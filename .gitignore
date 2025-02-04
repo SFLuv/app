@@ -1,0 +1,6 @@
+*/.env
+*/go.sum
+*/package-lock.json
+**.db
+.next
+node_modules
