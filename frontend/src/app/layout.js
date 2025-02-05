@@ -1,4 +1,5 @@
 import "./globals.css";
+import { Suspense } from "react";
 
 export const metadata = {
   title: "SFLuv Redemption Portal",
@@ -9,7 +10,9 @@ export default function RootLayout({ children }) {
   return (
     <html lang="en">
       <body>
-        {children}
+        <Suspense>
+          {children}
+        </Suspense>
       </body>
     </html>
   );
