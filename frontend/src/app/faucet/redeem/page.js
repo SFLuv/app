@@ -15,7 +15,7 @@ const Page = () => {
   const [success, setSuccess] = useState();
 
   const sigAuthAccount = searchParams.get("sigAuthAccount")
-  const sigAuthSignature = searchParams.get("sigAuthSignature") || "t"
+  const sigAuthSignature = searchParams.get("sigAuthSignature")
   const sigAuthRedirect = searchParams.get("sigAuthRedirect")
   const sigAuthExpiry = searchParams.get("sigAuthExpiry")
   const code = searchParams.get("code")
