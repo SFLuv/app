@@ -16,7 +16,7 @@ export default function Home() {
   const code = searchParams.get("code")
 
   useEffect(() => {
-    router.replace("/redeem"
+    router.replace("/faucet/redeem"
       + "?address=" + sigAuthAccount
       + "&signature=" + sigAuthSignature
       + "&code=" + code
