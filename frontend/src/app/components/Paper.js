@@ -1,3 +1,0 @@
-const Paper = () => {
-  return
-}
