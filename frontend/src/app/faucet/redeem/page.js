@@ -51,7 +51,7 @@ const Page = () => {
     });
 
     if (res.status != 200) {
-      setError("Error redeeming code. Please close this page.")
+      setError("Error redeeming code.")
       return
     }
 
@@ -72,13 +72,13 @@ const Page = () => {
           error ?
           <div style={{textAlign: "center"}}>
             <h2 style={{color: "black", size: "4vh"}}>
-              {error}
+              {error} {sigAuthRedirect}
             </h2>
           </div>
           : success ?
           <div style={{textAlign: "center"}}>
             <h2 style={{color: "black", size: "4vh"}}>
-              Code redeemed!
+              Code redeemed! {sigAuthRedirect}
             </h2>
           </div>
           :
