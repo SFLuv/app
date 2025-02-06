@@ -73,13 +73,13 @@ const closeModal = (delay) => {
           error ?
           <div style={{textAlign: "center"}}>
             <h2 style={{color: "black", size: "4vh"}}>
-              {error} {sigAuthRedirect}
+              {error}
             </h2>
           </div>
           : success ?
           <div style={{textAlign: "center"}}>
             <h2 style={{color: "black", size: "4vh"}}>
-              Code redeemed! {sigAuthRedirect}
+              Code redeemed!
             </h2>
           </div>
           :
