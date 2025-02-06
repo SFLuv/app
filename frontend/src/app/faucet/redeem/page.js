@@ -6,14 +6,6 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { verifyAccountOwnership } from "@citizenwallet/sdk";
 
-const closeModal = (sigAuthRedirect, delay) => {
-  setTimeout(() => {
-      if (sigAuthRedirect) {
-        router.push(decodeUri(sigAuthRedirect) + "/close")
-      }
-    }, [delay])
-}
-
 
 const Page = () => {
   const searchParams = useSearchParams();
@@ -28,6 +20,15 @@ const Page = () => {
   const sigAuthExpiry = searchParams.get("sigAuthExpiry")
   const code = searchParams.get("code")
 
+
+const closeModal = (delay) => {
+  setTimeout(() => {
+      if (sigAuthRedirect) {
+        router.push(sigAuthRedirect + "/close")
+      }
+    }, [delay])
+}
+
   useEffect(() => {
     sendBotRequest()
   }, [])
@@ -35,7 +36,7 @@ const Page = () => {
   const sendBotRequest = async () => {
     if (!sigAuthAccount || !sigAuthSignature || !code) {
       setError("Invalid request.")
-      closeModal(sigAuthRedirect, 2000)
+      closeModal(2000)
       return
     }
 
@@ -52,12 +53,12 @@ const Page = () => {
 
     if (res.status != 200) {
       setError("Error redeeming code.")
+      closeModal(2000)
       return
     }
 
     setSuccess(true)
-    closeModal(sigAuthRedirect, 2000)
-
+    closeModal(2000)
 
     //redirect back to app
   }
