@@ -9,7 +9,7 @@ import { verifyAccountOwnership } from "@citizenwallet/sdk";
 const closeModal = (sigAuthRedirect, delay) => {
   setTimeout(() => {
       if (sigAuthRedirect) {
-        router.push(sigAuthRedirect + "/close")
+        router.push(decodeUri(sigAuthRedirect) + "/close")
       }
     }, [delay])
 }
@@ -21,7 +21,6 @@ const Page = () => {
 
   const [error, setError] = useState();
   const [success, setSuccess] = useState();
-  console.log()
 
   const sigAuthAccount = searchParams.get("sigAuthAccount")
   const sigAuthSignature = searchParams.get("sigAuthSignature")
@@ -52,7 +51,6 @@ const Page = () => {
     });
 
     if (res.status != 200) {
-      console.log(res.status)
       setError("Error redeeming code. Please close this page.")
       return
     }
@@ -80,7 +78,7 @@ const Page = () => {
           : success ?
           <div style={{textAlign: "center"}}>
             <h2 style={{color: "black", size: "4vh"}}>
-              Code redeemed! {sigAuthRedirect}
+              Code redeemed!
             </h2>
           </div>
           :
