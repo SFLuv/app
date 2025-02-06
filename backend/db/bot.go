@@ -168,7 +168,11 @@ func (s *BotDB) Redeem(id string, account string) (uint64, *sql.Tx, error) {
 			(id)
 		FROM events
 		WHERE
-			id = (
+			(
+				SELECT (event)
+				FROM codes
+				WHERE id = $1
+			) = (
 				SELECT
 					(event)
 				FROM codes
@@ -177,10 +181,10 @@ func (s *BotDB) Redeem(id string, account string) (uint64, *sql.Tx, error) {
 						SELECT
 							(code)
 						FROM redemptions
-						WHERE account = $1
+						WHERE account = $2
 					)
 			);
-	`, account)
+	`, id, account)
 
 	var redeemed string
 	err = row.Scan(&redeemed)
