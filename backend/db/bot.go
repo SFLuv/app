@@ -62,10 +62,8 @@ func (s *BotDB) CreateTables() error {
 	_, err = s.db.Exec(`
 		CREATE TABLE IF NOT EXISTS redemptions(
 			account TEXT,
-			event TEXT,
 			code TEXT,
 			FOREIGN KEY (account) REFERENCES accounts(address),
-			FOREIGN KEY (event) REFERENCES events(id),
 			FOREIGN KEY (code) REFERENCES codes(id)
 		);
 	`)
@@ -126,13 +124,15 @@ func (s *BotDB) NewEvent(e *structs.Event) (string, error) {
 func (s *BotDB) GetCodes(r *structs.CodesPageRequest) ([]*structs.Code, error) {
 	offset := r.Page * r.Count
 
+	fmt.Println(r)
+
 	rows, err := s.db.Query(`
 		SELECT
-			(id, redeemed, event)
+			id, redeemed, event
 		FROM codes
 		WHERE event = $1
 		LIMIT $2
-		OFFSET $3
+		OFFSET $3;
 	`, r.Event, r.Count, offset)
 	if err != nil {
 		err = fmt.Errorf("error querying for event codes: %s", err)

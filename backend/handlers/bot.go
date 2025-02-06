@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 
 	"github.com/faucet-portal/backend/bot"
 	"github.com/faucet-portal/backend/db"
@@ -64,24 +65,29 @@ func (s *BotService) GetCodes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	defer r.Body.Close()
-
-	body, err := io.ReadAll(r.Body)
+	params := r.URL.Query()
+	event := params.Get("event")
+	count, err := strconv.Atoi(params.Get("count"))
 	if err != nil {
-		fmt.Println(err)
+		count = 100
+	}
+	page, err := strconv.Atoi(params.Get("page"))
+	if err != nil {
+		page = 0
+	}
+
+	if event == "" {
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
 
-	var request *structs.CodesPageRequest
-	err = json.Unmarshal(body, &request)
-	if err != nil {
-		fmt.Println(err)
-		w.WriteHeader(http.StatusBadRequest)
-		return
+	request := structs.CodesPageRequest{
+		Event: event,
+		Count: uint32(count),
+		Page:  uint32(page),
 	}
 
-	codes, err := s.db.GetCodes(request)
+	codes, err := s.db.GetCodes(&request)
 	if err != nil {
 		fmt.Println(err)
 		w.WriteHeader(http.StatusInternalServerError)
@@ -95,6 +101,7 @@ func (s *BotService) GetCodes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	w.WriteHeader(http.StatusOK)
 	w.Write(bytes)
 }
 
