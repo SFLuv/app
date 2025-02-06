@@ -6,6 +6,14 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { verifyAccountOwnership } from "@citizenwallet/sdk";
 
+const closeModal = (sigAuthRedirect, delay) => {
+  setTimeout(() => {
+      if (sigAuthRedirect) {
+        router.replace(sigAuthRedirect + "/close")
+      }
+    }, [delay])
+}
+
 
 const Page = () => {
   const searchParams = useSearchParams();
@@ -21,14 +29,13 @@ const Page = () => {
   const code = searchParams.get("code")
 
   useEffect(() => {
-    console.log('sending')
     sendBotRequest()
   }, [])
 
   const sendBotRequest = async () => {
     if (!sigAuthAccount || !sigAuthSignature || !code) {
-      console.log("missing param")
-      setError("Invalid request. Please close this page.")
+      setError("Invalid request.")
+      closeModal(sigAuthRedirect, 2000)
       return
     }
 
@@ -46,13 +53,12 @@ const Page = () => {
     if (res.status != 200) {
       console.log(res.status)
       setError("Error redeeming code. Please close this page.")
-      setTimeout(() => {}, [2000])
-      console.log("error redirect")
       return
     }
 
     setSuccess(true)
-    console.log("success redirect")
+    closeModal(sigAuthRedirect, 2000)
+
 
     //redirect back to app
   }
@@ -73,7 +79,7 @@ const Page = () => {
           : success ?
           <div style={{textAlign: "center"}}>
             <h2 style={{color: "black", size: "4vh"}}>
-              Code redeemed. You may now exit this page.
+              Code redeemed!
             </h2>
           </div>
           :
