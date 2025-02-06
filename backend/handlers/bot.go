@@ -125,7 +125,7 @@ func (s *BotService) Redeem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	amount, err := s.db.Redeem(request.Code)
+	amount, tx, err := s.db.Redeem(request.Code, request.Address)
 	if err != nil {
 		fmt.Println(err)
 		w.WriteHeader(http.StatusBadRequest)
@@ -138,4 +138,13 @@ func (s *BotService) Redeem(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
+
+	err = tx.Commit()
+	if err != nil {
+		fmt.Printf("error committing code redemption: %s\n", err)
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
 }

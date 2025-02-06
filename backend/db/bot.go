@@ -156,14 +156,41 @@ func (s *BotDB) GetCodes(r *structs.CodesPageRequest) ([]*structs.Code, error) {
 	return codes, nil
 }
 
-func (s *BotDB) Redeem(id string) (uint64, error) {
+func (s *BotDB) Redeem(id string, account string) (uint64, *sql.Tx, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
 		err = fmt.Errorf("error creating db tx: %s", err)
-		return 0, err
+		return 0, nil, err
 	}
 
 	row := tx.QueryRow(`
+		SELECT
+			(id)
+		FROM events
+		WHERE
+			id = (
+				SELECT
+					(event)
+				FROM codes
+				WHERE
+					id = (
+						SELECT
+							(code)
+						FROM redemptions
+						WHERE account = $1
+					)
+			);
+	`, account)
+
+	var redeemed string
+	err = row.Scan(&redeemed)
+	if err != sql.ErrNoRows {
+		err = fmt.Errorf("error getting user redemption status: %s", err)
+		tx.Rollback()
+		return 0, nil, err
+	}
+
+	row = tx.QueryRow(`
 		SELECT
 			(amount)
 		FROM events
@@ -182,7 +209,7 @@ func (s *BotDB) Redeem(id string) (uint64, error) {
 	if err != nil {
 		err = fmt.Errorf("error getting code redemption amount: %s", err)
 		tx.Rollback()
-		return 0, err
+		return 0, nil, err
 	}
 
 	_, err = tx.Exec(`
@@ -193,14 +220,18 @@ func (s *BotDB) Redeem(id string) (uint64, error) {
 	if err != nil {
 		err = fmt.Errorf("error updating code redemption status: %s", err)
 		tx.Rollback()
-		return 0, err
+		return 0, nil, err
 	}
 
-	err = tx.Commit()
+	_, err = tx.Exec(`
+		INSERT INTO redemptions(account, code)
+		VALUES ($1, $2);
+	`, account, id)
 	if err != nil {
-		err = fmt.Errorf("error committing code redemption: %s", err)
-		return 0, err
+		err = fmt.Errorf("error inserting code redemption: %s", err)
+		tx.Rollback()
+		return 0, nil, err
 	}
 
-	return amount, nil
+	return amount, tx, nil
 }
