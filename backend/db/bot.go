@@ -3,6 +3,7 @@ package db
 import (
 	"database/sql"
 	"fmt"
+	"time"
 
 	"github.com/faucet-portal/backend/structs"
 	"github.com/google/uuid"
@@ -165,7 +166,7 @@ func (s *BotDB) Redeem(id string, account string) (uint64, *sql.Tx, error) {
 
 	row := tx.QueryRow(`
 		SELECT
-			(id)
+			(id, expiration)
 		FROM events
 		WHERE
 			(
@@ -187,9 +188,17 @@ func (s *BotDB) Redeem(id string, account string) (uint64, *sql.Tx, error) {
 	`, id, account)
 
 	var redeemed string
-	err = row.Scan(&redeemed)
+	var expiration int64
+	err = row.Scan(&redeemed, &expiration)
 	if err != sql.ErrNoRows {
 		err = fmt.Errorf("error getting user redemption status: %s", err)
+		tx.Rollback()
+		return 0, nil, err
+	}
+
+	time := time.Now().Unix()
+	if expiration < time && expiration != 0 {
+		err = fmt.Errorf("code expired")
 		tx.Rollback()
 		return 0, nil, err
 	}
