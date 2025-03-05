@@ -7,7 +7,7 @@ import (
 	"github.com/go-chi/cors"
 )
 
-func New(s *handlers.BotService) *chi.Mux {
+func New(s *handlers.BotService, a *handlers.AccountService) *chi.Mux {
 	r := chi.NewRouter()
 
 	r.Use(middleware.Logger)
@@ -22,7 +22,11 @@ func New(s *handlers.BotService) *chi.Mux {
 
 	r.Post("/events", s.NewEvent)
 	r.Get("/events", s.GetCodes)
+
 	r.Post("/redeem", s.Redeem)
+
+	r.Post("/account", a.AddAccount)
+	r.Get("/account", a.GetAccount)
 
 	return r
 }

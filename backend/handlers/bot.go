@@ -127,8 +127,18 @@ func (s *BotService) Redeem(w http.ResponseWriter, r *http.Request) {
 
 	amount, tx, err := s.db.Redeem(request.Code, request.Address)
 	if err != nil {
-		fmt.Println(err)
 		w.WriteHeader(http.StatusBadRequest)
+
+		switch err.Error() {
+		case "code expired":
+			w.Write([]byte("code expired"))
+		case "code redeemed":
+			w.Write([]byte("code redeemed"))
+		case "user redeemed":
+			w.Write([]byte("user redeemed"))
+		}
+
+		fmt.Println(err)
 		return
 	}
 

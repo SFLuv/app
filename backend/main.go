@@ -15,9 +15,18 @@ import (
 func main() {
 	godotenv.Load()
 
-	b := db.InitDB("bot")
-	botDb := db.Bot(b)
+	bdb := db.InitDB("bot")
+	adb := db.InitDB("account")
+
+	botDb := db.Bot(bdb)
 	err := botDb.CreateTables()
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	accountDb := db.Account(adb)
+	err = accountDb.CreateTables()
 	if err != nil {
 		fmt.Println(err)
 		return
@@ -30,8 +39,9 @@ func main() {
 	}
 
 	s := handlers.NewBotService(botDb, bot)
+	a := handlers.NewAccountService(accountDb)
 
-	r := router.New(s)
+	r := router.New(s, a)
 	port := os.Getenv("PORT")
 
 	fmt.Printf("now listening on port %s\n", port)

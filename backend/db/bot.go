@@ -166,7 +166,7 @@ func (s *BotDB) Redeem(id string, account string) (uint64, *sql.Tx, error) {
 
 	row := tx.QueryRow(`
 		SELECT
-			(id, expiration)
+			id
 		FROM events
 		WHERE
 			(
@@ -188,24 +188,18 @@ func (s *BotDB) Redeem(id string, account string) (uint64, *sql.Tx, error) {
 	`, id, account)
 
 	var redeemed string
-	var expiration int64
-	err = row.Scan(&redeemed, &expiration)
+	err = row.Scan(&redeemed)
 	if err != sql.ErrNoRows {
-		err = fmt.Errorf("error getting user redemption status: %s", err)
+		err = fmt.Errorf("user redeemed")
 		tx.Rollback()
 		return 0, nil, err
 	}
 
 	time := time.Now().Unix()
-	if expiration < time && expiration != 0 {
-		err = fmt.Errorf("code expired")
-		tx.Rollback()
-		return 0, nil, err
-	}
 
 	row = tx.QueryRow(`
 		SELECT
-			(amount)
+			amount, expiration
 		FROM events
 		WHERE
 			id = (
@@ -218,9 +212,18 @@ func (s *BotDB) Redeem(id string, account string) (uint64, *sql.Tx, error) {
 	`, id)
 
 	var amount uint64
-	err = row.Scan(&amount)
+	var expiration int64
+	err = row.Scan(&amount, &expiration)
 	if err != nil {
-		err = fmt.Errorf("error getting code redemption amount: %s", err)
+		if err == sql.ErrNoRows {
+			err = fmt.Errorf("code redeemed")
+		}
+		tx.Rollback()
+		return 0, nil, err
+	}
+	fmt.Println(expiration, time)
+	if expiration < time && expiration != 0 {
+		err = fmt.Errorf("code expired")
 		tx.Rollback()
 		return 0, nil, err
 	}
