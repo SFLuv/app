@@ -8,7 +8,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-func InitDB(name string) *sql.DB {
+func DBPath(name string) string {
 	dbFolderPath := os.Getenv("DB_FOLDER_PATH")
 	dbPath := fmt.Sprintf("%s/%s.db", dbFolderPath, name)
 
@@ -23,7 +23,11 @@ func InitDB(name string) *sql.DB {
 	}
 
 	fmt.Printf("connecting to %s db...\n", name)
+	return dbPath
+}
 
+func InitDB(name string) *sql.DB {
+	dbPath := DBPath(name)
 	db, err := sql.Open("sqlite3", fmt.Sprintf("file:%s", dbPath))
 	if err != nil {
 		fmt.Println(err)
@@ -31,7 +35,6 @@ func InitDB(name string) *sql.DB {
 	}
 
 	return db
-
 }
 
 func exists(path string) bool {

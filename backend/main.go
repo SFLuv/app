@@ -17,6 +17,7 @@ func main() {
 
 	bdb := db.InitDB("bot")
 	adb := db.InitDB("account")
+	mdb := db.MerchantDB()
 
 	botDb := db.Bot(bdb)
 	err := botDb.CreateTables()
@@ -35,6 +36,11 @@ func main() {
 	bot, err := bot.Init()
 	if err != nil {
 		fmt.Printf("error initializing bot service: %s\n", err)
+		return
+	}
+
+	if mdb == nil {
+		fmt.Println("mdb is nil")
 		return
 	}
 
