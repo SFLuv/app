@@ -21,6 +21,7 @@ func New(s *handlers.BotService, a *handlers.AccountService) *chi.Mux {
 	}))
 
 	r.Post("/events", s.NewEvent)
+	r.Post("/events/{id}/codes", s.NewCodes)
 	r.Get("/events", s.GetCodes)
 
 	r.Post("/redeem", s.Redeem)

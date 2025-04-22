@@ -187,6 +187,46 @@ func (s *BotDB) GetCodes(r *structs.CodesPageRequest) ([]*structs.Code, error) {
 	return codes, nil
 }
 
+func (s *BotDB) NewCodes(r *structs.NewCodesRequest) ([]*structs.Code, error) {
+	results := make([]*structs.Code, r.Count)
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+
+	for i := 0; i < int(r.Count); i++ {
+		codeId := uuid.NewString()
+
+		_, err = tx.Exec(`
+			INSERT INTO codes
+				(id, event)
+			VALUES
+				($1, $2);
+		`, codeId, r.Event)
+		if err != nil {
+			err = fmt.Errorf("error inserting event codes: %s", err)
+			tx.Rollback()
+			return nil, err
+		}
+
+		results[i] = &structs.Code{
+			Id:       codeId,
+			Redeemed: false,
+			Event:    r.Event,
+		}
+	}
+
+	err = tx.Commit()
+	if err != nil {
+		err = fmt.Errorf("error committing db transaction: %s", err)
+		tx.Rollback()
+		return nil, err
+	}
+
+	return results, nil
+}
+
 func (s *BotDB) Redeem(id string, account string) (uint64, *sql.Tx, error) {
 	tx, err := s.db.Begin()
 	if err != nil {

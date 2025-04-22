@@ -25,3 +25,8 @@ type RedeemRequest struct {
 	Code    string `json:"code"`
 	Address string `json:"address"`
 }
+
+type NewCodesRequest struct {
+	Event string `json:"event"`
+	Count uint32 `json:"count"`
+}
