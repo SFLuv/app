@@ -1,14 +1,25 @@
 package main
 
 import (
+	"crypto/ecdsa"
+	"encoding/json"
+	"log"
 	"os"
 	"testing"
 
+	"bytes"
+	"net/http"
+	"net/http/httptest"
+
+	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/faucet-portal/backend/db"
+	"github.com/faucet-portal/backend/handlers"
 	"github.com/faucet-portal/backend/structs"
 	"github.com/joho/godotenv"
 )
 
+// TODO: factor this code with MakeBotService
 func SetupBotTestDB() *db.BotDB {
 	// Set up the test database
 	bdb := db.InitDB("bot")
@@ -53,6 +64,28 @@ func LoadEnv(t *testing.T) {
 	}
 }
 
+func GenerateKeyPair() (string, string) {
+	privateKey, err := crypto.GenerateKey()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	privateKeyBytes := crypto.FromECDSA(privateKey)
+	privateKeyString := hexutil.Encode(privateKeyBytes)
+
+	publicKey := privateKey.Public()
+	publicKeyECDSA, ok := publicKey.(*ecdsa.PublicKey)
+	if !ok {
+		log.Fatal("cannot assert type: publicKey is not of type *ecdsa.PublicKey")
+	}
+
+	// publicKeyBytes := crypto.FromECDSAPub(publicKeyECDSA)
+	// fmt.Println("Public Key:", hexutil.Encode(publicKeyBytes))
+
+	address := crypto.PubkeyToAddress(*publicKeyECDSA).Hex()
+	return privateKeyString, address
+}
+
 func TestRedeem(t *testing.T) {
 	LoadEnv(t)
 
@@ -86,7 +119,27 @@ func TestRedeem(t *testing.T) {
 		t.Fatalf("Failed to create code: %v", err)
 	}
 
-	// mock blockchain calls
+	bot_service := handlers.NewBotService(botDb, nil)
+
+	// mock blockchain calls - HOW?
+
+	t.Setenv("ADMIN_KEY", "0123456789")
+
+	_, address := GenerateKeyPair()
+
+	post_body := map[string]interface{}{
+		"Code":    "test-code",
+		"Address": address,
+	}
+	body, _ := json.Marshal(post_body)
+	req := httptest.NewRequest(http.MethodPost, "/redeem", bytes.NewReader(body))
+	req.Header.Set("X-API-KEY", "0123456789")
+	w := httptest.NewRecorder()
+	bot_service.Redeem(w, req)
+	res := w.Result()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("Expected status code 200, got %d", res.StatusCode)
+	}
 
 	CleanUpBotTestDB()
 }
