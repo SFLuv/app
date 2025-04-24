@@ -21,6 +21,7 @@ import (
 
 // TODO: factor this code with MakeBotService
 func SetupBotTestDB() *db.BotDB {
+
 	// Set up the test database
 	bdb := db.InitDB("bot")
 	if bdb == nil {
@@ -37,7 +38,7 @@ func SetupBotTestDB() *db.BotDB {
 }
 
 func CleanUpBotTestDB() {
-	// Clean up the test database
+	// Clean up the test database TODO: make sure we don't drop the wrong database!
 	bdb := db.InitDB("bot")
 	if bdb == nil {
 		return
@@ -89,6 +90,8 @@ func GenerateKeyPair() (string, string) {
 func TestRedeem(t *testing.T) {
 	LoadEnv(t)
 
+	t.Setenv("DB_FOLDER_PATH", "./test_data")
+
 	botDb := SetupBotTestDB()
 	if botDb == nil {
 		t.Fatalf("Failed to set up bot test database")
@@ -96,25 +99,25 @@ func TestRedeem(t *testing.T) {
 	defer CleanUpBotTestDB()
 	// Create a mock event
 	event := &structs.Event{
-		Id:          "test-event",
+		Id:          "test-event", // NOTE: NewEvent stomps on this Id
 		Title:       "Test Event",
 		Description: "This is a test event",
 		Expiration:  0,
 		Amount:      100,
 	}
 	// Insert the event into the database
-	_, err := botDb.NewEvent(event)
+	eventId, err := botDb.NewEvent(event)
 	if err != nil {
 		t.Fatalf("Failed to create event: %v", err)
 	}
 	// create a code
 	code := &structs.Code{
-		Id:       "test-code",
-		Event:    event.Id,
+		Id:       "test-code", // NOTE: NewCode stomps on this Id
+		Event:    eventId,
 		Redeemed: false,
 	}
 	// Insert the code into the database
-	_, err = botDb.NewCode(code)
+	codeId, err := botDb.NewCode(code)
 	if err != nil {
 		t.Fatalf("Failed to create code: %v", err)
 	}
@@ -128,7 +131,7 @@ func TestRedeem(t *testing.T) {
 	_, address := GenerateKeyPair()
 
 	post_body := map[string]interface{}{
-		"Code":    "test-code",
+		"Code":    codeId,
 		"Address": address,
 	}
 	body, _ := json.Marshal(post_body)
