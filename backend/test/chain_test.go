@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/ecdsa"
 	"encoding/json"
+	"fmt"
 	"log"
 	"os"
 	"testing"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/faucet-portal/backend/bot"
 	"github.com/faucet-portal/backend/db"
 	"github.com/faucet-portal/backend/handlers"
 	"github.com/faucet-portal/backend/structs"
@@ -72,7 +74,7 @@ func GenerateKeyPair() (string, string) {
 	}
 
 	privateKeyBytes := crypto.FromECDSA(privateKey)
-	privateKeyString := hexutil.Encode(privateKeyBytes)
+	privateKeyString := hexutil.Encode(privateKeyBytes)[2:]
 
 	publicKey := privateKey.Public()
 	publicKeyECDSA, ok := publicKey.(*ecdsa.PublicKey)
@@ -103,7 +105,7 @@ func TestRedeem(t *testing.T) {
 		Title:       "Test Event",
 		Description: "This is a test event",
 		Expiration:  0,
-		Amount:      100,
+		Amount:      1,
 	}
 	// Insert the event into the database
 	eventId, err := botDb.NewEvent(event)
@@ -122,7 +124,13 @@ func TestRedeem(t *testing.T) {
 		t.Fatalf("Failed to create code: %v", err)
 	}
 
-	bot_service := handlers.NewBotService(botDb, nil)
+	bot, err := bot.Init()
+	if err != nil {
+		fmt.Printf("error initializing bot service: %s\n", err)
+		return
+	}
+
+	bot_service := handlers.NewBotService(botDb, bot)
 
 	// mock blockchain calls - HOW?
 
