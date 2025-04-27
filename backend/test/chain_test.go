@@ -152,5 +152,7 @@ func TestRedeem(t *testing.T) {
 		t.Fatalf("Expected status code 200, got %d", res.StatusCode)
 	}
 
+	fmt.Printf("SFLuv minted to address: %s\n", address)
+
 	CleanUpBotTestDB()
 }
