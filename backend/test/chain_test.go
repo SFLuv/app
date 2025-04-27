@@ -14,15 +14,17 @@ import (
 
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/crypto"
-	"github.com/faucet-portal/backend/bot"
 	"github.com/faucet-portal/backend/db"
 	"github.com/faucet-portal/backend/handlers"
 	"github.com/faucet-portal/backend/structs"
 	"github.com/joho/godotenv"
+	"github.com/stretchr/testify/mock"
 )
 
 // TODO: factor this code with MakeBotService
-func SetupBotTestDB() *db.BotDB {
+func SetupBotTestDB(t *testing.T) *db.BotDB {
+
+	t.Setenv("DB_FOLDER_PATH", "./test_data")
 
 	// Set up the test database
 	bdb := db.InitDB("bot")
@@ -89,12 +91,30 @@ func GenerateKeyPair() (string, string) {
 	return privateKeyString, address
 }
 
+type BotTest struct {
+	mock.Mock
+}
+
+func (b *BotTest) Key() string {
+	return "test-key"
+}
+func (b *BotTest) Send(amount uint64, address string) error {
+	// Mock sending tokens
+	if address == "" {
+		return fmt.Errorf("invalid address")
+	}
+	if amount <= 0 {
+		return fmt.Errorf("invalid amount")
+	}
+	// Simulate successful sending
+	fmt.Printf("Sent %d tokens to %s\n", amount, address)
+	return nil
+}
+
 func TestRedeem(t *testing.T) {
 	LoadEnv(t)
 
-	t.Setenv("DB_FOLDER_PATH", "./test_data")
-
-	botDb := SetupBotTestDB()
+	botDb := SetupBotTestDB(t)
 	if botDb == nil {
 		t.Fatalf("Failed to set up bot test database")
 	}
@@ -124,15 +144,9 @@ func TestRedeem(t *testing.T) {
 		t.Fatalf("Failed to create code: %v", err)
 	}
 
-	bot, err := bot.Init()
-	if err != nil {
-		fmt.Printf("error initializing bot service: %s\n", err)
-		return
-	}
+	bot := new(BotTest)
 
 	bot_service := handlers.NewBotService(botDb, bot)
-
-	// mock blockchain calls - HOW?
 
 	t.Setenv("ADMIN_KEY", "0123456789")
 

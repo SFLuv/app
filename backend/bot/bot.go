@@ -16,6 +16,11 @@ import (
 	"golang.org/x/crypto/sha3"
 )
 
+type IBot interface {
+	Key() string
+	Send(amount uint64, address string) error
+}
+
 type Bot struct {
 	pKey    string
 	tokenId string

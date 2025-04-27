@@ -15,10 +15,10 @@ import (
 
 type BotService struct {
 	db  *db.BotDB
-	bot *bot.Bot
+	bot bot.IBot
 }
 
-func NewBotService(db *db.BotDB, bot *bot.Bot) *BotService {
+func NewBotService(db *db.BotDB, bot bot.IBot) *BotService {
 	return &BotService{db, bot}
 }
 
