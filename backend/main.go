@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"net/http"
 	"os"
@@ -14,6 +15,12 @@ import (
 
 func main() {
 	godotenv.Load()
+	updateFlag := flag.Bool("update", false, "set true to update tables instead of running server")
+	flag.Parse()
+	if *updateFlag {
+		updateTables()
+		return
+	}
 
 	bdb := db.InitDB("bot")
 	adb := db.InitDB("account")
@@ -47,4 +54,13 @@ func main() {
 	fmt.Printf("now listening on port %s\n", port)
 	err = http.ListenAndServe(fmt.Sprintf(":%s", port), r)
 	fmt.Println(err)
+}
+
+func updateTables() {
+	bdb := db.InitDB("bot")
+	botDb := db.Bot(bdb)
+	err := botDb.UpdateTables()
+	if err != nil {
+		fmt.Println("error updating bot db:", err)
+	}
 }

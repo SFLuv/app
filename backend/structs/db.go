@@ -7,6 +7,7 @@ type Event struct {
 	Codes       uint32 `json:"codes"`
 	Amount      uint64 `json:"amount"`
 	Expiration  uint64 `json:"expiration"`
+	Creator     string
 }
 
 type Code struct {
