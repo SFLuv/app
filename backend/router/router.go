@@ -20,14 +20,18 @@ func New(s *handlers.BotService, a *handlers.AccountService) *chi.Mux {
 		MaxAge:           300,
 	}))
 
-	r.Post("/events", s.NewEvent)
-	r.Post("/events/{id}/codes", s.NewCodes)
-	r.Get("/events", s.GetCodes)
-
-	r.Post("/redeem", s.Redeem)
+	AddBotRoutes(r, s)
 
 	r.Post("/account", a.AddAccount)
 	r.Get("/account", a.GetAccount)
 
 	return r
+}
+
+func AddBotRoutes(r *chi.Mux, s *handlers.BotService) {
+	r.Post("/events", s.NewEvent)
+	r.Post("/events/{event_id}/codes", s.NewCodesRequest)
+	r.Get("/events", s.GetCodesRequest)
+
+	r.Post("/redeem", s.Redeem)
 }

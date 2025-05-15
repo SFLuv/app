@@ -84,7 +84,7 @@ func (s *BotService) NewEvent(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(id))
 }
 
-func (s *BotService) NewCodes(w http.ResponseWriter, r *http.Request) {
+func (s *BotService) NewCodesRequest(w http.ResponseWriter, r *http.Request) {
 	if !EnsureLogin(w, r) {
 		return
 	}
@@ -96,6 +96,12 @@ func (s *BotService) NewCodes(w http.ResponseWriter, r *http.Request) {
 
 	var new_codes *structs.NewCodesRequest
 	if !EnsureUnmarshal(w, &new_codes, body) {
+		return
+	}
+
+	new_codes.Event = r.PathValue("event_id")
+	if new_codes.Event == "" {
+		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
 
@@ -113,7 +119,7 @@ func (s *BotService) NewCodes(w http.ResponseWriter, r *http.Request) {
 }
 
 // Get event codes by event id x, page y, and amount per page z (up to 100). Responds with array of event codes
-func (s *BotService) GetCodes(w http.ResponseWriter, r *http.Request) {
+func (s *BotService) GetCodesRequest(w http.ResponseWriter, r *http.Request) {
 	if !EnsureLogin(w, r) {
 		return
 	}
@@ -134,16 +140,14 @@ func (s *BotService) GetCodes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	request := structs.CodesPageRequest{
-		Event: event,
-		Count: uint32(count),
-		Page:  uint32(page),
-	}
-
-	codes, err := s.db.GetCodes(&request)
+	codes, err := s.GetCodes(event, count, page)
 	if err != nil {
 		fmt.Println(err)
 		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	if len(codes) == 0 {
+		w.WriteHeader(http.StatusNotFound)
 		return
 	}
 
@@ -156,6 +160,21 @@ func (s *BotService) GetCodes(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusOK)
 	w.Write(bytes)
+}
+
+func (s *BotService) GetCodes(event string, count, page int) ([]*structs.Code, error) {
+	request := structs.CodesPageRequest{
+		Event: event,
+		Count: uint32(count),
+		Page:  uint32(page),
+	}
+
+	codes, err := s.db.GetCodes(&request)
+	if err != nil {
+		return nil, err
+	}
+
+	return codes, nil
 }
 
 // Verify requesting address event redemption status, Check code redemption status, Send tokens. Responds with 200 OK, 500 tx error, or 400 status
