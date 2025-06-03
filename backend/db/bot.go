@@ -171,10 +171,10 @@ func (s *BotDB) GetCodes(r *structs.CodesPageRequest) ([]*structs.Code, error) {
 		SELECT
 			id, redeemed, event
 		FROM codes
-		WHERE event = $1
-		LIMIT $2
-		OFFSET $3;
-	`, r.Event, r.Count, offset)
+		WHERE event = (SELECT id FROM events WHERE id = $1 AND creator = $2)
+		LIMIT $3
+		OFFSET $4;
+	`, r.Event, r.Admin, r.Count, offset)
 	if err != nil {
 		err = fmt.Errorf("error querying for event codes: %s", err)
 		return nil, err
@@ -184,8 +184,8 @@ func (s *BotDB) GetCodes(r *structs.CodesPageRequest) ([]*structs.Code, error) {
 
 	for rows.Next() {
 		code := structs.Code{}
-
 		err = rows.Scan(&code.Id, &code.Redeemed, &code.Event)
+
 		if err != nil {
 			err = fmt.Errorf("error unpacking event codes: %s", err)
 			return nil, err
@@ -194,17 +194,15 @@ func (s *BotDB) GetCodes(r *structs.CodesPageRequest) ([]*structs.Code, error) {
 		codes = append(codes, &code)
 	}
 
+	if len(codes) == 0 {
+		return nil, sql.ErrNoRows
+	}
+
 	return codes, nil
 }
 
-func (s *BotDB) Redeem(id string, account string) (uint64, *sql.Tx, error) {
-	tx, err := s.db.Begin()
-	if err != nil {
-		err = fmt.Errorf("error creating db tx: %s", err)
-		return 0, nil, err
-	}
-
-	row := tx.QueryRow(`
+func (s *BotDB) GetRedeemAmount(id string, account string) (uint64, error) {
+	row := s.db.QueryRow(`
 		SELECT
 			id
 		FROM events
@@ -228,16 +226,15 @@ func (s *BotDB) Redeem(id string, account string) (uint64, *sql.Tx, error) {
 	`, id, account)
 
 	var redeemed string
-	err = row.Scan(&redeemed)
+	err := row.Scan(&redeemed)
 	if err != sql.ErrNoRows {
 		err = fmt.Errorf("user redeemed")
-		tx.Rollback()
-		return 0, nil, err
+		return 0, err
 	}
 
 	time := time.Now().Unix()
 
-	row = tx.QueryRow(`
+	row = s.db.QueryRow(`
 		SELECT
 			amount, expiration
 		FROM events
@@ -258,38 +255,38 @@ func (s *BotDB) Redeem(id string, account string) (uint64, *sql.Tx, error) {
 		if err == sql.ErrNoRows {
 			err = fmt.Errorf("code redeemed")
 		}
-		tx.Rollback()
-		return 0, nil, err
+		return 0, err
 	}
 	fmt.Println(expiration, time)
 	if expiration < time && expiration != 0 {
 		err = fmt.Errorf("code expired")
-		tx.Rollback()
-		return 0, nil, err
+		return 0, err
 	}
 
-	_, err = tx.Exec(`
+	return amount, nil
+}
+
+func (s *BotDB) SetRedeemed(id string, account string) error {
+	_, err := s.db.Exec(`
 		UPDATE codes
 		SET redeemed = 1
 		WHERE id = $1;
 	`, id)
 	if err != nil {
 		err = fmt.Errorf("error updating code redemption status: %s", err)
-		tx.Rollback()
-		return 0, nil, err
+		return err
 	}
 
-	_, err = tx.Exec(`
+	_, err = s.db.Exec(`
 		INSERT INTO redemptions(account, code)
 		VALUES ($1, $2);
 	`, account, id)
 	if err != nil {
 		err = fmt.Errorf("error inserting code redemption: %s", err)
-		tx.Rollback()
-		return 0, nil, err
+		return err
 	}
 
-	return amount, tx, nil
+	return nil
 }
 
 func (s *BotDB) NewAdmin(key string, name string, limit int, refresh int, refreshStart int) error {
@@ -325,8 +322,8 @@ func (s *BotDB) GetAdmin(key string) (*structs.Admin, error) {
 	return a, nil
 }
 
-func (s *BotDB) UpdateAdmin(tx *sql.Tx, admin *structs.Admin) (*sql.Tx, error) {
-	_, err := tx.Exec(`
+func (s *BotDB) UpdateAdmin(admin *structs.Admin) error {
+	_, err := s.db.Exec(`
 		UPDATE admins
 		SET
 			name = $1,
@@ -338,8 +335,8 @@ func (s *BotDB) UpdateAdmin(tx *sql.Tx, admin *structs.Admin) (*sql.Tx, error) {
 			key = $6;
 	`, &admin.Name, &admin.Limit, &admin.Refresh, &admin.Balance, &admin.LastRefresh, &admin.Key)
 	if err != nil {
-		return tx, fmt.Errorf("error updating admin %s: %s", admin.Name, err)
+		return fmt.Errorf("error updating admin %s: %s", admin.Name, err)
 	}
 
-	return tx, nil
+	return nil
 }

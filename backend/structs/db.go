@@ -17,6 +17,7 @@ type Code struct {
 }
 
 type CodesPageRequest struct {
+	Admin string `json:"admin"`
 	Event string `json:"event"`
 	Count uint32 `json:"count"`
 	Page  uint32 `json:"page"`

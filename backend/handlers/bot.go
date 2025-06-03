@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -26,22 +27,11 @@ func NewBotService(db *db.BotDB, bot *bot.Bot) *BotService {
 
 // Create an event with x amount of available codes, y $SFLUV per code, and z expiration date. Responds with event id
 func (s *BotService) NewEvent(w http.ResponseWriter, r *http.Request) {
-	var admin *structs.Admin
-	var err error
-	requestKey := r.Header[http.CanonicalHeaderKey("X-API-KEY")][0]
-	adminKey := os.Getenv("ADMIN_KEY")
-	fmt.Println(requestKey, adminKey)
-	if requestKey == adminKey {
-		admin = &structs.Admin{}
-		admin.Limit = 0
-		admin.Key = requestKey
-	} else {
-		admin, err = s.db.GetAdmin(requestKey)
-		if err != nil {
-			fmt.Printf("error getting admin for key %s: %s\n", adminKey, err)
-			w.WriteHeader(http.StatusUnauthorized)
-			return
-		}
+	admin, err := s.EnsureAuth(r)
+	if err != nil {
+		fmt.Println(err)
+		w.WriteHeader(http.StatusUnauthorized)
+		return
 	}
 
 	defer r.Body.Close()
@@ -88,8 +78,10 @@ func (s *BotService) NewEvent(w http.ResponseWriter, r *http.Request) {
 	}
 	admin.Balance += int(totalCost)
 
+	adminKey := os.Getenv("ADMIN_KEY")
+
 	if admin.Key != adminKey {
-		tx, err = s.db.UpdateAdmin(tx, admin)
+		err = s.db.UpdateAdmin(admin)
 		if err != nil {
 			fmt.Printf("error updating admin %s: %s\n", admin.Key, err)
 			w.WriteHeader(http.StatusInternalServerError)
@@ -117,8 +109,9 @@ func (s *BotService) NewEvent(w http.ResponseWriter, r *http.Request) {
 
 // Get event codes by event id x, page y, and amount per page z (up to 100). Responds with array of event codes
 func (s *BotService) GetCodes(w http.ResponseWriter, r *http.Request) {
-	adminKey := os.Getenv("ADMIN_KEY")
-	if r.Header[http.CanonicalHeaderKey("X-API-KEY")][0] != adminKey {
+	admin, err := s.EnsureAuth(r)
+	if err != nil {
+		fmt.Println(err)
 		w.WriteHeader(http.StatusUnauthorized)
 		return
 	}
@@ -140,6 +133,7 @@ func (s *BotService) GetCodes(w http.ResponseWriter, r *http.Request) {
 	}
 
 	request := structs.CodesPageRequest{
+		Admin: admin.Key,
 		Event: event,
 		Count: uint32(count),
 		Page:  uint32(page),
@@ -147,6 +141,11 @@ func (s *BotService) GetCodes(w http.ResponseWriter, r *http.Request) {
 
 	codes, err := s.db.GetCodes(&request)
 	if err != nil {
+		if err == sql.ErrNoRows {
+			fmt.Println(err)
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
 		fmt.Println(err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
@@ -183,7 +182,7 @@ func (s *BotService) Redeem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	amount, tx, err := s.db.Redeem(request.Code, request.Address)
+	amount, err := s.db.GetRedeemAmount(request.Code, request.Address)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 
@@ -194,6 +193,8 @@ func (s *BotService) Redeem(w http.ResponseWriter, r *http.Request) {
 			w.Write([]byte("code redeemed"))
 		case "user redeemed":
 			w.Write([]byte("user redeemed"))
+		default:
+			w.Write([]byte("error redeeming"))
 		}
 
 		fmt.Println(err)
@@ -203,15 +204,13 @@ func (s *BotService) Redeem(w http.ResponseWriter, r *http.Request) {
 	err = s.bot.Send(amount, request.Address)
 	if err != nil {
 		fmt.Println(err)
-		tx.Rollback()
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 
-	err = tx.Commit()
+	err = s.db.SetRedeemed(request.Code, request.Address)
 	if err != nil {
 		fmt.Printf("error committing code redemption: %s\n", err)
-		tx.Rollback()
 		w.WriteHeader(http.StatusOK)
 		return
 	}
@@ -251,5 +250,23 @@ func (s *BotService) NewAdmin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(201)
-	return
+}
+
+func (s *BotService) EnsureAuth(r *http.Request) (*structs.Admin, error) {
+	requestKey := r.Header[http.CanonicalHeaderKey("X-API-KEY")][0]
+	var admin *structs.Admin
+	var err error
+	adminKey := os.Getenv("ADMIN_KEY")
+	if requestKey == adminKey {
+		admin = &structs.Admin{}
+		admin.Limit = 0
+		admin.Key = requestKey
+	} else {
+		admin, err = s.db.GetAdmin(requestKey)
+		if err != nil {
+			return nil, fmt.Errorf("error getting admin for key %s: %s", adminKey, err)
+		}
+	}
+
+	return admin, nil
 }
