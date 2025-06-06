@@ -73,3 +73,9 @@ Response:
 ```
 Example uuid will be returned in plaintext.
 
+
+To create a redeem link, format the returned code uuids as follows:
+
+```txt
+  https://app.citizenwallet.xyz/#/?dl=plugin&alias=wallet.sfluv.org&plugin=https%3A%2F%2Fapp.sfluv.org%3Fcode%3D{uuid}%26page%3Dredeem
+```
