@@ -5,7 +5,9 @@
 ## Setup
 
 To make any authenticated call to the SFLuv faucet APIs, attach your api key to your request with the X-API-KEY header.
-Admin accounts are limited to a pre-determined weekly budget. By default, budgets reset every Monday morning at 12am PST.\
+Admin accounts are limited to a pre-determined weekly budget. By default, budgets reset every Monday morning at 12am PST.
+
+The base URL for our faucet is https://app.sfluv.org/api/faucet
 
 ## Relevant Endpoints
 
@@ -50,7 +52,7 @@ Request Query Params:
 
 Example event request:
 ```bash
-  curl http://localhost:8080/events?event=this-is-an-example-uuid\&page=0\&count=100
+  curl https://app.sfluv.org/api/faucet/events?event=this-is-an-example-uuid&page=0&count=100
 ```
 
 Response:
