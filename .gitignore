@@ -4,3 +4,5 @@
 **.db
 .next
 node_modules
+
+.idea
