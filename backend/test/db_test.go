@@ -6,8 +6,19 @@ import (
 	"github.com/faucet-portal/backend/db"
 )
 
-func TestMerchantInsert(t *testing.T) {
+func CleanUpMerchantTestDB() {
+	// Clean up the test database
+	mdb := db.MerchantDB()
+	if mdb == nil {
+		return
+	}
+	// Drop the merchant table
+	mdb.Exec("DROP TABLE IF EXISTS merchants")
+	// Drop the address table
+	mdb.Exec("DROP TABLE IF EXISTS addresses")
+}
 
+func TestMerchantInsert(t *testing.T) {
 	t.Setenv("DB_FOLDER_PATH", "./test_data")
 
 	mdb := db.MerchantDB()
@@ -64,6 +75,8 @@ func TestMerchantInsert(t *testing.T) {
 	if result.Error == nil {
 		t.Fatal("Expected merchant to be deleted, got nil")
 	}
+
+	CleanUpMerchantTestDB()
 }
 
 func TestMerchanAddressInsert(t *testing.T) {
@@ -136,4 +149,6 @@ func TestMerchanAddressInsert(t *testing.T) {
 	if result.Error == nil {
 		t.Fatal("Expected merchant to be deleted, got nil")
 	}
+
+	CleanUpMerchantTestDB()
 }

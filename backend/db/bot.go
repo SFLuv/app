@@ -122,6 +122,36 @@ func (s *BotDB) NewEvent(e *structs.Event) (string, error) {
 	return id, nil
 }
 
+func (s *BotDB) NewCode(code *structs.Code) (string, error) {
+	id := uuid.NewString()
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return "", err
+	}
+
+	_, err = tx.Exec(`
+		INSERT INTO codes
+			(id, redeemed, event)
+		VALUES
+		 ($1, $2, $3);
+	`, id, code.Redeemed, code.Event)
+	if err != nil {
+		tx.Rollback()
+		err = fmt.Errorf("error inserting event object: %s", err)
+		return "", err
+	}
+
+	err = tx.Commit()
+	if err != nil {
+		err = fmt.Errorf("error committing db transaction: %s", err)
+		tx.Rollback()
+		return "", err
+	}
+
+	return id, nil
+}
+
 func (s *BotDB) GetCodes(r *structs.CodesPageRequest) ([]*structs.Code, error) {
 	offset := r.Page * r.Count
 
