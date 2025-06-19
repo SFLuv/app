@@ -1,6 +1,8 @@
 package router
 
 import (
+	"net/http"
+
 	"github.com/faucet-portal/backend/handlers"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -34,4 +36,16 @@ func AddBotRoutes(r *chi.Mux, s *handlers.BotService) {
 	r.Get("/events", s.GetCodesRequest)
 
 	r.Post("/redeem", s.Redeem)
+}
+
+func withAuth(handlerFunc http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		_, ok := r.Context().Value("userDid").(string)
+		if !ok {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+
+		handlerFunc(w, r)
+	}
 }
