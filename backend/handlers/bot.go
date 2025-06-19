@@ -22,28 +22,55 @@ func NewBotService(db *db.BotDB, bot bot.IBot) *BotService {
 	return &BotService{db, bot}
 }
 
-// Create an event with x amount of available codes, y $SFLUV per code, and z expiration date. Responds with event id
-func (s *BotService) NewEvent(w http.ResponseWriter, r *http.Request) {
+func EnsureLogin(w http.ResponseWriter, r *http.Request) bool {
 	adminKey := os.Getenv("ADMIN_KEY")
-	if r.Header[http.CanonicalHeaderKey("X-API-KEY")][0] != adminKey {
+	header := r.Header[http.CanonicalHeaderKey("X-API-KEY")]
+	if len(header) == 0 {
 		w.WriteHeader(http.StatusUnauthorized)
-		return
+		return false
 	}
+	if header[0] != adminKey {
+		w.WriteHeader(http.StatusUnauthorized)
+		return false
+	}
+	return true
+}
 
+func EnsureBody(w http.ResponseWriter, r *http.Request) []byte {
 	defer r.Body.Close()
 
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		fmt.Println(err)
 		w.WriteHeader(http.StatusBadRequest)
+		return nil
+	}
+	return body
+}
+
+func EnsureUnmarshal(w http.ResponseWriter, obj any, body []byte) bool {
+	err := json.Unmarshal(body, obj)
+	if err != nil {
+		fmt.Println(err)
+		w.WriteHeader(http.StatusBadRequest)
+		return false
+	}
+	return true
+}
+
+// Create an event with x amount of available codes, y $SFLUV per code, and z expiration date. Responds with event id
+func (s *BotService) NewEvent(w http.ResponseWriter, r *http.Request) {
+	if !EnsureLogin(w, r) {
+		return
+	}
+
+	body := EnsureBody(w, r)
+	if body == nil {
 		return
 	}
 
 	var event *structs.Event
-	err = json.Unmarshal(body, &event)
-	if err != nil {
-		fmt.Println(err)
-		w.WriteHeader(http.StatusBadRequest)
+	if !EnsureUnmarshal(w, &event, body) {
 		return
 	}
 
@@ -57,11 +84,43 @@ func (s *BotService) NewEvent(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(id))
 }
 
+func (s *BotService) NewCodesRequest(w http.ResponseWriter, r *http.Request) {
+	if !EnsureLogin(w, r) {
+		return
+	}
+
+	body := EnsureBody(w, r)
+	if body == nil {
+		return
+	}
+
+	var new_codes *structs.NewCodesRequest
+	if !EnsureUnmarshal(w, &new_codes, body) {
+		return
+	}
+
+	new_codes.Event = r.PathValue("event_id")
+	if new_codes.Event == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	codes, err := s.db.NewCodes(new_codes)
+	if err != nil {
+		fmt.Println(err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	err = json.NewEncoder(w).Encode(codes)
+	if err != nil {
+		http.Error(w, "Failed to encode JSON", http.StatusInternalServerError)
+	}
+}
+
 // Get event codes by event id x, page y, and amount per page z (up to 100). Responds with array of event codes
-func (s *BotService) GetCodes(w http.ResponseWriter, r *http.Request) {
-	adminKey := os.Getenv("ADMIN_KEY")
-	if r.Header[http.CanonicalHeaderKey("X-API-KEY")][0] != adminKey {
-		w.WriteHeader(http.StatusUnauthorized)
+func (s *BotService) GetCodesRequest(w http.ResponseWriter, r *http.Request) {
+	if !EnsureLogin(w, r) {
 		return
 	}
 
@@ -81,16 +140,14 @@ func (s *BotService) GetCodes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	request := structs.CodesPageRequest{
-		Event: event,
-		Count: uint32(count),
-		Page:  uint32(page),
-	}
-
-	codes, err := s.db.GetCodes(&request)
+	codes, err := s.GetCodes(event, count, page)
 	if err != nil {
 		fmt.Println(err)
 		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	if len(codes) == 0 {
+		w.WriteHeader(http.StatusNotFound)
 		return
 	}
 
@@ -105,23 +162,31 @@ func (s *BotService) GetCodes(w http.ResponseWriter, r *http.Request) {
 	w.Write(bytes)
 }
 
+func (s *BotService) GetCodes(event string, count, page int) ([]*structs.Code, error) {
+	request := structs.CodesPageRequest{
+		Event: event,
+		Count: uint32(count),
+		Page:  uint32(page),
+	}
+
+	codes, err := s.db.GetCodes(&request)
+	if err != nil {
+		return nil, err
+	}
+
+	return codes, nil
+}
+
 // Verify requesting address event redemption status, Check code redemption status, Send tokens. Responds with 200 OK, 500 tx error, or 400 status
 func (s *BotService) Redeem(w http.ResponseWriter, r *http.Request) {
 
-	defer r.Body.Close()
-
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		fmt.Println(err)
-		w.WriteHeader(http.StatusBadRequest)
+	body := EnsureBody(w, r)
+	if body == nil {
 		return
 	}
 
 	var request *structs.RedeemRequest
-	err = json.Unmarshal(body, &request)
-	if err != nil {
-		fmt.Println(err)
-		w.WriteHeader(http.StatusBadRequest)
+	if !EnsureUnmarshal(w, &request, body) {
 		return
 	}
 
