@@ -6,7 +6,7 @@ import useTestRequest from "@/hooks/useTestRequest";
 import { usePrivy, useWallets } from "@privy-io/react-auth";
 import { useEffect, useState } from "react";
 import { Account, createWalletClient, custom, Hex } from "viem";
-import { sepolia } from "viem/chains";
+import { polygon } from "viem/chains";
 import { entryPoint07Abi, entryPoint07Address, toSmartAccount } from "viem/account-abstraction";
 import { toSimpleSmartAccount } from "permissionless/accounts";
 
@@ -20,26 +20,34 @@ export default function Home() {
 
   const runTest = async () => {
     const wallet = wallets[0]
-    await wallet.switchChain(sepolia.id)
+
+    console.log("wallet:", wallet)
+    await wallet.switchChain(polygon.id)
     const provider = await wallet.getEthereumProvider()
     const client = createWalletClient({
       account: wallet.address as Hex,
-      chain: sepolia,
+      chain: polygon,
       transport: custom(provider),
     })
 
+    // hard coded citizenwallet factory address for now, increment index for _nonce field in factory.
     const simpleSmartAccount = await toSimpleSmartAccount({
       owner: client,
       client,
       entryPoint: {
         address: entryPoint07Address,
         version: "0.7"
-      }
+      },
+      index: 1n,
+      factoryAddress: "0x940Cbb155161dc0C4aade27a4826a16Ed8ca0cb2",
     })
+
+    console.log("nonce:", await simpleSmartAccount.getNonce())
+    console.log("factoryData:", await simpleSmartAccount.getFactoryArgs())
 
     const address = await simpleSmartAccount.getAddress()
     const sig = await simpleSmartAccount.signUserOperation({
-      chainId: sepolia.id,
+      chainId: polygon.id,
       callData: "0x",
       callGasLimit: 0n,
       maxFeePerGas: 0n,
