@@ -3,9 +3,8 @@ import type { Metadata } from "next"
 import { Inter } from "next/font/google"
 import "./globals.css"
 import { Toaster } from "sonner"
-import AppProvider from "@/providers/AppProvider"
 import { CSSProperties } from "react"
-import { PrivyProvider } from "@privy-io/react-auth"
+import Providers from "@/providers/Providers"
 
 const inter = Inter({ subsets: ["latin"] })
 
@@ -23,24 +22,9 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <body className={inter.className}>
-      <PrivyProvider
-        appId={process.env.NEXT_PUBLIC_PRIVY_APP_ID || ""}
-        config={{
-          loginMethods: ["wallet", "email"],
-          appearance: {
-            theme: "dark",
-            accentColor: "#daa520",
-            logo: "/images/logo.png",
-          },
-          embeddedWallets: {
-            ethereum: {
-                createOnLogin: 'users-without-wallets',
-            },
-          }
-        }}
-      >
-        {children}
-      </PrivyProvider>
+        <Providers>
+          {children}
+        </Providers>
       </body>
     </html>
   )

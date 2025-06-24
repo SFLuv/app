@@ -5,62 +5,35 @@ import styles from "./page.module.css";
 import useTestRequest from "@/hooks/useTestRequest";
 import { usePrivy, useWallets } from "@privy-io/react-auth";
 import { useEffect, useState } from "react";
-import { Account, createWalletClient, custom, Hex } from "viem";
+import { Account, Address, createWalletClient, custom, Hex } from "viem";
 import { polygon } from "viem/chains";
 import { entryPoint07Abi, entryPoint07Address, toSmartAccount } from "viem/account-abstraction";
 import { toSimpleSmartAccount } from "permissionless/accounts";
+import { useApp } from "@/providers/AppProvider";
 
 export default function Home() {
   const { isLoading, sendRequest, requestSent, requestSuccessful } = useTestRequest();
-  const { login, logout, ready, authenticated } = usePrivy()
+  const { login, logout, ready, authenticated, send, wallet } = useApp()
   const [answer, setAnswer] = useState("")
   const [gameActive, setGameActive] = useState(false)
   const [message, setMessage] = useState("")
   const { wallets } = useWallets()
 
   const runTest = async () => {
-    const wallet = wallets[0]
-
-    console.log("wallet:", wallet)
-    await wallet.switchChain(polygon.id)
-    const provider = await wallet.getEthereumProvider()
-    const client = createWalletClient({
-      account: wallet.address as Hex,
-      chain: polygon,
-      transport: custom(provider),
-    })
-
-    // hard coded citizenwallet factory address for now, increment index for _nonce field in factory.
-    const simpleSmartAccount = await toSimpleSmartAccount({
-      owner: client,
-      client,
-      entryPoint: {
-        address: entryPoint07Address,
-        version: "0.7"
-      },
-      index: 1n,
-      factoryAddress: "0x940Cbb155161dc0C4aade27a4826a16Ed8ca0cb2",
-    })
-
-    console.log("nonce:", await simpleSmartAccount.getNonce())
-    console.log("factoryData:", await simpleSmartAccount.getFactoryArgs())
-
-    const address = await simpleSmartAccount.getAddress()
-    const sig = await simpleSmartAccount.signUserOperation({
-      chainId: polygon.id,
-      callData: "0x",
-      callGasLimit: 0n,
-      maxFeePerGas: 0n,
-      maxPriorityFeePerGas: 0n,
-      nonce: 0n,
-      preVerificationGas: 0n,
-      sender: "0x9e25Fe3734338F2cBF23e765a892a61AD23D19b2",
-      signature: "0x",
-      verificationGasLimit: 0n
-    })
-
-    console.log("address:", address)
-    console.log("sig:", sig)
+    const address = await wallet?.getAddress()
+    console.log(address)
+    if(address && (address != "" as Address)) {
+      const res = await send(1n, address)
+      if(res == null) {
+        console.error("tx not sent")
+        return
+      }
+      if(res?.error) {
+        console.error(res.error)
+        return
+      }
+      console.log(res?.hash)
+    }
   }
 
   useEffect(() => {
