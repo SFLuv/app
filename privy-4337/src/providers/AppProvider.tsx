@@ -4,10 +4,13 @@ import { PrivyProvider, usePrivy, useWallets } from "@privy-io/react-auth"
 import { toSimpleSmartAccount, ToSimpleSmartAccountReturnType } from "permissionless/accounts";
 import { createContext, ReactNode, useContext, useEffect, useState } from "react";
 import { Address, createWalletClient, custom, encodeFunctionData, Hash, Hex } from "viem";
-import { entryPoint07Address, PaymasterClient } from "viem/account-abstraction";
-import { depositFor, transfer, withdrawTo } from "@lib/abi";
-import { chain, token } from "@config"
+import { entryPoint07Address, formatUserOperation, PaymasterClient, toPackedUserOperation, UserOperation } from "viem/account-abstraction";
+import { depositFor, execute, transfer, withdrawTo } from "@lib/abi";
 import { client } from "@lib/paymaster"
+import { CHAIN, CHAIN_ID, COMMUNITY, FACTORY, PAYMASTER, TOKEN } from "@lib/constants";
+import { bundler } from "@lib/paymaster/client";
+import config from "@config";
+import { UserOp } from "@citizenwallet/sdk";
 
 interface UserState {
 }
@@ -31,6 +34,7 @@ interface AppContextType {
   unwrap: (amount: bigint, to: Address) => Promise<TxState | null>;
   wrap: (amount: bigint) => Promise<TxState | null>;
   send: (amount: bigint, to: Address) => Promise<TxState | null>;
+  getBalance: () => Promise<bigint>;
 }
 
 const defaultUserState: UserState = {
@@ -106,11 +110,11 @@ export default function AppProvider({ children }: { children: ReactNode }) {
       const index = 0n;
       const wallet = wallets[0];
       console.log(wallets)
-      await wallet.switchChain(chain.id)
+      await wallet.switchChain(CHAIN_ID)
       const provider = await wallet.getEthereumProvider()
       const client = createWalletClient({
         account: wallet.address as Hex,
-        chain: chain,
+        chain: CHAIN,
         transport: custom(provider)
       })
       const smartWallet = await toSimpleSmartAccount({
@@ -121,12 +125,13 @@ export default function AppProvider({ children }: { children: ReactNode }) {
           version: "0.7"
         },
         index,
-        factoryAddress: process.env.NEXT_PUBLIC_FACTORY_ADDRESS as Address
+        factoryAddress: FACTORY
       })
 
       setWallet(smartWallet)
     }
-    catch {
+    catch(error) {
+      console.error(error)
       throw new Error("error initializing wallet")
     }
   }
@@ -159,17 +164,32 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     }
 
     try {
-      const userOp = await client.sendUserOperation({
-        account,
-        calls: [{
-          to: token,
-          value: 0n,
-          data: callData
-        }],
-        paymaster: true
+      const opCallData = encodeFunctionData({
+        abi: [execute],
+        functionName: "execute",
+        args: [TOKEN, 0n, callData]
       })
 
-      receipt.hash = userOp
+      const preUserOp = {
+        sender: account.address,
+        nonce: await account.getNonce(),
+        callData: opCallData,
+        callGasLimit: 0n,
+        verificationGasLimit: 0n,
+        preVerificationGas: 0n,
+        maxFeePerGas: 0n,
+        maxPriorityFeePerGas: 0n,
+        signature: "0x" as Hex
+      } as UserOperation
+
+      console.log("test")
+
+      const userOp = await _paymasterSignUserOp(preUserOp)
+      const sig = await account.signUserOperation(userOp)
+
+      userOp.signature = sig
+
+      receipt.hash = await _paymasterSubmitUserOp(userOp)
     }
     catch(error) {
       receipt.error = "error sending transaction: check logs"
@@ -178,6 +198,41 @@ export default function AppProvider({ children }: { children: ReactNode }) {
 
     setTx(receipt)
     return receipt
+  }
+
+  const _paymasterSignUserOp = async (op: UserOperation): Promise<UserOperation> => {
+    const method = "pm_ooSponsorUserOperation"
+
+    const accountsConfig = COMMUNITY.primaryAccountConfig
+
+    const params = [
+      op,
+      accountsConfig.entrypoint_address,
+      { type: accountsConfig.paymaster_type },
+      1
+    ]
+
+    let res = await bundler.request({method, params} as any) as UserOperation
+    if(!res?.callData) {
+      throw new Error("invalid response")
+    }
+
+    return res
+  }
+
+  const _paymasterSubmitUserOp = async (op: UserOperation): Promise<Hex> => {
+    const method = "eth_sendUserOperation"
+
+    const primaryAccountConfig = COMMUNITY.primaryAccountConfig
+
+    const params = [
+      op,
+      primaryAccountConfig.entrypoint_address
+    ]
+
+    let res: Hex = await bundler.request({method, params} as any)
+
+    return res
   }
 
   const login = async () => {
@@ -240,9 +295,18 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     return _execTx(wallet, callData)
   }
 
+  const getBalance = async (): Promise<bigint> => {
+    if(!wallet) return 0n
+
+    return await client.getBalance({
+      address: wallet?.address,
+      blockTag: "safe"
+    })
+  }
+
   return (
       <AppContext.Provider
-        value={{ ready, authenticated, loading, user, wallet, tx, error, login, logout, unwrap, wrap, send}}
+        value={{ ready, authenticated, loading, user, wallet, tx, error, login, logout, unwrap, wrap, send, getBalance }}
       >
         {children}
       </AppContext.Provider>

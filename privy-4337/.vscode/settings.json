@@ -1,0 +1,8 @@
+{
+  "chat.agent.enabled": false,
+  "chat.commandCenter.enabled": false,
+  "chat.agent.maxRequests": 0,
+  "chat.notifyWindowOnConfirmation": false,
+  "telemetry.feedback.enabled": false,
+  "typescript.tsdk": "node_modules/typescript/lib"
+}

@@ -3,11 +3,12 @@
 import { ReactNode } from "react"
 import AppProvider from "./AppProvider"
 import { PrivyProvider } from "@privy-io/react-auth"
+import { PRIVY_ID } from "@lib/constants"
 
 const Providers = ({ children }: { children: ReactNode }) => {
   return (
     <PrivyProvider
-      appId={process.env.NEXT_PUBLIC_PRIVY_APP_ID || ""}
+      appId={PRIVY_ID}
       config={{
         loginMethods: ["wallet", "email"],
         appearance: {

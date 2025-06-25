@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { usePrivy } from "@privy-io/react-auth";
+import { BACKEND } from "@lib/constants";
 
 export default function useRequest() {
   const [requestSent, setRequestSent] = useState<boolean>(false);
@@ -7,7 +8,7 @@ export default function useRequest() {
   const [requestSuccessful, setRequestSuccessful] = useState<boolean>(false);
   const { authenticated, getAccessToken } = usePrivy();
 
-  let baseUrl: string = process.env.NEXT_PUBLIC_BACKEND_BASE_URL || "http://localhost:8080"
+  let baseUrl: string = BACKEND
 
   const sendRequest = async (endpoint: string, options: RequestInit) => {
     try {
