@@ -20,6 +20,8 @@ func MerchantDB() *gorm.DB {
 	return db
 }
 
+// TODO SANCHEZ: add all attributes you need for a merchant
+
 type Merchant struct {
 	gorm.Model
 	Address     Address
