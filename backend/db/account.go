@@ -8,15 +8,15 @@ import (
 )
 
 type AccountDB struct {
-	db *sql.DB
+	db *SFLuvDB
 }
 
-func Account(db *sql.DB) *AccountDB {
+func Account(db *SFLuvDB) *AccountDB {
 	return &AccountDB{db}
 }
 
 func (s *AccountDB) CreateTables() error {
-	_, err := s.db.Exec(`
+	_, err := s.db.GetDB().Exec(`
 		CREATE TABLE IF NOT EXISTS accounts(
 			address TEXT PRIMARY KEY NOT NULL,
 			email TEXT,
@@ -33,7 +33,7 @@ func (s *AccountDB) CreateTables() error {
 
 func (s *AccountDB) NewAccount(account *structs.AccountRequest) error {
 
-	_, err := s.db.Exec(`
+	_, err := s.db.GetDB().Exec(`
 		INSERT INTO accounts
 			(address, email, name)
 		VALUES
@@ -44,7 +44,7 @@ func (s *AccountDB) NewAccount(account *structs.AccountRequest) error {
 }
 
 func (s *AccountDB) GetAccount(address string) bool {
-	row := s.db.QueryRow(`
+	row := s.db.GetDB().QueryRow(`
 		SELECT * FROM accounts WHERE address = $1;
 	`, address)
 

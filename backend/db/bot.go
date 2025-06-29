@@ -10,17 +10,17 @@ import (
 )
 
 type BotDB struct {
-	db *sql.DB
+	db *SFLuvDB
 }
 
-func Bot(db *sql.DB) *BotDB {
+func Bot(db *SFLuvDB) *BotDB {
 	return &BotDB{db}
 }
 
 func (s *BotDB) CreateTables() error {
 
 	//	Event Table
-	_, err := s.db.Exec(`
+	_, err := s.db.GetDB().Exec(`
 		CREATE TABLE IF NOT EXISTS events(
 			id TEXT PRIMARY KEY NOT NULL,
 			title TEXT,
@@ -35,7 +35,7 @@ func (s *BotDB) CreateTables() error {
 	}
 
 	// Codes Table
-	_, err = s.db.Exec(`
+	_, err = s.db.GetDB().Exec(`
 		CREATE TABLE IF NOT EXISTS codes(
 			id TEXT PRIMARY KEY NOT NULL,
 			redeemed INTEGER NOT NULL DEFAULT 0,
@@ -49,7 +49,7 @@ func (s *BotDB) CreateTables() error {
 	}
 
 	// Accounts Table (for foreign key lookup in redemptions)
-	_, err = s.db.Exec(`
+	_, err = s.db.GetDB().Exec(`
 		CREATE TABLE IF NOT EXISTS accounts(
 			address TEXT PRIMARY KEY
 		)
@@ -60,7 +60,7 @@ func (s *BotDB) CreateTables() error {
 	}
 
 	// Redemptions Table (accounts - events join table)
-	_, err = s.db.Exec(`
+	_, err = s.db.GetDB().Exec(`
 		CREATE TABLE IF NOT EXISTS redemptions(
 			account TEXT,
 			code TEXT,
@@ -79,7 +79,7 @@ func (s *BotDB) CreateTables() error {
 func (s *BotDB) NewEvent(e *structs.Event) (string, error) {
 	id := uuid.NewString()
 
-	tx, err := s.db.Begin()
+	tx, err := s.db.GetDB().Begin()
 	if err != nil {
 		return "", err
 	}
@@ -125,7 +125,7 @@ func (s *BotDB) NewEvent(e *structs.Event) (string, error) {
 func (s *BotDB) NewCode(code *structs.Code) (string, error) {
 	id := uuid.NewString()
 
-	tx, err := s.db.Begin()
+	tx, err := s.db.GetDB().Begin()
 	if err != nil {
 		return "", err
 	}
@@ -157,7 +157,7 @@ func (s *BotDB) GetCodes(r *structs.CodesPageRequest) ([]*structs.Code, error) {
 
 	fmt.Println(r)
 
-	rows, err := s.db.Query(`
+	rows, err := s.db.GetDB().Query(`
 		SELECT
 			id, redeemed, event
 		FROM codes
@@ -190,7 +190,7 @@ func (s *BotDB) GetCodes(r *structs.CodesPageRequest) ([]*structs.Code, error) {
 func (s *BotDB) NewCodes(r *structs.NewCodesRequest) ([]*structs.Code, error) {
 	results := make([]*structs.Code, r.Count)
 
-	tx, err := s.db.Begin()
+	tx, err := s.db.GetDB().Begin()
 	if err != nil {
 		return nil, err
 	}
@@ -228,7 +228,7 @@ func (s *BotDB) NewCodes(r *structs.NewCodesRequest) ([]*structs.Code, error) {
 }
 
 func (s *BotDB) Redeem(id string, account string) (uint64, *sql.Tx, error) {
-	tx, err := s.db.Begin()
+	tx, err := s.db.GetDB().Begin()
 	if err != nil {
 		err = fmt.Errorf("error creating db tx: %s", err)
 		return 0, nil, err

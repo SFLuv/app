@@ -1,18 +1,14 @@
 package db
 
 import (
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
 
-func MerchantDB() *gorm.DB {
-	dbPath := DBPath("merchant")
-	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
-	if db == nil {
-		return nil
-	}
+func MerchantDB() *SFLuvDB {
+	// Initialize the database connection for merchants
+	db := InitDB("merchants")
 
-	err = db.AutoMigrate(&Merchant{}, &Person{}, &Address{}, &Category{})
+	err := db.db.AutoMigrate(&Merchant{}, &Person{}, &Address{}, &Category{})
 	if err != nil {
 		panic(err)
 	}
