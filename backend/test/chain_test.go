@@ -47,11 +47,11 @@ func CleanUpBotTestDB() {
 	if bdb == nil {
 		return
 	}
-	// Drop the codes table
-	bdb.GetDB().Exec("DROP TABLE IF EXISTS codes")
+	// Clean the codes table
+	bdb.GetDB().Exec("delete from codes")
 
-	// Drop the events table
-	bdb.GetDB().Exec("DROP TABLE IF EXISTS events")
+	// Clean the events table
+	bdb.GetDB().Exec("delete from events")
 }
 
 func LoadEnv(t *testing.T) {

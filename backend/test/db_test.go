@@ -12,26 +12,61 @@ func CleanUpMerchantTestDB() {
 	if mdb == nil {
 		return
 	}
-	// Drop the merchant table
-	mdb.GetDB().Exec("DROP TABLE IF EXISTS merchants")
-	// Drop the address table
-	mdb.GetDB().Exec("DROP TABLE IF EXISTS addresses")
+
+	// Clean the merchant table
+	mdb.GetDB().Exec("delete from merchants")
+	// Clean the address table
+	mdb.GetDB().Exec("delete from addresses")
+}
+
+func TestMerchantInsertPostgres(t *testing.T) {
+	t.Setenv("DB", "postgres")
+	TestMerchantInsert(t)
+}
+
+func TestMerchantInsertSQLite(t *testing.T) {
+	t.Setenv("DB", "sqlite")
+	t.Setenv("DB_FOLDER_PATH", "./test_data")
+	// Ensure the test database is clean before running the test
+	TestMerchantInsert(t)
 }
 
 func TestMerchantInsert(t *testing.T) {
-	t.Setenv("DB_FOLDER_PATH", "./test_data")
-	t.Setenv("DB", "postgres")
 
 	mdb := db.MerchantDB()
 
 	if mdb == nil {
 		t.Fatal("MerchantDB returned nil")
 	}
+
+	address := db.Address{
+		Street:   "123 Test St",
+		Street_2: "Apt 4B",
+		City:     "Test City",
+		State:    "Test State",
+		Zip:      "12345",
+	}
+
+	contact := db.Person{
+		Email:     "test@example.com",
+		Phone:     "123-456-7890",
+		FirstName: "Test",
+		LastName:  "User",
+	}
+
+	category := db.Category{
+		Name: "Test Category",
+	}
+
 	// Create a new merchant
 	merchant := db.Merchant{
 		Name:        "Test Merchant",
 		Description: "This is a test merchant",
+		Address:     address,
+		Contact:     contact,
+		Category:    category,
 	}
+
 	// Save the merchant to the database
 	result := mdb.GetGormDB().Create(&merchant)
 	if result.Error != nil {
