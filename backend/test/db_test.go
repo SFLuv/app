@@ -12,27 +12,63 @@ func CleanUpMerchantTestDB() {
 	if mdb == nil {
 		return
 	}
-	// Drop the merchant table
-	mdb.Exec("DROP TABLE IF EXISTS merchants")
-	// Drop the address table
-	mdb.Exec("DROP TABLE IF EXISTS addresses")
+
+	// Clean the merchant table
+	mdb.GetDB().Exec("delete from merchants")
+	// Clean the address table
+	mdb.GetDB().Exec("delete from addresses")
+}
+
+func TestMerchantInsertPostgres(t *testing.T) {
+	t.Setenv("DB", "postgres")
+	TestMerchantInsert(t)
+}
+
+func TestMerchantInsertSQLite(t *testing.T) {
+	t.Setenv("DB", "sqlite")
+	t.Setenv("DB_FOLDER_PATH", "./test_data")
+	// Ensure the test database is clean before running the test
+	TestMerchantInsert(t)
 }
 
 func TestMerchantInsert(t *testing.T) {
-	t.Setenv("DB_FOLDER_PATH", "./test_data")
 
 	mdb := db.MerchantDB()
 
 	if mdb == nil {
 		t.Fatal("MerchantDB returned nil")
 	}
+
+	address := db.Address{
+		Street:   "123 Test St",
+		Street_2: "Apt 4B",
+		City:     "Test City",
+		State:    "Test State",
+		Zip:      "12345",
+	}
+
+	contact := db.Person{
+		Email:     "test@example.com",
+		Phone:     "123-456-7890",
+		FirstName: "Test",
+		LastName:  "User",
+	}
+
+	category := db.Category{
+		Name: "Test Category",
+	}
+
 	// Create a new merchant
 	merchant := db.Merchant{
 		Name:        "Test Merchant",
 		Description: "This is a test merchant",
+		Address:     address,
+		Contact:     contact,
+		Category:    category,
 	}
+
 	// Save the merchant to the database
-	result := mdb.Create(&merchant)
+	result := mdb.GetGormDB().Create(&merchant)
 	if result.Error != nil {
 		t.Fatalf("Failed to create merchant: %v", result.Error)
 	}
@@ -64,13 +100,13 @@ func TestMerchantInsert(t *testing.T) {
 	if merchant.Phone != "" {
 		t.Fatalf("Expected merchant phone to be empty, got '%s'", merchant.Phone)
 	}
-	mdb.Delete(&merchant)
+	mdb.GetGormDB().Delete(&merchant)
 	// Check if the merchant was deleted successfully
 	if result.RowsAffected != 1 {
 		t.Fatalf("Expected 1 row affected, got %d", result.RowsAffected)
 	}
 
-	result = mdb.Take(&merchant)
+	result = mdb.GetGormDB().Take(&merchant)
 	// Check if the merchant was deleted successfully
 	if result.Error == nil {
 		t.Fatal("Expected merchant to be deleted, got nil")
@@ -94,7 +130,7 @@ func TestMerchanAddressInsert(t *testing.T) {
 		Zip:      "12345",
 	}
 	// Save the address to the database
-	result := mdb.Create(&address)
+	result := mdb.GetGormDB().Create(&address)
 	if result.Error != nil {
 		t.Fatalf("Failed to create address: %v", result.Error)
 	}
@@ -109,7 +145,7 @@ func TestMerchanAddressInsert(t *testing.T) {
 		Address:     address,
 	}
 	// Save the merchant to the database
-	result = mdb.Create(&merchant)
+	result = mdb.GetGormDB().Create(&merchant)
 	if result.Error != nil {
 		t.Fatalf("Failed to create merchant: %v", result.Error)
 	}
@@ -126,25 +162,25 @@ func TestMerchanAddressInsert(t *testing.T) {
 		t.Fatalf("Expected merchant address street to be '123 Test St', got '%s'", merchant.Address.Street)
 	}
 	// delete merchant
-	result = mdb.Delete(&merchant)
+	result = mdb.GetGormDB().Delete(&merchant)
 	// Check if the merchant was deleted successfully
 	if result.RowsAffected != 1 {
 		t.Fatalf("Expected 1 row affected, got %d", result.RowsAffected)
 	}
 	// delete address
-	result = mdb.Delete(&address)
+	result = mdb.GetGormDB().Delete(&address)
 	// Check if the address was deleted successfully
 	if result.RowsAffected != 1 {
 		t.Fatalf("Expected 1 row affected, got %d", result.RowsAffected)
 	}
 	// Check if the address was deleted successfully
-	result = mdb.Take(&address)
+	result = mdb.GetGormDB().Take(&address)
 	// Check if the address was deleted successfully
 	if result.Error == nil {
 		t.Fatal("Expected address to be deleted, got nil")
 	}
 	// Check if the merchant was deleted successfully
-	result = mdb.Take(&merchant)
+	result = mdb.GetGormDB().Take(&merchant)
 	// Check if the merchant was deleted successfully
 	if result.Error == nil {
 		t.Fatal("Expected merchant to be deleted, got nil")
