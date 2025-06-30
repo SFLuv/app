@@ -1,7 +1,25 @@
 package structs
 
+import (
+	"gorm.io/gorm"
+)
+
+type Redemption struct {
+	gorm.Model
+	UUID    string `json:"id"`
+	Account string `json:"account"`
+	Code    string `json:"code"`
+}
+
+type Account struct {
+	gorm.Model
+	UUID    string `json:"id"`
+	Address string `json:"address"`
+}
+
 type Event struct {
-	Id          string `json:"id"`
+	gorm.Model
+	UUID        string `json:"id"`
 	Title       string `json:"title"`
 	Description string `json:"description"`
 	Codes       uint32 `json:"codes"`
@@ -10,7 +28,8 @@ type Event struct {
 }
 
 type Code struct {
-	Id       string `json:"id"`
+	gorm.Model
+	UUID     string `json:"id"`
 	Redeemed bool   `json:"redeemed"`
 	Event    string `json:"event"`
 }

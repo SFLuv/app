@@ -19,58 +19,9 @@ func Bot(db *SFLuvDB) *BotDB {
 
 func (s *BotDB) CreateTables() error {
 
-	//	Event Table
-	_, err := s.db.GetDB().Exec(`
-		CREATE TABLE IF NOT EXISTS events(
-			id TEXT PRIMARY KEY NOT NULL,
-			title TEXT,
-			description TEXT,
-			expiration INTEGER,
-			amount INTEGER NOT NULL
-		);
-	`)
+	err := s.db.GetGormDB().AutoMigrate(&structs.Redemption{}, &structs.Account{}, &structs.Code{}, &structs.Event{})
 	if err != nil {
-		err = fmt.Errorf("error creating events table: %s", err)
-		return err
-	}
-
-	// Codes Table
-	_, err = s.db.GetDB().Exec(`
-		CREATE TABLE IF NOT EXISTS codes(
-			id TEXT PRIMARY KEY NOT NULL,
-			redeemed INTEGER NOT NULL DEFAULT 0,
-			event TEXT,
-			FOREIGN KEY (event) REFERENCES events(id)
-		);
-	`)
-	if err != nil {
-		err = fmt.Errorf("error creating codes table: %s", err)
-		return err
-	}
-
-	// Accounts Table (for foreign key lookup in redemptions)
-	_, err = s.db.GetDB().Exec(`
-		CREATE TABLE IF NOT EXISTS accounts(
-			address TEXT PRIMARY KEY
-		)
-	`)
-	if err != nil {
-		err = fmt.Errorf("error creating accounts table: %s", err)
-		return err
-	}
-
-	// Redemptions Table (accounts - events join table)
-	_, err = s.db.GetDB().Exec(`
-		CREATE TABLE IF NOT EXISTS redemptions(
-			account TEXT,
-			code TEXT,
-			FOREIGN KEY (account) REFERENCES accounts(address),
-			FOREIGN KEY (code) REFERENCES codes(id)
-		);
-	`)
-	if err != nil {
-		err = fmt.Errorf("error creating redemptions table: %s", err)
-		return err
+		panic(err)
 	}
 
 	return nil
@@ -79,44 +30,19 @@ func (s *BotDB) CreateTables() error {
 func (s *BotDB) NewEvent(e *structs.Event) (string, error) {
 	id := uuid.NewString()
 
-	tx, err := s.db.GetDB().Begin()
-	if err != nil {
-		return "", err
-	}
+	e.UUID = id
 
-	_, err = tx.Exec(`
-		INSERT INTO events
-			(id, title, description, amount, expiration)
-		VALUES
-		 ($1, $2, $3, $4, $5);
-	`, id, e.Title, e.Description, e.Amount, e.Expiration)
-	if err != nil {
-		tx.Rollback()
-		err = fmt.Errorf("error inserting event object: %s", err)
-		return "", err
-	}
+	s.db.GetGormDB().Create(e)
 
 	for range e.Codes {
 		codeId := uuid.NewString()
 
-		_, err = tx.Exec(`
-				INSERT INTO codes
-					(id, event)
-				VALUES
-					($1, $2);
-			`, codeId, id)
-		if err != nil {
-			err = fmt.Errorf("error inserting event codes: %s", err)
-			tx.Rollback()
-			return "", err
+		code := &structs.Code{
+			UUID:     codeId,
+			Redeemed: false,
+			Event:    id,
 		}
-	}
-
-	err = tx.Commit()
-	if err != nil {
-		err = fmt.Errorf("error committing db transaction: %s", err)
-		tx.Rollback()
-		return "", err
+		s.db.GetGormDB().Create(code)
 	}
 
 	return id, nil
@@ -125,27 +51,11 @@ func (s *BotDB) NewEvent(e *structs.Event) (string, error) {
 func (s *BotDB) NewCode(code *structs.Code) (string, error) {
 	id := uuid.NewString()
 
-	tx, err := s.db.GetDB().Begin()
-	if err != nil {
-		return "", err
-	}
+	code.UUID = id
 
-	_, err = tx.Exec(`
-		INSERT INTO codes
-			(id, redeemed, event)
-		VALUES
-		 ($1, $2, $3);
-	`, id, code.Redeemed, code.Event)
-	if err != nil {
-		tx.Rollback()
-		err = fmt.Errorf("error inserting event object: %s", err)
-		return "", err
-	}
-
-	err = tx.Commit()
-	if err != nil {
-		err = fmt.Errorf("error committing db transaction: %s", err)
-		tx.Rollback()
+	result := s.db.GetGormDB().Create(code)
+	if result.Error != nil {
+		err := fmt.Errorf("error creating code: %s", result.Error)
 		return "", err
 	}
 
@@ -175,7 +85,7 @@ func (s *BotDB) GetCodes(r *structs.CodesPageRequest) ([]*structs.Code, error) {
 	for rows.Next() {
 		code := structs.Code{}
 
-		err = rows.Scan(&code.Id, &code.Redeemed, &code.Event)
+		err = rows.Scan(&code.UUID, &code.Redeemed, &code.Event)
 		if err != nil {
 			err = fmt.Errorf("error unpacking event codes: %s", err)
 			return nil, err
@@ -211,7 +121,7 @@ func (s *BotDB) NewCodes(r *structs.NewCodesRequest) ([]*structs.Code, error) {
 		}
 
 		results[i] = &structs.Code{
-			Id:       codeId,
+			UUID:     codeId,
 			Redeemed: false,
 			Event:    r.Event,
 		}
@@ -228,6 +138,7 @@ func (s *BotDB) NewCodes(r *structs.NewCodesRequest) ([]*structs.Code, error) {
 }
 
 func (s *BotDB) Redeem(id string, account string) (uint64, *sql.Tx, error) {
+
 	tx, err := s.db.GetDB().Begin()
 	if err != nil {
 		err = fmt.Errorf("error creating db tx: %s", err)
@@ -242,13 +153,13 @@ func (s *BotDB) Redeem(id string, account string) (uint64, *sql.Tx, error) {
 			(
 				SELECT (event)
 				FROM codes
-				WHERE id = $1
+				WHERE uuid = $1
 			) = (
 				SELECT
 					(event)
 				FROM codes
 				WHERE
-					id = (
+					uuid = (
 						SELECT
 							(code)
 						FROM redemptions
@@ -272,12 +183,12 @@ func (s *BotDB) Redeem(id string, account string) (uint64, *sql.Tx, error) {
 			amount, expiration
 		FROM events
 		WHERE
-			id = (
+			uuid = (
 				SELECT
 					(event)
 				FROM codes
 				WHERE
-					(id = $1 AND redeemed = 0)
+					(uuid = $1 AND not redeemed)
 			);
 	`, id)
 
@@ -300,8 +211,8 @@ func (s *BotDB) Redeem(id string, account string) (uint64, *sql.Tx, error) {
 
 	_, err = tx.Exec(`
 		UPDATE codes
-		SET redeemed = 1
-		WHERE id = $1;
+		SET redeemed = true
+		WHERE uuid = $1;
 	`, id)
 	if err != nil {
 		err = fmt.Errorf("error updating code redemption status: %s", err)
