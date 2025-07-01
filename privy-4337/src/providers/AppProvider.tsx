@@ -3,14 +3,16 @@
 import { PrivyProvider, usePrivy, useWallets } from "@privy-io/react-auth"
 import { toSimpleSmartAccount, ToSimpleSmartAccountReturnType } from "permissionless/accounts";
 import { createContext, ReactNode, useContext, useEffect, useState } from "react";
-import { Address, createWalletClient, custom, encodeFunctionData, Hash, Hex } from "viem";
-import { entryPoint07Address, formatUserOperation, PaymasterClient, toPackedUserOperation, UserOperation } from "viem/account-abstraction";
+import { Address, createWalletClient, custom, encodeFunctionData, Hash, Hex, hexToBytes, RpcUserOperation } from "viem";
+import { entryPoint07Address, entryPoint08Address, formatUserOperation, PaymasterClient, toPackedUserOperation, UserOperation } from "viem/account-abstraction";
 import { depositFor, execute, transfer, withdrawTo } from "@lib/abi";
 import { client } from "@lib/paymaster"
-import { CHAIN, CHAIN_ID, COMMUNITY, FACTORY, PAYMASTER, TOKEN } from "@lib/constants";
-import { bundler } from "@lib/paymaster/client";
+import { CHAIN, CHAIN_ID, COMMUNITY, COMMUNITY_ACCOUNT, FACTORY, PAYMASTER, TOKEN } from "@lib/constants";
+import { bundler, cw_bundler } from "@lib/paymaster/client";
 import config from "@config";
 import { UserOp } from "@citizenwallet/sdk";
+import { Signer } from "ethers";
+import { BrowserProvider } from "ethers";
 
 interface UserState {
 }
@@ -26,7 +28,7 @@ interface AppContextType {
   authenticated: boolean;
   loading: boolean;
   user: UserState;
-  wallet: ToSimpleSmartAccountReturnType | null;
+  wallet: ToSimpleSmartAccountReturnType<"0.7"> | null;
   tx: TxState;
   error: string | null;
   login: () => Promise<void>;
@@ -53,7 +55,8 @@ export default function AppProvider({ children }: { children: ReactNode }) {
   const [authenticated, setAuthenticated] = useState<boolean>(false);
   const [loading, setLoading] = useState<boolean>(true);
   const [user, setUser] = useState<UserState>(defaultUserState);
-  const [wallet, setWallet] = useState<ToSimpleSmartAccountReturnType | null>(null);
+  const [wallet, setWallet] = useState<ToSimpleSmartAccountReturnType<"0.7"> | null>(null);
+  const [ethersSigner, setEthersSigner] = useState<Signer | null>(null);
   const [tx, setTx] = useState<TxState>(defaultTxState)
   const [error, setError] = useState<string | null>(null);
   const { getAccessToken, authenticated: privyAuthenticated, ready: privyReady, login: privyLogin, logout: privyLogout } = usePrivy();
@@ -82,12 +85,20 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     setLoading(true)
     try {
       await _getUser()
-      await _initWallet()
     }
-    catch (error) {
-      console.error(error)
+    catch(error) {
       await privyLogout()
       setError("error getting user data from backend")
+      console.error(error)
+      throw new Error("error logging user in")
+    }
+    try {
+      await _initWallet()
+    }
+    catch(error) {
+      await privyLogout()
+      setError("error initializing wallet")
+      console.error(error)
       throw new Error("error logging user in")
     }
 
@@ -121,13 +132,16 @@ export default function AppProvider({ children }: { children: ReactNode }) {
         owner: client,
         client,
         entryPoint: {
-          address: entryPoint07Address,
+          address: entryPoint07Address as Address,
           version: "0.7"
         },
         index,
         factoryAddress: FACTORY
       })
+      const ethersProvider = new BrowserProvider(provider)
+      const signer = await ethersProvider.getSigner()
 
+      setEthersSigner(signer)
       setWallet(smartWallet)
     }
     catch(error) {
@@ -136,9 +150,14 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     }
   }
 
-  const _beforeTx = (): ToSimpleSmartAccountReturnType | null => {
+  const _beforeTx = (): { wallet: ToSimpleSmartAccountReturnType<"0.7">, signer: Signer } | null => {
     if(!wallet) {
       setError("no wallet initialized")
+      return null
+    }
+
+    if(!ethersSigner) {
+      setError("no signer initialized")
       return null
     }
 
@@ -153,43 +172,49 @@ export default function AppProvider({ children }: { children: ReactNode }) {
       hash: null
     })
 
-    return wallet
+    return {wallet, signer: ethersSigner}
   }
 
-  const _execTx = async (account: ToSimpleSmartAccountReturnType, callData: Hash): Promise<TxState> => {
+  const _execTx = async (account: ToSimpleSmartAccountReturnType<"0.7">, signer: Signer, callData: Hash): Promise<TxState> => {
     let receipt: TxState = {
       sending: false,
       error: null,
       hash: null
     }
 
+    const data = hexToBytes(callData)
+
     try {
-      const opCallData = encodeFunctionData({
-        abi: [execute],
-        functionName: "execute",
-        args: [TOKEN, 0n, callData]
-      })
+      const hash = await cw_bundler.call(signer, TOKEN, account.address, data)
+      receipt.hash = hash
 
-      const preUserOp = {
-        sender: account.address,
-        nonce: await account.getNonce(),
-        callData: opCallData,
-        callGasLimit: 0n,
-        verificationGasLimit: 0n,
-        preVerificationGas: 0n,
-        maxFeePerGas: 0n,
-        maxPriorityFeePerGas: 0n,
-        signature: "0x" as Hex
-      } as UserOperation
+      // const opCallData = encodeFunctionData({
+      //   abi: [execute],
+      //   functionName: "execute",
+      //   args: [TOKEN, 0n, callData]
+      // })
 
-      console.log("test")
+      // const preUserOp = {
+      //   sender: account.address,
+      //   nonce: await account.getNonce(),
+      //   callData: opCallData,
+      //   callGasLimit: 0n,
+      //   verificationGasLimit: 0n,
+      //   preVerificationGas: 0n,
+      //   maxFeePerGas: 0n,
+      //   maxPriorityFeePerGas: 0n,
+      //   signature: "0x" as Hex
+      // } as UserOperation
 
-      const userOp = await _paymasterSignUserOp(preUserOp)
-      const sig = await account.signUserOperation(userOp)
+      // console.log("test")
 
-      userOp.signature = sig
 
-      receipt.hash = await _paymasterSubmitUserOp(userOp)
+      // const userOp = await _paymasterSignUserOp(preUserOp)
+      // const sig = await account.signUserOperation(userOp)
+
+      // userOp.signature = sig
+
+      // receipt.hash = await _paymasterSubmitUserOp(userOp)
     }
     catch(error) {
       receipt.error = "error sending transaction: check logs"
@@ -200,16 +225,15 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     return receipt
   }
 
-  const _paymasterSignUserOp = async (op: UserOperation): Promise<UserOperation> => {
-    const method = "pm_ooSponsorUserOperation"
+  const _paymasterSignUserOp = async (op: UserOperation<"0.7">): Promise<UserOperation> => {
+    const method = "pm_sponsorUserOperation"
 
     const accountsConfig = COMMUNITY.primaryAccountConfig
 
     const params = [
       op,
       accountsConfig.entrypoint_address,
-      { type: accountsConfig.paymaster_type },
-      1
+      { type: accountsConfig.paymaster_type }
     ]
 
     let res = await bundler.request({method, params} as any) as UserOperation
@@ -227,7 +251,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
 
     const params = [
       op,
-      primaryAccountConfig.entrypoint_address
+      primaryAccountConfig.entrypoint_address,
     ]
 
     let res: Hex = await bundler.request({method, params} as any)
@@ -257,34 +281,34 @@ export default function AppProvider({ children }: { children: ReactNode }) {
   }
 
   const wrap = async (amount: bigint): Promise<TxState | null>  => {
-    const wallet = _beforeTx()
-    if(!wallet) return null
+    const t = _beforeTx()
+    if(!t) return null
 
     const callData = encodeFunctionData({
       abi: [depositFor],
       functionName: "depositFor",
-      args: [wallet.address, amount]
+      args: [t.wallet.address, amount]
     })
 
-    return _execTx(wallet, callData)
+    return _execTx(t.wallet, t.signer, callData)
   }
 
   const unwrap = async (amount: bigint, to: Address): Promise<TxState | null>  => {
-    const wallet = _beforeTx()
-    if(!wallet) return null
+    const t = _beforeTx()
+    if(!t) return null
 
     const callData = encodeFunctionData({
       abi: [withdrawTo],
       functionName: "withdrawTo",
-      args: [to || wallet.address, amount]
+      args: [to || t.wallet.address, amount]
     })
 
-    return _execTx(wallet, callData)
+    return _execTx(t.wallet, t.signer, callData)
   }
 
   const send = async (amount: bigint, to: Address): Promise<TxState | null> => {
-    const wallet = _beforeTx()
-    if(!wallet) return null
+    const t = _beforeTx()
+    if(!t) return null
 
     const callData = encodeFunctionData({
       abi: [transfer],
@@ -292,7 +316,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
       args: [to, amount]
     })
 
-    return _execTx(wallet, callData)
+    return _execTx(t.wallet, t.signer, callData)
   }
 
   const getBalance = async (): Promise<bigint> => {

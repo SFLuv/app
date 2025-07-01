@@ -11,6 +11,7 @@
   "dependencies": {
     "@citizenwallet/sdk": "^2.0.96",
     "@privy-io/react-auth": "^2.13.0",
+    "ethers": "^6.14.4",
     "next": "15.3.1",
     "permissionless": "^0.2.47",
     "react": "^19.0.0",

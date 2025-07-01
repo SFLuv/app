@@ -1,0 +1,1 @@
+- Revisit using native viem abstractions for userop building.. particularly with goal to allow more transparency on data being signed.

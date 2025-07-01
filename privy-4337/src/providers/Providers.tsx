@@ -20,6 +20,7 @@ const Providers = ({ children }: { children: ReactNode }) => {
           ethereum: {
               createOnLogin: 'users-without-wallets',
           },
+          showWalletUIs: false
         }
       }}
     >
