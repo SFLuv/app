@@ -14,6 +14,7 @@ import { Badge } from "@/components/ui/badge"
 import { Copy, ExternalLink, CheckCircle, AlertCircle, Clock } from "lucide-react"
 import type { Transaction } from "@/types/transaction"
 import { transactionTypeLabels } from "@/types/transaction"
+import { SYMBOL } from "@/lib/constants"
 
 interface TransactionModalProps {
   transaction: Transaction | null
@@ -75,7 +76,7 @@ export function TransactionModal({ transaction, isOpen, onClose }: TransactionMo
   }
 
   const formatAmount = (amount: number) => {
-    return `${amount >= 0 ? "+" : ""}${amount} SFLuv`
+    return `${amount >= 0 ? "+" : ""}${amount} ${SYMBOL}`
   }
 
   return (

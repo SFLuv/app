@@ -10,11 +10,13 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Copy, QrCode, CheckCircle } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import type { ConnectedWallet } from "@/types/privy-wallet"
+import { AppWallet } from "@/lib/wallets/wallets"
+import { CHAIN, SYMBOL } from "@/lib/constants"
 
 interface ReceiveCryptoModalProps {
   open: boolean
   onOpenChange: (open: boolean) => void
-  wallet: ConnectedWallet
+  wallet: AppWallet
 }
 
 export function ReceiveCryptoModal({ open, onOpenChange, wallet }: ReceiveCryptoModalProps) {
@@ -23,43 +25,9 @@ export function ReceiveCryptoModal({ open, onOpenChange, wallet }: ReceiveCrypto
   const [copied, setCopied] = useState(false)
   const { toast } = useToast()
 
-  const getCurrencySymbol = (chainType: string) => {
-    switch (chainType) {
-      case "ethereum":
-        return "ETH"
-      case "polygon":
-        return "MATIC"
-      case "arbitrum":
-        return "ETH"
-      case "optimism":
-        return "ETH"
-      case "base":
-        return "ETH"
-      default:
-        return "ETH"
-    }
-  }
-
-  const getNetworkDisplayName = (chainType: string) => {
-    switch (chainType) {
-      case "ethereum":
-        return "Ethereum"
-      case "polygon":
-        return "Polygon"
-      case "arbitrum":
-        return "Arbitrum"
-      case "optimism":
-        return "Optimism"
-      case "base":
-        return "Base"
-      default:
-        return chainType.charAt(0).toUpperCase() + chainType.slice(1)
-    }
-  }
-
   const copyAddress = async () => {
     try {
-      await navigator.clipboard.writeText(wallet.address)
+      await navigator.clipboard.writeText(wallet.address || "0x")
       setCopied(true)
       toast({
         title: "Address Copied",
@@ -80,7 +48,7 @@ export function ReceiveCryptoModal({ open, onOpenChange, wallet }: ReceiveCrypto
     if (amount) params.append("amount", amount)
     if (memo) params.append("message", memo)
 
-    const currencySymbol = getCurrencySymbol(wallet.type)
+    const currencySymbol = SYMBOL
     const paymentUrl = `${currencySymbol.toLowerCase()}:${wallet.address}${params.toString() ? `?${params.toString()}` : ""}`
 
     toast({
@@ -91,8 +59,7 @@ export function ReceiveCryptoModal({ open, onOpenChange, wallet }: ReceiveCrypto
     return paymentUrl
   }
 
-  const currencySymbol = getCurrencySymbol(wallet.type)
-  const networkName = getNetworkDisplayName(wallet.type)
+  const currencySymbol = SYMBOL
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -100,7 +67,7 @@ export function ReceiveCryptoModal({ open, onOpenChange, wallet }: ReceiveCrypto
         <DialogHeader>
           <DialogTitle>Receive Cryptocurrency</DialogTitle>
           <DialogDescription>
-            Share your wallet address to receive {currencySymbol} on {networkName}
+            Share your wallet address to receive {currencySymbol} on {CHAIN.name}
           </DialogDescription>
         </DialogHeader>
 
@@ -113,7 +80,7 @@ export function ReceiveCryptoModal({ open, onOpenChange, wallet }: ReceiveCrypto
                   <div className="text-center">
                     <QrCode className="h-16 w-16 mx-auto text-muted-foreground mb-2" />
                     <p className="text-sm text-muted-foreground">QR Code</p>
-                    <p className="text-xs text-muted-foreground">{wallet.address.slice(0, 8)}...</p>
+                    <p className="text-xs text-muted-foreground">{wallet.address?.slice(0, 8) || "0x"}...</p>
                   </div>
                 </div>
                 <p className="text-sm text-muted-foreground">
@@ -133,7 +100,7 @@ export function ReceiveCryptoModal({ open, onOpenChange, wallet }: ReceiveCrypto
               </Button>
             </div>
             <p className="text-xs text-muted-foreground">
-              Only send {currencySymbol} on {networkName} to this address
+              Only send {currencySymbol} on {CHAIN.name} to this address
             </p>
           </div>
 
@@ -182,7 +149,7 @@ export function ReceiveCryptoModal({ open, onOpenChange, wallet }: ReceiveCrypto
                 <ul className="text-xs text-muted-foreground space-y-1">
                   <li>• Only share this address with trusted senders</li>
                   <li>• Verify the sender before sharing payment requests</li>
-                  <li>• Double-check the network matches ({networkName})</li>
+                  <li>• Double-check the network matches ({CHAIN.name})</li>
                   <li>• Never share your private keys or seed phrase</li>
                 </ul>
               </div>

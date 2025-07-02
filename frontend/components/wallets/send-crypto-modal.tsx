@@ -11,18 +11,24 @@ import { Textarea } from "@/components/ui/textarea"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
-import { Send, AlertTriangle, CheckCircle, X } from "lucide-react"
+import { Send, AlertTriangle, CheckCircle, X, Copy } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import type { ConnectedWallet } from "@/types/privy-wallet"
+import { AppWallet } from "@/lib/wallets/wallets"
+import { DECIMALS, SYMBOL } from "@/lib/constants"
+import { Address, Hash } from "viem"
 
 interface SendCryptoModalProps {
   open: boolean
   onOpenChange: (open: boolean) => void
-  wallet: ConnectedWallet
+  wallet: AppWallet
+  balance: number
 }
 
-export function SendCryptoModal({ open, onOpenChange, wallet }: SendCryptoModalProps) {
+export function SendCryptoModal({ open, onOpenChange, wallet, balance }: SendCryptoModalProps) {
   const [step, setStep] = useState<"form" | "confirm" | "sending" | "success" | "error">("form")
+  const [hash, setHash] = useState<Hash | null>(null)
+  const [copied, setCopied] = useState<boolean>(false)
   const [formData, setFormData] = useState({
     recipient: "",
     amount: "",
@@ -31,40 +37,22 @@ export function SendCryptoModal({ open, onOpenChange, wallet }: SendCryptoModalP
   const [error, setError] = useState("")
   const { toast } = useToast()
 
-  // Mock balance for validation
-  const mockBalance = 3.75
-
-  const getWalletDisplayName = (walletType: string) => {
-    switch (walletType) {
-      case "metamask":
-        return "MetaMask"
-      case "coinbase_wallet":
-        return "Coinbase Wallet"
-      case "wallet_connect":
-        return "WalletConnect"
-      case "rainbow":
-        return "Rainbow"
-      case "trust":
-        return "Trust Wallet"
-      default:
-        return walletType.charAt(0).toUpperCase() + walletType.slice(1)
-    }
-  }
-
-  const getCurrencySymbol = (chainType: string) => {
-    switch (chainType) {
-      case "ethereum":
-        return "ETH"
-      case "polygon":
-        return "MATIC"
-      case "arbitrum":
-        return "ETH"
-      case "optimism":
-        return "ETH"
-      case "base":
-        return "ETH"
-      default:
-        return "ETH"
+  const copyHash = async () => {
+    try {
+    if(!hash) throw new Error("no hash to copy")
+      await navigator.clipboard.writeText(hash)
+      setCopied(true)
+      toast({
+        title: "Hash Copied",
+        description: "Tx hash has been copied to clipboard",
+      })
+      setTimeout(() => setCopied(false), 2000)
+    } catch (err) {
+      toast({
+        title: "Copy Failed",
+        description: "Failed to copy hash to clipboard",
+        variant: "destructive",
+      })
     }
   }
 
@@ -83,7 +71,7 @@ export function SendCryptoModal({ open, onOpenChange, wallet }: SendCryptoModalP
       return
     }
 
-    if (Number.parseFloat(formData.amount) > mockBalance) {
+    if (Number.parseFloat(formData.amount) > balance) {
       setError("Insufficient balance")
       return
     }
@@ -101,14 +89,15 @@ export function SendCryptoModal({ open, onOpenChange, wallet }: SendCryptoModalP
     setStep("sending")
 
     // Mock sending process
-    await new Promise((resolve) => setTimeout(resolve, 2000))
+    let receipt = await wallet.send(BigInt(Number(formData.amount) * (10 ** DECIMALS)), formData.recipient as Address)
 
     // Simulate random success/failure
-    if (Math.random() > 0.2) {
+    if (receipt?.hash) {
       setStep("success")
+      setHash(receipt?.hash as Hash)
       toast({
         title: "Transaction Sent",
-        description: `Successfully sent ${formData.amount} ${getCurrencySymbol(wallet.type)} to ${formData.recipient.slice(0, 6)}...${formData.recipient.slice(-4)}`,
+        description: `Successfully sent ${formData.amount} ${SYMBOL} to ${formData.recipient.slice(0, 6)}...${formData.recipient.slice(-4)}`,
       })
     } else {
       setStep("error")
@@ -120,12 +109,11 @@ export function SendCryptoModal({ open, onOpenChange, wallet }: SendCryptoModalP
     setStep("form")
     setFormData({ recipient: "", amount: "", memo: "" })
     setError("")
+    setHash(null)
     onOpenChange(false)
   }
 
   const renderContent = () => {
-    const currencySymbol = getCurrencySymbol(wallet.type)
-
     switch (step) {
       case "form":
         return (
@@ -153,11 +141,11 @@ export function SendCryptoModal({ open, onOpenChange, wallet }: SendCryptoModalP
                   onChange={(e) => setFormData({ ...formData, amount: e.target.value })}
                 />
                 <div className="absolute right-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
-                  {currencySymbol}
+                  {SYMBOL}
                 </div>
               </div>
               <p className="text-xs text-muted-foreground">
-                Available: {mockBalance.toLocaleString()} {currencySymbol}
+                Available: {balance} {SYMBOL}
               </p>
             </div>
 
@@ -204,10 +192,10 @@ export function SendCryptoModal({ open, onOpenChange, wallet }: SendCryptoModalP
                   <span className="text-muted-foreground">From</span>
                   <div className="flex items-center gap-2">
                     <Avatar className="h-6 w-6">
-                      <AvatarImage src={`/placeholder.svg?height=24&width=24&text=${wallet.walletClientType}`} />
-                      <AvatarFallback>{wallet.walletClientType.slice(0, 2).toUpperCase()}</AvatarFallback>
+                      <AvatarImage src={`/placeholder.svg?height=24&width=24&text=${wallet.name}`} />
+                      <AvatarFallback>{wallet.name.slice(0, 2).toUpperCase()}</AvatarFallback>
                     </Avatar>
-                    <span className="font-medium">{getWalletDisplayName(wallet.walletClientType)}</span>
+                    <span className="font-medium">{wallet.name.toUpperCase()}</span>
                   </div>
                 </div>
 
@@ -221,16 +209,16 @@ export function SendCryptoModal({ open, onOpenChange, wallet }: SendCryptoModalP
                 <div className="flex items-center justify-between">
                   <span className="text-muted-foreground">Amount</span>
                   <span className="font-semibold">
-                    {formData.amount} {currencySymbol}
+                    {formData.amount} {SYMBOL}
                   </span>
                 </div>
 
-                <div className="flex items-center justify-between">
+                { wallet.type === "eoa" && <div className="flex items-center justify-between">
                   <span className="text-muted-foreground">Network Fee</span>
-                  <span className="text-sm">~0.0001 {currencySymbol}</span>
-                </div>
+                  <span className="text-sm">~0.0001 {SYMBOL}</span>
+                </div>}
 
-                {formData.memo && (
+                { formData.memo && (
                   <div className="flex items-start justify-between">
                     <span className="text-muted-foreground">Memo</span>
                     <span className="text-sm text-right max-w-[200px] break-words">{formData.memo}</span>
@@ -275,7 +263,10 @@ export function SendCryptoModal({ open, onOpenChange, wallet }: SendCryptoModalP
               <p className="text-muted-foreground">Your transaction has been broadcast to the network</p>
             </div>
             <Badge variant="secondary" className="font-mono text-xs">
-              TX: 0x1234...5678
+              TX: {hash?.slice(0, 6)}...{hash?.slice(-4)}
+              <Button size="icon" onClick={copyHash} className="bg-transparent focus:bg-transparent hover:bg-transparent">
+                {copied ? <CheckCircle className="h-4 w-4 text-green-600" /> : <Copy className="h-4 w-4" />}
+              </Button>
             </Badge>
             <Button onClick={handleClose} className="w-full">
               Done
@@ -315,7 +306,7 @@ export function SendCryptoModal({ open, onOpenChange, wallet }: SendCryptoModalP
         <DialogHeader>
           <DialogTitle>Send Cryptocurrency</DialogTitle>
           <DialogDescription>
-            Send {getCurrencySymbol(wallet.type)} from your {getWalletDisplayName(wallet.walletClientType)} wallet
+            Send {SYMBOL} from {wallet.name.toUpperCase()}
           </DialogDescription>
         </DialogHeader>
         {renderContent()}

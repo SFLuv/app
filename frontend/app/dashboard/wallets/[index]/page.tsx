@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useMemo } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -14,21 +14,44 @@ import { mockTransactions, mockWalletBalance } from "@/data/mock-wallet-data"
 import { useToast } from "@/hooks/use-toast"
 import { useParams, useRouter } from "next/navigation"
 import { useWallets } from "@privy-io/react-auth"
+import { useApp } from "@/context/AppProvider"
 
 export default function WalletDetailsPage() {
   const params = useParams()
   const router = useRouter()
   const walletIndex = Number.parseInt(params.index as string) || 0
-  const { wallets } = useWallets()
+  const { wallets } = useApp()
 
   // Get the specific wallet by index
   const wallet = wallets[walletIndex] || wallets[0]
 
   const [showSendModal, setShowSendModal] = useState(false)
+  const [error, setError] = useState<string | null>(null)
   const [showReceiveModal, setShowReceiveModal] = useState(false)
   const [showBalance, setShowBalance] = useState(true)
   const [isRefreshing, setIsRefreshing] = useState(false)
+  const [balance, setBalance] = useState<number | null>(null)
   const { toast } = useToast()
+
+  useEffect(() => { if(!showReceiveModal && !showSendModal) updateBalance() }, [showReceiveModal, showSendModal])
+
+  const updateBalance = async () => {
+    try {
+      const b = await wallet.getBalanceFormatted()
+      if(b === null) {
+        setError("Wallet not initialized.")
+        return
+      }
+      setBalance(b)
+    }
+    catch(error) {
+      console.error(error)
+    }
+  }
+
+  useEffect(() => {
+    if(error) console.error(error)
+  }, [error])
 
   // Redirect if no wallet found
   useEffect(() => {
@@ -77,21 +100,15 @@ export default function WalletDetailsPage() {
             </Button>
             <div className="flex items-center gap-2">
               <Avatar className="h-8 w-8">
-                <AvatarImage src={`/placeholder.svg?height=32&width=32&text=${wallet.walletClientType}`} />
-                <AvatarFallback>{wallet.walletClientType.slice(0, 2).toUpperCase()}</AvatarFallback>
+                <AvatarImage src={`/placeholder.svg?height=32&width=32&text=${wallet.name}`} />
+                <AvatarFallback>{wallet.name.slice(0, 2).toUpperCase()}</AvatarFallback>
               </Avatar>
               <div>
                 <h1 className="font-semibold text-lg">
-                  {wallet.walletClientType === "metamask"
-                    ? "MetaMask"
-                    : wallet.walletClientType === "coinbase_wallet"
-                      ? "Coinbase Wallet"
-                      : wallet.walletClientType === "wallet_connect"
-                        ? "WalletConnect"
-                        : wallet.walletClientType}
+                  {wallet.name.toUpperCase()}
                 </h1>
                 <Badge variant="secondary" className="text-xs">
-                  {wallet.type}
+                  {wallet.type.toUpperCase()}
                 </Badge>
               </div>
             </div>
@@ -112,7 +129,7 @@ export default function WalletDetailsPage() {
 
       <div className="container mx-auto p-4 space-y-6 max-w-2xl">
         {/* Balance Card */}
-        <WalletBalanceCard wallet={wallet} balance={mockWalletBalance} showBalance={showBalance} />
+        <WalletBalanceCard wallet={wallet} balance={balance} showBalance={showBalance} />
 
         {/* Quick Actions */}
         <Card>
@@ -178,7 +195,7 @@ export default function WalletDetailsPage() {
             </div>
           </CardHeader>
           <CardContent className="px-4 pb-4">
-            <TransactionHistoryList transactions={walletTransactions.slice(0, 10)} walletAddress={wallet.address} />
+            <TransactionHistoryList transactions={walletTransactions.slice(0, 10)} walletAddress={wallet.address || "0x"} />
           </CardContent>
         </Card>
 
@@ -201,7 +218,7 @@ export default function WalletDetailsPage() {
       </div>
 
       {/* Modals */}
-      <SendCryptoModal open={showSendModal} onOpenChange={setShowSendModal} wallet={wallet} />
+      <SendCryptoModal open={showSendModal} onOpenChange={setShowSendModal} wallet={wallet} balance={balance || 0} />
       <ReceiveCryptoModal open={showReceiveModal} onOpenChange={setShowReceiveModal} wallet={wallet} />
     </div>
   )
