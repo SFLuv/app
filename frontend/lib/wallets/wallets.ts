@@ -1,12 +1,12 @@
 import { ConnectedWallet, EIP1193Provider } from "@privy-io/react-auth";
 import { BrowserProvider, JsonRpcSigner, Signer } from "ethers";
 import { toSimpleSmartAccount, ToSimpleSmartAccountReturnType } from "permissionless/accounts";
-import { Address, createPublicClient, createWalletClient, custom, encodeFunctionData, Hex, hexToBytes, http } from "viem";
-import { CHAIN, FACTORY, TOKEN } from "../constants";
+import { Address, createPublicClient, createWalletClient, custom, encodeFunctionData, Hex, hexToBytes, http, PublicClient } from "viem";
+import { CHAIN, DECIMALS, FACTORY, TOKEN } from "../constants";
 import { entryPoint07Address } from "viem/account-abstraction";
 import { Hash } from "viem";
-import { client as publicClient, cw_bundler } from "../paymaster/client";
-import { depositFor, transfer, withdrawTo } from "../abi";
+import { cw_bundler } from "../paymaster/client";
+import { balanceOf, depositFor, transfer, withdrawTo } from "../abi";
 
 export type WalletType = "smartwallet" | "eoa"
 
@@ -34,6 +34,7 @@ export class AppWallet {
   private viemProvider?: EIP1193Provider;
   private ethersProvider?: BrowserProvider;
   private ethersSigner?: JsonRpcSigner;
+  private publicClient?: PublicClient;
 
   constructor(owner: ConnectedWallet, name: string, index?: bigint) {
     this.owner = owner
@@ -47,6 +48,10 @@ export class AppWallet {
     this.viemProvider = await this.owner.getEthereumProvider()
     this.ethersProvider = new BrowserProvider(this.viemProvider)
     this.ethersSigner = await this.ethersProvider.getSigner()
+    this.publicClient = createPublicClient({
+      chain: CHAIN,
+      transport: custom(this.viemProvider)
+    })
 
     if(this.index !== undefined) {
       const client = createWalletClient({
@@ -66,12 +71,8 @@ export class AppWallet {
         factoryAddress: FACTORY
       })
 
-      const publicClient = createPublicClient({
-        chain: CHAIN,
-        transport: custom(this.viemProvider)
-      })
 
-      const code = await publicClient.getCode({
+      const code = await this.publicClient.getCode({
         address: smartWallet.address
       })
       if(code === "0x" || code == null) {
@@ -86,6 +87,7 @@ export class AppWallet {
     else {
       this.wallet = this.owner
       this.type = "eoa"
+      this.address = this.wallet.address as Address
     }
 
     this.initialized = true
@@ -174,12 +176,28 @@ export class AppWallet {
   }
 
   getBalance = async (): Promise<bigint | null> => {
-    const t = this._beforeTx
-    if(!t) return null
-
-    return await publicClient.getBalance({
-      address: this.wallet?.address as Address,
+    if(!this.initialized) return null
+    const balance = await this.publicClient?.readContract({
+      address: TOKEN,
+      abi: [balanceOf],
+      functionName: "balanceOf",
+      args: [this.wallet?.address as Address],
       blockTag: "safe"
-    })
+    }) as unknown as bigint
+
+    console.log(balance)
+
+
+    return balance
+  }
+
+  getBalanceFormatted = async (): Promise<number | null> => {
+    const b = await this.getBalance()
+    if(b === null) return null
+
+    const d = BigInt(10 ** DECIMALS)
+    const q = Number(b * 100n / (d)) / 100
+
+    return q
   }
 }

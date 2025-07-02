@@ -10,6 +10,7 @@ import { Search, Filter, ArrowUpRight, ArrowDownLeft, CheckCircle, AlertCircle, 
 import { Pagination } from "@/components/opportunities/pagination"
 import type { Transaction } from "@/types/transaction"
 import { transactionTypeLabels } from "@/types/transaction"
+import { SYMBOL } from "@/lib/constants"
 
 interface TransactionListProps {
   transactions: Transaction[]
@@ -58,8 +59,8 @@ export function TransactionList({ transactions, onSelectTransaction, userRole }:
     if (searchQuery) {
       const query = searchQuery.toLowerCase()
       return (
-        transaction.fromName.toLowerCase().includes(query) ||
-        transaction.toName.toLowerCase().includes(query) ||
+        transaction.fromName?.toLowerCase().includes(query) ||
+        transaction.toName?.toLowerCase().includes(query) ||
         transaction.description?.toLowerCase().includes(query) ||
         transaction.transactionId.toLowerCase().includes(query) ||
         (transaction.category && transaction.category.toLowerCase().includes(query))
@@ -207,7 +208,7 @@ export function TransactionList({ transactions, onSelectTransaction, userRole }:
                       className={`font-bold ${transaction.amount >= 0 ? "text-green-600" : "text-red-600"} md:ml-4`}
                     >
                       {transaction.amount >= 0 ? "+" : ""}
-                      {transaction.amount} SFLuv
+                      {transaction.amount} {SYMBOL}
                     </span>
                   </div>
                 </div>

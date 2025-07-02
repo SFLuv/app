@@ -16,3 +16,5 @@ export const COMMUNITY_TOKEN = COMMUNITY.accounts[COMMUNITY_TOKEN_INDEX]
 export const PAYMASTER = COMMUNITY_ACCOUNT.paymaster_address as Address
 export const PAYMASTER_TYPE = COMMUNITY_ACCOUNT.paymaster_type
 export const FACTORY = COMMUNITY_ACCOUNT.account_factory_address as Address
+export const DECIMALS = (config.tokens as any)[COMMUNITY_TOKEN_INDEX].decimals as number
+export const SYMBOL = (config.tokens as any)[COMMUNITY_TOKEN_INDEX].symbol as string
