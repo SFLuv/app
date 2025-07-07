@@ -1,0 +1,574 @@
+{
+    "name": "places/ChIJ70zQuZCAhYARBOYFsIfxD6U",
+    "id": "ChIJ70zQuZCAhYARBOYFsIfxD6U",
+    "types": [
+        "american_restaurant",
+        "event_venue",
+        "night_club",
+        "bar",
+        "restaurant",
+        "food",
+        "point_of_interest",
+        "establishment"
+    ],
+    "nationalPhoneNumber": "(415) 496-5178",
+    "internationalPhoneNumber": "+1 415-496-5178",
+    "formattedAddress": "601 Eddy St, San Francisco, CA 94109, USA",
+    "addressComponents": [
+        {
+            "longText": "601",
+            "shortText": "601",
+            "types": [
+                "street_number"
+            ],
+            "languageCode": "en-US"
+        },
+        {
+            "longText": "Eddy Street",
+            "shortText": "Eddy St",
+            "types": [
+                "route"
+            ],
+            "languageCode": "en"
+        },
+        {
+            "longText": "Tenderloin",
+            "shortText": "Tenderloin",
+            "types": [
+                "neighborhood",
+                "political"
+            ],
+            "languageCode": "en"
+        },
+        {
+            "longText": "San Francisco",
+            "shortText": "SF",
+            "types": [
+                "locality",
+                "political"
+            ],
+            "languageCode": "en"
+        },
+        {
+            "longText": "San Francisco County",
+            "shortText": "San Francisco County",
+            "types": [
+                "administrative_area_level_2",
+                "political"
+            ],
+            "languageCode": "en"
+        },
+        {
+            "longText": "California",
+            "shortText": "CA",
+            "types": [
+                "administrative_area_level_1",
+                "political"
+            ],
+            "languageCode": "en"
+        },
+        {
+            "longText": "United States",
+            "shortText": "US",
+            "types": [
+                "country",
+                "political"
+            ],
+            "languageCode": "en"
+        },
+        {
+            "longText": "94109",
+            "shortText": "94109",
+            "types": [
+                "postal_code"
+            ],
+            "languageCode": "en-US"
+        }
+    ],
+    "plusCode": {
+        "globalCode": "849VQHMJ+6R",
+        "compoundCode": "QHMJ+6R Tenderloin, San Francisco, CA, USA"
+    },
+    "location": {
+        "latitude": 37.7830876,
+        "longitude": -122.4179062
+    },
+    "viewport": {
+        "low": {
+            "latitude": 37.7818271197085,
+            "longitude": -122.4192953302915
+        },
+        "high": {
+            "latitude": 37.7845250802915,
+            "longitude": -122.41659736970851
+        }
+    },
+    "rating": 4.3,
+    "googleMapsUri": "https://maps.google.com/?cid=11893990705984824836&g_mp=EAAYASAA",
+    "websiteUri": "http://www.chambers-sf.com/",
+    "utcOffsetMinutes": -420,
+    "adrFormatAddress": "<span class=\"street-address\">601 Eddy St</span>, <span class=\"locality\">San Francisco</span>, <span class=\"region\">CA</span> <span class=\"postal-code\">94109</span>, <span class=\"country-name\">USA</span>",
+    "businessStatus": "OPERATIONAL",
+    "priceLevel": "PRICE_LEVEL_MODERATE",
+    "userRatingCount": 478,
+    "iconMaskBaseUri": "https://maps.gstatic.com/mapfiles/place_api/icons/v2/restaurant_pinlet",
+    "iconBackgroundColor": "#FF9E67",
+    "displayName": {
+        "text": "Chambers eat + drink",
+        "languageCode": "en"
+    },
+    "primaryTypeDisplayName": {
+        "text": "American Restaurant",
+        "languageCode": "en-US"
+    },
+    "takeout": true,
+    "delivery": true,
+    "dineIn": true,
+    "curbsidePickup": false,
+    "reservable": true,
+    "servesLunch": true,
+    "servesDinner": true,
+    "servesBeer": true,
+    "servesWine": true,
+    "servesBrunch": true,
+    "servesVegetarianFood": false,
+    "primaryType": "american_restaurant",
+    "shortFormattedAddress": "601 Eddy St, San Francisco",
+    "editorialSummary": {
+        "text": "Innovative seasonal menu with French, Mediterranean & Japanese influences & poolside patio seating.",
+        "languageCode": "en"
+    },
+    "reviews": [
+        {
+            "name": "places/ChIJ70zQuZCAhYARBOYFsIfxD6U/reviews/ChZDSUhNMG9nS0VJQ0FnSUR6NFpLS2ZREAE",
+            "relativePublishTimeDescription": "a year ago",
+            "rating": 4,
+            "text": {
+                "text": "We came here for birthday dinner and drinks and we really enjoyed the atmosphere and service. You wouldn't know this pleasant interior space facing the hotel courtyard was there if you just walked by on the troubled streets outside. We were there on the early side so it was pretty quiet with a music soundtrack that wasn't intrusive. The staff, from the host to the servers, were great and took care of us. The apps and drinks were great especially the potato croquettes and the bourbon drink and the egg white drink. The main I had was a little disappointing though. I had the cavatelli and it came with a big square of melted cheese on it that overpowered the dish and just felt greasy so that I couldn't enjoy any nuance of flavors from the lemon or radicchio. I tasted the tofu and the chicken from my friends which were a notch better. Overall, pretty good place. Perhaps it shines best as a place to get great drinks and apps while hanging out in a hip spot.",
+                "languageCode": "en"
+            },
+            "originalText": {
+                "text": "We came here for birthday dinner and drinks and we really enjoyed the atmosphere and service. You wouldn't know this pleasant interior space facing the hotel courtyard was there if you just walked by on the troubled streets outside. We were there on the early side so it was pretty quiet with a music soundtrack that wasn't intrusive. The staff, from the host to the servers, were great and took care of us. The apps and drinks were great especially the potato croquettes and the bourbon drink and the egg white drink. The main I had was a little disappointing though. I had the cavatelli and it came with a big square of melted cheese on it that overpowered the dish and just felt greasy so that I couldn't enjoy any nuance of flavors from the lemon or radicchio. I tasted the tofu and the chicken from my friends which were a notch better. Overall, pretty good place. Perhaps it shines best as a place to get great drinks and apps while hanging out in a hip spot.",
+                "languageCode": "en"
+            },
+            "authorAttribution": {
+                "displayName": "JP G",
+                "uri": "https://www.google.com/maps/contrib/104500794040124164683/reviews",
+                "photoUri": "https://lh3.googleusercontent.com/a-/ALV-UjVPSWsSiC1SKEIbp0mvAtiuE-PWe3ABjYXDlp7VB7-4KaulxpP-og=s128-c0x00000000-cc-rp-mo-ba6"
+            },
+            "publishTime": "2024-06-10T18:08:23.705168Z",
+            "flagContentUri": "https://www.google.com/local/review/rap/report?postId=ChZDSUhNMG9nS0VJQ0FnSUR6NFpLS2ZREAE&d=17924085&t=1",
+            "googleMapsUri": "https://www.google.com/maps/reviews/data=!4m6!14m5!1m4!2m3!1sChZDSUhNMG9nS0VJQ0FnSUR6NFpLS2ZREAE!2m1!1s0x80858090b9d04cef:0xa50ff187b005e604"
+        },
+        {
+            "name": "places/ChIJ70zQuZCAhYARBOYFsIfxD6U/reviews/ChZDSUhNMG9nS0VJQ0FnSUQ3Mkl6Z0xBEAE",
+            "relativePublishTimeDescription": "10 months ago",
+            "rating": 4,
+            "text": {
+                "text": "We came to Chamber for a friends birthday  dinner. We had a reservation for 6PM, we arrived shortly before and they seemed to be surprised to see us. They sat us and the bartender came over to bring us menus. We immediately noticed the menu was not the same as the one on their website. The menu was far smaller and did not have any vegan options. We were frustrated because we picked the restaurant based on the online menu and vegan options for one of our party who has dietary restrictions. Be prepared as the menu has 2 entree items and then shareable.\n\nThe food we did order was great!! Everyone loved the Bombas and 4 out of the 7 of us ordered the Shrimp and polenta. It was amazing.\n\nWe all loved the atmosphere. We enjoyed the funky eclectic vibe and music.",
+                "languageCode": "en"
+            },
+            "originalText": {
+                "text": "We came to Chamber for a friends birthday  dinner. We had a reservation for 6PM, we arrived shortly before and they seemed to be surprised to see us. They sat us and the bartender came over to bring us menus. We immediately noticed the menu was not the same as the one on their website. The menu was far smaller and did not have any vegan options. We were frustrated because we picked the restaurant based on the online menu and vegan options for one of our party who has dietary restrictions. Be prepared as the menu has 2 entree items and then shareable.\n\nThe food we did order was great!! Everyone loved the Bombas and 4 out of the 7 of us ordered the Shrimp and polenta. It was amazing.\n\nWe all loved the atmosphere. We enjoyed the funky eclectic vibe and music.",
+                "languageCode": "en"
+            },
+            "authorAttribution": {
+                "displayName": "Sara Zenovic",
+                "uri": "https://www.google.com/maps/contrib/111704844881266429803/reviews",
+                "photoUri": "https://lh3.googleusercontent.com/a-/ALV-UjVdWuwQMq91Os87k0PHxi68gESW3KJnqF7tjX7N0f6BH2bIZ4E=s128-c0x00000000-cc-rp-mo-ba3"
+            },
+            "publishTime": "2024-08-21T01:26:36.688696Z",
+            "flagContentUri": "https://www.google.com/local/review/rap/report?postId=ChZDSUhNMG9nS0VJQ0FnSUQ3Mkl6Z0xBEAE&d=17924085&t=1",
+            "googleMapsUri": "https://www.google.com/maps/reviews/data=!4m6!14m5!1m4!2m3!1sChZDSUhNMG9nS0VJQ0FnSUQ3Mkl6Z0xBEAE!2m1!1s0x80858090b9d04cef:0xa50ff187b005e604"
+        },
+        {
+            "name": "places/ChIJ70zQuZCAhYARBOYFsIfxD6U/reviews/ChZDSUhNMG9nS0VJQ0FnSUNJNWFldGNnEAE",
+            "relativePublishTimeDescription": "4 years ago",
+            "rating": 5,
+            "text": {
+                "text": "Came here for Brunch on a Saturday. The area is somewhat sketchy seeing as it is in the Tenderloin so it's surrounded by  homeless people in tents or outside (my heart goes out to them being a local). However this little restaurant is just amazing the moment you walk in to the dining area. Old vinyls decorate the shelves along with a lovely atmosphere of wood furniture and cozy comfy seats. It is simly lit for the romantic aspects of couples dining in. The food was delicious! I highly recommend ordering the souffle pancake Asap and definitely share if you plan on having your own entrees. I honestly cannot wait to come back!",
+                "languageCode": "en"
+            },
+            "originalText": {
+                "text": "Came here for Brunch on a Saturday. The area is somewhat sketchy seeing as it is in the Tenderloin so it's surrounded by  homeless people in tents or outside (my heart goes out to them being a local). However this little restaurant is just amazing the moment you walk in to the dining area. Old vinyls decorate the shelves along with a lovely atmosphere of wood furniture and cozy comfy seats. It is simly lit for the romantic aspects of couples dining in. The food was delicious! I highly recommend ordering the souffle pancake Asap and definitely share if you plan on having your own entrees. I honestly cannot wait to come back!",
+                "languageCode": "en"
+            },
+            "authorAttribution": {
+                "displayName": "Stephanie Ann Dayrit-Perez",
+                "uri": "https://www.google.com/maps/contrib/109417103618531881935/reviews",
+                "photoUri": "https://lh3.googleusercontent.com/a-/ALV-UjU5dRHwvGLqN84R8pdbQ0u8y7Lv9LebSNuEAc93K_fcaS-Zx5RB=s128-c0x00000000-cc-rp-mo-ba3"
+            },
+            "publishTime": "2021-04-17T13:59:37.824805Z",
+            "flagContentUri": "https://www.google.com/local/review/rap/report?postId=ChZDSUhNMG9nS0VJQ0FnSUNJNWFldGNnEAE&d=17924085&t=1",
+            "googleMapsUri": "https://www.google.com/maps/reviews/data=!4m6!14m5!1m4!2m3!1sChZDSUhNMG9nS0VJQ0FnSUNJNWFldGNnEAE!2m1!1s0x80858090b9d04cef:0xa50ff187b005e604"
+        },
+        {
+            "name": "places/ChIJ70zQuZCAhYARBOYFsIfxD6U/reviews/ChZDSUhNMG9nS0VJQ0FnSURDbHZ2SE93EAE",
+            "relativePublishTimeDescription": "4 years ago",
+            "rating": 5,
+            "text": {
+                "text": "Today is February 28, 2021, and Chambers opened again and hopefully for good. I love Chambers; the staff is very young, friendly, and goes the extra mile to make you feel comfortable, happy, and special. At night the fire is magical, and the music is excellent and not too loud. Take the homeless crisis around the hotel as part of the experience and realize how fortunate we are to have so many privileges when other people don't. Today, Sunday, we went for brunch, and we enjoyed a great party with a live DJ, the most extraordinary music, and all the sun and glamour of this super chic place. Isabel, the owner, is the best and she will try to accommodate any special request that you could have. When you are here is challenging to think that you are in the middle of the city rather than in some fantastic and sophisticated hidden gem in LA or  Ibiza. Great place to go with a group of your closest friends to have fun and enjoy the music. Highly recommended.",
+                "languageCode": "en"
+            },
+            "originalText": {
+                "text": "Today is February 28, 2021, and Chambers opened again and hopefully for good. I love Chambers; the staff is very young, friendly, and goes the extra mile to make you feel comfortable, happy, and special. At night the fire is magical, and the music is excellent and not too loud. Take the homeless crisis around the hotel as part of the experience and realize how fortunate we are to have so many privileges when other people don't. Today, Sunday, we went for brunch, and we enjoyed a great party with a live DJ, the most extraordinary music, and all the sun and glamour of this super chic place. Isabel, the owner, is the best and she will try to accommodate any special request that you could have. When you are here is challenging to think that you are in the middle of the city rather than in some fantastic and sophisticated hidden gem in LA or  Ibiza. Great place to go with a group of your closest friends to have fun and enjoy the music. Highly recommended.",
+                "languageCode": "en"
+            },
+            "authorAttribution": {
+                "displayName": "Pablo Lo Giudice",
+                "uri": "https://www.google.com/maps/contrib/113785722579587882762/reviews",
+                "photoUri": "https://lh3.googleusercontent.com/a-/ALV-UjXL3NGxufHJ_AsTO-W-RvQdD_JilnsDWUzDZnmUhERMrv0Gm0BGYw=s128-c0x00000000-cc-rp-mo-ba4"
+            },
+            "publishTime": "2021-02-28T23:06:00.731677Z",
+            "flagContentUri": "https://www.google.com/local/review/rap/report?postId=ChZDSUhNMG9nS0VJQ0FnSURDbHZ2SE93EAE&d=17924085&t=1",
+            "googleMapsUri": "https://www.google.com/maps/reviews/data=!4m6!14m5!1m4!2m3!1sChZDSUhNMG9nS0VJQ0FnSURDbHZ2SE93EAE!2m1!1s0x80858090b9d04cef:0xa50ff187b005e604"
+        },
+        {
+            "name": "places/ChIJ70zQuZCAhYARBOYFsIfxD6U/reviews/ChZDSUhNMG9nS0VJQ0FnSURDbnVmak1BEAE",
+            "relativePublishTimeDescription": "4 years ago",
+            "rating": 3,
+            "text": {
+                "text": "Food was ok, but less flavorful than comparable places at this price-point in area. Outside dining was fun with fire-feature, heat lamps at night & pool for Phoenix hotel guests. Similar spots back in NY have better food.",
+                "languageCode": "en"
+            },
+            "originalText": {
+                "text": "Food was ok, but less flavorful than comparable places at this price-point in area. Outside dining was fun with fire-feature, heat lamps at night & pool for Phoenix hotel guests. Similar spots back in NY have better food.",
+                "languageCode": "en"
+            },
+            "authorAttribution": {
+                "displayName": "Vish Singh",
+                "uri": "https://www.google.com/maps/contrib/108854305913234728638/reviews",
+                "photoUri": "https://lh3.googleusercontent.com/a-/ALV-UjXn4ZB5FwZpXWSztbEciD_LZfrr-ml7zLiRKzpOb9r6bgeWtrM=s128-c0x00000000-cc-rp-mo-ba5"
+            },
+            "publishTime": "2020-09-28T12:04:32.120636Z",
+            "flagContentUri": "https://www.google.com/local/review/rap/report?postId=ChZDSUhNMG9nS0VJQ0FnSURDbnVmak1BEAE&d=17924085&t=1",
+            "googleMapsUri": "https://www.google.com/maps/reviews/data=!4m6!14m5!1m4!2m3!1sChZDSUhNMG9nS0VJQ0FnSURDbnVmak1BEAE!2m1!1s0x80858090b9d04cef:0xa50ff187b005e604"
+        }
+    ],
+    "photos": [
+        {
+            "name": "places/ChIJ70zQuZCAhYARBOYFsIfxD6U/photos/AXQCQNQNFcGDpeV948JRbWN0IKVbN8aHfV2Z0uOkbeIC5bOseOz1it1RJVsq9qNajkwPv2sNvB5J-lGhLH0jE_DNsqHpKUqlSv4Z0UOGwn52VBitH17oagV9xR4PKuSemC6E5Mm618WUlUKuFl8FyOB9AOp3Co2OvoXi0Y2zijy7UFp0y70DRLYAlW2aAEmyxLeaSqw-iWnwdQpDF15PF_nKl2Pl6bBb7ZtrjHNgiQ9rpHu2EDCFxlP6FjjGZEleAZ8cKaAuALSmfNYHYrCURcl5cZzDF_D_q_01lPPIkZfbQ-p-aA",
+            "widthPx": 4800,
+            "heightPx": 3200,
+            "authorAttributions": [
+                {
+                    "displayName": "Chambers eat + drink",
+                    "uri": "https://maps.google.com/maps/contrib/115787864719453844355",
+                    "photoUri": "https://lh3.googleusercontent.com/a-/ALV-UjVn1_TbX4iKDCsk11XSDBBkCZdQOmY2c-7iuxIiDGyMjubsY58=s100-p-k-no-mo"
+                }
+            ],
+            "flagContentUri": "https://www.google.com/local/imagery/report/?cb_client=maps_api_places.places_api&image_key=!1e10!2sAF1QipM3X8q_nEMvYWM9EqW4tZpg7HTYZvOYGcCAGX4s&hl=en-US",
+            "googleMapsUri": "https://www.google.com/maps/place//data=!3m4!1e2!3m2!1sAF1QipM3X8q_nEMvYWM9EqW4tZpg7HTYZvOYGcCAGX4s!2e10!4m2!3m1!1s0x80858090b9d04cef:0xa50ff187b005e604"
+        },
+        {
+            "name": "places/ChIJ70zQuZCAhYARBOYFsIfxD6U/photos/AXQCQNS3cmf5gb9T3jwQ212JC50rQ3BfBCMFIL74HA0Ukyz7g6Yl8xqdAMiqSIJ834A_piu6PwYtLyYULseLoacG7ICCk41lfpoQNoDaerPyG_F-HZzQkLx7re_x0_AoYgtIHomshFpZWprFDlBHPrmO4FSwGAwoQGlBLG6msslhm-xuPSYdIatCqKudVm0vbRUY8y_TgF5qRzrXaagT5AC4UeH9MzKWNeArZjbkwv8s3k_v_LL_mE-NwindYsF4QDe2JFyE5eVQYRFna-ow0mLazjYE_e8Wkzylf9Ut6qqPb-JgWw",
+            "widthPx": 3264,
+            "heightPx": 2448,
+            "authorAttributions": [
+                {
+                    "displayName": "Chambers eat + drink",
+                    "uri": "https://maps.google.com/maps/contrib/115787864719453844355",
+                    "photoUri": "https://lh3.googleusercontent.com/a-/ALV-UjVn1_TbX4iKDCsk11XSDBBkCZdQOmY2c-7iuxIiDGyMjubsY58=s100-p-k-no-mo"
+                }
+            ],
+            "flagContentUri": "https://www.google.com/local/imagery/report/?cb_client=maps_api_places.places_api&image_key=!1e10!2sAF1QipPNwuJD6QloBj9TEDoyJyTD4fe6fS0MSkPRoqSn&hl=en-US",
+            "googleMapsUri": "https://www.google.com/maps/place//data=!3m4!1e2!3m2!1sAF1QipPNwuJD6QloBj9TEDoyJyTD4fe6fS0MSkPRoqSn!2e10!4m2!3m1!1s0x80858090b9d04cef:0xa50ff187b005e604"
+        },
+        {
+            "name": "places/ChIJ70zQuZCAhYARBOYFsIfxD6U/photos/AXQCQNQ8pH43B1DkWqQYM5i0-9f28VlfaMo_sS1mCqtjjfcrXkSXSuzitAGoiEgLH-wazts54-bj7l_-3MKn6E4XnpnJbf5Oc-rO8eUk7wXs1uQ4QbOyK6r61RGE4WmOSXdkjbQdkMthHtPPGtBWGGdIOnOzC-iie6asVMg91qWQjLl2rUrQPGcd_7u6jVo8u-HS99UAMxTPU_1M2p02T9-0YAHjfyuIRQRRDT89TtraPZXz38kF7nZ-ZWTrd-PkI2cZtn_yEPOfsYhakYk0aIoQVgN5yrwg_FiwuGjlZmO21zIT-g",
+            "widthPx": 2048,
+            "heightPx": 1365,
+            "authorAttributions": [
+                {
+                    "displayName": "Chambers eat + drink",
+                    "uri": "https://maps.google.com/maps/contrib/115787864719453844355",
+                    "photoUri": "https://lh3.googleusercontent.com/a-/ALV-UjVn1_TbX4iKDCsk11XSDBBkCZdQOmY2c-7iuxIiDGyMjubsY58=s100-p-k-no-mo"
+                }
+            ],
+            "flagContentUri": "https://www.google.com/local/imagery/report/?cb_client=maps_api_places.places_api&image_key=!1e10!2sAF1QipOkpxW9y_gK5ynK4u7fnE3FPu6bAzg_5mlSMWpu&hl=en-US",
+            "googleMapsUri": "https://www.google.com/maps/place//data=!3m4!1e2!3m2!1sAF1QipOkpxW9y_gK5ynK4u7fnE3FPu6bAzg_5mlSMWpu!2e10!4m2!3m1!1s0x80858090b9d04cef:0xa50ff187b005e604"
+        },
+        {
+            "name": "places/ChIJ70zQuZCAhYARBOYFsIfxD6U/photos/AXQCQNQVAfwFIttyjvcXAs5M20IAINF30jcX1LuLc941IT0XUNTjIy_8tazs0xtSSeEWRiZXwOjzw2SzZHP2pooavT_INtchvi57znC6M4A7tbhRNKR7VU2FefV9CbCFjjG1q6dZoT0cCqHc8PU37yR3GaxEf7EvE7JHmFlbExF1NhDthAJj8-GsvF0PBUwlljlbXZ-gJaf7Vi4iAipE5fCx6Kk-kMoGuyyFm31PHi0dG3jl8P-hl8l5bSXNyPhcdYGQnIH6uC-74ebNV9IfIbsIuDDzEiuyBWxNU53XpgSp0-GWo9XSvrKeDqMB7ODGOlp2btu1g-m0eLlCH6GdEAbGCvDytBNQrJCZ--gsPTvWqajsa_yCnYSf1A-1KRHL2pIBMaSOXX3uUZM5HfnhZ94CKt4xChKBAGmCTJwUTB0ExxI",
+            "widthPx": 1000,
+            "heightPx": 647,
+            "authorAttributions": [
+                {
+                    "displayName": "Mary J. Winger",
+                    "uri": "https://maps.google.com/maps/contrib/108822422799384237995",
+                    "photoUri": "https://lh3.googleusercontent.com/a-/ALV-UjVYIkQlPflNhm9xLaIBr-O_MWXiWXQMPsnYMEoHfrL7ioNz3Zrx=s100-p-k-no-mo"
+                }
+            ],
+            "flagContentUri": "https://www.google.com/local/imagery/report/?cb_client=maps_api_places.places_api&image_key=!1e10!2sCIHM0ogKEICAgIC60cnYSQ&hl=en-US",
+            "googleMapsUri": "https://www.google.com/maps/place//data=!3m4!1e2!3m2!1sCIHM0ogKEICAgIC60cnYSQ!2e10!4m2!3m1!1s0x80858090b9d04cef:0xa50ff187b005e604"
+        },
+        {
+            "name": "places/ChIJ70zQuZCAhYARBOYFsIfxD6U/photos/AXQCQNTnOhP-Ym7MR6H6N2YURoXmr2BokB9V88gzHmRZI_otS2az4XSupBAgQEocQ8DtwMo0x3-FzEpLUTGQ6C0PIoq79SJEkGfc0u23vRjj3JD0vXtZKbZDDGr45_q07G0LwGkEsRbJzQsQLSqQS-yDFG82T2LEDF8x7AjcoKXDpxk9pNTaKeWqC73lXOkzNwyWAtZaMZBdTSgy9-Cy2p9mc7PLoApd4bwIQT2KDB6DCWQcyRLTGDnkOGeoQDEl27YoHmaq8Tvaw6hirMDe6MU2o4OKLRXSRWcsC3w174wT0kK8HIyruq0cIJS47-cx15-y0QML2Pm1_LyBrKsLjR-M34IyrJXGfXhG_8mPWmvCpMlSZB4xgc_18vycPe8wCwE3zsF_0lGCathKxH8WhFFOnjnmZH5GcZeeveXdVJs6z6ok7iO2",
+            "widthPx": 4800,
+            "heightPx": 3599,
+            "authorAttributions": [
+                {
+                    "displayName": "Iqbal Atwal",
+                    "uri": "https://maps.google.com/maps/contrib/103413963258702052616",
+                    "photoUri": "https://lh3.googleusercontent.com/a-/ALV-UjU6BmVpJG1gO9VF9Qz6hdSjoMtjT0knhZtn-cJ-3pr5sj4mT8NK-w=s100-p-k-no-mo"
+                }
+            ],
+            "flagContentUri": "https://www.google.com/local/imagery/report/?cb_client=maps_api_places.places_api&image_key=!1e10!2sCIHM0ogKEICAgIDm_9i18QE&hl=en-US",
+            "googleMapsUri": "https://www.google.com/maps/place//data=!3m4!1e2!3m2!1sCIHM0ogKEICAgIDm_9i18QE!2e10!4m2!3m1!1s0x80858090b9d04cef:0xa50ff187b005e604"
+        },
+        {
+            "name": "places/ChIJ70zQuZCAhYARBOYFsIfxD6U/photos/AXQCQNRont1l6BCfGK2mLHlEZyd0F3fkNePCNqoVb-8GLgc0AZrvPMJWp_Iuu-lssnzKQOsuA-GRV1SJPCFPibEUUaZd3BJIpjmjBsPYXIyLc-PN60CxaLgXxc0vnOLXXJvWMxXB8_2a23ttqNatTWBW-8rzwUBnaOz1gZDQbrsp2CFt4Dg4W5SOcyGRcGswcF4GLwm0vasHx9EM20nmYgvoNFktYCcuyGBCoLNxOOf_qbD7pMvZIaTpy-TbNG2herfA3bI2nvphth-LGUknUY8ysIDRHOtQiEq5I1GCQSk3mgoJcw",
+            "widthPx": 3600,
+            "heightPx": 2401,
+            "authorAttributions": [
+                {
+                    "displayName": "Chambers eat + drink",
+                    "uri": "https://maps.google.com/maps/contrib/115787864719453844355",
+                    "photoUri": "https://lh3.googleusercontent.com/a-/ALV-UjVn1_TbX4iKDCsk11XSDBBkCZdQOmY2c-7iuxIiDGyMjubsY58=s100-p-k-no-mo"
+                }
+            ],
+            "flagContentUri": "https://www.google.com/local/imagery/report/?cb_client=maps_api_places.places_api&image_key=!1e10!2sAF1QipODr9uTNfkMfunVx14auDOHu6jO71IUbo-EOopU&hl=en-US",
+            "googleMapsUri": "https://www.google.com/maps/place//data=!3m4!1e2!3m2!1sAF1QipODr9uTNfkMfunVx14auDOHu6jO71IUbo-EOopU!2e10!4m2!3m1!1s0x80858090b9d04cef:0xa50ff187b005e604"
+        },
+        {
+            "name": "places/ChIJ70zQuZCAhYARBOYFsIfxD6U/photos/AXQCQNStdmTavck6rywWXVoLfxMcVwX0kdg-U7EM_5lAD4i9fF9jmtXU-wjlp9Bb6eGXexUdLAgZlHKBVtTmtZnndk4TRW6p0fh_ezJWFU-BEYu0VvE34LJR5-5JP1Qp7j7QDuhOXuaIs0Fdcp1yuxb1EyVmn1onNawsMVsFW33o7kXszdL_OLX25ytsNo1sKIblKdTG9HyFDhOJ73ki8AskixXtXR8CZijBV1PbDmSQF7qHm-SbN8ni7DmWYw8aOPRJfiLee0aFq4VzDoduoutojQBGw5VFb6XaV0AoCMVehr9TJD5CXqPTuHB3bnNKPLCswnyMCWtMnKs4z7wP74Oowc-L_TbyjHX7-k3O05znubNixNIEr4bZQ7g_VtTuO4E2B7DrEWbq6D38CjR9yz03pGp0oD60NaLvJBjmxRS4QMlkqC0K",
+            "widthPx": 1000,
+            "heightPx": 750,
+            "authorAttributions": [
+                {
+                    "displayName": "Mary J. Winger",
+                    "uri": "https://maps.google.com/maps/contrib/108822422799384237995",
+                    "photoUri": "https://lh3.googleusercontent.com/a-/ALV-UjVYIkQlPflNhm9xLaIBr-O_MWXiWXQMPsnYMEoHfrL7ioNz3Zrx=s100-p-k-no-mo"
+                }
+            ],
+            "flagContentUri": "https://www.google.com/local/imagery/report/?cb_client=maps_api_places.places_api&image_key=!1e10!2sCIHM0ogKEICAgIC60cnInwE&hl=en-US",
+            "googleMapsUri": "https://www.google.com/maps/place//data=!3m4!1e2!3m2!1sCIHM0ogKEICAgIC60cnInwE!2e10!4m2!3m1!1s0x80858090b9d04cef:0xa50ff187b005e604"
+        },
+        {
+            "name": "places/ChIJ70zQuZCAhYARBOYFsIfxD6U/photos/AXQCQNTWWsSGN2OEEyPIK5pXjmTaQOBSO3wCnWYpR-LhrVhYKp2TOrTywcCHy___rIYkYSvW8kYoTmIv5YUNhVUKvK0rUDMe7FYIjFmUP3r8k8Ca74GIuwJ4ibwZ_fNLCAfw-b4Jot7voBpiMMH9ajMn4IPoa7R7uWLJ6lLiKp24PKNHcdLRN4DCVtyla3S2z2HbJzChzJ_qzVNnwG4-k018gvDN7ATrNkLftonxbWuE8kGm7xemR3R_7pYBwDuF_lFDPKkmRtkfrLFhqXSfROShgS3xQpXlW_excoWkmuSnNSrhig",
+            "widthPx": 4800,
+            "heightPx": 3200,
+            "authorAttributions": [
+                {
+                    "displayName": "Chambers eat + drink",
+                    "uri": "https://maps.google.com/maps/contrib/115787864719453844355",
+                    "photoUri": "https://lh3.googleusercontent.com/a-/ALV-UjVn1_TbX4iKDCsk11XSDBBkCZdQOmY2c-7iuxIiDGyMjubsY58=s100-p-k-no-mo"
+                }
+            ],
+            "flagContentUri": "https://www.google.com/local/imagery/report/?cb_client=maps_api_places.places_api&image_key=!1e10!2sAF1QipOJ_A-3Uy-LhELwMXCsVLb0p_dEf5CZ0pd85cmk&hl=en-US",
+            "googleMapsUri": "https://www.google.com/maps/place//data=!3m4!1e2!3m2!1sAF1QipOJ_A-3Uy-LhELwMXCsVLb0p_dEf5CZ0pd85cmk!2e10!4m2!3m1!1s0x80858090b9d04cef:0xa50ff187b005e604"
+        },
+        {
+            "name": "places/ChIJ70zQuZCAhYARBOYFsIfxD6U/photos/AXQCQNT5lzEp_rk3U7lLNSfVwUoDrujx2k5R1xvgY89uXrKiI9wU_ZoMOMhHdMh_Cs_7VyyPkS5jWcP5MY7dAISIl3xR6YwIIF6YoxZCEt2hioy8lxJIgzchj1FZfpqQ3UbsPz-7I2pNkuYZS5nNSg9uR_fw7Ft6jhN1HUZkplytozS_IIDePQigbcofbSCnsEt5Gx1OEZvu-1KOiidnUwmxps4n4ekfa-iu1U9cqbYJ8VUDd9Dx49XjeVb6q6EOZloMcDsP5JrGsjCy2nW6TtvPjEQGwh5O7stCzVmBTXvWsyGSeG6n5DYAvc7bToRifEZCytmOob-jDsmrkgyxrumHk18BK0Z8B5l0CIz2bhh3z10gMCjJc414TNZFOoCJz304_d_y3J5I98MGuwFsKIO2uk1MW8704ruMB_67ef-bJypIXGU",
+            "widthPx": 1000,
+            "heightPx": 647,
+            "authorAttributions": [
+                {
+                    "displayName": "Mary J. Winger",
+                    "uri": "https://maps.google.com/maps/contrib/108822422799384237995",
+                    "photoUri": "https://lh3.googleusercontent.com/a-/ALV-UjVYIkQlPflNhm9xLaIBr-O_MWXiWXQMPsnYMEoHfrL7ioNz3Zrx=s100-p-k-no-mo"
+                }
+            ],
+            "flagContentUri": "https://www.google.com/local/imagery/report/?cb_client=maps_api_places.places_api&image_key=!1e10!2sCIHM0ogKEICAgIC60YmL4gE&hl=en-US",
+            "googleMapsUri": "https://www.google.com/maps/place//data=!3m4!1e2!3m2!1sCIHM0ogKEICAgIC60YmL4gE!2e10!4m2!3m1!1s0x80858090b9d04cef:0xa50ff187b005e604"
+        },
+        {
+            "name": "places/ChIJ70zQuZCAhYARBOYFsIfxD6U/photos/AXQCQNRUaOh046ulYrOIWiqIznBkAR-cyS9bdZDybHPvoCwE-UqxKHVzeYn4sPUMxyd6NAVXRspdvWwLaSlyrWG5aX3pYXrt7yAzgzLdsNg5F70IpyJMhKvKHrb2mo3LJeIBvwc6SYvO7wXPV4bSaZb1qB3d-KYAjM2tbiAnfUwlaE38EnEewDnPNtsrOG8jPmQXrOg4Zxj4A7IFE1EDjqWzXn5w165mArMNOQpv5mvG28wGZV-QNM57huNb9g7gk96a3ZVLPXonv4A3lERGNqk4YL_F0RfA9zGtADj94HXwo8wqmi9Ggg1MZY-TBfLSG8WeIUbAGQ0JwRmSwIsyYC6PsWBLZAe-ROmkLOGgF0zFW6woyaGqz7rA_FCpv0zr0BP7dm83H1ORKP_qtmEwHegqAVoIsB3OoiPKDXqdkFXLSm__5g",
+            "widthPx": 4032,
+            "heightPx": 3024,
+            "authorAttributions": [
+                {
+                    "displayName": "Pablo Lo Giudice",
+                    "uri": "https://maps.google.com/maps/contrib/113785722579587882762",
+                    "photoUri": "https://lh3.googleusercontent.com/a-/ALV-UjXL3NGxufHJ_AsTO-W-RvQdD_JilnsDWUzDZnmUhERMrv0Gm0BGYw=s100-p-k-no-mo"
+                }
+            ],
+            "flagContentUri": "https://www.google.com/local/imagery/report/?cb_client=maps_api_places.places_api&image_key=!1e10!2sCIHM0ogKEICAgIDywpj5NA&hl=en-US",
+            "googleMapsUri": "https://www.google.com/maps/place//data=!3m4!1e2!3m2!1sCIHM0ogKEICAgIDywpj5NA!2e10!4m2!3m1!1s0x80858090b9d04cef:0xa50ff187b005e604"
+        }
+    ],
+    "outdoorSeating": true,
+    "liveMusic": true,
+    "menuForChildren": false,
+    "servesCocktails": true,
+    "servesDessert": true,
+    "servesCoffee": true,
+    "goodForChildren": false,
+    "restroom": true,
+    "goodForGroups": true,
+    "paymentOptions": {
+        "acceptsCreditCards": true,
+        "acceptsDebitCards": true,
+        "acceptsCashOnly": false,
+        "acceptsNfc": true
+    },
+    "parkingOptions": {
+        "paidStreetParking": true
+    },
+    "accessibilityOptions": {
+        "wheelchairAccessibleEntrance": true,
+        "wheelchairAccessibleRestroom": true,
+        "wheelchairAccessibleSeating": true
+    },
+    "generativeSummary": {
+        "overview": {
+            "text": "Traditional American restaurant in the Phoenix Hotel featuring a lounge, happy hours, and a pool, plus live music.",
+            "languageCode": "en-US"
+        },
+        "overviewFlagContentUri": "https://www.google.com/local/review/rap/report?postId=CiUweDgwODU4MDkwYjlkMDRjZWY6MHhhNTBmZjE4N2IwMDVlNjA0MAI&d=17924085&t=12",
+        "disclosureText": {
+            "text": "Summarized with Gemini",
+            "languageCode": "en-US"
+        }
+    },
+    "containingPlaces": [
+        {
+            "name": "places/ChIJ70zQuZCAhYARdKqXrH-M97s",
+            "id": "ChIJ70zQuZCAhYARdKqXrH-M97s"
+        }
+    ],
+    "pureServiceAreaBusiness": false,
+    "addressDescriptor": {
+        "landmarks": [
+            {
+                "name": "places/ChIJU2gsRnyAhYAR74kr1AsK7oo",
+                "placeId": "ChIJU2gsRnyAhYAR74kr1AsK7oo",
+                "displayName": {
+                    "text": "San Francisco Passport Agency",
+                    "languageCode": "en"
+                },
+                "types": [
+                    "establishment",
+                    "local_government_office",
+                    "point_of_interest"
+                ],
+                "straightLineDistanceMeters": 143.48366,
+                "travelDistanceMeters": 204.91855
+            },
+            {
+                "name": "places/ChIJU33KN5eAhYAR6WAWWSDh3Fg",
+                "placeId": "ChIJU33KN5eAhYAR6WAWWSDh3Fg",
+                "displayName": {
+                    "text": "KFC",
+                    "languageCode": "en"
+                },
+                "types": [
+                    "establishment",
+                    "food",
+                    "point_of_interest",
+                    "restaurant"
+                ],
+                "spatialRelationship": "DOWN_THE_ROAD",
+                "straightLineDistanceMeters": 92.98588,
+                "travelDistanceMeters": 104.72958
+            },
+            {
+                "name": "places/ChIJ70zQuZCAhYARdKqXrH-M97s",
+                "placeId": "ChIJ70zQuZCAhYARdKqXrH-M97s",
+                "displayName": {
+                    "text": "Phoenix Hotel",
+                    "languageCode": "en"
+                },
+                "types": [
+                    "establishment",
+                    "lodging",
+                    "point_of_interest"
+                ],
+                "spatialRelationship": "AROUND_THE_CORNER",
+                "straightLineDistanceMeters": 34.91437,
+                "travelDistanceMeters": 21.030746
+            },
+            {
+                "name": "places/ChIJN4VerZCAhYAR2f_Gj6xtln8",
+                "placeId": "ChIJN4VerZCAhYAR2f_Gj6xtln8",
+                "displayName": {
+                    "text": "Enterprise Rent-A-Car",
+                    "languageCode": "en"
+                },
+                "types": [
+                    "car_rental",
+                    "establishment",
+                    "point_of_interest"
+                ],
+                "straightLineDistanceMeters": 83.37717,
+                "travelDistanceMeters": 225.5518
+            },
+            {
+                "name": "places/ChIJZ9s5SJeAhYARIX3Fxl6oj6c",
+                "placeId": "ChIJZ9s5SJeAhYARIX3Fxl6oj6c",
+                "displayName": {
+                    "text": "Brenda's French Soul Food",
+                    "languageCode": "en"
+                },
+                "types": [
+                    "establishment",
+                    "food",
+                    "point_of_interest",
+                    "restaurant"
+                ],
+                "spatialRelationship": "AROUND_THE_CORNER",
+                "straightLineDistanceMeters": 88.285355,
+                "travelDistanceMeters": 135.8363
+            }
+        ],
+        "areas": [
+            {
+                "name": "places/ChIJyzeuaJCAhYARCmK0UthwWrY",
+                "placeId": "ChIJyzeuaJCAhYARCmK0UthwWrY",
+                "displayName": {
+                    "text": "Tenderloin",
+                    "languageCode": "en"
+                },
+                "containment": "WITHIN"
+            },
+            {
+                "name": "places/ChIJzQwYsJCAhYAR41vPxlb5Q_k",
+                "placeId": "ChIJzQwYsJCAhYAR41vPxlb5Q_k",
+                "displayName": {
+                    "text": "Parking lot",
+                    "languageCode": "en"
+                },
+                "containment": "NEAR"
+            },
+            {
+                "name": "places/ChIJDcaosJCAhYARDmPFzgF1GlI",
+                "placeId": "ChIJDcaosJCAhYARDmPFzgF1GlI",
+                "displayName": {
+                    "text": "Parking lot",
+                    "languageCode": "en"
+                },
+                "containment": "OUTSKIRTS"
+            }
+        ]
+    },
+    "googleMapsLinks": {
+        "directionsUri": "https://www.google.com/maps/dir//''/data=!4m7!4m6!1m1!4e2!1m2!1m1!1s0x80858090b9d04cef:0xa50ff187b005e604!3e0?g_mp=EAAYASAA",
+        "placeUri": "https://maps.google.com/?cid=11893990705984824836&g_mp=EAAYASAA",
+        "writeAReviewUri": "https://www.google.com/maps/place//data=!4m3!3m2!1s0x80858090b9d04cef:0xa50ff187b005e604!12e1?g_mp=EAAYASAA",
+        "reviewsUri": "https://www.google.com/maps/place//data=!4m4!3m3!1s0x80858090b9d04cef:0xa50ff187b005e604!9m1!1b1?g_mp=EAAYASAA",
+        "photosUri": "https://www.google.com/maps/place//data=!4m3!3m2!1s0x80858090b9d04cef:0xa50ff187b005e604!10e5?g_mp=EAAYASAA"
+    },
+    "priceRange": {
+        "startPrice": {
+            "currencyCode": "USD",
+            "units": "30"
+        },
+        "endPrice": {
+            "currencyCode": "USD",
+            "units": "50"
+        }
+    },
+    "timeZone": {
+        "id": "America/Los_Angeles"
+    },
+    "postalAddress": {
+        "regionCode": "US",
+        "languageCode": "en-US",
+        "postalCode": "94109",
+        "administrativeArea": "California",
+        "locality": "San Francisco",
+        "addressLines": [
+            "601 Eddy St"
+        ]
+    }
+}
