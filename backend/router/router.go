@@ -40,6 +40,11 @@ func AddBotRoutes(r *chi.Mux, s *handlers.BotService) {
 	// TODO SANCHEZ: add route for merchants
 }
 
+func AddMerchantRoutes(r *chi.Mux, s *handlers.MerchantService) {
+	r.Post("/merchants", s.AddMerchant)
+	r.Get("/merchants/{name}", s.GetMerchant)
+}
+
 func withAuth(handlerFunc http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		_, ok := r.Context().Value("userDid").(string)

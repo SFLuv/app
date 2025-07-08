@@ -1,60 +1,43 @@
 package db
 
 import (
-	"gorm.io/driver/sqlite"
-	"gorm.io/gorm"
+	"database/sql"
+	"fmt"
 )
 
-func MerchantDB() *gorm.DB {
-	dbPath := DBPath("merchant")
-	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
-	if db == nil {
-		return nil
-	}
+type MerchantDB struct {
+	db *sql.DB
+}
 
-	err = db.AutoMigrate(&Merchant{}, &Person{}, &Address{}, &Category{})
+func Merchant(db *sql.DB) *MerchantDB {
+	return &MerchantDB{db}
+}
+
+func (s *MerchantDB) CreateTables() error {
+	_, err := s.db.Exec(`
+		CREATE TABLE IF NOT EXISTS merchants(
+			name TEXT PRIMARY KEY NOT NULL,
+			googleid TEXT
+		);
+	`)
 	if err != nil {
-		panic(err)
+		err = fmt.Errorf("error creating merchants table: %s", err)
+		fmt.Println(fmt.Sprintf("error creating tables: %v", err))
+		return err
 	}
 
-	return db
+	fmt.Println("tables created")
+
+	return nil
 }
 
-// TODO SANCHEZ: add all attributes you need for a merchant
 
-type Merchant struct {
-	gorm.Model
-	Address     Address
-	AddressID   uint
-	Email       string
-	Name        string
-	Description string
-	Website     string
-	Phone       string
-	Category    Category
-	CategoryID  uint
-	Contact     Person
-	ContactID   uint
+func (s *MerchantDB) GetMerchant(name string) bool {
+	fmt.Println("Merchant got")
+	return true
 }
 
-type Person struct {
-	gorm.Model
-	FirstName string
-	LastName  string
-	Email     string
-	Phone     string
-}
-
-type Address struct {
-	gorm.Model
-	Street   string
-	Street_2 string
-	City     string
-	State    string
-	Zip      string
-}
-
-type Category struct {
-	gorm.Model
-	Name string
+func (s *MerchantDB) AddMerchant(name string) bool {
+	fmt.Println("Merchant added")
+	return true
 }

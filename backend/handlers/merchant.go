@@ -5,28 +5,24 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-
 	"github.com/faucet-portal/backend/db"
 	"github.com/faucet-portal/backend/structs"
-	"gorm.io/gorm"
 )
 
 type MerchantService struct {
-	db *gorm.DB
+	db *db.MerchantDB
 }
 
-func NewMerchantService(db *db.AccountDB) *AccountService {
-	return &AccountService{db}
+func NewMerchantService(db *db.MerchantDB) *MerchantService {
+	return &MerchantService{db}
 }
 
 func (s *MerchantService) GetMerchant(w http.ResponseWriter, r *http.Request) {
 	params := r.URL.Query()
-	address := params.Get("address")
-
-	// TODO SANCHEZ: get merchant from db using GORM
-
+	merchant := params.Get("merchant")
+	merch := s.db.GetMerchant(merchant)
 	w.WriteHeader(200)
-	w.Write([]byte(fmt.Sprintf(`{ "merchant": %t }`, acc)))
+	w.Write([]byte(fmt.Sprintf(`{ "merchant": %t }`, merch)))
 }
 
 func (s *MerchantService) AddMerchant(w http.ResponseWriter, r *http.Request) {
