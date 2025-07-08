@@ -316,7 +316,7 @@ export default function SettingsPage() {
                 <Button
                   variant="outline"
                   className="bg-secondary text-[#eb6c6c] border-[#eb6c6c] hover:bg-[#eb6c6c] hover:text-white"
-                  onClick={() => router.push("/dashboard/merchant-approval")}
+                  onClick={() => router.push("/merchant-approval")}
                 >
                   Apply to Become a Merchant
                 </Button>
@@ -340,7 +340,7 @@ export default function SettingsPage() {
                 <Button
                   variant="outline"
                   className="bg-secondary text-[#eb6c6c] border-[#eb6c6c] hover:bg-[#eb6c6c] hover:text-white"
-                  onClick={() => router.push("/dashboard/merchant-status")}
+                  onClick={() => router.push("/merchant-status")}
                 >
                   Check Application Status
                 </Button>
@@ -364,7 +364,7 @@ export default function SettingsPage() {
                 <Button
                   variant="outline"
                   className="bg-secondary text-[#eb6c6c] border-[#eb6c6c] hover:bg-[#eb6c6c] hover:text-white"
-                  onClick={() => router.push("/dashboard/merchant-status")}
+                  onClick={() => router.push("/merchant-status")}
                 >
                   View Details
                 </Button>

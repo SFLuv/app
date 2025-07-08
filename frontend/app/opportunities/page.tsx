@@ -133,7 +133,7 @@ export default function OpportunitiesPage() {
     setSelectedOpportunity(opportunity)
     setIsModalOpen(true)
     // Update URL with opportunity ID
-    router.push(`/dashboard/opportunities?id=${opportunity.id}`, { scroll: false })
+    router.push(`/opportunities?id=${opportunity.id}`, { scroll: false })
   }
 
   // Handle modal close
@@ -141,7 +141,7 @@ export default function OpportunitiesPage() {
     setIsModalOpen(false)
     setSelectedOpportunity(null)
     // Remove opportunity ID from URL
-    router.push("/dashboard/opportunities", { scroll: false })
+    router.push("/opportunities", { scroll: false })
   }
 
   // Handle registration

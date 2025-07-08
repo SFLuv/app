@@ -11,7 +11,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
-import { Send, AlertTriangle, CheckCircle, X, Copy } from "lucide-react"
+import { Send, AlertTriangle, CheckCircle, X, Copy, ArrowLeft } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import type { ConnectedWallet } from "@/types/privy-wallet"
 import { AppWallet } from "@/lib/wallets/wallets"
@@ -114,74 +114,84 @@ export function SendCryptoModal({ open, onOpenChange, wallet, balance }: SendCry
   }
 
   const renderContent = () => {
-    switch (step) {
+     switch (step) {
       case "form":
         return (
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="recipient">Recipient Address *</Label>
-              <Input
-                id="recipient"
-                placeholder="0x..."
-                value={formData.recipient}
-                onChange={(e) => setFormData({ ...formData, recipient: e.target.value })}
-                className="font-mono text-sm"
-              />
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="amount">Amount *</Label>
-              <div className="relative">
+          <div className="space-y-4">
+            <form onSubmit={handleSubmit} className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="recipient" className="text-sm font-medium">
+                  Recipient Address *
+                </Label>
                 <Input
-                  id="amount"
-                  type="number"
-                  step="0.00000001"
-                  placeholder="0.00"
-                  value={formData.amount}
-                  onChange={(e) => setFormData({ ...formData, amount: e.target.value })}
+                  id="recipient"
+                  placeholder="0x..."
+                  value={formData.recipient}
+                  onChange={(e) => setFormData({ ...formData, recipient: e.target.value })}
+                  className="font-mono text-sm h-11"
                 />
-                <div className="absolute right-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
-                  {SYMBOL}
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="amount" className="text-sm font-medium">
+                  Amount *
+                </Label>
+                <div className="relative">
+                  <Input
+                    id="amount"
+                    type="number"
+                    step="0.00000001"
+                    placeholder="0.00"
+                    value={formData.amount}
+                    onChange={(e) => setFormData({ ...formData, amount: e.target.value })}
+                    className="h-11 pr-16"
+                  />
+                  <div className="absolute right-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground font-medium">
+                    {SYMBOL}
+                  </div>
                 </div>
+                <p className="text-xs text-muted-foreground">
+                  Available: {balance} {SYMBOL}
+                </p>
               </div>
-              <p className="text-xs text-muted-foreground">
-                Available: {balance} {SYMBOL}
-              </p>
-            </div>
 
-            <div className="space-y-2">
-              <Label htmlFor="memo">Memo (Optional)</Label>
-              <Textarea
-                id="memo"
-                placeholder="Add a note for this transaction"
-                value={formData.memo}
-                onChange={(e) => setFormData({ ...formData, memo: e.target.value })}
-                rows={3}
-              />
-            </div>
-
-            {error && (
-              <div className="flex items-center gap-2 text-red-600 text-sm">
-                <AlertTriangle className="h-4 w-4" />
-                {error}
+              <div className="space-y-2">
+                <Label htmlFor="memo" className="text-sm font-medium">
+                  Memo (Optional)
+                </Label>
+                <Textarea
+                  id="memo"
+                  placeholder="Add a note for this transaction"
+                  value={formData.memo}
+                  onChange={(e) => setFormData({ ...formData, memo: e.target.value })}
+                  rows={3}
+                  className="resize-none"
+                />
               </div>
-            )}
 
-            <div className="flex gap-2 pt-4">
-              <Button type="button" variant="outline" onClick={handleClose} className="flex-1 bg-transparent">
-                Cancel
-              </Button>
-              <Button type="submit" className="flex-1">
-                Review Transaction
-              </Button>
-            </div>
-          </form>
+              {error && (
+                <div className="flex items-center gap-2 text-red-600 text-sm p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
+                  <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+                  <span>{error}</span>
+                </div>
+              )}
+
+              <div className="flex flex-col gap-3 pt-4 border-t">
+                <Button type="submit" className="h-11 w-full">
+                  Review Transaction
+                </Button>
+                <Button type="button" variant="outline" onClick={handleClose} className="h-11 w-full bg-transparent">
+                  Cancel
+                </Button>
+              </div>
+            </form>
+          </div>
         )
 
       case "confirm":
         return (
           <div className="space-y-4">
-            <div className="text-center">
+            <div className="text-center pb-2">
               <h3 className="text-lg font-semibold mb-2">Confirm Transaction</h3>
               <p className="text-muted-foreground text-sm">Please review the details before sending</p>
             </div>
@@ -189,51 +199,54 @@ export function SendCryptoModal({ open, onOpenChange, wallet, balance }: SendCry
             <Card>
               <CardContent className="p-4 space-y-4">
                 <div className="flex items-center justify-between">
-                  <span className="text-muted-foreground">From</span>
+                  <span className="text-muted-foreground text-sm">From</span>
                   <div className="flex items-center gap-2">
-                    <Avatar className="h-6 w-6">
-                      <AvatarImage src={`/placeholder.svg?height=24&width=24&text=${wallet.name}`} />
-                      <AvatarFallback>{wallet.name.slice(0, 2).toUpperCase()}</AvatarFallback>
+                    <Avatar className="h-5 w-5">
+                      <AvatarImage src={`/placeholder.svg?height=20&width=20&text=${wallet.name}`} />
+                      <AvatarFallback className="text-xs">
+                        {wallet.name.slice(0, 2).toUpperCase()}
+                      </AvatarFallback>
                     </Avatar>
-                    <span className="font-medium">{wallet.name.toUpperCase()}</span>
+                    <span className="font-medium text-sm">{wallet.name.toUpperCase()}</span>
                   </div>
                 </div>
 
                 <div className="flex items-center justify-between">
-                  <span className="text-muted-foreground">To</span>
+                  <span className="text-muted-foreground text-sm">To</span>
                   <span className="font-mono text-sm">
                     {formData.recipient.slice(0, 6)}...{formData.recipient.slice(-4)}
                   </span>
                 </div>
 
                 <div className="flex items-center justify-between">
-                  <span className="text-muted-foreground">Amount</span>
+                  <span className="text-muted-foreground text-sm">Amount</span>
                   <span className="font-semibold">
                     {formData.amount} {SYMBOL}
                   </span>
                 </div>
 
-                { wallet.type === "eoa" && <div className="flex items-center justify-between">
-                  <span className="text-muted-foreground">Network Fee</span>
+                <div className="flex items-center justify-between">
+                  <span className="text-muted-foreground text-sm">Network Fee</span>
                   <span className="text-sm">~0.0001 {SYMBOL}</span>
-                </div>}
+                </div>
 
-                { formData.memo && (
+                {formData.memo && (
                   <div className="flex items-start justify-between">
-                    <span className="text-muted-foreground">Memo</span>
+                    <span className="text-muted-foreground text-sm">Memo</span>
                     <span className="text-sm text-right max-w-[200px] break-words">{formData.memo}</span>
                   </div>
                 )}
               </CardContent>
             </Card>
 
-            <div className="flex gap-2">
-              <Button variant="outline" onClick={() => setStep("form")} className="flex-1">
-                Back
-              </Button>
-              <Button onClick={handleConfirm} className="flex-1">
+            <div className="flex flex-col gap-3 pt-4 border-t">
+              <Button onClick={handleConfirm} className="h-11 w-full">
                 <Send className="h-4 w-4 mr-2" />
                 Send Transaction
+              </Button>
+              <Button variant="outline" onClick={() => setStep("form")} className="h-11 w-full bg-transparent">
+                <ArrowLeft className="h-4 w-4 mr-2" />
+                Back
               </Button>
             </div>
           </div>
@@ -241,34 +254,31 @@ export function SendCryptoModal({ open, onOpenChange, wallet, balance }: SendCry
 
       case "sending":
         return (
-          <div className="text-center space-y-4">
+          <div className="text-center space-y-6 py-8">
             <div className="h-16 w-16 mx-auto rounded-full bg-primary/10 flex items-center justify-center">
               <Send className="h-8 w-8 text-primary animate-pulse" />
             </div>
             <div>
-              <h3 className="text-lg font-semibold">Sending Transaction</h3>
-              <p className="text-muted-foreground">Please wait while we process your transaction...</p>
+              <h3 className="text-lg font-semibold mb-2">Sending Transaction</h3>
+              <p className="text-muted-foreground text-sm">Please wait while we process your transaction...</p>
             </div>
           </div>
         )
 
       case "success":
         return (
-          <div className="text-center space-y-4">
+          <div className="text-center space-y-6 py-4">
             <div className="h-16 w-16 mx-auto rounded-full bg-green-100 dark:bg-green-900/20 flex items-center justify-center">
               <CheckCircle className="h-8 w-8 text-green-600 dark:text-green-400" />
             </div>
             <div>
-              <h3 className="text-lg font-semibold">Transaction Sent!</h3>
-              <p className="text-muted-foreground">Your transaction has been broadcast to the network</p>
+              <h3 className="text-lg font-semibold mb-2">Transaction Sent!</h3>
+              <p className="text-muted-foreground text-sm mb-4">Your transaction has been broadcast to the network</p>
+              <Badge variant="secondary" className="font-mono text-xs">
+                TX: 0x1234...5678
+              </Badge>
             </div>
-            <Badge variant="secondary" className="font-mono text-xs">
-              TX: {hash?.slice(0, 6)}...{hash?.slice(-4)}
-              <Button size="icon" onClick={copyHash} className="bg-transparent focus:bg-transparent hover:bg-transparent">
-                {copied ? <CheckCircle className="h-4 w-4 text-green-600" /> : <Copy className="h-4 w-4" />}
-              </Button>
-            </Badge>
-            <Button onClick={handleClose} className="w-full">
+            <Button onClick={handleClose} className="w-full h-11">
               Done
             </Button>
           </div>
@@ -276,19 +286,19 @@ export function SendCryptoModal({ open, onOpenChange, wallet, balance }: SendCry
 
       case "error":
         return (
-          <div className="text-center space-y-4">
+          <div className="text-center space-y-6 py-4">
             <div className="h-16 w-16 mx-auto rounded-full bg-red-100 dark:bg-red-900/20 flex items-center justify-center">
               <X className="h-8 w-8 text-red-600 dark:text-red-400" />
             </div>
             <div>
-              <h3 className="text-lg font-semibold">Transaction Failed</h3>
-              <p className="text-muted-foreground">{error}</p>
+              <h3 className="text-lg font-semibold mb-2">Transaction Failed</h3>
+              <p className="text-muted-foreground text-sm">{error}</p>
             </div>
-            <div className="flex gap-2">
-              <Button variant="outline" onClick={() => setStep("form")} className="flex-1">
+            <div className="flex flex-col gap-3">
+              <Button onClick={() => setStep("form")} className="w-full h-11">
                 Try Again
               </Button>
-              <Button onClick={handleClose} className="flex-1">
+              <Button variant="outline" onClick={handleClose} className="w-full h-11 bg-transparent">
                 Close
               </Button>
             </div>
@@ -302,11 +312,11 @@ export function SendCryptoModal({ open, onOpenChange, wallet, balance }: SendCry
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>Send Cryptocurrency</DialogTitle>
-          <DialogDescription>
-            Send {SYMBOL} from {wallet.name.toUpperCase()}
+      <DialogContent className="w-[95vw] max-w-md mx-auto max-h-[90vh] rounded-lg overflow-y-auto">
+        <DialogHeader className="space-y-2 pb-2">
+          <DialogTitle className="text-lg sm:text-xl">Send Cryptocurrency</DialogTitle>
+          <DialogDescription className="text-sm">
+            Send {SYMBOL} from your {wallet.name.toUpperCase()} wallet
           </DialogDescription>
         </DialogHeader>
         {renderContent()}

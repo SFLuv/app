@@ -56,7 +56,7 @@ export default function MerchantStatusPage() {
                 support team.
               </p>
             </div>
-            <Button variant="outline" onClick={() => router.push("/dashboard/settings")}>
+            <Button variant="outline" onClick={() => router.push("/settings")}>
               Return to Settings
             </Button>
           </div>
@@ -70,7 +70,7 @@ export default function MerchantStatusPage() {
             <p className="text-gray-600 dark:text-gray-400 mb-6">You haven't submitted a merchant application yet.</p>
             <Button
               className="bg-[#eb6c6c] hover:bg-[#d55c5c]"
-              onClick={() => router.push("/dashboard/merchant-approval")}
+              onClick={() => router.push("/merchant-approval")}
             >
               Apply to Become a Merchant
             </Button>

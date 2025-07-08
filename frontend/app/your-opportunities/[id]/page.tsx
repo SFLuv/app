@@ -58,7 +58,7 @@ export default function OpportunityDetailPage() {
   // Redirect if opportunity not found
   useEffect(() => {
     if (!isLoadingOpportunity && !opportunity) {
-      router.push("/dashboard/your-opportunities")
+      router.push("/your-opportunities")
     }
   }, [isLoadingOpportunity, opportunity, router])
 
@@ -117,7 +117,7 @@ export default function OpportunityDetailPage() {
     if (window.confirm("Are you sure you want to delete this opportunity? This action cannot be undone.")) {
       try {
         await deleteOpportunity(opportunityId)
-        router.push("/dashboard/your-opportunities")
+        router.push("/your-opportunities")
       } catch (err) {
         console.error("Failed to delete opportunity:", err)
       }
@@ -156,7 +156,7 @@ export default function OpportunityDetailPage() {
   return (
     <div className="space-y-6">
       <div className="flex items-center gap-4">
-        <Button variant="outline" onClick={() => router.push("/dashboard/your-opportunities")}>
+        <Button variant="outline" onClick={() => router.push("/your-opportunities")}>
           <ArrowLeft className="mr-2 h-4 w-4" /> Back to Opportunities
         </Button>
         <h1 className="text-3xl font-bold text-black dark:text-white">{opportunity.title}</h1>

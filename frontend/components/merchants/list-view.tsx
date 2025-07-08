@@ -141,7 +141,7 @@ export function ListView({
         ) : (
           paginatedMerchants.map((merchant) => (
             <Card
-              key={merchant.id}
+              key={merchant.name}
               className="overflow-hidden cursor-pointer hover:shadow-md transition-shadow"
               onClick={() => onSelectMerchant(merchant)}
             >
@@ -162,7 +162,7 @@ export function ListView({
                           <h3 className="text-xl font-semibold text-black dark:text-white">{merchant.name}</h3>
                           <div className="flex items-center mt-1 mb-2">
                             <Badge variant="outline" className="mr-2 bg-secondary text-black dark:text-white">
-                              {merchantTypeLabels[merchant.type]}
+                              {merchant.type.charAt(0).toUpperCase() + merchant.type.slice(1)}
                             </Badge>
                             <div className="flex items-center">
                               {renderStars(merchant.rating)}
@@ -186,10 +186,6 @@ export function ListView({
                       <div className="flex items-center text-gray-600 dark:text-gray-300">
                         <Phone className="h-4 w-4 mr-2 text-[#eb6c6c]" />
                         <span>{merchant.contactInfo.phone}</span>
-                      </div>
-                      <div className="flex items-center text-gray-600 dark:text-gray-300 md:col-span-2">
-                        <Clock className="h-4 w-4 mr-2 text-[#eb6c6c]" />
-                        <span>{merchant.hoursOfOperation.Monday} (Monday)</span>
                       </div>
                     </div>
                   </div>

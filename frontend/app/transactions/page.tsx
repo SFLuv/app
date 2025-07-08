@@ -40,7 +40,7 @@ export default function TransactionsPage() {
     setSelectedTransaction(transaction)
     setIsModalOpen(true)
     // Update URL with transaction ID
-    router.push(`/dashboard/transactions?id=${transaction.id}`, { scroll: false })
+    router.push(`/transactions?id=${transaction.id}`, { scroll: false })
   }
 
   // Handle modal close
@@ -48,7 +48,7 @@ export default function TransactionsPage() {
     setIsModalOpen(false)
     setSelectedTransaction(null)
     // Remove transaction ID from URL
-    router.push("/dashboard/transactions", { scroll: false })
+    router.push("/transactions", { scroll: false })
   }
 
   return (

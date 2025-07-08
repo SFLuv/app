@@ -182,7 +182,6 @@ export class AppWallet {
       abi: [balanceOf],
       functionName: "balanceOf",
       args: [this.wallet?.address as Address],
-      blockTag: "safe"
     }) as unknown as bigint
 
     console.log(balance)

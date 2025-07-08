@@ -58,7 +58,7 @@ export default function YourOpportunitiesPage() {
 
   // Handle opportunity click
   const handleOpportunityClick = (opportunityId: string) => {
-    router.push(`/dashboard/your-opportunities/${opportunityId}`)
+    router.push(`/your-opportunities/${opportunityId}`)
   }
 
   // Handle create opportunity

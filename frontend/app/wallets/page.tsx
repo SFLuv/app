@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -12,11 +12,23 @@ import { useWallets, usePrivy } from "@privy-io/react-auth"
 import type { ConnectedWallet } from "@/types/privy-wallet"
 import { useApp } from "@/context/AppProvider"
 import { AppWallet } from "@/lib/wallets/wallets"
+import { ConnectWalletModal } from "@/components/wallets/connect-wallet-modal"
 
 export default function WalletsPage() {
   const router = useRouter()
-  const { wallets } = useApp()
-  const { connectWallet } = usePrivy()
+  const { wallets, status } = useApp()
+
+  useEffect(() => {
+    if(status === "unauthenticated") {
+      router.replace("/")
+    }
+  }, [status])
+
+  const [connectWalletModalOpen, setConnectWalletModalOpen] = useState(false)
+
+  const onConnectWalletModalOpenChange = () => {
+
+  }
 
   const getWalletDisplayName = (walletType: string) => {
     switch (walletType) {
@@ -55,7 +67,7 @@ export default function WalletsPage() {
   // Handle wallet selection
   const handleSelectWallet = (wallet: AppWallet, index: number) => {
     // Navigate to the specific wallet page
-    router.push(`/dashboard/wallets/${index}`)
+    router.push(`/wallets/${index}`)
   }
 
   // Handle disconnect wallet
@@ -64,35 +76,32 @@ export default function WalletsPage() {
     console.log("Disconnecting wallet:", wallet.address)
   }
 
+  if (status === "loading") {
+    console.log("loading")
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-[#eb6c6c]"></div>
+      </div>
+    )
+  }
+
   return (
     <div className="space-y-6">
+      <ConnectWalletModal open={connectWalletModalOpen} onOpenChange={() => setConnectWalletModalOpen(!connectWalletModalOpen)}/>
       <div>
         <h1 className="text-3xl font-bold text-black dark:text-white">Connected Wallets</h1>
         <p className="text-gray-600 dark:text-gray-400 mt-1">Manage wallets connected to your SFLuv account</p>
       </div>
 
-      <div className="flex flex-col sm:flex-row gap-4">
-        <Button className="bg-[#eb6c6c] hover:bg-[#d55c5c]" onClick={connectWallet}>
-          <Plus className="h-4 w-4 mr-2" />
-          Connect New Wallet
-        </Button>
-      </div>
-
       <div className="space-y-4">
         {wallets.length === 0 ? (
           <div className="text-center py-12">
-            <Wallet className="h-12 w-12 text-gray-300 dark:text-gray-600 mx-auto mb-4" />
-            <h3 className="text-xl font-medium text-black dark:text-white mb-2">No wallets connected</h3>
-            <p className="text-gray-600 dark:text-gray-400 max-w-md mx-auto mb-6">
-              Connect your first wallet to start managing your cryptocurrency and making transactions.
-            </p>
-            <Button className="bg-[#eb6c6c] hover:bg-[#d55c5c]" onClick={connectWallet}>
-              <Plus className="h-4 w-4 mr-2" />
-              Connect Your First Wallet
-            </Button>
+            <h3 className="text-xl font-medium text-black dark:text-white mb-2">Error getting connected wallets.</h3>
           </div>
         ) : (
-          wallets.map((wallet, index) => (
+          wallets.map((wallet, index) => {
+            if(wallet.type === "eoa") return
+            return (
             <Card key={wallet.address} className="overflow-hidden cursor-pointer hover:shadow-md transition-shadow">
               <CardContent className="p-4">
                 <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -126,12 +135,19 @@ export default function WalletsPage() {
                 </div>
               </CardContent>
             </Card>
-          ))
+          )})
         )}
       </div>
 
+      <div className="flex flex-col sm:flex-row gap-4">
+        <Button className="bg-[#eb6c6c] hover:bg-[#d55c5c]" onClick={() => setConnectWalletModalOpen(!connectWalletModalOpen)}>
+          <Plus className="h-4 w-4 mr-2" />
+          Connect New Wallet
+        </Button>
+      </div>
+
       <div className="text-sm text-gray-500 dark:text-gray-400">
-        Showing {wallets.length} connected wallet{wallets.length !== 1 ? "s" : ""}
+        Showing {(wallets.filter((wallet, index) => wallet.type !== "eoa")).length} connected smart wallet{wallets.length !== 1 ? "s" : ""}
       </div>
     </div>
   )

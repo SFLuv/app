@@ -8,7 +8,6 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Badge } from "@/components/ui/badge"
 import { Star, MapPin, Phone, Mail, Globe, ExternalLink } from "lucide-react"
 import type { Merchant } from "@/types/merchant"
-import { merchantTypeLabels } from "@/types/merchant"
 
 interface MerchantModalProps {
   merchant: Merchant | null
@@ -37,20 +36,21 @@ export function MerchantModal({ merchant, isOpen, onClose }: MerchantModalProps)
     return `https://www.google.com/maps/search/?api=1&query=${formattedAddress}`
   }
 
+  console.log(merchant)
+
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
       <DialogContent className="sm:max-w-[600px] max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="text-2xl text-black dark:text-white">{merchant.name}</DialogTitle>
-          <DialogDescription className="flex items-center gap-2">
+          <DialogDescription className="flex items-center gap-2 sr-only">{merchant.type.charAt(0).toUpperCase() + merchant.type.slice(1)}</DialogDescription>
             <Badge variant="outline" className="bg-secondary text-black dark:text-white">
-              {merchantTypeLabels[merchant.type]}
+            {merchant.type.charAt(0).toUpperCase() + merchant.type.slice(1)}
             </Badge>
             <div className="flex items-center ml-2">
               {renderStars(merchant.rating)}
               <span className="ml-1 text-sm text-gray-600 dark:text-gray-400">{merchant.rating.toFixed(1)}</span>
             </div>
-          </DialogDescription>
         </DialogHeader>
 
         <div className="relative h-64 w-full my-4">
@@ -104,12 +104,7 @@ export function MerchantModal({ merchant, isOpen, onClose }: MerchantModalProps)
           <TabsContent value="hours" className="space-y-4">
             <h3 className="font-medium text-black dark:text-white">Hours of Operation</h3>
             <div className="space-y-2">
-              {Object.entries(merchant.hoursOfOperation).map(([day, hours]) => (
-                <div key={day} className="flex justify-between items-center">
-                  <span className="font-medium text-gray-700 dark:text-gray-300">{day}</span>
-                  <span className="text-gray-600 dark:text-gray-400">{hours}</span>
-                </div>
-              ))}
+              {merchant.opening_hours?.map(item => <li>{item}</li>)}
             </div>
           </TabsContent>
 

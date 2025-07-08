@@ -12,7 +12,7 @@ export default function MerchantApprovalPage() {
   // Redirect if user already has a merchant status
   useEffect(() => {
     if (user?.merchantStatus) {
-      router.push("/dashboard/merchant-status")
+      router.push("/merchant-status")
     }
   }, [user, router])
 

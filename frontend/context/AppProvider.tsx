@@ -64,6 +64,7 @@ interface AppContextType {
   // Web3 Functionality
   wallets: AppWallet[];
   tx: TxState;
+  updateWallets: () => Promise<void>
 
   // App Functionality
   updateUser: (data: Partial<User>) => void
@@ -98,7 +99,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
 
     if(privyAuthenticated) {
       if(!walletsReady) return;
-      _userLogin().then(() => setStatus("authenticated"))
+      _userLogin().then(() => setStatus("authenticated")).catch(() => setStatus("unauthenticated"))
     }
     else {
       setStatus("unauthenticated")
@@ -130,8 +131,6 @@ export default function AppProvider({ children }: { children: ReactNode }) {
       console.error(error)
       throw new Error("error logging user in")
     }
-
-    setStatus("loading")
   }
 
   const _resetAppState = async () => {
@@ -184,6 +183,18 @@ export default function AppProvider({ children }: { children: ReactNode }) {
       console.error(error)
       throw new Error("error initializing wallets")
     }
+  }
+
+  const updateWallets = async () => {
+    const s = status
+    setStatus("loading")
+    try {
+      await _initWallets()
+    }
+    catch {
+      setError("error updating wallets")
+    }
+    setStatus(s)
   }
 
   const login = async () => {
@@ -259,6 +270,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
           user,
           wallets,
           tx,
+          updateWallets,
           error,
           login,
           logout,
