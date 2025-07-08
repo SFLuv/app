@@ -1,11 +1,11 @@
 export type MerchantStatus = "pending" | "approved" | "rejected" | "revoked"
 
 export interface Merchant {
-  id: string
   name: string
+  id?: string
   description: string
-  type: MerchantType
-  status: MerchantStatus
+  type: string
+  status?: boolean
   address: {
     street: string
     city: string
@@ -18,16 +18,16 @@ export interface Merchant {
   }
   contactInfo: {
     phone: string
-    email: string
+    email?: string
     website?: string
   }
-  imageUrl: string
-  acceptsSFLuv: boolean
+  imageUrl?: string
+  acceptsSFLuv?: boolean
   rating: number // 1-5 stars
-  hoursOfOperation: {
-    [key: string]: string // e.g., "Monday": "9:00 AM - 5:00 PM"
-  }
+  opening_hours?: []
+  mapsPage: string
 }
+
 
 export type MerchantType =
   | "restaurant"

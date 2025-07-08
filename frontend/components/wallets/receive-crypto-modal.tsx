@@ -60,27 +60,28 @@ export function ReceiveCryptoModal({ open, onOpenChange, wallet }: ReceiveCrypto
   }
 
   const currencySymbol = SYMBOL
+  const networkName = CHAIN.name
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>Receive Cryptocurrency</DialogTitle>
-          <DialogDescription>
-            Share your wallet address to receive {currencySymbol} on {CHAIN.name}
+      <DialogContent className="w-[95vw] max-w-md mx-auto max-h-[90vh] rounded-lg overflow-y-auto">
+        <DialogHeader className="space-y-2 pb-2">
+          <DialogTitle className="text-lg sm:text-xl">Receive Cryptocurrency</DialogTitle>
+          <DialogDescription className="text-sm">
+            Share your wallet address to receive {currencySymbol} on {networkName}
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-6">
+        <div className="space-y-4 sm:space-y-6">
           {/* QR Code Section */}
           <Card>
-            <CardContent className="p-6">
-              <div className="text-center space-y-4">
-                <div className="h-48 w-48 mx-auto bg-muted rounded-lg flex items-center justify-center">
+            <CardContent className="p-4 sm:p-6">
+              <div className="text-center space-y-3 sm:space-y-4">
+                <div className="h-40 w-40 sm:h-48 sm:w-48 mx-auto bg-muted rounded-lg flex items-center justify-center">
                   <div className="text-center">
-                    <QrCode className="h-16 w-16 mx-auto text-muted-foreground mb-2" />
+                    <QrCode className="h-12 w-12 sm:h-16 sm:w-16 mx-auto text-muted-foreground mb-2" />
                     <p className="text-sm text-muted-foreground">QR Code</p>
-                    <p className="text-xs text-muted-foreground">{wallet.address?.slice(0, 8) || "0x"}...</p>
+                    <p className="text-xs text-muted-foreground">{wallet?.address?.slice(0, 8) || "0x"}...</p>
                   </div>
                 </div>
                 <p className="text-sm text-muted-foreground">
@@ -92,22 +93,31 @@ export function ReceiveCryptoModal({ open, onOpenChange, wallet }: ReceiveCrypto
 
           {/* Wallet Address */}
           <div className="space-y-2">
-            <Label>Wallet Address</Label>
+            <Label className="text-sm font-medium">Wallet Address</Label>
             <div className="flex gap-2">
-              <Input value={wallet.address} readOnly className="font-mono text-sm" />
-              <Button variant="outline" size="sm" onClick={copyAddress} className="px-3 bg-transparent">
+              <Input value={wallet.address} readOnly className="font-mono text-xs sm:text-sm h-11" />
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={copyAddress}
+                className="px-3 bg-transparent h-11 flex-shrink-0"
+              >
                 {copied ? <CheckCircle className="h-4 w-4 text-green-600" /> : <Copy className="h-4 w-4" />}
               </Button>
             </div>
-            <p className="text-xs text-muted-foreground">
-              Only send {currencySymbol} on {CHAIN.name} to this address
-            </p>
+            <div className="flex gap-2">
+              <p className="text-xs text-muted-foreground flex-1">
+                Only send {currencySymbol} on {networkName} to this address
+              </p>
+            </div>
           </div>
 
           {/* Optional Payment Request */}
           <div className="space-y-4">
             <div className="space-y-2">
-              <Label htmlFor="request-amount">Request Amount (Optional)</Label>
+              <Label htmlFor="request-amount" className="text-sm font-medium">
+                Request Amount (Optional)
+              </Label>
               <div className="relative">
                 <Input
                   id="request-amount"
@@ -116,26 +126,30 @@ export function ReceiveCryptoModal({ open, onOpenChange, wallet }: ReceiveCrypto
                   placeholder="0.00"
                   value={amount}
                   onChange={(e) => setAmount(e.target.value)}
+                  className="h-11 pr-16"
                 />
-                <div className="absolute right-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
+                <div className="absolute right-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground font-medium">
                   {currencySymbol}
                 </div>
               </div>
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="request-memo">Message (Optional)</Label>
+              <Label htmlFor="request-memo" className="text-sm font-medium">
+                Message (Optional)
+              </Label>
               <Textarea
                 id="request-memo"
                 placeholder="Add a message for the sender"
                 value={memo}
                 onChange={(e) => setMemo(e.target.value)}
                 rows={2}
+                className="resize-none"
               />
             </div>
 
             {(amount || memo) && (
-              <Button variant="outline" onClick={generatePaymentRequest} className="w-full bg-transparent">
+              <Button variant="outline" onClick={generatePaymentRequest} className="w-full bg-transparent h-11">
                 Generate Payment Request
               </Button>
             )}
@@ -143,13 +157,13 @@ export function ReceiveCryptoModal({ open, onOpenChange, wallet }: ReceiveCrypto
 
           {/* Security Notice */}
           <Card className="border-amber-200 dark:border-amber-800">
-            <CardContent className="p-4">
+            <CardContent className="p-3 sm:p-4">
               <div className="space-y-2">
                 <p className="font-medium text-sm">Security Tips</p>
                 <ul className="text-xs text-muted-foreground space-y-1">
                   <li>• Only share this address with trusted senders</li>
                   <li>• Verify the sender before sharing payment requests</li>
-                  <li>• Double-check the network matches ({CHAIN.name})</li>
+                  <li>• Double-check the network matches ({networkName})</li>
                   <li>• Never share your private keys or seed phrase</li>
                 </ul>
               </div>

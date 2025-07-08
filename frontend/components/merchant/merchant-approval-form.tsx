@@ -125,7 +125,7 @@ export function MerchantApprovalForm() {
     setTimeout(() => {
       requestMerchantStatus(merchantProfile)
       setIsSubmitting(false)
-      router.push("/dashboard/merchant-status")
+      router.push("/merchant-status")
     }, 1500)
   }
 

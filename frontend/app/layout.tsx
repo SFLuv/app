@@ -4,6 +4,7 @@ import { Inter } from "next/font/google"
 import "./globals.css"
 import { ThemeProvider } from "@/components/theme-provider"
 import Providers from "@/context/Providers"
+import Sidebar from "./sidebar"
 
 const inter = Inter({ subsets: ["latin"] })
 
@@ -19,11 +20,14 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode
 }>) {
+
   return (
     <html lang="en" suppressHydrationWarning>
       <body className={inter.className}>
         <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
-          <Providers>{children}</Providers>
+          <Providers>
+            <Sidebar>{children}</Sidebar>
+          </Providers>
         </ThemeProvider>
       </body>
     </html>
