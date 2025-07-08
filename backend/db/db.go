@@ -4,12 +4,20 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"path/filepath"
+	"runtime"
 
 	_ "github.com/mattn/go-sqlite3"
 )
 
 func DBPath(name string) string {
+	projectRoot, err := getProjectRoot()
+	if err != nil {
+		fmt.Println("err getting project root")
+		projectRoot = "./"
+	}
 	dbFolderPath := os.Getenv("DB_FOLDER_PATH")
+	dbFolderPath = filepath.Join(projectRoot, dbFolderPath)
 	dbPath := fmt.Sprintf("%s/%s.db", dbFolderPath, name)
 
 	if !exists(dbFolderPath) {
@@ -50,4 +58,28 @@ func exists(path string) bool {
 	}
 
 	return exists
+}
+
+func getProjectRoot() (string, error) {
+	_, filename, _, ok := runtime.Caller(0)
+	if !ok {
+		return "", fmt.Errorf("failed to get caller information")
+	}
+	currentDir := filepath.Dir(filename)
+
+	for {
+		// Check for common project root indicators
+		if _, err := os.Stat(filepath.Join(currentDir, "go.mod")); err == nil {
+			return currentDir, nil
+		}
+		if _, err := os.Stat(filepath.Join(currentDir, ".git")); err == nil {
+			return currentDir, nil
+		}
+
+		parentDir := filepath.Dir(currentDir)
+		if parentDir == currentDir { // Reached file system root
+			return "", fmt.Errorf("project root not found")
+		}
+		currentDir = parentDir
+	}
 }
