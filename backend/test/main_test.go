@@ -1,111 +1,143 @@
-package main
+package test
 
 import (
-	"bytes"
+	"context"
 	"fmt"
-	"io"
 	"log"
 	"os"
+	"path"
+	"path/filepath"
 	"testing"
-
-	"net/http"
-	"net/http/httptest"
-
 	"github.com/SFLuv/app/backend/db"
-
-	"github.com/SFLuv/app/backend/handlers"
-	"github.com/SFLuv/app/backend/router"
-	"github.com/go-chi/chi/v5"
+	"github.com/SFLuv/app/backend/utils"
+	"github.com/jackc/pgx/v5"
+	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/joho/godotenv"
-	//"github.com/SFLuv/app/backend/structs"
 )
 
-var testserver *httptest.Server
+var DBS = []string{
+	"test",
+	"account",
+	"bot",
+	"merchant",
+}
 
 func TestMain(m *testing.M) {
-	// setup code
-	testrouter := chi.NewRouter()
-	godotenv.Load("../test.env", "../.env")
-	mdb := db.InitDB("merchants")
-	merchantDb := db.Merchant(mdb)
-	err := merchantDb.CreateTables()
+	root, err := utils.GetProjectRoot()
 	if err != nil {
-		fmt.Printf("error creating tables: %s\n", err)
-		os.Exit(1)
+		log.Fatal("error getting project root")
 	}
-	merchant_service := handlers.NewMerchantService(merchantDb)
-	router.AddMerchantRoutes(testrouter, merchant_service)
-	testserver = httptest.NewServer(testrouter)
-	defer testserver.Close()
 
-	//run tests
+	testEnv := path.Join(root, "./.test.env")
+	if !utils.Exists(testEnv) {
+		log.Fatal("no test env present")
+	}
+
+	godotenv.Load(testEnv)
+
+	dbType := os.Getenv("DB_TYPE")
+	if dbType == "postgres" {
+		err = postgresSetup()
+	} else {
+		err = sqliteSetup()
+	}
+	if err != nil {
+		log.Fatalf("db setup error: %s", err)
+	}
+
 	code := m.Run()
 
-	// teardown code
-	err = os.RemoveAll("/Users/sanchezoleary/Projects/app/backend/test/data")
-	if err != nil {
-		log.Fatalf("Failed to delete directory: %v", err)
+	if dbType == "postgres" {
+		err = postgresTeardown()
+	} else {
+		err = sqliteTeardown()
 	}
+	if err != nil {
+		log.Fatalf("db teardown error: %s", err)
+	}
+
 	os.Exit(code)
 }
 
-func TestAddMerchant(t *testing.T) {
-	body_data_1 := []byte(`{"name": "Bob's Burgers", "googleid": "abc123", "description": "a homestyle burger place", "id": 1}`)
-	add_request_1, err := http.NewRequest(http.MethodPost, testserver.URL+"/merchants", bytes.NewReader(body_data_1))
+func postgresSetup() error {
+	connString := db.MakeDbConnString("postgres")
+	fmt.Println(connString)
+	pdb, err := pgx.Connect(context.Background(), connString)
 	if err != nil {
-		fmt.Printf("error creating add request 1: %s\n", err)
-		os.Exit(1)
+		return fmt.Errorf("error connecting to postgres db during setup: %s", err)
 	}
-	body_data_2 := []byte(`{"name": "Krusty Crab", "googleid": "def345", "description": "delicious Krabby Patties", "id": 2}`)
-	add_request_2, err := http.NewRequest(http.MethodPost, testserver.URL+"/merchants", bytes.NewReader(body_data_2))
-	if err != nil {
-		fmt.Printf("error creating add request 2: %s\n", err)
-		os.Exit(1)
+	defer pdb.Close(context.Background())
+	for _, db := range DBS {
+		_, err = pdb.Exec(context.Background(), fmt.Sprintf("CREATE DATABASE %s", fmt.Sprintf("test_%s", db)))
+		if err != nil {
+			return fmt.Errorf("error creating %s test db: %s", db, err)
+		}
 	}
-	add_request_1.Header.Set("Content-Type", "application/json")
-	add_request_2.Header.Set("Content-Type", "application/json")
-	add_request_response_1, err := testserver.Client().Do(add_request_1)
-	if err != nil {
-		fmt.Printf("error sending add request: %s\n", err)
-		os.Exit(1)
-	}
-	add_request_response_2, err := testserver.Client().Do(add_request_2)
-	if err != nil {
-		fmt.Printf("error sending add request: %s\n", err)
-		os.Exit(1)
-	}
-	addbody1, _ := io.ReadAll(add_request_response_1.Body)
-	addbody2, _ := io.ReadAll(add_request_response_2.Body)
-	fmt.Println(string(addbody1))
-	fmt.Println(string(addbody2))
+	return nil
 }
 
-func TestGetMerchant(t *testing.T) {
-	get_request, err := http.NewRequest(http.MethodGet, testserver.URL+"/merchants/"+"1", nil)
+func postgresTeardown() error {
+	connString := db.MakeDbConnString("postgres")
+	pdb, err := pgx.Connect(context.Background(), connString)
 	if err != nil {
-		fmt.Printf("error creating get request: %s\n", err)
-		os.Exit(1)
+		return fmt.Errorf("error connecting to postgres db during setup: %s", err)
 	}
-	get_request_response, err := testserver.Client().Do(get_request)
-	if err != nil {
-		fmt.Printf("error sending get request: %s\n", err)
-		os.Exit(1)
+	defer pdb.Close(context.Background())
+	for _, d := range DBS {
+		_, err = pdb.Exec(context.Background(), fmt.Sprintf("DROP DATABASE %s", fmt.Sprintf("test_%s", d)))
+		if err != nil {
+			return fmt.Errorf("error dropping %s test db: %s", d, err)
+		}
 	}
-	getbody, _ := io.ReadAll(get_request_response.Body)
-	fmt.Println(string(getbody))
+	return nil
 }
 
-func TestGetMerchants(t *testing.T) {
-	get_request, err := http.NewRequest(http.MethodGet, testserver.URL+"/merchants", nil)
-	if err != nil {
-		fmt.Printf("error creating get request: %s\n", err)
-		os.Exit(1)
+func sqliteSetup() error {
+	for _, d := range DBS {
+		_, err := db.InitDB(fmt.Sprintf("test_%s", d))
+		if err != nil {
+			return fmt.Errorf("error initializing %s db", err)
+		}
 	}
-	get_request_response, err := testserver.Client().Do(get_request)
+	return nil
+}
+
+func sqliteTeardown() error {
+	projectRoot, err := utils.GetProjectRoot()
 	if err != nil {
-		fmt.Printf("error sending get request: %s\n", err)
-		os.Exit(1)
+		projectRoot = "./"
 	}
-	getbody, _ := io.ReadAll(get_request_response.Body)
-	fmt.Println(string(getbody))
+	dbFolderPath := os.Getenv("DB_PATH")
+	if dbFolderPath == "" {
+		dbFolderPath = "./test_data"
+	}
+	dbFolderPath = filepath.Join(projectRoot, dbFolderPath)
+	err = os.RemoveAll(dbFolderPath)
+	if err != nil {
+		return fmt.Errorf("error removing test db folder: %s", err)
+	}
+	return nil
+}
+
+func TestDBConnection(t *testing.T) {
+	conn, err := db.InitDB("test_test")
+	if err != nil {
+		t.Fatalf("error establishing db connection: %s", err)
+	}
+	conn.Close()
+}
+
+func TestCreateAccountTables(t *testing.T) {
+	adb, err := db.InitDB("test_account")
+	if err != nil {
+		t.Fatal("failed to establish db connection")
+	}
+	defer adb.Close()
+
+	accountDB := db.Account(adb)
+
+	err = accountDB.CreateTables()
+	if err != nil {
+		t.Fatalf("error creating account tables: %s", err)
+	}
 }
