@@ -2,25 +2,35 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 
-	"github.com/faucet-portal/backend/bot"
-	"github.com/faucet-portal/backend/db"
-	"github.com/faucet-portal/backend/handlers"
-	"github.com/faucet-portal/backend/router"
+	"github.com/SFLuv/app/backend/bot"
+	"github.com/SFLuv/app/backend/db"
+	"github.com/SFLuv/app/backend/handlers"
+	"github.com/SFLuv/app/backend/router"
 	"github.com/joho/godotenv"
 )
 
 func main() {
 	godotenv.Load()
 
-	bdb := db.InitDB("bot")
-	adb := db.InitDB("account")
-	mdb := db.MerchantDB()
+	bdb, err := db.InitDB("bot")
+	if err != nil {
+		log.Fatal(fmt.Sprintf("error initializing bot db: %s\n", err))
+	}
+	adb, err := db.InitDB("account")
+	if err != nil {
+		log.Fatal(fmt.Sprintf("error initializing account db: %s\n", err))
+	}
+	mdb, err := db.InitDB("merchant")
+	if err != nil {
+		log.Fatal(fmt.Sprintf("error initializing merchant db: %s\n", err))
+	}
 
 	botDb := db.Bot(bdb)
-	err := botDb.CreateTables()
+	err = botDb.CreateTables()
 	if err != nil {
 		fmt.Println(err)
 		return

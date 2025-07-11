@@ -4,7 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 
-	"github.com/faucet-portal/backend/structs"
+	"github.com/SFLuv/app/backend/structs"
 )
 
 type AccountDB struct {

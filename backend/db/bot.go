@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/faucet-portal/backend/structs"
+	"github.com/SFLuv/app/backend/structs"
 	"github.com/google/uuid"
 )
 
