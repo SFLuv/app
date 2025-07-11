@@ -8,9 +8,9 @@ import (
 	"os"
 	"strconv"
 
-	"github.com/faucet-portal/backend/bot"
-	"github.com/faucet-portal/backend/db"
-	"github.com/faucet-portal/backend/structs"
+	"github.com/SFLuv/app/backend/bot"
+	"github.com/SFLuv/app/backend/db"
+	"github.com/SFLuv/app/backend/structs"
 )
 
 type BotService struct {
