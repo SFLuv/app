@@ -135,14 +135,12 @@ export function MapView({
                 <p className="text-gray-500 dark:text-gray-400">Loading map...</p>
               </div>
             ) : (
-              <APIProvider apiKey={'AIzaSyDushyc7TgeFyIlxbqiujHdydWDoVoHwNQ'} onLoad={() => console.log('Maps API has loaded')}>
+              <APIProvider apiKey={'AIzaSyDushyc7TgeFyIlxbqiujHdydWDoVoHwNQ'}>
                     <Map
                       defaultZoom={12}
                       defaultCenter={ { lat: defaultLocation.lat, lng: defaultLocation.lng } }
                       mapId='5d823aa5e32225a021e19266'
-                      onCameraChanged={ (ev: MapCameraChangedEvent) =>
-                      console.log('camera changed:', ev.detail.center, 'zoom:', ev.detail.zoom)
-                  }>
+                    >
                   </Map>
                   <PoiMarkers merchants={merchants} />
                 </APIProvider>

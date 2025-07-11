@@ -36,8 +36,6 @@ export function MerchantModal({ merchant, isOpen, onClose }: MerchantModalProps)
     return `https://www.google.com/maps/search/?api=1&query=${formattedAddress}`
   }
 
-  console.log(merchant)
-
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
       <DialogContent className="sm:max-w-[600px] max-h-[90vh] overflow-y-auto">
