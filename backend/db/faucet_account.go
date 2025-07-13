@@ -1,22 +1,24 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 
 	"github.com/SFLuv/app/backend/structs"
+	"github.com/jackc/pgx/v5"
 )
 
 type AccountDB struct {
-	db *sql.DB
+	db *pgx.Conn
 }
 
-func Account(db *sql.DB) *AccountDB {
+func Account(db *pgx.Conn) *AccountDB {
 	return &AccountDB{db}
 }
 
 func (s *AccountDB) CreateTables() error {
-	_, err := s.db.Exec(`
+	_, err := s.db.Exec(context.Background(), `
 		CREATE TABLE IF NOT EXISTS accounts(
 			address TEXT PRIMARY KEY NOT NULL,
 			email TEXT,
@@ -33,7 +35,7 @@ func (s *AccountDB) CreateTables() error {
 
 func (s *AccountDB) NewAccount(account *structs.AccountRequest) error {
 
-	_, err := s.db.Exec(`
+	_, err := s.db.Exec(context.Background(), `
 		INSERT INTO accounts
 			(address, email, name)
 		VALUES
@@ -44,7 +46,7 @@ func (s *AccountDB) NewAccount(account *structs.AccountRequest) error {
 }
 
 func (s *AccountDB) GetAccount(address string) bool {
-	row := s.db.QueryRow(`
+	row := s.db.QueryRow(context.Background(), `
 		SELECT * FROM accounts WHERE address = $1;
 	`, address)
 

@@ -38,7 +38,7 @@ func AddBotRoutes(r *chi.Mux, s *handlers.BotService) {
 	r.Post("/redeem", s.Redeem)
 }
 
-func AddMerchantRoutes(r *chi.Mux, s *handlers.MerchantService) {
+func AddMerchantRoutes(r *chi.Mux, s *handlers.AppService) {
 	r.Post("/merchants", s.AddMerchant)
 	r.Get("/merchants/{id}", s.GetMerchant)
 	r.Get("/merchants", s.GetMerchants)

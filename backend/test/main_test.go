@@ -6,8 +6,8 @@ import (
 	"log"
 	"os"
 	"path"
-	"path/filepath"
 	"testing"
+
 	"github.com/SFLuv/app/backend/db"
 	"github.com/SFLuv/app/backend/utils"
 	"github.com/jackc/pgx/v5"
@@ -35,23 +35,14 @@ func TestMain(m *testing.M) {
 
 	godotenv.Load(testEnv)
 
-	dbType := os.Getenv("DB_TYPE")
-	if dbType == "postgres" {
-		err = postgresSetup()
-	} else {
-		err = sqliteSetup()
-	}
+	err = postgresSetup()
 	if err != nil {
 		log.Fatalf("db setup error: %s", err)
 	}
 
 	code := m.Run()
 
-	if dbType == "postgres" {
-		err = postgresTeardown()
-	} else {
-		err = sqliteTeardown()
-	}
+	err = postgresTeardown()
 	if err != nil {
 		log.Fatalf("db teardown error: %s", err)
 	}
@@ -61,7 +52,6 @@ func TestMain(m *testing.M) {
 
 func postgresSetup() error {
 	connString := db.MakeDbConnString("postgres")
-	fmt.Println(connString)
 	pdb, err := pgx.Connect(context.Background(), connString)
 	if err != nil {
 		return fmt.Errorf("error connecting to postgres db during setup: %s", err)
@@ -92,47 +82,20 @@ func postgresTeardown() error {
 	return nil
 }
 
-func sqliteSetup() error {
-	for _, d := range DBS {
-		_, err := db.InitDB(fmt.Sprintf("test_%s", d))
-		if err != nil {
-			return fmt.Errorf("error initializing %s db", err)
-		}
-	}
-	return nil
-}
-
-func sqliteTeardown() error {
-	projectRoot, err := utils.GetProjectRoot()
-	if err != nil {
-		projectRoot = "./"
-	}
-	dbFolderPath := os.Getenv("DB_PATH")
-	if dbFolderPath == "" {
-		dbFolderPath = "./test_data"
-	}
-	dbFolderPath = filepath.Join(projectRoot, dbFolderPath)
-	err = os.RemoveAll(dbFolderPath)
-	if err != nil {
-		return fmt.Errorf("error removing test db folder: %s", err)
-	}
-	return nil
-}
-
 func TestDBConnection(t *testing.T) {
-	conn, err := db.InitDB("test_test")
+	conn, err := db.PgxDB("test_test")
 	if err != nil {
 		t.Fatalf("error establishing db connection: %s", err)
 	}
-	conn.Close()
+	conn.Close(context.Background())
 }
 
 func TestCreateAccountTables(t *testing.T) {
-	adb, err := db.InitDB("test_account")
+	adb, err := db.PgxDB("test_account")
 	if err != nil {
 		t.Fatal("failed to establish db connection")
 	}
-	defer adb.Close()
+	defer adb.Close(context.Background())
 
 	accountDB := db.Account(adb)
 

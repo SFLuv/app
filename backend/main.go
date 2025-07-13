@@ -16,15 +16,15 @@ import (
 func main() {
 	godotenv.Load()
 
-	bdb, err := db.InitDB("bot")
+	bdb, err := db.PgxDB("bot")
 	if err != nil {
 		log.Fatal(fmt.Sprintf("error initializing bot db: %s\n", err))
 	}
-	adb, err := db.InitDB("account")
+	adb, err := db.PgxDB("account")
 	if err != nil {
 		log.Fatal(fmt.Sprintf("error initializing account db: %s\n", err))
 	}
-	mdb, err := db.InitDB("merchant")
+	mdb, err := db.PgxDB("merchant")
 	if err != nil {
 		log.Fatal(fmt.Sprintf("error initializing merchant db: %s\n", err))
 	}

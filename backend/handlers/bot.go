@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -214,7 +215,7 @@ func (s *BotService) Redeem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err = tx.Commit()
+	err = tx.Commit(context.Background())
 	if err != nil {
 		fmt.Printf("error committing code redemption: %s\n", err)
 		w.WriteHeader(http.StatusOK)
