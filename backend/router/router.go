@@ -38,10 +38,10 @@ func AddBotRoutes(r *chi.Mux, s *handlers.BotService) {
 	r.Post("/redeem", s.Redeem)
 }
 
-func AddMerchantRoutes(r *chi.Mux, s *handlers.AppService) {
-	r.Post("/merchants", s.AddMerchant)
-	r.Get("/merchants/{id}", s.GetMerchant)
-	r.Get("/merchants", s.GetMerchants)
+func AddLocationRoutes(r *chi.Mux, s *handlers.AppService) {
+	r.Post("/locations", s.AddLocation)
+	r.Get("/locations/{id}", s.GetLocation)
+	r.Get("/locations", s.GetLocations)
 }
 
 func withAuth(handlerFunc http.HandlerFunc) http.HandlerFunc {

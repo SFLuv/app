@@ -1,21 +1,21 @@
 package structs
 
-// TODO SANCHEZ: Define the MerchantRequest struct with appropriate fields, this is the serializer
+// TODO SANCHEZ: Define the LocationRequest struct with appropriate fields, this is the serializer
 
-type MerchantRequest struct {
+type LocationRequest struct {
 	Name        string `json:"name"`
 	GoogleID    string `json:"googleid"`
 	Description string `json:"description"`
 	ID          uint   `json:"id"`
 }
 
-type Merchant struct {
+type Location struct {
 }
 
-type AuthedMerchantResponse struct {
+type AuthedLocationResponse struct {
 }
 
-type MerchantResponse struct {
+type LocationResponse struct {
 	Name    string          `json:"name"`
 	Address LocationAddress `json"address"`
 }

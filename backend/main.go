@@ -24,9 +24,9 @@ func main() {
 	if err != nil {
 		log.Fatal(fmt.Sprintf("error initializing account db: %s\n", err))
 	}
-	mdb, err := db.PgxDB("merchant")
+	mdb, err := db.PgxDB("location")
 	if err != nil {
-		log.Fatal(fmt.Sprintf("error initializing merchant db: %s\n", err))
+		log.Fatal(fmt.Sprintf("error initializing location db: %s\n", err))
 	}
 
 	botDb := db.Bot(bdb)

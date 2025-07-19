@@ -19,10 +19,10 @@ import (
 
 var testserver *httptest.Server
 
-func TestMerchantHandlers(t *testing.T) {
+func TestLocationHandlers(t *testing.T) {
 	testrouter := chi.NewRouter()
 
-	mdb, err := db.PgxDB("test_merchant")
+	mdb, err := db.PgxDB("test_location")
 	if err != nil {
 		t.Fatalf("error intializing database: %s", err)
 	}
@@ -36,25 +36,25 @@ func TestMerchantHandlers(t *testing.T) {
 
 	appService := handlers.NewAppService(appDb)
 
-	router.AddMerchantRoutes(testrouter, appService)
+	router.AddLocationRoutes(testrouter, appService)
 	testserver = httptest.NewServer(testrouter)
 	defer testserver.Close()
 
-	t.Run("add merchant test", UnitAddMerchant)
-	t.Run("get merchant test", UnitGetMerchant)
-	t.Run("get all merchants test", UnitGetMerchants)
+	t.Run("add location test", UnitAddLocation)
+	t.Run("get location test", UnitGetLocation)
+	t.Run("get all locations test", UnitGetLocations)
 
 }
 
-func UnitAddMerchant(t *testing.T) {
+func UnitAddLocation(t *testing.T) {
 	body_data_1 := []byte(`{"name": "Bob's Burgers", "googleid": "abc123", "description": "a homestyle burger place", "id": 1}`)
-	add_request_1, err := http.NewRequest(http.MethodPost, testserver.URL+"/merchants", bytes.NewReader(body_data_1))
+	add_request_1, err := http.NewRequest(http.MethodPost, testserver.URL+"/locations", bytes.NewReader(body_data_1))
 	if err != nil {
 		t.Fatalf("error creating add request 1: %s", err)
 	}
 
 	body_data_2 := []byte(`{"name": "Krusty Crab", "googleid": "def345", "description": "delicious Krabby Patties", "id": 2}`)
-	add_request_2, err := http.NewRequest(http.MethodPost, testserver.URL+"/merchants", bytes.NewReader(body_data_2))
+	add_request_2, err := http.NewRequest(http.MethodPost, testserver.URL+"/locations", bytes.NewReader(body_data_2))
 	if err != nil {
 		t.Fatalf("error creating add request 2: %s", err)
 	}
@@ -88,8 +88,8 @@ func UnitAddMerchant(t *testing.T) {
 	}
 }
 
-func UnitGetMerchant(t *testing.T) {
-	get_request, err := http.NewRequest(http.MethodGet, testserver.URL+"/merchants/"+"1", nil)
+func UnitGetLocation(t *testing.T) {
+	get_request, err := http.NewRequest(http.MethodGet, testserver.URL+"/locations/"+"1", nil)
 	if err != nil {
 		t.Fatalf("error creating get request: %s", err)
 	}
@@ -108,8 +108,8 @@ func UnitGetMerchant(t *testing.T) {
 	}
 }
 
-func UnitGetMerchants(t *testing.T) {
-	get_request, err := http.NewRequest(http.MethodGet, testserver.URL+"/merchants", nil)
+func UnitGetLocations(t *testing.T) {
+	get_request, err := http.NewRequest(http.MethodGet, testserver.URL+"/locations", nil)
 	if err != nil {
 		t.Fatalf("error creating get request: %s", err)
 	}

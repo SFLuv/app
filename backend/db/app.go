@@ -20,7 +20,7 @@ func (s *AppDB) CreateTables() error {
 		CREATE TABLE IF NOT EXISTS users(
 			id TEXT PRIMARY KEY NOT NULL,
 			is_admin INTEGER NOT NULL DEFAULT 0,
-			is_merchant INTEGER NOT NULL DEFAULT 0,
+			is_location INTEGER NOT NULL DEFAULT 0,
 			is_organizer INTEGER NOT NULL DEFAULT 0,
 			is_improver INTEGER NOT NULL DEFAULT 0,
 			contact_email TEXT NOT NULL,

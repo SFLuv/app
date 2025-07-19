@@ -19,7 +19,7 @@ var DBS = []string{
 	"test",
 	"account",
 	"bot",
-	"merchant",
+	"location",
 }
 
 func TestMain(m *testing.M) {

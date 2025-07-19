@@ -19,7 +19,7 @@ func NewAppService(db *db.AppDB) *AppService {
 	return &AppService{db}
 }
 
-func (s *AppService) GetMerchant(w http.ResponseWriter, r *http.Request) {
+func (s *AppService) GetLocation(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	num, err := strconv.ParseUint(id, 10, 64)
 	if err != nil {
@@ -27,15 +27,15 @@ func (s *AppService) GetMerchant(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("invalid id"))
 		return
 	}
-	merch, err := s.db.GetMerchant(num)
+	merch, err := s.db.GetLocation(num)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte("no merchant"))
+		w.Write([]byte("no location"))
 		return
 	}
 
 	jsonBytes, err := json.Marshal(map[string]any{
-		"merchant": merch,
+		"location": merch,
 	})
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -46,26 +46,26 @@ func (s *AppService) GetMerchant(w http.ResponseWriter, r *http.Request) {
 	w.Write(jsonBytes)
 }
 
-func (s *AppService) GetMerchants(w http.ResponseWriter, r *http.Request) {
-	merchants, err := s.db.GetMerchants()
+func (s *AppService) GetLocations(w http.ResponseWriter, r *http.Request) {
+	locations, err := s.db.GetLocations()
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte("failed to get merchants"))
+		w.Write([]byte("failed to get locations"))
 		return
 	}
 	jsonBytes, err := json.Marshal(map[string]any{
-		"merchants": merchants,
+		"locations": locations,
 	})
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte("Error marshalling JSON for merchants objects"))
+		w.Write([]byte("Error marshalling JSON for locations objects"))
 		return
 	}
 	w.WriteHeader(200)
 	w.Write(jsonBytes)
 }
 
-func (s *AppService) AddMerchant(w http.ResponseWriter, r *http.Request) {
+func (s *AppService) AddLocation(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
 	body, err := io.ReadAll(r.Body)
@@ -75,18 +75,18 @@ func (s *AppService) AddMerchant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var merchant *structs.MerchantRequest
-	err = json.Unmarshal(body, &merchant)
+	var location *structs.LocationRequest
+	err = json.Unmarshal(body, &location)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		w.Write([]byte("invalid req body"))
 		return
 	}
 
-	err = s.db.AddMerchant(merchant)
+	err = s.db.AddLocation(location)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte("invalid merchant body"))
+		w.Write([]byte("invalid location body"))
 		return
 	}
 
