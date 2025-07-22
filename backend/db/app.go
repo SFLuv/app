@@ -18,14 +18,14 @@ func App(db *pgx.Conn) *AppDB {
 func (s *AppDB) CreateTables() error {
 	_, err := s.db.Exec(context.Background(), `
 		CREATE TABLE IF NOT EXISTS users(
-			id TEXT PRIMARY KEY NOT NULL,
-			is_admin INTEGER NOT NULL DEFAULT 0,
-			is_location INTEGER NOT NULL DEFAULT 0,
-			is_organizer INTEGER NOT NULL DEFAULT 0,
-			is_improver INTEGER NOT NULL DEFAULT 0,
-			contact_email TEXT NOT NULL,
-			contact_phone TEXT NOT NULL,
-			contact_name TEXT NOT NULL
+			id TEXT PRIMARY KEY,
+			is_admin BOOLEAN NOT NULL DEFAULT false,
+			is_merchant BOOLEAN NOT NULL DEFAULT false,
+			is_organizer BOOLEAN NOT NULL DEFAULT false,
+			is_improver BOOLEAN NOT NULL DEFAULT false,
+			contact_email TEXT,
+			contact_phone TEXT,
+			contact_name TEXT
 		);
 	`)
 	if err != nil {
@@ -34,13 +34,14 @@ func (s *AppDB) CreateTables() error {
 
 	_, err = s.db.Exec(context.Background(), `
 		CREATE TABLE IF NOT EXISTS wallets(
-			id INTEGER PRIMARY KEY NOT NULL,
-			owner TEXT REFERENCES users(id),
-			name TEXT,
-			is_eoa INTEGER NOT NULL DEFAULT 0,
+			id SERIAL PRIMARY KEY NOT NULL,
+			owner TEXT NOT NULL REFERENCES users(id),
+			name TEXT NOT NULL,
+			is_eoa BOOLEAN NOT NULL,
 			eoa_address TEXT NOT NULL,
 			smart_address TEXT,
-			smart_index INTEGER
+			smart_index INTEGER,
+			UNIQUE (owner, is_eoa, eoa_address, smart_index)
 		);
 	`)
 	if err != nil {
@@ -56,7 +57,6 @@ func (s *AppDB) CreateTables() error {
 			description TEXT,
 			type TEXT NOT NULL,
 			approval BOOLEAN NOT NULL DEFAULT FALSE,
-			address TEXT NOT NULL,
 			street TEXT NOT NULL,
 			city TEXT NOT NULL,
 			state TEXT NOT NULL,

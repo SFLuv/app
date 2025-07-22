@@ -20,6 +20,7 @@ var DBS = []string{
 	"account",
 	"bot",
 	"location",
+	"app",
 }
 
 func TestMain(m *testing.M) {
@@ -35,6 +36,7 @@ func TestMain(m *testing.M) {
 
 	godotenv.Load(testEnv)
 
+	err = postgresTeardown(true)
 	err = postgresSetup()
 	if err != nil {
 		log.Fatalf("db setup error: %s", err)
@@ -42,7 +44,7 @@ func TestMain(m *testing.M) {
 
 	code := m.Run()
 
-	err = postgresTeardown()
+	err = postgresTeardown(false)
 	if err != nil {
 		log.Fatalf("db teardown error: %s", err)
 	}
@@ -66,17 +68,20 @@ func postgresSetup() error {
 	return nil
 }
 
-func postgresTeardown() error {
+func postgresTeardown(pre bool) error {
 	connString := db.MakeDbConnString("postgres")
 	pdb, err := pgx.Connect(context.Background(), connString)
 	if err != nil {
-		return fmt.Errorf("error connecting to postgres db during setup: %s", err)
+		return fmt.Errorf("error connecting to postgres db during teardown: %s", err)
 	}
 	defer pdb.Close(context.Background())
 	for _, d := range DBS {
 		_, err = pdb.Exec(context.Background(), fmt.Sprintf("DROP DATABASE %s", fmt.Sprintf("test_%s", d)))
 		if err != nil {
-			return fmt.Errorf("error dropping %s test db: %s", d, err)
+			if !pre {
+				fmt.Printf("error dropping %s test db: %s", d, err)
+			}
+			continue
 		}
 	}
 	return nil

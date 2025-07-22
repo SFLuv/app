@@ -47,13 +47,54 @@ func TestLocationHandlers(t *testing.T) {
 }
 
 func UnitAddLocation(t *testing.T) {
-	body_data_1 := []byte(`{"name": "Bob's Burgers", "googleid": "abc123", "description": "a homestyle burger place", "id": 1}`)
+	body_data_1 := []byte(`{
+		"id": 1,
+		"google_id": "abc123",
+		"owner_id": "user-001",
+		"name": "Bob's Burgers",
+		"description": "A homestyle burger place",
+		"type": "Restaurant",
+		"approval": true,
+		"street": "123 Ocean Ave",
+		"city": "Seymour's Bay",
+		"state": "CA",
+		"zip": "90210",
+		"lat": 34.0522,
+		"lng": -118.2437,
+		"phone": "555-1234",
+		"email": "bob@example.com",
+		"website": "https://bobsburgers.com",
+		"image_url": "https://images.example.com/bobs.jpg",
+		"rating": 4.6,
+		"maps_page": "https://maps.google.com/?cid=abc123"
+	}`)
+
+	body_data_2 := []byte(`{
+		"id": 2,
+		"google_id": "def345",
+		"owner_id": "user-002",
+		"name": "Krusty Krab",
+		"description": "Delicious Krabby Patties",
+		"type": "Fast Food",
+		"approval": false,
+		"street": "124 Bikini Bottom Blvd",
+		"city": "Bikini Bottom",
+		"state": "HI",
+		"zip": "96815",
+		"lat": 21.3069,
+		"lng": -157.8583,
+		"phone": "555-5678",
+		"email": "krabs@krustykrab.com",
+		"website": "https://krustykrab.com",
+		"image_url": "https://images.example.com/krusty.jpg",
+		"rating": 4.9,
+		"maps_page": "https://maps.google.com/?cid=def345"
+	}`)
+
 	add_request_1, err := http.NewRequest(http.MethodPost, testserver.URL+"/locations", bytes.NewReader(body_data_1))
 	if err != nil {
 		t.Fatalf("error creating add request 1: %s", err)
 	}
-
-	body_data_2 := []byte(`{"name": "Krusty Crab", "googleid": "def345", "description": "delicious Krabby Patties", "id": 2}`)
 	add_request_2, err := http.NewRequest(http.MethodPost, testserver.URL+"/locations", bytes.NewReader(body_data_2))
 	if err != nil {
 		t.Fatalf("error creating add request 2: %s", err)
@@ -125,6 +166,46 @@ func UnitGetLocations(t *testing.T) {
 	_, err = io.ReadAll(get_request_response.Body)
 	if err != nil {
 		t.Fatalf("error reading response body %s", err)
+	}
+
+}
+
+func UnitUpdateLocation(t *testing.T) {
+	body_data_1 := []byte(`{
+		"id": 1,
+		"google_id": "abc123",
+		"owner_id": "user-001",
+		"name": "Bob's Burgers",
+		"description": "This description has been updated",
+		"type": "Restaurant",
+		"approval": true,
+		"street": "456 New Street Location",
+		"city": "New Updated City",
+		"state": "CA",
+		"zip": "90210",
+		"lat": 34.0522,
+		"lng": -118.2437,
+		"phone": "555-1234",
+		"email": "bob@example.com",
+		"website": "https://bobsburgers.com",
+		"image_url": "https://images.example.com/bobs.jpg",
+		"rating": 4.6,
+		"maps_page": "https://maps.google.com/?cid=abc123"
+	}`)
+
+	put_request_1, err := http.NewRequest(http.MethodPut, testserver.URL+"/locations", bytes.NewReader(body_data_1))
+	if err != nil {
+		t.Fatalf("error creating put request 1: %s", err)
+	}
+
+	put_request_1.Header.Set("Content-Type", "application/json")
+
+	put_request_response_1, err := testserver.Client().Do(put_request_1)
+	if err != nil {
+		t.Fatalf("error sending put request: %s", err)
+	}
+	if put_request_response_1.StatusCode < 200 || put_request_response_1.StatusCode >= 300 {
+		t.Fatalf("request failed, got response code %d", put_request_response_1.StatusCode)
 	}
 
 }
