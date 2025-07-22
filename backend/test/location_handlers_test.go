@@ -3,13 +3,17 @@ package test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"fmt"
 	"io"
 	"testing"
+	"time"
 
 	"net/http"
 	"net/http/httptest"
 
 	"github.com/SFLuv/app/backend/db"
+	"github.com/SFLuv/app/backend/logs"
 
 	"github.com/SFLuv/app/backend/handlers"
 	"github.com/SFLuv/app/backend/router"
@@ -34,68 +38,42 @@ func TestLocationHandlers(t *testing.T) {
 		t.Fatalf("error creating tables: %s", err)
 	}
 
-	appService := handlers.NewAppService(appDb)
+	timeString := time.Now().Format(time.RFC3339)
+
+	appLogger, err := logs.New(fmt.Sprintf("./test/logs/app_test_%s.log", timeString), "APP_TEST: ")
+	if err != nil {
+		t.Fatalf("error initializing app logger")
+	}
+	defer appLogger.File.Close()
+
+	appService := handlers.NewAppService(appDb, appLogger.Logger)
 
 	router.AddLocationRoutes(testrouter, appService)
 	testserver = httptest.NewServer(testrouter)
 	defer testserver.Close()
 
-	t.Run("add location test", UnitAddLocation)
-	t.Run("get location test", UnitGetLocation)
-	t.Run("get all locations test", UnitGetLocations)
+	t.Run("add location test", ModuleAddLocation)
+	t.Run("get location test", ModuleGetLocation)
+	t.Run("get all locations test", ModuleGetLocations)
 
 }
 
-func UnitAddLocation(t *testing.T) {
-	body_data_1 := []byte(`{
-		"id": 1,
-		"google_id": "abc123",
-		"owner_id": "user-001",
-		"name": "Bob's Burgers",
-		"description": "A homestyle burger place",
-		"type": "Restaurant",
-		"approval": true,
-		"street": "123 Ocean Ave",
-		"city": "Seymour's Bay",
-		"state": "CA",
-		"zip": "90210",
-		"lat": 34.0522,
-		"lng": -118.2437,
-		"phone": "555-1234",
-		"email": "bob@example.com",
-		"website": "https://bobsburgers.com",
-		"image_url": "https://images.example.com/bobs.jpg",
-		"rating": 4.6,
-		"maps_page": "https://maps.google.com/?cid=abc123"
-	}`)
+func ModuleAddLocation(t *testing.T) {
+	body_data_1, err := json.Marshal(TEST_LOCATION_1)
+	if err != nil {
+		t.Fatalf("error marshaling JSON for location 1: %s", err)
+	}
 
-	body_data_2 := []byte(`{
-		"id": 2,
-		"google_id": "def345",
-		"owner_id": "user-002",
-		"name": "Krusty Krab",
-		"description": "Delicious Krabby Patties",
-		"type": "Fast Food",
-		"approval": false,
-		"street": "124 Bikini Bottom Blvd",
-		"city": "Bikini Bottom",
-		"state": "HI",
-		"zip": "96815",
-		"lat": 21.3069,
-		"lng": -157.8583,
-		"phone": "555-5678",
-		"email": "krabs@krustykrab.com",
-		"website": "https://krustykrab.com",
-		"image_url": "https://images.example.com/krusty.jpg",
-		"rating": 4.9,
-		"maps_page": "https://maps.google.com/?cid=def345"
-	}`)
+	body_data_2, err := json.Marshal(TEST_LOCATION_2)
+	if err != nil {
+		t.Fatalf("error marshaling JSON for location 2: %s", err)
+	}
 
-	add_request_1, err := http.NewRequest(http.MethodPost, testserver.URL+"/locations", bytes.NewReader(body_data_1))
+	add_request_1, err := http.NewRequest(http.MethodPost, testserver.URL+"/locations", bytes.NewReader([]byte(body_data_1)))
 	if err != nil {
 		t.Fatalf("error creating add request 1: %s", err)
 	}
-	add_request_2, err := http.NewRequest(http.MethodPost, testserver.URL+"/locations", bytes.NewReader(body_data_2))
+	add_request_2, err := http.NewRequest(http.MethodPost, testserver.URL+"/locations", bytes.NewReader([]byte(body_data_2)))
 	if err != nil {
 		t.Fatalf("error creating add request 2: %s", err)
 	}
@@ -129,7 +107,7 @@ func UnitAddLocation(t *testing.T) {
 	}
 }
 
-func UnitGetLocation(t *testing.T) {
+func ModuleGetLocation(t *testing.T) {
 	get_request, err := http.NewRequest(http.MethodGet, testserver.URL+"/locations/"+"1", nil)
 	if err != nil {
 		t.Fatalf("error creating get request: %s", err)
@@ -149,7 +127,7 @@ func UnitGetLocation(t *testing.T) {
 	}
 }
 
-func UnitGetLocations(t *testing.T) {
+func ModuleGetLocations(t *testing.T) {
 	get_request, err := http.NewRequest(http.MethodGet, testserver.URL+"/locations", nil)
 	if err != nil {
 		t.Fatalf("error creating get request: %s", err)
@@ -170,30 +148,13 @@ func UnitGetLocations(t *testing.T) {
 
 }
 
-func UnitUpdateLocation(t *testing.T) {
-	body_data_1 := []byte(`{
-		"id": 1,
-		"google_id": "abc123",
-		"owner_id": "user-001",
-		"name": "Bob's Burgers",
-		"description": "This description has been updated",
-		"type": "Restaurant",
-		"approval": true,
-		"street": "456 New Street Location",
-		"city": "New Updated City",
-		"state": "CA",
-		"zip": "90210",
-		"lat": 34.0522,
-		"lng": -118.2437,
-		"phone": "555-1234",
-		"email": "bob@example.com",
-		"website": "https://bobsburgers.com",
-		"image_url": "https://images.example.com/bobs.jpg",
-		"rating": 4.6,
-		"maps_page": "https://maps.google.com/?cid=abc123"
-	}`)
+func ModuleUpdateLocation(t *testing.T) {
+	body_data_2, err := json.Marshal(TEST_LOCATION_2A)
+	if err != nil {
+		t.Fatalf("error marshaling JSON for location 1: %s", err)
+	}
 
-	put_request_1, err := http.NewRequest(http.MethodPut, testserver.URL+"/locations", bytes.NewReader(body_data_1))
+	put_request_1, err := http.NewRequest(http.MethodPut, testserver.URL+"/locations/2", bytes.NewReader(body_data_2))
 	if err != nil {
 		t.Fatalf("error creating put request 1: %s", err)
 	}

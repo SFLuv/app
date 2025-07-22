@@ -36,7 +36,7 @@ func TestMain(m *testing.M) {
 
 	godotenv.Load(testEnv)
 
-	err = postgresTeardown(true)
+	postgresTeardown(true)
 	err = postgresSetup()
 	if err != nil {
 		log.Fatalf("db setup error: %s", err)

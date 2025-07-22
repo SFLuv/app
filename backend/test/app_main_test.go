@@ -64,6 +64,74 @@ var TEST_WALLET_2 = structs.Wallet{
 
 var TEST_WALLETS = []structs.Wallet{TEST_WALLET_1, TEST_WALLET_2}
 
+var TEST_LOCATION_1 = structs.Location{
+	ID:          1,
+	GoogleID:    "abc123",
+	OwnerID:     TEST_USER_1.Id,
+	Name:        "Bob's Burgers",
+	Description: "A homestyle burger place",
+	Type:        "Restaurant",
+	Approval:    true,
+	Street:      "123 Ocean Ave",
+	City:        "Seymour's Bay",
+	State:       "CA",
+	ZIP:         "90210",
+	Lat:         34.0522,
+	Lng:         -118.2437,
+	Phone:       "555-1234",
+	Email:       "bob@example.com",
+	Website:     "https://bobsburgers.com",
+	ImageURL:    "https://images.example.com/bobs.jpg",
+	Rating:      4.6,
+	MapsPage:    "https://maps.google.com/?cid=abc123",
+}
+
+var TEST_LOCATION_2 = structs.Location{
+	ID:          2,
+	GoogleID:    "def345",
+	OwnerID:     TEST_USER_2.Id,
+	Name:        "Krusty Krab",
+	Description: "Delicious Krabby Patties",
+	Type:        "Fast Food",
+	Approval:    false,
+	Street:      "124 Bikini Bottom Blvd",
+	City:        "Bikini Bottom",
+	State:       "HI",
+	ZIP:         "96815",
+	Lat:         21.3069,
+	Lng:         -157.8583,
+	Phone:       "555-5678",
+	Email:       "krabs@krustykrab.com",
+	Website:     "https://krustykrab.com",
+	ImageURL:    "https://images.example.com/krusty.jpg",
+	Rating:      4.9,
+	MapsPage:    "https://maps.google.com/?cid=def345",
+}
+
+var TEST_LOCATION_2A = structs.Location{
+	ID:          2,
+	GoogleID:    "def345",
+	OwnerID:     TEST_USER_2.Id,
+	Name:        "Krusty Krab - Updated",
+	Description: "Updated the description for testing person",
+	Type:        "Fast Food",
+	Approval:    false,
+	Street:      "124 Bikini Bottom Blvd",
+	City:        "Bikini Bottom",
+	State:       "HI",
+	ZIP:         "96815",
+	Lat:         21.3069,
+	Lng:         -157.8583,
+	Phone:       "555-5678",
+	Email:       "krabs@krustykrab.com",
+	Website:     "https://krustykrab.com",
+	ImageURL:    "https://images.example.com/krusty.jpg",
+	Rating:      4.9,
+	MapsPage:    "https://maps.google.com/?cid=def345",
+}
+
+var TEST_LOCATIONS = []structs.Location{TEST_LOCATION_1, TEST_LOCATION_2A}
+
 var AppDb *db.AppDB
 
 func TestApp(t *testing.T) {
