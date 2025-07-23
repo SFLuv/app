@@ -2,7 +2,6 @@ package test
 
 import (
 	"fmt"
-	"reflect"
 	"testing"
 
 	"github.com/SFLuv/app/backend/structs"
@@ -13,7 +12,7 @@ func GroupLocationControllers(t *testing.T) {
 	t.Run("update location controller", ModuleUpdateLocation)
 	t.Run("get all locations controller", ModuleGetLocationsController)
 	t.Run("get location by location id controller", ModuleGetLocationByIDController)
-	t.Run("get location by user id controller", ModuleGetLocationByUserController)
+	t.Run("get location by user id controller", ModuleGetLocationsByUserController)
 }
 
 func ModuleAddLocationController(t *testing.T) {
@@ -46,31 +45,37 @@ func ModuleGetLocationsController(t *testing.T) {
 	}
 
 	for n, location := range locations {
-		if location != &TEST_LOCATIONS[n] {
-			t.Fatalf("location info does not match for location %d", n)
+		if location.ID != TEST_LOCATIONS[n].ID {
+			t.Fatalf("got incorrect location value %d, expected %d", location.ID, TEST_LOCATIONS[n].ID)
+		}
+		if location.GoogleID != TEST_LOCATIONS[n].GoogleID {
+			t.Fatalf("got incorrect location value %d, expected %d", location.ID, locations[n].ID)
+		}
+		if location.Name != TEST_LOCATIONS[n].Name {
+			t.Fatalf("got incorrect location name value %s, expected %s", location.Name, TEST_LOCATIONS[n].Name)
 		}
 	}
-
 }
 
-func ModuleGetLocationByUserController(t *testing.T) {
+func ModuleGetLocationsByUserController(t *testing.T) {
 	locations, err := AppDb.GetLocationsByUser(TEST_USER_1.Id)
 	if err != nil {
 		t.Fatal(err.Error())
 	}
 
-	if *locations[0] != TEST_LOCATION_1 {
-		t.Fatalf("location does not match test user 1's location ")
+	if len(locations) != 1 {
+		t.Fatalf("got incorrect amount of locations in response %d, expected 1", len(locations))
 	}
 
-	returned_location_value := reflect.ValueOf(*locations[0])
-	test_location_value := reflect.ValueOf(TEST_LOCATION_1)
-	returned_location_type := reflect.TypeOf(*locations[0])
-
-	for i := range returned_location_value.NumField() {
-		if returned_location_value.Field(i) != test_location_value.Field(i) {
-			t.Errorf("returned location field %v does not match test location", returned_location_type.Field(i))
-		}
+	location := *locations[0]
+	if location.ID != 1 {
+		t.Fatalf("got incorrect location value %d, expected 1", location.ID)
+	}
+	if location.GoogleID != TEST_LOCATION_1.GoogleID {
+		t.Fatalf("got incorrect location google id value %s, expected %s", location.GoogleID, TEST_LOCATION_1.GoogleID)
+	}
+	if location.Name != TEST_LOCATION_1.Name {
+		t.Fatalf("got incorrect location name value %s, expected %s", location.Name, TEST_LOCATION_1.Name)
 	}
 
 }
@@ -81,13 +86,13 @@ func ModuleGetLocationByIDController(t *testing.T) {
 		t.Fatal(err.Error())
 	}
 
-	returned_location_value := reflect.ValueOf(*location)
-	test_location_value := reflect.ValueOf(TEST_LOCATION_1)
-	returned_location_type := reflect.TypeOf(*location)
-
-	for i := range returned_location_value.NumField() {
-		if returned_location_value.Field(i) != test_location_value.Field(i) {
-			t.Errorf("returned location field %v does not match test location", returned_location_type.Field(i))
-		}
+	if location.ID != 1 {
+		t.Fatalf("got incorrect location value %d, expected 1", location.ID)
+	}
+	if location.GoogleID != TEST_LOCATION_1.GoogleID {
+		t.Fatalf("got incorrect location google id value %s, expected %s", location.GoogleID, TEST_LOCATION_1.GoogleID)
+	}
+	if location.Name != TEST_LOCATION_1.Name {
+		t.Fatalf("got incorrect location name value %s, expected %s", location.Name, TEST_LOCATION_1.Name)
 	}
 }

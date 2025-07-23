@@ -2,10 +2,17 @@ package test
 
 import (
 	"context"
+	"fmt"
+	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/SFLuv/app/backend/db"
+	"github.com/SFLuv/app/backend/handlers"
+	"github.com/SFLuv/app/backend/logger"
+	"github.com/SFLuv/app/backend/router"
 	"github.com/SFLuv/app/backend/structs"
+	"github.com/go-chi/chi/v5"
 )
 
 var t1e = "test1@test.com"
@@ -133,26 +140,54 @@ var TEST_LOCATION_2A = structs.Location{
 var TEST_LOCATIONS = []structs.Location{TEST_LOCATION_1, TEST_LOCATION_2A}
 
 var AppDb *db.AppDB
+var TestServer *httptest.Server
 
 func TestApp(t *testing.T) {
 	adb, err := db.PgxDB("test_app")
 	if err != nil {
-		t.Fatalf("error establishing db connection: %s", err)
+		t.Fatalf("error establishing db connection: %s\n", err)
 	}
 	defer adb.Close(context.Background())
 
 	AppDb = db.App(adb)
 	err = AppDb.CreateTables()
 	if err != nil {
-		t.Fatalf("error creating app db tables: %s", err)
+		t.Fatalf("error creating app db tables: %s\n", err)
 	}
+
+	timeString := time.Now().Format(time.RFC3339)
+	appLogger, err := logger.New(fmt.Sprintf("./logs/test/app/app_test_%s.log", timeString), "APP_TEST: ")
+	if err != nil {
+		t.Fatalf("error initializing app logger: %s\n", err)
+	}
+	defer appLogger.Close()
+
+	testRouter := chi.NewRouter()
+	appService := handlers.NewAppService(AppDb, appLogger)
+
+	router.AddUserRoutes(testRouter, appService)
+	router.AddWalletRoutes(testRouter, appService)
+	router.AddLocationRoutes(testRouter, appService)
+
+	TestServer = httptest.NewServer(testRouter)
+	defer TestServer.Close()
 
 	usersControllers := t.Run("user controllers group", GroupUsersControllers)
 	if !usersControllers {
-		t.Fatalf("users controllers group failed")
+		t.Fatal("users controllers group failed")
 	}
 	walletsControllers := t.Run("wallets controllers group", GroupWalletsControllers)
 	if !walletsControllers {
-		t.Fatalf("wallets controllers group failed")
+		t.Error("wallets controllers group failed")
+	}
+
+	locationControllers := t.Run("location controllers group", GroupLocationControllers)
+	if !locationControllers {
+		t.Fatal("location controllers group failed")
+	}
+
+	locationHandlers := t.Run("location handlers group", GroupLocationHandlers)
+	if !locationHandlers {
+		t.Fatalf("location handlers group failed")
 	}
 }
