@@ -11,3 +11,9 @@ type User struct {
 	Phone       *string `json:"contact_phone"`
 	Name        *string `json:"contact_name"`
 }
+
+type AuthedUserResponse struct {
+	User      User        `json:"user"`
+	Wallets   []*Wallet   `json:"wallets"`
+	Locations []*Location `json:"locations"`
+}

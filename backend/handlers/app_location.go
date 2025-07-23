@@ -81,7 +81,7 @@ func (a *AppService) AddLocation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var location *structs.LocationRequest
+	var location *structs.Location
 	err = json.Unmarshal(body, &location)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
@@ -93,6 +93,7 @@ func (a *AppService) AddLocation(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		w.Write([]byte("invalid location body"))
+		a.logger.Logf("error was caused calling controller: %s", err.Error())
 		return
 	}
 
@@ -110,7 +111,7 @@ func (a *AppService) UpdateLocation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var location *structs.LocationRequest
+	var location *structs.Location
 	err = json.Unmarshal(body, &location)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)

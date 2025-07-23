@@ -7,7 +7,7 @@ import (
 	"github.com/SFLuv/app/backend/structs"
 )
 
-func (a *AppDB) GetLocation(id uint64) (*structs.LocationRequest, error) {
+func (a *AppDB) GetLocation(id uint64) (*structs.Location, error) {
 	row := a.db.QueryRow(context.Background(), `
 		SELECT
 			id,
@@ -33,7 +33,7 @@ func (a *AppDB) GetLocation(id uint64) (*structs.LocationRequest, error) {
 		WHERE id = $1;
 	`, id)
 
-	location := structs.LocationRequest{}
+	location := structs.Location{}
 	err := row.Scan(
 		&location.ID,
 		&location.GoogleID,
@@ -62,7 +62,7 @@ func (a *AppDB) GetLocation(id uint64) (*structs.LocationRequest, error) {
 	return &location, nil
 }
 
-func (s *AppDB) GetLocations(r *structs.LocationsPageRequest) ([]*structs.LocationRequest, error) {
+func (s *AppDB) GetLocations(r *structs.LocationsPageRequest) ([]*structs.Location, error) {
 	offset := r.Page * r.Count
 
 	rows, err := s.db.Query(context.Background(), `
@@ -95,10 +95,10 @@ func (s *AppDB) GetLocations(r *structs.LocationsPageRequest) ([]*structs.Locati
 		return nil, fmt.Errorf("error querying for locations: %w", err)
 	}
 
-	locations := []*structs.LocationRequest{}
+	locations := []*structs.Location{}
 
 	for rows.Next() {
-		location := structs.LocationRequest{}
+		location := structs.Location{}
 
 		err = rows.Scan(
 			&location.ID,
@@ -131,12 +131,12 @@ func (s *AppDB) GetLocations(r *structs.LocationsPageRequest) ([]*structs.Locati
 	return locations, nil
 }
 
-func (a *AppDB) AddLocation(location *structs.LocationRequest) error {
+func (a *AppDB) AddLocation(location *structs.Location) error {
 	_, err := a.db.Exec(context.Background(), `
 		INSERT INTO locations (
 			id,
 			google_id,
-			owner_id,
+			owner_id ,
 			name,
 			description,
 			type,
@@ -179,7 +179,7 @@ func (a *AppDB) AddLocation(location *structs.LocationRequest) error {
 	return err
 }
 
-func (a *AppDB) UpdateLocation(location *structs.LocationRequest) error {
+func (a *AppDB) UpdateLocation(location *structs.Location) error {
 	_, err := a.db.Exec(context.Background(), `
 		UPDATE locations
 		SET
@@ -227,7 +227,7 @@ func (a *AppDB) UpdateLocation(location *structs.LocationRequest) error {
 	return err
 }
 
-func (a *AppDB) GetLocationsByUser(user *structs.User) (*[]structs.LocationRequest, error) {
+func (a *AppDB) GetLocationsByUser(userId string) ([]*structs.Location, error) {
 	rows, err := a.db.Query(context.Background(), `
 		SELECT
 			id,
@@ -251,17 +251,17 @@ func (a *AppDB) GetLocationsByUser(user *structs.User) (*[]structs.LocationReque
 			maps_page
 		FROM locations
 		WHERE owner_id = $1;
-	`, user.Id)
+	`, userId)
 
 	if err != nil {
 		return nil, fmt.Errorf("error querying location table: %s", err)
 	}
 	defer rows.Close()
 
-	locations := []structs.LocationRequest{}
+	locations := []*structs.Location{}
 
 	for rows.Next() {
-		var location structs.LocationRequest
+		var location structs.Location
 		err := rows.Scan(
 			&location.ID,
 			&location.GoogleID,
@@ -286,10 +286,8 @@ func (a *AppDB) GetLocationsByUser(user *structs.User) (*[]structs.LocationReque
 		if err != nil {
 			return nil, fmt.Errorf("error scanning location data: %s", err)
 		}
-		locations = append(locations, location)
+		locations = append(locations, &location)
 	}
 
-	return &locations, nil
+	return locations, nil
 }
-
-// add pagination to get locations

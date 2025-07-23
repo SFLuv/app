@@ -1,11 +1,15 @@
 package handlers
 
-import "github.com/SFLuv/app/backend/db"
+import (
+	"github.com/SFLuv/app/backend/db"
+	"github.com/SFLuv/app/backend/logger"
+)
 
 type AppService struct {
-	db *db.AppDB
+	db     *db.AppDB
+	logger *logger.LogCloser
 }
 
-func NewAppService(db *db.AppDB) *AppService {
-	return &AppService{db}
+func NewAppService(db *db.AppDB, logger *logger.LogCloser) *AppService {
+	return &AppService{db, logger}
 }

@@ -52,7 +52,7 @@ func (s *AppDB) CreateTables() error {
 		CREATE TABLE IF NOT EXISTS locations(
 			id SERIAL PRIMARY KEY,
 			google_id TEXT NOT NULL,
-			owner_id TEXT NOT NULL,
+			owner_id TEXT NOT NULL REFERENCES users(id),
 			name TEXT NOT NULL,
 			description TEXT,
 			type TEXT NOT NULL,

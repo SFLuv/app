@@ -126,7 +126,7 @@ func (a *AppDB) GetUsers(page int, count int) ([]*structs.User, error) {
 	return users, nil
 }
 
-func (a *AppDB) GetUserById(id string) (*structs.User, error) {
+func (a *AppDB) GetUserById(userId string) (*structs.User, error) {
 	var user structs.User
 	row := a.db.QueryRow(context.Background(), `
 		SELECT
@@ -142,7 +142,7 @@ func (a *AppDB) GetUserById(id string) (*structs.User, error) {
 			users
 		WHERE
 			id = $1;
-	`, id)
+	`, userId)
 	err := row.Scan(
 		&user.Id,
 		&user.IsAdmin,

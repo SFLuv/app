@@ -1,8 +1,8 @@
 package structs
 
-// TODO SANCHEZ: Define the LocationRequest struct with appropriate fields, this is the serializer
+// TODO SANCHEZ: Define the Location struct with appropriate fields, this is the serializer
 
-type LocationRequest struct {
+type Location struct {
 	ID          uint    `json:"id"`
 	GoogleID    string  `json:"google_id"`
 	OwnerID     string  `json:"owner_id"`
@@ -27,9 +27,6 @@ type LocationRequest struct {
 type LocationsPageRequest struct {
 	Page  uint
 	Count uint
-}
-
-type Location struct {
 }
 
 type AuthedLocationResponse struct {
