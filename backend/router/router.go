@@ -7,6 +7,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
+
+	m "github.com/SFLuv/app/backend/utils/middleware"
 )
 
 func New(s *handlers.BotService, a *handlers.AccountService, p *handlers.AppService) *chi.Mux {
@@ -21,6 +23,7 @@ func New(s *handlers.BotService, a *handlers.AccountService, p *handlers.AppServ
 		AllowCredentials: false,
 		MaxAge:           300,
 	}))
+	r.Use(m.AuthMiddleware)
 
 	AddBotRoutes(r, s)
 	AddUserRoutes(r, p)

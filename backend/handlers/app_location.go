@@ -7,6 +7,7 @@ import (
 	"strconv"
 
 	"github.com/SFLuv/app/backend/structs"
+	"github.com/SFLuv/app/backend/utils"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -18,7 +19,7 @@ func (a *AppService) GetLocation(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("invalid id"))
 		return
 	}
-	merch, err := a.db.GetLocation(num)
+	location, err := a.db.GetLocation(num)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		w.Write([]byte("no location"))
@@ -26,7 +27,7 @@ func (a *AppService) GetLocation(w http.ResponseWriter, r *http.Request) {
 	}
 
 	jsonBytes, err := json.Marshal(map[string]any{
-		"location": merch,
+		"location": location,
 	})
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -74,6 +75,12 @@ func (a *AppService) GetLocations(w http.ResponseWriter, r *http.Request) {
 func (a *AppService) AddLocation(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
+	userDid := utils.GetDid(r)
+	if userDid == nil {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -88,7 +95,7 @@ func (a *AppService) AddLocation(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("invalid req body"))
 		return
 	}
-
+	location.OwnerID = *userDid
 	err = a.db.AddLocation(location)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
@@ -104,18 +111,28 @@ func (a *AppService) AddLocation(w http.ResponseWriter, r *http.Request) {
 func (a *AppService) UpdateLocation(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte("error reading request body"))
+	userDid := utils.GetDid(r)
+	if userDid == nil {
+		w.WriteHeader(http.StatusForbidden)
 		return
 	}
 
-	var location *structs.Location
-	err = json.Unmarshal(body, &location)
+	id := chi.URLParam(r, "id")
+	num, err := strconv.ParseUint(id, 10, 64)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte("invalid request body"))
+		w.Write([]byte("invalid id"))
+		return
+	}
+	location, err := a.db.GetLocation(num)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte("no location"))
+		return
+	}
+
+	if location.OwnerID != *userDid {
+		w.WriteHeader(http.StatusForbidden)
 		return
 	}
 

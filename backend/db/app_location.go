@@ -134,9 +134,8 @@ func (s *AppDB) GetLocations(r *structs.LocationsPageRequest) ([]*structs.Locati
 func (a *AppDB) AddLocation(location *structs.Location) error {
 	_, err := a.db.Exec(context.Background(), `
 		INSERT INTO locations (
-			id,
 			google_id,
-			owner_id ,
+			owner_id,
 			name,
 			description,
 			type,
@@ -153,9 +152,8 @@ func (a *AppDB) AddLocation(location *structs.Location) error {
 			image_url,
 			rating,
 			maps_page
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19);
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18);
 	`,
-		location.ID,
 		location.GoogleID,
 		location.OwnerID,
 		location.Name,
