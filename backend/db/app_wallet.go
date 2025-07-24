@@ -2,10 +2,10 @@ package db
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 
 	"github.com/SFLuv/app/backend/structs"
-	"github.com/jackc/pgx/v5"
 )
 
 func (a *AppDB) AddWallet(wallet *structs.Wallet) error {
@@ -52,14 +52,13 @@ func (a *AppDB) GetWalletsByUser(userId string) ([]*structs.Wallet, error) {
 		WHERE
 			users.id = $1;
 	`, userId)
-	if err == pgx.ErrNoRows {
+	if err == sql.ErrNoRows {
 		return wallets, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("error querying user wallets: %s", err)
 	}
 
-	var scanError error
 	for rows.Next() {
 		var wallet structs.Wallet
 		err := rows.Scan(
@@ -72,14 +71,10 @@ func (a *AppDB) GetWalletsByUser(userId string) ([]*structs.Wallet, error) {
 			&wallet.SmartIndex,
 		)
 		if err != nil {
-			scanError = err
 			continue
 		}
 
 		wallets = append(wallets, &wallet)
-	}
-	if len(wallets) == 0 {
-		return nil, fmt.Errorf("error while scanning all rows %s", scanError)
 	}
 
 	return wallets, nil
