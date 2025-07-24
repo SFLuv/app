@@ -19,8 +19,8 @@ var DBS = []string{
 	"test",
 	"account",
 	"bot",
-	"location",
-	"app",
+	"app_controllers",
+	"app_handlers",
 }
 
 func TestMain(m *testing.M) {

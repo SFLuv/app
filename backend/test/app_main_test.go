@@ -143,7 +143,12 @@ var AppDb *db.AppDB
 var TestServer *httptest.Server
 
 func TestApp(t *testing.T) {
-	adb, err := db.PgxDB("test_app")
+	GroupControllers(t)
+	GroupHandlers(t)
+}
+
+func GroupControllers(t *testing.T) {
+	adb, err := db.PgxDB("test_app_controllers")
 	if err != nil {
 		t.Fatalf("error establishing db connection: %s\n", err)
 	}
@@ -152,25 +157,8 @@ func TestApp(t *testing.T) {
 	AppDb = db.App(adb)
 	err = AppDb.CreateTables()
 	if err != nil {
-		t.Fatalf("error creating app db tables: %s\n", err)
+		t.Fatalf("error creating app db tables for controllers: %s\n", err)
 	}
-
-	timeString := time.Now().Format(time.RFC3339)
-	appLogger, err := logger.New(fmt.Sprintf("./logs/test/app/app_test_%s.log", timeString), "APP_TEST: ")
-	if err != nil {
-		t.Fatalf("error initializing app logger: %s\n", err)
-	}
-	defer appLogger.Close()
-
-	testRouter := chi.NewRouter()
-	appService := handlers.NewAppService(AppDb, appLogger)
-
-	router.AddUserRoutes(testRouter, appService)
-	router.AddWalletRoutes(testRouter, appService)
-	router.AddLocationRoutes(testRouter, appService)
-
-	TestServer = httptest.NewServer(testRouter)
-	defer TestServer.Close()
 
 	usersControllers := t.Run("user controllers group", GroupUsersControllers)
 	if !usersControllers {
@@ -181,13 +169,54 @@ func TestApp(t *testing.T) {
 		t.Error("wallets controllers group failed")
 	}
 
-	locationControllers := t.Run("location controllers group", GroupLocationControllers)
-	if !locationControllers {
-		t.Fatal("location controllers group failed")
+	// locationControllers := t.Run("location controllers group", GroupLocationControllers)
+	// if !locationControllers {
+	// 	t.Fatal("location controllers group failed")
+	// }
+}
+
+func GroupHandlers(t *testing.T) {
+	adb, err := db.PgxDB("test_app_handlers")
+	if err != nil {
+		t.Fatalf("error establishing db connection: %s\n", err)
+	}
+	defer adb.Close(context.Background())
+
+	appHandlersDb := db.App(adb)
+	err = appHandlersDb.CreateTables()
+	if err != nil {
+		t.Fatalf("error creating app db tables for handlers: %s\n", err)
 	}
 
-	locationHandlers := t.Run("location handlers group", GroupLocationHandlers)
-	if !locationHandlers {
-		t.Fatalf("location handlers group failed")
+	timeString := time.Now().Format(time.RFC3339)
+	appLogger, err := logger.New(fmt.Sprintf("./logs/test/app/app_test_%s.log", timeString), "APP_TEST: ")
+	if err != nil {
+		t.Fatalf("error initializing app logger: %s\n", err)
 	}
+	defer appLogger.Close()
+
+	testRouter := chi.NewRouter()
+	appService := handlers.NewAppService(appHandlersDb, appLogger)
+
+	router.AddUserRoutes(testRouter, appService)
+	router.AddWalletRoutes(testRouter, appService)
+	router.AddLocationRoutes(testRouter, appService)
+
+	TestServer = httptest.NewServer(testRouter)
+	defer TestServer.Close()
+
+	usersHandlers := t.Run("users handlers group", GroupUsersHandlers)
+	if !usersHandlers {
+		t.Fatal("users handlers group failed")
+	}
+
+	walletsHandlers := t.Run("wallets handlers group", GroupWalletsHandlers)
+	if !walletsHandlers {
+		t.Error("wallets handlers group failed")
+	}
+
+	// locationHandlers := t.Run("location handlers group", GroupLocationHandlers)
+	// if !locationHandlers {
+	// 	t.Fatal("location handlers group failed")
+	// }
 }

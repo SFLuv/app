@@ -107,14 +107,9 @@ func ModuleGetLocations(t *testing.T) {
 }
 
 func ModuleUpdateLocation(t *testing.T) {
-	body_data_2, err := json.Marshal(TEST_LOCATION_2A)
+	put_request_1, err := http.NewRequest(http.MethodPut, TestServer.URL+"/locations/"+"1", nil)
 	if err != nil {
-		t.Fatalf("error marshaling JSON for location 1: %s", err)
-	}
-
-	put_request_1, err := http.NewRequest(http.MethodPut, TestServer.URL+"/locations/2", bytes.NewReader(body_data_2))
-	if err != nil {
-		t.Fatalf("error creating put request 1: %s", err)
+		t.Fatalf("error creating put request: %s", err)
 	}
 
 	put_request_1.Header.Set("Content-Type", "application/json")

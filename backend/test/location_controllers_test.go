@@ -1,7 +1,6 @@
 package test
 
 import (
-	"fmt"
 	"testing"
 
 	"github.com/SFLuv/app/backend/structs"
@@ -40,7 +39,6 @@ func ModuleGetLocationsController(t *testing.T) {
 	}
 
 	if len(locations) != 2 {
-		fmt.Println(*locations[0])
 		t.Fatalf("incorrect location array length %d", len(locations))
 	}
 
