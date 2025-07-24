@@ -12,8 +12,12 @@ import (
 	"github.com/SFLuv/app/backend/logger"
 	"github.com/SFLuv/app/backend/router"
 	"github.com/SFLuv/app/backend/structs"
+	"github.com/SFLuv/app/backend/test/utils"
+	"github.com/SFLuv/app/backend/utils/middleware"
 	"github.com/go-chi/chi/v5"
 )
+
+var Spoofer *utils.ContextSpoofer
 
 var t1e = "test1@test.com"
 var t1p = "test1phone"
@@ -197,6 +201,10 @@ func GroupHandlers(t *testing.T) {
 
 	testRouter := chi.NewRouter()
 	appService := handlers.NewAppService(appHandlersDb, appLogger)
+	Spoofer = utils.NewContextSpoofer("userDid", TEST_USER_1.Id)
+
+	testRouter.Use(middleware.AuthMiddleware)
+	testRouter.Use(Spoofer.Middleware)
 
 	router.AddUserRoutes(testRouter, appService)
 	router.AddWalletRoutes(testRouter, appService)

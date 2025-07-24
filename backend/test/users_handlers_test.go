@@ -1,7 +1,7 @@
 package test
 
 import (
-	"context"
+	"io"
 	"net/http"
 	"testing"
 )
@@ -13,9 +13,9 @@ func GroupUsersHandlers(t *testing.T) {
 }
 
 func ModuleAddUserHandler(t *testing.T) {
-	ctx := context.WithValue(context.Background(), "userDid", TEST_USER_1.Id)
+	Spoofer.SetValue("userDid", TEST_USER_2.Id)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, TestServer.URL+"/users", nil)
+	req, err := http.NewRequest(http.MethodPost, TestServer.URL+"/users", nil)
 	if err != nil {
 		t.Fatalf("error creating request: %s", err)
 	}
@@ -31,7 +31,28 @@ func ModuleAddUserHandler(t *testing.T) {
 }
 
 func ModuleGetUserAuthedHandler(t *testing.T) {
+	Spoofer.SetValue("userDid", TEST_USER_2.Id)
 
+	req, err := http.NewRequest(http.MethodGet, TestServer.URL+"/users", nil)
+	if err != nil {
+		t.Fatalf("error creating request: %s", err)
+	}
+
+	res, err := TestServer.Client().Do(req)
+	if err != nil {
+		t.Fatalf("error sending request: %s", err)
+	}
+
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		t.Fatalf("request failed, got response code %d", res.StatusCode)
+	}
+
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		t.Fatalf("error reading response body: %s", err)
+	}
+
+	t.Log(string(body))
 }
 
 func ModuleUpdateUserInfoHandler(t *testing.T) {
