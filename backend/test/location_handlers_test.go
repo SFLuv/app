@@ -11,32 +11,39 @@ import (
 )
 
 func GroupLocationHandlers(t *testing.T) {
-	t.Run("add location test", ModuleAddLocation)
-	t.Run("get location test", ModuleGetLocation)
-	t.Run("get all locations test", ModuleGetLocations)
+	t.Run("add location test", ModuleAddLocationHandler)
+	t.Run("get location test", ModuleGetLocationHandler)
+	t.Run("update location test", ModuleGetLocationsHandler)
+	t.Run("get all locations test", ModuleUpdateLocationHandler)
 }
 
-func ModuleAddLocation(t *testing.T) {
+func ModuleAddLocationHandler(t *testing.T) {
+	Spoofer.SetValue("userDid", TEST_USER_1.Id)
+
 	body_data_1, err := json.Marshal(TEST_LOCATION_1)
 	if err != nil {
 		t.Fatalf("error marshaling JSON for location 1: %s", err)
-	}
-
-	body_data_2, err := json.Marshal(TEST_LOCATION_2)
-	if err != nil {
-		t.Fatalf("error marshaling JSON for location 2: %s", err)
 	}
 
 	add_request_1, err := http.NewRequest(http.MethodPost, TestServer.URL+"/locations", bytes.NewReader([]byte(body_data_1)))
 	if err != nil {
 		t.Fatalf("error creating add request 1: %s", err)
 	}
+
+	add_request_1.Header.Set("Content-Type", "application/json")
+
+	Spoofer.SetValue("userDid", TEST_USER_2.Id)
+
+	body_data_2, err := json.Marshal(TEST_LOCATION_2)
+	if err != nil {
+		t.Fatalf("error marshaling JSON for location 2: %s", err)
+	}
+
 	add_request_2, err := http.NewRequest(http.MethodPost, TestServer.URL+"/locations", bytes.NewReader([]byte(body_data_2)))
 	if err != nil {
 		t.Fatalf("error creating add request 2: %s", err)
 	}
 
-	add_request_1.Header.Set("Content-Type", "application/json")
 	add_request_2.Header.Set("Content-Type", "application/json")
 
 	add_request_response_1, err := TestServer.Client().Do(add_request_1)
@@ -65,7 +72,7 @@ func ModuleAddLocation(t *testing.T) {
 	}
 }
 
-func ModuleGetLocation(t *testing.T) {
+func ModuleGetLocationHandler(t *testing.T) {
 	get_request, err := http.NewRequest(http.MethodGet, TestServer.URL+"/locations/"+"1", nil)
 	if err != nil {
 		t.Fatalf("error creating get request: %s", err)
@@ -85,7 +92,7 @@ func ModuleGetLocation(t *testing.T) {
 	}
 }
 
-func ModuleGetLocations(t *testing.T) {
+func ModuleGetLocationsHandler(t *testing.T) {
 	get_request, err := http.NewRequest(http.MethodGet, TestServer.URL+"/locations", nil)
 	if err != nil {
 		t.Fatalf("error creating get request: %s", err)
@@ -106,7 +113,7 @@ func ModuleGetLocations(t *testing.T) {
 
 }
 
-func ModuleUpdateLocation(t *testing.T) {
+func ModuleUpdateLocationHandler(t *testing.T) {
 	put_request_1, err := http.NewRequest(http.MethodPut, TestServer.URL+"/locations/"+"1", nil)
 	if err != nil {
 		t.Fatalf("error creating put request: %s", err)

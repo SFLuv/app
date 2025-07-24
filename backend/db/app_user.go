@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"github.com/SFLuv/app/backend/structs"
-	"github.com/jackc/pgx/v5"
 )
 
 func (a *AppDB) AddUser(id string) error {
@@ -90,14 +89,10 @@ func (a *AppDB) GetUsers(page int, count int) ([]*structs.User, error) {
 		LIMIT $1
 		OFFSET $2;
 	`, count, offset)
-	if err == pgx.ErrNoRows {
-		return users, nil
-	}
 	if err != nil {
 		return nil, fmt.Errorf("error getting users: %s", err)
 	}
 
-	var scanError error
 	for rows.Next() {
 		user := structs.User{}
 		user.Exists = true
@@ -112,15 +107,10 @@ func (a *AppDB) GetUsers(page int, count int) ([]*structs.User, error) {
 			&user.Name,
 		)
 		if err != nil {
-			fmt.Println(err)
-			scanError = err
 			continue
 		}
 
 		users = append(users, &user)
-	}
-	if len(users) == 0 {
-		return nil, fmt.Errorf("error while scanning all rows: %s", scanError)
 	}
 
 	return users, nil

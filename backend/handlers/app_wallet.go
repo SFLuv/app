@@ -59,7 +59,7 @@ func (a *AppService) AddWallet(w http.ResponseWriter, r *http.Request) {
 
 	err = a.db.AddWallet(&wallet)
 	if err != nil {
-		a.logger.Logf("error marshalling wallet struct:\n  %#v\nfor user %s: %s", wallet, *userDid, err.Error())
+		a.logger.Logf("error adding wallet:\n  %#v\nfor user %s: %s", wallet, *userDid, err.Error())
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}

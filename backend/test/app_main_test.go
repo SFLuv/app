@@ -49,7 +49,7 @@ var TEST_USER_2 = structs.User{
 	Name:        &t2n,
 }
 
-var TEST_USERS = []structs.User{TEST_USER_1, TEST_USER_2}
+var TEST_USERS = []structs.User{TEST_USER_2, TEST_USER_1}
 
 var TEST_WALLET_1 = structs.Wallet{
 	Id:           nil,
@@ -169,14 +169,10 @@ func GroupControllers(t *testing.T) {
 		t.Fatal("users controllers group failed")
 	}
 	walletsControllers := t.Run("wallets controllers group", GroupWalletsControllers)
-	if !walletsControllers {
-		t.Error("wallets controllers group failed")
+	locationControllers := t.Run("location controllers group", GroupLocationControllers)
+	if !walletsControllers || !locationControllers {
+		t.Error("wallets or locations controllers group failed")
 	}
-
-	// locationControllers := t.Run("location controllers group", GroupLocationControllers)
-	// if !locationControllers {
-	// 	t.Fatal("location controllers group failed")
-	// }
 }
 
 func GroupHandlers(t *testing.T) {
@@ -223,8 +219,8 @@ func GroupHandlers(t *testing.T) {
 		t.Error("wallets handlers group failed")
 	}
 
-	// locationHandlers := t.Run("location handlers group", GroupLocationHandlers)
-	// if !locationHandlers {
-	// 	t.Fatal("location handlers group failed")
-	// }
+	locationHandlers := t.Run("location handlers group", GroupLocationHandlers)
+	if !locationHandlers {
+		t.Fatal("location handlers group failed")
+	}
 }

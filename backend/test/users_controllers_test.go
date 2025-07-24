@@ -1,7 +1,6 @@
 package test
 
 import (
-	"fmt"
 	"testing"
 )
 
@@ -18,10 +17,20 @@ func ModuleAddUserController(t *testing.T) {
 	if err != nil {
 		t.Fatal(err.Error())
 	}
+
+	err = AppDb.AddUser(TEST_USER_2.Id)
+	if err != nil {
+		t.Fatal(err.Error())
+	}
 }
 
 func ModuleUpdateUserInfoController(t *testing.T) {
 	err := AppDb.UpdateUserInfo(&TEST_USER_1)
+	if err != nil {
+		t.Fatal(err.Error())
+	}
+
+	err = AppDb.UpdateUserInfo(&TEST_USER_2)
 	if err != nil {
 		t.Fatal(err.Error())
 	}
@@ -49,17 +58,11 @@ func ModuleGetUserById(t *testing.T) {
 }
 
 func ModuleGetUsersController(t *testing.T) {
-	err := AppDb.AddUser(TEST_USER_2.Id)
-	if err != nil {
-		t.Fatal(err.Error())
-	}
-
 	users, err := AppDb.GetUsers(0, 2)
 	if err != nil {
 		t.Fatal(err.Error())
 	}
 	if len(users) != 2 {
-		fmt.Println(*users[0])
 		t.Fatalf("incorrect users array length %d", len(users))
 	}
 
@@ -71,6 +74,12 @@ func ModuleGetUsersController(t *testing.T) {
 			TEST_USERS[n].Name != nil &&
 			*user.Name != *TEST_USERS[n].Name {
 			t.Fatalf("names do not match for user %d", n)
+		}
+		if user.Email == nil {
+			t.Fatalf("expected to find user %d email", n+1)
+		}
+		if *user.Email != *TEST_USERS[n].Email {
+			t.Fatalf("email %s does not match expected %s", *user.Email, *TEST_USERS[n].Email)
 		}
 	}
 }

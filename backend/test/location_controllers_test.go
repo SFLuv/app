@@ -7,8 +7,8 @@ import (
 )
 
 func GroupLocationControllers(t *testing.T) {
-	t.Run("add location controller", ModuleAddLocation)
-	t.Run("update location controller", ModuleUpdateLocation)
+	t.Run("add location controller", ModuleAddLocationController)
+	t.Run("update location controller", ModuleUpdateLocationController)
 	t.Run("get all locations controller", ModuleGetLocationsController)
 	t.Run("get location by location id controller", ModuleGetLocationByIDController)
 	t.Run("get location by user id controller", ModuleGetLocationsByUserController)
@@ -16,6 +16,11 @@ func GroupLocationControllers(t *testing.T) {
 
 func ModuleAddLocationController(t *testing.T) {
 	err := AppDb.AddLocation(&TEST_LOCATION_1)
+	if err != nil {
+		t.Fatal(err.Error())
+	}
+
+	err = AppDb.AddLocation(&TEST_LOCATION_2)
 	if err != nil {
 		t.Fatal(err.Error())
 	}
@@ -38,7 +43,7 @@ func ModuleGetLocationsController(t *testing.T) {
 		t.Fatal(err.Error())
 	}
 
-	if len(locations) != 2 {
+	if len(locations) != len(TEST_LOCATIONS) {
 		t.Fatalf("incorrect location array length %d", len(locations))
 	}
 

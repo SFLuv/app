@@ -2,7 +2,6 @@ package db
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 
 	"github.com/SFLuv/app/backend/structs"
@@ -43,22 +42,19 @@ func (a *AppDB) AddWallet(wallet *structs.Wallet) error {
 }
 
 func (a *AppDB) GetWalletsByUser(userId string) ([]*structs.Wallet, error) {
-	var wallets []*structs.Wallet
 	rows, err := a.db.Query(context.Background(), `
-		SELECT
-			wallets.id, wallets.owner, wallets.name, wallets.is_eoa, wallets.eoa_address, wallets.smart_address, wallets.smart_index
-		FROM
-			wallets JOIN users ON wallets.owner = users.id
-		WHERE
-			users.id = $1;
+	SELECT
+	wallets.id, wallets.owner, wallets.name, wallets.is_eoa, wallets.eoa_address, wallets.smart_address, wallets.smart_index
+	FROM
+	wallets JOIN users ON wallets.owner = users.id
+	WHERE
+	users.id = $1;
 	`, userId)
-	if err == sql.ErrNoRows {
-		return wallets, nil
-	}
 	if err != nil {
 		return nil, fmt.Errorf("error querying user wallets: %s", err)
 	}
 
+	wallets := []*structs.Wallet{}
 	for rows.Next() {
 		var wallet structs.Wallet
 		err := rows.Scan(
