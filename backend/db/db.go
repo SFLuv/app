@@ -1,53 +1,30 @@
 package db
 
 import (
-	"database/sql"
+	"context"
 	"fmt"
 	"os"
 
-	_ "github.com/mattn/go-sqlite3"
+	"github.com/jackc/pgx/v5"
 )
 
-func DBPath(name string) string {
-	dbFolderPath := os.Getenv("DB_FOLDER_PATH")
-	dbPath := fmt.Sprintf("%s/%s.db", dbFolderPath, name)
+func PgxDB(name string) (*pgx.Conn, error) {
+	connString := MakeDbConnString(name)
 
-	if !exists(dbFolderPath) {
-		fmt.Printf("no %s db folder found... creating %s\n", name, dbFolderPath)
-		os.Mkdir(dbFolderPath, os.ModePerm)
-	}
-
-	if !exists(dbPath) {
-		fmt.Printf("no %s db file found... creating %s\n", name, dbPath)
-		os.Create(dbPath)
-	}
-
-	fmt.Printf("connecting to %s db...\n", name)
-	return dbPath
+	return pgx.Connect(context.Background(), connString)
 }
 
-func InitDB(name string) *sql.DB {
-	dbPath := DBPath(name)
-	db, err := sql.Open("sqlite3", fmt.Sprintf("file:%s", dbPath))
-	if err != nil {
-		fmt.Println(err)
-		return nil
+func MakeDbConnString(name string) string {
+	dbUser := os.Getenv("DB_USER")
+	dbPassword := os.Getenv("DB_PASSWORD")
+	dbPath := os.Getenv("DB_URL")
+
+	if dbPath == "" {
+		dbPath = "localhost:5432"
+	}
+	if dbUser == "" {
+		dbUser = "postgres"
 	}
 
-	return db
-}
-
-func exists(path string) bool {
-	exists := true
-	_, err := os.Stat(path)
-	if err != nil {
-		fmt.Println(err)
-		exists = false
-	}
-
-	if os.IsExist(err) {
-		exists = true
-	}
-
-	return exists
+	return fmt.Sprintf("postgres://%s:%s@%s/%s", dbUser, dbPassword, dbPath, name)
 }
