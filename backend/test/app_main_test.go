@@ -61,6 +61,17 @@ var TEST_WALLET_1 = structs.Wallet{
 	SmartIndex:   nil,
 }
 
+var t1Aid = 1
+var TEST_WALLET_1A = structs.Wallet{
+	Id:           &t1Aid,
+	Owner:        TEST_USER_1.Id,
+	Name:         "test_wallet_update",
+	IsEoa:        true,
+	EoaAddress:   "0x",
+	SmartAddress: nil,
+	SmartIndex:   nil,
+}
+
 var t2a = "0x"
 var t2i = 0
 var TEST_WALLET_2 = structs.Wallet{
@@ -73,7 +84,7 @@ var TEST_WALLET_2 = structs.Wallet{
 	SmartIndex:   &t2i,
 }
 
-var TEST_WALLETS = []structs.Wallet{TEST_WALLET_1, TEST_WALLET_2}
+var TEST_WALLETS = []structs.Wallet{TEST_WALLET_1A, TEST_WALLET_2}
 
 var TEST_LOCATION_1 = structs.Location{
 	ID:          1,
