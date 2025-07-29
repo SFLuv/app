@@ -1,20 +1,23 @@
 "use client"
 
-import { ReactNode } from "react"
+import { ReactNode, useMemo } from "react"
 import AppProvider from "./AppProvider"
 import { PrivyProvider } from "@privy-io/react-auth"
 import { PRIVY_ID } from "@/lib/constants"
+import { useTheme } from "next-themes"
 
 const Providers = ({ children }: { children: ReactNode }) => {
+  const { resolvedTheme } = useTheme()
   return (
     <PrivyProvider
       appId={PRIVY_ID}
       config={{
-        loginMethods: ["wallet", "email"],
+        loginMethods: ["wallet", "email", "google"],
         appearance: {
-          theme: "dark",
-          accentColor: "#daa520",
-          logo: "/images/logo.png",
+          theme: resolvedTheme as any || "light",
+          accentColor: "#eb6c6c",
+          logo: "/icon.png",
+          loginMessage: "Connect to the SFLuv Dashboard!"
         },
         embeddedWallets: {
           ethereum: {

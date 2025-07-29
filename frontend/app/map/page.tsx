@@ -8,6 +8,7 @@ import { MerchantModal } from "@/components/merchants/merchant-modal"
 import { mockMerchants, defaultLocation } from "@/data/mock-merchants"
 import { mockGoogleMerchants } from "@/data/mock-google-merchants"
 import type { Merchant, UserLocation } from "@/types/merchant"
+import { useApp } from "@/context/AppProvider"
 
 
 export default function MerchantMapPage() {
@@ -17,6 +18,7 @@ export default function MerchantMapPage() {
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [userLocation, setUserLocation] = useState<UserLocation>(defaultLocation)
   const [merchants, setMerchants] = useState<Merchant[]>([])
+  const { status } = useApp();
 
   useEffect(() => {
     loadMerchantData()
@@ -82,9 +84,17 @@ export default function MerchantMapPage() {
         rating: place_details?.rating,
         opening_hours: place_details?.regularOpeningHours?.weekdayDescriptions,
         mapsPage: place_details?.googleMapsLinks.placesUri
+    }
+    return newMerchant
   }
-  return newMerchant
-}
+
+  if (status === "loading") {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-[#eb6c6c]"></div>
+      </div>
+    )
+  }
 
   return (
     <div className="space-y-6">

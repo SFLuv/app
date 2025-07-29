@@ -39,7 +39,7 @@ export default function Dashboard() {
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false)
 
   // Get transactions based on user role
-  const transactions = user?.role === "merchant" ? mockMerchantTransactions : mockUserTransactions
+  const transactions = user?.isMerchant ? mockMerchantTransactions : mockUserTransactions
 
   const handleTransactionClick = (index: number) => {
     setSelectedTransaction(transactions[index])
@@ -173,20 +173,17 @@ export default function Dashboard() {
 
   // Determine which cards to show based on user role
   const getCards = () => {
-    switch (user?.role) {
-      case "admin":
-        return adminCards
-      case "merchant":
-        return merchantCards
-      default:
-        return userCards
-    }
+    return user?.isAdmin ?
+      adminCards
+    : user?.isMerchant ?
+      merchantCards
+    :
+      userCards
   }
 
   const cards = getCards()
 
   if (status === "loading") {
-    console.log("loading")
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-[#eb6c6c]"></div>
@@ -200,9 +197,9 @@ export default function Dashboard() {
       <div>
         <h1 className="text-3xl font-bold text-black dark:text-white">Welcome, {user?.name || "User"}</h1>
         <p className="text-gray-600 dark:text-gray-400 mt-1">
-          {user?.role === "admin"
+          {user?.isAdmin
             ? "Here's an overview of the SFLuv platform"
-            : user?.role === "merchant"
+            : user?.isMerchant
               ? "Here's an overview of your merchant account"
               : "Here's an overview of your SFLuv account"}
         </p>
@@ -233,40 +230,49 @@ export default function Dashboard() {
       </div>
 
       {/* Role-specific content sections */}
-      {user?.role === "user" && (
+
+      {user?.isAdmin ? (
         <div className="grid gap-6 grid-cols-1 md:grid-cols-2">
           <Card className="flex flex-col">
             <CardHeader>
-              <CardTitle className="text-black dark:text-white">Volunteer Opportunities</CardTitle>
-              <CardDescription>Find ways to earn SFLuv by volunteering</CardDescription>
+              <CardTitle className="text-black dark:text-white">System Metrics</CardTitle>
+              <CardDescription>Platform performance overview</CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-col flex-1">
+              <div className="rounded-lg border bg-gray-100 dark:bg-gray-800 h-[200px] flex items-center justify-center flex-1">
+                <BarChart3 className="h-12 w-12 text-gray-400" />
+              </div>
+              <Button
+                variant="ghost"
+                className="mt-4 w-full justify-center hover:bg-[#eb6c6c] hover:text-white"
+                onClick={() => router.push("/metrics")}
+              >
+                View Detailed Metrics
+              </Button>
+            </CardContent>
+          </Card>
+          <Card className="flex flex-col">
+            <CardHeader>
+              <CardTitle className="text-black dark:text-white">Pending Applications</CardTitle>
+              <CardDescription>Merchant applications awaiting approval</CardDescription>
             </CardHeader>
             <CardContent className="flex flex-col flex-1">
               <div className="space-y-4 flex-1">
                 <div className="border rounded-lg p-4">
-                  <h3 className="font-medium text-black dark:text-white">Community Garden Help</h3>
-                  <p className="text-sm text-gray-600 dark:text-gray-400">Help maintain local community gardens</p>
-                  <div className="flex justify-between items-center mt-2">
-                    <span className="text-sm text-green-500">Earn: 50 SFLuv/hr</span>
-                    <Button
-                      size="sm"
-                      className="bg-[#eb6c6c] hover:bg-[#d55c5c]"
-                      onClick={() => router.push(`/opportunities?id=opp-1`)}
-                    >
-                      View Details
+                  <h3 className="font-medium text-black dark:text-white">Local Bakery</h3>
+                  <p className="text-sm text-gray-600 dark:text-gray-400">Applied: Apr 15, 2023</p>
+                  <div className="flex justify-end mt-2">
+                    <Button size="sm" className="bg-[#eb6c6c] hover:bg-[#d55c5c]">
+                      Review
                     </Button>
                   </div>
                 </div>
                 <div className="border rounded-lg p-4">
-                  <h3 className="font-medium text-black dark:text-white">Food Bank Volunteer</h3>
-                  <p className="text-sm text-gray-600 dark:text-gray-400">Help sort and distribute food</p>
-                  <div className="flex justify-between items-center mt-2">
-                    <span className="text-sm text-green-500">Earn: 45 SFLuv/hr</span>
-                    <Button
-                      size="sm"
-                      className="bg-[#eb6c6c] hover:bg-[#d55c5c]"
-                      onClick={() => router.push(`/opportunities?id=opp-1`)}
-                    >
-                      View Details
+                  <h3 className="font-medium text-black dark:text-white">Community Bookstore</h3>
+                  <p className="text-sm text-gray-600 dark:text-gray-400">Applied: Apr 14, 2023</p>
+                  <div className="flex justify-end mt-2">
+                    <Button size="sm" className="bg-[#eb6c6c] hover:bg-[#d55c5c]">
+                      Review
                     </Button>
                   </div>
                 </div>
@@ -274,34 +280,14 @@ export default function Dashboard() {
               <Button
                 variant="ghost"
                 className="mt-4 w-full justify-center hover:bg-[#eb6c6c] hover:text-white"
-                onClick={() => router.push("/opportunities")}
+                onClick={() => router.push("/applications")}
               >
-                View All Opportunities
-              </Button>
-            </CardContent>
-          </Card>
-          <Card className="flex flex-col">
-            <CardHeader>
-              <CardTitle className="text-black dark:text-white">Merchant Map</CardTitle>
-              <CardDescription>Find places to spend your SFLuv</CardDescription>
-            </CardHeader>
-            <CardContent className="flex flex-col flex-1">
-              <div className="rounded-lg border bg-gray-100 dark:bg-gray-800 h-[200px] flex items-center justify-center flex-1">
-                <Map className="h-12 w-12 text-gray-400" />
-              </div>
-              <Button
-                variant="ghost"
-                className="mt-4 w-full justify-center hover:bg-[#eb6c6c] hover:text-white"
-                onClick={() => router.push("/map")}
-              >
-                Open Full Map
+                View All Applications
               </Button>
             </CardContent>
           </Card>
         </div>
-      )}
-
-      {user?.role === "merchant" && (
+      ) : user?.isMerchant ? (
         <div className="grid gap-6 grid-cols-1 md:grid-cols-2">
           <Card className="flex flex-col">
             <CardHeader>
@@ -369,65 +355,75 @@ export default function Dashboard() {
             </CardContent>
           </Card>
         </div>
-      )}
-
-      {user?.role === "admin" && (
+      ) : (
         <div className="grid gap-6 grid-cols-1 md:grid-cols-2">
           <Card className="flex flex-col">
             <CardHeader>
-              <CardTitle className="text-black dark:text-white">System Metrics</CardTitle>
-              <CardDescription>Platform performance overview</CardDescription>
+              <CardTitle className="text-black dark:text-white">Volunteer Opportunities</CardTitle>
+              <CardDescription>Find ways to earn SFLuv by volunteering</CardDescription>
             </CardHeader>
             <CardContent className="flex flex-col flex-1">
-              <div className="rounded-lg border bg-gray-100 dark:bg-gray-800 h-[200px] flex items-center justify-center flex-1">
-                <BarChart3 className="h-12 w-12 text-gray-400" />
+              <div className="space-y-4 flex-1">
+                <div className="border rounded-lg p-4">
+                  <h3 className="font-medium text-black dark:text-white">Community Garden Help</h3>
+                  <p className="text-sm text-gray-600 dark:text-gray-400">Help maintain local community gardens</p>
+                  <div className="flex justify-between items-center mt-2">
+                    <span className="text-sm text-green-500">Earn: 50 SFLuv/hr</span>
+                    <Button
+                      size="sm"
+                      className="bg-[#eb6c6c] hover:bg-[#d55c5c]"
+                      onClick={() => router.push(`/opportunities?id=opp-1`)}
+                    >
+                      View Details
+                    </Button>
+                  </div>
+                </div>
+                <div className="border rounded-lg p-4">
+                  <h3 className="font-medium text-black dark:text-white">Food Bank Volunteer</h3>
+                  <p className="text-sm text-gray-600 dark:text-gray-400">Help sort and distribute food</p>
+                  <div className="flex justify-between items-center mt-2">
+                    <span className="text-sm text-green-500">Earn: 45 SFLuv/hr</span>
+                    <Button
+                      size="sm"
+                      className="bg-[#eb6c6c] hover:bg-[#d55c5c]"
+                      onClick={() => router.push(`/opportunities?id=opp-1`)}
+                    >
+                      View Details
+                    </Button>
+                  </div>
+                </div>
               </div>
               <Button
                 variant="ghost"
                 className="mt-4 w-full justify-center hover:bg-[#eb6c6c] hover:text-white"
-                onClick={() => router.push("/metrics")}
+                onClick={() => router.push("/opportunities")}
               >
-                View Detailed Metrics
+                View All Opportunities
               </Button>
             </CardContent>
           </Card>
           <Card className="flex flex-col">
             <CardHeader>
-              <CardTitle className="text-black dark:text-white">Pending Applications</CardTitle>
-              <CardDescription>Merchant applications awaiting approval</CardDescription>
+              <CardTitle className="text-black dark:text-white">Merchant Map</CardTitle>
+              <CardDescription>Find places to spend your SFLuv</CardDescription>
             </CardHeader>
             <CardContent className="flex flex-col flex-1">
-              <div className="space-y-4 flex-1">
-                <div className="border rounded-lg p-4">
-                  <h3 className="font-medium text-black dark:text-white">Local Bakery</h3>
-                  <p className="text-sm text-gray-600 dark:text-gray-400">Applied: Apr 15, 2023</p>
-                  <div className="flex justify-end mt-2">
-                    <Button size="sm" className="bg-[#eb6c6c] hover:bg-[#d55c5c]">
-                      Review
-                    </Button>
-                  </div>
-                </div>
-                <div className="border rounded-lg p-4">
-                  <h3 className="font-medium text-black dark:text-white">Community Bookstore</h3>
-                  <p className="text-sm text-gray-600 dark:text-gray-400">Applied: Apr 14, 2023</p>
-                  <div className="flex justify-end mt-2">
-                    <Button size="sm" className="bg-[#eb6c6c] hover:bg-[#d55c5c]">
-                      Review
-                    </Button>
-                  </div>
-                </div>
+              <div className="rounded-lg border bg-gray-100 dark:bg-gray-800 h-[200px] flex items-center justify-center flex-1">
+                <Map className="h-12 w-12 text-gray-400" />
               </div>
               <Button
                 variant="ghost"
                 className="mt-4 w-full justify-center hover:bg-[#eb6c6c] hover:text-white"
-                onClick={() => router.push("/applications")}
+                onClick={() => router.push("/map")}
               >
-                View All Applications
+                Open Full Map
               </Button>
             </CardContent>
           </Card>
         </div>
       )}
+
+
       <TransactionModal transaction={selectedTransaction} isOpen={isModalOpen} onClose={handleCloseModal} />
     </div>
   )

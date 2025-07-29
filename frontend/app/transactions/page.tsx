@@ -22,7 +22,7 @@ export default function TransactionsPage() {
   const transactionId = searchParams.get("id")
 
   // Determine which transactions to show based on user role
-  const transactions = user?.role === "merchant" ? mockMerchantTransactions : mockUserTransactions
+  const transactions = user?.isMerchant ? mockMerchantTransactions : mockUserTransactions
 
   // Find transaction by ID if provided in URL
   useEffect(() => {
@@ -56,11 +56,11 @@ export default function TransactionsPage() {
       <div>
         <h1 className="text-3xl font-bold text-black dark:text-white">Transactions</h1>
         <p className="text-gray-600 dark:text-gray-400 mt-1">
-          {user?.role === "merchant" ? "View your transaction history and analytics" : "View your transaction history"}
+          {user?.isMerchant ? "View your transaction history and analytics" : "View your transaction history"}
         </p>
       </div>
 
-      {user?.role === "merchant" ? (
+      {user?.isMerchant ? (
         <Tabs defaultValue="list" value={activeTab} onValueChange={setActiveTab} className="w-full">
           <TabsList className="grid grid-cols-2 w-full mb-6 bg-secondary">
             <TabsTrigger value="list" className="text-black dark:text-white">
@@ -74,7 +74,6 @@ export default function TransactionsPage() {
             <TransactionList
               transactions={transactions}
               onSelectTransaction={handleSelectTransaction}
-              userRole={user.role}
             />
           </TabsContent>
           <TabsContent value="analytics">
@@ -85,7 +84,6 @@ export default function TransactionsPage() {
         <TransactionList
           transactions={transactions}
           onSelectTransaction={handleSelectTransaction}
-          userRole={user?.role || "user"}
         />
       )}
 

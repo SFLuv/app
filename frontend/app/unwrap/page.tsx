@@ -39,7 +39,7 @@ export default function UnwrapPage() {
 
   // Check if user has merchant or admin role
   useEffect(() => {
-    if (user && user.role !== "merchant" && user.role !== "admin") {
+    if (user?.isMerchant === false && user?.isAdmin === false) {
       router.push("/dashboard")
     }
   }, [user, router])
