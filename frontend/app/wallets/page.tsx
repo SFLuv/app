@@ -13,10 +13,13 @@ import type { ConnectedWallet } from "@/types/privy-wallet"
 import { useApp } from "@/context/AppProvider"
 import { AppWallet } from "@/lib/wallets/wallets"
 import { ConnectWalletModal } from "@/components/wallets/connect-wallet-modal"
+import { Checkbox } from "@/components/ui/checkbox"
+import { Label } from "@/components/ui/label"
 
 export default function WalletsPage() {
   const router = useRouter()
   const { wallets, status } = useApp()
+  const [showEoas, setShowEoas] = useState<boolean>(false)
 
   useEffect(() => {
     if(status === "unauthenticated") {
@@ -77,7 +80,6 @@ export default function WalletsPage() {
   }
 
   if (status === "loading") {
-    console.log("loading")
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-[#eb6c6c]"></div>
@@ -92,7 +94,19 @@ export default function WalletsPage() {
         <h1 className="text-3xl font-bold text-black dark:text-white">Connected Wallets</h1>
         <p className="text-gray-600 dark:text-gray-400 mt-1">Manage wallets connected to your SFLuv account</p>
       </div>
-
+      <div className="flex items-center space-x-2">
+        <Checkbox
+          id={`show-eoas`}
+          checked={showEoas}
+          onCheckedChange={() => setShowEoas(!showEoas)}
+        />
+        <Label
+          htmlFor={`show-eoas`}
+          className="text-sm text-black dark:text-white cursor-pointer"
+        >
+          Show EOA Accounts
+        </Label>
+      </div>
       <div className="space-y-4">
         {wallets.length === 0 ? (
           <div className="text-center py-12">
@@ -100,7 +114,7 @@ export default function WalletsPage() {
           </div>
         ) : (
           wallets.map((wallet, index) => {
-            if(wallet.type === "eoa") return
+            if(wallet.type === "eoa" && showEoas === false) return
             return (
             <Card key={wallet.address} className="overflow-hidden cursor-pointer hover:shadow-md transition-shadow">
               <CardContent className="p-4">
@@ -147,7 +161,7 @@ export default function WalletsPage() {
       </div>
 
       <div className="text-sm text-gray-500 dark:text-gray-400">
-        Showing {(wallets.filter((wallet, index) => wallet.type !== "eoa")).length} connected smart wallet{wallets.length !== 1 ? "s" : ""}
+        Showing {(wallets.filter((wallet, index) => wallet.type !== "eoa" || showEoas)).length} connected {showEoas ? "" : "smart"} wallet{(wallets.filter((wallet, index) => wallet.type !== "eoa" || showEoas)).length !== 1 ? "s" : ""}
       </div>
     </div>
   )

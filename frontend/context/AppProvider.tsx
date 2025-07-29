@@ -14,9 +14,9 @@ import { UserOp } from "@citizenwallet/sdk";
 import { JsonRpcSigner, Signer } from "ethers";
 import { BrowserProvider } from "ethers";
 import { AppWallet } from "@/lib/wallets/wallets";
+import { UserResponse, GetUserResponse, WalletResponse, LocationResponse } from "@/types/server";
 
-const mockUser: User = { id: "user3", name: "Bob Johnson", email: "bob@example.com", role: "merchant", isOrganizer: true }
-export type UserRole = "user" | "merchant" | "admin" | null
+// const mockUser: User = { id: "user3", name: "Bob Johnson", email: "bob@example.com", isMerchant: true, isAdmin: false, isOrganizer: false }
 export type UserStatus = "loading" | "authenticated" | "unauthenticated"
 export type MerchantApprovalStatus = "pending" | "approved" | "rejected" | null
 
@@ -24,26 +24,28 @@ export type MerchantApprovalStatus = "pending" | "approved" | "rejected" | null
 export interface User {
   id: string
   name: string
-  email: string
-  role: UserRole
-  avatar?: string
-  isOrganizer?: boolean
-  merchantStatus?: MerchantApprovalStatus
-  merchantProfile?: {
-    businessName: string
-    description: string
-    address: {
-      street: string
-      city: string
-      state: string
-      zip: string
-    }
-    contactInfo: {
-      phone: string
-      website?: string
-    }
-    businessType: string
-  }
+  contact_email?: string
+  contact_phone?: string
+  // avatar?: string
+  isAdmin: boolean
+  isMerchant: boolean
+  isOrganizer: boolean
+  // merchantStatus?: MerchantApprovalStatus
+  // merchantProfile?: {
+  //   businessName: string
+  //   description: string
+  //   address: {
+  //     street: string
+  //     city: string
+  //     state: string
+  //     zip: string
+  //   }
+  //   contactInfo: {
+  //     phone: string
+  //     website?: string
+  //   }
+  //   businessType: string
+  // }
 }
 
 interface TxState {
@@ -64,11 +66,12 @@ interface AppContextType {
   // Web3 Functionality
   wallets: AppWallet[];
   tx: TxState;
-  updateWallets: () => Promise<void>
+  updateWallet: (id: number, name: string) => Promise<void>
+  refreshWallets: () => Promise<void>
 
   // App Functionality
+  locations: LocationResponse[]
   updateUser: (data: Partial<User>) => void
-  requestMerchantStatus: (merchantProfile: User["merchantProfile"]) => void
   approveMerchantStatus: () => void
   rejectMerchantStatus: () => void
 }
@@ -85,21 +88,21 @@ const AppContext = createContext<AppContextType | null>(null);
 export default function AppProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [wallets, setWallets] = useState<AppWallet[]>([]);
+  const [locations, setLocations] = useState<LocationResponse[]>([])
   const [status, setStatus] = useState<UserStatus>("loading")
   const [tx, setTx] = useState<TxState>(defaultTxState)
   const [error, setError] = useState<string | null>(null);
-  const { getAccessToken, authenticated: privyAuthenticated, ready: privyReady, login: privyLogin, logout: privyLogout } = usePrivy();
+  const { getAccessToken, authenticated: privyAuthenticated, ready: privyReady, login: privyLogin, logout: privyLogout, user: privyUser } = usePrivy();
   const { wallets: privyWallets, ready: walletsReady } = useWallets();
 
 
 
   useEffect(() => {
     if(!privyReady) return;
-    console.log("wallet: ", walletsReady)
 
     if(privyAuthenticated) {
       if(!walletsReady) return;
-      _userLogin().then(() => setStatus("authenticated")).catch(() => setStatus("unauthenticated"))
+      _userLogin()
     }
     else {
       setStatus("unauthenticated")
@@ -111,26 +114,42 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     if(error) console.error(error)
   }, [error])
 
+  const _userResponseToUser = async (r: GetUserResponse) => {
+      const u: User = {
+        id: r.user.id,
+        name: r.user.contact_name || "User",
+        contact_email: r.user.contact_email,
+        contact_phone: r.user.contact_phone,
+        isAdmin: r.user.is_admin,
+        isMerchant: r.user.is_merchant,
+        isOrganizer: r.user.is_organizer
+      }
+      setUser(u)
+  }
+
   const _userLogin = async () => {
+    let userResponse: GetUserResponse | null
     setStatus("loading")
     try {
-      await _getUser()
+      userResponse = await _getUser()
+      if(userResponse === null) {
+        await _postUser()
+        userResponse = await _getUser()
+      }
+      if(userResponse === null) {
+        throw new Error("error posting user")
+      }
+      await _userResponseToUser(userResponse)
+      console.log(user)
+      await _initWallets(userResponse.wallets)
     }
     catch(error) {
-      await privyLogout()
-      setError("error getting user data from backend")
+      await logout()
+      setError("error logging in")
       console.error(error)
-      throw new Error("error logging user in")
+      return
     }
-    try {
-      await _initWallets()
-    }
-    catch(error) {
-      await privyLogout()
-      setError("error initializing wallet")
-      console.error(error)
-      throw new Error("error logging user in")
-    }
+    setStatus("authenticated")
   }
 
   const _resetAppState = async () => {
@@ -140,40 +159,126 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     setError(null)
   }
 
-  const _getUser = async () => {
-    // In a real app, this would be an API call to verify the session
-    const storedUser = localStorage.getItem("sfluv_user")
+  const _authFetch = async (endpoint: string, options: RequestInit = {}): Promise<Response> => {
+    const accessToken = await getAccessToken()
+    if(!accessToken) throw new Error("no access token")
+    const h: HeadersInit = {
+      ...options.headers,
+      "Access-Token": accessToken,
+    }
 
-    if (storedUser) {
-      const userData = JSON.parse(storedUser)
-      setUser(userData)
-      setStatus("authenticated")
-    } else {
-      logout()
+    return await fetch(process.env.NEXT_PUBLIC_BACKEND_BASE_URL + endpoint, { ...options, headers: h })
+  }
+
+  const _postUser = async () => {
+    let res = await _authFetch("/users", { method: "POST" })
+    if(res.status != 201) {
+      throw new Error("error posting user")
     }
   }
 
-  const _initWallets = async () => {
+  const _getUser = async (): Promise<GetUserResponse | null> => {
+    const res = await _authFetch("/users")
+    if(res.status == 404) {
+      return null
+    }
+    if(res.status != 200) {
+      throw new Error("error getting user")
+    }
+    return await res.json() as GetUserResponse
+  }
+
+  const _getWallets = async (): Promise<WalletResponse[]> => {
+    const res = await _authFetch("/wallets")
+    if(res.status != 200) {
+      throw new Error("error getting wallets")
+    }
+    return await res.json() as WalletResponse[]
+  }
+
+  const _postWallet = async (wallet: WalletResponse): Promise<number> => {
+    const res = await _authFetch("/wallets", {
+      method: "POST",
+      body: JSON.stringify(wallet)
+    })
+
+    if(res.status != 201) {
+      throw new Error("error posting wallet")
+    }
+
+    return await res.json()
+  }
+
+  const _updateWallet = async (w: WalletResponse) => {
+    const res = await _authFetch("/wallets", {
+      method: "PUT",
+      body: JSON.stringify(w)
+    })
+
+    if(res.status != 201) {
+      throw new Error("error updating wallet")
+    }
+  }
+
+  const _initWallets = async (extWallets?: WalletResponse[]) => {
     try {
+      if(!privyUser?.id) {
+        throw new Error("user not authenticated")
+      }
+      if(extWallets === undefined) {
+        extWallets = await _getWallets()
+      }
+
       let wlts: AppWallet[] = [];
-      let index = 0n;
       for(const i in privyWallets) {
         const privyWallet = privyWallets[i]
-        const eoaName = "EOA-" + (i + 1)
+
+        let extWallet = extWallets.find((w, n) => w.eoa_address == privyWallet.address && w.is_eoa)
+        if(!extWallet) {
+          extWallet = {
+            id: null,
+            owner: privyUser.id,
+            name: "EOA-" + (i + 1),
+            is_eoa: true,
+            eoa_address: privyWallet.address
+          }
+
+          let id = await _postWallet(extWallet)
+        }
+
+        const eoaName = extWallet.name
         const w = new AppWallet(privyWallet, eoaName)
         await w.init()
         wlts.push(w)
 
         await privyWallet.switchChain(CHAIN_ID);
         let next = true;
+        let index = 0n;
         while(next) {
-          const smartWalletName = "SW-" + (i + 1) + "-" + (index + 1n).toString()
-          const w = new AppWallet(privyWallet, smartWalletName, index)
+          let extSmartWallet = extWallets.find((w, n) => w.eoa_address == privyWallet.address && w.smart_index != undefined && BigInt(w.smart_index) == index)
+
+          const smartWalletName = extSmartWallet?.name || "SW-" + (i + 1) + "-" + (index + 1n).toString()
+          const w = new AppWallet(privyWallet, smartWalletName, {index})
           next = await w.init()
-          if(next) wlts.push(w)
-          index += 1n
+          if(next){
+            wlts.push(w)
+            if(!extSmartWallet) {
+              extSmartWallet = {
+                id: null,
+                owner: privyUser.id,
+                name: smartWalletName,
+                is_eoa: false,
+                eoa_address: privyWallet.address,
+                smart_address: w.address,
+                smart_index: Number(w.index)
+              }
+
+              let id = await _postWallet(extSmartWallet)
+              w.setId(id)
+            }
+            index += 1n
+          }
         }
-        index = 0n;
       }
 
       setWallets(wlts)
@@ -185,7 +290,32 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     }
   }
 
-  const updateWallets = async () => {
+  const updateWallet = async (id: number, name: string) => {
+    const s = status
+    setStatus("loading")
+    try {
+      if(!user) {
+        throw new Error("no user logged in")
+      }
+      var sWallet: WalletResponse = {
+        id: id,
+        owner: user.id,
+        name: name,
+        is_eoa: true,
+        eoa_address: "0x"
+      }
+
+      await _updateWallet(sWallet)
+      await refreshWallets()
+    }
+    catch {
+      console.error("error updating wallets")
+      setError("error updating wallets")
+    }
+    setStatus(s)
+  }
+
+  const refreshWallets = async () => {
     const s = status
     setStatus("loading")
     try {
@@ -207,7 +337,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
       try {
         await privyLogin()
         // move user data implementation to helper functions called in useEffect instead of passing into login() for real auth
-        localStorage.setItem("sfluv_user", JSON.stringify(mockUser))
+        // localStorage.setItem("sfluv_user", JSON.stringify(mockUser))
       }
       catch {
         setError("error logging in with privy")
@@ -228,24 +358,12 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     }
   }
 
-  const requestMerchantStatus = (merchantProfile: User["merchantProfile"]) => {
-    if (user) {
-      const updatedUser = {
-        ...user,
-        merchantStatus: "pending" as MerchantApprovalStatus,
-        merchantProfile,
-      }
-      setUser(updatedUser)
-      localStorage.setItem("sfluv_user", JSON.stringify(updatedUser))
-    }
-  }
-
   const approveMerchantStatus = () => {
     if (user) {
       const updatedUser = {
         ...user,
         merchantStatus: "approved" as MerchantApprovalStatus,
-        role: "merchant" as UserRole,
+        role: "merchant",
       }
       setUser(updatedUser)
       localStorage.setItem("sfluv_user", JSON.stringify(updatedUser))
@@ -270,12 +388,13 @@ export default function AppProvider({ children }: { children: ReactNode }) {
           user,
           wallets,
           tx,
-          updateWallets,
+          updateWallet,
+          refreshWallets,
           error,
           login,
           logout,
+          locations,
           updateUser,
-          requestMerchantStatus,
           approveMerchantStatus,
           rejectMerchantStatus,
          }}

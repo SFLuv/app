@@ -12,7 +12,8 @@ export const metadata: Metadata = {
   title: "SFLuv - Local Economy Management",
   description:
     "A central app for managing payments, users, and merchant discovery for a local economy management tool.",
-    generator: 'v0.dev'
+    generator: 'v0.dev',
+  icons: "/icon.png"
 }
 
 export default function RootLayout({

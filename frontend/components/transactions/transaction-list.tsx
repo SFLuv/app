@@ -11,23 +11,26 @@ import { Pagination } from "@/components/opportunities/pagination"
 import type { Transaction } from "@/types/transaction"
 import { transactionTypeLabels } from "@/types/transaction"
 import { SYMBOL } from "@/lib/constants"
+import { useApp } from "@/context/AppProvider"
 
 interface TransactionListProps {
   transactions: Transaction[]
   onSelectTransaction: (transaction: Transaction) => void
-  userRole: "user" | "merchant" | "admin"
 }
 
-export function TransactionList({ transactions, onSelectTransaction, userRole }: TransactionListProps) {
+export function TransactionList({ transactions, onSelectTransaction }: TransactionListProps) {
   const [searchQuery, setSearchQuery] = useState("")
   const [currentPage, setCurrentPage] = useState(1)
   const [typeFilter, setTypeFilter] = useState<string>("all")
   const [statusFilter, setStatusFilter] = useState<string>("all")
+
+  const { user } = useApp()
+
   const ITEMS_PER_PAGE = 10
 
   // Get available transaction types based on user role
   const getTransactionTypes = () => {
-    if (userRole === "merchant") {
+    if (user?.isMerchant) {
       return [
         { value: "all", label: "All Types" },
         { value: "customer_purchase", label: "Customer Purchase" },

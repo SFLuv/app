@@ -16,12 +16,18 @@ interface TxState {
   hash: string | null;
 }
 
+interface AppWalletOptions {
+  index?: bigint
+  id?: number
+}
+
 
 export class AppWallet {
   private owner: ConnectedWallet;
   index?: bigint;
 
   name: string;
+  id?: number;
   type: WalletType;
   address?: Address;
   wallet?: ConnectedWallet | ToSimpleSmartAccountReturnType<"0.7">;
@@ -36,11 +42,12 @@ export class AppWallet {
   private ethersSigner?: JsonRpcSigner;
   private publicClient?: PublicClient;
 
-  constructor(owner: ConnectedWallet, name: string, index?: bigint) {
+  constructor(owner: ConnectedWallet, name: string, options?: AppWalletOptions) {
     this.owner = owner
-    this.index = index
+    this.index = options?.index
+    this.id = options?.id
     this.name = name
-    this.type = index !== undefined ? "smartwallet" : "eoa"
+    this.type = options?.index !== undefined ? "smartwallet" : "eoa"
     this.initialized = false
   }
 
@@ -95,6 +102,8 @@ export class AppWallet {
     return true
   }
 
+
+
   private _beforeTx = (): { wallet: ToSimpleSmartAccountReturnType<"0.7">, signer: Signer } | null => {
     if(!this.initialized) {
       console.error("wallet not yet initialized")
@@ -134,6 +143,10 @@ export class AppWallet {
     }
 
     return receipt
+  }
+
+  setId = (id: number) => {
+    this.id = id
   }
 
   wrap = async (amount: bigint): Promise<TxState | null>  => {

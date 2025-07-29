@@ -4,7 +4,7 @@ import type React from "react"
 
 import { useRouter } from "next/navigation"
 import { useState } from "react"
-import { useApp, User, UserRole } from "@/context/AppProvider"
+import { useApp, User,  } from "@/context/AppProvider"
 
 const mockUsers = [
   {
@@ -12,7 +12,6 @@ const mockUsers = [
     name: "John Doe",
     email: "user@example.com",
     password: "password",
-    role: "user" as UserRole,
     isOrganizer: false,
   },
   {
@@ -20,7 +19,6 @@ const mockUsers = [
     name: "Jane Smith",
     email: "merchant@example.com",
     password: "password",
-    role: "merchant" as UserRole,
     isOrganizer: false,
   },
   {
@@ -28,7 +26,6 @@ const mockUsers = [
     name: "Admin User",
     email: "admin@example.com",
     password: "password",
-    role: "admin" as UserRole,
     isOrganizer: true,
   },
   {
@@ -36,7 +33,6 @@ const mockUsers = [
     name: "Sam Organizer",
     email: "organizer@example.com",
     password: "password",
-    role: "user" as UserRole,
     isOrganizer: true,
   },
   {
@@ -44,7 +40,6 @@ const mockUsers = [
     name: "Merchant Organizer",
     email: "merchant-organizer@example.com",
     password: "password",
-    role: "merchant" as UserRole,
     isOrganizer: true,
   },
 ]
@@ -63,43 +58,34 @@ export function useMockAuth() {
     const user = mockUsers.find((u) => u.email === email && u.password === password)
 
     if (user) {
-      login({
-        id: user.id,
-        name: user.name,
-        email: user.email,
-        role: user.role,
-        isOrganizer: user.isOrganizer,
-      })
+      login()
       router.push("/dashboard")
     } else {
       setError("Invalid email or password")
     }
   }
 
-  const mockLogin = (email: string, password: string, role: UserRole = "user") => {
+  const mockLogin = (email: string, password: string) => {
     // In a real app, this would be an API call
     const mockUser = {
       id: "user-123",
       name: email.split("@")[0],
       email,
-      role,
       avatar: `https://ui-avatars.com/api/?name=${encodeURIComponent(email.split("@")[0])}&background=eb6c6c&color=fff`,
     }
 
     const userData: User = {
       id: "user-123",
       name: email.split("@")[0],
+      isAdmin: false,
+      isMerchant: false,
+      isOrganizer: false,
       email,
-      role,
       avatar: `https://ui-avatars.com/api/?name=${encodeURIComponent(email.split("@")[0])}&background=eb6c6c&color=fff`,
     }
 
-    // Set merchant status for merchant role
-    if (role === "merchant") {
-      userData.merchantStatus = "approved"
-    }
 
-    login(userData)
+    login()
     router.push("/dashboard")
   }
 

@@ -26,12 +26,14 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@/components/ui/sidebar"
-import { ForwardRefExoticComponent, RefAttributes } from "react"
+import { ForwardRefExoticComponent, RefAttributes, useMemo } from "react"
 
 export function DashboardSidebar() {
   const router = useRouter()
   const pathname = usePathname()
   const { user, logout, status, login } = useApp()
+
+  const userRole = useMemo(() => user?.isAdmin ? "admin" : user?.isMerchant ? "merchant" : "user", [user])
 
   const isActive = (path: string) => pathname === path
 
@@ -125,7 +127,7 @@ export function DashboardSidebar() {
     }
 
     // Only show merchant items if user is a merchant with approved status
-    if (user?.role === "merchant" && user?.merchantStatus === "approved") {
+    if (user?.isMerchant && user?.merchantStatus === "approved") {
       items = [...items, ...merchantItems]
     }
 
@@ -142,7 +144,7 @@ export function DashboardSidebar() {
       items = [...items, ...organizerItems]
     }
 
-    if (user?.role === "admin") {
+    if (user?.isAdmin) {
       items = [...items, ...merchantItems, ...adminItems]
     }
 
@@ -159,7 +161,7 @@ export function DashboardSidebar() {
           <div className="flex-1 overflow-hidden">
             <h2 className="text-lg font-semibold text-black dark:text-white truncate">SFLuv Dashboard</h2>
             <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
-              {user?.role && `Logged in as ${user.role}`}
+              {user && `Logged in as ${userRole}.`}
             </p>
           </div>
         </div>
