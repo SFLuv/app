@@ -210,10 +210,6 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     return await res.json() as WalletResponse[]
   }
 
-  const _getMapLocations = async (): Promise<LocationResponse[]> => {
-    const res = await fetch(process.env.NEXT_PUBLIC_BACKEND_BASE_URL + "/locations")
-    return await res.json() as LocationResponse[]
-  }
 
   const _postWallet = async (wallet: WalletResponse): Promise<number> => {
     const res = await _authFetch("/wallets", {
