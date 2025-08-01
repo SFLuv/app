@@ -13,7 +13,7 @@ export default function RoleManagementPage() {
   const { user } = useApp()
 
   // Redirect if not admin
-  if (user?.role !== "admin") {
+  if (user?.isAdmin === false) {
     redirect("/dashboard")
   }
 

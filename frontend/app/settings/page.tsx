@@ -143,25 +143,19 @@ export default function SettingsPage() {
 
       <Tabs defaultValue="account" value={activeTab} onValueChange={setActiveTab} className="w-full">
         <TabsList className="w-full mb-6 bg-secondary">
-          {user?.role === "merchant" ? (
-            <div className="grid grid-cols-3 w-full">
+          {user?.isMerchant ? (
+            <div className={"grid grid-cols-2 w-full"}>
               <TabsTrigger value="account" className="text-black dark:text-white w-full">
                 Account
               </TabsTrigger>
               <TabsTrigger value="merchant" className="text-black dark:text-white w-full">
                 Merchant Profile
               </TabsTrigger>
-              <TabsTrigger value="notifications" className="text-black dark:text-white w-full">
-                Notifications
-              </TabsTrigger>
             </div>
           ) : (
-            <div className="grid grid-cols-2 w-full">
+            <div className="grid grid-cols-1 w-full">
               <TabsTrigger value="account" className="text-black dark:text-white w-full">
                 Account
-              </TabsTrigger>
-              <TabsTrigger value="notifications" className="text-black dark:text-white w-full">
-                Notifications
               </TabsTrigger>
             </div>
           )}
@@ -302,7 +296,7 @@ export default function SettingsPage() {
               </CardContent>
             </Card>
           </div>
-          {user?.role === "user" && !user?.merchantStatus && (
+          {user?.isMerchant === false && (
             <Card className="mt-6">
               <CardHeader>
                 <CardTitle className="text-black dark:text-white">Become a Merchant</CardTitle>
@@ -373,7 +367,7 @@ export default function SettingsPage() {
           )}
         </TabsContent>
 
-        {user?.role === "merchant" && (
+        {user?.isMerchant && (
           <TabsContent value="merchant">
             <Card>
               <CardHeader>

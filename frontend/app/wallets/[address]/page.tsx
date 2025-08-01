@@ -1,11 +1,11 @@
 "use client"
 
-import { useState, useEffect, useMemo } from "react"
+import { useState, useEffect, useMemo, useRef } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
-import { Send, QrCode, Eye, EyeOff, RefreshCw, Settings, ArrowLeft, Wallet } from "lucide-react"
+import { Send, QrCode, Eye, EyeOff, RefreshCw, Settings, ArrowLeft, Wallet, Pencil, Check, X } from "lucide-react"
 import { SendCryptoModal } from "@/components/wallets/send-crypto-modal"
 import { ReceiveCryptoModal } from "@/components/wallets/receive-crypto-modal"
 import { TransactionHistoryList } from "@/components/wallets/transaction-history-list"
@@ -16,12 +16,13 @@ import { useParams, useRouter } from "next/navigation"
 import { useWallets } from "@privy-io/react-auth"
 import { useApp } from "@/context/AppProvider"
 import { CHAIN } from "@/lib/constants"
+import { Input } from "@/components/ui/input"
 
 export default function WalletDetailsPage() {
   const params = useParams()
   const router = useRouter()
-  const walletIndex = Number.parseInt(params.index as string) || 1
-  const { wallets, status } = useApp()
+  const walletAddress = params.address as string
+  const { wallets, status, updateWallet } = useApp()
 
   useEffect(() => {
       if(status === "unauthenticated") {
@@ -30,7 +31,7 @@ export default function WalletDetailsPage() {
     }, [status])
 
   // Get the specific wallet by index
-  const wallet = wallets[walletIndex]
+  const wallet = useMemo(() => wallets.find((w) => w.address?.toLowerCase() === walletAddress.toLowerCase()), [wallets])
 
   const [showSendModal, setShowSendModal] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -38,14 +39,64 @@ export default function WalletDetailsPage() {
   const [showBalance, setShowBalance] = useState(true)
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [balance, setBalance] = useState<number | null>(null)
+  const [isEditingName, setIsEditingName] = useState(false)
+  const [walletName, setWalletName] = useState("")
+  const [isSavingName, setIsSavingName] = useState(false)
+  const nameInputRef = useRef<HTMLInputElement>(null)
   const { toast } = useToast()
 
   useEffect(() => { if(!showReceiveModal && !showSendModal) updateBalance() }, [showReceiveModal, showSendModal])
 
+
+  const handleEditName = () => {
+    setIsEditingName(true)
+  }
+
+  const handleCancelEdit = () => {
+    setIsEditingName(false)
+    if (wallet) {
+      setWalletName(wallet.name)
+    }
+  }
+
+  const handleSaveName = async () => {
+    if (!wallet || !wallet.id || !walletName.trim()) return
+
+    setIsSavingName(true)
+
+    try {
+      // Simulate API call delay
+      await updateWallet(wallet.id, walletName.trim())
+
+
+      setIsEditingName(false)
+      toast({
+        title: "Wallet Renamed",
+        description: `Wallet name updated to "${walletName.trim()}"`,
+      })
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: "Failed to update wallet name. Please try again.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsSavingName(false)
+    }
+  }
+
+  const handleKeyPress = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter") {
+      handleSaveName()
+    } else if (e.key === "Escape") {
+      handleCancelEdit()
+    }
+  }
+
   const updateBalance = async () => {
     try {
-      const b = await wallet.getBalanceFormatted()
-      if(b === null) {
+      const b = await wallet?.getBalanceFormatted()
+      if(b === null || b === undefined) {
         setError("Wallet not initialized.")
         return
       }
@@ -84,7 +135,6 @@ export default function WalletDetailsPage() {
   )
 
   if (status === "loading") {
-    console.log("loading")
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-[#eb6c6c]"></div>
@@ -120,9 +170,57 @@ export default function WalletDetailsPage() {
                 <AvatarFallback className="text-xs">{wallet.name.slice(0, 2).toUpperCase()}</AvatarFallback>
               </Avatar>
               <div className="min-w-0 flex-1">
-                <h1 className="font-semibold text-base sm:text-lg truncate">
-                  {wallet.name.toUpperCase()}
-                </h1>
+                {isEditingName ? (
+                  <div className="flex items-center gap-1 sm:gap-2">
+                    <Input
+                      ref={nameInputRef}
+                      value={walletName}
+                      onChange={(e) => setWalletName(e.target.value)}
+                      onKeyDown={handleKeyPress}
+                      onBlur={handleSaveName}
+                      className="h-7 sm:h-8 text-sm sm:text-base font-semibold px-2 py-1 min-w-0"
+                      placeholder="Wallet name"
+                      maxLength={30}
+                      disabled={isSavingName}
+                    />
+                    <div className="flex gap-0.5 sm:gap-1 flex-shrink-0">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={handleSaveName}
+                        disabled={isSavingName || !walletName.trim()}
+                        className="h-6 w-6 sm:h-7 sm:w-7 p-0 text-green-600 hover:text-green-700 hover:bg-green-100 dark:hover:bg-green-900/20"
+                      >
+                        {isSavingName ? (
+                          <div className="animate-spin h-3 w-3 sm:h-3.5 sm:w-3.5 border-2 border-green-600 border-t-transparent rounded-full" />
+                        ) : (
+                          <Check className="h-3 w-3 sm:h-3.5 sm:w-3.5" />
+                        )}
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={handleCancelEdit}
+                        disabled={isSavingName}
+                        className="h-6 w-6 sm:h-7 sm:w-7 p-0 text-red-600 hover:text-red-700 hover:bg-red-100 dark:hover:bg-red-900/20"
+                      >
+                        <X className="h-3 w-3 sm:h-3.5 sm:w-3.5" />
+                      </Button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-1 sm:gap-2">
+                    <h1 className="font-semibold text-base sm:text-lg truncate">{wallet.name}</h1>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={handleEditName}
+                      className="h-6 w-6 sm:h-7 sm:w-7 p-0 text-muted-foreground hover:text-foreground flex-shrink-0"
+                    >
+                      <Pencil className="h-3 w-3 sm:h-3.5 sm:w-3.5" />
+                    </Button>
+                  </div>
+                )}
                 <Badge variant="secondary" className="text-xs mt-0.5">
                   {CHAIN.name}
                 </Badge>
@@ -135,9 +233,6 @@ export default function WalletDetailsPage() {
             </Button>
             <Button variant="ghost" size="sm" onClick={handleRefresh} disabled={isRefreshing}>
               <RefreshCw className={`h-4 w-4 ${isRefreshing ? "animate-spin" : ""}`} />
-            </Button>
-            <Button variant="ghost" size="sm" className="hidden sm:flex">
-              <Settings className="h-4 w-4" />
             </Button>
           </div>
         </div>

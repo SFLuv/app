@@ -112,57 +112,12 @@ export function ReceiveCryptoModal({ open, onOpenChange, wallet }: ReceiveCrypto
             </div>
           </div>
 
-          {/* Optional Payment Request */}
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="request-amount" className="text-sm font-medium">
-                Request Amount (Optional)
-              </Label>
-              <div className="relative">
-                <Input
-                  id="request-amount"
-                  type="number"
-                  step="0.00000001"
-                  placeholder="0.00"
-                  value={amount}
-                  onChange={(e) => setAmount(e.target.value)}
-                  className="h-11 pr-16"
-                />
-                <div className="absolute right-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground font-medium">
-                  {currencySymbol}
-                </div>
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="request-memo" className="text-sm font-medium">
-                Message (Optional)
-              </Label>
-              <Textarea
-                id="request-memo"
-                placeholder="Add a message for the sender"
-                value={memo}
-                onChange={(e) => setMemo(e.target.value)}
-                rows={2}
-                className="resize-none"
-              />
-            </div>
-
-            {(amount || memo) && (
-              <Button variant="outline" onClick={generatePaymentRequest} className="w-full bg-transparent h-11">
-                Generate Payment Request
-              </Button>
-            )}
-          </div>
-
           {/* Security Notice */}
           <Card className="border-amber-200 dark:border-amber-800">
             <CardContent className="p-3 sm:p-4">
               <div className="space-y-2">
                 <p className="font-medium text-sm">Security Tips</p>
                 <ul className="text-xs text-muted-foreground space-y-1">
-                  <li>• Only share this address with trusted senders</li>
-                  <li>• Verify the sender before sharing payment requests</li>
                   <li>• Double-check the network matches ({networkName})</li>
                   <li>• Never share your private keys or seed phrase</li>
                 </ul>
