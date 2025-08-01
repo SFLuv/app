@@ -127,12 +127,12 @@ export function DashboardSidebar() {
     }
 
     // Only show merchant items if user is a merchant with approved status
-    if (user?.isMerchant && user?.merchantStatus === "approved") {
+    if (user?.isMerchant) {
       items = [...items, ...merchantItems]
     }
 
     // Add merchant status link for users with any merchant status
-    if (user?.merchantStatus) {
+    if (user?.isMerchant) {
       items.push({
         title: "Merchant Status",
         icon: FileCheck,

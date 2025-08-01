@@ -68,9 +68,9 @@ export default function WalletsPage() {
   }
 
   // Handle wallet selection
-  const handleSelectWallet = (wallet: AppWallet, index: number) => {
+  const handleSelectWallet = (address: string) => {
     // Navigate to the specific wallet page
-    router.push(`/wallets/${index}`)
+    router.push(`/wallets/${address}`)
   }
 
   // Handle disconnect wallet
@@ -116,7 +116,7 @@ export default function WalletsPage() {
           wallets.map((wallet, index) => {
             if(wallet.type === "eoa" && showEoas === false) return
             return (
-            <Card key={wallet.address} className="overflow-hidden cursor-pointer hover:shadow-md transition-shadow">
+            <Card key={wallet.address} onClick={() => handleSelectWallet(wallet.address || "0x")} className="overflow-hidden cursor-pointer hover:shadow-md transition-shadow">
               <CardContent className="p-4">
                 <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                   <div className="flex items-center gap-3">
@@ -139,7 +139,7 @@ export default function WalletsPage() {
 
                   <div className="flex items-center gap-2">
                     <Button
-                      onClick={() => handleSelectWallet(wallet, index)}
+                      onClick={() => handleSelectWallet(wallet.address || "0x")}
                       className="bg-[#eb6c6c] hover:bg-[#d55c5c]"
                     >
                       Open Wallet

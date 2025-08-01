@@ -60,20 +60,23 @@ interface AppContextType {
   // Authentication
   status: UserStatus;
   user: User | null;
+  userLocations: LocationResponse[]
   login: () => Promise<void>;
   logout: () => Promise<void>;
 
   // Web3 Functionality
   wallets: AppWallet[];
   tx: TxState;
-  updateWallet: (id: number, name: string) => Promise<void>
+  updateWallet: (id: number, name: string) => Promise<string | null>
   refreshWallets: () => Promise<void>
 
   // App Functionality
-  locations: LocationResponse[]
+  mapLocations: LocationResponse[]
   updateUser: (data: Partial<User>) => void
   approveMerchantStatus: () => void
   rejectMerchantStatus: () => void
+
+  //add location fuction signatures
 }
 
 
@@ -88,25 +91,38 @@ const AppContext = createContext<AppContextType | null>(null);
 export default function AppProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [wallets, setWallets] = useState<AppWallet[]>([]);
-  const [locations, setLocations] = useState<LocationResponse[]>([])
+  const [mapLocations, setMapLocations] = useState<LocationResponse[]>([])
+  const [userLocations, setUserLocations] = useState<LocationResponse[]>([])
   const [status, setStatus] = useState<UserStatus>("loading")
   const [tx, setTx] = useState<TxState>(defaultTxState)
   const [error, setError] = useState<string | null>(null);
-  const { getAccessToken, authenticated: privyAuthenticated, ready: privyReady, login: privyLogin, logout: privyLogout, user: privyUser } = usePrivy();
-  const { wallets: privyWallets, ready: walletsReady } = useWallets();
+  const {
+      getAccessToken,
+      authenticated: privyAuthenticated,
+      ready: privyReady,
+      login: privyLogin,
+      logout: privyLogout,
+      user: privyUser
+  } = usePrivy();
+  const {
+    wallets: privyWallets,
+    ready: walletsReady
+  } = useWallets();
 
 
 
   useEffect(() => {
     if(!privyReady) return;
+    console.log("ready")
+    if(!walletsReady) return;
+    console.log("wready")
 
-    if(privyAuthenticated) {
-      if(!walletsReady) return;
-      _userLogin()
-    }
-    else {
+    if(!privyAuthenticated) {
       setStatus("unauthenticated")
+      return
     }
+
+    _userLogin()
 
   }, [privyReady, privyAuthenticated, walletsReady])
 
@@ -140,14 +156,12 @@ export default function AppProvider({ children }: { children: ReactNode }) {
         throw new Error("error posting user")
       }
       await _userResponseToUser(userResponse)
-      console.log(user)
       await _initWallets(userResponse.wallets)
     }
     catch(error) {
       await logout()
       setError("error logging in")
       console.error(error)
-      return
     }
     setStatus("authenticated")
   }
@@ -194,6 +208,11 @@ export default function AppProvider({ children }: { children: ReactNode }) {
       throw new Error("error getting wallets")
     }
     return await res.json() as WalletResponse[]
+  }
+
+  const _getMapLocations = async (): Promise<LocationResponse[]> => {
+    const res = await fetch(process.env.NEXT_PUBLIC_BACKEND_BASE_URL + "/locations")
+    return await res.json() as LocationResponse[]
   }
 
   const _postWallet = async (wallet: WalletResponse): Promise<number> => {
@@ -244,10 +263,11 @@ export default function AppProvider({ children }: { children: ReactNode }) {
           }
 
           let id = await _postWallet(extWallet)
+          extWallet.id = id
         }
 
         const eoaName = extWallet.name
-        const w = new AppWallet(privyWallet, eoaName)
+        const w = new AppWallet(privyWallet, eoaName, { id: extWallet.id || undefined })
         await w.init()
         wlts.push(w)
 
@@ -257,7 +277,8 @@ export default function AppProvider({ children }: { children: ReactNode }) {
         while(next) {
           let extSmartWallet = extWallets.find((w, n) => w.eoa_address == privyWallet.address && w.smart_index != undefined && BigInt(w.smart_index) == index)
 
-          const smartWalletName = extSmartWallet?.name || "SW-" + (i + 1) + "-" + (index + 1n).toString()
+          const prefix = extWallet.name.startsWith("EOA") ? "SW-" + (i + 1) : extWallet.name + "-SW"
+          const smartWalletName = extSmartWallet?.name || prefix + "-" + (index + 1n).toString()
           const w = new AppWallet(privyWallet, smartWalletName, {index})
           next = await w.init()
           if(next){
@@ -290,8 +311,9 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     }
   }
 
-  const updateWallet = async (id: number, name: string) => {
+  const updateWallet = async (id: number, name: string): Promise<string | null> => {
     const s = status
+    let n: string | null = null
     setStatus("loading")
     try {
       if(!user) {
@@ -306,6 +328,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
       }
 
       await _updateWallet(sWallet)
+      n = name
       await refreshWallets()
     }
     catch {
@@ -313,6 +336,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
       setError("error updating wallets")
     }
     setStatus(s)
+    return n
   }
 
   const refreshWallets = async () => {
@@ -328,6 +352,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
   }
 
   const login = async () => {
+    console.log("login", privyReady, privyAuthenticated)
     if(!privyReady) {
       setError("privy not ready")
       return
@@ -387,13 +412,14 @@ export default function AppProvider({ children }: { children: ReactNode }) {
           status,
           user,
           wallets,
+          userLocations,
           tx,
           updateWallet,
           refreshWallets,
           error,
           login,
           logout,
-          locations,
+          mapLocations,
           updateUser,
           approveMerchantStatus,
           rejectMerchantStatus,
