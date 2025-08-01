@@ -9,55 +9,35 @@ import { mockMerchants, defaultLocation } from "@/data/mock-merchants"
 import { mockGoogleMerchants } from "@/data/mock-google-merchants"
 import type { Merchant, UserLocation } from "@/types/merchant"
 import { useApp } from "@/context/AppProvider"
+import { useLocation } from "@/context/LocationProvider"
 
 
-export default function MerchantMapPage() {
+export default function LocationMapPage() {
   const [activeTab, setActiveTab] = useState("map")
-  const [selectedMerchantType, setSelectedMerchantType] = useState("all")
-  const [selectedMerchant, setSelectedMerchant] = useState<Merchant | null>(null)
+  const [selectedLocationType, setSelectedLocationType] = useState("all")
+  const [selectedLocation, setSelectedLocation] = useState<Location | null>(null)
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [userLocation, setUserLocation] = useState<UserLocation>(defaultLocation)
-  const [merchants, setMerchants] = useState<Merchant[]>([])
-  const { status } = useApp();
+  const { status } = useApp()
+  const ctx = useLocation()
 
   useEffect(() => {
-    loadMerchantData()
+    ctx.getMapLocations()
   }, [])
 
 
-  const handleSelectMerchant = (merchant: Merchant) => {
-    setSelectedMerchant(merchant)
+  const handleSelectLocation = (location: Location) => {
+    setSelectedLocation(location)
     setIsModalOpen(true)
   }
 
   const handleCloseModal = () => {
     setIsModalOpen(false)
-    setSelectedMerchant(null)
+    setSelectedLocation(null)
   }
 
-
-  async function loadMerchantData() {
-    let requests = []
-    for (const merchant of mockGoogleMerchants) {
-      const res = fetch(`https://places.googleapis.com/v1/places/${merchant.google_id}?fields=*&key=AIzaSyDushyc7TgeFyIlxbqiujHdydWDoVoHwNQ`);
-      requests.push(res)
-
-    }
-    requests = await Promise.all(requests)
-    let newMerchants: Merchant[] = []
-    for (const res of requests) {
-      if (!res.ok) {
-        console.error("Failed to fetch data")
-        continue
-      }
-      const data = await res.json();
-      const tempMerchant = parseGoogleToMerchant(data)
-      newMerchants.push(tempMerchant)
-    }
-    setMerchants(newMerchants)
-  }
-
-  function parseGoogleToMerchant(place_details: any): Merchant {
+  // will use similar function later when a user goes to add a new location
+  /*function parseGoogleToMerchant(place_details: any): Merchant {
     const newMerchant : Merchant = {
         id: place_details?.id,
         name: place_details?.displayName?.text,
@@ -87,6 +67,7 @@ export default function MerchantMapPage() {
     }
     return newMerchant
   }
+  */
 
   if (status === "loading") {
     return (
@@ -99,8 +80,8 @@ export default function MerchantMapPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-3xl font-bold text-black dark:text-white">Merchant Map</h1>
-        <p className="text-gray-600 dark:text-gray-400 mt-1">Find merchants that accept SFLuv in your area</p>
+        <h1 className="text-3xl font-bold text-black dark:text-white">Location Map</h1>
+        <p className="text-gray-600 dark:text-gray-400 mt-1">Find locations that accept SFLuv in your area</p>
       </div>
 
       <Tabs defaultValue="map" value={activeTab} onValueChange={setActiveTab} className="w-full">
@@ -114,7 +95,7 @@ export default function MerchantMapPage() {
         </TabsList>
         <TabsContent value="map">
           <MapView
-            merchants={merchants}
+            merchants={ctx.mapLocations}
             selectedMerchantType={selectedMerchantType}
             setSelectedMerchantType={setSelectedMerchantType}
             onSelectMerchant={handleSelectMerchant}
