@@ -65,6 +65,7 @@ func AddLocationRoutes(r *chi.Mux, s *handlers.AppService) {
 	r.Post("/locations", s.AddLocation)
 	r.Get("/locations/{id}", s.GetLocation)
 	r.Get("/locations", s.GetLocations)
+	r.Get("/locations/user", s.GetLocationsByUser)
 	r.Put("/locations/{id}", s.UpdateLocation)
 }
 
