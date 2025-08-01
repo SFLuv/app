@@ -46,11 +46,8 @@ export function WalletBalanceCard({ wallet, balance, showBalance }: WalletBalanc
         <div className="space-y-3 sm:space-y-4">
           <div>
             <p className="text-2xl sm:text-3xl font-bold leading-tight">
-              {showBalance && balance ? `${balance} ${SYMBOL}` : `•••• ${SYMBOL}`}
+              {showBalance && balance !== null ? `${balance} ${SYMBOL}` : `•••• ${SYMBOL}`}
             </p>
-            <div className="flex items-center gap-2 mt-2">
-              <span className="text-xs sm:text-sm text-muted-foreground">24h</span>
-            </div>
           </div>
 
           <div className="grid grid-cols-2 gap-3 sm:gap-4 pt-3 sm:pt-4 border-t">
