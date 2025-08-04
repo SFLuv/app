@@ -58,6 +58,30 @@ func (a *AppDB) GetLocation(id uint64) (*structs.Location, error) {
 	if err != nil {
 		return nil, err
 	}
+	hours := [][2]string{}
+	opening_time := ""
+	closing_time := ""
+	rows, err := a.db.Query(context.Background(), `
+		SELECT
+			weekday,
+			open_time,
+			close_time,
+		FROM location_hours
+		WHERE location_id = $1
+		ORDER BY weekday;
+	`, id)
+
+	for rows.Next() {
+		err = rows.Scan(
+			&opening_time,
+			&closing_time,
+		)
+		if err != nil {
+			return nil, err
+		}
+		hour_pair := [2]string{opening_time, closing_time}
+		hours = append(hours, hour_pair)
+	}
 
 	return &location, nil
 }
@@ -125,6 +149,39 @@ func (s *AppDB) GetLocations(r *structs.LocationsPageRequest) ([]*structs.Locati
 			return nil, fmt.Errorf("error scanning location row: %w", err)
 		}
 
+		hours := [][2]string{}
+		opening_time := ""
+		closing_time := ""
+		rows2, err2 := s.db.Query(context.Background(), `
+			SELECT
+				weekday,
+				open_time,
+				close_time,
+			FROM location_hours
+			WHERE location_id = $1
+			ORDER BY weekday;
+		`, location.ID)
+
+		if err2 != nil {
+			continue
+		}
+		for rows2.Next() {
+			err2 = rows.Scan(
+				&opening_time,
+				&closing_time,
+			)
+			if err2 != nil {
+				break
+			}
+			hour_pair := [2]string{opening_time, closing_time}
+			hours = append(hours, hour_pair)
+
+		}
+
+		if err2 != nil {
+			continue
+		}
+		location.OpeningHours = hours
 		locations = append(locations, &location)
 	}
 
