@@ -18,7 +18,7 @@ import { Label } from "@/components/ui/label"
 
 export default function WalletsPage() {
   const router = useRouter()
-  const { wallets, status } = useApp()
+  const { wallets, status, walletsStatus } = useApp()
   const [showEoas, setShowEoas] = useState<boolean>(false)
 
   useEffect(() => {
@@ -79,7 +79,7 @@ export default function WalletsPage() {
     console.log("Disconnecting wallet:", wallet.address)
   }
 
-  if (status === "loading") {
+  if (status === "loading" || walletsStatus === "loading") {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-[#eb6c6c]"></div>

@@ -18,6 +18,7 @@ import { UserResponse, GetUserResponse, WalletResponse, LocationResponse } from 
 
 // const mockUser: User = { id: "user3", name: "Bob Johnson", email: "bob@example.com", isMerchant: true, isAdmin: false, isOrganizer: false }
 export type UserStatus = "loading" | "authenticated" | "unauthenticated"
+export type WalletsStatus = "loading" | "available" | "unavailable"
 export type MerchantApprovalStatus = "pending" | "approved" | "rejected" | null
 
 
@@ -60,18 +61,19 @@ interface AppContextType {
   // Authentication
   status: UserStatus;
   user: User | null;
-  userLocations: LocationResponse[]
+  userLocations: Location[]
   login: () => Promise<void>;
   logout: () => Promise<void>;
 
   // Web3 Functionality
   wallets: AppWallet[];
+  walletsStatus: WalletsStatus
   tx: TxState;
   updateWallet: (id: number, name: string) => Promise<string | null>
   refreshWallets: () => Promise<void>
 
   // App Functionality
-  mapLocations: LocationResponse[]
+  mapLocations: Location[]
   updateUser: (data: Partial<User>) => void
   approveMerchantStatus: () => void
   rejectMerchantStatus: () => void
@@ -91,8 +93,9 @@ const AppContext = createContext<AppContextType | null>(null);
 export default function AppProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [wallets, setWallets] = useState<AppWallet[]>([]);
-  const [mapLocations, setMapLocations] = useState<LocationResponse[]>([])
-  const [userLocations, setUserLocations] = useState<LocationResponse[]>([])
+  const [walletsStatus, setWalletsStatus] = useState<WalletsStatus>("loading")
+  const [mapLocations, setMapLocations] = useState<Location[]>([])
+  const [userLocations, setUserLocations] = useState<Location[]>([])
   const [status, setStatus] = useState<UserStatus>("loading")
   const [tx, setTx] = useState<TxState>(defaultTxState)
   const [error, setError] = useState<string | null>(null);
@@ -145,7 +148,9 @@ export default function AppProvider({ children }: { children: ReactNode }) {
 
   const _userLogin = async () => {
     let userResponse: GetUserResponse | null
+
     setStatus("loading")
+
     try {
       userResponse = await _getUser()
       if(userResponse === null) {
@@ -155,21 +160,24 @@ export default function AppProvider({ children }: { children: ReactNode }) {
       if(userResponse === null) {
         throw new Error("error posting user")
       }
+
       await _userResponseToUser(userResponse)
       await _initWallets(userResponse.wallets)
+
+      setStatus("authenticated")
     }
     catch(error) {
       await logout()
       setError("error logging in")
       console.error(error)
     }
-    setStatus("authenticated")
   }
 
   const _resetAppState = async () => {
     setUser(null)
     setWallets([])
     setStatus("unauthenticated")
+    setWalletsStatus("unavailable")
     setError(null)
   }
 
@@ -236,6 +244,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
   }
 
   const _initWallets = async (extWallets?: WalletResponse[]) => {
+    setWalletsStatus("loading")
     try {
       if(!privyUser?.id) {
         throw new Error("user not authenticated")
@@ -299,18 +308,20 @@ export default function AppProvider({ children }: { children: ReactNode }) {
       }
 
       setWallets(wlts)
+      setWalletsStatus("available")
       console.log(wlts)
     }
     catch(error) {
       console.error(error)
+      setWalletsStatus("unavailable")
       throw new Error("error initializing wallets")
     }
   }
 
   const updateWallet = async (id: number, name: string): Promise<string | null> => {
-    const s = status
+    const s = walletsStatus
     let n: string | null = null
-    setStatus("loading")
+    setWalletsStatus("loading")
     try {
       if(!user) {
         throw new Error("no user logged in")
@@ -331,20 +342,20 @@ export default function AppProvider({ children }: { children: ReactNode }) {
       console.error("error updating wallets")
       setError("error updating wallets")
     }
-    setStatus(s)
+    setWalletsStatus(s)
     return n
   }
 
   const refreshWallets = async () => {
-    const s = status
-    setStatus("loading")
+    const s = walletsStatus
+    setWalletsStatus("loading")
     try {
       await _initWallets()
     }
     catch {
       setError("error updating wallets")
     }
-    setStatus(s)
+    setWalletsStatus(s)
   }
 
   const login = async () => {
@@ -408,6 +419,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
           status,
           user,
           wallets,
+          walletsStatus,
           userLocations,
           tx,
           updateWallet,

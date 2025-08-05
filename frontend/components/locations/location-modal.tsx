@@ -7,18 +7,18 @@ import { Button } from "@/components/ui/button"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Badge } from "@/components/ui/badge"
 import { Star, MapPin, Phone, Mail, Globe, ExternalLink } from "lucide-react"
-import type { Merchant } from "@/types/merchant"
+import { Location } from "@/types/location"
 
-interface MerchantModalProps {
-  merchant: Merchant | null
+interface LocationModalProps {
+  location: Location | null
   isOpen: boolean
   onClose: () => void
 }
 
-export function MerchantModal({ merchant, isOpen, onClose }: MerchantModalProps) {
+export function LocationModal({ location, isOpen, onClose }: LocationModalProps) {
   const [activeTab, setActiveTab] = useState("info")
 
-  if (!merchant) return null
+  if (!location) return null
 
   const renderStars = (rating: number) => {
     return Array(5)
@@ -40,21 +40,21 @@ export function MerchantModal({ merchant, isOpen, onClose }: MerchantModalProps)
     <Dialog open={isOpen} onOpenChange={onClose}>
       <DialogContent className="sm:max-w-[600px] max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle className="text-2xl text-black dark:text-white">{merchant.name}</DialogTitle>
-          <DialogDescription className="flex items-center gap-2 sr-only">{merchant.type.charAt(0).toUpperCase() + merchant.type.slice(1)}</DialogDescription>
+          <DialogTitle className="text-2xl text-black dark:text-white">{location.name}</DialogTitle>
+          <DialogDescription className="flex items-center gap-2 sr-only">{location.type.charAt(0).toUpperCase() + location.type.slice(1)}</DialogDescription>
             <Badge variant="outline" className="bg-secondary text-black dark:text-white">
-            {merchant.type.charAt(0).toUpperCase() + merchant.type.slice(1)}
+            {location.type.charAt(0).toUpperCase() + location.type.slice(1)}
             </Badge>
             <div className="flex items-center ml-2">
-              {renderStars(merchant.rating)}
-              <span className="ml-1 text-sm text-gray-600 dark:text-gray-400">{merchant.rating.toFixed(1)}</span>
+              {renderStars(location.rating)}
+              <span className="ml-1 text-sm text-gray-600 dark:text-gray-400">{location.rating.toFixed(1)}</span>
             </div>
         </DialogHeader>
 
         <div className="relative h-64 w-full my-4">
           <Image
-            src={merchant.imageUrl || "/placeholder.svg?height=300&width=600"}
-            alt={merchant.name}
+            src={location.image_url || "/placeholder.svg?height=300&width=600"}
+            alt={location.name}
             fill
             className="object-cover rounded-md"
           />
@@ -68,21 +68,21 @@ export function MerchantModal({ merchant, isOpen, onClose }: MerchantModalProps)
           </TabsList>
 
           <TabsContent value="info" className="space-y-4">
-            <p className="text-gray-700 dark:text-gray-300">{merchant.description}</p>
+            <p className="text-gray-700 dark:text-gray-300">{location.description}</p>
 
             <div className="flex items-start gap-2">
               <MapPin className="h-5 w-5 text-[#eb6c6c] mt-0.5" />
               <div>
-                <p className="text-gray-700 dark:text-gray-300">{merchant.address.street}</p>
+                <p className="text-gray-700 dark:text-gray-300">{location.street}</p>
                 <p className="text-gray-700 dark:text-gray-300">
-                  {merchant.address.city}, {merchant.address.state} {merchant.address.zip}
+                  {location.city}, {location.state} {location.zip}
                 </p>
                 <a
                   href={getGoogleMapsUrl(
-                    merchant.address.street,
-                    merchant.address.city,
-                    merchant.address.state,
-                    merchant.address.zip,
+                    location.street,
+                    location.city,
+                    location.state,
+                    location.zip,
                   )}
                   target="_blank"
                   rel="noopener noreferrer"
@@ -102,7 +102,7 @@ export function MerchantModal({ merchant, isOpen, onClose }: MerchantModalProps)
           <TabsContent value="hours" className="space-y-4">
             <h3 className="font-medium text-black dark:text-white">Hours of Operation</h3>
             <div className="space-y-2">
-              {merchant.opening_hours?.map(item => <li>{item}</li>)}
+              {location.opening_hours?.map(item => <li>{item}</li>)}
             </div>
           </TabsContent>
 
@@ -110,28 +110,28 @@ export function MerchantModal({ merchant, isOpen, onClose }: MerchantModalProps)
             <div className="space-y-3">
               <div className="flex items-center gap-2">
                 <Phone className="h-5 w-5 text-[#eb6c6c]" />
-                <a href={`tel:${merchant.contactInfo.phone}`} className="text-gray-700 dark:text-gray-300">
-                  {merchant.contactInfo.phone}
+                <a href={`tel:${location.phone}`} className="text-gray-700 dark:text-gray-300">
+                  {location.phone}
                 </a>
               </div>
 
               <div className="flex items-center gap-2">
                 <Mail className="h-5 w-5 text-[#eb6c6c]" />
-                <a href={`mailto:${merchant.contactInfo.email}`} className="text-gray-700 dark:text-gray-300">
-                  {merchant.contactInfo.email}
+                <a href={`mailto:${location.email}`} className="text-gray-700 dark:text-gray-300">
+                  {location.email}
                 </a>
               </div>
 
-              {merchant.contactInfo.website && (
+              {location.website && (
                 <div className="flex items-center gap-2">
                   <Globe className="h-5 w-5 text-[#eb6c6c]" />
                   <a
-                    href={`https://${merchant.contactInfo.website}`}
+                    href={`https://${location.website}`}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="text-gray-700 dark:text-gray-300"
                   >
-                    {merchant.contactInfo.website}
+                    {location.website}
                   </a>
                 </div>
               )}
@@ -152,10 +152,10 @@ export function MerchantModal({ merchant, isOpen, onClose }: MerchantModalProps)
             onClick={() =>
               window.open(
                 getGoogleMapsUrl(
-                  merchant.address.street,
-                  merchant.address.city,
-                  merchant.address.state,
-                  merchant.address.zip,
+                  location.street,
+                  location.city,
+                  location.state,
+                  location.zip,
                 ),
                 "_blank",
               )

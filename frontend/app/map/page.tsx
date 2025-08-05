@@ -2,14 +2,15 @@
 
 import { useEffect, useState } from "react"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { MapView } from "@/components/merchants/map-view"
-import { ListView } from "@/components/merchants/list-view"
-import { MerchantModal } from "@/components/merchants/merchant-modal"
+import { MapView } from "@/components/locations/map-view"
+import { ListView } from "@/components/locations/list-view"
+import { LocationModal } from "@/components/locations/location-modal"
 import { mockMerchants, defaultLocation } from "@/data/mock-merchants"
 import { mockGoogleMerchants } from "@/data/mock-google-merchants"
 import type { Merchant, UserLocation } from "@/types/merchant"
 import { useApp } from "@/context/AppProvider"
 import { useLocation } from "@/context/LocationProvider"
+import { Location } from "@/types/location"
 
 
 export default function LocationMapPage() {
@@ -19,10 +20,10 @@ export default function LocationMapPage() {
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [userLocation, setUserLocation] = useState<UserLocation>(defaultLocation)
   const { status } = useApp()
-  const ctx = useLocation()
+  const { getMapLocations, mapLocations } = useLocation()
 
   useEffect(() => {
-    ctx.getMapLocations()
+    getMapLocations()
   }, [])
 
 
@@ -95,27 +96,27 @@ export default function LocationMapPage() {
         </TabsList>
         <TabsContent value="map">
           <MapView
-            merchants={ctx.mapLocations}
-            selectedMerchantType={selectedMerchantType}
-            setSelectedMerchantType={setSelectedMerchantType}
-            onSelectMerchant={handleSelectMerchant}
+            locations={mapLocations}
+            selectedLocationType={selectedLocationType}
+            setSelectedLocationType={setSelectedLocationType}
+            onSelectLocation={handleSelectLocation}
             userLocation={userLocation}
             setUserLocation={setUserLocation}
           />
         </TabsContent>
         <TabsContent value="list">
           <ListView
-            merchants={merchants}
-            selectedMerchantType={selectedMerchantType}
-            setSelectedMerchantType={setSelectedMerchantType}
-            onSelectMerchant={handleSelectMerchant}
+            locations={mapLocations}
+            selectedLocationType={selectedLocationType}
+            setSelectedLocationType={setSelectedLocationType}
+            onSelectLocation={handleSelectLocation}
             userLocation={userLocation}
             setUserLocation={setUserLocation}
           />
         </TabsContent>
       </Tabs>
 
-      <MerchantModal merchant={selectedMerchant} isOpen={isModalOpen} onClose={handleCloseModal} />
+      <LocationModal location={selectedLocation} isOpen={isModalOpen} onClose={handleCloseModal} />
     </div>
   )
   }

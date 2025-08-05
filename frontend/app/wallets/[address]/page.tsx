@@ -22,7 +22,7 @@ export default function WalletDetailsPage() {
   const params = useParams()
   const router = useRouter()
   const walletAddress = params.address as string
-  const { wallets, status, updateWallet } = useApp()
+  const { wallets, status, walletsStatus, updateWallet } = useApp()
 
   useEffect(() => {
       if(status === "unauthenticated") {
@@ -134,7 +134,7 @@ export default function WalletDetailsPage() {
     (tx) => tx.fromAddress === wallet?.address || tx.toAddress === wallet?.address,
   )
 
-  if (status === "loading") {
+  if (status === "loading" || walletsStatus === "loading") {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-[#eb6c6c]"></div>
