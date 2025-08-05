@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useCallback, useRef } from "react"
+import { useState, useEffect, useCallback, useRef, useMemo } from "react"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -8,32 +8,35 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Search, MapPin } from "lucide-react"
 import type { Merchant, UserLocation } from "@/types/merchant"
 import type { GoogleMerchant } from "@/types/google-merchant"
-import { merchantTypes, defaultLocation } from "@/data/mock-merchants"
+import { defaultLocation, locationTypes } from "@/data/mock-merchants"
 import {AdvancedMarker, APIProvider, Map, MapCameraChangedEvent, Pin, useMap} from '@vis.gl/react-google-maps'
 import type {Marker} from '@googlemaps/markerclusterer';
+import { useLocation } from "@/context/LocationProvider"
+import { Location } from "@/types/location"
 
 type Poi ={ key: string, location: google.maps.LatLngLiteral }
 interface MapViewProps {
-  merchants: Merchant[]
-  selectedMerchantType: string
-  setSelectedMerchantType: (type: string) => void
-  onSelectMerchant: (merchant: Merchant) => void
+  locations: Location[]
+  selectedLocationType: string
+  setSelectedLocationType: (type: string) => void
+  onSelectLocation: (location: Location) => void
   userLocation: UserLocation
-  setUserLocation: (location: UserLocation) => void
+  setUserLocation: (userlocation: UserLocation) => void
 }
 
 export function MapView({
-  merchants,
-  selectedMerchantType,
-  setSelectedMerchantType,
-  onSelectMerchant,
+  locations,
+  selectedLocationType,
+  setSelectedLocationType,
+  onSelectLocation,
   userLocation,
   setUserLocation,
 }: MapViewProps) {
   const [locationInput, setLocationInput] = useState(userLocation.address || "")
   const [isMapLoaded, setIsMapLoaded] = useState(false)
+  const { mapLocationsStatus } = useLocation();
 
-  const PoiMarkers = (props: {merchants: Merchant[]}) => {
+  const PoiMarkers = (props: {locations: Location[]}) => {
     const [markers, setMarkers] = useState<{[key: string]: Marker}>({});
     const map = useMap();
 
@@ -54,18 +57,18 @@ export function MapView({
 
     return (
       <>
-        {props.merchants.map( (currentMerchant: Merchant) => (
+        {props.locations.map( (currentLocation: Location) => (
           <AdvancedMarker
-            key={currentMerchant.name}
+            key={currentLocation.name}
             position={
               {
-              lat: currentMerchant.address.coordinates.lat,
-              lng: currentMerchant.address.coordinates.lng
+              lat: currentLocation.lat,
+              lng: currentLocation.lng
               }
             }
-            ref={(marker: Marker | null) => setMarkerRef(marker, currentMerchant.name)}
+            ref={(marker: Marker | null) => setMarkerRef(marker, currentLocation.name)}
             clickable={true}
-            onClick={() => onSelectMerchant(currentMerchant)}
+            onClick={() => onSelectLocation(currentLocation)}
             >
             <Pin background={'#eb6c6c'} glyphColor={'#000'} borderColor={'#000'} />
           </AdvancedMarker>
@@ -75,9 +78,13 @@ export function MapView({
   };
 
   // Filter merchants by type
-  const filteredMerchants = merchants.filter(
-    (merchant) => selectedMerchantType === "all" || merchant.type === selectedMerchantType,
-  )
+  const filteredLocations = useMemo(() => {
+    console.log(locations)
+    console.log(Array.isArray(locations))
+    return locations?.filter(
+      (location) => selectedLocationType === "all" || location.type === selectedLocationType,
+    )
+  }, [locations])
 
   // Initialize Google Maps
   useEffect(() => {
@@ -94,6 +101,15 @@ export function MapView({
   // Handle location search
   const handleLocationSearch = () => {
   }
+
+  if (mapLocationsStatus === "loading") {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-[#eb6c6c]"></div>
+      </div>
+    )
+  }
+
 
   return (
     <div className="space-y-4">
@@ -112,12 +128,12 @@ export function MapView({
           <MapPin className="h-4 w-4 mr-2" />
           Go to Location
         </Button>
-        <Select value={selectedMerchantType} onValueChange={setSelectedMerchantType}>
+        <Select value={selectedLocationType} onValueChange={setSelectedLocationType}>
           <SelectTrigger className="w-[180px] text-black dark:text-white bg-secondary">
             <SelectValue placeholder="Filter by type" />
           </SelectTrigger>
           <SelectContent>
-            {merchantTypes.map((type) => (
+            {locationTypes.map((type) => (
               <SelectItem key={type.value} value={type.value}>
                 {type.label}
               </SelectItem>
@@ -142,7 +158,7 @@ export function MapView({
                       mapId='5d823aa5e32225a021e19266'
                     >
                   </Map>
-                  <PoiMarkers merchants={merchants} />
+                  <PoiMarkers locations={locations} />
                 </APIProvider>
             )}
           </div>
@@ -150,9 +166,9 @@ export function MapView({
       </Card>
 
       <div className="text-sm text-gray-500 dark:text-gray-400">
-        Showing {filteredMerchants.length} merchants
-        {selectedMerchantType !== "all" &&
-          ` of type: ${merchantTypes.find((t) => t.value === selectedMerchantType)?.label}`}
+        Showing {filteredLocations.length} merchants
+        {selectedLocationType !== "all" &&
+          ` of type: ${locationTypes.find((t) => t.value === selectedLocationType)?.label}`}
       </div>
     </div>
   )

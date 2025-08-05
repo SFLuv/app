@@ -1,27 +1,36 @@
 
 import { LocationResponse } from "@/types/server";
 import { User } from "./AppProvider";
-import { createContext, ReactNode, useContext, useState } from "react";
+import { createContext, ReactNode, useContext, useEffect, useState } from "react";
+import { Location } from "@/types/location";
+import { mockLocations } from "@/data/mock-locations";
+
+export type LocationsStatus = "loading" | "available" | "unavailable"
 
 interface LocationContextType {
-    mapLocations: LocationResponse[]
-    getMapLocations: () => Promise<LocationResponse[]>
-    getLocationById: (id: number) => Promise<LocationResponse>
-    updateLocation: (location: LocationResponse) => void
-    addLocation: (location: LocationResponse) => void
+    mapLocations: Location[]
+    mapLocationsStatus: LocationsStatus
+    getMapLocations: () => Promise<void>
+    updateLocation: (location: Location) => Promise<void>
+    addLocation: (location: Location) => Promise<void>
 }
 
 const LocationContext = createContext<LocationContextType | null>(null)
 
 export default function LocationProvider({ children }: { children: ReactNode }) {
-    const [mapLocations, setMapLocations] = useState<LocationResponse[]>([])
+    const [mapLocations, setMapLocations] = useState<Location[]>([])
+    const [mapLocationsStatus, setMapLocationsStatus] = useState<LocationsStatus>("loading")
 
-    const getMapLocations = async (): Promise<LocationResponse[]> => {
+
+    const _getMapLocations = async (): Promise<LocationResponse> => {
         const res = await fetch(process.env.NEXT_PUBLIC_BACKEND_BASE_URL + "/locations")
-        return await res.json() as LocationResponse[]
-      }
+        if(res.status != 200) {
+            throw new Error("error getting locations")
+        }
+        return await res.json() as LocationResponse
+    }
 
-    const updateLocation = async (location: LocationResponse) => {
+    const _updateLocation = async (location: Location) => {
         const res = await fetch(process.env.NEXT_PUBLIC_BACKEND_BASE_URL + "/locations", {
             method: "PUT",
             headers: {
@@ -30,9 +39,21 @@ export default function LocationProvider({ children }: { children: ReactNode }) 
             body: JSON.stringify({location})
         }
         )
+        if(res.status != 201) {
+            throw new Error("error updating location")
+        }
       }
 
-    const addLocation = async (location: LocationResponse) => {
+    const _getLocationById = async (id: number): Promise<Location> => {
+        const res = await fetch(process.env.NEXT_PUBLIC_BACKEND_BASE_URL + "/locations/{id}")
+        if(res.status != 200) {
+            throw new Error("error getting location by id")
+        }
+        return await res.json() as Location
+    }
+
+
+    const _addLocation = async (location: Location) => {
         const res = await fetch(process.env.NEXT_PUBLIC_BACKEND_BASE_URL + "/locations", {
             method: "POST",
             headers: {
@@ -40,19 +61,59 @@ export default function LocationProvider({ children }: { children: ReactNode }) 
                 },
             body: JSON.stringify({location})
         })
+        if(res.status != 201) {
+            throw new Error("error adding new location")
+        }
       }
 
-    const getLocationById = async (id: number): Promise<LocationResponse> => {
-        const res = await fetch(process.env.NEXT_PUBLIC_BACKEND_BASE_URL + "/locations/{id}")
-        return await res.json() as LocationResponse
+    const addLocation = async (location: Location) => {
+        setMapLocationsStatus("loading")
+        try {
+            await _addLocation(location)
+            const l = await _getMapLocations()
+            setMapLocations(l.locations)
+            setMapLocationsStatus("available")
+        }
+        catch {
+            setMapLocationsStatus("unavailable")
+            console.error("error adding new location")
+        }
+      }
+
+
+    const getMapLocations = async () => {
+        setMapLocationsStatus("loading")
+        try {
+            //const l = await _getMapLocations()
+            //setMapLocations(l.locations)
+            setMapLocations(mockLocations)
+            setMapLocationsStatus("available")
+        }
+        catch {
+            setMapLocationsStatus("unavailable")
+            console.error("error getting locations")
+        }
     }
 
+    const updateLocation = async (location: Location) => {
+        setMapLocationsStatus("loading")
+        try {
+            await _updateLocation(location)
+            const l = await _getMapLocations()
+            setMapLocations(l.locations)
+            setMapLocationsStatus("available")
+        }
+        catch {
+            setMapLocationsStatus("unavailable")
+            console.error("error updating locations")
+        }
+    }
 
     return (
         <LocationContext.Provider
         value ={{
             mapLocations,
-            getLocationById,
+            mapLocationsStatus,
             getMapLocations,
             updateLocation,
             addLocation

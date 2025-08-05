@@ -1,7 +1,7 @@
 export interface Location {
   id: number;
-  googleId: string;
-  ownerId: string;
+  google_id: string;
+  owner_id: string;
   name: string;
   description: string;
   type: string;
@@ -15,7 +15,8 @@ export interface Location {
   phone: string;
   email: string;
   website: string;
-  imageUrl: string;
+  image_url: string;
   rating: number;
-  mapsPage: string;
+  maps_page: string;
+  opening_hours: []
 }

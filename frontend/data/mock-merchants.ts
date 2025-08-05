@@ -423,7 +423,7 @@ export const mockMerchants: Merchant[] = [
   },
 ]
 
-export const merchantTypes = [
+export const locationTypes = [
   { value: "all", label: "All Types" },
   { value: "restaurant", label: "Restaurants" },
   { value: "cafe", label: "Cafés" },

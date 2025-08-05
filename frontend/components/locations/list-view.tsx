@@ -9,25 +9,27 @@ import { Search, MapPin, Star, Phone, Clock } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import Image from "next/image"
 import type { Merchant, UserLocation } from "@/types/merchant"
-import { merchantTypes } from "@/data/mock-merchants"
 import { calculateDistance, formatDistance } from "@/utils/location"
 import { Pagination } from "@/components/opportunities/pagination"
 import { merchantTypeLabels } from "@/types/merchant"
+import { locationTypes } from "@/data/mock-merchants"
+import { useLocation } from "@/context/LocationProvider"
+import { Location } from "@/types/location"
 
 interface ListViewProps {
-  merchants: Merchant[]
-  selectedMerchantType: string
-  setSelectedMerchantType: (type: string) => void
-  onSelectMerchant: (merchant: Merchant) => void
+  locations: Location[]
+  selectedLocationType: string
+  setSelectedLocationType: (type: string) => void
+  onSelectLocation: (location: Location) => void
   userLocation: UserLocation
-  setUserLocation: (location: UserLocation) => void
+  setUserLocation: (userlocation: UserLocation) => void
 }
 
 export function ListView({
-  merchants,
-  selectedMerchantType,
-  setSelectedMerchantType,
-  onSelectMerchant,
+  locations,
+  selectedLocationType,
+  setSelectedLocationType,
+  onSelectLocation,
   userLocation,
   setUserLocation,
 }: ListViewProps) {
@@ -36,30 +38,31 @@ export function ListView({
   const [searchQuery, setSearchQuery] = useState("")
   const ITEMS_PER_PAGE = 5
 
+  const { mapLocationsStatus } = useLocation();
+
   // Filter merchants by type and search query
-  const filteredMerchants = merchants
-    .filter(
-      (merchant) =>
-        (selectedMerchantType === "all" || merchant.type === selectedMerchantType) &&
+  const filteredLocations = locations?.filter(
+      (location) =>
+        (selectedLocationType === "all" || location.type === selectedLocationType) &&
         (searchQuery === "" ||
-          merchant.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-          merchant.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
-          merchant.address.city.toLowerCase().includes(searchQuery.toLowerCase())),
+          location.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+          location.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
+          location.city.toLowerCase().includes(searchQuery.toLowerCase())),
     )
-    .map((merchant) => ({
-      ...merchant,
+    .map((location) => ({
+      ...location,
       distance: calculateDistance(
         userLocation.lat,
         userLocation.lng,
-        merchant.address.coordinates.lat,
-        merchant.address.coordinates.lng,
+        location.lat,
+        location.lng,
       ),
     }))
     .sort((a, b) => a.distance - b.distance)
 
   // Calculate pagination
-  const totalPages = Math.ceil(filteredMerchants.length / ITEMS_PER_PAGE)
-  const paginatedMerchants = filteredMerchants.slice((currentPage - 1) * ITEMS_PER_PAGE, currentPage * ITEMS_PER_PAGE)
+  const totalPages = Math.ceil(filteredLocations.length / ITEMS_PER_PAGE)
+  const paginatedLocations = filteredLocations.slice((currentPage - 1) * ITEMS_PER_PAGE, currentPage * ITEMS_PER_PAGE)
 
   // Handle location search
   const handleLocationSearch = () => {
@@ -91,6 +94,14 @@ export function ListView({
       ))
   }
 
+  if (mapLocationsStatus === "loading") {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-[#eb6c6c]"></div>
+      </div>
+    )
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex flex-col sm:flex-row gap-4">
@@ -116,12 +127,12 @@ export function ListView({
         <Button onClick={handleLocationSearch} className="bg-[#eb6c6c] hover:bg-[#d55c5c]">
           Update Location
         </Button>
-        <Select value={selectedMerchantType} onValueChange={setSelectedMerchantType}>
+        <Select value={selectedLocationType} onValueChange={setSelectedLocationType}>
           <SelectTrigger className="w-[180px] text-black dark:text-white bg-secondary">
             <SelectValue placeholder="Filter by type" />
           </SelectTrigger>
           <SelectContent>
-            {merchantTypes.map((type) => (
+            {locationTypes.map((type) => (
               <SelectItem key={type.value} value={type.value}>
                 {type.label}
               </SelectItem>
@@ -131,25 +142,25 @@ export function ListView({
       </div>
 
       <div className="space-y-4">
-        {paginatedMerchants.length === 0 ? (
+        {paginatedLocations.length === 0 ? (
           <div className="text-center py-12">
-            <h3 className="text-xl font-medium text-black dark:text-white">No merchants found</h3>
+            <h3 className="text-xl font-medium text-black dark:text-white">No locations found</h3>
             <p className="text-gray-600 dark:text-gray-400 mt-2">
-              Try adjusting your search or filters to find merchants
+              Try adjusting your search or filters to find locations
             </p>
           </div>
         ) : (
-          paginatedMerchants.map((merchant) => (
+          paginatedLocations.map((location) => (
             <Card
-              key={merchant.name}
+              key={location.name}
               className="overflow-hidden cursor-pointer hover:shadow-md transition-shadow"
-              onClick={() => onSelectMerchant(merchant)}
+              onClick={() => onSelectLocation(location)}
             >
               <div className="flex flex-col md:flex-row">
                 <div className="relative h-48 md:h-auto md:w-48 flex-shrink-0">
                   <Image
-                    src={merchant.imageUrl || "/placeholder.svg?height=200&width=200"}
-                    alt={merchant.name}
+                    src={location.image_url || "/placeholder.svg?height=200&width=200"}
+                    alt={location.name}
                     fill
                     className="object-cover"
                   />
@@ -159,33 +170,33 @@ export function ListView({
                     <div>
                       <div className="flex justify-between items-start">
                         <div>
-                          <h3 className="text-xl font-semibold text-black dark:text-white">{merchant.name}</h3>
+                          <h3 className="text-xl font-semibold text-black dark:text-white">{location.name}</h3>
                           <div className="flex items-center mt-1 mb-2">
                             <Badge variant="outline" className="mr-2 bg-secondary text-black dark:text-white">
-                              {merchant.type.charAt(0).toUpperCase() + merchant.type.slice(1)}
+                              {location.type.charAt(0).toUpperCase() + location.type.slice(1)}
                             </Badge>
                             <div className="flex items-center">
-                              {renderStars(merchant.rating)}
+                              {renderStars(location.rating)}
                               <span className="ml-1 text-sm text-gray-600 dark:text-gray-400">
-                                {merchant.rating.toFixed(1)}
+                                {location.rating.toFixed(1)}
                               </span>
                             </div>
                           </div>
                         </div>
-                        <Badge className="bg-[#eb6c6c]">{formatDistance(merchant.distance)}</Badge>
+                        <Badge className="bg-[#eb6c6c]">{formatDistance(location.distance)}</Badge>
                       </div>
-                      <p className="text-gray-600 dark:text-gray-300 line-clamp-2 mb-4">{merchant.description}</p>
+                      <p className="text-gray-600 dark:text-gray-300 line-clamp-2 mb-4">{location.description}</p>
                     </div>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm">
                       <div className="flex items-center text-gray-600 dark:text-gray-300">
                         <MapPin className="h-4 w-4 mr-2 text-[#eb6c6c]" />
                         <span>
-                          {merchant.address.street}, {merchant.address.city}
+                          {location.street}, {location.city}
                         </span>
                       </div>
                       <div className="flex items-center text-gray-600 dark:text-gray-300">
                         <Phone className="h-4 w-4 mr-2 text-[#eb6c6c]" />
-                        <span>{merchant.contactInfo.phone}</span>
+                        <span>{location.phone}</span>
                       </div>
                     </div>
                   </div>
@@ -203,9 +214,9 @@ export function ListView({
       )}
 
       <div className="text-sm text-gray-500 dark:text-gray-400">
-        Showing {paginatedMerchants.length} of {filteredMerchants.length} merchants
-        {selectedMerchantType !== "all" &&
-          ` of type: ${merchantTypes.find((t) => t.value === selectedMerchantType)?.label}`}
+        Showing {paginatedLocations.length} of {filteredLocations.length} merchants
+        {selectedLocationType !== "all" &&
+          ` of type: ${locationTypes.find((t) => t.value === selectedLocationType)?.label}`}
       </div>
     </div>
   )

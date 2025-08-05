@@ -1,6 +1,6 @@
- import type { LocationResponse } from "@/types/server"
+ import type { Location } from "@/types/location"
 
- export const mockLocations: LocationResponse[] = [
+ export const mockLocations: Location[] = [
   {
     id: 1,
     google_id: "ChIJQWq7yBaBhYARAW1YO8VAzB4",
@@ -20,7 +20,8 @@
     website: "https://azalinas.com",
     image_url: "/placeholder.svg?height=200&width=400",
     rating: 4.4,
-    maps_page: "https://maps.google.com/?cid=ChIJQWq7yBaBhYARAW1YO8VAzB4"
+    maps_page: "https://maps.google.com/?cid=ChIJQWq7yBaBhYARAW1YO8VAzB4",
+    opening_hours: []
   },
   {
     id: 2,
@@ -41,7 +42,8 @@
     website: "https://chambers-sf.com",
     image_url: "/placeholder.svg?height=200&width=400",
     rating: 4.3,
-    maps_page: "https://maps.google.com/?cid=ChIJ70zQuZCAhYARBOYFsIfxD6U"
+    maps_page: "https://maps.google.com/?cid=ChIJ70zQuZCAhYARBOYFsIfxD6U",
+    opening_hours: []
   },
   {
     id: 3,
@@ -62,7 +64,8 @@
     website: "https://tiltedbrim.com",
     image_url: "/placeholder.svg?height=200&width=400",
     rating: 4.6,
-    maps_page: "https://maps.google.com/?cid=ChIJ___v2JCAhYAR2ue8VZ7uLzM"
+    maps_page: "https://maps.google.com/?cid=ChIJ___v2JCAhYAR2ue8VZ7uLzM",
+    opening_hours: []
   },
   {
     id: 4,
@@ -83,7 +86,8 @@
     website: "https://versusgames.com",
     image_url: "/placeholder.svg?height=200&width=400",
     rating: 4.5,
-    maps_page: "https://maps.google.com/?cid=ChIJ41xPyYR9j4ARsMH74gIME9s"
+    maps_page: "https://maps.google.com/?cid=ChIJ41xPyYR9j4ARsMH74gIME9s",
+    opening_hours: []
   },
   {
     id: 5,
@@ -104,7 +108,8 @@
     website: "https://sfwines.com",
     image_url: "/placeholder.svg?height=200&width=400",
     rating: 4.9,
-    maps_page: "https://maps.google.com/?cid=ChIJaTgXtOx9j4ARa8FUo2zEKvE"
+    maps_page: "https://maps.google.com/?cid=ChIJaTgXtOx9j4ARa8FUo2zEKvE",
+    opening_hours: []
   },
   {
     id: 6,
@@ -125,7 +130,8 @@
     website: "https://glenparkstation.com",
     image_url: "/placeholder.svg?height=200&width=400",
     rating: 4.2,
-    maps_page: "https://maps.google.com/?cid=ChIJKVibX2N-j4ARUmTB1MrZ3Qk"
+    maps_page: "https://maps.google.com/?cid=ChIJKVibX2N-j4ARUmTB1MrZ3Qk",
+    opening_hours: []
   },
   {
     id: 7,
@@ -146,6 +152,7 @@
     website: "https://lacornetasf.com",
     image_url: "/placeholder.svg?height=200&width=400",
     rating: 4.7,
-    maps_page: "https://maps.google.com/?cid=ChIJw0OtX2N-j4ARq3b03Qa_8VI"
+    maps_page: "https://maps.google.com/?cid=ChIJw0OtX2N-j4ARq3b03Qa_8VI",
+    opening_hours: []
   }
 ]
