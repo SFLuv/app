@@ -149,9 +149,9 @@ func (s *AppDB) GetLocations(r *structs.LocationsPageRequest) ([]*structs.Locati
 			return nil, fmt.Errorf("error scanning location row: %w", err)
 		}
 
-		hours := [][2]string{}
-		opening_time := ""
-		closing_time := ""
+		hours := [][2]float64{}
+		opening_time := float64(100)
+		closing_time := float64(100)
 		rows2, err2 := s.db.Query(context.Background(), `
 			SELECT
 				weekday,
@@ -173,7 +173,7 @@ func (s *AppDB) GetLocations(r *structs.LocationsPageRequest) ([]*structs.Locati
 			if err2 != nil {
 				break
 			}
-			hour_pair := [2]string{opening_time, closing_time}
+			hour_pair := [2]float64{opening_time, closing_time}
 			hours = append(hours, hour_pair)
 
 		}
@@ -230,6 +230,25 @@ func (a *AppDB) AddLocation(location *structs.Location) error {
 		location.Rating,
 		location.MapsPage,
 	)
+
+	for i, hours := range location.OpeningHours {
+		_, err := a.db.Exec(context.Background(), `
+		INSERT INTO locations (
+			location_id,
+			weekday,
+			open_time,
+			close_time
+		) VALUES ($1, $2, $3, $4,);
+		`,
+			location.OwnerID,
+			i,
+			hours[0],
+			hours[1],
+		)
+		if err != nil {
+			return fmt.Errorf("error adding location hours to hour table: %s", err)
+		}
+	}
 
 	return err
 }
