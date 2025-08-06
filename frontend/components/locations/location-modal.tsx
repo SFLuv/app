@@ -51,7 +51,7 @@ export function LocationModal({ location, isOpen, onClose }: LocationModalProps)
     };
 
     return [format(start), format(end)];
-}
+  }
 
 
   return (
@@ -120,7 +120,7 @@ export function LocationModal({ location, isOpen, onClose }: LocationModalProps)
            <TabsContent value="hours" className="space-y-4">
             <h3 className="font-medium text-black dark:text-white">Hours of Operation</h3>
             <div className="space-y-2">
-              <ul className="list-disc pl-5">
+              <ul className="list-disc pl-5" style={{listStyleType: "none"}}>
                 <li>Monday: {formatTimeRange(location.opening_hours[0])[0]} - {formatTimeRange(location.opening_hours[0])[1]}</li>
                 <li>Tuesday: {formatTimeRange(location.opening_hours[1])[0]} - {formatTimeRange(location.opening_hours[1])[1]}</li>
                 <li>Wednesday: {formatTimeRange(location.opening_hours[2])[0]} - {formatTimeRange(location.opening_hours[2])[1]}</li>
