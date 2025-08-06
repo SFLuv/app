@@ -21,7 +21,15 @@
     image_url: "/placeholder.svg?height=200&width=400",
     rating: 4.4,
     maps_page: "https://maps.google.com/?cid=ChIJQWq7yBaBhYARAW1YO8VAzB4",
-    opening_hours: []
+    opening_hours: [
+      [11.0, 20.0], // Monday
+      [11.0, 20.0],
+      [11.0, 20.0],
+      [11.0, 20.0],
+      [11.0, 21.0],
+      [12.0, 21.0],
+      [12.0, 18.0]  // Sunday
+    ]
   },
   {
     id: 2,
@@ -43,7 +51,15 @@
     image_url: "/placeholder.svg?height=200&width=400",
     rating: 4.3,
     maps_page: "https://maps.google.com/?cid=ChIJ70zQuZCAhYARBOYFsIfxD6U",
-    opening_hours: []
+    opening_hours: [
+      [17.0, 23.0], // Monday
+      [17.0, 23.0],
+      [17.0, 23.0],
+      [17.0, 23.0],
+      [17.0, 24.0],
+      [17.0, 24.0],
+      [17.0, 22.0]  // Sunday
+    ]
   },
   {
     id: 3,
@@ -65,7 +81,15 @@
     image_url: "/placeholder.svg?height=200&width=400",
     rating: 4.6,
     maps_page: "https://maps.google.com/?cid=ChIJ___v2JCAhYAR2ue8VZ7uLzM",
-    opening_hours: []
+    opening_hours: [
+      [11.0, 19.0], // Monday
+      [11.0, 19.0],
+      [11.0, 19.0],
+      [11.0, 19.0],
+      [11.0, 20.0],
+      [11.0, 20.0],
+      [12.0, 18.0]  // Sunday
+    ]
   },
   {
     id: 4,
@@ -87,7 +111,15 @@
     image_url: "/placeholder.svg?height=200&width=400",
     rating: 4.5,
     maps_page: "https://maps.google.com/?cid=ChIJ41xPyYR9j4ARsMH74gIME9s",
-    opening_hours: []
+    opening_hours: [
+      [12.0, 20.0], // Monday
+      [12.0, 20.0],
+      [12.0, 20.0],
+      [12.0, 20.0],
+      [12.0, 21.0],
+      [11.0, 22.0],
+      [11.0, 20.0]  // Sunday
+    ]
   },
   {
     id: 5,
@@ -109,7 +141,15 @@
     image_url: "/placeholder.svg?height=200&width=400",
     rating: 4.9,
     maps_page: "https://maps.google.com/?cid=ChIJaTgXtOx9j4ARa8FUo2zEKvE",
-    opening_hours: []
+    opening_hours: [
+      [11.0, 19.0], // Monday
+      [11.0, 19.0],
+      [11.0, 19.0],
+      [11.0, 19.0],
+      [11.0, 20.0],
+      [11.0, 20.0],
+      [12.0, 17.0]  // Sunday
+    ]
   },
   {
     id: 6,
@@ -131,7 +171,15 @@
     image_url: "/placeholder.svg?height=200&width=400",
     rating: 4.2,
     maps_page: "https://maps.google.com/?cid=ChIJKVibX2N-j4ARUmTB1MrZ3Qk",
-    opening_hours: []
+    opening_hours: [
+      [16.0, 24.0], // Monday
+      [16.0, 24.0],
+      [16.0, 24.0],
+      [16.0, 24.0],
+      [16.0, 2.0],  // Friday: open late
+      [14.0, 2.0],  // Saturday
+      [14.0, 24.0]  // Sunday
+    ]
   },
   {
     id: 7,
@@ -153,6 +201,14 @@
     image_url: "/placeholder.svg?height=200&width=400",
     rating: 4.7,
     maps_page: "https://maps.google.com/?cid=ChIJw0OtX2N-j4ARq3b03Qa_8VI",
-    opening_hours: []
+    opening_hours: [
+      [10.5, 21.0], // Monday
+      [10.5, 21.0],
+      [10.5, 21.0],
+      [10.5, 21.0],
+      [10.5, 22.0],
+      [10.5, 22.0],
+      [10.5, 20.0]  // Sunday
+    ]
   }
-]
+];
