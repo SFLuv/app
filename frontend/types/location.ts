@@ -18,5 +18,5 @@ export interface Location {
   image_url: string;
   rating: number;
   maps_page: string;
-  opening_hours: []
+  opening_hours: [number, number][]
 }

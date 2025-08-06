@@ -3,7 +3,7 @@ import { LocationResponse } from "@/types/server";
 import { User } from "./AppProvider";
 import { createContext, ReactNode, useContext, useEffect, useState } from "react";
 import { Location } from "@/types/location";
-import { mockLocations } from "@/data/mock-locations";
+import { mockLocations } from "@/data/mock_locations";
 
 export type LocationsStatus = "loading" | "available" | "unavailable"
 

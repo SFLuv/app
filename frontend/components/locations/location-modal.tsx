@@ -36,6 +36,24 @@ export function LocationModal({ location, isOpen, onClose }: LocationModalProps)
     return `https://www.google.com/maps/search/?api=1&query=${formattedAddress}`
   }
 
+  function formatTimeRange([start, end]: [number, number]): [string, string] {
+    const format = (time: number): string => {
+      const hours = Math.floor(time);
+      const minutesDecimal = time - hours;
+      const minutes = Math.round(minutesDecimal * 100);
+
+      const period = hours >= 12 ? "PM" : "AM";
+      const adjustedHour = hours % 12 === 0 ? 12 : hours % 12;
+
+      const paddedMinutes = minutes.toString().padStart(2, '0');
+
+      return `${adjustedHour}:${paddedMinutes} ${period}`;
+    };
+
+    return [format(start), format(end)];
+}
+
+
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
       <DialogContent className="sm:max-w-[600px] max-h-[90vh] overflow-y-auto">
@@ -99,10 +117,18 @@ export function LocationModal({ location, isOpen, onClose }: LocationModalProps)
             </div>
           </TabsContent>
 
-          <TabsContent value="hours" className="space-y-4">
+           <TabsContent value="hours" className="space-y-4">
             <h3 className="font-medium text-black dark:text-white">Hours of Operation</h3>
             <div className="space-y-2">
-              {location.opening_hours?.map(item => <li>{item}</li>)}
+              <ul className="list-disc pl-5">
+                <li>Monday: {formatTimeRange(location.opening_hours[0])[0]} - {formatTimeRange(location.opening_hours[0])[1]}</li>
+                <li>Tuesday: {formatTimeRange(location.opening_hours[1])[0]} - {formatTimeRange(location.opening_hours[1])[1]}</li>
+                <li>Wednesday: {formatTimeRange(location.opening_hours[2])[0]} - {formatTimeRange(location.opening_hours[2])[1]}</li>
+                <li>Thursday: {formatTimeRange(location.opening_hours[3])[0]} - {formatTimeRange(location.opening_hours[3])[1]}</li>
+                <li>Friday: {formatTimeRange(location.opening_hours[4])[0]} - {formatTimeRange(location.opening_hours[4])[1]}</li>
+                <li>Saturday: {formatTimeRange(location.opening_hours[5])[0]} - {formatTimeRange(location.opening_hours[5])[1]}</li>
+                <li>Sunday: {formatTimeRange(location.opening_hours[6])[0]} - {formatTimeRange(location.opening_hours[6])[1]}</li>
+              </ul>
             </div>
           </TabsContent>
 
