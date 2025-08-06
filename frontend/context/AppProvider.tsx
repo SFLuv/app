@@ -64,6 +64,7 @@ interface AppContextType {
   userLocations: Location[]
   login: () => Promise<void>;
   logout: () => Promise<void>;
+  authFetch: (endpoint: string, options?: RequestInit) => Promise<Response>;
 
   // Web3 Functionality
   wallets: AppWallet[];
@@ -181,7 +182,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     setError(null)
   }
 
-  const _authFetch = async (endpoint: string, options: RequestInit = {}): Promise<Response> => {
+  const authFetch = async (endpoint: string, options: RequestInit = {}): Promise<Response> => {
     const accessToken = await getAccessToken()
     if(!accessToken) throw new Error("no access token")
     const h: HeadersInit = {
@@ -193,14 +194,14 @@ export default function AppProvider({ children }: { children: ReactNode }) {
   }
 
   const _postUser = async () => {
-    let res = await _authFetch("/users", { method: "POST" })
+    let res = await authFetch("/users", { method: "POST" })
     if(res.status != 201) {
       throw new Error("error posting user")
     }
   }
 
   const _getUser = async (): Promise<GetUserResponse | null> => {
-    const res = await _authFetch("/users")
+    const res = await authFetch("/users")
     if(res.status == 404) {
       return null
     }
@@ -211,7 +212,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
   }
 
   const _getWallets = async (): Promise<WalletResponse[]> => {
-    const res = await _authFetch("/wallets")
+    const res = await authFetch("/wallets")
     if(res.status != 200) {
       throw new Error("error getting wallets")
     }
@@ -220,7 +221,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
 
 
   const _postWallet = async (wallet: WalletResponse): Promise<number> => {
-    const res = await _authFetch("/wallets", {
+    const res = await authFetch("/wallets", {
       method: "POST",
       body: JSON.stringify(wallet)
     })
@@ -233,7 +234,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
   }
 
   const _updateWallet = async (w: WalletResponse) => {
-    const res = await _authFetch("/wallets", {
+    const res = await authFetch("/wallets", {
       method: "PUT",
       body: JSON.stringify(w)
     })
@@ -427,6 +428,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
           error,
           login,
           logout,
+          authFetch,
           mapLocations,
           updateUser,
           approveMerchantStatus,

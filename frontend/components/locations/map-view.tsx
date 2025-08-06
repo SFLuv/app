@@ -79,8 +79,6 @@ export function MapView({
 
   // Filter merchants by type
   const filteredLocations = useMemo(() => {
-    console.log(locations)
-    console.log(Array.isArray(locations))
     return locations?.filter(
       (location) => selectedLocationType === "all" || location.type === selectedLocationType,
     )

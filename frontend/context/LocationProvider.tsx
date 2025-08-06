@@ -1,9 +1,12 @@
+"use client"
+
 
 import { LocationResponse } from "@/types/server";
 import { User } from "./AppProvider";
 import { createContext, ReactNode, useContext, useEffect, useState } from "react";
 import { Location } from "@/types/location";
 import { mockLocations } from "@/data/mock_locations";
+import { useApp } from "@/context/AppProvider";
 
 export type LocationsStatus = "loading" | "available" | "unavailable"
 
@@ -13,6 +16,7 @@ interface LocationContextType {
     getMapLocations: () => Promise<void>
     updateLocation: (location: Location) => Promise<void>
     addLocation: (location: Location) => Promise<void>
+    loadLocations: () => Promise<void>
 }
 
 const LocationContext = createContext<LocationContextType | null>(null)
@@ -20,6 +24,7 @@ const LocationContext = createContext<LocationContextType | null>(null)
 export default function LocationProvider({ children }: { children: ReactNode }) {
     const [mapLocations, setMapLocations] = useState<Location[]>([])
     const [mapLocationsStatus, setMapLocationsStatus] = useState<LocationsStatus>("loading")
+    const { authFetch } = useApp()
 
 
     const _getMapLocations = async (): Promise<LocationResponse> => {
@@ -31,21 +36,20 @@ export default function LocationProvider({ children }: { children: ReactNode }) 
     }
 
     const _updateLocation = async (location: Location) => {
-        const res = await fetch(process.env.NEXT_PUBLIC_BACKEND_BASE_URL + "/locations", {
+        const res = await authFetch("/locations", {
             method: "PUT",
             headers: {
                 "Content-Type": "application/json"
-                },
+            },
             body: JSON.stringify({location})
-        }
-        )
+        })
         if(res.status != 201) {
             throw new Error("error updating location")
         }
       }
 
     const _getLocationById = async (id: number): Promise<Location> => {
-        const res = await fetch(process.env.NEXT_PUBLIC_BACKEND_BASE_URL + "/locations/{id}")
+        const res = await authFetch("/locations{id}")
         if(res.status != 200) {
             throw new Error("error getting location by id")
         }
@@ -54,7 +58,7 @@ export default function LocationProvider({ children }: { children: ReactNode }) 
 
 
     const _addLocation = async (location: Location) => {
-        const res = await fetch(process.env.NEXT_PUBLIC_BACKEND_BASE_URL + "/locations", {
+        const res = await authFetch("/locations", {
             method: "POST",
             headers: {
                 "Content-Type": "application/json"
@@ -62,7 +66,7 @@ export default function LocationProvider({ children }: { children: ReactNode }) 
             body: JSON.stringify({location})
         })
         if(res.status != 201) {
-            throw new Error("error adding new location")
+            throw new Error("error adding new location, from controller")
         }
       }
 
@@ -70,14 +74,12 @@ export default function LocationProvider({ children }: { children: ReactNode }) 
         setMapLocationsStatus("loading")
         try {
             await _addLocation(location)
-            const l = await _getMapLocations()
-            setMapLocations(l.locations)
-            setMapLocationsStatus("available")
         }
         catch {
             setMapLocationsStatus("unavailable")
             console.error("error adding new location")
         }
+
       }
 
 
@@ -92,6 +94,12 @@ export default function LocationProvider({ children }: { children: ReactNode }) 
         catch {
             setMapLocationsStatus("unavailable")
             console.error("error getting locations")
+        }
+    }
+
+    const loadLocations = async () => {
+        for (const loc of mockLocations) {
+            addLocation(loc)
         }
     }
 
@@ -116,7 +124,8 @@ export default function LocationProvider({ children }: { children: ReactNode }) 
             mapLocationsStatus,
             getMapLocations,
             updateLocation,
-            addLocation
+            addLocation,
+            loadLocations
         }}
         >
             {children}
