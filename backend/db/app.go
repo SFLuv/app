@@ -79,8 +79,8 @@ func (s *AppDB) CreateTables() error {
 		CREATE TABLE IF NOT EXISTS location_hours(
 			location_id INTEGER REFERENCES locations(id),
 			weekday INTEGER NOT NULL,
-			open_time TIME WITH TIME ZONE,
-			close_time TIME WITH TIME ZONE
+			open_time NUMERIC,
+			close_time NUMERIC
 		);
 	`)
 	if err != nil {

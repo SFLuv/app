@@ -58,18 +58,21 @@ func (a *AppDB) GetLocation(id uint64) (*structs.Location, error) {
 	if err != nil {
 		return nil, err
 	}
-	hours := [][2]string{}
-	opening_time := ""
-	closing_time := ""
+	hours := [][2]float64{}
+	opening_time := float64(100)
+	closing_time := float64(100)
 	rows, err := a.db.Query(context.Background(), `
 		SELECT
-			weekday,
 			open_time,
-			close_time,
+			close_time
 		FROM location_hours
 		WHERE location_id = $1
 		ORDER BY weekday;
 	`, id)
+
+	if err != nil {
+		return nil, fmt.Errorf("error getting location hours: %s", err)
+	}
 
 	for rows.Next() {
 		err = rows.Scan(
@@ -79,9 +82,10 @@ func (a *AppDB) GetLocation(id uint64) (*structs.Location, error) {
 		if err != nil {
 			return nil, err
 		}
-		hour_pair := [2]string{opening_time, closing_time}
+		hour_pair := [2]float64{opening_time, closing_time}
 		hours = append(hours, hour_pair)
 	}
+	location.OpeningHours = hours
 
 	return &location, nil
 }
@@ -149,40 +153,44 @@ func (s *AppDB) GetLocations(r *structs.LocationsPageRequest) ([]*structs.Locati
 			return nil, fmt.Errorf("error scanning location row: %w", err)
 		}
 
-		hours := [][2]string{}
-		opening_time := ""
-		closing_time := ""
+		locations = append(locations, &location)
+	}
+
+	for _, loc := range locations {
+		hours := [][2]float64{}
+		opening_time := float64(100)
+		closing_time := float64(100)
 		rows2, err2 := s.db.Query(context.Background(), `
 			SELECT
-				weekday,
 				open_time,
-				close_time,
+				close_time
 			FROM location_hours
 			WHERE location_id = $1
 			ORDER BY weekday;
-		`, location.ID)
+		`, loc.ID)
 
 		if err2 != nil {
+			fmt.Printf("error querying location hours table: %s\n", err2)
 			continue
 		}
 		for rows2.Next() {
-			err2 = rows.Scan(
+			err2 = rows2.Scan(
 				&opening_time,
 				&closing_time,
 			)
+			hour_pair := [2]float64{opening_time, closing_time}
 			if err2 != nil {
 				break
 			}
-			hour_pair := [2]string{opening_time, closing_time}
 			hours = append(hours, hour_pair)
 
 		}
 
 		if err2 != nil {
+			fmt.Printf("error scanning hours rows for get locations: %s\n", err2)
 			continue
 		}
-		location.OpeningHours = hours
-		locations = append(locations, &location)
+		loc.OpeningHours = hours
 	}
 
 	return locations, nil
@@ -230,6 +238,25 @@ func (a *AppDB) AddLocation(location *structs.Location) error {
 		location.Rating,
 		location.MapsPage,
 	)
+
+	for i, hours := range location.OpeningHours {
+		_, err := a.db.Exec(context.Background(), `
+		INSERT INTO location_hours (
+			location_id,
+			weekday,
+			open_time,
+			close_time
+		) VALUES ($1, $2, $3, $4);
+		`,
+			location.ID,
+			i,
+			hours[0],
+			hours[1],
+		)
+		if err != nil {
+			return fmt.Errorf("error adding location hours to hour table: %s", err)
+		}
+	}
 
 	return err
 }
