@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -9,10 +9,13 @@ import { Card, CardContent } from "@/components/ui/card"
 import { ArrowLeft, ArrowRight, Wallet, Key, Check, AlertTriangle } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { useImportWallet, usePrivy } from "@privy-io/react-auth"
+import { parseKeyFromCWLink } from "@/lib/wallets/parse"
+import { useApp } from "@/context/AppProvider"
 
 interface ConnectWalletModalProps {
   open: boolean
   onOpenChange: (open: boolean) => void
+  importWalletFunction: (walletName: string, privateKey: string) => Promise<void>
 }
 
 interface StepIndicatorProps {
@@ -59,14 +62,28 @@ function StepIndicator({ currentStep, totalSteps }: StepIndicatorProps) {
   )
 }
 
-export function ConnectWalletModal({ open, onOpenChange }: ConnectWalletModalProps) {
+export function ConnectWalletModal({ open, onOpenChange, importWalletFunction: importWallet }: ConnectWalletModalProps) {
   const [currentStep, setCurrentStep] = useState(1)
   const [walletName, setWalletName] = useState("")
-  const [privateKey, setPrivateKey] = useState("")
+  const [privateKeyInput, setPrivateKeyInput] = useState("")
+  const [privateKey, setPrivateKey] = useState<string>("");
   const [isLoading, setIsLoading] = useState(false)
   const [errors, setErrors] = useState<{ name?: string; privateKey?: string }>({})
   const { toast } = useToast()
-  const { importWallet } = useImportWallet()
+
+  const getPrivateKeyFromInput = async (input: string) => {
+    if(input.startsWith("http")) {
+      const pkeyFromCW = await parseKeyFromCWLink(input)
+      setPrivateKey(pkeyFromCW || input)
+      return
+    }
+
+    setPrivateKey(input)
+  }
+
+  useEffect(() => {
+    getPrivateKeyFromInput(privateKeyInput)
+  }, [privateKeyInput])
 
   const totalSteps = 2
 
@@ -114,10 +131,7 @@ export function ConnectWalletModal({ open, onOpenChange }: ConnectWalletModalPro
 
     setIsLoading(true)
     try {
-      // Use Privy's importWallet function
-      await importWallet({
-        privateKey: privateKey.startsWith("0x") ? privateKey : `0x${privateKey}`,
-      })
+      await importWallet(walletName, privateKey)
 
       toast({
         title: "Wallet Connected",
@@ -220,7 +234,7 @@ export function ConnectWalletModal({ open, onOpenChange }: ConnectWalletModalPro
                     <div className="space-y-1">
                       <p className="font-medium text-sm">Security Warning</p>
                       <p className="text-xs text-muted-foreground">
-                        Never share your private key with anyone. We encrypt and securely store this information.
+                        Never share your private key with anyone. We securely store this information with Privy.
                       </p>
                     </div>
                   </div>
@@ -235,10 +249,10 @@ export function ConnectWalletModal({ open, onOpenChange }: ConnectWalletModalPro
                 <Input
                   id="private-key"
                   type="password"
-                  placeholder="0x... or 64-character hex string"
-                  value={privateKey}
+                  placeholder="0x... or CW import link."
+                  value={privateKeyInput}
                   onChange={(e) => {
-                    setPrivateKey(e.target.value)
+                    setPrivateKeyInput(e.target.value)
                     if (errors.privateKey) {
                       setErrors({ ...errors, privateKey: undefined })
                     }
