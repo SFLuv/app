@@ -24,9 +24,11 @@ export default function LocationMapPage() {
 
 
   useEffect(() => {
-    loadLocations()
-    getMapLocations()
-  }, [])
+    if(status === "authenticated") {
+      loadLocations()
+      getMapLocations()
+    }
+  }, [status])
 
 
   const handleSelectLocation = (location: Location) => {

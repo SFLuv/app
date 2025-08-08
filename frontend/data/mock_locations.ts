@@ -1,10 +1,10 @@
- import type { Location } from "@/types/location"
+import type { Location } from "@/types/location"
 
- export const mockLocations: Location[] = [
+export const mockLocations: Location[] = [
   {
     id: 1,
     google_id: "ChIJQWq7yBaBhYARAW1YO8VAzB4",
-    owner_id: "REPLACE_WITH_OWNER_ID",
+    owner_id: "did:privy:cmdp2q30z00vil50jxr93ds15",
     name: "Azalina's",
     description: "A Malaysian street food stall serving bold, authentic flavors.",
     type: "restaurant",
@@ -34,7 +34,7 @@
   {
     id: 2,
     google_id: "ChIJ70zQuZCAhYARBOYFsIfxD6U",
-    owner_id: "REPLACE_WITH_OWNER_ID",
+    owner_id: "did:privy:cmdp2q30z00vil50jxr93ds15",
     name: "Chamber's Eat + Drink",
     description: "Trendy restaurant & bar with a vintage ambiance and upscale comfort food.",
     type: "restaurant",
@@ -64,7 +64,7 @@
   {
     id: 3,
     google_id: "ChIJ___v2JCAhYAR2ue8VZ7uLzM",
-    owner_id: "REPLACE_WITH_OWNER_ID",
+    owner_id: "did:privy:cmdp2q30z00vil50jxr93ds15",
     name: "Tilted Brim",
     description: "A streetwear boutique with a modern collection of urban fashion.",
     type: "retail",
@@ -94,7 +94,7 @@
   {
     id: 4,
     google_id: "ChIJ41xPyYR9j4ARsMH74gIME9s",
-    owner_id: "REPLACE_WITH_OWNER_ID",
+    owner_id: "did:privy:cmdp2q30z00vil50jxr93ds15",
     name: "Versus Games",
     description: "Local game store and lounge with a wide variety of tabletop and card games.",
     type: "retail",
@@ -124,7 +124,7 @@
   {
     id: 5,
     google_id: "ChIJaTgXtOx9j4ARa8FUo2zEKvE",
-    owner_id: "REPLACE_WITH_OWNER_ID",
+    owner_id: "did:privy:cmdp2q30z00vil50jxr93ds15",
     name: "The San Francisco Wine Trading Company",
     description: "A cozy neighborhood wine shop offering rare and vintage bottles.",
     type: "retail",
@@ -154,7 +154,7 @@
   {
     id: 6,
     google_id: "ChIJKVibX2N-j4ARUmTB1MrZ3Qk",
-    owner_id: "REPLACE_WITH_OWNER_ID",
+    owner_id: "did:privy:cmdp2q30z00vil50jxr93ds15",
     name: "Glen Park Station",
     description: "A historic bar known for local beer, sports nights, and friendly vibes.",
     type: "bar",
@@ -184,7 +184,7 @@
   {
     id: 7,
     google_id: "ChIJw0OtX2N-j4ARq3b03Qa_8VI",
-    owner_id: "REPLACE_WITH_OWNER_ID",
+    owner_id: "did:privy:cmdp2q30z00vil50jxr93ds15",
     name: "La Corneta Taqueria",
     description: "Popular taqueria offering hearty burritos and tacos in a fast-paced setting.",
     type: "restaurant",

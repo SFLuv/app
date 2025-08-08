@@ -1,6 +1,6 @@
 "use client"
 
-import { ConnectedWallet, EIP1193Provider, PrivyProvider, usePrivy, useWallets } from "@privy-io/react-auth"
+import { ConnectedWallet, EIP1193Provider, PrivyProvider, useImportWallet, usePrivy, useWallets, Wallet } from "@privy-io/react-auth"
 import { toSimpleSmartAccount, ToSimpleSmartAccountReturnType } from "permissionless/accounts";
 import { createContext, ReactNode, useContext, useEffect, useState } from "react";
 import { Address, createWalletClient, custom, encodeFunctionData, Hash, Hex, hexToBytes, RpcUserOperation } from "viem";
@@ -70,6 +70,7 @@ interface AppContextType {
   wallets: AppWallet[];
   walletsStatus: WalletsStatus
   tx: TxState;
+  importWallet: (walletName: string, privateKey: string) => Promise<void>
   updateWallet: (id: number, name: string) => Promise<string | null>
   refreshWallets: () => Promise<void>
 
@@ -112,6 +113,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     wallets: privyWallets,
     ready: walletsReady
   } = useWallets();
+  const { importWallet: privyImportWallet } = useImportWallet()
 
 
 
@@ -319,6 +321,40 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     }
   }
 
+  const importWallet = async (walletName: string, privateKey: string) => {
+    if(!privyUser) {
+      setError("no user authenticated")
+      return
+    }
+    let s = walletsStatus
+    setWalletsStatus("loading")
+    let w: WalletResponse
+    try {
+      const wallet = await privyImportWallet({ privateKey })
+      w = {
+        id: 0,
+        owner: privyUser.id,
+        name: walletName,
+        is_eoa: true,
+        eoa_address: wallet.address
+      }
+    }
+    catch(error) {
+      setWalletsStatus(s)
+      throw error
+    }
+    try {
+        await _postWallet(w)
+        await _initWallets()
+        setWalletsStatus(s)
+    }
+    catch(error) {
+      setWalletsStatus(s)
+      console.error(error)
+      setError("error updating wallets after import")
+    }
+  }
+
   const updateWallet = async (id: number, name: string): Promise<string | null> => {
     const s = walletsStatus
     let n: string | null = null
@@ -342,6 +378,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     catch {
       console.error("error updating wallets")
       setError("error updating wallets")
+      throw new Error("error updating wallet")
     }
     setWalletsStatus(s)
     return n
@@ -423,6 +460,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
           walletsStatus,
           userLocations,
           tx,
+          importWallet,
           updateWallet,
           refreshWallets,
           error,

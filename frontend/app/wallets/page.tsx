@@ -18,7 +18,7 @@ import { Label } from "@/components/ui/label"
 
 export default function WalletsPage() {
   const router = useRouter()
-  const { wallets, status, walletsStatus } = useApp()
+  const { wallets, status, walletsStatus, importWallet } = useApp()
   const [showEoas, setShowEoas] = useState<boolean>(false)
 
   useEffect(() => {
@@ -89,7 +89,7 @@ export default function WalletsPage() {
 
   return (
     <div className="space-y-6">
-      <ConnectWalletModal open={connectWalletModalOpen} onOpenChange={() => setConnectWalletModalOpen(!connectWalletModalOpen)}/>
+      <ConnectWalletModal open={connectWalletModalOpen} onOpenChange={() => setConnectWalletModalOpen(!connectWalletModalOpen)} importWalletFunction={importWallet}/>
       <div>
         <h1 className="text-3xl font-bold text-black dark:text-white">Connected Wallets</h1>
         <p className="text-gray-600 dark:text-gray-400 mt-1">Manage wallets connected to your SFLuv account</p>

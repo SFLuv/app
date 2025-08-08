@@ -99,7 +99,8 @@ export default function LocationProvider({ children }: { children: ReactNode }) 
 
     const loadLocations = async () => {
         for (const loc of mockLocations) {
-            addLocation(loc)
+            await addLocation(loc)
+            console.log(loc)
         }
     }
 
