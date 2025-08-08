@@ -24,7 +24,7 @@ export default function LocationMapPage() {
 
 
   useEffect(() => {
-    //loadLocations()
+    loadLocations()
     getMapLocations()
   }, [])
 
