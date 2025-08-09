@@ -72,6 +72,31 @@ func (a *AppService) GetLocations(w http.ResponseWriter, r *http.Request) {
 	w.Write(jsonBytes)
 }
 
+func (a *AppService) GetLocationsByUser(w http.ResponseWriter, r *http.Request) {
+	userDid := utils.GetDid(r)
+	if userDid == nil {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	locations, err := a.db.GetLocationsByUser(*userDid)
+	if err != nil {
+		a.logger.Logf("error getting locations for user %s: %s", *userDid, err.Error())
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	jsonBytes, err := json.Marshal(map[string]any{
+		"locations": locations,
+	})
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte("Error marshalling JSON for locations objects"))
+		return
+	}
+	w.WriteHeader(200)
+	w.Write(jsonBytes)
+}
+
 func (a *AppService) AddLocation(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
