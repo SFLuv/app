@@ -1,0 +1,214 @@
+ import type { Location } from "@/types/location"
+
+ export const mockLocations: Location[] = [
+  {
+    id: 1,
+    google_id: "ChIJQWq7yBaBhYARAW1YO8VAzB4",
+    owner_id: "REPLACE_WITH_OWNER_ID",
+    name: "Azalina's",
+    description: "A Malaysian street food stall serving bold, authentic flavors.",
+    type: "restaurant",
+    approval: true,
+    street: "1355 Market St",
+    city: "San Francisco",
+    state: "CA",
+    zip: "94103",
+    lat: 37.7751,
+    lng: -122.4172,
+    phone: "(415) 555-1111",
+    email: "info@azalinas.com",
+    website: "https://azalinas.com",
+    image_url: "/placeholder.svg?height=200&width=400",
+    rating: 4.4,
+    maps_page: "https://maps.google.com/?cid=ChIJQWq7yBaBhYARAW1YO8VAzB4",
+    opening_hours: [
+      [11.0, 20.0], // Monday
+      [11.0, 20.0],
+      [11.0, 20.0],
+      [11.0, 20.0],
+      [11.0, 21.0],
+      [12.0, 21.0],
+      [12.0, 18.0]  // Sunday
+    ]
+  },
+  {
+    id: 2,
+    google_id: "ChIJ70zQuZCAhYARBOYFsIfxD6U",
+    owner_id: "REPLACE_WITH_OWNER_ID",
+    name: "Chamber's Eat + Drink",
+    description: "Trendy restaurant & bar with a vintage ambiance and upscale comfort food.",
+    type: "restaurant",
+    approval: true,
+    street: "601 Eddy St",
+    city: "San Francisco",
+    state: "CA",
+    zip: "94109",
+    lat: 37.7832,
+    lng: -122.4181,
+    phone: "(415) 555-2222",
+    email: "contact@chambers-sf.com",
+    website: "https://chambers-sf.com",
+    image_url: "/placeholder.svg?height=200&width=400",
+    rating: 4.3,
+    maps_page: "https://maps.google.com/?cid=ChIJ70zQuZCAhYARBOYFsIfxD6U",
+    opening_hours: [
+      [17.0, 23.0], // Monday
+      [17.0, 23.0],
+      [17.0, 23.0],
+      [17.0, 23.0],
+      [17.0, 24.0],
+      [17.0, 24.0],
+      [17.0, 22.0]  // Sunday
+    ]
+  },
+  {
+    id: 3,
+    google_id: "ChIJ___v2JCAhYAR2ue8VZ7uLzM",
+    owner_id: "REPLACE_WITH_OWNER_ID",
+    name: "Tilted Brim",
+    description: "A streetwear boutique with a modern collection of urban fashion.",
+    type: "retail",
+    approval: false,
+    street: "812 Valencia St",
+    city: "San Francisco",
+    state: "CA",
+    zip: "94110",
+    lat: 37.7584,
+    lng: -122.4211,
+    phone: "(415) 555-3333",
+    email: "support@tiltedbrim.com",
+    website: "https://tiltedbrim.com",
+    image_url: "/placeholder.svg?height=200&width=400",
+    rating: 4.6,
+    maps_page: "https://maps.google.com/?cid=ChIJ___v2JCAhYAR2ue8VZ7uLzM",
+    opening_hours: [
+      [11.0, 19.0], // Monday
+      [11.0, 19.0],
+      [11.0, 19.0],
+      [11.0, 19.0],
+      [11.0, 20.0],
+      [11.0, 20.0],
+      [12.0, 18.0]  // Sunday
+    ]
+  },
+  {
+    id: 4,
+    google_id: "ChIJ41xPyYR9j4ARsMH74gIME9s",
+    owner_id: "REPLACE_WITH_OWNER_ID",
+    name: "Versus Games",
+    description: "Local game store and lounge with a wide variety of tabletop and card games.",
+    type: "retail",
+    approval: false,
+    street: "3004 Taraval St",
+    city: "San Francisco",
+    state: "CA",
+    zip: "94116",
+    lat: 37.7429,
+    lng: -122.4951,
+    phone: "(415) 555-4444",
+    email: "info@versusgames.com",
+    website: "https://versusgames.com",
+    image_url: "/placeholder.svg?height=200&width=400",
+    rating: 4.5,
+    maps_page: "https://maps.google.com/?cid=ChIJ41xPyYR9j4ARsMH74gIME9s",
+    opening_hours: [
+      [12.0, 20.0], // Monday
+      [12.0, 20.0],
+      [12.0, 20.0],
+      [12.0, 20.0],
+      [12.0, 21.0],
+      [11.0, 22.0],
+      [11.0, 20.0]  // Sunday
+    ]
+  },
+  {
+    id: 5,
+    google_id: "ChIJaTgXtOx9j4ARa8FUo2zEKvE",
+    owner_id: "REPLACE_WITH_OWNER_ID",
+    name: "The San Francisco Wine Trading Company",
+    description: "A cozy neighborhood wine shop offering rare and vintage bottles.",
+    type: "retail",
+    approval: true,
+    street: "250 Taraval St",
+    city: "San Francisco",
+    state: "CA",
+    zip: "94116",
+    lat: 37.7437,
+    lng: -122.4789,
+    phone: "(415) 555-5555",
+    email: "sales@sfwines.com",
+    website: "https://sfwines.com",
+    image_url: "/placeholder.svg?height=200&width=400",
+    rating: 4.9,
+    maps_page: "https://maps.google.com/?cid=ChIJaTgXtOx9j4ARa8FUo2zEKvE",
+    opening_hours: [
+      [11.0, 19.0], // Monday
+      [11.0, 19.0],
+      [11.0, 19.0],
+      [11.0, 19.0],
+      [11.0, 20.0],
+      [11.0, 20.0],
+      [12.0, 17.0]  // Sunday
+    ]
+  },
+  {
+    id: 6,
+    google_id: "ChIJKVibX2N-j4ARUmTB1MrZ3Qk",
+    owner_id: "REPLACE_WITH_OWNER_ID",
+    name: "Glen Park Station",
+    description: "A historic bar known for local beer, sports nights, and friendly vibes.",
+    type: "bar",
+    approval: true,
+    street: "2816 Diamond St",
+    city: "San Francisco",
+    state: "CA",
+    zip: "94131",
+    lat: 37.7336,
+    lng: -122.4335,
+    phone: "(415) 555-6666",
+    email: "hello@glenparkstation.com",
+    website: "https://glenparkstation.com",
+    image_url: "/placeholder.svg?height=200&width=400",
+    rating: 4.2,
+    maps_page: "https://maps.google.com/?cid=ChIJKVibX2N-j4ARUmTB1MrZ3Qk",
+    opening_hours: [
+      [16.0, 24.0], // Monday
+      [16.0, 24.0],
+      [16.0, 24.0],
+      [16.0, 24.0],
+      [16.0, 2.0],  // Friday: open late
+      [14.0, 2.0],  // Saturday
+      [14.0, 24.0]  // Sunday
+    ]
+  },
+  {
+    id: 7,
+    google_id: "ChIJw0OtX2N-j4ARq3b03Qa_8VI",
+    owner_id: "REPLACE_WITH_OWNER_ID",
+    name: "La Corneta Taqueria",
+    description: "Popular taqueria offering hearty burritos and tacos in a fast-paced setting.",
+    type: "restaurant",
+    approval: true,
+    street: "2834 Diamond St",
+    city: "San Francisco",
+    state: "CA",
+    zip: "94131",
+    lat: 37.7337,
+    lng: -122.4338,
+    phone: "(415) 555-7777",
+    email: "orders@lacornetasf.com",
+    website: "https://lacornetasf.com",
+    image_url: "/placeholder.svg?height=200&width=400",
+    rating: 4.7,
+    maps_page: "https://maps.google.com/?cid=ChIJw0OtX2N-j4ARq3b03Qa_8VI",
+    opening_hours: [
+      [10.5, 21.0], // Monday
+      [10.5, 21.0],
+      [10.5, 21.0],
+      [10.5, 21.0],
+      [10.5, 22.0],
+      [10.5, 22.0],
+      [10.5, 20.0]  // Sunday
+    ]
+  }
+];

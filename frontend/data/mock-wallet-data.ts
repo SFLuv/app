@@ -1,0 +1,68 @@
+import type { WalletTransaction, WalletBalance } from "@/types/privy-wallet"
+
+export const mockTransactions: WalletTransaction[] = [
+  {
+    id: "tx-1",
+    type: "receive",
+    amount: 0.5,
+    currency: "ETH",
+    fromAddress: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e",
+    toAddress: "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed",
+    status: "confirmed",
+    timestamp: "2024-01-15T10:30:00Z",
+    hash: "0x1234567890abcdef1234567890abcdef12345678",
+    memo: "Payment for services",
+  },
+  {
+    id: "tx-2",
+    type: "send",
+    amount: 0.25,
+    currency: "ETH",
+    fromAddress: "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed",
+    toAddress: "0xfB6916095ca1df60bB79Ce92cE3Ea74c37c5d359",
+    status: "confirmed",
+    timestamp: "2024-01-14T15:45:00Z",
+    hash: "0xabcdef1234567890abcdef1234567890abcdef12",
+    memo: "Transfer to savings",
+  },
+  {
+    id: "tx-3",
+    type: "receive",
+    amount: 1.0,
+    currency: "ETH",
+    fromAddress: "0x7cB57B5A97eAbe94205C07890BE4c1aD31E486A8",
+    toAddress: "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed",
+    status: "pending",
+    timestamp: "2024-01-16T09:20:00Z",
+    hash: "0x567890abcdef1234567890abcdef1234567890ab",
+  },
+  {
+    id: "tx-4",
+    type: "send",
+    amount: 0.1,
+    currency: "ETH",
+    fromAddress: "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed",
+    toAddress: "0x2932b7A2355D6fecc4b5c0B6BD44cC31df247a2e",
+    status: "failed",
+    timestamp: "2024-01-13T12:10:00Z",
+    memo: "Failed transaction",
+  },
+  {
+    id: "tx-5",
+    type: "receive",
+    amount: 2.5,
+    currency: "ETH",
+    fromAddress: "0x6C3e4cb2E96B01F4b866965A91ed4437839A121a",
+    toAddress: "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed",
+    status: "confirmed",
+    timestamp: "2024-01-12T18:30:00Z",
+    hash: "0x890abcdef1234567890abcdef1234567890abcdef",
+  },
+]
+
+export const mockWalletBalance: WalletBalance = {
+  currency: "ETH",
+  balance: 3.75,
+  usdValue: 8250.0,
+  priceChange24h: 2.4,
+}
