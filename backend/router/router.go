@@ -59,6 +59,7 @@ func AddAdminRoutes(r *chi.Mux, s *handlers.AppService) {
 func AddWalletRoutes(r *chi.Mux, s *handlers.AppService) {
 	r.Get("/wallets", withAuth(s.GetWalletsByUser))
 	r.Post("/wallets", withAuth(s.AddWallet))
+	r.Put("/wallets", withAuth(s.UpdateWallet))
 }
 
 func AddLocationRoutes(r *chi.Mux, s *handlers.AppService) {

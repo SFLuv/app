@@ -66,3 +66,35 @@ func (a *AppService) AddWallet(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusCreated)
 }
+
+func (a *AppService) UpdateWallet(w http.ResponseWriter, r *http.Request) {
+	userDid := utils.GetDid(r)
+	if userDid == nil {
+		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		a.logger.Logf("error reading update wallet request body from user %s: %s", *userDid, err.Error())
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	var wallet structs.Wallet
+	err = json.Unmarshal(body, &wallet)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	wallet.Owner = *userDid
+
+	err = a.db.UpdateWallet(&wallet)
+	if err != nil {
+		a.logger.Logf("error updating wallet:\n  %#v\nfor user %s: %s", wallet, *userDid, err.Error())
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusCreated)
+}
