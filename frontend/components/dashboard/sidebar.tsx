@@ -26,16 +26,20 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@/components/ui/sidebar"
-import { ForwardRefExoticComponent, RefAttributes, useMemo } from "react"
+import { ForwardRefExoticComponent, RefAttributes, useEffect, useMemo } from "react"
+import path from "path"
 
 export function DashboardSidebar() {
   const router = useRouter()
   const pathname = usePathname()
   const { user, logout, status, login } = useApp()
 
+
   const userRole = useMemo(() => user?.isAdmin ? "admin" : user?.isMerchant ? "merchant" : "user", [user])
 
-  const isActive = (path: string) => pathname === path
+  const isActive = (path: string) => {
+    return pathname.startsWith(path)
+  }
 
   const handleLogout = () => {
     logout()

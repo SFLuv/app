@@ -24,15 +24,11 @@ export default function WalletDetailsPage() {
   const walletAddress = params.address as string
   const { wallets, status, walletsStatus, updateWallet } = useApp()
 
-  useEffect(() => {
-      if(status === "unauthenticated") {
-        router.replace("/")
-      }
-    }, [status])
-
   // Get the specific wallet by index
   const wallet = useMemo(() => {
     if(walletsStatus !== "available") return undefined
+    if(wallets.length === 0) return undefined
+
     let w = wallets.find((w) => w.address?.toLowerCase() === walletAddress.toLowerCase())
     if(!w) {
       router.replace("/wallets")
