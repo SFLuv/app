@@ -3,13 +3,15 @@ package router
 import (
 	"net/http"
 
-	"github.com/faucet-portal/backend/handlers"
+	"github.com/SFLuv/app/backend/handlers"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
+
+	m "github.com/SFLuv/app/backend/utils/middleware"
 )
 
-func New(s *handlers.BotService, a *handlers.AccountService) *chi.Mux {
+func New(s *handlers.BotService, a *handlers.AccountService, p *handlers.AppService) *chi.Mux {
 	r := chi.NewRouter()
 
 	r.Use(middleware.Logger)
@@ -21,8 +23,13 @@ func New(s *handlers.BotService, a *handlers.AccountService) *chi.Mux {
 		AllowCredentials: false,
 		MaxAge:           300,
 	}))
+	r.Use(m.AuthMiddleware)
 
 	AddBotRoutes(r, s)
+	AddUserRoutes(r, p)
+	AddAdminRoutes(r, p)
+	AddWalletRoutes(r, p)
+	AddLocationRoutes(r, p)
 
 	r.Post("/account", a.AddAccount)
 	r.Get("/account", a.GetAccount)
@@ -36,6 +43,30 @@ func AddBotRoutes(r *chi.Mux, s *handlers.BotService) {
 	r.Get("/events", s.GetCodesRequest)
 
 	r.Post("/redeem", s.Redeem)
+}
+
+func AddUserRoutes(r *chi.Mux, s *handlers.AppService) {
+	r.Post("/users", withAuth(s.AddUser))
+	r.Get("/users", withAuth(s.GetUserAuthed))
+	r.Put("/users", withAuth(s.UpdateUserInfo))
+}
+
+func AddAdminRoutes(r *chi.Mux, s *handlers.AppService) {
+	r.Get("/admin/users", withAuth(s.GetUsers))
+	r.Put("/admin/users", withAuth(s.UpdateUserRole))
+}
+
+func AddWalletRoutes(r *chi.Mux, s *handlers.AppService) {
+	r.Get("/wallets", withAuth(s.GetWalletsByUser))
+	r.Post("/wallets", withAuth(s.AddWallet))
+	r.Put("/wallets", withAuth(s.UpdateWallet))
+}
+
+func AddLocationRoutes(r *chi.Mux, s *handlers.AppService) {
+	r.Post("/locations", s.AddLocation)
+	r.Get("/locations/{id}", s.GetLocation)
+	r.Get("/locations", s.GetLocations)
+	r.Put("/locations/{id}", s.UpdateLocation)
 }
 
 func withAuth(handlerFunc http.HandlerFunc) http.HandlerFunc {

@@ -6,8 +6,8 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/faucet-portal/backend/db"
-	"github.com/faucet-portal/backend/structs"
+	"github.com/SFLuv/app/backend/db"
+	"github.com/SFLuv/app/backend/structs"
 )
 
 type AccountService struct {
