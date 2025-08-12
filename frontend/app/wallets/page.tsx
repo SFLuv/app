@@ -24,12 +24,6 @@ export default function WalletsPage() {
   const [addWalletModalOpen, setAddWalletModalOpen] = useState<boolean>(false)
   const { addWallet } = useApp()
 
-  useEffect(() => {
-    if(status === "unauthenticated") {
-      router.replace("/")
-    }
-  }, [status])
-
   const [connectWalletModalOpen, setConnectWalletModalOpen] = useState(false)
 
   const onConnectWalletModalOpenChange = () => {

@@ -18,3 +18,4 @@ export const PAYMASTER_TYPE = COMMUNITY_ACCOUNT.paymaster_type
 export const FACTORY = COMMUNITY_ACCOUNT.account_factory_address as Address
 export const DECIMALS = (config.tokens as any)[COMMUNITY_TOKEN_INDEX].decimals as number
 export const SYMBOL = (config.tokens as any)[COMMUNITY_TOKEN_INDEX].symbol as string
+export const CW_APP_BASE_URL = process.env.NEXT_PUBLIC_CW_BASE_URL || "https://app.citizenwallet.xyz"

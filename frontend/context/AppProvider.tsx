@@ -126,9 +126,13 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     if(!privyReady) return;
     if(!walletsReady) return;
 
-    console.log(privyAuthenticated)
     if(!privyAuthenticated) {
       _resetAppState()
+      return
+    }
+    if(privyWallets.length === 0) {
+      console.error("wallets not actually connected")
+      logout()
       return
     }
 
@@ -272,8 +276,6 @@ export default function AppProvider({ children }: { children: ReactNode }) {
         wResults.push(_initEOAWallet(privyWallet, extWallet, i))
 
         let smartWallets = extWallets.filter((w) => w.eoa_address == privyWallet.address && w.is_eoa === false && w.smart_index !== undefined)
-        console.log(smartWallets)
-        console.log(smartWallets.length)
         if(smartWallets.length === 0) {
           smartWallets.push({
             id: null,
@@ -284,7 +286,6 @@ export default function AppProvider({ children }: { children: ReactNode }) {
             smart_index: 0
           })
         }
-        console.log(smartWallets)
 
         for(let index = 0n; index < BigInt(smartWallets.length); index++) {
           let extSmartWallet = smartWallets.find((w) => {
@@ -292,7 +293,6 @@ export default function AppProvider({ children }: { children: ReactNode }) {
             if(w.smart_index === null) w.smart_index = 10000
             return w.eoa_address == privyWallet.address && w.is_eoa === false && BigInt(w.smart_index) === index
           })
-          console.log("w", extSmartWallet)
           if(!extSmartWallet) continue
 
           wResults.push(_initSmartWallet(privyWallet, extSmartWallet, index, i))
@@ -303,7 +303,6 @@ export default function AppProvider({ children }: { children: ReactNode }) {
 
       setWallets(wlts)
       setWalletsStatus("available")
-      console.log(wlts)
     }
     catch(error) {
       console.error(error)
@@ -356,7 +355,6 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     const privyWallet = privyWallets[0]
     const n = wallets.filter((w) => w.owner.address === privyWallet.address && w.type === "smartwallet").length
 
-    console.log(n)
 
     const wallet: WalletResponse = {
       id: null,
@@ -449,7 +447,6 @@ export default function AppProvider({ children }: { children: ReactNode }) {
   }
 
   const login = async () => {
-    console.log("login", privyReady, privyAuthenticated)
     if(!privyReady) {
       setError("privy not ready")
       return
