@@ -12,10 +12,10 @@ import { useImportWallet, usePrivy } from "@privy-io/react-auth"
 import { parseKeyFromCWLink } from "@/lib/wallets/parse"
 import { useApp } from "@/context/AppProvider"
 
-interface ConnectWalletModalProps {
+interface AddWalletModalProps {
   open: boolean
   onOpenChange: (open: boolean) => void
-  importWalletFunction: (walletName: string, privateKey: string) => Promise<void>
+  addWalletFunction: (walletName: string) => Promise<void>
 }
 
 interface StepIndicatorProps {
@@ -62,30 +62,15 @@ function StepIndicator({ currentStep, totalSteps }: StepIndicatorProps) {
   )
 }
 
-export function ConnectWalletModal({ open, onOpenChange, importWalletFunction: importWallet }: ConnectWalletModalProps) {
+export function NewWalletModal({ open, onOpenChange, addWalletFunction: addWallet }: AddWalletModalProps) {
   const [currentStep, setCurrentStep] = useState(1)
   const [walletName, setWalletName] = useState("")
-  const [privateKeyInput, setPrivateKeyInput] = useState("")
-  const [privateKey, setPrivateKey] = useState<string>("");
   const [isLoading, setIsLoading] = useState(false)
-  const [errors, setErrors] = useState<{ name?: string; privateKey?: string }>({})
+  const [errors, setErrors] = useState<{ name?: string }>({})
   const { toast } = useToast()
 
-  const getPrivateKeyFromInput = async (input: string) => {
-    if(input.startsWith("http")) {
-      const pkeyFromCW = await parseKeyFromCWLink(input)
-      setPrivateKey(pkeyFromCW || input)
-      return
-    }
 
-    setPrivateKey(input)
-  }
-
-  useEffect(() => {
-    getPrivateKeyFromInput(privateKeyInput)
-  }, [privateKeyInput])
-
-  const totalSteps = 2
+  const totalSteps = 1
 
   const validateStep1 = () => {
     const newErrors: { name?: string } = {}
@@ -100,42 +85,17 @@ export function ConnectWalletModal({ open, onOpenChange, importWalletFunction: i
     return Object.keys(newErrors).length === 0
   }
 
-  const validateStep2 = () => {
-    const newErrors: { privateKey?: string } = {}
 
-    if (!privateKey.trim()) {
-      newErrors.privateKey = "Private key is required"
-    } else if (!privateKey.startsWith("0x") && privateKey.length !== 64 && privateKey.length !== 66) {
-      newErrors.privateKey = "Please enter a valid private key"
-    }
-
-    setErrors(newErrors)
-    return Object.keys(newErrors).length === 0
-  }
-
-  const handleNext = () => {
-    if (currentStep === 1 && validateStep1()) {
-      setCurrentStep(2)
-    }
-  }
-
-  const handleBack = () => {
-    if (currentStep > 1) {
-      setCurrentStep(currentStep - 1)
-      setErrors({})
-    }
-  }
-
-  const handleImportWallet = async () => {
-    if (!validateStep2()) return
+  const handleAddWallet = async () => {
+    if (!validateStep1()) return
 
     setIsLoading(true)
     try {
-      await importWallet(walletName, privateKey)
+      await addWallet(walletName)
 
       toast({
-        title: "Wallet Connected",
-        description: `${walletName} has been successfully connected and imported.`,
+        title: "Wallet Added",
+        description: `${walletName} has been successfully added.`,
       })
 
       // Reset form and close modal
@@ -145,7 +105,7 @@ export function ConnectWalletModal({ open, onOpenChange, importWalletFunction: i
       console.error("Failed to import wallet:", error)
       toast({
         title: "Import Failed",
-        description: "Failed to import wallet. Please check your private key and try again.",
+        description: "Failed to add wallet.",
         variant: "destructive",
       })
     } finally {
@@ -156,7 +116,6 @@ export function ConnectWalletModal({ open, onOpenChange, importWalletFunction: i
   const resetForm = () => {
     setCurrentStep(1)
     setWalletName("")
-    setPrivateKey("")
     setErrors({})
     setIsLoading(false)
   }
@@ -180,8 +139,6 @@ export function ConnectWalletModal({ open, onOpenChange, importWalletFunction: i
             Import your existing wallet by providing a name and private key
           </DialogDescription>
         </DialogHeader>
-
-        <StepIndicator currentStep={currentStep} totalSteps={totalSteps} />
 
         <div className="space-y-4 sm:space-y-6">
           {currentStep === 1 && (
@@ -222,96 +179,26 @@ export function ConnectWalletModal({ open, onOpenChange, importWalletFunction: i
               </div>
             </div>
           )}
-
-          {currentStep === 2 && (
-            <div className="space-y-4">
-              <Card className="border-amber-200 dark:border-amber-800">
-                <CardContent className="p-3 sm:p-4">
-                  <div className="flex items-start gap-2 sm:gap-3">
-                    <div className="h-6 w-6 sm:h-8 sm:w-8 rounded-full bg-amber-100 dark:bg-amber-900/20 flex items-center justify-center flex-shrink-0">
-                      <AlertTriangle className="h-3 w-3 sm:h-4 sm:w-4 text-amber-600 dark:text-amber-400" />
-                    </div>
-                    <div className="space-y-1">
-                      <p className="font-medium text-sm">Security Warning</p>
-                      <p className="text-xs text-muted-foreground">
-                        Never share your private key with anyone. We securely store this information with Privy.
-                      </p>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-
-              <div className="space-y-2">
-                <Label htmlFor="private-key" className="flex items-center gap-2 text-sm font-medium">
-                  <Key className="h-3 w-3 sm:h-4 sm:w-4" />
-                  Private Key
-                </Label>
-                <Input
-                  id="private-key"
-                  type="password"
-                  placeholder="0x... or CW import link."
-                  value={privateKeyInput}
-                  onChange={(e) => {
-                    setPrivateKeyInput(e.target.value)
-                    if (errors.privateKey) {
-                      setErrors({ ...errors, privateKey: undefined })
-                    }
-                  }}
-                  className={`h-11 font-mono text-sm ${errors.privateKey ? "border-red-500" : ""}`}
-                />
-                {errors.privateKey && <p className="text-sm text-red-500">{errors.privateKey}</p>}
-                <p className="text-xs text-muted-foreground">
-                  Enter your wallet's private key (with or without 0x prefix)
-                </p>
-              </div>
-
-              <div className="bg-gray-50 dark:bg-gray-900/50 p-3 rounded-lg">
-                <p className="text-sm font-medium mb-1">Wallet Summary:</p>
-                <p className="text-sm text-muted-foreground">Name: {walletName}</p>
-              </div>
-            </div>
-          )}
         </div>
 
         <div className="flex flex-col sm:flex-row gap-3 sm:justify-between pt-4 border-t">
           <Button
-            variant="outline"
-            onClick={handleBack}
-            disabled={currentStep === 1 || isLoading}
-            className="flex items-center justify-center gap-2 bg-transparent h-11 order-2 sm:order-1"
+            onClick={handleAddWallet}
+            disabled={isLoading}
+            className="flex items-center justify-center gap-2 h-11 order-1 sm:order-2"
           >
-            <ArrowLeft className="h-4 w-4" />
-            Back
+            {isLoading ? (
+              <>
+                <div className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                Adding...
+              </>
+            ) : (
+              <>
+                <Wallet className="h-4 w-4" />
+                Add Wallet
+              </>
+            )}
           </Button>
-
-          {currentStep < totalSteps ? (
-            <Button
-              onClick={handleNext}
-              disabled={isLoading}
-              className="flex items-center justify-center gap-2 h-11 order-1 sm:order-2"
-            >
-              Next
-              <ArrowRight className="h-4 w-4" />
-            </Button>
-          ) : (
-            <Button
-              onClick={handleImportWallet}
-              disabled={isLoading}
-              className="flex items-center justify-center gap-2 h-11 order-1 sm:order-2"
-            >
-              {isLoading ? (
-                <>
-                  <div className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
-                  Importing...
-                </>
-              ) : (
-                <>
-                  <Wallet className="h-4 w-4" />
-                  Connect Wallet
-                </>
-              )}
-            </Button>
-          )}
         </div>
       </DialogContent>
     </Dialog>

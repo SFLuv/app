@@ -23,7 +23,7 @@ interface AppWalletOptions {
 
 
 export class AppWallet {
-  private owner: ConnectedWallet;
+  owner: ConnectedWallet;
   index?: bigint;
 
   name: string;
@@ -82,14 +82,14 @@ export class AppWallet {
       const code = await this.publicClient.getCode({
         address: smartWallet.address
       })
-      if(code === "0x" || code == null) {
-        return false
-      }
 
       this.wallet = smartWallet
       this.type = "smartwallet"
       this.address = this.wallet.address
-      console.log(this.address, code)
+      if(code === "0x" || code == null) {
+        this.initialized = true
+        return false
+      }
     }
     else {
       this.wallet = this.owner
@@ -101,6 +101,18 @@ export class AppWallet {
 
     return true
   }
+
+  // async deploy(): Promise<boolean> {
+  //   if(!this.initialized) {
+  //     console.error("wallet not initialized when attempting to deploy")
+  //     return false
+  //   }
+
+
+
+
+  //   return true
+  // }
 
 
 
@@ -134,7 +146,7 @@ export class AppWallet {
     const data = hexToBytes(callData)
 
     try {
-      const hash = await cw_bundler.call(signer, contract || TOKEN, account.address, data)
+      const hash = await cw_bundler.call(signer, contract || TOKEN, account.address, data, undefined, undefined, undefined, { smartAccountIndex: this.index ? Number(this.index) : undefined })
       receipt.hash = hash
     }
     catch(error) {
@@ -190,15 +202,19 @@ export class AppWallet {
 
   getBalance = async (): Promise<bigint | null> => {
     if(!this.initialized) return null
-    const balance = await this.publicClient?.readContract({
+    if(!this.wallet) return null
+    if(!this.publicClient) return null
+    if(!this.address) return null
+
+    const statement = {
       address: TOKEN,
       abi: [balanceOf],
       functionName: "balanceOf",
-      args: [this.wallet?.address as Address],
-    }) as unknown as bigint
-
+      args: [this.address],
+    }
+    console.log(statement)
+    const balance = await this.publicClient.readContract(statement) as bigint
     console.log(balance)
-
 
     return balance
   }

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -8,9 +9,9 @@ import (
 	"os"
 	"strconv"
 
-	"github.com/faucet-portal/backend/bot"
-	"github.com/faucet-portal/backend/db"
-	"github.com/faucet-portal/backend/structs"
+	"github.com/SFLuv/app/backend/bot"
+	"github.com/SFLuv/app/backend/db"
+	"github.com/SFLuv/app/backend/structs"
 )
 
 type BotService struct {
@@ -214,7 +215,7 @@ func (s *BotService) Redeem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err = tx.Commit()
+	err = tx.Commit(context.Background())
 	if err != nil {
 		fmt.Printf("error committing code redemption: %s\n", err)
 		w.WriteHeader(http.StatusOK)

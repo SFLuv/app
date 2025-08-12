@@ -31,7 +31,17 @@ export default function WalletDetailsPage() {
     }, [status])
 
   // Get the specific wallet by index
-  const wallet = useMemo(() => wallets.find((w) => w.address?.toLowerCase() === walletAddress.toLowerCase()), [wallets])
+  const wallet = useMemo(() => {
+    if(walletsStatus !== "available") return undefined
+    let w = wallets.find((w) => w.address?.toLowerCase() === walletAddress.toLowerCase())
+    if(!w) {
+      router.replace("/wallets")
+      return undefined
+    }
+    return w
+  }, [wallets])
+
+
 
   const [showSendModal, setShowSendModal] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -94,9 +104,10 @@ export default function WalletDetailsPage() {
   }
 
   const updateBalance = async () => {
+    if(!wallet) return
     try {
-      const b = await wallet?.getBalanceFormatted()
-      if(b === null || b === undefined) {
+      const b = await wallet.getBalanceFormatted()
+      if(b === null) {
         setError("Wallet not initialized.")
         return
       }
@@ -121,7 +132,7 @@ export default function WalletDetailsPage() {
   const handleRefresh = async () => {
     setIsRefreshing(true)
     // Mock refresh delay
-    await new Promise((resolve) => setTimeout(resolve, 1000))
+    await updateBalance()
     setIsRefreshing(false)
     toast({
       title: "Wallet Refreshed",
