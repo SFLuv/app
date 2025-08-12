@@ -9,7 +9,7 @@
     "start": "next start"
   },
   "dependencies": {
-    "@citizenwallet/sdk": "link:/Users/coding/citizenwallet/js-sdk",
+    "@citizenwallet/sdk": "^2.0.115",
     "@googlemaps/markerclusterer": "^2.6.2",
     "@hookform/resolvers": "^3.10.0",
     "@hpke/chacha20poly1305": "^1.7.0",

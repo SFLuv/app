@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@citizenwallet/sdk':
-        specifier: link:/Users/coding/citizenwallet/js-sdk
-        version: link:../../../citizenwallet/js-sdk
+        specifier: ^2.0.115
+        version: 2.0.115(@openzeppelin/contracts@5.4.0)(@types/react@19.1.10)(bufferutil@4.0.9)(utf-8-validate@5.0.10)
       '@googlemaps/markerclusterer':
         specifier: ^2.6.2
         version: 2.6.2
@@ -232,6 +232,9 @@ packages:
 
   '@bitcoinerlab/secp256k1@1.2.0':
     resolution: {integrity: sha512-jeujZSzb3JOZfmJYI0ph1PVpCRV5oaexCgy+RvCXV8XlY+XFB/2n3WOcvBsKLsOw78KYgnQrQWb2HrKE4be88Q==}
+
+  '@citizenwallet/sdk@2.0.115':
+    resolution: {integrity: sha512-vnZH4kpTdKF3ppdh4gbsGbBrZwqPwkeqlSAZiwdIHei9WJwII8BkWBOv/maTBYI2WlB4d5RfcwoXyAis3fnJyw==}
 
   '@coinbase/wallet-sdk@4.3.2':
     resolution: {integrity: sha512-hOLA2YONq8Z9n8f6oVP6N//FEEHOen7nq+adG/cReol6juFTHUelVN5GnA5zTIxiLFMDcrhDwwgCA6Tdb5jubw==}
@@ -674,6 +677,14 @@ packages:
   '@nodelib/fs.walk@1.2.8':
     resolution: {integrity: sha512-oGB+UxlgWcgQkgwo8GcEGwemoTFt3FIO9ababBmaGwXIoBKZ+GTy0pP185beGg7Llih/NSHSV2XAs1lnznocSg==}
     engines: {node: '>= 8'}
+
+  '@openzeppelin/contracts-upgradeable@5.4.0':
+    resolution: {integrity: sha512-STJKyDzUcYuB35Zub1JpWW58JxvrFFVgQ+Ykdr8A9PGXgtq/obF5uoh07k2XmFyPxfnZdPdBdhkJ/n2YxJ87HQ==}
+    peerDependencies:
+      '@openzeppelin/contracts': 5.4.0
+
+  '@openzeppelin/contracts@5.4.0':
+    resolution: {integrity: sha512-eCYgWnLg6WO+X52I16TZt8uEjbtdkgLC0SUX/xnAksjjrQI4Xfn4iBRoI5j55dmlOhDv1Y7BoR3cU7e3WWhC6A==}
 
   '@pkgjs/parseargs@0.11.0':
     resolution: {integrity: sha512-+1VkjdD0QBLPodGrJUeqarH8VAIvQODIbwh9XpP5Syisf7YoQgsJKPNFoqqLQlu+VQ/tVSshMR6loPMn8U+dPg==}
@@ -2632,6 +2643,9 @@ packages:
   fetch-retry@6.0.0:
     resolution: {integrity: sha512-BUFj1aMubgib37I3v4q78fYo63Po7t4HUPTpQ6/QE6yK6cIQrP+W43FYToeTEyg5m2Y7eFUtijUuAv/PDlWuag==}
 
+  fflate@0.8.2:
+    resolution: {integrity: sha512-cPJU47OaAoCbg0pBvzsgpTPhmhqI5eJjh/JIu8tPj5q+T7iLvW/JAYUqmE7KOB4R1ZyEhzBaIQpQpardBF5z8A==}
+
   file-uri-to-path@1.0.0:
     resolution: {integrity: sha512-0Zt+s3L7Vf1biwWZ29aARiVYLx7iMGnEUl9x33fbB/j3jR81u/O2LbqK+Bm1CDSNDKVtJ/YjwY7TUd5SkeLQLw==}
 
@@ -3346,6 +3360,10 @@ packages:
       react: '>=16.6.0'
       react-dom: '>=16.6.0'
 
+  react@18.3.1:
+    resolution: {integrity: sha512-wS+hAgJShR0KhEvPJArfuPVN1+Hz1t0Y6n5jLrGQbkb4urgPE/0Rve+1kMB1v/oWgHgm4WIcV+i7F2pTVj+2iQ==}
+    engines: {node: '>=0.10.0'}
+
   react@19.1.1:
     resolution: {integrity: sha512-w8nqGImo45dmMIfljjMwOGtbmC/mk4CMYhWIicdSflH91J9TyCyczcPFXJzrZ/ZXcgGRFeP6BU0BEJTw6tZdfQ==}
     engines: {node: '>=0.10.0'}
@@ -4009,6 +4027,21 @@ packages:
   zod@3.25.76:
     resolution: {integrity: sha512-gzUt/qt81nXsFGKIFcC3YnfEAx5NkunCfnDlvuBSSFS02bcXu4Lmea0AFIUwbLWxWPx3d9p8S5QoaujKcNQxcQ==}
 
+  zustand@4.5.7:
+    resolution: {integrity: sha512-CHOUy7mu3lbD6o6LJLfllpjkzhHXSBlX8B9+qPddUsIfeF5S/UZ5q0kmCsnRqT1UHFQZchNFDDzMbQsuesHWlw==}
+    engines: {node: '>=12.7.0'}
+    peerDependencies:
+      '@types/react': '>=16.8'
+      immer: '>=9.0.6'
+      react: '>=16.8'
+    peerDependenciesMeta:
+      '@types/react':
+        optional: true
+      immer:
+        optional: true
+      react:
+        optional: true
+
   zustand@5.0.3:
     resolution: {integrity: sha512-14fwWQtU3pH4dE0dOpdMiWjddcH+QzKIgk1cl8epwSE7yag43k/AD/m4L6+K7DytAOr9gGBe3/EXj9g7cdostg==}
     engines: {node: '>=12.20.0'}
@@ -4079,6 +4112,22 @@ snapshots:
     dependencies:
       '@noble/curves': 1.9.6
     optional: true
+
+  '@citizenwallet/sdk@2.0.115(@openzeppelin/contracts@5.4.0)(@types/react@19.1.10)(bufferutil@4.0.9)(utf-8-validate@5.0.10)':
+    dependencies:
+      '@openzeppelin/contracts-upgradeable': 5.4.0(@openzeppelin/contracts@5.4.0)
+      dotenv: 16.6.1
+      ethers: 6.15.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)
+      fflate: 0.8.2
+      react: 18.3.1
+      typescript: 5.9.2
+      zustand: 4.5.7(@types/react@19.1.10)(react@18.3.1)
+    transitivePeerDependencies:
+      - '@openzeppelin/contracts'
+      - '@types/react'
+      - bufferutil
+      - immer
+      - utf-8-validate
 
   '@coinbase/wallet-sdk@4.3.2':
     dependencies:
@@ -4607,6 +4656,12 @@ snapshots:
     dependencies:
       '@nodelib/fs.scandir': 2.1.5
       fastq: 1.19.1
+
+  '@openzeppelin/contracts-upgradeable@5.4.0(@openzeppelin/contracts@5.4.0)':
+    dependencies:
+      '@openzeppelin/contracts': 5.4.0
+
+  '@openzeppelin/contracts@5.4.0': {}
 
   '@pkgjs/parseargs@0.11.0':
     optional: true
@@ -7670,6 +7725,8 @@ snapshots:
 
   fetch-retry@6.0.0: {}
 
+  fflate@0.8.2: {}
+
   file-uri-to-path@1.0.0:
     optional: true
 
@@ -8432,6 +8489,10 @@ snapshots:
       react: 19.1.1
       react-dom: 19.1.1(react@19.1.1)
 
+  react@18.3.1:
+    dependencies:
+      loose-envify: 1.4.0
+
   react@19.1.1: {}
 
   read-cache@1.0.0:
@@ -8878,6 +8939,10 @@ snapshots:
     dependencies:
       react: 19.1.1
 
+  use-sync-external-store@1.5.0(react@18.3.1):
+    dependencies:
+      react: 18.3.1
+
   use-sync-external-store@1.5.0(react@19.1.1):
     dependencies:
       react: 19.1.1
@@ -9130,6 +9195,13 @@ snapshots:
   zod@3.22.4: {}
 
   zod@3.25.76: {}
+
+  zustand@4.5.7(@types/react@19.1.10)(react@18.3.1):
+    dependencies:
+      use-sync-external-store: 1.5.0(react@18.3.1)
+    optionalDependencies:
+      '@types/react': 19.1.10
+      react: 18.3.1
 
   zustand@5.0.3(@types/react@19.1.10)(react@19.1.1)(use-sync-external-store@1.5.0(react@19.1.1)):
     optionalDependencies:
