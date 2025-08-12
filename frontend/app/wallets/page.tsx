@@ -15,11 +15,14 @@ import { AppWallet } from "@/lib/wallets/wallets"
 import { ConnectWalletModal } from "@/components/wallets/connect-wallet-modal"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Label } from "@/components/ui/label"
+import { NewWalletModal } from "@/components/wallets/new-wallet-modal"
 
 export default function WalletsPage() {
   const router = useRouter()
   const { wallets, status, walletsStatus, importWallet } = useApp()
   const [showEoas, setShowEoas] = useState<boolean>(false)
+  const [addWalletModalOpen, setAddWalletModalOpen] = useState<boolean>(false)
+  const { addWallet } = useApp()
 
   useEffect(() => {
     if(status === "unauthenticated") {
@@ -31,6 +34,10 @@ export default function WalletsPage() {
 
   const onConnectWalletModalOpenChange = () => {
 
+  }
+
+  const toggleAddWalletModal = () => {
+    setAddWalletModalOpen(!addWalletModalOpen)
   }
 
   const getWalletDisplayName = (walletType: string) => {
@@ -90,6 +97,7 @@ export default function WalletsPage() {
   return (
     <div className="space-y-6">
       <ConnectWalletModal open={connectWalletModalOpen} onOpenChange={() => setConnectWalletModalOpen(!connectWalletModalOpen)} importWalletFunction={importWallet}/>
+      <NewWalletModal open={addWalletModalOpen} onOpenChange={toggleAddWalletModal} addWalletFunction={addWallet} />
       <div>
         <h1 className="text-3xl font-bold text-black dark:text-white">Connected Wallets</h1>
         <p className="text-gray-600 dark:text-gray-400 mt-1">Manage wallets connected to your SFLuv account</p>
@@ -152,11 +160,18 @@ export default function WalletsPage() {
           )})
         )}
       </div>
-
+{/*
       <div className="flex flex-col sm:flex-row gap-4">
-        <Button className="bg-[#eb6c6c] hover:bg-[#d55c5c]" onClick={() => setConnectWalletModalOpen(!connectWalletModalOpen)}>
+        <Button className="bg-[#eb6c6c] hover:bg-[#d55c5c]" onClick={connectWallet}>
           <Plus className="h-4 w-4 mr-2" />
           Connect New Wallet
+        </Button>
+      </div> */}
+
+      <div className="flex flex-col sm:flex-row gap-4">
+        <Button className="bg-[#eb6c6c] hover:bg-[#d55c5c]" onClick={toggleAddWalletModal}>
+          <Plus className="h-4 w-4 mr-2" />
+          New Wallet
         </Button>
       </div>
 

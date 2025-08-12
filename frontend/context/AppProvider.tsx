@@ -15,6 +15,8 @@ import { JsonRpcSigner, Signer } from "ethers";
 import { BrowserProvider } from "ethers";
 import { AppWallet } from "@/lib/wallets/wallets";
 import { UserResponse, GetUserResponse, WalletResponse, LocationResponse } from "@/types/server";
+import { importWallet as privyImportWallet } from "@/lib/wallets/import";
+import { useRouter } from "next/navigation";
 
 // const mockUser: User = { id: "user3", name: "Bob Johnson", email: "bob@example.com", isMerchant: true, isAdmin: false, isOrganizer: false }
 export type UserStatus = "loading" | "authenticated" | "unauthenticated"
@@ -70,6 +72,7 @@ interface AppContextType {
   wallets: AppWallet[];
   walletsStatus: WalletsStatus
   tx: TxState;
+  addWallet: (walletName: string) => Promise<void>
   importWallet: (walletName: string, privateKey: string) => Promise<void>
   updateWallet: (id: number, name: string) => Promise<string | null>
   refreshWallets: () => Promise<void>
@@ -113,18 +116,19 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     wallets: privyWallets,
     ready: walletsReady
   } = useWallets();
-  const { importWallet: privyImportWallet } = useImportWallet()
+  const {
+    replace
+  } = useRouter()
 
 
 
   useEffect(() => {
     if(!privyReady) return;
-    console.log("ready")
     if(!walletsReady) return;
-    console.log("wready")
 
+    console.log(privyAuthenticated)
     if(!privyAuthenticated) {
-      setStatus("unauthenticated")
+      _resetAppState()
       return
     }
 
@@ -177,6 +181,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
   }
 
   const _resetAppState = async () => {
+    replace("/")
     setUser(null)
     setWallets([])
     setStatus("unauthenticated")
@@ -256,59 +261,45 @@ export default function AppProvider({ children }: { children: ReactNode }) {
         extWallets = await _getWallets()
       }
 
-      let wlts: AppWallet[] = [];
-      for(const i in privyWallets) {
+      let wResults: Promise<AppWallet>[] = []
+      let cResults: Promise<void>[] = []
+      for(let i = 0; i < privyWallets.length; i++) {
         const privyWallet = privyWallets[i]
 
-        let extWallet = extWallets.find((w, n) => w.eoa_address == privyWallet.address && w.is_eoa)
-        if(!extWallet) {
-          extWallet = {
+        cResults.push(privyWallet.switchChain(CHAIN_ID));
+
+        let extWallet = extWallets.find((w) => w.eoa_address == privyWallet.address && w.is_eoa === true)
+        wResults.push(_initEOAWallet(privyWallet, extWallet, i))
+
+        let smartWallets = extWallets.filter((w) => w.eoa_address == privyWallet.address && w.is_eoa === false && w.smart_index !== undefined)
+        console.log(smartWallets)
+        console.log(smartWallets.length)
+        if(smartWallets.length === 0) {
+          smartWallets.push({
             id: null,
             owner: privyUser.id,
-            name: "EOA-" + (i + 1),
-            is_eoa: true,
-            eoa_address: privyWallet.address
-          }
-
-          let id = await _postWallet(extWallet)
-          extWallet.id = id
+            name: "",
+            is_eoa: false,
+            eoa_address: privyWallet.address,
+            smart_index: 0
+          })
         }
+        console.log(smartWallets)
 
-        const eoaName = extWallet.name
-        const w = new AppWallet(privyWallet, eoaName, { id: extWallet.id || undefined })
-        await w.init()
-        wlts.push(w)
+        for(let index = 0n; index < BigInt(smartWallets.length); index++) {
+          let extSmartWallet = smartWallets.find((w) => {
+            if(w.smart_index === undefined) w.smart_index = 10000
+            if(w.smart_index === null) w.smart_index = 10000
+            return w.eoa_address == privyWallet.address && w.is_eoa === false && BigInt(w.smart_index) === index
+          })
+          console.log("w", extSmartWallet)
+          if(!extSmartWallet) continue
 
-        await privyWallet.switchChain(CHAIN_ID);
-        let next = true;
-        let index = 0n;
-        while(next) {
-          let extSmartWallet = extWallets.find((w, n) => w.eoa_address == privyWallet.address && w.smart_index != undefined && BigInt(w.smart_index) == index)
-
-          const prefix = extWallet.name.startsWith("EOA") ? "SW-" + (i + 1) : extWallet.name + "-SW"
-          const smartWalletName = extSmartWallet?.name || prefix + "-" + (index + 1n).toString()
-          const w = new AppWallet(privyWallet, smartWalletName, {index})
-          next = await w.init()
-          if(next){
-            wlts.push(w)
-            if(!extSmartWallet) {
-              extSmartWallet = {
-                id: null,
-                owner: privyUser.id,
-                name: smartWalletName,
-                is_eoa: false,
-                eoa_address: privyWallet.address,
-                smart_address: w.address,
-                smart_index: Number(w.index)
-              }
-
-              let id = await _postWallet(extSmartWallet)
-              w.setId(id)
-            }
-            index += 1n
-          }
+          wResults.push(_initSmartWallet(privyWallet, extSmartWallet, index, i))
         }
       }
+      await Promise.all(cResults)
+      let wlts = await Promise.all(wResults)
 
       setWallets(wlts)
       setWalletsStatus("available")
@@ -321,6 +312,64 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     }
   }
 
+  const _initEOAWallet = async (privyWallet: ConnectedWallet, wallet: WalletResponse | undefined, i: number): Promise<AppWallet> => {
+    if(!privyUser) throw new Error("user not logged in")
+
+    if(!wallet) {
+      wallet = {
+        id: null,
+        owner: privyUser.id,
+        name: "EOA-" + (i + 1),
+        is_eoa: true,
+        eoa_address: privyWallet.address
+      }
+
+      let id = await _postWallet(wallet)
+      wallet.id = id
+    }
+
+    const eoaName = wallet.name
+    const w = new AppWallet(privyWallet, eoaName, { id: wallet.id || undefined })
+    await w.init()
+    return w
+  }
+
+  const _initSmartWallet = async (privyWallet: ConnectedWallet, wallet: WalletResponse, index: bigint, i: number): Promise<AppWallet> => {
+    if(wallet.is_eoa) throw new Error("trying to initialize smart wallet with eoa")
+    const smartWalletName = wallet?.name || "SW-" + (i+1) + "-" + (index + 1n).toString()
+
+    const w = new AppWallet(privyWallet, smartWalletName, {index, id: wallet.id || undefined})
+    await w.init()
+
+    if(wallet.id === null) {
+      wallet.smart_address = w.address
+      wallet.smart_index = Number(index)
+      let id = await _postWallet(wallet)
+      w.setId(id)
+    }
+
+    return w
+  }
+
+  const addWallet = async (walletName: string) => {
+    if(!privyUser) throw new Error("no user logged in")
+    const privyWallet = privyWallets[0]
+    const n = wallets.filter((w) => w.owner.address === privyWallet.address && w.type === "smartwallet").length
+
+    console.log(n)
+
+    const wallet: WalletResponse = {
+      id: null,
+      owner: privyUser.id,
+      name: walletName,
+      is_eoa: false,
+      eoa_address: privyWallet.address,
+    }
+
+    const w = await _initSmartWallet(privyWallet, wallet, BigInt(n), 1)
+    setWallets([...wallets, w])
+  }
+
   const importWallet = async (walletName: string, privateKey: string) => {
     if(!privyUser) {
       setError("no user authenticated")
@@ -328,15 +377,18 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     }
     let s = walletsStatus
     setWalletsStatus("loading")
+
     let w: WalletResponse
     try {
-      const wallet = await privyImportWallet({ privateKey })
+      const accessToken = await getAccessToken()
+      if(!accessToken) throw new Error("no access token available")
+      const address = await privyImportWallet(privateKey, accessToken)
       w = {
         id: 0,
         owner: privyUser.id,
         name: walletName,
         is_eoa: true,
-        eoa_address: wallet.address
+        eoa_address: address
       }
     }
     catch(error) {
@@ -460,6 +512,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
           walletsStatus,
           userLocations,
           tx,
+          addWallet,
           importWallet,
           updateWallet,
           refreshWallets,
