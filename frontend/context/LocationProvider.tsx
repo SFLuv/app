@@ -82,13 +82,11 @@ export default function LocationProvider({ children }: { children: ReactNode }) 
 
       }
 
-
     const getMapLocations = async () => {
         setMapLocationsStatus("loading")
         try {
-            //const l = await _getMapLocations()
-            //setMapLocations(l.locations)
-            setMapLocations(mockLocations)
+            const l = await _getMapLocations()
+            setMapLocations(l.locations)
             setMapLocationsStatus("available")
         }
         catch {

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strconv"
 
 	"github.com/SFLuv/app/backend/structs"
 	"github.com/SFLuv/app/backend/utils"
@@ -57,14 +58,16 @@ func (a *AppService) AddWallet(w http.ResponseWriter, r *http.Request) {
 	}
 	wallet.Owner = *userDid
 
-	err = a.db.AddWallet(&wallet)
+	id, err := a.db.AddWallet(&wallet)
 	if err != nil {
 		a.logger.Logf("error adding wallet:\n  %#v\nfor user %s: %s", wallet, *userDid, err.Error())
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
+	res := strconv.Itoa(id)
 
 	w.WriteHeader(http.StatusCreated)
+	w.Write([]byte(res))
 }
 
 func (a *AppService) UpdateWallet(w http.ResponseWriter, r *http.Request) {

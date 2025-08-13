@@ -106,6 +106,15 @@ var TEST_LOCATION_1 = structs.Location{
 	ImageURL:    "https://images.example.com/bobs.jpg",
 	Rating:      4.6,
 	MapsPage:    "https://maps.google.com/?cid=abc123",
+	OpeningHours: [][2]float64{
+		{11.0, 20.0}, // Monday
+		{11.0, 20.0}, // Tuesday
+		{11.0, 20.0}, // Wednesday
+		{11.0, 20.0}, // Thursday
+		{11.0, 21.0}, // Friday
+		{12.0, 21.0}, // Saturday
+		{12.0, 18.0}, // Sunday
+	},
 }
 
 var TEST_LOCATION_2 = structs.Location{
@@ -128,6 +137,15 @@ var TEST_LOCATION_2 = structs.Location{
 	ImageURL:    "https://images.example.com/krusty.jpg",
 	Rating:      4.9,
 	MapsPage:    "https://maps.google.com/?cid=def345",
+	OpeningHours: [][2]float64{
+		{9.0, 18.0},  // Monday
+		{10.0, 18.0}, // Tuesday
+		{9.0, 17.0},  // Wednesday
+		{9, 17.0},    // Thursday
+		{10.0, 18.0}, // Friday
+		{12.0, 17.0}, // Saturday
+		{12.0, 16.0}, // Sunday
+	},
 }
 
 var TEST_LOCATION_2A = structs.Location{
@@ -150,6 +168,15 @@ var TEST_LOCATION_2A = structs.Location{
 	ImageURL:    "https://images.example.com/krusty.jpg",
 	Rating:      4.9,
 	MapsPage:    "https://maps.google.com/?cid=def345",
+	OpeningHours: [][2]float64{
+		{9.0, 18.0},  // Monday
+		{10.0, 18.0}, // Tuesday
+		{9.0, 17.0},  // Wednesday
+		{9, 17.0},    // Thursday
+		{10.0, 18.0}, // Friday
+		{12.0, 17.0}, // Saturday
+		{12.0, 16.0}, // Sunday
+	},
 }
 
 var TEST_LOCATIONS = []structs.Location{TEST_LOCATION_1, TEST_LOCATION_2A}

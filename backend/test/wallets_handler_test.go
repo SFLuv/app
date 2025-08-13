@@ -37,6 +37,15 @@ func ModuleAddWalletHandler(t *testing.T) {
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
 		t.Fatalf("request failed, got response code %d", res.StatusCode)
 	}
+
+	resBytes, err := io.ReadAll(res.Body)
+	if err != nil {
+		t.Fatalf("error reading response body: %s", err.Error())
+	}
+
+	if string(resBytes) != "1" {
+		t.Fatalf("expected response 1 got %s", string(resBytes))
+	}
 }
 
 func ModuleUpdateWalletHandler(t *testing.T) {

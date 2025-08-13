@@ -45,7 +45,7 @@ func (a *AppDB) UpdateUserInfo(user *structs.User) error {
 func (a *AppDB) UpdateUserRole(userId string, role string, value bool) error {
 	roles := map[string]string{
 		"admin":     "is_admin",
-		"merchant=": "is_merchant",
+		"merchant":  "is_merchant",
 		"organizer": "is_organizer",
 		"improver":  "is_improver",
 	}

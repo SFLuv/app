@@ -6,7 +6,6 @@ import { MapView } from "@/components/locations/map-view"
 import { ListView } from "@/components/locations/list-view"
 import { LocationModal } from "@/components/locations/location-modal"
 import { mockMerchants, defaultLocation } from "@/data/mock-merchants"
-import { mockGoogleMerchants } from "@/data/mock-google-merchants"
 import type { Merchant, UserLocation } from "@/types/merchant"
 import { useApp } from "@/context/AppProvider"
 import { useLocation } from "@/context/LocationProvider"
@@ -24,11 +23,8 @@ export default function LocationMapPage() {
 
 
   useEffect(() => {
-    if(status === "authenticated") {
-      loadLocations()
-      getMapLocations()
-    }
-  }, [status])
+    getMapLocations()
+  },[])
 
 
   const handleSelectLocation = (location: Location) => {

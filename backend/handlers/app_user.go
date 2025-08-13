@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"database/sql"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -34,8 +35,12 @@ func (a *AppService) GetUserAuthed(w http.ResponseWriter, r *http.Request) {
 	}
 
 	user, err := a.db.GetUserById(*userDid)
-	if err != nil {
+	if err == sql.ErrNoRows {
 		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 
