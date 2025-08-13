@@ -69,10 +69,10 @@ func (a *AppDB) GetLocation(id uint64) (*structs.Location, error) {
 		WHERE location_id = $1
 		ORDER BY weekday;
 	`, id)
-
 	if err != nil {
 		return nil, fmt.Errorf("error getting location hours: %s", err)
 	}
+	defer rows.Close()
 
 	for rows.Next() {
 		err = rows.Scan(
@@ -122,6 +122,7 @@ func (s *AppDB) GetLocations(r *structs.LocationsPageRequest) ([]*structs.Locati
 	if err != nil {
 		return nil, fmt.Errorf("error querying for locations: %w", err)
 	}
+	defer rows.Close()
 
 	locations := []*structs.Location{}
 
@@ -156,6 +157,7 @@ func (s *AppDB) GetLocations(r *structs.LocationsPageRequest) ([]*structs.Locati
 		locations = append(locations, &location)
 	}
 
+	finalLocations := []*structs.Location{}
 	for _, loc := range locations {
 		hours := [][2]float64{}
 		opening_time := float64(100)
@@ -168,11 +170,11 @@ func (s *AppDB) GetLocations(r *structs.LocationsPageRequest) ([]*structs.Locati
 			WHERE location_id = $1
 			ORDER BY weekday;
 		`, loc.ID)
-
 		if err2 != nil {
 			fmt.Printf("error querying location hours table: %s\n", err2)
 			continue
 		}
+
 		for rows2.Next() {
 			err2 = rows2.Scan(
 				&opening_time,
@@ -180,20 +182,21 @@ func (s *AppDB) GetLocations(r *structs.LocationsPageRequest) ([]*structs.Locati
 			)
 			hour_pair := [2]float64{opening_time, closing_time}
 			if err2 != nil {
+				rows2.Close()
 				break
 			}
 			hours = append(hours, hour_pair)
-
 		}
-
 		if err2 != nil {
 			fmt.Printf("error scanning hours rows for get locations: %s\n", err2)
 			continue
 		}
+
 		loc.OpeningHours = hours
+		finalLocations = append(finalLocations, loc)
 	}
 
-	return locations, nil
+	return finalLocations, nil
 }
 
 func (a *AppDB) AddLocation(location *structs.Location) error {
@@ -239,7 +242,8 @@ func (a *AppDB) AddLocation(location *structs.Location) error {
 		location.MapsPage,
 	)
 
-	for i, hours := range location.OpeningHours {
+	for i := 0; i < len(location.OpeningHours); i++ {
+		hours := location.OpeningHours[i]
 		_, err := a.db.Exec(context.Background(), `
 		INSERT INTO location_hours (
 			location_id,
