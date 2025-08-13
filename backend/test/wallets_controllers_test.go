@@ -11,12 +11,16 @@ func GroupWalletsControllers(t *testing.T) {
 }
 
 func ModuleAddWalletController(t *testing.T) {
-	err := AppDb.AddWallet(&TEST_WALLET_1)
+	id, err := AppDb.AddWallet(&TEST_WALLET_1)
 	if err != nil {
 		t.Fatal(err.Error())
 	}
 
-	err = AppDb.AddWallet(&TEST_WALLET_2)
+	if id != 1 {
+		t.Fatalf("expected id 1 got %d", id)
+	}
+
+	_, err = AppDb.AddWallet(&TEST_WALLET_2)
 	if err != nil {
 		t.Fatalf("error adding second wallet: %s", err.Error())
 	}
