@@ -93,7 +93,8 @@ func (s *AppDB) CreateTables() error {
 			owner TEXT NOT NULL REFERENCES users(id),
 			name TEXT NOT NULL,
 			address TEXT NOT NULL,
-			is_favorite BOOLEAN NOT NULL DEFAULT FALSE
+			is_favorite BOOLEAN NOT NULL DEFAULT FALSE,
+			UNIQUE (owner, address)
 		);
 	`)
 	if err != nil {

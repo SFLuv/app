@@ -92,6 +92,7 @@ func (a *AppDB) GetUsers(page int, count int) ([]*structs.User, error) {
 	if err != nil {
 		return nil, fmt.Errorf("error getting users: %s", err)
 	}
+	defer rows.Close()
 
 	for rows.Next() {
 		user := structs.User{}

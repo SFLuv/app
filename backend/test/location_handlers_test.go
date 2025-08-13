@@ -110,7 +110,6 @@ func ModuleGetLocationsHandler(t *testing.T) {
 	if err != nil {
 		t.Fatalf("error reading response body %s", err)
 	}
-
 }
 
 func ModuleUpdateLocationHandler(t *testing.T) {
