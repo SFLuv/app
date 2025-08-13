@@ -58,7 +58,7 @@ interface TxState {
 }
 
 interface AppContextType {
-  error: string | null;
+  error: string | unknown | null;
 
   // Authentication
   status: UserStatus;
@@ -103,7 +103,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
   const [userLocations, setUserLocations] = useState<Location[]>([])
   const [status, setStatus] = useState<UserStatus>("loading")
   const [tx, setTx] = useState<TxState>(defaultTxState)
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | unknown | null>(null);
   const {
       getAccessToken,
       authenticated: privyAuthenticated,
@@ -131,7 +131,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
       return
     }
     if(privyWallets.length === 0) {
-      console.error("wallets not actually connected")
+      setError("wallets not actually connected")
       logout()
       return
     }
@@ -139,6 +139,10 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     _userLogin()
 
   }, [privyReady, privyAuthenticated, walletsReady])
+
+  useEffect(() => {
+    console.log(status)
+  }, [status])
 
   useEffect(() => {
     if(error) console.error(error)
@@ -160,6 +164,8 @@ export default function AppProvider({ children }: { children: ReactNode }) {
   const _userLogin = async () => {
     let userResponse: GetUserResponse | null
 
+    console.log("logging in")
+
     setStatus("loading")
 
     try {
@@ -178,9 +184,8 @@ export default function AppProvider({ children }: { children: ReactNode }) {
       setStatus("authenticated")
     }
     catch(error) {
+      setError(error)
       await logout()
-      setError("error logging in")
-      console.error(error)
     }
   }
 
@@ -305,7 +310,6 @@ export default function AppProvider({ children }: { children: ReactNode }) {
       setWalletsStatus("available")
     }
     catch(error) {
-      console.error(error)
       setWalletsStatus("unavailable")
       throw new Error("error initializing wallets")
     }
@@ -400,8 +404,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     }
     catch(error) {
       setWalletsStatus(s)
-      console.error(error)
-      setError("error updating wallets after import")
+      setError(error)
     }
   }
 
@@ -425,9 +428,8 @@ export default function AppProvider({ children }: { children: ReactNode }) {
       n = name
       await refreshWallets()
     }
-    catch {
-      console.error("error updating wallets")
-      setError("error updating wallets")
+    catch(error) {
+      setError(error)
       throw new Error("error updating wallet")
     }
     setWalletsStatus(s)
@@ -440,8 +442,8 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     try {
       await _initWallets()
     }
-    catch {
-      setError("error updating wallets")
+    catch(error) {
+      setError(error)
     }
     setWalletsStatus(s)
   }
@@ -458,8 +460,8 @@ export default function AppProvider({ children }: { children: ReactNode }) {
         // move user data implementation to helper functions called in useEffect instead of passing into login() for real auth
         // localStorage.setItem("sfluv_user", JSON.stringify(mockUser))
       }
-      catch {
-        setError("error logging in with privy")
+      catch(error) {
+        setError(error)
       }
     }
   }

@@ -18,9 +18,9 @@ export default function Sidebar({
   children: React.ReactNode
 }>) {
 
-  const { status, user, login } = useApp();
+  const { status, login } = useApp();
 
-  if (status === "loading" && !user) return children
+  if (status === "loading") return children
   return (
     <SidebarProvider defaultOpen={status === "authenticated"}>
       <div className="flex h-screen w-full overflow-hidden">
