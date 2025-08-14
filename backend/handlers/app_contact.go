@@ -128,7 +128,7 @@ func (a *AppService) DeleteContact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err = a.db.DeleteContact(*userDid, cId)
+	err = a.db.DeleteContact(cId, *userDid)
 	if err != nil {
 		a.logger.Logf("error deleting contact %d for user %s: %s", cId, *userDid, err.Error())
 		w.WriteHeader(http.StatusInternalServerError)

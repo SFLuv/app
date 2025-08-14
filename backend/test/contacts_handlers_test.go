@@ -19,7 +19,6 @@ func GroupContactsHandlers(t *testing.T) {
 }
 
 func ModuleNewContactHandler(t *testing.T) {
-	Spoofer.SetValue("userDid", TEST_USER_1.Id)
 
 	body_data_1, err := json.Marshal(TEST_CONTACT_1)
 	if err != nil {
@@ -33,8 +32,6 @@ func ModuleNewContactHandler(t *testing.T) {
 
 	add_request_1.Header.Set("Content-Type", "application/json")
 
-	Spoofer.SetValue("userDid", TEST_USER_2.Id)
-
 	body_data_2, err := json.Marshal(TEST_CONTACT_2)
 	if err != nil {
 		t.Fatalf("error marshaling JSON for location 2: %s", err)
@@ -47,6 +44,8 @@ func ModuleNewContactHandler(t *testing.T) {
 
 	add_request_2.Header.Set("Content-Type", "application/json")
 
+	Spoofer.SetValue("userDid", TEST_USER_1.Id)
+
 	add_request_response_1, err := TestServer.Client().Do(add_request_1)
 	if err != nil {
 		t.Fatalf("error sending add request: %s", err)
@@ -54,6 +53,8 @@ func ModuleNewContactHandler(t *testing.T) {
 	if add_request_response_1.StatusCode < 200 || add_request_response_1.StatusCode >= 300 {
 		t.Fatalf("request failed, got response code %d", add_request_response_1.StatusCode)
 	}
+
+	Spoofer.SetValue("userDid", TEST_USER_2.Id)
 
 	add_request_response_2, err := TestServer.Client().Do(add_request_2)
 	if err != nil {
@@ -132,8 +133,8 @@ func ModuleGetContactsHandler(t *testing.T) {
 		t.Fatalf("got incorrect contact name %s, expected %s", contact[0].Name, TEST_CONTACT_2A.Name)
 	}
 
-	if contact[0].Address != TEST_CONTACT_2.Address {
-		t.Fatalf("got incorrect contact address %s, expected %s", contact[0].Address, TEST_CONTACT_2.Address)
+	if contact[0].Address != TEST_CONTACT_2A.Address {
+		t.Fatalf("got incorrect contact address %s, expected %s", contact[0].Address, TEST_CONTACT_2A.Address)
 	}
 }
 

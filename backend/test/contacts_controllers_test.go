@@ -1,7 +1,6 @@
 package test
 
 import (
-	"fmt"
 	"testing"
 )
 
@@ -13,17 +12,16 @@ func GroupContactsControllers(t *testing.T) {
 }
 
 func ModuleAddContactController(t *testing.T) {
-	id, err := AppDb.AddContact(&TEST_CONTACT_1, TEST_CONTACT_1.Owner)
+	_, err := AppDb.AddContact(&TEST_CONTACT_1, TEST_CONTACT_1.Owner)
 	if err != nil {
 		t.Fatal(err.Error())
 	}
 
-	id2, err := AppDb.AddContact(&TEST_CONTACT_2, TEST_CONTACT_1.Owner)
+	_, err = AppDb.AddContact(&TEST_CONTACT_2, TEST_CONTACT_1.Owner)
 	if err != nil {
 		t.Fatal(err.Error())
 	}
 
-	fmt.Println(id, id2)
 }
 
 func ModuleUpdateContactController(t *testing.T) {
@@ -48,12 +46,12 @@ func ModuleGetContactsController(t *testing.T) {
 }
 
 func ModuleDeleteContactController(t *testing.T) {
-	err := AppDb.DeleteContact(TEST_CONTACT_1.Owner, TEST_CONTACT_1.Id)
+	err := AppDb.DeleteContact(TEST_CONTACT_1.Id, TEST_CONTACT_1.Owner)
 	if err != nil {
 		t.Fatal(err.Error())
 	}
 
-	err = AppDb.DeleteContact(TEST_CONTACT_1.Owner, TEST_CONTACT_1.Id)
+	err = AppDb.DeleteContact(TEST_CONTACT_2A.Id, TEST_CONTACT_1.Owner)
 	if err != nil {
 		t.Fatal(err.Error())
 	}

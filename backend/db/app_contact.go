@@ -8,8 +8,6 @@ import (
 )
 
 func (a *AppDB) AddContact(c *structs.Contact, userId string) (*structs.Contact, error) {
-	fmt.Println("add", c.Address)
-	fmt.Println("add", c.Id)
 	row := a.db.QueryRow(context.Background(), `
 		INSERT INTO contacts(
 			owner,
@@ -35,8 +33,6 @@ func (a *AppDB) AddContact(c *structs.Contact, userId string) (*structs.Contact,
 }
 
 func (a *AppDB) UpdateContact(c *structs.Contact, userId string) error {
-	fmt.Println("update", c.Address)
-	fmt.Println("update", c.Id)
 	_, err := a.db.Exec(context.Background(), `
 		UPDATE contacts
 		SET
@@ -44,9 +40,9 @@ func (a *AppDB) UpdateContact(c *structs.Contact, userId string) error {
 			address = $2,
 			is_favorite = $3
 		FROM
-			contacts AS c JOIN users as u ON c.owner = u.id
+			contacts c INNER JOIN users u ON c.owner = u.id
 		WHERE
-			(c.id = $4 AND u.id = $5);
+			(contacts.id = $4 AND u.id = $5);
 	`, c.Name, c.Address, c.IsFavorite, c.Id, userId)
 
 	return err
@@ -91,13 +87,15 @@ func (a *AppDB) GetContacts(userId string) ([]*structs.Contact, error) {
 	return contacts, nil
 }
 
-func (a *AppDB) DeleteContact(userId string, contactId int) error {
+func (a *AppDB) DeleteContact(contactId int, userId string) error {
 	_, err := a.db.Exec(context.Background(), `
 		DELETE FROM
-			contacts JOIN users ON contacts.owner = users.id
+			contacts
+		USING
+			users
 		WHERE
-			(users.id = $1 AND contacts.id = $2);
-	`, userId, contactId)
+			(contacts.id = $1 AND owner = users.id AND users.id = $2);
+	`, contactId, userId)
 
 	return err
 }
