@@ -15,6 +15,8 @@ import {
   CalendarClock,
   FileCheck,
   Calendar,
+  SquareUserIcon,
+  ContactIcon,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import {
@@ -82,6 +84,11 @@ export function DashboardSidebar() {
         title: "Connected Wallets",
         icon: Wallet,
         path: "/wallets",
+      },
+      {
+        title: "Contacts",
+        icon: SquareUserIcon,
+        path: "/contacts"
       }
     ]
 
