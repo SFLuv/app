@@ -19,3 +19,5 @@ export const FACTORY = COMMUNITY_ACCOUNT.account_factory_address as Address
 export const DECIMALS = (config.tokens as any)[COMMUNITY_TOKEN_INDEX].decimals as number
 export const SYMBOL = (config.tokens as any)[COMMUNITY_TOKEN_INDEX].symbol as string
 export const CW_APP_BASE_URL = process.env.NEXT_PUBLIC_CW_BASE_URL || "https://app.citizenwallet.xyz"
+export const GOOGLE_MAPS_API_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY as string
+export const MAP_ID = process.env.NEXT_PUBLIC_MAP_ID as string

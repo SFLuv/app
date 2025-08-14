@@ -1,8 +1,7 @@
 "use client"
 
 import type React from "react"
-
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
 import { useApp } from "@/context/AppProvider"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -12,6 +11,8 @@ import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Loader2 } from "lucide-react"
+import PlaceAutocomplete from "./google_place_finder"
+import { GOOGLE_MAPS_API_KEY } from "@/lib/constants"
 
 const businessTypes = [
   "restaurant",
@@ -54,6 +55,7 @@ const messagingServiceOptions = [
   "Other",
 ]
 
+
 export function MerchantApprovalForm() {
   const router = useRouter()
   const { requestMerchantStatus } = useApp()
@@ -87,6 +89,7 @@ export function MerchantApprovalForm() {
   const [tabletModelOther, setTabletModelOther] = useState("")
   const [messagingService, setMessagingService] = useState("")
   const [messagingServiceOther, setMessagingServiceOther] = useState("")
+
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
@@ -151,6 +154,10 @@ export function MerchantApprovalForm() {
                 required
               />
             </div>
+
+
+            <PlaceAutocomplete/>
+
 
             <div className="space-y-2">
               <Label htmlFor="business-type" className="text-black dark:text-white">

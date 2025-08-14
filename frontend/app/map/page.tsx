@@ -19,7 +19,7 @@ export default function LocationMapPage() {
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [userLocation, setUserLocation] = useState<UserLocation>(defaultLocation)
   const { status } = useApp()
-  const { getMapLocations, loadLocations, mapLocations } = useLocation()
+  const { getMapLocations, mapLocations } = useLocation()
 
 
   useEffect(() => {
