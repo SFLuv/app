@@ -1,31 +1,17 @@
 "use client"; // for Next.js App Router
 
 import { useEffect, useRef, useState } from "react";
-import { GOOGLE_MAPS_API_KEY } from "@/lib/constants";
+import { LAT_DIF, LNG_DIF, MAP_CENTER, MAP_RADIUS } from "@/lib/constants";
 import { useApp } from "@/context/AppProvider";
+
 
 
 export default function PlaceAutocomplete() {
   const { status } = useApp()
-
-
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!containerRef.current) return;
-
-    const addGoogleScript = async () => {
-        const existingScript = document.querySelector<HTMLScriptElement>(
-            `script[src^="https://maps.googleapis.com/maps/api/js"]`);
-        if (!existingScript) {
-        const script = document.createElement("script");
-        script.src = `https://maps.googleapis.com/maps/api/js?key=${GOOGLE_MAPS_API_KEY}&libraries=places`;
-        script.async = true;
-        script.defer = true;
-        document.head.appendChild(script);
-        console.log("Script appended")
-        }
-    }
 
     const importGoogleLibrary = async () => {
         console.log("google maps imported")
@@ -33,10 +19,29 @@ export default function PlaceAutocomplete() {
     }
 
   const init = async () => {
-    await addGoogleScript()
     await importGoogleLibrary()
     //@ts-ignore
-    const placeAutocomplete = new google.maps.places.PlaceAutocompleteElement();
+    const placeAutocomplete = new google.maps.places.PlaceAutocompleteElement({
+    locationRestriction: {
+        south: MAP_CENTER.lat - LAT_DIF,
+        west: MAP_CENTER.lng - LNG_DIF,
+        north: MAP_CENTER.lat + LAT_DIF,
+        east: MAP_CENTER.lng + LNG_DIF,},
+    });
+
+    //@ts-ignore
+    placeAutocomplete.addEventListener('gmp-select', async ({ placePrediction }) => {
+        const place = placePrediction.toPlace();
+        await place.fetchFields({ fields: [
+            'displayName', 'addressComponents', 'location', 'rating', 'regularOpeningHours',
+            'websiteURI', 'primaryTypeDisplayName', 'nationalPhoneNumber', 'googleMapsURI',
+            'googleMapsURI',
+
+        ] });
+        console.log(JSON.stringify(place.toJSON(), /* replacer */ null, /* space */ 2))
+    });
+    placeAutocomplete.className="text-black dark:text-white border rounded-md bg-secondary px-3 py-2"
+
     if (containerRef.current?.querySelector("gmp-place-autocomplete")) {
         console.log("Element is already inside container");
     } else {
@@ -49,5 +54,8 @@ export default function PlaceAutocomplete() {
   }
 , [])
 
-  return <div ref={containerRef}></div>;
+  return (
+      <div ref={containerRef} style={{
+  }}></div>
+  )
 }

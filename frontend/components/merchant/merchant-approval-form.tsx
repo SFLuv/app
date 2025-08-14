@@ -155,9 +155,12 @@ export function MerchantApprovalForm() {
               />
             </div>
 
-
-            <PlaceAutocomplete/>
-
+             <div className="space-y-2">
+              <Label htmlFor="business-name" className="text-black dark:text-white">
+                Search for Your Business
+              </Label>
+              <PlaceAutocomplete/>
+            </div>
 
             <div className="space-y-2">
               <Label htmlFor="business-type" className="text-black dark:text-white">

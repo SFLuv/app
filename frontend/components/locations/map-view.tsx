@@ -13,6 +13,7 @@ import {AdvancedMarker, APIProvider, Map, MapCameraChangedEvent, Pin, useMap} fr
 import type {Marker} from '@googlemaps/markerclusterer';
 import { useLocation } from "@/context/LocationProvider"
 import { Location } from "@/types/location"
+import { GOOGLE_MAPS_API_KEY, MAP_CENTER, MAP_ID } from "@/lib/constants"
 
 type Poi ={ key: string, location: google.maps.LatLngLiteral }
 interface MapViewProps {
@@ -132,11 +133,11 @@ export function MapView({
       <Card className="border bg-card">
         <CardContent className="p-0">
           <div className="w-full h-[600px] bg-gray-100 dark:bg-gray-800 flex items-center justify-center p-4 rounded-lg">
-            <APIProvider apiKey={'AIzaSyDushyc7TgeFyIlxbqiujHdydWDoVoHwNQ'}>
+            <APIProvider apiKey={GOOGLE_MAPS_API_KEY}>
                   <Map
                     defaultZoom={12}
-                    defaultCenter={ { lat: defaultLocation.lat, lng: defaultLocation.lng } }
-                    mapId='5d823aa5e32225a021e19266'
+                    defaultCenter={ MAP_CENTER }
+                    mapId={ MAP_ID }
                   >
                 </Map>
                 <PoiMarkers locations={locations} />
