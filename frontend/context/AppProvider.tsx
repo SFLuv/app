@@ -2,7 +2,7 @@
 
 import { ConnectedWallet, EIP1193Provider, PrivyProvider, useImportWallet, usePrivy, useWallets, Wallet } from "@privy-io/react-auth"
 import { toSimpleSmartAccount, ToSimpleSmartAccountReturnType } from "permissionless/accounts";
-import { createContext, ReactNode, useContext, useEffect, useState } from "react";
+import { createContext, Dispatch, ReactNode, useContext, useEffect, useState } from "react";
 import { Address, createWalletClient, custom, encodeFunctionData, Hash, Hex, hexToBytes, RpcUserOperation } from "viem";
 import { entryPoint07Address, entryPoint08Address, formatUserOperation, PaymasterClient, toPackedUserOperation, ToSmartAccountReturnType, UserOperation } from "viem/account-abstraction";
 import { depositFor, execute, transfer, withdrawTo } from "@/lib/abi";
@@ -22,7 +22,6 @@ import { Contact } from "@/types/contact";
 // const mockUser: User = { id: "user3", name: "Bob Johnson", email: "bob@example.com", isMerchant: true, isAdmin: false, isOrganizer: false }
 export type UserStatus = "loading" | "authenticated" | "unauthenticated"
 export type WalletsStatus = "loading" | "available" | "unavailable"
-export type ContactsStatus = "loading" | "available"
 export type MerchantApprovalStatus = "pending" | "approved" | "rejected" | null
 
 
@@ -44,6 +43,7 @@ interface TxState {
 
 interface AppContextType {
   error: string | unknown | null;
+  setError: Dispatch<unknown>
 
   // Authentication
   status: UserStatus;
@@ -84,8 +84,6 @@ export default function AppProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
   const [wallets, setWallets] = useState<AppWallet[]>([])
   const [walletsStatus, setWalletsStatus] = useState<WalletsStatus>("loading")
-  const [contacts, setContacts] = useState<Contact[]>([])
-  const [contactsStatus, setContactsStatus] = useState<ContactsStatus>("loading")
   const [mapLocations, setMapLocations] = useState<Location[]>([])
   const [userLocations, setUserLocations] = useState<Location[]>([])
   const [status, setStatus] = useState<UserStatus>("loading")
@@ -163,9 +161,6 @@ export default function AppProvider({ children }: { children: ReactNode }) {
       await _userResponseToUser(userResponse)
       await _initWallets(userResponse.wallets)
 
-      setContacts(userResponse.contacts)
-      setContactsStatus("available")
-
       setStatus("authenticated")
     }
     catch(error) {
@@ -180,8 +175,6 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     setStatus("unauthenticated")
     setWallets([])
     setWalletsStatus("unavailable")
-    setContacts([])
-    setContactsStatus("loading")
     setError(null)
   }
 
@@ -247,47 +240,6 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     }
   }
 
-  const _addContact = async (c: Contact) => {
-    const res = await authFetch("/contacts", {
-      method: "POST",
-      body: JSON.stringify(c)
-    })
-
-    if(res.status != 201) {
-      throw new Error("error adding contact")
-    }
-  }
-
-  const _updateContact = async (c: Contact) => {
-    const res = await authFetch("/contacts", {
-      method: "PUT",
-      body: JSON.stringify(c)
-    })
-
-    if(res.status != 201) {
-      throw new Error("error updating contact")
-    }
-  }
-
-  const _getContacts = async (): Promise<Contact[]> => {
-    const res = await authFetch("/contacts")
-
-    if(res.status != 200) {
-      throw new Error("error getting contacts")
-    }
-
-    return await res.json() as Contact[]
-  }
-
-  const _deleteContact = async (id: number) => {
-    const res = await authFetch("/contacts?id=" + id, {
-      method: "DELETE"
-    })
-
-    if(res.status != 200) {
-      throw new Error("error deleting contact")
-    }
-  }
 
   const _initWallets = async (extWallets?: WalletResponse[]) => {
     setWalletsStatus("loading")
@@ -477,59 +429,6 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     setWalletsStatus(s)
   }
 
-  const addContact = async (c: Contact) => {
-    setContactsStatus("loading")
-    try {
-      await _addContact(c)
-      setContacts([...contacts, c])
-    }
-    catch(err) {
-      setError(err)
-    }
-    setContactsStatus("available")
-  }
-
-  const updateContact = async (c: Contact) => {
-    setContactsStatus("loading")
-    try {
-      const index = contacts.findIndex((contact) => c.id === contact.id)
-      if(index === -1) throw new Error("no contact found with id " + c.id)
-      await _updateContact(c)
-      contacts[index] = c
-      setContacts([...contacts])
-    }
-    catch(err) {
-      setError(err)
-    }
-    setContactsStatus("available")
-  }
-
-  const getContacts = async () => {
-    setContactsStatus("loading")
-    try {
-      const cs = await _getContacts()
-      setContacts(cs)
-    }
-    catch(err) {
-      setError(err)
-    }
-    setContactsStatus("available")
-  }
-
-  const deleteContact = async (id: number) => {
-    setContactsStatus("loading")
-    try {
-      const index = contacts.findIndex((contact) => contact.id === id)
-      if(index === -1) throw new Error("no contact found with id " + id)
-      await _deleteContact(id)
-      contacts.splice(index, 1)
-      setContacts([...contacts])
-    }
-    catch(err) {
-      setError(err)
-    }
-    setContactsStatus("available")
-  }
 
   const login = async () => {
     if(!privyReady) {
@@ -599,6 +498,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
           updateWallet,
           refreshWallets,
           error,
+          setError,
           login,
           logout,
           authFetch,
