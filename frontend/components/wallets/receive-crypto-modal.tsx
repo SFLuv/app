@@ -19,6 +19,7 @@ import { generateReceiveLink } from "@citizenwallet/sdk"
 import config from "@/app.config"
 import { Collapsible, CollapsibleTrigger } from "../ui/collapsible"
 import { CollapsibleContent } from "@radix-ui/react-collapsible"
+import ContactOrAddressInput from "../contacts/contact-or-address-input"
 
 interface ReceiveCryptoModalProps {
   open: boolean
@@ -212,14 +213,14 @@ export function ReceiveCryptoModal({ open, onOpenChange, wallet }: ReceiveCrypto
                 >
                   {/* TipTo Address */}
                   {activeTab === "cw" && <>
-                    <Label className="text-sm font-medium">Tip Address</Label>
+                    <Label className="text-sm font-medium">Tip To</Label>
                     <div className="flex gap-2">
-                      <Input
-                        value={tipAddress}
+                      <ContactOrAddressInput
                         className="font-mono text-xs sm:text-sm h-11"
-                        onChange={(e) => {
-                          setTipAddress(e.target.value)
+                        onChange={(value) => {
+                          setTipAddress(value)
                         }}
+                        id="tip-address"
                       />
                     </div>
                     {error && (

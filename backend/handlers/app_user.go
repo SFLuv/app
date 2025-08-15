@@ -58,10 +58,18 @@ func (a *AppService) GetUserAuthed(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	contacts, err := a.db.GetContacts(*userDid)
+	if err != nil {
+		a.logger.Logf("error getting contacts for user %s: %s", *userDid, err.Error())
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
 	response := structs.AuthedUserResponse{
 		User:      *user,
 		Wallets:   wallets,
 		Locations: locations,
+		Contacts:  contacts,
 	}
 
 	bytes, err := json.Marshal(response)

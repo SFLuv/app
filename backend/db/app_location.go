@@ -180,11 +180,11 @@ func (s *AppDB) GetLocations(r *structs.LocationsPageRequest) ([]*structs.Locati
 				&opening_time,
 				&closing_time,
 			)
-			hour_pair := [2]float64{opening_time, closing_time}
 			if err2 != nil {
 				rows2.Close()
 				break
 			}
+			hour_pair := [2]float64{opening_time, closing_time}
 			hours = append(hours, hour_pair)
 		}
 		if err2 != nil {

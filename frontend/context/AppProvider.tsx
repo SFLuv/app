@@ -2,7 +2,7 @@
 
 import { ConnectedWallet, EIP1193Provider, PrivyProvider, useImportWallet, usePrivy, useWallets, Wallet } from "@privy-io/react-auth"
 import { toSimpleSmartAccount, ToSimpleSmartAccountReturnType } from "permissionless/accounts";
-import { createContext, ReactNode, useContext, useEffect, useState } from "react";
+import { createContext, Dispatch, ReactNode, useContext, useEffect, useState } from "react";
 import { Address, createWalletClient, custom, encodeFunctionData, Hash, Hex, hexToBytes, RpcUserOperation } from "viem";
 import { entryPoint07Address, entryPoint08Address, formatUserOperation, PaymasterClient, toPackedUserOperation, ToSmartAccountReturnType, UserOperation } from "viem/account-abstraction";
 import { depositFor, execute, transfer, withdrawTo } from "@/lib/abi";
@@ -16,7 +16,8 @@ import { BrowserProvider } from "ethers";
 import { AppWallet } from "@/lib/wallets/wallets";
 import { UserResponse, GetUserResponse, WalletResponse, LocationResponse } from "@/types/server";
 import { importWallet as privyImportWallet } from "@/lib/wallets/import";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
+import { Contact } from "@/types/contact";
 
 // const mockUser: User = { id: "user3", name: "Bob Johnson", email: "bob@example.com", isMerchant: true, isAdmin: false, isOrganizer: false }
 export type UserStatus = "loading" | "authenticated" | "unauthenticated"
@@ -29,26 +30,9 @@ export interface User {
   name: string
   contact_email?: string
   contact_phone?: string
-  // avatar?: string
   isAdmin: boolean
   isMerchant: boolean
   isOrganizer: boolean
-  // merchantStatus?: MerchantApprovalStatus
-  // merchantProfile?: {
-  //   businessName: string
-  //   description: string
-  //   address: {
-  //     street: string
-  //     city: string
-  //     state: string
-  //     zip: string
-  //   }
-  //   contactInfo: {
-  //     phone: string
-  //     website?: string
-  //   }
-  //   businessType: string
-  // }
 }
 
 interface TxState {
@@ -59,6 +43,7 @@ interface TxState {
 
 interface AppContextType {
   error: string | unknown | null;
+  setError: Dispatch<unknown>
 
   // Authentication
   status: UserStatus;
@@ -96,8 +81,8 @@ const defaultTxState: TxState = {
 const AppContext = createContext<AppContextType | null>(null);
 
 export default function AppProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<User | null>(null);
-  const [wallets, setWallets] = useState<AppWallet[]>([]);
+  const [user, setUser] = useState<User | null>(null)
+  const [wallets, setWallets] = useState<AppWallet[]>([])
   const [walletsStatus, setWalletsStatus] = useState<WalletsStatus>("loading")
   const [mapLocations, setMapLocations] = useState<Location[]>([])
   const [userLocations, setUserLocations] = useState<Location[]>([])
@@ -119,6 +104,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
   const {
     replace
   } = useRouter()
+  const pathname = usePathname()
 
 
 
@@ -140,13 +126,14 @@ export default function AppProvider({ children }: { children: ReactNode }) {
 
   }, [privyReady, privyAuthenticated, walletsReady])
 
-  useEffect(() => {
-    console.log(status)
-  }, [status])
 
   useEffect(() => {
     if(error) console.error(error)
   }, [error])
+
+  useEffect(() => {
+    setError(null)
+  }, [pathname])
 
   const _userResponseToUser = async (r: GetUserResponse) => {
       const u: User = {
@@ -163,8 +150,6 @@ export default function AppProvider({ children }: { children: ReactNode }) {
 
   const _userLogin = async () => {
     let userResponse: GetUserResponse | null
-
-    console.log("logging in")
 
     setStatus("loading")
 
@@ -192,8 +177,8 @@ export default function AppProvider({ children }: { children: ReactNode }) {
   const _resetAppState = async () => {
     replace("/")
     setUser(null)
-    setWallets([])
     setStatus("unauthenticated")
+    setWallets([])
     setWalletsStatus("unavailable")
     setError(null)
   }
@@ -259,6 +244,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
       throw new Error("error updating wallet")
     }
   }
+
 
   const _initWallets = async (extWallets?: WalletResponse[]) => {
     setWalletsStatus("loading")
@@ -448,6 +434,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     setWalletsStatus(s)
   }
 
+
   const login = async () => {
     if(!privyReady) {
       setError("privy not ready")
@@ -516,6 +503,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
           updateWallet,
           refreshWallets,
           error,
+          setError,
           login,
           logout,
           authFetch,

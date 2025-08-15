@@ -1,3 +1,4 @@
+import { Contact } from "./contact"
 import { Location } from "./location"
 
 export interface UserResponse {
@@ -29,4 +30,5 @@ export interface GetUserResponse {
   user: UserResponse
   wallets: WalletResponse[]
   locations: Location[]
+  contacts: Contact[]
 }

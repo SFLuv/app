@@ -6,6 +6,7 @@ import { PrivyProvider } from "@privy-io/react-auth"
 import { PRIVY_ID } from "@/lib/constants"
 import { useTheme } from "next-themes"
 import LocationProvider from "./LocationProvider"
+import ContactsProvider from "./ContactsProvider"
 
 const Providers = ({ children }: { children: ReactNode }) => {
   const { resolvedTheme } = useTheme()
@@ -29,9 +30,11 @@ const Providers = ({ children }: { children: ReactNode }) => {
       }}
     >
       <AppProvider>
+        <ContactsProvider>
         <LocationProvider>
         {children}
         </LocationProvider>
+        </ContactsProvider>
       </AppProvider>
     </PrivyProvider>
   )

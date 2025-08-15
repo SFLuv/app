@@ -57,6 +57,7 @@ func (a *AppDB) GetWalletsByUser(userId string) ([]*structs.Wallet, error) {
 	if err != nil {
 		return nil, fmt.Errorf("error querying user wallets: %s", err)
 	}
+	defer rows.Close()
 
 	wallets := []*structs.Wallet{}
 	for rows.Next() {
