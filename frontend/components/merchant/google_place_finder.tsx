@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { LAT_DIF, LNG_DIF, MAP_CENTER, MAP_RADIUS } from "@/lib/constants";
 import { useApp } from "@/context/AppProvider";
+import { GoogleSubLocation } from "@/types/location";
 
 
 
@@ -38,7 +39,26 @@ export default function PlaceAutocomplete() {
 
 
         ] });
-        console.log(JSON.stringify(place.toJSON(), /* replacer */ null, /* space */ 2))
+        console.log(place.toJSON())
+        const rawGoogleData = place.toJSON()
+        const googleDetails:GoogleSubLocation = {
+            google_id: rawGoogleData.id,
+            name: rawGoogleData.displayName,
+            type: rawGoogleData.primaryTypeDisplayName,
+            street: rawGoogleData.addressComponents[0].longText + " " + rawGoogleData.addressComponents[1].longText,
+            city: rawGoogleData.addressComponents[3].longText,
+            state: rawGoogleData.addressComponents[5].longText,
+            zip: rawGoogleData.addressComponents[7].longText,
+            lat: rawGoogleData.location.lat,
+            lng: rawGoogleData.location.lng,
+            phone: rawGoogleData.nationalPhoneNumber,
+            website: rawGoogleData.websiteURI,
+            image_url: rawGoogleData.photos[0].googleMapsURI,
+            rating: rawGoogleData.rating,
+            maps_page: rawGoogleData.googleMapsURI,
+            opening_hours: rawGoogleData.regularOpeningHours.weekdayDescriptions,
+        }
+        console.log(googleDetails)
     });
     placeAutocomplete.className="text-black dark:text-white border rounded-md bg-secondary px-3 py-2"
 

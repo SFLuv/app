@@ -30,5 +30,22 @@ export interface Location {
   service_stations: number;
   tablet_model: string;
   messaging_service: string;
+}
 
+export interface GoogleSubLocation {
+  google_id: string;
+  name: string;
+  type: string;
+  street: string;
+  city: string;
+  state: string;
+  zip: string;
+  lat: number;
+  lng: number;
+  phone: string;
+  website: string;
+  image_url: string;
+  rating: number;
+  maps_page: string;
+  opening_hours: string[];
 }
