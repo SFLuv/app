@@ -21,6 +21,7 @@ export default function ContactsProvider ({ children }: { children: ReactNode })
   const { status, authFetch, setError } = useApp()
 
   useEffect(() => {
+    console.log(status)
     if(status === "loading") return
 
     if(status === "unauthenticated") {
@@ -29,11 +30,12 @@ export default function ContactsProvider ({ children }: { children: ReactNode })
       return
     }
 
+    console.log("getting contacts")
     getContacts()
   }, [status])
 
 
-  const _addContact = async (c: Contact) => {
+  const _addContact = async (c: Contact): Promise<Contact> => {
     const res = await authFetch("/contacts", {
       method: "POST",
       body: JSON.stringify(c)
@@ -42,6 +44,8 @@ export default function ContactsProvider ({ children }: { children: ReactNode })
     if(res.status != 201) {
       throw new Error("error adding contact")
     }
+
+    return await res.json() as Contact
   }
 
   const _updateContact = async (c: Contact) => {
@@ -79,8 +83,8 @@ export default function ContactsProvider ({ children }: { children: ReactNode })
     const addContact = async (c: Contact) => {
       setContactsStatus("loading")
       try {
-        await _addContact(c)
-        setContacts([...contacts, c])
+        const contact  = await _addContact(c)
+        setContacts([...contacts, contact])
       }
       catch(err) {
         setError(err)

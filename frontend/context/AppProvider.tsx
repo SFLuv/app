@@ -16,7 +16,7 @@ import { BrowserProvider } from "ethers";
 import { AppWallet } from "@/lib/wallets/wallets";
 import { UserResponse, GetUserResponse, WalletResponse, LocationResponse } from "@/types/server";
 import { importWallet as privyImportWallet } from "@/lib/wallets/import";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { Contact } from "@/types/contact";
 
 // const mockUser: User = { id: "user3", name: "Bob Johnson", email: "bob@example.com", isMerchant: true, isAdmin: false, isOrganizer: false }
@@ -104,6 +104,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
   const {
     replace
   } = useRouter()
+  const pathname = usePathname()
 
 
 
@@ -129,6 +130,10 @@ export default function AppProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if(error) console.error(error)
   }, [error])
+
+  useEffect(() => {
+    setError(null)
+  }, [pathname])
 
   const _userResponseToUser = async (r: GetUserResponse) => {
       const u: User = {
