@@ -26,6 +26,10 @@ export default function LocationProvider({ children }: { children: ReactNode }) 
     const [mapLocationsStatus, setMapLocationsStatus] = useState<LocationsStatus>("loading")
     const { authFetch } = useApp()
 
+    useEffect(() => {
+      getMapLocations()
+    }, [])
+
 
     const _getMapLocations = async (): Promise<LocationResponse> => {
         const res = await fetch(process.env.NEXT_PUBLIC_BACKEND_BASE_URL + "/locations")

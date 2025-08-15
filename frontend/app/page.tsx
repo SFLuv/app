@@ -9,6 +9,7 @@ import { TransactionModal } from "@/components/transactions/transaction-modal"
 import { mockMerchantTransactions, mockUserTransactions } from "@/data/mock-transactions"
 import { useEffect, useState } from "react"
 import { Transaction } from "@/types/transaction"
+import LocationMapPage from "./map/page"
 
 export default function Dashboard() {
   const { user, status } = useApp()
@@ -17,7 +18,11 @@ export default function Dashboard() {
   //CHANGE ONCE DASHBOARD IMPLEMENTED
   useEffect(() => {
     router.replace("/map")
-  }, [])
+  }, [status])
+
+  return (
+    <LocationMapPage />
+  )
 
   return (
     <div className="min-h-screen flex items-center justify-center">
