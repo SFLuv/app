@@ -18,5 +18,17 @@ export interface Location {
   image_url: string;
   rating: number;
   maps_page: string;
-  opening_hours: [number, number][]
+  opening_hours: string[];
+  contact_firstname: string;
+  contact_lastname: string;
+  contact_phone: string;
+  pos_system: string;
+  sole_proprietorship: string;
+  tipping_policy: string;
+  tipping_division: string;
+  table_coverage: string;
+  service_stations: number;
+  tablet_model: string;
+  messaging_service: string;
+
 }

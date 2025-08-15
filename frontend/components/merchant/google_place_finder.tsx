@@ -34,8 +34,8 @@ export default function PlaceAutocomplete() {
         const place = placePrediction.toPlace();
         await place.fetchFields({ fields: [
             'displayName', 'addressComponents', 'location', 'rating', 'regularOpeningHours',
-            'websiteURI', 'primaryTypeDisplayName', 'nationalPhoneNumber', 'googleMapsURI',
-            'googleMapsURI',
+            'websiteURI', 'primaryTypeDisplayName', 'nationalPhoneNumber', 'googleMapsURI', 'photos',
+
 
         ] });
         console.log(JSON.stringify(place.toJSON(), /* replacer */ null, /* space */ 2))

@@ -1,7 +1,7 @@
 "use client"
 
 import type React from "react"
-import { useEffect, useState } from "react"
+import { useState } from "react"
 import { useRouter } from "next/navigation"
 import { useApp } from "@/context/AppProvider"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -12,7 +12,9 @@ import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Loader2 } from "lucide-react"
 import PlaceAutocomplete from "./google_place_finder"
-import { GOOGLE_MAPS_API_KEY } from "@/lib/constants"
+import { useLocation } from "@/context/LocationProvider"
+import { Location } from "@/types/location"
+
 
 const businessTypes = [
   "restaurant",
@@ -47,6 +49,16 @@ const tableCoverageOptions = [
 
 const tabletOptions = ["iPad", "Android tablet", "We do not have a tablet accessible near register", "Other"]
 
+const tippingDivisionOptions = [
+  "Each member receives their own tips",
+  "All tips are pooled and divided between the team",
+  "Other"
+]
+
+const serviceStationOptions = [
+  "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10"
+]
+
 const messagingServiceOptions = [
   "Zapier",
   "Google messaging",
@@ -57,23 +69,12 @@ const messagingServiceOptions = [
 
 
 export function MerchantApprovalForm() {
-  const router = useRouter()
-  const { requestMerchantStatus } = useApp()
+  // Internal Form State
   const [isSubmitting, setIsSubmitting] = useState(false)
 
-  // Existing form state
-  const [businessName, setBusinessName] = useState("")
+  // User-inputted state
   const [description, setDescription] = useState("")
-  const [businessType, setBusinessType] = useState("")
-  const [businessTypeOther, setBusinessTypeOther] = useState("")
-  const [street, setStreet] = useState("")
-  const [city, setCity] = useState("")
-  const [state, setState] = useState("")
-  const [zip, setZip] = useState("")
-  const [phone, setPhone] = useState("")
-  const [website, setWebsite] = useState("")
-
-  // New form state
+  const [email, setEmail] = useState("")
   const [primaryContactFirstName, setPrimaryContactFirstName] = useState("")
   const [primaryContactLastName, setPrimaryContactLastName] = useState("")
   const [primaryContactPhone, setPrimaryContactPhone] = useState("")
@@ -82,55 +83,74 @@ export function MerchantApprovalForm() {
   const [soleProprietorship, setSoleProprietorship] = useState("")
   const [tippingPolicy, setTippingPolicy] = useState("")
   const [tippingPolicyOther, setTippingPolicyOther] = useState("")
+  const [tippingDivision, setTippingDivision] = useState("")
+  const [tippingDivisionOther, setTippingDivisionOther] = useState("")
   const [tableCoverage, setTableCoverage] = useState("")
   const [tableCoverageOther, setTableCoverageOther] = useState("")
-  const [tablesOrStations, setTablesOrStations] = useState("")
+  const [serviceStations, setServiceStations] = useState("")
   const [tabletModel, setTabletModel] = useState("")
   const [tabletModelOther, setTabletModelOther] = useState("")
   const [messagingService, setMessagingService] = useState("")
   const [messagingServiceOther, setMessagingServiceOther] = useState("")
 
+  // State pulled from Google
+  const [googleID, setGoogleID] = useState("")
+  const [businessName, setBusinessName] = useState("")
+  const [businessType, setBusinessType] = useState("")
+  const [street, setStreet] = useState("")
+  const [city, setCity] = useState("")
+  const [state, setState] = useState("")
+  const [lat, setLat] = useState(0)
+  const [lng, setLng] = useState(0)
+  const [zip, setZip] = useState("")
+  const [phone, setPhone] = useState("")
+  const [website, setWebsite] = useState("")
+  const [imageURL, setImageURL] = useState("")
+  const [rating, setRating] = useState(0)
+  const [googleMapsURL, setGoogleMapsURL] = useState("")
+  const [openingHours, setOpeningHours] = useState([])
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
-    setIsSubmitting(true)
 
     // Create merchant profile with all fields
-    const merchantProfile = {
-      businessName,
-      description,
-      businessType: businessType === "other" ? businessTypeOther : businessType,
-      address: {
-        street,
-        city,
-        state,
-        zip,
-      },
-      contactInfo: {
-        phone,
-        website: website || undefined,
-      },
-      primaryContact: {
-        firstName: primaryContactFirstName,
-        lastName: primaryContactLastName,
-        phone: primaryContactPhone,
-      },
-      posSystem: posSystem === "Other" ? posSystemOther : posSystem,
-      soleProprietorship,
-      tippingPolicy: tippingPolicy === "Other" ? tippingPolicyOther : tippingPolicy,
-      tableCoverage: tableCoverage === "Other" ? tableCoverageOther : tableCoverage,
-      tablesOrStations,
-      tabletModel: tabletModel === "Other" ? tabletModelOther : tabletModel,
-      messagingService: messagingService === "Other" ? messagingServiceOther : messagingService,
-    }
+    const newLocation:Location = {
+      id: 0,
+      google_id: googleID,
+      owner_id: "",
+      name: businessName,
+      description: description,
+      type: businessType,
+      approval: false,
+      street: street,
+      city: city,
+      state: state,
+      zip: zip,
+      lat: lat,
+      lng: lng,
+      phone: phone,
+      email: email,
+      website: website,
+      image_url: imageURL,
+      rating: rating,
+      maps_page: googleMapsURL,
+      opening_hours: openingHours,
+      contact_firstname: primaryContactFirstName,
+      contact_lastname: primaryContactLastName,
+      contact_phone: primaryContactPhone,
+      pos_system: posSystem === "Other" ? posSystemOther : posSystem,
+      sole_proprietorship: soleProprietorship,
+      tipping_policy: tippingPolicy === "Other" ? tippingPolicyOther : tippingPolicy,
+      tipping_division: tippingDivision  === "Other" ? tippingDivisionOther: tippingDivision,
+      table_coverage: tableCoverage  === "Other" ? tableCoverageOther : tableCoverage,
+      service_stations: Number(serviceStations),
+      tablet_model: tabletModel  === "Other" ? tabletModelOther : tabletModel,
+      messaging_service: messagingService === "Other" ? messagingServiceOther : messagingService,
+      }
 
-    // Submit merchant approval request
-    setTimeout(() => {
-      requestMerchantStatus(merchantProfile)
-      setIsSubmitting(false)
-      router.push("/merchant-status")
-    }, 1500)
-  }
+      console.log(newLocation)
+
+    }
 
   return (
     <Card>
@@ -142,56 +162,12 @@ export function MerchantApprovalForm() {
         <form onSubmit={handleSubmit} className="space-y-6">
           <div className="space-y-4">
             {/* Existing Business Information */}
-            <div className="space-y-2">
-              <Label htmlFor="business-name" className="text-black dark:text-white">
-                Business Name
-              </Label>
-              <Input
-                id="business-name"
-                value={businessName}
-                onChange={(e) => setBusinessName(e.target.value)}
-                className="text-black dark:text-white bg-secondary"
-                required
-              />
-            </div>
 
              <div className="space-y-2">
               <Label htmlFor="business-name" className="text-black dark:text-white">
                 Search for Your Business
               </Label>
               <PlaceAutocomplete/>
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="business-type" className="text-black dark:text-white">
-                Business Type
-              </Label>
-              <Select value={businessType} onValueChange={setBusinessType} required>
-                <SelectTrigger className="text-black dark:text-white bg-secondary">
-                  <SelectValue placeholder="Select business type" />
-                </SelectTrigger>
-                <SelectContent>
-                  {businessTypes.map((type) => (
-                    <SelectItem key={type} value={type}>
-                      {type.charAt(0).toUpperCase() + type.slice(1)}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              {businessType === "other" && (
-                <div className="space-y-2 mt-2">
-                  <Label htmlFor="business-type-other" className="text-black dark:text-white">
-                    Business Type
-                  </Label>
-                  <Input
-                    id="business-type-other"
-                    value={businessTypeOther}
-                    onChange={(e) => setBusinessTypeOther(e.target.value)}
-                    className="text-black dark:text-white bg-secondary"
-                    placeholder="Specify your business type"
-                  />
-                </div>
-              )}
             </div>
 
             <div className="space-y-2">
@@ -205,92 +181,6 @@ export function MerchantApprovalForm() {
                 className="text-black dark:text-white bg-secondary min-h-[100px]"
                 required
               />
-            </div>
-
-            {/* Business Address */}
-            <div>
-              <h3 className="text-lg font-medium text-black dark:text-white mb-4">Business Address</h3>
-              <div className="grid gap-4 md:grid-cols-2">
-                <div className="space-y-2">
-                  <Label htmlFor="street" className="text-black dark:text-white">
-                    Street Address
-                  </Label>
-                  <Input
-                    id="street"
-                    value={street}
-                    onChange={(e) => setStreet(e.target.value)}
-                    className="text-black dark:text-white bg-secondary"
-                    required
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="city" className="text-black dark:text-white">
-                    City
-                  </Label>
-                  <Input
-                    id="city"
-                    value={city}
-                    onChange={(e) => setCity(e.target.value)}
-                    className="text-black dark:text-white bg-secondary"
-                    required
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="state" className="text-black dark:text-white">
-                    State
-                  </Label>
-                  <Input
-                    id="state"
-                    value={state}
-                    onChange={(e) => setState(e.target.value)}
-                    className="text-black dark:text-white bg-secondary"
-                    required
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="zip" className="text-black dark:text-white">
-                    ZIP Code
-                  </Label>
-                  <Input
-                    id="zip"
-                    value={zip}
-                    onChange={(e) => setZip(e.target.value)}
-                    className="text-black dark:text-white bg-secondary"
-                    required
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* Business Contact Information */}
-            <div className="grid gap-4 md:grid-cols-2">
-              <div className="space-y-2">
-                <Label htmlFor="phone" className="text-black dark:text-white">
-                  Business Phone
-                </Label>
-                <Input
-                  id="phone"
-                  value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
-                  className="text-black dark:text-white bg-secondary"
-                  required
-                />
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="website" className="text-black dark:text-white">
-                  Business Website (Optional)
-                </Label>
-                <Input
-                  id="website"
-                  value={website}
-                  onChange={(e) => setWebsite(e.target.value)}
-                  className="text-black dark:text-white bg-secondary"
-                />
-              </div>
             </div>
 
             {/* Primary Contact Information */}
@@ -423,6 +313,38 @@ export function MerchantApprovalForm() {
               )}
             </div>
 
+            <div className="space-y-2">
+              <Label htmlFor="tablet-model" className="text-black dark:text-white">
+                How are tips divided amongst staff members?
+              </Label>
+              <Select value={tippingDivision} onValueChange={setTippingDivision} required>
+                <SelectTrigger className="text-black dark:text-white bg-secondary">
+                  <SelectValue placeholder="Select tip divison style" />
+                </SelectTrigger>
+                <SelectContent>
+                  {tippingDivisionOptions.map((option) => (
+                    <SelectItem key={option} value={option}>
+                      {option}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {tippingDivision === "Other" && (
+                <div className="space-y-2 mt-2">
+                  <Label htmlFor="tipping-division-other" className="text-black dark:text-white">
+                    Division of Tips
+                  </Label>
+                  <Input
+                    id="tipping-division-other"
+                    value={tippingDivisionOther}
+                    onChange={(e) => setTippingDivisionOther(e.target.value)}
+                    className="text-black dark:text-white bg-secondary"
+                    placeholder="Specify your tip divison style"
+                  />
+                </div>
+              )}
+            </div>
+
             {/* Table Coverage */}
             <div className="space-y-2">
               <Label htmlFor="table-coverage" className="text-black dark:text-white">
@@ -461,14 +383,18 @@ export function MerchantApprovalForm() {
               <Label htmlFor="tables-or-stations" className="text-black dark:text-white">
                 How many tables or service stations do you have?
               </Label>
-              <Input
-                id="tables-or-stations"
-                value={tablesOrStations}
-                onChange={(e) => setTablesOrStations(e.target.value)}
-                className="text-black dark:text-white bg-secondary"
-                placeholder="Enter number of tables or service stations"
-                required
-              />
+              <Select value={serviceStations} onValueChange={setServiceStations} required>
+                <SelectTrigger className="text-black dark:text-white bg-secondary">
+                  <SelectValue placeholder="Select # of service stations" />
+                </SelectTrigger>
+                <SelectContent>
+                  {serviceStationOptions.map((option) => (
+                    <SelectItem key={option} value={option}>
+                      {option}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
 
             {/* Tablet Model */}
