@@ -5,9 +5,11 @@ import { LAT_DIF, LNG_DIF, MAP_CENTER, MAP_RADIUS } from "@/lib/constants";
 import { useApp } from "@/context/AppProvider";
 import { GoogleSubLocation } from "@/types/location";
 
+interface PlaceAutocompleteProps {
+  setGoogleSubLocation: React.Dispatch<React.SetStateAction<GoogleSubLocation | null>>;
+}
 
-
-export default function PlaceAutocomplete() {
+export default function PlaceAutocomplete({ setGoogleSubLocation }: PlaceAutocompleteProps) {
   const { status } = useApp()
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -36,10 +38,10 @@ export default function PlaceAutocomplete() {
         await place.fetchFields({ fields: [
             'displayName', 'addressComponents', 'location', 'rating', 'regularOpeningHours',
             'websiteURI', 'primaryTypeDisplayName', 'nationalPhoneNumber', 'googleMapsURI', 'photos',
+            'svgIconMaskURI'
 
 
         ] });
-        console.log(place.toJSON())
         const rawGoogleData = place.toJSON()
         const googleDetails:GoogleSubLocation = {
             google_id: rawGoogleData.id,
@@ -58,7 +60,9 @@ export default function PlaceAutocomplete() {
             maps_page: rawGoogleData.googleMapsURI,
             opening_hours: rawGoogleData.regularOpeningHours.weekdayDescriptions,
         }
+        console.log(rawGoogleData)
         console.log(googleDetails)
+        setGoogleSubLocation(googleDetails)
     });
     placeAutocomplete.className="text-black dark:text-white border rounded-md bg-secondary px-3 py-2"
 

@@ -13,7 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Loader2 } from "lucide-react"
 import PlaceAutocomplete from "./google_place_finder"
 import { useLocation } from "@/context/LocationProvider"
-import { Location } from "@/types/location"
+import { Location, GoogleSubLocation } from "@/types/location"
 
 
 const businessTypes = [
@@ -92,6 +92,8 @@ export function MerchantApprovalForm() {
   const [tabletModelOther, setTabletModelOther] = useState("")
   const [messagingService, setMessagingService] = useState("")
   const [messagingServiceOther, setMessagingServiceOther] = useState("")
+  const [googleSubLocation, setGoogleSubLocation] = useState<GoogleSubLocation | null>(null);
+
 
   // State pulled from Google
   const [googleID, setGoogleID] = useState("")
@@ -112,29 +114,30 @@ export function MerchantApprovalForm() {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
+    if(!googleSubLocation) return
 
     // Create merchant profile with all fields
     const newLocation:Location = {
       id: 0,
-      google_id: googleID,
+      google_id: googleSubLocation.google_id,
       owner_id: "",
-      name: businessName,
+      name: googleSubLocation.name,
       description: description,
-      type: businessType,
+      type: googleSubLocation.type,
       approval: false,
-      street: street,
-      city: city,
-      state: state,
-      zip: zip,
-      lat: lat,
-      lng: lng,
-      phone: phone,
+      street: googleSubLocation.street,
+      city: googleSubLocation.city,
+      state: googleSubLocation.state,
+      zip: googleSubLocation.zip,
+      lat: googleSubLocation.lat,
+      lng: googleSubLocation.lng,
+      phone:googleSubLocation.phone,
       email: email,
-      website: website,
-      image_url: imageURL,
-      rating: rating,
-      maps_page: googleMapsURL,
-      opening_hours: openingHours,
+      website: googleSubLocation.website,
+      image_url: googleSubLocation.image_url,
+      rating: googleSubLocation.rating,
+      maps_page: googleSubLocation.maps_page,
+      opening_hours: googleSubLocation.opening_hours,
       contact_firstname: primaryContactFirstName,
       contact_lastname: primaryContactLastName,
       contact_phone: primaryContactPhone,
@@ -167,7 +170,7 @@ export function MerchantApprovalForm() {
               <Label htmlFor="business-name" className="text-black dark:text-white">
                 Search for Your Business
               </Label>
-              <PlaceAutocomplete/>
+              <PlaceAutocomplete setGoogleSubLocation={setGoogleSubLocation}/>
             </div>
 
             <div className="space-y-2">
