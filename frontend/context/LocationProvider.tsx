@@ -67,9 +67,9 @@ export default function LocationProvider({ children }: { children: ReactNode }) 
             headers: {
                 "Content-Type": "application/json"
                 },
-            body: JSON.stringify({location})
+            body: JSON.stringify(location)
         })
-        if(res.status != 201) {
+        if(res.status != 200) {
             throw new Error("error adding new location, from controller")
         }
       }

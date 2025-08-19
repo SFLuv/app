@@ -32,6 +32,7 @@ export interface Location {
   messaging_service: string;
 }
 
+
 export interface GoogleSubLocation {
   google_id: string;
   name: string;

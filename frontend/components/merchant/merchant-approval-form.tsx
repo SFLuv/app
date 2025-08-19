@@ -12,8 +12,8 @@ import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Loader2 } from "lucide-react"
 import PlaceAutocomplete from "./google_place_finder"
-import { useLocation } from "@/context/LocationProvider"
 import { Location, GoogleSubLocation } from "@/types/location"
+import { useLocation } from "@/context/LocationProvider"
 
 
 const businessTypes = [
@@ -69,6 +69,7 @@ const messagingServiceOptions = [
 
 
 export function MerchantApprovalForm() {
+  const { addLocation } = useLocation();
   // Internal Form State
   const [isSubmitting, setIsSubmitting] = useState(false)
 
@@ -152,6 +153,7 @@ export function MerchantApprovalForm() {
       }
 
       console.log(newLocation)
+      addLocation(newLocation)
 
     }
 

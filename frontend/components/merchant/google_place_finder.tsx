@@ -60,7 +60,6 @@ export default function PlaceAutocomplete({ setGoogleSubLocation }: PlaceAutocom
             maps_page: rawGoogleData.googleMapsURI,
             opening_hours: rawGoogleData.regularOpeningHours.weekdayDescriptions,
         }
-        console.log(rawGoogleData)
         console.log(googleDetails)
         setGoogleSubLocation(googleDetails)
     });

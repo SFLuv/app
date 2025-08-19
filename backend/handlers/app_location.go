@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -99,6 +100,7 @@ func (a *AppService) GetLocationsByUser(w http.ResponseWriter, r *http.Request) 
 
 func (a *AppService) AddLocation(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
+	fmt.Println("reached add location handler")
 
 	userDid := utils.GetDid(r)
 	if userDid == nil {
@@ -121,6 +123,7 @@ func (a *AppService) AddLocation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	location.OwnerID = *userDid
+	fmt.Println(location)
 	err = a.db.AddLocation(location)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
