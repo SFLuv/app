@@ -11,8 +11,6 @@ import Image from "next/image"
 import type { Merchant, UserLocation } from "@/types/merchant"
 import { calculateDistance, formatDistance } from "@/utils/location"
 import { Pagination } from "@/components/opportunities/pagination"
-import { merchantTypeLabels } from "@/types/merchant"
-import { locationTypes } from "@/data/mock-merchants"
 import { useLocation } from "@/context/LocationProvider"
 import { Location } from "@/types/location"
 
@@ -37,13 +35,13 @@ export function ListView({
   const [currentPage, setCurrentPage] = useState(1)
   const [searchQuery, setSearchQuery] = useState("")
   const ITEMS_PER_PAGE = 5
-
-  const { mapLocationsStatus } = useLocation();
+  const { mapLocationsStatus, locationTypes } = useLocation();
+  console.log(locationTypes)
 
   // Filter merchants by type and search query
   const filteredLocations = locations?.filter(
       (location) =>
-        (selectedLocationType === "all" || location.type === selectedLocationType) &&
+        (selectedLocationType === "All Locations" || location.type === selectedLocationType) &&
         (searchQuery === "" ||
           location.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
           location.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -125,7 +123,7 @@ export function ListView({
           />
         </div>
         <Button onClick={handleLocationSearch} className="bg-[#eb6c6c] hover:bg-[#d55c5c]">
-          Update Location
+          Search
         </Button>
         <Select value={selectedLocationType} onValueChange={setSelectedLocationType}>
           <SelectTrigger className="w-[180px] text-black dark:text-white bg-secondary">
@@ -133,8 +131,8 @@ export function ListView({
           </SelectTrigger>
           <SelectContent>
             {locationTypes.map((type) => (
-              <SelectItem key={type.value} value={type.value}>
-                {type.label}
+              <SelectItem key={type} value={type}>
+                {type}
               </SelectItem>
             ))}
           </SelectContent>
@@ -196,7 +194,7 @@ export function ListView({
                       </div>
                       <div className="flex items-center text-gray-600 dark:text-gray-300">
                         <Phone className="h-4 w-4 mr-2 text-[#eb6c6c]" />
-                        <span>{location.phone}</span>
+                        <span>{location.phone || "Not Available"}</span>
                       </div>
                     </div>
                   </div>

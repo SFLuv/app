@@ -75,7 +75,7 @@ export function MerchantApprovalForm() {
 
   // User-inputted state
   const [description, setDescription] = useState("")
-  const [email, setEmail] = useState("")
+  const [primaryContactEmail, setPrimaryContactEmail] = useState("")
   const [primaryContactFirstName, setPrimaryContactFirstName] = useState("")
   const [primaryContactLastName, setPrimaryContactLastName] = useState("")
   const [primaryContactPhone, setPrimaryContactPhone] = useState("")
@@ -94,6 +94,7 @@ export function MerchantApprovalForm() {
   const [messagingService, setMessagingService] = useState("")
   const [messagingServiceOther, setMessagingServiceOther] = useState("")
   const [googleSubLocation, setGoogleSubLocation] = useState<GoogleSubLocation | null>(null);
+  const [searchKey, setSearchKey] = useState(0);
 
 
   // State pulled from Google
@@ -112,6 +113,29 @@ export function MerchantApprovalForm() {
   const [rating, setRating] = useState(0)
   const [googleMapsURL, setGoogleMapsURL] = useState("")
   const [openingHours, setOpeningHours] = useState([])
+
+  const resetForm = () => {
+  setDescription("");
+  setPrimaryContactEmail("");
+  setPrimaryContactFirstName("");
+  setPrimaryContactLastName("");
+  setPrimaryContactPhone("");
+  setPosSystem("");
+  setPosSystemOther("");
+  setSoleProprietorship("");
+  setTippingPolicy("");
+  setTippingPolicyOther("");
+  setTippingDivision("");
+  setTippingDivisionOther("");
+  setTableCoverage("");
+  setTableCoverageOther("");
+  setServiceStations("");
+  setTabletModel("");
+  setTabletModelOther("");
+  setMessagingService("");
+  setMessagingServiceOther("");
+  setGoogleSubLocation(null)
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
@@ -133,7 +157,7 @@ export function MerchantApprovalForm() {
       lat: googleSubLocation.lat,
       lng: googleSubLocation.lng,
       phone:googleSubLocation.phone,
-      email: email,
+      email: primaryContactEmail,
       website: googleSubLocation.website,
       image_url: googleSubLocation.image_url,
       rating: googleSubLocation.rating,
@@ -154,7 +178,8 @@ export function MerchantApprovalForm() {
 
       console.log(newLocation)
       addLocation(newLocation)
-
+      setSearchKey(prev => prev + 1)
+      resetForm()
     }
 
   return (
@@ -172,7 +197,7 @@ export function MerchantApprovalForm() {
               <Label htmlFor="business-name" className="text-black dark:text-white">
                 Search for Your Business
               </Label>
-              <PlaceAutocomplete setGoogleSubLocation={setGoogleSubLocation}/>
+              <PlaceAutocomplete key={searchKey} setGoogleSubLocation={setGoogleSubLocation}/>
             </div>
 
             <div className="space-y-2">
@@ -191,7 +216,7 @@ export function MerchantApprovalForm() {
             {/* Primary Contact Information */}
             <div>
               <h3 className="text-lg font-medium text-black dark:text-white mb-4">Primary Contact for Business</h3>
-              <div className="grid gap-4 md:grid-cols-3">
+              <div className="grid gap-4 md:grid-cols-2">
                 <div className="space-y-2">
                   <Label htmlFor="primary-contact-first-name" className="text-black dark:text-white">
                     First Name
@@ -226,6 +251,19 @@ export function MerchantApprovalForm() {
                     id="primary-contact-phone"
                     value={primaryContactPhone}
                     onChange={(e) => setPrimaryContactPhone(e.target.value)}
+                    className="text-black dark:text-white bg-secondary"
+                    required
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="primary-contact-email" className="text-black dark:text-white">
+                    Email
+                  </Label>
+                  <Input
+                    id="primary-contact-email"
+                    value={primaryContactEmail}
+                    onChange={(e) => setPrimaryContactEmail(e.target.value)}
                     className="text-black dark:text-white bg-secondary"
                     required
                   />

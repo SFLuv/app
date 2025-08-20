@@ -115,14 +115,14 @@ export function LocationModal({ location, isOpen, onClose }: LocationModalProps)
               <div className="flex items-center gap-2">
                 <Phone className="h-5 w-5 text-[#eb6c6c]" />
                 <a href={`tel:${location.phone}`} className="text-gray-700 dark:text-gray-300">
-                  {location.phone}
+                  {location.phone || "Not Available"}
                 </a>
               </div>
 
               <div className="flex items-center gap-2">
                 <Mail className="h-5 w-5 text-[#eb6c6c]" />
                 <a href={`mailto:${location.email}`} className="text-gray-700 dark:text-gray-300">
-                  {location.email}
+                  {location.email || "Not Available"}
                 </a>
               </div>
 
@@ -130,12 +130,12 @@ export function LocationModal({ location, isOpen, onClose }: LocationModalProps)
                 <div className="flex items-center gap-2">
                   <Globe className="h-5 w-5 text-[#eb6c6c]" />
                   <a
-                    href={`https://${location.website}`}
+                    href={location.website}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="text-gray-700 dark:text-gray-300"
                   >
-                    {location.website}
+                    {location.website || "Not Available"}
                   </a>
                 </div>
               )}

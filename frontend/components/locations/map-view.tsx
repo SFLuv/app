@@ -8,7 +8,6 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Search, MapPin } from "lucide-react"
 import type { Merchant, UserLocation } from "@/types/merchant"
 import type { GoogleMerchant } from "@/types/google-merchant"
-import { defaultLocation, locationTypes } from "@/data/mock-merchants"
 import {AdvancedMarker, APIProvider, Map, MapCameraChangedEvent, Pin, useMap} from '@vis.gl/react-google-maps'
 import type {Marker} from '@googlemaps/markerclusterer';
 import { useLocation } from "@/context/LocationProvider"
@@ -34,7 +33,7 @@ export function MapView({
   setUserLocation,
 }: MapViewProps) {
   const [locationInput, setLocationInput] = useState(userLocation.address || "")
-  const { mapLocationsStatus } = useLocation();
+  const { mapLocationsStatus, locationTypes } = useLocation();
 
   const PoiMarkers = (props: {locations: Location[]}) => {
     const [markers, setMarkers] = useState<{[key: number]: Marker}>({});
@@ -80,7 +79,7 @@ export function MapView({
   // Filter merchants by type
   const filteredLocations = useMemo(() => {
     return locations?.filter(
-      (location) => selectedLocationType === "all" || location.type === selectedLocationType,
+      (location) => selectedLocationType === "All Locations" || location.type === selectedLocationType,
     )
   }, [locations])
 
@@ -122,8 +121,8 @@ export function MapView({
           </SelectTrigger>
           <SelectContent>
             {locationTypes.map((type) => (
-              <SelectItem key={type.value} value={type.value}>
-                {type.label}
+              <SelectItem key={type} value={type}>
+                {type}
               </SelectItem>
             ))}
           </SelectContent>

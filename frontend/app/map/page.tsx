@@ -14,7 +14,7 @@ import { Location } from "@/types/location"
 
 export default function LocationMapPage() {
   const [activeTab, setActiveTab] = useState("map")
-  const [selectedLocationType, setSelectedLocationType] = useState("all")
+  const [selectedLocationType, setSelectedLocationType] = useState("All Locations")
   const [selectedLocation, setSelectedLocation] = useState<Location | null>(null)
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [userLocation, setUserLocation] = useState<UserLocation>(defaultLocation)
@@ -32,38 +32,6 @@ export default function LocationMapPage() {
     setSelectedLocation(null)
   }
 
-  // will use similar function later when a user goes to add a new location
-  /*function parseGoogleToMerchant(place_details: any): Merchant {
-    const newMerchant : Merchant = {
-        id: place_details?.id,
-        name: place_details?.displayName?.text,
-        description: place_details?.editorialSummary?.text,
-        type: place_details?.primaryType,
-        status: false,
-        address: {
-          street: place_details?.postalAddress?.addressLines[0],
-          city: place_details?.postalAddress?.locality,
-          state: place_details?.postalAddress?.administrativeArea,
-          zip: place_details?.postalAddress?.postalCode,
-          coordinates: {
-            lat: place_details?.location?.latitude,
-            lng: place_details?.location?.longitude,
-          }
-        },
-        contactInfo: {
-          phone: place_details?.nationalPhoneNumber,
-          email: "",
-          website: place_details?.websiteUri,
-        },
-        imageUrl: place_details.googleMapsLinks.photosUri,
-        acceptsSFLuv: false,
-        rating: place_details?.rating,
-        opening_hours: place_details?.regularOpeningHours?.weekdayDescriptions,
-        mapsPage: place_details?.googleMapsLinks.placesUri
-    }
-    return newMerchant
-  }
-  */
 
   if (status === "loading") {
     return (
