@@ -65,6 +65,8 @@ func (s *AppDB) CreateTables() error {
 				lng NUMERIC,
 				phone TEXT,
 				email TEXT,
+				admin_phone TEXT,
+				admin_email TEXT,
 				website TEXT,
 				image_url TEXT,
 				rating NUMERIC,
@@ -80,10 +82,9 @@ func (s *AppDB) CreateTables() error {
 				service_stations INTEGER,
 				tablet_model TEXT,
 				messaging_service TEXT,
+				reference TEXT,
 				UNIQUE (google_id)
 		);
-
-
 	`)
 	if err != nil {
 		return fmt.Errorf("error creating locations table: %s", err)

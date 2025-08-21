@@ -94,6 +94,7 @@ export function MerchantApprovalForm() {
   const [messagingService, setMessagingService] = useState("")
   const [messagingServiceOther, setMessagingServiceOther] = useState("")
   const [googleSubLocation, setGoogleSubLocation] = useState<GoogleSubLocation | null>(null);
+  const [reference, setReference] = useState("")
   const [searchKey, setSearchKey] = useState(0);
 
 
@@ -107,8 +108,8 @@ export function MerchantApprovalForm() {
   const [lat, setLat] = useState(0)
   const [lng, setLng] = useState(0)
   const [zip, setZip] = useState("")
-  const [phone, setPhone] = useState("")
-  const [website, setWebsite] = useState("")
+  const [businessPhone, setBusinessPhone] = useState("")
+  const [businessEmail, setBusinessEmail] = useState("")
   const [imageURL, setImageURL] = useState("")
   const [rating, setRating] = useState(0)
   const [googleMapsURL, setGoogleMapsURL] = useState("")
@@ -120,6 +121,8 @@ export function MerchantApprovalForm() {
   setPrimaryContactFirstName("");
   setPrimaryContactLastName("");
   setPrimaryContactPhone("");
+  setBusinessEmail("")
+  setBusinessPhone("")
   setPosSystem("");
   setPosSystemOther("");
   setSoleProprietorship("");
@@ -134,6 +137,7 @@ export function MerchantApprovalForm() {
   setTabletModelOther("");
   setMessagingService("");
   setMessagingServiceOther("");
+  setReference("")
   setGoogleSubLocation(null)
   };
 
@@ -156,8 +160,10 @@ export function MerchantApprovalForm() {
       zip: googleSubLocation.zip,
       lat: googleSubLocation.lat,
       lng: googleSubLocation.lng,
-      phone:googleSubLocation.phone,
-      email: primaryContactEmail,
+      phone:businessPhone,
+      email: businessEmail,
+      admin_phone: primaryContactPhone,
+      admin_email: primaryContactEmail,
       website: googleSubLocation.website,
       image_url: googleSubLocation.image_url,
       rating: googleSubLocation.rating,
@@ -174,12 +180,17 @@ export function MerchantApprovalForm() {
       service_stations: Number(serviceStations),
       tablet_model: tabletModel  === "Other" ? tabletModelOther : tabletModel,
       messaging_service: messagingService === "Other" ? messagingServiceOther : messagingService,
+      reference: reference,
       }
 
       console.log(newLocation)
       addLocation(newLocation)
       setSearchKey(prev => prev + 1)
       resetForm()
+      setIsSubmitting(true)
+      setTimeout(() => {
+      setIsSubmitting(false);
+  }, 3000);
     }
 
   return (
@@ -197,7 +208,8 @@ export function MerchantApprovalForm() {
               <Label htmlFor="business-name" className="text-black dark:text-white">
                 Search for Your Business
               </Label>
-              <PlaceAutocomplete key={searchKey} setGoogleSubLocation={setGoogleSubLocation}/>
+              <PlaceAutocomplete key={searchKey} setGoogleSubLocation={setGoogleSubLocation}
+              setBusinessPhone={setBusinessPhone}/>
             </div>
 
             <div className="space-y-2">
@@ -213,9 +225,41 @@ export function MerchantApprovalForm() {
               />
             </div>
 
+            {/* Business Contact Information */}
+            <div>
+              <h3 className="text-lg font-medium text-black dark:text-white mb-4">Business Contact Information</h3>
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="business-phone" className="text-black dark:text-white">
+                    Business Phone Number
+                  </Label>
+                  <Input
+                    id="business-phone"
+                    value={businessPhone}
+                    onChange={(e) => setBusinessPhone(e.target.value)}
+                    className="text-black dark:text-white bg-secondary"
+                    required
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="business-email" className="text-black dark:text-white">
+                    Business Email
+                  </Label>
+                  <Input
+                    id="business-email"
+                    value={businessEmail}
+                    onChange={(e) => setBusinessEmail(e.target.value)}
+                    className="text-black dark:text-white bg-secondary"
+                    required
+                  />
+                </div>
+              </div>
+            </div>
+
             {/* Primary Contact Information */}
             <div>
-              <h3 className="text-lg font-medium text-black dark:text-white mb-4">Primary Contact for Business</h3>
+              <h3 className="text-lg font-medium text-black dark:text-white mb-4">Primary Contact for Business (Only Visible to SFLuv Admin Team)</h3>
               <div className="grid gap-4 md:grid-cols-2">
                 <div className="space-y-2">
                   <Label htmlFor="primary-contact-first-name" className="text-black dark:text-white">
@@ -506,13 +550,26 @@ export function MerchantApprovalForm() {
                 </div>
               )}
             </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="reference" className="text-black dark:text-white">
+                How did you hear about SFLuv?
+              </Label>
+              <Textarea
+                id="reference"
+                value={reference}
+                onChange={(e) => setReference(e.target.value)}
+                className="text-black dark:text-white bg-secondary min-h-[100px]"
+                required
+              />
+            </div>
           </div>
 
           <Button type="submit" className="w-full bg-[#eb6c6c] hover:bg-[#d55c5c]" disabled={isSubmitting}>
             {isSubmitting ? (
               <>
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                Submitting Application...
+                Your application has been submitted! We will get back to you shortly.
               </>
             ) : (
               "Submit Merchant Application"

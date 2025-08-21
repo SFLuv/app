@@ -7,9 +7,10 @@ import { GoogleSubLocation } from "@/types/location";
 
 interface PlaceAutocompleteProps {
   setGoogleSubLocation: React.Dispatch<React.SetStateAction<GoogleSubLocation | null>>;
+  setBusinessPhone: React.Dispatch<React.SetStateAction<string>>;
 }
 
-export default function PlaceAutocomplete({ setGoogleSubLocation }: PlaceAutocompleteProps) {
+export default function PlaceAutocomplete({ setGoogleSubLocation, setBusinessPhone }: PlaceAutocompleteProps) {
   const { status } = useApp()
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -62,6 +63,12 @@ export default function PlaceAutocomplete({ setGoogleSubLocation }: PlaceAutocom
         }
         console.log(googleDetails)
         setGoogleSubLocation(googleDetails)
+        console.log("phone value:", googleDetails.phone, typeof googleDetails.phone)
+        if (typeof googleDetails.phone === "string") {
+        setBusinessPhone(googleDetails.phone)
+        } else {
+          setBusinessPhone("")
+        }
     });
     placeAutocomplete.className="text-black dark:text-white border rounded-md bg-secondary px-3 py-2"
 

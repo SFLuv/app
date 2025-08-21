@@ -41,6 +41,8 @@ type Location struct {
 	Lng                float64  `json:"lng"`
 	Phone              string   `json:"phone"`
 	Email              string   `json:"email"`
+	AdminPhone         string   `json:"admin_phone"`
+	AdminEmail         string   `json:"admin_email"`
 	Website            string   `json:"website"`
 	ImageURL           string   `json:"image_url"`
 	Rating             float64  `json:"rating"`
@@ -57,6 +59,7 @@ type Location struct {
 	ServiceStations    int      `json:"service_stations"`
 	TabletModel        string   `json:"tablet_model"`
 	MessagingService   string   `json:"messaging_service"`
+	Reference          string   `json:"reference"`
 }
 
 type LocationsPageRequest struct {

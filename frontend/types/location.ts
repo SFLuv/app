@@ -14,6 +14,8 @@ export interface Location {
   lng: number;
   phone: string;
   email: string;
+  admin_phone: string;
+  admin_email: string;
   website: string;
   image_url: string;
   rating: number;
@@ -30,6 +32,7 @@ export interface Location {
   service_stations: number;
   tablet_model: string;
   messaging_service: string;
+  reference: string;
 }
 
 
