@@ -146,7 +146,8 @@ export function ListView({
                   <Image
                     src={location.image_url || "/placeholder.svg?height=200&width=200"}
                     alt={location.name}
-                    fill
+                    width={200}
+                    height={200}
                     className="object-cover"
                   />
                 </div>
