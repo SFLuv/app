@@ -37,7 +37,6 @@ export function MapView({
 
   const PoiMarkers = (props: {locations: Location[]}) => {
     const [markers, setMarkers] = useState<{[key: number]: Marker}>({});
-    const map = useMap();
 
     const setMarkerRef = (marker: Marker | null, key: number) => {
       if (marker && markers[key]) return;
@@ -78,10 +77,9 @@ export function MapView({
 
   // Filter merchants by type
   const filteredLocations = useMemo(() => {
-    return locations?.filter(
-      (location) => selectedLocationType === "All Locations" || location.type === selectedLocationType,
-    )
-  }, [locations])
+      console.log(locations?.filter((location) => selectedLocationType === "All Locations" || location.type === selectedLocationType))
+      return locations?.filter((location) => selectedLocationType === "All Locations" || location.type === selectedLocationType)
+  }, [selectedLocationType])
 
 
 
@@ -139,7 +137,7 @@ export function MapView({
                     mapId={ MAP_ID }
                   >
                 </Map>
-                <PoiMarkers locations={locations} />
+                <PoiMarkers locations={filteredLocations ?? []} />
               </APIProvider>
           </div>
         </CardContent>
@@ -148,7 +146,7 @@ export function MapView({
       <div className="text-sm text-gray-500 dark:text-gray-400">
         Showing {filteredLocations.length} merchants
         {selectedLocationType !== "all" &&
-          ` of type: ${locationTypes.find((t) => t.value === selectedLocationType)?.label}`}
+          ` of type: ${locationTypes.find((t) => t === selectedLocationType)}`}
       </div>
     </div>
   )

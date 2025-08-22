@@ -214,7 +214,7 @@ export function ListView({
       <div className="text-sm text-gray-500 dark:text-gray-400">
         Showing {paginatedLocations.length} of {filteredLocations.length} merchants
         {selectedLocationType !== "all" &&
-          ` of type: ${locationTypes.find((t) => t.value === selectedLocationType)?.label}`}
+          ` of type: ${locationTypes.find((t) => t === selectedLocationType)}`}
       </div>
     </div>
   )
