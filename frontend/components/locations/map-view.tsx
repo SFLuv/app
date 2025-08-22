@@ -34,6 +34,7 @@ export function MapView({
 }: MapViewProps) {
   const [locationInput, setLocationInput] = useState(userLocation.address || "")
   const { mapLocationsStatus, locationTypes } = useLocation();
+  const [searchQuery, setSearchQuery] = useState("")
 
   const PoiMarkers = (props: {locations: Location[]}) => {
     const [markers, setMarkers] = useState<{[key: number]: Marker}>({});
@@ -75,17 +76,24 @@ export function MapView({
     );
   };
 
+
   // Filter merchants by type
   const filteredLocations = useMemo(() => {
-      console.log(locations?.filter((location) => selectedLocationType === "All Locations" || location.type === selectedLocationType))
-      return locations?.filter((location) => selectedLocationType === "All Locations" || location.type === selectedLocationType)
-  }, [selectedLocationType])
+  return locations?.filter((location) => {
+    const matchesSearch =
+      searchQuery === "" ||
+      location.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      location.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      location.city.toLowerCase().includes(searchQuery.toLowerCase());
 
+    const matchesType =
+      selectedLocationType === "All Locations" ||
+      location.type === selectedLocationType;
 
+    return matchesType && matchesSearch;
+  })
+}, [selectedLocationType, searchQuery])
 
-  // Handle location search
-  const handleLocationSearch = () => {
-  }
 
   if (mapLocationsStatus === "loading") {
     return (
@@ -102,17 +110,12 @@ export function MapView({
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
           <Input
-            placeholder="Enter an address..."
-            value={locationInput}
-            onChange={(e) => setLocationInput(e.target.value)}
+            placeholder="Search merchants..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
             className="pl-10 text-black dark:text-white bg-secondary"
-            onKeyDown={(e) => e.key === "Enter" && handleLocationSearch()}
           />
         </div>
-        <Button onClick={handleLocationSearch} className="bg-[#eb6c6c] hover:bg-[#d55c5c]">
-          <MapPin className="h-4 w-4 mr-2" />
-          Go to Location
-        </Button>
         <Select value={selectedLocationType} onValueChange={setSelectedLocationType}>
           <SelectTrigger className="w-[180px] text-black dark:text-white bg-secondary">
             <SelectValue placeholder="Filter by type" />

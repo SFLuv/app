@@ -112,19 +112,6 @@ export function ListView({
             className="pl-10 text-black dark:text-white bg-secondary"
           />
         </div>
-        <div className="relative flex-1">
-          <MapPin className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
-          <Input
-            placeholder="Enter your location..."
-            value={locationInput}
-            onChange={(e) => setLocationInput(e.target.value)}
-            className="pl-10 text-black dark:text-white bg-secondary"
-            onKeyDown={(e) => e.key === "Enter" && handleLocationSearch()}
-          />
-        </div>
-        <Button onClick={handleLocationSearch} className="bg-[#eb6c6c] hover:bg-[#d55c5c]">
-          Search
-        </Button>
         <Select value={selectedLocationType} onValueChange={setSelectedLocationType}>
           <SelectTrigger className="w-[180px] text-black dark:text-white bg-secondary">
             <SelectValue placeholder="Filter by type" />
@@ -150,7 +137,7 @@ export function ListView({
         ) : (
           paginatedLocations.map((location) => (
             <Card
-              key={location.name}
+              key={location.google_id}
               className="overflow-hidden cursor-pointer hover:shadow-md transition-shadow"
               onClick={() => onSelectLocation(location)}
             >
