@@ -36,24 +36,6 @@ export function LocationModal({ location, isOpen, onClose }: LocationModalProps)
     return `https://www.google.com/maps/search/?api=1&query=${formattedAddress}`
   }
 
-  function formatTimeRange([start, end]: [number, number]): [string, string] {
-    const format = (time: number): string => {
-      const hours = Math.floor(time);
-      const minutesDecimal = time - hours;
-      const minutes = Math.round(minutesDecimal * 100);
-
-      const period = hours >= 12 ? "PM" : "AM";
-      const adjustedHour = hours % 12 === 0 ? 12 : hours % 12;
-
-      const paddedMinutes = minutes.toString().padStart(2, '0');
-
-      return `${adjustedHour}:${paddedMinutes} ${period}`;
-    };
-
-    return [format(start), format(end)];
-  }
-
-
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
       <DialogContent className="sm:max-w-[600px] max-h-[90vh] overflow-y-auto">
@@ -120,15 +102,11 @@ export function LocationModal({ location, isOpen, onClose }: LocationModalProps)
            <TabsContent value="hours" className="space-y-4">
             <h3 className="font-medium text-black dark:text-white">Hours of Operation</h3>
             <div className="space-y-2">
-              <ul className="list-disc pl-5" style={{listStyleType: "none"}}>
-                <li>Monday: {formatTimeRange(location.opening_hours[0])[0]} - {formatTimeRange(location.opening_hours[0])[1]}</li>
-                <li>Tuesday: {formatTimeRange(location.opening_hours[1])[0]} - {formatTimeRange(location.opening_hours[1])[1]}</li>
-                <li>Wednesday: {formatTimeRange(location.opening_hours[2])[0]} - {formatTimeRange(location.opening_hours[2])[1]}</li>
-                <li>Thursday: {formatTimeRange(location.opening_hours[3])[0]} - {formatTimeRange(location.opening_hours[3])[1]}</li>
-                <li>Friday: {formatTimeRange(location.opening_hours[4])[0]} - {formatTimeRange(location.opening_hours[4])[1]}</li>
-                <li>Saturday: {formatTimeRange(location.opening_hours[5])[0]} - {formatTimeRange(location.opening_hours[5])[1]}</li>
-                <li>Sunday: {formatTimeRange(location.opening_hours[6])[0]} - {formatTimeRange(location.opening_hours[6])[1]}</li>
-              </ul>
+                <ul>
+                  {location.opening_hours.map((hours) => (
+                    <li key={hours}>{hours}</li>
+                  ))}
+                </ul>
             </div>
           </TabsContent>
 
@@ -137,14 +115,14 @@ export function LocationModal({ location, isOpen, onClose }: LocationModalProps)
               <div className="flex items-center gap-2">
                 <Phone className="h-5 w-5 text-[#eb6c6c]" />
                 <a href={`tel:${location.phone}`} className="text-gray-700 dark:text-gray-300">
-                  {location.phone}
+                  {location.phone || "Not Available"}
                 </a>
               </div>
 
               <div className="flex items-center gap-2">
                 <Mail className="h-5 w-5 text-[#eb6c6c]" />
                 <a href={`mailto:${location.email}`} className="text-gray-700 dark:text-gray-300">
-                  {location.email}
+                  {location.email || "Not Available"}
                 </a>
               </div>
 
@@ -152,12 +130,12 @@ export function LocationModal({ location, isOpen, onClose }: LocationModalProps)
                 <div className="flex items-center gap-2">
                   <Globe className="h-5 w-5 text-[#eb6c6c]" />
                   <a
-                    href={`https://${location.website}`}
+                    href={location.website}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="text-gray-700 dark:text-gray-300"
                   >
-                    {location.website}
+                    {location.website || "Not Available"}
                   </a>
                 </div>
               )}

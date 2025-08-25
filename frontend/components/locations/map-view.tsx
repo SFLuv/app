@@ -8,11 +8,11 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Search, MapPin } from "lucide-react"
 import type { Merchant, UserLocation } from "@/types/merchant"
 import type { GoogleMerchant } from "@/types/google-merchant"
-import { defaultLocation, locationTypes } from "@/data/mock-merchants"
 import {AdvancedMarker, APIProvider, Map, MapCameraChangedEvent, Pin, useMap} from '@vis.gl/react-google-maps'
 import type {Marker} from '@googlemaps/markerclusterer';
 import { useLocation } from "@/context/LocationProvider"
 import { Location } from "@/types/location"
+import { GOOGLE_MAPS_API_KEY, MAP_CENTER, MAP_ID } from "@/lib/constants"
 
 type Poi ={ key: string, location: google.maps.LatLngLiteral }
 interface MapViewProps {
@@ -33,7 +33,7 @@ export function MapView({
   setUserLocation,
 }: MapViewProps) {
   const [locationInput, setLocationInput] = useState(userLocation.address || "")
-  const { mapLocationsStatus } = useLocation();
+  const { mapLocationsStatus, locationTypes } = useLocation();
 
   const PoiMarkers = (props: {locations: Location[]}) => {
     const [markers, setMarkers] = useState<{[key: number]: Marker}>({});
@@ -79,7 +79,7 @@ export function MapView({
   // Filter merchants by type
   const filteredLocations = useMemo(() => {
     return locations?.filter(
-      (location) => selectedLocationType === "all" || location.type === selectedLocationType,
+      (location) => selectedLocationType === "All Locations" || location.type === selectedLocationType,
     )
   }, [locations])
 
@@ -121,8 +121,8 @@ export function MapView({
           </SelectTrigger>
           <SelectContent>
             {locationTypes.map((type) => (
-              <SelectItem key={type.value} value={type.value}>
-                {type.label}
+              <SelectItem key={type} value={type}>
+                {type}
               </SelectItem>
             ))}
           </SelectContent>
@@ -132,11 +132,11 @@ export function MapView({
       <Card className="border bg-card">
         <CardContent className="p-0">
           <div className="w-full h-[600px] bg-gray-100 dark:bg-gray-800 flex items-center justify-center p-4 rounded-lg">
-            <APIProvider apiKey={'AIzaSyDushyc7TgeFyIlxbqiujHdydWDoVoHwNQ'}>
+            <APIProvider apiKey={GOOGLE_MAPS_API_KEY}>
                   <Map
                     defaultZoom={12}
-                    defaultCenter={ { lat: defaultLocation.lat, lng: defaultLocation.lng } }
-                    mapId='5d823aa5e32225a021e19266'
+                    defaultCenter={ MAP_CENTER }
+                    mapId={ MAP_ID }
                   >
                 </Map>
                 <PoiMarkers locations={locations} />

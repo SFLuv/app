@@ -206,7 +206,7 @@ export default function SettingsPage() {
                       type="email"
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
-                      className="text-black dark:text-white bg-secondary"
+                      className="text-black dark:text-white bg-secondary rounded-md"
                     />
                   </div>
 

@@ -1,7 +1,6 @@
 "use client"
 
 import type React from "react"
-
 import { useState } from "react"
 import { useRouter } from "next/navigation"
 import { useApp } from "@/context/AppProvider"
@@ -12,6 +11,10 @@ import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Loader2 } from "lucide-react"
+import PlaceAutocomplete from "./google_place_finder"
+import { Location, GoogleSubLocation } from "@/types/location"
+import { useLocation } from "@/context/LocationProvider"
+
 
 const businessTypes = [
   "restaurant",
@@ -46,6 +49,16 @@ const tableCoverageOptions = [
 
 const tabletOptions = ["iPad", "Android tablet", "We do not have a tablet accessible near register", "Other"]
 
+const tippingDivisionOptions = [
+  "Each member receives their own tips",
+  "All tips are pooled and divided between the team",
+  "Other"
+]
+
+const serviceStationOptions = [
+  "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10"
+]
+
 const messagingServiceOptions = [
   "Zapier",
   "Google messaging",
@@ -54,24 +67,15 @@ const messagingServiceOptions = [
   "Other",
 ]
 
+
 export function MerchantApprovalForm() {
-  const router = useRouter()
-  const { requestMerchantStatus } = useApp()
+  const { addLocation } = useLocation();
+  // Internal Form State
   const [isSubmitting, setIsSubmitting] = useState(false)
 
-  // Existing form state
-  const [businessName, setBusinessName] = useState("")
+  // User-inputted state
   const [description, setDescription] = useState("")
-  const [businessType, setBusinessType] = useState("")
-  const [businessTypeOther, setBusinessTypeOther] = useState("")
-  const [street, setStreet] = useState("")
-  const [city, setCity] = useState("")
-  const [state, setState] = useState("")
-  const [zip, setZip] = useState("")
-  const [phone, setPhone] = useState("")
-  const [website, setWebsite] = useState("")
-
-  // New form state
+  const [primaryContactEmail, setPrimaryContactEmail] = useState("")
   const [primaryContactFirstName, setPrimaryContactFirstName] = useState("")
   const [primaryContactLastName, setPrimaryContactLastName] = useState("")
   const [primaryContactPhone, setPrimaryContactPhone] = useState("")
@@ -80,54 +84,114 @@ export function MerchantApprovalForm() {
   const [soleProprietorship, setSoleProprietorship] = useState("")
   const [tippingPolicy, setTippingPolicy] = useState("")
   const [tippingPolicyOther, setTippingPolicyOther] = useState("")
+  const [tippingDivision, setTippingDivision] = useState("")
+  const [tippingDivisionOther, setTippingDivisionOther] = useState("")
   const [tableCoverage, setTableCoverage] = useState("")
   const [tableCoverageOther, setTableCoverageOther] = useState("")
-  const [tablesOrStations, setTablesOrStations] = useState("")
+  const [serviceStations, setServiceStations] = useState("")
   const [tabletModel, setTabletModel] = useState("")
   const [tabletModelOther, setTabletModelOther] = useState("")
   const [messagingService, setMessagingService] = useState("")
   const [messagingServiceOther, setMessagingServiceOther] = useState("")
+  const [googleSubLocation, setGoogleSubLocation] = useState<GoogleSubLocation | null>(null);
+  const [reference, setReference] = useState("")
+  const [searchKey, setSearchKey] = useState(0);
+
+
+  // State pulled from Google
+  const [googleID, setGoogleID] = useState("")
+  const [businessName, setBusinessName] = useState("")
+  const [businessType, setBusinessType] = useState("")
+  const [street, setStreet] = useState("")
+  const [city, setCity] = useState("")
+  const [state, setState] = useState("")
+  const [lat, setLat] = useState(0)
+  const [lng, setLng] = useState(0)
+  const [zip, setZip] = useState("")
+  const [businessPhone, setBusinessPhone] = useState("")
+  const [businessEmail, setBusinessEmail] = useState("")
+  const [imageURL, setImageURL] = useState("")
+  const [rating, setRating] = useState(0)
+  const [googleMapsURL, setGoogleMapsURL] = useState("")
+  const [openingHours, setOpeningHours] = useState([])
+
+  const resetForm = () => {
+  setDescription("");
+  setPrimaryContactEmail("");
+  setPrimaryContactFirstName("");
+  setPrimaryContactLastName("");
+  setPrimaryContactPhone("");
+  setBusinessEmail("")
+  setBusinessPhone("")
+  setPosSystem("");
+  setPosSystemOther("");
+  setSoleProprietorship("");
+  setTippingPolicy("");
+  setTippingPolicyOther("");
+  setTippingDivision("");
+  setTippingDivisionOther("");
+  setTableCoverage("");
+  setTableCoverageOther("");
+  setServiceStations("");
+  setTabletModel("");
+  setTabletModelOther("");
+  setMessagingService("");
+  setMessagingServiceOther("");
+  setReference("")
+  setGoogleSubLocation(null)
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
-    setIsSubmitting(true)
+    if(!googleSubLocation) return
 
     // Create merchant profile with all fields
-    const merchantProfile = {
-      businessName,
-      description,
-      businessType: businessType === "other" ? businessTypeOther : businessType,
-      address: {
-        street,
-        city,
-        state,
-        zip,
-      },
-      contactInfo: {
-        phone,
-        website: website || undefined,
-      },
-      primaryContact: {
-        firstName: primaryContactFirstName,
-        lastName: primaryContactLastName,
-        phone: primaryContactPhone,
-      },
-      posSystem: posSystem === "Other" ? posSystemOther : posSystem,
-      soleProprietorship,
-      tippingPolicy: tippingPolicy === "Other" ? tippingPolicyOther : tippingPolicy,
-      tableCoverage: tableCoverage === "Other" ? tableCoverageOther : tableCoverage,
-      tablesOrStations,
-      tabletModel: tabletModel === "Other" ? tabletModelOther : tabletModel,
-      messagingService: messagingService === "Other" ? messagingServiceOther : messagingService,
-    }
+    const newLocation:Location = {
+      id: 0,
+      google_id: googleSubLocation.google_id,
+      owner_id: "",
+      name: googleSubLocation.name,
+      description: description,
+      type: googleSubLocation.type,
+      approval: false,
+      street: googleSubLocation.street,
+      city: googleSubLocation.city,
+      state: googleSubLocation.state,
+      zip: googleSubLocation.zip,
+      lat: googleSubLocation.lat,
+      lng: googleSubLocation.lng,
+      phone:businessPhone,
+      email: businessEmail,
+      admin_phone: primaryContactPhone,
+      admin_email: primaryContactEmail,
+      website: googleSubLocation.website,
+      image_url: googleSubLocation.image_url,
+      rating: googleSubLocation.rating,
+      maps_page: googleSubLocation.maps_page,
+      opening_hours: googleSubLocation.opening_hours,
+      contact_firstname: primaryContactFirstName,
+      contact_lastname: primaryContactLastName,
+      contact_phone: primaryContactPhone,
+      pos_system: posSystem === "Other" ? posSystemOther : posSystem,
+      sole_proprietorship: soleProprietorship,
+      tipping_policy: tippingPolicy === "Other" ? tippingPolicyOther : tippingPolicy,
+      tipping_division: tippingDivision  === "Other" ? tippingDivisionOther: tippingDivision,
+      table_coverage: tableCoverage  === "Other" ? tableCoverageOther : tableCoverage,
+      service_stations: Number(serviceStations),
+      tablet_model: tabletModel  === "Other" ? tabletModelOther : tabletModel,
+      messaging_service: messagingService === "Other" ? messagingServiceOther : messagingService,
+      reference: reference,
+      }
 
-    // Submit merchant approval request
-    setTimeout(() => {
-      requestMerchantStatus(merchantProfile)
-      setIsSubmitting(false)
-      router.push("/merchant-status")
-    }, 1500)
-  }
+      console.log(newLocation)
+      addLocation(newLocation)
+      setSearchKey(prev => prev + 1)
+      resetForm()
+      setIsSubmitting(true)
+      setTimeout(() => {
+      setIsSubmitting(false);
+  }, 3000);
+    }
 
   return (
     <Card>
@@ -139,49 +203,13 @@ export function MerchantApprovalForm() {
         <form onSubmit={handleSubmit} className="space-y-6">
           <div className="space-y-4">
             {/* Existing Business Information */}
-            <div className="space-y-2">
-              <Label htmlFor="business-name" className="text-black dark:text-white">
-                Business Name
-              </Label>
-              <Input
-                id="business-name"
-                value={businessName}
-                onChange={(e) => setBusinessName(e.target.value)}
-                className="text-black dark:text-white bg-secondary"
-                required
-              />
-            </div>
 
-            <div className="space-y-2">
-              <Label htmlFor="business-type" className="text-black dark:text-white">
-                Business Type
+             <div className="space-y-2">
+              <Label htmlFor="business-name" className="text-black dark:text-white">
+                Search for Your Business
               </Label>
-              <Select value={businessType} onValueChange={setBusinessType} required>
-                <SelectTrigger className="text-black dark:text-white bg-secondary">
-                  <SelectValue placeholder="Select business type" />
-                </SelectTrigger>
-                <SelectContent>
-                  {businessTypes.map((type) => (
-                    <SelectItem key={type} value={type}>
-                      {type.charAt(0).toUpperCase() + type.slice(1)}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              {businessType === "other" && (
-                <div className="space-y-2 mt-2">
-                  <Label htmlFor="business-type-other" className="text-black dark:text-white">
-                    Business Type
-                  </Label>
-                  <Input
-                    id="business-type-other"
-                    value={businessTypeOther}
-                    onChange={(e) => setBusinessTypeOther(e.target.value)}
-                    className="text-black dark:text-white bg-secondary"
-                    placeholder="Specify your business type"
-                  />
-                </div>
-              )}
+              <PlaceAutocomplete key={searchKey} setGoogleSubLocation={setGoogleSubLocation}
+              setBusinessPhone={setBusinessPhone}/>
             </div>
 
             <div className="space-y-2">
@@ -197,96 +225,42 @@ export function MerchantApprovalForm() {
               />
             </div>
 
-            {/* Business Address */}
+            {/* Business Contact Information */}
             <div>
-              <h3 className="text-lg font-medium text-black dark:text-white mb-4">Business Address</h3>
+              <h3 className="text-lg font-medium text-black dark:text-white mb-4">Business Contact Information</h3>
               <div className="grid gap-4 md:grid-cols-2">
                 <div className="space-y-2">
-                  <Label htmlFor="street" className="text-black dark:text-white">
-                    Street Address
+                  <Label htmlFor="business-phone" className="text-black dark:text-white">
+                    Business Phone Number
                   </Label>
                   <Input
-                    id="street"
-                    value={street}
-                    onChange={(e) => setStreet(e.target.value)}
+                    id="business-phone"
+                    value={businessPhone}
+                    onChange={(e) => setBusinessPhone(e.target.value)}
                     className="text-black dark:text-white bg-secondary"
                     required
                   />
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="city" className="text-black dark:text-white">
-                    City
+                  <Label htmlFor="business-email" className="text-black dark:text-white">
+                    Business Email
                   </Label>
                   <Input
-                    id="city"
-                    value={city}
-                    onChange={(e) => setCity(e.target.value)}
+                    id="business-email"
+                    value={businessEmail}
+                    onChange={(e) => setBusinessEmail(e.target.value)}
                     className="text-black dark:text-white bg-secondary"
                     required
                   />
                 </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="state" className="text-black dark:text-white">
-                    State
-                  </Label>
-                  <Input
-                    id="state"
-                    value={state}
-                    onChange={(e) => setState(e.target.value)}
-                    className="text-black dark:text-white bg-secondary"
-                    required
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="zip" className="text-black dark:text-white">
-                    ZIP Code
-                  </Label>
-                  <Input
-                    id="zip"
-                    value={zip}
-                    onChange={(e) => setZip(e.target.value)}
-                    className="text-black dark:text-white bg-secondary"
-                    required
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* Business Contact Information */}
-            <div className="grid gap-4 md:grid-cols-2">
-              <div className="space-y-2">
-                <Label htmlFor="phone" className="text-black dark:text-white">
-                  Business Phone
-                </Label>
-                <Input
-                  id="phone"
-                  value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
-                  className="text-black dark:text-white bg-secondary"
-                  required
-                />
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="website" className="text-black dark:text-white">
-                  Business Website (Optional)
-                </Label>
-                <Input
-                  id="website"
-                  value={website}
-                  onChange={(e) => setWebsite(e.target.value)}
-                  className="text-black dark:text-white bg-secondary"
-                />
               </div>
             </div>
 
             {/* Primary Contact Information */}
             <div>
-              <h3 className="text-lg font-medium text-black dark:text-white mb-4">Primary Contact for Business</h3>
-              <div className="grid gap-4 md:grid-cols-3">
+              <h3 className="text-lg font-medium text-black dark:text-white mb-4">Primary Contact for Business (Only Visible to SFLuv Admin Team)</h3>
+              <div className="grid gap-4 md:grid-cols-2">
                 <div className="space-y-2">
                   <Label htmlFor="primary-contact-first-name" className="text-black dark:text-white">
                     First Name
@@ -321,6 +295,19 @@ export function MerchantApprovalForm() {
                     id="primary-contact-phone"
                     value={primaryContactPhone}
                     onChange={(e) => setPrimaryContactPhone(e.target.value)}
+                    className="text-black dark:text-white bg-secondary"
+                    required
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="primary-contact-email" className="text-black dark:text-white">
+                    Email
+                  </Label>
+                  <Input
+                    id="primary-contact-email"
+                    value={primaryContactEmail}
+                    onChange={(e) => setPrimaryContactEmail(e.target.value)}
                     className="text-black dark:text-white bg-secondary"
                     required
                   />
@@ -413,6 +400,38 @@ export function MerchantApprovalForm() {
               )}
             </div>
 
+            <div className="space-y-2">
+              <Label htmlFor="tablet-model" className="text-black dark:text-white">
+                How are tips divided amongst staff members?
+              </Label>
+              <Select value={tippingDivision} onValueChange={setTippingDivision} required>
+                <SelectTrigger className="text-black dark:text-white bg-secondary">
+                  <SelectValue placeholder="Select tip divison style" />
+                </SelectTrigger>
+                <SelectContent>
+                  {tippingDivisionOptions.map((option) => (
+                    <SelectItem key={option} value={option}>
+                      {option}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {tippingDivision === "Other" && (
+                <div className="space-y-2 mt-2">
+                  <Label htmlFor="tipping-division-other" className="text-black dark:text-white">
+                    Division of Tips
+                  </Label>
+                  <Input
+                    id="tipping-division-other"
+                    value={tippingDivisionOther}
+                    onChange={(e) => setTippingDivisionOther(e.target.value)}
+                    className="text-black dark:text-white bg-secondary"
+                    placeholder="Specify your tip divison style"
+                  />
+                </div>
+              )}
+            </div>
+
             {/* Table Coverage */}
             <div className="space-y-2">
               <Label htmlFor="table-coverage" className="text-black dark:text-white">
@@ -451,14 +470,18 @@ export function MerchantApprovalForm() {
               <Label htmlFor="tables-or-stations" className="text-black dark:text-white">
                 How many tables or service stations do you have?
               </Label>
-              <Input
-                id="tables-or-stations"
-                value={tablesOrStations}
-                onChange={(e) => setTablesOrStations(e.target.value)}
-                className="text-black dark:text-white bg-secondary"
-                placeholder="Enter number of tables or service stations"
-                required
-              />
+              <Select value={serviceStations} onValueChange={setServiceStations} required>
+                <SelectTrigger className="text-black dark:text-white bg-secondary">
+                  <SelectValue placeholder="Select # of service stations" />
+                </SelectTrigger>
+                <SelectContent>
+                  {serviceStationOptions.map((option) => (
+                    <SelectItem key={option} value={option}>
+                      {option}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
 
             {/* Tablet Model */}
@@ -527,13 +550,26 @@ export function MerchantApprovalForm() {
                 </div>
               )}
             </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="reference" className="text-black dark:text-white">
+                How did you hear about SFLuv?
+              </Label>
+              <Textarea
+                id="reference"
+                value={reference}
+                onChange={(e) => setReference(e.target.value)}
+                className="text-black dark:text-white bg-secondary min-h-[100px]"
+                required
+              />
+            </div>
           </div>
 
           <Button type="submit" className="w-full bg-[#eb6c6c] hover:bg-[#d55c5c]" disabled={isSubmitting}>
             {isSubmitting ? (
               <>
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                Submitting Application...
+                Your application has been submitted! We will get back to you shortly.
               </>
             ) : (
               "Submit Merchant Application"

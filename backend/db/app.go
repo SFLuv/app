@@ -49,26 +49,41 @@ func (s *AppDB) CreateTables() error {
 	}
 
 	_, err = s.db.Exec(context.Background(), `
-		CREATE TABLE IF NOT EXISTS locations(
-			id SERIAL PRIMARY KEY,
-			google_id TEXT NOT NULL,
-			owner_id TEXT NOT NULL REFERENCES users(id),
-			name TEXT NOT NULL,
-			description TEXT,
-			type TEXT NOT NULL,
-			approval BOOLEAN NOT NULL DEFAULT FALSE,
-			street TEXT NOT NULL,
-			city TEXT NOT NULL,
-			state TEXT NOT NULL,
-			zip TEXT NOT NULL,
-			lat NUMERIC NOT NULL,
-			lng NUMERIC NOT NULL,
-			phone TEXT NOT NULL,
-			email TEXT NOT NULL,
-			website TEXT,
-			image_url TEXT,
-			rating NUMERIC,
-			maps_page TEXT NOT NULL
+			CREATE TABLE IF NOT EXISTS locations (
+				id SERIAL PRIMARY KEY,
+				google_id TEXT,
+				owner_id TEXT REFERENCES users(id),
+				name TEXT,
+				description TEXT,
+				type TEXT,
+				approval BOOLEAN,
+				street TEXT,
+				city TEXT,
+				state TEXT,
+				zip TEXT,
+				lat NUMERIC,
+				lng NUMERIC,
+				phone TEXT,
+				email TEXT,
+				admin_phone TEXT,
+				admin_email TEXT,
+				website TEXT,
+				image_url TEXT,
+				rating NUMERIC,
+				maps_page TEXT,
+				contact_firstname TEXT,
+				contact_lastname TEXT,
+				contact_phone TEXT,
+				pos_system TEXT,
+				sole_proprietorship TEXT,
+				tipping_policy TEXT,
+				tipping_division TEXT,
+				table_coverage TEXT,
+				service_stations INTEGER,
+				tablet_model TEXT,
+				messaging_service TEXT,
+				reference TEXT,
+				UNIQUE (google_id)
 		);
 	`)
 	if err != nil {
@@ -79,8 +94,7 @@ func (s *AppDB) CreateTables() error {
 		CREATE TABLE IF NOT EXISTS location_hours(
 			location_id INTEGER REFERENCES locations(id),
 			weekday INTEGER NOT NULL,
-			open_time NUMERIC,
-			close_time NUMERIC
+			hours TEXT
 		);
 	`)
 	if err != nil {

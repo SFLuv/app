@@ -5,18 +5,17 @@ import { LocationResponse } from "@/types/server";
 import { User } from "./AppProvider";
 import { createContext, ReactNode, useContext, useEffect, useState } from "react";
 import { Location } from "@/types/location";
-import { mockLocations } from "@/data/mock_locations";
 import { useApp } from "@/context/AppProvider";
 
 export type LocationsStatus = "loading" | "available" | "unavailable"
 
 interface LocationContextType {
     mapLocations: Location[]
+    locationTypes: string[]
     mapLocationsStatus: LocationsStatus
     getMapLocations: () => Promise<void>
     updateLocation: (location: Location) => Promise<void>
     addLocation: (location: Location) => Promise<void>
-    loadLocations: () => Promise<void>
 }
 
 const LocationContext = createContext<LocationContextType | null>(null)
@@ -24,7 +23,12 @@ const LocationContext = createContext<LocationContextType | null>(null)
 export default function LocationProvider({ children }: { children: ReactNode }) {
     const [mapLocations, setMapLocations] = useState<Location[]>([])
     const [mapLocationsStatus, setMapLocationsStatus] = useState<LocationsStatus>("loading")
+    const [locationTypes, setLocationTypes] = useState<string[]>([])
     const { authFetch } = useApp()
+
+    useEffect(() => {
+      getMapLocations()
+    }, [])
 
 
     const _getMapLocations = async (): Promise<LocationResponse> => {
@@ -63,9 +67,9 @@ export default function LocationProvider({ children }: { children: ReactNode }) 
             headers: {
                 "Content-Type": "application/json"
                 },
-            body: JSON.stringify({location})
+            body: JSON.stringify(location)
         })
-        if(res.status != 201) {
+        if(res.status != 200) {
             throw new Error("error adding new location, from controller")
         }
       }
@@ -88,19 +92,25 @@ export default function LocationProvider({ children }: { children: ReactNode }) 
             const l = await _getMapLocations()
             setMapLocations(l.locations)
             setMapLocationsStatus("available")
+            const tempTypes: string[] = [];
+            for (let i = 0; i < l.locations.length; i++) {
+                if (!tempTypes.includes(l.locations[i].type)) {
+                tempTypes.push(l.locations[i].type)
+                }
+            }
+            tempTypes.push("All Locations")
+            console.log(tempTypes)
+            console.log(mapLocations)
+            console.log(l.locations)
+            setLocationTypes(tempTypes)
         }
         catch {
             setMapLocationsStatus("unavailable")
             console.error("error getting locations")
         }
+
     }
 
-    const loadLocations = async () => {
-        for (const loc of mockLocations) {
-            await addLocation(loc)
-            console.log(loc)
-        }
-    }
 
     const updateLocation = async (location: Location) => {
         setMapLocationsStatus("loading")
@@ -120,11 +130,11 @@ export default function LocationProvider({ children }: { children: ReactNode }) 
         <LocationContext.Provider
         value ={{
             mapLocations,
+            locationTypes,
             mapLocationsStatus,
             getMapLocations,
             updateLocation,
             addLocation,
-            loadLocations
         }}
         >
             {children}
