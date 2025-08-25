@@ -212,9 +212,7 @@ export class AppWallet {
       functionName: "balanceOf",
       args: [this.address],
     }
-    console.log(statement)
     const balance = await this.publicClient.readContract(statement) as bigint
-    console.log(balance)
 
     return balance
   }

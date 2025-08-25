@@ -2,7 +2,7 @@
 
 import type React from "react"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -17,6 +17,7 @@ import type { ConnectedWallet } from "@/types/privy-wallet"
 import { AppWallet } from "@/lib/wallets/wallets"
 import { DECIMALS, SYMBOL } from "@/lib/constants"
 import { Address, Hash } from "viem"
+import ContactOrAddressInput from "../contacts/contact-or-address-input"
 
 interface SendCryptoModalProps {
   open: boolean
@@ -128,11 +129,9 @@ export function SendCryptoModal({ open, onOpenChange, wallet, balance }: SendCry
                 <Label htmlFor="recipient" className="text-sm font-medium">
                   Recipient Address *
                 </Label>
-                <Input
+                <ContactOrAddressInput
                   id="recipient"
-                  placeholder="0x..."
-                  value={formData.recipient}
-                  onChange={(e) => setFormData({ ...formData, recipient: e.target.value })}
+                  onChange={(value) => setFormData({ ...formData, recipient: value })}
                   className="font-mono text-sm h-11"
                 />
               </div>
