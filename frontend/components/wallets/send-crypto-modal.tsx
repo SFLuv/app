@@ -90,11 +90,16 @@ export function SendCryptoModal({ open, onOpenChange, wallet, balance }: SendCry
 
     // Mock sending process
     let receipt = await wallet.send(BigInt(Number(formData.amount) * (10 ** DECIMALS)), formData.recipient as Address)
+    if(!receipt) {
+      setStep("error")
+      setError("Error creating transaction. Please try again.")
+      return
+    }
 
     // Simulate random success/failure
-    if (receipt?.hash) {
+    if (receipt.hash) {
       setStep("success")
-      setHash(receipt?.hash as Hash)
+      setHash(receipt.hash as Hash)
       toast({
         title: "Transaction Sent",
         description: `Successfully sent ${formData.amount} ${SYMBOL} to ${formData.recipient.slice(0, 6)}...${formData.recipient.slice(-4)}`,
@@ -225,11 +230,6 @@ export function SendCryptoModal({ open, onOpenChange, wallet, balance }: SendCry
                   </span>
                 </div>
 
-                <div className="flex items-center justify-between">
-                  <span className="text-muted-foreground text-sm">Network Fee</span>
-                  <span className="text-sm">~0.0001 {SYMBOL}</span>
-                </div>
-
                 {formData.memo && (
                   <div className="flex items-start justify-between">
                     <span className="text-muted-foreground text-sm">Memo</span>
@@ -274,9 +274,20 @@ export function SendCryptoModal({ open, onOpenChange, wallet, balance }: SendCry
             <div>
               <h3 className="text-lg font-semibold mb-2">Transaction Sent!</h3>
               <p className="text-muted-foreground text-sm mb-4">Your transaction has been broadcast to the network</p>
-              <Badge variant="secondary" className="font-mono text-xs">
-                TX: 0x1234...5678
-              </Badge>
+              <div className="space-y-2">
+                <Label className="text-sm font-medium">Wallet Address</Label>
+                <div className="flex gap-2">
+                  <Input value={`${hash?.slice(0, 6)}...${hash?.slice(-4)}`} readOnly className="font-mono text-xs sm:text-sm h-11" />
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={copyHash}
+                    className="px-3 bg-transparent h-11 flex-shrink-0"
+                  >
+                    {copied ? <CheckCircle className="h-4 w-4 text-green-600" /> : <Copy className="h-4 w-4" />}
+                  </Button>
+                </div>
+                </div>
             </div>
             <Button onClick={handleClose} className="w-full h-11">
               Done

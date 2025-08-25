@@ -33,14 +33,13 @@ export function MapView({
   setUserLocation,
 }: MapViewProps) {
   const [locationInput, setLocationInput] = useState(userLocation.address || "")
-  const [isMapLoaded, setIsMapLoaded] = useState(false)
   const { mapLocationsStatus } = useLocation();
 
   const PoiMarkers = (props: {locations: Location[]}) => {
-    const [markers, setMarkers] = useState<{[key: string]: Marker}>({});
+    const [markers, setMarkers] = useState<{[key: number]: Marker}>({});
     const map = useMap();
 
-    const setMarkerRef = (marker: Marker | null, key: string) => {
+    const setMarkerRef = (marker: Marker | null, key: number) => {
       if (marker && markers[key]) return;
       if (!marker && !markers[key]) return;
 
@@ -59,14 +58,14 @@ export function MapView({
       <>
         {props.locations.map( (currentLocation: Location) => (
           <AdvancedMarker
-            key={currentLocation.name}
+            key={currentLocation.id}
             position={
               {
               lat: currentLocation.lat,
               lng: currentLocation.lng
               }
             }
-            ref={(marker: Marker | null) => setMarkerRef(marker, currentLocation.name)}
+            ref={(marker: Marker | null) => setMarkerRef(marker, currentLocation.id)}
             clickable={true}
             onClick={() => onSelectLocation(currentLocation)}
             >
@@ -83,16 +82,6 @@ export function MapView({
       (location) => selectedLocationType === "all" || location.type === selectedLocationType,
     )
   }, [locations])
-
-  // Initialize Google Maps
-  useEffect(() => {
-    // This would be the actual implementation with a real API key
-    // For now, we'll just simulate the map loading
-    const loadMap = async () => {
-            setIsMapLoaded(true)
-    }
-    loadMap()
-  }, [])
 
 
 
@@ -143,22 +132,15 @@ export function MapView({
       <Card className="border bg-card">
         <CardContent className="p-0">
           <div className="w-full h-[600px] bg-gray-100 dark:bg-gray-800 flex items-center justify-center p-4 rounded-lg">
-            {!isMapLoaded ? (
-              <div className="text-center">
-                <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-[#eb6c6c] mb-4"></div>
-                <p className="text-gray-500 dark:text-gray-400">Loading map...</p>
-              </div>
-            ) : (
-              <APIProvider apiKey={'AIzaSyDushyc7TgeFyIlxbqiujHdydWDoVoHwNQ'}>
-                    <Map
-                      defaultZoom={12}
-                      defaultCenter={ { lat: defaultLocation.lat, lng: defaultLocation.lng } }
-                      mapId='5d823aa5e32225a021e19266'
-                    >
-                  </Map>
-                  <PoiMarkers locations={locations} />
-                </APIProvider>
-            )}
+            <APIProvider apiKey={'AIzaSyDushyc7TgeFyIlxbqiujHdydWDoVoHwNQ'}>
+                  <Map
+                    defaultZoom={12}
+                    defaultCenter={ { lat: defaultLocation.lat, lng: defaultLocation.lng } }
+                    mapId='5d823aa5e32225a021e19266'
+                  >
+                </Map>
+                <PoiMarkers locations={locations} />
+              </APIProvider>
           </div>
         </CardContent>
       </Card>

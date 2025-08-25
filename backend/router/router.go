@@ -16,9 +16,9 @@ func New(s *handlers.BotService, a *handlers.AccountService, p *handlers.AppServ
 
 	r.Use(middleware.Logger)
 	r.Use(cors.Handler(cors.Options{
-		AllowedOrigins:   []string{"https://*", "http://*"},
+		AllowedOrigins:   []string{"*"},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token"},
+		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token", "Access-Token"},
 		ExposedHeaders:   []string{"Link"},
 		AllowCredentials: false,
 		MaxAge:           300,
@@ -66,6 +66,7 @@ func AddLocationRoutes(r *chi.Mux, s *handlers.AppService) {
 	r.Post("/locations", s.AddLocation)
 	r.Get("/locations/{id}", s.GetLocation)
 	r.Get("/locations", s.GetLocations)
+	r.Get("/locations/user", s.GetLocationsByUser)
 	r.Put("/locations/{id}", s.UpdateLocation)
 }
 
