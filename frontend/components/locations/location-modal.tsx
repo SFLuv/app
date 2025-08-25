@@ -51,11 +51,12 @@ export function LocationModal({ location, isOpen, onClose }: LocationModalProps)
             </div>
         </DialogHeader>
 
-        <div className="relative h-64 w-full my-4">
+        <div className="my-4 flex justify-center">
           <Image
             src={location.image_url || "/placeholder.svg?height=300&width=600"}
             alt={location.name}
-            fill
+            width={400}
+            height={200}
             className="object-cover rounded-md"
           />
         </div>
