@@ -181,6 +181,32 @@ var TEST_LOCATION_2A = structs.Location{
 
 var TEST_LOCATIONS = []structs.Location{TEST_LOCATION_1, TEST_LOCATION_2A}
 
+var TEST_CONTACT_1 = structs.Contact{
+	Id:         1,
+	Owner:      TEST_USER_1.Id,
+	Name:       "test_contact_1",
+	Address:    "0x7e571",
+	IsFavorite: false,
+}
+
+var TEST_CONTACT_2 = structs.Contact{
+	Id:         2,
+	Owner:      TEST_USER_2.Id,
+	Name:       "test_contact_2",
+	Address:    "0x7e572",
+	IsFavorite: true,
+}
+
+var TEST_CONTACT_2A = structs.Contact{
+	Id:         2,
+	Owner:      TEST_USER_2.Id,
+	Name:       "test_contact_2a",
+	Address:    "0x7e572a",
+	IsFavorite: true,
+}
+
+var TEST_CONTACTS = []structs.Contact{TEST_CONTACT_1, TEST_CONTACT_2A}
+
 var AppDb *db.AppDB
 var TestServer *httptest.Server
 
@@ -208,8 +234,9 @@ func GroupControllers(t *testing.T) {
 	}
 	walletsControllers := t.Run("wallets controllers group", GroupWalletsControllers)
 	locationControllers := t.Run("location controllers group", GroupLocationControllers)
-	if !walletsControllers || !locationControllers {
-		t.Error("wallets or locations controllers group failed")
+	contactsControllers := t.Run("contacts controllers group", GroupContactsControllers)
+	if !walletsControllers || !locationControllers || !contactsControllers {
+		t.Error("wallets, locations, or contacts controllers group failed")
 	}
 }
 
@@ -243,6 +270,7 @@ func GroupHandlers(t *testing.T) {
 	router.AddUserRoutes(testRouter, appService)
 	router.AddWalletRoutes(testRouter, appService)
 	router.AddLocationRoutes(testRouter, appService)
+	router.AddContactRoutes(testRouter, appService)
 
 	TestServer = httptest.NewServer(testRouter)
 	defer TestServer.Close()
@@ -260,5 +288,10 @@ func GroupHandlers(t *testing.T) {
 	locationHandlers := t.Run("location handlers group", GroupLocationHandlers)
 	if !locationHandlers {
 		t.Fatal("location handlers group failed")
+	}
+
+	contactsHandlers := t.Run("contacts handlers group", GroupContactsHandlers)
+	if !contactsHandlers {
+		t.Fatal("contacts handlers group failed")
 	}
 }

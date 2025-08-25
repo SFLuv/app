@@ -87,5 +87,19 @@ func (s *AppDB) CreateTables() error {
 		return fmt.Errorf("error creating location_hours table: %s", err)
 	}
 
+	_, err = s.db.Exec(context.Background(), `
+		CREATE TABLE IF NOT EXISTS contacts(
+			id SERIAL PRIMARY KEY NOT NULL,
+			owner TEXT NOT NULL REFERENCES users(id),
+			name TEXT NOT NULL,
+			address TEXT NOT NULL,
+			is_favorite BOOLEAN NOT NULL DEFAULT FALSE,
+			UNIQUE (owner, address)
+		);
+	`)
+	if err != nil {
+		return fmt.Errorf("error creating contacts table: %s", err)
+	}
+
 	return nil
 }
