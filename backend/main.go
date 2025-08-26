@@ -44,7 +44,14 @@ func main() {
 		return
 	}
 
-	appDb := db.App(pdb)
+	appLogger, err := logger.New("./logs/prod/app.log", "APP: ")
+	if err != nil {
+		fmt.Printf("error initializing app logger: %s\n", err)
+		return
+	}
+	defer appLogger.Close()
+
+	appDb := db.App(pdb, appLogger)
 	err = appDb.CreateTables()
 	if err != nil {
 		fmt.Println(err)
@@ -56,13 +63,6 @@ func main() {
 		fmt.Printf("error initializing bot service: %s\n", err)
 		return
 	}
-
-	appLogger, err := logger.New("./logs/prod/app.log", "APP: ")
-	if err != nil {
-		fmt.Printf("error initializing app logger: %s\n", err)
-		return
-	}
-	defer appLogger.Close()
 
 	s := handlers.NewBotService(botDb, bot)
 	a := handlers.NewAccountService(accountDb)

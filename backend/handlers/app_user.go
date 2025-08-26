@@ -1,13 +1,13 @@
 package handlers
 
 import (
-	"database/sql"
 	"encoding/json"
 	"io"
 	"net/http"
 
 	"github.com/SFLuv/app/backend/structs"
 	"github.com/SFLuv/app/backend/utils"
+	"github.com/jackc/pgx/v5"
 )
 
 func (a *AppService) AddUser(w http.ResponseWriter, r *http.Request) {
@@ -35,11 +35,12 @@ func (a *AppService) GetUserAuthed(w http.ResponseWriter, r *http.Request) {
 	}
 
 	user, err := a.db.GetUserById(*userDid)
-	if err == sql.ErrNoRows {
+	if err == pgx.ErrNoRows {
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
 	if err != nil {
+		a.logger.Logf("error getting user by id %s: %s", *userDid, err.Error())
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
