@@ -6,3 +6,5 @@ Final prod updates
   - loading state bug after merchant requests approval
   - be sure to filter for only merchants where approved state is true (default approved state should be false)
   - be sure to only return external contact info from backend for locations
+  - switch out QR code generation? if time permits
+  - switch to new community & test

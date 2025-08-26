@@ -265,7 +265,7 @@ export default function WalletDetailsPage() {
                 <Button
                   variant="outline"
                   onClick={() => setShowReceiveModal(true)}
-                  className="h-14 sm:h-16 flex-col gap-1.5 sm:gap-2 text-sm"
+                  className="h-14 sm:h-16 flex-col gap-1.5 sm:gap-2 text-sm hover:bg-primary/65"
                 >
                   <QrCode className="h-4 w-4 sm:h-5 sm:w-5" />
                   <span>Receive</span>
