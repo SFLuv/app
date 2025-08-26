@@ -9,13 +9,14 @@ import (
 	"github.com/SFLuv/app/backend/structs"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type BotDB struct {
-	db *pgx.Conn
+	db *pgxpool.Pool
 }
 
-func Bot(db *pgx.Conn) *BotDB {
+func Bot(db *pgxpool.Pool) *BotDB {
 	return &BotDB{db}
 }
 
@@ -78,22 +79,22 @@ func (s *BotDB) CreateTables() error {
 	return nil
 }
 
-func (s *BotDB) NewEvent(e *structs.Event) (string, error) {
+func (s *BotDB) NewEvent(ctx context.Context, e *structs.Event) (string, error) {
 	id := uuid.NewString()
 
-	tx, err := s.db.Begin(context.Background())
+	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return "", err
 	}
 
-	_, err = tx.Exec(context.Background(), `
+	_, err = tx.Exec(ctx, `
 		INSERT INTO events
 			(id, title, description, amount, expiration)
 		VALUES
 		 ($1, $2, $3, $4, $5);
 	`, id, e.Title, e.Description, e.Amount, e.Expiration)
 	if err != nil {
-		tx.Rollback(context.Background())
+		tx.Rollback(ctx)
 		err = fmt.Errorf("error inserting event object: %s", err)
 		return "", err
 	}
@@ -101,7 +102,7 @@ func (s *BotDB) NewEvent(e *structs.Event) (string, error) {
 	for range e.Codes {
 		codeId := uuid.NewString()
 
-		_, err = tx.Exec(context.Background(), `
+		_, err = tx.Exec(ctx, `
 				INSERT INTO codes
 					(id, event)
 				VALUES
@@ -109,52 +110,52 @@ func (s *BotDB) NewEvent(e *structs.Event) (string, error) {
 			`, codeId, id)
 		if err != nil {
 			err = fmt.Errorf("error inserting event codes: %s", err)
-			tx.Rollback(context.Background())
+			tx.Rollback(ctx)
 			return "", err
 		}
 	}
 
-	err = tx.Commit(context.Background())
+	err = tx.Commit(ctx)
 	if err != nil {
 		err = fmt.Errorf("error committing db transaction: %s", err)
-		tx.Rollback(context.Background())
+		tx.Rollback(ctx)
 		return "", err
 	}
 
 	return id, nil
 }
 
-func (s *BotDB) NewCode(code *structs.Code) (string, error) {
+func (s *BotDB) NewCode(ctx context.Context, code *structs.Code) (string, error) {
 	id := uuid.NewString()
 
-	tx, err := s.db.Begin(context.Background())
+	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return "", err
 	}
 
-	_, err = tx.Exec(context.Background(), `
+	_, err = tx.Exec(ctx, `
 		INSERT INTO codes
 			(id, redeemed, event)
 		VALUES
 		 ($1, $2, $3);
 	`, id, code.Redeemed, code.Event)
 	if err != nil {
-		tx.Rollback(context.Background())
+		tx.Rollback(ctx)
 		err = fmt.Errorf("error inserting event object: %s", err)
 		return "", err
 	}
 
-	err = tx.Commit(context.Background())
+	err = tx.Commit(ctx)
 	if err != nil {
 		err = fmt.Errorf("error committing db transaction: %s", err)
-		tx.Rollback(context.Background())
+		tx.Rollback(ctx)
 		return "", err
 	}
 
 	return id, nil
 }
 
-func (s *BotDB) GetCodes(r *structs.CodesPageRequest) ([]*structs.Code, error) {
+func (s *BotDB) GetCodes(ctx context.Context, r *structs.CodesPageRequest) ([]*structs.Code, error) {
 	offset := r.Page * r.Count
 
 	fmt.Println(r)
@@ -171,6 +172,7 @@ func (s *BotDB) GetCodes(r *structs.CodesPageRequest) ([]*structs.Code, error) {
 		err = fmt.Errorf("error querying for event codes: %s", err)
 		return nil, err
 	}
+	defer rows.Close()
 
 	codes := []*structs.Code{}
 
@@ -189,7 +191,7 @@ func (s *BotDB) GetCodes(r *structs.CodesPageRequest) ([]*structs.Code, error) {
 	return codes, nil
 }
 
-func (s *BotDB) NewCodes(r *structs.NewCodesRequest) ([]*structs.Code, error) {
+func (s *BotDB) NewCodes(ctx context.Context, r *structs.NewCodesRequest) ([]*structs.Code, error) {
 	results := make([]*structs.Code, r.Count)
 
 	tx, err := s.db.Begin(context.Background())
@@ -229,7 +231,7 @@ func (s *BotDB) NewCodes(r *structs.NewCodesRequest) ([]*structs.Code, error) {
 	return results, nil
 }
 
-func (s *BotDB) Redeem(id string, account string) (uint64, pgx.Tx, error) {
+func (s *BotDB) Redeem(ctx context.Context, id string, account string) (uint64, pgx.Tx, error) {
 	tx, err := s.db.Begin(context.Background())
 	if err != nil {
 		err = fmt.Errorf("error creating db tx: %s", err)
@@ -269,7 +271,7 @@ func (s *BotDB) Redeem(id string, account string) (uint64, pgx.Tx, error) {
 
 	time := time.Now().Unix()
 
-	row = tx.QueryRow(context.Background(), `
+	row = tx.QueryRow(ctx, `
 		SELECT
 			amount, expiration
 		FROM events
@@ -290,34 +292,34 @@ func (s *BotDB) Redeem(id string, account string) (uint64, pgx.Tx, error) {
 		if err == sql.ErrNoRows {
 			err = fmt.Errorf("code redeemed")
 		}
-		tx.Rollback(context.Background())
+		tx.Rollback(ctx)
 		return 0, nil, err
 	}
 	fmt.Println(expiration, time)
 	if expiration < time && expiration != 0 {
 		err = fmt.Errorf("code expired")
-		tx.Rollback(context.Background())
+		tx.Rollback(ctx)
 		return 0, nil, err
 	}
 
-	_, err = tx.Exec(context.Background(), `
+	_, err = tx.Exec(ctx, `
 		UPDATE codes
 		SET redeemed = 1
 		WHERE id = $1;
 	`, id)
 	if err != nil {
 		err = fmt.Errorf("error updating code redemption status: %s", err)
-		tx.Rollback(context.Background())
+		tx.Rollback(ctx)
 		return 0, nil, err
 	}
 
-	_, err = tx.Exec(context.Background(), `
+	_, err = tx.Exec(ctx, `
 		INSERT INTO redemptions(account, code)
 		VALUES ($1, $2);
 	`, account, id)
 	if err != nil {
 		err = fmt.Errorf("error inserting code redemption: %s", err)
-		tx.Rollback(context.Background())
+		tx.Rollback(ctx)
 		return 0, nil, err
 	}
 

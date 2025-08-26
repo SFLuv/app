@@ -1,6 +1,7 @@
 package test
 
 import (
+	"context"
 	"testing"
 )
 
@@ -13,38 +14,50 @@ func GroupUsersControllers(t *testing.T) {
 }
 
 func ModuleAddUserController(t *testing.T) {
-	err := AppDb.AddUser(TEST_USER_1.Id)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	err := AppDb.AddUser(ctx, TEST_USER_1.Id)
 	if err != nil {
 		t.Fatal(err.Error())
 	}
 
-	err = AppDb.AddUser(TEST_USER_2.Id)
+	err = AppDb.AddUser(ctx, TEST_USER_2.Id)
 	if err != nil {
 		t.Fatal(err.Error())
 	}
 }
 
 func ModuleUpdateUserInfoController(t *testing.T) {
-	err := AppDb.UpdateUserInfo(&TEST_USER_1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	err := AppDb.UpdateUserInfo(ctx, &TEST_USER_1)
 	if err != nil {
 		t.Fatal(err.Error())
 	}
 
-	err = AppDb.UpdateUserInfo(&TEST_USER_2)
+	err = AppDb.UpdateUserInfo(ctx, &TEST_USER_2)
 	if err != nil {
 		t.Fatal(err.Error())
 	}
 }
 
 func ModuleUpdateUserRoleController(t *testing.T) {
-	err := AppDb.UpdateUserRole(TEST_USER_1.Id, "admin", true)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	err := AppDb.UpdateUserRole(ctx, TEST_USER_1.Id, "admin", true)
 	if err != nil {
 		t.Fatal(err.Error())
 	}
 }
 
 func ModuleGetUserById(t *testing.T) {
-	user, err := AppDb.GetUserById(TEST_USER_1.Id)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	user, err := AppDb.GetUserById(ctx, TEST_USER_1.Id)
 	if err != nil {
 		t.Fatal(err.Error())
 	}
@@ -58,7 +71,10 @@ func ModuleGetUserById(t *testing.T) {
 }
 
 func ModuleGetUsersController(t *testing.T) {
-	users, err := AppDb.GetUsers(0, 2)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	users, err := AppDb.GetUsers(ctx, 0, 2)
 	if err != nil {
 		t.Fatal(err.Error())
 	}

@@ -7,8 +7,8 @@ import (
 	"github.com/SFLuv/app/backend/structs"
 )
 
-func (a *AppDB) AddWallet(wallet *structs.Wallet) (int, error) {
-	row := a.db.QueryRow(context.Background(), `
+func (a *AppDB) AddWallet(ctx context.Context, wallet *structs.Wallet) (int, error) {
+	row := a.db.QueryRow(ctx, `
 		INSERT INTO wallets (
 			owner,
 			name,
@@ -45,8 +45,8 @@ func (a *AppDB) AddWallet(wallet *structs.Wallet) (int, error) {
 	return id, nil
 }
 
-func (a *AppDB) GetWalletsByUser(userId string) ([]*structs.Wallet, error) {
-	rows, err := a.db.Query(context.Background(), `
+func (a *AppDB) GetWalletsByUser(ctx context.Context, userId string) ([]*structs.Wallet, error) {
+	rows, err := a.db.Query(ctx, `
 	SELECT
 		wallets.id, wallets.owner, wallets.name, wallets.is_eoa, wallets.eoa_address, wallets.smart_address, wallets.smart_index
 	FROM
@@ -81,8 +81,8 @@ func (a *AppDB) GetWalletsByUser(userId string) ([]*structs.Wallet, error) {
 	return wallets, nil
 }
 
-func (a *AppDB) UpdateWallet(wallet *structs.Wallet) error {
-	_, err := a.db.Exec(context.Background(), `
+func (a *AppDB) UpdateWallet(ctx context.Context, wallet *structs.Wallet) error {
+	_, err := a.db.Exec(ctx, `
 		UPDATE
 			wallets
 		SET

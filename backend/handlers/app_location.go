@@ -19,7 +19,7 @@ func (a *AppService) GetLocation(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
-	location, err := a.db.GetLocation(num)
+	location, err := a.db.GetLocation(r.Context(), num)
 	if err != nil {
 		a.logger.Logf("no location with id %s: %s", id, err.Error())
 		w.WriteHeader(http.StatusBadRequest)
@@ -54,7 +54,7 @@ func (a *AppService) GetLocations(w http.ResponseWriter, r *http.Request) {
 		Count: uint(count),
 	}
 
-	locations, err := a.db.GetLocations(&request)
+	locations, err := a.db.GetLocations(r.Context(), &request)
 	if err != nil {
 		a.logger.Logf("Failed to get locations %s", err.Error())
 		w.WriteHeader(http.StatusInternalServerError)
@@ -80,7 +80,7 @@ func (a *AppService) GetLocationsByUser(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	locations, err := a.db.GetLocationsByUser(*userDid)
+	locations, err := a.db.GetLocationsByUser(r.Context(), *userDid)
 	if err != nil {
 		a.logger.Logf("error getting locations for user %s: %s", *userDid, err.Error())
 		w.WriteHeader(http.StatusInternalServerError)
@@ -123,7 +123,7 @@ func (a *AppService) AddLocation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	location.OwnerID = *userDid
-	err = a.db.AddLocation(location)
+	err = a.db.AddLocation(r.Context(), location)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		a.logger.Logf("invalid location body: %s", err.Error())
@@ -151,7 +151,7 @@ func (a *AppService) UpdateLocation(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
-	location, err := a.db.GetLocation(num)
+	location, err := a.db.GetLocation(r.Context(), num)
 	if err != nil {
 		a.logger.Logf("no location %s", err.Error())
 		w.WriteHeader(http.StatusBadRequest)
@@ -164,7 +164,7 @@ func (a *AppService) UpdateLocation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err = a.db.UpdateLocation(location)
+	err = a.db.UpdateLocation(r.Context(), location)
 	if err != nil {
 		a.logger.Logf("failed to update location %s", err.Error())
 		w.WriteHeader(http.StatusBadRequest)

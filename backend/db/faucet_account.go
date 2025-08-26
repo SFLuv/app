@@ -6,14 +6,14 @@ import (
 	"fmt"
 
 	"github.com/SFLuv/app/backend/structs"
-	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type AccountDB struct {
-	db *pgx.Conn
+	db *pgxpool.Pool
 }
 
-func Account(db *pgx.Conn) *AccountDB {
+func Account(db *pgxpool.Pool) *AccountDB {
 	return &AccountDB{db}
 }
 
@@ -33,9 +33,9 @@ func (s *AccountDB) CreateTables() error {
 	return nil
 }
 
-func (s *AccountDB) NewAccount(account *structs.AccountRequest) error {
+func (s *AccountDB) NewAccount(ctx context.Context, account *structs.AccountRequest) error {
 
-	_, err := s.db.Exec(context.Background(), `
+	_, err := s.db.Exec(ctx, `
 		INSERT INTO accounts
 			(address, email, name)
 		VALUES
@@ -45,8 +45,8 @@ func (s *AccountDB) NewAccount(account *structs.AccountRequest) error {
 	return err
 }
 
-func (s *AccountDB) GetAccount(address string) bool {
-	row := s.db.QueryRow(context.Background(), `
+func (s *AccountDB) GetAccount(ctx context.Context, address string) bool {
+	row := s.db.QueryRow(ctx, `
 		SELECT * FROM accounts WHERE address = $1;
 	`, address)
 

@@ -17,7 +17,7 @@ func (a *AppService) AddUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err := a.db.AddUser(*userDid)
+	err := a.db.AddUser(r.Context(), *userDid)
 	if err != nil {
 		a.logger.Logf("error adding user %s: %s", *userDid, err.Error())
 		w.WriteHeader(http.StatusInternalServerError)
@@ -34,7 +34,7 @@ func (a *AppService) GetUserAuthed(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := a.db.GetUserById(*userDid)
+	user, err := a.db.GetUserById(r.Context(), *userDid)
 	if err == pgx.ErrNoRows {
 		w.WriteHeader(http.StatusNotFound)
 		return
@@ -45,21 +45,21 @@ func (a *AppService) GetUserAuthed(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	wallets, err := a.db.GetWalletsByUser(*userDid)
+	wallets, err := a.db.GetWalletsByUser(r.Context(), *userDid)
 	if err != nil {
 		a.logger.Logf("error getting wallets for user %s: %s", *userDid, err.Error())
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 
-	locations, err := a.db.GetLocationsByUser(*userDid)
+	locations, err := a.db.GetLocationsByUser(r.Context(), *userDid)
 	if err != nil {
 		a.logger.Logf("error getting locations for user %s: %s", *userDid, err.Error())
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 
-	contacts, err := a.db.GetContacts(*userDid)
+	contacts, err := a.db.GetContacts(r.Context(), *userDid)
 	if err != nil {
 		a.logger.Logf("error getting contacts for user %s: %s", *userDid, err.Error())
 		w.WriteHeader(http.StatusInternalServerError)
@@ -107,7 +107,7 @@ func (a *AppService) UpdateUserInfo(w http.ResponseWriter, r *http.Request) {
 	}
 	user.Id = *userDid
 
-	err = a.db.UpdateUserInfo(&user)
+	err = a.db.UpdateUserInfo(r.Context(), &user)
 	if err != nil {
 		a.logger.Logf("error updating user info with struct:\n  %#v\nfor user %s: %s", user, *userDid, err.Error())
 		w.WriteHeader(http.StatusInternalServerError)

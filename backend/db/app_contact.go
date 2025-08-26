@@ -7,8 +7,8 @@ import (
 	"github.com/SFLuv/app/backend/structs"
 )
 
-func (a *AppDB) AddContact(c *structs.Contact, userId string) (*structs.Contact, error) {
-	row := a.db.QueryRow(context.Background(), `
+func (a *AppDB) AddContact(ctx context.Context, c *structs.Contact, userId string) (*structs.Contact, error) {
+	row := a.db.QueryRow(ctx, `
 		INSERT INTO contacts(
 			owner,
 			name,
@@ -32,8 +32,8 @@ func (a *AppDB) AddContact(c *structs.Contact, userId string) (*structs.Contact,
 	return c, nil
 }
 
-func (a *AppDB) UpdateContact(c *structs.Contact, userId string) error {
-	_, err := a.db.Exec(context.Background(), `
+func (a *AppDB) UpdateContact(ctx context.Context, c *structs.Contact, userId string) error {
+	_, err := a.db.Exec(ctx, `
 		UPDATE contacts
 		SET
 			name = $1,
@@ -48,8 +48,8 @@ func (a *AppDB) UpdateContact(c *structs.Contact, userId string) error {
 	return err
 }
 
-func (a *AppDB) GetContacts(userId string) ([]*structs.Contact, error) {
-	rows, err := a.db.Query(context.Background(), `
+func (a *AppDB) GetContacts(ctx context.Context, userId string) ([]*structs.Contact, error) {
+	rows, err := a.db.Query(ctx, `
 		SELECT
 			c.id,
 			c.name,
@@ -87,8 +87,8 @@ func (a *AppDB) GetContacts(userId string) ([]*structs.Contact, error) {
 	return contacts, nil
 }
 
-func (a *AppDB) DeleteContact(contactId int, userId string) error {
-	_, err := a.db.Exec(context.Background(), `
+func (a *AppDB) DeleteContact(ctx context.Context, contactId int, userId string) error {
+	_, err := a.db.Exec(ctx, `
 		DELETE FROM
 			contacts
 		USING

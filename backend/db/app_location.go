@@ -7,8 +7,8 @@ import (
 	"github.com/SFLuv/app/backend/structs"
 )
 
-func (a *AppDB) GetLocation(id uint64) (*structs.Location, error) {
-	row := a.db.QueryRow(context.Background(), `
+func (a *AppDB) GetLocation(ctx context.Context, id uint64) (*structs.Location, error) {
+	row := a.db.QueryRow(ctx, `
 		SELECT
 			id,
 			google_id,
@@ -87,7 +87,7 @@ func (a *AppDB) GetLocation(id uint64) (*structs.Location, error) {
 		return nil, err
 	}
 
-	rows, err := a.db.Query(context.Background(), `
+	rows, err := a.db.Query(ctx, `
 		SELECT
 			hours
 		FROM location_hours
@@ -115,10 +115,10 @@ func (a *AppDB) GetLocation(id uint64) (*structs.Location, error) {
 	return &location, nil
 }
 
-func (s *AppDB) GetLocations(r *structs.LocationsPageRequest) ([]*structs.Location, error) {
+func (s *AppDB) GetLocations(ctx context.Context, r *structs.LocationsPageRequest) ([]*structs.Location, error) {
 	offset := r.Page * r.Count
 
-	rows, err := s.db.Query(context.Background(), `
+	rows, err := s.db.Query(ctx, `
 		SELECT
 			id,
 			google_id,
@@ -214,7 +214,7 @@ func (s *AppDB) GetLocations(r *structs.LocationsPageRequest) ([]*structs.Locati
 	for _, loc := range locations {
 		curr_hours := ""
 		openingHours := []string{}
-		rows2, err2 := s.db.Query(context.Background(), `
+		rows2, err2 := s.db.Query(ctx, `
 			SELECT
 				hours
 			FROM location_hours
@@ -222,7 +222,7 @@ func (s *AppDB) GetLocations(r *structs.LocationsPageRequest) ([]*structs.Locati
 			ORDER BY weekday;
 		`, loc.ID)
 		if err2 != nil {
-			fmt.Printf("error querying location hours table: %s\n", err2)
+			s.logger.Logf("error querying location hours table: %s", err2)
 			continue
 		}
 
@@ -237,7 +237,7 @@ func (s *AppDB) GetLocations(r *structs.LocationsPageRequest) ([]*structs.Locati
 			openingHours = append(openingHours, curr_hours)
 		}
 		if err2 != nil {
-			fmt.Printf("error scanning hours rows for get locations: %s\n", err2)
+			s.logger.Logf("error scanning hours rows for get locations: %s", err2)
 			continue
 		}
 
@@ -248,9 +248,8 @@ func (s *AppDB) GetLocations(r *structs.LocationsPageRequest) ([]*structs.Locati
 	return finalLocations, nil
 }
 
-func (a *AppDB) AddLocation(location *structs.Location) error {
-	fmt.Println("reached add location controller")
-	_, err := a.db.Exec(context.Background(), `
+func (a *AppDB) AddLocation(ctx context.Context, location *structs.Location) error {
+	_, err := a.db.Exec(ctx, `
 		INSERT INTO locations (
 			google_id,
 			owner_id,
@@ -329,7 +328,7 @@ func (a *AppDB) AddLocation(location *structs.Location) error {
 		return fmt.Errorf("error adding location to locations table: %s", err)
 	}
 
-	row := a.db.QueryRow(context.Background(), `
+	row := a.db.QueryRow(ctx, `
 		SELECT
 			id
 		FROM locations
@@ -339,11 +338,10 @@ func (a *AppDB) AddLocation(location *structs.Location) error {
 
 	id := 0
 	err = row.Scan(&id)
-	fmt.Println(id)
 
 	for i := 0; i < len(location.OpeningHours); i++ {
 		hours := location.OpeningHours[i]
-		_, err := a.db.Exec(context.Background(), `
+		_, err := a.db.Exec(ctx, `
 		INSERT INTO location_hours (
 			location_id,
 			weekday,
@@ -354,7 +352,6 @@ func (a *AppDB) AddLocation(location *structs.Location) error {
 			i,
 			hours,
 		)
-		fmt.Println(err)
 		if err != nil {
 			return fmt.Errorf("error adding location hours to hour table: %s", err)
 		}
@@ -362,8 +359,8 @@ func (a *AppDB) AddLocation(location *structs.Location) error {
 	return err
 }
 
-func (a *AppDB) UpdateLocation(location *structs.Location) error {
-	_, err := a.db.Exec(context.Background(), `
+func (a *AppDB) UpdateLocation(ctx context.Context, location *structs.Location) error {
+	_, err := a.db.Exec(ctx, `
     UPDATE locations
     SET
         google_id = $1,
@@ -381,8 +378,8 @@ func (a *AppDB) UpdateLocation(location *structs.Location) error {
         phone = $13,
         email = $14,
         website = $15,
-		admin_phone = $16,
-		admin_email = $17,
+        admin_phone = $16,
+        admin_email = $17,
         image_url = $18,
         rating = $19,
         maps_page = $20,
@@ -397,8 +394,8 @@ func (a *AppDB) UpdateLocation(location *structs.Location) error {
         service_stations = $29,
         tablet_model = $30,
         messaging_service = $31,
-		reference = $32
-    WHERE location_id = $33;
+        reference = $32
+    WHERE id = $33;
 	`,
 		location.GoogleID,
 		location.OwnerID,
@@ -441,7 +438,7 @@ func (a *AppDB) UpdateLocation(location *structs.Location) error {
 
 	for i := 0; i < len(location.OpeningHours); i++ {
 		hours := location.OpeningHours[i]
-		_, err := a.db.Exec(context.Background(), `
+		_, err := a.db.Exec(ctx, `
 		UPDATE location_hours
 		SET
 			weekday = $1,
@@ -459,8 +456,8 @@ func (a *AppDB) UpdateLocation(location *structs.Location) error {
 	return err
 }
 
-func (a *AppDB) GetLocationsByUser(userId string) ([]*structs.Location, error) {
-	rows, err := a.db.Query(context.Background(), `
+func (a *AppDB) GetLocationsByUser(ctx context.Context, userId string) ([]*structs.Location, error) {
+	rows, err := a.db.Query(ctx, `
     SELECT
         id,
 		google_id,
@@ -553,7 +550,7 @@ func (a *AppDB) GetLocationsByUser(userId string) ([]*structs.Location, error) {
 	for _, loc := range locations {
 		curr_hours := ""
 		openingHours := []string{}
-		rows2, err2 := a.db.Query(context.Background(), `
+		rows2, err2 := a.db.Query(ctx, `
 			SELECT
 				hours
 			FROM location_hours
@@ -561,7 +558,7 @@ func (a *AppDB) GetLocationsByUser(userId string) ([]*structs.Location, error) {
 			ORDER BY weekday;
 		`, loc.ID)
 		if err2 != nil {
-			fmt.Printf("error querying location hours table: %s\n", err2)
+			a.logger.Logf("error querying location hours table: %s", err2)
 			continue
 		}
 
@@ -576,7 +573,7 @@ func (a *AppDB) GetLocationsByUser(userId string) ([]*structs.Location, error) {
 			openingHours = append(openingHours, curr_hours)
 		}
 		if err2 != nil {
-			fmt.Printf("error scanning hours rows for get locations by id: %s\n", err2)
+			a.logger.Logf("error scanning hours rows for get locations by id: %s", err2)
 			continue
 		}
 
