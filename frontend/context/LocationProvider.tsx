@@ -4,7 +4,7 @@
 import { LocationResponse } from "@/types/server";
 import { User } from "./AppProvider";
 import { createContext, ReactNode, useContext, useEffect, useState } from "react";
-import { Location } from "@/types/location";
+import { AuthedLocation, Location } from "@/types/location";
 import { useApp } from "@/context/AppProvider";
 
 export type LocationsStatus = "loading" | "available" | "unavailable"
@@ -14,8 +14,8 @@ interface LocationContextType {
     locationTypes: string[]
     mapLocationsStatus: LocationsStatus
     getMapLocations: () => Promise<void>
-    updateLocation: (location: Location) => Promise<void>
-    addLocation: (location: Location) => Promise<void>
+    updateLocation: (location: AuthedLocation) => Promise<void>
+    addLocation: (location: AuthedLocation) => Promise<void>
 }
 
 const LocationContext = createContext<LocationContextType | null>(null)
@@ -24,7 +24,7 @@ export default function LocationProvider({ children }: { children: ReactNode }) 
     const [mapLocations, setMapLocations] = useState<Location[]>([])
     const [mapLocationsStatus, setMapLocationsStatus] = useState<LocationsStatus>("loading")
     const [locationTypes, setLocationTypes] = useState<string[]>([])
-    const { authFetch } = useApp()
+    const { authFetch, userLocations, setUserLocations } = useApp()
 
     useEffect(() => {
       getMapLocations()
@@ -39,7 +39,7 @@ export default function LocationProvider({ children }: { children: ReactNode }) 
         return await res.json() as LocationResponse
     }
 
-    const _updateLocation = async (location: Location) => {
+    const _updateLocation = async (location: AuthedLocation) => {
         const res = await authFetch("/locations", {
             method: "PUT",
             headers: {
@@ -61,7 +61,7 @@ export default function LocationProvider({ children }: { children: ReactNode }) 
     }
 
 
-    const _addLocation = async (location: Location) => {
+    const _addLocation = async (location: AuthedLocation) => {
         const res = await authFetch("/locations", {
             method: "POST",
             headers: {
@@ -69,21 +69,21 @@ export default function LocationProvider({ children }: { children: ReactNode }) 
                 },
             body: JSON.stringify(location)
         })
-        if(res.status != 200) {
+        if(res.status != 201) {
             throw new Error("error adding new location, from controller")
         }
       }
 
-    const addLocation = async (location: Location) => {
+    const addLocation = async (location: AuthedLocation) => {
         setMapLocationsStatus("loading")
         try {
             await _addLocation(location)
+            setUserLocations([...userLocations, location])
         }
         catch {
             setMapLocationsStatus("unavailable")
             console.error("error adding new location")
         }
-
       }
 
     const getMapLocations = async () => {
@@ -112,7 +112,7 @@ export default function LocationProvider({ children }: { children: ReactNode }) 
     }
 
 
-    const updateLocation = async (location: Location) => {
+    const updateLocation = async (location: AuthedLocation) => {
         setMapLocationsStatus("loading")
         try {
             await _updateLocation(location)

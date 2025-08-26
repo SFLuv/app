@@ -1,6 +1,27 @@
 export interface Location {
   id: number;
   google_id: string;
+  name: string;
+  description: string;
+  type: string;
+  street: string;
+  city: string;
+  state: string;
+  zip: string;
+  lat: number;
+  lng: number;
+  phone: string;
+  email: string;
+  website: string;
+  image_url: string;
+  rating: number;
+  maps_page: string;
+  opening_hours: string[];
+}
+
+export interface AuthedLocation {
+  id: number;
+  google_id: string;
   owner_id: string;
   name: string;
   description: string;

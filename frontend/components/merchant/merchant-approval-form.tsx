@@ -12,7 +12,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Loader2 } from "lucide-react"
 import PlaceAutocomplete from "./google_place_finder"
-import { Location, GoogleSubLocation } from "@/types/location"
+import { Location, GoogleSubLocation, AuthedLocation } from "@/types/location"
 import { useLocation } from "@/context/LocationProvider"
 
 
@@ -70,6 +70,7 @@ const messagingServiceOptions = [
 
 export function MerchantApprovalForm() {
   const { addLocation } = useLocation();
+  const router = useRouter()
   // Internal Form State
   const [isSubmitting, setIsSubmitting] = useState(false)
 
@@ -141,12 +142,12 @@ export function MerchantApprovalForm() {
   setGoogleSubLocation(null)
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if(!googleSubLocation) return
 
     // Create merchant profile with all fields
-    const newLocation:Location = {
+    const newLocation:AuthedLocation = {
       id: 0,
       google_id: googleSubLocation.google_id,
       owner_id: "",
@@ -184,13 +185,12 @@ export function MerchantApprovalForm() {
       }
 
       console.log(newLocation)
-      addLocation(newLocation)
-      setSearchKey(prev => prev + 1)
-      resetForm()
       setIsSubmitting(true)
-      setTimeout(() => {
+      await addLocation(newLocation)
+      setSearchKey(prev => prev + 1)
       setIsSubmitting(false);
-  }, 3000);
+      resetForm()
+      router.replace("/settings")
     }
 
   return (

@@ -2,7 +2,7 @@
 
 import type React from "react"
 
-import { useState } from "react"
+import { useMemo, useState } from "react"
 import { useRouter } from "next/navigation"
 import { useApp } from "@/context/AppProvider"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -16,9 +16,18 @@ import { Switch } from "@/components/ui/switch"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Check, Loader2, Upload, User, Clock, XCircle } from "lucide-react"
 
+type MerchantStatus = "approved" | "pending" | "rejected" | "none"
+
 export default function SettingsPage() {
   const router = useRouter()
-  const { user, updateUser } = useApp()
+  const { user, updateUser, userLocations, status } = useApp()
+
+  const merchantStatus: MerchantStatus = useMemo(() => {
+    console.log(userLocations)
+    if(userLocations.length == 0) return "none"
+    if(userLocations.find((loc) => loc.approval)) return "approved"
+    return "pending"
+  }, [userLocations])
 
   // Form states
   const [activeTab, setActiveTab] = useState("account")
@@ -28,7 +37,6 @@ export default function SettingsPage() {
 
   // Account form
   const [name, setName] = useState(user?.name || "")
-  const [email, setEmail] = useState(user?.email || "")
 
   // Password form
   const [currentPassword, setCurrentPassword] = useState("")
@@ -55,17 +63,6 @@ export default function SettingsPage() {
   const [transactionAlerts, setTransactionAlerts] = useState(true)
 
   // Handle account update
-  const handleAccountUpdate = (e: React.FormEvent) => {
-    e.preventDefault()
-    setIsUpdating(true)
-
-    // Simulate API call
-    setTimeout(() => {
-      updateUser({ name, email })
-      setIsUpdating(false)
-      showSuccessMessage("Account details updated successfully")
-    }, 1500)
-  }
 
   // Handle password change
   const handlePasswordChange = (e: React.FormEvent) => {
@@ -127,6 +124,15 @@ export default function SettingsPage() {
     }, 3000)
   }
 
+
+  if (status === "loading") {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-[#eb6c6c]"></div>
+      </div>
+    )
+  }
+
   return (
     <div className="space-y-6 w-full">
       <div>
@@ -134,12 +140,12 @@ export default function SettingsPage() {
         <p className="text-gray-600 dark:text-gray-400 mt-1">Manage your account preferences and settings</p>
       </div>
 
-      {successMessage && (
+      {/* {successMessage && (
         <div className="bg-green-100 dark:bg-green-900 border border-green-200 dark:border-green-800 text-green-800 dark:text-green-200 px-4 py-3 rounded flex items-center">
           <Check className="h-5 w-5 mr-2" />
           {successMessage}
         </div>
-      )}
+      )} */}
 
       <Tabs defaultValue="account" value={activeTab} onValueChange={setActiveTab} className="w-full">
         <TabsList className="w-full mb-6 bg-secondary">
@@ -162,7 +168,7 @@ export default function SettingsPage() {
         </TabsList>
 
         <TabsContent value="account">
-          <div className="grid gap-6 md:grid-cols-2">
+          {/* <div className="grid gap-6 md:grid-cols-2">
             <Card>
               <CardHeader>
                 <CardTitle className="text-black dark:text-white">Profile Information</CardTitle>
@@ -295,8 +301,8 @@ export default function SettingsPage() {
                 </form>
               </CardContent>
             </Card>
-          </div>
-          {user?.isMerchant === false && (
+          </div> */}
+          {merchantStatus == "none" && (
             <Card className="mt-6">
               <CardHeader>
                 <CardTitle className="text-black dark:text-white">Become a Merchant</CardTitle>
@@ -310,7 +316,7 @@ export default function SettingsPage() {
                 <Button
                   variant="outline"
                   className="bg-secondary text-[#eb6c6c] border-[#eb6c6c] hover:bg-[#eb6c6c] hover:text-white"
-                  onClick={() => router.push("/merchant-approval")}
+                  onClick={() => router.push("/settings/merchant-approval")}
                 >
                   Apply to Become a Merchant
                 </Button>
@@ -318,31 +324,69 @@ export default function SettingsPage() {
             </Card>
           )}
 
-          {user?.merchantStatus === "pending" && (
-            <Card className="mt-6 border-yellow-300 dark:border-yellow-700">
-              <CardHeader className="bg-yellow-50 dark:bg-yellow-900/20 rounded-t-lg">
-                <CardTitle className="text-black dark:text-white flex items-center">
-                  <Clock className="h-5 w-5 text-yellow-500 mr-2" />
-                  Merchant Application Pending
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="pt-4">
-                <p className="text-gray-600 dark:text-gray-400 mb-4">
-                  Your application to become a merchant is currently under review. You'll be notified once a decision
-                  has been made.
-                </p>
-                <Button
-                  variant="outline"
-                  className="bg-secondary text-[#eb6c6c] border-[#eb6c6c] hover:bg-[#eb6c6c] hover:text-white"
-                  onClick={() => router.push("/merchant-status")}
-                >
-                  Check Application Status
-                </Button>
-              </CardContent>
-            </Card>
+          {(merchantStatus === "pending" || merchantStatus == "approved") && (
+            <div className="space-y-4">
+              <div className="space-y-2">
+                {userLocations.filter((loc) => loc.approval).map((loc) => {
+                  return (
+                    <Card className="mt-6 border-green-300 dark:border-green-700" key={loc.id}>
+                      <CardHeader className="bg-green-50 dark:bg-green-900/20 rounded-t-lg">
+                        <CardTitle className="text-black dark:text-white flex items-center">
+                          <Clock className="h-5 w-5 text-green-500 mr-2" />
+                          Location Application Approved
+                        </CardTitle>
+                      </CardHeader>
+                      <CardContent className="pt-4">
+                        <p className="text-gray-600 dark:text-gray-400 mb-4">
+                          Your application for {loc.name} has been approved!
+                        </p>
+                        {/* <Button
+                          variant="outline"
+                          className="bg-secondary text-[#eb6c6c] border-[#eb6c6c] hover:bg-[#eb6c6c] hover:text-white"
+                          onClick={() => router.push("/merchant-status")}
+                        >
+                          Check Application Status
+                        </Button> */}
+                      </CardContent>
+                    </Card>
+                  )
+                })}
+                {userLocations.filter((loc) => loc.approval === false).map((loc) => {
+                  return (
+                    <Card className="mt-6 border-yellow-300 dark:border-yellow-700" key={loc.id}>
+                      <CardHeader className="bg-yellow-50 dark:bg-yellow-900/20 rounded-t-lg">
+                        <CardTitle className="text-black dark:text-white flex items-center">
+                          <Clock className="h-5 w-5 text-yellow-500 mr-2" />
+                          Location Application Pending
+                        </CardTitle>
+                      </CardHeader>
+                      <CardContent className="pt-4">
+                        <p className="text-gray-600 dark:text-gray-400 mb-4">
+                          Your application for {loc.name} is currently under review.
+                        </p>
+                        {/* <Button
+                          variant="outline"
+                          className="bg-secondary text-[#eb6c6c] border-[#eb6c6c] hover:bg-[#eb6c6c] hover:text-white"
+                          onClick={() => router.push("/merchant-status")}
+                        >
+                          Check Application Status
+                        </Button> */}
+                      </CardContent>
+                    </Card>
+                  )
+                })}
+              </div>
+            <Button
+              variant="outline"
+              className="bg-secondary text-[#eb6c6c] border-[#eb6c6c] hover:bg-[#eb6c6c] hover:text-white"
+              onClick={() => router.push("/settings/merchant-approval")}
+            >
+              Submit Another Application
+            </Button>
+            </div>
           )}
 
-          {user?.merchantStatus === "rejected" && (
+          {/* {user?.merchantStatus === "rejected" && (
             <Card className="mt-6 border-red-300 dark:border-red-700">
               <CardHeader className="bg-red-50 dark:bg-red-900/20 rounded-t-lg">
                 <CardTitle className="text-black dark:text-white flex items-center">
@@ -364,10 +408,10 @@ export default function SettingsPage() {
                 </Button>
               </CardContent>
             </Card>
-          )}
+          )} */}
         </TabsContent>
 
-        {user?.isMerchant && (
+        {merchantStatus == "approved" && (
           <TabsContent value="merchant">
             <Card>
               <CardHeader>

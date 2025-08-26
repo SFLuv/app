@@ -1,5 +1,5 @@
 import { Contact } from "./contact"
-import { Location } from "./location"
+import { AuthedLocation, Location } from "./location"
 
 export interface UserResponse {
   id: string
@@ -16,6 +16,10 @@ export interface LocationResponse {
   locations: Location[]
 }
 
+export interface AuthedLocationResponse {
+  locations: AuthedLocation[]
+}
+
 export interface WalletResponse {
   id: number | null
   owner: string
@@ -29,6 +33,6 @@ export interface WalletResponse {
 export interface GetUserResponse {
   user: UserResponse
   wallets: WalletResponse[]
-  locations: Location[]
+  locations: AuthedLocation[]
   contacts: Contact[]
 }

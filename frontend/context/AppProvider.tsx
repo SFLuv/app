@@ -2,7 +2,7 @@
 
 import { ConnectedWallet, EIP1193Provider, PrivyProvider, useImportWallet, usePrivy, useWallets, Wallet } from "@privy-io/react-auth"
 import { toSimpleSmartAccount, ToSimpleSmartAccountReturnType } from "permissionless/accounts";
-import { createContext, Dispatch, ReactNode, useContext, useEffect, useState } from "react";
+import { createContext, Dispatch, ReactNode, SetStateAction, useContext, useEffect, useState } from "react";
 import { Address, createWalletClient, custom, encodeFunctionData, Hash, Hex, hexToBytes, RpcUserOperation } from "viem";
 import { entryPoint07Address, entryPoint08Address, formatUserOperation, PaymasterClient, toPackedUserOperation, ToSmartAccountReturnType, UserOperation } from "viem/account-abstraction";
 import { depositFor, execute, transfer, withdrawTo } from "@/lib/abi";
@@ -14,7 +14,8 @@ import { UserOp } from "@citizenwallet/sdk";
 import { JsonRpcSigner, Signer } from "ethers";
 import { BrowserProvider } from "ethers";
 import { AppWallet } from "@/lib/wallets/wallets";
-import { UserResponse, GetUserResponse, WalletResponse, LocationResponse } from "@/types/server";
+import { UserResponse, GetUserResponse, WalletResponse } from "@/types/server";
+import { AuthedLocation } from "@/types/location";
 import { importWallet as privyImportWallet } from "@/lib/wallets/import";
 import { usePathname, useRouter } from "next/navigation";
 import { Contact } from "@/types/contact";
@@ -48,7 +49,8 @@ interface AppContextType {
   // Authentication
   status: UserStatus;
   user: User | null;
-  userLocations: Location[]
+  userLocations: AuthedLocation[]
+  setUserLocations: Dispatch<SetStateAction<AuthedLocation[]>>;
   login: () => Promise<void>;
   logout: () => Promise<void>;
   authFetch: (endpoint: string, options?: RequestInit) => Promise<Response>;
@@ -85,7 +87,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
   const [wallets, setWallets] = useState<AppWallet[]>([])
   const [walletsStatus, setWalletsStatus] = useState<WalletsStatus>("loading")
   const [mapLocations, setMapLocations] = useState<Location[]>([])
-  const [userLocations, setUserLocations] = useState<Location[]>([])
+  const [userLocations, setUserLocations] = useState<AuthedLocation[]>([])
   const [status, setStatus] = useState<UserStatus>("loading")
   const [tx, setTx] = useState<TxState>(defaultTxState)
   const [error, setError] = useState<string | unknown | null>(null);
@@ -165,6 +167,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
 
       await _userResponseToUser(userResponse)
       await _initWallets(userResponse.wallets)
+      setUserLocations(userResponse.locations)
 
       setStatus("authenticated")
     }
@@ -497,6 +500,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
           wallets,
           walletsStatus,
           userLocations,
+          setUserLocations,
           tx,
           addWallet,
           importWallet,
