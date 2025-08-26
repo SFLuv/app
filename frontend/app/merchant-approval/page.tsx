@@ -10,17 +10,17 @@ export default function MerchantApprovalPage() {
   const { status } = useApp()
 
   const addGoogleScript = async () => {
-          const existingScript = document.querySelector<HTMLScriptElement>(
-              `script[src^="https://maps.googleapis.com/maps/api/js"]`);
-          if (!existingScript) {
-          const script = document.createElement("script");
-          script.src = `https://maps.googleapis.com/maps/api/js?key=${GOOGLE_MAPS_API_KEY}&libraries=places`;
-          script.async = true;
-          script.defer = true;
-          document.head.appendChild(script);
-          console.log("Script appended")
-          }
-      }
+    const existingScript = document.querySelector<HTMLScriptElement>(
+        `script[src^="https://maps.googleapis.com/maps/api/js"]`);
+    if (!existingScript) {
+    const script = document.createElement("script");
+    script.src = `https://maps.googleapis.com/maps/api/js?key=${GOOGLE_MAPS_API_KEY}&libraries=places`;
+    script.async = true;
+    script.defer = true;
+    document.head.appendChild(script);
+    console.log("Script appended")
+    }
+  }
 
   useEffect(() => {
     addGoogleScript()

@@ -172,10 +172,10 @@ export default function WalletDetailsPage() {
               <ArrowLeft className="h-4 w-4" />
             </Button>
             <div className="flex items-center gap-2 min-w-0 flex-1">
-              <Avatar className="h-7 w-7 sm:h-8 sm:w-8 flex-shrink-0">
+              {/* <Avatar className="h-7 w-7 sm:h-8 sm:w-8 flex-shrink-0">
                 <AvatarImage src={`/placeholder.svg?height=32&width=32&text=${wallet.name}`} />
                 <AvatarFallback className="text-xs">{wallet.name.slice(0, 2).toUpperCase()}</AvatarFallback>
-              </Avatar>
+              </Avatar> */}
               <div className="min-w-0 flex-1">
                 {isEditingName ? (
                   <div className="flex items-center gap-1 sm:gap-2">
@@ -275,7 +275,7 @@ export default function WalletDetailsPage() {
           </Card>
 
           {/* Quick Stats */}
-          <div className="grid grid-cols-2 gap-3 sm:gap-4">
+          {/* <div className="grid grid-cols-2 gap-3 sm:gap-4">
             <Card>
               <CardContent className="p-3 sm:p-4">
                 <div className="flex items-center gap-2 sm:gap-3">
@@ -306,10 +306,10 @@ export default function WalletDetailsPage() {
                 </div>
               </CardContent>
             </Card>
-          </div>
+          </div> */}
 
           {/* Transaction History */}
-          <Card>
+          {/* <Card>
             <CardHeader className="pb-2 sm:pb-3">
               <div className="flex items-center justify-between">
                 <div>
@@ -324,7 +324,7 @@ export default function WalletDetailsPage() {
             <CardContent className="px-3 sm:px-4 pb-3 sm:pb-4">
               <TransactionHistoryList transactions={walletTransactions.slice(0, 10)} walletAddress={wallet.address || "0x"} />
             </CardContent>
-          </Card>
+          </Card> */}
 
           {/* Security Notice */}
           <Card className="border-amber-200 dark:border-amber-800 bg-amber-50/50 dark:bg-amber-900/10">
