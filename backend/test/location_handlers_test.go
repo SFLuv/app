@@ -113,7 +113,8 @@ func ModuleGetLocationsHandler(t *testing.T) {
 }
 
 func ModuleUpdateLocationHandler(t *testing.T) {
-	put_request_1, err := http.NewRequest(http.MethodPut, TestServer.URL+"/locations/"+"1", nil)
+	Spoofer.SetValue("userDid", TEST_USER_1.Id)
+	put_request_1, err := http.NewRequest(http.MethodPut, TestServer.URL+"/locations", nil)
 	if err != nil {
 		t.Fatalf("error creating put request: %s", err)
 	}

@@ -5,18 +5,17 @@ import (
 	"fmt"
 
 	"github.com/SFLuv/app/backend/structs"
+	"github.com/jackc/pgx/v5"
 )
 
-func (a *AppDB) GetLocation(ctx context.Context, id uint64) (*structs.Location, error) {
+func (a *AppDB) GetLocation(ctx context.Context, id uint64) (*structs.PublicLocation, error) {
 	row := a.db.QueryRow(ctx, `
 		SELECT
 			id,
 			google_id,
-			owner_id,
 			name,
 			description,
 			type,
-			approval,
 			street,
 			city,
 			state,
@@ -25,37 +24,21 @@ func (a *AppDB) GetLocation(ctx context.Context, id uint64) (*structs.Location, 
 			lng,
 			phone,
 			email,
-			admin_phone,
-			admin_email,
 			website,
 			image_url,
 			rating,
-			maps_page,
-			contact_firstname,
-			contact_lastname,
-			contact_phone,
-			pos_system,
-			sole_proprietorship,
-			tipping_policy,
-			tipping_division,
-			table_coverage,
-			service_stations,
-			tablet_model,
-			messaging_service,
-			reference
+			maps_page
 		FROM locations
 		WHERE id = $1;
 	`, id)
 
-	location := structs.Location{}
+	location := structs.PublicLocation{}
 	err := row.Scan(
 		&location.ID,
 		&location.GoogleID,
-		&location.OwnerID,
 		&location.Name,
 		&location.Description,
 		&location.Type,
-		&location.Approval,
 		&location.Street,
 		&location.City,
 		&location.State,
@@ -64,24 +47,10 @@ func (a *AppDB) GetLocation(ctx context.Context, id uint64) (*structs.Location, 
 		&location.Lng,
 		&location.Phone,
 		&location.Email,
-		&location.AdminPhone,
-		&location.AdminEmail,
 		&location.Website,
 		&location.ImageURL,
 		&location.Rating,
 		&location.MapsPage,
-		&location.ContactFirstName,
-		&location.ContactLastName,
-		&location.ContactPhone,
-		&location.PosSystem,
-		&location.SoleProprietorship,
-		&location.TippingPolicy,
-		&location.TippingDivision,
-		&location.TableCoverage,
-		&location.ServiceStations,
-		&location.TabletModel,
-		&location.MessagingService,
-		&location.Reference,
 	)
 	if err != nil {
 		return nil, err
@@ -115,18 +84,16 @@ func (a *AppDB) GetLocation(ctx context.Context, id uint64) (*structs.Location, 
 	return &location, nil
 }
 
-func (s *AppDB) GetLocations(ctx context.Context, r *structs.LocationsPageRequest) ([]*structs.Location, error) {
+func (s *AppDB) GetLocations(ctx context.Context, r *structs.LocationsPageRequest) ([]*structs.PublicLocation, error) {
 	offset := r.Page * r.Count
 
 	rows, err := s.db.Query(ctx, `
 		SELECT
 			id,
 			google_id,
-			owner_id,
 			name,
 			description,
 			type,
-			approval,
 			street,
 			city,
 			state,
@@ -135,25 +102,12 @@ func (s *AppDB) GetLocations(ctx context.Context, r *structs.LocationsPageReques
 			lng,
 			phone,
 			email,
-			admin_phone,
-			admin_email,
 			website,
 			image_url,
 			rating,
-			maps_page,
-			contact_firstname,
-			contact_lastname,
-			contact_phone,
-			pos_system,
-			sole_proprietorship,
-			tipping_policy,
-			tipping_division,
-			table_coverage,
-			service_stations,
-			tablet_model,
-			messaging_service,
-			reference
+			maps_page
 		FROM locations
+		WHERE approval = TRUE
 		ORDER BY id
 		LIMIT $1
 		OFFSET $2;
@@ -163,19 +117,17 @@ func (s *AppDB) GetLocations(ctx context.Context, r *structs.LocationsPageReques
 	}
 	defer rows.Close()
 
-	locations := []*structs.Location{}
+	locations := []*structs.PublicLocation{}
 
 	for rows.Next() {
-		location := structs.Location{}
+		location := structs.PublicLocation{}
 
 		err = rows.Scan(
 			&location.ID,
 			&location.GoogleID,
-			&location.OwnerID,
 			&location.Name,
 			&location.Description,
 			&location.Type,
-			&location.Approval,
 			&location.Street,
 			&location.City,
 			&location.State,
@@ -184,24 +136,10 @@ func (s *AppDB) GetLocations(ctx context.Context, r *structs.LocationsPageReques
 			&location.Lng,
 			&location.Phone,
 			&location.Email,
-			&location.AdminPhone,
-			&location.AdminEmail,
 			&location.Website,
 			&location.ImageURL,
 			&location.Rating,
 			&location.MapsPage,
-			&location.ContactFirstName,
-			&location.ContactLastName,
-			&location.ContactPhone,
-			&location.PosSystem,
-			&location.SoleProprietorship,
-			&location.TippingPolicy,
-			&location.TippingDivision,
-			&location.TableCoverage,
-			&location.ServiceStations,
-			&location.TabletModel,
-			&location.MessagingService,
-			&location.Reference,
 		)
 
 		if err != nil {
@@ -210,7 +148,6 @@ func (s *AppDB) GetLocations(ctx context.Context, r *structs.LocationsPageReques
 		locations = append(locations, &location)
 	}
 
-	finalLocations := []*structs.Location{}
 	for _, loc := range locations {
 		curr_hours := ""
 		openingHours := []string{}
@@ -242,10 +179,9 @@ func (s *AppDB) GetLocations(ctx context.Context, r *structs.LocationsPageReques
 		}
 
 		loc.OpeningHours = openingHours
-		finalLocations = append(finalLocations, loc)
 	}
 
-	return finalLocations, nil
+	return locations, nil
 }
 
 func (a *AppDB) AddLocation(ctx context.Context, location *structs.Location) error {
@@ -360,7 +296,7 @@ func (a *AppDB) AddLocation(ctx context.Context, location *structs.Location) err
 }
 
 func (a *AppDB) UpdateLocation(ctx context.Context, location *structs.Location) error {
-	_, err := a.db.Exec(ctx, `
+	result, err := a.db.Exec(ctx, `
     UPDATE locations
     SET
         google_id = $1,
@@ -395,7 +331,7 @@ func (a *AppDB) UpdateLocation(ctx context.Context, location *structs.Location) 
         tablet_model = $30,
         messaging_service = $31,
         reference = $32
-    WHERE id = $33;
+    WHERE (id = $33 AND owner_id = $34);
 	`,
 		location.GoogleID,
 		location.OwnerID,
@@ -430,10 +366,13 @@ func (a *AppDB) UpdateLocation(ctx context.Context, location *structs.Location) 
 		location.MessagingService,
 		location.Reference,
 		location.ID,
+		location.OwnerID,
 	)
-
 	if err != nil {
 		return fmt.Errorf("error updating locations table: %s", err)
+	}
+	if result.RowsAffected() == 0 {
+		return pgx.ErrNoRows
 	}
 
 	for i := 0; i < len(location.OpeningHours); i++ {

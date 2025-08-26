@@ -68,7 +68,7 @@ func AddLocationRoutes(r *chi.Mux, s *handlers.AppService) {
 	r.Get("/locations/{id}", s.GetLocation)
 	r.Get("/locations", s.GetLocations)
 	r.Get("/locations/user", s.GetLocationsByUser)
-	r.Put("/locations/{id}", s.UpdateLocation)
+	r.Put("/locations", s.UpdateLocation)
 }
 
 func AddContactRoutes(r *chi.Mux, s *handlers.AppService) {

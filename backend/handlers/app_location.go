@@ -34,7 +34,7 @@ func (a *AppService) GetLocation(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
-	w.WriteHeader(200)
+	w.WriteHeader(http.StatusOK)
 	w.Write(jsonBytes)
 }
 
@@ -68,7 +68,7 @@ func (a *AppService) GetLocations(w http.ResponseWriter, r *http.Request) {
 		a.logger.Logf("Error marshalling JSON for locations objects %s", err.Error())
 		return
 	}
-	w.WriteHeader(200)
+	w.WriteHeader(http.StatusOK)
 	w.Write(jsonBytes)
 }
 
@@ -94,7 +94,7 @@ func (a *AppService) GetLocationsByUser(w http.ResponseWriter, r *http.Request) 
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
-	w.WriteHeader(200)
+	w.WriteHeader(http.StatusOK)
 	w.Write(jsonBytes)
 }
 
@@ -130,7 +130,7 @@ func (a *AppService) AddLocation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.WriteHeader(http.StatusOK)
+	w.WriteHeader(http.StatusCreated)
 	w.Write([]byte("success"))
 }
 
@@ -144,33 +144,29 @@ func (a *AppService) UpdateLocation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	id := chi.URLParam(r, "id")
-	num, err := strconv.ParseUint(id, 10, 64)
+	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		a.logger.Logf("error, invalid ID %s", err.Error())
-		w.WriteHeader(http.StatusBadRequest)
+		a.logger.Logf("error reading update location body: %s", err)
+		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
-	location, err := a.db.GetLocation(r.Context(), num)
+
+	var location structs.Location
+	err = json.Unmarshal(body, &location)
 	if err != nil {
-		a.logger.Logf("no location %s", err.Error())
+		a.logger.Logf("error unmarshalling update location body: %s", err)
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
 
-	if location.OwnerID != *userDid {
-		a.logger.Logf("location Owner ID does not match user DID")
-		w.WriteHeader(http.StatusForbidden)
-		return
-	}
+	location.OwnerID = *userDid
 
-	err = a.db.UpdateLocation(r.Context(), location)
+	err = a.db.UpdateLocation(r.Context(), &location)
 	if err != nil {
 		a.logger.Logf("failed to update location %s", err.Error())
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
 
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("update successful"))
+	w.WriteHeader(http.StatusCreated)
 }
