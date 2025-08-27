@@ -92,7 +92,7 @@ func TestDBConnection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("error establishing db connection: %s", err)
 	}
-	conn.Close(context.Background())
+	conn.Close()
 }
 
 func TestCreateAccountTables(t *testing.T) {
@@ -100,7 +100,7 @@ func TestCreateAccountTables(t *testing.T) {
 	if err != nil {
 		t.Fatal("failed to establish db connection")
 	}
-	defer adb.Close(context.Background())
+	defer adb.Close()
 
 	accountDB := db.Account(adb)
 

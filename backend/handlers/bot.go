@@ -75,7 +75,7 @@ func (s *BotService) NewEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	id, err := s.db.NewEvent(event)
+	id, err := s.db.NewEvent(r.Context(), event)
 	if err != nil {
 		fmt.Println(err)
 		w.WriteHeader(http.StatusInternalServerError)
@@ -106,7 +106,7 @@ func (s *BotService) NewCodesRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	codes, err := s.db.NewCodes(new_codes)
+	codes, err := s.db.NewCodes(r.Context(), new_codes)
 	if err != nil {
 		fmt.Println(err)
 		w.WriteHeader(http.StatusInternalServerError)
@@ -164,13 +164,16 @@ func (s *BotService) GetCodesRequest(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *BotService) GetCodes(event string, count, page int) ([]*structs.Code, error) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	request := structs.CodesPageRequest{
 		Event: event,
 		Count: uint32(count),
 		Page:  uint32(page),
 	}
 
-	codes, err := s.db.GetCodes(&request)
+	codes, err := s.db.GetCodes(ctx, &request)
 	if err != nil {
 		return nil, err
 	}
@@ -191,7 +194,7 @@ func (s *BotService) Redeem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	amount, tx, err := s.db.Redeem(request.Code, request.Address)
+	amount, tx, err := s.db.Redeem(r.Context(), request.Code, request.Address)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 

@@ -1,6 +1,7 @@
 package test
 
 import (
+	"context"
 	"testing"
 )
 
@@ -12,12 +13,15 @@ func GroupContactsControllers(t *testing.T) {
 }
 
 func ModuleAddContactController(t *testing.T) {
-	_, err := AppDb.AddContact(&TEST_CONTACT_1, TEST_CONTACT_1.Owner)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	_, err := AppDb.AddContact(ctx, &TEST_CONTACT_1, TEST_CONTACT_1.Owner)
 	if err != nil {
 		t.Fatal(err.Error())
 	}
 
-	_, err = AppDb.AddContact(&TEST_CONTACT_2, TEST_CONTACT_1.Owner)
+	_, err = AppDb.AddContact(ctx, &TEST_CONTACT_2, TEST_CONTACT_1.Owner)
 	if err != nil {
 		t.Fatal(err.Error())
 	}
@@ -25,14 +29,20 @@ func ModuleAddContactController(t *testing.T) {
 }
 
 func ModuleUpdateContactController(t *testing.T) {
-	err := AppDb.UpdateContact(&TEST_CONTACT_2A, TEST_CONTACT_1.Owner)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	err := AppDb.UpdateContact(ctx, &TEST_CONTACT_2A, TEST_CONTACT_1.Owner)
 	if err != nil {
 		t.Fatal(err.Error())
 	}
 }
 
 func ModuleGetContactsController(t *testing.T) {
-	cs, err := AppDb.GetContacts(TEST_CONTACT_1.Owner)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cs, err := AppDb.GetContacts(ctx, TEST_CONTACT_1.Owner)
 	if err != nil {
 		t.Fatal(err.Error())
 	}
@@ -46,12 +56,15 @@ func ModuleGetContactsController(t *testing.T) {
 }
 
 func ModuleDeleteContactController(t *testing.T) {
-	err := AppDb.DeleteContact(TEST_CONTACT_1.Id, TEST_CONTACT_1.Owner)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	err := AppDb.DeleteContact(ctx, TEST_CONTACT_1.Id, TEST_CONTACT_1.Owner)
 	if err != nil {
 		t.Fatal(err.Error())
 	}
 
-	err = AppDb.DeleteContact(TEST_CONTACT_2A.Id, TEST_CONTACT_1.Owner)
+	err = AppDb.DeleteContact(ctx, TEST_CONTACT_2A.Id, TEST_CONTACT_1.Owner)
 	if err != nil {
 		t.Fatal(err.Error())
 	}

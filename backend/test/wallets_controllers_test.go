@@ -1,6 +1,7 @@
 package test
 
 import (
+	"context"
 	"testing"
 )
 
@@ -11,7 +12,10 @@ func GroupWalletsControllers(t *testing.T) {
 }
 
 func ModuleAddWalletController(t *testing.T) {
-	id, err := AppDb.AddWallet(&TEST_WALLET_1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	id, err := AppDb.AddWallet(ctx, &TEST_WALLET_1)
 	if err != nil {
 		t.Fatal(err.Error())
 	}
@@ -20,21 +24,27 @@ func ModuleAddWalletController(t *testing.T) {
 		t.Fatalf("expected id 1 got %d", id)
 	}
 
-	_, err = AppDb.AddWallet(&TEST_WALLET_2)
+	_, err = AppDb.AddWallet(ctx, &TEST_WALLET_2)
 	if err != nil {
 		t.Fatalf("error adding second wallet: %s", err.Error())
 	}
 }
 
 func ModuleUpdateWalletControler(t *testing.T) {
-	err := AppDb.UpdateWallet(&TEST_WALLET_1A)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	err := AppDb.UpdateWallet(ctx, &TEST_WALLET_1A)
 	if err != nil {
 		t.Fatal(err.Error())
 	}
 }
 
 func ModuleGetWalletsByUserController(t *testing.T) {
-	wallets, err := AppDb.GetWalletsByUser(TEST_WALLET_1.Owner)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	wallets, err := AppDb.GetWalletsByUser(ctx, TEST_WALLET_1.Owner)
 	if err != nil {
 		t.Fatal(err.Error())
 	}

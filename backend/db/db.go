@@ -7,13 +7,19 @@ import (
 	"path/filepath"
 	"runtime"
 
-	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-func PgxDB(name string) (*pgx.Conn, error) {
+func PgxDB(name string) (*pgxpool.Pool, error) {
 	connString := MakeDbConnString(name)
+	config, err := pgxpool.ParseConfig(connString)
+	if err != nil {
+		return nil, err
+	}
 
-	return pgx.Connect(context.Background(), connString)
+	config.MaxConns = 8
+
+	return pgxpool.NewWithConfig(context.Background(), config)
 }
 
 func MakeDbConnString(name string) string {

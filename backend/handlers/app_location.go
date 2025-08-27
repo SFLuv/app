@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -16,14 +15,14 @@ func (a *AppService) GetLocation(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	num, err := strconv.ParseUint(id, 10, 64)
 	if err != nil {
+		a.logger.Logf("invalid id, got: %s: %s", id, err.Error())
 		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte("invalid id"))
 		return
 	}
-	location, err := a.db.GetLocation(num)
+	location, err := a.db.GetLocation(r.Context(), num)
 	if err != nil {
+		a.logger.Logf("no location with id %s: %s", id, err.Error())
 		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte("no location"))
 		return
 	}
 
@@ -31,8 +30,8 @@ func (a *AppService) GetLocation(w http.ResponseWriter, r *http.Request) {
 		"location": location,
 	})
 	if err != nil {
+		a.logger.Logf("Error marhalling json %s", err.Error())
 		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte("Error marshalling JSON"))
 		return
 	}
 	w.WriteHeader(200)
@@ -55,10 +54,10 @@ func (a *AppService) GetLocations(w http.ResponseWriter, r *http.Request) {
 		Count: uint(count),
 	}
 
-	locations, err := a.db.GetLocations(&request)
+	locations, err := a.db.GetLocations(r.Context(), &request)
 	if err != nil {
+		a.logger.Logf("Failed to get locations %s", err.Error())
 		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte("failed to get locations"))
 		return
 	}
 	jsonBytes, err := json.Marshal(map[string]any{
@@ -66,7 +65,7 @@ func (a *AppService) GetLocations(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte("Error marshalling JSON for locations objects"))
+		a.logger.Logf("Error marshalling JSON for locations objects %s", err.Error())
 		return
 	}
 	w.WriteHeader(200)
@@ -76,11 +75,12 @@ func (a *AppService) GetLocations(w http.ResponseWriter, r *http.Request) {
 func (a *AppService) GetLocationsByUser(w http.ResponseWriter, r *http.Request) {
 	userDid := utils.GetDid(r)
 	if userDid == nil {
+		a.logger.Logf("Could not pull user DID")
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}
 
-	locations, err := a.db.GetLocationsByUser(*userDid)
+	locations, err := a.db.GetLocationsByUser(r.Context(), *userDid)
 	if err != nil {
 		a.logger.Logf("error getting locations for user %s: %s", *userDid, err.Error())
 		w.WriteHeader(http.StatusInternalServerError)
@@ -90,8 +90,8 @@ func (a *AppService) GetLocationsByUser(w http.ResponseWriter, r *http.Request) 
 		"locations": locations,
 	})
 	if err != nil {
+		a.logger.Logf(("Error marshalling JSON for locations objects"))
 		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte("Error marshalling JSON for locations objects"))
 		return
 	}
 	w.WriteHeader(200)
@@ -100,35 +100,33 @@ func (a *AppService) GetLocationsByUser(w http.ResponseWriter, r *http.Request) 
 
 func (a *AppService) AddLocation(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
-	fmt.Println("reached add location handler")
 
 	userDid := utils.GetDid(r)
 	if userDid == nil {
+		a.logger.Logf("Could not pull user DID")
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}
 
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
+		a.logger.Logf("error reading req body: %s", err.Error())
 		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte("error reading req body"))
 		return
 	}
 
 	var location *structs.Location
 	err = json.Unmarshal(body, &location)
 	if err != nil {
+		a.logger.Logf("invalid req body: %s", err.Error())
 		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte("invalid req body"))
 		return
 	}
 	location.OwnerID = *userDid
-	fmt.Println(location)
-	err = a.db.AddLocation(location)
+	err = a.db.AddLocation(r.Context(), location)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte("invalid location body"))
-		a.logger.Logf("error was caused calling controller: %s", err.Error())
+		a.logger.Logf("invalid location body: %s", err.Error())
 		return
 	}
 
@@ -141,6 +139,7 @@ func (a *AppService) UpdateLocation(w http.ResponseWriter, r *http.Request) {
 
 	userDid := utils.GetDid(r)
 	if userDid == nil {
+		a.logger.Logf("could not pull user DID")
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}
@@ -148,26 +147,27 @@ func (a *AppService) UpdateLocation(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	num, err := strconv.ParseUint(id, 10, 64)
 	if err != nil {
+		a.logger.Logf("error, invalid ID %s", err.Error())
 		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte("invalid id"))
 		return
 	}
-	location, err := a.db.GetLocation(num)
+	location, err := a.db.GetLocation(r.Context(), num)
 	if err != nil {
+		a.logger.Logf("no location %s", err.Error())
 		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte("no location"))
 		return
 	}
 
 	if location.OwnerID != *userDid {
+		a.logger.Logf("location Owner ID does not match user DID")
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}
 
-	err = a.db.UpdateLocation(location)
+	err = a.db.UpdateLocation(r.Context(), location)
 	if err != nil {
+		a.logger.Logf("failed to update location %s", err.Error())
 		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte("failed to update location"))
 		return
 	}
 

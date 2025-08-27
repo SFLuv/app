@@ -4,15 +4,17 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/jackc/pgx/v5"
+	"github.com/SFLuv/app/backend/logger"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type AppDB struct {
-	db *pgx.Conn
+	db     *pgxpool.Pool
+	logger *logger.LogCloser
 }
 
-func App(db *pgx.Conn) *AppDB {
-	return &AppDB{db}
+func App(db *pgxpool.Pool, logger *logger.LogCloser) *AppDB {
+	return &AppDB{db, logger}
 }
 
 func (s *AppDB) CreateTables() error {

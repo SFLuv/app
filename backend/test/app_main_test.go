@@ -1,7 +1,6 @@
 package test
 
 import (
-	"context"
 	"fmt"
 	"net/http/httptest"
 	"testing"
@@ -88,95 +87,137 @@ var TEST_WALLETS = []structs.Wallet{TEST_WALLET_1A, TEST_WALLET_2}
 
 var TEST_LOCATION_1 = structs.Location{
 	ID:          1,
-	GoogleID:    "abc123",
+	GoogleID:    "ChIJQWq7yBaBhYARAW1YO8VAzB4",
 	OwnerID:     TEST_USER_1.Id,
-	Name:        "Bob's Burgers",
-	Description: "A homestyle burger place",
+	Name:        "Azalina's",
+	Description: "cacsac",
 	Type:        "Restaurant",
-	Approval:    true,
-	Street:      "123 Ocean Ave",
-	City:        "Seymour's Bay",
-	State:       "CA",
-	ZIP:         "90210",
-	Lat:         34.0522,
-	Lng:         -118.2437,
-	Phone:       "555-1234",
-	Email:       "bob@example.com",
-	Website:     "https://bobsburgers.com",
-	ImageURL:    "https://images.example.com/bobs.jpg",
-	Rating:      4.6,
-	MapsPage:    "https://maps.google.com/?cid=abc123",
-	OpeningHours: [][2]float64{
-		{11.0, 20.0}, // Monday
-		{11.0, 20.0}, // Tuesday
-		{11.0, 20.0}, // Wednesday
-		{11.0, 20.0}, // Thursday
-		{11.0, 21.0}, // Friday
-		{12.0, 21.0}, // Saturday
-		{12.0, 18.0}, // Sunday
+	Approval:    false,
+	Street:      "499 Ellis Street",
+	City:        "San Francisco",
+	State:       "California",
+	ZIP:         "94102",
+	Lat:         37.7845922,
+	Lng:         -122.4143191,
+	Phone:       "4156038101",
+	Email:       "sanchez@oleary.com",
+	AdminPhone:  "4156038101",
+	AdminEmail:  "sanchez@oleary.com",
+	Website:     "https://www.azalinas.com/",
+	ImageURL:    "https://images.getbento.com/accounts/f8194d40a15b976a1bce5338d622a254/media/images/99097CKmJL5kTBytRFQHlzNzO_533593_567145296630856_962075461_n.png?w=1000&fit=max&auto=compress,format&h=1000",
+	Rating:      4.5,
+	MapsPage:    "https://maps.google.com/?cid=2219219932235197697&g_mp=CiVnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLkdldFBsYWNlEAAYASAA&hl=en-US&source=apiv3",
+	OpeningHours: []string{
+		"Monday: Closed",
+		"Tuesday: Closed",
+		"Wednesday: 5:00 – 10:00 PM",
+		"Thursday: 5:00 – 10:00 PM",
+		"Friday: 5:00 – 10:00 PM",
+		"Saturday: 5:00 – 10:00 PM",
+		"Sunday: Closed",
 	},
+	ContactFirstName:   "Sanchez",
+	ContactLastName:    "O'Leary",
+	ContactPhone:       "4156038101",
+	PosSystem:          "Shopify",
+	SoleProprietorship: "No",
+	TippingPolicy:      "N/A - our employees do not receive tips",
+	TippingDivision:    "All tips are pooled and divided between the team",
+	TableCoverage:      "Table coverage is managed differently (e.g. rotating, team service, etc.)",
+	ServiceStations:    3,
+	TabletModel:        "We do not have a tablet accessible near register",
+	MessagingService:   "We do not currently use a messaging service",
+	Reference:          "casCAS",
 }
 
 var TEST_LOCATION_2 = structs.Location{
 	ID:          2,
-	GoogleID:    "def345",
+	GoogleID:    "ChIJ92WDBbuAhYARQZ1TXrfhXv0",
 	OwnerID:     TEST_USER_2.Id,
-	Name:        "Krusty Krab",
-	Description: "Delicious Krabby Patties",
-	Type:        "Fast Food",
+	Name:        "McDonald's",
+	Description: "casascsa",
+	Type:        "Fast Food Restaurant",
 	Approval:    false,
-	Street:      "124 Bikini Bottom Blvd",
-	City:        "Bikini Bottom",
-	State:       "HI",
-	ZIP:         "96815",
-	Lat:         21.3069,
-	Lng:         -157.8583,
-	Phone:       "555-5678",
-	Email:       "krabs@krustykrab.com",
-	Website:     "https://krustykrab.com",
-	ImageURL:    "https://images.example.com/krusty.jpg",
-	Rating:      4.9,
-	MapsPage:    "https://maps.google.com/?cid=def345",
-	OpeningHours: [][2]float64{
-		{9.0, 18.0},  // Monday
-		{10.0, 18.0}, // Tuesday
-		{9.0, 17.0},  // Wednesday
-		{9, 17.0},    // Thursday
-		{10.0, 18.0}, // Friday
-		{12.0, 17.0}, // Saturday
-		{12.0, 16.0}, // Sunday
+	Street:      "1100 Fillmore Street",
+	City:        "San Francisco",
+	State:       "California",
+	ZIP:         "94102",
+	Lat:         37.7798713,
+	Lng:         -122.4317172,
+	Phone:       "4156038101",
+	Email:       "sanchez@oleary.com",
+	AdminPhone:  "4156038101",
+	AdminEmail:  "sanchez@oleary.com",
+	Website:     "https://www.mcdonalds.com/us/en-us/location/CA/SAN-FRANCISCO/1100-FILLMORE-ST/10162.html?cid=RF:YXT:GMB::Clicks",
+	ImageURL:    "https://upload.wikimedia.org/wikipedia/commons/thumb/0/05/McDonald%27s_square_2020.svg/960px-McDonald%27s_square_2020.svg.png",
+	Rating:      3.4,
+	MapsPage:    "https://maps.google.com/?cid=18257278117084372289&g_mp=CiVnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLkdldFBsYWNlEAAYASAA&hl=en-US&source=apiv3",
+	OpeningHours: []string{
+		"Monday: 7:30 AM – 10:00 PM",
+		"Tuesday: 6:00 AM – 10:00 PM",
+		"Wednesday: 6:00 AM – 10:00 PM",
+		"Thursday: 6:00 AM – 10:00 PM",
+		"Friday: 6:00 AM – 10:00 PM",
+		"Saturday: 6:00 AM – 10:00 PM",
+		"Sunday: 6:00 AM – 10:00 PM",
 	},
+	ContactFirstName:   "Sanchez",
+	ContactLastName:    "O'Leary",
+	ContactPhone:       "4156038101",
+	PosSystem:          "Shopify",
+	SoleProprietorship: "No",
+	TippingPolicy:      "Both (depends on party size or situation)",
+	TippingDivision:    "csasacs",
+	TableCoverage:      "Table coverage is managed differently (e.g. rotating, team service, etc.)",
+	ServiceStations:    8,
+	TabletModel:        "Android tablet",
+	MessagingService:   "We do not currently use a messaging service",
+	Reference:          "acsacsa",
 }
 
 var TEST_LOCATION_2A = structs.Location{
 	ID:          2,
-	GoogleID:    "def345",
+	GoogleID:    "ChIJ92WDBbuAhYARQZ1TXrfhXv0",
 	OwnerID:     TEST_USER_2.Id,
-	Name:        "Krusty Krab - Updated",
-	Description: "Updated the description for testing person",
-	Type:        "Fast Food",
+	Name:        "McDonald's",
+	Description: "test changes",
+	Type:        "Fast Food Restaurant",
 	Approval:    false,
-	Street:      "124 Bikini Bottom Blvd",
-	City:        "Bikini Bottom",
-	State:       "HI",
-	ZIP:         "96815",
-	Lat:         21.3069,
-	Lng:         -157.8583,
-	Phone:       "555-5678",
-	Email:       "krabs@krustykrab.com",
-	Website:     "https://krustykrab.com",
-	ImageURL:    "https://images.example.com/krusty.jpg",
-	Rating:      4.9,
-	MapsPage:    "https://maps.google.com/?cid=def345",
-	OpeningHours: [][2]float64{
-		{9.0, 18.0},  // Monday
-		{10.0, 18.0}, // Tuesday
-		{9.0, 17.0},  // Wednesday
-		{9, 17.0},    // Thursday
-		{10.0, 18.0}, // Friday
-		{12.0, 17.0}, // Saturday
-		{12.0, 16.0}, // Sunday
+	Street:      "1100 Fillmore Street",
+	City:        "San Francisco",
+	State:       "California",
+	ZIP:         "94102",
+	Lat:         37.7798713,
+	Lng:         -122.4317172,
+	Phone:       "4156038101",
+	Email:       "sanchez@oleary.com",
+	AdminPhone:  "4156038101",
+	AdminEmail:  "sanchez@oleary.com",
+	Website:     "https://www.mcdonalds.com/us/en-us/location/CA/SAN-FRANCISCO/1100-FILLMORE-ST/10162.html?cid=RF:YXT:GMB::Clicks",
+	ImageURL:    "https://upload.wikimedia.org/wikipedia/commons/thumb/0/05/McDonald%27s_square_2020.svg/960px-McDonald%27s_square_2020.svg.png",
+	Rating:      3.4,
+	MapsPage:    "https://maps.google.com/?cid=18257278117084372289&g_mp=CiVnb29nbGUubWFwcy5wbGFjZXMudjEuUGxhY2VzLkdldFBsYWNlEAAYASAA&hl=en-US&source=apiv3",
+	OpeningHours: []string{
+		"Monday: 8:30 AM – 10:00 PM",
+		"Tuesday: 6:00 AM – 10:00 PM",
+		"Wednesday: 6:00 AM – 10:00 PM",
+		"Thursday: 7:00 AM – 10:00 PM",
+		"Friday: 6:00 AM – 10:00 PM",
+		"Saturday: 6:00 AM – 10:00 PM",
+		"Sunday: 6:00 AM – 10:00 PM",
 	},
+	ContactFirstName:   "Sanchez",
+	ContactLastName:    "O'Leary",
+	ContactPhone:       "4156038101",
+	PosSystem:          "Square",
+	SoleProprietorship: "No",
+	TippingPolicy:      "Both (depends on party size or situation)",
+	TippingDivision:    "fair and balanced",
+	TableCoverage:      "Table coverage is managed differently (e.g. rotating, team service, etc.)",
+	ServiceStations:    8,
+	TabletModel:        "Android tablet",
+	MessagingService:   "We do not currently use a messaging service",
+	Reference:          "some guy",
 }
 
 var TEST_LOCATIONS = []structs.Location{TEST_LOCATION_1, TEST_LOCATION_2A}
@@ -220,9 +261,17 @@ func GroupControllers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("error establishing db connection: %s\n", err)
 	}
-	defer adb.Close(context.Background())
+	defer adb.Close()
 
-	AppDb = db.App(adb)
+	timeString := time.Now().Format(time.RFC3339)
+	appLogger, err := logger.New(fmt.Sprintf("./logs/test/app/app_test_%s.log", timeString), "APP_TEST: ")
+	if err != nil {
+		t.Fatalf("error initializing app logger: %s\n", err)
+	}
+	defer appLogger.Close()
+
+	defer appLogger.Close()
+	AppDb = db.App(adb, appLogger)
 	err = AppDb.CreateTables()
 	if err != nil {
 		t.Fatalf("error creating app db tables for controllers: %s\n", err)
@@ -245,13 +294,7 @@ func GroupHandlers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("error establishing db connection: %s\n", err)
 	}
-	defer adb.Close(context.Background())
-
-	appHandlersDb := db.App(adb)
-	err = appHandlersDb.CreateTables()
-	if err != nil {
-		t.Fatalf("error creating app db tables for handlers: %s\n", err)
-	}
+	defer adb.Close()
 
 	timeString := time.Now().Format(time.RFC3339)
 	appLogger, err := logger.New(fmt.Sprintf("./logs/test/app/app_test_%s.log", timeString), "APP_TEST: ")
@@ -259,6 +302,12 @@ func GroupHandlers(t *testing.T) {
 		t.Fatalf("error initializing app logger: %s\n", err)
 	}
 	defer appLogger.Close()
+
+	appHandlersDb := db.App(adb, appLogger)
+	err = appHandlersDb.CreateTables()
+	if err != nil {
+		t.Fatalf("error creating app db tables for handlers: %s\n", err)
+	}
 
 	testRouter := chi.NewRouter()
 	appService := handlers.NewAppService(appHandlersDb, appLogger)

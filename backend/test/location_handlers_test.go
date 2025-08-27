@@ -13,8 +13,8 @@ import (
 func GroupLocationHandlers(t *testing.T) {
 	t.Run("add location test", ModuleAddLocationHandler)
 	t.Run("get location test", ModuleGetLocationHandler)
-	t.Run("update location test", ModuleGetLocationsHandler)
-	t.Run("get all locations test", ModuleUpdateLocationHandler)
+	t.Run("update location test", ModuleUpdateLocationHandler)
+	t.Run("get all locations test", ModuleGetLocationsHandler)
 }
 
 func ModuleAddLocationHandler(t *testing.T) {

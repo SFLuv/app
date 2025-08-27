@@ -34,7 +34,7 @@ func (a *AppService) NewContact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	contact, err := a.db.AddContact(&c, *userDid)
+	contact, err := a.db.AddContact(r.Context(), &c, *userDid)
 	if err != nil {
 		a.logger.Logf("error adding contact for user %s: %s", *userDid, err.Error())
 		w.WriteHeader(http.StatusInternalServerError)
@@ -61,7 +61,7 @@ func (a *AppService) GetContacts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	contacts, err := a.db.GetContacts(*userDid)
+	contacts, err := a.db.GetContacts(r.Context(), *userDid)
 	if err != nil {
 		a.logger.Logf("error getting contacts for user %s: %s", *userDid, err.Error())
 		w.WriteHeader(http.StatusInternalServerError)
@@ -103,7 +103,7 @@ func (a *AppService) UpdateContact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err = a.db.UpdateContact(&c, *userDid)
+	err = a.db.UpdateContact(r.Context(), &c, *userDid)
 	if err != nil {
 		a.logger.Logf("error updating contact %d for user %s: %s", c.Id, *userDid, err.Error())
 		w.WriteHeader(http.StatusInternalServerError)
@@ -128,7 +128,7 @@ func (a *AppService) DeleteContact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err = a.db.DeleteContact(cId, *userDid)
+	err = a.db.DeleteContact(r.Context(), cId, *userDid)
 	if err != nil {
 		a.logger.Logf("error deleting contact %d for user %s: %s", cId, *userDid, err.Error())
 		w.WriteHeader(http.StatusInternalServerError)

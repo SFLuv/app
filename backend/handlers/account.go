@@ -22,7 +22,7 @@ func (s *AccountService) GetAccount(w http.ResponseWriter, r *http.Request) {
 	params := r.URL.Query()
 	address := params.Get("address")
 
-	acc := s.db.GetAccount(address)
+	acc := s.db.GetAccount(r.Context(), address)
 
 	w.WriteHeader(200)
 	w.Write([]byte(fmt.Sprintf(`{ "account": %t }`, acc)))
@@ -46,7 +46,7 @@ func (s *AccountService) AddAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err = s.db.NewAccount(account)
+	err = s.db.NewAccount(r.Context(), account)
 	if err != nil {
 		fmt.Println("error adding new account:", err)
 		w.WriteHeader(http.StatusBadRequest)

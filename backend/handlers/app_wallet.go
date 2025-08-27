@@ -17,7 +17,7 @@ func (a *AppService) GetWalletsByUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	wallets, err := a.db.GetWalletsByUser(*userDid)
+	wallets, err := a.db.GetWalletsByUser(r.Context(), *userDid)
 	if err != nil {
 		a.logger.Logf("error getting wallets for user %s: %s", *userDid, err.Error())
 		w.WriteHeader(http.StatusInternalServerError)
@@ -58,7 +58,7 @@ func (a *AppService) AddWallet(w http.ResponseWriter, r *http.Request) {
 	}
 	wallet.Owner = *userDid
 
-	id, err := a.db.AddWallet(&wallet)
+	id, err := a.db.AddWallet(r.Context(), &wallet)
 	if err != nil {
 		a.logger.Logf("error adding wallet:\n  %#v\nfor user %s: %s", wallet, *userDid, err.Error())
 		w.WriteHeader(http.StatusInternalServerError)
@@ -92,7 +92,7 @@ func (a *AppService) UpdateWallet(w http.ResponseWriter, r *http.Request) {
 	}
 	wallet.Owner = *userDid
 
-	err = a.db.UpdateWallet(&wallet)
+	err = a.db.UpdateWallet(r.Context(), &wallet)
 	if err != nil {
 		a.logger.Logf("error updating wallet:\n  %#v\nfor user %s: %s", wallet, *userDid, err.Error())
 		w.WriteHeader(http.StatusInternalServerError)
