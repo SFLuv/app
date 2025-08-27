@@ -1,0 +1,13 @@
+Final prod updates
+  - Merchant pictures (remove altogether if not possible to do in time)
+  - Merchant approval form pending state
+  - Settings page cleanup(remove password etc.)
+  - loading state bug after merchant requests approval
+  - change locations post response code to 201
+  - be sure to filter for only merchants where approved state is true (default approved state should be false)
+  - be sure to only return external contact info from backend for locations
+  - switch out QR code generation? if time permits
+  - switch to new community & test
+
+Later todos
+ - make sure all queries using join tables

@@ -10,6 +10,7 @@ import type { UserLocation } from "@/types/merchant"
 import { useApp } from "@/context/AppProvider"
 import { useLocation } from "@/context/LocationProvider"
 import { Location } from "@/types/location"
+import { useSearchParams } from "next/navigation"
 
 
 export default function LocationMapPage() {
@@ -20,6 +21,7 @@ export default function LocationMapPage() {
   const [userLocation, setUserLocation] = useState<UserLocation>(defaultLocation)
   const { status } = useApp()
   const { mapLocations } = useLocation()
+  const search = useSearchParams()
 
 
   const handleSelectLocation = (location: Location) => {
@@ -42,7 +44,7 @@ export default function LocationMapPage() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className={`space-y-6 ${search.get("sidebar") === "false" ? "p-5" : ""}`}>
       <div>
         <h1 className="text-3xl font-bold text-black dark:text-white">Location Map</h1>
         <p className="text-gray-600 dark:text-gray-400 mt-1">Find locations that accept SFLuv in your area</p>

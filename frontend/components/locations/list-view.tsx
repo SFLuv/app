@@ -142,7 +142,7 @@ export function ListView({
               onClick={() => onSelectLocation(location)}
             >
               <div className="flex flex-col md:flex-row">
-                <div className="relative h-48 md:h-auto md:w-48 flex-shrink-0">
+                {/* <div className="relative h-48 md:h-auto md:w-48 flex-shrink-0">
                   <Image
                     src={location.image_url || "/placeholder.svg?height=200&width=200"}
                     alt={location.name}
@@ -150,12 +150,12 @@ export function ListView({
                     height={200}
                     className="object-cover"
                   />
-                </div>
+                </div> */}
                 <CardContent className="flex-1 p-4">
-                  <div className="flex flex-col h-full justify-between">
-                    <div>
+                  <div className="flex flex-col h-full justify-between space-y-4">
+                    <div className="space-y-2">
                       <div className="flex justify-between items-start">
-                        <div>
+                        <div className="space-y-2">
                           <h3 className="text-xl font-semibold text-black dark:text-white">{location.name}</h3>
                           <div className="flex items-center mt-1 mb-2">
                             <Badge variant="outline" className="mr-2 bg-secondary text-black dark:text-white">

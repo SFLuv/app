@@ -22,12 +22,12 @@ export function WalletBalanceCard({ wallet, balance, showBalance }: WalletBalanc
       <CardHeader className="pb-2 sm:pb-3">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
-            <Avatar className="h-8 w-8 sm:h-10 sm:w-10 flex-shrink-0">
+            {/* <Avatar className="h-8 w-8 sm:h-10 sm:w-10 flex-shrink-0">
               <AvatarImage src={`/placeholder.svg?height=40&width=40&text=${wallet.name}`} />
               <AvatarFallback className="text-xs sm:text-sm">
                 {wallet.name.slice(0, 2).toUpperCase()}
               </AvatarFallback>
-            </Avatar>
+            </Avatar> */}
             <div className="min-w-0 flex-1">
               <CardTitle className="text-sm sm:text-lg truncate">
                 {wallet.name.toUpperCase()}
