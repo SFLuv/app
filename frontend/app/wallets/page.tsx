@@ -19,12 +19,17 @@ import { NewWalletModal } from "@/components/wallets/new-wallet-modal"
 
 export default function WalletsPage() {
   const router = useRouter()
-  const { wallets, status, walletsStatus, importWallet } = useApp()
+  const { wallets, status, walletsStatus, importWallet, addWallet, refreshWallets } = useApp()
   const [showEoas, setShowEoas] = useState<boolean>(false)
   const [addWalletModalOpen, setAddWalletModalOpen] = useState<boolean>(false)
-  const { addWallet } = useApp()
 
   const [connectWalletModalOpen, setConnectWalletModalOpen] = useState(false)
+
+  useEffect(() => {
+    if(!wallets.length) {
+      refreshWallets()
+    }
+  }, [])
 
   const onConnectWalletModalOpenChange = () => {
 
