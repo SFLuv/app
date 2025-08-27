@@ -118,11 +118,6 @@ export default function AppProvider({ children }: { children: ReactNode }) {
       _resetAppState()
       return
     }
-    if(privyWallets.length === 0) {
-      setError("wallets not actually connected")
-      logout()
-      return
-    }
 
     _userLogin()
 
@@ -173,6 +168,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     }
     catch(error) {
       setError(error)
+      console.error(error)
       await logout()
     }
   }
