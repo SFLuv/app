@@ -6,6 +6,7 @@ import { User } from "./AppProvider";
 import { createContext, ReactNode, useContext, useEffect, useState } from "react";
 import { AuthedLocation, Location } from "@/types/location";
 import { useApp } from "@/context/AppProvider";
+import { BACKEND } from "@/lib/constants";
 
 export type LocationsStatus = "loading" | "available" | "unavailable"
 
@@ -32,7 +33,7 @@ export default function LocationProvider({ children }: { children: ReactNode }) 
 
 
     const _getMapLocations = async (): Promise<LocationResponse> => {
-        const res = await fetch(process.env.NEXT_PUBLIC_BACKEND_BASE_URL + "/locations")
+        const res = await fetch(BACKEND + "/locations")
         if(res.status != 200) {
             throw new Error("error getting locations")
         }

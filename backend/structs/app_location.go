@@ -66,6 +66,7 @@ type PublicLocation struct {
 	ID           uint     `json:"id"`
 	GoogleID     string   `json:"google_id"`
 	Name         string   `json:"name"`
+	Approval     bool     `json:"approval"`
 	Description  string   `json:"description"`
 	Type         string   `json:"type"`
 	Street       string   `json:"street"`

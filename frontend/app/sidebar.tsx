@@ -11,6 +11,7 @@ import { DashboardSidebar } from "@/components/dashboard/sidebar"
 import { SidebarProvider, SidebarInset, SidebarTrigger } from "@/components/ui/sidebar"
 import { Button } from "@/components/ui/button"
 import { useEffect, useState } from "react"
+import { usePathname, useSearchParams } from "next/navigation"
 
 
 export default function Sidebar({
@@ -21,12 +22,14 @@ export default function Sidebar({
 
   const { status, login } = useApp();
   const [open, setOpen] = useState(false);
+  const pathname = usePathname()
+  const search = useSearchParams()
 
   useEffect(() => {
     if(status == "authenticated") setOpen(true)
   }, [status])
 
-  if (status === "loading") return children
+  if (status === "loading" || pathname == "/faucet/redeem" || search.get("sidebar") === "false") return children
   return (
     <SidebarProvider open={open} onOpenChange={setOpen} defaultOpen={status === "authenticated"}>
       <div className="flex h-screen w-full overflow-hidden">

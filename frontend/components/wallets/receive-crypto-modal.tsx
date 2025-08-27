@@ -136,16 +136,17 @@ export function ReceiveCryptoModal({ open, onOpenChange, wallet }: ReceiveCrypto
                         width: "30vh",
                         borderRadius: "10px"
                       }}
+                      size={600}
                       logoImage={"/icon.png"}
                       removeQrCodeBehindLogo={true}
                       logoPadding={1}
                       logoPaddingStyle="circle"
-                      logoWidth={40}
+                      logoWidth={150}
                       qrStyle="dots"
-                      eyeRadius={6}
+                      eyeRadius={100}
                       eyeColor={"#eb6c6c"}
                       ecLevel="H"
-                      quietZone={5}
+                      quietZone={20}
                     />
                     {/* <p className="text-sm text-muted-foreground">QR Code</p>
                     <p className="text-xs text-muted-foreground">{wallet?.address?.slice(0, 8) || "0x"}...</p> */}

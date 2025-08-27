@@ -7,7 +7,7 @@ import { Address, createWalletClient, custom, encodeFunctionData, Hash, Hex, hex
 import { entryPoint07Address, entryPoint08Address, formatUserOperation, PaymasterClient, toPackedUserOperation, ToSmartAccountReturnType, UserOperation } from "viem/account-abstraction";
 import { depositFor, execute, transfer, withdrawTo } from "@/lib/abi";
 import { client } from "@/lib/paymaster"
-import { CHAIN, CHAIN_ID, COMMUNITY, COMMUNITY_ACCOUNT, FACTORY, PAYMASTER, TOKEN } from "@/lib/constants";
+import { BACKEND, CHAIN, CHAIN_ID, COMMUNITY, COMMUNITY_ACCOUNT, FACTORY, PAYMASTER, TOKEN } from "@/lib/constants";
 import { bundler, cw_bundler } from "@/lib/paymaster/client";
 import config from "@/app.config";
 import { UserOp } from "@citizenwallet/sdk";
@@ -194,7 +194,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
       "Access-Token": accessToken,
     }
 
-    return await fetch(process.env.NEXT_PUBLIC_BACKEND_BASE_URL + endpoint, { ...options, headers: h })
+    return await fetch(BACKEND + endpoint, { ...options, headers: h })
   }
 
   const _postUser = async () => {

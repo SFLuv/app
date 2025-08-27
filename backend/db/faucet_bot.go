@@ -158,8 +158,6 @@ func (s *BotDB) NewCode(ctx context.Context, code *structs.Code) (string, error)
 func (s *BotDB) GetCodes(ctx context.Context, r *structs.CodesPageRequest) ([]*structs.Code, error) {
 	offset := r.Page * r.Count
 
-	fmt.Println(r)
-
 	rows, err := s.db.Query(context.Background(), `
 		SELECT
 			id, redeemed, event

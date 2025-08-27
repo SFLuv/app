@@ -287,6 +287,11 @@ func GroupControllers(t *testing.T) {
 	if !walletsControllers || !locationControllers || !contactsControllers {
 		t.Error("wallets, locations, or contacts controllers group failed")
 	}
+
+	adminControllers := t.Run("admin controllers group", GroupAdminControllers)
+	if !adminControllers {
+		t.Error("admin controllers failed group")
+	}
 }
 
 func GroupHandlers(t *testing.T) {
@@ -342,5 +347,10 @@ func GroupHandlers(t *testing.T) {
 	contactsHandlers := t.Run("contacts handlers group", GroupContactsHandlers)
 	if !contactsHandlers {
 		t.Fatal("contacts handlers group failed")
+	}
+
+	adminHandlers := t.Run("admin handlers group", GroupAdminHandlers)
+	if !adminHandlers {
+		t.Fatal("admin handlers group failed")
 	}
 }

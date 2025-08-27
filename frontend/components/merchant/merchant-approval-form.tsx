@@ -1,7 +1,7 @@
 "use client"
 
 import type React from "react"
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
 import { useApp } from "@/context/AppProvider"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -10,7 +10,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Loader2 } from "lucide-react"
+import { AlertTriangle, Loader2 } from "lucide-react"
 import PlaceAutocomplete from "./google_place_finder"
 import { Location, GoogleSubLocation, AuthedLocation } from "@/types/location"
 import { useLocation } from "@/context/LocationProvider"
@@ -73,6 +73,7 @@ export function MerchantApprovalForm() {
   const router = useRouter()
   // Internal Form State
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [error, setError] = useState<string | null>(null);
 
   // User-inputted state
   const [description, setDescription] = useState("")
@@ -116,38 +117,46 @@ export function MerchantApprovalForm() {
   const [googleMapsURL, setGoogleMapsURL] = useState("")
   const [openingHours, setOpeningHours] = useState([])
 
+  useEffect(() => {
+    if(googleSubLocation) setError(null)
+  }, [googleSubLocation])
+
   const resetForm = () => {
-  setDescription("");
-  setPrimaryContactEmail("");
-  setPrimaryContactFirstName("");
-  setPrimaryContactLastName("");
-  setPrimaryContactPhone("");
-  setBusinessEmail("")
-  setBusinessPhone("")
-  setPosSystem("");
-  setPosSystemOther("");
-  setSoleProprietorship("");
-  setTippingPolicy("");
-  setTippingPolicyOther("");
-  setTippingDivision("");
-  setTippingDivisionOther("");
-  setTableCoverage("");
-  setTableCoverageOther("");
-  setServiceStations("");
-  setTabletModel("");
-  setTabletModelOther("");
-  setMessagingService("");
-  setMessagingServiceOther("");
-  setReference("")
-  setGoogleSubLocation(null)
+    setError(null);
+    setDescription("");
+    setPrimaryContactEmail("");
+    setPrimaryContactFirstName("");
+    setPrimaryContactLastName("");
+    setPrimaryContactPhone("");
+    setBusinessEmail("")
+    setBusinessPhone("")
+    setPosSystem("");
+    setPosSystemOther("");
+    setSoleProprietorship("");
+    setTippingPolicy("");
+    setTippingPolicyOther("");
+    setTippingDivision("");
+    setTippingDivisionOther("");
+    setTableCoverage("");
+    setTableCoverageOther("");
+    setServiceStations("");
+    setTabletModel("");
+    setTabletModelOther("");
+    setMessagingService("");
+    setMessagingServiceOther("");
+    setReference("")
+    setGoogleSubLocation(null)
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if(!googleSubLocation) return
+    if(!googleSubLocation) {
+      setError('"Search for your business" field must be filled.')
+      return
+    }
 
     // Create merchant profile with all fields
-    const newLocation:AuthedLocation = {
+    const newLocation: AuthedLocation = {
       id: 0,
       google_id: googleSubLocation.google_id,
       owner_id: "",
@@ -182,16 +191,15 @@ export function MerchantApprovalForm() {
       tablet_model: tabletModel  === "Other" ? tabletModelOther : tabletModel,
       messaging_service: messagingService === "Other" ? messagingServiceOther : messagingService,
       reference: reference,
-      }
-
-      console.log(newLocation)
-      setIsSubmitting(true)
-      await addLocation(newLocation)
-      setSearchKey(prev => prev + 1)
-      setIsSubmitting(false);
-      resetForm()
-      router.replace("/settings")
     }
+
+    setIsSubmitting(true)
+    await addLocation(newLocation)
+    setSearchKey(prev => prev + 1)
+    setIsSubmitting(false);
+    resetForm()
+    router.replace("/settings")
+  }
 
   return (
     <Card>
@@ -564,12 +572,16 @@ export function MerchantApprovalForm() {
               />
             </div>
           </div>
-
+          {error &&
+            <div className="flex items-center gap-2 text-red-600 text-sm p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
+              <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+              <span>{error}</span>
+            </div>
+          }
           <Button type="submit" className="w-full bg-[#eb6c6c] hover:bg-[#d55c5c]" disabled={isSubmitting}>
             {isSubmitting ? (
               <>
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                Your application has been submitted! We will get back to you shortly.
               </>
             ) : (
               "Submit Merchant Application"

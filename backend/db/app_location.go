@@ -14,6 +14,7 @@ func (a *AppDB) GetLocation(ctx context.Context, id uint64) (*structs.PublicLoca
 			id,
 			google_id,
 			name,
+			approval,
 			description,
 			type,
 			street,
@@ -37,6 +38,7 @@ func (a *AppDB) GetLocation(ctx context.Context, id uint64) (*structs.PublicLoca
 		&location.ID,
 		&location.GoogleID,
 		&location.Name,
+		&location.Approval,
 		&location.Description,
 		&location.Type,
 		&location.Street,
@@ -224,8 +226,7 @@ func (a *AppDB) AddLocation(ctx context.Context, location *structs.Location) err
 			$11, $12, $13, $14, $15, $16, $17, $18,
 			$19, $20, $21, $22, $23, $24, $25, $26,
 			$27, $28, $29, $30, $31, $32
-			);
-		`,
+		);`,
 		&location.GoogleID,
 		&location.OwnerID,
 		&location.Name,
