@@ -171,9 +171,6 @@ export function DashboardSidebar() {
         >
           <div className="flex-1 overflow-hidden">
             <h2 className="text-lg font-semibold text-black dark:text-white truncate">SFLuv Dashboard</h2>
-            <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
-              {user && `Logged in as ${userRole}.`}
-            </p>
           </div>
         </div>
       </SidebarHeader>
@@ -188,7 +185,7 @@ export function DashboardSidebar() {
                 <Button
                   variant="ghost"
                   className={cn(
-                    "w-full justify-start transition-colors hover:bg-secondary/80",
+                    "w-full justify-start transition-colors hover:bg-primary/60 rounded-none",
                     isActive(item.path)
                       ? "bg-[#eb6c6c] text-white hover:bg-[#d55c5c] rounded-none"
                       : "text-black dark:text-white",
@@ -211,7 +208,7 @@ export function DashboardSidebar() {
                 <Button
                   variant="ghost"
                   className={cn(
-                    "w-full justify-start transition-colors hover:bg-secondary/80",
+                    "w-full justify-start transition-colors hover:bg-primary",
                     isActive("/settings")
                       ? "bg-[#eb6c6c] text-white hover:bg-[#d55c5c] rounded-md"
                       : "text-black dark:text-white",

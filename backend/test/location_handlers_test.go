@@ -113,7 +113,14 @@ func ModuleGetLocationsHandler(t *testing.T) {
 }
 
 func ModuleUpdateLocationHandler(t *testing.T) {
-	put_request_1, err := http.NewRequest(http.MethodPut, TestServer.URL+"/locations/"+"1", nil)
+	Spoofer.SetValue("userDid", TEST_USER_2.Id)
+
+	body_data_2a, err := json.Marshal(TEST_LOCATION_2A)
+	if err != nil {
+		t.Fatalf("error marshaling JSON for location 2: %s", err)
+	}
+
+	put_request_1, err := http.NewRequest(http.MethodPut, TestServer.URL+"/locations", bytes.NewReader([]byte(body_data_2a)))
 	if err != nil {
 		t.Fatalf("error creating put request: %s", err)
 	}

@@ -3,7 +3,7 @@
 import { ReactNode, useMemo } from "react"
 import AppProvider from "./AppProvider"
 import { PrivyProvider } from "@privy-io/react-auth"
-import { PRIVY_ID } from "@/lib/constants"
+import { CHAIN, PRIVY_ID } from "@/lib/constants"
 import { useTheme } from "next-themes"
 import LocationProvider from "./LocationProvider"
 import ContactsProvider from "./ContactsProvider"
@@ -26,7 +26,9 @@ const Providers = ({ children }: { children: ReactNode }) => {
               createOnLogin: 'users-without-wallets',
           },
           showWalletUIs: false
-        }
+        },
+        defaultChain: CHAIN,
+        supportedChains: [CHAIN]
       }}
     >
       <AppProvider>

@@ -92,7 +92,7 @@ var TEST_LOCATION_1 = structs.Location{
 	Name:        "Azalina's",
 	Description: "cacsac",
 	Type:        "Restaurant",
-	Approval:    false,
+	Approval:    true,
 	Street:      "499 Ellis Street",
 	City:        "San Francisco",
 	State:       "California",
@@ -137,7 +137,7 @@ var TEST_LOCATION_2 = structs.Location{
 	Name:        "McDonald's",
 	Description: "casascsa",
 	Type:        "Fast Food Restaurant",
-	Approval:    false,
+	Approval:    true,
 	Street:      "1100 Fillmore Street",
 	City:        "San Francisco",
 	State:       "California",
@@ -182,7 +182,7 @@ var TEST_LOCATION_2A = structs.Location{
 	Name:        "McDonald's",
 	Description: "test changes",
 	Type:        "Fast Food Restaurant",
-	Approval:    false,
+	Approval:    true,
 	Street:      "1100 Fillmore Street",
 	City:        "San Francisco",
 	State:       "California",
@@ -287,6 +287,11 @@ func GroupControllers(t *testing.T) {
 	if !walletsControllers || !locationControllers || !contactsControllers {
 		t.Error("wallets, locations, or contacts controllers group failed")
 	}
+
+	adminControllers := t.Run("admin controllers group", GroupAdminControllers)
+	if !adminControllers {
+		t.Error("admin controllers failed group")
+	}
 }
 
 func GroupHandlers(t *testing.T) {
@@ -342,5 +347,10 @@ func GroupHandlers(t *testing.T) {
 	contactsHandlers := t.Run("contacts handlers group", GroupContactsHandlers)
 	if !contactsHandlers {
 		t.Fatal("contacts handlers group failed")
+	}
+
+	adminHandlers := t.Run("admin handlers group", GroupAdminHandlers)
+	if !adminHandlers {
+		t.Fatal("admin handlers group failed")
 	}
 }

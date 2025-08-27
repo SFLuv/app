@@ -62,6 +62,28 @@ type Location struct {
 	Reference          string   `json:"reference"`
 }
 
+type PublicLocation struct {
+	ID           uint     `json:"id"`
+	GoogleID     string   `json:"google_id"`
+	Name         string   `json:"name"`
+	Approval     bool     `json:"approval"`
+	Description  string   `json:"description"`
+	Type         string   `json:"type"`
+	Street       string   `json:"street"`
+	City         string   `json:"city"`
+	State        string   `json:"state"`
+	ZIP          string   `json:"zip"`
+	Lat          float64  `json:"lat"`
+	Lng          float64  `json:"lng"`
+	Phone        string   `json:"phone"`
+	Email        string   `json:"email"`
+	Website      string   `json:"website"`
+	ImageURL     string   `json:"image_url"`
+	Rating       float64  `json:"rating"`
+	MapsPage     string   `json:"maps_page"`
+	OpeningHours []string `json:"opening_hours"`
+}
+
 type LocationsPageRequest struct {
 	Page  uint
 	Count uint

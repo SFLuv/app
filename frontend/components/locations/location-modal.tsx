@@ -38,8 +38,8 @@ export function LocationModal({ location, isOpen, onClose }: LocationModalProps)
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
-      <DialogContent className="sm:max-w-[600px] max-h-[90vh] overflow-y-auto">
-        <DialogHeader>
+      <DialogContent className="sm:max-w-[600px] max-h-[90vh] overflow-y-auto space-y-4">
+        <DialogHeader className="space-y-2">
           <DialogTitle className="text-2xl text-black dark:text-white">{location.name}</DialogTitle>
           <DialogDescription className="flex items-center gap-2 sr-only">{location.type.charAt(0).toUpperCase() + location.type.slice(1)}</DialogDescription>
             <Badge variant="outline" className="bg-secondary text-black dark:text-white">
@@ -51,7 +51,7 @@ export function LocationModal({ location, isOpen, onClose }: LocationModalProps)
             </div>
         </DialogHeader>
 
-        <div className="my-4 flex justify-center">
+        {/* <div className="my-4 flex justify-center">
           <Image
             src={location.image_url || "/placeholder.svg?height=300&width=600"}
             alt={location.name}
@@ -59,12 +59,12 @@ export function LocationModal({ location, isOpen, onClose }: LocationModalProps)
             height={200}
             className="object-cover rounded-md"
           />
-        </div>
+        </div> */}
 
         <Tabs defaultValue="info" value={activeTab} onValueChange={setActiveTab}>
-          <TabsList className="grid grid-cols-3 mb-4">
+          <TabsList className={`grid ${!!location.opening_hours.length ? "grid-cols-3" : "grid-cols-2"} mb-4`}>
             <TabsTrigger value="info">Information</TabsTrigger>
-            <TabsTrigger value="hours">Hours</TabsTrigger>
+            {!!location.opening_hours.length && <TabsTrigger value="hours">Hours</TabsTrigger>}
             <TabsTrigger value="contact">Contact</TabsTrigger>
           </TabsList>
 
@@ -93,10 +93,6 @@ export function LocationModal({ location, isOpen, onClose }: LocationModalProps)
                   <ExternalLink className="h-3 w-3 ml-1" />
                 </a>
               </div>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <Badge className="bg-[#eb6c6c]">Accepts SFLuv</Badge>
             </div>
           </TabsContent>
 

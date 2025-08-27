@@ -61,10 +61,6 @@ func EnsureUnmarshal(w http.ResponseWriter, obj any, body []byte) bool {
 
 // Create an event with x amount of available codes, y $SFLUV per code, and z expiration date. Responds with event id
 func (s *BotService) NewEvent(w http.ResponseWriter, r *http.Request) {
-	if !EnsureLogin(w, r) {
-		return
-	}
-
 	body := EnsureBody(w, r)
 	if body == nil {
 		return
@@ -86,10 +82,6 @@ func (s *BotService) NewEvent(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *BotService) NewCodesRequest(w http.ResponseWriter, r *http.Request) {
-	if !EnsureLogin(w, r) {
-		return
-	}
-
 	body := EnsureBody(w, r)
 	if body == nil {
 		return
@@ -121,10 +113,6 @@ func (s *BotService) NewCodesRequest(w http.ResponseWriter, r *http.Request) {
 
 // Get event codes by event id x, page y, and amount per page z (up to 100). Responds with array of event codes
 func (s *BotService) GetCodesRequest(w http.ResponseWriter, r *http.Request) {
-	if !EnsureLogin(w, r) {
-		return
-	}
-
 	params := r.URL.Query()
 	event := params.Get("event")
 	count, err := strconv.Atoi(params.Get("count"))

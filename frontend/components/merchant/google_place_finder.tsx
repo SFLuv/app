@@ -44,26 +44,25 @@ export default function PlaceAutocomplete({ setGoogleSubLocation, setBusinessPho
 
         ] });
         const rawGoogleData = place.toJSON()
-        const googleDetails:GoogleSubLocation = {
+        console.log(rawGoogleData)
+        const googleDetails: GoogleSubLocation = {
             google_id: rawGoogleData.id,
             name: rawGoogleData.displayName,
             type: rawGoogleData.primaryTypeDisplayName,
-            street: rawGoogleData.addressComponents[0].longText + " " + rawGoogleData.addressComponents[1].longText,
-            city: rawGoogleData.addressComponents[3].longText,
-            state: rawGoogleData.addressComponents[5].longText,
-            zip: rawGoogleData.addressComponents[7].longText,
+            street: rawGoogleData.addressComponents[0]?.longText || "" + " " + rawGoogleData.addressComponents[1]?.longText || "",
+            city: rawGoogleData.addressComponents[3]?.longText || "",
+            state: rawGoogleData.addressComponents[5]?.longText || "",
+            zip: rawGoogleData.addressComponents[7]?.longText || "",
             lat: rawGoogleData.location.lat,
             lng: rawGoogleData.location.lng,
             phone: rawGoogleData.nationalPhoneNumber,
             website: rawGoogleData.websiteURI,
-            image_url: rawGoogleData.photos[0].googleMapsURI,
+            image_url: rawGoogleData.photos[0]?.googleMapsURI || "",
             rating: rawGoogleData.rating,
             maps_page: rawGoogleData.googleMapsURI,
-            opening_hours: rawGoogleData.regularOpeningHours.weekdayDescriptions,
+            opening_hours: rawGoogleData.regularOpeningHours?.weekdayDescriptions || [],
         }
-        console.log(googleDetails)
         setGoogleSubLocation(googleDetails)
-        console.log("phone value:", googleDetails.phone, typeof googleDetails.phone)
         if (typeof googleDetails.phone === "string") {
         setBusinessPhone(googleDetails.phone)
         } else {
