@@ -1,9 +1,9 @@
 "use client"
 
-import { ReactNode, useMemo } from "react"
+import { ReactNode, Suspense, useMemo } from "react"
 import AppProvider from "./AppProvider"
 import { PrivyProvider } from "@privy-io/react-auth"
-import { PRIVY_ID } from "@/lib/constants"
+import { CHAIN, PRIVY_ID } from "@/lib/constants"
 import { useTheme } from "next-themes"
 import LocationProvider from "./LocationProvider"
 import ContactsProvider from "./ContactsProvider"
@@ -21,18 +21,31 @@ const Providers = ({ children }: { children: ReactNode }) => {
           logo: "/icon.png",
           loginMessage: "Connect to the SFLuv Dashboard!"
         },
+        externalWallets: {
+          coinbaseWallet: {
+            connectionOptions: "eoaOnly"
+          }
+        },
         embeddedWallets: {
           ethereum: {
               createOnLogin: 'users-without-wallets',
           },
           showWalletUIs: false
-        }
+        },
+        defaultChain: CHAIN,
+        supportedChains: [CHAIN]
       }}
     >
       <AppProvider>
         <ContactsProvider>
         <LocationProvider>
+        <Suspense fallback={
+          <div className="min-h-screen flex items-center justify-center">
+            <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-[#eb6c6c]"></div>
+          </div>
+        }>
         {children}
+        </Suspense>
         </LocationProvider>
         </ContactsProvider>
       </AppProvider>
