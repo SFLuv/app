@@ -13,8 +13,8 @@ import (
 func GroupLocationHandlers(t *testing.T) {
 	t.Run("add location test", ModuleAddLocationHandler)
 	t.Run("get location test", ModuleGetLocationHandler)
-	t.Run("update location test", ModuleGetLocationsHandler)
-	t.Run("get all locations test", ModuleUpdateLocationHandler)
+	t.Run("update location test", ModuleUpdateLocationHandler)
+	t.Run("get all locations test", ModuleGetLocationsHandler)
 }
 
 func ModuleAddLocationHandler(t *testing.T) {
@@ -110,11 +110,17 @@ func ModuleGetLocationsHandler(t *testing.T) {
 	if err != nil {
 		t.Fatalf("error reading response body %s", err)
 	}
-
 }
 
 func ModuleUpdateLocationHandler(t *testing.T) {
-	put_request_1, err := http.NewRequest(http.MethodPut, TestServer.URL+"/locations/"+"1", nil)
+	Spoofer.SetValue("userDid", TEST_USER_2.Id)
+
+	body_data_2a, err := json.Marshal(TEST_LOCATION_2A)
+	if err != nil {
+		t.Fatalf("error marshaling JSON for location 2: %s", err)
+	}
+
+	put_request_1, err := http.NewRequest(http.MethodPut, TestServer.URL+"/locations", bytes.NewReader([]byte(body_data_2a)))
 	if err != nil {
 		t.Fatalf("error creating put request: %s", err)
 	}

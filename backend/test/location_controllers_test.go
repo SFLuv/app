@@ -1,6 +1,7 @@
 package test
 
 import (
+	"context"
 	"testing"
 
 	"github.com/SFLuv/app/backend/structs"
@@ -15,30 +16,39 @@ func GroupLocationControllers(t *testing.T) {
 }
 
 func ModuleAddLocationController(t *testing.T) {
-	err := AppDb.AddLocation(&TEST_LOCATION_1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	err := AppDb.AddLocation(ctx, &TEST_LOCATION_1)
 	if err != nil {
 		t.Fatal(err.Error())
 	}
 
-	err = AppDb.AddLocation(&TEST_LOCATION_2)
+	err = AppDb.AddLocation(ctx, &TEST_LOCATION_2)
 	if err != nil {
 		t.Fatal(err.Error())
 	}
 }
 
 func ModuleUpdateLocationController(t *testing.T) {
-	err := AppDb.UpdateLocation(&TEST_LOCATION_2A)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	err := AppDb.UpdateLocation(ctx, &TEST_LOCATION_2A)
 	if err != nil {
 		t.Fatal(err.Error())
 	}
 }
 
 func ModuleGetLocationsController(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	var location_pagination = structs.LocationsPageRequest{
 		Page:  0,
 		Count: 1000,
 	}
-	locations, err := AppDb.GetLocations(&location_pagination)
+	locations, err := AppDb.GetLocations(ctx, &location_pagination)
 	if err != nil {
 		t.Fatal(err.Error())
 	}
@@ -61,7 +71,10 @@ func ModuleGetLocationsController(t *testing.T) {
 }
 
 func ModuleGetLocationsByUserController(t *testing.T) {
-	locations, err := AppDb.GetLocationsByUser(TEST_USER_1.Id)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	locations, err := AppDb.GetLocationsByUser(ctx, TEST_USER_1.Id)
 	if err != nil {
 		t.Fatal(err.Error())
 	}
@@ -84,7 +97,10 @@ func ModuleGetLocationsByUserController(t *testing.T) {
 }
 
 func ModuleGetLocationByIDController(t *testing.T) {
-	location, err := AppDb.GetLocation(1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	location, err := AppDb.GetLocation(ctx, 1)
 	if err != nil {
 		t.Fatal(err.Error())
 	}

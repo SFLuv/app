@@ -16,4 +16,5 @@ type AuthedUserResponse struct {
 	User      User        `json:"user"`
 	Wallets   []*Wallet   `json:"wallets"`
 	Locations []*Location `json:"locations"`
+	Contacts  []*Contact  `json:"contacts"`
 }

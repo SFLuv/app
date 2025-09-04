@@ -1,0 +1,87 @@
+"use client"
+
+import { useEffect, useState } from "react"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { MapView } from "@/components/locations/map-view"
+import { ListView } from "@/components/locations/list-view"
+import { LocationModal } from "@/components/locations/location-modal"
+import { defaultLocation } from "@/data/mock-merchants"
+import type { UserLocation } from "@/types/merchant"
+import { useApp } from "@/context/AppProvider"
+import { useLocation } from "@/context/LocationProvider"
+import { Location } from "@/types/location"
+import { useSearchParams } from "next/navigation"
+
+
+export default function LocationMapPage() {
+  const [activeTab, setActiveTab] = useState("map")
+  const [selectedLocationType, setSelectedLocationType] = useState("All Locations")
+  const [selectedLocation, setSelectedLocation] = useState<Location | null>(null)
+  const [isModalOpen, setIsModalOpen] = useState(false)
+  const [userLocation, setUserLocation] = useState<UserLocation>(defaultLocation)
+  const { status } = useApp()
+  const { mapLocations } = useLocation()
+  const search = useSearchParams()
+
+
+  const handleSelectLocation = (location: Location) => {
+    setSelectedLocation(location)
+    setIsModalOpen(true)
+  }
+
+  const handleCloseModal = () => {
+    setIsModalOpen(false)
+    setSelectedLocation(null)
+  }
+
+
+  if (status === "loading") {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-[#eb6c6c]"></div>
+      </div>
+    )
+  }
+
+  return (
+    <div className={`space-y-6 ${search.get("sidebar") === "false" ? "p-5" : ""}`}>
+      <div>
+        <h1 className="text-3xl font-bold text-black dark:text-white">Location Map</h1>
+        <p className="text-gray-600 dark:text-gray-400 mt-1">Find locations that accept SFLuv in your area</p>
+      </div>
+
+      <Tabs defaultValue="map" value={activeTab} onValueChange={setActiveTab} className="w-full">
+        <TabsList className="grid grid-cols-2 w-full mb-6 bg-secondary">
+          <TabsTrigger value="map" className="text-black dark:text-white">
+            Map View
+          </TabsTrigger>
+          <TabsTrigger value="list" className="text-black dark:text-white">
+            List View
+          </TabsTrigger>
+        </TabsList>
+        <TabsContent value="map">
+          <MapView
+            locations={mapLocations}
+            selectedLocationType={selectedLocationType}
+            setSelectedLocationType={setSelectedLocationType}
+            onSelectLocation={handleSelectLocation}
+            userLocation={userLocation}
+            setUserLocation={setUserLocation}
+          />
+        </TabsContent>
+        <TabsContent value="list">
+          <ListView
+            locations={mapLocations}
+            selectedLocationType={selectedLocationType}
+            setSelectedLocationType={setSelectedLocationType}
+            onSelectLocation={handleSelectLocation}
+            userLocation={userLocation}
+            setUserLocation={setUserLocation}
+          />
+        </TabsContent>
+      </Tabs>
+
+      <LocationModal location={selectedLocation} isOpen={isModalOpen} onClose={handleCloseModal} />
+    </div>
+  )
+  }

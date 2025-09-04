@@ -2,6 +2,7 @@ package router
 
 import (
 	"net/http"
+	"os"
 
 	"github.com/SFLuv/app/backend/handlers"
 	"github.com/go-chi/chi/v5"
@@ -16,20 +17,21 @@ func New(s *handlers.BotService, a *handlers.AccountService, p *handlers.AppServ
 
 	r.Use(middleware.Logger)
 	r.Use(cors.Handler(cors.Options{
-		AllowedOrigins:   []string{"https://*", "http://*"},
+		AllowedOrigins:   []string{"*"},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token"},
+		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token", "Access-Token", "X-Admin-Key"},
 		ExposedHeaders:   []string{"Link"},
 		AllowCredentials: false,
 		MaxAge:           300,
 	}))
 	r.Use(m.AuthMiddleware)
 
-	AddBotRoutes(r, s)
+	AddBotRoutes(r, s, p)
 	AddUserRoutes(r, p)
 	AddAdminRoutes(r, p)
 	AddWalletRoutes(r, p)
 	AddLocationRoutes(r, p)
+	AddContactRoutes(r, p)
 
 	r.Post("/account", a.AddAccount)
 	r.Get("/account", a.GetAccount)
@@ -37,10 +39,10 @@ func New(s *handlers.BotService, a *handlers.AccountService, p *handlers.AppServ
 	return r
 }
 
-func AddBotRoutes(r *chi.Mux, s *handlers.BotService) {
-	r.Post("/events", s.NewEvent)
-	r.Post("/events/{event_id}/codes", s.NewCodesRequest)
-	r.Get("/events", s.GetCodesRequest)
+func AddBotRoutes(r *chi.Mux, s *handlers.BotService, a *handlers.AppService) {
+	r.Post("/events", withAdmin(s.NewEvent, a))
+	r.Post("/events/{event_id}/codes", withAdmin(s.NewCodesRequest, a))
+	r.Get("/events", withAdmin(s.GetCodesRequest, a))
 
 	r.Post("/redeem", s.Redeem)
 }
@@ -54,24 +56,59 @@ func AddUserRoutes(r *chi.Mux, s *handlers.AppService) {
 func AddAdminRoutes(r *chi.Mux, s *handlers.AppService) {
 	r.Get("/admin/users", withAuth(s.GetUsers))
 	r.Put("/admin/users", withAuth(s.UpdateUserRole))
+	r.Put("/admin/locations", withAdmin(s.UpdateLocationApproval, s))
 }
 
 func AddWalletRoutes(r *chi.Mux, s *handlers.AppService) {
 	r.Get("/wallets", withAuth(s.GetWalletsByUser))
 	r.Post("/wallets", withAuth(s.AddWallet))
+	r.Put("/wallets", withAuth(s.UpdateWallet))
 }
 
 func AddLocationRoutes(r *chi.Mux, s *handlers.AppService) {
-	r.Post("/locations", s.AddLocation)
+	r.Post("/locations", withAuth(s.AddLocation))
 	r.Get("/locations/{id}", s.GetLocation)
 	r.Get("/locations", s.GetLocations)
-	r.Put("/locations/{id}", s.UpdateLocation)
+	r.Get("/locations/user", withAuth(s.GetLocationsByUser))
+	r.Put("/locations", withAuth(s.UpdateLocation))
+}
+
+func AddContactRoutes(r *chi.Mux, s *handlers.AppService) {
+	r.Post("/contacts", withAuth(s.NewContact))
+	r.Get("/contacts", withAuth(s.GetContacts))
+	r.Put("/contacts", withAuth(s.UpdateContact))
+	r.Delete("/contacts", withAuth(s.DeleteContact))
 }
 
 func withAuth(handlerFunc http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		_, ok := r.Context().Value("userDid").(string)
 		if !ok {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+
+		handlerFunc(w, r)
+	}
+}
+
+func withAdmin(handlerFunc http.HandlerFunc, s *handlers.AppService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		reqKey := r.Header.Get("X-Admin-Key")
+		envKey := os.Getenv("ADMIN_KEY")
+		if reqKey == envKey && envKey != "" {
+			handlerFunc(w, r)
+			return
+		}
+
+		id, ok := r.Context().Value("userDid").(string)
+		if !ok {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+
+		isAdmin := s.IsAdmin(r.Context(), id)
+		if !isAdmin {
 			w.WriteHeader(http.StatusForbidden)
 			return
 		}

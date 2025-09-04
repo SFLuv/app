@@ -7,8 +7,8 @@ import (
 	"github.com/SFLuv/app/backend/structs"
 )
 
-func (a *AppDB) AddUser(id string) error {
-	_, err := a.db.Exec(context.Background(), `
+func (a *AppDB) AddUser(ctx context.Context, id string) error {
+	_, err := a.db.Exec(ctx, `
 		INSERT INTO users
 			(id)
 		VALUES
@@ -24,8 +24,8 @@ func (a *AppDB) AddUser(id string) error {
 	return nil
 }
 
-func (a *AppDB) UpdateUserInfo(user *structs.User) error {
-	_, err := a.db.Exec(context.Background(), `
+func (a *AppDB) UpdateUserInfo(ctx context.Context, user *structs.User) error {
+	_, err := a.db.Exec(ctx, `
 		UPDATE
 			users
 		SET
@@ -42,10 +42,10 @@ func (a *AppDB) UpdateUserInfo(user *structs.User) error {
 	return nil
 }
 
-func (a *AppDB) UpdateUserRole(userId string, role string, value bool) error {
+func (a *AppDB) UpdateUserRole(ctx context.Context, userId string, role string, value bool) error {
 	roles := map[string]string{
 		"admin":     "is_admin",
-		"merchant=": "is_merchant",
+		"merchant":  "is_merchant",
 		"organizer": "is_organizer",
 		"improver":  "is_improver",
 	}
@@ -55,7 +55,7 @@ func (a *AppDB) UpdateUserRole(userId string, role string, value bool) error {
 		return fmt.Errorf("invalid role column name")
 	}
 
-	_, err := a.db.Exec(context.Background(), fmt.Sprintf(`
+	_, err := a.db.Exec(ctx, fmt.Sprintf(`
 		UPDATE
 			users
 		SET
@@ -70,11 +70,11 @@ func (a *AppDB) UpdateUserRole(userId string, role string, value bool) error {
 	return nil
 }
 
-func (a *AppDB) GetUsers(page int, count int) ([]*structs.User, error) {
+func (a *AppDB) GetUsers(ctx context.Context, page int, count int) ([]*structs.User, error) {
 	var users []*structs.User
 	offset := page * count
 
-	rows, err := a.db.Query(context.Background(), `
+	rows, err := a.db.Query(ctx, `
 		SELECT
 			id,
 			is_admin,
@@ -92,6 +92,7 @@ func (a *AppDB) GetUsers(page int, count int) ([]*structs.User, error) {
 	if err != nil {
 		return nil, fmt.Errorf("error getting users: %s", err)
 	}
+	defer rows.Close()
 
 	for rows.Next() {
 		user := structs.User{}
@@ -116,9 +117,9 @@ func (a *AppDB) GetUsers(page int, count int) ([]*structs.User, error) {
 	return users, nil
 }
 
-func (a *AppDB) GetUserById(userId string) (*structs.User, error) {
+func (a *AppDB) GetUserById(ctx context.Context, userId string) (*structs.User, error) {
 	var user structs.User
-	row := a.db.QueryRow(context.Background(), `
+	row := a.db.QueryRow(ctx, `
 		SELECT
 			id,
 			is_admin,
