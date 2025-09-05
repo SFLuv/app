@@ -214,7 +214,7 @@ export function MerchantApprovalForm() {
 
              <div className="space-y-2">
               <Label htmlFor="business-name" className="text-black dark:text-white">
-                Search for Your Business
+                Search for Your Location Name
               </Label>
               <PlaceAutocomplete key={searchKey} setGoogleSubLocation={setGoogleSubLocation}
               setBusinessPhone={setBusinessPhone}/>
@@ -235,7 +235,7 @@ export function MerchantApprovalForm() {
 
             {/* Business Contact Information */}
             <div>
-              <h3 className="text-lg font-medium text-black dark:text-white mb-4">Business Contact Information</h3>
+              <h3 className="text-lg font-medium text-black dark:text-white mb-4">Business Contact Information (Publicly Available to Customers)</h3>
               <div className="grid gap-4 md:grid-cols-2">
                 <div className="space-y-2">
                   <Label htmlFor="business-phone" className="text-black dark:text-white">
@@ -246,7 +246,6 @@ export function MerchantApprovalForm() {
                     value={businessPhone}
                     onChange={(e) => setBusinessPhone(e.target.value)}
                     className="text-black dark:text-white bg-secondary"
-                    required
                   />
                 </div>
 
@@ -259,7 +258,6 @@ export function MerchantApprovalForm() {
                     value={businessEmail}
                     onChange={(e) => setBusinessEmail(e.target.value)}
                     className="text-black dark:text-white bg-secondary"
-                    required
                   />
                 </div>
               </div>
@@ -267,7 +265,7 @@ export function MerchantApprovalForm() {
 
             {/* Primary Contact Information */}
             <div>
-              <h3 className="text-lg font-medium text-black dark:text-white mb-4">Primary Contact for Business (Only Visible to SFLuv Admin Team)</h3>
+              <h3 className="text-lg font-medium text-black dark:text-white mb-4">Primary Administrative Contact for Business (Only Visible to SFLuv Admin Team)</h3>
               <div className="grid gap-4 md:grid-cols-2">
                 <div className="space-y-2">
                   <Label htmlFor="primary-contact-first-name" className="text-black dark:text-white">
