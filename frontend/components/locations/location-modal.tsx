@@ -31,9 +31,8 @@ export function LocationModal({ location, isOpen, onClose }: LocationModalProps)
       ))
   }
 
-  const getGoogleMapsUrl = (address: string, city: string, state: string, zip: string) => {
-    const formattedAddress = encodeURIComponent(`${address}, ${city}, ${state} ${zip}`)
-    return `https://www.google.com/maps/search/?api=1&query=${formattedAddress}`
+  const getGoogleMapsUrl = (googleId: string) => {
+    return `https://www.google.com/maps/place/?q=place_id:${googleId}`
   }
 
   return (
@@ -80,10 +79,7 @@ export function LocationModal({ location, isOpen, onClose }: LocationModalProps)
                 </p>
                 <a
                   href={getGoogleMapsUrl(
-                    location.street,
-                    location.city,
-                    location.state,
-                    location.zip,
+                    location.google_id
                   )}
                   target="_blank"
                   rel="noopener noreferrer"
@@ -153,10 +149,7 @@ export function LocationModal({ location, isOpen, onClose }: LocationModalProps)
             onClick={() =>
               window.open(
                 getGoogleMapsUrl(
-                  location.street,
-                  location.city,
-                  location.state,
-                  location.zip,
+                  location.google_id
                 ),
                 "_blank",
               )
