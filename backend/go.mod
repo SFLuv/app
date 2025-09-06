@@ -6,12 +6,18 @@ toolchain go1.24.1
 
 require (
 	github.com/ethereum/go-ethereum v1.16.2
+	github.com/getbrevo/brevo-go v1.1.3
 	github.com/go-chi/chi/v5 v5.2.2
 	github.com/go-chi/cors v1.2.2
 	github.com/golang-jwt/jwt/v5 v5.3.0
 	github.com/google/uuid v1.6.0
 	github.com/joho/godotenv v1.5.1
 	golang.org/x/crypto v0.37.0
+)
+
+require (
+	github.com/antihax/optional v1.0.0 // indirect
+	golang.org/x/oauth2 v0.22.0 // indirect
 )
 
 require (
