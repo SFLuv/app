@@ -11,12 +11,16 @@ func TestSendEmail(t *testing.T) {
 
 	godotenv.Load("../../.env")
 
-	to := "pete@sfluv.com"
+	to := "pete@timelight.com"
 	subject := "Test Subject"
 	body := "This is a test email."
 
 	sender := utils.NewEmailSender()
-	err := sender.SendEmail(to, "Test User", subject, body, "sender@example.com", "Sender Name")
+	// Check if the sender is initialized
+	if sender == nil {
+		t.Fatal("Failed to create email sender")
+	}
+	err := sender.SendEmail(to, "Test User", subject, body, "pete@sfluv.org", "SFLuv")
 	if err != nil {
 		t.Errorf("SendEmail failed: %v", err)
 	}
