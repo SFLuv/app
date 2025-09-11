@@ -20,7 +20,8 @@ type MerchantStatus = "approved" | "pending" | "rejected" | "none"
 
 export default function SettingsPage() {
   const router = useRouter()
-  const { user, updateUser, userLocations, status } = useApp()
+  const { user, userLocations, status } = useApp()
+  const userRole = useMemo(() => user?.isAdmin ? "admin" : user?.isMerchant ? "merchant" : "user", [user])
 
   const merchantStatus: MerchantStatus = useMemo(() => {
     console.log(userLocations)
@@ -313,13 +314,15 @@ export default function SettingsPage() {
                   As a merchant, you can accept SFLuv as payment, appear on the merchant map, and access
                   merchant-specific features.
                 </p>
-                <Button
-                  variant="outline"
-                  className="bg-secondary text-[#eb6c6c] border-[#eb6c6c] hover:bg-[#eb6c6c] hover:text-white"
-                  onClick={() => router.push("/settings/merchant-approval")}
-                >
-                  Apply to Become a Merchant
-                </Button>
+              <Button
+                variant="outline"
+                className="bg-secondary text-[#eb6c6c] border-[#eb6c6c] hover:bg-[#eb6c6c] hover:text-white"
+                onClick={() => router.push("/settings/merchant-approval")}>
+                {userLocations.length === 0 ?
+                "Apply to Become a Merchant" :
+                "Submit Another Application"
+                }
+              </Button>
               </CardContent>
             </Card>
           )}

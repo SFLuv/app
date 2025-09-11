@@ -34,9 +34,7 @@ import path from "path"
 export function DashboardSidebar() {
   const router = useRouter()
   const pathname = usePathname()
-  const { user, logout, status, login } = useApp()
-
-
+  const { user, logout, status, login, userLocations } = useApp()
   const userRole = useMemo(() => user?.isAdmin ? "admin" : user?.isMerchant ? "merchant" : "user", [user])
 
   const isActive = (path: string) => {
@@ -203,6 +201,17 @@ export function DashboardSidebar() {
       <SidebarFooter className="border-t p-2 bg-secondary dark:bg-secondary">
         <SidebarMenu>
           {status === "authenticated" ? <>
+          {!isActive("/settings") &&
+          <Button
+              variant="outline"
+              className="bg-secondary text-[#eb6c6c] border-[#eb6c6c] hover:bg-[#eb6c6c] hover:text-white"
+              onClick={() => router.push("/settings/merchant-approval")}>
+              {userLocations.length === 0 ?
+              "Apply to Become a Merchant" :
+              "Submit Another Application"
+              }
+          </Button>
+          }
             <SidebarMenuItem>
               <SidebarMenuButton asChild tooltip="Settings" isActive={isActive("/settings")}>
                 <Button
@@ -213,7 +222,11 @@ export function DashboardSidebar() {
                       ? "bg-[#eb6c6c] text-white hover:bg-[#d55c5c] rounded-md"
                       : "text-black dark:text-white",
                   )}
-                  onClick={() => router.push("/settings")}
+                  onClick={() => {router.push("/settings");
+                    console.log(user?.id);
+                    console.log(userRole);
+                  }
+                  }
                 >
                   <Settings className="mr-2 h-4 w-4" />
                   <span>Settings</span>

@@ -274,7 +274,7 @@ export function SendCryptoModal({ open, onOpenChange, wallet, balance }: SendCry
               <h3 className="text-lg font-semibold mb-2">Transaction Sent!</h3>
               <p className="text-muted-foreground text-sm mb-4">Your transaction has been broadcast to the network</p>
               <div className="space-y-2">
-                <Label className="text-sm font-medium">Wallet Address</Label>
+                <Label className="text-sm font-medium">Tranaction ID</Label>
                 <div className="flex gap-2">
                   <Input value={`${hash?.slice(0, 6)}...${hash?.slice(-4)}`} readOnly className="font-mono text-xs sm:text-sm h-11" />
                   <Button
