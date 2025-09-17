@@ -17,6 +17,7 @@ import {
   Calendar,
   SquareUserIcon,
   ContactIcon,
+  Shield,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import {
@@ -87,6 +88,11 @@ export function DashboardSidebar() {
         title: "Contacts",
         icon: SquareUserIcon,
         path: "/contacts"
+      },
+      {
+        title: "Admin Panel",
+        icon: Shield,
+        path: "/admin"
       }
     ]
 
@@ -223,8 +229,6 @@ export function DashboardSidebar() {
                       : "text-black dark:text-white",
                   )}
                   onClick={() => {router.push("/settings");
-                    console.log(user?.id);
-                    console.log(userRole);
                   }
                   }
                 >

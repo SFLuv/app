@@ -55,6 +55,7 @@ func AddUserRoutes(r *chi.Mux, s *handlers.AppService) {
 
 func AddAdminRoutes(r *chi.Mux, s *handlers.AppService) {
 	r.Get("/admin/users", withAuth(s.GetUsers))
+	r.Get("/admin/locations", (s.GetAuthedLocations))
 	r.Put("/admin/users", withAuth(s.UpdateUserRole))
 	r.Put("/admin/locations", withAdmin(s.UpdateLocationApproval, s))
 }

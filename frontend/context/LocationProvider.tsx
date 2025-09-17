@@ -1,7 +1,7 @@
 "use client"
 
 
-import { LocationResponse } from "@/types/server";
+import { AuthedLocationResponse, LocationResponse } from "@/types/server";
 import { User } from "./AppProvider";
 import { createContext, ReactNode, useContext, useEffect, useState } from "react";
 import { AuthedLocation, Location } from "@/types/location";
@@ -12,9 +12,11 @@ export type LocationsStatus = "loading" | "available" | "unavailable"
 
 interface LocationContextType {
     mapLocations: Location[]
+    authedMapLocations: AuthedLocation[]
     locationTypes: string[]
     mapLocationsStatus: LocationsStatus
     getMapLocations: () => Promise<void>
+    getAuthedMapLocations: () => Promise<void>
     updateLocation: (location: AuthedLocation) => Promise<void>
     addLocation: (location: AuthedLocation) => Promise<void>
 }
@@ -23,12 +25,14 @@ const LocationContext = createContext<LocationContextType | null>(null)
 
 export default function LocationProvider({ children }: { children: ReactNode }) {
     const [mapLocations, setMapLocations] = useState<Location[]>([])
+    const [authedMapLocations, setAuthedMapLocations] = useState<AuthedLocation[]>([])
     const [mapLocationsStatus, setMapLocationsStatus] = useState<LocationsStatus>("loading")
     const [locationTypes, setLocationTypes] = useState<string[]>([])
     const { authFetch, userLocations, setUserLocations } = useApp()
 
     useEffect(() => {
       getMapLocations()
+      getAuthedMapLocations()
     }, [])
 
 
@@ -38,6 +42,14 @@ export default function LocationProvider({ children }: { children: ReactNode }) 
             throw new Error("error getting locations")
         }
         return await res.json() as LocationResponse
+    }
+
+    const _geAuthedMapLocations = async (): Promise<AuthedLocationResponse> => {
+        const res = await fetch(BACKEND + "/admin/locations")
+        if(res.status != 200) {
+            throw new Error("error getting authed locations")
+        }
+        return await res.json() as AuthedLocationResponse
     }
 
     const _updateLocation = async (location: AuthedLocation) => {
@@ -100,16 +112,22 @@ export default function LocationProvider({ children }: { children: ReactNode }) 
                 }
             }
             tempTypes.push("All Locations")
-            console.log(tempTypes)
-            console.log(mapLocations)
-            console.log(l.locations)
             setLocationTypes(tempTypes)
         }
         catch {
             setMapLocationsStatus("unavailable")
             console.error("error getting locations")
         }
+    }
 
+    const getAuthedMapLocations = async () => {
+        setMapLocationsStatus("loading")
+        try {
+            const l = await _geAuthedMapLocations()
+            setAuthedMapLocations(l.locations)
+        } catch {
+            console.log("error getting authed locations")
+        }
     }
 
 
@@ -131,9 +149,11 @@ export default function LocationProvider({ children }: { children: ReactNode }) 
         <LocationContext.Provider
         value ={{
             mapLocations,
+            authedMapLocations,
             locationTypes,
             mapLocationsStatus,
             getMapLocations,
+            getAuthedMapLocations,
             updateLocation,
             addLocation,
         }}
