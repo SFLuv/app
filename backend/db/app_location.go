@@ -187,7 +187,6 @@ func (s *AppDB) GetLocations(ctx context.Context, r *structs.LocationsPageReques
 }
 
 func (s *AppDB) GetAuthedLocations(ctx context.Context, r *structs.LocationsPageRequest) ([]*structs.Location, error) {
-	fmt.Println("reached authed locations controller")
 	offset := r.Page * r.Count
 
 	rows, err := s.db.Query(ctx, `

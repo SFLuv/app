@@ -4,7 +4,7 @@
 import { AuthedLocationResponse, LocationResponse } from "@/types/server";
 import { User } from "./AppProvider";
 import { createContext, ReactNode, useContext, useEffect, useState } from "react";
-import { AuthedLocation, Location } from "@/types/location";
+import { AuthedLocation, Location, UpdateLocationApprovalRequest } from "@/types/location";
 import { useApp } from "@/context/AppProvider";
 import { BACKEND } from "@/lib/constants";
 
@@ -18,6 +18,7 @@ interface LocationContextType {
     getMapLocations: () => Promise<void>
     getAuthedMapLocations: () => Promise<void>
     updateLocation: (location: AuthedLocation) => Promise<void>
+    updateLocationApproval: (req: UpdateLocationApprovalRequest) => Promise<void>
     addLocation: (location: AuthedLocation) => Promise<void>
 }
 
@@ -32,7 +33,6 @@ export default function LocationProvider({ children }: { children: ReactNode }) 
 
     useEffect(() => {
       getMapLocations()
-      getAuthedMapLocations()
     }, [])
 
 
@@ -45,7 +45,7 @@ export default function LocationProvider({ children }: { children: ReactNode }) 
     }
 
     const _geAuthedMapLocations = async (): Promise<AuthedLocationResponse> => {
-        const res = await fetch(BACKEND + "/admin/locations")
+        const res = await authFetch("/admin/locations")
         if(res.status != 200) {
             throw new Error("error getting authed locations")
         }
@@ -86,6 +86,20 @@ export default function LocationProvider({ children }: { children: ReactNode }) 
             throw new Error("error adding new location, from controller")
         }
       }
+
+      const _updateLocationApproval = async (req: UpdateLocationApprovalRequest) => {
+        const res = await authFetch("/admin/locations", {
+            method: "PUT",
+            headers: {
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({req})
+        })
+        if(res.status != 201) {
+            throw new Error("error updating location approval")
+        }
+      }
+
 
     const addLocation = async (location: AuthedLocation) => {
         setMapLocationsStatus("loading")
@@ -145,6 +159,20 @@ export default function LocationProvider({ children }: { children: ReactNode }) 
         }
     }
 
+     const updateLocationApproval = async (req: UpdateLocationApprovalRequest) => {
+         setMapLocationsStatus("loading")
+        try {
+            await _updateLocationApproval(req)
+            const l = await _getMapLocations()
+            setMapLocations(l.locations)
+            setMapLocationsStatus("available")
+        }
+        catch {
+            setMapLocationsStatus("unavailable")
+            console.error("error updating location approval")
+        }
+      }
+
     return (
         <LocationContext.Provider
         value ={{
@@ -155,6 +183,7 @@ export default function LocationProvider({ children }: { children: ReactNode }) 
             getMapLocations,
             getAuthedMapLocations,
             updateLocation,
+            updateLocationApproval,
             addLocation,
         }}
         >

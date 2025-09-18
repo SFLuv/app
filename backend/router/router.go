@@ -1,6 +1,7 @@
 package router
 
 import (
+	"fmt"
 	"net/http"
 	"os"
 
@@ -55,7 +56,7 @@ func AddUserRoutes(r *chi.Mux, s *handlers.AppService) {
 
 func AddAdminRoutes(r *chi.Mux, s *handlers.AppService) {
 	r.Get("/admin/users", withAuth(s.GetUsers))
-	r.Get("/admin/locations", (s.GetAuthedLocations))
+	r.Get("/admin/locations", withAdmin(s.GetAuthedLocations, s))
 	r.Put("/admin/users", withAuth(s.UpdateUserRole))
 	r.Put("/admin/locations", withAdmin(s.UpdateLocationApproval, s))
 }
@@ -95,6 +96,7 @@ func withAuth(handlerFunc http.HandlerFunc) http.HandlerFunc {
 
 func withAdmin(handlerFunc http.HandlerFunc, s *handlers.AppService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		fmt.Println("reached with admin")
 		reqKey := r.Header.Get("X-Admin-Key")
 		envKey := os.Getenv("ADMIN_KEY")
 		if reqKey == envKey && envKey != "" {
@@ -103,10 +105,14 @@ func withAdmin(handlerFunc http.HandlerFunc, s *handlers.AppService) http.Handle
 		}
 
 		id, ok := r.Context().Value("userDid").(string)
+		fmt.Println(id)
 		if !ok {
+			fmt.Println("not ok")
 			w.WriteHeader(http.StatusForbidden)
 			return
 		}
+
+		//id := "did:privy:cmdp2q30z00vil50jxr93ds15"
 
 		isAdmin := s.IsAdmin(r.Context(), id)
 		if !isAdmin {

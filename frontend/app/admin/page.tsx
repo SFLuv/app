@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { useApp } from "@/context/AppProvider"
 import { useMerchants } from "@/hooks/api/use-merchants"
 import { useToast } from "@/hooks/use-toast"
@@ -47,6 +47,7 @@ import {
   CalendarIcon,
 } from "lucide-react"
 import { useLocation } from "@/context/LocationProvider"
+import { AuthedLocation, UpdateLocationApprovalRequest } from "@/types/location"
 
 // Mock connected wallets
 const mockConnectedWallets = [
@@ -96,7 +97,7 @@ const mockPaypalAccounts = [
 
 export default function AdminPage() {
   const { user } = useApp()
-  const { authedMapLocations} = useLocation()
+  const { getAuthedMapLocations, updateLocationApproval, authedMapLocations} = useLocation()
   const { toast } = useToast()
 
   // Global wallet selection
@@ -137,8 +138,17 @@ export default function AdminPage() {
   const [numberOfCodes, setNumberOfCodes] = useState("")
   const [isGeneratingCodes, setIsGeneratingCodes] = useState(false)
   const [generatedCodes, setGeneratedCodes] = useState<any[]>([])
+  const [pendingLocations, setPendingLocations] = useState<AuthedLocation[]>([])
 
-  const pendingLocations = authedMapLocations.filter((location) => !location.approval)
+    useEffect(() => {
+      getAuthedMapLocations()
+    }, [])
+
+    useEffect(() => {
+        setPendingLocations(authedMapLocations.filter((location) => !location.approval))
+    }, [authedMapLocations])
+
+
 
   // Get selected wallet data
   const getSelectedWalletData = () => {
@@ -434,8 +444,13 @@ export default function AdminPage() {
     }
   }
 
-  const handleApproveMerchant = async (locationId: number) => {
+  const handleApproveLocation = async (locationId: number) => {
+    const update: UpdateLocationApprovalRequest = {
+        id: 123,
+        approval: true
+    }
     try {
+    updateLocationApproval(update)
       toast({
         title: "Location #" + locationId + "Approved",
         description: "Location has been successfully approved.",
@@ -448,7 +463,7 @@ export default function AdminPage() {
     }
   }
 
-  const handleRejectMerchant = async (locationId: number) => {
+  const handleRejectLocation = async (locationId: number) => {
      try {
       toast({
         title: "Location #" + locationId + "Rejected",
@@ -992,9 +1007,9 @@ export default function AdminPage() {
             <CardHeader className="pb-6">
               <CardTitle className="flex items-center gap-2 text-xl">
                 <Users className="h-6 w-6" />
-                Merchants Pending Approval
+                Locations Pending Approval
               </CardTitle>
-              <CardDescription className="text-base mt-2">Review and approve merchant applications</CardDescription>
+              <CardDescription className="text-base mt-2">Review and approve location applications</CardDescription>
               <div className="flex items-center gap-2 mt-3">
                 <Badge variant="destructive" className="text-sm px-3 py-1">
                   {pendingLocations.length} Pending
@@ -1052,7 +1067,7 @@ export default function AdminPage() {
                           <div className="flex gap-2">
                             <Button
                               size="sm"
-                              onClick={() => handleApproveMerchant(location.id)}
+                              onClick={() => handleApproveLocation(location.id)}
                               disabled={!pendingLocations.includes(location)}
                             >
                               {!pendingLocations.includes(location) ? (
@@ -1065,7 +1080,7 @@ export default function AdminPage() {
                             <Button
                               size="sm"
                               variant="outline"
-                              onClick={() => handleRejectMerchant(location.id)}
+                              onClick={() => handleRejectLocation(location.id)}
                               disabled={!pendingLocations.includes(location)}
                             >
                               {!pendingLocations.includes(location) ? (
@@ -1521,7 +1536,7 @@ export default function AdminPage() {
               variant="destructive"
               onClick={() => {
                 if (selectedLocationForReview) {
-                  handleRejectMerchant(selectedLocationForReview.id)
+                  handleRejectLocation(selectedLocationForReview.id)
                   setisLocationReviewModalOpen(false)
                 }
               }}
@@ -1531,12 +1546,12 @@ export default function AdminPage() {
             <Button
               onClick={() => {
                 if (selectedLocationForReview) {
-                  handleApproveMerchant(selectedLocationForReview.id)
+                  handleApproveLocation(selectedLocationForReview.id)
                   setisLocationReviewModalOpen(false)
                 }
               }}
             >
-              Approve Merchant
+              Approve Location
             </Button>
           </DialogFooter>
         </DialogContent>

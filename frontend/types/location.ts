@@ -74,3 +74,8 @@ export interface GoogleSubLocation {
   maps_page: string;
   opening_hours: string[];
 }
+
+export interface UpdateLocationApprovalRequest {
+  id: number
+  approval: boolean
+}
