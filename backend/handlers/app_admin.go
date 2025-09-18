@@ -3,7 +3,6 @@ package handlers
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 
@@ -46,7 +45,6 @@ func (a *AppService) UpdateLocationApproval(w http.ResponseWriter, r *http.Reque
 }
 
 func (a *AppService) IsAdmin(ctx context.Context, id string) bool {
-	fmt.Println("reached is admin")
 	isAdmin, err := a.db.IsAdmin(ctx, id)
 	if err != nil {
 		a.logger.Logf("error getting admin state for user %s: %s", id, err)

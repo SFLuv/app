@@ -21,6 +21,8 @@ var Spoofer *utils.ContextSpoofer
 var t1e = "test1@test.com"
 var t1p = "test1phone"
 var t1n = "test1name"
+var testTrue = true
+var testFalse = false
 var TEST_USER_1 = structs.User{
 	Id:          "test1",
 	Exists:      true,
@@ -92,7 +94,7 @@ var TEST_LOCATION_1 = structs.Location{
 	Name:        "Azalina's",
 	Description: "cacsac",
 	Type:        "Restaurant",
-	Approval:    true,
+	Approval:    &testTrue,
 	Street:      "499 Ellis Street",
 	City:        "San Francisco",
 	State:       "California",
@@ -137,7 +139,7 @@ var TEST_LOCATION_2 = structs.Location{
 	Name:        "McDonald's",
 	Description: "casascsa",
 	Type:        "Fast Food Restaurant",
-	Approval:    true,
+	Approval:    &testTrue,
 	Street:      "1100 Fillmore Street",
 	City:        "San Francisco",
 	State:       "California",
@@ -182,7 +184,7 @@ var TEST_LOCATION_2A = structs.Location{
 	Name:        "McDonald's",
 	Description: "test changes",
 	Type:        "Fast Food Restaurant",
-	Approval:    true,
+	Approval:    &testTrue,
 	Street:      "1100 Fillmore Street",
 	City:        "San Francisco",
 	State:       "California",

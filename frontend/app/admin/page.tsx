@@ -145,7 +145,7 @@ export default function AdminPage() {
     }, [])
 
     useEffect(() => {
-        setPendingLocations(authedMapLocations.filter((location) => !location.approval))
+        setPendingLocations(authedMapLocations.filter((location) => location.approval === null))
     }, [authedMapLocations])
 
 
@@ -446,7 +446,7 @@ export default function AdminPage() {
 
   const handleApproveLocation = async (locationId: number) => {
     const update: UpdateLocationApprovalRequest = {
-        id: 123,
+        id: locationId,
         approval: true
     }
     try {
@@ -464,7 +464,12 @@ export default function AdminPage() {
   }
 
   const handleRejectLocation = async (locationId: number) => {
+    const update: UpdateLocationApprovalRequest = {
+        id: locationId,
+        approval: false
+    }
      try {
+      updateLocationApproval(update)
       toast({
         title: "Location #" + locationId + "Rejected",
         description: "Location has been successfully rejected.",

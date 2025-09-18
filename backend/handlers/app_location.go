@@ -157,7 +157,6 @@ func (a *AppService) AddLocation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	location.OwnerID = *userDid
-	location.Approval = false
 	err = a.db.AddLocation(r.Context(), location)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)

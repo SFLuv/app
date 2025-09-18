@@ -32,7 +32,7 @@ type Location struct {
 	Name               string   `json:"name"`
 	Description        string   `json:"description"`
 	Type               string   `json:"type"`
-	Approval           bool     `json:"approval"`
+	Approval           *bool    `json:"approval"`
 	Street             string   `json:"street"`
 	City               string   `json:"city"`
 	State              string   `json:"state"`

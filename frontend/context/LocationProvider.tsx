@@ -44,7 +44,7 @@ export default function LocationProvider({ children }: { children: ReactNode }) 
         return await res.json() as LocationResponse
     }
 
-    const _geAuthedMapLocations = async (): Promise<AuthedLocationResponse> => {
+    const _getAuthedMapLocations = async (): Promise<AuthedLocationResponse> => {
         const res = await authFetch("/admin/locations")
         if(res.status != 200) {
             throw new Error("error getting authed locations")
@@ -88,12 +88,13 @@ export default function LocationProvider({ children }: { children: ReactNode }) 
       }
 
       const _updateLocationApproval = async (req: UpdateLocationApprovalRequest) => {
+        console.log(req)
         const res = await authFetch("/admin/locations", {
             method: "PUT",
             headers: {
                 "Content-Type": "application/json"
             },
-            body: JSON.stringify({req})
+            body: JSON.stringify(req)
         })
         if(res.status != 201) {
             throw new Error("error updating location approval")
@@ -137,7 +138,7 @@ export default function LocationProvider({ children }: { children: ReactNode }) 
     const getAuthedMapLocations = async () => {
         setMapLocationsStatus("loading")
         try {
-            const l = await _geAuthedMapLocations()
+            const l = await _getAuthedMapLocations()
             setAuthedMapLocations(l.locations)
         } catch {
             console.log("error getting authed locations")
@@ -165,6 +166,8 @@ export default function LocationProvider({ children }: { children: ReactNode }) 
             await _updateLocationApproval(req)
             const l = await _getMapLocations()
             setMapLocations(l.locations)
+            const al = await _getAuthedMapLocations()
+            setAuthedMapLocations(al.locations)
             setMapLocationsStatus("available")
         }
         catch {
