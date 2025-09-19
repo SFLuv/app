@@ -163,7 +163,6 @@ export function MerchantApprovalForm() {
       name: googleSubLocation.name,
       description: description,
       type: googleSubLocation.type,
-      approval: false,
       street: googleSubLocation.street,
       city: googleSubLocation.city,
       state: googleSubLocation.state,

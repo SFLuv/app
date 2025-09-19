@@ -147,7 +147,7 @@ export function DashboardSidebar() {
     }
 
     // Add merchant status link for users with any merchant status
-    if (user?.isMerchant) {
+    if (userLocations.length !== 0) {
       items.push({
         title: "Merchant Status",
         icon: FileCheck,

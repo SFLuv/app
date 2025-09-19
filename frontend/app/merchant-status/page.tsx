@@ -5,14 +5,26 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button"
 import { AlertCircle, CheckCircle, Clock, XCircle } from "lucide-react"
 import { useRouter } from "next/navigation"
+import { useEffect, useState } from "react"
 
 export default function MerchantStatusPage() {
-  const { user } = useApp()
+  const { user, userLocations } = useApp()
   const router = useRouter()
+  const [hasApprovedLocation, setHasApprovedLocation] = useState<boolean>(false)
+  const [hasPendingLocation, setHasPendingLocation] = useState<boolean>(false)
+
+  useEffect(() => {
+    for (let i = 0; i < userLocations.length; i++) {
+      if (userLocations[i].approval === true) {
+        setHasApprovedLocation(true)
+      }
+      if (userLocations[i].approval === null) {
+        setHasPendingLocation(true)
+      }
+  }}, [userLocations])
 
   const renderStatusContent = () => {
-    switch (user?.merchantStatus) {
-      case "pending":
+    if (!hasApprovedLocation && hasPendingLocation) {
         return (
           <div className="text-center">
             <Clock className="h-16 w-16 text-yellow-500 mx-auto mb-4" />
@@ -26,8 +38,8 @@ export default function MerchantStatusPage() {
             </div>
           </div>
         )
-
-      case "approved":
+      }
+      else if (hasApprovedLocation) {
         return (
           <div className="text-center">
             <CheckCircle className="h-16 w-16 text-green-500 mx-auto mb-4" />
@@ -41,8 +53,7 @@ export default function MerchantStatusPage() {
             </Button>
           </div>
         )
-
-      case "rejected":
+      } else if (!hasApprovedLocation && !hasPendingLocation) {
         return (
           <div className="text-center">
             <XCircle className="h-16 w-16 text-red-500 mx-auto mb-4" />
@@ -61,8 +72,8 @@ export default function MerchantStatusPage() {
             </Button>
           </div>
         )
-
-      default:
+      }
+      else {
         return (
           <div className="text-center">
             <AlertCircle className="h-16 w-16 text-gray-500 mx-auto mb-4" />
@@ -70,7 +81,7 @@ export default function MerchantStatusPage() {
             <p className="text-gray-600 dark:text-gray-400 mb-6">You haven't submitted a merchant application yet.</p>
             <Button
               className="bg-[#eb6c6c] hover:bg-[#d55c5c]"
-              onClick={() => router.push("/merchant-approval")}
+              onClick={() => router.push("/settings/merchant-approval")}
             >
               Apply to Become a Merchant
             </Button>
