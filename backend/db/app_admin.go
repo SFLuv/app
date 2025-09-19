@@ -27,39 +27,6 @@ func (a *AppDB) IsAdmin(ctx context.Context, id string) (bool, error) {
 	return isAdmin, nil
 }
 
-func (a *AppDB) HasApprovedLocations(ctx context.Context, id string) (bool, error) {
-	var hasApprovedLocations = false
-	var isApproved = false
-
-	rows, err := a.db.Query(ctx, `
-		SELECT
-			l.approval
-		FROM
-			locations l
-		INNER JOIN users u ON l.owner_id = u.id
-		WHERE u.id = $1;
-	`, id)
-
-	if err != nil {
-		return false, err
-	}
-
-	for rows.Next() {
-		fmt.Println("iterating through row")
-		err = rows.Scan(&isApproved)
-		if err != nil {
-			return false, err
-		}
-		if isApproved {
-			fmt.Println("found approved location")
-			hasApprovedLocations = true
-		}
-
-	}
-	fmt.Println(hasApprovedLocations)
-	return hasApprovedLocations, nil
-}
-
 func (a *AppDB) UpdateLocationApproval(ctx context.Context, id uint, approval bool) error {
 	tx, err := a.db.Begin(ctx)
 	if err != nil {
@@ -92,42 +59,6 @@ func (a *AppDB) UpdateLocationApproval(ctx context.Context, id uint, approval bo
 	`, approval, id)
 	if err != nil {
 		return fmt.Errorf("error updating approval for location %d: %s", id, err)
-	}
-
-	/*rows, err := tx.Query(ctx, `
-		SELECT
-			l.approval
-		FROM
-			locations l
-		INNER JOIN users u ON l.owner_id = u.id
-		WHERE u.id = $1;
-	`, owner_id)
-	if err != nil {
-		return fmt.Errorf("error getting approval statuses for merchant %s: %s", owner_id, err)
-	}
-
-	for rows.Next() {
-		var a bool
-		err = rows.Scan(&a)
-		if err != nil {
-			return fmt.Errorf("error scanning approval status for merchant %s: %s", owner_id, err)
-		}
-		fmt.Println("value of a:")
-		fmt.Println(a)
-		if a {
-			fmt.Println("merchant approval status set to true")
-			merchantApproval = true
-			rows.Close()
-			break
-		}
-	}
-	*/
-
-	hasApprovedLocations, _ := a.HasApprovedLocations(ctx, owner_id)
-	if hasApprovedLocations {
-		fmt.Println("owner has approved locations")
-	} else {
-		fmt.Println("no approved locations found for owner")
 	}
 
 	if approval {
