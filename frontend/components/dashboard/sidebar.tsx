@@ -89,11 +89,6 @@ export function DashboardSidebar() {
         icon: SquareUserIcon,
         path: "/contacts"
       },
-      {
-        title: "Admin Panel",
-        icon: Shield,
-        path: "/admin"
-      }
     ]
 
     const merchantItems: NavItem[] = [
@@ -118,6 +113,11 @@ export function DashboardSidebar() {
     ]
 
     const adminItems: NavItem[] = [
+      {
+        title: "Admin Panel",
+        icon: Shield,
+        path: "/admin"
+      }
     //   {
     //     title: "Users",
     //     icon: Users,
