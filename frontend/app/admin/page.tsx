@@ -96,12 +96,15 @@ const mockPaypalAccounts = [
 ]
 
 export default function AdminPage() {
-  const { user } = useApp()
+  const { user, wallets } = useApp()
   const { getAuthedMapLocations, updateLocationApproval, authedMapLocations} = useLocation()
   const { toast } = useToast()
 
   // Global wallet selection
   const [selectedWallet, setSelectedWallet] = useState<string>("")
+  const [selectedWalletPYUSDBalance, setSelectedWalletPYUSDBalance] = useState<number>(0)
+  const [selectedWalletSFLUVBalance, setSelectedWalletSFLUVBalance] = useState<number>(0)
+
 
   // Token management state
   const [amount, setAmount] = useState("")
@@ -148,13 +151,29 @@ export default function AdminPage() {
         setPendingLocations(authedMapLocations.filter((location) => location.approval === null))
     }, [authedMapLocations])
 
+    useEffect(() => {
+      setSelectedWalletBalances()
+    }, [selectedWallet])
+
 
 
   // Get selected wallet data
   const getSelectedWalletData = () => {
     if (!selectedWallet) return null
-    return mockConnectedWallets.find((wallet) => wallet.id === selectedWallet)
+    return wallets.find((wallet) => String(wallet.id) === selectedWallet)
   }
+
+  async function setSelectedWalletBalances() {
+    const SFLuvPromise = getSelectedWalletData()?.getBalanceFormatted()
+    if (SFLuvPromise !== undefined) {
+    const SFLuvBalance = await SFLuvPromise
+    if (SFLuvBalance != null) {
+      setSelectedWalletSFLUVBalance(SFLuvBalance)
+      setSelectedWalletPYUSDBalance(SFLuvBalance)
+    }
+    }
+  }
+
 
   const selectedWalletData = getSelectedWalletData()
 
@@ -231,7 +250,7 @@ export default function AdminPage() {
       return
     }
 
-    if (conversionType === "wrap" && convertAmount > walletData.pyusdBalance) {
+    if (conversionType === "wrap" && convertAmount > selectedWalletPYUSDBalance) {
       toast({
         title: "Insufficient Balance",
         description: "You don't have enough PYUSD in this wallet to wrap this amount.",
@@ -240,7 +259,7 @@ export default function AdminPage() {
       return
     }
 
-    if (conversionType === "unwrap" && convertAmount > walletData.sfluvBalance) {
+    if (conversionType === "unwrap" && convertAmount > selectedWalletSFLUVBalance) {
       toast({
         title: "Insufficient Balance",
         description: "You don't have enough SFLUV in this wallet to unwrap this amount.",
@@ -324,7 +343,7 @@ export default function AdminPage() {
       return
     }
 
-    if (convertAmount > walletData.pyusdBalance) {
+    if (convertAmount > selectedWalletPYUSDBalance) {
       toast({
         title: "Insufficient Balance",
         description: "You don't have enough PYUSD in this wallet to convert to cash.",
@@ -589,16 +608,16 @@ export default function AdminPage() {
     if (!selectedWalletData) return "No wallet selected"
 
     if (conversionType === "wrap") {
-      return `$${selectedWalletData.pyusdBalance.toLocaleString()} PYUSD`
+      return `$${selectedWalletPYUSDBalance.toLocaleString()} PYUSD`
     } else {
-      return `${selectedWalletData.sfluvBalance.toLocaleString()} SFLUV`
+      return `${selectedWalletSFLUVBalance.toLocaleString()} SFLUV`
     }
   }
 
   // Get available balance for PayPal conversion
   const getPaypalAvailableBalance = () => {
     if (!selectedWalletData) return "No wallet selected"
-    return `$${selectedWalletData.pyusdBalance.toLocaleString()} PYUSD`
+    return `$${selectedWalletPYUSDBalance.toLocaleString()} PYUSD`
   }
 
   return (
@@ -640,8 +659,8 @@ export default function AdminPage() {
                   <SelectValue placeholder="Choose a wallet to manage" />
                 </SelectTrigger>
                 <SelectContent>
-                  {mockConnectedWallets.map((wallet) => (
-                    <SelectItem key={wallet.id} value={wallet.id}>
+                  {wallets.map((wallet) => (
+                    <SelectItem key={wallet.name} value={String(wallet.id)}>
                       <div className="flex items-center gap-3">
                         <Wallet className="h-4 w-4" />
                         <div className="flex flex-col">
@@ -667,7 +686,7 @@ export default function AdminPage() {
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-bold">
-                  ${selectedWalletData ? selectedWalletData.pyusdBalance.toLocaleString() : "0"}
+                  ${selectedWalletData ? selectedWalletPYUSDBalance.toLocaleString() : "0"}
                 </div>
                 <p className="text-xs text-muted-foreground">
                   {selectedWalletData ? "Available in selected wallet" : "Select a wallet to view balance"}
@@ -684,7 +703,7 @@ export default function AdminPage() {
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-bold">
-                  {selectedWalletData ? selectedWalletData.sfluvBalance.toLocaleString() : "0"}
+                  {selectedWalletData ? selectedWalletSFLUVBalance.toLocaleString() : "0"}
                 </div>
                 <p className="text-xs text-muted-foreground">
                   {selectedWalletData ? "Available in selected wallet" : "Select a wallet to view balance"}
