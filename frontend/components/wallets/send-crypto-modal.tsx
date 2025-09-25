@@ -15,7 +15,7 @@ import { Send, AlertTriangle, CheckCircle, X, Copy, ArrowLeft } from "lucide-rea
 import { useToast } from "@/hooks/use-toast"
 import type { ConnectedWallet } from "@/types/privy-wallet"
 import { AppWallet } from "@/lib/wallets/wallets"
-import { DECIMALS, SYMBOL } from "@/lib/constants"
+import { SFLUV_DECIMALS, SYMBOL } from "@/lib/constants"
 import { Address, Hash } from "viem"
 import ContactOrAddressInput from "../contacts/contact-or-address-input"
 
@@ -90,7 +90,7 @@ export function SendCryptoModal({ open, onOpenChange, wallet, balance }: SendCry
     setStep("sending")
 
     // Mock sending process
-    let receipt = await wallet.send(BigInt(Number(formData.amount) * (10 ** DECIMALS)), formData.recipient as Address)
+    let receipt = await wallet.send(BigInt(Number(formData.amount) * (10 ** SFLUV_DECIMALS)), formData.recipient as Address)
     if(!receipt) {
       setStep("error")
       setError("Error creating transaction. Please try again.")

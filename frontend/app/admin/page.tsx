@@ -102,7 +102,7 @@ export default function AdminPage() {
 
   // Global wallet selection
   const [selectedWallet, setSelectedWallet] = useState<string>("")
-  const [selectedWalletPYUSDBalance, setSelectedWalletPYUSDBalance] = useState<number>(0)
+  const [selectedWalletBYUSDBalance, setSelectedWalletBYUSDBalance] = useState<number>(0)
   const [selectedWalletSFLUVBalance, setSelectedWalletSFLUVBalance] = useState<number>(0)
 
 
@@ -164,14 +164,23 @@ export default function AdminPage() {
   }
 
   async function setSelectedWalletBalances() {
-    const SFLuvPromise = getSelectedWalletData()?.getBalanceFormatted()
+    const SFLuvPromise = getSelectedWalletData()?.getSFLUVBalanceFormatted()
+    const BYUSDPromise = getSelectedWalletData()?.getBYUSDBalanceFormatted()
+
     if (SFLuvPromise !== undefined) {
     const SFLuvBalance = await SFLuvPromise
     if (SFLuvBalance != null) {
       setSelectedWalletSFLUVBalance(SFLuvBalance)
-      setSelectedWalletPYUSDBalance(SFLuvBalance)
+      }
     }
+
+    if (BYUSDPromise !== undefined) {
+    const BYUSDBalance = await BYUSDPromise
+    if (BYUSDBalance != null) {
+      setSelectedWalletBYUSDBalance(BYUSDBalance)
+      }
     }
+
   }
 
 
@@ -250,10 +259,10 @@ export default function AdminPage() {
       return
     }
 
-    if (conversionType === "wrap" && convertAmount > selectedWalletPYUSDBalance) {
+    if (conversionType === "wrap" && convertAmount > selectedWalletBYUSDBalance) {
       toast({
         title: "Insufficient Balance",
-        description: "You don't have enough PYUSD in this wallet to wrap this amount.",
+        description: "You don't have enough BYUSD in this wallet to wrap this amount.",
         variant: "destructive",
       })
       return
@@ -288,7 +297,7 @@ export default function AdminPage() {
       toast({
         title: `${conversionType === "wrap" ? "Wrap" : "Unwrap"} Successful`,
         description: `Successfully ${conversionType === "wrap" ? "wrapped" : "unwrapped"} ${convertAmount} ${
-          conversionType === "wrap" ? "PYUSD to SFLUV" : "SFLUV to PYUSD"
+          conversionType === "wrap" ? "BYUSD to SFLUV" : "SFLUV to BYUSD"
         }.`,
       })
 
@@ -343,10 +352,10 @@ export default function AdminPage() {
       return
     }
 
-    if (convertAmount > selectedWalletPYUSDBalance) {
+    if (convertAmount > selectedWalletBYUSDBalance) {
       toast({
         title: "Insufficient Balance",
-        description: "You don't have enough PYUSD in this wallet to convert to cash.",
+        description: "You don't have enough BYUSD in this wallet to convert to cash.",
         variant: "destructive",
       })
       return
@@ -367,7 +376,7 @@ export default function AdminPage() {
 
       toast({
         title: "PayPal Conversion Successful",
-        description: `Successfully converted ${convertAmount} PYUSD to cash in ${selectedAccount?.email}.`,
+        description: `Successfully converted ${convertAmount} BYUSD to cash in ${selectedAccount?.email}.`,
       })
       setPaypalAmount("")
     } catch (error) {
@@ -608,7 +617,7 @@ export default function AdminPage() {
     if (!selectedWalletData) return "No wallet selected"
 
     if (conversionType === "wrap") {
-      return `$${selectedWalletPYUSDBalance.toLocaleString()} PYUSD`
+      return `$${selectedWalletBYUSDBalance.toLocaleString()} BYUSD`
     } else {
       return `${selectedWalletSFLUVBalance.toLocaleString()} SFLUV`
     }
@@ -617,7 +626,7 @@ export default function AdminPage() {
   // Get available balance for PayPal conversion
   const getPaypalAvailableBalance = () => {
     if (!selectedWalletData) return "No wallet selected"
-    return `$${selectedWalletPYUSDBalance.toLocaleString()} PYUSD`
+    return `$${selectedWalletBYUSDBalance.toLocaleString()} BYUSD`
   }
 
   return (
@@ -680,13 +689,13 @@ export default function AdminPage() {
             <Card>
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                 <CardTitle className="text-sm font-medium">
-                  {selectedWalletData ? `${selectedWalletData.name} PYUSD Balance` : "PYUSD Balance"}
+                  {selectedWalletData ? `${selectedWalletData.name} BYUSD Balance` : "BYUSD Balance"}
                 </CardTitle>
                 <Coins className="h-4 w-4 text-blue-600" />
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-bold">
-                  ${selectedWalletData ? selectedWalletPYUSDBalance.toLocaleString() : "0"}
+                  ${selectedWalletData ? selectedWalletBYUSDBalance.toLocaleString() + " BYUSD" : "0"}
                 </div>
                 <p className="text-xs text-muted-foreground">
                   {selectedWalletData ? "Available in selected wallet" : "Select a wallet to view balance"}
@@ -703,7 +712,7 @@ export default function AdminPage() {
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-bold">
-                  {selectedWalletData ? selectedWalletSFLUVBalance.toLocaleString() : "0"}
+                  {selectedWalletData ? selectedWalletSFLUVBalance.toLocaleString() + " SFLUV": "0"}
                 </div>
                 <p className="text-xs text-muted-foreground">
                   {selectedWalletData ? "Available in selected wallet" : "Select a wallet to view balance"}
@@ -720,7 +729,7 @@ export default function AdminPage() {
                   <ArrowUpDown className="h-5 w-5 text-green-600" />
                   Token Conversion
                 </CardTitle>
-                <CardDescription>Convert between PYUSD stablecoins and SFLUV tokens</CardDescription>
+                <CardDescription>Convert between BYUSD stablecoins and SFLUV tokens</CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="space-y-2">
@@ -751,7 +760,7 @@ export default function AdminPage() {
                   <Input
                     id="conversion-amount"
                     type="text"
-                    placeholder={`Enter ${conversionType === "wrap" ? "PYUSD" : "SFLUV"} amount`}
+                    placeholder={`Enter ${conversionType === "wrap" ? "BYUSD" : "SFLUV"} amount`}
                     value={amount}
                     onChange={(e) => handleAmountChange(e.target.value)}
                     disabled={isProcessing}
@@ -776,7 +785,7 @@ export default function AdminPage() {
                       ) : (
                         <ArrowDown className="mr-2 h-4 w-4" />
                       )}
-                      {conversionType === "wrap" ? "Wrap to SFLUV" : "Unwrap to PYUSD"}
+                      {conversionType === "wrap" ? "Wrap to SFLUV" : "Unwrap to BYUSD"}
                     </>
                   )}
                 </Button>
@@ -789,7 +798,7 @@ export default function AdminPage() {
                   <CreditCard className="h-5 w-5 text-purple-600" />
                   PayPal Cash Conversion
                 </CardTitle>
-                <CardDescription>Convert PYUSD stablecoins to cash in your PayPal account</CardDescription>
+                <CardDescription>Convert BYUSD stablecoins to cash in your PayPal account</CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="space-y-2">
