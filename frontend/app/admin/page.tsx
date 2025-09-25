@@ -48,34 +48,7 @@ import {
 } from "lucide-react"
 import { useLocation } from "@/context/LocationProvider"
 import { AuthedLocation, UpdateLocationApprovalRequest } from "@/types/location"
-
-// Mock connected wallets
-const mockConnectedWallets = [
-  {
-    id: "wallet-1",
-    name: "MetaMask Wallet",
-    address: "0x1234...5678",
-    type: "MetaMask",
-    pyusdBalance: 25000.0,
-    sfluvBalance: 15000.0,
-  },
-  {
-    id: "wallet-2",
-    name: "Coinbase Wallet",
-    address: "0x9876...4321",
-    type: "Coinbase",
-    pyusdBalance: 25000.0,
-    sfluvBalance: 10000.0,
-  },
-  {
-    id: "wallet-3",
-    name: "WalletConnect",
-    address: "0x5555...9999",
-    type: "WalletConnect",
-    pyusdBalance: 5000.0,
-    sfluvBalance: 2500.0,
-  },
-]
+import { AppWallet } from "@/lib/wallets/wallets"
 
 // Mock PayPal accounts
 const mockPaypalAccounts = [
@@ -101,7 +74,7 @@ export default function AdminPage() {
   const { toast } = useToast()
 
   // Global wallet selection
-  const [selectedWallet, setSelectedWallet] = useState<string>("")
+  const [selectedWallet, setSelectedWallet] = useState<AppWallet | null>(null)
   const [selectedWalletBYUSDBalance, setSelectedWalletBYUSDBalance] = useState<number>(0)
   const [selectedWalletSFLUVBalance, setSelectedWalletSFLUVBalance] = useState<number>(0)
 
@@ -157,34 +130,23 @@ export default function AdminPage() {
 
 
 
-  // Get selected wallet data
-  const getSelectedWalletData = () => {
-    if (!selectedWallet) return null
-    return wallets.find((wallet) => String(wallet.id) === selectedWallet)
-  }
-
   async function setSelectedWalletBalances() {
-    const SFLuvPromise = getSelectedWalletData()?.getSFLUVBalanceFormatted()
-    const BYUSDPromise = getSelectedWalletData()?.getBYUSDBalanceFormatted()
+    if (selectedWallet !== null) {
+    const SFLuvPromise = selectedWallet.getSFLUVBalanceFormatted()
+    const BYUSDPromise = selectedWallet.getBYUSDBalanceFormatted()
 
-    if (SFLuvPromise !== undefined) {
     const SFLuvBalance = await SFLuvPromise
     if (SFLuvBalance != null) {
       setSelectedWalletSFLUVBalance(SFLuvBalance)
       }
-    }
 
-    if (BYUSDPromise !== undefined) {
     const BYUSDBalance = await BYUSDPromise
     if (BYUSDBalance != null) {
       setSelectedWalletBYUSDBalance(BYUSDBalance)
       }
     }
-
   }
 
-
-  const selectedWalletData = getSelectedWalletData()
 
   // Get selected PayPal account data
   const getSelectedPaypalAccount = () => {
@@ -249,7 +211,7 @@ export default function AdminPage() {
       return
     }
 
-    const walletData = getSelectedWalletData()
+    const walletData = selectedWallet
     if (!walletData) {
       toast({
         title: "Wallet Not Found",
@@ -279,29 +241,8 @@ export default function AdminPage() {
 
     setIsProcessing(true)
     try {
-      // Simulate blockchain transaction
-      await new Promise((resolve) => setTimeout(resolve, 2000))
-
-      // Update the selected wallet's balance
-      const walletIndex = mockConnectedWallets.findIndex((w) => w.id === selectedWallet)
-      if (walletIndex !== -1) {
-        if (conversionType === "wrap") {
-          mockConnectedWallets[walletIndex].pyusdBalance -= convertAmount
-          mockConnectedWallets[walletIndex].sfluvBalance += convertAmount
-        } else {
-          mockConnectedWallets[walletIndex].sfluvBalance -= convertAmount
-          mockConnectedWallets[walletIndex].pyusdBalance += convertAmount
-        }
-      }
-
-      toast({
-        title: `${conversionType === "wrap" ? "Wrap" : "Unwrap"} Successful`,
-        description: `Successfully ${conversionType === "wrap" ? "wrapped" : "unwrapped"} ${convertAmount} ${
-          conversionType === "wrap" ? "BYUSD to SFLUV" : "SFLUV to BYUSD"
-        }.`,
-      })
-
-      setAmount("")
+      //Token conversion call goes here
+      console.log("Token Conversion")
     } catch (error) {
       toast({
         title: "Conversion Failed",
@@ -342,7 +283,7 @@ export default function AdminPage() {
       return
     }
 
-    const walletData = getSelectedWalletData()
+    const walletData = selectedWallet
     if (!walletData) {
       toast({
         title: "Wallet Not Found",
@@ -365,20 +306,8 @@ export default function AdminPage() {
 
     setIsConvertingToPaypal(true)
     try {
-      // Simulate PayPal API call
-      await new Promise((resolve) => setTimeout(resolve, 3000))
-
-      // Update the selected wallet's balance
-      const walletIndex = mockConnectedWallets.findIndex((w) => w.id === selectedWallet)
-      if (walletIndex !== -1) {
-        mockConnectedWallets[walletIndex].pyusdBalance -= convertAmount
-      }
-
-      toast({
-        title: "PayPal Conversion Successful",
-        description: `Successfully converted ${convertAmount} BYUSD to cash in ${selectedAccount?.email}.`,
-      })
-      setPaypalAmount("")
+      // PayPal offload called here
+      console.log("PayPal offload")
     } catch (error) {
       toast({
         title: "PayPal Conversion Failed",
@@ -614,7 +543,7 @@ export default function AdminPage() {
 
   // Get available balance for conversion type
   const getAvailableBalance = () => {
-    if (!selectedWalletData) return "No wallet selected"
+    if (selectedWallet == null) return "No wallet selected"
 
     if (conversionType === "wrap") {
       return `$${selectedWalletBYUSDBalance.toLocaleString()} BYUSD`
@@ -625,7 +554,7 @@ export default function AdminPage() {
 
   // Get available balance for PayPal conversion
   const getPaypalAvailableBalance = () => {
-    if (!selectedWalletData) return "No wallet selected"
+    if (selectedWallet == null) return "No wallet selected"
     return `$${selectedWalletBYUSDBalance.toLocaleString()} BYUSD`
   }
 
@@ -663,7 +592,12 @@ export default function AdminPage() {
               <CardDescription>Choose which wallet to use for all operations</CardDescription>
             </CardHeader>
             <CardContent>
-              <Select value={selectedWallet} onValueChange={setSelectedWallet}>
+              <Select value={selectedWallet ? String(selectedWallet?.id) : ""} onValueChange={(id) => {
+                const wallet = wallets.find((w) => String(w.id) === id)
+                if (wallet) {
+                setSelectedWallet(wallet)
+                }
+              }}>
                 <SelectTrigger className="w-full">
                   <SelectValue placeholder="Choose a wallet to manage" />
                 </SelectTrigger>
@@ -689,16 +623,16 @@ export default function AdminPage() {
             <Card>
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                 <CardTitle className="text-sm font-medium">
-                  {selectedWalletData ? `${selectedWalletData.name} BYUSD Balance` : "BYUSD Balance"}
+                  {selectedWallet ? `${selectedWallet.name} BYUSD Balance` : "BYUSD Balance"}
                 </CardTitle>
                 <Coins className="h-4 w-4 text-blue-600" />
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-bold">
-                  ${selectedWalletData ? selectedWalletBYUSDBalance.toLocaleString() + " BYUSD" : "0"}
+                  ${selectedWallet ? selectedWalletBYUSDBalance.toLocaleString() + " BYUSD" : "0"}
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  {selectedWalletData ? "Available in selected wallet" : "Select a wallet to view balance"}
+                  {selectedWallet ? "Available in selected wallet" : "Select a wallet to view balance"}
                 </p>
               </CardContent>
             </Card>
@@ -706,16 +640,16 @@ export default function AdminPage() {
             <Card>
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                 <CardTitle className="text-sm font-medium">
-                  {selectedWalletData ? `${selectedWalletData.name} SFLUV Balance` : "SFLUV Balance"}
+                  {selectedWallet ? `${selectedWallet.name} SFLUV Balance` : "SFLUV Balance"}
                 </CardTitle>
                 <Coins className="h-4 w-4 text-green-600" />
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-bold">
-                  {selectedWalletData ? selectedWalletSFLUVBalance.toLocaleString() + " SFLUV": "0"}
+                  {selectedWallet ? selectedWalletSFLUVBalance.toLocaleString() + " SFLUV": "0"}
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  {selectedWalletData ? "Available in selected wallet" : "Select a wallet to view balance"}
+                  {selectedWallet ? "Available in selected wallet" : "Select a wallet to view balance"}
                 </p>
               </CardContent>
             </Card>
