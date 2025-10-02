@@ -567,18 +567,18 @@ export default function AdminPage() {
         </div>
       </div>
 
-      <Tabs defaultValue="tokens" className="space-y-6">
-        <TabsList className="grid w-full grid-cols-3">
-          <TabsTrigger value="tokens">Token Management</TabsTrigger>
+      <Tabs defaultValue="merchant" className="space-y-6">
+        <TabsList className="grid w-full grid-cols-1">
+          {/* <TabsTrigger value="tokens">Token Management</TabsTrigger> */}
           <TabsTrigger value="merchants" className="relative">
             Merchant Approvals
             {pendingLocations.length > 0 && (
-              <Badge variant="destructive" className="ml-2 h-5 w-5 rounded-full p-0 text-xs">
+              <Badge variant="destructive" className="ml-2 h-5 w-5 rounded-full p-1.5 text-xs">
                 {pendingLocations.length}
               </Badge>
             )}
           </TabsTrigger>
-          <TabsTrigger value="qrcodes">QR Codes</TabsTrigger>
+          {/* <TabsTrigger value="qrcodes">QR Codes</TabsTrigger> */}
         </TabsList>
 
         <TabsContent value="tokens" className="space-y-6">
