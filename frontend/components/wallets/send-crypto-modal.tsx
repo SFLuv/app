@@ -17,6 +17,7 @@ import type { ConnectedWallet } from "@/types/privy-wallet"
 import { AppWallet } from "@/lib/wallets/wallets"
 import { SFLUV_DECIMALS, SYMBOL } from "@/lib/constants"
 import { Address, Hash } from "viem"
+import { useContacts } from "@/context/ContactsProvider";
 import ContactOrAddressInput from "../contacts/contact-or-address-input"
 
 interface SendCryptoModalProps {
@@ -37,6 +38,7 @@ export function SendCryptoModal({ open, onOpenChange, wallet, balance }: SendCry
   })
   const [error, setError] = useState("")
   const { toast } = useToast()
+  const { contacts } = useContacts()
 
   const copyHash = async () => {
     try {
@@ -218,7 +220,7 @@ export function SendCryptoModal({ open, onOpenChange, wallet, balance }: SendCry
                 <div className="flex items-center justify-between">
                   <span className="text-muted-foreground text-sm">To</span>
                   <span className="font-mono text-sm">
-                    {formData.recipient.slice(0, 6)}...{formData.recipient.slice(-4)}
+                    {contacts.find((contact) => contact.address === formData.recipient)?.name || formData.recipient.slice(0, 6) + "..." + formData.recipient.slice(-4)}
                   </span>
                 </div>
 
