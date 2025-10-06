@@ -3,6 +3,7 @@ package utils
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"time"
 
@@ -25,6 +26,8 @@ func NewEmailSender() *EmailSender {
 }
 
 func (es *EmailSender) SendEmail(toEmail, toName, subject, htmlContent string, fromEmail, fromName string) error {
+	fromEmail = "postmaster@sandbox765683e00c5c40cdbf31a5d0dc18d316.mailgun.org"
+	fromName = "Mailgun Sandbox"
 	m := es.mg.NewMessage(
 		fmt.Sprintf("%s <%s>", fromName, fromEmail),
 		subject,
@@ -37,4 +40,18 @@ func (es *EmailSender) SendEmail(toEmail, toName, subject, htmlContent string, f
 
 	_, _, err := es.mg.Send(ctx, m)
 	return err
+}
+
+func (es *EmailSender) AddAuthorizedRecipient(toEmail string) error {
+	req, _ := http.NewRequest("POST",
+		"https://api.mailgun.net/v5/sandbox/auth_recipients?email="+toEmail, nil)
+	req.SetBasicAuth("api", os.Getenv("MAILGUN_API_KEY"))
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	fmt.Println("Status:", resp.Status)
+	return nil
 }
