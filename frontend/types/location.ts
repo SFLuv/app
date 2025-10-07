@@ -26,7 +26,7 @@ export interface AuthedLocation {
   name: string;
   description: string;
   type: string;
-  approval: boolean;
+  approval?: boolean;
   street: string;
   city: string;
   state: string;
@@ -73,4 +73,9 @@ export interface GoogleSubLocation {
   rating: number;
   maps_page: string;
   opening_hours: string[];
+}
+
+export interface UpdateLocationApprovalRequest {
+  id: number
+  approval: boolean
 }

@@ -72,6 +72,40 @@ func (a *AppService) GetLocations(w http.ResponseWriter, r *http.Request) {
 	w.Write(jsonBytes)
 }
 
+func (a *AppService) GetAuthedLocations(w http.ResponseWriter, r *http.Request) {
+	params := r.URL.Query()
+	count, err := strconv.Atoi(params.Get("count"))
+	if err != nil {
+		count = 1000
+	}
+	page, err := strconv.Atoi(params.Get("page"))
+	if err != nil {
+		page = 0
+	}
+
+	request := structs.LocationsPageRequest{
+		Page:  uint(page),
+		Count: uint(count),
+	}
+
+	locations, err := a.db.GetAuthedLocations(r.Context(), &request)
+	if err != nil {
+		a.logger.Logf("Failed to get locations %s", err.Error())
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	jsonBytes, err := json.Marshal(map[string]any{
+		"locations": locations,
+	})
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		a.logger.Logf("Error marshalling JSON for locations objects %s", err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	w.Write(jsonBytes)
+}
+
 func (a *AppService) GetLocationsByUser(w http.ResponseWriter, r *http.Request) {
 	userDid := utils.GetDid(r)
 	if userDid == nil {
@@ -123,7 +157,6 @@ func (a *AppService) AddLocation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	location.OwnerID = *userDid
-	location.Approval = false
 	err = a.db.AddLocation(r.Context(), location)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)

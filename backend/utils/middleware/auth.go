@@ -15,7 +15,6 @@ func AuthMiddleware(next http.Handler) http.Handler {
 	return (http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 
 		accessToken := r.Header.Get("Access-Token")
-
 		token, err := jwt.ParseWithClaims(accessToken, &jwt.MapClaims{}, keyFunc)
 		if err != nil {
 			next.ServeHTTP(w, r)

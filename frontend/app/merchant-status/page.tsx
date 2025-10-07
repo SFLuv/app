@@ -5,29 +5,45 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button"
 import { AlertCircle, CheckCircle, Clock, XCircle } from "lucide-react"
 import { useRouter } from "next/navigation"
+import { useEffect, useState } from "react"
+import MerchantStatusLoading from "./loading"
 
 export default function MerchantStatusPage() {
-  const { user } = useApp()
+  const { user, userLocations, status } = useApp()
   const router = useRouter()
+  const [hasApprovedLocation, setHasApprovedLocation] = useState<boolean>(false)
+  const [hasPendingLocation, setHasPendingLocation] = useState<boolean>(false)
+
+  useEffect(() => {
+    for (let i = 0; i < userLocations.length; i++) {
+      if (userLocations[i].approval === true) {
+        setHasApprovedLocation(true)
+      }
+      if (userLocations[i].approval === null) {
+        setHasPendingLocation(true)
+      }
+  }}, [userLocations])
 
   const renderStatusContent = () => {
-    switch (user?.merchantStatus) {
-      case "pending":
-        return (
-          <div className="text-center">
-            <Clock className="h-16 w-16 text-yellow-500 mx-auto mb-4" />
-            <h2 className="text-2xl font-bold text-black dark:text-white mb-2">Application Under Review</h2>
-            <p className="text-gray-600 dark:text-gray-400 mb-6">
-              Your merchant application is currently being reviewed by our team. This process typically takes 1-3
-              business days.
-            </p>
-            <div className="bg-yellow-100 dark:bg-yellow-900/30 p-4 rounded-lg text-yellow-800 dark:text-yellow-200 mb-6">
-              <p>While your application is pending, you can continue to use SFLuv as a community member.</p>
-            </div>
+    if (status === "loading") {
+      <MerchantStatusLoading/>
+    }
+    else if (!hasApprovedLocation && hasPendingLocation) {
+      return (
+        <div className="text-center">
+          <Clock className="h-16 w-16 text-yellow-500 mx-auto mb-4" />
+          <h2 className="text-2xl font-bold text-black dark:text-white mb-2">Application Under Review</h2>
+          <p className="text-gray-600 dark:text-gray-400 mb-6">
+            Your merchant application is currently being reviewed by our team. This process typically takes 1-3
+            business days.
+          </p>
+          <div className="bg-yellow-100 dark:bg-yellow-900/30 p-4 rounded-lg text-yellow-800 dark:text-yellow-200 mb-6">
+            <p>While your application is pending, you can continue to use SFLuv as a community member.</p>
           </div>
+        </div>
         )
-
-      case "approved":
+      }
+      else if (hasApprovedLocation) {
         return (
           <div className="text-center">
             <CheckCircle className="h-16 w-16 text-green-500 mx-auto mb-4" />
@@ -41,8 +57,7 @@ export default function MerchantStatusPage() {
             </Button>
           </div>
         )
-
-      case "rejected":
+      } else if (!hasApprovedLocation && !hasPendingLocation) {
         return (
           <div className="text-center">
             <XCircle className="h-16 w-16 text-red-500 mx-auto mb-4" />
@@ -61,8 +76,8 @@ export default function MerchantStatusPage() {
             </Button>
           </div>
         )
-
-      default:
+      }
+      else {
         return (
           <div className="text-center">
             <AlertCircle className="h-16 w-16 text-gray-500 mx-auto mb-4" />
@@ -70,7 +85,7 @@ export default function MerchantStatusPage() {
             <p className="text-gray-600 dark:text-gray-400 mb-6">You haven't submitted a merchant application yet.</p>
             <Button
               className="bg-[#eb6c6c] hover:bg-[#d55c5c]"
-              onClick={() => router.push("/merchant-approval")}
+              onClick={() => router.push("/settings/merchant-approval")}
             >
               Apply to Become a Merchant
             </Button>

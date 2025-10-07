@@ -102,7 +102,7 @@ export default function WalletDetailsPage() {
   const updateBalance = async () => {
     if(!wallet) return
     try {
-      const b = await wallet.getBalanceFormatted()
+      const b = await wallet.getSFLUVBalanceFormatted()
       if(b === null) {
         setError("Wallet not initialized.")
         return

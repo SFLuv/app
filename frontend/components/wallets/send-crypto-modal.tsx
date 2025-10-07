@@ -15,8 +15,9 @@ import { Send, AlertTriangle, CheckCircle, X, Copy, ArrowLeft } from "lucide-rea
 import { useToast } from "@/hooks/use-toast"
 import type { ConnectedWallet } from "@/types/privy-wallet"
 import { AppWallet } from "@/lib/wallets/wallets"
-import { DECIMALS, SYMBOL } from "@/lib/constants"
+import { SFLUV_DECIMALS, SYMBOL } from "@/lib/constants"
 import { Address, Hash } from "viem"
+import { useContacts } from "@/context/ContactsProvider";
 import ContactOrAddressInput from "../contacts/contact-or-address-input"
 
 interface SendCryptoModalProps {
@@ -37,6 +38,7 @@ export function SendCryptoModal({ open, onOpenChange, wallet, balance }: SendCry
   })
   const [error, setError] = useState("")
   const { toast } = useToast()
+  const { contacts } = useContacts()
 
   const copyHash = async () => {
     try {
@@ -90,7 +92,7 @@ export function SendCryptoModal({ open, onOpenChange, wallet, balance }: SendCry
     setStep("sending")
 
     // Mock sending process
-    let receipt = await wallet.send(BigInt(Number(formData.amount) * (10 ** DECIMALS)), formData.recipient as Address)
+    let receipt = await wallet.send(BigInt(Number(formData.amount) * (10 ** SFLUV_DECIMALS)), formData.recipient as Address)
     if(!receipt) {
       setStep("error")
       setError("Error creating transaction. Please try again.")
@@ -218,7 +220,7 @@ export function SendCryptoModal({ open, onOpenChange, wallet, balance }: SendCry
                 <div className="flex items-center justify-between">
                   <span className="text-muted-foreground text-sm">To</span>
                   <span className="font-mono text-sm">
-                    {formData.recipient.slice(0, 6)}...{formData.recipient.slice(-4)}
+                    {contacts.find((contact) => contact.address === formData.recipient)?.name || formData.recipient.slice(0, 6) + "..." + formData.recipient.slice(-4)}
                   </span>
                 </div>
 
@@ -274,7 +276,7 @@ export function SendCryptoModal({ open, onOpenChange, wallet, balance }: SendCry
               <h3 className="text-lg font-semibold mb-2">Transaction Sent!</h3>
               <p className="text-muted-foreground text-sm mb-4">Your transaction has been broadcast to the network</p>
               <div className="space-y-2">
-                <Label className="text-sm font-medium">Wallet Address</Label>
+                <Label className="text-sm font-medium">Tranaction ID</Label>
                 <div className="flex gap-2">
                   <Input value={`${hash?.slice(0, 6)}...${hash?.slice(-4)}`} readOnly className="font-mono text-xs sm:text-sm h-11" />
                   <Button

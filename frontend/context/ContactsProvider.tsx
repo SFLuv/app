@@ -21,7 +21,6 @@ export default function ContactsProvider ({ children }: { children: ReactNode })
   const { status, authFetch, setError } = useApp()
 
   useEffect(() => {
-    console.log(status)
     if(status === "loading") return
 
     if(status === "unauthenticated") {
@@ -29,8 +28,6 @@ export default function ContactsProvider ({ children }: { children: ReactNode })
       setContactsStatus("loading")
       return
     }
-
-    console.log("getting contacts")
     getContacts()
   }, [status])
 

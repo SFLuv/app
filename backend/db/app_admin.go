@@ -61,34 +61,8 @@ func (a *AppDB) UpdateLocationApproval(ctx context.Context, id uint, approval bo
 		return fmt.Errorf("error updating approval for location %d: %s", id, err)
 	}
 
-	if !approval {
-		rows, err := tx.Query(ctx, `
-			SELECT
-				l.approval
-			FROM
-				locations l
-			INNER JOIN users u ON l.owner_id = u.id
-			WHERE u.id = $1;
-		`, owner_id)
-		if err != nil {
-			return fmt.Errorf("error getting approval statuses for merchant %s: %s", owner_id, err)
-		}
-
-		for rows.Next() {
-			var a bool
-			err = rows.Scan(&a)
-			if err != nil {
-				return fmt.Errorf("error scanning approval status for merchant %s: %s", owner_id, err)
-			}
-			if a {
-				approval = true
-				rows.Close()
-				break
-			}
-		}
-	}
-
-	_, err = tx.Exec(ctx, `
+	if approval {
+		_, err = tx.Exec(ctx, `
 		UPDATE
 			users
 		SET
@@ -96,8 +70,9 @@ func (a *AppDB) UpdateLocationApproval(ctx context.Context, id uint, approval bo
 		WHERE
 			id = $2;
 	`, approval, owner_id)
-	if err != nil {
-		return fmt.Errorf("error updating owner merchant status for user %s: %s", owner_id, err)
+		if err != nil {
+			return fmt.Errorf("error updating owner merchant status for user %s: %s", owner_id, err)
+		}
 	}
 
 	tx.Commit(ctx)

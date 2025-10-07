@@ -186,6 +186,137 @@ func (s *AppDB) GetLocations(ctx context.Context, r *structs.LocationsPageReques
 	return locations, nil
 }
 
+func (s *AppDB) GetAuthedLocations(ctx context.Context, r *structs.LocationsPageRequest) ([]*structs.Location, error) {
+	offset := r.Page * r.Count
+
+	rows, err := s.db.Query(ctx, `
+		SELECT
+			id,
+			google_id,
+			owner_id,
+			name,
+			description,
+			type,
+			approval,
+			street,
+			city,
+			state,
+			zip,
+			lat,
+			lng,
+			phone,
+			email,
+			admin_phone,
+			admin_email,
+			website,
+			image_url,
+			rating,
+			maps_page,
+			contact_firstname,
+			contact_lastname,
+			contact_phone,
+			pos_system,
+			sole_proprietorship,
+			tipping_policy,
+			tipping_division,
+			table_coverage,
+			service_stations,
+			tablet_model,
+			messaging_service,
+			reference
+		FROM locations
+		ORDER BY id
+		LIMIT $1
+		OFFSET $2;
+	`, r.Count, offset)
+	if err != nil {
+		return nil, fmt.Errorf("error querying for locations: %w", err)
+	}
+	defer rows.Close()
+
+	authedLocations := []*structs.Location{}
+
+	for rows.Next() {
+		location := structs.Location{}
+
+		err = rows.Scan(
+			&location.ID,
+			&location.GoogleID,
+			&location.OwnerID,
+			&location.Name,
+			&location.Description,
+			&location.Type,
+			&location.Approval,
+			&location.Street,
+			&location.City,
+			&location.State,
+			&location.ZIP,
+			&location.Lat,
+			&location.Lng,
+			&location.Phone,
+			&location.Email,
+			&location.AdminPhone,
+			&location.AdminEmail,
+			&location.Website,
+			&location.ImageURL,
+			&location.Rating,
+			&location.MapsPage,
+			&location.ContactFirstName,
+			&location.ContactLastName,
+			&location.ContactPhone,
+			&location.PosSystem,
+			&location.SoleProprietorship,
+			&location.TippingPolicy,
+			&location.TippingDivision,
+			&location.TableCoverage,
+			&location.ServiceStations,
+			&location.TabletModel,
+			&location.MessagingService,
+			&location.Reference,
+		)
+
+		if err != nil {
+			return nil, fmt.Errorf("error scanning authed location row: %w", err)
+		}
+		authedLocations = append(authedLocations, &location)
+	}
+
+	for _, loc := range authedLocations {
+		curr_hours := ""
+		openingHours := []string{}
+		rows2, err2 := s.db.Query(ctx, `
+			SELECT
+				hours
+			FROM location_hours
+			WHERE location_id = $1
+			ORDER BY weekday;
+		`, loc.ID)
+		if err2 != nil {
+			s.logger.Logf("error querying location hours table: %s", err2)
+			continue
+		}
+
+		for rows2.Next() {
+			err2 = rows2.Scan(
+				&curr_hours,
+			)
+			if err2 != nil {
+				rows2.Close()
+				break
+			}
+			openingHours = append(openingHours, curr_hours)
+		}
+		if err2 != nil {
+			s.logger.Logf("error scanning hours rows for get locations: %s", err2)
+			continue
+		}
+
+		loc.OpeningHours = openingHours
+	}
+
+	return authedLocations, nil
+}
+
 func (a *AppDB) AddLocation(ctx context.Context, location *structs.Location) error {
 	_, err := a.db.Exec(ctx, `
 		INSERT INTO locations (

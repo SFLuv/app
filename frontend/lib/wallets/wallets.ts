@@ -2,7 +2,7 @@ import { ConnectedWallet, EIP1193Provider } from "@privy-io/react-auth";
 import { BrowserProvider, JsonRpcSigner, Signer } from "ethers";
 import { toSimpleSmartAccount, ToSimpleSmartAccountReturnType } from "permissionless/accounts";
 import { Address, createPublicClient, createWalletClient, custom, encodeFunctionData, Hex, hexToBytes, http, PublicClient } from "viem";
-import { CHAIN, DECIMALS, FACTORY, TOKEN } from "../constants";
+import { CHAIN, BYUSD_DECIMALS, SFLUV_DECIMALS, FACTORY, SFLUV_TOKEN, BYUSD_TOKEN, } from "../constants";
 import { entryPoint07Address } from "viem/account-abstraction";
 import { Hash } from "viem";
 import { cw_bundler } from "../paymaster/client";
@@ -146,7 +146,7 @@ export class AppWallet {
     const data = hexToBytes(callData)
 
     try {
-      const hash = await cw_bundler.call(signer, contract || TOKEN, account.address, data, undefined, undefined, undefined, { smartAccountIndex: this.index ? Number(this.index) : undefined })
+      const hash = await cw_bundler.call(signer, contract || SFLUV_TOKEN, account.address, data, undefined, undefined, undefined, { smartAccountIndex: this.index ? Number(this.index) : undefined })
       receipt.hash = hash
     }
     catch(error) {
@@ -200,14 +200,15 @@ export class AppWallet {
     return this._execTx(t.wallet, t.signer, callData)
   }
 
-  getBalance = async (): Promise<bigint | null> => {
+  getBalance = async (token: Address): Promise<bigint | null> => {
     if(!this.initialized) return null
     if(!this.wallet) return null
     if(!this.publicClient) return null
     if(!this.address) return null
 
+
     const statement = {
-      address: TOKEN,
+      address: token,
       abi: [balanceOf],
       functionName: "balanceOf",
       args: [this.address],
@@ -217,11 +218,21 @@ export class AppWallet {
     return balance
   }
 
-  getBalanceFormatted = async (): Promise<number | null> => {
-    const b = await this.getBalance()
+  getSFLUVBalanceFormatted = async (): Promise<number | null> => {
+    const b = await this.getBalance(SFLUV_TOKEN)
     if(b === null) return null
 
-    const d = BigInt(10 ** DECIMALS)
+    const d = BigInt(10 ** SFLUV_DECIMALS)
+    const q = Number(b * 100n / (d)) / 100
+
+    return q
+  }
+
+  getBYUSDBalanceFormatted = async (): Promise<number | null> => {
+    const b = await this.getBalance(BYUSD_TOKEN)
+    if(b === null) return null
+
+    const d = BigInt(10 ** BYUSD_DECIMALS)
     const q = Number(b * 100n / (d)) / 100
 
     return q
