@@ -223,7 +223,6 @@ func (s *BotDB) Redeem(ctx context.Context, id string, account string) (uint64, 
 		return 0, nil, err
 	}
 
-	fmt.Println("first query reached")
 	row := tx.QueryRow(context.Background(), `
 		SELECT
 			id
@@ -249,14 +248,12 @@ func (s *BotDB) Redeem(ctx context.Context, id string, account string) (uint64, 
 
 	var redeemed string
 	err = row.Scan(&redeemed)
-	fmt.Println(err)
 	if err != pgx.ErrNoRows {
-		err = fmt.Errorf("code could not be redeemed")
+		err = fmt.Errorf("user redeemed")
 		tx.Rollback(context.Background())
 		return 0, nil, err
 	}
 
-	fmt.Println("first query passed")
 
 	time := time.Now().Unix()
 
@@ -277,7 +274,6 @@ func (s *BotDB) Redeem(ctx context.Context, id string, account string) (uint64, 
 	var amount uint64
 	var expiration int64
 	err = row.Scan(&amount, &expiration)
-	fmt.Println(err)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			err = fmt.Errorf("code redeemed")
@@ -285,8 +281,6 @@ func (s *BotDB) Redeem(ctx context.Context, id string, account string) (uint64, 
 		tx.Rollback(ctx)
 		return 0, nil, err
 	}
-	fmt.Println("second query passed")
-	fmt.Println(expiration, time)
 	if expiration < time && expiration != 0 {
 		err = fmt.Errorf("code expired")
 		tx.Rollback(ctx)
@@ -303,7 +297,6 @@ func (s *BotDB) Redeem(ctx context.Context, id string, account string) (uint64, 
 		tx.Rollback(ctx)
 		return 0, nil, err
 	}
-	fmt.Println("third query passed")
 
 	_, err = tx.Exec(ctx, `
 		INSERT INTO redemptions(address, code)
@@ -315,7 +308,6 @@ func (s *BotDB) Redeem(ctx context.Context, id string, account string) (uint64, 
 		return 0, nil, err
 	}
 
-	fmt.Println("fourth query passed")
 
 	return amount, tx, nil
 }
