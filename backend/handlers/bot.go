@@ -201,6 +201,7 @@ func (s *BotService) Redeem(w http.ResponseWriter, r *http.Request) {
 
 	err = s.bot.Send(amount, request.Address)
 	if err != nil {
+		fmt.Println("this is the bot error:")
 		fmt.Println(err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return

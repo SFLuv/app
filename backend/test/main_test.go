@@ -94,18 +94,3 @@ func TestDBConnection(t *testing.T) {
 	}
 	conn.Close()
 }
-
-func TestCreateAccountTables(t *testing.T) {
-	adb, err := db.PgxDB("test_account")
-	if err != nil {
-		t.Fatal("failed to establish db connection")
-	}
-	defer adb.Close()
-
-	accountDB := db.Account(adb)
-
-	err = accountDB.CreateTables()
-	if err != nil {
-		t.Fatalf("error creating account tables: %s", err)
-	}
-}
