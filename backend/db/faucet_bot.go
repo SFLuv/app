@@ -2,7 +2,6 @@ package db
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"time"
 
@@ -41,7 +40,7 @@ func (s *BotDB) CreateTables() error {
 	_, err = s.db.Exec(context.Background(), `
 		CREATE TABLE IF NOT EXISTS codes(
 			id TEXT PRIMARY KEY NOT NULL,
-			redeemed INTEGER NOT NULL DEFAULT 0,
+			redeemed BOOLEAN DEFAULT FALSE,
 			event TEXT,
 			FOREIGN KEY (event) REFERENCES events(id)
 		);
@@ -51,23 +50,11 @@ func (s *BotDB) CreateTables() error {
 		return err
 	}
 
-	// Accounts Table (for foreign key lookup in redemptions)
-	_, err = s.db.Exec(context.Background(), `
-		CREATE TABLE IF NOT EXISTS accounts(
-			address TEXT PRIMARY KEY
-		)
-	`)
-	if err != nil {
-		err = fmt.Errorf("error creating accounts table: %s", err)
-		return err
-	}
-
 	// Redemptions Table (accounts - events join table)
 	_, err = s.db.Exec(context.Background(), `
 		CREATE TABLE IF NOT EXISTS redemptions(
-			account TEXT,
+			address TEXT PRIMARY KEY,
 			code TEXT,
-			FOREIGN KEY (account) REFERENCES accounts(address),
 			FOREIGN KEY (code) REFERENCES codes(id)
 		);
 	`)
@@ -254,18 +241,19 @@ func (s *BotDB) Redeem(ctx context.Context, id string, account string) (uint64, 
 						SELECT
 							(code)
 						FROM redemptions
-						WHERE account = $2
+						WHERE address = $2
 					)
 			);
 	`, id, account)
 
 	var redeemed string
 	err = row.Scan(&redeemed)
-	if err != sql.ErrNoRows {
+	if err != pgx.ErrNoRows {
 		err = fmt.Errorf("user redeemed")
 		tx.Rollback(context.Background())
 		return 0, nil, err
 	}
+
 
 	time := time.Now().Unix()
 
@@ -279,7 +267,7 @@ func (s *BotDB) Redeem(ctx context.Context, id string, account string) (uint64, 
 					(event)
 				FROM codes
 				WHERE
-					(id = $1 AND redeemed = 0)
+					(id = $1 AND redeemed = false)
 			);
 	`, id)
 
@@ -287,13 +275,12 @@ func (s *BotDB) Redeem(ctx context.Context, id string, account string) (uint64, 
 	var expiration int64
 	err = row.Scan(&amount, &expiration)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if err == pgx.ErrNoRows {
 			err = fmt.Errorf("code redeemed")
 		}
 		tx.Rollback(ctx)
 		return 0, nil, err
 	}
-	fmt.Println(expiration, time)
 	if expiration < time && expiration != 0 {
 		err = fmt.Errorf("code expired")
 		tx.Rollback(ctx)
@@ -302,7 +289,7 @@ func (s *BotDB) Redeem(ctx context.Context, id string, account string) (uint64, 
 
 	_, err = tx.Exec(ctx, `
 		UPDATE codes
-		SET redeemed = 1
+		SET redeemed = true
 		WHERE id = $1;
 	`, id)
 	if err != nil {
@@ -312,7 +299,7 @@ func (s *BotDB) Redeem(ctx context.Context, id string, account string) (uint64, 
 	}
 
 	_, err = tx.Exec(ctx, `
-		INSERT INTO redemptions(account, code)
+		INSERT INTO redemptions(address, code)
 		VALUES ($1, $2);
 	`, account, id)
 	if err != nil {
@@ -320,6 +307,7 @@ func (s *BotDB) Redeem(ctx context.Context, id string, account string) (uint64, 
 		tx.Rollback(ctx)
 		return 0, nil, err
 	}
+
 
 	return amount, tx, nil
 }

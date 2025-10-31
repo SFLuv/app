@@ -21,10 +21,6 @@ func main() {
 	if err != nil {
 		log.Fatal(fmt.Sprintf("error initializing bot db: %s\n", err))
 	}
-	adb, err := db.PgxDB("account")
-	if err != nil {
-		log.Fatal(fmt.Sprintf("error initializing account db: %s\n", err))
-	}
 	pdb, err := db.PgxDB("app")
 	if err != nil {
 		log.Fatal(fmt.Sprintf("error initializing app db: %s\n", err))
@@ -32,13 +28,6 @@ func main() {
 
 	botDb := db.Bot(bdb)
 	err = botDb.CreateTables()
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
-
-	accountDb := db.Account(adb)
-	err = accountDb.CreateTables()
 	if err != nil {
 		fmt.Println(err)
 		return
@@ -65,10 +54,9 @@ func main() {
 	}
 
 	s := handlers.NewBotService(botDb, bot)
-	a := handlers.NewAccountService(accountDb)
 	p := handlers.NewAppService(appDb, appLogger)
 
-	r := router.New(s, a, p)
+	r := router.New(s, p)
 	port := os.Getenv("PORT")
 
 	fmt.Printf("now listening on port %s\n", port)

@@ -567,7 +567,7 @@ export default function AdminPage() {
         </div>
       </div>
 
-      <Tabs defaultValue="merchant" className="space-y-6">
+      <Tabs defaultValue="merchants" className="space-y-6">
         <TabsList className="grid w-full grid-cols-1">
           {/* <TabsTrigger value="tokens">Token Management</TabsTrigger> */}
           <TabsTrigger value="merchants" className="relative">

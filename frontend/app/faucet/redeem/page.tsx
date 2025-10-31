@@ -15,11 +15,6 @@ const Page = () => {
 
   const [error, setError] = useState<string | null>();
   const [success, setSuccess] = useState<boolean>(false);
-  const [accountLinked, setAccountLinked] = useState(false);
-  const [inputting, setInputting] = useState(false);
-
-  const [email, setEmail] = useState("");
-  const [name, setName] = useState("");
 
   const sigAuthAccount = searchParams.get("sigAuthAccount")
   const sigAuthSignature = searchParams.get("sigAuthSignature")
@@ -31,7 +26,8 @@ const Page = () => {
   const closeModal = (delay: number) => {
     setTimeout(() => {
         if (sigAuthRedirect) {
-          router.push(sigAuthRedirect + "/close")
+          //router.push(sigAuthRedirect + "/close")
+          console.log("modal should close")
         }
       }, delay)
   }
@@ -41,18 +37,12 @@ const Page = () => {
       setError("Please download the CitizenWallet app, then scan your QR code again.")
       return
     }
-    getAccountLinked()
+    console.log("use effect reached")
+    sendBotRequest()
   }, [])
 
-  useEffect(() => {
-    console.log('sending')
-    if (accountLinked) {
-      sendBotRequest()
-    }
-  }, [accountLinked])
-
   const sendBotRequest = async () => {
-
+    console.log("send bot request reached")
     // let verified = verifyAccountOwnership()
     //implement real verification
     try {
@@ -79,8 +69,6 @@ const Page = () => {
           default:
             setError("Error redeeming code.")
         }
-        closeModal(2000)
-        return
       }
 
       setSuccess(true)
@@ -95,54 +83,6 @@ const Page = () => {
 
     //redirect back to app
   }
-
-  const getAccountLinked = async () => {
-    try {
-      let res = await fetch(BACKEND + "/account?address="
-        + sigAuthAccount
-      );
-
-      if (res.status != 200) {
-        setAccountLinked(true)
-        return
-      }
-
-      let body = await res.json()
-      if (body?.account === true) {
-        setAccountLinked(true)
-        return
-      }
-
-
-      setInputting(true)
-    } catch {
-      setAccountLinked(true)
-      return
-    }
-  }
-
-  const sendAccountLink = async () => {
-    try {
-      let res = await fetch(BACKEND + "/account", {
-        method: "POST",
-        body: JSON.stringify({
-          address: sigAuthAccount,
-          email,
-          name
-        })
-      });
-
-
-    } catch {
-      setAccountLinked(true)
-      return
-    }
-
-    setAccountLinked(true)
-    return
-  }
-
-
 
   return (
     <div className="min-h-screen flex items-center justify-center">
@@ -174,43 +114,6 @@ const Page = () => {
           <h2 className="text-3xl font-bold text-black dark:text-white">
             Code redeemed!
           </h2>
-        </div>
-        : inputting ?
-        <div style={{width: "70vw", marginBottom: "10vh"}}>
-          <h1 className="text-3xl font-bold text-black dark:text-white">Want to hear more about SFLuv events?</h1>
-          <form
-            onSubmit={(e: any) => {
-              e.preventDefault()
-              sendAccountLink()
-            }}
-            className="space-y-2"
-          >
-            <Label>Email:</Label>
-            <Input
-              className="text-black dark:text-white bg-secondary"
-              value={email}
-              onChange={(e) => {
-                setEmail(e.target.value)
-              }}
-            />
-            <Label>Name:</Label>
-            <Input
-              className="text-black dark:text-white bg-secondary"
-              value={name}
-              onChange={(e) => {
-                setName(e.target.value)
-              }}
-            />
-            <Button type="submit">Submit</Button>
-            <Button
-              variant="secondary"
-              type="button"
-              onClick={() => {
-                setInputting(false)
-                setAccountLinked(true)
-              }}
-            >Skip</Button>
-          </form>
         </div>
         :
         <div className="text-center space-y-6 justify-center items-center">

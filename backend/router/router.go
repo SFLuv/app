@@ -12,7 +12,7 @@ import (
 	m "github.com/SFLuv/app/backend/utils/middleware"
 )
 
-func New(s *handlers.BotService, a *handlers.AccountService, p *handlers.AppService) *chi.Mux {
+func New(s *handlers.BotService, p *handlers.AppService) *chi.Mux {
 	r := chi.NewRouter()
 
 	r.Use(middleware.Logger)
@@ -33,9 +33,6 @@ func New(s *handlers.BotService, a *handlers.AccountService, p *handlers.AppServ
 	AddLocationRoutes(r, p)
 	AddContactRoutes(r, p)
 
-	r.Post("/account", a.AddAccount)
-	r.Get("/account", a.GetAccount)
-
 	return r
 }
 
@@ -43,7 +40,6 @@ func AddBotRoutes(r *chi.Mux, s *handlers.BotService, a *handlers.AppService) {
 	r.Post("/events", withAdmin(s.NewEvent, a))
 	r.Post("/events/{event_id}/codes", withAdmin(s.NewCodesRequest, a))
 	r.Get("/events", withAdmin(s.GetCodesRequest, a))
-
 	r.Post("/redeem", s.Redeem)
 }
 

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"math/big"
 	"os"
-	"strconv"
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
@@ -43,20 +42,18 @@ func Init() (*Bot, error) {
 
 func (b *Bot) Key() string {
 	// get bot's public key and return it
-
 	return ""
 }
 
 // send {amount} tokens to {address}
 func (b *Bot) Send(amount uint64, address string) error {
-	decimals, err := strconv.Atoi(os.Getenv("TOKEN_DECIMALS"))
-	if err != nil {
-		fmt.Println("decimals not set in .env, automatically setting decimals to 6 places")
-		decimals = 1000000
+	decimalString := os.Getenv("TOKEN_DECIMALS")
+	decimals, ok := new(big.Int).SetString(decimalString, 10)
+	if !ok {
+		return fmt.Errorf("invalid TOKEN_DECIMALS value %s", decimalString)
 	}
 
-	value := big.NewInt(0)
-	tokenAmount := big.NewInt(int64(amount * uint64(decimals)))
+	tokenAmount := new(big.Int).Mul(decimals, big.NewInt(int64(amount)))
 	toAddress := common.HexToAddress(address)
 	tokenAddress := common.HexToAddress(b.tokenId)
 	method := methodId("transfer(address,uint256)")
@@ -105,7 +102,8 @@ func (b *Bot) Send(amount uint64, address string) error {
 		return err
 	}
 
-	tx := types.NewTransaction(nonce, tokenAddress, value, gasLimit, gasPrice, data)
+	// changed from value to tokenAmount, now not using value
+	tx := types.NewTransaction(nonce, tokenAddress, big.NewInt(0), gasLimit, gasPrice, data)
 
 	chainId, err := b.client.NetworkID(context.Background())
 	if err != nil {
