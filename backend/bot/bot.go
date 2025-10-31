@@ -47,7 +47,6 @@ func (b *Bot) Key() string {
 
 // send {amount} tokens to {address}
 func (b *Bot) Send(amount uint64, address string) error {
-	fmt.Println("bot reached")
 	decimalString := os.Getenv("TOKEN_DECIMALS")
 	decimals, ok := new(big.Int).SetString(decimalString, 10)
 	if !ok {
@@ -56,8 +55,6 @@ func (b *Bot) Send(amount uint64, address string) error {
 
 	tokenAmount := new(big.Int).Mul(decimals, big.NewInt(int64(amount)))
 	toAddress := common.HexToAddress(address)
-	fmt.Println("to address:")
-	fmt.Println(toAddress)
 	tokenAddress := common.HexToAddress(b.tokenId)
 	method := methodId("transfer(address,uint256)")
 
@@ -95,7 +92,6 @@ func (b *Bot) Send(amount uint64, address string) error {
 		return err
 	}
 
-	fmt.Println("estimating gas costs")
 	gasLimit, err := b.client.EstimateGas(context.Background(), ethereum.CallMsg{
 		From: fromAddress,
 		To:   &tokenAddress,
@@ -107,7 +103,6 @@ func (b *Bot) Send(amount uint64, address string) error {
 	}
 
 	// changed from value to tokenAmount, now not using value
-	fmt.Println("creating new transaction")
 	tx := types.NewTransaction(nonce, tokenAddress, big.NewInt(0), gasLimit, gasPrice, data)
 
 	chainId, err := b.client.NetworkID(context.Background())
@@ -122,7 +117,6 @@ func (b *Bot) Send(amount uint64, address string) error {
 		return err
 	}
 
-	fmt.Println("sending transaction")
 	err = b.client.SendTransaction(context.Background(), signedTx)
 	if err != nil {
 		err = fmt.Errorf("error sending signed transaction: %s", err)
