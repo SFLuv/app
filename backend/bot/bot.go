@@ -50,7 +50,7 @@ func (b *Bot) Send(amount uint64, address string) error {
 	decimalString := os.Getenv("TOKEN_DECIMALS")
 	decimals, ok := new(big.Int).SetString(decimalString, 10)
 	if !ok {
-		fmt.Println("invalid TOKEN_DECIMALS value")
+		return fmt.Errorf("invalid TOKEN_DECIMALS value %s", decimalString)
 	}
 
 	tokenAmount := new(big.Int).Mul(decimals, big.NewInt(int64(amount)))
