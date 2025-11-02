@@ -26,8 +26,8 @@ func NewEmailSender() *EmailSender {
 }
 
 func (es *EmailSender) SendEmail(toEmail, toName, subject, htmlContent string, fromEmail, fromName string) error {
-	fromEmail = "postmaster@sandbox765683e00c5c40cdbf31a5d0dc18d316.mailgun.org"
-	fromName = "Mailgun Sandbox"
+	// fromEmail = "no_reply@" + os.Getenv("MAILGUN_DOMAIN")
+	// fromName = "SFLuv Admin"
 	m := es.mg.NewMessage(
 		fmt.Sprintf("%s <%s>", fromName, fromEmail),
 		subject,

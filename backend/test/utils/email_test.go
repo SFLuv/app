@@ -20,7 +20,7 @@ func TestSendEmail(t *testing.T) {
 	if sender == nil {
 		t.Fatal("Failed to create email sender")
 	}
-	err := sender.SendEmail(to, "Test User", subject, body, "pete@sfluv.org", "SFLuv")
+	err := sender.SendEmail(to, "Test User", subject, body, "no_reply@sfluv.org", "SFLuv Admin")
 	if err != nil {
 		t.Errorf("SendEmail failed: %v", err)
 	}
