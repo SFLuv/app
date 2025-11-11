@@ -17,7 +17,7 @@ import { AppWallet } from "@/lib/wallets/wallets";
 import { UserResponse, GetUserResponse, WalletResponse } from "@/types/server";
 import { AuthedLocation } from "@/types/location";
 import { importWallet as privyImportWallet } from "@/lib/wallets/import";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Contact } from "@/types/contact";
 
 // const mockUser: User = { id: "user3", name: "Bob Johnson", email: "bob@example.com", isMerchant: true, isAdmin: false, isOrganizer: false }
@@ -107,6 +107,8 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     replace
   } = useRouter()
   const pathname = usePathname()
+  const search = useSearchParams()
+  const [isLoggedOutPage, setIsLoggedOutPage] = useState(!!search.get("page"))
 
 
 
@@ -114,7 +116,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     if(!privyReady) return;
     if(!walletsReady) return;
 
-    if(!privyAuthenticated) {
+    if(!privyAuthenticated && !isLoggedOutPage) {
       _resetAppState()
       return
     }
@@ -180,6 +182,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     setWallets([])
     setWalletsStatus("unavailable")
     setError(null)
+    setIsLoggedOutPage(false)
   }
 
   const authFetch = async (endpoint: string, options: RequestInit = {}): Promise<Response> => {
