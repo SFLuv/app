@@ -107,16 +107,15 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     replace
   } = useRouter()
   const pathname = usePathname()
-  const search = useSearchParams()
-  const [isLoggedOutPage, setIsLoggedOutPage] = useState(!!search.get("page"))
 
 
 
   useEffect(() => {
     if(!privyReady) return;
     if(!walletsReady) return;
+    if(pathname.startsWith("/faucet")) return;
 
-    if(!privyAuthenticated && !isLoggedOutPage) {
+    if(!privyAuthenticated) {
       _resetAppState()
       return
     }
@@ -182,7 +181,6 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     setWallets([])
     setWalletsStatus("unavailable")
     setError(null)
-    setIsLoggedOutPage(false)
   }
 
   const authFetch = async (endpoint: string, options: RequestInit = {}): Promise<Response> => {
