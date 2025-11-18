@@ -8,9 +8,10 @@ import { GoogleSubLocation } from "@/types/location";
 interface PlaceAutocompleteProps {
   setGoogleSubLocation: React.Dispatch<React.SetStateAction<GoogleSubLocation | null>>;
   setBusinessPhone: React.Dispatch<React.SetStateAction<string>>;
+  setStreet: React.Dispatch<React.SetStateAction<string>>;
 }
 
-export default function PlaceAutocomplete({ setGoogleSubLocation, setBusinessPhone }: PlaceAutocompleteProps) {
+export default function PlaceAutocomplete({ setGoogleSubLocation, setBusinessPhone, setStreet}: PlaceAutocompleteProps) {
   const { status } = useApp()
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -49,7 +50,7 @@ export default function PlaceAutocomplete({ setGoogleSubLocation, setBusinessPho
             google_id: rawGoogleData.id,
             name: rawGoogleData.displayName,
             type: rawGoogleData.primaryTypeDisplayName,
-            street: rawGoogleData.addressComponents[0]?.longText || "" + " " + rawGoogleData.addressComponents[1]?.longText || "",
+            street: (rawGoogleData.addressComponents[0]?.longText || "") + " " + (rawGoogleData.addressComponents[1]?.longText || ""),
             city: rawGoogleData.addressComponents[3]?.longText || "",
             state: rawGoogleData.addressComponents[5]?.longText || "",
             zip: rawGoogleData.addressComponents[7]?.longText || "",
@@ -62,11 +63,17 @@ export default function PlaceAutocomplete({ setGoogleSubLocation, setBusinessPho
             maps_page: rawGoogleData.googleMapsURI,
             opening_hours: rawGoogleData.regularOpeningHours?.weekdayDescriptions || [],
         }
+        console.log(googleDetails)
         setGoogleSubLocation(googleDetails)
         if (typeof googleDetails.phone === "string") {
         setBusinessPhone(googleDetails.phone)
         } else {
           setBusinessPhone("")
+        }
+        if (typeof googleDetails.street === "string") {
+        setStreet(googleDetails.street)
+        } else {
+          setStreet("")
         }
     });
     placeAutocomplete.className="text-black dark:text-white border rounded-md bg-secondary px-3 py-2"
