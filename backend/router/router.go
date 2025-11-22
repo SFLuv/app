@@ -26,6 +26,13 @@ func New(s *handlers.BotService, p *handlers.AppService) *chi.Mux {
 	}))
 	r.Use(m.AuthMiddleware)
 
+	// Health check endpoint
+	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"status":"ok"}`))
+	})
+
 	AddBotRoutes(r, s, p)
 	AddUserRoutes(r, p)
 	AddAdminRoutes(r, p)
