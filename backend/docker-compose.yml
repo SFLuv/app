@@ -1,0 +1,86 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: sfluv-postgres
+    environment:
+      POSTGRES_USER: ${DB_USER:-sfluv_user}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-sfluv_password}
+      POSTGRES_DB: ${DB_NAME:-sfluv_db}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    networks:
+      - sfluv-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-sfluv_user} -d ${DB_NAME:-sfluv_db}"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Go Backend Application
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: sfluv-backend
+    environment:
+      - PORT=${PORT:-8080}
+      - DB_TYPE=${DB_TYPE:-postgres}
+      - DB_URL=postgres://${DB_USER:-sfluv_user}:${DB_PASSWORD:-sfluv_password}@postgres:5432/${DB_NAME:-sfluv_db}?sslmode=disable
+      - DB_USER=${DB_USER:-sfluv_user}
+      - DB_PASSWORD=${DB_PASSWORD:-sfluv_password}
+      - ADMIN_KEY=${ADMIN_KEY}
+      - TOKEN_ID=${TOKEN_ID}
+      - TOKEN_DECIMALS=${TOKEN_DECIMALS}
+      - RPC_URL=${RPC_URL}
+      - BOT_KEY=${BOT_KEY}
+      - PRIVY_APP_ID=${PRIVY_APP_ID}
+      - PRIVY_VKEY=${PRIVY_VKEY}
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./logs:/root/logs
+    networks:
+      - sfluv-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Redis Cache (optional, for future use)
+  redis:
+    image: redis:7-alpine
+    container_name: sfluv-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - sfluv-network
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+
+# Named volumes
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+
+# Networks
+networks:
+  sfluv-network:
+    driver: bridge
