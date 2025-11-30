@@ -1,0 +1,61 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: sfluv-postgres
+    environment:
+      POSTGRES_USER: ${DB_USER:-sfluv_user}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-sfluv_password}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - sfluv-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-sfluv_user} -d ${DB_NAME:-sfluv_db}"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Go Backend Application
+  sfluv:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: sfluv-backend
+    env_file:
+      - .env
+    environment:
+      # Override database connection for Docker network
+      - DB_HOST=postgres
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./logs:/root/logs
+    networks:
+      - sfluv-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+# Named volumes
+volumes:
+  postgres_data:
+    driver: local
+
+# Networks
+networks:
+  sfluv-network:
+    driver: bridge
