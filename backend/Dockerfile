@@ -17,24 +17,13 @@ RUN go mod download
 COPY . .
 
 # Build the application
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o main .
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -a -installsuffix cgo -o main .
 
 # Start a new stage from scratch
-FROM alpine:latest
-
-# Install ca-certificates for HTTPS requests
-RUN apk --no-cache add ca-certificates tzdata
-
-WORKDIR /root/
-
-# Copy the pre-built binary file from the previous stage
-COPY --from=builder /app/main .
-
-# Create logs directory
-RUN mkdir -p logs/prod logs/test/app
-
-# Expose port
+FROM gcr.io/distroless/static:nonroot
+WORKDIR /app
+COPY --from=builder /app/main ./main
+COPY --from=builder /app/go.mod ./go.mod
 EXPOSE 8080
-
-# Command to run the executable
-CMD ["./main"]
+USER nonroot:nonroot
+ENTRYPOINT ["./main"]
