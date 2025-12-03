@@ -120,9 +120,11 @@ export default function AppProvider({ children }: { children: ReactNode }) {
       return
     }
 
+    if(status === "authenticated") return;
+
     _userLogin()
 
-  }, [privyReady, privyAuthenticated, walletsReady])
+  }, [privyReady, privyAuthenticated, walletsReady, pathname])
 
 
   useEffect(() => {
