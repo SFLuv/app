@@ -53,10 +53,13 @@ func (s *BotDB) CreateTables() error {
 	// Redemptions Table (accounts - events join table)
 	_, err = s.db.Exec(context.Background(), `
 		CREATE TABLE IF NOT EXISTS redemptions(
-			address TEXT PRIMARY KEY,
+			id SERIAL PRIMARY KEY,
+			address TEXT,
 			code TEXT,
 			FOREIGN KEY (code) REFERENCES codes(id)
 		);
+
+		CREATE INDEX redemption_address ON redemptions(address);
 	`)
 	if err != nil {
 		err = fmt.Errorf("error creating redemptions table: %s", err)
@@ -254,7 +257,6 @@ func (s *BotDB) Redeem(ctx context.Context, id string, account string) (uint64, 
 		return 0, nil, err
 	}
 
-
 	time := time.Now().Unix()
 
 	row = tx.QueryRow(ctx, `
@@ -307,7 +309,6 @@ func (s *BotDB) Redeem(ctx context.Context, id string, account string) (uint64, 
 		tx.Rollback(ctx)
 		return 0, nil, err
 	}
-
 
 	return amount, tx, nil
 }
