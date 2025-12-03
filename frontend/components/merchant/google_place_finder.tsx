@@ -12,7 +12,6 @@ interface PlaceAutocompleteProps {
 }
 
 export default function PlaceAutocomplete({ setGoogleSubLocation, setBusinessPhone, setStreet}: PlaceAutocompleteProps) {
-  const { status } = useApp()
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
