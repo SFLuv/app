@@ -49,6 +49,9 @@ import {
 import { useLocation } from "@/context/LocationProvider"
 import { AuthedLocation, UpdateLocationApprovalRequest } from "@/types/location"
 import { AppWallet } from "@/lib/wallets/wallets"
+import { FAUCET_ADDRESS, SFLUV_DECIMALS, SFLUV_TOKEN } from "@/lib/constants"
+import { Event, EventsStatus } from "@/types/event"
+import { AddEventModal } from "@/components/events/add-event-modal"
 
 // Mock PayPal accounts
 const mockPaypalAccounts = [
@@ -68,8 +71,11 @@ const mockPaypalAccounts = [
   },
 ]
 
+
+
+
 export default function AdminPage() {
-  const { user, wallets } = useApp()
+  const { user, wallets, authFetch } = useApp()
   const { getAuthedMapLocations, updateLocationApproval, authedMapLocations} = useLocation()
   const { toast } = useToast()
 
@@ -115,18 +121,86 @@ export default function AdminPage() {
   const [isGeneratingCodes, setIsGeneratingCodes] = useState(false)
   const [generatedCodes, setGeneratedCodes] = useState<any[]>([])
   const [pendingLocations, setPendingLocations] = useState<AuthedLocation[]>([])
+  const [faucetBalance, setFaucetBalance] = useState<string | bigint>("-")
 
-    useEffect(() => {
-      getAuthedMapLocations()
-    }, [])
+  // Events
+  const [events, setEvents] = useState<Event[]>([])
+  const [eventsStatus, setEventsStatus] = useState<EventsStatus>("loading")
+  const [eventsError, setEventsError] = useState<string>("")
+  const [eventsSearch, setEventsSearch] = useState<string>("")
+  const [eventsPage, setEventsPage] = useState<number>(0)
+  const [eventsCount, setEventsCount] = useState<number>(10)
+  const [eventsExpired, setEventsExpired] = useState<boolean>(false)
+  const [eventsModalOpen, setEventsModalOpen] = useState<boolean>(false)
 
-    useEffect(() => {
-        setPendingLocations(authedMapLocations.filter((location) => location.approval === null))
-    }, [authedMapLocations])
+  const toggleNewEventModal = () => {
+    setEventsModalOpen(!eventsModalOpen)
+  }
 
-    useEffect(() => {
-      setSelectedWalletBalances()
-    }, [selectedWallet])
+  const handleAddEvent = async (ev: Event) => {
+    const url = "/events"
+    try {
+      const res = await authFetch(url, {
+        method: "POST",
+        body: JSON.stringify(ev)
+      })
+
+      const e = await res.json()
+      setEvents(e)
+    }
+    catch {
+      setEventsStatus("error")
+      setEventsError("Error adding event. Please try again later.")
+    }
+
+    await getEvents()
+    toggleNewEventModal()
+  }
+
+  const getFaucetBalance = async () => {
+    const decimals = 10 ** SFLUV_DECIMALS
+    const bal = await wallets[0]?.getBalanceOf(SFLUV_TOKEN, FAUCET_ADDRESS)
+
+    setFaucetBalance(bal ? bal / BigInt(decimals) : "-")
+  }
+
+
+
+  const getEvents = async () => {
+    const url = "/events"
+      + "?page=" + eventsPage
+      + "&count=" + eventsCount
+      + "&expired=" + eventsExpired
+      + (eventsSearch ? "&search=" + eventsSearch : "")
+    try {
+      const res = await authFetch(url)
+
+      const e = await res.json()
+      setEvents(e)
+    }
+    catch {
+      setEventsStatus("error")
+      setEventsError("Error fetching events. Please try again later.")
+    }
+  }
+
+  useEffect(() => {
+    getFaucetBalance()
+  }, [wallets])
+
+  useEffect(() => {
+    getAuthedMapLocations()
+    getEvents()
+  }, [])
+
+  useEffect(() => {
+      setPendingLocations(authedMapLocations.filter((location) => location.approval === null))
+  }, [authedMapLocations])
+
+  useEffect(() => {
+    setSelectedWalletBalances()
+  }, [selectedWallet])
+
 
 
 
@@ -568,10 +642,18 @@ export default function AdminPage() {
       </div>
 
       <Tabs defaultValue="merchants" className="space-y-6">
-        <TabsList className="grid w-full grid-cols-1">
+        <TabsList className="grid w-full grid-cols-2">
           {/* <TabsTrigger value="tokens">Token Management</TabsTrigger> */}
           <TabsTrigger value="merchants" className="relative">
             Merchant Approvals
+            {pendingLocations.length > 0 && (
+              <Badge variant="destructive" className="ml-2 h-5 w-5 rounded-full p-1.5 text-xs">
+                {pendingLocations.length}
+              </Badge>
+            )}
+          </TabsTrigger>
+          <TabsTrigger value="events" className="relative">
+            Events
             {pendingLocations.length > 0 && (
               <Badge variant="destructive" className="ml-2 h-5 w-5 rounded-full p-1.5 text-xs">
                 {pendingLocations.length}
@@ -1065,6 +1147,91 @@ export default function AdminPage() {
                               }}
                             >
                               Review Application
+                            </Button>
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="events" className="space-y-6">
+          <AddEventModal
+            open={eventsModalOpen}
+            onOpenChange={toggleNewEventModal}
+            handleAddEvent={handleAddEvent}
+          />
+          <Card>
+            <CardHeader className="pb-6 grid grid-cols-[2fr,1fr]">
+              <div>
+                <CardTitle className="flex items-center gap-2 text-xl">
+                  <CalendarIcon className="h-6 w-6" />
+                  Volunteer Events
+                </CardTitle>
+                <CardDescription className="text-base mt-2">Create and Manage Volunteer Events</CardDescription>
+                <div className="flex items-center gap-2 mt-3">
+                  <Badge className="text-sm px-3 py-1">
+                    {faucetBalance} SFLuv
+                  </Badge>
+                  <span className="text-sm text-muted-foreground">in faucet</span>
+                </div>
+              </div>
+              <div className="text-right">
+                <Button onClick={toggleNewEventModal}>
+                  + New Event
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {pendingLocations.length === 0 ? (
+                <div className="text-center py-8">
+                  <Building2 className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+                  <h3 className="text-lg font-medium">No {eventsExpired ? "" : "Active"} Events</h3>
+                  <p className="text-muted-foreground">Create a new event to see it here.</p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {events.map((event) => (
+                    <Card key={event.id} className="border-l-4 border-l-yellow-500">
+                      <CardContent className="p-4">
+                        <div className="flex items-start justify-between gap-4">
+                          <div className="flex items-start gap-4 flex-1">
+                            <div className="flex-1 space-y-2">
+                              <div>
+                                <h4 className="font-semibold">{event.title}</h4>
+                                <p className="text-sm text-muted-foreground">{event.description}</p>
+                              </div>
+                              {/* <div className="grid gap-1 text-sm">
+                                <div className="flex items-center gap-2">
+                                  <Mail className="h-3 w-3" />
+                                  <span>{location.email}</span>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <Phone className="h-3 w-3" />
+                                  <span>{location.phone}</span>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <MapPin className="h-3 w-3" />
+                                  <span>
+                                    {location.street}, {location.city}, {location.state}{" "}
+                                    {location.zip}
+                                  </span>
+                                </div>
+                              </div> */}
+                            </div>
+                          </div>
+                          <div className="flex gap-2">
+                            <Button
+                              size="sm"
+                              onClick={() => {
+
+                              }}
+                            >
+                              Details
                             </Button>
                           </div>
                         </div>

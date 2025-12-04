@@ -115,6 +115,58 @@ func (s *BotDB) NewEvent(ctx context.Context, e *structs.Event) (string, error) 
 	return id, nil
 }
 
+func (s *BotDB) GetEvents(ctx context.Context, e *structs.EventsRequest) ([]*structs.Event, error) {
+	offset := e.Page * e.Count
+
+	rows, err := s.db.Query(ctx, `
+		SELECT
+			id,
+			title,
+			description,
+			amount,
+			expiration
+		FROM
+			events
+		WHERE
+			CASE
+				WHEN ($1 AND expiration != 0) THEN expiration > EXTRACT(EPOCH from NOW())
+				ELSE TRUE
+			END
+		AND
+			(
+				title ~* $2
+				OR
+				description ~* $3
+			)
+		ORDER BY
+			expiration
+		LIMIT $4
+		OFFSET $5;
+	`, e.Expired, e.Search, e.Search, e.Count, offset)
+	if err != nil {
+		return nil, fmt.Errorf("error querying for events: %s", err)
+	}
+
+	events := []*structs.Event{}
+	for rows.Next() {
+		event := structs.Event{}
+		err = rows.Scan(
+			event.Id,
+			event.Title,
+			event.Description,
+			event.Amount,
+			event.Expiration,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("error scanning event row: %s", err)
+		}
+
+		events = append(events, &event)
+	}
+
+	return events, nil
+}
+
 func (s *BotDB) NewCode(ctx context.Context, code *structs.Code) (string, error) {
 	id := uuid.NewString()
 

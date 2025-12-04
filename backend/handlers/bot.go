@@ -111,10 +111,52 @@ func (s *BotService) NewCodesRequest(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (s *BotService) GetEvents(w http.ResponseWriter, r *http.Request) {
+	params := r.URL.Query()
+
+	count, err := strconv.Atoi(params.Get("count"))
+	if err != nil {
+		count = 10
+	}
+	page, err := strconv.Atoi(params.Get("page"))
+	if err != nil {
+		page = 0
+	}
+	search := params.Get("search")
+	expired := params.Get("expired") == "true"
+
+	events, err := s.db.GetEvents(r.Context(), &structs.EventsRequest{
+		Page:    page,
+		Count:   count,
+		Search:  search,
+		Expired: expired,
+	})
+	if err != nil {
+		fmt.Printf("error getting events: page %d, count %d, search %s, expired %t\n: %s", page, count, search, expired, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	bytes, err := json.Marshal(events)
+	if err != nil {
+		fmt.Printf("error marshalling events bytes: %s\n", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	w.Write(bytes)
+}
+
 // Get event codes by event id x, page y, and amount per page z (up to 100). Responds with array of event codes
 func (s *BotService) GetCodesRequest(w http.ResponseWriter, r *http.Request) {
 	params := r.URL.Query()
-	event := params.Get("event")
+
+	event := r.PathValue("event")
+	if event == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
 	count, err := strconv.Atoi(params.Get("count"))
 	if err != nil {
 		count = 100
