@@ -59,7 +59,7 @@ func (s *BotDB) CreateTables() error {
 			FOREIGN KEY (code) REFERENCES codes(id)
 		);
 
-		CREATE INDEX redemption_address ON redemptions(address);
+		CREATE INDEX IF NOT EXISTS redemption_address ON redemptions(address);
 	`)
 	if err != nil {
 		err = fmt.Errorf("error creating redemptions table: %s", err)

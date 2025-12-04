@@ -113,17 +113,25 @@ export default function AppProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if(!privyReady) return;
     if(!walletsReady) return;
-    if(pathname.startsWith("/faucet")) return;
+
+    if(pathname.startsWith("/faucet")) {
+      setUser(null)
+      setStatus("unauthenticated")
+      setWallets([])
+      setWalletsStatus("unavailable")
+      setError(null)
+      return
+    }
 
     if(!privyAuthenticated) {
+      console.log("check")
       _resetAppState()
-      privyLogout()
       return
     }
 
     _userLogin()
 
-  }, [privyReady, privyAuthenticated, walletsReady, pathname])
+  }, [privyReady, privyAuthenticated, walletsReady])
 
 
   useEffect(() => {
