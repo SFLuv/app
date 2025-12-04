@@ -117,6 +117,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
 
     if(!privyAuthenticated) {
       _resetAppState()
+      privyLogout()
       return
     }
 
