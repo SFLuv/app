@@ -120,8 +120,6 @@ export default function AppProvider({ children }: { children: ReactNode }) {
       return
     }
 
-    if(status === "authenticated") return;
-
     _userLogin()
 
   }, [privyReady, privyAuthenticated, walletsReady, pathname])
@@ -149,6 +147,8 @@ export default function AppProvider({ children }: { children: ReactNode }) {
   }
 
   const _userLogin = async () => {
+    if(status === "authenticated") return
+
     let userResponse: GetUserResponse | null
 
     setStatus("loading")
