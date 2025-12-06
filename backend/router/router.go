@@ -40,6 +40,7 @@ func AddBotRoutes(r *chi.Mux, s *handlers.BotService, a *handlers.AppService) {
 	r.Post("/events", withAdmin(s.NewEvent, a))
 	r.Post("/events/{event_id}/codes", withAdmin(s.NewCodesRequest, a))
 	r.Get("/events/{event}", withAdmin(s.GetCodesRequest, a))
+	r.Delete("/events/{event}", withAdmin(s.DeleteEvent, a))
 	r.Get("/events", withAdmin(s.GetEvents, a))
 	r.Post("/redeem", s.Redeem)
 }

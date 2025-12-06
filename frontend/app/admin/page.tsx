@@ -45,6 +45,7 @@ import {
   QrCode,
   Download,
   CalendarIcon,
+  Leaf,
 } from "lucide-react"
 import { useLocation } from "@/context/LocationProvider"
 import { AuthedLocation, UpdateLocationApprovalRequest } from "@/types/location"
@@ -52,6 +53,8 @@ import { AppWallet } from "@/lib/wallets/wallets"
 import { FAUCET_ADDRESS, SFLUV_DECIMALS, SFLUV_TOKEN } from "@/lib/constants"
 import { Event, EventsStatus } from "@/types/event"
 import { AddEventModal } from "@/components/events/add-event-modal"
+import { EventModal } from "@/components/events/event-modal"
+import EventCard from "@/components/events/event-card"
 
 // Mock PayPal accounts
 const mockPaypalAccounts = [
@@ -75,7 +78,7 @@ const mockPaypalAccounts = [
 
 
 export default function AdminPage() {
-  const { user, wallets, authFetch } = useApp()
+  const { user, wallets, authFetch, status } = useApp()
   const { getAuthedMapLocations, updateLocationApproval, authedMapLocations} = useLocation()
   const { toast } = useToast()
 
@@ -132,9 +135,34 @@ export default function AdminPage() {
   const [eventsCount, setEventsCount] = useState<number>(10)
   const [eventsExpired, setEventsExpired] = useState<boolean>(false)
   const [eventsModalOpen, setEventsModalOpen] = useState<boolean>(false)
+  const [eventDetailModalOpen, setEventDetailModalOpen] = useState<boolean>(false)
+  const [deleteEventError, setDeleteEventError] = useState<string | undefined>(undefined)
+  const [eventDetailsEvent, setEventDetailsEvent] = useState<Event | undefined>(undefined)
 
   const toggleNewEventModal = () => {
     setEventsModalOpen(!eventsModalOpen)
+  }
+
+  const toggleEventDetailModal = () => {
+    setEventDetailModalOpen(!eventDetailModalOpen)
+  }
+
+
+  const handleDeleteEvent = async (id: string) => {
+    const url = "/events/" + id
+    try {
+      const res = await authFetch(url, {
+        method: "DELETE",
+      })
+      if(res.status !== 200) throw new Error()
+    }
+    catch {
+      setEventsStatus("error")
+      setEventsError("Error adding event. Please try again later.")
+    }
+
+    await getEvents()
+    toggleEventDetailModal()
   }
 
   const handleAddEvent = async (ev: Event) => {
@@ -144,9 +172,6 @@ export default function AdminPage() {
         method: "POST",
         body: JSON.stringify(ev)
       })
-
-      const e = await res.json()
-      setEvents(e)
     }
     catch {
       setEventsStatus("error")
@@ -176,6 +201,7 @@ export default function AdminPage() {
       const res = await authFetch(url)
 
       const e = await res.json()
+      console.log(e)
       setEvents(e)
     }
     catch {
@@ -630,6 +656,14 @@ export default function AdminPage() {
   const getPaypalAvailableBalance = () => {
     if (selectedWallet == null) return "No wallet selected"
     return `$${selectedWalletBYUSDBalance.toLocaleString()} BYUSD`
+  }
+
+  if(status === "loading") {
+    return (
+      <div className="flex items-center justify-center min-h-[70vh]">
+        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-[#eb6c6c]"></div>
+      </div>
+    )
   }
 
   return (
@@ -1164,6 +1198,14 @@ export default function AdminPage() {
             open={eventsModalOpen}
             onOpenChange={toggleNewEventModal}
             handleAddEvent={handleAddEvent}
+            addEventError={eventsError}
+          />
+          <EventModal
+            event={eventDetailsEvent}
+            open={eventDetailModalOpen}
+            onOpenChange={toggleEventDetailModal}
+            handleDeleteEvent={handleDeleteEvent}
+            deleteEventError={deleteEventError}
           />
           <Card>
             <CardHeader className="pb-6 grid grid-cols-[2fr,1fr]">
@@ -1187,56 +1229,21 @@ export default function AdminPage() {
               </div>
             </CardHeader>
             <CardContent>
-              {pendingLocations.length === 0 ? (
+              {events.length === 0 ? (
                 <div className="text-center py-8">
-                  <Building2 className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+                  <Leaf className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
                   <h3 className="text-lg font-medium">No {eventsExpired ? "" : "Active"} Events</h3>
                   <p className="text-muted-foreground">Create a new event to see it here.</p>
                 </div>
               ) : (
                 <div className="space-y-4">
-                  {events.map((event) => (
-                    <Card key={event.id} className="border-l-4 border-l-yellow-500">
-                      <CardContent className="p-4">
-                        <div className="flex items-start justify-between gap-4">
-                          <div className="flex items-start gap-4 flex-1">
-                            <div className="flex-1 space-y-2">
-                              <div>
-                                <h4 className="font-semibold">{event.title}</h4>
-                                <p className="text-sm text-muted-foreground">{event.description}</p>
-                              </div>
-                              {/* <div className="grid gap-1 text-sm">
-                                <div className="flex items-center gap-2">
-                                  <Mail className="h-3 w-3" />
-                                  <span>{location.email}</span>
-                                </div>
-                                <div className="flex items-center gap-2">
-                                  <Phone className="h-3 w-3" />
-                                  <span>{location.phone}</span>
-                                </div>
-                                <div className="flex items-center gap-2">
-                                  <MapPin className="h-3 w-3" />
-                                  <span>
-                                    {location.street}, {location.city}, {location.state}{" "}
-                                    {location.zip}
-                                  </span>
-                                </div>
-                              </div> */}
-                            </div>
-                          </div>
-                          <div className="flex gap-2">
-                            <Button
-                              size="sm"
-                              onClick={() => {
-
-                              }}
-                            >
-                              Details
-                            </Button>
-                          </div>
-                        </div>
-                      </CardContent>
-                    </Card>
+                  {events.map((event: Event) => (
+                    <EventCard
+                      key={event.id}
+                      event={event}
+                      toggleEventModal={toggleEventDetailModal}
+                      setEventModalEvent={setEventDetailsEvent}
+                    />
                   ))}
                 </div>
               )}

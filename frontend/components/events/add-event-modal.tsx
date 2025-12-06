@@ -18,6 +18,7 @@ import { useApp } from "@/context/AppProvider"
 import { validateAddress } from "@/lib/utils"
 import { Contact } from "@/types/contact"
 import { Event } from "@/types/event"
+import { DateTimePicker } from "../ui/datetime-picker"
 
 interface AddEventModalProps {
   open: boolean
@@ -34,6 +35,12 @@ export function AddEventModal({ open, onOpenChange, handleAddEvent, addEventErro
   const [expiration, setExpiration] = useState<number>(0)
   const [addError, setAddError] = useState<string | null>(null)
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false)
+  const [datePickerOpen, setDatePickerOpen] = useState<boolean>(false)
+  const [timezone, setTimezone] = useState<string | undefined>(undefined)
+
+  useEffect(() => {
+    setTimezone(Intl.DateTimeFormat().resolvedOptions().timeZone)
+  }, [])
 
   useEffect(() => {
     setTitle("")
@@ -52,6 +59,11 @@ export function AddEventModal({ open, onOpenChange, handleAddEvent, addEventErro
 
     if(amount == 0) {
       setAddError("Code amount must be greater than 0.")
+      return
+    }
+
+    if(expiration === 0) {
+      setAddError("Expiration date must be set.")
       return
     }
 
@@ -147,14 +159,12 @@ export function AddEventModal({ open, onOpenChange, handleAddEvent, addEventErro
 
             <div className="space-y-2">
               <Label className="text-sm font-medium">Expiration *</Label>
-              <Input
-                value={codes}
-                placeholder="Leave blank for no expiration."
-                className="font-mono text-xs sm:text-sm h-11"
-                onChange={(e) => {
-                  setExpiration(Number(e.target.value))
-                }}
-                autoComplete="off"
+              <DateTimePicker
+                date={expiration}
+                setDate={setExpiration}
+                open={datePickerOpen}
+                setOpen={setDatePickerOpen}
+                timezone={timezone}
                 />
             </div>
 

@@ -193,6 +193,23 @@ func (s *BotService) GetCodesRequest(w http.ResponseWriter, r *http.Request) {
 	w.Write(bytes)
 }
 
+func (s *BotService) DeleteEvent(w http.ResponseWriter, r *http.Request) {
+	event := r.PathValue("event")
+	if event == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	err := s.db.DeleteEvent(r.Context(), event)
+	if err != nil {
+		fmt.Printf("error deleting event %s: %s\n", event, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+}
+
 func (s *BotService) GetCodes(event string, count, page int) ([]*structs.Code, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
