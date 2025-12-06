@@ -6,7 +6,8 @@ import { polygon } from "viem/chains"
 export const CHAIN_ID = config.community.primary_token.chain_id
 export const CHAIN = chain
 export const SFLUV_TOKEN = config.community.primary_token.address as Address
-export const BYUSD_TOKEN = "0x688e72142674041f8f6Af4c808a4045cA1D6aC82" as Address
+export const BYUSD_TOKEN = process.env.NEXT_PUBLIC_BYUSD_ADDRESS as Address
+export const FAUCET_ADDRESS = process.env.NEXT_PUBLIC_FAUCET_ADDRESS as Address
 export const PRIVY_ID = process.env.NEXT_PUBLIC_PRIVY_APP_ID as string
 export const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8080"
 export const COMMUNITY_TOKEN_INDEX = Object.keys(config.tokens)[0]

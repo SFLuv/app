@@ -115,6 +115,108 @@ func (s *BotDB) NewEvent(ctx context.Context, e *structs.Event) (string, error) 
 	return id, nil
 }
 
+func (s *BotDB) GetEvents(ctx context.Context, e *structs.EventsRequest) ([]*structs.Event, error) {
+	offset := e.Page * e.Count
+
+	rows, err := s.db.Query(ctx, `
+		SELECT
+			e.id,
+			e.title,
+			e.description,
+			e.amount,
+			e.expiration,
+			COUNT(c.id)
+		FROM
+			events e
+		LEFT JOIN
+			codes c
+		ON
+			e.id = c.event
+
+		WHERE
+			CASE
+				WHEN ($1 AND e.expiration != 0) THEN e.expiration > EXTRACT(EPOCH from NOW())
+				ELSE TRUE
+			END
+		AND
+			(
+				e.title ~* $2
+				OR
+				e.description ~* $3
+			)
+		GROUP BY
+			e.id
+		ORDER BY
+			e.expiration
+		LIMIT $4
+		OFFSET $5;
+	`, !e.Expired, e.Search, e.Search, e.Count, offset)
+	if err != nil {
+		return nil, fmt.Errorf("error querying for events: %s", err)
+	}
+
+	events := []*structs.Event{}
+	for rows.Next() {
+		event := structs.Event{}
+		err = rows.Scan(
+			&event.Id,
+			&event.Title,
+			&event.Description,
+			&event.Amount,
+			&event.Expiration,
+			&event.Codes,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("error scanning event row: %s", err)
+		}
+
+		events = append(events, &event)
+	}
+
+	return events, nil
+}
+
+func (s *BotDB) DeleteEvent(ctx context.Context, id string) error {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("error beginning delete event transaction: %s", err)
+	}
+	defer tx.Rollback(ctx)
+
+	fmt.Println(id)
+
+	_, err = tx.Exec(ctx, `
+		DELETE FROM
+			codes
+		USING
+			events
+		WHERE
+			codes.event = events.id
+		AND
+			events.id = $1;
+	`, id)
+	if err != nil {
+		return fmt.Errorf("error deleting event %s codes: %s", id, err)
+	}
+
+	_, err = tx.Exec(ctx, `
+		DELETE FROM
+			events
+		WHERE
+			id = $1;
+	`, id)
+	if err != nil {
+		return fmt.Errorf("error deleting event %s: %s", id, err)
+	}
+
+	err = tx.Commit(ctx)
+	if err != nil {
+		return fmt.Errorf("error committing delete event %s transaction: %s", id, err)
+	}
+
+	return nil
+}
+
 func (s *BotDB) NewCode(ctx context.Context, code *structs.Code) (string, error) {
 	id := uuid.NewString()
 

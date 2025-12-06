@@ -7,7 +7,7 @@ import { Address, createWalletClient, custom, encodeFunctionData, Hash, Hex, hex
 import { entryPoint07Address, entryPoint08Address, formatUserOperation, PaymasterClient, toPackedUserOperation, ToSmartAccountReturnType, UserOperation } from "viem/account-abstraction";
 import { depositFor, execute, transfer, withdrawTo } from "@/lib/abi";
 import { client } from "@/lib/paymaster"
-import { BACKEND, CHAIN, CHAIN_ID, COMMUNITY, COMMUNITY_ACCOUNT, FACTORY, PAYMASTER, TOKEN } from "@/lib/constants";
+import { BACKEND, CHAIN, CHAIN_ID, COMMUNITY, COMMUNITY_ACCOUNT, FACTORY, PAYMASTER } from "@/lib/constants";
 import { bundler, cw_bundler } from "@/lib/paymaster/client";
 import config from "@/app.config";
 import { UserOp } from "@citizenwallet/sdk";
@@ -124,7 +124,6 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     }
 
     if(!privyAuthenticated) {
-      console.log("check")
       _resetAppState()
       return
     }
