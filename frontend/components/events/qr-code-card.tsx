@@ -6,7 +6,7 @@ export const QRCodeCard = ({ code }: { code: string }) => {
     + process.env.NEXT_PUBLIC_APP_REDEEM_URL_POST
 
   return (
-    <div style={{textAlign: "center", justifyContent: "center", color: "black", height: "550px", width: "425px", margin: "auto", overflowY: "hidden", marginTop: "10px"}}>
+    <div style={{textAlign: "center", justifyContent: "center", color: "black", height: "550px", width: "425px", margin: "auto", overflowY: "hidden", paddingTop: "10px"}}>
       <img src="../icon.png" style={{
         height: "auto",
         width: "30%",
