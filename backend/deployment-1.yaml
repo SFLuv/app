@@ -1,0 +1,122 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: deployment-1
+  namespace: default
+  labels:
+    app: deployment-1
+    app.kubernetes.io/managed-by: cloud-console
+spec:
+  progressDeadlineSeconds: 600
+  replicas: 3
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      app: deployment-1
+      app.kubernetes.io/managed-by: cloud-console
+  strategy:
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 25%
+    type: RollingUpdate
+  template:
+    metadata:
+      creationTimestamp: null
+      labels:
+        app: deployment-1
+        app.kubernetes.io/managed-by: cloud-console
+    spec:
+      serviceAccountName: sfluv-ksa
+      containers:
+      - env:
+        - name: PORT
+          value: "8080"
+        - name: DB_HOST
+          value: localhost:5432
+        - name: DB_USER
+          value: postgres
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: sfluv-secrets
+              key: db-password
+        - name: ADMIN_KEY
+          valueFrom:
+            secretKeyRef:
+              name: sfluv-secrets
+              key: admin-key
+        - name: BOT_KEY
+          valueFrom:
+            secretKeyRef:
+              name: sfluv-secrets
+              key: bot-key
+        - name: TOKEN_ID
+          value: 0x881cad4f885c6701d8481c0ed347f6d35444ea7e
+        - name: TOKEN_DECIMALS
+          value: "1000000000000000000"
+        - name: RPC_URL
+          value: https://rpc.berachain.com/
+        - name: PRIVY_APP_ID
+          value: cmc3nhnmc004yl10mwcmj4be3
+        - name: PRIVY_VKEY
+          valueFrom:
+            secretKeyRef:
+              name: sfluv-secrets
+              key: privy-vkey
+        image: us-central1-docker.pkg.dev/sfluv-app/sfluv-images/backend_sfluv@sha256:8c0b5e88c86be1c54e12e5358362a18f048fa479c42a34b6721dffaf62638a9d
+        imagePullPolicy: IfNotPresent
+        name: backend-sfluv-sha256-1
+        volumeMounts:
+        - name: secrets-store
+          mountPath: "/mnt/secrets"
+          readOnly: true
+        resources:
+          limits:
+            ephemeral-storage: 1Gi
+          requests:
+            cpu: 500m
+            ephemeral-storage: 1Gi
+            memory: 2Gi
+        securityContext:
+          capabilities:
+            drop:
+            - NET_RAW
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+      - name: cloud-sql-proxy
+        image: gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.8.0
+        args:
+          - "--structured-logs"
+          - "--port=5432"
+          - "sfluv-app:us-central1:sfluv-app-prod"
+        securityContext:
+          runAsNonRoot: true
+          capabilities:
+            drop:
+            - ALL
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+          limits:
+            cpu: "200m"
+            memory: "256Mi"
+      volumes:
+      - name: secrets-store
+        csi:
+          driver: secrets-store-gke.csi.k8s.io
+          readOnly: true
+          volumeAttributes:
+            secretProviderClass: sfluv-secrets-spc
+      dnsPolicy: ClusterFirst
+      restartPolicy: Always
+      schedulerName: default-scheduler
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      terminationGracePeriodSeconds: 30
+      tolerations:
+      - effect: NoSchedule
+        key: kubernetes.io/arch
+        operator: Equal
+        value: amd64

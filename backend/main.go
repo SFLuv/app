@@ -19,11 +19,13 @@ func main() {
 
 	bdb, err := db.PgxDB("bot")
 	if err != nil {
-		log.Fatal(fmt.Sprintf("error initializing bot db: %s\n", err))
+		log.Fatalf("error initializing bot db: %s\n", err)
+		os.Exit(1)
 	}
 	pdb, err := db.PgxDB("app")
 	if err != nil {
-		log.Fatal(fmt.Sprintf("error initializing app db: %s\n", err))
+		log.Fatalf("error initializing app db: %s\n", err)
+		os.Exit(1)
 	}
 
 	botDb := db.Bot(bdb)
@@ -33,7 +35,18 @@ func main() {
 		return
 	}
 
-	appLogger, err := logger.New("./logs/prod/app.log", "APP: ")
+	appLogFile := "./logs/prod/app.log"
+
+	// create folders if they don't exist
+	if _, err := os.Stat("./logs/prod"); os.IsNotExist(err) {
+		err = os.MkdirAll("./logs/prod", os.ModePerm)
+		if err != nil {
+			fmt.Printf("error creating log directories: %s\n", err)
+			return
+		}
+	}
+
+	appLogger, err := logger.New(appLogFile, "APP: ")
 	if err != nil {
 		fmt.Printf("error initializing app logger: %s\n", err)
 		return
