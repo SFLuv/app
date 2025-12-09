@@ -124,6 +124,7 @@ export function MerchantApprovalForm() {
   const resetForm = () => {
     setError(null);
     setDescription("");
+    setStreet("");
     setPrimaryContactEmail("");
     setPrimaryContactFirstName("");
     setPrimaryContactLastName("");
@@ -163,7 +164,7 @@ export function MerchantApprovalForm() {
       name: googleSubLocation.name,
       description: description,
       type: googleSubLocation.type,
-      street: googleSubLocation.street,
+      street: street,
       city: googleSubLocation.city,
       state: googleSubLocation.state,
       zip: googleSubLocation.zip,
@@ -197,7 +198,7 @@ export function MerchantApprovalForm() {
     setSearchKey(prev => prev + 1)
     setIsSubmitting(false);
     resetForm()
-    router.replace("/settings")
+    router.replace("/map")
   }
 
   return (
@@ -215,8 +216,11 @@ export function MerchantApprovalForm() {
               <Label htmlFor="business-name" className="text-black dark:text-white">
                 Search for Your Location Name
               </Label>
-              <PlaceAutocomplete key={searchKey} setGoogleSubLocation={setGoogleSubLocation}
-              setBusinessPhone={setBusinessPhone}/>
+              <PlaceAutocomplete
+              key={searchKey}
+              setGoogleSubLocation={setGoogleSubLocation}
+              setBusinessPhone={setBusinessPhone}
+              setStreet={setStreet}/>
             </div>
 
             <div className="space-y-2">
@@ -260,6 +264,19 @@ export function MerchantApprovalForm() {
                   />
                 </div>
               </div>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="street" className="text-black dark:text-white">
+                Street Address
+              </Label>
+              <Input
+                id="street"
+                value={street}
+                onChange={(e) => setDescription(e.target.value)}
+                className="text-black dark:text-white bg-secondary"
+                required
+              />
             </div>
 
             {/* Primary Contact Information */}

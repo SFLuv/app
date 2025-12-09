@@ -112,6 +112,7 @@ export default function LocationProvider({ children }: { children: ReactNode }) 
             setMapLocationsStatus("unavailable")
             console.error("error adding new location")
         }
+        setMapLocationsStatus("available")
       }
 
     const getMapLocations = async () => {
