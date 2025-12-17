@@ -9,6 +9,13 @@ type Event struct {
 	Expiration  uint64 `json:"expiration"`
 }
 
+type EventsRequest struct {
+	Search  string `json:"search"`
+	Page    int    `json:"page"`
+	Count   int    `json:"count"`
+	Expired bool   `json:"expired"`
+}
+
 type Code struct {
 	Id       string `json:"id"`
 	Redeemed bool   `json:"redeemed"`
