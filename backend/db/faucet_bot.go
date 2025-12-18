@@ -330,30 +330,30 @@ func (s *BotDB) Redeem(ctx context.Context, id string, account string) (uint64, 
 
 	row := tx.QueryRow(context.Background(), `
 		SELECT
-			id
-		FROM events
+			event
+		FROM
+			codes c
+		JOIN
+			redemptions r
+		ON
+			c.id = r.code
 		WHERE
-			(
-				SELECT (event)
-				FROM codes
-				WHERE id = $1
-			) = (
+			r.address = $1
+		AND
+			c.event = (
 				SELECT
-					(event)
-				FROM codes
+					event
+				FROM
+					codes
 				WHERE
-					id = (
-						SELECT
-							(code)
-						FROM redemptions
-						WHERE address = $2
-					)
+					id = $2
 			);
-	`, id, account)
+	`, account, id)
 
 	var redeemed string
 	err = row.Scan(&redeemed)
 	if err != pgx.ErrNoRows {
+		fmt.Println(err)
 		err = fmt.Errorf("user redeemed")
 		tx.Rollback(context.Background())
 		return 0, nil, err
