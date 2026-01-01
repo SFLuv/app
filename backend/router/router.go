@@ -3,6 +3,7 @@ package router
 import (
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/SFLuv/app/backend/handlers"
 	"github.com/go-chi/chi/v5"
@@ -15,9 +16,11 @@ import (
 func New(s *handlers.BotService, p *handlers.AppService) *chi.Mux {
 	r := chi.NewRouter()
 
+	alchemyOrigins := strings.Split(os.Getenv("ALCHEMY_WEBHOOK_ORIGINS"), ",")
+
 	r.Use(middleware.Logger)
 	r.Use(cors.Handler(cors.Options{
-		AllowedOrigins:   []string{"*"},
+		AllowedOrigins:   append([]string{"*"}, alchemyOrigins...),
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token", "Access-Token", "X-Admin-Key"},
 		ExposedHeaders:   []string{"Link"},
@@ -77,6 +80,10 @@ func AddContactRoutes(r *chi.Mux, s *handlers.AppService) {
 	r.Get("/contacts", withAuth(s.GetContacts))
 	r.Put("/contacts", withAuth(s.UpdateContact))
 	r.Delete("/contacts", withAuth(s.DeleteContact))
+}
+
+func AddWebhookRoutes(r *chi.Mux, s *handlers.AppService) {
+	r.Post("/webhooks", s.ProcessHook)
 }
 
 func withAuth(handlerFunc http.HandlerFunc) http.HandlerFunc {

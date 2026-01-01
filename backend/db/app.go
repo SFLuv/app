@@ -118,5 +118,25 @@ func (s *AppDB) CreateTables() error {
 		return fmt.Errorf("error creating contacts table: %s", err)
 	}
 
+	_, err = s.db.Exec(context.Background(), `
+		CREATE TABLE IF NOT EXISTS transaction_subscriptions(
+			address TEXT PRIMARY KEY,
+			wallet TEXT NOT NULL REFERENCES wallets(id)
+		);
+	`)
+
+	_, err = s.db.Exec(context.Background(), `
+		CREATE TABLE IF NOT EXISTS transactions(
+			id TEXT NOT NULL,
+			wallet TEXT NOT NULL REFERENCES wallets(id),
+			direction TEXT NOT NULL,
+			counterparty TEXT NOT NULL,
+			type TEXT NOT NULL,
+			amount FLOAT NOT NULL,
+			timestamp_seconds INTEGER DEFAULT 0,
+			PRIMARY KEY (id, wallet)
+		);
+	`)
+
 	return nil
 }
