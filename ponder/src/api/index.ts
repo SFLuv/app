@@ -6,30 +6,33 @@ import { addHook, deleteHook, PonderHook } from "../db";
 
 const app = new Hono();
 
+app.use("/", async (c, next) => {
+  const adminKey = process.env.ADMIN_KEY
+  const authKey = c.req.header("X-Admin-Key")
+
+  if(adminKey != authKey) {
+    return c.status(401)
+  }
+
+  return next()
+})
+
 app.use("/sql/*", client({ db, schema }));
 
 app.use("/", graphql({ db, schema }));
 app.use("/graphql", graphql({ db, schema }));
 
 app.post("/hooks", async (c) => {
-  const adminKey = process.env.ADMIN_KEY
-  const authKey = c.req.header("X-Admin-Key")
-  if(adminKey != authKey) {
-    return c.status(401)
-  }
+
 
   const hookRequest = (await c.req.json()) as PonderHook
 
   try {
-    const hookResponse = await addHook(hookRequest)
-    const ping = await fetch(hookResponse.url, {
-      method: "POST",
-      body: JSON.stringify(hookResponse)
-    })
+    const ping = await fetch(hookRequest.url)
     if(!ping.ok) {
-      await deleteHook(hookResponse.id)
       return c.status(400)
     }
+    const hookResponse = await addHook(hookRequest)
     return c.json(hookResponse, 201)
   }
   catch(error) {

@@ -5,6 +5,9 @@ import {
   approvalEvent,
   transferEvent,
 } from "ponder:schema";
+import { createTables, getHooks, PonderHook } from "./db";
+
+createTables()
 
 ponder.on("ERC20:Transfer", async ({ event, context }) => {
   await context.db
@@ -34,6 +37,30 @@ ponder.on("ERC20:Transfer", async ({ event, context }) => {
     from: event.args.from,
     to: event.args.to,
   });
+
+  let deduped: Record<string, boolean> = {};
+  (await Promise.all([
+    getHooks(event.args.from),
+    event.args.to === event.args.from ? undefined : getHooks(event.args.to)
+  ]))
+  .map((set: PonderHook[] | undefined) => {
+    if(!set) return
+    set.forEach((hook) => {
+      const hookBody = {
+        to: event.args.to,
+        from: event.args.from,
+        hash: event.transaction.hash,
+        amount: event.args.amount.toString()
+      }
+
+      if(deduped[hook.url]) return
+      deduped[hook.url] = true
+      fetch(hook.url, {
+        method: "POST",
+        body: JSON.stringify(hookBody)
+      })
+    })
+  })
 });
 
 ponder.on("ERC20:Approval", async ({ event, context }) => {
