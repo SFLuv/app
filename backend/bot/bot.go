@@ -7,6 +7,7 @@ import (
 	"math/big"
 	"os"
 
+	"github.com/SFLuv/app/backend/abi"
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -18,6 +19,7 @@ import (
 type IBot interface {
 	Key() string
 	Send(amount uint64, address string) error
+	Drain(address common.Address) error
 }
 
 type Bot struct {
@@ -60,6 +62,91 @@ func (b *Bot) Send(amount uint64, address string) error {
 
 	paddedAmount := common.LeftPadBytes(tokenAmount.Bytes(), 32)
 	paddedAddress := common.LeftPadBytes(toAddress.Bytes(), 32)
+
+	var data []byte
+	data = append(data, method...)
+	data = append(data, paddedAddress...)
+	data = append(data, paddedAmount...)
+
+	gasPrice, err := b.client.SuggestGasPrice(context.Background())
+	if err != nil {
+		err = fmt.Errorf("error getting suggested gas price: %s", err)
+		return err
+	}
+
+	privateKey, err := crypto.HexToECDSA(b.pKey)
+	if err != nil {
+		err = fmt.Errorf("error parsing private key: %s", err)
+		return err
+	}
+
+	publicKey := privateKey.Public()
+	publicKeyECDSA, ok := publicKey.(*ecdsa.PublicKey)
+	if !ok {
+		err = fmt.Errorf("error asserting type: publicKey is not of type ecdsa.PublicKey")
+		return err
+	}
+
+	fromAddress := crypto.PubkeyToAddress(*publicKeyECDSA)
+	nonce, err := b.client.PendingNonceAt(context.Background(), fromAddress)
+	if err != nil {
+		err = fmt.Errorf("error retrieving nonce: %s", err)
+		return err
+	}
+
+	gasLimit, err := b.client.EstimateGas(context.Background(), ethereum.CallMsg{
+		From: fromAddress,
+		To:   &tokenAddress,
+		Data: data,
+	})
+	if err != nil {
+		err = fmt.Errorf("error estimating gas cost: %s", err)
+		return err
+	}
+
+	// changed from value to tokenAmount, now not using value
+	tx := types.NewTransaction(nonce, tokenAddress, big.NewInt(0), gasLimit, gasPrice, data)
+
+	chainId, err := b.client.NetworkID(context.Background())
+	if err != nil {
+		err = fmt.Errorf("error getting chainId from rpc node: %s", err)
+		return err
+	}
+
+	signedTx, err := types.SignTx(tx, types.NewEIP155Signer(chainId), privateKey)
+	if err != nil {
+		err = fmt.Errorf("error signing transaction: %s", err)
+		return err
+	}
+
+	err = b.client.SendTransaction(context.Background(), signedTx)
+	if err != nil {
+		err = fmt.Errorf("error sending signed transaction: %s", err)
+		return err
+	}
+
+	fmt.Printf("Sent Transaction: %s\n", signedTx.Hash().Hex())
+	// return err if err
+	return nil
+}
+
+func (b *Bot) Drain(address common.Address) error {
+
+	tokenAddress := common.HexToAddress(b.tokenId)
+	method := methodId("transfer(address,uint256)")
+
+	contract, err := abi.NewSFLUVv2(tokenAddress, b.client)
+	if err != nil {
+		return fmt.Errorf("error creating sfluv contract instance: %s", err)
+	}
+
+	amount, err := contract.BalanceOf(nil, common.HexToAddress(os.Getenv("BOT_ADDRESS")))
+	if err != nil {
+		return fmt.Errorf("error getting bot balance: %s", err)
+	}
+
+	paddedAmount := common.LeftPadBytes(amount.Bytes(), 32)
+	paddedAddress := common.LeftPadBytes(address.Bytes(), 32)
 
 	var data []byte
 	data = append(data, method...)
