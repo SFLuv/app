@@ -448,12 +448,10 @@ export default function AppProvider({ children }: { children: ReactNode }) {
   const login = async () => {
     if(!privyReady) {
       setError("privy not ready")
-      console.log("Should be returning rn")
       return
     }
 
     if(!privyAuthenticated) {
-      console.log("got to privy login anyways")
       try {
         await privyLogin()
         // move user data implementation to helper functions called in useEffect instead of passing into login() for real auth
