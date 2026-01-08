@@ -103,9 +103,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     wallets: privyWallets,
     ready: walletsReady
   } = useWallets();
-  const {
-    replace
-  } = useRouter()
+  const router = useRouter()
   const pathname = usePathname()
 
 
@@ -185,7 +183,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
   }
 
   const _resetAppState = async () => {
-    replace("/")
+    router.replace("/")
     setUser(null)
     setStatus("unauthenticated")
     setWallets([])

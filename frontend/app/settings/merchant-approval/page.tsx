@@ -25,10 +25,12 @@ export default function MerchantApprovalPage() {
   }
 
   useEffect(() => {
+    if (status === "unauthenticated") {
     login()
-    router.replace("/settings/merchant-approval")
+    }
+    router.push("/settings/merchant-approval")
     addGoogleScript()
-  }, [])
+  }, [status])
 
   if (status === "loading") {
     return (
