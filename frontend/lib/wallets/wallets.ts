@@ -174,17 +174,71 @@ export class AppWallet {
     return this._execTx(t.wallet, t.signer, callData)
   }
 
-  unwrap = async (amount: bigint, to: Address): Promise<TxState | null>  => {
+  unwrap = async (amount: number): Promise<TxState | null>  => {
     const t = this._beforeTx()
     if(!t) return null
 
-    const callData = encodeFunctionData({
-      abi: [withdrawTo],
-      functionName: "withdrawTo",
-      args: [to || t.wallet.address, amount]
-    })
+    const sourceAmount = String(amount * (10 ** BYUSD_DECIMALS))
+    const destAmountMin = String((amount * (10 ** BYUSD_DECIMALS) * .95))
 
-    return this._execTx(t.wallet, t.signer, callData)
+    const params = new URLSearchParams({
+      srcToken: "0x688e72142674041f8f6Af4c808a4045cA1D6aC82",
+      srcChainKey: "bera",
+      dstToken: "0x6c3ea9036406852006290770BEdFcAbA0e23A0e8",
+      dstChainKey: "ethereum",
+      srcAddress: t.wallet.address,
+      dstAddress:t.wallet.address,
+      srcAmount: sourceAmount,
+      dstAmountMin: destAmountMin
+      });
+
+      console.log(t.wallet.address)
+      console.log("Signer: " + JSON.stringify(t.signer, null, 2))
+
+    const url = `https://stargate.finance/api/v1/quotes?${params.toString()}`;
+
+    const res = await fetch(url, {
+      method: "GET",
+      headers: {
+        "Accept": "application/json"
+      }
+    });
+
+    const response = await res.json();
+    // check if response got anything
+    if (!response.quotes || response.quotes.length === 0) {
+    console.error("No quotes returned from the API:", response);
+    return null;
+  }
+
+      // Access route data from API response
+    const route = response.quotes[0]; // First route (oft/v2)
+
+    // Access transaction steps
+    const bridgeStep = route.steps[0]; // First step (bridge)
+
+    const bridgeTransactionValue = BigInt(bridgeStep.transaction.value)
+    const bridgeTransactionData = bridgeStep.transaction.data
+
+    let receipt: TxState = {
+        sending: false,
+        error: null,
+        hash: null
+      }
+
+    const data = hexToBytes(bridgeTransactionData)
+
+    try {
+      const hash = await cw_bundler.call(t.signer, BYUSD_TOKEN, t.wallet.address, data, bridgeTransactionValue, undefined, undefined, { smartAccountIndex: this.index ? Number(this.index) : undefined })
+      receipt.hash = hash
+    }
+    catch(error) {
+      receipt.error = "error sending transaction: check logs"
+      console.error(error)
+    }
+
+    console.log(receipt)
+    return receipt
   }
 
   send = async (amount: bigint, to: Address): Promise<TxState | null> => {
@@ -198,6 +252,19 @@ export class AppWallet {
     })
 
     return this._execTx(t.wallet, t.signer, callData)
+  }
+
+  sendBYUSD = async (amount: bigint, to: Address): Promise<TxState | null> => {
+    const t = this._beforeTx()
+    if(!t) return null
+
+    const callData = encodeFunctionData({
+      abi: [transfer],
+      functionName: "transfer",
+      args: [to, amount]
+    })
+
+    return this._execTx(t.wallet, t.signer, callData, BYUSD_TOKEN)
   }
 
   getBalance = async (token: Address): Promise<bigint | null> => {

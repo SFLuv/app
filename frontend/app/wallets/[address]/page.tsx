@@ -5,7 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
-import { Send, QrCode, Eye, EyeOff, RefreshCw, Settings, ArrowLeft, Wallet, Pencil, Check, X } from "lucide-react"
+import { Send, QrCode, Eye, EyeOff, RefreshCw, Settings, ArrowLeft, Wallet, Pencil, Check, X, Banknote } from "lucide-react"
 import { SendCryptoModal } from "@/components/wallets/send-crypto-modal"
 import { ReceiveCryptoModal } from "@/components/wallets/receive-crypto-modal"
 import { TransactionHistoryList } from "@/components/wallets/transaction-history-list"
@@ -17,6 +17,7 @@ import { useWallets } from "@privy-io/react-auth"
 import { useApp } from "@/context/AppProvider"
 import { CHAIN } from "@/lib/constants"
 import { Input } from "@/components/ui/input"
+import { CashOutCryptoModal } from "@/components/wallets/cashOut_crypto_modal"
 
 export default function WalletDetailsPage() {
   const params = useParams()
@@ -40,6 +41,7 @@ export default function WalletDetailsPage() {
 
 
   const [showSendModal, setShowSendModal] = useState(false)
+  const [showCashoutModal, setShowCashoutModal] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [showReceiveModal, setShowReceiveModal] = useState(false)
   const [showBalance, setShowBalance] = useState(true)
@@ -113,6 +115,7 @@ export default function WalletDetailsPage() {
       console.error(error)
     }
   }
+
 
   useEffect(() => {
     if(error) console.error(error)
@@ -254,7 +257,7 @@ export default function WalletDetailsPage() {
           {/* Quick Actions */}
           <Card>
             <CardContent className="p-3 sm:p-4">
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-3 gap-3">
                 <Button
                   onClick={() => setShowSendModal(true)}
                   className="h-14 sm:h-16 flex-col gap-1.5 sm:gap-2 text-sm"
@@ -269,6 +272,14 @@ export default function WalletDetailsPage() {
                 >
                   <QrCode className="h-4 w-4 sm:h-5 sm:w-5" />
                   <span>Receive</span>
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => setShowCashoutModal(true)}
+                  className="h-14 sm:h-16 flex-col gap-1.5 sm:gap-2 text-sm hover:bg-primary/65"
+                >
+                  <Banknote className="h-4 w-4 sm:h-5 sm:w-5" />
+                  <span>Cash Out SFLuv</span>
                 </Button>
               </div>
             </CardContent>
@@ -348,6 +359,7 @@ export default function WalletDetailsPage() {
       {/* Modals */}
       <SendCryptoModal open={showSendModal} onOpenChange={setShowSendModal} wallet={wallet} balance={balance || 0} />
       <ReceiveCryptoModal open={showReceiveModal} onOpenChange={setShowReceiveModal} wallet={wallet} />
+      <CashOutCryptoModal open={showCashoutModal} onOpenChange={setShowCashoutModal} wallet={wallet} />
     </div>
   )
 }

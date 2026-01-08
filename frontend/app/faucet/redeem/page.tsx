@@ -72,6 +72,7 @@ const Page = () => {
       }
 
       setSuccess(true)
+      
       setTimeout(() => {
         router.replace("/map?sidebar=false")
       }, 2000)

@@ -7,7 +7,8 @@ import { MerchantApprovalForm } from "@/components/merchant/merchant-approval-fo
 import { GOOGLE_MAPS_API_KEY } from "@/lib/constants"
 
 export default function MerchantApprovalPage() {
-  const { status } = useApp()
+  const { status, login } = useApp()
+  const router = useRouter()
 
   const addGoogleScript = async () => {
     const existingScript = document.querySelector<HTMLScriptElement>(
@@ -23,6 +24,8 @@ export default function MerchantApprovalPage() {
   }
 
   useEffect(() => {
+    login()
+    router.replace("/settings/merchant-approval")
     addGoogleScript()
   }, [])
 
