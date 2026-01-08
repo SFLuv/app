@@ -5,9 +5,12 @@ import { useRouter } from "next/navigation"
 import { useApp } from "@/context/AppProvider"
 import { MerchantApprovalForm } from "@/components/merchant/merchant-approval-form"
 import { GOOGLE_MAPS_API_KEY } from "@/lib/constants"
+import { Button } from "@/components/ui/button"
+import { Card, CardContent } from "@/components/ui/card"
 
 export default function MerchantApprovalPage() {
-  const { status } = useApp()
+  const { status, login } = useApp()
+  const router = useRouter()
 
   const addGoogleScript = async () => {
     const existingScript = document.querySelector<HTMLScriptElement>(
@@ -23,6 +26,8 @@ export default function MerchantApprovalPage() {
   }
 
   useEffect(() => {
+    login()
+    router.replace("/settings/merchant-approval")
     addGoogleScript()
   }, [])
 
@@ -32,6 +37,31 @@ export default function MerchantApprovalPage() {
         <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-[#eb6c6c]"></div>
       </div>
     )
+  }
+
+  if (status === "unauthenticated") {
+    return (<Card className="border-[#eb6c6c]/40 bg-[#eb6c6c]/5">
+        <CardContent className="p-6 space-y-4 text-center">
+          <p className="text-sm text-[#8f2e2e]">
+            You must have an <span className="font-semibold">SFLUV account</span>{" "}
+            in order to submit a merchant approval form.
+          </p>
+
+          <p className="text-sm text-[#8f2e2e]">
+            Click the button below to create an account or log in if you already
+            have one.
+          </p>
+
+          <Button
+            variant="default"
+            size="lg"
+            className="bg-[#eb6c6c] hover:bg-[#d55c5c]"
+            onClick={login}
+          >
+            Create Account / Log In
+          </Button>
+        </CardContent>
+      </Card>)
   }
 
   return (
