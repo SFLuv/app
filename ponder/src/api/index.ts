@@ -28,7 +28,11 @@ app.post("/hooks", async (c) => {
   const hookRequest = (await c.req.json()) as PonderHook
 
   try {
-    const ping = await fetch(hookRequest.url)
+    const ping = await fetch(hookRequest.url, {
+      headers: {
+        "X-Admin-Key": process.env.ADMIN_KEY as string
+      }
+    })
     if(!ping.ok) {
       return c.status(400)
     }

@@ -118,5 +118,20 @@ func (s *AppDB) CreateTables() error {
 		return fmt.Errorf("error creating contacts table: %s", err)
 	}
 
+	_, err = s.db.Exec(context.Background(), `
+		CREATE TABLE IF NOT EXISTS ponder_subscriptions(
+			id INTEGER PRIMARY KEY,
+			address TEXT NOT NULL,
+			type TEXT NOT NULL,
+			owner TEXT NOT NULL REFERENCES users(id),
+			data TEXT
+		);
+
+		CREATE INDEX ponder_subscription_address ON ponder_subscriptions(address);
+	`)
+	if err != nil {
+		return fmt.Errorf("error creating ponder subscriptions table: %s", err)
+	}
+
 	return nil
 }

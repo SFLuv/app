@@ -29,7 +29,7 @@ export const getHooks = async (address: string): Promise<PonderHook[]> => {
     SELECT * FROM
       ponder_hooks
     WHERE
-      address = $1;
+      address = LOWER($1);
     `, [address])).rows
 }
 
@@ -39,7 +39,7 @@ export const addHook = async (hook: PonderHook): Promise<PonderHook> => {
       address,
       url
     ) VALUES (
-      $1,
+      LOWER($1),
       $2
     )
     RETURNING *;

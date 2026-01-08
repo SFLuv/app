@@ -57,7 +57,10 @@ ponder.on("ERC20:Transfer", async ({ event, context }) => {
       deduped[hook.url] = true
       fetch(hook.url, {
         method: "POST",
-        body: JSON.stringify(hookBody)
+        body: JSON.stringify(hookBody),
+        headers: {
+          "X-Api-Key": process.env.ADMIN_KEY as string
+        }
       })
     })
   })
