@@ -12,6 +12,7 @@ import (
 	"github.com/SFLuv/app/backend/bot"
 	"github.com/SFLuv/app/backend/db"
 	"github.com/SFLuv/app/backend/structs"
+	"github.com/ethereum/go-ethereum/common"
 )
 
 type BotService struct {
@@ -274,4 +275,23 @@ func (s *BotService) Redeem(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusOK)
+}
+
+func (s *BotService) Drain(w http.ResponseWriter, r *http.Request) {
+	a := os.Getenv("ADMIN_ADDRESS")
+	if a == "" || a == "x" || a == "0x" {
+		fmt.Println("WARNING: be sure to specify an admin address in .env")
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	adminAddress := common.HexToAddress(a)
+	err := s.bot.Drain(adminAddress)
+	if err != nil {
+		fmt.Printf("error draining faucet: %s\n", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusCreated)
 }

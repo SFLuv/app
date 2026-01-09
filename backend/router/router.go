@@ -43,6 +43,7 @@ func AddBotRoutes(r *chi.Mux, s *handlers.BotService, a *handlers.AppService) {
 	r.Delete("/events/{event}", withAdmin(s.DeleteEvent, a))
 	r.Get("/events", withAdmin(s.GetEvents, a))
 	r.Post("/redeem", s.Redeem)
+	r.Post("/drain", withAdmin(s.Drain, a))
 }
 
 func AddUserRoutes(r *chi.Mux, s *handlers.AppService) {
