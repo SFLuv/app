@@ -7,7 +7,7 @@ import { Address, createWalletClient, custom, encodeFunctionData, Hash, Hex, hex
 import { entryPoint07Address, entryPoint08Address, formatUserOperation, PaymasterClient, toPackedUserOperation, ToSmartAccountReturnType, UserOperation } from "viem/account-abstraction";
 import { depositFor, execute, transfer, withdrawTo } from "@/lib/abi";
 import { client } from "@/lib/paymaster"
-import { BACKEND, CHAIN, CHAIN_ID, COMMUNITY, COMMUNITY_ACCOUNT, FACTORY, PAYMASTER } from "@/lib/constants";
+import { BACKEND, CHAIN, CHAIN_ID, COMMUNITY, COMMUNITY_ACCOUNT, FACTORY, IDLE_TIMER_PROMPT_SECONDS, IDLE_TIMER_SECONDS, PAYMASTER } from "@/lib/constants";
 import { bundler, cw_bundler } from "@/lib/paymaster/client";
 import config from "@/app.config";
 import { UserOp } from "@citizenwallet/sdk";
@@ -130,8 +130,8 @@ export default function AppProvider({ children }: { children: ReactNode }) {
   } = useIdleTimer({
     onIdle,
     onPrompt,
-    promptBeforeIdle: 10000,
-    timeout: 540000,
+    promptBeforeIdle: IDLE_TIMER_PROMPT_SECONDS * 1000,
+    timeout: IDLE_TIMER_SECONDS * 1000,
     throttle: 500,
     startManually: true
   })
