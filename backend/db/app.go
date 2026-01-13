@@ -27,7 +27,8 @@ func (s *AppDB) CreateTables() error {
 			is_improver BOOLEAN NOT NULL DEFAULT false,
 			contact_email TEXT,
 			contact_phone TEXT,
-			contact_name TEXT
+			contact_name TEXT,
+			paypal_eth TEXT
 		);
 	`)
 	if err != nil {
