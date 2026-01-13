@@ -19,6 +19,8 @@ import { AuthedLocation } from "@/types/location";
 import { importWallet as privyImportWallet } from "@/lib/wallets/import";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Contact } from "@/types/contact";
+import { useIdleTimer } from "react-idle-timer";
+import { IdleModal } from "@/components/idle/idle-modal";
 
 // const mockUser: User = { id: "user3", name: "Bob Johnson", email: "bob@example.com", isMerchant: true, isAdmin: false, isOrganizer: false }
 export type UserStatus = "loading" | "authenticated" | "unauthenticated"
@@ -91,6 +93,8 @@ export default function AppProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<UserStatus>("loading")
   const [tx, setTx] = useState<TxState>(defaultTxState)
   const [error, setError] = useState<string | unknown | null>(null);
+  const [idleModalOpen, setIdleModalOpen] = useState<boolean>(false);
+  const [idleTimer, setIdleTimer] = useState<NodeJS.Timeout | undefined>();
   const {
       getAccessToken,
       authenticated: privyAuthenticated,
@@ -108,6 +112,35 @@ export default function AppProvider({ children }: { children: ReactNode }) {
   } = useRouter()
   const pathname = usePathname()
 
+  const onIdle = () => {
+    if(status === "authenticated") {
+      logout()
+    }
+  }
+  const onPrompt = () => {
+    if(status === "authenticated") {
+      setIdleModalOpen(true)
+    }
+  }
+  const {
+    getRemainingTime,
+    start: startIdleTimer,
+    pause: pauseIdleTimer,
+    reset: resetIdleTimer
+  } = useIdleTimer({
+    onIdle,
+    onPrompt,
+    promptBeforeIdle: 10000,
+    timeout: 540000,
+    throttle: 500,
+    startManually: true
+  })
+
+
+  const toggleIdleModal = () => {
+    setIdleModalOpen(!idleModalOpen)
+    startIdleTimer()
+  }
 
 
   useEffect(() => {
@@ -140,6 +173,16 @@ export default function AppProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     setError(null)
   }, [pathname])
+
+  useEffect(() => {
+    if(status === "authenticated") {
+      resetIdleTimer()
+      startIdleTimer()
+    }
+    else {
+      pauseIdleTimer()
+    }
+  }, [status])
 
   const _userResponseToUser = async (r: GetUserResponse) => {
       const u: User = {
@@ -191,6 +234,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     setWallets([])
     setWalletsStatus("unavailable")
     setError(null)
+    setUserLocations([])
   }
 
   const authFetch = async (endpoint: string, options: RequestInit = {}): Promise<Response> => {
@@ -453,7 +497,6 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     }
 
     if(!privyAuthenticated) {
-      console.log("got to privy login anyways")
       try {
         await privyLogin()
         // move user data implementation to helper functions called in useEffect instead of passing into login() for real auth
@@ -526,7 +569,14 @@ export default function AppProvider({ children }: { children: ReactNode }) {
           rejectMerchantStatus,
          }}
       >
-        {children}
+        <>
+          <IdleModal
+            open={idleModalOpen}
+            onOpenChange={toggleIdleModal}
+            getRemainingTime={getRemainingTime}
+          />
+          {children}
+        </>
       </AppContext.Provider>
   )
 }
