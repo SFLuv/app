@@ -28,3 +28,5 @@ export const MAP_CENTER = { lat: 37.7749, lng: -122.4194 }
 export const MAP_RADIUS = 10
 export const LAT_DIF = 0.145
 export const LNG_DIF = 0.1818
+export const IDLE_TIMER_SECONDS = Number(process.env.NEXT_PUBLIC_IDLE_TIMER_TIMEOUT_SECONDS) || 600
+export const IDLE_TIMER_PROMPT_SECONDS = Number(process.env.NEXT_PUBLIC_IDLE_TIMER_PROMPT_SECONDS) || 60

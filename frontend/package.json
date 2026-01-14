@@ -61,6 +61,7 @@
     "react-day-picker": "latest",
     "react-dom": "^19.1.1",
     "react-hook-form": "^7.62.0",
+    "react-idle-timer": "^5.7.2",
     "react-qr-code": "^2.0.18",
     "react-qrcode-logo": "^3.0.0",
     "react-resizable-panels": "^2.1.9",

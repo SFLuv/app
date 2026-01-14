@@ -54,6 +54,7 @@ import { FAUCET_ADDRESS, SFLUV_DECIMALS, SFLUV_TOKEN } from "@/lib/constants"
 import { Event, EventsStatus } from "@/types/event"
 import { AddEventModal } from "@/components/events/add-event-modal"
 import { EventModal } from "@/components/events/event-modal"
+import { DrainFaucetModal } from "@/components/events/drain-faucet-modal"
 import EventCard from "@/components/events/event-card"
 
 // Mock PayPal accounts
@@ -138,6 +139,8 @@ export default function AdminPage() {
   const [eventDetailModalOpen, setEventDetailModalOpen] = useState<boolean>(false)
   const [deleteEventError, setDeleteEventError] = useState<string | undefined>(undefined)
   const [eventDetailsEvent, setEventDetailsEvent] = useState<Event | undefined>(undefined)
+  const [drainFaucetModalOpen, setDrainFaucetModalOpen] = useState<boolean>(false)
+  const [drainFaucetError, setDrainFaucetError] = useState<boolean>(false)
 
   const toggleNewEventModal = () => {
     setEventsModalOpen(!eventsModalOpen)
@@ -147,6 +150,23 @@ export default function AdminPage() {
     setEventDetailModalOpen(!eventDetailModalOpen)
   }
 
+  const toggleDrainFaucetModal = () => {
+    setDrainFaucetModalOpen(!drainFaucetModalOpen)
+  }
+
+  const handleDrainFaucet = async () => {
+    const url = "/drain"
+    try {
+      const res = await authFetch(url, {
+        method: "POST"
+      })
+      if(res.status !== 201) throw new Error()
+      setDrainFaucetError(false)
+    }
+    catch {
+      setDrainFaucetError(true)
+    }
+  }
 
   const handleDeleteEvent = async (id: string) => {
     const url = "/events/" + id
@@ -1207,6 +1227,12 @@ export default function AdminPage() {
             handleDeleteEvent={handleDeleteEvent}
             deleteEventError={deleteEventError}
           />
+          <DrainFaucetModal
+            open={drainFaucetModalOpen}
+            onOpenChange={toggleDrainFaucetModal}
+            handleDrainFaucet={handleDrainFaucet}
+            drainFaucetError={drainFaucetError}
+          />
           <Card>
             <CardHeader className="pb-6 grid grid-cols-[2fr,1fr]">
               <div>
@@ -1216,7 +1242,7 @@ export default function AdminPage() {
                 </CardTitle>
                 <CardDescription className="text-base mt-2">Create and Manage Volunteer Events</CardDescription>
                 <div className="flex items-center gap-2 mt-3">
-                  <Badge className="text-sm px-3 py-1">
+                  <Badge className="text-sm px-3 py-1 cursor-pointer" onClick={toggleDrainFaucetModal}>
                     {faucetBalance} SFLuv
                   </Badge>
                   <span className="text-sm text-muted-foreground">in faucet</span>

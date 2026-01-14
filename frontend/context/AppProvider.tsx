@@ -7,7 +7,7 @@ import { Address, createWalletClient, custom, encodeFunctionData, Hash, Hex, hex
 import { entryPoint07Address, entryPoint08Address, formatUserOperation, PaymasterClient, toPackedUserOperation, ToSmartAccountReturnType, UserOperation } from "viem/account-abstraction";
 import { depositFor, execute, transfer, withdrawTo } from "@/lib/abi";
 import { client } from "@/lib/paymaster"
-import { BACKEND, CHAIN, CHAIN_ID, COMMUNITY, COMMUNITY_ACCOUNT, FACTORY, PAYMASTER } from "@/lib/constants";
+import { BACKEND, CHAIN, CHAIN_ID, COMMUNITY, COMMUNITY_ACCOUNT, FACTORY, IDLE_TIMER_PROMPT_SECONDS, IDLE_TIMER_SECONDS, PAYMASTER } from "@/lib/constants";
 import { bundler, cw_bundler } from "@/lib/paymaster/client";
 import config from "@/app.config";
 import { UserOp } from "@citizenwallet/sdk";
@@ -19,6 +19,8 @@ import { AuthedLocation } from "@/types/location";
 import { importWallet as privyImportWallet } from "@/lib/wallets/import";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Contact } from "@/types/contact";
+import { useIdleTimer } from "react-idle-timer";
+import { IdleModal } from "@/components/idle/idle-modal";
 
 // const mockUser: User = { id: "user3", name: "Bob Johnson", email: "bob@example.com", isMerchant: true, isAdmin: false, isOrganizer: false }
 export type UserStatus = "loading" | "authenticated" | "unauthenticated"
@@ -91,6 +93,8 @@ export default function AppProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<UserStatus>("loading")
   const [tx, setTx] = useState<TxState>(defaultTxState)
   const [error, setError] = useState<string | unknown | null>(null);
+  const [idleModalOpen, setIdleModalOpen] = useState<boolean>(false);
+  const [idleTimer, setIdleTimer] = useState<NodeJS.Timeout | undefined>();
   const {
       getAccessToken,
       authenticated: privyAuthenticated,
@@ -108,6 +112,35 @@ export default function AppProvider({ children }: { children: ReactNode }) {
   } = useRouter()
   const pathname = usePathname()
 
+  const onIdle = () => {
+    if(status === "authenticated") {
+      logout()
+    }
+  }
+  const onPrompt = () => {
+    if(status === "authenticated") {
+      setIdleModalOpen(true)
+    }
+  }
+  const {
+    getRemainingTime,
+    start: startIdleTimer,
+    pause: pauseIdleTimer,
+    reset: resetIdleTimer
+  } = useIdleTimer({
+    onIdle,
+    onPrompt,
+    promptBeforeIdle: IDLE_TIMER_PROMPT_SECONDS * 1000,
+    timeout: IDLE_TIMER_SECONDS * 1000,
+    throttle: 500,
+    startManually: true
+  })
+
+
+  const toggleIdleModal = () => {
+    setIdleModalOpen(!idleModalOpen)
+    startIdleTimer()
+  }
 
 
   useEffect(() => {
@@ -140,6 +173,16 @@ export default function AppProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     setError(null)
   }, [pathname])
+
+  useEffect(() => {
+    if(status === "authenticated") {
+      resetIdleTimer()
+      startIdleTimer()
+    }
+    else {
+      pauseIdleTimer()
+    }
+  }, [status])
 
   const _userResponseToUser = async (r: GetUserResponse) => {
       const u: User = {
@@ -191,6 +234,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     setWallets([])
     setWalletsStatus("unavailable")
     setError(null)
+    setUserLocations([])
   }
 
   const authFetch = async (endpoint: string, options: RequestInit = {}): Promise<Response> => {
@@ -448,6 +492,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
   const login = async () => {
     if(!privyReady) {
       setError("privy not ready")
+      console.log("Should be returning rn")
       return
     }
 
@@ -524,7 +569,14 @@ export default function AppProvider({ children }: { children: ReactNode }) {
           rejectMerchantStatus,
          }}
       >
-        {children}
+        <>
+          <IdleModal
+            open={idleModalOpen}
+            onOpenChange={toggleIdleModal}
+            getRemainingTime={getRemainingTime}
+          />
+          {children}
+        </>
       </AppContext.Provider>
   )
 }
