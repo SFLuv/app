@@ -47,6 +47,7 @@ func AddUserRoutes(r *chi.Mux, s *handlers.AppService) {
 	r.Post("/users", withAuth(s.AddUser))
 	r.Get("/users", withAuth(s.GetUserAuthed))
 	r.Put("/users", withAuth(s.UpdateUserInfo))
+	r.Put("/paypaleth", withAuth(s.UpdateUserPayPalEth))
 }
 
 func AddAdminRoutes(r *chi.Mux, s *handlers.AppService) {

@@ -186,8 +186,8 @@ export class AppWallet {
       srcChainKey: "bera",
       dstToken: "0x6c3ea9036406852006290770BEdFcAbA0e23A0e8",
       dstChainKey: "ethereum",
-      srcAddress: t.wallet.address,
-      dstAddress:t.wallet.address,
+      srcAddress: "0x8b631C26537a784082A55528eaD52271ce88572e", //t.wallet.address,
+      dstAddress:"0x8b631C26537a784082A55528eaD52271ce88572e", //t.wallet.address,
       srcAmount: sourceAmount,
       dstAmountMin: destAmountMin
       });

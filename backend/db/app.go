@@ -28,7 +28,8 @@ func (s *AppDB) CreateTables() error {
 			contact_email TEXT,
 			contact_phone TEXT,
 			contact_name TEXT,
-			paypal_eth TEXT
+			paypal_eth TEXT NOT NULL DEFAULT '',
+			last_redemption INTEGER NOT NULL DEFAULT 0
 		);
 	`)
 	if err != nil {

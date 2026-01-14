@@ -42,6 +42,22 @@ func (a *AppDB) UpdateUserInfo(ctx context.Context, user *structs.User) error {
 	return nil
 }
 
+func (a *AppDB) UpdateUserPayPalEth(ctx context.Context, userId string, paypalEthAddress string) error {
+	fmt.Println("update paypal controller reached")
+	_, err := a.db.Exec(ctx, `
+		UPDATE
+			users
+		SET
+			paypal_eth = $1
+		WHERE
+			id = $2;
+	`, paypalEthAddress, userId)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 func (a *AppDB) UpdateUserRole(ctx context.Context, userId string, role string, value bool) error {
 	roles := map[string]string{
 		"admin":     "is_admin",

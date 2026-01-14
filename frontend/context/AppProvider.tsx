@@ -7,7 +7,7 @@ import { Address, createWalletClient, custom, encodeFunctionData, Hash, Hex, hex
 import { entryPoint07Address, entryPoint08Address, formatUserOperation, PaymasterClient, toPackedUserOperation, ToSmartAccountReturnType, UserOperation } from "viem/account-abstraction";
 import { depositFor, execute, transfer, withdrawTo } from "@/lib/abi";
 import { client } from "@/lib/paymaster"
-import { BACKEND, CHAIN, CHAIN_ID, COMMUNITY, COMMUNITY_ACCOUNT, FACTORY, PAYMASTER, TOKEN } from "@/lib/constants";
+import { BACKEND, CHAIN, CHAIN_ID, COMMUNITY, COMMUNITY_ACCOUNT, FACTORY, PAYMASTER } from "@/lib/constants";
 import { bundler, cw_bundler } from "@/lib/paymaster/client";
 import config from "@/app.config";
 import { UserOp } from "@citizenwallet/sdk";
@@ -69,6 +69,9 @@ interface AppContextType {
   updateUser: (data: Partial<User>) => void
   approveMerchantStatus: () => void
   rejectMerchantStatus: () => void
+
+  //cashout functionality
+  updatePayPalAddress: (payPalAddress: string) => Promise<void>
 
   //add location fuction signatures
 }
@@ -339,6 +342,19 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     return w
   }
 
+  const _updatePayPalAddress = async (payPalAddress: string) => {
+    const res = await authFetch("/paypaleth", {
+      method: "PUT",
+      body: JSON.stringify(payPalAddress)
+    })
+
+    console.log(res.status)
+
+    if(res.status != 201) {
+      throw new Error("error updating paypal address")
+    }
+  }
+
   const addWallet = async (walletName: string) => {
     if(!privyUser) throw new Error("no user logged in")
     const privyWallet = privyWallets[0]
@@ -488,6 +504,12 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     }
   }
 
+  const updatePayPalAddress = async (payPalAddress : string) => {
+    if (user) {
+      _updatePayPalAddress(payPalAddress)
+    }
+  }
+
   return (
       <AppContext.Provider
         value={{
@@ -511,6 +533,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
           updateUser,
           approveMerchantStatus,
           rejectMerchantStatus,
+          updatePayPalAddress,
          }}
       >
         {children}
