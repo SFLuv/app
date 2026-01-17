@@ -59,7 +59,7 @@ ponder.on("ERC20:Transfer", async ({ event, context }) => {
         method: "POST",
         body: JSON.stringify(hookBody),
         headers: {
-          "X-Api-Key": process.env.ADMIN_KEY as string
+          "X-Admin-Key": process.env.ADMIN_KEY as string
         }
       })
     })

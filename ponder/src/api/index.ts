@@ -14,7 +14,7 @@ app.use("/", async (c, next) => {
     return c.status(401)
   }
 
-  return next()
+  return await next()
 })
 
 app.use("/sql/*", client({ db, schema }));
@@ -23,8 +23,6 @@ app.use("/", graphql({ db, schema }));
 app.use("/graphql", graphql({ db, schema }));
 
 app.post("/hooks", async (c) => {
-
-
   const hookRequest = (await c.req.json()) as PonderHook
 
   try {
@@ -34,14 +32,16 @@ app.post("/hooks", async (c) => {
       }
     })
     if(!ping.ok) {
-      return c.status(400)
+      c.status(400)
+      return c.text("bad request")
     }
     const hookResponse = await addHook(hookRequest)
     return c.json(hookResponse, 201)
   }
   catch(error) {
     console.log(error)
-    return c.status(500)
+    c.status(500)
+    return c.text("internal server error")
   }
 })
 
@@ -49,18 +49,21 @@ app.delete("/hooks", async (c) => {
   const adminKey = process.env.ADMIN_KEY
   const authKey = c.req.header("X-Admin-Key")
   if(adminKey != authKey) {
-    return c.status(401)
+    c.status(401)
+    return c.text("bad auth key")
   }
 
   const hookId = Number(c.req.query("id"))
 
   try {
     await deleteHook(hookId)
-    return c.status(200)
+    c.status(200)
+    return c.text("ok")
   }
   catch(error) {
     console.log(error)
-    return c.status(500)
+    c.status(500)
+    return c.text("internal server error")
   }
 })
 

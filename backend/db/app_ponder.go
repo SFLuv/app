@@ -17,7 +17,7 @@ func (a *AppDB) AddPonderSubscription(ctx context.Context, s *structs.PonderSubs
 			data
 		) VALUES (
 			$1,
-			$2,
+			LOWER($2),
 			$3,
 			$4,
 			$5
@@ -38,7 +38,7 @@ func (a *AppDB) GetPonderSubscriptions(ctx context.Context, address string) ([]*
 		FROM
 			ponder_subscriptions
 		WHERE
-			address = $1
+			address = LOWER($1)
 	`, address)
 	if err != nil {
 		return nil, fmt.Errorf("error querying for ponder subscriptions for address %s: %s", address, err)

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/big"
 	"net/http"
 	"os"
 	"strconv"
@@ -41,7 +42,7 @@ func (a *AppService) AddPonderMerchantSubscription(w http.ResponseWriter, r *htt
 		return
 	}
 
-	if !user.IsMerchant {
+	if !user.IsMerchant && !user.IsAdmin {
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}
@@ -55,11 +56,11 @@ func (a *AppService) AddPonderMerchantSubscription(w http.ResponseWriter, r *htt
 
 	userWallets := map[string]bool{}
 	for _, wallet := range wallets {
-		if !wallet.IsEoa {
+		if !wallet.IsEoa && wallet.SmartAddress != nil {
 			userWallets[*wallet.SmartAddress] = true
 			continue
 		}
-		userWallets[*&wallet.EoaAddress] = true
+		userWallets[wallet.EoaAddress] = true
 	}
 
 	if !userWallets[req.Address] {
@@ -170,6 +171,7 @@ func (a *AppService) DeletePonderMerchantSubscription(w http.ResponseWriter, r *
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
+	subscriptionReq.Header.Add("X-Admin-Key", os.Getenv("PONDER_KEY"))
 
 	res, err := http.DefaultClient.Do(subscriptionReq)
 	if err != nil {
@@ -189,8 +191,6 @@ func (a *AppService) DeletePonderMerchantSubscription(w http.ResponseWriter, r *
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
-
-	subscriptionReq.Header.Add("X-Admin-Key", os.Getenv("PONDER_KEY"))
 
 	w.WriteHeader(http.StatusOK)
 }
@@ -231,6 +231,12 @@ func (a *AppService) PonderPingCallback(w http.ResponseWriter, r *http.Request) 
 }
 
 func (a *AppService) PonderHookHandler(w http.ResponseWriter, r *http.Request) {
+	key := os.Getenv("PONDER_KEY")
+	if key != r.Header.Get("X-Admin-Key") {
+		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		a.logger.Logf("error reading ponder hook body: %s", err)
@@ -238,6 +244,64 @@ func (a *AppService) PonderHookHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	fmt.Println(body)
+	tx := structs.PonderHookData{}
+	err = json.Unmarshal(body, &tx)
+	if err != nil {
+		a.logger.Logf("error unmarshalling ponder txs into hook data: %s", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	sender := utils.NewEmailSender()
+	if sender == nil {
+		a.logger.Logf("error initializing new email sender: %s", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	amount := new(big.Float)
+	decimals := new(big.Float)
+
+	_, ok := decimals.SetPrec(6).SetString(os.Getenv("TOKEN_DECIMALS"))
+	if !ok {
+		a.logger.Logf("error setting token decimals amount bigint from string: %s", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	_, ok = amount.SetPrec(6).SetString(tx.Amount)
+	if !ok {
+		a.logger.Logf("error setting tx amount bigint from string: %s", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	formatted := new(big.Float)
+	formatted.Quo(amount, decimals)
+
+	listeners, err := a.db.GetPonderSubscriptions(r.Context(), tx.To)
+	if err != nil {
+		a.logger.Logf("error getting ponder subscriptions for %s: %s", tx.To, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	for _, l := range listeners {
+		err = sender.SendEmail(string(l.Data), "SFLuv Transactions", fmt.Sprintf("$SFLUV %.2f", formatted), fmt.Sprintf(`
+SFLuv Transaction:
+
+	Value: %.2f
+
+	From: %s
+
+	To: %s
+
+	Hash: %s
+		`, formatted, tx.From, tx.To, tx.Hash), "no_reply@sfluv.org", "SFLuv Transactions")
+	}
+	if err != nil {
+		a.logger.Logf("error sending transaction receipt email: %s", err.Error())
+	}
+
 	w.WriteHeader(http.StatusOK)
 }

@@ -127,7 +127,7 @@ func (s *AppDB) CreateTables() error {
 			data TEXT
 		);
 
-		CREATE INDEX ponder_subscription_address ON ponder_subscriptions(address);
+		CREATE INDEX IF NOT EXISTS ponder_subscription_address ON ponder_subscriptions(address);
 	`)
 	if err != nil {
 		return fmt.Errorf("error creating ponder subscriptions table: %s", err)
