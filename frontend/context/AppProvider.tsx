@@ -21,6 +21,8 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Contact } from "@/types/contact";
 import { useIdleTimer } from "react-idle-timer";
 import { IdleModal } from "@/components/idle/idle-modal";
+import { PonderSubscription, PonderSubscriptionRequest } from "@/types/ponder";
+import { base64 } from "@scure/base";
 
 // const mockUser: User = { id: "user3", name: "Bob Johnson", email: "bob@example.com", isMerchant: true, isAdmin: false, isOrganizer: false }
 export type UserStatus = "loading" | "authenticated" | "unauthenticated"
@@ -72,7 +74,11 @@ interface AppContextType {
   approveMerchantStatus: () => void
   rejectMerchantStatus: () => void
 
-  //add location fuction signatures
+  // Ponder Functionality
+  ponderSubscriptions: PonderSubscription[]
+  addPonderSubscription: (email: string, address: string) => Promise<void>
+  getPonderSubscriptions: () => Promise<void>
+  deletePonderSubscription: (id: number) => Promise<void>
 }
 
 
@@ -94,6 +100,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
   const [tx, setTx] = useState<TxState>(defaultTxState)
   const [error, setError] = useState<string | unknown | null>(null);
   const [idleModalOpen, setIdleModalOpen] = useState<boolean>(false);
+  const [ponderSubscriptions, setPonderSubscriptions] = useState<PonderSubscription[]>([])
   const [idleTimer, setIdleTimer] = useState<NodeJS.Timeout | undefined>();
   const {
       getAccessToken,
@@ -216,6 +223,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
 
       await _userResponseToUser(userResponse)
       await _initWallets(userResponse.wallets)
+      await getPonderSubscriptions()
       setUserLocations(userResponse.locations)
 
       setStatus("authenticated")
@@ -544,6 +552,47 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     }
   }
 
+
+  const addPonderSubscription = async (email: string, address: string) => {
+    const body: PonderSubscriptionRequest = {
+      email,
+      address
+    }
+
+    const res = await authFetch("/ponder", {
+      body: JSON.stringify(body),
+      method: "POST"
+    })
+
+    if(!res.ok) throw new Error("error adding ponder subscription for " + address)
+  }
+
+  const deletePonderSubscription = async (id: number) => {
+    const res = await authFetch("/ponder?id=" + id, {
+      method: "DELETE"
+    })
+
+    if(!res.ok) throw new Error("error deleting ponder subscription " + id)
+  }
+
+  const getPonderSubscriptions = async () => {
+    try {
+      const res = await authFetch("/ponder")
+      let body = await res.json() as PonderSubscription[]
+      body = body.map((sub) => {
+        if(sub.type === "merchant") {
+          sub.data = new TextDecoder("utf-8").decode(base64.decode(sub.data))
+        }
+        return sub
+      })
+
+      setPonderSubscriptions(body)
+    }
+    catch {
+      throw new Error("error getting ponder subscriptions.")
+    }
+  }
+
   return (
       <AppContext.Provider
         value={{
@@ -567,6 +616,10 @@ export default function AppProvider({ children }: { children: ReactNode }) {
           updateUser,
           approveMerchantStatus,
           rejectMerchantStatus,
+          ponderSubscriptions,
+          addPonderSubscription,
+          getPonderSubscriptions,
+          deletePonderSubscription
          }}
       >
         <>
