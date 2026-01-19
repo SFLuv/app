@@ -286,18 +286,43 @@ func (a *AppService) PonderHookHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	root, err := utils.GetProjectRoot()
+	if err != nil {
+		a.logger.Logf("error getting project root directory in ponder hook handler: %s", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	file, err := os.ReadFile(fmt.Sprintf("%s/mail/schemas/notification.json", root))
+	if err != nil {
+		a.logger.Logf("error getting email notification mask: %s", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	var mask structs.EmailMask
+	err = json.Unmarshal(file, &mask)
+	if err != nil {
+		a.logger.Logf("error unmarshalling notification mask into mask struct: %s", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	html, err := os.ReadFile(fmt.Sprintf("%s/%s", root, mask.HtmlContent))
+	if err != nil {
+		a.logger.Logf("error getting html body for email notification: %s", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
 	for _, l := range listeners {
-		err = sender.SendEmail(string(l.Data), "SFLuv Transactions", fmt.Sprintf("$SFLUV %.2f", formatted), fmt.Sprintf(`
-SFLuv Transaction:
-
-	Value: %.2f
-
-	From: %s
-
-	To: %s
-
-	Hash: %s
-		`, formatted, tx.From, tx.To, tx.Hash), "no_reply@sfluv.org", "SFLuv Transactions")
+		err = sender.SendEmail(
+			fmt.Sprintf(mask.ToEmail, l.Data),
+			mask.ToName,
+			fmt.Sprintf(mask.Subject, formatted, tx.Hash[:5]),
+			fmt.Sprintf(string(html), formatted, tx.From, tx.To, tx.Hash),
+			mask.FromEmail,
+			mask.FromName)
 	}
 	if err != nil {
 		a.logger.Logf("error sending transaction receipt email: %s", err.Error())
