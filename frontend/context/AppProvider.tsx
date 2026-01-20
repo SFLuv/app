@@ -586,10 +586,10 @@ export default function AppProvider({ children }: { children: ReactNode }) {
         return sub
       })
 
-      setPonderSubscriptions(body)
+      setPonderSubscriptions(body || [])
     }
-    catch {
-      throw new Error("error getting ponder subscriptions.")
+    catch(error) {
+      setError(error)
     }
   }
 
