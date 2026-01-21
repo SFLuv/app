@@ -24,7 +24,6 @@ export default function SettingsPage() {
   const userRole = useMemo(() => user?.isAdmin ? "admin" : user?.isMerchant ? "merchant" : "user", [user])
 
   const merchantStatus: MerchantStatus = useMemo(() => {
-    console.log(userLocations)
     if(userLocations.length == 0) return "none"
     if(userLocations.find((loc) => loc.approval)) return "approved"
     return "pending"

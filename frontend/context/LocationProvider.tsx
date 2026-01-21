@@ -88,7 +88,6 @@ export default function LocationProvider({ children }: { children: ReactNode }) 
       }
 
       const _updateLocationApproval = async (req: UpdateLocationApprovalRequest) => {
-        console.log(req)
         const res = await authFetch("/admin/locations", {
             method: "PUT",
             headers: {
