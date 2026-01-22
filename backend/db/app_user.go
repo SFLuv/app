@@ -42,7 +42,7 @@ func (a *AppDB) UpdateUserInfo(ctx context.Context, user *structs.User) error {
 	return nil
 }
 
-func (a *AppDB) UpdateUserPayPalEth(ctx context.Context, userId string, paypalEthAddress string) error {
+func (a *AppDB) UpdateUserPayPalEth(ctx context.Context, userId string, paypalEthAddress any) error {
 	fmt.Println("update paypal controller reached")
 	_, err := a.db.Exec(ctx, `
 		UPDATE
@@ -99,7 +99,8 @@ func (a *AppDB) GetUsers(ctx context.Context, page int, count int) ([]*structs.U
 			is_improver,
 			contact_email,
 			contact_phone,
-			contact_name
+			contact_name,
+			paypal_eth
 		FROM
 			users
 		LIMIT $1
@@ -122,6 +123,7 @@ func (a *AppDB) GetUsers(ctx context.Context, page int, count int) ([]*structs.U
 			&user.Email,
 			&user.Phone,
 			&user.Name,
+			&user.PayPalEth,
 		)
 		if err != nil {
 			continue
@@ -144,7 +146,9 @@ func (a *AppDB) GetUserById(ctx context.Context, userId string) (*structs.User, 
 			is_improver,
 			contact_email,
 			contact_phone,
-			contact_name
+			contact_name,
+			paypal_eth,
+			last_redemption
 		FROM
 			users
 		WHERE
@@ -159,6 +163,8 @@ func (a *AppDB) GetUserById(ctx context.Context, userId string) (*structs.User, 
 		&user.Email,
 		&user.Phone,
 		&user.Name,
+		&user.PayPalEth,
+		&user.LastRedemption,
 	)
 	if err != nil {
 		return nil, err

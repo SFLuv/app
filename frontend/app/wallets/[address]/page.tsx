@@ -23,7 +23,7 @@ export default function WalletDetailsPage() {
   const params = useParams()
   const router = useRouter()
   const walletAddress = params.address as string
-  const { wallets, status, walletsStatus, updateWallet } = useApp()
+  const { user, wallets, status, walletsStatus, updateWallet } = useApp()
 
   // Get the specific wallet by index
   const wallet = useMemo(() => {
@@ -257,7 +257,11 @@ export default function WalletDetailsPage() {
           {/* Quick Actions */}
           <Card>
             <CardContent className="p-3 sm:p-4">
-              <div className="grid grid-cols-3 gap-3">
+              <div
+                className={`grid gap-3 ${
+                  user?.isMerchant ? "grid-cols-3" : "grid-cols-2"
+                }`}
+              >
                 <Button
                   onClick={() => setShowSendModal(true)}
                   className="h-14 sm:h-16 flex-col gap-1.5 sm:gap-2 text-sm"
@@ -265,6 +269,7 @@ export default function WalletDetailsPage() {
                   <Send className="h-4 w-4 sm:h-5 sm:w-5" />
                   <span>Send</span>
                 </Button>
+
                 <Button
                   variant="outline"
                   onClick={() => setShowReceiveModal(true)}
@@ -273,14 +278,17 @@ export default function WalletDetailsPage() {
                   <QrCode className="h-4 w-4 sm:h-5 sm:w-5" />
                   <span>Receive</span>
                 </Button>
-                <Button
-                  variant="outline"
-                  onClick={() => setShowCashoutModal(true)}
-                  className="h-14 sm:h-16 flex-col gap-1.5 sm:gap-2 text-sm hover:bg-primary/65"
-                >
-                  <Banknote className="h-4 w-4 sm:h-5 sm:w-5" />
-                  <span>Cash Out SFLuv</span>
-                </Button>
+
+                {user?.isMerchant && (
+                  <Button
+                    variant="outline"
+                    onClick={() => setShowCashoutModal(true)}
+                    className="h-14 sm:h-16 flex-col gap-1.5 sm:gap-2 text-sm hover:bg-primary/65"
+                  >
+                    <Banknote className="h-4 w-4 sm:h-5 sm:w-5" />
+                    <span>Unwrap SFLuv</span>
+                  </Button>
+                )}
               </div>
             </CardContent>
           </Card>

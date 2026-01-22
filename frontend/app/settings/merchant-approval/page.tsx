@@ -19,7 +19,6 @@ export default function MerchantApprovalPage() {
     script.async = true;
     script.defer = true;
     document.head.appendChild(script);
-    console.log("Script appended")
     }
   }
 

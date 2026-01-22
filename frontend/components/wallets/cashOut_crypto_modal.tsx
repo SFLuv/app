@@ -14,6 +14,7 @@ import { Label } from "@/components/ui/label"
 import { Card, CardContent } from "@/components/ui/card"
 import { CheckCircle } from "lucide-react"
 import type { AppWallet } from "@/lib/wallets/wallets"
+import { useApp } from "@/context/AppProvider"
 
 interface CashoutCryptoModalProps {
   open: boolean
@@ -29,9 +30,16 @@ export function CashOutCryptoModal({
   const [cashOutValue, setCashOutValue] = useState<string>("")
   const [confirmed, setConfirmed] = useState(false)
   const [walletSFLUV, setWalletSFLUV] = useState(0)
+  const [payPalEthAddress, setPayPalEthAddress] = useState<string>("")
+  const { user } = useApp()
 
   useEffect(() => {
     walletBalanceChange()
+    if (user) {
+    setPayPalEthAddress(user?.paypalEthAddress)
+    } else {
+      console.log("no user found")
+    }
     }, [])
 
   const walletBalanceChange = async () => {
@@ -83,8 +91,11 @@ export function CashOutCryptoModal({
     const amount = Number(cashOutValue)
     if (amount <= 0) return
 
-    // mock unwrap
-    await wallet.unwrap(amount)
+    if (user) {
+    await wallet.unwrap(amount, payPalEthAddress)
+    } else {
+      throw new Error("user not found")
+    }
 
     setCashOutValue("0.00")
     setConfirmed(true)

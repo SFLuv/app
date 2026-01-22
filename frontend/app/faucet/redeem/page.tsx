@@ -42,7 +42,6 @@ const Page = () => {
   }, [])
 
   const sendBotRequest = async () => {
-    console.log("send bot request reached")
     // let verified = verifyAccountOwnership()
     //implement real verification
     try {
@@ -72,7 +71,7 @@ const Page = () => {
       }
 
       setSuccess(true)
-      
+
       setTimeout(() => {
         router.replace("/map?sidebar=false")
       }, 2000)

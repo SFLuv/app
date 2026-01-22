@@ -7,6 +7,7 @@ import { entryPoint07Address } from "viem/account-abstraction";
 import { Hash } from "viem";
 import { cw_bundler } from "../paymaster/client";
 import { balanceOf, depositFor, transfer, withdrawTo } from "../abi";
+import { useApp } from "@/context/AppProvider";
 
 export type WalletType = "smartwallet" | "eoa"
 
@@ -22,7 +23,9 @@ interface AppWalletOptions {
 }
 
 
+
 export class AppWallet {
+
   owner: ConnectedWallet;
   index?: bigint;
 
@@ -174,8 +177,8 @@ export class AppWallet {
     return this._execTx(t.wallet, t.signer, callData)
   }
 
-  unwrap = async (amount: number): Promise<TxState | null>  => {
-    const t = this._beforeTx()
+  unwrap = async (amount: number, paypalEthAddress : string): Promise<TxState | null>  => {
+     const t = this._beforeTx()
     if(!t) return null
 
     const sourceAmount = String(amount * (10 ** BYUSD_DECIMALS))
@@ -186,8 +189,8 @@ export class AppWallet {
       srcChainKey: "bera",
       dstToken: "0x6c3ea9036406852006290770BEdFcAbA0e23A0e8",
       dstChainKey: "ethereum",
-      srcAddress: "0x8b631C26537a784082A55528eaD52271ce88572e", //t.wallet.address,
-      dstAddress:"0x8b631C26537a784082A55528eaD52271ce88572e", //t.wallet.address,
+      srcAddress: t.wallet.address,
+      dstAddress: paypalEthAddress,
       srcAmount: sourceAmount,
       dstAmountMin: destAmountMin
       });

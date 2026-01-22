@@ -98,8 +98,6 @@ export function SendCryptoModal({ open, onOpenChange, wallet, balance }: SendCry
       return
     }
 
-    console.log(receipt)
-
     if (receipt.hash) {
       setStep("success")
       setHash(receipt.hash as Hash)

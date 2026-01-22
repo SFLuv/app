@@ -134,7 +134,7 @@ func (a *AppService) UpdateUserPayPalEth(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	err = a.db.UpdateUserPayPalEth(r.Context(), *userDid, string(body))
+	err = a.db.UpdateUserPayPalEth(r.Context(), *userDid, body)
 	if err != nil {
 		a.logger.Logf("error updating user paypal address for user: " + *userDid)
 		w.WriteHeader(http.StatusInternalServerError)
