@@ -5,7 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
-import { Send, QrCode, Eye, EyeOff, RefreshCw, Settings, ArrowLeft, Wallet, Pencil, Check, X, Banknote } from "lucide-react"
+import { Send, QrCode, Eye, EyeOff, RefreshCw, Settings, ArrowLeft, Wallet, Pencil, Check, X, BellOff, Bell, Banknote } from "lucide-react"
 import { SendCryptoModal } from "@/components/wallets/send-crypto-modal"
 import { ReceiveCryptoModal } from "@/components/wallets/receive-crypto-modal"
 import { TransactionHistoryList } from "@/components/wallets/transaction-history-list"
@@ -18,12 +18,23 @@ import { useApp } from "@/context/AppProvider"
 import { CHAIN } from "@/lib/constants"
 import { Input } from "@/components/ui/input"
 import { CashOutCryptoModal } from "@/components/wallets/cashOut_crypto_modal"
+import { NotificationModal } from "@/components/notifications/notification-modal"
+
 
 export default function WalletDetailsPage() {
   const params = useParams()
   const router = useRouter()
   const walletAddress = params.address as string
-  const { user, wallets, status, walletsStatus, updateWallet } = useApp()
+  const {
+    user,
+    wallets,
+    status,
+    walletsStatus,
+    updateWallet,
+    ponderSubscriptions,
+    addPonderSubscription,
+    deletePonderSubscription
+  } = useApp()
 
   // Get the specific wallet by index
   const wallet = useMemo(() => {
@@ -38,6 +49,13 @@ export default function WalletDetailsPage() {
     return w
   }, [wallets])
 
+  const ponder = useMemo(() => {
+    if(ponderSubscriptions?.length === 0) return undefined
+
+    let p = ponderSubscriptions?.find((s) => s.address?.toLowerCase() === walletAddress.toLowerCase())
+    return p
+  }, [ponderSubscriptions])
+
 
 
   const [showSendModal, setShowSendModal] = useState(false)
@@ -50,10 +68,15 @@ export default function WalletDetailsPage() {
   const [isEditingName, setIsEditingName] = useState(false)
   const [walletName, setWalletName] = useState("")
   const [isSavingName, setIsSavingName] = useState(false)
+  const [notificationModalOpen, setNotificationModalOpen] = useState<boolean>(false)
   const nameInputRef = useRef<HTMLInputElement>(null)
   const { toast } = useToast()
 
   useEffect(() => { if(!showReceiveModal && !showSendModal) updateBalance() }, [showReceiveModal, showSendModal])
+
+  const toggleNotificationModal = () => {
+    setNotificationModalOpen(!notificationModalOpen)
+  }
 
 
   const handleEditName = () => {
@@ -238,6 +261,11 @@ export default function WalletDetailsPage() {
             </div>
           </div>
           <div className="flex items-center gap-1 sm:gap-2 flex-shrink-0">
+            {(user?.isAdmin || user?.isMerchant) &&
+              <Button variant="ghost" size="sm" onClick={toggleNotificationModal}>
+                  {ponder?.id ? <BellOff className="h-4 w-4" /> : <Bell className="h-4 w-4" />}
+              </Button>
+            }
             <Button variant="ghost" size="sm" onClick={() => setShowBalance(!showBalance)}>
               {showBalance ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
             </Button>
@@ -368,6 +396,13 @@ export default function WalletDetailsPage() {
       <SendCryptoModal open={showSendModal} onOpenChange={setShowSendModal} wallet={wallet} balance={balance || 0} />
       <ReceiveCryptoModal open={showReceiveModal} onOpenChange={setShowReceiveModal} wallet={wallet} />
       <CashOutCryptoModal open={showCashoutModal} onOpenChange={setShowCashoutModal} wallet={wallet} />
+      <NotificationModal
+        open={notificationModalOpen}
+        onOpenChange={setNotificationModalOpen}
+        id={ponder?.id}
+        emailAddress={ponder?.data}
+        address={wallet?.address || ""}
+      />
     </div>
   )
 }

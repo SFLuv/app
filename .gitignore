@@ -5,3 +5,6 @@
 .next
 node_modules
 .DS_Store
+pnpm-lock.yaml
+ponder/.env.local
+ponder/generated

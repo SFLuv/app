@@ -7,7 +7,9 @@ import (
 	"math/big"
 	"os"
 
+	"github.com/SFLuv/app/backend/abi"
 	"github.com/ethereum/go-ethereum"
+	"github.com/ethereum/go-ethereum/accounts/abi/bind/v2"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -18,6 +20,7 @@ import (
 type IBot interface {
 	Key() string
 	Send(amount uint64, address string) error
+	Drain(address common.Address) error
 }
 
 type Bot struct {
@@ -124,6 +127,51 @@ func (b *Bot) Send(amount uint64, address string) error {
 	}
 
 	fmt.Printf("Sent Transaction: %s\n", signedTx.Hash().Hex())
+	// return err if err
+	return nil
+}
+
+func (b *Bot) Drain(address common.Address) error {
+
+	tokenAddress := common.HexToAddress(b.tokenId)
+
+	contract, err := abi.NewSFLUVv2(tokenAddress, b.client)
+	if err != nil {
+		return fmt.Errorf("error creating sfluv contract instance: %s", err)
+	}
+
+	amount, err := contract.BalanceOf(nil, common.HexToAddress(os.Getenv("BOT_ADDRESS")))
+	if err != nil {
+		return fmt.Errorf("error getting bot balance: %s", err)
+	}
+
+	chid, err := b.client.ChainID(context.Background())
+	if err != nil {
+		return fmt.Errorf("error getting chainId:%s", err)
+	}
+
+	privKey, err := crypto.HexToECDSA(b.pKey)
+	if err != nil {
+		return fmt.Errorf("error parsing private key: %s", err)
+	}
+
+	pubKey, ok := privKey.Public().(*ecdsa.PublicKey)
+	if !ok {
+		return fmt.Errorf("error parsing public key into ecdsa type")
+	}
+
+	s := bind.NewKeyedTransactor(privKey, chid)
+
+	opts := &bind.TransactOpts{
+		From:    crypto.PubkeyToAddress(*pubKey),
+		Signer:  s.Signer,
+		Context: context.Background(),
+	}
+
+	_, err = contract.Transfer(opts, address, amount)
+	if err != nil {
+		return fmt.Errorf("error draining faucet balance: %s", err)
+	}
 	// return err if err
 	return nil
 }

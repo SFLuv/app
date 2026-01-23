@@ -45,10 +45,17 @@ import {
   QrCode,
   Download,
   CalendarIcon,
+  Leaf,
 } from "lucide-react"
 import { useLocation } from "@/context/LocationProvider"
 import { AuthedLocation, UpdateLocationApprovalRequest } from "@/types/location"
 import { AppWallet } from "@/lib/wallets/wallets"
+import { FAUCET_ADDRESS, SFLUV_DECIMALS, SFLUV_TOKEN } from "@/lib/constants"
+import { Event, EventsStatus } from "@/types/event"
+import { AddEventModal } from "@/components/events/add-event-modal"
+import { EventModal } from "@/components/events/event-modal"
+import { DrainFaucetModal } from "@/components/events/drain-faucet-modal"
+import EventCard from "@/components/events/event-card"
 
 // Mock PayPal accounts
 const mockPaypalAccounts = [
@@ -68,8 +75,11 @@ const mockPaypalAccounts = [
   },
 ]
 
+
+
+
 export default function AdminPage() {
-  const { user, wallets } = useApp()
+  const { user, wallets, authFetch, status } = useApp()
   const { getAuthedMapLocations, updateLocationApproval, authedMapLocations} = useLocation()
   const { toast } = useToast()
 
@@ -115,18 +125,128 @@ export default function AdminPage() {
   const [isGeneratingCodes, setIsGeneratingCodes] = useState(false)
   const [generatedCodes, setGeneratedCodes] = useState<any[]>([])
   const [pendingLocations, setPendingLocations] = useState<AuthedLocation[]>([])
+  const [faucetBalance, setFaucetBalance] = useState<string | bigint>("-")
 
-    useEffect(() => {
-      getAuthedMapLocations()
-    }, [])
+  // Events
+  const [events, setEvents] = useState<Event[]>([])
+  const [eventsStatus, setEventsStatus] = useState<EventsStatus>("loading")
+  const [eventsError, setEventsError] = useState<string>("")
+  const [eventsSearch, setEventsSearch] = useState<string>("")
+  const [eventsPage, setEventsPage] = useState<number>(0)
+  const [eventsCount, setEventsCount] = useState<number>(10)
+  const [eventsExpired, setEventsExpired] = useState<boolean>(false)
+  const [eventsModalOpen, setEventsModalOpen] = useState<boolean>(false)
+  const [eventDetailModalOpen, setEventDetailModalOpen] = useState<boolean>(false)
+  const [deleteEventError, setDeleteEventError] = useState<string | undefined>(undefined)
+  const [eventDetailsEvent, setEventDetailsEvent] = useState<Event | undefined>(undefined)
+  const [drainFaucetModalOpen, setDrainFaucetModalOpen] = useState<boolean>(false)
+  const [drainFaucetError, setDrainFaucetError] = useState<boolean>(false)
 
-    useEffect(() => {
-        setPendingLocations(authedMapLocations.filter((location) => location.approval === null))
-    }, [authedMapLocations])
+  const toggleNewEventModal = () => {
+    setEventsModalOpen(!eventsModalOpen)
+  }
 
-    useEffect(() => {
-      setSelectedWalletBalances()
-    }, [selectedWallet])
+  const toggleEventDetailModal = () => {
+    setEventDetailModalOpen(!eventDetailModalOpen)
+  }
+
+  const toggleDrainFaucetModal = () => {
+    setDrainFaucetModalOpen(!drainFaucetModalOpen)
+  }
+
+  const handleDrainFaucet = async () => {
+    const url = "/drain"
+    try {
+      const res = await authFetch(url, {
+        method: "POST"
+      })
+      if(res.status !== 201) throw new Error()
+      setDrainFaucetError(false)
+    }
+    catch {
+      setDrainFaucetError(true)
+    }
+  }
+
+  const handleDeleteEvent = async (id: string) => {
+    const url = "/events/" + id
+    try {
+      const res = await authFetch(url, {
+        method: "DELETE",
+      })
+      if(res.status !== 200) throw new Error()
+    }
+    catch {
+      setEventsStatus("error")
+      setEventsError("Error adding event. Please try again later.")
+    }
+
+    await getEvents()
+    toggleEventDetailModal()
+  }
+
+  const handleAddEvent = async (ev: Event) => {
+    const url = "/events"
+    try {
+      const res = await authFetch(url, {
+        method: "POST",
+        body: JSON.stringify(ev)
+      })
+    }
+    catch {
+      setEventsStatus("error")
+      setEventsError("Error adding event. Please try again later.")
+    }
+
+    await getEvents()
+    toggleNewEventModal()
+  }
+
+  const getFaucetBalance = async () => {
+    const decimals = 10 ** SFLUV_DECIMALS
+    const bal = await wallets[0]?.getBalanceOf(SFLUV_TOKEN, FAUCET_ADDRESS)
+
+    setFaucetBalance(bal ? bal / BigInt(decimals) : "-")
+  }
+
+
+
+  const getEvents = async () => {
+    const url = "/events"
+      + "?page=" + eventsPage
+      + "&count=" + eventsCount
+      + "&expired=" + eventsExpired
+      + (eventsSearch ? "&search=" + eventsSearch : "")
+    try {
+      const res = await authFetch(url)
+
+      const e = await res.json()
+      console.log(e)
+      setEvents(e)
+    }
+    catch {
+      setEventsStatus("error")
+      setEventsError("Error fetching events. Please try again later.")
+    }
+  }
+
+  useEffect(() => {
+    getFaucetBalance()
+  }, [wallets])
+
+  useEffect(() => {
+    getAuthedMapLocations()
+    getEvents()
+  }, [])
+
+  useEffect(() => {
+      setPendingLocations(authedMapLocations.filter((location) => location.approval === null))
+  }, [authedMapLocations])
+
+  useEffect(() => {
+    setSelectedWalletBalances()
+  }, [selectedWallet])
+
 
 
 
@@ -558,6 +678,14 @@ export default function AdminPage() {
     return `$${selectedWalletBYUSDBalance.toLocaleString()} BYUSD`
   }
 
+  if(status === "loading") {
+    return (
+      <div className="flex items-center justify-center min-h-[70vh]">
+        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-[#eb6c6c]"></div>
+      </div>
+    )
+  }
+
   return (
     <div className="container mx-auto p-4 space-y-6">
       <div className="flex items-center justify-between">
@@ -568,10 +696,18 @@ export default function AdminPage() {
       </div>
 
       <Tabs defaultValue="merchants" className="space-y-6">
-        <TabsList className="grid w-full grid-cols-1">
+        <TabsList className="grid w-full grid-cols-2">
           {/* <TabsTrigger value="tokens">Token Management</TabsTrigger> */}
           <TabsTrigger value="merchants" className="relative">
             Merchant Approvals
+            {pendingLocations.length > 0 && (
+              <Badge variant="destructive" className="ml-2 h-5 w-5 rounded-full p-1.5 text-xs">
+                {pendingLocations.length}
+              </Badge>
+            )}
+          </TabsTrigger>
+          <TabsTrigger value="events" className="relative">
+            Events
             {pendingLocations.length > 0 && (
               <Badge variant="destructive" className="ml-2 h-5 w-5 rounded-full p-1.5 text-xs">
                 {pendingLocations.length}
@@ -1070,6 +1206,70 @@ export default function AdminPage() {
                         </div>
                       </CardContent>
                     </Card>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="events" className="space-y-6">
+          <AddEventModal
+            open={eventsModalOpen}
+            onOpenChange={toggleNewEventModal}
+            handleAddEvent={handleAddEvent}
+            addEventError={eventsError}
+          />
+          <EventModal
+            event={eventDetailsEvent}
+            open={eventDetailModalOpen}
+            onOpenChange={toggleEventDetailModal}
+            handleDeleteEvent={handleDeleteEvent}
+            deleteEventError={deleteEventError}
+          />
+          <DrainFaucetModal
+            open={drainFaucetModalOpen}
+            onOpenChange={toggleDrainFaucetModal}
+            handleDrainFaucet={handleDrainFaucet}
+            drainFaucetError={drainFaucetError}
+          />
+          <Card>
+            <CardHeader className="pb-6 grid grid-cols-[2fr,1fr]">
+              <div>
+                <CardTitle className="flex items-center gap-2 text-xl">
+                  <CalendarIcon className="h-6 w-6" />
+                  Volunteer Events
+                </CardTitle>
+                <CardDescription className="text-base mt-2">Create and Manage Volunteer Events</CardDescription>
+                <div className="flex items-center gap-2 mt-3">
+                  <Badge className="text-sm px-3 py-1 cursor-pointer" onClick={toggleDrainFaucetModal}>
+                    {faucetBalance} SFLuv
+                  </Badge>
+                  <span className="text-sm text-muted-foreground">in faucet</span>
+                </div>
+              </div>
+              <div className="text-right">
+                <Button onClick={toggleNewEventModal}>
+                  + New Event
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {events.length === 0 ? (
+                <div className="text-center py-8">
+                  <Leaf className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+                  <h3 className="text-lg font-medium">No {eventsExpired ? "" : "Active"} Events</h3>
+                  <p className="text-muted-foreground">Create a new event to see it here.</p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {events.map((event: Event) => (
+                    <EventCard
+                      key={event.id}
+                      event={event}
+                      toggleEventModal={toggleEventDetailModal}
+                      setEventModalEvent={setEventDetailsEvent}
+                    />
                   ))}
                 </div>
               )}

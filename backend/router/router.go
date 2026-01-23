@@ -32,6 +32,7 @@ func New(s *handlers.BotService, p *handlers.AppService) *chi.Mux {
 	AddWalletRoutes(r, p)
 	AddLocationRoutes(r, p)
 	AddContactRoutes(r, p)
+	AddPonderRoutes(r, p)
 
 	return r
 }
@@ -39,8 +40,11 @@ func New(s *handlers.BotService, p *handlers.AppService) *chi.Mux {
 func AddBotRoutes(r *chi.Mux, s *handlers.BotService, a *handlers.AppService) {
 	r.Post("/events", withAdmin(s.NewEvent, a))
 	r.Post("/events/{event_id}/codes", withAdmin(s.NewCodesRequest, a))
-	r.Get("/events", withAdmin(s.GetCodesRequest, a))
+	r.Get("/events/{event}", withAdmin(s.GetCodesRequest, a))
+	r.Delete("/events/{event}", withAdmin(s.DeleteEvent, a))
+	r.Get("/events", withAdmin(s.GetEvents, a))
 	r.Post("/redeem", s.Redeem)
+	r.Post("/drain", withAdmin(s.Drain, a))
 }
 
 func AddUserRoutes(r *chi.Mux, s *handlers.AppService) {
@@ -76,6 +80,14 @@ func AddContactRoutes(r *chi.Mux, s *handlers.AppService) {
 	r.Get("/contacts", withAuth(s.GetContacts))
 	r.Put("/contacts", withAuth(s.UpdateContact))
 	r.Delete("/contacts", withAuth(s.DeleteContact))
+}
+
+func AddPonderRoutes(r *chi.Mux, s *handlers.AppService) {
+	r.Post("/ponder", withAuth(s.AddPonderMerchantSubscription))
+	r.Get("/ponder", withAuth(s.GetPonderSubscriptions))
+	r.Delete("/ponder", withAuth(s.DeletePonderMerchantSubscription))
+	r.Get("/ponder/callback", s.PonderPingCallback)
+	r.Post("/ponder/callback", s.PonderHookHandler)
 }
 
 func withAuth(handlerFunc http.HandlerFunc) http.HandlerFunc {

@@ -26,8 +26,7 @@ const Page = () => {
   const closeModal = (delay: number) => {
     setTimeout(() => {
         if (sigAuthRedirect) {
-          //router.push(sigAuthRedirect + "/close")
-          console.log("modal should close")
+          router.push(sigAuthRedirect + "/close")
         }
       }, delay)
   }
@@ -37,7 +36,6 @@ const Page = () => {
       setError("Please download the CitizenWallet app, then scan your QR code again.")
       return
     }
-    console.log("use effect reached")
     sendBotRequest()
   }, [])
 

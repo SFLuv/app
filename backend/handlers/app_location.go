@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -164,6 +165,15 @@ func (a *AppService) AddLocation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	sender := utils.NewEmailSender()
+	if sender != nil {
+		// send confirmation email to admin
+		err = sender.SendEmail("admin@sfluv.org", "SFLuv Admin", "New Location Added", fmt.Sprintf("A new location has been added: %s", location.Name), "no_reply@sfluv.org", "SFLuv Admin")
+		if err != nil {
+			a.logger.Logf("error sending confirmation email: %s", err.Error())
+		}
+	}
+
 	w.WriteHeader(http.StatusCreated)
 	w.Write([]byte("success"))
 }
@@ -200,6 +210,18 @@ func (a *AppService) UpdateLocation(w http.ResponseWriter, r *http.Request) {
 		a.logger.Logf("failed to update location %s", err.Error())
 		w.WriteHeader(http.StatusBadRequest)
 		return
+	}
+
+	// TODO: how do we make sure this is the first time a location is approved?
+	if *location.Approval {
+		// send confirmation email to contact associated with location
+		sender := utils.NewEmailSender()
+		if sender != nil {
+			err = sender.SendEmail(location.AdminEmail, fmt.Sprintf("%s %s", location.ContactFirstName, location.ContactLastName), "Location Approved", fmt.Sprintf("Location %s has been approved", location.Name), "no_reply@sfluv.org", "SFLuv Admin")
+			if err != nil {
+				a.logger.Logf("error sending confirmation email: %s", err.Error())
+			}
+		}
 	}
 
 	w.WriteHeader(http.StatusCreated)

@@ -288,6 +288,24 @@ export class AppWallet {
     return balance
   }
 
+  getBalanceOf = async (token: Address, address: Address): Promise<bigint | null> => {
+    if(!this.initialized) return null
+    if(!this.wallet) return null
+    if(!this.publicClient) return null
+    if(!this.address) return null
+
+
+    const statement = {
+      address: token,
+      abi: [balanceOf],
+      functionName: "balanceOf",
+      args: [address],
+    }
+    const balance = await this.publicClient.readContract(statement) as bigint
+
+    return balance
+  }
+
   getSFLUVBalanceFormatted = async (): Promise<number | null> => {
     const b = await this.getBalance(SFLUV_TOKEN)
     if(b === null) return null
