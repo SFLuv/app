@@ -1,4 +1,4 @@
-export type TransactionType = "customer_purchase" | "currency_unwrap" | "currency_transfer" | "volunteer_reward"
+export type TransactionType =  "currency_unwrap" | "currency_transfer" | "volunteer_reward"
 
 export type TransactionStatus = "completed" | "pending" | "failed"
 
@@ -19,7 +19,6 @@ export interface Transaction {
 }
 
 export const transactionTypeLabels: Record<TransactionType, string> = {
-  customer_purchase: "Customer Purchase",
   currency_unwrap: "Currency Unwrap",
   currency_transfer: "Currency Transfer",
   volunteer_reward: "Volunteer Reward",

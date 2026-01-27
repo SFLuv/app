@@ -337,14 +337,19 @@ export default function WalletDetailsPage() {
           </div> */}
 
           {/* Transaction History */}
-          {/* <Card>
+          <Card>
             <CardHeader className="pb-2 sm:pb-3">
               <div className="flex items-center justify-between">
                 <div>
                   <CardTitle className="text-base sm:text-lg">Recent Activity</CardTitle>
                   <CardDescription className="text-xs sm:text-sm">Your latest transactions</CardDescription>
                 </div>
-                <Button variant="ghost" size="sm" className="text-xs sm:text-sm">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-xs sm:text-sm"
+                  onClick={() => router.push("/wallets/" + params.address + "/transactions")}
+                >
                   View All
                 </Button>
               </div>
@@ -352,7 +357,7 @@ export default function WalletDetailsPage() {
             <CardContent className="px-3 sm:px-4 pb-3 sm:pb-4">
               <TransactionHistoryList transactions={walletTransactions.slice(0, 10)} walletAddress={wallet.address || "0x"} />
             </CardContent>
-          </Card> */}
+          </Card>
 
           {/* Security Notice */}
           <Card className="border-amber-200 dark:border-amber-800 bg-amber-50/50 dark:bg-amber-900/10">
