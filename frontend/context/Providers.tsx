@@ -7,6 +7,7 @@ import { CHAIN, PRIVY_ID } from "@/lib/constants"
 import { useTheme } from "next-themes"
 import LocationProvider from "./LocationProvider"
 import ContactsProvider from "./ContactsProvider"
+import TransactionProvider from "./TransactionProvider"
 
 const Providers = ({ children }: { children: ReactNode }) => {
   const { resolvedTheme } = useTheme()
@@ -39,6 +40,7 @@ const Providers = ({ children }: { children: ReactNode }) => {
       <AppProvider>
         <ContactsProvider>
         <LocationProvider>
+        <TransactionProvider>
         <Suspense fallback={
           <div className="min-h-screen flex items-center justify-center">
             <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-[#eb6c6c]"></div>
@@ -46,6 +48,7 @@ const Providers = ({ children }: { children: ReactNode }) => {
         }>
         {children}
         </Suspense>
+        </TransactionProvider>
         </LocationProvider>
         </ContactsProvider>
       </AppProvider>

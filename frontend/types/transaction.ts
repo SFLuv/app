@@ -1,6 +1,18 @@
+import { WalletTransaction } from "./privy-wallet";
+
 export type TransactionType =  "currency_unwrap" | "currency_transfer" | "volunteer_reward"
 
 export type TransactionStatus = "completed" | "pending" | "failed"
+
+export interface ServerTransaction {
+  id: string;
+  hash: string;
+  amount: string;
+  timestamp: number;
+  from: string;
+  to: string;
+
+}
 
 export interface Transaction {
   id: string

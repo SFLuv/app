@@ -1,14 +1,30 @@
 import { createContext, ReactNode, useContext, useEffect, useState } from "react";
 import { useApp } from "./AppProvider";
-import { Transaction, TransactionStatus } from "@/types/transaction";
+import { ServerTransaction, Transaction, TransactionStatus, TransactionType } from "@/types/transaction";
 import { Options } from "react-to-pdf";
+import { useContacts } from "./ContactsProvider";
+import { Server } from "http";
+import { FAUCET_ADDRESS, HONEY_TOKEN, SFLUV_DECIMALS } from "@/lib/constants";
+import { WalletTransaction } from "@/types/privy-wallet";
 
 interface TransactionContext {
-  getTransactionsPage: (address: string, page: number, options: TransactionOptions) => Promise<Transaction[]>
+  transactionsStatus: TransactionsStatus
+  transactionsError: string | null
+
+  getTransactionsPage: (address: string, page: number, options: TransactionOptions) => Promise<WalletPage>
+  toWalletTransaction: (owner: string, tx: Transaction) => WalletTransaction
+  refreshTransactions: (address: string, page: number, options: TransactionOptions) => Promise<WalletPage>
 }
+
 
 interface WalletTransactions {
   pages: Transaction[][]
+  total: number
+}
+
+interface WalletPage {
+  txs: Transaction[]
+  page: number
   total: number
 }
 
@@ -28,6 +44,7 @@ const TransactionContext = createContext<TransactionContext | null>(null);
 
 export default function TransactionProvider({ children }: { children: ReactNode }) {
   const { status, wallets, authFetch } = useApp()
+  const { contacts, contactsStatus } = useContacts()
   const [transactions, setTransactions] = useState<Record<string, WalletTransactions>>({})
   const [transactionsError, setTransactionsError] = useState<string | null>(null)
   const [transactionsStatus, setTransactionsStatus] = useState<TransactionsStatus>("ready")
@@ -40,68 +57,169 @@ export default function TransactionProvider({ children }: { children: ReactNode 
     }
   }, [status])
 
-  const getTransactionsPage = async (address: string, page: number, options: TransactionOptions): Promise<Transaction[]> => {
+  useEffect(() => {
+    if(transactionsError) {
+      console.error(transactionsError)
+    }
+  }, [transactionsError])
+
+  const getTransactionsPage = async (address: string, page: number, options: TransactionOptions): Promise<WalletPage> => {
     const paginationString = "&count=" + (options.paginationDetails.count || 10)+ "&desc=" + (options.paginationDetails.desc ?? true)
 
     try {
-      let txPage: Transaction[] = transactions[paginationString]?.pages[page]
-      if(!txPage?.length) {
+      let txPage: WalletPage = {
+        txs: transactions[paginationString]?.pages[page],
+        page,
+        total: transactions[paginationString]?.total
+      }
+      if(!txPage?.txs?.length) {
         txPage = await _fillTransactionsPage(address, page, options.paginationDetails)
+        console.log(txPage)
       }
 
       return txPage
     }
-    catch {
+    catch(error) {
+      console.error(error)
       setTransactionsError("Error getting transactions page.")
-      return []
+      return {
+        txs: [],
+        page,
+        total: 0
+      }
     }
   }
 
-  const _fillTransactionsPage = async (address: string, page: number, paginationDetails: PaginationDetails): Promise<Transaction[]>  => {
+  const refreshTransactions = async (address: string, page: number, options: TransactionOptions): Promise<WalletPage> => {
+    setTransactions({})
+    setTransactionsError(null)
+    return getTransactionsPage(address, page, options)
+  }
+
+  const toWalletTransaction = (owner: string, tx: Transaction): WalletTransaction => {
+    const id = tx.id
+    const type = owner.toLowerCase() === tx.fromAddress.toLowerCase() ? "send" : "receive"
+    const amount = tx.amount
+    const currency = "SFLUV"
+    const fromAddress = tx.fromAddress
+    const toAddress = tx.toAddress
+    const status = "confirmed"
+    const timestamp = tx.timestamp
+    const hash = tx.transactionId
+
+    return {
+      id,
+      type,
+      amount,
+      currency,
+      fromAddress,
+      toAddress,
+      status,
+      timestamp,
+      hash
+    }
+  }
+
+  const _fillTransactionsPage = async (address: string, page: number, paginationDetails: PaginationDetails): Promise<WalletPage>  => {
     const paginationString = "&count=" + (paginationDetails.count || 10)+ "&desc=" + (paginationDetails.desc ?? true)
     const pageName = address + paginationString
     setTransactionsStatus("loading")
-    if(transactions[pageName].total < page * paginationDetails.count - 1) {
+    if(transactions[pageName]?.total < page * paginationDetails.count - 1) {
       setTransactionsError("Out of bounds.")
-      return []
+      return {
+        txs: [],
+        page,
+        total: 0
+      }
     }
-
     try {
 
-      const res = await authFetch("/transactions" + "?page=" + page + paginationDetails)
+      const res = await authFetch("/transactions" + "?address=" + address + "&page=" + page + paginationString)
       const txPage = await res.json()
       const newTransactions = { ...transactions }
 
-      newTransactions[pageName] = transactions[pageName]
-      newTransactions[pageName].pages[page] = txPage.transactions.map((tx) => {
-
-      })
+      newTransactions[pageName] = transactions[pageName] || { pages: [], total: 0 }
+      newTransactions[pageName].pages[page] = txPage.transactions.map(_txResponseToAppTx)
       newTransactions[pageName].total = txPage.total
 
       setTransactions(newTransactions)
       setTransactionsError(null)
 
-      return newTransactions[pageName].pages[page]
+      return {
+        txs: newTransactions[pageName]?.pages[page],
+        page,
+        total: txPage.total
+      }
     }
-    catch {
+    catch(error) {
+      console.error(error)
       setTransactionsError("Error fetching new transactions page.")
-      return []
+      return {
+        txs: [],
+        page,
+        total: 0
+      }
     }
     finally {
       setTransactionsStatus("ready")
     }
   }
 
+
+  const _txResponseToAppTx = (tx: ServerTransaction): Transaction => {
+    const id = tx.id
+    const type = _getTxType(tx)
+    const amount = Number(BigInt(tx.amount) / BigInt(10 ** (SFLUV_DECIMALS - 2))) / 100
+    const timestamp = String(tx.timestamp)
+    const status = "completed"
+    const fromName = contacts.find((c) => c.address.toLowerCase() === tx.from.toLowerCase())?.name
+    const fromAddress = tx.from
+    const toName = contacts.find((c) => c.address.toLowerCase() === tx.to.toLowerCase())?.name
+    const toAddress = tx.to
+    const transactionId = tx.hash
+
+    return {
+      id,
+      type,
+      amount,
+      timestamp,
+      status,
+      fromName,
+      fromAddress,
+      toName,
+      toAddress,
+      transactionId
+    }
+  }
+
+
+  const _getTxType = (tx: ServerTransaction): TransactionType => {
+    if(tx.to.toLowerCase() === "0x0000000000000000000000000000000000000000") {
+      return "currency_unwrap"
+    }
+    if(tx.from.toLowerCase() === FAUCET_ADDRESS.toLowerCase()) {
+      return "volunteer_reward"
+    }
+
+    return "currency_transfer"
+  }
+
+
   return (
     <TransactionContext.Provider
       value={{
-        getTransactionsPage
+        transactionsStatus,
+        transactionsError,
+        getTransactionsPage,
+        toWalletTransaction,
+        refreshTransactions
       }}
     >
       {children}
     </TransactionContext.Provider>
   )
 }
+
 
 export function useTransactions() {
   const context = useContext(TransactionContext)

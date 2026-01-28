@@ -1,30 +1,65 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { useRouter, useSearchParams } from "next/navigation"
+import { useParams, useRouter, useSearchParams } from "next/navigation"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { TransactionList } from "@/components/transactions/transaction-list"
 import { TransactionAnalytics } from "@/components/transactions/transaction-analytics"
 import { TransactionModal } from "@/components/transactions/transaction-modal"
 import { useApp } from "@/context/AppProvider"
-import { mockMerchantTransactions, mockUserTransactions, mockMerchantAnalytics } from "@/data/mock-transactions"
 import type { Transaction } from "@/types/transaction"
+import { Pagination } from "@/components/opportunities/pagination"
 import { Button } from "@/components/ui/button"
 import { ArrowLeft } from "lucide-react"
+import { useTransactions } from "@/context/TransactionProvider"
 
 export default function TransactionsPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
-  const { user } = useApp()
+  const { user, status, walletsStatus } = useApp()
   const [activeTab, setActiveTab] = useState("list")
   const [selectedTransaction, setSelectedTransaction] = useState<Transaction | null>(null)
+  const [transactions, setTransactions] = useState<Transaction[]>([])
   const [isModalOpen, setIsModalOpen] = useState(false)
+  const [currentPage, setCurrentPage] = useState(0)
+  const [totalPages, setTotalPages] = useState(0)
+
+  const ITEMS_PER_PAGE = 10
+
+
+  const params = useParams()
+  const walletAddress = params.address as string
+
+  const {
+    getTransactionsPage,
+    toWalletTransaction
+  } = useTransactions()
+
+  useEffect(() => {
+    txPageHandler()
+  }, [currentPage])
+
+
+  const txPageHandler = async () => {
+    console.log("fetching")
+
+    const walletTxs = (await getTransactionsPage(walletAddress, currentPage, {
+      paginationDetails: {
+        count: ITEMS_PER_PAGE,
+        desc: true
+      }
+    }))
+
+    console.log(walletTxs)
+
+    setTransactions(walletTxs.txs)
+    setTotalPages(Math.ceil(walletTxs.total / ITEMS_PER_PAGE))
+  }
 
   // Get transaction ID from URL if present
   const transactionId = searchParams.get("id")
 
   // Determine which transactions to show based on user role
-  const transactions = user?.isMerchant ? mockMerchantTransactions : mockUserTransactions
 
   // Find transaction by ID if provided in URL
   useEffect(() => {
@@ -42,15 +77,21 @@ export default function TransactionsPage() {
     setSelectedTransaction(transaction)
     setIsModalOpen(true)
     // Update URL with transaction ID
-    router.push(`/transactions?id=${transaction.id}`, { scroll: false })
   }
 
   // Handle modal close
   const handleCloseModal = () => {
     setIsModalOpen(false)
     setSelectedTransaction(null)
-    // Remove transaction ID from URL
-    router.push("/transactions", { scroll: false })
+  }
+
+
+  if (status === "loading" || walletsStatus === "loading") {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-[#eb6c6c]"></div>
+      </div>
+    )
   }
 
   return (
@@ -72,34 +113,49 @@ export default function TransactionsPage() {
             </p>
           </div>
 
-          {user?.isMerchant ? (
+          {/* {user?.isMerchant ? (
             <Tabs defaultValue="list" value={activeTab} onValueChange={setActiveTab} className="w-full">
               <TabsList className="grid grid-cols-1 w-full mb-6 bg-secondary">
                 <TabsTrigger value="list" className="text-black dark:text-white">
                   Transaction List
                 </TabsTrigger>
-                {/* <TabsTrigger value="analytics" className="text-black dark:text-white">
+                <TabsTrigger value="analytics" className="text-black dark:text-white">
                   Analytics
-                </TabsTrigger> */}
+                </TabsTrigger>
               </TabsList>
               <TabsContent value="list">
                 <TransactionList
+                  wallet={walletAddress}
                   transactions={transactions}
                   onSelectTransaction={handleSelectTransaction}
                 />
               </TabsContent>
-              {/* <TabsContent value="analytics">
+              <TabsContent value="analytics">
                 <TransactionAnalytics analytics={mockMerchantAnalytics} />
-              </TabsContent> */}
+              </TabsContent>
             </Tabs>
-          ) : (
-            <TransactionList
-              transactions={transactions}
-              onSelectTransaction={handleSelectTransaction}
-            />
-          )}
+          ) : ( */}
+            <>
+              <TransactionList
+                wallet={walletAddress}
+                transactions={transactions}
+                onSelectTransaction={handleSelectTransaction}
+              />
 
-          <TransactionModal transaction={selectedTransaction} isOpen={isModalOpen} onClose={handleCloseModal} />
+            {totalPages > 1 && (
+              <div className="mt-8">
+                <Pagination currentPage={currentPage + 1} totalPages={totalPages} onPageChange={(p) => setCurrentPage(p-1)} />
+              </div>
+            )}
+            <div className="pb-1 text-sm text-gray-500 dark:text-gray-400">
+              Showing {transactions.length} transaction{transactions.length === 1 ? "" : "s"}.
+            </div>
+
+            </>
+          {/* )} */}
+
+          <TransactionModal transaction={selectedTransaction} wallet={walletAddress} isOpen={isModalOpen} onClose={handleCloseModal} />
+
         </div>
       </div>
     </div>
