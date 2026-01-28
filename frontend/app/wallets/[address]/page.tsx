@@ -81,16 +81,12 @@ export default function WalletDetailsPage() {
   }, [status])
 
   const txPageHandler = async () => {
-    console.log("fetching")
-
     const walletTxs = (await getTransactionsPage(walletAddress, 0, {
       paginationDetails: {
         count: 5,
         desc: true
       }
     }))
-
-    console.log(walletTxs)
 
     setWalletTransactions(walletTxs.txs.map((w) => toWalletTransaction(walletAddress, w)))
   }

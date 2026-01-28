@@ -41,16 +41,12 @@ export default function TransactionsPage() {
 
 
   const txPageHandler = async () => {
-    console.log("fetching")
-
     const walletTxs = (await getTransactionsPage(walletAddress, currentPage, {
       paginationDetails: {
         count: ITEMS_PER_PAGE,
         desc: true
       }
     }))
-
-    console.log(walletTxs)
 
     setTransactions(walletTxs.txs)
     setTotalPages(Math.ceil(walletTxs.total / ITEMS_PER_PAGE))
