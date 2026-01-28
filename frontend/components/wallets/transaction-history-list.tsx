@@ -26,8 +26,7 @@ export function TransactionHistoryList({ transactions, walletAddress }: Transact
   return (
     <div className="space-y-2 sm:space-y-3">
       {transactions.map((transaction) => {
-        const isSent = transaction.fromAddress === walletAddress
-        const isReceived = transaction.toAddress === walletAddress
+        const isSent = transaction.type === "send"
 
         const getStatusIcon = () => {
           switch (transaction.status) {
@@ -43,16 +42,7 @@ export function TransactionHistoryList({ transactions, walletAddress }: Transact
         }
 
         const getStatusColor = () => {
-          switch (transaction.status) {
-            case "confirmed":
-              return "text-green-600"
-            case "pending":
-              return "text-yellow-600"
-            case "failed":
-              return "text-red-600"
-            default:
-              return "text-gray-400"
-          }
+          return "text-gray-400"
         }
 
         return (

@@ -12,7 +12,7 @@ import (
 	m "github.com/SFLuv/app/backend/utils/middleware"
 )
 
-func New(s *handlers.BotService, p *handlers.AppService) *chi.Mux {
+func New(s *handlers.BotService, a *handlers.AppService, p *handlers.PonderService) *chi.Mux {
 	r := chi.NewRouter()
 
 	r.Use(middleware.Logger)
@@ -26,13 +26,13 @@ func New(s *handlers.BotService, p *handlers.AppService) *chi.Mux {
 	}))
 	r.Use(m.AuthMiddleware)
 
-	AddBotRoutes(r, s, p)
-	AddUserRoutes(r, p)
-	AddAdminRoutes(r, p)
-	AddWalletRoutes(r, p)
-	AddLocationRoutes(r, p)
-	AddContactRoutes(r, p)
-	AddPonderRoutes(r, p)
+	AddBotRoutes(r, s, a)
+	AddUserRoutes(r, a)
+	AddAdminRoutes(r, a)
+	AddWalletRoutes(r, a)
+	AddLocationRoutes(r, a)
+	AddContactRoutes(r, a)
+	AddPonderRoutes(r, a, p)
 
 	return r
 }
@@ -81,12 +81,13 @@ func AddContactRoutes(r *chi.Mux, s *handlers.AppService) {
 	r.Delete("/contacts", withAuth(s.DeleteContact))
 }
 
-func AddPonderRoutes(r *chi.Mux, s *handlers.AppService) {
+func AddPonderRoutes(r *chi.Mux, s *handlers.AppService, p *handlers.PonderService) {
 	r.Post("/ponder", withAuth(s.AddPonderMerchantSubscription))
 	r.Get("/ponder", withAuth(s.GetPonderSubscriptions))
 	r.Delete("/ponder", withAuth(s.DeletePonderMerchantSubscription))
 	r.Get("/ponder/callback", s.PonderPingCallback)
 	r.Post("/ponder/callback", s.PonderHookHandler)
+	r.Get("/transactions", p.GetTransactionHistory)
 }
 
 func withAuth(handlerFunc http.HandlerFunc) http.HandlerFunc {
