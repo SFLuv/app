@@ -17,7 +17,15 @@ func (p *PonderService) GetTransactionHistory(w http.ResponseWriter, r *http.Req
 		descending = true
 	}
 
-	if address == "" || page == "" || count == "" {
+	if page == "" {
+		page = "0"
+	}
+
+	if count == "" {
+		count = "10"
+	}
+
+	if address == "" {
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
