@@ -117,6 +117,7 @@ export default function ContactsPage() {
                 key={contact.id}
                 contact={contact}
                 handleToggleIsFavorite={handleToggleIsFavorite}
+                updateContact={updateContact}
                 toggleDeleteContactModal={toggleDeleteContactModal}
                 setDeleteContactModalContact={setDeleteContactModalContact}
               />
