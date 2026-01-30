@@ -96,9 +96,9 @@ func (a *AppDB) GetWalletByUserAndAddress(ctx context.Context, userId string, ad
 		WHERE
 			owner = $1
 		AND (
-			smart_address LIKE $2
+			LOWER(smart_address) = LOWER($2)
 			OR (
-				eoa_address LIKE $3
+				LOWER(eoa_address) = LOWER($3)
 				AND
 				smart_address IS NULL
 			)

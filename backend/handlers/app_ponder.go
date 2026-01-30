@@ -321,17 +321,15 @@ func (a *AppService) PonderHookHandler(w http.ResponseWriter, r *http.Request) {
 		w, err := a.db.GetWalletByUserAndAddress(r.Context(), l.Owner, l.Address)
 		if err != nil {
 			a.logger.Logf("error getting wallet for user %s, address %s while sending tx receipt email: %s", l.Owner, l.Address, err)
+			continue
 		}
 
-		name := w.Name
-		if name == "" {
-			name = l.Address[:6]
-		}
-		subjectTail := fmt.Sprintf("to %s", name)
-
+		subjectTail := fmt.Sprintf("- %s", tx.Hash[:6])
 		toLine := tx.To
-		if name == w.Name {
-			toLine = fmt.Sprintf("%s (%s)", name, tx.To)
+
+		if w.Name != "" {
+			subjectTail = fmt.Sprintf("to %s %s", w.Name, subjectTail)
+			toLine = fmt.Sprintf("%s (%s)", w.Name, tx.To)
 		}
 
 		err = sender.SendEmail(
