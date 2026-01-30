@@ -31,6 +31,7 @@ func (a *AppService) AddPonderMerchantSubscription(w http.ResponseWriter, r *htt
 	var req structs.PonderSubscriptionRequest
 	err = json.Unmarshal(body, &req)
 	if err != nil {
+		fmt.Println(err)
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
@@ -64,6 +65,7 @@ func (a *AppService) AddPonderMerchantSubscription(w http.ResponseWriter, r *htt
 	}
 
 	if !userWallets[req.Address] {
+		fmt.Println("no address %s", req.Address)
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}

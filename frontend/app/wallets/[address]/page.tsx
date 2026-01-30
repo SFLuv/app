@@ -18,8 +18,24 @@ import { useApp } from "@/context/AppProvider"
 import { CHAIN } from "@/lib/constants"
 import { Input } from "@/components/ui/input"
 import { NotificationModal } from "@/components/notifications/notification-modal"
+import { useTransactions } from "@/context/TransactionProvider"
+import { WalletTransaction } from "@/types/privy-wallet"
 
 export default function WalletDetailsPage() {
+  const [showSendModal, setShowSendModal] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [showReceiveModal, setShowReceiveModal] = useState(false)
+  const [showBalance, setShowBalance] = useState(true)
+  const [isRefreshing, setIsRefreshing] = useState(false)
+  const [balance, setBalance] = useState<number | null>(null)
+  const [isEditingName, setIsEditingName] = useState(false)
+  const [walletName, setWalletName] = useState("")
+  const [isSavingName, setIsSavingName] = useState(false)
+  const [notificationModalOpen, setNotificationModalOpen] = useState<boolean>(false)
+  const [walletTransactions, setWalletTransactions] = useState<WalletTransaction[]>([])
+  const nameInputRef = useRef<HTMLInputElement>(null)
+  const { toast } = useToast()
+
   const params = useParams()
   const router = useRouter()
   const walletAddress = params.address as string
@@ -33,6 +49,12 @@ export default function WalletDetailsPage() {
     addPonderSubscription,
     deletePonderSubscription
   } = useApp()
+  const {
+    transactionsStatus,
+    getTransactionsPage,
+    refreshTransactions,
+    toWalletTransaction
+  } = useTransactions()
 
   // Get the specific wallet by index
   const wallet = useMemo(() => {
@@ -54,20 +76,35 @@ export default function WalletDetailsPage() {
     return p
   }, [ponderSubscriptions])
 
+  useEffect(() => {
+    txPageHandler()
+  }, [status])
+
+  const txPageHandler = async () => {
+    const walletTxs = (await getTransactionsPage(walletAddress, 0, {
+      paginationDetails: {
+        count: 5,
+        desc: true
+      }
+    }))
+
+    setWalletTransactions(walletTxs.txs.map((w) => toWalletTransaction(walletAddress, w)))
+  }
+
+    const txPageRefresher = async () => {
+    const walletTxs = (await refreshTransactions(walletAddress, 0, {
+      paginationDetails: {
+        count: 5,
+        desc: true
+      }
+    }))
+
+    setWalletTransactions(walletTxs.txs.map((w) => toWalletTransaction(walletAddress, w)))
+  }
 
 
-  const [showSendModal, setShowSendModal] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [showReceiveModal, setShowReceiveModal] = useState(false)
-  const [showBalance, setShowBalance] = useState(true)
-  const [isRefreshing, setIsRefreshing] = useState(false)
-  const [balance, setBalance] = useState<number | null>(null)
-  const [isEditingName, setIsEditingName] = useState(false)
-  const [walletName, setWalletName] = useState("")
-  const [isSavingName, setIsSavingName] = useState(false)
-  const [notificationModalOpen, setNotificationModalOpen] = useState<boolean>(false)
-  const nameInputRef = useRef<HTMLInputElement>(null)
-  const { toast } = useToast()
+
+
 
   useEffect(() => { if(!showReceiveModal && !showSendModal) updateBalance() }, [showReceiveModal, showSendModal])
 
@@ -152,6 +189,7 @@ export default function WalletDetailsPage() {
     setIsRefreshing(true)
     // Mock refresh delay
     await updateBalance()
+    await txPageRefresher()
     setIsRefreshing(false)
     toast({
       title: "Wallet Refreshed",
@@ -159,10 +197,6 @@ export default function WalletDetailsPage() {
     })
   }
 
-  // Filter transactions for this wallet
-  const walletTransactions = mockTransactions.filter(
-    (tx) => tx.fromAddress === wallet?.address || tx.toAddress === wallet?.address,
-  )
 
   if (status === "loading" || walletsStatus === "loading") {
     return (
@@ -337,22 +371,32 @@ export default function WalletDetailsPage() {
           </div> */}
 
           {/* Transaction History */}
-          {/* <Card>
+          <Card>
             <CardHeader className="pb-2 sm:pb-3">
               <div className="flex items-center justify-between">
                 <div>
                   <CardTitle className="text-base sm:text-lg">Recent Activity</CardTitle>
                   <CardDescription className="text-xs sm:text-sm">Your latest transactions</CardDescription>
                 </div>
-                <Button variant="ghost" size="sm" className="text-xs sm:text-sm">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-xs sm:text-sm"
+                  onClick={() => router.push("/wallets/" + params.address + "/transactions")}
+                >
                   View All
                 </Button>
               </div>
             </CardHeader>
             <CardContent className="px-3 sm:px-4 pb-3 sm:pb-4">
-              <TransactionHistoryList transactions={walletTransactions.slice(0, 10)} walletAddress={wallet.address || "0x"} />
+              {
+                transactionsStatus === "loading" ?
+                <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-[#eb6c6c]"></div>
+                :
+                <TransactionHistoryList transactions={walletTransactions.slice(0, 10)} walletAddress={wallet.address || "0x"} />
+              }
             </CardContent>
-          </Card> */}
+          </Card>
 
           {/* Security Notice */}
           <Card className="border-amber-200 dark:border-amber-800 bg-amber-50/50 dark:bg-amber-900/10">

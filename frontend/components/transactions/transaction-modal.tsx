@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useMemo, useState } from "react"
 import {
   Dialog,
   DialogContent,
@@ -18,12 +18,17 @@ import { SYMBOL } from "@/lib/constants"
 
 interface TransactionModalProps {
   transaction: Transaction | null
+  wallet: string
   isOpen: boolean
   onClose: () => void
 }
 
-export function TransactionModal({ transaction, isOpen, onClose }: TransactionModalProps) {
+export function TransactionModal({ transaction, wallet, isOpen, onClose }: TransactionModalProps) {
   const [copied, setCopied] = useState<string | null>(null)
+
+  const received = useMemo(() => {
+    return transaction?.toAddress.toLowerCase() === wallet.toLowerCase()
+  }, [transaction])
 
   if (!transaction) return null
 
@@ -34,7 +39,7 @@ export function TransactionModal({ transaction, isOpen, onClose }: TransactionMo
   }
 
   const formatDate = (dateString: string) => {
-    const date = new Date(dateString)
+    const date = new Date(Number(dateString) * 1000)
     return date.toLocaleString("en-US", {
       year: "numeric",
       month: "long",
@@ -72,11 +77,11 @@ export function TransactionModal({ transaction, isOpen, onClose }: TransactionMo
   }
 
   const getAmountColor = (amount: number) => {
-    return amount >= 0 ? "text-green-500" : "text-red-500"
+    return received ? "text-green-500" : "text-red-500"
   }
 
   const formatAmount = (amount: number) => {
-    return `${amount >= 0 ? "+" : ""}${amount} ${SYMBOL}`
+    return `${received ? "+" : "-"}${amount} ${SYMBOL}`
   }
 
   return (
@@ -193,7 +198,7 @@ export function TransactionModal({ transaction, isOpen, onClose }: TransactionMo
           </Button>
           <Button
             className="bg-[#eb6c6c] hover:bg-[#d55c5c]"
-            onClick={() => window.open(`https://explorer.sfluv.org/tx/${transaction.transactionId}`, "_blank")}
+            onClick={() => window.open(`https://berascan.com/tx/${transaction.transactionId}`, "_blank")}
           >
             <ExternalLink className="h-4 w-4 mr-2" />
             View on Explorer

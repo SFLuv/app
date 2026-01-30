@@ -38,32 +38,42 @@ ponder.on("ERC20:Transfer", async ({ event, context }) => {
     to: event.args.to,
   });
 
-  let deduped: Record<string, boolean> = {};
-  (await Promise.all([
-    getHooks(event.args.from),
-    event.args.to === event.args.from ? undefined : getHooks(event.args.to)
-  ]))
-  .map((set: PonderHook[] | undefined) => {
-    if(!set) return
-    set.forEach((hook) => {
-      const hookBody = {
-        to: event.args.to,
-        from: event.args.from,
-        hash: event.transaction.hash,
-        amount: event.args.amount.toString()
-      }
+  try {
+    let deduped: Record<string, boolean> = {};
+    (await Promise.all([
+      getHooks(event.args.from),
+      event.args.to === event.args.from ? undefined : getHooks(event.args.to)
+    ]))
+    .map((set: PonderHook[] | undefined) => {
+      if(!set) return
+      set.forEach(async (hook) => {
+        try {
+          const hookBody = {
+            to: event.args.to,
+            from: event.args.from,
+            hash: event.transaction.hash,
+            amount: event.args.amount.toString()
+          }
 
-      if(deduped[hook.url]) return
-      deduped[hook.url] = true
-      fetch(hook.url, {
-        method: "POST",
-        body: JSON.stringify(hookBody),
-        headers: {
-          "X-Admin-Key": process.env.ADMIN_KEY as string
+          if(deduped[hook.url]) return
+          deduped[hook.url] = true
+          await fetch(hook.url, {
+            method: "POST",
+            body: JSON.stringify(hookBody),
+            headers: {
+              "X-Admin-Key": process.env.ADMIN_KEY as string
+            }
+          })
+        }
+        catch {
+          console.log("Error sending hook for tx " + event.transaction.hash + ":", hook)
         }
       })
     })
-  })
+  }
+  catch {
+    console.log("Error getting hooks for transfer:", event)
+  }
 });
 
 ponder.on("ERC20:Approval", async ({ event, context }) => {
