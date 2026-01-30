@@ -81,6 +81,47 @@ func (a *AppDB) GetWalletsByUser(ctx context.Context, userId string) ([]*structs
 	return wallets, nil
 }
 
+func (a *AppDB) GetWalletByUserAndAddress(ctx context.Context, userId string, address string) (*structs.Wallet, error) {
+	row := a.db.QueryRow(ctx, `
+		SELECT
+			id,
+			owner,
+			name,
+			is_eoa,
+			eoa_address,
+			smart_address,
+			smart_index
+		FROM
+			wallets
+		WHERE
+			owner = $1
+		AND (
+			smart_address LIKE $2
+			OR (
+				eoa_address LIKE $3
+				AND
+				smart_address IS NULL
+			)
+		);
+	`, userId, address, address)
+
+	var w structs.Wallet
+	err := row.Scan(
+		&w.Id,
+		&w.Owner,
+		&w.Name,
+		&w.IsEoa,
+		&w.EoaAddress,
+		&w.SmartAddress,
+		&w.SmartIndex,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return &w, nil
+}
+
 func (a *AppDB) UpdateWallet(ctx context.Context, wallet *structs.Wallet) error {
 	_, err := a.db.Exec(ctx, `
 		UPDATE
