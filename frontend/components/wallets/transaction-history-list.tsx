@@ -72,7 +72,7 @@ export function TransactionHistoryList({ transactions, walletAddress }: Transact
                 </p>
                 <div className="flex items-center gap-2 mt-0.5">
                   <p className="text-xs text-muted-foreground">
-                    {new Date(transaction.timestamp).toLocaleDateString()}
+                    {new Date(Number(transaction.timestamp) * 1000).toLocaleDateString()}
                   </p>
                   {transaction.hash && (
                     <p className="text-xs text-muted-foreground font-mono hidden sm:block">
