@@ -92,7 +92,7 @@ export function CashOutCryptoModal({
     if (amount <= 0) return
 
     if (user) {
-    await wallet.unwrap(amount, payPalEthAddress)
+    await wallet.unwrapAndBridge(amount, payPalEthAddress)
     } else {
       throw new Error("user not found")
     }

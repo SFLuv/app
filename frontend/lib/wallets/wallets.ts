@@ -2,11 +2,11 @@ import { ConnectedWallet, EIP1193Provider } from "@privy-io/react-auth";
 import { BrowserProvider, JsonRpcSigner, Signer } from "ethers";
 import { toSimpleSmartAccount, ToSimpleSmartAccountReturnType } from "permissionless/accounts";
 import { Address, createPublicClient, createWalletClient, custom, encodeFunctionData, Hex, hexToBytes, http, PublicClient } from "viem";
-import { CHAIN, BYUSD_DECIMALS, SFLUV_DECIMALS, FACTORY, SFLUV_TOKEN, BYUSD_TOKEN, } from "../constants";
+import { CHAIN, BYUSD_DECIMALS, SFLUV_DECIMALS, FACTORY, SFLUV_TOKEN, BYUSD_TOKEN, ZAPPER_CONTRACT_ADDRESS } from "../constants";
 import { entryPoint07Address } from "viem/account-abstraction";
 import { Hash } from "viem";
 import { cw_bundler } from "../paymaster/client";
-import { balanceOf, depositFor, transfer, withdrawTo } from "../abi";
+import { balanceOf, depositFor, transfer, withdrawTo, unwrapSwapAndBridge } from "../abi";
 import { useApp } from "@/context/AppProvider";
 
 export type WalletType = "smartwallet" | "eoa"
@@ -177,7 +177,7 @@ export class AppWallet {
     return this._execTx(t.wallet, t.signer, callData)
   }
 
-  unwrap = async (amount: number, paypalEthAddress : string): Promise<TxState | null>  => {
+  bridge = async (amount: number, paypalEthAddress : string): Promise<TxState | null>  => {
      const t = this._beforeTx()
     if(!t) return null
 
@@ -243,6 +243,40 @@ export class AppWallet {
     console.log(receipt)
     return receipt
   }
+
+  unwrapAndBridge = async (amount: number, to: string): Promise<TxState | null> => {
+  const sendAmount = amount * (10 ** SFLUV_DECIMALS)
+    const t = this._beforeTx()
+    if(!t) return null
+
+    const callData = encodeFunctionData({
+      abi: [unwrapSwapAndBridge],
+      functionName: "unwrapSwapAndBridge",
+      args: [sendAmount, to]
+    })
+
+    const callDataBytes = hexToBytes(callData)
+
+    let receipt: TxState = {
+        sending: false,
+        error: null,
+        hash: null
+      }
+
+    console.log("Unwrapping and bridging " + sendAmount + " to: " + to)
+    console.log("Index: " + this.index)
+    try {
+      const hash = await cw_bundler.call(t.signer, ZAPPER_CONTRACT_ADDRESS, t.wallet.address, callDataBytes, undefined, undefined, undefined, { smartAccountIndex: this.index ? Number(this.index) : undefined })
+      receipt.hash = hash
+    }
+    catch(error) {
+      receipt.error = "error sending transaction: check logs"
+      console.error(error)
+    }
+
+    console.log(receipt)
+    return receipt
+   }
 
   send = async (amount: bigint, to: Address): Promise<TxState | null> => {
     const t = this._beforeTx()
