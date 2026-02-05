@@ -18,7 +18,6 @@ export default function PlaceAutocomplete({ setGoogleSubLocation, setBusinessPho
     if (!containerRef.current) return;
 
     const importGoogleLibrary = async () => {
-        console.log("google maps imported")
         await google.maps.importLibrary("places") as google.maps.PlacesLibrary;
     }
 
@@ -44,7 +43,6 @@ export default function PlaceAutocomplete({ setGoogleSubLocation, setBusinessPho
 
         ] });
         const rawGoogleData = place.toJSON()
-        console.log(rawGoogleData)
         const googleDetails: GoogleSubLocation = {
             google_id: rawGoogleData.id,
             name: rawGoogleData.displayName,
@@ -62,7 +60,6 @@ export default function PlaceAutocomplete({ setGoogleSubLocation, setBusinessPho
             maps_page: rawGoogleData.googleMapsURI,
             opening_hours: rawGoogleData.regularOpeningHours?.weekdayDescriptions || [],
         }
-        console.log(googleDetails)
         setGoogleSubLocation(googleDetails)
         if (typeof googleDetails.phone === "string") {
         setBusinessPhone(googleDetails.phone)
@@ -78,7 +75,6 @@ export default function PlaceAutocomplete({ setGoogleSubLocation, setBusinessPho
     placeAutocomplete.className="text-black dark:text-white border rounded-md bg-secondary px-3 py-2"
 
     if (containerRef.current?.querySelector("gmp-place-autocomplete")) {
-        console.log("Element is already inside container");
     } else {
         //@ts-ignore
         containerRef.current.appendChild(placeAutocomplete)
