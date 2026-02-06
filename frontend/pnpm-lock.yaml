@@ -177,8 +177,8 @@ importers:
         specifier: ^2.1.9
         version: 2.1.9(react-dom@19.2.1(react@19.2.1))(react@19.2.1)
       react-to-pdf:
-        specifier: ^2.0.3
-        version: 2.0.3(react-dom@19.2.1(react@19.2.1))(react@19.2.1)
+        specifier: ^3.0.0
+        version: 3.0.0(react-dom@19.2.1(react@19.2.1))(react@19.2.1)
       recharts:
         specifier: 2.15.0
         version: 2.15.0(react-dom@19.2.1(react@19.2.1))(react@19.2.1)
@@ -2444,6 +2444,17 @@ packages:
       zod:
         optional: true
 
+  abitype@1.2.3:
+    resolution: {integrity: sha512-Ofer5QUnuUdTFsBRwARMoWKOH1ND5ehwYhJ3OJ/BQO+StkwQjHw0XyVh4vDttzHB7QOFhPHa/o413PJ82gU/Tg==}
+    peerDependencies:
+      typescript: '>=5.0.4'
+      zod: ^3.22.0 || ^4.0.0
+    peerDependenciesMeta:
+      typescript:
+        optional: true
+      zod:
+        optional: true
+
   abort-controller@3.0.0:
     resolution: {integrity: sha512-h8lQ8tacZYnR3vNQTgibj+tODHI5/+l06Au2Pcriv/Gmet0eaj4TwWH41sO9wnHDiQsEj19q0drzdWdeAHtweg==}
     engines: {node: '>=6.5'}
@@ -3266,8 +3277,8 @@ packages:
   json-stringify-safe@5.0.1:
     resolution: {integrity: sha512-ZClg6AaYvamvYEE82d3Iyd3vSSIjQ+odgjaTzRuO3s7toCdFKczob2i0zCh7JE8kWn17yvAWhUVxvqGwUalsRA==}
 
-  jspdf@3.0.4:
-    resolution: {integrity: sha512-dc6oQ8y37rRcHn316s4ngz/nOjayLF/FFxBF4V9zamQKRqXxyiH1zagkCdktdWhtoQId5K20xt1lB90XzkB+hQ==}
+  jspdf@4.0.0:
+    resolution: {integrity: sha512-w12U97Z6edKd2tXDn3LzTLg7C7QLJlx0BPfM3ecjK2BckUl9/81vZ+r5gK4/3KQdhAcEZhENUxRhtgYBj75MqQ==}
 
   kdbush@4.0.2:
     resolution: {integrity: sha512-WbCVYJ27Sz8zi9Q7Q0xHC+05iwkm3Znipc2XTlrnJbsHMYktW4hPhXUE8Ys1engBrvffoSCqbil1JQAa7clRpA==}
@@ -3822,8 +3833,8 @@ packages:
       '@types/react':
         optional: true
 
-  react-to-pdf@2.0.3:
-    resolution: {integrity: sha512-T7BguvKiiftKx83w5roFetoNiO/QLdokEDnw3OpHKh3eaQnwki6HxNN9uObcFAv6MQs2GQ647bEe/Pq2Ow5IgA==}
+  react-to-pdf@3.0.0:
+    resolution: {integrity: sha512-aYYyrKDX2Bp4BFdX77CHGzbOWRyD+iz2O5G9DKPhez6ZKh3SfBDuIiVG+XoYp3HQ3XVsL/nOv1Lny5mrjZ4skw==}
     peerDependencies:
       react: '>=16.8'
       react-dom: '>=16.8'
@@ -8373,6 +8384,12 @@ snapshots:
       typescript: 5.9.3
       zod: 3.25.76
 
+  abitype@1.2.3(typescript@5.9.3)(zod@3.25.76):
+    optionalDependencies:
+      typescript: 5.9.3
+      zod: 3.25.76
+    optional: true
+
   abort-controller@3.0.0:
     dependencies:
       event-target-shim: 5.0.1
@@ -9177,7 +9194,7 @@ snapshots:
 
   json-stringify-safe@5.0.1: {}
 
-  jspdf@3.0.4:
+  jspdf@4.0.0:
     dependencies:
       '@babel/runtime': 7.28.4
       fast-png: 6.4.0
@@ -9417,7 +9434,7 @@ snapshots:
       '@noble/hashes': 1.8.0
       '@scure/bip32': 1.7.0
       '@scure/bip39': 1.6.0
-      abitype: 1.2.1(typescript@5.9.3)(zod@3.25.76)
+      abitype: 1.2.3(typescript@5.9.3)(zod@3.25.76)
       eventemitter3: 5.0.1
     optionalDependencies:
       typescript: 5.9.3
@@ -9777,10 +9794,10 @@ snapshots:
     optionalDependencies:
       '@types/react': 19.2.7
 
-  react-to-pdf@2.0.3(react-dom@19.2.1(react@19.2.1))(react@19.2.1):
+  react-to-pdf@3.0.0(react-dom@19.2.1(react@19.2.1))(react@19.2.1):
     dependencies:
       html2canvas: 1.4.1
-      jspdf: 3.0.4
+      jspdf: 4.0.0
       react: 19.2.1
       react-dom: 19.2.1(react@19.2.1)
 

@@ -65,7 +65,7 @@
     "react-qr-code": "^2.0.18",
     "react-qrcode-logo": "^3.0.0",
     "react-resizable-panels": "^2.1.9",
-    "react-to-pdf": "^2.0.3",
+    "react-to-pdf": "^3.0.0",
     "recharts": "2.15.0",
     "sonner": "^1.7.4",
     "tailwind-merge": "^2.6.0",
