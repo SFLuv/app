@@ -23,19 +23,26 @@ export const QRCodeCard = ({ code }: { code: string }) => {
         }}>Thank you from SFLuv!</h1>
         <h3 style={{margin: "10px"}}>To redeem your tokens:</h3>
         <ol style={{textAlign: "center", width: "70%", margin: "auto", fontSize: "10px"}}>
-          <li>Scan the QR code</li>
-          <li>Download the app (CitizenWallet)</li>
-          <li>Once downloaded, scan the QR again to claim your $SFLUV!</li>
+          <li>1. Scan the QR code</li>
+          <li>2. Download the app (CitizenWallet)</li>
+          <li>3. Select "Browse Communities"</li>
+          <li>4. Select "SFLUV Community"</li>
+          <li>5. Scan the QR again to claim your $SFLUV!</li>
         </ol>
       </div>
 
-      <div style={{margin: "auto", marginTop: "25px", height: "auto", width: "50%", textAlign: "center"}}>
+      <div style={{margin: "auto", marginTop: "20px", marginBottom: "15px", height: "auto", width: "40%", textAlign: "center"}}>
         <QRCode
           size={256}
           style={{ height: "auto", maxWidth: "100%", width: "100%" }}
           value={url}
           viewBox={`0 0 256 256`}
         />
+      </div>
+      <div style={{textAlign: "center", fontSize: "8px"}}>
+        <p>Interested in more SFLuv supported events?<br/>
+          Visit <a>www.sfluv.org/volunteers</a>
+        </p>
       </div>
     </div>
 
