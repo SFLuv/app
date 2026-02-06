@@ -6,6 +6,7 @@ import { polygon } from "viem/chains"
 export const CHAIN_ID = config.community.primary_token.chain_id
 export const CHAIN = chain
 export const SFLUV_TOKEN = config.community.primary_token.address as Address
+export const HONEY_TOKEN = process.env.NEXT_PUBLIC_HONEY_ADDRESS as Address
 export const BYUSD_TOKEN = process.env.NEXT_PUBLIC_BYUSD_ADDRESS as Address
 export const ZAPPER_CONTRACT_ADDRESS = process.env.NEXT_PUBLIC_ZAPPER_ADDRESS as Address
 export const FAUCET_ADDRESS = process.env.NEXT_PUBLIC_FAUCET_ADDRESS as Address

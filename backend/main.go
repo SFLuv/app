@@ -21,9 +21,13 @@ func main() {
 	if err != nil {
 		log.Fatal(fmt.Sprintf("error initializing bot db: %s\n", err))
 	}
-	pdb, err := db.PgxDB("app")
+	adb, err := db.PgxDB("app")
 	if err != nil {
 		log.Fatal(fmt.Sprintf("error initializing app db: %s\n", err))
+	}
+	pdb, err := db.PgxDB("ponder")
+	if err != nil {
+		log.Fatal(fmt.Sprintf("error initializing ponder db: %s\n", err))
 	}
 
 	botDb := db.Bot(bdb)
@@ -40,8 +44,16 @@ func main() {
 	}
 	defer appLogger.Close()
 
-	appDb := db.App(pdb, appLogger)
+	appDb := db.App(adb, appLogger)
 	err = appDb.CreateTables()
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	// TODO: Enable service flag to disable ponder for lighter-weight instances?
+	ponderDb := db.Ponder(pdb, appLogger)
+	err = ponderDb.Ping()
 	if err != nil {
 		fmt.Println(err)
 		return
@@ -54,9 +66,10 @@ func main() {
 	}
 
 	s := handlers.NewBotService(botDb, bot)
-	p := handlers.NewAppService(appDb, appLogger)
+	a := handlers.NewAppService(appDb, appLogger)
+	p := handlers.NewPonderService(ponderDb, appLogger)
 
-	r := router.New(s, p)
+	r := router.New(s, a, p)
 	port := os.Getenv("PORT")
 
 	fmt.Printf("now listening on port %s\n", port)

@@ -604,7 +604,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     try {
       const res = await authFetch("/ponder")
       let body = await res.json() as PonderSubscription[]
-      body = body.map((sub) => {
+      body = body?.map((sub) => {
         if(sub.type === "merchant") {
           sub.data = new TextDecoder("utf-8").decode(base64.decode(sub.data))
         }
