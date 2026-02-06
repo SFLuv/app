@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/big"
 	"net/http"
 	"os"
 	"strconv"
@@ -72,6 +73,42 @@ func (s *BotService) NewEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	eventTotal := big.NewInt(int64(event.Amount) * int64(event.Codes))
+	decimals, err := strconv.Atoi(os.Getenv("TOKEN_DECIMALS"))
+	if err != nil {
+		fmt.Println("invalid token decimals in .env")
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	eventTotal.Mul(eventTotal, big.NewInt(int64(decimals)))
+
+	balance, err := s.bot.Balance()
+	if err != nil {
+		fmt.Printf("error getting current bot balance: %s\n", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	allocatedBalance, err := s.db.AllocatedBalance(r.Context())
+	if err != nil {
+		fmt.Printf("error getting allocated balance for faucet: %s", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	bigAllocated := big.NewInt(int64(allocatedBalance))
+	bigAllocated.Mul(bigAllocated, big.NewInt(int64(decimals)))
+
+	unallocated := bigAllocated.Sub(balance, bigAllocated)
+
+	if eventTotal.Cmp(unallocated) > 0 {
+		fmt.Println("total event rewards should not exceed unallocated balance")
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte("insufficient balance"))
+		return
+	}
+
 	id, err := s.db.NewEvent(r.Context(), event)
 	if err != nil {
 		fmt.Println(err)
@@ -80,6 +117,37 @@ func (s *BotService) NewEvent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Write([]byte(id))
+}
+
+func (s *BotService) RemainingBalance(w http.ResponseWriter, r *http.Request) {
+	decimals, err := strconv.Atoi(os.Getenv("TOKEN_DECIMALS"))
+	if err != nil {
+		fmt.Println("invalid token decimals in .env")
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	balance, err := s.bot.Balance()
+	if err != nil {
+		fmt.Printf("error getting current bot balance: %s\n", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	allocatedBalance, err := s.db.AllocatedBalance(r.Context())
+	if err != nil {
+		fmt.Printf("error getting allocated balance for faucet: %s", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	bigAllocated := big.NewInt(int64(allocatedBalance))
+	bigAllocated.Mul(bigAllocated, big.NewInt(int64(decimals)))
+
+	unallocated := bigAllocated.Sub(balance, bigAllocated)
+
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(unallocated.String()))
 }
 
 func (s *BotService) NewCodesRequest(w http.ResponseWriter, r *http.Request) {

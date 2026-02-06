@@ -21,6 +21,7 @@ type IBot interface {
 	Key() string
 	Send(amount uint64, address string) error
 	Drain(address common.Address) error
+	Balance() (*big.Int, error)
 }
 
 type Bot struct {
@@ -174,6 +175,17 @@ func (b *Bot) Drain(address common.Address) error {
 	}
 	// return err if err
 	return nil
+}
+
+func (b *Bot) Balance() (*big.Int, error) {
+	tokenAddress := common.HexToAddress(b.tokenId)
+
+	contract, err := abi.NewSFLUVv2(tokenAddress, b.client)
+	if err != nil {
+		return nil, fmt.Errorf("error creating sfluv contract instance to get balance: %s", err)
+	}
+
+	return contract.BalanceOf(nil, common.HexToAddress(os.Getenv("BOT_ADDRESS")))
 }
 
 func methodId(signature string) []byte {
