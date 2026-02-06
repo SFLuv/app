@@ -56,7 +56,6 @@ export function AutocompleteInput({
       ...filteredSuggestions
       .map((s) => s[0])
     ])]
-    .slice(0, 4)
     .map((e) => [...suggestions, ...filteredSuggestions].find((s) => s[0] === e))
 
     return n.filter((e) => e !== undefined)
@@ -140,7 +139,7 @@ export function AutocompleteInput({
       {showDropdown && fSuggestions.length > 0 && (
         <div
           ref={dropdownRef}
-          className="absolute top-full m-auto max-w-[98%] left-0 right-0 z-50 mt-1 max-h-60 overflow-auto rounded-md rounded-t-none border bg-popover text-popover-foreground shadow-md"
+          className="absolute top-full m-auto max-w-[98%] left-0 right-0 z-50 mt-1 max-h-[120px] overflow-auto rounded-md rounded-t-none border bg-popover text-popover-foreground shadow-md"
         >
           {fSuggestions.map((suggestion, index) => (
             <div
