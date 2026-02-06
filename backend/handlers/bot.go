@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/big"
 	"net/http"
 	"os"
 	"strconv"
@@ -18,10 +19,11 @@ import (
 type BotService struct {
 	db  *db.BotDB
 	bot bot.IBot
+	w9  *W9Service
 }
 
-func NewBotService(db *db.BotDB, bot bot.IBot) *BotService {
-	return &BotService{db, bot}
+func NewBotService(db *db.BotDB, bot bot.IBot, w9 *W9Service) *BotService {
+	return &BotService{db: db, bot: bot, w9: w9}
 }
 
 func EnsureLogin(w http.ResponseWriter, r *http.Request) bool {
@@ -257,6 +259,31 @@ func (s *BotService) Redeem(w http.ResponseWriter, r *http.Request) {
 
 		fmt.Println(err)
 		return
+	}
+
+	if s.w9 != nil {
+		decimalString := os.Getenv("TOKEN_DECIMALS")
+		decimals, ok := new(big.Int).SetString(decimalString, 10)
+		if !ok {
+			tx.Rollback(context.Background())
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+
+		amountWei := new(big.Int).Mul(decimals, big.NewInt(int64(amount)))
+		resp, err := s.w9.CheckCompliance(r.Context(), os.Getenv("BOT_ADDRESS"), request.Address, amountWei)
+		if err != nil {
+			tx.Rollback(context.Background())
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		if !resp.Allowed {
+			tx.Rollback(context.Background())
+			bytes, _ := json.Marshal(resp)
+			w.WriteHeader(http.StatusForbidden)
+			w.Write(bytes)
+			return
+		}
 	}
 
 	err = s.bot.Send(amount, request.Address)

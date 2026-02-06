@@ -33,6 +33,7 @@ func New(s *handlers.BotService, a *handlers.AppService, p *handlers.PonderServi
 	AddLocationRoutes(r, a)
 	AddContactRoutes(r, a)
 	AddPonderRoutes(r, a, p)
+	AddW9Routes(r, a)
 
 	return r
 }
@@ -89,6 +90,14 @@ func AddPonderRoutes(r *chi.Mux, s *handlers.AppService, p *handlers.PonderServi
 	r.Get("/ponder/callback", s.PonderPingCallback)
 	r.Post("/ponder/callback", s.PonderHookHandler)
 	r.Get("/transactions", p.GetTransactionHistory)
+}
+
+func AddW9Routes(r *chi.Mux, s *handlers.AppService) {
+	r.Post("/w9/submit", s.SubmitW9)
+	r.Post("/w9/transaction", withAdmin(s.RecordW9Transaction, s))
+	r.Post("/w9/check", withAdmin(s.CheckW9Compliance, s))
+	r.Get("/admin/w9/pending", withAdmin(s.GetPendingW9Submissions, s))
+	r.Put("/admin/w9/approve", withAdmin(s.ApproveW9Submission, s))
 }
 
 func withAuth(handlerFunc http.HandlerFunc) http.HandlerFunc {

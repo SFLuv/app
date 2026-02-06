@@ -15,6 +15,7 @@ const Page = () => {
 
   const [error, setError] = useState<string | null>();
   const [success, setSuccess] = useState<boolean>(false);
+  const [w9Url, setW9Url] = useState<string | null>(null);
 
   const sigAuthAccount = searchParams.get("sigAuthAccount")
   const sigAuthSignature = searchParams.get("sigAuthSignature")
@@ -53,18 +54,33 @@ const Page = () => {
 
       if (res.status != 200) {
         let text = await res.text()
+        try {
+          const data = JSON.parse(text)
+          if (data?.reason === "w9_required" || data?.error === "w9_required") {
+            setW9Url(data?.w9_url || null)
+            setError("W9 Required")
+            return
+          }
+          if (data?.reason === "w9_pending" || data?.error === "w9_pending") {
+            setW9Url(null)
+            setError("W9 Pending")
+            return
+          }
+        } catch {
+          // ignore json parse error
+        }
         switch (text) {
-          case "code expired":
-            setError("Code expired.")
-            break;
-          case "code redeemed":
-            setError("Code already redeemed.")
-            break;
-          case "user redeemed":
-            setError("User already redeemed for this event.")
-            break;
-          default:
-            setError("Error redeeming code.")
+        case "code expired":
+          setError("Code expired.")
+          break;
+        case "code redeemed":
+          setError("Code already redeemed.")
+          break;
+        case "user redeemed":
+          setError("User already redeemed for this event.")
+          break;
+        default:
+          setError("Error redeeming code.")
         }
       }
 
@@ -90,6 +106,32 @@ const Page = () => {
           <h2 className="text-3xl font-bold text-black dark:text-white">
             {error}
           </h2>
+          {error === "W9 Required" && (
+            <div className="mt-4 space-y-3 text-sm text-muted-foreground">
+              <p>
+                You have reached the $600 annual SFLuv earnings threshold. We are required to collect a W9 before any
+                additional payouts can be issued.
+              </p>
+              {w9Url && (
+                <a
+                  href={w9Url}
+                  className="inline-flex w-full items-center justify-center rounded-md bg-[#eb6c6c] px-16 py-10 text-2xl font-semibold text-white sm:w-auto sm:px-12 sm:py-8 sm:text-xl"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Submit W9
+                </a>
+              )}
+            </div>
+          )}
+          {error === "W9 Pending" && (
+            <div className="mt-4 space-y-3 text-sm text-muted-foreground">
+              <p>
+                Your W9 form is being processed. Once approved by an admin, scan this QR code again to receive your
+                SFLuv.
+              </p>
+            </div>
+          )}
           {error === "Please download the CitizenWallet app, then scan your QR code again." &&
             <div className="columns-2 m-auto max-w-80">
               <a href="https://apps.apple.com/us/app/citizen-wallet/id6460822891">

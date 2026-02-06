@@ -30,6 +30,7 @@ import {
   ArrowUp,
   ArrowDown,
   Users,
+  FileCheck,
   Building2,
   Mail,
   Phone,
@@ -56,6 +57,7 @@ import { AddEventModal } from "@/components/events/add-event-modal"
 import { EventModal } from "@/components/events/event-modal"
 import { DrainFaucetModal } from "@/components/events/drain-faucet-modal"
 import EventCard from "@/components/events/event-card"
+import type { W9Submission } from "@/types/w9"
 
 // Mock PayPal accounts
 const mockPaypalAccounts = [
@@ -87,6 +89,9 @@ export default function AdminPage() {
   const [selectedWallet, setSelectedWallet] = useState<AppWallet | null>(null)
   const [selectedWalletBYUSDBalance, setSelectedWalletBYUSDBalance] = useState<number>(0)
   const [selectedWalletSFLUVBalance, setSelectedWalletSFLUVBalance] = useState<number>(0)
+
+  const [pendingW9Submissions, setPendingW9Submissions] = useState<W9Submission[]>([])
+  const [w9Loading, setW9Loading] = useState<boolean>(false)
 
 
   // Token management state
@@ -238,6 +243,56 @@ export default function AdminPage() {
     getAuthedMapLocations()
     getEvents()
   }, [])
+
+  const fetchPendingW9Submissions = async () => {
+    if (!user?.isAdmin) return
+    setW9Loading(true)
+    try {
+      const res = await authFetch("/admin/w9/pending")
+      if (res.status !== 200) {
+        throw new Error("failed to fetch w9 submissions")
+      }
+      const data = await res.json()
+      setPendingW9Submissions(data.submissions || [])
+    } catch {
+      toast({
+        title: "Error",
+        description: "Failed to load W9 submissions.",
+        variant: "destructive",
+      })
+    } finally {
+      setW9Loading(false)
+    }
+  }
+
+  useEffect(() => {
+    if (status === "authenticated" && user?.isAdmin) {
+      fetchPendingW9Submissions()
+    }
+  }, [status, user?.isAdmin])
+
+  const handleApproveW9 = async (id: number) => {
+    try {
+      const res = await authFetch("/admin/w9/approve", {
+        method: "PUT",
+        body: JSON.stringify({ id }),
+      })
+      if (res.status !== 200) {
+        throw new Error("failed to approve w9")
+      }
+      setPendingW9Submissions((prev) => prev.filter((submission) => submission.id !== id))
+      toast({
+        title: "W9 Approved",
+        description: "The W9 submission has been approved.",
+      })
+    } catch {
+      toast({
+        title: "Approval Failed",
+        description: "Failed to approve W9 submission. Please try again.",
+        variant: "destructive",
+      })
+    }
+  }
 
   useEffect(() => {
       setPendingLocations(authedMapLocations.filter((location) => location.approval === null))
@@ -696,13 +751,21 @@ export default function AdminPage() {
       </div>
 
       <Tabs defaultValue="merchants" className="space-y-6">
-        <TabsList className="grid w-full grid-cols-2">
+        <TabsList className="grid w-full grid-cols-3">
           {/* <TabsTrigger value="tokens">Token Management</TabsTrigger> */}
           <TabsTrigger value="merchants" className="relative">
             Merchant Approvals
             {pendingLocations.length > 0 && (
               <Badge variant="destructive" className="ml-2 h-5 w-5 rounded-full p-1.5 text-xs">
                 {pendingLocations.length}
+              </Badge>
+            )}
+          </TabsTrigger>
+          <TabsTrigger value="w9" className="relative">
+            W9 Approvals
+            {pendingW9Submissions.length > 0 && (
+              <Badge variant="destructive" className="ml-2 h-5 w-5 rounded-full p-1.5 text-xs">
+                {pendingW9Submissions.length}
               </Badge>
             )}
           </TabsTrigger>
@@ -1201,6 +1264,70 @@ export default function AdminPage() {
                               }}
                             >
                               Review Application
+                            </Button>
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="w9" className="space-y-6">
+          <Card>
+            <CardHeader className="pb-6">
+              <CardTitle className="flex items-center gap-2 text-xl">
+                <FileCheck className="h-6 w-6" />
+                W9 Submissions Pending Approval
+              </CardTitle>
+              <CardDescription className="text-base mt-2">Review and approve W9 submissions</CardDescription>
+              <div className="flex items-center gap-2 mt-3">
+                <Badge variant="destructive" className="text-sm px-3 py-1">
+                  {pendingW9Submissions.length} Pending
+                </Badge>
+                <span className="text-sm text-muted-foreground">submissions awaiting review</span>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {w9Loading ? (
+                <div className="flex items-center justify-center py-8">
+                  <Loader2 className="h-6 w-6 animate-spin" />
+                </div>
+              ) : pendingW9Submissions.length === 0 ? (
+                <div className="text-center py-8">
+                  <FileCheck className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+                  <h3 className="text-lg font-medium">No Pending W9 Submissions</h3>
+                  <p className="text-muted-foreground">All W9 submissions have been processed.</p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {pendingW9Submissions.map((submission) => (
+                    <Card key={submission.id} className="border-l-4 border-l-yellow-500">
+                      <CardContent className="p-4">
+                        <div className="flex items-start justify-between gap-4">
+                          <div className="flex-1 space-y-2">
+                            <div>
+                              <h4 className="font-semibold">Wallet</h4>
+                              <p className="text-sm text-muted-foreground break-all">{submission.wallet_address}</p>
+                            </div>
+                            <div className="grid gap-1 text-sm">
+                              <div className="flex items-center gap-2">
+                                <Mail className="h-3 w-3" />
+                                <span>{submission.email}</span>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <CalendarIcon className="h-3 w-3" />
+                                <span>Year {submission.year}</span>
+                              </div>
+                            </div>
+                          </div>
+                          <div className="flex gap-2">
+                            <Button size="sm" onClick={() => handleApproveW9(submission.id)}>
+                              <Check className="h-4 w-4" />
+                              Approve
                             </Button>
                           </div>
                         </div>

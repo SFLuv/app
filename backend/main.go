@@ -15,7 +15,11 @@ import (
 )
 
 func main() {
-	godotenv.Load()
+	if envFile := os.Getenv("ENV_FILE"); envFile != "" {
+		_ = godotenv.Load(envFile)
+	} else {
+		godotenv.Load()
+	}
 
 	bdb, err := db.PgxDB("bot")
 	if err != nil {
@@ -65,8 +69,9 @@ func main() {
 		return
 	}
 
-	s := handlers.NewBotService(botDb, bot)
-	a := handlers.NewAppService(appDb, appLogger)
+	w9 := handlers.NewW9Service(appDb, ponderDb, appLogger)
+	s := handlers.NewBotService(botDb, bot, w9)
+	a := handlers.NewAppService(appDb, appLogger, w9)
 	p := handlers.NewPonderService(ponderDb, appLogger)
 
 	r := router.New(s, a, p)
