@@ -25,9 +25,10 @@ interface AddEventModalProps {
   onOpenChange: (open: boolean) => void
   handleAddEvent: (e: Event) => Promise<void>
   addEventError: unknown
+  currentBalance: number
 }
 
-export function AddEventModal({ open, onOpenChange, handleAddEvent, addEventError }: AddEventModalProps) {
+export function AddEventModal({ open, onOpenChange, handleAddEvent, addEventError, currentBalance }: AddEventModalProps) {
   const [title, setTitle] = useState<string>("")
   const [description, setDescription] = useState<string>("")
   const [amount, setAmount] = useState<number>(0)
@@ -52,17 +53,22 @@ export function AddEventModal({ open, onOpenChange, handleAddEvent, addEventErro
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
 
-    if(codes == 0) {
+    if(codes <= 0) {
       setAddError("At least one code required per event.")
       return
     }
 
-    if(amount == 0) {
+    if(amount <= 0) {
       setAddError("Code amount must be greater than 0.")
       return
     }
 
-    if(expiration === 0) {
+    if(codes * amount > currentBalance) {
+      setAddError("Codes should not exceed current faucet balance.")
+      return
+    }
+
+    if(expiration <= 0) {
       setAddError("Expiration date must be set.")
       return
     }
@@ -147,7 +153,6 @@ export function AddEventModal({ open, onOpenChange, handleAddEvent, addEventErro
             <div className="space-y-2">
               <Label className="text-sm font-medium">Amount *</Label>
               <Input
-                type="number"
                 value={amount}
                 className="font-mono text-xs sm:text-sm h-11"
                 onChange={(e) => {

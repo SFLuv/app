@@ -414,3 +414,49 @@ func (s *BotDB) Redeem(ctx context.Context, id string, account string) (uint64, 
 
 	return amount, tx, nil
 }
+
+func (s *BotDB) AllocatedBalance(ctx context.Context) (uint64, error) {
+	row := s.db.QueryRow(ctx, `
+		SELECT COALESCE(SUM(
+			(
+				(
+					SELECT
+						COUNT(id)
+					FROM
+						codes
+					WHERE
+						event = e.id
+				) - (
+					SELECT
+						COUNT(r.id)
+					FROM
+						redemptions r
+					JOIN
+						codes c
+					ON
+						r.code = c.id
+					WHERE
+						c.event = e.id
+				)
+			) * (
+			SELECT
+				amount
+			FROM
+				events
+			WHERE
+				id = e.id
+			)
+		), 0)
+		FROM
+			events e
+		WHERE
+			e.expiration > EXTRACT(EPOCH from NOW());
+	`)
+	var allocated uint64
+	err := row.Scan(&allocated)
+	if err != nil {
+		return 0, err
+	}
+
+	return allocated, nil
+}

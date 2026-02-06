@@ -45,6 +45,7 @@ func AddBotRoutes(r *chi.Mux, s *handlers.BotService, a *handlers.AppService) {
 	r.Get("/events", withAdmin(s.GetEvents, a))
 	r.Post("/redeem", s.Redeem)
 	r.Post("/drain", withAdmin(s.Drain, a))
+	r.Get("/balance", withAdmin(s.RemainingBalance, a))
 }
 
 func AddUserRoutes(r *chi.Mux, s *handlers.AppService) {
