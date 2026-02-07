@@ -9,6 +9,18 @@ import { createTables, getHooks, PonderHook } from "./db";
 
 createTables()
 
+const parseAdminAddresses = () => {
+  const raw = process.env.PAID_ADMIN_ADDRESSES || "";
+  const list = raw
+    .split(",")
+    .map((addr) => addr.trim().toLowerCase())
+    .filter((addr) => addr.length > 0);
+  return Array.from(new Set(list));
+};
+
+const adminAddresses = parseAdminAddresses();
+const w9TransactionUrl = process.env.W9_TRANSACTION_URL;
+
 ponder.on("ERC20:Transfer", async ({ event, context }) => {
   await context.db
     .insert(transferAccount)
@@ -73,6 +85,28 @@ ponder.on("ERC20:Transfer", async ({ event, context }) => {
   }
   catch {
     console.log("Error getting hooks for transfer:", event)
+  }
+
+  try {
+    const fromAddress = event.args.from.toLowerCase();
+    if (w9TransactionUrl && adminAddresses.includes(fromAddress)) {
+      await fetch(w9TransactionUrl, {
+        method: "POST",
+        body: JSON.stringify({
+          from_address: event.args.from,
+          to_address: event.args.to,
+          hash: event.transaction.hash,
+          amount: event.args.amount.toString(),
+          timestamp: Number(event.block.timestamp),
+        }),
+        headers: {
+          "Content-Type": "application/json",
+          "X-Admin-Key": process.env.ADMIN_KEY as string,
+        },
+      });
+    }
+  } catch (error) {
+    console.log("Error sending W9 transaction hook:", error);
   }
 });
 

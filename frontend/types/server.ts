@@ -10,6 +10,8 @@ export interface UserResponse {
   contact_email?: string
   contact_phone?: string
   contact_name?: string
+  paypal_eth: string
+  last_redemption: number
 }
 
 export interface LocationResponse {

@@ -38,6 +38,8 @@ export interface User {
   isAdmin: boolean
   isMerchant: boolean
   isOrganizer: boolean
+  paypalEthAddress: string
+  lastRedemption: number
 }
 
 interface TxState {
@@ -74,6 +76,10 @@ interface AppContextType {
   approveMerchantStatus: () => void
   rejectMerchantStatus: () => void
 
+  //cashout functionality
+  updatePayPalAddress: (payPalAddress: string) => Promise<void>
+
+  //add location fuction signatures
   // Ponder Functionality
   ponderSubscriptions: PonderSubscription[]
   addPonderSubscription: (email: string, address: string) => Promise<void>
@@ -199,7 +205,9 @@ export default function AppProvider({ children }: { children: ReactNode }) {
         contact_phone: r.user.contact_phone,
         isAdmin: r.user.is_admin,
         isMerchant: r.user.is_merchant,
-        isOrganizer: r.user.is_organizer
+        isOrganizer: r.user.is_organizer,
+        paypalEthAddress: r.user.paypal_eth,
+        lastRedemption: r.user.last_redemption
       }
       setUser(u)
   }
@@ -271,7 +279,8 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     if(res.status != 200) {
       throw new Error("error getting user")
     }
-    return await res.json() as GetUserResponse
+    const json = await res.json()
+    return json as GetUserResponse
   }
 
   const _getWallets = async (): Promise<WalletResponse[]> => {
@@ -400,6 +409,17 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     }
 
     return w
+  }
+
+  const _updatePayPalAddress = async (payPalAddress: string) => {
+    const res = await authFetch("/paypaleth", {
+      method: "PUT",
+      body: payPalAddress
+    })
+
+    if(res.status != 201) {
+      throw new Error("error updating paypal address")
+    }
   }
 
   const addWallet = async (walletName: string) => {
@@ -552,6 +572,11 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     }
   }
 
+  const updatePayPalAddress = async (payPalAddress : string) => {
+    if (user) {
+      _updatePayPalAddress(payPalAddress)
+    }
+  }
 
   const addPonderSubscription = async (email: string, address: string) => {
     const body: PonderSubscriptionRequest = {
@@ -616,6 +641,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
           updateUser,
           approveMerchantStatus,
           rejectMerchantStatus,
+          updatePayPalAddress,
           ponderSubscriptions,
           addPonderSubscription,
           getPonderSubscriptions,
