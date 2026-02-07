@@ -8,6 +8,8 @@ import (
 	"math/big"
 	"net/http"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/SFLuv/app/backend/db"
@@ -309,40 +311,12 @@ func (a *AppService) SubmitW9(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.WalletAddress == "" || req.Email == "" {
-		w.WriteHeader(http.StatusBadRequest)
+	stored, ok := a.submitW9(r.Context(), w, &req)
+	if !ok {
 		return
 	}
 
-	year := time.Now().UTC().Year()
-	if req.Year != nil {
-		year = *req.Year
-	}
-
-	submission := &structs.W9Submission{
-		WalletAddress: utils.NormalizeAddress(req.WalletAddress),
-		Year:          year,
-		Email:         req.Email,
-	}
-
-	stored, err := a.db.UpsertW9Submission(r.Context(), submission)
-	if err != nil {
-		a.logger.Logf("error upserting w9 submission: %s", err)
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
-	resp := map[string]any{
-		"submission": stored,
-	}
-	bytes, err := json.Marshal(resp)
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
-	w.WriteHeader(http.StatusCreated)
-	w.Write(bytes)
+	a.writeW9SubmissionResponse(w, stored)
 }
 
 func (a *AppService) GetPendingW9Submissions(w http.ResponseWriter, r *http.Request) {
@@ -351,6 +325,25 @@ func (a *AppService) GetPendingW9Submissions(w http.ResponseWriter, r *http.Requ
 		a.logger.Logf("error getting pending w9 submissions: %s", err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
+	}
+
+	for _, submission := range submissions {
+		userId, err := a.db.GetUserIdByWalletAddress(r.Context(), submission.WalletAddress)
+		if err != nil {
+			a.logger.Logf("error getting user by wallet for w9 submission %d: %s", submission.Id, err)
+			continue
+		}
+		if userId == nil {
+			continue
+		}
+		email, err := a.db.GetUserContactEmail(r.Context(), *userId)
+		if err != nil {
+			a.logger.Logf("error getting user contact email for w9 submission %d: %s", submission.Id, err)
+			continue
+		}
+		if email != nil && *email != "" {
+			submission.UserContactEmail = email
+		}
 	}
 
 	resp := structs.W9PendingResponse{
@@ -425,6 +418,154 @@ func (a *AppService) ApproveW9Submission(w http.ResponseWriter, r *http.Request)
 	}
 
 	w.WriteHeader(http.StatusOK)
+	w.Write(bytes)
+}
+
+func (a *AppService) RejectW9Submission(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	var req structs.W9RejectRequest
+	err = json.Unmarshal(body, &req)
+	if err != nil || req.Id == 0 {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	rejector := utils.GetDid(r)
+	rejectedBy := ""
+	if rejector != nil {
+		rejectedBy = *rejector
+	}
+
+	submission, err := a.db.RejectW9Submission(r.Context(), req.Id, rejectedBy, req.Reason)
+	if err != nil {
+		a.logger.Logf("error rejecting w9 submission: %s", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	resp := map[string]any{
+		"submission": submission,
+	}
+	bytes, err := json.Marshal(resp)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	w.Write(bytes)
+}
+
+func (a *AppService) SubmitW9Webhook(w http.ResponseWriter, r *http.Request) {
+	if secret := os.Getenv("W9_WEBHOOK_SECRET"); secret != "" {
+		key := r.Header.Get("X-W9-Secret")
+		if key == "" {
+			key = r.Header.Get("X-W9-Key")
+		}
+		if key != secret {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+	}
+
+	var req structs.W9SubmitRequest
+	contentType := r.Header.Get("Content-Type")
+	if strings.Contains(contentType, "application/json") {
+		defer r.Body.Close()
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if err := json.Unmarshal(body, &req); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+	} else {
+		if err := r.ParseForm(); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		req.WalletAddress = r.FormValue("wallet")
+		if req.WalletAddress == "" {
+			req.WalletAddress = r.FormValue("wallet_address")
+		}
+		req.Email = r.FormValue("email")
+		if yearStr := r.FormValue("year"); yearStr != "" {
+			if parsed, err := strconv.Atoi(yearStr); err == nil {
+				req.Year = &parsed
+			}
+		}
+	}
+
+	stored, ok := a.submitW9(r.Context(), w, &req)
+	if !ok {
+		return
+	}
+
+	a.writeW9SubmissionResponse(w, stored)
+}
+
+func (a *AppService) submitW9(ctx context.Context, w http.ResponseWriter, req *structs.W9SubmitRequest) (*structs.W9Submission, bool) {
+	if req.WalletAddress == "" || req.Email == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		return nil, false
+	}
+
+	year := time.Now().UTC().Year()
+	if req.Year != nil {
+		year = *req.Year
+	}
+
+	existing, err := a.db.GetW9SubmissionByWalletYear(ctx, req.WalletAddress, year)
+	if err != nil {
+		a.logger.Logf("error checking existing w9 submission: %s", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return nil, false
+	}
+	if existing != nil && existing.PendingApproval {
+		w.WriteHeader(http.StatusConflict)
+		w.Write([]byte(`{"error":"w9_pending"}`))
+		return nil, false
+	}
+	if existing != nil && existing.ApprovedAt != nil && existing.RejectedAt == nil {
+		w.WriteHeader(http.StatusConflict)
+		w.Write([]byte(`{"error":"w9_approved"}`))
+		return nil, false
+	}
+
+	submission := &structs.W9Submission{
+		WalletAddress: utils.NormalizeAddress(req.WalletAddress),
+		Year:          year,
+		Email:         req.Email,
+	}
+
+	stored, err := a.db.UpsertW9Submission(ctx, submission)
+	if err != nil {
+		a.logger.Logf("error upserting w9 submission: %s", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return nil, false
+	}
+	return stored, true
+}
+
+func (a *AppService) writeW9SubmissionResponse(w http.ResponseWriter, stored *structs.W9Submission) {
+	resp := map[string]any{
+		"submission": stored,
+	}
+	bytes, err := json.Marshal(resp)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusCreated)
 	w.Write(bytes)
 }
 

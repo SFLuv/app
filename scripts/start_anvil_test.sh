@@ -32,6 +32,10 @@ set -a
 source "$ANVIL_ENV"
 set +a
 
+set -a
+source "$BACKEND_ENV_TEST"
+set +a
+
 echo "Starting anvil fork..."
 nohup anvil \
   --fork-url "$ANVIL_FORK_URL" \
@@ -44,6 +48,24 @@ sleep 1
 if command -v cast >/dev/null 2>&1; then
   echo "Impersonating faucet address on anvil..."
   cast rpc --rpc-url http://127.0.0.1:8545 anvil_impersonateAccount "$ANVIL_UNLOCK" >/dev/null || true
+
+  BOT_ADDR="$BOT_ADDRESS"
+  TOKEN_ID_LOCAL="$TOKEN_ID"
+  if [[ -n "$BOT_ADDR" ]]; then
+    echo "Funding bot address gas on anvil..."
+    cast rpc --rpc-url http://127.0.0.1:8545 anvil_setBalance "$BOT_ADDR" 0x3635C9ADC5DEA00000 >/dev/null || true
+  fi
+  if [[ -n "$ANVIL_UNLOCK" ]]; then
+    echo "Funding faucet address gas on anvil..."
+    cast rpc --rpc-url http://127.0.0.1:8545 anvil_setBalance "$ANVIL_UNLOCK" 0x3635C9ADC5DEA00000 >/dev/null || true
+  fi
+  if [[ -n "$TOKEN_ID_LOCAL" && -n "$BOT_ADDR" ]]; then
+    echo "Transferring SFLUV from faucet to bot address..."
+    cast send "$TOKEN_ID_LOCAL" "transfer(address,uint256)" "$BOT_ADDR" 50000000000000000000 \
+      --rpc-url http://127.0.0.1:8545 \
+      --from "$ANVIL_UNLOCK" \
+      --unlocked >/dev/null || true
+  fi
 fi
 
 echo "Starting backend with test env..."

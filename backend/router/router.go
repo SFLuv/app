@@ -94,10 +94,12 @@ func AddPonderRoutes(r *chi.Mux, s *handlers.AppService, p *handlers.PonderServi
 
 func AddW9Routes(r *chi.Mux, s *handlers.AppService) {
 	r.Post("/w9/submit", s.SubmitW9)
+	r.Post("/w9/webhook", s.SubmitW9Webhook)
 	r.Post("/w9/transaction", withAdmin(s.RecordW9Transaction, s))
 	r.Post("/w9/check", withAdmin(s.CheckW9Compliance, s))
 	r.Get("/admin/w9/pending", withAdmin(s.GetPendingW9Submissions, s))
 	r.Put("/admin/w9/approve", withAdmin(s.ApproveW9Submission, s))
+	r.Put("/admin/w9/reject", withAdmin(s.RejectW9Submission, s))
 }
 
 func withAuth(handlerFunc http.HandlerFunc) http.HandlerFunc {

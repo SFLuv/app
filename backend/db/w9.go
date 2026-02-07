@@ -164,21 +164,36 @@ func (a *AppDB) UpsertW9Submission(ctx context.Context, submission *structs.W9Su
 			email,
 			pending_approval,
 			submitted_at,
-			w9_url
+			w9_url,
+			rejected_at,
+			rejected_by_user_id,
+			rejection_reason,
+			approved_at,
+			approved_by_user_id
 		) VALUES (
 			LOWER($1),
 			$2,
 			$3,
 			TRUE,
 			NOW(),
-			$4
+			$4,
+			NULL,
+			NULL,
+			NULL,
+			NULL,
+			NULL
 		)
 		ON CONFLICT (wallet_address, year)
 		DO UPDATE SET
 			email = EXCLUDED.email,
 			pending_approval = TRUE,
 			submitted_at = NOW(),
-			w9_url = EXCLUDED.w9_url
+			w9_url = EXCLUDED.w9_url,
+			rejected_at = NULL,
+			rejected_by_user_id = NULL,
+			rejection_reason = NULL,
+			approved_at = NULL,
+			approved_by_user_id = NULL
 		RETURNING
 			id,
 			wallet_address,
@@ -188,12 +203,18 @@ func (a *AppDB) UpsertW9Submission(ctx context.Context, submission *structs.W9Su
 			pending_approval,
 			approved_at,
 			approved_by_user_id,
+			rejected_at,
+			rejected_by_user_id,
+			rejection_reason,
 			w9_url;
 	`, submission.WalletAddress, submission.Year, submission.Email, submission.W9URL)
 
 	var stored structs.W9Submission
 	var approvedAt sql.NullTime
 	var approvedBy sql.NullString
+	var rejectedAt sql.NullTime
+	var rejectedBy sql.NullString
+	var rejectionReason sql.NullString
 	var w9Url sql.NullString
 	err := row.Scan(
 		&stored.Id,
@@ -204,6 +225,9 @@ func (a *AppDB) UpsertW9Submission(ctx context.Context, submission *structs.W9Su
 		&stored.PendingApproval,
 		&approvedAt,
 		&approvedBy,
+		&rejectedAt,
+		&rejectedBy,
+		&rejectionReason,
 		&w9Url,
 	)
 	if err != nil {
@@ -216,6 +240,16 @@ func (a *AppDB) UpsertW9Submission(ctx context.Context, submission *structs.W9Su
 	}
 	if approvedBy.Valid {
 		stored.ApprovedByUserId = &approvedBy.String
+	}
+	if rejectedAt.Valid {
+		t := rejectedAt.Time
+		stored.RejectedAt = &t
+	}
+	if rejectedBy.Valid {
+		stored.RejectedByUserId = &rejectedBy.String
+	}
+	if rejectionReason.Valid {
+		stored.RejectionReason = &rejectionReason.String
 	}
 	if w9Url.Valid {
 		stored.W9URL = &w9Url.String
@@ -235,6 +269,9 @@ func (a *AppDB) GetW9SubmissionByWalletYear(ctx context.Context, wallet string, 
 			pending_approval,
 			approved_at,
 			approved_by_user_id,
+			rejected_at,
+			rejected_by_user_id,
+			rejection_reason,
 			w9_url
 		FROM
 			w9_submissions
@@ -247,6 +284,9 @@ func (a *AppDB) GetW9SubmissionByWalletYear(ctx context.Context, wallet string, 
 	var submission structs.W9Submission
 	var approvedAt sql.NullTime
 	var approvedBy sql.NullString
+	var rejectedAt sql.NullTime
+	var rejectedBy sql.NullString
+	var rejectionReason sql.NullString
 	var w9Url sql.NullString
 	err := row.Scan(
 		&submission.Id,
@@ -257,6 +297,9 @@ func (a *AppDB) GetW9SubmissionByWalletYear(ctx context.Context, wallet string, 
 		&submission.PendingApproval,
 		&approvedAt,
 		&approvedBy,
+		&rejectedAt,
+		&rejectedBy,
+		&rejectionReason,
 		&w9Url,
 	)
 	if err == pgx.ErrNoRows {
@@ -272,6 +315,16 @@ func (a *AppDB) GetW9SubmissionByWalletYear(ctx context.Context, wallet string, 
 	}
 	if approvedBy.Valid {
 		submission.ApprovedByUserId = &approvedBy.String
+	}
+	if rejectedAt.Valid {
+		t := rejectedAt.Time
+		submission.RejectedAt = &t
+	}
+	if rejectedBy.Valid {
+		submission.RejectedByUserId = &rejectedBy.String
+	}
+	if rejectionReason.Valid {
+		submission.RejectionReason = &rejectionReason.String
 	}
 	if w9Url.Valid {
 		submission.W9URL = &w9Url.String
@@ -291,11 +344,16 @@ func (a *AppDB) GetPendingW9Submissions(ctx context.Context) ([]*structs.W9Submi
 			pending_approval,
 			approved_at,
 			approved_by_user_id,
+			rejected_at,
+			rejected_by_user_id,
+			rejection_reason,
 			w9_url
 		FROM
 			w9_submissions
 		WHERE
 			pending_approval = TRUE
+		AND
+			rejected_at IS NULL
 		ORDER BY
 			submitted_at ASC;
 	`)
@@ -309,6 +367,9 @@ func (a *AppDB) GetPendingW9Submissions(ctx context.Context) ([]*structs.W9Submi
 		var submission structs.W9Submission
 		var approvedAt sql.NullTime
 		var approvedBy sql.NullString
+		var rejectedAt sql.NullTime
+		var rejectedBy sql.NullString
+		var rejectionReason sql.NullString
 		var w9Url sql.NullString
 		err = rows.Scan(
 			&submission.Id,
@@ -319,6 +380,9 @@ func (a *AppDB) GetPendingW9Submissions(ctx context.Context) ([]*structs.W9Submi
 			&submission.PendingApproval,
 			&approvedAt,
 			&approvedBy,
+			&rejectedAt,
+			&rejectedBy,
+			&rejectionReason,
 			&w9Url,
 		)
 		if err != nil {
@@ -331,6 +395,16 @@ func (a *AppDB) GetPendingW9Submissions(ctx context.Context) ([]*structs.W9Submi
 		}
 		if approvedBy.Valid {
 			submission.ApprovedByUserId = &approvedBy.String
+		}
+		if rejectedAt.Valid {
+			t := rejectedAt.Time
+			submission.RejectedAt = &t
+		}
+		if rejectedBy.Valid {
+			submission.RejectedByUserId = &rejectedBy.String
+		}
+		if rejectionReason.Valid {
+			submission.RejectionReason = &rejectionReason.String
 		}
 		if w9Url.Valid {
 			submission.W9URL = &w9Url.String
@@ -349,7 +423,10 @@ func (a *AppDB) ApproveW9Submission(ctx context.Context, id int, approvedBy stri
 		SET
 			pending_approval = FALSE,
 			approved_at = NOW(),
-			approved_by_user_id = $2
+			approved_by_user_id = $2,
+			rejected_at = NULL,
+			rejected_by_user_id = NULL,
+			rejection_reason = NULL
 		WHERE
 			id = $1
 		RETURNING
@@ -361,12 +438,18 @@ func (a *AppDB) ApproveW9Submission(ctx context.Context, id int, approvedBy stri
 			pending_approval,
 			approved_at,
 			approved_by_user_id,
+			rejected_at,
+			rejected_by_user_id,
+			rejection_reason,
 			w9_url;
 	`, id, approvedBy)
 
 	var submission structs.W9Submission
 	var approvedAt sql.NullTime
 	var approvedByUser sql.NullString
+	var rejectedAt sql.NullTime
+	var rejectedByUser sql.NullString
+	var rejectionReason sql.NullString
 	var w9Url sql.NullString
 	err := row.Scan(
 		&submission.Id,
@@ -377,6 +460,9 @@ func (a *AppDB) ApproveW9Submission(ctx context.Context, id int, approvedBy stri
 		&submission.PendingApproval,
 		&approvedAt,
 		&approvedByUser,
+		&rejectedAt,
+		&rejectedByUser,
+		&rejectionReason,
 		&w9Url,
 	)
 	if err != nil {
@@ -389,6 +475,93 @@ func (a *AppDB) ApproveW9Submission(ctx context.Context, id int, approvedBy stri
 	}
 	if approvedByUser.Valid {
 		submission.ApprovedByUserId = &approvedByUser.String
+	}
+	if rejectedAt.Valid {
+		t := rejectedAt.Time
+		submission.RejectedAt = &t
+	}
+	if rejectedByUser.Valid {
+		submission.RejectedByUserId = &rejectedByUser.String
+	}
+	if rejectionReason.Valid {
+		submission.RejectionReason = &rejectionReason.String
+	}
+	if w9Url.Valid {
+		submission.W9URL = &w9Url.String
+	}
+
+	return &submission, nil
+}
+
+func (a *AppDB) RejectW9Submission(ctx context.Context, id int, rejectedBy string, reason string) (*structs.W9Submission, error) {
+	row := a.db.QueryRow(ctx, `
+		UPDATE
+			w9_submissions
+		SET
+			pending_approval = FALSE,
+			rejected_at = NOW(),
+			rejected_by_user_id = $2,
+			rejection_reason = $3,
+			approved_at = NULL,
+			approved_by_user_id = NULL
+		WHERE
+			id = $1
+		RETURNING
+			id,
+			wallet_address,
+			year,
+			email,
+			submitted_at,
+			pending_approval,
+			approved_at,
+			approved_by_user_id,
+			rejected_at,
+			rejected_by_user_id,
+			rejection_reason,
+			w9_url;
+	`, id, rejectedBy, reason)
+
+	var submission structs.W9Submission
+	var approvedAt sql.NullTime
+	var approvedByUser sql.NullString
+	var rejectedAt sql.NullTime
+	var rejectedByUser sql.NullString
+	var rejectionReason sql.NullString
+	var w9Url sql.NullString
+	err := row.Scan(
+		&submission.Id,
+		&submission.WalletAddress,
+		&submission.Year,
+		&submission.Email,
+		&submission.SubmittedAt,
+		&submission.PendingApproval,
+		&approvedAt,
+		&approvedByUser,
+		&rejectedAt,
+		&rejectedByUser,
+		&rejectionReason,
+		&w9Url,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	if approvedAt.Valid {
+		t := approvedAt.Time
+		submission.ApprovedAt = &t
+	}
+	if approvedByUser.Valid {
+		submission.ApprovedByUserId = &approvedByUser.String
+	}
+	if rejectedAt.Valid {
+		t := rejectedAt.Time
+		submission.RejectedAt = &t
+	}
+	if rejectedByUser.Valid {
+		submission.RejectedByUserId = &rejectedByUser.String
+	}
+	if rejectionReason.Valid {
+		submission.RejectionReason = &rejectionReason.String
 	}
 	if w9Url.Valid {
 		submission.W9URL = &w9Url.String

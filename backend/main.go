@@ -76,6 +76,24 @@ func main() {
 
 	r := router.New(s, a, p)
 	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+
+	certFile := os.Getenv("TLS_CERT_FILE")
+	keyFile := os.Getenv("TLS_KEY_FILE")
+	tlsPort := os.Getenv("TLS_PORT")
+	if tlsPort == "" {
+		tlsPort = "8443"
+	}
+	if certFile != "" && keyFile != "" {
+		go func() {
+			fmt.Printf("now listening on TLS port %s\n", tlsPort)
+			if err := http.ListenAndServeTLS(fmt.Sprintf(":%s", tlsPort), certFile, keyFile, r); err != nil {
+				fmt.Println(err)
+			}
+		}()
+	}
 
 	fmt.Printf("now listening on port %s\n", port)
 	err = http.ListenAndServe(fmt.Sprintf(":%s", port), r)

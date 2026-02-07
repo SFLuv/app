@@ -168,9 +168,16 @@ func (s *AppDB) CreateTables() error {
 			pending_approval BOOLEAN NOT NULL DEFAULT TRUE,
 			approved_at TIMESTAMP NULL,
 			approved_by_user_id TEXT NULL,
+			rejected_at TIMESTAMP NULL,
+			rejected_by_user_id TEXT NULL,
+			rejection_reason TEXT NULL,
 			w9_url TEXT NULL,
 			UNIQUE (wallet_address, year)
 		);
+
+		ALTER TABLE w9_submissions ADD COLUMN IF NOT EXISTS rejected_at TIMESTAMP NULL;
+		ALTER TABLE w9_submissions ADD COLUMN IF NOT EXISTS rejected_by_user_id TEXT NULL;
+		ALTER TABLE w9_submissions ADD COLUMN IF NOT EXISTS rejection_reason TEXT NULL;
 
 		CREATE INDEX IF NOT EXISTS w9_submissions_pending_idx ON w9_submissions(pending_approval);
 		CREATE INDEX IF NOT EXISTS w9_submissions_year_idx ON w9_submissions(year);

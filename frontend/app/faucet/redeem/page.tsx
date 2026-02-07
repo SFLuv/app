@@ -16,6 +16,7 @@ const Page = () => {
   const [error, setError] = useState<string | null>();
   const [success, setSuccess] = useState<boolean>(false);
   const [w9Url, setW9Url] = useState<string | null>(null);
+  const [w9Email, setW9Email] = useState<string | null>(null);
 
   const sigAuthAccount = searchParams.get("sigAuthAccount")
   const sigAuthSignature = searchParams.get("sigAuthSignature")
@@ -40,6 +41,25 @@ const Page = () => {
     sendBotRequest()
   }, [])
 
+  const buildW9Url = (baseUrl: string, walletAddress: string, email?: string | null) => {
+    if (!baseUrl) return baseUrl
+    if (!walletAddress) return baseUrl
+    try {
+      const url = new URL(baseUrl)
+      url.searchParams.set("wallet", walletAddress)
+      if (email) {
+        url.searchParams.set("email", email)
+      }
+      return url.toString()
+    } catch {
+      const encoded = encodeURIComponent(walletAddress)
+      const withWallet = baseUrl.includes("?") ? `${baseUrl}&wallet=${encoded}` : `${baseUrl}?wallet=${encoded}`
+      if (!email) return withWallet
+      const encodedEmail = encodeURIComponent(email)
+      return `${withWallet}&email=${encodedEmail}`
+    }
+  }
+
   const sendBotRequest = async () => {
     // let verified = verifyAccountOwnership()
     //implement real verification
@@ -58,11 +78,13 @@ const Page = () => {
           const data = JSON.parse(text)
           if (data?.reason === "w9_required" || data?.error === "w9_required") {
             setW9Url(data?.w9_url || null)
+            setW9Email(data?.email || null)
             setError("W9 Required")
             return
           }
           if (data?.reason === "w9_pending" || data?.error === "w9_pending") {
             setW9Url(null)
+            setW9Email(data?.email || null)
             setError("W9 Pending")
             return
           }
@@ -114,7 +136,7 @@ const Page = () => {
               </p>
               {w9Url && (
                 <a
-                  href={w9Url}
+                  href={buildW9Url(w9Url, sigAuthAccount, w9Email)}
                   className="inline-flex w-full items-center justify-center rounded-md bg-[#eb6c6c] px-16 py-10 text-2xl font-semibold text-white sm:w-auto sm:px-12 sm:py-8 sm:text-xl"
                   target="_blank"
                   rel="noreferrer"

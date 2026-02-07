@@ -22,7 +22,11 @@ type W9Submission struct {
 	PendingApproval  bool       `json:"pending_approval"`
 	ApprovedAt       *time.Time `json:"approved_at,omitempty"`
 	ApprovedByUserId *string    `json:"approved_by_user_id,omitempty"`
+	RejectedAt       *time.Time `json:"rejected_at,omitempty"`
+	RejectedByUserId *string    `json:"rejected_by_user_id,omitempty"`
+	RejectionReason  *string    `json:"rejection_reason,omitempty"`
 	W9URL            *string    `json:"-"`
+	UserContactEmail *string    `json:"user_contact_email,omitempty"`
 }
 
 type W9SubmitRequest struct {
@@ -33,6 +37,11 @@ type W9SubmitRequest struct {
 
 type W9ApprovalRequest struct {
 	Id int `json:"id"`
+}
+
+type W9RejectRequest struct {
+	Id     int    `json:"id"`
+	Reason string `json:"reason,omitempty"`
 }
 
 type W9CheckRequest struct {

@@ -294,6 +294,31 @@ export default function AdminPage() {
     }
   }
 
+  const handleRejectW9 = async (id: number) => {
+    const confirmed = window.confirm("Reject this W9 submission? The user will need to resubmit.")
+    if (!confirmed) return
+    try {
+      const res = await authFetch("/admin/w9/reject", {
+        method: "PUT",
+        body: JSON.stringify({ id }),
+      })
+      if (res.status !== 200) {
+        throw new Error("failed to reject w9")
+      }
+      setPendingW9Submissions((prev) => prev.filter((submission) => submission.id !== id))
+      toast({
+        title: "W9 Rejected",
+        description: "The W9 submission has been rejected.",
+      })
+    } catch {
+      toast({
+        title: "Rejection Failed",
+        description: "Failed to reject W9 submission. Please try again.",
+        variant: "destructive",
+      })
+    }
+  }
+
   useEffect(() => {
       setPendingLocations(authedMapLocations.filter((location) => location.approval === null))
   }, [authedMapLocations])
@@ -1318,6 +1343,14 @@ export default function AdminPage() {
                                 <Mail className="h-3 w-3" />
                                 <span>{submission.email}</span>
                               </div>
+                              {submission.user_contact_email && submission.user_contact_email !== submission.email && (
+                                <div className="flex items-center gap-2 text-yellow-700">
+                                  <AlertTriangle className="h-3 w-3" />
+                                  <span className="text-xs">
+                                    Email on user profile differs: {submission.user_contact_email}
+                                  </span>
+                                </div>
+                              )}
                               <div className="flex items-center gap-2">
                                 <CalendarIcon className="h-3 w-3" />
                                 <span>Year {submission.year}</span>
@@ -1328,6 +1361,10 @@ export default function AdminPage() {
                             <Button size="sm" onClick={() => handleApproveW9(submission.id)}>
                               <Check className="h-4 w-4" />
                               Approve
+                            </Button>
+                            <Button size="sm" variant="outline" onClick={() => handleRejectW9(submission.id)}>
+                              <X className="h-4 w-4" />
+                              Reject
                             </Button>
                           </div>
                         </div>
