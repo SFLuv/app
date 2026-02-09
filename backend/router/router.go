@@ -90,6 +90,7 @@ func AddPonderRoutes(r *chi.Mux, s *handlers.AppService, p *handlers.PonderServi
 	r.Get("/ponder/callback", s.PonderPingCallback)
 	r.Post("/ponder/callback", s.PonderHookHandler)
 	r.Get("/transactions", p.GetTransactionHistory)
+	r.Get("/transactions/balance", withAuth(p.GetBalanceAtTimestamp))
 }
 
 func AddW9Routes(r *chi.Mux, s *handlers.AppService) {

@@ -43,7 +43,7 @@ export type TransactionsStatus = "loading" | "ready"
 const TransactionContext = createContext<TransactionContext | null>(null);
 
 export default function TransactionProvider({ children }: { children: ReactNode }) {
-  const { status, wallets, authFetch } = useApp()
+  const { status, authFetch } = useApp()
   const { contacts, contactsStatus } = useContacts()
   const [transactions, setTransactions] = useState<Record<string, WalletTransactions>>({})
   const [transactionsError, setTransactionsError] = useState<string | null>(null)
@@ -133,8 +133,7 @@ export default function TransactionProvider({ children }: { children: ReactNode 
       }
     }
     try {
-
-      const res = await authFetch("/transactions" + "?address=" + address + "&page=" + page + paginationString)
+      const res = await fetchTransactionsWithRetry("/transactions" + "?address=" + address + "&page=" + page + paginationString)
       const txPage = await res.json()
       const newTransactions = { ...transactions }
 
@@ -151,9 +150,9 @@ export default function TransactionProvider({ children }: { children: ReactNode 
         total: txPage.total
       }
     }
-    catch(error) {
+    catch(error: any) {
       console.error(error)
-      setTransactionsError("Error fetching new transactions page.")
+      setTransactionsError(error?.message || "Error fetching new transactions page.")
       return {
         txs: [],
         page,
@@ -163,6 +162,24 @@ export default function TransactionProvider({ children }: { children: ReactNode 
     finally {
       setTransactionsStatus("ready")
     }
+  }
+
+  const fetchTransactionsWithRetry = async (endpoint: string): Promise<Response> => {
+    const maxAttempts = 3
+    for(let attempt = 0; attempt < maxAttempts; attempt++) {
+      try {
+        return await authFetch(endpoint)
+      }
+      catch(error: any) {
+        const message = error?.message || ""
+        if(message.includes("no access token") && attempt < maxAttempts - 1) {
+          await new Promise((resolve) => setTimeout(resolve, 400))
+          continue
+        }
+        throw error
+      }
+    }
+    throw new Error("Error fetching transactions.")
   }
 
 
@@ -194,10 +211,12 @@ export default function TransactionProvider({ children }: { children: ReactNode 
 
 
   const _getTxType = (tx: ServerTransaction): TransactionType => {
-    if(tx.to.toLowerCase() === "0x0000000000000000000000000000000000000000") {
+    const to = tx?.to?.toLowerCase ? tx.to.toLowerCase() : ""
+    const from = tx?.from?.toLowerCase ? tx.from.toLowerCase() : ""
+    if(to === "0x0000000000000000000000000000000000000000") {
       return "currency_unwrap"
     }
-    if(tx.from.toLowerCase() === FAUCET_ADDRESS.toLowerCase()) {
+    if(FAUCET_ADDRESS && from === FAUCET_ADDRESS.toLowerCase()) {
       return "volunteer_reward"
     }
 

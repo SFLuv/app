@@ -15,8 +15,10 @@ import { useToast } from "@/hooks/use-toast"
 import { useParams, useRouter } from "next/navigation"
 import { useWallets } from "@privy-io/react-auth"
 import { useApp } from "@/context/AppProvider"
-import { CHAIN } from "@/lib/constants"
+import { CHAIN, SFLUV_DECIMALS, SYMBOL } from "@/lib/constants"
 import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { CashOutCryptoModal } from "@/components/wallets/cashOut_crypto_modal"
 import { NotificationModal } from "@/components/notifications/notification-modal"
 import { useTransactions } from "@/context/TransactionProvider"
@@ -35,6 +37,13 @@ export default function WalletDetailsPage() {
   const [isSavingName, setIsSavingName] = useState(false)
   const [notificationModalOpen, setNotificationModalOpen] = useState<boolean>(false)
   const [walletTransactions, setWalletTransactions] = useState<WalletTransaction[]>([])
+  const [historicalModalOpen, setHistoricalModalOpen] = useState<boolean>(false)
+  const [balanceAtDate, setBalanceAtDate] = useState<string>("")
+  const [balanceAtTime, setBalanceAtTime] = useState<string>("23:59")
+  const [historicalBalanceWei, setHistoricalBalanceWei] = useState<string | null>(null)
+  const [historicalBalanceTimestamp, setHistoricalBalanceTimestamp] = useState<number | null>(null)
+  const [historicalBalanceLoading, setHistoricalBalanceLoading] = useState<boolean>(false)
+  const [historicalBalanceError, setHistoricalBalanceError] = useState<string | null>(null)
   const nameInputRef = useRef<HTMLInputElement>(null)
   const { toast } = useToast()
   const params = useParams()
@@ -46,6 +55,7 @@ export default function WalletDetailsPage() {
     status,
     walletsStatus,
     updateWallet,
+    authFetch,
     ponderSubscriptions,
     addPonderSubscription,
     deletePonderSubscription
@@ -168,6 +178,84 @@ export default function WalletDetailsPage() {
     }
     catch(error) {
       console.error(error)
+    }
+  }
+
+  const formatWeiToTwoDecimals = (wei: string) => {
+    try {
+      const value = BigInt(wei)
+      const negative = value < 0n
+      const abs = negative ? -value : value
+      const scale = BigInt(10) ** BigInt(SFLUV_DECIMALS)
+      const cents = (abs * 100n) / scale
+      const whole = cents / 100n
+      const fraction = cents % 100n
+      const formatted = `${whole.toString()}.${fraction.toString().padStart(2, "0")}`
+      return negative ? `-${formatted}` : formatted
+    } catch {
+      return "0.00"
+    }
+  }
+
+  const formatTimestamp = (timestamp?: number | null) => {
+    if(!timestamp) return ""
+    const date = new Date(timestamp * 1000)
+    return date.toLocaleString("en-US", {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit"
+    })
+  }
+
+  useEffect(() => {
+    if(!historicalModalOpen) return
+    if(!balanceAtDate) {
+      const today = new Date()
+      const isoDate = new Date(today.getTime() - today.getTimezoneOffset() * 60000).toISOString().slice(0, 10)
+      setBalanceAtDate(isoDate)
+    }
+    setBalanceAtTime("23:59")
+  }, [historicalModalOpen])
+
+  useEffect(() => {
+    if(balanceAtDate) {
+      setBalanceAtTime("23:59")
+    }
+  }, [balanceAtDate])
+
+  const handleBalanceAtTime = async () => {
+    if(!wallet?.address) return
+    if(!balanceAtDate) {
+      setHistoricalBalanceError("Please select a date.")
+      return
+    }
+    const timeValue = balanceAtTime || "23:59"
+    const timeWithSeconds = timeValue.length === 5 ? `${timeValue}:00` : timeValue
+    const parsed = new Date(`${balanceAtDate}T${timeWithSeconds}`).getTime()
+    if(Number.isNaN(parsed)) {
+      setHistoricalBalanceError("Invalid date/time.")
+      return
+    }
+    const timestamp = Math.floor(parsed / 1000)
+    setHistoricalBalanceLoading(true)
+    setHistoricalBalanceError(null)
+    try {
+      const res = await authFetch(`/transactions/balance?address=${encodeURIComponent(wallet.address)}&timestamp=${timestamp}`)
+      if(!res.ok) {
+        throw new Error("Failed to fetch balance at time.")
+      }
+      const data = await res.json()
+      setHistoricalBalanceWei(data?.balance ?? "0")
+      setHistoricalBalanceTimestamp(data?.timestamp ?? timestamp)
+    } catch (error) {
+      console.error(error)
+      setHistoricalBalanceError("Unable to load balance at that time.")
+      setHistoricalBalanceWei(null)
+      setHistoricalBalanceTimestamp(null)
+    } finally {
+      setHistoricalBalanceLoading(false)
     }
   }
 
@@ -309,7 +397,12 @@ export default function WalletDetailsPage() {
       <div className="pb-6 sm:pb-8">
         <div className="container mx-auto px-3 sm:px-4 pt-4 sm:pt-6 space-y-4 sm:space-y-6 max-w-2xl">
           {/* Balance Card */}
-          <WalletBalanceCard wallet={wallet} balance={balance || 0} showBalance={showBalance} />
+          <WalletBalanceCard
+            wallet={wallet}
+            balance={balance || 0}
+            showBalance={showBalance}
+            onShowHistoricalBalance={() => setHistoricalModalOpen(true)}
+          />
 
           {/* Quick Actions */}
           <Card>
@@ -442,6 +535,71 @@ export default function WalletDetailsPage() {
         emailAddress={ponder?.data}
         address={wallet?.address || ""}
       />
+
+      <Dialog open={historicalModalOpen} onOpenChange={setHistoricalModalOpen}>
+        <DialogContent className="sm:max-w-[520px]">
+          <DialogHeader>
+            <DialogTitle>Historical Balance</DialogTitle>
+            <DialogDescription>
+              Select a day to see the balance at the end of that day (23:59).
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="grid gap-2">
+              <Label htmlFor="balance-date" className="text-xs sm:text-sm">Date</Label>
+              <Input
+                id="balance-date"
+                type="date"
+                value={balanceAtDate}
+                onChange={(e) => setBalanceAtDate(e.target.value)}
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="balance-time" className="text-xs sm:text-sm">Time</Label>
+              <Input
+                id="balance-time"
+                type="time"
+                step="60"
+                value={balanceAtTime}
+                onChange={(e) => setBalanceAtTime(e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">
+                Time defaults to 23:59 whenever you change the date.
+              </p>
+            </div>
+            {historicalBalanceError && (
+              <p className="text-xs text-red-600">{historicalBalanceError}</p>
+            )}
+            {historicalBalanceWei !== null && historicalBalanceTimestamp && (
+              <div className="rounded-md bg-secondary/50 p-3 text-sm space-y-1">
+                <p className="text-xs text-muted-foreground">
+                  As of {formatTimestamp(historicalBalanceTimestamp)}
+                </p>
+                <p className="text-lg font-semibold">
+                  {formatWeiToTwoDecimals(historicalBalanceWei)} {SYMBOL}
+                </p>
+                {BigInt(historicalBalanceWei) < 0n && (
+                  <p className="text-xs text-amber-600">
+                    History may be incomplete before the indexer start block.
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setHistoricalModalOpen(false)}>
+              Close
+            </Button>
+            <Button
+              onClick={handleBalanceAtTime}
+              disabled={historicalBalanceLoading}
+              className="bg-[#eb6c6c] hover:bg-[#d55c5c]"
+            >
+              {historicalBalanceLoading ? "Checking..." : "Get Balance"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

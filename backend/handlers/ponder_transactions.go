@@ -59,3 +59,42 @@ func (p *PonderService) GetTransactionHistory(w http.ResponseWriter, r *http.Req
 	w.WriteHeader(http.StatusOK)
 	w.Write(bytes)
 }
+
+func (p *PonderService) GetBalanceAtTimestamp(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query()
+	address := query.Get("address")
+	timestamp := query.Get("timestamp")
+	if address == "" || timestamp == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	parsedTimestamp, err := strconv.ParseInt(timestamp, 10, 64)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	balance, err := p.db.GetBalanceAtTimestamp(r.Context(), address, parsedTimestamp)
+	if err != nil {
+		p.logger.Logf("error getting balance at timestamp: %s", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	resp := map[string]any{
+		"address":   address,
+		"timestamp": parsedTimestamp,
+		"balance":   balance,
+	}
+
+	bytes, err := json.Marshal(resp)
+	if err != nil {
+		p.logger.Logf("error marshalling balance response: %s", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	w.Write(bytes)
+}

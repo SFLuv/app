@@ -80,3 +80,32 @@ func (p *PonderDB) GetTransactionsPaginated(ctx context.Context, address string,
 
 	return &transactionsPage, nil
 }
+
+func (p *PonderDB) GetBalanceAtTimestamp(ctx context.Context, address string, timestamp int64) (string, error) {
+	row := p.db.QueryRow(ctx, `
+		SELECT
+			COALESCE(
+				SUM(CASE WHEN t.to = LOWER($1) THEN t.amount ELSE 0 END)
+				-
+				SUM(CASE WHEN t.from = LOWER($1) THEN t.amount ELSE 0 END),
+				0
+			)::text
+		FROM
+			transfer_event t
+		WHERE
+			t.timestamp <= $2
+		AND (
+			t.from = LOWER($1)
+			OR
+			t.to = LOWER($1)
+		);
+	`, address, timestamp)
+
+	var balance string
+	err := row.Scan(&balance)
+	if err != nil {
+		return "", fmt.Errorf("error getting balance at timestamp for address %s: %s", address, err)
+	}
+
+	return balance, nil
+}

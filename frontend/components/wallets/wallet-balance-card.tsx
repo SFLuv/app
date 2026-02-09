@@ -3,6 +3,7 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
+import { Button } from "@/components/ui/button"
 import { TrendingUp, TrendingDown } from "lucide-react"
 import type { ConnectedWallet } from "@/types/privy-wallet"
 import type { WalletBalance } from "@/types/privy-wallet"
@@ -13,9 +14,10 @@ interface WalletBalanceCardProps {
   wallet: AppWallet
   balance: number | null
   showBalance: boolean
+  onShowHistoricalBalance?: () => void
 }
 
-export function WalletBalanceCard({ wallet, balance, showBalance }: WalletBalanceCardProps) {
+export function WalletBalanceCard({ wallet, balance, showBalance, onShowHistoricalBalance }: WalletBalanceCardProps) {
 
   return (
     <Card className="bg-gradient-to-br from-background to-muted/20">
@@ -50,12 +52,23 @@ export function WalletBalanceCard({ wallet, balance, showBalance }: WalletBalanc
             </p>
           </div>
 
-          <div className="grid grid-cols-2 gap-3 sm:gap-4 pt-3 sm:pt-4 border-t">
-            <div>
-              <p className="text-xs sm:text-sm text-muted-foreground">Wallet Type</p>
-              <p className="font-medium text-sm sm:text-base truncate">
-                {wallet.type.toUpperCase()}
-              </p>
+          <div className="pt-3 sm:pt-4 border-t">
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <p className="text-xs sm:text-sm text-muted-foreground">Wallet Type</p>
+                <p className="font-medium text-sm sm:text-base truncate">
+                  {wallet.type.toUpperCase()}
+                </p>
+              </div>
+              {onShowHistoricalBalance && (
+                <Button
+                  size="sm"
+                  onClick={onShowHistoricalBalance}
+                  className="h-7 px-2 text-[11px] sm:text-xs bg-[#eb6c6c] hover:bg-[#d55c5c] text-white"
+                >
+                  Get Historical Balance
+                </Button>
+              )}
             </div>
           </div>
         </div>
