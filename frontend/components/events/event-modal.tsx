@@ -17,9 +17,19 @@ interface EventModalProps {
   event: Event | undefined
   handleDeleteEvent: (id: string) => Promise<void>
   deleteEventError: unknown
+  eventsBasePath?: string
+  ownerLabel?: string
 }
 
-export function EventModal({ open, onOpenChange, event, handleDeleteEvent, deleteEventError }: EventModalProps) {
+export function EventModal({
+  open,
+  onOpenChange,
+  event,
+  handleDeleteEvent,
+  deleteEventError,
+  eventsBasePath = "/events",
+  ownerLabel,
+}: EventModalProps) {
   if(!event) return
 
   const { authFetch } = useApp()
@@ -39,7 +49,7 @@ export function EventModal({ open, onOpenChange, event, handleDeleteEvent, delet
 
 
   const getCodes = async () => {
-    const url = "/events/" + event.id
+    const url = `${eventsBasePath}/${event.id}`
     try {
       const res = await authFetch(url)
       const codes = await res.json()
@@ -101,6 +111,15 @@ export function EventModal({ open, onOpenChange, event, handleDeleteEvent, delet
                 {event.codes}
               </span>
             </div>
+
+            {ownerLabel && (
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-muted-foreground text-sm">Owner: </span>
+                <span className="font-mono text-sm">
+                  {ownerLabel}
+                </span>
+              </div>
+            )}
 
             <div className="flex items-center justify-between gap-3">
               <span className="text-muted-foreground text-sm">Amount: </span>

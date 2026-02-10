@@ -168,7 +168,25 @@ func (a *AppService) AddLocation(w http.ResponseWriter, r *http.Request) {
 	sender := utils.NewEmailSender()
 	if sender != nil {
 		// send confirmation email to admin
-		err = sender.SendEmail("admin@sfluv.org", "SFLuv Admin", "New Location Added", fmt.Sprintf("A new location has been added: %s", location.Name), "no_reply@sfluv.org", "SFLuv Admin")
+		details := fmt.Sprintf(`
+<table role="presentation" width="100%%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
+  <tr>
+    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280; width:160px;">Location</td>
+    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827;">%s</td>
+  </tr>
+  <tr>
+    <td style="padding:12px 0; font-size:13px; color:#6b7280;">Submitted By</td>
+    <td style="padding:12px 0; font-size:13px; color:#111827; word-break:break-all;">%s</td>
+  </tr>
+</table>`, location.Name, location.OwnerID)
+
+		htmlContent := utils.BuildStyledEmail(
+			"New Location Added",
+			"A new location has been submitted for review.",
+			details,
+		)
+
+		err = sender.SendEmail("admin@sfluv.org", "SFLuv Admin", "New Location Added", htmlContent, "no_reply@sfluv.org", "SFLuv Admin")
 		if err != nil {
 			a.logger.Logf("error sending confirmation email: %s", err.Error())
 		}
@@ -217,7 +235,25 @@ func (a *AppService) UpdateLocation(w http.ResponseWriter, r *http.Request) {
 		// send confirmation email to contact associated with location
 		sender := utils.NewEmailSender()
 		if sender != nil {
-			err = sender.SendEmail(location.AdminEmail, fmt.Sprintf("%s %s", location.ContactFirstName, location.ContactLastName), "Location Approved", fmt.Sprintf("Location %s has been approved", location.Name), "no_reply@sfluv.org", "SFLuv Admin")
+			details := fmt.Sprintf(`
+<table role="presentation" width="100%%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
+  <tr>
+    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280; width:160px;">Location</td>
+    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827;">%s</td>
+  </tr>
+  <tr>
+    <td style="padding:12px 0; font-size:13px; color:#6b7280;">Status</td>
+    <td style="padding:12px 0; font-size:13px; color:#111827;">Approved</td>
+  </tr>
+</table>`, location.Name)
+
+			htmlContent := utils.BuildStyledEmail(
+				"Location Approved",
+				"Your location has been approved.",
+				details,
+			)
+
+			err = sender.SendEmail(location.AdminEmail, fmt.Sprintf("%s %s", location.ContactFirstName, location.ContactLastName), "Location Approved", htmlContent, "no_reply@sfluv.org", "SFLuv Admin")
 			if err != nil {
 				a.logger.Logf("error sending confirmation email: %s", err.Error())
 			}

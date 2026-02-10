@@ -8,12 +8,14 @@ interface EventCardProps {
   event: Event
   toggleEventModal: () => void
   setEventModalEvent: (c: Event) => void
+  ownerLabel?: string
 }
 
 const EventCard = ({
   event,
   toggleEventModal,
-  setEventModalEvent
+  setEventModalEvent,
+  ownerLabel,
 }: EventCardProps) => {
   const toggleModal = () => {
     setEventModalEvent(event)
@@ -33,6 +35,11 @@ const EventCard = ({
               <p className="text-sm text-gray-600 dark:text-gray-400 truncate max-w-[200px] md:max-w-[300px] font-mono">
                 {event.description.slice(0, 20) + (event.description.length > 20 ? "..." : "")}
               </p>
+              {ownerLabel && (
+                <p className="text-xs text-muted-foreground mt-1">
+                  Owner: {ownerLabel}
+                </p>
+              )}
             </div>
           </div>
 

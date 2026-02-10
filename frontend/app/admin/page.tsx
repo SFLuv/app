@@ -52,6 +52,7 @@ import { useLocation } from "@/context/LocationProvider"
 import { AuthedLocation, UpdateLocationApprovalRequest } from "@/types/location"
 import { AppWallet } from "@/lib/wallets/wallets"
 import { FAUCET_ADDRESS, SFLUV_DECIMALS, SFLUV_TOKEN } from "@/lib/constants"
+import { Affiliate } from "@/types/affiliate"
 import { Event, EventsStatus } from "@/types/event"
 import { AddEventModal } from "@/components/events/add-event-modal"
 import { EventModal } from "@/components/events/event-modal"
@@ -143,6 +144,18 @@ export default function AdminPage() {
   const [eventDetailsEvent, setEventDetailsEvent] = useState<Event | undefined>(undefined)
   const [drainFaucetModalOpen, setDrainFaucetModalOpen] = useState<boolean>(false)
   const [drainFaucetError, setDrainFaucetError] = useState<boolean>(false)
+
+  // Affiliates
+  const [affiliates, setAffiliates] = useState<Affiliate[]>([])
+  const [affiliatesError, setAffiliatesError] = useState<string>("")
+  const [affiliateModalOpen, setAffiliateModalOpen] = useState<boolean>(false)
+  const [selectedAffiliate, setSelectedAffiliate] = useState<Affiliate | null>(null)
+  const [affiliateNickname, setAffiliateNickname] = useState<string>("")
+  const [affiliateWeeklyBalance, setAffiliateWeeklyBalance] = useState<string>("")
+  const [affiliateBonus, setAffiliateBonus] = useState<string>("")
+  const [affiliateUpdating, setAffiliateUpdating] = useState<boolean>(false)
+  const [affiliateModalError, setAffiliateModalError] = useState<string>("")
+  const [eventsOwnerFilter, setEventsOwnerFilter] = useState<string>("all")
 
   const toggleNewEventModal = () => {
     setEventsModalOpen(!eventsModalOpen)
@@ -253,6 +266,127 @@ export default function AdminPage() {
     }
   }
 
+  const affiliateLabelMap = useMemo(() => {
+    const map = new Map<string, string>()
+    affiliates.forEach((affiliate) => {
+      map.set(affiliate.user_id, affiliate.nickname || affiliate.organization)
+    })
+    return map
+  }, [affiliates])
+
+  const getOwnerLabel = (owner?: string) => {
+    if (!owner) return "Admin"
+    const label = affiliateLabelMap.get(owner)
+    if (label) return label
+    return `Admin`
+  }
+
+  const ownerOptions = useMemo(() => {
+    const owners = new Map<string, string>()
+    events.forEach((event) => {
+      if (event.owner) {
+        owners.set(event.owner, getOwnerLabel(event.owner))
+      }
+    })
+    return Array.from(owners.entries())
+      .map(([value, label]) => ({ value, label }))
+      .sort((a, b) => a.label.localeCompare(b.label))
+  }, [events, affiliateLabelMap])
+
+  const filteredEvents = useMemo(() => {
+    if (eventsOwnerFilter === "all") return events
+    return events.filter((event) => event.owner === eventsOwnerFilter)
+  }, [events, eventsOwnerFilter])
+
+  const getAffiliates = async () => {
+    try {
+      const res = await authFetch("/admin/affiliates")
+      if (!res.ok) throw new Error()
+      const data = await res.json()
+      setAffiliates(data || [])
+      setAffiliatesError("")
+    } catch {
+      setAffiliatesError("Error fetching affiliates. Please try again later.")
+    }
+  }
+
+  const openAffiliateModal = (affiliate: Affiliate) => {
+    setSelectedAffiliate(affiliate)
+    setAffiliateNickname(affiliate.nickname || "")
+    setAffiliateWeeklyBalance(String(affiliate.weekly_allocation ?? affiliate.weekly_balance ?? 0))
+    setAffiliateBonus("")
+    setAffiliateModalError("")
+    setAffiliateModalOpen(true)
+  }
+
+  const submitAffiliateUpdate = async (payload: Record<string, unknown>) => {
+    setAffiliateUpdating(true)
+    setAffiliateModalError("")
+    try {
+      const res = await authFetch("/admin/affiliates", {
+        method: "PUT",
+        body: JSON.stringify(payload),
+      })
+      if (!res.ok) throw new Error()
+
+      const updated = await res.json()
+      setAffiliates((prev) =>
+        prev.map((affiliate) => (affiliate.user_id === updated.user_id ? updated : affiliate)),
+      )
+      setSelectedAffiliate(updated)
+      setAffiliateBonus("")
+    } catch {
+      setAffiliateModalError("Unable to update affiliate right now. Please try again.")
+    } finally {
+      setAffiliateUpdating(false)
+    }
+  }
+
+  const handleAffiliateSave = async () => {
+    if (!selectedAffiliate) return
+
+    const payload: Record<string, unknown> = {
+      user_id: selectedAffiliate.user_id,
+    }
+
+    const weekly = Number(affiliateWeeklyBalance)
+    if (!Number.isNaN(weekly)) {
+      payload.weekly_balance = weekly
+    }
+
+    payload.nickname = affiliateNickname
+
+    const bonus = Number(affiliateBonus)
+    if (!Number.isNaN(bonus) && bonus > 0) {
+      payload.one_time_bonus = bonus
+    }
+
+    await submitAffiliateUpdate(payload)
+  }
+
+  const handleAffiliateStatus = async (status: Affiliate["status"]) => {
+    if (!selectedAffiliate) return
+
+    const payload: Record<string, unknown> = {
+      user_id: selectedAffiliate.user_id,
+      status,
+    }
+
+    const weekly = Number(affiliateWeeklyBalance)
+    if (!Number.isNaN(weekly)) {
+      payload.weekly_balance = weekly
+    }
+
+    payload.nickname = affiliateNickname
+
+    const bonus = Number(affiliateBonus)
+    if (!Number.isNaN(bonus) && bonus > 0) {
+      payload.one_time_bonus = bonus
+    }
+
+    await submitAffiliateUpdate(payload)
+  }
+
   useEffect(() => {
     if(wallets.length) {
       getFaucetBalance()
@@ -262,6 +396,7 @@ export default function AdminPage() {
   useEffect(() => {
     getAuthedMapLocations()
     getEvents()
+    getAffiliates()
   }, [])
 
   useEffect(() => {
@@ -721,13 +856,21 @@ export default function AdminPage() {
       </div>
 
       <Tabs defaultValue="merchants" className="space-y-6">
-        <TabsList className="grid w-full grid-cols-2">
+        <TabsList className="grid w-full grid-cols-3">
           {/* <TabsTrigger value="tokens">Token Management</TabsTrigger> */}
           <TabsTrigger value="merchants" className="relative">
             Merchant Approvals
             {pendingLocations.length > 0 && (
               <Badge variant="destructive" className="ml-2 h-5 w-5 rounded-full p-1.5 text-xs">
                 {pendingLocations.length}
+              </Badge>
+            )}
+          </TabsTrigger>
+          <TabsTrigger value="affiliates" className="relative">
+            Affiliates
+            {affiliates.filter((affiliate) => affiliate.status === "pending").length > 0 && (
+              <Badge variant="destructive" className="ml-2 h-5 w-5 rounded-full p-1.5 text-xs">
+                {affiliates.filter((affiliate) => affiliate.status === "pending").length}
               </Badge>
             )}
           </TabsTrigger>
@@ -1238,6 +1381,138 @@ export default function AdminPage() {
           </Card>
         </TabsContent>
 
+        <TabsContent value="affiliates" className="space-y-6">
+          {affiliatesError && (
+            <div className="flex items-center gap-2 text-red-600 text-sm p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
+              <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+              <span>{affiliatesError}</span>
+            </div>
+          )}
+
+          <Dialog open={affiliateModalOpen} onOpenChange={setAffiliateModalOpen}>
+            <DialogContent className="sm:max-w-lg">
+              <DialogHeader>
+                <DialogTitle>Manage Affiliate</DialogTitle>
+                <DialogDescription>
+                  {selectedAffiliate?.nickname || selectedAffiliate?.organization || "Affiliate"} ·{" "}
+                  {selectedAffiliate?.status || "pending"}
+                </DialogDescription>
+              </DialogHeader>
+              {selectedAffiliate && (
+                <div className="space-y-4">
+                  <div className="space-y-2">
+                    <Label>Nickname</Label>
+                    <Input
+                      value={affiliateNickname}
+                      onChange={(e) => setAffiliateNickname(e.target.value)}
+                      placeholder="Display name"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Weekly Allocation (SFLuv)</Label>
+                    <Input
+                      type="number"
+                      min="0"
+                      value={affiliateWeeklyBalance}
+                      onChange={(e) => setAffiliateWeeklyBalance(e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>One-Time Balance Increase (SFLuv)</Label>
+                    <Input
+                      type="number"
+                      min="0"
+                      value={affiliateBonus}
+                      onChange={(e) => setAffiliateBonus(e.target.value)}
+                      placeholder="Add a one-time bonus"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Current one-time balance: {selectedAffiliate.one_time_balance}
+                    </p>
+                  </div>
+
+                  {affiliateModalError && (
+                    <div className="flex items-center gap-2 text-red-600 text-sm p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
+                      <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+                      <span>{affiliateModalError}</span>
+                    </div>
+                  )}
+
+                  <div className="flex flex-wrap gap-2 justify-end">
+                    {selectedAffiliate.status === "pending" && (
+                      <>
+                        <Button
+                          variant="outline"
+                          disabled={affiliateUpdating}
+                          onClick={() => handleAffiliateStatus("rejected")}
+                        >
+                          <X className="mr-2 h-4 w-4" />
+                          Reject
+                        </Button>
+                        <Button
+                          disabled={affiliateUpdating}
+                          onClick={() => handleAffiliateStatus("approved")}
+                        >
+                          <Check className="mr-2 h-4 w-4" />
+                          Approve
+                        </Button>
+                      </>
+                    )}
+                    <Button
+                      variant="secondary"
+                      disabled={affiliateUpdating}
+                      onClick={handleAffiliateSave}
+                    >
+                      {affiliateUpdating ? "Saving..." : "Save Changes"}
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </DialogContent>
+          </Dialog>
+
+          <Card>
+            <CardHeader className="pb-4">
+              <CardTitle className="flex items-center gap-2 text-xl">
+                <Users className="h-5 w-5" />
+                Manage Affiliates
+              </CardTitle>
+              <CardDescription>Approve requests and manage affiliate balances</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {affiliates.length === 0 ? (
+                <div className="text-center py-8">
+                  <Users className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+                  <h3 className="text-lg font-medium">No Affiliate Requests</h3>
+                  <p className="text-muted-foreground">Affiliate requests will appear here.</p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {affiliates.map((affiliate) => (
+                    <Card
+                      key={affiliate.user_id}
+                      className="cursor-pointer hover:shadow-md transition-shadow"
+                      onClick={() => openAffiliateModal(affiliate)}
+                    >
+                      <CardContent className="p-4 flex items-center justify-between gap-4">
+                        <div>
+                          <p className="font-medium text-black dark:text-white">
+                            {affiliate.nickname || affiliate.organization}
+                          </p>
+                          {affiliate.nickname && (
+                            <p className="text-xs text-muted-foreground">{affiliate.organization}</p>
+                          )}
+                        </div>
+                        {affiliate.status === "pending" && <Badge variant="outline">Pending</Badge>}
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
         <TabsContent value="events" className="space-y-6">
           {eventsError != "" && (
             <div className="flex items-center gap-2 text-red-600 text-sm p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
@@ -1258,6 +1533,7 @@ export default function AdminPage() {
             onOpenChange={toggleEventDetailModal}
             handleDeleteEvent={handleDeleteEvent}
             deleteEventError={deleteEventError}
+            ownerLabel={eventDetailsEvent ? getOwnerLabel(eventDetailsEvent.owner) : undefined}
           />
           <DrainFaucetModal
             open={drainFaucetModalOpen}
@@ -1279,6 +1555,22 @@ export default function AdminPage() {
                   </Badge>
                   <span className="text-sm text-muted-foreground">in faucet</span>
                 </div>
+                <div className="flex flex-wrap items-center gap-2 mt-4">
+                  <Label className="text-xs text-muted-foreground">Filter by owner</Label>
+                  <Select value={eventsOwnerFilter} onValueChange={setEventsOwnerFilter}>
+                    <SelectTrigger className="w-[220px]">
+                      <SelectValue placeholder="All owners" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All owners</SelectItem>
+                      {ownerOptions.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
               </div>
               <div className="text-right">
                 <Button onClick={toggleNewEventModal}>
@@ -1287,7 +1579,7 @@ export default function AdminPage() {
               </div>
             </CardHeader>
             <CardContent>
-              {events.length === 0 ? (
+              {filteredEvents.length === 0 ? (
                 <div className="text-center py-8">
                   <Leaf className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
                   <h3 className="text-lg font-medium">No {eventsExpired ? "" : "Active"} Events</h3>
@@ -1295,12 +1587,13 @@ export default function AdminPage() {
                 </div>
               ) : (
                 <div className="space-y-4">
-                  {events.map((event: Event) => (
+                  {filteredEvents.map((event: Event) => (
                     <EventCard
                       key={event.id}
                       event={event}
                       toggleEventModal={toggleEventDetailModal}
                       setEventModalEvent={setEventDetailsEvent}
+                      ownerLabel={getOwnerLabel(event.owner)}
                     />
                   ))}
                 </div>
