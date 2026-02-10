@@ -2,7 +2,7 @@
 
 import type React from "react"
 
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { useRouter } from "next/navigation"
 import { useApp } from "@/context/AppProvider"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -37,6 +37,14 @@ export default function SettingsPage() {
     return "none"
   }, [affiliate, user])
 
+  useEffect(() => {
+    if (affiliate?.affiliate_logo) {
+      setAffiliateLogoPreview(affiliate.affiliate_logo)
+    } else {
+      setAffiliateLogoPreview("")
+    }
+  }, [affiliate?.affiliate_logo])
+
   // Form states
   const [activeTab, setActiveTab] = useState("account")
   const [isUpdating, setIsUpdating] = useState(false)
@@ -47,6 +55,9 @@ export default function SettingsPage() {
   const [affiliateSubmitting, setAffiliateSubmitting] = useState(false)
   const [affiliateError, setAffiliateError] = useState("")
   const [affiliateSuccess, setAffiliateSuccess] = useState("")
+  const [affiliateLogoPreview, setAffiliateLogoPreview] = useState<string>("")
+  const [affiliateLogoSaving, setAffiliateLogoSaving] = useState(false)
+  const [affiliateLogoError, setAffiliateLogoError] = useState("")
 
   // Account form
   const [name, setName] = useState(user?.name || "")
@@ -165,6 +176,51 @@ export default function SettingsPage() {
       setAffiliateError("Unable to submit your request right now. Please try again.")
     } finally {
       setAffiliateSubmitting(false)
+    }
+  }
+
+  const handleAffiliateLogoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setAffiliateLogoError("")
+    const file = e.target.files?.[0]
+    if (!file) return
+
+    if (!file.type.startsWith("image/")) {
+      setAffiliateLogoError("Please upload a valid image file.")
+      return
+    }
+
+    const reader = new FileReader()
+    reader.onload = () => {
+      const result = reader.result
+      if (typeof result === "string") {
+        setAffiliateLogoPreview(result)
+      }
+    }
+    reader.readAsDataURL(file)
+  }
+
+  const handleAffiliateLogoSave = async () => {
+    if (!affiliateLogoPreview) return
+    setAffiliateLogoSaving(true)
+    setAffiliateLogoError("")
+
+    try {
+      const res = await authFetch("/affiliates/logo", {
+        method: "PUT",
+        body: JSON.stringify({ logo: affiliateLogoPreview }),
+      })
+
+      if (!res.ok) {
+        throw new Error("Unable to update affiliate logo right now.")
+      }
+
+      const updated = await res.json()
+      setAffiliate(updated)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unable to update affiliate logo right now."
+      setAffiliateLogoError(message)
+    } finally {
+      setAffiliateLogoSaving(false)
     }
   }
 
@@ -492,6 +548,48 @@ export default function SettingsPage() {
                 <p className="text-gray-600 dark:text-gray-400 mb-4">
                   You are approved to create affiliate events for {affiliate?.organization || "your organization"}.
                 </p>
+                <div className="space-y-3">
+                  <Label className="text-black dark:text-white">Affiliate Logo</Label>
+                  <div className="flex items-center gap-4">
+                    <div className="h-16 w-16 rounded-xl bg-secondary border border-muted flex items-center justify-center overflow-hidden">
+                      {affiliateLogoPreview ? (
+                        <img src={affiliateLogoPreview} alt="Affiliate logo" className="h-full w-full object-contain" />
+                      ) : (
+                        <span className="text-xs text-muted-foreground">No logo</span>
+                      )}
+                    </div>
+                    <div className="space-y-2">
+                      <Input
+                        type="file"
+                        accept="image/*"
+                        onChange={handleAffiliateLogoChange}
+                        className="text-black dark:text-white bg-secondary"
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="bg-secondary text-[#eb6c6c] border-[#eb6c6c] hover:bg-[#eb6c6c] hover:text-white"
+                        disabled={!affiliateLogoPreview || affiliateLogoSaving}
+                        onClick={handleAffiliateLogoSave}
+                      >
+                        {affiliateLogoSaving ? (
+                          <>
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                            Saving...
+                          </>
+                        ) : (
+                          "Save Logo"
+                        )}
+                      </Button>
+                    </div>
+                  </div>
+                  {affiliateLogoError && (
+                    <div className="flex items-center gap-2 text-red-600 text-sm p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
+                      <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+                      <span>{affiliateLogoError}</span>
+                    </div>
+                  )}
+                </div>
               </CardContent>
             </Card>
           )}

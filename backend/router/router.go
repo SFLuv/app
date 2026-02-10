@@ -67,11 +67,13 @@ func AddAdminRoutes(r *chi.Mux, s *handlers.AppService) {
 
 func AddAffiliateRoutes(r *chi.Mux, s *handlers.BotService, a *handlers.AppService) {
 	r.Post("/affiliates/request", withAuth(a.RequestAffiliateStatus))
+	r.Put("/affiliates/logo", withAffiliate(a.UpdateAffiliateLogo, a))
 	r.Get("/affiliates/balance", withAffiliate(s.AffiliateBalance, a))
 	r.Post("/affiliates/events", withAffiliate(s.AffiliateNewEvent, a))
 	r.Get("/affiliates/events", withAffiliate(s.AffiliateGetEvents, a))
 	r.Get("/affiliates/events/{event}", withAffiliate(s.AffiliateGetCodes, a))
 	r.Delete("/affiliates/events/{event}", withAffiliate(s.AffiliateDeleteEvent, a))
+	r.Get("/affiliates/{user_id}", withAffiliate(a.GetAffiliate, a))
 }
 
 func AddWalletRoutes(r *chi.Mux, s *handlers.AppService) {

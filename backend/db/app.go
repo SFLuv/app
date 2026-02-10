@@ -65,6 +65,7 @@ func (s *AppDB) CreateTables() error {
 			organization TEXT NOT NULL,
 			nickname TEXT,
 			status TEXT NOT NULL DEFAULT 'pending',
+			affiliate_logo TEXT,
 			weekly_allocation BIGINT NOT NULL DEFAULT 0,
 			weekly_balance BIGINT NOT NULL DEFAULT 0,
 			one_time_balance BIGINT NOT NULL DEFAULT 0,
@@ -79,6 +80,9 @@ func (s *AppDB) CreateTables() error {
 	}
 
 	_, err = s.db.Exec(context.Background(), `
+		ALTER TABLE affiliates
+		ADD COLUMN IF NOT EXISTS affiliate_logo TEXT;
+
 		ALTER TABLE affiliates
 		ADD COLUMN IF NOT EXISTS weekly_allocation BIGINT NOT NULL DEFAULT 0;
 

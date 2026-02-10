@@ -338,14 +338,14 @@ func (s *BotDB) EventUnredeemedValue(ctx context.Context, id string) (uint64, er
 			(
 				(
 					SELECT
-						COUNT(id)
+						COUNT(*)
 					FROM
 						codes
 					WHERE
-						event = e.id
+						event = $1
 				) - (
 					SELECT
-						COUNT(r.id)
+						COUNT(*)
 					FROM
 						redemptions r
 					JOIN
@@ -353,14 +353,18 @@ func (s *BotDB) EventUnredeemedValue(ctx context.Context, id string) (uint64, er
 					ON
 						r.code = c.id
 					WHERE
-						c.event = e.id
-					)
-				) * e.amount
-			), 0)
-		FROM
-			events e
-		WHERE
-			e.id = $1;
+						c.event = $1
+				)
+			) * COALESCE((
+				SELECT
+					amount
+				FROM
+					events
+				WHERE
+					id = $1
+			), 0),
+			0
+		);
 	`, id)
 	var value uint64
 	err := row.Scan(&value)

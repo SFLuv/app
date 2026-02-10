@@ -1542,23 +1542,25 @@ export default function AdminPage() {
             drainFaucetError={drainFaucetError}
           />
           <Card>
-            <CardHeader className="pb-6 grid grid-cols-[2fr,1fr]">
+            <CardHeader className="pb-6 flex flex-col gap-4 md:grid md:grid-cols-[2fr,1fr]">
               <div>
                 <CardTitle className="flex items-center gap-2 text-xl">
                   <CalendarIcon className="h-6 w-6" />
                   Volunteer Events
                 </CardTitle>
                 <CardDescription className="text-base mt-2">Create and Manage Volunteer Events</CardDescription>
-                <div className="flex items-center gap-2 mt-3">
-                  <Badge className="text-sm px-3 py-1 cursor-pointer" onClick={toggleDrainFaucetModal}>
-                    {unallocatedBalance ? `${unallocatedBalance} / ${faucetBalance} SFLuv Available` : `${faucetBalance} SFLuv`}
+                <div className="flex flex-wrap items-center gap-2 mt-3">
+                  <Badge className="text-xs sm:text-sm px-3 py-1 cursor-pointer" onClick={toggleDrainFaucetModal}>
+                    {unallocatedBalance !== undefined
+                      ? `${unallocatedBalance} / ${faucetBalance} SFLuv Available`
+                      : `${faucetBalance} SFLuv`}
                   </Badge>
-                  <span className="text-sm text-muted-foreground">in faucet</span>
+                  <span className="text-xs sm:text-sm text-muted-foreground">in faucet</span>
                 </div>
-                <div className="flex flex-wrap items-center gap-2 mt-4">
+                <div className="flex flex-col gap-2 mt-4 sm:flex-row sm:flex-wrap sm:items-center">
                   <Label className="text-xs text-muted-foreground">Filter by owner</Label>
                   <Select value={eventsOwnerFilter} onValueChange={setEventsOwnerFilter}>
-                    <SelectTrigger className="w-[220px]">
+                    <SelectTrigger className="w-full sm:w-[220px]">
                       <SelectValue placeholder="All owners" />
                     </SelectTrigger>
                     <SelectContent>
@@ -1572,8 +1574,8 @@ export default function AdminPage() {
                   </Select>
                 </div>
               </div>
-              <div className="text-right">
-                <Button onClick={toggleNewEventModal}>
+              <div className="text-left md:text-right">
+                <Button onClick={toggleNewEventModal} className="w-full md:w-auto">
                   + New Event
                 </Button>
               </div>

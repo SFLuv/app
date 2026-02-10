@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/SFLuv/app/backend/structs"
 	"github.com/jackc/pgx/v5"
@@ -92,6 +93,7 @@ func (a *AppDB) GetAffiliates(ctx context.Context) ([]*structs.Affiliate, error)
 			organization,
 			nickname,
 			status,
+			affiliate_logo,
 			weekly_allocation,
 			weekly_balance,
 			one_time_balance
@@ -113,6 +115,7 @@ func (a *AppDB) GetAffiliates(ctx context.Context) ([]*structs.Affiliate, error)
 			&affiliate.Organization,
 			&affiliate.Nickname,
 			&affiliate.Status,
+			&affiliate.AffiliateLogo,
 			&affiliate.WeeklyAllocation,
 			&affiliate.WeeklyBalance,
 			&affiliate.OneTimeBalance,
@@ -184,6 +187,34 @@ func (a *AppDB) AddAffiliateWeeklyBalance(ctx context.Context, userId string, am
 		return fmt.Errorf("error adding affiliate weekly balance: %s", err)
 	}
 	return nil
+}
+
+func (a *AppDB) UpdateAffiliateLogo(ctx context.Context, userId string, logo *string) (*structs.Affiliate, error) {
+	var logoValue any
+	if logo != nil {
+		trimmed := strings.TrimSpace(*logo)
+		if trimmed != "" {
+			logoValue = trimmed
+		}
+	}
+
+	cmd, err := a.db.Exec(ctx, `
+		UPDATE
+			affiliates
+		SET
+			affiliate_logo = $2,
+			updated_at = NOW()
+		WHERE
+			user_id = $1;
+	`, userId, logoValue)
+	if err != nil {
+		return nil, fmt.Errorf("error updating affiliate logo: %s", err)
+	}
+	if cmd.RowsAffected() == 0 {
+		return nil, fmt.Errorf("affiliate not found")
+	}
+
+	return getAffiliateByUser(ctx, a.db, userId)
 }
 
 func (a *AppDB) ReserveAffiliateBalance(ctx context.Context, userId string, amount uint64) (*structs.BalanceReservation, error) {
@@ -412,6 +443,7 @@ func getAffiliateByUser(ctx context.Context, querier interface {
 			organization,
 			nickname,
 			status,
+			affiliate_logo,
 			weekly_allocation,
 			weekly_balance,
 			one_time_balance
@@ -427,6 +459,7 @@ func getAffiliateByUser(ctx context.Context, querier interface {
 		&affiliate.Organization,
 		&affiliate.Nickname,
 		&affiliate.Status,
+		&affiliate.AffiliateLogo,
 		&affiliate.WeeklyAllocation,
 		&affiliate.WeeklyBalance,
 		&affiliate.OneTimeBalance,

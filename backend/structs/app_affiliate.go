@@ -5,6 +5,7 @@ type Affiliate struct {
 	Organization     string  `json:"organization"`
 	Nickname         *string `json:"nickname"`
 	Status           string  `json:"status"`
+	AffiliateLogo    *string `json:"affiliate_logo"`
 	WeeklyAllocation uint64  `json:"weekly_allocation"`
 	WeeklyBalance    uint64  `json:"weekly_balance"`
 	OneTimeBalance   uint64  `json:"one_time_balance"`
@@ -22,6 +23,10 @@ type BalanceReservation struct {
 
 type AffiliateRequest struct {
 	Organization string `json:"organization"`
+}
+
+type AffiliateLogoRequest struct {
+	Logo string `json:"logo"`
 }
 
 type AffiliateUpdateRequest struct {

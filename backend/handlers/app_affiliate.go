@@ -96,6 +96,72 @@ func (a *AppService) GetAffiliates(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(affiliates)
 }
 
+func (a *AppService) GetAffiliate(w http.ResponseWriter, r *http.Request) {
+	userId := r.PathValue("user_id")
+	if userId == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	requester := utils.GetDid(r)
+	if requester == nil {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	if *requester != userId && !a.IsAdmin(r.Context(), *requester) {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	affiliate, err := a.db.GetAffiliateByUser(r.Context(), userId)
+	if err == pgx.ErrNoRows {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		a.logger.Logf("error getting affiliate %s: %s", userId, err.Error())
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(affiliate)
+}
+
+func (a *AppService) UpdateAffiliateLogo(w http.ResponseWriter, r *http.Request) {
+	userDid := utils.GetDid(r)
+	if userDid == nil {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	defer r.Body.Close()
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		a.logger.Logf("error reading affiliate logo update body for user %s: %s", *userDid, err.Error())
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	var req structs.AffiliateLogoRequest
+	err = json.Unmarshal(body, &req)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	affiliate, err := a.db.UpdateAffiliateLogo(r.Context(), *userDid, &req.Logo)
+	if err != nil {
+		a.logger.Logf("error updating affiliate logo for user %s: %s", *userDid, err.Error())
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(affiliate)
+}
+
 func (a *AppService) UpdateAffiliate(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 	body, err := io.ReadAll(r.Body)

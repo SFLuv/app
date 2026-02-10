@@ -144,24 +144,26 @@ export default function AffiliatesPage() {
       />
 
       <Card>
-        <CardHeader className="pb-6 grid grid-cols-[2fr,1fr]">
+        <CardHeader className="pb-6 flex flex-col gap-4 md:grid md:grid-cols-[2fr,1fr]">
           <div>
             <CardTitle className="flex items-center gap-2 text-xl">
               <CalendarIcon className="h-6 w-6" />
               Affiliate Events
             </CardTitle>
             <CardDescription className="text-base mt-2">Allocate your affiliate balance to new events</CardDescription>
-            <div className="flex items-center gap-2 mt-3">
-              <Badge className="text-sm px-3 py-1">
+            <div className="flex flex-wrap items-center gap-2 mt-3">
+              <Badge className="text-xs sm:text-sm px-3 py-1">
                 {balance
-                  ? `${balance.available}/${balance.weekly_allocation} SFLuv`
+                  ? `${balance.available}/${balance.weekly_allocation}${
+                      balance.available > balance.weekly_allocation ? "+" : ""
+                    } SFLuv`
                   : "Balance loading"}
               </Badge>
-              <span className="text-sm text-muted-foreground">remaining / weekly allocation</span>
+              <span className="text-xs sm:text-sm text-muted-foreground">remaining / weekly allocation</span>
             </div>
           </div>
-          <div className="text-right">
-            <Button onClick={toggleNewEventModal}>
+          <div className="text-left md:text-right">
+            <Button onClick={toggleNewEventModal} className="w-full md:w-auto">
               + New Event
             </Button>
           </div>

@@ -7,6 +7,7 @@ import { AlertTriangle, Container, Divide, Trash2 } from "lucide-react"
 import { Event } from "@/types/event"
 import { DeleteEventModal } from "./delete-event-modal"
 import { QRCodeCard } from "./qr-code-card"
+import { AffiliateQRCodeCard } from "./affiliate-qr-code-card"
 import { useApp } from "@/context/AppProvider"
 import { Margin, Options, usePDF } from "react-to-pdf";
 import ReactPDF from '@react-pdf/renderer';
@@ -32,13 +33,15 @@ export function EventModal({
 }: EventModalProps) {
   if(!event) return
 
-  const { authFetch } = useApp()
+  const { authFetch, affiliate, user } = useApp()
 
   const [deleteError, setDeleteError]= useState<string | null>()
   const [deleteModalOpen, setDeleteModalOpen] = useState<boolean>(false)
 
   const [codes, setCodes] = useState<string[]>([])
   const [codesError, setCodesError] = useState<string | undefined>()
+  const [affiliateLogo, setAffiliateLogo] = useState<string | null>(null)
+  const [affiliateOrganization, setAffiliateOrganization] = useState<string | null>(null)
 
   const { toPDF, targetRef } = usePDF({
     method: "save",
@@ -63,12 +66,44 @@ export function EventModal({
 
   }
 
+  const getAffiliateLogo = async () => {
+    if (!event?.owner) {
+      setAffiliateLogo(null)
+      setAffiliateOrganization(null)
+      return
+    }
+
+    if (user?.id === event.owner) {
+      setAffiliateLogo(affiliate?.affiliate_logo || null)
+      setAffiliateOrganization(affiliate?.organization || null)
+      return
+    }
+
+    try {
+      const res = await authFetch(`/affiliates/${encodeURIComponent(event.owner)}`)
+      if (!res.ok) {
+        setAffiliateLogo(null)
+        setAffiliateOrganization(null)
+        return
+      }
+      const data = await res.json()
+      setAffiliateLogo(data?.affiliate_logo || null)
+      setAffiliateOrganization(data?.organization || null)
+    } catch {
+      setAffiliateLogo(null)
+      setAffiliateOrganization(null)
+    }
+  }
+
 
   useEffect(() => {
     setDeleteError(null)
     setCodesError(undefined)
     if(open) {
+      setAffiliateLogo(null)
+      setAffiliateOrganization(null)
       getCodes()
+      getAffiliateLogo()
     }
   }, [open])
 
@@ -139,7 +174,16 @@ export function EventModal({
             <div className="pt-2 text-center">
               <div style={{top: 100000, position: "relative"}}>
                 <div ref={targetRef} style={{zIndex: -1, position: "fixed", width: "425px", padding: 0}}>
-                  {codes.map((code) => <QRCodeCard key={code} code={code} />)}
+                  {codes.map((code) => (
+                    affiliateLogo
+                      ? <AffiliateQRCodeCard
+                          key={code}
+                          code={code}
+                          logoUrl={affiliateLogo}
+                          organization={affiliateOrganization || "our partner"}
+                        />
+                      : <QRCodeCard key={code} code={code} />
+                  ))}
                 </div>
               </div>
               <Button

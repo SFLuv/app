@@ -296,10 +296,19 @@ func (s *BotService) DeleteEvent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if owner != "" && s.appDb != nil {
-		freed, err := s.db.EventUnredeemedValue(r.Context(), event)
-		if err == nil && freed > 0 {
-			if err := s.appDb.AddAffiliateWeeklyBalance(r.Context(), owner, freed); err != nil {
-				fmt.Printf("error refunding affiliate balance for event %s: %s\n", event, err)
+		_, err := s.appDb.GetAffiliateByUser(r.Context(), owner)
+		if err == pgx.ErrNoRows {
+			// Not an affiliate, nothing to refund.
+		} else if err != nil {
+			fmt.Printf("error checking affiliate owner for event %s: %s\n", event, err)
+		} else {
+			freed, err := s.db.EventUnredeemedValue(r.Context(), event)
+			if err == nil && freed > 0 {
+				if err := s.appDb.AddAffiliateWeeklyBalance(r.Context(), owner, freed); err != nil {
+					fmt.Printf("error refunding affiliate balance for event %s: %s\n", event, err)
+				}
+			} else {
+				fmt.Printf("error getting event unredeemed value for event %s refund: %s\n", event, err)
 			}
 		}
 	}
