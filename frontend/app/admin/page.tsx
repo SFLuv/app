@@ -46,6 +46,7 @@ import {
   Download,
   CalendarIcon,
   Leaf,
+  AlertTriangle,
 } from "lucide-react"
 import { useLocation } from "@/context/LocationProvider"
 import { AuthedLocation, UpdateLocationApprovalRequest } from "@/types/location"
@@ -126,6 +127,7 @@ export default function AdminPage() {
   const [generatedCodes, setGeneratedCodes] = useState<any[]>([])
   const [pendingLocations, setPendingLocations] = useState<AuthedLocation[]>([])
   const [faucetBalance, setFaucetBalance] = useState<string | bigint>("-")
+  const [unallocatedBalance, setUnallocatedBalance] = useState<number | undefined>(undefined)
 
   // Events
   const [events, setEvents] = useState<Event[]>([])
@@ -155,6 +157,10 @@ export default function AdminPage() {
   }
 
   const handleDrainFaucet = async () => {
+    if(BigInt(unallocatedBalance || 0) != faucetBalance) {
+      setEventsError("Delete active events before draining faucet balance.")
+      return
+    }
     const url = "/drain"
     try {
       const res = await authFetch(url, {
@@ -162,9 +168,11 @@ export default function AdminPage() {
       })
       if(res.status !== 201) throw new Error()
       setDrainFaucetError(false)
+      getFaucetBalance()
     }
     catch {
       setDrainFaucetError(true)
+      setEventsError("")
     }
   }
 
@@ -183,6 +191,7 @@ export default function AdminPage() {
 
     await getEvents()
     toggleEventDetailModal()
+    getUnallocatedBalance()
   }
 
   const handleAddEvent = async (ev: Event) => {
@@ -200,6 +209,7 @@ export default function AdminPage() {
 
     await getEvents()
     toggleNewEventModal()
+    getUnallocatedBalance()
   }
 
   const getFaucetBalance = async () => {
@@ -207,6 +217,7 @@ export default function AdminPage() {
     const bal = await wallets[0]?.getBalanceOf(SFLUV_TOKEN, FAUCET_ADDRESS)
 
     setFaucetBalance(bal ? bal / BigInt(decimals) : "-")
+    getUnallocatedBalance()
   }
 
 
@@ -230,8 +241,22 @@ export default function AdminPage() {
     }
   }
 
+  const getUnallocatedBalance = async () => {
+    try {
+      const res = await authFetch("/balance")
+      const bal = await res.json()
+      const decimals = 10 ** SFLUV_DECIMALS
+      setUnallocatedBalance(Number((BigInt(bal) / BigInt(decimals))))
+    }
+    catch {
+      setEventsError("Error getting unallocated faucet balance.")
+    }
+  }
+
   useEffect(() => {
-    getFaucetBalance()
+    if(wallets.length) {
+      getFaucetBalance()
+    }
   }, [wallets])
 
   useEffect(() => {
@@ -1214,11 +1239,18 @@ export default function AdminPage() {
         </TabsContent>
 
         <TabsContent value="events" className="space-y-6">
+          {eventsError != "" && (
+            <div className="flex items-center gap-2 text-red-600 text-sm p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
+              <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+              <span>{eventsError}</span>
+            </div>
+          )}
           <AddEventModal
             open={eventsModalOpen}
             onOpenChange={toggleNewEventModal}
             handleAddEvent={handleAddEvent}
             addEventError={eventsError}
+            currentBalance={faucetBalance == "-" ? 0 : Number(faucetBalance)}
           />
           <EventModal
             event={eventDetailsEvent}
@@ -1243,7 +1275,7 @@ export default function AdminPage() {
                 <CardDescription className="text-base mt-2">Create and Manage Volunteer Events</CardDescription>
                 <div className="flex items-center gap-2 mt-3">
                   <Badge className="text-sm px-3 py-1 cursor-pointer" onClick={toggleDrainFaucetModal}>
-                    {faucetBalance} SFLuv
+                    {unallocatedBalance ? `${unallocatedBalance} / ${faucetBalance} SFLuv Available` : `${faucetBalance} SFLuv`}
                   </Badge>
                   <span className="text-sm text-muted-foreground">in faucet</span>
                 </div>
