@@ -89,6 +89,9 @@ func (s *AppDB) CreateTables() error {
 		UPDATE affiliates
 		SET weekly_allocation = weekly_balance
 		WHERE weekly_allocation = 0;
+
+		UPDATE affiliates
+		SET weekly_balance = LEAST(weekly_balance, weekly_allocation);
 	`)
 	if err != nil {
 		return fmt.Errorf("error updating affiliates weekly allocation: %s", err)

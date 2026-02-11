@@ -162,7 +162,7 @@ func (a *AppDB) SetAffiliateWeeklyBalance(ctx context.Context, userId string, ba
 		UPDATE
 			affiliates
 		SET
-			weekly_balance = $1,
+			weekly_balance = LEAST($1, weekly_allocation),
 			updated_at = NOW()
 		WHERE
 			user_id = $2;
@@ -178,7 +178,7 @@ func (a *AppDB) AddAffiliateWeeklyBalance(ctx context.Context, userId string, am
 		UPDATE
 			affiliates
 		SET
-			weekly_balance = weekly_balance + $1,
+			weekly_balance = LEAST(weekly_balance + $1, weekly_allocation),
 			updated_at = NOW()
 		WHERE
 			user_id = $2;
@@ -281,7 +281,7 @@ func (a *AppDB) RefundAffiliateBalance(ctx context.Context, userId string, weekl
 		UPDATE
 			affiliates
 		SET
-			weekly_balance = weekly_balance + $1,
+			weekly_balance = LEAST(weekly_balance + $1, weekly_allocation),
 			one_time_balance = one_time_balance + $2,
 			updated_at = NOW()
 		WHERE
@@ -342,6 +342,9 @@ func (a *AppDB) UpdateAffiliate(ctx context.Context, req *structs.AffiliateUpdat
 			}
 		}
 	}
+	if newWeekly > newAllocation {
+		newWeekly = newAllocation
+	}
 
 	cmd, err := tx.Exec(ctx, `
 		UPDATE
@@ -350,12 +353,12 @@ func (a *AppDB) UpdateAffiliate(ctx context.Context, req *structs.AffiliateUpdat
 			nickname = COALESCE($2, nickname),
 			weekly_allocation = $3,
 			weekly_balance = $4,
-			one_time_balance = one_time_balance + COALESCE($5, 0),
+			one_time_balance = COALESCE($5, one_time_balance),
 			status = COALESCE($6, status),
 			updated_at = NOW()
 		WHERE
 			user_id = $1;
-	`, req.UserId, req.Nickname, newAllocation, newWeekly, req.OneTimeBonus, req.Status)
+	`, req.UserId, req.Nickname, newAllocation, newWeekly, req.OneTimeBalance, req.Status)
 	if err != nil {
 		return nil, fmt.Errorf("error updating affiliate: %s", err)
 	}

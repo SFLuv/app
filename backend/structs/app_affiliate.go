@@ -30,11 +30,11 @@ type AffiliateLogoRequest struct {
 }
 
 type AffiliateUpdateRequest struct {
-	UserId        string  `json:"user_id"`
-	Status        *string `json:"status,omitempty"`
-	Nickname      *string `json:"nickname,omitempty"`
-	WeeklyBalance *uint64 `json:"weekly_balance,omitempty"`
-	OneTimeBonus  *uint64 `json:"one_time_bonus,omitempty"`
+	UserId         string  `json:"user_id"`
+	Status         *string `json:"status,omitempty"`
+	Nickname       *string `json:"nickname,omitempty"`
+	WeeklyBalance  *uint64 `json:"weekly_balance,omitempty"`
+	OneTimeBalance *uint64 `json:"one_time_balance,omitempty"`
 }
 
 type AffiliateBalance struct {

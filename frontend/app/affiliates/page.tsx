@@ -154,9 +154,7 @@ export default function AffiliatesPage() {
             <div className="flex flex-wrap items-center gap-2 mt-3">
               <Badge className="text-xs sm:text-sm px-3 py-1">
                 {balance
-                  ? `${balance.available}/${balance.weekly_allocation}${
-                      balance.available > balance.weekly_allocation ? "+" : ""
-                    } SFLuv`
+                  ? `${balance.available}/${balance.weekly_allocation} SFLuv`
                   : "Balance loading"}
               </Badge>
               <span className="text-xs sm:text-sm text-muted-foreground">remaining / weekly allocation</span>

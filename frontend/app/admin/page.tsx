@@ -314,7 +314,7 @@ export default function AdminPage() {
     setSelectedAffiliate(affiliate)
     setAffiliateNickname(affiliate.nickname || "")
     setAffiliateWeeklyBalance(String(affiliate.weekly_allocation ?? affiliate.weekly_balance ?? 0))
-    setAffiliateBonus("")
+    setAffiliateBonus(String(affiliate.one_time_balance ?? 0))
     setAffiliateModalError("")
     setAffiliateModalOpen(true)
   }
@@ -334,7 +334,7 @@ export default function AdminPage() {
         prev.map((affiliate) => (affiliate.user_id === updated.user_id ? updated : affiliate)),
       )
       setSelectedAffiliate(updated)
-      setAffiliateBonus("")
+      setAffiliateBonus(String(updated?.one_time_balance ?? 0))
     } catch {
       setAffiliateModalError("Unable to update affiliate right now. Please try again.")
     } finally {
@@ -356,9 +356,12 @@ export default function AdminPage() {
 
     payload.nickname = affiliateNickname
 
-    const bonus = Number(affiliateBonus)
-    if (!Number.isNaN(bonus) && bonus > 0) {
-      payload.one_time_bonus = bonus
+    const bonusValue = affiliateBonus.trim()
+    if (bonusValue !== "") {
+      const bonus = Number(bonusValue)
+      if (!Number.isNaN(bonus)) {
+        payload.one_time_balance = bonus
+      }
     }
 
     await submitAffiliateUpdate(payload)
@@ -379,9 +382,12 @@ export default function AdminPage() {
 
     payload.nickname = affiliateNickname
 
-    const bonus = Number(affiliateBonus)
-    if (!Number.isNaN(bonus) && bonus > 0) {
-      payload.one_time_bonus = bonus
+    const bonusValue = affiliateBonus.trim()
+    if (bonusValue !== "") {
+      const bonus = Number(bonusValue)
+      if (!Number.isNaN(bonus)) {
+        payload.one_time_balance = bonus
+      }
     }
 
     await submitAffiliateUpdate(payload)
@@ -1418,13 +1424,13 @@ export default function AdminPage() {
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label>One-Time Balance Increase (SFLuv)</Label>
+                    <Label>One-Time Balance (SFLuv)</Label>
                     <Input
                       type="number"
                       min="0"
                       value={affiliateBonus}
                       onChange={(e) => setAffiliateBonus(e.target.value)}
-                      placeholder="Add a one-time bonus"
+                      placeholder="Set one-time balance"
                     />
                     <p className="text-xs text-muted-foreground">
                       Current one-time balance: {selectedAffiliate.one_time_balance}
