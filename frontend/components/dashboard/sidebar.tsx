@@ -31,6 +31,7 @@ import {
 } from "@/components/ui/sidebar"
 import { ForwardRefExoticComponent, RefAttributes, useEffect, useMemo } from "react"
 import path from "path"
+import { stat } from "fs"
 
 export function DashboardSidebar() {
   const router = useRouter()

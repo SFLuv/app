@@ -188,7 +188,6 @@ function useToast() {
 
   const toastFunction = React.useCallback(({ title, description, variant = "default" }: ToastProps) => {
     // Mock toast implementation
-    console.log(`Toast: ${title} - ${description} (${variant})`)
   }, [])
 
   return {

@@ -221,7 +221,6 @@ export default function AdminPage() {
       const res = await authFetch(url)
 
       const e = await res.json()
-      console.log(e)
       setEvents(e)
     }
     catch {
@@ -362,7 +361,6 @@ export default function AdminPage() {
     setIsProcessing(true)
     try {
       //Token conversion call goes here
-      console.log("Token Conversion")
     } catch (error) {
       toast({
         title: "Conversion Failed",
@@ -427,7 +425,6 @@ export default function AdminPage() {
     setIsConvertingToPaypal(true)
     try {
       // PayPal offload called here
-      console.log("PayPal offload")
     } catch (error) {
       toast({
         title: "PayPal Conversion Failed",

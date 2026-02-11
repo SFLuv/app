@@ -47,7 +47,6 @@ export const parsePrivateKeyFromV4Hash = async (
     );
 
     const [account, accountFactory, encryptedPrivateKey] = decoded.split("|");
-    console.log(account, accountFactory)
     if (!account || !accountFactory || !encryptedPrivateKey) {
       throw new Error("Invalid wallet format");
     }

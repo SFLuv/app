@@ -21,15 +21,16 @@ export default function MerchantApprovalPage() {
     script.async = true;
     script.defer = true;
     document.head.appendChild(script);
-    console.log("Script appended")
     }
   }
 
   useEffect(() => {
+    if (status === "unauthenticated") {
     login()
-    router.replace("/settings/merchant-approval")
+    }
+    router.push("/settings/merchant-approval")
     addGoogleScript()
-  }, [])
+  }, [status])
 
   if (status === "loading") {
     return (

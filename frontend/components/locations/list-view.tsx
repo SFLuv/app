@@ -36,7 +36,6 @@ export function ListView({
   const [searchQuery, setSearchQuery] = useState("")
   const ITEMS_PER_PAGE = 5
   const { mapLocationsStatus, locationTypes } = useLocation();
-  console.log(locationTypes)
 
   // Filter merchants by type and search query
   const filteredLocations = locations?.filter(
