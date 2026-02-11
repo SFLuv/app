@@ -2,7 +2,7 @@
 
 import { ConnectedWallet, EIP1193Provider, PrivyProvider, useImportWallet, usePrivy, useWallets, Wallet } from "@privy-io/react-auth"
 import { toSimpleSmartAccount, ToSimpleSmartAccountReturnType } from "permissionless/accounts";
-import { createContext, Dispatch, ReactNode, SetStateAction, useContext, useEffect, useState } from "react";
+import { createContext, Dispatch, ReactNode, SetStateAction, useContext, useEffect, useMemo, useState } from "react";
 import { Address, createWalletClient, custom, encodeFunctionData, Hash, Hex, hexToBytes, RpcUserOperation } from "viem";
 import { entryPoint07Address, entryPoint08Address, formatUserOperation, PaymasterClient, toPackedUserOperation, ToSmartAccountReturnType, UserOperation } from "viem/account-abstraction";
 import { depositFor, execute, transfer, withdrawTo } from "@/lib/abi";
@@ -130,6 +130,38 @@ export default function AppProvider({ children }: { children: ReactNode }) {
   } = useRouter()
   const pathname = usePathname()
 
+  const linkedWalletAddresses = useMemo(() => {
+    const linked = new Set<string>()
+    for (const account of privyUser?.linkedAccounts ?? []) {
+      if (account.type !== "wallet") continue
+      if (!("address" in account) || typeof account.address !== "string") continue
+      linked.add(account.address.toLowerCase())
+    }
+    return linked
+  }, [privyUser])
+
+  const getManagedPrivyWallets = (): ConnectedWallet[] => {
+    const walletsByAddress = new Map<string, ConnectedWallet>()
+    for (const wallet of privyWallets) {
+      const address = wallet.address?.toLowerCase()
+      if (!address) continue
+      const walletClientType = ((wallet as unknown as { walletClientType?: string }).walletClientType || "").toLowerCase()
+      const connectorType = ((wallet as unknown as { connectorType?: string }).connectorType || "").toLowerCase()
+      const isLinkedWallet = linkedWalletAddresses.has(address)
+      const isEmbeddedWallet =
+        walletClientType === "privy" ||
+        walletClientType === "privy-v2" ||
+        connectorType === "embedded" ||
+        connectorType === "embedded_imported"
+
+      if (!isLinkedWallet && !isEmbeddedWallet) continue
+      if (!walletsByAddress.has(address)) {
+        walletsByAddress.set(address, wallet)
+      }
+    }
+    return Array.from(walletsByAddress.values())
+  }
+
   const onIdle = () => {
     if(status === "authenticated") {
       logout()
@@ -181,7 +213,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
 
     _userLogin()
 
-  }, [privyReady, privyAuthenticated, walletsReady])
+  }, [privyReady, privyAuthenticated, walletsReady, privyUser])
 
 
   useEffect(() => {
@@ -337,8 +369,9 @@ export default function AppProvider({ children }: { children: ReactNode }) {
 
       let wResults: Promise<AppWallet>[] = []
       let cResults: Promise<void>[] = []
-      for(let i = 0; i < privyWallets.length; i++) {
-        const privyWallet = privyWallets[i]
+      const managedPrivyWallets = getManagedPrivyWallets()
+      for(let i = 0; i < managedPrivyWallets.length; i++) {
+        const privyWallet = managedPrivyWallets[i]
 
         cResults.push(privyWallet.switchChain(CHAIN_ID));
 
