@@ -280,6 +280,7 @@ func (a *AppService) PonderHookHandler(w http.ResponseWriter, r *http.Request) {
 
 	formatted := new(big.Float)
 	formatted.Quo(amount, decimals)
+	formattedAmount := formatted.Text('f', 2)
 
 	listeners, err := a.db.GetPonderSubscriptions(r.Context(), tx.To)
 	if err != nil {
@@ -335,8 +336,8 @@ func (a *AppService) PonderHookHandler(w http.ResponseWriter, r *http.Request) {
 		err = sender.SendEmail(
 			fmt.Sprintf(mask.ToEmail, l.Data),
 			mask.ToName,
-			fmt.Sprintf(mask.Subject, formatted, subjectTail),
-			fmt.Sprintf(string(html), formatted, tx.From, toLine, tx.Hash),
+			fmt.Sprintf(mask.Subject, formattedAmount, subjectTail),
+			fmt.Sprintf(string(html), formattedAmount, tx.From, toLine, tx.Hash),
 			mask.FromEmail,
 			mask.FromName)
 	}

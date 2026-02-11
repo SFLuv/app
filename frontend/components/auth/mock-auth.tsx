@@ -4,7 +4,7 @@ import type React from "react"
 
 import { useRouter } from "next/navigation"
 import { useState } from "react"
-import { useApp, User,  } from "@/context/AppProvider"
+import { useApp, User } from "@/context/AppProvider"
 
 const mockUsers = [
   {
@@ -77,11 +77,11 @@ export function useMockAuth() {
     const userData: User = {
       id: "user-123",
       name: email.split("@")[0],
+      contact_email: email,
       isAdmin: false,
       isMerchant: false,
       isOrganizer: false,
-      email,
-      avatar: `https://ui-avatars.com/api/?name=${encodeURIComponent(email.split("@")[0])}&background=eb6c6c&color=fff`,
+      isAffiliate: false,
     }
 
 

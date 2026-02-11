@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 
 func main() {
 	godotenv.Load()
+	ctx := context.Background()
 
 	bdb, err := db.PgxDB("bot")
 	if err != nil {
@@ -30,13 +32,6 @@ func main() {
 		log.Fatal(fmt.Sprintf("error initializing ponder db: %s\n", err))
 	}
 
-	botDb := db.Bot(bdb)
-	err = botDb.CreateTables()
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
-
 	appLogger, err := logger.New("./logs/prod/app.log", "APP: ")
 	if err != nil {
 		fmt.Printf("error initializing app logger: %s\n", err)
@@ -46,6 +41,18 @@ func main() {
 
 	appDb := db.App(adb, appLogger)
 	err = appDb.CreateTables()
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	defaultAdminId, err := appDb.GetFirstAdminId(ctx)
+	if err != nil {
+		fmt.Printf("error getting default admin id: %s\n", err)
+	}
+
+	botDb := db.Bot(bdb)
+	err = botDb.CreateTables(defaultAdminId)
 	if err != nil {
 		fmt.Println(err)
 		return
@@ -65,7 +72,10 @@ func main() {
 		return
 	}
 
-	s := handlers.NewBotService(botDb, bot)
+	affiliateScheduler := handlers.NewAffiliateScheduler(appDb, botDb, appLogger)
+	affiliateScheduler.Start(ctx)
+
+	s := handlers.NewBotService(botDb, appDb, bot, affiliateScheduler)
 	a := handlers.NewAppService(appDb, appLogger)
 	p := handlers.NewPonderService(ponderDb, appLogger)
 

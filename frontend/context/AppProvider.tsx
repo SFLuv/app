@@ -14,6 +14,7 @@ import { UserOp } from "@citizenwallet/sdk";
 import { JsonRpcSigner, Signer } from "ethers";
 import { BrowserProvider } from "ethers";
 import { AppWallet } from "@/lib/wallets/wallets";
+import { Affiliate } from "@/types/affiliate";
 import { UserResponse, GetUserResponse, WalletResponse } from "@/types/server";
 import { AuthedLocation } from "@/types/location";
 import { importWallet as privyImportWallet } from "@/lib/wallets/import";
@@ -38,6 +39,7 @@ export interface User {
   isAdmin: boolean
   isMerchant: boolean
   isOrganizer: boolean
+  isAffiliate: boolean
 }
 
 interface TxState {
@@ -53,6 +55,8 @@ interface AppContextType {
   // Authentication
   status: UserStatus;
   user: User | null;
+  affiliate: Affiliate | null;
+  setAffiliate: Dispatch<SetStateAction<Affiliate | null>>;
   userLocations: AuthedLocation[]
   setUserLocations: Dispatch<SetStateAction<AuthedLocation[]>>;
   login: () => Promise<void>;
@@ -92,6 +96,7 @@ const AppContext = createContext<AppContextType | null>(null);
 
 export default function AppProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
+  const [affiliate, setAffiliate] = useState<Affiliate | null>(null)
   const [wallets, setWallets] = useState<AppWallet[]>([])
   const [walletsStatus, setWalletsStatus] = useState<WalletsStatus>("loading")
   const [mapLocations, setMapLocations] = useState<Location[]>([])
@@ -199,9 +204,11 @@ export default function AppProvider({ children }: { children: ReactNode }) {
         contact_phone: r.user.contact_phone,
         isAdmin: r.user.is_admin,
         isMerchant: r.user.is_merchant,
-        isOrganizer: r.user.is_organizer
+        isOrganizer: r.user.is_organizer,
+        isAffiliate: r.user.is_affiliate
       }
       setUser(u)
+      setAffiliate(r.affiliate ?? null)
   }
 
   const _userLogin = async () => {
@@ -238,6 +245,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
   const _resetAppState = async () => {
     replace("/")
     setUser(null)
+    setAffiliate(null)
     setStatus("unauthenticated")
     setWallets([])
     setWalletsStatus("unavailable")
@@ -598,6 +606,8 @@ export default function AppProvider({ children }: { children: ReactNode }) {
         value={{
           status,
           user,
+          affiliate,
+          setAffiliate,
           wallets,
           walletsStatus,
           userLocations,
