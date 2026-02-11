@@ -67,11 +67,22 @@ func (a *AppService) GetUserAuthed(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	affiliate, err := a.db.GetAffiliateByUser(r.Context(), *userDid)
+	if err != nil && err != pgx.ErrNoRows {
+		a.logger.Logf("error getting affiliate info for user %s: %s", *userDid, err.Error())
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	if err == pgx.ErrNoRows {
+		affiliate = nil
+	}
+
 	response := structs.AuthedUserResponse{
 		User:      *user,
 		Wallets:   wallets,
 		Locations: locations,
 		Contacts:  contacts,
+		Affiliate: affiliate,
 	}
 
 	bytes, err := json.Marshal(response)

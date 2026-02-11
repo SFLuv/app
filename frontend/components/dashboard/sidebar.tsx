@@ -12,6 +12,7 @@ import {
   ShoppingBag,
   Users,
   Wallet,
+  Handshake,
   CalendarClock,
   FileCheck,
   Calendar,
@@ -112,6 +113,14 @@ export function DashboardSidebar() {
     //   },
     ]
 
+    const affiliateItems: NavItem[] = [
+      {
+        title: "Affiliates Panel",
+        icon: Handshake,
+        path: "/affiliates",
+      },
+    ]
+
     const adminItems: NavItem[] = [
       {
         title: "Admin Panel",
@@ -157,6 +166,10 @@ export function DashboardSidebar() {
 
     if (user?.isOrganizer) {
       items = [...items, ...organizerItems]
+    }
+
+    if (user?.isAffiliate) {
+      items = [...items, ...affiliateItems]
     }
 
     if (user?.isAdmin) {

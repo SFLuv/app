@@ -25,6 +25,7 @@ func (s *AppDB) CreateTables() error {
 			is_merchant BOOLEAN NOT NULL DEFAULT false,
 			is_organizer BOOLEAN NOT NULL DEFAULT false,
 			is_improver BOOLEAN NOT NULL DEFAULT false,
+			is_affiliate BOOLEAN NOT NULL DEFAULT false,
 			contact_email TEXT,
 			contact_phone TEXT,
 			contact_name TEXT,
@@ -34,6 +35,14 @@ func (s *AppDB) CreateTables() error {
 	`)
 	if err != nil {
 		return fmt.Errorf("error creating users table: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
+		ALTER TABLE users
+		ADD COLUMN IF NOT EXISTS is_affiliate BOOLEAN NOT NULL DEFAULT false;
+	`)
+	if err != nil {
+		return fmt.Errorf("error adding is_affiliate column: %s", err)
 	}
 
 	_, err = s.db.Exec(context.Background(), `
@@ -50,6 +59,44 @@ func (s *AppDB) CreateTables() error {
 	`)
 	if err != nil {
 		return fmt.Errorf("error creating wallets table: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
+		CREATE TABLE IF NOT EXISTS affiliates(
+			user_id TEXT PRIMARY KEY REFERENCES users(id),
+			organization TEXT NOT NULL,
+			nickname TEXT,
+			status TEXT NOT NULL DEFAULT 'pending',
+			affiliate_logo TEXT,
+			weekly_allocation BIGINT NOT NULL DEFAULT 0,
+			weekly_balance BIGINT NOT NULL DEFAULT 0,
+			one_time_balance BIGINT NOT NULL DEFAULT 0,
+			created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+		);
+
+		CREATE INDEX IF NOT EXISTS affiliates_status_idx ON affiliates(status);
+	`)
+	if err != nil {
+		return fmt.Errorf("error creating affiliates table: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
+		ALTER TABLE affiliates
+		ADD COLUMN IF NOT EXISTS affiliate_logo TEXT;
+
+		ALTER TABLE affiliates
+		ADD COLUMN IF NOT EXISTS weekly_allocation BIGINT NOT NULL DEFAULT 0;
+
+		UPDATE affiliates
+		SET weekly_allocation = weekly_balance
+		WHERE weekly_allocation = 0;
+
+		UPDATE affiliates
+		SET weekly_balance = LEAST(weekly_balance, weekly_allocation);
+	`)
+	if err != nil {
+		return fmt.Errorf("error updating affiliates weekly allocation: %s", err)
 	}
 
 	_, err = s.db.Exec(context.Background(), `

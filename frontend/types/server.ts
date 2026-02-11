@@ -1,4 +1,5 @@
 import { Contact } from "./contact"
+import { Affiliate } from "./affiliate"
 import { AuthedLocation, Location } from "./location"
 
 export interface UserResponse {
@@ -7,6 +8,7 @@ export interface UserResponse {
   is_merchant: boolean
   is_organizer: boolean
   is_improver: boolean
+  is_affiliate: boolean
   contact_email?: string
   contact_phone?: string
   contact_name?: string
@@ -37,4 +39,5 @@ export interface GetUserResponse {
   wallets: WalletResponse[]
   locations: AuthedLocation[]
   contacts: Contact[]
+  affiliate?: Affiliate | null
 }

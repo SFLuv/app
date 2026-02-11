@@ -2,7 +2,7 @@
 
 import type React from "react"
 
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { useRouter } from "next/navigation"
 import { useApp } from "@/context/AppProvider"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -14,7 +14,8 @@ import { Separator } from "@/components/ui/separator"
 import { Textarea } from "@/components/ui/textarea"
 import { Switch } from "@/components/ui/switch"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
-import { Check, Loader2, Upload, User, Clock, XCircle } from "lucide-react"
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Check, Loader2, Upload, User, Clock, XCircle, AlertTriangle } from "lucide-react"
 
 type MerchantStatus = "approved" | "pending" | "rejected" | "none"
 type LocationApplicationStatus = "approved" | "pending" | "rejected"
@@ -27,7 +28,7 @@ const getLocationApplicationStatus = (approval?: boolean | null): LocationApplic
 
 export default function SettingsPage() {
   const router = useRouter()
-  const { user, userLocations, status } = useApp()
+  const { user, userLocations, status, affiliate, setAffiliate, authFetch } = useApp()
   const userRole = useMemo(() => user?.isAdmin ? "admin" : user?.isMerchant ? "merchant" : "user", [user])
 
   const merchantStatus: MerchantStatus = useMemo(() => {
@@ -41,11 +42,33 @@ export default function SettingsPage() {
     return [...userLocations].sort((a, b) => b.id - a.id)
   }, [userLocations])
 
+  const affiliateStatus = useMemo(() => {
+    if (user?.isAffiliate) return "approved"
+    if (affiliate?.status) return affiliate.status
+    return "none"
+  }, [affiliate, user])
+
+  useEffect(() => {
+    if (affiliate?.affiliate_logo) {
+      setAffiliateLogoPreview(affiliate.affiliate_logo)
+    } else {
+      setAffiliateLogoPreview("")
+    }
+  }, [affiliate?.affiliate_logo])
+
   // Form states
   const [activeTab, setActiveTab] = useState("account")
   const [isUpdating, setIsUpdating] = useState(false)
   const [isChangingPassword, setIsChangingPassword] = useState(false)
   const [successMessage, setSuccessMessage] = useState("")
+  const [affiliateModalOpen, setAffiliateModalOpen] = useState(false)
+  const [affiliateOrg, setAffiliateOrg] = useState("")
+  const [affiliateSubmitting, setAffiliateSubmitting] = useState(false)
+  const [affiliateError, setAffiliateError] = useState("")
+  const [affiliateSuccess, setAffiliateSuccess] = useState("")
+  const [affiliateLogoPreview, setAffiliateLogoPreview] = useState<string>("")
+  const [affiliateLogoSaving, setAffiliateLogoSaving] = useState(false)
+  const [affiliateLogoError, setAffiliateLogoError] = useState("")
 
   // Account form
   const [name, setName] = useState(user?.name || "")
@@ -126,6 +149,90 @@ export default function SettingsPage() {
       setIsUpdating(false)
       showSuccessMessage("Notification settings updated successfully")
     }, 1500)
+  }
+
+  const handleAffiliateRequest = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setAffiliateError("")
+    setAffiliateSuccess("")
+
+    if (!affiliateOrg.trim()) {
+      setAffiliateError("Please enter the organization you are requesting from.")
+      return
+    }
+
+    setAffiliateSubmitting(true)
+
+    try {
+      const res = await authFetch("/affiliates/request", {
+        method: "POST",
+        body: JSON.stringify({ organization: affiliateOrg.trim() }),
+      })
+
+      if (!res.ok) {
+        if (res.status === 409) {
+          setAffiliateError("Your affiliate status is already approved.")
+        } else {
+          setAffiliateError("Unable to submit your request right now. Please try again.")
+        }
+        return
+      }
+
+      const data = await res.json()
+      setAffiliate(data)
+      setAffiliateSuccess("Affiliate request submitted.")
+      setAffiliateModalOpen(false)
+      setAffiliateOrg("")
+    } catch {
+      setAffiliateError("Unable to submit your request right now. Please try again.")
+    } finally {
+      setAffiliateSubmitting(false)
+    }
+  }
+
+  const handleAffiliateLogoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setAffiliateLogoError("")
+    const file = e.target.files?.[0]
+    if (!file) return
+
+    if (!file.type.startsWith("image/")) {
+      setAffiliateLogoError("Please upload a valid image file.")
+      return
+    }
+
+    const reader = new FileReader()
+    reader.onload = () => {
+      const result = reader.result
+      if (typeof result === "string") {
+        setAffiliateLogoPreview(result)
+      }
+    }
+    reader.readAsDataURL(file)
+  }
+
+  const handleAffiliateLogoSave = async () => {
+    if (!affiliateLogoPreview) return
+    setAffiliateLogoSaving(true)
+    setAffiliateLogoError("")
+
+    try {
+      const res = await authFetch("/affiliates/logo", {
+        method: "PUT",
+        body: JSON.stringify({ logo: affiliateLogoPreview }),
+      })
+
+      if (!res.ok) {
+        throw new Error("Unable to update affiliate logo right now.")
+      }
+
+      const updated = await res.json()
+      setAffiliate(updated)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unable to update affiliate logo right now."
+      setAffiliateLogoError(message)
+    } finally {
+      setAffiliateLogoSaving(false)
+    }
   }
 
   // Show success message
@@ -392,6 +499,172 @@ export default function SettingsPage() {
             </Button>
             </div>
           )}
+
+          {affiliateStatus === "none" && (
+            <Card className="mt-6">
+              <CardHeader>
+                <CardTitle className="text-black dark:text-white">Request Affiliate Status</CardTitle>
+                <CardDescription>Apply to receive an affiliate balance for community events</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <p className="text-gray-600 dark:text-gray-400 mb-4">
+                  Affiliates can create events funded by an assigned weekly balance plus one-time bonuses.
+                </p>
+                <Button
+                  variant="outline"
+                  className="bg-secondary text-[#eb6c6c] border-[#eb6c6c] hover:bg-[#eb6c6c] hover:text-white"
+                  onClick={() => setAffiliateModalOpen(true)}
+                >
+                  Request Affiliate Status
+                </Button>
+                {affiliateSuccess && (
+                  <p className="mt-3 text-sm text-green-600">{affiliateSuccess}</p>
+                )}
+              </CardContent>
+            </Card>
+          )}
+
+          {affiliateStatus === "pending" && (
+            <Card className="mt-6 border-yellow-300 dark:border-yellow-700">
+              <CardHeader className="bg-yellow-50 dark:bg-yellow-900/20 rounded-t-lg">
+                <CardTitle className="text-black dark:text-white flex items-center">
+                  <Clock className="h-5 w-5 text-yellow-500 mr-2" />
+                  Affiliate Request Pending
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="pt-4">
+                <p className="text-gray-600 dark:text-gray-400 mb-4">
+                  Your affiliate request for {affiliate?.organization || "your organization"} is under review.
+                </p>
+              </CardContent>
+            </Card>
+          )}
+
+          {affiliateStatus === "approved" && (
+            <Card className="mt-6 border-green-300 dark:border-green-700">
+              <CardHeader className="bg-green-50 dark:bg-green-900/20 rounded-t-lg">
+                <CardTitle className="text-black dark:text-white flex items-center">
+                  <Check className="h-5 w-5 text-green-500 mr-2" />
+                  Affiliate Status Approved
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="pt-4">
+                <p className="text-gray-600 dark:text-gray-400 mb-4">
+                  You are approved to create affiliate events for {affiliate?.organization || "your organization"}.
+                </p>
+                <div className="space-y-3">
+                  <Label className="text-black dark:text-white">Affiliate Logo</Label>
+                  <div className="flex items-center gap-4">
+                    <div className="h-16 w-16 rounded-xl bg-secondary border border-muted flex items-center justify-center overflow-hidden">
+                      {affiliateLogoPreview ? (
+                        <img src={affiliateLogoPreview} alt="Affiliate logo" className="h-full w-full object-contain" />
+                      ) : (
+                        <span className="text-xs text-muted-foreground">No logo</span>
+                      )}
+                    </div>
+                    <div className="space-y-2">
+                      <Input
+                        type="file"
+                        accept="image/*"
+                        onChange={handleAffiliateLogoChange}
+                        className="text-black dark:text-white bg-secondary"
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="bg-secondary text-[#eb6c6c] border-[#eb6c6c] hover:bg-[#eb6c6c] hover:text-white"
+                        disabled={!affiliateLogoPreview || affiliateLogoSaving}
+                        onClick={handleAffiliateLogoSave}
+                      >
+                        {affiliateLogoSaving ? (
+                          <>
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                            Saving...
+                          </>
+                        ) : (
+                          "Save Logo"
+                        )}
+                      </Button>
+                    </div>
+                  </div>
+                  {affiliateLogoError && (
+                    <div className="flex items-center gap-2 text-red-600 text-sm p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
+                      <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+                      <span>{affiliateLogoError}</span>
+                    </div>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {affiliateStatus === "rejected" && (
+            <Card className="mt-6 border-red-300 dark:border-red-700">
+              <CardHeader className="bg-red-50 dark:bg-red-900/20 rounded-t-lg">
+                <CardTitle className="text-black dark:text-white flex items-center">
+                  <XCircle className="h-5 w-5 text-red-500 mr-2" />
+                  Affiliate Request Not Approved
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="pt-4">
+                <p className="text-gray-600 dark:text-gray-400 mb-4">
+                  Your affiliate request was not approved. You can submit another request if details change.
+                </p>
+                <Button
+                  variant="outline"
+                  className="bg-secondary text-[#eb6c6c] border-[#eb6c6c] hover:bg-[#eb6c6c] hover:text-white"
+                  onClick={() => setAffiliateModalOpen(true)}
+                >
+                  Submit Another Request
+                </Button>
+              </CardContent>
+            </Card>
+          )}
+
+          <Dialog open={affiliateModalOpen} onOpenChange={setAffiliateModalOpen}>
+            <DialogContent className="sm:max-w-md">
+              <DialogHeader>
+                <DialogTitle>Request Affiliate Status</DialogTitle>
+                <DialogDescription>
+                  Tell us which organization you are requesting affiliate access for.
+                </DialogDescription>
+              </DialogHeader>
+              <form onSubmit={handleAffiliateRequest} className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="affiliate-org" className="text-black dark:text-white">
+                    Organization Name
+                  </Label>
+                  <Input
+                    id="affiliate-org"
+                    value={affiliateOrg}
+                    onChange={(e) => setAffiliateOrg(e.target.value)}
+                    className="text-black dark:text-white bg-secondary"
+                    placeholder="Organization or group name"
+                  />
+                </div>
+
+                {affiliateError && (
+                  <div className="flex items-center gap-2 text-red-600 text-sm p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
+                    <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+                    <span>{affiliateError}</span>
+                  </div>
+                )}
+
+                <div className="flex justify-end">
+                  <Button type="submit" disabled={affiliateSubmitting}>
+                    {affiliateSubmitting ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Submitting...
+                      </>
+                    ) : (
+                      "Submit Request"
+                    )}
+                  </Button>
+                </div>
+              </form>
+            </DialogContent>
+          </Dialog>
 
           {/* {user?.merchantStatus === "rejected" && (
             <Card className="mt-6 border-red-300 dark:border-red-700">

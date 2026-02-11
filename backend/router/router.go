@@ -1,6 +1,7 @@
 package router
 
 import (
+	"context"
 	"net/http"
 	"os"
 
@@ -29,6 +30,7 @@ func New(s *handlers.BotService, a *handlers.AppService, p *handlers.PonderServi
 	AddBotRoutes(r, s, a)
 	AddUserRoutes(r, a)
 	AddAdminRoutes(r, a)
+	AddAffiliateRoutes(r, s, a)
 	AddWalletRoutes(r, a)
 	AddLocationRoutes(r, a)
 	AddContactRoutes(r, a)
@@ -46,6 +48,7 @@ func AddBotRoutes(r *chi.Mux, s *handlers.BotService, a *handlers.AppService) {
 	r.Get("/events", withAdmin(s.GetEvents, a))
 	r.Post("/redeem", s.Redeem)
 	r.Post("/drain", withAdmin(s.Drain, a))
+	r.Get("/balance", withAdmin(s.RemainingBalance, a))
 }
 
 func AddUserRoutes(r *chi.Mux, s *handlers.AppService) {
@@ -60,6 +63,19 @@ func AddAdminRoutes(r *chi.Mux, s *handlers.AppService) {
 	r.Get("/admin/locations", withAdmin(s.GetAuthedLocations, s))
 	r.Put("/admin/users", withAuth(s.UpdateUserRole))
 	r.Put("/admin/locations", withAdmin(s.UpdateLocationApproval, s))
+	r.Get("/admin/affiliates", withAdmin(s.GetAffiliates, s))
+	r.Put("/admin/affiliates", withAdmin(s.UpdateAffiliate, s))
+}
+
+func AddAffiliateRoutes(r *chi.Mux, s *handlers.BotService, a *handlers.AppService) {
+	r.Post("/affiliates/request", withAuth(a.RequestAffiliateStatus))
+	r.Put("/affiliates/logo", withAffiliate(a.UpdateAffiliateLogo, a))
+	r.Get("/affiliates/balance", withAffiliate(s.AffiliateBalance, a))
+	r.Post("/affiliates/events", withAffiliate(s.AffiliateNewEvent, a))
+	r.Get("/affiliates/events", withAffiliate(s.AffiliateGetEvents, a))
+	r.Get("/affiliates/events/{event}", withAffiliate(s.AffiliateGetCodes, a))
+	r.Delete("/affiliates/events/{event}", withAffiliate(s.AffiliateDeleteEvent, a))
+	r.Get("/affiliates/{user_id}", withAffiliate(a.GetAffiliate, a))
 }
 
 func AddWalletRoutes(r *chi.Mux, s *handlers.AppService) {
@@ -120,6 +136,13 @@ func withAdmin(handlerFunc http.HandlerFunc, s *handlers.AppService) http.Handle
 		reqKey := r.Header.Get("X-Admin-Key")
 		envKey := os.Getenv("ADMIN_KEY")
 		if reqKey == envKey && envKey != "" {
+			if _, ok := r.Context().Value("userDid").(string); !ok {
+				adminId := s.GetFirstAdminId(r.Context())
+				if adminId != "" {
+					ctx := context.WithValue(r.Context(), "userDid", adminId)
+					r = r.WithContext(ctx)
+				}
+			}
 			handlerFunc(w, r)
 			return
 		}
@@ -132,6 +155,29 @@ func withAdmin(handlerFunc http.HandlerFunc, s *handlers.AppService) http.Handle
 
 		isAdmin := s.IsAdmin(r.Context(), id)
 		if !isAdmin {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+
+		handlerFunc(w, r)
+	}
+}
+
+func withAffiliate(handlerFunc http.HandlerFunc, s *handlers.AppService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, ok := r.Context().Value("userDid").(string)
+		if !ok {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+
+		if s.IsAdmin(r.Context(), id) {
+			handlerFunc(w, r)
+			return
+		}
+
+		isAffiliate := s.IsAffiliate(r.Context(), id)
+		if !isAffiliate {
 			w.WriteHeader(http.StatusForbidden)
 			return
 		}

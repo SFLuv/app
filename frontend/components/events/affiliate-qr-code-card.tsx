@@ -1,26 +1,39 @@
 import QRCode from "react-qr-code";
 
-export const QRCodeCard = ({ code }: { code: string }) => {
+export const AffiliateQRCodeCard = ({
+  code,
+  logoUrl,
+  organization,
+}: {
+  code: string
+  logoUrl: string
+  organization: string
+}) => {
   const url = process.env.NEXT_PUBLIC_APP_REDEEM_URL_PRE
     + code
     + process.env.NEXT_PUBLIC_APP_REDEEM_URL_POST
 
   return (
     <div style={{textAlign: "center", justifyContent: "center", color: "black", height: "550px", width: "425px", margin: "auto", overflowY: "hidden", paddingTop: "10px"}}>
-      <img src="../icon.png" style={{
-        height: "auto",
-        width: "30%",
-        marginBottom: "0",
-        marginTop: "40px",
-        padding: "0",
-        margin: "auto"
-      }}/>
+      <div style={{display: "flex", alignItems: "center", justifyContent: "center", gap: "12px", marginTop: "24px"}}>
+        <img src="../icon.png" alt="SFLuv logo" style={{
+          height: "56px",
+          width: "56px",
+          objectFit: "contain"
+        }} />
+        <span style={{fontWeight: "bold", fontSize: "20px"}}>X</span>
+        <img src={logoUrl} alt="Affiliate logo" style={{
+          height: "56px",
+          width: "56px",
+          objectFit: "contain"
+        }} />
+      </div>
       <div style={{textAlign: "center"}}>
         <h1 style={{
-          margin: 0,
+          margin: "12px 0 0",
           fontWeight: "bold",
           fontSize: "18px"
-        }}>Thank you from SFLuv!</h1>
+        }}>Thank you from SFLuv and {organization}!</h1>
         <h3 style={{margin: "10px"}}>To redeem your tokens:</h3>
         <ol style={{textAlign: "center", width: "70%", margin: "auto", fontSize: "10px"}}>
           <li>1. Scan the QR code</li>

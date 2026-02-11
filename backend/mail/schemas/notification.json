@@ -1,7 +1,7 @@
 {
   "toEmail": "%s",
   "toName": "Merchant",
-  "subject": "%.2f $SFLuv Incoming %s",
+  "subject": "%s $SFLuv Incoming %s",
   "htmlContent": "mail/pages/notification.html",
   "fromEmail": "no_reply@sfluv.org",
   "fromName": "SFLuv Transactions"

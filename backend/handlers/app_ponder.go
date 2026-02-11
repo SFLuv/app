@@ -280,6 +280,7 @@ func (a *AppService) PonderHookHandler(w http.ResponseWriter, r *http.Request) {
 
 	formatted := new(big.Float)
 	formatted.Quo(amount, decimals)
+	formattedAmount := formatted.Text('f', 2)
 
 	listeners, err := a.db.GetPonderSubscriptions(r.Context(), tx.To)
 	if err != nil {
@@ -318,11 +319,25 @@ func (a *AppService) PonderHookHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	for _, l := range listeners {
+		w, err := a.db.GetWalletByUserAndAddress(r.Context(), l.Owner, l.Address)
+		if err != nil {
+			a.logger.Logf("error getting wallet for user %s, address %s while sending tx receipt email: %s", l.Owner, l.Address, err)
+			continue
+		}
+
+		subjectTail := fmt.Sprintf("- %s", tx.Hash[:6])
+		toLine := tx.To
+
+		if w.Name != "" {
+			subjectTail = fmt.Sprintf("to %s %s", w.Name, subjectTail)
+			toLine = fmt.Sprintf("%s (%s)", w.Name, tx.To)
+		}
+
 		err = sender.SendEmail(
 			fmt.Sprintf(mask.ToEmail, l.Data),
 			mask.ToName,
-			fmt.Sprintf(mask.Subject, formatted, tx.Hash[:5]),
-			fmt.Sprintf(string(html), formatted, tx.From, tx.To, tx.Hash),
+			fmt.Sprintf(mask.Subject, formattedAmount, subjectTail),
+			fmt.Sprintf(string(html), formattedAmount, tx.From, toLine, tx.Hash),
 			mask.FromEmail,
 			mask.FromName)
 	}
