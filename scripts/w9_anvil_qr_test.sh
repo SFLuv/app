@@ -2,11 +2,11 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BACKEND_ENV_TEST="$ROOT_DIR/backend/.env.test"
+BACKEND_ENV="$ROOT_DIR/backend/.env"
 ANVIL_ENV="$ROOT_DIR/scripts/anvil.env"
 
-if [[ ! -f "$BACKEND_ENV_TEST" ]]; then
-  echo "Missing $BACKEND_ENV_TEST"
+if [[ ! -f "$BACKEND_ENV" ]]; then
+  echo "Missing $BACKEND_ENV"
   exit 1
 fi
 if [[ ! -f "$ANVIL_ENV" ]]; then
@@ -15,7 +15,7 @@ if [[ ! -f "$ANVIL_ENV" ]]; then
 fi
 
 set -a
-source "$BACKEND_ENV_TEST"
+source "$BACKEND_ENV"
 source "$ANVIL_ENV"
 set +a
 
@@ -25,7 +25,7 @@ if ! command -v cast >/dev/null 2>&1; then
 fi
 
 if [[ -z "${TOKEN_ID:-}" || -z "${ADMIN_KEY:-}" ]]; then
-  echo "Missing TOKEN_ID or ADMIN_KEY in $BACKEND_ENV_TEST"
+  echo "Missing TOKEN_ID or ADMIN_KEY in $BACKEND_ENV"
   exit 1
 fi
 

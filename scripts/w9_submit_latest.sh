@@ -2,20 +2,20 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BACKEND_ENV_TEST="$ROOT_DIR/backend/.env.test"
+BACKEND_ENV="$ROOT_DIR/backend/.env"
 
-if [[ ! -f "$BACKEND_ENV_TEST" ]]; then
-  echo "Missing $BACKEND_ENV_TEST"
+if [[ ! -f "$BACKEND_ENV" ]]; then
+  echo "Missing $BACKEND_ENV"
   exit 1
 fi
 
 set -a
-source "$BACKEND_ENV_TEST"
+source "$BACKEND_ENV"
 set +a
 
 FAUCET_ADDR="$(echo "${PAID_ADMIN_ADDRESSES}" | cut -d, -f1 | tr -d '[:space:]')"
 if [[ -z "$FAUCET_ADDR" ]]; then
-  echo "Missing PAID_ADMIN_ADDRESSES in $BACKEND_ENV_TEST"
+  echo "Missing PAID_ADMIN_ADDRESSES in $BACKEND_ENV"
   exit 1
 fi
 

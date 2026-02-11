@@ -7,11 +7,11 @@ This document describes the local anvil-based test flow for W9 compliance and fa
 - Postgres running (local `app`, `bot`, `ponder` databases)
 
 ## Test Environment Files
-- `/Users/sanchezoleary/Projects/SFLUV_Dev/app/backend/.env.test`
-- `/Users/sanchezoleary/Projects/SFLUV_Dev/app/ponder/.env.test`
+- `/Users/sanchezoleary/Projects/SFLUV_Dev/app/backend/.env`
+- `/Users/sanchezoleary/Projects/SFLUV_Dev/app/ponder/.env`
 - `/Users/sanchezoleary/Projects/SFLUV_Dev/app/scripts/anvil.env`
 
-These keep test-only settings (fork RPC, startBlock, W9 limit override) separate from production `.env`.
+Test scripts use plain `.env` files. `scripts/anvil.env` provides fork-only values used to override RPC/start block for anvil sessions.
 
 ## Start Anvil + Services (test mode)
 ```bash
@@ -20,8 +20,8 @@ These keep test-only settings (fork RPC, startBlock, W9 limit override) separate
 
 Starts:
 - anvil fork (Berachain)
-- backend (using `ENV_FILE=/Users/sanchezoleary/Projects/SFLUV_Dev/app/backend/.env.test`)
-- ponder (using `/Users/sanchezoleary/Projects/SFLUV_Dev/app/ponder/.env.test`)
+- backend (using `ENV_FILE=/Users/sanchezoleary/Projects/SFLUV_Dev/app/backend/.env`)
+- ponder (using `/Users/sanchezoleary/Projects/SFLUV_Dev/app/ponder/.env` with anvil overrides from `scripts/anvil.env`)
 - frontend
 
 Logs:

@@ -796,11 +796,6 @@ export default function AdminPage() {
           </TabsTrigger>
           <TabsTrigger value="events" className="relative">
             Events
-            {pendingLocations.length > 0 && (
-              <Badge variant="destructive" className="ml-2 h-5 w-5 rounded-full p-1.5 text-xs">
-                {pendingLocations.length}
-              </Badge>
-            )}
           </TabsTrigger>
           {/* <TabsTrigger value="qrcodes">QR Codes</TabsTrigger> */}
         </TabsList>

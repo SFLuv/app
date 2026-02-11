@@ -3,19 +3,19 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ANVIL_ENV="$ROOT_DIR/scripts/anvil.env"
-BACKEND_ENV_TEST="$ROOT_DIR/backend/.env.test"
-PONDER_ENV_TEST="$ROOT_DIR/ponder/.env.test"
+BACKEND_ENV="$ROOT_DIR/backend/.env"
+PONDER_ENV="$ROOT_DIR/ponder/.env"
 
 if [[ ! -f "$ANVIL_ENV" ]]; then
   echo "Missing $ANVIL_ENV"
   exit 1
 fi
-if [[ ! -f "$BACKEND_ENV_TEST" ]]; then
-  echo "Missing $BACKEND_ENV_TEST"
+if [[ ! -f "$BACKEND_ENV" ]]; then
+  echo "Missing $BACKEND_ENV"
   exit 1
 fi
-if [[ ! -f "$PONDER_ENV_TEST" ]]; then
-  echo "Missing $PONDER_ENV_TEST"
+if [[ ! -f "$PONDER_ENV" ]]; then
+  echo "Missing $PONDER_ENV"
   exit 1
 fi
 
@@ -33,7 +33,7 @@ source "$ANVIL_ENV"
 set +a
 
 set -a
-source "$BACKEND_ENV_TEST"
+source "$BACKEND_ENV"
 set +a
 
 echo "Starting anvil fork..."
@@ -71,13 +71,16 @@ fi
 echo "Starting backend with test env..."
 (
   cd "$ROOT_DIR/backend"
-  ENV_FILE="$BACKEND_ENV_TEST" nohup go run main.go > /tmp/sfluv_backend.log 2>&1 &
+  ENV_FILE="$BACKEND_ENV" nohup go run main.go > /tmp/sfluv_backend.log 2>&1 &
 )
 
 echo "Starting ponder with test env..."
 (
   set -a
-  source "$PONDER_ENV_TEST"
+  source "$PONDER_ENV"
+  export PONDER_RPC_URL_1="http://127.0.0.1:8545"
+  export PONDER_START_BLOCK="${ANVIL_FORK_BLOCK}"
+  export PAID_ADMIN_ADDRESSES="${ANVIL_UNLOCK}"
   set +a
   cd "$ROOT_DIR/ponder"
   nohup pnpm dev > /tmp/sfluv_ponder.log 2>&1 &

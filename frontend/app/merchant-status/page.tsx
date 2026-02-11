@@ -5,106 +5,108 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button"
 import { AlertCircle, CheckCircle, Clock, XCircle } from "lucide-react"
 import { useRouter } from "next/navigation"
-import { useEffect, useState } from "react"
-import MerchantStatusLoading from "./loading"
+import { useMemo } from "react"
+
+type LocationApplicationStatus = "approved" | "pending" | "rejected"
+
+const getLocationApplicationStatus = (approval?: boolean | null): LocationApplicationStatus => {
+  if (approval === true) return "approved"
+  if (approval === false) return "rejected"
+  return "pending"
+}
 
 export default function MerchantStatusPage() {
-  const { user, userLocations, status } = useApp()
+  const { userLocations, status } = useApp()
   const router = useRouter()
-  const [hasApprovedLocation, setHasApprovedLocation] = useState<boolean>(false)
-  const [hasPendingLocation, setHasPendingLocation] = useState<boolean>(false)
-
-  useEffect(() => {
-    for (let i = 0; i < userLocations.length; i++) {
-      if (userLocations[i].approval === true) {
-        setHasApprovedLocation(true)
-      }
-      if (userLocations[i].approval === null) {
-        setHasPendingLocation(true)
-      }
-  }}, [userLocations])
-
-  const renderStatusContent = () => {
-    if (status === "loading") {
-      <MerchantStatusLoading/>
-    }
-    else if (!hasApprovedLocation && hasPendingLocation) {
-      return (
-        <div className="text-center">
-          <Clock className="h-16 w-16 text-yellow-500 mx-auto mb-4" />
-          <h2 className="text-2xl font-bold text-black dark:text-white mb-2">Application Under Review</h2>
-          <p className="text-gray-600 dark:text-gray-400 mb-6">
-            Your merchant application is currently being reviewed by our team. This process typically takes 1-3
-            business days.
-          </p>
-          <div className="bg-yellow-100 dark:bg-yellow-900/30 p-4 rounded-lg text-yellow-800 dark:text-yellow-200 mb-6">
-            <p>While your application is pending, you can continue to use SFLuv as a community member.</p>
-          </div>
-        </div>
-        )
-      }
-      else if (hasApprovedLocation) {
-        return (
-          <div className="text-center">
-            <CheckCircle className="h-16 w-16 text-green-500 mx-auto mb-4" />
-            <h2 className="text-2xl font-bold text-black dark:text-white mb-2">Application Approved!</h2>
-            <p className="text-gray-600 dark:text-gray-400 mb-6">
-              Congratulations! Your merchant application has been approved. You now have access to all merchant
-              features.
-            </p>
-            <Button className="bg-[#eb6c6c] hover:bg-[#d55c5c]" onClick={() => router.push("/dashboard")}>
-              Go to Merchant Dashboard
-            </Button>
-          </div>
-        )
-      } else if (!hasApprovedLocation && !hasPendingLocation) {
-        return (
-          <div className="text-center">
-            <XCircle className="h-16 w-16 text-red-500 mx-auto mb-4" />
-            <h2 className="text-2xl font-bold text-black dark:text-white mb-2">Application Not Approved</h2>
-            <p className="text-gray-600 dark:text-gray-400 mb-6">
-              Unfortunately, your merchant application was not approved at this time.
-            </p>
-            <div className="bg-red-100 dark:bg-red-900/30 p-4 rounded-lg text-red-800 dark:text-red-200 mb-6">
-              <p>
-                If you believe this was an error or would like to provide additional information, please contact our
-                support team.
-              </p>
-            </div>
-            <Button variant="outline" onClick={() => router.push("/settings")}>
-              Return to Settings
-            </Button>
-          </div>
-        )
-      }
-      else {
-        return (
-          <div className="text-center">
-            <AlertCircle className="h-16 w-16 text-gray-500 mx-auto mb-4" />
-            <h2 className="text-2xl font-bold text-black dark:text-white mb-2">No Application Found</h2>
-            <p className="text-gray-600 dark:text-gray-400 mb-6">You haven't submitted a merchant application yet.</p>
-            <Button
-              className="bg-[#eb6c6c] hover:bg-[#d55c5c]"
-              onClick={() => router.push("/settings/merchant-approval")}
-            >
-              Apply to Become a Merchant
-            </Button>
-          </div>
-        )
-    }
-  }
+  const sortedUserLocations = useMemo(() => {
+    return [...userLocations].sort((a, b) => b.id - a.id)
+  }, [userLocations])
 
   return (
     <div className="max-w-3xl mx-auto">
       <h1 className="text-3xl font-bold text-black dark:text-white mb-6">Merchant Status</h1>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-black dark:text-white">Application Status</CardTitle>
-          <CardDescription>Check the status of your merchant application</CardDescription>
-        </CardHeader>
-        <CardContent>{renderStatusContent()}</CardContent>
-      </Card>
+      {status === "loading" && (
+        <div className="min-h-screen flex items-center justify-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-[#eb6c6c]"></div>
+        </div>
+      )}
+
+      {status !== "loading" && sortedUserLocations.length === 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-black dark:text-white">Application Status</CardTitle>
+            <CardDescription>Check the status of your merchant applications</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="text-center">
+              <AlertCircle className="h-16 w-16 text-gray-500 mx-auto mb-4" />
+              <h2 className="text-2xl font-bold text-black dark:text-white mb-2">No Application Found</h2>
+              <p className="text-gray-600 dark:text-gray-400 mb-6">You haven't submitted a merchant application yet.</p>
+              <Button
+                className="bg-[#eb6c6c] hover:bg-[#d55c5c]"
+                onClick={() => router.push("/settings/merchant-approval")}
+              >
+                Apply to Become a Merchant
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {status !== "loading" && sortedUserLocations.length > 0 && (
+        <div className="space-y-4">
+          {sortedUserLocations.map((location) => {
+            const applicationStatus = getLocationApplicationStatus(location.approval)
+            let borderClass = "border-yellow-300 dark:border-yellow-700"
+            let headerClass = "bg-yellow-50 dark:bg-yellow-900/20 rounded-t-lg"
+            let title = "Location Application Pending"
+            let body = `Your application for ${location.name} is currently under review.`
+            let Icon = Clock
+            let iconClass = "h-5 w-5 text-yellow-500 mr-2"
+
+            if (applicationStatus === "approved") {
+              borderClass = "border-green-300 dark:border-green-700"
+              headerClass = "bg-green-50 dark:bg-green-900/20 rounded-t-lg"
+              title = "Location Application Approved"
+              body = `Your application for ${location.name} has been approved!`
+              Icon = CheckCircle
+              iconClass = "h-5 w-5 text-green-500 mr-2"
+            } else if (applicationStatus === "rejected") {
+              borderClass = "border-red-300 dark:border-red-700"
+              headerClass = "bg-red-50 dark:bg-red-900/20 rounded-t-lg"
+              title = "Location Application Not Approved"
+              body = `Your application for ${location.name} was not approved.`
+              Icon = XCircle
+              iconClass = "h-5 w-5 text-red-500 mr-2"
+            }
+
+            return (
+              <Card key={location.id} className={borderClass}>
+                <CardHeader className={headerClass}>
+                  <CardTitle className="text-black dark:text-white">Application Status</CardTitle>
+                  <CardDescription className="text-black dark:text-white/80">{location.name}</CardDescription>
+                </CardHeader>
+                <CardContent className="pt-4">
+                  <h2 className="text-xl font-semibold text-black dark:text-white mb-2 flex items-center">
+                    <Icon className={iconClass} />
+                    {title}
+                  </h2>
+                  <p className="text-gray-600 dark:text-gray-400">{body}</p>
+                </CardContent>
+              </Card>
+            )
+          })}
+
+          <Button
+            variant="outline"
+            className="bg-secondary text-[#eb6c6c] border-[#eb6c6c] hover:bg-[#eb6c6c] hover:text-white"
+            onClick={() => router.push("/settings/merchant-approval")}
+          >
+            Submit Another Application
+          </Button>
+        </div>
+      )}
     </div>
   )
 }
