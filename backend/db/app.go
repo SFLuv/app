@@ -46,6 +46,22 @@ func (s *AppDB) CreateTables() error {
 	}
 
 	_, err = s.db.Exec(context.Background(), `
+		ALTER TABLE users
+		ADD COLUMN IF NOT EXISTS paypal_eth TEXT NOT NULL DEFAULT '';
+	`)
+	if err != nil {
+		return fmt.Errorf("error adding paypal_eth column: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
+		ALTER TABLE users
+		ADD COLUMN IF NOT EXISTS last_redemption INTEGER NOT NULL DEFAULT 0;
+	`)
+	if err != nil {
+		return fmt.Errorf("error adding last_redemption column: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
 		CREATE TABLE IF NOT EXISTS wallets(
 			id SERIAL PRIMARY KEY NOT NULL,
 			owner TEXT NOT NULL REFERENCES users(id),
