@@ -51,6 +51,7 @@ func (s *AppDB) CreateTables() error {
 			owner TEXT NOT NULL REFERENCES users(id),
 			name TEXT NOT NULL,
 			is_eoa BOOLEAN NOT NULL,
+			is_redeemer BOOLEAN NOT NULL DEFAULT false,
 			eoa_address TEXT NOT NULL,
 			smart_address TEXT,
 			smart_index INTEGER,
@@ -59,6 +60,14 @@ func (s *AppDB) CreateTables() error {
 	`)
 	if err != nil {
 		return fmt.Errorf("error creating wallets table: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
+		ALTER TABLE wallets
+		ADD COLUMN IF NOT EXISTS is_redeemer BOOLEAN NOT NULL DEFAULT false;
+	`)
+	if err != nil {
+		return fmt.Errorf("error adding is_redeemer column to wallets table: %s", err)
 	}
 
 	_, err = s.db.Exec(context.Background(), `

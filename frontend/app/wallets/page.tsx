@@ -1,12 +1,12 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { useRouter } from "next/navigation"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
-import { Plus, Wallet, Settings, ArrowRight } from "lucide-react"
+import { Plus, Wallet, Settings, ArrowRight, CheckCircle2 } from "lucide-react"
 import { WalletDetailModal } from "@/components/wallets/wallet-detail-modal"
 import { useWallets } from "@privy-io/react-auth"
 import type { ConnectedWallet } from "@/types/privy-wallet"
@@ -37,6 +37,16 @@ export default function WalletsPage() {
   const [addWalletModalOpen, setAddWalletModalOpen] = useState<boolean>(false)
   const [connectWalletModalOpen, setConnectWalletModalOpen] = useState(false)
   const [addPayPalModalOpen, setAddPayPalModalOpen] = useState<boolean>(false)
+  const [unwrapEnabledByAddress, setUnwrapEnabledByAddress] = useState<Record<string, boolean>>({})
+
+  const hasRedeemerWallet = useMemo(
+    () =>
+      wallets.some((wallet) => {
+        if (!wallet.address) return false
+        return unwrapEnabledByAddress[wallet.address.toLowerCase()] === true
+      }),
+    [wallets, unwrapEnabledByAddress]
+  )
 
 
   useEffect(() => {
@@ -44,6 +54,35 @@ export default function WalletsPage() {
       refreshWallets()
     }
   }, [])
+
+  useEffect(() => {
+    let cancelled = false
+
+    const syncUnwrapStatuses = async () => {
+      const results = await Promise.all(
+        wallets.map(async (wallet) => {
+          if (!wallet.address) return { address: "", enabled: false }
+          const enabled = await wallet.hasRedeemerRole()
+          return { address: wallet.address.toLowerCase(), enabled }
+        })
+      )
+
+      if (cancelled) return
+
+      const nextMap: Record<string, boolean> = {}
+      for (const result of results) {
+        if (!result.address) continue
+        nextMap[result.address] = result.enabled
+      }
+      setUnwrapEnabledByAddress(nextMap)
+    }
+
+    syncUnwrapStatuses()
+
+    return () => {
+      cancelled = true
+    }
+  }, [wallets])
 
   const toggleAddPayPalModal = () => {
     setAddPayPalModalOpen(!addPayPalModalOpen)
@@ -135,7 +174,7 @@ export default function WalletsPage() {
           </p>
         </div>
 
-        {user?.isMerchant === true && (
+        {user?.isMerchant === true && hasRedeemerWallet && (
           <Button
             variant="outline"
             onClick={toggleAddPayPalModal}
@@ -171,6 +210,9 @@ export default function WalletsPage() {
         ) : (
           wallets.map((wallet) => {
             if (wallet.type === "eoa" && !showEoas) return null
+            const walletUnwrapEnabled = wallet.address
+              ? unwrapEnabledByAddress[wallet.address.toLowerCase()] === true
+              : false
 
             return (
               <Card
@@ -196,6 +238,14 @@ export default function WalletsPage() {
                             {wallet.address.slice(0, 8)}...
                             {wallet.address.slice(-6)}
                           </p>
+                        )}
+                        {walletUnwrapEnabled && (
+                          <div className="mt-2">
+                            <Badge className="bg-green-100 text-green-800 border border-green-200 hover:bg-green-100">
+                              <CheckCircle2 className="h-3.5 w-3.5 mr-1" />
+                              Unwrap Enabled
+                            </Badge>
+                          </div>
                         )}
                       </div>
                     </div>

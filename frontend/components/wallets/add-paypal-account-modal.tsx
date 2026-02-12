@@ -80,9 +80,9 @@ export function UpdatePayPalAccountModal({
             Add PayPal Account
           </DialogTitle>
           <DialogDescription className="text-sm sm:text-base text-gray-700 dark:text-gray-300">
-            SFLUV currently supports cashing out your SFLUV balance via PayPal.
+            SFLUV currently supports unwrapping your SFLUV balance via PayPal.
             Please enter your PayPal wallet address below. Once you have entered a
-            PayPal wallet address, the "Cash Out SFLUV" feature on your connected
+            PayPal wallet address, the "Unwrap SFLUV" feature on your connected
             wallets will route money to the PayPal account associated with this
             address.
           </DialogDescription>

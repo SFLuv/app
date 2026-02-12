@@ -79,9 +79,14 @@ func main() {
 	w9 := handlers.NewW9Service(appDb, ponderDb, appLogger)
 	affiliateScheduler := handlers.NewAffiliateScheduler(appDb, botDb, appLogger)
 	affiliateScheduler.Start(ctx)
+	redeemer := handlers.NewRedeemerService(appDb, appLogger)
+	if err := redeemer.SyncApprovedMerchants(ctx); err != nil {
+		appLogger.Logf("error syncing redeemer roles on startup: %s", err)
+	}
 
 	s := handlers.NewBotService(botDb, appDb, bot, w9, affiliateScheduler)
 	a := handlers.NewAppService(appDb, appLogger, w9)
+	a.SetRedeemerService(redeemer)
 	p := handlers.NewPonderService(ponderDb, appLogger)
 
 	r := router.New(s, a, p)

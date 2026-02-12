@@ -385,6 +385,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
             owner: privyUser.id,
             name: "",
             is_eoa: false,
+            is_redeemer: false,
             eoa_address: privyWallet.address,
             smart_index: 0
           })
@@ -422,6 +423,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
         owner: privyUser.id,
         name: "EOA-" + (i + 1),
         is_eoa: true,
+        is_redeemer: false,
         eoa_address: privyWallet.address
       }
 
@@ -430,7 +432,10 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     }
 
     const eoaName = wallet.name
-    const w = new AppWallet(privyWallet, eoaName, { id: wallet.id || undefined })
+    const w = new AppWallet(privyWallet, eoaName, {
+      id: wallet.id || undefined,
+      isRedeemer: wallet.is_redeemer
+    })
     await w.init()
     return w
   }
@@ -439,7 +444,11 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     if(wallet.is_eoa) throw new Error("trying to initialize smart wallet with eoa")
     const smartWalletName = wallet?.name || "SW-" + (i+1) + "-" + (index + 1n).toString()
 
-    const w = new AppWallet(privyWallet, smartWalletName, {index, id: wallet.id || undefined})
+    const w = new AppWallet(privyWallet, smartWalletName, {
+      index,
+      id: wallet.id || undefined,
+      isRedeemer: wallet.is_redeemer
+    })
     await w.init()
 
     if(wallet.id === null) {
@@ -474,6 +483,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
       owner: privyUser.id,
       name: walletName,
       is_eoa: false,
+      is_redeemer: false,
       eoa_address: privyWallet.address,
     }
 
@@ -499,6 +509,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
         owner: privyUser.id,
         name: walletName,
         is_eoa: true,
+        is_redeemer: false,
         eoa_address: address
       }
     }
@@ -530,6 +541,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
         owner: user.id,
         name: name,
         is_eoa: true,
+        is_redeemer: false,
         eoa_address: "0x"
       }
 
@@ -614,9 +626,14 @@ export default function AppProvider({ children }: { children: ReactNode }) {
   }
 
   const updatePayPalAddress = async (payPalAddress : string) => {
-    if (user) {
-      _updatePayPalAddress(payPalAddress)
+    if (!user) {
+      throw new Error("no user logged in")
     }
+    await _updatePayPalAddress(payPalAddress)
+    setUser({
+      ...user,
+      paypalEthAddress: payPalAddress
+    })
   }
 
   const addPonderSubscription = async (email: string, address: string) => {

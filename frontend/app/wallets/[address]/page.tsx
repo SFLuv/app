@@ -44,6 +44,7 @@ export default function WalletDetailsPage() {
   const [historicalBalanceTimestamp, setHistoricalBalanceTimestamp] = useState<number | null>(null)
   const [historicalBalanceLoading, setHistoricalBalanceLoading] = useState<boolean>(false)
   const [historicalBalanceError, setHistoricalBalanceError] = useState<string | null>(null)
+  const [walletCanUnwrap, setWalletCanUnwrap] = useState<boolean>(false)
   const nameInputRef = useRef<HTMLInputElement>(null)
   const { toast } = useToast()
   const params = useParams()
@@ -90,6 +91,28 @@ export default function WalletDetailsPage() {
   useEffect(() => {
     txPageHandler()
   }, [status])
+
+  useEffect(() => {
+    let cancelled = false
+
+    const resolveUnwrapEligibility = async () => {
+      if (!wallet || wallet.type !== "smartwallet") {
+        if (!cancelled) setWalletCanUnwrap(false)
+        return
+      }
+
+      const canUnwrap = await wallet.hasRedeemerRole()
+      if (!cancelled) {
+        setWalletCanUnwrap(canUnwrap)
+      }
+    }
+
+    resolveUnwrapEligibility()
+
+    return () => {
+      cancelled = true
+    }
+  }, [wallet])
 
   const txPageHandler = async () => {
     const walletTxs = (await getTransactionsPage(walletAddress, 0, {
@@ -409,7 +432,7 @@ export default function WalletDetailsPage() {
             <CardContent className="p-3 sm:p-4">
               <div
                 className={`grid gap-3 ${
-                  user?.isMerchant ? "grid-cols-3" : "grid-cols-2"
+                  user?.isMerchant && walletCanUnwrap ? "grid-cols-3" : "grid-cols-2"
                 }`}
               >
                 <Button
@@ -429,14 +452,14 @@ export default function WalletDetailsPage() {
                   <span>Receive</span>
                 </Button>
 
-                {user?.isMerchant && (
+                {user?.isMerchant && walletCanUnwrap && (
                   <Button
                     variant="outline"
                     onClick={() => setShowCashoutModal(true)}
                     className="h-14 sm:h-16 flex-col gap-1.5 sm:gap-2 text-sm hover:bg-primary/65"
                   >
                     <Banknote className="h-4 w-4 sm:h-5 sm:w-5" />
-                    <span>Unwrap SFLuv</span>
+                    <span>Unwrap SFLUV</span>
                   </Button>
                 )}
               </div>

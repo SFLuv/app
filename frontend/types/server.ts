@@ -29,6 +29,7 @@ export interface WalletResponse {
   owner: string
   name: string
   is_eoa: boolean
+  is_redeemer: boolean
   eoa_address: string
   smart_address?: string
   smart_index?: number
