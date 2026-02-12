@@ -4,7 +4,7 @@ import { Badge } from "../ui/badge"
 import { Check, CheckCircle, Copy, Pencil, Star, Trash, X } from "lucide-react"
 import { Button } from "../ui/button"
 import { useRef, useState } from "react"
-import { useToast } from "../ui/use-toast"
+import { useToast } from "@/hooks/use-toast"
 import { Input } from "../ui/input"
 
 interface ContactCardProps {

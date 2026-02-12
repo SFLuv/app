@@ -1,7 +1,9 @@
 package test
 
 import (
+	"context"
 	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
@@ -11,12 +13,36 @@ import (
 	"github.com/SFLuv/app/backend/logger"
 	"github.com/SFLuv/app/backend/router"
 	"github.com/SFLuv/app/backend/structs"
-	"github.com/SFLuv/app/backend/test/utils"
 	"github.com/SFLuv/app/backend/utils/middleware"
 	"github.com/go-chi/chi/v5"
 )
 
-var Spoofer *utils.ContextSpoofer
+var Spoofer *ContextSpoofer
+
+type ContextSpoofer struct {
+	key   any
+	value any
+}
+
+func NewContextSpoofer(key any, value any) *ContextSpoofer {
+	return &ContextSpoofer{
+		key:   key,
+		value: value,
+	}
+}
+
+func (c *ContextSpoofer) SetValue(key any, value any) {
+	c.key = key
+	c.value = value
+}
+
+func (c *ContextSpoofer) Middleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := context.WithValue(r.Context(), c.key, c.value)
+		r = r.WithContext(ctx)
+		next.ServeHTTP(w, r)
+	})
+}
 
 var t1e = "test1@test.com"
 var t1p = "test1phone"
@@ -317,8 +343,8 @@ func GroupHandlers(t *testing.T) {
 	}
 
 	testRouter := chi.NewRouter()
-	appService := handlers.NewAppService(appHandlersDb, appLogger)
-	Spoofer = utils.NewContextSpoofer("userDid", TEST_USER_1.Id)
+	appService := handlers.NewAppService(appHandlersDb, appLogger, nil)
+	Spoofer = NewContextSpoofer("userDid", TEST_USER_1.Id)
 
 	testRouter.Use(middleware.AuthMiddleware)
 	testRouter.Use(Spoofer.Middleware)

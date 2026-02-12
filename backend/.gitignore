@@ -1,4 +1,5 @@
 .env
+.env.test
 .test.env
 logs/*
 test/logs/*

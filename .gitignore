@@ -1,4 +1,6 @@
 */.env
+*/.env.test
+*/.env.local
 */go.sum
 */package-lock.json
 **.db
@@ -6,5 +8,4 @@
 node_modules
 .DS_Store
 pnpm-lock.yaml
-ponder/.env.local
 ponder/generated

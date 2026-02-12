@@ -2,7 +2,7 @@
 
 import { ConnectedWallet, EIP1193Provider, PrivyProvider, useImportWallet, usePrivy, useWallets, Wallet } from "@privy-io/react-auth"
 import { toSimpleSmartAccount, ToSimpleSmartAccountReturnType } from "permissionless/accounts";
-import { createContext, Dispatch, ReactNode, SetStateAction, useContext, useEffect, useState } from "react";
+import { createContext, Dispatch, ReactNode, SetStateAction, useContext, useEffect, useMemo, useState } from "react";
 import { Address, createWalletClient, custom, encodeFunctionData, Hash, Hex, hexToBytes, RpcUserOperation } from "viem";
 import { entryPoint07Address, entryPoint08Address, formatUserOperation, PaymasterClient, toPackedUserOperation, ToSmartAccountReturnType, UserOperation } from "viem/account-abstraction";
 import { depositFor, execute, transfer, withdrawTo } from "@/lib/abi";
@@ -39,6 +39,8 @@ export interface User {
   isAdmin: boolean
   isMerchant: boolean
   isOrganizer: boolean
+  paypalEthAddress: string
+  lastRedemption: number
   isAffiliate: boolean
 }
 
@@ -78,6 +80,10 @@ interface AppContextType {
   approveMerchantStatus: () => void
   rejectMerchantStatus: () => void
 
+  //cashout functionality
+  updatePayPalAddress: (payPalAddress: string) => Promise<void>
+
+  //add location fuction signatures
   // Ponder Functionality
   ponderSubscriptions: PonderSubscription[]
   addPonderSubscription: (email: string, address: string) => Promise<void>
@@ -123,6 +129,38 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     replace
   } = useRouter()
   const pathname = usePathname()
+
+  const linkedWalletAddresses = useMemo(() => {
+    const linked = new Set<string>()
+    for (const account of privyUser?.linkedAccounts ?? []) {
+      if (account.type !== "wallet") continue
+      if (!("address" in account) || typeof account.address !== "string") continue
+      linked.add(account.address.toLowerCase())
+    }
+    return linked
+  }, [privyUser])
+
+  const getManagedPrivyWallets = (): ConnectedWallet[] => {
+    const walletsByAddress = new Map<string, ConnectedWallet>()
+    for (const wallet of privyWallets) {
+      const address = wallet.address?.toLowerCase()
+      if (!address) continue
+      const walletClientType = ((wallet as unknown as { walletClientType?: string }).walletClientType || "").toLowerCase()
+      const connectorType = ((wallet as unknown as { connectorType?: string }).connectorType || "").toLowerCase()
+      const isLinkedWallet = linkedWalletAddresses.has(address)
+      const isEmbeddedWallet =
+        walletClientType === "privy" ||
+        walletClientType === "privy-v2" ||
+        connectorType === "embedded" ||
+        connectorType === "embedded_imported"
+
+      if (!isLinkedWallet && !isEmbeddedWallet) continue
+      if (!walletsByAddress.has(address)) {
+        walletsByAddress.set(address, wallet)
+      }
+    }
+    return Array.from(walletsByAddress.values())
+  }
 
   const onIdle = () => {
     if(status === "authenticated") {
@@ -175,7 +213,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
 
     _userLogin()
 
-  }, [privyReady, privyAuthenticated, walletsReady])
+  }, [privyReady, privyAuthenticated, walletsReady, privyUser])
 
 
   useEffect(() => {
@@ -205,6 +243,8 @@ export default function AppProvider({ children }: { children: ReactNode }) {
         isAdmin: r.user.is_admin,
         isMerchant: r.user.is_merchant,
         isOrganizer: r.user.is_organizer,
+        paypalEthAddress: r.user.paypal_eth,
+        lastRedemption: r.user.last_redemption,
         isAffiliate: r.user.is_affiliate
       }
       setUser(u)
@@ -279,7 +319,8 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     if(res.status != 200) {
       throw new Error("error getting user")
     }
-    return await res.json() as GetUserResponse
+    const json = await res.json()
+    return json as GetUserResponse
   }
 
   const _getWallets = async (): Promise<WalletResponse[]> => {
@@ -328,8 +369,9 @@ export default function AppProvider({ children }: { children: ReactNode }) {
 
       let wResults: Promise<AppWallet>[] = []
       let cResults: Promise<void>[] = []
-      for(let i = 0; i < privyWallets.length; i++) {
-        const privyWallet = privyWallets[i]
+      const managedPrivyWallets = getManagedPrivyWallets()
+      for(let i = 0; i < managedPrivyWallets.length; i++) {
+        const privyWallet = managedPrivyWallets[i]
 
         cResults.push(privyWallet.switchChain(CHAIN_ID));
 
@@ -343,6 +385,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
             owner: privyUser.id,
             name: "",
             is_eoa: false,
+            is_redeemer: false,
             eoa_address: privyWallet.address,
             smart_index: 0
           })
@@ -380,6 +423,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
         owner: privyUser.id,
         name: "EOA-" + (i + 1),
         is_eoa: true,
+        is_redeemer: false,
         eoa_address: privyWallet.address
       }
 
@@ -388,7 +432,10 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     }
 
     const eoaName = wallet.name
-    const w = new AppWallet(privyWallet, eoaName, { id: wallet.id || undefined })
+    const w = new AppWallet(privyWallet, eoaName, {
+      id: wallet.id || undefined,
+      isRedeemer: wallet.is_redeemer
+    })
     await w.init()
     return w
   }
@@ -397,7 +444,11 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     if(wallet.is_eoa) throw new Error("trying to initialize smart wallet with eoa")
     const smartWalletName = wallet?.name || "SW-" + (i+1) + "-" + (index + 1n).toString()
 
-    const w = new AppWallet(privyWallet, smartWalletName, {index, id: wallet.id || undefined})
+    const w = new AppWallet(privyWallet, smartWalletName, {
+      index,
+      id: wallet.id || undefined,
+      isRedeemer: wallet.is_redeemer
+    })
     await w.init()
 
     if(wallet.id === null) {
@@ -408,6 +459,17 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     }
 
     return w
+  }
+
+  const _updatePayPalAddress = async (payPalAddress: string) => {
+    const res = await authFetch("/paypaleth", {
+      method: "PUT",
+      body: payPalAddress
+    })
+
+    if(res.status != 201) {
+      throw new Error("error updating paypal address")
+    }
   }
 
   const addWallet = async (walletName: string) => {
@@ -421,6 +483,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
       owner: privyUser.id,
       name: walletName,
       is_eoa: false,
+      is_redeemer: false,
       eoa_address: privyWallet.address,
     }
 
@@ -446,6 +509,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
         owner: privyUser.id,
         name: walletName,
         is_eoa: true,
+        is_redeemer: false,
         eoa_address: address
       }
     }
@@ -477,6 +541,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
         owner: user.id,
         name: name,
         is_eoa: true,
+        is_redeemer: false,
         eoa_address: "0x"
       }
 
@@ -560,6 +625,16 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     }
   }
 
+  const updatePayPalAddress = async (payPalAddress : string) => {
+    if (!user) {
+      throw new Error("no user logged in")
+    }
+    await _updatePayPalAddress(payPalAddress)
+    setUser({
+      ...user,
+      paypalEthAddress: payPalAddress
+    })
+  }
 
   const addPonderSubscription = async (email: string, address: string) => {
     const body: PonderSubscriptionRequest = {
@@ -626,6 +701,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
           updateUser,
           approveMerchantStatus,
           rejectMerchantStatus,
+          updatePayPalAddress,
           ponderSubscriptions,
           addPonderSubscription,
           getPonderSubscriptions,

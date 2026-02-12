@@ -28,7 +28,9 @@ func (s *AppDB) CreateTables() error {
 			is_affiliate BOOLEAN NOT NULL DEFAULT false,
 			contact_email TEXT,
 			contact_phone TEXT,
-			contact_name TEXT
+			contact_name TEXT,
+			paypal_eth TEXT NOT NULL DEFAULT '',
+			last_redemption INTEGER NOT NULL DEFAULT 0
 		);
 	`)
 	if err != nil {
@@ -49,6 +51,7 @@ func (s *AppDB) CreateTables() error {
 			owner TEXT NOT NULL REFERENCES users(id),
 			name TEXT NOT NULL,
 			is_eoa BOOLEAN NOT NULL,
+			is_redeemer BOOLEAN NOT NULL DEFAULT false,
 			eoa_address TEXT NOT NULL,
 			smart_address TEXT,
 			smart_index INTEGER,
@@ -57,6 +60,14 @@ func (s *AppDB) CreateTables() error {
 	`)
 	if err != nil {
 		return fmt.Errorf("error creating wallets table: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
+		ALTER TABLE wallets
+		ADD COLUMN IF NOT EXISTS is_redeemer BOOLEAN NOT NULL DEFAULT false;
+	`)
+	if err != nil {
+		return fmt.Errorf("error adding is_redeemer column to wallets table: %s", err)
 	}
 
 	_, err = s.db.Exec(context.Background(), `
@@ -178,6 +189,57 @@ func (s *AppDB) CreateTables() error {
 	`)
 	if err != nil {
 		return fmt.Errorf("error creating ponder subscriptions table: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
+		CREATE TABLE IF NOT EXISTS w9_wallet_earnings(
+			wallet_address TEXT NOT NULL,
+			year INTEGER NOT NULL,
+			amount_received NUMERIC(78, 0) NOT NULL DEFAULT 0,
+			user_id TEXT,
+			w9_required BOOLEAN NOT NULL DEFAULT false,
+			w9_required_at TIMESTAMP,
+			last_tx_hash TEXT,
+			last_tx_timestamp INTEGER,
+			created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			PRIMARY KEY (wallet_address, year)
+		);
+
+		CREATE INDEX IF NOT EXISTS w9_wallet_earnings_user_id_idx ON w9_wallet_earnings(user_id);
+		CREATE INDEX IF NOT EXISTS w9_wallet_earnings_year_idx ON w9_wallet_earnings(year);
+		CREATE INDEX IF NOT EXISTS w9_wallet_earnings_required_idx ON w9_wallet_earnings(w9_required);
+	`)
+	if err != nil {
+		return fmt.Errorf("error creating w9 wallet earnings table: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
+		CREATE TABLE IF NOT EXISTS w9_submissions(
+			id SERIAL PRIMARY KEY,
+			wallet_address TEXT NOT NULL,
+			year INTEGER NOT NULL,
+			email TEXT NOT NULL,
+			submitted_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			pending_approval BOOLEAN NOT NULL DEFAULT TRUE,
+			approved_at TIMESTAMP NULL,
+			approved_by_user_id TEXT NULL,
+			rejected_at TIMESTAMP NULL,
+			rejected_by_user_id TEXT NULL,
+			rejection_reason TEXT NULL,
+			w9_url TEXT NULL,
+			UNIQUE (wallet_address, year)
+		);
+
+		ALTER TABLE w9_submissions ADD COLUMN IF NOT EXISTS rejected_at TIMESTAMP NULL;
+		ALTER TABLE w9_submissions ADD COLUMN IF NOT EXISTS rejected_by_user_id TEXT NULL;
+		ALTER TABLE w9_submissions ADD COLUMN IF NOT EXISTS rejection_reason TEXT NULL;
+
+		CREATE INDEX IF NOT EXISTS w9_submissions_pending_idx ON w9_submissions(pending_approval);
+		CREATE INDEX IF NOT EXISTS w9_submissions_year_idx ON w9_submissions(year);
+	`)
+	if err != nil {
+		return fmt.Errorf("error creating w9 submissions table: %s", err)
 	}
 
 	return nil

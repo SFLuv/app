@@ -64,6 +64,17 @@ func (a *AppService) AddWallet(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
+
+	if a.redeemer != nil && a.redeemer.IsEnabled() && !wallet.IsEoa && wallet.SmartIndex != nil && *wallet.SmartIndex == 0 {
+		hasApprovedLocation, err := a.db.UserHasAnyApprovedLocation(r.Context(), wallet.Owner)
+		if err != nil {
+			a.logger.Logf("error checking approved locations for user %s after wallet add: %s", wallet.Owner, err)
+		} else if hasApprovedLocation {
+			if err := a.redeemer.EnsureMerchantHasRedeemerWallet(r.Context(), wallet.Owner); err != nil {
+				a.logger.Logf("error auto-granting redeemer role for user %s after wallet add: %s", wallet.Owner, err)
+			}
+		}
+	}
 	res := strconv.Itoa(id)
 
 	w.WriteHeader(http.StatusCreated)

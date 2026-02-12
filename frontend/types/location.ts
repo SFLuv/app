@@ -26,7 +26,7 @@ export interface AuthedLocation {
   name: string;
   description: string;
   type: string;
-  approval?: boolean;
+  approval?: boolean | null;
   street: string;
   city: string;
   state: string;

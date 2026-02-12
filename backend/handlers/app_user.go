@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 
@@ -121,6 +122,32 @@ func (a *AppService) UpdateUserInfo(w http.ResponseWriter, r *http.Request) {
 	err = a.db.UpdateUserInfo(r.Context(), &user)
 	if err != nil {
 		a.logger.Logf("error updating user info with struct:\n  %#v\nfor user %s: %s", user, *userDid, err.Error())
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusCreated)
+}
+
+func (a *AppService) UpdateUserPayPalEth(w http.ResponseWriter, r *http.Request) {
+	fmt.Println("update paypal handler reached")
+	userDid := utils.GetDid(r)
+	if userDid == nil {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	defer r.Body.Close()
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		a.logger.Logf("error reading paypal address from body from user %s: %s", *userDid, err.Error())
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	err = a.db.UpdateUserPayPalEth(r.Context(), *userDid, body)
+	if err != nil {
+		a.logger.Logf("error updating user paypal address for user: " + *userDid)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}

@@ -3,12 +3,12 @@
 ## Overview
 
 SFLUV transaction indexer for historical lookup & webhook functionality.
-All requests must contain an X-Admin-Key header that matches the admin key specified in .env.local
+All requests must contain an X-Admin-Key header that matches the admin key specified in `.env`.
 
 
 ## Historical Lookup (DB Access)
 
-The SFLUV Ponder Indexer saves historical transaction data to the specified db in the .env.local connection string.
+The SFLUV Ponder Indexer saves historical transaction data to the specified db in the `.env` connection string.
 
 Use ponder.schema.ts as the canonical db schema.
 

@@ -42,6 +42,22 @@ func (a *AppDB) UpdateUserInfo(ctx context.Context, user *structs.User) error {
 	return nil
 }
 
+func (a *AppDB) UpdateUserPayPalEth(ctx context.Context, userId string, paypalEthAddress any) error {
+	fmt.Println("update paypal controller reached")
+	_, err := a.db.Exec(ctx, `
+		UPDATE
+			users
+		SET
+			paypal_eth = $1
+		WHERE
+			id = $2;
+	`, paypalEthAddress, userId)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 func (a *AppDB) UpdateUserRole(ctx context.Context, userId string, role string, value bool) error {
 	roles := map[string]string{
 		"admin":     "is_admin",
@@ -85,7 +101,8 @@ func (a *AppDB) GetUsers(ctx context.Context, page int, count int) ([]*structs.U
 			is_affiliate,
 			contact_email,
 			contact_phone,
-			contact_name
+			contact_name,
+			paypal_eth
 		FROM
 			users
 		LIMIT $1
@@ -109,6 +126,7 @@ func (a *AppDB) GetUsers(ctx context.Context, page int, count int) ([]*structs.U
 			&user.Email,
 			&user.Phone,
 			&user.Name,
+			&user.PayPalEth,
 		)
 		if err != nil {
 			continue
@@ -132,7 +150,9 @@ func (a *AppDB) GetUserById(ctx context.Context, userId string) (*structs.User, 
 			is_affiliate,
 			contact_email,
 			contact_phone,
-			contact_name
+			contact_name,
+			paypal_eth,
+			last_redemption
 		FROM
 			users
 		WHERE
@@ -148,6 +168,8 @@ func (a *AppDB) GetUserById(ctx context.Context, userId string) (*structs.User, 
 		&user.Email,
 		&user.Phone,
 		&user.Name,
+		&user.PayPalEth,
+		&user.LastRedemption,
 	)
 	if err != nil {
 		return nil, err

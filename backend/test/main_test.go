@@ -29,12 +29,12 @@ func TestMain(m *testing.M) {
 		log.Fatal("error getting project root")
 	}
 
-	testEnv := path.Join(root, "./.test.env")
-	if !utils.Exists(testEnv) {
-		log.Fatal("no test env present")
+	envFile := path.Join(root, "./.env")
+	if !utils.Exists(envFile) {
+		log.Fatal("no .env present for tests")
 	}
 
-	godotenv.Load(testEnv)
+	godotenv.Load(envFile)
 
 	postgresTeardown(true)
 	err = postgresSetup()

@@ -18,6 +18,13 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Check, Loader2, Upload, User, Clock, XCircle, AlertTriangle } from "lucide-react"
 
 type MerchantStatus = "approved" | "pending" | "rejected" | "none"
+type LocationApplicationStatus = "approved" | "pending" | "rejected"
+
+const getLocationApplicationStatus = (approval?: boolean | null): LocationApplicationStatus => {
+  if (approval === true) return "approved"
+  if (approval === false) return "rejected"
+  return "pending"
+}
 
 export default function SettingsPage() {
   const router = useRouter()
@@ -25,10 +32,14 @@ export default function SettingsPage() {
   const userRole = useMemo(() => user?.isAdmin ? "admin" : user?.isMerchant ? "merchant" : "user", [user])
 
   const merchantStatus: MerchantStatus = useMemo(() => {
-    console.log(userLocations)
-    if(userLocations.length == 0) return "none"
-    if(userLocations.find((loc) => loc.approval)) return "approved"
-    return "pending"
+    if (userLocations.length === 0) return "none"
+    if (userLocations.some((loc) => getLocationApplicationStatus(loc.approval) === "approved")) return "approved"
+    if (userLocations.some((loc) => getLocationApplicationStatus(loc.approval) === "pending")) return "pending"
+    return "rejected"
+  }, [userLocations])
+
+  const sortedUserLocations = useMemo(() => {
+    return [...userLocations].sort((a, b) => b.id - a.id)
   }, [userLocations])
 
   const affiliateStatus = useMemo(() => {
@@ -434,53 +445,46 @@ export default function SettingsPage() {
             </Card>
           )}
 
-          {(merchantStatus === "pending" || merchantStatus == "approved") && (
+          {merchantStatus !== "none" && (
             <div className="space-y-4">
               <div className="space-y-2">
-                {userLocations.filter((loc) => loc.approval).map((loc) => {
+                {sortedUserLocations.map((loc) => {
+                  const applicationStatus = getLocationApplicationStatus(loc.approval)
+                  let borderClass = "border-yellow-300 dark:border-yellow-700"
+                  let headerClass = "bg-yellow-50 dark:bg-yellow-900/20 rounded-t-lg"
+                  let statusTitle = "Location Application Pending"
+                  let statusBody = `Your application for ${loc.name} is currently under review.`
+                  let Icon = Clock
+                  let iconClass = "h-5 w-5 text-yellow-500 mr-2"
+
+                  if (applicationStatus === "approved") {
+                    borderClass = "border-green-300 dark:border-green-700"
+                    headerClass = "bg-green-50 dark:bg-green-900/20 rounded-t-lg"
+                    statusTitle = "Location Application Approved"
+                    statusBody = `Your application for ${loc.name} has been approved!`
+                    Icon = Check
+                    iconClass = "h-5 w-5 text-green-500 mr-2"
+                  } else if (applicationStatus === "rejected") {
+                    borderClass = "border-red-300 dark:border-red-700"
+                    headerClass = "bg-red-50 dark:bg-red-900/20 rounded-t-lg"
+                    statusTitle = "Location Application Not Approved"
+                    statusBody = `Your application for ${loc.name} was not approved.`
+                    Icon = XCircle
+                    iconClass = "h-5 w-5 text-red-500 mr-2"
+                  }
+
                   return (
-                    <Card className="mt-6 border-green-300 dark:border-green-700" key={loc.id}>
-                      <CardHeader className="bg-green-50 dark:bg-green-900/20 rounded-t-lg">
+                    <Card className={`mt-6 ${borderClass}`} key={loc.id}>
+                      <CardHeader className={headerClass}>
                         <CardTitle className="text-black dark:text-white flex items-center">
-                          <Clock className="h-5 w-5 text-green-500 mr-2" />
-                          Location Application Approved
+                          <Icon className={iconClass} />
+                          {statusTitle}
                         </CardTitle>
                       </CardHeader>
                       <CardContent className="pt-4">
                         <p className="text-gray-600 dark:text-gray-400 mb-4">
-                          Your application for {loc.name} has been approved!
+                          {statusBody}
                         </p>
-                        {/* <Button
-                          variant="outline"
-                          className="bg-secondary text-[#eb6c6c] border-[#eb6c6c] hover:bg-[#eb6c6c] hover:text-white"
-                          onClick={() => router.push("/merchant-status")}
-                        >
-                          Check Application Status
-                        </Button> */}
-                      </CardContent>
-                    </Card>
-                  )
-                })}
-                {userLocations.filter((loc) => loc.approval === false).map((loc) => {
-                  return (
-                    <Card className="mt-6 border-yellow-300 dark:border-yellow-700" key={loc.id}>
-                      <CardHeader className="bg-yellow-50 dark:bg-yellow-900/20 rounded-t-lg">
-                        <CardTitle className="text-black dark:text-white flex items-center">
-                          <Clock className="h-5 w-5 text-yellow-500 mr-2" />
-                          Location Application Pending
-                        </CardTitle>
-                      </CardHeader>
-                      <CardContent className="pt-4">
-                        <p className="text-gray-600 dark:text-gray-400 mb-4">
-                          Your application for {loc.name} is currently under review.
-                        </p>
-                        {/* <Button
-                          variant="outline"
-                          className="bg-secondary text-[#eb6c6c] border-[#eb6c6c] hover:bg-[#eb6c6c] hover:text-white"
-                          onClick={() => router.push("/merchant-status")}
-                        >
-                          Check Application Status
-                        </Button> */}
                       </CardContent>
                     </Card>
                   )

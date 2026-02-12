@@ -13,9 +13,10 @@ import { Badge } from "@/components/ui/badge"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Send, AlertTriangle, CheckCircle, X, Copy, ArrowLeft } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
+import { useApp } from "@/context/AppProvider"
 import type { ConnectedWallet } from "@/types/privy-wallet"
 import { AppWallet } from "@/lib/wallets/wallets"
-import { SFLUV_DECIMALS, SYMBOL } from "@/lib/constants"
+import { BYUSD_DECIMALS, SFLUV_DECIMALS, SYMBOL } from "@/lib/constants"
 import { Address, Hash } from "viem"
 import { useContacts } from "@/context/ContactsProvider";
 import ContactOrAddressInput from "../contacts/contact-or-address-input"
@@ -31,6 +32,7 @@ export function SendCryptoModal({ open, onOpenChange, wallet, balance }: SendCry
   const [step, setStep] = useState<"form" | "confirm" | "sending" | "success" | "error">("form")
   const [hash, setHash] = useState<Hash | null>(null)
   const [copied, setCopied] = useState<boolean>(false)
+  const [w9Email, setW9Email] = useState<string | null>(null)
   const [formData, setFormData] = useState({
     recipient: "",
     amount: "",
@@ -39,6 +41,7 @@ export function SendCryptoModal({ open, onOpenChange, wallet, balance }: SendCry
   const [error, setError] = useState("")
   const { toast } = useToast()
   const { contacts } = useContacts()
+  const { user, authFetch } = useApp()
 
   const copyHash = async () => {
     try {
@@ -91,15 +94,51 @@ export function SendCryptoModal({ open, onOpenChange, wallet, balance }: SendCry
   const handleConfirm = async () => {
     setStep("sending")
 
-    // Mock sending process
-    let receipt = await wallet.send(BigInt(Number(formData.amount) * (10 ** SFLUV_DECIMALS)), formData.recipient as Address)
+    const amountWei = BigInt(Number(formData.amount) * (10 ** SFLUV_DECIMALS))
+
+    if (user?.isAdmin) {
+      try {
+        const res = await authFetch("/w9/check", {
+          method: "POST",
+          body: JSON.stringify({
+            from_address: wallet.address,
+            to_address: formData.recipient,
+            amount: amountWei.toString(),
+          }),
+        })
+
+        if (res.status === 403) {
+          const data = await res.json()
+          if (data?.reason === "w9_pending") {
+            setW9Email(data?.email || null)
+            setError("W9 submission is pending approval. Transfers are blocked until approved.")
+          } else {
+            setW9Email(data?.email || null)
+            setError("W9 required before sending to this wallet.")
+          }
+          setStep("error")
+          return
+        }
+
+        if (res.status !== 200) {
+          setError("Unable to validate W9 compliance. Please try again.")
+          setStep("error")
+          return
+        }
+      } catch {
+        setError("Unable to validate W9 compliance. Please try again.")
+        setStep("error")
+        return
+      }
+    }
+
+    let receipt = await wallet.send(amountWei, formData.recipient as Address)
     if(!receipt) {
       setStep("error")
       setError("Error creating transaction. Please try again.")
       return
     }
 
-    // Simulate random success/failure
     if (receipt.hash) {
       setStep("success")
       setHash(receipt.hash as Hash)
@@ -118,6 +157,7 @@ export function SendCryptoModal({ open, onOpenChange, wallet, balance }: SendCry
     setFormData({ recipient: "", amount: "", memo: "" })
     setError("")
     setHash(null)
+    setW9Email(null)
     onOpenChange(false)
   }
 
@@ -305,9 +345,22 @@ export function SendCryptoModal({ open, onOpenChange, wallet, balance }: SendCry
             <div>
               <h3 className="text-lg font-semibold mb-2">Transaction Failed</h3>
               <p className="text-muted-foreground text-sm">{error}</p>
+              {w9Email ? (
+                <p className="text-sm mt-2">
+                  Recipient email on file: <span className="font-medium">{w9Email}</span>
+                </p>
+              ) : (
+                <p className="text-sm mt-2 text-muted-foreground">No recipient email on file.</p>
+              )}
             </div>
             <div className="flex flex-col gap-3">
-              <Button onClick={() => setStep("form")} className="w-full h-11">
+              <Button
+                onClick={() => {
+                  setStep("form")
+                  setW9Url(null)
+                }}
+                className="w-full h-11"
+              >
                 Try Again
               </Button>
               <Button variant="outline" onClick={handleClose} className="w-full h-11 bg-transparent">
