@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"time"
 
 	"github.com/SFLuv/app/backend/structs"
 	"github.com/jackc/pgx/v5"
@@ -50,7 +51,7 @@ func (a *AppDB) AddWallet(ctx context.Context, wallet *structs.Wallet) (int, err
 func (a *AppDB) GetWalletsByUser(ctx context.Context, userId string) ([]*structs.Wallet, error) {
 	rows, err := a.db.Query(ctx, `
 	SELECT
-		wallets.id, wallets.owner, wallets.name, wallets.is_eoa, wallets.is_redeemer, wallets.eoa_address, wallets.smart_address, wallets.smart_index
+		wallets.id, wallets.owner, wallets.name, wallets.is_eoa, wallets.is_redeemer, wallets.eoa_address, wallets.smart_address, wallets.smart_index, wallets.last_unwrap_at
 	FROM
 		wallets JOIN users ON wallets.owner = users.id
 	WHERE
@@ -64,6 +65,9 @@ func (a *AppDB) GetWalletsByUser(ctx context.Context, userId string) ([]*structs
 	wallets := []*structs.Wallet{}
 	for rows.Next() {
 		var wallet structs.Wallet
+		var smartAddress sql.NullString
+		var smartIndex sql.NullInt64
+		var lastUnwrapAt sql.NullTime
 		err := rows.Scan(
 			&wallet.Id,
 			&wallet.Owner,
@@ -71,11 +75,24 @@ func (a *AppDB) GetWalletsByUser(ctx context.Context, userId string) ([]*structs
 			&wallet.IsEoa,
 			&wallet.IsRedeemer,
 			&wallet.EoaAddress,
-			&wallet.SmartAddress,
-			&wallet.SmartIndex,
+			&smartAddress,
+			&smartIndex,
+			&lastUnwrapAt,
 		)
 		if err != nil {
 			continue
+		}
+		if smartAddress.Valid {
+			addr := smartAddress.String
+			wallet.SmartAddress = &addr
+		}
+		if smartIndex.Valid {
+			idx := int(smartIndex.Int64)
+			wallet.SmartIndex = &idx
+		}
+		if lastUnwrapAt.Valid {
+			unwrapAt := lastUnwrapAt.Time
+			wallet.LastUnwrapAt = &unwrapAt
 		}
 
 		wallets = append(wallets, &wallet)
@@ -94,7 +111,8 @@ func (a *AppDB) GetWalletByUserAndAddress(ctx context.Context, userId string, ad
 			is_redeemer,
 			eoa_address,
 			smart_address,
-			smart_index
+			smart_index,
+			last_unwrap_at
 		FROM
 			wallets
 		WHERE
@@ -110,6 +128,9 @@ func (a *AppDB) GetWalletByUserAndAddress(ctx context.Context, userId string, ad
 	`, userId, address, address)
 
 	var w structs.Wallet
+	var smartAddress sql.NullString
+	var smartIndex sql.NullInt64
+	var lastUnwrapAt sql.NullTime
 	err := row.Scan(
 		&w.Id,
 		&w.Owner,
@@ -117,11 +138,24 @@ func (a *AppDB) GetWalletByUserAndAddress(ctx context.Context, userId string, ad
 		&w.IsEoa,
 		&w.IsRedeemer,
 		&w.EoaAddress,
-		&w.SmartAddress,
-		&w.SmartIndex,
+		&smartAddress,
+		&smartIndex,
+		&lastUnwrapAt,
 	)
 	if err != nil {
 		return nil, err
+	}
+	if smartAddress.Valid {
+		addr := smartAddress.String
+		w.SmartAddress = &addr
+	}
+	if smartIndex.Valid {
+		idx := int(smartIndex.Int64)
+		w.SmartIndex = &idx
+	}
+	if lastUnwrapAt.Valid {
+		unwrapAt := lastUnwrapAt.Time
+		w.LastUnwrapAt = &unwrapAt
 	}
 
 	return &w, nil
@@ -172,7 +206,8 @@ func (a *AppDB) GetSmartWalletByOwnerIndex(ctx context.Context, owner string, in
 			is_redeemer,
 			eoa_address,
 			smart_address,
-			smart_index
+			smart_index,
+			last_unwrap_at
 		FROM
 			wallets
 		WHERE
@@ -188,6 +223,7 @@ func (a *AppDB) GetSmartWalletByOwnerIndex(ctx context.Context, owner string, in
 	var wallet structs.Wallet
 	var smartAddress sql.NullString
 	var smartIndex sql.NullInt64
+	var lastUnwrapAt sql.NullTime
 	err := row.Scan(
 		&wallet.Id,
 		&wallet.Owner,
@@ -197,6 +233,7 @@ func (a *AppDB) GetSmartWalletByOwnerIndex(ctx context.Context, owner string, in
 		&wallet.EoaAddress,
 		&smartAddress,
 		&smartIndex,
+		&lastUnwrapAt,
 	)
 	if err == pgx.ErrNoRows {
 		return nil, nil
@@ -212,6 +249,10 @@ func (a *AppDB) GetSmartWalletByOwnerIndex(ctx context.Context, owner string, in
 		idx := int(smartIndex.Int64)
 		wallet.SmartIndex = &idx
 	}
+	if lastUnwrapAt.Valid {
+		unwrapAt := lastUnwrapAt.Time
+		wallet.LastUnwrapAt = &unwrapAt
+	}
 
 	return &wallet, nil
 }
@@ -225,5 +266,17 @@ func (a *AppDB) SetWalletRedeemerStatus(ctx context.Context, walletId int, isRed
 		WHERE
 			id = $2;
 	`, isRedeemer, walletId)
+	return err
+}
+
+func (a *AppDB) SetWalletLastUnwrapAt(ctx context.Context, walletId int, lastUnwrapAt time.Time) error {
+	_, err := a.db.Exec(ctx, `
+		UPDATE
+			wallets
+		SET
+			last_unwrap_at = $1
+		WHERE
+			id = $2;
+	`, lastUnwrapAt.UTC(), walletId)
 	return err
 }

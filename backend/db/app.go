@@ -71,6 +71,14 @@ func (s *AppDB) CreateTables() error {
 	}
 
 	_, err = s.db.Exec(context.Background(), `
+		ALTER TABLE wallets
+		ADD COLUMN IF NOT EXISTS last_unwrap_at TIMESTAMP NULL;
+	`)
+	if err != nil {
+		return fmt.Errorf("error adding last_unwrap_at column to wallets table: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
 		CREATE TABLE IF NOT EXISTS affiliates(
 			user_id TEXT PRIMARY KEY REFERENCES users(id),
 			organization TEXT NOT NULL,

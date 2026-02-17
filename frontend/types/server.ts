@@ -33,6 +33,7 @@ export interface WalletResponse {
   eoa_address: string
   smart_address?: string
   smart_index?: number
+  last_unwrap_at?: string
 }
 
 export interface GetUserResponse {
