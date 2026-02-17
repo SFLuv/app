@@ -7,6 +7,9 @@ type User struct {
 	IsMerchant     bool    `json:"is_merchant"`
 	IsOrganizer    bool    `json:"is_organizer"`
 	IsImprover     bool    `json:"is_improver"`
+	IsProposer     bool    `json:"is_proposer"`
+	IsVoter        bool    `json:"is_voter"`
+	IsIssuer       bool    `json:"is_issuer"`
 	IsAffiliate    bool    `json:"is_affiliate"`
 	Email          *string `json:"contact_email"`
 	Phone          *string `json:"contact_phone"`
@@ -21,4 +24,6 @@ type AuthedUserResponse struct {
 	Locations []*Location `json:"locations"`
 	Contacts  []*Contact  `json:"contacts"`
 	Affiliate *Affiliate  `json:"affiliate,omitempty"`
+	Proposer  *Proposer   `json:"proposer,omitempty"`
+	Improver  *Improver   `json:"improver,omitempty"`
 }

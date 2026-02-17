@@ -28,7 +28,7 @@ const getLocationApplicationStatus = (approval?: boolean | null): LocationApplic
 
 export default function SettingsPage() {
   const router = useRouter()
-  const { user, userLocations, status, affiliate, setAffiliate, authFetch } = useApp()
+  const { user, userLocations, status, affiliate, setAffiliate, proposer, setProposer, improver, setImprover, authFetch } = useApp()
   const userRole = useMemo(() => user?.isAdmin ? "admin" : user?.isMerchant ? "merchant" : "user", [user])
 
   const merchantStatus: MerchantStatus = useMemo(() => {
@@ -48,6 +48,18 @@ export default function SettingsPage() {
     return "none"
   }, [affiliate, user])
 
+  const proposerStatus = useMemo(() => {
+    if (user?.isProposer) return "approved"
+    if (proposer?.status) return proposer.status
+    return "none"
+  }, [proposer, user])
+
+  const improverStatus = useMemo(() => {
+    if (user?.isImprover) return "approved"
+    if (improver?.status) return improver.status
+    return "none"
+  }, [improver, user])
+
   useEffect(() => {
     if (affiliate?.affiliate_logo) {
       setAffiliateLogoPreview(affiliate.affiliate_logo)
@@ -55,6 +67,13 @@ export default function SettingsPage() {
       setAffiliateLogoPreview("")
     }
   }, [affiliate?.affiliate_logo])
+
+  useEffect(() => {
+    if (!improver) return
+    setImproverFirstName(improver.first_name || "")
+    setImproverLastName(improver.last_name || "")
+    setImproverEmail(improver.email || user?.contact_email || "")
+  }, [improver, user?.contact_email])
 
   // Form states
   const [activeTab, setActiveTab] = useState("account")
@@ -66,6 +85,18 @@ export default function SettingsPage() {
   const [affiliateSubmitting, setAffiliateSubmitting] = useState(false)
   const [affiliateError, setAffiliateError] = useState("")
   const [affiliateSuccess, setAffiliateSuccess] = useState("")
+  const [proposerModalOpen, setProposerModalOpen] = useState(false)
+  const [proposerOrg, setProposerOrg] = useState("")
+  const [proposerSubmitting, setProposerSubmitting] = useState(false)
+  const [proposerError, setProposerError] = useState("")
+  const [proposerSuccess, setProposerSuccess] = useState("")
+  const [improverModalOpen, setImproverModalOpen] = useState(false)
+  const [improverFirstName, setImproverFirstName] = useState("")
+  const [improverLastName, setImproverLastName] = useState("")
+  const [improverEmail, setImproverEmail] = useState(user?.contact_email || "")
+  const [improverSubmitting, setImproverSubmitting] = useState(false)
+  const [improverError, setImproverError] = useState("")
+  const [improverSuccess, setImproverSuccess] = useState("")
   const [affiliateLogoPreview, setAffiliateLogoPreview] = useState<string>("")
   const [affiliateLogoSaving, setAffiliateLogoSaving] = useState(false)
   const [affiliateLogoError, setAffiliateLogoError] = useState("")
@@ -187,6 +218,88 @@ export default function SettingsPage() {
       setAffiliateError("Unable to submit your request right now. Please try again.")
     } finally {
       setAffiliateSubmitting(false)
+    }
+  }
+
+  const handleProposerRequest = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setProposerError("")
+    setProposerSuccess("")
+
+    if (!proposerOrg.trim()) {
+      setProposerError("Please enter the organization you are requesting from.")
+      return
+    }
+
+    setProposerSubmitting(true)
+    try {
+      const res = await authFetch("/proposers/request", {
+        method: "POST",
+        body: JSON.stringify({ organization: proposerOrg.trim() }),
+      })
+
+      if (!res.ok) {
+        if (res.status === 409) {
+          setProposerError("Your proposer status is already approved.")
+        } else {
+          setProposerError("Unable to submit your request right now. Please try again.")
+        }
+        return
+      }
+
+      const data = await res.json()
+      setProposer(data)
+      setProposerSuccess("Proposer request submitted.")
+      setProposerModalOpen(false)
+      setProposerOrg("")
+    } catch {
+      setProposerError("Unable to submit your request right now. Please try again.")
+    } finally {
+      setProposerSubmitting(false)
+    }
+  }
+
+  const handleImproverRequest = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setImproverError("")
+    setImproverSuccess("")
+
+    const firstName = improverFirstName.trim()
+    const lastName = improverLastName.trim()
+    const email = improverEmail.trim()
+    if (!firstName || !lastName || !email) {
+      setImproverError("First name, last name, and email are required.")
+      return
+    }
+
+    setImproverSubmitting(true)
+    try {
+      const res = await authFetch("/improvers/request", {
+        method: "POST",
+        body: JSON.stringify({
+          first_name: firstName,
+          last_name: lastName,
+          email,
+        }),
+      })
+
+      if (!res.ok) {
+        if (res.status === 409) {
+          setImproverError("Your improver status is already approved.")
+        } else {
+          setImproverError("Unable to submit your request right now. Please try again.")
+        }
+        return
+      }
+
+      const data = await res.json()
+      setImprover(data)
+      setImproverSuccess("Improver request submitted.")
+      setImproverModalOpen(false)
+    } catch {
+      setImproverError("Unable to submit your request right now. Please try again.")
+    } finally {
+      setImproverSubmitting(false)
     }
   }
 
@@ -621,6 +734,174 @@ export default function SettingsPage() {
             </Card>
           )}
 
+          {proposerStatus === "none" && (
+            <Card className="mt-6">
+              <CardHeader>
+                <CardTitle className="text-black dark:text-white">Request Proposer Status</CardTitle>
+                <CardDescription>Apply to build and submit workflows for community work</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <p className="text-gray-600 dark:text-gray-400 mb-4">
+                  Proposers create structured workflows with role requirements, steps, and step bounties.
+                </p>
+                <Button
+                  variant="outline"
+                  className="bg-secondary text-[#eb6c6c] border-[#eb6c6c] hover:bg-[#eb6c6c] hover:text-white"
+                  onClick={() => setProposerModalOpen(true)}
+                >
+                  Request Proposer Status
+                </Button>
+                {proposerSuccess && <p className="mt-3 text-sm text-green-600">{proposerSuccess}</p>}
+              </CardContent>
+            </Card>
+          )}
+
+          {proposerStatus === "pending" && (
+            <Card className="mt-6 border-yellow-300 dark:border-yellow-700">
+              <CardHeader className="bg-yellow-50 dark:bg-yellow-900/20 rounded-t-lg">
+                <CardTitle className="text-black dark:text-white flex items-center">
+                  <Clock className="h-5 w-5 text-yellow-500 mr-2" />
+                  Proposer Request Pending
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="pt-4">
+                <p className="text-gray-600 dark:text-gray-400 mb-4">
+                  Your proposer request for {proposer?.organization || "your organization"} is under review.
+                </p>
+              </CardContent>
+            </Card>
+          )}
+
+          {proposerStatus === "approved" && (
+            <Card className="mt-6 border-green-300 dark:border-green-700">
+              <CardHeader className="bg-green-50 dark:bg-green-900/20 rounded-t-lg">
+                <CardTitle className="text-black dark:text-white flex items-center">
+                  <Check className="h-5 w-5 text-green-500 mr-2" />
+                  Proposer Status Approved
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="pt-4">
+                <p className="text-gray-600 dark:text-gray-400 mb-4">
+                  You are approved to create workflows for {proposer?.organization || "your organization"}.
+                </p>
+                <Button
+                  variant="outline"
+                  className="bg-secondary text-[#eb6c6c] border-[#eb6c6c] hover:bg-[#eb6c6c] hover:text-white"
+                  onClick={() => router.push("/proposer")}
+                >
+                  Open Proposer Panel
+                </Button>
+              </CardContent>
+            </Card>
+          )}
+
+          {proposerStatus === "rejected" && (
+            <Card className="mt-6 border-red-300 dark:border-red-700">
+              <CardHeader className="bg-red-50 dark:bg-red-900/20 rounded-t-lg">
+                <CardTitle className="text-black dark:text-white flex items-center">
+                  <XCircle className="h-5 w-5 text-red-500 mr-2" />
+                  Proposer Request Not Approved
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="pt-4">
+                <p className="text-gray-600 dark:text-gray-400 mb-4">
+                  Your proposer request was not approved. You can submit another request with updated details.
+                </p>
+                <Button
+                  variant="outline"
+                  className="bg-secondary text-[#eb6c6c] border-[#eb6c6c] hover:bg-[#eb6c6c] hover:text-white"
+                  onClick={() => setProposerModalOpen(true)}
+                >
+                  Submit Another Request
+                </Button>
+              </CardContent>
+            </Card>
+          )}
+
+          {improverStatus === "none" && (
+            <Card className="mt-6">
+              <CardHeader>
+                <CardTitle className="text-black dark:text-white">Request Improver Status</CardTitle>
+                <CardDescription>Apply to claim and complete assigned workflow steps</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <p className="text-gray-600 dark:text-gray-400 mb-4">
+                  Improvers complete workflow tasks and submit evidence against proposer-defined requirements.
+                </p>
+                <Button
+                  variant="outline"
+                  className="bg-secondary text-[#eb6c6c] border-[#eb6c6c] hover:bg-[#eb6c6c] hover:text-white"
+                  onClick={() => setImproverModalOpen(true)}
+                >
+                  Request Improver Status
+                </Button>
+                {improverSuccess && <p className="mt-3 text-sm text-green-600">{improverSuccess}</p>}
+              </CardContent>
+            </Card>
+          )}
+
+          {improverStatus === "pending" && (
+            <Card className="mt-6 border-yellow-300 dark:border-yellow-700">
+              <CardHeader className="bg-yellow-50 dark:bg-yellow-900/20 rounded-t-lg">
+                <CardTitle className="text-black dark:text-white flex items-center">
+                  <Clock className="h-5 w-5 text-yellow-500 mr-2" />
+                  Improver Request Pending
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="pt-4">
+                <p className="text-gray-600 dark:text-gray-400 mb-4">
+                  Your improver request is under review.
+                </p>
+              </CardContent>
+            </Card>
+          )}
+
+          {improverStatus === "approved" && (
+            <Card className="mt-6 border-green-300 dark:border-green-700">
+              <CardHeader className="bg-green-50 dark:bg-green-900/20 rounded-t-lg">
+                <CardTitle className="text-black dark:text-white flex items-center">
+                  <Check className="h-5 w-5 text-green-500 mr-2" />
+                  Improver Status Approved
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="pt-4">
+                <p className="text-gray-600 dark:text-gray-400 mb-4">
+                  You are approved as an improver and can now claim eligible workflow steps.
+                </p>
+                <Button
+                  variant="outline"
+                  className="bg-secondary text-[#eb6c6c] border-[#eb6c6c] hover:bg-[#eb6c6c] hover:text-white"
+                  onClick={() => router.push("/improver")}
+                >
+                  Open Improver Panel
+                </Button>
+              </CardContent>
+            </Card>
+          )}
+
+          {improverStatus === "rejected" && (
+            <Card className="mt-6 border-red-300 dark:border-red-700">
+              <CardHeader className="bg-red-50 dark:bg-red-900/20 rounded-t-lg">
+                <CardTitle className="text-black dark:text-white flex items-center">
+                  <XCircle className="h-5 w-5 text-red-500 mr-2" />
+                  Improver Request Not Approved
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="pt-4">
+                <p className="text-gray-600 dark:text-gray-400 mb-4">
+                  Your improver request was not approved. You can submit another request.
+                </p>
+                <Button
+                  variant="outline"
+                  className="bg-secondary text-[#eb6c6c] border-[#eb6c6c] hover:bg-[#eb6c6c] hover:text-white"
+                  onClick={() => setImproverModalOpen(true)}
+                >
+                  Submit Another Request
+                </Button>
+              </CardContent>
+            </Card>
+          )}
+
           <Dialog open={affiliateModalOpen} onOpenChange={setAffiliateModalOpen}>
             <DialogContent className="sm:max-w-md">
               <DialogHeader>
@@ -653,6 +934,121 @@ export default function SettingsPage() {
                 <div className="flex justify-end">
                   <Button type="submit" disabled={affiliateSubmitting}>
                     {affiliateSubmitting ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Submitting...
+                      </>
+                    ) : (
+                      "Submit Request"
+                    )}
+                  </Button>
+                </div>
+              </form>
+            </DialogContent>
+          </Dialog>
+
+          <Dialog open={proposerModalOpen} onOpenChange={setProposerModalOpen}>
+            <DialogContent className="sm:max-w-md">
+              <DialogHeader>
+                <DialogTitle>Request Proposer Status</DialogTitle>
+                <DialogDescription>
+                  Tell us which organization you are requesting proposer access for.
+                </DialogDescription>
+              </DialogHeader>
+              <form onSubmit={handleProposerRequest} className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="proposer-org" className="text-black dark:text-white">
+                    Organization Name
+                  </Label>
+                  <Input
+                    id="proposer-org"
+                    value={proposerOrg}
+                    onChange={(e) => setProposerOrg(e.target.value)}
+                    className="text-black dark:text-white bg-secondary"
+                    placeholder="Organization or group name"
+                  />
+                </div>
+
+                {proposerError && (
+                  <div className="flex items-center gap-2 text-red-600 text-sm p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
+                    <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+                    <span>{proposerError}</span>
+                  </div>
+                )}
+
+                <div className="flex justify-end">
+                  <Button type="submit" disabled={proposerSubmitting}>
+                    {proposerSubmitting ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Submitting...
+                      </>
+                    ) : (
+                      "Submit Request"
+                    )}
+                  </Button>
+                </div>
+              </form>
+            </DialogContent>
+          </Dialog>
+
+          <Dialog open={improverModalOpen} onOpenChange={setImproverModalOpen}>
+            <DialogContent className="sm:max-w-md">
+              <DialogHeader>
+                <DialogTitle>Request Improver Status</DialogTitle>
+                <DialogDescription>
+                  Enter your legal contact details for admin review.
+                </DialogDescription>
+              </DialogHeader>
+              <form onSubmit={handleImproverRequest} className="space-y-4">
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-2">
+                    <Label htmlFor="improver-first-name" className="text-black dark:text-white">
+                      First Name
+                    </Label>
+                    <Input
+                      id="improver-first-name"
+                      value={improverFirstName}
+                      onChange={(e) => setImproverFirstName(e.target.value)}
+                      className="text-black dark:text-white bg-secondary"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="improver-last-name" className="text-black dark:text-white">
+                      Last Name
+                    </Label>
+                    <Input
+                      id="improver-last-name"
+                      value={improverLastName}
+                      onChange={(e) => setImproverLastName(e.target.value)}
+                      className="text-black dark:text-white bg-secondary"
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="improver-email" className="text-black dark:text-white">
+                    Email
+                  </Label>
+                  <Input
+                    id="improver-email"
+                    type="email"
+                    value={improverEmail}
+                    onChange={(e) => setImproverEmail(e.target.value)}
+                    className="text-black dark:text-white bg-secondary"
+                  />
+                </div>
+
+                {improverError && (
+                  <div className="flex items-center gap-2 text-red-600 text-sm p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
+                    <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+                    <span>{improverError}</span>
+                  </div>
+                )}
+
+                <div className="flex justify-end">
+                  <Button type="submit" disabled={improverSubmitting}>
+                    {improverSubmitting ? (
                       <>
                         <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                         Submitting...

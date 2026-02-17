@@ -1,0 +1,153 @@
+# IMPROVER_PANEL Work Context
+
+## Scope for This Iteration
+- Start implementation for new multi-role workflow system (improver/proposer/issuer/voter), focusing on proposer panel first.
+- Add proposer access request/approval flow (mirroring affiliate + merchant settings/admin patterns).
+- Add improver access request flow scaffold with required profile fields for admin review.
+- Build proposer workflow creation (with roles, credentials, steps, work items, schedule, series/workflow IDs, budget assignment constraints).
+- Update admin panel navigation to side layout to scale for many tabs.
+- Integrate workflow budgeting into faucet allocation checks with approval guardrails.
+- Ensure new notifications use existing email style.
+- Continue with voter panel UI and credential grant/issue flows.
+- Add admin voter privileges and quorum/countdown voting behavior.
+
+## Implemented
+
+### Backend
+- Added schema for:
+  - proposer requests and budget state (`proposers`)
+  - improver requests (`improvers`)
+  - credential scaffolding for issuers/users (`issuer_credential_scopes`, `user_credentials`)
+  - workflows (`workflows`) with recurrence, series/workflow IDs, budget reservation fields, and block flags
+  - workflow roles + required credentials (`workflow_roles`, `workflow_role_credentials`)
+  - workflow steps and work items (`workflow_steps`, `workflow_step_items`)
+  - workflow voting (`workflow_votes`)
+- Extended `users` role columns with `is_proposer`, `is_voter`, `is_issuer`.
+- Added proposer/improver/workflow structs and credential constants (`dpw_certified`, `sfluv_verifier`).
+- Added DB logic for:
+  - proposer/improver request create/update/list and admin approval
+  - proposer budget reserve/refund/balance
+  - workflow create/list/read/delete
+  - workflow template support:
+    - proposer-owned templates
+    - admin default templates visible to all proposers
+    - template payload stores recurrence/start/series + roles/steps blueprint
+  - dropdown option creation update:
+    - proposer now provides option labels only
+    - backend derives stable option values from labels
+    - per-option notification emails are stored on each dropdown option
+    - legacy item-level notify fields are still read as fallback for older workflows
+  - workflow vote recording + approve/reject status transitions
+  - recurring-series block behavior when prior workflow is not `paid_out` (tracked via block flag while proposal remains `pending`)
+- Added API routes and handlers for:
+  - `POST /proposers/request`, `GET/PUT /admin/proposers`
+  - `POST /improvers/request`, `GET/PUT /admin/improvers`
+  - `GET /proposers/balance`
+  - `GET/POST /proposers/workflow-templates`
+  - `POST /admin/workflow-templates/default`
+  - `POST/GET/DELETE /proposers/workflows...`
+  - `GET /workflows/{workflow_id}`
+  - `POST /workflows/{workflow_id}/votes`
+- Added voter/issuer API routes and handlers:
+  - `GET /voters/workflows` (vote-state evaluation with faucet-aware approval gating)
+  - `POST /admin/workflows/{workflow_id}/force-approve`
+  - `GET/PUT /admin/issuers`
+  - `GET /issuers/scopes`
+  - `POST/DELETE /issuers/credentials`
+  - `GET /issuers/credentials/{user_id}`
+- Implemented and secured `GET /admin/users` and `PUT /admin/users` role handlers (admin-only checks in handler) to support role assignment for voter/issuer/proposer/improver flags.
+- Added styled admin-email notifications for proposer and improver requests.
+- Updated authed user payload to include proposer and improver records.
+- Updated faucet allocation math in event creation and `/balance` to include active workflow allocations.
+- Added voter approval guardrail: workflows cannot be approved if unallocated faucet balance cannot cover one week of the workflow requirement.
+- Added admin-to-voter defaults:
+  - migration update sets `is_voter = true` for admins
+  - admin role assignment also auto-sets voter role
+  - voter checks treat admins as eligible voters
+- Added vote lifecycle fields on workflows (`vote_quorum_reached_at`, `vote_finalize_at`, `vote_finalized_at`, `vote_finalized_by_user_id`, `vote_decision`) and vote-state evaluation for:
+  - quorum reached at >=50% of eligible voters
+  - 24h countdown after quorum
+  - early finalization when >50% of the full voter body approves or denies
+  - finalization after countdown by simple majority of votes cast
+- Added approval gating in vote-state evaluation to prevent vote-driven approval finalization when faucet capacity is insufficient for one-week requirement.
+- Added improver execution schema additions:
+  - `workflow_steps.started_at`, `workflow_steps.completed_at`
+  - `workflow_step_submissions` for persisted step completion responses
+  - `workflow_step_notifications` for deduped step-available alerts
+  - unique index to prevent assigning the same improver more than once within one workflow
+- Added start-elapsed faucet safety check for series workflows:
+  - when step-1 unlocks because `start_at` elapsed, backend now evaluates series workflows against current unallocated faucet balance
+  - if unallocated balance is below the workflow requirement, a styled admin email is sent with exact shortfall (`Amount Needed`)
+- Added admin force-approval pathway (`admin_approve`) for pending workflows.
+- Added issuer scope enforcement for credential grants/revocations (`dpw_certified`, `sfluv_verifier`).
+
+### Frontend
+- Added types for proposer/improver/workflows.
+- Extended app context/user model with proposer/improver/voter/issuer flags and proposer/improver payloads.
+- Updated settings page with:
+  - proposer request flow/status cards
+  - improver request flow/status cards (first name, last name, email)
+- Added new proposer panel page at `frontend/app/proposer/page.tsx`:
+  - proposer balance view
+  - template library and apply flow
+  - template save flow for proposer-owned templates
+  - admin-only save flow for default templates
+  - workflow builder with recurrence, series ID option, role editor, step editor, work-item editor
+  - per-work-item requirements for photo/written/dropdown, dropdown options, optional flag
+  - dropdown options now use label-only input with backend-derived value
+  - per-dropdown-option notification emails with add/remove controls (no comma-separated field)
+  - workflow list with status/vote summary and delete capability for non-active states
+- Updated sidebar to show `Proposer Panel` for approved proposers.
+- Restyled admin tab navigation into a side-tab layout and added tabs for:
+  - proposer approvals and budgeting
+  - improver approvals
+- Added voter panel at `frontend/app/voter/page.tsx`:
+  - workflow vote queue
+  - approve/deny actions
+  - quorum/countdown visibility
+  - admin-only force approve action
+- Added issuer panel at `frontend/app/issuer/page.tsx`:
+  - issuer scope display
+  - issue/revoke credential actions
+  - per-user credential history lookup
+- Added admin issuer scope management tab in `frontend/app/admin/page.tsx`.
+- Updated sidebar to expose `Voter Panel` and `Issuer Panel` for authorized users/admins.
+- Added improver panel at `frontend/app/improver/page.tsx` with:
+  - workflow feed + active credential visibility
+  - step claim/start/complete actions
+  - dynamic work-item completion forms for photo/written/dropdown requirements
+- Updated settings approved-improver state to link into `/improver`.
+- Updated sidebar to expose `Improver Panel` for approved improvers.
+
+### New Backend Improver Pipeline
+- Added improver routes:
+  - `GET /improvers/workflows`
+  - `POST /improvers/workflows/{workflow_id}/steps/{step_id}/claim`
+  - `POST /improvers/workflows/{workflow_id}/steps/{step_id}/start`
+  - `POST /improvers/workflows/{workflow_id}/steps/{step_id}/complete`
+- Added backend logic for:
+  - claim validation (role credential gate + single assignment per workflow)
+  - claim hardening for race conditions:
+    - DB unique index violation is surfaced as a clean conflict (`improver already assigned within this workflow`)
+    - claims are now restricted to `locked`/`available` steps only
+    - if a claimed step is immediately `available`, a deduped step-available notification is recorded and emailed
+  - start-state transition and workflow activation (`approved -> in_progress`)
+  - completion validation against work-item requirements
+  - sequential unlock of next step
+  - workflow completion transition when all steps are done
+  - availability and dropdown-triggered notifications using styled email templates
+  - workflow step submissions are now hydrated onto step payloads from `workflow_step_submissions`
+  - submission visibility guard:
+    - improvers assigned to at least one step in a workflow can view all submitted step details in that workflow
+    - improvers who are only eligible-to-claim (not yet assigned) do not receive submission payloads
+
+## Validation Notes
+- Backend compile/tests for changed packages passed:
+  - `go test -vet=off ./db ./handlers ./router ./structs`
+- Full frontend `next build` cannot run in this sandbox because outbound font fetch to `fonts.googleapis.com` is blocked.
+- `npx tsc --noEmit` reports many pre-existing project errors in unrelated files; no errors were reported in newly touched proposer/improver/workflow files.
+
+## Remaining (Next Iterations)
+- Workflow step payout pipeline (faucet settlement and `paid_out` transitions).
+- Improved attachment handling (direct upload/storage flow for required photos instead of URL entry).
+- Scheduled/background finalization guarantees for vote countdown expiry (today this finalizes when relevant endpoints are hit).

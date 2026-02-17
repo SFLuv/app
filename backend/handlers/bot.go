@@ -111,7 +111,7 @@ func (s *BotService) NewEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	allocatedBalance, err := s.db.AllocatedBalance(r.Context())
+	allocatedBalance, err := s.totalAllocatedBalance(r.Context())
 	if err != nil {
 		fmt.Printf("error getting allocated balance for faucet: %s", err)
 		w.WriteHeader(http.StatusInternalServerError)
@@ -155,7 +155,7 @@ func (s *BotService) RemainingBalance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	allocatedBalance, err := s.db.AllocatedBalance(r.Context())
+	allocatedBalance, err := s.totalAllocatedBalance(r.Context())
 	if err != nil {
 		fmt.Printf("error getting allocated balance for faucet: %s", err)
 		w.WriteHeader(http.StatusInternalServerError)
@@ -379,7 +379,7 @@ func (s *BotService) AffiliateNewEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	allocatedBalance, err := s.db.AllocatedBalance(r.Context())
+	allocatedBalance, err := s.totalAllocatedBalance(r.Context())
 	if err != nil {
 		fmt.Printf("error getting allocated balance for faucet: %s", err)
 		_ = s.appDb.RefundAffiliateBalance(r.Context(), *userDid, reservation.WeeklyDeducted, reservation.OneTimeDeducted)

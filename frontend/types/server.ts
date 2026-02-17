@@ -1,6 +1,8 @@
 import { Contact } from "./contact"
 import { Affiliate } from "./affiliate"
 import { AuthedLocation, Location } from "./location"
+import { Proposer } from "./proposer"
+import { Improver } from "./improver"
 
 export interface UserResponse {
   id: string
@@ -8,6 +10,9 @@ export interface UserResponse {
   is_merchant: boolean
   is_organizer: boolean
   is_improver: boolean
+  is_proposer: boolean
+  is_voter: boolean
+  is_issuer: boolean
   is_affiliate: boolean
   contact_email?: string
   contact_phone?: string
@@ -41,4 +46,6 @@ export interface GetUserResponse {
   locations: AuthedLocation[]
   contacts: Contact[]
   affiliate?: Affiliate | null
+  proposer?: Proposer | null
+  improver?: Improver | null
 }

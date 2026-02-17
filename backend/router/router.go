@@ -31,6 +31,7 @@ func New(s *handlers.BotService, a *handlers.AppService, p *handlers.PonderServi
 	AddUserRoutes(r, a)
 	AddAdminRoutes(r, a)
 	AddAffiliateRoutes(r, s, a)
+	AddWorkflowRoutes(r, s, a)
 	AddWalletRoutes(r, a)
 	AddLocationRoutes(r, a)
 	AddContactRoutes(r, a)
@@ -76,6 +77,42 @@ func AddAffiliateRoutes(r *chi.Mux, s *handlers.BotService, a *handlers.AppServi
 	r.Get("/affiliates/events/{event}", withAffiliate(s.AffiliateGetCodes, a))
 	r.Delete("/affiliates/events/{event}", withAffiliate(s.AffiliateDeleteEvent, a))
 	r.Get("/affiliates/{user_id}", withAffiliate(a.GetAffiliate, a))
+}
+
+func AddWorkflowRoutes(r *chi.Mux, s *handlers.BotService, a *handlers.AppService) {
+	r.Post("/proposers/request", withAuth(a.RequestProposerStatus))
+	r.Post("/improvers/request", withAuth(a.RequestImproverStatus))
+
+	r.Get("/proposers/balance", withProposer(a.GetProposerBalance, a))
+	r.Get("/proposers/workflow-templates", withProposer(a.GetProposerWorkflowTemplates, a))
+	r.Post("/proposers/workflow-templates", withProposer(a.CreateProposerWorkflowTemplate, a))
+	r.Post("/proposers/workflows", withProposer(a.CreateWorkflow, a))
+	r.Get("/proposers/workflows", withProposer(a.GetProposerWorkflows, a))
+	r.Get("/proposers/workflows/{workflow_id}", withProposer(a.GetProposerWorkflow, a))
+	r.Delete("/proposers/workflows/{workflow_id}", withProposer(a.DeleteProposerWorkflow, a))
+
+	r.Get("/improvers/workflows", withImprover(a.GetImproverWorkflows, a))
+	r.Post("/improvers/workflows/{workflow_id}/steps/{step_id}/claim", withImprover(a.ClaimWorkflowStep, a))
+	r.Post("/improvers/workflows/{workflow_id}/steps/{step_id}/start", withImprover(a.StartWorkflowStep, a))
+	r.Post("/improvers/workflows/{workflow_id}/steps/{step_id}/complete", withImprover(a.CompleteWorkflowStep, a))
+
+	r.Get("/admin/proposers", withAdmin(a.GetProposers, a))
+	r.Put("/admin/proposers", withAdmin(a.UpdateProposer, a))
+	r.Get("/admin/improvers", withAdmin(a.GetImprovers, a))
+	r.Put("/admin/improvers", withAdmin(a.UpdateImprover, a))
+	r.Get("/admin/issuers", withAdmin(a.GetIssuers, a))
+	r.Put("/admin/issuers", withAdmin(a.UpdateIssuerScopes, a))
+	r.Post("/admin/workflow-templates/default", withAdmin(a.CreateDefaultWorkflowTemplate, a))
+	r.Post("/admin/workflows/{workflow_id}/force-approve", withAdmin(s.AdminForceApproveWorkflow, a))
+
+	r.Get("/voters/workflows", withVoter(s.GetVoterWorkflows, a))
+	r.Get("/workflows/{workflow_id}", withAuth(a.GetWorkflow))
+	r.Post("/workflows/{workflow_id}/votes", withVoter(s.VoteWorkflow, a))
+
+	r.Get("/issuers/scopes", withIssuer(a.GetMyIssuerScopes, a))
+	r.Post("/issuers/credentials", withIssuer(a.IssueCredential, a))
+	r.Delete("/issuers/credentials", withIssuer(a.RevokeCredential, a))
+	r.Get("/issuers/credentials/{user_id}", withIssuer(a.GetIssuerUserCredentials, a))
 }
 
 func AddWalletRoutes(r *chi.Mux, s *handlers.AppService) {
@@ -178,6 +215,98 @@ func withAffiliate(handlerFunc http.HandlerFunc, s *handlers.AppService) http.Ha
 
 		isAffiliate := s.IsAffiliate(r.Context(), id)
 		if !isAffiliate {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+
+		handlerFunc(w, r)
+	}
+}
+
+func withProposer(handlerFunc http.HandlerFunc, s *handlers.AppService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, ok := r.Context().Value("userDid").(string)
+		if !ok {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+
+		if s.IsAdmin(r.Context(), id) {
+			handlerFunc(w, r)
+			return
+		}
+
+		isProposer := s.IsProposer(r.Context(), id)
+		if !isProposer {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+
+		handlerFunc(w, r)
+	}
+}
+
+func withImprover(handlerFunc http.HandlerFunc, s *handlers.AppService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, ok := r.Context().Value("userDid").(string)
+		if !ok {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+
+		if s.IsAdmin(r.Context(), id) {
+			handlerFunc(w, r)
+			return
+		}
+
+		isImprover := s.IsImprover(r.Context(), id)
+		if !isImprover {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+
+		handlerFunc(w, r)
+	}
+}
+
+func withVoter(handlerFunc http.HandlerFunc, s *handlers.AppService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, ok := r.Context().Value("userDid").(string)
+		if !ok {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+
+		if s.IsAdmin(r.Context(), id) {
+			handlerFunc(w, r)
+			return
+		}
+
+		isVoter := s.IsVoter(r.Context(), id)
+		if !isVoter {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+
+		handlerFunc(w, r)
+	}
+}
+
+func withIssuer(handlerFunc http.HandlerFunc, s *handlers.AppService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, ok := r.Context().Value("userDid").(string)
+		if !ok {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+
+		if s.IsAdmin(r.Context(), id) {
+			handlerFunc(w, r)
+			return
+		}
+
+		isIssuer := s.IsIssuer(r.Context(), id)
+		if !isIssuer {
 			w.WriteHeader(http.StatusForbidden)
 			return
 		}

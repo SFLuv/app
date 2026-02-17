@@ -19,6 +19,10 @@ import {
   SquareUserIcon,
   ContactIcon,
   Shield,
+  ClipboardList,
+  Vote,
+  ShieldCheck,
+  Wrench,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import {
@@ -121,6 +125,38 @@ export function DashboardSidebar() {
       },
     ]
 
+    const proposerItems: NavItem[] = [
+      {
+        title: "Proposer Panel",
+        icon: ClipboardList,
+        path: "/proposer",
+      },
+    ]
+
+    const improverItems: NavItem[] = [
+      {
+        title: "Improver Panel",
+        icon: Wrench,
+        path: "/improver",
+      },
+    ]
+
+    const voterItems: NavItem[] = [
+      {
+        title: "Voter Panel",
+        icon: Vote,
+        path: "/voter",
+      },
+    ]
+
+    const issuerItems: NavItem[] = [
+      {
+        title: "Issuer Panel",
+        icon: ShieldCheck,
+        path: "/issuer",
+      },
+    ]
+
     const adminItems: NavItem[] = [
       {
         title: "Admin Panel",
@@ -170,6 +206,22 @@ export function DashboardSidebar() {
 
     if (user?.isAffiliate) {
       items = [...items, ...affiliateItems]
+    }
+
+    if (user?.isProposer || user?.isAdmin) {
+      items = [...items, ...proposerItems]
+    }
+
+    if (user?.isImprover) {
+      items = [...items, ...improverItems]
+    }
+
+    if (user?.isVoter || user?.isAdmin) {
+      items = [...items, ...voterItems]
+    }
+
+    if (user?.isIssuer || user?.isAdmin) {
+      items = [...items, ...issuerItems]
     }
 
     if (user?.isAdmin) {

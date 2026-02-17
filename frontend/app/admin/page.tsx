@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Badge } from "@/components/ui/badge"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import {
@@ -54,6 +55,10 @@ import { AuthedLocation, UpdateLocationApprovalRequest } from "@/types/location"
 import { AppWallet } from "@/lib/wallets/wallets"
 import { FAUCET_ADDRESS, SFLUV_DECIMALS, SFLUV_TOKEN } from "@/lib/constants"
 import { Affiliate } from "@/types/affiliate"
+import { Proposer } from "@/types/proposer"
+import { Improver } from "@/types/improver"
+import { IssuerWithScopes } from "@/types/issuer"
+import { CredentialType } from "@/types/workflow"
 import { Event, EventsStatus } from "@/types/event"
 import { AddEventModal } from "@/components/events/add-event-modal"
 import { EventModal } from "@/components/events/event-modal"
@@ -79,6 +84,10 @@ const mockPaypalAccounts = [
   },
 ]
 
+const issuerCredentialOptions: Array<{ value: CredentialType; label: string }> = [
+  { value: "dpw_certified", label: "DPW Certified" },
+  { value: "sfluv_verifier", label: "SFLuv Verifier" },
+]
 
 
 
@@ -161,6 +170,27 @@ export default function AdminPage() {
   const [affiliateUpdating, setAffiliateUpdating] = useState<boolean>(false)
   const [affiliateModalError, setAffiliateModalError] = useState<string>("")
   const [eventsOwnerFilter, setEventsOwnerFilter] = useState<string>("all")
+
+  // Proposers
+  const [proposers, setProposers] = useState<Proposer[]>([])
+  const [proposersError, setProposersError] = useState<string>("")
+  const [proposerModalOpen, setProposerModalOpen] = useState<boolean>(false)
+  const [selectedProposer, setSelectedProposer] = useState<Proposer | null>(null)
+  const [proposerNickname, setProposerNickname] = useState<string>("")
+  const [proposerWeeklyBalance, setProposerWeeklyBalance] = useState<string>("")
+  const [proposerBonus, setProposerBonus] = useState<string>("")
+  const [proposerUpdating, setProposerUpdating] = useState<boolean>(false)
+  const [proposerModalError, setProposerModalError] = useState<string>("")
+
+  // Improvers
+  const [improvers, setImprovers] = useState<Improver[]>([])
+  const [improversError, setImproversError] = useState<string>("")
+  const [issuers, setIssuers] = useState<IssuerWithScopes[]>([])
+  const [issuersError, setIssuersError] = useState<string>("")
+  const [issuerUserId, setIssuerUserId] = useState<string>("")
+  const [issuerEnabled, setIssuerEnabled] = useState<boolean>(true)
+  const [issuerScopes, setIssuerScopes] = useState<CredentialType[]>(["dpw_certified"])
+  const [issuerSaving, setIssuerSaving] = useState<boolean>(false)
 
   const toggleNewEventModal = () => {
     setEventsModalOpen(!eventsModalOpen)
@@ -398,6 +428,200 @@ export default function AdminPage() {
     await submitAffiliateUpdate(payload)
   }
 
+  const getProposers = async () => {
+    try {
+      const res = await authFetch("/admin/proposers")
+      if (!res.ok) throw new Error()
+      const data = await res.json()
+      setProposers(data || [])
+      setProposersError("")
+    } catch {
+      setProposersError("Error fetching proposers. Please try again later.")
+    }
+  }
+
+  const openProposerModal = (proposer: Proposer) => {
+    setSelectedProposer(proposer)
+    setProposerNickname(proposer.nickname || "")
+    setProposerWeeklyBalance(String(proposer.weekly_allocation ?? proposer.weekly_balance ?? 0))
+    setProposerBonus(String(proposer.one_time_balance ?? 0))
+    setProposerModalError("")
+    setProposerModalOpen(true)
+  }
+
+  const submitProposerUpdate = async (payload: Record<string, unknown>) => {
+    setProposerUpdating(true)
+    setProposerModalError("")
+    try {
+      const res = await authFetch("/admin/proposers", {
+        method: "PUT",
+        body: JSON.stringify(payload),
+      })
+      if (!res.ok) throw new Error()
+
+      const updated = await res.json()
+      setProposers((prev) =>
+        prev.map((proposer) => (proposer.user_id === updated.user_id ? updated : proposer)),
+      )
+      setSelectedProposer(updated)
+      setProposerBonus(String(updated?.one_time_balance ?? 0))
+    } catch {
+      setProposerModalError("Unable to update proposer right now. Please try again.")
+    } finally {
+      setProposerUpdating(false)
+    }
+  }
+
+  const handleProposerSave = async () => {
+    if (!selectedProposer) return
+
+    const payload: Record<string, unknown> = {
+      user_id: selectedProposer.user_id,
+      nickname: proposerNickname,
+    }
+
+    const weekly = Number(proposerWeeklyBalance)
+    if (!Number.isNaN(weekly)) {
+      payload.weekly_balance = weekly
+    }
+
+    const bonusValue = proposerBonus.trim()
+    if (bonusValue !== "") {
+      const bonus = Number(bonusValue)
+      if (!Number.isNaN(bonus)) {
+        payload.one_time_balance = bonus
+      }
+    }
+
+    await submitProposerUpdate(payload)
+  }
+
+  const handleProposerStatus = async (status: Proposer["status"]) => {
+    if (!selectedProposer) return
+
+    const payload: Record<string, unknown> = {
+      user_id: selectedProposer.user_id,
+      status,
+      nickname: proposerNickname,
+    }
+
+    const weekly = Number(proposerWeeklyBalance)
+    if (!Number.isNaN(weekly)) {
+      payload.weekly_balance = weekly
+    }
+
+    const bonusValue = proposerBonus.trim()
+    if (bonusValue !== "") {
+      const bonus = Number(bonusValue)
+      if (!Number.isNaN(bonus)) {
+        payload.one_time_balance = bonus
+      }
+    }
+
+    await submitProposerUpdate(payload)
+  }
+
+  const getImprovers = async () => {
+    try {
+      const res = await authFetch("/admin/improvers")
+      if (!res.ok) throw new Error()
+      const data = await res.json()
+      setImprovers(data || [])
+      setImproversError("")
+    } catch {
+      setImproversError("Error fetching improvers. Please try again later.")
+    }
+  }
+
+  const updateImproverStatus = async (user_id: string, status: Improver["status"]) => {
+    try {
+      const res = await authFetch("/admin/improvers", {
+        method: "PUT",
+        body: JSON.stringify({ user_id, status }),
+      })
+      if (!res.ok) throw new Error()
+      const updated = await res.json()
+      setImprovers((prev) => prev.map((improver) => (improver.user_id === updated.user_id ? updated : improver)))
+    } catch {
+      setImproversError("Unable to update improver right now. Please try again.")
+    }
+  }
+
+  const getIssuers = async () => {
+    try {
+      const res = await authFetch("/admin/issuers")
+      if (!res.ok) throw new Error()
+      const data = await res.json()
+      setIssuers(data || [])
+      setIssuersError("")
+    } catch {
+      setIssuersError("Error fetching issuers. Please try again later.")
+    }
+  }
+
+  const toggleIssuerScope = (credential: CredentialType, checked: boolean) => {
+    setIssuerScopes((prev) => {
+      if (checked) {
+        if (prev.includes(credential)) return prev
+        return [...prev, credential]
+      }
+      return prev.filter((value) => value !== credential)
+    })
+  }
+
+  const loadIssuerEditor = (issuer: IssuerWithScopes) => {
+    setIssuerUserId(issuer.user_id)
+    setIssuerEnabled(issuer.is_issuer)
+    setIssuerScopes(issuer.allowed_credentials || [])
+    setIssuersError("")
+  }
+
+  const saveIssuerScopes = async () => {
+    const user_id = issuerUserId.trim()
+    if (!user_id) {
+      setIssuersError("User ID is required.")
+      return
+    }
+    if (issuerEnabled && issuerScopes.length === 0) {
+      setIssuersError("Select at least one credential scope for an active issuer.")
+      return
+    }
+
+    setIssuerSaving(true)
+    try {
+      const res = await authFetch("/admin/issuers", {
+        method: "PUT",
+        body: JSON.stringify({
+          user_id,
+          allowed_credentials: issuerScopes,
+          make_issuer: issuerEnabled,
+        }),
+      })
+      if (!res.ok) {
+        const text = await res.text()
+        throw new Error(text || "Unable to update issuer scopes.")
+      }
+
+      const updated = (await res.json()) as IssuerWithScopes
+      setIssuers((prev) => {
+        const existingIndex = prev.findIndex((issuer) => issuer.user_id === updated.user_id)
+        if (existingIndex === -1) return [updated, ...prev]
+        const next = [...prev]
+        next[existingIndex] = updated
+        return next
+      })
+      setIssuersError("")
+    } catch (error) {
+      if (error instanceof Error && error.message) {
+        setIssuersError(error.message)
+      } else {
+        setIssuersError("Unable to update issuer scopes right now. Please try again.")
+      }
+    } finally {
+      setIssuerSaving(false)
+    }
+  }
+
   useEffect(() => {
     if(wallets.length) {
       getFaucetBalance()
@@ -408,6 +632,9 @@ export default function AdminPage() {
     getAuthedMapLocations()
     getEvents()
     getAffiliates()
+    getProposers()
+    getImprovers()
+    getIssuers()
   }, [])
 
   const fetchPendingW9Submissions = async () => {
@@ -941,38 +1168,58 @@ export default function AdminPage() {
         </div>
       </div>
 
-      <Tabs defaultValue="merchants" className="space-y-6">
-        <TabsList className="grid w-full grid-cols-4">
-          {/* <TabsTrigger value="tokens">Token Management</TabsTrigger> */}
-          <TabsTrigger value="merchants" className="relative">
-            Merchant Approvals
-            {pendingLocations.length > 0 && (
-              <Badge variant="destructive" className="ml-2 h-5 w-5 rounded-full p-1.5 text-xs">
-                {pendingLocations.length}
-              </Badge>
-            )}
-          </TabsTrigger>
-          <TabsTrigger value="w9" className="relative">
-            W9 Approvals
-            {pendingW9Submissions.length > 0 && (
-              <Badge variant="destructive" className="ml-2 h-5 w-5 rounded-full p-1.5 text-xs">
-                {pendingW9Submissions.length}
-              </Badge>
-            )}
-          </TabsTrigger>
-          <TabsTrigger value="affiliates" className="relative">
-            Affiliates
-            {affiliates.filter((affiliate) => affiliate.status === "pending").length > 0 && (
-              <Badge variant="destructive" className="ml-2 h-5 w-5 rounded-full p-1.5 text-xs">
-                {affiliates.filter((affiliate) => affiliate.status === "pending").length}
-              </Badge>
-            )}
-          </TabsTrigger>
-          <TabsTrigger value="events" className="relative">
-            Events
-          </TabsTrigger>
-          {/* <TabsTrigger value="qrcodes">QR Codes</TabsTrigger> */}
-        </TabsList>
+      <Tabs defaultValue="merchants" className="space-y-0">
+        <div className="grid gap-6 lg:grid-cols-[280px_minmax(0,1fr)]">
+          <TabsList className="h-auto w-full flex-col items-stretch rounded-xl bg-secondary p-3 space-y-2">
+            <TabsTrigger value="merchants" className="w-full justify-between px-3 py-2">
+              <span>Merchant Approvals</span>
+              {pendingLocations.length > 0 && (
+                <Badge variant="destructive" className="h-5 min-w-5 rounded-full px-1.5 text-xs">
+                  {pendingLocations.length}
+                </Badge>
+              )}
+            </TabsTrigger>
+            <TabsTrigger value="w9" className="w-full justify-between px-3 py-2">
+              <span>W9 Approvals</span>
+              {pendingW9Submissions.length > 0 && (
+                <Badge variant="destructive" className="h-5 min-w-5 rounded-full px-1.5 text-xs">
+                  {pendingW9Submissions.length}
+                </Badge>
+              )}
+            </TabsTrigger>
+            <TabsTrigger value="affiliates" className="w-full justify-between px-3 py-2">
+              <span>Affiliates</span>
+              {affiliates.filter((affiliate) => affiliate.status === "pending").length > 0 && (
+                <Badge variant="destructive" className="h-5 min-w-5 rounded-full px-1.5 text-xs">
+                  {affiliates.filter((affiliate) => affiliate.status === "pending").length}
+                </Badge>
+              )}
+            </TabsTrigger>
+            <TabsTrigger value="proposers" className="w-full justify-between px-3 py-2">
+              <span>Proposers</span>
+              {proposers.filter((proposer) => proposer.status === "pending").length > 0 && (
+                <Badge variant="destructive" className="h-5 min-w-5 rounded-full px-1.5 text-xs">
+                  {proposers.filter((proposer) => proposer.status === "pending").length}
+                </Badge>
+              )}
+            </TabsTrigger>
+            <TabsTrigger value="improvers" className="w-full justify-between px-3 py-2">
+              <span>Improvers</span>
+              {improvers.filter((improver) => improver.status === "pending").length > 0 && (
+                <Badge variant="destructive" className="h-5 min-w-5 rounded-full px-1.5 text-xs">
+                  {improvers.filter((improver) => improver.status === "pending").length}
+                </Badge>
+              )}
+            </TabsTrigger>
+            <TabsTrigger value="issuers" className="w-full justify-between px-3 py-2">
+              <span>Issuer Credentials</span>
+            </TabsTrigger>
+            <TabsTrigger value="events" className="w-full justify-between px-3 py-2">
+              <span>Events</span>
+            </TabsTrigger>
+          </TabsList>
+
+          <div className="min-w-0">
 
         <TabsContent value="tokens" className="space-y-6">
           {/* Global Wallet Selection */}
@@ -1678,6 +1925,310 @@ export default function AdminPage() {
           </Card>
         </TabsContent>
 
+        <TabsContent value="proposers" className="space-y-6">
+          {proposersError && (
+            <div className="flex items-center gap-2 text-red-600 text-sm p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
+              <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+              <span>{proposersError}</span>
+            </div>
+          )}
+
+          <Dialog open={proposerModalOpen} onOpenChange={setProposerModalOpen}>
+            <DialogContent className="sm:max-w-lg">
+              <DialogHeader>
+                <DialogTitle>Manage Proposer</DialogTitle>
+                <DialogDescription>
+                  {selectedProposer?.nickname || selectedProposer?.organization || "Proposer"} ·{" "}
+                  {selectedProposer?.status || "pending"}
+                </DialogDescription>
+              </DialogHeader>
+              {selectedProposer && (
+                <div className="space-y-4">
+                  <div className="space-y-2">
+                    <Label>Nickname</Label>
+                    <Input
+                      value={proposerNickname}
+                      onChange={(e) => setProposerNickname(e.target.value)}
+                      placeholder="Display name"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Weekly Allocation (SFLuv)</Label>
+                    <Input
+                      type="number"
+                      min="0"
+                      value={proposerWeeklyBalance}
+                      onChange={(e) => setProposerWeeklyBalance(e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>One-Time Balance (SFLuv)</Label>
+                    <Input
+                      type="number"
+                      min="0"
+                      value={proposerBonus}
+                      onChange={(e) => setProposerBonus(e.target.value)}
+                      placeholder="Set one-time balance"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Current one-time balance: {selectedProposer.one_time_balance}
+                    </p>
+                  </div>
+
+                  {proposerModalError && (
+                    <div className="flex items-center gap-2 text-red-600 text-sm p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
+                      <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+                      <span>{proposerModalError}</span>
+                    </div>
+                  )}
+
+                  <div className="flex flex-wrap gap-2 justify-end">
+                    {selectedProposer.status === "pending" && (
+                      <>
+                        <Button
+                          variant="outline"
+                          disabled={proposerUpdating}
+                          onClick={() => handleProposerStatus("rejected")}
+                        >
+                          <X className="mr-2 h-4 w-4" />
+                          Reject
+                        </Button>
+                        <Button
+                          disabled={proposerUpdating}
+                          onClick={() => handleProposerStatus("approved")}
+                        >
+                          <Check className="mr-2 h-4 w-4" />
+                          Approve
+                        </Button>
+                      </>
+                    )}
+                    <Button
+                      variant="secondary"
+                      disabled={proposerUpdating}
+                      onClick={handleProposerSave}
+                    >
+                      {proposerUpdating ? "Saving..." : "Save Changes"}
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </DialogContent>
+          </Dialog>
+
+          <Card>
+            <CardHeader className="pb-4">
+              <CardTitle className="flex items-center gap-2 text-xl">
+                <Users className="h-5 w-5" />
+                Manage Proposers
+              </CardTitle>
+              <CardDescription>Approve proposer requests and set proposer budgets</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {proposers.length === 0 ? (
+                <div className="text-center py-8">
+                  <Users className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+                  <h3 className="text-lg font-medium">No Proposer Requests</h3>
+                  <p className="text-muted-foreground">Proposer requests will appear here.</p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {proposers.map((proposer) => (
+                    <Card
+                      key={proposer.user_id}
+                      className="cursor-pointer hover:shadow-md transition-shadow"
+                      onClick={() => openProposerModal(proposer)}
+                    >
+                      <CardContent className="p-4 flex items-center justify-between gap-4">
+                        <div>
+                          <p className="font-medium text-black dark:text-white">
+                            {proposer.nickname || proposer.organization}
+                          </p>
+                          <p className="text-xs text-muted-foreground">{proposer.organization}</p>
+                        </div>
+                        {proposer.status === "pending" && <Badge variant="outline">Pending</Badge>}
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="improvers" className="space-y-6">
+          {improversError && (
+            <div className="flex items-center gap-2 text-red-600 text-sm p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
+              <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+              <span>{improversError}</span>
+            </div>
+          )}
+
+          <Card>
+            <CardHeader className="pb-4">
+              <CardTitle className="flex items-center gap-2 text-xl">
+                <Users className="h-5 w-5" />
+                Manage Improvers
+              </CardTitle>
+              <CardDescription>Approve or reject improver access requests</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {improvers.length === 0 ? (
+                <div className="text-center py-8">
+                  <Users className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+                  <h3 className="text-lg font-medium">No Improver Requests</h3>
+                  <p className="text-muted-foreground">Improver requests will appear here.</p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {improvers.map((improver) => (
+                    <Card key={improver.user_id}>
+                      <CardContent className="p-4">
+                        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                          <div>
+                            <p className="font-medium text-black dark:text-white">
+                              {improver.first_name} {improver.last_name}
+                            </p>
+                            <p className="text-sm text-muted-foreground">{improver.email}</p>
+                            <p className="text-xs text-muted-foreground break-all">User: {improver.user_id}</p>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <Badge variant={improver.status === "approved" ? "default" : improver.status === "rejected" ? "destructive" : "outline"}>
+                              {improver.status}
+                            </Badge>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => updateImproverStatus(improver.user_id, "rejected")}
+                            >
+                              <X className="h-4 w-4" />
+                              Reject
+                            </Button>
+                            <Button
+                              size="sm"
+                              onClick={() => updateImproverStatus(improver.user_id, "approved")}
+                            >
+                              <Check className="h-4 w-4" />
+                              Approve
+                            </Button>
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="issuers" className="space-y-6">
+          {issuersError && (
+            <div className="flex items-center gap-2 text-red-600 text-sm p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
+              <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+              <span>{issuersError}</span>
+            </div>
+          )}
+
+          <Card>
+            <CardHeader className="pb-4">
+              <CardTitle className="flex items-center gap-2 text-xl">
+                <Users className="h-5 w-5" />
+                Grant Issuer Credential Scope
+              </CardTitle>
+              <CardDescription>Assign which credentials an issuer can grant.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="issuer-user-id">Issuer User ID</Label>
+                <Input
+                  id="issuer-user-id"
+                  value={issuerUserId}
+                  onChange={(e) => setIssuerUserId(e.target.value)}
+                  placeholder="did:privy:..."
+                />
+              </div>
+
+              <label className="flex items-center gap-2 text-sm">
+                <Checkbox checked={issuerEnabled} onCheckedChange={(value) => setIssuerEnabled(Boolean(value))} />
+                <span>Enable issuer role</span>
+              </label>
+
+              <div className="space-y-2">
+                <Label>Allowed Credentials</Label>
+                <div className="flex flex-wrap gap-3">
+                  {issuerCredentialOptions.map((option) => {
+                    const checked = issuerScopes.includes(option.value)
+                    return (
+                      <label key={option.value} className="flex items-center gap-2 text-sm">
+                        <Checkbox
+                          checked={checked}
+                          onCheckedChange={(value) => toggleIssuerScope(option.value, Boolean(value))}
+                        />
+                        <span>{option.label}</span>
+                      </label>
+                    )
+                  })}
+                </div>
+              </div>
+
+              <div className="flex justify-end">
+                <Button onClick={saveIssuerScopes} disabled={issuerSaving}>
+                  {issuerSaving ? "Saving..." : "Save Issuer Scope"}
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="pb-4">
+              <CardTitle className="flex items-center gap-2 text-xl">
+                <Users className="h-5 w-5" />
+                Existing Issuers
+              </CardTitle>
+              <CardDescription>Click an issuer to load and edit their scope.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {issuers.length === 0 ? (
+                <div className="text-center py-8">
+                  <Users className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+                  <h3 className="text-lg font-medium">No Issuers Configured</h3>
+                  <p className="text-muted-foreground">Issuer assignments will appear here.</p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {issuers.map((issuer) => (
+                    <Card
+                      key={issuer.user_id}
+                      className="cursor-pointer hover:shadow-md transition-shadow"
+                      onClick={() => loadIssuerEditor(issuer)}
+                    >
+                      <CardContent className="p-4 space-y-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="font-medium break-all">{issuer.user_id}</p>
+                          <Badge variant={issuer.is_issuer ? "default" : "outline"}>
+                            {issuer.is_issuer ? "issuer" : "scope only"}
+                          </Badge>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          {(issuer.allowed_credentials || []).length === 0 ? (
+                            <span className="text-xs text-muted-foreground">No credential scopes</span>
+                          ) : (
+                            issuer.allowed_credentials.map((credential) => (
+                              <Badge key={credential} variant="secondary">
+                                {credential}
+                              </Badge>
+                            ))
+                          )}
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
         <TabsContent value="events" className="space-y-6">
           {eventsError != "" && (
             <div className="flex items-center gap-2 text-red-600 text-sm p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
@@ -1995,6 +2546,8 @@ export default function AdminPage() {
             </CardContent>
           </Card>
         </TabsContent>
+          </div>
+        </div>
       </Tabs>
 
       {/* Location Review Modal */}
