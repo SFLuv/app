@@ -83,10 +83,15 @@ func main() {
 	if err := redeemer.SyncApprovedMerchants(ctx); err != nil {
 		appLogger.Logf("error syncing redeemer roles on startup: %s", err)
 	}
+	minter := handlers.NewMinterService(appDb, appLogger)
+	if err := minter.SyncWalletMinterStatuses(ctx); err != nil {
+		appLogger.Logf("error syncing minter roles on startup: %s", err)
+	}
 
 	s := handlers.NewBotService(botDb, appDb, bot, w9, affiliateScheduler)
 	a := handlers.NewAppService(appDb, appLogger, w9)
 	a.SetRedeemerService(redeemer)
+	a.SetMinterService(minter)
 	p := handlers.NewPonderService(ponderDb, appLogger)
 
 	r := router.New(s, a, p)

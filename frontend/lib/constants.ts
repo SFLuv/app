@@ -9,6 +9,10 @@ export const SFLUV_TOKEN = config.community.primary_token.address as Address
 export const HONEY_TOKEN = process.env.NEXT_PUBLIC_HONEY_ADDRESS as Address
 export const BYUSD_TOKEN = process.env.NEXT_PUBLIC_BYUSD_ADDRESS as Address
 export const ZAPPER_CONTRACT_ADDRESS = process.env.NEXT_PUBLIC_ZAPPER_ADDRESS as Address
+export const BACKING_ASSETS = (process.env.NEXT_PUBLIC_BACKING_ASSETS || "")
+  .split(",")
+  .map((asset) => asset.trim())
+  .filter((asset) => asset.length > 0) as Address[]
 export const FAUCET_ADDRESS = process.env.NEXT_PUBLIC_FAUCET_ADDRESS as Address
 export const PRIVY_ID = process.env.NEXT_PUBLIC_PRIVY_APP_ID as string
 export const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8080"
@@ -21,7 +25,13 @@ export const PAYMASTER = COMMUNITY_ACCOUNT.paymaster_address as Address
 export const PAYMASTER_TYPE = COMMUNITY_ACCOUNT.paymaster_type
 export const FACTORY = COMMUNITY_ACCOUNT.account_factory_address as Address
 export const SFLUV_DECIMALS = (config.tokens as any)[COMMUNITY_TOKEN_INDEX].decimals as number
-export const BYUSD_DECIMALS = Number(process.env.NEXT_PUBLIC_BYUSD_DECIMALS)
+const parseDecimals = (value: string | undefined, fallback: number): number => {
+  if (!value) return fallback
+  const parsed = Number(value.trim())
+  return Number.isFinite(parsed) ? parsed : fallback
+}
+export const BYUSD_DECIMALS = parseDecimals(process.env.NEXT_PUBLIC_BYUSD_DECIMALS, 6)
+export const HONEY_DECIMALS = parseDecimals(process.env.NEXT_PUBLIC_HONEY_DECIMALS, SFLUV_DECIMALS)
 export const SYMBOL = (config.tokens as any)[COMMUNITY_TOKEN_INDEX].symbol as string
 export const CW_APP_BASE_URL = process.env.NEXT_PUBLIC_CW_BASE_URL || "https://app.citizenwallet.xyz"
 export const GOOGLE_MAPS_API_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY as string
