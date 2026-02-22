@@ -15,6 +15,8 @@ import { Card, CardContent } from "@/components/ui/card"
 import { CheckCircle } from "lucide-react"
 import type { AppWallet } from "@/lib/wallets/wallets"
 import { useApp } from "@/context/AppProvider"
+import { parseUnits } from "viem"
+import { SFLUV_DECIMALS } from "@/lib/constants"
 
 interface CashoutCryptoModalProps {
   open: boolean
@@ -37,7 +39,8 @@ export function CashOutCryptoModal({
   const [payPalInputAddress, setPayPalInputAddress] = useState<string>("")
   const [payPalInputError, setPayPalInputError] = useState<string | null>(null)
   const [isSavingPayPalAddress, setIsSavingPayPalAddress] = useState(false)
-  const { user, updatePayPalAddress } = useApp()
+  const [postSuccessWarning, setPostSuccessWarning] = useState<string | null>(null)
+  const { user, updatePayPalAddress, authFetch } = useApp()
 
   useEffect(() => {
     if(!open) return
@@ -51,6 +54,7 @@ export function CashOutCryptoModal({
     setTxHash(null)
     setCashOutValue("0.00")
     setIsProcessing(false)
+    setPostSuccessWarning(null)
   }, [open, user, wallet])
 
   const walletBalanceChange = async () => {
@@ -127,6 +131,62 @@ export function CashOutCryptoModal({
 
   /* ---------------- UNWRAP ---------------- */
 
+  const checkUnwrapEligibility = async (amountWei: string): Promise<string | null> => {
+    if (!wallet.address) {
+      return "Unable to verify wallet address for unwrap."
+    }
+
+    try {
+      const res = await authFetch("/unwrap/eligibility", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          wallet_address: wallet.address,
+          amount_wei: amountWei,
+        }),
+      })
+
+      const data = await res.json().catch(() => null) as { reason?: string } | null
+      if (res.ok) {
+        return null
+      }
+      if (data?.reason) {
+        return data.reason
+      }
+      if (res.status === 403) {
+        return "This unwrap is not allowed by monthly limits."
+      }
+      return "Unable to verify unwrap eligibility right now."
+    } catch {
+      return "Unable to verify unwrap eligibility right now."
+    }
+  }
+
+  const recordSuccessfulUnwrap = async (txHash: string): Promise<string | null> => {
+    if (!wallet.address) {
+      return "Transaction succeeded but wallet tracking failed."
+    }
+
+    try {
+      const res = await authFetch("/unwrap/record", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          wallet_address: wallet.address,
+          tx_hash: txHash,
+        }),
+      })
+
+      if (res.ok) {
+        return null
+      }
+
+      return "Transaction succeeded, but monthly unwrap tracking failed. Please contact support."
+    } catch {
+      return "Transaction succeeded, but monthly unwrap tracking failed. Please contact support."
+    }
+  }
+
   const handleCashOut = async () => {
     const amount = Number(cashOutValue)
     if (!Number.isFinite(amount) || amount <= 0) return
@@ -138,10 +198,25 @@ export function CashOutCryptoModal({
     setCashOutError(null)
     setIsProcessing(true)
     setTxHash(null)
+    setPostSuccessWarning(null)
 
     try {
       if (!user) {
         throw new Error("user not found")
+      }
+
+      let amountWei: bigint
+      try {
+        amountWei = parseUnits(cashOutValue, SFLUV_DECIMALS)
+      } catch {
+        setCashOutError("Invalid cash out amount.")
+        return
+      }
+
+      const eligibilityError = await checkUnwrapEligibility(amountWei.toString())
+      if (eligibilityError) {
+        setCashOutError(eligibilityError)
+        return
       }
 
       const tx = await wallet.unwrapAndBridge(cashOutValue, payPalEthAddress)
@@ -158,6 +233,10 @@ export function CashOutCryptoModal({
       setCashOutValue("0.00")
       setTxHash(tx.hash)
       setConfirmed(true)
+      const recordError = await recordSuccessfulUnwrap(tx.hash)
+      if (recordError) {
+        setPostSuccessWarning(recordError)
+      }
       await walletBalanceChange()
     } catch {
       setCashOutError("Unwrap failed. Please try again.")
@@ -177,6 +256,7 @@ export function CashOutCryptoModal({
           setTxHash(null)
           setPayPalInputError(null)
           setIsProcessing(false)
+          setPostSuccessWarning(null)
         }
         onOpenChange(open)
       }}
@@ -275,6 +355,11 @@ export function CashOutCryptoModal({
             {txHash && (
               <p className="text-xs break-all font-mono text-muted-foreground">
                 {txHash}
+              </p>
+            )}
+            {postSuccessWarning && (
+              <p className="text-xs text-amber-700 break-words [overflow-wrap:anywhere]">
+                {postSuccessWarning}
               </p>
             )}
           </div>

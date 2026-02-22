@@ -2,11 +2,11 @@ import { ConnectedWallet, EIP1193Provider } from "@privy-io/react-auth";
 import { BrowserProvider, JsonRpcSigner, Signer } from "ethers";
 import { toSimpleSmartAccount, ToSimpleSmartAccountReturnType } from "permissionless/accounts";
 import { Address, createPublicClient, createWalletClient, custom, encodeFunctionData, Hex, hexToBytes, parseUnits, PublicClient } from "viem";
-import { CHAIN, BYUSD_DECIMALS, SFLUV_DECIMALS, FACTORY, SFLUV_TOKEN, BYUSD_TOKEN, ZAPPER_CONTRACT_ADDRESS } from "../constants";
+import { CHAIN, BYUSD_DECIMALS, HONEY_DECIMALS, SFLUV_DECIMALS, FACTORY, SFLUV_TOKEN, BYUSD_TOKEN, HONEY_TOKEN, ZAPPER_CONTRACT_ADDRESS } from "../constants";
 import { entryPoint07Address } from "viem/account-abstraction";
 import { Hash } from "viem";
 import { cw_bundler } from "../paymaster/client";
-import { allowance, approve, balanceOf, depositFor, hasRole, redeemerRole, transfer, unwrapSwapAndBridge } from "../abi";
+import { allowance, approve, balanceOf, depositFor, hasRole, minterRole, redeemerRole, transfer, unwrapSwapAndBridge, zapIn } from "../abi";
 
 export type WalletType = "smartwallet" | "eoa"
 
@@ -20,8 +20,10 @@ interface AppWalletOptions {
   index?: bigint
   id?: number
   isRedeemer?: boolean
+  isMinter?: boolean
 }
 
+const MAX_UINT256 = (1n << 256n) - 1n
 
 
 export class AppWallet {
@@ -32,6 +34,7 @@ export class AppWallet {
   name: string;
   id?: number;
   isRedeemer: boolean;
+  isMinter: boolean;
   type: WalletType;
   address?: Address;
   wallet?: ConnectedWallet | ToSimpleSmartAccountReturnType<"0.7">;
@@ -51,6 +54,7 @@ export class AppWallet {
     this.index = options?.index
     this.id = options?.id
     this.isRedeemer = options?.isRedeemer === true
+    this.isMinter = options?.isMinter === true
     this.name = name
     this.type = options?.index !== undefined ? "smartwallet" : "eoa"
     this.initialized = false
@@ -176,12 +180,12 @@ export class AppWallet {
     return receipt
   }
 
-  private _getAllowance = async (owner: Address, spender: Address): Promise<bigint | null> => {
+  private _getAllowance = async (owner: Address, spender: Address, token: Address = SFLUV_TOKEN): Promise<bigint | null> => {
     if (!this.publicClient) return null
 
     try {
       return await this.publicClient.readContract({
-        address: SFLUV_TOKEN,
+        address: token,
         abi: [allowance],
         functionName: "allowance",
         args: [owner, spender]
@@ -193,13 +197,13 @@ export class AppWallet {
     }
   }
 
-  private _waitForAllowance = async (owner: Address, spender: Address, minAllowance: bigint): Promise<boolean> => {
+  private _waitForAllowance = async (owner: Address, spender: Address, minAllowance: bigint, token: Address = SFLUV_TOKEN): Promise<boolean> => {
     const timeoutMs = 90_000
     const intervalMs = 1_500
     const start = Date.now()
 
     while (Date.now() - start < timeoutMs) {
-      const currentAllowance = await this._getAllowance(owner, spender)
+      const currentAllowance = await this._getAllowance(owner, spender, token)
       if (currentAllowance !== null && currentAllowance >= minAllowance) {
         return true
       }
@@ -209,13 +213,13 @@ export class AppWallet {
     return false
   }
 
-  private _waitForAllowanceEquals = async (owner: Address, spender: Address, expectedAllowance: bigint): Promise<boolean> => {
+  private _waitForAllowanceEquals = async (owner: Address, spender: Address, expectedAllowance: bigint, token: Address = SFLUV_TOKEN): Promise<boolean> => {
     const timeoutMs = 90_000
     const intervalMs = 1_500
     const start = Date.now()
 
     while (Date.now() - start < timeoutMs) {
-      const currentAllowance = await this._getAllowance(owner, spender)
+      const currentAllowance = await this._getAllowance(owner, spender, token)
       if (currentAllowance !== null && currentAllowance === expectedAllowance) {
         return true
       }
@@ -359,6 +363,141 @@ export class AppWallet {
     }
   }
 
+  private _hasMinterRole = async (account: Address): Promise<boolean | null> => {
+    if (!this.publicClient) return null
+
+    try {
+      const role = await this.publicClient.readContract({
+        address: SFLUV_TOKEN,
+        abi: [minterRole],
+        functionName: "MINTER_ROLE"
+      }) as Hash
+
+      const walletHasRole = await this.publicClient.readContract({
+        address: SFLUV_TOKEN,
+        abi: [hasRole],
+        functionName: "hasRole",
+        args: [role, account]
+      }) as boolean
+
+      return walletHasRole
+    }
+    catch (error) {
+      console.error("error verifying MINTER_ROLE", error)
+      return null
+    }
+  }
+
+  private _submitContractCall = async (contract: Address, callData: Hash, value: bigint = 0n): Promise<TxState> => {
+    const receipt: TxState = {
+      sending: false,
+      error: null,
+      hash: null
+    }
+
+    if (!this.initialized || !this.address) {
+      receipt.error = "wallet not initialized"
+      return receipt
+    }
+
+    try {
+      if (this.type === "smartwallet") {
+        const t = this._beforeTx()
+        if (!t) {
+          receipt.error = "smart wallet not ready"
+          return receipt
+        }
+        const hash = await this._withTimeout(
+          cw_bundler.call(
+            t.signer,
+            contract,
+            t.wallet.address,
+            hexToBytes(callData),
+            value,
+            undefined,
+            undefined,
+            { smartAccountIndex: this.index ? Number(this.index) : undefined }
+          ),
+          60_000,
+          "Transaction submission"
+        )
+        receipt.hash = hash
+        return receipt
+      }
+
+      if (!this.ethersSigner) {
+        receipt.error = "eoa signer not ready"
+        return receipt
+      }
+      const tx = await this._withTimeout(
+        this.ethersSigner.sendTransaction({
+          to: contract,
+          data: callData,
+          value
+        }),
+        60_000,
+        "Transaction submission"
+      )
+      receipt.hash = tx.hash
+      return receipt
+    }
+    catch (error) {
+      const message = error instanceof Error ? error.message : "unknown error"
+      receipt.error = `error sending transaction: ${message}`
+      console.error(error)
+      return receipt
+    }
+  }
+
+  private _setTokenAllowance = async (token: Address, spender: Address, value: bigint): Promise<TxState> => {
+    const callData = encodeFunctionData({
+      abi: [approve],
+      functionName: "approve",
+      args: [spender, value]
+    })
+
+    return this._submitContractCall(token, callData)
+  }
+
+  private _clearTokenAllowance = async (token: Address, owner: Address, spender: Address): Promise<string | null> => {
+    const clearReceipt = await this._setTokenAllowance(token, spender, 0n)
+    if (clearReceipt.error || !clearReceipt.hash) {
+      return "failed to submit allowance reset transaction"
+    }
+
+    const allowanceCleared = await this._waitForAllowanceEquals(owner, spender, 0n, token)
+    if (!allowanceCleared) {
+      return "allowance reset is still pending"
+    }
+
+    return null
+  }
+
+  private _simulateZapIn = async (from: Address, amount: bigint): Promise<string | null> => {
+    if (!this.publicClient) {
+      return "Unable to simulate mint transaction."
+    }
+
+    const data = encodeFunctionData({
+      abi: [zapIn],
+      functionName: "zapIn",
+      args: [amount]
+    })
+
+    try {
+      await this.publicClient.call({
+        account: from,
+        to: ZAPPER_CONTRACT_ADDRESS,
+        data
+      })
+      return null
+    }
+    catch (error) {
+      console.error("mint preflight failed", error)
+      return "Mint preflight reverted."
+    }
+  }
+
   private _setZapperAllowance = async (account: ToSimpleSmartAccountReturnType<"0.7">, signer: Signer, value: bigint): Promise<TxState> => {
     const approveCallData = encodeFunctionData({
       abi: [approve],
@@ -395,6 +534,15 @@ export class AppWallet {
     return hasRole === true
   }
 
+  hasMinterRole = async (): Promise<boolean> => {
+    if (!this.address) {
+      return false
+    }
+
+    const hasRole = await this._hasMinterRole(this.address)
+    return hasRole === true
+  }
+
   setId = (id: number) => {
     this.id = id
   }
@@ -410,6 +558,258 @@ export class AppWallet {
     })
 
     return this._execTx(t.wallet, t.signer, callData)
+  }
+
+  mintSFLUVFromBYUSD = async (amount: string): Promise<TxState | null> => {
+    if (!this.address) {
+      return {
+        sending: false,
+        error: "Wallet address is not available",
+        hash: null
+      }
+    }
+
+    let sendAmount: bigint
+    try {
+      sendAmount = parseUnits(amount, BYUSD_DECIMALS)
+    }
+    catch {
+      return {
+        sending: false,
+        error: "Invalid mint amount",
+        hash: null
+      }
+    }
+    if (sendAmount <= 0n) {
+      return {
+        sending: false,
+        error: "Mint amount must be greater than zero",
+        hash: null
+      }
+    }
+
+    const walletHasMinterRole = await this._hasMinterRole(this.address)
+    if (walletHasMinterRole === null) {
+      return {
+        sending: false,
+        error: "Unable to verify MINTER_ROLE on SFLUV contract",
+        hash: null
+      }
+    }
+    if (!walletHasMinterRole) {
+      return {
+        sending: false,
+        error: "Wallet is missing MINTER_ROLE and cannot mint",
+        hash: null
+      }
+    }
+
+    const currentBalance = await this.getBalance(BYUSD_TOKEN)
+    if (currentBalance === null) {
+      return {
+        sending: false,
+        error: "Unable to read BYUSD balance",
+        hash: null
+      }
+    }
+    if (currentBalance < sendAmount) {
+      return {
+        sending: false,
+        error: "Insufficient BYUSD balance for mint",
+        hash: null
+      }
+    }
+
+    const currentAllowance = await this._getAllowance(this.address, ZAPPER_CONTRACT_ADDRESS, BYUSD_TOKEN)
+    if (currentAllowance === null) {
+      return {
+        sending: false,
+        error: "Unable to verify BYUSD approval status",
+        hash: null
+      }
+    }
+
+    if (currentAllowance > 0n) {
+      const clearError = await this._clearTokenAllowance(BYUSD_TOKEN, this.address, ZAPPER_CONTRACT_ADDRESS)
+      if (clearError) {
+        return {
+          sending: false,
+          error: `Unable to clear previous approval: ${clearError}`,
+          hash: null
+        }
+      }
+    }
+
+    const approveReceipt = await this._setTokenAllowance(BYUSD_TOKEN, ZAPPER_CONTRACT_ADDRESS, MAX_UINT256)
+    if (approveReceipt.error || !approveReceipt.hash) {
+      return {
+        sending: false,
+        error: approveReceipt.error ?? "error approving BYUSD spend: check logs",
+        hash: approveReceipt.hash
+      }
+    }
+
+    const allowanceUpdated = await this._waitForAllowance(this.address, ZAPPER_CONTRACT_ADDRESS, MAX_UINT256, BYUSD_TOKEN)
+    if (!allowanceUpdated) {
+      return {
+        sending: false,
+        error: "Approval sent, but confirmation is still pending. Please retry in a moment.",
+        hash: approveReceipt.hash
+      }
+    }
+
+    const preflightError = await this._simulateZapIn(this.address, sendAmount)
+    if (preflightError) {
+      const cleanupError = await this._clearTokenAllowance(BYUSD_TOKEN, this.address, ZAPPER_CONTRACT_ADDRESS)
+      return {
+        sending: false,
+        error: cleanupError
+          ? `${preflightError} Also unable to reset approval: ${cleanupError}`
+          : preflightError,
+        hash: null
+      }
+    }
+
+    const mintCallData = encodeFunctionData({
+      abi: [zapIn],
+      functionName: "zapIn",
+      args: [sendAmount]
+    })
+
+    const mintReceipt = await this._submitContractCall(ZAPPER_CONTRACT_ADDRESS, mintCallData)
+    if (mintReceipt.error || !mintReceipt.hash) {
+      const cleanupError = await this._clearTokenAllowance(BYUSD_TOKEN, this.address, ZAPPER_CONTRACT_ADDRESS)
+      if (cleanupError) {
+        mintReceipt.error = `${mintReceipt.error ?? "mint failed"}. Also unable to reset approval: ${cleanupError}`
+      }
+      return mintReceipt
+    }
+
+    const cleanupError = await this._clearTokenAllowance(BYUSD_TOKEN, this.address, ZAPPER_CONTRACT_ADDRESS)
+    if (cleanupError) {
+      mintReceipt.error = `Mint submitted, but failed to clear leftover approval: ${cleanupError}`
+    }
+
+    return mintReceipt
+  }
+
+  mintSFLUVFromHONEY = async (amount: string): Promise<TxState | null> => {
+    if (!this.address) {
+      return {
+        sending: false,
+        error: "Wallet address is not available",
+        hash: null
+      }
+    }
+
+    let sendAmount: bigint
+    try {
+      sendAmount = parseUnits(amount, HONEY_DECIMALS)
+    }
+    catch {
+      return {
+        sending: false,
+        error: "Invalid mint amount",
+        hash: null
+      }
+    }
+    if (sendAmount <= 0n) {
+      return {
+        sending: false,
+        error: "Mint amount must be greater than zero",
+        hash: null
+      }
+    }
+
+    const walletHasMinterRole = await this._hasMinterRole(this.address)
+    if (walletHasMinterRole === null) {
+      return {
+        sending: false,
+        error: "Unable to verify MINTER_ROLE on SFLUV contract",
+        hash: null
+      }
+    }
+    if (!walletHasMinterRole) {
+      return {
+        sending: false,
+        error: "Wallet is missing MINTER_ROLE and cannot mint",
+        hash: null
+      }
+    }
+
+    const currentBalance = await this.getBalance(HONEY_TOKEN)
+    if (currentBalance === null) {
+      return {
+        sending: false,
+        error: "Unable to read Honey balance",
+        hash: null
+      }
+    }
+    if (currentBalance < sendAmount) {
+      return {
+        sending: false,
+        error: "Insufficient Honey balance for mint",
+        hash: null
+      }
+    }
+
+    const currentAllowance = await this._getAllowance(this.address, SFLUV_TOKEN, HONEY_TOKEN)
+    if (currentAllowance === null) {
+      return {
+        sending: false,
+        error: "Unable to verify Honey approval status",
+        hash: null
+      }
+    }
+    if (currentAllowance > 0n) {
+      const clearError = await this._clearTokenAllowance(HONEY_TOKEN, this.address, SFLUV_TOKEN)
+      if (clearError) {
+        return {
+          sending: false,
+          error: `Unable to clear previous approval: ${clearError}`,
+          hash: null
+        }
+      }
+    }
+
+    const approveReceipt = await this._setTokenAllowance(HONEY_TOKEN, SFLUV_TOKEN, MAX_UINT256)
+    if (approveReceipt.error || !approveReceipt.hash) {
+      return {
+        sending: false,
+        error: approveReceipt.error ?? "error approving Honey spend: check logs",
+        hash: approveReceipt.hash
+      }
+    }
+
+    const allowanceUpdated = await this._waitForAllowance(this.address, SFLUV_TOKEN, MAX_UINT256, HONEY_TOKEN)
+    if (!allowanceUpdated) {
+      return {
+        sending: false,
+        error: "Approval sent, but confirmation is still pending. Please retry in a moment.",
+        hash: approveReceipt.hash
+      }
+    }
+
+    const mintCallData = encodeFunctionData({
+      abi: [depositFor],
+      functionName: "depositFor",
+      args: [this.address, sendAmount]
+    })
+    const mintReceipt = await this._submitContractCall(SFLUV_TOKEN, mintCallData)
+    if (mintReceipt.error || !mintReceipt.hash) {
+      const cleanupError = await this._clearTokenAllowance(HONEY_TOKEN, this.address, SFLUV_TOKEN)
+      if (cleanupError) {
+        mintReceipt.error = `${mintReceipt.error ?? "mint failed"}. Also unable to reset approval: ${cleanupError}`
+      }
+      return mintReceipt
+    }
+
+    const cleanupError = await this._clearTokenAllowance(HONEY_TOKEN, this.address, SFLUV_TOKEN)
+    if (cleanupError) {
+      mintReceipt.error = `Mint submitted, but failed to clear leftover approval: ${cleanupError}`
+    }
+
+    return mintReceipt
   }
 
   bridge = async (amount: number, paypalEthAddress : string): Promise<TxState | null>  => {
@@ -709,16 +1109,19 @@ export class AppWallet {
     if(!this.publicClient) return null
     if(!this.address) return null
 
-
-    const statement = {
-      address: token,
-      abi: [balanceOf],
-      functionName: "balanceOf",
-      args: [this.address],
+    try {
+      const statement = {
+        address: token,
+        abi: [balanceOf],
+        functionName: "balanceOf",
+        args: [this.address],
+      }
+      const balance = await this.publicClient.readContract(statement) as bigint
+      return balance
+    } catch (error) {
+      console.error("error reading token balance", error)
+      return null
     }
-    const balance = await this.publicClient.readContract(statement) as bigint
-
-    return balance
   }
 
   getBalanceOf = async (token: Address, address: Address): Promise<bigint | null> => {
@@ -727,16 +1130,19 @@ export class AppWallet {
     if(!this.publicClient) return null
     if(!this.address) return null
 
-
-    const statement = {
-      address: token,
-      abi: [balanceOf],
-      functionName: "balanceOf",
-      args: [address],
+    try {
+      const statement = {
+        address: token,
+        abi: [balanceOf],
+        functionName: "balanceOf",
+        args: [address],
+      }
+      const balance = await this.publicClient.readContract(statement) as bigint
+      return balance
+    } catch (error) {
+      console.error("error reading token balance", error)
+      return null
     }
-    const balance = await this.publicClient.readContract(statement) as bigint
-
-    return balance
   }
 
   getSFLUVBalanceFormatted = async (): Promise<number | null> => {
@@ -753,7 +1159,18 @@ export class AppWallet {
     const b = await this.getBalance(BYUSD_TOKEN)
     if(b === null) return null
 
-    const d = BigInt(10 ** BYUSD_DECIMALS)
+    const d = 10n ** BigInt(BYUSD_DECIMALS)
+    const q = Number(b * 100n / (d)) / 100
+
+    return q
+  }
+
+  getHoneyBalanceFormatted = async (): Promise<number | null> => {
+    if (!HONEY_TOKEN || HONEY_TOKEN.length !== 42) return null
+    const b = await this.getBalance(HONEY_TOKEN)
+    if(b === null) return null
+
+    const d = 10n ** BigInt(HONEY_DECIMALS)
     const q = Number(b * 100n / (d)) / 100
 
     return q

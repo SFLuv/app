@@ -30,9 +30,11 @@ export interface WalletResponse {
   name: string
   is_eoa: boolean
   is_redeemer: boolean
+  is_minter: boolean
   eoa_address: string
   smart_address?: string
   smart_index?: number
+  last_unwrap_at?: string
 }
 
 export interface GetUserResponse {
