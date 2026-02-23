@@ -177,8 +177,6 @@ export default function AdminPage() {
   const [proposerModalOpen, setProposerModalOpen] = useState<boolean>(false)
   const [selectedProposer, setSelectedProposer] = useState<Proposer | null>(null)
   const [proposerNickname, setProposerNickname] = useState<string>("")
-  const [proposerWeeklyBalance, setProposerWeeklyBalance] = useState<string>("")
-  const [proposerBonus, setProposerBonus] = useState<string>("")
   const [proposerUpdating, setProposerUpdating] = useState<boolean>(false)
   const [proposerModalError, setProposerModalError] = useState<string>("")
 
@@ -443,8 +441,6 @@ export default function AdminPage() {
   const openProposerModal = (proposer: Proposer) => {
     setSelectedProposer(proposer)
     setProposerNickname(proposer.nickname || "")
-    setProposerWeeklyBalance(String(proposer.weekly_allocation ?? proposer.weekly_balance ?? 0))
-    setProposerBonus(String(proposer.one_time_balance ?? 0))
     setProposerModalError("")
     setProposerModalOpen(true)
   }
@@ -464,7 +460,6 @@ export default function AdminPage() {
         prev.map((proposer) => (proposer.user_id === updated.user_id ? updated : proposer)),
       )
       setSelectedProposer(updated)
-      setProposerBonus(String(updated?.one_time_balance ?? 0))
     } catch {
       setProposerModalError("Unable to update proposer right now. Please try again.")
     } finally {
@@ -480,19 +475,6 @@ export default function AdminPage() {
       nickname: proposerNickname,
     }
 
-    const weekly = Number(proposerWeeklyBalance)
-    if (!Number.isNaN(weekly)) {
-      payload.weekly_balance = weekly
-    }
-
-    const bonusValue = proposerBonus.trim()
-    if (bonusValue !== "") {
-      const bonus = Number(bonusValue)
-      if (!Number.isNaN(bonus)) {
-        payload.one_time_balance = bonus
-      }
-    }
-
     await submitProposerUpdate(payload)
   }
 
@@ -503,19 +485,6 @@ export default function AdminPage() {
       user_id: selectedProposer.user_id,
       status,
       nickname: proposerNickname,
-    }
-
-    const weekly = Number(proposerWeeklyBalance)
-    if (!Number.isNaN(weekly)) {
-      payload.weekly_balance = weekly
-    }
-
-    const bonusValue = proposerBonus.trim()
-    if (bonusValue !== "") {
-      const bonus = Number(bonusValue)
-      if (!Number.isNaN(bonus)) {
-        payload.one_time_balance = bonus
-      }
     }
 
     await submitProposerUpdate(payload)
@@ -1953,26 +1922,8 @@ export default function AdminPage() {
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label>Weekly Allocation (SFLuv)</Label>
-                    <Input
-                      type="number"
-                      min="0"
-                      value={proposerWeeklyBalance}
-                      onChange={(e) => setProposerWeeklyBalance(e.target.value)}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>One-Time Balance (SFLuv)</Label>
-                    <Input
-                      type="number"
-                      min="0"
-                      value={proposerBonus}
-                      onChange={(e) => setProposerBonus(e.target.value)}
-                      placeholder="Set one-time balance"
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      Current one-time balance: {selectedProposer.one_time_balance}
-                    </p>
+                    <Label>Notification Email</Label>
+                    <Input value={selectedProposer.email} disabled />
                   </div>
 
                   {proposerModalError && (
@@ -2021,7 +1972,7 @@ export default function AdminPage() {
                 <Users className="h-5 w-5" />
                 Manage Proposers
               </CardTitle>
-              <CardDescription>Approve proposer requests and set proposer budgets</CardDescription>
+              <CardDescription>Approve proposer requests and manage proposer access.</CardDescription>
             </CardHeader>
             <CardContent>
               {proposers.length === 0 ? (
@@ -2044,6 +1995,7 @@ export default function AdminPage() {
                             {proposer.nickname || proposer.organization}
                           </p>
                           <p className="text-xs text-muted-foreground">{proposer.organization}</p>
+                          <p className="text-xs text-muted-foreground">{proposer.email}</p>
                         </div>
                         {proposer.status === "pending" && <Badge variant="outline">Pending</Badge>}
                       </CardContent>

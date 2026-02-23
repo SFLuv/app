@@ -11,11 +11,12 @@ import { Badge } from "@/components/ui/badge"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Checkbox } from "@/components/ui/checkbox"
 import { AlertTriangle, Check, Clock, Loader2, Plus, Trash2 } from "lucide-react"
-import { ProposerBalance } from "@/types/proposer"
 import {
+  ActiveWorkflowListItem,
   CredentialType,
   Workflow,
   WorkflowCreateRequest,
+  WorkflowDeletionTargetType,
   WorkflowDropdownOptionCreateInput,
   WorkflowRecurrence,
   WorkflowTemplate,
@@ -99,12 +100,13 @@ const toDatetimeLocalValue = (value: string) => {
 export default function ProposerPage() {
   const { user, status, authFetch } = useApp()
 
-  const [balance, setBalance] = useState<ProposerBalance | null>(null)
   const [workflows, setWorkflows] = useState<Workflow[]>([])
+  const [activeWorkflows, setActiveWorkflows] = useState<ActiveWorkflowListItem[]>([])
   const [templates, setTemplates] = useState<WorkflowTemplate[]>([])
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
   const [templateSaving, setTemplateSaving] = useState(false)
+  const [deletionSubmitting, setDeletionSubmitting] = useState("")
   const [error, setError] = useState("")
   const [selectedTemplateId, setSelectedTemplateId] = useState("")
   const [templateTitle, setTemplateTitle] = useState("")
@@ -119,6 +121,7 @@ export default function ProposerPage() {
   const [steps, setSteps] = useState<DraftStep[]>([createDraftStep()])
 
   const isApproved = Boolean(user?.isProposer || user?.isAdmin)
+  const canProposeDeletion = Boolean(user?.isProposer)
 
   const totalDraftBounty = useMemo(() => {
     return steps.reduce((sum, step) => sum + (Number(step.bounty) || 0), 0)
@@ -132,16 +135,11 @@ export default function ProposerPage() {
 
     setLoading(true)
     try {
-      const [balanceRes, workflowsRes, templatesRes] = await Promise.all([
-        authFetch("/proposers/balance"),
+      const [workflowsRes, templatesRes, activeWorkflowsRes] = await Promise.all([
         authFetch("/proposers/workflows"),
         authFetch("/proposers/workflow-templates"),
+        authFetch("/workflows/active"),
       ])
-
-      if (balanceRes.ok) {
-        const balanceJson = await balanceRes.json()
-        setBalance(balanceJson)
-      }
 
       if (workflowsRes.ok) {
         const workflowsJson = await workflowsRes.json()
@@ -151,6 +149,10 @@ export default function ProposerPage() {
       if (templatesRes.ok) {
         const templatesJson = await templatesRes.json()
         setTemplates(templatesJson || [])
+      }
+      if (activeWorkflowsRes.ok) {
+        const activeWorkflowsJson = await activeWorkflowsRes.json()
+        setActiveWorkflows(activeWorkflowsJson || [])
       }
 
       setError("")
@@ -576,6 +578,29 @@ export default function ProposerPage() {
     }
   }
 
+  const proposeDeletion = async (workflowId: string, targetType: WorkflowDeletionTargetType) => {
+    setError("")
+    setDeletionSubmitting(`${workflowId}:${targetType}`)
+    try {
+      const res = await authFetch("/proposers/workflow-deletion-proposals", {
+        method: "POST",
+        body: JSON.stringify({
+          workflow_id: workflowId,
+          target_type: targetType,
+        }),
+      })
+      if (!res.ok) {
+        const text = await res.text()
+        throw new Error(text || "Unable to create deletion proposal.")
+      }
+      await loadData()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to create deletion proposal.")
+    } finally {
+      setDeletionSubmitting("")
+    }
+  }
+
   if (status === "loading" || loading) {
     return (
       <div className="flex items-center justify-center min-h-[70vh]">
@@ -612,18 +637,6 @@ export default function ProposerPage() {
           <span>{error}</span>
         </div>
       )}
-
-      <Card>
-        <CardHeader className="pb-4">
-          <CardTitle className="text-xl">Budget</CardTitle>
-          <CardDescription>Allocate your proposer budget across workflow steps.</CardDescription>
-        </CardHeader>
-        <CardContent className="flex flex-wrap gap-2">
-          <Badge>{balance ? `${balance.available} available` : "--"} SFLuv</Badge>
-          <Badge variant="secondary">{balance ? `${balance.weekly_allocation} weekly allocation` : "--"}</Badge>
-          <Badge variant="outline">{balance ? `${balance.reserved} reserved` : "--"}</Badge>
-        </CardContent>
-      </Card>
 
       <Card>
         <CardHeader>
@@ -1035,7 +1048,7 @@ export default function ProposerPage() {
       <Card>
         <CardHeader>
           <CardTitle>Your Workflows</CardTitle>
-          <CardDescription>Track status, budget, and votes for your submitted workflows.</CardDescription>
+          <CardDescription>Track status and votes for your submitted workflows.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           {workflows.length === 0 ? (
@@ -1069,11 +1082,65 @@ export default function ProposerPage() {
                       </div>
                     </div>
 
-                    {(workflow.status === "pending" || workflow.status === "blocked" || workflow.status === "rejected") && (
+                    {(workflow.status === "pending" || workflow.status === "rejected" || workflow.status === "expired") && (
                       <Button variant="outline" onClick={() => deleteWorkflow(workflow.id)}>
                         <Trash2 className="h-4 w-4 mr-2" />
                         Delete
                       </Button>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            ))
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Active Workflows</CardTitle>
+          <CardDescription>
+            Browse active workflows. Deletion votes can only be proposed by approved proposers.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {activeWorkflows.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No active workflows available right now.</p>
+          ) : (
+            activeWorkflows.map((workflow) => (
+              <Card key={`active-${workflow.id}`}>
+                <CardContent className="pt-4 space-y-3">
+                  <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2">
+                        <h4 className="font-semibold">{workflow.title}</h4>
+                        <Badge>{workflow.status}</Badge>
+                      </div>
+                      <p className="text-sm text-muted-foreground">{workflow.description}</p>
+                      <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+                        <span>Workflow ID: {workflow.id}</span>
+                        <span>Series ID: {workflow.series_id}</span>
+                        <span>Start: {new Date(workflow.start_at).toLocaleString()}</span>
+                      </div>
+                    </div>
+
+                    {canProposeDeletion && (
+                      <div className="flex flex-wrap gap-2">
+                        <Button
+                          variant="outline"
+                          onClick={() => proposeDeletion(workflow.id, "workflow")}
+                          disabled={Boolean(deletionSubmitting)}
+                        >
+                          {deletionSubmitting === `${workflow.id}:workflow` ? "Submitting..." : "Propose Workflow Deletion"}
+                        </Button>
+                        <Button
+                          variant="outline"
+                          onClick={() => proposeDeletion(workflow.id, "series")}
+                          disabled={Boolean(deletionSubmitting)}
+                        >
+                          {deletionSubmitting === `${workflow.id}:series` ? "Submitting..." : "Propose Series Deletion"}
+                        </Button>
+                      </div>
                     )}
                   </div>
                 </CardContent>

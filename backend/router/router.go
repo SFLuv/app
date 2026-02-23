@@ -83,13 +83,13 @@ func AddWorkflowRoutes(r *chi.Mux, s *handlers.BotService, a *handlers.AppServic
 	r.Post("/proposers/request", withAuth(a.RequestProposerStatus))
 	r.Post("/improvers/request", withAuth(a.RequestImproverStatus))
 
-	r.Get("/proposers/balance", withProposer(a.GetProposerBalance, a))
 	r.Get("/proposers/workflow-templates", withProposer(a.GetProposerWorkflowTemplates, a))
 	r.Post("/proposers/workflow-templates", withProposer(a.CreateProposerWorkflowTemplate, a))
 	r.Post("/proposers/workflows", withProposer(a.CreateWorkflow, a))
 	r.Get("/proposers/workflows", withProposer(a.GetProposerWorkflows, a))
 	r.Get("/proposers/workflows/{workflow_id}", withProposer(a.GetProposerWorkflow, a))
 	r.Delete("/proposers/workflows/{workflow_id}", withProposer(a.DeleteProposerWorkflow, a))
+	r.Post("/proposers/workflow-deletion-proposals", withProposer(a.ProposeWorkflowDeletion, a))
 
 	r.Get("/improvers/workflows", withImprover(a.GetImproverWorkflows, a))
 	r.Post("/improvers/workflows/{workflow_id}/steps/{step_id}/claim", withImprover(a.ClaimWorkflowStep, a))
@@ -103,11 +103,14 @@ func AddWorkflowRoutes(r *chi.Mux, s *handlers.BotService, a *handlers.AppServic
 	r.Get("/admin/issuers", withAdmin(a.GetIssuers, a))
 	r.Put("/admin/issuers", withAdmin(a.UpdateIssuerScopes, a))
 	r.Post("/admin/workflow-templates/default", withAdmin(a.CreateDefaultWorkflowTemplate, a))
-	r.Post("/admin/workflows/{workflow_id}/force-approve", withAdmin(s.AdminForceApproveWorkflow, a))
+	r.Post("/admin/workflows/{workflow_id}/force-approve", withAdmin(a.AdminForceApproveWorkflow, a))
 
-	r.Get("/voters/workflows", withVoter(s.GetVoterWorkflows, a))
+	r.Get("/voters/workflows", withVoter(a.GetVoterWorkflows, a))
+	r.Get("/voters/workflow-deletion-proposals", withVoter(a.GetVoterWorkflowDeletionProposals, a))
+	r.Get("/workflows/active", withAuth(a.GetActiveWorkflows))
 	r.Get("/workflows/{workflow_id}", withAuth(a.GetWorkflow))
-	r.Post("/workflows/{workflow_id}/votes", withVoter(s.VoteWorkflow, a))
+	r.Post("/workflows/{workflow_id}/votes", withVoter(a.VoteWorkflow, a))
+	r.Post("/workflow-deletion-proposals/{proposal_id}/votes", withVoter(a.VoteWorkflowDeletionProposal, a))
 
 	r.Get("/issuers/scopes", withIssuer(a.GetMyIssuerScopes, a))
 	r.Post("/issuers/credentials", withIssuer(a.IssueCredential, a))

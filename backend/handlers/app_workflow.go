@@ -33,15 +33,19 @@ func (a *AppService) RequestProposerStatus(w http.ResponseWriter, r *http.Reques
 
 	var req structs.ProposerRequest
 	err = json.Unmarshal(body, &req)
-	if err != nil || strings.TrimSpace(req.Organization) == "" {
+	if err != nil || strings.TrimSpace(req.Organization) == "" || strings.TrimSpace(req.Email) == "" {
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
 
-	proposer, err := a.db.UpsertProposerRequest(r.Context(), *userDid, req.Organization)
+	proposer, err := a.db.UpsertProposerRequest(r.Context(), *userDid, req.Organization, req.Email)
 	if err != nil {
 		if err.Error() == "proposer already approved" {
 			w.WriteHeader(http.StatusConflict)
+			return
+		}
+		if strings.Contains(err.Error(), "required") {
+			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
 		a.logger.Logf("error upserting proposer request for user %s: %s", *userDid, err.Error())
@@ -63,7 +67,11 @@ func (a *AppService) RequestProposerStatus(w http.ResponseWriter, r *http.Reques
     <td style="padding:12px 0; font-size:13px; color:#6b7280;">Organization</td>
     <td style="padding:12px 0; font-size:13px; color:#111827;">%s</td>
   </tr>
-</table>`, proposer.UserId, proposer.Organization),
+  <tr>
+    <td style="padding:12px 0; font-size:13px; color:#6b7280;">Notification Email</td>
+    <td style="padding:12px 0; font-size:13px; color:#111827;">%s</td>
+  </tr>
+</table>`, proposer.UserId, proposer.Organization, proposer.Email),
 	)
 
 	w.WriteHeader(http.StatusCreated)
@@ -212,28 +220,6 @@ func (a *AppService) UpdateImprover(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(improver)
-}
-
-func (a *AppService) GetProposerBalance(w http.ResponseWriter, r *http.Request) {
-	userDid := utils.GetDid(r)
-	if userDid == nil {
-		w.WriteHeader(http.StatusForbidden)
-		return
-	}
-
-	balance, err := a.db.GetProposerBalance(r.Context(), *userDid)
-	if err != nil {
-		if err == pgx.ErrNoRows {
-			w.WriteHeader(http.StatusNotFound)
-			return
-		}
-		a.logger.Logf("error getting proposer balance for user %s: %s", *userDid, err)
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(balance)
 }
 
 func (a *AppService) GetProposerWorkflowTemplates(w http.ResponseWriter, r *http.Request) {
@@ -412,11 +398,6 @@ func (a *AppService) CreateWorkflow(w http.ResponseWriter, r *http.Request) {
 	workflow, err := a.db.CreateWorkflow(r.Context(), *userDid, &req, startAt)
 	if err != nil {
 		errMsg := err.Error()
-		if strings.Contains(errMsg, "insufficient proposer balance") {
-			w.WriteHeader(http.StatusBadRequest)
-			w.Write([]byte("insufficient proposer balance"))
-			return
-		}
 		if strings.Contains(errMsg, "not approved") {
 			w.WriteHeader(http.StatusForbidden)
 			return
@@ -825,6 +806,8 @@ func (a *AppService) GetVoterWorkflows(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	a.expireStaleWorkflowProposalsAndNotify(r.Context())
+
 	workflows, err := a.db.GetVoterWorkflows(r.Context(), *userDid)
 	if err != nil {
 		a.logger.Logf("error getting voter workflows for %s: %s", *userDid, err)
@@ -832,8 +815,342 @@ func (a *AppService) GetVoterWorkflows(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	for idx, workflow := range workflows {
+		if workflow.Status != "pending" {
+			continue
+		}
+
+		allowApproval, err := a.workflowApprovalAllowed(r.Context(), workflow)
+		if err != nil {
+			a.logger.Logf("error checking faucet allocation for workflow %s vote evaluation: %s", workflow.Id, err)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+
+		evaluatedWorkflow, err := a.db.EvaluateWorkflowVoteStateWithApproval(r.Context(), workflow.Id, allowApproval)
+		if err != nil {
+			a.logger.Logf("error evaluating workflow vote state %s for voter %s: %s", workflow.Id, *userDid, err)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		if workflow.Status == "pending" && evaluatedWorkflow.Status != "pending" {
+			a.sendWorkflowProposalOutcomeEmailByWorkflow(r.Context(), evaluatedWorkflow.Id)
+		}
+		votes, err := a.db.GetWorkflowVotesForUser(r.Context(), workflow.Id, *userDid)
+		if err == nil {
+			evaluatedWorkflow.Votes = *votes
+		}
+		workflows[idx] = evaluatedWorkflow
+	}
+
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(workflows)
+}
+
+func (a *AppService) VoteWorkflow(w http.ResponseWriter, r *http.Request) {
+	userDid := utils.GetDid(r)
+	if userDid == nil {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	workflowId := strings.TrimSpace(r.PathValue("workflow_id"))
+	if workflowId == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	var req structs.WorkflowVoteRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	req.Decision = strings.ToLower(strings.TrimSpace(req.Decision))
+	if req.Decision != "approve" && req.Decision != "deny" {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	a.expireStaleWorkflowProposalsAndNotify(r.Context())
+
+	workflow, err := a.db.GetWorkflowForApproval(r.Context(), workflowId)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		a.logger.Logf("error loading workflow %s for voting: %s", workflowId, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	if workflow.Status != "pending" {
+		w.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(w).Encode(workflow)
+		return
+	}
+
+	_, err = a.db.RecordWorkflowVote(r.Context(), workflowId, *userDid, req.Decision, req.Comment)
+	if err != nil {
+		a.logger.Logf("error recording workflow vote for workflow %s voter %s: %s", workflowId, *userDid, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	allowApproval, err := a.workflowApprovalAllowed(r.Context(), workflow)
+	if err != nil {
+		a.logger.Logf("error checking faucet allocation for workflow %s vote: %s", workflowId, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	updatedWorkflow, err := a.db.EvaluateWorkflowVoteStateWithApproval(r.Context(), workflowId, allowApproval)
+	if err != nil {
+		a.logger.Logf("error evaluating workflow vote state for workflow %s: %s", workflowId, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	votes, err := a.db.GetWorkflowVotesForUser(r.Context(), workflowId, *userDid)
+	if err == nil {
+		updatedWorkflow.Votes = *votes
+	}
+
+	if workflow.Status == "pending" && updatedWorkflow.Status != "pending" {
+		a.sendWorkflowProposalOutcomeEmailByWorkflow(r.Context(), updatedWorkflow.Id)
+	}
+
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(updatedWorkflow)
+}
+
+func (a *AppService) AdminForceApproveWorkflow(w http.ResponseWriter, r *http.Request) {
+	adminId := utils.GetDid(r)
+	if adminId == nil {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	workflowId := strings.TrimSpace(r.PathValue("workflow_id"))
+	if workflowId == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	a.expireStaleWorkflowProposalsAndNotify(r.Context())
+
+	workflow, err := a.db.GetWorkflowForApproval(r.Context(), workflowId)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		a.logger.Logf("error loading workflow %s for admin force approve: %s", workflowId, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	if workflow.Status != "pending" {
+		w.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(w).Encode(workflow)
+		return
+	}
+
+	allowApproval, err := a.workflowApprovalAllowed(r.Context(), workflow)
+	if err != nil {
+		a.logger.Logf("error checking faucet allocation for admin force approval on workflow %s: %s", workflowId, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	if !allowApproval {
+		w.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"error": "insufficient faucet balance to approve workflow",
+		})
+		return
+	}
+
+	if err := a.db.ForceApproveWorkflowAsAdmin(r.Context(), workflowId, *adminId); err != nil {
+		a.logger.Logf("error force approving workflow %s by admin %s: %s", workflowId, *adminId, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	updatedWorkflow, err := a.db.GetWorkflowByID(r.Context(), workflowId)
+	if err != nil {
+		a.logger.Logf("error loading workflow %s after admin force approve: %s", workflowId, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	a.sendWorkflowProposalOutcomeEmailByWorkflow(r.Context(), updatedWorkflow.Id)
+
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(updatedWorkflow)
+}
+
+func (a *AppService) GetActiveWorkflows(w http.ResponseWriter, r *http.Request) {
+	userDid := utils.GetDid(r)
+	if userDid == nil {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	canView := a.IsAdmin(r.Context(), *userDid) || a.IsProposer(r.Context(), *userDid) || a.IsImprover(r.Context(), *userDid) || a.IsVoter(r.Context(), *userDid)
+	if !canView {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	workflows, err := a.db.GetActiveWorkflows(r.Context())
+	if err != nil {
+		a.logger.Logf("error loading active workflows for user %s: %s", *userDid, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(workflows)
+}
+
+func (a *AppService) ProposeWorkflowDeletion(w http.ResponseWriter, r *http.Request) {
+	proposerId := utils.GetDid(r)
+	if proposerId == nil {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+	if !a.IsProposer(r.Context(), *proposerId) {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	defer r.Body.Close()
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		a.logger.Logf("error reading workflow deletion proposal body: %s", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	var req structs.WorkflowDeletionProposalCreateRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	proposal, err := a.db.CreateWorkflowDeletionProposal(r.Context(), *proposerId, &req)
+	if err != nil {
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "required") || strings.Contains(errMsg, "invalid") || strings.Contains(errMsg, "active") || strings.Contains(errMsg, "already exists") {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(errMsg))
+			return
+		}
+		if strings.Contains(errMsg, "not approved") {
+			w.WriteHeader(http.StatusForbidden)
+			w.Write([]byte(errMsg))
+			return
+		}
+		if strings.Contains(errMsg, "not found") {
+			w.WriteHeader(http.StatusNotFound)
+			w.Write([]byte(errMsg))
+			return
+		}
+		a.logger.Logf("error creating workflow deletion proposal for proposer %s: %s", *proposerId, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(proposal)
+}
+
+func (a *AppService) GetVoterWorkflowDeletionProposals(w http.ResponseWriter, r *http.Request) {
+	voterId := utils.GetDid(r)
+	if voterId == nil {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	proposals, err := a.db.GetWorkflowDeletionProposalsForVoter(r.Context(), *voterId)
+	if err != nil {
+		a.logger.Logf("error loading workflow deletion proposals for voter %s: %s", *voterId, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(proposals)
+}
+
+func (a *AppService) VoteWorkflowDeletionProposal(w http.ResponseWriter, r *http.Request) {
+	voterId := utils.GetDid(r)
+	if voterId == nil {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	proposalId := strings.TrimSpace(r.PathValue("proposal_id"))
+	if proposalId == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	defer r.Body.Close()
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		a.logger.Logf("error reading workflow deletion vote body: %s", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	var req structs.WorkflowDeletionProposalVoteRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	req.Decision = strings.ToLower(strings.TrimSpace(req.Decision))
+	if req.Decision != "approve" && req.Decision != "deny" {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	proposal, err := a.db.GetWorkflowDeletionProposalByIDForUser(r.Context(), proposalId, voterId)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		a.logger.Logf("error loading workflow deletion proposal %s for vote: %s", proposalId, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	if proposal.Status != "pending" {
+		w.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(w).Encode(proposal)
+		return
+	}
+
+	if _, err := a.db.RecordWorkflowDeletionVote(r.Context(), proposalId, *voterId, req.Decision, req.Comment); err != nil {
+		a.logger.Logf("error recording workflow deletion vote %s by %s: %s", proposalId, *voterId, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	updatedProposal, err := a.db.EvaluateWorkflowDeletionVoteState(r.Context(), proposalId)
+	if err != nil {
+		a.logger.Logf("error evaluating workflow deletion vote state %s: %s", proposalId, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	proposalWithVotes, err := a.db.GetWorkflowDeletionProposalByIDForUser(r.Context(), proposalId, voterId)
+	if err == nil {
+		updatedProposal.Votes = proposalWithVotes.Votes
+	}
+
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(updatedProposal)
 }
 
 func (a *AppService) GetIssuers(w http.ResponseWriter, r *http.Request) {
@@ -1035,6 +1352,136 @@ func (a *AppService) GetIssuerUserCredentials(w http.ResponseWriter, r *http.Req
 
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(credentials)
+}
+
+func (a *AppService) workflowApprovalAllowed(ctx context.Context, workflow *structs.Workflow) (bool, error) {
+	if workflow == nil {
+		return false, fmt.Errorf("workflow is required")
+	}
+	if a.bot == nil {
+		a.logger.Logf("workflow vote approval checks are disabled because bot service is not configured")
+		return false, nil
+	}
+
+	unallocatedTokens, err := a.bot.unallocatedBalanceTokens(ctx)
+	if err != nil {
+		return false, err
+	}
+	weeklyRequirement := new(big.Int).SetUint64(workflow.WeeklyBountyRequirement)
+	return unallocatedTokens.Cmp(weeklyRequirement) >= 0, nil
+}
+
+func (a *AppService) expireStaleWorkflowProposalsAndNotify(ctx context.Context) {
+	expiredNotices, err := a.db.ExpireStaleWorkflowProposals(ctx)
+	if err != nil {
+		a.logger.Logf("error expiring stale workflow proposals: %s", err)
+		return
+	}
+
+	for _, notice := range expiredNotices {
+		a.sendWorkflowProposalExpiredEmail(notice)
+	}
+}
+
+func (a *AppService) sendWorkflowProposalOutcomeEmailByWorkflow(ctx context.Context, workflowId string) {
+	notification, err := a.db.GetWorkflowProposalOutcomeNotification(ctx, workflowId)
+	if err != nil {
+		if strings.Contains(err.Error(), "not finalized") {
+			return
+		}
+		a.logger.Logf("error building workflow proposal outcome notification for %s: %s", workflowId, err)
+		return
+	}
+	a.sendWorkflowProposalOutcomeEmail(*notification)
+}
+
+func (a *AppService) sendWorkflowProposalOutcomeEmail(notification structs.WorkflowProposalOutcomeNotification) {
+	toEmail := strings.TrimSpace(notification.ProposerEmail)
+	if toEmail == "" {
+		return
+	}
+
+	emailSender := utils.NewEmailSender()
+	if emailSender == nil {
+		return
+	}
+
+	fromDomain := os.Getenv("MAILGUN_DOMAIN")
+	fromEmail := "no_reply@sfluv.org"
+	if fromDomain != "" {
+		fromEmail = "no_reply@" + fromDomain
+	}
+
+	outcomeLabel := "approved"
+	subtitle := "Your workflow proposal has been approved."
+	title := "Workflow Proposal Approved"
+	if notification.Decision == "rejected" {
+		outcomeLabel = "rejected"
+		subtitle = "Your workflow proposal has been rejected."
+		title = "Workflow Proposal Rejected"
+	}
+	htmlContent := utils.BuildStyledEmail(
+		title,
+		subtitle,
+		fmt.Sprintf(`
+<table role="presentation" width="100%%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
+  <tr>
+    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280; width:160px;">Workflow</td>
+    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827;">%s</td>
+  </tr>
+  <tr>
+    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280;">Workflow ID</td>
+    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827; word-break:break-all;">%s</td>
+  </tr>
+  <tr>
+    <td style="padding:12px 0; font-size:13px; color:#6b7280;">Outcome</td>
+    <td style="padding:12px 0; font-size:13px; color:#111827; font-weight:600;">%s</td>
+  </tr>
+</table>`, notification.WorkflowTitle, notification.WorkflowId, strings.ToUpper(outcomeLabel)),
+	)
+
+	if err := emailSender.SendEmail(toEmail, "Proposer", title, htmlContent, fromEmail, "SFLuv Workflows"); err != nil {
+		a.logger.Logf("error sending workflow proposal outcome email for %s: %s", notification.WorkflowId, err)
+	}
+}
+
+func (a *AppService) sendWorkflowProposalExpiredEmail(notification structs.WorkflowProposalExpiryNotice) {
+	toEmail := strings.TrimSpace(notification.ProposerEmail)
+	if toEmail == "" {
+		return
+	}
+
+	emailSender := utils.NewEmailSender()
+	if emailSender == nil {
+		return
+	}
+
+	fromDomain := os.Getenv("MAILGUN_DOMAIN")
+	fromEmail := "no_reply@sfluv.org"
+	if fromDomain != "" {
+		fromEmail = "no_reply@" + fromDomain
+	}
+
+	title := "Workflow Proposal Expired"
+	htmlContent := utils.BuildStyledEmail(
+		title,
+		"Your workflow proposal expired before reaching a voting decision.",
+		fmt.Sprintf(`
+<table role="presentation" width="100%%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
+  <tr>
+    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280; width:160px;">Workflow</td>
+    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827;">%s</td>
+  </tr>
+  <tr>
+    <td style="padding:12px 0; font-size:13px; color:#6b7280;">Workflow ID</td>
+    <td style="padding:12px 0; font-size:13px; color:#111827; word-break:break-all;">%s</td>
+  </tr>
+</table>`, notification.WorkflowTitle, notification.WorkflowId),
+	)
+
+	if err := emailSender.SendEmail(toEmail, "Proposer", title, htmlContent, fromEmail, "SFLuv Workflows"); err != nil {
+		a.logger.Logf("error sending workflow proposal expiry email for %s: %s", notification.WorkflowId, err)
+	}
 }
 
 func (a *AppService) sendRoleRequestEmail(envKey string, title string, subtitle string, details string) {

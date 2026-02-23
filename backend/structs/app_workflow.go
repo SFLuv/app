@@ -19,35 +19,24 @@ func IsValidCredentialType(value string) bool {
 }
 
 type Proposer struct {
-	UserId           string    `json:"user_id"`
-	Organization     string    `json:"organization"`
-	Nickname         *string   `json:"nickname"`
-	Status           string    `json:"status"`
-	WeeklyAllocation uint64    `json:"weekly_allocation"`
-	WeeklyBalance    uint64    `json:"weekly_balance"`
-	OneTimeBalance   uint64    `json:"one_time_balance"`
-	CreatedAt        time.Time `json:"created_at"`
-	UpdatedAt        time.Time `json:"updated_at"`
+	UserId       string    `json:"user_id"`
+	Organization string    `json:"organization"`
+	Email        string    `json:"email"`
+	Nickname     *string   `json:"nickname"`
+	Status       string    `json:"status"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 type ProposerRequest struct {
 	Organization string `json:"organization"`
+	Email        string `json:"email"`
 }
 
 type ProposerUpdateRequest struct {
-	UserId         string  `json:"user_id"`
-	Status         *string `json:"status,omitempty"`
-	Nickname       *string `json:"nickname,omitempty"`
-	WeeklyBalance  *uint64 `json:"weekly_balance,omitempty"`
-	OneTimeBalance *uint64 `json:"one_time_balance,omitempty"`
-}
-
-type ProposerBalance struct {
-	Available        uint64 `json:"available"`
-	WeeklyAllocation uint64 `json:"weekly_allocation"`
-	WeeklyBalance    uint64 `json:"weekly_balance"`
-	OneTimeBalance   uint64 `json:"one_time_balance"`
-	Reserved         uint64 `json:"reserved"`
+	UserId   string  `json:"user_id"`
+	Status   *string `json:"status,omitempty"`
+	Nickname *string `json:"nickname,omitempty"`
 }
 
 type Improver struct {
@@ -153,6 +142,70 @@ type Workflow struct {
 	Roles                   []WorkflowRole `json:"roles"`
 	Steps                   []WorkflowStep `json:"steps"`
 	Votes                   WorkflowVotes  `json:"votes"`
+}
+
+type ActiveWorkflowListItem struct {
+	Id                      string     `json:"id"`
+	SeriesId                string     `json:"series_id"`
+	ProposerId              string     `json:"proposer_id"`
+	Title                   string     `json:"title"`
+	Description             string     `json:"description"`
+	Recurrence              string     `json:"recurrence"`
+	StartAt                 time.Time  `json:"start_at"`
+	Status                  string     `json:"status"`
+	IsStartBlocked          bool       `json:"is_start_blocked"`
+	BlockedByWorkflowId     *string    `json:"blocked_by_workflow_id,omitempty"`
+	TotalBounty             uint64     `json:"total_bounty"`
+	WeeklyBountyRequirement uint64     `json:"weekly_bounty_requirement"`
+	CreatedAt               time.Time  `json:"created_at"`
+	UpdatedAt               time.Time  `json:"updated_at"`
+	VoteDecision            *string    `json:"vote_decision,omitempty"`
+	ApprovedAt              *time.Time `json:"approved_at,omitempty"`
+}
+
+type WorkflowDeletionProposalCreateRequest struct {
+	WorkflowId string `json:"workflow_id"`
+	TargetType string `json:"target_type"`
+	Reason     string `json:"reason,omitempty"`
+}
+
+type WorkflowDeletionProposalVoteRequest struct {
+	Decision string `json:"decision"`
+	Comment  string `json:"comment,omitempty"`
+}
+
+type WorkflowDeletionProposal struct {
+	Id                  string        `json:"id"`
+	TargetType          string        `json:"target_type"`
+	TargetWorkflowId    *string       `json:"target_workflow_id,omitempty"`
+	TargetWorkflowTitle *string       `json:"target_workflow_title,omitempty"`
+	TargetSeriesId      *string       `json:"target_series_id,omitempty"`
+	Reason              string        `json:"reason"`
+	Status              string        `json:"status"`
+	RequestedByUserId   string        `json:"requested_by_user_id"`
+	VoteQuorumReachedAt *time.Time    `json:"vote_quorum_reached_at,omitempty"`
+	VoteFinalizeAt      *time.Time    `json:"vote_finalize_at,omitempty"`
+	VoteFinalizedAt     *time.Time    `json:"vote_finalized_at,omitempty"`
+	VoteFinalizedBy     *string       `json:"vote_finalized_by_user_id,omitempty"`
+	VoteDecision        *string       `json:"vote_decision,omitempty"`
+	CreatedAt           time.Time     `json:"created_at"`
+	UpdatedAt           time.Time     `json:"updated_at"`
+	Votes               WorkflowVotes `json:"votes"`
+}
+
+type WorkflowProposalExpiryNotice struct {
+	WorkflowId     string `json:"workflow_id"`
+	WorkflowTitle  string `json:"workflow_title"`
+	ProposerUserId string `json:"proposer_user_id"`
+	ProposerEmail  string `json:"proposer_email"`
+}
+
+type WorkflowProposalOutcomeNotification struct {
+	WorkflowId     string `json:"workflow_id"`
+	WorkflowTitle  string `json:"workflow_title"`
+	Decision       string `json:"decision"`
+	ProposerUserId string `json:"proposer_user_id"`
+	ProposerEmail  string `json:"proposer_email"`
 }
 
 type WorkflowTemplate struct {

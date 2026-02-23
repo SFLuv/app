@@ -10,7 +10,7 @@ import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
 import { AlertTriangle, CheckCircle2, ClipboardCheck, Wrench } from "lucide-react"
-import { CredentialType, ImproverWorkflowFeed, Workflow, WorkflowStep } from "@/types/workflow"
+import { ActiveWorkflowListItem, CredentialType, ImproverWorkflowFeed, Workflow, WorkflowStep } from "@/types/workflow"
 
 type ItemFormState = {
   photos: string
@@ -27,6 +27,7 @@ const defaultItemFormState: ItemFormState = {
 export default function ImproverPage() {
   const { authFetch, status, user } = useApp()
   const [workflows, setWorkflows] = useState<Workflow[]>([])
+  const [activeWorkflows, setActiveWorkflows] = useState<ActiveWorkflowListItem[]>([])
   const [activeCredentials, setActiveCredentials] = useState<CredentialType[]>([])
   const [error, setError] = useState<string>("")
   const [loading, setLoading] = useState<boolean>(true)
@@ -42,14 +43,23 @@ export default function ImproverPage() {
     }
 
     try {
-      const res = await authFetch("/improvers/workflows")
-      if (!res.ok) {
-        const text = await res.text()
+      const [feedRes, activeRes] = await Promise.all([
+        authFetch("/improvers/workflows"),
+        authFetch("/workflows/active"),
+      ])
+      if (!feedRes.ok) {
+        const text = await feedRes.text()
         throw new Error(text || "Unable to load improver workflows.")
       }
-      const data = (await res.json()) as ImproverWorkflowFeed
+      const data = (await feedRes.json()) as ImproverWorkflowFeed
       setWorkflows(data.workflows || [])
       setActiveCredentials((data.active_credentials || []) as CredentialType[])
+      if (activeRes.ok) {
+        const activeData = (await activeRes.json()) as ActiveWorkflowListItem[]
+        setActiveWorkflows(activeData || [])
+      } else {
+        setActiveWorkflows([])
+      }
       setError("")
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to load improver workflows.")
@@ -279,6 +289,37 @@ export default function ImproverPage() {
               <Badge key={credential} variant="secondary">
                 {credential}
               </Badge>
+            ))
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Active Workflows</CardTitle>
+          <CardDescription>
+            Active workflows that can be targeted by proposer deletion proposals.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {activeWorkflows.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No active workflows available right now.</p>
+          ) : (
+            activeWorkflows.map((workflow) => (
+              <Card key={`active-${workflow.id}`}>
+                <CardContent className="pt-4 space-y-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <h4 className="font-semibold">{workflow.title}</h4>
+                    <Badge>{workflow.status}</Badge>
+                  </div>
+                  <p className="text-sm text-muted-foreground">{workflow.description}</p>
+                  <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+                    <span>Workflow ID: {workflow.id}</span>
+                    <span>Series ID: {workflow.series_id}</span>
+                    <span>Start: {new Date(workflow.start_at).toLocaleString()}</span>
+                  </div>
+                </CardContent>
+              </Card>
             ))
           )}
         </CardContent>

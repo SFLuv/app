@@ -69,7 +69,7 @@ func (a *AppDB) getBoolUserRole(ctx context.Context, id string, column string) (
 	return value, nil
 }
 
-func (a *AppDB) UpsertProposerRequest(ctx context.Context, userId string, organization string) (*structs.Proposer, error) {
+func (a *AppDB) UpsertProposerRequest(ctx context.Context, userId string, organization string, email string) (*structs.Proposer, error) {
 	tx, err := a.db.Begin(ctx)
 	if err != nil {
 		return nil, err
@@ -77,8 +77,12 @@ func (a *AppDB) UpsertProposerRequest(ctx context.Context, userId string, organi
 	defer tx.Rollback(ctx)
 
 	organization = strings.TrimSpace(organization)
+	email = strings.ToLower(strings.TrimSpace(email))
 	if organization == "" {
 		return nil, fmt.Errorf("organization is required")
+	}
+	if email == "" {
+		return nil, fmt.Errorf("email is required")
 	}
 
 	var status string
@@ -93,10 +97,10 @@ func (a *AppDB) UpsertProposerRequest(ctx context.Context, userId string, organi
 	if err == pgx.ErrNoRows {
 		_, err = tx.Exec(ctx, `
 			INSERT INTO proposers
-				(user_id, organization, status)
+				(user_id, organization, email, status)
 			VALUES
-				($1, $2, 'pending');
-		`, userId, organization)
+				($1, $2, $3, 'pending');
+		`, userId, organization, email)
 		if err != nil {
 			return nil, fmt.Errorf("error inserting proposer request: %s", err)
 		}
@@ -112,11 +116,12 @@ func (a *AppDB) UpsertProposerRequest(ctx context.Context, userId string, organi
 				proposers
 			SET
 				organization = $2,
+				email = $3,
 				status = 'pending',
 				updated_at = NOW()
 			WHERE
 				user_id = $1;
-		`, userId, organization)
+		`, userId, organization, email)
 		if err != nil {
 			return nil, fmt.Errorf("error updating proposer request: %s", err)
 		}
@@ -126,10 +131,11 @@ func (a *AppDB) UpsertProposerRequest(ctx context.Context, userId string, organi
 		UPDATE
 			users
 		SET
-			is_proposer = false
+			is_proposer = false,
+			contact_email = COALESCE(NULLIF($2, ''), contact_email)
 		WHERE
 			id = $1;
-	`, userId)
+	`, userId, email)
 	if err != nil {
 		return nil, fmt.Errorf("error resetting proposer status: %s", err)
 	}
@@ -155,11 +161,9 @@ func (a *AppDB) GetProposers(ctx context.Context) ([]*structs.Proposer, error) {
 		SELECT
 			user_id,
 			organization,
+			email,
 			nickname,
 			status,
-			weekly_allocation,
-			weekly_balance,
-			one_time_balance,
 			created_at,
 			updated_at
 		FROM
@@ -178,11 +182,9 @@ func (a *AppDB) GetProposers(ctx context.Context) ([]*structs.Proposer, error) {
 		err = rows.Scan(
 			&proposer.UserId,
 			&proposer.Organization,
+			&proposer.Email,
 			&proposer.Nickname,
 			&proposer.Status,
-			&proposer.WeeklyAllocation,
-			&proposer.WeeklyBalance,
-			&proposer.OneTimeBalance,
 			&proposer.CreatedAt,
 			&proposer.UpdatedAt,
 		)
@@ -214,53 +216,16 @@ func (a *AppDB) UpdateProposer(ctx context.Context, req *structs.ProposerUpdateR
 	}
 	defer tx.Rollback(ctx)
 
-	var currentAllocation uint64
-	var currentWeekly uint64
-	err = tx.QueryRow(ctx, `
-		SELECT
-			weekly_allocation,
-			weekly_balance
-		FROM
-			proposers
-		WHERE
-			user_id = $1;
-	`, req.UserId).Scan(&currentAllocation, &currentWeekly)
-	if err != nil {
-		return nil, fmt.Errorf("error getting proposer balances: %s", err)
-	}
-
-	newAllocation := currentAllocation
-	newWeekly := currentWeekly
-	if req.WeeklyBalance != nil {
-		newAllocation = *req.WeeklyBalance
-		if newAllocation >= currentAllocation {
-			newWeekly = currentWeekly + (newAllocation - currentAllocation)
-		} else {
-			delta := currentAllocation - newAllocation
-			if currentWeekly > delta {
-				newWeekly = currentWeekly - delta
-			} else {
-				newWeekly = 0
-			}
-		}
-	}
-	if newWeekly > newAllocation {
-		newWeekly = newAllocation
-	}
-
 	cmd, err := tx.Exec(ctx, `
 		UPDATE
 			proposers
 		SET
 			nickname = COALESCE($2, nickname),
-			weekly_allocation = $3,
-			weekly_balance = $4,
-			one_time_balance = COALESCE($5, one_time_balance),
-			status = COALESCE($6, status),
+			status = COALESCE($3, status),
 			updated_at = NOW()
 		WHERE
 			user_id = $1;
-	`, req.UserId, req.Nickname, newAllocation, newWeekly, req.OneTimeBalance, req.Status)
+	`, req.UserId, req.Nickname, req.Status)
 	if err != nil {
 		return nil, fmt.Errorf("error updating proposer: %s", err)
 	}
@@ -295,111 +260,6 @@ func (a *AppDB) UpdateProposer(ctx context.Context, req *structs.ProposerUpdateR
 	return proposer, nil
 }
 
-func (a *AppDB) ReserveProposerBalance(ctx context.Context, userId string, amount uint64) (*structs.BalanceReservation, error) {
-	tx, err := a.db.Begin(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback(ctx)
-
-	res, err := reserveProposerBalanceTx(ctx, tx, userId, amount)
-	if err != nil {
-		return nil, err
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return nil, err
-	}
-
-	return res, nil
-}
-
-func (a *AppDB) RefundProposerBalance(ctx context.Context, userId string, weeklyAmount uint64, oneTimeAmount uint64) error {
-	_, err := a.db.Exec(ctx, `
-		UPDATE
-			proposers
-		SET
-			weekly_balance = LEAST(weekly_balance + $1, weekly_allocation),
-			one_time_balance = one_time_balance + $2,
-			updated_at = NOW()
-		WHERE
-			user_id = $3;
-	`, weeklyAmount, oneTimeAmount, userId)
-	if err != nil {
-		return fmt.Errorf("error refunding proposer balance: %s", err)
-	}
-	return nil
-}
-
-func (a *AppDB) GetProposerBalance(ctx context.Context, owner string) (*structs.ProposerBalance, error) {
-	proposer, err := a.GetProposerByUser(ctx, owner)
-	if err != nil {
-		return nil, err
-	}
-
-	reserved, err := a.AllocatedWorkflowBalanceByProposer(ctx, owner)
-	if err != nil {
-		return nil, err
-	}
-
-	return &structs.ProposerBalance{
-		Available:        proposer.WeeklyBalance + proposer.OneTimeBalance,
-		WeeklyAllocation: proposer.WeeklyAllocation,
-		WeeklyBalance:    proposer.WeeklyBalance,
-		OneTimeBalance:   proposer.OneTimeBalance,
-		Reserved:         reserved,
-	}, nil
-}
-
-func reserveProposerBalanceTx(ctx context.Context, tx pgx.Tx, userId string, amount uint64) (*structs.BalanceReservation, error) {
-	var weekly uint64
-	var oneTime uint64
-	err := tx.QueryRow(ctx, `
-		SELECT
-			weekly_balance,
-			one_time_balance
-		FROM
-			proposers
-		WHERE
-			user_id = $1
-		FOR UPDATE;
-	`, userId).Scan(&weekly, &oneTime)
-	if err != nil {
-		return nil, fmt.Errorf("error getting proposer balances: %s", err)
-	}
-
-	total := weekly + oneTime
-	if total < amount {
-		return nil, fmt.Errorf("insufficient proposer balance")
-	}
-
-	deductOneTime := amount
-	if oneTime < amount {
-		deductOneTime = oneTime
-	}
-	remainder := amount - deductOneTime
-	deductWeekly := remainder
-
-	_, err = tx.Exec(ctx, `
-		UPDATE
-			proposers
-		SET
-			weekly_balance = $2,
-			one_time_balance = $3,
-			updated_at = NOW()
-		WHERE
-			user_id = $1;
-	`, userId, weekly-deductWeekly, oneTime-deductOneTime)
-	if err != nil {
-		return nil, fmt.Errorf("error reserving proposer balance: %s", err)
-	}
-
-	return &structs.BalanceReservation{
-		WeeklyDeducted:  deductWeekly,
-		OneTimeDeducted: deductOneTime,
-	}, nil
-}
-
 func getProposerByUser(ctx context.Context, querier interface {
 	QueryRow(context.Context, string, ...any) pgx.Row
 }, userId string) (*structs.Proposer, error) {
@@ -407,11 +267,9 @@ func getProposerByUser(ctx context.Context, querier interface {
 		SELECT
 			user_id,
 			organization,
+			email,
 			nickname,
 			status,
-			weekly_allocation,
-			weekly_balance,
-			one_time_balance,
 			created_at,
 			updated_at
 		FROM
@@ -424,11 +282,9 @@ func getProposerByUser(ctx context.Context, querier interface {
 	err := row.Scan(
 		&proposer.UserId,
 		&proposer.Organization,
+		&proposer.Email,
 		&proposer.Nickname,
 		&proposer.Status,
-		&proposer.WeeklyAllocation,
-		&proposer.WeeklyBalance,
-		&proposer.OneTimeBalance,
 		&proposer.CreatedAt,
 		&proposer.UpdatedAt,
 	)
@@ -1085,11 +941,6 @@ func (a *AppDB) CreateWorkflow(ctx context.Context, proposerId string, req *stru
 		return nil, fmt.Errorf("proposer is not approved")
 	}
 
-	reservation, err := reserveProposerBalanceTx(ctx, tx, proposerId, totalBounty)
-	if err != nil {
-		return nil, err
-	}
-
 	isStartBlocked := false
 	var blockedById *string
 	var previousWorkflowId string
@@ -1110,7 +961,7 @@ func (a *AppDB) CreateWorkflow(ctx context.Context, proposerId string, req *stru
 	if err != nil && err != pgx.ErrNoRows {
 		return nil, err
 	}
-	if err == nil && previousStatus != "paid_out" {
+	if err == nil && previousStatus != "paid_out" && previousStatus != "deleted" {
 		isStartBlocked = true
 		blockedById = &previousWorkflowId
 	}
@@ -1139,7 +990,7 @@ func (a *AppDB) CreateWorkflow(ctx context.Context, proposerId string, req *stru
 			)
 		VALUES
 			($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14);
-	`, workflowId, seriesId, proposerId, strings.TrimSpace(req.Title), strings.TrimSpace(req.Description), req.Recurrence, startAt, status, isStartBlocked, blockedById, totalBounty, weeklyRequirement, reservation.WeeklyDeducted, reservation.OneTimeDeducted)
+	`, workflowId, seriesId, proposerId, strings.TrimSpace(req.Title), strings.TrimSpace(req.Description), req.Recurrence, startAt, status, isStartBlocked, blockedById, totalBounty, weeklyRequirement, 0, 0)
 	if err != nil {
 		return nil, fmt.Errorf("error inserting workflow: %s", err)
 	}
@@ -1713,13 +1564,9 @@ func (a *AppDB) DeleteWorkflowByProposer(ctx context.Context, workflowId string,
 	defer tx.Rollback(ctx)
 
 	var status string
-	var weeklyDeducted uint64
-	var oneTimeDeducted uint64
 	err = tx.QueryRow(ctx, `
 		SELECT
-			status,
-			budget_weekly_deducted,
-			budget_one_time_deducted
+			status
 		FROM
 			workflows
 		WHERE
@@ -1727,12 +1574,12 @@ func (a *AppDB) DeleteWorkflowByProposer(ctx context.Context, workflowId string,
 		AND
 			proposer_id = $2
 		FOR UPDATE;
-	`, workflowId, proposerId).Scan(&status, &weeklyDeducted, &oneTimeDeducted)
+	`, workflowId, proposerId).Scan(&status)
 	if err != nil {
 		return err
 	}
 
-	if status != "pending" && status != "rejected" && status != "blocked" {
+	if status != "pending" && status != "rejected" && status != "expired" {
 		return fmt.Errorf("workflow cannot be deleted in current status")
 	}
 
@@ -1741,22 +1588,6 @@ func (a *AppDB) DeleteWorkflowByProposer(ctx context.Context, workflowId string,
 	`, workflowId)
 	if err != nil {
 		return fmt.Errorf("error deleting workflow: %s", err)
-	}
-
-	if weeklyDeducted > 0 || oneTimeDeducted > 0 {
-		_, err = tx.Exec(ctx, `
-			UPDATE
-				proposers
-			SET
-				weekly_balance = LEAST(weekly_balance + $1, weekly_allocation),
-				one_time_balance = one_time_balance + $2,
-				updated_at = NOW()
-			WHERE
-				user_id = $3;
-		`, weeklyDeducted, oneTimeDeducted, proposerId)
-		if err != nil {
-			return fmt.Errorf("error refunding proposer balance after workflow delete: %s", err)
-		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -3029,6 +2860,107 @@ func (a *AppDB) GetWorkflowForApproval(ctx context.Context, workflowId string) (
 	return a.GetWorkflowByID(ctx, workflowId)
 }
 
+func (a *AppDB) ExpireStaleWorkflowProposals(ctx context.Context) ([]structs.WorkflowProposalExpiryNotice, error) {
+	rows, err := a.db.Query(ctx, `
+		WITH expired AS (
+			UPDATE
+				workflows w
+			SET
+				status = 'expired',
+				vote_quorum_reached_at = COALESCE(vote_quorum_reached_at, NOW()),
+				vote_finalize_at = COALESCE(vote_finalize_at, NOW()),
+				vote_finalized_at = COALESCE(vote_finalized_at, NOW()),
+				updated_at = NOW()
+			WHERE
+				w.status = 'pending'
+			AND
+				w.created_at <= NOW() - INTERVAL '14 days'
+			RETURNING
+				w.id,
+				w.title,
+				w.proposer_id
+		)
+		SELECT
+			e.id,
+			e.title,
+			e.proposer_id,
+			COALESCE(NULLIF(TRIM(p.email), ''), COALESCE(u.contact_email, ''))
+		FROM
+			expired e
+		LEFT JOIN
+			proposers p
+		ON
+			p.user_id = e.proposer_id
+		LEFT JOIN
+			users u
+		ON
+			u.id = e.proposer_id;
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("error expiring stale workflow proposals: %s", err)
+	}
+	defer rows.Close()
+
+	notifications := []structs.WorkflowProposalExpiryNotice{}
+	for rows.Next() {
+		notice := structs.WorkflowProposalExpiryNotice{}
+		if err := rows.Scan(&notice.WorkflowId, &notice.WorkflowTitle, &notice.ProposerUserId, &notice.ProposerEmail); err != nil {
+			return nil, fmt.Errorf("error scanning expired workflow notice: %s", err)
+		}
+		notice.ProposerEmail = strings.TrimSpace(notice.ProposerEmail)
+		notifications = append(notifications, notice)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating expired workflow notices: %s", err)
+	}
+
+	return notifications, nil
+}
+
+func (a *AppDB) GetWorkflowProposalOutcomeNotification(ctx context.Context, workflowId string) (*structs.WorkflowProposalOutcomeNotification, error) {
+	row := a.db.QueryRow(ctx, `
+		SELECT
+			w.id,
+			w.title,
+			CASE
+				WHEN w.status IN ('approved', 'blocked') THEN 'approved'
+				WHEN w.status = 'rejected' THEN 'rejected'
+				ELSE ''
+			END,
+			w.proposer_id,
+			COALESCE(NULLIF(TRIM(p.email), ''), COALESCE(u.contact_email, ''))
+		FROM
+			workflows w
+		LEFT JOIN
+			proposers p
+		ON
+			p.user_id = w.proposer_id
+		LEFT JOIN
+			users u
+		ON
+			u.id = w.proposer_id
+		WHERE
+			w.id = $1;
+	`, workflowId)
+
+	notification := structs.WorkflowProposalOutcomeNotification{}
+	if err := row.Scan(
+		&notification.WorkflowId,
+		&notification.WorkflowTitle,
+		&notification.Decision,
+		&notification.ProposerUserId,
+		&notification.ProposerEmail,
+	); err != nil {
+		return nil, err
+	}
+
+	notification.ProposerEmail = strings.TrimSpace(notification.ProposerEmail)
+	if notification.Decision == "" {
+		return nil, fmt.Errorf("workflow outcome is not finalized")
+	}
+	return &notification, nil
+}
+
 func (a *AppDB) EvaluateWorkflowVoteState(ctx context.Context, workflowId string) (*structs.Workflow, error) {
 	return a.EvaluateWorkflowVoteStateWithApproval(ctx, workflowId, true)
 }
@@ -3043,9 +2975,6 @@ func (a *AppDB) EvaluateWorkflowVoteStateWithApproval(ctx context.Context, workf
 	type workflowVoteState struct {
 		Status          string
 		IsStartBlocked  bool
-		ProposerId      string
-		WeeklyDeducted  uint64
-		OneTimeDeducted uint64
 		QuorumReachedAt *time.Time
 		FinalizeAt      *time.Time
 		FinalizedAt     *time.Time
@@ -3056,9 +2985,6 @@ func (a *AppDB) EvaluateWorkflowVoteStateWithApproval(ctx context.Context, workf
 		SELECT
 			status,
 			is_start_blocked,
-			proposer_id,
-			budget_weekly_deducted,
-			budget_one_time_deducted,
 			vote_quorum_reached_at,
 			vote_finalize_at,
 			vote_finalized_at
@@ -3070,9 +2996,6 @@ func (a *AppDB) EvaluateWorkflowVoteStateWithApproval(ctx context.Context, workf
 	`, workflowId).Scan(
 		&state.Status,
 		&state.IsStartBlocked,
-		&state.ProposerId,
-		&state.WeeklyDeducted,
-		&state.OneTimeDeducted,
 		&state.QuorumReachedAt,
 		&state.FinalizeAt,
 		&state.FinalizedAt,
@@ -3145,7 +3068,7 @@ func (a *AppDB) EvaluateWorkflowVoteStateWithApproval(ctx context.Context, workf
 		}
 	}
 	if outcome == "deny" {
-		if err := finalizeWorkflowRejectionTx(ctx, tx, workflowId, state.ProposerId, state.WeeklyDeducted, state.OneTimeDeducted, "deny", nil); err != nil {
+		if err := finalizeWorkflowRejectionTx(ctx, tx, workflowId, "deny", nil); err != nil {
 			return nil, err
 		}
 	}
@@ -3250,22 +3173,16 @@ func (a *AppDB) RejectWorkflow(ctx context.Context, workflowId string) error {
 	}
 	defer tx.Rollback(ctx)
 
-	var proposerId string
 	var status string
-	var weeklyDeducted uint64
-	var oneTimeDeducted uint64
 	err = tx.QueryRow(ctx, `
 		SELECT
-			proposer_id,
-			status,
-			budget_weekly_deducted,
-			budget_one_time_deducted
+			status
 		FROM
 			workflows
 		WHERE
 			id = $1
 		FOR UPDATE;
-	`, workflowId).Scan(&proposerId, &status, &weeklyDeducted, &oneTimeDeducted)
+	`, workflowId).Scan(&status)
 	if err != nil {
 		return err
 	}
@@ -3280,7 +3197,7 @@ func (a *AppDB) RejectWorkflow(ctx context.Context, workflowId string) error {
 		return fmt.Errorf("approved or active workflows cannot be rejected")
 	}
 
-	if err := finalizeWorkflowRejectionTx(ctx, tx, workflowId, proposerId, weeklyDeducted, oneTimeDeducted, "deny", nil); err != nil {
+	if err := finalizeWorkflowRejectionTx(ctx, tx, workflowId, "deny", nil); err != nil {
 		return err
 	}
 
@@ -3329,28 +3246,9 @@ func finalizeWorkflowRejectionTx(
 	ctx context.Context,
 	tx pgx.Tx,
 	workflowId string,
-	proposerId string,
-	weeklyDeducted uint64,
-	oneTimeDeducted uint64,
 	decision string,
 	actorUserId *string,
 ) error {
-	if weeklyDeducted > 0 || oneTimeDeducted > 0 {
-		_, err := tx.Exec(ctx, `
-			UPDATE
-				proposers
-			SET
-				weekly_balance = LEAST(weekly_balance + $1, weekly_allocation),
-				one_time_balance = one_time_balance + $2,
-				updated_at = NOW()
-			WHERE
-				user_id = $3;
-		`, weeklyDeducted, oneTimeDeducted, proposerId)
-		if err != nil {
-			return fmt.Errorf("error refunding proposer after rejection: %s", err)
-		}
-	}
-
 	_, err := tx.Exec(ctx, `
 		UPDATE
 			workflows
@@ -3473,6 +3371,657 @@ func (a *AppDB) GetVoterWorkflows(ctx context.Context, voterId string) ([]*struc
 	}
 
 	return workflows, nil
+}
+
+func (a *AppDB) GetActiveWorkflows(ctx context.Context) ([]*structs.ActiveWorkflowListItem, error) {
+	rows, err := a.db.Query(ctx, `
+		SELECT
+			id,
+			series_id,
+			proposer_id,
+			title,
+			description,
+			recurrence,
+			start_at,
+			status,
+			is_start_blocked,
+			blocked_by_workflow_id,
+			total_bounty,
+			weekly_bounty_requirement,
+			created_at,
+			updated_at,
+			vote_decision,
+			approved_at
+		FROM
+			workflows
+		WHERE
+			status IN ('approved', 'blocked', 'in_progress', 'completed')
+		ORDER BY
+			start_at ASC,
+			created_at DESC
+		LIMIT 500;
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("error querying active workflows: %s", err)
+	}
+	defer rows.Close()
+
+	results := []*structs.ActiveWorkflowListItem{}
+	for rows.Next() {
+		workflow := &structs.ActiveWorkflowListItem{}
+		if err := rows.Scan(
+			&workflow.Id,
+			&workflow.SeriesId,
+			&workflow.ProposerId,
+			&workflow.Title,
+			&workflow.Description,
+			&workflow.Recurrence,
+			&workflow.StartAt,
+			&workflow.Status,
+			&workflow.IsStartBlocked,
+			&workflow.BlockedByWorkflowId,
+			&workflow.TotalBounty,
+			&workflow.WeeklyBountyRequirement,
+			&workflow.CreatedAt,
+			&workflow.UpdatedAt,
+			&workflow.VoteDecision,
+			&workflow.ApprovedAt,
+		); err != nil {
+			return nil, fmt.Errorf("error scanning active workflow: %s", err)
+		}
+		results = append(results, workflow)
+	}
+
+	return results, nil
+}
+
+func (a *AppDB) CreateWorkflowDeletionProposal(
+	ctx context.Context,
+	proposerId string,
+	req *structs.WorkflowDeletionProposalCreateRequest,
+) (*structs.WorkflowDeletionProposal, error) {
+	if req == nil {
+		return nil, fmt.Errorf("request is required")
+	}
+
+	workflowId := strings.TrimSpace(req.WorkflowId)
+	if workflowId == "" {
+		return nil, fmt.Errorf("workflow_id is required")
+	}
+
+	targetType := strings.TrimSpace(req.TargetType)
+	if targetType == "" {
+		targetType = "workflow"
+	}
+	if targetType != "workflow" && targetType != "series" {
+		return nil, fmt.Errorf("invalid target_type")
+	}
+
+	reason := strings.TrimSpace(req.Reason)
+	if len(reason) > 2000 {
+		return nil, fmt.Errorf("reason is too long")
+	}
+
+	tx, err := a.db.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	var proposerStatus string
+	err = tx.QueryRow(ctx, `
+		SELECT
+			status
+		FROM
+			proposers
+		WHERE
+			user_id = $1;
+	`, proposerId).Scan(&proposerStatus)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, fmt.Errorf("proposer not found")
+		}
+		return nil, err
+	}
+	if proposerStatus != "approved" {
+		return nil, fmt.Errorf("proposer is not approved")
+	}
+
+	var seriesId string
+	var workflowStatus string
+	err = tx.QueryRow(ctx, `
+		SELECT
+			series_id,
+			status
+		FROM
+			workflows
+		WHERE
+			id = $1
+		FOR UPDATE;
+	`, workflowId).Scan(&seriesId, &workflowStatus)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, fmt.Errorf("workflow not found")
+		}
+		return nil, err
+	}
+
+	switch workflowStatus {
+	case "approved", "blocked", "in_progress", "completed":
+	default:
+		return nil, fmt.Errorf("workflow is not active")
+	}
+
+	if targetType == "workflow" {
+		var pendingCount int
+		err = tx.QueryRow(ctx, `
+			SELECT
+				COUNT(*)
+			FROM
+				workflow_deletion_proposals
+			WHERE
+				target_type = 'workflow'
+			AND
+				target_workflow_id = $1
+			AND
+				status = 'pending';
+		`, workflowId).Scan(&pendingCount)
+		if err != nil {
+			return nil, err
+		}
+		if pendingCount > 0 {
+			return nil, fmt.Errorf("a pending deletion vote already exists for this workflow")
+		}
+	} else {
+		var pendingCount int
+		err = tx.QueryRow(ctx, `
+			SELECT
+				COUNT(*)
+			FROM
+				workflow_deletion_proposals
+			WHERE
+				target_type = 'series'
+			AND
+				target_series_id = $1
+			AND
+				status = 'pending';
+		`, seriesId).Scan(&pendingCount)
+		if err != nil {
+			return nil, err
+		}
+		if pendingCount > 0 {
+			return nil, fmt.Errorf("a pending deletion vote already exists for this series")
+		}
+	}
+
+	proposalId := uuid.NewString()
+	var targetWorkflowID *string
+	var targetSeriesID *string
+	if targetType == "workflow" {
+		targetWorkflowID = &workflowId
+	} else {
+		targetSeriesID = &seriesId
+	}
+
+	_, err = tx.Exec(ctx, `
+		INSERT INTO workflow_deletion_proposals
+			(
+				id,
+				target_type,
+				target_workflow_id,
+				target_series_id,
+				requested_by_user_id,
+				reason
+			)
+		VALUES
+			($1, $2, $3, $4, $5, $6);
+	`, proposalId, targetType, targetWorkflowID, targetSeriesID, proposerId, reason)
+	if err != nil {
+		return nil, fmt.Errorf("error creating workflow deletion proposal: %s", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+
+	return a.GetWorkflowDeletionProposalByIDForUser(ctx, proposalId, nil)
+}
+
+func (a *AppDB) GetWorkflowDeletionProposalByIDForUser(ctx context.Context, proposalId string, voterId *string) (*structs.WorkflowDeletionProposal, error) {
+	row := a.db.QueryRow(ctx, `
+		SELECT
+			p.id,
+			p.target_type,
+			p.target_workflow_id,
+			CASE
+				WHEN p.target_type = 'workflow' THEN w.title
+				ELSE NULL
+			END,
+			p.target_series_id,
+			p.reason,
+			p.status,
+			p.requested_by_user_id,
+			p.vote_quorum_reached_at,
+			p.vote_finalize_at,
+			p.vote_finalized_at,
+			p.vote_finalized_by_user_id,
+			p.vote_decision,
+			p.created_at,
+			p.updated_at
+		FROM
+			workflow_deletion_proposals p
+		LEFT JOIN
+			workflows w
+		ON
+			w.id = p.target_workflow_id
+		WHERE
+			p.id = $1;
+	`, proposalId)
+
+	proposal := &structs.WorkflowDeletionProposal{}
+	if err := row.Scan(
+		&proposal.Id,
+		&proposal.TargetType,
+		&proposal.TargetWorkflowId,
+		&proposal.TargetWorkflowTitle,
+		&proposal.TargetSeriesId,
+		&proposal.Reason,
+		&proposal.Status,
+		&proposal.RequestedByUserId,
+		&proposal.VoteQuorumReachedAt,
+		&proposal.VoteFinalizeAt,
+		&proposal.VoteFinalizedAt,
+		&proposal.VoteFinalizedBy,
+		&proposal.VoteDecision,
+		&proposal.CreatedAt,
+		&proposal.UpdatedAt,
+	); err != nil {
+		return nil, err
+	}
+
+	votes, err := a.getWorkflowDeletionVotesInternal(ctx, proposalId, voterId)
+	if err != nil {
+		return nil, err
+	}
+	proposal.Votes = *votes
+
+	return proposal, nil
+}
+
+func (a *AppDB) GetWorkflowDeletionProposalsForVoter(ctx context.Context, voterId string) ([]*structs.WorkflowDeletionProposal, error) {
+	rows, err := a.db.Query(ctx, `
+		SELECT
+			id
+		FROM
+			workflow_deletion_proposals
+		WHERE
+			status IN ('pending', 'approved', 'denied')
+		ORDER BY
+			CASE WHEN status = 'pending' THEN 0 ELSE 1 END,
+			created_at DESC
+		LIMIT 300;
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("error querying workflow deletion proposals: %s", err)
+	}
+	defer rows.Close()
+
+	proposalIDs := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("error scanning workflow deletion proposal id: %s", err)
+		}
+		proposalIDs = append(proposalIDs, id)
+	}
+
+	proposals := make([]*structs.WorkflowDeletionProposal, 0, len(proposalIDs))
+	for _, proposalID := range proposalIDs {
+		proposal, err := a.GetWorkflowDeletionProposalByIDForUser(ctx, proposalID, &voterId)
+		if err != nil {
+			return nil, err
+		}
+		proposals = append(proposals, proposal)
+	}
+	return proposals, nil
+}
+
+func (a *AppDB) getWorkflowDeletionVotesInternal(ctx context.Context, proposalId string, voterId *string) (*structs.WorkflowVotes, error) {
+	row := a.db.QueryRow(ctx, `
+		SELECT
+			COUNT(*) FILTER (WHERE decision = 'approve'),
+			COUNT(*) FILTER (WHERE decision = 'deny')
+		FROM
+			workflow_deletion_votes
+		WHERE
+			proposal_id = $1;
+	`, proposalId)
+
+	votes := &structs.WorkflowVotes{}
+	if err := row.Scan(&votes.Approve, &votes.Deny); err != nil {
+		return nil, err
+	}
+
+	totalVoters, err := a.CountEligibleVoters(ctx)
+	if err != nil {
+		return nil, err
+	}
+	votes.TotalVoters = totalVoters
+	votes.VotesCast = votes.Approve + votes.Deny
+	votes.QuorumThreshold = quorumVotesRequired(totalVoters)
+	votes.QuorumReached = votes.VotesCast >= votes.QuorumThreshold && totalVoters > 0
+
+	row = a.db.QueryRow(ctx, `
+		SELECT
+			vote_quorum_reached_at,
+			vote_finalize_at,
+			vote_finalized_at,
+			vote_decision
+		FROM
+			workflow_deletion_proposals
+		WHERE
+			id = $1;
+	`, proposalId)
+	if err := row.Scan(&votes.QuorumReachedAt, &votes.FinalizeAt, &votes.FinalizedAt, &votes.Decision); err != nil {
+		return nil, err
+	}
+
+	if voterId != nil {
+		voteRow := a.db.QueryRow(ctx, `
+			SELECT
+				decision
+			FROM
+				workflow_deletion_votes
+			WHERE
+				proposal_id = $1
+			AND
+				voter_id = $2;
+		`, proposalId, *voterId)
+		var decision string
+		err := voteRow.Scan(&decision)
+		if err == nil {
+			votes.MyDecision = &decision
+		} else if err != pgx.ErrNoRows {
+			return nil, err
+		}
+	}
+
+	return votes, nil
+}
+
+func (a *AppDB) RecordWorkflowDeletionVote(ctx context.Context, proposalId string, voterId string, decision string, comment string) (*structs.WorkflowVotes, error) {
+	_, err := a.db.Exec(ctx, `
+		INSERT INTO workflow_deletion_votes
+			(proposal_id, voter_id, decision, comment)
+		VALUES
+			($1, $2, $3, $4)
+		ON CONFLICT (proposal_id, voter_id)
+		DO UPDATE SET
+			decision = EXCLUDED.decision,
+			comment = EXCLUDED.comment,
+			updated_at = NOW();
+	`, proposalId, voterId, decision, comment)
+	if err != nil {
+		return nil, fmt.Errorf("error recording workflow deletion vote: %s", err)
+	}
+	return a.getWorkflowDeletionVotesInternal(ctx, proposalId, &voterId)
+}
+
+func (a *AppDB) EvaluateWorkflowDeletionVoteState(ctx context.Context, proposalId string) (*structs.WorkflowDeletionProposal, error) {
+	tx, err := a.db.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	type deletionVoteState struct {
+		Status          string
+		TargetType      string
+		TargetWorkflow  *string
+		TargetSeries    *string
+		QuorumReachedAt *time.Time
+		FinalizeAt      *time.Time
+		FinalizedAt     *time.Time
+	}
+
+	state := deletionVoteState{}
+	err = tx.QueryRow(ctx, `
+		SELECT
+			status,
+			target_type,
+			target_workflow_id,
+			target_series_id,
+			vote_quorum_reached_at,
+			vote_finalize_at,
+			vote_finalized_at
+		FROM
+			workflow_deletion_proposals
+		WHERE
+			id = $1
+		FOR UPDATE;
+	`, proposalId).Scan(
+		&state.Status,
+		&state.TargetType,
+		&state.TargetWorkflow,
+		&state.TargetSeries,
+		&state.QuorumReachedAt,
+		&state.FinalizeAt,
+		&state.FinalizedAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	if state.Status != "pending" {
+		if err := tx.Commit(ctx); err != nil {
+			return nil, err
+		}
+		return a.GetWorkflowDeletionProposalByIDForUser(ctx, proposalId, nil)
+	}
+
+	totalVoters, err := countEligibleVotersTx(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
+	approveCount, denyCount, err := countWorkflowDeletionVotesTx(ctx, tx, proposalId)
+	if err != nil {
+		return nil, err
+	}
+	votesCast := approveCount + denyCount
+	quorumThreshold := quorumVotesRequired(totalVoters)
+	quorumReached := totalVoters > 0 && votesCast >= quorumThreshold
+	now := time.Now().UTC()
+
+	if quorumReached && state.QuorumReachedAt == nil {
+		quorumReachedAt := now
+		finalizeAt := now.Add(24 * time.Hour)
+		_, err = tx.Exec(ctx, `
+			UPDATE
+				workflow_deletion_proposals
+			SET
+				vote_quorum_reached_at = $2,
+				vote_finalize_at = $3,
+				updated_at = NOW()
+			WHERE
+				id = $1;
+		`, proposalId, quorumReachedAt, finalizeAt)
+		if err != nil {
+			return nil, fmt.Errorf("error setting deletion vote quorum countdown: %s", err)
+		}
+		state.QuorumReachedAt = &quorumReachedAt
+		state.FinalizeAt = &finalizeAt
+	}
+
+	majorityThreshold := possibleBodyMajority(totalVoters)
+	outcome := ""
+	if totalVoters > 0 && approveCount >= majorityThreshold {
+		outcome = "approve"
+	} else if totalVoters > 0 && denyCount >= majorityThreshold {
+		outcome = "deny"
+	} else if quorumReached && state.FinalizeAt != nil && !now.Before(*state.FinalizeAt) {
+		if approveCount > denyCount {
+			outcome = "approve"
+		} else {
+			outcome = "deny"
+		}
+	}
+
+	if outcome == "approve" {
+		if err := finalizeWorkflowDeletionApprovalTx(ctx, tx, proposalId, state.TargetType, state.TargetWorkflow, state.TargetSeries, nil, "approve"); err != nil {
+			return nil, err
+		}
+	}
+	if outcome == "deny" {
+		if err := finalizeWorkflowDeletionDenialTx(ctx, tx, proposalId, nil, "deny"); err != nil {
+			return nil, err
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+
+	return a.GetWorkflowDeletionProposalByIDForUser(ctx, proposalId, nil)
+}
+
+func countWorkflowDeletionVotesTx(ctx context.Context, tx pgx.Tx, proposalId string) (int, int, error) {
+	row := tx.QueryRow(ctx, `
+		SELECT
+			COUNT(*) FILTER (WHERE decision = 'approve'),
+			COUNT(*) FILTER (WHERE decision = 'deny')
+		FROM
+			workflow_deletion_votes
+		WHERE
+			proposal_id = $1;
+	`, proposalId)
+	var approve int
+	var deny int
+	if err := row.Scan(&approve, &deny); err != nil {
+		return 0, 0, err
+	}
+	return approve, deny, nil
+}
+
+func finalizeWorkflowDeletionApprovalTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	proposalId string,
+	targetType string,
+	targetWorkflowId *string,
+	targetSeriesId *string,
+	actorUserId *string,
+	decision string,
+) error {
+	if targetType == "workflow" && targetWorkflowId != nil {
+		_, err := tx.Exec(ctx, `
+			WITH deleted AS (
+				UPDATE
+					workflows
+				SET
+					status = 'deleted',
+					updated_at = NOW()
+				WHERE
+					id = $1
+				AND
+					status IN ('approved', 'blocked', 'in_progress', 'completed')
+				RETURNING
+					id
+			)
+			UPDATE
+				workflows
+			SET
+				is_start_blocked = false,
+				blocked_by_workflow_id = NULL,
+				status = CASE WHEN status = 'blocked' THEN 'approved' ELSE status END,
+				updated_at = NOW()
+			WHERE
+				status = 'blocked'
+			AND
+				blocked_by_workflow_id IN (SELECT id FROM deleted);
+		`, *targetWorkflowId)
+		if err != nil {
+			return fmt.Errorf("error deleting workflow from approved deletion vote: %s", err)
+		}
+	}
+
+	if targetType == "series" && targetSeriesId != nil {
+		_, err := tx.Exec(ctx, `
+			WITH deleted AS (
+				UPDATE
+					workflows
+				SET
+					status = 'deleted',
+					updated_at = NOW()
+				WHERE
+					series_id = $1
+				AND
+					status IN ('approved', 'blocked', 'in_progress', 'completed')
+				RETURNING
+					id
+			)
+			UPDATE
+				workflows
+			SET
+				is_start_blocked = false,
+				blocked_by_workflow_id = NULL,
+				status = CASE WHEN status = 'blocked' THEN 'approved' ELSE status END,
+				updated_at = NOW()
+			WHERE
+				status = 'blocked'
+			AND
+				blocked_by_workflow_id IN (SELECT id FROM deleted);
+		`, *targetSeriesId)
+		if err != nil {
+			return fmt.Errorf("error deleting workflow series from approved deletion vote: %s", err)
+		}
+	}
+
+	_, err := tx.Exec(ctx, `
+		UPDATE
+			workflow_deletion_proposals
+		SET
+			status = 'approved',
+			vote_quorum_reached_at = COALESCE(vote_quorum_reached_at, NOW()),
+			vote_finalize_at = COALESCE(vote_finalize_at, NOW()),
+			vote_finalized_at = COALESCE(vote_finalized_at, NOW()),
+			vote_finalized_by_user_id = COALESCE($3, vote_finalized_by_user_id),
+			vote_decision = $2,
+			updated_at = NOW()
+		WHERE
+			id = $1;
+	`, proposalId, decision, actorUserId)
+	if err != nil {
+		return fmt.Errorf("error finalizing approved deletion vote: %s", err)
+	}
+
+	return nil
+}
+
+func finalizeWorkflowDeletionDenialTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	proposalId string,
+	actorUserId *string,
+	decision string,
+) error {
+	_, err := tx.Exec(ctx, `
+		UPDATE
+			workflow_deletion_proposals
+		SET
+			status = 'denied',
+			vote_quorum_reached_at = COALESCE(vote_quorum_reached_at, NOW()),
+			vote_finalize_at = COALESCE(vote_finalize_at, NOW()),
+			vote_finalized_at = COALESCE(vote_finalized_at, NOW()),
+			vote_finalized_by_user_id = COALESCE($3, vote_finalized_by_user_id),
+			vote_decision = $2,
+			updated_at = NOW()
+		WHERE
+			id = $1;
+	`, proposalId, decision, actorUserId)
+	if err != nil {
+		return fmt.Errorf("error finalizing denied deletion vote: %s", err)
+	}
+	return nil
 }
 
 func (a *AppDB) GetIssuersWithScopes(ctx context.Context) ([]*structs.IssuerWithScopes, error) {

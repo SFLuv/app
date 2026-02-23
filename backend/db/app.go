@@ -147,6 +147,7 @@ func (s *AppDB) CreateTables() error {
 		CREATE TABLE IF NOT EXISTS proposers(
 			user_id TEXT PRIMARY KEY REFERENCES users(id),
 			organization TEXT NOT NULL,
+			email TEXT NOT NULL DEFAULT '',
 			nickname TEXT,
 			status TEXT NOT NULL DEFAULT 'pending',
 			weekly_allocation BIGINT NOT NULL DEFAULT 0,
@@ -160,6 +161,22 @@ func (s *AppDB) CreateTables() error {
 	`)
 	if err != nil {
 		return fmt.Errorf("error creating proposers table: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
+		ALTER TABLE proposers
+		ADD COLUMN IF NOT EXISTS email TEXT NOT NULL DEFAULT '';
+
+		UPDATE proposers p
+		SET email = COALESCE(NULLIF(TRIM(u.contact_email), ''), p.email)
+		FROM users u
+		WHERE
+			u.id = p.user_id
+		AND
+			TRIM(COALESCE(p.email, '')) = '';
+	`)
+	if err != nil {
+		return fmt.Errorf("error altering proposers email column: %s", err)
 	}
 
 	_, err = s.db.Exec(context.Background(), `
@@ -236,7 +253,7 @@ func (s *AppDB) CreateTables() error {
 			created_at TIMESTAMP NOT NULL DEFAULT NOW(),
 			updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
 			CHECK (recurrence IN ('one_time', 'daily', 'weekly', 'monthly')),
-			CHECK (status IN ('pending', 'approved', 'rejected', 'in_progress', 'completed', 'paid_out', 'blocked')),
+			CHECK (status IN ('pending', 'approved', 'rejected', 'in_progress', 'completed', 'paid_out', 'blocked', 'expired', 'deleted')),
 			CHECK (vote_decision IN ('approve', 'deny', 'admin_approve') OR vote_decision IS NULL)
 		);
 
@@ -247,6 +264,18 @@ func (s *AppDB) CreateTables() error {
 	`)
 	if err != nil {
 		return fmt.Errorf("error creating workflows table: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
+		ALTER TABLE workflows
+		DROP CONSTRAINT IF EXISTS workflows_status_check;
+
+		ALTER TABLE workflows
+		ADD CONSTRAINT workflows_status_check
+		CHECK (status IN ('pending', 'approved', 'rejected', 'in_progress', 'completed', 'paid_out', 'blocked', 'expired', 'deleted'));
+	`)
+	if err != nil {
+		return fmt.Errorf("error updating workflows status constraint: %s", err)
 	}
 
 	_, err = s.db.Exec(context.Background(), `
@@ -436,6 +465,57 @@ func (s *AppDB) CreateTables() error {
 	`)
 	if err != nil {
 		return fmt.Errorf("error creating workflow_votes table: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
+		CREATE TABLE IF NOT EXISTS workflow_deletion_proposals(
+			id TEXT PRIMARY KEY,
+			target_type TEXT NOT NULL,
+			target_workflow_id TEXT REFERENCES workflows(id) ON DELETE CASCADE,
+			target_series_id TEXT,
+			requested_by_user_id TEXT NOT NULL REFERENCES users(id),
+			reason TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT 'pending',
+			vote_quorum_reached_at TIMESTAMP,
+			vote_finalize_at TIMESTAMP,
+			vote_finalized_at TIMESTAMP,
+			vote_finalized_by_user_id TEXT REFERENCES users(id),
+			vote_decision TEXT,
+			created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			CHECK (target_type IN ('workflow', 'series')),
+			CHECK (
+				(target_type = 'workflow' AND target_workflow_id IS NOT NULL)
+				OR
+				(target_type = 'series' AND target_series_id IS NOT NULL)
+			),
+			CHECK (status IN ('pending', 'approved', 'denied', 'expired')),
+			CHECK (vote_decision IN ('approve', 'deny', 'admin_approve') OR vote_decision IS NULL)
+		);
+
+		CREATE INDEX IF NOT EXISTS workflow_deletion_proposals_status_idx
+			ON workflow_deletion_proposals(status);
+		CREATE INDEX IF NOT EXISTS workflow_deletion_proposals_workflow_idx
+			ON workflow_deletion_proposals(target_workflow_id);
+		CREATE INDEX IF NOT EXISTS workflow_deletion_proposals_series_idx
+			ON workflow_deletion_proposals(target_series_id);
+
+		CREATE TABLE IF NOT EXISTS workflow_deletion_votes(
+			proposal_id TEXT NOT NULL REFERENCES workflow_deletion_proposals(id) ON DELETE CASCADE,
+			voter_id TEXT NOT NULL REFERENCES users(id),
+			decision TEXT NOT NULL,
+			comment TEXT,
+			created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			PRIMARY KEY (proposal_id, voter_id),
+			CHECK (decision IN ('approve', 'deny'))
+		);
+
+		CREATE INDEX IF NOT EXISTS workflow_deletion_votes_proposal_idx
+			ON workflow_deletion_votes(proposal_id);
+	`)
+	if err != nil {
+		return fmt.Errorf("error creating workflow deletion vote tables: %s", err)
 	}
 
 	_, err = s.db.Exec(context.Background(), `

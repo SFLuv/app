@@ -75,6 +75,10 @@ export default function SettingsPage() {
     setImproverEmail(improver.email || user?.contact_email || "")
   }, [improver, user?.contact_email])
 
+  useEffect(() => {
+    setProposerEmail(proposer?.email || user?.contact_email || "")
+  }, [proposer?.email, user?.contact_email])
+
   // Form states
   const [activeTab, setActiveTab] = useState("account")
   const [isUpdating, setIsUpdating] = useState(false)
@@ -87,6 +91,7 @@ export default function SettingsPage() {
   const [affiliateSuccess, setAffiliateSuccess] = useState("")
   const [proposerModalOpen, setProposerModalOpen] = useState(false)
   const [proposerOrg, setProposerOrg] = useState("")
+  const [proposerEmail, setProposerEmail] = useState(user?.contact_email || "")
   const [proposerSubmitting, setProposerSubmitting] = useState(false)
   const [proposerError, setProposerError] = useState("")
   const [proposerSuccess, setProposerSuccess] = useState("")
@@ -230,12 +235,19 @@ export default function SettingsPage() {
       setProposerError("Please enter the organization you are requesting from.")
       return
     }
+    if (!proposerEmail.trim()) {
+      setProposerError("Please provide an email for proposer notifications.")
+      return
+    }
 
     setProposerSubmitting(true)
     try {
       const res = await authFetch("/proposers/request", {
         method: "POST",
-        body: JSON.stringify({ organization: proposerOrg.trim() }),
+        body: JSON.stringify({
+          organization: proposerOrg.trim(),
+          email: proposerEmail.trim(),
+        }),
       })
 
       if (!res.ok) {
@@ -952,7 +964,7 @@ export default function SettingsPage() {
               <DialogHeader>
                 <DialogTitle>Request Proposer Status</DialogTitle>
                 <DialogDescription>
-                  Tell us which organization you are requesting proposer access for.
+                  Tell us which organization you are requesting proposer access for and where proposal notifications should be sent.
                 </DialogDescription>
               </DialogHeader>
               <form onSubmit={handleProposerRequest} className="space-y-4">
@@ -966,6 +978,19 @@ export default function SettingsPage() {
                     onChange={(e) => setProposerOrg(e.target.value)}
                     className="text-black dark:text-white bg-secondary"
                     placeholder="Organization or group name"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="proposer-email" className="text-black dark:text-white">
+                    Notification Email
+                  </Label>
+                  <Input
+                    id="proposer-email"
+                    type="email"
+                    value={proposerEmail}
+                    onChange={(e) => setProposerEmail(e.target.value)}
+                    className="text-black dark:text-white bg-secondary"
+                    placeholder="name@example.com"
                   />
                 </div>
 

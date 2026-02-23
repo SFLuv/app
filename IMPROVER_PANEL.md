@@ -13,6 +13,52 @@
 
 ## Implemented
 
+### Backend (Latest Iteration)
+- Added proposer request email requirement and persistence:
+  - proposer request now requires `organization` + `email`
+  - proposer email is stored on `proposers.email` and included in admin review payloads
+- Removed proposer budget gating from workflow creation:
+  - proposer workflow creation no longer reserves proposer weekly/one-time balances
+  - proposer admin updates now focus on status/nickname only
+  - faucet-capacity check at vote-time approval remains enforced
+- Added workflow lifecycle extensions:
+  - new workflow statuses: `expired` and `deleted`
+  - pending workflow proposals older than 14 days auto-transition to `expired`
+  - expired proposals are excluded from voter workflow lists and cannot be voted through voting endpoints
+- Added proposer outcome notifications (styled email templates):
+  - proposer receives email when workflow proposal is approved
+  - proposer receives email when workflow proposal is rejected
+  - proposer receives email when workflow proposal expires after 2 weeks
+- Added active-workflow listing and deletion-vote infrastructure:
+  - new active workflow query for statuses `approved|blocked|in_progress|completed`
+  - new deletion vote tables:
+    - `workflow_deletion_proposals`
+    - `workflow_deletion_votes`
+  - proposers can create deletion proposals for a specific active workflow or an entire active series
+  - voters can vote approve/deny on deletion proposals with the same quorum/countdown/finalization pattern as workflow proposal voting
+  - approved deletion proposals mark targeted active workflow(s) as `deleted`
+- Updated routing to use app-level workflow vote handlers that run expiry checks and proposer email notifications before/after voting transitions.
+
+### Frontend (Latest Iteration)
+- Settings:
+  - proposer access request modal now requires notification email input
+- Admin panel:
+  - proposer management no longer shows/edits proposer budget fields
+  - proposer management now surfaces proposer notification email
+- Proposer panel:
+  - removed proposer budget display card
+  - retained workflow proposal creation with unrestricted step bounty totals
+  - direct proposer delete remains only for `pending|rejected|expired` workflows
+  - added active workflows section with proposer-only buttons to:
+    - propose workflow deletion vote
+    - propose series deletion vote
+- Voter panel:
+  - workflow voting now excludes expired proposals via backend behavior
+  - added deletion-vote section for workflow/series deletion proposals
+  - added active workflows read-only list
+- Improver panel:
+  - added active workflows read-only list
+
 ### Backend
 - Added schema for:
   - proposer requests and budget state (`proposers`)

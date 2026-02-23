@@ -84,7 +84,7 @@ export interface Workflow {
   description: string
   recurrence: WorkflowRecurrence
   start_at: string
-  status: "pending" | "approved" | "rejected" | "in_progress" | "completed" | "paid_out" | "blocked"
+  status: "pending" | "approved" | "rejected" | "in_progress" | "completed" | "paid_out" | "blocked" | "expired" | "deleted"
   is_start_blocked: boolean
   blocked_by_workflow_id?: string | null
   total_bounty: number
@@ -100,6 +100,46 @@ export interface Workflow {
   updated_at: string
   roles: WorkflowRole[]
   steps: WorkflowStep[]
+  votes: WorkflowVotes
+}
+
+export interface ActiveWorkflowListItem {
+  id: string
+  series_id: string
+  proposer_id: string
+  title: string
+  description: string
+  recurrence: WorkflowRecurrence
+  start_at: string
+  status: "approved" | "blocked" | "in_progress" | "completed"
+  is_start_blocked: boolean
+  blocked_by_workflow_id?: string | null
+  total_bounty: number
+  weekly_bounty_requirement: number
+  created_at: string
+  updated_at: string
+  vote_decision?: "approve" | "deny" | "admin_approve" | null
+  approved_at?: string | null
+}
+
+export type WorkflowDeletionTargetType = "workflow" | "series"
+
+export interface WorkflowDeletionProposal {
+  id: string
+  target_type: WorkflowDeletionTargetType
+  target_workflow_id?: string | null
+  target_workflow_title?: string | null
+  target_series_id?: string | null
+  reason: string
+  status: "pending" | "approved" | "denied" | "expired"
+  requested_by_user_id: string
+  vote_quorum_reached_at?: string | null
+  vote_finalize_at?: string | null
+  vote_finalized_at?: string | null
+  vote_finalized_by_user_id?: string | null
+  vote_decision?: "approve" | "deny" | "admin_approve" | null
+  created_at: string
+  updated_at: string
   votes: WorkflowVotes
 }
 
