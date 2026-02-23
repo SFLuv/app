@@ -37,6 +37,7 @@ func New(s *handlers.BotService, a *handlers.AppService, p *handlers.PonderServi
 	AddContactRoutes(r, a)
 	AddPonderRoutes(r, a, p)
 	AddW9Routes(r, a)
+	AddUnwrapRoutes(r, a)
 
 	return r
 }
@@ -157,6 +158,11 @@ func AddW9Routes(r *chi.Mux, s *handlers.AppService) {
 	r.Get("/admin/w9/pending", withAdmin(s.GetPendingW9Submissions, s))
 	r.Put("/admin/w9/approve", withAdmin(s.ApproveW9Submission, s))
 	r.Put("/admin/w9/reject", withAdmin(s.RejectW9Submission, s))
+}
+
+func AddUnwrapRoutes(r *chi.Mux, s *handlers.AppService) {
+	r.Post("/unwrap/eligibility", withAuth(s.CheckUnwrapEligibility))
+	r.Post("/unwrap/record", withAuth(s.RecordUnwrap))
 }
 
 func withAuth(handlerFunc http.HandlerFunc) http.HandlerFunc {

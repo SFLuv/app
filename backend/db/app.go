@@ -105,6 +105,7 @@ func (s *AppDB) CreateTables() error {
 			name TEXT NOT NULL,
 			is_eoa BOOLEAN NOT NULL,
 			is_redeemer BOOLEAN NOT NULL DEFAULT false,
+			is_minter BOOLEAN NOT NULL DEFAULT false,
 			eoa_address TEXT NOT NULL,
 			smart_address TEXT,
 			smart_index INTEGER,
@@ -121,6 +122,22 @@ func (s *AppDB) CreateTables() error {
 	`)
 	if err != nil {
 		return fmt.Errorf("error adding is_redeemer column to wallets table: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
+		ALTER TABLE wallets
+		ADD COLUMN IF NOT EXISTS is_minter BOOLEAN NOT NULL DEFAULT false;
+	`)
+	if err != nil {
+		return fmt.Errorf("error adding is_minter column to wallets table: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
+		ALTER TABLE wallets
+		ADD COLUMN IF NOT EXISTS last_unwrap_at TIMESTAMP NULL;
+	`)
+	if err != nil {
+		return fmt.Errorf("error adding last_unwrap_at column to wallets table: %s", err)
 	}
 
 	_, err = s.db.Exec(context.Background(), `

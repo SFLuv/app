@@ -406,6 +406,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
             name: "",
             is_eoa: false,
             is_redeemer: false,
+            is_minter: false,
             eoa_address: privyWallet.address,
             smart_index: 0
           })
@@ -444,6 +445,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
         name: "EOA-" + (i + 1),
         is_eoa: true,
         is_redeemer: false,
+        is_minter: false,
         eoa_address: privyWallet.address
       }
 
@@ -454,7 +456,8 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     const eoaName = wallet.name
     const w = new AppWallet(privyWallet, eoaName, {
       id: wallet.id || undefined,
-      isRedeemer: wallet.is_redeemer
+      isRedeemer: wallet.is_redeemer,
+      isMinter: wallet.is_minter
     })
     await w.init()
     return w
@@ -467,7 +470,8 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     const w = new AppWallet(privyWallet, smartWalletName, {
       index,
       id: wallet.id || undefined,
-      isRedeemer: wallet.is_redeemer
+      isRedeemer: wallet.is_redeemer,
+      isMinter: wallet.is_minter
     })
     await w.init()
 
@@ -504,6 +508,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
       name: walletName,
       is_eoa: false,
       is_redeemer: false,
+      is_minter: false,
       eoa_address: privyWallet.address,
     }
 
@@ -530,6 +535,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
         name: walletName,
         is_eoa: true,
         is_redeemer: false,
+        is_minter: false,
         eoa_address: address
       }
     }
@@ -562,6 +568,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
         name: name,
         is_eoa: true,
         is_redeemer: false,
+        is_minter: false,
         eoa_address: "0x"
       }
 

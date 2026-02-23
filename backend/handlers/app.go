@@ -10,6 +10,7 @@ type AppService struct {
 	w9       *W9Service
 	bot      *BotService
 	redeemer *RedeemerService
+	minter   *MinterService
 	logger   *logger.LogCloser
 }
 
@@ -23,4 +24,8 @@ func (a *AppService) SetRedeemerService(redeemer *RedeemerService) {
 
 func (a *AppService) SetBotService(bot *BotService) {
 	a.bot = bot
+}
+
+func (a *AppService) SetMinterService(minter *MinterService) {
+	a.minter = minter
 }

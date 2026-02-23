@@ -15,7 +15,7 @@ import { useToast } from "@/hooks/use-toast"
 import { useParams, useRouter } from "next/navigation"
 import { useWallets } from "@privy-io/react-auth"
 import { useApp } from "@/context/AppProvider"
-import { CHAIN, SFLUV_DECIMALS, SYMBOL } from "@/lib/constants"
+import { CHAIN, HONEY_TOKEN, SFLUV_DECIMALS, SYMBOL } from "@/lib/constants"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
@@ -45,6 +45,15 @@ export default function WalletDetailsPage() {
   const [historicalBalanceLoading, setHistoricalBalanceLoading] = useState<boolean>(false)
   const [historicalBalanceError, setHistoricalBalanceError] = useState<string | null>(null)
   const [walletCanUnwrap, setWalletCanUnwrap] = useState<boolean>(false)
+  const [walletCanMint, setWalletCanMint] = useState<boolean>(false)
+  const [backingBalancesLoading, setBackingBalancesLoading] = useState<boolean>(false)
+  const [byusdBalance, setByusdBalance] = useState<number | null>(null)
+  const [honeyBalance, setHoneyBalance] = useState<number | null>(null)
+  const [showMintModal, setShowMintModal] = useState<boolean>(false)
+  const [mintAsset, setMintAsset] = useState<"BYUSD" | "HONEY">("BYUSD")
+  const [mintAmount, setMintAmount] = useState<string>("")
+  const [isMinting, setIsMinting] = useState<boolean>(false)
+  const [mintError, setMintError] = useState<string | null>(null)
   const nameInputRef = useRef<HTMLInputElement>(null)
   const { toast } = useToast()
   const params = useParams()
@@ -114,6 +123,15 @@ export default function WalletDetailsPage() {
     }
   }, [wallet])
 
+  useEffect(() => {
+    if (!wallet) {
+      setWalletCanMint(false)
+      return
+    }
+
+    setWalletCanMint(wallet.isMinter === true)
+  }, [wallet])
+
   const txPageHandler = async () => {
     const walletTxs = (await getTransactionsPage(walletAddress, 0, {
       paginationDetails: {
@@ -137,7 +155,12 @@ export default function WalletDetailsPage() {
   }
 
 
-  useEffect(() => { if(!showReceiveModal && !showSendModal) updateBalance() }, [showReceiveModal, showSendModal])
+  useEffect(() => {
+    if(!showReceiveModal && !showSendModal) {
+      updateBalance()
+      updateBackingBalances()
+    }
+  }, [showReceiveModal, showSendModal, walletCanMint])
 
   const toggleNotificationModal = () => {
     setNotificationModalOpen(!notificationModalOpen)
@@ -201,6 +224,95 @@ export default function WalletDetailsPage() {
     }
     catch(error) {
       console.error(error)
+    }
+  }
+
+  const updateBackingBalances = async () => {
+    if (!wallet || !walletCanMint) {
+      setByusdBalance(null)
+      setHoneyBalance(null)
+      setBackingBalancesLoading(false)
+      return
+    }
+
+    setBackingBalancesLoading(true)
+    try {
+      const [byusd, honey] = await Promise.all([
+        wallet.getBYUSDBalanceFormatted(),
+        wallet.getHoneyBalanceFormatted()
+      ])
+      setByusdBalance(byusd)
+      setHoneyBalance(honey)
+    }
+    catch (error) {
+      console.error(error)
+      setByusdBalance(null)
+      setHoneyBalance(null)
+    } finally {
+      setBackingBalancesLoading(false)
+    }
+  }
+
+  const openMintModal = (asset: "BYUSD" | "HONEY") => {
+    setMintAsset(asset)
+    setMintAmount("")
+    setMintError(null)
+    setShowMintModal(true)
+  }
+
+  const handleMint = async () => {
+    if (!wallet) return
+    if (!mintAmount || Number(mintAmount) <= 0) {
+      setMintError("Enter an amount greater than 0.")
+      return
+    }
+
+    setIsMinting(true)
+    setMintError(null)
+    try {
+      const receipt = mintAsset === "BYUSD"
+        ? await wallet.mintSFLUVFromBYUSD(mintAmount)
+        : await wallet.mintSFLUVFromHONEY(mintAmount)
+
+      if (!receipt) {
+        setMintError("Mint request did not submit.")
+        return
+      }
+
+      if (receipt.error) {
+        setMintError(receipt.error)
+        toast({
+          title: "Mint Failed",
+          description: receipt.hash
+            ? `${receipt.error} (tx: ${receipt.hash})`
+            : receipt.error,
+          variant: "destructive"
+        })
+        return
+      }
+
+      toast({
+        title: "Mint Submitted",
+        description: receipt.hash
+          ? `Transaction hash: ${receipt.hash}`
+          : "Mint transaction submitted"
+      })
+      setShowMintModal(false)
+      setMintAmount("")
+      await updateBalance()
+      await updateBackingBalances()
+      await txPageRefresher()
+    }
+    catch (error) {
+      const message = error instanceof Error ? error.message : "unknown error"
+      setMintError(message)
+      toast({
+        title: "Mint Failed",
+        description: message,
+        variant: "destructive"
+      })
+    } finally {
+      setIsMinting(false)
     }
   }
 
@@ -466,6 +578,57 @@ export default function WalletDetailsPage() {
             </CardContent>
           </Card>
 
+          {walletCanMint && (
+            <Card className="border-sky-200 dark:border-sky-800 bg-sky-50/40 dark:bg-sky-900/10">
+              <CardHeader className="pb-2 sm:pb-3">
+                <CardTitle className="text-base sm:text-lg">Minter Backing Assets</CardTitle>
+                <CardDescription className="text-xs sm:text-sm">
+                  Use backing assets to mint new SFLUV to this wallet.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3 sm:space-y-4">
+                <div className="rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50/60 dark:bg-blue-900/15 p-3 sm:p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="space-y-1">
+                      <p className="text-xs text-muted-foreground uppercase tracking-wide">BYUSD Balance</p>
+                      <p className="text-lg sm:text-xl font-semibold">
+                        {showBalance ? (backingBalancesLoading ? "Loading..." : byusdBalance !== null ? byusdBalance.toFixed(2) : "Unavailable") : "•••••"} BYUSD
+                      </p>
+                    </div>
+                    <Button
+                      onClick={() => openMintModal("BYUSD")}
+                      className="bg-[#eb6c6c] hover:bg-[#d55c5c] text-white"
+                    >
+                      Mint SFLUV
+                    </Button>
+                  </div>
+                </div>
+
+                <div className="rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50/60 dark:bg-amber-900/15 p-3 sm:p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="space-y-1">
+                      <p className="text-xs text-muted-foreground uppercase tracking-wide">Honey Balance</p>
+                      <p className="text-lg sm:text-xl font-semibold">
+                        {showBalance ? (backingBalancesLoading ? "Loading..." : honeyBalance !== null ? honeyBalance.toFixed(2) : "Unavailable") : "•••••"} HONEY
+                      </p>
+                    </div>
+                    <Button
+                      onClick={() => openMintModal("HONEY")}
+                      className="bg-[#eb6c6c] hover:bg-[#d55c5c] text-white"
+                    >
+                      Mint SFLUV
+                    </Button>
+                  </div>
+                </div>
+                {!backingBalancesLoading && (!HONEY_TOKEN || HONEY_TOKEN.length !== 42) && (
+                  <p className="text-xs text-amber-700 dark:text-amber-300">
+                    Honey balance unavailable: set `NEXT_PUBLIC_HONEY_ADDRESS` in frontend env.
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+          )}
+
           {/* Quick Stats */}
           {/* <div className="grid grid-cols-2 gap-3 sm:gap-4">
             <Card>
@@ -619,6 +782,50 @@ export default function WalletDetailsPage() {
               className="bg-[#eb6c6c] hover:bg-[#d55c5c]"
             >
               {historicalBalanceLoading ? "Checking..." : "Get Balance"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showMintModal} onOpenChange={setShowMintModal}>
+        <DialogContent className="sm:max-w-[520px]">
+          <DialogHeader>
+            <DialogTitle>Mint SFLUV from {mintAsset}</DialogTitle>
+            <DialogDescription>
+              Enter how much {mintAsset} to convert into SFLUV.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="grid gap-2">
+              <Label htmlFor="mint-amount">Amount ({mintAsset})</Label>
+              <Input
+                id="mint-amount"
+                type="number"
+                min="0"
+                step="0.000001"
+                placeholder="0.00"
+                value={mintAmount}
+                onChange={(e) => setMintAmount(e.target.value)}
+              />
+            </div>
+            {mintError && (
+              <p className="text-xs text-red-600 break-words">{mintError}</p>
+            )}
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setShowMintModal(false)}
+              disabled={isMinting}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleMint}
+              disabled={isMinting}
+              className="bg-[#eb6c6c] hover:bg-[#d55c5c]"
+            >
+              {isMinting ? "Minting..." : "Mint SFLUV"}
             </Button>
           </DialogFooter>
         </DialogContent>
