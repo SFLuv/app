@@ -3,6 +3,7 @@ import { Affiliate } from "./affiliate"
 import { AuthedLocation, Location } from "./location"
 import { Proposer } from "./proposer"
 import { Improver } from "./improver"
+import { IssuerRecord } from "./issuer"
 
 export interface UserResponse {
   id: string
@@ -50,4 +51,19 @@ export interface GetUserResponse {
   affiliate?: Affiliate | null
   proposer?: Proposer | null
   improver?: Improver | null
+  issuer?: IssuerRecord | null
+}
+
+export type VerifiedEmailStatus = "verified" | "pending" | "expired"
+
+export interface VerifiedEmailResponse {
+  id: string
+  user_id: string
+  email: string
+  status: VerifiedEmailStatus
+  verified_at?: string | null
+  verification_sent_at?: string | null
+  verification_token_expires_at?: string | null
+  created_at: string
+  updated_at: string
 }

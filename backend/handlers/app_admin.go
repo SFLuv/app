@@ -112,8 +112,9 @@ func (a *AppService) UpdateLocationApproval(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	isApproving := u.Approval != nil && *u.Approval
 	hadOtherApprovedLocations := false
-	if u.Approval {
+	if isApproving {
 		hadOtherApprovedLocations, err = a.db.OwnerHasApprovedLocationExcluding(r.Context(), ownerID, u.Id)
 		if err != nil {
 			a.logger.Logf("error checking existing approved locations for owner %s: %s", ownerID, err)
@@ -124,12 +125,20 @@ func (a *AppService) UpdateLocationApproval(w http.ResponseWriter, r *http.Reque
 
 	err = a.db.UpdateLocationApproval(r.Context(), u.Id, u.Approval)
 	if err != nil {
-		a.logger.Logf("error updating location approval for location %d: %t", u.Id, u.Approval)
+		status := "pending"
+		if u.Approval != nil {
+			if *u.Approval {
+				status = "approved"
+			} else {
+				status = "rejected"
+			}
+		}
+		a.logger.Logf("error updating location approval for location %d to %s", u.Id, status)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 
-	if a.redeemer != nil && a.redeemer.IsEnabled() && u.Approval && !wasApproved && !hadOtherApprovedLocations {
+	if a.redeemer != nil && a.redeemer.IsEnabled() && isApproving && !wasApproved && !hadOtherApprovedLocations {
 		if err := a.redeemer.EnsureMerchantHasRedeemerWallet(r.Context(), ownerID); err != nil {
 			a.logger.Logf("error auto-granting redeemer role for user %s after location %d approval: %s", ownerID, u.Id, err)
 		}

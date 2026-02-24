@@ -28,7 +28,7 @@ func (a *AppDB) IsAdmin(ctx context.Context, id string) (bool, error) {
 	return isAdmin, nil
 }
 
-func (a *AppDB) UpdateLocationApproval(ctx context.Context, id uint, approval bool) error {
+func (a *AppDB) UpdateLocationApproval(ctx context.Context, id uint, approval *bool) error {
 	tx, err := a.db.Begin(ctx)
 	if err != nil {
 		return err
@@ -62,21 +62,36 @@ func (a *AppDB) UpdateLocationApproval(ctx context.Context, id uint, approval bo
 		return fmt.Errorf("error updating approval for location %d: %s", id, err)
 	}
 
-	if approval {
-		_, err = tx.Exec(ctx, `
+	row = tx.QueryRow(ctx, `
+		SELECT
+			EXISTS (
+				SELECT 1
+				FROM locations
+				WHERE owner_id = $1
+				AND approval = TRUE
+			);
+	`, owner_id)
+
+	var hasApprovedLocation bool
+	if err := row.Scan(&hasApprovedLocation); err != nil {
+		return fmt.Errorf("error checking merchant approval state for user %s: %s", owner_id, err)
+	}
+
+	_, err = tx.Exec(ctx, `
 		UPDATE
 			users
 		SET
 			is_merchant = $1
 		WHERE
 			id = $2;
-	`, approval, owner_id)
-		if err != nil {
-			return fmt.Errorf("error updating owner merchant status for user %s: %s", owner_id, err)
-		}
+	`, hasApprovedLocation, owner_id)
+	if err != nil {
+		return fmt.Errorf("error updating owner merchant status for user %s: %s", owner_id, err)
 	}
 
-	tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
 	return nil
 }
 

@@ -58,6 +58,10 @@ func AddUserRoutes(r *chi.Mux, s *handlers.AppService) {
 	r.Get("/users", withAuth(s.GetUserAuthed))
 	r.Put("/users", withAuth(s.UpdateUserInfo))
 	r.Put("/paypaleth", withAuth(s.UpdateUserPayPalEth))
+	r.Get("/users/verified-emails", withAuth(s.GetUserVerifiedEmails))
+	r.Post("/users/verified-emails", withAuth(s.RequestUserEmailVerification))
+	r.Post("/users/verified-emails/{email_id}/resend", withAuth(s.ResendUserEmailVerification))
+	r.Post("/users/verified-emails/verify", s.VerifyUserEmailToken)
 }
 
 func AddAdminRoutes(r *chi.Mux, s *handlers.AppService) {
@@ -83,6 +87,9 @@ func AddAffiliateRoutes(r *chi.Mux, s *handlers.BotService, a *handlers.AppServi
 func AddWorkflowRoutes(r *chi.Mux, s *handlers.BotService, a *handlers.AppService) {
 	r.Post("/proposers/request", withAuth(a.RequestProposerStatus))
 	r.Post("/improvers/request", withAuth(a.RequestImproverStatus))
+	r.Post("/issuers/request", withAuth(a.RequestIssuerStatus))
+	r.Get("/credentials/types", withAuth(a.GetCredentialTypes))
+	r.Get("/issuers/users/by-address/{address}", withIssuer(a.GetUserByAddress, a))
 
 	r.Get("/proposers/workflow-templates", withProposer(a.GetProposerWorkflowTemplates, a))
 	r.Post("/proposers/workflow-templates", withProposer(a.CreateProposerWorkflowTemplate, a))
@@ -93,9 +100,20 @@ func AddWorkflowRoutes(r *chi.Mux, s *handlers.BotService, a *handlers.AppServic
 	r.Post("/proposers/workflow-deletion-proposals", withProposer(a.ProposeWorkflowDeletion, a))
 
 	r.Get("/improvers/workflows", withImprover(a.GetImproverWorkflows, a))
+	r.Get("/improvers/managed-workflows", withImprover(a.GetManagedWorkflows, a))
+	r.Get("/improvers/unpaid-workflows", withImprover(a.GetImproverUnpaidWorkflows, a))
+	r.Get("/improvers/credential-requests", withImprover(a.GetImproverCredentialRequests, a))
+	r.Post("/improvers/credential-requests", withImprover(a.CreateImproverCredentialRequest, a))
+	r.Get("/improvers/workflows/absence-periods", withImprover(a.GetImproverAbsencePeriods, a))
+	r.Post("/improvers/workflows/absence-periods", withImprover(a.CreateImproverAbsencePeriod, a))
+	r.Post("/improvers/workflows/{workflow_id}/manager/claim", withImprover(a.ClaimWorkflowManager, a))
+	r.Post("/improvers/workflows/{workflow_id}/manager/payout-request", withImprover(a.RequestWorkflowManagerPayoutRetry, a))
 	r.Post("/improvers/workflows/{workflow_id}/steps/{step_id}/claim", withImprover(a.ClaimWorkflowStep, a))
 	r.Post("/improvers/workflows/{workflow_id}/steps/{step_id}/start", withImprover(a.StartWorkflowStep, a))
 	r.Post("/improvers/workflows/{workflow_id}/steps/{step_id}/complete", withImprover(a.CompleteWorkflowStep, a))
+	r.Post("/improvers/workflows/{workflow_id}/steps/{step_id}/payout-request", withImprover(a.RequestWorkflowStepPayoutRetry, a))
+	r.Get("/improvers/managed-workflows/{workflow_id}/export.csv", withImprover(a.DownloadManagedWorkflowCSV, a))
+	r.Get("/improvers/managed-workflows/{workflow_id}/photos.zip", withImprover(a.DownloadManagedWorkflowPhotosZip, a))
 
 	r.Get("/admin/proposers", withAdmin(a.GetProposers, a))
 	r.Put("/admin/proposers", withAdmin(a.UpdateProposer, a))
@@ -103,17 +121,26 @@ func AddWorkflowRoutes(r *chi.Mux, s *handlers.BotService, a *handlers.AppServic
 	r.Put("/admin/improvers", withAdmin(a.UpdateImprover, a))
 	r.Get("/admin/issuers", withAdmin(a.GetIssuers, a))
 	r.Put("/admin/issuers", withAdmin(a.UpdateIssuerScopes, a))
+	r.Get("/admin/issuer-requests", withAdmin(a.GetIssuerRequests, a))
+	r.Put("/admin/issuer-requests", withAdmin(a.UpdateIssuerRequest, a))
+	r.Get("/admin/credential-types", withAdmin(a.GetAdminCredentialTypes, a))
+	r.Post("/admin/credential-types", withAdmin(a.CreateAdminCredentialType, a))
+	r.Delete("/admin/credential-types/{value}", withAdmin(a.DeleteAdminCredentialType, a))
 	r.Post("/admin/workflow-templates/default", withAdmin(a.CreateDefaultWorkflowTemplate, a))
 	r.Post("/admin/workflows/{workflow_id}/force-approve", withAdmin(a.AdminForceApproveWorkflow, a))
 
 	r.Get("/voters/workflows", withVoter(a.GetVoterWorkflows, a))
 	r.Get("/voters/workflow-deletion-proposals", withVoter(a.GetVoterWorkflowDeletionProposals, a))
+	r.Post("/voters/workflow-deletion-proposals", withVoter(a.ProposeWorkflowDeletion, a))
 	r.Get("/workflows/active", withAuth(a.GetActiveWorkflows))
 	r.Get("/workflows/{workflow_id}", withAuth(a.GetWorkflow))
+	r.Get("/workflow-photos/{photo_id}", withAuth(a.GetWorkflowPhoto))
 	r.Post("/workflows/{workflow_id}/votes", withVoter(a.VoteWorkflow, a))
 	r.Post("/workflow-deletion-proposals/{proposal_id}/votes", withVoter(a.VoteWorkflowDeletionProposal, a))
 
 	r.Get("/issuers/scopes", withIssuer(a.GetMyIssuerScopes, a))
+	r.Get("/issuers/credential-requests", withIssuer(a.GetIssuerCredentialRequests, a))
+	r.Post("/issuers/credential-requests/{request_id}/decision", withIssuer(a.DecideIssuerCredentialRequest, a))
 	r.Post("/issuers/credentials", withIssuer(a.IssueCredential, a))
 	r.Delete("/issuers/credentials", withIssuer(a.RevokeCredential, a))
 	r.Get("/issuers/credentials/{user_id}", withIssuer(a.GetIssuerUserCredentials, a))

@@ -10,9 +10,10 @@ import { Textarea } from "@/components/ui/textarea"
 import { Badge } from "@/components/ui/badge"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Checkbox } from "@/components/ui/checkbox"
-import { AlertTriangle, Check, Clock, Loader2, Plus, Trash2 } from "lucide-react"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { formatStatusLabel } from "@/lib/status-labels"
+import { AlertTriangle, Clock, Loader2, Plus, Trash2 } from "lucide-react"
 import {
-  ActiveWorkflowListItem,
   CredentialType,
   Workflow,
   WorkflowCreateRequest,
@@ -48,6 +49,12 @@ interface DraftStep {
   work_items: DraftWorkItem[]
 }
 
+interface DraftWorkflowManager {
+  enabled: boolean
+  required_credentials: CredentialType[]
+  bounty: string
+}
+
 const CREDENTIAL_OPTIONS: { value: CredentialType; label: string }[] = [
   { value: "dpw_certified", label: "DPW Certified" },
   { value: "sfluv_verifier", label: "SFLuv Verifier" },
@@ -65,6 +72,7 @@ const createDraftWorkItem = (): DraftWorkItem => ({
   description: "",
   optional: false,
   requires_photo: false,
+  camera_capture_only: false,
   requires_written_response: true,
   requires_dropdown: false,
   dropdown_options: [],
@@ -78,6 +86,28 @@ const createDraftStep = (): DraftStep => ({
   role_client_id: "",
   work_items: [createDraftWorkItem()],
 })
+
+const createDraftWorkflowManager = (): DraftWorkflowManager => ({
+  enabled: false,
+  required_credentials: ["dpw_certified"],
+  bounty: "",
+})
+
+const WORKFLOW_STATUS_FILTER_OPTIONS: Array<{
+  value: "all" | Workflow["status"]
+  label: string
+}> = [
+  { value: "all", label: "All Statuses" },
+  { value: "pending", label: "Pending" },
+  { value: "approved", label: "Approved" },
+  { value: "rejected", label: "Rejected" },
+  { value: "expired", label: "Expired" },
+  { value: "blocked", label: "Blocked" },
+  { value: "in_progress", label: "In Progress" },
+  { value: "completed", label: "Completed" },
+  { value: "paid_out", label: "Paid Out" },
+  { value: "deleted", label: "Deleted" },
+]
 
 const nowForDatetimeLocal = () => {
   const date = new Date()
@@ -101,12 +131,13 @@ export default function ProposerPage() {
   const { user, status, authFetch } = useApp()
 
   const [workflows, setWorkflows] = useState<Workflow[]>([])
-  const [activeWorkflows, setActiveWorkflows] = useState<ActiveWorkflowListItem[]>([])
   const [templates, setTemplates] = useState<WorkflowTemplate[]>([])
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
   const [templateSaving, setTemplateSaving] = useState(false)
   const [deletionSubmitting, setDeletionSubmitting] = useState("")
+  const [activeTab, setActiveTab] = useState<"create-workflow" | "your-workflows">("create-workflow")
+  const [workflowStatusFilter, setWorkflowStatusFilter] = useState<"all" | Workflow["status"]>("all")
   const [error, setError] = useState("")
   const [selectedTemplateId, setSelectedTemplateId] = useState("")
   const [templateTitle, setTemplateTitle] = useState("")
@@ -116,16 +147,25 @@ export default function ProposerPage() {
   const [description, setDescription] = useState("")
   const [recurrence, setRecurrence] = useState<WorkflowRecurrence>("one_time")
   const [startAt, setStartAt] = useState(nowForDatetimeLocal())
-  const [seriesId, setSeriesId] = useState("")
   const [roles, setRoles] = useState<DraftRole[]>([createDraftRole()])
+  const [workflowManager, setWorkflowManager] = useState<DraftWorkflowManager>(createDraftWorkflowManager())
   const [steps, setSteps] = useState<DraftStep[]>([createDraftStep()])
 
   const isApproved = Boolean(user?.isProposer || user?.isAdmin)
   const canProposeDeletion = Boolean(user?.isProposer)
 
   const totalDraftBounty = useMemo(() => {
-    return steps.reduce((sum, step) => sum + (Number(step.bounty) || 0), 0)
-  }, [steps])
+    const stepTotal = steps.reduce((sum, step) => sum + (Number(step.bounty) || 0), 0)
+    const managerBounty = workflowManager.enabled ? Number(workflowManager.bounty) || 0 : 0
+    return stepTotal + managerBounty
+  }, [steps, workflowManager.bounty, workflowManager.enabled])
+
+  const filteredWorkflows = useMemo(() => {
+    if (workflowStatusFilter === "all") {
+      return workflows
+    }
+    return workflows.filter((workflow) => workflow.status === workflowStatusFilter)
+  }, [workflowStatusFilter, workflows])
 
   const loadData = async () => {
     if (!isApproved) {
@@ -135,10 +175,9 @@ export default function ProposerPage() {
 
     setLoading(true)
     try {
-      const [workflowsRes, templatesRes, activeWorkflowsRes] = await Promise.all([
+      const [workflowsRes, templatesRes] = await Promise.all([
         authFetch("/proposers/workflows"),
         authFetch("/proposers/workflow-templates"),
-        authFetch("/workflows/active"),
       ])
 
       if (workflowsRes.ok) {
@@ -149,10 +188,6 @@ export default function ProposerPage() {
       if (templatesRes.ok) {
         const templatesJson = await templatesRes.json()
         setTemplates(templatesJson || [])
-      }
-      if (activeWorkflowsRes.ok) {
-        const activeWorkflowsJson = await activeWorkflowsRes.json()
-        setActiveWorkflows(activeWorkflowsJson || [])
       }
 
       setError("")
@@ -169,6 +204,20 @@ export default function ProposerPage() {
 
   const updateRole = (roleId: string, update: Partial<DraftRole>) => {
     setRoles((prev) => prev.map((role) => (role.client_id === roleId ? { ...role, ...update } : role)))
+  }
+
+  const toggleWorkflowManagerCredential = (credential: CredentialType, checked: boolean) => {
+    setWorkflowManager((prev) => {
+      const hasCredential = prev.required_credentials.includes(credential)
+      if (checked && !hasCredential) {
+        return { ...prev, required_credentials: [...prev.required_credentials, credential] }
+      }
+      if (!checked && hasCredential) {
+        const next = prev.required_credentials.filter((value) => value !== credential)
+        return { ...prev, required_credentials: next.length ? next : [credential] }
+      }
+      return prev
+    })
   }
 
   const toggleRoleCredential = (roleId: string, credential: CredentialType, checked: boolean) => {
@@ -330,8 +379,8 @@ export default function ProposerPage() {
     setDescription("")
     setRecurrence("one_time")
     setStartAt(nowForDatetimeLocal())
-    setSeriesId("")
     setRoles([createDraftRole()])
+    setWorkflowManager(createDraftWorkflowManager())
     setSteps([createDraftStep()])
   }
 
@@ -356,6 +405,7 @@ export default function ProposerPage() {
         description: item.description.trim(),
         optional: item.optional,
         requires_photo: item.requires_photo,
+        camera_capture_only: item.requires_photo ? item.camera_capture_only : false,
         requires_written_response: item.requires_written_response,
         requires_dropdown: item.requires_dropdown,
         dropdown_options: item.dropdown_options.map((option) => ({
@@ -389,14 +439,33 @@ export default function ProposerPage() {
       }
     }
 
+    let normalizedManager: WorkflowCreateRequest["manager"] | undefined
+    if (workflowManager.enabled) {
+      const requiredCredentials = workflowManager.required_credentials
+        .map((credential) => credential.trim())
+        .filter(Boolean)
+      if (requiredCredentials.length === 0) {
+        throw new Error("Workflow manager must require at least one credential.")
+      }
+      const managerBounty = workflowManager.bounty.trim() === "" ? 0 : Number(workflowManager.bounty)
+      if (Number.isNaN(managerBounty) || managerBounty < 0) {
+        throw new Error("Workflow manager bounty must be zero or greater.")
+      }
+      normalizedManager = {
+        required_credentials: Array.from(new Set(requiredCredentials)),
+        bounty: managerBounty,
+      }
+    }
+
     return {
       normalizedRoles,
       normalizedSteps,
+      normalizedManager,
     }
   }
 
   const buildTemplatePayload = (): WorkflowTemplateCreateRequest => {
-    const { normalizedRoles, normalizedSteps } = normalizeDraftWorkflowFields()
+    const { normalizedRoles, normalizedSteps, normalizedManager } = normalizeDraftWorkflowFields()
     const payload: WorkflowTemplateCreateRequest = {
       template_title: templateTitle.trim(),
       template_description: templateDescription.trim(),
@@ -405,9 +474,8 @@ export default function ProposerPage() {
       roles: normalizedRoles,
       steps: normalizedSteps,
     }
-
-    if (seriesId.trim()) {
-      payload.series_id = seriesId.trim()
+    if (normalizedManager) {
+      payload.manager = normalizedManager
     }
 
     return payload
@@ -487,6 +555,7 @@ export default function ProposerPage() {
         description: item.description,
         optional: item.optional,
         requires_photo: item.requires_photo,
+        camera_capture_only: Boolean(item.camera_capture_only),
         requires_written_response: item.requires_written_response,
         requires_dropdown: item.requires_dropdown,
         dropdown_options: item.dropdown_options.map((option) => ({
@@ -498,9 +567,16 @@ export default function ProposerPage() {
       })),
     }))
 
+    const templateManager = template.manager
+    setWorkflowManager({
+      enabled: Boolean(templateManager),
+      required_credentials: templateManager?.required_credentials?.length
+        ? [...templateManager.required_credentials]
+        : ["dpw_certified"],
+      bounty: templateManager ? String(templateManager.bounty) : "",
+    })
     setRecurrence(template.recurrence)
     setStartAt(toDatetimeLocalValue(template.start_at))
-    setSeriesId(template.series_id || "")
     setRoles(mappedRoles.length ? mappedRoles : [createDraftRole()])
     setSteps(mappedSteps.length ? mappedSteps : [createDraftStep()])
     setError("")
@@ -516,10 +592,12 @@ export default function ProposerPage() {
 
     let normalizedRoles: WorkflowCreateRequest["roles"] = []
     let normalizedSteps: WorkflowCreateRequest["steps"] = []
+    let normalizedManager: WorkflowCreateRequest["manager"] | undefined
     try {
       const normalized = normalizeDraftWorkflowFields()
       normalizedRoles = normalized.normalizedRoles
       normalizedSteps = normalized.normalizedSteps
+      normalizedManager = normalized.normalizedManager
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to validate workflow.")
       return
@@ -533,9 +611,8 @@ export default function ProposerPage() {
       roles: normalizedRoles,
       steps: normalizedSteps,
     }
-
-    if (seriesId.trim()) {
-      payload.series_id = seriesId.trim()
+    if (normalizedManager) {
+      payload.manager = normalizedManager
     }
 
     setSubmitting(true)
@@ -601,6 +678,15 @@ export default function ProposerPage() {
     }
   }
 
+  const isSeriesWorkflow = (workflow: Workflow) =>
+    workflow.recurrence !== "one_time" ||
+    workflows.some((candidate) => candidate.id !== workflow.id && candidate.series_id === workflow.series_id)
+  const canProposeDeletionForStatus = (workflow: Workflow) =>
+    workflow.status === "approved" ||
+    workflow.status === "blocked" ||
+    workflow.status === "in_progress" ||
+    workflow.status === "completed"
+
   if (status === "loading" || loading) {
     return (
       <div className="flex items-center justify-center min-h-[70vh]">
@@ -638,15 +724,22 @@ export default function ProposerPage() {
         </div>
       )}
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Create Workflow Proposal</CardTitle>
-          <CardDescription>
-            Steps unlock sequentially. Each step has one assignee role and configurable work-item evidence requirements.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-6">
-          <div className="space-y-4 rounded-lg border p-4">
+      <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as "create-workflow" | "your-workflows")} className="w-full">
+        <TabsList className="w-full h-auto grid grid-cols-1 gap-1 p-1 sm:grid-cols-2">
+          <TabsTrigger value="create-workflow">Create Workflow</TabsTrigger>
+          <TabsTrigger value="your-workflows">Your Workflows</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="create-workflow" className="mt-4 space-y-6">
+          <Card>
+            <CardHeader>
+              <CardTitle>Create Workflow Proposal</CardTitle>
+              <CardDescription>
+                Steps unlock sequentially. Each step has one assignee role and configurable work-item evidence requirements.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <div className="space-y-4 rounded-lg border p-4">
             <div className="flex items-center justify-between gap-3">
               <div>
                 <h3 className="text-base font-medium">Template Library</h3>
@@ -706,7 +799,7 @@ export default function ProposerPage() {
             </div>
           </div>
 
-          <div className="grid gap-4 md:grid-cols-2">
+	          <div className="grid gap-4 md:grid-cols-2">
             <div className="space-y-2 md:col-span-2">
               <Label>Workflow Title</Label>
               <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Neighborhood storefront verification" />
@@ -737,19 +830,69 @@ export default function ProposerPage() {
               <Label>Start Date & Time</Label>
               <Input type="datetime-local" value={startAt} onChange={(e) => setStartAt(e.target.value)} />
             </div>
-            {recurrence !== "one_time" && (
-              <div className="space-y-2 md:col-span-2">
-                <Label>Series ID (optional)</Label>
-                <Input
-                  value={seriesId}
-                  onChange={(e) => setSeriesId(e.target.value)}
-                  placeholder="Leave blank to auto-generate a series ID"
-                />
-              </div>
-            )}
-          </div>
+	          </div>
 
-          <div className="space-y-4">
+	          <Card>
+	            <CardHeader className="pb-3">
+	              <CardTitle className="text-base">Workflow Manager (Optional)</CardTitle>
+	              <CardDescription>
+	                Add a manager claim role with credential requirements and an optional payout when the workflow is completed.
+	              </CardDescription>
+	            </CardHeader>
+	            <CardContent className="space-y-4">
+	              <label className="flex items-center gap-2 text-sm">
+	                <Checkbox
+	                  checked={workflowManager.enabled}
+	                  onCheckedChange={(checked) =>
+	                    setWorkflowManager((prev) => ({
+	                      ...prev,
+	                      enabled: Boolean(checked),
+	                    }))
+	                  }
+	                />
+	                Enable Workflow Manager
+	              </label>
+
+	              {workflowManager.enabled && (
+	                <div className="space-y-4">
+	                  <div className="space-y-2">
+	                    <Label>Required Credentials</Label>
+	                    <div className="grid gap-2 sm:grid-cols-2">
+	                      {CREDENTIAL_OPTIONS.map((credential) => {
+	                        const checked = workflowManager.required_credentials.includes(credential.value)
+	                        return (
+	                          <label key={`manager-${credential.value}`} className="flex items-center gap-2 text-sm">
+	                            <Checkbox
+	                              checked={checked}
+	                              onCheckedChange={(value) => toggleWorkflowManagerCredential(credential.value, Boolean(value))}
+	                            />
+	                            <span>{credential.label}</span>
+	                          </label>
+	                        )
+	                      })}
+	                    </div>
+	                  </div>
+	                  <div className="space-y-2">
+	                    <Label>Manager Completion Payout (Optional)</Label>
+	                    <Input
+	                      type="number"
+	                      min="0"
+	                      value={workflowManager.bounty}
+	                      onChange={(e) =>
+	                        setWorkflowManager((prev) => ({
+	                          ...prev,
+	                          bounty: e.target.value,
+	                        }))
+	                      }
+	                      placeholder="0"
+	                    />
+	                  </div>
+	                </div>
+	              )}
+	            </CardContent>
+	          </Card>
+
+	          <div className="space-y-4">
             <div className="flex items-center justify-between">
               <h3 className="text-lg font-medium">Workflow Roles</h3>
               <Button type="button" variant="outline" onClick={() => setRoles((prev) => [...prev, createDraftRole()])}>
@@ -917,7 +1060,13 @@ export default function ProposerPage() {
                             <label className="flex items-center gap-2 text-sm">
                               <Checkbox
                                 checked={item.requires_photo}
-                                onCheckedChange={(value) => updateWorkItem(step.id, item.id, { requires_photo: Boolean(value) })}
+                                onCheckedChange={(value) => {
+                                  const requiresPhoto = Boolean(value)
+                                  updateWorkItem(step.id, item.id, {
+                                    requires_photo: requiresPhoto,
+                                    camera_capture_only: requiresPhoto ? item.camera_capture_only : false,
+                                  })
+                                }}
                               />
                               Require Photo
                             </label>
@@ -938,6 +1087,18 @@ export default function ProposerPage() {
                               Require Dropdown
                             </label>
                           </div>
+
+                          {item.requires_photo && (
+                            <label className="flex items-center gap-2 text-sm">
+                              <Checkbox
+                                checked={item.camera_capture_only}
+                                onCheckedChange={(value) =>
+                                  updateWorkItem(step.id, item.id, { camera_capture_only: Boolean(value) })
+                                }
+                              />
+                              Require live camera capture only (disallow camera roll)
+                            </label>
+                          )}
 
                           {item.requires_dropdown && (
                             <div className="space-y-3 border rounded-md p-3 bg-secondary/50">
@@ -1029,126 +1190,117 @@ export default function ProposerPage() {
             ))}
           </div>
 
-          <div className="flex flex-wrap items-center gap-3">
-            <Badge variant="outline">Draft Total Bounty: {totalDraftBounty} SFLuv</Badge>
-            <Button onClick={submitWorkflow} disabled={submitting}>
-              {submitting ? (
-                <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Submitting...
-                </>
+              <div className="flex flex-wrap items-center gap-3">
+                <Badge variant="outline">Draft Total Bounty: {totalDraftBounty} SFLuv</Badge>
+                <Button onClick={submitWorkflow} disabled={submitting}>
+                  {submitting ? (
+                    <>
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      Submitting...
+                    </>
+                  ) : (
+                    "Submit Workflow Proposal"
+                  )}
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="your-workflows" className="mt-4 space-y-6">
+          <Card>
+            <CardHeader>
+              <CardTitle>Your Workflows</CardTitle>
+              <CardDescription>
+                Review only your submitted workflows, filter by status, and propose deletions for active workflows.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="w-full max-w-xs space-y-2">
+                <Label>Filter By Approval Status</Label>
+                <Select value={workflowStatusFilter} onValueChange={(value) => setWorkflowStatusFilter(value as "all" | Workflow["status"])}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {WORKFLOW_STATUS_FILTER_OPTIONS.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {filteredWorkflows.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No workflows found for the selected status.</p>
               ) : (
-                "Submit Workflow Proposal"
+                filteredWorkflows.map((workflow) => (
+                  <Card key={workflow.id}>
+                    <CardContent className="pt-4">
+                      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                        <div className="space-y-2">
+                          <div className="flex items-center gap-2">
+                            <h4 className="font-semibold">{workflow.title}</h4>
+                            <Badge
+                              variant={
+                                workflow.status === "approved"
+                                  ? "default"
+                                  : workflow.status === "rejected"
+                                    ? "destructive"
+                                    : "secondary"
+                              }
+                            >
+                              {formatStatusLabel(workflow.status)}
+                            </Badge>
+                          </div>
+                          <p className="text-sm text-muted-foreground">{workflow.description}</p>
+                          <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+                            <span>Start: {new Date(workflow.start_at).toLocaleString()}</span>
+                            <span>Recurring: {workflow.recurrence}</span>
+                            <span>Total bounty: {workflow.total_bounty}</span>
+                            <span>Weekly requirement: {workflow.weekly_bounty_requirement}</span>
+                          </div>
+                          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                            <Clock className="h-3 w-3" />
+                            <span>
+                              Votes {workflow.votes.approve} approve / {workflow.votes.deny} deny
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:flex-wrap">
+                          {(workflow.status === "pending" || workflow.status === "rejected" || workflow.status === "expired") && (
+                            <Button className="w-full sm:w-auto" variant="outline" onClick={() => deleteWorkflow(workflow.id)}>
+                              <Trash2 className="h-4 w-4 mr-2" />
+                              Delete
+                            </Button>
+                          )}
+
+                          {canProposeDeletion && canProposeDeletionForStatus(workflow) && (
+                            <Button
+                              className="w-full sm:w-auto"
+                              variant="outline"
+                              onClick={() => proposeDeletion(workflow.id, isSeriesWorkflow(workflow) ? "series" : "workflow")}
+                              disabled={Boolean(deletionSubmitting)}
+                            >
+                              {deletionSubmitting === `${workflow.id}:${isSeriesWorkflow(workflow) ? "series" : "workflow"}`
+                                ? "Submitting..."
+                                : isSeriesWorkflow(workflow)
+                                  ? "Propose Series Deletion"
+                                  : "Propose Workflow Deletion"}
+                            </Button>
+                          )}
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))
               )}
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Your Workflows</CardTitle>
-          <CardDescription>Track status and votes for your submitted workflows.</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {workflows.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No workflows submitted yet.</p>
-          ) : (
-            workflows.map((workflow) => (
-              <Card key={workflow.id}>
-                <CardContent className="pt-4">
-                  <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-                    <div className="space-y-2">
-                      <div className="flex items-center gap-2">
-                        <h4 className="font-semibold">{workflow.title}</h4>
-                        <Badge variant={workflow.status === "approved" ? "default" : workflow.status === "rejected" ? "destructive" : "secondary"}>
-                          {workflow.status}
-                        </Badge>
-                      </div>
-                      <p className="text-sm text-muted-foreground">{workflow.description}</p>
-                      <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
-                        <span>Workflow ID: {workflow.id}</span>
-                        <span>Series ID: {workflow.series_id}</span>
-                        <span>Start: {new Date(workflow.start_at).toLocaleString()}</span>
-                        <span>Recurring: {workflow.recurrence}</span>
-                        <span>Total bounty: {workflow.total_bounty}</span>
-                        <span>Weekly requirement: {workflow.weekly_bounty_requirement}</span>
-                      </div>
-                      <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                        <Clock className="h-3 w-3" />
-                        <span>
-                          Votes {workflow.votes.approve} approve / {workflow.votes.deny} deny
-                        </span>
-                      </div>
-                    </div>
-
-                    {(workflow.status === "pending" || workflow.status === "rejected" || workflow.status === "expired") && (
-                      <Button variant="outline" onClick={() => deleteWorkflow(workflow.id)}>
-                        <Trash2 className="h-4 w-4 mr-2" />
-                        Delete
-                      </Button>
-                    )}
-                  </div>
-                </CardContent>
-              </Card>
-            ))
-          )}
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Active Workflows</CardTitle>
-          <CardDescription>
-            Browse active workflows. Deletion votes can only be proposed by approved proposers.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {activeWorkflows.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No active workflows available right now.</p>
-          ) : (
-            activeWorkflows.map((workflow) => (
-              <Card key={`active-${workflow.id}`}>
-                <CardContent className="pt-4 space-y-3">
-                  <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-                    <div className="space-y-2">
-                      <div className="flex items-center gap-2">
-                        <h4 className="font-semibold">{workflow.title}</h4>
-                        <Badge>{workflow.status}</Badge>
-                      </div>
-                      <p className="text-sm text-muted-foreground">{workflow.description}</p>
-                      <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
-                        <span>Workflow ID: {workflow.id}</span>
-                        <span>Series ID: {workflow.series_id}</span>
-                        <span>Start: {new Date(workflow.start_at).toLocaleString()}</span>
-                      </div>
-                    </div>
-
-                    {canProposeDeletion && (
-                      <div className="flex flex-wrap gap-2">
-                        <Button
-                          variant="outline"
-                          onClick={() => proposeDeletion(workflow.id, "workflow")}
-                          disabled={Boolean(deletionSubmitting)}
-                        >
-                          {deletionSubmitting === `${workflow.id}:workflow` ? "Submitting..." : "Propose Workflow Deletion"}
-                        </Button>
-                        <Button
-                          variant="outline"
-                          onClick={() => proposeDeletion(workflow.id, "series")}
-                          disabled={Boolean(deletionSubmitting)}
-                        >
-                          {deletionSubmitting === `${workflow.id}:series` ? "Submitting..." : "Propose Series Deletion"}
-                        </Button>
-                      </div>
-                    )}
-                  </div>
-                </CardContent>
-              </Card>
-            ))
-          )}
-        </CardContent>
-      </Card>
+            </CardContent>
+          </Card>
+        </TabsContent>
+      </Tabs>
     </div>
   )
 }

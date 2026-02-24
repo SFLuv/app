@@ -13,7 +13,10 @@ func ModuleUpdateLocationApprovalController(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	err := AppDb.UpdateLocationApproval(ctx, TEST_LOCATION_1.ID, true)
+	approved := true
+	rejected := false
+
+	err := AppDb.UpdateLocationApproval(ctx, TEST_LOCATION_1.ID, &approved)
 	if err != nil {
 		t.Fatal(err.Error())
 	}
@@ -45,7 +48,7 @@ func ModuleUpdateLocationApprovalController(t *testing.T) {
 		t.Fatal(err.Error())
 	}
 
-	err = AppDb.UpdateLocationApproval(ctx, 3, true)
+	err = AppDb.UpdateLocationApproval(ctx, 3, &approved)
 	if err != nil {
 		t.Fatal(err.Error())
 	}
@@ -54,7 +57,7 @@ func ModuleUpdateLocationApprovalController(t *testing.T) {
 		t.Fatal("expected user to be merchant after second approval")
 	}
 
-	err = AppDb.UpdateLocationApproval(ctx, 3, false)
+	err = AppDb.UpdateLocationApproval(ctx, 3, &rejected)
 	if err != nil {
 		t.Fatal(err.Error())
 	}
@@ -63,7 +66,7 @@ func ModuleUpdateLocationApprovalController(t *testing.T) {
 		t.Fatal("expected user to be merchant after second approval removed")
 	}
 
-	err = AppDb.UpdateLocationApproval(ctx, TEST_LOCATION_1.ID, false)
+	err = AppDb.UpdateLocationApproval(ctx, TEST_LOCATION_1.ID, &rejected)
 	if err != nil {
 		t.Fatal(err.Error())
 	}

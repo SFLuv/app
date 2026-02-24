@@ -1,12 +1,19 @@
 export type WorkflowRecurrence = "one_time" | "daily" | "weekly" | "monthly"
 
-export type CredentialType = "dpw_certified" | "sfluv_verifier"
+export type CredentialType = string
+
+export interface GlobalCredentialType {
+  value: string
+  label: string
+  created_at: string
+}
 
 export interface WorkflowDropdownOption {
   value: string
   label: string
   requires_written_response: boolean
   notify_emails?: string[]
+  notify_email_count?: number
 }
 
 export interface WorkflowDropdownOptionCreateInput {
@@ -23,6 +30,7 @@ export interface WorkflowWorkItem {
   description: string
   optional: boolean
   requires_photo: boolean
+  camera_capture_only: boolean
   requires_written_response: boolean
   requires_dropdown: boolean
   dropdown_options: WorkflowDropdownOption[]
@@ -41,6 +49,10 @@ export interface WorkflowStep {
   status: "locked" | "available" | "in_progress" | "completed" | "paid_out"
   started_at?: string | null
   completed_at?: string | null
+  payout_error?: string | null
+  payout_last_try_at?: string | null
+  retry_requested_at?: string | null
+  retry_requested_by?: string | null
   submission?: WorkflowStepSubmission | null
   work_items: WorkflowWorkItem[]
 }
@@ -60,6 +72,7 @@ export interface WorkflowRole {
   workflow_id: string
   title: string
   required_credentials: CredentialType[]
+  is_manager: boolean
 }
 
 export interface WorkflowVotes {
@@ -96,6 +109,15 @@ export interface Workflow {
   vote_finalized_at?: string | null
   vote_finalized_by_user_id?: string | null
   vote_decision?: "approve" | "deny" | "admin_approve" | null
+  manager_required: boolean
+  manager_role_id?: string | null
+  manager_improver_id?: string | null
+  manager_bounty: number
+  manager_paid_out_at?: string | null
+  manager_payout_error?: string | null
+  manager_payout_last_try_at?: string | null
+  manager_retry_requested_at?: string | null
+  manager_retry_requested_by?: string | null
   created_at: string
   updated_at: string
   roles: WorkflowRole[]
@@ -154,6 +176,7 @@ export interface WorkflowWorkItemCreateInput {
   description: string
   optional: boolean
   requires_photo: boolean
+  camera_capture_only: boolean
   requires_written_response: boolean
   requires_dropdown: boolean
   dropdown_options: WorkflowDropdownOptionCreateInput[]
@@ -167,12 +190,18 @@ export interface WorkflowStepCreateInput {
   work_items: WorkflowWorkItemCreateInput[]
 }
 
+export interface WorkflowManagerCreateInput {
+  required_credentials: CredentialType[]
+  bounty: number
+}
+
 export interface WorkflowCreateRequest {
   series_id?: string
   title: string
   description: string
   recurrence: WorkflowRecurrence
   start_at: string
+  manager?: WorkflowManagerCreateInput
   roles: WorkflowRoleCreateInput[]
   steps: WorkflowStepCreateInput[]
 }
@@ -183,6 +212,7 @@ export interface WorkflowTemplateCreateRequest {
   series_id?: string
   recurrence: WorkflowRecurrence
   start_at: string
+  manager?: WorkflowManagerCreateInput
   roles: WorkflowRoleCreateInput[]
   steps: WorkflowStepCreateInput[]
 }
@@ -197,6 +227,7 @@ export interface WorkflowTemplate {
   recurrence: WorkflowRecurrence
   start_at: string
   series_id?: string | null
+  manager?: WorkflowManagerCreateInput | null
   roles: WorkflowRoleCreateInput[]
   steps: WorkflowStepCreateInput[]
   created_at: string
@@ -208,11 +239,56 @@ export interface ImproverWorkflowFeed {
   workflows: Workflow[]
 }
 
+export interface ImproverAbsencePeriod {
+  id: string
+  improver_id: string
+  series_id: string
+  step_order: number
+  absent_from: string
+  absent_until: string
+  created_at: string
+  updated_at: string
+}
+
+export interface ImproverAbsencePeriodCreateRequest {
+  series_id: string
+  step_order: number
+  absent_from: string
+  absent_until: string
+}
+
+export interface ImproverAbsencePeriodCreateResult {
+  absence: ImproverAbsencePeriod
+  released_count: number
+  skipped_count: number
+}
+
 export interface WorkflowStepItemResponseInput {
   item_id: string
-  photo_urls: string[]
+  photo_urls?: string[]
+  photo_ids?: string[]
+  photo_uploads?: WorkflowPhotoUploadInput[]
+  photos?: WorkflowSubmissionPhoto[]
   written_response?: string
   dropdown_value?: string
+}
+
+export interface WorkflowPhotoUploadInput {
+  file_name: string
+  content_type: string
+  data_base64: string
+}
+
+export interface WorkflowSubmissionPhoto {
+  id: string
+  workflow_id: string
+  step_id: string
+  item_id: string
+  submission_id: string
+  file_name: string
+  content_type: string
+  size_bytes: number
+  created_at: string
 }
 
 export interface WorkflowStepCompleteRequest {

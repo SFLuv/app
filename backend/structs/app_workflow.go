@@ -2,20 +2,38 @@ package structs
 
 import "time"
 
-type CredentialType string
+type CredentialType = string
 
-const (
-	CredentialDPWCertified  CredentialType = "dpw_certified"
-	CredentialSFLUVVerifier CredentialType = "sfluv_verifier"
-)
+type Issuer struct {
+	UserId       string    `json:"user_id"`
+	Organization string    `json:"organization"`
+	Email        string    `json:"email"`
+	Nickname     *string   `json:"nickname"`
+	Status       string    `json:"status"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
 
-func IsValidCredentialType(value string) bool {
-	switch CredentialType(value) {
-	case CredentialDPWCertified, CredentialSFLUVVerifier:
-		return true
-	default:
-		return false
-	}
+type IssuerRequest struct {
+	Organization string `json:"organization"`
+	Email        string `json:"email"`
+}
+
+type IssuerUpdateRequest struct {
+	UserId   string  `json:"user_id"`
+	Status   *string `json:"status,omitempty"`
+	Nickname *string `json:"nickname,omitempty"`
+}
+
+type GlobalCredentialType struct {
+	Value     string    `json:"value"`
+	Label     string    `json:"label"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+type GlobalCredentialTypeRequest struct {
+	Value string `json:"value"`
+	Label string `json:"label"`
 }
 
 type Proposer struct {
@@ -61,23 +79,30 @@ type ImproverUpdateRequest struct {
 }
 
 type WorkflowCreateRequest struct {
-	SeriesId    *string                   `json:"series_id,omitempty"`
-	Title       string                    `json:"title"`
-	Description string                    `json:"description"`
-	Recurrence  string                    `json:"recurrence"`
-	StartAt     string                    `json:"start_at"`
-	Roles       []WorkflowRoleCreateInput `json:"roles"`
-	Steps       []WorkflowStepCreateInput `json:"steps"`
+	SeriesId    *string                     `json:"series_id,omitempty"`
+	Title       string                      `json:"title"`
+	Description string                      `json:"description"`
+	Recurrence  string                      `json:"recurrence"`
+	StartAt     string                      `json:"start_at"`
+	Manager     *WorkflowManagerCreateInput `json:"manager,omitempty"`
+	Roles       []WorkflowRoleCreateInput   `json:"roles"`
+	Steps       []WorkflowStepCreateInput   `json:"steps"`
 }
 
 type WorkflowTemplateCreateRequest struct {
-	TemplateTitle       string                    `json:"template_title"`
-	TemplateDescription string                    `json:"template_description"`
-	SeriesId            *string                   `json:"series_id,omitempty"`
-	Recurrence          string                    `json:"recurrence"`
-	StartAt             string                    `json:"start_at"`
-	Roles               []WorkflowRoleCreateInput `json:"roles"`
-	Steps               []WorkflowStepCreateInput `json:"steps"`
+	TemplateTitle       string                      `json:"template_title"`
+	TemplateDescription string                      `json:"template_description"`
+	SeriesId            *string                     `json:"series_id,omitempty"`
+	Recurrence          string                      `json:"recurrence"`
+	StartAt             string                      `json:"start_at"`
+	Manager             *WorkflowManagerCreateInput `json:"manager,omitempty"`
+	Roles               []WorkflowRoleCreateInput   `json:"roles"`
+	Steps               []WorkflowStepCreateInput   `json:"steps"`
+}
+
+type WorkflowManagerCreateInput struct {
+	RequiredCredentials []string `json:"required_credentials"`
+	Bounty              uint64   `json:"bounty"`
 }
 
 type WorkflowRoleCreateInput struct {
@@ -95,13 +120,14 @@ type WorkflowStepCreateInput struct {
 }
 
 type WorkflowWorkItemCreateInput struct {
-	Title            string                              `json:"title"`
-	Description      string                              `json:"description"`
-	Optional         bool                                `json:"optional"`
-	RequiresPhoto    bool                                `json:"requires_photo"`
-	RequiresWritten  bool                                `json:"requires_written_response"`
-	RequiresDropdown bool                                `json:"requires_dropdown"`
-	DropdownOptions  []WorkflowDropdownOptionCreateInput `json:"dropdown_options"`
+	Title             string                              `json:"title"`
+	Description       string                              `json:"description"`
+	Optional          bool                                `json:"optional"`
+	RequiresPhoto     bool                                `json:"requires_photo"`
+	CameraCaptureOnly bool                                `json:"camera_capture_only"`
+	RequiresWritten   bool                                `json:"requires_written_response"`
+	RequiresDropdown  bool                                `json:"requires_dropdown"`
+	DropdownOptions   []WorkflowDropdownOptionCreateInput `json:"dropdown_options"`
 }
 
 type WorkflowDropdownOptionCreateInput struct {
@@ -115,6 +141,7 @@ type WorkflowDropdownOption struct {
 	Label                   string   `json:"label"`
 	RequiresWrittenResponse bool     `json:"requires_written_response"`
 	NotifyEmails            []string `json:"notify_emails,omitempty"`
+	NotifyEmailCount        int      `json:"notify_email_count,omitempty"`
 }
 
 type Workflow struct {
@@ -137,6 +164,15 @@ type Workflow struct {
 	VoteFinalizedAt         *time.Time     `json:"vote_finalized_at,omitempty"`
 	VoteFinalizedByUserId   *string        `json:"vote_finalized_by_user_id,omitempty"`
 	VoteDecision            *string        `json:"vote_decision,omitempty"`
+	ManagerRequired         bool           `json:"manager_required"`
+	ManagerRoleId           *string        `json:"manager_role_id,omitempty"`
+	ManagerImproverId       *string        `json:"manager_improver_id,omitempty"`
+	ManagerBounty           uint64         `json:"manager_bounty"`
+	ManagerPaidOutAt        *time.Time     `json:"manager_paid_out_at,omitempty"`
+	ManagerPayoutError      *string        `json:"manager_payout_error,omitempty"`
+	ManagerPayoutLastTryAt  *time.Time     `json:"manager_payout_last_try_at,omitempty"`
+	ManagerRetryRequestedAt *time.Time     `json:"manager_retry_requested_at,omitempty"`
+	ManagerRetryRequestedBy *string        `json:"manager_retry_requested_by,omitempty"`
 	CreatedAt               time.Time      `json:"created_at"`
 	UpdatedAt               time.Time      `json:"updated_at"`
 	Roles                   []WorkflowRole `json:"roles"`
@@ -209,19 +245,20 @@ type WorkflowProposalOutcomeNotification struct {
 }
 
 type WorkflowTemplate struct {
-	Id                  string                    `json:"id"`
-	TemplateTitle       string                    `json:"template_title"`
-	TemplateDescription string                    `json:"template_description"`
-	OwnerUserId         *string                   `json:"owner_user_id,omitempty"`
-	CreatedByUserId     string                    `json:"created_by_user_id"`
-	IsDefault           bool                      `json:"is_default"`
-	Recurrence          string                    `json:"recurrence"`
-	StartAt             time.Time                 `json:"start_at"`
-	SeriesId            *string                   `json:"series_id,omitempty"`
-	Roles               []WorkflowRoleCreateInput `json:"roles"`
-	Steps               []WorkflowStepCreateInput `json:"steps"`
-	CreatedAt           time.Time                 `json:"created_at"`
-	UpdatedAt           time.Time                 `json:"updated_at"`
+	Id                  string                      `json:"id"`
+	TemplateTitle       string                      `json:"template_title"`
+	TemplateDescription string                      `json:"template_description"`
+	OwnerUserId         *string                     `json:"owner_user_id,omitempty"`
+	CreatedByUserId     string                      `json:"created_by_user_id"`
+	IsDefault           bool                        `json:"is_default"`
+	Recurrence          string                      `json:"recurrence"`
+	StartAt             time.Time                   `json:"start_at"`
+	SeriesId            *string                     `json:"series_id,omitempty"`
+	Manager             *WorkflowManagerCreateInput `json:"manager,omitempty"`
+	Roles               []WorkflowRoleCreateInput   `json:"roles"`
+	Steps               []WorkflowStepCreateInput   `json:"steps"`
+	CreatedAt           time.Time                   `json:"created_at"`
+	UpdatedAt           time.Time                   `json:"updated_at"`
 }
 
 type WorkflowRole struct {
@@ -229,6 +266,7 @@ type WorkflowRole struct {
 	WorkflowId          string   `json:"workflow_id"`
 	Title               string   `json:"title"`
 	RequiredCredentials []string `json:"required_credentials"`
+	IsManager           bool     `json:"is_manager"`
 }
 
 type WorkflowStep struct {
@@ -243,6 +281,10 @@ type WorkflowStep struct {
 	Status             string                  `json:"status"`
 	StartedAt          *time.Time              `json:"started_at,omitempty"`
 	CompletedAt        *time.Time              `json:"completed_at,omitempty"`
+	PayoutError        *string                 `json:"payout_error,omitempty"`
+	PayoutLastTryAt    *time.Time              `json:"payout_last_try_at,omitempty"`
+	RetryRequestedAt   *time.Time              `json:"retry_requested_at,omitempty"`
+	RetryRequestedBy   *string                 `json:"retry_requested_by,omitempty"`
 	Submission         *WorkflowStepSubmission `json:"submission,omitempty"`
 	WorkItems          []WorkflowWorkItem      `json:"work_items"`
 }
@@ -255,6 +297,7 @@ type WorkflowWorkItem struct {
 	Description                string                   `json:"description"`
 	Optional                   bool                     `json:"optional"`
 	RequiresPhoto              bool                     `json:"requires_photo"`
+	CameraCaptureOnly          bool                     `json:"camera_capture_only"`
 	RequiresWrittenResponse    bool                     `json:"requires_written_response"`
 	RequiresDropdown           bool                     `json:"requires_dropdown"`
 	DropdownOptions            []WorkflowDropdownOption `json:"dropdown_options"`
@@ -294,11 +337,68 @@ type WorkflowStepClaimRequest struct {
 	StepId string `json:"step_id"`
 }
 
+type ImproverAbsencePeriod struct {
+	Id          string    `json:"id"`
+	ImproverId  string    `json:"improver_id"`
+	SeriesId    string    `json:"series_id"`
+	StepOrder   int       `json:"step_order"`
+	AbsentFrom  time.Time `json:"absent_from"`
+	AbsentUntil time.Time `json:"absent_until"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+type ImproverAbsencePeriodCreateRequest struct {
+	SeriesId    string `json:"series_id"`
+	StepOrder   int    `json:"step_order"`
+	AbsentFrom  string `json:"absent_from"`
+	AbsentUntil string `json:"absent_until"`
+}
+
+type ImproverAbsencePeriodCreateResult struct {
+	Absence       ImproverAbsencePeriod `json:"absence"`
+	ReleasedCount int                   `json:"released_count"`
+	SkippedCount  int                   `json:"skipped_count"`
+}
+
 type WorkflowStepItemResponse struct {
-	ItemId          string   `json:"item_id"`
-	PhotoURLs       []string `json:"photo_urls"`
-	WrittenResponse *string  `json:"written_response,omitempty"`
-	DropdownValue   *string  `json:"dropdown_value,omitempty"`
+	ItemId          string                    `json:"item_id"`
+	PhotoURLs       []string                  `json:"photo_urls,omitempty"` // legacy compatibility for older submissions.
+	PhotoIDs        []string                  `json:"photo_ids,omitempty"`
+	PhotoUploads    []WorkflowPhotoUpload     `json:"photo_uploads,omitempty"`
+	Photos          []WorkflowSubmissionPhoto `json:"photos,omitempty"`
+	WrittenResponse *string                   `json:"written_response,omitempty"`
+	DropdownValue   *string                   `json:"dropdown_value,omitempty"`
+}
+
+type WorkflowPhotoUpload struct {
+	FileName    string `json:"file_name"`
+	ContentType string `json:"content_type"`
+	DataBase64  string `json:"data_base64"`
+}
+
+type WorkflowSubmissionPhoto struct {
+	Id           string    `json:"id"`
+	WorkflowId   string    `json:"workflow_id"`
+	StepId       string    `json:"step_id"`
+	ItemId       string    `json:"item_id"`
+	SubmissionId string    `json:"submission_id"`
+	FileName     string    `json:"file_name"`
+	ContentType  string    `json:"content_type"`
+	SizeBytes    int       `json:"size_bytes"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+
+type WorkflowSubmissionPhotoBlob struct {
+	WorkflowSubmissionPhoto
+	PhotoData []byte `json:"-"`
+}
+
+type WorkflowSubmissionPhotoExport struct {
+	Photo     WorkflowSubmissionPhotoBlob `json:"photo"`
+	StepOrder int                         `json:"step_order"`
+	ItemOrder int                         `json:"item_order"`
+	ItemTitle string                      `json:"item_title"`
 }
 
 type WorkflowStepSubmission struct {
@@ -361,6 +461,8 @@ type IssuerWithScopes struct {
 	UserId             string   `json:"user_id"`
 	IsIssuer           bool     `json:"is_issuer"`
 	AllowedCredentials []string `json:"allowed_credentials"`
+	Organization       string   `json:"organization"`
+	Nickname           *string  `json:"nickname"`
 }
 
 type IssuerScopeUpdateRequest struct {
@@ -372,6 +474,37 @@ type IssuerScopeUpdateRequest struct {
 type CredentialIssueRequest struct {
 	UserId         string `json:"user_id"`
 	CredentialType string `json:"credential_type"`
+}
+
+type CredentialRequest struct {
+	Id                 string     `json:"id"`
+	UserId             string     `json:"user_id"`
+	CredentialType     string     `json:"credential_type"`
+	Status             string     `json:"status"`
+	RequestedAt        time.Time  `json:"requested_at"`
+	ResolvedAt         *time.Time `json:"resolved_at,omitempty"`
+	ResolvedBy         *string    `json:"resolved_by,omitempty"`
+	CreatedAt          time.Time  `json:"created_at"`
+	UpdatedAt          time.Time  `json:"updated_at"`
+	RequesterName      string     `json:"requester_name"`
+	RequesterFirstName string     `json:"requester_first_name"`
+	RequesterLastName  string     `json:"requester_last_name"`
+	RequesterEmail     string     `json:"requester_email"`
+}
+
+type CredentialRequestCreateRequest struct {
+	CredentialType string `json:"credential_type"`
+}
+
+type CredentialRequestDecisionRequest struct {
+	Decision string `json:"decision"`
+	Status   string `json:"status,omitempty"`
+}
+
+type CredentialRequestIssuerRecipient struct {
+	UserId string `json:"user_id"`
+	Name   string `json:"name"`
+	Email  string `json:"email"`
 }
 
 type UserCredential struct {

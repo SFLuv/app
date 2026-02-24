@@ -77,5 +77,5 @@ export interface GoogleSubLocation {
 
 export interface UpdateLocationApprovalRequest {
   id: number
-  approval: boolean
+  approval: boolean | null
 }

@@ -1,5 +1,7 @@
 package structs
 
+import "time"
+
 type User struct {
 	Id             string  `json:"id"`
 	Exists         bool    `json:"exists"`
@@ -26,4 +28,33 @@ type AuthedUserResponse struct {
 	Affiliate *Affiliate  `json:"affiliate,omitempty"`
 	Proposer  *Proposer   `json:"proposer,omitempty"`
 	Improver  *Improver   `json:"improver,omitempty"`
+	Issuer    *Issuer     `json:"issuer,omitempty"`
+}
+
+type UserVerifiedEmailStatus string
+
+const (
+	UserVerifiedEmailStatusVerified UserVerifiedEmailStatus = "verified"
+	UserVerifiedEmailStatusPending  UserVerifiedEmailStatus = "pending"
+	UserVerifiedEmailStatusExpired  UserVerifiedEmailStatus = "expired"
+)
+
+type UserVerifiedEmail struct {
+	Id                         string                  `json:"id"`
+	UserId                     string                  `json:"user_id"`
+	Email                      string                  `json:"email"`
+	Status                     UserVerifiedEmailStatus `json:"status"`
+	VerifiedAt                 *time.Time              `json:"verified_at,omitempty"`
+	VerificationSentAt         *time.Time              `json:"verification_sent_at,omitempty"`
+	VerificationTokenExpiresAt *time.Time              `json:"verification_token_expires_at,omitempty"`
+	CreatedAt                  time.Time               `json:"created_at"`
+	UpdatedAt                  time.Time               `json:"updated_at"`
+}
+
+type UserVerifiedEmailRequest struct {
+	Email string `json:"email"`
+}
+
+type UserEmailVerificationTokenRequest struct {
+	Token string `json:"token"`
 }

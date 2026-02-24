@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 
 	"github.com/SFLuv/app/backend/structs"
 	"github.com/SFLuv/app/backend/utils"
@@ -46,17 +45,11 @@ func (a *AppService) RequestAffiliateStatus(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	adminEmail := os.Getenv("AFFILIATE_ADMIN_EMAIL")
-	emailSender := utils.NewEmailSender()
-	if adminEmail != "" && emailSender != nil {
-		fromDomain := os.Getenv("MAILGUN_DOMAIN")
-		fromEmail := "no_reply@sfluv.org"
-		if fromDomain != "" {
-			fromEmail = "no_reply@" + fromDomain
-		}
-
-		subject := "New Affiliate Request"
-		details := fmt.Sprintf(`
+	a.sendRoleRequestEmail(
+		"AFFILIATE_ADMIN_EMAIL",
+		"New Affiliate Request",
+		"A user has requested affiliate status.",
+		fmt.Sprintf(`
 <table role="presentation" width="100%%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
   <tr>
     <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280; width:140px;">User</td>
@@ -66,19 +59,8 @@ func (a *AppService) RequestAffiliateStatus(w http.ResponseWriter, r *http.Reque
     <td style="padding:12px 0; font-size:13px; color:#6b7280;">Organization</td>
     <td style="padding:12px 0; font-size:13px; color:#111827;">%s</td>
   </tr>
-</table>`, affiliate.UserId, affiliate.Organization)
-
-		htmlContent := utils.BuildStyledEmail(
-			"New Affiliate Request",
-			"A user has requested affiliate status.",
-			details,
-		)
-
-		err = emailSender.SendEmail(adminEmail, "Admin", subject, htmlContent, fromEmail, "SFLuv Affiliates")
-		if err != nil {
-			a.logger.Logf("error sending affiliate request email: %s", err.Error())
-		}
-	}
+</table>`, affiliate.UserId, affiliate.Organization),
+	)
 
 	w.WriteHeader(http.StatusCreated)
 	_ = json.NewEncoder(w).Encode(affiliate)

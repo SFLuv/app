@@ -5,7 +5,10 @@ import { useApp } from "@/context/AppProvider"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { ActiveWorkflowListItem, Workflow, WorkflowDeletionProposal } from "@/types/workflow"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { WorkflowDetailsModal } from "@/components/workflows/workflow-details-modal"
+import { formatStatusLabel } from "@/lib/status-labels"
+import { ActiveWorkflowListItem, Workflow, WorkflowDeletionProposal, WorkflowDeletionTargetType } from "@/types/workflow"
 import { AlertTriangle, Clock3, Vote } from "lucide-react"
 
 function countdownText(finalizeAt?: string | null): string {
@@ -26,6 +29,10 @@ export default function VoterPage() {
   const [loading, setLoading] = useState<boolean>(true)
   const [error, setError] = useState<string>("")
   const [submittingId, setSubmittingId] = useState<string>("")
+  const [detailWorkflow, setDetailWorkflow] = useState<Workflow | null>(null)
+  const [detailOpen, setDetailOpen] = useState<boolean>(false)
+  const [detailLoading, setDetailLoading] = useState<boolean>(false)
+  const [detailSource, setDetailSource] = useState<"workflow-votes" | "active-workflows">("workflow-votes")
 
   const canVote = Boolean(user?.isVoter || user?.isAdmin)
 
@@ -136,6 +143,102 @@ export default function VoterPage() {
     }
   }
 
+  const getDeletionTargetType = useCallback(
+    (workflow: Workflow): WorkflowDeletionTargetType => {
+      const appearsSeriesWorkflow =
+        workflow.recurrence !== "one_time" ||
+        activeWorkflows.some((candidate) => candidate.id !== workflow.id && candidate.series_id === workflow.series_id)
+      return appearsSeriesWorkflow ? "series" : "workflow"
+    },
+    [activeWorkflows],
+  )
+
+  const hasPendingDeletionProposal = useCallback(
+    (workflow: Workflow, targetType: WorkflowDeletionTargetType): boolean =>
+      deletionProposals.some(
+        (proposal) =>
+          proposal.status === "pending" &&
+          ((targetType === "series" &&
+            proposal.target_type === "series" &&
+            proposal.target_series_id === workflow.series_id) ||
+            (targetType === "workflow" &&
+              proposal.target_type === "workflow" &&
+              proposal.target_workflow_id === workflow.id)),
+      ),
+    [deletionProposals],
+  )
+
+  const proposeDeletionFromActiveWorkflow = async (workflow: Workflow) => {
+    const targetType = getDeletionTargetType(workflow)
+    if (hasPendingDeletionProposal(workflow, targetType)) {
+      setError(targetType === "series" ? "A pending deletion vote already exists for this series." : "A pending deletion vote already exists for this workflow.")
+      return
+    }
+
+    setSubmittingId(`deletion:create:${workflow.id}`)
+    try {
+      const res = await authFetch("/voters/workflow-deletion-proposals", {
+        method: "POST",
+        body: JSON.stringify({
+          workflow_id: workflow.id,
+          target_type: targetType,
+        }),
+      })
+      if (!res.ok) {
+        const text = await res.text()
+        throw new Error(text || "Unable to create deletion proposal.")
+      }
+      await loadWorkflows()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to create deletion proposal.")
+    } finally {
+      setSubmittingId("")
+    }
+  }
+
+  const openWorkflowDetails = async (
+    workflowId: string,
+    workflow?: Workflow,
+    source: "workflow-votes" | "active-workflows" = "workflow-votes",
+  ) => {
+    setError("")
+    setDetailSource(source)
+
+    if (workflow) {
+      setDetailWorkflow(workflow)
+      setDetailLoading(false)
+      setDetailOpen(true)
+      return
+    }
+
+    const existing = workflows.find((item) => item.id === workflowId)
+    if (existing) {
+      setDetailWorkflow(existing)
+      setDetailLoading(false)
+      setDetailOpen(true)
+      return
+    }
+
+    setDetailWorkflow(null)
+    setDetailLoading(true)
+    setDetailOpen(true)
+
+    try {
+      const res = await authFetch(`/workflows/${workflowId}`)
+      if (!res.ok) {
+        const text = await res.text()
+        throw new Error(text || "Unable to load workflow details.")
+      }
+      const workflowDetails = (await res.json()) as Workflow
+      setDetailWorkflow(workflowDetails)
+    } catch (err) {
+      setDetailOpen(false)
+      setError(err instanceof Error ? err.message : "Unable to load workflow details.")
+    } finally {
+      setDetailLoading(false)
+    }
+  }
+
   const pendingCount = useMemo(() => workflows.filter((workflow) => workflow.status === "pending").length, [workflows])
   const pendingDeletionCount = useMemo(
     () => deletionProposals.filter((proposal) => proposal.status === "pending").length,
@@ -179,215 +282,278 @@ export default function VoterPage() {
         </div>
       )}
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Vote className="h-5 w-5" />
-            Workflow Votes
-          </CardTitle>
-          <CardDescription>
-            Pending proposals: <span className="font-medium">{pendingCount}</span>
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {workflows.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No workflows available for voting.</p>
-          ) : (
-            <div className="space-y-4">
-              {workflows.map((workflow) => {
-                const pending = workflow.status === "pending"
-                const myDecision = workflow.votes.my_decision
+      <Tabs defaultValue="workflow-votes" className="space-y-4">
+        <TabsList className="grid h-auto w-full grid-cols-1 gap-2 p-1 sm:grid-cols-3">
+          <TabsTrigger value="workflow-votes">Workflow Votes ({pendingCount})</TabsTrigger>
+          <TabsTrigger value="deletion-votes">Deletion Votes ({pendingDeletionCount})</TabsTrigger>
+          <TabsTrigger value="active-workflows">Active Workflows</TabsTrigger>
+        </TabsList>
 
-                return (
-                  <Card key={workflow.id}>
-                    <CardContent className="p-4 space-y-3">
-                      <div className="flex flex-wrap items-center justify-between gap-3">
-                        <div>
-                          <h3 className="font-semibold">{workflow.title}</h3>
-                          <p className="text-xs text-muted-foreground">Workflow ID: {workflow.id}</p>
-                        </div>
-                        <Badge variant={pending ? "outline" : workflow.status === "approved" || workflow.status === "blocked" ? "default" : "secondary"}>
-                          {workflow.status}
-                        </Badge>
+        <TabsContent value="workflow-votes">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Vote className="h-5 w-5" />
+                Workflow Votes
+              </CardTitle>
+              <CardDescription>
+                Pending proposals: <span className="font-medium">{pendingCount}</span>
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {workflows.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No workflows available for voting.</p>
+              ) : (
+                <div className="space-y-4">
+                  {workflows.map((workflow) => {
+                    const pending = workflow.status === "pending"
+                    const myDecision = workflow.votes.my_decision
+
+                    return (
+                      <Card
+                        key={workflow.id}
+                        className="cursor-pointer transition-colors hover:bg-muted/30"
+                        onClick={() => openWorkflowDetails(workflow.id, workflow, "workflow-votes")}
+                      >
+                        <CardContent className="p-4 space-y-3">
+                          <div className="flex flex-wrap items-center justify-between gap-3">
+                            <div>
+                              <h3 className="font-semibold">{workflow.title}</h3>
+                            </div>
+                            <Badge variant={pending ? "outline" : workflow.status === "approved" || workflow.status === "blocked" ? "default" : "secondary"}>
+                              {formatStatusLabel(workflow.status)}
+                            </Badge>
+                          </div>
+
+                          <p className="text-sm text-muted-foreground">{workflow.description}</p>
+
+                          <div className="grid gap-2 text-xs text-muted-foreground md:grid-cols-3">
+                            <span>
+                              Votes: {workflow.votes.approve} approve / {workflow.votes.deny} deny ({workflow.votes.votes_cast}/{workflow.votes.total_voters})
+                            </span>
+                            <span>Quorum threshold: {workflow.votes.quorum_threshold}</span>
+                            <span>Start: {new Date(workflow.start_at).toLocaleString()}</span>
+                          </div>
+
+                          {pending && workflow.votes.quorum_reached && (
+                            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                              <Clock3 className="h-3 w-3" />
+                              <span>Countdown: {countdownText(workflow.votes.finalize_at)}</span>
+                            </div>
+                          )}
+
+                          <div className="flex flex-wrap items-center gap-2">
+                            {myDecision && <Badge variant="secondary">Your vote: {formatStatusLabel(myDecision)}</Badge>}
+                            {workflow.votes.decision && <Badge variant="secondary">Decision: {formatStatusLabel(workflow.votes.decision)}</Badge>}
+                          </div>
+
+                          {pending && (
+                            <div className="flex flex-wrap gap-2 pt-1">
+                              <Button
+                                className="w-full sm:w-auto"
+                                size="sm"
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  void voteWorkflow(workflow.id, "approve")
+                                }}
+                                disabled={Boolean(submittingId)}
+                              >
+                                {submittingId === workflow.id + "approve" ? "Submitting..." : "Approve"}
+                              </Button>
+                              <Button
+                                className="w-full sm:w-auto"
+                                size="sm"
+                                variant="outline"
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  void voteWorkflow(workflow.id, "deny")
+                                }}
+                                disabled={Boolean(submittingId)}
+                              >
+                                {submittingId === workflow.id + "deny" ? "Submitting..." : "Deny"}
+                              </Button>
+                              {user?.isAdmin && (
+                                <Button
+                                  className="w-full sm:w-auto"
+                                  size="sm"
+                                  variant="secondary"
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    void forceApprove(workflow.id)
+                                  }}
+                                  disabled={Boolean(submittingId)}
+                                >
+                                  {submittingId === workflow.id + "force" ? "Submitting..." : "Force Approve"}
+                                </Button>
+                              )}
+                            </div>
+                          )}
+                        </CardContent>
+                      </Card>
+                    )
+                  })}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="deletion-votes">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Vote className="h-5 w-5" />
+                Workflow Deletion Votes
+              </CardTitle>
+              <CardDescription>
+                Pending deletion proposals: <span className="font-medium">{pendingDeletionCount}</span>
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {deletionProposals.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No workflow deletion proposals available.</p>
+              ) : (
+                <div className="space-y-4">
+                  {deletionProposals.map((proposal) => {
+                    const pending = proposal.status === "pending"
+                    return (
+                      <Card key={proposal.id}>
+                        <CardContent className="p-4 space-y-3">
+                          <div className="flex flex-wrap items-center justify-between gap-3">
+                            <div>
+                              <h3 className="font-semibold">
+                                {proposal.target_type === "series" ? "Series Deletion" : "Workflow Deletion"}
+                              </h3>
+                            </div>
+                            <Badge variant={pending ? "outline" : proposal.status === "approved" ? "default" : "secondary"}>
+                              {formatStatusLabel(proposal.status)}
+                            </Badge>
+                          </div>
+
+                          <div className="grid gap-2 text-xs text-muted-foreground md:grid-cols-3">
+                            <span>Target Type: {proposal.target_type}</span>
+                            <span>Workflow: {proposal.target_workflow_title || "--"}</span>
+                            <span>{proposal.target_type === "series" ? "Target: Entire Series" : "Target: Single Workflow"}</span>
+                          </div>
+                          <div className="grid gap-2 text-xs text-muted-foreground md:grid-cols-3">
+                            <span>
+                              Votes: {proposal.votes.approve} approve / {proposal.votes.deny} deny ({proposal.votes.votes_cast}/{proposal.votes.total_voters})
+                            </span>
+                            <span>Quorum threshold: {proposal.votes.quorum_threshold}</span>
+                            <span>Created: {new Date(proposal.created_at).toLocaleString()}</span>
+                          </div>
+
+                          {pending && proposal.votes.quorum_reached && (
+                            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                              <Clock3 className="h-3 w-3" />
+                              <span>Countdown: {countdownText(proposal.votes.finalize_at)}</span>
+                            </div>
+                          )}
+
+                          <div className="flex flex-wrap items-center gap-2">
+                            {proposal.votes.my_decision && <Badge variant="secondary">Your vote: {formatStatusLabel(proposal.votes.my_decision)}</Badge>}
+                            {proposal.votes.decision && <Badge variant="secondary">Decision: {formatStatusLabel(proposal.votes.decision)}</Badge>}
+                          </div>
+
+                          {pending && (
+                            <div className="flex flex-wrap gap-2 pt-1">
+                              <Button
+                                className="w-full sm:w-auto"
+                                size="sm"
+                                onClick={() => voteDeletionProposal(proposal.id, "approve")}
+                                disabled={Boolean(submittingId)}
+                              >
+                                {submittingId === `deletion:${proposal.id}:approve` ? "Submitting..." : "Approve"}
+                              </Button>
+                              <Button
+                                className="w-full sm:w-auto"
+                                size="sm"
+                                variant="outline"
+                                onClick={() => voteDeletionProposal(proposal.id, "deny")}
+                                disabled={Boolean(submittingId)}
+                              >
+                                {submittingId === `deletion:${proposal.id}:deny` ? "Submitting..." : "Deny"}
+                              </Button>
+                            </div>
+                          )}
+                        </CardContent>
+                      </Card>
+                    )
+                  })}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="active-workflows">
+          <Card>
+            <CardHeader>
+              <CardTitle>Active Workflows</CardTitle>
+              <CardDescription>
+                Active workflows that can be targeted by voter deletion proposals.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {activeWorkflows.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No active workflows available right now.</p>
+              ) : (
+                activeWorkflows.map((workflow) => (
+                  <Card
+                    key={`active-${workflow.id}`}
+                    className="cursor-pointer transition-colors hover:bg-muted/30"
+                    onClick={() => openWorkflowDetails(workflow.id, undefined, "active-workflows")}
+                  >
+                    <CardContent className="pt-4 space-y-2">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <h4 className="font-semibold">{workflow.title}</h4>
+                        <Badge>{formatStatusLabel(workflow.status)}</Badge>
                       </div>
-
                       <p className="text-sm text-muted-foreground">{workflow.description}</p>
-
-                      <div className="grid gap-2 text-xs text-muted-foreground md:grid-cols-3">
-                        <span>
-                          Votes: {workflow.votes.approve} approve / {workflow.votes.deny} deny ({workflow.votes.votes_cast}/{workflow.votes.total_voters})
-                        </span>
-                        <span>Quorum threshold: {workflow.votes.quorum_threshold}</span>
+                      <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
                         <span>Start: {new Date(workflow.start_at).toLocaleString()}</span>
                       </div>
-
-                      {pending && workflow.votes.quorum_reached && (
-                        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                          <Clock3 className="h-3 w-3" />
-                          <span>Countdown: {countdownText(workflow.votes.finalize_at)}</span>
-                        </div>
-                      )}
-
-                      <div className="flex flex-wrap items-center gap-2">
-                        {myDecision && <Badge variant="secondary">Your vote: {myDecision}</Badge>}
-                        {workflow.votes.decision && <Badge variant="secondary">Decision: {workflow.votes.decision}</Badge>}
-                      </div>
-
-                      {pending && (
-                        <div className="flex flex-wrap gap-2 pt-1">
-                          <Button
-                            size="sm"
-                            onClick={() => voteWorkflow(workflow.id, "approve")}
-                            disabled={Boolean(submittingId)}
-                          >
-                            {submittingId === workflow.id + "approve" ? "Submitting..." : "Approve"}
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => voteWorkflow(workflow.id, "deny")}
-                            disabled={Boolean(submittingId)}
-                          >
-                            {submittingId === workflow.id + "deny" ? "Submitting..." : "Deny"}
-                          </Button>
-                          {user?.isAdmin && (
-                            <Button
-                              size="sm"
-                              variant="secondary"
-                              onClick={() => forceApprove(workflow.id)}
-                              disabled={Boolean(submittingId)}
-                            >
-                              {submittingId === workflow.id + "force" ? "Submitting..." : "Force Approve"}
-                            </Button>
-                          )}
-                        </div>
-                      )}
                     </CardContent>
                   </Card>
-                )
-              })}
-            </div>
-          )}
-        </CardContent>
-      </Card>
+                ))
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+      </Tabs>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Vote className="h-5 w-5" />
-            Workflow Deletion Votes
-          </CardTitle>
-          <CardDescription>
-            Pending deletion proposals: <span className="font-medium">{pendingDeletionCount}</span>
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {deletionProposals.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No workflow deletion proposals available.</p>
-          ) : (
-            <div className="space-y-4">
-              {deletionProposals.map((proposal) => {
-                const pending = proposal.status === "pending"
+      <WorkflowDetailsModal
+        workflow={detailWorkflow}
+        open={detailOpen}
+        onOpenChange={(open) => setDetailOpen(open)}
+        loading={detailLoading}
+        renderWorkflowActions={
+          detailSource === "active-workflows"
+            ? (workflow) => {
+                const targetType = getDeletionTargetType(workflow)
+                const pending = hasPendingDeletionProposal(workflow, targetType)
+                const createSubmitting = submittingId === `deletion:create:${workflow.id}`
                 return (
-                  <Card key={proposal.id}>
-                    <CardContent className="p-4 space-y-3">
-                      <div className="flex flex-wrap items-center justify-between gap-3">
-                        <div>
-                          <h3 className="font-semibold">
-                            {proposal.target_type === "series" ? "Series Deletion" : "Workflow Deletion"}
-                          </h3>
-                          <p className="text-xs text-muted-foreground">
-                            Proposal ID: {proposal.id}
-                          </p>
-                        </div>
-                        <Badge variant={pending ? "outline" : proposal.status === "approved" ? "default" : "secondary"}>
-                          {proposal.status}
-                        </Badge>
-                      </div>
-
-                      <div className="grid gap-2 text-xs text-muted-foreground md:grid-cols-3">
-                        <span>Target Type: {proposal.target_type}</span>
-                        <span>Workflow: {proposal.target_workflow_title || proposal.target_workflow_id || "--"}</span>
-                        <span>Series: {proposal.target_series_id || "--"}</span>
-                      </div>
-                      <div className="grid gap-2 text-xs text-muted-foreground md:grid-cols-3">
-                        <span>
-                          Votes: {proposal.votes.approve} approve / {proposal.votes.deny} deny ({proposal.votes.votes_cast}/{proposal.votes.total_voters})
-                        </span>
-                        <span>Quorum threshold: {proposal.votes.quorum_threshold}</span>
-                        <span>Created: {new Date(proposal.created_at).toLocaleString()}</span>
-                      </div>
-
-                      {pending && proposal.votes.quorum_reached && (
-                        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                          <Clock3 className="h-3 w-3" />
-                          <span>Countdown: {countdownText(proposal.votes.finalize_at)}</span>
-                        </div>
-                      )}
-
-                      <div className="flex flex-wrap items-center gap-2">
-                        {proposal.votes.my_decision && <Badge variant="secondary">Your vote: {proposal.votes.my_decision}</Badge>}
-                        {proposal.votes.decision && <Badge variant="secondary">Decision: {proposal.votes.decision}</Badge>}
-                      </div>
-
-                      {pending && (
-                        <div className="flex flex-wrap gap-2 pt-1">
-                          <Button
-                            size="sm"
-                            onClick={() => voteDeletionProposal(proposal.id, "approve")}
-                            disabled={Boolean(submittingId)}
-                          >
-                            {submittingId === `deletion:${proposal.id}:approve` ? "Submitting..." : "Approve"}
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => voteDeletionProposal(proposal.id, "deny")}
-                            disabled={Boolean(submittingId)}
-                          >
-                            {submittingId === `deletion:${proposal.id}:deny` ? "Submitting..." : "Deny"}
-                          </Button>
-                        </div>
-                      )}
-                    </CardContent>
-                  </Card>
+                  <div className="space-y-2 rounded-md border bg-secondary/30 p-3">
+                    <p className="text-xs text-muted-foreground">
+                      {targetType === "series"
+                        ? "Deletion proposal will target the full workflow series."
+                        : "Deletion proposal will target only this workflow."}
+                    </p>
+                    <Button
+                      className="w-full sm:w-auto"
+                      size="sm"
+                      onClick={() => void proposeDeletionFromActiveWorkflow(workflow)}
+                      disabled={Boolean(submittingId) || pending}
+                    >
+                      {createSubmitting ? "Submitting..." : pending ? "Deletion Vote Pending" : "Propose Deletion Vote"}
+                    </Button>
+                  </div>
                 )
-              })}
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Active Workflows</CardTitle>
-          <CardDescription>
-            Active workflows that can be targeted by proposer deletion proposals.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {activeWorkflows.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No active workflows available right now.</p>
-          ) : (
-            activeWorkflows.map((workflow) => (
-              <Card key={`active-${workflow.id}`}>
-                <CardContent className="pt-4 space-y-2">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <h4 className="font-semibold">{workflow.title}</h4>
-                    <Badge>{workflow.status}</Badge>
-                  </div>
-                  <p className="text-sm text-muted-foreground">{workflow.description}</p>
-                  <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
-                    <span>Workflow ID: {workflow.id}</span>
-                    <span>Series ID: {workflow.series_id}</span>
-                    <span>Start: {new Date(workflow.start_at).toLocaleString()}</span>
-                  </div>
-                </CardContent>
-              </Card>
-            ))
-          )}
-        </CardContent>
-      </Card>
+              }
+            : undefined
+        }
+      />
     </div>
   )
 }

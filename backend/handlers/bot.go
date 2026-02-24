@@ -8,8 +8,11 @@ import (
 	"io"
 	"math/big"
 	"net/http"
+	"net/url"
 	"os"
+	"regexp"
 	"strconv"
+	"strings"
 
 	"github.com/SFLuv/app/backend/bot"
 	"github.com/SFLuv/app/backend/db"
@@ -26,6 +29,8 @@ type BotService struct {
 	w9                 *W9Service
 	affiliateScheduler *AffiliateScheduler
 }
+
+var redeemCodeUUIDPattern = regexp.MustCompile(`(?i)[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}`)
 
 func NewBotService(db *db.BotDB, appDb *db.AppDB, bot bot.IBot, w9 *W9Service, affiliateScheduler *AffiliateScheduler) *BotService {
 	return &BotService{
@@ -71,6 +76,25 @@ func EnsureUnmarshal(w http.ResponseWriter, obj any, body []byte) bool {
 		return false
 	}
 	return true
+}
+
+func normalizeRedeemCode(raw string) string {
+	code := strings.TrimSpace(raw)
+	if code == "" {
+		return ""
+	}
+
+	if decoded, err := url.QueryUnescape(code); err == nil {
+		code = decoded
+	}
+
+	code = strings.ReplaceAll(code, " ", "")
+
+	if match := redeemCodeUUIDPattern.FindString(code); match != "" {
+		return strings.ToLower(match)
+	}
+
+	return strings.ToLower(code)
 }
 
 // Create an event with x amount of available codes, y $SFLUV per code, and z expiration date. Responds with event id
@@ -678,6 +702,12 @@ func (s *BotService) Redeem(w http.ResponseWriter, r *http.Request) {
 	if !EnsureUnmarshal(w, &request, body) {
 		return
 	}
+	if request == nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	request.Code = normalizeRedeemCode(request.Code)
 
 	amount, tx, err := s.db.Redeem(r.Context(), request.Code, request.Address)
 	if err != nil {

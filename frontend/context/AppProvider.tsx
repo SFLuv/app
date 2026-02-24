@@ -17,6 +17,7 @@ import { AppWallet } from "@/lib/wallets/wallets";
 import { Affiliate } from "@/types/affiliate";
 import { Proposer } from "@/types/proposer";
 import { Improver } from "@/types/improver";
+import { IssuerRecord } from "@/types/issuer";
 import { UserResponse, GetUserResponse, WalletResponse } from "@/types/server";
 import { AuthedLocation } from "@/types/location";
 import { importWallet as privyImportWallet } from "@/lib/wallets/import";
@@ -69,6 +70,8 @@ interface AppContextType {
   setProposer: Dispatch<SetStateAction<Proposer | null>>;
   improver: Improver | null;
   setImprover: Dispatch<SetStateAction<Improver | null>>;
+  issuer: IssuerRecord | null;
+  setIssuer: Dispatch<SetStateAction<IssuerRecord | null>>;
   userLocations: AuthedLocation[]
   setUserLocations: Dispatch<SetStateAction<AuthedLocation[]>>;
   login: () => Promise<void>;
@@ -115,6 +118,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
   const [affiliate, setAffiliate] = useState<Affiliate | null>(null)
   const [proposer, setProposer] = useState<Proposer | null>(null)
   const [improver, setImprover] = useState<Improver | null>(null)
+  const [issuer, setIssuer] = useState<IssuerRecord | null>(null)
   const [wallets, setWallets] = useState<AppWallet[]>([])
   const [walletsStatus, setWalletsStatus] = useState<WalletsStatus>("loading")
   const [mapLocations, setMapLocations] = useState<Location[]>([])
@@ -267,6 +271,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
       setAffiliate(r.affiliate ?? null)
       setProposer(r.proposer ?? null)
       setImprover(r.improver ?? null)
+      setIssuer(r.issuer ?? null)
   }
 
   const _userLogin = async () => {
@@ -306,6 +311,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     setAffiliate(null)
     setProposer(null)
     setImprover(null)
+    setIssuer(null)
     setStatus("unauthenticated")
     setWallets([])
     setWalletsStatus("unavailable")
@@ -714,6 +720,8 @@ export default function AppProvider({ children }: { children: ReactNode }) {
           setProposer,
           improver,
           setImprover,
+          issuer,
+          setIssuer,
           wallets,
           walletsStatus,
           userLocations,

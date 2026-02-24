@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import React, { useEffect, useMemo, useState } from "react"
 import { useApp } from "@/context/AppProvider"
 import { useMerchants } from "@/hooks/api/use-merchants"
 import { useToast } from "@/hooks/use-toast"
@@ -10,9 +10,10 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Badge } from "@/components/ui/badge"
-import { Checkbox } from "@/components/ui/checkbox"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { buildCredentialLabelMap, formatCredentialLabel } from "@/lib/credential-labels"
+import { formatStatusLabel } from "@/lib/status-labels"
 import {
   Dialog,
   DialogContent,
@@ -57,8 +58,8 @@ import { FAUCET_ADDRESS, SFLUV_DECIMALS, SFLUV_TOKEN } from "@/lib/constants"
 import { Affiliate } from "@/types/affiliate"
 import { Proposer } from "@/types/proposer"
 import { Improver } from "@/types/improver"
-import { IssuerWithScopes } from "@/types/issuer"
-import { CredentialType } from "@/types/workflow"
+import { IssuerRecord, IssuerWithScopes } from "@/types/issuer"
+import { CredentialType, GlobalCredentialType } from "@/types/workflow"
 import { Event, EventsStatus } from "@/types/event"
 import { AddEventModal } from "@/components/events/add-event-modal"
 import { EventModal } from "@/components/events/event-modal"
@@ -84,16 +85,23 @@ const mockPaypalAccounts = [
   },
 ]
 
-const issuerCredentialOptions: Array<{ value: CredentialType; label: string }> = [
-  { value: "dpw_certified", label: "DPW Certified" },
-  { value: "sfluv_verifier", label: "SFLuv Verifier" },
-]
+type ApprovalStatus = "pending" | "approved" | "rejected"
 
+const approvalToStatus = (approval?: boolean | null): ApprovalStatus => {
+  if (approval === true) return "approved"
+  if (approval === false) return "rejected"
+  return "pending"
+}
 
+const statusToApproval = (status: ApprovalStatus): boolean | null => {
+  if (status === "approved") return true
+  if (status === "rejected") return false
+  return null
+}
 
 export default function AdminPage() {
   const { user, wallets, authFetch, status } = useApp()
-  const { getAuthedMapLocations, updateLocationApproval, authedMapLocations} = useLocation()
+  const { getAuthedMapLocations, authedMapLocations} = useLocation()
   const { toast } = useToast()
 
   // Global wallet selection
@@ -130,6 +138,10 @@ export default function AdminPage() {
   // Merchant review modal state
   const [selectedLocationForReview, setselectedLocationForReview] = useState<any>(null)
   const [isLocationReviewModalOpen, setisLocationReviewModalOpen] = useState(false)
+  const [merchantStatusFilter, setMerchantStatusFilter] = useState<string>("all")
+  const [merchantStatusDraft, setMerchantStatusDraft] = useState<ApprovalStatus>("pending")
+  const [merchantModalSaving, setMerchantModalSaving] = useState<boolean>(false)
+  const [merchantModalError, setMerchantModalError] = useState<string>("")
 
   // QR code generation state
   const [eventStartDate, setEventStartDate] = useState<Date>()
@@ -170,6 +182,8 @@ export default function AdminPage() {
   const [affiliateUpdating, setAffiliateUpdating] = useState<boolean>(false)
   const [affiliateModalError, setAffiliateModalError] = useState<string>("")
   const [eventsOwnerFilter, setEventsOwnerFilter] = useState<string>("all")
+  const [affiliateStatusFilter, setAffiliateStatusFilter] = useState<string>("all")
+  const [affiliateStatusDraft, setAffiliateStatusDraft] = useState<Affiliate["status"]>("pending")
 
   // Proposers
   const [proposers, setProposers] = useState<Proposer[]>([])
@@ -179,16 +193,48 @@ export default function AdminPage() {
   const [proposerNickname, setProposerNickname] = useState<string>("")
   const [proposerUpdating, setProposerUpdating] = useState<boolean>(false)
   const [proposerModalError, setProposerModalError] = useState<string>("")
+  const [proposerStatusFilter, setProposerStatusFilter] = useState<string>("all")
+  const [proposerStatusDraft, setProposerStatusDraft] = useState<Proposer["status"]>("pending")
 
   // Improvers
   const [improvers, setImprovers] = useState<Improver[]>([])
   const [improversError, setImproversError] = useState<string>("")
+  const [improverStatusFilter, setImproverStatusFilter] = useState<string>("all")
+  const [improverModalOpen, setImproverModalOpen] = useState<boolean>(false)
+  const [selectedImprover, setSelectedImprover] = useState<Improver | null>(null)
+  const [improverStatusDraft, setImproverStatusDraft] = useState<Improver["status"]>("pending")
+  const [improverModalUpdating, setImproverModalUpdating] = useState<boolean>(false)
+  const [improverModalError, setImproverModalError] = useState<string>("")
+
+  // Issuer requests
+  const [issuerRequests, setIssuerRequests] = useState<IssuerRecord[]>([])
+  const [issuerRequestsError, setIssuerRequestsError] = useState<string>("")
+  const [issuerRequestSaving, setIssuerRequestSaving] = useState<Record<string, boolean>>({})
+  const [issuerRequestModalOpen, setIssuerRequestModalOpen] = useState<boolean>(false)
+  const [selectedIssuerRequest, setSelectedIssuerRequest] = useState<IssuerRecord | null>(null)
+  const [issuerRequestNickname, setIssuerRequestNickname] = useState<string>("")
+  const [issuerRequestStatusDraft, setIssuerRequestStatusDraft] = useState<string>("pending")
+  const [issuerRequestModalError, setIssuerRequestModalError] = useState<string>("")
+  const [issuerStatusFilter, setIssuerStatusFilter] = useState<string>("all")
+
+  // Issuer credential scopes
   const [issuers, setIssuers] = useState<IssuerWithScopes[]>([])
   const [issuersError, setIssuersError] = useState<string>("")
-  const [issuerUserId, setIssuerUserId] = useState<string>("")
-  const [issuerEnabled, setIssuerEnabled] = useState<boolean>(true)
-  const [issuerScopes, setIssuerScopes] = useState<CredentialType[]>(["dpw_certified"])
+  const [issuerScopes, setIssuerScopes] = useState<CredentialType[]>([])
+  const [issuerScopePicker, setIssuerScopePicker] = useState<string>("")
   const [issuerSaving, setIssuerSaving] = useState<boolean>(false)
+
+  // Credential types
+  const [credentialTypes, setCredentialTypes] = useState<GlobalCredentialType[]>([])
+  const [credentialTypesError, setCredentialTypesError] = useState<string>("")
+  const [newCredentialValue, setNewCredentialValue] = useState<string>("")
+  const [newCredentialLabel, setNewCredentialLabel] = useState<string>("")
+  const [credentialTypeSaving, setCredentialTypeSaving] = useState<boolean>(false)
+
+  const credentialLabelMap = useMemo(
+    () => buildCredentialLabelMap(credentialTypes),
+    [credentialTypes],
+  )
 
   const toggleNewEventModal = () => {
     setEventsModalOpen(!eventsModalOpen)
@@ -331,6 +377,31 @@ export default function AdminPage() {
     return events.filter((event) => event.owner === eventsOwnerFilter)
   }, [events, eventsOwnerFilter])
 
+  const filteredMerchants = useMemo(() => {
+    if (merchantStatusFilter === "all") return authedMapLocations
+    return authedMapLocations.filter((location) => approvalToStatus(location.approval) === merchantStatusFilter)
+  }, [authedMapLocations, merchantStatusFilter])
+
+  const filteredAffiliates = useMemo(() => {
+    if (affiliateStatusFilter === "all") return affiliates
+    return affiliates.filter((affiliate) => affiliate.status === affiliateStatusFilter)
+  }, [affiliates, affiliateStatusFilter])
+
+  const filteredProposers = useMemo(() => {
+    if (proposerStatusFilter === "all") return proposers
+    return proposers.filter((proposer) => proposer.status === proposerStatusFilter)
+  }, [proposers, proposerStatusFilter])
+
+  const filteredImprovers = useMemo(() => {
+    if (improverStatusFilter === "all") return improvers
+    return improvers.filter((improver) => improver.status === improverStatusFilter)
+  }, [improvers, improverStatusFilter])
+
+  const filteredIssuerRequests = useMemo(() => {
+    if (issuerStatusFilter === "all") return issuerRequests
+    return issuerRequests.filter((issuer) => issuer.status === issuerStatusFilter)
+  }, [issuerRequests, issuerStatusFilter])
+
   const getAffiliates = async () => {
     try {
       const res = await authFetch("/admin/affiliates")
@@ -348,6 +419,7 @@ export default function AdminPage() {
     setAffiliateNickname(affiliate.nickname || "")
     setAffiliateWeeklyBalance(String(affiliate.weekly_allocation ?? affiliate.weekly_balance ?? 0))
     setAffiliateBonus(String(affiliate.one_time_balance ?? 0))
+    setAffiliateStatusDraft(affiliate.status)
     setAffiliateModalError("")
     setAffiliateModalOpen(true)
   }
@@ -368,6 +440,7 @@ export default function AdminPage() {
       )
       setSelectedAffiliate(updated)
       setAffiliateBonus(String(updated?.one_time_balance ?? 0))
+      setAffiliateStatusDraft(updated.status)
     } catch {
       setAffiliateModalError("Unable to update affiliate right now. Please try again.")
     } finally {
@@ -380,32 +453,7 @@ export default function AdminPage() {
 
     const payload: Record<string, unknown> = {
       user_id: selectedAffiliate.user_id,
-    }
-
-    const weekly = Number(affiliateWeeklyBalance)
-    if (!Number.isNaN(weekly)) {
-      payload.weekly_balance = weekly
-    }
-
-    payload.nickname = affiliateNickname
-
-    const bonusValue = affiliateBonus.trim()
-    if (bonusValue !== "") {
-      const bonus = Number(bonusValue)
-      if (!Number.isNaN(bonus)) {
-        payload.one_time_balance = bonus
-      }
-    }
-
-    await submitAffiliateUpdate(payload)
-  }
-
-  const handleAffiliateStatus = async (status: Affiliate["status"]) => {
-    if (!selectedAffiliate) return
-
-    const payload: Record<string, unknown> = {
-      user_id: selectedAffiliate.user_id,
-      status,
+      status: affiliateStatusDraft,
     }
 
     const weekly = Number(affiliateWeeklyBalance)
@@ -441,6 +489,7 @@ export default function AdminPage() {
   const openProposerModal = (proposer: Proposer) => {
     setSelectedProposer(proposer)
     setProposerNickname(proposer.nickname || "")
+    setProposerStatusDraft(proposer.status)
     setProposerModalError("")
     setProposerModalOpen(true)
   }
@@ -460,6 +509,7 @@ export default function AdminPage() {
         prev.map((proposer) => (proposer.user_id === updated.user_id ? updated : proposer)),
       )
       setSelectedProposer(updated)
+      setProposerStatusDraft(updated.status)
     } catch {
       setProposerModalError("Unable to update proposer right now. Please try again.")
     } finally {
@@ -473,18 +523,7 @@ export default function AdminPage() {
     const payload: Record<string, unknown> = {
       user_id: selectedProposer.user_id,
       nickname: proposerNickname,
-    }
-
-    await submitProposerUpdate(payload)
-  }
-
-  const handleProposerStatus = async (status: Proposer["status"]) => {
-    if (!selectedProposer) return
-
-    const payload: Record<string, unknown> = {
-      user_id: selectedProposer.user_id,
-      status,
-      nickname: proposerNickname,
+      status: proposerStatusDraft,
     }
 
     await submitProposerUpdate(payload)
@@ -502,7 +541,17 @@ export default function AdminPage() {
     }
   }
 
+  const openImproverModal = (improver: Improver) => {
+    setSelectedImprover(improver)
+    setImproverStatusDraft(improver.status)
+    setImproverModalError("")
+    setImproverModalOpen(true)
+  }
+
   const updateImproverStatus = async (user_id: string, status: Improver["status"]) => {
+    setImproverModalUpdating(true)
+    setImproversError("")
+    setImproverModalError("")
     try {
       const res = await authFetch("/admin/improvers", {
         method: "PUT",
@@ -511,9 +560,21 @@ export default function AdminPage() {
       if (!res.ok) throw new Error()
       const updated = await res.json()
       setImprovers((prev) => prev.map((improver) => (improver.user_id === updated.user_id ? updated : improver)))
+      setSelectedImprover((prev) => (prev?.user_id === updated.user_id ? updated : prev))
+      return true
     } catch {
       setImproversError("Unable to update improver right now. Please try again.")
+      setImproverModalError("Unable to update improver right now. Please try again.")
+      return false
+    } finally {
+      setImproverModalUpdating(false)
     }
+  }
+
+  const saveImproverModal = async () => {
+    if (!selectedImprover) return
+    const ok = await updateImproverStatus(selectedImprover.user_id, improverStatusDraft)
+    if (ok) setImproverModalOpen(false)
   }
 
   const getIssuers = async () => {
@@ -528,42 +589,129 @@ export default function AdminPage() {
     }
   }
 
-  const toggleIssuerScope = (credential: CredentialType, checked: boolean) => {
-    setIssuerScopes((prev) => {
-      if (checked) {
-        if (prev.includes(credential)) return prev
-        return [...prev, credential]
+  const getIssuerRequests = async () => {
+    try {
+      const res = await authFetch("/admin/issuer-requests")
+      if (!res.ok) throw new Error()
+      const data = await res.json()
+      setIssuerRequests(data || [])
+      setIssuerRequestsError("")
+    } catch {
+      setIssuerRequestsError("Error fetching issuer requests. Please try again later.")
+    }
+  }
+
+  const updateIssuerRequest = async (user_id: string, payload: { status?: string; nickname?: string }) => {
+    setIssuerRequestSaving((prev) => ({ ...prev, [user_id]: true }))
+    setIssuerRequestsError("")
+    try {
+      const res = await authFetch("/admin/issuer-requests", {
+        method: "PUT",
+        body: JSON.stringify({ user_id, ...payload }),
+      })
+      if (!res.ok) throw new Error()
+      const updated = await res.json() as IssuerRecord
+      setIssuerRequests((prev) => prev.map((r) => (r.user_id === updated.user_id ? updated : r)))
+      setSelectedIssuerRequest((prev) => (prev?.user_id === updated.user_id ? updated : prev))
+      await getIssuers()
+      return true
+    } catch {
+      setIssuerRequestsError("Unable to update issuer request right now. Please try again.")
+      return false
+    } finally {
+      setIssuerRequestSaving((prev) => ({ ...prev, [user_id]: false }))
+    }
+  }
+
+  const openIssuerRequestModal = (req: IssuerRecord) => {
+    setSelectedIssuerRequest(req)
+    setIssuerRequestNickname(req.nickname || "")
+    setIssuerRequestStatusDraft(req.status || "pending")
+    const issuer = issuers.find((candidate) => candidate.user_id === req.user_id)
+    setIssuerScopes(issuer?.allowed_credentials || [])
+    setIssuerScopePicker("")
+    setIssuerRequestModalError("")
+    setIssuerRequestModalOpen(true)
+  }
+
+  const getCredentialTypes = async () => {
+    try {
+      const res = await authFetch("/admin/credential-types")
+      if (!res.ok) throw new Error()
+      const data = await res.json()
+      setCredentialTypes(data || [])
+      setCredentialTypesError("")
+    } catch {
+      setCredentialTypesError("Error fetching credential types. Please try again later.")
+    }
+  }
+
+  const createCredentialType = async (e: React.FormEvent) => {
+    e.preventDefault()
+    const value = newCredentialValue.trim()
+    const label = newCredentialLabel.trim()
+    if (!value || !label) return
+    setCredentialTypeSaving(true)
+    setCredentialTypesError("")
+    try {
+      const res = await authFetch("/admin/credential-types", {
+        method: "POST",
+        body: JSON.stringify({ value, label }),
+      })
+      if (!res.ok) {
+        const text = await res.text()
+        throw new Error(text || "Unable to create credential type.")
       }
-      return prev.filter((value) => value !== credential)
-    })
+      const created = await res.json() as GlobalCredentialType
+      setCredentialTypes((prev) => [...prev, created])
+      setNewCredentialValue("")
+      setNewCredentialLabel("")
+    } catch (err) {
+      setCredentialTypesError(err instanceof Error ? err.message : "Unable to create credential type.")
+    } finally {
+      setCredentialTypeSaving(false)
+    }
   }
 
-  const loadIssuerEditor = (issuer: IssuerWithScopes) => {
-    setIssuerUserId(issuer.user_id)
-    setIssuerEnabled(issuer.is_issuer)
-    setIssuerScopes(issuer.allowed_credentials || [])
-    setIssuersError("")
+  const deleteCredentialType = async (credentialType: GlobalCredentialType) => {
+    if (!window.confirm(`Delete credential type "${credentialType.label}"? This does not revoke existing grants.`)) return
+    setCredentialTypesError("")
+    try {
+      const res = await authFetch(`/admin/credential-types/${encodeURIComponent(credentialType.value)}`, { method: "DELETE" })
+      if (!res.ok) throw new Error()
+      setCredentialTypes((prev) => prev.filter((ct) => ct.value !== credentialType.value))
+    } catch {
+      setCredentialTypesError("Unable to delete credential type right now. Please try again.")
+    }
   }
 
-  const saveIssuerScopes = async () => {
-    const user_id = issuerUserId.trim()
-    if (!user_id) {
+  const addIssuerScope = (credential: CredentialType) => {
+    setIssuerScopes((prev) => (prev.includes(credential) ? prev : [...prev, credential]))
+    setIssuerScopePicker("")
+  }
+
+  const removeIssuerScope = (credential: CredentialType) => {
+    setIssuerScopes((prev) => prev.filter((value) => value !== credential))
+  }
+
+  const saveIssuerScopes = async (user_id: string, allowedCredentials: CredentialType[], makeIssuer: boolean) => {
+    const normalizedUserId = user_id.trim()
+    if (!normalizedUserId) {
       setIssuersError("User ID is required.")
-      return
+      return false
     }
-    if (issuerEnabled && issuerScopes.length === 0) {
-      setIssuersError("Select at least one credential scope for an active issuer.")
-      return
-    }
+
+    setIssuersError("")
+    setIssuerRequestModalError("")
 
     setIssuerSaving(true)
     try {
       const res = await authFetch("/admin/issuers", {
         method: "PUT",
         body: JSON.stringify({
-          user_id,
-          allowed_credentials: issuerScopes,
-          make_issuer: issuerEnabled,
+          user_id: normalizedUserId,
+          allowed_credentials: allowedCredentials,
+          make_issuer: makeIssuer,
         }),
       })
       if (!res.ok) {
@@ -580,15 +728,42 @@ export default function AdminPage() {
         return next
       })
       setIssuersError("")
+      return true
     } catch (error) {
       if (error instanceof Error && error.message) {
         setIssuersError(error.message)
       } else {
         setIssuersError("Unable to update issuer scopes right now. Please try again.")
       }
+      return false
     } finally {
       setIssuerSaving(false)
     }
+  }
+
+  const saveIssuerRequestModal = async () => {
+    if (!selectedIssuerRequest) return
+    setIssuerRequestModalError("")
+
+    const userId = selectedIssuerRequest.user_id
+    const nextStatus = issuerRequestStatusDraft
+
+    const requestSaved = await updateIssuerRequest(userId, {
+      nickname: issuerRequestNickname,
+      status: nextStatus,
+    })
+    if (!requestSaved) {
+      setIssuerRequestModalError("Unable to save issuer request changes.")
+      return
+    }
+
+    const scopesSaved = await saveIssuerScopes(userId, issuerScopes, nextStatus === "approved")
+    if (!scopesSaved) {
+      setIssuerRequestModalError("Issuer details were saved, but credential scopes could not be updated.")
+      return
+    }
+
+    setIssuerRequestModalOpen(false)
   }
 
   useEffect(() => {
@@ -603,7 +778,9 @@ export default function AdminPage() {
     getAffiliates()
     getProposers()
     getImprovers()
+    getIssuerRequests()
     getIssuers()
+    getCredentialTypes()
   }, [])
 
   const fetchPendingW9Submissions = async () => {
@@ -963,41 +1140,45 @@ export default function AdminPage() {
     }
   }
 
-  const handleApproveLocation = async (locationId: number) => {
-    const update: UpdateLocationApprovalRequest = {
-        id: locationId,
-        approval: true
-    }
-    try {
-    updateLocationApproval(update)
-      toast({
-        title: "Location #" + locationId + "Approved",
-        description: "Location has been successfully approved.",
-      })
-    } catch (error) {
-      toast({
-        title: "Approval Failed",
-        description: "Failed to approve merchant. Please try again.",
-      })
-    }
+  const openMerchantModal = (location: AuthedLocation) => {
+    setselectedLocationForReview(location)
+    setMerchantStatusDraft(approvalToStatus(location.approval))
+    setMerchantModalError("")
+    setisLocationReviewModalOpen(true)
   }
 
-  const handleRejectLocation = async (locationId: number) => {
+  const saveMerchantModal = async () => {
+    if (!selectedLocationForReview) return
+
+    setMerchantModalSaving(true)
+    setMerchantModalError("")
     const update: UpdateLocationApprovalRequest = {
-        id: locationId,
-        approval: false
+      id: selectedLocationForReview.id,
+      approval: statusToApproval(merchantStatusDraft),
     }
-     try {
-      updateLocationApproval(update)
-      toast({
-        title: "Location #" + locationId + "Rejected",
-        description: "Location has been successfully rejected.",
+
+    try {
+      const res = await authFetch("/admin/locations", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(update),
       })
-    } catch (error) {
+      if (res.status !== 201) {
+        throw new Error("Unable to update merchant status")
+      }
+
+      await getAuthedMapLocations()
       toast({
-        title: "Approval Failed",
-        description: "Failed to approve merchant. Please try again.",
+        title: "Merchant Updated",
+        description: `Status set to ${formatStatusLabel(merchantStatusDraft)}.`,
       })
+      setisLocationReviewModalOpen(false)
+    } catch {
+      setMerchantModalError("Unable to update merchant right now. Please try again.")
+    } finally {
+      setMerchantModalSaving(false)
     }
   }
 
@@ -1129,30 +1310,33 @@ export default function AdminPage() {
   }
 
   return (
-    <div className="container mx-auto p-4 space-y-6">
+    <div className="container mx-auto space-y-6 px-3 py-4 sm:p-4">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold">Admin Panel</h1>
+          <h1 className="text-2xl font-bold sm:text-3xl">Admin Panel</h1>
           <p className="text-muted-foreground">Manage tokens and merchant approvals</p>
         </div>
       </div>
 
-      <Tabs defaultValue="merchants" className="space-y-0">
-        <div className="grid gap-6 lg:grid-cols-[280px_minmax(0,1fr)]">
-          <TabsList className="h-auto w-full flex-col items-stretch rounded-xl bg-secondary p-3 space-y-2">
-            <TabsTrigger value="merchants" className="w-full justify-between px-3 py-2">
-              <span>Merchant Approvals</span>
-              {pendingLocations.length > 0 && (
-                <Badge variant="destructive" className="h-5 min-w-5 rounded-full px-1.5 text-xs">
-                  {pendingLocations.length}
-                </Badge>
-              )}
+      <Tabs defaultValue="merchants" className="space-y-4 lg:space-y-0">
+        <div className="grid gap-4 lg:grid-cols-[280px_minmax(0,1fr)] lg:items-start lg:gap-6">
+          <TabsList className="h-fit w-full flex-col items-stretch gap-2 rounded-xl bg-secondary p-3 lg:sticky lg:top-4 lg:min-w-[280px]">
+            <TabsTrigger value="events" className="w-full justify-between px-3 py-2">
+              <span>Events</span>
             </TabsTrigger>
             <TabsTrigger value="w9" className="w-full justify-between px-3 py-2">
               <span>W9 Approvals</span>
               {pendingW9Submissions.length > 0 && (
                 <Badge variant="destructive" className="h-5 min-w-5 rounded-full px-1.5 text-xs">
                   {pendingW9Submissions.length}
+                </Badge>
+              )}
+            </TabsTrigger>
+            <TabsTrigger value="merchants" className="w-full justify-between px-3 py-2">
+              <span>Merchants</span>
+              {pendingLocations.length > 0 && (
+                <Badge variant="destructive" className="h-5 min-w-5 rounded-full px-1.5 text-xs">
+                  {pendingLocations.length}
                 </Badge>
               )}
             </TabsTrigger>
@@ -1181,10 +1365,15 @@ export default function AdminPage() {
               )}
             </TabsTrigger>
             <TabsTrigger value="issuers" className="w-full justify-between px-3 py-2">
-              <span>Issuer Credentials</span>
+              <span>Issuers</span>
+              {issuerRequests.filter((r) => r.status === "pending").length > 0 && (
+                <Badge variant="destructive" className="h-5 min-w-5 rounded-full px-1.5 text-xs">
+                  {issuerRequests.filter((r) => r.status === "pending").length}
+                </Badge>
+              )}
             </TabsTrigger>
-            <TabsTrigger value="events" className="w-full justify-between px-3 py-2">
-              <span>Events</span>
+            <TabsTrigger value="credential-types" className="w-full justify-between px-3 py-2">
+              <span>Credential Types</span>
             </TabsTrigger>
           </TabsList>
 
@@ -1379,11 +1568,11 @@ export default function AdminPage() {
                     </Select>
                     <Dialog open={isPaypalModalOpen} onOpenChange={setIsPaypalModalOpen}>
                       <DialogTrigger asChild>
-                        <Button variant="outline" size="icon">
+                        <Button variant="outline" size="icon" className="shrink-0">
                           <Plus className="h-4 w-4" />
                         </Button>
                       </DialogTrigger>
-                      <DialogContent className="sm:max-w-[500px]">
+                      <DialogContent className="w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] max-h-[90vh] overflow-y-auto sm:max-w-[500px]">
                         <DialogHeader>
                           <DialogTitle>Connect PayPal Account</DialogTitle>
                           <DialogDescription>
@@ -1391,7 +1580,7 @@ export default function AdminPage() {
                           </DialogDescription>
                         </DialogHeader>
                         <div className="grid gap-4 py-4 max-h-[60vh] overflow-y-auto">
-                          <div className="grid grid-cols-2 gap-4">
+                          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                             <div className="space-y-2">
                               <Label htmlFor="paypal-first-name">
                                 First Name <span className="text-red-500">*</span>
@@ -1498,8 +1687,9 @@ export default function AdminPage() {
                             </div>
                           </div>
                         </div>
-                        <DialogFooter>
+                        <DialogFooter className="gap-2">
                           <Button
+                            className="w-full sm:w-auto"
                             variant="outline"
                             onClick={() => {
                               setIsPaypalModalOpen(false)
@@ -1516,7 +1706,7 @@ export default function AdminPage() {
                           >
                             Cancel
                           </Button>
-                          <Button onClick={handleConnectPaypalAccount} disabled={isConnectingPaypal}>
+                          <Button className="w-full sm:w-auto" onClick={handleConnectPaypalAccount} disabled={isConnectingPaypal}>
                             {isConnectingPaypal ? (
                               <>
                                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -1583,30 +1773,47 @@ export default function AdminPage() {
             <CardHeader className="pb-6">
               <CardTitle className="flex items-center gap-2 text-xl">
                 <Users className="h-6 w-6" />
-                Locations Pending Approval
+                Manage Merchants
               </CardTitle>
-              <CardDescription className="text-base mt-2">Review and approve location applications</CardDescription>
-              <div className="flex items-center gap-2 mt-3">
-                <Badge variant="destructive" className="text-sm px-3 py-1">
-                  {pendingLocations.length} Pending
-                </Badge>
-                <span className="text-sm text-muted-foreground">applications awaiting review</span>
+              <CardDescription className="text-base mt-2">Review and manage merchant application status</CardDescription>
+              <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+                <div className="text-sm text-muted-foreground">
+                  Showing {filteredMerchants.length} of {authedMapLocations.length} merchant applications
+                </div>
+                <div className="w-full sm:w-[220px] space-y-1">
+                  <Label className="text-xs text-muted-foreground">Filter by status</Label>
+                  <Select value={merchantStatusFilter} onValueChange={setMerchantStatusFilter}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="All statuses" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All</SelectItem>
+                      <SelectItem value="approved">Approved</SelectItem>
+                      <SelectItem value="pending">Pending</SelectItem>
+                      <SelectItem value="rejected">Rejected</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
               </div>
             </CardHeader>
             <CardContent>
-              {pendingLocations.length === 0 ? (
+              {filteredMerchants.length === 0 ? (
                 <div className="text-center py-8">
                   <Building2 className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-                  <h3 className="text-lg font-medium">No Pending Locations</h3>
-                  <p className="text-muted-foreground">All location applications have been processed.</p>
+                  <h3 className="text-lg font-medium">No Merchant Applications</h3>
+                  <p className="text-muted-foreground">No merchants match the selected status filter.</p>
                 </div>
               ) : (
                 <div className="space-y-4">
-                  {pendingLocations.map((location) => (
-                    <Card key={location.id} className="border-l-4 border-l-yellow-500">
+                  {filteredMerchants.map((location) => (
+                    <Card
+                      key={location.id}
+                      className="cursor-pointer hover:shadow-md transition-shadow"
+                      onClick={() => openMerchantModal(location)}
+                    >
                       <CardContent className="p-4">
-                        <div className="flex items-start justify-between gap-4">
-                          <div className="flex items-start gap-4 flex-1">
+                        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                          <div className="flex min-w-0 flex-1 items-start gap-4">
                             <Avatar className="h-12 w-12">
                               <AvatarImage src={location.image_url || "/placeholder.svg"} alt={location.name} />
                               <AvatarFallback>
@@ -1624,7 +1831,7 @@ export default function AdminPage() {
                               <div className="grid gap-1 text-sm">
                                 <div className="flex items-center gap-2">
                                   <Mail className="h-3 w-3" />
-                                  <span>{location.email}</span>
+                                  <span className="break-all">{location.email}</span>
                                 </div>
                                 <div className="flex items-center gap-2">
                                   <Phone className="h-3 w-3" />
@@ -1632,7 +1839,7 @@ export default function AdminPage() {
                                 </div>
                                 <div className="flex items-center gap-2">
                                   <MapPin className="h-3 w-3" />
-                                  <span>
+                                  <span className="break-words">
                                     {location.street}, {location.city}, {location.state}{" "}
                                     {location.zip}
                                   </span>
@@ -1640,42 +1847,17 @@ export default function AdminPage() {
                               </div>
                             </div>
                           </div>
-                          <div className="flex gap-2">
-                            <Button
-                              size="sm"
-                              onClick={() => handleApproveLocation(location.id)}
-                              disabled={!pendingLocations.includes(location)}
-                            >
-                              {!pendingLocations.includes(location) ? (
-                                <Loader2 className="h-4 w-4 animate-spin" />
-                              ) : (
-                                <Check className="h-4 w-4" />
-                              )}
-                              Approve
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => handleRejectLocation(location.id)}
-                              disabled={!pendingLocations.includes(location)}
-                            >
-                              {!pendingLocations.includes(location) ? (
-                                <Loader2 className="h-4 w-4 animate-spin" />
-                              ) : (
-                                <X className="h-4 w-4" />
-                              )}
-                              Reject
-                            </Button>
-                            <Button
-                              size="sm"
-                              onClick={() => {
-                                setselectedLocationForReview(location)
-                                setisLocationReviewModalOpen(true)
-                              }}
-                            >
-                              Review Application
-                            </Button>
-                          </div>
+                          <Badge
+                            variant={
+                              approvalToStatus(location.approval) === "approved"
+                                ? "default"
+                                : approvalToStatus(location.approval) === "rejected"
+                                  ? "destructive"
+                                  : "outline"
+                            }
+                          >
+                            {formatStatusLabel(approvalToStatus(location.approval))}
+                          </Badge>
                         </div>
                       </CardContent>
                     </Card>
@@ -1694,7 +1876,7 @@ export default function AdminPage() {
                 W9 Submissions Pending Approval
               </CardTitle>
               <CardDescription className="text-base mt-2">Review and approve W9 submissions</CardDescription>
-              <div className="flex items-center gap-2 mt-3">
+              <div className="mt-3 flex flex-wrap items-center gap-2">
                 <Badge variant="destructive" className="text-sm px-3 py-1">
                   {pendingW9Submissions.length} Pending
                 </Badge>
@@ -1717,7 +1899,7 @@ export default function AdminPage() {
                   {pendingW9Submissions.map((submission) => (
                     <Card key={submission.id} className="border-l-4 border-l-yellow-500">
                       <CardContent className="p-4">
-                        <div className="flex items-start justify-between gap-4">
+                        <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
                           <div className="flex-1 space-y-2">
                             <div>
                               <h4 className="font-semibold">Wallet</h4>
@@ -1726,7 +1908,7 @@ export default function AdminPage() {
                             <div className="grid gap-1 text-sm">
                               <div className="flex items-center gap-2">
                                 <Mail className="h-3 w-3" />
-                                <span>{submission.email}</span>
+                                <span className="break-all">{submission.email}</span>
                               </div>
                               {submission.user_contact_email && submission.user_contact_email !== submission.email && (
                                 <div className="flex items-center gap-2 text-yellow-700">
@@ -1742,12 +1924,12 @@ export default function AdminPage() {
                               </div>
                             </div>
                           </div>
-                          <div className="flex gap-2">
-                            <Button size="sm" onClick={() => handleApproveW9(submission.id)}>
+                          <div className="flex w-full flex-wrap gap-2 md:w-auto md:justify-end">
+                            <Button className="w-full sm:w-auto" size="sm" onClick={() => handleApproveW9(submission.id)}>
                               <Check className="h-4 w-4" />
                               Approve
                             </Button>
-                            <Button size="sm" variant="outline" onClick={() => handleRejectW9(submission.id)}>
+                            <Button className="w-full sm:w-auto" size="sm" variant="outline" onClick={() => handleRejectW9(submission.id)}>
                               <X className="h-4 w-4" />
                               Reject
                             </Button>
@@ -1771,12 +1953,12 @@ export default function AdminPage() {
           )}
 
           <Dialog open={affiliateModalOpen} onOpenChange={setAffiliateModalOpen}>
-            <DialogContent className="sm:max-w-lg">
+            <DialogContent className="w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] max-h-[90vh] overflow-y-auto sm:max-w-lg">
               <DialogHeader>
                 <DialogTitle>Manage Affiliate</DialogTitle>
                 <DialogDescription>
                   {selectedAffiliate?.nickname || selectedAffiliate?.organization || "Affiliate"} ·{" "}
-                  {selectedAffiliate?.status || "pending"}
+                  {formatStatusLabel(selectedAffiliate?.status || "pending")}
                 </DialogDescription>
               </DialogHeader>
               {selectedAffiliate && (
@@ -1811,6 +1993,22 @@ export default function AdminPage() {
                       Current one-time balance: {selectedAffiliate.one_time_balance}
                     </p>
                   </div>
+                  <div className="space-y-2">
+                    <Label>Change Approval Status</Label>
+                    <Select
+                      value={affiliateStatusDraft}
+                      onValueChange={(value) => setAffiliateStatusDraft(value as Affiliate["status"])}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="pending">Pending</SelectItem>
+                        <SelectItem value="approved">Approved</SelectItem>
+                        <SelectItem value="rejected">Rejected</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
 
                   {affiliateModalError && (
                     <div className="flex items-center gap-2 text-red-600 text-sm p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
@@ -1819,27 +2017,9 @@ export default function AdminPage() {
                     </div>
                   )}
 
-                  <div className="flex flex-wrap gap-2 justify-end">
-                    {selectedAffiliate.status === "pending" && (
-                      <>
-                        <Button
-                          variant="outline"
-                          disabled={affiliateUpdating}
-                          onClick={() => handleAffiliateStatus("rejected")}
-                        >
-                          <X className="mr-2 h-4 w-4" />
-                          Reject
-                        </Button>
-                        <Button
-                          disabled={affiliateUpdating}
-                          onClick={() => handleAffiliateStatus("approved")}
-                        >
-                          <Check className="mr-2 h-4 w-4" />
-                          Approve
-                        </Button>
-                      </>
-                    )}
+                  <div className="flex justify-end">
                     <Button
+                      className="w-full sm:w-auto"
                       variant="secondary"
                       disabled={affiliateUpdating}
                       onClick={handleAffiliateSave}
@@ -1860,22 +2040,41 @@ export default function AdminPage() {
               </CardTitle>
               <CardDescription>Approve requests and manage affiliate balances</CardDescription>
             </CardHeader>
-            <CardContent>
-              {affiliates.length === 0 ? (
+            <CardContent className="space-y-4">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+                <div className="text-sm text-muted-foreground">
+                  Showing {filteredAffiliates.length} of {affiliates.length} affiliates
+                </div>
+                <div className="w-full sm:w-[220px] space-y-1">
+                  <Label className="text-xs text-muted-foreground">Filter by status</Label>
+                  <Select value={affiliateStatusFilter} onValueChange={setAffiliateStatusFilter}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="All statuses" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All</SelectItem>
+                      <SelectItem value="approved">Approved</SelectItem>
+                      <SelectItem value="pending">Pending</SelectItem>
+                      <SelectItem value="rejected">Rejected</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              {filteredAffiliates.length === 0 ? (
                 <div className="text-center py-8">
                   <Users className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-                  <h3 className="text-lg font-medium">No Affiliate Requests</h3>
-                  <p className="text-muted-foreground">Affiliate requests will appear here.</p>
+                  <h3 className="text-lg font-medium">No Affiliates Found</h3>
+                  <p className="text-muted-foreground">No affiliates match the selected status filter.</p>
                 </div>
               ) : (
                 <div className="space-y-4">
-                  {affiliates.map((affiliate) => (
+                  {filteredAffiliates.map((affiliate) => (
                     <Card
                       key={affiliate.user_id}
                       className="cursor-pointer hover:shadow-md transition-shadow"
                       onClick={() => openAffiliateModal(affiliate)}
                     >
-                      <CardContent className="p-4 flex items-center justify-between gap-4">
+                      <CardContent className="flex flex-col gap-2 p-4 sm:flex-row sm:items-center sm:justify-between">
                         <div>
                           <p className="font-medium text-black dark:text-white">
                             {affiliate.nickname || affiliate.organization}
@@ -1884,7 +2083,9 @@ export default function AdminPage() {
                             <p className="text-xs text-muted-foreground">{affiliate.organization}</p>
                           )}
                         </div>
-                        {affiliate.status === "pending" && <Badge variant="outline">Pending</Badge>}
+                        <Badge variant={affiliate.status === "approved" ? "default" : affiliate.status === "rejected" ? "destructive" : "outline"}>
+                          {formatStatusLabel(affiliate.status)}
+                        </Badge>
                       </CardContent>
                     </Card>
                   ))}
@@ -1903,12 +2104,12 @@ export default function AdminPage() {
           )}
 
           <Dialog open={proposerModalOpen} onOpenChange={setProposerModalOpen}>
-            <DialogContent className="sm:max-w-lg">
+            <DialogContent className="w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] max-h-[90vh] overflow-y-auto sm:max-w-lg">
               <DialogHeader>
                 <DialogTitle>Manage Proposer</DialogTitle>
                 <DialogDescription>
                   {selectedProposer?.nickname || selectedProposer?.organization || "Proposer"} ·{" "}
-                  {selectedProposer?.status || "pending"}
+                  {formatStatusLabel(selectedProposer?.status || "pending")}
                 </DialogDescription>
               </DialogHeader>
               {selectedProposer && (
@@ -1925,6 +2126,22 @@ export default function AdminPage() {
                     <Label>Notification Email</Label>
                     <Input value={selectedProposer.email} disabled />
                   </div>
+                  <div className="space-y-2">
+                    <Label>Change Approval Status</Label>
+                    <Select
+                      value={proposerStatusDraft}
+                      onValueChange={(value) => setProposerStatusDraft(value as Proposer["status"])}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="pending">Pending</SelectItem>
+                        <SelectItem value="approved">Approved</SelectItem>
+                        <SelectItem value="rejected">Rejected</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
 
                   {proposerModalError && (
                     <div className="flex items-center gap-2 text-red-600 text-sm p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
@@ -1933,27 +2150,9 @@ export default function AdminPage() {
                     </div>
                   )}
 
-                  <div className="flex flex-wrap gap-2 justify-end">
-                    {selectedProposer.status === "pending" && (
-                      <>
-                        <Button
-                          variant="outline"
-                          disabled={proposerUpdating}
-                          onClick={() => handleProposerStatus("rejected")}
-                        >
-                          <X className="mr-2 h-4 w-4" />
-                          Reject
-                        </Button>
-                        <Button
-                          disabled={proposerUpdating}
-                          onClick={() => handleProposerStatus("approved")}
-                        >
-                          <Check className="mr-2 h-4 w-4" />
-                          Approve
-                        </Button>
-                      </>
-                    )}
+                  <div className="flex justify-end">
                     <Button
+                      className="w-full sm:w-auto"
                       variant="secondary"
                       disabled={proposerUpdating}
                       onClick={handleProposerSave}
@@ -1974,22 +2173,41 @@ export default function AdminPage() {
               </CardTitle>
               <CardDescription>Approve proposer requests and manage proposer access.</CardDescription>
             </CardHeader>
-            <CardContent>
-              {proposers.length === 0 ? (
+            <CardContent className="space-y-4">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+                <div className="text-sm text-muted-foreground">
+                  Showing {filteredProposers.length} of {proposers.length} proposers
+                </div>
+                <div className="w-full sm:w-[220px] space-y-1">
+                  <Label className="text-xs text-muted-foreground">Filter by status</Label>
+                  <Select value={proposerStatusFilter} onValueChange={setProposerStatusFilter}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="All statuses" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All</SelectItem>
+                      <SelectItem value="approved">Approved</SelectItem>
+                      <SelectItem value="pending">Pending</SelectItem>
+                      <SelectItem value="rejected">Rejected</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              {filteredProposers.length === 0 ? (
                 <div className="text-center py-8">
                   <Users className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-                  <h3 className="text-lg font-medium">No Proposer Requests</h3>
-                  <p className="text-muted-foreground">Proposer requests will appear here.</p>
+                  <h3 className="text-lg font-medium">No Proposers Found</h3>
+                  <p className="text-muted-foreground">No proposers match the selected status filter.</p>
                 </div>
               ) : (
                 <div className="space-y-4">
-                  {proposers.map((proposer) => (
+                  {filteredProposers.map((proposer) => (
                     <Card
                       key={proposer.user_id}
                       className="cursor-pointer hover:shadow-md transition-shadow"
                       onClick={() => openProposerModal(proposer)}
                     >
-                      <CardContent className="p-4 flex items-center justify-between gap-4">
+                      <CardContent className="flex flex-col gap-2 p-4 sm:flex-row sm:items-center sm:justify-between">
                         <div>
                           <p className="font-medium text-black dark:text-white">
                             {proposer.nickname || proposer.organization}
@@ -1997,7 +2215,9 @@ export default function AdminPage() {
                           <p className="text-xs text-muted-foreground">{proposer.organization}</p>
                           <p className="text-xs text-muted-foreground">{proposer.email}</p>
                         </div>
-                        {proposer.status === "pending" && <Badge variant="outline">Pending</Badge>}
+                        <Badge variant={proposer.status === "approved" ? "default" : proposer.status === "rejected" ? "destructive" : "outline"}>
+                          {formatStatusLabel(proposer.status)}
+                        </Badge>
                       </CardContent>
                     </Card>
                   ))}
@@ -2015,6 +2235,66 @@ export default function AdminPage() {
             </div>
           )}
 
+          <Dialog open={improverModalOpen} onOpenChange={setImproverModalOpen}>
+            <DialogContent className="w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] max-h-[90vh] overflow-y-auto sm:max-w-lg">
+              <DialogHeader>
+                <DialogTitle>Manage Improver</DialogTitle>
+                <DialogDescription>
+                  Update approval status for this improver request.
+                </DialogDescription>
+              </DialogHeader>
+              {selectedImprover && (
+                <div className="space-y-4">
+                  <div className="space-y-1">
+                    <Label>Name</Label>
+                    <Input value={`${selectedImprover.first_name} ${selectedImprover.last_name}`} disabled />
+                  </div>
+                  <div className="space-y-1">
+                    <Label>Email</Label>
+                    <Input value={selectedImprover.email} disabled />
+                  </div>
+                  <div className="space-y-1">
+                    <Label>User ID</Label>
+                    <Input value={selectedImprover.user_id} disabled className="font-mono text-xs" />
+                  </div>
+                  <div className="space-y-1">
+                    <Label>Change Approval Status</Label>
+                    <Select
+                      value={improverStatusDraft}
+                      onValueChange={(value) => setImproverStatusDraft(value as Improver["status"])}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="pending">Pending</SelectItem>
+                        <SelectItem value="approved">Approved</SelectItem>
+                        <SelectItem value="rejected">Rejected</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  {improverModalError && (
+                    <div className="flex items-center gap-2 text-red-600 text-sm p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
+                      <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+                      <span>{improverModalError}</span>
+                    </div>
+                  )}
+
+                  <div className="flex justify-end">
+                    <Button
+                      className="w-full sm:w-auto"
+                      onClick={saveImproverModal}
+                      disabled={improverModalUpdating}
+                    >
+                      {improverModalUpdating ? "Saving..." : "Save Changes"}
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </DialogContent>
+          </Dialog>
+
           <Card>
             <CardHeader className="pb-4">
               <CardTitle className="flex items-center gap-2 text-xl">
@@ -2023,17 +2303,40 @@ export default function AdminPage() {
               </CardTitle>
               <CardDescription>Approve or reject improver access requests</CardDescription>
             </CardHeader>
-            <CardContent>
-              {improvers.length === 0 ? (
+            <CardContent className="space-y-4">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+                <div className="text-sm text-muted-foreground">
+                  Showing {filteredImprovers.length} of {improvers.length} improvers
+                </div>
+                <div className="w-full sm:w-[220px] space-y-1">
+                  <Label className="text-xs text-muted-foreground">Filter by status</Label>
+                  <Select value={improverStatusFilter} onValueChange={setImproverStatusFilter}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="All statuses" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All</SelectItem>
+                      <SelectItem value="approved">Approved</SelectItem>
+                      <SelectItem value="pending">Pending</SelectItem>
+                      <SelectItem value="rejected">Rejected</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              {filteredImprovers.length === 0 ? (
                 <div className="text-center py-8">
                   <Users className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-                  <h3 className="text-lg font-medium">No Improver Requests</h3>
-                  <p className="text-muted-foreground">Improver requests will appear here.</p>
+                  <h3 className="text-lg font-medium">No Improvers Found</h3>
+                  <p className="text-muted-foreground">No improvers match the selected status filter.</p>
                 </div>
               ) : (
                 <div className="space-y-4">
-                  {improvers.map((improver) => (
-                    <Card key={improver.user_id}>
+                  {filteredImprovers.map((improver) => (
+                    <Card
+                      key={improver.user_id}
+                      className="cursor-pointer hover:shadow-md transition-shadow"
+                      onClick={() => openImproverModal(improver)}
+                    >
                       <CardContent className="p-4">
                         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                           <div>
@@ -2043,26 +2346,9 @@ export default function AdminPage() {
                             <p className="text-sm text-muted-foreground">{improver.email}</p>
                             <p className="text-xs text-muted-foreground break-all">User: {improver.user_id}</p>
                           </div>
-                          <div className="flex items-center gap-2">
-                            <Badge variant={improver.status === "approved" ? "default" : improver.status === "rejected" ? "destructive" : "outline"}>
-                              {improver.status}
-                            </Badge>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => updateImproverStatus(improver.user_id, "rejected")}
-                            >
-                              <X className="h-4 w-4" />
-                              Reject
-                            </Button>
-                            <Button
-                              size="sm"
-                              onClick={() => updateImproverStatus(improver.user_id, "approved")}
-                            >
-                              <Check className="h-4 w-4" />
-                              Approve
-                            </Button>
-                          </div>
+                          <Badge variant={improver.status === "approved" ? "default" : improver.status === "rejected" ? "destructive" : "outline"}>
+                            {formatStatusLabel(improver.status)}
+                          </Badge>
                         </div>
                       </CardContent>
                     </Card>
@@ -2074,109 +2360,257 @@ export default function AdminPage() {
         </TabsContent>
 
         <TabsContent value="issuers" className="space-y-6">
-          {issuersError && (
+          {(issuerRequestsError || issuersError) && (
+            <div className="flex items-center gap-2 rounded-lg bg-red-50 p-3 text-sm text-red-600 dark:bg-red-900/20">
+              <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+              <span>{issuerRequestsError || issuersError}</span>
+            </div>
+          )}
+
+          <Dialog open={issuerRequestModalOpen} onOpenChange={setIssuerRequestModalOpen}>
+            <DialogContent className="w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] max-h-[90vh] overflow-y-auto sm:max-w-lg">
+              <DialogHeader>
+                <DialogTitle>Manage Issuer</DialogTitle>
+                <DialogDescription>
+                  Update approval status, nickname, and allowed credentials.
+                </DialogDescription>
+              </DialogHeader>
+              {selectedIssuerRequest && (
+                <div className="space-y-4">
+                  <div className="space-y-1">
+                    <Label>Organization</Label>
+                    <Input value={selectedIssuerRequest.organization} disabled />
+                  </div>
+                  <div className="space-y-1">
+                    <Label>Email</Label>
+                    <Input value={selectedIssuerRequest.email} disabled />
+                  </div>
+                  <div className="space-y-1">
+                    <Label>User ID</Label>
+                    <Input value={selectedIssuerRequest.user_id} disabled className="font-mono text-xs" />
+                  </div>
+                  <div className="space-y-1">
+                    <Label>Nickname</Label>
+                    <Input
+                      value={issuerRequestNickname}
+                      onChange={(e) => setIssuerRequestNickname(e.target.value)}
+                      placeholder="Nickname (optional)"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label>Change Approval Status</Label>
+                    <Select value={issuerRequestStatusDraft} onValueChange={setIssuerRequestStatusDraft}>
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="pending">Pending</SelectItem>
+                        <SelectItem value="approved">Approved</SelectItem>
+                        <SelectItem value="rejected">Rejected</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label>Allowed Credentials</Label>
+                    {credentialTypes.length === 0 ? (
+                      <p className="text-sm text-muted-foreground">No credential types defined. Add types in the Credential Types tab.</p>
+                    ) : (
+                      <>
+                        <Select value={issuerScopePicker} onValueChange={(value) => addIssuerScope(value)}>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Select a credential to add" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {credentialTypes
+                              .filter((ct) => !issuerScopes.includes(ct.value))
+                              .map((ct) => (
+                                <SelectItem key={ct.value} value={ct.value}>
+                                  {ct.label}
+                                </SelectItem>
+                              ))}
+                          </SelectContent>
+                        </Select>
+
+                        <div className="flex flex-wrap gap-2 pt-2">
+                          {issuerScopes.length === 0 ? (
+                            <span className="text-xs text-muted-foreground">No credential scopes selected</span>
+                          ) : (
+                            issuerScopes.map((credential) => {
+                              const credentialLabel = formatCredentialLabel(credential, credentialLabelMap)
+                              return (
+                                <Badge key={credential} variant="secondary" className="gap-1">
+                                  {credentialLabel}
+                                  <button
+                                    type="button"
+                                    className="ml-1"
+                                    onClick={() => removeIssuerScope(credential)}
+                                    aria-label={`Remove ${credentialLabel}`}
+                                  >
+                                    <X className="h-3 w-3" />
+                                  </button>
+                                </Badge>
+                              )
+                            })
+                          )}
+                        </div>
+                      </>
+                    )}
+                  </div>
+
+                  {issuerRequestModalError && (
+                    <div className="flex items-center gap-2 text-red-600 text-sm p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
+                      <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+                      <span>{issuerRequestModalError}</span>
+                    </div>
+                  )}
+
+                  <div className="flex justify-end">
+                    <Button
+                      className="w-full sm:w-auto"
+                      onClick={saveIssuerRequestModal}
+                      disabled={!!issuerRequestSaving[selectedIssuerRequest.user_id] || issuerSaving}
+                    >
+                      {!!issuerRequestSaving[selectedIssuerRequest.user_id] || issuerSaving ? "Saving..." : "Save Changes"}
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </DialogContent>
+          </Dialog>
+
+          <Card>
+            <CardHeader className="pb-4">
+              <CardTitle className="flex items-center gap-2 text-xl">
+                <Users className="h-5 w-5" />
+                Manage Issuers
+              </CardTitle>
+              <CardDescription>Approve requests and manage issuer credential scopes.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+                <div>
+                  <p className="text-sm text-muted-foreground">
+                    Showing {filteredIssuerRequests.length} of {issuerRequests.length} issuer requests
+                  </p>
+                </div>
+                <div className="w-full sm:w-[220px] space-y-1">
+                  <Label className="text-xs text-muted-foreground">Filter by status</Label>
+                  <Select value={issuerStatusFilter} onValueChange={setIssuerStatusFilter}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="All statuses" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All</SelectItem>
+                      <SelectItem value="approved">Approved</SelectItem>
+                      <SelectItem value="pending">Pending</SelectItem>
+                      <SelectItem value="rejected">Rejected</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              {filteredIssuerRequests.length === 0 ? (
+                <div className="py-8 text-center">
+                  <Users className="mx-auto mb-4 h-12 w-12 text-muted-foreground" />
+                  <h3 className="text-lg font-medium">No Issuer Requests</h3>
+                  <p className="text-muted-foreground">No issuers match the selected status filter.</p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {filteredIssuerRequests.map((req) => (
+                    <Card
+                      key={req.user_id}
+                      className={`cursor-pointer hover:shadow-md transition-shadow ${selectedIssuerRequest?.user_id === req.user_id ? "ring-2 ring-primary" : ""}`}
+                      onClick={() => openIssuerRequestModal(req)}
+                    >
+                      <CardContent className="flex flex-col gap-2 p-4 sm:flex-row sm:items-center sm:justify-between">
+                        <div>
+                          <p className="font-medium text-black dark:text-white break-words">{req.nickname || req.organization}</p>
+                          {req.nickname && <p className="text-xs text-muted-foreground">{req.organization}</p>}
+                        </div>
+                        <Badge variant={req.status === "approved" ? "default" : req.status === "rejected" ? "destructive" : "outline"}>
+                          {formatStatusLabel(req.status)}
+                        </Badge>
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="credential-types" className="space-y-6">
+          {credentialTypesError && (
             <div className="flex items-center gap-2 text-red-600 text-sm p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
               <AlertTriangle className="h-4 w-4 flex-shrink-0" />
-              <span>{issuersError}</span>
+              <span>{credentialTypesError}</span>
             </div>
           )}
 
           <Card>
             <CardHeader className="pb-4">
               <CardTitle className="flex items-center gap-2 text-xl">
-                <Users className="h-5 w-5" />
-                Grant Issuer Credential Scope
+                <FileCheck className="h-5 w-5" />
+                Credential Types
               </CardTitle>
-              <CardDescription>Assign which credentials an issuer can grant.</CardDescription>
+              <CardDescription>Define the credential types that issuers can grant to users.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="issuer-user-id">Issuer User ID</Label>
-                <Input
-                  id="issuer-user-id"
-                  value={issuerUserId}
-                  onChange={(e) => setIssuerUserId(e.target.value)}
-                  placeholder="did:privy:..."
-                />
-              </div>
-
-              <label className="flex items-center gap-2 text-sm">
-                <Checkbox checked={issuerEnabled} onCheckedChange={(value) => setIssuerEnabled(Boolean(value))} />
-                <span>Enable issuer role</span>
-              </label>
-
-              <div className="space-y-2">
-                <Label>Allowed Credentials</Label>
-                <div className="flex flex-wrap gap-3">
-                  {issuerCredentialOptions.map((option) => {
-                    const checked = issuerScopes.includes(option.value)
-                    return (
-                      <label key={option.value} className="flex items-center gap-2 text-sm">
-                        <Checkbox
-                          checked={checked}
-                          onCheckedChange={(value) => toggleIssuerScope(option.value, Boolean(value))}
-                        />
-                        <span>{option.label}</span>
-                      </label>
-                    )
-                  })}
-                </div>
-              </div>
-
-              <div className="flex justify-end">
-                <Button onClick={saveIssuerScopes} disabled={issuerSaving}>
-                  {issuerSaving ? "Saving..." : "Save Issuer Scope"}
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="pb-4">
-              <CardTitle className="flex items-center gap-2 text-xl">
-                <Users className="h-5 w-5" />
-                Existing Issuers
-              </CardTitle>
-              <CardDescription>Click an issuer to load and edit their scope.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              {issuers.length === 0 ? (
-                <div className="text-center py-8">
-                  <Users className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-                  <h3 className="text-lg font-medium">No Issuers Configured</h3>
-                  <p className="text-muted-foreground">Issuer assignments will appear here.</p>
-                </div>
+              {credentialTypes.length === 0 ? (
+                <p className="text-sm text-muted-foreground py-4 text-center">No credential types defined yet.</p>
               ) : (
-                <div className="space-y-3">
-                  {issuers.map((issuer) => (
-                    <Card
-                      key={issuer.user_id}
-                      className="cursor-pointer hover:shadow-md transition-shadow"
-                      onClick={() => loadIssuerEditor(issuer)}
-                    >
-                      <CardContent className="p-4 space-y-2">
-                        <div className="flex items-center justify-between gap-2">
-                          <p className="font-medium break-all">{issuer.user_id}</p>
-                          <Badge variant={issuer.is_issuer ? "default" : "outline"}>
-                            {issuer.is_issuer ? "issuer" : "scope only"}
-                          </Badge>
-                        </div>
-                        <div className="flex flex-wrap gap-2">
-                          {(issuer.allowed_credentials || []).length === 0 ? (
-                            <span className="text-xs text-muted-foreground">No credential scopes</span>
-                          ) : (
-                            issuer.allowed_credentials.map((credential) => (
-                              <Badge key={credential} variant="secondary">
-                                {credential}
-                              </Badge>
-                            ))
-                          )}
-                        </div>
-                      </CardContent>
-                    </Card>
+                <div className="space-y-2">
+                  {credentialTypes.map((ct) => (
+                    <div key={ct.value} className="flex flex-col gap-3 rounded-lg border p-3 sm:flex-row sm:items-center sm:justify-between">
+                      <div>
+                        <p className="font-medium text-sm">{ct.label}</p>
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="w-full text-red-600 border-red-300 hover:bg-red-50 sm:w-auto"
+                        onClick={() => deleteCredentialType(ct)}
+                      >
+                        <X className="h-4 w-4" />
+                        Delete
+                      </Button>
+                    </div>
                   ))}
                 </div>
               )}
+
+              <form onSubmit={createCredentialType} className="space-y-3 pt-4 border-t">
+                <p className="text-sm font-medium">Add New Credential Type</p>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <div className="space-y-1">
+                    <Label htmlFor="cred-value" className="text-xs">Value (slug)</Label>
+                    <Input
+                      id="cred-value"
+                      value={newCredentialValue}
+                      onChange={(e) => setNewCredentialValue(e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, ""))}
+                      placeholder="e.g. dpw_certified"
+                      className="font-mono text-sm"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label htmlFor="cred-label" className="text-xs">Display Label</Label>
+                    <Input
+                      id="cred-label"
+                      value={newCredentialLabel}
+                      onChange={(e) => setNewCredentialLabel(e.target.value)}
+                      placeholder="e.g. DPW Certified"
+                    />
+                  </div>
+                </div>
+                <p className="text-xs text-muted-foreground">Note: Deleting a credential type does not revoke existing grants.</p>
+                <div className="flex justify-end">
+                  <Button className="w-full sm:w-auto" type="submit" disabled={credentialTypeSaving || !newCredentialValue || !newCredentialLabel}>
+                    {credentialTypeSaving ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Adding...</> : <><Plus className="mr-2 h-4 w-4" />Add Type</>}
+                  </Button>
+                </div>
+              </form>
             </CardContent>
           </Card>
         </TabsContent>
@@ -2423,11 +2857,11 @@ export default function AdminPage() {
               </div>
 
               {/* Generation Actions */}
-              <div className="flex gap-4">
+              <div className="flex flex-col gap-3 sm:flex-row">
                 <Button
                   onClick={handleGenerateQRCodes}
                   disabled={isGeneratingCodes || !eventStartDate || !eventEndDate}
-                  className="flex-1"
+                  className="w-full sm:flex-1"
                 >
                   {isGeneratingCodes ? (
                     <>
@@ -2443,7 +2877,7 @@ export default function AdminPage() {
                 </Button>
 
                 {generatedCodes.length > 0 && (
-                  <Button onClick={handleDownloadQRCodes} variant="outline" disabled={isGeneratingCodes}>
+                  <Button className="w-full sm:w-auto" onClick={handleDownloadQRCodes} variant="outline" disabled={isGeneratingCodes}>
                     <Download className="mr-2 h-4 w-4" />
                     Download CSV
                   </Button>
@@ -2504,16 +2938,40 @@ export default function AdminPage() {
 
       {/* Location Review Modal */}
       <Dialog open={isLocationReviewModalOpen} onOpenChange={setisLocationReviewModalOpen}>
-        <DialogContent className="sm:max-w-[900px] max-h-[90vh] overflow-y-auto">
+        <DialogContent className="w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] max-h-[90vh] overflow-y-auto p-4 sm:max-w-[900px] sm:p-6">
           <DialogHeader>
-            <DialogTitle className="text-xl font-bold">
-              Location Application Review - {selectedLocationForReview?.name}
+            <DialogTitle className="text-lg font-bold sm:text-xl">
+              Manage Merchant - {selectedLocationForReview?.name}
             </DialogTitle>
-            <DialogDescription>Review the complete merchant application details below</DialogDescription>
+            <DialogDescription>Review merchant details and update approval status.</DialogDescription>
           </DialogHeader>
 
           {selectedLocationForReview && (
             <div className="space-y-6 py-4">
+              <div className="space-y-2">
+                <Label>Change Approval Status</Label>
+                <Select
+                  value={merchantStatusDraft}
+                  onValueChange={(value) => setMerchantStatusDraft(value as ApprovalStatus)}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="pending">Pending</SelectItem>
+                    <SelectItem value="approved">Approved</SelectItem>
+                    <SelectItem value="rejected">Rejected</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {merchantModalError && (
+                <div className="flex items-center gap-2 text-red-600 text-sm p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
+                  <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+                  <span>{merchantModalError}</span>
+                </div>
+              )}
+
               {/* Business Information Section */}
               <div className="space-y-4">
                 <h3 className="text-lg font-semibold text-foreground border-b pb-2">Business Information</h3>
@@ -2692,30 +3150,16 @@ export default function AdminPage() {
             </div>
           )}
 
-          <DialogFooter className="flex gap-2">
-            <Button variant="outline" onClick={() => setisLocationReviewModalOpen(false)}>
+          <DialogFooter className="gap-2">
+            <Button className="w-full sm:w-auto" variant="outline" onClick={() => setisLocationReviewModalOpen(false)}>
               Close
             </Button>
             <Button
-              variant="destructive"
-              onClick={() => {
-                if (selectedLocationForReview) {
-                  handleRejectLocation(selectedLocationForReview.id)
-                  setisLocationReviewModalOpen(false)
-                }
-              }}
+              className="w-full sm:w-auto"
+              onClick={saveMerchantModal}
+              disabled={merchantModalSaving}
             >
-              Reject Application
-            </Button>
-            <Button
-              onClick={() => {
-                if (selectedLocationForReview) {
-                  handleApproveLocation(selectedLocationForReview.id)
-                  setisLocationReviewModalOpen(false)
-                }
-              }}
-            >
-              Approve Location
+              {merchantModalSaving ? "Saving..." : "Save Changes"}
             </Button>
           </DialogFooter>
         </DialogContent>

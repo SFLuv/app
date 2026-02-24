@@ -130,7 +130,7 @@ export function EventModal({
         event={event}
         deleteEventError={deleteEventError}
       />
-      <DialogContent className="w-[95vw] max-w-md mx-auto max-h-[90vh] rounded-lg overflow-none">
+      <DialogContent className="w-[95vw] max-w-md mx-auto max-h-[90vh] rounded-lg overflow-y-auto">
         <DialogHeader className="space-y-2 pb-2">
           <DialogTitle className="text-lg sm:text-xl">{event.title}</DialogTitle>
           <DialogDescription className="text-sm">
@@ -138,34 +138,34 @@ export function EventModal({
           </DialogDescription>
         </DialogHeader>
           {/* Details */}
-          <div className="space-y-2 m-auto">
+          <div className="m-auto space-y-3">
 
-            <div className="flex items-center justify-between gap-3">
+            <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
               <span className="text-muted-foreground text-sm">Codes: </span>
-              <span className="font-mono text-sm">
+              <span className="font-mono text-sm text-left sm:text-right">
                 {event.codes}
               </span>
             </div>
 
             {ownerLabel && (
-              <div className="flex items-center justify-between gap-3">
+              <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
                 <span className="text-muted-foreground text-sm">Owner: </span>
-                <span className="font-mono text-sm">
+                <span className="font-mono text-sm break-all text-left sm:text-right">
                   {ownerLabel}
                 </span>
               </div>
             )}
 
-            <div className="flex items-center justify-between gap-3">
+            <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
               <span className="text-muted-foreground text-sm">Amount: </span>
-              <span className="font-mono text-sm">
+              <span className="font-mono text-sm text-left sm:text-right">
                 {event.amount}
               </span>
             </div>
 
-            <div className="flex items-center justify-between gap-3">
+            <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
               <span className="text-muted-foreground text-sm">Expiration: </span>
-              <span className="font-mono text-sm">
+              <span className="font-mono text-sm text-left sm:text-right">
                 {(new Date(event.expiration * 1000)).toLocaleDateString() + " " + (new Date(event.expiration * 1000)).toLocaleTimeString().split(" ")[0] + " " + (new Date(event.expiration * 1000)).toLocaleTimeString().split(" ")[1]}
               </span>
             </div>
@@ -188,6 +188,7 @@ export function EventModal({
               </div>
               <Button
                 type="button"
+                className="w-full sm:w-auto"
                 onClick={() => {
                   if(codes.length == 0) {
                     setCodesError("Error fetching codes.")
@@ -210,7 +211,7 @@ export function EventModal({
             <div className="pt-2 text-center">
               <Button
                 type="button"
-                className="bg-secondary hover:bg-[#333333]"
+                className="w-full bg-secondary hover:bg-[#333333] sm:w-auto"
                 onClick={toggleDeleteModal}
               >
                 <Trash2 color="red" />

@@ -165,32 +165,22 @@ func (a *AppService) AddLocation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sender := utils.NewEmailSender()
-	if sender != nil {
-		// send confirmation email to admin
-		details := fmt.Sprintf(`
+	a.sendRoleRequestEmail(
+		"MERCHANT_ADMIN_EMAIL",
+		"New Location Added",
+		"A new merchant location has been submitted for review.",
+		fmt.Sprintf(`
 <table role="presentation" width="100%%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
   <tr>
-    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280; width:160px;">Location</td>
+    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280; width:140px;">Location</td>
     <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827;">%s</td>
   </tr>
   <tr>
     <td style="padding:12px 0; font-size:13px; color:#6b7280;">Submitted By</td>
     <td style="padding:12px 0; font-size:13px; color:#111827; word-break:break-all;">%s</td>
   </tr>
-</table>`, location.Name, location.OwnerID)
-
-		htmlContent := utils.BuildStyledEmail(
-			"New Location Added",
-			"A new location has been submitted for review.",
-			details,
-		)
-
-		err = sender.SendEmail("admin@sfluv.org", "SFLuv Admin", "New Location Added", htmlContent, "no_reply@sfluv.org", "SFLuv Admin")
-		if err != nil {
-			a.logger.Logf("error sending confirmation email: %s", err.Error())
-		}
-	}
+</table>`, location.Name, location.OwnerID),
+	)
 
 	w.WriteHeader(http.StatusCreated)
 	w.Write([]byte("success"))

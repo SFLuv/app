@@ -97,6 +97,13 @@ func (a *AppService) GetUserAuthed(w http.ResponseWriter, r *http.Request) {
 		improver = nil
 	}
 
+	issuer, err := a.db.GetIssuerByUser(r.Context(), *userDid)
+	if err != nil {
+		a.logger.Logf("error getting issuer info for user %s: %s", *userDid, err.Error())
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
 	response := structs.AuthedUserResponse{
 		User:      *user,
 		Wallets:   wallets,
@@ -105,6 +112,7 @@ func (a *AppService) GetUserAuthed(w http.ResponseWriter, r *http.Request) {
 		Affiliate: affiliate,
 		Proposer:  proposer,
 		Improver:  improver,
+		Issuer:    issuer,
 	}
 
 	bytes, err := json.Marshal(response)

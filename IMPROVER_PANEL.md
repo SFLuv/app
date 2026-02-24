@@ -10,10 +10,163 @@
 - Ensure new notifications use existing email style.
 - Continue with voter panel UI and credential grant/issue flows.
 - Add admin voter privileges and quorum/countdown voting behavior.
+- Add improver recurring-claim absence periods so temporary coverage can be claimed by other qualified improvers.
+- Replace issuer wallet-address lookup flow with issuer-side credential request queue and improver-submitted credential requests.
+- Add optional workflow manager role to workflow creation and templates, with credential requirements and optional completion payout.
+- Add workflow manager operations in improver panel (manager claims, managed-workflow list, search, detail view, CSV/photo exports).
+- Move workflow submission photo handling to DB-backed binary storage and retrieval (no URL-based uploads).
+- Add per-work-item photo policy to optionally require live camera capture (disallow camera roll uploads) and enforce it in improver step execution UI.
 
 ## Implemented
 
+### Status Label + Mobile Polish (Current Iteration)
+- Added shared status formatter at `frontend/lib/status-labels.ts` to render status values as human-readable capitalized labels (including underscore-separated statuses like `in_progress` -> `In Progress`).
+- Applied capitalization to approval/workflow status displays across:
+  - admin role management status badges/descriptions and status-update messaging
+  - proposer panel workflow status badges
+  - improver panel workflow and credential-request status badges
+  - voter panel workflow/deletion vote status and decision badges
+  - workflow details modal workflow + step status labels
+- Capitalized approval status option labels (`Pending`, `Approved`, `Rejected`) in admin role-management selectors/filters.
+- Mobile styling pass for proposer/improver/voter:
+  - improved tab layout responsiveness to avoid cramped horizontal layouts
+  - standardized action-button behavior with mobile-first full-width controls that collapse to inline on larger screens
+  - improved modal step navigation button behavior on small screens.
+
+### Workflow View Cleanup (Current Iteration)
+- Removed UUID/ID display fields from frontend workflow views:
+  - proposer workflow cards
+  - improver workflow board/my workflows/manager/unpaid cards
+  - voter workflow/deletion/active workflow cards
+  - workflow details modal role/header/photo displays
+- Updated deletion vote display to show human-readable target details without raw workflow/series IDs.
+- Removed manual `series_id` entry from proposer workflow creation UI.
+- Enforced backend rule for workflow creation:
+  - proposer-specified `series_id` is now rejected with a validation error
+  - series IDs for created workflows are backend-generated only.
+
+### Improver Panel UX (Current Iteration)
+- Removed the `Active Workflows` tab/panel from the improver page.
+- Updated improver tab structure:
+  - `Workflow Board`
+  - `My Workflows` (new)
+  - `Unpaid Workflows`
+  - `Credentials`
+  - `Absence Coverage`
+  - `Manager View` now appears only when the user has an active claimed manager role on at least one workflow.
+- Workflow claim UX changes:
+  - removed step/manager claim actions from workflow cards
+  - claims are now modal-only
+  - added workflow-level action rendering in the workflow details modal so manager claim is available there.
+- Board vs claimed workflow separation:
+  - `Workflow Board` now shows only workflows the improver has not claimed yet and can claim in.
+  - once the improver claims any role in a workflow (step or manager), that workflow is removed from `Workflow Board` and appears only in `My Workflows`.
+
+### Proposer Panel (Current Iteration)
+- Refactored proposer UI into tabs:
+  - `Create Workflow`
+  - `Your Workflows`
+- Combined prior `Your Workflows` + `Active Workflows` behavior into a single proposer-owned workflow list:
+  - proposer page no longer fetches global `/workflows/active`
+  - list now only uses `/proposers/workflows` data (workflows proposed by the current user)
+- Added status filtering on proposer workflows (`all`, `pending`, `approved`, `rejected`, `expired`, `blocked`, `in_progress`, `completed`, `paid_out`, `deleted`).
+- Deletion proposal UX update:
+  - deletion vote action now appears on the proposer-owned workflow cards for active statuses
+  - if a workflow is in a series, UI only offers `Propose Series Deletion`
+  - for non-series workflows, UI offers `Propose Workflow Deletion`
+- Backend enforcement added so the series rule cannot be bypassed:
+  - `CreateWorkflowDeletionProposal` now rejects `target_type=workflow` when the target belongs to a series (recurring workflow or shared series with multiple workflows)
+  - handler maps this validation to `400` with a clear error message.
+
+### Email Verification (Current Iteration)
+- Added a verified-email subsystem for user notification emails:
+  - new `user_verified_emails` table with per-user email records, verified state, active token, and token expiry metadata
+  - verification tokens are UUIDs and expire 30 minutes after issuance
+  - migration backfills existing attached emails as already verified (users/proposers/improvers/issuers and existing wallet notification subscription emails)
+- Added user email verification APIs:
+  - `GET /users/verified-emails` (auth required)
+  - `POST /users/verified-emails` (auth required; request verification email)
+  - `POST /users/verified-emails/{email_id}/resend` (auth required)
+  - `POST /users/verified-emails/verify` (public token verification endpoint)
+- Added verification email delivery flow:
+  - backend sends a styled email with link to frontend `/verify?token=<uuid>`
+  - backend verifies token, marks email as verified, and clears token metadata
+  - new `APP_BASE_URL` env var is used to build verification links
+- Enforced verified-email requirements for notification-related flows:
+  - proposer/improver/issuer role requests now require the selected email to already be verified for that user
+  - wallet notification subscription creation (`/ponder`) now requires a verified email
+- Frontend updates:
+  - settings `Account` tab now includes verified email management:
+    - list of verified emails
+    - list of pending/expired emails
+    - `Add Email` flow to request verification
+    - `Resend Verification` action for expired entries
+  - role request forms now use verified-email dropdown selection instead of freeform email input; if none exist, users are directed to account email setup
+  - wallet notification modal now uses verified-email dropdown selection and directs users to settings if no verified emails exist
+  - new frontend `/verify` page consumes the token and finalizes verification through backend API
+
+### Backend (Current Payout Iteration)
+- Implemented workflow series payout pipeline execution:
+  - payout attempts run in strict series order (`start_at`/creation order) and stop at the first non-settled earlier workflow
+  - later workflows in a series can still be worked on and completed, but payouts are held until prior workflows are fully finished and paid
+- Added payout failure tracking + manual retry semantics:
+  - failed step payouts now store `payout_error` + `payout_last_try_at`
+  - failed manager payouts now store `manager_payout_error` + `manager_payout_last_try_at`
+  - payout failures clear previous retry-request markers, requiring a fresh improver re-request for a new retry attempt
+- Added improver payout retry APIs:
+  - `GET /improvers/unpaid-workflows`
+  - `POST /improvers/workflows/{workflow_id}/steps/{step_id}/payout-request`
+  - `POST /improvers/workflows/{workflow_id}/manager/payout-request`
+- Added payout error admin notifications (styled email):
+  - includes workflow/step/improver/wallet context
+  - if insufficient balance is detected, email includes current balance, needed balance, and shortfall
+
+### Frontend (Current Payout Iteration)
+- Added `Unpaid Workflows` tab to improver panel.
+- Tab lists unpaid completed step/manager payouts and distinguishes:
+  - pending-held payouts (waiting on earlier workflows in series)
+  - payout-error items
+- Added `Re-request Payout` actions for failed step and manager payouts.
+- Added unpaid workflow fetch + route wiring and workflow detail access from the unpaid tab.
+
 ### Backend (Latest Iteration)
+- Tightened workflow photo upload size enforcement:
+  - reduced backend per-photo limit to `2MB` (`maxWorkflowPhotoUploadBytes = 2 * 1024 * 1024`)
+  - step completion upload parsing now rejects oversized images with a clear `2MB` validation error
+- Added workflow work-item camera-capture policy:
+  - new `workflow_step_items.camera_capture_only` column (default `false`) with migration-safe `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`
+  - workflow create/template normalization and persistence now round-trip `camera_capture_only`
+  - workflow read paths now include `camera_capture_only` so clients can enforce capture behavior
+- Added credential request workflow between improvers and issuers:
+  - new table: `credential_requests`
+    - tracks `pending|approved|rejected` status, requester, credential type, and resolver metadata
+    - prevents duplicate pending requests per user + credential type
+  - new endpoints:
+    - `GET /credentials/types`
+    - `GET /improvers/credential-requests`
+    - `POST /improvers/credential-requests`
+    - `GET /issuers/credential-requests`
+    - `POST /issuers/credential-requests/{request_id}/decision`
+  - issuer decisions now resolve requests and, on approval, issue credentials atomically in the same transaction
+  - issuer permission checks were refactored into shared DB enforcement for grant/revoke/request-decision flows
+- Added issuer notification email fanout for credential requests:
+  - when an improver submits a credential request, all issuers scoped for that credential type are notified
+  - notifications use existing styled email templates and include requester details + request metadata
+- Added recurring improver absence-period pipeline:
+  - new table: `workflow_improver_absences` (series + step-order scoped absence windows)
+  - new improver APIs:
+    - `GET /improvers/workflows/absence-periods`
+    - `POST /improvers/workflows/absence-periods`
+  - absence creation validates:
+    - user has a claimed recurring workpiece for the target `series_id` + `step_order`
+    - no overlapping absence window exists for the same claimed recurring piece
+  - absence creation temporarily releases assigned step claims in the absence window:
+    - only recurring workflows in the targeted series
+    - only matching step order
+    - only active workflow statuses (`approved|blocked|in_progress`)
+    - only steps still `locked|available` (in-progress/completed work is not force-reassigned)
+  - released step notification rows for the absent improver are cleared so claim-time notifications can re-emit correctly for reassigned users
+  - claim enforcement now blocks the original improver from re-claiming covered recurring steps during their absence window
 - Added proposer request email requirement and persistence:
   - proposer request now requires `organization` + `email`
   - proposer email is stored on `proposers.email` and included in admin review payloads
@@ -40,11 +193,53 @@
 - Updated routing to use app-level workflow vote handlers that run expiry checks and proposer email notifications before/after voting transitions.
 
 ### Frontend (Latest Iteration)
+- Added client-side photo downsizing/compression before upload in improver step execution:
+  - selected images are resized/compressed automatically when possible to meet the `2MB` limit
+  - if an image cannot be reduced below `2MB`, upload is blocked with a user-facing error
+  - camera-captured photos also pass through the same size-normalization path before submission
+  - completion payload builder includes a final guard that rejects any photo still above `2MB`
+- Proposer + improver workflow item UX updates:
+  - proposer work-item editor now supports `Require live camera capture only (disallow camera roll)` when photo evidence is required
+  - improver step completion form now enforces camera-only items via live `getUserMedia` capture controls (no file picker path), with captured-photo list/remove controls
+  - workflow details modal requirement text now indicates `Photo (Live Camera Only)` when applicable
+- Issuer panel:
+  - replaced wallet-address lookup and direct issue/revoke UI with request-queue workflow
+  - added status filtering (`all|pending|approved|rejected`)
+  - added admin-style modal for reviewing request details and saving approval/rejection decisions
+- Improver panel:
+  - added credential request section
+  - improvers can select from global credential types they do not already hold and submit requests
+  - added request history display with status and timestamps
+- Improver panel:
+  - added `Recurring Absence Coverage` card in `/improver`
+  - improvers can select one of their recurring claimed workpieces (series + step order), set absent start/end, and submit an absence period
+  - added absence-period list display with scheduled/ended state
+  - claim buttons are now hidden for steps covered by the current improver’s active/scheduled absence windows
 - Settings:
   - proposer access request modal now requires notification email input
 - Admin panel:
   - proposer management no longer shows/edits proposer budget fields
   - proposer management now surfaces proposer notification email
+  - completed mobile responsiveness pass across admin tabs and dialogs:
+    - top admin tab rail is horizontally scrollable on mobile and remains fixed-width as a sidebar on desktop
+    - card rows with actions (merchants, W9, improvers, issuer requests, credential types) now stack/wrap cleanly on small screens
+    - admin dialogs now use mobile-safe viewport width/height constraints with internal scrolling where needed
+    - issuer sub-tabs now wrap and remain usable on narrow screens
+    - modal and inline action buttons now expand to full width on mobile and collapse back to inline on larger breakpoints
+    - event detail modal rows now wrap long values and stay scrollable on small screens
+  - issuer scope editor now allows saving with zero selected scopes (admins can clear all credential scopes from an issuer)
+  - removed horizontal-scroll tab rails in admin:
+    - primary admin tabs are now vertical on mobile and desktop
+    - issuer sub-tabs were removed in favor of a single combined Issuers view
+  - combined issuer request + credential scope management into a single Issuers tab:
+    - issuer scope editing now lives directly in the issuer modal alongside nickname/status edits
+    - removed issuer sub-tabs and moved Credential Types back to a top-level admin tab
+    - added issuer status filter (all/approved/pending/rejected) in Issuers tab
+  - aligned admin management UX across merchants/affiliates/proposers/improvers with issuer-style modal status editing:
+    - affiliates and proposers now use modal status dropdowns (`pending/approved/rejected`) + save action
+    - improvers now use a dedicated modal with status dropdown + save action
+    - merchants now use modal status dropdown + save action instead of inline approve/reject buttons
+    - added status filters (all/approved/pending/rejected) to merchants, affiliates, proposers, and improvers tabs
 - Proposer panel:
   - removed proposer budget display card
   - retained workflow proposal creation with unrestricted step bounty totals
@@ -58,6 +253,10 @@
   - added active workflows read-only list
 - Improver panel:
   - added active workflows read-only list
+- Admin issuer scope UX refinement:
+  - removed `Enable issuer role` checkbox from issuer credential scope management
+  - replaced credential scope checkboxes with dropdown-to-add interaction
+  - selected credential scopes now render as removable chips with `x` remove action
 
 ### Backend
 - Added schema for:
@@ -126,6 +325,10 @@
   - if unallocated balance is below the workflow requirement, a styled admin email is sent with exact shortfall (`Amount Needed`)
 - Added admin force-approval pathway (`admin_approve`) for pending workflows.
 - Added issuer scope enforcement for credential grants/revocations (`dpw_certified`, `sfluv_verifier`).
+- Updated merchant approval API semantics to support nullable approval state:
+  - `UpdateLocationApprovalRequest.approval` is now nullable (`true`/`false`/`null`)
+  - admin location approval handler now accepts `pending` transitions and preserves redeemer auto-grant logic for true approvals
+  - location approval DB update now recalculates `users.is_merchant` from current approved-location state after each change
 
 ### Frontend
 - Added types for proposer/improver/workflows.
@@ -162,6 +365,13 @@
   - workflow feed + active credential visibility
   - step claim/start/complete actions
   - dynamic work-item completion forms for photo/written/dropdown requirements
+- Updated voter + improver workflow browsing UX:
+  - added reusable `WorkflowDetailsModal` component at `frontend/components/workflows/workflow-details-modal.tsx`
+  - workflow cards in voter and improver panels now open a step-paged workflow details modal
+  - modal pages each workflow step individually with previous/next controls and full work-item/submission detail visibility
+  - improver workflow cards now show bottom claim CTAs when at least one step is credential-eligible to claim
+  - improver step action forms (claim/start/complete) are now surfaced in the modal per-step action area
+  - voter and improver panel sections are now split into tabs to reduce clutter
 - Updated settings approved-improver state to link into `/improver`.
 - Updated sidebar to expose `Improver Panel` for approved improvers.
 
@@ -187,6 +397,54 @@
     - improvers assigned to at least one step in a workflow can view all submitted step details in that workflow
     - improvers who are only eligible-to-claim (not yet assigned) do not receive submission payloads
 
+### Workflow Manager + DB Media (Current Iteration)
+- Added workflow manager support in workflow/template models and persistence:
+  - workflow create/template payloads now support optional `manager` object with required credentials + optional bounty.
+  - workflows now persist:
+    - `manager_required`
+    - `manager_role_id`
+    - `manager_improver_id`
+    - `manager_bounty`
+    - `manager_paid_out_at`
+  - `workflow_roles` now includes `is_manager` with uniqueness guard for one manager role per workflow.
+- Workflow creation now:
+  - validates manager credentials against allowed credential types.
+  - creates manager role + manager role credentials when enabled.
+  - includes manager bounty in `total_bounty` and `weekly_bounty_requirement`.
+- Added workflow manager claim + managed workflow backend APIs:
+  - `POST /improvers/workflows/{workflow_id}/manager/claim`
+  - `GET /improvers/managed-workflows`
+  - `GET /improvers/managed-workflows/{workflow_id}/export.csv`
+  - `GET /improvers/managed-workflows/{workflow_id}/photos.zip`
+  - `GET /workflow-photos/{photo_id}`
+- Added manager assignment/authorization enforcement:
+  - manager claim requires manager-role credentials and blocks if the improver already has a step assignment in that workflow.
+  - step claims block if the improver is already the workflow manager.
+  - manager-assigned improvers are treated as assigned for submission visibility in improver feed.
+- Added DB-backed workflow photo storage pipeline:
+  - new table `workflow_submission_photos` stores uploaded image bytes (`BYTEA`) + metadata.
+  - step completion now accepts `photo_uploads` (base64 payload), validates image payloads, stores bytes in DB, and persists `photo_ids` in submission responses.
+  - submission hydration now resolves `photo_ids` + photo metadata directly from DB.
+  - `/workflow-photos/{photo_id}` streams image bytes from DB with access control.
+- Added manager export features:
+  - CSV export includes workflow details + per-item response data.
+  - photo ZIP export names files using workflow/step/field metadata and file extension inference.
+- Frontend updates:
+  - proposer workflow builder now includes optional Workflow Manager section (enable, credentials, optional payout), including template save/apply support.
+  - improver panel includes `Manager View` tab:
+    - list workflows managed by current improver
+    - title-based search
+    - open workflow detail modal
+    - download CSV export
+    - download photo ZIP
+  - improver step completion switched from URL input to image file uploads that send `photo_uploads`.
+  - workflow details modal now renders submission photo IDs/metadata with download actions via DB photo endpoint.
+  - manager users no longer see step-claim buttons for workflows they already manage.
+  - credential displays now resolve to credential labels (not raw values) across improver, issuer, admin issuer-scope, and workflow details modal surfaces.
+  - fixed map-loading regression when navigating back to home/map by preventing `getAuthedMapLocations` from setting shared `mapLocationsStatus` to `loading`.
+  - issuer panel credential-request modal now supports changing status to `pending|approved|rejected` for any request state, and issuer request list now supports combined filtering by status and requested credential type.
+  - fixed DB migration ordering for `workflow_roles` manager index creation so older schemas no longer fail with `column "is_manager" does not exist` during startup.
+
 ## Validation Notes
 - Backend compile/tests for changed packages passed:
   - `go test -vet=off ./db ./handlers ./router ./structs`
@@ -195,5 +453,46 @@
 
 ## Remaining (Next Iterations)
 - Workflow step payout pipeline (faucet settlement and `paid_out` transitions).
-- Improved attachment handling (direct upload/storage flow for required photos instead of URL entry).
 - Scheduled/background finalization guarantees for vote countdown expiry (today this finalizes when relevant endpoints are hit).
+
+### Workflow Item Notification Email Privacy (2026-02-24)
+- Restricted workflow-item dropdown `notify_emails` exposure in API responses:
+  - Added redaction in workflow handlers so notification email addresses are removed for non-manager viewers.
+  - Redaction is applied across proposer workflow reads, generic workflow reads, improver feeds/unpaid/payout retry responses, claim/start/complete responses, voter workflow reads/vote responses, and admin force-approve responses.
+  - Workflow managers retain access to these email addresses on workflows they manage.
+  - Proposers still see entered emails at proposal time through the create flow response/UI.
+- Added `notify_email_count` metadata to dropdown options in backend/frontend workflow models.
+  - Backend now sets this count when hydrating workflow items.
+  - Redaction preserves count while removing email addresses.
+- Updated workflow details modal UI:
+  - If viewer has access, it still shows actual notify emails.
+  - If viewer does not have access but count is present, it shows a non-sensitive indicator (`Notification email configured`).
+  - This satisfies voting-view requirement to show presence of configured notification email without revealing the address.
+- Confirmed workflow-item notify emails are not forced through verified-email enforcement:
+  - Verified-email checks remain on role-request/contact style flows, not workflow-item dropdown notify recipients.
+
+### Validation (This Iteration)
+- `gofmt -w backend/handlers/app_workflow.go backend/db/app_workflow.go backend/structs/app_workflow.go`
+- `cd backend && go test -vet=off ./handlers ./db ./structs` (passed)
+- `cd frontend && npx tsc --noEmit --pretty false 2>&1 | rg -n "workflow-details-modal|types/workflow" -S || true` (no errors for touched workflow files)
+
+### Voter-Initiated Workflow Deletion Proposals (2026-02-24)
+- Enabled voters to submit workflow deletion proposals directly:
+  - Added `POST /voters/workflow-deletion-proposals` route using voter authorization middleware.
+  - Reused existing deletion-proposal handler and expanded authorization checks to allow admin/proposer/voter callers.
+- Updated deletion proposal backend authorization logic:
+  - `CreateWorkflowDeletionProposal` now accepts a generic requester ID.
+  - Requester is authorized when they are either:
+    - approved proposer, or
+    - voter (`is_voter`), or
+    - admin (`is_admin`).
+- Updated voter panel UX:
+  - In Active Workflows, opening workflow details modal now shows a `Propose Deletion Vote` action.
+  - Modal action infers target type (`workflow` vs `series`) based on recurrence/series presence.
+  - If a pending deletion proposal already exists for the same workflow/series target, action is blocked and UI shows `Deletion Vote Pending`.
+  - Active workflows tab copy updated to reflect voter-driven deletion proposals.
+
+### Validation (This Iteration)
+- `gofmt -w backend/handlers/app_workflow.go backend/db/app_workflow.go backend/router/router.go`
+- `cd backend && go test -vet=off ./handlers ./db ./router ./structs` (passed)
+- `cd frontend && npx tsc --noEmit --pretty false 2>&1 | rg -n "app/voter/page.tsx|workflow-details-modal|types/workflow" -S || true` (no errors for touched voter/workflow files)

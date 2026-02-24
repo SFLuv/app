@@ -1,13 +1,21 @@
 package handlers
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"io"
 	"math/big"
+	"mime"
 	"net/http"
 	"os"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -15,6 +23,41 @@ import (
 	"github.com/SFLuv/app/backend/utils"
 	"github.com/jackc/pgx/v5"
 )
+
+func userCanViewWorkflowNotifyEmails(workflow *structs.Workflow, userID string) bool {
+	if workflow == nil || userID == "" {
+		return false
+	}
+	return workflow.ManagerImproverId != nil && *workflow.ManagerImproverId == userID
+}
+
+func redactWorkflowItemNotifyEmailsForUser(workflow *structs.Workflow, userID string) {
+	if workflow == nil {
+		return
+	}
+	if userCanViewWorkflowNotifyEmails(workflow, userID) {
+		return
+	}
+	for stepIdx := range workflow.Steps {
+		for itemIdx := range workflow.Steps[stepIdx].WorkItems {
+			for optionIdx := range workflow.Steps[stepIdx].WorkItems[itemIdx].DropdownOptions {
+				option := &workflow.Steps[stepIdx].WorkItems[itemIdx].DropdownOptions[optionIdx]
+				notifyEmailCount := option.NotifyEmailCount
+				if len(option.NotifyEmails) > notifyEmailCount {
+					notifyEmailCount = len(option.NotifyEmails)
+				}
+				option.NotifyEmailCount = notifyEmailCount
+				option.NotifyEmails = nil
+			}
+		}
+	}
+}
+
+func redactWorkflowItemNotifyEmailsForUserInList(workflows []*structs.Workflow, userID string) {
+	for _, workflow := range workflows {
+		redactWorkflowItemNotifyEmailsForUser(workflow, userID)
+	}
+}
 
 func (a *AppService) RequestProposerStatus(w http.ResponseWriter, r *http.Request) {
 	userDid := utils.GetDid(r)
@@ -44,8 +87,9 @@ func (a *AppService) RequestProposerStatus(w http.ResponseWriter, r *http.Reques
 			w.WriteHeader(http.StatusConflict)
 			return
 		}
-		if strings.Contains(err.Error(), "required") {
+		if strings.Contains(err.Error(), "required") || strings.Contains(err.Error(), "invalid") || strings.Contains(err.Error(), "verified") {
 			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(err.Error()))
 			return
 		}
 		a.logger.Logf("error upserting proposer request for user %s: %s", *userDid, err.Error())
@@ -145,8 +189,9 @@ func (a *AppService) RequestImproverStatus(w http.ResponseWriter, r *http.Reques
 			w.WriteHeader(http.StatusConflict)
 			return
 		}
-		if strings.Contains(err.Error(), "required") {
+		if strings.Contains(err.Error(), "required") || strings.Contains(err.Error(), "invalid") || strings.Contains(err.Error(), "verified") {
 			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(err.Error()))
 			return
 		}
 		a.logger.Logf("error upserting improver request for user %s: %s", *userDid, err.Error())
@@ -429,6 +474,7 @@ func (a *AppService) GetProposerWorkflows(w http.ResponseWriter, r *http.Request
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
+	redactWorkflowItemNotifyEmailsForUserInList(workflows, *userDid)
 
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(workflows)
@@ -457,6 +503,7 @@ func (a *AppService) GetProposerWorkflow(w http.ResponseWriter, r *http.Request)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
+	redactWorkflowItemNotifyEmailsForUser(workflow, *userDid)
 
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(workflow)
@@ -495,6 +542,12 @@ func (a *AppService) DeleteProposerWorkflow(w http.ResponseWriter, r *http.Reque
 }
 
 func (a *AppService) GetWorkflow(w http.ResponseWriter, r *http.Request) {
+	userDid := utils.GetDid(r)
+	if userDid == nil {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
 	workflowId := strings.TrimSpace(r.PathValue("workflow_id"))
 	if workflowId == "" {
 		w.WriteHeader(http.StatusBadRequest)
@@ -511,6 +564,7 @@ func (a *AppService) GetWorkflow(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
+	redactWorkflowItemNotifyEmailsForUser(workflow, *userDid)
 
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(workflow)
@@ -559,8 +613,26 @@ func (a *AppService) GetImproverWorkflows(w http.ResponseWriter, r *http.Request
 			roleById[role.Id] = role
 		}
 
+		isManager := workflow.ManagerImproverId != nil && *workflow.ManagerImproverId == *userDid
 		isRelevant := false
-		hasAssignment := false
+		hasAssignment := isManager
+		if isManager {
+			isRelevant = true
+		}
+		if workflow.ManagerRequired && workflow.ManagerImproverId == nil && workflow.ManagerRoleId != nil {
+			if managerRole, ok := roleById[*workflow.ManagerRoleId]; ok {
+				hasAllManagerCredentials := true
+				for _, required := range managerRole.RequiredCredentials {
+					if _, has := activeSet[required]; !has {
+						hasAllManagerCredentials = false
+						break
+					}
+				}
+				if hasAllManagerCredentials {
+					isRelevant = true
+				}
+			}
+		}
 		for _, step := range workflow.Steps {
 			if step.AssignedImproverId != nil && *step.AssignedImproverId == *userDid {
 				isRelevant = true
@@ -602,6 +674,7 @@ func (a *AppService) GetImproverWorkflows(w http.ResponseWriter, r *http.Request
 		}
 
 		if isRelevant {
+			redactWorkflowItemNotifyEmailsForUser(workflow, *userDid)
 			filtered = append(filtered, workflow)
 		}
 	}
@@ -612,6 +685,640 @@ func (a *AppService) GetImproverWorkflows(w http.ResponseWriter, r *http.Request
 	}
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(feed)
+}
+
+func (a *AppService) GetManagedWorkflows(w http.ResponseWriter, r *http.Request) {
+	userDid := utils.GetDid(r)
+	if userDid == nil {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	workflows, err := a.db.GetManagedWorkflowsByImprover(r.Context(), *userDid)
+	if err != nil {
+		a.logger.Logf("error loading managed workflows for improver %s: %s", *userDid, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	redactWorkflowItemNotifyEmailsForUserInList(workflows, *userDid)
+
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(workflows)
+}
+
+func (a *AppService) GetImproverUnpaidWorkflows(w http.ResponseWriter, r *http.Request) {
+	userDid := utils.GetDid(r)
+	if userDid == nil {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	workflows, err := a.db.GetImproverUnpaidWorkflows(r.Context(), *userDid)
+	if err != nil {
+		a.logger.Logf("error loading unpaid workflows for improver %s: %s", *userDid, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	for _, workflow := range workflows {
+		a.processWorkflowSeriesPayouts(r.Context(), workflow.Id)
+	}
+
+	refreshed, err := a.db.GetImproverUnpaidWorkflows(r.Context(), *userDid)
+	if err != nil {
+		a.logger.Logf("error refreshing unpaid workflows for improver %s: %s", *userDid, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	redactWorkflowItemNotifyEmailsForUserInList(refreshed, *userDid)
+
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(refreshed)
+}
+
+func (a *AppService) RequestWorkflowStepPayoutRetry(w http.ResponseWriter, r *http.Request) {
+	userDid := utils.GetDid(r)
+	if userDid == nil {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	workflowID := strings.TrimSpace(r.PathValue("workflow_id"))
+	stepID := strings.TrimSpace(r.PathValue("step_id"))
+	if workflowID == "" || stepID == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	if err := a.db.RequestWorkflowStepPayoutRetry(r.Context(), workflowID, stepID, *userDid); err != nil {
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "no failed step payout found") {
+			w.WriteHeader(http.StatusConflict)
+			w.Write([]byte(errMsg))
+			return
+		}
+		a.logger.Logf("error requesting workflow step payout retry for workflow %s step %s improver %s: %s", workflowID, stepID, *userDid, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	a.processWorkflowSeriesPayouts(r.Context(), workflowID)
+
+	workflow, err := a.db.GetWorkflowByID(r.Context(), workflowID)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		a.logger.Logf("error loading workflow %s after payout retry request: %s", workflowID, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	redactWorkflowItemNotifyEmailsForUser(workflow, *userDid)
+
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(workflow)
+}
+
+func (a *AppService) RequestWorkflowManagerPayoutRetry(w http.ResponseWriter, r *http.Request) {
+	userDid := utils.GetDid(r)
+	if userDid == nil {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	workflowID := strings.TrimSpace(r.PathValue("workflow_id"))
+	if workflowID == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	if err := a.db.RequestWorkflowManagerPayoutRetry(r.Context(), workflowID, *userDid); err != nil {
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "no failed manager payout found") {
+			w.WriteHeader(http.StatusConflict)
+			w.Write([]byte(errMsg))
+			return
+		}
+		a.logger.Logf("error requesting workflow manager payout retry for workflow %s improver %s: %s", workflowID, *userDid, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	a.processWorkflowSeriesPayouts(r.Context(), workflowID)
+
+	workflow, err := a.db.GetWorkflowByID(r.Context(), workflowID)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		a.logger.Logf("error loading workflow %s after manager payout retry request: %s", workflowID, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	redactWorkflowItemNotifyEmailsForUser(workflow, *userDid)
+
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(workflow)
+}
+
+func (a *AppService) ClaimWorkflowManager(w http.ResponseWriter, r *http.Request) {
+	userDid := utils.GetDid(r)
+	if userDid == nil {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	workflowID := strings.TrimSpace(r.PathValue("workflow_id"))
+	if workflowID == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	workflow, err := a.db.ClaimWorkflowManager(r.Context(), workflowID, *userDid)
+	if err != nil {
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "missing required credentials") {
+			w.WriteHeader(http.StatusForbidden)
+			w.Write([]byte(errMsg))
+			return
+		}
+		if strings.Contains(errMsg, "already claimed") || strings.Contains(errMsg, "already assigned") {
+			w.WriteHeader(http.StatusConflict)
+			w.Write([]byte(errMsg))
+			return
+		}
+		if strings.Contains(errMsg, "not enabled") || strings.Contains(errMsg, "not available") {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(errMsg))
+			return
+		}
+		if err == pgx.ErrNoRows {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		a.logger.Logf("error claiming workflow manager on workflow %s for improver %s: %s", workflowID, *userDid, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	redactWorkflowItemNotifyEmailsForUser(workflow, *userDid)
+
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(workflow)
+}
+
+func (a *AppService) DownloadManagedWorkflowCSV(w http.ResponseWriter, r *http.Request) {
+	userDid := utils.GetDid(r)
+	if userDid == nil {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	workflowID := strings.TrimSpace(r.PathValue("workflow_id"))
+	if workflowID == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	isManager, err := a.db.IsWorkflowManagedByImprover(r.Context(), workflowID, *userDid)
+	if err != nil {
+		a.logger.Logf("error checking manager authorization for workflow csv %s improver %s: %s", workflowID, *userDid, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	if !isManager {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	workflow, err := a.db.GetWorkflowByID(r.Context(), workflowID)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		a.logger.Logf("error loading managed workflow %s for csv export: %s", workflowID, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	csvData, err := buildManagedWorkflowCSV(workflow)
+	if err != nil {
+		a.logger.Logf("error building csv export for managed workflow %s: %s", workflowID, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	filename := fmt.Sprintf("workflow_%s_export.csv", workflowID)
+	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(csvData)
+}
+
+var workflowPhotoFieldSlugger = regexp.MustCompile(`[^a-z0-9]+`)
+
+func slugifyWorkflowPhotoField(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	value = workflowPhotoFieldSlugger.ReplaceAllString(value, "_")
+	value = strings.Trim(value, "_")
+	if value == "" {
+		return "field"
+	}
+	return value
+}
+
+func workflowPhotoFileExtension(contentType string, fileName string) string {
+	ext := strings.ToLower(strings.TrimSpace(filepath.Ext(fileName)))
+	if ext != "" {
+		return ext
+	}
+	contentType = strings.TrimSpace(contentType)
+	if contentType != "" {
+		if inferred, err := mime.ExtensionsByType(contentType); err == nil && len(inferred) > 0 {
+			ext = strings.ToLower(strings.TrimSpace(inferred[0]))
+			if ext != "" {
+				return ext
+			}
+		}
+	}
+	return ".bin"
+}
+
+func (a *AppService) DownloadManagedWorkflowPhotosZip(w http.ResponseWriter, r *http.Request) {
+	userDid := utils.GetDid(r)
+	if userDid == nil {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	workflowID := strings.TrimSpace(r.PathValue("workflow_id"))
+	if workflowID == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	isManager, err := a.db.IsWorkflowManagedByImprover(r.Context(), workflowID, *userDid)
+	if err != nil {
+		a.logger.Logf("error checking manager authorization for workflow photo export %s improver %s: %s", workflowID, *userDid, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	if !isManager {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	photos, err := a.db.GetWorkflowSubmissionPhotoExports(r.Context(), workflowID)
+	if err != nil {
+		a.logger.Logf("error loading workflow photo export rows for workflow %s: %s", workflowID, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	var zipBuffer bytes.Buffer
+	zipWriter := zip.NewWriter(&zipBuffer)
+	fileNameCounts := map[string]int{}
+	for _, photoExport := range photos {
+		ext := workflowPhotoFileExtension(photoExport.Photo.ContentType, photoExport.Photo.FileName)
+		fieldSlug := slugifyWorkflowPhotoField(photoExport.ItemTitle)
+		baseName := fmt.Sprintf("%s_step%02d_%s_%s", workflowID, photoExport.StepOrder, fieldSlug, photoExport.Photo.Id)
+		archiveFileName := baseName + ext
+		if seenCount := fileNameCounts[archiveFileName]; seenCount > 0 {
+			archiveFileName = fmt.Sprintf("%s_%d%s", baseName, seenCount+1, ext)
+		}
+		fileNameCounts[archiveFileName]++
+
+		entryWriter, entryErr := zipWriter.Create(archiveFileName)
+		if entryErr != nil {
+			a.logger.Logf("error creating photo zip entry for workflow %s photo %s: %s", workflowID, photoExport.Photo.Id, entryErr)
+			continue
+		}
+		if _, writeErr := entryWriter.Write(photoExport.Photo.PhotoData); writeErr != nil {
+			a.logger.Logf("error writing photo zip entry for workflow %s photo %s: %s", workflowID, photoExport.Photo.Id, writeErr)
+		}
+	}
+	if err := zipWriter.Close(); err != nil {
+		a.logger.Logf("error finalizing photo zip for workflow %s: %s", workflowID, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	filename := fmt.Sprintf("workflow_%s_photos.zip", workflowID)
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(zipBuffer.Bytes())
+}
+
+func buildManagedWorkflowCSV(workflow *structs.Workflow) ([]byte, error) {
+	if workflow == nil {
+		return nil, fmt.Errorf("workflow is required")
+	}
+
+	var csvBuffer bytes.Buffer
+	writer := csv.NewWriter(&csvBuffer)
+	headers := []string{
+		"workflow_id",
+		"workflow_title",
+		"series_id",
+		"workflow_status",
+		"recurrence",
+		"start_at",
+		"manager_improver_id",
+		"manager_bounty",
+		"step_order",
+		"step_id",
+		"step_title",
+		"step_status",
+		"step_assigned_improver_id",
+		"step_bounty",
+		"item_order",
+		"item_id",
+		"item_title",
+		"item_optional",
+		"submitted_at",
+		"submitted_by",
+		"dropdown_value",
+		"written_response",
+		"photo_ids",
+	}
+	if err := writer.Write(headers); err != nil {
+		return nil, err
+	}
+
+	steps := append([]structs.WorkflowStep{}, workflow.Steps...)
+	sort.SliceStable(steps, func(i int, j int) bool {
+		return steps[i].StepOrder < steps[j].StepOrder
+	})
+
+	managerImproverID := ""
+	if workflow.ManagerImproverId != nil {
+		managerImproverID = *workflow.ManagerImproverId
+	}
+
+	for _, step := range steps {
+		items := append([]structs.WorkflowWorkItem{}, step.WorkItems...)
+		sort.SliceStable(items, func(i int, j int) bool {
+			return items[i].ItemOrder < items[j].ItemOrder
+		})
+
+		responseByItem := map[string]structs.WorkflowStepItemResponse{}
+		submittedAt := ""
+		submittedBy := ""
+		if step.Submission != nil {
+			submittedAt = step.Submission.SubmittedAt.UTC().Format(time.RFC3339)
+			submittedBy = step.Submission.ImproverId
+			for _, response := range step.Submission.ItemResponses {
+				responseByItem[response.ItemId] = response
+			}
+		}
+
+		if len(items) == 0 {
+			row := []string{
+				workflow.Id,
+				workflow.Title,
+				workflow.SeriesId,
+				workflow.Status,
+				workflow.Recurrence,
+				workflow.StartAt.UTC().Format(time.RFC3339),
+				managerImproverID,
+				strconv.FormatUint(workflow.ManagerBounty, 10),
+				strconv.Itoa(step.StepOrder),
+				step.Id,
+				step.Title,
+				step.Status,
+				valueOrEmpty(step.AssignedImproverId),
+				strconv.FormatUint(step.Bounty, 10),
+				"",
+				"",
+				"",
+				"",
+				submittedAt,
+				submittedBy,
+				"",
+				"",
+				"",
+			}
+			if err := writer.Write(row); err != nil {
+				return nil, err
+			}
+			continue
+		}
+
+		for _, item := range items {
+			response, hasResponse := responseByItem[item.Id]
+			dropdownValue := ""
+			writtenResponse := ""
+			photoIDs := []string{}
+			if hasResponse {
+				if response.DropdownValue != nil {
+					dropdownValue = *response.DropdownValue
+				}
+				if response.WrittenResponse != nil {
+					writtenResponse = *response.WrittenResponse
+				}
+				photoIDs = append(photoIDs, response.PhotoIDs...)
+				if len(photoIDs) == 0 && len(response.PhotoURLs) > 0 {
+					photoIDs = append(photoIDs, response.PhotoURLs...)
+				}
+			}
+
+			row := []string{
+				workflow.Id,
+				workflow.Title,
+				workflow.SeriesId,
+				workflow.Status,
+				workflow.Recurrence,
+				workflow.StartAt.UTC().Format(time.RFC3339),
+				managerImproverID,
+				strconv.FormatUint(workflow.ManagerBounty, 10),
+				strconv.Itoa(step.StepOrder),
+				step.Id,
+				step.Title,
+				step.Status,
+				valueOrEmpty(step.AssignedImproverId),
+				strconv.FormatUint(step.Bounty, 10),
+				strconv.Itoa(item.ItemOrder),
+				item.Id,
+				item.Title,
+				strconv.FormatBool(item.Optional),
+				submittedAt,
+				submittedBy,
+				dropdownValue,
+				writtenResponse,
+				strings.Join(photoIDs, ";"),
+			}
+			if err := writer.Write(row); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	writer.Flush()
+	if err := writer.Error(); err != nil {
+		return nil, err
+	}
+	return csvBuffer.Bytes(), nil
+}
+
+func valueOrEmpty(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
+}
+
+func (a *AppService) GetWorkflowPhoto(w http.ResponseWriter, r *http.Request) {
+	userDid := utils.GetDid(r)
+	if userDid == nil {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	photoID := strings.TrimSpace(r.PathValue("photo_id"))
+	if photoID == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	photo, err := a.db.GetWorkflowSubmissionPhotoBlobByID(r.Context(), photoID)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		a.logger.Logf("error loading workflow photo %s: %s", photoID, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	canAccess := false
+	if a.IsAdmin(r.Context(), *userDid) || a.IsVoter(r.Context(), *userDid) {
+		canAccess = true
+	}
+	if !canAccess && a.IsProposer(r.Context(), *userDid) {
+		workflow, wfErr := a.db.GetWorkflowByID(r.Context(), photo.WorkflowId)
+		if wfErr != nil && wfErr != pgx.ErrNoRows {
+			a.logger.Logf("error checking proposer workflow photo access for photo %s user %s: %s", photoID, *userDid, wfErr)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		if wfErr == nil && workflow.ProposerId == *userDid {
+			canAccess = true
+		}
+	}
+	if !canAccess && a.IsImprover(r.Context(), *userDid) {
+		assigned, assignedErr := a.db.IsImproverAssignedOrManagerForWorkflow(r.Context(), photo.WorkflowId, *userDid)
+		if assignedErr != nil {
+			a.logger.Logf("error checking improver workflow photo access for photo %s user %s: %s", photoID, *userDid, assignedErr)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		canAccess = assigned
+	}
+
+	if !canAccess {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	contentType := strings.TrimSpace(photo.ContentType)
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+	filename := strings.TrimSpace(filepath.Base(photo.FileName))
+	if filename == "" {
+		filename = photo.Id + workflowPhotoFileExtension(contentType, "")
+	}
+
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename))
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(photo.PhotoData)
+}
+
+func (a *AppService) GetImproverAbsencePeriods(w http.ResponseWriter, r *http.Request) {
+	userDid := utils.GetDid(r)
+	if userDid == nil {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	periods, err := a.db.GetImproverAbsencePeriods(r.Context(), *userDid)
+	if err != nil {
+		a.logger.Logf("error loading improver absence periods for %s: %s", *userDid, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(periods)
+}
+
+func (a *AppService) CreateImproverAbsencePeriod(w http.ResponseWriter, r *http.Request) {
+	userDid := utils.GetDid(r)
+	if userDid == nil {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	defer r.Body.Close()
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		a.logger.Logf("error reading improver absence request body for %s: %s", *userDid, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	var req structs.ImproverAbsencePeriodCreateRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	absentFrom, err := parseWorkflowStartAt(req.AbsentFrom)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte("invalid absent_from"))
+		return
+	}
+	absentUntil, err := parseWorkflowStartAt(req.AbsentUntil)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte("invalid absent_until"))
+		return
+	}
+
+	result, err := a.db.CreateImproverAbsencePeriod(
+		r.Context(),
+		*userDid,
+		req.SeriesId,
+		req.StepOrder,
+		absentFrom,
+		absentUntil,
+	)
+	if err != nil {
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "required") || strings.Contains(errMsg, "must be") || strings.Contains(errMsg, "overlapping") {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(errMsg))
+			return
+		}
+		if strings.Contains(errMsg, "no claimed recurring workpiece") {
+			w.WriteHeader(http.StatusConflict)
+			w.Write([]byte(errMsg))
+			return
+		}
+		a.logger.Logf("error creating improver absence period for %s: %s", *userDid, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(result)
 }
 
 func (a *AppService) ClaimWorkflowStep(w http.ResponseWriter, r *http.Request) {
@@ -650,6 +1357,11 @@ func (a *AppService) ClaimWorkflowStep(w http.ResponseWriter, r *http.Request) {
 			w.Write([]byte(errMsg))
 			return
 		}
+		if strings.Contains(errMsg, "absence period") {
+			w.WriteHeader(http.StatusConflict)
+			w.Write([]byte(errMsg))
+			return
+		}
 		if strings.Contains(errMsg, "not claimable") || strings.Contains(errMsg, "not available") || strings.Contains(errMsg, "missing a role") || strings.Contains(errMsg, "does not belong") {
 			w.WriteHeader(http.StatusBadRequest)
 			w.Write([]byte(errMsg))
@@ -666,6 +1378,7 @@ func (a *AppService) ClaimWorkflowStep(w http.ResponseWriter, r *http.Request) {
 	if availabilityNotification != nil {
 		a.sendWorkflowStepAvailableEmail(*availabilityNotification)
 	}
+	redactWorkflowItemNotifyEmailsForUser(workflow, *userDid)
 
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(workflow)
@@ -715,6 +1428,7 @@ func (a *AppService) StartWorkflowStep(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
+	redactWorkflowItemNotifyEmailsForUser(workflow, *userDid)
 
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(workflow)
@@ -788,12 +1502,15 @@ func (a *AppService) CompleteWorkflowStep(w http.ResponseWriter, r *http.Request
 		a.sendWorkflowDropdownAlertEmail(notification)
 	}
 
+	a.processWorkflowSeriesPayouts(r.Context(), workflowId)
+
 	workflow, err := a.db.GetWorkflowByID(r.Context(), workflowId)
 	if err != nil {
 		a.logger.Logf("error loading workflow %s after step completion: %s", workflowId, err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
+	redactWorkflowItemNotifyEmailsForUser(workflow, *userDid)
 
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(workflow)
@@ -842,6 +1559,7 @@ func (a *AppService) GetVoterWorkflows(w http.ResponseWriter, r *http.Request) {
 		}
 		workflows[idx] = evaluatedWorkflow
 	}
+	redactWorkflowItemNotifyEmailsForUserInList(workflows, *userDid)
 
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(workflows)
@@ -885,6 +1603,7 @@ func (a *AppService) VoteWorkflow(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if workflow.Status != "pending" {
+		redactWorkflowItemNotifyEmailsForUser(workflow, *userDid)
 		w.WriteHeader(http.StatusConflict)
 		_ = json.NewEncoder(w).Encode(workflow)
 		return
@@ -919,6 +1638,7 @@ func (a *AppService) VoteWorkflow(w http.ResponseWriter, r *http.Request) {
 	if workflow.Status == "pending" && updatedWorkflow.Status != "pending" {
 		a.sendWorkflowProposalOutcomeEmailByWorkflow(r.Context(), updatedWorkflow.Id)
 	}
+	redactWorkflowItemNotifyEmailsForUser(updatedWorkflow, *userDid)
 
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(updatedWorkflow)
@@ -951,6 +1671,7 @@ func (a *AppService) AdminForceApproveWorkflow(w http.ResponseWriter, r *http.Re
 	}
 
 	if workflow.Status != "pending" {
+		redactWorkflowItemNotifyEmailsForUser(workflow, *adminId)
 		w.WriteHeader(http.StatusConflict)
 		_ = json.NewEncoder(w).Encode(workflow)
 		return
@@ -984,6 +1705,7 @@ func (a *AppService) AdminForceApproveWorkflow(w http.ResponseWriter, r *http.Re
 	}
 
 	a.sendWorkflowProposalOutcomeEmailByWorkflow(r.Context(), updatedWorkflow.Id)
+	redactWorkflowItemNotifyEmailsForUser(updatedWorkflow, *adminId)
 
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(updatedWorkflow)
@@ -1014,12 +1736,12 @@ func (a *AppService) GetActiveWorkflows(w http.ResponseWriter, r *http.Request) 
 }
 
 func (a *AppService) ProposeWorkflowDeletion(w http.ResponseWriter, r *http.Request) {
-	proposerId := utils.GetDid(r)
-	if proposerId == nil {
+	requesterId := utils.GetDid(r)
+	if requesterId == nil {
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}
-	if !a.IsProposer(r.Context(), *proposerId) {
+	if !a.IsAdmin(r.Context(), *requesterId) && !a.IsProposer(r.Context(), *requesterId) && !a.IsVoter(r.Context(), *requesterId) {
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}
@@ -1038,15 +1760,19 @@ func (a *AppService) ProposeWorkflowDeletion(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	proposal, err := a.db.CreateWorkflowDeletionProposal(r.Context(), *proposerId, &req)
+	proposal, err := a.db.CreateWorkflowDeletionProposal(r.Context(), *requesterId, &req)
 	if err != nil {
 		errMsg := err.Error()
-		if strings.Contains(errMsg, "required") || strings.Contains(errMsg, "invalid") || strings.Contains(errMsg, "active") || strings.Contains(errMsg, "already exists") {
+		if strings.Contains(errMsg, "required") ||
+			strings.Contains(errMsg, "invalid") ||
+			strings.Contains(errMsg, "active") ||
+			strings.Contains(errMsg, "already exists") ||
+			strings.Contains(errMsg, "not allowed") {
 			w.WriteHeader(http.StatusBadRequest)
 			w.Write([]byte(errMsg))
 			return
 		}
-		if strings.Contains(errMsg, "not approved") {
+		if strings.Contains(errMsg, "not approved") || strings.Contains(errMsg, "not authorized") {
 			w.WriteHeader(http.StatusForbidden)
 			w.Write([]byte(errMsg))
 			return
@@ -1056,7 +1782,7 @@ func (a *AppService) ProposeWorkflowDeletion(w http.ResponseWriter, r *http.Requ
 			w.Write([]byte(errMsg))
 			return
 		}
-		a.logger.Logf("error creating workflow deletion proposal for proposer %s: %s", *proposerId, err)
+		a.logger.Logf("error creating workflow deletion proposal for requester %s: %s", *requesterId, err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
@@ -1207,6 +1933,174 @@ func (a *AppService) UpdateIssuerScopes(w http.ResponseWriter, r *http.Request) 
 	_ = json.NewEncoder(w).Encode(issuer)
 }
 
+func (a *AppService) GetCredentialTypes(w http.ResponseWriter, r *http.Request) {
+	credentialTypes, err := a.db.GetGlobalCredentialTypes(r.Context())
+	if err != nil {
+		a.logger.Logf("error getting credential types: %s", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(credentialTypes)
+}
+
+func (a *AppService) GetImproverCredentialRequests(w http.ResponseWriter, r *http.Request) {
+	userDid := utils.GetDid(r)
+	if userDid == nil {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	requests, err := a.db.GetCredentialRequestsByUser(r.Context(), *userDid)
+	if err != nil {
+		a.logger.Logf("error getting credential requests for improver %s: %s", *userDid, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(requests)
+}
+
+func (a *AppService) CreateImproverCredentialRequest(w http.ResponseWriter, r *http.Request) {
+	userDid := utils.GetDid(r)
+	if userDid == nil {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	defer r.Body.Close()
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		a.logger.Logf("error reading improver credential request body for %s: %s", *userDid, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	var req structs.CredentialRequestCreateRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	created, err := a.db.CreateCredentialRequest(r.Context(), *userDid, req.CredentialType)
+	if err != nil {
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "required") || strings.Contains(errMsg, "invalid") {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(errMsg))
+			return
+		}
+		if strings.Contains(errMsg, "already exists") || strings.Contains(errMsg, "already active") {
+			w.WriteHeader(http.StatusConflict)
+			w.Write([]byte(errMsg))
+			return
+		}
+		if strings.Contains(errMsg, "not found") {
+			w.WriteHeader(http.StatusNotFound)
+			w.Write([]byte(errMsg))
+			return
+		}
+		a.logger.Logf("error creating improver credential request for %s: %s", *userDid, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	a.sendCredentialRequestEmails(r.Context(), *created)
+
+	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(created)
+}
+
+func (a *AppService) GetIssuerCredentialRequests(w http.ResponseWriter, r *http.Request) {
+	issuerId := utils.GetDid(r)
+	if issuerId == nil {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	requests, err := a.db.GetCredentialRequestsForIssuer(r.Context(), *issuerId)
+	if err != nil {
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "role required") {
+			w.WriteHeader(http.StatusForbidden)
+			w.Write([]byte(errMsg))
+			return
+		}
+		a.logger.Logf("error getting credential requests for issuer %s: %s", *issuerId, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(requests)
+}
+
+func (a *AppService) DecideIssuerCredentialRequest(w http.ResponseWriter, r *http.Request) {
+	issuerId := utils.GetDid(r)
+	if issuerId == nil {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	requestId := strings.TrimSpace(r.PathValue("request_id"))
+	if requestId == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	defer r.Body.Close()
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		a.logger.Logf("error reading issuer credential request decision body: %s", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	var req structs.CredentialRequestDecisionRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	statusInput := strings.TrimSpace(req.Status)
+	if statusInput == "" {
+		statusInput = strings.TrimSpace(req.Decision)
+	}
+
+	updated, err := a.db.ResolveCredentialRequest(r.Context(), *issuerId, requestId, statusInput)
+	if err != nil {
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "required") || strings.Contains(errMsg, "invalid decision") {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(errMsg))
+			return
+		}
+		if strings.Contains(errMsg, "role required") || strings.Contains(errMsg, "not allowed") {
+			w.WriteHeader(http.StatusForbidden)
+			w.Write([]byte(errMsg))
+			return
+		}
+		if strings.Contains(errMsg, "not found") {
+			w.WriteHeader(http.StatusNotFound)
+			w.Write([]byte(errMsg))
+			return
+		}
+		if strings.Contains(errMsg, "pending credential request already exists") {
+			w.WriteHeader(http.StatusConflict)
+			w.Write([]byte(errMsg))
+			return
+		}
+		a.logger.Logf("error resolving credential request %s by issuer %s: %s", requestId, *issuerId, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(updated)
+}
+
 func (a *AppService) GetMyIssuerScopes(w http.ResponseWriter, r *http.Request) {
 	userDid := utils.GetDid(r)
 	if userDid == nil {
@@ -1218,9 +2112,14 @@ func (a *AppService) GetMyIssuerScopes(w http.ResponseWriter, r *http.Request) {
 	isIssuer := isAdmin || a.IsIssuer(r.Context(), *userDid)
 	allowed := []string{}
 	if isAdmin {
-		allowed = []string{
-			string(structs.CredentialDPWCertified),
-			string(structs.CredentialSFLUVVerifier),
+		allTypes, err := a.db.GetGlobalCredentialTypes(r.Context())
+		if err != nil {
+			a.logger.Logf("error getting credential types for admin %s: %s", *userDid, err)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		for _, t := range allTypes {
+			allowed = append(allowed, t.Value)
 		}
 	} else {
 		scopes, err := a.db.GetIssuerScopeCredentials(r.Context(), *userDid)
@@ -1510,6 +2409,101 @@ func (a *AppService) sendRoleRequestEmail(envKey string, title string, subtitle 
 	}
 }
 
+func (a *AppService) sendCredentialRequestEmails(ctx context.Context, request structs.CredentialRequest) {
+	recipients, err := a.db.GetIssuersAllowedForCredential(ctx, request.CredentialType)
+	if err != nil {
+		a.logger.Logf("error loading issuer recipients for credential request %s: %s", request.Id, err)
+		return
+	}
+	if len(recipients) == 0 {
+		return
+	}
+
+	emailSender := utils.NewEmailSender()
+	if emailSender == nil {
+		return
+	}
+
+	fromDomain := os.Getenv("MAILGUN_DOMAIN")
+	fromEmail := "no_reply@sfluv.org"
+	if fromDomain != "" {
+		fromEmail = "no_reply@" + fromDomain
+	}
+
+	credentialLabel := request.CredentialType
+	types, err := a.db.GetGlobalCredentialTypes(ctx)
+	if err == nil {
+		for _, ct := range types {
+			if ct.Value == request.CredentialType {
+				credentialLabel = ct.Label
+				break
+			}
+		}
+	}
+
+	title := "New Credential Request"
+	htmlContent := utils.BuildStyledEmail(
+		title,
+		"A user requested a credential your issuer account can grant.",
+		fmt.Sprintf(`
+<table role="presentation" width="100%%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
+  <tr>
+    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280; width:170px;">Requester</td>
+    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827;">%s</td>
+  </tr>
+  <tr>
+    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280;">Requester Email</td>
+    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827;">%s</td>
+  </tr>
+  <tr>
+    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280;">Credential</td>
+    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827;">%s (%s)</td>
+  </tr>
+  <tr>
+    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280;">Request ID</td>
+    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827; word-break:break-all;">%s</td>
+  </tr>
+  <tr>
+    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280;">Requester User ID</td>
+    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827; word-break:break-all;">%s</td>
+  </tr>
+  <tr>
+    <td style="padding:12px 0; font-size:13px; color:#6b7280;">Requested At (UTC)</td>
+    <td style="padding:12px 0; font-size:13px; color:#111827;">%s</td>
+  </tr>
+</table>`,
+			request.RequesterName,
+			request.RequesterEmail,
+			credentialLabel,
+			request.CredentialType,
+			request.Id,
+			request.UserId,
+			request.RequestedAt.UTC().Format(time.RFC3339),
+		),
+	)
+
+	sentEmails := map[string]struct{}{}
+	for _, recipient := range recipients {
+		toEmail := strings.TrimSpace(recipient.Email)
+		if toEmail == "" {
+			continue
+		}
+		if _, exists := sentEmails[toEmail]; exists {
+			continue
+		}
+		sentEmails[toEmail] = struct{}{}
+
+		recipientName := strings.TrimSpace(recipient.Name)
+		if recipientName == "" {
+			recipientName = "Issuer"
+		}
+
+		if err := emailSender.SendEmail(toEmail, recipientName, title, htmlContent, fromEmail, "SFLuv Workflows"); err != nil {
+			a.logger.Logf("error sending credential request email %s to issuer %s: %s", request.Id, recipient.UserId, err.Error())
+		}
+	}
+}
+
 func (a *AppService) sendWorkflowSeriesFundingShortfallEmails(ctx context.Context, checks []structs.WorkflowSeriesStartFundingCheck) {
 	if len(checks) == 0 {
 		return
@@ -1572,6 +2566,338 @@ func (a *AppService) sendWorkflowSeriesFundingShortfallEmails(ctx context.Contex
   </tr>
 </table>`, check.WorkflowTitle, check.WorkflowId, check.SeriesId, check.Recurrence, check.StartAt.UTC().Format(time.RFC3339), requiredTokens.String(), unallocatedTokens.String(), shortfallTokens.String()),
 		)
+	}
+}
+
+type workflowPayoutTarget struct {
+	WorkflowId    string
+	WorkflowTitle string
+	SeriesId      string
+	StepId        string
+	StepTitle     string
+	StepOrder     int
+	IsManager     bool
+	ImproverId    string
+	Amount        uint64
+}
+
+func collectWorkflowPayoutTargets(workflow *structs.Workflow) []workflowPayoutTarget {
+	if workflow == nil || workflow.Status != "completed" {
+		return []workflowPayoutTarget{}
+	}
+
+	steps := append([]structs.WorkflowStep{}, workflow.Steps...)
+	sort.SliceStable(steps, func(i int, j int) bool {
+		return steps[i].StepOrder < steps[j].StepOrder
+	})
+
+	targets := make([]workflowPayoutTarget, 0, len(steps)+1)
+	for _, step := range steps {
+		if step.Status != "completed" {
+			continue
+		}
+		manualRetryRequired := step.PayoutError != nil && strings.TrimSpace(*step.PayoutError) != ""
+		if manualRetryRequired && step.RetryRequestedAt == nil {
+			continue
+		}
+		improverId := ""
+		if step.AssignedImproverId != nil {
+			improverId = strings.TrimSpace(*step.AssignedImproverId)
+		}
+		targets = append(targets, workflowPayoutTarget{
+			WorkflowId:    workflow.Id,
+			WorkflowTitle: workflow.Title,
+			SeriesId:      workflow.SeriesId,
+			StepId:        step.Id,
+			StepTitle:     step.Title,
+			StepOrder:     step.StepOrder,
+			IsManager:     false,
+			ImproverId:    improverId,
+			Amount:        step.Bounty,
+		})
+	}
+
+	managerRetryRequired := workflow.ManagerPayoutError != nil && strings.TrimSpace(*workflow.ManagerPayoutError) != ""
+	if workflow.ManagerBounty > 0 && workflow.ManagerImproverId != nil && workflow.ManagerPaidOutAt == nil && (!managerRetryRequired || workflow.ManagerRetryRequestedAt != nil) {
+		targets = append(targets, workflowPayoutTarget{
+			WorkflowId:    workflow.Id,
+			WorkflowTitle: workflow.Title,
+			SeriesId:      workflow.SeriesId,
+			IsManager:     true,
+			ImproverId:    strings.TrimSpace(*workflow.ManagerImproverId),
+			Amount:        workflow.ManagerBounty,
+		})
+	}
+
+	return targets
+}
+
+func (a *AppService) attemptWorkflowPayoutTransfer(ctx context.Context, amount uint64, walletAddress string) (*big.Int, *big.Int, bool, error) {
+	neededTokens := new(big.Int).SetUint64(amount)
+
+	if a.bot == nil || a.bot.bot == nil {
+		return nil, neededTokens, false, fmt.Errorf("bot service is not configured")
+	}
+
+	faucetBalanceWei, err := a.bot.bot.Balance()
+	if err != nil {
+		return nil, neededTokens, false, fmt.Errorf("error checking faucet balance: %s", err)
+	}
+
+	multiplier, err := getTokenMultiplier()
+	if err != nil {
+		return nil, neededTokens, false, fmt.Errorf("error reading token decimals: %s", err)
+	}
+
+	currentTokens := new(big.Int).Div(faucetBalanceWei, multiplier)
+	if currentTokens.Cmp(neededTokens) < 0 {
+		return currentTokens, neededTokens, true, fmt.Errorf("insufficient faucet balance for workflow payout")
+	}
+
+	if err := a.bot.bot.Send(amount, walletAddress); err != nil {
+		errLower := strings.ToLower(err.Error())
+		isInsufficient := strings.Contains(errLower, "insufficient")
+		return currentTokens, neededTokens, isInsufficient, err
+	}
+
+	return currentTokens, neededTokens, false, nil
+}
+
+func (a *AppService) sendWorkflowPayoutErrorEmail(
+	ctx context.Context,
+	target workflowPayoutTarget,
+	walletAddress string,
+	errorMessage string,
+	currentBalance *big.Int,
+	neededBalance *big.Int,
+	isInsufficient bool,
+) {
+	errorMessage = strings.TrimSpace(errorMessage)
+	if errorMessage == "" {
+		errorMessage = "Unknown workflow payout error"
+	}
+
+	improverName := "Improver"
+	improverEmail := ""
+	if target.ImproverId != "" {
+		if improver, err := a.db.GetImproverByUser(ctx, target.ImproverId); err == nil && improver != nil {
+			fullName := strings.TrimSpace(improver.FirstName + " " + improver.LastName)
+			if fullName != "" {
+				improverName = fullName
+			}
+			improverEmail = strings.TrimSpace(improver.Email)
+		}
+	}
+
+	targetLabel := "Workflow Step"
+	targetDetails := fmt.Sprintf("Step %d: %s", target.StepOrder, target.StepTitle)
+	if target.IsManager {
+		targetLabel = "Workflow Manager"
+		targetDetails = "Workflow manager completion payout"
+	}
+
+	extraRows := ""
+	if isInsufficient && currentBalance != nil && neededBalance != nil {
+		shortfall := new(big.Int).Sub(new(big.Int).Set(neededBalance), currentBalance)
+		if shortfall.Sign() < 0 {
+			shortfall = big.NewInt(0)
+		}
+		extraRows = fmt.Sprintf(`
+  <tr>
+    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280;">Current Faucet Balance</td>
+    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827;">%s SFLuv</td>
+  </tr>
+  <tr>
+    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280;">Needed For This Payout</td>
+    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827;">%s SFLuv</td>
+  </tr>
+  <tr>
+    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280;">Amount Needed</td>
+    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827; font-weight:600;">%s SFLuv</td>
+  </tr>`, currentBalance.String(), neededBalance.String(), shortfall.String())
+	}
+
+	a.sendRoleRequestEmail(
+		"WORKFLOW_ADMIN_EMAIL",
+		"Workflow Payout Error",
+		"A workflow payout attempt failed.",
+		fmt.Sprintf(`
+<table role="presentation" width="100%%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
+  <tr>
+    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280; width:180px;">Workflow</td>
+    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827;">%s</td>
+  </tr>
+  <tr>
+    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280;">Workflow ID</td>
+    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827; word-break:break-all;">%s</td>
+  </tr>
+  <tr>
+    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280;">Series ID</td>
+    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827; word-break:break-all;">%s</td>
+  </tr>
+  <tr>
+    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280;">Target</td>
+    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827;">%s</td>
+  </tr>
+  <tr>
+    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280;">Target Details</td>
+    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827;">%s</td>
+  </tr>
+  <tr>
+    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280;">Improver</td>
+    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827;">%s (%s)</td>
+  </tr>
+  <tr>
+    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280;">Improver Email</td>
+    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827;">%s</td>
+  </tr>
+  <tr>
+    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280;">Payout Wallet</td>
+    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827; word-break:break-all;">%s</td>
+  </tr>
+  <tr>
+    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280;">Payout Amount</td>
+    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827;">%d SFLuv</td>
+  </tr>%s
+  <tr>
+    <td style="padding:12px 0; font-size:13px; color:#6b7280;">Error</td>
+    <td style="padding:12px 0; font-size:13px; color:#111827; white-space:pre-wrap;">%s</td>
+  </tr>
+</table>`,
+			target.WorkflowTitle,
+			target.WorkflowId,
+			target.SeriesId,
+			targetLabel,
+			targetDetails,
+			improverName,
+			target.ImproverId,
+			improverEmail,
+			strings.TrimSpace(walletAddress),
+			target.Amount,
+			extraRows,
+			errorMessage,
+		),
+	)
+}
+
+func (a *AppService) processWorkflowSeriesPayouts(ctx context.Context, triggerWorkflowID string) {
+	triggerWorkflowID = strings.TrimSpace(triggerWorkflowID)
+	if triggerWorkflowID == "" {
+		return
+	}
+
+	if a.bot == nil || a.bot.bot == nil {
+		a.logger.Logf("workflow payout processing skipped for %s: bot service is not configured", triggerWorkflowID)
+		return
+	}
+
+	workflowIDs, err := a.db.GetWorkflowSeriesOrderedIDs(ctx, triggerWorkflowID)
+	if err != nil {
+		a.logger.Logf("error loading workflow series order for payout processing %s: %s", triggerWorkflowID, err)
+		return
+	}
+
+	for _, workflowID := range workflowIDs {
+		workflow, err := a.db.GetWorkflowByID(ctx, workflowID)
+		if err != nil {
+			a.logger.Logf("error loading workflow %s during payout processing: %s", workflowID, err)
+			return
+		}
+
+		switch workflow.Status {
+		case "deleted", "rejected", "expired", "paid_out":
+			continue
+		case "completed":
+			targets := collectWorkflowPayoutTargets(workflow)
+			for _, target := range targets {
+				if target.Amount == 0 {
+					var markErr error
+					if target.IsManager {
+						_, markErr = a.db.MarkWorkflowManagerPaidOut(ctx, target.WorkflowId)
+					} else {
+						_, markErr = a.db.MarkWorkflowStepPaidOut(ctx, target.WorkflowId, target.StepId)
+					}
+					if markErr != nil {
+						a.logger.Logf("error auto-settling zero-value workflow payout target workflow %s step %s manager %t: %s", target.WorkflowId, target.StepId, target.IsManager, markErr)
+						return
+					}
+					continue
+				}
+
+				walletAddress := ""
+				if target.ImproverId == "" {
+					errMsg := "workflow payout cannot proceed because no improver is assigned"
+					if target.IsManager {
+						if dbErr := a.db.MarkWorkflowManagerPayoutFailed(ctx, target.WorkflowId, errMsg); dbErr != nil {
+							a.logger.Logf("error recording manager payout assignment failure for workflow %s: %s", target.WorkflowId, dbErr)
+						}
+					} else {
+						if dbErr := a.db.MarkWorkflowStepPayoutFailed(ctx, target.WorkflowId, target.StepId, errMsg); dbErr != nil {
+							a.logger.Logf("error recording step payout assignment failure for workflow %s step %s: %s", target.WorkflowId, target.StepId, dbErr)
+						}
+					}
+					a.sendWorkflowPayoutErrorEmail(ctx, target, walletAddress, errMsg, nil, nil, false)
+					return
+				}
+
+				walletAddress, err = a.db.GetPreferredRedeemerWalletAddressForUser(ctx, target.ImproverId)
+				if err != nil {
+					errMsg := fmt.Sprintf("workflow payout cannot proceed because no payout wallet is configured: %s", err)
+					if target.IsManager {
+						if dbErr := a.db.MarkWorkflowManagerPayoutFailed(ctx, target.WorkflowId, errMsg); dbErr != nil {
+							a.logger.Logf("error recording manager payout wallet failure for workflow %s: %s", target.WorkflowId, dbErr)
+						}
+					} else {
+						if dbErr := a.db.MarkWorkflowStepPayoutFailed(ctx, target.WorkflowId, target.StepId, errMsg); dbErr != nil {
+							a.logger.Logf("error recording step payout wallet failure for workflow %s step %s: %s", target.WorkflowId, target.StepId, dbErr)
+						}
+					}
+					a.sendWorkflowPayoutErrorEmail(ctx, target, walletAddress, errMsg, nil, nil, false)
+					return
+				}
+
+				currentBalance, neededBalance, insufficient, transferErr := a.attemptWorkflowPayoutTransfer(ctx, target.Amount, walletAddress)
+				if transferErr != nil {
+					errMsg := fmt.Sprintf("workflow payout transfer failed: %s", transferErr)
+					if target.IsManager {
+						if dbErr := a.db.MarkWorkflowManagerPayoutFailed(ctx, target.WorkflowId, errMsg); dbErr != nil {
+							a.logger.Logf("error recording manager payout transfer failure for workflow %s: %s", target.WorkflowId, dbErr)
+						}
+					} else {
+						if dbErr := a.db.MarkWorkflowStepPayoutFailed(ctx, target.WorkflowId, target.StepId, errMsg); dbErr != nil {
+							a.logger.Logf("error recording step payout transfer failure for workflow %s step %s: %s", target.WorkflowId, target.StepId, dbErr)
+						}
+					}
+					a.sendWorkflowPayoutErrorEmail(ctx, target, walletAddress, errMsg, currentBalance, neededBalance, insufficient)
+					return
+				}
+
+				if target.IsManager {
+					if _, err := a.db.MarkWorkflowManagerPaidOut(ctx, target.WorkflowId); err != nil {
+						a.logger.Logf("error marking manager payout complete for workflow %s: %s", target.WorkflowId, err)
+						return
+					}
+				} else {
+					if _, err := a.db.MarkWorkflowStepPaidOut(ctx, target.WorkflowId, target.StepId); err != nil {
+						a.logger.Logf("error marking step payout complete for workflow %s step %s: %s", target.WorkflowId, target.StepId, err)
+						return
+					}
+				}
+			}
+
+			settled, err := a.db.FinalizeWorkflowPaidOutIfSettled(ctx, workflowID)
+			if err != nil {
+				a.logger.Logf("error finalizing workflow paid_out status for workflow %s: %s", workflowID, err)
+				return
+			}
+			if !settled {
+				return
+			}
+		default:
+			// Stop processing here so later workflows in the same series remain held
+			// until all earlier workflows are fully finished and paid.
+			return
+		}
 	}
 }
 
@@ -1734,4 +3060,201 @@ func (a *AppService) IsIssuer(ctx context.Context, id string) bool {
 		return false
 	}
 	return isIssuer
+}
+
+func (a *AppService) RequestIssuerStatus(w http.ResponseWriter, r *http.Request) {
+	userDid := utils.GetDid(r)
+	if userDid == nil {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	defer r.Body.Close()
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		a.logger.Logf("error reading issuer request body for user %s: %s", *userDid, err.Error())
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	var req structs.IssuerRequest
+	err = json.Unmarshal(body, &req)
+	if err != nil || strings.TrimSpace(req.Organization) == "" || strings.TrimSpace(req.Email) == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	issuer, err := a.db.UpsertIssuerRequest(r.Context(), *userDid, req.Organization, req.Email)
+	if err != nil {
+		if err.Error() == "issuer already approved" {
+			w.WriteHeader(http.StatusConflict)
+			return
+		}
+		if strings.Contains(err.Error(), "required") || strings.Contains(err.Error(), "invalid") || strings.Contains(err.Error(), "verified") {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(err.Error()))
+			return
+		}
+		a.logger.Logf("error upserting issuer request for user %s: %s", *userDid, err.Error())
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	a.sendRoleRequestEmail(
+		"ISSUER_ADMIN_EMAIL",
+		"New Issuer Request",
+		"A user has requested issuer status.",
+		fmt.Sprintf(`
+<table role="presentation" width="100%%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
+  <tr>
+    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280; width:140px;">User</td>
+    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827; word-break:break-all;">%s</td>
+  </tr>
+  <tr>
+    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280;">Organization</td>
+    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827;">%s</td>
+  </tr>
+  <tr>
+    <td style="padding:12px 0; font-size:13px; color:#6b7280;">Notification Email</td>
+    <td style="padding:12px 0; font-size:13px; color:#111827;">%s</td>
+  </tr>
+</table>`, issuer.UserId, issuer.Organization, issuer.Email),
+	)
+
+	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(issuer)
+}
+
+func (a *AppService) GetIssuerRequests(w http.ResponseWriter, r *http.Request) {
+	issuers, err := a.db.GetIssuerRequests(r.Context())
+	if err != nil {
+		a.logger.Logf("error getting issuer requests: %s", err.Error())
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(issuers)
+}
+
+func (a *AppService) UpdateIssuerRequest(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		a.logger.Logf("error reading update issuer request body: %s", err.Error())
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	var req structs.IssuerUpdateRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	issuer, err := a.db.UpdateIssuerRequest(r.Context(), &req)
+	if err != nil {
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "required") || strings.Contains(errMsg, "invalid") {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(errMsg))
+			return
+		}
+		a.logger.Logf("error updating issuer request %s: %s", req.UserId, err.Error())
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(issuer)
+}
+
+func (a *AppService) GetAdminCredentialTypes(w http.ResponseWriter, r *http.Request) {
+	types, err := a.db.GetGlobalCredentialTypes(r.Context())
+	if err != nil {
+		a.logger.Logf("error getting credential types: %s", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(types)
+}
+
+func (a *AppService) CreateAdminCredentialType(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		a.logger.Logf("error reading create credential type body: %s", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	var req structs.GlobalCredentialTypeRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	t, err := a.db.CreateGlobalCredentialType(r.Context(), req.Value, req.Label)
+	if err != nil {
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "required") || strings.Contains(errMsg, "already exists") {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(errMsg))
+			return
+		}
+		a.logger.Logf("error creating credential type %s: %s", req.Value, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(t)
+}
+
+func (a *AppService) DeleteAdminCredentialType(w http.ResponseWriter, r *http.Request) {
+	value := strings.TrimSpace(r.PathValue("value"))
+	if value == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	if err := a.db.DeleteGlobalCredentialType(r.Context(), value); err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		a.logger.Logf("error deleting credential type %s: %s", value, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *AppService) GetUserByAddress(w http.ResponseWriter, r *http.Request) {
+	address := strings.TrimSpace(r.PathValue("address"))
+	if address == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	user, err := a.db.GetUserByAddress(r.Context(), address)
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			w.WriteHeader(http.StatusNotFound)
+			w.Write([]byte("user not found"))
+			return
+		}
+		a.logger.Logf("error looking up user by address %s: %s", address, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"user_id": user.Id,
+		"address": user.PayPalEth,
+	})
 }
