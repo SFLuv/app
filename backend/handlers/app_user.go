@@ -104,6 +104,16 @@ func (a *AppService) GetUserAuthed(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	supervisor, err := a.db.GetSupervisorByUser(r.Context(), *userDid)
+	if err != nil && err != pgx.ErrNoRows {
+		a.logger.Logf("error getting supervisor info for user %s: %s", *userDid, err.Error())
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	if err == pgx.ErrNoRows {
+		supervisor = nil
+	}
+
 	response := structs.AuthedUserResponse{
 		User:      *user,
 		Wallets:   wallets,
@@ -113,6 +123,7 @@ func (a *AppService) GetUserAuthed(w http.ResponseWriter, r *http.Request) {
 		Proposer:  proposer,
 		Improver:  improver,
 		Issuer:    issuer,
+		Supervisor: supervisor,
 	}
 
 	bytes, err := json.Marshal(response)

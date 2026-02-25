@@ -19,20 +19,21 @@ func App(db *pgxpool.Pool, logger *logger.LogCloser) *AppDB {
 
 func (s *AppDB) CreateTables() error {
 	_, err := s.db.Exec(context.Background(), `
-		CREATE TABLE IF NOT EXISTS users(
-			id TEXT PRIMARY KEY,
-			is_admin BOOLEAN NOT NULL DEFAULT false,
-			is_merchant BOOLEAN NOT NULL DEFAULT false,
-			is_organizer BOOLEAN NOT NULL DEFAULT false,
-			is_improver BOOLEAN NOT NULL DEFAULT false,
-			is_proposer BOOLEAN NOT NULL DEFAULT false,
-			is_voter BOOLEAN NOT NULL DEFAULT false,
-			is_issuer BOOLEAN NOT NULL DEFAULT false,
-			is_affiliate BOOLEAN NOT NULL DEFAULT false,
-			contact_email TEXT,
-			contact_phone TEXT,
-			contact_name TEXT,
-			paypal_eth TEXT NOT NULL DEFAULT '',
+			CREATE TABLE IF NOT EXISTS users(
+				id TEXT PRIMARY KEY,
+				is_admin BOOLEAN NOT NULL DEFAULT false,
+				is_merchant BOOLEAN NOT NULL DEFAULT false,
+				is_organizer BOOLEAN NOT NULL DEFAULT false,
+				is_improver BOOLEAN NOT NULL DEFAULT false,
+				is_proposer BOOLEAN NOT NULL DEFAULT false,
+				is_voter BOOLEAN NOT NULL DEFAULT false,
+				is_issuer BOOLEAN NOT NULL DEFAULT false,
+				is_supervisor BOOLEAN NOT NULL DEFAULT false,
+				is_affiliate BOOLEAN NOT NULL DEFAULT false,
+				contact_email TEXT,
+				contact_phone TEXT,
+				contact_name TEXT,
+				paypal_eth TEXT NOT NULL DEFAULT '',
 			last_redemption INTEGER NOT NULL DEFAULT 0
 		);
 	`)
@@ -75,11 +76,19 @@ func (s *AppDB) CreateTables() error {
 	}
 
 	_, err = s.db.Exec(context.Background(), `
-		ALTER TABLE users
-		ADD COLUMN IF NOT EXISTS is_issuer BOOLEAN NOT NULL DEFAULT false;
-	`)
+			ALTER TABLE users
+			ADD COLUMN IF NOT EXISTS is_issuer BOOLEAN NOT NULL DEFAULT false;
+		`)
 	if err != nil {
 		return fmt.Errorf("error adding is_issuer column: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
+			ALTER TABLE users
+			ADD COLUMN IF NOT EXISTS is_supervisor BOOLEAN NOT NULL DEFAULT false;
+		`)
+	if err != nil {
+		return fmt.Errorf("error adding is_supervisor column: %s", err)
 	}
 
 	_, err = s.db.Exec(context.Background(), `
@@ -253,9 +262,9 @@ func (s *AppDB) CreateTables() error {
 	}
 
 	_, err = s.db.Exec(context.Background(), `
-		CREATE TABLE IF NOT EXISTS improvers(
-			user_id TEXT PRIMARY KEY REFERENCES users(id),
-			first_name TEXT NOT NULL,
+			CREATE TABLE IF NOT EXISTS improvers(
+				user_id TEXT PRIMARY KEY REFERENCES users(id),
+				first_name TEXT NOT NULL,
 			last_name TEXT NOT NULL,
 			email TEXT NOT NULL,
 			status TEXT NOT NULL DEFAULT 'pending',
@@ -267,6 +276,39 @@ func (s *AppDB) CreateTables() error {
 	`)
 	if err != nil {
 		return fmt.Errorf("error creating improvers table: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
+			CREATE TABLE IF NOT EXISTS supervisors(
+				user_id TEXT PRIMARY KEY REFERENCES users(id),
+				organization TEXT NOT NULL,
+				email TEXT NOT NULL DEFAULT '',
+				nickname TEXT,
+				status TEXT NOT NULL DEFAULT 'pending',
+				created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+				updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+			);
+
+			CREATE INDEX IF NOT EXISTS supervisors_status_idx ON supervisors(status);
+		`)
+	if err != nil {
+		return fmt.Errorf("error creating supervisors table: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
+			ALTER TABLE supervisors
+			ADD COLUMN IF NOT EXISTS email TEXT NOT NULL DEFAULT '';
+
+			UPDATE supervisors s
+			SET email = COALESCE(NULLIF(TRIM(u.contact_email), ''), s.email)
+			FROM users u
+			WHERE
+				u.id = s.user_id
+			AND
+				TRIM(COALESCE(s.email, '')) = '';
+		`)
+	if err != nil {
+		return fmt.Errorf("error altering supervisors email column: %s", err)
 	}
 
 	_, err = s.db.Exec(context.Background(), `
@@ -329,6 +371,14 @@ func (s *AppDB) CreateTables() error {
 	}
 
 	_, err = s.db.Exec(context.Background(), `
+		CREATE OR REPLACE FUNCTION unix_now()
+		RETURNS BIGINT
+		LANGUAGE SQL
+		STABLE
+		AS $$
+			SELECT EXTRACT(EPOCH FROM NOW())::BIGINT;
+		$$;
+
 		CREATE TABLE IF NOT EXISTS workflows(
 			id TEXT PRIMARY KEY,
 			series_id TEXT NOT NULL,
@@ -336,7 +386,7 @@ func (s *AppDB) CreateTables() error {
 			title TEXT NOT NULL,
 			description TEXT NOT NULL,
 			recurrence TEXT NOT NULL,
-			start_at TIMESTAMP NOT NULL,
+			start_at BIGINT NOT NULL,
 			status TEXT NOT NULL DEFAULT 'pending',
 			is_start_blocked BOOLEAN NOT NULL DEFAULT false,
 			blocked_by_workflow_id TEXT,
@@ -344,24 +394,24 @@ func (s *AppDB) CreateTables() error {
 			weekly_bounty_requirement BIGINT NOT NULL DEFAULT 0,
 			budget_weekly_deducted BIGINT NOT NULL DEFAULT 0,
 			budget_one_time_deducted BIGINT NOT NULL DEFAULT 0,
-				vote_quorum_reached_at TIMESTAMP,
-				vote_finalize_at TIMESTAMP,
-				vote_finalized_at TIMESTAMP,
+				vote_quorum_reached_at BIGINT,
+				vote_finalize_at BIGINT,
+				vote_finalized_at BIGINT,
 				vote_finalized_by_user_id TEXT REFERENCES users(id),
 				vote_decision TEXT,
 				manager_required BOOLEAN NOT NULL DEFAULT false,
 				manager_role_id TEXT,
 				manager_improver_id TEXT REFERENCES users(id),
 				manager_bounty BIGINT NOT NULL DEFAULT 0,
-				manager_paid_out_at TIMESTAMP,
+				manager_paid_out_at BIGINT,
 				manager_payout_error TEXT,
-				manager_payout_last_try_at TIMESTAMP,
-				manager_retry_requested_at TIMESTAMP,
+				manager_payout_last_try_at BIGINT,
+				manager_retry_requested_at BIGINT,
 				manager_retry_requested_by TEXT REFERENCES users(id),
-				approved_at TIMESTAMP,
+				approved_at BIGINT,
 				approved_by_user_id TEXT,
-			created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-			updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			created_at BIGINT NOT NULL DEFAULT unix_now(),
+			updated_at BIGINT NOT NULL DEFAULT unix_now(),
 			CHECK (recurrence IN ('one_time', 'daily', 'weekly', 'monthly')),
 			CHECK (status IN ('pending', 'approved', 'rejected', 'in_progress', 'completed', 'paid_out', 'blocked', 'expired', 'deleted')),
 			CHECK (vote_decision IN ('approve', 'deny', 'admin_approve') OR vote_decision IS NULL)
@@ -389,21 +439,23 @@ func (s *AppDB) CreateTables() error {
 	}
 
 	_, err = s.db.Exec(context.Background(), `
-		CREATE TABLE IF NOT EXISTS workflow_templates(
-			id TEXT PRIMARY KEY,
-			template_title TEXT NOT NULL,
-			template_description TEXT NOT NULL,
-			owner_user_id TEXT REFERENCES users(id) ON DELETE CASCADE,
-			created_by_user_id TEXT NOT NULL REFERENCES users(id),
-			is_default BOOLEAN NOT NULL DEFAULT false,
-				recurrence TEXT NOT NULL,
-				start_at TIMESTAMP NOT NULL,
-				series_id TEXT,
-				manager_json JSONB,
-				roles_json JSONB NOT NULL DEFAULT '[]'::jsonb,
-				steps_json JSONB NOT NULL DEFAULT '[]'::jsonb,
-			created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-			updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			CREATE TABLE IF NOT EXISTS workflow_templates(
+				id TEXT PRIMARY KEY,
+				template_title TEXT NOT NULL,
+				template_description TEXT NOT NULL,
+				owner_user_id TEXT REFERENCES users(id) ON DELETE CASCADE,
+				created_by_user_id TEXT NOT NULL REFERENCES users(id),
+				is_default BOOLEAN NOT NULL DEFAULT false,
+					recurrence TEXT NOT NULL,
+					start_at BIGINT NOT NULL,
+					series_id TEXT,
+					supervisor_user_id TEXT REFERENCES users(id),
+					supervisor_bounty BIGINT,
+					manager_json JSONB,
+					roles_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+					steps_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+				created_at BIGINT NOT NULL DEFAULT unix_now(),
+			updated_at BIGINT NOT NULL DEFAULT unix_now(),
 			CHECK (recurrence IN ('one_time', 'daily', 'weekly', 'monthly'))
 		);
 
@@ -416,22 +468,28 @@ func (s *AppDB) CreateTables() error {
 	}
 
 	_, err = s.db.Exec(context.Background(), `
-			ALTER TABLE workflow_templates
-			ADD COLUMN IF NOT EXISTS manager_json JSONB;
-		`)
+				ALTER TABLE workflow_templates
+				ADD COLUMN IF NOT EXISTS supervisor_user_id TEXT REFERENCES users(id);
+
+				ALTER TABLE workflow_templates
+				ADD COLUMN IF NOT EXISTS supervisor_bounty BIGINT;
+
+				ALTER TABLE workflow_templates
+				ADD COLUMN IF NOT EXISTS manager_json JSONB;
+			`)
 	if err != nil {
-		return fmt.Errorf("error altering workflow_templates manager_json column: %s", err)
+		return fmt.Errorf("error altering workflow_templates columns: %s", err)
 	}
 
 	_, err = s.db.Exec(context.Background(), `
 		ALTER TABLE workflows
-		ADD COLUMN IF NOT EXISTS vote_quorum_reached_at TIMESTAMP;
+		ADD COLUMN IF NOT EXISTS vote_quorum_reached_at BIGINT;
 
 		ALTER TABLE workflows
-		ADD COLUMN IF NOT EXISTS vote_finalize_at TIMESTAMP;
+		ADD COLUMN IF NOT EXISTS vote_finalize_at BIGINT;
 
 		ALTER TABLE workflows
-		ADD COLUMN IF NOT EXISTS vote_finalized_at TIMESTAMP;
+		ADD COLUMN IF NOT EXISTS vote_finalized_at BIGINT;
 
 		ALTER TABLE workflows
 		ADD COLUMN IF NOT EXISTS vote_finalized_by_user_id TEXT REFERENCES users(id);
@@ -452,16 +510,16 @@ func (s *AppDB) CreateTables() error {
 			ADD COLUMN IF NOT EXISTS manager_bounty BIGINT NOT NULL DEFAULT 0;
 
 			ALTER TABLE workflows
-			ADD COLUMN IF NOT EXISTS manager_paid_out_at TIMESTAMP;
+			ADD COLUMN IF NOT EXISTS manager_paid_out_at BIGINT;
 
 			ALTER TABLE workflows
 			ADD COLUMN IF NOT EXISTS manager_payout_error TEXT;
 
 			ALTER TABLE workflows
-			ADD COLUMN IF NOT EXISTS manager_payout_last_try_at TIMESTAMP;
+			ADD COLUMN IF NOT EXISTS manager_payout_last_try_at BIGINT;
 
 			ALTER TABLE workflows
-			ADD COLUMN IF NOT EXISTS manager_retry_requested_at TIMESTAMP;
+			ADD COLUMN IF NOT EXISTS manager_retry_requested_at BIGINT;
 
 			ALTER TABLE workflows
 			ADD COLUMN IF NOT EXISTS manager_retry_requested_by TEXT REFERENCES users(id);
@@ -476,7 +534,7 @@ func (s *AppDB) CreateTables() error {
 			status = 'approved',
 			is_start_blocked = false,
 			blocked_by_workflow_id = NULL,
-			updated_at = NOW()
+			updated_at = unix_now()
 		WHERE
 			status = 'blocked';
 	`)
@@ -555,15 +613,16 @@ func (s *AppDB) CreateTables() error {
 			bounty BIGINT NOT NULL DEFAULT 0,
 			role_id TEXT REFERENCES workflow_roles(id),
 			assigned_improver_id TEXT REFERENCES users(id),
+			allow_step_not_possible BOOLEAN NOT NULL DEFAULT false,
 			status TEXT NOT NULL DEFAULT 'locked',
-			started_at TIMESTAMP,
-			completed_at TIMESTAMP,
+			started_at BIGINT,
+			completed_at BIGINT,
 			payout_error TEXT,
-			payout_last_try_at TIMESTAMP,
-			retry_requested_at TIMESTAMP,
+			payout_last_try_at BIGINT,
+			retry_requested_at BIGINT,
 			retry_requested_by TEXT REFERENCES users(id),
-			created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-			updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			created_at BIGINT NOT NULL DEFAULT unix_now(),
+			updated_at BIGINT NOT NULL DEFAULT unix_now(),
 			UNIQUE (workflow_id, step_order),
 			CHECK (status IN ('locked', 'available', 'in_progress', 'completed', 'paid_out'))
 		);
@@ -579,22 +638,25 @@ func (s *AppDB) CreateTables() error {
 
 	_, err = s.db.Exec(context.Background(), `
 		ALTER TABLE workflow_steps
-		ADD COLUMN IF NOT EXISTS started_at TIMESTAMP;
+		ADD COLUMN IF NOT EXISTS started_at BIGINT;
 
 		ALTER TABLE workflow_steps
-		ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP;
+		ADD COLUMN IF NOT EXISTS completed_at BIGINT;
 
 		ALTER TABLE workflow_steps
 		ADD COLUMN IF NOT EXISTS payout_error TEXT;
 
 		ALTER TABLE workflow_steps
-		ADD COLUMN IF NOT EXISTS payout_last_try_at TIMESTAMP;
+		ADD COLUMN IF NOT EXISTS payout_last_try_at BIGINT;
 
 		ALTER TABLE workflow_steps
-		ADD COLUMN IF NOT EXISTS retry_requested_at TIMESTAMP;
+		ADD COLUMN IF NOT EXISTS retry_requested_at BIGINT;
 
 		ALTER TABLE workflow_steps
 		ADD COLUMN IF NOT EXISTS retry_requested_by TEXT REFERENCES users(id);
+
+		ALTER TABLE workflow_steps
+		ADD COLUMN IF NOT EXISTS allow_step_not_possible BOOLEAN NOT NULL DEFAULT false;
 
 		CREATE UNIQUE INDEX IF NOT EXISTS workflow_single_assignment_per_improver_idx
 			ON workflow_steps(workflow_id, assigned_improver_id)
@@ -643,10 +705,12 @@ func (s *AppDB) CreateTables() error {
 			workflow_id TEXT NOT NULL REFERENCES workflows(id) ON DELETE CASCADE,
 			step_id TEXT NOT NULL UNIQUE REFERENCES workflow_steps(id) ON DELETE CASCADE,
 			improver_id TEXT NOT NULL REFERENCES users(id),
+			step_not_possible BOOLEAN NOT NULL DEFAULT false,
+			step_not_possible_details TEXT,
 			item_responses JSONB NOT NULL DEFAULT '[]'::jsonb,
-			submitted_at TIMESTAMP NOT NULL DEFAULT NOW(),
-			created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-			updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+			submitted_at BIGINT NOT NULL DEFAULT unix_now(),
+			created_at BIGINT NOT NULL DEFAULT unix_now(),
+			updated_at BIGINT NOT NULL DEFAULT unix_now()
 		);
 
 		CREATE INDEX IF NOT EXISTS workflow_step_submissions_workflow_idx ON workflow_step_submissions(workflow_id);
@@ -654,6 +718,17 @@ func (s *AppDB) CreateTables() error {
 	`)
 	if err != nil {
 		return fmt.Errorf("error creating workflow_step_submissions table: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
+		ALTER TABLE workflow_step_submissions
+		ADD COLUMN IF NOT EXISTS step_not_possible BOOLEAN NOT NULL DEFAULT false;
+
+		ALTER TABLE workflow_step_submissions
+		ADD COLUMN IF NOT EXISTS step_not_possible_details TEXT;
+	`)
+	if err != nil {
+		return fmt.Errorf("error altering workflow_step_submissions columns: %s", err)
 	}
 
 	_, err = s.db.Exec(context.Background(), `
@@ -667,8 +742,8 @@ func (s *AppDB) CreateTables() error {
 				content_type TEXT NOT NULL DEFAULT 'application/octet-stream',
 				photo_data BYTEA NOT NULL,
 				size_bytes INTEGER NOT NULL DEFAULT 0,
-				created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-				updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+				created_at BIGINT NOT NULL DEFAULT unix_now(),
+				updated_at BIGINT NOT NULL DEFAULT unix_now()
 			);
 
 			CREATE INDEX IF NOT EXISTS workflow_submission_photos_submission_idx
@@ -687,7 +762,7 @@ func (s *AppDB) CreateTables() error {
 			step_id TEXT NOT NULL REFERENCES workflow_steps(id) ON DELETE CASCADE,
 			user_id TEXT NOT NULL REFERENCES users(id),
 			notification_type TEXT NOT NULL,
-			created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			created_at BIGINT NOT NULL DEFAULT unix_now(),
 			PRIMARY KEY (step_id, user_id, notification_type),
 			CHECK (notification_type IN ('step_available'))
 		);
@@ -702,10 +777,10 @@ func (s *AppDB) CreateTables() error {
 			improver_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
 			series_id TEXT NOT NULL,
 			step_order INTEGER NOT NULL,
-			absent_from TIMESTAMP NOT NULL,
-			absent_until TIMESTAMP NOT NULL,
-			created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-			updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			absent_from BIGINT NOT NULL,
+			absent_until BIGINT NOT NULL,
+			created_at BIGINT NOT NULL DEFAULT unix_now(),
+			updated_at BIGINT NOT NULL DEFAULT unix_now(),
 			CHECK (step_order > 0),
 			CHECK (absent_until > absent_from)
 		);
@@ -725,8 +800,8 @@ func (s *AppDB) CreateTables() error {
 			voter_id TEXT NOT NULL REFERENCES users(id),
 			decision TEXT NOT NULL,
 			comment TEXT,
-			created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-			updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			created_at BIGINT NOT NULL DEFAULT unix_now(),
+			updated_at BIGINT NOT NULL DEFAULT unix_now(),
 			PRIMARY KEY (workflow_id, voter_id),
 			CHECK (decision IN ('approve', 'deny'))
 		);
@@ -746,13 +821,13 @@ func (s *AppDB) CreateTables() error {
 			requested_by_user_id TEXT NOT NULL REFERENCES users(id),
 			reason TEXT NOT NULL DEFAULT '',
 			status TEXT NOT NULL DEFAULT 'pending',
-			vote_quorum_reached_at TIMESTAMP,
-			vote_finalize_at TIMESTAMP,
-			vote_finalized_at TIMESTAMP,
+			vote_quorum_reached_at BIGINT,
+			vote_finalize_at BIGINT,
+			vote_finalized_at BIGINT,
 			vote_finalized_by_user_id TEXT REFERENCES users(id),
 			vote_decision TEXT,
-			created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-			updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			created_at BIGINT NOT NULL DEFAULT unix_now(),
+			updated_at BIGINT NOT NULL DEFAULT unix_now(),
 			CHECK (target_type IN ('workflow', 'series')),
 			CHECK (
 				(target_type = 'workflow' AND target_workflow_id IS NOT NULL)
@@ -775,8 +850,8 @@ func (s *AppDB) CreateTables() error {
 			voter_id TEXT NOT NULL REFERENCES users(id),
 			decision TEXT NOT NULL,
 			comment TEXT,
-			created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-			updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			created_at BIGINT NOT NULL DEFAULT unix_now(),
+			updated_at BIGINT NOT NULL DEFAULT unix_now(),
 			PRIMARY KEY (proposal_id, voter_id),
 			CHECK (decision IN ('approve', 'deny'))
 		);
@@ -1005,6 +1080,48 @@ func (s *AppDB) CreateTables() error {
 	`)
 	if err != nil {
 		return fmt.Errorf("error dropping hardcoded credential type constraints: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
+		INSERT INTO credential_type_definitions (value, label)
+		SELECT DISTINCT
+			TRIM(wrc.credential_type) AS value,
+			TRIM(wrc.credential_type) AS label
+		FROM
+			workflow_role_credentials wrc
+		LEFT JOIN
+			credential_type_definitions ctd
+		ON
+			ctd.value = TRIM(wrc.credential_type)
+		WHERE
+			TRIM(COALESCE(wrc.credential_type, '')) <> ''
+		AND
+			ctd.value IS NULL;
+	`)
+	if err != nil {
+		return fmt.Errorf("error seeding credential type definitions: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
+		DO $$
+		BEGIN
+			IF NOT EXISTS (
+				SELECT 1
+				FROM pg_constraint
+				WHERE conname = 'workflow_role_credentials_credential_type_fk'
+			) THEN
+				ALTER TABLE workflow_role_credentials
+				ADD CONSTRAINT workflow_role_credentials_credential_type_fk
+				FOREIGN KEY (credential_type)
+				REFERENCES credential_type_definitions(value)
+				ON UPDATE CASCADE
+				ON DELETE RESTRICT
+				DEFERRABLE INITIALLY IMMEDIATE;
+			END IF;
+		END $$;
+	`)
+	if err != nil {
+		return fmt.Errorf("error adding workflow role credential foreign key: %s", err)
 	}
 
 	_, err = s.db.Exec(context.Background(), `

@@ -50,6 +50,10 @@ func (a *AppDB) IsIssuer(ctx context.Context, id string) (bool, error) {
 	return a.getBoolUserRole(ctx, id, "is_issuer")
 }
 
+func (a *AppDB) IsSupervisor(ctx context.Context, id string) (bool, error) {
+	return a.getBoolUserRole(ctx, id, "is_supervisor")
+}
+
 func (a *AppDB) getBoolUserRole(ctx context.Context, id string, column string) (bool, error) {
 	query := fmt.Sprintf(`
 		SELECT
@@ -166,7 +170,12 @@ func (a *AppDB) GetProposerByUser(ctx context.Context, userId string) (*structs.
 	return getProposerByUser(ctx, a.db, userId)
 }
 
-func (a *AppDB) GetProposers(ctx context.Context) ([]*structs.Proposer, error) {
+func (a *AppDB) GetProposers(ctx context.Context, search string, page, count int) ([]*structs.Proposer, error) {
+	if count <= 0 {
+		count = 20
+	}
+	offset := page * count
+	likeSearch := "%" + search + "%"
 	rows, err := a.db.Query(ctx, `
 		SELECT
 			user_id,
@@ -178,9 +187,13 @@ func (a *AppDB) GetProposers(ctx context.Context) ([]*structs.Proposer, error) {
 			updated_at
 		FROM
 			proposers
+		WHERE
+			(organization ILIKE $1 OR email ILIKE $1 OR COALESCE(nickname, '') ILIKE $1)
 		ORDER BY
-			created_at DESC;
-	`)
+			created_at DESC
+		LIMIT $2
+		OFFSET $3;
+	`, likeSearch, count, offset)
 	if err != nil {
 		return nil, fmt.Errorf("error querying proposers: %s", err)
 	}
@@ -404,7 +417,12 @@ func (a *AppDB) GetImproverByUser(ctx context.Context, userId string) (*structs.
 	return getImproverByUser(ctx, a.db, userId)
 }
 
-func (a *AppDB) GetImprovers(ctx context.Context) ([]*structs.Improver, error) {
+func (a *AppDB) GetImprovers(ctx context.Context, search string, page, count int) ([]*structs.Improver, error) {
+	if count <= 0 {
+		count = 20
+	}
+	offset := page * count
+	likeSearch := "%" + search + "%"
 	rows, err := a.db.Query(ctx, `
 		SELECT
 			user_id,
@@ -416,9 +434,13 @@ func (a *AppDB) GetImprovers(ctx context.Context) ([]*structs.Improver, error) {
 			updated_at
 		FROM
 			improvers
+		WHERE
+			(first_name ILIKE $1 OR last_name ILIKE $1 OR email ILIKE $1)
 		ORDER BY
-			created_at DESC;
-	`)
+			created_at DESC
+		LIMIT $2
+		OFFSET $3;
+	`, likeSearch, count, offset)
 	if err != nil {
 		return nil, fmt.Errorf("error querying improvers: %s", err)
 	}
@@ -542,14 +564,307 @@ func getImproverByUser(ctx context.Context, querier interface {
 	return &improver, nil
 }
 
+func (a *AppDB) UpsertSupervisorRequest(ctx context.Context, userId string, organization string, email string) (*structs.Supervisor, error) {
+	organization = strings.TrimSpace(organization)
+	email = strings.ToLower(strings.TrimSpace(email))
+	if organization == "" {
+		return nil, fmt.Errorf("organization is required")
+	}
+	if email == "" {
+		return nil, fmt.Errorf("email is required")
+	}
+	isVerified, err := a.IsVerifiedEmailForUser(ctx, userId, email)
+	if err != nil {
+		return nil, err
+	}
+	if !isVerified {
+		return nil, fmt.Errorf("email must be verified before requesting supervisor status")
+	}
+
+	tx, err := a.db.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	var status string
+	err = tx.QueryRow(ctx, `
+		SELECT
+			status
+		FROM
+			supervisors
+		WHERE
+			user_id = $1;
+	`, userId).Scan(&status)
+	if err == pgx.ErrNoRows {
+		_, err = tx.Exec(ctx, `
+			INSERT INTO supervisors
+				(user_id, organization, email, status)
+			VALUES
+				($1, $2, $3, 'pending');
+		`, userId, organization, email)
+		if err != nil {
+			return nil, fmt.Errorf("error inserting supervisor request: %s", err)
+		}
+	} else if err != nil {
+		return nil, err
+	} else {
+		if status == "approved" {
+			return nil, fmt.Errorf("supervisor already approved")
+		}
+		_, err = tx.Exec(ctx, `
+			UPDATE
+				supervisors
+			SET
+				organization = $2,
+				email = $3,
+				status = 'pending',
+				updated_at = NOW()
+			WHERE
+				user_id = $1;
+		`, userId, organization, email)
+		if err != nil {
+			return nil, fmt.Errorf("error updating supervisor request: %s", err)
+		}
+	}
+
+	_, err = tx.Exec(ctx, `
+		UPDATE
+			users
+		SET
+			is_supervisor = false,
+			contact_email = COALESCE(NULLIF($2, ''), contact_email)
+		WHERE
+			id = $1;
+	`, userId, email)
+	if err != nil {
+		return nil, fmt.Errorf("error resetting supervisor status: %s", err)
+	}
+
+	supervisor, err := getSupervisorByUser(ctx, tx, userId)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+
+	return supervisor, nil
+}
+
+func (a *AppDB) GetSupervisorByUser(ctx context.Context, userId string) (*structs.Supervisor, error) {
+	return getSupervisorByUser(ctx, a.db, userId)
+}
+
+func (a *AppDB) GetSupervisors(ctx context.Context, search string, page, count int) ([]*structs.Supervisor, error) {
+	if count <= 0 {
+		count = 20
+	}
+	offset := page * count
+	likeSearch := "%" + search + "%"
+	rows, err := a.db.Query(ctx, `
+		SELECT
+			user_id,
+			organization,
+			email,
+			nickname,
+			status,
+			created_at,
+			updated_at
+		FROM
+			supervisors
+		WHERE
+			(organization ILIKE $1 OR email ILIKE $1 OR COALESCE(nickname, '') ILIKE $1)
+		ORDER BY
+			created_at DESC
+		LIMIT $2
+		OFFSET $3;
+	`, likeSearch, count, offset)
+	if err != nil {
+		return nil, fmt.Errorf("error querying supervisors: %s", err)
+	}
+	defer rows.Close()
+
+	results := []*structs.Supervisor{}
+	for rows.Next() {
+		supervisor := structs.Supervisor{}
+		err = rows.Scan(
+			&supervisor.UserId,
+			&supervisor.Organization,
+			&supervisor.Email,
+			&supervisor.Nickname,
+			&supervisor.Status,
+			&supervisor.CreatedAt,
+			&supervisor.UpdatedAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("error scanning supervisor: %s", err)
+		}
+		results = append(results, &supervisor)
+	}
+
+	return results, nil
+}
+
+func (a *AppDB) GetApprovedSupervisors(ctx context.Context) ([]*structs.Supervisor, error) {
+	rows, err := a.db.Query(ctx, `
+		SELECT
+			s.user_id,
+			s.organization,
+			s.email,
+			s.nickname,
+			s.status,
+			s.created_at,
+			s.updated_at
+		FROM
+			supervisors s
+		JOIN
+			users u
+		ON
+			u.id = s.user_id
+		WHERE
+			s.status = 'approved'
+		AND
+			u.is_supervisor = true
+		ORDER BY
+			COALESCE(NULLIF(TRIM(s.nickname), ''), s.organization) ASC,
+			s.created_at DESC;
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("error querying approved supervisors: %s", err)
+	}
+	defer rows.Close()
+
+	results := []*structs.Supervisor{}
+	for rows.Next() {
+		supervisor := structs.Supervisor{}
+		if err := rows.Scan(
+			&supervisor.UserId,
+			&supervisor.Organization,
+			&supervisor.Email,
+			&supervisor.Nickname,
+			&supervisor.Status,
+			&supervisor.CreatedAt,
+			&supervisor.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("error scanning approved supervisor: %s", err)
+		}
+		results = append(results, &supervisor)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating approved supervisors: %s", err)
+	}
+	return results, nil
+}
+
+func (a *AppDB) UpdateSupervisor(ctx context.Context, req *structs.SupervisorUpdateRequest) (*structs.Supervisor, error) {
+	if req.UserId == "" {
+		return nil, fmt.Errorf("user_id is required")
+	}
+
+	if req.Status != nil {
+		switch *req.Status {
+		case "pending", "approved", "rejected":
+		default:
+			return nil, fmt.Errorf("invalid supervisor status")
+		}
+	}
+
+	tx, err := a.db.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	cmd, err := tx.Exec(ctx, `
+		UPDATE
+			supervisors
+		SET
+			nickname = COALESCE($2, nickname),
+			status = COALESCE($3, status),
+			updated_at = NOW()
+		WHERE
+			user_id = $1;
+	`, req.UserId, req.Nickname, req.Status)
+	if err != nil {
+		return nil, fmt.Errorf("error updating supervisor: %s", err)
+	}
+	if cmd.RowsAffected() == 0 {
+		return nil, fmt.Errorf("supervisor not found")
+	}
+
+	if req.Status != nil {
+		isSupervisor := *req.Status == "approved"
+		_, err = tx.Exec(ctx, `
+			UPDATE
+				users
+			SET
+				is_supervisor = $1
+			WHERE
+				id = $2;
+		`, isSupervisor, req.UserId)
+		if err != nil {
+			return nil, fmt.Errorf("error updating user supervisor flag: %s", err)
+		}
+	}
+
+	supervisor, err := getSupervisorByUser(ctx, tx, req.UserId)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+
+	return supervisor, nil
+}
+
+func getSupervisorByUser(ctx context.Context, querier interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}, userId string) (*structs.Supervisor, error) {
+	row := querier.QueryRow(ctx, `
+		SELECT
+			user_id,
+			organization,
+			email,
+			nickname,
+			status,
+			created_at,
+			updated_at
+		FROM
+			supervisors
+		WHERE
+			user_id = $1;
+	`, userId)
+
+	supervisor := structs.Supervisor{}
+	err := row.Scan(
+		&supervisor.UserId,
+		&supervisor.Organization,
+		&supervisor.Email,
+		&supervisor.Nickname,
+		&supervisor.Status,
+		&supervisor.CreatedAt,
+		&supervisor.UpdatedAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return &supervisor, nil
+}
+
 type normalizedWorkflowTemplateData struct {
-	SeriesId    *string
-	Recurrence  string
-	StartAt     time.Time
-	Manager     *structs.WorkflowManagerCreateInput
-	Roles       []structs.WorkflowRoleCreateInput
-	Steps       []structs.WorkflowStepCreateInput
-	TotalBounty uint64
+	SeriesId         *string
+	Recurrence       string
+	StartAt          time.Time
+	SupervisorUserId *string
+	SupervisorBounty *uint64
+	Roles            []structs.WorkflowRoleCreateInput
+	Steps            []structs.WorkflowStepCreateInput
+	TotalBounty      uint64
 }
 
 func normalizeWorkflowTemplateData(req *structs.WorkflowTemplateCreateRequest, startAt time.Time, validCredentials map[string]struct{}) (*normalizedWorkflowTemplateData, error) {
@@ -613,29 +928,22 @@ func normalizeWorkflowTemplateData(req *structs.WorkflowTemplateCreateRequest, s
 	}
 
 	totalBounty := uint64(0)
-	var normalizedManager *structs.WorkflowManagerCreateInput
-	if req.Manager != nil {
-		normalizedCredentials := make([]string, 0, len(req.Manager.RequiredCredentials))
-		seenCredentials := map[string]struct{}{}
-		for _, credential := range req.Manager.RequiredCredentials {
-			credential = strings.TrimSpace(credential)
-			if _, ok := validCredentials[credential]; !ok {
-				return nil, fmt.Errorf("invalid workflow manager credential: %s", credential)
-			}
-			if _, exists := seenCredentials[credential]; exists {
-				continue
-			}
-			seenCredentials[credential] = struct{}{}
-			normalizedCredentials = append(normalizedCredentials, credential)
+	var supervisorUserId *string
+	if req.SupervisorUserId != nil {
+		normalized := strings.TrimSpace(*req.SupervisorUserId)
+		if normalized != "" {
+			supervisorUserId = &normalized
 		}
-		if len(normalizedCredentials) == 0 {
-			return nil, fmt.Errorf("workflow manager requires at least one credential")
-		}
-		normalizedManager = &structs.WorkflowManagerCreateInput{
-			RequiredCredentials: normalizedCredentials,
-			Bounty:              req.Manager.Bounty,
-		}
-		totalBounty += normalizedManager.Bounty
+	}
+	var supervisorBounty *uint64
+	if req.SupervisorBounty != nil {
+		value := *req.SupervisorBounty
+		supervisorBounty = &value
+		totalBounty += value
+	} else if req.Manager != nil {
+		value := req.Manager.Bounty
+		supervisorBounty = &value
+		totalBounty += value
 	}
 
 	normalizedSteps := make([]structs.WorkflowStepCreateInput, 0, len(req.Steps))
@@ -706,16 +1014,13 @@ func normalizeWorkflowTemplateData(req *structs.WorkflowTemplateCreateRequest, s
 		}
 
 		normalizedSteps = append(normalizedSteps, structs.WorkflowStepCreateInput{
-			Title:        stepTitle,
-			Description:  strings.TrimSpace(stepInput.Description),
-			Bounty:       stepInput.Bounty,
-			RoleClientId: roleClientId,
-			WorkItems:    normalizedItems,
+			Title:                stepTitle,
+			Description:          strings.TrimSpace(stepInput.Description),
+			Bounty:               stepInput.Bounty,
+			RoleClientId:         roleClientId,
+			AllowStepNotPossible: stepInput.AllowStepNotPossible,
+			WorkItems:            normalizedItems,
 		})
-	}
-
-	if totalBounty == 0 {
-		return nil, fmt.Errorf("workflow total bounty must be greater than zero")
 	}
 
 	var seriesId *string
@@ -727,13 +1032,14 @@ func normalizeWorkflowTemplateData(req *structs.WorkflowTemplateCreateRequest, s
 	}
 
 	return &normalizedWorkflowTemplateData{
-		SeriesId:    seriesId,
-		Recurrence:  recurrence,
-		StartAt:     startAt,
-		Manager:     normalizedManager,
-		Roles:       normalizedRoles,
-		Steps:       normalizedSteps,
-		TotalBounty: totalBounty,
+		SeriesId:         seriesId,
+		Recurrence:       recurrence,
+		StartAt:          startAt,
+		SupervisorUserId: supervisorUserId,
+		SupervisorBounty: supervisorBounty,
+		Roles:            normalizedRoles,
+		Steps:            normalizedSteps,
+		TotalBounty:      totalBounty,
 	}, nil
 }
 
@@ -758,9 +1064,6 @@ func (a *AppDB) CreateWorkflowTemplate(
 	if templateTitle == "" {
 		return nil, fmt.Errorf("template_title is required")
 	}
-	if templateDescription == "" {
-		return nil, fmt.Errorf("template_description is required")
-	}
 
 	var ownerUserId *string
 	if !isDefault {
@@ -775,11 +1078,6 @@ func (a *AppDB) CreateWorkflowTemplate(
 	if err != nil {
 		return nil, fmt.Errorf("error marshalling template steps: %s", err)
 	}
-	managerJSON, err := json.Marshal(normalized.Manager)
-	if err != nil {
-		return nil, fmt.Errorf("error marshalling template manager: %s", err)
-	}
-
 	templateId := uuid.NewString()
 	_, err = a.db.Exec(ctx, `
 		INSERT INTO workflow_templates
@@ -793,13 +1091,14 @@ func (a *AppDB) CreateWorkflowTemplate(
 					recurrence,
 					start_at,
 					series_id,
-					manager_json,
+					supervisor_user_id,
+					supervisor_bounty,
 					roles_json,
 					steps_json
 				)
 			VALUES
-				($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb, $12::jsonb);
-		`, templateId, templateTitle, templateDescription, ownerUserId, creatorUserId, isDefault, normalized.Recurrence, normalized.StartAt, normalized.SeriesId, string(managerJSON), string(rolesJSON), string(stepsJSON))
+				($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13::jsonb);
+		`, templateId, templateTitle, templateDescription, ownerUserId, creatorUserId, isDefault, normalized.Recurrence, normalized.StartAt.UTC().Unix(), normalized.SeriesId, normalized.SupervisorUserId, normalized.SupervisorBounty, string(rolesJSON), string(stepsJSON))
 	if err != nil {
 		return nil, fmt.Errorf("error creating workflow template: %s", err)
 	}
@@ -819,7 +1118,8 @@ func (a *AppDB) GetWorkflowTemplateByID(ctx context.Context, templateId string) 
 				recurrence,
 				start_at,
 				series_id,
-				manager_json,
+				supervisor_user_id,
+				supervisor_bounty,
 				roles_json,
 				steps_json,
 				created_at,
@@ -831,7 +1131,8 @@ func (a *AppDB) GetWorkflowTemplateByID(ctx context.Context, templateId string) 
 	`, templateId)
 
 	template := &structs.WorkflowTemplate{}
-	var managerBytes []byte
+	var supervisorUserId *string
+	var supervisorBounty *uint64
 	var rolesBytes []byte
 	var stepsBytes []byte
 	if err := row.Scan(
@@ -844,7 +1145,8 @@ func (a *AppDB) GetWorkflowTemplateByID(ctx context.Context, templateId string) 
 		&template.Recurrence,
 		&template.StartAt,
 		&template.SeriesId,
-		&managerBytes,
+		&supervisorUserId,
+		&supervisorBounty,
 		&rolesBytes,
 		&stepsBytes,
 		&template.CreatedAt,
@@ -853,15 +1155,9 @@ func (a *AppDB) GetWorkflowTemplateByID(ctx context.Context, templateId string) 
 		return nil, err
 	}
 
-	if len(managerBytes) > 0 {
-		manager := &structs.WorkflowManagerCreateInput{}
-		if err := json.Unmarshal(managerBytes, manager); err != nil {
-			return nil, fmt.Errorf("error unmarshalling template manager: %s", err)
-		}
-		if len(manager.RequiredCredentials) > 0 {
-			template.Manager = manager
-		}
-	}
+	template.SupervisorUserId = supervisorUserId
+	template.SupervisorBounty = supervisorBounty
+	template.Manager = nil
 
 	template.Roles = []structs.WorkflowRoleCreateInput{}
 	if len(rolesBytes) > 0 {
@@ -892,7 +1188,8 @@ func (a *AppDB) GetWorkflowTemplatesForProposer(ctx context.Context, proposerId 
 				recurrence,
 				start_at,
 				series_id,
-				manager_json,
+				supervisor_user_id,
+				supervisor_bounty,
 				roles_json,
 				steps_json,
 				created_at,
@@ -915,7 +1212,8 @@ func (a *AppDB) GetWorkflowTemplatesForProposer(ctx context.Context, proposerId 
 	templates := []*structs.WorkflowTemplate{}
 	for rows.Next() {
 		template := &structs.WorkflowTemplate{}
-		var managerBytes []byte
+		var supervisorUserId *string
+		var supervisorBounty *uint64
 		var rolesBytes []byte
 		var stepsBytes []byte
 		if err := rows.Scan(
@@ -928,7 +1226,8 @@ func (a *AppDB) GetWorkflowTemplatesForProposer(ctx context.Context, proposerId 
 			&template.Recurrence,
 			&template.StartAt,
 			&template.SeriesId,
-			&managerBytes,
+			&supervisorUserId,
+			&supervisorBounty,
 			&rolesBytes,
 			&stepsBytes,
 			&template.CreatedAt,
@@ -937,15 +1236,9 @@ func (a *AppDB) GetWorkflowTemplatesForProposer(ctx context.Context, proposerId 
 			return nil, fmt.Errorf("error scanning workflow template: %s", err)
 		}
 
-		if len(managerBytes) > 0 {
-			manager := &structs.WorkflowManagerCreateInput{}
-			if err := json.Unmarshal(managerBytes, manager); err != nil {
-				return nil, fmt.Errorf("error unmarshalling workflow template manager: %s", err)
-			}
-			if len(manager.RequiredCredentials) > 0 {
-				template.Manager = manager
-			}
-		}
+		template.SupervisorUserId = supervisorUserId
+		template.SupervisorBounty = supervisorBounty
+		template.Manager = nil
 
 		template.Roles = []structs.WorkflowRoleCreateInput{}
 		if len(rolesBytes) > 0 {
@@ -967,6 +1260,20 @@ func (a *AppDB) GetWorkflowTemplatesForProposer(ctx context.Context, proposerId 
 	return templates, nil
 }
 
+func (a *AppDB) DeleteWorkflowTemplate(ctx context.Context, templateId, proposerId string) error {
+	cmd, err := a.db.Exec(ctx, `
+		DELETE FROM workflow_templates
+		WHERE id = $1 AND owner_user_id = $2 AND is_default = false;
+	`, templateId, proposerId)
+	if err != nil {
+		return fmt.Errorf("error deleting workflow template: %s", err)
+	}
+	if cmd.RowsAffected() == 0 {
+		return fmt.Errorf("template not found or not owned by proposer")
+	}
+	return nil
+}
+
 func (a *AppDB) CreateWorkflow(ctx context.Context, proposerId string, req *structs.WorkflowCreateRequest, startAt time.Time) (*structs.Workflow, error) {
 	if req == nil {
 		return nil, fmt.Errorf("workflow request is required")
@@ -979,43 +1286,29 @@ func (a *AppDB) CreateWorkflow(ctx context.Context, proposerId string, req *stru
 		return nil, fmt.Errorf("at least one workflow step is required")
 	}
 
-	managerRequired := req.Manager != nil
-	managerBounty := uint64(0)
-	managerRequiredCredentials := []string{}
-	if req.Manager != nil {
-		managerBounty = req.Manager.Bounty
-		seenCredentials := map[string]struct{}{}
-		for _, credential := range req.Manager.RequiredCredentials {
-			credential = strings.TrimSpace(credential)
-			if credential == "" {
-				continue
-			}
-			if _, exists := seenCredentials[credential]; exists {
-				continue
-			}
-			valid, vcErr := a.IsGlobalCredentialType(ctx, credential)
-			if vcErr != nil {
-				return nil, fmt.Errorf("error validating workflow manager credential: %s", vcErr)
-			}
-			if !valid {
-				return nil, fmt.Errorf("invalid workflow manager credential: %s", credential)
-			}
-			seenCredentials[credential] = struct{}{}
-			managerRequiredCredentials = append(managerRequiredCredentials, credential)
+	validCredentialTypes, err := a.getValidCredentialTypeSet(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("error loading credential types: %s", err)
+	}
+
+	supervisorRequired := req.Supervisor != nil
+	supervisorBounty := uint64(0)
+	var supervisorUserID *string
+	if req.Supervisor != nil {
+		normalizedSupervisorID := strings.TrimSpace(req.Supervisor.UserId)
+		if normalizedSupervisorID == "" {
+			return nil, fmt.Errorf("workflow supervisor user_id is required")
 		}
-		if len(managerRequiredCredentials) == 0 {
-			return nil, fmt.Errorf("workflow manager requires at least one credential")
-		}
+		supervisorUserID = &normalizedSupervisorID
+		supervisorBounty = req.Supervisor.Bounty
 	}
 
 	totalBounty := uint64(0)
 	for _, step := range req.Steps {
 		totalBounty += step.Bounty
 	}
-	totalBounty += managerBounty
-	if totalBounty == 0 {
-		return nil, fmt.Errorf("workflow total bounty must be greater than zero")
-	}
+	totalBounty += supervisorBounty
+	autoApproveWithoutVote := totalBounty == 0 && supervisorUserID != nil && *supervisorUserID == proposerId
 
 	if req.SeriesId != nil && strings.TrimSpace(*req.SeriesId) != "" {
 		return nil, fmt.Errorf("invalid series_id: manual series_id is not allowed")
@@ -1048,6 +1341,40 @@ func (a *AppDB) CreateWorkflow(ctx context.Context, proposerId string, req *stru
 		return nil, fmt.Errorf("proposer is not approved")
 	}
 
+	if supervisorUserID != nil {
+		var isSupervisor bool
+		var supervisorStatus string
+		err = tx.QueryRow(ctx, `
+				SELECT
+					u.is_supervisor,
+					COALESCE(
+						(
+							SELECT
+								s.status
+							FROM
+								supervisors s
+							WHERE
+								s.user_id = u.id
+						),
+						''
+					)
+				FROM
+					users u
+				WHERE
+					u.id = $1
+				FOR UPDATE;
+			`, *supervisorUserID).Scan(&isSupervisor, &supervisorStatus)
+		if err != nil {
+			if err == pgx.ErrNoRows {
+				return nil, fmt.Errorf("workflow supervisor user not found")
+			}
+			return nil, fmt.Errorf("error validating workflow supervisor: %s", err)
+		}
+		if !isSupervisor || strings.TrimSpace(supervisorStatus) != "approved" {
+			return nil, fmt.Errorf("workflow supervisor must be approved")
+		}
+	}
+
 	isStartBlocked := false
 	var blockedById *string
 
@@ -1073,11 +1400,12 @@ func (a *AppDB) CreateWorkflow(ctx context.Context, proposerId string, req *stru
 					budget_weekly_deducted,
 					budget_one_time_deducted,
 					manager_required,
+					manager_improver_id,
 					manager_bounty
 				)
 			VALUES
-				($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16);
-		`, workflowId, seriesId, proposerId, strings.TrimSpace(req.Title), strings.TrimSpace(req.Description), req.Recurrence, startAt, status, isStartBlocked, blockedById, totalBounty, weeklyRequirement, 0, 0, managerRequired, managerBounty)
+				($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17);
+		`, workflowId, seriesId, proposerId, strings.TrimSpace(req.Title), strings.TrimSpace(req.Description), req.Recurrence, startAt.UTC().Unix(), status, isStartBlocked, blockedById, totalBounty, weeklyRequirement, 0, 0, supervisorRequired, supervisorUserID, supervisorBounty)
 	if err != nil {
 		return nil, fmt.Errorf("error inserting workflow: %s", err)
 	}
@@ -1088,7 +1416,24 @@ func (a *AppDB) CreateWorkflow(ctx context.Context, proposerId string, req *stru
 		if title == "" {
 			return nil, fmt.Errorf("workflow role title is required")
 		}
-		if len(roleInput.RequiredCredentials) == 0 {
+
+		normalizedRoleCredentials := make([]string, 0, len(roleInput.RequiredCredentials))
+		seenRoleCredentials := map[string]struct{}{}
+		for _, credential := range roleInput.RequiredCredentials {
+			credential = strings.TrimSpace(credential)
+			if credential == "" {
+				continue
+			}
+			if _, exists := seenRoleCredentials[credential]; exists {
+				continue
+			}
+			if _, ok := validCredentialTypes[credential]; !ok {
+				return nil, fmt.Errorf("invalid workflow role credential: %s", credential)
+			}
+			seenRoleCredentials[credential] = struct{}{}
+			normalizedRoleCredentials = append(normalizedRoleCredentials, credential)
+		}
+		if len(normalizedRoleCredentials) == 0 {
 			return nil, fmt.Errorf("workflow role requires at least one credential")
 		}
 
@@ -1112,15 +1457,7 @@ func (a *AppDB) CreateWorkflow(ctx context.Context, proposerId string, req *stru
 			return nil, fmt.Errorf("error inserting workflow role: %s", err)
 		}
 
-		for _, credential := range roleInput.RequiredCredentials {
-			credential = strings.TrimSpace(credential)
-			valid, vcErr := a.IsGlobalCredentialType(ctx, credential)
-			if vcErr != nil {
-				return nil, fmt.Errorf("error validating role credential: %s", vcErr)
-			}
-			if !valid {
-				return nil, fmt.Errorf("invalid workflow role credential: %s", credential)
-			}
+		for _, credential := range normalizedRoleCredentials {
 			_, err = tx.Exec(ctx, `
 				INSERT INTO workflow_role_credentials
 					(role_id, credential_type)
@@ -1128,45 +1465,12 @@ func (a *AppDB) CreateWorkflow(ctx context.Context, proposerId string, req *stru
 					($1, $2);
 			`, roleId, credential)
 			if err != nil {
+				var pgErr *pgconn.PgError
+				if errors.As(err, &pgErr) && pgErr.Code == "23503" && pgErr.ConstraintName == "workflow_role_credentials_credential_type_fk" {
+					return nil, fmt.Errorf("invalid workflow role credential: %s", credential)
+				}
 				return nil, fmt.Errorf("error inserting workflow role credential: %s", err)
 			}
-		}
-	}
-
-	if managerRequired {
-		managerRoleId := uuid.NewString()
-		_, err = tx.Exec(ctx, `
-			INSERT INTO workflow_roles
-				(id, workflow_id, title, is_manager)
-			VALUES
-				($1, $2, $3, true);
-		`, managerRoleId, workflowId, "Workflow Manager")
-		if err != nil {
-			return nil, fmt.Errorf("error inserting workflow manager role: %s", err)
-		}
-
-		for _, credential := range managerRequiredCredentials {
-			_, err = tx.Exec(ctx, `
-				INSERT INTO workflow_role_credentials
-					(role_id, credential_type)
-				VALUES
-					($1, $2);
-			`, managerRoleId, credential)
-			if err != nil {
-				return nil, fmt.Errorf("error inserting workflow manager credential: %s", err)
-			}
-		}
-
-		_, err = tx.Exec(ctx, `
-			UPDATE workflows
-			SET
-				manager_role_id = $2,
-				updated_at = NOW()
-			WHERE
-				id = $1;
-		`, workflowId, managerRoleId)
-		if err != nil {
-			return nil, fmt.Errorf("error linking workflow manager role: %s", err)
 		}
 	}
 
@@ -1196,10 +1500,10 @@ func (a *AppDB) CreateWorkflow(ctx context.Context, proposerId string, req *stru
 
 		_, err = tx.Exec(ctx, `
 			INSERT INTO workflow_steps
-				(id, workflow_id, step_order, title, description, bounty, role_id, status)
+				(id, workflow_id, step_order, title, description, bounty, allow_step_not_possible, role_id, status)
 			VALUES
-				($1, $2, $3, $4, $5, $6, $7, $8);
-		`, stepId, workflowId, stepIndex+1, stepTitle, strings.TrimSpace(stepInput.Description), stepInput.Bounty, roleId, stepStatus)
+				($1, $2, $3, $4, $5, $6, $7, $8, $9);
+		`, stepId, workflowId, stepIndex+1, stepTitle, strings.TrimSpace(stepInput.Description), stepInput.Bounty, stepInput.AllowStepNotPossible, roleId, stepStatus)
 		if err != nil {
 			return nil, fmt.Errorf("error inserting workflow step: %s", err)
 		}
@@ -1291,6 +1595,12 @@ func (a *AppDB) CreateWorkflow(ctx context.Context, proposerId string, req *stru
 			if err != nil {
 				return nil, fmt.Errorf("error inserting workflow work item: %s", err)
 			}
+		}
+	}
+
+	if autoApproveWithoutVote {
+		if err := finalizeWorkflowApprovalTx(ctx, tx, workflowId, isStartBlocked, nil, "approve"); err != nil {
+			return nil, err
 		}
 	}
 
@@ -1413,6 +1723,37 @@ func (a *AppDB) GetWorkflowByID(ctx context.Context, workflowId string) (*struct
 		return nil, err
 	}
 
+	workflow.SupervisorRequired = workflow.ManagerRequired
+	workflow.SupervisorUserId = workflow.ManagerImproverId
+	workflow.SupervisorBounty = workflow.ManagerBounty
+	workflow.SupervisorPaidOutAt = workflow.ManagerPaidOutAt
+	workflow.SupervisorPayoutError = workflow.ManagerPayoutError
+	workflow.SupervisorPayoutLastTryAt = workflow.ManagerPayoutLastTryAt
+	workflow.SupervisorRetryRequestedAt = workflow.ManagerRetryRequestedAt
+	workflow.SupervisorRetryRequestedBy = workflow.ManagerRetryRequestedBy
+	workflow.SupervisorTitle = nil
+	workflow.SupervisorOrganization = nil
+	if workflow.SupervisorUserId != nil && strings.TrimSpace(*workflow.SupervisorUserId) != "" {
+		var supervisorTitle *string
+		var supervisorOrganization *string
+		if err := a.db.QueryRow(ctx, `
+			SELECT
+				NULLIF(TRIM(COALESCE(s.nickname, s.organization, u.contact_name, '')), ''),
+				NULLIF(TRIM(COALESCE(s.organization, '')), '')
+			FROM
+				users u
+			LEFT JOIN
+				supervisors s
+			ON
+				s.user_id = u.id
+			WHERE
+				u.id = $1;
+		`, *workflow.SupervisorUserId).Scan(&supervisorTitle, &supervisorOrganization); err == nil {
+			workflow.SupervisorTitle = supervisorTitle
+			workflow.SupervisorOrganization = supervisorOrganization
+		}
+	}
+
 	roles, err := a.getWorkflowRoles(ctx, workflowId)
 	if err != nil {
 		return nil, err
@@ -1444,7 +1785,9 @@ func (a *AppDB) getWorkflowRoles(ctx context.Context, workflowId string) ([]stru
 		FROM
 			workflow_roles
 		WHERE
-			workflow_id = $1;
+			workflow_id = $1
+		AND
+			is_manager = false;
 	`, workflowId)
 	if err != nil {
 		return nil, fmt.Errorf("error querying workflow roles: %s", err)
@@ -1496,27 +1839,37 @@ func (a *AppDB) getWorkflowRoles(ctx context.Context, workflowId string) ([]stru
 func (a *AppDB) getWorkflowSteps(ctx context.Context, workflowId string) ([]structs.WorkflowStep, error) {
 	rows, err := a.db.Query(ctx, `
 		SELECT
-			id,
-			workflow_id,
-			step_order,
-			title,
-			description,
-			bounty,
-			role_id,
-			assigned_improver_id,
-			status,
-			started_at,
-			completed_at,
-			payout_error,
-			payout_last_try_at,
-			retry_requested_at,
-			retry_requested_by
+			ws.id,
+			ws.workflow_id,
+			ws.step_order,
+			ws.title,
+			ws.description,
+			ws.bounty,
+			ws.allow_step_not_possible,
+			ws.role_id,
+			ws.assigned_improver_id,
+			CASE
+				WHEN COALESCE(NULLIF(BTRIM(i.first_name), ''), '') = '' THEN NULL
+				WHEN COALESCE(NULLIF(BTRIM(i.last_name), ''), '') = '' THEN BTRIM(i.first_name)
+				ELSE BTRIM(i.first_name) || ' ' || UPPER(LEFT(BTRIM(i.last_name), 1)) || '.'
+			END AS assigned_improver_name,
+			ws.status,
+			ws.started_at,
+			ws.completed_at,
+			ws.payout_error,
+			ws.payout_last_try_at,
+			ws.retry_requested_at,
+			ws.retry_requested_by
 		FROM
-			workflow_steps
+			workflow_steps ws
+		LEFT JOIN
+			improvers i
+		ON
+			i.user_id = ws.assigned_improver_id
 		WHERE
-			workflow_id = $1
+			ws.workflow_id = $1
 		ORDER BY
-			step_order ASC;
+			ws.step_order ASC;
 	`, workflowId)
 	if err != nil {
 		return nil, fmt.Errorf("error querying workflow steps: %s", err)
@@ -1534,8 +1887,10 @@ func (a *AppDB) getWorkflowSteps(ctx context.Context, workflowId string) ([]stru
 			&step.Title,
 			&step.Description,
 			&step.Bounty,
+			&step.AllowStepNotPossible,
 			&step.RoleId,
 			&step.AssignedImproverId,
+			&step.AssignedImproverName,
 			&step.Status,
 			&step.StartedAt,
 			&step.CompletedAt,
@@ -1674,6 +2029,8 @@ func (a *AppDB) getWorkflowSteps(ctx context.Context, workflowId string) ([]stru
 			workflow_id,
 			step_id,
 			improver_id,
+			step_not_possible,
+			step_not_possible_details,
 			item_responses,
 			submitted_at,
 			updated_at
@@ -1695,6 +2052,8 @@ func (a *AppDB) getWorkflowSteps(ctx context.Context, workflowId string) ([]stru
 			&submission.WorkflowId,
 			&submission.StepId,
 			&submission.ImproverId,
+			&submission.StepNotPossible,
+			&submission.StepNotPossibleDetails,
 			&itemResponsesBytes,
 			&submission.SubmittedAt,
 			&submission.UpdatedAt,
@@ -1994,13 +2353,36 @@ func getActiveCredentialTypesTx(ctx context.Context, tx pgx.Tx, userId string) (
 	return credentials, nil
 }
 
+func getCredentialTypeSetTx(ctx context.Context, tx pgx.Tx) (map[string]struct{}, error) {
+	rows, err := tx.Query(ctx, `
+		SELECT
+			value
+		FROM
+			credential_type_definitions;
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("error querying credential type definitions: %s", err)
+	}
+	defer rows.Close()
+
+	set := map[string]struct{}{}
+	for rows.Next() {
+		var value string
+		if err := rows.Scan(&value); err != nil {
+			return nil, fmt.Errorf("error scanning credential type definition: %s", err)
+		}
+		set[strings.TrimSpace(value)] = struct{}{}
+	}
+	return set, nil
+}
+
 func (a *AppDB) RefreshWorkflowStartAvailability(ctx context.Context) (*structs.WorkflowStartRefreshResult, error) {
 	rows, err := a.db.Query(ctx, `
 		WITH updated_steps AS (
 			UPDATE workflow_steps ws
 			SET
 				status = 'available',
-				updated_at = NOW()
+				updated_at = unix_now()
 			FROM workflows w
 			WHERE
 				ws.workflow_id = w.id
@@ -2011,7 +2393,7 @@ func (a *AppDB) RefreshWorkflowStartAvailability(ctx context.Context) (*structs.
 			AND
 				w.status IN ('approved', 'in_progress')
 			AND
-					w.start_at <= NOW()
+					w.start_at <= unix_now()
 				RETURNING
 					ws.id AS step_id,
 					ws.workflow_id,
@@ -2104,7 +2486,7 @@ func (a *AppDB) RefreshWorkflowStartAvailability(ctx context.Context) (*structs.
 		var shouldNotify bool
 		var seriesId string
 		var recurrence string
-		var startAt time.Time
+		var startAt int64
 		var totalBounty uint64
 		var weeklyRequirement uint64
 		if err := rows.Scan(
@@ -2236,6 +2618,293 @@ func (a *AppDB) GetManagedWorkflowsByImprover(ctx context.Context, improverId st
 	return workflows, nil
 }
 
+func (a *AppDB) GetUserEmailsByIDs(ctx context.Context, userIDs []string) (map[string]string, error) {
+	normalizedIDs := make([]string, 0, len(userIDs))
+	seen := map[string]struct{}{}
+	for _, id := range userIDs {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		seen[id] = struct{}{}
+		normalizedIDs = append(normalizedIDs, id)
+	}
+	if len(normalizedIDs) == 0 {
+		return map[string]string{}, nil
+	}
+
+	rows, err := a.db.Query(ctx, `
+		SELECT
+			u.id,
+			COALESCE(NULLIF(TRIM(i.email), ''), NULLIF(TRIM(u.contact_email), ''), '')
+		FROM
+			users u
+		LEFT JOIN
+			improvers i
+		ON
+			i.user_id = u.id
+		WHERE
+			u.id = ANY($1::text[]);
+	`, normalizedIDs)
+	if err != nil {
+		return nil, fmt.Errorf("error querying user emails: %s", err)
+	}
+	defer rows.Close()
+
+	emails := map[string]string{}
+	for rows.Next() {
+		var userID string
+		var email string
+		if err := rows.Scan(&userID, &email); err != nil {
+			return nil, fmt.Errorf("error scanning user email: %s", err)
+		}
+		emails[userID] = strings.TrimSpace(email)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating user emails: %s", err)
+	}
+	return emails, nil
+}
+
+func normalizeSupervisorSort(sortBy string) string {
+	switch strings.ToLower(strings.TrimSpace(sortBy)) {
+	case "title":
+		return "title"
+	case "start_at":
+		return "start_at"
+	case "completed_at":
+		return "completed_at"
+	case "created_at":
+		fallthrough
+	default:
+		return "created_at"
+	}
+}
+
+func normalizeSupervisorSortDirection(sortDirection string) string {
+	switch strings.ToLower(strings.TrimSpace(sortDirection)) {
+	case "asc":
+		return "ASC"
+	default:
+		return "DESC"
+	}
+}
+
+func normalizeSupervisorDateField(dateField string) string {
+	switch strings.ToLower(strings.TrimSpace(dateField)) {
+	case "start_at":
+		return "start_at"
+	case "completed_at":
+		return "completed_at"
+	case "created_at":
+		fallthrough
+	default:
+		return "created_at"
+	}
+}
+
+func (a *AppDB) GetSupervisorWorkflows(
+	ctx context.Context,
+	supervisorID string,
+	search string,
+	statusFilter string,
+	sortBy string,
+	sortDirection string,
+	dateField string,
+	dateFrom *time.Time,
+	dateTo *time.Time,
+	page int,
+	count int,
+) (*structs.SupervisorWorkflowListResponse, error) {
+	supervisorID = strings.TrimSpace(supervisorID)
+	if supervisorID == "" {
+		return nil, fmt.Errorf("supervisor_id is required")
+	}
+	if page < 0 {
+		page = 0
+	}
+	if count <= 0 {
+		count = 20
+	}
+	if count > 200 {
+		count = 200
+	}
+
+	allowedStatus := map[string]struct{}{
+		"pending":     {},
+		"approved":    {},
+		"rejected":    {},
+		"in_progress": {},
+		"completed":   {},
+		"paid_out":    {},
+		"blocked":     {},
+		"expired":     {},
+		"deleted":     {},
+	}
+	normalizedStatus := strings.ToLower(strings.TrimSpace(statusFilter))
+	if normalizedStatus != "" && normalizedStatus != "all" {
+		if _, ok := allowedStatus[normalizedStatus]; !ok {
+			return nil, fmt.Errorf("invalid status filter")
+		}
+	}
+
+	orderBy := normalizeSupervisorSort(sortBy)
+	orderDir := normalizeSupervisorSortDirection(sortDirection)
+	normalizedDateField := normalizeSupervisorDateField(dateField)
+
+	baseCTE := `
+		WITH bw AS (
+			SELECT
+				w.id,
+				w.series_id,
+				w.title,
+				w.status,
+				w.recurrence,
+				w.start_at,
+				w.created_at,
+				w.total_bounty,
+				w.manager_bounty,
+				(
+					SELECT
+						MAX(ws.completed_at)
+					FROM
+						workflow_steps ws
+					WHERE
+						ws.workflow_id = w.id
+				) AS completed_at
+			FROM
+				workflows w
+			WHERE
+				w.manager_improver_id = $1
+		)
+	`
+
+	conditions := []string{"1=1"}
+	args := []any{supervisorID}
+	argIndex := 2
+
+	trimmedSearch := strings.TrimSpace(search)
+	if trimmedSearch != "" {
+		conditions = append(conditions, fmt.Sprintf("bw.title ILIKE $%d", argIndex))
+		args = append(args, "%"+trimmedSearch+"%")
+		argIndex++
+	}
+
+	if normalizedStatus != "" && normalizedStatus != "all" {
+		conditions = append(conditions, fmt.Sprintf("bw.status = $%d", argIndex))
+		args = append(args, normalizedStatus)
+		argIndex++
+	}
+
+	dateColumn := "bw.created_at"
+	if normalizedDateField == "start_at" {
+		dateColumn = "bw.start_at"
+	}
+	if normalizedDateField == "completed_at" {
+		dateColumn = "bw.completed_at"
+	}
+	if dateFrom != nil {
+		conditions = append(conditions, fmt.Sprintf("%s >= $%d", dateColumn, argIndex))
+		args = append(args, dateFrom.UTC().Unix())
+		argIndex++
+	}
+	if dateTo != nil {
+		conditions = append(conditions, fmt.Sprintf("%s <= $%d", dateColumn, argIndex))
+		args = append(args, dateTo.UTC().Unix())
+		argIndex++
+	}
+
+	whereClause := strings.Join(conditions, " AND ")
+
+	countQuery := baseCTE + fmt.Sprintf(`
+		SELECT
+			COUNT(*)
+		FROM
+			bw
+		WHERE
+			%s;
+	`, whereClause)
+	var total int
+	if err := a.db.QueryRow(ctx, countQuery, args...).Scan(&total); err != nil {
+		return nil, fmt.Errorf("error counting supervisor workflows: %s", err)
+	}
+
+	orderColumn := "bw.created_at"
+	switch orderBy {
+	case "title":
+		orderColumn = "bw.title"
+	case "start_at":
+		orderColumn = "bw.start_at"
+	case "completed_at":
+		orderColumn = "bw.completed_at"
+	}
+
+	offset := page * count
+	listQuery := baseCTE + fmt.Sprintf(`
+		SELECT
+			bw.id,
+			bw.series_id,
+			bw.title,
+			bw.status,
+			bw.recurrence,
+			bw.start_at,
+			bw.created_at,
+			bw.completed_at,
+			bw.total_bounty,
+			bw.manager_bounty
+		FROM
+			bw
+		WHERE
+			%s
+		ORDER BY
+			%s %s NULLS LAST,
+			bw.created_at DESC
+		LIMIT $%d
+		OFFSET $%d;
+	`, whereClause, orderColumn, orderDir, argIndex, argIndex+1)
+
+	listArgs := append([]any{}, args...)
+	listArgs = append(listArgs, count, offset)
+	rows, err := a.db.Query(ctx, listQuery, listArgs...)
+	if err != nil {
+		return nil, fmt.Errorf("error querying supervisor workflows: %s", err)
+	}
+	defer rows.Close()
+
+	items := []*structs.SupervisorWorkflowListItem{}
+	for rows.Next() {
+		item := &structs.SupervisorWorkflowListItem{}
+		if err := rows.Scan(
+			&item.Id,
+			&item.SeriesId,
+			&item.Title,
+			&item.Status,
+			&item.Recurrence,
+			&item.StartAt,
+			&item.CreatedAt,
+			&item.CompletedAt,
+			&item.TotalBounty,
+			&item.SupervisorBounty,
+		); err != nil {
+			return nil, fmt.Errorf("error scanning supervisor workflow list item: %s", err)
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating supervisor workflows: %s", err)
+	}
+
+	return &structs.SupervisorWorkflowListResponse{
+		Items: items,
+		Total: total,
+		Page:  page,
+		Count: count,
+	}, nil
+}
+
 func (a *AppDB) ClaimWorkflowManager(ctx context.Context, workflowId string, improverId string) (*structs.Workflow, error) {
 	tx, err := a.db.Begin(ctx)
 	if err != nil {
@@ -2309,10 +2978,19 @@ func (a *AppDB) ClaimWorkflowManager(ctx context.Context, workflowId string, imp
 		if err := requiredRows.Scan(&credential); err != nil {
 			return nil, fmt.Errorf("error scanning workflow manager credential: %s", err)
 		}
-		requiredCredentials = append(requiredCredentials, credential)
+		requiredCredentials = append(requiredCredentials, strings.TrimSpace(credential))
 	}
 	if len(requiredCredentials) == 0 {
 		return nil, fmt.Errorf("workflow manager role has no credential requirements")
+	}
+	validCredentialTypes, err := getCredentialTypeSetTx(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
+	for _, required := range requiredCredentials {
+		if _, ok := validCredentialTypes[required]; !ok {
+			return nil, fmt.Errorf("workflow manager role references unknown credential type: %s", required)
+		}
 	}
 
 	activeCredentials, err := getActiveCredentialTypesTx(ctx, tx, improverId)
@@ -2334,7 +3012,7 @@ func (a *AppDB) ClaimWorkflowManager(ctx context.Context, workflowId string, imp
 			workflows
 		SET
 			manager_improver_id = $2,
-			updated_at = NOW()
+			updated_at = unix_now()
 		WHERE
 			id = $1;
 	`, workflowId, improverId)
@@ -2453,9 +3131,15 @@ func (a *AppDB) GetWorkflowSubmissionPhotoExports(ctx context.Context, workflowI
 			p.photo_data,
 			COALESCE(ws.step_order, 0),
 			COALESCE(wsi.item_order, 0),
-			COALESCE(wsi.title, '')
+			COALESCE(wsi.title, ''),
+			COALESCE(w.title, ''),
+			w.start_at
 		FROM
 			workflow_submission_photos p
+		LEFT JOIN
+			workflows w
+		ON
+			w.id = p.workflow_id
 		LEFT JOIN
 			workflow_steps ws
 		ON
@@ -2493,6 +3177,8 @@ func (a *AppDB) GetWorkflowSubmissionPhotoExports(ctx context.Context, workflowI
 			&export.StepOrder,
 			&export.ItemOrder,
 			&export.ItemTitle,
+			&export.WorkflowTitle,
+			&export.WorkflowStartAt,
 		); err != nil {
 			return nil, fmt.Errorf("error scanning workflow submission photo export row: %s", err)
 		}
@@ -2564,6 +3250,8 @@ func (a *AppDB) CreateImproverAbsencePeriod(
 	if !absentUntil.After(absentFrom) {
 		return nil, fmt.Errorf("absent_until must be after absent_from")
 	}
+	absentFromUnix := absentFrom.UTC().Unix()
+	absentUntilUnix := absentUntil.UTC().Unix()
 
 	seriesId = strings.TrimSpace(seriesId)
 	absentFrom = absentFrom.UTC()
@@ -2615,7 +3303,7 @@ func (a *AppDB) CreateImproverAbsencePeriod(
 			step_order = $3
 		AND
 			NOT ($5 <= absent_from OR $4 >= absent_until);
-	`, improverId, seriesId, stepOrder, absentFrom, absentUntil).Scan(&overlapCount)
+	`, improverId, seriesId, stepOrder, absentFromUnix, absentUntilUnix).Scan(&overlapCount)
 	if err != nil {
 		return nil, fmt.Errorf("error checking overlapping absence period: %s", err)
 	}
@@ -2646,7 +3334,7 @@ func (a *AppDB) CreateImproverAbsencePeriod(
 			absent_until,
 			created_at,
 			updated_at;
-	`, absenceID, improverId, seriesId, stepOrder, absentFrom, absentUntil).Scan(
+	`, absenceID, improverId, seriesId, stepOrder, absentFromUnix, absentUntilUnix).Scan(
 		&absence.Id,
 		&absence.ImproverId,
 		&absence.SeriesId,
@@ -2686,7 +3374,7 @@ func (a *AppDB) CreateImproverAbsencePeriod(
 			w.status IN ('approved', 'blocked', 'in_progress')
 		AND
 			ws.status NOT IN ('completed', 'paid_out');
-	`, improverId, seriesId, stepOrder, absentFrom, absentUntil).Scan(&targetedCount)
+	`, improverId, seriesId, stepOrder, absentFromUnix, absentUntilUnix).Scan(&targetedCount)
 	if err != nil {
 		return nil, fmt.Errorf("error counting absence target assignments: %s", err)
 	}
@@ -2725,7 +3413,7 @@ func (a *AppDB) CreateImproverAbsencePeriod(
 				workflow_steps ws
 			SET
 				assigned_improver_id = NULL,
-				updated_at = NOW()
+				updated_at = unix_now()
 			WHERE
 				ws.id IN (SELECT id FROM releasable)
 			RETURNING
@@ -2746,7 +3434,7 @@ func (a *AppDB) CreateImproverAbsencePeriod(
 			COUNT(*)
 		FROM
 			released;
-	`, improverId, seriesId, stepOrder, absentFrom, absentUntil).Scan(&releasedCount)
+	`, improverId, seriesId, stepOrder, absentFromUnix, absentUntilUnix).Scan(&releasedCount)
 	if err != nil {
 		return nil, fmt.Errorf("error releasing assignments for improver absence period: %s", err)
 	}
@@ -2779,7 +3467,7 @@ func (a *AppDB) ClaimWorkflowStep(
 	defer tx.Rollback(ctx)
 
 	var workflowStatus string
-	var workflowStartAt time.Time
+	var workflowStartAt int64
 	var workflowTitle string
 	var workflowSeriesId string
 	var workflowRecurrence string
@@ -2797,7 +3485,7 @@ func (a *AppDB) ClaimWorkflowStep(
 			WHERE
 				id = $1
 			FOR UPDATE;
-		`, workflowId).Scan(&workflowStatus, &workflowStartAt, &workflowTitle, &workflowSeriesId, &workflowRecurrence, &managerImproverID)
+	`, workflowId).Scan(&workflowStatus, &workflowStartAt, &workflowTitle, &workflowSeriesId, &workflowRecurrence, &managerImproverID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -2890,7 +3578,19 @@ func (a *AppDB) ClaimWorkflowStep(
 		if err := requiredRows.Scan(&credential); err != nil {
 			return nil, nil, err
 		}
-		requiredCredentials = append(requiredCredentials, credential)
+		requiredCredentials = append(requiredCredentials, strings.TrimSpace(credential))
+	}
+	if len(requiredCredentials) == 0 {
+		return nil, nil, fmt.Errorf("workflow role has no credential requirements")
+	}
+	validCredentialTypes, err := getCredentialTypeSetTx(ctx, tx)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, required := range requiredCredentials {
+		if _, ok := validCredentialTypes[required]; !ok {
+			return nil, nil, fmt.Errorf("workflow role references unknown credential type: %s", required)
+		}
 	}
 
 	activeCredentials, err := getActiveCredentialTypesTx(ctx, tx, improverId)
@@ -2914,15 +3614,15 @@ func (a *AppDB) ClaimWorkflowStep(
 		SET
 			assigned_improver_id = $2,
 			status = CASE
-				WHEN status = 'locked' AND step_order = 1 AND $3 <= NOW() THEN 'available'
+				WHEN status = 'locked' AND step_order = 1 AND $3 <= unix_now() THEN 'available'
 				ELSE status
 			END,
-			updated_at = NOW()
+			updated_at = unix_now()
 		WHERE
 			id = $1
 		RETURNING
 			status;
-	`, stepId, improverId, workflowStartAt).Scan(&postClaimStatus)
+		`, stepId, improverId, workflowStartAt).Scan(&postClaimStatus)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "workflow_single_assignment_per_improver_idx" {
@@ -2987,7 +3687,7 @@ func hasImproverAbsenceCoverageTx(
 	improverId string,
 	seriesId string,
 	stepOrder int,
-	workflowStartAt time.Time,
+	workflowStartAt int64,
 ) (bool, error) {
 	row := tx.QueryRow(ctx, `
 		SELECT
@@ -3016,9 +3716,9 @@ func hasImproverAbsenceCoverageTx(
 	return covered, nil
 }
 
-func canStepTransitionToAvailableTx(ctx context.Context, tx pgx.Tx, workflowId string, stepOrder int, workflowStartAt time.Time) (bool, error) {
+func canStepTransitionToAvailableTx(ctx context.Context, tx pgx.Tx, workflowId string, stepOrder int, workflowStartAt int64) (bool, error) {
 	if stepOrder <= 1 {
-		return !workflowStartAt.After(time.Now().UTC()), nil
+		return workflowStartAt <= time.Now().UTC().Unix(), nil
 	}
 
 	var previousStatus string
@@ -3047,7 +3747,7 @@ func (a *AppDB) StartWorkflowStep(ctx context.Context, workflowId string, stepId
 	defer tx.Rollback(ctx)
 
 	var workflowStatus string
-	var workflowStartAt time.Time
+	var workflowStartAt int64
 	err = tx.QueryRow(ctx, `
 		SELECT
 			status,
@@ -3108,7 +3808,7 @@ func (a *AppDB) StartWorkflowStep(ctx context.Context, workflowId string, stepId
 				workflow_steps
 			SET
 				status = 'available',
-				updated_at = NOW()
+				updated_at = unix_now()
 			WHERE
 				id = $1;
 		`, stepId)
@@ -3124,8 +3824,8 @@ func (a *AppDB) StartWorkflowStep(ctx context.Context, workflowId string, stepId
 				workflow_steps
 			SET
 				status = 'in_progress',
-				started_at = COALESCE(started_at, NOW()),
-				updated_at = NOW()
+				started_at = COALESCE(started_at, unix_now()),
+				updated_at = unix_now()
 			WHERE
 				id = $1;
 		`, stepId)
@@ -3140,7 +3840,7 @@ func (a *AppDB) StartWorkflowStep(ctx context.Context, workflowId string, stepId
 				workflows
 			SET
 				status = 'in_progress',
-				updated_at = NOW()
+				updated_at = unix_now()
 			WHERE
 				id = $1;
 		`, workflowId)
@@ -3246,6 +3946,8 @@ func (a *AppDB) CompleteWorkflowStep(
 	workflowId string,
 	stepId string,
 	improverId string,
+	stepNotPossible bool,
+	stepNotPossibleDetails *string,
 	itemResponses []structs.WorkflowStepItemResponse,
 ) (*structs.WorkflowStepCompletionResult, error) {
 	tx, err := a.db.Begin(ctx)
@@ -3260,7 +3962,7 @@ func (a *AppDB) CompleteWorkflowStep(
 	}
 
 	var workflowStatus string
-	var workflowStartAt time.Time
+	var workflowStartAt int64
 	var workflowTitle string
 	err = tx.QueryRow(ctx, `
 			SELECT
@@ -3284,6 +3986,7 @@ func (a *AppDB) CompleteWorkflowStep(
 	var stepOrder int
 	var stepStatus string
 	var stepTitle string
+	var allowStepNotPossible bool
 	var assignedImproverId *string
 	err = tx.QueryRow(ctx, `
 		SELECT
@@ -3291,13 +3994,14 @@ func (a *AppDB) CompleteWorkflowStep(
 			step_order,
 			status,
 			title,
+			allow_step_not_possible,
 			assigned_improver_id
 		FROM
 			workflow_steps
 		WHERE
 			id = $1
 		FOR UPDATE;
-	`, stepId).Scan(&stepWorkflowId, &stepOrder, &stepStatus, &stepTitle, &assignedImproverId)
+	`, stepId).Scan(&stepWorkflowId, &stepOrder, &stepStatus, &stepTitle, &allowStepNotPossible, &assignedImproverId)
 	if err != nil {
 		return nil, err
 	}
@@ -3319,7 +4023,33 @@ func (a *AppDB) CompleteWorkflowStep(
 		return nil, fmt.Errorf("step is not available yet")
 	}
 
-	itemRows, err := tx.Query(ctx, `
+	stepNotPossibleDetailValue := ""
+	if stepNotPossibleDetails != nil {
+		stepNotPossibleDetailValue = strings.TrimSpace(*stepNotPossibleDetails)
+	}
+	if stepNotPossible {
+		if !allowStepNotPossible {
+			return nil, fmt.Errorf("invalid step_not_possible request: option is not enabled for this step")
+		}
+		if stepNotPossibleDetailValue == "" {
+			return nil, fmt.Errorf("step_not_possible_details is required when step_not_possible is selected")
+		}
+		if len(itemResponses) > 0 {
+			return nil, fmt.Errorf("invalid step_not_possible request: item responses are not allowed")
+		}
+	} else if stepNotPossibleDetailValue != "" {
+		return nil, fmt.Errorf("invalid step_not_possible request: details are only allowed when step_not_possible is selected")
+	}
+
+	var stepNotPossibleDetailsNormalized *string
+	if stepNotPossibleDetailValue != "" {
+		stepNotPossibleDetailsNormalized = &stepNotPossibleDetailValue
+	}
+
+	serializedResponses := []structs.WorkflowStepItemResponse{}
+	photoUploadsByItem := map[string][]parsedWorkflowPhotoUpload{}
+	if !stepNotPossible {
+		itemRows, err := tx.Query(ctx, `
 		SELECT
 			id,
 			title,
@@ -3339,234 +4069,245 @@ func (a *AppDB) CompleteWorkflowStep(
 		ORDER BY
 			item_order ASC;
 	`, stepId)
-	if err != nil {
-		return nil, fmt.Errorf("error querying workflow step items for completion: %s", err)
-	}
-	defer itemRows.Close()
+		if err != nil {
+			return nil, fmt.Errorf("error querying workflow step items for completion: %s", err)
+		}
+		defer itemRows.Close()
 
-	type stepItemMeta struct {
-		Id                         string
-		Title                      string
-		Optional                   bool
-		RequiresPhoto              bool
-		CameraCaptureOnly          bool
-		RequiresWrittenResponse    bool
-		RequiresDropdown           bool
-		DropdownOptions            []structs.WorkflowDropdownOption
-		DropdownRequiresWrittenMap map[string]bool
-	}
-
-	items := []stepItemMeta{}
-	itemByID := map[string]stepItemMeta{}
-
-	for itemRows.Next() {
-		item := stepItemMeta{}
-		var dropdownOptionsBytes []byte
-		var dropdownRequiresBytes []byte
-		var notifyEmailsBytes []byte
-		var notifyValuesBytes []byte
-		if err := itemRows.Scan(
-			&item.Id,
-			&item.Title,
-			&item.Optional,
-			&item.RequiresPhoto,
-			&item.CameraCaptureOnly,
-			&item.RequiresWrittenResponse,
-			&item.RequiresDropdown,
-			&dropdownOptionsBytes,
-			&dropdownRequiresBytes,
-			&notifyEmailsBytes,
-			&notifyValuesBytes,
-		); err != nil {
-			return nil, fmt.Errorf("error scanning workflow step item metadata: %s", err)
+		type stepItemMeta struct {
+			Id                         string
+			Title                      string
+			Optional                   bool
+			RequiresPhoto              bool
+			CameraCaptureOnly          bool
+			RequiresWrittenResponse    bool
+			RequiresDropdown           bool
+			DropdownOptions            []structs.WorkflowDropdownOption
+			DropdownRequiresWrittenMap map[string]bool
 		}
 
-		item.DropdownOptions = []structs.WorkflowDropdownOption{}
-		if len(dropdownOptionsBytes) > 0 {
-			if err := json.Unmarshal(dropdownOptionsBytes, &item.DropdownOptions); err != nil {
-				return nil, fmt.Errorf("error unmarshalling workflow step item dropdown options: %s", err)
+		items := []stepItemMeta{}
+		itemByID := map[string]stepItemMeta{}
+
+		for itemRows.Next() {
+			item := stepItemMeta{}
+			var dropdownOptionsBytes []byte
+			var dropdownRequiresBytes []byte
+			var notifyEmailsBytes []byte
+			var notifyValuesBytes []byte
+			if err := itemRows.Scan(
+				&item.Id,
+				&item.Title,
+				&item.Optional,
+				&item.RequiresPhoto,
+				&item.CameraCaptureOnly,
+				&item.RequiresWrittenResponse,
+				&item.RequiresDropdown,
+				&dropdownOptionsBytes,
+				&dropdownRequiresBytes,
+				&notifyEmailsBytes,
+				&notifyValuesBytes,
+			); err != nil {
+				return nil, fmt.Errorf("error scanning workflow step item metadata: %s", err)
 			}
-		}
-		for idx := range item.DropdownOptions {
-			item.DropdownOptions[idx].NotifyEmails = normalizeEmailList(item.DropdownOptions[idx].NotifyEmails)
-		}
-		item.DropdownRequiresWrittenMap = map[string]bool{}
-		if len(dropdownRequiresBytes) > 0 {
-			if err := json.Unmarshal(dropdownRequiresBytes, &item.DropdownRequiresWrittenMap); err != nil {
-				return nil, fmt.Errorf("error unmarshalling workflow step item dropdown requirement map: %s", err)
+
+			item.DropdownOptions = []structs.WorkflowDropdownOption{}
+			if len(dropdownOptionsBytes) > 0 {
+				if err := json.Unmarshal(dropdownOptionsBytes, &item.DropdownOptions); err != nil {
+					return nil, fmt.Errorf("error unmarshalling workflow step item dropdown options: %s", err)
+				}
 			}
+			for idx := range item.DropdownOptions {
+				item.DropdownOptions[idx].NotifyEmails = normalizeEmailList(item.DropdownOptions[idx].NotifyEmails)
+			}
+			item.DropdownRequiresWrittenMap = map[string]bool{}
+			if len(dropdownRequiresBytes) > 0 {
+				if err := json.Unmarshal(dropdownRequiresBytes, &item.DropdownRequiresWrittenMap); err != nil {
+					return nil, fmt.Errorf("error unmarshalling workflow step item dropdown requirement map: %s", err)
+				}
+			}
+
+			legacyNotifyEmails := []string{}
+			if len(notifyEmailsBytes) > 0 {
+				if err := json.Unmarshal(notifyEmailsBytes, &legacyNotifyEmails); err != nil {
+					return nil, fmt.Errorf("error unmarshalling workflow step item notification emails: %s", err)
+				}
+			}
+
+			legacyNotifyValues := []string{}
+			if len(notifyValuesBytes) > 0 {
+				if err := json.Unmarshal(notifyValuesBytes, &legacyNotifyValues); err != nil {
+					return nil, fmt.Errorf("error unmarshalling workflow step item notification values: %s", err)
+				}
+			}
+			legacyNotifyEmails = normalizeEmailList(legacyNotifyEmails)
+			if len(legacyNotifyEmails) > 0 && len(legacyNotifyValues) > 0 {
+				legacyWatchValues := map[string]struct{}{}
+				for _, value := range legacyNotifyValues {
+					value = strings.TrimSpace(value)
+					if value == "" {
+						continue
+					}
+					legacyWatchValues[value] = struct{}{}
+				}
+				if len(legacyWatchValues) > 0 {
+					for idx := range item.DropdownOptions {
+						if len(item.DropdownOptions[idx].NotifyEmails) > 0 {
+							continue
+						}
+						if _, ok := legacyWatchValues[item.DropdownOptions[idx].Value]; !ok {
+							continue
+						}
+						item.DropdownOptions[idx].NotifyEmails = append([]string{}, legacyNotifyEmails...)
+					}
+				}
+			}
+			for idx := range item.DropdownOptions {
+				item.DropdownOptions[idx].NotifyEmailCount = len(item.DropdownOptions[idx].NotifyEmails)
+			}
+
+			items = append(items, item)
+			itemByID[item.Id] = item
 		}
 
-		legacyNotifyEmails := []string{}
-		if len(notifyEmailsBytes) > 0 {
-			if err := json.Unmarshal(notifyEmailsBytes, &legacyNotifyEmails); err != nil {
-				return nil, fmt.Errorf("error unmarshalling workflow step item notification emails: %s", err)
+		responseMap := map[string]structs.WorkflowStepItemResponse{}
+		for _, response := range itemResponses {
+			itemId := strings.TrimSpace(response.ItemId)
+			if itemId == "" {
+				return nil, fmt.Errorf("item_id is required for step completion")
 			}
+			if _, exists := itemByID[itemId]; !exists {
+				return nil, fmt.Errorf("workflow step response references unknown item_id: %s", itemId)
+			}
+			if _, exists := responseMap[itemId]; exists {
+				return nil, fmt.Errorf("duplicate workflow step response item_id: %s", itemId)
+			}
+
+			cleanUploads := make([]parsedWorkflowPhotoUpload, 0, len(response.PhotoUploads))
+			for _, upload := range response.PhotoUploads {
+				parsedUpload, parseErr := parseWorkflowPhotoUpload(upload)
+				if parseErr != nil {
+					return nil, fmt.Errorf("invalid photo upload for item %s: %s", itemId, parseErr)
+				}
+				cleanUploads = append(cleanUploads, *parsedUpload)
+			}
+			photoUploadsByItem[itemId] = cleanUploads
+
+			if response.WrittenResponse != nil {
+				trimmed := strings.TrimSpace(*response.WrittenResponse)
+				if trimmed == "" {
+					response.WrittenResponse = nil
+				} else {
+					response.WrittenResponse = &trimmed
+				}
+			}
+			if response.DropdownValue != nil {
+				trimmed := strings.TrimSpace(*response.DropdownValue)
+				if trimmed == "" {
+					response.DropdownValue = nil
+				} else {
+					response.DropdownValue = &trimmed
+				}
+			}
+
+			response.ItemId = itemId
+			response.PhotoURLs = nil
+			response.PhotoIDs = nil
+			response.PhotoUploads = nil
+			response.Photos = nil
+			responseMap[itemId] = response
 		}
 
-		legacyNotifyValues := []string{}
-		if len(notifyValuesBytes) > 0 {
-			if err := json.Unmarshal(notifyValuesBytes, &legacyNotifyValues); err != nil {
-				return nil, fmt.Errorf("error unmarshalling workflow step item notification values: %s", err)
-			}
-		}
-		legacyNotifyEmails = normalizeEmailList(legacyNotifyEmails)
-		if len(legacyNotifyEmails) > 0 && len(legacyNotifyValues) > 0 {
-			legacyWatchValues := map[string]struct{}{}
-			for _, value := range legacyNotifyValues {
-				value = strings.TrimSpace(value)
-				if value == "" {
+		for _, item := range items {
+			response, hasResponse := responseMap[item.Id]
+			if !hasResponse {
+				if item.Optional {
 					continue
 				}
-				legacyWatchValues[value] = struct{}{}
+				return nil, fmt.Errorf("required step item missing response: %s", item.Title)
 			}
-			if len(legacyWatchValues) > 0 {
-				for idx := range item.DropdownOptions {
-					if len(item.DropdownOptions[idx].NotifyEmails) > 0 {
-						continue
-					}
-					if _, ok := legacyWatchValues[item.DropdownOptions[idx].Value]; !ok {
-						continue
-					}
-					item.DropdownOptions[idx].NotifyEmails = append([]string{}, legacyNotifyEmails...)
-				}
-			}
-		}
-		for idx := range item.DropdownOptions {
-			item.DropdownOptions[idx].NotifyEmailCount = len(item.DropdownOptions[idx].NotifyEmails)
-		}
 
-		items = append(items, item)
-		itemByID[item.Id] = item
-	}
-
-	responseMap := map[string]structs.WorkflowStepItemResponse{}
-	photoUploadsByItem := map[string][]parsedWorkflowPhotoUpload{}
-	for _, response := range itemResponses {
-		itemId := strings.TrimSpace(response.ItemId)
-		if itemId == "" {
-			return nil, fmt.Errorf("item_id is required for step completion")
-		}
-		if _, exists := itemByID[itemId]; !exists {
-			return nil, fmt.Errorf("workflow step response references unknown item_id: %s", itemId)
-		}
-		if _, exists := responseMap[itemId]; exists {
-			return nil, fmt.Errorf("duplicate workflow step response item_id: %s", itemId)
-		}
-
-		cleanUploads := make([]parsedWorkflowPhotoUpload, 0, len(response.PhotoUploads))
-		for _, upload := range response.PhotoUploads {
-			parsedUpload, parseErr := parseWorkflowPhotoUpload(upload)
-			if parseErr != nil {
-				return nil, fmt.Errorf("invalid photo upload for item %s: %s", itemId, parseErr)
-			}
-			cleanUploads = append(cleanUploads, *parsedUpload)
-		}
-		photoUploadsByItem[itemId] = cleanUploads
-
-		if response.WrittenResponse != nil {
-			trimmed := strings.TrimSpace(*response.WrittenResponse)
-			if trimmed == "" {
-				response.WrittenResponse = nil
-			} else {
-				response.WrittenResponse = &trimmed
-			}
-		}
-		if response.DropdownValue != nil {
-			trimmed := strings.TrimSpace(*response.DropdownValue)
-			if trimmed == "" {
-				response.DropdownValue = nil
-			} else {
-				response.DropdownValue = &trimmed
-			}
-		}
-
-		response.ItemId = itemId
-		response.PhotoURLs = nil
-		response.PhotoIDs = nil
-		response.PhotoUploads = nil
-		response.Photos = nil
-		responseMap[itemId] = response
-	}
-
-	serializedResponses := []structs.WorkflowStepItemResponse{}
-	for _, item := range items {
-		response, hasResponse := responseMap[item.Id]
-		if !hasResponse {
-			if item.Optional {
+			photoUploads := photoUploadsByItem[item.Id]
+			hasAnyResponse := len(photoUploads) > 0 || response.WrittenResponse != nil || response.DropdownValue != nil
+			if item.Optional && !hasAnyResponse {
 				continue
 			}
-			return nil, fmt.Errorf("required step item missing response: %s", item.Title)
-		}
 
-		photoUploads := photoUploadsByItem[item.Id]
-		hasAnyResponse := len(photoUploads) > 0 || response.WrittenResponse != nil || response.DropdownValue != nil
-		if item.Optional && !hasAnyResponse {
-			continue
-		}
-
-		if item.RequiresPhoto && len(photoUploads) == 0 {
-			return nil, fmt.Errorf("step item requires photo evidence: %s", item.Title)
-		}
-		if item.RequiresWrittenResponse && response.WrittenResponse == nil {
-			return nil, fmt.Errorf("step item requires written response: %s", item.Title)
-		}
-		if item.RequiresDropdown {
-			if response.DropdownValue == nil {
-				return nil, fmt.Errorf("step item requires dropdown selection: %s", item.Title)
+			if item.RequiresPhoto && len(photoUploads) == 0 {
+				return nil, fmt.Errorf("step item requires photo evidence: %s", item.Title)
 			}
+			if item.RequiresWrittenResponse && response.WrittenResponse == nil {
+				return nil, fmt.Errorf("step item requires written response: %s", item.Title)
+			}
+			if item.RequiresDropdown {
+				if response.DropdownValue == nil {
+					return nil, fmt.Errorf("step item requires dropdown selection: %s", item.Title)
+				}
 
-			dropdownAllowed := map[string]struct{}{}
-			var selectedOption *structs.WorkflowDropdownOption
-			for _, option := range item.DropdownOptions {
-				dropdownAllowed[option.Value] = struct{}{}
-				if option.Value == *response.DropdownValue {
-					opt := option
-					selectedOption = &opt
+				dropdownAllowed := map[string]struct{}{}
+				var selectedOption *structs.WorkflowDropdownOption
+				for _, option := range item.DropdownOptions {
+					dropdownAllowed[option.Value] = struct{}{}
+					if option.Value == *response.DropdownValue {
+						opt := option
+						selectedOption = &opt
+					}
+				}
+				if _, ok := dropdownAllowed[*response.DropdownValue]; !ok {
+					return nil, fmt.Errorf("invalid dropdown value for step item: %s", item.Title)
+				}
+
+				if requiredWritten, ok := item.DropdownRequiresWrittenMap[*response.DropdownValue]; ok && requiredWritten && response.WrittenResponse == nil {
+					return nil, fmt.Errorf("dropdown selection requires written response for step item: %s", item.Title)
+				}
+
+				if selectedOption != nil {
+					emails := normalizeEmailList(selectedOption.NotifyEmails)
+					if len(emails) > 0 {
+						result.DropdownNotifications = append(result.DropdownNotifications, structs.WorkflowDropdownNotification{
+							WorkflowId:    workflowId,
+							WorkflowTitle: workflowTitle,
+							StepId:        stepId,
+							StepTitle:     stepTitle,
+							ItemId:        item.Id,
+							ItemTitle:     item.Title,
+							DropdownValue: *response.DropdownValue,
+							Emails:        emails,
+						})
+					}
 				}
 			}
-			if _, ok := dropdownAllowed[*response.DropdownValue]; !ok {
-				return nil, fmt.Errorf("invalid dropdown value for step item: %s", item.Title)
-			}
 
-			if requiredWritten, ok := item.DropdownRequiresWrittenMap[*response.DropdownValue]; ok && requiredWritten && response.WrittenResponse == nil {
-				return nil, fmt.Errorf("dropdown selection requires written response for step item: %s", item.Title)
-			}
-
-			if selectedOption != nil {
-				emails := normalizeEmailList(selectedOption.NotifyEmails)
-				if len(emails) > 0 {
-					result.DropdownNotifications = append(result.DropdownNotifications, structs.WorkflowDropdownNotification{
-						WorkflowId:    workflowId,
-						WorkflowTitle: workflowTitle,
-						StepId:        stepId,
-						StepTitle:     stepTitle,
-						ItemId:        item.Id,
-						ItemTitle:     item.Title,
-						DropdownValue: *response.DropdownValue,
-						Emails:        emails,
-					})
-				}
-			}
+			serializedResponses = append(serializedResponses, response)
 		}
-
-		serializedResponses = append(serializedResponses, response)
 	}
 
 	var submissionId string
 	err = tx.QueryRow(ctx, `
 		INSERT INTO workflow_step_submissions
-			(id, workflow_id, step_id, improver_id, item_responses, submitted_at, updated_at)
+			(
+				id,
+				workflow_id,
+				step_id,
+				improver_id,
+				step_not_possible,
+				step_not_possible_details,
+				item_responses,
+				submitted_at,
+				updated_at
+			)
 		VALUES
-			($1, $2, $3, $4, '[]'::jsonb, NOW(), NOW())
+			($1, $2, $3, $4, $5, $6, '[]'::jsonb, unix_now(), unix_now())
 		ON CONFLICT (step_id)
 		DO UPDATE SET
 			improver_id = EXCLUDED.improver_id,
-			submitted_at = NOW(),
-			updated_at = NOW()
+			step_not_possible = EXCLUDED.step_not_possible,
+			step_not_possible_details = EXCLUDED.step_not_possible_details,
+			submitted_at = unix_now(),
+			updated_at = unix_now()
 		RETURNING
 			id;
-	`, uuid.NewString(), workflowId, stepId, improverId).Scan(&submissionId)
+	`, uuid.NewString(), workflowId, stepId, improverId, stepNotPossible, stepNotPossibleDetailsNormalized).Scan(&submissionId)
 	if err != nil {
 		return nil, fmt.Errorf("error upserting workflow step submission: %s", err)
 	}
@@ -3627,8 +4368,8 @@ func (a *AppDB) CompleteWorkflowStep(
 			workflow_step_submissions
 		SET
 			item_responses = $2::jsonb,
-			submitted_at = NOW(),
-			updated_at = NOW()
+			submitted_at = unix_now(),
+			updated_at = unix_now()
 		WHERE
 			id = $1;
 	`, submissionId, string(responsesJSON))
@@ -3636,14 +4377,63 @@ func (a *AppDB) CompleteWorkflowStep(
 		return nil, fmt.Errorf("error updating workflow step submission responses: %s", err)
 	}
 
+	if stepNotPossible {
+		_, err = tx.Exec(ctx, `
+			UPDATE
+				workflow_steps
+			SET
+				status = CASE WHEN status = 'paid_out' THEN 'paid_out' ELSE 'completed' END,
+				started_at = COALESCE(started_at, unix_now()),
+				completed_at = COALESCE(completed_at, unix_now()),
+				bounty = 0,
+				payout_error = NULL,
+				payout_last_try_at = NULL,
+				retry_requested_at = NULL,
+				retry_requested_by = NULL,
+				updated_at = unix_now()
+			WHERE
+				workflow_id = $1;
+		`, workflowId)
+		if err != nil {
+			return nil, fmt.Errorf("error marking workflow steps completed for step_not_possible: %s", err)
+		}
+
+		_, err = tx.Exec(ctx, `
+			UPDATE
+				workflows
+			SET
+				status = 'completed',
+				total_bounty = 0,
+				weekly_bounty_requirement = 0,
+				manager_bounty = 0,
+				manager_paid_out_at = NULL,
+				manager_payout_error = NULL,
+				manager_payout_last_try_at = NULL,
+				manager_retry_requested_at = NULL,
+				manager_retry_requested_by = NULL,
+				updated_at = unix_now()
+			WHERE
+				id = $1;
+		`, workflowId)
+		if err != nil {
+			return nil, fmt.Errorf("error finalizing workflow after step_not_possible: %s", err)
+		}
+
+		result.WorkflowStatus = "completed"
+		if err := tx.Commit(ctx); err != nil {
+			return nil, err
+		}
+		return result, nil
+	}
+
 	_, err = tx.Exec(ctx, `
 		UPDATE
 			workflow_steps
 		SET
 			status = 'completed',
-			started_at = COALESCE(started_at, NOW()),
-			completed_at = NOW(),
-			updated_at = NOW()
+			started_at = COALESCE(started_at, unix_now()),
+			completed_at = unix_now(),
+			updated_at = unix_now()
 		WHERE
 			id = $1;
 	`, stepId)
@@ -3679,7 +4469,7 @@ func (a *AppDB) CompleteWorkflowStep(
 				workflow_steps
 			SET
 				status = 'available',
-				updated_at = NOW()
+				updated_at = unix_now()
 			WHERE
 				id = $1;
 		`, nextStepId)
@@ -3748,7 +4538,7 @@ func (a *AppDB) CompleteWorkflowStep(
 				workflows
 			SET
 				status = 'completed',
-				updated_at = NOW()
+				updated_at = unix_now()
 			WHERE
 				id = $1;
 		`, workflowId)
@@ -3763,7 +4553,7 @@ func (a *AppDB) CompleteWorkflowStep(
 					workflows
 				SET
 					status = 'in_progress',
-					updated_at = NOW()
+					updated_at = unix_now()
 				WHERE
 					id = $1;
 			`, workflowId)
@@ -3823,24 +4613,29 @@ func (a *AppDB) GetWorkflowSeriesOrderedIDs(ctx context.Context, workflowId stri
 
 func (a *AppDB) GetImproverUnpaidWorkflows(ctx context.Context, improverId string) ([]*structs.Workflow, error) {
 	rows, err := a.db.Query(ctx, `
-		SELECT DISTINCT
+		SELECT
 			w.id
 		FROM
 			workflows w
-		LEFT JOIN
-			workflow_steps ws
-		ON
-			ws.workflow_id = w.id
 		WHERE
 			w.status = 'completed'
 		AND
 			(
 				(
-					ws.assigned_improver_id = $1
-				AND
-					ws.status = 'completed'
-				AND
-					ws.bounty > 0
+					EXISTS (
+						SELECT
+							1
+						FROM
+							workflow_steps ws
+						WHERE
+							ws.workflow_id = w.id
+						AND
+							ws.assigned_improver_id = $1
+						AND
+							ws.status = 'completed'
+						AND
+							ws.bounty > 0
+					)
 				)
 				OR
 				(
@@ -3920,10 +4715,10 @@ func (a *AppDB) MarkWorkflowStepPayoutFailed(ctx context.Context, workflowId str
 			workflow_steps
 		SET
 			payout_error = $3,
-			payout_last_try_at = NOW(),
+			payout_last_try_at = unix_now(),
 			retry_requested_at = NULL,
 			retry_requested_by = NULL,
-			updated_at = NOW()
+			updated_at = unix_now()
 		WHERE
 			id = $1
 		AND
@@ -3947,10 +4742,10 @@ func (a *AppDB) MarkWorkflowManagerPayoutFailed(ctx context.Context, workflowId 
 			workflows
 		SET
 			manager_payout_error = $2,
-			manager_payout_last_try_at = NOW(),
+			manager_payout_last_try_at = unix_now(),
 			manager_retry_requested_at = NULL,
 			manager_retry_requested_by = NULL,
-			updated_at = NOW()
+			updated_at = unix_now()
 		WHERE
 			id = $1
 		AND
@@ -3978,10 +4773,10 @@ func (a *AppDB) MarkWorkflowStepPaidOut(ctx context.Context, workflowId string, 
 		SET
 			status = 'paid_out',
 			payout_error = NULL,
-			payout_last_try_at = NOW(),
+			payout_last_try_at = unix_now(),
 			retry_requested_at = NULL,
 			retry_requested_by = NULL,
-			updated_at = NOW()
+			updated_at = unix_now()
 		WHERE
 			id = $1
 		AND
@@ -4000,12 +4795,12 @@ func (a *AppDB) MarkWorkflowManagerPaidOut(ctx context.Context, workflowId strin
 		UPDATE
 			workflows
 		SET
-			manager_paid_out_at = NOW(),
+			manager_paid_out_at = unix_now(),
 			manager_payout_error = NULL,
-			manager_payout_last_try_at = NOW(),
+			manager_payout_last_try_at = unix_now(),
 			manager_retry_requested_at = NULL,
 			manager_retry_requested_by = NULL,
-			updated_at = NOW()
+			updated_at = unix_now()
 		WHERE
 			id = $1
 		AND
@@ -4033,7 +4828,7 @@ func (a *AppDB) FinalizeWorkflowPaidOutIfSettled(ctx context.Context, workflowId
 	var status string
 	var managerBounty uint64
 	var managerImproverID *string
-	var managerPaidOutAt *time.Time
+	var managerPaidOutAt *int64
 	err = tx.QueryRow(ctx, `
 		SELECT
 			status,
@@ -4063,10 +4858,10 @@ func (a *AppDB) FinalizeWorkflowPaidOutIfSettled(ctx context.Context, workflowId
 		SET
 			status = 'paid_out',
 			payout_error = NULL,
-			payout_last_try_at = COALESCE(payout_last_try_at, NOW()),
+			payout_last_try_at = COALESCE(payout_last_try_at, unix_now()),
 			retry_requested_at = NULL,
 			retry_requested_by = NULL,
-			updated_at = NOW()
+			updated_at = unix_now()
 		WHERE
 			workflow_id = $1
 		AND
@@ -4113,7 +4908,7 @@ func (a *AppDB) FinalizeWorkflowPaidOutIfSettled(ctx context.Context, workflowId
 			status = 'paid_out',
 			is_start_blocked = false,
 			blocked_by_workflow_id = NULL,
-			updated_at = NOW()
+			updated_at = unix_now()
 		WHERE
 			id = $1;
 	`, workflowId)
@@ -4128,7 +4923,7 @@ func (a *AppDB) FinalizeWorkflowPaidOutIfSettled(ctx context.Context, workflowId
 			is_start_blocked = false,
 			blocked_by_workflow_id = NULL,
 			status = CASE WHEN status = 'blocked' THEN 'approved' ELSE status END,
-			updated_at = NOW()
+			updated_at = unix_now()
 		WHERE
 			status = 'blocked'
 		AND
@@ -4149,9 +4944,9 @@ func (a *AppDB) RequestWorkflowStepPayoutRetry(ctx context.Context, workflowId s
 		UPDATE
 			workflow_steps
 		SET
-			retry_requested_at = NOW(),
+			retry_requested_at = unix_now(),
 			retry_requested_by = $3,
-			updated_at = NOW()
+			updated_at = unix_now()
 		WHERE
 			id = $1
 		AND
@@ -4179,9 +4974,9 @@ func (a *AppDB) RequestWorkflowManagerPayoutRetry(ctx context.Context, workflowI
 		UPDATE
 			workflows
 		SET
-			manager_retry_requested_at = NOW(),
+			manager_retry_requested_at = unix_now(),
 			manager_retry_requested_by = $2,
-			updated_at = NOW()
+			updated_at = unix_now()
 		WHERE
 			id = $1
 		AND
@@ -4317,7 +5112,7 @@ func (a *AppDB) RecordWorkflowVote(ctx context.Context, workflowId string, voter
 		DO UPDATE SET
 			decision = EXCLUDED.decision,
 			comment = EXCLUDED.comment,
-			updated_at = NOW();
+			updated_at = unix_now();
 	`, workflowId, voterId, decision, comment)
 	if err != nil {
 		return nil, fmt.Errorf("error recording workflow vote: %s", err)
@@ -4336,14 +5131,14 @@ func (a *AppDB) ExpireStaleWorkflowProposals(ctx context.Context) ([]structs.Wor
 				workflows w
 			SET
 				status = 'expired',
-				vote_quorum_reached_at = COALESCE(vote_quorum_reached_at, NOW()),
-				vote_finalize_at = COALESCE(vote_finalize_at, NOW()),
-				vote_finalized_at = COALESCE(vote_finalized_at, NOW()),
-				updated_at = NOW()
+				vote_quorum_reached_at = COALESCE(vote_quorum_reached_at, unix_now()),
+				vote_finalize_at = COALESCE(vote_finalize_at, unix_now()),
+				vote_finalized_at = COALESCE(vote_finalized_at, unix_now()),
+				updated_at = unix_now()
 			WHERE
 				w.status = 'pending'
 			AND
-				w.created_at <= NOW() - INTERVAL '14 days'
+				w.created_at <= (unix_now() - (14 * 24 * 60 * 60))
 			RETURNING
 				w.id,
 				w.title,
@@ -4444,9 +5239,9 @@ func (a *AppDB) EvaluateWorkflowVoteStateWithApproval(ctx context.Context, workf
 	type workflowVoteState struct {
 		Status          string
 		IsStartBlocked  bool
-		QuorumReachedAt *time.Time
-		FinalizeAt      *time.Time
-		FinalizedAt     *time.Time
+		QuorumReachedAt *int64
+		FinalizeAt      *int64
+		FinalizedAt     *int64
 	}
 
 	state := workflowVoteState{}
@@ -4491,18 +5286,18 @@ func (a *AppDB) EvaluateWorkflowVoteStateWithApproval(ctx context.Context, workf
 	votesCast := approveCount + denyCount
 	quorumThreshold := quorumVotesRequired(totalVoters)
 	quorumReached := totalVoters > 0 && votesCast >= quorumThreshold
-	now := time.Now().UTC()
+	nowUnix := time.Now().UTC().Unix()
 
 	if quorumReached && state.QuorumReachedAt == nil {
-		quorumReachedAt := now
-		finalizeAt := now.Add(24 * time.Hour)
+		quorumReachedAt := nowUnix
+		finalizeAt := nowUnix + int64((24 * time.Hour).Seconds())
 		_, err = tx.Exec(ctx, `
 			UPDATE
 				workflows
 			SET
 				vote_quorum_reached_at = $2,
 				vote_finalize_at = $3,
-				updated_at = NOW()
+				updated_at = unix_now()
 			WHERE
 				id = $1;
 		`, workflowId, quorumReachedAt, finalizeAt)
@@ -4519,7 +5314,7 @@ func (a *AppDB) EvaluateWorkflowVoteStateWithApproval(ctx context.Context, workf
 		outcome = "approve"
 	} else if totalVoters > 0 && denyCount >= majorityThreshold {
 		outcome = "deny"
-	} else if quorumReached && state.FinalizeAt != nil && !now.Before(*state.FinalizeAt) {
+	} else if quorumReached && state.FinalizeAt != nil && nowUnix >= *state.FinalizeAt {
 		if approveCount > denyCount {
 			outcome = "approve"
 		} else {
@@ -4693,20 +5488,47 @@ func finalizeWorkflowApprovalTx(
 			status = $2,
 			is_start_blocked = false,
 			blocked_by_workflow_id = NULL,
-			approved_at = COALESCE(approved_at, NOW()),
+			approved_at = COALESCE(approved_at, unix_now()),
 			approved_by_user_id = COALESCE($3, approved_by_user_id),
-			vote_quorum_reached_at = COALESCE(vote_quorum_reached_at, NOW()),
-			vote_finalize_at = COALESCE(vote_finalize_at, NOW()),
-			vote_finalized_at = COALESCE(vote_finalized_at, NOW()),
+			vote_quorum_reached_at = COALESCE(vote_quorum_reached_at, unix_now()),
+			vote_finalize_at = COALESCE(vote_finalize_at, unix_now()),
+			vote_finalized_at = COALESCE(vote_finalized_at, unix_now()),
 			vote_finalized_by_user_id = COALESCE($4, vote_finalized_by_user_id),
 			vote_decision = $5,
-			updated_at = NOW()
+			updated_at = unix_now()
 		WHERE
 			id = $1;
 	`, workflowId, nextStatus, actorUserId, actorUserId, decision)
 	if err != nil {
 		return fmt.Errorf("error approving workflow: %s", err)
 	}
+
+	// If the start time has already elapsed by approval time, unlock step 1 immediately.
+	_, err = tx.Exec(ctx, `
+		UPDATE
+			workflow_steps ws
+		SET
+			status = 'available',
+			updated_at = unix_now()
+		FROM
+			workflows w
+		WHERE
+			ws.workflow_id = w.id
+		AND
+			w.id = $1
+		AND
+			ws.step_order = 1
+		AND
+			ws.status = 'locked'
+		AND
+			w.status IN ('approved', 'in_progress')
+		AND
+			w.start_at <= unix_now();
+	`, workflowId)
+	if err != nil {
+		return fmt.Errorf("error unlocking initial workflow step on approval: %s", err)
+	}
+
 	return nil
 }
 
@@ -4724,12 +5546,12 @@ func finalizeWorkflowRejectionTx(
 			status = 'rejected',
 			budget_weekly_deducted = 0,
 			budget_one_time_deducted = 0,
-			vote_quorum_reached_at = COALESCE(vote_quorum_reached_at, NOW()),
-			vote_finalize_at = COALESCE(vote_finalize_at, NOW()),
-			vote_finalized_at = COALESCE(vote_finalized_at, NOW()),
+			vote_quorum_reached_at = COALESCE(vote_quorum_reached_at, unix_now()),
+			vote_finalize_at = COALESCE(vote_finalize_at, unix_now()),
+			vote_finalized_at = COALESCE(vote_finalized_at, unix_now()),
 			vote_finalized_by_user_id = COALESCE($3, vote_finalized_by_user_id),
 			vote_decision = $2,
-			updated_at = NOW()
+			updated_at = unix_now()
 		WHERE
 			id = $1;
 	`, workflowId, decision, actorUserId)
@@ -5259,7 +6081,7 @@ func (a *AppDB) RecordWorkflowDeletionVote(ctx context.Context, proposalId strin
 		DO UPDATE SET
 			decision = EXCLUDED.decision,
 			comment = EXCLUDED.comment,
-			updated_at = NOW();
+			updated_at = unix_now();
 	`, proposalId, voterId, decision, comment)
 	if err != nil {
 		return nil, fmt.Errorf("error recording workflow deletion vote: %s", err)
@@ -5279,9 +6101,9 @@ func (a *AppDB) EvaluateWorkflowDeletionVoteState(ctx context.Context, proposalI
 		TargetType      string
 		TargetWorkflow  *string
 		TargetSeries    *string
-		QuorumReachedAt *time.Time
-		FinalizeAt      *time.Time
-		FinalizedAt     *time.Time
+		QuorumReachedAt *int64
+		FinalizeAt      *int64
+		FinalizedAt     *int64
 	}
 
 	state := deletionVoteState{}
@@ -5330,18 +6152,18 @@ func (a *AppDB) EvaluateWorkflowDeletionVoteState(ctx context.Context, proposalI
 	votesCast := approveCount + denyCount
 	quorumThreshold := quorumVotesRequired(totalVoters)
 	quorumReached := totalVoters > 0 && votesCast >= quorumThreshold
-	now := time.Now().UTC()
+	nowUnix := time.Now().UTC().Unix()
 
 	if quorumReached && state.QuorumReachedAt == nil {
-		quorumReachedAt := now
-		finalizeAt := now.Add(24 * time.Hour)
+		quorumReachedAt := nowUnix
+		finalizeAt := nowUnix + int64((24 * time.Hour).Seconds())
 		_, err = tx.Exec(ctx, `
 			UPDATE
 				workflow_deletion_proposals
 			SET
 				vote_quorum_reached_at = $2,
 				vote_finalize_at = $3,
-				updated_at = NOW()
+				updated_at = unix_now()
 			WHERE
 				id = $1;
 		`, proposalId, quorumReachedAt, finalizeAt)
@@ -5358,7 +6180,7 @@ func (a *AppDB) EvaluateWorkflowDeletionVoteState(ctx context.Context, proposalI
 		outcome = "approve"
 	} else if totalVoters > 0 && denyCount >= majorityThreshold {
 		outcome = "deny"
-	} else if quorumReached && state.FinalizeAt != nil && !now.Before(*state.FinalizeAt) {
+	} else if quorumReached && state.FinalizeAt != nil && nowUnix >= *state.FinalizeAt {
 		if approveCount > denyCount {
 			outcome = "approve"
 		} else {
@@ -5419,7 +6241,7 @@ func finalizeWorkflowDeletionApprovalTx(
 					workflows
 				SET
 					status = 'deleted',
-					updated_at = NOW()
+					updated_at = unix_now()
 				WHERE
 					id = $1
 				AND
@@ -5433,7 +6255,7 @@ func finalizeWorkflowDeletionApprovalTx(
 				is_start_blocked = false,
 				blocked_by_workflow_id = NULL,
 				status = CASE WHEN status = 'blocked' THEN 'approved' ELSE status END,
-				updated_at = NOW()
+				updated_at = unix_now()
 			WHERE
 				status = 'blocked'
 			AND
@@ -5451,7 +6273,7 @@ func finalizeWorkflowDeletionApprovalTx(
 					workflows
 				SET
 					status = 'deleted',
-					updated_at = NOW()
+					updated_at = unix_now()
 				WHERE
 					series_id = $1
 				AND
@@ -5465,7 +6287,7 @@ func finalizeWorkflowDeletionApprovalTx(
 				is_start_blocked = false,
 				blocked_by_workflow_id = NULL,
 				status = CASE WHEN status = 'blocked' THEN 'approved' ELSE status END,
-				updated_at = NOW()
+				updated_at = unix_now()
 			WHERE
 				status = 'blocked'
 			AND
@@ -5481,12 +6303,12 @@ func finalizeWorkflowDeletionApprovalTx(
 			workflow_deletion_proposals
 		SET
 			status = 'approved',
-			vote_quorum_reached_at = COALESCE(vote_quorum_reached_at, NOW()),
-			vote_finalize_at = COALESCE(vote_finalize_at, NOW()),
-			vote_finalized_at = COALESCE(vote_finalized_at, NOW()),
+			vote_quorum_reached_at = COALESCE(vote_quorum_reached_at, unix_now()),
+			vote_finalize_at = COALESCE(vote_finalize_at, unix_now()),
+			vote_finalized_at = COALESCE(vote_finalized_at, unix_now()),
 			vote_finalized_by_user_id = COALESCE($3, vote_finalized_by_user_id),
 			vote_decision = $2,
-			updated_at = NOW()
+			updated_at = unix_now()
 		WHERE
 			id = $1;
 	`, proposalId, decision, actorUserId)
@@ -5509,12 +6331,12 @@ func finalizeWorkflowDeletionDenialTx(
 			workflow_deletion_proposals
 		SET
 			status = 'denied',
-			vote_quorum_reached_at = COALESCE(vote_quorum_reached_at, NOW()),
-			vote_finalize_at = COALESCE(vote_finalize_at, NOW()),
-			vote_finalized_at = COALESCE(vote_finalized_at, NOW()),
+			vote_quorum_reached_at = COALESCE(vote_quorum_reached_at, unix_now()),
+			vote_finalize_at = COALESCE(vote_finalize_at, unix_now()),
+			vote_finalized_at = COALESCE(vote_finalized_at, unix_now()),
 			vote_finalized_by_user_id = COALESCE($3, vote_finalized_by_user_id),
 			vote_decision = $2,
-			updated_at = NOW()
+			updated_at = unix_now()
 		WHERE
 			id = $1;
 	`, proposalId, decision, actorUserId)
@@ -5524,7 +6346,12 @@ func finalizeWorkflowDeletionDenialTx(
 	return nil
 }
 
-func (a *AppDB) GetIssuersWithScopes(ctx context.Context) ([]*structs.IssuerWithScopes, error) {
+func (a *AppDB) GetIssuersWithScopes(ctx context.Context, search string, page, count int) ([]*structs.IssuerWithScopes, error) {
+	if count <= 0 {
+		count = 20
+	}
+	offset := page * count
+	likeSearch := "%" + search + "%"
 	rows, err := a.db.Query(ctx, `
 		SELECT
 			u.id,
@@ -5537,9 +6364,13 @@ func (a *AppDB) GetIssuersWithScopes(ctx context.Context) ([]*structs.IssuerWith
 			issuers i ON i.user_id = u.id
 		WHERE
 			u.is_issuer = true
+		AND
+			(COALESCE(i.organization, '') ILIKE $1 OR COALESCE(i.nickname, '') ILIKE $1)
 		ORDER BY
-			u.id ASC;
-	`)
+			u.id ASC
+		LIMIT $2
+		OFFSET $3;
+	`, likeSearch, count, offset)
 	if err != nil {
 		return nil, fmt.Errorf("error querying issuers: %s", err)
 	}
@@ -6166,11 +6997,16 @@ func (a *AppDB) GetCredentialRequestsByUser(ctx context.Context, userId string) 
 	return results, nil
 }
 
-func (a *AppDB) GetCredentialRequestsForIssuer(ctx context.Context, issuerId string) ([]*structs.CredentialRequest, error) {
+func (a *AppDB) GetCredentialRequestsForIssuer(ctx context.Context, issuerId, search string, page, count int) ([]*structs.CredentialRequest, error) {
 	issuerId = strings.TrimSpace(issuerId)
 	if issuerId == "" {
 		return nil, fmt.Errorf("issuer user_id is required")
 	}
+	if count <= 0 {
+		count = 20
+	}
+	offset := page * count
+	likeSearch := "%" + search + "%"
 
 	var isAdmin bool
 	var isIssuer bool
@@ -6192,42 +7028,49 @@ func (a *AppDB) GetCredentialRequestsForIssuer(ctx context.Context, issuerId str
 		return nil, fmt.Errorf("issuer role required")
 	}
 
-	query := `
-		SELECT
-			cr.id,
-			cr.user_id,
-			cr.credential_type,
-			cr.status,
-			cr.requested_at,
-			cr.resolved_at,
-			cr.resolved_by,
-			cr.created_at,
-			cr.updated_at,
-			COALESCE(NULLIF(TRIM(COALESCE(i.first_name, '') || ' ' || COALESCE(i.last_name, '')), ''), COALESCE(u.contact_name, ''), cr.user_id),
-			COALESCE(i.first_name, ''),
-			COALESCE(i.last_name, ''),
-			COALESCE(NULLIF(i.email, ''), COALESCE(u.contact_email, ''))
-		FROM
-			credential_requests cr
-		LEFT JOIN
-			improvers i
-		ON
-			i.user_id = cr.user_id
-		LEFT JOIN
-			users u
-		ON
-			u.id = cr.user_id
-		ORDER BY
-			CASE WHEN cr.status = 'pending' THEN 0 ELSE 1 END,
-			cr.requested_at DESC,
-			cr.created_at DESC
-		LIMIT 500;
-	`
-
 	var rows pgx.Rows
 	var errQuery error
 	if isAdmin {
-		rows, errQuery = a.db.Query(ctx, query)
+		rows, errQuery = a.db.Query(ctx, `
+			SELECT
+				cr.id,
+				cr.user_id,
+				cr.credential_type,
+				cr.status,
+				cr.requested_at,
+				cr.resolved_at,
+				cr.resolved_by,
+				cr.created_at,
+				cr.updated_at,
+				COALESCE(NULLIF(TRIM(COALESCE(i.first_name, '') || ' ' || COALESCE(i.last_name, '')), ''), COALESCE(u.contact_name, ''), cr.user_id),
+				COALESCE(i.first_name, ''),
+				COALESCE(i.last_name, ''),
+				COALESCE(NULLIF(i.email, ''), COALESCE(u.contact_email, ''))
+			FROM
+				credential_requests cr
+			LEFT JOIN
+				improvers i
+			ON
+				i.user_id = cr.user_id
+			LEFT JOIN
+				users u
+			ON
+				u.id = cr.user_id
+			WHERE
+				(
+					COALESCE(i.first_name, '') ILIKE $1
+					OR COALESCE(i.last_name, '') ILIKE $1
+					OR COALESCE(i.email, '') ILIKE $1
+					OR COALESCE(u.contact_name, '') ILIKE $1
+					OR COALESCE(u.contact_email, '') ILIKE $1
+				)
+			ORDER BY
+				CASE WHEN cr.status = 'pending' THEN 0 ELSE 1 END,
+				cr.requested_at DESC,
+				cr.created_at DESC
+			LIMIT $2
+			OFFSET $3;
+		`, likeSearch, count, offset)
 	} else {
 		rows, errQuery = a.db.Query(ctx, `
 			SELECT
@@ -6251,7 +7094,7 @@ func (a *AppDB) GetCredentialRequestsForIssuer(ctx context.Context, issuerId str
 			ON
 				scope.credential_type = cr.credential_type
 			AND
-				scope.issuer_id = $1
+				scope.issuer_id = $2
 			LEFT JOIN
 				improvers i
 			ON
@@ -6260,12 +7103,21 @@ func (a *AppDB) GetCredentialRequestsForIssuer(ctx context.Context, issuerId str
 				users u
 			ON
 				u.id = cr.user_id
+			WHERE
+				(
+					COALESCE(i.first_name, '') ILIKE $1
+					OR COALESCE(i.last_name, '') ILIKE $1
+					OR COALESCE(i.email, '') ILIKE $1
+					OR COALESCE(u.contact_name, '') ILIKE $1
+					OR COALESCE(u.contact_email, '') ILIKE $1
+				)
 			ORDER BY
 				CASE WHEN cr.status = 'pending' THEN 0 ELSE 1 END,
 				cr.requested_at DESC,
 				cr.created_at DESC
-			LIMIT 500;
-		`, issuerId)
+			LIMIT $3
+			OFFSET $4;
+		`, likeSearch, issuerId, count, offset)
 	}
 	if errQuery != nil {
 		return nil, fmt.Errorf("error querying credential requests for issuer: %s", errQuery)
@@ -6540,6 +7392,10 @@ func (a *AppDB) DeleteGlobalCredentialType(ctx context.Context, value string) er
 		DELETE FROM credential_type_definitions WHERE value = $1;
 	`, value)
 	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
+			return fmt.Errorf("credential type is in use")
+		}
 		return fmt.Errorf("error deleting credential type: %s", err)
 	}
 	if result.RowsAffected() == 0 {
@@ -6614,11 +7470,19 @@ func (a *AppDB) GetIssuerByUser(ctx context.Context, userId string) (*structs.Is
 	return i, nil
 }
 
-func (a *AppDB) GetIssuerRequests(ctx context.Context) ([]*structs.Issuer, error) {
+func (a *AppDB) GetIssuerRequests(ctx context.Context, search string, page, count int) ([]*structs.Issuer, error) {
+	if count <= 0 {
+		count = 20
+	}
+	offset := page * count
+	likeSearch := "%" + search + "%"
 	rows, err := a.db.Query(ctx, `
 		SELECT user_id, organization, email, nickname, status, created_at, updated_at
-		FROM issuers ORDER BY created_at DESC;
-	`)
+		FROM issuers
+		WHERE (organization ILIKE $1 OR email ILIKE $1 OR COALESCE(nickname, '') ILIKE $1)
+		ORDER BY created_at DESC
+		LIMIT $2 OFFSET $3;
+	`, likeSearch, count, offset)
 	if err != nil {
 		return nil, fmt.Errorf("error querying issuer requests: %s", err)
 	}
@@ -6688,14 +7552,14 @@ func (a *AppDB) GetUserByAddress(ctx context.Context, address string) (*structs.
 	}
 	row := a.db.QueryRow(ctx, `
 		SELECT id, is_admin, is_merchant, is_organizer, is_improver, is_proposer,
-		       is_voter, is_issuer, is_affiliate, contact_email, contact_phone,
+		       is_voter, is_issuer, is_supervisor, is_affiliate, contact_email, contact_phone,
 		       contact_name, paypal_eth, last_redemption
 		FROM users WHERE LOWER(paypal_eth) = LOWER($1);
 	`, address)
 	u := structs.User{Exists: true}
 	err := row.Scan(
 		&u.Id, &u.IsAdmin, &u.IsMerchant, &u.IsOrganizer, &u.IsImprover, &u.IsProposer,
-		&u.IsVoter, &u.IsIssuer, &u.IsAffiliate, &u.Email, &u.Phone,
+		&u.IsVoter, &u.IsIssuer, &u.IsSupervisor, &u.IsAffiliate, &u.Email, &u.Phone,
 		&u.Name, &u.PayPalEth, &u.LastRedemption,
 	)
 	if err == pgx.ErrNoRows {

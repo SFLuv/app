@@ -44,14 +44,16 @@ export interface WorkflowStep {
   title: string
   description: string
   bounty: number
+  allow_step_not_possible: boolean
   role_id?: string | null
   assigned_improver_id?: string | null
+  assigned_improver_name?: string | null
   status: "locked" | "available" | "in_progress" | "completed" | "paid_out"
-  started_at?: string | null
-  completed_at?: string | null
+  started_at?: number | null
+  completed_at?: number | null
   payout_error?: string | null
-  payout_last_try_at?: string | null
-  retry_requested_at?: string | null
+  payout_last_try_at?: number | null
+  retry_requested_at?: number | null
   retry_requested_by?: string | null
   submission?: WorkflowStepSubmission | null
   work_items: WorkflowWorkItem[]
@@ -62,9 +64,11 @@ export interface WorkflowStepSubmission {
   workflow_id: string
   step_id: string
   improver_id: string
+  step_not_possible: boolean
+  step_not_possible_details?: string | null
   item_responses: WorkflowStepItemResponseInput[]
-  submitted_at: string
-  updated_at: string
+  submitted_at: number
+  updated_at: number
 }
 
 export interface WorkflowRole {
@@ -72,7 +76,6 @@ export interface WorkflowRole {
   workflow_id: string
   title: string
   required_credentials: CredentialType[]
-  is_manager: boolean
 }
 
 export interface WorkflowVotes {
@@ -82,9 +85,9 @@ export interface WorkflowVotes {
   total_voters: number
   quorum_reached: boolean
   quorum_threshold: number
-  quorum_reached_at?: string | null
-  finalize_at?: string | null
-  finalized_at?: string | null
+  quorum_reached_at?: number | null
+  finalize_at?: number | null
+  finalized_at?: number | null
   decision?: "approve" | "deny" | "admin_approve" | null
   my_decision?: "approve" | "deny" | null
 }
@@ -96,7 +99,7 @@ export interface Workflow {
   title: string
   description: string
   recurrence: WorkflowRecurrence
-  start_at: string
+  start_at: number
   status: "pending" | "approved" | "rejected" | "in_progress" | "completed" | "paid_out" | "blocked" | "expired" | "deleted"
   is_start_blocked: boolean
   blocked_by_workflow_id?: string | null
@@ -104,22 +107,23 @@ export interface Workflow {
   weekly_bounty_requirement: number
   budget_weekly_deducted: number
   budget_one_time_deducted: number
-  vote_quorum_reached_at?: string | null
-  vote_finalize_at?: string | null
-  vote_finalized_at?: string | null
+  vote_quorum_reached_at?: number | null
+  vote_finalize_at?: number | null
+  vote_finalized_at?: number | null
   vote_finalized_by_user_id?: string | null
   vote_decision?: "approve" | "deny" | "admin_approve" | null
-  manager_required: boolean
-  manager_role_id?: string | null
-  manager_improver_id?: string | null
-  manager_bounty: number
-  manager_paid_out_at?: string | null
-  manager_payout_error?: string | null
-  manager_payout_last_try_at?: string | null
-  manager_retry_requested_at?: string | null
-  manager_retry_requested_by?: string | null
-  created_at: string
-  updated_at: string
+  supervisor_required: boolean
+  supervisor_user_id?: string | null
+  supervisor_bounty: number
+  supervisor_paid_out_at?: number | null
+  supervisor_payout_error?: string | null
+  supervisor_payout_last_try_at?: number | null
+  supervisor_retry_requested_at?: number | null
+  supervisor_retry_requested_by?: string | null
+  supervisor_title?: string | null
+  supervisor_organization?: string | null
+  created_at: number
+  updated_at: number
   roles: WorkflowRole[]
   steps: WorkflowStep[]
   votes: WorkflowVotes
@@ -132,16 +136,16 @@ export interface ActiveWorkflowListItem {
   title: string
   description: string
   recurrence: WorkflowRecurrence
-  start_at: string
+  start_at: number
   status: "approved" | "blocked" | "in_progress" | "completed"
   is_start_blocked: boolean
   blocked_by_workflow_id?: string | null
   total_bounty: number
   weekly_bounty_requirement: number
-  created_at: string
-  updated_at: string
+  created_at: number
+  updated_at: number
   vote_decision?: "approve" | "deny" | "admin_approve" | null
-  approved_at?: string | null
+  approved_at?: number | null
 }
 
 export type WorkflowDeletionTargetType = "workflow" | "series"
@@ -155,13 +159,13 @@ export interface WorkflowDeletionProposal {
   reason: string
   status: "pending" | "approved" | "denied" | "expired"
   requested_by_user_id: string
-  vote_quorum_reached_at?: string | null
-  vote_finalize_at?: string | null
-  vote_finalized_at?: string | null
+  vote_quorum_reached_at?: number | null
+  vote_finalize_at?: number | null
+  vote_finalized_at?: number | null
   vote_finalized_by_user_id?: string | null
   vote_decision?: "approve" | "deny" | "admin_approve" | null
-  created_at: string
-  updated_at: string
+  created_at: number
+  updated_at: number
   votes: WorkflowVotes
 }
 
@@ -187,11 +191,12 @@ export interface WorkflowStepCreateInput {
   description: string
   bounty: number
   role_client_id: string
+  allow_step_not_possible: boolean
   work_items: WorkflowWorkItemCreateInput[]
 }
 
-export interface WorkflowManagerCreateInput {
-  required_credentials: CredentialType[]
+export interface WorkflowSupervisorCreateInput {
+  user_id: string
   bounty: number
 }
 
@@ -201,7 +206,7 @@ export interface WorkflowCreateRequest {
   description: string
   recurrence: WorkflowRecurrence
   start_at: string
-  manager?: WorkflowManagerCreateInput
+  supervisor?: WorkflowSupervisorCreateInput
   roles: WorkflowRoleCreateInput[]
   steps: WorkflowStepCreateInput[]
 }
@@ -212,7 +217,8 @@ export interface WorkflowTemplateCreateRequest {
   series_id?: string
   recurrence: WorkflowRecurrence
   start_at: string
-  manager?: WorkflowManagerCreateInput
+  supervisor_user_id?: string
+  supervisor_bounty?: number
   roles: WorkflowRoleCreateInput[]
   steps: WorkflowStepCreateInput[]
 }
@@ -225,13 +231,14 @@ export interface WorkflowTemplate {
   created_by_user_id: string
   is_default: boolean
   recurrence: WorkflowRecurrence
-  start_at: string
+  start_at: number
   series_id?: string | null
-  manager?: WorkflowManagerCreateInput | null
+  supervisor_user_id?: string | null
+  supervisor_bounty?: number | null
   roles: WorkflowRoleCreateInput[]
   steps: WorkflowStepCreateInput[]
-  created_at: string
-  updated_at: string
+  created_at: number
+  updated_at: number
 }
 
 export interface ImproverWorkflowFeed {
@@ -244,10 +251,10 @@ export interface ImproverAbsencePeriod {
   improver_id: string
   series_id: string
   step_order: number
-  absent_from: string
-  absent_until: string
-  created_at: string
-  updated_at: string
+  absent_from: number
+  absent_until: number
+  created_at: number
+  updated_at: number
 }
 
 export interface ImproverAbsencePeriodCreateRequest {
@@ -288,9 +295,38 @@ export interface WorkflowSubmissionPhoto {
   file_name: string
   content_type: string
   size_bytes: number
-  created_at: string
+  created_at: number
+}
+
+export interface SupervisorWorkflowListItem {
+  id: string
+  series_id: string
+  title: string
+  status: Workflow["status"]
+  recurrence: WorkflowRecurrence
+  start_at: number
+  created_at: number
+  completed_at?: number | null
+  total_bounty: number
+  supervisor_bounty: number
+}
+
+export interface SupervisorWorkflowListResponse {
+  items: SupervisorWorkflowListItem[]
+  total: number
+  page: number
+  count: number
+}
+
+export interface SupervisorWorkflowExportRequest {
+  workflow_ids: string[]
+  date_field: "created_at" | "completed_at" | "start_at" | ""
+  date_from: string
+  date_to: string
 }
 
 export interface WorkflowStepCompleteRequest {
+  step_not_possible?: boolean
+  step_not_possible_details?: string
   items: WorkflowStepItemResponseInput[]
 }

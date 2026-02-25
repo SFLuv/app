@@ -18,6 +18,7 @@ import { Affiliate } from "@/types/affiliate";
 import { Proposer } from "@/types/proposer";
 import { Improver } from "@/types/improver";
 import { IssuerRecord } from "@/types/issuer";
+import { Supervisor } from "@/types/supervisor";
 import { UserResponse, GetUserResponse, WalletResponse } from "@/types/server";
 import { AuthedLocation } from "@/types/location";
 import { importWallet as privyImportWallet } from "@/lib/wallets/import";
@@ -46,6 +47,7 @@ export interface User {
   isProposer: boolean
   isVoter: boolean
   isIssuer: boolean
+  isSupervisor: boolean
   paypalEthAddress: string
   lastRedemption: number
   isAffiliate: boolean
@@ -72,6 +74,8 @@ interface AppContextType {
   setImprover: Dispatch<SetStateAction<Improver | null>>;
   issuer: IssuerRecord | null;
   setIssuer: Dispatch<SetStateAction<IssuerRecord | null>>;
+  supervisor: Supervisor | null;
+  setSupervisor: Dispatch<SetStateAction<Supervisor | null>>;
   userLocations: AuthedLocation[]
   setUserLocations: Dispatch<SetStateAction<AuthedLocation[]>>;
   login: () => Promise<void>;
@@ -119,6 +123,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
   const [proposer, setProposer] = useState<Proposer | null>(null)
   const [improver, setImprover] = useState<Improver | null>(null)
   const [issuer, setIssuer] = useState<IssuerRecord | null>(null)
+  const [supervisor, setSupervisor] = useState<Supervisor | null>(null)
   const [wallets, setWallets] = useState<AppWallet[]>([])
   const [walletsStatus, setWalletsStatus] = useState<WalletsStatus>("loading")
   const [mapLocations, setMapLocations] = useState<Location[]>([])
@@ -263,6 +268,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
         isProposer: r.user.is_proposer,
         isVoter: r.user.is_voter,
         isIssuer: r.user.is_issuer,
+        isSupervisor: r.user.is_supervisor,
         paypalEthAddress: r.user.paypal_eth,
         lastRedemption: r.user.last_redemption,
         isAffiliate: r.user.is_affiliate
@@ -272,6 +278,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
       setProposer(r.proposer ?? null)
       setImprover(r.improver ?? null)
       setIssuer(r.issuer ?? null)
+      setSupervisor(r.supervisor ?? null)
   }
 
   const _userLogin = async () => {
@@ -312,6 +319,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     setProposer(null)
     setImprover(null)
     setIssuer(null)
+    setSupervisor(null)
     setStatus("unauthenticated")
     setWallets([])
     setWalletsStatus("unavailable")
@@ -720,8 +728,10 @@ export default function AppProvider({ children }: { children: ReactNode }) {
           setProposer,
           improver,
           setImprover,
-          issuer,
-          setIssuer,
+        issuer,
+        setIssuer,
+        supervisor,
+        setSupervisor,
           wallets,
           walletsStatus,
           userLocations,

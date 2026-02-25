@@ -88,11 +88,14 @@ func AddWorkflowRoutes(r *chi.Mux, s *handlers.BotService, a *handlers.AppServic
 	r.Post("/proposers/request", withAuth(a.RequestProposerStatus))
 	r.Post("/improvers/request", withAuth(a.RequestImproverStatus))
 	r.Post("/issuers/request", withAuth(a.RequestIssuerStatus))
+	r.Post("/supervisors/request", withAuth(a.RequestSupervisorStatus))
+	r.Get("/supervisors/approved", withAuth(a.GetApprovedSupervisors))
 	r.Get("/credentials/types", withAuth(a.GetCredentialTypes))
 	r.Get("/issuers/users/by-address/{address}", withIssuer(a.GetUserByAddress, a))
 
 	r.Get("/proposers/workflow-templates", withProposer(a.GetProposerWorkflowTemplates, a))
 	r.Post("/proposers/workflow-templates", withProposer(a.CreateProposerWorkflowTemplate, a))
+	r.Delete("/proposers/workflow-templates/{template_id}", withProposer(a.DeleteProposerWorkflowTemplate, a))
 	r.Post("/proposers/workflows", withProposer(a.CreateWorkflow, a))
 	r.Get("/proposers/workflows", withProposer(a.GetProposerWorkflows, a))
 	r.Get("/proposers/workflows/{workflow_id}", withProposer(a.GetProposerWorkflow, a))
@@ -100,25 +103,25 @@ func AddWorkflowRoutes(r *chi.Mux, s *handlers.BotService, a *handlers.AppServic
 	r.Post("/proposers/workflow-deletion-proposals", withProposer(a.ProposeWorkflowDeletion, a))
 
 	r.Get("/improvers/workflows", withImprover(a.GetImproverWorkflows, a))
-	r.Get("/improvers/managed-workflows", withImprover(a.GetManagedWorkflows, a))
 	r.Get("/improvers/unpaid-workflows", withImprover(a.GetImproverUnpaidWorkflows, a))
 	r.Get("/improvers/credential-requests", withImprover(a.GetImproverCredentialRequests, a))
 	r.Post("/improvers/credential-requests", withImprover(a.CreateImproverCredentialRequest, a))
 	r.Get("/improvers/workflows/absence-periods", withImprover(a.GetImproverAbsencePeriods, a))
 	r.Post("/improvers/workflows/absence-periods", withImprover(a.CreateImproverAbsencePeriod, a))
-	r.Post("/improvers/workflows/{workflow_id}/manager/claim", withImprover(a.ClaimWorkflowManager, a))
-	r.Post("/improvers/workflows/{workflow_id}/manager/payout-request", withImprover(a.RequestWorkflowManagerPayoutRetry, a))
 	r.Post("/improvers/workflows/{workflow_id}/steps/{step_id}/claim", withImprover(a.ClaimWorkflowStep, a))
 	r.Post("/improvers/workflows/{workflow_id}/steps/{step_id}/start", withImprover(a.StartWorkflowStep, a))
 	r.Post("/improvers/workflows/{workflow_id}/steps/{step_id}/complete", withImprover(a.CompleteWorkflowStep, a))
 	r.Post("/improvers/workflows/{workflow_id}/steps/{step_id}/payout-request", withImprover(a.RequestWorkflowStepPayoutRetry, a))
-	r.Get("/improvers/managed-workflows/{workflow_id}/export.csv", withImprover(a.DownloadManagedWorkflowCSV, a))
-	r.Get("/improvers/managed-workflows/{workflow_id}/photos.zip", withImprover(a.DownloadManagedWorkflowPhotosZip, a))
+
+	r.Get("/supervisors/workflows", withSupervisor(a.GetSupervisorWorkflows, a))
+	r.Post("/supervisors/workflows/export", withSupervisor(a.ExportSupervisorWorkflowData, a))
 
 	r.Get("/admin/proposers", withAdmin(a.GetProposers, a))
 	r.Put("/admin/proposers", withAdmin(a.UpdateProposer, a))
 	r.Get("/admin/improvers", withAdmin(a.GetImprovers, a))
 	r.Put("/admin/improvers", withAdmin(a.UpdateImprover, a))
+	r.Get("/admin/supervisors", withAdmin(a.GetSupervisors, a))
+	r.Put("/admin/supervisors", withAdmin(a.UpdateSupervisor, a))
 	r.Get("/admin/issuers", withAdmin(a.GetIssuers, a))
 	r.Put("/admin/issuers", withAdmin(a.UpdateIssuerScopes, a))
 	r.Get("/admin/issuer-requests", withAdmin(a.GetIssuerRequests, a))
@@ -343,6 +346,29 @@ func withIssuer(handlerFunc http.HandlerFunc, s *handlers.AppService) http.Handl
 
 		isIssuer := s.IsIssuer(r.Context(), id)
 		if !isIssuer {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+
+		handlerFunc(w, r)
+	}
+}
+
+func withSupervisor(handlerFunc http.HandlerFunc, s *handlers.AppService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, ok := r.Context().Value("userDid").(string)
+		if !ok {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+
+		if s.IsAdmin(r.Context(), id) {
+			handlerFunc(w, r)
+			return
+		}
+
+		isSupervisor := s.IsSupervisor(r.Context(), id)
+		if !isSupervisor {
 			w.WriteHeader(http.StatusForbidden)
 			return
 		}

@@ -11,10 +11,20 @@ import { Badge } from "@/components/ui/badge"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { formatStatusLabel } from "@/lib/status-labels"
-import { AlertTriangle, Clock, Loader2, Plus, Trash2 } from "lucide-react"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import {
-  CredentialType,
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { formatStatusLabel } from "@/lib/status-labels"
+import { cn } from "@/lib/utils"
+import { AlertTriangle, ChevronsUpDown, Clock, Loader2, Plus, Search, Trash2, X } from "lucide-react"
+import {
+  GlobalCredentialType,
   Workflow,
   WorkflowCreateRequest,
   WorkflowDeletionTargetType,
@@ -24,11 +34,12 @@ import {
   WorkflowTemplateCreateRequest,
   WorkflowWorkItemCreateInput,
 } from "@/types/workflow"
+import { Supervisor } from "@/types/supervisor"
 
 interface DraftRole {
   client_id: string
   title: string
-  required_credentials: CredentialType[]
+  required_credentials: string[]
 }
 
 interface DraftDropdownOption extends WorkflowDropdownOptionCreateInput {
@@ -46,24 +57,20 @@ interface DraftStep {
   description: string
   bounty: string
   role_client_id: string
+  allow_step_not_possible: boolean
   work_items: DraftWorkItem[]
 }
 
-interface DraftWorkflowManager {
+interface DraftWorkflowSupervisor {
   enabled: boolean
-  required_credentials: CredentialType[]
+  user_id: string
   bounty: string
 }
-
-const CREDENTIAL_OPTIONS: { value: CredentialType; label: string }[] = [
-  { value: "dpw_certified", label: "DPW Certified" },
-  { value: "sfluv_verifier", label: "SFLuv Verifier" },
-]
 
 const createDraftRole = (): DraftRole => ({
   client_id: crypto.randomUUID(),
   title: "",
-  required_credentials: ["dpw_certified"],
+  required_credentials: [],
 })
 
 const createDraftWorkItem = (): DraftWorkItem => ({
@@ -84,12 +91,13 @@ const createDraftStep = (): DraftStep => ({
   description: "",
   bounty: "",
   role_client_id: "",
+  allow_step_not_possible: false,
   work_items: [createDraftWorkItem()],
 })
 
-const createDraftWorkflowManager = (): DraftWorkflowManager => ({
+const createDraftWorkflowSupervisor = (): DraftWorkflowSupervisor => ({
   enabled: false,
-  required_credentials: ["dpw_certified"],
+  user_id: "",
   bounty: "",
 })
 
@@ -105,20 +113,19 @@ const WORKFLOW_STATUS_FILTER_OPTIONS: Array<{
   { value: "blocked", label: "Blocked" },
   { value: "in_progress", label: "In Progress" },
   { value: "completed", label: "Completed" },
-  { value: "paid_out", label: "Paid Out" },
+  { value: "paid_out", label: "Finalized" },
   { value: "deleted", label: "Deleted" },
 ]
 
 const nowForDatetimeLocal = () => {
   const date = new Date()
-  date.setMinutes(date.getMinutes() + 60)
   return new Date(date.getTime() - date.getTimezoneOffset() * 60_000)
     .toISOString()
     .slice(0, 16)
 }
 
-const toDatetimeLocalValue = (value: string) => {
-  const date = new Date(value)
+const toDatetimeLocalValue = (value: number) => {
+  const date = new Date(value * 1000)
   if (Number.isNaN(date.getTime())) {
     return nowForDatetimeLocal()
   }
@@ -127,11 +134,21 @@ const toDatetimeLocalValue = (value: string) => {
     .slice(0, 16)
 }
 
+const toUTCISOStringFromDatetimeLocal = (value: string) => {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) {
+    throw new Error("Workflow start date/time is invalid.")
+  }
+  return date.toISOString()
+}
+
 export default function ProposerPage() {
   const { user, status, authFetch } = useApp()
 
   const [workflows, setWorkflows] = useState<Workflow[]>([])
   const [templates, setTemplates] = useState<WorkflowTemplate[]>([])
+  const [credentialTypes, setCredentialTypes] = useState<GlobalCredentialType[]>([])
+  const [supervisors, setSupervisors] = useState<Supervisor[]>([])
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
   const [templateSaving, setTemplateSaving] = useState(false)
@@ -140,6 +157,11 @@ export default function ProposerPage() {
   const [workflowStatusFilter, setWorkflowStatusFilter] = useState<"all" | Workflow["status"]>("all")
   const [error, setError] = useState("")
   const [selectedTemplateId, setSelectedTemplateId] = useState("")
+  const [templateComboOpen, setTemplateComboOpen] = useState(false)
+  const [templateSearch, setTemplateSearch] = useState("")
+  const [deleteTemplateId, setDeleteTemplateId] = useState("")
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
+  const [deleteTemplateLoading, setDeleteTemplateLoading] = useState(false)
   const [templateTitle, setTemplateTitle] = useState("")
   const [templateDescription, setTemplateDescription] = useState("")
 
@@ -148,7 +170,7 @@ export default function ProposerPage() {
   const [recurrence, setRecurrence] = useState<WorkflowRecurrence>("one_time")
   const [startAt, setStartAt] = useState(nowForDatetimeLocal())
   const [roles, setRoles] = useState<DraftRole[]>([createDraftRole()])
-  const [workflowManager, setWorkflowManager] = useState<DraftWorkflowManager>(createDraftWorkflowManager())
+  const [workflowSupervisor, setWorkflowSupervisor] = useState<DraftWorkflowSupervisor>(createDraftWorkflowSupervisor())
   const [steps, setSteps] = useState<DraftStep[]>([createDraftStep()])
 
   const isApproved = Boolean(user?.isProposer || user?.isAdmin)
@@ -156,9 +178,9 @@ export default function ProposerPage() {
 
   const totalDraftBounty = useMemo(() => {
     const stepTotal = steps.reduce((sum, step) => sum + (Number(step.bounty) || 0), 0)
-    const managerBounty = workflowManager.enabled ? Number(workflowManager.bounty) || 0 : 0
-    return stepTotal + managerBounty
-  }, [steps, workflowManager.bounty, workflowManager.enabled])
+    const supervisorBounty = workflowSupervisor.enabled ? Number(workflowSupervisor.bounty) || 0 : 0
+    return stepTotal + supervisorBounty
+  }, [steps, workflowSupervisor.bounty, workflowSupervisor.enabled])
 
   const filteredWorkflows = useMemo(() => {
     if (workflowStatusFilter === "all") {
@@ -166,6 +188,17 @@ export default function ProposerPage() {
     }
     return workflows.filter((workflow) => workflow.status === workflowStatusFilter)
   }, [workflowStatusFilter, workflows])
+
+  const filteredTemplates = useMemo(() => {
+    const s = templateSearch.trim().toLowerCase()
+    if (!s) return templates
+    return templates.filter((t) => t.template_title.toLowerCase().includes(s))
+  }, [templates, templateSearch])
+
+  const selectedTemplate = useMemo(
+    () => templates.find((t) => t.id === selectedTemplateId) ?? null,
+    [templates, selectedTemplateId]
+  )
 
   const loadData = async () => {
     if (!isApproved) {
@@ -175,9 +208,11 @@ export default function ProposerPage() {
 
     setLoading(true)
     try {
-      const [workflowsRes, templatesRes] = await Promise.all([
+      const [workflowsRes, templatesRes, credentialTypesRes, supervisorsRes] = await Promise.all([
         authFetch("/proposers/workflows"),
         authFetch("/proposers/workflow-templates"),
+        authFetch("/credentials/types"),
+        authFetch("/supervisors/approved"),
       ])
 
       if (workflowsRes.ok) {
@@ -188,6 +223,18 @@ export default function ProposerPage() {
       if (templatesRes.ok) {
         const templatesJson = await templatesRes.json()
         setTemplates(templatesJson || [])
+      }
+
+      if (credentialTypesRes.ok) {
+        const credentialTypesJson = await credentialTypesRes.json()
+        setCredentialTypes(credentialTypesJson || [])
+      }
+
+      if (supervisorsRes.ok) {
+        const supervisorsJson = await supervisorsRes.json()
+        setSupervisors(supervisorsJson || [])
+      } else {
+        setSupervisors([])
       }
 
       setError("")
@@ -206,35 +253,17 @@ export default function ProposerPage() {
     setRoles((prev) => prev.map((role) => (role.client_id === roleId ? { ...role, ...update } : role)))
   }
 
-  const toggleWorkflowManagerCredential = (credential: CredentialType, checked: boolean) => {
-    setWorkflowManager((prev) => {
-      const hasCredential = prev.required_credentials.includes(credential)
-      if (checked && !hasCredential) {
-        return { ...prev, required_credentials: [...prev.required_credentials, credential] }
-      }
-      if (!checked && hasCredential) {
-        const next = prev.required_credentials.filter((value) => value !== credential)
-        return { ...prev, required_credentials: next.length ? next : [credential] }
-      }
-      return prev
-    })
-  }
-
-  const toggleRoleCredential = (roleId: string, credential: CredentialType, checked: boolean) => {
+  const toggleRoleCredential = (roleId: string, credential: string, checked: boolean) => {
     setRoles((prev) =>
       prev.map((role) => {
         if (role.client_id !== roleId) return role
-
         const hasCredential = role.required_credentials.includes(credential)
         if (checked && !hasCredential) {
           return { ...role, required_credentials: [...role.required_credentials, credential] }
         }
-
         if (!checked && hasCredential) {
-          const next = role.required_credentials.filter((value) => value !== credential)
-          return { ...role, required_credentials: next.length ? next : [credential] }
+          return { ...role, required_credentials: role.required_credentials.filter((c) => c !== credential) }
         }
-
         return role
       }),
     )
@@ -380,7 +409,7 @@ export default function ProposerPage() {
     setRecurrence("one_time")
     setStartAt(nowForDatetimeLocal())
     setRoles([createDraftRole()])
-    setWorkflowManager(createDraftWorkflowManager())
+    setWorkflowSupervisor(createDraftWorkflowSupervisor())
     setSteps([createDraftStep()])
   }
 
@@ -400,6 +429,7 @@ export default function ProposerPage() {
       description: step.description.trim(),
       bounty: Number(step.bounty),
       role_client_id: step.role_client_id,
+      allow_step_not_possible: step.allow_step_not_possible,
       work_items: step.work_items.map((item) => ({
         title: item.title.trim(),
         description: item.description.trim(),
@@ -418,8 +448,8 @@ export default function ProposerPage() {
       })),
     }))
 
-    if (normalizedSteps.some((step) => !step.title || !step.description || Number.isNaN(step.bounty) || step.bounty <= 0 || !step.role_client_id)) {
-      throw new Error("Every step needs a title, description, role assignment, and bounty greater than zero.")
+    if (normalizedSteps.some((step) => !step.title || !step.description || Number.isNaN(step.bounty) || step.bounty < 0 || !step.role_client_id)) {
+      throw new Error("Every step needs a title, description, role assignment, and bounty zero or greater.")
     }
 
     for (const step of normalizedSteps) {
@@ -439,43 +469,43 @@ export default function ProposerPage() {
       }
     }
 
-    let normalizedManager: WorkflowCreateRequest["manager"] | undefined
-    if (workflowManager.enabled) {
-      const requiredCredentials = workflowManager.required_credentials
-        .map((credential) => credential.trim())
-        .filter(Boolean)
-      if (requiredCredentials.length === 0) {
-        throw new Error("Workflow manager must require at least one credential.")
+    let normalizedSupervisor: WorkflowCreateRequest["supervisor"] | undefined
+    if (workflowSupervisor.enabled) {
+      const supervisorUserID = workflowSupervisor.user_id.trim()
+      if (!supervisorUserID) {
+        throw new Error("Select a workflow supervisor.")
       }
-      const managerBounty = workflowManager.bounty.trim() === "" ? 0 : Number(workflowManager.bounty)
-      if (Number.isNaN(managerBounty) || managerBounty < 0) {
-        throw new Error("Workflow manager bounty must be zero or greater.")
+      const supervisorBounty = workflowSupervisor.bounty.trim() === "" ? 0 : Number(workflowSupervisor.bounty)
+      if (Number.isNaN(supervisorBounty) || supervisorBounty < 0) {
+        throw new Error("Workflow supervisor bounty must be zero or greater.")
       }
-      normalizedManager = {
-        required_credentials: Array.from(new Set(requiredCredentials)),
-        bounty: managerBounty,
+      normalizedSupervisor = {
+        user_id: supervisorUserID,
+        bounty: supervisorBounty,
       }
     }
 
     return {
       normalizedRoles,
       normalizedSteps,
-      normalizedManager,
+      normalizedSupervisor,
     }
   }
 
   const buildTemplatePayload = (): WorkflowTemplateCreateRequest => {
-    const { normalizedRoles, normalizedSteps, normalizedManager } = normalizeDraftWorkflowFields()
+    const { normalizedRoles, normalizedSteps, normalizedSupervisor } = normalizeDraftWorkflowFields()
+    const startAtISO = toUTCISOStringFromDatetimeLocal(startAt)
     const payload: WorkflowTemplateCreateRequest = {
       template_title: templateTitle.trim(),
       template_description: templateDescription.trim(),
       recurrence,
-      start_at: startAt,
+      start_at: startAtISO,
       roles: normalizedRoles,
       steps: normalizedSteps,
     }
-    if (normalizedManager) {
-      payload.manager = normalizedManager
+    if (normalizedSupervisor) {
+      payload.supervisor_user_id = normalizedSupervisor.user_id
+      payload.supervisor_bounty = normalizedSupervisor.bounty
     }
 
     return payload
@@ -485,8 +515,8 @@ export default function ProposerPage() {
     setError("")
     const templateTitleValue = templateTitle.trim()
     const templateDescriptionValue = templateDescription.trim()
-    if (!templateTitleValue || !templateDescriptionValue) {
-      setError("Template title and description are required.")
+    if (!templateTitleValue) {
+      setError("Template title is required.")
       return
     }
 
@@ -549,6 +579,7 @@ export default function ProposerPage() {
       description: step.description,
       bounty: String(step.bounty),
       role_client_id: roleIdMap.get(step.role_client_id) || "",
+      allow_step_not_possible: Boolean(step.allow_step_not_possible),
       work_items: step.work_items.map((item) => ({
         id: crypto.randomUUID(),
         title: item.title,
@@ -567,13 +598,17 @@ export default function ProposerPage() {
       })),
     }))
 
-    const templateManager = template.manager
-    setWorkflowManager({
-      enabled: Boolean(templateManager),
-      required_credentials: templateManager?.required_credentials?.length
-        ? [...templateManager.required_credentials]
-        : ["dpw_certified"],
-      bounty: templateManager ? String(templateManager.bounty) : "",
+    const templateSupervisorUserId = (template.supervisor_user_id || "").trim()
+    const templateHasSupervisor =
+      templateSupervisorUserId.length > 0 ||
+      (template.supervisor_bounty !== undefined && template.supervisor_bounty !== null)
+    setWorkflowSupervisor({
+      enabled: templateHasSupervisor,
+      user_id: templateSupervisorUserId,
+      bounty:
+        template.supervisor_bounty !== undefined && template.supervisor_bounty !== null
+          ? String(template.supervisor_bounty)
+          : "",
     })
     setRecurrence(template.recurrence)
     setStartAt(toDatetimeLocalValue(template.start_at))
@@ -585,19 +620,19 @@ export default function ProposerPage() {
   const submitWorkflow = async () => {
     setError("")
 
-    if (!title.trim() || !description.trim()) {
-      setError("Workflow title and description are required.")
+    if (!title.trim()) {
+      setError("Workflow title is required.")
       return
     }
 
     let normalizedRoles: WorkflowCreateRequest["roles"] = []
     let normalizedSteps: WorkflowCreateRequest["steps"] = []
-    let normalizedManager: WorkflowCreateRequest["manager"] | undefined
+    let normalizedSupervisor: WorkflowCreateRequest["supervisor"] | undefined
     try {
       const normalized = normalizeDraftWorkflowFields()
       normalizedRoles = normalized.normalizedRoles
       normalizedSteps = normalized.normalizedSteps
-      normalizedManager = normalized.normalizedManager
+      normalizedSupervisor = normalized.normalizedSupervisor
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to validate workflow.")
       return
@@ -607,12 +642,12 @@ export default function ProposerPage() {
       title: title.trim(),
       description: description.trim(),
       recurrence,
-      start_at: startAt,
+      start_at: toUTCISOStringFromDatetimeLocal(startAt),
       roles: normalizedRoles,
       steps: normalizedSteps,
     }
-    if (normalizedManager) {
-      payload.manager = normalizedManager
+    if (normalizedSupervisor) {
+      payload.supervisor = normalizedSupervisor
     }
 
     setSubmitting(true)
@@ -678,6 +713,26 @@ export default function ProposerPage() {
     }
   }
 
+  const handleConfirmDelete = async () => {
+    if (!deleteTemplateId) return
+    setDeleteTemplateLoading(true)
+    try {
+      const res = await authFetch(`/proposers/workflow-templates/${deleteTemplateId}`, { method: "DELETE" })
+      if (!res.ok) {
+        const text = await res.text()
+        throw new Error(text || "Unable to delete template.")
+      }
+      setTemplates((prev) => prev.filter((t) => t.id !== deleteTemplateId))
+      if (selectedTemplateId === deleteTemplateId) setSelectedTemplateId("")
+      setDeleteTemplateId("")
+      setDeleteConfirmOpen(false)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to delete template.")
+    } finally {
+      setDeleteTemplateLoading(false)
+    }
+  }
+
   const isSeriesWorkflow = (workflow: Workflow) =>
     workflow.recurrence !== "one_time" ||
     workflows.some((candidate) => candidate.id !== workflow.id && candidate.series_id === workflow.series_id)
@@ -739,6 +794,20 @@ export default function ProposerPage() {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
+              <div className="flex flex-wrap items-center gap-3">
+                <Badge variant="outline">Draft Total Bounty: {totalDraftBounty} SFLuv</Badge>
+                <Button onClick={submitWorkflow} disabled={submitting}>
+                  {submitting ? (
+                    <>
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      Submitting...
+                    </>
+                  ) : (
+                    "Submit Workflow Proposal"
+                  )}
+                </Button>
+              </div>
+
               <div className="space-y-4 rounded-lg border p-4">
             <div className="flex items-center justify-between gap-3">
               <div>
@@ -751,18 +820,70 @@ export default function ProposerPage() {
             </div>
 
             <div className="grid gap-3 md:grid-cols-[minmax(0,1fr),auto]">
-              <Select value={selectedTemplateId} onValueChange={setSelectedTemplateId}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Select a template" />
-                </SelectTrigger>
-                <SelectContent>
-                  {templates.map((template) => (
-                    <SelectItem key={template.id} value={template.id}>
-                      {template.template_title} {template.is_default ? "(Default)" : "(Personal)"}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <Popover open={templateComboOpen} onOpenChange={setTemplateComboOpen}>
+                <PopoverTrigger asChild>
+                  <Button variant="outline" role="combobox" className="w-full justify-between font-normal">
+                    <span className="truncate">
+                      {selectedTemplate ? `${selectedTemplate.template_title} (${selectedTemplate.is_default ? "Default" : "Personal"})` : "Select a template"}
+                    </span>
+                    <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-[--radix-popover-trigger-width] p-2" align="start">
+                  <div className="relative mb-2">
+                    <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                    <Input
+                      placeholder="Search templates..."
+                      value={templateSearch}
+                      onChange={(e) => setTemplateSearch(e.target.value)}
+                      className="pl-8 h-8 text-sm"
+                    />
+                  </div>
+                  <div className="max-h-60 overflow-y-auto space-y-0.5">
+                    {filteredTemplates.length === 0 ? (
+                      <p className="text-sm text-muted-foreground px-2 py-1.5">No templates found.</p>
+                    ) : (
+                      filteredTemplates.map((template) => (
+                        <div
+                          key={template.id}
+                          className={cn(
+                            "flex items-center justify-between gap-2 rounded px-2 py-1.5 text-sm group",
+                            selectedTemplateId === template.id ? "bg-accent font-medium" : "hover:bg-accent"
+                          )}
+                        >
+                          <button
+                            type="button"
+                            className="flex-1 text-left min-w-0"
+                            onClick={() => {
+                              setSelectedTemplateId(template.id)
+                              setTemplateComboOpen(false)
+                              setTemplateSearch("")
+                            }}
+                          >
+                            <span className="block truncate">{template.template_title}</span>
+                            <span className="text-xs text-muted-foreground">{template.is_default ? "Default" : "Personal"}</span>
+                          </button>
+                          {!template.is_default && (
+                            <button
+                              type="button"
+                              className="shrink-0 text-muted-foreground hover:text-destructive transition-colors p-0.5"
+                              title="Delete template"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                setDeleteTemplateId(template.id)
+                                setDeleteConfirmOpen(true)
+                                setTemplateComboOpen(false)
+                              }}
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          )}
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </PopoverContent>
+              </Popover>
               <Button type="button" variant="secondary" onClick={applyTemplate} disabled={!selectedTemplateId}>
                 Apply Template
               </Button>
@@ -832,74 +953,80 @@ export default function ProposerPage() {
             </div>
 	          </div>
 
-	          <Card>
-	            <CardHeader className="pb-3">
-	              <CardTitle className="text-base">Workflow Manager (Optional)</CardTitle>
-	              <CardDescription>
-	                Add a manager claim role with credential requirements and an optional payout when the workflow is completed.
-	              </CardDescription>
-	            </CardHeader>
-	            <CardContent className="space-y-4">
-	              <label className="flex items-center gap-2 text-sm">
-	                <Checkbox
-	                  checked={workflowManager.enabled}
-	                  onCheckedChange={(checked) =>
-	                    setWorkflowManager((prev) => ({
-	                      ...prev,
-	                      enabled: Boolean(checked),
-	                    }))
-	                  }
-	                />
-	                Enable Workflow Manager
-	              </label>
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base">Workflow Supervisor (Optional)</CardTitle>
+              <CardDescription>
+                Assign an approved supervisor to this workflow and optionally reserve a supervisor completion payout.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <label className="flex items-center gap-2 text-sm">
+                <Checkbox
+                  checked={workflowSupervisor.enabled}
+                  onCheckedChange={(checked) =>
+                    setWorkflowSupervisor((prev) => ({
+                      ...prev,
+                      enabled: Boolean(checked),
+                    }))
+                  }
+                />
+                Enable Workflow Supervisor
+              </label>
 
-	              {workflowManager.enabled && (
-	                <div className="space-y-4">
-	                  <div className="space-y-2">
-	                    <Label>Required Credentials</Label>
-	                    <div className="grid gap-2 sm:grid-cols-2">
-	                      {CREDENTIAL_OPTIONS.map((credential) => {
-	                        const checked = workflowManager.required_credentials.includes(credential.value)
-	                        return (
-	                          <label key={`manager-${credential.value}`} className="flex items-center gap-2 text-sm">
-	                            <Checkbox
-	                              checked={checked}
-	                              onCheckedChange={(value) => toggleWorkflowManagerCredential(credential.value, Boolean(value))}
-	                            />
-	                            <span>{credential.label}</span>
-	                          </label>
-	                        )
-	                      })}
-	                    </div>
-	                  </div>
-	                  <div className="space-y-2">
-	                    <Label>Manager Completion Payout (Optional)</Label>
-	                    <Input
-	                      type="number"
-	                      min="0"
-	                      value={workflowManager.bounty}
-	                      onChange={(e) =>
-	                        setWorkflowManager((prev) => ({
-	                          ...prev,
-	                          bounty: e.target.value,
-	                        }))
-	                      }
-	                      placeholder="0"
-	                    />
-	                  </div>
-	                </div>
-	              )}
-	            </CardContent>
-	          </Card>
+              {workflowSupervisor.enabled && (
+                <div className="space-y-4">
+                  <div className="space-y-2">
+                    <Label>Supervisor</Label>
+                    {supervisors.length === 0 ? (
+                      <p className="text-xs text-muted-foreground">
+                        No approved supervisors available yet.
+                      </p>
+                    ) : (
+                      <Select
+                        value={workflowSupervisor.user_id}
+                        onValueChange={(value) =>
+                          setWorkflowSupervisor((prev) => ({
+                            ...prev,
+                            user_id: value,
+                          }))
+                        }
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select a supervisor..." />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {supervisors.map((supervisor) => (
+                            <SelectItem key={supervisor.user_id} value={supervisor.user_id}>
+                              {supervisor.nickname || supervisor.organization}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    )}
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Supervisor Completion Payout (Optional)</Label>
+                    <Input
+                      type="number"
+                      min="0"
+                      value={workflowSupervisor.bounty}
+                      onChange={(e) =>
+                        setWorkflowSupervisor((prev) => ({
+                          ...prev,
+                          bounty: e.target.value,
+                        }))
+                      }
+                      placeholder="0"
+                    />
+                  </div>
+                </div>
+              )}
+            </CardContent>
+          </Card>
 
-	          <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <h3 className="text-lg font-medium">Workflow Roles</h3>
-              <Button type="button" variant="outline" onClick={() => setRoles((prev) => [...prev, createDraftRole()])}>
-                <Plus className="h-4 w-4 mr-2" />
-                Add Role
-              </Button>
-            </div>
+		          <div className="space-y-4">
+            <h3 className="text-lg font-medium">Workflow Roles</h3>
 
             {roles.map((role, roleIndex) => (
               <Card key={role.client_id}>
@@ -929,34 +1056,61 @@ export default function ProposerPage() {
 
                   <div className="space-y-2">
                     <Label>Required Credentials</Label>
-                    <div className="grid gap-2 sm:grid-cols-2">
-                      {CREDENTIAL_OPTIONS.map((credential) => {
-                        const checked = role.required_credentials.includes(credential.value)
-                        return (
-                          <label key={credential.value} className="flex items-center gap-2 text-sm">
-                            <Checkbox
-                              checked={checked}
-                              onCheckedChange={(value) => toggleRoleCredential(role.client_id, credential.value, Boolean(value))}
-                            />
-                            <span>{credential.label}</span>
-                          </label>
-                        )
-                      })}
-                    </div>
+                    {credentialTypes.length === 0 ? (
+                      <p className="text-xs text-muted-foreground">No credential types defined. Add them in the Admin panel.</p>
+                    ) : (
+                      <Select
+                        value=""
+                        onValueChange={(value) => toggleRoleCredential(role.client_id, value, true)}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Add a required credential..." />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {credentialTypes
+                            .filter((ct) => !role.required_credentials.includes(ct.value))
+                            .map((ct) => (
+                              <SelectItem key={ct.value} value={ct.value}>
+                                {ct.label}
+                              </SelectItem>
+                            ))}
+                        </SelectContent>
+                      </Select>
+                    )}
+                    {role.required_credentials.length > 0 && (
+                      <div className="flex flex-wrap gap-1.5 pt-1">
+                        {role.required_credentials.map((cred) => {
+                          const label = credentialTypes.find((ct) => ct.value === cred)?.label || cred
+                          return (
+                            <Badge key={cred} variant="secondary" className="gap-1 pr-1">
+                              {label}
+                              <button
+                                type="button"
+                                className="ml-0.5 rounded-sm opacity-70 hover:opacity-100"
+                                onClick={() => toggleRoleCredential(role.client_id, cred, false)}
+                              >
+                                <X className="h-3 w-3" />
+                              </button>
+                            </Badge>
+                          )
+                        })}
+                      </div>
+                    )}
                   </div>
                 </CardContent>
               </Card>
             ))}
+
+            <div className="flex justify-end">
+              <Button type="button" variant="outline" onClick={() => setRoles((prev) => [...prev, createDraftRole()])}>
+                <Plus className="h-4 w-4 mr-2" />
+                Add Role
+              </Button>
+            </div>
           </div>
 
           <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <h3 className="text-lg font-medium">Workflow Steps</h3>
-              <Button type="button" variant="outline" onClick={() => setSteps((prev) => [...prev, createDraftStep()])}>
-                <Plus className="h-4 w-4 mr-2" />
-                New Step
-              </Button>
-            </div>
+            <h3 className="text-lg font-medium">Workflow Steps</h3>
 
             {steps.map((step, stepIndex) => (
               <Card key={step.id}>
@@ -997,7 +1151,7 @@ export default function ProposerPage() {
                       <Label>Bounty (SFLuv)</Label>
                       <Input
                         type="number"
-                        min="1"
+                        min="0"
                         value={step.bounty}
                         onChange={(e) => updateStep(step.id, { bounty: e.target.value })}
                       />
@@ -1019,14 +1173,16 @@ export default function ProposerPage() {
                     </div>
                   </div>
 
+                  <label className="flex items-center gap-2 text-sm">
+                    <Checkbox
+                      checked={step.allow_step_not_possible}
+                      onCheckedChange={(value) => updateStep(step.id, { allow_step_not_possible: Boolean(value) })}
+                    />
+                    Enable "Step not possible" option (requires details, ends workflow with no payouts)
+                  </label>
+
                   <div className="space-y-4">
-                    <div className="flex items-center justify-between">
-                      <Label>Work Items</Label>
-                      <Button type="button" variant="outline" size="sm" onClick={() => addWorkItem(step.id)}>
-                        <Plus className="h-4 w-4 mr-1" />
-                        Add Work Item
-                      </Button>
-                    </div>
+                    <Label>Work Items</Label>
 
                     {step.work_items.map((item, itemIndex) => (
                       <Card key={item.id}>
@@ -1102,13 +1258,7 @@ export default function ProposerPage() {
 
                           {item.requires_dropdown && (
                             <div className="space-y-3 border rounded-md p-3 bg-secondary/50">
-                              <div className="flex items-center justify-between">
-                                <Label className="text-sm">Dropdown Options</Label>
-                                <Button type="button" variant="outline" size="sm" onClick={() => addDropdownOption(step.id, item.id)}>
-                                  <Plus className="h-4 w-4 mr-1" />
-                                  Add Option
-                                </Button>
-                              </div>
+                              <Label className="text-sm">Dropdown Options</Label>
 
                               {item.dropdown_options.map((option, optionIndex) => (
                                 <div key={`${item.id}-${optionIndex}`} className="space-y-2 rounded-md border p-3">
@@ -1141,25 +1291,15 @@ export default function ProposerPage() {
 
                                   <div className="space-y-2">
                                     <Label className="text-xs">Notify Emails For This Option</Label>
-                                    <div className="flex gap-2">
-                                      <Input
-                                        value={option.notify_email_input}
-                                        onChange={(e) =>
-                                          updateDropdownOption(step.id, item.id, optionIndex, {
-                                            notify_email_input: e.target.value,
-                                          })
-                                        }
-                                        placeholder="name@example.com"
-                                      />
-                                      <Button
-                                        type="button"
-                                        size="sm"
-                                        variant="outline"
-                                        onClick={() => addDropdownOptionEmail(step.id, item.id, optionIndex)}
-                                      >
-                                        Add Email
-                                      </Button>
-                                    </div>
+                                    <Input
+                                      value={option.notify_email_input}
+                                      onChange={(e) =>
+                                        updateDropdownOption(step.id, item.id, optionIndex, {
+                                          notify_email_input: e.target.value,
+                                        })
+                                      }
+                                      placeholder="name@example.com"
+                                    />
                                     {option.notify_emails.length > 0 && (
                                       <div className="flex flex-wrap gap-2">
                                         {option.notify_emails.map((email) => (
@@ -1176,21 +1316,59 @@ export default function ProposerPage() {
                                         ))}
                                       </div>
                                     )}
+                                    <div className="flex justify-end">
+                                      <Button
+                                        type="button"
+                                        size="sm"
+                                        variant="outline"
+                                        onClick={() => addDropdownOptionEmail(step.id, item.id, optionIndex)}
+                                      >
+                                        Add Email
+                                      </Button>
+                                    </div>
                                   </div>
                                 </div>
                               ))}
+
+                              <div className="flex justify-end">
+                                <Button type="button" variant="outline" size="sm" onClick={() => addDropdownOption(step.id, item.id)}>
+                                  <Plus className="h-4 w-4 mr-1" />
+                                  Add Option
+                                </Button>
+                              </div>
                             </div>
                           )}
                         </CardContent>
                       </Card>
                     ))}
+
+                    <div className="flex justify-end">
+                      <Button type="button" variant="outline" size="sm" onClick={() => addWorkItem(step.id)}>
+                        <Plus className="h-4 w-4 mr-1" />
+                        Add Work Item
+                      </Button>
+                    </div>
                   </div>
                 </CardContent>
               </Card>
             ))}
+
+            <div className="flex justify-end">
+              <Button type="button" variant="outline" onClick={() => setSteps((prev) => [...prev, createDraftStep()])}>
+                <Plus className="h-4 w-4 mr-2" />
+                New Step
+              </Button>
+            </div>
           </div>
 
-              <div className="flex flex-wrap items-center gap-3">
+              {error && (
+                <div className="flex items-center gap-2 text-red-600 text-sm p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
+                  <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+                  <span>{error}</span>
+                </div>
+              )}
+
+		              <div className="flex flex-wrap items-center gap-3">
                 <Badge variant="outline">Draft Total Bounty: {totalDraftBounty} SFLuv</Badge>
                 <Button onClick={submitWorkflow} disabled={submitting}>
                   {submitting ? (
@@ -1256,7 +1434,7 @@ export default function ProposerPage() {
                           </div>
                           <p className="text-sm text-muted-foreground">{workflow.description}</p>
                           <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
-                            <span>Start: {new Date(workflow.start_at).toLocaleString()}</span>
+                            <span>Start: {new Date(workflow.start_at * 1000).toLocaleString()}</span>
                             <span>Recurring: {workflow.recurrence}</span>
                             <span>Total bounty: {workflow.total_bounty}</span>
                             <span>Weekly requirement: {workflow.weekly_bounty_requirement}</span>
@@ -1301,6 +1479,25 @@ export default function ProposerPage() {
           </Card>
         </TabsContent>
       </Tabs>
+
+      <Dialog open={deleteConfirmOpen} onOpenChange={setDeleteConfirmOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Delete Template?</DialogTitle>
+            <DialogDescription>
+              This will permanently delete this personal workflow template. This action cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteConfirmOpen(false)} disabled={deleteTemplateLoading}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={handleConfirmDelete} disabled={deleteTemplateLoading}>
+              {deleteTemplateLoading ? "Deleting..." : "Delete"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

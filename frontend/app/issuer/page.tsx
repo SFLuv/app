@@ -13,12 +13,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { buildCredentialLabelMap, formatCredentialLabel } from "@/lib/credential-labels"
 import { CredentialRequest, IssuerWithScopes } from "@/types/issuer"
 import { GlobalCredentialType } from "@/types/workflow"
-import { AlertTriangle, CheckCircle2, ClipboardList, ShieldCheck } from "lucide-react"
+import { AlertTriangle, CheckCircle2, ChevronLeft, ChevronRight, ClipboardList, Search, ShieldCheck } from "lucide-react"
 
 export default function IssuerPage() {
   const { authFetch, status, user } = useApp()
@@ -27,6 +28,8 @@ export default function IssuerPage() {
   const [credentialTypes, setCredentialTypes] = useState<GlobalCredentialType[]>([])
   const [statusFilter, setStatusFilter] = useState<"all" | "pending" | "approved" | "rejected">("all")
   const [credentialFilter, setCredentialFilter] = useState<string>("all")
+  const [issuerSearch, setIssuerSearch] = useState<string>("")
+  const [issuerPage, setIssuerPage] = useState<number>(0)
   const [modalOpen, setModalOpen] = useState<boolean>(false)
   const [selectedRequest, setSelectedRequest] = useState<CredentialRequest | null>(null)
   const [statusDraft, setStatusDraft] = useState<CredentialRequest["status"]>("pending")
@@ -47,29 +50,25 @@ export default function IssuerPage() {
 
   const canUsePanel = Boolean(user?.isIssuer || user?.isAdmin)
 
-  const loadIssuerData = useCallback(async () => {
+  const loadIssuerMetadata = useCallback(async () => {
     if (!canUsePanel) {
       setLoading(false)
       return
     }
 
     try {
-      const [scopeRes, requestRes, credentialTypesRes] = await Promise.all([
+      const [scopeRes, credentialTypesRes] = await Promise.all([
         authFetch("/issuers/scopes"),
-        authFetch("/issuers/credential-requests"),
         authFetch("/credentials/types"),
       ])
       if (!scopeRes.ok) throw new Error("Unable to load issuer scope.")
-      if (!requestRes.ok) throw new Error("Unable to load credential requests.")
 
       const scopeData = (await scopeRes.json()) as IssuerWithScopes
-      const requestData = (await requestRes.json()) as CredentialRequest[]
       const credentialTypeData = credentialTypesRes.ok
         ? ((await credentialTypesRes.json()) as GlobalCredentialType[])
         : []
 
       setScopes(scopeData)
-      setRequests(requestData || [])
       setCredentialTypes(credentialTypeData || [])
       setError("")
     } catch (err) {
@@ -79,10 +78,30 @@ export default function IssuerPage() {
     }
   }, [authFetch, canUsePanel])
 
+  const loadRequests = useCallback(async (search: string, page: number) => {
+    if (!canUsePanel) return
+    try {
+      const params = new URLSearchParams({ page: String(page), count: "20" })
+      if (search) params.set("search", search)
+      const res = await authFetch(`/issuers/credential-requests?${params}`)
+      if (!res.ok) throw new Error("Unable to load credential requests.")
+      const data = (await res.json()) as CredentialRequest[]
+      setRequests(data || [])
+      setError("")
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to load credential requests.")
+    }
+  }, [authFetch, canUsePanel])
+
   useEffect(() => {
     if (status !== "authenticated") return
-    loadIssuerData()
-  }, [status, loadIssuerData])
+    loadIssuerMetadata()
+  }, [status, loadIssuerMetadata])
+
+  useEffect(() => {
+    if (status !== "authenticated") return
+    loadRequests(issuerSearch, issuerPage)
+  }, [status, issuerSearch, issuerPage, loadRequests])
 
   const credentialFilterOptions = useMemo(() => {
     const scoped = scopes?.allowed_credentials || []
@@ -229,11 +248,17 @@ export default function IssuerPage() {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-            <p className="text-sm text-muted-foreground">
-              Showing {filteredRequests.length} of {requests.length} requests
-            </p>
-            <div className="grid w-full gap-3 sm:grid-cols-2 sm:max-w-xl">
+          <div className="flex flex-col gap-3">
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input
+                placeholder="Search by name or email..."
+                value={issuerSearch}
+                onChange={(e) => { setIssuerSearch(e.target.value); setIssuerPage(0) }}
+                className="pl-9"
+              />
+            </div>
+            <div className="grid w-full gap-3 sm:grid-cols-2">
               <Select value={statusFilter} onValueChange={(value) => setStatusFilter(value as "all" | "pending" | "approved" | "rejected")}>
                 <SelectTrigger>
                   <SelectValue placeholder="Filter by status" />
@@ -282,6 +307,28 @@ export default function IssuerPage() {
               ))}
             </div>
           )}
+
+          <div className="flex items-center justify-between pt-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setIssuerPage((p) => Math.max(0, p - 1))}
+              disabled={issuerPage === 0}
+            >
+              <ChevronLeft className="h-4 w-4" />
+              Previous
+            </Button>
+            <span className="text-sm text-muted-foreground">Page {issuerPage + 1}</span>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setIssuerPage((p) => p + 1)}
+              disabled={requests.length < 20}
+            >
+              Next
+              <ChevronRight className="h-4 w-4" />
+            </Button>
+          </div>
         </CardContent>
       </Card>
 

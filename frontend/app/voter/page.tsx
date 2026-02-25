@@ -9,11 +9,12 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { WorkflowDetailsModal } from "@/components/workflows/workflow-details-modal"
 import { formatStatusLabel } from "@/lib/status-labels"
 import { ActiveWorkflowListItem, Workflow, WorkflowDeletionProposal, WorkflowDeletionTargetType } from "@/types/workflow"
-import { AlertTriangle, Clock3, Vote } from "lucide-react"
+import { Input } from "@/components/ui/input"
+import { AlertTriangle, Clock3, Search, Vote } from "lucide-react"
 
-function countdownText(finalizeAt?: string | null): string {
+function countdownText(finalizeAt?: number | null): string {
   if (!finalizeAt) return "Countdown not started"
-  const remainingMs = new Date(finalizeAt).getTime() - Date.now()
+  const remainingMs = finalizeAt * 1000 - Date.now()
   if (remainingMs <= 0) return "Finalization pending"
 
   const hours = Math.floor(remainingMs / (1000 * 60 * 60))
@@ -33,6 +34,8 @@ export default function VoterPage() {
   const [detailOpen, setDetailOpen] = useState<boolean>(false)
   const [detailLoading, setDetailLoading] = useState<boolean>(false)
   const [detailSource, setDetailSource] = useState<"workflow-votes" | "active-workflows">("workflow-votes")
+  const [workflowSearch, setWorkflowSearch] = useState<string>("")
+  const [deletionSearch, setDeletionSearch] = useState<string>("")
 
   const canVote = Boolean(user?.isVoter || user?.isAdmin)
 
@@ -245,6 +248,26 @@ export default function VoterPage() {
     [deletionProposals],
   )
 
+  const workflowVotesList = useMemo(
+    () => workflows.filter((workflow) => workflow.status !== "approved"),
+    [workflows],
+  )
+
+  const filteredWorkflows = useMemo(() => {
+    const s = workflowSearch.trim().toLowerCase()
+    if (!s) return workflowVotesList
+    return workflowVotesList.filter((w) => w.title.toLowerCase().includes(s))
+  }, [workflowVotesList, workflowSearch])
+
+  const filteredDeletionProposals = useMemo(() => {
+    const s = deletionSearch.trim().toLowerCase()
+    if (!s) return deletionProposals
+    return deletionProposals.filter((p) =>
+      (p.target_workflow_title || "").toLowerCase().includes(s) ||
+      p.target_type.toLowerCase().includes(s)
+    )
+  }, [deletionProposals, deletionSearch])
+
   if (status === "loading" || loading) {
     return (
       <div className="flex items-center justify-center min-h-[70vh]">
@@ -300,12 +323,21 @@ export default function VoterPage() {
                 Pending proposals: <span className="font-medium">{pendingCount}</span>
               </CardDescription>
             </CardHeader>
-            <CardContent>
-              {workflows.length === 0 ? (
+            <CardContent className="space-y-4">
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Input
+                  placeholder="Search proposals..."
+                  value={workflowSearch}
+                  onChange={(e) => setWorkflowSearch(e.target.value)}
+                  className="pl-9"
+                />
+              </div>
+              {filteredWorkflows.length === 0 ? (
                 <p className="text-sm text-muted-foreground">No workflows available for voting.</p>
               ) : (
                 <div className="space-y-4">
-                  {workflows.map((workflow) => {
+                  {filteredWorkflows.map((workflow) => {
                     const pending = workflow.status === "pending"
                     const myDecision = workflow.votes.my_decision
 
@@ -332,7 +364,10 @@ export default function VoterPage() {
                               Votes: {workflow.votes.approve} approve / {workflow.votes.deny} deny ({workflow.votes.votes_cast}/{workflow.votes.total_voters})
                             </span>
                             <span>Quorum threshold: {workflow.votes.quorum_threshold}</span>
-                            <span>Start: {new Date(workflow.start_at).toLocaleString()}</span>
+                            <span>Start: {new Date(workflow.start_at * 1000).toLocaleString()}</span>
+                            {workflow.supervisor_required && (
+                              <span>Supervisor: {workflow.supervisor_title || workflow.supervisor_organization || "Assigned"}</span>
+                            )}
                           </div>
 
                           {pending && workflow.votes.quorum_reached && (
@@ -409,12 +444,21 @@ export default function VoterPage() {
                 Pending deletion proposals: <span className="font-medium">{pendingDeletionCount}</span>
               </CardDescription>
             </CardHeader>
-            <CardContent>
-              {deletionProposals.length === 0 ? (
+            <CardContent className="space-y-4">
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Input
+                  placeholder="Search deletion proposals..."
+                  value={deletionSearch}
+                  onChange={(e) => setDeletionSearch(e.target.value)}
+                  className="pl-9"
+                />
+              </div>
+              {filteredDeletionProposals.length === 0 ? (
                 <p className="text-sm text-muted-foreground">No workflow deletion proposals available.</p>
               ) : (
                 <div className="space-y-4">
-                  {deletionProposals.map((proposal) => {
+                  {filteredDeletionProposals.map((proposal) => {
                     const pending = proposal.status === "pending"
                     return (
                       <Card key={proposal.id}>
@@ -440,7 +484,7 @@ export default function VoterPage() {
                               Votes: {proposal.votes.approve} approve / {proposal.votes.deny} deny ({proposal.votes.votes_cast}/{proposal.votes.total_voters})
                             </span>
                             <span>Quorum threshold: {proposal.votes.quorum_threshold}</span>
-                            <span>Created: {new Date(proposal.created_at).toLocaleString()}</span>
+                            <span>Created: {new Date(proposal.created_at * 1000).toLocaleString()}</span>
                           </div>
 
                           {pending && proposal.votes.quorum_reached && (
@@ -511,7 +555,7 @@ export default function VoterPage() {
                       </div>
                       <p className="text-sm text-muted-foreground">{workflow.description}</p>
                       <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
-                        <span>Start: {new Date(workflow.start_at).toLocaleString()}</span>
+                        <span>Start: {new Date(workflow.start_at * 1000).toLocaleString()}</span>
                       </div>
                     </CardContent>
                   </Card>

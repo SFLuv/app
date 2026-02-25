@@ -4,22 +4,16 @@ import { useRouter, usePathname } from "next/navigation"
 import { useApp } from "@/context/AppProvider"
 import { cn } from "@/lib/utils"
 import {
-  BarChart3,
-  Home,
   LogOut,
   Map,
   Settings,
-  ShoppingBag,
-  Users,
   Wallet,
   Handshake,
-  CalendarClock,
   FileCheck,
-  Calendar,
   SquareUserIcon,
-  ContactIcon,
   Shield,
   ClipboardList,
+  ClipboardCheck,
   Vote,
   ShieldCheck,
   Wrench,
@@ -34,14 +28,12 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@/components/ui/sidebar"
-import { ForwardRefExoticComponent, RefAttributes, useEffect, useMemo } from "react"
-import path from "path"
+import { ForwardRefExoticComponent } from "react"
 
 export function DashboardSidebar() {
   const router = useRouter()
   const pathname = usePathname()
   const { user, logout, status, login, userLocations } = useApp()
-  const userRole = useMemo(() => user?.isAdmin ? "admin" : user?.isMerchant ? "merchant" : "user", [user])
 
   const isActive = (path: string) => {
     return pathname.startsWith(path)
@@ -157,6 +149,14 @@ export function DashboardSidebar() {
       },
     ]
 
+    const supervisorItems: NavItem[] = [
+      {
+        title: "Supervisor Panel",
+        icon: ClipboardCheck,
+        path: "/supervisor",
+      },
+    ]
+
     const adminItems: NavItem[] = [
       {
         title: "Admin Panel",
@@ -222,6 +222,10 @@ export function DashboardSidebar() {
 
     if (user?.isIssuer || user?.isAdmin) {
       items = [...items, ...issuerItems]
+    }
+
+    if (user?.isSupervisor || user?.isAdmin) {
+      items = [...items, ...supervisorItems]
     }
 
     if (user?.isAdmin) {

@@ -8,12 +8,15 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { WorkflowDetailsModal } from "@/components/workflows/workflow-details-modal"
 import { buildCredentialLabelMap, formatCredentialLabel } from "@/lib/credential-labels"
 import { formatStatusLabel } from "@/lib/status-labels"
-import { AlertTriangle, CheckCircle2, ClipboardCheck, Download, ImageDown, Wrench } from "lucide-react"
+import { cn } from "@/lib/utils"
+import { AlertTriangle, CheckCircle2, ChevronsUpDown, ClipboardCheck, Search, Wrench } from "lucide-react"
 import { CredentialRequest } from "@/types/issuer"
 import { CredentialType, GlobalCredentialType, ImproverAbsencePeriod, ImproverAbsencePeriodCreateResult, ImproverWorkflowFeed, Workflow, WorkflowStep } from "@/types/workflow"
 
@@ -28,6 +31,11 @@ type CameraCaptureState = {
   error: string
 }
 
+type StepNotPossibleFormState = {
+  selected: boolean
+  details: string
+}
+
 const defaultItemFormState: ItemFormState = {
   photos: [],
   written: "",
@@ -37,6 +45,11 @@ const defaultItemFormState: ItemFormState = {
 const defaultCameraCaptureState: CameraCaptureState = {
   open: false,
   error: "",
+}
+
+const defaultStepNotPossibleFormState: StepNotPossibleFormState = {
+  selected: false,
+  details: "",
 }
 
 const maxWorkflowPhotoUploadBytes = 2 * 1024 * 1024
@@ -84,7 +97,6 @@ const toJpegFileName = (fileName: string) => {
 export default function ImproverPage() {
   const { authFetch, status, user } = useApp()
   const [workflows, setWorkflows] = useState<Workflow[]>([])
-  const [managedWorkflows, setManagedWorkflows] = useState<Workflow[]>([])
   const [unpaidWorkflows, setUnpaidWorkflows] = useState<Workflow[]>([])
   const [activeCredentials, setActiveCredentials] = useState<CredentialType[]>([])
   const [credentialTypes, setCredentialTypes] = useState<GlobalCredentialType[]>([])
@@ -97,14 +109,21 @@ export default function ImproverPage() {
   const [submitting, setSubmitting] = useState<string>("")
   const [forms, setForms] = useState<Record<string, Record<string, ItemFormState>>>({})
   const [cameraStates, setCameraStates] = useState<Record<string, CameraCaptureState>>({})
+  const [stepNotPossibleForms, setStepNotPossibleForms] = useState<Record<string, StepNotPossibleFormState>>({})
   const [absenceSelection, setAbsenceSelection] = useState<string>("")
   const [absenceFrom, setAbsenceFrom] = useState<string>("")
   const [absenceUntil, setAbsenceUntil] = useState<string>("")
   const [detailWorkflow, setDetailWorkflow] = useState<Workflow | null>(null)
   const [detailOpen, setDetailOpen] = useState<boolean>(false)
   const [detailLoading, setDetailLoading] = useState<boolean>(false)
+  const [detailInitialStepIndex, setDetailInitialStepIndex] = useState<number>(0)
   const [downloadingPhotoId, setDownloadingPhotoId] = useState<string | null>(null)
-  const [managerSearch, setManagerSearch] = useState<string>("")
+  const [boardSearch, setBoardSearch] = useState<string>("")
+  const [myWorkflowsSearch, setMyWorkflowsSearch] = useState<string>("")
+  const [unpaidSearch, setUnpaidSearch] = useState<string>("")
+  const [absenceSearch, setAbsenceSearch] = useState<string>("")
+  const [credentialComboOpen, setCredentialComboOpen] = useState<boolean>(false)
+  const [credentialSearch, setCredentialSearch] = useState<string>("")
   const videoElementRefs = useRef<Record<string, HTMLVideoElement | null>>({})
   const cameraStreamRefs = useRef<Record<string, MediaStream | null>>({})
   const cameraVideoRefCallbacks = useRef<Record<string, (element: HTMLVideoElement | null) => void>>({})
@@ -118,9 +137,8 @@ export default function ImproverPage() {
     }
 
     try {
-      const [feedRes, managedRes, unpaidRes, absenceRes, credentialTypesRes, credentialRequestsRes] = await Promise.all([
+      const [feedRes, unpaidRes, absenceRes, credentialTypesRes, credentialRequestsRes] = await Promise.all([
         authFetch("/improvers/workflows"),
-        authFetch("/improvers/managed-workflows"),
         authFetch("/improvers/unpaid-workflows"),
         authFetch("/improvers/workflows/absence-periods"),
         authFetch("/credentials/types"),
@@ -133,12 +151,6 @@ export default function ImproverPage() {
       const data = (await feedRes.json()) as ImproverWorkflowFeed
       setWorkflows(data.workflows || [])
       setActiveCredentials((data.active_credentials || []) as CredentialType[])
-      if (managedRes.ok) {
-        const managedData = (await managedRes.json()) as Workflow[]
-        setManagedWorkflows(managedData || [])
-      } else {
-        setManagedWorkflows([])
-      }
       if (unpaidRes.ok) {
         const unpaidData = (await unpaidRes.json()) as Workflow[]
         setUnpaidWorkflows(unpaidData || [])
@@ -227,7 +239,7 @@ export default function ImproverPage() {
     workflowTitle: string
     recurrence: Workflow["recurrence"]
     claimedCount: number
-    nextStartAt?: string
+    nextStartAt?: number
   }
 
   const recurringClaimOptions = useMemo<RecurringClaimOption[]>(() => {
@@ -258,7 +270,7 @@ export default function ImproverPage() {
         }
 
         const nextStartAt =
-          !existing.nextStartAt || new Date(workflow.start_at).getTime() < new Date(existing.nextStartAt).getTime()
+          !existing.nextStartAt || workflow.start_at < existing.nextStartAt
             ? workflow.start_at
             : existing.nextStartAt
 
@@ -301,7 +313,6 @@ export default function ImproverPage() {
   const hasClaimedRoleInWorkflow = useCallback(
     (workflow: Workflow) => {
       if (!user?.id) return false
-      if (workflow.manager_improver_id === user.id) return true
       return workflow.steps.some((step) => step.assigned_improver_id === user.id)
     },
     [user?.id],
@@ -311,18 +322,13 @@ export default function ImproverPage() {
     if (!user?.id) return false
     if (workflow.recurrence === "one_time") return false
 
-    const workflowStart = new Date(workflow.start_at).getTime()
-    if (Number.isNaN(workflowStart)) return false
+    const workflowStart = workflow.start_at
 
     return absencePeriods.some((period) => {
       if (period.series_id !== workflow.series_id) return false
       if (period.step_order !== step.step_order) return false
 
-      const absentFrom = new Date(period.absent_from).getTime()
-      const absentUntil = new Date(period.absent_until).getTime()
-      if (Number.isNaN(absentFrom) || Number.isNaN(absentUntil)) return false
-
-      return workflowStart >= absentFrom && workflowStart < absentUntil
+      return workflowStart >= period.absent_from && workflowStart < period.absent_until
     })
   }
 
@@ -330,7 +336,6 @@ export default function ImproverPage() {
     if (!user?.id) return false
     if (step.assigned_improver_id) return false
     if (step.status !== "available" && step.status !== "locked") return false
-    if (workflow.manager_improver_id === user.id) return false
     if (alreadyAssignedInWorkflow(workflow)) return false
     if (isStepCoveredByMyAbsence(workflow, step)) return false
     if (!step.role_id) return false
@@ -339,19 +344,6 @@ export default function ImproverPage() {
     const role = roleMap.get(step.role_id)
     if (!role) return false
     return role.required_credentials.every((credential) => credentialSet.has(credential))
-  }
-
-  const canClaimManager = (workflow: Workflow) => {
-    if (!user?.id) return false
-    if (!workflow.manager_required) return false
-    if (workflow.manager_improver_id) return false
-    if (!workflow.manager_role_id) return false
-    if (alreadyAssignedInWorkflow(workflow)) return false
-
-    const roleMap = roleMapForWorkflow(workflow)
-    const managerRole = roleMap.get(workflow.manager_role_id)
-    if (!managerRole) return false
-    return managerRole.required_credentials.every((credential) => credentialSet.has(credential))
   }
 
   const refreshDetailWorkflow = async (workflowId: string) => {
@@ -380,25 +372,6 @@ export default function ImproverPage() {
       await refreshDetailWorkflow(workflowId)
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to claim this step.")
-    } finally {
-      setSubmitting("")
-    }
-  }
-
-  const claimWorkflowManager = async (workflowId: string) => {
-    setSubmitting(`manager:${workflowId}`)
-    try {
-      const res = await authFetch(`/improvers/workflows/${workflowId}/manager/claim`, {
-        method: "POST",
-      })
-      if (!res.ok) {
-        const text = await res.text()
-        throw new Error(text || "Unable to claim workflow manager role.")
-      }
-      await loadFeed()
-      await refreshDetailWorkflow(workflowId)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to claim workflow manager role.")
     } finally {
       setSubmitting("")
     }
@@ -547,6 +520,19 @@ export default function ImproverPage() {
             ...current,
             ...patch,
           },
+        },
+      }
+    })
+  }
+
+  const updateStepNotPossibleForm = (stepId: string, patch: Partial<StepNotPossibleFormState>) => {
+    setStepNotPossibleForms((prev) => {
+      const current = prev[stepId] || defaultStepNotPossibleFormState
+      return {
+        ...prev,
+        [stepId]: {
+          ...current,
+          ...patch,
         },
       }
     })
@@ -932,6 +918,20 @@ export default function ImproverPage() {
     })
 
   const buildCompletionPayload = async (step: WorkflowStep) => {
+    const stepNotPossibleForm = stepNotPossibleForms[step.id] || defaultStepNotPossibleFormState
+    const stepNotPossible = step.allow_step_not_possible && stepNotPossibleForm.selected
+    const stepNotPossibleDetails = stepNotPossibleForm.details.trim()
+    if (stepNotPossible) {
+      if (!stepNotPossibleDetails) {
+        throw new Error("Provide details for why this step is not possible.")
+      }
+      return {
+        step_not_possible: true,
+        step_not_possible_details: stepNotPossibleDetails,
+        items: [],
+      }
+    }
+
     const stepForms = forms[step.id] || {}
     const items: Array<{
       item_id: string
@@ -1001,7 +1001,10 @@ export default function ImproverPage() {
       items.push(payloadItem)
     }
 
-    return { items }
+    return {
+      step_not_possible: false,
+      items,
+    }
   }
 
   const completeStep = async (workflowId: string, step: WorkflowStep) => {
@@ -1020,6 +1023,12 @@ export default function ImproverPage() {
       await refreshDetailWorkflow(workflowId)
       stopCameraCapturesForStep(step.id)
       setForms((prev) => {
+        const next = { ...prev }
+        delete next[step.id]
+        return next
+      })
+      setStepNotPossibleForms((prev) => {
+        if (!prev[step.id]) return prev
         const next = { ...prev }
         delete next[step.id]
         return next
@@ -1043,7 +1052,7 @@ export default function ImproverPage() {
   const workflowBoardWorkflows = useMemo(() => {
     return workflows.filter((workflow) => {
       if (hasClaimedRoleInWorkflow(workflow)) return false
-      return Boolean(getFirstClaimableStep(workflow)) || canClaimManager(workflow)
+      return Boolean(getFirstClaimableStep(workflow))
     })
   }, [workflows, hasClaimedRoleInWorkflow, credentialSet, absencePeriods, user?.id])
 
@@ -1051,20 +1060,40 @@ export default function ImproverPage() {
     return workflows.filter((workflow) => hasClaimedRoleInWorkflow(workflow))
   }, [workflows, hasClaimedRoleInWorkflow])
 
-  const hasActiveManagerRole = useMemo(() => {
-    if (!user?.id) return false
-    return managedWorkflows.some(
-      (workflow) =>
-        workflow.manager_improver_id === user.id &&
-        (workflow.status === "approved" ||
-          workflow.status === "blocked" ||
-          workflow.status === "in_progress" ||
-          workflow.status === "completed"),
-    )
-  }, [managedWorkflows, user?.id])
+  const getInitialStepIndexForMyWorkflow = useCallback(
+    (workflow: Workflow) => {
+      if (!user?.id) return 0
+      const sortedSteps = [...workflow.steps].sort((a, b) => a.step_order - b.step_order)
+      if (sortedSteps.length === 0) return 0
 
-  const openWorkflowDetails = async (workflowId: string, workflow?: Workflow) => {
+      const preferredAssignedIndex = sortedSteps.findIndex(
+        (step) =>
+          step.assigned_improver_id === user.id &&
+          (step.status === "available" || step.status === "in_progress" || step.status === "locked"),
+      )
+      if (preferredAssignedIndex >= 0) {
+        return preferredAssignedIndex
+      }
+
+      const fallbackAssignedIndex = sortedSteps.findIndex((step) => step.assigned_improver_id === user.id)
+      return fallbackAssignedIndex >= 0 ? fallbackAssignedIndex : 0
+    },
+    [user?.id],
+  )
+
+  const openWorkflowDetails = async (
+    workflowId: string,
+    workflow?: Workflow,
+    options?: {
+      initialStepIndex?: number
+    },
+  ) => {
     setError("")
+    const initialStepIndex =
+      typeof options?.initialStepIndex === "number" && Number.isFinite(options.initialStepIndex) && options.initialStepIndex >= 0
+        ? Math.floor(options.initialStepIndex)
+        : 0
+    setDetailInitialStepIndex(initialStepIndex)
 
     if (workflow) {
       setDetailWorkflow(workflow)
@@ -1073,7 +1102,7 @@ export default function ImproverPage() {
       return
     }
 
-    const existing = [...workflows, ...managedWorkflows, ...unpaidWorkflows].find((item) => item.id === workflowId)
+    const existing = [...workflows, ...unpaidWorkflows].find((item) => item.id === workflowId)
     if (existing) {
       setDetailWorkflow(existing)
       setDetailLoading(false)
@@ -1110,44 +1139,35 @@ export default function ImproverPage() {
     return ""
   }
 
-  const downloadManagedWorkflowExport = async (workflowId: string, format: "csv" | "photos") => {
-    const key = `${format}:${workflowId}`
-    setSubmitting(key)
-    try {
-      const endpoint =
-        format === "csv"
-          ? `/improvers/managed-workflows/${workflowId}/export.csv`
-          : `/improvers/managed-workflows/${workflowId}/photos.zip`
-      const res = await authFetch(endpoint)
-      if (!res.ok) {
-        const text = await res.text()
-        throw new Error(text || "Unable to download workflow export.")
-      }
+  const filteredBoardWorkflows = useMemo(() => {
+    const s = boardSearch.trim().toLowerCase()
+    if (!s) return workflowBoardWorkflows
+    return workflowBoardWorkflows.filter((w) => w.title.toLowerCase().includes(s))
+  }, [workflowBoardWorkflows, boardSearch])
 
-      const blob = await res.blob()
-      const disposition = res.headers.get("Content-Disposition")
-      const fallback = format === "csv" ? `workflow_${workflowId}_export.csv` : `workflow_${workflowId}_photos.zip`
-      const filename = parseAttachmentFilename(disposition) || fallback
-      const url = URL.createObjectURL(blob)
-      const anchor = document.createElement("a")
-      anchor.href = url
-      anchor.download = filename
-      document.body.appendChild(anchor)
-      anchor.click()
-      anchor.remove()
-      URL.revokeObjectURL(url)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to download workflow export.")
-    } finally {
-      setSubmitting("")
-    }
-  }
+  const filteredMyClaimedWorkflows = useMemo(() => {
+    const s = myWorkflowsSearch.trim().toLowerCase()
+    if (!s) return myClaimedWorkflows
+    return myClaimedWorkflows.filter((w) => w.title.toLowerCase().includes(s))
+  }, [myClaimedWorkflows, myWorkflowsSearch])
 
-  const filteredManagedWorkflows = useMemo(() => {
-    const search = managerSearch.trim().toLowerCase()
-    if (!search) return managedWorkflows
-    return managedWorkflows.filter((workflow) => workflow.title.toLowerCase().includes(search))
-  }, [managedWorkflows, managerSearch])
+  const filteredUnpaidWorkflows = useMemo(() => {
+    const s = unpaidSearch.trim().toLowerCase()
+    if (!s) return unpaidWorkflows
+    return unpaidWorkflows.filter((w) => w.title.toLowerCase().includes(s))
+  }, [unpaidWorkflows, unpaidSearch])
+
+  const filteredAbsencePeriods = useMemo(() => {
+    const s = absenceSearch.trim().toLowerCase()
+    if (!s) return absencePeriods
+    return absencePeriods.filter((p) => p.series_id.toLowerCase().includes(s))
+  }, [absencePeriods, absenceSearch])
+
+  const filteredCredentialTypes = useMemo(() => {
+    const s = credentialSearch.trim().toLowerCase()
+    if (!s) return requestableCredentialTypes
+    return requestableCredentialTypes.filter((t) => t.label.toLowerCase().includes(s))
+  }, [requestableCredentialTypes, credentialSearch])
 
   const requestStepPayout = async (workflowId: string, stepId: string) => {
     const key = `retry-step:${stepId}`
@@ -1166,29 +1186,6 @@ export default function ImproverPage() {
       await refreshDetailWorkflow(workflowId)
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to request step payout retry.")
-      setNotice("")
-    } finally {
-      setSubmitting("")
-    }
-  }
-
-  const requestManagerPayout = async (workflowId: string) => {
-    const key = `retry-manager:${workflowId}`
-    setSubmitting(key)
-    try {
-      const res = await authFetch(`/improvers/workflows/${workflowId}/manager/payout-request`, {
-        method: "POST",
-      })
-      if (!res.ok) {
-        const text = await res.text()
-        throw new Error(text || "Unable to request manager payout retry.")
-      }
-      setNotice("Manager payout retry requested.")
-      setError("")
-      await loadFeed()
-      await refreshDetailWorkflow(workflowId)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to request manager payout retry.")
       setNotice("")
     } finally {
       setSubmitting("")
@@ -1222,37 +1219,13 @@ export default function ImproverPage() {
     }
   }
 
-  const renderWorkflowHeaderActions = (workflow: Workflow) => {
-    const claimableManager = canClaimManager(workflow)
-    const isManager = workflow.manager_improver_id === user?.id
-
-    if (!workflow.manager_required) return null
-    if (!claimableManager && !isManager) return null
-
-    return (
-      <div className="flex flex-wrap items-center gap-2 rounded-md border bg-secondary/30 p-3">
-        <p className="text-xs text-muted-foreground">
-          Manager bounty: {workflow.manager_bounty}
-        </p>
-        {claimableManager && (
-          <Button
-            className="w-full sm:w-auto"
-            size="sm"
-            variant="secondary"
-            onClick={() => claimWorkflowManager(workflow.id)}
-            disabled={Boolean(submitting)}
-          >
-            {submitting === `manager:${workflow.id}` ? "Claiming..." : "Claim Manager Role"}
-          </Button>
-        )}
-        {isManager && <Badge variant="default">You are manager</Badge>}
-      </div>
-    )
-  }
+  const renderWorkflowHeaderActions = () => null
 
   const renderWorkflowStepActions = (workflow: Workflow, step: WorkflowStep) => {
     const mine = step.assigned_improver_id === user?.id
     const claimable = canClaimStep(workflow, step)
+    const stepNotPossibleState = stepNotPossibleForms[step.id] || defaultStepNotPossibleFormState
+    const stepNotPossibleSelected = step.allow_step_not_possible && stepNotPossibleState.selected
 
     if (!mine && !claimable) return null
 
@@ -1269,7 +1242,7 @@ export default function ImproverPage() {
           </Button>
         )}
 
-        {mine && step.status === "available" && (
+        {mine && (step.status === "available" || step.status === "locked") && (
           <Button
             className="w-full sm:w-auto"
             size="sm"
@@ -1283,10 +1256,61 @@ export default function ImproverPage() {
 
         {mine && (step.status === "in_progress" || step.status === "available") && (
           <div className="space-y-4 pt-1">
+            {step.allow_step_not_possible && (
+              <Card>
+                <CardContent className="p-3 space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-sm font-medium">Step not possible</p>
+                    <Badge variant="outline">Optional</Badge>
+                  </div>
+                  <label className="flex items-center gap-2 text-sm">
+                    <Checkbox
+                      checked={stepNotPossibleSelected}
+                      onCheckedChange={(checked: boolean | "indeterminate") => {
+                        const selected = Boolean(checked)
+                        updateStepNotPossibleForm(step.id, {
+                          selected,
+                        })
+                        if (selected) {
+                          stopCameraCapturesForStep(step.id)
+                        }
+                      }}
+                      disabled={Boolean(submitting)}
+                    />
+                    Mark this step as not possible
+                  </label>
+                  {stepNotPossibleSelected && (
+                    <div className="space-y-1">
+                      <Label className="text-xs">Required Details</Label>
+                      <Textarea
+                        value={stepNotPossibleState.details}
+                        onChange={(e) =>
+                          updateStepNotPossibleForm(step.id, {
+                            details: e.target.value,
+                          })
+                        }
+                        placeholder="Explain why this step cannot be completed."
+                        disabled={Boolean(submitting)}
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Selecting this will end the full workflow with no bounties paid out.
+                      </p>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            )}
+
             <div className="flex items-center gap-2 text-sm font-medium">
               <ClipboardCheck className="h-4 w-4" />
               Work Item Responses
             </div>
+
+            {stepNotPossibleSelected && (
+              <p className="text-xs text-muted-foreground">
+                Work item inputs are disabled while &quot;Step not possible&quot; is selected.
+              </p>
+            )}
 
             {step.work_items.map((item) => {
               const form = forms[step.id]?.[item.id] || defaultItemFormState
@@ -1294,7 +1318,7 @@ export default function ImproverPage() {
               const cameraState = cameraStates[cameraKey] || defaultCameraCaptureState
 
               return (
-                <Card key={item.id}>
+                <Card key={item.id} className={cn(stepNotPossibleSelected && "opacity-60")}>
                   <CardContent className="p-3 space-y-3">
                     <div className="flex flex-wrap items-center gap-2">
                       <p className="font-medium text-sm">{item.title}</p>
@@ -1319,30 +1343,30 @@ export default function ImproverPage() {
                               size="sm"
                               variant="outline"
                               onClick={() => startCameraCapture(step.id, item.id)}
-                              disabled={Boolean(submitting)}
+                              disabled={Boolean(submitting) || stepNotPossibleSelected}
                             >
                               {cameraState.open ? "Restart Camera" : "Open Camera"}
                             </Button>
                             {cameraState.open && (
-                              <Button
-                                className="w-full sm:w-auto"
-                                type="button"
-                                size="sm"
-                                variant="outline"
-                                onClick={() => stopCameraCapture(step.id, item.id)}
-                                disabled={Boolean(submitting)}
-                              >
+                                <Button
+                                  className="w-full sm:w-auto"
+                                  type="button"
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => stopCameraCapture(step.id, item.id)}
+                                  disabled={Boolean(submitting) || stepNotPossibleSelected}
+                                >
                                 Stop Camera
                               </Button>
                             )}
                             {cameraState.open && (
-                              <Button
-                                className="w-full sm:w-auto"
-                                type="button"
-                                size="sm"
-                                onClick={() => captureCameraPhoto(step.id, item.id, item.title)}
-                                disabled={Boolean(submitting)}
-                              >
+                                <Button
+                                  className="w-full sm:w-auto"
+                                  type="button"
+                                  size="sm"
+                                  onClick={() => captureCameraPhoto(step.id, item.id, item.title)}
+                                  disabled={Boolean(submitting) || stepNotPossibleSelected}
+                                >
                                 Capture Photo
                               </Button>
                             )}
@@ -1379,7 +1403,7 @@ export default function ImproverPage() {
                                       size="sm"
                                       variant="ghost"
                                       onClick={() => removeItemPhoto(step.id, item.id, photoIndex)}
-                                      disabled={Boolean(submitting)}
+                                      disabled={Boolean(submitting) || stepNotPossibleSelected}
                                     >
                                       Remove
                                     </Button>
@@ -1402,6 +1426,7 @@ export default function ImproverPage() {
                             accept="image/*"
                             multiple
                             onChange={(e) => void replaceItemPhotosFromSelection(step.id, item.id, e.target.files)}
+                            disabled={stepNotPossibleSelected || Boolean(submitting)}
                           />
                           {form.photos.length > 0 && (
                             <p className="text-xs text-muted-foreground">
@@ -1417,6 +1442,7 @@ export default function ImproverPage() {
                         <Select
                           value={form.dropdown}
                           onValueChange={(value) => updateItemForm(step.id, item.id, { dropdown: value })}
+                          disabled={stepNotPossibleSelected || Boolean(submitting)}
                         >
                           <SelectTrigger>
                             <SelectValue placeholder="Select an option" />
@@ -1440,6 +1466,7 @@ export default function ImproverPage() {
                           value={form.written}
                           onChange={(e) => updateItemForm(step.id, item.id, { written: e.target.value })}
                           placeholder="Enter your response..."
+                          disabled={stepNotPossibleSelected || Boolean(submitting)}
                         />
                       </div>
                     )}
@@ -1459,7 +1486,7 @@ export default function ImproverPage() {
               ) : (
                 <>
                   <CheckCircle2 className="mr-2 h-4 w-4" />
-                  Complete Step
+                  {stepNotPossibleSelected ? "Mark Step Not Possible" : "Complete Step"}
                 </>
               )}
             </Button>
@@ -1513,30 +1540,35 @@ export default function ImproverPage() {
         </div>
       )}
 
-	      <Tabs defaultValue="workflow-board" className="space-y-4">
+	      <Tabs defaultValue="my-workflows" className="space-y-4">
 	        <TabsList className="grid h-auto w-full grid-cols-1 gap-2 p-1 sm:grid-cols-2 lg:grid-cols-3">
-	          <TabsTrigger value="workflow-board">Workflow Board</TabsTrigger>
 	          <TabsTrigger value="my-workflows">My Workflows</TabsTrigger>
-	          {hasActiveManagerRole && (
-	            <TabsTrigger value="managed-workflows">Manager View</TabsTrigger>
-	          )}
+	          <TabsTrigger value="workflow-board">Workflow Board</TabsTrigger>
 	          <TabsTrigger value="unpaid-workflows">Unpaid Workflows</TabsTrigger>
 	          <TabsTrigger value="credentials">Credentials</TabsTrigger>
 	          <TabsTrigger value="absence">Absence Coverage</TabsTrigger>
 	        </TabsList>
 
 	        <TabsContent value="workflow-board" className="space-y-3">
-          {workflowBoardWorkflows.length === 0 ? (
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Input
+              placeholder="Search workflows..."
+              value={boardSearch}
+              onChange={(e) => setBoardSearch(e.target.value)}
+              className="pl-9"
+            />
+          </div>
+          {filteredBoardWorkflows.length === 0 ? (
             <Card>
               <CardHeader>
                 <CardTitle>No Eligible Workflows</CardTitle>
                 <CardDescription>No workflows are currently available for you to claim.</CardDescription>
               </CardHeader>
             </Card>
-          ) : (
-	            workflowBoardWorkflows.map((workflow) => {
+	          ) : (
+	            filteredBoardWorkflows.map((workflow) => {
 	              const claimableStep = getFirstClaimableStep(workflow)
-	              const claimableManager = canClaimManager(workflow)
 
 	              return (
                 <Card
@@ -1557,21 +1589,9 @@ export default function ImproverPage() {
                     <p className="text-sm text-muted-foreground line-clamp-2">{workflow.description}</p>
 
 	                    <div className="grid gap-2 text-xs text-muted-foreground md:grid-cols-3">
-	                      <span>Start: {new Date(workflow.start_at).toLocaleString()}</span>
+	                      <span>Start: {new Date(workflow.start_at * 1000).toLocaleString()}</span>
 	                      <span>Claims available in workflow details modal</span>
 	                    </div>
-
-	                    {workflow.manager_required && (
-	                      <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
-	                        <span>Manager bounty: {workflow.manager_bounty}</span>
-	                        <span>
-	                          Manager:{" "}
-	                          {workflow.manager_improver_id
-	                            ? workflow.manager_improver_id
-	                            : "Unclaimed"}
-	                        </span>
-	                      </div>
-	                    )}
 
 	                    <div className="flex w-full flex-col gap-2 pt-1 sm:w-auto sm:flex-row sm:flex-wrap">
                       <Button
@@ -1585,7 +1605,7 @@ export default function ImproverPage() {
                       >
                         View Details
                       </Button>
-                      {(claimableStep || claimableManager) && (
+                      {claimableStep && (
                         <Badge variant="secondary">
                           Claim available in modal
                         </Badge>
@@ -1599,7 +1619,16 @@ export default function ImproverPage() {
 	        </TabsContent>
 
 	        <TabsContent value="my-workflows" className="space-y-3">
-          {myClaimedWorkflows.length === 0 ? (
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Input
+              placeholder="Search my workflows..."
+              value={myWorkflowsSearch}
+              onChange={(e) => setMyWorkflowsSearch(e.target.value)}
+              className="pl-9"
+            />
+          </div>
+          {filteredMyClaimedWorkflows.length === 0 ? (
             <Card>
               <CardHeader>
                 <CardTitle>No Claimed Workflows</CardTitle>
@@ -1607,16 +1636,20 @@ export default function ImproverPage() {
               </CardHeader>
             </Card>
           ) : (
-            myClaimedWorkflows.map((workflow) => {
+            filteredMyClaimedWorkflows.map((workflow) => {
               const assignedSteps = workflow.steps.filter((step) => step.assigned_improver_id === user?.id)
               const actionableSteps = assignedSteps.filter((step) => step.status === "available" || step.status === "in_progress")
-              const isManager = workflow.manager_improver_id === user?.id
+              const myWorkflowInitialStepIndex = getInitialStepIndexForMyWorkflow(workflow)
 
               return (
                 <Card
                   key={`mine-${workflow.id}`}
                   className="cursor-pointer transition-colors hover:bg-muted/30"
-                  onClick={() => openWorkflowDetails(workflow.id, workflow)}
+                  onClick={() =>
+                    openWorkflowDetails(workflow.id, workflow, {
+                      initialStepIndex: myWorkflowInitialStepIndex,
+                    })
+                  }
                 >
                   <CardContent className="pt-4 space-y-3">
                     <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1631,26 +1664,12 @@ export default function ImproverPage() {
                     <p className="text-sm text-muted-foreground line-clamp-2">{workflow.description}</p>
 
                     <div className="grid gap-2 text-xs text-muted-foreground md:grid-cols-3">
-                      <span>Start: {new Date(workflow.start_at).toLocaleString()}</span>
+                      <span>Start: {new Date(workflow.start_at * 1000).toLocaleString()}</span>
                       <span>
                         Assigned to you: {assignedSteps.length} step{assignedSteps.length === 1 ? "" : "s"}
                         {actionableSteps.length > 0 ? ` (${actionableSteps.length} actionable)` : ""}
                       </span>
                     </div>
-
-                    {workflow.manager_required && (
-                      <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
-                        <span>Manager bounty: {workflow.manager_bounty}</span>
-                        <span>
-                          Manager:{" "}
-                          {workflow.manager_improver_id
-                            ? workflow.manager_improver_id === user?.id
-                              ? "You"
-                              : workflow.manager_improver_id
-                            : "Unclaimed"}
-                        </span>
-                      </div>
-                    )}
 
                     <div className="flex w-full flex-col gap-2 pt-1 sm:w-auto sm:flex-row sm:flex-wrap">
                       <Button
@@ -1659,16 +1678,13 @@ export default function ImproverPage() {
                         variant="outline"
                         onClick={(e) => {
                           e.stopPropagation()
-                          void openWorkflowDetails(workflow.id, workflow)
+                          void openWorkflowDetails(workflow.id, workflow, {
+                            initialStepIndex: myWorkflowInitialStepIndex,
+                          })
                         }}
                       >
                         View Details
                       </Button>
-                      {isManager && (
-                        <Badge variant="default" className="px-2 py-1">
-                          You are manager
-                        </Badge>
-                      )}
                     </div>
                   </CardContent>
                 </Card>
@@ -1676,87 +1692,6 @@ export default function ImproverPage() {
             })
           )}
 	        </TabsContent>
-
-          {hasActiveManagerRole && (
-	        <TabsContent value="managed-workflows" className="space-y-4">
-	          <Card>
-	            <CardHeader>
-	              <CardTitle>Managed Workflows</CardTitle>
-	              <CardDescription>
-	                Review workflows where you are the claimed workflow manager, inspect details, and export submission data.
-	              </CardDescription>
-	            </CardHeader>
-	            <CardContent className="space-y-4">
-	              <div className="space-y-1">
-	                <Label>Search by Workflow Title</Label>
-	                <Input
-	                  value={managerSearch}
-	                  onChange={(e) => setManagerSearch(e.target.value)}
-	                  placeholder="Search managed workflows..."
-	                />
-	              </div>
-
-	              {filteredManagedWorkflows.length === 0 ? (
-	                <p className="text-sm text-muted-foreground">
-	                  {managedWorkflows.length === 0
-	                    ? "You are not currently assigned as a workflow manager."
-	                    : "No managed workflows match your search."}
-	                </p>
-	              ) : (
-	                <div className="space-y-3">
-	                  {filteredManagedWorkflows.map((workflow) => (
-	                    <Card key={`managed-${workflow.id}`}>
-	                      <CardContent className="pt-4 space-y-3">
-	                        <div className="flex flex-wrap items-center justify-between gap-2">
-	                          <div>
-	                            <h4 className="font-semibold">{workflow.title}</h4>
-	                          </div>
-	                          <Badge>{formatStatusLabel(workflow.status)}</Badge>
-	                        </div>
-	                        <p className="text-sm text-muted-foreground line-clamp-2">{workflow.description}</p>
-	                        <div className="grid gap-2 text-xs text-muted-foreground md:grid-cols-3">
-	                          <span>Manager bounty: {workflow.manager_bounty}</span>
-	                          <span>Start: {new Date(workflow.start_at).toLocaleString()}</span>
-	                        </div>
-	                        <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:flex-wrap">
-	                          <Button
-	                            className="w-full sm:w-auto"
-	                            size="sm"
-	                            variant="outline"
-	                            onClick={() => openWorkflowDetails(workflow.id, workflow)}
-	                          >
-	                            View Details
-	                          </Button>
-	                          <Button
-	                            className="w-full sm:w-auto"
-	                            size="sm"
-	                            variant="secondary"
-	                            onClick={() => downloadManagedWorkflowExport(workflow.id, "csv")}
-	                            disabled={Boolean(submitting)}
-	                          >
-	                            <Download className="mr-2 h-4 w-4" />
-	                            {submitting === `csv:${workflow.id}` ? "Downloading..." : "Download CSV"}
-	                          </Button>
-	                          <Button
-	                            className="w-full sm:w-auto"
-	                            size="sm"
-	                            variant="secondary"
-	                            onClick={() => downloadManagedWorkflowExport(workflow.id, "photos")}
-	                            disabled={Boolean(submitting)}
-	                          >
-	                            <ImageDown className="mr-2 h-4 w-4" />
-	                            {submitting === `photos:${workflow.id}` ? "Downloading..." : "Download Pictures"}
-	                          </Button>
-	                        </div>
-	                      </CardContent>
-	                    </Card>
-	                  ))}
-	                </div>
-	              )}
-	            </CardContent>
-	          </Card>
-	        </TabsContent>
-          )}
 
 	        <TabsContent value="unpaid-workflows" className="space-y-4">
 	          <Card>
@@ -1767,18 +1702,23 @@ export default function ImproverPage() {
 	              </CardDescription>
 	            </CardHeader>
 	            <CardContent className="space-y-3">
-	              {unpaidWorkflows.length === 0 ? (
+	              <div className="relative">
+	                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+	                <Input
+	                  placeholder="Search unpaid workflows..."
+	                  value={unpaidSearch}
+	                  onChange={(e) => setUnpaidSearch(e.target.value)}
+	                  className="pl-9"
+	                />
+	              </div>
+	              {filteredUnpaidWorkflows.length === 0 ? (
 	                <p className="text-sm text-muted-foreground">No unpaid workflow payouts are pending for you.</p>
 	              ) : (
-                unpaidWorkflows.map((workflow) => {
+                filteredUnpaidWorkflows.map((workflow) => {
                   const unpaidSteps = workflow.steps.filter(
                     (step) => step.assigned_improver_id === user?.id && step.status === "completed" && step.bounty > 0
                   )
-                  const isManagerUnpaid =
-                    workflow.manager_improver_id === user?.id &&
-                    workflow.manager_bounty > 0 &&
-                    !workflow.manager_paid_out_at
-                  if (unpaidSteps.length === 0 && !isManagerUnpaid) {
+                  if (unpaidSteps.length === 0) {
                     return null
                   }
 
@@ -1791,12 +1731,12 @@ export default function ImproverPage() {
 	                          </div>
 	                          <Badge>{formatStatusLabel(workflow.status)}</Badge>
 	                        </div>
-	                        <div className="grid gap-2 text-xs text-muted-foreground md:grid-cols-3">
-	                          <span>Start: {new Date(workflow.start_at).toLocaleString()}</span>
-	                          <span>
-	                            Pending payouts: {unpaidSteps.length + (isManagerUnpaid ? 1 : 0)}
-	                          </span>
-	                        </div>
+                        <div className="grid gap-2 text-xs text-muted-foreground md:grid-cols-3">
+                          <span>Start: {new Date(workflow.start_at * 1000).toLocaleString()}</span>
+                          <span>
+                            Pending payouts: {unpaidSteps.length}
+                          </span>
+                        </div>
 
 	                        {unpaidSteps.map((step) => {
 	                          const hasError = Boolean(step.payout_error?.trim())
@@ -1830,36 +1770,6 @@ export default function ImproverPage() {
 	                            </div>
 	                          )
 	                        })}
-
-	                        {isManagerUnpaid && (
-	                          <div className="rounded border p-3 space-y-2">
-	                            <div className="flex flex-wrap items-center justify-between gap-2">
-	                              <p className="text-sm font-medium">Workflow Manager Payout</p>
-	                              <Badge variant={workflow.manager_payout_error ? "destructive" : "outline"}>
-	                                {workflow.manager_payout_error ? "Payout Error" : "Pending"}
-	                              </Badge>
-	                            </div>
-	                            <p className="text-xs text-muted-foreground">Bounty: {workflow.manager_bounty} SFLuv</p>
-	                            {workflow.manager_payout_error ? (
-	                              <p className="text-xs text-red-600 whitespace-pre-wrap">{workflow.manager_payout_error}</p>
-	                            ) : (
-	                              <p className="text-xs text-muted-foreground">
-	                                Payout is waiting for earlier workflows in this series to finish and settle.
-	                              </p>
-	                            )}
-	                            {workflow.manager_payout_error && (
-	                              <Button
-	                                className="w-full sm:w-auto"
-	                                size="sm"
-	                                variant="secondary"
-	                                onClick={() => requestManagerPayout(workflow.id)}
-	                                disabled={Boolean(submitting)}
-	                              >
-	                                {submitting === `retry-manager:${workflow.id}` ? "Requesting..." : "Re-request Payout"}
-	                              </Button>
-	                            )}
-	                          </div>
-	                        )}
 
 	                        <Button
 	                          className="w-full sm:w-auto"
@@ -1909,18 +1819,48 @@ export default function ImproverPage() {
                 <p className="text-sm text-muted-foreground">No additional credential types are available to request.</p>
               ) : (
                 <div className="grid gap-3 md:grid-cols-[1fr_auto]">
-                  <Select value={credentialRequestType} onValueChange={setCredentialRequestType}>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select a credential type" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {requestableCredentialTypes.map((type) => (
-                        <SelectItem key={type.value} value={type.value}>
-                          {type.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <Popover open={credentialComboOpen} onOpenChange={setCredentialComboOpen}>
+                    <PopoverTrigger asChild>
+                      <Button variant="outline" role="combobox" className="w-full justify-between font-normal">
+                        {credentialRequestType ? getCredentialLabel(credentialRequestType) : "Select a credential type"}
+                        <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-[--radix-popover-trigger-width] p-2" align="start">
+                      <div className="relative mb-2">
+                        <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                        <Input
+                          placeholder="Search credential types..."
+                          value={credentialSearch}
+                          onChange={(e) => setCredentialSearch(e.target.value)}
+                          className="pl-8 h-8 text-sm"
+                        />
+                      </div>
+                      <div className="max-h-48 overflow-y-auto space-y-0.5">
+                        {filteredCredentialTypes.length === 0 ? (
+                          <p className="text-sm text-muted-foreground px-2 py-1.5">No credential types found.</p>
+                        ) : (
+                          filteredCredentialTypes.map((type) => (
+                            <button
+                              key={type.value}
+                              type="button"
+                              className={cn(
+                                "w-full text-left px-2 py-1.5 text-sm rounded hover:bg-accent transition-colors",
+                                credentialRequestType === type.value && "bg-accent font-medium"
+                              )}
+                              onClick={() => {
+                                setCredentialRequestType(type.value)
+                                setCredentialComboOpen(false)
+                                setCredentialSearch("")
+                              }}
+                            >
+                              {type.label}
+                            </button>
+                          ))
+                        )}
+                      </div>
+                    </PopoverContent>
+                  </Popover>
                   <Button className="w-full md:w-auto" onClick={requestCredential} disabled={submitting === "credential-request" || !credentialRequestType}>
                     {submitting === "credential-request" ? "Submitting..." : "Request Credential"}
                   </Button>
@@ -2006,18 +1946,27 @@ export default function ImproverPage() {
               {absencePeriods.length > 0 && (
                 <div className="space-y-2">
                   <p className="text-sm font-medium">Your Absence Periods</p>
-                  {absencePeriods.map((period) => (
+                  <div className="relative">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                    <Input
+                      placeholder="Filter by series ID..."
+                      value={absenceSearch}
+                      onChange={(e) => setAbsenceSearch(e.target.value)}
+                      className="pl-9"
+                    />
+                  </div>
+                  {filteredAbsencePeriods.map((period) => (
                     <div key={period.id} className="rounded border bg-secondary/30 p-3 text-xs space-y-1">
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <p className="font-medium">
                           Step {period.step_order}
                         </p>
                         <Badge variant="outline">
-                          {new Date(period.absent_until).getTime() < Date.now() ? "Ended" : "Scheduled"}
+                          {period.absent_until * 1000 < Date.now() ? "Ended" : "Scheduled"}
                         </Badge>
                       </div>
-                      <p>From: {new Date(period.absent_from).toLocaleString()}</p>
-                      <p>Until: {new Date(period.absent_until).toLocaleString()}</p>
+                      <p>From: {new Date(period.absent_from * 1000).toLocaleString()}</p>
+                      <p>Until: {new Date(period.absent_until * 1000).toLocaleString()}</p>
                     </div>
                   ))}
                 </div>
@@ -2033,8 +1982,13 @@ export default function ImproverPage() {
         open={detailOpen}
         onOpenChange={(open) => setDetailOpen(open)}
         loading={detailLoading}
+        initialStepIndex={detailInitialStepIndex}
         renderWorkflowActions={renderWorkflowHeaderActions}
         renderStepActions={renderWorkflowStepActions}
+        hideDefaultStepDetails={(workflow, step) =>
+          step.assigned_improver_id === user?.id &&
+          (step.status === "available" || step.status === "in_progress")
+        }
         onDownloadPhoto={downloadWorkflowPhoto}
         downloadingPhotoId={downloadingPhotoId}
       />

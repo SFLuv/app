@@ -29,7 +29,7 @@ const getLocationApplicationStatus = (approval?: boolean | null): LocationApplic
 
 export default function SettingsPage() {
   const router = useRouter()
-  const { user, userLocations, status, affiliate, setAffiliate, proposer, setProposer, improver, setImprover, issuer, setIssuer, authFetch } = useApp()
+  const { user, userLocations, status, affiliate, setAffiliate, proposer, setProposer, improver, setImprover, issuer, setIssuer, supervisor, setSupervisor, authFetch } = useApp()
   const userRole = useMemo(() => user?.isAdmin ? "admin" : user?.isMerchant ? "merchant" : "user", [user])
 
   const merchantStatus: MerchantStatus = useMemo(() => {
@@ -67,6 +67,12 @@ export default function SettingsPage() {
     return "none"
   }, [issuer, user])
 
+  const supervisorStatus = useMemo(() => {
+    if (user?.isSupervisor) return "approved"
+    if (supervisor?.status) return supervisor.status
+    return "none"
+  }, [supervisor, user])
+
   useEffect(() => {
     if (affiliate?.affiliate_logo) {
       setAffiliateLogoPreview(affiliate.affiliate_logo)
@@ -81,7 +87,7 @@ export default function SettingsPage() {
   const [isUpdating, setIsUpdating] = useState(false)
   const [isChangingPassword, setIsChangingPassword] = useState(false)
   const [successMessage, setSuccessMessage] = useState("")
-  type RoleRequestType = "merchant" | "affiliate" | "proposer" | "improver" | "issuer" | ""
+  type RoleRequestType = "merchant" | "affiliate" | "proposer" | "improver" | "issuer" | "supervisor" | ""
   const [roleRequestType, setRoleRequestType] = useState<RoleRequestType>("")
   const [roleOrg, setRoleOrg] = useState("")
   const [roleEmail, setRoleEmail] = useState("")
@@ -301,10 +307,10 @@ export default function SettingsPage() {
       return
     }
 
-    if (roleRequestType === "affiliate" || roleRequestType === "proposer" || roleRequestType === "issuer") {
+    if (roleRequestType === "affiliate" || roleRequestType === "proposer" || roleRequestType === "issuer" || roleRequestType === "supervisor") {
       if (!roleOrg.trim()) { setRoleError("Organization name is required."); return }
     }
-    if ((roleRequestType === "proposer" || roleRequestType === "issuer") && !roleEmail.trim()) {
+    if ((roleRequestType === "proposer" || roleRequestType === "issuer" || roleRequestType === "supervisor") && !roleEmail.trim()) {
       setRoleError("Notification email is required.")
       return
     }
@@ -327,6 +333,9 @@ export default function SettingsPage() {
       } else if (roleRequestType === "issuer") {
         res = await authFetch("/issuers/request", { method: "POST", body: JSON.stringify({ organization: roleOrg.trim(), email: roleEmail.trim() }) })
         if (res.ok) { const data = await res.json(); setIssuer(data) }
+      } else if (roleRequestType === "supervisor") {
+        res = await authFetch("/supervisors/request", { method: "POST", body: JSON.stringify({ organization: roleOrg.trim(), email: roleEmail.trim() }) })
+        if (res.ok) { const data = await res.json(); setSupervisor(data) }
       } else {
         res = await authFetch("/improvers/request", { method: "POST", body: JSON.stringify({ first_name: roleFirstName.trim(), last_name: roleLastName.trim(), email: roleEmail.trim() }) })
         if (res.ok) { const data = await res.json(); setImprover(data) }
@@ -457,6 +466,11 @@ export default function SettingsPage() {
           {(issuerStatus === "pending" || issuerStatus === "approved") && (
             <TabsTrigger value="issuer" className="text-black dark:text-white flex-1">
               Issuer
+            </TabsTrigger>
+          )}
+          {(supervisorStatus === "pending" || supervisorStatus === "approved") && (
+            <TabsTrigger value="supervisor" className="text-black dark:text-white flex-1">
+              Supervisor
             </TabsTrigger>
           )}
         </TabsList>
@@ -782,11 +796,25 @@ export default function SettingsPage() {
             </Card>
           )}
 
-          {(merchantStatus === "none" || merchantStatus === "rejected" || affiliateStatus === "none" || affiliateStatus === "rejected" || proposerStatus === "none" || proposerStatus === "rejected" || improverStatus === "none" || improverStatus === "rejected" || issuerStatus === "none" || issuerStatus === "rejected") && (
+          {supervisorStatus === "rejected" && (
+            <Card className="mt-6 border-red-300 dark:border-red-700">
+              <CardHeader className="bg-red-50 dark:bg-red-900/20 rounded-t-lg">
+                <CardTitle className="text-black dark:text-white flex items-center">
+                  <XCircle className="h-5 w-5 text-red-500 mr-2" />
+                  Supervisor Request Not Approved
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="pt-4">
+                <p className="text-gray-600 dark:text-gray-400">Your supervisor request was not approved. Use the form below to submit another request.</p>
+              </CardContent>
+            </Card>
+          )}
+
+          {(merchantStatus === "none" || merchantStatus === "rejected" || affiliateStatus === "none" || affiliateStatus === "rejected" || proposerStatus === "none" || proposerStatus === "rejected" || improverStatus === "none" || improverStatus === "rejected" || issuerStatus === "none" || issuerStatus === "rejected" || supervisorStatus === "none" || supervisorStatus === "rejected") && (
             <Card className="mt-6">
               <CardHeader>
                 <CardTitle className="text-black dark:text-white">Request Role Access</CardTitle>
-                <CardDescription>Apply for merchant, affiliate, proposer, improver, or issuer status</CardDescription>
+                <CardDescription>Apply for merchant, affiliate, proposer, improver, issuer, or supervisor status</CardDescription>
               </CardHeader>
               <CardContent>
                 <form onSubmit={handleRoleRequest} className="space-y-4">
@@ -802,18 +830,19 @@ export default function SettingsPage() {
                         {(proposerStatus === "none" || proposerStatus === "rejected") && <SelectItem value="proposer">Proposer — build and submit community workflows</SelectItem>}
                         {(improverStatus === "none" || improverStatus === "rejected") && <SelectItem value="improver">Improver — claim and complete workflow steps</SelectItem>}
                         {(issuerStatus === "none" || issuerStatus === "rejected") && <SelectItem value="issuer">Issuer — issue credentials to community members</SelectItem>}
+                        {(supervisorStatus === "none" || supervisorStatus === "rejected") && <SelectItem value="supervisor">Supervisor — review workflow submissions and exports</SelectItem>}
                       </SelectContent>
                     </Select>
                   </div>
 
-                  {(roleRequestType === "affiliate" || roleRequestType === "proposer" || roleRequestType === "issuer") && (
+                  {(roleRequestType === "affiliate" || roleRequestType === "proposer" || roleRequestType === "issuer" || roleRequestType === "supervisor") && (
                     <div className="space-y-2">
                       <Label htmlFor="role-org" className="text-black dark:text-white">Organization Name</Label>
                       <Input id="role-org" value={roleOrg} onChange={(e) => setRoleOrg(e.target.value)} className="text-black dark:text-white bg-secondary" placeholder="Organization or group name" />
                     </div>
                   )}
 
-                  {(roleRequestType === "proposer" || roleRequestType === "issuer") && (
+                  {(roleRequestType === "proposer" || roleRequestType === "issuer" || roleRequestType === "supervisor") && (
                     <div className="space-y-2">
                       <Label htmlFor="role-email" className="text-black dark:text-white">Notification Email</Label>
                       {verifiedEmailOptions.length > 0 ? (
@@ -842,7 +871,7 @@ export default function SettingsPage() {
 
                   {roleRequestType === "improver" && (
                     <>
-                      <div className="grid grid-cols-2 gap-3">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         <div className="space-y-2">
                           <Label htmlFor="role-first-name" className="text-black dark:text-white">First Name</Label>
                           <Input id="role-first-name" value={roleFirstName} onChange={(e) => setRoleFirstName(e.target.value)} className="text-black dark:text-white bg-secondary" />
@@ -1195,6 +1224,30 @@ export default function SettingsPage() {
                 )}
                 {issuerStatus === "approved" && (
                   <p className="text-gray-600 dark:text-gray-400">You are approved to issue credentials on behalf of {issuer?.organization || "your organization"}.</p>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+        )}
+
+        {(supervisorStatus === "pending" || supervisorStatus === "approved") && (
+          <TabsContent value="supervisor">
+            <Card className={supervisorStatus === "approved" ? "border-green-300 dark:border-green-700" : "border-yellow-300 dark:border-yellow-700"}>
+              <CardHeader className={`rounded-t-lg ${supervisorStatus === "approved" ? "bg-green-50 dark:bg-green-900/20" : "bg-yellow-50 dark:bg-yellow-900/20"}`}>
+                <CardTitle className="text-black dark:text-white flex items-center">
+                  {supervisorStatus === "approved" ? <Check className="h-5 w-5 text-green-500 mr-2" /> : <Clock className="h-5 w-5 text-yellow-500 mr-2" />}
+                  Supervisor {supervisorStatus === "approved" ? "Status Approved" : "Request Pending"}
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="pt-4">
+                {supervisorStatus === "pending" && (
+                  <p className="text-gray-600 dark:text-gray-400">Your supervisor request for {supervisor?.organization || "your organization"} is under review.</p>
+                )}
+                {supervisorStatus === "approved" && (
+                  <>
+                    <p className="text-gray-600 dark:text-gray-400 mb-4">You are approved to supervise assigned workflows for {supervisor?.organization || "your organization"}.</p>
+                    <Button variant="outline" className="bg-secondary text-[#eb6c6c] border-[#eb6c6c] hover:bg-[#eb6c6c] hover:text-white" onClick={() => router.push("/supervisor")}>Open Supervisor Panel</Button>
+                  </>
                 )}
               </CardContent>
             </Card>

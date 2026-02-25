@@ -23,8 +23,10 @@ interface WorkflowDetailsModalProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   loading?: boolean
+  initialStepIndex?: number
   renderWorkflowActions?: (workflow: Workflow) => ReactNode
   renderStepActions?: (workflow: Workflow, step: WorkflowStep) => ReactNode
+  hideDefaultStepDetails?: (workflow: Workflow, step: WorkflowStep) => boolean
   onDownloadPhoto?: (photoId: string) => void
   downloadingPhotoId?: string | null
 }
@@ -45,8 +47,10 @@ export function WorkflowDetailsModal({
   open,
   onOpenChange,
   loading = false,
+  initialStepIndex = 0,
   renderWorkflowActions,
   renderStepActions,
+  hideDefaultStepDetails,
   onDownloadPhoto,
   downloadingPhotoId = null,
 }: WorkflowDetailsModalProps) {
@@ -100,8 +104,16 @@ export function WorkflowDetailsModal({
   const currentStep = sortedSteps[safeStepIndex]
 
   useEffect(() => {
-    setStepIndex(0)
-  }, [workflow?.id, open])
+    const stepsCount = sortedSteps.length
+    if (stepsCount === 0) {
+      setStepIndex(0)
+      return
+    }
+    const normalizedInitialStepIndex = Number.isFinite(initialStepIndex)
+      ? Math.max(0, Math.min(Math.floor(initialStepIndex), stepsCount - 1))
+      : 0
+    setStepIndex(normalizedInitialStepIndex)
+  }, [workflow?.id, open, initialStepIndex, sortedSteps.length])
 
   const canGoPrev = safeStepIndex > 0
   const canGoNext = safeStepIndex < sortedSteps.length - 1
@@ -130,7 +142,12 @@ export function WorkflowDetailsModal({
             <>
               <div className="grid gap-2 text-xs text-muted-foreground sm:grid-cols-2 lg:grid-cols-2">
                 <span>Status: {formatStatusLabel(workflow.status)}</span>
-                <span>Start: {new Date(workflow.start_at).toLocaleString()}</span>
+                <span>Start: {new Date(workflow.start_at * 1000).toLocaleString()}</span>
+                {workflow.supervisor_required && (
+                  <span>
+                    Supervisor: {workflow.supervisor_title || workflow.supervisor_organization || "Assigned"}
+                  </span>
+                )}
               </div>
 
               <p className="text-sm text-muted-foreground whitespace-pre-wrap">
@@ -206,157 +223,170 @@ export function WorkflowDetailsModal({
                   {currentStep && (
                     <Card>
                       <CardContent className="pt-4 space-y-4">
-                        <div className="flex flex-wrap items-start justify-between gap-3">
-                          <div>
-                            <h3 className="font-semibold">
-                              Step {currentStep.step_order}: {currentStep.title}
-                            </h3>
-                            <p className="text-sm text-muted-foreground whitespace-pre-wrap">{currentStep.description}</p>
-                          </div>
-                          <div className="flex flex-wrap items-center gap-2">
-                            <Badge variant="outline">{formatStatusLabel(currentStep.status)}</Badge>
-                            <Badge variant="secondary">Bounty: {currentStep.bounty}</Badge>
-                            {currentStep.assigned_improver_id && (
-                              <Badge variant="outline">Assigned: {currentStep.assigned_improver_id}</Badge>
-                            )}
-                          </div>
-                        </div>
-
-                        <div className="space-y-3">
-                          <p className="text-sm font-medium">Work Items</p>
-                          {currentStep.work_items.length === 0 ? (
-                            <p className="text-xs text-muted-foreground">No work items on this step.</p>
-                          ) : (
-                            currentStep.work_items
-                              .slice()
-                              .sort((a, b) => a.item_order - b.item_order)
-                              .map((item) => (
-                                <Card key={item.id}>
-                                  <CardContent className="pt-3 space-y-2">
-                                    <div className="flex flex-wrap items-center gap-2">
-                                      <p className="text-sm font-medium">
-                                        Item {item.item_order}: {item.title}
-                                      </p>
-                                      {item.optional && <Badge variant="outline">Optional</Badge>}
-                                    </div>
-                                    <p className="text-xs text-muted-foreground whitespace-pre-wrap">{item.description}</p>
-                                    <p className="text-xs text-muted-foreground">
-                                      Requirements: {formatWorkItemRequirements(item)}
-                                    </p>
-
-                                    {item.requires_dropdown && (
-                                      <div className="space-y-1">
-                                        <p className="text-xs font-medium">Dropdown Options</p>
-                                        {item.dropdown_options.length === 0 ? (
-                                          <p className="text-xs text-muted-foreground">No dropdown options configured.</p>
-                                        ) : (
-                                          item.dropdown_options.map((option) => (
-                                            <div key={`${item.id}-${option.value}`} className="rounded border p-2 text-xs space-y-1">
-                                              <p>{option.label}</p>
-                                              {option.requires_written_response && (
-                                                <p className="text-muted-foreground">Requires written response when selected</p>
-                                              )}
-                                              {option.notify_emails && option.notify_emails.length > 0 && (
-                                                <p className="text-muted-foreground break-all">
-                                                  Notify: {option.notify_emails.join(", ")}
-                                                </p>
-                                              )}
-                                              {(!option.notify_emails || option.notify_emails.length === 0) &&
-                                                (option.notify_email_count ?? 0) > 0 && (
-                                                  <p className="text-muted-foreground">Notification email configured</p>
-                                              )}
-                                            </div>
-                                          ))
-                                        )}
-                                      </div>
-                                    )}
-                                  </CardContent>
-                                </Card>
-                              ))
-                          )}
-                        </div>
-
-                        {currentStep.submission && (
-                          <div className="space-y-3 rounded-md border bg-secondary/30 p-3">
-                            <div>
-                              <p className="text-sm font-medium">Submitted Step Details</p>
-                              <p className="text-xs text-muted-foreground">
-                                Submitted on {new Date(currentStep.submission.submitted_at).toLocaleString()}
-                              </p>
+                        {hideDefaultStepDetails?.(workflow, currentStep) !== true && (
+                          <>
+                            <div className="flex flex-wrap items-start justify-between gap-3">
+                              <div>
+                                <h3 className="font-semibold">
+                                  Step {currentStep.step_order}: {currentStep.title}
+                                </h3>
+                                <p className="text-sm text-muted-foreground whitespace-pre-wrap">{currentStep.description}</p>
+                              </div>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <Badge variant="outline">{formatStatusLabel(currentStep.status)}</Badge>
+                                <Badge variant="secondary">Bounty: {currentStep.bounty}</Badge>
+                                {currentStep.assigned_improver_id && (
+                                  <Badge variant="outline">Assigned: {currentStep.assigned_improver_name || "Assigned"}</Badge>
+                                )}
+                              </div>
                             </div>
 
-                            {currentStep.submission.item_responses.length === 0 ? (
-                              <p className="text-xs text-muted-foreground">No item responses were included in this submission.</p>
-                            ) : (
-                              <div className="space-y-2">
-                                {currentStep.submission.item_responses.map((response, index) => {
-                                  const item = currentStep.work_items.find((workItem) => workItem.id === response.item_id)
-                                  const dropdownLabel =
-                                    response.dropdown_value && item
-                                      ? item.dropdown_options.find((option) => option.value === response.dropdown_value)?.label ||
-                                        response.dropdown_value
-                                      : response.dropdown_value
+                            <div className="space-y-3">
+                              <p className="text-sm font-medium">Work Items</p>
+                              {currentStep.work_items.length === 0 ? (
+                                <p className="text-xs text-muted-foreground">No work items on this step.</p>
+                              ) : (
+                                currentStep.work_items
+                                  .slice()
+                                  .sort((a, b) => a.item_order - b.item_order)
+                                  .map((item) => (
+                                    <Card key={item.id}>
+                                      <CardContent className="pt-3 space-y-2">
+                                        <div className="flex flex-wrap items-center gap-2">
+                                          <p className="text-sm font-medium">
+                                            Item {item.item_order}: {item.title}
+                                          </p>
+                                          {item.optional && <Badge variant="outline">Optional</Badge>}
+                                        </div>
+                                        <p className="text-xs text-muted-foreground whitespace-pre-wrap">{item.description}</p>
+                                        <p className="text-xs text-muted-foreground">
+                                          Requirements: {formatWorkItemRequirements(item)}
+                                        </p>
 
-                                  return (
-                                    <div key={`${response.item_id}-${index}`} className="rounded border bg-background p-2 text-xs space-y-1">
-                                      <p className="font-medium">{item?.title || response.item_id}</p>
-                                      {response.dropdown_value && <p>Dropdown: {dropdownLabel}</p>}
-                                      {response.written_response && <p>Written: {response.written_response}</p>}
-                                      {response.photo_ids && response.photo_ids.length > 0 && (
-                                        <div className="space-y-1">
-                                          <p>Photos:</p>
-                                          {response.photo_ids.map((photoId, photoIndex) => {
-                                            const photoMeta = response.photos?.find((photo) => photo.id === photoId)
-                                            return (
-                                              <div key={`${photoId}-${photoIndex}`} className="flex items-center justify-between gap-2 rounded border p-2">
-                                                <span className="break-all">
-                                                  {photoMeta?.file_name || `Photo ${photoIndex + 1}`}
-                                                </span>
-                                                {onDownloadPhoto ? (
-                                                  <Button
-                                                    className="w-full sm:w-auto"
-                                                    size="sm"
-                                                    variant="outline"
-                                                    onClick={() => onDownloadPhoto(photoId)}
-                                                    disabled={downloadingPhotoId === photoId}
-                                                  >
-                                                    {downloadingPhotoId === photoId ? "Downloading..." : "Download"}
-                                                  </Button>
-                                                ) : (
-                                                  <Badge variant="outline">Photo ID</Badge>
-                                                )}
-                                              </div>
-                                            )
-                                          })}
+                                        {item.requires_dropdown && (
+                                          <div className="space-y-1">
+                                            <p className="text-xs font-medium">Dropdown Options</p>
+                                            {item.dropdown_options.length === 0 ? (
+                                              <p className="text-xs text-muted-foreground">No dropdown options configured.</p>
+                                            ) : (
+                                              item.dropdown_options.map((option) => (
+                                                <div key={`${item.id}-${option.value}`} className="rounded border p-2 text-xs space-y-1">
+                                                  <p>{option.label}</p>
+                                                  {option.requires_written_response && (
+                                                    <p className="text-muted-foreground">Requires written response when selected</p>
+                                                  )}
+                                                  {option.notify_emails && option.notify_emails.length > 0 && (
+                                                    <p className="text-muted-foreground break-all">
+                                                      Notify: {option.notify_emails.join(", ")}
+                                                    </p>
+                                                  )}
+                                                  {(!option.notify_emails || option.notify_emails.length === 0) &&
+                                                    (option.notify_email_count ?? 0) > 0 && (
+                                                      <p className="text-muted-foreground">Notification email configured</p>
+                                                  )}
+                                                </div>
+                                              ))
+                                            )}
+                                          </div>
+                                        )}
+                                      </CardContent>
+                                    </Card>
+                                  ))
+                              )}
+                            </div>
+
+                            {currentStep.submission && (
+                              <div className="space-y-3 rounded-md border bg-secondary/30 p-3">
+                                <div>
+                                  <p className="text-sm font-medium">Submitted Step Details</p>
+                                  <p className="text-xs text-muted-foreground">
+                                    Submitted on {new Date(currentStep.submission.submitted_at * 1000).toLocaleString()}
+                                  </p>
+                                </div>
+
+                                {currentStep.submission.step_not_possible ? (
+                                  <div className="rounded border bg-background p-2 text-xs space-y-1">
+                                    <p className="font-medium">Step marked as not possible</p>
+                                    {currentStep.submission.step_not_possible_details ? (
+                                      <p className="whitespace-pre-wrap">{currentStep.submission.step_not_possible_details}</p>
+                                    ) : (
+                                      <p className="text-muted-foreground">No details were recorded.</p>
+                                    )}
+                                  </div>
+                                ) : currentStep.submission.item_responses.length === 0 ? (
+                                  <p className="text-xs text-muted-foreground">No item responses were included in this submission.</p>
+                                ) : (
+                                  <div className="space-y-2">
+                                    {currentStep.submission.item_responses.map((response, index) => {
+                                      const item = currentStep.work_items.find((workItem) => workItem.id === response.item_id)
+                                      const dropdownLabel =
+                                        response.dropdown_value && item
+                                          ? item.dropdown_options.find((option) => option.value === response.dropdown_value)?.label ||
+                                            response.dropdown_value
+                                          : response.dropdown_value
+
+                                      return (
+                                        <div key={`${response.item_id}-${index}`} className="rounded border bg-background p-2 text-xs space-y-1">
+                                          <p className="font-medium">{item?.title || response.item_id}</p>
+                                          {response.dropdown_value && <p>Dropdown: {dropdownLabel}</p>}
+                                          {response.written_response && <p>Written: {response.written_response}</p>}
+                                          {response.photo_ids && response.photo_ids.length > 0 && (
+                                            <div className="space-y-1">
+                                              <p>Photos:</p>
+                                              {response.photo_ids.map((photoId, photoIndex) => {
+                                                const photoMeta = response.photos?.find((photo) => photo.id === photoId)
+                                                return (
+                                                  <div key={`${photoId}-${photoIndex}`} className="flex items-center justify-between gap-2 rounded border p-2">
+                                                    <span className="break-all">
+                                                      {photoMeta?.file_name || `Photo ${photoIndex + 1}`}
+                                                    </span>
+                                                    {onDownloadPhoto ? (
+                                                      <Button
+                                                        className="w-full sm:w-auto"
+                                                        size="sm"
+                                                        variant="outline"
+                                                        onClick={() => onDownloadPhoto(photoId)}
+                                                        disabled={downloadingPhotoId === photoId}
+                                                      >
+                                                        {downloadingPhotoId === photoId ? "Downloading..." : "Download"}
+                                                      </Button>
+                                                    ) : (
+                                                      <Badge variant="outline">Photo ID</Badge>
+                                                    )}
+                                                  </div>
+                                                )
+                                              })}
+                                            </div>
+                                          )}
+                                          {response.photo_urls && response.photo_urls.length > 0 && (
+                                            <div className="space-y-1">
+                                              <p>Legacy Photos:</p>
+                                              {response.photo_urls.map((url) => (
+                                                <a
+                                                  key={url}
+                                                  href={url}
+                                                  target="_blank"
+                                                  rel="noreferrer"
+                                                  className="block text-blue-600 underline break-all"
+                                                >
+                                                  {url}
+                                                </a>
+                                              ))}
+                                            </div>
+                                          )}
                                         </div>
-                                      )}
-                                      {response.photo_urls && response.photo_urls.length > 0 && (
-                                        <div className="space-y-1">
-                                          <p>Legacy Photos:</p>
-                                          {response.photo_urls.map((url) => (
-                                            <a
-                                              key={url}
-                                              href={url}
-                                              target="_blank"
-                                              rel="noreferrer"
-                                              className="block text-blue-600 underline break-all"
-                                            >
-                                              {url}
-                                            </a>
-                                          ))}
-                                        </div>
-                                      )}
-                                    </div>
-                                  )
-                                })}
+                                      )
+                                    })}
+                                  </div>
+                                )}
                               </div>
                             )}
-                          </div>
+                          </>
                         )}
 
                         {renderStepActions && (
                           <>
-                            <Separator />
+                            {hideDefaultStepDetails?.(workflow, currentStep) !== true && <Separator />}
                             {renderStepActions(workflow, currentStep)}
                           </>
                         )}

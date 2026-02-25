@@ -4,6 +4,7 @@ import { AuthedLocation, Location } from "./location"
 import { Proposer } from "./proposer"
 import { Improver } from "./improver"
 import { IssuerRecord } from "./issuer"
+import { Supervisor } from "./supervisor"
 
 export interface UserResponse {
   id: string
@@ -14,6 +15,7 @@ export interface UserResponse {
   is_proposer: boolean
   is_voter: boolean
   is_issuer: boolean
+  is_supervisor: boolean
   is_affiliate: boolean
   contact_email?: string
   contact_phone?: string
@@ -52,6 +54,7 @@ export interface GetUserResponse {
   proposer?: Proposer | null
   improver?: Improver | null
   issuer?: IssuerRecord | null
+  supervisor?: Supervisor | null
 }
 
 export type VerifiedEmailStatus = "verified" | "pending" | "expired"

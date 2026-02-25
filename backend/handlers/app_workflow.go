@@ -7,6 +7,8 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/jpeg"
 	"io"
 	"math/big"
 	"mime"
@@ -22,11 +24,20 @@ import (
 	"github.com/SFLuv/app/backend/structs"
 	"github.com/SFLuv/app/backend/utils"
 	"github.com/jackc/pgx/v5"
+
+	_ "image/gif"
+	_ "image/png"
 )
 
 func userCanViewWorkflowNotifyEmails(workflow *structs.Workflow, userID string) bool {
 	if workflow == nil || userID == "" {
 		return false
+	}
+	if workflow.ProposerId == userID {
+		return true
+	}
+	if workflow.SupervisorUserId != nil && *workflow.SupervisorUserId == userID {
+		return true
 	}
 	return workflow.ManagerImproverId != nil && *workflow.ManagerImproverId == userID
 }
@@ -57,6 +68,18 @@ func redactWorkflowItemNotifyEmailsForUserInList(workflows []*structs.Workflow, 
 	for _, workflow := range workflows {
 		redactWorkflowItemNotifyEmailsForUser(workflow, userID)
 	}
+}
+
+func (a *AppService) refreshWorkflowStartAvailabilityAndNotify(ctx context.Context) error {
+	refreshResult, err := a.db.RefreshWorkflowStartAvailability(ctx)
+	if err != nil {
+		return err
+	}
+	for _, notification := range refreshResult.AvailabilityNotifications {
+		a.sendWorkflowStepAvailableEmail(notification)
+	}
+	a.sendWorkflowSeriesFundingShortfallEmails(ctx, refreshResult.SeriesFundingChecks)
+	return nil
 }
 
 func (a *AppService) RequestProposerStatus(w http.ResponseWriter, r *http.Request) {
@@ -123,7 +146,13 @@ func (a *AppService) RequestProposerStatus(w http.ResponseWriter, r *http.Reques
 }
 
 func (a *AppService) GetProposers(w http.ResponseWriter, r *http.Request) {
-	proposers, err := a.db.GetProposers(r.Context())
+	search := r.URL.Query().Get("search")
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	count, _ := strconv.Atoi(r.URL.Query().Get("count"))
+	if count <= 0 {
+		count = 20
+	}
+	proposers, err := a.db.GetProposers(r.Context(), search, page, count)
 	if err != nil {
 		a.logger.Logf("error getting proposers: %s", err.Error())
 		w.WriteHeader(http.StatusInternalServerError)
@@ -229,7 +258,13 @@ func (a *AppService) RequestImproverStatus(w http.ResponseWriter, r *http.Reques
 }
 
 func (a *AppService) GetImprovers(w http.ResponseWriter, r *http.Request) {
-	improvers, err := a.db.GetImprovers(r.Context())
+	search := r.URL.Query().Get("search")
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	count, _ := strconv.Atoi(r.URL.Query().Get("count"))
+	if count <= 0 {
+		count = 20
+	}
+	improvers, err := a.db.GetImprovers(r.Context(), search, page, count)
 	if err != nil {
 		a.logger.Logf("error getting improvers: %s", err.Error())
 		w.WriteHeader(http.StatusInternalServerError)
@@ -265,6 +300,130 @@ func (a *AppService) UpdateImprover(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(improver)
+}
+
+func (a *AppService) RequestSupervisorStatus(w http.ResponseWriter, r *http.Request) {
+	userDid := utils.GetDid(r)
+	if userDid == nil {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	defer r.Body.Close()
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		a.logger.Logf("error reading supervisor request body for user %s: %s", *userDid, err.Error())
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	var req structs.SupervisorRequest
+	if err := json.Unmarshal(body, &req); err != nil || strings.TrimSpace(req.Organization) == "" || strings.TrimSpace(req.Email) == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	supervisor, err := a.db.UpsertSupervisorRequest(r.Context(), *userDid, req.Organization, req.Email)
+	if err != nil {
+		if err.Error() == "supervisor already approved" {
+			w.WriteHeader(http.StatusConflict)
+			return
+		}
+		if strings.Contains(err.Error(), "required") || strings.Contains(err.Error(), "invalid") || strings.Contains(err.Error(), "verified") {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(err.Error()))
+			return
+		}
+		a.logger.Logf("error upserting supervisor request for user %s: %s", *userDid, err.Error())
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	a.sendRoleRequestEmail(
+		"SUPERVISOR_ADMIN_EMAIL",
+		"New Supervisor Request",
+		"A user has requested supervisor status.",
+		fmt.Sprintf(`
+<table role="presentation" width="100%%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
+  <tr>
+    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280; width:140px;">User</td>
+    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827; word-break:break-all;">%s</td>
+  </tr>
+  <tr>
+    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280;">Organization</td>
+    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827;">%s</td>
+  </tr>
+  <tr>
+    <td style="padding:12px 0; font-size:13px; color:#6b7280;">Notification Email</td>
+    <td style="padding:12px 0; font-size:13px; color:#111827;">%s</td>
+  </tr>
+</table>`, supervisor.UserId, supervisor.Organization, supervisor.Email),
+	)
+
+	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(supervisor)
+}
+
+func (a *AppService) GetSupervisors(w http.ResponseWriter, r *http.Request) {
+	search := r.URL.Query().Get("search")
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	count, _ := strconv.Atoi(r.URL.Query().Get("count"))
+	if count <= 0 {
+		count = 20
+	}
+	supervisors, err := a.db.GetSupervisors(r.Context(), search, page, count)
+	if err != nil {
+		a.logger.Logf("error getting supervisors: %s", err.Error())
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(supervisors)
+}
+
+func (a *AppService) UpdateSupervisor(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		a.logger.Logf("error reading update supervisor body: %s", err.Error())
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	var req structs.SupervisorUpdateRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	supervisor, err := a.db.UpdateSupervisor(r.Context(), &req)
+	if err != nil {
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "required") || strings.Contains(errMsg, "invalid") {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(errMsg))
+			return
+		}
+		a.logger.Logf("error updating supervisor %s: %s", req.UserId, err.Error())
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(supervisor)
+}
+
+func (a *AppService) GetApprovedSupervisors(w http.ResponseWriter, r *http.Request) {
+	supervisors, err := a.db.GetApprovedSupervisors(r.Context())
+	if err != nil {
+		a.logger.Logf("error getting approved supervisors: %s", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(supervisors)
 }
 
 func (a *AppService) GetProposerWorkflowTemplates(w http.ResponseWriter, r *http.Request) {
@@ -306,7 +465,7 @@ func (a *AppService) CreateProposerWorkflowTemplate(w http.ResponseWriter, r *ht
 		return
 	}
 
-	if strings.TrimSpace(req.TemplateTitle) == "" || strings.TrimSpace(req.TemplateDescription) == "" {
+	if strings.TrimSpace(req.TemplateTitle) == "" {
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
@@ -363,7 +522,7 @@ func (a *AppService) CreateDefaultWorkflowTemplate(w http.ResponseWriter, r *htt
 		return
 	}
 
-	if strings.TrimSpace(req.TemplateTitle) == "" || strings.TrimSpace(req.TemplateDescription) == "" {
+	if strings.TrimSpace(req.TemplateTitle) == "" {
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
@@ -420,7 +579,7 @@ func (a *AppService) CreateWorkflow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if strings.TrimSpace(req.Title) == "" || strings.TrimSpace(req.Description) == "" {
+	if strings.TrimSpace(req.Title) == "" {
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
@@ -456,6 +615,9 @@ func (a *AppService) CreateWorkflow(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
+	if workflow.Status == "approved" {
+		go a.sendWorkflowProposalOutcomeEmailByWorkflow(context.Background(), workflow.Id)
+	}
 
 	w.WriteHeader(http.StatusCreated)
 	_ = json.NewEncoder(w).Encode(workflow)
@@ -490,6 +652,12 @@ func (a *AppService) GetProposerWorkflow(w http.ResponseWriter, r *http.Request)
 	workflowId := strings.TrimSpace(r.PathValue("workflow_id"))
 	if workflowId == "" {
 		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	if err := a.refreshWorkflowStartAvailabilityAndNotify(r.Context()); err != nil {
+		a.logger.Logf("error refreshing workflow availability before proposer workflow detail %s for user %s: %s", workflowId, *userDid, err)
+		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 
@@ -551,6 +719,12 @@ func (a *AppService) GetWorkflow(w http.ResponseWriter, r *http.Request) {
 	workflowId := strings.TrimSpace(r.PathValue("workflow_id"))
 	if workflowId == "" {
 		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	if err := a.refreshWorkflowStartAvailabilityAndNotify(r.Context()); err != nil {
+		a.logger.Logf("error refreshing workflow availability before workflow detail %s for user %s: %s", workflowId, *userDid, err)
+		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 
@@ -706,6 +880,79 @@ func (a *AppService) GetManagedWorkflows(w http.ResponseWriter, r *http.Request)
 	_ = json.NewEncoder(w).Encode(workflows)
 }
 
+func parseSupervisorDateQueryValue(value string) (*time.Time, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil, nil
+	}
+	if parsed, err := time.Parse(time.RFC3339, value); err == nil {
+		utc := parsed.UTC()
+		return &utc, nil
+	}
+	if parsed, err := time.ParseInLocation("2006-01-02", value, time.UTC); err == nil {
+		utc := parsed.UTC()
+		return &utc, nil
+	}
+	return nil, fmt.Errorf("invalid date value")
+}
+
+func (a *AppService) GetSupervisorWorkflows(w http.ResponseWriter, r *http.Request) {
+	userDid := utils.GetDid(r)
+	if userDid == nil {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	search := r.URL.Query().Get("search")
+	statusFilter := r.URL.Query().Get("status")
+	sortBy := r.URL.Query().Get("sort_by")
+	sortDirection := r.URL.Query().Get("sort_direction")
+	dateField := r.URL.Query().Get("date_field")
+	page, _ := strconv.Atoi(strings.TrimSpace(r.URL.Query().Get("page")))
+	count, _ := strconv.Atoi(strings.TrimSpace(r.URL.Query().Get("count")))
+
+	dateFrom, err := parseSupervisorDateQueryValue(r.URL.Query().Get("date_from"))
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte("invalid date_from"))
+		return
+	}
+	dateTo, err := parseSupervisorDateQueryValue(r.URL.Query().Get("date_to"))
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte("invalid date_to"))
+		return
+	}
+
+	response, err := a.db.GetSupervisorWorkflows(
+		r.Context(),
+		*userDid,
+		search,
+		statusFilter,
+		sortBy,
+		sortDirection,
+		dateField,
+		dateFrom,
+		dateTo,
+		page,
+		count,
+	)
+	if err != nil {
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "required") || strings.Contains(errMsg, "invalid") {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(errMsg))
+			return
+		}
+		a.logger.Logf("error loading supervisor workflows for %s: %s", *userDid, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(response)
+}
+
 func (a *AppService) GetImproverUnpaidWorkflows(w http.ResponseWriter, r *http.Request) {
 	userDid := utils.GetDid(r)
 	if userDid == nil {
@@ -849,7 +1096,10 @@ func (a *AppService) ClaimWorkflowManager(w http.ResponseWriter, r *http.Request
 			w.Write([]byte(errMsg))
 			return
 		}
-		if strings.Contains(errMsg, "not enabled") || strings.Contains(errMsg, "not available") {
+		if strings.Contains(errMsg, "not enabled") ||
+			strings.Contains(errMsg, "not available") ||
+			strings.Contains(errMsg, "no credential requirements") ||
+			strings.Contains(errMsg, "unknown credential type") {
 			w.WriteHeader(http.StatusBadRequest)
 			w.Write([]byte(errMsg))
 			return
@@ -903,7 +1153,20 @@ func (a *AppService) DownloadManagedWorkflowCSV(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	csvData, err := buildManagedWorkflowCSV(workflow)
+	photoFileNamesByID := map[string]string{}
+	photoFileNameCounts := map[string]int{}
+	photoExports, err := a.db.GetWorkflowSubmissionPhotoExports(r.Context(), workflowID)
+	if err != nil {
+		a.logger.Logf("error loading managed workflow %s photos for csv export: %s", workflowID, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	for _, photoExport := range photoExports {
+		archiveFileName := buildManagedWorkflowPhotoArchiveName(workflowID, photoExport, photoFileNameCounts)
+		photoFileNamesByID[photoExport.Photo.Id] = archiveFileName
+	}
+
+	csvData, err := buildManagedWorkflowCSV(workflow, photoFileNamesByID)
 	if err != nil {
 		a.logger.Logf("error building csv export for managed workflow %s: %s", workflowID, err)
 		w.WriteHeader(http.StatusInternalServerError)
@@ -946,6 +1209,22 @@ func workflowPhotoFileExtension(contentType string, fileName string) string {
 	return ".bin"
 }
 
+func buildManagedWorkflowPhotoArchiveName(
+	workflowID string,
+	photoExport *structs.WorkflowSubmissionPhotoExport,
+	fileNameCounts map[string]int,
+) string {
+	ext := workflowPhotoFileExtension(photoExport.Photo.ContentType, photoExport.Photo.FileName)
+	fieldSlug := slugifyWorkflowPhotoField(photoExport.ItemTitle)
+	baseName := fmt.Sprintf("%s_step%02d_%s_%s", workflowID, photoExport.StepOrder, fieldSlug, photoExport.Photo.Id)
+	archiveFileName := baseName + ext
+	if seenCount := fileNameCounts[archiveFileName]; seenCount > 0 {
+		archiveFileName = fmt.Sprintf("%s_%d%s", baseName, seenCount+1, ext)
+	}
+	fileNameCounts[archiveFileName]++
+	return archiveFileName
+}
+
 func (a *AppService) DownloadManagedWorkflowPhotosZip(w http.ResponseWriter, r *http.Request) {
 	userDid := utils.GetDid(r)
 	if userDid == nil {
@@ -981,14 +1260,7 @@ func (a *AppService) DownloadManagedWorkflowPhotosZip(w http.ResponseWriter, r *
 	zipWriter := zip.NewWriter(&zipBuffer)
 	fileNameCounts := map[string]int{}
 	for _, photoExport := range photos {
-		ext := workflowPhotoFileExtension(photoExport.Photo.ContentType, photoExport.Photo.FileName)
-		fieldSlug := slugifyWorkflowPhotoField(photoExport.ItemTitle)
-		baseName := fmt.Sprintf("%s_step%02d_%s_%s", workflowID, photoExport.StepOrder, fieldSlug, photoExport.Photo.Id)
-		archiveFileName := baseName + ext
-		if seenCount := fileNameCounts[archiveFileName]; seenCount > 0 {
-			archiveFileName = fmt.Sprintf("%s_%d%s", baseName, seenCount+1, ext)
-		}
-		fileNameCounts[archiveFileName]++
+		archiveFileName := buildManagedWorkflowPhotoArchiveName(workflowID, photoExport, fileNameCounts)
 
 		entryWriter, entryErr := zipWriter.Create(archiveFileName)
 		if entryErr != nil {
@@ -1012,7 +1284,507 @@ func (a *AppService) DownloadManagedWorkflowPhotosZip(w http.ResponseWriter, r *
 	_, _ = w.Write(zipBuffer.Bytes())
 }
 
-func buildManagedWorkflowCSV(workflow *structs.Workflow) ([]byte, error) {
+var supervisorExportTokenSanitizer = regexp.MustCompile(`[^A-Z0-9]+`)
+var supervisorCSVHeaderSanitizer = regexp.MustCompile(`[^a-z0-9]+`)
+
+func sanitizeSupervisorExportToken(value string) string {
+	value = strings.ToUpper(strings.TrimSpace(value))
+	value = supervisorExportTokenSanitizer.ReplaceAllString(value, "_")
+	value = strings.Trim(value, "_")
+	if value == "" {
+		return "UNTITLED"
+	}
+	return value
+}
+
+func sanitizeSupervisorCSVHeaderToken(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	value = supervisorCSVHeaderSanitizer.ReplaceAllString(value, "_")
+	value = strings.Trim(value, "_")
+	if value == "" {
+		return "column"
+	}
+	return value
+}
+
+func buildSupervisorWorkflowPhotoArchiveName(
+	photoExport *structs.WorkflowSubmissionPhotoExport,
+	defaultWorkflowStartAt int64,
+	fileNameCounts map[string]int,
+) string {
+	workflowToken := sanitizeSupervisorExportToken(photoExport.WorkflowTitle)
+	itemToken := sanitizeSupervisorExportToken(photoExport.ItemTitle)
+	timestampUnix := defaultWorkflowStartAt
+	if photoExport.WorkflowStartAt > 0 {
+		timestampUnix = photoExport.WorkflowStartAt
+	}
+	baseName := fmt.Sprintf("%s_%d_%d_%s", workflowToken, timestampUnix, photoExport.StepOrder, itemToken)
+	archiveName := baseName + ".jpeg"
+	if seenCount := fileNameCounts[archiveName]; seenCount > 0 {
+		archiveName = fmt.Sprintf("%s_%d.jpeg", baseName, seenCount+1)
+	}
+	fileNameCounts[archiveName]++
+	return archiveName
+}
+
+func uniqueSupervisorCSVHeader(base string, seen map[string]int) string {
+	if seen == nil {
+		return base
+	}
+	count := seen[base]
+	seen[base] = count + 1
+	if count == 0 {
+		return base
+	}
+	return base + strings.Repeat("_duplicate", count)
+}
+
+func (a *AppService) collectSupervisorWorkflowIDsForExport(
+	ctx context.Context,
+	supervisorID string,
+	req *structs.SupervisorWorkflowExportRequest,
+) ([]string, error) {
+	if req == nil {
+		return nil, fmt.Errorf("request is required")
+	}
+
+	seen := map[string]struct{}{}
+	ids := []string{}
+	for _, workflowID := range req.WorkflowIds {
+		workflowID = strings.TrimSpace(workflowID)
+		if workflowID == "" {
+			continue
+		}
+		if _, exists := seen[workflowID]; exists {
+			continue
+		}
+		seen[workflowID] = struct{}{}
+		ids = append(ids, workflowID)
+	}
+	if len(ids) > 0 {
+		return ids, nil
+	}
+
+	dateFrom, err := parseSupervisorDateQueryValue(req.DateFrom)
+	if err != nil {
+		return nil, fmt.Errorf("invalid date_from")
+	}
+	dateTo, err := parseSupervisorDateQueryValue(req.DateTo)
+	if err != nil {
+		return nil, fmt.Errorf("invalid date_to")
+	}
+
+	page := 0
+	pageSize := 200
+	total := -1
+	for total < 0 || len(ids) < total {
+		result, err := a.db.GetSupervisorWorkflows(
+			ctx,
+			supervisorID,
+			"",
+			"",
+			"created_at",
+			"desc",
+			req.DateField,
+			dateFrom,
+			dateTo,
+			page,
+			pageSize,
+		)
+		if err != nil {
+			return nil, err
+		}
+		if total < 0 {
+			total = result.Total
+		}
+		if len(result.Items) == 0 {
+			break
+		}
+		for _, item := range result.Items {
+			if _, exists := seen[item.Id]; exists {
+				continue
+			}
+			seen[item.Id] = struct{}{}
+			ids = append(ids, item.Id)
+		}
+		page++
+	}
+	return ids, nil
+}
+
+type supervisorExportColumn struct {
+	Key    string
+	Header string
+}
+
+func deriveSupervisorCSVStepStatus(step structs.WorkflowStep) string {
+	if step.Submission != nil {
+		if step.Submission.StepNotPossible {
+			return "failed"
+		}
+		return "complete"
+	}
+
+	switch strings.ToLower(strings.TrimSpace(step.Status)) {
+	case "in_progress":
+		return "active"
+	case "completed", "paid_out":
+		return "complete"
+	default:
+		// locked + available (and any unknown status) are treated as not yet submitted.
+		return "pending"
+	}
+}
+
+func buildSupervisorWorkflowCSV(
+	workflows []*structs.Workflow,
+	improverEmails map[string]string,
+	photoFileNamesByID map[string]string,
+) ([]byte, error) {
+	if len(workflows) == 0 {
+		return nil, fmt.Errorf("no workflows provided")
+	}
+
+	dynamicColumns := map[string]supervisorExportColumn{}
+	usedHeaders := map[string]int{}
+	for _, workflow := range workflows {
+		for _, step := range workflow.Steps {
+			for _, item := range step.WorkItems {
+				title := strings.TrimSpace(item.Title)
+				if title == "" {
+					title = "Untitled Item"
+				}
+				titleKey := strings.ToLower(title)
+				if item.RequiresDropdown {
+					key := titleKey + "|dropdown"
+					if _, exists := dynamicColumns[key]; !exists {
+						baseHeader := sanitizeSupervisorCSVHeaderToken(title + "_dropdown")
+						dynamicColumns[key] = supervisorExportColumn{
+							Key:    key,
+							Header: uniqueSupervisorCSVHeader(baseHeader, usedHeaders),
+						}
+					}
+				}
+				if item.RequiresWrittenResponse {
+					key := titleKey + "|written"
+					if _, exists := dynamicColumns[key]; !exists {
+						baseHeader := sanitizeSupervisorCSVHeaderToken(title + "_written")
+						dynamicColumns[key] = supervisorExportColumn{
+							Key:    key,
+							Header: uniqueSupervisorCSVHeader(baseHeader, usedHeaders),
+						}
+					}
+				}
+				if item.RequiresPhoto {
+					key := titleKey + "|photos"
+					if _, exists := dynamicColumns[key]; !exists {
+						baseHeader := sanitizeSupervisorCSVHeaderToken(title + "_photos")
+						dynamicColumns[key] = supervisorExportColumn{
+							Key:    key,
+							Header: uniqueSupervisorCSVHeader(baseHeader, usedHeaders),
+						}
+					}
+				}
+				if item.RequiresDropdown {
+					for _, option := range item.DropdownOptions {
+						if option.RequiresWrittenResponse {
+							key := titleKey + "|written"
+							if _, exists := dynamicColumns[key]; !exists {
+								baseHeader := sanitizeSupervisorCSVHeaderToken(title + "_written")
+								dynamicColumns[key] = supervisorExportColumn{
+									Key:    key,
+									Header: uniqueSupervisorCSVHeader(baseHeader, usedHeaders),
+								}
+							}
+							break
+						}
+					}
+				}
+			}
+		}
+	}
+
+	dynamicOrder := make([]supervisorExportColumn, 0, len(dynamicColumns))
+	for _, column := range dynamicColumns {
+		dynamicOrder = append(dynamicOrder, column)
+	}
+	sort.Slice(dynamicOrder, func(i, j int) bool {
+		return dynamicOrder[i].Header < dynamicOrder[j].Header
+	})
+
+	headers := []string{
+		"id",
+		"title",
+		"start_timestamp",
+		"completed_timestamp",
+		"step_number",
+		"status",
+		"improver_email",
+	}
+	for _, column := range dynamicOrder {
+		headers = append(headers, column.Header)
+	}
+
+	var csvBuffer bytes.Buffer
+	writer := csv.NewWriter(&csvBuffer)
+	if err := writer.Write(headers); err != nil {
+		return nil, err
+	}
+
+	for _, workflow := range workflows {
+		steps := append([]structs.WorkflowStep{}, workflow.Steps...)
+		sort.SliceStable(steps, func(i, j int) bool {
+			return steps[i].StepOrder < steps[j].StepOrder
+		})
+
+		for _, step := range steps {
+			responseByItem := map[string]structs.WorkflowStepItemResponse{}
+			if step.Submission != nil {
+				for _, response := range step.Submission.ItemResponses {
+					responseByItem[response.ItemId] = response
+				}
+			}
+			statusValue := deriveSupervisorCSVStepStatus(step)
+
+			improverID := ""
+			if step.AssignedImproverId != nil {
+				improverID = strings.TrimSpace(*step.AssignedImproverId)
+			}
+			if improverID == "" && step.Submission != nil {
+				improverID = strings.TrimSpace(step.Submission.ImproverId)
+			}
+			improverEmail := strings.TrimSpace(improverEmails[improverID])
+			if improverEmail == "" {
+				improverEmail = improverID
+			}
+
+			completedAt := ""
+			if step.CompletedAt != nil {
+				completedAt = strconv.FormatInt(*step.CompletedAt, 10)
+			}
+			if completedAt == "" && step.Submission != nil {
+				completedAt = strconv.FormatInt(step.Submission.SubmittedAt, 10)
+			}
+
+			row := []string{
+				workflow.Id,
+				workflow.Title,
+				strconv.FormatInt(workflow.StartAt, 10),
+				completedAt,
+				strconv.Itoa(step.StepOrder),
+				statusValue,
+				improverEmail,
+			}
+
+			valuesByKey := map[string]string{}
+			for _, item := range step.WorkItems {
+				title := strings.TrimSpace(item.Title)
+				if title == "" {
+					title = "Untitled Item"
+				}
+				titleKey := strings.ToLower(title)
+
+				response, hasResponse := responseByItem[item.Id]
+				if !hasResponse {
+					continue
+				}
+
+				if item.RequiresDropdown && response.DropdownValue != nil {
+					valuesByKey[titleKey+"|dropdown"] = strings.TrimSpace(*response.DropdownValue)
+				}
+				if (item.RequiresWrittenResponse || item.RequiresDropdown) && response.WrittenResponse != nil {
+					valuesByKey[titleKey+"|written"] = strings.TrimSpace(*response.WrittenResponse)
+				}
+				if item.RequiresPhoto {
+					photoIDs := append([]string{}, response.PhotoIDs...)
+					if len(photoIDs) == 0 && len(response.PhotoURLs) > 0 {
+						photoIDs = append(photoIDs, response.PhotoURLs...)
+					}
+					photoNames := make([]string, 0, len(photoIDs))
+					for _, photoID := range photoIDs {
+						photoID = strings.TrimSpace(photoID)
+						if photoID == "" {
+							continue
+						}
+						if name := strings.TrimSpace(photoFileNamesByID[photoID]); name != "" {
+							photoNames = append(photoNames, name)
+							continue
+						}
+						photoNames = append(photoNames, photoID)
+					}
+					valuesByKey[titleKey+"|photos"] = strings.Join(photoNames, ";")
+				}
+			}
+
+			for _, column := range dynamicOrder {
+				row = append(row, valuesByKey[column.Key])
+			}
+
+			if err := writer.Write(row); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	writer.Flush()
+	if err := writer.Error(); err != nil {
+		return nil, err
+	}
+	return csvBuffer.Bytes(), nil
+}
+
+func (a *AppService) ExportSupervisorWorkflowData(w http.ResponseWriter, r *http.Request) {
+	userDid := utils.GetDid(r)
+	if userDid == nil {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	defer r.Body.Close()
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		a.logger.Logf("error reading supervisor workflow export body for %s: %s", *userDid, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	req := structs.SupervisorWorkflowExportRequest{}
+	if len(strings.TrimSpace(string(body))) > 0 {
+		if err := json.Unmarshal(body, &req); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+	}
+
+	workflowIDs, err := a.collectSupervisorWorkflowIDsForExport(r.Context(), *userDid, &req)
+	if err != nil {
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "required") || strings.Contains(errMsg, "invalid") {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(errMsg))
+			return
+		}
+		a.logger.Logf("error selecting supervisor workflows for export by %s: %s", *userDid, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	if len(workflowIDs) == 0 {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+
+	workflows := make([]*structs.Workflow, 0, len(workflowIDs))
+	improverIDs := map[string]struct{}{}
+	for _, workflowID := range workflowIDs {
+		workflow, err := a.db.GetWorkflowByID(r.Context(), workflowID)
+		if err != nil {
+			if err == pgx.ErrNoRows {
+				continue
+			}
+			a.logger.Logf("error loading workflow %s for supervisor export by %s: %s", workflowID, *userDid, err)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		if workflow.SupervisorUserId == nil || strings.TrimSpace(*workflow.SupervisorUserId) != *userDid {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		workflows = append(workflows, workflow)
+		for _, step := range workflow.Steps {
+			if step.AssignedImproverId != nil && strings.TrimSpace(*step.AssignedImproverId) != "" {
+				improverIDs[strings.TrimSpace(*step.AssignedImproverId)] = struct{}{}
+			}
+			if step.Submission != nil && strings.TrimSpace(step.Submission.ImproverId) != "" {
+				improverIDs[strings.TrimSpace(step.Submission.ImproverId)] = struct{}{}
+			}
+		}
+	}
+	if len(workflows) == 0 {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+
+	sort.SliceStable(workflows, func(i, j int) bool {
+		return workflows[i].StartAt < workflows[j].StartAt
+	})
+
+	improverIDList := make([]string, 0, len(improverIDs))
+	for improverID := range improverIDs {
+		improverIDList = append(improverIDList, improverID)
+	}
+	improverEmails, err := a.db.GetUserEmailsByIDs(r.Context(), improverIDList)
+	if err != nil {
+		a.logger.Logf("error loading improver emails for supervisor export by %s: %s", *userDid, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	var zipBuffer bytes.Buffer
+	zipWriter := zip.NewWriter(&zipBuffer)
+	fileNameCounts := map[string]int{}
+	photoFileNamesByID := map[string]string{}
+	for _, workflow := range workflows {
+		photos, err := a.db.GetWorkflowSubmissionPhotoExports(r.Context(), workflow.Id)
+		if err != nil {
+			a.logger.Logf("error loading supervisor photo exports for workflow %s user %s: %s", workflow.Id, *userDid, err)
+			continue
+		}
+		for _, photoExport := range photos {
+			img, _, decodeErr := image.Decode(bytes.NewReader(photoExport.Photo.PhotoData))
+			if decodeErr != nil {
+				continue
+			}
+
+			var jpegBuffer bytes.Buffer
+			if err := jpeg.Encode(&jpegBuffer, img, &jpeg.Options{Quality: 90}); err != nil {
+				continue
+			}
+
+			archiveName := buildSupervisorWorkflowPhotoArchiveName(photoExport, workflow.StartAt, fileNameCounts)
+
+			entryWriter, entryErr := zipWriter.Create(filepath.Join("photos", archiveName))
+			if entryErr != nil {
+				continue
+			}
+			if _, writeErr := entryWriter.Write(jpegBuffer.Bytes()); writeErr != nil {
+				continue
+			}
+			photoFileNamesByID[photoExport.Photo.Id] = archiveName
+		}
+	}
+
+	csvData, err := buildSupervisorWorkflowCSV(workflows, improverEmails, photoFileNamesByID)
+	if err != nil {
+		a.logger.Logf("error building supervisor workflow csv for %s: %s", *userDid, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	csvEntry, err := zipWriter.Create("supervisor_workflows.csv")
+	if err != nil {
+		a.logger.Logf("error creating supervisor export csv zip entry for %s: %s", *userDid, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	if _, err := csvEntry.Write(csvData); err != nil {
+		a.logger.Logf("error writing supervisor export csv for %s: %s", *userDid, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	if err := zipWriter.Close(); err != nil {
+		a.logger.Logf("error finalizing supervisor workflow export zip for %s: %s", *userDid, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Disposition", "attachment; filename=\"supervisor_workflow_export.zip\"")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(zipBuffer.Bytes())
+}
+
+func buildManagedWorkflowCSV(workflow *structs.Workflow, photoFileNamesByID map[string]string) ([]byte, error) {
 	if workflow == nil {
 		return nil, fmt.Errorf("workflow is required")
 	}
@@ -1068,7 +1840,7 @@ func buildManagedWorkflowCSV(workflow *structs.Workflow) ([]byte, error) {
 		submittedAt := ""
 		submittedBy := ""
 		if step.Submission != nil {
-			submittedAt = step.Submission.SubmittedAt.UTC().Format(time.RFC3339)
+			submittedAt = time.Unix(step.Submission.SubmittedAt, 0).UTC().Format(time.RFC3339)
 			submittedBy = step.Submission.ImproverId
 			for _, response := range step.Submission.ItemResponses {
 				responseByItem[response.ItemId] = response
@@ -1082,7 +1854,7 @@ func buildManagedWorkflowCSV(workflow *structs.Workflow) ([]byte, error) {
 				workflow.SeriesId,
 				workflow.Status,
 				workflow.Recurrence,
-				workflow.StartAt.UTC().Format(time.RFC3339),
+				time.Unix(workflow.StartAt, 0).UTC().Format(time.RFC3339),
 				managerImproverID,
 				strconv.FormatUint(workflow.ManagerBounty, 10),
 				strconv.Itoa(step.StepOrder),
@@ -1124,6 +1896,18 @@ func buildManagedWorkflowCSV(workflow *structs.Workflow) ([]byte, error) {
 					photoIDs = append(photoIDs, response.PhotoURLs...)
 				}
 			}
+			photoNames := make([]string, 0, len(photoIDs))
+			for _, photoID := range photoIDs {
+				photoID = strings.TrimSpace(photoID)
+				if photoID == "" {
+					continue
+				}
+				if name := strings.TrimSpace(photoFileNamesByID[photoID]); name != "" {
+					photoNames = append(photoNames, name)
+					continue
+				}
+				photoNames = append(photoNames, photoID)
+			}
 
 			row := []string{
 				workflow.Id,
@@ -1131,7 +1915,7 @@ func buildManagedWorkflowCSV(workflow *structs.Workflow) ([]byte, error) {
 				workflow.SeriesId,
 				workflow.Status,
 				workflow.Recurrence,
-				workflow.StartAt.UTC().Format(time.RFC3339),
+				time.Unix(workflow.StartAt, 0).UTC().Format(time.RFC3339),
 				managerImproverID,
 				strconv.FormatUint(workflow.ManagerBounty, 10),
 				strconv.Itoa(step.StepOrder),
@@ -1148,7 +1932,7 @@ func buildManagedWorkflowCSV(workflow *structs.Workflow) ([]byte, error) {
 				submittedBy,
 				dropdownValue,
 				writtenResponse,
-				strings.Join(photoIDs, ";"),
+				strings.Join(photoNames, ";"),
 			}
 			if err := writer.Write(row); err != nil {
 				return nil, err
@@ -1206,6 +1990,17 @@ func (a *AppService) GetWorkflowPhoto(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if wfErr == nil && workflow.ProposerId == *userDid {
+			canAccess = true
+		}
+	}
+	if !canAccess && a.IsSupervisor(r.Context(), *userDid) {
+		workflow, wfErr := a.db.GetWorkflowByID(r.Context(), photo.WorkflowId)
+		if wfErr != nil && wfErr != pgx.ErrNoRows {
+			a.logger.Logf("error checking supervisor workflow photo access for photo %s user %s: %s", photoID, *userDid, wfErr)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		if wfErr == nil && workflow.SupervisorUserId != nil && *workflow.SupervisorUserId == *userDid {
 			canAccess = true
 		}
 	}
@@ -1362,7 +2157,12 @@ func (a *AppService) ClaimWorkflowStep(w http.ResponseWriter, r *http.Request) {
 			w.Write([]byte(errMsg))
 			return
 		}
-		if strings.Contains(errMsg, "not claimable") || strings.Contains(errMsg, "not available") || strings.Contains(errMsg, "missing a role") || strings.Contains(errMsg, "does not belong") {
+		if strings.Contains(errMsg, "not claimable") ||
+			strings.Contains(errMsg, "not available") ||
+			strings.Contains(errMsg, "missing a role") ||
+			strings.Contains(errMsg, "does not belong") ||
+			strings.Contains(errMsg, "no credential requirements") ||
+			strings.Contains(errMsg, "unknown credential type") {
 			w.WriteHeader(http.StatusBadRequest)
 			w.Write([]byte(errMsg))
 			return
@@ -1473,7 +2273,7 @@ func (a *AppService) CompleteWorkflowStep(w http.ResponseWriter, r *http.Request
 		}
 	}
 
-	result, err := a.db.CompleteWorkflowStep(r.Context(), workflowId, stepId, *userDid, req.Items)
+	result, err := a.db.CompleteWorkflowStep(r.Context(), workflowId, stepId, *userDid, req.StepNotPossible, req.StepNotPossibleDetails, req.Items)
 	if err != nil {
 		errMsg := err.Error()
 		if strings.Contains(errMsg, "not assigned") {
@@ -1718,7 +2518,7 @@ func (a *AppService) GetActiveWorkflows(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	canView := a.IsAdmin(r.Context(), *userDid) || a.IsProposer(r.Context(), *userDid) || a.IsImprover(r.Context(), *userDid) || a.IsVoter(r.Context(), *userDid)
+	canView := a.IsAdmin(r.Context(), *userDid) || a.IsProposer(r.Context(), *userDid) || a.IsImprover(r.Context(), *userDid) || a.IsVoter(r.Context(), *userDid) || a.IsSupervisor(r.Context(), *userDid)
 	if !canView {
 		w.WriteHeader(http.StatusForbidden)
 		return
@@ -1880,7 +2680,13 @@ func (a *AppService) VoteWorkflowDeletionProposal(w http.ResponseWriter, r *http
 }
 
 func (a *AppService) GetIssuers(w http.ResponseWriter, r *http.Request) {
-	issuers, err := a.db.GetIssuersWithScopes(r.Context())
+	search := r.URL.Query().Get("search")
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	count, _ := strconv.Atoi(r.URL.Query().Get("count"))
+	if count <= 0 {
+		count = 20
+	}
+	issuers, err := a.db.GetIssuersWithScopes(r.Context(), search, page, count)
 	if err != nil {
 		a.logger.Logf("error getting issuers: %s", err)
 		w.WriteHeader(http.StatusInternalServerError)
@@ -2020,7 +2826,14 @@ func (a *AppService) GetIssuerCredentialRequests(w http.ResponseWriter, r *http.
 		return
 	}
 
-	requests, err := a.db.GetCredentialRequestsForIssuer(r.Context(), *issuerId)
+	search := r.URL.Query().Get("search")
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	count, _ := strconv.Atoi(r.URL.Query().Get("count"))
+	if count <= 0 {
+		count = 20
+	}
+
+	requests, err := a.db.GetCredentialRequestsForIssuer(r.Context(), *issuerId, search, page, count)
 	if err != nil {
 		errMsg := err.Error()
 		if strings.Contains(errMsg, "role required") {
@@ -2035,6 +2848,27 @@ func (a *AppService) GetIssuerCredentialRequests(w http.ResponseWriter, r *http.
 
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(requests)
+}
+
+func (a *AppService) DeleteProposerWorkflowTemplate(w http.ResponseWriter, r *http.Request) {
+	userDid := utils.GetDid(r)
+	if userDid == nil {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	templateId := strings.TrimSpace(r.PathValue("template_id"))
+	if templateId == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	if err := a.db.DeleteWorkflowTemplate(r.Context(), templateId, *userDid); err != nil {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (a *AppService) DecideIssuerCredentialRequest(w http.ResponseWriter, r *http.Request) {
@@ -2564,7 +3398,7 @@ func (a *AppService) sendWorkflowSeriesFundingShortfallEmails(ctx context.Contex
     <td style="padding:12px 0; font-size:13px; color:#6b7280;">Amount Needed</td>
     <td style="padding:12px 0; font-size:13px; color:#111827; font-weight:600;">%s SFLuv</td>
   </tr>
-</table>`, check.WorkflowTitle, check.WorkflowId, check.SeriesId, check.Recurrence, check.StartAt.UTC().Format(time.RFC3339), requiredTokens.String(), unallocatedTokens.String(), shortfallTokens.String()),
+</table>`, check.WorkflowTitle, check.WorkflowId, check.SeriesId, check.Recurrence, time.Unix(check.StartAt, 0).UTC().Format(time.RFC3339), requiredTokens.String(), unallocatedTokens.String(), shortfallTokens.String()),
 		)
 	}
 }
@@ -3015,11 +3849,12 @@ func parseWorkflowStartAt(value string) (time.Time, error) {
 		return parsed.UTC(), nil
 	}
 
-	if parsed, err := time.ParseInLocation("2006-01-02T15:04", value, time.Local); err == nil {
+	// Legacy fallback for naive values: interpret as UTC to avoid server-local timezone drift.
+	if parsed, err := time.ParseInLocation("2006-01-02T15:04", value, time.UTC); err == nil {
 		return parsed.UTC(), nil
 	}
 
-	if parsed, err := time.ParseInLocation("2006-01-02 15:04:05", value, time.Local); err == nil {
+	if parsed, err := time.ParseInLocation("2006-01-02 15:04:05", value, time.UTC); err == nil {
 		return parsed.UTC(), nil
 	}
 
@@ -3060,6 +3895,15 @@ func (a *AppService) IsIssuer(ctx context.Context, id string) bool {
 		return false
 	}
 	return isIssuer
+}
+
+func (a *AppService) IsSupervisor(ctx context.Context, id string) bool {
+	isSupervisor, err := a.db.IsSupervisor(ctx, id)
+	if err != nil {
+		a.logger.Logf("error getting supervisor state for user %s: %s", id, err)
+		return false
+	}
+	return isSupervisor
 }
 
 func (a *AppService) RequestIssuerStatus(w http.ResponseWriter, r *http.Request) {
@@ -3126,7 +3970,13 @@ func (a *AppService) RequestIssuerStatus(w http.ResponseWriter, r *http.Request)
 }
 
 func (a *AppService) GetIssuerRequests(w http.ResponseWriter, r *http.Request) {
-	issuers, err := a.db.GetIssuerRequests(r.Context())
+	search := r.URL.Query().Get("search")
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	count, _ := strconv.Atoi(r.URL.Query().Get("count"))
+	if count <= 0 {
+		count = 20
+	}
+	issuers, err := a.db.GetIssuerRequests(r.Context(), search, page, count)
 	if err != nil {
 		a.logger.Logf("error getting issuer requests: %s", err.Error())
 		w.WriteHeader(http.StatusInternalServerError)
@@ -3223,6 +4073,11 @@ func (a *AppService) DeleteAdminCredentialType(w http.ResponseWriter, r *http.Re
 	if err := a.db.DeleteGlobalCredentialType(r.Context(), value); err != nil {
 		if strings.Contains(err.Error(), "not found") {
 			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		if strings.Contains(err.Error(), "in use") {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(err.Error()))
 			return
 		}
 		a.logger.Logf("error deleting credential type %s: %s", value, err)

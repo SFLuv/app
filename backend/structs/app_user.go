@@ -12,6 +12,7 @@ type User struct {
 	IsProposer     bool    `json:"is_proposer"`
 	IsVoter        bool    `json:"is_voter"`
 	IsIssuer       bool    `json:"is_issuer"`
+	IsSupervisor   bool    `json:"is_supervisor"`
 	IsAffiliate    bool    `json:"is_affiliate"`
 	Email          *string `json:"contact_email"`
 	Phone          *string `json:"contact_phone"`
@@ -29,6 +30,7 @@ type AuthedUserResponse struct {
 	Proposer  *Proposer   `json:"proposer,omitempty"`
 	Improver  *Improver   `json:"improver,omitempty"`
 	Issuer    *Issuer     `json:"issuer,omitempty"`
+	Supervisor *Supervisor `json:"supervisor,omitempty"`
 }
 
 type UserVerifiedEmailStatus string

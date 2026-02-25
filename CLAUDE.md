@@ -69,12 +69,21 @@ frontend/
 
 ### Key Pages by Role
 - `/` — Merchant map (landing)
-- `/settings` — Role request flows (proposer, improver, affiliate)
+- `/settings` — Role request flows (proposer, improver, affiliate); merchant approval
 - `/proposer` — Workflow builder, template library, active workflow management
 - `/voter` — Workflow vote queue, deletion vote queue
 - `/improver` — Workflow feed, step claim/start/complete
+- `/your-opportunities` — Improver workflow opportunities dashboard
 - `/issuer` — Credential grant/revoke
 - `/admin` — Side-tab admin panel (users, proposers, improvers, issuers, templates)
+- `/affiliates` — Affiliate dashboard and event management
+- `/wallets` — Wallet connection and management
+- `/contacts` — Contact CRUD
+- `/calendar` — Workflow calendar view
+- `/verify` — Email verification flow
+- `/merchant-status` — W9 compliance status
+- `/unwrap` — Token unwrapping UI
+- `/map` — Full merchant location map
 
 ## Core Domain Concepts
 
@@ -116,11 +125,24 @@ Workflows with recurrence (`daily`/`weekly`/`monthly`) share a `series_id`. A ne
 ### Email Notifications
 Mailgun is used for all transactional email. Styled HTML templates are constructed in Go handlers. Follow existing patterns in `backend/handlers/app.go` and `backend/handlers/app_workflow.go` for email template style.
 
-## Current Work Focus
+## Additional Systems
 
-See [IMPROVER_PANEL.md](IMPROVER_PANEL.md) for the active implementation context.
+### Affiliate System
+Affiliates (`isAffiliate`) have a separate event/payout flow. `AffiliatScheduler` in `backend/handlers/affiliate_scheduler.go` runs recurring payouts. Routes under `/affiliates/*` are affiliate-guarded.
 
-**Remaining items (as of last check-in):**
+### W9 / Compliance
+W9 submissions arrive via a Wordpress webhook (`POST /w9/webhook`, validated with `W9_WEBHOOK_SECRET`). Eligibility and unwrap flows in `backend/handlers/w9.go` and `backend/handlers/unwrap.go`.
+
+### Account Abstraction
+Frontend uses Permissionless SDK (`frontend/lib/paymaster/`) for smart accounts and transaction batching via a bundler client.
+
+### Background Services
+`BotService` (faucet events, QR code redemptions) and `AffiliatScheduler` are initialized in `main.go` and run as goroutines. Logging via `backend/logger/logger.go`.
+
+### Middleware Guards
+In `router.go`: `withAuth()`, `withAdmin()`, `withProposer()`, `withImprover()`, `withVoter()`, `withIssuer()`, `withAffiliate()`. Admin users bypass all role checks. Admin endpoints also accept an `X-Admin-Key` header for scripted calls.
+
+## Remaining Work Items
 - Workflow step payout pipeline (faucet settlement → `paid_out` transitions)
 - Improved attachment handling (direct upload/storage for required photos)
 - Scheduled/background vote countdown finalization (currently finalizes lazily on endpoint hit)

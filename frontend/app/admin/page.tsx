@@ -50,6 +50,9 @@ import {
   CalendarIcon,
   Leaf,
   AlertTriangle,
+  Search,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react"
 import { useLocation } from "@/context/LocationProvider"
 import { AuthedLocation, UpdateLocationApprovalRequest } from "@/types/location"
@@ -58,6 +61,7 @@ import { FAUCET_ADDRESS, SFLUV_DECIMALS, SFLUV_TOKEN } from "@/lib/constants"
 import { Affiliate } from "@/types/affiliate"
 import { Proposer } from "@/types/proposer"
 import { Improver } from "@/types/improver"
+import { Supervisor } from "@/types/supervisor"
 import { IssuerRecord, IssuerWithScopes } from "@/types/issuer"
 import { CredentialType, GlobalCredentialType } from "@/types/workflow"
 import { Event, EventsStatus } from "@/types/event"
@@ -139,6 +143,7 @@ export default function AdminPage() {
   const [selectedLocationForReview, setselectedLocationForReview] = useState<any>(null)
   const [isLocationReviewModalOpen, setisLocationReviewModalOpen] = useState(false)
   const [merchantStatusFilter, setMerchantStatusFilter] = useState<string>("all")
+  const [merchantSearch, setMerchantSearch] = useState<string>("")
   const [merchantStatusDraft, setMerchantStatusDraft] = useState<ApprovalStatus>("pending")
   const [merchantModalSaving, setMerchantModalSaving] = useState<boolean>(false)
   const [merchantModalError, setMerchantModalError] = useState<string>("")
@@ -184,6 +189,8 @@ export default function AdminPage() {
   const [eventsOwnerFilter, setEventsOwnerFilter] = useState<string>("all")
   const [affiliateStatusFilter, setAffiliateStatusFilter] = useState<string>("all")
   const [affiliateStatusDraft, setAffiliateStatusDraft] = useState<Affiliate["status"]>("pending")
+  const [affiliateSearch, setAffiliateSearch] = useState<string>("")
+  const [affiliatePage, setAffiliatePage] = useState<number>(0)
 
   // Proposers
   const [proposers, setProposers] = useState<Proposer[]>([])
@@ -195,6 +202,8 @@ export default function AdminPage() {
   const [proposerModalError, setProposerModalError] = useState<string>("")
   const [proposerStatusFilter, setProposerStatusFilter] = useState<string>("all")
   const [proposerStatusDraft, setProposerStatusDraft] = useState<Proposer["status"]>("pending")
+  const [proposerSearch, setProposerSearch] = useState<string>("")
+  const [proposerPage, setProposerPage] = useState<number>(0)
 
   // Improvers
   const [improvers, setImprovers] = useState<Improver[]>([])
@@ -205,6 +214,21 @@ export default function AdminPage() {
   const [improverStatusDraft, setImproverStatusDraft] = useState<Improver["status"]>("pending")
   const [improverModalUpdating, setImproverModalUpdating] = useState<boolean>(false)
   const [improverModalError, setImproverModalError] = useState<string>("")
+  const [improverSearch, setImproverSearch] = useState<string>("")
+  const [improverPage, setImproverPage] = useState<number>(0)
+
+  // Supervisors
+  const [supervisors, setSupervisors] = useState<Supervisor[]>([])
+  const [supervisorsError, setSupervisorsError] = useState<string>("")
+  const [supervisorStatusFilter, setSupervisorStatusFilter] = useState<string>("all")
+  const [supervisorModalOpen, setSupervisorModalOpen] = useState<boolean>(false)
+  const [selectedSupervisor, setSelectedSupervisor] = useState<Supervisor | null>(null)
+  const [supervisorNickname, setSupervisorNickname] = useState<string>("")
+  const [supervisorStatusDraft, setSupervisorStatusDraft] = useState<Supervisor["status"]>("pending")
+  const [supervisorModalUpdating, setSupervisorModalUpdating] = useState<boolean>(false)
+  const [supervisorModalError, setSupervisorModalError] = useState<string>("")
+  const [supervisorSearch, setSupervisorSearch] = useState<string>("")
+  const [supervisorPage, setSupervisorPage] = useState<number>(0)
 
   // Issuer requests
   const [issuerRequests, setIssuerRequests] = useState<IssuerRecord[]>([])
@@ -216,6 +240,8 @@ export default function AdminPage() {
   const [issuerRequestStatusDraft, setIssuerRequestStatusDraft] = useState<string>("pending")
   const [issuerRequestModalError, setIssuerRequestModalError] = useState<string>("")
   const [issuerStatusFilter, setIssuerStatusFilter] = useState<string>("all")
+  const [issuerRequestSearch, setIssuerRequestSearch] = useState<string>("")
+  const [issuerRequestPage, setIssuerRequestPage] = useState<number>(0)
 
   // Issuer credential scopes
   const [issuers, setIssuers] = useState<IssuerWithScopes[]>([])
@@ -378,9 +404,13 @@ export default function AdminPage() {
   }, [events, eventsOwnerFilter])
 
   const filteredMerchants = useMemo(() => {
-    if (merchantStatusFilter === "all") return authedMapLocations
-    return authedMapLocations.filter((location) => approvalToStatus(location.approval) === merchantStatusFilter)
-  }, [authedMapLocations, merchantStatusFilter])
+    const s = merchantSearch.trim().toLowerCase()
+    return authedMapLocations.filter((location) => {
+      const matchesStatus = merchantStatusFilter === "all" || approvalToStatus(location.approval) === merchantStatusFilter
+      const matchesSearch = !s || location.name.toLowerCase().includes(s) || (location.city || "").toLowerCase().includes(s)
+      return matchesStatus && matchesSearch
+    })
+  }, [authedMapLocations, merchantStatusFilter, merchantSearch])
 
   const filteredAffiliates = useMemo(() => {
     if (affiliateStatusFilter === "all") return affiliates
@@ -397,14 +427,21 @@ export default function AdminPage() {
     return improvers.filter((improver) => improver.status === improverStatusFilter)
   }, [improvers, improverStatusFilter])
 
+  const filteredSupervisors = useMemo(() => {
+    if (supervisorStatusFilter === "all") return supervisors
+    return supervisors.filter((supervisor) => supervisor.status === supervisorStatusFilter)
+  }, [supervisors, supervisorStatusFilter])
+
   const filteredIssuerRequests = useMemo(() => {
     if (issuerStatusFilter === "all") return issuerRequests
     return issuerRequests.filter((issuer) => issuer.status === issuerStatusFilter)
   }, [issuerRequests, issuerStatusFilter])
 
-  const getAffiliates = async () => {
+  const getAffiliates = async (search = affiliateSearch, page = affiliatePage) => {
     try {
-      const res = await authFetch("/admin/affiliates")
+      const params = new URLSearchParams({ page: String(page), count: "20" })
+      if (search) params.set("search", search)
+      const res = await authFetch(`/admin/affiliates?${params}`)
       if (!res.ok) throw new Error()
       const data = await res.json()
       setAffiliates(data || [])
@@ -474,9 +511,11 @@ export default function AdminPage() {
     await submitAffiliateUpdate(payload)
   }
 
-  const getProposers = async () => {
+  const getProposers = async (search = proposerSearch, page = proposerPage) => {
     try {
-      const res = await authFetch("/admin/proposers")
+      const params = new URLSearchParams({ page: String(page), count: "20" })
+      if (search) params.set("search", search)
+      const res = await authFetch(`/admin/proposers?${params}`)
       if (!res.ok) throw new Error()
       const data = await res.json()
       setProposers(data || [])
@@ -529,9 +568,11 @@ export default function AdminPage() {
     await submitProposerUpdate(payload)
   }
 
-  const getImprovers = async () => {
+  const getImprovers = async (search = improverSearch, page = improverPage) => {
     try {
-      const res = await authFetch("/admin/improvers")
+      const params = new URLSearchParams({ page: String(page), count: "20" })
+      if (search) params.set("search", search)
+      const res = await authFetch(`/admin/improvers?${params}`)
       if (!res.ok) throw new Error()
       const data = await res.json()
       setImprovers(data || [])
@@ -577,6 +618,61 @@ export default function AdminPage() {
     if (ok) setImproverModalOpen(false)
   }
 
+  const getSupervisors = async (search = supervisorSearch, page = supervisorPage) => {
+    try {
+      const params = new URLSearchParams({ page: String(page), count: "20" })
+      if (search) params.set("search", search)
+      const res = await authFetch(`/admin/supervisors?${params}`)
+      if (!res.ok) throw new Error()
+      const data = await res.json()
+      setSupervisors(data || [])
+      setSupervisorsError("")
+    } catch {
+      setSupervisorsError("Error fetching supervisors. Please try again later.")
+    }
+  }
+
+  const openSupervisorModal = (supervisor: Supervisor) => {
+    setSelectedSupervisor(supervisor)
+    setSupervisorNickname(supervisor.nickname || "")
+    setSupervisorStatusDraft(supervisor.status)
+    setSupervisorModalError("")
+    setSupervisorModalOpen(true)
+  }
+
+  const updateSupervisor = async (payload: { user_id: string; status: Supervisor["status"]; nickname: string }) => {
+    setSupervisorModalUpdating(true)
+    setSupervisorsError("")
+    setSupervisorModalError("")
+    try {
+      const res = await authFetch("/admin/supervisors", {
+        method: "PUT",
+        body: JSON.stringify(payload),
+      })
+      if (!res.ok) throw new Error()
+      const updated = await res.json()
+      setSupervisors((prev) => prev.map((supervisor) => (supervisor.user_id === updated.user_id ? updated : supervisor)))
+      setSelectedSupervisor((prev) => (prev?.user_id === updated.user_id ? updated : prev))
+      return true
+    } catch {
+      setSupervisorsError("Unable to update supervisor right now. Please try again.")
+      setSupervisorModalError("Unable to update supervisor right now. Please try again.")
+      return false
+    } finally {
+      setSupervisorModalUpdating(false)
+    }
+  }
+
+  const saveSupervisorModal = async () => {
+    if (!selectedSupervisor) return
+    const ok = await updateSupervisor({
+      user_id: selectedSupervisor.user_id,
+      status: supervisorStatusDraft,
+      nickname: supervisorNickname,
+    })
+    if (ok) setSupervisorModalOpen(false)
+  }
+
   const getIssuers = async () => {
     try {
       const res = await authFetch("/admin/issuers")
@@ -589,9 +685,11 @@ export default function AdminPage() {
     }
   }
 
-  const getIssuerRequests = async () => {
+  const getIssuerRequests = async (search = issuerRequestSearch, page = issuerRequestPage) => {
     try {
-      const res = await authFetch("/admin/issuer-requests")
+      const params = new URLSearchParams({ page: String(page), count: "20" })
+      if (search) params.set("search", search)
+      const res = await authFetch(`/admin/issuer-requests?${params}`)
       if (!res.ok) throw new Error()
       const data = await res.json()
       setIssuerRequests(data || [])
@@ -775,13 +873,15 @@ export default function AdminPage() {
   useEffect(() => {
     getAuthedMapLocations()
     getEvents()
-    getAffiliates()
-    getProposers()
-    getImprovers()
-    getIssuerRequests()
     getIssuers()
     getCredentialTypes()
   }, [])
+
+  useEffect(() => { getAffiliates(affiliateSearch, affiliatePage) }, [affiliateSearch, affiliatePage])
+  useEffect(() => { getProposers(proposerSearch, proposerPage) }, [proposerSearch, proposerPage])
+  useEffect(() => { getImprovers(improverSearch, improverPage) }, [improverSearch, improverPage])
+  useEffect(() => { getSupervisors(supervisorSearch, supervisorPage) }, [supervisorSearch, supervisorPage])
+  useEffect(() => { getIssuerRequests(issuerRequestSearch, issuerRequestPage) }, [issuerRequestSearch, issuerRequestPage])
 
   const fetchPendingW9Submissions = async () => {
     if (!user?.isAdmin) return
@@ -1364,6 +1464,14 @@ export default function AdminPage() {
                 </Badge>
               )}
             </TabsTrigger>
+            <TabsTrigger value="supervisors" className="w-full justify-between px-3 py-2">
+              <span>Supervisors</span>
+              {supervisors.filter((supervisor) => supervisor.status === "pending").length > 0 && (
+                <Badge variant="destructive" className="h-5 min-w-5 rounded-full px-1.5 text-xs">
+                  {supervisors.filter((supervisor) => supervisor.status === "pending").length}
+                </Badge>
+              )}
+            </TabsTrigger>
             <TabsTrigger value="issuers" className="w-full justify-between px-3 py-2">
               <span>Issuers</span>
               {issuerRequests.filter((r) => r.status === "pending").length > 0 && (
@@ -1776,23 +1884,34 @@ export default function AdminPage() {
                 Manage Merchants
               </CardTitle>
               <CardDescription className="text-base mt-2">Review and manage merchant application status</CardDescription>
-              <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-                <div className="text-sm text-muted-foreground">
-                  Showing {filteredMerchants.length} of {authedMapLocations.length} merchant applications
+              <div className="mt-4 flex flex-col gap-3">
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    placeholder="Search merchants..."
+                    value={merchantSearch}
+                    onChange={(e) => setMerchantSearch(e.target.value)}
+                    className="pl-9"
+                  />
                 </div>
-                <div className="w-full sm:w-[220px] space-y-1">
-                  <Label className="text-xs text-muted-foreground">Filter by status</Label>
-                  <Select value={merchantStatusFilter} onValueChange={setMerchantStatusFilter}>
-                    <SelectTrigger>
-                      <SelectValue placeholder="All statuses" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">All</SelectItem>
-                      <SelectItem value="approved">Approved</SelectItem>
-                      <SelectItem value="pending">Pending</SelectItem>
-                      <SelectItem value="rejected">Rejected</SelectItem>
-                    </SelectContent>
-                  </Select>
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+                  <div className="text-sm text-muted-foreground">
+                    Showing {filteredMerchants.length} of {authedMapLocations.length} merchant applications
+                  </div>
+                  <div className="w-full sm:w-[220px] space-y-1">
+                    <Label className="text-xs text-muted-foreground">Filter by status</Label>
+                    <Select value={merchantStatusFilter} onValueChange={setMerchantStatusFilter}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="All statuses" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All</SelectItem>
+                        <SelectItem value="approved">Approved</SelectItem>
+                        <SelectItem value="pending">Pending</SelectItem>
+                        <SelectItem value="rejected">Rejected</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
                 </div>
               </div>
             </CardHeader>
@@ -2041,30 +2160,41 @@ export default function AdminPage() {
               <CardDescription>Approve requests and manage affiliate balances</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-                <div className="text-sm text-muted-foreground">
-                  Showing {filteredAffiliates.length} of {affiliates.length} affiliates
+              <div className="flex flex-col gap-3">
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    placeholder="Search affiliates..."
+                    value={affiliateSearch}
+                    onChange={(e) => { setAffiliateSearch(e.target.value); setAffiliatePage(0) }}
+                    className="pl-9"
+                  />
                 </div>
-                <div className="w-full sm:w-[220px] space-y-1">
-                  <Label className="text-xs text-muted-foreground">Filter by status</Label>
-                  <Select value={affiliateStatusFilter} onValueChange={setAffiliateStatusFilter}>
-                    <SelectTrigger>
-                      <SelectValue placeholder="All statuses" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">All</SelectItem>
-                      <SelectItem value="approved">Approved</SelectItem>
-                      <SelectItem value="pending">Pending</SelectItem>
-                      <SelectItem value="rejected">Rejected</SelectItem>
-                    </SelectContent>
-                  </Select>
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+                  <div className="text-sm text-muted-foreground">
+                    Showing {filteredAffiliates.length} affiliates
+                  </div>
+                  <div className="w-full sm:w-[220px] space-y-1">
+                    <Label className="text-xs text-muted-foreground">Filter by status</Label>
+                    <Select value={affiliateStatusFilter} onValueChange={setAffiliateStatusFilter}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="All statuses" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All</SelectItem>
+                        <SelectItem value="approved">Approved</SelectItem>
+                        <SelectItem value="pending">Pending</SelectItem>
+                        <SelectItem value="rejected">Rejected</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
                 </div>
               </div>
               {filteredAffiliates.length === 0 ? (
                 <div className="text-center py-8">
                   <Users className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
                   <h3 className="text-lg font-medium">No Affiliates Found</h3>
-                  <p className="text-muted-foreground">No affiliates match the selected status filter.</p>
+                  <p className="text-muted-foreground">No affiliates match the selected filter.</p>
                 </div>
               ) : (
                 <div className="space-y-4">
@@ -2091,6 +2221,15 @@ export default function AdminPage() {
                   ))}
                 </div>
               )}
+              <div className="flex items-center justify-between pt-2">
+                <Button variant="outline" size="sm" onClick={() => setAffiliatePage((p) => Math.max(0, p - 1))} disabled={affiliatePage === 0}>
+                  <ChevronLeft className="h-4 w-4" />Previous
+                </Button>
+                <span className="text-sm text-muted-foreground">Page {affiliatePage + 1}</span>
+                <Button variant="outline" size="sm" onClick={() => setAffiliatePage((p) => p + 1)} disabled={affiliates.length < 20}>
+                  Next<ChevronRight className="h-4 w-4" />
+                </Button>
+              </div>
             </CardContent>
           </Card>
         </TabsContent>
@@ -2174,30 +2313,41 @@ export default function AdminPage() {
               <CardDescription>Approve proposer requests and manage proposer access.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-                <div className="text-sm text-muted-foreground">
-                  Showing {filteredProposers.length} of {proposers.length} proposers
+              <div className="flex flex-col gap-3">
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    placeholder="Search proposers..."
+                    value={proposerSearch}
+                    onChange={(e) => { setProposerSearch(e.target.value); setProposerPage(0) }}
+                    className="pl-9"
+                  />
                 </div>
-                <div className="w-full sm:w-[220px] space-y-1">
-                  <Label className="text-xs text-muted-foreground">Filter by status</Label>
-                  <Select value={proposerStatusFilter} onValueChange={setProposerStatusFilter}>
-                    <SelectTrigger>
-                      <SelectValue placeholder="All statuses" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">All</SelectItem>
-                      <SelectItem value="approved">Approved</SelectItem>
-                      <SelectItem value="pending">Pending</SelectItem>
-                      <SelectItem value="rejected">Rejected</SelectItem>
-                    </SelectContent>
-                  </Select>
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+                  <div className="text-sm text-muted-foreground">
+                    Showing {filteredProposers.length} proposers
+                  </div>
+                  <div className="w-full sm:w-[220px] space-y-1">
+                    <Label className="text-xs text-muted-foreground">Filter by status</Label>
+                    <Select value={proposerStatusFilter} onValueChange={setProposerStatusFilter}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="All statuses" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All</SelectItem>
+                        <SelectItem value="approved">Approved</SelectItem>
+                        <SelectItem value="pending">Pending</SelectItem>
+                        <SelectItem value="rejected">Rejected</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
                 </div>
               </div>
               {filteredProposers.length === 0 ? (
                 <div className="text-center py-8">
                   <Users className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
                   <h3 className="text-lg font-medium">No Proposers Found</h3>
-                  <p className="text-muted-foreground">No proposers match the selected status filter.</p>
+                  <p className="text-muted-foreground">No proposers match the selected filter.</p>
                 </div>
               ) : (
                 <div className="space-y-4">
@@ -2223,6 +2373,15 @@ export default function AdminPage() {
                   ))}
                 </div>
               )}
+              <div className="flex items-center justify-between pt-2">
+                <Button variant="outline" size="sm" onClick={() => setProposerPage((p) => Math.max(0, p - 1))} disabled={proposerPage === 0}>
+                  <ChevronLeft className="h-4 w-4" />Previous
+                </Button>
+                <span className="text-sm text-muted-foreground">Page {proposerPage + 1}</span>
+                <Button variant="outline" size="sm" onClick={() => setProposerPage((p) => p + 1)} disabled={proposers.length < 20}>
+                  Next<ChevronRight className="h-4 w-4" />
+                </Button>
+              </div>
             </CardContent>
           </Card>
         </TabsContent>
@@ -2305,8 +2464,14 @@ export default function AdminPage() {
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-                <div className="text-sm text-muted-foreground">
-                  Showing {filteredImprovers.length} of {improvers.length} improvers
+                <div className="relative flex-1">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    placeholder="Search improvers..."
+                    value={improverSearch}
+                    onChange={(e) => { setImproverSearch(e.target.value); setImproverPage(0) }}
+                    className="pl-9"
+                  />
                 </div>
                 <div className="w-full sm:w-[220px] space-y-1">
                   <Label className="text-xs text-muted-foreground">Filter by status</Label>
@@ -2355,6 +2520,195 @@ export default function AdminPage() {
                   ))}
                 </div>
               )}
+              <div className="flex items-center justify-between pt-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setImproverPage((p) => Math.max(0, p - 1))}
+                  disabled={improverPage === 0}
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                  Previous
+                </Button>
+                <span className="text-sm text-muted-foreground">Page {improverPage + 1}</span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setImproverPage((p) => p + 1)}
+                  disabled={improvers.length < 20}
+                >
+                  Next
+                  <ChevronRight className="h-4 w-4" />
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="supervisors" className="space-y-6">
+          {supervisorsError && (
+            <div className="flex items-center gap-2 text-red-600 text-sm p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
+              <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+              <span>{supervisorsError}</span>
+            </div>
+          )}
+
+          <Dialog open={supervisorModalOpen} onOpenChange={setSupervisorModalOpen}>
+            <DialogContent className="w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] max-h-[90vh] overflow-y-auto sm:max-w-lg">
+              <DialogHeader>
+                <DialogTitle>Manage Supervisor</DialogTitle>
+                <DialogDescription>
+                  Update approval status and nickname for this supervisor request.
+                </DialogDescription>
+              </DialogHeader>
+              {selectedSupervisor && (
+                <div className="space-y-4">
+                  <div className="space-y-1">
+                    <Label>Organization</Label>
+                    <Input value={selectedSupervisor.organization} disabled />
+                  </div>
+                  <div className="space-y-1">
+                    <Label>Email</Label>
+                    <Input value={selectedSupervisor.email} disabled />
+                  </div>
+                  <div className="space-y-1">
+                    <Label>User ID</Label>
+                    <Input value={selectedSupervisor.user_id} disabled className="font-mono text-xs" />
+                  </div>
+                  <div className="space-y-1">
+                    <Label>Nickname</Label>
+                    <Input
+                      value={supervisorNickname}
+                      onChange={(e) => setSupervisorNickname(e.target.value)}
+                      placeholder="Nickname (optional)"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label>Change Approval Status</Label>
+                    <Select
+                      value={supervisorStatusDraft}
+                      onValueChange={(value) => setSupervisorStatusDraft(value as Supervisor["status"])}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="pending">Pending</SelectItem>
+                        <SelectItem value="approved">Approved</SelectItem>
+                        <SelectItem value="rejected">Rejected</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  {supervisorModalError && (
+                    <div className="flex items-center gap-2 text-red-600 text-sm p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
+                      <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+                      <span>{supervisorModalError}</span>
+                    </div>
+                  )}
+
+                  <div className="flex justify-end">
+                    <Button
+                      className="w-full sm:w-auto"
+                      onClick={saveSupervisorModal}
+                      disabled={supervisorModalUpdating}
+                    >
+                      {supervisorModalUpdating ? "Saving..." : "Save Changes"}
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </DialogContent>
+          </Dialog>
+
+          <Card>
+            <CardHeader className="pb-4">
+              <CardTitle className="flex items-center gap-2 text-xl">
+                <Users className="h-5 w-5" />
+                Manage Supervisors
+              </CardTitle>
+              <CardDescription>Approve or reject supervisor access requests</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+                <div className="relative flex-1">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    placeholder="Search supervisors..."
+                    value={supervisorSearch}
+                    onChange={(e) => { setSupervisorSearch(e.target.value); setSupervisorPage(0) }}
+                    className="pl-9"
+                  />
+                </div>
+                <div className="w-full sm:w-[220px] space-y-1">
+                  <Label className="text-xs text-muted-foreground">Filter by status</Label>
+                  <Select value={supervisorStatusFilter} onValueChange={setSupervisorStatusFilter}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="All statuses" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All</SelectItem>
+                      <SelectItem value="approved">Approved</SelectItem>
+                      <SelectItem value="pending">Pending</SelectItem>
+                      <SelectItem value="rejected">Rejected</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              {filteredSupervisors.length === 0 ? (
+                <div className="text-center py-8">
+                  <Users className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+                  <h3 className="text-lg font-medium">No Supervisors Found</h3>
+                  <p className="text-muted-foreground">No supervisors match the selected status filter.</p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {filteredSupervisors.map((supervisor) => (
+                    <Card
+                      key={supervisor.user_id}
+                      className="cursor-pointer hover:shadow-md transition-shadow"
+                      onClick={() => openSupervisorModal(supervisor)}
+                    >
+                      <CardContent className="p-4">
+                        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                          <div>
+                            <p className="font-medium text-black dark:text-white">
+                              {supervisor.nickname || supervisor.organization}
+                            </p>
+                            <p className="text-sm text-muted-foreground">{supervisor.organization}</p>
+                            <p className="text-sm text-muted-foreground">{supervisor.email}</p>
+                            <p className="text-xs text-muted-foreground break-all">User: {supervisor.user_id}</p>
+                          </div>
+                          <Badge variant={supervisor.status === "approved" ? "default" : supervisor.status === "rejected" ? "destructive" : "outline"}>
+                            {formatStatusLabel(supervisor.status)}
+                          </Badge>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+              )}
+              <div className="flex items-center justify-between pt-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setSupervisorPage((p) => Math.max(0, p - 1))}
+                  disabled={supervisorPage === 0}
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                  Previous
+                </Button>
+                <span className="text-sm text-muted-foreground">Page {supervisorPage + 1}</span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setSupervisorPage((p) => p + 1)}
+                  disabled={supervisors.length < 20}
+                >
+                  Next
+                  <ChevronRight className="h-4 w-4" />
+                </Button>
+              </div>
             </CardContent>
           </Card>
         </TabsContent>
@@ -2489,10 +2843,14 @@ export default function AdminPage() {
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-                <div>
-                  <p className="text-sm text-muted-foreground">
-                    Showing {filteredIssuerRequests.length} of {issuerRequests.length} issuer requests
-                  </p>
+                <div className="relative flex-1">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    placeholder="Search issuers..."
+                    value={issuerRequestSearch}
+                    onChange={(e) => { setIssuerRequestSearch(e.target.value); setIssuerRequestPage(0) }}
+                    className="pl-9"
+                  />
                 </div>
                 <div className="w-full sm:w-[220px] space-y-1">
                   <Label className="text-xs text-muted-foreground">Filter by status</Label>
@@ -2537,6 +2895,27 @@ export default function AdminPage() {
                   ))}
                 </div>
               )}
+              <div className="flex items-center justify-between pt-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setIssuerRequestPage((p) => Math.max(0, p - 1))}
+                  disabled={issuerRequestPage === 0}
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                  Previous
+                </Button>
+                <span className="text-sm text-muted-foreground">Page {issuerRequestPage + 1}</span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setIssuerRequestPage((p) => p + 1)}
+                  disabled={issuerRequests.length < 20}
+                >
+                  Next
+                  <ChevronRight className="h-4 w-4" />
+                </Button>
+              </div>
             </CardContent>
           </Card>
         </TabsContent>
