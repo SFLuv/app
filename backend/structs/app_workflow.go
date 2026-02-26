@@ -58,13 +58,14 @@ type ProposerUpdateRequest struct {
 }
 
 type Improver struct {
-	UserId    string    `json:"user_id"`
-	FirstName string    `json:"first_name"`
-	LastName  string    `json:"last_name"`
-	Email     string    `json:"email"`
-	Status    string    `json:"status"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	UserId                string    `json:"user_id"`
+	FirstName             string    `json:"first_name"`
+	LastName              string    `json:"last_name"`
+	Email                 string    `json:"email"`
+	PrimaryRewardsAccount string    `json:"primary_rewards_account"`
+	Status                string    `json:"status"`
+	CreatedAt             time.Time `json:"created_at"`
+	UpdatedAt             time.Time `json:"updated_at"`
 }
 
 type ImproverRequest struct {
@@ -78,14 +79,19 @@ type ImproverUpdateRequest struct {
 	Status *string `json:"status,omitempty"`
 }
 
+type PrimaryRewardsAccountUpdateRequest struct {
+	PrimaryRewardsAccount string `json:"primary_rewards_account"`
+}
+
 type Supervisor struct {
-	UserId       string    `json:"user_id"`
-	Organization string    `json:"organization"`
-	Email        string    `json:"email"`
-	Nickname     *string   `json:"nickname"`
-	Status       string    `json:"status"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	UserId                string    `json:"user_id"`
+	Organization          string    `json:"organization"`
+	Email                 string    `json:"email"`
+	PrimaryRewardsAccount string    `json:"primary_rewards_account"`
+	Nickname              *string   `json:"nickname"`
+	Status                string    `json:"status"`
+	CreatedAt             time.Time `json:"created_at"`
+	UpdatedAt             time.Time `json:"updated_at"`
 }
 
 type SupervisorRequest struct {
@@ -437,10 +443,19 @@ type ImproverAbsencePeriodCreateRequest struct {
 	AbsentUntil string `json:"absent_until"`
 }
 
+type ImproverAbsencePeriodUpdateRequest struct {
+	AbsentFrom  string `json:"absent_from"`
+	AbsentUntil string `json:"absent_until"`
+}
+
 type ImproverAbsencePeriodCreateResult struct {
 	Absence       ImproverAbsencePeriod `json:"absence"`
 	ReleasedCount int                   `json:"released_count"`
 	SkippedCount  int                   `json:"skipped_count"`
+}
+
+type ImproverAbsencePeriodDeleteResult struct {
+	Id string `json:"id"`
 }
 
 type ImproverWorkflowSeriesUnclaimRequest struct {

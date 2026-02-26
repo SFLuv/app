@@ -302,6 +302,48 @@ func (a *AppService) UpdateImprover(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(improver)
 }
 
+func (a *AppService) UpdateImproverPrimaryRewardsAccount(w http.ResponseWriter, r *http.Request) {
+	userDid := utils.GetDid(r)
+	if userDid == nil {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	defer r.Body.Close()
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		a.logger.Logf("error reading improver primary rewards account body for user %s: %s", *userDid, err.Error())
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	req := structs.PrimaryRewardsAccountUpdateRequest{}
+	if err := json.Unmarshal(body, &req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	improver, err := a.db.UpdateImproverPrimaryRewardsAccount(r.Context(), *userDid, req.PrimaryRewardsAccount)
+	if err != nil {
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "required") || strings.Contains(errMsg, "valid ethereum address") || strings.Contains(errMsg, "approved") {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(errMsg))
+			return
+		}
+		if strings.Contains(errMsg, "not found") {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		a.logger.Logf("error updating improver primary rewards account for user %s: %s", *userDid, errMsg)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(improver)
+}
+
 func (a *AppService) RequestSupervisorStatus(w http.ResponseWriter, r *http.Request) {
 	userDid := utils.GetDid(r)
 	if userDid == nil {
@@ -406,6 +448,48 @@ func (a *AppService) UpdateSupervisor(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		a.logger.Logf("error updating supervisor %s: %s", req.UserId, err.Error())
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(supervisor)
+}
+
+func (a *AppService) UpdateSupervisorPrimaryRewardsAccount(w http.ResponseWriter, r *http.Request) {
+	userDid := utils.GetDid(r)
+	if userDid == nil {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	defer r.Body.Close()
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		a.logger.Logf("error reading supervisor primary rewards account body for user %s: %s", *userDid, err.Error())
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	req := structs.PrimaryRewardsAccountUpdateRequest{}
+	if err := json.Unmarshal(body, &req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	supervisor, err := a.db.UpdateSupervisorPrimaryRewardsAccount(r.Context(), *userDid, req.PrimaryRewardsAccount)
+	if err != nil {
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "required") || strings.Contains(errMsg, "valid ethereum address") || strings.Contains(errMsg, "approved") {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(errMsg))
+			return
+		}
+		if strings.Contains(errMsg, "not found") {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		a.logger.Logf("error updating supervisor primary rewards account for user %s: %s", *userDid, errMsg)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
@@ -2076,13 +2160,13 @@ func (a *AppService) CreateImproverAbsencePeriod(w http.ResponseWriter, r *http.
 		return
 	}
 
-	absentFrom, err := parseWorkflowStartAt(req.AbsentFrom)
+	absentFrom, err := parseAbsenceBoundary(req.AbsentFrom, false)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		w.Write([]byte("invalid absent_from"))
 		return
 	}
-	absentUntil, err := parseWorkflowStartAt(req.AbsentUntil)
+	absentUntil, err := parseAbsenceBoundary(req.AbsentUntil, true)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		w.Write([]byte("invalid absent_until"))
@@ -2115,6 +2199,117 @@ func (a *AppService) CreateImproverAbsencePeriod(w http.ResponseWriter, r *http.
 	}
 
 	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(result)
+}
+
+func (a *AppService) UpdateImproverAbsencePeriod(w http.ResponseWriter, r *http.Request) {
+	userDid := utils.GetDid(r)
+	if userDid == nil {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	absenceID := strings.TrimSpace(r.PathValue("absence_id"))
+	if absenceID == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	defer r.Body.Close()
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		a.logger.Logf("error reading improver absence update request body for %s: %s", *userDid, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	var req structs.ImproverAbsencePeriodUpdateRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	absentFrom, err := parseAbsenceBoundary(req.AbsentFrom, false)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte("invalid absent_from"))
+		return
+	}
+	absentUntil, err := parseAbsenceBoundary(req.AbsentUntil, true)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte("invalid absent_until"))
+		return
+	}
+
+	result, err := a.db.UpdateImproverAbsencePeriod(
+		r.Context(),
+		*userDid,
+		absenceID,
+		absentFrom,
+		absentUntil,
+	)
+	if err != nil {
+		errMsg := err.Error()
+		if err == pgx.ErrNoRows {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		if strings.Contains(errMsg, "required") || strings.Contains(errMsg, "must be") || strings.Contains(errMsg, "overlapping") {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(errMsg))
+			return
+		}
+		if strings.Contains(errMsg, "another improver has already claimed") || strings.Contains(errMsg, "no claimed recurring workpiece") {
+			w.WriteHeader(http.StatusConflict)
+			w.Write([]byte(errMsg))
+			return
+		}
+		a.logger.Logf("error updating improver absence period %s for %s: %s", absenceID, *userDid, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(result)
+}
+
+func (a *AppService) DeleteImproverAbsencePeriod(w http.ResponseWriter, r *http.Request) {
+	userDid := utils.GetDid(r)
+	if userDid == nil {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	absenceID := strings.TrimSpace(r.PathValue("absence_id"))
+	if absenceID == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	result, err := a.db.DeleteImproverAbsencePeriod(r.Context(), *userDid, absenceID)
+	if err != nil {
+		errMsg := err.Error()
+		if err == pgx.ErrNoRows {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		if strings.Contains(errMsg, "required") {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(errMsg))
+			return
+		}
+		if strings.Contains(errMsg, "another improver has already claimed") {
+			w.WriteHeader(http.StatusConflict)
+			w.Write([]byte(errMsg))
+			return
+		}
+		a.logger.Logf("error deleting improver absence period %s for %s: %s", absenceID, *userDid, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(result)
 }
 
@@ -3811,7 +4006,7 @@ func (a *AppService) processWorkflowSeriesPayouts(ctx context.Context, triggerWo
 					return
 				}
 
-				walletAddress, err = a.db.GetPreferredRedeemerWalletAddressForUser(ctx, target.ImproverId)
+				walletAddress, err = a.db.GetPreferredWorkflowPayoutAddressForUser(ctx, target.ImproverId, target.IsManager)
 				if err != nil {
 					errMsg := fmt.Sprintf("workflow payout cannot proceed because no payout wallet is configured: %s", err)
 					if target.IsManager {
@@ -3996,6 +4191,25 @@ func parseWorkflowStartAt(value string) (time.Time, error) {
 	}
 
 	return time.Time{}, fmt.Errorf("invalid start_at")
+}
+
+func parseAbsenceBoundary(value string, isEnd bool) (time.Time, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		if isEnd {
+			return time.Time{}, fmt.Errorf("absent_until is required")
+		}
+		return time.Time{}, fmt.Errorf("absent_from is required")
+	}
+
+	if parsed, err := time.ParseInLocation("2006-01-02", value, time.UTC); err == nil {
+		if isEnd {
+			parsed = parsed.Add(24 * time.Hour)
+		}
+		return parsed.UTC(), nil
+	}
+
+	return parseWorkflowStartAt(value)
 }
 
 func (a *AppService) IsProposer(ctx context.Context, id string) bool {

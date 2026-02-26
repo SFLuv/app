@@ -32,6 +32,7 @@ import {
   GlobalCredentialType,
   ImproverAbsencePeriod,
   ImproverAbsencePeriodCreateResult,
+  ImproverAbsencePeriodDeleteResult,
   ImproverWorkflowFeed,
   ImproverWorkflowSeriesUnclaimResult,
   Workflow,
@@ -120,6 +121,24 @@ const toJpegFileName = (fileName: string) => {
   return `${trimmed.slice(0, dotIndex)}.jpg`
 }
 
+const dateInputPattern = /^\d{4}-\d{2}-\d{2}$/
+
+const isValidDateInput = (value: string) => dateInputPattern.test(value.trim())
+
+const toDateInputValueFromUnix = (unixSeconds: number, endExclusive = false): string => {
+  const adjustedSeconds = endExclusive ? Math.max(unixSeconds - 1, 0) : unixSeconds
+  const date = new Date(adjustedSeconds * 1000)
+  const year = String(date.getUTCFullYear())
+  const month = String(date.getUTCMonth() + 1).padStart(2, "0")
+  const day = String(date.getUTCDate()).padStart(2, "0")
+  return `${year}-${month}-${day}`
+}
+
+const formatDateFromUnix = (unixSeconds: number, endExclusive = false): string => {
+  const adjustedSeconds = endExclusive ? Math.max(unixSeconds - 1, 0) : unixSeconds
+  return new Date(adjustedSeconds * 1000).toLocaleDateString(undefined, { timeZone: "UTC" })
+}
+
 export default function ImproverPage() {
   const { authFetch, status, user } = useApp()
   const [workflows, setWorkflows] = useState<Workflow[]>([])
@@ -136,9 +155,13 @@ export default function ImproverPage() {
   const [forms, setForms] = useState<Record<string, Record<string, ItemFormState>>>({})
   const [cameraStates, setCameraStates] = useState<Record<string, CameraCaptureState>>({})
   const [stepNotPossibleForms, setStepNotPossibleForms] = useState<Record<string, StepNotPossibleFormState>>({})
+  const [absenceTargetMode, setAbsenceTargetMode] = useState<"single" | "all">("single")
   const [absenceSelection, setAbsenceSelection] = useState<string>("")
   const [absenceFrom, setAbsenceFrom] = useState<string>("")
   const [absenceUntil, setAbsenceUntil] = useState<string>("")
+  const [editingAbsenceId, setEditingAbsenceId] = useState<string>("")
+  const [editAbsenceFrom, setEditAbsenceFrom] = useState<string>("")
+  const [editAbsenceUntil, setEditAbsenceUntil] = useState<string>("")
   const [detailWorkflow, setDetailWorkflow] = useState<Workflow | null>(null)
   const [detailOpen, setDetailOpen] = useState<boolean>(false)
   const [detailLoading, setDetailLoading] = useState<boolean>(false)
@@ -436,75 +459,208 @@ export default function ImproverPage() {
     }
   }
 
-  const toISOFromLocalInput = (value: string) => {
-    const date = new Date(value)
-    if (Number.isNaN(date.getTime())) return ""
-    return date.toISOString()
+  const parseAbsenceSelection = (selection: string) => {
+    const separatorIndex = selection.lastIndexOf(":")
+    if (separatorIndex <= 0) return null
+    const seriesId = selection.slice(0, separatorIndex)
+    const stepOrder = Number.parseInt(selection.slice(separatorIndex + 1), 10)
+    if (!seriesId || Number.isNaN(stepOrder) || stepOrder <= 0) return null
+    return { seriesId, stepOrder }
+  }
+
+  const createAbsencePeriodForTarget = async (
+    seriesId: string,
+    stepOrder: number,
+    absentFromDate: string,
+    absentUntilDate: string,
+  ) => {
+    const res = await authFetch("/improvers/workflows/absence-periods", {
+      method: "POST",
+      body: JSON.stringify({
+        series_id: seriesId,
+        step_order: stepOrder,
+        absent_from: absentFromDate,
+        absent_until: absentUntilDate,
+      }),
+    })
+    if (!res.ok) {
+      const text = await res.text()
+      throw new Error(text || "Unable to create absence period.")
+    }
+    return (await res.json()) as ImproverAbsencePeriodCreateResult
   }
 
   const createAbsencePeriod = async () => {
-    if (!absenceSelection) {
+    if (!absenceFrom || !absenceUntil) {
+      setError("Absent period start and end dates are required.")
+      setNotice("")
+      return
+    }
+    if (!isValidDateInput(absenceFrom) || !isValidDateInput(absenceUntil)) {
+      setError("Invalid absent period dates.")
+      setNotice("")
+      return
+    }
+    if (absenceFrom > absenceUntil) {
+      setError("Absent end date must be on or after absent start date.")
+      setNotice("")
+      return
+    }
+
+    const singleTarget = parseAbsenceSelection(absenceSelection)
+    if (absenceTargetMode === "single" && !singleTarget) {
       setError("Choose a recurring claim before setting an absent period.")
       setNotice("")
       return
     }
-    if (!absenceFrom || !absenceUntil) {
-      setError("Absent period start and end are required.")
-      setNotice("")
-      return
-    }
-
-    const separatorIndex = absenceSelection.lastIndexOf(":")
-    if (separatorIndex <= 0) {
-      setError("Invalid recurring claim selection.")
-      setNotice("")
-      return
-    }
-
-    const seriesId = absenceSelection.slice(0, separatorIndex)
-    const stepOrder = Number.parseInt(absenceSelection.slice(separatorIndex + 1), 10)
-    if (!seriesId || Number.isNaN(stepOrder) || stepOrder <= 0) {
-      setError("Invalid recurring claim selection.")
-      setNotice("")
-      return
-    }
-
-    const absentFromISO = toISOFromLocalInput(absenceFrom)
-    const absentUntilISO = toISOFromLocalInput(absenceUntil)
-    if (!absentFromISO || !absentUntilISO) {
-      setError("Invalid absent period dates.")
+    if (absenceTargetMode === "all" && recurringClaimOptions.length === 0) {
+      setError("No active recurring claimed workpieces found.")
       setNotice("")
       return
     }
 
     setSubmitting("absence")
     try {
-      const res = await authFetch("/improvers/workflows/absence-periods", {
-        method: "POST",
-        body: JSON.stringify({
-          series_id: seriesId,
-          step_order: stepOrder,
-          absent_from: absentFromISO,
-          absent_until: absentUntilISO,
-        }),
-      })
-      if (!res.ok) {
-        const text = await res.text()
-        throw new Error(text || "Unable to create absence period.")
+      if (absenceTargetMode === "single" && singleTarget) {
+        const data = await createAbsencePeriodForTarget(singleTarget.seriesId, singleTarget.stepOrder, absenceFrom, absenceUntil)
+        setNotice(
+          data.skipped_count > 0
+            ? `Absent period created. Released ${data.released_count} assignments. ${data.skipped_count} assigned steps were already in progress or completed and were not released.`
+            : `Absent period created. Released ${data.released_count} assignments for coverage.`,
+        )
+      } else {
+        let createdCount = 0
+        let releasedTotal = 0
+        let skippedTotal = 0
+        const failures: string[] = []
+
+        for (const option of recurringClaimOptions) {
+          const target = parseAbsenceSelection(option.key)
+          if (!target) {
+            failures.push("Invalid recurring claim selection.")
+            continue
+          }
+          try {
+            const data = await createAbsencePeriodForTarget(target.seriesId, target.stepOrder, absenceFrom, absenceUntil)
+            createdCount += 1
+            releasedTotal += data.released_count
+            skippedTotal += data.skipped_count
+          } catch (err) {
+            failures.push(err instanceof Error ? err.message : "Unable to create absence period.")
+          }
+        }
+
+        if (createdCount === 0) {
+          throw new Error(failures[0] || "Unable to create absence periods.")
+        }
+
+        const successNotice =
+          skippedTotal > 0
+            ? `Created ${createdCount} absence period(s). Released ${releasedTotal} assignments; ${skippedTotal} assigned steps were already in progress or completed and were not released.`
+            : `Created ${createdCount} absence period(s). Released ${releasedTotal} assignments for coverage.`
+        const failureSuffix = failures.length > 0 ? ` ${failures.length} period(s) could not be created.` : ""
+        setNotice(successNotice + failureSuffix)
       }
 
-      const data = (await res.json()) as ImproverAbsencePeriodCreateResult
-      setNotice(
-        data.skipped_count > 0
-          ? `Absent period created. Released ${data.released_count} assignments. ${data.skipped_count} assigned steps were already in progress or completed and were not released.`
-          : `Absent period created. Released ${data.released_count} assignments for coverage.`
-      )
       setError("")
       setAbsenceFrom("")
       setAbsenceUntil("")
       await loadFeed()
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to create absence period.")
+      setNotice("")
+    } finally {
+      setSubmitting("")
+    }
+  }
+
+  const beginEditAbsencePeriod = (period: ImproverAbsencePeriod) => {
+    setEditingAbsenceId(period.id)
+    setEditAbsenceFrom(toDateInputValueFromUnix(period.absent_from))
+    setEditAbsenceUntil(toDateInputValueFromUnix(period.absent_until, true))
+    setError("")
+    setNotice("")
+  }
+
+  const cancelEditAbsencePeriod = () => {
+    setEditingAbsenceId("")
+    setEditAbsenceFrom("")
+    setEditAbsenceUntil("")
+  }
+
+  const updateAbsencePeriod = async (absenceId: string) => {
+    if (!editAbsenceFrom || !editAbsenceUntil) {
+      setError("Absent period start and end dates are required.")
+      setNotice("")
+      return
+    }
+    if (!isValidDateInput(editAbsenceFrom) || !isValidDateInput(editAbsenceUntil)) {
+      setError("Invalid absent period dates.")
+      setNotice("")
+      return
+    }
+    if (editAbsenceFrom > editAbsenceUntil) {
+      setError("Absent end date must be on or after absent start date.")
+      setNotice("")
+      return
+    }
+
+    const submitKey = `absence-update:${absenceId}`
+    setSubmitting(submitKey)
+    try {
+      const res = await authFetch(`/improvers/workflows/absence-periods/${absenceId}`, {
+        method: "PUT",
+        body: JSON.stringify({
+          absent_from: editAbsenceFrom,
+          absent_until: editAbsenceUntil,
+        }),
+      })
+      if (!res.ok) {
+        const text = await res.text()
+        throw new Error(text || "Unable to update absence period.")
+      }
+
+      const data = (await res.json()) as ImproverAbsencePeriodCreateResult
+      setNotice(
+        data.skipped_count > 0
+          ? `Absent period updated. Released ${data.released_count} assignments. ${data.skipped_count} assigned steps were already in progress or completed and were not released.`
+          : `Absent period updated. Released ${data.released_count} assignments for coverage.`,
+      )
+      setError("")
+      cancelEditAbsencePeriod()
+      await loadFeed()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to update absence period.")
+      setNotice("")
+    } finally {
+      setSubmitting("")
+    }
+  }
+
+  const deleteAbsencePeriod = async (period: ImproverAbsencePeriod) => {
+    if (!window.confirm("Delete this absence period?")) {
+      return
+    }
+
+    const submitKey = `absence-delete:${period.id}`
+    setSubmitting(submitKey)
+    try {
+      const res = await authFetch(`/improvers/workflows/absence-periods/${period.id}`, {
+        method: "DELETE",
+      })
+      if (!res.ok) {
+        const text = await res.text()
+        throw new Error(text || "Unable to delete absence period.")
+      }
+      await res.json() as ImproverAbsencePeriodDeleteResult
+      setNotice("Absent period deleted.")
+      setError("")
+      if (editingAbsenceId === period.id) {
+        cancelEditAbsencePeriod()
+      }
+      await loadFeed()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to delete absence period.")
       setNotice("")
     } finally {
       setSubmitting("")
@@ -2263,39 +2419,60 @@ export default function ImproverPage() {
                 <>
                   <div className="grid gap-4 md:grid-cols-2">
                     <div className="space-y-1">
-                      <Label>Recurring Claimed Workpiece</Label>
-                      <Select value={absenceSelection} onValueChange={setAbsenceSelection}>
+                      <Label>Coverage Target</Label>
+                      <Select
+                        value={absenceTargetMode}
+                        onValueChange={(value) => setAbsenceTargetMode(value as "single" | "all")}
+                      >
                         <SelectTrigger>
-                          <SelectValue placeholder="Select a recurring claimed workpiece" />
+                          <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          {recurringClaimOptions.map((option) => (
-                            <SelectItem key={option.key} value={option.key}>
-                              {option.workflowTitle} • Step {option.stepOrder} ({option.stepTitle})
-                            </SelectItem>
-                          ))}
+                          <SelectItem value="single">One workflow series step</SelectItem>
+                          <SelectItem value="all">All active workflow serieses</SelectItem>
                         </SelectContent>
                       </Select>
                     </div>
+                    {absenceTargetMode === "single" && (
+                      <div className="space-y-1">
+                        <Label>Recurring Claimed Workpiece</Label>
+                        <Select value={absenceSelection} onValueChange={setAbsenceSelection}>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Select a recurring claimed workpiece" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {recurringClaimOptions.map((option) => (
+                              <SelectItem key={option.key} value={option.key}>
+                                {option.workflowTitle} • Step {option.stepOrder} ({option.stepTitle})
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    )}
                     <div className="space-y-1">
-                      <Label>Absent Start</Label>
+                      <Label>Absent Start Date</Label>
                       <Input
-                        type="datetime-local"
+                        type="date"
                         value={absenceFrom}
                         onChange={(e) => setAbsenceFrom(e.target.value)}
                       />
                     </div>
                     <div className="space-y-1">
-                      <Label>Absent End</Label>
+                      <Label>Absent End Date</Label>
                       <Input
-                        type="datetime-local"
+                        type="date"
                         value={absenceUntil}
                         onChange={(e) => setAbsenceUntil(e.target.value)}
                       />
                     </div>
                   </div>
                   <Button className="w-full sm:w-auto" onClick={createAbsencePeriod} disabled={submitting === "absence"}>
-                    {submitting === "absence" ? "Saving..." : "Save Absent Period"}
+                    {submitting === "absence"
+                      ? "Saving..."
+                      : absenceTargetMode === "all"
+                        ? "Save Absent Period For All Active Serieses"
+                        : "Save Absent Period"}
                   </Button>
                 </>
               )}
@@ -2322,8 +2499,73 @@ export default function ImproverPage() {
                           {period.absent_until * 1000 < Date.now() ? "Ended" : "Scheduled"}
                         </Badge>
                       </div>
-                      <p>From: {new Date(period.absent_from * 1000).toLocaleString()}</p>
-                      <p>Until: {new Date(period.absent_until * 1000).toLocaleString()}</p>
+                      <p>Series: {period.series_id}</p>
+                      {editingAbsenceId === period.id ? (
+                        <div className="grid gap-2 pt-1 sm:grid-cols-2">
+                          <div className="space-y-1">
+                            <Label className="text-xs">Absent Start Date</Label>
+                            <Input
+                              type="date"
+                              value={editAbsenceFrom}
+                              onChange={(e) => setEditAbsenceFrom(e.target.value)}
+                              disabled={Boolean(submitting)}
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <Label className="text-xs">Absent End Date</Label>
+                            <Input
+                              type="date"
+                              value={editAbsenceUntil}
+                              onChange={(e) => setEditAbsenceUntil(e.target.value)}
+                              disabled={Boolean(submitting)}
+                            />
+                          </div>
+                          <div className="flex flex-wrap gap-2 sm:col-span-2">
+                            <Button
+                              size="sm"
+                              className="w-full sm:w-auto"
+                              onClick={() => updateAbsencePeriod(period.id)}
+                              disabled={Boolean(submitting)}
+                            >
+                              {submitting === `absence-update:${period.id}` ? "Saving..." : "Save"}
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="w-full sm:w-auto"
+                              onClick={cancelEditAbsencePeriod}
+                              disabled={Boolean(submitting)}
+                            >
+                              Cancel
+                            </Button>
+                          </div>
+                        </div>
+                      ) : (
+                        <>
+                          <p>From: {formatDateFromUnix(period.absent_from)}</p>
+                          <p>Until: {formatDateFromUnix(period.absent_until, true)}</p>
+                          <div className="flex flex-wrap gap-2 pt-1">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="w-full sm:w-auto"
+                              onClick={() => beginEditAbsencePeriod(period)}
+                              disabled={Boolean(submitting)}
+                            >
+                              Edit
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="destructive"
+                              className="w-full sm:w-auto"
+                              onClick={() => deleteAbsencePeriod(period)}
+                              disabled={Boolean(submitting)}
+                            >
+                              {submitting === `absence-delete:${period.id}` ? "Deleting..." : "Delete"}
+                            </Button>
+                          </div>
+                        </>
+                      )}
                     </div>
                   ))}
                 </div>

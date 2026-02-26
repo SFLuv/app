@@ -265,12 +265,13 @@ func (s *AppDB) CreateTables() error {
 			CREATE TABLE IF NOT EXISTS improvers(
 				user_id TEXT PRIMARY KEY REFERENCES users(id),
 				first_name TEXT NOT NULL,
-			last_name TEXT NOT NULL,
-			email TEXT NOT NULL,
-			status TEXT NOT NULL DEFAULT 'pending',
-			created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-			updated_at TIMESTAMP NOT NULL DEFAULT NOW()
-		);
+				last_name TEXT NOT NULL,
+				email TEXT NOT NULL,
+				primary_rewards_account TEXT NOT NULL DEFAULT '',
+				status TEXT NOT NULL DEFAULT 'pending',
+				created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+				updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+			);
 
 		CREATE INDEX IF NOT EXISTS improvers_status_idx ON improvers(status);
 	`)
@@ -279,10 +280,41 @@ func (s *AppDB) CreateTables() error {
 	}
 
 	_, err = s.db.Exec(context.Background(), `
+		ALTER TABLE improvers
+		ADD COLUMN IF NOT EXISTS primary_rewards_account TEXT NOT NULL DEFAULT '';
+
+		UPDATE improvers i
+		SET primary_rewards_account = COALESCE(
+			(
+				SELECT
+					COALESCE(NULLIF(TRIM(w.smart_address), ''), NULLIF(TRIM(w.eoa_address), ''))
+				FROM
+					wallets w
+				WHERE
+					w.owner = i.user_id
+				AND
+					w.is_eoa = false
+				AND
+					w.smart_index = 0
+				ORDER BY
+					w.id ASC
+				LIMIT 1
+			),
+			TRIM(COALESCE(i.primary_rewards_account, ''))
+		)
+		WHERE
+			TRIM(COALESCE(i.primary_rewards_account, '')) = '';
+	`)
+	if err != nil {
+		return fmt.Errorf("error altering improvers primary rewards account column: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
 			CREATE TABLE IF NOT EXISTS supervisors(
 				user_id TEXT PRIMARY KEY REFERENCES users(id),
 				organization TEXT NOT NULL,
 				email TEXT NOT NULL DEFAULT '',
+				primary_rewards_account TEXT NOT NULL DEFAULT '',
 				nickname TEXT,
 				status TEXT NOT NULL DEFAULT 'pending',
 				created_at TIMESTAMP NOT NULL DEFAULT NOW(),
@@ -299,6 +331,9 @@ func (s *AppDB) CreateTables() error {
 			ALTER TABLE supervisors
 			ADD COLUMN IF NOT EXISTS email TEXT NOT NULL DEFAULT '';
 
+			ALTER TABLE supervisors
+			ADD COLUMN IF NOT EXISTS primary_rewards_account TEXT NOT NULL DEFAULT '';
+
 			UPDATE supervisors s
 			SET email = COALESCE(NULLIF(TRIM(u.contact_email), ''), s.email)
 			FROM users u
@@ -306,6 +341,28 @@ func (s *AppDB) CreateTables() error {
 				u.id = s.user_id
 			AND
 				TRIM(COALESCE(s.email, '')) = '';
+
+			UPDATE supervisors s
+			SET primary_rewards_account = COALESCE(
+				(
+					SELECT
+						COALESCE(NULLIF(TRIM(w.smart_address), ''), NULLIF(TRIM(w.eoa_address), ''))
+					FROM
+						wallets w
+					WHERE
+						w.owner = s.user_id
+					AND
+						w.is_eoa = false
+					AND
+						w.smart_index = 0
+					ORDER BY
+						w.id ASC
+					LIMIT 1
+				),
+				TRIM(COALESCE(s.primary_rewards_account, ''))
+			)
+			WHERE
+				TRIM(COALESCE(s.primary_rewards_account, '')) = '';
 		`)
 	if err != nil {
 		return fmt.Errorf("error altering supervisors email column: %s", err)

@@ -304,6 +304,15 @@ export interface ImproverAbsencePeriodCreateResult {
   skipped_count: number
 }
 
+export interface ImproverAbsencePeriodUpdateRequest {
+  absent_from: string
+  absent_until: string
+}
+
+export interface ImproverAbsencePeriodDeleteResult {
+  id: string
+}
+
 export interface ImproverWorkflowSeriesUnclaimResult {
   series_id: string
   step_order: number

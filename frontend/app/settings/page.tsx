@@ -16,10 +16,12 @@ import { Switch } from "@/components/ui/switch"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Check, Loader2, Upload, User, Clock, XCircle, AlertTriangle } from "lucide-react"
-import { VerifiedEmailResponse } from "@/types/server"
+import { VerifiedEmailResponse, WalletResponse } from "@/types/server"
+import { getAddress, isAddress } from "viem"
 
 type MerchantStatus = "approved" | "pending" | "rejected" | "none"
 type LocationApplicationStatus = "approved" | "pending" | "rejected"
+const CUSTOM_REWARDS_ACCOUNT_VALUE = "__custom__"
 
 const getLocationApplicationStatus = (approval?: boolean | null): LocationApplicationStatus => {
   if (approval === true) return "approved"
@@ -106,6 +108,21 @@ export default function SettingsPage() {
   const [affiliateLogoPreview, setAffiliateLogoPreview] = useState<string>("")
   const [affiliateLogoSaving, setAffiliateLogoSaving] = useState(false)
   const [affiliateLogoError, setAffiliateLogoError] = useState("")
+  const [rewardsWallets, setRewardsWallets] = useState<WalletResponse[]>([])
+  const [rewardsWalletsLoading, setRewardsWalletsLoading] = useState(false)
+  const [rewardsWalletsError, setRewardsWalletsError] = useState("")
+
+  const [improverRewardsSelection, setImproverRewardsSelection] = useState("")
+  const [improverCustomRewardsAccount, setImproverCustomRewardsAccount] = useState("")
+  const [improverRewardsSaving, setImproverRewardsSaving] = useState(false)
+  const [improverRewardsError, setImproverRewardsError] = useState("")
+  const [improverRewardsSuccess, setImproverRewardsSuccess] = useState("")
+
+  const [supervisorRewardsSelection, setSupervisorRewardsSelection] = useState("")
+  const [supervisorCustomRewardsAccount, setSupervisorCustomRewardsAccount] = useState("")
+  const [supervisorRewardsSaving, setSupervisorRewardsSaving] = useState(false)
+  const [supervisorRewardsError, setSupervisorRewardsError] = useState("")
+  const [supervisorRewardsSuccess, setSupervisorRewardsSuccess] = useState("")
 
   // Account form
   const [name, setName] = useState(user?.name || "")
@@ -144,6 +161,41 @@ export default function SettingsPage() {
     [verifiedEmails],
   )
 
+  const rewardsAccountOptions = useMemo(() => {
+    const seen = new Set<string>()
+    const options: Array<{ value: string; label: string; isSmartWalletZero: boolean }> = []
+
+    for (const wallet of rewardsWallets) {
+      const rawAddress = (wallet.smart_address || wallet.eoa_address || "").trim()
+      if (!rawAddress || !isAddress(rawAddress)) continue
+      const normalizedAddress = getAddress(rawAddress)
+      const key = normalizedAddress.toLowerCase()
+      if (seen.has(key)) continue
+      seen.add(key)
+
+      const fallbackName = wallet.is_eoa
+        ? "EOA Account"
+        : wallet.smart_index !== undefined
+          ? `Smart Wallet ${wallet.smart_index + 1}`
+          : "Smart Wallet"
+      const displayName = (wallet.name || "").trim() || fallbackName
+      const shortAddress = `${normalizedAddress.slice(0, 6)}...${normalizedAddress.slice(-4)}`
+      options.push({
+        value: normalizedAddress,
+        label: `${displayName} (${shortAddress})`,
+        isSmartWalletZero: wallet.is_eoa === false && wallet.smart_index === 0,
+      })
+    }
+
+    return options
+  }, [rewardsWallets])
+
+  const defaultRewardsAccount = useMemo(() => {
+    const smartWalletZero = rewardsAccountOptions.find((option) => option.isSmartWalletZero)
+    if (smartWalletZero) return smartWalletZero.value
+    return rewardsAccountOptions[0]?.value || ""
+  }, [rewardsAccountOptions])
+
   useEffect(() => {
     if (verifiedEmailOptions.length === 0) {
       if (roleEmail !== "") setRoleEmail("")
@@ -176,11 +228,80 @@ export default function SettingsPage() {
     }
   }
 
+  const loadRewardsWallets = async () => {
+    if (status !== "authenticated") return
+
+    setRewardsWalletsLoading(true)
+    setRewardsWalletsError("")
+    try {
+      const res = await authFetch("/wallets")
+      if (!res.ok) {
+        const text = await res.text()
+        throw new Error(text || "Unable to load accounts.")
+      }
+      const data = (await res.json()) as WalletResponse[]
+      setRewardsWallets(data || [])
+    } catch (err) {
+      setRewardsWalletsError(err instanceof Error ? err.message : "Unable to load accounts.")
+    } finally {
+      setRewardsWalletsLoading(false)
+    }
+  }
+
   useEffect(() => {
     if (status === "authenticated") {
       void loadVerifiedEmails()
+      void loadRewardsWallets()
     }
   }, [status])
+
+  useEffect(() => {
+    if (improverStatus !== "approved") return
+
+    const current = (improver?.primary_rewards_account || "").trim()
+    const normalizedCurrent = current && isAddress(current) ? getAddress(current) : ""
+    if (normalizedCurrent && rewardsAccountOptions.some((option) => option.value.toLowerCase() === normalizedCurrent.toLowerCase())) {
+      setImproverRewardsSelection(normalizedCurrent)
+      setImproverCustomRewardsAccount("")
+      return
+    }
+    if (normalizedCurrent) {
+      setImproverRewardsSelection(CUSTOM_REWARDS_ACCOUNT_VALUE)
+      setImproverCustomRewardsAccount(normalizedCurrent)
+      return
+    }
+    if (defaultRewardsAccount) {
+      setImproverRewardsSelection(defaultRewardsAccount)
+      setImproverCustomRewardsAccount("")
+      return
+    }
+    setImproverRewardsSelection(CUSTOM_REWARDS_ACCOUNT_VALUE)
+    setImproverCustomRewardsAccount("")
+  }, [improverStatus, improver?.primary_rewards_account, rewardsAccountOptions, defaultRewardsAccount])
+
+  useEffect(() => {
+    if (supervisorStatus !== "approved") return
+
+    const current = (supervisor?.primary_rewards_account || "").trim()
+    const normalizedCurrent = current && isAddress(current) ? getAddress(current) : ""
+    if (normalizedCurrent && rewardsAccountOptions.some((option) => option.value.toLowerCase() === normalizedCurrent.toLowerCase())) {
+      setSupervisorRewardsSelection(normalizedCurrent)
+      setSupervisorCustomRewardsAccount("")
+      return
+    }
+    if (normalizedCurrent) {
+      setSupervisorRewardsSelection(CUSTOM_REWARDS_ACCOUNT_VALUE)
+      setSupervisorCustomRewardsAccount(normalizedCurrent)
+      return
+    }
+    if (defaultRewardsAccount) {
+      setSupervisorRewardsSelection(defaultRewardsAccount)
+      setSupervisorCustomRewardsAccount("")
+      return
+    }
+    setSupervisorRewardsSelection(CUSTOM_REWARDS_ACCOUNT_VALUE)
+    setSupervisorCustomRewardsAccount("")
+  }, [supervisorStatus, supervisor?.primary_rewards_account, rewardsAccountOptions, defaultRewardsAccount])
 
   const handleAddVerifiedEmail = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -358,6 +479,84 @@ export default function SettingsPage() {
       setRoleError("Unable to submit your request. Please try again.")
     } finally {
       setRoleSubmitting(false)
+    }
+  }
+
+  const handleSaveImproverRewardsAccount = async () => {
+    setImproverRewardsError("")
+    setImproverRewardsSuccess("")
+
+    const selectedValue = improverRewardsSelection === CUSTOM_REWARDS_ACCOUNT_VALUE
+      ? improverCustomRewardsAccount.trim()
+      : improverRewardsSelection.trim()
+
+    if (!selectedValue) {
+      setImproverRewardsError("Primary rewards account is required.")
+      return
+    }
+    if (!isAddress(selectedValue)) {
+      setImproverRewardsError("Enter a valid Ethereum address.")
+      return
+    }
+
+    const normalized = getAddress(selectedValue)
+    setImproverRewardsSaving(true)
+    try {
+      const res = await authFetch("/improvers/primary-rewards-account", {
+        method: "PUT",
+        body: JSON.stringify({ primary_rewards_account: normalized }),
+      })
+      if (!res.ok) {
+        const text = await res.text()
+        throw new Error(text || "Unable to update improver rewards account.")
+      }
+
+      const data = await res.json()
+      setImprover(data)
+      setImproverRewardsSuccess("Primary rewards account updated.")
+    } catch (err) {
+      setImproverRewardsError(err instanceof Error ? err.message : "Unable to update improver rewards account.")
+    } finally {
+      setImproverRewardsSaving(false)
+    }
+  }
+
+  const handleSaveSupervisorRewardsAccount = async () => {
+    setSupervisorRewardsError("")
+    setSupervisorRewardsSuccess("")
+
+    const selectedValue = supervisorRewardsSelection === CUSTOM_REWARDS_ACCOUNT_VALUE
+      ? supervisorCustomRewardsAccount.trim()
+      : supervisorRewardsSelection.trim()
+
+    if (!selectedValue) {
+      setSupervisorRewardsError("Primary rewards account is required.")
+      return
+    }
+    if (!isAddress(selectedValue)) {
+      setSupervisorRewardsError("Enter a valid Ethereum address.")
+      return
+    }
+
+    const normalized = getAddress(selectedValue)
+    setSupervisorRewardsSaving(true)
+    try {
+      const res = await authFetch("/supervisors/primary-rewards-account", {
+        method: "PUT",
+        body: JSON.stringify({ primary_rewards_account: normalized }),
+      })
+      if (!res.ok) {
+        const text = await res.text()
+        throw new Error(text || "Unable to update supervisor rewards account.")
+      }
+
+      const data = await res.json()
+      setSupervisor(data)
+      setSupervisorRewardsSuccess("Primary rewards account updated.")
+    } catch (err) {
+      setSupervisorRewardsError(err instanceof Error ? err.message : "Unable to update supervisor rewards account.")
+    } finally {
+      setSupervisorRewardsSaving(false)
     }
   }
 
@@ -1199,10 +1398,70 @@ export default function SettingsPage() {
                   <p className="text-gray-600 dark:text-gray-400">Your improver request is under review.</p>
                 )}
                 {improverStatus === "approved" && (
-                  <>
-                    <p className="text-gray-600 dark:text-gray-400 mb-4">You are approved as an improver and can now claim eligible workflow steps.</p>
+                  <div className="space-y-4">
+                    <p className="text-gray-600 dark:text-gray-400">You are approved as an improver and can now claim eligible workflow steps.</p>
+                    <div className="space-y-3 rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-900/30">
+                      <div className="space-y-1">
+                        <Label htmlFor="improver-primary-rewards-account" className="text-black dark:text-white">
+                          Primary Rewards Account
+                        </Label>
+                        <p className="text-xs text-gray-500 dark:text-gray-400">
+                          Workflow rewards are paid to this account. Smart Wallet 1 is used by default.
+                        </p>
+                      </div>
+                      <Select
+                        value={improverRewardsSelection || (defaultRewardsAccount || CUSTOM_REWARDS_ACCOUNT_VALUE)}
+                        onValueChange={(value) => {
+                          setImproverRewardsSelection(value)
+                          setImproverRewardsError("")
+                          setImproverRewardsSuccess("")
+                        }}
+                      >
+                        <SelectTrigger id="improver-primary-rewards-account" className="text-black dark:text-white bg-secondary">
+                          <SelectValue placeholder={rewardsWalletsLoading ? "Loading accounts..." : "Select an account"} />
+                        </SelectTrigger>
+                        <SelectContent className="bg-secondary text-black dark:text-white">
+                          {rewardsAccountOptions.map((option) => (
+                            <SelectItem key={option.value} value={option.value}>
+                              {option.label}{option.isSmartWalletZero ? " (Default)" : ""}
+                            </SelectItem>
+                          ))}
+                          <SelectItem value={CUSTOM_REWARDS_ACCOUNT_VALUE}>Custom account</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      {improverRewardsSelection === CUSTOM_REWARDS_ACCOUNT_VALUE && (
+                        <Input
+                          value={improverCustomRewardsAccount}
+                          onChange={(e) => {
+                            setImproverCustomRewardsAccount(e.target.value)
+                            setImproverRewardsError("")
+                            setImproverRewardsSuccess("")
+                          }}
+                          placeholder="0x..."
+                          className="text-black dark:text-white bg-secondary"
+                        />
+                      )}
+                      {rewardsWalletsError && (
+                        <p className="text-sm text-red-600 dark:text-red-400">{rewardsWalletsError}</p>
+                      )}
+                      {improverRewardsError && (
+                        <p className="text-sm text-red-600 dark:text-red-400">{improverRewardsError}</p>
+                      )}
+                      {improverRewardsSuccess && (
+                        <p className="text-sm text-green-600 dark:text-green-400">{improverRewardsSuccess}</p>
+                      )}
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="bg-secondary text-[#eb6c6c] border-[#eb6c6c] hover:bg-[#eb6c6c] hover:text-white"
+                        onClick={handleSaveImproverRewardsAccount}
+                        disabled={improverRewardsSaving}
+                      >
+                        {improverRewardsSaving ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Saving...</> : "Save Rewards Account"}
+                      </Button>
+                    </div>
                     <Button variant="outline" className="bg-secondary text-[#eb6c6c] border-[#eb6c6c] hover:bg-[#eb6c6c] hover:text-white" onClick={() => router.push("/improver")}>Open Improver Panel</Button>
-                  </>
+                  </div>
                 )}
               </CardContent>
             </Card>
@@ -1244,10 +1503,70 @@ export default function SettingsPage() {
                   <p className="text-gray-600 dark:text-gray-400">Your supervisor request for {supervisor?.organization || "your organization"} is under review.</p>
                 )}
                 {supervisorStatus === "approved" && (
-                  <>
-                    <p className="text-gray-600 dark:text-gray-400 mb-4">You are approved to supervise assigned workflows for {supervisor?.organization || "your organization"}.</p>
+                  <div className="space-y-4">
+                    <p className="text-gray-600 dark:text-gray-400">You are approved to supervise assigned workflows for {supervisor?.organization || "your organization"}.</p>
+                    <div className="space-y-3 rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-900/30">
+                      <div className="space-y-1">
+                        <Label htmlFor="supervisor-primary-rewards-account" className="text-black dark:text-white">
+                          Primary Rewards Account
+                        </Label>
+                        <p className="text-xs text-gray-500 dark:text-gray-400">
+                          Supervisor workflow rewards are paid to this account. Smart Wallet 1 is used by default.
+                        </p>
+                      </div>
+                      <Select
+                        value={supervisorRewardsSelection || (defaultRewardsAccount || CUSTOM_REWARDS_ACCOUNT_VALUE)}
+                        onValueChange={(value) => {
+                          setSupervisorRewardsSelection(value)
+                          setSupervisorRewardsError("")
+                          setSupervisorRewardsSuccess("")
+                        }}
+                      >
+                        <SelectTrigger id="supervisor-primary-rewards-account" className="text-black dark:text-white bg-secondary">
+                          <SelectValue placeholder={rewardsWalletsLoading ? "Loading accounts..." : "Select an account"} />
+                        </SelectTrigger>
+                        <SelectContent className="bg-secondary text-black dark:text-white">
+                          {rewardsAccountOptions.map((option) => (
+                            <SelectItem key={option.value} value={option.value}>
+                              {option.label}{option.isSmartWalletZero ? " (Default)" : ""}
+                            </SelectItem>
+                          ))}
+                          <SelectItem value={CUSTOM_REWARDS_ACCOUNT_VALUE}>Custom account</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      {supervisorRewardsSelection === CUSTOM_REWARDS_ACCOUNT_VALUE && (
+                        <Input
+                          value={supervisorCustomRewardsAccount}
+                          onChange={(e) => {
+                            setSupervisorCustomRewardsAccount(e.target.value)
+                            setSupervisorRewardsError("")
+                            setSupervisorRewardsSuccess("")
+                          }}
+                          placeholder="0x..."
+                          className="text-black dark:text-white bg-secondary"
+                        />
+                      )}
+                      {rewardsWalletsError && (
+                        <p className="text-sm text-red-600 dark:text-red-400">{rewardsWalletsError}</p>
+                      )}
+                      {supervisorRewardsError && (
+                        <p className="text-sm text-red-600 dark:text-red-400">{supervisorRewardsError}</p>
+                      )}
+                      {supervisorRewardsSuccess && (
+                        <p className="text-sm text-green-600 dark:text-green-400">{supervisorRewardsSuccess}</p>
+                      )}
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="bg-secondary text-[#eb6c6c] border-[#eb6c6c] hover:bg-[#eb6c6c] hover:text-white"
+                        onClick={handleSaveSupervisorRewardsAccount}
+                        disabled={supervisorRewardsSaving}
+                      >
+                        {supervisorRewardsSaving ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Saving...</> : "Save Rewards Account"}
+                      </Button>
+                    </div>
                     <Button variant="outline" className="bg-secondary text-[#eb6c6c] border-[#eb6c6c] hover:bg-[#eb6c6c] hover:text-white" onClick={() => router.push("/supervisor")}>Open Supervisor Panel</Button>
-                  </>
+                  </div>
                 )}
               </CardContent>
             </Card>

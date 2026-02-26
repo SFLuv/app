@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/SFLuv/app/backend/structs"
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -74,6 +75,52 @@ func (a *AppDB) getBoolUserRole(ctx context.Context, id string, column string) (
 		return false, err
 	}
 	return value, nil
+}
+
+func normalizeEthereumAddress(value string) (string, error) {
+	normalized := strings.TrimSpace(value)
+	if normalized == "" {
+		return "", fmt.Errorf("primary rewards account is required")
+	}
+	if !common.IsHexAddress(normalized) {
+		return "", fmt.Errorf("primary rewards account must be a valid ethereum address")
+	}
+	return common.HexToAddress(normalized).Hex(), nil
+}
+
+func getDefaultPrimaryRewardsAccountForUser(ctx context.Context, querier interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}, userId string) (string, error) {
+	var account string
+	err := querier.QueryRow(ctx, `
+		SELECT
+			COALESCE(NULLIF(TRIM(w.smart_address), ''), NULLIF(TRIM(w.eoa_address), ''), '')
+		FROM
+			wallets w
+		WHERE
+			w.owner = $1
+		AND
+			w.is_eoa = false
+		AND
+			w.smart_index = 0
+		ORDER BY
+			w.id ASC
+		LIMIT 1;
+	`, userId).Scan(&account)
+	if err == pgx.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	account = strings.TrimSpace(account)
+	if account == "" {
+		return "", nil
+	}
+	if !common.IsHexAddress(account) {
+		return "", nil
+	}
+	return common.HexToAddress(account).Hex(), nil
 }
 
 func (a *AppDB) UpsertProposerRequest(ctx context.Context, userId string, organization string, email string) (*structs.Proposer, error) {
@@ -343,6 +390,11 @@ func (a *AppDB) UpsertImproverRequest(ctx context.Context, userId string, req *s
 	}
 	defer tx.Rollback(ctx)
 
+	defaultRewardsAccount, err := getDefaultPrimaryRewardsAccountForUser(ctx, tx, userId)
+	if err != nil {
+		return nil, fmt.Errorf("error loading default improver rewards account: %s", err)
+	}
+
 	var status string
 	err = tx.QueryRow(ctx, `
 		SELECT
@@ -355,10 +407,10 @@ func (a *AppDB) UpsertImproverRequest(ctx context.Context, userId string, req *s
 	if err == pgx.ErrNoRows {
 		_, err = tx.Exec(ctx, `
 			INSERT INTO improvers
-				(user_id, first_name, last_name, email, status)
+				(user_id, first_name, last_name, email, primary_rewards_account, status)
 			VALUES
-				($1, $2, $3, $4, 'pending');
-		`, userId, first, last, email)
+				($1, $2, $3, $4, $5, 'pending');
+		`, userId, first, last, email, defaultRewardsAccount)
 		if err != nil {
 			return nil, fmt.Errorf("error inserting improver request: %s", err)
 		}
@@ -376,11 +428,12 @@ func (a *AppDB) UpsertImproverRequest(ctx context.Context, userId string, req *s
 				first_name = $2,
 				last_name = $3,
 				email = $4,
+				primary_rewards_account = COALESCE(NULLIF(TRIM(primary_rewards_account), ''), $5, ''),
 				status = 'pending',
 				updated_at = NOW()
 			WHERE
 				user_id = $1;
-		`, userId, first, last, email)
+		`, userId, first, last, email, defaultRewardsAccount)
 		if err != nil {
 			return nil, fmt.Errorf("error updating improver request: %s", err)
 		}
@@ -429,6 +482,7 @@ func (a *AppDB) GetImprovers(ctx context.Context, search string, page, count int
 			first_name,
 			last_name,
 			email,
+			primary_rewards_account,
 			status,
 			created_at,
 			updated_at
@@ -454,6 +508,7 @@ func (a *AppDB) GetImprovers(ctx context.Context, search string, page, count int
 			&improver.FirstName,
 			&improver.LastName,
 			&improver.Email,
+			&improver.PrimaryRewardsAccount,
 			&improver.Status,
 			&improver.CreatedAt,
 			&improver.UpdatedAt,
@@ -515,6 +570,27 @@ func (a *AppDB) UpdateImprover(ctx context.Context, req *structs.ImproverUpdateR
 		if err != nil {
 			return nil, fmt.Errorf("error updating user improver flag: %s", err)
 		}
+
+		if isImprover {
+			defaultRewardsAccount, rewardsErr := getDefaultPrimaryRewardsAccountForUser(ctx, tx, req.UserId)
+			if rewardsErr != nil {
+				return nil, fmt.Errorf("error loading default improver rewards account: %s", rewardsErr)
+			}
+			if defaultRewardsAccount != "" {
+				_, err = tx.Exec(ctx, `
+					UPDATE
+						improvers
+					SET
+						primary_rewards_account = COALESCE(NULLIF(TRIM(primary_rewards_account), ''), $2),
+						updated_at = NOW()
+					WHERE
+						user_id = $1;
+				`, req.UserId, defaultRewardsAccount)
+				if err != nil {
+					return nil, fmt.Errorf("error defaulting improver rewards account: %s", err)
+				}
+			}
+		}
 	}
 
 	improver, err := getImproverByUser(ctx, tx, req.UserId)
@@ -529,6 +605,67 @@ func (a *AppDB) UpdateImprover(ctx context.Context, req *structs.ImproverUpdateR
 	return improver, nil
 }
 
+func (a *AppDB) UpdateImproverPrimaryRewardsAccount(ctx context.Context, userId string, account string) (*structs.Improver, error) {
+	userId = strings.TrimSpace(userId)
+	if userId == "" {
+		return nil, fmt.Errorf("user_id is required")
+	}
+
+	normalizedAccount, err := normalizeEthereumAddress(account)
+	if err != nil {
+		return nil, err
+	}
+
+	tx, err := a.db.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	var status string
+	err = tx.QueryRow(ctx, `
+		SELECT
+			status
+		FROM
+			improvers
+		WHERE
+			user_id = $1
+		FOR UPDATE;
+	`, userId).Scan(&status)
+	if err == pgx.ErrNoRows {
+		return nil, fmt.Errorf("improver not found")
+	}
+	if err != nil {
+		return nil, fmt.Errorf("error loading improver: %s", err)
+	}
+	if status != "approved" {
+		return nil, fmt.Errorf("improver must be approved")
+	}
+
+	_, err = tx.Exec(ctx, `
+		UPDATE
+			improvers
+		SET
+			primary_rewards_account = $2,
+			updated_at = NOW()
+		WHERE
+			user_id = $1;
+	`, userId, normalizedAccount)
+	if err != nil {
+		return nil, fmt.Errorf("error updating improver rewards account: %s", err)
+	}
+
+	improver, err := getImproverByUser(ctx, tx, userId)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return improver, nil
+}
+
 func getImproverByUser(ctx context.Context, querier interface {
 	QueryRow(context.Context, string, ...any) pgx.Row
 }, userId string) (*structs.Improver, error) {
@@ -538,6 +675,7 @@ func getImproverByUser(ctx context.Context, querier interface {
 			first_name,
 			last_name,
 			email,
+			primary_rewards_account,
 			status,
 			created_at,
 			updated_at
@@ -553,6 +691,7 @@ func getImproverByUser(ctx context.Context, querier interface {
 		&improver.FirstName,
 		&improver.LastName,
 		&improver.Email,
+		&improver.PrimaryRewardsAccount,
 		&improver.Status,
 		&improver.CreatedAt,
 		&improver.UpdatedAt,
@@ -587,6 +726,11 @@ func (a *AppDB) UpsertSupervisorRequest(ctx context.Context, userId string, orga
 	}
 	defer tx.Rollback(ctx)
 
+	defaultRewardsAccount, err := getDefaultPrimaryRewardsAccountForUser(ctx, tx, userId)
+	if err != nil {
+		return nil, fmt.Errorf("error loading default supervisor rewards account: %s", err)
+	}
+
 	var status string
 	err = tx.QueryRow(ctx, `
 		SELECT
@@ -599,10 +743,10 @@ func (a *AppDB) UpsertSupervisorRequest(ctx context.Context, userId string, orga
 	if err == pgx.ErrNoRows {
 		_, err = tx.Exec(ctx, `
 			INSERT INTO supervisors
-				(user_id, organization, email, status)
+				(user_id, organization, email, primary_rewards_account, status)
 			VALUES
-				($1, $2, $3, 'pending');
-		`, userId, organization, email)
+				($1, $2, $3, $4, 'pending');
+		`, userId, organization, email, defaultRewardsAccount)
 		if err != nil {
 			return nil, fmt.Errorf("error inserting supervisor request: %s", err)
 		}
@@ -618,11 +762,12 @@ func (a *AppDB) UpsertSupervisorRequest(ctx context.Context, userId string, orga
 			SET
 				organization = $2,
 				email = $3,
+				primary_rewards_account = COALESCE(NULLIF(TRIM(primary_rewards_account), ''), $4, ''),
 				status = 'pending',
 				updated_at = NOW()
 			WHERE
 				user_id = $1;
-		`, userId, organization, email)
+		`, userId, organization, email, defaultRewardsAccount)
 		if err != nil {
 			return nil, fmt.Errorf("error updating supervisor request: %s", err)
 		}
@@ -668,6 +813,7 @@ func (a *AppDB) GetSupervisors(ctx context.Context, search string, page, count i
 			user_id,
 			organization,
 			email,
+			primary_rewards_account,
 			nickname,
 			status,
 			created_at,
@@ -693,6 +839,7 @@ func (a *AppDB) GetSupervisors(ctx context.Context, search string, page, count i
 			&supervisor.UserId,
 			&supervisor.Organization,
 			&supervisor.Email,
+			&supervisor.PrimaryRewardsAccount,
 			&supervisor.Nickname,
 			&supervisor.Status,
 			&supervisor.CreatedAt,
@@ -713,6 +860,7 @@ func (a *AppDB) GetApprovedSupervisors(ctx context.Context) ([]*structs.Supervis
 			s.user_id,
 			s.organization,
 			s.email,
+			s.primary_rewards_account,
 			s.nickname,
 			s.status,
 			s.created_at,
@@ -743,6 +891,7 @@ func (a *AppDB) GetApprovedSupervisors(ctx context.Context) ([]*structs.Supervis
 			&supervisor.UserId,
 			&supervisor.Organization,
 			&supervisor.Email,
+			&supervisor.PrimaryRewardsAccount,
 			&supervisor.Nickname,
 			&supervisor.Status,
 			&supervisor.CreatedAt,
@@ -807,6 +956,27 @@ func (a *AppDB) UpdateSupervisor(ctx context.Context, req *structs.SupervisorUpd
 		if err != nil {
 			return nil, fmt.Errorf("error updating user supervisor flag: %s", err)
 		}
+
+		if isSupervisor {
+			defaultRewardsAccount, rewardsErr := getDefaultPrimaryRewardsAccountForUser(ctx, tx, req.UserId)
+			if rewardsErr != nil {
+				return nil, fmt.Errorf("error loading default supervisor rewards account: %s", rewardsErr)
+			}
+			if defaultRewardsAccount != "" {
+				_, err = tx.Exec(ctx, `
+					UPDATE
+						supervisors
+					SET
+						primary_rewards_account = COALESCE(NULLIF(TRIM(primary_rewards_account), ''), $2),
+						updated_at = NOW()
+					WHERE
+						user_id = $1;
+				`, req.UserId, defaultRewardsAccount)
+				if err != nil {
+					return nil, fmt.Errorf("error defaulting supervisor rewards account: %s", err)
+				}
+			}
+		}
 	}
 
 	supervisor, err := getSupervisorByUser(ctx, tx, req.UserId)
@@ -821,6 +991,67 @@ func (a *AppDB) UpdateSupervisor(ctx context.Context, req *structs.SupervisorUpd
 	return supervisor, nil
 }
 
+func (a *AppDB) UpdateSupervisorPrimaryRewardsAccount(ctx context.Context, userId string, account string) (*structs.Supervisor, error) {
+	userId = strings.TrimSpace(userId)
+	if userId == "" {
+		return nil, fmt.Errorf("user_id is required")
+	}
+
+	normalizedAccount, err := normalizeEthereumAddress(account)
+	if err != nil {
+		return nil, err
+	}
+
+	tx, err := a.db.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	var status string
+	err = tx.QueryRow(ctx, `
+		SELECT
+			status
+		FROM
+			supervisors
+		WHERE
+			user_id = $1
+		FOR UPDATE;
+	`, userId).Scan(&status)
+	if err == pgx.ErrNoRows {
+		return nil, fmt.Errorf("supervisor not found")
+	}
+	if err != nil {
+		return nil, fmt.Errorf("error loading supervisor: %s", err)
+	}
+	if status != "approved" {
+		return nil, fmt.Errorf("supervisor must be approved")
+	}
+
+	_, err = tx.Exec(ctx, `
+		UPDATE
+			supervisors
+		SET
+			primary_rewards_account = $2,
+			updated_at = NOW()
+		WHERE
+			user_id = $1;
+	`, userId, normalizedAccount)
+	if err != nil {
+		return nil, fmt.Errorf("error updating supervisor rewards account: %s", err)
+	}
+
+	supervisor, err := getSupervisorByUser(ctx, tx, userId)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return supervisor, nil
+}
+
 func getSupervisorByUser(ctx context.Context, querier interface {
 	QueryRow(context.Context, string, ...any) pgx.Row
 }, userId string) (*structs.Supervisor, error) {
@@ -829,6 +1060,7 @@ func getSupervisorByUser(ctx context.Context, querier interface {
 			user_id,
 			organization,
 			email,
+			primary_rewards_account,
 			nickname,
 			status,
 			created_at,
@@ -844,6 +1076,7 @@ func getSupervisorByUser(ctx context.Context, querier interface {
 		&supervisor.UserId,
 		&supervisor.Organization,
 		&supervisor.Email,
+		&supervisor.PrimaryRewardsAccount,
 		&supervisor.Nickname,
 		&supervisor.Status,
 		&supervisor.CreatedAt,
@@ -4067,7 +4300,8 @@ func (a *AppDB) CreateImproverAbsencePeriod(
 	absentFrom time.Time,
 	absentUntil time.Time,
 ) (*structs.ImproverAbsencePeriodCreateResult, error) {
-	if strings.TrimSpace(seriesId) == "" {
+	seriesId = strings.TrimSpace(seriesId)
+	if seriesId == "" {
 		return nil, fmt.Errorf("series_id is required")
 	}
 	if stepOrder <= 0 {
@@ -4076,12 +4310,9 @@ func (a *AppDB) CreateImproverAbsencePeriod(
 	if !absentUntil.After(absentFrom) {
 		return nil, fmt.Errorf("absent_until must be after absent_from")
 	}
+
 	absentFromUnix := absentFrom.UTC().Unix()
 	absentUntilUnix := absentUntil.UTC().Unix()
-
-	seriesId = strings.TrimSpace(seriesId)
-	absentFrom = absentFrom.UTC()
-	absentUntil = absentUntil.UTC()
 
 	tx, err := a.db.Begin(ctx)
 	if err != nil {
@@ -4089,61 +4320,408 @@ func (a *AppDB) CreateImproverAbsencePeriod(
 	}
 	defer tx.Rollback(ctx)
 
-	var recurringClaims int
-	err = tx.QueryRow(ctx, `
-			SELECT
-				COUNT(*)
-			FROM
-				workflow_steps ws
-			JOIN
-				workflows w
-			ON
-				w.id = ws.workflow_id
-			JOIN
-				workflow_series sr
-			ON
-				sr.id = w.series_id
-			WHERE
-				ws.assigned_improver_id = $1
-			AND
-				w.series_id = $2
-			AND
-				COALESCE(NULLIF(TRIM(sr.recurrence), ''), 'one_time') <> 'one_time'
-			AND
-				ws.step_order = $3;
-		`, improverId, seriesId, stepOrder).Scan(&recurringClaims)
-	if err != nil {
-		return nil, fmt.Errorf("error validating recurring assignment for absence period: %s", err)
+	if err := ensureRecurringClaimExistsForAbsenceTx(ctx, tx, improverId, seriesId, stepOrder); err != nil {
+		return nil, err
 	}
-	if recurringClaims == 0 {
-		return nil, fmt.Errorf("no claimed recurring workpiece found for this series and step")
-	}
-
-	var overlapCount int
-	err = tx.QueryRow(ctx, `
-		SELECT
-			COUNT(*)
-		FROM
-			workflow_improver_absences
-		WHERE
-			improver_id = $1
-		AND
-			series_id = $2
-		AND
-			step_order = $3
-		AND
-			NOT ($5 <= absent_from OR $4 >= absent_until);
-	`, improverId, seriesId, stepOrder, absentFromUnix, absentUntilUnix).Scan(&overlapCount)
+	overlapCount, err := countImproverAbsenceOverlapTx(ctx, tx, improverId, seriesId, stepOrder, absentFromUnix, absentUntilUnix, "")
 	if err != nil {
-		return nil, fmt.Errorf("error checking overlapping absence period: %s", err)
+		return nil, err
 	}
 	if overlapCount > 0 {
 		return nil, fmt.Errorf("overlapping absence period already exists")
 	}
 
+	absence, err := insertImproverAbsencePeriodTx(ctx, tx, improverId, seriesId, stepOrder, absentFromUnix, absentUntilUnix)
+	if err != nil {
+		return nil, err
+	}
+	targetedCount, releasedCount, err := releaseAssignmentsForImproverAbsenceTx(ctx, tx, improverId, seriesId, stepOrder, absentFromUnix, absentUntilUnix)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+
+	result := &structs.ImproverAbsencePeriodCreateResult{
+		Absence:       absence,
+		ReleasedCount: releasedCount,
+		SkippedCount:  targetedCount - releasedCount,
+	}
+	if result.SkippedCount < 0 {
+		result.SkippedCount = 0
+	}
+	return result, nil
+}
+
+func (a *AppDB) UpdateImproverAbsencePeriod(
+	ctx context.Context,
+	improverId string,
+	absenceId string,
+	absentFrom time.Time,
+	absentUntil time.Time,
+) (*structs.ImproverAbsencePeriodCreateResult, error) {
+	absenceId = strings.TrimSpace(absenceId)
+	if absenceId == "" {
+		return nil, fmt.Errorf("absence_id is required")
+	}
+	if !absentUntil.After(absentFrom) {
+		return nil, fmt.Errorf("absent_until must be after absent_from")
+	}
+
+	absentFromUnix := absentFrom.UTC().Unix()
+	absentUntilUnix := absentUntil.UTC().Unix()
+
+	tx, err := a.db.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	existing := structs.ImproverAbsencePeriod{}
+	err = tx.QueryRow(ctx, `
+		SELECT
+			id,
+			improver_id,
+			series_id,
+			step_order,
+			absent_from,
+			absent_until,
+			created_at,
+			updated_at
+		FROM
+			workflow_improver_absences
+		WHERE
+			id = $1
+		AND
+			improver_id = $2
+		FOR UPDATE;
+	`, absenceId, improverId).Scan(
+		&existing.Id,
+		&existing.ImproverId,
+		&existing.SeriesId,
+		&existing.StepOrder,
+		&existing.AbsentFrom,
+		&existing.AbsentUntil,
+		&existing.CreatedAt,
+		&existing.UpdatedAt,
+	)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, pgx.ErrNoRows
+		}
+		return nil, fmt.Errorf("error loading absence period for update: %s", err)
+	}
+
+	replacementClaimCount, err := countReplacementClaimsForImproverAbsenceTx(
+		ctx,
+		tx,
+		improverId,
+		existing.SeriesId,
+		existing.StepOrder,
+		existing.AbsentFrom,
+		existing.AbsentUntil,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if replacementClaimCount > 0 {
+		return nil, fmt.Errorf("another improver has already claimed work in this absence period")
+	}
+
+	overlapCount, err := countImproverAbsenceOverlapTx(
+		ctx,
+		tx,
+		improverId,
+		existing.SeriesId,
+		existing.StepOrder,
+		absentFromUnix,
+		absentUntilUnix,
+		existing.Id,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if overlapCount > 0 {
+		return nil, fmt.Errorf("overlapping absence period already exists")
+	}
+
+	updated := structs.ImproverAbsencePeriod{}
+	err = tx.QueryRow(ctx, `
+		UPDATE
+			workflow_improver_absences
+		SET
+			absent_from = $2,
+			absent_until = $3,
+			updated_at = unix_now()
+		WHERE
+			id = $1
+		AND
+			improver_id = $4
+		RETURNING
+			id,
+			improver_id,
+			series_id,
+			step_order,
+			absent_from,
+			absent_until,
+			created_at,
+			updated_at;
+	`, existing.Id, absentFromUnix, absentUntilUnix, improverId).Scan(
+		&updated.Id,
+		&updated.ImproverId,
+		&updated.SeriesId,
+		&updated.StepOrder,
+		&updated.AbsentFrom,
+		&updated.AbsentUntil,
+		&updated.CreatedAt,
+		&updated.UpdatedAt,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("error updating improver absence period: %s", err)
+	}
+
+	targetedCount, releasedCount, err := releaseAssignmentsForImproverAbsenceTx(
+		ctx,
+		tx,
+		improverId,
+		updated.SeriesId,
+		updated.StepOrder,
+		updated.AbsentFrom,
+		updated.AbsentUntil,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	hasClaimMapping, err := hasWorkflowSeriesClaimMappingTx(ctx, tx, updated.SeriesId, updated.StepOrder, improverId)
+	if err != nil {
+		return nil, err
+	}
+	if hasClaimMapping {
+		minStart := existing.AbsentFrom
+		if updated.AbsentFrom < minStart {
+			minStart = updated.AbsentFrom
+		}
+		if err := propagateWorkflowSeriesClaimTx(ctx, tx, updated.SeriesId, updated.StepOrder, improverId, minStart); err != nil {
+			return nil, err
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+
+	result := &structs.ImproverAbsencePeriodCreateResult{
+		Absence:       updated,
+		ReleasedCount: releasedCount,
+		SkippedCount:  targetedCount - releasedCount,
+	}
+	if result.SkippedCount < 0 {
+		result.SkippedCount = 0
+	}
+	return result, nil
+}
+
+func (a *AppDB) DeleteImproverAbsencePeriod(
+	ctx context.Context,
+	improverId string,
+	absenceId string,
+) (*structs.ImproverAbsencePeriodDeleteResult, error) {
+	absenceId = strings.TrimSpace(absenceId)
+	if absenceId == "" {
+		return nil, fmt.Errorf("absence_id is required")
+	}
+
+	tx, err := a.db.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	existing := structs.ImproverAbsencePeriod{}
+	err = tx.QueryRow(ctx, `
+		SELECT
+			id,
+			improver_id,
+			series_id,
+			step_order,
+			absent_from,
+			absent_until,
+			created_at,
+			updated_at
+		FROM
+			workflow_improver_absences
+		WHERE
+			id = $1
+		AND
+			improver_id = $2
+		FOR UPDATE;
+	`, absenceId, improverId).Scan(
+		&existing.Id,
+		&existing.ImproverId,
+		&existing.SeriesId,
+		&existing.StepOrder,
+		&existing.AbsentFrom,
+		&existing.AbsentUntil,
+		&existing.CreatedAt,
+		&existing.UpdatedAt,
+	)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, pgx.ErrNoRows
+		}
+		return nil, fmt.Errorf("error loading absence period for deletion: %s", err)
+	}
+
+	replacementClaimCount, err := countReplacementClaimsForImproverAbsenceTx(
+		ctx,
+		tx,
+		improverId,
+		existing.SeriesId,
+		existing.StepOrder,
+		existing.AbsentFrom,
+		existing.AbsentUntil,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if replacementClaimCount > 0 {
+		return nil, fmt.Errorf("another improver has already claimed work in this absence period")
+	}
+
+	_, err = tx.Exec(ctx, `
+		DELETE FROM workflow_improver_absences
+		WHERE
+			id = $1
+		AND
+			improver_id = $2;
+	`, existing.Id, improverId)
+	if err != nil {
+		return nil, fmt.Errorf("error deleting improver absence period: %s", err)
+	}
+
+	hasClaimMapping, err := hasWorkflowSeriesClaimMappingTx(ctx, tx, existing.SeriesId, existing.StepOrder, improverId)
+	if err != nil {
+		return nil, err
+	}
+	if hasClaimMapping {
+		if err := propagateWorkflowSeriesClaimTx(ctx, tx, existing.SeriesId, existing.StepOrder, improverId, existing.AbsentFrom); err != nil {
+			return nil, err
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+
+	return &structs.ImproverAbsencePeriodDeleteResult{Id: existing.Id}, nil
+}
+
+func ensureRecurringClaimExistsForAbsenceTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	improverId string,
+	seriesId string,
+	stepOrder int,
+) error {
+	var recurringClaims int
+	err := tx.QueryRow(ctx, `
+		SELECT
+			COUNT(*)
+		FROM
+			workflow_steps ws
+		JOIN
+			workflows w
+		ON
+			w.id = ws.workflow_id
+		JOIN
+			workflow_series sr
+		ON
+			sr.id = w.series_id
+		WHERE
+			ws.assigned_improver_id = $1
+		AND
+			w.series_id = $2
+		AND
+			COALESCE(NULLIF(TRIM(sr.recurrence), ''), 'one_time') <> 'one_time'
+		AND
+			ws.step_order = $3;
+	`, improverId, seriesId, stepOrder).Scan(&recurringClaims)
+	if err != nil {
+		return fmt.Errorf("error validating recurring assignment for absence period: %s", err)
+	}
+	if recurringClaims == 0 {
+		return fmt.Errorf("no claimed recurring workpiece found for this series and step")
+	}
+	return nil
+}
+
+func countImproverAbsenceOverlapTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	improverId string,
+	seriesId string,
+	stepOrder int,
+	absentFromUnix int64,
+	absentUntilUnix int64,
+	excludeAbsenceId string,
+) (int, error) {
+	excludeAbsenceId = strings.TrimSpace(excludeAbsenceId)
+	var overlapCount int
+	var err error
+	if excludeAbsenceId == "" {
+		err = tx.QueryRow(ctx, `
+			SELECT
+				COUNT(*)
+			FROM
+				workflow_improver_absences
+			WHERE
+				improver_id = $1
+			AND
+				series_id = $2
+			AND
+				step_order = $3
+			AND
+				NOT ($5 <= absent_from OR $4 >= absent_until);
+		`, improverId, seriesId, stepOrder, absentFromUnix, absentUntilUnix).Scan(&overlapCount)
+	} else {
+		err = tx.QueryRow(ctx, `
+			SELECT
+				COUNT(*)
+			FROM
+				workflow_improver_absences
+			WHERE
+				improver_id = $1
+			AND
+				series_id = $2
+			AND
+				step_order = $3
+			AND
+				id <> $6
+			AND
+				NOT ($5 <= absent_from OR $4 >= absent_until);
+		`, improverId, seriesId, stepOrder, absentFromUnix, absentUntilUnix, excludeAbsenceId).Scan(&overlapCount)
+	}
+	if err != nil {
+		return 0, fmt.Errorf("error checking overlapping absence period: %s", err)
+	}
+	return overlapCount, nil
+}
+
+func insertImproverAbsencePeriodTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	improverId string,
+	seriesId string,
+	stepOrder int,
+	absentFromUnix int64,
+	absentUntilUnix int64,
+) (structs.ImproverAbsencePeriod, error) {
 	absenceID := uuid.NewString()
 	absence := structs.ImproverAbsencePeriod{}
-	err = tx.QueryRow(ctx, `
+	err := tx.QueryRow(ctx, `
 		INSERT INTO workflow_improver_absences
 			(
 				id,
@@ -4175,13 +4753,60 @@ func (a *AppDB) CreateImproverAbsencePeriod(
 		&absence.UpdatedAt,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("error creating improver absence period: %s", err)
+		return structs.ImproverAbsencePeriod{}, fmt.Errorf("error creating improver absence period: %s", err)
+	}
+	return absence, nil
+}
+
+func releaseAssignmentsForImproverAbsenceTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	improverId string,
+	seriesId string,
+	stepOrder int,
+	absentFromUnix int64,
+	absentUntilUnix int64,
+) (int, int, error) {
+	var targetedCount int
+	err := tx.QueryRow(ctx, `
+		SELECT
+			COUNT(*)
+		FROM
+			workflow_steps ws
+		JOIN
+			workflows w
+		ON
+			w.id = ws.workflow_id
+		JOIN
+			workflow_series sr
+		ON
+			sr.id = w.series_id
+		WHERE
+			ws.assigned_improver_id = $1
+		AND
+			w.series_id = $2
+		AND
+			COALESCE(NULLIF(TRIM(sr.recurrence), ''), 'one_time') <> 'one_time'
+		AND
+			ws.step_order = $3
+		AND
+			w.start_at >= $4
+		AND
+			w.start_at < $5
+		AND
+			w.status IN ('approved', 'blocked', 'in_progress')
+		AND
+			ws.status NOT IN ('completed', 'paid_out');
+	`, improverId, seriesId, stepOrder, absentFromUnix, absentUntilUnix).Scan(&targetedCount)
+	if err != nil {
+		return 0, 0, fmt.Errorf("error counting absence target assignments: %s", err)
 	}
 
-	var targetedCount int
+	var releasedCount int
 	err = tx.QueryRow(ctx, `
+		WITH releasable AS (
 			SELECT
-				COUNT(*)
+				ws.id
 			FROM
 				workflow_steps ws
 			JOIN
@@ -4200,42 +4825,6 @@ func (a *AppDB) CreateImproverAbsencePeriod(
 				COALESCE(NULLIF(TRIM(sr.recurrence), ''), 'one_time') <> 'one_time'
 			AND
 				ws.step_order = $3
-		AND
-			w.start_at >= $4
-		AND
-			w.start_at < $5
-		AND
-			w.status IN ('approved', 'blocked', 'in_progress')
-		AND
-			ws.status NOT IN ('completed', 'paid_out');
-	`, improverId, seriesId, stepOrder, absentFromUnix, absentUntilUnix).Scan(&targetedCount)
-	if err != nil {
-		return nil, fmt.Errorf("error counting absence target assignments: %s", err)
-	}
-
-	var releasedCount int
-	err = tx.QueryRow(ctx, `
-			WITH releasable AS (
-				SELECT
-					ws.id
-				FROM
-					workflow_steps ws
-				JOIN
-					workflows w
-				ON
-					w.id = ws.workflow_id
-				JOIN
-					workflow_series sr
-				ON
-					sr.id = w.series_id
-				WHERE
-					ws.assigned_improver_id = $1
-				AND
-					w.series_id = $2
-				AND
-					COALESCE(NULLIF(TRIM(sr.recurrence), ''), 'one_time') <> 'one_time'
-				AND
-					ws.step_order = $3
 			AND
 				w.start_at >= $4
 			AND
@@ -4274,22 +4863,85 @@ func (a *AppDB) CreateImproverAbsencePeriod(
 			released;
 	`, improverId, seriesId, stepOrder, absentFromUnix, absentUntilUnix).Scan(&releasedCount)
 	if err != nil {
-		return nil, fmt.Errorf("error releasing assignments for improver absence period: %s", err)
+		return 0, 0, fmt.Errorf("error releasing assignments for improver absence period: %s", err)
 	}
 
-	if err := tx.Commit(ctx); err != nil {
-		return nil, err
-	}
+	return targetedCount, releasedCount, nil
+}
 
-	result := &structs.ImproverAbsencePeriodCreateResult{
-		Absence:       absence,
-		ReleasedCount: releasedCount,
-		SkippedCount:  targetedCount - releasedCount,
+func countReplacementClaimsForImproverAbsenceTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	improverId string,
+	seriesId string,
+	stepOrder int,
+	absentFromUnix int64,
+	absentUntilUnix int64,
+) (int, error) {
+	var count int
+	err := tx.QueryRow(ctx, `
+		SELECT
+			COUNT(*)
+		FROM
+			workflow_steps ws
+		JOIN
+			workflows w
+		ON
+			w.id = ws.workflow_id
+		JOIN
+			workflow_series sr
+		ON
+			sr.id = w.series_id
+		WHERE
+			w.series_id = $1
+		AND
+			COALESCE(NULLIF(TRIM(sr.recurrence), ''), 'one_time') <> 'one_time'
+		AND
+			ws.step_order = $2
+		AND
+			w.start_at >= $3
+		AND
+			w.start_at < $4
+		AND
+			w.status IN ('approved', 'blocked', 'in_progress', 'completed', 'paid_out')
+		AND
+			ws.assigned_improver_id IS NOT NULL
+		AND
+			ws.assigned_improver_id <> $5;
+	`, seriesId, stepOrder, absentFromUnix, absentUntilUnix, improverId).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("error checking replacement claims for absence period: %s", err)
 	}
-	if result.SkippedCount < 0 {
-		result.SkippedCount = 0
+	return count, nil
+}
+
+func hasWorkflowSeriesClaimMappingTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	seriesId string,
+	stepOrder int,
+	improverId string,
+) (bool, error) {
+	var exists bool
+	err := tx.QueryRow(ctx, `
+		SELECT
+			EXISTS (
+				SELECT
+					1
+				FROM
+					workflow_series_step_claims
+				WHERE
+					series_id = $1
+				AND
+					step_order = $2
+				AND
+					improver_id = $3
+			);
+	`, seriesId, stepOrder, improverId).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("error checking workflow series claim mapping: %s", err)
 	}
-	return result, nil
+	return exists, nil
 }
 
 func (a *AppDB) ClaimWorkflowStep(
@@ -5543,7 +6195,95 @@ func (a *AppDB) GetImproverUnpaidWorkflows(ctx context.Context, improverId strin
 	return workflows, nil
 }
 
-func (a *AppDB) GetPreferredRedeemerWalletAddressForUser(ctx context.Context, userId string) (string, error) {
+func (a *AppDB) GetPreferredWorkflowPayoutAddressForUser(ctx context.Context, userId string, preferSupervisor bool) (string, error) {
+	type rewardsSource struct {
+		query string
+		args  []any
+	}
+	sources := make([]rewardsSource, 0, 2)
+	if preferSupervisor {
+		sources = append(sources,
+			rewardsSource{
+				query: `
+					SELECT
+						primary_rewards_account
+					FROM
+						supervisors
+					WHERE
+						user_id = $1
+					AND
+						status = 'approved'
+					AND
+						TRIM(COALESCE(primary_rewards_account, '')) <> '';
+				`,
+				args: []any{userId},
+			},
+			rewardsSource{
+				query: `
+					SELECT
+						primary_rewards_account
+					FROM
+						improvers
+					WHERE
+						user_id = $1
+					AND
+						status = 'approved'
+					AND
+						TRIM(COALESCE(primary_rewards_account, '')) <> '';
+				`,
+				args: []any{userId},
+			},
+		)
+	} else {
+		sources = append(sources,
+			rewardsSource{
+				query: `
+					SELECT
+						primary_rewards_account
+					FROM
+						improvers
+					WHERE
+						user_id = $1
+					AND
+						status = 'approved'
+					AND
+						TRIM(COALESCE(primary_rewards_account, '')) <> '';
+				`,
+				args: []any{userId},
+			},
+			rewardsSource{
+				query: `
+					SELECT
+						primary_rewards_account
+					FROM
+						supervisors
+					WHERE
+						user_id = $1
+					AND
+						status = 'approved'
+					AND
+						TRIM(COALESCE(primary_rewards_account, '')) <> '';
+				`,
+				args: []any{userId},
+			},
+		)
+	}
+
+	for _, source := range sources {
+		var address string
+		err := a.db.QueryRow(ctx, source.query, source.args...).Scan(&address)
+		if err == pgx.ErrNoRows {
+			continue
+		}
+		if err != nil {
+			return "", err
+		}
+		address = strings.TrimSpace(address)
+		if address != "" && common.IsHexAddress(address) {
+			return common.HexToAddress(address).Hex(), nil
+		}
+	}
+
 	row := a.db.QueryRow(ctx, `
 		SELECT
 			COALESCE(NULLIF(TRIM(smart_address), ''), NULLIF(TRIM(eoa_address), ''))
@@ -5564,7 +6304,15 @@ func (a *AppDB) GetPreferredRedeemerWalletAddressForUser(ctx context.Context, us
 	if address == nil || strings.TrimSpace(*address) == "" {
 		return "", fmt.Errorf("wallet address is not configured for user")
 	}
-	return strings.TrimSpace(*address), nil
+	normalizedAddress := strings.TrimSpace(*address)
+	if !common.IsHexAddress(normalizedAddress) {
+		return "", fmt.Errorf("wallet address is not configured for user")
+	}
+	return common.HexToAddress(normalizedAddress).Hex(), nil
+}
+
+func (a *AppDB) GetPreferredRedeemerWalletAddressForUser(ctx context.Context, userId string) (string, error) {
+	return a.GetPreferredWorkflowPayoutAddressForUser(ctx, userId, false)
 }
 
 func truncateWorkflowPayoutErrorMessage(message string) string {

@@ -667,3 +667,56 @@
   - Workflow title is now resolved from `workflow_series.title` via subquery while locking the workflow row.
 - This addresses runtime error:
   - `ERROR: column "title" does not exist (SQLSTATE 42703)` during step completion.
+
+### Improver Absence Management Expansion (2026-02-26)
+- Backend routes in `backend/router/router.go`:
+  - Added `PUT /improvers/workflows/absence-periods/{absence_id}`.
+  - Added `DELETE /improvers/workflows/absence-periods/{absence_id}`.
+- Backend handlers in `backend/handlers/app_workflow.go`:
+  - Added `UpdateImproverAbsencePeriod`.
+  - Added `DeleteImproverAbsencePeriod`.
+  - Absence date parsing now supports date-only values (`YYYY-MM-DD`) via `parseAbsenceBoundary`.
+  - For date-only end values, end boundary is normalized as next-day start (exclusive) so same-day ranges are valid.
+- Backend DB logic in `backend/db/app_workflow.go`:
+  - Added absence update/delete DB methods.
+  - Added guard that blocks edit/delete when another improver has already claimed work in that absence period.
+  - Added reusable absence helpers for overlap checks and assignment release.
+  - On edit/delete, claim propagation is reapplied (when claim mapping exists) so claims can be restored where absence no longer applies.
+- Shared workflow structs/types:
+  - Added update/delete absence request/result structs in `backend/structs/app_workflow.go`.
+  - Added corresponding frontend types in `frontend/types/workflow.ts`.
+- Frontend improver absence UI in `frontend/app/improver/page.tsx`:
+  - Absence inputs are now date-only (`type="date"`), no time required.
+  - Added coverage target mode:
+    - `One workflow series step` (existing behavior)
+    - `All active workflow serieses` (bulk create by iterating active recurring claims)
+  - Added absence period `Edit` and `Delete` actions with backend enforcement.
+  - Edit mode provides inline date fields + save/cancel actions.
+  - Absence period display now shows date values (not datetime timestamps).
+
+### Primary Rewards Account Selection for Improver/Supervisor (2026-02-26)
+- Added role-level primary rewards account persistence:
+  - `improvers.primary_rewards_account`
+  - `supervisors.primary_rewards_account`
+- DB bootstrap in `backend/db/app.go` now:
+  - Creates both columns on fresh tables.
+  - Adds both columns for existing tables if missing.
+  - Backfills empty values from Smart Wallet 1 (`wallets.is_eoa = false`, `smart_index = 0`) when available.
+- Backend role models now include `primary_rewards_account`:
+  - `backend/structs/app_workflow.go` (`Improver`, `Supervisor`).
+- Added backend validation + update APIs:
+  - `PUT /improvers/primary-rewards-account`
+  - `PUT /supervisors/primary-rewards-account`
+  - Both enforce valid Ethereum address format and approved role status.
+- Added defaults during role lifecycle:
+  - On improver/supervisor request upsert and admin approval transitions, empty primary rewards account is defaulted from Smart Wallet 1 when available.
+- Workflow payout selection now respects role-specific primary rewards account preference:
+  - Step/improver payouts prefer improver primary account.
+  - Supervisor/manager payouts prefer supervisor primary account.
+  - Falls back to existing wallet selection logic if no role primary account is set.
+- Settings UI (`frontend/app/settings/page.tsx`) updated for approved users:
+  - Improver tab and Supervisor tab now each include `Primary Rewards Account` controls.
+  - Dropdown shows user wallet names with short addresses (name-first display).
+  - Includes `Custom account` option with manual address input.
+  - Frontend Ethereum address validation enforced before save.
+  - Save actions call new backend endpoints and update local role state on success.

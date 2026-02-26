@@ -104,10 +104,13 @@ func AddWorkflowRoutes(r *chi.Mux, s *handlers.BotService, a *handlers.AppServic
 
 	r.Get("/improvers/workflows", withImprover(a.GetImproverWorkflows, a))
 	r.Get("/improvers/unpaid-workflows", withImprover(a.GetImproverUnpaidWorkflows, a))
+	r.Put("/improvers/primary-rewards-account", withImprover(a.UpdateImproverPrimaryRewardsAccount, a))
 	r.Get("/improvers/credential-requests", withImprover(a.GetImproverCredentialRequests, a))
 	r.Post("/improvers/credential-requests", withImprover(a.CreateImproverCredentialRequest, a))
 	r.Get("/improvers/workflows/absence-periods", withImprover(a.GetImproverAbsencePeriods, a))
 	r.Post("/improvers/workflows/absence-periods", withImprover(a.CreateImproverAbsencePeriod, a))
+	r.Put("/improvers/workflows/absence-periods/{absence_id}", withImprover(a.UpdateImproverAbsencePeriod, a))
+	r.Delete("/improvers/workflows/absence-periods/{absence_id}", withImprover(a.DeleteImproverAbsencePeriod, a))
 	r.Post("/improvers/workflow-series/unclaim", withImprover(a.UnclaimImproverWorkflowSeries, a))
 	r.Post("/improvers/workflows/{workflow_id}/steps/{step_id}/claim", withImprover(a.ClaimWorkflowStep, a))
 	r.Post("/improvers/workflows/{workflow_id}/steps/{step_id}/start", withImprover(a.StartWorkflowStep, a))
@@ -116,6 +119,7 @@ func AddWorkflowRoutes(r *chi.Mux, s *handlers.BotService, a *handlers.AppServic
 
 	r.Get("/supervisors/workflows", withSupervisor(a.GetSupervisorWorkflows, a))
 	r.Post("/supervisors/workflows/export", withSupervisor(a.ExportSupervisorWorkflowData, a))
+	r.Put("/supervisors/primary-rewards-account", withSupervisor(a.UpdateSupervisorPrimaryRewardsAccount, a))
 
 	r.Get("/admin/proposers", withAdmin(a.GetProposers, a))
 	r.Put("/admin/proposers", withAdmin(a.UpdateProposer, a))
