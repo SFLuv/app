@@ -1383,14 +1383,26 @@ func (a *AppDB) CreateWorkflow(ctx context.Context, proposerId string, req *stru
 	status := "pending"
 
 	_, err = tx.Exec(ctx, `
+		INSERT INTO workflow_series(
+			id,
+			proposer_id,
+			title,
+			description,
+			recurrence
+		)
+		VALUES
+			($1, $2, $3, $4, $5);
+	`, seriesId, proposerId, strings.TrimSpace(req.Title), strings.TrimSpace(req.Description), req.Recurrence)
+	if err != nil {
+		return nil, fmt.Errorf("error inserting workflow series: %s", err)
+	}
+
+	_, err = tx.Exec(ctx, `
 		INSERT INTO workflows
 			(
 				id,
 				series_id,
 				proposer_id,
-				title,
-				description,
-				recurrence,
 				start_at,
 				status,
 				is_start_blocked,
@@ -1404,8 +1416,8 @@ func (a *AppDB) CreateWorkflow(ctx context.Context, proposerId string, req *stru
 					manager_bounty
 				)
 			VALUES
-				($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17);
-		`, workflowId, seriesId, proposerId, strings.TrimSpace(req.Title), strings.TrimSpace(req.Description), req.Recurrence, startAt.UTC().Unix(), status, isStartBlocked, blockedById, totalBounty, weeklyRequirement, 0, 0, supervisorRequired, supervisorUserID, supervisorBounty)
+				($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14);
+		`, workflowId, seriesId, proposerId, startAt.UTC().Unix(), status, isStartBlocked, blockedById, totalBounty, weeklyRequirement, 0, 0, supervisorRequired, supervisorUserID, supervisorBounty)
 	if err != nil {
 		return nil, fmt.Errorf("error inserting workflow: %s", err)
 	}
@@ -1500,10 +1512,10 @@ func (a *AppDB) CreateWorkflow(ctx context.Context, proposerId string, req *stru
 
 		_, err = tx.Exec(ctx, `
 			INSERT INTO workflow_steps
-				(id, workflow_id, step_order, title, description, bounty, allow_step_not_possible, role_id, status)
+				(id, series_id, workflow_id, step_order, title, description, bounty, allow_step_not_possible, role_id, status)
 			VALUES
-				($1, $2, $3, $4, $5, $6, $7, $8, $9);
-		`, stepId, workflowId, stepIndex+1, stepTitle, strings.TrimSpace(stepInput.Description), stepInput.Bounty, stepInput.AllowStepNotPossible, roleId, stepStatus)
+				($1, $2, $3, $4, $5, $6, $7, $8, $9, $10);
+		`, stepId, seriesId, workflowId, stepIndex+1, stepTitle, strings.TrimSpace(stepInput.Description), stepInput.Bounty, stepInput.AllowStepNotPossible, roleId, stepStatus)
 		if err != nil {
 			return nil, fmt.Errorf("error inserting workflow step: %s", err)
 		}
@@ -1650,40 +1662,44 @@ func (a *AppDB) GetWorkflowsByProposer(ctx context.Context, proposerId string) (
 func (a *AppDB) GetWorkflowByID(ctx context.Context, workflowId string) (*structs.Workflow, error) {
 	row := a.db.QueryRow(ctx, `
 		SELECT
-			id,
-			series_id,
-			proposer_id,
-			title,
-			description,
-			recurrence,
-			start_at,
-			status,
-			is_start_blocked,
-			blocked_by_workflow_id,
-			total_bounty,
-			weekly_bounty_requirement,
-				budget_weekly_deducted,
-				budget_one_time_deducted,
-				vote_quorum_reached_at,
-				vote_finalize_at,
-				vote_finalized_at,
-				vote_finalized_by_user_id,
-			vote_decision,
-			manager_required,
-			manager_role_id,
-			manager_improver_id,
-			manager_bounty,
-			manager_paid_out_at,
-			manager_payout_error,
-			manager_payout_last_try_at,
-			manager_retry_requested_at,
-			manager_retry_requested_by,
-			created_at,
-			updated_at
+			w.id,
+			w.series_id,
+			w.proposer_id,
+			COALESCE(NULLIF(TRIM(s.title), ''), ''),
+			COALESCE(s.description, ''),
+			COALESCE(NULLIF(TRIM(s.recurrence), ''), 'one_time'),
+			w.start_at,
+			w.status,
+			w.is_start_blocked,
+			w.blocked_by_workflow_id,
+			w.total_bounty,
+			w.weekly_bounty_requirement,
+			w.budget_weekly_deducted,
+			w.budget_one_time_deducted,
+			w.vote_quorum_reached_at,
+			w.vote_finalize_at,
+			w.vote_finalized_at,
+			w.vote_finalized_by_user_id,
+			w.vote_decision,
+			w.manager_required,
+			w.manager_role_id,
+			w.manager_improver_id,
+			w.manager_bounty,
+			w.manager_paid_out_at,
+			w.manager_payout_error,
+			w.manager_payout_last_try_at,
+			w.manager_retry_requested_at,
+			w.manager_retry_requested_by,
+			w.created_at,
+			w.updated_at
 		FROM
-			workflows
+			workflows w
+		LEFT JOIN
+			workflow_series s
+		ON
+			s.id = w.series_id
 		WHERE
-			id = $1;
+			w.id = $1;
 	`, workflowId)
 
 	workflow := &structs.Workflow{}
@@ -2213,6 +2229,800 @@ func weeklyBountyRequirement(total uint64, recurrence string) uint64 {
 	}
 }
 
+func nextRecurringStartAt(startAt int64, recurrence string) (int64, error) {
+	base := time.Unix(startAt, 0).UTC()
+	switch recurrence {
+	case "daily":
+		return base.AddDate(0, 0, 1).Unix(), nil
+	case "weekly":
+		return base.AddDate(0, 0, 7).Unix(), nil
+	case "monthly":
+		return base.AddDate(0, 1, 0).Unix(), nil
+	default:
+		return 0, fmt.Errorf("workflow is not recurring")
+	}
+}
+
+func ensureWorkflowSeriesClaimTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	seriesId string,
+	stepOrder int,
+	improverId string,
+) error {
+	_, err := tx.Exec(ctx, `
+		INSERT INTO workflow_series_step_claims(
+			series_id,
+			step_order,
+			improver_id,
+			created_at,
+			updated_at
+		)
+		VALUES
+			($1, $2, $3, unix_now(), unix_now())
+		ON CONFLICT (series_id, step_order)
+		DO UPDATE SET
+			improver_id = EXCLUDED.improver_id,
+			updated_at = unix_now();
+	`, seriesId, stepOrder, improverId)
+	if err != nil {
+		return fmt.Errorf("error persisting workflow series claim: %s", err)
+	}
+	return nil
+}
+
+func propagateWorkflowSeriesClaimTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	seriesId string,
+	stepOrder int,
+	improverId string,
+	minStartAt int64,
+) error {
+	_, err := tx.Exec(ctx, `
+		WITH candidates AS (
+			SELECT
+				ws.id
+			FROM
+				workflow_steps ws
+			JOIN
+				workflows w
+			ON
+				w.id = ws.workflow_id
+			JOIN
+				workflow_series sr
+			ON
+				sr.id = w.series_id
+			WHERE
+				w.series_id = $1
+			AND
+				COALESCE(NULLIF(TRIM(sr.recurrence), ''), 'one_time') <> 'one_time'
+			AND
+				w.start_at >= $4
+			AND
+				w.status IN ('approved', 'blocked', 'in_progress')
+			AND
+				ws.step_order = $2
+			AND
+				ws.assigned_improver_id IS NULL
+			AND
+				ws.status IN ('locked', 'available')
+			AND
+				(w.manager_improver_id IS NULL OR w.manager_improver_id <> $3)
+			AND
+				NOT EXISTS (
+					SELECT
+						1
+					FROM
+						workflow_steps existing
+					WHERE
+						existing.workflow_id = ws.workflow_id
+					AND
+						existing.assigned_improver_id = $3
+				)
+			AND
+				NOT EXISTS (
+					SELECT
+						1
+					FROM
+						workflow_improver_absences abs
+					WHERE
+						abs.improver_id = $3
+					AND
+						abs.series_id = w.series_id
+					AND
+						abs.step_order = ws.step_order
+					AND
+						w.start_at >= abs.absent_from
+					AND
+						w.start_at < abs.absent_until
+				)
+			FOR UPDATE
+		),
+		assigned AS (
+			UPDATE
+				workflow_steps ws
+			SET
+				assigned_improver_id = $3,
+				updated_at = unix_now()
+			WHERE
+				ws.id IN (SELECT id FROM candidates)
+			RETURNING
+				ws.id,
+				ws.status
+		)
+		INSERT INTO workflow_step_notifications(step_id, user_id, notification_type)
+		SELECT
+			a.id,
+			$3,
+			'step_available'
+		FROM
+			assigned a
+		WHERE
+			a.status = 'available'
+		ON CONFLICT DO NOTHING;
+	`, seriesId, stepOrder, improverId, minStartAt)
+	if err != nil {
+		return fmt.Errorf("error propagating workflow series claim: %s", err)
+	}
+	return nil
+}
+
+func applyWorkflowSeriesClaimsToWorkflowTx(ctx context.Context, tx pgx.Tx, workflowId string) error {
+	_, err := tx.Exec(ctx, `
+		WITH workflow_meta AS (
+			SELECT
+				id,
+				series_id,
+				start_at,
+				manager_improver_id
+			FROM
+				workflows
+			WHERE
+				id = $1
+		),
+		candidate_raw AS (
+			SELECT
+				ws.id AS step_id,
+				ws.step_order,
+				ws.status AS step_status,
+				c.improver_id,
+				ROW_NUMBER() OVER (
+					PARTITION BY c.improver_id
+					ORDER BY ws.step_order ASC
+				) AS improver_rank
+			FROM
+				workflow_steps ws
+			JOIN
+				workflow_meta wm
+			ON
+				wm.id = ws.workflow_id
+			JOIN
+				workflow_series_step_claims c
+			ON
+				c.series_id = wm.series_id
+			AND
+				c.step_order = ws.step_order
+			WHERE
+				ws.workflow_id = $1
+			AND
+				ws.assigned_improver_id IS NULL
+			AND
+				ws.status IN ('locked', 'available')
+			AND
+				(wm.manager_improver_id IS NULL OR wm.manager_improver_id <> c.improver_id)
+			AND
+				NOT EXISTS (
+					SELECT
+						1
+					FROM
+						workflow_steps existing
+					WHERE
+						existing.workflow_id = ws.workflow_id
+					AND
+						existing.assigned_improver_id = c.improver_id
+				)
+			AND
+				NOT EXISTS (
+					SELECT
+						1
+					FROM
+						workflow_improver_absences abs
+					WHERE
+						abs.improver_id = c.improver_id
+					AND
+						abs.series_id = wm.series_id
+					AND
+						abs.step_order = ws.step_order
+					AND
+						wm.start_at >= abs.absent_from
+					AND
+						wm.start_at < abs.absent_until
+				)
+		),
+		candidates AS (
+			SELECT
+				cr.step_id,
+				cr.improver_id,
+				cr.step_status
+			FROM
+				candidate_raw cr
+			WHERE
+				cr.improver_rank = 1
+		),
+		assigned AS (
+			UPDATE
+				workflow_steps ws
+			SET
+				assigned_improver_id = c.improver_id,
+				updated_at = unix_now()
+			FROM
+				candidates c
+			WHERE
+				ws.id = c.step_id
+			RETURNING
+				ws.id,
+				ws.assigned_improver_id,
+				ws.status
+		)
+		INSERT INTO workflow_step_notifications(step_id, user_id, notification_type)
+		SELECT
+			a.id,
+			a.assigned_improver_id,
+			'step_available'
+		FROM
+			assigned a
+		WHERE
+			a.status = 'available'
+		ON CONFLICT DO NOTHING;
+	`, workflowId)
+	if err != nil {
+		return fmt.Errorf("error applying workflow series claims to workflow: %s", err)
+	}
+	return nil
+}
+
+func ensureRecurringWorkflowSuccessorTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	workflowId string,
+) (string, error) {
+	type workflowSeed struct {
+		Id                      string
+		SeriesId                string
+		ProposerId              string
+		Title                   string
+		Description             string
+		Recurrence              string
+		StartAt                 int64
+		Status                  string
+		TotalBounty             uint64
+		WeeklyBountyRequirement uint64
+		ManagerRequired         bool
+		ManagerImproverId       *string
+		ManagerBounty           uint64
+	}
+
+	seed := workflowSeed{}
+	err := tx.QueryRow(ctx, `
+		SELECT
+			w.id,
+			w.series_id,
+			s.proposer_id,
+			COALESCE(NULLIF(TRIM(s.title), ''), ''),
+			COALESCE(s.description, ''),
+			COALESCE(NULLIF(TRIM(s.recurrence), ''), 'one_time'),
+			w.start_at,
+			w.status,
+			w.total_bounty,
+			w.weekly_bounty_requirement,
+			w.manager_required,
+			w.manager_improver_id,
+			w.manager_bounty
+		FROM
+			workflows w
+		JOIN
+			workflow_series s
+		ON
+			s.id = w.series_id
+		WHERE
+			w.id = $1
+		FOR UPDATE OF w, s;
+	`, workflowId).Scan(
+		&seed.Id,
+		&seed.SeriesId,
+		&seed.ProposerId,
+		&seed.Title,
+		&seed.Description,
+		&seed.Recurrence,
+		&seed.StartAt,
+		&seed.Status,
+		&seed.TotalBounty,
+		&seed.WeeklyBountyRequirement,
+		&seed.ManagerRequired,
+		&seed.ManagerImproverId,
+		&seed.ManagerBounty,
+	)
+	if err != nil {
+		return "", fmt.Errorf("error loading recurring workflow seed: %s", err)
+	}
+
+	if seed.Recurrence == "one_time" {
+		return "", nil
+	}
+	switch seed.Status {
+	case "completed", "paid_out":
+	default:
+		return "", nil
+	}
+
+	_, err = tx.Exec(ctx, `
+		SELECT pg_advisory_xact_lock(hashtext($1), 0);
+	`, seed.SeriesId)
+	if err != nil {
+		return "", fmt.Errorf("error locking workflow series for recurrence: %s", err)
+	}
+
+	nextStartAt, err := nextRecurringStartAt(seed.StartAt, seed.Recurrence)
+	if err != nil {
+		return "", err
+	}
+
+	existingWorkflowId := ""
+	err = tx.QueryRow(ctx, `
+		SELECT
+			id
+		FROM
+			workflows
+		WHERE
+			series_id = $1
+		AND
+			start_at = $2
+		AND
+			status <> 'deleted'
+		ORDER BY
+			created_at DESC
+		LIMIT 1;
+	`, seed.SeriesId, nextStartAt).Scan(&existingWorkflowId)
+	if err == nil {
+		return existingWorkflowId, nil
+	}
+	if err != nil && err != pgx.ErrNoRows {
+		return "", fmt.Errorf("error checking recurring workflow successor: %s", err)
+	}
+
+	nowUnix := time.Now().UTC().Unix()
+	var futureWorkflowCount int
+	err = tx.QueryRow(ctx, `
+		SELECT
+			COUNT(*)
+		FROM
+			workflows
+		WHERE
+			series_id = $1
+		AND
+			status <> 'deleted'
+		AND
+			start_at > $2;
+	`, seed.SeriesId, nowUnix).Scan(&futureWorkflowCount)
+	if err != nil {
+		return "", fmt.Errorf("error checking recurring future workflow window: %s", err)
+	}
+	if futureWorkflowCount > 0 {
+		return "", nil
+	}
+
+	successorStatus := "approved"
+	successorIsBlocked := false
+	var blockedByWorkflowId *string
+	if seed.Status != "paid_out" {
+		successorStatus = "blocked"
+		successorIsBlocked = true
+		blockedByWorkflowId = &seed.Id
+	}
+
+	successorId := uuid.NewString()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO workflows(
+			id,
+			series_id,
+			proposer_id,
+			start_at,
+			status,
+			is_start_blocked,
+			blocked_by_workflow_id,
+			total_bounty,
+			weekly_bounty_requirement,
+			budget_weekly_deducted,
+			budget_one_time_deducted,
+			manager_required,
+			manager_improver_id,
+			manager_bounty,
+			vote_quorum_reached_at,
+			vote_finalize_at,
+			vote_finalized_at,
+			vote_decision,
+			approved_at,
+					approved_by_user_id
+					)
+					VALUES
+						($1, $2, $3, $4, $5, $6, $7, $8, $9, 0, 0, $10, $11, $12, $13, $13, $13, 'approve', $13, NULL);
+		`, successorId, seed.SeriesId, seed.ProposerId, nextStartAt, successorStatus, successorIsBlocked, blockedByWorkflowId, seed.TotalBounty, seed.WeeklyBountyRequirement, seed.ManagerRequired, seed.ManagerImproverId, seed.ManagerBounty, nowUnix)
+	if err != nil {
+		return "", fmt.Errorf("error inserting recurring workflow successor: %s", err)
+	}
+
+	type roleSeed struct {
+		Id          string
+		Title       string
+		IsManager   bool
+		Credentials []string
+	}
+	roleRows, err := tx.Query(ctx, `
+		SELECT
+			id,
+			title,
+			COALESCE(is_manager, false)
+		FROM
+			workflow_roles
+		WHERE
+			workflow_id = $1
+		ORDER BY
+			id ASC;
+	`, workflowId)
+	if err != nil {
+		return "", fmt.Errorf("error querying workflow role seeds: %s", err)
+	}
+	roleSeeds := []roleSeed{}
+	for roleRows.Next() {
+		role := roleSeed{}
+		if err := roleRows.Scan(&role.Id, &role.Title, &role.IsManager); err != nil {
+			roleRows.Close()
+			return "", fmt.Errorf("error scanning workflow role seed: %s", err)
+		}
+		roleSeeds = append(roleSeeds, role)
+	}
+	if err := roleRows.Err(); err != nil {
+		roleRows.Close()
+		return "", fmt.Errorf("error iterating workflow role seeds: %s", err)
+	}
+	roleRows.Close()
+
+	for idx := range roleSeeds {
+		credentialRows, err := tx.Query(ctx, `
+			SELECT
+				credential_type
+			FROM
+				workflow_role_credentials
+			WHERE
+				role_id = $1
+			ORDER BY
+				credential_type ASC;
+		`, roleSeeds[idx].Id)
+		if err != nil {
+			return "", fmt.Errorf("error querying workflow role credentials for recurrence clone: %s", err)
+		}
+
+		credentials := []string{}
+		for credentialRows.Next() {
+			var credentialType string
+			if err := credentialRows.Scan(&credentialType); err != nil {
+				credentialRows.Close()
+				return "", fmt.Errorf("error scanning workflow role credential seed: %s", err)
+			}
+			credentials = append(credentials, credentialType)
+		}
+		if err := credentialRows.Err(); err != nil {
+			credentialRows.Close()
+			return "", fmt.Errorf("error iterating workflow role credential seeds: %s", err)
+		}
+		credentialRows.Close()
+		roleSeeds[idx].Credentials = credentials
+	}
+
+	roleIdMap := map[string]string{}
+	for _, role := range roleSeeds {
+		newRoleId := uuid.NewString()
+		roleIdMap[role.Id] = newRoleId
+		_, err = tx.Exec(ctx, `
+			INSERT INTO workflow_roles(
+				id,
+				workflow_id,
+				title,
+				is_manager
+			)
+			VALUES
+				($1, $2, $3, $4);
+		`, newRoleId, successorId, role.Title, role.IsManager)
+		if err != nil {
+			return "", fmt.Errorf("error cloning workflow role seed: %s", err)
+		}
+
+		for _, credentialType := range role.Credentials {
+			_, err = tx.Exec(ctx, `
+				INSERT INTO workflow_role_credentials(
+					role_id,
+					credential_type
+				)
+				VALUES
+					($1, $2);
+			`, newRoleId, credentialType)
+			if err != nil {
+				return "", fmt.Errorf("error cloning workflow role credential seed: %s", err)
+			}
+		}
+	}
+
+	type stepItemSeed struct {
+		ItemOrder               int
+		Title                   string
+		Description             string
+		IsOptional              bool
+		RequiresPhoto           bool
+		CameraCaptureOnly       bool
+		RequiresWrittenResponse bool
+		RequiresDropdown        bool
+		DropdownOptions         []byte
+		DropdownRequiresWritten []byte
+		NotifyEmails            []byte
+		NotifyOnDropdownValues  []byte
+	}
+	type stepSeed struct {
+		Id                   string
+		StepOrder            int
+		Title                string
+		Description          string
+		Bounty               uint64
+		AllowStepNotPossible bool
+		RoleId               *string
+		Items                []stepItemSeed
+	}
+	stepRows, err := tx.Query(ctx, `
+		SELECT
+			id,
+			step_order,
+			title,
+			description,
+			bounty,
+			allow_step_not_possible,
+			role_id
+		FROM
+			workflow_steps
+		WHERE
+			workflow_id = $1
+		ORDER BY
+			step_order ASC;
+	`, workflowId)
+	if err != nil {
+		return "", fmt.Errorf("error querying workflow step seeds: %s", err)
+	}
+	stepSeeds := []stepSeed{}
+	for stepRows.Next() {
+		step := stepSeed{}
+		if err := stepRows.Scan(&step.Id, &step.StepOrder, &step.Title, &step.Description, &step.Bounty, &step.AllowStepNotPossible, &step.RoleId); err != nil {
+			stepRows.Close()
+			return "", fmt.Errorf("error scanning workflow step seed: %s", err)
+		}
+		stepSeeds = append(stepSeeds, step)
+	}
+	if err := stepRows.Err(); err != nil {
+		stepRows.Close()
+		return "", fmt.Errorf("error iterating workflow step seeds: %s", err)
+	}
+	stepRows.Close()
+
+	for idx := range stepSeeds {
+		itemRows, err := tx.Query(ctx, `
+			SELECT
+				item_order,
+				title,
+				description,
+				is_optional,
+				requires_photo,
+				camera_capture_only,
+				requires_written_response,
+				requires_dropdown,
+				dropdown_options,
+				dropdown_requires_written_response,
+				notify_emails,
+				notify_on_dropdown_values
+			FROM
+				workflow_step_items
+			WHERE
+				step_id = $1
+			ORDER BY
+				item_order ASC;
+		`, stepSeeds[idx].Id)
+		if err != nil {
+			return "", fmt.Errorf("error querying workflow step item seeds: %s", err)
+		}
+
+		items := []stepItemSeed{}
+		for itemRows.Next() {
+			item := stepItemSeed{}
+			if err := itemRows.Scan(
+				&item.ItemOrder,
+				&item.Title,
+				&item.Description,
+				&item.IsOptional,
+				&item.RequiresPhoto,
+				&item.CameraCaptureOnly,
+				&item.RequiresWrittenResponse,
+				&item.RequiresDropdown,
+				&item.DropdownOptions,
+				&item.DropdownRequiresWritten,
+				&item.NotifyEmails,
+				&item.NotifyOnDropdownValues,
+			); err != nil {
+				itemRows.Close()
+				return "", fmt.Errorf("error scanning workflow step item seed: %s", err)
+			}
+			items = append(items, item)
+		}
+		if err := itemRows.Err(); err != nil {
+			itemRows.Close()
+			return "", fmt.Errorf("error iterating workflow step item seeds: %s", err)
+		}
+		itemRows.Close()
+		stepSeeds[idx].Items = items
+	}
+
+	for _, step := range stepSeeds {
+		var clonedRoleId *string
+		if step.RoleId != nil {
+			mappedRoleId, ok := roleIdMap[*step.RoleId]
+			if !ok {
+				return "", fmt.Errorf("workflow step role seed cannot be mapped during recurrence clone")
+			}
+			clonedRoleId = &mappedRoleId
+		}
+
+		stepStatus := "locked"
+		if step.StepOrder == 1 && !successorIsBlocked && nextStartAt <= nowUnix {
+			stepStatus = "available"
+		}
+
+		newStepId := uuid.NewString()
+		_, err = tx.Exec(ctx, `
+			INSERT INTO workflow_steps(
+				id,
+				series_id,
+				workflow_id,
+				step_order,
+				title,
+				description,
+				bounty,
+				allow_step_not_possible,
+				role_id,
+				status
+			)
+			VALUES
+				($1, $2, $3, $4, $5, $6, $7, $8, $9, $10);
+		`, newStepId, seed.SeriesId, successorId, step.StepOrder, step.Title, step.Description, step.Bounty, step.AllowStepNotPossible, clonedRoleId, stepStatus)
+		if err != nil {
+			return "", fmt.Errorf("error cloning workflow step seed: %s", err)
+		}
+
+		for _, item := range step.Items {
+			dropdownOptions := item.DropdownOptions
+			dropdownRequiresWritten := item.DropdownRequiresWritten
+			notifyEmails := item.NotifyEmails
+			notifyOnValues := item.NotifyOnDropdownValues
+			if len(dropdownOptions) == 0 {
+				dropdownOptions = []byte("[]")
+			}
+			if len(dropdownRequiresWritten) == 0 {
+				dropdownRequiresWritten = []byte("{}")
+			}
+			if len(notifyEmails) == 0 {
+				notifyEmails = []byte("[]")
+			}
+			if len(notifyOnValues) == 0 {
+				notifyOnValues = []byte("[]")
+			}
+
+			_, err = tx.Exec(ctx, `
+				INSERT INTO workflow_step_items(
+					id,
+					step_id,
+					item_order,
+					title,
+					description,
+					is_optional,
+					requires_photo,
+					camera_capture_only,
+					requires_written_response,
+					requires_dropdown,
+					dropdown_options,
+					dropdown_requires_written_response,
+					notify_emails,
+					notify_on_dropdown_values
+				)
+				VALUES
+					($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12::jsonb, $13::jsonb, $14::jsonb);
+			`, uuid.NewString(), newStepId, item.ItemOrder, item.Title, item.Description, item.IsOptional, item.RequiresPhoto, item.CameraCaptureOnly, item.RequiresWrittenResponse, item.RequiresDropdown, string(dropdownOptions), string(dropdownRequiresWritten), string(notifyEmails), string(notifyOnValues))
+			if err != nil {
+				return "", fmt.Errorf("error cloning workflow step item seed: %s", err)
+			}
+		}
+	}
+
+	if err := applyWorkflowSeriesClaimsToWorkflowTx(ctx, tx, successorId); err != nil {
+		return "", err
+	}
+
+	return successorId, nil
+}
+
+func (a *AppDB) ensureRecurringWorkflowContinuity(ctx context.Context) error {
+	tx, err := a.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	rows, err := tx.Query(ctx, `
+		WITH latest AS (
+			SELECT DISTINCT ON (w.series_id)
+				w.series_id,
+				w.id,
+				w.status,
+				COALESCE(NULLIF(TRIM(s.recurrence), ''), 'one_time') AS recurrence
+			FROM
+				workflows w
+			JOIN
+				workflow_series s
+			ON
+				s.id = w.series_id
+			WHERE
+				w.status <> 'deleted'
+			ORDER BY
+				w.series_id,
+				w.start_at DESC,
+				w.created_at DESC,
+				w.id DESC
+		)
+		SELECT
+			l.id
+		FROM
+			latest l
+		WHERE
+			l.recurrence <> 'one_time'
+		AND
+			l.status IN ('completed', 'paid_out')
+		ORDER BY
+			l.series_id ASC;
+	`)
+	if err != nil {
+		return fmt.Errorf("error querying recurring workflow continuity seeds: %s", err)
+	}
+	workflowIDs := []string{}
+	for rows.Next() {
+		var workflowId string
+		if err := rows.Scan(&workflowId); err != nil {
+			rows.Close()
+			return fmt.Errorf("error scanning recurring workflow continuity seed: %s", err)
+		}
+		workflowIDs = append(workflowIDs, workflowId)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("error iterating recurring workflow continuity seeds: %s", err)
+	}
+	rows.Close()
+
+	for _, workflowId := range workflowIDs {
+		if _, err := ensureRecurringWorkflowSuccessorTx(ctx, tx, workflowId); err != nil {
+			return err
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	return nil
+}
+
 func (a *AppDB) AllocatedWorkflowBalance(ctx context.Context) (uint64, error) {
 	row := a.db.QueryRow(ctx, `
 		SELECT
@@ -2377,6 +3187,10 @@ func getCredentialTypeSetTx(ctx context.Context, tx pgx.Tx) (map[string]struct{}
 }
 
 func (a *AppDB) RefreshWorkflowStartAvailability(ctx context.Context) (*structs.WorkflowStartRefreshResult, error) {
+	if err := a.ensureRecurringWorkflowContinuity(ctx); err != nil {
+		return nil, fmt.Errorf("error ensuring recurring workflow continuity: %s", err)
+	}
+
 	rows, err := a.db.Query(ctx, `
 		WITH updated_steps AS (
 			UPDATE workflow_steps ws
@@ -2405,19 +3219,23 @@ func (a *AppDB) RefreshWorkflowStartAvailability(ctx context.Context) (*structs.
 					u.step_id,
 					u.workflow_id,
 					u.step_title,
-					u.assigned_improver_id,
-					w.title AS workflow_title,
-					w.series_id,
-					w.recurrence,
-					w.start_at,
-					w.total_bounty,
-					w.weekly_bounty_requirement
+						u.assigned_improver_id,
+						COALESCE(NULLIF(TRIM(s.title), ''), '') AS workflow_title,
+						w.series_id,
+						COALESCE(NULLIF(TRIM(s.recurrence), ''), 'one_time') AS recurrence,
+						w.start_at,
+						w.total_bounty,
+						w.weekly_bounty_requirement
 				FROM
 					updated_steps u
 				JOIN
 					workflows w
 				ON
 					w.id = u.workflow_id
+				LEFT JOIN
+					workflow_series s
+				ON
+					s.id = w.series_id
 			),
 			inserted_notifications AS (
 				INSERT INTO workflow_step_notifications(step_id, user_id, notification_type)
@@ -2549,11 +3367,11 @@ func (a *AppDB) GetImproverWorkflows(ctx context.Context) ([]*structs.Workflow, 
 		FROM
 			workflows
 		WHERE
-			status IN ('approved', 'in_progress')
+			status IN ('approved', 'in_progress', 'completed', 'paid_out', 'blocked')
 		ORDER BY
-			start_at ASC,
-			created_at ASC
-		LIMIT 300;
+			start_at DESC,
+			created_at DESC
+		LIMIT 500;
 	`)
 	if err != nil {
 		return nil, fmt.Errorf("error querying improver workflows: %s", err)
@@ -2756,17 +3574,17 @@ func (a *AppDB) GetSupervisorWorkflows(
 	normalizedDateField := normalizeSupervisorDateField(dateField)
 
 	baseCTE := `
-		WITH bw AS (
-			SELECT
-				w.id,
-				w.series_id,
-				w.title,
-				w.status,
-				w.recurrence,
-				w.start_at,
-				w.created_at,
-				w.total_bounty,
-				w.manager_bounty,
+			WITH bw AS (
+				SELECT
+					w.id,
+					w.series_id,
+					COALESCE(NULLIF(TRIM(s.title), ''), '') AS title,
+					w.status,
+					COALESCE(NULLIF(TRIM(s.recurrence), ''), 'one_time') AS recurrence,
+					w.start_at,
+					w.created_at,
+					w.total_bounty,
+					w.manager_bounty,
 				(
 					SELECT
 						MAX(ws.completed_at)
@@ -2775,11 +3593,15 @@ func (a *AppDB) GetSupervisorWorkflows(
 					WHERE
 						ws.workflow_id = w.id
 				) AS completed_at
-			FROM
-				workflows w
-			WHERE
-				w.manager_improver_id = $1
-		)
+				FROM
+					workflows w
+				LEFT JOIN
+					workflow_series s
+				ON
+					s.id = w.series_id
+				WHERE
+					w.manager_improver_id = $1
+			)
 	`
 
 	conditions := []string{"1=1"}
@@ -3118,9 +3940,9 @@ func (a *AppDB) GetWorkflowSubmissionPhotoBlobByID(ctx context.Context, photoID 
 
 func (a *AppDB) GetWorkflowSubmissionPhotoExports(ctx context.Context, workflowID string) ([]*structs.WorkflowSubmissionPhotoExport, error) {
 	rows, err := a.db.Query(ctx, `
-		SELECT
-			p.id,
-			p.workflow_id,
+			SELECT
+				p.id,
+				p.workflow_id,
 			p.step_id,
 			p.item_id,
 			p.submission_id,
@@ -3128,20 +3950,24 @@ func (a *AppDB) GetWorkflowSubmissionPhotoExports(ctx context.Context, workflowI
 			p.content_type,
 			p.size_bytes,
 			p.created_at,
-			p.photo_data,
-			COALESCE(ws.step_order, 0),
-			COALESCE(wsi.item_order, 0),
-			COALESCE(wsi.title, ''),
-			COALESCE(w.title, ''),
-			w.start_at
-		FROM
-			workflow_submission_photos p
-		LEFT JOIN
-			workflows w
-		ON
-			w.id = p.workflow_id
-		LEFT JOIN
-			workflow_steps ws
+				p.photo_data,
+				COALESCE(ws.step_order, 0),
+				COALESCE(wsi.item_order, 0),
+				COALESCE(wsi.title, ''),
+				COALESCE(s.title, ''),
+				w.start_at
+			FROM
+				workflow_submission_photos p
+			LEFT JOIN
+				workflows w
+			ON
+				w.id = p.workflow_id
+			LEFT JOIN
+				workflow_series s
+			ON
+				s.id = w.series_id
+			LEFT JOIN
+				workflow_steps ws
 		ON
 			ws.id = p.step_id
 		LEFT JOIN
@@ -3265,23 +4091,27 @@ func (a *AppDB) CreateImproverAbsencePeriod(
 
 	var recurringClaims int
 	err = tx.QueryRow(ctx, `
-		SELECT
-			COUNT(*)
-		FROM
-			workflow_steps ws
-		JOIN
-			workflows w
-		ON
-			w.id = ws.workflow_id
-		WHERE
-			ws.assigned_improver_id = $1
-		AND
-			w.series_id = $2
-		AND
-			w.recurrence <> 'one_time'
-		AND
-			ws.step_order = $3;
-	`, improverId, seriesId, stepOrder).Scan(&recurringClaims)
+			SELECT
+				COUNT(*)
+			FROM
+				workflow_steps ws
+			JOIN
+				workflows w
+			ON
+				w.id = ws.workflow_id
+			JOIN
+				workflow_series sr
+			ON
+				sr.id = w.series_id
+			WHERE
+				ws.assigned_improver_id = $1
+			AND
+				w.series_id = $2
+			AND
+				COALESCE(NULLIF(TRIM(sr.recurrence), ''), 'one_time') <> 'one_time'
+			AND
+				ws.step_order = $3;
+		`, improverId, seriesId, stepOrder).Scan(&recurringClaims)
 	if err != nil {
 		return nil, fmt.Errorf("error validating recurring assignment for absence period: %s", err)
 	}
@@ -3350,22 +4180,26 @@ func (a *AppDB) CreateImproverAbsencePeriod(
 
 	var targetedCount int
 	err = tx.QueryRow(ctx, `
-		SELECT
-			COUNT(*)
-		FROM
-			workflow_steps ws
-		JOIN
-			workflows w
-		ON
-			w.id = ws.workflow_id
-		WHERE
-			ws.assigned_improver_id = $1
-		AND
-			w.series_id = $2
-		AND
-			w.recurrence <> 'one_time'
-		AND
-			ws.step_order = $3
+			SELECT
+				COUNT(*)
+			FROM
+				workflow_steps ws
+			JOIN
+				workflows w
+			ON
+				w.id = ws.workflow_id
+			JOIN
+				workflow_series sr
+			ON
+				sr.id = w.series_id
+			WHERE
+				ws.assigned_improver_id = $1
+			AND
+				w.series_id = $2
+			AND
+				COALESCE(NULLIF(TRIM(sr.recurrence), ''), 'one_time') <> 'one_time'
+			AND
+				ws.step_order = $3
 		AND
 			w.start_at >= $4
 		AND
@@ -3381,23 +4215,27 @@ func (a *AppDB) CreateImproverAbsencePeriod(
 
 	var releasedCount int
 	err = tx.QueryRow(ctx, `
-		WITH releasable AS (
-			SELECT
-				ws.id
-			FROM
-				workflow_steps ws
-			JOIN
-				workflows w
-			ON
-				w.id = ws.workflow_id
-			WHERE
-				ws.assigned_improver_id = $1
-			AND
-				w.series_id = $2
-			AND
-				w.recurrence <> 'one_time'
-			AND
-				ws.step_order = $3
+			WITH releasable AS (
+				SELECT
+					ws.id
+				FROM
+					workflow_steps ws
+				JOIN
+					workflows w
+				ON
+					w.id = ws.workflow_id
+				JOIN
+					workflow_series sr
+				ON
+					sr.id = w.series_id
+				WHERE
+					ws.assigned_improver_id = $1
+				AND
+					w.series_id = $2
+				AND
+					COALESCE(NULLIF(TRIM(sr.recurrence), ''), 'one_time') <> 'one_time'
+				AND
+					ws.step_order = $3
 			AND
 				w.start_at >= $4
 			AND
@@ -3474,17 +4312,21 @@ func (a *AppDB) ClaimWorkflowStep(
 	var managerImproverID *string
 	err = tx.QueryRow(ctx, `
 			SELECT
-				status,
-				start_at,
-				title,
-				series_id,
-				recurrence,
-				manager_improver_id
+				w.status,
+				w.start_at,
+				COALESCE(NULLIF(TRIM(s.title), ''), ''),
+				w.series_id,
+				COALESCE(NULLIF(TRIM(s.recurrence), ''), 'one_time'),
+				w.manager_improver_id
 			FROM
-				workflows
+				workflows w
+			LEFT JOIN
+				workflow_series s
+			ON
+				s.id = w.series_id
 			WHERE
-				id = $1
-			FOR UPDATE;
+				w.id = $1
+			FOR UPDATE OF w;
 	`, workflowId).Scan(&workflowStatus, &workflowStartAt, &workflowTitle, &workflowSeriesId, &workflowRecurrence, &managerImproverID)
 	if err != nil {
 		return nil, nil, err
@@ -3629,6 +4471,15 @@ func (a *AppDB) ClaimWorkflowStep(
 			return nil, nil, fmt.Errorf("improver already assigned within this workflow")
 		}
 		return nil, nil, fmt.Errorf("error assigning workflow step: %s", err)
+	}
+
+	if workflowRecurrence != "one_time" {
+		if err := ensureWorkflowSeriesClaimTx(ctx, tx, workflowSeriesId, stepOrder, improverId); err != nil {
+			return nil, nil, err
+		}
+		if err := propagateWorkflowSeriesClaimTx(ctx, tx, workflowSeriesId, stepOrder, improverId, workflowStartAt); err != nil {
+			return nil, nil, err
+		}
 	}
 
 	var availabilityNotification *structs.WorkflowStepAvailabilityNotification
@@ -3966,13 +4817,23 @@ func (a *AppDB) CompleteWorkflowStep(
 	var workflowTitle string
 	err = tx.QueryRow(ctx, `
 			SELECT
-				status,
-				start_at,
-				title
+				w.status,
+				w.start_at,
+				COALESCE(
+					(
+						SELECT
+							NULLIF(TRIM(ws.title), '')
+						FROM
+							workflow_series ws
+						WHERE
+							ws.id = w.series_id
+					),
+					''
+				)
 			FROM
-				workflows
+				workflows w
 			WHERE
-				id = $1
+				w.id = $1
 			FOR UPDATE;
 		`, workflowId).Scan(&workflowStatus, &workflowStartAt, &workflowTitle)
 	if err != nil {
@@ -4418,6 +5279,9 @@ func (a *AppDB) CompleteWorkflowStep(
 		if err != nil {
 			return nil, fmt.Errorf("error finalizing workflow after step_not_possible: %s", err)
 		}
+		if _, err := ensureRecurringWorkflowSuccessorTx(ctx, tx, workflowId); err != nil {
+			return nil, err
+		}
 
 		result.WorkflowStatus = "completed"
 		if err := tx.Commit(ctx); err != nil {
@@ -4544,6 +5408,9 @@ func (a *AppDB) CompleteWorkflowStep(
 		`, workflowId)
 		if err != nil {
 			return nil, fmt.Errorf("error marking workflow completed: %s", err)
+		}
+		if _, err := ensureRecurringWorkflowSuccessorTx(ctx, tx, workflowId); err != nil {
+			return nil, err
 		}
 	} else {
 		result.WorkflowStatus = "in_progress"
@@ -5126,8 +5993,8 @@ func (a *AppDB) GetWorkflowForApproval(ctx context.Context, workflowId string) (
 
 func (a *AppDB) ExpireStaleWorkflowProposals(ctx context.Context) ([]structs.WorkflowProposalExpiryNotice, error) {
 	rows, err := a.db.Query(ctx, `
-		WITH expired AS (
-			UPDATE
+			WITH expired AS (
+				UPDATE
 				workflows w
 			SET
 				status = 'expired',
@@ -5137,24 +6004,28 @@ func (a *AppDB) ExpireStaleWorkflowProposals(ctx context.Context) ([]structs.Wor
 				updated_at = unix_now()
 			WHERE
 				w.status = 'pending'
-			AND
-				w.created_at <= (unix_now() - (14 * 24 * 60 * 60))
-			RETURNING
-				w.id,
-				w.title,
-				w.proposer_id
-		)
-		SELECT
-			e.id,
-			e.title,
-			e.proposer_id,
-			COALESCE(NULLIF(TRIM(p.email), ''), COALESCE(u.contact_email, ''))
-		FROM
-			expired e
-		LEFT JOIN
-			proposers p
-		ON
-			p.user_id = e.proposer_id
+				AND
+					w.created_at <= (unix_now() - (14 * 24 * 60 * 60))
+				RETURNING
+					w.id,
+					w.series_id,
+					w.proposer_id
+			)
+			SELECT
+				e.id,
+				COALESCE(NULLIF(TRIM(s.title), ''), ''),
+				e.proposer_id,
+				COALESCE(NULLIF(TRIM(p.email), ''), COALESCE(u.contact_email, ''))
+			FROM
+				expired e
+			LEFT JOIN
+				workflow_series s
+			ON
+				s.id = e.series_id
+			LEFT JOIN
+				proposers p
+			ON
+				p.user_id = e.proposer_id
 		LEFT JOIN
 			users u
 		ON
@@ -5185,7 +6056,7 @@ func (a *AppDB) GetWorkflowProposalOutcomeNotification(ctx context.Context, work
 	row := a.db.QueryRow(ctx, `
 		SELECT
 			w.id,
-			w.title,
+			COALESCE(NULLIF(TRIM(s.title), ''), ''),
 			CASE
 				WHEN w.status IN ('approved', 'blocked') THEN 'approved'
 				WHEN w.status = 'rejected' THEN 'rejected'
@@ -5195,6 +6066,10 @@ func (a *AppDB) GetWorkflowProposalOutcomeNotification(ctx context.Context, work
 			COALESCE(NULLIF(TRIM(p.email), ''), COALESCE(u.contact_email, ''))
 		FROM
 			workflows w
+		LEFT JOIN
+			workflow_series s
+		ON
+			s.id = w.series_id
 		LEFT JOIN
 			proposers p
 		ON
@@ -5666,29 +6541,33 @@ func (a *AppDB) GetVoterWorkflows(ctx context.Context, voterId string) ([]*struc
 func (a *AppDB) GetActiveWorkflows(ctx context.Context) ([]*structs.ActiveWorkflowListItem, error) {
 	rows, err := a.db.Query(ctx, `
 		SELECT
-			id,
-			series_id,
-			proposer_id,
-			title,
-			description,
-			recurrence,
-			start_at,
-			status,
-			is_start_blocked,
-			blocked_by_workflow_id,
-			total_bounty,
-			weekly_bounty_requirement,
-			created_at,
-			updated_at,
-			vote_decision,
-			approved_at
+			w.id,
+			w.series_id,
+			w.proposer_id,
+			COALESCE(NULLIF(TRIM(s.title), ''), ''),
+			COALESCE(s.description, ''),
+			COALESCE(NULLIF(TRIM(s.recurrence), ''), 'one_time'),
+			w.start_at,
+			w.status,
+			w.is_start_blocked,
+			w.blocked_by_workflow_id,
+			w.total_bounty,
+			w.weekly_bounty_requirement,
+			w.created_at,
+			w.updated_at,
+			w.vote_decision,
+			w.approved_at
 		FROM
-			workflows
+			workflows w
+		LEFT JOIN
+			workflow_series s
+		ON
+			s.id = w.series_id
 		WHERE
-			status IN ('approved', 'blocked', 'in_progress', 'completed')
+			w.status IN ('approved', 'blocked', 'in_progress', 'completed')
 		ORDER BY
-			start_at ASC,
-			created_at DESC
+			w.start_at ASC,
+			w.created_at DESC
 		LIMIT 500;
 	`)
 	if err != nil {
@@ -5723,6 +6602,508 @@ func (a *AppDB) GetActiveWorkflows(ctx context.Context) ([]*structs.ActiveWorkfl
 	}
 
 	return results, nil
+}
+
+func (a *AppDB) GetAdminWorkflows(ctx context.Context, search string, page, count int) (*structs.AdminWorkflowListResponse, error) {
+	if page < 0 {
+		page = 0
+	}
+	if count <= 0 {
+		count = 20
+	}
+	if count > 200 {
+		count = 200
+	}
+
+	trimmedSearch := strings.TrimSpace(search)
+	likeSearch := "%" + trimmedSearch + "%"
+	offset := page * count
+
+	baseCTE := `
+			WITH assigned AS (
+			SELECT
+				ws.workflow_id,
+				ARRAY_REMOVE(
+					ARRAY_AGG(
+						DISTINCT NULLIF(TRIM(COALESCE(i.email, u.contact_email, '')), '')
+					),
+					NULL
+				) AS assigned_improver_emails
+			FROM
+				workflow_steps ws
+			LEFT JOIN
+				improvers i
+			ON
+				i.user_id = ws.assigned_improver_id
+			LEFT JOIN
+				users u
+			ON
+				u.id = ws.assigned_improver_id
+			WHERE
+				ws.assigned_improver_id IS NOT NULL
+			GROUP BY
+				ws.workflow_id
+		),
+			base AS (
+				SELECT
+					w.id,
+					w.series_id,
+					COALESCE(NULLIF(TRIM(s.title), ''), '') AS title,
+					COALESCE(s.description, '') AS description,
+					COALESCE(NULLIF(TRIM(s.recurrence), ''), 'one_time') AS recurrence,
+					w.status,
+					w.start_at,
+					w.created_at,
+					w.updated_at,
+					COALESCE(a.assigned_improver_emails, ARRAY[]::text[]) AS assigned_improver_emails
+				FROM
+					workflows w
+				LEFT JOIN
+					workflow_series s
+				ON
+					s.id = w.series_id
+				LEFT JOIN
+					assigned a
+				ON
+				a.workflow_id = w.id
+			WHERE
+				w.status IN ('approved', 'blocked', 'in_progress', 'completed', 'paid_out')
+		)
+	`
+
+	whereClause := `
+		(
+			$1 = ''
+			OR base.title ILIKE $2
+			OR EXISTS (
+				SELECT
+					1
+				FROM
+					UNNEST(base.assigned_improver_emails) AS email
+				WHERE
+					email ILIKE $2
+			)
+		)
+	`
+
+	var total int
+	countQuery := baseCTE + fmt.Sprintf(`
+		SELECT
+			COUNT(*)
+		FROM
+			base
+		WHERE
+			%s;
+	`, whereClause)
+	if err := a.db.QueryRow(ctx, countQuery, trimmedSearch, likeSearch).Scan(&total); err != nil {
+		return nil, fmt.Errorf("error counting admin workflows: %s", err)
+	}
+
+	listQuery := baseCTE + fmt.Sprintf(`
+		SELECT
+			base.id,
+			base.series_id,
+			base.title,
+			base.description,
+			base.recurrence,
+			base.status,
+			base.start_at,
+			base.created_at,
+			base.updated_at,
+			base.assigned_improver_emails
+		FROM
+			base
+		WHERE
+			%s
+		ORDER BY
+			base.start_at DESC,
+			base.created_at DESC
+		LIMIT $3
+		OFFSET $4;
+	`, whereClause)
+
+	rows, err := a.db.Query(ctx, listQuery, trimmedSearch, likeSearch, count, offset)
+	if err != nil {
+		return nil, fmt.Errorf("error querying admin workflows: %s", err)
+	}
+	defer rows.Close()
+
+	items := []*structs.AdminWorkflowListItem{}
+	for rows.Next() {
+		item := &structs.AdminWorkflowListItem{}
+		if err := rows.Scan(
+			&item.Id,
+			&item.SeriesId,
+			&item.Title,
+			&item.Description,
+			&item.Recurrence,
+			&item.Status,
+			&item.StartAt,
+			&item.CreatedAt,
+			&item.UpdatedAt,
+			&item.AssignedImproverEmails,
+		); err != nil {
+			return nil, fmt.Errorf("error scanning admin workflow list item: %s", err)
+		}
+		if item.AssignedImproverEmails == nil {
+			item.AssignedImproverEmails = []string{}
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating admin workflows: %s", err)
+	}
+
+	return &structs.AdminWorkflowListResponse{
+		Items: items,
+		Total: total,
+		Page:  page,
+		Count: count,
+	}, nil
+}
+
+func (a *AppDB) GetWorkflowSeriesClaimants(ctx context.Context, seriesId string) ([]*structs.WorkflowSeriesClaimant, error) {
+	seriesId = strings.TrimSpace(seriesId)
+	if seriesId == "" {
+		return nil, fmt.Errorf("series_id is required")
+	}
+
+	rows, err := a.db.Query(ctx, `
+		SELECT
+			ws.assigned_improver_id,
+			COALESCE(NULLIF(TRIM(i.email), ''), NULLIF(TRIM(u.contact_email), ''), ''),
+			COALESCE(
+				NULLIF(TRIM(COALESCE(i.first_name, '') || ' ' || COALESCE(i.last_name, '')), ''),
+				NULLIF(TRIM(u.contact_name), ''),
+				ws.assigned_improver_id
+			),
+			COUNT(*)
+		FROM
+			workflow_steps ws
+		JOIN
+			workflows w
+		ON
+			w.id = ws.workflow_id
+		LEFT JOIN
+			improvers i
+		ON
+			i.user_id = ws.assigned_improver_id
+		LEFT JOIN
+			users u
+		ON
+			u.id = ws.assigned_improver_id
+		WHERE
+			w.series_id = $1
+		AND
+			ws.assigned_improver_id IS NOT NULL
+		AND
+			w.status IN ('approved', 'blocked', 'in_progress', 'completed', 'paid_out')
+		GROUP BY
+			ws.assigned_improver_id,
+			i.email,
+			u.contact_email,
+			i.first_name,
+			i.last_name,
+			u.contact_name
+		ORDER BY
+			COALESCE(NULLIF(TRIM(i.email), ''), NULLIF(TRIM(u.contact_email), ''), ws.assigned_improver_id) ASC;
+	`, seriesId)
+	if err != nil {
+		return nil, fmt.Errorf("error querying workflow series claimants: %s", err)
+	}
+	defer rows.Close()
+
+	claimants := []*structs.WorkflowSeriesClaimant{}
+	for rows.Next() {
+		claimant := &structs.WorkflowSeriesClaimant{}
+		if err := rows.Scan(
+			&claimant.UserId,
+			&claimant.Email,
+			&claimant.Name,
+			&claimant.ClaimCount,
+		); err != nil {
+			return nil, fmt.Errorf("error scanning workflow series claimant: %s", err)
+		}
+		claimants = append(claimants, claimant)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating workflow series claimants: %s", err)
+	}
+	return claimants, nil
+}
+
+func (a *AppDB) UnclaimImproverWorkflowSeriesStep(
+	ctx context.Context,
+	improverId string,
+	seriesId string,
+	stepOrder int,
+) (*structs.ImproverWorkflowSeriesUnclaimResult, error) {
+	improverId = strings.TrimSpace(improverId)
+	seriesId = strings.TrimSpace(seriesId)
+	if improverId == "" {
+		return nil, fmt.Errorf("improver_id is required")
+	}
+	if seriesId == "" {
+		return nil, fmt.Errorf("series_id is required")
+	}
+	if stepOrder <= 0 {
+		return nil, fmt.Errorf("step_order must be greater than zero")
+	}
+
+	tx, err := a.db.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	var targetedCount int
+	err = tx.QueryRow(ctx, `
+			SELECT
+				COUNT(*)
+			FROM
+				workflow_steps ws
+			JOIN
+				workflows w
+			ON
+				w.id = ws.workflow_id
+			JOIN
+				workflow_series sr
+			ON
+				sr.id = w.series_id
+			WHERE
+				w.series_id = $1
+			AND
+				COALESCE(NULLIF(TRIM(sr.recurrence), ''), 'one_time') <> 'one_time'
+			AND
+				ws.step_order = $2
+		AND
+			ws.assigned_improver_id = $3
+		AND
+			w.status IN ('approved', 'blocked', 'in_progress')
+		AND
+			ws.status IN ('locked', 'available', 'in_progress');
+	`, seriesId, stepOrder, improverId).Scan(&targetedCount)
+	if err != nil {
+		return nil, fmt.Errorf("error counting improver workflow series claims: %s", err)
+	}
+	if targetedCount == 0 {
+		return nil, fmt.Errorf("no claimed recurring workpiece found for this series and step")
+	}
+
+	var releasedCount int
+	err = tx.QueryRow(ctx, `
+			WITH releasable AS (
+				SELECT
+					ws.id
+				FROM
+					workflow_steps ws
+				JOIN
+					workflows w
+				ON
+					w.id = ws.workflow_id
+				JOIN
+					workflow_series sr
+				ON
+					sr.id = w.series_id
+				WHERE
+					w.series_id = $1
+				AND
+					COALESCE(NULLIF(TRIM(sr.recurrence), ''), 'one_time') <> 'one_time'
+				AND
+					ws.step_order = $2
+			AND
+				ws.assigned_improver_id = $3
+			AND
+				w.status IN ('approved', 'blocked', 'in_progress')
+			AND
+				ws.status IN ('locked', 'available')
+			FOR UPDATE
+		),
+		released AS (
+			UPDATE
+				workflow_steps ws
+			SET
+				assigned_improver_id = NULL,
+				updated_at = unix_now()
+			WHERE
+				ws.id IN (SELECT id FROM releasable)
+			RETURNING
+				ws.id
+		),
+		cleared_notifications AS (
+			DELETE FROM workflow_step_notifications n
+			WHERE
+				n.step_id IN (SELECT id FROM released)
+			AND
+				n.user_id = $3
+			AND
+				n.notification_type = 'step_available'
+		)
+		SELECT
+			COUNT(*)
+		FROM
+			released;
+	`, seriesId, stepOrder, improverId).Scan(&releasedCount)
+	if err != nil {
+		return nil, fmt.Errorf("error releasing workflow series claims: %s", err)
+	}
+	if releasedCount == 0 {
+		return nil, fmt.Errorf("no claimable recurring assignments found to release")
+	}
+
+	_, err = tx.Exec(ctx, `
+		DELETE FROM workflow_series_step_claims
+		WHERE
+			series_id = $1
+		AND
+			step_order = $2
+		AND
+			improver_id = $3;
+	`, seriesId, stepOrder, improverId)
+	if err != nil {
+		return nil, fmt.Errorf("error removing workflow series claim mapping: %s", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+
+	result := &structs.ImproverWorkflowSeriesUnclaimResult{
+		SeriesId:      seriesId,
+		StepOrder:     stepOrder,
+		ReleasedCount: releasedCount,
+		SkippedCount:  targetedCount - releasedCount,
+	}
+	if result.SkippedCount < 0 {
+		result.SkippedCount = 0
+	}
+	return result, nil
+}
+
+func (a *AppDB) AdminRevokeWorkflowSeriesImproverClaims(
+	ctx context.Context,
+	seriesId string,
+	improverUserId string,
+) (*structs.WorkflowSeriesClaimRevokeResult, error) {
+	seriesId = strings.TrimSpace(seriesId)
+	improverUserId = strings.TrimSpace(improverUserId)
+	if seriesId == "" {
+		return nil, fmt.Errorf("series_id is required")
+	}
+	if improverUserId == "" {
+		return nil, fmt.Errorf("improver_user_id is required")
+	}
+
+	tx, err := a.db.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	var targetedCount int
+	err = tx.QueryRow(ctx, `
+		SELECT
+			COUNT(*)
+		FROM
+			workflow_steps ws
+		JOIN
+			workflows w
+		ON
+			w.id = ws.workflow_id
+		WHERE
+			w.series_id = $1
+		AND
+			ws.assigned_improver_id = $2
+		AND
+			w.status IN ('approved', 'blocked', 'in_progress')
+		AND
+			ws.status IN ('locked', 'available', 'in_progress');
+	`, seriesId, improverUserId).Scan(&targetedCount)
+	if err != nil {
+		return nil, fmt.Errorf("error counting admin workflow claim targets: %s", err)
+	}
+	if targetedCount == 0 {
+		return nil, fmt.Errorf("no claimed workflow assignments found for selected improver in this series")
+	}
+
+	var releasedCount int
+	err = tx.QueryRow(ctx, `
+		WITH releasable AS (
+			SELECT
+				ws.id
+			FROM
+				workflow_steps ws
+			JOIN
+				workflows w
+			ON
+				w.id = ws.workflow_id
+			WHERE
+				w.series_id = $1
+			AND
+				ws.assigned_improver_id = $2
+			AND
+				w.status IN ('approved', 'blocked', 'in_progress')
+			AND
+				ws.status IN ('locked', 'available')
+			FOR UPDATE
+		),
+		released AS (
+			UPDATE
+				workflow_steps ws
+			SET
+				assigned_improver_id = NULL,
+				updated_at = unix_now()
+			WHERE
+				ws.id IN (SELECT id FROM releasable)
+			RETURNING
+				ws.id
+		),
+		cleared_notifications AS (
+			DELETE FROM workflow_step_notifications n
+			WHERE
+				n.step_id IN (SELECT id FROM released)
+			AND
+				n.user_id = $2
+			AND
+				n.notification_type = 'step_available'
+		)
+		SELECT
+			COUNT(*)
+		FROM
+			released;
+	`, seriesId, improverUserId).Scan(&releasedCount)
+	if err != nil {
+		return nil, fmt.Errorf("error revoking workflow claims from admin action: %s", err)
+	}
+	if releasedCount == 0 {
+		return nil, fmt.Errorf("no claimable assignments found to revoke")
+	}
+
+	_, err = tx.Exec(ctx, `
+		DELETE FROM workflow_series_step_claims
+		WHERE
+			series_id = $1
+		AND
+			improver_id = $2;
+	`, seriesId, improverUserId)
+	if err != nil {
+		return nil, fmt.Errorf("error clearing workflow series claim mappings from admin revocation: %s", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+
+	result := &structs.WorkflowSeriesClaimRevokeResult{
+		SeriesId:       seriesId,
+		ImproverUserId: improverUserId,
+		ReleasedCount:  releasedCount,
+		SkippedCount:   targetedCount - releasedCount,
+	}
+	if result.SkippedCount < 0 {
+		result.SkippedCount = 0
+	}
+	return result, nil
 }
 
 func (a *AppDB) CreateWorkflowDeletionProposal(
@@ -5792,14 +7173,18 @@ func (a *AppDB) CreateWorkflowDeletionProposal(
 	var recurrence string
 	err = tx.QueryRow(ctx, `
 		SELECT
-			series_id,
-			status,
-			recurrence
+			w.series_id,
+			w.status,
+			COALESCE(NULLIF(TRIM(s.recurrence), ''), 'one_time')
 		FROM
-			workflows
+			workflows w
+		LEFT JOIN
+			workflow_series s
+		ON
+			s.id = w.series_id
 		WHERE
-			id = $1
-		FOR UPDATE;
+			w.id = $1
+		FOR UPDATE OF w;
 	`, workflowId).Scan(&seriesId, &workflowStatus, &recurrence)
 	if err != nil {
 		if err == pgx.ErrNoRows {
@@ -5916,7 +7301,7 @@ func (a *AppDB) GetWorkflowDeletionProposalByIDForUser(ctx context.Context, prop
 			p.target_type,
 			p.target_workflow_id,
 			CASE
-				WHEN p.target_type = 'workflow' THEN w.title
+				WHEN p.target_type = 'workflow' THEN COALESCE(NULLIF(TRIM(sr.title), ''), '')
 				ELSE NULL
 			END,
 			p.target_series_id,
@@ -5936,6 +7321,10 @@ func (a *AppDB) GetWorkflowDeletionProposalByIDForUser(ctx context.Context, prop
 			workflows w
 		ON
 			w.id = p.target_workflow_id
+		LEFT JOIN
+			workflow_series sr
+		ON
+			sr.id = w.series_id
 		WHERE
 			p.id = $1;
 	`, proposalId)

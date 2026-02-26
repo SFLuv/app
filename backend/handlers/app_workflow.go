@@ -1514,6 +1514,7 @@ func buildSupervisorWorkflowCSV(
 
 	headers := []string{
 		"id",
+		"series_id",
 		"title",
 		"start_timestamp",
 		"completed_timestamp",
@@ -1568,6 +1569,7 @@ func buildSupervisorWorkflowCSV(
 
 			row := []string{
 				workflow.Id,
+				workflow.SeriesId,
 				workflow.Title,
 				strconv.FormatInt(workflow.StartAt, 10),
 				completedAt,
@@ -2116,6 +2118,49 @@ func (a *AppService) CreateImproverAbsencePeriod(w http.ResponseWriter, r *http.
 	_ = json.NewEncoder(w).Encode(result)
 }
 
+func (a *AppService) UnclaimImproverWorkflowSeries(w http.ResponseWriter, r *http.Request) {
+	userDid := utils.GetDid(r)
+	if userDid == nil {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	defer r.Body.Close()
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		a.logger.Logf("error reading improver workflow series unclaim body for %s: %s", *userDid, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	var req structs.ImproverWorkflowSeriesUnclaimRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	result, err := a.db.UnclaimImproverWorkflowSeriesStep(r.Context(), *userDid, req.SeriesId, req.StepOrder)
+	if err != nil {
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "required") || strings.Contains(errMsg, "greater than zero") {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(errMsg))
+			return
+		}
+		if strings.Contains(errMsg, "no claimed recurring workpiece") || strings.Contains(errMsg, "no claimable recurring assignments") {
+			w.WriteHeader(http.StatusConflict)
+			w.Write([]byte(errMsg))
+			return
+		}
+		a.logger.Logf("error unclaiming workflow series %s step %d for improver %s: %s", req.SeriesId, req.StepOrder, *userDid, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(result)
+}
+
 func (a *AppService) ClaimWorkflowStep(w http.ResponseWriter, r *http.Request) {
 	userDid := utils.GetDid(r)
 	if userDid == nil {
@@ -2533,6 +2578,98 @@ func (a *AppService) GetActiveWorkflows(w http.ResponseWriter, r *http.Request) 
 
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(workflows)
+}
+
+func (a *AppService) GetAdminWorkflows(w http.ResponseWriter, r *http.Request) {
+	search := r.URL.Query().Get("search")
+	page, _ := strconv.Atoi(strings.TrimSpace(r.URL.Query().Get("page")))
+	count, _ := strconv.Atoi(strings.TrimSpace(r.URL.Query().Get("count")))
+	if count <= 0 {
+		count = 20
+	}
+
+	response, err := a.db.GetAdminWorkflows(r.Context(), search, page, count)
+	if err != nil {
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "invalid") || strings.Contains(errMsg, "required") {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(errMsg))
+			return
+		}
+		a.logger.Logf("error loading admin workflows: %s", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(response)
+}
+
+func (a *AppService) GetAdminWorkflowSeriesClaimants(w http.ResponseWriter, r *http.Request) {
+	seriesId := strings.TrimSpace(r.PathValue("series_id"))
+	if seriesId == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	claimants, err := a.db.GetWorkflowSeriesClaimants(r.Context(), seriesId)
+	if err != nil {
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "required") {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(errMsg))
+			return
+		}
+		a.logger.Logf("error loading workflow series claimants for %s: %s", seriesId, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(claimants)
+}
+
+func (a *AppService) RevokeAdminWorkflowSeriesImproverClaim(w http.ResponseWriter, r *http.Request) {
+	seriesId := strings.TrimSpace(r.PathValue("series_id"))
+	if seriesId == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	defer r.Body.Close()
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		a.logger.Logf("error reading admin workflow series revoke body for %s: %s", seriesId, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	var req structs.WorkflowSeriesClaimRevokeRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	result, err := a.db.AdminRevokeWorkflowSeriesImproverClaims(r.Context(), seriesId, req.ImproverUserId)
+	if err != nil {
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "required") {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(errMsg))
+			return
+		}
+		if strings.Contains(errMsg, "no claimed workflow assignments") || strings.Contains(errMsg, "no claimable assignments") {
+			w.WriteHeader(http.StatusConflict)
+			w.Write([]byte(errMsg))
+			return
+		}
+		a.logger.Logf("error revoking workflow series claim for %s improver %s: %s", seriesId, req.ImproverUserId, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(result)
 }
 
 func (a *AppService) ProposeWorkflowDeletion(w http.ResponseWriter, r *http.Request) {

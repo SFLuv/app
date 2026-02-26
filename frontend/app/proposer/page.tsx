@@ -20,7 +20,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { formatStatusLabel } from "@/lib/status-labels"
+import { formatWorkflowDisplayStatus } from "@/lib/workflow-status"
 import { cn } from "@/lib/utils"
 import { AlertTriangle, ChevronsUpDown, Clock, Loader2, Plus, Search, Trash2, X } from "lucide-react"
 import {
@@ -1429,7 +1429,7 @@ export default function ProposerPage() {
                                     : "secondary"
                               }
                             >
-                              {formatStatusLabel(workflow.status)}
+                              {formatWorkflowDisplayStatus(workflow)}
                             </Badge>
                           </div>
                           <p className="text-sm text-muted-foreground">{workflow.description}</p>

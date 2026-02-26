@@ -8,6 +8,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { WorkflowDetailsModal } from "@/components/workflows/workflow-details-modal"
 import { formatStatusLabel } from "@/lib/status-labels"
+import { formatWorkflowDisplayStatus } from "@/lib/workflow-status"
 import { ActiveWorkflowListItem, Workflow, WorkflowDeletionProposal, WorkflowDeletionTargetType } from "@/types/workflow"
 import { Input } from "@/components/ui/input"
 import { AlertTriangle, Clock3, Search, Vote } from "lucide-react"
@@ -353,7 +354,7 @@ export default function VoterPage() {
                               <h3 className="font-semibold">{workflow.title}</h3>
                             </div>
                             <Badge variant={pending ? "outline" : workflow.status === "approved" || workflow.status === "blocked" ? "default" : "secondary"}>
-                              {formatStatusLabel(workflow.status)}
+                              {formatWorkflowDisplayStatus(workflow)}
                             </Badge>
                           </div>
 
@@ -551,7 +552,7 @@ export default function VoterPage() {
                     <CardContent className="pt-4 space-y-2">
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <h4 className="font-semibold">{workflow.title}</h4>
-                        <Badge>{formatStatusLabel(workflow.status)}</Badge>
+                        <Badge>{formatWorkflowDisplayStatus(workflow)}</Badge>
                       </div>
                       <p className="text-sm text-muted-foreground">{workflow.description}</p>
                       <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">

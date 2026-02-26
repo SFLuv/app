@@ -371,25 +371,22 @@ func (s *AppDB) CreateTables() error {
 	}
 
 	_, err = s.db.Exec(context.Background(), `
-		CREATE OR REPLACE FUNCTION unix_now()
-		RETURNS BIGINT
-		LANGUAGE SQL
-		STABLE
-		AS $$
-			SELECT EXTRACT(EPOCH FROM NOW())::BIGINT;
-		$$;
+			CREATE OR REPLACE FUNCTION unix_now()
+			RETURNS BIGINT
+			LANGUAGE SQL
+			STABLE
+			AS $$
+				SELECT EXTRACT(EPOCH FROM NOW())::BIGINT;
+			$$;
 
-		CREATE TABLE IF NOT EXISTS workflows(
-			id TEXT PRIMARY KEY,
-			series_id TEXT NOT NULL,
-			proposer_id TEXT NOT NULL REFERENCES users(id),
-			title TEXT NOT NULL,
-			description TEXT NOT NULL,
-			recurrence TEXT NOT NULL,
-			start_at BIGINT NOT NULL,
-			status TEXT NOT NULL DEFAULT 'pending',
-			is_start_blocked BOOLEAN NOT NULL DEFAULT false,
-			blocked_by_workflow_id TEXT,
+			CREATE TABLE IF NOT EXISTS workflows(
+				id TEXT PRIMARY KEY,
+				series_id TEXT NOT NULL,
+				proposer_id TEXT NOT NULL REFERENCES users(id),
+				start_at BIGINT NOT NULL,
+				status TEXT NOT NULL DEFAULT 'pending',
+				is_start_blocked BOOLEAN NOT NULL DEFAULT false,
+				blocked_by_workflow_id TEXT,
 			total_bounty BIGINT NOT NULL DEFAULT 0,
 			weekly_bounty_requirement BIGINT NOT NULL DEFAULT 0,
 			budget_weekly_deducted BIGINT NOT NULL DEFAULT 0,
@@ -410,12 +407,11 @@ func (s *AppDB) CreateTables() error {
 				manager_retry_requested_by TEXT REFERENCES users(id),
 				approved_at BIGINT,
 				approved_by_user_id TEXT,
-			created_at BIGINT NOT NULL DEFAULT unix_now(),
-			updated_at BIGINT NOT NULL DEFAULT unix_now(),
-			CHECK (recurrence IN ('one_time', 'daily', 'weekly', 'monthly')),
-			CHECK (status IN ('pending', 'approved', 'rejected', 'in_progress', 'completed', 'paid_out', 'blocked', 'expired', 'deleted')),
-			CHECK (vote_decision IN ('approve', 'deny', 'admin_approve') OR vote_decision IS NULL)
-		);
+				created_at BIGINT NOT NULL DEFAULT unix_now(),
+				updated_at BIGINT NOT NULL DEFAULT unix_now(),
+				CHECK (status IN ('pending', 'approved', 'rejected', 'in_progress', 'completed', 'paid_out', 'blocked', 'expired', 'deleted')),
+				CHECK (vote_decision IN ('approve', 'deny', 'admin_approve') OR vote_decision IS NULL)
+			);
 
 		CREATE INDEX IF NOT EXISTS workflows_series_idx ON workflows(series_id);
 		CREATE INDEX IF NOT EXISTS workflows_status_idx ON workflows(status);
@@ -427,8 +423,105 @@ func (s *AppDB) CreateTables() error {
 	}
 
 	_, err = s.db.Exec(context.Background(), `
-		ALTER TABLE workflows
-		DROP CONSTRAINT IF EXISTS workflows_status_check;
+		CREATE TABLE IF NOT EXISTS workflow_series(
+			id TEXT PRIMARY KEY,
+			proposer_id TEXT NOT NULL REFERENCES users(id),
+			title TEXT NOT NULL,
+			description TEXT NOT NULL DEFAULT '',
+			recurrence TEXT NOT NULL,
+			created_at BIGINT NOT NULL DEFAULT unix_now(),
+			updated_at BIGINT NOT NULL DEFAULT unix_now(),
+			CHECK (recurrence IN ('one_time', 'daily', 'weekly', 'monthly'))
+		);
+
+		CREATE INDEX IF NOT EXISTS workflow_series_proposer_idx ON workflow_series(proposer_id);
+		CREATE INDEX IF NOT EXISTS workflow_series_recurrence_idx ON workflow_series(recurrence);
+	`)
+	if err != nil {
+		return fmt.Errorf("error creating workflow_series table: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
+			WITH missing_series AS (
+				SELECT DISTINCT
+					w.series_id,
+					w.proposer_id,
+					w.created_at,
+					w.updated_at
+				FROM
+					workflows w
+				LEFT JOIN
+					workflow_series s
+				ON
+					s.id = w.series_id
+				WHERE
+					s.id IS NULL
+			)
+			INSERT INTO workflow_series(
+				id,
+				proposer_id,
+				title,
+				description,
+				recurrence,
+				created_at,
+				updated_at
+			)
+			SELECT
+				m.series_id,
+				m.proposer_id,
+				CONCAT('Workflow ', UPPER(SUBSTRING(m.series_id FROM 1 FOR 8))),
+				'',
+				'one_time',
+				m.created_at,
+				m.updated_at
+			FROM
+				missing_series m
+			ON CONFLICT (id)
+			DO NOTHING;
+		`)
+	if err != nil {
+		return fmt.Errorf("error backfilling workflow_series table: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
+			DO $$
+			BEGIN
+			IF NOT EXISTS (
+				SELECT
+					1
+				FROM
+					pg_constraint
+				WHERE
+					conname = 'workflows_series_fk'
+			) THEN
+				ALTER TABLE workflows
+				ADD CONSTRAINT workflows_series_fk
+				FOREIGN KEY (series_id) REFERENCES workflow_series(id)
+				ON DELETE CASCADE;
+			END IF;
+			END $$;
+		`)
+	if err != nil {
+		return fmt.Errorf("error adding workflow series foreign key: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
+			ALTER TABLE workflows
+			DROP COLUMN IF EXISTS title;
+
+			ALTER TABLE workflows
+			DROP COLUMN IF EXISTS description;
+
+			ALTER TABLE workflows
+			DROP COLUMN IF EXISTS recurrence;
+		`)
+	if err != nil {
+		return fmt.Errorf("error dropping legacy workflow definition columns: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
+			ALTER TABLE workflows
+			DROP CONSTRAINT IF EXISTS workflows_status_check;
 
 		ALTER TABLE workflows
 		ADD CONSTRAINT workflows_status_check
@@ -604,11 +697,12 @@ func (s *AppDB) CreateTables() error {
 	}
 
 	_, err = s.db.Exec(context.Background(), `
-		CREATE TABLE IF NOT EXISTS workflow_steps(
-			id TEXT PRIMARY KEY,
-			workflow_id TEXT NOT NULL REFERENCES workflows(id) ON DELETE CASCADE,
-			step_order INTEGER NOT NULL,
-			title TEXT NOT NULL,
+			CREATE TABLE IF NOT EXISTS workflow_steps(
+				id TEXT PRIMARY KEY,
+				series_id TEXT NOT NULL REFERENCES workflow_series(id) ON DELETE CASCADE,
+				workflow_id TEXT NOT NULL,
+				step_order INTEGER NOT NULL,
+				title TEXT NOT NULL,
 			description TEXT NOT NULL,
 			bounty BIGINT NOT NULL DEFAULT 0,
 			role_id TEXT REFERENCES workflow_roles(id),
@@ -625,20 +719,23 @@ func (s *AppDB) CreateTables() error {
 			updated_at BIGINT NOT NULL DEFAULT unix_now(),
 			UNIQUE (workflow_id, step_order),
 			CHECK (status IN ('locked', 'available', 'in_progress', 'completed', 'paid_out'))
-		);
+			);
 
-		CREATE INDEX IF NOT EXISTS workflow_steps_workflow_idx ON workflow_steps(workflow_id);
-		CREATE UNIQUE INDEX IF NOT EXISTS workflow_single_assignment_per_improver_idx
-			ON workflow_steps(workflow_id, assigned_improver_id)
-			WHERE assigned_improver_id IS NOT NULL;
-	`)
+			CREATE INDEX IF NOT EXISTS workflow_steps_workflow_idx ON workflow_steps(workflow_id);
+			CREATE UNIQUE INDEX IF NOT EXISTS workflow_single_assignment_per_improver_idx
+				ON workflow_steps(workflow_id, assigned_improver_id)
+				WHERE assigned_improver_id IS NOT NULL;
+		`)
 	if err != nil {
 		return fmt.Errorf("error creating workflow_steps table: %s", err)
 	}
 
 	_, err = s.db.Exec(context.Background(), `
-		ALTER TABLE workflow_steps
-		ADD COLUMN IF NOT EXISTS started_at BIGINT;
+			ALTER TABLE workflow_steps
+			ADD COLUMN IF NOT EXISTS series_id TEXT;
+
+			ALTER TABLE workflow_steps
+			ADD COLUMN IF NOT EXISTS started_at BIGINT;
 
 		ALTER TABLE workflow_steps
 		ADD COLUMN IF NOT EXISTS completed_at BIGINT;
@@ -655,13 +752,47 @@ func (s *AppDB) CreateTables() error {
 		ALTER TABLE workflow_steps
 		ADD COLUMN IF NOT EXISTS retry_requested_by TEXT REFERENCES users(id);
 
-		ALTER TABLE workflow_steps
-		ADD COLUMN IF NOT EXISTS allow_step_not_possible BOOLEAN NOT NULL DEFAULT false;
+			ALTER TABLE workflow_steps
+			ADD COLUMN IF NOT EXISTS allow_step_not_possible BOOLEAN NOT NULL DEFAULT false;
 
-		CREATE UNIQUE INDEX IF NOT EXISTS workflow_single_assignment_per_improver_idx
-			ON workflow_steps(workflow_id, assigned_improver_id)
-			WHERE assigned_improver_id IS NOT NULL;
-	`)
+			UPDATE workflow_steps ws
+			SET
+				series_id = w.series_id
+			FROM
+				workflows w
+			WHERE
+				ws.workflow_id = w.id
+			AND
+				(ws.series_id IS NULL OR ws.series_id <> w.series_id);
+
+			DO $$
+			BEGIN
+				IF NOT EXISTS (
+					SELECT
+						1
+					FROM
+						pg_constraint
+					WHERE
+						conname = 'workflow_steps_series_fk'
+				) THEN
+					ALTER TABLE workflow_steps
+					ADD CONSTRAINT workflow_steps_series_fk
+					FOREIGN KEY (series_id) REFERENCES workflow_series(id)
+					ON DELETE CASCADE;
+				END IF;
+			END $$;
+
+			ALTER TABLE workflow_steps
+			DROP CONSTRAINT IF EXISTS workflow_steps_workflow_id_fkey;
+
+			ALTER TABLE workflow_steps
+			ALTER COLUMN series_id SET NOT NULL;
+
+			CREATE INDEX IF NOT EXISTS workflow_steps_series_idx ON workflow_steps(series_id);
+			CREATE UNIQUE INDEX IF NOT EXISTS workflow_single_assignment_per_improver_idx
+				ON workflow_steps(workflow_id, assigned_improver_id)
+				WHERE assigned_improver_id IS NOT NULL;
+		`)
 	if err != nil {
 		return fmt.Errorf("error altering workflow_steps execution columns: %s", err)
 	}
@@ -772,9 +903,9 @@ func (s *AppDB) CreateTables() error {
 	}
 
 	_, err = s.db.Exec(context.Background(), `
-		CREATE TABLE IF NOT EXISTS workflow_improver_absences(
-			id TEXT PRIMARY KEY,
-			improver_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			CREATE TABLE IF NOT EXISTS workflow_improver_absences(
+				id TEXT PRIMARY KEY,
+				improver_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
 			series_id TEXT NOT NULL,
 			step_order INTEGER NOT NULL,
 			absent_from BIGINT NOT NULL,
@@ -795,8 +926,82 @@ func (s *AppDB) CreateTables() error {
 	}
 
 	_, err = s.db.Exec(context.Background(), `
-		CREATE TABLE IF NOT EXISTS workflow_votes(
-			workflow_id TEXT NOT NULL REFERENCES workflows(id) ON DELETE CASCADE,
+			CREATE TABLE IF NOT EXISTS workflow_series_step_claims(
+				series_id TEXT NOT NULL,
+				step_order INTEGER NOT NULL,
+				improver_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+				created_at BIGINT NOT NULL DEFAULT unix_now(),
+				updated_at BIGINT NOT NULL DEFAULT unix_now(),
+				PRIMARY KEY (series_id, step_order),
+				CHECK (step_order > 0)
+			);
+
+			CREATE INDEX IF NOT EXISTS workflow_series_step_claims_improver_idx
+				ON workflow_series_step_claims(improver_id, series_id, step_order);
+		`)
+	if err != nil {
+		return fmt.Errorf("error creating workflow_series_step_claims table: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
+				WITH ranked AS (
+					SELECT
+						w.series_id,
+						ws.step_order,
+						ws.assigned_improver_id,
+					ROW_NUMBER() OVER (
+						PARTITION BY w.series_id, ws.step_order
+						ORDER BY
+							w.start_at DESC,
+							ws.updated_at DESC,
+							ws.created_at DESC
+					) AS row_rank
+					FROM
+						workflow_steps ws
+					JOIN
+						workflows w
+					ON
+						w.id = ws.workflow_id
+					JOIN
+						workflow_series sr
+					ON
+						sr.id = w.series_id
+					WHERE
+						sr.recurrence <> 'one_time'
+					AND
+						w.status IN ('approved', 'blocked', 'in_progress', 'completed', 'paid_out')
+					AND
+					ws.assigned_improver_id IS NOT NULL
+			)
+			INSERT INTO workflow_series_step_claims(
+				series_id,
+				step_order,
+				improver_id,
+				created_at,
+				updated_at
+			)
+			SELECT
+				r.series_id,
+				r.step_order,
+				r.assigned_improver_id,
+				unix_now(),
+				unix_now()
+			FROM
+				ranked r
+			WHERE
+				r.row_rank = 1
+			ON CONFLICT (series_id, step_order)
+			DO UPDATE SET
+				improver_id = EXCLUDED.improver_id,
+				updated_at = unix_now();
+		`)
+	if err != nil {
+		return fmt.Errorf("error backfilling workflow_series_step_claims table: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
+			CREATE TABLE IF NOT EXISTS workflow_votes(
+				workflow_id TEXT NOT NULL REFERENCES workflows(id) ON DELETE CASCADE,
 			voter_id TEXT NOT NULL REFERENCES users(id),
 			decision TEXT NOT NULL,
 			comment TEXT,

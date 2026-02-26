@@ -14,6 +14,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { buildCredentialLabelMap, formatCredentialLabel } from "@/lib/credential-labels"
 import { formatStatusLabel } from "@/lib/status-labels"
+import { formatWorkflowDisplayStatus } from "@/lib/workflow-status"
 import {
   Dialog,
   DialogContent,
@@ -63,11 +64,20 @@ import { Proposer } from "@/types/proposer"
 import { Improver } from "@/types/improver"
 import { Supervisor } from "@/types/supervisor"
 import { IssuerRecord, IssuerWithScopes } from "@/types/issuer"
-import { CredentialType, GlobalCredentialType } from "@/types/workflow"
+import {
+  AdminWorkflowListItem,
+  AdminWorkflowListResponse,
+  CredentialType,
+  GlobalCredentialType,
+  Workflow,
+  WorkflowSeriesClaimant,
+  WorkflowSeriesClaimRevokeResult,
+} from "@/types/workflow"
 import { Event, EventsStatus } from "@/types/event"
 import { AddEventModal } from "@/components/events/add-event-modal"
 import { EventModal } from "@/components/events/event-modal"
 import { DrainFaucetModal } from "@/components/events/drain-faucet-modal"
+import { WorkflowDetailsModal } from "@/components/workflows/workflow-details-modal"
 import EventCard from "@/components/events/event-card"
 import type { W9Submission } from "@/types/w9"
 
@@ -101,6 +111,11 @@ const statusToApproval = (status: ApprovalStatus): boolean | null => {
   if (status === "approved") return true
   if (status === "rejected") return false
   return null
+}
+
+type AdminWorkflowSeriesGroup = {
+  seriesId: string
+  workflows: AdminWorkflowListItem[]
 }
 
 export default function AdminPage() {
@@ -256,6 +271,30 @@ export default function AdminPage() {
   const [newCredentialValue, setNewCredentialValue] = useState<string>("")
   const [newCredentialLabel, setNewCredentialLabel] = useState<string>("")
   const [credentialTypeSaving, setCredentialTypeSaving] = useState<boolean>(false)
+
+  // Workflows (admin)
+  const [adminWorkflows, setAdminWorkflows] = useState<AdminWorkflowListItem[]>([])
+  const [adminWorkflowsTotal, setAdminWorkflowsTotal] = useState<number>(0)
+  const [adminWorkflowsPage, setAdminWorkflowsPage] = useState<number>(0)
+  const [adminWorkflowsCount] = useState<number>(20)
+  const [adminWorkflowsSearch, setAdminWorkflowsSearch] = useState<string>("")
+  const [adminWorkflowsError, setAdminWorkflowsError] = useState<string>("")
+  const [adminWorkflowDetail, setAdminWorkflowDetail] = useState<Workflow | null>(null)
+  const [adminWorkflowDetailOpen, setAdminWorkflowDetailOpen] = useState<boolean>(false)
+  const [adminWorkflowDetailLoading, setAdminWorkflowDetailLoading] = useState<boolean>(false)
+  const [adminSeriesCardIndexById, setAdminSeriesCardIndexById] = useState<Record<string, number>>({})
+  const [adminDetailSeriesContext, setAdminDetailSeriesContext] = useState<{
+    seriesId: string
+    workflowIds: string[]
+    index: number
+  } | null>(null)
+  const [adminRevokeModalOpen, setAdminRevokeModalOpen] = useState<boolean>(false)
+  const [adminRevokeClaimants, setAdminRevokeClaimants] = useState<WorkflowSeriesClaimant[]>([])
+  const [adminRevokeLoading, setAdminRevokeLoading] = useState<boolean>(false)
+  const [adminRevokeSeriesId, setAdminRevokeSeriesId] = useState<string>("")
+  const [adminRevokeImproverId, setAdminRevokeImproverId] = useState<string>("")
+  const [adminRevokeError, setAdminRevokeError] = useState<string>("")
+  const [adminRevokeSubmitting, setAdminRevokeSubmitting] = useState<boolean>(false)
 
   const credentialLabelMap = useMemo(
     () => buildCredentialLabelMap(credentialTypes),
@@ -436,6 +475,35 @@ export default function AdminPage() {
     if (issuerStatusFilter === "all") return issuerRequests
     return issuerRequests.filter((issuer) => issuer.status === issuerStatusFilter)
   }, [issuerRequests, issuerStatusFilter])
+
+  const groupedAdminWorkflows = useMemo<AdminWorkflowSeriesGroup[]>(() => {
+    const groups = new Map<string, AdminWorkflowSeriesGroup>()
+    adminWorkflows.forEach((workflow) => {
+      const existing = groups.get(workflow.series_id)
+      if (!existing) {
+        groups.set(workflow.series_id, {
+          seriesId: workflow.series_id,
+          workflows: [workflow],
+        })
+        return
+      }
+      groups.set(workflow.series_id, {
+        ...existing,
+        workflows: [...existing.workflows, workflow],
+      })
+    })
+
+    return Array.from(groups.values())
+      .map((group) => ({
+        ...group,
+        workflows: [...group.workflows].sort((a, b) => a.start_at - b.start_at),
+      }))
+      .sort((a, b) => {
+        const aStart = a.workflows[0]?.start_at || 0
+        const bStart = b.workflows[0]?.start_at || 0
+        return bStart - aStart
+      })
+  }, [adminWorkflows])
 
   const getAffiliates = async (search = affiliateSearch, page = affiliatePage) => {
     try {
@@ -864,6 +932,129 @@ export default function AdminPage() {
     setIssuerRequestModalOpen(false)
   }
 
+  const getAdminWorkflows = async (search = adminWorkflowsSearch, page = adminWorkflowsPage) => {
+    try {
+      const params = new URLSearchParams({
+        search,
+        page: String(page),
+        count: String(adminWorkflowsCount),
+      })
+      const res = await authFetch(`/admin/workflows?${params}`)
+      if (!res.ok) throw new Error()
+      const data = (await res.json()) as AdminWorkflowListResponse
+      setAdminWorkflows(data.items || [])
+      setAdminWorkflowsTotal(data.total || 0)
+      setAdminWorkflowsError("")
+    } catch {
+      setAdminWorkflowsError("Unable to load workflows right now. Please try again.")
+    }
+  }
+
+  const openAdminWorkflowDetails = async (
+    workflowId: string,
+    workflow?: Workflow,
+    seriesContext?: { seriesId: string; workflowIds: string[]; index: number } | null,
+  ) => {
+    setAdminWorkflowsError("")
+    setAdminDetailSeriesContext(seriesContext || null)
+
+    if (workflow) {
+      setAdminWorkflowDetail(workflow)
+      setAdminWorkflowDetailLoading(false)
+      setAdminWorkflowDetailOpen(true)
+      return
+    }
+
+    setAdminWorkflowDetail(null)
+    setAdminWorkflowDetailLoading(true)
+    setAdminWorkflowDetailOpen(true)
+    try {
+      const res = await authFetch(`/workflows/${workflowId}`)
+      if (!res.ok) {
+        const text = await res.text()
+        throw new Error(text || "Unable to load workflow details.")
+      }
+      const data = (await res.json()) as Workflow
+      setAdminWorkflowDetail(data)
+    } catch (err) {
+      setAdminWorkflowDetailOpen(false)
+      setAdminWorkflowsError(err instanceof Error ? err.message : "Unable to load workflow details.")
+    } finally {
+      setAdminWorkflowDetailLoading(false)
+    }
+  }
+
+  const loadAdminSeriesClaimants = async (seriesId: string) => {
+    setAdminRevokeLoading(true)
+    setAdminRevokeError("")
+    try {
+      const res = await authFetch(`/admin/workflow-series/${encodeURIComponent(seriesId)}/claimants`)
+      if (!res.ok) {
+        const text = await res.text()
+        throw new Error(text || "Unable to load claimants.")
+      }
+      const data = (await res.json()) as WorkflowSeriesClaimant[]
+      setAdminRevokeClaimants(data || [])
+      setAdminRevokeImproverId((current) => current || data?.[0]?.user_id || "")
+    } catch (err) {
+      setAdminRevokeClaimants([])
+      setAdminRevokeImproverId("")
+      setAdminRevokeError(err instanceof Error ? err.message : "Unable to load claimants.")
+    } finally {
+      setAdminRevokeLoading(false)
+    }
+  }
+
+  const openAdminRevokeModal = async (seriesId: string) => {
+    setAdminRevokeSeriesId(seriesId)
+    setAdminRevokeClaimants([])
+    setAdminRevokeImproverId("")
+    setAdminRevokeError("")
+    setAdminRevokeModalOpen(true)
+    await loadAdminSeriesClaimants(seriesId)
+  }
+
+  const revokeAdminSeriesClaim = async () => {
+    if (!adminRevokeSeriesId || !adminRevokeImproverId) {
+      setAdminRevokeError("Select an improver to revoke.")
+      return
+    }
+    setAdminRevokeSubmitting(true)
+    setAdminRevokeError("")
+    try {
+      const res = await authFetch(`/admin/workflow-series/${encodeURIComponent(adminRevokeSeriesId)}/revoke-claim`, {
+        method: "POST",
+        body: JSON.stringify({
+          improver_user_id: adminRevokeImproverId,
+        }),
+      })
+      if (!res.ok) {
+        const text = await res.text()
+        throw new Error(text || "Unable to revoke claim.")
+      }
+      const result = (await res.json()) as WorkflowSeriesClaimRevokeResult
+      const skipped =
+        result.skipped_count > 0 ? ` ${result.skipped_count} started assignment(s) were not revoked.` : ""
+      toast({
+        title: "Claims revoked",
+        description: `Released ${result.released_count} assignment(s).${skipped}`,
+      })
+      setAdminRevokeModalOpen(false)
+      await getAdminWorkflows(adminWorkflowsSearch, adminWorkflowsPage)
+      if (adminWorkflowDetail?.id) {
+        const resWorkflow = await authFetch(`/workflows/${adminWorkflowDetail.id}`)
+        if (resWorkflow.ok) {
+          const refreshed = (await resWorkflow.json()) as Workflow
+          setAdminWorkflowDetail(refreshed)
+        }
+      }
+    } catch (err) {
+      setAdminRevokeError(err instanceof Error ? err.message : "Unable to revoke claim.")
+    } finally {
+      setAdminRevokeSubmitting(false)
+    }
+  }
+
   useEffect(() => {
     if(wallets.length) {
       getFaucetBalance()
@@ -882,6 +1073,7 @@ export default function AdminPage() {
   useEffect(() => { getImprovers(improverSearch, improverPage) }, [improverSearch, improverPage])
   useEffect(() => { getSupervisors(supervisorSearch, supervisorPage) }, [supervisorSearch, supervisorPage])
   useEffect(() => { getIssuerRequests(issuerRequestSearch, issuerRequestPage) }, [issuerRequestSearch, issuerRequestPage])
+  useEffect(() => { getAdminWorkflows(adminWorkflowsSearch, adminWorkflowsPage) }, [adminWorkflowsSearch, adminWorkflowsPage])
 
   const fetchPendingW9Submissions = async () => {
     if (!user?.isAdmin) return
@@ -1401,6 +1593,48 @@ export default function AdminPage() {
     return `$${selectedWalletBYUSDBalance.toLocaleString()} BYUSD`
   }
 
+  const getAdminSeriesCardIndex = (group: AdminWorkflowSeriesGroup) => {
+    if (group.workflows.length === 0) return 0
+    const currentIndex = adminSeriesCardIndexById[group.seriesId] ?? 0
+    return ((currentIndex % group.workflows.length) + group.workflows.length) % group.workflows.length
+  }
+
+  const shiftAdminSeriesCardIndex = (group: AdminWorkflowSeriesGroup, direction: number) => {
+    if (group.workflows.length <= 1) return
+    setAdminSeriesCardIndexById((prev) => {
+      const currentIndex = prev[group.seriesId] ?? 0
+      const nextIndex = ((currentIndex + direction) % group.workflows.length + group.workflows.length) % group.workflows.length
+      return {
+        ...prev,
+        [group.seriesId]: nextIndex,
+      }
+    })
+  }
+
+  const openAdminSeriesWorkflowDetails = async (group: AdminWorkflowSeriesGroup, index: number) => {
+    if (group.workflows.length === 0) return
+    const safeIndex = ((index % group.workflows.length) + group.workflows.length) % group.workflows.length
+    const selectedWorkflow = group.workflows[safeIndex]
+    await openAdminWorkflowDetails(selectedWorkflow.id, undefined, {
+      seriesId: group.seriesId,
+      workflowIds: group.workflows.map((workflow) => workflow.id),
+      index: safeIndex,
+    })
+  }
+
+  const shiftAdminDetailSeriesWorkflow = async (direction: number) => {
+    if (!adminDetailSeriesContext || adminDetailSeriesContext.workflowIds.length <= 1) return
+    const nextIndex =
+      ((adminDetailSeriesContext.index + direction) % adminDetailSeriesContext.workflowIds.length +
+        adminDetailSeriesContext.workflowIds.length) %
+      adminDetailSeriesContext.workflowIds.length
+    const nextWorkflowId = adminDetailSeriesContext.workflowIds[nextIndex]
+    await openAdminWorkflowDetails(nextWorkflowId, undefined, {
+      ...adminDetailSeriesContext,
+      index: nextIndex,
+    })
+  }
+
   if(status === "loading") {
     return (
       <div className="flex items-center justify-center min-h-[70vh]">
@@ -1471,6 +1705,9 @@ export default function AdminPage() {
                   {supervisors.filter((supervisor) => supervisor.status === "pending").length}
                 </Badge>
               )}
+            </TabsTrigger>
+            <TabsTrigger value="workflows" className="w-full justify-between px-3 py-2">
+              <span>Workflows</span>
             </TabsTrigger>
             <TabsTrigger value="issuers" className="w-full justify-between px-3 py-2">
               <span>Issuers</span>
@@ -2713,6 +2950,178 @@ export default function AdminPage() {
           </Card>
         </TabsContent>
 
+        <TabsContent value="workflows" className="space-y-6">
+          {adminWorkflowsError && (
+            <div className="flex items-center gap-2 text-red-600 text-sm p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
+              <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+              <span>{adminWorkflowsError}</span>
+            </div>
+          )}
+
+          <Card>
+            <CardHeader className="pb-4">
+              <CardTitle className="flex items-center gap-2 text-xl">
+                <FileCheck className="h-5 w-5" />
+                Manage Workflows
+              </CardTitle>
+              <CardDescription>Search workflows by title or assigned improver email, then manage series claims.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+                <div className="relative flex-1">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    placeholder="Search workflows by title or improver email..."
+                    value={adminWorkflowsSearch}
+                    onChange={(event) => {
+                      setAdminWorkflowsSearch(event.target.value)
+                      setAdminWorkflowsPage(0)
+                    }}
+                    className="pl-9"
+                  />
+                </div>
+                <div className="text-sm text-muted-foreground">
+                  Showing {groupedAdminWorkflows.length} series entries from {adminWorkflowsTotal} workflows
+                </div>
+              </div>
+
+              {groupedAdminWorkflows.length === 0 ? (
+                <div className="text-center py-8">
+                  <FileCheck className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+                  <h3 className="text-lg font-medium">No Workflows Found</h3>
+                  <p className="text-muted-foreground">No workflows match this search.</p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {groupedAdminWorkflows.map((group) => {
+                    if (group.workflows.length === 0) return null
+                    const cardIndex = getAdminSeriesCardIndex(group)
+                    const workflow = group.workflows[cardIndex]
+
+                    return (
+                      <Card
+                        key={`admin-series-${group.seriesId}`}
+                        className="cursor-pointer transition-shadow hover:shadow-md"
+                        onClick={() => void openAdminSeriesWorkflowDetails(group, cardIndex)}
+                      >
+                        <CardContent className="p-4 space-y-3">
+                          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                            <div>
+                              <p className="font-medium text-black dark:text-white">{workflow.title}</p>
+                              <p className="text-xs text-muted-foreground">
+                                Start: {new Date(workflow.start_at * 1000).toLocaleString()}
+                              </p>
+                            </div>
+                            <Badge
+                              variant={
+                                workflow.status === "approved" || workflow.status === "in_progress"
+                                  ? "default"
+                                  : workflow.status === "blocked"
+                                    ? "secondary"
+                                    : "outline"
+                              }
+                            >
+                              {formatWorkflowDisplayStatus(workflow)}
+                            </Badge>
+                          </div>
+
+                          <p className="text-sm text-muted-foreground line-clamp-2">{workflow.description || "No description provided."}</p>
+                          <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+                            <span>Series workflow {cardIndex + 1} of {group.workflows.length}</span>
+                            <span>Recurrence: {workflow.recurrence.replace("_", " ")}</span>
+                          </div>
+                          <div className="flex flex-wrap gap-1">
+                            {workflow.assigned_improver_emails.length === 0 ? (
+                              <Badge variant="outline">No assigned improvers</Badge>
+                            ) : (
+                              workflow.assigned_improver_emails.map((email) => (
+                                <Badge key={`${workflow.id}-${email}`} variant="secondary">
+                                  {email}
+                                </Badge>
+                              ))
+                            )}
+                          </div>
+
+                          <div className="flex w-full flex-col gap-2 pt-1 sm:w-auto sm:flex-row sm:flex-wrap">
+                            <Button
+                              className="w-full sm:w-auto"
+                              size="sm"
+                              variant="outline"
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                void openAdminSeriesWorkflowDetails(group, cardIndex)
+                              }}
+                            >
+                              View Details
+                            </Button>
+                            <Button
+                              className="w-full sm:w-auto"
+                              size="sm"
+                              variant="outline"
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                shiftAdminSeriesCardIndex(group, -1)
+                              }}
+                              disabled={group.workflows.length <= 1}
+                            >
+                              <ChevronLeft className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              className="w-full sm:w-auto"
+                              size="sm"
+                              variant="outline"
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                shiftAdminSeriesCardIndex(group, 1)
+                              }}
+                              disabled={group.workflows.length <= 1}
+                            >
+                              <ChevronRight className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              className="w-full sm:w-auto"
+                              size="sm"
+                              variant="destructive"
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                void openAdminRevokeModal(group.seriesId)
+                              }}
+                            >
+                              Revoke Improver Claim
+                            </Button>
+                          </div>
+                        </CardContent>
+                      </Card>
+                    )
+                  })}
+                </div>
+              )}
+
+              <div className="flex items-center justify-between pt-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setAdminWorkflowsPage((page) => Math.max(0, page - 1))}
+                  disabled={adminWorkflowsPage === 0}
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                  Previous
+                </Button>
+                <span className="text-sm text-muted-foreground">Page {adminWorkflowsPage + 1}</span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setAdminWorkflowsPage((page) => page + 1)}
+                  disabled={adminWorkflows.length < adminWorkflowsCount}
+                >
+                  Next
+                  <ChevronRight className="h-4 w-4" />
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
         <TabsContent value="issuers" className="space-y-6">
           {(issuerRequestsError || issuersError) && (
             <div className="flex items-center gap-2 rounded-lg bg-red-50 p-3 text-sm text-red-600 dark:bg-red-900/20">
@@ -3543,6 +3952,112 @@ export default function AdminPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <Dialog open={adminRevokeModalOpen} onOpenChange={setAdminRevokeModalOpen}>
+        <DialogContent className="w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] max-h-[90vh] overflow-y-auto sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Revoke Improver Claim</DialogTitle>
+            <DialogDescription>
+              Select an improver claim to revoke for this workflow series.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            {adminRevokeLoading ? (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Loading claimants...
+              </div>
+            ) : adminRevokeClaimants.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No claimants found for this series.</p>
+            ) : (
+              <div className="space-y-2">
+                <Label>Improver Email</Label>
+                <Select value={adminRevokeImproverId} onValueChange={setAdminRevokeImproverId}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select an improver" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {adminRevokeClaimants.map((claimant) => (
+                      <SelectItem key={claimant.user_id} value={claimant.user_id}>
+                        {claimant.email || claimant.name || claimant.user_id}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+
+            {adminRevokeError && (
+              <div className="flex items-center gap-2 text-red-600 text-sm p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
+                <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+                <span>{adminRevokeError}</span>
+              </div>
+            )}
+
+            <div className="flex justify-end">
+              <Button
+                className="w-full sm:w-auto"
+                variant="destructive"
+                disabled={
+                  adminRevokeSubmitting ||
+                  adminRevokeLoading ||
+                  adminRevokeClaimants.length === 0 ||
+                  !adminRevokeImproverId
+                }
+                onClick={revokeAdminSeriesClaim}
+              >
+                {adminRevokeSubmitting ? "Revoking..." : "Revoke Claim"}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <WorkflowDetailsModal
+        workflow={adminWorkflowDetail}
+        open={adminWorkflowDetailOpen}
+        onOpenChange={(open) => {
+          setAdminWorkflowDetailOpen(open)
+          if (!open) {
+            setAdminDetailSeriesContext(null)
+          }
+        }}
+        loading={adminWorkflowDetailLoading}
+        renderWorkflowActions={
+          adminDetailSeriesContext
+            ? () => {
+                const hasMultiple = adminDetailSeriesContext.workflowIds.length > 1
+                return (
+                  <div className="space-y-2 rounded-md border bg-secondary/30 p-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className="text-xs text-muted-foreground">
+                        Series workflow {adminDetailSeriesContext.index + 1} of {adminDetailSeriesContext.workflowIds.length}
+                      </p>
+                      {hasMultiple && (
+                        <div className="flex items-center gap-2">
+                          <Button className="w-full sm:w-auto" size="sm" variant="outline" onClick={() => void shiftAdminDetailSeriesWorkflow(-1)}>
+                            <ChevronLeft className="h-4 w-4" />
+                          </Button>
+                          <Button className="w-full sm:w-auto" size="sm" variant="outline" onClick={() => void shiftAdminDetailSeriesWorkflow(1)}>
+                            <ChevronRight className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      )}
+                    </div>
+                    <Button
+                      className="w-full sm:w-auto"
+                      size="sm"
+                      variant="destructive"
+                      onClick={() => void openAdminRevokeModal(adminDetailSeriesContext.seriesId)}
+                    >
+                      Revoke Improver Claim
+                    </Button>
+                  </div>
+                )
+              }
+            : undefined
+        }
+      />
     </div>
   )
 }

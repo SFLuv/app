@@ -239,6 +239,44 @@ type ActiveWorkflowListItem struct {
 	ApprovedAt              *int64  `json:"approved_at,omitempty"`
 }
 
+type AdminWorkflowListItem struct {
+	Id                     string   `json:"id"`
+	SeriesId               string   `json:"series_id"`
+	Title                  string   `json:"title"`
+	Description            string   `json:"description"`
+	Recurrence             string   `json:"recurrence"`
+	Status                 string   `json:"status"`
+	StartAt                int64    `json:"start_at"`
+	CreatedAt              int64    `json:"created_at"`
+	UpdatedAt              int64    `json:"updated_at"`
+	AssignedImproverEmails []string `json:"assigned_improver_emails"`
+}
+
+type AdminWorkflowListResponse struct {
+	Items []*AdminWorkflowListItem `json:"items"`
+	Total int                      `json:"total"`
+	Page  int                      `json:"page"`
+	Count int                      `json:"count"`
+}
+
+type WorkflowSeriesClaimant struct {
+	UserId     string `json:"user_id"`
+	Email      string `json:"email"`
+	Name       string `json:"name"`
+	ClaimCount int    `json:"claim_count"`
+}
+
+type WorkflowSeriesClaimRevokeRequest struct {
+	ImproverUserId string `json:"improver_user_id"`
+}
+
+type WorkflowSeriesClaimRevokeResult struct {
+	SeriesId       string `json:"series_id"`
+	ImproverUserId string `json:"improver_user_id"`
+	ReleasedCount  int    `json:"released_count"`
+	SkippedCount   int    `json:"skipped_count"`
+}
+
 type WorkflowDeletionProposalCreateRequest struct {
 	WorkflowId string `json:"workflow_id"`
 	TargetType string `json:"target_type"`
@@ -403,6 +441,18 @@ type ImproverAbsencePeriodCreateResult struct {
 	Absence       ImproverAbsencePeriod `json:"absence"`
 	ReleasedCount int                   `json:"released_count"`
 	SkippedCount  int                   `json:"skipped_count"`
+}
+
+type ImproverWorkflowSeriesUnclaimRequest struct {
+	SeriesId  string `json:"series_id"`
+	StepOrder int    `json:"step_order"`
+}
+
+type ImproverWorkflowSeriesUnclaimResult struct {
+	SeriesId      string `json:"series_id"`
+	StepOrder     int    `json:"step_order"`
+	ReleasedCount int    `json:"released_count"`
+	SkippedCount  int    `json:"skipped_count"`
 }
 
 type WorkflowStepItemResponse struct {

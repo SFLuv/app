@@ -10,7 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Checkbox } from "@/components/ui/checkbox"
 import { Badge } from "@/components/ui/badge"
 import { WorkflowDetailsModal } from "@/components/workflows/workflow-details-modal"
-import { formatStatusLabel } from "@/lib/status-labels"
+import { formatWorkflowDisplayStatus } from "@/lib/workflow-status"
 import { cn } from "@/lib/utils"
 import { SupervisorWorkflowExportRequest, SupervisorWorkflowListItem, SupervisorWorkflowListResponse, Workflow } from "@/types/workflow"
 import { ChevronLeft, ChevronRight, Download, Loader2, Search } from "lucide-react"
@@ -27,6 +27,14 @@ const toLocalDateBoundaryISO = (value: string, boundary: "start" | "end"): strin
   return local.toISOString()
 }
 
+const toMMDDYYYY = (unixSeconds: number): string => {
+  const date = new Date(unixSeconds * 1000)
+  const month = String(date.getMonth() + 1).padStart(2, "0")
+  const day = String(date.getDate()).padStart(2, "0")
+  const year = String(date.getFullYear())
+  return `${month}/${day}/${year}`
+}
+
 export default function SupervisorPage() {
   const { authFetch, status, user } = useApp()
 
@@ -38,7 +46,7 @@ export default function SupervisorPage() {
   const [statusFilter, setStatusFilter] = useState<string>("all")
   const [sortBy, setSortBy] = useState<DateField>("created_at")
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc")
-  const [dateField, setDateField] = useState<DateField>("created_at")
+  const [dateField, setDateField] = useState<DateField>("start_at")
   const [dateFrom, setDateFrom] = useState<string>("")
   const [dateTo, setDateTo] = useState<string>("")
   const [selectMode, setSelectMode] = useState<boolean>(false)
@@ -177,8 +185,8 @@ export default function SupervisorPage() {
 
   if (status === "loading") {
     return (
-      <div className="flex items-center justify-center py-24">
-        <Loader2 className="h-6 w-6 animate-spin" />
+      <div className="flex items-center justify-center min-h-[70vh]">
+        <div className="h-12 w-12 animate-spin rounded-full border-b-2 border-t-2 border-[#eb6c6c]" />
       </div>
     )
   }
@@ -328,9 +336,11 @@ export default function SupervisorPage() {
                 >
                   <div className="flex flex-wrap items-start justify-between gap-2">
                     <div className="space-y-1">
-                      <p className="font-medium">{item.title}</p>
+                      <p className="font-medium">
+                        {item.title} - {toMMDDYYYY(item.start_at)}
+                      </p>
                       <div className="text-xs text-muted-foreground space-y-1">
-                        <p>Status: {formatStatusLabel(item.status)}</p>
+                        <p>Status: {formatWorkflowDisplayStatus(item)}</p>
                         <p>Start: {new Date(item.start_at * 1000).toLocaleString()}</p>
                         <p>Created: {new Date(item.created_at * 1000).toLocaleString()}</p>
                         {item.completed_at ? <p>Completed: {new Date(item.completed_at * 1000).toLocaleString()}</p> : null}

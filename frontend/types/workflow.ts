@@ -148,6 +148,40 @@ export interface ActiveWorkflowListItem {
   approved_at?: number | null
 }
 
+export interface AdminWorkflowListItem {
+  id: string
+  series_id: string
+  title: string
+  description: string
+  recurrence: WorkflowRecurrence
+  status: "approved" | "blocked" | "in_progress" | "completed" | "paid_out"
+  start_at: number
+  created_at: number
+  updated_at: number
+  assigned_improver_emails: string[]
+}
+
+export interface AdminWorkflowListResponse {
+  items: AdminWorkflowListItem[]
+  total: number
+  page: number
+  count: number
+}
+
+export interface WorkflowSeriesClaimant {
+  user_id: string
+  email: string
+  name: string
+  claim_count: number
+}
+
+export interface WorkflowSeriesClaimRevokeResult {
+  series_id: string
+  improver_user_id: string
+  released_count: number
+  skipped_count: number
+}
+
 export type WorkflowDeletionTargetType = "workflow" | "series"
 
 export interface WorkflowDeletionProposal {
@@ -266,6 +300,13 @@ export interface ImproverAbsencePeriodCreateRequest {
 
 export interface ImproverAbsencePeriodCreateResult {
   absence: ImproverAbsencePeriod
+  released_count: number
+  skipped_count: number
+}
+
+export interface ImproverWorkflowSeriesUnclaimResult {
+  series_id: string
+  step_order: number
   released_count: number
   skipped_count: number
 }

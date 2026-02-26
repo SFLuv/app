@@ -7,6 +7,7 @@ import { Card, CardContent } from "@/components/ui/card"
 import { useApp } from "@/context/AppProvider"
 import { buildCredentialLabelMap, formatCredentialLabel } from "@/lib/credential-labels"
 import { formatStatusLabel } from "@/lib/status-labels"
+import { formatWorkflowDisplayStatus } from "@/lib/workflow-status"
 import {
   Dialog,
   DialogContent,
@@ -15,7 +16,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Separator } from "@/components/ui/separator"
-import { GlobalCredentialType, Workflow, WorkflowStep, WorkflowWorkItem } from "@/types/workflow"
+import { GlobalCredentialType, Workflow, WorkflowStep, WorkflowStepItemResponseInput, WorkflowWorkItem } from "@/types/workflow"
 import { ChevronLeft, ChevronRight, Loader2 } from "lucide-react"
 
 interface WorkflowDetailsModalProps {
@@ -24,6 +25,7 @@ interface WorkflowDetailsModalProps {
   onOpenChange: (open: boolean) => void
   loading?: boolean
   initialStepIndex?: number
+  renderTopRightActions?: (workflow: Workflow) => ReactNode
   renderWorkflowActions?: (workflow: Workflow) => ReactNode
   renderStepActions?: (workflow: Workflow, step: WorkflowStep) => ReactNode
   hideDefaultStepDetails?: (workflow: Workflow, step: WorkflowStep) => boolean
@@ -48,6 +50,7 @@ export function WorkflowDetailsModal({
   onOpenChange,
   loading = false,
   initialStepIndex = 0,
+  renderTopRightActions,
   renderWorkflowActions,
   renderStepActions,
   hideDefaultStepDetails,
@@ -120,10 +123,13 @@ export function WorkflowDetailsModal({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="w-[95vw] max-w-5xl max-h-[90vh] overflow-y-auto p-0">
-        <div className="p-6 space-y-5">
-          <DialogHeader>
-            <DialogTitle>{workflow?.title || "Workflow Details"}</DialogTitle>
+      <DialogContent className="w-[96vw] max-w-5xl max-h-[92vh] overflow-y-auto p-0">
+        <div className="p-4 sm:p-6 space-y-5">
+          <DialogHeader className="text-left">
+            <div className="flex flex-wrap items-center gap-2">
+              <DialogTitle>{workflow?.title || "Workflow Details"}</DialogTitle>
+              {!loading && workflow && renderTopRightActions ? renderTopRightActions(workflow) : null}
+            </div>
             <DialogDescription>
               {workflow
                 ? "Review workflow details and each step page."
@@ -141,7 +147,7 @@ export function WorkflowDetailsModal({
           {!loading && workflow && (
             <>
               <div className="grid gap-2 text-xs text-muted-foreground sm:grid-cols-2 lg:grid-cols-2">
-                <span>Status: {formatStatusLabel(workflow.status)}</span>
+                <span>Status: {formatWorkflowDisplayStatus(workflow)}</span>
                 <span>Start: {new Date(workflow.start_at * 1000).toLocaleString()}</span>
                 {workflow.supervisor_required && (
                   <span>
@@ -241,6 +247,23 @@ export function WorkflowDetailsModal({
                               </div>
                             </div>
 
+                            {currentStep.submission && (
+                              <p className="text-xs text-muted-foreground">
+                                Submitted on {new Date(currentStep.submission.submitted_at * 1000).toLocaleString()}
+                              </p>
+                            )}
+
+                            {currentStep.submission?.step_not_possible && (
+                              <div className="rounded border bg-secondary/30 p-2.5 text-xs space-y-1">
+                                <p className="font-medium">Step marked as not possible</p>
+                                {currentStep.submission.step_not_possible_details ? (
+                                  <p className="whitespace-pre-wrap">{currentStep.submission.step_not_possible_details}</p>
+                                ) : (
+                                  <p className="text-muted-foreground">No details were recorded.</p>
+                                )}
+                              </div>
+                            )}
+
                             <div className="space-y-3">
                               <p className="text-sm font-medium">Work Items</p>
                               {currentStep.work_items.length === 0 ? (
@@ -249,9 +272,15 @@ export function WorkflowDetailsModal({
                                 currentStep.work_items
                                   .slice()
                                   .sort((a, b) => a.item_order - b.item_order)
-                                  .map((item) => (
-                                    <Card key={item.id}>
-                                      <CardContent className="pt-3 space-y-2">
+                                  .map((item) => {
+                                    const itemResponses: WorkflowStepItemResponseInput[] =
+                                      currentStep.submission && !currentStep.submission.step_not_possible
+                                        ? currentStep.submission.item_responses.filter((response) => response.item_id === item.id)
+                                        : []
+
+                                    return (
+                                      <Card key={item.id}>
+                                        <CardContent className="pt-3 space-y-2">
                                         <div className="flex flex-wrap items-center gap-2">
                                           <p className="text-sm font-medium">
                                             Item {item.item_order}: {item.title}
@@ -289,98 +318,98 @@ export function WorkflowDetailsModal({
                                             )}
                                           </div>
                                         )}
-                                      </CardContent>
-                                    </Card>
-                                  ))
-                              )}
-                            </div>
+                                        {currentStep.submission && !currentStep.submission.step_not_possible && (
+                                          <div className="space-y-2 rounded-md border bg-secondary/30 p-2.5">
+                                            <p className="text-xs font-medium">Submitted Response</p>
+                                            {itemResponses.length === 0 ? (
+                                              <p className="text-xs text-muted-foreground">
+                                                No response submitted for this item.
+                                              </p>
+                                            ) : (
+                                              itemResponses.map((response, responseIndex) => {
+                                                const dropdownLabel =
+                                                  response.dropdown_value
+                                                    ? item.dropdown_options.find((option) => option.value === response.dropdown_value)?.label ||
+                                                      response.dropdown_value
+                                                    : response.dropdown_value
+                                                const hasResponseContent =
+                                                  Boolean(response.dropdown_value) ||
+                                                  Boolean(response.written_response) ||
+                                                  Boolean(response.photo_ids && response.photo_ids.length > 0) ||
+                                                  Boolean(response.photo_urls && response.photo_urls.length > 0)
 
-                            {currentStep.submission && (
-                              <div className="space-y-3 rounded-md border bg-secondary/30 p-3">
-                                <div>
-                                  <p className="text-sm font-medium">Submitted Step Details</p>
-                                  <p className="text-xs text-muted-foreground">
-                                    Submitted on {new Date(currentStep.submission.submitted_at * 1000).toLocaleString()}
-                                  </p>
-                                </div>
-
-                                {currentStep.submission.step_not_possible ? (
-                                  <div className="rounded border bg-background p-2 text-xs space-y-1">
-                                    <p className="font-medium">Step marked as not possible</p>
-                                    {currentStep.submission.step_not_possible_details ? (
-                                      <p className="whitespace-pre-wrap">{currentStep.submission.step_not_possible_details}</p>
-                                    ) : (
-                                      <p className="text-muted-foreground">No details were recorded.</p>
-                                    )}
-                                  </div>
-                                ) : currentStep.submission.item_responses.length === 0 ? (
-                                  <p className="text-xs text-muted-foreground">No item responses were included in this submission.</p>
-                                ) : (
-                                  <div className="space-y-2">
-                                    {currentStep.submission.item_responses.map((response, index) => {
-                                      const item = currentStep.work_items.find((workItem) => workItem.id === response.item_id)
-                                      const dropdownLabel =
-                                        response.dropdown_value && item
-                                          ? item.dropdown_options.find((option) => option.value === response.dropdown_value)?.label ||
-                                            response.dropdown_value
-                                          : response.dropdown_value
-
-                                      return (
-                                        <div key={`${response.item_id}-${index}`} className="rounded border bg-background p-2 text-xs space-y-1">
-                                          <p className="font-medium">{item?.title || response.item_id}</p>
-                                          {response.dropdown_value && <p>Dropdown: {dropdownLabel}</p>}
-                                          {response.written_response && <p>Written: {response.written_response}</p>}
-                                          {response.photo_ids && response.photo_ids.length > 0 && (
-                                            <div className="space-y-1">
-                                              <p>Photos:</p>
-                                              {response.photo_ids.map((photoId, photoIndex) => {
-                                                const photoMeta = response.photos?.find((photo) => photo.id === photoId)
                                                 return (
-                                                  <div key={`${photoId}-${photoIndex}`} className="flex items-center justify-between gap-2 rounded border p-2">
-                                                    <span className="break-all">
-                                                      {photoMeta?.file_name || `Photo ${photoIndex + 1}`}
-                                                    </span>
-                                                    {onDownloadPhoto ? (
-                                                      <Button
-                                                        className="w-full sm:w-auto"
-                                                        size="sm"
-                                                        variant="outline"
-                                                        onClick={() => onDownloadPhoto(photoId)}
-                                                        disabled={downloadingPhotoId === photoId}
-                                                      >
-                                                        {downloadingPhotoId === photoId ? "Downloading..." : "Download"}
-                                                      </Button>
-                                                    ) : (
-                                                      <Badge variant="outline">Photo ID</Badge>
+                                                  <div
+                                                    key={`${item.id}-submitted-${responseIndex}`}
+                                                    className="rounded border bg-background p-2 text-xs space-y-1"
+                                                  >
+                                                    {itemResponses.length > 1 && <p className="font-medium">Response {responseIndex + 1}</p>}
+                                                    {response.dropdown_value && <p>Dropdown: {dropdownLabel}</p>}
+                                                    {response.written_response && (
+                                                      <p className="whitespace-pre-wrap">Written: {response.written_response}</p>
+                                                    )}
+                                                    {response.photo_ids && response.photo_ids.length > 0 && (
+                                                      <div className="space-y-1">
+                                                        <p>Photos:</p>
+                                                        {response.photo_ids.map((photoId, photoIndex) => {
+                                                          const photoMeta = response.photos?.find((photo) => photo.id === photoId)
+                                                          return (
+                                                            <div
+                                                              key={`${photoId}-${photoIndex}`}
+                                                              className="flex items-center justify-between gap-2 rounded border p-2"
+                                                            >
+                                                              <span className="break-all">
+                                                                {photoMeta?.file_name || `Photo ${photoIndex + 1}`}
+                                                              </span>
+                                                              {onDownloadPhoto ? (
+                                                                <Button
+                                                                  className="w-full sm:w-auto"
+                                                                  size="sm"
+                                                                  variant="outline"
+                                                                  onClick={() => onDownloadPhoto(photoId)}
+                                                                  disabled={downloadingPhotoId === photoId}
+                                                                >
+                                                                  {downloadingPhotoId === photoId ? "Downloading..." : "Download"}
+                                                                </Button>
+                                                              ) : (
+                                                                <Badge variant="outline">Photo ID</Badge>
+                                                              )}
+                                                            </div>
+                                                          )
+                                                        })}
+                                                      </div>
+                                                    )}
+                                                    {response.photo_urls && response.photo_urls.length > 0 && (
+                                                      <div className="space-y-1">
+                                                        <p>Legacy Photos:</p>
+                                                        {response.photo_urls.map((url) => (
+                                                          <a
+                                                            key={url}
+                                                            href={url}
+                                                            target="_blank"
+                                                            rel="noreferrer"
+                                                            className="block text-blue-600 underline break-all"
+                                                          >
+                                                            {url}
+                                                          </a>
+                                                        ))}
+                                                      </div>
+                                                    )}
+                                                    {!hasResponseContent && (
+                                                      <p className="text-muted-foreground">No response data recorded.</p>
                                                     )}
                                                   </div>
                                                 )
-                                              })}
-                                            </div>
-                                          )}
-                                          {response.photo_urls && response.photo_urls.length > 0 && (
-                                            <div className="space-y-1">
-                                              <p>Legacy Photos:</p>
-                                              {response.photo_urls.map((url) => (
-                                                <a
-                                                  key={url}
-                                                  href={url}
-                                                  target="_blank"
-                                                  rel="noreferrer"
-                                                  className="block text-blue-600 underline break-all"
-                                                >
-                                                  {url}
-                                                </a>
-                                              ))}
-                                            </div>
-                                          )}
-                                        </div>
-                                      )
-                                    })}
-                                  </div>
-                                )}
-                              </div>
-                            )}
+                                              })
+                                            )}
+                                          </div>
+                                        )}
+                                        </CardContent>
+                                      </Card>
+                                    )
+                                  })
+                              )}
+                            </div>
                           </>
                         )}
 

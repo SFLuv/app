@@ -108,6 +108,7 @@ func AddWorkflowRoutes(r *chi.Mux, s *handlers.BotService, a *handlers.AppServic
 	r.Post("/improvers/credential-requests", withImprover(a.CreateImproverCredentialRequest, a))
 	r.Get("/improvers/workflows/absence-periods", withImprover(a.GetImproverAbsencePeriods, a))
 	r.Post("/improvers/workflows/absence-periods", withImprover(a.CreateImproverAbsencePeriod, a))
+	r.Post("/improvers/workflow-series/unclaim", withImprover(a.UnclaimImproverWorkflowSeries, a))
 	r.Post("/improvers/workflows/{workflow_id}/steps/{step_id}/claim", withImprover(a.ClaimWorkflowStep, a))
 	r.Post("/improvers/workflows/{workflow_id}/steps/{step_id}/start", withImprover(a.StartWorkflowStep, a))
 	r.Post("/improvers/workflows/{workflow_id}/steps/{step_id}/complete", withImprover(a.CompleteWorkflowStep, a))
@@ -130,6 +131,9 @@ func AddWorkflowRoutes(r *chi.Mux, s *handlers.BotService, a *handlers.AppServic
 	r.Post("/admin/credential-types", withAdmin(a.CreateAdminCredentialType, a))
 	r.Delete("/admin/credential-types/{value}", withAdmin(a.DeleteAdminCredentialType, a))
 	r.Post("/admin/workflow-templates/default", withAdmin(a.CreateDefaultWorkflowTemplate, a))
+	r.Get("/admin/workflows", withAdmin(a.GetAdminWorkflows, a))
+	r.Get("/admin/workflow-series/{series_id}/claimants", withAdmin(a.GetAdminWorkflowSeriesClaimants, a))
+	r.Post("/admin/workflow-series/{series_id}/revoke-claim", withAdmin(a.RevokeAdminWorkflowSeriesImproverClaim, a))
 	r.Post("/admin/workflows/{workflow_id}/force-approve", withAdmin(a.AdminForceApproveWorkflow, a))
 
 	r.Get("/voters/workflows", withVoter(a.GetVoterWorkflows, a))

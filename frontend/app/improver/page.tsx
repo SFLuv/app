@@ -12,13 +12,31 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { WorkflowDetailsModal } from "@/components/workflows/workflow-details-modal"
 import { buildCredentialLabelMap, formatCredentialLabel } from "@/lib/credential-labels"
 import { formatStatusLabel } from "@/lib/status-labels"
+import { formatWorkflowDisplayStatus } from "@/lib/workflow-status"
 import { cn } from "@/lib/utils"
-import { AlertTriangle, CheckCircle2, ChevronsUpDown, ClipboardCheck, Search, Wrench } from "lucide-react"
+import { AlertTriangle, CheckCircle2, ChevronLeft, ChevronRight, ChevronsUpDown, ClipboardCheck, Search, Wrench } from "lucide-react"
 import { CredentialRequest } from "@/types/issuer"
-import { CredentialType, GlobalCredentialType, ImproverAbsencePeriod, ImproverAbsencePeriodCreateResult, ImproverWorkflowFeed, Workflow, WorkflowStep } from "@/types/workflow"
+import {
+  CredentialType,
+  GlobalCredentialType,
+  ImproverAbsencePeriod,
+  ImproverAbsencePeriodCreateResult,
+  ImproverWorkflowFeed,
+  ImproverWorkflowSeriesUnclaimResult,
+  Workflow,
+  WorkflowStep,
+} from "@/types/workflow"
 
 type ItemFormState = {
   photos: File[]
@@ -34,6 +52,14 @@ type CameraCaptureState = {
 type StepNotPossibleFormState = {
   selected: boolean
   details: string
+}
+
+type WorkflowSeriesCardGroup = {
+  key: string
+  seriesId: string
+  primaryStepOrder: number | null
+  primaryStepTitle: string | null
+  workflows: Workflow[]
 }
 
 const defaultItemFormState: ItemFormState = {
@@ -117,9 +143,23 @@ export default function ImproverPage() {
   const [detailOpen, setDetailOpen] = useState<boolean>(false)
   const [detailLoading, setDetailLoading] = useState<boolean>(false)
   const [detailInitialStepIndex, setDetailInitialStepIndex] = useState<number>(0)
+  const [detailSeriesContext, setDetailSeriesContext] = useState<{
+    key: string
+    seriesId: string
+    stepOrder: number | null
+    workflowIds: string[]
+    index: number
+  } | null>(null)
+  const [unclaimConfirmTarget, setUnclaimConfirmTarget] = useState<{
+    seriesId: string
+    stepOrder: number
+    workflowTitle: string
+  } | null>(null)
+  const [seriesCardIndexByKey, setSeriesCardIndexByKey] = useState<Record<string, number>>({})
   const [downloadingPhotoId, setDownloadingPhotoId] = useState<string | null>(null)
   const [boardSearch, setBoardSearch] = useState<string>("")
   const [myWorkflowsSearch, setMyWorkflowsSearch] = useState<string>("")
+  const [showOnlyActiveSeries, setShowOnlyActiveSeries] = useState<boolean>(true)
   const [unpaidSearch, setUnpaidSearch] = useState<string>("")
   const [absenceSearch, setAbsenceSearch] = useState<string>("")
   const [credentialComboOpen, setCredentialComboOpen] = useState<boolean>(false)
@@ -1060,6 +1100,61 @@ export default function ImproverPage() {
     return workflows.filter((workflow) => hasClaimedRoleInWorkflow(workflow))
   }, [workflows, hasClaimedRoleInWorkflow])
 
+  const myWorkflowSeriesGroups = useMemo<WorkflowSeriesCardGroup[]>(() => {
+    if (!user?.id) return []
+    const groupMap = new Map<string, WorkflowSeriesCardGroup>()
+
+    myClaimedWorkflows.forEach((workflow) => {
+      const assignedStep = workflow.steps
+        .filter((step) => step.assigned_improver_id === user.id)
+        .sort((a, b) => a.step_order - b.step_order)[0]
+      const key = workflow.series_id
+      const existing = groupMap.get(key)
+      if (!existing) {
+        groupMap.set(key, {
+          key,
+          seriesId: workflow.series_id,
+          primaryStepOrder: assignedStep ? assignedStep.step_order : null,
+          primaryStepTitle: assignedStep ? assignedStep.title : null,
+          workflows: [workflow],
+        })
+        return
+      }
+
+      let nextPrimaryStepOrder = existing.primaryStepOrder
+      let nextPrimaryStepTitle = existing.primaryStepTitle
+      if (nextPrimaryStepOrder == null && assignedStep) {
+        nextPrimaryStepOrder = assignedStep.step_order
+        nextPrimaryStepTitle = assignedStep.title
+      } else if (
+        assignedStep &&
+        nextPrimaryStepOrder != null &&
+        assignedStep.step_order < nextPrimaryStepOrder
+      ) {
+        nextPrimaryStepOrder = assignedStep.step_order
+        nextPrimaryStepTitle = assignedStep.title
+      }
+
+      groupMap.set(key, {
+        ...existing,
+        primaryStepOrder: nextPrimaryStepOrder,
+        primaryStepTitle: nextPrimaryStepTitle,
+        workflows: [...existing.workflows, workflow],
+      })
+    })
+
+    return Array.from(groupMap.values())
+      .map((group) => ({
+        ...group,
+        workflows: [...group.workflows].sort((a, b) => a.start_at - b.start_at),
+      }))
+      .sort((a, b) => {
+        const aLatest = a.workflows[a.workflows.length - 1]?.start_at || 0
+        const bLatest = b.workflows[b.workflows.length - 1]?.start_at || 0
+        return bLatest - aLatest
+      })
+  }, [myClaimedWorkflows, user?.id])
+
   const getInitialStepIndexForMyWorkflow = useCallback(
     (workflow: Workflow) => {
       if (!user?.id) return 0
@@ -1086,6 +1181,13 @@ export default function ImproverPage() {
     workflow?: Workflow,
     options?: {
       initialStepIndex?: number
+      seriesContext?: {
+        key: string
+        seriesId: string
+        stepOrder: number | null
+        workflowIds: string[]
+        index: number
+      } | null
     },
   ) => {
     setError("")
@@ -1094,6 +1196,7 @@ export default function ImproverPage() {
         ? Math.floor(options.initialStepIndex)
         : 0
     setDetailInitialStepIndex(initialStepIndex)
+    setDetailSeriesContext(options?.seriesContext || null)
 
     if (workflow) {
       setDetailWorkflow(workflow)
@@ -1130,6 +1233,78 @@ export default function ImproverPage() {
     }
   }
 
+  const getSeriesCardIndex = useCallback((group: WorkflowSeriesCardGroup) => {
+    if (group.workflows.length === 0) return 0
+    const maxIndex = group.workflows.length - 1
+    const currentIndex = seriesCardIndexByKey[group.key]
+    if (currentIndex == null) return maxIndex
+    if (currentIndex < 0) return 0
+    if (currentIndex > maxIndex) return maxIndex
+    return currentIndex
+  }, [seriesCardIndexByKey])
+
+  const shiftSeriesCardIndex = useCallback((group: WorkflowSeriesCardGroup, direction: number) => {
+    if (group.workflows.length <= 1) return
+    setSeriesCardIndexByKey((prev) => {
+      const maxIndex = group.workflows.length - 1
+      const currentIndex = prev[group.key] ?? maxIndex
+      const nextIndex = Math.min(maxIndex, Math.max(0, currentIndex + direction))
+      return {
+        ...prev,
+        [group.key]: nextIndex,
+      }
+    })
+  }, [])
+
+  const formatImproverCardStatus = useCallback((workflow: Workflow) => {
+    const label = formatWorkflowDisplayStatus(workflow)
+    if (label.trim().toLowerCase() === "approved") {
+      return "Available"
+    }
+    return label
+  }, [])
+
+  const openSeriesWorkflowDetails = useCallback(async (group: WorkflowSeriesCardGroup, index: number) => {
+    if (group.workflows.length === 0) return
+    const safeIndex = ((index % group.workflows.length) + group.workflows.length) % group.workflows.length
+    const workflow = group.workflows[safeIndex]
+    const assignedStep = workflow.steps
+      .filter((step) => step.assigned_improver_id === user?.id)
+      .sort((a, b) => a.step_order - b.step_order)[0]
+    await openWorkflowDetails(workflow.id, workflow, {
+      initialStepIndex: getInitialStepIndexForMyWorkflow(workflow),
+      seriesContext: {
+        key: group.key,
+        seriesId: group.seriesId,
+        stepOrder: assignedStep ? assignedStep.step_order : group.primaryStepOrder,
+        workflowIds: group.workflows.map((item) => item.id),
+        index: safeIndex,
+      },
+    })
+  }, [getInitialStepIndexForMyWorkflow, user?.id])
+
+  const shiftDetailSeriesWorkflow = useCallback(async (direction: number) => {
+    if (!detailSeriesContext || detailSeriesContext.workflowIds.length <= 1) return
+    const nextIndex =
+      ((detailSeriesContext.index + direction) % detailSeriesContext.workflowIds.length + detailSeriesContext.workflowIds.length) %
+      detailSeriesContext.workflowIds.length
+    const nextWorkflowId = detailSeriesContext.workflowIds[nextIndex]
+    const nextWorkflow = workflows.find((item) => item.id === nextWorkflowId) || unpaidWorkflows.find((item) => item.id === nextWorkflowId)
+    const assignedStep = nextWorkflow
+      ? nextWorkflow.steps
+          .filter((step) => step.assigned_improver_id === user?.id)
+          .sort((a, b) => a.step_order - b.step_order)[0]
+      : null
+    await openWorkflowDetails(nextWorkflowId, nextWorkflow, {
+      initialStepIndex: nextWorkflow ? getInitialStepIndexForMyWorkflow(nextWorkflow) : 0,
+      seriesContext: {
+        ...detailSeriesContext,
+        stepOrder: assignedStep ? assignedStep.step_order : detailSeriesContext.stepOrder,
+        index: nextIndex,
+      },
+    })
+  }, [detailSeriesContext, workflows, unpaidWorkflows, getInitialStepIndexForMyWorkflow, user?.id])
+
   const parseAttachmentFilename = (value: string | null) => {
     if (!value) return ""
     const quotedMatch = value.match(/filename=\"([^\"]+)\"/i)
@@ -1145,11 +1320,27 @@ export default function ImproverPage() {
     return workflowBoardWorkflows.filter((w) => w.title.toLowerCase().includes(s))
   }, [workflowBoardWorkflows, boardSearch])
 
-  const filteredMyClaimedWorkflows = useMemo(() => {
+  const filteredActiveSeriesGroups = useMemo(() => {
     const s = myWorkflowsSearch.trim().toLowerCase()
-    if (!s) return myClaimedWorkflows
-    return myClaimedWorkflows.filter((w) => w.title.toLowerCase().includes(s))
-  }, [myClaimedWorkflows, myWorkflowsSearch])
+    let filtered = myWorkflowSeriesGroups
+
+    if (showOnlyActiveSeries) {
+      filtered = filtered.filter((group) =>
+        group.workflows.some((workflow) =>
+          workflow.steps.some(
+            (step) =>
+              step.assigned_improver_id === user?.id &&
+              (step.status === "available" || step.status === "in_progress"),
+          ),
+        ),
+      )
+    }
+
+    if (!s) return filtered
+    return filtered.filter((group) =>
+      group.workflows.some((workflow) => workflow.title.toLowerCase().includes(s)),
+    )
+  }, [myWorkflowSeriesGroups, myWorkflowsSearch, showOnlyActiveSeries, user?.id])
 
   const filteredUnpaidWorkflows = useMemo(() => {
     const s = unpaidSearch.trim().toLowerCase()
@@ -1192,6 +1383,52 @@ export default function ImproverPage() {
     }
   }
 
+  const unclaimSeries = async (seriesId: string, stepOrder: number) => {
+    const submitKey = `unclaim-series:${seriesId}:${stepOrder}`
+    setSubmitting(submitKey)
+    try {
+      const res = await authFetch("/improvers/workflow-series/unclaim", {
+        method: "POST",
+        body: JSON.stringify({
+          series_id: seriesId,
+          step_order: stepOrder,
+        }),
+      })
+      if (!res.ok) {
+        const text = await res.text()
+        throw new Error(text || "Unable to unclaim this workflow series.")
+      }
+      const result = (await res.json()) as ImproverWorkflowSeriesUnclaimResult
+      setNotice(
+        result.skipped_count > 0
+          ? `Series unclaimed. Released ${result.released_count} claim(s); ${result.skipped_count} started assignment(s) were not released.`
+          : `Series unclaimed. Released ${result.released_count} claim(s).`,
+      )
+      setError("")
+      await loadFeed()
+      if (detailSeriesContext?.seriesId === seriesId && detailSeriesContext.stepOrder === stepOrder) {
+        setDetailOpen(false)
+        setDetailWorkflow(null)
+        setDetailSeriesContext(null)
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to unclaim this workflow series.")
+      setNotice("")
+    } finally {
+      setSubmitting("")
+    }
+  }
+
+  const confirmUnclaimSeries = async () => {
+    if (!unclaimConfirmTarget) return
+    const target = unclaimConfirmTarget
+    try {
+      await unclaimSeries(target.seriesId, target.stepOrder)
+    } finally {
+      setUnclaimConfirmTarget(null)
+    }
+  }
+
   const downloadWorkflowPhoto = async (photoId: string) => {
     setDownloadingPhotoId(photoId)
     try {
@@ -1219,13 +1456,85 @@ export default function ImproverPage() {
     }
   }
 
-  const renderWorkflowHeaderActions = () => null
+  const renderWorkflowHeaderActions = (workflow: Workflow) => {
+    if (!detailSeriesContext) return null
+    const workflowIndex = detailSeriesContext.workflowIds.findIndex((id) => id === workflow.id)
+    if (workflowIndex === -1) return null
+
+    const hasMultiple = detailSeriesContext.workflowIds.length > 1
+
+    return (
+      <div className="space-y-2 rounded-md border bg-secondary/30 p-2.5 sm:p-3">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <p className="text-xs text-muted-foreground">
+            Series workflow {workflowIndex + 1} of {detailSeriesContext.workflowIds.length}
+          </p>
+          {hasMultiple && (
+            <div className="flex items-center gap-2 sm:ml-auto">
+              <Button
+                className="h-8 w-8 p-0"
+                variant="outline"
+                size="sm"
+                onClick={() => void shiftDetailSeriesWorkflow(-1)}
+                disabled={Boolean(submitting)}
+              >
+                <ChevronLeft className="h-4 w-4" />
+              </Button>
+              <Button
+                className="h-8 w-8 p-0"
+                variant="outline"
+                size="sm"
+                onClick={() => void shiftDetailSeriesWorkflow(1)}
+                disabled={Boolean(submitting)}
+              >
+                <ChevronRight className="h-4 w-4" />
+              </Button>
+            </div>
+          )}
+        </div>
+      </div>
+    )
+  }
+
+  const renderWorkflowTopRightActions = (workflow: Workflow) => {
+    if (!detailSeriesContext || detailSeriesContext.stepOrder == null) return null
+    if (workflow.recurrence === "one_time") return null
+
+    const submitKey = `unclaim-series:${detailSeriesContext.seriesId}:${detailSeriesContext.stepOrder}`
+    const isUnclaiming = submitting === submitKey
+    return (
+      <Button
+        size="sm"
+        variant="ghost"
+        className="h-8 px-2 text-xs font-normal text-muted-foreground hover:text-destructive"
+        onClick={() =>
+          setUnclaimConfirmTarget({
+            seriesId: detailSeriesContext.seriesId,
+            stepOrder: detailSeriesContext.stepOrder!,
+            workflowTitle: workflow.title,
+          })
+        }
+        disabled={Boolean(submitting)}
+      >
+        {isUnclaiming ? "Unclaiming..." : "Unclaim series"}
+      </Button>
+    )
+  }
 
   const renderWorkflowStepActions = (workflow: Workflow, step: WorkflowStep) => {
     const mine = step.assigned_improver_id === user?.id
     const claimable = canClaimStep(workflow, step)
     const stepNotPossibleState = stepNotPossibleForms[step.id] || defaultStepNotPossibleFormState
     const stepNotPossibleSelected = step.allow_step_not_possible && stepNotPossibleState.selected
+    const nowUnix = Math.floor(Date.now() / 1000)
+    const isStartEligible =
+      step.step_order <= 1
+        ? workflow.start_at <= nowUnix
+        : workflow.steps.some(
+            (candidate) =>
+              candidate.step_order === step.step_order - 1 &&
+              (candidate.status === "completed" || candidate.status === "paid_out"),
+          )
 
     if (!mine && !claimable) return null
 
@@ -1242,11 +1551,11 @@ export default function ImproverPage() {
           </Button>
         )}
 
-        {mine && (step.status === "available" || step.status === "locked") && (
-          <Button
-            className="w-full sm:w-auto"
-            size="sm"
-            variant="secondary"
+	        {mine && step.status === "locked" && isStartEligible && (
+	          <Button
+	            className="w-full sm:w-auto"
+	            size="sm"
+	            variant="secondary"
             onClick={() => startStep(workflow.id, step.id)}
             disabled={Boolean(submitting)}
           >
@@ -1568,8 +1877,6 @@ export default function ImproverPage() {
             </Card>
 	          ) : (
 	            filteredBoardWorkflows.map((workflow) => {
-	              const claimableStep = getFirstClaimableStep(workflow)
-
 	              return (
                 <Card
                   key={workflow.id}
@@ -1582,7 +1889,7 @@ export default function ImproverPage() {
                         <h4 className="font-semibold">{workflow.title}</h4>
                       </div>
                       <Badge variant={workflow.status === "in_progress" ? "default" : "secondary"}>
-                        {formatStatusLabel(workflow.status)}
+                        {formatImproverCardStatus(workflow)}
                       </Badge>
                     </div>
 
@@ -1590,7 +1897,6 @@ export default function ImproverPage() {
 
 	                    <div className="grid gap-2 text-xs text-muted-foreground md:grid-cols-3">
 	                      <span>Start: {new Date(workflow.start_at * 1000).toLocaleString()}</span>
-	                      <span>Claims available in workflow details modal</span>
 	                    </div>
 
 	                    <div className="flex w-full flex-col gap-2 pt-1 sm:w-auto sm:flex-row sm:flex-wrap">
@@ -1605,11 +1911,6 @@ export default function ImproverPage() {
                       >
                         View Details
                       </Button>
-                      {claimableStep && (
-                        <Badge variant="secondary">
-                          Claim available in modal
-                        </Badge>
-                      )}
 	                    </div>
 	                  </CardContent>
 	                </Card>
@@ -1618,7 +1919,7 @@ export default function ImproverPage() {
           )}
 	        </TabsContent>
 
-	        <TabsContent value="my-workflows" className="space-y-3">
+        <TabsContent value="my-workflows" className="space-y-3">
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input
@@ -1628,70 +1929,126 @@ export default function ImproverPage() {
               className="pl-9"
             />
           </div>
-          {filteredMyClaimedWorkflows.length === 0 ? (
+          <div className="flex items-center gap-2 rounded-md border bg-secondary/20 px-3 py-2">
+            <Checkbox
+              id="my-workflows-active-only"
+              checked={showOnlyActiveSeries}
+              onCheckedChange={(checked: boolean | "indeterminate") => setShowOnlyActiveSeries(Boolean(checked))}
+            />
+            <Label htmlFor="my-workflows-active-only" className="text-sm font-normal cursor-pointer">
+              Show only active workflow series
+            </Label>
+          </div>
+          {filteredActiveSeriesGroups.length === 0 ? (
             <Card>
               <CardHeader>
                 <CardTitle>No Claimed Workflows</CardTitle>
-                <CardDescription>Workflows you claim will appear here.</CardDescription>
+                <CardDescription>
+                  {showOnlyActiveSeries
+                    ? "No active workflow series match your filter."
+                    : "Workflows you claim will appear here."}
+                </CardDescription>
               </CardHeader>
             </Card>
           ) : (
-            filteredMyClaimedWorkflows.map((workflow) => {
-              const assignedSteps = workflow.steps.filter((step) => step.assigned_improver_id === user?.id)
-              const actionableSteps = assignedSteps.filter((step) => step.status === "available" || step.status === "in_progress")
-              const myWorkflowInitialStepIndex = getInitialStepIndexForMyWorkflow(workflow)
+            <div className="space-y-4">
+              <div className="space-y-3">
+                <p className="text-sm font-medium">Workflow Series</p>
+                {filteredActiveSeriesGroups.map((group) => {
+                  if (group.workflows.length === 0) return null
+                  const cardIndex = getSeriesCardIndex(group)
+                  const workflow = group.workflows[cardIndex]
+                  const hasSeriesNavigation = workflow.recurrence !== "one_time" && group.workflows.length > 1
+                  const canShiftBackward = hasSeriesNavigation && cardIndex > 0
+                  const canShiftForward = hasSeriesNavigation && cardIndex < group.workflows.length - 1
 
-              return (
-                <Card
-                  key={`mine-${workflow.id}`}
-                  className="cursor-pointer transition-colors hover:bg-muted/30"
-                  onClick={() =>
-                    openWorkflowDetails(workflow.id, workflow, {
-                      initialStepIndex: myWorkflowInitialStepIndex,
-                    })
-                  }
-                >
-                  <CardContent className="pt-4 space-y-3">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div>
-                        <h4 className="font-semibold">{workflow.title}</h4>
-                      </div>
-                      <Badge variant={workflow.status === "in_progress" ? "default" : "secondary"}>
-                        {formatStatusLabel(workflow.status)}
-                      </Badge>
-                    </div>
+                  return (
+                    <Card
+                      key={`series-${group.key}`}
+                      className="cursor-pointer transition-colors hover:bg-muted/30"
+                      onClick={() => void openSeriesWorkflowDetails(group, cardIndex)}
+                    >
+                      <CardContent className="pt-4 space-y-3">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div>
+                            <h4 className="font-semibold">{workflow.title}</h4>
+                            {group.primaryStepOrder != null && group.primaryStepTitle ? (
+                              <p className="text-xs text-muted-foreground">
+                                Assigned step {group.primaryStepOrder}: {group.primaryStepTitle}
+                              </p>
+                            ) : (
+                              <p className="text-xs text-muted-foreground">Series assignment</p>
+                            )}
+                          </div>
+                          <Badge variant={workflow.status === "in_progress" ? "default" : "secondary"}>
+                            {formatImproverCardStatus(workflow)}
+                          </Badge>
+                        </div>
 
-                    <p className="text-sm text-muted-foreground line-clamp-2">{workflow.description}</p>
+                        <p className="text-sm text-muted-foreground line-clamp-2">{workflow.description}</p>
 
-                    <div className="grid gap-2 text-xs text-muted-foreground md:grid-cols-3">
-                      <span>Start: {new Date(workflow.start_at * 1000).toLocaleString()}</span>
-                      <span>
-                        Assigned to you: {assignedSteps.length} step{assignedSteps.length === 1 ? "" : "s"}
-                        {actionableSteps.length > 0 ? ` (${actionableSteps.length} actionable)` : ""}
-                      </span>
-                    </div>
+                        <div className="grid gap-2 text-xs text-muted-foreground md:grid-cols-3">
+                          <span>Start: {new Date(workflow.start_at * 1000).toLocaleString()}</span>
+                        </div>
 
-                    <div className="flex w-full flex-col gap-2 pt-1 sm:w-auto sm:flex-row sm:flex-wrap">
-                      <Button
-                        className="w-full sm:w-auto"
-                        size="sm"
-                        variant="outline"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          void openWorkflowDetails(workflow.id, workflow, {
-                            initialStepIndex: myWorkflowInitialStepIndex,
-                          })
-                        }}
-                      >
-                        View Details
-                      </Button>
-                    </div>
-                  </CardContent>
-                </Card>
-              )
-            })
+                        <div className="flex flex-wrap items-center gap-2 pt-1">
+                          <Button
+                            className="w-auto"
+                            size="sm"
+                            variant="outline"
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              void openSeriesWorkflowDetails(group, cardIndex)
+                            }}
+                          >
+                            View Details
+                          </Button>
+                          {hasSeriesNavigation && (
+                            <div className="flex items-center gap-2">
+                              <Button
+                                className="h-8 w-8 p-0"
+                                size="sm"
+                                variant="outline"
+                                onClick={(event) => {
+                                  event.stopPropagation()
+                                  shiftSeriesCardIndex(group, -1)
+                                }}
+                                disabled={!canShiftBackward || Boolean(submitting)}
+                              >
+                                <ChevronLeft className="h-4 w-4" />
+                              </Button>
+                              <Button
+                                className="h-8 w-8 p-0"
+                                size="sm"
+                                variant="outline"
+                                onClick={(event) => {
+                                  event.stopPropagation()
+                                  shiftSeriesCardIndex(group, 1)
+                                }}
+                                disabled={!canShiftForward || Boolean(submitting)}
+                              >
+                                <ChevronRight className="h-4 w-4" />
+                              </Button>
+                            </div>
+                          )}
+                          <span className="ml-auto hidden text-[11px] tabular-nums text-muted-foreground sm:inline">
+                            {cardIndex + 1}/{group.workflows.length}
+                          </span>
+                        </div>
+
+                        <div className="flex justify-end pt-1 sm:hidden">
+                          <span className="text-[11px] tabular-nums text-muted-foreground">
+                            {cardIndex + 1}/{group.workflows.length}
+                          </span>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  )
+                })}
+              </div>
+            </div>
           )}
-	        </TabsContent>
+        </TabsContent>
 
 	        <TabsContent value="unpaid-workflows" className="space-y-4">
 	          <Card>
@@ -1729,7 +2086,7 @@ export default function ImproverPage() {
 	                          <div>
 	                            <h4 className="font-semibold">{workflow.title}</h4>
 	                          </div>
-	                          <Badge>{formatStatusLabel(workflow.status)}</Badge>
+	                          <Badge>{formatImproverCardStatus(workflow)}</Badge>
 	                        </div>
                         <div className="grid gap-2 text-xs text-muted-foreground md:grid-cols-3">
                           <span>Start: {new Date(workflow.start_at * 1000).toLocaleString()}</span>
@@ -1977,12 +2334,58 @@ export default function ImproverPage() {
 
       </Tabs>
 
+      <Dialog
+        open={Boolean(unclaimConfirmTarget)}
+        onOpenChange={(open) => {
+          if (!open) setUnclaimConfirmTarget(null)
+        }}
+      >
+        <DialogContent className="w-[95vw] max-w-md">
+          <DialogHeader>
+            <DialogTitle>Unclaim Series?</DialogTitle>
+            <DialogDescription>
+              {unclaimConfirmTarget
+                ? `This will release your future claims for "${unclaimConfirmTarget.workflowTitle}" (step ${unclaimConfirmTarget.stepOrder}) in this series.`
+                : "This will release your future claims in this series."}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+            <Button
+              variant="outline"
+              onClick={() => setUnclaimConfirmTarget(null)}
+              disabled={Boolean(submitting)}
+              className="w-full sm:w-auto"
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => void confirmUnclaimSeries()}
+              disabled={
+                !unclaimConfirmTarget ||
+                submitting === `unclaim-series:${unclaimConfirmTarget.seriesId}:${unclaimConfirmTarget.stepOrder}`
+              }
+              className="w-full sm:w-auto"
+            >
+              {unclaimConfirmTarget &&
+              submitting === `unclaim-series:${unclaimConfirmTarget.seriesId}:${unclaimConfirmTarget.stepOrder}`
+                ? "Unclaiming..."
+                : "Confirm Unclaim"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <WorkflowDetailsModal
         workflow={detailWorkflow}
         open={detailOpen}
-        onOpenChange={(open) => setDetailOpen(open)}
+        onOpenChange={(open) => {
+          setDetailOpen(open)
+          if (!open) setDetailSeriesContext(null)
+        }}
         loading={detailLoading}
         initialStepIndex={detailInitialStepIndex}
+        renderTopRightActions={renderWorkflowTopRightActions}
         renderWorkflowActions={renderWorkflowHeaderActions}
         renderStepActions={renderWorkflowStepActions}
         hideDefaultStepDetails={(workflow, step) =>
