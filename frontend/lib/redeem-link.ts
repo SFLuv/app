@@ -82,9 +82,10 @@ export const buildEventRedeemQrValue = (code: string): string => {
   const cwBaseUrl = legacyConfig?.cwBaseUrl || DEFAULT_CW_BASE_URL
 
   // Keep the base app endpoint flow; middleware uses page=redeem for redirect.
-  const redeemTarget = new URL("/", appOrigin)
-  redeemTarget.searchParams.set("code", trimmedCode)
-  redeemTarget.searchParams.set("page", "redeem")
+  const redeemQuery = new URLSearchParams()
+  redeemQuery.set("code", trimmedCode)
+  redeemQuery.set("page", "redeem")
+  const redeemTarget = `${appOrigin}?${redeemQuery.toString()}`
 
-  return `${cwBaseUrl}/#/?dl=plugin&alias=${encodeURIComponent(cwAlias)}&plugin=${encodeURIComponent(redeemTarget.toString())}`
+  return `${cwBaseUrl}/#/?dl=plugin&alias=${encodeURIComponent(cwAlias)}&plugin=${encodeURIComponent(redeemTarget)}`
 }
