@@ -1,25 +1,15 @@
 "use client"
 
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
+import { useRouter } from "next/navigation"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
-import { QRCode } from "react-qrcode-logo"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Card, CardContent } from "@/components/ui/card"
-import { Copy, CheckCircle, ChevronLeft, ChevronDown, ChevronRight, AlertTriangle } from "lucide-react"
-import { useToast } from "@/hooks/use-toast"
-import { TabsTrigger, Tabs, TabsList } from "../ui/tabs"
-import { Collapsible, CollapsibleTrigger } from "../ui/collapsible"
-import { CollapsibleContent } from "@radix-ui/react-collapsible"
-import { useContacts } from "@/context/ContactsProvider"
-import { Form } from "../ui/form"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { AlertTriangle, Loader2 } from "lucide-react"
 import { useApp } from "@/context/AppProvider"
-import { validateAddress } from "@/lib/utils"
-import { Contact } from "@/types/contact"
-import { Event } from "@/types/event"
-import { DateTimePicker } from "../ui/datetime-picker"
-import { PonderSubscription } from "@/types/ponder"
+import { VerifiedEmailResponse } from "@/types/server"
 
 interface NotificationModalProps {
   open: boolean
@@ -31,29 +21,75 @@ interface NotificationModalProps {
 
 export function NotificationModal({ open, id, address, emailAddress, onOpenChange }: NotificationModalProps) {
   const [email, setEmail] = useState<string>(emailAddress || "")
-  const [amount, setAmount] = useState<number>(0)
-  const [codes, setCodes] = useState<number>(0)
-  const [expiration, setExpiration] = useState<number>(0)
-
-
+  const [verifiedEmails, setVerifiedEmails] = useState<VerifiedEmailResponse[]>([])
   const [addError, setAddError] = useState<string | null>(null)
+  const [loadingEmails, setLoadingEmails] = useState<boolean>(false)
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false)
-  const [datePickerOpen, setDatePickerOpen] = useState<boolean>(false)
-  const [timezone, setTimezone] = useState<string | undefined>(undefined)
 
   const {
     addPonderSubscription,
     getPonderSubscriptions,
-    deletePonderSubscription
+    deletePonderSubscription,
+    authFetch,
   } = useApp()
+  const router = useRouter()
 
-  useEffect(() => {
-    setTimezone(Intl.DateTimeFormat().resolvedOptions().timeZone)
-  }, [])
+  const verifiedEmailOptions = useMemo(
+    () => verifiedEmails.filter((entry) => entry.status === "verified"),
+    [verifiedEmails],
+  )
 
   useEffect(() => {
     setIsSubmitting(false)
   }, [open])
+
+  useEffect(() => {
+    if (!open || Boolean(id)) return
+    let ignore = false
+
+    const loadVerifiedEmails = async () => {
+      setLoadingEmails(true)
+      setAddError(null)
+      try {
+        const res = await authFetch("/users/verified-emails")
+        if (!res.ok) {
+          const text = await res.text()
+          throw new Error(text || "Unable to load verified emails.")
+        }
+        const data = (await res.json()) as VerifiedEmailResponse[]
+        if (ignore) return
+        setVerifiedEmails(data || [])
+      } catch (err) {
+        if (ignore) return
+        setAddError(err instanceof Error ? err.message : "Unable to load verified emails.")
+      } finally {
+        if (!ignore) {
+          setLoadingEmails(false)
+        }
+      }
+    }
+
+    void loadVerifiedEmails()
+    return () => {
+      ignore = true
+    }
+  }, [open, id, authFetch])
+
+  useEffect(() => {
+    if (id) {
+      setEmail(emailAddress || "")
+      return
+    }
+    if (verifiedEmailOptions.length === 0) {
+      setEmail("")
+      return
+    }
+
+    const existing = verifiedEmailOptions.some((entry) => entry.email === email)
+    if (!existing) {
+      setEmail(verifiedEmailOptions[0].email)
+    }
+  }, [id, emailAddress, verifiedEmailOptions, email])
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
@@ -67,8 +103,9 @@ export function NotificationModal({ open, id, address, emailAddress, onOpenChang
         return
       }
 
-      if(email == "") {
+      if (email === "") {
         setAddError("Email must not be empty.")
+        return
       }
 
       await addPonderSubscription(email, address)
@@ -97,7 +134,7 @@ export function NotificationModal({ open, id, address, emailAddress, onOpenChang
         </DialogHeader>
         {isSubmitting ?
           <div className="min-h-64 flex items-center justify-center">
-            <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-[#eb6c6c]"></div>
+            <Loader2 className="h-8 w-8 animate-spin text-[#eb6c6c]" />
           </div>
         :
         <>{
@@ -132,14 +169,40 @@ export function NotificationModal({ open, id, address, emailAddress, onOpenChang
             {/* Name */}
             <div className="space-y-2">
               <Label className="text-sm font-medium">Email *</Label>
-              <Input
-                value={email}
-                className="font-mono text-xs sm:text-sm h-11"
-                onChange={(e) => {
-                  setEmail(e.target.value)
-                }}
-                autoComplete="off"
-                />
+              {loadingEmails ? (
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Loading verified emails...
+                </div>
+              ) : verifiedEmailOptions.length > 0 ? (
+                <Select value={email} onValueChange={setEmail}>
+                  <SelectTrigger className="font-mono text-xs sm:text-sm h-11">
+                    <SelectValue placeholder="Select a verified email" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {verifiedEmailOptions.map((entry) => (
+                      <SelectItem key={entry.id} value={entry.email}>
+                        {entry.email}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              ) : (
+                <div className="rounded border border-yellow-300 bg-yellow-50 p-3 text-sm text-yellow-800 dark:border-yellow-700 dark:bg-yellow-900/20 dark:text-yellow-300 space-y-2">
+                  <p>No verified emails found for your account.</p>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      onOpenChange(false)
+                      router.push("/settings")
+                    }}
+                  >
+                    Go to Settings
+                  </Button>
+                </div>
+              )}
             </div>
 
             {addError && (
@@ -151,7 +214,7 @@ export function NotificationModal({ open, id, address, emailAddress, onOpenChang
 
             {/* Submit Button */}
             <div className="pt-2 text-center">
-              <Button type="submit">
+              <Button type="submit" disabled={verifiedEmailOptions.length === 0 || loadingEmails}>
                 Enable
               </Button>
             </div>

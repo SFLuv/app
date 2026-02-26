@@ -7,6 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { BACKEND } from "@/lib/constants";
+import { normalizeRedeemCode } from "@/lib/redeem-link";
 
 
 const Page = () => {
@@ -22,7 +23,7 @@ const Page = () => {
   const sigAuthSignature = searchParams.get("sigAuthSignature")
   const sigAuthRedirect = searchParams.get("sigAuthRedirect")
   const sigAuthExpiry = searchParams.get("sigAuthExpiry")
-  const code = searchParams.get("code")
+  const code = normalizeRedeemCode(searchParams.get("code"))
 
 
   const closeModal = (delay: number) => {

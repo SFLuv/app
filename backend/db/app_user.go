@@ -64,6 +64,10 @@ func (a *AppDB) UpdateUserRole(ctx context.Context, userId string, role string, 
 		"merchant":  "is_merchant",
 		"organizer": "is_organizer",
 		"improver":  "is_improver",
+		"proposer":  "is_proposer",
+		"voter":     "is_voter",
+		"issuer":    "is_issuer",
+		"supervisor": "is_supervisor",
 		"affiliate": "is_affiliate",
 	}
 
@@ -84,6 +88,20 @@ func (a *AppDB) UpdateUserRole(ctx context.Context, userId string, role string, 
 		return fmt.Errorf("error updating user: %s", err)
 	}
 
+	if role == "is_admin" && value {
+		_, err = a.db.Exec(ctx, `
+			UPDATE
+				users
+			SET
+				is_voter = true
+			WHERE
+				id = $1;
+		`, userId)
+		if err != nil {
+			return fmt.Errorf("error defaulting admin to voter: %s", err)
+		}
+	}
+
 	return nil
 }
 
@@ -98,6 +116,10 @@ func (a *AppDB) GetUsers(ctx context.Context, page int, count int) ([]*structs.U
 			is_merchant,
 			is_organizer,
 			is_improver,
+			is_proposer,
+			is_voter,
+			is_issuer,
+			is_supervisor,
 			is_affiliate,
 			contact_email,
 			contact_phone,
@@ -121,9 +143,13 @@ func (a *AppDB) GetUsers(ctx context.Context, page int, count int) ([]*structs.U
 			&user.IsAdmin,
 			&user.IsMerchant,
 			&user.IsOrganizer,
-			&user.IsImprover,
-			&user.IsAffiliate,
-			&user.Email,
+				&user.IsImprover,
+				&user.IsProposer,
+				&user.IsVoter,
+				&user.IsIssuer,
+				&user.IsSupervisor,
+				&user.IsAffiliate,
+				&user.Email,
 			&user.Phone,
 			&user.Name,
 			&user.PayPalEth,
@@ -147,6 +173,10 @@ func (a *AppDB) GetUserById(ctx context.Context, userId string) (*structs.User, 
 			is_merchant,
 			is_organizer,
 			is_improver,
+			is_proposer,
+			is_voter,
+			is_issuer,
+			is_supervisor,
 			is_affiliate,
 			contact_email,
 			contact_phone,
@@ -164,6 +194,10 @@ func (a *AppDB) GetUserById(ctx context.Context, userId string) (*structs.User, 
 		&user.IsMerchant,
 		&user.IsOrganizer,
 		&user.IsImprover,
+		&user.IsProposer,
+		&user.IsVoter,
+		&user.IsIssuer,
+		&user.IsSupervisor,
 		&user.IsAffiliate,
 		&user.Email,
 		&user.Phone,

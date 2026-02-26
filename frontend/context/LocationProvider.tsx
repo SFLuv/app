@@ -137,7 +137,6 @@ export default function LocationProvider({ children }: { children: ReactNode }) 
     }
 
     const getAuthedMapLocations = async () => {
-        setMapLocationsStatus("loading")
         try {
             const l = await _getAuthedMapLocations()
             setAuthedMapLocations(l.locations)

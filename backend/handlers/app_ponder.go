@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/SFLuv/app/backend/structs"
 	"github.com/SFLuv/app/backend/utils"
@@ -33,6 +34,28 @@ func (a *AppService) AddPonderMerchantSubscription(w http.ResponseWriter, r *htt
 	if err != nil {
 		fmt.Println(err)
 		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	req.Email = strings.ToLower(strings.TrimSpace(req.Email))
+	if req.Email == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	isVerified, err := a.db.IsVerifiedEmailForUser(r.Context(), *userDid, req.Email)
+	if err != nil {
+		if strings.Contains(err.Error(), "invalid") {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(err.Error()))
+			return
+		}
+		a.logger.Logf("error checking verified email for user %s: %s", *userDid, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	if !isVerified {
+		w.WriteHeader(http.StatusForbidden)
+		w.Write([]byte("notification email must be verified"))
 		return
 	}
 

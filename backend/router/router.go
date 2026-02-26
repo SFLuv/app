@@ -31,6 +31,7 @@ func New(s *handlers.BotService, a *handlers.AppService, p *handlers.PonderServi
 	AddUserRoutes(r, a)
 	AddAdminRoutes(r, a)
 	AddAffiliateRoutes(r, s, a)
+	AddWorkflowRoutes(r, s, a)
 	AddWalletRoutes(r, a)
 	AddLocationRoutes(r, a)
 	AddContactRoutes(r, a)
@@ -57,6 +58,10 @@ func AddUserRoutes(r *chi.Mux, s *handlers.AppService) {
 	r.Get("/users", withAuth(s.GetUserAuthed))
 	r.Put("/users", withAuth(s.UpdateUserInfo))
 	r.Put("/paypaleth", withAuth(s.UpdateUserPayPalEth))
+	r.Get("/users/verified-emails", withAuth(s.GetUserVerifiedEmails))
+	r.Post("/users/verified-emails", withAuth(s.RequestUserEmailVerification))
+	r.Post("/users/verified-emails/{email_id}/resend", withAuth(s.ResendUserEmailVerification))
+	r.Post("/users/verified-emails/verify", s.VerifyUserEmailToken)
 }
 
 func AddAdminRoutes(r *chi.Mux, s *handlers.AppService) {
@@ -77,6 +82,79 @@ func AddAffiliateRoutes(r *chi.Mux, s *handlers.BotService, a *handlers.AppServi
 	r.Get("/affiliates/events/{event}", withAffiliate(s.AffiliateGetCodes, a))
 	r.Delete("/affiliates/events/{event}", withAffiliate(s.AffiliateDeleteEvent, a))
 	r.Get("/affiliates/{user_id}", withAffiliate(a.GetAffiliate, a))
+}
+
+func AddWorkflowRoutes(r *chi.Mux, s *handlers.BotService, a *handlers.AppService) {
+	r.Post("/proposers/request", withAuth(a.RequestProposerStatus))
+	r.Post("/improvers/request", withAuth(a.RequestImproverStatus))
+	r.Post("/issuers/request", withAuth(a.RequestIssuerStatus))
+	r.Post("/supervisors/request", withAuth(a.RequestSupervisorStatus))
+	r.Get("/supervisors/approved", withAuth(a.GetApprovedSupervisors))
+	r.Get("/credentials/types", withAuth(a.GetCredentialTypes))
+	r.Get("/issuers/users/by-address/{address}", withIssuer(a.GetUserByAddress, a))
+
+	r.Get("/proposers/workflow-templates", withProposer(a.GetProposerWorkflowTemplates, a))
+	r.Post("/proposers/workflow-templates", withProposer(a.CreateProposerWorkflowTemplate, a))
+	r.Delete("/proposers/workflow-templates/{template_id}", withProposer(a.DeleteProposerWorkflowTemplate, a))
+	r.Post("/proposers/workflows", withProposer(a.CreateWorkflow, a))
+	r.Get("/proposers/workflows", withProposer(a.GetProposerWorkflows, a))
+	r.Get("/proposers/workflows/{workflow_id}", withProposer(a.GetProposerWorkflow, a))
+	r.Delete("/proposers/workflows/{workflow_id}", withProposer(a.DeleteProposerWorkflow, a))
+	r.Post("/proposers/workflow-deletion-proposals", withProposer(a.ProposeWorkflowDeletion, a))
+
+	r.Get("/improvers/workflows", withImprover(a.GetImproverWorkflows, a))
+	r.Get("/improvers/unpaid-workflows", withImprover(a.GetImproverUnpaidWorkflows, a))
+	r.Put("/improvers/primary-rewards-account", withImprover(a.UpdateImproverPrimaryRewardsAccount, a))
+	r.Get("/improvers/credential-requests", withImprover(a.GetImproverCredentialRequests, a))
+	r.Post("/improvers/credential-requests", withImprover(a.CreateImproverCredentialRequest, a))
+	r.Get("/improvers/workflows/absence-periods", withImprover(a.GetImproverAbsencePeriods, a))
+	r.Post("/improvers/workflows/absence-periods", withImprover(a.CreateImproverAbsencePeriod, a))
+	r.Put("/improvers/workflows/absence-periods/{absence_id}", withImprover(a.UpdateImproverAbsencePeriod, a))
+	r.Delete("/improvers/workflows/absence-periods/{absence_id}", withImprover(a.DeleteImproverAbsencePeriod, a))
+	r.Post("/improvers/workflow-series/unclaim", withImprover(a.UnclaimImproverWorkflowSeries, a))
+	r.Post("/improvers/workflows/{workflow_id}/steps/{step_id}/claim", withImprover(a.ClaimWorkflowStep, a))
+	r.Post("/improvers/workflows/{workflow_id}/steps/{step_id}/start", withImprover(a.StartWorkflowStep, a))
+	r.Post("/improvers/workflows/{workflow_id}/steps/{step_id}/complete", withImprover(a.CompleteWorkflowStep, a))
+	r.Post("/improvers/workflows/{workflow_id}/steps/{step_id}/payout-request", withImprover(a.RequestWorkflowStepPayoutRetry, a))
+
+	r.Get("/supervisors/workflows", withSupervisor(a.GetSupervisorWorkflows, a))
+	r.Post("/supervisors/workflows/export", withSupervisor(a.ExportSupervisorWorkflowData, a))
+	r.Put("/supervisors/primary-rewards-account", withSupervisor(a.UpdateSupervisorPrimaryRewardsAccount, a))
+
+	r.Get("/admin/proposers", withAdmin(a.GetProposers, a))
+	r.Put("/admin/proposers", withAdmin(a.UpdateProposer, a))
+	r.Get("/admin/improvers", withAdmin(a.GetImprovers, a))
+	r.Put("/admin/improvers", withAdmin(a.UpdateImprover, a))
+	r.Get("/admin/supervisors", withAdmin(a.GetSupervisors, a))
+	r.Put("/admin/supervisors", withAdmin(a.UpdateSupervisor, a))
+	r.Get("/admin/issuers", withAdmin(a.GetIssuers, a))
+	r.Put("/admin/issuers", withAdmin(a.UpdateIssuerScopes, a))
+	r.Get("/admin/issuer-requests", withAdmin(a.GetIssuerRequests, a))
+	r.Put("/admin/issuer-requests", withAdmin(a.UpdateIssuerRequest, a))
+	r.Get("/admin/credential-types", withAdmin(a.GetAdminCredentialTypes, a))
+	r.Post("/admin/credential-types", withAdmin(a.CreateAdminCredentialType, a))
+	r.Delete("/admin/credential-types/{value}", withAdmin(a.DeleteAdminCredentialType, a))
+	r.Post("/admin/workflow-templates/default", withAdmin(a.CreateDefaultWorkflowTemplate, a))
+	r.Get("/admin/workflows", withAdmin(a.GetAdminWorkflows, a))
+	r.Get("/admin/workflow-series/{series_id}/claimants", withAdmin(a.GetAdminWorkflowSeriesClaimants, a))
+	r.Post("/admin/workflow-series/{series_id}/revoke-claim", withAdmin(a.RevokeAdminWorkflowSeriesImproverClaim, a))
+	r.Post("/admin/workflows/{workflow_id}/force-approve", withAdmin(a.AdminForceApproveWorkflow, a))
+
+	r.Get("/voters/workflows", withVoter(a.GetVoterWorkflows, a))
+	r.Get("/voters/workflow-deletion-proposals", withVoter(a.GetVoterWorkflowDeletionProposals, a))
+	r.Post("/voters/workflow-deletion-proposals", withVoter(a.ProposeWorkflowDeletion, a))
+	r.Get("/workflows/active", withAuth(a.GetActiveWorkflows))
+	r.Get("/workflows/{workflow_id}", withAuth(a.GetWorkflow))
+	r.Get("/workflow-photos/{photo_id}", withAuth(a.GetWorkflowPhoto))
+	r.Post("/workflows/{workflow_id}/votes", withVoter(a.VoteWorkflow, a))
+	r.Post("/workflow-deletion-proposals/{proposal_id}/votes", withVoter(a.VoteWorkflowDeletionProposal, a))
+
+	r.Get("/issuers/scopes", withIssuer(a.GetMyIssuerScopes, a))
+	r.Get("/issuers/credential-requests", withIssuer(a.GetIssuerCredentialRequests, a))
+	r.Post("/issuers/credential-requests/{request_id}/decision", withIssuer(a.DecideIssuerCredentialRequest, a))
+	r.Post("/issuers/credentials", withIssuer(a.IssueCredential, a))
+	r.Delete("/issuers/credentials", withIssuer(a.RevokeCredential, a))
+	r.Get("/issuers/credentials/{user_id}", withIssuer(a.GetIssuerUserCredentials, a))
 }
 
 func AddWalletRoutes(r *chi.Mux, s *handlers.AppService) {
@@ -184,6 +262,121 @@ func withAffiliate(handlerFunc http.HandlerFunc, s *handlers.AppService) http.Ha
 
 		isAffiliate := s.IsAffiliate(r.Context(), id)
 		if !isAffiliate {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+
+		handlerFunc(w, r)
+	}
+}
+
+func withProposer(handlerFunc http.HandlerFunc, s *handlers.AppService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, ok := r.Context().Value("userDid").(string)
+		if !ok {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+
+		if s.IsAdmin(r.Context(), id) {
+			handlerFunc(w, r)
+			return
+		}
+
+		isProposer := s.IsProposer(r.Context(), id)
+		if !isProposer {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+
+		handlerFunc(w, r)
+	}
+}
+
+func withImprover(handlerFunc http.HandlerFunc, s *handlers.AppService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, ok := r.Context().Value("userDid").(string)
+		if !ok {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+
+		if s.IsAdmin(r.Context(), id) {
+			handlerFunc(w, r)
+			return
+		}
+
+		isImprover := s.IsImprover(r.Context(), id)
+		if !isImprover {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+
+		handlerFunc(w, r)
+	}
+}
+
+func withVoter(handlerFunc http.HandlerFunc, s *handlers.AppService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, ok := r.Context().Value("userDid").(string)
+		if !ok {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+
+		if s.IsAdmin(r.Context(), id) {
+			handlerFunc(w, r)
+			return
+		}
+
+		isVoter := s.IsVoter(r.Context(), id)
+		if !isVoter {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+
+		handlerFunc(w, r)
+	}
+}
+
+func withIssuer(handlerFunc http.HandlerFunc, s *handlers.AppService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, ok := r.Context().Value("userDid").(string)
+		if !ok {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+
+		if s.IsAdmin(r.Context(), id) {
+			handlerFunc(w, r)
+			return
+		}
+
+		isIssuer := s.IsIssuer(r.Context(), id)
+		if !isIssuer {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+
+		handlerFunc(w, r)
+	}
+}
+
+func withSupervisor(handlerFunc http.HandlerFunc, s *handlers.AppService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, ok := r.Context().Value("userDid").(string)
+		if !ok {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+
+		if s.IsAdmin(r.Context(), id) {
+			handlerFunc(w, r)
+			return
+		}
+
+		isSupervisor := s.IsSupervisor(r.Context(), id)
+		if !isSupervisor {
 			w.WriteHeader(http.StatusForbidden)
 			return
 		}

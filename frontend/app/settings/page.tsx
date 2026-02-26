@@ -14,11 +14,14 @@ import { Separator } from "@/components/ui/separator"
 import { Textarea } from "@/components/ui/textarea"
 import { Switch } from "@/components/ui/switch"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Check, Loader2, Upload, User, Clock, XCircle, AlertTriangle } from "lucide-react"
+import { VerifiedEmailResponse, WalletResponse } from "@/types/server"
+import { getAddress, isAddress } from "viem"
 
 type MerchantStatus = "approved" | "pending" | "rejected" | "none"
 type LocationApplicationStatus = "approved" | "pending" | "rejected"
+const CUSTOM_REWARDS_ACCOUNT_VALUE = "__custom__"
 
 const getLocationApplicationStatus = (approval?: boolean | null): LocationApplicationStatus => {
   if (approval === true) return "approved"
@@ -28,7 +31,7 @@ const getLocationApplicationStatus = (approval?: boolean | null): LocationApplic
 
 export default function SettingsPage() {
   const router = useRouter()
-  const { user, userLocations, status, affiliate, setAffiliate, authFetch } = useApp()
+  const { user, userLocations, status, affiliate, setAffiliate, proposer, setProposer, improver, setImprover, issuer, setIssuer, supervisor, setSupervisor, authFetch } = useApp()
   const userRole = useMemo(() => user?.isAdmin ? "admin" : user?.isMerchant ? "merchant" : "user", [user])
 
   const merchantStatus: MerchantStatus = useMemo(() => {
@@ -48,6 +51,30 @@ export default function SettingsPage() {
     return "none"
   }, [affiliate, user])
 
+  const proposerStatus = useMemo(() => {
+    if (user?.isProposer) return "approved"
+    if (proposer?.status) return proposer.status
+    return "none"
+  }, [proposer, user])
+
+  const improverStatus = useMemo(() => {
+    if (user?.isImprover) return "approved"
+    if (improver?.status) return improver.status
+    return "none"
+  }, [improver, user])
+
+  const issuerStatus = useMemo(() => {
+    if (user?.isIssuer) return "approved"
+    if (issuer?.status) return issuer.status
+    return "none"
+  }, [issuer, user])
+
+  const supervisorStatus = useMemo(() => {
+    if (user?.isSupervisor) return "approved"
+    if (supervisor?.status) return supervisor.status
+    return "none"
+  }, [supervisor, user])
+
   useEffect(() => {
     if (affiliate?.affiliate_logo) {
       setAffiliateLogoPreview(affiliate.affiliate_logo)
@@ -56,19 +83,46 @@ export default function SettingsPage() {
     }
   }, [affiliate?.affiliate_logo])
 
+
   // Form states
   const [activeTab, setActiveTab] = useState("account")
   const [isUpdating, setIsUpdating] = useState(false)
   const [isChangingPassword, setIsChangingPassword] = useState(false)
   const [successMessage, setSuccessMessage] = useState("")
-  const [affiliateModalOpen, setAffiliateModalOpen] = useState(false)
-  const [affiliateOrg, setAffiliateOrg] = useState("")
-  const [affiliateSubmitting, setAffiliateSubmitting] = useState(false)
-  const [affiliateError, setAffiliateError] = useState("")
-  const [affiliateSuccess, setAffiliateSuccess] = useState("")
+  type RoleRequestType = "merchant" | "affiliate" | "proposer" | "improver" | "issuer" | "supervisor" | ""
+  const [roleRequestType, setRoleRequestType] = useState<RoleRequestType>("")
+  const [roleOrg, setRoleOrg] = useState("")
+  const [roleEmail, setRoleEmail] = useState("")
+  const [roleFirstName, setRoleFirstName] = useState("")
+  const [roleLastName, setRoleLastName] = useState("")
+  const [roleSubmitting, setRoleSubmitting] = useState(false)
+  const [roleError, setRoleError] = useState("")
+  const [roleSuccess, setRoleSuccess] = useState("")
+  const [verifiedEmails, setVerifiedEmails] = useState<VerifiedEmailResponse[]>([])
+  const [verifiedEmailsLoading, setVerifiedEmailsLoading] = useState(false)
+  const [verifiedEmailFormOpen, setVerifiedEmailFormOpen] = useState(false)
+  const [newVerifiedEmail, setNewVerifiedEmail] = useState("")
+  const [verifiedEmailSubmitting, setVerifiedEmailSubmitting] = useState(false)
+  const [verifiedEmailError, setVerifiedEmailError] = useState("")
+  const [verifiedEmailSuccess, setVerifiedEmailSuccess] = useState("")
   const [affiliateLogoPreview, setAffiliateLogoPreview] = useState<string>("")
   const [affiliateLogoSaving, setAffiliateLogoSaving] = useState(false)
   const [affiliateLogoError, setAffiliateLogoError] = useState("")
+  const [rewardsWallets, setRewardsWallets] = useState<WalletResponse[]>([])
+  const [rewardsWalletsLoading, setRewardsWalletsLoading] = useState(false)
+  const [rewardsWalletsError, setRewardsWalletsError] = useState("")
+
+  const [improverRewardsSelection, setImproverRewardsSelection] = useState("")
+  const [improverCustomRewardsAccount, setImproverCustomRewardsAccount] = useState("")
+  const [improverRewardsSaving, setImproverRewardsSaving] = useState(false)
+  const [improverRewardsError, setImproverRewardsError] = useState("")
+  const [improverRewardsSuccess, setImproverRewardsSuccess] = useState("")
+
+  const [supervisorRewardsSelection, setSupervisorRewardsSelection] = useState("")
+  const [supervisorCustomRewardsAccount, setSupervisorCustomRewardsAccount] = useState("")
+  const [supervisorRewardsSaving, setSupervisorRewardsSaving] = useState(false)
+  const [supervisorRewardsError, setSupervisorRewardsError] = useState("")
+  const [supervisorRewardsSuccess, setSupervisorRewardsSuccess] = useState("")
 
   // Account form
   const [name, setName] = useState(user?.name || "")
@@ -96,6 +150,214 @@ export default function SettingsPage() {
   const [emailNotifications, setEmailNotifications] = useState(true)
   const [opportunityAlerts, setOpportunityAlerts] = useState(true)
   const [transactionAlerts, setTransactionAlerts] = useState(true)
+
+  const verifiedEmailOptions = useMemo(
+    () => verifiedEmails.filter((email) => email.status === "verified"),
+    [verifiedEmails],
+  )
+
+  const pendingOrExpiredEmailOptions = useMemo(
+    () => verifiedEmails.filter((email) => email.status !== "verified"),
+    [verifiedEmails],
+  )
+
+  const rewardsAccountOptions = useMemo(() => {
+    const seen = new Set<string>()
+    const options: Array<{ value: string; label: string; isSmartWalletZero: boolean }> = []
+
+    for (const wallet of rewardsWallets) {
+      const rawAddress = (wallet.smart_address || wallet.eoa_address || "").trim()
+      if (!rawAddress || !isAddress(rawAddress)) continue
+      const normalizedAddress = getAddress(rawAddress)
+      const key = normalizedAddress.toLowerCase()
+      if (seen.has(key)) continue
+      seen.add(key)
+
+      const fallbackName = wallet.is_eoa
+        ? "EOA Account"
+        : wallet.smart_index !== undefined
+          ? `Smart Wallet ${wallet.smart_index + 1}`
+          : "Smart Wallet"
+      const displayName = (wallet.name || "").trim() || fallbackName
+      const shortAddress = `${normalizedAddress.slice(0, 6)}...${normalizedAddress.slice(-4)}`
+      options.push({
+        value: normalizedAddress,
+        label: `${displayName} (${shortAddress})`,
+        isSmartWalletZero: wallet.is_eoa === false && wallet.smart_index === 0,
+      })
+    }
+
+    return options
+  }, [rewardsWallets])
+
+  const defaultRewardsAccount = useMemo(() => {
+    const smartWalletZero = rewardsAccountOptions.find((option) => option.isSmartWalletZero)
+    if (smartWalletZero) return smartWalletZero.value
+    return rewardsAccountOptions[0]?.value || ""
+  }, [rewardsAccountOptions])
+
+  useEffect(() => {
+    if (verifiedEmailOptions.length === 0) {
+      if (roleEmail !== "") setRoleEmail("")
+      return
+    }
+
+    const roleEmailExists = verifiedEmailOptions.some((option) => option.email === roleEmail)
+    if (!roleEmailExists) {
+      setRoleEmail(verifiedEmailOptions[0].email)
+    }
+  }, [verifiedEmailOptions, roleEmail])
+
+  const loadVerifiedEmails = async () => {
+    if (status !== "authenticated") return
+
+    setVerifiedEmailsLoading(true)
+    setVerifiedEmailError("")
+    try {
+      const res = await authFetch("/users/verified-emails")
+      if (!res.ok) {
+        const text = await res.text()
+        throw new Error(text || "Unable to load verified emails.")
+      }
+      const data = (await res.json()) as VerifiedEmailResponse[]
+      setVerifiedEmails(data || [])
+    } catch (err) {
+      setVerifiedEmailError(err instanceof Error ? err.message : "Unable to load verified emails.")
+    } finally {
+      setVerifiedEmailsLoading(false)
+    }
+  }
+
+  const loadRewardsWallets = async () => {
+    if (status !== "authenticated") return
+
+    setRewardsWalletsLoading(true)
+    setRewardsWalletsError("")
+    try {
+      const res = await authFetch("/wallets")
+      if (!res.ok) {
+        const text = await res.text()
+        throw new Error(text || "Unable to load accounts.")
+      }
+      const data = (await res.json()) as WalletResponse[]
+      setRewardsWallets(data || [])
+    } catch (err) {
+      setRewardsWalletsError(err instanceof Error ? err.message : "Unable to load accounts.")
+    } finally {
+      setRewardsWalletsLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    if (status === "authenticated") {
+      void loadVerifiedEmails()
+      void loadRewardsWallets()
+    }
+  }, [status])
+
+  useEffect(() => {
+    if (improverStatus !== "approved") return
+
+    const current = (improver?.primary_rewards_account || "").trim()
+    const normalizedCurrent = current && isAddress(current) ? getAddress(current) : ""
+    if (normalizedCurrent && rewardsAccountOptions.some((option) => option.value.toLowerCase() === normalizedCurrent.toLowerCase())) {
+      setImproverRewardsSelection(normalizedCurrent)
+      setImproverCustomRewardsAccount("")
+      return
+    }
+    if (normalizedCurrent) {
+      setImproverRewardsSelection(CUSTOM_REWARDS_ACCOUNT_VALUE)
+      setImproverCustomRewardsAccount(normalizedCurrent)
+      return
+    }
+    if (defaultRewardsAccount) {
+      setImproverRewardsSelection(defaultRewardsAccount)
+      setImproverCustomRewardsAccount("")
+      return
+    }
+    setImproverRewardsSelection(CUSTOM_REWARDS_ACCOUNT_VALUE)
+    setImproverCustomRewardsAccount("")
+  }, [improverStatus, improver?.primary_rewards_account, rewardsAccountOptions, defaultRewardsAccount])
+
+  useEffect(() => {
+    if (supervisorStatus !== "approved") return
+
+    const current = (supervisor?.primary_rewards_account || "").trim()
+    const normalizedCurrent = current && isAddress(current) ? getAddress(current) : ""
+    if (normalizedCurrent && rewardsAccountOptions.some((option) => option.value.toLowerCase() === normalizedCurrent.toLowerCase())) {
+      setSupervisorRewardsSelection(normalizedCurrent)
+      setSupervisorCustomRewardsAccount("")
+      return
+    }
+    if (normalizedCurrent) {
+      setSupervisorRewardsSelection(CUSTOM_REWARDS_ACCOUNT_VALUE)
+      setSupervisorCustomRewardsAccount(normalizedCurrent)
+      return
+    }
+    if (defaultRewardsAccount) {
+      setSupervisorRewardsSelection(defaultRewardsAccount)
+      setSupervisorCustomRewardsAccount("")
+      return
+    }
+    setSupervisorRewardsSelection(CUSTOM_REWARDS_ACCOUNT_VALUE)
+    setSupervisorCustomRewardsAccount("")
+  }, [supervisorStatus, supervisor?.primary_rewards_account, rewardsAccountOptions, defaultRewardsAccount])
+
+  const handleAddVerifiedEmail = async (e: React.FormEvent) => {
+    e.preventDefault()
+
+    const email = newVerifiedEmail.trim()
+    if (!email) {
+      setVerifiedEmailError("Email is required.")
+      setVerifiedEmailSuccess("")
+      return
+    }
+
+    setVerifiedEmailSubmitting(true)
+    setVerifiedEmailError("")
+    setVerifiedEmailSuccess("")
+    try {
+      const res = await authFetch("/users/verified-emails", {
+        method: "POST",
+        body: JSON.stringify({ email }),
+      })
+      if (!res.ok) {
+        const text = await res.text()
+        throw new Error(text || "Unable to send verification email.")
+      }
+
+      setNewVerifiedEmail("")
+      setVerifiedEmailFormOpen(false)
+      setVerifiedEmailSuccess("Verification email sent. It expires in 30 minutes.")
+      await loadVerifiedEmails()
+    } catch (err) {
+      setVerifiedEmailError(err instanceof Error ? err.message : "Unable to send verification email.")
+    } finally {
+      setVerifiedEmailSubmitting(false)
+    }
+  }
+
+  const handleResendVerification = async (emailId: string) => {
+    setVerifiedEmailSubmitting(true)
+    setVerifiedEmailError("")
+    setVerifiedEmailSuccess("")
+    try {
+      const res = await authFetch(`/users/verified-emails/${emailId}/resend`, {
+        method: "POST",
+      })
+      if (!res.ok) {
+        const text = await res.text()
+        throw new Error(text || "Unable to resend verification email.")
+      }
+
+      setVerifiedEmailSuccess("Verification email resent. It expires in 30 minutes.")
+      await loadVerifiedEmails()
+    } catch (err) {
+      setVerifiedEmailError(err instanceof Error ? err.message : "Unable to resend verification email.")
+    } finally {
+      setVerifiedEmailSubmitting(false)
+    }
+  }
 
   // Handle account update
 
@@ -151,44 +413,153 @@ export default function SettingsPage() {
     }, 1500)
   }
 
-  const handleAffiliateRequest = async (e: React.FormEvent) => {
+  const handleRoleRequest = async (e: React.FormEvent) => {
     e.preventDefault()
-    setAffiliateError("")
-    setAffiliateSuccess("")
+    setRoleError("")
+    setRoleSuccess("")
 
-    if (!affiliateOrg.trim()) {
-      setAffiliateError("Please enter the organization you are requesting from.")
+    if (!roleRequestType) {
+      setRoleError("Please select a role type.")
       return
     }
 
-    setAffiliateSubmitting(true)
+    if (roleRequestType === "merchant") {
+      router.push("/settings/merchant-approval")
+      return
+    }
 
+    if (roleRequestType === "affiliate" || roleRequestType === "proposer" || roleRequestType === "issuer" || roleRequestType === "supervisor") {
+      if (!roleOrg.trim()) { setRoleError("Organization name is required."); return }
+    }
+    if ((roleRequestType === "proposer" || roleRequestType === "issuer" || roleRequestType === "supervisor") && !roleEmail.trim()) {
+      setRoleError("Notification email is required.")
+      return
+    }
+    if (roleRequestType === "improver") {
+      if (!roleFirstName.trim() || !roleLastName.trim() || !roleEmail.trim()) {
+        setRoleError("First name, last name, and email are required.")
+        return
+      }
+    }
+
+    setRoleSubmitting(true)
     try {
-      const res = await authFetch("/affiliates/request", {
-        method: "POST",
-        body: JSON.stringify({ organization: affiliateOrg.trim() }),
-      })
-
-      if (!res.ok) {
-        if (res.status === 409) {
-          setAffiliateError("Your affiliate status is already approved.")
+      let res: Response
+      if (roleRequestType === "affiliate") {
+        res = await authFetch("/affiliates/request", { method: "POST", body: JSON.stringify({ organization: roleOrg.trim() }) })
+        if (res.ok) { const data = await res.json(); setAffiliate(data) }
+      } else if (roleRequestType === "proposer") {
+        res = await authFetch("/proposers/request", { method: "POST", body: JSON.stringify({ organization: roleOrg.trim(), email: roleEmail.trim() }) })
+        if (res.ok) { const data = await res.json(); setProposer(data) }
+      } else if (roleRequestType === "issuer") {
+        res = await authFetch("/issuers/request", { method: "POST", body: JSON.stringify({ organization: roleOrg.trim(), email: roleEmail.trim() }) })
+        if (res.ok) { const data = await res.json(); setIssuer(data) }
+      } else if (roleRequestType === "supervisor") {
+        res = await authFetch("/supervisors/request", { method: "POST", body: JSON.stringify({ organization: roleOrg.trim(), email: roleEmail.trim() }) })
+        if (res.ok) { const data = await res.json(); setSupervisor(data) }
+      } else {
+        res = await authFetch("/improvers/request", { method: "POST", body: JSON.stringify({ first_name: roleFirstName.trim(), last_name: roleLastName.trim(), email: roleEmail.trim() }) })
+        if (res.ok) { const data = await res.json(); setImprover(data) }
+      }
+      if (!res!.ok) {
+        if (res!.status === 409) {
+          setRoleError("Your status for that role is already approved.")
         } else {
-          setAffiliateError("Unable to submit your request right now. Please try again.")
+          setRoleError("Unable to submit your request right now. Please try again.")
         }
         return
       }
-
-      const data = await res.json()
-      setAffiliate(data)
-      setAffiliateSuccess("Affiliate request submitted.")
-      setAffiliateModalOpen(false)
-      setAffiliateOrg("")
+      setRoleSuccess("Your request has been submitted and is pending review.")
+      setRoleRequestType("")
+      setRoleOrg("")
+      setRoleEmail(verifiedEmailOptions[0]?.email || "")
+      setRoleFirstName("")
+      setRoleLastName("")
     } catch {
-      setAffiliateError("Unable to submit your request right now. Please try again.")
+      setRoleError("Unable to submit your request. Please try again.")
     } finally {
-      setAffiliateSubmitting(false)
+      setRoleSubmitting(false)
     }
   }
+
+  const handleSaveImproverRewardsAccount = async () => {
+    setImproverRewardsError("")
+    setImproverRewardsSuccess("")
+
+    const selectedValue = improverRewardsSelection === CUSTOM_REWARDS_ACCOUNT_VALUE
+      ? improverCustomRewardsAccount.trim()
+      : improverRewardsSelection.trim()
+
+    if (!selectedValue) {
+      setImproverRewardsError("Primary rewards account is required.")
+      return
+    }
+    if (!isAddress(selectedValue)) {
+      setImproverRewardsError("Enter a valid Ethereum address.")
+      return
+    }
+
+    const normalized = getAddress(selectedValue)
+    setImproverRewardsSaving(true)
+    try {
+      const res = await authFetch("/improvers/primary-rewards-account", {
+        method: "PUT",
+        body: JSON.stringify({ primary_rewards_account: normalized }),
+      })
+      if (!res.ok) {
+        const text = await res.text()
+        throw new Error(text || "Unable to update improver rewards account.")
+      }
+
+      const data = await res.json()
+      setImprover(data)
+      setImproverRewardsSuccess("Primary rewards account updated.")
+    } catch (err) {
+      setImproverRewardsError(err instanceof Error ? err.message : "Unable to update improver rewards account.")
+    } finally {
+      setImproverRewardsSaving(false)
+    }
+  }
+
+  const handleSaveSupervisorRewardsAccount = async () => {
+    setSupervisorRewardsError("")
+    setSupervisorRewardsSuccess("")
+
+    const selectedValue = supervisorRewardsSelection === CUSTOM_REWARDS_ACCOUNT_VALUE
+      ? supervisorCustomRewardsAccount.trim()
+      : supervisorRewardsSelection.trim()
+
+    if (!selectedValue) {
+      setSupervisorRewardsError("Primary rewards account is required.")
+      return
+    }
+    if (!isAddress(selectedValue)) {
+      setSupervisorRewardsError("Enter a valid Ethereum address.")
+      return
+    }
+
+    const normalized = getAddress(selectedValue)
+    setSupervisorRewardsSaving(true)
+    try {
+      const res = await authFetch("/supervisors/primary-rewards-account", {
+        method: "PUT",
+        body: JSON.stringify({ primary_rewards_account: normalized }),
+      })
+      if (!res.ok) {
+        const text = await res.text()
+        throw new Error(text || "Unable to update supervisor rewards account.")
+      }
+
+      const data = await res.json()
+      setSupervisor(data)
+      setSupervisorRewardsSuccess("Primary rewards account updated.")
+    } catch (err) {
+      setSupervisorRewardsError(err instanceof Error ? err.message : "Unable to update supervisor rewards account.")
+    } finally {
+      setSupervisorRewardsSaving(false)
+    }
+  }
+
 
   const handleAffiliateLogoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setAffiliateLogoError("")
@@ -267,22 +638,39 @@ export default function SettingsPage() {
       )} */}
 
       <Tabs defaultValue="account" value={activeTab} onValueChange={setActiveTab} className="w-full">
-        <TabsList className="w-full mb-6 bg-secondary">
-          {user?.isMerchant ? (
-            <div className={"grid grid-cols-2 w-full"}>
-              <TabsTrigger value="account" className="text-black dark:text-white w-full">
-                Account
-              </TabsTrigger>
-              <TabsTrigger value="merchant" className="text-black dark:text-white w-full">
-                Merchant Profile
-              </TabsTrigger>
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 w-full">
-              <TabsTrigger value="account" className="text-black dark:text-white w-full">
-                Account
-              </TabsTrigger>
-            </div>
+        <TabsList className="w-full mb-6 bg-secondary flex flex-wrap h-auto gap-1 p-1">
+          <TabsTrigger value="account" className="text-black dark:text-white flex-1">
+            Account
+          </TabsTrigger>
+          {merchantStatus !== "none" && (
+            <TabsTrigger value="merchant" className="text-black dark:text-white flex-1">
+              Merchant
+            </TabsTrigger>
+          )}
+          {(affiliateStatus === "pending" || affiliateStatus === "approved") && (
+            <TabsTrigger value="affiliate" className="text-black dark:text-white flex-1">
+              Affiliate
+            </TabsTrigger>
+          )}
+          {(proposerStatus === "pending" || proposerStatus === "approved") && (
+            <TabsTrigger value="proposer" className="text-black dark:text-white flex-1">
+              Proposer
+            </TabsTrigger>
+          )}
+          {(improverStatus === "pending" || improverStatus === "approved") && (
+            <TabsTrigger value="improver" className="text-black dark:text-white flex-1">
+              Improver
+            </TabsTrigger>
+          )}
+          {(issuerStatus === "pending" || issuerStatus === "approved") && (
+            <TabsTrigger value="issuer" className="text-black dark:text-white flex-1">
+              Issuer
+            </TabsTrigger>
+          )}
+          {(supervisorStatus === "pending" || supervisorStatus === "approved") && (
+            <TabsTrigger value="supervisor" className="text-black dark:text-white flex-1">
+              Supervisor
+            </TabsTrigger>
           )}
         </TabsList>
 
@@ -421,182 +809,133 @@ export default function SettingsPage() {
               </CardContent>
             </Card>
           </div> */}
-          {merchantStatus == "none" && (
-            <Card className="mt-6">
-              <CardHeader>
-                <CardTitle className="text-black dark:text-white">Become a Merchant</CardTitle>
-                <CardDescription>Apply to accept SFLuv as payment for your business</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <p className="text-gray-600 dark:text-gray-400 mb-4">
-                  As a merchant, you can accept SFLuv as payment, appear on the merchant map, and access
-                  merchant-specific features.
-                </p>
-              <Button
-                variant="outline"
-                className="bg-secondary text-[#eb6c6c] border-[#eb6c6c] hover:bg-[#eb6c6c] hover:text-white"
-                onClick={() => router.push("/settings/merchant-approval")}>
-                {userLocations.length === 0 ?
-                "Apply to Become a Merchant" :
-                "Submit Another Application"
-                }
-              </Button>
-              </CardContent>
-            </Card>
-          )}
 
-          {merchantStatus !== "none" && (
-            <div className="space-y-4">
-              <div className="space-y-2">
-                {sortedUserLocations.map((loc) => {
-                  const applicationStatus = getLocationApplicationStatus(loc.approval)
-                  let borderClass = "border-yellow-300 dark:border-yellow-700"
-                  let headerClass = "bg-yellow-50 dark:bg-yellow-900/20 rounded-t-lg"
-                  let statusTitle = "Location Application Pending"
-                  let statusBody = `Your application for ${loc.name} is currently under review.`
-                  let Icon = Clock
-                  let iconClass = "h-5 w-5 text-yellow-500 mr-2"
-
-                  if (applicationStatus === "approved") {
-                    borderClass = "border-green-300 dark:border-green-700"
-                    headerClass = "bg-green-50 dark:bg-green-900/20 rounded-t-lg"
-                    statusTitle = "Location Application Approved"
-                    statusBody = `Your application for ${loc.name} has been approved!`
-                    Icon = Check
-                    iconClass = "h-5 w-5 text-green-500 mr-2"
-                  } else if (applicationStatus === "rejected") {
-                    borderClass = "border-red-300 dark:border-red-700"
-                    headerClass = "bg-red-50 dark:bg-red-900/20 rounded-t-lg"
-                    statusTitle = "Location Application Not Approved"
-                    statusBody = `Your application for ${loc.name} was not approved.`
-                    Icon = XCircle
-                    iconClass = "h-5 w-5 text-red-500 mr-2"
-                  }
-
-                  return (
-                    <Card className={`mt-6 ${borderClass}`} key={loc.id}>
-                      <CardHeader className={headerClass}>
-                        <CardTitle className="text-black dark:text-white flex items-center">
-                          <Icon className={iconClass} />
-                          {statusTitle}
-                        </CardTitle>
-                      </CardHeader>
-                      <CardContent className="pt-4">
-                        <p className="text-gray-600 dark:text-gray-400 mb-4">
-                          {statusBody}
-                        </p>
-                      </CardContent>
-                    </Card>
-                  )
-                })}
+          <Card className="mt-6">
+            <CardHeader className="flex flex-row items-start justify-between gap-4">
+              <div>
+                <CardTitle className="text-black dark:text-white">Verified Emails</CardTitle>
+                <CardDescription>
+                  Only verified emails can be used for role requests and wallet notification subscriptions.
+                </CardDescription>
               </div>
-            <Button
-              variant="outline"
-              className="bg-secondary text-[#eb6c6c] border-[#eb6c6c] hover:bg-[#eb6c6c] hover:text-white"
-              onClick={() => router.push("/settings/merchant-approval")}
-            >
-              Submit Another Application
-            </Button>
-            </div>
-          )}
-
-          {affiliateStatus === "none" && (
-            <Card className="mt-6">
-              <CardHeader>
-                <CardTitle className="text-black dark:text-white">Request Affiliate Status</CardTitle>
-                <CardDescription>Apply to receive an affiliate balance for community events</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <p className="text-gray-600 dark:text-gray-400 mb-4">
-                  Affiliates can create events funded by an assigned weekly balance plus one-time bonuses.
-                </p>
-                <Button
-                  variant="outline"
-                  className="bg-secondary text-[#eb6c6c] border-[#eb6c6c] hover:bg-[#eb6c6c] hover:text-white"
-                  onClick={() => setAffiliateModalOpen(true)}
-                >
-                  Request Affiliate Status
-                </Button>
-                {affiliateSuccess && (
-                  <p className="mt-3 text-sm text-green-600">{affiliateSuccess}</p>
-                )}
-              </CardContent>
-            </Card>
-          )}
-
-          {affiliateStatus === "pending" && (
-            <Card className="mt-6 border-yellow-300 dark:border-yellow-700">
-              <CardHeader className="bg-yellow-50 dark:bg-yellow-900/20 rounded-t-lg">
-                <CardTitle className="text-black dark:text-white flex items-center">
-                  <Clock className="h-5 w-5 text-yellow-500 mr-2" />
-                  Affiliate Request Pending
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="pt-4">
-                <p className="text-gray-600 dark:text-gray-400 mb-4">
-                  Your affiliate request for {affiliate?.organization || "your organization"} is under review.
-                </p>
-              </CardContent>
-            </Card>
-          )}
-
-          {affiliateStatus === "approved" && (
-            <Card className="mt-6 border-green-300 dark:border-green-700">
-              <CardHeader className="bg-green-50 dark:bg-green-900/20 rounded-t-lg">
-                <CardTitle className="text-black dark:text-white flex items-center">
-                  <Check className="h-5 w-5 text-green-500 mr-2" />
-                  Affiliate Status Approved
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="pt-4">
-                <p className="text-gray-600 dark:text-gray-400 mb-4">
-                  You are approved to create affiliate events for {affiliate?.organization || "your organization"}.
-                </p>
-                <div className="space-y-3">
-                  <Label className="text-black dark:text-white">Affiliate Logo</Label>
-                  <div className="flex items-center gap-4">
-                    <div className="h-16 w-16 rounded-xl bg-secondary border border-muted flex items-center justify-center overflow-hidden">
-                      {affiliateLogoPreview ? (
-                        <img src={affiliateLogoPreview} alt="Affiliate logo" className="h-full w-full object-contain" />
-                      ) : (
-                        <span className="text-xs text-muted-foreground">No logo</span>
-                      )}
-                    </div>
-                    <div className="space-y-2">
-                      <Input
-                        type="file"
-                        accept="image/*"
-                        onChange={handleAffiliateLogoChange}
-                        className="text-black dark:text-white bg-secondary"
-                      />
-                      <Button
-                        type="button"
-                        variant="outline"
-                        className="bg-secondary text-[#eb6c6c] border-[#eb6c6c] hover:bg-[#eb6c6c] hover:text-white"
-                        disabled={!affiliateLogoPreview || affiliateLogoSaving}
-                        onClick={handleAffiliateLogoSave}
-                      >
-                        {affiliateLogoSaving ? (
-                          <>
-                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                            Saving...
-                          </>
-                        ) : (
-                          "Save Logo"
-                        )}
-                      </Button>
-                    </div>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  setVerifiedEmailFormOpen((prev) => !prev)
+                  setVerifiedEmailError("")
+                  setVerifiedEmailSuccess("")
+                }}
+                className="whitespace-nowrap"
+              >
+                Add Email
+              </Button>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {verifiedEmailsLoading ? (
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Loading verified emails...
+                </div>
+              ) : (
+                <>
+                  <div className="space-y-2">
+                    <p className="text-sm font-medium text-black dark:text-white">Verified</p>
+                    {verifiedEmailOptions.length === 0 ? (
+                      <p className="text-sm text-muted-foreground">No verified emails yet.</p>
+                    ) : (
+                      verifiedEmailOptions.map((entry) => (
+                        <div key={entry.id} className="rounded border bg-secondary/30 px-3 py-2 text-sm flex items-center justify-between gap-2">
+                          <span className="break-all">{entry.email}</span>
+                          <span className="text-xs text-green-700 dark:text-green-300">Verified</span>
+                        </div>
+                      ))
+                    )}
                   </div>
-                  {affiliateLogoError && (
-                    <div className="flex items-center gap-2 text-red-600 text-sm p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
-                      <AlertTriangle className="h-4 w-4 flex-shrink-0" />
-                      <span>{affiliateLogoError}</span>
+
+                  {pendingOrExpiredEmailOptions.length > 0 && (
+                    <div className="space-y-2">
+                      <p className="text-sm font-medium text-black dark:text-white">Pending Verification</p>
+                      {pendingOrExpiredEmailOptions.map((entry) => (
+                        <div key={entry.id} className="rounded border bg-secondary/30 px-3 py-2 text-sm space-y-2">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <span className="break-all">{entry.email}</span>
+                            <span className={`text-xs ${entry.status === "expired" ? "text-red-600 dark:text-red-300" : "text-yellow-700 dark:text-yellow-300"}`}>
+                              {entry.status === "expired" ? "Expired" : "Pending"}
+                            </span>
+                          </div>
+                          {entry.verification_token_expires_at && (
+                            <p className="text-xs text-muted-foreground">
+                              Expires: {new Date(entry.verification_token_expires_at).toLocaleString()}
+                            </p>
+                          )}
+                          {entry.status === "expired" && (
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="secondary"
+                              onClick={() => void handleResendVerification(entry.id)}
+                              disabled={verifiedEmailSubmitting}
+                            >
+                              {verifiedEmailSubmitting ? "Sending..." : "Resend Verification"}
+                            </Button>
+                          )}
+                        </div>
+                      ))}
                     </div>
                   )}
+                </>
+              )}
+
+              {verifiedEmailFormOpen && (
+                <form onSubmit={handleAddVerifiedEmail} className="space-y-3 rounded border p-3">
+                  <div className="space-y-1">
+                    <Label htmlFor="verified-email-input">Email</Label>
+                    <Input
+                      id="verified-email-input"
+                      type="email"
+                      value={newVerifiedEmail}
+                      onChange={(e) => setNewVerifiedEmail(e.target.value)}
+                      className="text-black dark:text-white bg-secondary"
+                      placeholder="name@example.com"
+                    />
+                  </div>
+                  <div className="flex flex-wrap justify-end gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => {
+                        setVerifiedEmailFormOpen(false)
+                        setNewVerifiedEmail("")
+                      }}
+                    >
+                      Cancel
+                    </Button>
+                    <Button type="submit" disabled={verifiedEmailSubmitting}>
+                      {verifiedEmailSubmitting ? (
+                        <>
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          Sending...
+                        </>
+                      ) : (
+                        "Send Verification"
+                      )}
+                    </Button>
+                  </div>
+                </form>
+              )}
+
+              {verifiedEmailError && (
+                <div className="flex items-center gap-2 text-red-600 text-sm p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
+                  <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+                  <span>{verifiedEmailError}</span>
                 </div>
-              </CardContent>
-            </Card>
-          )}
+              )}
+              {verifiedEmailSuccess && (
+                <p className="text-sm text-green-600">{verifiedEmailSuccess}</p>
+              )}
+            </CardContent>
+          </Card>
 
           {affiliateStatus === "rejected" && (
             <Card className="mt-6 border-red-300 dark:border-red-700">
@@ -607,64 +946,193 @@ export default function SettingsPage() {
                 </CardTitle>
               </CardHeader>
               <CardContent className="pt-4">
-                <p className="text-gray-600 dark:text-gray-400 mb-4">
-                  Your affiliate request was not approved. You can submit another request if details change.
+                <p className="text-gray-600 dark:text-gray-400">
+                  Your affiliate request was not approved. Use the form below to submit another request.
                 </p>
-                <Button
-                  variant="outline"
-                  className="bg-secondary text-[#eb6c6c] border-[#eb6c6c] hover:bg-[#eb6c6c] hover:text-white"
-                  onClick={() => setAffiliateModalOpen(true)}
-                >
-                  Submit Another Request
-                </Button>
               </CardContent>
             </Card>
           )}
 
-          <Dialog open={affiliateModalOpen} onOpenChange={setAffiliateModalOpen}>
-            <DialogContent className="sm:max-w-md">
-              <DialogHeader>
-                <DialogTitle>Request Affiliate Status</DialogTitle>
-                <DialogDescription>
-                  Tell us which organization you are requesting affiliate access for.
-                </DialogDescription>
-              </DialogHeader>
-              <form onSubmit={handleAffiliateRequest} className="space-y-4">
-                <div className="space-y-2">
-                  <Label htmlFor="affiliate-org" className="text-black dark:text-white">
-                    Organization Name
-                  </Label>
-                  <Input
-                    id="affiliate-org"
-                    value={affiliateOrg}
-                    onChange={(e) => setAffiliateOrg(e.target.value)}
-                    className="text-black dark:text-white bg-secondary"
-                    placeholder="Organization or group name"
-                  />
-                </div>
+          {proposerStatus === "rejected" && (
+            <Card className="mt-6 border-red-300 dark:border-red-700">
+              <CardHeader className="bg-red-50 dark:bg-red-900/20 rounded-t-lg">
+                <CardTitle className="text-black dark:text-white flex items-center">
+                  <XCircle className="h-5 w-5 text-red-500 mr-2" />
+                  Proposer Request Not Approved
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="pt-4">
+                <p className="text-gray-600 dark:text-gray-400">Your proposer request was not approved. Use the form below to submit another request.</p>
+              </CardContent>
+            </Card>
+          )}
 
-                {affiliateError && (
-                  <div className="flex items-center gap-2 text-red-600 text-sm p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
-                    <AlertTriangle className="h-4 w-4 flex-shrink-0" />
-                    <span>{affiliateError}</span>
+          {improverStatus === "rejected" && (
+            <Card className="mt-6 border-red-300 dark:border-red-700">
+              <CardHeader className="bg-red-50 dark:bg-red-900/20 rounded-t-lg">
+                <CardTitle className="text-black dark:text-white flex items-center">
+                  <XCircle className="h-5 w-5 text-red-500 mr-2" />
+                  Improver Request Not Approved
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="pt-4">
+                <p className="text-gray-600 dark:text-gray-400">Your improver request was not approved. Use the form below to submit another request.</p>
+              </CardContent>
+            </Card>
+          )}
+
+          {issuerStatus === "rejected" && (
+            <Card className="mt-6 border-red-300 dark:border-red-700">
+              <CardHeader className="bg-red-50 dark:bg-red-900/20 rounded-t-lg">
+                <CardTitle className="text-black dark:text-white flex items-center">
+                  <XCircle className="h-5 w-5 text-red-500 mr-2" />
+                  Issuer Request Not Approved
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="pt-4">
+                <p className="text-gray-600 dark:text-gray-400">Your issuer request was not approved. Use the form below to submit another request.</p>
+              </CardContent>
+            </Card>
+          )}
+
+          {supervisorStatus === "rejected" && (
+            <Card className="mt-6 border-red-300 dark:border-red-700">
+              <CardHeader className="bg-red-50 dark:bg-red-900/20 rounded-t-lg">
+                <CardTitle className="text-black dark:text-white flex items-center">
+                  <XCircle className="h-5 w-5 text-red-500 mr-2" />
+                  Supervisor Request Not Approved
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="pt-4">
+                <p className="text-gray-600 dark:text-gray-400">Your supervisor request was not approved. Use the form below to submit another request.</p>
+              </CardContent>
+            </Card>
+          )}
+
+          {(merchantStatus === "none" || merchantStatus === "rejected" || affiliateStatus === "none" || affiliateStatus === "rejected" || proposerStatus === "none" || proposerStatus === "rejected" || improverStatus === "none" || improverStatus === "rejected" || issuerStatus === "none" || issuerStatus === "rejected" || supervisorStatus === "none" || supervisorStatus === "rejected") && (
+            <Card className="mt-6">
+              <CardHeader>
+                <CardTitle className="text-black dark:text-white">Request Role Access</CardTitle>
+                <CardDescription>Apply for merchant, affiliate, proposer, improver, issuer, or supervisor status</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <form onSubmit={handleRoleRequest} className="space-y-4">
+                  <div className="space-y-2">
+                    <Label className="text-black dark:text-white">Role Type</Label>
+                    <Select value={roleRequestType} onValueChange={(v) => { setRoleRequestType(v as RoleRequestType); setRoleError(""); setRoleSuccess("") }}>
+                      <SelectTrigger className="text-black dark:text-white bg-secondary">
+                        <SelectValue placeholder="Select a role to request..." />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {(merchantStatus === "none" || merchantStatus === "rejected") && <SelectItem value="merchant">Merchant — accept SFLuv as payment at your business</SelectItem>}
+                        {(affiliateStatus === "none" || affiliateStatus === "rejected") && <SelectItem value="affiliate">Affiliate — create funded community events</SelectItem>}
+                        {(proposerStatus === "none" || proposerStatus === "rejected") && <SelectItem value="proposer">Proposer — build and submit community workflows</SelectItem>}
+                        {(improverStatus === "none" || improverStatus === "rejected") && <SelectItem value="improver">Improver — claim and complete workflow steps</SelectItem>}
+                        {(issuerStatus === "none" || issuerStatus === "rejected") && <SelectItem value="issuer">Issuer — issue credentials to community members</SelectItem>}
+                        {(supervisorStatus === "none" || supervisorStatus === "rejected") && <SelectItem value="supervisor">Supervisor — review workflow submissions and exports</SelectItem>}
+                      </SelectContent>
+                    </Select>
                   </div>
-                )}
 
-                <div className="flex justify-end">
-                  <Button type="submit" disabled={affiliateSubmitting}>
-                    {affiliateSubmitting ? (
-                      <>
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                        Submitting...
-                      </>
-                    ) : (
-                      "Submit Request"
-                    )}
-                  </Button>
-                </div>
-              </form>
-            </DialogContent>
-          </Dialog>
+                  {(roleRequestType === "affiliate" || roleRequestType === "proposer" || roleRequestType === "issuer" || roleRequestType === "supervisor") && (
+                    <div className="space-y-2">
+                      <Label htmlFor="role-org" className="text-black dark:text-white">Organization Name</Label>
+                      <Input id="role-org" value={roleOrg} onChange={(e) => setRoleOrg(e.target.value)} className="text-black dark:text-white bg-secondary" placeholder="Organization or group name" />
+                    </div>
+                  )}
+
+                  {(roleRequestType === "proposer" || roleRequestType === "issuer" || roleRequestType === "supervisor") && (
+                    <div className="space-y-2">
+                      <Label htmlFor="role-email" className="text-black dark:text-white">Notification Email</Label>
+                      {verifiedEmailOptions.length > 0 ? (
+                        <Select value={roleEmail} onValueChange={setRoleEmail}>
+                          <SelectTrigger id="role-email" className="text-black dark:text-white bg-secondary">
+                            <SelectValue placeholder="Select a verified email" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {verifiedEmailOptions.map((entry) => (
+                              <SelectItem key={entry.id} value={entry.email}>
+                                {entry.email}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      ) : (
+                        <div className="rounded border border-yellow-300 bg-yellow-50 p-3 text-sm text-yellow-800 dark:border-yellow-700 dark:bg-yellow-900/20 dark:text-yellow-300 space-y-2">
+                          <p>No verified emails available.</p>
+                          <Button type="button" size="sm" variant="outline" onClick={() => setActiveTab("account")}>
+                            Go to Account Emails
+                          </Button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {roleRequestType === "improver" && (
+                    <>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div className="space-y-2">
+                          <Label htmlFor="role-first-name" className="text-black dark:text-white">First Name</Label>
+                          <Input id="role-first-name" value={roleFirstName} onChange={(e) => setRoleFirstName(e.target.value)} className="text-black dark:text-white bg-secondary" />
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="role-last-name" className="text-black dark:text-white">Last Name</Label>
+                          <Input id="role-last-name" value={roleLastName} onChange={(e) => setRoleLastName(e.target.value)} className="text-black dark:text-white bg-secondary" />
+                        </div>
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="role-email-improver" className="text-black dark:text-white">Email</Label>
+                        {verifiedEmailOptions.length > 0 ? (
+                          <Select value={roleEmail} onValueChange={setRoleEmail}>
+                            <SelectTrigger id="role-email-improver" className="text-black dark:text-white bg-secondary">
+                              <SelectValue placeholder="Select a verified email" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {verifiedEmailOptions.map((entry) => (
+                                <SelectItem key={entry.id} value={entry.email}>
+                                  {entry.email}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        ) : (
+                          <div className="rounded border border-yellow-300 bg-yellow-50 p-3 text-sm text-yellow-800 dark:border-yellow-700 dark:bg-yellow-900/20 dark:text-yellow-300 space-y-2">
+                            <p>No verified emails available.</p>
+                            <Button type="button" size="sm" variant="outline" onClick={() => setActiveTab("account")}>
+                              Go to Account Emails
+                            </Button>
+                          </div>
+                        )}
+                      </div>
+                    </>
+                  )}
+
+                  {roleError && (
+                    <div className="flex items-center gap-2 text-red-600 text-sm p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
+                      <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+                      <span>{roleError}</span>
+                    </div>
+                  )}
+
+                  {roleSuccess && <p className="text-sm text-green-600">{roleSuccess}</p>}
+
+                  <div className="flex justify-end">
+                    <Button type="submit" disabled={roleSubmitting || !roleRequestType}>
+                      {roleSubmitting ? (
+                        <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Submitting...</>
+                      ) : roleRequestType === "merchant" ? (
+                        "Continue to Application"
+                      ) : (
+                        "Submit Request"
+                      )}
+                    </Button>
+                  </div>
+                </form>
+              </CardContent>
+            </Card>
+          )}
+
+
 
           {/* {user?.merchantStatus === "rejected" && (
             <Card className="mt-6 border-red-300 dark:border-red-700">
@@ -691,9 +1159,33 @@ export default function SettingsPage() {
           )} */}
         </TabsContent>
 
-        {merchantStatus == "approved" && (
-          <TabsContent value="merchant">
-            <Card>
+        {merchantStatus !== "none" && (
+          <TabsContent value="merchant" className="space-y-6">
+            <div className="space-y-2">
+              {sortedUserLocations.map((loc) => {
+                const applicationStatus = getLocationApplicationStatus(loc.approval)
+                const borderClass = applicationStatus === "approved" ? "border-green-300 dark:border-green-700" : applicationStatus === "rejected" ? "border-red-300 dark:border-red-700" : "border-yellow-300 dark:border-yellow-700"
+                const headerClass = applicationStatus === "approved" ? "bg-green-50 dark:bg-green-900/20 rounded-t-lg" : applicationStatus === "rejected" ? "bg-red-50 dark:bg-red-900/20 rounded-t-lg" : "bg-yellow-50 dark:bg-yellow-900/20 rounded-t-lg"
+                const Icon = applicationStatus === "approved" ? Check : applicationStatus === "rejected" ? XCircle : Clock
+                const iconClass = applicationStatus === "approved" ? "h-5 w-5 text-green-500 mr-2" : applicationStatus === "rejected" ? "h-5 w-5 text-red-500 mr-2" : "h-5 w-5 text-yellow-500 mr-2"
+                const statusTitle = applicationStatus === "approved" ? "Location Application Approved" : applicationStatus === "rejected" ? "Location Application Not Approved" : "Location Application Pending"
+                const statusBody = applicationStatus === "approved" ? `Your application for ${loc.name} has been approved!` : applicationStatus === "rejected" ? `Your application for ${loc.name} was not approved.` : `Your application for ${loc.name} is currently under review.`
+                return (
+                  <Card className={borderClass} key={loc.id}>
+                    <CardHeader className={headerClass}>
+                      <CardTitle className="text-black dark:text-white flex items-center">
+                        <Icon className={iconClass} />
+                        {statusTitle}
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="pt-4">
+                      <p className="text-gray-600 dark:text-gray-400">{statusBody}</p>
+                    </CardContent>
+                  </Card>
+                )
+              })}
+            </div>
+            {merchantStatus === "approved" && <Card>
               <CardHeader>
                 <CardTitle className="text-black dark:text-white">Merchant Profile</CardTitle>
                 <CardDescription>Update your business information</CardDescription>
@@ -816,6 +1308,266 @@ export default function SettingsPage() {
                     )}
                   </Button>
                 </form>
+              </CardContent>
+            </Card>}
+          </TabsContent>
+        )}
+
+        {(affiliateStatus === "pending" || affiliateStatus === "approved") && (
+          <TabsContent value="affiliate">
+            <Card className={affiliateStatus === "approved" ? "border-green-300 dark:border-green-700" : "border-yellow-300 dark:border-yellow-700"}>
+              <CardHeader className={`rounded-t-lg ${affiliateStatus === "approved" ? "bg-green-50 dark:bg-green-900/20" : "bg-yellow-50 dark:bg-yellow-900/20"}`}>
+                <CardTitle className="text-black dark:text-white flex items-center">
+                  {affiliateStatus === "approved" ? <Check className="h-5 w-5 text-green-500 mr-2" /> : <Clock className="h-5 w-5 text-yellow-500 mr-2" />}
+                  Affiliate {affiliateStatus === "approved" ? "Status Approved" : "Request Pending"}
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="pt-4">
+                {affiliateStatus === "pending" && (
+                  <p className="text-gray-600 dark:text-gray-400">Your affiliate request for {affiliate?.organization || "your organization"} is under review.</p>
+                )}
+                {affiliateStatus === "approved" && (
+                  <div className="space-y-4">
+                    <p className="text-gray-600 dark:text-gray-400">You are approved to create affiliate events for {affiliate?.organization || "your organization"}.</p>
+                    <div className="space-y-3">
+                      <Label className="text-black dark:text-white">Affiliate Logo</Label>
+                      <div className="flex items-center gap-4">
+                        <div className="h-16 w-16 rounded-xl bg-secondary border border-muted flex items-center justify-center overflow-hidden">
+                          {affiliateLogoPreview ? (
+                            <img src={affiliateLogoPreview} alt="Affiliate logo" className="h-full w-full object-contain" />
+                          ) : (
+                            <span className="text-xs text-muted-foreground">No logo</span>
+                          )}
+                        </div>
+                        <div className="space-y-2">
+                          <Input type="file" accept="image/*" onChange={handleAffiliateLogoChange} className="text-black dark:text-white bg-secondary" />
+                          <Button type="button" variant="outline" className="bg-secondary text-[#eb6c6c] border-[#eb6c6c] hover:bg-[#eb6c6c] hover:text-white" disabled={!affiliateLogoPreview || affiliateLogoSaving} onClick={handleAffiliateLogoSave}>
+                            {affiliateLogoSaving ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Saving...</> : "Save Logo"}
+                          </Button>
+                        </div>
+                      </div>
+                      {affiliateLogoError && (
+                        <div className="flex items-center gap-2 text-red-600 text-sm p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
+                          <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+                          <span>{affiliateLogoError}</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+        )}
+
+        {(proposerStatus === "pending" || proposerStatus === "approved") && (
+          <TabsContent value="proposer">
+            <Card className={proposerStatus === "approved" ? "border-green-300 dark:border-green-700" : "border-yellow-300 dark:border-yellow-700"}>
+              <CardHeader className={`rounded-t-lg ${proposerStatus === "approved" ? "bg-green-50 dark:bg-green-900/20" : "bg-yellow-50 dark:bg-yellow-900/20"}`}>
+                <CardTitle className="text-black dark:text-white flex items-center">
+                  {proposerStatus === "approved" ? <Check className="h-5 w-5 text-green-500 mr-2" /> : <Clock className="h-5 w-5 text-yellow-500 mr-2" />}
+                  Proposer {proposerStatus === "approved" ? "Status Approved" : "Request Pending"}
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="pt-4">
+                {proposerStatus === "pending" && (
+                  <p className="text-gray-600 dark:text-gray-400">Your proposer request for {proposer?.organization || "your organization"} is under review.</p>
+                )}
+                {proposerStatus === "approved" && (
+                  <>
+                    <p className="text-gray-600 dark:text-gray-400 mb-4">You are approved to create workflows for {proposer?.organization || "your organization"}.</p>
+                    <Button variant="outline" className="bg-secondary text-[#eb6c6c] border-[#eb6c6c] hover:bg-[#eb6c6c] hover:text-white" onClick={() => router.push("/proposer")}>Open Proposer Panel</Button>
+                  </>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+        )}
+
+        {(improverStatus === "pending" || improverStatus === "approved") && (
+          <TabsContent value="improver">
+            <Card className={improverStatus === "approved" ? "border-green-300 dark:border-green-700" : "border-yellow-300 dark:border-yellow-700"}>
+              <CardHeader className={`rounded-t-lg ${improverStatus === "approved" ? "bg-green-50 dark:bg-green-900/20" : "bg-yellow-50 dark:bg-yellow-900/20"}`}>
+                <CardTitle className="text-black dark:text-white flex items-center">
+                  {improverStatus === "approved" ? <Check className="h-5 w-5 text-green-500 mr-2" /> : <Clock className="h-5 w-5 text-yellow-500 mr-2" />}
+                  Improver {improverStatus === "approved" ? "Status Approved" : "Request Pending"}
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="pt-4">
+                {improverStatus === "pending" && (
+                  <p className="text-gray-600 dark:text-gray-400">Your improver request is under review.</p>
+                )}
+                {improverStatus === "approved" && (
+                  <div className="space-y-4">
+                    <p className="text-gray-600 dark:text-gray-400">You are approved as an improver and can now claim eligible workflow steps.</p>
+                    <div className="space-y-3 rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-900/30">
+                      <div className="space-y-1">
+                        <Label htmlFor="improver-primary-rewards-account" className="text-black dark:text-white">
+                          Primary Rewards Account
+                        </Label>
+                        <p className="text-xs text-gray-500 dark:text-gray-400">
+                          Workflow rewards are paid to this account. Smart Wallet 1 is used by default.
+                        </p>
+                      </div>
+                      <Select
+                        value={improverRewardsSelection || (defaultRewardsAccount || CUSTOM_REWARDS_ACCOUNT_VALUE)}
+                        onValueChange={(value) => {
+                          setImproverRewardsSelection(value)
+                          setImproverRewardsError("")
+                          setImproverRewardsSuccess("")
+                        }}
+                      >
+                        <SelectTrigger id="improver-primary-rewards-account" className="text-black dark:text-white bg-secondary">
+                          <SelectValue placeholder={rewardsWalletsLoading ? "Loading accounts..." : "Select an account"} />
+                        </SelectTrigger>
+                        <SelectContent className="bg-secondary text-black dark:text-white">
+                          {rewardsAccountOptions.map((option) => (
+                            <SelectItem key={option.value} value={option.value}>
+                              {option.label}{option.isSmartWalletZero ? " (Default)" : ""}
+                            </SelectItem>
+                          ))}
+                          <SelectItem value={CUSTOM_REWARDS_ACCOUNT_VALUE}>Custom account</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      {improverRewardsSelection === CUSTOM_REWARDS_ACCOUNT_VALUE && (
+                        <Input
+                          value={improverCustomRewardsAccount}
+                          onChange={(e) => {
+                            setImproverCustomRewardsAccount(e.target.value)
+                            setImproverRewardsError("")
+                            setImproverRewardsSuccess("")
+                          }}
+                          placeholder="0x..."
+                          className="text-black dark:text-white bg-secondary"
+                        />
+                      )}
+                      {rewardsWalletsError && (
+                        <p className="text-sm text-red-600 dark:text-red-400">{rewardsWalletsError}</p>
+                      )}
+                      {improverRewardsError && (
+                        <p className="text-sm text-red-600 dark:text-red-400">{improverRewardsError}</p>
+                      )}
+                      {improverRewardsSuccess && (
+                        <p className="text-sm text-green-600 dark:text-green-400">{improverRewardsSuccess}</p>
+                      )}
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="bg-secondary text-[#eb6c6c] border-[#eb6c6c] hover:bg-[#eb6c6c] hover:text-white"
+                        onClick={handleSaveImproverRewardsAccount}
+                        disabled={improverRewardsSaving}
+                      >
+                        {improverRewardsSaving ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Saving...</> : "Save Rewards Account"}
+                      </Button>
+                    </div>
+                    <Button variant="outline" className="bg-secondary text-[#eb6c6c] border-[#eb6c6c] hover:bg-[#eb6c6c] hover:text-white" onClick={() => router.push("/improver")}>Open Improver Panel</Button>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+        )}
+
+        {(issuerStatus === "pending" || issuerStatus === "approved") && (
+          <TabsContent value="issuer">
+            <Card className={issuerStatus === "approved" ? "border-green-300 dark:border-green-700" : "border-yellow-300 dark:border-yellow-700"}>
+              <CardHeader className={`rounded-t-lg ${issuerStatus === "approved" ? "bg-green-50 dark:bg-green-900/20" : "bg-yellow-50 dark:bg-yellow-900/20"}`}>
+                <CardTitle className="text-black dark:text-white flex items-center">
+                  {issuerStatus === "approved" ? <Check className="h-5 w-5 text-green-500 mr-2" /> : <Clock className="h-5 w-5 text-yellow-500 mr-2" />}
+                  Issuer {issuerStatus === "approved" ? "Status Approved" : "Request Pending"}
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="pt-4">
+                {issuerStatus === "pending" && (
+                  <p className="text-gray-600 dark:text-gray-400">Your issuer request for {issuer?.organization || "your organization"} is under review.</p>
+                )}
+                {issuerStatus === "approved" && (
+                  <p className="text-gray-600 dark:text-gray-400">You are approved to issue credentials on behalf of {issuer?.organization || "your organization"}.</p>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+        )}
+
+        {(supervisorStatus === "pending" || supervisorStatus === "approved") && (
+          <TabsContent value="supervisor">
+            <Card className={supervisorStatus === "approved" ? "border-green-300 dark:border-green-700" : "border-yellow-300 dark:border-yellow-700"}>
+              <CardHeader className={`rounded-t-lg ${supervisorStatus === "approved" ? "bg-green-50 dark:bg-green-900/20" : "bg-yellow-50 dark:bg-yellow-900/20"}`}>
+                <CardTitle className="text-black dark:text-white flex items-center">
+                  {supervisorStatus === "approved" ? <Check className="h-5 w-5 text-green-500 mr-2" /> : <Clock className="h-5 w-5 text-yellow-500 mr-2" />}
+                  Supervisor {supervisorStatus === "approved" ? "Status Approved" : "Request Pending"}
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="pt-4">
+                {supervisorStatus === "pending" && (
+                  <p className="text-gray-600 dark:text-gray-400">Your supervisor request for {supervisor?.organization || "your organization"} is under review.</p>
+                )}
+                {supervisorStatus === "approved" && (
+                  <div className="space-y-4">
+                    <p className="text-gray-600 dark:text-gray-400">You are approved to supervise assigned workflows for {supervisor?.organization || "your organization"}.</p>
+                    <div className="space-y-3 rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-900/30">
+                      <div className="space-y-1">
+                        <Label htmlFor="supervisor-primary-rewards-account" className="text-black dark:text-white">
+                          Primary Rewards Account
+                        </Label>
+                        <p className="text-xs text-gray-500 dark:text-gray-400">
+                          Supervisor workflow rewards are paid to this account. Smart Wallet 1 is used by default.
+                        </p>
+                      </div>
+                      <Select
+                        value={supervisorRewardsSelection || (defaultRewardsAccount || CUSTOM_REWARDS_ACCOUNT_VALUE)}
+                        onValueChange={(value) => {
+                          setSupervisorRewardsSelection(value)
+                          setSupervisorRewardsError("")
+                          setSupervisorRewardsSuccess("")
+                        }}
+                      >
+                        <SelectTrigger id="supervisor-primary-rewards-account" className="text-black dark:text-white bg-secondary">
+                          <SelectValue placeholder={rewardsWalletsLoading ? "Loading accounts..." : "Select an account"} />
+                        </SelectTrigger>
+                        <SelectContent className="bg-secondary text-black dark:text-white">
+                          {rewardsAccountOptions.map((option) => (
+                            <SelectItem key={option.value} value={option.value}>
+                              {option.label}{option.isSmartWalletZero ? " (Default)" : ""}
+                            </SelectItem>
+                          ))}
+                          <SelectItem value={CUSTOM_REWARDS_ACCOUNT_VALUE}>Custom account</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      {supervisorRewardsSelection === CUSTOM_REWARDS_ACCOUNT_VALUE && (
+                        <Input
+                          value={supervisorCustomRewardsAccount}
+                          onChange={(e) => {
+                            setSupervisorCustomRewardsAccount(e.target.value)
+                            setSupervisorRewardsError("")
+                            setSupervisorRewardsSuccess("")
+                          }}
+                          placeholder="0x..."
+                          className="text-black dark:text-white bg-secondary"
+                        />
+                      )}
+                      {rewardsWalletsError && (
+                        <p className="text-sm text-red-600 dark:text-red-400">{rewardsWalletsError}</p>
+                      )}
+                      {supervisorRewardsError && (
+                        <p className="text-sm text-red-600 dark:text-red-400">{supervisorRewardsError}</p>
+                      )}
+                      {supervisorRewardsSuccess && (
+                        <p className="text-sm text-green-600 dark:text-green-400">{supervisorRewardsSuccess}</p>
+                      )}
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="bg-secondary text-[#eb6c6c] border-[#eb6c6c] hover:bg-[#eb6c6c] hover:text-white"
+                        onClick={handleSaveSupervisorRewardsAccount}
+                        disabled={supervisorRewardsSaving}
+                      >
+                        {supervisorRewardsSaving ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Saving...</> : "Save Rewards Account"}
+                      </Button>
+                    </div>
+                    <Button variant="outline" className="bg-secondary text-[#eb6c6c] border-[#eb6c6c] hover:bg-[#eb6c6c] hover:text-white" onClick={() => router.push("/supervisor")}>Open Supervisor Panel</Button>
+                  </div>
+                )}
               </CardContent>
             </Card>
           </TabsContent>

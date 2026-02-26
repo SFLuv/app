@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import React, { useEffect, useMemo, useState } from "react"
 import { useApp } from "@/context/AppProvider"
 import { useMerchants } from "@/hooks/api/use-merchants"
 import { useToast } from "@/hooks/use-toast"
@@ -12,6 +12,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Badge } from "@/components/ui/badge"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { buildCredentialLabelMap, formatCredentialLabel } from "@/lib/credential-labels"
+import { formatStatusLabel } from "@/lib/status-labels"
+import { formatWorkflowDisplayStatus } from "@/lib/workflow-status"
 import {
   Dialog,
   DialogContent,
@@ -48,16 +51,33 @@ import {
   CalendarIcon,
   Leaf,
   AlertTriangle,
+  Search,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react"
 import { useLocation } from "@/context/LocationProvider"
 import { AuthedLocation, UpdateLocationApprovalRequest } from "@/types/location"
 import { AppWallet } from "@/lib/wallets/wallets"
 import { FAUCET_ADDRESS, SFLUV_DECIMALS, SFLUV_TOKEN } from "@/lib/constants"
 import { Affiliate } from "@/types/affiliate"
+import { Proposer } from "@/types/proposer"
+import { Improver } from "@/types/improver"
+import { Supervisor } from "@/types/supervisor"
+import { IssuerRecord, IssuerWithScopes } from "@/types/issuer"
+import {
+  AdminWorkflowListItem,
+  AdminWorkflowListResponse,
+  CredentialType,
+  GlobalCredentialType,
+  Workflow,
+  WorkflowSeriesClaimant,
+  WorkflowSeriesClaimRevokeResult,
+} from "@/types/workflow"
 import { Event, EventsStatus } from "@/types/event"
 import { AddEventModal } from "@/components/events/add-event-modal"
 import { EventModal } from "@/components/events/event-modal"
 import { DrainFaucetModal } from "@/components/events/drain-faucet-modal"
+import { WorkflowDetailsModal } from "@/components/workflows/workflow-details-modal"
 import EventCard from "@/components/events/event-card"
 import type { W9Submission } from "@/types/w9"
 
@@ -79,12 +99,28 @@ const mockPaypalAccounts = [
   },
 ]
 
+type ApprovalStatus = "pending" | "approved" | "rejected"
 
+const approvalToStatus = (approval?: boolean | null): ApprovalStatus => {
+  if (approval === true) return "approved"
+  if (approval === false) return "rejected"
+  return "pending"
+}
 
+const statusToApproval = (status: ApprovalStatus): boolean | null => {
+  if (status === "approved") return true
+  if (status === "rejected") return false
+  return null
+}
+
+type AdminWorkflowSeriesGroup = {
+  seriesId: string
+  workflows: AdminWorkflowListItem[]
+}
 
 export default function AdminPage() {
   const { user, wallets, authFetch, status } = useApp()
-  const { getAuthedMapLocations, updateLocationApproval, authedMapLocations} = useLocation()
+  const { getAuthedMapLocations, authedMapLocations} = useLocation()
   const { toast } = useToast()
 
   // Global wallet selection
@@ -121,6 +157,11 @@ export default function AdminPage() {
   // Merchant review modal state
   const [selectedLocationForReview, setselectedLocationForReview] = useState<any>(null)
   const [isLocationReviewModalOpen, setisLocationReviewModalOpen] = useState(false)
+  const [merchantStatusFilter, setMerchantStatusFilter] = useState<string>("all")
+  const [merchantSearch, setMerchantSearch] = useState<string>("")
+  const [merchantStatusDraft, setMerchantStatusDraft] = useState<ApprovalStatus>("pending")
+  const [merchantModalSaving, setMerchantModalSaving] = useState<boolean>(false)
+  const [merchantModalError, setMerchantModalError] = useState<string>("")
 
   // QR code generation state
   const [eventStartDate, setEventStartDate] = useState<Date>()
@@ -161,6 +202,104 @@ export default function AdminPage() {
   const [affiliateUpdating, setAffiliateUpdating] = useState<boolean>(false)
   const [affiliateModalError, setAffiliateModalError] = useState<string>("")
   const [eventsOwnerFilter, setEventsOwnerFilter] = useState<string>("all")
+  const [affiliateStatusFilter, setAffiliateStatusFilter] = useState<string>("all")
+  const [affiliateStatusDraft, setAffiliateStatusDraft] = useState<Affiliate["status"]>("pending")
+  const [affiliateSearch, setAffiliateSearch] = useState<string>("")
+  const [affiliatePage, setAffiliatePage] = useState<number>(0)
+
+  // Proposers
+  const [proposers, setProposers] = useState<Proposer[]>([])
+  const [proposersError, setProposersError] = useState<string>("")
+  const [proposerModalOpen, setProposerModalOpen] = useState<boolean>(false)
+  const [selectedProposer, setSelectedProposer] = useState<Proposer | null>(null)
+  const [proposerNickname, setProposerNickname] = useState<string>("")
+  const [proposerUpdating, setProposerUpdating] = useState<boolean>(false)
+  const [proposerModalError, setProposerModalError] = useState<string>("")
+  const [proposerStatusFilter, setProposerStatusFilter] = useState<string>("all")
+  const [proposerStatusDraft, setProposerStatusDraft] = useState<Proposer["status"]>("pending")
+  const [proposerSearch, setProposerSearch] = useState<string>("")
+  const [proposerPage, setProposerPage] = useState<number>(0)
+
+  // Improvers
+  const [improvers, setImprovers] = useState<Improver[]>([])
+  const [improversError, setImproversError] = useState<string>("")
+  const [improverStatusFilter, setImproverStatusFilter] = useState<string>("all")
+  const [improverModalOpen, setImproverModalOpen] = useState<boolean>(false)
+  const [selectedImprover, setSelectedImprover] = useState<Improver | null>(null)
+  const [improverStatusDraft, setImproverStatusDraft] = useState<Improver["status"]>("pending")
+  const [improverModalUpdating, setImproverModalUpdating] = useState<boolean>(false)
+  const [improverModalError, setImproverModalError] = useState<string>("")
+  const [improverSearch, setImproverSearch] = useState<string>("")
+  const [improverPage, setImproverPage] = useState<number>(0)
+
+  // Supervisors
+  const [supervisors, setSupervisors] = useState<Supervisor[]>([])
+  const [supervisorsError, setSupervisorsError] = useState<string>("")
+  const [supervisorStatusFilter, setSupervisorStatusFilter] = useState<string>("all")
+  const [supervisorModalOpen, setSupervisorModalOpen] = useState<boolean>(false)
+  const [selectedSupervisor, setSelectedSupervisor] = useState<Supervisor | null>(null)
+  const [supervisorNickname, setSupervisorNickname] = useState<string>("")
+  const [supervisorStatusDraft, setSupervisorStatusDraft] = useState<Supervisor["status"]>("pending")
+  const [supervisorModalUpdating, setSupervisorModalUpdating] = useState<boolean>(false)
+  const [supervisorModalError, setSupervisorModalError] = useState<string>("")
+  const [supervisorSearch, setSupervisorSearch] = useState<string>("")
+  const [supervisorPage, setSupervisorPage] = useState<number>(0)
+
+  // Issuer requests
+  const [issuerRequests, setIssuerRequests] = useState<IssuerRecord[]>([])
+  const [issuerRequestsError, setIssuerRequestsError] = useState<string>("")
+  const [issuerRequestSaving, setIssuerRequestSaving] = useState<Record<string, boolean>>({})
+  const [issuerRequestModalOpen, setIssuerRequestModalOpen] = useState<boolean>(false)
+  const [selectedIssuerRequest, setSelectedIssuerRequest] = useState<IssuerRecord | null>(null)
+  const [issuerRequestNickname, setIssuerRequestNickname] = useState<string>("")
+  const [issuerRequestStatusDraft, setIssuerRequestStatusDraft] = useState<string>("pending")
+  const [issuerRequestModalError, setIssuerRequestModalError] = useState<string>("")
+  const [issuerStatusFilter, setIssuerStatusFilter] = useState<string>("all")
+  const [issuerRequestSearch, setIssuerRequestSearch] = useState<string>("")
+  const [issuerRequestPage, setIssuerRequestPage] = useState<number>(0)
+
+  // Issuer credential scopes
+  const [issuers, setIssuers] = useState<IssuerWithScopes[]>([])
+  const [issuersError, setIssuersError] = useState<string>("")
+  const [issuerScopes, setIssuerScopes] = useState<CredentialType[]>([])
+  const [issuerScopePicker, setIssuerScopePicker] = useState<string>("")
+  const [issuerSaving, setIssuerSaving] = useState<boolean>(false)
+
+  // Credential types
+  const [credentialTypes, setCredentialTypes] = useState<GlobalCredentialType[]>([])
+  const [credentialTypesError, setCredentialTypesError] = useState<string>("")
+  const [newCredentialValue, setNewCredentialValue] = useState<string>("")
+  const [newCredentialLabel, setNewCredentialLabel] = useState<string>("")
+  const [credentialTypeSaving, setCredentialTypeSaving] = useState<boolean>(false)
+
+  // Workflows (admin)
+  const [adminWorkflows, setAdminWorkflows] = useState<AdminWorkflowListItem[]>([])
+  const [adminWorkflowsTotal, setAdminWorkflowsTotal] = useState<number>(0)
+  const [adminWorkflowsPage, setAdminWorkflowsPage] = useState<number>(0)
+  const [adminWorkflowsCount] = useState<number>(20)
+  const [adminWorkflowsSearch, setAdminWorkflowsSearch] = useState<string>("")
+  const [adminWorkflowsError, setAdminWorkflowsError] = useState<string>("")
+  const [adminWorkflowDetail, setAdminWorkflowDetail] = useState<Workflow | null>(null)
+  const [adminWorkflowDetailOpen, setAdminWorkflowDetailOpen] = useState<boolean>(false)
+  const [adminWorkflowDetailLoading, setAdminWorkflowDetailLoading] = useState<boolean>(false)
+  const [adminSeriesCardIndexById, setAdminSeriesCardIndexById] = useState<Record<string, number>>({})
+  const [adminDetailSeriesContext, setAdminDetailSeriesContext] = useState<{
+    seriesId: string
+    workflowIds: string[]
+    index: number
+  } | null>(null)
+  const [adminRevokeModalOpen, setAdminRevokeModalOpen] = useState<boolean>(false)
+  const [adminRevokeClaimants, setAdminRevokeClaimants] = useState<WorkflowSeriesClaimant[]>([])
+  const [adminRevokeLoading, setAdminRevokeLoading] = useState<boolean>(false)
+  const [adminRevokeSeriesId, setAdminRevokeSeriesId] = useState<string>("")
+  const [adminRevokeImproverId, setAdminRevokeImproverId] = useState<string>("")
+  const [adminRevokeError, setAdminRevokeError] = useState<string>("")
+  const [adminRevokeSubmitting, setAdminRevokeSubmitting] = useState<boolean>(false)
+
+  const credentialLabelMap = useMemo(
+    () => buildCredentialLabelMap(credentialTypes),
+    [credentialTypes],
+  )
 
   const toggleNewEventModal = () => {
     setEventsModalOpen(!eventsModalOpen)
@@ -303,9 +442,74 @@ export default function AdminPage() {
     return events.filter((event) => event.owner === eventsOwnerFilter)
   }, [events, eventsOwnerFilter])
 
-  const getAffiliates = async () => {
+  const filteredMerchants = useMemo(() => {
+    const s = merchantSearch.trim().toLowerCase()
+    return authedMapLocations.filter((location) => {
+      const matchesStatus = merchantStatusFilter === "all" || approvalToStatus(location.approval) === merchantStatusFilter
+      const matchesSearch = !s || location.name.toLowerCase().includes(s) || (location.city || "").toLowerCase().includes(s)
+      return matchesStatus && matchesSearch
+    })
+  }, [authedMapLocations, merchantStatusFilter, merchantSearch])
+
+  const filteredAffiliates = useMemo(() => {
+    if (affiliateStatusFilter === "all") return affiliates
+    return affiliates.filter((affiliate) => affiliate.status === affiliateStatusFilter)
+  }, [affiliates, affiliateStatusFilter])
+
+  const filteredProposers = useMemo(() => {
+    if (proposerStatusFilter === "all") return proposers
+    return proposers.filter((proposer) => proposer.status === proposerStatusFilter)
+  }, [proposers, proposerStatusFilter])
+
+  const filteredImprovers = useMemo(() => {
+    if (improverStatusFilter === "all") return improvers
+    return improvers.filter((improver) => improver.status === improverStatusFilter)
+  }, [improvers, improverStatusFilter])
+
+  const filteredSupervisors = useMemo(() => {
+    if (supervisorStatusFilter === "all") return supervisors
+    return supervisors.filter((supervisor) => supervisor.status === supervisorStatusFilter)
+  }, [supervisors, supervisorStatusFilter])
+
+  const filteredIssuerRequests = useMemo(() => {
+    if (issuerStatusFilter === "all") return issuerRequests
+    return issuerRequests.filter((issuer) => issuer.status === issuerStatusFilter)
+  }, [issuerRequests, issuerStatusFilter])
+
+  const groupedAdminWorkflows = useMemo<AdminWorkflowSeriesGroup[]>(() => {
+    const groups = new Map<string, AdminWorkflowSeriesGroup>()
+    adminWorkflows.forEach((workflow) => {
+      const existing = groups.get(workflow.series_id)
+      if (!existing) {
+        groups.set(workflow.series_id, {
+          seriesId: workflow.series_id,
+          workflows: [workflow],
+        })
+        return
+      }
+      groups.set(workflow.series_id, {
+        ...existing,
+        workflows: [...existing.workflows, workflow],
+      })
+    })
+
+    return Array.from(groups.values())
+      .map((group) => ({
+        ...group,
+        workflows: [...group.workflows].sort((a, b) => a.start_at - b.start_at),
+      }))
+      .sort((a, b) => {
+        const aStart = a.workflows[0]?.start_at || 0
+        const bStart = b.workflows[0]?.start_at || 0
+        return bStart - aStart
+      })
+  }, [adminWorkflows])
+
+  const getAffiliates = async (search = affiliateSearch, page = affiliatePage) => {
     try {
-      const res = await authFetch("/admin/affiliates")
+      const params = new URLSearchParams({ page: String(page), count: "20" })
+      if (search) params.set("search", search)
+      const res = await authFetch(`/admin/affiliates?${params}`)
       if (!res.ok) throw new Error()
       const data = await res.json()
       setAffiliates(data || [])
@@ -320,6 +524,7 @@ export default function AdminPage() {
     setAffiliateNickname(affiliate.nickname || "")
     setAffiliateWeeklyBalance(String(affiliate.weekly_allocation ?? affiliate.weekly_balance ?? 0))
     setAffiliateBonus(String(affiliate.one_time_balance ?? 0))
+    setAffiliateStatusDraft(affiliate.status)
     setAffiliateModalError("")
     setAffiliateModalOpen(true)
   }
@@ -340,6 +545,7 @@ export default function AdminPage() {
       )
       setSelectedAffiliate(updated)
       setAffiliateBonus(String(updated?.one_time_balance ?? 0))
+      setAffiliateStatusDraft(updated.status)
     } catch {
       setAffiliateModalError("Unable to update affiliate right now. Please try again.")
     } finally {
@@ -352,6 +558,7 @@ export default function AdminPage() {
 
     const payload: Record<string, unknown> = {
       user_id: selectedAffiliate.user_id,
+      status: affiliateStatusDraft,
     }
 
     const weekly = Number(affiliateWeeklyBalance)
@@ -372,30 +579,480 @@ export default function AdminPage() {
     await submitAffiliateUpdate(payload)
   }
 
-  const handleAffiliateStatus = async (status: Affiliate["status"]) => {
-    if (!selectedAffiliate) return
+  const getProposers = async (search = proposerSearch, page = proposerPage) => {
+    try {
+      const params = new URLSearchParams({ page: String(page), count: "20" })
+      if (search) params.set("search", search)
+      const res = await authFetch(`/admin/proposers?${params}`)
+      if (!res.ok) throw new Error()
+      const data = await res.json()
+      setProposers(data || [])
+      setProposersError("")
+    } catch {
+      setProposersError("Error fetching proposers. Please try again later.")
+    }
+  }
+
+  const openProposerModal = (proposer: Proposer) => {
+    setSelectedProposer(proposer)
+    setProposerNickname(proposer.nickname || "")
+    setProposerStatusDraft(proposer.status)
+    setProposerModalError("")
+    setProposerModalOpen(true)
+  }
+
+  const submitProposerUpdate = async (payload: Record<string, unknown>) => {
+    setProposerUpdating(true)
+    setProposerModalError("")
+    try {
+      const res = await authFetch("/admin/proposers", {
+        method: "PUT",
+        body: JSON.stringify(payload),
+      })
+      if (!res.ok) throw new Error()
+
+      const updated = await res.json()
+      setProposers((prev) =>
+        prev.map((proposer) => (proposer.user_id === updated.user_id ? updated : proposer)),
+      )
+      setSelectedProposer(updated)
+      setProposerStatusDraft(updated.status)
+    } catch {
+      setProposerModalError("Unable to update proposer right now. Please try again.")
+    } finally {
+      setProposerUpdating(false)
+    }
+  }
+
+  const handleProposerSave = async () => {
+    if (!selectedProposer) return
 
     const payload: Record<string, unknown> = {
-      user_id: selectedAffiliate.user_id,
-      status,
+      user_id: selectedProposer.user_id,
+      nickname: proposerNickname,
+      status: proposerStatusDraft,
     }
 
-    const weekly = Number(affiliateWeeklyBalance)
-    if (!Number.isNaN(weekly)) {
-      payload.weekly_balance = weekly
+    await submitProposerUpdate(payload)
+  }
+
+  const getImprovers = async (search = improverSearch, page = improverPage) => {
+    try {
+      const params = new URLSearchParams({ page: String(page), count: "20" })
+      if (search) params.set("search", search)
+      const res = await authFetch(`/admin/improvers?${params}`)
+      if (!res.ok) throw new Error()
+      const data = await res.json()
+      setImprovers(data || [])
+      setImproversError("")
+    } catch {
+      setImproversError("Error fetching improvers. Please try again later.")
     }
+  }
 
-    payload.nickname = affiliateNickname
+  const openImproverModal = (improver: Improver) => {
+    setSelectedImprover(improver)
+    setImproverStatusDraft(improver.status)
+    setImproverModalError("")
+    setImproverModalOpen(true)
+  }
 
-    const bonusValue = affiliateBonus.trim()
-    if (bonusValue !== "") {
-      const bonus = Number(bonusValue)
-      if (!Number.isNaN(bonus)) {
-        payload.one_time_balance = bonus
+  const updateImproverStatus = async (user_id: string, status: Improver["status"]) => {
+    setImproverModalUpdating(true)
+    setImproversError("")
+    setImproverModalError("")
+    try {
+      const res = await authFetch("/admin/improvers", {
+        method: "PUT",
+        body: JSON.stringify({ user_id, status }),
+      })
+      if (!res.ok) throw new Error()
+      const updated = await res.json()
+      setImprovers((prev) => prev.map((improver) => (improver.user_id === updated.user_id ? updated : improver)))
+      setSelectedImprover((prev) => (prev?.user_id === updated.user_id ? updated : prev))
+      return true
+    } catch {
+      setImproversError("Unable to update improver right now. Please try again.")
+      setImproverModalError("Unable to update improver right now. Please try again.")
+      return false
+    } finally {
+      setImproverModalUpdating(false)
+    }
+  }
+
+  const saveImproverModal = async () => {
+    if (!selectedImprover) return
+    const ok = await updateImproverStatus(selectedImprover.user_id, improverStatusDraft)
+    if (ok) setImproverModalOpen(false)
+  }
+
+  const getSupervisors = async (search = supervisorSearch, page = supervisorPage) => {
+    try {
+      const params = new URLSearchParams({ page: String(page), count: "20" })
+      if (search) params.set("search", search)
+      const res = await authFetch(`/admin/supervisors?${params}`)
+      if (!res.ok) throw new Error()
+      const data = await res.json()
+      setSupervisors(data || [])
+      setSupervisorsError("")
+    } catch {
+      setSupervisorsError("Error fetching supervisors. Please try again later.")
+    }
+  }
+
+  const openSupervisorModal = (supervisor: Supervisor) => {
+    setSelectedSupervisor(supervisor)
+    setSupervisorNickname(supervisor.nickname || "")
+    setSupervisorStatusDraft(supervisor.status)
+    setSupervisorModalError("")
+    setSupervisorModalOpen(true)
+  }
+
+  const updateSupervisor = async (payload: { user_id: string; status: Supervisor["status"]; nickname: string }) => {
+    setSupervisorModalUpdating(true)
+    setSupervisorsError("")
+    setSupervisorModalError("")
+    try {
+      const res = await authFetch("/admin/supervisors", {
+        method: "PUT",
+        body: JSON.stringify(payload),
+      })
+      if (!res.ok) throw new Error()
+      const updated = await res.json()
+      setSupervisors((prev) => prev.map((supervisor) => (supervisor.user_id === updated.user_id ? updated : supervisor)))
+      setSelectedSupervisor((prev) => (prev?.user_id === updated.user_id ? updated : prev))
+      return true
+    } catch {
+      setSupervisorsError("Unable to update supervisor right now. Please try again.")
+      setSupervisorModalError("Unable to update supervisor right now. Please try again.")
+      return false
+    } finally {
+      setSupervisorModalUpdating(false)
+    }
+  }
+
+  const saveSupervisorModal = async () => {
+    if (!selectedSupervisor) return
+    const ok = await updateSupervisor({
+      user_id: selectedSupervisor.user_id,
+      status: supervisorStatusDraft,
+      nickname: supervisorNickname,
+    })
+    if (ok) setSupervisorModalOpen(false)
+  }
+
+  const getIssuers = async () => {
+    try {
+      const res = await authFetch("/admin/issuers")
+      if (!res.ok) throw new Error()
+      const data = await res.json()
+      setIssuers(data || [])
+      setIssuersError("")
+    } catch {
+      setIssuersError("Error fetching issuers. Please try again later.")
+    }
+  }
+
+  const getIssuerRequests = async (search = issuerRequestSearch, page = issuerRequestPage) => {
+    try {
+      const params = new URLSearchParams({ page: String(page), count: "20" })
+      if (search) params.set("search", search)
+      const res = await authFetch(`/admin/issuer-requests?${params}`)
+      if (!res.ok) throw new Error()
+      const data = await res.json()
+      setIssuerRequests(data || [])
+      setIssuerRequestsError("")
+    } catch {
+      setIssuerRequestsError("Error fetching issuer requests. Please try again later.")
+    }
+  }
+
+  const updateIssuerRequest = async (user_id: string, payload: { status?: string; nickname?: string }) => {
+    setIssuerRequestSaving((prev) => ({ ...prev, [user_id]: true }))
+    setIssuerRequestsError("")
+    try {
+      const res = await authFetch("/admin/issuer-requests", {
+        method: "PUT",
+        body: JSON.stringify({ user_id, ...payload }),
+      })
+      if (!res.ok) throw new Error()
+      const updated = await res.json() as IssuerRecord
+      setIssuerRequests((prev) => prev.map((r) => (r.user_id === updated.user_id ? updated : r)))
+      setSelectedIssuerRequest((prev) => (prev?.user_id === updated.user_id ? updated : prev))
+      await getIssuers()
+      return true
+    } catch {
+      setIssuerRequestsError("Unable to update issuer request right now. Please try again.")
+      return false
+    } finally {
+      setIssuerRequestSaving((prev) => ({ ...prev, [user_id]: false }))
+    }
+  }
+
+  const openIssuerRequestModal = (req: IssuerRecord) => {
+    setSelectedIssuerRequest(req)
+    setIssuerRequestNickname(req.nickname || "")
+    setIssuerRequestStatusDraft(req.status || "pending")
+    const issuer = issuers.find((candidate) => candidate.user_id === req.user_id)
+    setIssuerScopes(issuer?.allowed_credentials || [])
+    setIssuerScopePicker("")
+    setIssuerRequestModalError("")
+    setIssuerRequestModalOpen(true)
+  }
+
+  const getCredentialTypes = async () => {
+    try {
+      const res = await authFetch("/admin/credential-types")
+      if (!res.ok) throw new Error()
+      const data = await res.json()
+      setCredentialTypes(data || [])
+      setCredentialTypesError("")
+    } catch {
+      setCredentialTypesError("Error fetching credential types. Please try again later.")
+    }
+  }
+
+  const createCredentialType = async (e: React.FormEvent) => {
+    e.preventDefault()
+    const value = newCredentialValue.trim()
+    const label = newCredentialLabel.trim()
+    if (!value || !label) return
+    setCredentialTypeSaving(true)
+    setCredentialTypesError("")
+    try {
+      const res = await authFetch("/admin/credential-types", {
+        method: "POST",
+        body: JSON.stringify({ value, label }),
+      })
+      if (!res.ok) {
+        const text = await res.text()
+        throw new Error(text || "Unable to create credential type.")
       }
+      const created = await res.json() as GlobalCredentialType
+      setCredentialTypes((prev) => [...prev, created])
+      setNewCredentialValue("")
+      setNewCredentialLabel("")
+    } catch (err) {
+      setCredentialTypesError(err instanceof Error ? err.message : "Unable to create credential type.")
+    } finally {
+      setCredentialTypeSaving(false)
+    }
+  }
+
+  const deleteCredentialType = async (credentialType: GlobalCredentialType) => {
+    if (!window.confirm(`Delete credential type "${credentialType.label}"? This does not revoke existing grants.`)) return
+    setCredentialTypesError("")
+    try {
+      const res = await authFetch(`/admin/credential-types/${encodeURIComponent(credentialType.value)}`, { method: "DELETE" })
+      if (!res.ok) throw new Error()
+      setCredentialTypes((prev) => prev.filter((ct) => ct.value !== credentialType.value))
+    } catch {
+      setCredentialTypesError("Unable to delete credential type right now. Please try again.")
+    }
+  }
+
+  const addIssuerScope = (credential: CredentialType) => {
+    setIssuerScopes((prev) => (prev.includes(credential) ? prev : [...prev, credential]))
+    setIssuerScopePicker("")
+  }
+
+  const removeIssuerScope = (credential: CredentialType) => {
+    setIssuerScopes((prev) => prev.filter((value) => value !== credential))
+  }
+
+  const saveIssuerScopes = async (user_id: string, allowedCredentials: CredentialType[], makeIssuer: boolean) => {
+    const normalizedUserId = user_id.trim()
+    if (!normalizedUserId) {
+      setIssuersError("User ID is required.")
+      return false
     }
 
-    await submitAffiliateUpdate(payload)
+    setIssuersError("")
+    setIssuerRequestModalError("")
+
+    setIssuerSaving(true)
+    try {
+      const res = await authFetch("/admin/issuers", {
+        method: "PUT",
+        body: JSON.stringify({
+          user_id: normalizedUserId,
+          allowed_credentials: allowedCredentials,
+          make_issuer: makeIssuer,
+        }),
+      })
+      if (!res.ok) {
+        const text = await res.text()
+        throw new Error(text || "Unable to update issuer scopes.")
+      }
+
+      const updated = (await res.json()) as IssuerWithScopes
+      setIssuers((prev) => {
+        const existingIndex = prev.findIndex((issuer) => issuer.user_id === updated.user_id)
+        if (existingIndex === -1) return [updated, ...prev]
+        const next = [...prev]
+        next[existingIndex] = updated
+        return next
+      })
+      setIssuersError("")
+      return true
+    } catch (error) {
+      if (error instanceof Error && error.message) {
+        setIssuersError(error.message)
+      } else {
+        setIssuersError("Unable to update issuer scopes right now. Please try again.")
+      }
+      return false
+    } finally {
+      setIssuerSaving(false)
+    }
+  }
+
+  const saveIssuerRequestModal = async () => {
+    if (!selectedIssuerRequest) return
+    setIssuerRequestModalError("")
+
+    const userId = selectedIssuerRequest.user_id
+    const nextStatus = issuerRequestStatusDraft
+
+    const requestSaved = await updateIssuerRequest(userId, {
+      nickname: issuerRequestNickname,
+      status: nextStatus,
+    })
+    if (!requestSaved) {
+      setIssuerRequestModalError("Unable to save issuer request changes.")
+      return
+    }
+
+    const scopesSaved = await saveIssuerScopes(userId, issuerScopes, nextStatus === "approved")
+    if (!scopesSaved) {
+      setIssuerRequestModalError("Issuer details were saved, but credential scopes could not be updated.")
+      return
+    }
+
+    setIssuerRequestModalOpen(false)
+  }
+
+  const getAdminWorkflows = async (search = adminWorkflowsSearch, page = adminWorkflowsPage) => {
+    try {
+      const params = new URLSearchParams({
+        search,
+        page: String(page),
+        count: String(adminWorkflowsCount),
+      })
+      const res = await authFetch(`/admin/workflows?${params}`)
+      if (!res.ok) throw new Error()
+      const data = (await res.json()) as AdminWorkflowListResponse
+      setAdminWorkflows(data.items || [])
+      setAdminWorkflowsTotal(data.total || 0)
+      setAdminWorkflowsError("")
+    } catch {
+      setAdminWorkflowsError("Unable to load workflows right now. Please try again.")
+    }
+  }
+
+  const openAdminWorkflowDetails = async (
+    workflowId: string,
+    workflow?: Workflow,
+    seriesContext?: { seriesId: string; workflowIds: string[]; index: number } | null,
+  ) => {
+    setAdminWorkflowsError("")
+    setAdminDetailSeriesContext(seriesContext || null)
+
+    if (workflow) {
+      setAdminWorkflowDetail(workflow)
+      setAdminWorkflowDetailLoading(false)
+      setAdminWorkflowDetailOpen(true)
+      return
+    }
+
+    setAdminWorkflowDetail(null)
+    setAdminWorkflowDetailLoading(true)
+    setAdminWorkflowDetailOpen(true)
+    try {
+      const res = await authFetch(`/workflows/${workflowId}`)
+      if (!res.ok) {
+        const text = await res.text()
+        throw new Error(text || "Unable to load workflow details.")
+      }
+      const data = (await res.json()) as Workflow
+      setAdminWorkflowDetail(data)
+    } catch (err) {
+      setAdminWorkflowDetailOpen(false)
+      setAdminWorkflowsError(err instanceof Error ? err.message : "Unable to load workflow details.")
+    } finally {
+      setAdminWorkflowDetailLoading(false)
+    }
+  }
+
+  const loadAdminSeriesClaimants = async (seriesId: string) => {
+    setAdminRevokeLoading(true)
+    setAdminRevokeError("")
+    try {
+      const res = await authFetch(`/admin/workflow-series/${encodeURIComponent(seriesId)}/claimants`)
+      if (!res.ok) {
+        const text = await res.text()
+        throw new Error(text || "Unable to load claimants.")
+      }
+      const data = (await res.json()) as WorkflowSeriesClaimant[]
+      setAdminRevokeClaimants(data || [])
+      setAdminRevokeImproverId((current) => current || data?.[0]?.user_id || "")
+    } catch (err) {
+      setAdminRevokeClaimants([])
+      setAdminRevokeImproverId("")
+      setAdminRevokeError(err instanceof Error ? err.message : "Unable to load claimants.")
+    } finally {
+      setAdminRevokeLoading(false)
+    }
+  }
+
+  const openAdminRevokeModal = async (seriesId: string) => {
+    setAdminRevokeSeriesId(seriesId)
+    setAdminRevokeClaimants([])
+    setAdminRevokeImproverId("")
+    setAdminRevokeError("")
+    setAdminRevokeModalOpen(true)
+    await loadAdminSeriesClaimants(seriesId)
+  }
+
+  const revokeAdminSeriesClaim = async () => {
+    if (!adminRevokeSeriesId || !adminRevokeImproverId) {
+      setAdminRevokeError("Select an improver to revoke.")
+      return
+    }
+    setAdminRevokeSubmitting(true)
+    setAdminRevokeError("")
+    try {
+      const res = await authFetch(`/admin/workflow-series/${encodeURIComponent(adminRevokeSeriesId)}/revoke-claim`, {
+        method: "POST",
+        body: JSON.stringify({
+          improver_user_id: adminRevokeImproverId,
+        }),
+      })
+      if (!res.ok) {
+        const text = await res.text()
+        throw new Error(text || "Unable to revoke claim.")
+      }
+      const result = (await res.json()) as WorkflowSeriesClaimRevokeResult
+      const skipped =
+        result.skipped_count > 0 ? ` ${result.skipped_count} started assignment(s) were not revoked.` : ""
+      toast({
+        title: "Claims revoked",
+        description: `Released ${result.released_count} assignment(s).${skipped}`,
+      })
+      setAdminRevokeModalOpen(false)
+      await getAdminWorkflows(adminWorkflowsSearch, adminWorkflowsPage)
+      if (adminWorkflowDetail?.id) {
+        const resWorkflow = await authFetch(`/workflows/${adminWorkflowDetail.id}`)
+        if (resWorkflow.ok) {
+          const refreshed = (await resWorkflow.json()) as Workflow
+          setAdminWorkflowDetail(refreshed)
+        }
+      }
+    } catch (err) {
+      setAdminRevokeError(err instanceof Error ? err.message : "Unable to revoke claim.")
+    } finally {
+      setAdminRevokeSubmitting(false)
+    }
   }
 
   useEffect(() => {
@@ -407,8 +1064,16 @@ export default function AdminPage() {
   useEffect(() => {
     getAuthedMapLocations()
     getEvents()
-    getAffiliates()
+    getIssuers()
+    getCredentialTypes()
   }, [])
+
+  useEffect(() => { getAffiliates(affiliateSearch, affiliatePage) }, [affiliateSearch, affiliatePage])
+  useEffect(() => { getProposers(proposerSearch, proposerPage) }, [proposerSearch, proposerPage])
+  useEffect(() => { getImprovers(improverSearch, improverPage) }, [improverSearch, improverPage])
+  useEffect(() => { getSupervisors(supervisorSearch, supervisorPage) }, [supervisorSearch, supervisorPage])
+  useEffect(() => { getIssuerRequests(issuerRequestSearch, issuerRequestPage) }, [issuerRequestSearch, issuerRequestPage])
+  useEffect(() => { getAdminWorkflows(adminWorkflowsSearch, adminWorkflowsPage) }, [adminWorkflowsSearch, adminWorkflowsPage])
 
   const fetchPendingW9Submissions = async () => {
     if (!user?.isAdmin) return
@@ -767,41 +1432,45 @@ export default function AdminPage() {
     }
   }
 
-  const handleApproveLocation = async (locationId: number) => {
-    const update: UpdateLocationApprovalRequest = {
-        id: locationId,
-        approval: true
-    }
-    try {
-    updateLocationApproval(update)
-      toast({
-        title: "Location #" + locationId + "Approved",
-        description: "Location has been successfully approved.",
-      })
-    } catch (error) {
-      toast({
-        title: "Approval Failed",
-        description: "Failed to approve merchant. Please try again.",
-      })
-    }
+  const openMerchantModal = (location: AuthedLocation) => {
+    setselectedLocationForReview(location)
+    setMerchantStatusDraft(approvalToStatus(location.approval))
+    setMerchantModalError("")
+    setisLocationReviewModalOpen(true)
   }
 
-  const handleRejectLocation = async (locationId: number) => {
+  const saveMerchantModal = async () => {
+    if (!selectedLocationForReview) return
+
+    setMerchantModalSaving(true)
+    setMerchantModalError("")
     const update: UpdateLocationApprovalRequest = {
-        id: locationId,
-        approval: false
+      id: selectedLocationForReview.id,
+      approval: statusToApproval(merchantStatusDraft),
     }
-     try {
-      updateLocationApproval(update)
-      toast({
-        title: "Location #" + locationId + "Rejected",
-        description: "Location has been successfully rejected.",
+
+    try {
+      const res = await authFetch("/admin/locations", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(update),
       })
-    } catch (error) {
+      if (res.status !== 201) {
+        throw new Error("Unable to update merchant status")
+      }
+
+      await getAuthedMapLocations()
       toast({
-        title: "Approval Failed",
-        description: "Failed to approve merchant. Please try again.",
+        title: "Merchant Updated",
+        description: `Status set to ${formatStatusLabel(merchantStatusDraft)}.`,
       })
+      setisLocationReviewModalOpen(false)
+    } catch {
+      setMerchantModalError("Unable to update merchant right now. Please try again.")
+    } finally {
+      setMerchantModalSaving(false)
     }
   }
 
@@ -924,6 +1593,48 @@ export default function AdminPage() {
     return `$${selectedWalletBYUSDBalance.toLocaleString()} BYUSD`
   }
 
+  const getAdminSeriesCardIndex = (group: AdminWorkflowSeriesGroup) => {
+    if (group.workflows.length === 0) return 0
+    const currentIndex = adminSeriesCardIndexById[group.seriesId] ?? 0
+    return ((currentIndex % group.workflows.length) + group.workflows.length) % group.workflows.length
+  }
+
+  const shiftAdminSeriesCardIndex = (group: AdminWorkflowSeriesGroup, direction: number) => {
+    if (group.workflows.length <= 1) return
+    setAdminSeriesCardIndexById((prev) => {
+      const currentIndex = prev[group.seriesId] ?? 0
+      const nextIndex = ((currentIndex + direction) % group.workflows.length + group.workflows.length) % group.workflows.length
+      return {
+        ...prev,
+        [group.seriesId]: nextIndex,
+      }
+    })
+  }
+
+  const openAdminSeriesWorkflowDetails = async (group: AdminWorkflowSeriesGroup, index: number) => {
+    if (group.workflows.length === 0) return
+    const safeIndex = ((index % group.workflows.length) + group.workflows.length) % group.workflows.length
+    const selectedWorkflow = group.workflows[safeIndex]
+    await openAdminWorkflowDetails(selectedWorkflow.id, undefined, {
+      seriesId: group.seriesId,
+      workflowIds: group.workflows.map((workflow) => workflow.id),
+      index: safeIndex,
+    })
+  }
+
+  const shiftAdminDetailSeriesWorkflow = async (direction: number) => {
+    if (!adminDetailSeriesContext || adminDetailSeriesContext.workflowIds.length <= 1) return
+    const nextIndex =
+      ((adminDetailSeriesContext.index + direction) % adminDetailSeriesContext.workflowIds.length +
+        adminDetailSeriesContext.workflowIds.length) %
+      adminDetailSeriesContext.workflowIds.length
+    const nextWorkflowId = adminDetailSeriesContext.workflowIds[nextIndex]
+    await openAdminWorkflowDetails(nextWorkflowId, undefined, {
+      ...adminDetailSeriesContext,
+      index: nextIndex,
+    })
+  }
+
   if(status === "loading") {
     return (
       <div className="flex items-center justify-center min-h-[70vh]">
@@ -933,46 +1644,85 @@ export default function AdminPage() {
   }
 
   return (
-    <div className="container mx-auto p-4 space-y-6">
+    <div className="container mx-auto space-y-6 px-3 py-4 sm:p-4">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold">Admin Panel</h1>
+          <h1 className="text-2xl font-bold sm:text-3xl">Admin Panel</h1>
           <p className="text-muted-foreground">Manage tokens and merchant approvals</p>
         </div>
       </div>
 
-      <Tabs defaultValue="merchants" className="space-y-6">
-        <TabsList className="grid w-full grid-cols-4">
-          {/* <TabsTrigger value="tokens">Token Management</TabsTrigger> */}
-          <TabsTrigger value="merchants" className="relative">
-            Merchant Approvals
-            {pendingLocations.length > 0 && (
-              <Badge variant="destructive" className="ml-2 h-5 w-5 rounded-full p-1.5 text-xs">
-                {pendingLocations.length}
-              </Badge>
-            )}
-          </TabsTrigger>
-          <TabsTrigger value="w9" className="relative">
-            W9 Approvals
-            {pendingW9Submissions.length > 0 && (
-              <Badge variant="destructive" className="ml-2 h-5 w-5 rounded-full p-1.5 text-xs">
-                {pendingW9Submissions.length}
-              </Badge>
-            )}
-          </TabsTrigger>
-          <TabsTrigger value="affiliates" className="relative">
-            Affiliates
-            {affiliates.filter((affiliate) => affiliate.status === "pending").length > 0 && (
-              <Badge variant="destructive" className="ml-2 h-5 w-5 rounded-full p-1.5 text-xs">
-                {affiliates.filter((affiliate) => affiliate.status === "pending").length}
-              </Badge>
-            )}
-          </TabsTrigger>
-          <TabsTrigger value="events" className="relative">
-            Events
-          </TabsTrigger>
-          {/* <TabsTrigger value="qrcodes">QR Codes</TabsTrigger> */}
-        </TabsList>
+      <Tabs defaultValue="merchants" className="space-y-4 lg:space-y-0">
+        <div className="grid gap-4 lg:grid-cols-[280px_minmax(0,1fr)] lg:items-start lg:gap-6">
+          <TabsList className="h-fit w-full flex-col items-stretch gap-2 rounded-xl bg-secondary p-3 lg:sticky lg:top-4 lg:min-w-[280px]">
+            <TabsTrigger value="events" className="w-full justify-between px-3 py-2">
+              <span>Events</span>
+            </TabsTrigger>
+            <TabsTrigger value="w9" className="w-full justify-between px-3 py-2">
+              <span>W9 Approvals</span>
+              {pendingW9Submissions.length > 0 && (
+                <Badge variant="destructive" className="h-5 min-w-5 rounded-full px-1.5 text-xs">
+                  {pendingW9Submissions.length}
+                </Badge>
+              )}
+            </TabsTrigger>
+            <TabsTrigger value="merchants" className="w-full justify-between px-3 py-2">
+              <span>Merchants</span>
+              {pendingLocations.length > 0 && (
+                <Badge variant="destructive" className="h-5 min-w-5 rounded-full px-1.5 text-xs">
+                  {pendingLocations.length}
+                </Badge>
+              )}
+            </TabsTrigger>
+            <TabsTrigger value="affiliates" className="w-full justify-between px-3 py-2">
+              <span>Affiliates</span>
+              {affiliates.filter((affiliate) => affiliate.status === "pending").length > 0 && (
+                <Badge variant="destructive" className="h-5 min-w-5 rounded-full px-1.5 text-xs">
+                  {affiliates.filter((affiliate) => affiliate.status === "pending").length}
+                </Badge>
+              )}
+            </TabsTrigger>
+            <TabsTrigger value="proposers" className="w-full justify-between px-3 py-2">
+              <span>Proposers</span>
+              {proposers.filter((proposer) => proposer.status === "pending").length > 0 && (
+                <Badge variant="destructive" className="h-5 min-w-5 rounded-full px-1.5 text-xs">
+                  {proposers.filter((proposer) => proposer.status === "pending").length}
+                </Badge>
+              )}
+            </TabsTrigger>
+            <TabsTrigger value="improvers" className="w-full justify-between px-3 py-2">
+              <span>Improvers</span>
+              {improvers.filter((improver) => improver.status === "pending").length > 0 && (
+                <Badge variant="destructive" className="h-5 min-w-5 rounded-full px-1.5 text-xs">
+                  {improvers.filter((improver) => improver.status === "pending").length}
+                </Badge>
+              )}
+            </TabsTrigger>
+            <TabsTrigger value="supervisors" className="w-full justify-between px-3 py-2">
+              <span>Supervisors</span>
+              {supervisors.filter((supervisor) => supervisor.status === "pending").length > 0 && (
+                <Badge variant="destructive" className="h-5 min-w-5 rounded-full px-1.5 text-xs">
+                  {supervisors.filter((supervisor) => supervisor.status === "pending").length}
+                </Badge>
+              )}
+            </TabsTrigger>
+            <TabsTrigger value="workflows" className="w-full justify-between px-3 py-2">
+              <span>Workflows</span>
+            </TabsTrigger>
+            <TabsTrigger value="issuers" className="w-full justify-between px-3 py-2">
+              <span>Issuers</span>
+              {issuerRequests.filter((r) => r.status === "pending").length > 0 && (
+                <Badge variant="destructive" className="h-5 min-w-5 rounded-full px-1.5 text-xs">
+                  {issuerRequests.filter((r) => r.status === "pending").length}
+                </Badge>
+              )}
+            </TabsTrigger>
+            <TabsTrigger value="credential-types" className="w-full justify-between px-3 py-2">
+              <span>Credential Types</span>
+            </TabsTrigger>
+          </TabsList>
+
+          <div className="min-w-0">
 
         <TabsContent value="tokens" className="space-y-6">
           {/* Global Wallet Selection */}
@@ -1163,11 +1913,11 @@ export default function AdminPage() {
                     </Select>
                     <Dialog open={isPaypalModalOpen} onOpenChange={setIsPaypalModalOpen}>
                       <DialogTrigger asChild>
-                        <Button variant="outline" size="icon">
+                        <Button variant="outline" size="icon" className="shrink-0">
                           <Plus className="h-4 w-4" />
                         </Button>
                       </DialogTrigger>
-                      <DialogContent className="sm:max-w-[500px]">
+                      <DialogContent className="w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] max-h-[90vh] overflow-y-auto sm:max-w-[500px]">
                         <DialogHeader>
                           <DialogTitle>Connect PayPal Account</DialogTitle>
                           <DialogDescription>
@@ -1175,7 +1925,7 @@ export default function AdminPage() {
                           </DialogDescription>
                         </DialogHeader>
                         <div className="grid gap-4 py-4 max-h-[60vh] overflow-y-auto">
-                          <div className="grid grid-cols-2 gap-4">
+                          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                             <div className="space-y-2">
                               <Label htmlFor="paypal-first-name">
                                 First Name <span className="text-red-500">*</span>
@@ -1282,8 +2032,9 @@ export default function AdminPage() {
                             </div>
                           </div>
                         </div>
-                        <DialogFooter>
+                        <DialogFooter className="gap-2">
                           <Button
+                            className="w-full sm:w-auto"
                             variant="outline"
                             onClick={() => {
                               setIsPaypalModalOpen(false)
@@ -1300,7 +2051,7 @@ export default function AdminPage() {
                           >
                             Cancel
                           </Button>
-                          <Button onClick={handleConnectPaypalAccount} disabled={isConnectingPaypal}>
+                          <Button className="w-full sm:w-auto" onClick={handleConnectPaypalAccount} disabled={isConnectingPaypal}>
                             {isConnectingPaypal ? (
                               <>
                                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -1367,30 +2118,58 @@ export default function AdminPage() {
             <CardHeader className="pb-6">
               <CardTitle className="flex items-center gap-2 text-xl">
                 <Users className="h-6 w-6" />
-                Locations Pending Approval
+                Manage Merchants
               </CardTitle>
-              <CardDescription className="text-base mt-2">Review and approve location applications</CardDescription>
-              <div className="flex items-center gap-2 mt-3">
-                <Badge variant="destructive" className="text-sm px-3 py-1">
-                  {pendingLocations.length} Pending
-                </Badge>
-                <span className="text-sm text-muted-foreground">applications awaiting review</span>
+              <CardDescription className="text-base mt-2">Review and manage merchant application status</CardDescription>
+              <div className="mt-4 flex flex-col gap-3">
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    placeholder="Search merchants..."
+                    value={merchantSearch}
+                    onChange={(e) => setMerchantSearch(e.target.value)}
+                    className="pl-9"
+                  />
+                </div>
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+                  <div className="text-sm text-muted-foreground">
+                    Showing {filteredMerchants.length} of {authedMapLocations.length} merchant applications
+                  </div>
+                  <div className="w-full sm:w-[220px] space-y-1">
+                    <Label className="text-xs text-muted-foreground">Filter by status</Label>
+                    <Select value={merchantStatusFilter} onValueChange={setMerchantStatusFilter}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="All statuses" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All</SelectItem>
+                        <SelectItem value="approved">Approved</SelectItem>
+                        <SelectItem value="pending">Pending</SelectItem>
+                        <SelectItem value="rejected">Rejected</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
               </div>
             </CardHeader>
             <CardContent>
-              {pendingLocations.length === 0 ? (
+              {filteredMerchants.length === 0 ? (
                 <div className="text-center py-8">
                   <Building2 className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-                  <h3 className="text-lg font-medium">No Pending Locations</h3>
-                  <p className="text-muted-foreground">All location applications have been processed.</p>
+                  <h3 className="text-lg font-medium">No Merchant Applications</h3>
+                  <p className="text-muted-foreground">No merchants match the selected status filter.</p>
                 </div>
               ) : (
                 <div className="space-y-4">
-                  {pendingLocations.map((location) => (
-                    <Card key={location.id} className="border-l-4 border-l-yellow-500">
+                  {filteredMerchants.map((location) => (
+                    <Card
+                      key={location.id}
+                      className="cursor-pointer hover:shadow-md transition-shadow"
+                      onClick={() => openMerchantModal(location)}
+                    >
                       <CardContent className="p-4">
-                        <div className="flex items-start justify-between gap-4">
-                          <div className="flex items-start gap-4 flex-1">
+                        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                          <div className="flex min-w-0 flex-1 items-start gap-4">
                             <Avatar className="h-12 w-12">
                               <AvatarImage src={location.image_url || "/placeholder.svg"} alt={location.name} />
                               <AvatarFallback>
@@ -1408,7 +2187,7 @@ export default function AdminPage() {
                               <div className="grid gap-1 text-sm">
                                 <div className="flex items-center gap-2">
                                   <Mail className="h-3 w-3" />
-                                  <span>{location.email}</span>
+                                  <span className="break-all">{location.email}</span>
                                 </div>
                                 <div className="flex items-center gap-2">
                                   <Phone className="h-3 w-3" />
@@ -1416,7 +2195,7 @@ export default function AdminPage() {
                                 </div>
                                 <div className="flex items-center gap-2">
                                   <MapPin className="h-3 w-3" />
-                                  <span>
+                                  <span className="break-words">
                                     {location.street}, {location.city}, {location.state}{" "}
                                     {location.zip}
                                   </span>
@@ -1424,42 +2203,17 @@ export default function AdminPage() {
                               </div>
                             </div>
                           </div>
-                          <div className="flex gap-2">
-                            <Button
-                              size="sm"
-                              onClick={() => handleApproveLocation(location.id)}
-                              disabled={!pendingLocations.includes(location)}
-                            >
-                              {!pendingLocations.includes(location) ? (
-                                <Loader2 className="h-4 w-4 animate-spin" />
-                              ) : (
-                                <Check className="h-4 w-4" />
-                              )}
-                              Approve
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => handleRejectLocation(location.id)}
-                              disabled={!pendingLocations.includes(location)}
-                            >
-                              {!pendingLocations.includes(location) ? (
-                                <Loader2 className="h-4 w-4 animate-spin" />
-                              ) : (
-                                <X className="h-4 w-4" />
-                              )}
-                              Reject
-                            </Button>
-                            <Button
-                              size="sm"
-                              onClick={() => {
-                                setselectedLocationForReview(location)
-                                setisLocationReviewModalOpen(true)
-                              }}
-                            >
-                              Review Application
-                            </Button>
-                          </div>
+                          <Badge
+                            variant={
+                              approvalToStatus(location.approval) === "approved"
+                                ? "default"
+                                : approvalToStatus(location.approval) === "rejected"
+                                  ? "destructive"
+                                  : "outline"
+                            }
+                          >
+                            {formatStatusLabel(approvalToStatus(location.approval))}
+                          </Badge>
                         </div>
                       </CardContent>
                     </Card>
@@ -1478,7 +2232,7 @@ export default function AdminPage() {
                 W9 Submissions Pending Approval
               </CardTitle>
               <CardDescription className="text-base mt-2">Review and approve W9 submissions</CardDescription>
-              <div className="flex items-center gap-2 mt-3">
+              <div className="mt-3 flex flex-wrap items-center gap-2">
                 <Badge variant="destructive" className="text-sm px-3 py-1">
                   {pendingW9Submissions.length} Pending
                 </Badge>
@@ -1501,7 +2255,7 @@ export default function AdminPage() {
                   {pendingW9Submissions.map((submission) => (
                     <Card key={submission.id} className="border-l-4 border-l-yellow-500">
                       <CardContent className="p-4">
-                        <div className="flex items-start justify-between gap-4">
+                        <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
                           <div className="flex-1 space-y-2">
                             <div>
                               <h4 className="font-semibold">Wallet</h4>
@@ -1510,7 +2264,7 @@ export default function AdminPage() {
                             <div className="grid gap-1 text-sm">
                               <div className="flex items-center gap-2">
                                 <Mail className="h-3 w-3" />
-                                <span>{submission.email}</span>
+                                <span className="break-all">{submission.email}</span>
                               </div>
                               {submission.user_contact_email && submission.user_contact_email !== submission.email && (
                                 <div className="flex items-center gap-2 text-yellow-700">
@@ -1526,12 +2280,12 @@ export default function AdminPage() {
                               </div>
                             </div>
                           </div>
-                          <div className="flex gap-2">
-                            <Button size="sm" onClick={() => handleApproveW9(submission.id)}>
+                          <div className="flex w-full flex-wrap gap-2 md:w-auto md:justify-end">
+                            <Button className="w-full sm:w-auto" size="sm" onClick={() => handleApproveW9(submission.id)}>
                               <Check className="h-4 w-4" />
                               Approve
                             </Button>
-                            <Button size="sm" variant="outline" onClick={() => handleRejectW9(submission.id)}>
+                            <Button className="w-full sm:w-auto" size="sm" variant="outline" onClick={() => handleRejectW9(submission.id)}>
                               <X className="h-4 w-4" />
                               Reject
                             </Button>
@@ -1555,12 +2309,12 @@ export default function AdminPage() {
           )}
 
           <Dialog open={affiliateModalOpen} onOpenChange={setAffiliateModalOpen}>
-            <DialogContent className="sm:max-w-lg">
+            <DialogContent className="w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] max-h-[90vh] overflow-y-auto sm:max-w-lg">
               <DialogHeader>
                 <DialogTitle>Manage Affiliate</DialogTitle>
                 <DialogDescription>
                   {selectedAffiliate?.nickname || selectedAffiliate?.organization || "Affiliate"} ·{" "}
-                  {selectedAffiliate?.status || "pending"}
+                  {formatStatusLabel(selectedAffiliate?.status || "pending")}
                 </DialogDescription>
               </DialogHeader>
               {selectedAffiliate && (
@@ -1595,6 +2349,22 @@ export default function AdminPage() {
                       Current one-time balance: {selectedAffiliate.one_time_balance}
                     </p>
                   </div>
+                  <div className="space-y-2">
+                    <Label>Change Approval Status</Label>
+                    <Select
+                      value={affiliateStatusDraft}
+                      onValueChange={(value) => setAffiliateStatusDraft(value as Affiliate["status"])}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="pending">Pending</SelectItem>
+                        <SelectItem value="approved">Approved</SelectItem>
+                        <SelectItem value="rejected">Rejected</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
 
                   {affiliateModalError && (
                     <div className="flex items-center gap-2 text-red-600 text-sm p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
@@ -1603,27 +2373,9 @@ export default function AdminPage() {
                     </div>
                   )}
 
-                  <div className="flex flex-wrap gap-2 justify-end">
-                    {selectedAffiliate.status === "pending" && (
-                      <>
-                        <Button
-                          variant="outline"
-                          disabled={affiliateUpdating}
-                          onClick={() => handleAffiliateStatus("rejected")}
-                        >
-                          <X className="mr-2 h-4 w-4" />
-                          Reject
-                        </Button>
-                        <Button
-                          disabled={affiliateUpdating}
-                          onClick={() => handleAffiliateStatus("approved")}
-                        >
-                          <Check className="mr-2 h-4 w-4" />
-                          Approve
-                        </Button>
-                      </>
-                    )}
+                  <div className="flex justify-end">
                     <Button
+                      className="w-full sm:w-auto"
                       variant="secondary"
                       disabled={affiliateUpdating}
                       onClick={handleAffiliateSave}
@@ -1644,22 +2396,52 @@ export default function AdminPage() {
               </CardTitle>
               <CardDescription>Approve requests and manage affiliate balances</CardDescription>
             </CardHeader>
-            <CardContent>
-              {affiliates.length === 0 ? (
+            <CardContent className="space-y-4">
+              <div className="flex flex-col gap-3">
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    placeholder="Search affiliates..."
+                    value={affiliateSearch}
+                    onChange={(e) => { setAffiliateSearch(e.target.value); setAffiliatePage(0) }}
+                    className="pl-9"
+                  />
+                </div>
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+                  <div className="text-sm text-muted-foreground">
+                    Showing {filteredAffiliates.length} affiliates
+                  </div>
+                  <div className="w-full sm:w-[220px] space-y-1">
+                    <Label className="text-xs text-muted-foreground">Filter by status</Label>
+                    <Select value={affiliateStatusFilter} onValueChange={setAffiliateStatusFilter}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="All statuses" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All</SelectItem>
+                        <SelectItem value="approved">Approved</SelectItem>
+                        <SelectItem value="pending">Pending</SelectItem>
+                        <SelectItem value="rejected">Rejected</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+              </div>
+              {filteredAffiliates.length === 0 ? (
                 <div className="text-center py-8">
                   <Users className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-                  <h3 className="text-lg font-medium">No Affiliate Requests</h3>
-                  <p className="text-muted-foreground">Affiliate requests will appear here.</p>
+                  <h3 className="text-lg font-medium">No Affiliates Found</h3>
+                  <p className="text-muted-foreground">No affiliates match the selected filter.</p>
                 </div>
               ) : (
                 <div className="space-y-4">
-                  {affiliates.map((affiliate) => (
+                  {filteredAffiliates.map((affiliate) => (
                     <Card
                       key={affiliate.user_id}
                       className="cursor-pointer hover:shadow-md transition-shadow"
                       onClick={() => openAffiliateModal(affiliate)}
                     >
-                      <CardContent className="p-4 flex items-center justify-between gap-4">
+                      <CardContent className="flex flex-col gap-2 p-4 sm:flex-row sm:items-center sm:justify-between">
                         <div>
                           <p className="font-medium text-black dark:text-white">
                             {affiliate.nickname || affiliate.organization}
@@ -1668,12 +2450,955 @@ export default function AdminPage() {
                             <p className="text-xs text-muted-foreground">{affiliate.organization}</p>
                           )}
                         </div>
-                        {affiliate.status === "pending" && <Badge variant="outline">Pending</Badge>}
+                        <Badge variant={affiliate.status === "approved" ? "default" : affiliate.status === "rejected" ? "destructive" : "outline"}>
+                          {formatStatusLabel(affiliate.status)}
+                        </Badge>
                       </CardContent>
                     </Card>
                   ))}
                 </div>
               )}
+              <div className="flex items-center justify-between pt-2">
+                <Button variant="outline" size="sm" onClick={() => setAffiliatePage((p) => Math.max(0, p - 1))} disabled={affiliatePage === 0}>
+                  <ChevronLeft className="h-4 w-4" />Previous
+                </Button>
+                <span className="text-sm text-muted-foreground">Page {affiliatePage + 1}</span>
+                <Button variant="outline" size="sm" onClick={() => setAffiliatePage((p) => p + 1)} disabled={affiliates.length < 20}>
+                  Next<ChevronRight className="h-4 w-4" />
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="proposers" className="space-y-6">
+          {proposersError && (
+            <div className="flex items-center gap-2 text-red-600 text-sm p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
+              <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+              <span>{proposersError}</span>
+            </div>
+          )}
+
+          <Dialog open={proposerModalOpen} onOpenChange={setProposerModalOpen}>
+            <DialogContent className="w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] max-h-[90vh] overflow-y-auto sm:max-w-lg">
+              <DialogHeader>
+                <DialogTitle>Manage Proposer</DialogTitle>
+                <DialogDescription>
+                  {selectedProposer?.nickname || selectedProposer?.organization || "Proposer"} ·{" "}
+                  {formatStatusLabel(selectedProposer?.status || "pending")}
+                </DialogDescription>
+              </DialogHeader>
+              {selectedProposer && (
+                <div className="space-y-4">
+                  <div className="space-y-2">
+                    <Label>Nickname</Label>
+                    <Input
+                      value={proposerNickname}
+                      onChange={(e) => setProposerNickname(e.target.value)}
+                      placeholder="Display name"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Notification Email</Label>
+                    <Input value={selectedProposer.email} disabled />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Change Approval Status</Label>
+                    <Select
+                      value={proposerStatusDraft}
+                      onValueChange={(value) => setProposerStatusDraft(value as Proposer["status"])}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="pending">Pending</SelectItem>
+                        <SelectItem value="approved">Approved</SelectItem>
+                        <SelectItem value="rejected">Rejected</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  {proposerModalError && (
+                    <div className="flex items-center gap-2 text-red-600 text-sm p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
+                      <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+                      <span>{proposerModalError}</span>
+                    </div>
+                  )}
+
+                  <div className="flex justify-end">
+                    <Button
+                      className="w-full sm:w-auto"
+                      variant="secondary"
+                      disabled={proposerUpdating}
+                      onClick={handleProposerSave}
+                    >
+                      {proposerUpdating ? "Saving..." : "Save Changes"}
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </DialogContent>
+          </Dialog>
+
+          <Card>
+            <CardHeader className="pb-4">
+              <CardTitle className="flex items-center gap-2 text-xl">
+                <Users className="h-5 w-5" />
+                Manage Proposers
+              </CardTitle>
+              <CardDescription>Approve proposer requests and manage proposer access.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex flex-col gap-3">
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    placeholder="Search proposers..."
+                    value={proposerSearch}
+                    onChange={(e) => { setProposerSearch(e.target.value); setProposerPage(0) }}
+                    className="pl-9"
+                  />
+                </div>
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+                  <div className="text-sm text-muted-foreground">
+                    Showing {filteredProposers.length} proposers
+                  </div>
+                  <div className="w-full sm:w-[220px] space-y-1">
+                    <Label className="text-xs text-muted-foreground">Filter by status</Label>
+                    <Select value={proposerStatusFilter} onValueChange={setProposerStatusFilter}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="All statuses" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All</SelectItem>
+                        <SelectItem value="approved">Approved</SelectItem>
+                        <SelectItem value="pending">Pending</SelectItem>
+                        <SelectItem value="rejected">Rejected</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+              </div>
+              {filteredProposers.length === 0 ? (
+                <div className="text-center py-8">
+                  <Users className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+                  <h3 className="text-lg font-medium">No Proposers Found</h3>
+                  <p className="text-muted-foreground">No proposers match the selected filter.</p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {filteredProposers.map((proposer) => (
+                    <Card
+                      key={proposer.user_id}
+                      className="cursor-pointer hover:shadow-md transition-shadow"
+                      onClick={() => openProposerModal(proposer)}
+                    >
+                      <CardContent className="flex flex-col gap-2 p-4 sm:flex-row sm:items-center sm:justify-between">
+                        <div>
+                          <p className="font-medium text-black dark:text-white">
+                            {proposer.nickname || proposer.organization}
+                          </p>
+                          <p className="text-xs text-muted-foreground">{proposer.organization}</p>
+                          <p className="text-xs text-muted-foreground">{proposer.email}</p>
+                        </div>
+                        <Badge variant={proposer.status === "approved" ? "default" : proposer.status === "rejected" ? "destructive" : "outline"}>
+                          {formatStatusLabel(proposer.status)}
+                        </Badge>
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+              )}
+              <div className="flex items-center justify-between pt-2">
+                <Button variant="outline" size="sm" onClick={() => setProposerPage((p) => Math.max(0, p - 1))} disabled={proposerPage === 0}>
+                  <ChevronLeft className="h-4 w-4" />Previous
+                </Button>
+                <span className="text-sm text-muted-foreground">Page {proposerPage + 1}</span>
+                <Button variant="outline" size="sm" onClick={() => setProposerPage((p) => p + 1)} disabled={proposers.length < 20}>
+                  Next<ChevronRight className="h-4 w-4" />
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="improvers" className="space-y-6">
+          {improversError && (
+            <div className="flex items-center gap-2 text-red-600 text-sm p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
+              <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+              <span>{improversError}</span>
+            </div>
+          )}
+
+          <Dialog open={improverModalOpen} onOpenChange={setImproverModalOpen}>
+            <DialogContent className="w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] max-h-[90vh] overflow-y-auto sm:max-w-lg">
+              <DialogHeader>
+                <DialogTitle>Manage Improver</DialogTitle>
+                <DialogDescription>
+                  Update approval status for this improver request.
+                </DialogDescription>
+              </DialogHeader>
+              {selectedImprover && (
+                <div className="space-y-4">
+                  <div className="space-y-1">
+                    <Label>Name</Label>
+                    <Input value={`${selectedImprover.first_name} ${selectedImprover.last_name}`} disabled />
+                  </div>
+                  <div className="space-y-1">
+                    <Label>Email</Label>
+                    <Input value={selectedImprover.email} disabled />
+                  </div>
+                  <div className="space-y-1">
+                    <Label>User ID</Label>
+                    <Input value={selectedImprover.user_id} disabled className="font-mono text-xs" />
+                  </div>
+                  <div className="space-y-1">
+                    <Label>Change Approval Status</Label>
+                    <Select
+                      value={improverStatusDraft}
+                      onValueChange={(value) => setImproverStatusDraft(value as Improver["status"])}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="pending">Pending</SelectItem>
+                        <SelectItem value="approved">Approved</SelectItem>
+                        <SelectItem value="rejected">Rejected</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  {improverModalError && (
+                    <div className="flex items-center gap-2 text-red-600 text-sm p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
+                      <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+                      <span>{improverModalError}</span>
+                    </div>
+                  )}
+
+                  <div className="flex justify-end">
+                    <Button
+                      className="w-full sm:w-auto"
+                      onClick={saveImproverModal}
+                      disabled={improverModalUpdating}
+                    >
+                      {improverModalUpdating ? "Saving..." : "Save Changes"}
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </DialogContent>
+          </Dialog>
+
+          <Card>
+            <CardHeader className="pb-4">
+              <CardTitle className="flex items-center gap-2 text-xl">
+                <Users className="h-5 w-5" />
+                Manage Improvers
+              </CardTitle>
+              <CardDescription>Approve or reject improver access requests</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+                <div className="relative flex-1">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    placeholder="Search improvers..."
+                    value={improverSearch}
+                    onChange={(e) => { setImproverSearch(e.target.value); setImproverPage(0) }}
+                    className="pl-9"
+                  />
+                </div>
+                <div className="w-full sm:w-[220px] space-y-1">
+                  <Label className="text-xs text-muted-foreground">Filter by status</Label>
+                  <Select value={improverStatusFilter} onValueChange={setImproverStatusFilter}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="All statuses" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All</SelectItem>
+                      <SelectItem value="approved">Approved</SelectItem>
+                      <SelectItem value="pending">Pending</SelectItem>
+                      <SelectItem value="rejected">Rejected</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              {filteredImprovers.length === 0 ? (
+                <div className="text-center py-8">
+                  <Users className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+                  <h3 className="text-lg font-medium">No Improvers Found</h3>
+                  <p className="text-muted-foreground">No improvers match the selected status filter.</p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {filteredImprovers.map((improver) => (
+                    <Card
+                      key={improver.user_id}
+                      className="cursor-pointer hover:shadow-md transition-shadow"
+                      onClick={() => openImproverModal(improver)}
+                    >
+                      <CardContent className="p-4">
+                        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                          <div>
+                            <p className="font-medium text-black dark:text-white">
+                              {improver.first_name} {improver.last_name}
+                            </p>
+                            <p className="text-sm text-muted-foreground">{improver.email}</p>
+                            <p className="text-xs text-muted-foreground break-all">User: {improver.user_id}</p>
+                          </div>
+                          <Badge variant={improver.status === "approved" ? "default" : improver.status === "rejected" ? "destructive" : "outline"}>
+                            {formatStatusLabel(improver.status)}
+                          </Badge>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+              )}
+              <div className="flex items-center justify-between pt-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setImproverPage((p) => Math.max(0, p - 1))}
+                  disabled={improverPage === 0}
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                  Previous
+                </Button>
+                <span className="text-sm text-muted-foreground">Page {improverPage + 1}</span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setImproverPage((p) => p + 1)}
+                  disabled={improvers.length < 20}
+                >
+                  Next
+                  <ChevronRight className="h-4 w-4" />
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="supervisors" className="space-y-6">
+          {supervisorsError && (
+            <div className="flex items-center gap-2 text-red-600 text-sm p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
+              <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+              <span>{supervisorsError}</span>
+            </div>
+          )}
+
+          <Dialog open={supervisorModalOpen} onOpenChange={setSupervisorModalOpen}>
+            <DialogContent className="w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] max-h-[90vh] overflow-y-auto sm:max-w-lg">
+              <DialogHeader>
+                <DialogTitle>Manage Supervisor</DialogTitle>
+                <DialogDescription>
+                  Update approval status and nickname for this supervisor request.
+                </DialogDescription>
+              </DialogHeader>
+              {selectedSupervisor && (
+                <div className="space-y-4">
+                  <div className="space-y-1">
+                    <Label>Organization</Label>
+                    <Input value={selectedSupervisor.organization} disabled />
+                  </div>
+                  <div className="space-y-1">
+                    <Label>Email</Label>
+                    <Input value={selectedSupervisor.email} disabled />
+                  </div>
+                  <div className="space-y-1">
+                    <Label>User ID</Label>
+                    <Input value={selectedSupervisor.user_id} disabled className="font-mono text-xs" />
+                  </div>
+                  <div className="space-y-1">
+                    <Label>Nickname</Label>
+                    <Input
+                      value={supervisorNickname}
+                      onChange={(e) => setSupervisorNickname(e.target.value)}
+                      placeholder="Nickname (optional)"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label>Change Approval Status</Label>
+                    <Select
+                      value={supervisorStatusDraft}
+                      onValueChange={(value) => setSupervisorStatusDraft(value as Supervisor["status"])}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="pending">Pending</SelectItem>
+                        <SelectItem value="approved">Approved</SelectItem>
+                        <SelectItem value="rejected">Rejected</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  {supervisorModalError && (
+                    <div className="flex items-center gap-2 text-red-600 text-sm p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
+                      <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+                      <span>{supervisorModalError}</span>
+                    </div>
+                  )}
+
+                  <div className="flex justify-end">
+                    <Button
+                      className="w-full sm:w-auto"
+                      onClick={saveSupervisorModal}
+                      disabled={supervisorModalUpdating}
+                    >
+                      {supervisorModalUpdating ? "Saving..." : "Save Changes"}
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </DialogContent>
+          </Dialog>
+
+          <Card>
+            <CardHeader className="pb-4">
+              <CardTitle className="flex items-center gap-2 text-xl">
+                <Users className="h-5 w-5" />
+                Manage Supervisors
+              </CardTitle>
+              <CardDescription>Approve or reject supervisor access requests</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+                <div className="relative flex-1">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    placeholder="Search supervisors..."
+                    value={supervisorSearch}
+                    onChange={(e) => { setSupervisorSearch(e.target.value); setSupervisorPage(0) }}
+                    className="pl-9"
+                  />
+                </div>
+                <div className="w-full sm:w-[220px] space-y-1">
+                  <Label className="text-xs text-muted-foreground">Filter by status</Label>
+                  <Select value={supervisorStatusFilter} onValueChange={setSupervisorStatusFilter}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="All statuses" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All</SelectItem>
+                      <SelectItem value="approved">Approved</SelectItem>
+                      <SelectItem value="pending">Pending</SelectItem>
+                      <SelectItem value="rejected">Rejected</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              {filteredSupervisors.length === 0 ? (
+                <div className="text-center py-8">
+                  <Users className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+                  <h3 className="text-lg font-medium">No Supervisors Found</h3>
+                  <p className="text-muted-foreground">No supervisors match the selected status filter.</p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {filteredSupervisors.map((supervisor) => (
+                    <Card
+                      key={supervisor.user_id}
+                      className="cursor-pointer hover:shadow-md transition-shadow"
+                      onClick={() => openSupervisorModal(supervisor)}
+                    >
+                      <CardContent className="p-4">
+                        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                          <div>
+                            <p className="font-medium text-black dark:text-white">
+                              {supervisor.nickname || supervisor.organization}
+                            </p>
+                            <p className="text-sm text-muted-foreground">{supervisor.organization}</p>
+                            <p className="text-sm text-muted-foreground">{supervisor.email}</p>
+                            <p className="text-xs text-muted-foreground break-all">User: {supervisor.user_id}</p>
+                          </div>
+                          <Badge variant={supervisor.status === "approved" ? "default" : supervisor.status === "rejected" ? "destructive" : "outline"}>
+                            {formatStatusLabel(supervisor.status)}
+                          </Badge>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+              )}
+              <div className="flex items-center justify-between pt-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setSupervisorPage((p) => Math.max(0, p - 1))}
+                  disabled={supervisorPage === 0}
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                  Previous
+                </Button>
+                <span className="text-sm text-muted-foreground">Page {supervisorPage + 1}</span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setSupervisorPage((p) => p + 1)}
+                  disabled={supervisors.length < 20}
+                >
+                  Next
+                  <ChevronRight className="h-4 w-4" />
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="workflows" className="space-y-6">
+          {adminWorkflowsError && (
+            <div className="flex items-center gap-2 text-red-600 text-sm p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
+              <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+              <span>{adminWorkflowsError}</span>
+            </div>
+          )}
+
+          <Card>
+            <CardHeader className="pb-4">
+              <CardTitle className="flex items-center gap-2 text-xl">
+                <FileCheck className="h-5 w-5" />
+                Manage Workflows
+              </CardTitle>
+              <CardDescription>Search workflows by title or assigned improver email, then manage series claims.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+                <div className="relative flex-1">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    placeholder="Search workflows by title or improver email..."
+                    value={adminWorkflowsSearch}
+                    onChange={(event) => {
+                      setAdminWorkflowsSearch(event.target.value)
+                      setAdminWorkflowsPage(0)
+                    }}
+                    className="pl-9"
+                  />
+                </div>
+                <div className="text-sm text-muted-foreground">
+                  Showing {groupedAdminWorkflows.length} series entries from {adminWorkflowsTotal} workflows
+                </div>
+              </div>
+
+              {groupedAdminWorkflows.length === 0 ? (
+                <div className="text-center py-8">
+                  <FileCheck className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+                  <h3 className="text-lg font-medium">No Workflows Found</h3>
+                  <p className="text-muted-foreground">No workflows match this search.</p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {groupedAdminWorkflows.map((group) => {
+                    if (group.workflows.length === 0) return null
+                    const cardIndex = getAdminSeriesCardIndex(group)
+                    const workflow = group.workflows[cardIndex]
+
+                    return (
+                      <Card
+                        key={`admin-series-${group.seriesId}`}
+                        className="cursor-pointer transition-shadow hover:shadow-md"
+                        onClick={() => void openAdminSeriesWorkflowDetails(group, cardIndex)}
+                      >
+                        <CardContent className="p-4 space-y-3">
+                          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                            <div>
+                              <p className="font-medium text-black dark:text-white">{workflow.title}</p>
+                              <p className="text-xs text-muted-foreground">
+                                Start: {new Date(workflow.start_at * 1000).toLocaleString()}
+                              </p>
+                            </div>
+                            <Badge
+                              variant={
+                                workflow.status === "approved" || workflow.status === "in_progress"
+                                  ? "default"
+                                  : workflow.status === "blocked"
+                                    ? "secondary"
+                                    : "outline"
+                              }
+                            >
+                              {formatWorkflowDisplayStatus(workflow)}
+                            </Badge>
+                          </div>
+
+                          <p className="text-sm text-muted-foreground line-clamp-2">{workflow.description || "No description provided."}</p>
+                          <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+                            <span>Series workflow {cardIndex + 1} of {group.workflows.length}</span>
+                            <span>Recurrence: {workflow.recurrence.replace("_", " ")}</span>
+                          </div>
+                          <div className="flex flex-wrap gap-1">
+                            {workflow.assigned_improver_emails.length === 0 ? (
+                              <Badge variant="outline">No assigned improvers</Badge>
+                            ) : (
+                              workflow.assigned_improver_emails.map((email) => (
+                                <Badge key={`${workflow.id}-${email}`} variant="secondary">
+                                  {email}
+                                </Badge>
+                              ))
+                            )}
+                          </div>
+
+                          <div className="flex w-full flex-col gap-2 pt-1 sm:w-auto sm:flex-row sm:flex-wrap">
+                            <Button
+                              className="w-full sm:w-auto"
+                              size="sm"
+                              variant="outline"
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                void openAdminSeriesWorkflowDetails(group, cardIndex)
+                              }}
+                            >
+                              View Details
+                            </Button>
+                            <Button
+                              className="w-full sm:w-auto"
+                              size="sm"
+                              variant="outline"
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                shiftAdminSeriesCardIndex(group, -1)
+                              }}
+                              disabled={group.workflows.length <= 1}
+                            >
+                              <ChevronLeft className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              className="w-full sm:w-auto"
+                              size="sm"
+                              variant="outline"
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                shiftAdminSeriesCardIndex(group, 1)
+                              }}
+                              disabled={group.workflows.length <= 1}
+                            >
+                              <ChevronRight className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              className="w-full sm:w-auto"
+                              size="sm"
+                              variant="destructive"
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                void openAdminRevokeModal(group.seriesId)
+                              }}
+                            >
+                              Revoke Improver Claim
+                            </Button>
+                          </div>
+                        </CardContent>
+                      </Card>
+                    )
+                  })}
+                </div>
+              )}
+
+              <div className="flex items-center justify-between pt-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setAdminWorkflowsPage((page) => Math.max(0, page - 1))}
+                  disabled={adminWorkflowsPage === 0}
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                  Previous
+                </Button>
+                <span className="text-sm text-muted-foreground">Page {adminWorkflowsPage + 1}</span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setAdminWorkflowsPage((page) => page + 1)}
+                  disabled={adminWorkflows.length < adminWorkflowsCount}
+                >
+                  Next
+                  <ChevronRight className="h-4 w-4" />
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="issuers" className="space-y-6">
+          {(issuerRequestsError || issuersError) && (
+            <div className="flex items-center gap-2 rounded-lg bg-red-50 p-3 text-sm text-red-600 dark:bg-red-900/20">
+              <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+              <span>{issuerRequestsError || issuersError}</span>
+            </div>
+          )}
+
+          <Dialog open={issuerRequestModalOpen} onOpenChange={setIssuerRequestModalOpen}>
+            <DialogContent className="w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] max-h-[90vh] overflow-y-auto sm:max-w-lg">
+              <DialogHeader>
+                <DialogTitle>Manage Issuer</DialogTitle>
+                <DialogDescription>
+                  Update approval status, nickname, and allowed credentials.
+                </DialogDescription>
+              </DialogHeader>
+              {selectedIssuerRequest && (
+                <div className="space-y-4">
+                  <div className="space-y-1">
+                    <Label>Organization</Label>
+                    <Input value={selectedIssuerRequest.organization} disabled />
+                  </div>
+                  <div className="space-y-1">
+                    <Label>Email</Label>
+                    <Input value={selectedIssuerRequest.email} disabled />
+                  </div>
+                  <div className="space-y-1">
+                    <Label>User ID</Label>
+                    <Input value={selectedIssuerRequest.user_id} disabled className="font-mono text-xs" />
+                  </div>
+                  <div className="space-y-1">
+                    <Label>Nickname</Label>
+                    <Input
+                      value={issuerRequestNickname}
+                      onChange={(e) => setIssuerRequestNickname(e.target.value)}
+                      placeholder="Nickname (optional)"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label>Change Approval Status</Label>
+                    <Select value={issuerRequestStatusDraft} onValueChange={setIssuerRequestStatusDraft}>
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="pending">Pending</SelectItem>
+                        <SelectItem value="approved">Approved</SelectItem>
+                        <SelectItem value="rejected">Rejected</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label>Allowed Credentials</Label>
+                    {credentialTypes.length === 0 ? (
+                      <p className="text-sm text-muted-foreground">No credential types defined. Add types in the Credential Types tab.</p>
+                    ) : (
+                      <>
+                        <Select value={issuerScopePicker} onValueChange={(value) => addIssuerScope(value)}>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Select a credential to add" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {credentialTypes
+                              .filter((ct) => !issuerScopes.includes(ct.value))
+                              .map((ct) => (
+                                <SelectItem key={ct.value} value={ct.value}>
+                                  {ct.label}
+                                </SelectItem>
+                              ))}
+                          </SelectContent>
+                        </Select>
+
+                        <div className="flex flex-wrap gap-2 pt-2">
+                          {issuerScopes.length === 0 ? (
+                            <span className="text-xs text-muted-foreground">No credential scopes selected</span>
+                          ) : (
+                            issuerScopes.map((credential) => {
+                              const credentialLabel = formatCredentialLabel(credential, credentialLabelMap)
+                              return (
+                                <Badge key={credential} variant="secondary" className="gap-1">
+                                  {credentialLabel}
+                                  <button
+                                    type="button"
+                                    className="ml-1"
+                                    onClick={() => removeIssuerScope(credential)}
+                                    aria-label={`Remove ${credentialLabel}`}
+                                  >
+                                    <X className="h-3 w-3" />
+                                  </button>
+                                </Badge>
+                              )
+                            })
+                          )}
+                        </div>
+                      </>
+                    )}
+                  </div>
+
+                  {issuerRequestModalError && (
+                    <div className="flex items-center gap-2 text-red-600 text-sm p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
+                      <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+                      <span>{issuerRequestModalError}</span>
+                    </div>
+                  )}
+
+                  <div className="flex justify-end">
+                    <Button
+                      className="w-full sm:w-auto"
+                      onClick={saveIssuerRequestModal}
+                      disabled={!!issuerRequestSaving[selectedIssuerRequest.user_id] || issuerSaving}
+                    >
+                      {!!issuerRequestSaving[selectedIssuerRequest.user_id] || issuerSaving ? "Saving..." : "Save Changes"}
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </DialogContent>
+          </Dialog>
+
+          <Card>
+            <CardHeader className="pb-4">
+              <CardTitle className="flex items-center gap-2 text-xl">
+                <Users className="h-5 w-5" />
+                Manage Issuers
+              </CardTitle>
+              <CardDescription>Approve requests and manage issuer credential scopes.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+                <div className="relative flex-1">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    placeholder="Search issuers..."
+                    value={issuerRequestSearch}
+                    onChange={(e) => { setIssuerRequestSearch(e.target.value); setIssuerRequestPage(0) }}
+                    className="pl-9"
+                  />
+                </div>
+                <div className="w-full sm:w-[220px] space-y-1">
+                  <Label className="text-xs text-muted-foreground">Filter by status</Label>
+                  <Select value={issuerStatusFilter} onValueChange={setIssuerStatusFilter}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="All statuses" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All</SelectItem>
+                      <SelectItem value="approved">Approved</SelectItem>
+                      <SelectItem value="pending">Pending</SelectItem>
+                      <SelectItem value="rejected">Rejected</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              {filteredIssuerRequests.length === 0 ? (
+                <div className="py-8 text-center">
+                  <Users className="mx-auto mb-4 h-12 w-12 text-muted-foreground" />
+                  <h3 className="text-lg font-medium">No Issuer Requests</h3>
+                  <p className="text-muted-foreground">No issuers match the selected status filter.</p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {filteredIssuerRequests.map((req) => (
+                    <Card
+                      key={req.user_id}
+                      className={`cursor-pointer hover:shadow-md transition-shadow ${selectedIssuerRequest?.user_id === req.user_id ? "ring-2 ring-primary" : ""}`}
+                      onClick={() => openIssuerRequestModal(req)}
+                    >
+                      <CardContent className="flex flex-col gap-2 p-4 sm:flex-row sm:items-center sm:justify-between">
+                        <div>
+                          <p className="font-medium text-black dark:text-white break-words">{req.nickname || req.organization}</p>
+                          {req.nickname && <p className="text-xs text-muted-foreground">{req.organization}</p>}
+                        </div>
+                        <Badge variant={req.status === "approved" ? "default" : req.status === "rejected" ? "destructive" : "outline"}>
+                          {formatStatusLabel(req.status)}
+                        </Badge>
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+              )}
+              <div className="flex items-center justify-between pt-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setIssuerRequestPage((p) => Math.max(0, p - 1))}
+                  disabled={issuerRequestPage === 0}
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                  Previous
+                </Button>
+                <span className="text-sm text-muted-foreground">Page {issuerRequestPage + 1}</span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setIssuerRequestPage((p) => p + 1)}
+                  disabled={issuerRequests.length < 20}
+                >
+                  Next
+                  <ChevronRight className="h-4 w-4" />
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="credential-types" className="space-y-6">
+          {credentialTypesError && (
+            <div className="flex items-center gap-2 text-red-600 text-sm p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
+              <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+              <span>{credentialTypesError}</span>
+            </div>
+          )}
+
+          <Card>
+            <CardHeader className="pb-4">
+              <CardTitle className="flex items-center gap-2 text-xl">
+                <FileCheck className="h-5 w-5" />
+                Credential Types
+              </CardTitle>
+              <CardDescription>Define the credential types that issuers can grant to users.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {credentialTypes.length === 0 ? (
+                <p className="text-sm text-muted-foreground py-4 text-center">No credential types defined yet.</p>
+              ) : (
+                <div className="space-y-2">
+                  {credentialTypes.map((ct) => (
+                    <div key={ct.value} className="flex flex-col gap-3 rounded-lg border p-3 sm:flex-row sm:items-center sm:justify-between">
+                      <div>
+                        <p className="font-medium text-sm">{ct.label}</p>
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="w-full text-red-600 border-red-300 hover:bg-red-50 sm:w-auto"
+                        onClick={() => deleteCredentialType(ct)}
+                      >
+                        <X className="h-4 w-4" />
+                        Delete
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <form onSubmit={createCredentialType} className="space-y-3 pt-4 border-t">
+                <p className="text-sm font-medium">Add New Credential Type</p>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <div className="space-y-1">
+                    <Label htmlFor="cred-value" className="text-xs">Value (slug)</Label>
+                    <Input
+                      id="cred-value"
+                      value={newCredentialValue}
+                      onChange={(e) => setNewCredentialValue(e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, ""))}
+                      placeholder="e.g. dpw_certified"
+                      className="font-mono text-sm"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label htmlFor="cred-label" className="text-xs">Display Label</Label>
+                    <Input
+                      id="cred-label"
+                      value={newCredentialLabel}
+                      onChange={(e) => setNewCredentialLabel(e.target.value)}
+                      placeholder="e.g. DPW Certified"
+                    />
+                  </div>
+                </div>
+                <p className="text-xs text-muted-foreground">Note: Deleting a credential type does not revoke existing grants.</p>
+                <div className="flex justify-end">
+                  <Button className="w-full sm:w-auto" type="submit" disabled={credentialTypeSaving || !newCredentialValue || !newCredentialLabel}>
+                    {credentialTypeSaving ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Adding...</> : <><Plus className="mr-2 h-4 w-4" />Add Type</>}
+                  </Button>
+                </div>
+              </form>
             </CardContent>
           </Card>
         </TabsContent>
@@ -1920,11 +3645,11 @@ export default function AdminPage() {
               </div>
 
               {/* Generation Actions */}
-              <div className="flex gap-4">
+              <div className="flex flex-col gap-3 sm:flex-row">
                 <Button
                   onClick={handleGenerateQRCodes}
                   disabled={isGeneratingCodes || !eventStartDate || !eventEndDate}
-                  className="flex-1"
+                  className="w-full sm:flex-1"
                 >
                   {isGeneratingCodes ? (
                     <>
@@ -1940,7 +3665,7 @@ export default function AdminPage() {
                 </Button>
 
                 {generatedCodes.length > 0 && (
-                  <Button onClick={handleDownloadQRCodes} variant="outline" disabled={isGeneratingCodes}>
+                  <Button className="w-full sm:w-auto" onClick={handleDownloadQRCodes} variant="outline" disabled={isGeneratingCodes}>
                     <Download className="mr-2 h-4 w-4" />
                     Download CSV
                   </Button>
@@ -1995,20 +3720,46 @@ export default function AdminPage() {
             </CardContent>
           </Card>
         </TabsContent>
+          </div>
+        </div>
       </Tabs>
 
       {/* Location Review Modal */}
       <Dialog open={isLocationReviewModalOpen} onOpenChange={setisLocationReviewModalOpen}>
-        <DialogContent className="sm:max-w-[900px] max-h-[90vh] overflow-y-auto">
+        <DialogContent className="w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] max-h-[90vh] overflow-y-auto p-4 sm:max-w-[900px] sm:p-6">
           <DialogHeader>
-            <DialogTitle className="text-xl font-bold">
-              Location Application Review - {selectedLocationForReview?.name}
+            <DialogTitle className="text-lg font-bold sm:text-xl">
+              Manage Merchant - {selectedLocationForReview?.name}
             </DialogTitle>
-            <DialogDescription>Review the complete merchant application details below</DialogDescription>
+            <DialogDescription>Review merchant details and update approval status.</DialogDescription>
           </DialogHeader>
 
           {selectedLocationForReview && (
             <div className="space-y-6 py-4">
+              <div className="space-y-2">
+                <Label>Change Approval Status</Label>
+                <Select
+                  value={merchantStatusDraft}
+                  onValueChange={(value) => setMerchantStatusDraft(value as ApprovalStatus)}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="pending">Pending</SelectItem>
+                    <SelectItem value="approved">Approved</SelectItem>
+                    <SelectItem value="rejected">Rejected</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {merchantModalError && (
+                <div className="flex items-center gap-2 text-red-600 text-sm p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
+                  <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+                  <span>{merchantModalError}</span>
+                </div>
+              )}
+
               {/* Business Information Section */}
               <div className="space-y-4">
                 <h3 className="text-lg font-semibold text-foreground border-b pb-2">Business Information</h3>
@@ -2187,34 +3938,126 @@ export default function AdminPage() {
             </div>
           )}
 
-          <DialogFooter className="flex gap-2">
-            <Button variant="outline" onClick={() => setisLocationReviewModalOpen(false)}>
+          <DialogFooter className="gap-2">
+            <Button className="w-full sm:w-auto" variant="outline" onClick={() => setisLocationReviewModalOpen(false)}>
               Close
             </Button>
             <Button
-              variant="destructive"
-              onClick={() => {
-                if (selectedLocationForReview) {
-                  handleRejectLocation(selectedLocationForReview.id)
-                  setisLocationReviewModalOpen(false)
-                }
-              }}
+              className="w-full sm:w-auto"
+              onClick={saveMerchantModal}
+              disabled={merchantModalSaving}
             >
-              Reject Application
-            </Button>
-            <Button
-              onClick={() => {
-                if (selectedLocationForReview) {
-                  handleApproveLocation(selectedLocationForReview.id)
-                  setisLocationReviewModalOpen(false)
-                }
-              }}
-            >
-              Approve Location
+              {merchantModalSaving ? "Saving..." : "Save Changes"}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <Dialog open={adminRevokeModalOpen} onOpenChange={setAdminRevokeModalOpen}>
+        <DialogContent className="w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] max-h-[90vh] overflow-y-auto sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Revoke Improver Claim</DialogTitle>
+            <DialogDescription>
+              Select an improver claim to revoke for this workflow series.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            {adminRevokeLoading ? (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Loading claimants...
+              </div>
+            ) : adminRevokeClaimants.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No claimants found for this series.</p>
+            ) : (
+              <div className="space-y-2">
+                <Label>Improver Email</Label>
+                <Select value={adminRevokeImproverId} onValueChange={setAdminRevokeImproverId}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select an improver" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {adminRevokeClaimants.map((claimant) => (
+                      <SelectItem key={claimant.user_id} value={claimant.user_id}>
+                        {claimant.email || claimant.name || claimant.user_id}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+
+            {adminRevokeError && (
+              <div className="flex items-center gap-2 text-red-600 text-sm p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
+                <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+                <span>{adminRevokeError}</span>
+              </div>
+            )}
+
+            <div className="flex justify-end">
+              <Button
+                className="w-full sm:w-auto"
+                variant="destructive"
+                disabled={
+                  adminRevokeSubmitting ||
+                  adminRevokeLoading ||
+                  adminRevokeClaimants.length === 0 ||
+                  !adminRevokeImproverId
+                }
+                onClick={revokeAdminSeriesClaim}
+              >
+                {adminRevokeSubmitting ? "Revoking..." : "Revoke Claim"}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <WorkflowDetailsModal
+        workflow={adminWorkflowDetail}
+        open={adminWorkflowDetailOpen}
+        onOpenChange={(open) => {
+          setAdminWorkflowDetailOpen(open)
+          if (!open) {
+            setAdminDetailSeriesContext(null)
+          }
+        }}
+        loading={adminWorkflowDetailLoading}
+        renderWorkflowActions={
+          adminDetailSeriesContext
+            ? () => {
+                const hasMultiple = adminDetailSeriesContext.workflowIds.length > 1
+                return (
+                  <div className="space-y-2 rounded-md border bg-secondary/30 p-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className="text-xs text-muted-foreground">
+                        Series workflow {adminDetailSeriesContext.index + 1} of {adminDetailSeriesContext.workflowIds.length}
+                      </p>
+                      {hasMultiple && (
+                        <div className="flex items-center gap-2">
+                          <Button className="w-full sm:w-auto" size="sm" variant="outline" onClick={() => void shiftAdminDetailSeriesWorkflow(-1)}>
+                            <ChevronLeft className="h-4 w-4" />
+                          </Button>
+                          <Button className="w-full sm:w-auto" size="sm" variant="outline" onClick={() => void shiftAdminDetailSeriesWorkflow(1)}>
+                            <ChevronRight className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      )}
+                    </div>
+                    <Button
+                      className="w-full sm:w-auto"
+                      size="sm"
+                      variant="destructive"
+                      onClick={() => void openAdminRevokeModal(adminDetailSeriesContext.seriesId)}
+                    >
+                      Revoke Improver Claim
+                    </Button>
+                  </div>
+                )
+              }
+            : undefined
+        }
+      />
     </div>
   )
 }

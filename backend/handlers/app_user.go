@@ -77,12 +77,53 @@ func (a *AppService) GetUserAuthed(w http.ResponseWriter, r *http.Request) {
 		affiliate = nil
 	}
 
+	proposer, err := a.db.GetProposerByUser(r.Context(), *userDid)
+	if err != nil && err != pgx.ErrNoRows {
+		a.logger.Logf("error getting proposer info for user %s: %s", *userDid, err.Error())
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	if err == pgx.ErrNoRows {
+		proposer = nil
+	}
+
+	improver, err := a.db.GetImproverByUser(r.Context(), *userDid)
+	if err != nil && err != pgx.ErrNoRows {
+		a.logger.Logf("error getting improver info for user %s: %s", *userDid, err.Error())
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	if err == pgx.ErrNoRows {
+		improver = nil
+	}
+
+	issuer, err := a.db.GetIssuerByUser(r.Context(), *userDid)
+	if err != nil {
+		a.logger.Logf("error getting issuer info for user %s: %s", *userDid, err.Error())
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	supervisor, err := a.db.GetSupervisorByUser(r.Context(), *userDid)
+	if err != nil && err != pgx.ErrNoRows {
+		a.logger.Logf("error getting supervisor info for user %s: %s", *userDid, err.Error())
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	if err == pgx.ErrNoRows {
+		supervisor = nil
+	}
+
 	response := structs.AuthedUserResponse{
 		User:      *user,
 		Wallets:   wallets,
 		Locations: locations,
 		Contacts:  contacts,
 		Affiliate: affiliate,
+		Proposer:  proposer,
+		Improver:  improver,
+		Issuer:    issuer,
+		Supervisor: supervisor,
 	}
 
 	bytes, err := json.Marshal(response)

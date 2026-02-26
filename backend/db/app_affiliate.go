@@ -86,7 +86,12 @@ func (a *AppDB) GetAffiliateByUser(ctx context.Context, userId string) (*structs
 	return getAffiliateByUser(ctx, a.db, userId)
 }
 
-func (a *AppDB) GetAffiliates(ctx context.Context) ([]*structs.Affiliate, error) {
+func (a *AppDB) GetAffiliates(ctx context.Context, search string, page, count int) ([]*structs.Affiliate, error) {
+	if count <= 0 {
+		count = 20
+	}
+	offset := page * count
+	likeSearch := "%" + search + "%"
 	rows, err := a.db.Query(ctx, `
 		SELECT
 			user_id,
@@ -99,9 +104,13 @@ func (a *AppDB) GetAffiliates(ctx context.Context) ([]*structs.Affiliate, error)
 			one_time_balance
 		FROM
 			affiliates
+		WHERE
+			(organization ILIKE $1 OR COALESCE(nickname, '') ILIKE $1)
 		ORDER BY
-			created_at DESC;
-	`)
+			created_at DESC
+		LIMIT $2
+		OFFSET $3;
+	`, likeSearch, count, offset)
 	if err != nil {
 		return nil, fmt.Errorf("error querying affiliates: %s", err)
 	}

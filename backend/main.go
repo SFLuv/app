@@ -90,6 +90,7 @@ func main() {
 
 	s := handlers.NewBotService(botDb, appDb, bot, w9, affiliateScheduler)
 	a := handlers.NewAppService(appDb, appLogger, w9)
+	a.SetBotService(s)
 	a.SetRedeemerService(redeemer)
 	a.SetMinterService(minter)
 	p := handlers.NewPonderService(ponderDb, appLogger)

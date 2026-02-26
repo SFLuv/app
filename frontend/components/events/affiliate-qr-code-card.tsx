@@ -1,4 +1,5 @@
 import QRCode from "react-qr-code";
+import { buildEventRedeemQrValue } from "@/lib/redeem-link";
 
 export const AffiliateQRCodeCard = ({
   code,
@@ -9,9 +10,7 @@ export const AffiliateQRCodeCard = ({
   logoUrl: string
   organization: string
 }) => {
-  const url = process.env.NEXT_PUBLIC_APP_REDEEM_URL_PRE
-    + code
-    + process.env.NEXT_PUBLIC_APP_REDEEM_URL_POST
+  const url = buildEventRedeemQrValue(code)
 
   return (
     <div style={{textAlign: "center", justifyContent: "center", color: "black", height: "550px", width: "425px", margin: "auto", overflowY: "hidden", paddingTop: "10px"}}>

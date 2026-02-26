@@ -4,21 +4,19 @@ import { useRouter, usePathname } from "next/navigation"
 import { useApp } from "@/context/AppProvider"
 import { cn } from "@/lib/utils"
 import {
-  BarChart3,
-  Home,
   LogOut,
   Map,
   Settings,
-  ShoppingBag,
-  Users,
   Wallet,
   Handshake,
-  CalendarClock,
   FileCheck,
-  Calendar,
   SquareUserIcon,
-  ContactIcon,
   Shield,
+  ClipboardList,
+  ClipboardCheck,
+  Vote,
+  ShieldCheck,
+  Wrench,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import {
@@ -30,14 +28,12 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@/components/ui/sidebar"
-import { ForwardRefExoticComponent, RefAttributes, useEffect, useMemo } from "react"
-import path from "path"
+import { ForwardRefExoticComponent } from "react"
 
 export function DashboardSidebar() {
   const router = useRouter()
   const pathname = usePathname()
   const { user, logout, status, login, userLocations } = useApp()
-  const userRole = useMemo(() => user?.isAdmin ? "admin" : user?.isMerchant ? "merchant" : "user", [user])
 
   const isActive = (path: string) => {
     return pathname.startsWith(path)
@@ -121,6 +117,46 @@ export function DashboardSidebar() {
       },
     ]
 
+    const proposerItems: NavItem[] = [
+      {
+        title: "Proposer Panel",
+        icon: ClipboardList,
+        path: "/proposer",
+      },
+    ]
+
+    const improverItems: NavItem[] = [
+      {
+        title: "Improver Panel",
+        icon: Wrench,
+        path: "/improver",
+      },
+    ]
+
+    const voterItems: NavItem[] = [
+      {
+        title: "Voter Panel",
+        icon: Vote,
+        path: "/voter",
+      },
+    ]
+
+    const issuerItems: NavItem[] = [
+      {
+        title: "Issuer Panel",
+        icon: ShieldCheck,
+        path: "/issuer",
+      },
+    ]
+
+    const supervisorItems: NavItem[] = [
+      {
+        title: "Supervisor Panel",
+        icon: ClipboardCheck,
+        path: "/supervisor",
+      },
+    ]
+
     const adminItems: NavItem[] = [
       {
         title: "Admin Panel",
@@ -170,6 +206,26 @@ export function DashboardSidebar() {
 
     if (user?.isAffiliate) {
       items = [...items, ...affiliateItems]
+    }
+
+    if (user?.isProposer || user?.isAdmin) {
+      items = [...items, ...proposerItems]
+    }
+
+    if (user?.isImprover) {
+      items = [...items, ...improverItems]
+    }
+
+    if (user?.isVoter || user?.isAdmin) {
+      items = [...items, ...voterItems]
+    }
+
+    if (user?.isIssuer || user?.isAdmin) {
+      items = [...items, ...issuerItems]
+    }
+
+    if (user?.isSupervisor || user?.isAdmin) {
+      items = [...items, ...supervisorItems]
     }
 
     if (user?.isAdmin) {
