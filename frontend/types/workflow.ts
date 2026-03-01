@@ -1,4 +1,5 @@
 export type WorkflowRecurrence = "one_time" | "daily" | "weekly" | "monthly"
+export type WorkflowPhotoAspectRatio = "vertical" | "square" | "horizontal"
 
 export type CredentialType = string
 
@@ -31,6 +32,9 @@ export interface WorkflowWorkItem {
   optional: boolean
   requires_photo: boolean
   camera_capture_only: boolean
+  photo_required_count: number
+  photo_allow_any_count: boolean
+  photo_aspect_ratio: WorkflowPhotoAspectRatio
   requires_written_response: boolean
   requires_dropdown: boolean
   dropdown_options: WorkflowDropdownOption[]
@@ -215,6 +219,9 @@ export interface WorkflowWorkItemCreateInput {
   optional: boolean
   requires_photo: boolean
   camera_capture_only: boolean
+  photo_required_count: number
+  photo_allow_any_count: boolean
+  photo_aspect_ratio: WorkflowPhotoAspectRatio
   requires_written_response: boolean
   requires_dropdown: boolean
   dropdown_options: WorkflowDropdownOptionCreateInput[]

@@ -855,23 +855,28 @@ func (s *AppDB) CreateTables() error {
 	}
 
 	_, err = s.db.Exec(context.Background(), `
-		CREATE TABLE IF NOT EXISTS workflow_step_items(
-			id TEXT PRIMARY KEY,
-			step_id TEXT NOT NULL REFERENCES workflow_steps(id) ON DELETE CASCADE,
-			item_order INTEGER NOT NULL,
-			title TEXT NOT NULL,
-			description TEXT NOT NULL,
-			is_optional BOOLEAN NOT NULL DEFAULT false,
-			requires_photo BOOLEAN NOT NULL DEFAULT false,
-			camera_capture_only BOOLEAN NOT NULL DEFAULT false,
-			requires_written_response BOOLEAN NOT NULL DEFAULT false,
-			requires_dropdown BOOLEAN NOT NULL DEFAULT false,
-			dropdown_options JSONB NOT NULL DEFAULT '[]'::jsonb,
-			dropdown_requires_written_response JSONB NOT NULL DEFAULT '{}'::jsonb,
-			notify_emails JSONB NOT NULL DEFAULT '[]'::jsonb,
-			notify_on_dropdown_values JSONB NOT NULL DEFAULT '[]'::jsonb,
-			UNIQUE (step_id, item_order)
-		);
+			CREATE TABLE IF NOT EXISTS workflow_step_items(
+				id TEXT PRIMARY KEY,
+				step_id TEXT NOT NULL REFERENCES workflow_steps(id) ON DELETE CASCADE,
+				item_order INTEGER NOT NULL,
+				title TEXT NOT NULL,
+				description TEXT NOT NULL,
+				is_optional BOOLEAN NOT NULL DEFAULT false,
+				requires_photo BOOLEAN NOT NULL DEFAULT false,
+				camera_capture_only BOOLEAN NOT NULL DEFAULT false,
+				photo_required_count INTEGER NOT NULL DEFAULT 1,
+				photo_allow_any_count BOOLEAN NOT NULL DEFAULT false,
+				photo_aspect_ratio TEXT NOT NULL DEFAULT 'square',
+				requires_written_response BOOLEAN NOT NULL DEFAULT false,
+				requires_dropdown BOOLEAN NOT NULL DEFAULT false,
+				dropdown_options JSONB NOT NULL DEFAULT '[]'::jsonb,
+				dropdown_requires_written_response JSONB NOT NULL DEFAULT '{}'::jsonb,
+				notify_emails JSONB NOT NULL DEFAULT '[]'::jsonb,
+				notify_on_dropdown_values JSONB NOT NULL DEFAULT '[]'::jsonb,
+				UNIQUE (step_id, item_order),
+				CHECK (photo_required_count >= 1),
+				CHECK (photo_aspect_ratio IN ('vertical', 'square', 'horizontal'))
+			);
 
 		CREATE INDEX IF NOT EXISTS workflow_step_items_step_idx ON workflow_step_items(step_id);
 	`)
@@ -880,9 +885,30 @@ func (s *AppDB) CreateTables() error {
 	}
 
 	_, err = s.db.Exec(context.Background(), `
-		ALTER TABLE workflow_step_items
-		ADD COLUMN IF NOT EXISTS camera_capture_only BOOLEAN NOT NULL DEFAULT false;
-	`)
+			ALTER TABLE workflow_step_items
+			ADD COLUMN IF NOT EXISTS camera_capture_only BOOLEAN NOT NULL DEFAULT false;
+
+			ALTER TABLE workflow_step_items
+			ADD COLUMN IF NOT EXISTS photo_required_count INTEGER NOT NULL DEFAULT 1;
+
+			ALTER TABLE workflow_step_items
+			ADD COLUMN IF NOT EXISTS photo_allow_any_count BOOLEAN NOT NULL DEFAULT false;
+
+			ALTER TABLE workflow_step_items
+			ADD COLUMN IF NOT EXISTS photo_aspect_ratio TEXT NOT NULL DEFAULT 'square';
+
+			ALTER TABLE workflow_step_items
+			DROP CONSTRAINT IF EXISTS workflow_step_items_photo_required_count_check;
+
+			ALTER TABLE workflow_step_items
+			ADD CONSTRAINT workflow_step_items_photo_required_count_check CHECK (photo_required_count >= 1);
+
+			ALTER TABLE workflow_step_items
+			DROP CONSTRAINT IF EXISTS workflow_step_items_photo_aspect_ratio_check;
+
+			ALTER TABLE workflow_step_items
+			ADD CONSTRAINT workflow_step_items_photo_aspect_ratio_check CHECK (photo_aspect_ratio IN ('vertical', 'square', 'horizontal'));
+		`)
 	if err != nil {
 		return fmt.Errorf("error altering workflow_step_items camera capture column: %s", err)
 	}

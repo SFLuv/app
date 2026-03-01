@@ -35,6 +35,7 @@ import {
   ImproverAbsencePeriodDeleteResult,
   ImproverWorkflowFeed,
   ImproverWorkflowSeriesUnclaimResult,
+  WorkflowPhotoAspectRatio,
   Workflow,
   WorkflowStep,
 } from "@/types/workflow"
@@ -53,6 +54,11 @@ type CameraCaptureState = {
 type StepNotPossibleFormState = {
   selected: boolean
   details: string
+}
+
+type LocalPhotoPreviewState = {
+  url: string
+  label: string
 }
 
 type WorkflowSeriesCardGroup = {
@@ -84,6 +90,41 @@ const maxWorkflowPhotoUploadLabel = "2MB"
 const minWorkflowPhotoResizeDimension = 640
 const maxWorkflowPhotoInitialDimension = 4096
 
+const workflowPhotoAspectRatios: Record<WorkflowPhotoAspectRatio, number> = {
+  vertical: 3 / 4,
+  square: 1,
+  horizontal: 4 / 3,
+}
+
+const normalizeWorkflowPhotoAspectRatio = (value: string): WorkflowPhotoAspectRatio => {
+  const normalized = value.trim().toLowerCase()
+  if (normalized === "vertical" || normalized === "horizontal" || normalized === "square") {
+    return normalized
+  }
+  return "square"
+}
+
+const computeCropForAspectRatio = (width: number, height: number, aspectRatio: number) => {
+  if (!width || !height || !Number.isFinite(width) || !Number.isFinite(height) || aspectRatio <= 0) {
+    return { x: 0, y: 0, width, height }
+  }
+
+  const sourceRatio = width / height
+  if (Math.abs(sourceRatio - aspectRatio) < 0.001) {
+    return { x: 0, y: 0, width, height }
+  }
+
+  if (sourceRatio > aspectRatio) {
+    const cropWidth = Math.max(1, Math.floor(height * aspectRatio))
+    const x = Math.max(0, Math.floor((width - cropWidth) / 2))
+    return { x, y: 0, width: cropWidth, height }
+  }
+
+  const cropHeight = Math.max(1, Math.floor(width / aspectRatio))
+  const y = Math.max(0, Math.floor((height - cropHeight) / 2))
+  return { x: 0, y, width, height: cropHeight }
+}
+
 const loadImageFromFile = (file: File) =>
   new Promise<HTMLImageElement>((resolve, reject) => {
     const objectURL = URL.createObjectURL(file)
@@ -99,7 +140,13 @@ const loadImageFromFile = (file: File) =>
     image.src = objectURL
   })
 
-const renderJpegBlob = (image: HTMLImageElement, width: number, height: number, quality: number) =>
+const renderJpegBlob = (
+  image: HTMLImageElement,
+  width: number,
+  height: number,
+  quality: number,
+  sourceCrop?: { x: number; y: number; width: number; height: number },
+) =>
   new Promise<Blob | null>((resolve) => {
     const canvas = document.createElement("canvas")
     canvas.width = width
@@ -109,7 +156,21 @@ const renderJpegBlob = (image: HTMLImageElement, width: number, height: number, 
       resolve(null)
       return
     }
-    ctx.drawImage(image, 0, 0, width, height)
+    if (sourceCrop) {
+      ctx.drawImage(
+        image,
+        sourceCrop.x,
+        sourceCrop.y,
+        sourceCrop.width,
+        sourceCrop.height,
+        0,
+        0,
+        width,
+        height,
+      )
+    } else {
+      ctx.drawImage(image, 0, 0, width, height)
+    }
     canvas.toBlob((blob) => resolve(blob), "image/jpeg", quality)
   })
 
@@ -139,6 +200,42 @@ const formatDateFromUnix = (unixSeconds: number, endExclusive = false): string =
   return new Date(adjustedSeconds * 1000).toLocaleDateString(undefined, { timeZone: "UTC" })
 }
 
+function LocalPhotoThumbnail({
+  file,
+  onOpen,
+  disabled = false,
+}: {
+  file: File
+  onOpen: (file: File) => void
+  disabled?: boolean
+}) {
+  const [previewURL, setPreviewURL] = useState("")
+
+  useEffect(() => {
+    const nextURL = URL.createObjectURL(file)
+    setPreviewURL(nextURL)
+    return () => {
+      URL.revokeObjectURL(nextURL)
+    }
+  }, [file])
+
+  return (
+    <button
+      type="button"
+      className="overflow-hidden rounded border bg-secondary/20 disabled:opacity-60"
+      onClick={() => onOpen(file)}
+      disabled={disabled || !previewURL}
+      title={file.name}
+    >
+      {previewURL ? (
+        <img src={previewURL} alt={file.name || "Selected photo"} className="h-24 w-full object-cover" />
+      ) : (
+        <div className="flex h-24 items-center justify-center text-[11px] text-muted-foreground">Loading preview...</div>
+      )}
+    </button>
+  )
+}
+
 export default function ImproverPage() {
   const { authFetch, status, user } = useApp()
   const [workflows, setWorkflows] = useState<Workflow[]>([])
@@ -153,8 +250,10 @@ export default function ImproverPage() {
   const [loading, setLoading] = useState<boolean>(true)
   const [submitting, setSubmitting] = useState<string>("")
   const [forms, setForms] = useState<Record<string, Record<string, ItemFormState>>>({})
+  const [stepSubmitErrors, setStepSubmitErrors] = useState<Record<string, string>>({})
   const [cameraStates, setCameraStates] = useState<Record<string, CameraCaptureState>>({})
   const [stepNotPossibleForms, setStepNotPossibleForms] = useState<Record<string, StepNotPossibleFormState>>({})
+  const [localPhotoPreview, setLocalPhotoPreview] = useState<LocalPhotoPreviewState | null>(null)
   const [absenceTargetMode, setAbsenceTargetMode] = useState<"single" | "all">("single")
   const [absenceSelection, setAbsenceSelection] = useState<string>("")
   const [absenceFrom, setAbsenceFrom] = useState<string>("")
@@ -705,6 +804,7 @@ export default function ImproverPage() {
   const cameraKeyForItem = useCallback((stepId: string, itemId: string) => `${stepId}:${itemId}`, [])
 
   const updateItemForm = (stepId: string, itemId: string, patch: Partial<ItemFormState>) => {
+    clearStepSubmitError(stepId)
     setForms((prev) => {
       const stepForms = prev[stepId] || {}
       const current = stepForms[itemId] || defaultItemFormState
@@ -722,6 +822,7 @@ export default function ImproverPage() {
   }
 
   const updateStepNotPossibleForm = (stepId: string, patch: Partial<StepNotPossibleFormState>) => {
+    clearStepSubmitError(stepId)
     setStepNotPossibleForms((prev) => {
       const current = prev[stepId] || defaultStepNotPossibleFormState
       return {
@@ -734,7 +835,41 @@ export default function ImproverPage() {
     })
   }
 
+  const clearStepSubmitError = useCallback((stepId: string) => {
+    setStepSubmitErrors((prev) => {
+      if (!prev[stepId]) return prev
+      const next = { ...prev }
+      delete next[stepId]
+      return next
+    })
+  }, [])
+
+  const closeLocalPhotoPreview = useCallback(() => {
+    setLocalPhotoPreview((prev) => {
+      if (prev?.url) {
+        URL.revokeObjectURL(prev.url)
+      }
+      return null
+    })
+  }, [])
+
+  const openLocalPhotoPreview = useCallback(
+    (file: File) => {
+      setLocalPhotoPreview((prev) => {
+        if (prev?.url) {
+          URL.revokeObjectURL(prev.url)
+        }
+        return {
+          url: URL.createObjectURL(file),
+          label: file.name || "Photo Preview",
+        }
+      })
+    },
+    [],
+  )
+
   const removeItemPhoto = (stepId: string, itemId: string, photoIndex: number) => {
+    clearStepSubmitError(stepId)
     setForms((prev) => {
       const stepForms = prev[stepId] || {}
       const current = stepForms[itemId] || defaultItemFormState
@@ -753,6 +888,7 @@ export default function ImproverPage() {
   }
 
   const addItemPhoto = (stepId: string, itemId: string, photo: File) => {
+    clearStepSubmitError(stepId)
     setForms((prev) => {
       const stepForms = prev[stepId] || {}
       const current = stepForms[itemId] || defaultItemFormState
@@ -769,12 +905,9 @@ export default function ImproverPage() {
     })
   }
 
-  const shrinkPhotoToUploadLimit = useCallback(async (file: File) => {
+  const shrinkPhotoToUploadLimit = useCallback(async (file: File, aspectRatio: WorkflowPhotoAspectRatio = "square") => {
     if (!file.type.startsWith("image/")) {
       throw new Error(`Only image uploads are allowed: ${file.name}`)
-    }
-    if (file.size <= maxWorkflowPhotoUploadBytes) {
-      return file
     }
 
     const image = await loadImageFromFile(file)
@@ -784,8 +917,12 @@ export default function ImproverPage() {
       throw new Error(`Unable to process image dimensions for ${file.name}`)
     }
 
-    let targetWidth = imageWidth
-    let targetHeight = imageHeight
+    const normalizedAspect = normalizeWorkflowPhotoAspectRatio(aspectRatio)
+    const targetAspect = workflowPhotoAspectRatios[normalizedAspect]
+    const crop = computeCropForAspectRatio(imageWidth, imageHeight, targetAspect)
+
+    let targetWidth = crop.width
+    let targetHeight = crop.height
     const largestDimension = Math.max(targetWidth, targetHeight)
     if (largestDimension > maxWorkflowPhotoInitialDimension) {
       const initialScale = maxWorkflowPhotoInitialDimension / largestDimension
@@ -796,7 +933,7 @@ export default function ImproverPage() {
     const qualitySteps = [0.9, 0.82, 0.74, 0.66, 0.58, 0.5, 0.42]
     for (let scaleAttempt = 0; scaleAttempt < 6; scaleAttempt += 1) {
       for (const quality of qualitySteps) {
-        const blob = await renderJpegBlob(image, targetWidth, targetHeight, quality)
+        const blob = await renderJpegBlob(image, targetWidth, targetHeight, quality, crop)
         if (!blob) continue
         if (blob.size > maxWorkflowPhotoUploadBytes) continue
         return new File([blob], toJpegFileName(file.name), {
@@ -816,10 +953,10 @@ export default function ImproverPage() {
   }, [])
 
   const prepareSelectedPhotos = useCallback(
-    async (files: File[]) => {
+    async (files: File[], aspectRatio: WorkflowPhotoAspectRatio) => {
       const processed: File[] = []
       for (const file of files) {
-        processed.push(await shrinkPhotoToUploadLimit(file))
+        processed.push(await shrinkPhotoToUploadLimit(file, aspectRatio))
       }
       return processed
     },
@@ -827,7 +964,7 @@ export default function ImproverPage() {
   )
 
   const replaceItemPhotosFromSelection = useCallback(
-    async (stepId: string, itemId: string, selectedFiles: FileList | null) => {
+    async (stepId: string, itemId: string, aspectRatio: WorkflowPhotoAspectRatio, selectedFiles: FileList | null) => {
       const files = Array.from(selectedFiles || [])
       if (files.length === 0) {
         updateItemForm(stepId, itemId, { photos: [] })
@@ -835,7 +972,7 @@ export default function ImproverPage() {
       }
 
       try {
-        const prepared = await prepareSelectedPhotos(files)
+        const prepared = await prepareSelectedPhotos(files, aspectRatio)
         updateItemForm(stepId, itemId, { photos: prepared })
         setError("")
       } catch (err) {
@@ -991,7 +1128,12 @@ export default function ImproverPage() {
     }
   }
 
-  const captureCameraPhoto = async (stepId: string, itemId: string, itemTitle: string) => {
+  const captureCameraPhoto = async (
+    stepId: string,
+    itemId: string,
+    itemTitle: string,
+    aspectRatio: WorkflowPhotoAspectRatio,
+  ) => {
     const cameraKey = cameraKeyForItem(stepId, itemId)
     const stream = cameraStreamRefs.current[cameraKey]
     const videoElement = videoElementRefs.current[cameraKey]
@@ -1019,9 +1161,13 @@ export default function ImproverPage() {
       return
     }
 
+    const normalizedAspect = normalizeWorkflowPhotoAspectRatio(aspectRatio)
+    const targetAspect = workflowPhotoAspectRatios[normalizedAspect]
+    const crop = computeCropForAspectRatio(width, height, targetAspect)
+
     const canvas = document.createElement("canvas")
-    canvas.width = width
-    canvas.height = height
+    canvas.width = crop.width
+    canvas.height = crop.height
     const ctx = canvas.getContext("2d")
     if (!ctx) {
       setCameraStates((prev) => ({
@@ -1034,7 +1180,7 @@ export default function ImproverPage() {
       return
     }
 
-    ctx.drawImage(videoElement, 0, 0, width, height)
+    ctx.drawImage(videoElement, crop.x, crop.y, crop.width, crop.height, 0, 0, crop.width, crop.height)
     const blob = await new Promise<Blob | null>((resolve) => {
       canvas.toBlob((value) => resolve(value), "image/jpeg", 0.92)
     })
@@ -1060,7 +1206,7 @@ export default function ImproverPage() {
     })
     let preparedPhoto: File
     try {
-      preparedPhoto = await shrinkPhotoToUploadLimit(photo)
+      preparedPhoto = await shrinkPhotoToUploadLimit(photo, normalizedAspect)
     } catch (err) {
       const message = err instanceof Error ? err.message : `Unable to process captured photo for ${maxWorkflowPhotoUploadLabel} limit.`
       setCameraStates((prev) => ({
@@ -1088,8 +1234,9 @@ export default function ImproverPage() {
   useEffect(() => {
     return () => {
       stopAllCameraCaptures()
+      closeLocalPhotoPreview()
     }
-  }, [stopAllCameraCaptures])
+  }, [stopAllCameraCaptures, closeLocalPhotoPreview])
 
   useEffect(() => {
     if (!detailOpen) {
@@ -1165,8 +1312,15 @@ export default function ImproverPage() {
         throw new Error(`Missing response for required work item: ${item.title}`)
       }
 
-      if (item.requires_photo && photoUploads.length === 0) {
-        throw new Error(`Photo evidence is required for: ${item.title}`)
+      if (item.requires_photo) {
+        const requiredCount = Math.max(1, item.photo_required_count || 1)
+        if (item.photo_allow_any_count) {
+          if (photoUploads.length === 0) {
+            throw new Error(`At least one photo is required for: ${item.title}`)
+          }
+        } else if (photoUploads.length !== requiredCount) {
+          throw new Error(`Exactly ${requiredCount} photo${requiredCount === 1 ? "" : "s"} required for: ${item.title}`)
+        }
       }
       if (item.requires_dropdown && dropdownValue.length === 0) {
         throw new Error(`Dropdown selection is required for: ${item.title}`)
@@ -1204,6 +1358,8 @@ export default function ImproverPage() {
   }
 
   const completeStep = async (workflowId: string, step: WorkflowStep) => {
+    clearStepSubmitError(step.id)
+    setError("")
     setSubmitting(`complete:${step.id}`)
     try {
       const payload = await buildCompletionPayload(step)
@@ -1229,8 +1385,13 @@ export default function ImproverPage() {
         delete next[step.id]
         return next
       })
+      clearStepSubmitError(step.id)
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to complete this step.")
+      const message = err instanceof Error ? err.message : "Unable to complete this step."
+      setStepSubmitErrors((prev) => ({
+        ...prev,
+        [step.id]: message,
+      }))
     } finally {
       setSubmitting("")
     }
@@ -1441,9 +1602,8 @@ export default function ImproverPage() {
 
   const shiftDetailSeriesWorkflow = useCallback(async (direction: number) => {
     if (!detailSeriesContext || detailSeriesContext.workflowIds.length <= 1) return
-    const nextIndex =
-      ((detailSeriesContext.index + direction) % detailSeriesContext.workflowIds.length + detailSeriesContext.workflowIds.length) %
-      detailSeriesContext.workflowIds.length
+    const nextIndex = detailSeriesContext.index + direction
+    if (nextIndex < 0 || nextIndex >= detailSeriesContext.workflowIds.length) return
     const nextWorkflowId = detailSeriesContext.workflowIds[nextIndex]
     const nextWorkflow = workflows.find((item) => item.id === nextWorkflowId) || unpaidWorkflows.find((item) => item.id === nextWorkflowId)
     const assignedStep = nextWorkflow
@@ -1617,7 +1777,9 @@ export default function ImproverPage() {
     const workflowIndex = detailSeriesContext.workflowIds.findIndex((id) => id === workflow.id)
     if (workflowIndex === -1) return null
 
-    const hasMultiple = detailSeriesContext.workflowIds.length > 1
+    const hasSeriesNavigation = workflow.recurrence !== "one_time" && detailSeriesContext.workflowIds.length > 1
+    const canShiftBackward = hasSeriesNavigation && workflowIndex > 0
+    const canShiftForward = hasSeriesNavigation && workflowIndex < detailSeriesContext.workflowIds.length - 1
 
     return (
       <div className="space-y-2 rounded-md border bg-secondary/30 p-2.5 sm:p-3">
@@ -1625,14 +1787,14 @@ export default function ImproverPage() {
           <p className="text-xs text-muted-foreground">
             Series workflow {workflowIndex + 1} of {detailSeriesContext.workflowIds.length}
           </p>
-          {hasMultiple && (
+          {hasSeriesNavigation && (
             <div className="flex items-center gap-2 sm:ml-auto">
               <Button
                 className="h-8 w-8 p-0"
                 variant="outline"
                 size="sm"
                 onClick={() => void shiftDetailSeriesWorkflow(-1)}
-                disabled={Boolean(submitting)}
+                disabled={!canShiftBackward || Boolean(submitting)}
               >
                 <ChevronLeft className="h-4 w-4" />
               </Button>
@@ -1641,7 +1803,7 @@ export default function ImproverPage() {
                 variant="outline"
                 size="sm"
                 onClick={() => void shiftDetailSeriesWorkflow(1)}
-                disabled={Boolean(submitting)}
+                disabled={!canShiftForward || Boolean(submitting)}
               >
                 <ChevronRight className="h-4 w-4" />
               </Button>
@@ -1659,27 +1821,30 @@ export default function ImproverPage() {
     const submitKey = `unclaim-series:${detailSeriesContext.seriesId}:${detailSeriesContext.stepOrder}`
     const isUnclaiming = submitting === submitKey
     return (
-      <Button
-        size="sm"
-        variant="ghost"
-        className="h-8 px-2 text-xs font-normal text-muted-foreground hover:text-destructive"
-        onClick={() =>
-          setUnclaimConfirmTarget({
-            seriesId: detailSeriesContext.seriesId,
-            stepOrder: detailSeriesContext.stepOrder!,
-            workflowTitle: workflow.title,
-          })
-        }
-        disabled={Boolean(submitting)}
-      >
-        {isUnclaiming ? "Unclaiming..." : "Unclaim series"}
-      </Button>
+      <div className="w-full sm:w-auto">
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-8 px-2 text-xs font-normal text-muted-foreground hover:text-destructive justify-start sm:justify-center"
+          onClick={() =>
+            setUnclaimConfirmTarget({
+              seriesId: detailSeriesContext.seriesId,
+              stepOrder: detailSeriesContext.stepOrder!,
+              workflowTitle: workflow.title,
+            })
+          }
+          disabled={Boolean(submitting)}
+        >
+          {isUnclaiming ? "Unclaiming..." : "Unclaim series"}
+        </Button>
+      </div>
     )
   }
 
   const renderWorkflowStepActions = (workflow: Workflow, step: WorkflowStep) => {
     const mine = step.assigned_improver_id === user?.id
     const claimable = canClaimStep(workflow, step)
+    const stepSubmitError = stepSubmitErrors[step.id] || ""
     const stepNotPossibleState = stepNotPossibleForms[step.id] || defaultStepNotPossibleFormState
     const stepNotPossibleSelected = step.allow_step_not_possible && stepNotPossibleState.selected
     const nowUnix = Math.floor(Date.now() / 1000)
@@ -1797,7 +1962,11 @@ export default function ImproverPage() {
                           <div>
                             <Label className="text-xs">Camera Capture</Label>
                             <p className="text-xs text-muted-foreground">
-                              Camera roll uploads are disabled for this work item. Each photo must be under {maxWorkflowPhotoUploadLabel}.
+                              Camera roll uploads are disabled for this work item.{" "}
+                              {item.photo_allow_any_count
+                                ? "Capture any number of photos."
+                                : `Capture exactly ${Math.max(1, item.photo_required_count || 1)} photo${Math.max(1, item.photo_required_count || 1) === 1 ? "" : "s"}.`}{" "}
+                              Each photo must be under {maxWorkflowPhotoUploadLabel}.
                             </p>
                           </div>
 
@@ -1829,7 +1998,14 @@ export default function ImproverPage() {
                                   className="w-full sm:w-auto"
                                   type="button"
                                   size="sm"
-                                  onClick={() => captureCameraPhoto(step.id, item.id, item.title)}
+                                  onClick={() =>
+                                    captureCameraPhoto(
+                                      step.id,
+                                      item.id,
+                                      item.title,
+                                      normalizeWorkflowPhotoAspectRatio(item.photo_aspect_ratio || "square"),
+                                    )
+                                  }
                                   disabled={Boolean(submitting) || stepNotPossibleSelected}
                                 >
                                 Capture Photo
@@ -1840,10 +2016,17 @@ export default function ImproverPage() {
                           {cameraState.error && <p className="text-xs text-red-600">{cameraState.error}</p>}
 
                           {cameraState.open && (
-                            <div className="overflow-hidden rounded border bg-black/80">
+                            <div
+                              className="overflow-hidden rounded border bg-black/80"
+                              style={{
+                                aspectRatio: String(
+                                  workflowPhotoAspectRatios[normalizeWorkflowPhotoAspectRatio(item.photo_aspect_ratio || "square")],
+                                ),
+                              }}
+                            >
                               <video
                                 ref={getCameraVideoRef(cameraKey)}
-                                className="h-48 w-full object-cover"
+                                className="h-full w-full object-cover"
                                 playsInline
                                 muted
                                 autoPlay
@@ -1852,26 +2035,33 @@ export default function ImproverPage() {
                           )}
 
                           {form.photos.length > 0 ? (
-                            <div className="space-y-1">
+                            <div className="space-y-2">
                               <p className="text-xs text-muted-foreground">
                                 {form.photos.length} captured photo{form.photos.length === 1 ? "" : "s"}
                               </p>
-                              <div className="space-y-1">
+                              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
                                 {form.photos.map((photo, photoIndex) => (
                                   <div
                                     key={`${photo.name}-${photo.lastModified}-${photoIndex}`}
-                                    className="flex items-center justify-between gap-2 rounded border p-2 text-xs"
+                                    className="space-y-2 rounded border p-2 text-xs"
                                   >
-                                    <span className="truncate">{photo.name}</span>
-                                    <Button
-                                      type="button"
-                                      size="sm"
-                                      variant="ghost"
-                                      onClick={() => removeItemPhoto(step.id, item.id, photoIndex)}
-                                      disabled={Boolean(submitting) || stepNotPossibleSelected}
-                                    >
-                                      Remove
-                                    </Button>
+                                    <LocalPhotoThumbnail
+                                      file={photo}
+                                      onOpen={openLocalPhotoPreview}
+                                      disabled={Boolean(submitting)}
+                                    />
+                                    <div className="flex items-center justify-between gap-2">
+                                      <span className="truncate">{photo.name}</span>
+                                      <Button
+                                        type="button"
+                                        size="sm"
+                                        variant="ghost"
+                                        onClick={() => removeItemPhoto(step.id, item.id, photoIndex)}
+                                        disabled={Boolean(submitting) || stepNotPossibleSelected}
+                                      >
+                                        Remove
+                                      </Button>
+                                    </div>
                                   </div>
                                 ))}
                               </div>
@@ -1884,19 +2074,59 @@ export default function ImproverPage() {
                         <div className="space-y-1">
                           <Label className="text-xs">Upload Photos</Label>
                           <p className="text-xs text-muted-foreground">
+                            {item.photo_allow_any_count
+                              ? "Upload any number of photos."
+                              : `Upload exactly ${Math.max(1, item.photo_required_count || 1)} photo${Math.max(1, item.photo_required_count || 1) === 1 ? "" : "s"}.`}{" "}
                             Each photo must be under {maxWorkflowPhotoUploadLabel}. Oversized images are resized automatically when possible.
                           </p>
                           <Input
                             type="file"
                             accept="image/*"
                             multiple
-                            onChange={(e) => void replaceItemPhotosFromSelection(step.id, item.id, e.target.files)}
+                            onChange={(e) =>
+                              void replaceItemPhotosFromSelection(
+                                step.id,
+                                item.id,
+                                normalizeWorkflowPhotoAspectRatio(item.photo_aspect_ratio || "square"),
+                                e.target.files,
+                              )
+                            }
                             disabled={stepNotPossibleSelected || Boolean(submitting)}
                           />
-                          {form.photos.length > 0 && (
-                            <p className="text-xs text-muted-foreground">
-                              {form.photos.length} file{form.photos.length === 1 ? "" : "s"} selected
-                            </p>
+                          {form.photos.length > 0 ? (
+                            <div className="space-y-2">
+                              <p className="text-xs text-muted-foreground">
+                                {form.photos.length} file{form.photos.length === 1 ? "" : "s"} selected
+                              </p>
+                              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                                {form.photos.map((photo, photoIndex) => (
+                                  <div
+                                    key={`${photo.name}-${photo.lastModified}-${photoIndex}`}
+                                    className="space-y-2 rounded border p-2 text-xs"
+                                  >
+                                    <LocalPhotoThumbnail
+                                      file={photo}
+                                      onOpen={openLocalPhotoPreview}
+                                      disabled={Boolean(submitting)}
+                                    />
+                                    <div className="flex items-center justify-between gap-2">
+                                      <span className="truncate">{photo.name}</span>
+                                      <Button
+                                        type="button"
+                                        size="sm"
+                                        variant="ghost"
+                                        onClick={() => removeItemPhoto(step.id, item.id, photoIndex)}
+                                        disabled={Boolean(submitting) || stepNotPossibleSelected}
+                                      >
+                                        Remove
+                                      </Button>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          ) : (
+                            <p className="text-xs text-muted-foreground">No photos selected yet.</p>
                           )}
                         </div>
                       ))}
@@ -1939,6 +2169,13 @@ export default function ImproverPage() {
                 </Card>
               )
             })}
+
+            {stepSubmitError && (
+              <div className="flex items-center gap-2 rounded border border-red-200 bg-red-50 p-2 text-xs text-red-700">
+                <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0" />
+                <span>{stepSubmitError}</span>
+              </div>
+            )}
 
             <Button
               className="w-full sm:w-auto"
@@ -2577,6 +2814,38 @@ export default function ImproverPage() {
       </Tabs>
 
       <Dialog
+        open={Boolean(localPhotoPreview)}
+        onOpenChange={(open) => {
+          if (!open) {
+            closeLocalPhotoPreview()
+          }
+        }}
+      >
+        <DialogContent className="w-[95vw] max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>{localPhotoPreview?.label || "Photo Preview"}</DialogTitle>
+            <DialogDescription>Preview selected photo before submitting the workflow step.</DialogDescription>
+          </DialogHeader>
+          {localPhotoPreview ? (
+            <div className="space-y-3">
+              <img
+                src={localPhotoPreview.url}
+                alt={localPhotoPreview.label}
+                className="max-h-[70vh] w-full rounded border object-contain bg-secondary/20"
+              />
+              <div className="flex justify-end">
+                <Button type="button" variant="outline" onClick={closeLocalPhotoPreview}>
+                  Close
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">Preview unavailable.</p>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
         open={Boolean(unclaimConfirmTarget)}
         onOpenChange={(open) => {
           if (!open) setUnclaimConfirmTarget(null)
@@ -2623,7 +2892,10 @@ export default function ImproverPage() {
         open={detailOpen}
         onOpenChange={(open) => {
           setDetailOpen(open)
-          if (!open) setDetailSeriesContext(null)
+          if (!open) {
+            setDetailSeriesContext(null)
+            closeLocalPhotoPreview()
+          }
         }}
         loading={detailLoading}
         initialStepIndex={detailInitialStepIndex}

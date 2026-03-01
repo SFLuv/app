@@ -1624,10 +1624,8 @@ export default function AdminPage() {
 
   const shiftAdminDetailSeriesWorkflow = async (direction: number) => {
     if (!adminDetailSeriesContext || adminDetailSeriesContext.workflowIds.length <= 1) return
-    const nextIndex =
-      ((adminDetailSeriesContext.index + direction) % adminDetailSeriesContext.workflowIds.length +
-        adminDetailSeriesContext.workflowIds.length) %
-      adminDetailSeriesContext.workflowIds.length
+    const nextIndex = adminDetailSeriesContext.index + direction
+    if (nextIndex < 0 || nextIndex >= adminDetailSeriesContext.workflowIds.length) return
     const nextWorkflowId = adminDetailSeriesContext.workflowIds[nextIndex]
     await openAdminWorkflowDetails(nextWorkflowId, undefined, {
       ...adminDetailSeriesContext,
@@ -4025,20 +4023,35 @@ export default function AdminPage() {
         loading={adminWorkflowDetailLoading}
         renderWorkflowActions={
           adminDetailSeriesContext
-            ? () => {
-                const hasMultiple = adminDetailSeriesContext.workflowIds.length > 1
+            ? (workflow) => {
+                const hasSeriesNavigation = workflow.recurrence !== "one_time" && adminDetailSeriesContext.workflowIds.length > 1
+                const canShiftBackward = hasSeriesNavigation && adminDetailSeriesContext.index > 0
+                const canShiftForward =
+                  hasSeriesNavigation && adminDetailSeriesContext.index < adminDetailSeriesContext.workflowIds.length - 1
                 return (
                   <div className="space-y-2 rounded-md border bg-secondary/30 p-3">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <p className="text-xs text-muted-foreground">
                         Series workflow {adminDetailSeriesContext.index + 1} of {adminDetailSeriesContext.workflowIds.length}
                       </p>
-                      {hasMultiple && (
+                      {hasSeriesNavigation && (
                         <div className="flex items-center gap-2">
-                          <Button className="w-full sm:w-auto" size="sm" variant="outline" onClick={() => void shiftAdminDetailSeriesWorkflow(-1)}>
+                          <Button
+                            className="w-full sm:w-auto"
+                            size="sm"
+                            variant="outline"
+                            onClick={() => void shiftAdminDetailSeriesWorkflow(-1)}
+                            disabled={!canShiftBackward}
+                          >
                             <ChevronLeft className="h-4 w-4" />
                           </Button>
-                          <Button className="w-full sm:w-auto" size="sm" variant="outline" onClick={() => void shiftAdminDetailSeriesWorkflow(1)}>
+                          <Button
+                            className="w-full sm:w-auto"
+                            size="sm"
+                            variant="outline"
+                            onClick={() => void shiftAdminDetailSeriesWorkflow(1)}
+                            disabled={!canShiftForward}
+                          >
                             <ChevronRight className="h-4 w-4" />
                           </Button>
                         </div>

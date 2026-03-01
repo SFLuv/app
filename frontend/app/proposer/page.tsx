@@ -22,19 +22,22 @@ import {
 } from "@/components/ui/dialog"
 import { formatWorkflowDisplayStatus } from "@/lib/workflow-status"
 import { cn } from "@/lib/utils"
-import { AlertTriangle, ChevronsUpDown, Clock, Loader2, Plus, Search, Trash2, X } from "lucide-react"
+import { useToast } from "@/hooks/use-toast"
+import { AlertTriangle, CheckCircle2, ChevronsUpDown, Clock, Loader2, Plus, Search, Trash2, X } from "lucide-react"
 import {
   GlobalCredentialType,
   Workflow,
   WorkflowCreateRequest,
   WorkflowDeletionTargetType,
   WorkflowDropdownOptionCreateInput,
+  WorkflowPhotoAspectRatio,
   WorkflowRecurrence,
   WorkflowTemplate,
   WorkflowTemplateCreateRequest,
   WorkflowWorkItemCreateInput,
 } from "@/types/workflow"
 import { Supervisor } from "@/types/supervisor"
+import { WorkflowDetailsModal } from "@/components/workflows/workflow-details-modal"
 
 interface DraftRole {
   client_id: string
@@ -67,6 +70,12 @@ interface DraftWorkflowSupervisor {
   bounty: string
 }
 
+interface WorkflowSeriesGroup {
+  key: string
+  series_id: string
+  workflows: Workflow[]
+}
+
 const createDraftRole = (): DraftRole => ({
   client_id: crypto.randomUUID(),
   title: "",
@@ -80,6 +89,9 @@ const createDraftWorkItem = (): DraftWorkItem => ({
   optional: false,
   requires_photo: false,
   camera_capture_only: false,
+  photo_required_count: 1,
+  photo_allow_any_count: false,
+  photo_aspect_ratio: "square",
   requires_written_response: true,
   requires_dropdown: false,
   dropdown_options: [],
@@ -114,8 +126,23 @@ const WORKFLOW_STATUS_FILTER_OPTIONS: Array<{
   { value: "in_progress", label: "In Progress" },
   { value: "completed", label: "Completed" },
   { value: "paid_out", label: "Finalized" },
-  { value: "deleted", label: "Deleted" },
+	{ value: "deleted", label: "Deleted" },
 ]
+
+const workflowNotificationEmailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+
+const normalizeWorkflowPhotoAspectRatio = (value: string): WorkflowPhotoAspectRatio => {
+  const normalized = value.trim().toLowerCase()
+  if (normalized === "vertical" || normalized === "horizontal" || normalized === "square") {
+    return normalized
+  }
+  return "square"
+}
+
+const isWellFormedWorkflowNotificationEmail = (value: string) => {
+  if (!value) return false
+  return workflowNotificationEmailPattern.test(value)
+}
 
 const nowForDatetimeLocal = () => {
   const date = new Date()
@@ -144,6 +171,7 @@ const toUTCISOStringFromDatetimeLocal = (value: string) => {
 
 export default function ProposerPage() {
   const { user, status, authFetch } = useApp()
+  const { toast } = useToast()
 
   const [workflows, setWorkflows] = useState<Workflow[]>([])
   const [templates, setTemplates] = useState<WorkflowTemplate[]>([])
@@ -156,6 +184,7 @@ export default function ProposerPage() {
   const [activeTab, setActiveTab] = useState<"create-workflow" | "your-workflows">("create-workflow")
   const [workflowStatusFilter, setWorkflowStatusFilter] = useState<"all" | Workflow["status"]>("all")
   const [error, setError] = useState("")
+  const [successMessage, setSuccessMessage] = useState("")
   const [selectedTemplateId, setSelectedTemplateId] = useState("")
   const [templateComboOpen, setTemplateComboOpen] = useState(false)
   const [templateSearch, setTemplateSearch] = useState("")
@@ -164,6 +193,15 @@ export default function ProposerPage() {
   const [deleteTemplateLoading, setDeleteTemplateLoading] = useState(false)
   const [templateTitle, setTemplateTitle] = useState("")
   const [templateDescription, setTemplateDescription] = useState("")
+  const [detailOpen, setDetailOpen] = useState(false)
+  const [detailLoading, setDetailLoading] = useState(false)
+  const [detailWorkflow, setDetailWorkflow] = useState<Workflow | null>(null)
+
+  const [saveFromWorkflowOpen, setSaveFromWorkflowOpen] = useState(false)
+  const [saveFromWorkflowTitle, setSaveFromWorkflowTitle] = useState("")
+  const [saveFromWorkflowDescription, setSaveFromWorkflowDescription] = useState("")
+  const [saveFromWorkflowError, setSaveFromWorkflowError] = useState("")
+  const [saveFromWorkflowSubmitting, setSaveFromWorkflowSubmitting] = useState(false)
 
   const [title, setTitle] = useState("")
   const [description, setDescription] = useState("")
@@ -188,6 +226,41 @@ export default function ProposerPage() {
     }
     return workflows.filter((workflow) => workflow.status === workflowStatusFilter)
   }, [workflowStatusFilter, workflows])
+
+  const workflowSeriesGroups = useMemo<WorkflowSeriesGroup[]>(() => {
+    const bySeries = new Map<string, Workflow[]>()
+    for (const workflow of filteredWorkflows) {
+      const key = workflow.series_id?.trim() || workflow.id
+      const existing = bySeries.get(key)
+      if (existing) {
+        existing.push(workflow)
+      } else {
+        bySeries.set(key, [workflow])
+      }
+    }
+
+    const groups = Array.from(bySeries.entries()).map(([seriesId, items]) => {
+      const sorted = [...items].sort((a, b) => {
+        if (a.start_at !== b.start_at) return a.start_at - b.start_at
+        if (a.created_at !== b.created_at) return a.created_at - b.created_at
+        return a.id.localeCompare(b.id)
+      })
+      return {
+        key: seriesId,
+        series_id: seriesId,
+        workflows: sorted,
+      }
+    })
+
+    groups.sort((a, b) => {
+      const latestA = a.workflows[a.workflows.length - 1]
+      const latestB = b.workflows[b.workflows.length - 1]
+      if (latestA.created_at !== latestB.created_at) return latestB.created_at - latestA.created_at
+      return latestB.start_at - latestA.start_at
+    })
+
+    return groups
+  }, [filteredWorkflows])
 
   const filteredTemplates = useMemo(() => {
     const s = templateSearch.trim().toLowerCase()
@@ -248,6 +321,27 @@ export default function ProposerPage() {
   useEffect(() => {
     loadData()
   }, [isApproved])
+
+  useEffect(() => {
+    setError("")
+  }, [activeTab])
+
+  useEffect(() => {
+    if (activeTab !== "create-workflow") return
+    setError("")
+  }, [
+    activeTab,
+    title,
+    description,
+    recurrence,
+    startAt,
+    templateTitle,
+    templateDescription,
+    selectedTemplateId,
+    workflowSupervisor,
+    roles,
+    steps,
+  ])
 
   const updateRole = (roleId: string, update: Partial<DraftRole>) => {
     setRoles((prev) => prev.map((role) => (role.client_id === roleId ? { ...role, ...update } : role)))
@@ -363,11 +457,19 @@ export default function ProposerPage() {
 
     const email = draftOption.notify_email_input.trim().toLowerCase()
     if (!email) return
+    const stepNumber = steps.findIndex((step) => step.id === stepId) + 1
+    const itemNumber = draftStep?.work_items.findIndex((item) => item.id === itemId) ?? -1
+    if (!isWellFormedWorkflowNotificationEmail(email)) {
+      setSuccessMessage("")
+      setError(`Malformed notification email on step ${stepNumber} item ${itemNumber + 1} option ${optionIndex + 1}.`)
+      return
+    }
     if (draftOption.notify_emails.includes(email)) {
       updateDropdownOption(stepId, itemId, optionIndex, { notify_email_input: "" })
       return
     }
 
+    setError("")
     updateDropdownOption(stepId, itemId, optionIndex, {
       notify_emails: [...draftOption.notify_emails, email],
       notify_email_input: "",
@@ -403,6 +505,33 @@ export default function ProposerPage() {
     )
   }
 
+  const normalizeOptionNotificationEmails = (
+    stepNumber: number,
+    itemNumber: number,
+    optionNumber: number,
+    option: DraftDropdownOption,
+  ) => {
+    const normalized = new Set<string>()
+    option.notify_emails.forEach((email) => {
+      const value = email.trim().toLowerCase()
+      if (!value) return
+      if (!isWellFormedWorkflowNotificationEmail(value)) {
+        throw new Error(`Malformed notification email on step ${stepNumber} item ${itemNumber} option ${optionNumber}.`)
+      }
+      normalized.add(value)
+    })
+
+    const pendingInput = option.notify_email_input.trim().toLowerCase()
+    if (pendingInput) {
+      if (!isWellFormedWorkflowNotificationEmail(pendingInput)) {
+        throw new Error(`Malformed notification email on step ${stepNumber} item ${itemNumber} option ${optionNumber}.`)
+      }
+      normalized.add(pendingInput)
+    }
+
+    return Array.from(normalized)
+  }
+
   const resetForm = () => {
     setTitle("")
     setDescription("")
@@ -424,28 +553,40 @@ export default function ProposerPage() {
       throw new Error("Every role needs a title and at least one required credential.")
     }
 
-    const normalizedSteps = steps.map((step) => ({
+    const normalizedSteps = steps.map((step, stepIndex) => ({
       title: step.title.trim(),
       description: step.description.trim(),
       bounty: Number(step.bounty),
       role_client_id: step.role_client_id,
       allow_step_not_possible: step.allow_step_not_possible,
-      work_items: step.work_items.map((item) => ({
-        title: item.title.trim(),
-        description: item.description.trim(),
-        optional: item.optional,
-        requires_photo: item.requires_photo,
-        camera_capture_only: item.requires_photo ? item.camera_capture_only : false,
-        requires_written_response: item.requires_written_response,
-        requires_dropdown: item.requires_dropdown,
-        dropdown_options: item.dropdown_options.map((option) => ({
-          label: option.label.trim(),
-          requires_written_response: option.requires_written_response,
-          notify_emails: option.notify_emails
-            .map((email) => email.trim().toLowerCase())
-            .filter(Boolean),
-        })),
-      })),
+      work_items: step.work_items.map((item, itemIndex) => {
+        const requiresPhoto = Boolean(item.requires_photo)
+        const photoRequiredCount = Number.isFinite(item.photo_required_count)
+          ? Math.max(1, Math.floor(Number(item.photo_required_count)))
+          : 1
+        const photoAllowAnyCount = requiresPhoto ? Boolean(item.photo_allow_any_count) : false
+        const photoAspectRatio = requiresPhoto
+          ? normalizeWorkflowPhotoAspectRatio(item.photo_aspect_ratio)
+          : "square"
+
+        return {
+          title: item.title.trim(),
+          description: item.description.trim(),
+          optional: item.optional,
+          requires_photo: requiresPhoto,
+          camera_capture_only: requiresPhoto ? item.camera_capture_only : false,
+          photo_required_count: photoRequiredCount,
+          photo_allow_any_count: photoAllowAnyCount,
+          photo_aspect_ratio: photoAspectRatio,
+          requires_written_response: item.requires_written_response,
+          requires_dropdown: item.requires_dropdown,
+          dropdown_options: item.dropdown_options.map((option, optionIndex) => ({
+            label: option.label.trim(),
+            requires_written_response: option.requires_written_response,
+            notify_emails: normalizeOptionNotificationEmails(stepIndex + 1, itemIndex + 1, optionIndex + 1, option),
+          })),
+        }
+      }),
     }))
 
     if (normalizedSteps.some((step) => !step.title || !step.description || Number.isNaN(step.bounty) || step.bounty < 0 || !step.role_client_id)) {
@@ -459,6 +600,9 @@ export default function ProposerPage() {
         }
         if (!item.requires_photo && !item.requires_written_response && !item.requires_dropdown) {
           throw new Error("Each work item must require photo, written response, or dropdown.")
+        }
+        if (item.requires_photo && !item.photo_allow_any_count && item.photo_required_count < 1) {
+          throw new Error("Photo-required work items need a required photo count of at least 1.")
         }
         if (item.requires_dropdown && item.dropdown_options.length === 0) {
           throw new Error("Dropdown work items need at least one dropdown option.")
@@ -513,6 +657,7 @@ export default function ProposerPage() {
 
   const saveTemplate = async (asDefault: boolean) => {
     setError("")
+    setSuccessMessage("")
     const templateTitleValue = templateTitle.trim()
     const templateDescriptionValue = templateDescription.trim()
     if (!templateTitleValue) {
@@ -546,6 +691,11 @@ export default function ProposerPage() {
       setSelectedTemplateId(created.id)
       setTemplateTitle("")
       setTemplateDescription("")
+      setSuccessMessage(asDefault ? "Default template saved successfully." : "Template saved successfully.")
+      toast({
+        title: asDefault ? "Default template saved" : "Template saved",
+        description: created.template_title,
+      })
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to save workflow template.")
     } finally {
@@ -553,12 +703,9 @@ export default function ProposerPage() {
     }
   }
 
-  const applyTemplate = () => {
-    const template = templates.find((value) => value.id === selectedTemplateId)
-    if (!template) {
-      setError("Select a template to apply.")
-      return
-    }
+  const applyTemplate = (templateId: string) => {
+    const template = templates.find((value) => value.id === templateId)
+    if (!template) return
 
     const roleIdMap = new Map<string, string>()
     const mappedRoles: DraftRole[] = template.roles.map((role, index) => {
@@ -587,6 +734,12 @@ export default function ProposerPage() {
         optional: item.optional,
         requires_photo: item.requires_photo,
         camera_capture_only: Boolean(item.camera_capture_only),
+        photo_required_count:
+          typeof item.photo_required_count === "number" && Number.isFinite(item.photo_required_count)
+            ? Math.max(1, Math.floor(item.photo_required_count))
+            : 1,
+        photo_allow_any_count: Boolean(item.photo_allow_any_count),
+        photo_aspect_ratio: normalizeWorkflowPhotoAspectRatio(item.photo_aspect_ratio || "square"),
         requires_written_response: item.requires_written_response,
         requires_dropdown: item.requires_dropdown,
         dropdown_options: item.dropdown_options.map((option) => ({
@@ -615,10 +768,12 @@ export default function ProposerPage() {
     setRoles(mappedRoles.length ? mappedRoles : [createDraftRole()])
     setSteps(mappedSteps.length ? mappedSteps : [createDraftStep()])
     setError("")
+    setSuccessMessage(`Applied template: ${template.template_title}`)
   }
 
   const submitWorkflow = async () => {
     setError("")
+    setSuccessMessage("")
 
     if (!title.trim()) {
       setError("Workflow title is required.")
@@ -665,6 +820,11 @@ export default function ProposerPage() {
       const created = (await res.json()) as Workflow
       setWorkflows((prev) => [created, ...prev])
       resetForm()
+      setSuccessMessage("Workflow proposal created successfully.")
+      toast({
+        title: "Workflow proposal created",
+        description: created.title,
+      })
       await loadData()
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to create workflow right now.")
@@ -716,6 +876,7 @@ export default function ProposerPage() {
   const handleConfirmDelete = async () => {
     if (!deleteTemplateId) return
     setDeleteTemplateLoading(true)
+    setSuccessMessage("")
     try {
       const res = await authFetch(`/proposers/workflow-templates/${deleteTemplateId}`, { method: "DELETE" })
       if (!res.ok) {
@@ -726,6 +887,11 @@ export default function ProposerPage() {
       if (selectedTemplateId === deleteTemplateId) setSelectedTemplateId("")
       setDeleteTemplateId("")
       setDeleteConfirmOpen(false)
+      setSuccessMessage("Template deleted successfully.")
+      toast({
+        title: "Template deleted",
+        description: "The template was deleted successfully.",
+      })
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to delete template.")
     } finally {
@@ -741,6 +907,175 @@ export default function ProposerPage() {
     workflow.status === "blocked" ||
     workflow.status === "in_progress" ||
     workflow.status === "completed"
+
+  const canSaveTemplateFromWorkflow = (workflow: Workflow) =>
+    workflow.status === "approved" ||
+    workflow.status === "blocked" ||
+    workflow.status === "in_progress" ||
+    workflow.status === "completed" ||
+    workflow.status === "paid_out"
+
+  const openWorkflowDetails = async (workflowId: string, fallback?: Workflow) => {
+    setDetailOpen(true)
+    setDetailLoading(true)
+    if (fallback) {
+      setDetailWorkflow(fallback)
+    }
+    try {
+      const res = await authFetch(`/proposers/workflows/${workflowId}`)
+      if (!res.ok) {
+        const text = await res.text()
+        throw new Error(text || "Unable to load workflow details.")
+      }
+      const workflow = (await res.json()) as Workflow
+      setDetailWorkflow(workflow)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to load workflow details.")
+      setDetailOpen(false)
+      setDetailWorkflow(null)
+    } finally {
+      setDetailLoading(false)
+    }
+  }
+
+  const openSaveFromWorkflowModal = (workflow: Workflow) => {
+    if (!canSaveTemplateFromWorkflow(workflow)) {
+      setError("Only approved workflows can be saved as templates.")
+      return
+    }
+    setError("")
+    setSaveFromWorkflowError("")
+    setSaveFromWorkflowTitle(`${workflow.title} Template`)
+    setSaveFromWorkflowDescription(workflow.description || "")
+    setSaveFromWorkflowOpen(true)
+  }
+
+  const buildTemplatePayloadFromWorkflow = (
+    workflow: Workflow,
+    templateTitleValue: string,
+    templateDescriptionValue: string,
+  ): WorkflowTemplateCreateRequest => {
+    const roleClientIdById = new Map<string, string>()
+    const roles = workflow.roles.map((role, index) => {
+      const clientId = `role-${index + 1}`
+      roleClientIdById.set(role.id, clientId)
+      return {
+        client_id: clientId,
+        title: role.title,
+        required_credentials: role.required_credentials,
+      }
+    })
+
+    const steps = workflow.steps
+      .slice()
+      .sort((a, b) => a.step_order - b.step_order)
+      .map((step) => {
+        const roleId = step.role_id || ""
+        const roleClientId = roleClientIdById.get(roleId) || ""
+        if (!roleClientId) {
+          throw new Error(`Workflow step "${step.title}" is missing a valid role assignment.`)
+        }
+
+        return {
+          title: step.title,
+          description: step.description,
+          bounty: step.bounty,
+          role_client_id: roleClientId,
+          allow_step_not_possible: Boolean(step.allow_step_not_possible),
+          work_items: step.work_items
+            .slice()
+            .sort((a, b) => a.item_order - b.item_order)
+            .map((item) => ({
+              title: item.title,
+              description: item.description,
+              optional: item.optional,
+              requires_photo: item.requires_photo,
+              camera_capture_only: Boolean(item.camera_capture_only),
+              photo_required_count: Math.max(1, item.photo_required_count || 1),
+              photo_allow_any_count: Boolean(item.photo_allow_any_count),
+              photo_aspect_ratio: normalizeWorkflowPhotoAspectRatio(item.photo_aspect_ratio || "square"),
+              requires_written_response: item.requires_written_response,
+              requires_dropdown: item.requires_dropdown,
+              dropdown_options: item.dropdown_options.map((option) => ({
+                label: option.label,
+                requires_written_response: Boolean(option.requires_written_response),
+                notify_emails: option.notify_emails || [],
+              })),
+            })),
+        }
+      })
+
+    const payload: WorkflowTemplateCreateRequest = {
+      template_title: templateTitleValue,
+      template_description: templateDescriptionValue,
+      recurrence: workflow.recurrence,
+      start_at: new Date(workflow.start_at * 1000).toISOString(),
+      roles,
+      steps,
+    }
+
+    if (workflow.supervisor_required && workflow.supervisor_user_id) {
+      payload.supervisor_user_id = workflow.supervisor_user_id
+      payload.supervisor_bounty = workflow.supervisor_bounty
+    }
+
+    return payload
+  }
+
+  const saveCurrentWorkflowAsTemplate = async () => {
+    setSaveFromWorkflowError("")
+    if (!detailWorkflow) {
+      setSaveFromWorkflowError("No workflow selected.")
+      return
+    }
+    if (!canSaveTemplateFromWorkflow(detailWorkflow)) {
+      setSaveFromWorkflowError("Only approved workflows can be saved as templates.")
+      return
+    }
+
+    const templateTitleValue = saveFromWorkflowTitle.trim()
+    const templateDescriptionValue = saveFromWorkflowDescription.trim()
+    if (!templateTitleValue) {
+      setSaveFromWorkflowError("Template title is required.")
+      return
+    }
+
+    let payload: WorkflowTemplateCreateRequest
+    try {
+      payload = buildTemplatePayloadFromWorkflow(detailWorkflow, templateTitleValue, templateDescriptionValue)
+    } catch (err) {
+      setSaveFromWorkflowError(err instanceof Error ? err.message : "Unable to build template from workflow.")
+      return
+    }
+
+    setSaveFromWorkflowSubmitting(true)
+    try {
+      const res = await authFetch("/proposers/workflow-templates", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      })
+      if (!res.ok) {
+        const text = await res.text()
+        throw new Error(text || "Unable to save template from workflow.")
+      }
+      const created = (await res.json()) as WorkflowTemplate
+      setTemplates((prev) => [created, ...prev.filter((template) => template.id !== created.id)])
+      setSelectedTemplateId(created.id)
+      setSaveFromWorkflowOpen(false)
+      setSaveFromWorkflowError("")
+      setSaveFromWorkflowTitle("")
+      setSaveFromWorkflowDescription("")
+      setSuccessMessage("Template saved from workflow successfully.")
+      toast({
+        title: "Template saved",
+        description: created.template_title,
+      })
+    } catch (err) {
+      setSaveFromWorkflowError(err instanceof Error ? err.message : "Unable to save template from workflow.")
+    } finally {
+      setSaveFromWorkflowSubmitting(false)
+    }
+  }
 
   if (status === "loading" || loading) {
     return (
@@ -776,6 +1111,13 @@ export default function ProposerPage() {
         <div className="flex items-center gap-2 text-red-600 text-sm p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
           <AlertTriangle className="h-4 w-4 flex-shrink-0" />
           <span>{error}</span>
+        </div>
+      )}
+
+      {successMessage && (
+        <div className="flex items-center gap-2 text-green-700 text-sm p-3 bg-green-50 dark:bg-green-900/20 rounded-lg">
+          <CheckCircle2 className="h-4 w-4 flex-shrink-0" />
+          <span>{successMessage}</span>
         </div>
       )}
 
@@ -819,7 +1161,7 @@ export default function ProposerPage() {
               <Badge variant="outline">{templates.length} templates</Badge>
             </div>
 
-            <div className="grid gap-3 md:grid-cols-[minmax(0,1fr),auto]">
+            <div className="grid gap-3">
               <Popover open={templateComboOpen} onOpenChange={setTemplateComboOpen}>
                 <PopoverTrigger asChild>
                   <Button variant="outline" role="combobox" className="w-full justify-between font-normal">
@@ -856,6 +1198,7 @@ export default function ProposerPage() {
                             className="flex-1 text-left min-w-0"
                             onClick={() => {
                               setSelectedTemplateId(template.id)
+                              applyTemplate(template.id)
                               setTemplateComboOpen(false)
                               setTemplateSearch("")
                             }}
@@ -863,7 +1206,7 @@ export default function ProposerPage() {
                             <span className="block truncate">{template.template_title}</span>
                             <span className="text-xs text-muted-foreground">{template.is_default ? "Default" : "Personal"}</span>
                           </button>
-                          {!template.is_default && (
+                          {(!template.is_default || user?.isAdmin) && (
                             <button
                               type="button"
                               className="shrink-0 text-muted-foreground hover:text-destructive transition-colors p-0.5"
@@ -884,9 +1227,6 @@ export default function ProposerPage() {
                   </div>
                 </PopoverContent>
               </Popover>
-              <Button type="button" variant="secondary" onClick={applyTemplate} disabled={!selectedTemplateId}>
-                Apply Template
-              </Button>
             </div>
 
             <div className="grid gap-3 md:grid-cols-2">
@@ -910,7 +1250,7 @@ export default function ProposerPage() {
 
             <div className="flex flex-wrap gap-2">
               <Button type="button" variant="outline" onClick={() => saveTemplate(false)} disabled={templateSaving}>
-                {templateSaving ? "Saving..." : "Save Personal Template"}
+                {templateSaving ? "Saving..." : `Save${user?.isAdmin ? " Personal" : ""} Template`}
               </Button>
               {user?.isAdmin && (
                 <Button type="button" onClick={() => saveTemplate(true)} disabled={templateSaving}>
@@ -1221,6 +1561,11 @@ export default function ProposerPage() {
                                   updateWorkItem(step.id, item.id, {
                                     requires_photo: requiresPhoto,
                                     camera_capture_only: requiresPhoto ? item.camera_capture_only : false,
+                                    photo_required_count: requiresPhoto ? Math.max(1, Number(item.photo_required_count) || 1) : 1,
+                                    photo_allow_any_count: requiresPhoto ? item.photo_allow_any_count : false,
+                                    photo_aspect_ratio: requiresPhoto
+                                      ? normalizeWorkflowPhotoAspectRatio(item.photo_aspect_ratio)
+                                      : "square",
                                   })
                                 }}
                               />
@@ -1245,15 +1590,75 @@ export default function ProposerPage() {
                           </div>
 
                           {item.requires_photo && (
-                            <label className="flex items-center gap-2 text-sm">
-                              <Checkbox
-                                checked={item.camera_capture_only}
-                                onCheckedChange={(value) =>
-                                  updateWorkItem(step.id, item.id, { camera_capture_only: Boolean(value) })
-                                }
-                              />
-                              Require live camera capture only (disallow camera roll)
-                            </label>
+                            <div className="space-y-3 rounded-md border p-3 bg-secondary/40">
+                              <label className="flex items-center gap-2 text-sm">
+                                <Checkbox
+                                  checked={item.camera_capture_only}
+                                  onCheckedChange={(value) =>
+                                    updateWorkItem(step.id, item.id, {
+                                      camera_capture_only: Boolean(value),
+                                      photo_aspect_ratio: Boolean(value)
+                                        ? "square"
+                                        : normalizeWorkflowPhotoAspectRatio(item.photo_aspect_ratio),
+                                    })
+                                  }
+                                />
+                                Require live camera capture only (disallow camera roll)
+                              </label>
+
+                              <div className="grid gap-3 md:grid-cols-3">
+                                <div className="space-y-1">
+                                  <Label className="text-xs">Photo Aspect Ratio</Label>
+                                  <Select
+                                    value={normalizeWorkflowPhotoAspectRatio(item.photo_aspect_ratio)}
+                                    onValueChange={(value: WorkflowPhotoAspectRatio) =>
+                                      updateWorkItem(step.id, item.id, {
+                                        photo_aspect_ratio: normalizeWorkflowPhotoAspectRatio(value),
+                                      })
+                                    }
+                                  >
+                                    <SelectTrigger>
+                                      <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      <SelectItem value="vertical">Vertical</SelectItem>
+                                      <SelectItem value="square">Square</SelectItem>
+                                      <SelectItem value="horizontal">Horizontal</SelectItem>
+                                    </SelectContent>
+                                  </Select>
+                                </div>
+
+                                <div className="space-y-1 md:col-span-2">
+                                  <Label className="text-xs">Photo Count Requirement</Label>
+                                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                                    <label className="flex items-center gap-2 text-xs">
+                                      <Checkbox
+                                        checked={item.photo_allow_any_count}
+                                        onCheckedChange={(value) =>
+                                          updateWorkItem(step.id, item.id, {
+                                            photo_allow_any_count: Boolean(value),
+                                          })
+                                        }
+                                      />
+                                      Allow any amount
+                                    </label>
+                                    {!item.photo_allow_any_count && (
+                                      <Input
+                                        type="number"
+                                        min={1}
+                                        value={item.photo_required_count}
+                                        onChange={(e) =>
+                                          updateWorkItem(step.id, item.id, {
+                                            photo_required_count: Math.max(1, Number(e.target.value) || 1),
+                                          })
+                                        }
+                                        className="w-full sm:w-32"
+                                      />
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
                           )}
 
                           {item.requires_dropdown && (
@@ -1410,12 +1815,19 @@ export default function ProposerPage() {
                 </Select>
               </div>
 
-              {filteredWorkflows.length === 0 ? (
+              {workflowSeriesGroups.length === 0 ? (
                 <p className="text-sm text-muted-foreground">No workflows found for the selected status.</p>
               ) : (
-                filteredWorkflows.map((workflow) => (
-                  <Card key={workflow.id}>
-                    <CardContent className="pt-4">
+                workflowSeriesGroups.map((group) => {
+                  const workflow = group.workflows[group.workflows.length - 1]
+                  const deletionTargetType: WorkflowDeletionTargetType = isSeriesWorkflow(workflow) ? "series" : "workflow"
+
+                  return (
+                  <Card key={group.key}>
+                    <CardContent
+                      className="pt-4 cursor-pointer transition-colors hover:bg-muted/30"
+                      onClick={() => void openWorkflowDetails(workflow.id, workflow)}
+                    >
                       <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                         <div className="space-y-2">
                           <div className="flex items-center gap-2">
@@ -1448,8 +1860,26 @@ export default function ProposerPage() {
                         </div>
 
                         <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:flex-wrap">
+                          <Button
+                            className="w-full sm:w-auto"
+                            variant="outline"
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              void openWorkflowDetails(workflow.id, workflow)
+                            }}
+                          >
+                            View Details
+                          </Button>
+
                           {(workflow.status === "pending" || workflow.status === "rejected" || workflow.status === "expired") && (
-                            <Button className="w-full sm:w-auto" variant="outline" onClick={() => deleteWorkflow(workflow.id)}>
+                            <Button
+                              className="w-full sm:w-auto"
+                              variant="outline"
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                void deleteWorkflow(workflow.id)
+                              }}
+                            >
                               <Trash2 className="h-4 w-4 mr-2" />
                               Delete
                             </Button>
@@ -1459,33 +1889,65 @@ export default function ProposerPage() {
                             <Button
                               className="w-full sm:w-auto"
                               variant="outline"
-                              onClick={() => proposeDeletion(workflow.id, isSeriesWorkflow(workflow) ? "series" : "workflow")}
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                void proposeDeletion(workflow.id, deletionTargetType)
+                              }}
                               disabled={Boolean(deletionSubmitting)}
                             >
-                              {deletionSubmitting === `${workflow.id}:${isSeriesWorkflow(workflow) ? "series" : "workflow"}`
+                              {deletionSubmitting === `${workflow.id}:${deletionTargetType}`
                                 ? "Submitting..."
-                                : isSeriesWorkflow(workflow)
+                                : deletionTargetType === "series"
                                   ? "Propose Series Deletion"
                                   : "Propose Workflow Deletion"}
                             </Button>
                           )}
+
                         </div>
                       </div>
                     </CardContent>
                   </Card>
-                ))
+                )})
               )}
             </CardContent>
           </Card>
         </TabsContent>
       </Tabs>
 
+      <WorkflowDetailsModal
+        workflow={detailWorkflow}
+        open={detailOpen}
+        onOpenChange={(open) => {
+          setDetailOpen(open)
+          if (!open) {
+            setDetailWorkflow(null)
+          }
+        }}
+        loading={detailLoading}
+        disableStepPagination
+        hideSubmissionData
+        renderBottomActions={(workflow) =>
+          canSaveTemplateFromWorkflow(workflow) ? (
+            <div className="flex justify-end">
+              <Button
+                className="w-full sm:w-auto"
+                variant="outline"
+                onClick={() => openSaveFromWorkflowModal(workflow)}
+                disabled={saveFromWorkflowSubmitting}
+              >
+                Save as Template
+              </Button>
+            </div>
+          ) : null
+        }
+      />
+
       <Dialog open={deleteConfirmOpen} onOpenChange={setDeleteConfirmOpen}>
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle>Delete Template?</DialogTitle>
             <DialogDescription>
-              This will permanently delete this personal workflow template. This action cannot be undone.
+              This will permanently delete this workflow template. This action cannot be undone.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -1496,6 +1958,61 @@ export default function ProposerPage() {
               {deleteTemplateLoading ? "Deleting..." : "Delete"}
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={saveFromWorkflowOpen}
+        onOpenChange={(open) => {
+          setSaveFromWorkflowOpen(open)
+          if (!open) {
+            setSaveFromWorkflowError("")
+          }
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Save As Template</DialogTitle>
+            <DialogDescription>
+              Save this approved workflow structure as a reusable template.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-1">
+              <Label>Template Title</Label>
+              <Input
+                value={saveFromWorkflowTitle}
+                onChange={(e) => setSaveFromWorkflowTitle(e.target.value)}
+                placeholder="Template title"
+              />
+            </div>
+            <div className="space-y-1">
+              <Label>Template Description</Label>
+              <Textarea
+                value={saveFromWorkflowDescription}
+                onChange={(e) => setSaveFromWorkflowDescription(e.target.value)}
+                placeholder="Template description (optional)"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setSaveFromWorkflowOpen(false)
+                setSaveFromWorkflowError("")
+              }}
+              disabled={saveFromWorkflowSubmitting}
+            >
+              Cancel
+            </Button>
+            <Button onClick={saveCurrentWorkflowAsTemplate} disabled={saveFromWorkflowSubmitting}>
+              {saveFromWorkflowSubmitting ? "Saving..." : "Save"}
+            </Button>
+          </DialogFooter>
+          {saveFromWorkflowError && (
+            <p className="text-sm text-red-600">{saveFromWorkflowError}</p>
+          )}
         </DialogContent>
       </Dialog>
     </div>

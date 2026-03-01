@@ -156,14 +156,17 @@ type WorkflowStepCreateInput struct {
 }
 
 type WorkflowWorkItemCreateInput struct {
-	Title             string                              `json:"title"`
-	Description       string                              `json:"description"`
-	Optional          bool                                `json:"optional"`
-	RequiresPhoto     bool                                `json:"requires_photo"`
-	CameraCaptureOnly bool                                `json:"camera_capture_only"`
-	RequiresWritten   bool                                `json:"requires_written_response"`
-	RequiresDropdown  bool                                `json:"requires_dropdown"`
-	DropdownOptions   []WorkflowDropdownOptionCreateInput `json:"dropdown_options"`
+	Title              string                              `json:"title"`
+	Description        string                              `json:"description"`
+	Optional           bool                                `json:"optional"`
+	RequiresPhoto      bool                                `json:"requires_photo"`
+	CameraCaptureOnly  bool                                `json:"camera_capture_only"`
+	PhotoRequiredCount int                                 `json:"photo_required_count"`
+	PhotoAllowAnyCount bool                                `json:"photo_allow_any_count"`
+	PhotoAspectRatio   string                              `json:"photo_aspect_ratio"`
+	RequiresWritten    bool                                `json:"requires_written_response"`
+	RequiresDropdown   bool                                `json:"requires_dropdown"`
+	DropdownOptions    []WorkflowDropdownOptionCreateInput `json:"dropdown_options"`
 }
 
 type WorkflowDropdownOptionCreateInput struct {
@@ -386,6 +389,9 @@ type WorkflowWorkItem struct {
 	Optional                   bool                     `json:"optional"`
 	RequiresPhoto              bool                     `json:"requires_photo"`
 	CameraCaptureOnly          bool                     `json:"camera_capture_only"`
+	PhotoRequiredCount         int                      `json:"photo_required_count"`
+	PhotoAllowAnyCount         bool                     `json:"photo_allow_any_count"`
+	PhotoAspectRatio           string                   `json:"photo_aspect_ratio"`
 	RequiresWrittenResponse    bool                     `json:"requires_written_response"`
 	RequiresDropdown           bool                     `json:"requires_dropdown"`
 	DropdownOptions            []WorkflowDropdownOption `json:"dropdown_options"`

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/mail"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -1205,6 +1206,20 @@ func normalizeWorkflowTemplateData(req *structs.WorkflowTemplateCreateRequest, s
 				return nil, fmt.Errorf("workflow work item must require photo, written response, or dropdown")
 			}
 
+			photoRequiredCount := itemInput.PhotoRequiredCount
+			if photoRequiredCount <= 0 {
+				photoRequiredCount = 1
+			}
+			photoAllowAnyCount := itemInput.RequiresPhoto && itemInput.PhotoAllowAnyCount
+			if !itemInput.RequiresPhoto {
+				photoAllowAnyCount = false
+			}
+
+			photoAspectRatio, err := normalizeWorkflowPhotoAspectRatio(itemInput.PhotoAspectRatio)
+			if err != nil {
+				return nil, fmt.Errorf("workflow work item photo_aspect_ratio is invalid")
+			}
+
 			normalizedDropdownOptions := []structs.WorkflowDropdownOptionCreateInput{}
 			if itemInput.RequiresDropdown {
 				if len(itemInput.DropdownOptions) == 0 {
@@ -1226,23 +1241,31 @@ func normalizeWorkflowTemplateData(req *structs.WorkflowTemplateCreateRequest, s
 					}
 					seenValues[value] = struct{}{}
 
+					notifyEmails, notifyErr := normalizeValidatedWorkflowNotificationEmails(option.NotifyEmails)
+					if notifyErr != nil {
+						return nil, notifyErr
+					}
+
 					normalizedDropdownOptions = append(normalizedDropdownOptions, structs.WorkflowDropdownOptionCreateInput{
 						Label:                   label,
 						RequiresWrittenResponse: option.RequiresWrittenResponse,
-						NotifyEmails:            normalizeEmailList(option.NotifyEmails),
+						NotifyEmails:            notifyEmails,
 					})
 				}
 			}
 
 			normalizedItems = append(normalizedItems, structs.WorkflowWorkItemCreateInput{
-				Title:             itemTitle,
-				Description:       strings.TrimSpace(itemInput.Description),
-				Optional:          itemInput.Optional,
-				RequiresPhoto:     itemInput.RequiresPhoto,
-				CameraCaptureOnly: itemInput.RequiresPhoto && itemInput.CameraCaptureOnly,
-				RequiresWritten:   itemInput.RequiresWritten,
-				RequiresDropdown:  itemInput.RequiresDropdown,
-				DropdownOptions:   normalizedDropdownOptions,
+				Title:              itemTitle,
+				Description:        strings.TrimSpace(itemInput.Description),
+				Optional:           itemInput.Optional,
+				RequiresPhoto:      itemInput.RequiresPhoto,
+				CameraCaptureOnly:  itemInput.RequiresPhoto && itemInput.CameraCaptureOnly,
+				PhotoRequiredCount: photoRequiredCount,
+				PhotoAllowAnyCount: photoAllowAnyCount,
+				PhotoAspectRatio:   photoAspectRatio,
+				RequiresWritten:    itemInput.RequiresWritten,
+				RequiresDropdown:   itemInput.RequiresDropdown,
+				DropdownOptions:    normalizedDropdownOptions,
 			})
 		}
 
@@ -1493,16 +1516,22 @@ func (a *AppDB) GetWorkflowTemplatesForProposer(ctx context.Context, proposerId 
 	return templates, nil
 }
 
-func (a *AppDB) DeleteWorkflowTemplate(ctx context.Context, templateId, proposerId string) error {
+func (a *AppDB) DeleteWorkflowTemplate(ctx context.Context, templateId, proposerId string, isAdmin bool) error {
 	cmd, err := a.db.Exec(ctx, `
 		DELETE FROM workflow_templates
-		WHERE id = $1 AND owner_user_id = $2 AND is_default = false;
-	`, templateId, proposerId)
+		WHERE
+			id = $1
+		AND (
+			(owner_user_id = $2 AND is_default = false)
+			OR
+			($3 = true AND is_default = true)
+		);
+	`, templateId, proposerId, isAdmin)
 	if err != nil {
 		return fmt.Errorf("error deleting workflow template: %s", err)
 	}
 	if cmd.RowsAffected() == 0 {
-		return fmt.Errorf("template not found or not owned by proposer")
+		return fmt.Errorf("template not found or not deletable by user")
 	}
 	return nil
 }
@@ -1762,6 +1791,19 @@ func (a *AppDB) CreateWorkflow(ctx context.Context, proposerId string, req *stru
 				return nil, fmt.Errorf("workflow work item must require photo, written response, or dropdown")
 			}
 
+			photoRequiredCount := itemInput.PhotoRequiredCount
+			if photoRequiredCount <= 0 {
+				photoRequiredCount = 1
+			}
+			photoAllowAnyCount := itemInput.RequiresPhoto && itemInput.PhotoAllowAnyCount
+			if !itemInput.RequiresPhoto {
+				photoAllowAnyCount = false
+			}
+			photoAspectRatio, err := normalizeWorkflowPhotoAspectRatio(itemInput.PhotoAspectRatio)
+			if err != nil {
+				return nil, fmt.Errorf("workflow work item photo_aspect_ratio is invalid")
+			}
+
 			dropdownOptions := []structs.WorkflowDropdownOption{}
 			dropdownRequiresWritten := map[string]bool{}
 			if itemInput.RequiresDropdown {
@@ -1785,7 +1827,10 @@ func (a *AppDB) CreateWorkflow(ctx context.Context, proposerId string, req *stru
 					}
 					seenValues[value] = struct{}{}
 
-					notifyEmails := normalizeEmailList(option.NotifyEmails)
+					notifyEmails, notifyErr := normalizeValidatedWorkflowNotificationEmails(option.NotifyEmails)
+					if notifyErr != nil {
+						return nil, notifyErr
+					}
 					dropdownOptions = append(dropdownOptions, structs.WorkflowDropdownOption{
 						Value:                   value,
 						Label:                   label,
@@ -1824,19 +1869,22 @@ func (a *AppDB) CreateWorkflow(ctx context.Context, proposerId string, req *stru
 						item_order,
 						title,
 						description,
-						is_optional,
-						requires_photo,
-						camera_capture_only,
-						requires_written_response,
-						requires_dropdown,
-						dropdown_options,
-						dropdown_requires_written_response,
-						notify_emails,
+							is_optional,
+							requires_photo,
+							camera_capture_only,
+							photo_required_count,
+							photo_allow_any_count,
+							photo_aspect_ratio,
+							requires_written_response,
+							requires_dropdown,
+							dropdown_options,
+							dropdown_requires_written_response,
+							notify_emails,
 						notify_on_dropdown_values
 					)
-				VALUES
-					($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12::jsonb, $13::jsonb, $14::jsonb);
-			`, itemId, stepId, itemIndex+1, itemTitle, strings.TrimSpace(itemInput.Description), itemInput.Optional, itemInput.RequiresPhoto, itemInput.RequiresPhoto && itemInput.CameraCaptureOnly, itemInput.RequiresWritten, itemInput.RequiresDropdown, string(dropdownOptionsJSON), string(dropdownRequiresJSON), string(legacyNotifyEmailsJSON), string(legacyNotifyValuesJSON))
+						VALUES
+							($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb, $15::jsonb, $16::jsonb, $17::jsonb);
+				`, itemId, stepId, itemIndex+1, itemTitle, strings.TrimSpace(itemInput.Description), itemInput.Optional, itemInput.RequiresPhoto, itemInput.RequiresPhoto && itemInput.CameraCaptureOnly, photoRequiredCount, photoAllowAnyCount, photoAspectRatio, itemInput.RequiresWritten, itemInput.RequiresDropdown, string(dropdownOptionsJSON), string(dropdownRequiresJSON), string(legacyNotifyEmailsJSON), string(legacyNotifyValuesJSON))
 			if err != nil {
 				return nil, fmt.Errorf("error inserting workflow work item: %s", err)
 			}
@@ -2157,20 +2205,23 @@ func (a *AppDB) getWorkflowSteps(ctx context.Context, workflowId string) ([]stru
 	}
 
 	itemRows, err := a.db.Query(ctx, `
-		SELECT
-			id,
-			step_id,
-			item_order,
-			title,
-			description,
-			is_optional,
-			requires_photo,
-			camera_capture_only,
-			requires_written_response,
-			requires_dropdown,
-			dropdown_options,
-			dropdown_requires_written_response,
-			notify_emails,
+			SELECT
+				id,
+				step_id,
+				item_order,
+				title,
+				description,
+				is_optional,
+				requires_photo,
+				camera_capture_only,
+				photo_required_count,
+				photo_allow_any_count,
+				photo_aspect_ratio,
+				requires_written_response,
+				requires_dropdown,
+				dropdown_options,
+				dropdown_requires_written_response,
+				notify_emails,
 			notify_on_dropdown_values
 		FROM
 			workflow_step_items
@@ -2201,6 +2252,9 @@ func (a *AppDB) getWorkflowSteps(ctx context.Context, workflowId string) ([]stru
 			&item.Optional,
 			&item.RequiresPhoto,
 			&item.CameraCaptureOnly,
+			&item.PhotoRequiredCount,
+			&item.PhotoAllowAnyCount,
+			&item.PhotoAspectRatio,
 			&item.RequiresWrittenResponse,
 			&item.RequiresDropdown,
 			&dropdownOptionsBytes,
@@ -2212,6 +2266,17 @@ func (a *AppDB) getWorkflowSteps(ctx context.Context, workflowId string) ([]stru
 		}
 
 		item.DropdownOptions = []structs.WorkflowDropdownOption{}
+		if item.PhotoRequiredCount <= 0 {
+			item.PhotoRequiredCount = 1
+		}
+		if normalizedAspect, aspectErr := normalizeWorkflowPhotoAspectRatio(item.PhotoAspectRatio); aspectErr == nil {
+			item.PhotoAspectRatio = normalizedAspect
+		} else {
+			item.PhotoAspectRatio = defaultWorkflowPhotoAspectRatio
+		}
+		if !item.RequiresPhoto {
+			item.PhotoAllowAnyCount = false
+		}
 		if len(dropdownOptionsBytes) > 0 {
 			if err := json.Unmarshal(dropdownOptionsBytes, &item.DropdownOptions); err != nil {
 				return nil, fmt.Errorf("error unmarshalling dropdown options: %s", err)
@@ -2993,6 +3058,9 @@ func ensureRecurringWorkflowSuccessorTx(
 		IsOptional              bool
 		RequiresPhoto           bool
 		CameraCaptureOnly       bool
+		PhotoRequiredCount      int
+		PhotoAllowAnyCount      bool
+		PhotoAspectRatio        string
 		RequiresWrittenResponse bool
 		RequiresDropdown        bool
 		DropdownOptions         []byte
@@ -3046,18 +3114,21 @@ func ensureRecurringWorkflowSuccessorTx(
 
 	for idx := range stepSeeds {
 		itemRows, err := tx.Query(ctx, `
-			SELECT
-				item_order,
-				title,
-				description,
-				is_optional,
-				requires_photo,
-				camera_capture_only,
-				requires_written_response,
-				requires_dropdown,
-				dropdown_options,
-				dropdown_requires_written_response,
-				notify_emails,
+				SELECT
+					item_order,
+					title,
+					description,
+					is_optional,
+					requires_photo,
+					camera_capture_only,
+					photo_required_count,
+					photo_allow_any_count,
+					photo_aspect_ratio,
+					requires_written_response,
+					requires_dropdown,
+					dropdown_options,
+					dropdown_requires_written_response,
+					notify_emails,
 				notify_on_dropdown_values
 			FROM
 				workflow_step_items
@@ -3080,6 +3151,9 @@ func ensureRecurringWorkflowSuccessorTx(
 				&item.IsOptional,
 				&item.RequiresPhoto,
 				&item.CameraCaptureOnly,
+				&item.PhotoRequiredCount,
+				&item.PhotoAllowAnyCount,
+				&item.PhotoAspectRatio,
 				&item.RequiresWrittenResponse,
 				&item.RequiresDropdown,
 				&item.DropdownOptions,
@@ -3153,27 +3227,40 @@ func ensureRecurringWorkflowSuccessorTx(
 			if len(notifyOnValues) == 0 {
 				notifyOnValues = []byte("[]")
 			}
+			if item.PhotoRequiredCount <= 0 {
+				item.PhotoRequiredCount = 1
+			}
+			normalizedAspect, aspectErr := normalizeWorkflowPhotoAspectRatio(item.PhotoAspectRatio)
+			if aspectErr != nil {
+				normalizedAspect = defaultWorkflowPhotoAspectRatio
+			}
+			if !item.RequiresPhoto {
+				item.PhotoAllowAnyCount = false
+			}
 
 			_, err = tx.Exec(ctx, `
-				INSERT INTO workflow_step_items(
-					id,
-					step_id,
+					INSERT INTO workflow_step_items(
+						id,
+						step_id,
 					item_order,
 					title,
 					description,
-					is_optional,
-					requires_photo,
-					camera_capture_only,
-					requires_written_response,
-					requires_dropdown,
-					dropdown_options,
-					dropdown_requires_written_response,
-					notify_emails,
+						is_optional,
+						requires_photo,
+						camera_capture_only,
+						photo_required_count,
+						photo_allow_any_count,
+						photo_aspect_ratio,
+						requires_written_response,
+						requires_dropdown,
+						dropdown_options,
+						dropdown_requires_written_response,
+						notify_emails,
 					notify_on_dropdown_values
-				)
-				VALUES
-					($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12::jsonb, $13::jsonb, $14::jsonb);
-			`, uuid.NewString(), newStepId, item.ItemOrder, item.Title, item.Description, item.IsOptional, item.RequiresPhoto, item.CameraCaptureOnly, item.RequiresWrittenResponse, item.RequiresDropdown, string(dropdownOptions), string(dropdownRequiresWritten), string(notifyEmails), string(notifyOnValues))
+					)
+					VALUES
+						($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb, $15::jsonb, $16::jsonb, $17::jsonb);
+				`, uuid.NewString(), newStepId, item.ItemOrder, item.Title, item.Description, item.IsOptional, item.RequiresPhoto, item.CameraCaptureOnly, item.PhotoRequiredCount, item.PhotoAllowAnyCount, normalizedAspect, item.RequiresWrittenResponse, item.RequiresDropdown, string(dropdownOptions), string(dropdownRequiresWritten), string(notifyEmails), string(notifyOnValues))
 			if err != nil {
 				return "", fmt.Errorf("error cloning workflow step item seed: %s", err)
 			}
@@ -5359,11 +5446,27 @@ func (a *AppDB) StartWorkflowStep(ctx context.Context, workflowId string, stepId
 }
 
 var dropdownValueSanitizer = regexp.MustCompile(`[^a-z0-9]+`)
+var workflowNotificationEmailPattern = regexp.MustCompile(`^[^\s@]+@[^\s@]+\.[^\s@]+$`)
+
+const defaultWorkflowPhotoAspectRatio = "square"
 
 func deriveDropdownValueFromLabel(label string) string {
 	label = strings.ToLower(strings.TrimSpace(label))
 	label = dropdownValueSanitizer.ReplaceAllString(label, "_")
 	return strings.Trim(label, "_")
+}
+
+func normalizeWorkflowPhotoAspectRatio(raw string) (string, error) {
+	normalized := strings.ToLower(strings.TrimSpace(raw))
+	if normalized == "" {
+		return defaultWorkflowPhotoAspectRatio, nil
+	}
+	switch normalized {
+	case "vertical", "square", "horizontal":
+		return normalized, nil
+	default:
+		return "", fmt.Errorf("invalid photo aspect ratio")
+	}
 }
 
 func normalizeEmailList(emails []string) []string {
@@ -5381,6 +5484,33 @@ func normalizeEmailList(emails []string) []string {
 		normalized = append(normalized, email)
 	}
 	return normalized
+}
+
+func normalizeValidatedWorkflowNotificationEmails(emails []string) ([]string, error) {
+	normalized := make([]string, 0, len(emails))
+	seen := map[string]struct{}{}
+	for _, raw := range emails {
+		email := strings.ToLower(strings.TrimSpace(raw))
+		if email == "" {
+			continue
+		}
+		parsed, err := mail.ParseAddress(email)
+		if err != nil || parsed == nil || strings.TrimSpace(parsed.Address) == "" {
+			return nil, fmt.Errorf("invalid notification email format")
+		}
+		if strings.ToLower(strings.TrimSpace(parsed.Address)) != email {
+			return nil, fmt.Errorf("invalid notification email format")
+		}
+		if !workflowNotificationEmailPattern.MatchString(email) {
+			return nil, fmt.Errorf("invalid notification email format")
+		}
+		if _, exists := seen[email]; exists {
+			continue
+		}
+		seen[email] = struct{}{}
+		normalized = append(normalized, email)
+	}
+	return normalized, nil
 }
 
 const maxWorkflowPhotoUploadBytes = 2 * 1024 * 1024
@@ -5563,17 +5693,20 @@ func (a *AppDB) CompleteWorkflowStep(
 	photoUploadsByItem := map[string][]parsedWorkflowPhotoUpload{}
 	if !stepNotPossible {
 		itemRows, err := tx.Query(ctx, `
-		SELECT
-			id,
-			title,
-			is_optional,
-			requires_photo,
-			camera_capture_only,
-			requires_written_response,
-			requires_dropdown,
-			dropdown_options,
-			dropdown_requires_written_response,
-			notify_emails,
+			SELECT
+				id,
+				title,
+				is_optional,
+				requires_photo,
+				camera_capture_only,
+				photo_required_count,
+				photo_allow_any_count,
+				photo_aspect_ratio,
+				requires_written_response,
+				requires_dropdown,
+				dropdown_options,
+				dropdown_requires_written_response,
+				notify_emails,
 			notify_on_dropdown_values
 		FROM
 			workflow_step_items
@@ -5593,6 +5726,9 @@ func (a *AppDB) CompleteWorkflowStep(
 			Optional                   bool
 			RequiresPhoto              bool
 			CameraCaptureOnly          bool
+			PhotoRequiredCount         int
+			PhotoAllowAnyCount         bool
+			PhotoAspectRatio           string
 			RequiresWrittenResponse    bool
 			RequiresDropdown           bool
 			DropdownOptions            []structs.WorkflowDropdownOption
@@ -5614,6 +5750,9 @@ func (a *AppDB) CompleteWorkflowStep(
 				&item.Optional,
 				&item.RequiresPhoto,
 				&item.CameraCaptureOnly,
+				&item.PhotoRequiredCount,
+				&item.PhotoAllowAnyCount,
+				&item.PhotoAspectRatio,
 				&item.RequiresWrittenResponse,
 				&item.RequiresDropdown,
 				&dropdownOptionsBytes,
@@ -5625,6 +5764,17 @@ func (a *AppDB) CompleteWorkflowStep(
 			}
 
 			item.DropdownOptions = []structs.WorkflowDropdownOption{}
+			if item.PhotoRequiredCount <= 0 {
+				item.PhotoRequiredCount = 1
+			}
+			normalizedAspect, aspectErr := normalizeWorkflowPhotoAspectRatio(item.PhotoAspectRatio)
+			if aspectErr != nil {
+				normalizedAspect = defaultWorkflowPhotoAspectRatio
+			}
+			item.PhotoAspectRatio = normalizedAspect
+			if !item.RequiresPhoto {
+				item.PhotoAllowAnyCount = false
+			}
 			if len(dropdownOptionsBytes) > 0 {
 				if err := json.Unmarshal(dropdownOptionsBytes, &item.DropdownOptions); err != nil {
 					return nil, fmt.Errorf("error unmarshalling workflow step item dropdown options: %s", err)
@@ -5746,8 +5896,14 @@ func (a *AppDB) CompleteWorkflowStep(
 				continue
 			}
 
-			if item.RequiresPhoto && len(photoUploads) == 0 {
-				return nil, fmt.Errorf("step item requires photo evidence: %s", item.Title)
+			if item.RequiresPhoto {
+				if item.PhotoAllowAnyCount {
+					if len(photoUploads) == 0 {
+						return nil, fmt.Errorf("step item requires photo evidence: %s", item.Title)
+					}
+				} else if len(photoUploads) != item.PhotoRequiredCount {
+					return nil, fmt.Errorf("step item requires exactly %d photo(s): %s", item.PhotoRequiredCount, item.Title)
+				}
 			}
 			if item.RequiresWrittenResponse && response.WrittenResponse == nil {
 				return nil, fmt.Errorf("step item requires written response: %s", item.Title)
