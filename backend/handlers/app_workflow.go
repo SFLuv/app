@@ -70,6 +70,55 @@ func redactWorkflowItemNotifyEmailsForUserInList(workflows []*structs.Workflow, 
 	}
 }
 
+func userCanViewWorkflowSubmissionData(workflow *structs.Workflow, userID string, isAdmin bool) bool {
+	if workflow == nil || userID == "" {
+		return false
+	}
+	if isAdmin {
+		return true
+	}
+	if workflow.SupervisorUserId != nil && *workflow.SupervisorUserId == userID {
+		return true
+	}
+	for _, step := range workflow.Steps {
+		if step.AssignedImproverId != nil && *step.AssignedImproverId == userID {
+			return true
+		}
+		if step.Submission != nil && step.Submission.ImproverId == userID {
+			return true
+		}
+	}
+	return false
+}
+
+func redactWorkflowSubmissionDataForUser(workflow *structs.Workflow, userID string, isAdmin bool) {
+	if workflow == nil {
+		return
+	}
+	if userCanViewWorkflowSubmissionData(workflow, userID, isAdmin) {
+		return
+	}
+	for stepIdx := range workflow.Steps {
+		workflow.Steps[stepIdx].Submission = nil
+	}
+}
+
+func redactWorkflowSubmissionDataForUserInList(workflows []*structs.Workflow, userID string, isAdmin bool) {
+	for _, workflow := range workflows {
+		redactWorkflowSubmissionDataForUser(workflow, userID, isAdmin)
+	}
+}
+
+func sanitizeWorkflowForUser(workflow *structs.Workflow, userID string, isAdmin bool) {
+	redactWorkflowItemNotifyEmailsForUser(workflow, userID)
+	redactWorkflowSubmissionDataForUser(workflow, userID, isAdmin)
+}
+
+func sanitizeWorkflowListForUser(workflows []*structs.Workflow, userID string, isAdmin bool) {
+	redactWorkflowItemNotifyEmailsForUserInList(workflows, userID)
+	redactWorkflowSubmissionDataForUserInList(workflows, userID, isAdmin)
+}
+
 func (a *AppService) refreshWorkflowStartAvailabilityAndNotify(ctx context.Context) error {
 	refreshResult, err := a.db.RefreshWorkflowStartAvailability(ctx)
 	if err != nil {
@@ -713,6 +762,7 @@ func (a *AppService) GetProposerWorkflows(w http.ResponseWriter, r *http.Request
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}
+	isAdmin := a.IsAdmin(r.Context(), *userDid)
 
 	workflows, err := a.db.GetWorkflowsByProposer(r.Context(), *userDid)
 	if err != nil {
@@ -720,7 +770,7 @@ func (a *AppService) GetProposerWorkflows(w http.ResponseWriter, r *http.Request
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
-	redactWorkflowItemNotifyEmailsForUserInList(workflows, *userDid)
+	sanitizeWorkflowListForUser(workflows, *userDid, isAdmin)
 
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(workflows)
@@ -732,6 +782,7 @@ func (a *AppService) GetProposerWorkflow(w http.ResponseWriter, r *http.Request)
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}
+	isAdmin := a.IsAdmin(r.Context(), *userDid)
 
 	workflowId := strings.TrimSpace(r.PathValue("workflow_id"))
 	if workflowId == "" {
@@ -755,7 +806,7 @@ func (a *AppService) GetProposerWorkflow(w http.ResponseWriter, r *http.Request)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
-	redactWorkflowItemNotifyEmailsForUser(workflow, *userDid)
+	sanitizeWorkflowForUser(workflow, *userDid, isAdmin)
 
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(workflow)
@@ -799,6 +850,7 @@ func (a *AppService) GetWorkflow(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}
+	isAdmin := a.IsAdmin(r.Context(), *userDid)
 
 	workflowId := strings.TrimSpace(r.PathValue("workflow_id"))
 	if workflowId == "" {
@@ -822,7 +874,7 @@ func (a *AppService) GetWorkflow(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
-	redactWorkflowItemNotifyEmailsForUser(workflow, *userDid)
+	sanitizeWorkflowForUser(workflow, *userDid, isAdmin)
 
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(workflow)
@@ -834,6 +886,7 @@ func (a *AppService) GetImproverWorkflows(w http.ResponseWriter, r *http.Request
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}
+	isAdmin := a.IsAdmin(r.Context(), *userDid)
 
 	refreshResult, err := a.db.RefreshWorkflowStartAvailability(r.Context())
 	if err != nil {
@@ -873,7 +926,6 @@ func (a *AppService) GetImproverWorkflows(w http.ResponseWriter, r *http.Request
 
 		isManager := workflow.ManagerImproverId != nil && *workflow.ManagerImproverId == *userDid
 		isRelevant := false
-		hasAssignment := isManager
 		if isManager {
 			isRelevant = true
 		}
@@ -891,12 +943,11 @@ func (a *AppService) GetImproverWorkflows(w http.ResponseWriter, r *http.Request
 				}
 			}
 		}
-		for _, step := range workflow.Steps {
-			if step.AssignedImproverId != nil && *step.AssignedImproverId == *userDid {
-				isRelevant = true
-				hasAssignment = true
-				continue
-			}
+			for _, step := range workflow.Steps {
+				if step.AssignedImproverId != nil && *step.AssignedImproverId == *userDid {
+					isRelevant = true
+					continue
+				}
 
 			if step.AssignedImproverId != nil {
 				continue
@@ -925,17 +976,11 @@ func (a *AppService) GetImproverWorkflows(w http.ResponseWriter, r *http.Request
 			}
 		}
 
-		if !hasAssignment {
-			for idx := range workflow.Steps {
-				workflow.Steps[idx].Submission = nil
+			if isRelevant {
+				sanitizeWorkflowForUser(workflow, *userDid, isAdmin)
+				filtered = append(filtered, workflow)
 			}
 		}
-
-		if isRelevant {
-			redactWorkflowItemNotifyEmailsForUser(workflow, *userDid)
-			filtered = append(filtered, workflow)
-		}
-	}
 
 	feed := structs.ImproverWorkflowFeed{
 		ActiveCredentials: activeCredentials,
@@ -951,6 +996,7 @@ func (a *AppService) GetManagedWorkflows(w http.ResponseWriter, r *http.Request)
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}
+	isAdmin := a.IsAdmin(r.Context(), *userDid)
 
 	workflows, err := a.db.GetManagedWorkflowsByImprover(r.Context(), *userDid)
 	if err != nil {
@@ -958,7 +1004,7 @@ func (a *AppService) GetManagedWorkflows(w http.ResponseWriter, r *http.Request)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
-	redactWorkflowItemNotifyEmailsForUserInList(workflows, *userDid)
+	sanitizeWorkflowListForUser(workflows, *userDid, isAdmin)
 
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(workflows)
@@ -1043,6 +1089,7 @@ func (a *AppService) GetImproverUnpaidWorkflows(w http.ResponseWriter, r *http.R
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}
+	isAdmin := a.IsAdmin(r.Context(), *userDid)
 
 	workflows, err := a.db.GetImproverUnpaidWorkflows(r.Context(), *userDid)
 	if err != nil {
@@ -1061,7 +1108,7 @@ func (a *AppService) GetImproverUnpaidWorkflows(w http.ResponseWriter, r *http.R
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
-	redactWorkflowItemNotifyEmailsForUserInList(refreshed, *userDid)
+	sanitizeWorkflowListForUser(refreshed, *userDid, isAdmin)
 
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(refreshed)
@@ -1073,6 +1120,7 @@ func (a *AppService) RequestWorkflowStepPayoutRetry(w http.ResponseWriter, r *ht
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}
+	isAdmin := a.IsAdmin(r.Context(), *userDid)
 
 	workflowID := strings.TrimSpace(r.PathValue("workflow_id"))
 	stepID := strings.TrimSpace(r.PathValue("step_id"))
@@ -1105,7 +1153,7 @@ func (a *AppService) RequestWorkflowStepPayoutRetry(w http.ResponseWriter, r *ht
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
-	redactWorkflowItemNotifyEmailsForUser(workflow, *userDid)
+	sanitizeWorkflowForUser(workflow, *userDid, isAdmin)
 
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(workflow)
@@ -1117,6 +1165,7 @@ func (a *AppService) RequestWorkflowManagerPayoutRetry(w http.ResponseWriter, r 
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}
+	isAdmin := a.IsAdmin(r.Context(), *userDid)
 
 	workflowID := strings.TrimSpace(r.PathValue("workflow_id"))
 	if workflowID == "" {
@@ -1148,7 +1197,7 @@ func (a *AppService) RequestWorkflowManagerPayoutRetry(w http.ResponseWriter, r 
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
-	redactWorkflowItemNotifyEmailsForUser(workflow, *userDid)
+	sanitizeWorkflowForUser(workflow, *userDid, isAdmin)
 
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(workflow)
@@ -1160,6 +1209,7 @@ func (a *AppService) ClaimWorkflowManager(w http.ResponseWriter, r *http.Request
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}
+	isAdmin := a.IsAdmin(r.Context(), *userDid)
 
 	workflowID := strings.TrimSpace(r.PathValue("workflow_id"))
 	if workflowID == "" {
@@ -1196,7 +1246,7 @@ func (a *AppService) ClaimWorkflowManager(w http.ResponseWriter, r *http.Request
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
-	redactWorkflowItemNotifyEmailsForUser(workflow, *userDid)
+	sanitizeWorkflowForUser(workflow, *userDid, isAdmin)
 
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(workflow)
@@ -2064,40 +2114,18 @@ func (a *AppService) GetWorkflowPhoto(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	canAccess := false
-	if a.IsAdmin(r.Context(), *userDid) || a.IsVoter(r.Context(), *userDid) {
-		canAccess = true
-	}
-	if !canAccess && a.IsProposer(r.Context(), *userDid) {
+	isAdmin := a.IsAdmin(r.Context(), *userDid)
+	canAccess := isAdmin
+	if !canAccess {
 		workflow, wfErr := a.db.GetWorkflowByID(r.Context(), photo.WorkflowId)
 		if wfErr != nil && wfErr != pgx.ErrNoRows {
-			a.logger.Logf("error checking proposer workflow photo access for photo %s user %s: %s", photoID, *userDid, wfErr)
+			a.logger.Logf("error checking workflow photo access for photo %s user %s: %s", photoID, *userDid, wfErr)
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
-		if wfErr == nil && workflow.ProposerId == *userDid {
-			canAccess = true
+		if wfErr == nil {
+			canAccess = userCanViewWorkflowSubmissionData(workflow, *userDid, isAdmin)
 		}
-	}
-	if !canAccess && a.IsSupervisor(r.Context(), *userDid) {
-		workflow, wfErr := a.db.GetWorkflowByID(r.Context(), photo.WorkflowId)
-		if wfErr != nil && wfErr != pgx.ErrNoRows {
-			a.logger.Logf("error checking supervisor workflow photo access for photo %s user %s: %s", photoID, *userDid, wfErr)
-			w.WriteHeader(http.StatusInternalServerError)
-			return
-		}
-		if wfErr == nil && workflow.SupervisorUserId != nil && *workflow.SupervisorUserId == *userDid {
-			canAccess = true
-		}
-	}
-	if !canAccess && a.IsImprover(r.Context(), *userDid) {
-		assigned, assignedErr := a.db.IsImproverAssignedOrManagerForWorkflow(r.Context(), photo.WorkflowId, *userDid)
-		if assignedErr != nil {
-			a.logger.Logf("error checking improver workflow photo access for photo %s user %s: %s", photoID, *userDid, assignedErr)
-			w.WriteHeader(http.StatusInternalServerError)
-			return
-		}
-		canAccess = assigned
 	}
 
 	if !canAccess {
@@ -2362,6 +2390,7 @@ func (a *AppService) ClaimWorkflowStep(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}
+	isAdmin := a.IsAdmin(r.Context(), *userDid)
 
 	if refreshResult, err := a.db.RefreshWorkflowStartAvailability(r.Context()); err == nil {
 		for _, notification := range refreshResult.AvailabilityNotifications {
@@ -2418,7 +2447,7 @@ func (a *AppService) ClaimWorkflowStep(w http.ResponseWriter, r *http.Request) {
 	if availabilityNotification != nil {
 		a.sendWorkflowStepAvailableEmail(*availabilityNotification)
 	}
-	redactWorkflowItemNotifyEmailsForUser(workflow, *userDid)
+	sanitizeWorkflowForUser(workflow, *userDid, isAdmin)
 
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(workflow)
@@ -2430,6 +2459,7 @@ func (a *AppService) StartWorkflowStep(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}
+	isAdmin := a.IsAdmin(r.Context(), *userDid)
 
 	if refreshResult, err := a.db.RefreshWorkflowStartAvailability(r.Context()); err == nil {
 		for _, notification := range refreshResult.AvailabilityNotifications {
@@ -2468,7 +2498,7 @@ func (a *AppService) StartWorkflowStep(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
-	redactWorkflowItemNotifyEmailsForUser(workflow, *userDid)
+	sanitizeWorkflowForUser(workflow, *userDid, isAdmin)
 
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(workflow)
@@ -2480,6 +2510,7 @@ func (a *AppService) CompleteWorkflowStep(w http.ResponseWriter, r *http.Request
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}
+	isAdmin := a.IsAdmin(r.Context(), *userDid)
 
 	if refreshResult, err := a.db.RefreshWorkflowStartAvailability(r.Context()); err == nil {
 		for _, notification := range refreshResult.AvailabilityNotifications {
@@ -2550,7 +2581,7 @@ func (a *AppService) CompleteWorkflowStep(w http.ResponseWriter, r *http.Request
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
-	redactWorkflowItemNotifyEmailsForUser(workflow, *userDid)
+	sanitizeWorkflowForUser(workflow, *userDid, isAdmin)
 
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(workflow)
@@ -2562,6 +2593,7 @@ func (a *AppService) GetVoterWorkflows(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}
+	isAdmin := a.IsAdmin(r.Context(), *userDid)
 
 	a.expireStaleWorkflowProposalsAndNotify(r.Context())
 
@@ -2599,7 +2631,7 @@ func (a *AppService) GetVoterWorkflows(w http.ResponseWriter, r *http.Request) {
 		}
 		workflows[idx] = evaluatedWorkflow
 	}
-	redactWorkflowItemNotifyEmailsForUserInList(workflows, *userDid)
+	sanitizeWorkflowListForUser(workflows, *userDid, isAdmin)
 
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(workflows)
@@ -2611,6 +2643,7 @@ func (a *AppService) VoteWorkflow(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}
+	isAdmin := a.IsAdmin(r.Context(), *userDid)
 
 	workflowId := strings.TrimSpace(r.PathValue("workflow_id"))
 	if workflowId == "" {
@@ -2643,7 +2676,7 @@ func (a *AppService) VoteWorkflow(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if workflow.Status != "pending" {
-		redactWorkflowItemNotifyEmailsForUser(workflow, *userDid)
+		sanitizeWorkflowForUser(workflow, *userDid, isAdmin)
 		w.WriteHeader(http.StatusConflict)
 		_ = json.NewEncoder(w).Encode(workflow)
 		return
@@ -2678,7 +2711,7 @@ func (a *AppService) VoteWorkflow(w http.ResponseWriter, r *http.Request) {
 	if workflow.Status == "pending" && updatedWorkflow.Status != "pending" {
 		a.sendWorkflowProposalOutcomeEmailByWorkflow(r.Context(), updatedWorkflow.Id)
 	}
-	redactWorkflowItemNotifyEmailsForUser(updatedWorkflow, *userDid)
+	sanitizeWorkflowForUser(updatedWorkflow, *userDid, isAdmin)
 
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(updatedWorkflow)
@@ -2711,7 +2744,7 @@ func (a *AppService) AdminForceApproveWorkflow(w http.ResponseWriter, r *http.Re
 	}
 
 	if workflow.Status != "pending" {
-		redactWorkflowItemNotifyEmailsForUser(workflow, *adminId)
+		sanitizeWorkflowForUser(workflow, *adminId, true)
 		w.WriteHeader(http.StatusConflict)
 		_ = json.NewEncoder(w).Encode(workflow)
 		return
@@ -2745,7 +2778,7 @@ func (a *AppService) AdminForceApproveWorkflow(w http.ResponseWriter, r *http.Re
 	}
 
 	a.sendWorkflowProposalOutcomeEmailByWorkflow(r.Context(), updatedWorkflow.Id)
-	redactWorkflowItemNotifyEmailsForUser(updatedWorkflow, *adminId)
+	sanitizeWorkflowForUser(updatedWorkflow, *adminId, true)
 
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(updatedWorkflow)
@@ -3195,7 +3228,8 @@ func (a *AppService) DeleteProposerWorkflowTemplate(w http.ResponseWriter, r *ht
 		return
 	}
 
-	if err := a.db.DeleteWorkflowTemplate(r.Context(), templateId, *userDid); err != nil {
+	isAdmin := a.IsAdmin(r.Context(), *userDid)
+	if err := a.db.DeleteWorkflowTemplate(r.Context(), templateId, *userDid, isAdmin); err != nil {
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}

@@ -51,6 +51,7 @@ func (s *BotService) VoteWorkflow(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if workflow.Status != "pending" {
+		sanitizeWorkflowForUser(workflow, *userDid, false)
 		w.WriteHeader(http.StatusConflict)
 		_ = json.NewEncoder(w).Encode(workflow)
 		return
@@ -80,6 +81,7 @@ func (s *BotService) VoteWorkflow(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		updatedWorkflow.Votes = *votes
 	}
+	sanitizeWorkflowForUser(updatedWorkflow, *userDid, false)
 
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(updatedWorkflow)
@@ -122,6 +124,7 @@ func (s *BotService) GetVoterWorkflows(w http.ResponseWriter, r *http.Request) {
 		}
 		workflows[idx] = evaluatedWorkflow
 	}
+	sanitizeWorkflowListForUser(workflows, *userDid, false)
 
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(workflows)
@@ -151,6 +154,7 @@ func (s *BotService) AdminForceApproveWorkflow(w http.ResponseWriter, r *http.Re
 	}
 
 	if workflow.Status != "pending" {
+		sanitizeWorkflowForUser(workflow, *adminId, true)
 		w.WriteHeader(http.StatusConflict)
 		_ = json.NewEncoder(w).Encode(workflow)
 		return
@@ -180,6 +184,7 @@ func (s *BotService) AdminForceApproveWorkflow(w http.ResponseWriter, r *http.Re
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
+	sanitizeWorkflowForUser(updatedWorkflow, *adminId, true)
 
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(updatedWorkflow)
