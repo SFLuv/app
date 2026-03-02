@@ -85,6 +85,12 @@ func (a *AppService) UpdateUserRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if a.redeemer != nil && a.redeemer.CanSync() && req.Value && (req.Role == "admin" || req.Role == "merchant") {
+		if err := a.redeemer.SyncOwnerWalletRedeemerStatuses(r.Context(), req.UserId); err != nil {
+			a.logger.Logf("error syncing redeemer wallet state for user %s after %s role update: %s", req.UserId, req.Role, err)
+		}
+	}
+
 	w.WriteHeader(http.StatusCreated)
 }
 
@@ -141,6 +147,11 @@ func (a *AppService) UpdateLocationApproval(w http.ResponseWriter, r *http.Reque
 	if a.redeemer != nil && a.redeemer.IsEnabled() && isApproving && !wasApproved && !hadOtherApprovedLocations {
 		if err := a.redeemer.EnsureMerchantHasRedeemerWallet(r.Context(), ownerID); err != nil {
 			a.logger.Logf("error auto-granting redeemer role for user %s after location %d approval: %s", ownerID, u.Id, err)
+		}
+	}
+	if a.redeemer != nil && a.redeemer.CanSync() && isApproving && !wasApproved && !hadOtherApprovedLocations {
+		if err := a.redeemer.SyncOwnerWalletRedeemerStatuses(r.Context(), ownerID); err != nil {
+			a.logger.Logf("error syncing redeemer wallet state for user %s after location %d approval: %s", ownerID, u.Id, err)
 		}
 	}
 

@@ -168,6 +168,35 @@ func (r *RedeemerService) SyncWalletRedeemerStatuses(ctx context.Context) error 
 	return nil
 }
 
+func (r *RedeemerService) SyncOwnerWalletRedeemerStatuses(ctx context.Context, ownerID string) error {
+	if !r.CanSync() {
+		return nil
+	}
+	if r.appDb == nil {
+		return fmt.Errorf("app db is not configured for redeemer sync")
+	}
+	if strings.TrimSpace(ownerID) == "" {
+		return fmt.Errorf("owner id is required")
+	}
+
+	wallets, err := r.appDb.GetWalletsByUser(ctx, ownerID)
+	if err != nil {
+		return fmt.Errorf("error loading wallets for redeemer sync user %s: %w", ownerID, err)
+	}
+
+	for _, wallet := range wallets {
+		if err := r.syncWalletRedeemerStatus(ctx, wallet); err != nil {
+			if wallet != nil && wallet.Id != nil {
+				r.logf("error syncing is_redeemer for wallet %d user %s: %s", *wallet.Id, ownerID, err)
+			} else {
+				r.logf("error syncing is_redeemer for user %s: %s", ownerID, err)
+			}
+		}
+	}
+
+	return nil
+}
+
 func (r *RedeemerService) SyncApprovedMerchants(ctx context.Context) error {
 	if !r.IsEnabled() {
 		return nil
