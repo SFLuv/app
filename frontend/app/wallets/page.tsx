@@ -174,7 +174,7 @@ export default function WalletsPage() {
           </p>
         </div>
 
-        {user?.isMerchant === true && hasRedeemerWallet && (
+        {(user?.isMerchant === true || user?.isAdmin === true) && hasRedeemerWallet && (
           <Button
             variant="outline"
             onClick={toggleAddPayPalModal}
