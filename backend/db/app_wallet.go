@@ -274,6 +274,23 @@ func (a *AppDB) SetWalletRedeemerStatus(ctx context.Context, walletId int, isRed
 	return err
 }
 
+func (a *AppDB) SetWalletRedeemerStatusByAddress(ctx context.Context, address string, isRedeemer bool) (int64, error) {
+	commandTag, err := a.db.Exec(ctx, `
+		UPDATE
+			wallets
+		SET
+			is_redeemer = $1
+		WHERE
+			LOWER(COALESCE(smart_address, '')) = LOWER($2)
+			OR (is_eoa = TRUE AND LOWER(eoa_address) = LOWER($2));
+	`, isRedeemer, address)
+	if err != nil {
+		return 0, err
+	}
+
+	return commandTag.RowsAffected(), nil
+}
+
 func (a *AppDB) SetWalletMinterStatus(ctx context.Context, walletId int, isMinter bool) error {
 	_, err := a.db.Exec(ctx, `
 		UPDATE
