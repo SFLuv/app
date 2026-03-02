@@ -153,6 +153,28 @@ func (r *RedeemerService) SyncApprovedMerchants(ctx context.Context) error {
 	return nil
 }
 
+func (r *RedeemerService) SyncAdmins(ctx context.Context) error {
+	if !r.IsEnabled() {
+		return nil
+	}
+	if r.appDb == nil {
+		return fmt.Errorf("app db is not configured for redeemer sync")
+	}
+
+	adminIDs, err := r.appDb.GetAdminUserIDs(ctx)
+	if err != nil {
+		return fmt.Errorf("error loading admin users: %w", err)
+	}
+
+	for _, adminID := range adminIDs {
+		if err := r.EnsureMerchantHasRedeemerWallet(ctx, adminID); err != nil {
+			r.logf("error ensuring redeemer wallet for admin %s: %s", adminID, err)
+		}
+	}
+
+	return nil
+}
+
 func (r *RedeemerService) EnsureMerchantHasRedeemerWallet(ctx context.Context, ownerID string) error {
 	if !r.IsEnabled() {
 		return nil

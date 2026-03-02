@@ -544,7 +544,7 @@ export default function WalletDetailsPage() {
             <CardContent className="p-3 sm:p-4">
               <div
                 className={`grid gap-3 ${
-                  user?.isMerchant && walletCanUnwrap ? "grid-cols-3" : "grid-cols-2"
+                  walletCanUnwrap ? "grid-cols-3" : "grid-cols-2"
                 }`}
               >
                 <Button
@@ -564,7 +564,7 @@ export default function WalletDetailsPage() {
                   <span>Receive</span>
                 </Button>
 
-                {user?.isMerchant && walletCanUnwrap && (
+                {walletCanUnwrap && (
                   <Button
                     variant="outline"
                     onClick={() => setShowCashoutModal(true)}

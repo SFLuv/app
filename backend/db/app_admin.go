@@ -28,6 +28,36 @@ func (a *AppDB) IsAdmin(ctx context.Context, id string) (bool, error) {
 	return isAdmin, nil
 }
 
+func (a *AppDB) GetAdminUserIDs(ctx context.Context) ([]string, error) {
+	rows, err := a.db.Query(ctx, `
+		SELECT
+			id
+		FROM
+			users
+		WHERE
+			is_admin = TRUE;
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	adminIDs := []string{}
+	for rows.Next() {
+		var adminID string
+		if err := rows.Scan(&adminID); err != nil {
+			return nil, err
+		}
+		adminIDs = append(adminIDs, adminID)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return adminIDs, nil
+}
+
 func (a *AppDB) UpdateLocationApproval(ctx context.Context, id uint, approval *bool) error {
 	tx, err := a.db.Begin(ctx)
 	if err != nil {

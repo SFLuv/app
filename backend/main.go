@@ -83,6 +83,9 @@ func main() {
 	if err := redeemer.SyncApprovedMerchants(ctx); err != nil {
 		appLogger.Logf("error syncing redeemer roles on startup: %s", err)
 	}
+	if err := redeemer.SyncAdmins(ctx); err != nil {
+		appLogger.Logf("error syncing admin redeemer roles on startup: %s", err)
+	}
 	minter := handlers.NewMinterService(appDb, appLogger)
 	if err := minter.SyncWalletMinterStatuses(ctx); err != nil {
 		appLogger.Logf("error syncing minter roles on startup: %s", err)
