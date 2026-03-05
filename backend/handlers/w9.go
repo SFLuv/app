@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math/big"
@@ -16,6 +17,7 @@ import (
 	"github.com/SFLuv/app/backend/logger"
 	"github.com/SFLuv/app/backend/structs"
 	"github.com/SFLuv/app/backend/utils"
+	"github.com/jackc/pgx/v5"
 )
 
 type W9Service struct {
@@ -81,18 +83,15 @@ func (w *W9Service) CheckCompliance(ctx context.Context, fromAddress string, toA
 		w9RequiredAt = existing.W9RequiredAt
 	}
 
-	shouldNotify := false
 	now := time.Now().UTC()
 	if !w9Required && total.Cmp(limit) >= 0 {
 		w9Required = true
 		w9RequiredAt = &now
-		shouldNotify = true
 	}
 
 	if !w9Required && total.Cmp(limit) < 0 && newTotal.Cmp(limit) >= 0 {
 		w9Required = true
 		w9RequiredAt = &now
-		shouldNotify = true
 	}
 
 	userId, err := w.appDb.GetUserIdByWalletAddress(ctx, toAddress)
@@ -129,9 +128,9 @@ func (w *W9Service) CheckCompliance(ctx context.Context, fromAddress string, toA
 	}
 
 	allowed := !(newTotal.Cmp(limit) > 0 && !approved)
-
-	if shouldNotify {
-		w.notifyAdminThreshold(toAddress, total.String(), newTotal.String(), limit.String(), year)
+	recipientEmail, err := w.resolveRecipientEmail(ctx, userId, submission)
+	if err != nil {
+		return nil, err
 	}
 
 	resp := &structs.W9CheckResponse{
@@ -141,16 +140,8 @@ func (w *W9Service) CheckCompliance(ctx context.Context, fromAddress string, toA
 		Limit:        limit.String(),
 		Year:         year,
 	}
-	if submission != nil && submission.Email != "" {
-		resp.Email = submission.Email
-	} else if userId != nil {
-		email, err := w.appDb.GetUserContactEmail(ctx, *userId)
-		if err != nil {
-			return nil, err
-		}
-		if email != nil {
-			resp.Email = *email
-		}
+	if recipientEmail != "" {
+		resp.Email = recipientEmail
 	}
 	if !allowed {
 		if pending {
@@ -211,12 +202,10 @@ func (w *W9Service) ProcessPaidTransfer(ctx context.Context, fromAddress string,
 		w9RequiredAt = existing.W9RequiredAt
 	}
 
-	shouldNotify := false
 	now := time.Now().UTC()
 	if !w9Required && total.Cmp(limit) >= 0 {
 		w9Required = true
 		w9RequiredAt = &now
-		shouldNotify = true
 	}
 
 	userId, err := w.appDb.GetUserIdByWalletAddress(ctx, toAddress)
@@ -252,48 +241,24 @@ func (w *W9Service) ProcessPaidTransfer(ctx context.Context, fromAddress string,
 		return nil, err
 	}
 
-	if shouldNotify {
-		w.notifyAdminThreshold(toAddress, total.String(), total.String(), limit.String(), year)
-	}
-
 	return earning, nil
 }
 
-func (w *W9Service) notifyAdminThreshold(wallet string, currentTotal string, newTotal string, limit string, year int) {
-	sender := utils.NewEmailSender()
-	if sender == nil {
-		if w.logger != nil {
-			w.logger.Logf("w9 admin email not sent; mailgun not configured")
-		}
-		return
+func (w *W9Service) resolveRecipientEmail(ctx context.Context, userId *string, submission *structs.W9Submission) (string, error) {
+	if submission != nil && strings.TrimSpace(submission.Email) != "" {
+		return strings.TrimSpace(submission.Email), nil
 	}
-
-	adminEmail := os.Getenv("W9_ADMIN_EMAIL")
-	if adminEmail == "" {
-		adminEmail = "admin@sfluv.com"
+	if userId == nil {
+		return "", nil
 	}
-
-	subject := fmt.Sprintf("W9 required for wallet %s", wallet)
-	body := fmt.Sprintf(
-		"Wallet %s reached the W9 threshold in %d.<br/><br/>Current total: %s<br/>New total: %s<br/>Limit: %s",
-		wallet,
-		year,
-		currentTotal,
-		newTotal,
-		limit,
-	)
-
-	err := sender.SendEmail(
-		adminEmail,
-		"SFLuv Admin",
-		subject,
-		body,
-		"no_reply@sfluv.org",
-		"SFLuv Admin",
-	)
-	if err != nil && w.logger != nil {
-		w.logger.Logf("error sending w9 admin email: %s", err)
+	email, err := w.appDb.GetUserContactEmail(ctx, *userId)
+	if err != nil {
+		return "", err
 	}
+	if email == nil {
+		return "", nil
+	}
+	return strings.TrimSpace(*email), nil
 }
 
 func (a *AppService) SubmitW9(w http.ResponseWriter, r *http.Request) {
@@ -383,6 +348,11 @@ func (a *AppService) ApproveW9Submission(w http.ResponseWriter, r *http.Request)
 
 	submission, err := a.db.ApproveW9Submission(r.Context(), req.Id, approvedBy)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			w.WriteHeader(http.StatusConflict)
+			w.Write([]byte(`{"error":"w9_not_pending"}`))
+			return
+		}
 		a.logger.Logf("error approving w9 submission: %s", err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
@@ -390,22 +360,34 @@ func (a *AppService) ApproveW9Submission(w http.ResponseWriter, r *http.Request)
 
 	sender := utils.NewEmailSender()
 	if sender != nil {
-		subject := "W9 approved - restriction removed"
+		adminEmail := os.Getenv("W9_ADMIN_EMAIL")
+		if adminEmail == "" {
+			adminEmail = "admin@sfluv.org"
+		}
+		contact := strings.TrimSpace(submission.Email)
+		if contact == "" {
+			contact = submission.WalletAddress
+		}
+		subject := fmt.Sprintf("W9 required for wallet %s", submission.WalletAddress)
 		body := fmt.Sprintf(
-			"Your W9 has been approved for wallet %s. The $600 restriction has been removed.",
+			"%s has reached the 1099 limit and needs a W9 submission form. Please send them a form using <a href=\"https://app.getw9.tax/subscriber\">https://app.getw9.tax/subscriber</a>.<br/><br/>Wallet: %s<br/>Year: %d",
+			contact,
 			submission.WalletAddress,
+			submission.Year,
 		)
 		err = sender.SendEmail(
-			submission.Email,
-			"SFLuv User",
+			adminEmail,
+			"SFLuv Admin",
 			subject,
 			body,
 			"no_reply@sfluv.org",
 			"SFLuv Admin",
 		)
 		if err != nil {
-			a.logger.Logf("error sending w9 approval email: %s", err)
+			a.logger.Logf("error sending w9 admin alert email: %s", err)
 		}
+	} else {
+		a.logger.Logf("w9 admin email not sent; mailgun not configured")
 	}
 
 	resp := map[string]any{

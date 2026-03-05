@@ -1413,24 +1413,24 @@ func (s *AppDB) CreateTables() error {
 	}
 
 	_, err = s.db.Exec(context.Background(), `
-		CREATE TABLE IF NOT EXISTS w9_wallet_earnings(
-			wallet_address TEXT NOT NULL,
-			year INTEGER NOT NULL,
-			amount_received NUMERIC(78, 0) NOT NULL DEFAULT 0,
-			user_id TEXT,
-			w9_required BOOLEAN NOT NULL DEFAULT false,
-			w9_required_at TIMESTAMP,
-			last_tx_hash TEXT,
-			last_tx_timestamp INTEGER,
-			created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-			updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
-			PRIMARY KEY (wallet_address, year)
-		);
+			CREATE TABLE IF NOT EXISTS w9_wallet_earnings(
+				wallet_address TEXT NOT NULL,
+				year INTEGER NOT NULL,
+				amount_received NUMERIC(78, 0) NOT NULL DEFAULT 0,
+				user_id TEXT,
+				w9_required BOOLEAN NOT NULL DEFAULT false,
+				w9_required_at TIMESTAMP,
+				last_tx_hash TEXT,
+				last_tx_timestamp INTEGER,
+				created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+				updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+				PRIMARY KEY (wallet_address, year)
+			);
 
-		CREATE INDEX IF NOT EXISTS w9_wallet_earnings_user_id_idx ON w9_wallet_earnings(user_id);
-		CREATE INDEX IF NOT EXISTS w9_wallet_earnings_year_idx ON w9_wallet_earnings(year);
-		CREATE INDEX IF NOT EXISTS w9_wallet_earnings_required_idx ON w9_wallet_earnings(w9_required);
-	`)
+			CREATE INDEX IF NOT EXISTS w9_wallet_earnings_user_id_idx ON w9_wallet_earnings(user_id);
+			CREATE INDEX IF NOT EXISTS w9_wallet_earnings_year_idx ON w9_wallet_earnings(year);
+			CREATE INDEX IF NOT EXISTS w9_wallet_earnings_required_idx ON w9_wallet_earnings(w9_required);
+		`)
 	if err != nil {
 		return fmt.Errorf("error creating w9 wallet earnings table: %s", err)
 	}
