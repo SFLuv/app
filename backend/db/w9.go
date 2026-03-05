@@ -59,17 +59,17 @@ func (a *AppDB) GetUserContactEmail(ctx context.Context, userId string) (*string
 
 func (a *AppDB) GetW9WalletEarning(ctx context.Context, wallet string, year int) (*structs.W9WalletEarning, error) {
 	row := a.db.QueryRow(ctx, `
-		SELECT
-			wallet_address,
-			year,
-			amount_received::text,
-			user_id,
-			w9_required,
-			w9_required_at,
-			last_tx_hash,
-			last_tx_timestamp
-		FROM
-			w9_wallet_earnings
+			SELECT
+				wallet_address,
+				year,
+				amount_received::text,
+				user_id,
+				w9_required,
+				w9_required_at,
+				last_tx_hash,
+				last_tx_timestamp
+			FROM
+				w9_wallet_earnings
 		WHERE
 			wallet_address = LOWER($1)
 		AND
@@ -429,6 +429,8 @@ func (a *AppDB) ApproveW9Submission(ctx context.Context, id int, approvedBy stri
 			rejection_reason = NULL
 		WHERE
 			id = $1
+		AND
+			pending_approval = TRUE
 		RETURNING
 			id,
 			wallet_address,

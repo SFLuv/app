@@ -3,14 +3,14 @@ package structs
 import "time"
 
 type W9WalletEarning struct {
-	WalletAddress string     `json:"wallet_address"`
-	Year          int        `json:"year"`
-	AmountReceived string    `json:"amount_received"`
-	UserId        *string    `json:"user_id,omitempty"`
-	W9Required    bool       `json:"w9_required"`
-	W9RequiredAt  *time.Time `json:"w9_required_at,omitempty"`
-	LastTxHash    *string    `json:"last_tx_hash,omitempty"`
-	LastTxTimestamp *int     `json:"last_tx_timestamp,omitempty"`
+	WalletAddress   string     `json:"wallet_address"`
+	Year            int        `json:"year"`
+	AmountReceived  string     `json:"amount_received"`
+	UserId          *string    `json:"user_id,omitempty"`
+	W9Required      bool       `json:"w9_required"`
+	W9RequiredAt    *time.Time `json:"w9_required_at,omitempty"`
+	LastTxHash      *string    `json:"last_tx_hash,omitempty"`
+	LastTxTimestamp *int       `json:"last_tx_timestamp,omitempty"`
 }
 
 type W9Submission struct {
