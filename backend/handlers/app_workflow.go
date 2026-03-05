@@ -943,11 +943,11 @@ func (a *AppService) GetImproverWorkflows(w http.ResponseWriter, r *http.Request
 				}
 			}
 		}
-			for _, step := range workflow.Steps {
-				if step.AssignedImproverId != nil && *step.AssignedImproverId == *userDid {
-					isRelevant = true
-					continue
-				}
+		for _, step := range workflow.Steps {
+			if step.AssignedImproverId != nil && *step.AssignedImproverId == *userDid {
+				isRelevant = true
+				continue
+			}
 
 			if step.AssignedImproverId != nil {
 				continue
@@ -976,11 +976,11 @@ func (a *AppService) GetImproverWorkflows(w http.ResponseWriter, r *http.Request
 			}
 		}
 
-			if isRelevant {
-				sanitizeWorkflowForUser(workflow, *userDid, isAdmin)
-				filtered = append(filtered, workflow)
-			}
+		if isRelevant {
+			sanitizeWorkflowForUser(workflow, *userDid, isAdmin)
+			filtered = append(filtered, workflow)
 		}
+	}
 
 	feed := structs.ImproverWorkflowFeed{
 		ActiveCredentials: activeCredentials,
@@ -2784,6 +2784,98 @@ func (a *AppService) AdminForceApproveWorkflow(w http.ResponseWriter, r *http.Re
 	_ = json.NewEncoder(w).Encode(updatedWorkflow)
 }
 
+func (a *AppService) ResolveAdminWorkflowPayoutLock(w http.ResponseWriter, r *http.Request) {
+	adminId := utils.GetDid(r)
+	if adminId == nil {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	workflowId := strings.TrimSpace(r.PathValue("workflow_id"))
+	if workflowId == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	defer r.Body.Close()
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		a.logger.Logf("error reading admin workflow payout resolution body for workflow %s: %s", workflowId, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	req := structs.AdminWorkflowPayoutResolutionRequest{}
+	if len(strings.TrimSpace(string(body))) > 0 {
+		if err := json.Unmarshal(body, &req); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+	}
+
+	if err := a.db.ResolveWorkflowPayoutLockByAdmin(r.Context(), *adminId, workflowId, &req); err != nil {
+		errMsg := err.Error()
+		if err == pgx.ErrNoRows {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		if strings.Contains(errMsg, "required") || strings.Contains(errMsg, "invalid") || strings.Contains(errMsg, "not allowed") {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(errMsg))
+			return
+		}
+		if strings.Contains(errMsg, "not currently locked") ||
+			strings.Contains(errMsg, "already marked paid out") ||
+			strings.Contains(errMsg, "requires completed") ||
+			strings.Contains(errMsg, "not applicable") {
+			w.WriteHeader(http.StatusConflict)
+			w.Write([]byte(errMsg))
+			return
+		}
+		a.logger.Logf(
+			"error resolving admin payout lock for workflow %s by admin %s target %s step %s action %s: %s",
+			workflowId,
+			*adminId,
+			strings.TrimSpace(req.TargetType),
+			strings.TrimSpace(req.StepId),
+			strings.TrimSpace(req.Action),
+			err,
+		)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	if strings.EqualFold(strings.TrimSpace(req.Action), "mark_paid_out") {
+		if _, err := a.db.FinalizeWorkflowPaidOutIfSettled(r.Context(), workflowId); err != nil {
+			a.logger.Logf("error finalizing workflow %s after admin payout resolution: %s", workflowId, err)
+		}
+	}
+
+	workflow, err := a.db.GetWorkflowByID(r.Context(), workflowId)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		a.logger.Logf("error loading workflow %s after admin payout resolution: %s", workflowId, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	sanitizeWorkflowForUser(workflow, *adminId, true)
+
+	a.logger.Logf(
+		"admin payout resolution applied: admin=%s workflow=%s target=%s step=%s action=%s",
+		*adminId,
+		workflowId,
+		strings.TrimSpace(req.TargetType),
+		strings.TrimSpace(req.StepId),
+		strings.TrimSpace(req.Action),
+	)
+
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(workflow)
+}
+
 func (a *AppService) GetActiveWorkflows(w http.ResponseWriter, r *http.Request) {
 	userDid := utils.GetDid(r)
 	if userDid == nil {
@@ -3796,6 +3888,9 @@ func collectWorkflowPayoutTargets(workflow *structs.Workflow) []workflowPayoutTa
 		if step.Status != "completed" {
 			continue
 		}
+		if step.PayoutInProgress {
+			continue
+		}
 		manualRetryRequired := step.PayoutError != nil && strings.TrimSpace(*step.PayoutError) != ""
 		if manualRetryRequired && step.RetryRequestedAt == nil {
 			continue
@@ -3818,7 +3913,11 @@ func collectWorkflowPayoutTargets(workflow *structs.Workflow) []workflowPayoutTa
 	}
 
 	managerRetryRequired := workflow.ManagerPayoutError != nil && strings.TrimSpace(*workflow.ManagerPayoutError) != ""
-	if workflow.ManagerBounty > 0 && workflow.ManagerImproverId != nil && workflow.ManagerPaidOutAt == nil && (!managerRetryRequired || workflow.ManagerRetryRequestedAt != nil) {
+	if workflow.ManagerBounty > 0 &&
+		workflow.ManagerImproverId != nil &&
+		workflow.ManagerPaidOutAt == nil &&
+		!workflow.ManagerPayoutInProgress &&
+		(!managerRetryRequired || workflow.ManagerRetryRequestedAt != nil) {
 		targets = append(targets, workflowPayoutTarget{
 			WorkflowId:    workflow.Id,
 			WorkflowTitle: workflow.Title,
@@ -4024,6 +4123,26 @@ func (a *AppService) processWorkflowSeriesPayouts(ctx context.Context, triggerWo
 					continue
 				}
 
+				if target.IsManager {
+					claimed, claimErr := a.db.ClaimWorkflowManagerPayoutAttempt(ctx, target.WorkflowId)
+					if claimErr != nil {
+						a.logger.Logf("error claiming manager payout attempt lock for workflow %s: %s", target.WorkflowId, claimErr)
+						return
+					}
+					if !claimed {
+						continue
+					}
+				} else {
+					claimed, claimErr := a.db.ClaimWorkflowStepPayoutAttempt(ctx, target.WorkflowId, target.StepId)
+					if claimErr != nil {
+						a.logger.Logf("error claiming step payout attempt lock for workflow %s step %s: %s", target.WorkflowId, target.StepId, claimErr)
+						return
+					}
+					if !claimed {
+						continue
+					}
+				}
+
 				walletAddress := ""
 				if target.ImproverId == "" {
 					errMsg := "workflow payout cannot proceed because no improver is assigned"
@@ -4074,12 +4193,16 @@ func (a *AppService) processWorkflowSeriesPayouts(ctx context.Context, triggerWo
 
 				if target.IsManager {
 					if _, err := a.db.MarkWorkflowManagerPaidOut(ctx, target.WorkflowId); err != nil {
+						errMsg := fmt.Sprintf("workflow payout post-transfer state update failed: %s", err)
 						a.logger.Logf("error marking manager payout complete for workflow %s: %s", target.WorkflowId, err)
+						a.sendWorkflowPayoutErrorEmail(ctx, target, walletAddress, errMsg, nil, nil, false)
 						return
 					}
 				} else {
 					if _, err := a.db.MarkWorkflowStepPaidOut(ctx, target.WorkflowId, target.StepId); err != nil {
+						errMsg := fmt.Sprintf("workflow payout post-transfer state update failed: %s", err)
 						a.logger.Logf("error marking step payout complete for workflow %s step %s: %s", target.WorkflowId, target.StepId, err)
+						a.sendWorkflowPayoutErrorEmail(ctx, target, walletAddress, errMsg, nil, nil, false)
 						return
 					}
 				}

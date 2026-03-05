@@ -220,6 +220,7 @@ type Workflow struct {
 	ManagerPaidOutAt           *int64         `json:"-"`
 	ManagerPayoutError         *string        `json:"-"`
 	ManagerPayoutLastTryAt     *int64         `json:"-"`
+	ManagerPayoutInProgress    bool           `json:"-"`
 	ManagerRetryRequestedAt    *int64         `json:"-"`
 	ManagerRetryRequestedBy    *string        `json:"-"`
 	CreatedAt                  int64          `json:"created_at"`
@@ -374,6 +375,7 @@ type WorkflowStep struct {
 	CompletedAt          *int64                  `json:"completed_at,omitempty"`
 	PayoutError          *string                 `json:"payout_error,omitempty"`
 	PayoutLastTryAt      *int64                  `json:"payout_last_try_at,omitempty"`
+	PayoutInProgress     bool                    `json:"-"`
 	RetryRequestedAt     *int64                  `json:"retry_requested_at,omitempty"`
 	RetryRequestedBy     *string                 `json:"retry_requested_by,omitempty"`
 	Submission           *WorkflowStepSubmission `json:"submission,omitempty"`
@@ -534,6 +536,13 @@ type WorkflowStepCompleteRequest struct {
 	StepNotPossible        bool                       `json:"step_not_possible"`
 	StepNotPossibleDetails *string                    `json:"step_not_possible_details,omitempty"`
 	Items                  []WorkflowStepItemResponse `json:"items"`
+}
+
+type AdminWorkflowPayoutResolutionRequest struct {
+	TargetType   string `json:"target_type"`
+	Action       string `json:"action"`
+	StepId       string `json:"step_id,omitempty"`
+	ErrorMessage string `json:"error_message,omitempty"`
 }
 
 type WorkflowStepAvailabilityNotification struct {
