@@ -34,6 +34,7 @@ const Page = () => {
   const [webWalletError, setWebWalletError] = useState<string | null>(null)
   const directRedeemAttemptedRef = useRef<boolean>(false)
   const webWalletRedeemAttemptedRef = useRef<boolean>(false)
+  const redirectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const sigAuthAccount = searchParams.get("sigAuthAccount")
   const sigAuthSignature = searchParams.get("sigAuthSignature")
@@ -43,14 +44,6 @@ const Page = () => {
   const returnTo = normalizeReturnTo(searchParams.get("returnTo"))
   const code = normalizeRedeemCode(searchParams.get("code"))
 
-
-  const closeModal = (delay: number) => {
-    setTimeout(() => {
-        if (sigAuthRedirect) {
-          router.push(sigAuthRedirect + "/close")
-        }
-      }, delay)
-  }
 
   const buildW9Url = (baseUrl: string, walletAddress: string, email?: string | null) => {
     if (!baseUrl) return baseUrl
@@ -71,7 +64,7 @@ const Page = () => {
     }
   }
 
-  const sendBotRequest = async (address: string, overrideReturnTo?: string) => {
+  const sendBotRequest = async (address: string) => {
     // let verified = verifyAccountOwnership()
     //implement real verification
     try {
@@ -131,17 +124,12 @@ const Page = () => {
       }
 
       setSuccess(true)
-
-      setTimeout(() => {
-        router.replace(overrideReturnTo || returnTo || "/map?sidebar=false")
-      }, 2000)
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") {
         setError("Redeem request timed out. Please try again.")
         return
       }
       setError("Internal server error.")
-      closeModal(2000)
       return
     }
 
@@ -216,10 +204,7 @@ const Page = () => {
         ensureWebWalletQueryParams(smartWalletReturnTo)
       }
 
-      await sendBotRequest(
-        smartWallet.address,
-        !returnTo || returnTo === "/wallets" ? smartWalletReturnTo : undefined
-      )
+      await sendBotRequest(smartWallet.address)
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unable to continue with web wallet."
       setError(message)
@@ -311,6 +296,33 @@ const Page = () => {
   }, [continueWithWebWalletRequested, authenticated, privyReady, walletsReady, redeemWithWebWallet])
 
   const showDownloadPrompt = error === missingSigAuthMessage && privyReady && !authenticated
+  const isFinalErrorState = Boolean(
+    error &&
+    error !== missingSigAuthMessage &&
+    error !== "W9 Required" &&
+    error !== "W9 Pending"
+  )
+  const shouldAutoRedirect = success || isFinalErrorState
+
+  useEffect(() => {
+    if (!shouldAutoRedirect) return
+    if (redirectTimeoutRef.current) return
+
+    redirectTimeoutRef.current = setTimeout(() => {
+      const destination = hasSigAuth && sigAuthRedirect
+        ? `${sigAuthRedirect}/close`
+        : (returnTo || "/wallets")
+      router.replace(destination)
+    }, 2000)
+  }, [hasSigAuth, returnTo, router, shouldAutoRedirect, sigAuthRedirect])
+
+  useEffect(() => {
+    return () => {
+      if (redirectTimeoutRef.current) {
+        clearTimeout(redirectTimeoutRef.current)
+      }
+    }
+  }, [])
 
   return (
     <div className="min-h-screen flex items-center justify-center">

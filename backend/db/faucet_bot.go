@@ -720,6 +720,77 @@ func (s *BotDB) GetCodeAmount(ctx context.Context, id string) (uint64, error) {
 	return amount, nil
 }
 
+func (s *BotDB) UndoRedeem(ctx context.Context, id string, account string) error {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("error creating db tx for redeem undo: %w", err)
+	}
+	defer tx.Rollback(context.Background())
+
+	row := tx.QueryRow(ctx, `
+		SELECT
+			redeemed
+		FROM
+			codes
+		WHERE
+			id = $1
+		FOR UPDATE;
+	`, id)
+
+	var redeemed bool
+	if err := row.Scan(&redeemed); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		return fmt.Errorf("error locking code for redeem undo: %w", err)
+	}
+	if !redeemed {
+		return nil
+	}
+
+	tag, err := tx.Exec(ctx, `
+		DELETE FROM
+			redemptions
+		WHERE
+			code = $1
+		AND
+			address = $2;
+	`, id, account)
+	if err != nil {
+		return fmt.Errorf("error deleting redemption during undo: %w", err)
+	}
+	if tag.RowsAffected() != 1 {
+		return fmt.Errorf("no matching redemption found to undo for code %s", id)
+	}
+
+	_, err = tx.Exec(ctx, `
+		UPDATE
+			codes
+		SET
+			redeemed = false
+		WHERE
+			id = $1
+		AND
+			NOT EXISTS (
+				SELECT
+					1
+				FROM
+					redemptions
+				WHERE
+					code = $1
+			);
+	`, id)
+	if err != nil {
+		return fmt.Errorf("error updating code status during redeem undo: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("error committing redeem undo: %w", err)
+	}
+
+	return nil
+}
+
 func (s *BotDB) AllocatedBalance(ctx context.Context) (uint64, error) {
 	row := s.db.QueryRow(ctx, `
 		SELECT COALESCE(SUM(

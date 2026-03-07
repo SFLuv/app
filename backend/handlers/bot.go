@@ -859,6 +859,13 @@ func (s *BotService) Redeem(w http.ResponseWriter, r *http.Request) {
 
 	if err := s.bot.Send(amount, request.Address); err != nil {
 		fmt.Printf("error sending redeem payout for code %s address %s: %s\n", request.Code, request.Address, err)
+		if bot.ShouldRevertRedemption(err) {
+			undoCtx, undoCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			if undoErr := s.db.UndoRedeem(undoCtx, request.Code, request.Address); undoErr != nil {
+				fmt.Printf("error undoing redemption for code %s address %s after payout failure: %s\n", request.Code, request.Address, undoErr)
+			}
+			undoCancel()
+		}
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
