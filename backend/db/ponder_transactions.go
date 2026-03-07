@@ -3,8 +3,10 @@ package db
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/SFLuv/app/backend/structs"
+	"github.com/jackc/pgx/v5"
 )
 
 func (p *PonderDB) GetTransactionsPaginated(ctx context.Context, address string, page int, count int, descending bool) (*structs.PonderTransactionsPage, error) {
@@ -54,8 +56,9 @@ func (p *PonderDB) GetTransactionsPaginated(ctx context.Context, address string,
 	if err != nil {
 		return nil, fmt.Errorf("error querying for transaction history for address %s: %s", address, err)
 	}
+	defer rows.Close()
 
-	var transactions []*structs.PonderTransaction
+	transactions := make([]*structs.PonderTransaction, 0)
 	for rows.Next() {
 		var t structs.PonderTransaction
 		err = rows.Scan(
@@ -71,6 +74,9 @@ func (p *PonderDB) GetTransactionsPaginated(ctx context.Context, address string,
 		}
 
 		transactions = append(transactions, &t)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating transaction history rows for address %s: %s", address, err)
 	}
 
 	transactionsPage := structs.PonderTransactionsPage{
@@ -108,4 +114,38 @@ func (p *PonderDB) GetBalanceAtTimestamp(ctx context.Context, address string, ti
 	}
 
 	return balance, nil
+}
+
+func (p *PonderDB) GetTransactionPartiesByHash(ctx context.Context, txHash string) (*structs.PonderTransactionParties, error) {
+	normalizedHash := strings.ToLower(strings.TrimSpace(txHash))
+	if normalizedHash == "" {
+		return nil, nil
+	}
+
+	row := p.db.QueryRow(ctx, `
+		SELECT
+			t.hash,
+			t.from,
+			t.to
+		FROM
+			transfer_event t
+		WHERE
+			t.hash = LOWER($1)
+		LIMIT 1;
+	`, normalizedHash)
+
+	var tx structs.PonderTransactionParties
+	err := row.Scan(
+		&tx.Hash,
+		&tx.From,
+		&tx.To,
+	)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("error querying transaction by hash %s: %w", normalizedHash, err)
+	}
+
+	return &tx, nil
 }

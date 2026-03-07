@@ -1,4 +1,4 @@
-import { createContext, ReactNode, useContext, useEffect, useState } from "react";
+import { createContext, ReactNode, useContext, useEffect, useRef, useState } from "react";
 import { useApp } from "./AppProvider";
 import { ServerTransaction, Transaction, TransactionStatus, TransactionType } from "@/types/transaction";
 import { Options } from "react-to-pdf";
@@ -28,6 +28,13 @@ interface WalletPage {
   total: number
 }
 
+interface WalletLookupResponse {
+  found?: boolean
+  is_merchant?: boolean
+  merchant_name?: string
+  wallet_name?: string
+}
+
 export interface TransactionOptions {
   paginationDetails: PaginationDetails
 }
@@ -48,12 +55,14 @@ export default function TransactionProvider({ children }: { children: ReactNode 
   const [transactions, setTransactions] = useState<Record<string, WalletTransactions>>({})
   const [transactionsError, setTransactionsError] = useState<string | null>(null)
   const [transactionsStatus, setTransactionsStatus] = useState<TransactionsStatus>("ready")
+  const merchantNameCacheRef = useRef<Record<string, string>>({})
 
 
   useEffect(() => {
     if(status == "unauthenticated") {
       setTransactions({})
       setTransactionsError(null)
+      merchantNameCacheRef.current = {}
     }
   }, [status])
 
@@ -106,6 +115,7 @@ export default function TransactionProvider({ children }: { children: ReactNode 
     const status = "confirmed"
     const timestamp = tx.timestamp
     const hash = tx.transactionId
+    const memo = tx.memo
 
     return {
       id,
@@ -116,7 +126,8 @@ export default function TransactionProvider({ children }: { children: ReactNode 
       toAddress,
       status,
       timestamp,
-      hash
+      hash,
+      memo,
     }
   }
 
@@ -136,10 +147,15 @@ export default function TransactionProvider({ children }: { children: ReactNode 
       const res = await fetchTransactionsWithRetry("/transactions" + "?address=" + address + "&page=" + page + paginationString)
       const txPage = await res.json()
       const newTransactions = { ...transactions }
+      const rawTransactions = Array.isArray(txPage?.transactions)
+        ? txPage.transactions.filter(Boolean) as ServerTransaction[]
+        : []
+      const total = typeof txPage?.total === "number" ? txPage.total : 0
 
       newTransactions[pageName] = transactions[pageName] || { pages: [], total: 0 }
-      newTransactions[pageName].pages[page] = txPage.transactions.map(_txResponseToAppTx)
-      newTransactions[pageName].total = txPage.total
+      await resolveMerchantNames(rawTransactions)
+      newTransactions[pageName].pages[page] = rawTransactions.map(_txResponseToAppTx)
+      newTransactions[pageName].total = total
 
       setTransactions(newTransactions)
       setTransactionsError(null)
@@ -147,7 +163,7 @@ export default function TransactionProvider({ children }: { children: ReactNode 
       return {
         txs: newTransactions[pageName]?.pages[page],
         page,
-        total: txPage.total
+        total,
       }
     }
     catch(error: any) {
@@ -182,6 +198,60 @@ export default function TransactionProvider({ children }: { children: ReactNode 
     throw new Error("Error fetching transactions.")
   }
 
+  const resolveMerchantNames = async (txs: ServerTransaction[]) => {
+    const contactNameByAddress: Record<string, string> = {}
+    for (const contact of contacts) {
+      contactNameByAddress[contact.address.toLowerCase()] = contact.name
+    }
+
+    const uniqueAddresses = new Set<string>()
+    for (const tx of txs) {
+      if (!tx) continue
+      if (typeof tx.from === "string" && tx.from.trim()) {
+        uniqueAddresses.add(tx.from.toLowerCase())
+      }
+      if (typeof tx.to === "string" && tx.to.trim()) {
+        uniqueAddresses.add(tx.to.toLowerCase())
+      }
+    }
+
+    const toLookup = Array.from(uniqueAddresses).filter((addr) => {
+      if (contactNameByAddress[addr]) return false
+      return merchantNameCacheRef.current[addr] === undefined
+    })
+
+    if (toLookup.length === 0) return
+
+    await Promise.all(toLookup.map(async (addr) => {
+      try {
+        const res = await authFetch(`/wallets/lookup/${encodeURIComponent(addr)}`)
+        if (!res.ok) {
+          merchantNameCacheRef.current[addr] = ""
+          return
+        }
+        const data = await res.json() as WalletLookupResponse
+        if (data?.found && data?.is_merchant) {
+          const merchantName = (data.merchant_name || data.wallet_name || "").trim()
+          merchantNameCacheRef.current[addr] = merchantName
+          return
+        }
+        merchantNameCacheRef.current[addr] = ""
+      } catch {
+        merchantNameCacheRef.current[addr] = ""
+      }
+    }))
+  }
+
+  const resolveAddressLabel = (address: string): string | undefined => {
+    if (!address) return undefined
+    const normalized = address.toLowerCase()
+    const contactName = contacts.find((c) => c.address.toLowerCase() === normalized)?.name
+    if (contactName) return contactName
+    const merchantName = merchantNameCacheRef.current[normalized]
+    if (merchantName && merchantName.trim()) return merchantName.trim()
+    return undefined
+  }
+
 
   const _txResponseToAppTx = (tx: ServerTransaction): Transaction => {
     const id = tx.id
@@ -189,11 +259,12 @@ export default function TransactionProvider({ children }: { children: ReactNode 
     const amount = Number(BigInt(tx.amount) / BigInt(10 ** (SFLUV_DECIMALS - 2))) / 100
     const timestamp = String(tx.timestamp)
     const status = "completed"
-    const fromName = contacts.find((c) => c.address.toLowerCase() === tx.from.toLowerCase())?.name
+    const fromName = resolveAddressLabel(tx.from)
     const fromAddress = tx.from
-    const toName = contacts.find((c) => c.address.toLowerCase() === tx.to.toLowerCase())?.name
+    const toName = resolveAddressLabel(tx.to)
     const toAddress = tx.to
     const transactionId = tx.hash
+    const memo = tx.memo?.trim() || undefined
 
     return {
       id,
@@ -205,7 +276,8 @@ export default function TransactionProvider({ children }: { children: ReactNode 
       fromAddress,
       toName,
       toAddress,
-      transactionId
+      transactionId,
+      memo,
     }
   }
 

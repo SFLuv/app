@@ -3,7 +3,7 @@
 import type React from "react"
 
 import { useState, useEffect } from "react"
-import { useRouter } from "next/navigation"
+import { usePathname, useRouter, useSearchParams } from "next/navigation"
 import { useApp } from "@/context/AppProvider"
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -25,9 +25,12 @@ const mockContacts = [
 
 export default function UnwrapPage() {
   const router = useRouter()
+  const pathname = usePathname()
+  const searchParams = useSearchParams()
+  const tabFromQuery = searchParams.get("tab")
   const { user } = useApp()
   const [amount, setAmount] = useState("")
-  const [addressType, setAddressType] = useState("manual")
+  const [addressType, setAddressType] = useState<"manual" | "contact">(tabFromQuery === "contact" ? "contact" : "manual")
   const [manualAddress, setManualAddress] = useState("")
   const [selectedContact, setSelectedContact] = useState("")
   const [qrCode, setQrCode] = useState<string | null>(null)
@@ -43,6 +46,21 @@ export default function UnwrapPage() {
       router.push("/dashboard")
     }
   }, [user, router])
+
+  useEffect(() => {
+    const nextTab = searchParams.get("tab")
+    if (nextTab !== "manual" && nextTab !== "contact") return
+    setAddressType((prev) => (nextTab === prev ? prev : nextTab))
+  }, [searchParams])
+
+  useEffect(() => {
+    const params = new URLSearchParams(searchParams.toString())
+    params.set("tab", addressType)
+    const nextQuery = params.toString()
+    if (nextQuery !== searchParams.toString()) {
+      router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname, { scroll: false })
+    }
+  }, [addressType, pathname, router, searchParams])
 
   // Handle form submission
   const handleSubmit = (e: React.FormEvent) => {
@@ -167,7 +185,7 @@ export default function UnwrapPage() {
 
                 <div className="space-y-2">
                   <Label className="text-black dark:text-white">Destination Address</Label>
-                  <Tabs defaultValue="manual" value={addressType} onValueChange={setAddressType}>
+                  <Tabs defaultValue="manual" value={addressType} onValueChange={(value) => setAddressType(value as "manual" | "contact")}>
                     <TabsList className="grid grid-cols-2 mb-4 bg-secondary">
                       <TabsTrigger value="manual" className="text-black dark:text-white">
                         Manual Entry

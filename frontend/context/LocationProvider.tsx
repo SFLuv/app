@@ -2,8 +2,7 @@
 
 
 import { AuthedLocationResponse, LocationResponse } from "@/types/server";
-import { User } from "./AppProvider";
-import { createContext, ReactNode, useContext, useEffect, useState } from "react";
+import { createContext, ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { AuthedLocation, Location, UpdateLocationApprovalRequest } from "@/types/location";
 import { useApp } from "@/context/AppProvider";
 import { BACKEND } from "@/lib/constants";
@@ -23,172 +22,208 @@ interface LocationContextType {
 }
 
 const LocationContext = createContext<LocationContextType | null>(null)
+let mapLocationsInFlight: Promise<LocationResponse> | null = null
+
+const getLocationTypes = (locations: Location[]): string[] => {
+    const uniqueTypes = new Set<string>()
+    for (const location of locations) {
+        uniqueTypes.add(location.type)
+    }
+    return [...uniqueTypes, "All Locations"]
+}
+
+const fetchMapLocations = async (): Promise<LocationResponse> => {
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), 10000)
+    try {
+        const res = await fetch(BACKEND + "/locations", { signal: controller.signal })
+        if(res.status != 200) {
+            throw new Error("error getting locations")
+        }
+        return await res.json() as LocationResponse
+    } finally {
+        clearTimeout(timeoutId)
+    }
+}
+
+const getMapLocationsDeduped = async (): Promise<LocationResponse> => {
+    if (mapLocationsInFlight) return mapLocationsInFlight
+    mapLocationsInFlight = (async () => {
+        try {
+            return await fetchMapLocations()
+        } finally {
+            mapLocationsInFlight = null
+        }
+    })()
+    return mapLocationsInFlight
+}
 
 export default function LocationProvider({ children }: { children: ReactNode }) {
     const [mapLocations, setMapLocations] = useState<Location[]>([])
     const [authedMapLocations, setAuthedMapLocations] = useState<AuthedLocation[]>([])
     const [mapLocationsStatus, setMapLocationsStatus] = useState<LocationsStatus>("loading")
     const [locationTypes, setLocationTypes] = useState<string[]>([])
-    const { authFetch, userLocations, setUserLocations } = useApp()
+    const { authFetch, setUserLocations } = useApp()
+    const authFetchRef = useRef(authFetch)
+    const setUserLocationsRef = useRef(setUserLocations)
+    const mapLocationsRequestRef = useRef<Promise<void> | null>(null)
 
     useEffect(() => {
-      getMapLocations()
+        authFetchRef.current = authFetch
+    }, [authFetch])
+
+    useEffect(() => {
+        setUserLocationsRef.current = setUserLocations
+    }, [setUserLocations])
+
+    const getMapLocations = useCallback(async () => {
+        if (mapLocationsRequestRef.current) {
+            return mapLocationsRequestRef.current
+        }
+
+        const request = (async () => {
+            setMapLocationsStatus((currentStatus) => currentStatus === "loading" ? currentStatus : "loading")
+            try {
+                const response = await getMapLocationsDeduped()
+                setMapLocations(response.locations)
+                setLocationTypes(getLocationTypes(response.locations))
+                setMapLocationsStatus("available")
+            }
+            catch {
+                setMapLocationsStatus("unavailable")
+                console.error("error getting locations")
+            }
+            finally {
+                mapLocationsRequestRef.current = null
+            }
+        })()
+
+        mapLocationsRequestRef.current = request
+        return request
     }, [])
 
+    useEffect(() => {
+        void getMapLocations()
+    }, [getMapLocations])
 
-    const _getMapLocations = async (): Promise<LocationResponse> => {
-        const res = await fetch(BACKEND + "/locations")
-        if(res.status != 200) {
-            throw new Error("error getting locations")
+    const getAuthedMapLocations = useCallback(async () => {
+        try {
+            const res = await authFetchRef.current("/admin/locations")
+            if(res.status != 200) {
+                throw new Error("error getting authed locations")
+            }
+            const response = await res.json() as AuthedLocationResponse
+            setAuthedMapLocations(response.locations)
+        } catch {
+            console.log("error getting authed locations")
         }
-        return await res.json() as LocationResponse
-    }
+    }, [])
 
-    const _getAuthedMapLocations = async (): Promise<AuthedLocationResponse> => {
-        const res = await authFetch("/admin/locations")
-        if(res.status != 200) {
-            throw new Error("error getting authed locations")
-        }
-        return await res.json() as AuthedLocationResponse
-    }
-
-    const _updateLocation = async (location: AuthedLocation) => {
-        const res = await authFetch("/locations", {
-            method: "PUT",
-            headers: {
-                "Content-Type": "application/json"
-            },
-            body: JSON.stringify({location})
-        })
-        if(res.status != 201) {
-            throw new Error("error updating location")
-        }
-      }
-
-    const _getLocationById = async (id: number): Promise<Location> => {
-        const res = await authFetch("/locations{id}")
-        if(res.status != 200) {
-            throw new Error("error getting location by id")
-        }
-        return await res.json() as Location
-    }
-
-
-    const _addLocation = async (location: AuthedLocation) => {
-        const res = await authFetch("/locations", {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json"
-                },
-            body: JSON.stringify(location)
-        })
-        if(res.status != 201) {
-            throw new Error("error adding new location, from controller")
-        }
-      }
-
-      const _updateLocationApproval = async (req: UpdateLocationApprovalRequest) => {
-        console.log(req)
-        const res = await authFetch("/admin/locations", {
-            method: "PUT",
-            headers: {
-                "Content-Type": "application/json"
-            },
-            body: JSON.stringify(req)
-        })
-        if(res.status != 201) {
-            throw new Error("error updating location approval")
-        }
-      }
-
-
-    const addLocation = async (location: AuthedLocation) => {
+    const addLocation = useCallback(async (location: AuthedLocation) => {
         setMapLocationsStatus("loading")
         try {
-            await _addLocation(location)
-            setUserLocations([...userLocations, location])
+            const res = await authFetchRef.current("/locations", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json"
+                    },
+                body: JSON.stringify(location)
+            })
+            if(res.status != 201) {
+                throw new Error("error adding new location, from controller")
+            }
+            setUserLocationsRef.current((currentLocations) => [...currentLocations, location])
+            setMapLocationsStatus("available")
         }
         catch {
             setMapLocationsStatus("unavailable")
             console.error("error adding new location")
         }
-        setMapLocationsStatus("available")
-      }
+      }, [])
 
-    const getMapLocations = async () => {
+    const updateLocation = useCallback(async (location: AuthedLocation) => {
         setMapLocationsStatus("loading")
         try {
-            const l = await _getMapLocations()
-            setMapLocations(l.locations)
-            setMapLocationsStatus("available")
-            const tempTypes: string[] = [];
-            for (let i = 0; i < l.locations.length; i++) {
-                if (!tempTypes.includes(l.locations[i].type)) {
-                tempTypes.push(l.locations[i].type)
-                }
+            const res = await authFetchRef.current("/locations", {
+                method: "PUT",
+                headers: {
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify({location})
+            })
+            if(res.status != 201) {
+                throw new Error("error updating location")
             }
-            tempTypes.push("All Locations")
-            setLocationTypes(tempTypes)
-        }
-        catch {
-            setMapLocationsStatus("unavailable")
-            console.error("error getting locations")
-        }
-    }
-
-    const getAuthedMapLocations = async () => {
-        try {
-            const l = await _getAuthedMapLocations()
-            setAuthedMapLocations(l.locations)
-        } catch {
-            console.log("error getting authed locations")
-        }
-    }
-
-
-    const updateLocation = async (location: AuthedLocation) => {
-        setMapLocationsStatus("loading")
-        try {
-            await _updateLocation(location)
-            const l = await _getMapLocations()
-            setMapLocations(l.locations)
+            const updatedLocations = await getMapLocationsDeduped()
+            setMapLocations(updatedLocations.locations)
+            setLocationTypes(getLocationTypes(updatedLocations.locations))
             setMapLocationsStatus("available")
         }
         catch {
             setMapLocationsStatus("unavailable")
             console.error("error updating locations")
         }
-    }
+    }, [])
 
-     const updateLocationApproval = async (req: UpdateLocationApprovalRequest) => {
-         setMapLocationsStatus("loading")
+    const updateLocationApproval = useCallback(async (req: UpdateLocationApprovalRequest) => {
+        setMapLocationsStatus("loading")
         try {
-            await _updateLocationApproval(req)
-            const l = await _getMapLocations()
-            setMapLocations(l.locations)
-            const al = await _getAuthedMapLocations()
-            setAuthedMapLocations(al.locations)
+            const updateRes = await authFetchRef.current("/admin/locations", {
+                method: "PUT",
+                headers: {
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify(req)
+            })
+            if(updateRes.status != 201) {
+                throw new Error("error updating location approval")
+            }
+
+            const [locationsRes, authedLocationsRes] = await Promise.all([
+                getMapLocationsDeduped(),
+                authFetchRef.current("/admin/locations")
+            ])
+            if(authedLocationsRes.status != 200) {
+                throw new Error("error getting authed locations")
+            }
+            const authedLocations = await authedLocationsRes.json() as AuthedLocationResponse
+
+            setMapLocations(locationsRes.locations)
+            setLocationTypes(getLocationTypes(locationsRes.locations))
+            setAuthedMapLocations(authedLocations.locations)
             setMapLocationsStatus("available")
         }
         catch {
             setMapLocationsStatus("unavailable")
             console.error("error updating location approval")
         }
-      }
+      }, [])
+
+    const contextValue = useMemo<LocationContextType>(() => ({
+        mapLocations,
+        authedMapLocations,
+        locationTypes,
+        mapLocationsStatus,
+        getMapLocations,
+        getAuthedMapLocations,
+        updateLocation,
+        updateLocationApproval,
+        addLocation,
+    }), [
+        mapLocations,
+        authedMapLocations,
+        locationTypes,
+        mapLocationsStatus,
+        getMapLocations,
+        getAuthedMapLocations,
+        updateLocation,
+        updateLocationApproval,
+        addLocation
+    ])
 
     return (
         <LocationContext.Provider
-        value ={{
-            mapLocations,
-            authedMapLocations,
-            locationTypes,
-            mapLocationsStatus,
-            getMapLocations,
-            getAuthedMapLocations,
-            updateLocation,
-            updateLocationApproval,
-            addLocation,
-        }}
+        value ={contextValue}
         >
             {children}
         </LocationContext.Provider>

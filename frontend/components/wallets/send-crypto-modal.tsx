@@ -2,35 +2,48 @@
 
 import type React from "react"
 
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Card, CardContent } from "@/components/ui/card"
-import { Badge } from "@/components/ui/badge"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
-import { Send, AlertTriangle, CheckCircle, X, Copy, ArrowLeft } from "lucide-react"
+import { Send, AlertTriangle, CheckCircle, X, Copy, ArrowLeft, Camera, ImageUp, ChevronDown, ChevronUp } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { useApp } from "@/context/AppProvider"
-import type { ConnectedWallet } from "@/types/privy-wallet"
 import { AppWallet } from "@/lib/wallets/wallets"
-import { BYUSD_DECIMALS, SFLUV_DECIMALS, SYMBOL } from "@/lib/constants"
+import { SFLUV_DECIMALS, SYMBOL } from "@/lib/constants"
 import { Address, Hash } from "viem"
 import { useContacts } from "@/context/ContactsProvider";
 import ContactOrAddressInput from "../contacts/contact-or-address-input"
 import type { W9Submission } from "@/types/w9"
+import { useRouter } from "next/navigation"
+import { extractEthereumAddressFromPayload, extractRedeemParamsFromPayload } from "@/lib/qr/payload"
+
+type SendFlowMode = "manual" | "scan"
+
+type WalletLookupResponse = {
+  found?: boolean
+  user_id?: string
+  is_merchant?: boolean
+  merchant_name?: string
+  wallet_name?: string
+  address?: string
+}
 
 interface SendCryptoModalProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   wallet: AppWallet
   balance: number
+  defaultFlow?: SendFlowMode
 }
 
-export function SendCryptoModal({ open, onOpenChange, wallet, balance }: SendCryptoModalProps) {
+export function SendCryptoModal({ open, onOpenChange, wallet, balance, defaultFlow = "manual" }: SendCryptoModalProps) {
   const [step, setStep] = useState<"form" | "confirm" | "sending" | "success" | "error">("form")
+  const [flowMode, setFlowMode] = useState<SendFlowMode>(defaultFlow)
   const [hash, setHash] = useState<Hash | null>(null)
   const [copied, setCopied] = useState<boolean>(false)
   const [w9Email, setW9Email] = useState<string | null>(null)
@@ -44,6 +57,22 @@ export function SendCryptoModal({ open, onOpenChange, wallet, balance }: SendCry
     memo: "",
   })
   const [error, setError] = useState("")
+  const [scanError, setScanError] = useState<string>("")
+  const [scannerRunning, setScannerRunning] = useState<boolean>(false)
+  const [scannerSupported, setScannerSupported] = useState<boolean>(true)
+  const [photoScanLoading, setPhotoScanLoading] = useState<boolean>(false)
+  const [scanInstruction, setScanInstruction] = useState<string>("Point your camera at a QR code.")
+  const [showScanMoreOptions, setShowScanMoreOptions] = useState<boolean>(false)
+  const [processingDetectedQr, setProcessingDetectedQr] = useState<boolean>(false)
+  const [recipientMerchantName, setRecipientMerchantName] = useState<string>("")
+  const [recipientIsMerchant, setRecipientIsMerchant] = useState<boolean>(false)
+  const videoRef = useRef<HTMLVideoElement | null>(null)
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const streamRef = useRef<MediaStream | null>(null)
+  const scanIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const scanLockedRef = useRef<boolean>(false)
+  const isDetectingRef = useRef<boolean>(false)
+  const router = useRouter()
   const { toast } = useToast()
   const { contacts } = useContacts()
   const { user, authFetch } = useApp()
@@ -51,6 +80,202 @@ export function SendCryptoModal({ open, onOpenChange, wallet, balance }: SendCry
   const isValidEmail = (email: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
 
   const toAmountWei = () => BigInt(Number(formData.amount) * (10 ** SFLUV_DECIMALS))
+
+  const saveTransactionMemo = async (txHash: string) => {
+    const memo = formData.memo.trim()
+    if (!memo) return
+
+    try {
+      const res = await authFetch("/transactions/memo", {
+        method: "POST",
+        body: JSON.stringify({
+          tx_hash: txHash,
+          memo,
+        }),
+      })
+      if (!res.ok) {
+        throw new Error("Failed to save transaction memo.")
+      }
+    } catch (memoError) {
+      console.error(memoError)
+      toast({
+        title: "Memo Not Saved",
+        description: "The transfer was sent, but the memo could not be saved.",
+        variant: "destructive",
+      })
+    }
+  }
+
+  const stopScanner = () => {
+    if (scanIntervalRef.current) {
+      clearInterval(scanIntervalRef.current)
+      scanIntervalRef.current = null
+    }
+    if (streamRef.current) {
+      for (const track of streamRef.current.getTracks()) {
+        track.stop()
+      }
+      streamRef.current = null
+    }
+    if (videoRef.current) {
+      videoRef.current.srcObject = null
+    }
+    setScannerRunning(false)
+    isDetectingRef.current = false
+  }
+
+  const processScannedPayload = async (rawValue: string) => {
+    const value = rawValue.trim()
+    if (!value || scanLockedRef.current) return
+    scanLockedRef.current = true
+    setProcessingDetectedQr(true)
+    setScanError("")
+    setError("")
+
+    try {
+      const redeemParams = extractRedeemParamsFromPayload(value)
+      if (redeemParams) {
+        stopScanner()
+        toast({
+          title: "Redeem Code Detected",
+          description: "Redirecting to redeem flow...",
+        })
+        handleClose()
+        router.push(`/faucet/redeem?${redeemParams.toString()}`)
+        return
+      }
+
+      const recipientAddress = extractEthereumAddressFromPayload(value)
+      if (!recipientAddress) {
+        setScanError("Unsupported QR code. Scan a wallet address, CitizenWallet link, or faucet redeem code.")
+        scanLockedRef.current = false
+        return
+      }
+
+      setFormData((prev) => ({ ...prev, recipient: recipientAddress }))
+      setScanInstruction("Address found. Opening payment details...")
+      stopScanner()
+      setStep("confirm")
+      scanLockedRef.current = false
+    } finally {
+      setProcessingDetectedQr(false)
+    }
+  }
+
+  const detectFromSource = async (source: ImageBitmapSource) => {
+    const barcodeDetector = (window as any)?.BarcodeDetector
+    if (!barcodeDetector) {
+      setScannerSupported(false)
+      throw new Error("QR scanning is not supported in this browser.")
+    }
+
+    const detector = new barcodeDetector({ formats: ["qr_code"] })
+    const codes = await detector.detect(source)
+    if (!codes || codes.length === 0 || !codes[0]?.rawValue) {
+      throw new Error("No QR code detected. Try again.")
+    }
+    await processScannedPayload(codes[0].rawValue)
+  }
+
+  const startScanner = async () => {
+    if (scannerRunning || streamRef.current) return
+    setScanError("")
+    setScannerSupported(true)
+    setScanInstruction("Point your camera at a QR code.")
+    scanLockedRef.current = false
+
+    if (!navigator?.mediaDevices?.getUserMedia) {
+      setScannerSupported(false)
+      setScanError("Camera access is not supported in this browser. Switch to manual flow.")
+      return
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: { ideal: "environment" },
+        },
+      })
+
+      streamRef.current = stream
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream
+        await videoRef.current.play()
+      }
+
+      const barcodeDetector = (window as any)?.BarcodeDetector
+      if (!barcodeDetector) {
+        setScannerSupported(false)
+        setScanError("Live QR scan is unavailable in this browser. Use photo upload or manual flow.")
+        stopScanner()
+        return
+      }
+
+      setScannerRunning(true)
+      scanIntervalRef.current = setInterval(async () => {
+        if (!videoRef.current || isDetectingRef.current || scanLockedRef.current) return
+        isDetectingRef.current = true
+        try {
+          await detectFromSource(videoRef.current)
+        } catch {
+          // Keep scanning until a valid payload is detected.
+        } finally {
+          isDetectingRef.current = false
+        }
+      }, 600)
+    } catch {
+      setScanError("Camera permission denied or unavailable.")
+      setScannerSupported(false)
+      stopScanner()
+    }
+  }
+
+  const handlePhotoScan = async (file: File) => {
+    setPhotoScanLoading(true)
+    setScanError("")
+    try {
+      const bitmap = await createImageBitmap(file)
+      try {
+        await detectFromSource(bitmap)
+      } finally {
+        bitmap.close()
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unable to read QR from selected photo."
+      setScanError(message)
+    } finally {
+      setPhotoScanLoading(false)
+    }
+  }
+
+  const switchFlow = (nextFlow: SendFlowMode) => {
+    if (nextFlow === flowMode) return
+    setFlowMode(nextFlow)
+    setError("")
+    setScanError("")
+    setProcessingDetectedQr(false)
+    setShowScanMoreOptions(false)
+    if (nextFlow === "manual") {
+      stopScanner()
+    } else {
+      setFormData((prev) => ({ ...prev, recipient: "" }))
+    }
+  }
+
+  const normalizedRecipientAddress = (rawValue: string): string | null => {
+    return extractEthereumAddressFromPayload(rawValue)
+  }
+
+  const openPhotoPicker = () => {
+    fileInputRef.current?.click()
+  }
+
+  const handlePhotoInputChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    if (!file) return
+    await handlePhotoScan(file)
+    event.target.value = ""
+  }
 
   const executeSend = async () => {
     try {
@@ -64,6 +289,7 @@ export function SendCryptoModal({ open, onOpenChange, wallet, balance }: SendCry
       }
 
       if (receipt.hash) {
+        await saveTransactionMemo(receipt.hash)
         setStep("success")
         setHash(receipt.hash as Hash)
         toast({
@@ -212,6 +438,87 @@ export function SendCryptoModal({ open, onOpenChange, wallet, balance }: SendCry
     }
   }
 
+  useEffect(() => {
+    return () => {
+      stopScanner()
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!open) {
+      stopScanner()
+      return
+    }
+
+    setFlowMode(defaultFlow)
+    setScanInstruction("Point your camera at a QR code.")
+    setScanError("")
+    setProcessingDetectedQr(false)
+    setShowScanMoreOptions(false)
+    scanLockedRef.current = false
+  }, [open, defaultFlow])
+
+  useEffect(() => {
+    if (!open || step !== "form") return
+    if (flowMode !== "scan") {
+      stopScanner()
+      return
+    }
+    if (formData.recipient) {
+      stopScanner()
+      return
+    }
+    startScanner()
+  }, [flowMode, formData.recipient, open, step])
+
+  useEffect(() => {
+    if (!open || flowMode !== "scan" || step !== "confirm") return
+
+    const recipient = formData.recipient.trim()
+    if (!recipient) {
+      setRecipientMerchantName("")
+      setRecipientIsMerchant(false)
+      return
+    }
+
+    let cancelled = false
+    const lookupRecipient = async () => {
+      try {
+        const res = await authFetch(`/wallets/lookup/${encodeURIComponent(recipient)}`)
+        if (!res.ok) {
+          if (!cancelled) {
+            setRecipientMerchantName("")
+            setRecipientIsMerchant(false)
+          }
+          return
+        }
+
+        const data = await res.json() as WalletLookupResponse
+        if (cancelled) return
+
+        if (data.found && data.is_merchant) {
+          const merchantName = (data.merchant_name || data.wallet_name || "").trim()
+          setRecipientMerchantName(merchantName || "Merchant")
+          setRecipientIsMerchant(true)
+          return
+        }
+
+        setRecipientMerchantName("")
+        setRecipientIsMerchant(false)
+      } catch {
+        if (cancelled) return
+        setRecipientMerchantName("")
+        setRecipientIsMerchant(false)
+      }
+    }
+
+    void lookupRecipient()
+
+    return () => {
+      cancelled = true
+    }
+  }, [authFetch, flowMode, formData.recipient, open, step])
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
     setError("")
@@ -232,17 +539,37 @@ export function SendCryptoModal({ open, onOpenChange, wallet, balance }: SendCry
       return
     }
 
-    // Basic address validation
-    if (!formData.recipient.startsWith("0x") || formData.recipient.length !== 42) {
-      setError("Please enter a valid Ethereum address")
+    const normalizedRecipient = normalizedRecipientAddress(formData.recipient)
+    if (!normalizedRecipient) {
+      setError("Please enter or scan a valid Ethereum address")
       return
+    }
+
+    if (normalizedRecipient !== formData.recipient) {
+      setFormData((prev) => ({ ...prev, recipient: normalizedRecipient }))
     }
 
     setStep("confirm")
   }
 
   const handleConfirm = async () => {
-    setStep("sending")
+    const normalizedRecipient = normalizedRecipientAddress(formData.recipient)
+    if (!normalizedRecipient) {
+      setError("Please enter or scan a valid Ethereum address")
+      return
+    }
+
+    const amountNumber = Number.parseFloat(formData.amount)
+    if (!Number.isFinite(amountNumber) || amountNumber <= 0) {
+      setError("Amount must be greater than 0")
+      return
+    }
+
+    if (amountNumber > balance) {
+      setError("Insufficient balance")
+      return
+    }
+
     setW9Reason(null)
     setW9Year(null)
     setW9Email(null)
@@ -250,6 +577,7 @@ export function SendCryptoModal({ open, onOpenChange, wallet, balance }: SendCry
     setError("")
 
     const amountWei = toAmountWei()
+    setStep("sending")
 
     if (user?.isAdmin) {
       try {
@@ -257,7 +585,7 @@ export function SendCryptoModal({ open, onOpenChange, wallet, balance }: SendCry
           method: "POST",
           body: JSON.stringify({
             from_address: wallet.address,
-            to_address: formData.recipient,
+            to_address: normalizedRecipient,
             amount: amountWei.toString(),
           }),
         })
@@ -296,9 +624,18 @@ export function SendCryptoModal({ open, onOpenChange, wallet, balance }: SendCry
   }
 
   const handleClose = () => {
+    stopScanner()
+    scanLockedRef.current = false
     setStep("form")
+    setFlowMode(defaultFlow)
     setFormData({ recipient: "", amount: "", memo: "" })
     setError("")
+    setScanError("")
+    setScanInstruction("Point your camera at a QR code.")
+    setProcessingDetectedQr(false)
+    setRecipientMerchantName("")
+    setRecipientIsMerchant(false)
+    setShowScanMoreOptions(false)
     setHash(null)
     setW9Email(null)
     setW9Reason(null)
@@ -308,59 +645,153 @@ export function SendCryptoModal({ open, onOpenChange, wallet, balance }: SendCry
     onOpenChange(false)
   }
 
+  const handleBackFromConfirm = () => {
+    setError("")
+    if (flowMode === "scan") {
+      setFormData((prev) => ({ ...prev, recipient: "", amount: "" }))
+      setScanError("")
+      setScanInstruction("Point your camera at a QR code.")
+      setProcessingDetectedQr(false)
+      setRecipientMerchantName("")
+      setRecipientIsMerchant(false)
+      scanLockedRef.current = false
+    }
+    setStep("form")
+  }
+
+  const shortenAddress = (address: string, start = 6, end = 4) => {
+    if (!address) return ""
+    if (address.length <= start + end) return address
+    return `${address.slice(0, start)}...${address.slice(-end)}`
+  }
+
   const renderContent = () => {
      switch (step) {
       case "form":
         return (
           <div className="space-y-4">
             <form onSubmit={handleSubmit} className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="recipient" className="text-sm font-medium">
-                  Recipient Address *
-                </Label>
-                <ContactOrAddressInput
-                  id="recipient"
-                  onChange={(value) => setFormData({ ...formData, recipient: value })}
-                  className="font-mono text-sm h-11"
-                />
+              <div className="flex items-center justify-end">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => switchFlow(flowMode === "manual" ? "scan" : "manual")}
+                >
+                  Switch to {flowMode === "manual" ? "Scan Flow" : "Manual Flow"}
+                </Button>
               </div>
 
-              <div className="space-y-2">
-                <Label htmlFor="amount" className="text-sm font-medium">
-                  Amount *
-                </Label>
-                <div className="relative">
-                  <Input
-                    id="amount"
-                    type="number"
-                    step="0.00000001"
-                    placeholder="0.00"
-                    value={formData.amount}
-                    onChange={(e) => setFormData({ ...formData, amount: e.target.value })}
-                    className="h-11 pr-16"
-                  />
-                  <div className="absolute right-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground font-medium">
-                    {SYMBOL}
+              {flowMode === "manual" ? (
+                <>
+                  <div className="space-y-2">
+                    <Label htmlFor="recipient" className="text-sm font-medium">
+                      Recipient Address *
+                    </Label>
+                    <ContactOrAddressInput
+                      id="recipient"
+                      onChange={(value) => setFormData({ ...formData, recipient: value })}
+                      className="font-mono text-sm h-11"
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="amount" className="text-sm font-medium">
+                      Amount *
+                    </Label>
+                    <div className="relative">
+                      <Input
+                        id="amount"
+                        type="number"
+                        step="0.00000001"
+                        placeholder="0.00"
+                        value={formData.amount}
+                        onChange={(e) => setFormData({ ...formData, amount: e.target.value })}
+                        className="h-11 pr-16"
+                      />
+                      <div className="absolute right-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground font-medium">
+                        {SYMBOL}
+                      </div>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      Available: {balance} {SYMBOL}
+                    </p>
+                  </div>
+                </>
+              ) : (
+                <div className="space-y-3 rounded-lg border p-3">
+                  <div className="space-y-2">
+                    <Label className="text-sm font-medium">Scan Recipient QR</Label>
+                    <div className="relative rounded-md bg-black/90 overflow-hidden border">
+                      <video ref={videoRef} className="h-56 w-full object-cover" muted playsInline />
+                      {processingDetectedQr && (
+                        <div className="pointer-events-none absolute inset-0">
+                          <div className="absolute inset-4 rounded-lg border border-white/40 shadow-[0_0_24px_rgba(255,255,255,0.2)]" />
+                          <div className="absolute left-4 right-4 h-0.5 bg-[#eb6c6c] shadow-[0_0_16px_rgba(235,108,108,0.85)] animate-qr-scan-line" />
+                        </div>
+                      )}
+                    </div>
+                    <p className="text-xs text-muted-foreground">{scanInstruction}</p>
+                  </div>
+
+                  {!scannerRunning && (
+                    <Button type="button" variant="outline" onClick={startScanner}>
+                      <Camera className="h-4 w-4 mr-2" />
+                      Start Camera
+                    </Button>
+                  )}
+
+                  {!scannerSupported && (
+                    <p className="text-xs text-amber-600">
+                      Browser QR detection support is limited. You can switch to manual flow at any time.
+                    </p>
+                  )}
+
+                  <div className="space-y-2">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      className="h-9 px-0 !bg-transparent hover:!bg-transparent active:!bg-transparent focus:!bg-transparent focus-visible:!bg-transparent focus-visible:!ring-0 focus-visible:!ring-offset-0"
+                      onClick={() => setShowScanMoreOptions((prev) => !prev)}
+                    >
+                      {showScanMoreOptions ? <ChevronUp className="h-4 w-4 mr-2" /> : <ChevronDown className="h-4 w-4 mr-2" />}
+                      More options
+                    </Button>
+                    {showScanMoreOptions && (
+                      <div className="space-y-3 rounded-md border bg-secondary/20 p-3">
+                        <Button type="button" variant="outline" onClick={openPhotoPicker} disabled={photoScanLoading} className="w-full">
+                          <ImageUp className="h-4 w-4 mr-2" />
+                          {photoScanLoading ? "Reading..." : "Camera Roll"}
+                        </Button>
+                      </div>
+                    )}
                   </div>
                 </div>
-                <p className="text-xs text-muted-foreground">
-                  Available: {balance} {SYMBOL}
-                </p>
-              </div>
+              )}
 
-              <div className="space-y-2">
-                <Label htmlFor="memo" className="text-sm font-medium">
-                  Memo (Optional)
-                </Label>
-                <Textarea
-                  id="memo"
-                  placeholder="Add a note for this transaction"
-                  value={formData.memo}
-                  onChange={(e) => setFormData({ ...formData, memo: e.target.value })}
-                  rows={3}
-                  className="resize-none"
-                />
-              </div>
+              {flowMode === "manual" && (
+                <div className="space-y-2">
+                  <Label htmlFor="memo" className="text-sm font-medium">
+                    Memo (Optional)
+                  </Label>
+                  <Textarea
+                    id="memo"
+                    placeholder="Add a note for this transaction"
+                    value={formData.memo}
+                    onChange={(e) => setFormData({ ...formData, memo: e.target.value })}
+                    rows={3}
+                    className="resize-none"
+                  />
+                </div>
+              )}
+
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={handlePhotoInputChange}
+              />
 
               {error && (
                 <div className="flex items-center gap-2 text-red-600 text-sm p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
@@ -369,70 +800,148 @@ export function SendCryptoModal({ open, onOpenChange, wallet, balance }: SendCry
                 </div>
               )}
 
-              <div className="flex flex-col gap-3 pt-4 border-t">
-                <Button type="submit" className="h-11 w-full">
-                  Review Transaction
-                </Button>
-                <Button type="button" variant="outline" onClick={handleClose} className="h-11 w-full bg-transparent">
-                  Cancel
-                </Button>
-              </div>
+              {scanError && (
+                <div className="flex items-center gap-2 text-red-600 text-sm p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
+                  <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+                  <span>{scanError}</span>
+                </div>
+              )}
+
+              {flowMode === "manual" ? (
+                <div className="flex flex-col gap-3 pt-4 border-t">
+                  <Button type="submit" className="h-11 w-full">
+                    Review Transaction
+                  </Button>
+                  <Button type="button" variant="outline" onClick={handleClose} className="h-11 w-full bg-transparent">
+                    Cancel
+                  </Button>
+                </div>
+              ) : null}
             </form>
           </div>
         )
 
       case "confirm":
         return (
-          <div className="space-y-4">
-            <div className="text-center pb-2">
-              <h3 className="text-lg font-semibold mb-2">Confirm Transaction</h3>
-              <p className="text-muted-foreground text-sm">Please review the details before sending</p>
-            </div>
+          <div className="space-y-3">
+            {flowMode !== "scan" && (
+              <div className="text-center pb-2">
+                <h3 className="text-lg font-semibold mb-2">Confirm Transaction</h3>
+                <p className="text-muted-foreground text-sm">Please review the details before sending</p>
+              </div>
+            )}
 
-            <Card>
-              <CardContent className="p-4 space-y-4">
-                <div className="flex items-center justify-between">
-                  <span className="text-muted-foreground text-sm">From</span>
-                  <div className="flex items-center gap-2">
-                    <Avatar className="h-5 w-5">
-                      <AvatarImage src={`/placeholder.svg?height=20&width=20&text=${wallet.name}`} />
+            {flowMode === "scan" ? (
+              <Card className="overflow-hidden border-primary/25 bg-gradient-to-b from-primary/5 via-background to-background">
+                <CardContent className="space-y-3 p-3 sm:p-4">
+                  <div className="rounded-2xl border bg-background/90 p-3 shadow-sm">
+                    <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground text-center">Amount</p>
+                    <div className="mt-1.5 flex items-center justify-center gap-1">
+                      <span className="text-2xl sm:text-3xl font-semibold text-foreground">$</span>
+                      <Input
+                        id="confirm-amount"
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        inputMode="decimal"
+                        placeholder="0.00"
+                        value={formData.amount}
+                        onChange={(e) => setFormData({ ...formData, amount: e.target.value })}
+                        onWheel={(e) => e.currentTarget.blur()}
+                        className="h-auto w-full max-w-[200px] border-0 bg-transparent px-0 text-center text-2xl sm:text-3xl font-semibold focus-visible:ring-0"
+                      />
+                    </div>
+                    <p className="mt-1 text-center text-xs text-muted-foreground">{SYMBOL}</p>
+                    <p className="mt-2 text-center text-xs text-muted-foreground">
+                      Available: {balance} {SYMBOL}
+                    </p>
+                  </div>
+
+                  <div className="space-y-2 rounded-xl border bg-background/80 p-3">
+                    <div>
+                      <p className="text-[11px] uppercase tracking-wide text-muted-foreground">To</p>
+                      <p className="text-sm font-semibold leading-tight">
+                        {contacts.find((contact) => contact.address === formData.recipient)?.name || recipientMerchantName || "Scanned Recipient"}
+                      </p>
+                      <p className="font-mono text-xs text-muted-foreground break-all">
+                        {shortenAddress(formData.recipient, 8, 6)}
+                      </p>
+                    </div>
+                    <div className="border-t pt-2">
+                      <p className="text-[11px] uppercase tracking-wide text-muted-foreground">From</p>
+                      <p className="text-sm font-semibold leading-tight">{wallet.name}</p>
+                    </div>
+                  </div>
+
+                  <div className="space-y-2 rounded-xl border bg-background/80 p-3">
+                    <Label htmlFor="confirm-memo" className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                      Memo (Optional)
+                    </Label>
+                    <Input
+                      id="confirm-memo"
+                      type="text"
+                      placeholder="Add a note"
+                      value={formData.memo}
+                      onChange={(e) => setFormData({ ...formData, memo: e.target.value })}
+                      className="h-10"
+                    />
+                  </div>
+                </CardContent>
+              </Card>
+            ) : (
+              <Card className="overflow-hidden border-primary/20 bg-gradient-to-b from-primary/5 via-background to-background">
+                <CardContent className="space-y-3 p-3 sm:p-4">
+                  <div className="rounded-xl border bg-background/90 p-3 shadow-sm">
+                    <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Amount</p>
+                    <p className="mt-1 text-lg font-semibold sm:text-xl">
+                      {formData.amount} {SYMBOL}
+                    </p>
+                  </div>
+
+                  <div className="space-y-2 rounded-xl border bg-background/80 p-3">
+                    <p className="text-[11px] uppercase tracking-wide text-muted-foreground">To</p>
+                    <p className="text-sm font-semibold leading-tight">
+                      {contacts.find((contact) => contact.address === formData.recipient)?.name || shortenAddress(formData.recipient, 8, 6)}
+                    </p>
+                    <p className="font-mono text-xs text-muted-foreground break-all">{formData.recipient}</p>
+                  </div>
+
+                  <div className="flex items-center justify-between gap-3 rounded-xl border bg-background/80 p-3">
+                    <div>
+                      <p className="text-[11px] uppercase tracking-wide text-muted-foreground">From</p>
+                      <p className="text-sm font-semibold leading-tight">{wallet.name}</p>
+                    </div>
+                    <Avatar className="h-8 w-8">
+                      <AvatarImage src={`/placeholder.svg?height=32&width=32&text=${wallet.name}`} />
                       <AvatarFallback className="text-xs">
                         {wallet.name.slice(0, 2).toUpperCase()}
                       </AvatarFallback>
                     </Avatar>
-                    <span className="font-medium text-sm">{wallet.name.toUpperCase()}</span>
                   </div>
-                </div>
 
-                <div className="flex items-center justify-between">
-                  <span className="text-muted-foreground text-sm">To</span>
-                  <span className="font-mono text-sm">
-                    {contacts.find((contact) => contact.address === formData.recipient)?.name || formData.recipient.slice(0, 6) + "..." + formData.recipient.slice(-4)}
-                  </span>
-                </div>
+                  {formData.memo && (
+                    <div className="space-y-1 rounded-xl border bg-background/80 p-3">
+                      <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Memo</p>
+                      <p className="text-sm break-words">{formData.memo}</p>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            )}
 
-                <div className="flex items-center justify-between">
-                  <span className="text-muted-foreground text-sm">Amount</span>
-                  <span className="font-semibold">
-                    {formData.amount} {SYMBOL}
-                  </span>
-                </div>
+            {error && (
+              <div className="flex items-center gap-2 text-red-600 text-sm p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
+                <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+                <span>{error}</span>
+              </div>
+            )}
 
-                {formData.memo && (
-                  <div className="flex items-start justify-between">
-                    <span className="text-muted-foreground text-sm">Memo</span>
-                    <span className="text-sm text-right max-w-[200px] break-words">{formData.memo}</span>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-
-            <div className="flex flex-col gap-3 pt-4 border-t">
+            <div className={flowMode === "scan" ? "grid grid-cols-2 gap-2 pt-3 border-t" : "flex flex-col gap-3 pt-4 border-t"}>
               <Button onClick={handleConfirm} className="h-11 w-full">
                 <Send className="h-4 w-4 mr-2" />
-                Send Transaction
+                Send
               </Button>
-              <Button variant="outline" onClick={() => setStep("form")} className="h-11 w-full bg-transparent">
+              <Button variant="outline" onClick={handleBackFromConfirm} className="h-11 w-full bg-transparent">
                 <ArrowLeft className="h-4 w-4 mr-2" />
                 Back
               </Button>
@@ -591,7 +1100,7 @@ export function SendCryptoModal({ open, onOpenChange, wallet, balance }: SendCry
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent className="w-[95vw] max-w-md mx-auto max-h-[90vh] rounded-lg overflow-y-auto">
+      <DialogContent className="mx-auto w-[calc(100vw-1rem)] max-w-md max-h-[calc(100dvh-1rem)] rounded-lg overflow-x-hidden overflow-y-auto p-4 sm:p-6">
         <DialogHeader className="space-y-2 pb-2">
           <DialogTitle className="text-lg sm:text-xl">Send Cryptocurrency</DialogTitle>
           <DialogDescription className="text-sm">

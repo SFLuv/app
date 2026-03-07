@@ -112,7 +112,7 @@ export function ReceiveCryptoModal({ open, onOpenChange, wallet }: ReceiveCrypto
       setMoreOptions(false)
       onOpenChange(open)
     }}>
-      <DialogContent className="w-[95vw] max-w-md mx-auto max-h-[90vh] rounded-lg overflow-y-auto">
+      <DialogContent className="mx-auto w-[calc(100vw-1rem)] max-w-md max-h-[90vh] rounded-lg overflow-y-auto overflow-x-hidden p-4 sm:p-6">
         <DialogHeader className="space-y-2 pb-2">
           <DialogTitle className="text-lg sm:text-xl">Receive Cryptocurrency</DialogTitle>
           <DialogDescription className="text-sm">
@@ -122,35 +122,32 @@ export function ReceiveCryptoModal({ open, onOpenChange, wallet }: ReceiveCrypto
 
         <div className="space-y-4 sm:space-y-6">
           {/* QR Code Section */}
-          <Card>
+          <Card className="overflow-hidden border-primary/20 bg-gradient-to-b from-primary/5 via-background to-background">
             <CardContent className="p-4 sm:p-6">
               <div className="text-center space-y-3 sm:space-y-4">
-                <div className=" mx-auto bg-muted rounded-lg flex items-center justify-center">
-                  <div className="text-center">
-                    <QRCode
-                      ref={QRRef}
-                      value={activeTab === "cw" ? cwLinkValue : wallet.address}
-                      style={{
-                        // display: "flex",
-                        height: "30vh",
-                        width: "30vh",
-                        borderRadius: "10px"
-                      }}
-                      size={600}
-                      logoImage={"/icon.png"}
-                      removeQrCodeBehindLogo={true}
-                      logoPadding={1}
-                      logoPaddingStyle="circle"
-                      logoWidth={150}
-                      qrStyle="dots"
-                      eyeRadius={100}
-                      eyeColor={"#eb6c6c"}
-                      ecLevel="H"
-                      quietZone={20}
-                    />
-                    {/* <p className="text-sm text-muted-foreground">QR Code</p>
-                    <p className="text-xs text-muted-foreground">{wallet?.address?.slice(0, 8) || "0x"}...</p> */}
-                  </div>
+                <div className="mx-auto my-2 w-full max-w-[280px] rounded-2xl border border-border/70 bg-white p-3 shadow-sm sm:my-3 sm:p-4">
+                  <QRCode
+                    ref={QRRef}
+                    value={activeTab === "cw" ? cwLinkValue : wallet.address}
+                    style={{
+                      display: "block",
+                      width: "100%",
+                      height: "100%",
+                      aspectRatio: "1 / 1",
+                      borderRadius: "12px",
+                    }}
+                    size={600}
+                    logoImage={"/icon.png"}
+                    removeQrCodeBehindLogo={true}
+                    logoPadding={1}
+                    logoPaddingStyle="circle"
+                    logoWidth={150}
+                    qrStyle="dots"
+                    eyeRadius={100}
+                    eyeColor={"#eb6c6c"}
+                    ecLevel="H"
+                    quietZone={20}
+                  />
                 </div>
                 <p className="text-sm text-muted-foreground">
                   Scan this QR code to send {currencySymbol} to this wallet
@@ -176,8 +173,12 @@ export function ReceiveCryptoModal({ open, onOpenChange, wallet }: ReceiveCrypto
 
             {/* Wallet Address */}
             <Label className="text-sm font-medium">Wallet {activeTab === "cw" ? "Link" : "Address"}</Label>
-            <div className="flex gap-2">
-              <Input value={activeTab === "cw" ? cwLinkValue : wallet.address} readOnly className="font-mono text-xs sm:text-sm h-11" />
+            <div className="flex min-w-0 gap-2">
+              <Input
+                value={activeTab === "cw" ? cwLinkValue : wallet.address}
+                readOnly
+                className="h-11 min-w-0 flex-1 font-mono text-xs sm:text-sm"
+              />
               <Button
                 variant="outline"
                 size="sm"

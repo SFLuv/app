@@ -16,6 +16,7 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { usePathname, useRouter, useSearchParams } from "next/navigation"
 import { buildCredentialLabelMap, formatCredentialLabel } from "@/lib/credential-labels"
 import { CredentialRequest, IssuerWithScopes } from "@/types/issuer"
 import { GlobalCredentialType } from "@/types/workflow"
@@ -23,13 +24,25 @@ import { AlertTriangle, CheckCircle2, ChevronLeft, ChevronRight, ClipboardList, 
 
 export default function IssuerPage() {
   const { authFetch, status, user } = useApp()
+  const router = useRouter()
+  const pathname = usePathname()
+  const searchParams = useSearchParams()
+  const statusFilterFromQuery = searchParams.get("status")
+  const credentialFilterFromQuery = searchParams.get("credential")
+  const searchFromQuery = searchParams.get("search")
+  const pageFromQuery = Number(searchParams.get("page") || "0")
+
   const [scopes, setScopes] = useState<IssuerWithScopes | null>(null)
   const [requests, setRequests] = useState<CredentialRequest[]>([])
   const [credentialTypes, setCredentialTypes] = useState<GlobalCredentialType[]>([])
-  const [statusFilter, setStatusFilter] = useState<"all" | "pending" | "approved" | "rejected">("all")
-  const [credentialFilter, setCredentialFilter] = useState<string>("all")
-  const [issuerSearch, setIssuerSearch] = useState<string>("")
-  const [issuerPage, setIssuerPage] = useState<number>(0)
+  const [statusFilter, setStatusFilter] = useState<"all" | "pending" | "approved" | "rejected">(
+    statusFilterFromQuery === "pending" || statusFilterFromQuery === "approved" || statusFilterFromQuery === "rejected"
+      ? statusFilterFromQuery
+      : "all"
+  )
+  const [credentialFilter, setCredentialFilter] = useState<string>(credentialFilterFromQuery || "all")
+  const [issuerSearch, setIssuerSearch] = useState<string>(searchFromQuery || "")
+  const [issuerPage, setIssuerPage] = useState<number>(Number.isFinite(pageFromQuery) && pageFromQuery >= 0 ? pageFromQuery : 0)
   const [modalOpen, setModalOpen] = useState<boolean>(false)
   const [selectedRequest, setSelectedRequest] = useState<CredentialRequest | null>(null)
   const [statusDraft, setStatusDraft] = useState<CredentialRequest["status"]>("pending")
@@ -102,6 +115,41 @@ export default function IssuerPage() {
     if (status !== "authenticated") return
     loadRequests(issuerSearch, issuerPage)
   }, [status, issuerSearch, issuerPage, loadRequests])
+
+  useEffect(() => {
+    const nextSearch = searchParams.get("search") || ""
+    const nextCredential = searchParams.get("credential") || "all"
+    const nextStatus = searchParams.get("status")
+    const nextPage = Number(searchParams.get("page") || "0")
+    const normalizedPage = Number.isFinite(nextPage) && nextPage >= 0 ? nextPage : 0
+    const normalizedStatus: "all" | "pending" | "approved" | "rejected" =
+      nextStatus === "pending" || nextStatus === "approved" || nextStatus === "rejected" ? nextStatus : "all"
+
+    setIssuerSearch((prev) => (nextSearch === prev ? prev : nextSearch))
+    setCredentialFilter((prev) => (nextCredential === prev ? prev : nextCredential))
+    setStatusFilter((prev) => (normalizedStatus === prev ? prev : normalizedStatus))
+    setIssuerPage((prev) => (normalizedPage === prev ? prev : normalizedPage))
+  }, [searchParams])
+
+  useEffect(() => {
+    const params = new URLSearchParams(searchParams.toString())
+    if (issuerSearch) params.set("search", issuerSearch)
+    else params.delete("search")
+
+    if (issuerPage > 0) params.set("page", String(issuerPage))
+    else params.delete("page")
+
+    if (statusFilter === "all") params.delete("status")
+    else params.set("status", statusFilter)
+
+    if (credentialFilter === "all") params.delete("credential")
+    else params.set("credential", credentialFilter)
+
+    const nextQuery = params.toString()
+    if (nextQuery !== searchParams.toString()) {
+      router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname, { scroll: false })
+    }
+  }, [credentialFilter, issuerPage, issuerSearch, pathname, router, searchParams, statusFilter])
 
   const credentialFilterOptions = useMemo(() => {
     const scoped = scopes?.allowed_credentials || []

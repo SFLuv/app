@@ -206,6 +206,34 @@ func (s *AppDB) CreateTables() error {
 	}
 
 	_, err = s.db.Exec(context.Background(), `
+		CREATE INDEX IF NOT EXISTS wallets_smart_address_lower_idx
+			ON wallets (LOWER(smart_address))
+			WHERE smart_address IS NOT NULL;
+
+		CREATE INDEX IF NOT EXISTS wallets_eoa_address_lower_idx
+			ON wallets (LOWER(eoa_address));
+	`)
+	if err != nil {
+		return fmt.Errorf("error creating wallet address lookup indexes: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
+		CREATE TABLE IF NOT EXISTS memos(
+			tx_hash TEXT PRIMARY KEY,
+			memo TEXT NOT NULL,
+			owner TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+		);
+
+		CREATE INDEX IF NOT EXISTS memos_tx_hash_idx
+			ON memos (LOWER(tx_hash));
+	`)
+	if err != nil {
+		return fmt.Errorf("error creating memos table: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
 		CREATE TABLE IF NOT EXISTS affiliates(
 			user_id TEXT PRIMARY KEY REFERENCES users(id),
 			organization TEXT NOT NULL,
@@ -1170,17 +1198,18 @@ func (s *AppDB) CreateTables() error {
 	}
 
 	_, err = s.db.Exec(context.Background(), `
-			CREATE TABLE IF NOT EXISTS locations (
-				id SERIAL PRIMARY KEY,
-				google_id TEXT,
-				owner_id TEXT REFERENCES users(id),
-				name TEXT,
-				description TEXT,
-				type TEXT,
-				approval BOOLEAN,
-				street TEXT,
-				city TEXT,
-				state TEXT,
+				CREATE TABLE IF NOT EXISTS locations (
+					id SERIAL PRIMARY KEY,
+					google_id TEXT,
+					owner_id TEXT REFERENCES users(id),
+					name TEXT,
+					description TEXT,
+					type TEXT,
+					approval BOOLEAN,
+					approved_at TIMESTAMP,
+					street TEXT,
+					city TEXT,
+					state TEXT,
 				zip TEXT,
 				lat NUMERIC,
 				lng NUMERIC,
@@ -1209,6 +1238,19 @@ func (s *AppDB) CreateTables() error {
 	`)
 	if err != nil {
 		return fmt.Errorf("error creating locations table: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
+			ALTER TABLE locations
+			ADD COLUMN IF NOT EXISTS approved_at TIMESTAMP;
+
+			UPDATE locations
+			SET approved_at = NOW()
+			WHERE approval = TRUE
+			AND approved_at IS NULL;
+		`)
+	if err != nil {
+		return fmt.Errorf("error ensuring locations.approved_at column: %s", err)
 	}
 
 	_, err = s.db.Exec(context.Background(), `

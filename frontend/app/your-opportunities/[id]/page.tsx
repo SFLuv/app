@@ -3,7 +3,7 @@
 import type React from "react"
 
 import { useState, useEffect } from "react"
-import { useParams, useRouter } from "next/navigation"
+import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -22,9 +22,12 @@ import { useRegisteredVolunteers } from "@/hooks/api/use-registered-volunteers"
 export default function OpportunityDetailPage() {
   const params = useParams()
   const router = useRouter()
+  const pathname = usePathname()
+  const searchParams = useSearchParams()
   const { user } = useApp()
   const opportunityId = params.id as string
-  const [activeTab, setActiveTab] = useState("details")
+  const tabFromQuery = searchParams.get("tab")
+  const [activeTab, setActiveTab] = useState(tabFromQuery === "volunteers" ? "volunteers" : "details")
   const [isEditing, setIsEditing] = useState(false)
   const [formData, setFormData] = useState({
     title: "",
@@ -61,6 +64,22 @@ export default function OpportunityDetailPage() {
       router.push("/your-opportunities")
     }
   }, [isLoadingOpportunity, opportunity, router])
+
+  useEffect(() => {
+    const nextTab = searchParams.get("tab")
+    if (!nextTab) return
+    if (nextTab !== "details" && nextTab !== "volunteers") return
+    setActiveTab((prev) => (nextTab === prev ? prev : nextTab))
+  }, [searchParams])
+
+  useEffect(() => {
+    const params = new URLSearchParams(searchParams.toString())
+    params.set("tab", activeTab)
+    const nextQuery = params.toString()
+    if (nextQuery !== searchParams.toString()) {
+      router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname, { scroll: false })
+    }
+  }, [activeTab, pathname, router, searchParams])
 
   // Initialize form data when opportunity is loaded
   useEffect(() => {

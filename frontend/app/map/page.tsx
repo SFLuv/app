@@ -1,28 +1,47 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { memo, useEffect, useRef, useState } from "react"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { MapView } from "@/components/locations/map-view"
 import { ListView } from "@/components/locations/list-view"
 import { LocationModal } from "@/components/locations/location-modal"
 import { defaultLocation } from "@/data/mock-merchants"
 import type { UserLocation } from "@/types/merchant"
-import { useApp } from "@/context/AppProvider"
 import { useLocation } from "@/context/LocationProvider"
 import { Location } from "@/types/location"
-import { useSearchParams } from "next/navigation"
+import { usePathname, useRouter, useSearchParams } from "next/navigation"
 
 
-export default function LocationMapPage() {
-  const [activeTab, setActiveTab] = useState("map")
+const LocationMapPageContent = memo(function LocationMapPageContent() {
+  const search = useSearchParams()
+  const pathname = usePathname()
+  const router = useRouter()
+  const tabFromQuery = search.get("tab")
+  const activeTab = tabFromQuery === "list" ? "list" : "map"
   const [selectedLocationType, setSelectedLocationType] = useState("All Locations")
   const [selectedLocation, setSelectedLocation] = useState<Location | null>(null)
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [userLocation, setUserLocation] = useState<UserLocation>(defaultLocation)
-  const { status } = useApp()
-  const { mapLocations } = useLocation()
-  const search = useSearchParams()
+  const { mapLocations, mapLocationsStatus, getMapLocations } = useLocation()
+  const previousTabRef = useRef(activeTab)
 
+  useEffect(() => {
+    if (previousTabRef.current !== activeTab) {
+      previousTabRef.current = activeTab
+      void getMapLocations()
+    }
+  }, [activeTab, getMapLocations])
+
+  const handleTabChange = (value: string) => {
+    if (value !== "map" && value !== "list") return
+    if (value === activeTab) return
+    const params = new URLSearchParams(search.toString())
+    params.set("tab", value)
+    const nextQuery = params.toString()
+    if (nextQuery !== search.toString()) {
+      router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname, { scroll: false })
+    }
+  }
 
   const handleSelectLocation = (location: Location) => {
     setSelectedLocation(location)
@@ -34,14 +53,14 @@ export default function LocationMapPage() {
     setSelectedLocation(null)
   }
 
-
-  if (status === "loading") {
+  if (mapLocationsStatus === "loading") {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-[#eb6c6c]"></div>
       </div>
     )
   }
+
 
   return (
     <div className={`space-y-6 ${search.get("sidebar") === "false" ? "p-5" : ""}`}>
@@ -50,7 +69,7 @@ export default function LocationMapPage() {
         <p className="text-gray-600 dark:text-gray-400 mt-1">Find locations that accept SFLuv in your area</p>
       </div>
 
-      <Tabs defaultValue="map" value={activeTab} onValueChange={setActiveTab} className="w-full">
+      <Tabs value={activeTab} onValueChange={handleTabChange} className="w-full">
         <TabsList className="grid grid-cols-2 w-full mb-6 bg-secondary">
           <TabsTrigger value="map" className="text-black dark:text-white">
             Map View
@@ -84,4 +103,8 @@ export default function LocationMapPage() {
       <LocationModal location={selectedLocation} isOpen={isModalOpen} onClose={handleCloseModal} />
     </div>
   )
-  }
+})
+
+export default function LocationMapPage() {
+  return <LocationMapPageContent />
+}

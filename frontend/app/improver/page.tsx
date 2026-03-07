@@ -26,6 +26,7 @@ import { formatStatusLabel } from "@/lib/status-labels"
 import { formatWorkflowDisplayStatus } from "@/lib/workflow-status"
 import { cn } from "@/lib/utils"
 import { AlertTriangle, CheckCircle2, ChevronLeft, ChevronRight, ChevronsUpDown, ClipboardCheck, Search, Wrench } from "lucide-react"
+import { usePathname, useRouter, useSearchParams } from "next/navigation"
 import { CredentialRequest } from "@/types/issuer"
 import {
   CredentialType,
@@ -67,6 +68,18 @@ type WorkflowSeriesCardGroup = {
   primaryStepOrder: number | null
   primaryStepTitle: string | null
   workflows: Workflow[]
+}
+
+type ImproverTab = "my-workflows" | "workflow-board" | "unpaid-workflows" | "credentials" | "absence"
+
+const isImproverTab = (value: string | null): value is ImproverTab => {
+  return (
+    value === "my-workflows"
+    || value === "workflow-board"
+    || value === "unpaid-workflows"
+    || value === "credentials"
+    || value === "absence"
+  )
 }
 
 const defaultItemFormState: ItemFormState = {
@@ -237,6 +250,10 @@ function LocalPhotoThumbnail({
 }
 
 export default function ImproverPage() {
+  const searchParams = useSearchParams()
+  const pathname = usePathname()
+  const router = useRouter()
+  const tabFromQuery = searchParams.get("tab")
   const { authFetch, status, user } = useApp()
   const [workflows, setWorkflows] = useState<Workflow[]>([])
   const [unpaidWorkflows, setUnpaidWorkflows] = useState<Workflow[]>([])
@@ -279,13 +296,14 @@ export default function ImproverPage() {
   } | null>(null)
   const [seriesCardIndexByKey, setSeriesCardIndexByKey] = useState<Record<string, number>>({})
   const [downloadingPhotoId, setDownloadingPhotoId] = useState<string | null>(null)
-  const [boardSearch, setBoardSearch] = useState<string>("")
-  const [myWorkflowsSearch, setMyWorkflowsSearch] = useState<string>("")
-  const [showOnlyActiveSeries, setShowOnlyActiveSeries] = useState<boolean>(true)
-  const [unpaidSearch, setUnpaidSearch] = useState<string>("")
-  const [absenceSearch, setAbsenceSearch] = useState<string>("")
+  const [activeTab, setActiveTab] = useState<ImproverTab>(isImproverTab(tabFromQuery) ? tabFromQuery : "my-workflows")
+  const [boardSearch, setBoardSearch] = useState<string>(searchParams.get("board_search") || "")
+  const [myWorkflowsSearch, setMyWorkflowsSearch] = useState<string>(searchParams.get("my_workflows_search") || "")
+  const [showOnlyActiveSeries, setShowOnlyActiveSeries] = useState<boolean>(searchParams.get("my_active_only") !== "false")
+  const [unpaidSearch, setUnpaidSearch] = useState<string>(searchParams.get("unpaid_search") || "")
+  const [absenceSearch, setAbsenceSearch] = useState<string>(searchParams.get("absence_search") || "")
   const [credentialComboOpen, setCredentialComboOpen] = useState<boolean>(false)
-  const [credentialSearch, setCredentialSearch] = useState<string>("")
+  const [credentialSearch, setCredentialSearch] = useState<string>(searchParams.get("credential_search") || "")
   const videoElementRefs = useRef<Record<string, HTMLVideoElement | null>>({})
   const cameraStreamRefs = useRef<Record<string, MediaStream | null>>({})
   const cameraVideoRefCallbacks = useRef<Record<string, (element: HTMLVideoElement | null) => void>>({})
@@ -346,9 +364,73 @@ export default function ImproverPage() {
   }, [authFetch, canUsePanel])
 
   useEffect(() => {
+    const nextTab = searchParams.get("tab")
+    if (isImproverTab(nextTab)) {
+      setActiveTab((prev) => (nextTab === prev ? prev : nextTab))
+    }
+
+    const nextBoardSearch = searchParams.get("board_search") || ""
+    setBoardSearch((prev) => (nextBoardSearch === prev ? prev : nextBoardSearch))
+
+    const nextMyWorkflowsSearch = searchParams.get("my_workflows_search") || ""
+    setMyWorkflowsSearch((prev) => (nextMyWorkflowsSearch === prev ? prev : nextMyWorkflowsSearch))
+
+    const nextShowOnlyActiveSeries = searchParams.get("my_active_only") !== "false"
+    setShowOnlyActiveSeries((prev) => (nextShowOnlyActiveSeries === prev ? prev : nextShowOnlyActiveSeries))
+
+    const nextUnpaidSearch = searchParams.get("unpaid_search") || ""
+    setUnpaidSearch((prev) => (nextUnpaidSearch === prev ? prev : nextUnpaidSearch))
+
+    const nextAbsenceSearch = searchParams.get("absence_search") || ""
+    setAbsenceSearch((prev) => (nextAbsenceSearch === prev ? prev : nextAbsenceSearch))
+
+    const nextCredentialSearch = searchParams.get("credential_search") || ""
+    setCredentialSearch((prev) => (nextCredentialSearch === prev ? prev : nextCredentialSearch))
+  }, [searchParams])
+
+  useEffect(() => {
+    const params = new URLSearchParams(searchParams.toString())
+    params.set("tab", activeTab)
+
+    if (boardSearch) params.set("board_search", boardSearch)
+    else params.delete("board_search")
+
+    if (myWorkflowsSearch) params.set("my_workflows_search", myWorkflowsSearch)
+    else params.delete("my_workflows_search")
+
+    if (!showOnlyActiveSeries) params.set("my_active_only", "false")
+    else params.delete("my_active_only")
+
+    if (unpaidSearch) params.set("unpaid_search", unpaidSearch)
+    else params.delete("unpaid_search")
+
+    if (absenceSearch) params.set("absence_search", absenceSearch)
+    else params.delete("absence_search")
+
+    if (credentialSearch) params.set("credential_search", credentialSearch)
+    else params.delete("credential_search")
+
+    const nextQuery = params.toString()
+    if (nextQuery !== searchParams.toString()) {
+      router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname, { scroll: false })
+    }
+  }, [
+    absenceSearch,
+    activeTab,
+    boardSearch,
+    credentialSearch,
+    myWorkflowsSearch,
+    pathname,
+    router,
+    searchParams,
+    showOnlyActiveSeries,
+    unpaidSearch,
+  ])
+
+  useEffect(() => {
     if (status !== "authenticated") return
-    loadFeed()
-  }, [status, loadFeed])
+    void loadFeed()
+  }, [activeTab, status, loadFeed])
 
   const credentialSet = useMemo(() => {
     const set = new Set<string>()
@@ -2242,7 +2324,7 @@ export default function ImproverPage() {
         </div>
       )}
 
-	      <Tabs defaultValue="my-workflows" className="space-y-4">
+		      <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as ImproverTab)} className="space-y-4">
 	        <TabsList className="grid h-auto w-full grid-cols-1 gap-2 p-1 sm:grid-cols-2 lg:grid-cols-3">
 	          <TabsTrigger value="my-workflows">My Workflows</TabsTrigger>
 	          <TabsTrigger value="workflow-board">Workflow Board</TabsTrigger>

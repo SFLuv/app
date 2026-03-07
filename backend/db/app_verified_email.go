@@ -427,3 +427,72 @@ func (a *AppDB) IsVerifiedEmailForUser(ctx context.Context, userId string, email
 	}
 	return exists, nil
 }
+
+func (a *AppDB) UpsertVerifiedUserEmail(ctx context.Context, userId string, email string) (*structs.UserVerifiedEmail, error) {
+	email, normalized, err := normalizeVerifiedEmailInput(email)
+	if err != nil {
+		return nil, err
+	}
+
+	record, err := scanUserVerifiedEmailRow(a.db.QueryRow(ctx, `
+		INSERT INTO user_verified_emails
+			(
+				id,
+				user_id,
+				email,
+				email_normalized,
+				verified_at,
+				verification_token,
+				verification_sent_at,
+				verification_token_expires_at
+			)
+		VALUES
+			(
+				MD5($1 || ':' || $2),
+				$1,
+				$3,
+				$2,
+				NOW(),
+				NULL,
+				NULL,
+				NULL
+			)
+		ON CONFLICT (user_id, email_normalized) DO UPDATE
+		SET
+			email = EXCLUDED.email,
+			verified_at = COALESCE(user_verified_emails.verified_at, NOW()),
+			verification_token = NULL,
+			verification_sent_at = NULL,
+			verification_token_expires_at = NULL,
+			updated_at = NOW()
+		RETURNING
+			id,
+			user_id,
+			email,
+			verified_at,
+			verification_sent_at,
+			verification_token_expires_at,
+			created_at,
+			updated_at;
+	`, userId, normalized, email))
+	if err != nil {
+		return nil, fmt.Errorf("error upserting verified email for user %s: %s", userId, err)
+	}
+
+	_, err = a.db.Exec(ctx, `
+		UPDATE
+			users
+		SET
+			contact_email = CASE
+				WHEN COALESCE(NULLIF(TRIM(contact_email), ''), '') = '' THEN $2
+				ELSE contact_email
+			END
+		WHERE
+			id = $1;
+	`, userId, email)
+	if err != nil {
+		return nil, fmt.Errorf("error setting contact email for user %s after verified-email upsert: %s", userId, err)
+	}
+
+	return record, nil
+}

@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import { useApp } from "@/context/AppProvider"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -12,6 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Checkbox } from "@/components/ui/checkbox"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { usePathname, useRouter, useSearchParams } from "next/navigation"
 import {
   Dialog,
   DialogContent,
@@ -172,6 +173,12 @@ const toUTCISOStringFromDatetimeLocal = (value: string) => {
 export default function ProposerPage() {
   const { user, status, authFetch } = useApp()
   const { toast } = useToast()
+  const searchParams = useSearchParams()
+  const pathname = usePathname()
+  const router = useRouter()
+  const tabFromQuery = searchParams.get("tab")
+  const workflowStatusFromQuery = searchParams.get("workflow_status")
+  const templateSearchFromQuery = searchParams.get("template_search")
 
   const [workflows, setWorkflows] = useState<Workflow[]>([])
   const [templates, setTemplates] = useState<WorkflowTemplate[]>([])
@@ -181,13 +188,20 @@ export default function ProposerPage() {
   const [submitting, setSubmitting] = useState(false)
   const [templateSaving, setTemplateSaving] = useState(false)
   const [deletionSubmitting, setDeletionSubmitting] = useState("")
-  const [activeTab, setActiveTab] = useState<"create-workflow" | "your-workflows">("create-workflow")
-  const [workflowStatusFilter, setWorkflowStatusFilter] = useState<"all" | Workflow["status"]>("all")
+  const [activeTab, setActiveTab] = useState<"create-workflow" | "your-workflows">(
+    tabFromQuery === "your-workflows" ? "your-workflows" : "create-workflow"
+  )
+  const [workflowStatusFilter, setWorkflowStatusFilter] = useState<"all" | Workflow["status"]>(
+    workflowStatusFromQuery &&
+    WORKFLOW_STATUS_FILTER_OPTIONS.some((option) => option.value === workflowStatusFromQuery)
+      ? (workflowStatusFromQuery as "all" | Workflow["status"])
+      : "all"
+  )
   const [error, setError] = useState("")
   const [successMessage, setSuccessMessage] = useState("")
   const [selectedTemplateId, setSelectedTemplateId] = useState("")
   const [templateComboOpen, setTemplateComboOpen] = useState(false)
-  const [templateSearch, setTemplateSearch] = useState("")
+  const [templateSearch, setTemplateSearch] = useState(templateSearchFromQuery || "")
   const [deleteTemplateId, setDeleteTemplateId] = useState("")
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
   const [deleteTemplateLoading, setDeleteTemplateLoading] = useState(false)
@@ -273,7 +287,7 @@ export default function ProposerPage() {
     [templates, selectedTemplateId]
   )
 
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     if (!isApproved) {
       setLoading(false)
       return
@@ -316,11 +330,54 @@ export default function ProposerPage() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [authFetch, isApproved])
 
   useEffect(() => {
     loadData()
-  }, [isApproved])
+  }, [loadData])
+
+  useEffect(() => {
+    const nextTab = searchParams.get("tab")
+    if (nextTab !== "create-workflow" && nextTab !== "your-workflows") return
+    setActiveTab((prev) => (nextTab === prev ? prev : nextTab))
+  }, [searchParams])
+
+  useEffect(() => {
+    const nextFilter = searchParams.get("workflow_status")
+    if (!nextFilter) return
+    if (!WORKFLOW_STATUS_FILTER_OPTIONS.some((option) => option.value === nextFilter)) return
+    setWorkflowStatusFilter((prev) => (nextFilter === prev ? prev : (nextFilter as "all" | Workflow["status"])))
+  }, [searchParams])
+
+  useEffect(() => {
+    const nextTemplateSearch = searchParams.get("template_search") || ""
+    setTemplateSearch((prev) => (nextTemplateSearch === prev ? prev : nextTemplateSearch))
+  }, [searchParams])
+
+  useEffect(() => {
+    const params = new URLSearchParams(searchParams.toString())
+    params.set("tab", activeTab)
+    if (workflowStatusFilter === "all") {
+      params.delete("workflow_status")
+    } else {
+      params.set("workflow_status", workflowStatusFilter)
+    }
+    if (templateSearch) {
+      params.set("template_search", templateSearch)
+    } else {
+      params.delete("template_search")
+    }
+    const nextQuery = params.toString()
+    if (nextQuery !== searchParams.toString()) {
+      router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname, { scroll: false })
+    }
+  }, [activeTab, templateSearch, workflowStatusFilter, pathname, router, searchParams])
+
+  useEffect(() => {
+    if (status !== "authenticated") return
+    if (!isApproved) return
+    void loadData()
+  }, [activeTab, isApproved, loadData, status])
 
   useEffect(() => {
     setError("")
@@ -1370,7 +1427,7 @@ export default function ProposerPage() {
 
             {roles.map((role, roleIndex) => (
               <Card key={role.client_id}>
-                <CardContent className="pt-4 space-y-4">
+                <CardContent className="pt-5 sm:pt-6 space-y-4">
                   <div className="flex items-center justify-between">
                     <Label className="text-sm text-muted-foreground">Role {roleIndex + 1}</Label>
                     {roles.length > 1 && (

@@ -10,12 +10,25 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Checkbox } from "@/components/ui/checkbox"
 import { Badge } from "@/components/ui/badge"
 import { WorkflowDetailsModal } from "@/components/workflows/workflow-details-modal"
+import { usePathname, useRouter, useSearchParams } from "next/navigation"
 import { formatWorkflowDisplayStatus } from "@/lib/workflow-status"
 import { cn } from "@/lib/utils"
 import { SupervisorWorkflowExportRequest, SupervisorWorkflowListItem, SupervisorWorkflowListResponse, Workflow } from "@/types/workflow"
 import { ChevronLeft, ChevronRight, Download, Loader2, Search } from "lucide-react"
 
 type DateField = "created_at" | "completed_at" | "start_at"
+const SUPERVISOR_STATUS_FILTERS = new Set([
+  "all",
+  "pending",
+  "approved",
+  "rejected",
+  "blocked",
+  "in_progress",
+  "completed",
+  "paid_out",
+  "expired",
+  "deleted",
+])
 
 const toLocalDateBoundaryISO = (value: string, boundary: "start" | "end"): string => {
   const trimmed = value.trim()
@@ -37,18 +50,38 @@ const toMMDDYYYY = (unixSeconds: number): string => {
 
 export default function SupervisorPage() {
   const { authFetch, status, user } = useApp()
+  const router = useRouter()
+  const pathname = usePathname()
+  const searchParams = useSearchParams()
+  const pageFromQuery = Number(searchParams.get("page") || "0")
+  const countFromQuery = Number(searchParams.get("count") || "20")
+  const searchFromQuery = searchParams.get("search") || ""
+  const statusFromQuery = searchParams.get("status") || "all"
+  const sortByFromQuery = searchParams.get("sort_by")
+  const sortDirectionFromQuery = searchParams.get("sort_direction")
+  const dateFieldFromQuery = searchParams.get("date_field")
+  const dateFromQuery = searchParams.get("date_from") || ""
+  const dateToQuery = searchParams.get("date_to") || ""
 
   const [items, setItems] = useState<SupervisorWorkflowListItem[]>([])
   const [total, setTotal] = useState<number>(0)
-  const [page, setPage] = useState<number>(0)
-  const [count, setCount] = useState<number>(20)
-  const [search, setSearch] = useState<string>("")
-  const [statusFilter, setStatusFilter] = useState<string>("all")
-  const [sortBy, setSortBy] = useState<DateField>("created_at")
-  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc")
-  const [dateField, setDateField] = useState<DateField>("start_at")
-  const [dateFrom, setDateFrom] = useState<string>("")
-  const [dateTo, setDateTo] = useState<string>("")
+  const [page, setPage] = useState<number>(Number.isFinite(pageFromQuery) && pageFromQuery >= 0 ? pageFromQuery : 0)
+  const [count, setCount] = useState<number>(countFromQuery === 10 || countFromQuery === 20 || countFromQuery === 50 ? countFromQuery : 20)
+  const [search, setSearch] = useState<string>(searchFromQuery)
+  const [statusFilter, setStatusFilter] = useState<string>(SUPERVISOR_STATUS_FILTERS.has(statusFromQuery) ? statusFromQuery : "all")
+  const [sortBy, setSortBy] = useState<DateField>(
+    sortByFromQuery === "created_at" || sortByFromQuery === "completed_at" || sortByFromQuery === "start_at"
+      ? sortByFromQuery
+      : "created_at"
+  )
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">(sortDirectionFromQuery === "asc" ? "asc" : "desc")
+  const [dateField, setDateField] = useState<DateField>(
+    dateFieldFromQuery === "created_at" || dateFieldFromQuery === "completed_at" || dateFieldFromQuery === "start_at"
+      ? dateFieldFromQuery
+      : "start_at"
+  )
+  const [dateFrom, setDateFrom] = useState<string>(dateFromQuery)
+  const [dateTo, setDateTo] = useState<string>(dateToQuery)
   const [selectMode, setSelectMode] = useState<boolean>(false)
   const [selectedIDs, setSelectedIDs] = useState<Set<string>>(new Set())
   const [loading, setLoading] = useState<boolean>(true)
@@ -106,6 +139,66 @@ export default function SupervisorPage() {
     if (status !== "authenticated") return
     void loadData()
   }, [status, loadData])
+
+  useEffect(() => {
+    const nextPage = Number(searchParams.get("page") || "0")
+    const nextCount = Number(searchParams.get("count") || "20")
+    const nextSearch = searchParams.get("search") || ""
+    const nextStatus = searchParams.get("status") || "all"
+    const nextSortBy = searchParams.get("sort_by")
+    const nextSortDirection = searchParams.get("sort_direction")
+    const nextDateField = searchParams.get("date_field")
+    const nextDateFrom = searchParams.get("date_from") || ""
+    const nextDateTo = searchParams.get("date_to") || ""
+
+    const normalizedPage = Number.isFinite(nextPage) && nextPage >= 0 ? nextPage : 0
+    const normalizedCount = nextCount === 10 || nextCount === 20 || nextCount === 50 ? nextCount : 20
+    const normalizedSortBy: DateField =
+      nextSortBy === "created_at" || nextSortBy === "completed_at" || nextSortBy === "start_at" ? nextSortBy : "created_at"
+    const normalizedSortDirection: "asc" | "desc" = nextSortDirection === "asc" ? "asc" : "desc"
+    const normalizedDateField: DateField =
+      nextDateField === "created_at" || nextDateField === "completed_at" || nextDateField === "start_at"
+        ? nextDateField
+        : "start_at"
+
+    setPage((prev) => (normalizedPage === prev ? prev : normalizedPage))
+    setCount((prev) => (normalizedCount === prev ? prev : normalizedCount))
+    setSearch((prev) => (nextSearch === prev ? prev : nextSearch))
+    const normalizedStatus = SUPERVISOR_STATUS_FILTERS.has(nextStatus) ? nextStatus : "all"
+    setStatusFilter((prev) => (normalizedStatus === prev ? prev : normalizedStatus))
+    setSortBy((prev) => (normalizedSortBy === prev ? prev : normalizedSortBy))
+    setSortDirection((prev) => (normalizedSortDirection === prev ? prev : normalizedSortDirection))
+    setDateField((prev) => (normalizedDateField === prev ? prev : normalizedDateField))
+    setDateFrom((prev) => (nextDateFrom === prev ? prev : nextDateFrom))
+    setDateTo((prev) => (nextDateTo === prev ? prev : nextDateTo))
+  }, [searchParams])
+
+  useEffect(() => {
+    const params = new URLSearchParams(searchParams.toString())
+    if (page > 0) params.set("page", String(page))
+    else params.delete("page")
+    if (count !== 20) params.set("count", String(count))
+    else params.delete("count")
+    if (search) params.set("search", search)
+    else params.delete("search")
+    if (statusFilter !== "all") params.set("status", statusFilter)
+    else params.delete("status")
+    if (sortBy !== "created_at") params.set("sort_by", sortBy)
+    else params.delete("sort_by")
+    if (sortDirection !== "desc") params.set("sort_direction", sortDirection)
+    else params.delete("sort_direction")
+    if (dateField !== "start_at") params.set("date_field", dateField)
+    else params.delete("date_field")
+    if (dateFrom) params.set("date_from", dateFrom)
+    else params.delete("date_from")
+    if (dateTo) params.set("date_to", dateTo)
+    else params.delete("date_to")
+
+    const nextQuery = params.toString()
+    if (nextQuery !== searchParams.toString()) {
+      router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname, { scroll: false })
+    }
+  }, [count, dateField, dateFrom, dateTo, page, pathname, router, search, searchParams, sortBy, sortDirection, statusFilter])
 
   const totalPages = useMemo(() => {
     if (count <= 0) return 1

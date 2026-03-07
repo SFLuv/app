@@ -3,6 +3,7 @@
 import { useRouter, usePathname } from "next/navigation"
 import { useApp } from "@/context/AppProvider"
 import { cn } from "@/lib/utils"
+import { useIsMobile } from "@/hooks/use-mobile"
 import {
   LogOut,
   Map,
@@ -33,15 +34,29 @@ import { ForwardRefExoticComponent } from "react"
 export function DashboardSidebar() {
   const router = useRouter()
   const pathname = usePathname()
-  const { user, logout, status, login, userLocations } = useApp()
+  const isMobile = useIsMobile()
+  const { user, logout, status, login, userLocations, wallets } = useApp()
+
+  const isNonAdminNonMerchant = user?.isAdmin !== true && user?.isMerchant !== true
+  const shouldShortcutToWallet = status === "authenticated" && isMobile && isNonAdminNonMerchant
+  const primarySmartWallet =
+    wallets.find((wallet) => wallet.type === "smartwallet" && wallet.index === 0n) ??
+    wallets.find((wallet) => wallet.type === "smartwallet")
+  const hasWalletShortcutTarget = shouldShortcutToWallet && Boolean(primarySmartWallet?.address)
+  const walletNavTitle = hasWalletShortcutTarget ? "Wallet" : "Connected Wallets"
+  const walletNavPath =
+    hasWalletShortcutTarget && primarySmartWallet?.address
+      ? `/wallets/${primarySmartWallet.address}?fromWalletMenu=1`
+      : "/wallets"
 
   const isActive = (path: string) => {
-    return pathname.startsWith(path)
+    const [pathWithoutQuery] = path.split("?")
+    return pathname.startsWith(pathWithoutQuery)
   }
 
   const handleLogout = () => {
     logout()
-    router.push("/")
+    router.push("/map")
   }
 
   interface NavItem {
@@ -77,9 +92,9 @@ export function DashboardSidebar() {
 
     const authedItems: NavItem[] = [
       {
-        title: "Connected Wallets",
+        title: walletNavTitle,
         icon: Wallet,
-        path: "/wallets",
+        path: walletNavPath,
       },
       {
         title: "Contacts",
@@ -240,7 +255,7 @@ export function DashboardSidebar() {
       <SidebarHeader className="border-b bg-secondary dark:bg-secondary">
         <div
           className="flex items-center p-2 cursor-pointer hover:bg-secondary/80 transition-colors"
-          onClick={() => router.push("/")}
+          onClick={() => router.push("/map")}
         >
           <div className="flex-1 overflow-hidden">
             <h2 className="text-lg font-semibold text-black dark:text-white truncate">SFLuv Dashboard</h2>

@@ -23,26 +23,29 @@ export default function MerchantStatusPage() {
   }, [userLocations])
 
   return (
-    <div className="max-w-3xl mx-auto">
-      <h1 className="text-3xl font-bold text-black dark:text-white mb-6">Merchant Status</h1>
+    <div className="mx-auto w-full max-w-3xl space-y-5 px-3 pb-6 pt-2 sm:space-y-6 sm:px-0">
+      <div className="space-y-1">
+        <h1 className="text-2xl font-bold text-black dark:text-white sm:text-3xl">Merchant Status</h1>
+        <p className="text-sm text-muted-foreground sm:text-base">Review your merchant application approvals.</p>
+      </div>
 
       {status === "loading" && (
-        <div className="min-h-screen flex items-center justify-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-[#eb6c6c]"></div>
+        <div className="flex min-h-[260px] items-center justify-center rounded-lg border bg-card/40">
+          <div className="h-10 w-10 animate-spin rounded-full border-b-2 border-t-2 border-[#eb6c6c]"></div>
         </div>
       )}
 
       {status !== "loading" && sortedUserLocations.length === 0 && (
-        <Card>
-          <CardHeader>
+        <Card className="overflow-hidden border-border/80 bg-card/85 shadow-sm">
+          <CardHeader className="px-4 pb-3 pt-5 sm:px-6">
             <CardTitle className="text-black dark:text-white">Application Status</CardTitle>
             <CardDescription>Check the status of your merchant applications</CardDescription>
           </CardHeader>
-          <CardContent>
-            <div className="text-center">
-              <AlertCircle className="h-16 w-16 text-gray-500 mx-auto mb-4" />
-              <h2 className="text-2xl font-bold text-black dark:text-white mb-2">No Application Found</h2>
-              <p className="text-gray-600 dark:text-gray-400 mb-6">You haven't submitted a merchant application yet.</p>
+          <CardContent className="px-4 pb-6 pt-2 sm:px-6">
+            <div className="rounded-lg border bg-muted/20 px-4 py-6 text-center sm:px-6">
+              <AlertCircle className="mx-auto mb-3 h-12 w-12 text-gray-500" />
+              <h2 className="mb-2 text-xl font-semibold text-black dark:text-white sm:text-2xl">No Application Found</h2>
+              <p className="mb-6 text-sm text-gray-600 dark:text-gray-400 sm:text-base">You haven't submitted a merchant application yet.</p>
               <Button
                 className="bg-[#eb6c6c] hover:bg-[#d55c5c]"
                 onClick={() => router.push("/settings/merchant-approval")}
@@ -55,11 +58,11 @@ export default function MerchantStatusPage() {
       )}
 
       {status !== "loading" && sortedUserLocations.length > 0 && (
-        <div className="space-y-4">
+        <div className="space-y-4 sm:space-y-5">
           {sortedUserLocations.map((location) => {
             const applicationStatus = getLocationApplicationStatus(location.approval)
             let borderClass = "border-yellow-300 dark:border-yellow-700"
-            let headerClass = "bg-yellow-50 dark:bg-yellow-900/20 rounded-t-lg"
+            let headerClass = "bg-yellow-50 dark:bg-yellow-900/20"
             let title = "Location Application Pending"
             let body = `Your application for ${location.name} is currently under review.`
             let Icon = Clock
@@ -67,14 +70,14 @@ export default function MerchantStatusPage() {
 
             if (applicationStatus === "approved") {
               borderClass = "border-green-300 dark:border-green-700"
-              headerClass = "bg-green-50 dark:bg-green-900/20 rounded-t-lg"
+              headerClass = "bg-green-50 dark:bg-green-900/20"
               title = "Location Application Approved"
               body = `Your application for ${location.name} has been approved!`
               Icon = CheckCircle
               iconClass = "h-5 w-5 text-green-500 mr-2"
             } else if (applicationStatus === "rejected") {
               borderClass = "border-red-300 dark:border-red-700"
-              headerClass = "bg-red-50 dark:bg-red-900/20 rounded-t-lg"
+              headerClass = "bg-red-50 dark:bg-red-900/20"
               title = "Location Application Not Approved"
               body = `Your application for ${location.name} was not approved.`
               Icon = XCircle
@@ -82,17 +85,17 @@ export default function MerchantStatusPage() {
             }
 
             return (
-              <Card key={location.id} className={borderClass}>
-                <CardHeader className={headerClass}>
+              <Card key={location.id} className={`overflow-hidden shadow-sm ${borderClass}`}>
+                <CardHeader className={`${headerClass} px-4 pb-3 pt-5 sm:px-6`}>
                   <CardTitle className="text-black dark:text-white">Application Status</CardTitle>
                   <CardDescription className="text-black dark:text-white/80">{location.name}</CardDescription>
                 </CardHeader>
-                <CardContent className="pt-4">
-                  <h2 className="text-xl font-semibold text-black dark:text-white mb-2 flex items-center">
+                <CardContent className="px-4 pb-5 pt-4 sm:px-6">
+                  <h2 className="mb-2 flex items-center text-lg font-semibold leading-tight text-black dark:text-white sm:text-xl">
                     <Icon className={iconClass} />
                     {title}
                   </h2>
-                  <p className="text-gray-600 dark:text-gray-400">{body}</p>
+                  <p className="text-sm leading-relaxed text-gray-600 dark:text-gray-400 sm:text-base">{body}</p>
                 </CardContent>
               </Card>
             )

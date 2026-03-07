@@ -12,6 +12,7 @@ import { formatWorkflowDisplayStatus } from "@/lib/workflow-status"
 import { ActiveWorkflowListItem, Workflow, WorkflowDeletionProposal, WorkflowDeletionTargetType } from "@/types/workflow"
 import { Input } from "@/components/ui/input"
 import { AlertTriangle, Clock3, Search, Vote } from "lucide-react"
+import { usePathname, useRouter, useSearchParams } from "next/navigation"
 
 function countdownText(finalizeAt?: number | null): string {
   if (!finalizeAt) return "Countdown not started"
@@ -23,7 +24,19 @@ function countdownText(finalizeAt?: number | null): string {
   return `${hours}h ${minutes}m remaining`
 }
 
+type VoterTab = "workflow-votes" | "deletion-votes" | "active-workflows"
+
+const isVoterTab = (value: string | null): value is VoterTab => {
+  return value === "workflow-votes" || value === "deletion-votes" || value === "active-workflows"
+}
+
 export default function VoterPage() {
+  const searchParams = useSearchParams()
+  const pathname = usePathname()
+  const router = useRouter()
+  const tabFromQuery = searchParams.get("tab")
+  const workflowSearchFromQuery = searchParams.get("workflow_search") || ""
+  const deletionSearchFromQuery = searchParams.get("deletion_search") || ""
   const { authFetch, status, user } = useApp()
   const [workflows, setWorkflows] = useState<Workflow[]>([])
   const [activeWorkflows, setActiveWorkflows] = useState<ActiveWorkflowListItem[]>([])
@@ -35,8 +48,9 @@ export default function VoterPage() {
   const [detailOpen, setDetailOpen] = useState<boolean>(false)
   const [detailLoading, setDetailLoading] = useState<boolean>(false)
   const [detailSource, setDetailSource] = useState<"workflow-votes" | "active-workflows">("workflow-votes")
-  const [workflowSearch, setWorkflowSearch] = useState<string>("")
-  const [deletionSearch, setDeletionSearch] = useState<string>("")
+  const [activeTab, setActiveTab] = useState<VoterTab>(isVoterTab(tabFromQuery) ? tabFromQuery : "workflow-votes")
+  const [workflowSearch, setWorkflowSearch] = useState<string>(workflowSearchFromQuery)
+  const [deletionSearch, setDeletionSearch] = useState<string>(deletionSearchFromQuery)
 
   const canVote = Boolean(user?.isVoter || user?.isAdmin)
 
@@ -79,9 +93,35 @@ export default function VoterPage() {
   }, [authFetch, canVote])
 
   useEffect(() => {
+    const nextTab = searchParams.get("tab")
+    if (isVoterTab(nextTab)) {
+      setActiveTab((prev) => (nextTab === prev ? prev : nextTab))
+    }
+
+    const nextWorkflowSearch = searchParams.get("workflow_search") || ""
+    setWorkflowSearch((prev) => (nextWorkflowSearch === prev ? prev : nextWorkflowSearch))
+
+    const nextDeletionSearch = searchParams.get("deletion_search") || ""
+    setDeletionSearch((prev) => (nextDeletionSearch === prev ? prev : nextDeletionSearch))
+  }, [searchParams])
+
+  useEffect(() => {
+    const params = new URLSearchParams(searchParams.toString())
+    params.set("tab", activeTab)
+    if (workflowSearch) params.set("workflow_search", workflowSearch)
+    else params.delete("workflow_search")
+    if (deletionSearch) params.set("deletion_search", deletionSearch)
+    else params.delete("deletion_search")
+    const nextQuery = params.toString()
+    if (nextQuery !== searchParams.toString()) {
+      router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname, { scroll: false })
+    }
+  }, [activeTab, deletionSearch, pathname, router, searchParams, workflowSearch])
+
+  useEffect(() => {
     if (status !== "authenticated") return
-    loadWorkflows()
-  }, [status, loadWorkflows])
+    void loadWorkflows()
+  }, [activeTab, status, loadWorkflows])
 
   useEffect(() => {
     if (status !== "authenticated" || !canVote) return
@@ -306,7 +346,7 @@ export default function VoterPage() {
         </div>
       )}
 
-      <Tabs defaultValue="workflow-votes" className="space-y-4">
+      <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as VoterTab)} className="space-y-4">
         <TabsList className="grid h-auto w-full grid-cols-1 gap-2 p-1 sm:grid-cols-3">
           <TabsTrigger value="workflow-votes">Workflow Votes ({pendingCount})</TabsTrigger>
           <TabsTrigger value="deletion-votes">Deletion Votes ({pendingDeletionCount})</TabsTrigger>

@@ -10,9 +10,6 @@ import { Search, Filter, ArrowUpRight, ArrowDownLeft, CheckCircle, AlertCircle, 
 import type { Transaction } from "@/types/transaction"
 import { transactionTypeLabels } from "@/types/transaction"
 import { SYMBOL } from "@/lib/constants"
-import { useApp } from "@/context/AppProvider"
-import { useTransactions } from "@/context/TransactionProvider"
-import { useContacts } from "@/context/ContactsProvider"
 
 interface TransactionListProps {
   transactions: Transaction[]
@@ -22,14 +19,7 @@ interface TransactionListProps {
 
 export function TransactionList({ transactions, onSelectTransaction, wallet }: TransactionListProps) {
   const [searchQuery, setSearchQuery] = useState("")
-  const [currentPage, setCurrentPage] = useState(1)
   const [typeFilter, setTypeFilter] = useState<string>("all")
-
-  const { user, status } = useApp()
-  const { contacts } = useContacts()
-  const { transactionsStatus } = useTransactions()
-
-  const ITEMS_PER_PAGE = 10
 
   // Get available transaction types based on user role
   const getTransactionTypes = () => {
@@ -54,6 +44,7 @@ export function TransactionList({ transactions, onSelectTransaction, wallet }: T
       return (
         transaction.fromName?.toLowerCase().includes(query) ||
         transaction.toName?.toLowerCase().includes(query) ||
+        transaction.memo?.toLowerCase().includes(query) ||
         transaction.description?.toLowerCase().includes(query) ||
         transaction.transactionId.toLowerCase().includes(query) ||
         (transaction.category && transaction.category.toLowerCase().includes(query))
@@ -62,12 +53,6 @@ export function TransactionList({ transactions, onSelectTransaction, wallet }: T
 
     return true
   })
-
-  // Calculate pagination
-  const paginatedTransactions = filteredTransactions.slice(
-    (currentPage - 1) * ITEMS_PER_PAGE,
-    currentPage * ITEMS_PER_PAGE,
-  )
 
   // Format date
   const formatDate = (dateString: string) => {
@@ -95,14 +80,6 @@ export function TransactionList({ transactions, onSelectTransaction, wallet }: T
     }
   }
 
-  if (status === "loading" || transactionsStatus === "loading") {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-[#eb6c6c]"></div>
-      </div>
-    )
-  }
-
   return (
     <div className="space-y-4">
       <div className="flex flex-col sm:flex-row gap-4">
@@ -117,7 +94,7 @@ export function TransactionList({ transactions, onSelectTransaction, wallet }: T
         </div>
 
         <Select value={typeFilter} onValueChange={setTypeFilter}>
-          <SelectTrigger className="w-[180px] text-black dark:text-white bg-secondary">
+          <SelectTrigger className="w-full sm:w-[180px] text-black dark:text-white bg-secondary">
             <SelectValue placeholder="Filter by type" />
           </SelectTrigger>
           <SelectContent>
@@ -131,7 +108,7 @@ export function TransactionList({ transactions, onSelectTransaction, wallet }: T
 
         <Button
           variant="outline"
-          className="text-black dark:text-white bg-secondary hover:bg-secondary/80"
+          className="w-full sm:w-auto text-black dark:text-white bg-secondary hover:bg-secondary/80"
           onClick={() => {
             setSearchQuery("")
             setTypeFilter("all")
@@ -143,7 +120,7 @@ export function TransactionList({ transactions, onSelectTransaction, wallet }: T
       </div>
 
       <div className="space-y-4">
-        {paginatedTransactions.length === 0 ? (
+        {filteredTransactions.length === 0 ? (
           <div className="text-center py-12">
             <h3 className="text-xl font-medium text-black dark:text-white">No transactions found</h3>
             <p className="text-gray-600 dark:text-gray-400 mt-2">
@@ -151,7 +128,7 @@ export function TransactionList({ transactions, onSelectTransaction, wallet }: T
             </p>
           </div>
         ) : (
-          paginatedTransactions.map((transaction) => {
+          filteredTransactions.map((transaction) => {
             const received = transaction.toAddress.toLowerCase() === wallet.toLowerCase()
 
             return (
@@ -160,9 +137,9 @@ export function TransactionList({ transactions, onSelectTransaction, wallet }: T
                 className="overflow-hidden cursor-pointer hover:shadow-md transition-shadow"
                 onClick={() => onSelectTransaction(transaction)}
               >
-                <CardContent className="p-4 overflow-hidden">
-                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-                    <div className="flex items-center gap-3 min-w-0">
+                <CardContent className="p-3 sm:p-4 overflow-hidden">
+                  <div className="flex items-start justify-between gap-3 sm:gap-4">
+                    <div className="flex items-center gap-3 min-w-0 flex-1">
                       <div
                         className={`flex-shrink-0 flex items-center justify-center w-10 h-10 rounded-full ${
                           received ? "bg-green-100" : "bg-red-100"
@@ -180,27 +157,31 @@ export function TransactionList({ transactions, onSelectTransaction, wallet }: T
                             ? `Received from ${transaction.fromName || transaction.fromAddress.slice(0, 4) + "..." + transaction.fromAddress.slice(-4)}`
                             : `Sent to ${transaction.toName || transaction.toAddress.slice(0, 4) + "..." + transaction.toAddress.slice(-4)}`}
                         </h3>
-                        <p className="text-sm text-gray-600 dark:text-gray-400">{formatDate(transaction.timestamp)}</p>
+                        <p className="text-xs sm:text-sm text-gray-600 dark:text-gray-400">{formatDate(transaction.timestamp)}</p>
                       </div>
                     </div>
 
-                    <div className="flex flex-wrap items-center gap-2 md:text-right">
-                      <Badge variant="outline" className="bg-secondary text-black dark:text-white">
-                        {transactionTypeLabels[transaction.type]}
-                      </Badge>
-                      <div className="flex items-center gap-1">
-                        {getStatusIcon(transaction.status)}
-                        <span className="text-sm text-gray-600 dark:text-gray-400">
-                          {transaction.status.charAt(0).toUpperCase() + transaction.status.slice(1)}
-                        </span>
-                      </div>
-                      <span
-                        className={`font-bold ${received ? "text-green-600" : "text-red-600"} md:ml-4`}
-                      >
+                    <div className="text-right flex-shrink-0">
+                      <span className={`font-bold text-sm sm:text-base ${received ? "text-green-600" : "text-red-600"}`}>
                         {received ? "+" : "-"}
                         {transaction.amount} {SYMBOL}
                       </span>
+                      <div className="mt-1 flex items-center justify-end gap-1">
+                        {getStatusIcon(transaction.status)}
+                        <span className="text-xs sm:text-sm text-gray-600 dark:text-gray-400">
+                          {transaction.status.charAt(0).toUpperCase() + transaction.status.slice(1)}
+                        </span>
+                      </div>
                     </div>
+                  </div>
+
+                  <div className="mt-3 flex items-center justify-between gap-2 border-t pt-2">
+                    <Badge variant="outline" className="bg-secondary text-black dark:text-white text-[11px] sm:text-xs">
+                      {transactionTypeLabels[transaction.type]}
+                    </Badge>
+                    <span className="text-[11px] sm:text-xs text-muted-foreground font-mono truncate max-w-[130px] sm:max-w-none">
+                      {transaction.transactionId.slice(0, 6)}...{transaction.transactionId.slice(-4)}
+                    </span>
                   </div>
                 </CardContent>
               </Card>

@@ -159,6 +159,7 @@ func AddWorkflowRoutes(r *chi.Mux, s *handlers.BotService, a *handlers.AppServic
 
 func AddWalletRoutes(r *chi.Mux, s *handlers.AppService) {
 	r.Get("/wallets", withAuth(s.GetWalletsByUser))
+	r.Get("/wallets/lookup/{address}", withAuth(s.LookupWalletOwnerByAddress))
 	r.Post("/wallets", withAuth(s.AddWallet))
 	r.Put("/wallets", withAuth(s.UpdateWallet))
 }
@@ -185,6 +186,7 @@ func AddPonderRoutes(r *chi.Mux, s *handlers.AppService, p *handlers.PonderServi
 	r.Get("/ponder/callback", s.PonderPingCallback)
 	r.Post("/ponder/callback", s.PonderHookHandler)
 	r.Get("/transactions", p.GetTransactionHistory)
+	r.Post("/transactions/memo", withAuth(p.UpsertTransactionMemo))
 	r.Get("/transactions/balance", withAuth(p.GetBalanceAtTimestamp))
 }
 
