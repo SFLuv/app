@@ -1969,6 +1969,7 @@ func (a *AppDB) GetWorkflowByID(ctx context.Context, workflowId string) (*struct
 			w.manager_paid_out_at,
 			w.manager_payout_error,
 			w.manager_payout_last_try_at,
+			w.manager_payout_in_progress,
 			w.manager_retry_requested_at,
 			w.manager_retry_requested_by,
 			w.created_at,
@@ -2011,6 +2012,7 @@ func (a *AppDB) GetWorkflowByID(ctx context.Context, workflowId string) (*struct
 		&workflow.ManagerPaidOutAt,
 		&workflow.ManagerPayoutError,
 		&workflow.ManagerPayoutLastTryAt,
+		&workflow.ManagerPayoutInProgress,
 		&workflow.ManagerRetryRequestedAt,
 		&workflow.ManagerRetryRequestedBy,
 		&workflow.CreatedAt,
@@ -2155,6 +2157,7 @@ func (a *AppDB) getWorkflowSteps(ctx context.Context, workflowId string) ([]stru
 			ws.completed_at,
 			ws.payout_error,
 			ws.payout_last_try_at,
+			ws.payout_in_progress,
 			ws.retry_requested_at,
 			ws.retry_requested_by
 		FROM
@@ -2193,6 +2196,7 @@ func (a *AppDB) getWorkflowSteps(ctx context.Context, workflowId string) ([]stru
 			&step.CompletedAt,
 			&step.PayoutError,
 			&step.PayoutLastTryAt,
+			&step.PayoutInProgress,
 			&step.RetryRequestedAt,
 			&step.RetryRequestedBy,
 		); err != nil {
@@ -6057,6 +6061,7 @@ func (a *AppDB) CompleteWorkflowStep(
 				bounty = 0,
 				payout_error = NULL,
 				payout_last_try_at = NULL,
+				payout_in_progress = false,
 				retry_requested_at = NULL,
 				retry_requested_by = NULL,
 				updated_at = unix_now()
@@ -6078,6 +6083,7 @@ func (a *AppDB) CompleteWorkflowStep(
 				manager_paid_out_at = NULL,
 				manager_payout_error = NULL,
 				manager_payout_last_try_at = NULL,
+				manager_payout_in_progress = false,
 				manager_retry_requested_at = NULL,
 				manager_retry_requested_by = NULL,
 				updated_at = unix_now()
@@ -6105,6 +6111,7 @@ func (a *AppDB) CompleteWorkflowStep(
 			status = 'completed',
 			started_at = COALESCE(started_at, unix_now()),
 			completed_at = unix_now(),
+			payout_in_progress = false,
 			updated_at = unix_now()
 		WHERE
 			id = $1;
@@ -6479,6 +6486,312 @@ func truncateWorkflowPayoutErrorMessage(message string) string {
 	return message[:800]
 }
 
+func normalizeAdminWorkflowPayoutResolutionTargetType(value string) (string, error) {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	switch normalized {
+	case "step", "supervisor":
+		return normalized, nil
+	default:
+		return "", fmt.Errorf("invalid payout resolution target type")
+	}
+}
+
+func normalizeAdminWorkflowPayoutResolutionAction(value string) (string, error) {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	switch normalized {
+	case "mark_paid_out", "mark_failed":
+		return normalized, nil
+	default:
+		return "", fmt.Errorf("invalid payout resolution action")
+	}
+}
+
+func (a *AppDB) ResolveWorkflowPayoutLockByAdmin(
+	ctx context.Context,
+	adminId string,
+	workflowId string,
+	req *structs.AdminWorkflowPayoutResolutionRequest,
+) error {
+	adminId = strings.TrimSpace(adminId)
+	workflowId = strings.TrimSpace(workflowId)
+	if adminId == "" {
+		return fmt.Errorf("admin id is required")
+	}
+	if workflowId == "" {
+		return fmt.Errorf("workflow id is required")
+	}
+	if req == nil {
+		return fmt.Errorf("request is required")
+	}
+
+	targetType, err := normalizeAdminWorkflowPayoutResolutionTargetType(req.TargetType)
+	if err != nil {
+		return err
+	}
+	action, err := normalizeAdminWorkflowPayoutResolutionAction(req.Action)
+	if err != nil {
+		return err
+	}
+	stepId := strings.TrimSpace(req.StepId)
+	errorMessage := truncateWorkflowPayoutErrorMessage(req.ErrorMessage)
+	if action == "mark_failed" && errorMessage == "" {
+		errorMessage = "admin manually marked payout as failed"
+	}
+
+	tx, err := a.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	switch targetType {
+	case "step":
+		if stepId == "" {
+			return fmt.Errorf("step id is required for step payout resolution")
+		}
+
+		var stepStatus string
+		var payoutInProgress bool
+		var stepBounty uint64
+		err = tx.QueryRow(ctx, `
+			SELECT
+				status,
+				payout_in_progress,
+				bounty
+			FROM
+				workflow_steps
+			WHERE
+				id = $1
+			AND
+				workflow_id = $2
+			FOR UPDATE;
+		`, stepId, workflowId).Scan(&stepStatus, &payoutInProgress, &stepBounty)
+		if err != nil {
+			return err
+		}
+
+		if stepStatus != "completed" {
+			return fmt.Errorf("workflow step payout resolution requires completed step status")
+		}
+		if stepBounty == 0 {
+			return fmt.Errorf("workflow step payout resolution is not applicable for zero-bounty step")
+		}
+		if !payoutInProgress {
+			return fmt.Errorf("workflow step payout is not currently locked in progress")
+		}
+
+		if action == "mark_paid_out" {
+			_, err = tx.Exec(ctx, `
+				UPDATE
+					workflow_steps
+				SET
+					status = 'paid_out',
+					payout_error = NULL,
+					payout_last_try_at = unix_now(),
+					payout_in_progress = false,
+					retry_requested_at = NULL,
+					retry_requested_by = NULL,
+					updated_at = unix_now()
+				WHERE
+					id = $1
+				AND
+					workflow_id = $2;
+			`, stepId, workflowId)
+			if err != nil {
+				return fmt.Errorf("error marking workflow step paid out during admin payout resolution: %s", err)
+			}
+		} else {
+			_, err = tx.Exec(ctx, `
+				UPDATE
+					workflow_steps
+				SET
+					payout_error = $3,
+					payout_last_try_at = unix_now(),
+					payout_in_progress = false,
+					retry_requested_at = NULL,
+					retry_requested_by = NULL,
+					updated_at = unix_now()
+				WHERE
+					id = $1
+				AND
+					workflow_id = $2;
+			`, stepId, workflowId, errorMessage)
+			if err != nil {
+				return fmt.Errorf("error marking workflow step payout failure during admin payout resolution: %s", err)
+			}
+		}
+
+	case "supervisor":
+		if stepId != "" {
+			return fmt.Errorf("step id is not allowed for supervisor payout resolution")
+		}
+
+		var workflowStatus string
+		var managerBounty uint64
+		var managerImproverId *string
+		var managerPaidOutAt *int64
+		var managerPayoutInProgress bool
+		err = tx.QueryRow(ctx, `
+			SELECT
+				status,
+				manager_bounty,
+				manager_improver_id,
+				manager_paid_out_at,
+				manager_payout_in_progress
+			FROM
+				workflows
+			WHERE
+				id = $1
+			FOR UPDATE;
+		`, workflowId).Scan(
+			&workflowStatus,
+			&managerBounty,
+			&managerImproverId,
+			&managerPaidOutAt,
+			&managerPayoutInProgress,
+		)
+		if err != nil {
+			return err
+		}
+
+		if workflowStatus != "completed" {
+			return fmt.Errorf("workflow supervisor payout resolution requires completed workflow status")
+		}
+		if managerBounty == 0 || managerImproverId == nil || strings.TrimSpace(*managerImproverId) == "" {
+			return fmt.Errorf("workflow supervisor payout resolution is not applicable for this workflow")
+		}
+		if managerPaidOutAt != nil {
+			return fmt.Errorf("workflow supervisor payout is already marked paid out")
+		}
+		if !managerPayoutInProgress {
+			return fmt.Errorf("workflow supervisor payout is not currently locked in progress")
+		}
+
+		if action == "mark_paid_out" {
+			_, err = tx.Exec(ctx, `
+				UPDATE
+					workflows
+				SET
+					manager_paid_out_at = unix_now(),
+					manager_payout_error = NULL,
+					manager_payout_last_try_at = unix_now(),
+					manager_payout_in_progress = false,
+					manager_retry_requested_at = NULL,
+					manager_retry_requested_by = NULL,
+					updated_at = unix_now()
+				WHERE
+					id = $1;
+			`, workflowId)
+			if err != nil {
+				return fmt.Errorf("error marking workflow supervisor paid out during admin payout resolution: %s", err)
+			}
+		} else {
+			_, err = tx.Exec(ctx, `
+				UPDATE
+					workflows
+				SET
+					manager_payout_error = $2,
+					manager_payout_last_try_at = unix_now(),
+					manager_payout_in_progress = false,
+					manager_retry_requested_at = NULL,
+					manager_retry_requested_by = NULL,
+					updated_at = unix_now()
+				WHERE
+					id = $1;
+			`, workflowId, errorMessage)
+			if err != nil {
+				return fmt.Errorf("error marking workflow supervisor payout failure during admin payout resolution: %s", err)
+			}
+		}
+	}
+
+	var stepIDValue any
+	if targetType == "step" {
+		stepIDValue = stepId
+	} else {
+		stepIDValue = nil
+	}
+	_, err = tx.Exec(ctx, `
+		INSERT INTO workflow_payout_admin_actions(
+			id,
+			workflow_id,
+			step_id,
+			target_type,
+			action,
+			error_message,
+			performed_by_user_id
+		)
+		VALUES
+			($1, $2, $3, $4, $5, $6, $7);
+	`, uuid.NewString(), workflowId, stepIDValue, targetType, action, errorMessage, adminId)
+	if err != nil {
+		return fmt.Errorf("error recording workflow payout admin action: %s", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (a *AppDB) ClaimWorkflowStepPayoutAttempt(ctx context.Context, workflowId string, stepId string) (bool, error) {
+	cmd, err := a.db.Exec(ctx, `
+		UPDATE
+			workflow_steps
+		SET
+			payout_in_progress = true,
+			payout_error = NULL,
+			payout_last_try_at = unix_now(),
+			retry_requested_at = NULL,
+			retry_requested_by = NULL,
+			updated_at = unix_now()
+		WHERE
+			id = $1
+		AND
+			workflow_id = $2
+		AND
+			status = 'completed'
+		AND
+			bounty > 0
+		AND
+			payout_in_progress = false;
+	`, stepId, workflowId)
+	if err != nil {
+		return false, fmt.Errorf("error claiming workflow step payout attempt: %s", err)
+	}
+	return cmd.RowsAffected() > 0, nil
+}
+
+func (a *AppDB) ClaimWorkflowManagerPayoutAttempt(ctx context.Context, workflowId string) (bool, error) {
+	cmd, err := a.db.Exec(ctx, `
+		UPDATE
+			workflows
+		SET
+			manager_payout_in_progress = true,
+			manager_payout_error = NULL,
+			manager_payout_last_try_at = unix_now(),
+			manager_retry_requested_at = NULL,
+			manager_retry_requested_by = NULL,
+			updated_at = unix_now()
+		WHERE
+			id = $1
+		AND
+			status = 'completed'
+		AND
+			manager_bounty > 0
+		AND
+			manager_improver_id IS NOT NULL
+		AND
+			manager_paid_out_at IS NULL
+		AND
+			manager_payout_in_progress = false;
+	`, workflowId)
+	if err != nil {
+		return false, fmt.Errorf("error claiming workflow manager payout attempt: %s", err)
+	}
+	return cmd.RowsAffected() > 0, nil
+}
+
 func (a *AppDB) MarkWorkflowStepPayoutFailed(ctx context.Context, workflowId string, stepId string, errorMessage string) error {
 	errorMessage = truncateWorkflowPayoutErrorMessage(errorMessage)
 	cmd, err := a.db.Exec(ctx, `
@@ -6487,6 +6800,7 @@ func (a *AppDB) MarkWorkflowStepPayoutFailed(ctx context.Context, workflowId str
 		SET
 			payout_error = $3,
 			payout_last_try_at = unix_now(),
+			payout_in_progress = false,
 			retry_requested_at = NULL,
 			retry_requested_by = NULL,
 			updated_at = unix_now()
@@ -6514,6 +6828,7 @@ func (a *AppDB) MarkWorkflowManagerPayoutFailed(ctx context.Context, workflowId 
 		SET
 			manager_payout_error = $2,
 			manager_payout_last_try_at = unix_now(),
+			manager_payout_in_progress = false,
 			manager_retry_requested_at = NULL,
 			manager_retry_requested_by = NULL,
 			updated_at = unix_now()
@@ -6545,6 +6860,7 @@ func (a *AppDB) MarkWorkflowStepPaidOut(ctx context.Context, workflowId string, 
 			status = 'paid_out',
 			payout_error = NULL,
 			payout_last_try_at = unix_now(),
+			payout_in_progress = false,
 			retry_requested_at = NULL,
 			retry_requested_by = NULL,
 			updated_at = unix_now()
@@ -6553,7 +6869,9 @@ func (a *AppDB) MarkWorkflowStepPaidOut(ctx context.Context, workflowId string, 
 		AND
 			workflow_id = $2
 		AND
-			status = 'completed';
+			status = 'completed'
+		AND
+			(payout_in_progress = true OR bounty = 0);
 	`, stepId, workflowId)
 	if err != nil {
 		return false, fmt.Errorf("error marking workflow step paid out: %s", err)
@@ -6569,6 +6887,7 @@ func (a *AppDB) MarkWorkflowManagerPaidOut(ctx context.Context, workflowId strin
 			manager_paid_out_at = unix_now(),
 			manager_payout_error = NULL,
 			manager_payout_last_try_at = unix_now(),
+			manager_payout_in_progress = false,
 			manager_retry_requested_at = NULL,
 			manager_retry_requested_by = NULL,
 			updated_at = unix_now()
@@ -6581,7 +6900,9 @@ func (a *AppDB) MarkWorkflowManagerPaidOut(ctx context.Context, workflowId strin
 		AND
 			manager_improver_id IS NOT NULL
 		AND
-			manager_paid_out_at IS NULL;
+			manager_paid_out_at IS NULL
+		AND
+			manager_payout_in_progress = true;
 	`, workflowId)
 	if err != nil {
 		return false, fmt.Errorf("error marking workflow manager paid out: %s", err)
@@ -6600,18 +6921,20 @@ func (a *AppDB) FinalizeWorkflowPaidOutIfSettled(ctx context.Context, workflowId
 	var managerBounty uint64
 	var managerImproverID *string
 	var managerPaidOutAt *int64
+	var managerPayoutInProgress bool
 	err = tx.QueryRow(ctx, `
 		SELECT
 			status,
 			manager_bounty,
 			manager_improver_id,
-			manager_paid_out_at
+			manager_paid_out_at,
+			manager_payout_in_progress
 		FROM
 			workflows
 		WHERE
 			id = $1
 		FOR UPDATE;
-	`, workflowId).Scan(&status, &managerBounty, &managerImproverID, &managerPaidOutAt)
+	`, workflowId).Scan(&status, &managerBounty, &managerImproverID, &managerPaidOutAt, &managerPayoutInProgress)
 	if err != nil {
 		return false, err
 	}
@@ -6630,6 +6953,7 @@ func (a *AppDB) FinalizeWorkflowPaidOutIfSettled(ctx context.Context, workflowId
 			status = 'paid_out',
 			payout_error = NULL,
 			payout_last_try_at = COALESCE(payout_last_try_at, unix_now()),
+			payout_in_progress = false,
 			retry_requested_at = NULL,
 			retry_requested_by = NULL,
 			updated_at = unix_now()
@@ -6665,7 +6989,7 @@ func (a *AppDB) FinalizeWorkflowPaidOutIfSettled(ctx context.Context, workflowId
 		return false, nil
 	}
 
-	if managerBounty > 0 && managerImproverID != nil && managerPaidOutAt == nil {
+	if managerBounty > 0 && managerImproverID != nil && (managerPaidOutAt == nil || managerPayoutInProgress) {
 		if err := tx.Commit(ctx); err != nil {
 			return false, err
 		}
@@ -6729,6 +7053,8 @@ func (a *AppDB) RequestWorkflowStepPayoutRetry(ctx context.Context, workflowId s
 		AND
 			bounty > 0
 		AND
+			payout_in_progress = false
+		AND
 			COALESCE(NULLIF(TRIM(payout_error), ''), '') <> '';
 	`, stepId, workflowId, improverId)
 	if err != nil {
@@ -6758,6 +7084,8 @@ func (a *AppDB) RequestWorkflowManagerPayoutRetry(ctx context.Context, workflowI
 			manager_improver_id = $2
 		AND
 			manager_paid_out_at IS NULL
+		AND
+			manager_payout_in_progress = false
 		AND
 			COALESCE(NULLIF(TRIM(manager_payout_error), ''), '') <> '';
 	`, workflowId, improverId)

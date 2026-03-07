@@ -488,6 +488,7 @@ func (s *AppDB) CreateTables() error {
 				manager_paid_out_at BIGINT,
 				manager_payout_error TEXT,
 				manager_payout_last_try_at BIGINT,
+				manager_payout_in_progress BOOLEAN NOT NULL DEFAULT false,
 				manager_retry_requested_at BIGINT,
 				manager_retry_requested_by TEXT REFERENCES users(id),
 				approved_at BIGINT,
@@ -697,6 +698,9 @@ func (s *AppDB) CreateTables() error {
 			ADD COLUMN IF NOT EXISTS manager_payout_last_try_at BIGINT;
 
 			ALTER TABLE workflows
+			ADD COLUMN IF NOT EXISTS manager_payout_in_progress BOOLEAN NOT NULL DEFAULT false;
+
+			ALTER TABLE workflows
 			ADD COLUMN IF NOT EXISTS manager_retry_requested_at BIGINT;
 
 			ALTER TABLE workflows
@@ -798,6 +802,7 @@ func (s *AppDB) CreateTables() error {
 			completed_at BIGINT,
 			payout_error TEXT,
 			payout_last_try_at BIGINT,
+			payout_in_progress BOOLEAN NOT NULL DEFAULT false,
 			retry_requested_at BIGINT,
 			retry_requested_by TEXT REFERENCES users(id),
 			created_at BIGINT NOT NULL DEFAULT unix_now(),
@@ -830,6 +835,9 @@ func (s *AppDB) CreateTables() error {
 
 		ALTER TABLE workflow_steps
 		ADD COLUMN IF NOT EXISTS payout_last_try_at BIGINT;
+
+		ALTER TABLE workflow_steps
+		ADD COLUMN IF NOT EXISTS payout_in_progress BOOLEAN NOT NULL DEFAULT false;
 
 		ALTER TABLE workflow_steps
 		ADD COLUMN IF NOT EXISTS retry_requested_at BIGINT;
@@ -1111,8 +1119,36 @@ func (s *AppDB) CreateTables() error {
 	}
 
 	_, err = s.db.Exec(context.Background(), `
-			CREATE TABLE IF NOT EXISTS workflow_votes(
-				workflow_id TEXT NOT NULL REFERENCES workflows(id) ON DELETE CASCADE,
+		CREATE TABLE IF NOT EXISTS workflow_payout_admin_actions(
+			id TEXT PRIMARY KEY,
+			workflow_id TEXT NOT NULL REFERENCES workflows(id) ON DELETE CASCADE,
+			step_id TEXT REFERENCES workflow_steps(id) ON DELETE SET NULL,
+			target_type TEXT NOT NULL,
+			action TEXT NOT NULL,
+			error_message TEXT NOT NULL DEFAULT '',
+			performed_by_user_id TEXT NOT NULL REFERENCES users(id),
+			created_at BIGINT NOT NULL DEFAULT unix_now(),
+			CHECK (target_type IN ('step', 'supervisor')),
+			CHECK (action IN ('mark_paid_out', 'mark_failed')),
+			CHECK (
+				(target_type = 'step' AND step_id IS NOT NULL)
+				OR
+				(target_type = 'supervisor' AND step_id IS NULL)
+			)
+		);
+
+		CREATE INDEX IF NOT EXISTS workflow_payout_admin_actions_workflow_idx
+			ON workflow_payout_admin_actions(workflow_id, created_at DESC);
+		CREATE INDEX IF NOT EXISTS workflow_payout_admin_actions_performed_by_idx
+			ON workflow_payout_admin_actions(performed_by_user_id, created_at DESC);
+	`)
+	if err != nil {
+		return fmt.Errorf("error creating workflow_payout_admin_actions table: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
+		CREATE TABLE IF NOT EXISTS workflow_votes(
+			workflow_id TEXT NOT NULL REFERENCES workflows(id) ON DELETE CASCADE,
 			voter_id TEXT NOT NULL REFERENCES users(id),
 			decision TEXT NOT NULL,
 			comment TEXT,
