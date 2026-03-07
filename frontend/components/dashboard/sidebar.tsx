@@ -273,9 +273,9 @@ export function DashboardSidebar() {
                 <Button
                   variant="ghost"
                   className={cn(
-                    "w-full justify-start transition-colors hover:bg-primary/60 rounded-none",
+                    "w-full justify-start rounded-none transition-colors hover:bg-primary/10",
                     isActive(item.path)
-                      ? "bg-[#eb6c6c] text-white hover:bg-[#d55c5c] rounded-none"
+                      ? "bg-primary text-primary-foreground hover:bg-primary/90"
                       : "text-black dark:text-white",
                   )}
                   onClick={() => router.push(item.path)}
@@ -307,9 +307,9 @@ export function DashboardSidebar() {
                 <Button
                   variant="ghost"
                   className={cn(
-                    "w-full justify-start transition-colors hover:bg-primary",
+                    "w-full justify-start transition-colors hover:bg-primary/10",
                     isActive("/settings")
-                      ? "bg-[#eb6c6c] text-white hover:bg-[#d55c5c] rounded-md"
+                      ? "bg-primary text-primary-foreground hover:bg-primary/90 rounded-md"
                       : "text-black dark:text-white",
                   )}
                   onClick={() => {router.push("/settings");

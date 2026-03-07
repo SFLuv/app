@@ -19,7 +19,7 @@ import { Address, Hash } from "viem"
 import { useContacts } from "@/context/ContactsProvider";
 import ContactOrAddressInput from "../contacts/contact-or-address-input"
 import type { W9Submission } from "@/types/w9"
-import { useRouter } from "next/navigation"
+import { usePathname, useRouter, useSearchParams } from "next/navigation"
 import { extractEthereumAddressFromPayload, extractRedeemParamsFromPayload } from "@/lib/qr/payload"
 
 type SendFlowMode = "manual" | "scan"
@@ -73,6 +73,8 @@ export function SendCryptoModal({ open, onOpenChange, wallet, balance, defaultFl
   const scanLockedRef = useRef<boolean>(false)
   const isDetectingRef = useRef<boolean>(false)
   const router = useRouter()
+  const pathname = usePathname()
+  const pageSearchParams = useSearchParams()
   const { toast } = useToast()
   const { contacts } = useContacts()
   const { user, authFetch } = useApp()
@@ -135,13 +137,19 @@ export function SendCryptoModal({ open, onOpenChange, wallet, balance, defaultFl
     try {
       const redeemParams = extractRedeemParamsFromPayload(value)
       if (redeemParams) {
+        const nextParams = new URLSearchParams(redeemParams.toString())
+        nextParams.set("webWallet", "1")
+        nextParams.set("source", "wallet")
+        const currentSearch = pageSearchParams.toString()
+        const returnTo = currentSearch ? `${pathname}?${currentSearch}` : pathname
+        nextParams.set("returnTo", returnTo)
         stopScanner()
         toast({
           title: "Redeem Code Detected",
           description: "Redirecting to redeem flow...",
         })
         handleClose()
-        router.push(`/faucet/redeem?${redeemParams.toString()}`)
+        router.push(`/faucet/redeem?${nextParams.toString()}`)
         return
       }
 

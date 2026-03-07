@@ -221,7 +221,7 @@ export default function SupervisorPage() {
     setDetailLoading(true)
     setDetailWorkflow(null)
     try {
-      const res = await authFetch(`/workflows/${workflowID}`)
+      const res = await authFetch(`/workflows/${workflowID}?include_supervisor_data=true`)
       if (!res.ok) {
         const text = await res.text()
         throw new Error(text || "Unable to load workflow details.")
@@ -234,6 +234,32 @@ export default function SupervisorPage() {
     } finally {
       setDetailLoading(false)
     }
+  }
+
+  const renderSupervisorDataFields = (workflow: Workflow) => {
+    const fields = (workflow.supervisor_data_fields || []).filter(
+      (field) => (field.key || "").trim() !== "" || (field.value || "").trim() !== "",
+    )
+    if (fields.length === 0) return null
+
+    return (
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm">Supervisor Data Fields</CardTitle>
+          <CardDescription className="text-xs">
+            Workflow metadata tags included in supervisor exports.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-2">
+          {fields.map((field, index) => (
+            <div key={`${field.key}-${index}`} className="grid gap-1 sm:grid-cols-[180px_1fr]">
+              <p className="text-xs font-medium text-muted-foreground break-words">{field.key}</p>
+              <p className="text-sm break-words">{field.value}</p>
+            </div>
+          ))}
+        </CardContent>
+      </Card>
+    )
   }
 
   const runExport = async () => {
@@ -327,7 +353,7 @@ export default function SupervisorPage() {
                   <SelectItem value="completed">Completed</SelectItem>
                   <SelectItem value="paid_out">Finalized</SelectItem>
                   <SelectItem value="expired">Expired</SelectItem>
-                  <SelectItem value="deleted">Deleted</SelectItem>
+                  <SelectItem value="deleted">Archived</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -482,6 +508,7 @@ export default function SupervisorPage() {
         open={detailOpen}
         onOpenChange={setDetailOpen}
         loading={detailLoading}
+        renderWorkflowActions={renderSupervisorDataFields}
       />
     </div>
   )

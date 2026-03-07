@@ -13,6 +13,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Badge } from "@/components/ui/badge"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Switch } from "@/components/ui/switch"
 import { buildCredentialLabelMap, formatCredentialLabel } from "@/lib/credential-labels"
 import { formatStatusLabel } from "@/lib/status-labels"
 import { formatWorkflowDisplayStatus } from "@/lib/workflow-status"
@@ -128,7 +129,9 @@ export default function AdminPage() {
   const searchParams = useSearchParams()
 
   const readQueryNumber = (key: string, fallback: number) => {
-    const raw = Number(searchParams.get(key))
+    const rawValue = searchParams.get(key)
+    if (rawValue === null || rawValue.trim() === "") return fallback
+    const raw = Number(rawValue)
     if (!Number.isFinite(raw)) return fallback
     return raw >= 0 ? raw : fallback
   }
@@ -318,6 +321,7 @@ export default function AdminPage() {
   const [adminWorkflowsPage, setAdminWorkflowsPage] = useState<number>(readQueryNumber("workflow_page", 0))
   const [adminWorkflowsCount] = useState<number>(20)
   const [adminWorkflowsSearch, setAdminWorkflowsSearch] = useState<string>(readQueryText("workflow_search", ""))
+  const [adminWorkflowsIncludeArchived, setAdminWorkflowsIncludeArchived] = useState<boolean>(readQueryBoolean("workflow_include_archived", false))
   const [adminWorkflowsError, setAdminWorkflowsError] = useState<string>("")
   const [adminWorkflowDetail, setAdminWorkflowDetail] = useState<Workflow | null>(null)
   const [adminWorkflowDetailOpen, setAdminWorkflowDetailOpen] = useState<boolean>(false)
@@ -391,22 +395,28 @@ export default function AdminPage() {
     getUnallocatedBalance()
   }
 
-  const handleAddEvent = async (ev: Event) => {
+  const handleAddEvent = async (ev: Event): Promise<boolean> => {
     const url = "/events"
     try {
       const res = await authFetch(url, {
         method: "POST",
         body: JSON.stringify(ev)
       })
+      if (!res.ok) {
+        const message = (await res.text()).trim()
+        throw new Error(message || "Error adding event. Please try again later.")
+      }
+      setEventsError("")
+      await getEvents()
+      getUnallocatedBalance()
+      return true
     }
-    catch {
+    catch (error) {
+      const message = error instanceof Error ? error.message : "Error adding event. Please try again later."
       setEventsStatus("error")
-      setEventsError("Error adding event. Please try again later.")
+      setEventsError(message)
+      return false
     }
-
-    await getEvents()
-    toggleNewEventModal()
-    getUnallocatedBalance()
   }
 
   const getFaucetBalance = async () => {
@@ -972,13 +982,20 @@ export default function AdminPage() {
     setIssuerRequestModalOpen(false)
   }
 
-  const getAdminWorkflows = async (search = adminWorkflowsSearch, page = adminWorkflowsPage) => {
+  const getAdminWorkflows = async (
+    search = adminWorkflowsSearch,
+    page = adminWorkflowsPage,
+    includeArchived = adminWorkflowsIncludeArchived,
+  ) => {
     try {
       const params = new URLSearchParams({
         search,
         page: String(page),
         count: String(adminWorkflowsCount),
       })
+      if (includeArchived) {
+        params.set("include_archived", "true")
+      }
       const res = await authFetch(`/admin/workflows?${params}`)
       if (!res.ok) throw new Error()
       const data = (await res.json()) as AdminWorkflowListResponse
@@ -1080,7 +1097,7 @@ export default function AdminPage() {
         description: `Released ${result.released_count} assignment(s).${skipped}`,
       })
       setAdminRevokeModalOpen(false)
-      await getAdminWorkflows(adminWorkflowsSearch, adminWorkflowsPage)
+      await getAdminWorkflows(adminWorkflowsSearch, adminWorkflowsPage, adminWorkflowsIncludeArchived)
       if (adminWorkflowDetail?.id) {
         const resWorkflow = await authFetch(`/workflows/${adminWorkflowDetail.id}`)
         if (resWorkflow.ok) {
@@ -1156,6 +1173,8 @@ export default function AdminPage() {
     if (nextWorkflowSearch !== adminWorkflowsSearch) setAdminWorkflowsSearch(nextWorkflowSearch)
     const nextWorkflowPage = readQueryNumber("workflow_page", 0)
     if (nextWorkflowPage !== adminWorkflowsPage) setAdminWorkflowsPage(nextWorkflowPage)
+    const nextWorkflowIncludeArchived = readQueryBoolean("workflow_include_archived", false)
+    if (nextWorkflowIncludeArchived !== adminWorkflowsIncludeArchived) setAdminWorkflowsIncludeArchived(nextWorkflowIncludeArchived)
   }, [searchParams])
 
   useEffect(() => {
@@ -1218,6 +1237,8 @@ export default function AdminPage() {
     else params.delete("workflow_search")
     if (adminWorkflowsPage > 0) params.set("workflow_page", String(adminWorkflowsPage))
     else params.delete("workflow_page")
+    if (adminWorkflowsIncludeArchived) params.set("workflow_include_archived", "true")
+    else params.delete("workflow_include_archived")
 
     const nextQuery = params.toString()
     if (nextQuery !== searchParams.toString()) {
@@ -1249,6 +1270,7 @@ export default function AdminPage() {
     issuerStatusFilter,
     adminWorkflowsSearch,
     adminWorkflowsPage,
+    adminWorkflowsIncludeArchived,
     pathname,
     router,
     searchParams,
@@ -1272,7 +1294,7 @@ export default function AdminPage() {
   useEffect(() => { getImprovers(improverSearch, improverPage) }, [improverSearch, improverPage])
   useEffect(() => { getSupervisors(supervisorSearch, supervisorPage) }, [supervisorSearch, supervisorPage])
   useEffect(() => { getIssuerRequests(issuerRequestSearch, issuerRequestPage) }, [issuerRequestSearch, issuerRequestPage])
-  useEffect(() => { getAdminWorkflows(adminWorkflowsSearch, adminWorkflowsPage) }, [adminWorkflowsSearch, adminWorkflowsPage])
+  useEffect(() => { getAdminWorkflows(adminWorkflowsSearch, adminWorkflowsPage, adminWorkflowsIncludeArchived) }, [adminWorkflowsSearch, adminWorkflowsPage, adminWorkflowsIncludeArchived])
 
   useEffect(() => {
     if (status !== "authenticated") return
@@ -1301,7 +1323,7 @@ export default function AdminPage() {
         void getSupervisors(supervisorSearch, supervisorPage)
         break
       case "workflows":
-        void getAdminWorkflows(adminWorkflowsSearch, adminWorkflowsPage)
+        void getAdminWorkflows(adminWorkflowsSearch, adminWorkflowsPage, adminWorkflowsIncludeArchived)
         break
       case "issuers":
         void getIssuerRequests(issuerRequestSearch, issuerRequestPage)
@@ -1326,6 +1348,7 @@ export default function AdminPage() {
     supervisorPage,
     adminWorkflowsSearch,
     adminWorkflowsPage,
+    adminWorkflowsIncludeArchived,
     issuerRequestSearch,
     issuerRequestPage,
   ])
@@ -3233,8 +3256,23 @@ export default function AdminPage() {
                     className="pl-9"
                   />
                 </div>
-                <div className="text-sm text-muted-foreground">
-                  Showing {groupedAdminWorkflows.length} series entries from {adminWorkflowsTotal} workflows
+                <div className="flex items-center gap-4">
+                  <div className="text-sm text-muted-foreground">
+                    Showing {groupedAdminWorkflows.length} series entries from {adminWorkflowsTotal} workflows
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Label htmlFor="workflow-include-archived" className="text-sm font-normal text-muted-foreground">
+                      Include archived
+                    </Label>
+                    <Switch
+                      id="workflow-include-archived"
+                      checked={adminWorkflowsIncludeArchived}
+                      onCheckedChange={(checked) => {
+                        setAdminWorkflowsIncludeArchived(Boolean(checked))
+                        setAdminWorkflowsPage(0)
+                      }}
+                    />
+                  </div>
                 </div>
               </div>
 

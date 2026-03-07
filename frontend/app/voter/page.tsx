@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useApp } from "@/context/AppProvider"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -41,7 +41,7 @@ export default function VoterPage() {
   const [workflows, setWorkflows] = useState<Workflow[]>([])
   const [activeWorkflows, setActiveWorkflows] = useState<ActiveWorkflowListItem[]>([])
   const [deletionProposals, setDeletionProposals] = useState<WorkflowDeletionProposal[]>([])
-  const [loading, setLoading] = useState<boolean>(true)
+  const [initialLoading, setInitialLoading] = useState<boolean>(true)
   const [error, setError] = useState<string>("")
   const [submittingId, setSubmittingId] = useState<string>("")
   const [detailWorkflow, setDetailWorkflow] = useState<Workflow | null>(null)
@@ -53,44 +53,60 @@ export default function VoterPage() {
   const [deletionSearch, setDeletionSearch] = useState<string>(deletionSearchFromQuery)
 
   const canVote = Boolean(user?.isVoter || user?.isAdmin)
+  const hasLoadedDataRef = useRef(false)
 
-  const loadWorkflows = useCallback(async () => {
-    if (!canVote) {
-      setLoading(false)
-      return
-    }
+  const loadWorkflows = useCallback(
+    async (mode: "initial" | "tab" | "background" = "background") => {
+      const isInitialFetch = !hasLoadedDataRef.current
 
-    try {
-      const [workflowRes, deletionRes, activeRes] = await Promise.all([
-        authFetch("/voters/workflows"),
-        authFetch("/voters/workflow-deletion-proposals"),
-        authFetch("/workflows/active"),
-      ])
-      if (!workflowRes.ok) throw new Error()
-
-      const workflowData = (await workflowRes.json()) as Workflow[]
-      setWorkflows(workflowData || [])
-
-      if (deletionRes.ok) {
-        const deletionData = (await deletionRes.json()) as WorkflowDeletionProposal[]
-        setDeletionProposals(deletionData || [])
-      } else {
-        setDeletionProposals([])
+      if (!canVote) {
+        if (isInitialFetch || mode === "initial") {
+          hasLoadedDataRef.current = true
+          setInitialLoading(false)
+        }
+        return
       }
 
-      if (activeRes.ok) {
-        const activeData = (await activeRes.json()) as ActiveWorkflowListItem[]
-        setActiveWorkflows(activeData || [])
-      } else {
-        setActiveWorkflows([])
+      if (isInitialFetch || mode === "initial") {
+        setInitialLoading(true)
       }
-      setError("")
-    } catch {
-      setError("Unable to load workflows for voting right now.")
-    } finally {
-      setLoading(false)
-    }
-  }, [authFetch, canVote])
+
+      try {
+        const [workflowRes, deletionRes, activeRes] = await Promise.all([
+          authFetch("/voters/workflows"),
+          authFetch("/voters/workflow-deletion-proposals"),
+          authFetch("/workflows/active"),
+        ])
+        if (!workflowRes.ok) throw new Error()
+
+        const workflowData = (await workflowRes.json()) as Workflow[]
+        setWorkflows(workflowData || [])
+
+        if (deletionRes.ok) {
+          const deletionData = (await deletionRes.json()) as WorkflowDeletionProposal[]
+          setDeletionProposals(deletionData || [])
+        } else {
+          setDeletionProposals([])
+        }
+
+        if (activeRes.ok) {
+          const activeData = (await activeRes.json()) as ActiveWorkflowListItem[]
+          setActiveWorkflows(activeData || [])
+        } else {
+          setActiveWorkflows([])
+        }
+        setError("")
+      } catch {
+        setError("Unable to load workflows for voting right now.")
+      } finally {
+        if (isInitialFetch || mode === "initial") {
+          hasLoadedDataRef.current = true
+          setInitialLoading(false)
+        }
+      }
+    },
+    [authFetch, canVote],
+  )
 
   useEffect(() => {
     const nextTab = searchParams.get("tab")
@@ -119,9 +135,15 @@ export default function VoterPage() {
   }, [activeTab, deletionSearch, pathname, router, searchParams, workflowSearch])
 
   useEffect(() => {
-    if (status !== "authenticated") return
-    void loadWorkflows()
-  }, [activeTab, status, loadWorkflows])
+    if (status === "loading") return
+    void loadWorkflows("initial")
+  }, [canVote, loadWorkflows, status])
+
+  useEffect(() => {
+    if (status !== "authenticated" || !canVote) return
+    if (!hasLoadedDataRef.current) return
+    void loadWorkflows("tab")
+  }, [activeTab, canVote, loadWorkflows, status])
 
   useEffect(() => {
     if (status !== "authenticated" || !canVote) return
@@ -309,7 +331,7 @@ export default function VoterPage() {
     )
   }, [deletionProposals, deletionSearch])
 
-  if (status === "loading" || loading) {
+  if (status === "loading" || initialLoading) {
     return (
       <div className="flex items-center justify-center min-h-[70vh]">
         <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-[#eb6c6c]"></div>

@@ -5,6 +5,7 @@ export interface Event {
   description: string;
   amount: number;
   codes: number;
+  start_at: number;
   expiration: number;
   owner?: string;
 }

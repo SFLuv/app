@@ -314,7 +314,11 @@ export default function AppProvider({ children }: { children: ReactNode }) {
   }
 
   const _resetAppState = async () => {
-    if (pathname !== "/map" && !pathname.startsWith("/faucet")) {
+    const allowUnauthedRoute =
+      pathname === "/map" ||
+      pathname.startsWith("/faucet") ||
+      pathname.startsWith("/improver/join")
+    if (!allowUnauthedRoute) {
       replace("/map")
     }
     setUser(null)

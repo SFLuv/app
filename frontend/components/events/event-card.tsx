@@ -1,7 +1,5 @@
 import { Event } from "@/types/event"
 import { Card, CardContent } from "../ui/card"
-import { Badge } from "../ui/badge"
-import { Star, Trash } from "lucide-react"
 import { Button } from "../ui/button"
 
 interface EventCardProps {
@@ -22,7 +20,20 @@ const EventCard = ({
     toggleEventModal()
   }
   return(
-    <Card key={event.id} className="overflow-hidden hover:shadow-md transition-shadow">
+    <Card
+      key={event.id}
+      className="overflow-hidden hover:shadow-md transition-shadow cursor-pointer"
+      onClick={toggleModal}
+      onKeyDown={(e) => {
+        if (e.target !== e.currentTarget) return
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault()
+          toggleModal()
+        }
+      }}
+      role="button"
+      tabIndex={0}
+    >
       <CardContent className="p-4">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="flex items-center gap-3">
@@ -46,7 +57,10 @@ const EventCard = ({
           <div className="flex items-center gap-2">
               <Button
                 size="sm"
-                onClick={toggleModal}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  toggleModal()
+                }}
               >
                 Details
               </Button>
