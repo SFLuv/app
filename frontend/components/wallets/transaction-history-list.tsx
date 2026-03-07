@@ -8,9 +8,10 @@ import type { WalletTransaction } from "@/types/privy-wallet"
 interface TransactionHistoryListProps {
   transactions: WalletTransaction[]
   walletAddress: string
+  onSelectTransaction?: (transaction: WalletTransaction) => void
 }
 
-export function TransactionHistoryList({ transactions, walletAddress }: TransactionHistoryListProps) {
+export function TransactionHistoryList({ transactions, walletAddress, onSelectTransaction }: TransactionHistoryListProps) {
   if (transactions.length === 0) {
     return (
       <div className="text-center py-6 sm:py-8">
@@ -48,7 +49,10 @@ export function TransactionHistoryList({ transactions, walletAddress }: Transact
         return (
           <div
             key={transaction.id}
-            className="flex items-center justify-between p-2.5 sm:p-3 rounded-lg border bg-card/50"
+            className={`flex items-center justify-between p-2.5 sm:p-3 rounded-lg border bg-card/50 ${
+              onSelectTransaction ? "cursor-pointer transition-colors hover:bg-accent/40" : ""
+            }`}
+            onClick={onSelectTransaction ? () => onSelectTransaction(transaction) : undefined}
           >
             <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
               <Avatar className="h-7 w-7 sm:h-8 sm:w-8 flex-shrink-0">

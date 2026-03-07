@@ -44,7 +44,7 @@ export default function ContactsPage() {
 
   useEffect(() => {
     if(status === "unauthenticated") {
-      router.replace("/")
+      router.replace("/map")
     }
   }, [status])
 

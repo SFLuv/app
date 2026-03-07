@@ -3,7 +3,7 @@
 import type React from "react"
 
 import { useEffect, useMemo, useState } from "react"
-import { useRouter } from "next/navigation"
+import { usePathname, useRouter, useSearchParams } from "next/navigation"
 import { useApp } from "@/context/AppProvider"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -31,6 +31,8 @@ const getLocationApplicationStatus = (approval?: boolean | null): LocationApplic
 
 export default function SettingsPage() {
   const router = useRouter()
+  const pathname = usePathname()
+  const searchParams = useSearchParams()
   const { user, userLocations, status, affiliate, setAffiliate, proposer, setProposer, improver, setImprover, issuer, setIssuer, supervisor, setSupervisor, authFetch } = useApp()
   const userRole = useMemo(() => user?.isAdmin ? "admin" : user?.isMerchant ? "merchant" : "user", [user])
 
@@ -85,7 +87,8 @@ export default function SettingsPage() {
 
 
   // Form states
-  const [activeTab, setActiveTab] = useState("account")
+  const tabFromQuery = searchParams.get("tab")
+  const [activeTab, setActiveTab] = useState(tabFromQuery || "account")
   const [isUpdating, setIsUpdating] = useState(false)
   const [isChangingPassword, setIsChangingPassword] = useState(false)
   const [successMessage, setSuccessMessage] = useState("")
@@ -160,6 +163,38 @@ export default function SettingsPage() {
     () => verifiedEmails.filter((email) => email.status !== "verified"),
     [verifiedEmails],
   )
+
+  const availableTabs = useMemo(() => {
+    const tabs = ["account"]
+    if (merchantStatus !== "none") tabs.push("merchant")
+    if (affiliateStatus === "pending" || affiliateStatus === "approved") tabs.push("affiliate")
+    if (proposerStatus === "pending" || proposerStatus === "approved") tabs.push("proposer")
+    if (improverStatus === "pending" || improverStatus === "approved") tabs.push("improver")
+    if (issuerStatus === "pending" || issuerStatus === "approved") tabs.push("issuer")
+    if (supervisorStatus === "pending" || supervisorStatus === "approved") tabs.push("supervisor")
+    return tabs
+  }, [affiliateStatus, improverStatus, issuerStatus, merchantStatus, proposerStatus, supervisorStatus])
+
+  useEffect(() => {
+    const tab = searchParams.get("tab")
+    if (!tab) return
+    if (!availableTabs.includes(tab)) return
+    setActiveTab((prev) => (tab === prev ? prev : tab))
+  }, [availableTabs, searchParams])
+
+  useEffect(() => {
+    if (!availableTabs.includes(activeTab)) {
+      setActiveTab("account")
+      return
+    }
+
+    const params = new URLSearchParams(searchParams.toString())
+    params.set("tab", activeTab)
+    const nextQuery = params.toString()
+    if (nextQuery !== searchParams.toString()) {
+      router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname, { scroll: false })
+    }
+  }, [activeTab, availableTabs, pathname, router, searchParams])
 
   const rewardsAccountOptions = useMemo(() => {
     const seen = new Set<string>()
@@ -254,6 +289,14 @@ export default function SettingsPage() {
       void loadRewardsWallets()
     }
   }, [status])
+
+  useEffect(() => {
+    if (status !== "authenticated") return
+    if (activeTab === "account" || activeTab === "improver" || activeTab === "supervisor") {
+      void loadVerifiedEmails()
+      void loadRewardsWallets()
+    }
+  }, [activeTab, status])
 
   useEffect(() => {
     if (improverStatus !== "approved") return

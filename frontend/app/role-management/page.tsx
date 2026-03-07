@@ -1,16 +1,39 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { MerchantManagement } from "@/components/role-management/merchant-management"
 import { OrganizerManagement } from "@/components/role-management/organizer-management"
 import { BlacklistedUsers } from "@/components/role-management/blacklisted-users"
 import { useApp } from "@/context/AppProvider"
-import { redirect } from "next/navigation"
+import { redirect, usePathname, useRouter, useSearchParams } from "next/navigation"
 
 export default function RoleManagementPage() {
-  const [activeTab, setActiveTab] = useState("merchants")
+  const searchParams = useSearchParams()
+  const router = useRouter()
+  const pathname = usePathname()
+  const tabFromQuery = searchParams.get("tab")
+  const [activeTab, setActiveTab] = useState(
+    tabFromQuery === "organizers" || tabFromQuery === "blacklisted" ? tabFromQuery : "merchants"
+  )
   const { user } = useApp()
+
+  useEffect(() => {
+    const nextTab = searchParams.get("tab")
+    if (!nextTab) return
+    if (nextTab !== "merchants" && nextTab !== "organizers" && nextTab !== "blacklisted") return
+    setActiveTab((prev) => (nextTab === prev ? prev : nextTab))
+  }, [searchParams])
+
+  useEffect(() => {
+    const params = new URLSearchParams(searchParams.toString())
+    if (params.get("tab") === activeTab) return
+    params.set("tab", activeTab)
+    const nextQuery = params.toString()
+    const currentQuery = searchParams.toString()
+    if (nextQuery === currentQuery) return
+    router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname, { scroll: false })
+  }, [activeTab, pathname, router, searchParams])
 
   // Redirect if not admin
   if (user?.isAdmin === false) {

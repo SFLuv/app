@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/SFLuv/app/backend/structs"
 	"github.com/SFLuv/app/backend/utils"
@@ -111,4 +112,43 @@ func (a *AppService) UpdateWallet(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusCreated)
+}
+
+func (a *AppService) LookupWalletOwnerByAddress(w http.ResponseWriter, r *http.Request) {
+	userDid := utils.GetDid(r)
+	if userDid == nil {
+		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+
+	address := strings.TrimSpace(r.PathValue("address"))
+	if address == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	lookup, err := a.db.GetWalletAddressOwnerLookup(r.Context(), address)
+	if err != nil {
+		a.logger.Logf("error looking up wallet owner by address %s: %s", address, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	response := map[string]any{
+		"found":   false,
+		"address": address,
+	}
+	if lookup != nil {
+		response["found"] = true
+		response["user_id"] = lookup.UserID
+		response["is_merchant"] = lookup.IsMerchant
+		response["wallet_name"] = lookup.WalletName
+		response["address"] = lookup.MatchedAddress
+		if lookup.IsMerchant && strings.TrimSpace(lookup.MerchantName) != "" {
+			response["merchant_name"] = strings.TrimSpace(lookup.MerchantName)
+		}
+	}
+
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(response)
 }

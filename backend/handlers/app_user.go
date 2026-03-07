@@ -25,6 +25,10 @@ func (a *AppService) AddUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if _, err := a.SyncPrivyLinkedEmailsForUser(r.Context(), *userDid); err != nil {
+		a.logger.Logf("error syncing Privy linked emails for new user %s: %s", *userDid, err)
+	}
+
 	w.WriteHeader(http.StatusCreated)
 }
 
@@ -115,14 +119,14 @@ func (a *AppService) GetUserAuthed(w http.ResponseWriter, r *http.Request) {
 	}
 
 	response := structs.AuthedUserResponse{
-		User:      *user,
-		Wallets:   wallets,
-		Locations: locations,
-		Contacts:  contacts,
-		Affiliate: affiliate,
-		Proposer:  proposer,
-		Improver:  improver,
-		Issuer:    issuer,
+		User:       *user,
+		Wallets:    wallets,
+		Locations:  locations,
+		Contacts:   contacts,
+		Affiliate:  affiliate,
+		Proposer:   proposer,
+		Improver:   improver,
+		Issuer:     issuer,
 		Supervisor: supervisor,
 	}
 

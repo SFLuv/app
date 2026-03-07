@@ -24,30 +24,40 @@ export default function Sidebar({
   const [open, setOpen] = useState(false);
   const pathname = usePathname()
   const search = useSearchParams()
+  const shouldHideSidebar = pathname == "/faucet/redeem" || search.get("sidebar") === "false"
 
   useEffect(() => {
     if(status == "authenticated") setOpen(true)
   }, [status])
 
-  if (status === "loading" || pathname == "/faucet/redeem" || search.get("sidebar") === "false") return children
+  if (shouldHideSidebar) return children
+
+  if (status === "loading") {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-[#eb6c6c]"></div>
+      </div>
+    )
+  }
+
   return (
     <SidebarProvider open={open} onOpenChange={setOpen} defaultOpen={status === "authenticated"}>
       <div className="flex h-screen w-full overflow-hidden">
         <DashboardSidebar />
         <SidebarInset className="flex flex-col w-full">
-          <header className="h-16 border-b flex flex-row items-center px-4 bg-secondary w-full">
+          <header className="h-16 border-b border-border/70 flex flex-row items-center px-4 bg-card/85 backdrop-blur-md w-full">
             <SidebarTrigger className="mr-4" />
             <h1 className="text-xl font-semibold mr-auto text-black dark:text-white">Dashboard</h1>
             {status !== "authenticated" && <Button
               variant="default"
               size="lg"
-              className="bg-[#eb6c6c] hover:bg-[#d55c5c] margin-left-auto"
+              className="margin-left-auto"
               onClick={() => login()}
             >
               Connect
             </Button>}
           </header>
-          <main className="flex-1 overflow-auto p-3 sm:p-6 bg-[#d3d3d3] dark:bg-[#1a1a1a] w-full">{children}</main>
+          <main className="flex-1 overflow-auto p-3 sm:p-6 w-full">{children}</main>
         </SidebarInset>
       </div>
     </SidebarProvider>

@@ -139,6 +139,7 @@ func AddWorkflowRoutes(r *chi.Mux, s *handlers.BotService, a *handlers.AppServic
 	r.Get("/admin/workflow-series/{series_id}/claimants", withAdmin(a.GetAdminWorkflowSeriesClaimants, a))
 	r.Post("/admin/workflow-series/{series_id}/revoke-claim", withAdmin(a.RevokeAdminWorkflowSeriesImproverClaim, a))
 	r.Post("/admin/workflows/{workflow_id}/force-approve", withAdmin(a.AdminForceApproveWorkflow, a))
+	r.Post("/admin/workflows/{workflow_id}/payout-lock-resolution", withAdmin(a.ResolveAdminWorkflowPayoutLock, a))
 
 	r.Get("/voters/workflows", withVoter(a.GetVoterWorkflows, a))
 	r.Get("/voters/workflow-deletion-proposals", withVoter(a.GetVoterWorkflowDeletionProposals, a))
@@ -159,6 +160,7 @@ func AddWorkflowRoutes(r *chi.Mux, s *handlers.BotService, a *handlers.AppServic
 
 func AddWalletRoutes(r *chi.Mux, s *handlers.AppService) {
 	r.Get("/wallets", withAuth(s.GetWalletsByUser))
+	r.Get("/wallets/lookup/{address}", withAuth(s.LookupWalletOwnerByAddress))
 	r.Post("/wallets", withAuth(s.AddWallet))
 	r.Put("/wallets", withAuth(s.UpdateWallet))
 }
@@ -185,6 +187,7 @@ func AddPonderRoutes(r *chi.Mux, s *handlers.AppService, p *handlers.PonderServi
 	r.Get("/ponder/callback", s.PonderPingCallback)
 	r.Post("/ponder/callback", s.PonderHookHandler)
 	r.Get("/transactions", p.GetTransactionHistory)
+	r.Post("/transactions/memo", withAuth(p.UpsertTransactionMemo))
 	r.Get("/transactions/balance", withAuth(p.GetBalanceAtTimestamp))
 }
 

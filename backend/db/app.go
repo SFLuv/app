@@ -206,6 +206,34 @@ func (s *AppDB) CreateTables() error {
 	}
 
 	_, err = s.db.Exec(context.Background(), `
+		CREATE INDEX IF NOT EXISTS wallets_smart_address_lower_idx
+			ON wallets (LOWER(smart_address))
+			WHERE smart_address IS NOT NULL;
+
+		CREATE INDEX IF NOT EXISTS wallets_eoa_address_lower_idx
+			ON wallets (LOWER(eoa_address));
+	`)
+	if err != nil {
+		return fmt.Errorf("error creating wallet address lookup indexes: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
+		CREATE TABLE IF NOT EXISTS memos(
+			tx_hash TEXT PRIMARY KEY,
+			memo TEXT NOT NULL,
+			owner TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+		);
+
+		CREATE INDEX IF NOT EXISTS memos_tx_hash_idx
+			ON memos (LOWER(tx_hash));
+	`)
+	if err != nil {
+		return fmt.Errorf("error creating memos table: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
 		CREATE TABLE IF NOT EXISTS affiliates(
 			user_id TEXT PRIMARY KEY REFERENCES users(id),
 			organization TEXT NOT NULL,
@@ -460,6 +488,7 @@ func (s *AppDB) CreateTables() error {
 				manager_paid_out_at BIGINT,
 				manager_payout_error TEXT,
 				manager_payout_last_try_at BIGINT,
+				manager_payout_in_progress BOOLEAN NOT NULL DEFAULT false,
 				manager_retry_requested_at BIGINT,
 				manager_retry_requested_by TEXT REFERENCES users(id),
 				approved_at BIGINT,
@@ -486,6 +515,7 @@ func (s *AppDB) CreateTables() error {
 			title TEXT NOT NULL,
 			description TEXT NOT NULL DEFAULT '',
 			recurrence TEXT NOT NULL,
+			supervisor_data_json JSONB NOT NULL DEFAULT '[]'::jsonb,
 			created_at BIGINT NOT NULL DEFAULT unix_now(),
 			updated_at BIGINT NOT NULL DEFAULT unix_now(),
 			CHECK (recurrence IN ('one_time', 'daily', 'weekly', 'monthly'))
@@ -601,6 +631,7 @@ func (s *AppDB) CreateTables() error {
 					series_id TEXT,
 					supervisor_user_id TEXT REFERENCES users(id),
 					supervisor_bounty BIGINT,
+					supervisor_data_json JSONB NOT NULL DEFAULT '[]'::jsonb,
 					manager_json JSONB,
 					roles_json JSONB NOT NULL DEFAULT '[]'::jsonb,
 					steps_json JSONB NOT NULL DEFAULT '[]'::jsonb,
@@ -618,11 +649,17 @@ func (s *AppDB) CreateTables() error {
 	}
 
 	_, err = s.db.Exec(context.Background(), `
+				ALTER TABLE workflow_series
+				ADD COLUMN IF NOT EXISTS supervisor_data_json JSONB NOT NULL DEFAULT '[]'::jsonb;
+
 				ALTER TABLE workflow_templates
 				ADD COLUMN IF NOT EXISTS supervisor_user_id TEXT REFERENCES users(id);
 
 				ALTER TABLE workflow_templates
 				ADD COLUMN IF NOT EXISTS supervisor_bounty BIGINT;
+
+				ALTER TABLE workflow_templates
+				ADD COLUMN IF NOT EXISTS supervisor_data_json JSONB NOT NULL DEFAULT '[]'::jsonb;
 
 				ALTER TABLE workflow_templates
 				ADD COLUMN IF NOT EXISTS manager_json JSONB;
@@ -667,6 +704,9 @@ func (s *AppDB) CreateTables() error {
 
 			ALTER TABLE workflows
 			ADD COLUMN IF NOT EXISTS manager_payout_last_try_at BIGINT;
+
+			ALTER TABLE workflows
+			ADD COLUMN IF NOT EXISTS manager_payout_in_progress BOOLEAN NOT NULL DEFAULT false;
 
 			ALTER TABLE workflows
 			ADD COLUMN IF NOT EXISTS manager_retry_requested_at BIGINT;
@@ -770,6 +810,7 @@ func (s *AppDB) CreateTables() error {
 			completed_at BIGINT,
 			payout_error TEXT,
 			payout_last_try_at BIGINT,
+			payout_in_progress BOOLEAN NOT NULL DEFAULT false,
 			retry_requested_at BIGINT,
 			retry_requested_by TEXT REFERENCES users(id),
 			created_at BIGINT NOT NULL DEFAULT unix_now(),
@@ -802,6 +843,9 @@ func (s *AppDB) CreateTables() error {
 
 		ALTER TABLE workflow_steps
 		ADD COLUMN IF NOT EXISTS payout_last_try_at BIGINT;
+
+		ALTER TABLE workflow_steps
+		ADD COLUMN IF NOT EXISTS payout_in_progress BOOLEAN NOT NULL DEFAULT false;
 
 		ALTER TABLE workflow_steps
 		ADD COLUMN IF NOT EXISTS retry_requested_at BIGINT;
@@ -1083,8 +1127,36 @@ func (s *AppDB) CreateTables() error {
 	}
 
 	_, err = s.db.Exec(context.Background(), `
-			CREATE TABLE IF NOT EXISTS workflow_votes(
-				workflow_id TEXT NOT NULL REFERENCES workflows(id) ON DELETE CASCADE,
+		CREATE TABLE IF NOT EXISTS workflow_payout_admin_actions(
+			id TEXT PRIMARY KEY,
+			workflow_id TEXT NOT NULL REFERENCES workflows(id) ON DELETE CASCADE,
+			step_id TEXT REFERENCES workflow_steps(id) ON DELETE SET NULL,
+			target_type TEXT NOT NULL,
+			action TEXT NOT NULL,
+			error_message TEXT NOT NULL DEFAULT '',
+			performed_by_user_id TEXT NOT NULL REFERENCES users(id),
+			created_at BIGINT NOT NULL DEFAULT unix_now(),
+			CHECK (target_type IN ('step', 'supervisor')),
+			CHECK (action IN ('mark_paid_out', 'mark_failed')),
+			CHECK (
+				(target_type = 'step' AND step_id IS NOT NULL)
+				OR
+				(target_type = 'supervisor' AND step_id IS NULL)
+			)
+		);
+
+		CREATE INDEX IF NOT EXISTS workflow_payout_admin_actions_workflow_idx
+			ON workflow_payout_admin_actions(workflow_id, created_at DESC);
+		CREATE INDEX IF NOT EXISTS workflow_payout_admin_actions_performed_by_idx
+			ON workflow_payout_admin_actions(performed_by_user_id, created_at DESC);
+	`)
+	if err != nil {
+		return fmt.Errorf("error creating workflow_payout_admin_actions table: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
+		CREATE TABLE IF NOT EXISTS workflow_votes(
+			workflow_id TEXT NOT NULL REFERENCES workflows(id) ON DELETE CASCADE,
 			voter_id TEXT NOT NULL REFERENCES users(id),
 			decision TEXT NOT NULL,
 			comment TEXT,
@@ -1170,17 +1242,18 @@ func (s *AppDB) CreateTables() error {
 	}
 
 	_, err = s.db.Exec(context.Background(), `
-			CREATE TABLE IF NOT EXISTS locations (
-				id SERIAL PRIMARY KEY,
-				google_id TEXT,
-				owner_id TEXT REFERENCES users(id),
-				name TEXT,
-				description TEXT,
-				type TEXT,
-				approval BOOLEAN,
-				street TEXT,
-				city TEXT,
-				state TEXT,
+				CREATE TABLE IF NOT EXISTS locations (
+					id SERIAL PRIMARY KEY,
+					google_id TEXT,
+					owner_id TEXT REFERENCES users(id),
+					name TEXT,
+					description TEXT,
+					type TEXT,
+					approval BOOLEAN,
+					approved_at TIMESTAMP,
+					street TEXT,
+					city TEXT,
+					state TEXT,
 				zip TEXT,
 				lat NUMERIC,
 				lng NUMERIC,
@@ -1209,6 +1282,19 @@ func (s *AppDB) CreateTables() error {
 	`)
 	if err != nil {
 		return fmt.Errorf("error creating locations table: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
+			ALTER TABLE locations
+			ADD COLUMN IF NOT EXISTS approved_at TIMESTAMP;
+
+			UPDATE locations
+			SET approved_at = NOW()
+			WHERE approval = TRUE
+			AND approved_at IS NULL;
+		`)
+	if err != nil {
+		return fmt.Errorf("error ensuring locations.approved_at column: %s", err)
 	}
 
 	_, err = s.db.Exec(context.Background(), `

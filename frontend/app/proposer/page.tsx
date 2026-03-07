@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useApp } from "@/context/AppProvider"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -12,6 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Checkbox } from "@/components/ui/checkbox"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { usePathname, useRouter, useSearchParams } from "next/navigation"
 import {
   Dialog,
   DialogContent,
@@ -35,6 +36,7 @@ import {
   WorkflowTemplate,
   WorkflowTemplateCreateRequest,
   WorkflowWorkItemCreateInput,
+  WorkflowSupervisorDataField,
 } from "@/types/workflow"
 import { Supervisor } from "@/types/supervisor"
 import { WorkflowDetailsModal } from "@/components/workflows/workflow-details-modal"
@@ -68,6 +70,10 @@ interface DraftWorkflowSupervisor {
   enabled: boolean
   user_id: string
   bounty: string
+}
+
+interface DraftSupervisorDataField extends WorkflowSupervisorDataField {
+  id: string
 }
 
 interface WorkflowSeriesGroup {
@@ -113,6 +119,12 @@ const createDraftWorkflowSupervisor = (): DraftWorkflowSupervisor => ({
   bounty: "",
 })
 
+const createDraftSupervisorDataField = (): DraftSupervisorDataField => ({
+  id: crypto.randomUUID(),
+  key: "",
+  value: "",
+})
+
 const WORKFLOW_STATUS_FILTER_OPTIONS: Array<{
   value: "all" | Workflow["status"]
   label: string
@@ -126,7 +138,7 @@ const WORKFLOW_STATUS_FILTER_OPTIONS: Array<{
   { value: "in_progress", label: "In Progress" },
   { value: "completed", label: "Completed" },
   { value: "paid_out", label: "Finalized" },
-	{ value: "deleted", label: "Deleted" },
+	{ value: "deleted", label: "Archived" },
 ]
 
 const workflowNotificationEmailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
@@ -172,22 +184,35 @@ const toUTCISOStringFromDatetimeLocal = (value: string) => {
 export default function ProposerPage() {
   const { user, status, authFetch } = useApp()
   const { toast } = useToast()
+  const searchParams = useSearchParams()
+  const pathname = usePathname()
+  const router = useRouter()
+  const tabFromQuery = searchParams.get("tab")
+  const workflowStatusFromQuery = searchParams.get("workflow_status")
+  const templateSearchFromQuery = searchParams.get("template_search")
 
   const [workflows, setWorkflows] = useState<Workflow[]>([])
   const [templates, setTemplates] = useState<WorkflowTemplate[]>([])
   const [credentialTypes, setCredentialTypes] = useState<GlobalCredentialType[]>([])
   const [supervisors, setSupervisors] = useState<Supervisor[]>([])
-  const [loading, setLoading] = useState(true)
+  const [initialLoading, setInitialLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
   const [templateSaving, setTemplateSaving] = useState(false)
   const [deletionSubmitting, setDeletionSubmitting] = useState("")
-  const [activeTab, setActiveTab] = useState<"create-workflow" | "your-workflows">("create-workflow")
-  const [workflowStatusFilter, setWorkflowStatusFilter] = useState<"all" | Workflow["status"]>("all")
+  const [activeTab, setActiveTab] = useState<"create-workflow" | "your-workflows">(
+    tabFromQuery === "your-workflows" ? "your-workflows" : "create-workflow"
+  )
+  const [workflowStatusFilter, setWorkflowStatusFilter] = useState<"all" | Workflow["status"]>(
+    workflowStatusFromQuery &&
+    WORKFLOW_STATUS_FILTER_OPTIONS.some((option) => option.value === workflowStatusFromQuery)
+      ? (workflowStatusFromQuery as "all" | Workflow["status"])
+      : "all"
+  )
   const [error, setError] = useState("")
   const [successMessage, setSuccessMessage] = useState("")
   const [selectedTemplateId, setSelectedTemplateId] = useState("")
   const [templateComboOpen, setTemplateComboOpen] = useState(false)
-  const [templateSearch, setTemplateSearch] = useState("")
+  const [templateSearch, setTemplateSearch] = useState(templateSearchFromQuery || "")
   const [deleteTemplateId, setDeleteTemplateId] = useState("")
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
   const [deleteTemplateLoading, setDeleteTemplateLoading] = useState(false)
@@ -209,9 +234,11 @@ export default function ProposerPage() {
   const [startAt, setStartAt] = useState(nowForDatetimeLocal())
   const [roles, setRoles] = useState<DraftRole[]>([createDraftRole()])
   const [workflowSupervisor, setWorkflowSupervisor] = useState<DraftWorkflowSupervisor>(createDraftWorkflowSupervisor())
+  const [workflowSupervisorDataFields, setWorkflowSupervisorDataFields] = useState<DraftSupervisorDataField[]>([])
   const [steps, setSteps] = useState<DraftStep[]>([createDraftStep()])
 
   const isApproved = Boolean(user?.isProposer || user?.isAdmin)
+  const hasLoadedDataRef = useRef(false)
   const canProposeDeletion = Boolean(user?.isProposer)
 
   const totalDraftBounty = useMemo(() => {
@@ -273,54 +300,112 @@ export default function ProposerPage() {
     [templates, selectedTemplateId]
   )
 
-  const loadData = async () => {
-    if (!isApproved) {
-      setLoading(false)
-      return
-    }
+  const loadData = useCallback(
+    async (mode: "initial" | "tab" | "background" = "background") => {
+      const isInitialFetch = !hasLoadedDataRef.current
 
-    setLoading(true)
-    try {
-      const [workflowsRes, templatesRes, credentialTypesRes, supervisorsRes] = await Promise.all([
-        authFetch("/proposers/workflows"),
-        authFetch("/proposers/workflow-templates"),
-        authFetch("/credentials/types"),
-        authFetch("/supervisors/approved"),
-      ])
-
-      if (workflowsRes.ok) {
-        const workflowsJson = await workflowsRes.json()
-        setWorkflows(workflowsJson || [])
+      if (!isApproved) {
+        if (isInitialFetch || mode === "initial") {
+          hasLoadedDataRef.current = true
+          setInitialLoading(false)
+        }
+        return
       }
 
-      if (templatesRes.ok) {
-        const templatesJson = await templatesRes.json()
-        setTemplates(templatesJson || [])
+      if (isInitialFetch || mode === "initial") {
+        setInitialLoading(true)
       }
 
-      if (credentialTypesRes.ok) {
-        const credentialTypesJson = await credentialTypesRes.json()
-        setCredentialTypes(credentialTypesJson || [])
-      }
+      try {
+        const [workflowsRes, templatesRes, credentialTypesRes, supervisorsRes] = await Promise.all([
+          authFetch("/proposers/workflows"),
+          authFetch("/proposers/workflow-templates"),
+          authFetch("/credentials/types"),
+          authFetch("/supervisors/approved"),
+        ])
 
-      if (supervisorsRes.ok) {
-        const supervisorsJson = await supervisorsRes.json()
-        setSupervisors(supervisorsJson || [])
-      } else {
-        setSupervisors([])
-      }
+        if (workflowsRes.ok) {
+          const workflowsJson = await workflowsRes.json()
+          setWorkflows(workflowsJson || [])
+        }
 
-      setError("")
-    } catch {
-      setError("Unable to load proposer data right now.")
-    } finally {
-      setLoading(false)
-    }
-  }
+        if (templatesRes.ok) {
+          const templatesJson = await templatesRes.json()
+          setTemplates(templatesJson || [])
+        }
+
+        if (credentialTypesRes.ok) {
+          const credentialTypesJson = await credentialTypesRes.json()
+          setCredentialTypes(credentialTypesJson || [])
+        }
+
+        if (supervisorsRes.ok) {
+          const supervisorsJson = await supervisorsRes.json()
+          setSupervisors(supervisorsJson || [])
+        } else {
+          setSupervisors([])
+        }
+
+        setError("")
+      } catch {
+        setError("Unable to load proposer data right now.")
+      } finally {
+        if (isInitialFetch || mode === "initial") {
+          hasLoadedDataRef.current = true
+          setInitialLoading(false)
+        }
+      }
+    },
+    [authFetch, isApproved],
+  )
 
   useEffect(() => {
-    loadData()
-  }, [isApproved])
+    const nextTab = searchParams.get("tab")
+    if (nextTab !== "create-workflow" && nextTab !== "your-workflows") return
+    setActiveTab((prev) => (nextTab === prev ? prev : nextTab))
+  }, [searchParams])
+
+  useEffect(() => {
+    const nextFilter = searchParams.get("workflow_status")
+    if (!nextFilter) return
+    if (!WORKFLOW_STATUS_FILTER_OPTIONS.some((option) => option.value === nextFilter)) return
+    setWorkflowStatusFilter((prev) => (nextFilter === prev ? prev : (nextFilter as "all" | Workflow["status"])))
+  }, [searchParams])
+
+  useEffect(() => {
+    const nextTemplateSearch = searchParams.get("template_search") || ""
+    setTemplateSearch((prev) => (nextTemplateSearch === prev ? prev : nextTemplateSearch))
+  }, [searchParams])
+
+  useEffect(() => {
+    const params = new URLSearchParams(searchParams.toString())
+    params.set("tab", activeTab)
+    if (workflowStatusFilter === "all") {
+      params.delete("workflow_status")
+    } else {
+      params.set("workflow_status", workflowStatusFilter)
+    }
+    if (templateSearch) {
+      params.set("template_search", templateSearch)
+    } else {
+      params.delete("template_search")
+    }
+    const nextQuery = params.toString()
+    if (nextQuery !== searchParams.toString()) {
+      router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname, { scroll: false })
+    }
+  }, [activeTab, templateSearch, workflowStatusFilter, pathname, router, searchParams])
+
+  useEffect(() => {
+    if (status === "loading") return
+    void loadData("initial")
+  }, [isApproved, loadData, status])
+
+  useEffect(() => {
+    if (status !== "authenticated" || !isApproved) return
+    if (!hasLoadedDataRef.current) return
+    void loadData("tab")
+  }, [activeTab, isApproved, loadData, status])
 
   useEffect(() => {
     setError("")
@@ -532,6 +617,23 @@ export default function ProposerPage() {
     return Array.from(normalized)
   }
 
+  const addWorkflowSupervisorDataField = () => {
+    setWorkflowSupervisorDataFields((prev) => [...prev, createDraftSupervisorDataField()])
+  }
+
+  const updateWorkflowSupervisorDataField = (
+    fieldId: string,
+    patch: Partial<Pick<DraftSupervisorDataField, "key" | "value">>,
+  ) => {
+    setWorkflowSupervisorDataFields((prev) =>
+      prev.map((field) => (field.id === fieldId ? { ...field, ...patch } : field)),
+    )
+  }
+
+  const removeWorkflowSupervisorDataField = (fieldId: string) => {
+    setWorkflowSupervisorDataFields((prev) => prev.filter((field) => field.id !== fieldId))
+  }
+
   const resetForm = () => {
     setTitle("")
     setDescription("")
@@ -539,6 +641,7 @@ export default function ProposerPage() {
     setStartAt(nowForDatetimeLocal())
     setRoles([createDraftRole()])
     setWorkflowSupervisor(createDraftWorkflowSupervisor())
+    setWorkflowSupervisorDataFields([])
     setSteps([createDraftStep()])
   }
 
@@ -614,6 +717,7 @@ export default function ProposerPage() {
     }
 
     let normalizedSupervisor: WorkflowCreateRequest["supervisor"] | undefined
+    let normalizedSupervisorDataFields: WorkflowSupervisorDataField[] = []
     if (workflowSupervisor.enabled) {
       const supervisorUserID = workflowSupervisor.user_id.trim()
       if (!supervisorUserID) {
@@ -627,17 +731,37 @@ export default function ProposerPage() {
         user_id: supervisorUserID,
         bounty: supervisorBounty,
       }
+
+      const seenSupervisorFieldKeys = new Set<string>()
+      normalizedSupervisorDataFields = workflowSupervisorDataFields
+        .map((field) => ({
+          key: field.key.trim(),
+          value: field.value.trim(),
+        }))
+        .filter((field) => field.key !== "" || field.value !== "")
+
+      for (const field of normalizedSupervisorDataFields) {
+        if (!field.key || !field.value) {
+          throw new Error("Supervisor data fields require both key and value.")
+        }
+        const keyLookup = field.key.toLowerCase()
+        if (seenSupervisorFieldKeys.has(keyLookup)) {
+          throw new Error(`Duplicate supervisor data field key: ${field.key}`)
+        }
+        seenSupervisorFieldKeys.add(keyLookup)
+      }
     }
 
     return {
       normalizedRoles,
       normalizedSteps,
       normalizedSupervisor,
+      normalizedSupervisorDataFields,
     }
   }
 
   const buildTemplatePayload = (): WorkflowTemplateCreateRequest => {
-    const { normalizedRoles, normalizedSteps, normalizedSupervisor } = normalizeDraftWorkflowFields()
+    const { normalizedRoles, normalizedSteps, normalizedSupervisor, normalizedSupervisorDataFields } = normalizeDraftWorkflowFields()
     const startAtISO = toUTCISOStringFromDatetimeLocal(startAt)
     const payload: WorkflowTemplateCreateRequest = {
       template_title: templateTitle.trim(),
@@ -650,6 +774,9 @@ export default function ProposerPage() {
     if (normalizedSupervisor) {
       payload.supervisor_user_id = normalizedSupervisor.user_id
       payload.supervisor_bounty = normalizedSupervisor.bounty
+      if (normalizedSupervisorDataFields.length > 0) {
+        payload.supervisor_data_fields = normalizedSupervisorDataFields
+      }
     }
 
     return payload
@@ -752,9 +879,17 @@ export default function ProposerPage() {
     }))
 
     const templateSupervisorUserId = (template.supervisor_user_id || "").trim()
+    const templateSupervisorDataFields = (template.supervisor_data_fields || [])
+      .map((field) => ({
+        id: crypto.randomUUID(),
+        key: (field.key || "").trim(),
+        value: (field.value || "").trim(),
+      }))
+      .filter((field) => field.key || field.value)
     const templateHasSupervisor =
       templateSupervisorUserId.length > 0 ||
-      (template.supervisor_bounty !== undefined && template.supervisor_bounty !== null)
+      (template.supervisor_bounty !== undefined && template.supervisor_bounty !== null) ||
+      templateSupervisorDataFields.length > 0
     setWorkflowSupervisor({
       enabled: templateHasSupervisor,
       user_id: templateSupervisorUserId,
@@ -763,6 +898,7 @@ export default function ProposerPage() {
           ? String(template.supervisor_bounty)
           : "",
     })
+    setWorkflowSupervisorDataFields(templateSupervisorDataFields)
     setRecurrence(template.recurrence)
     setStartAt(toDatetimeLocalValue(template.start_at))
     setRoles(mappedRoles.length ? mappedRoles : [createDraftRole()])
@@ -783,11 +919,13 @@ export default function ProposerPage() {
     let normalizedRoles: WorkflowCreateRequest["roles"] = []
     let normalizedSteps: WorkflowCreateRequest["steps"] = []
     let normalizedSupervisor: WorkflowCreateRequest["supervisor"] | undefined
+    let normalizedSupervisorDataFields: WorkflowSupervisorDataField[] = []
     try {
       const normalized = normalizeDraftWorkflowFields()
       normalizedRoles = normalized.normalizedRoles
       normalizedSteps = normalized.normalizedSteps
       normalizedSupervisor = normalized.normalizedSupervisor
+      normalizedSupervisorDataFields = normalized.normalizedSupervisorDataFields
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to validate workflow.")
       return
@@ -803,6 +941,9 @@ export default function ProposerPage() {
     }
     if (normalizedSupervisor) {
       payload.supervisor = normalizedSupervisor
+      if (normalizedSupervisorDataFields.length > 0) {
+        payload.supervisor_data_fields = normalizedSupervisorDataFields
+      }
     }
 
     setSubmitting(true)
@@ -841,12 +982,12 @@ export default function ProposerPage() {
       })
       if (!res.ok) {
         const text = await res.text()
-        throw new Error(text || "Unable to delete workflow.")
+        throw new Error(text || "Unable to archive workflow.")
       }
       setWorkflows((prev) => prev.filter((workflow) => workflow.id !== workflowId))
       await loadData()
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to delete workflow.")
+      setError(err instanceof Error ? err.message : "Unable to archive workflow.")
     }
   }
 
@@ -1018,6 +1159,12 @@ export default function ProposerPage() {
       payload.supervisor_user_id = workflow.supervisor_user_id
       payload.supervisor_bounty = workflow.supervisor_bounty
     }
+    if ((workflow.supervisor_data_fields || []).length > 0) {
+      payload.supervisor_data_fields = (workflow.supervisor_data_fields || []).map((field) => ({
+        key: (field.key || "").trim(),
+        value: (field.value || "").trim(),
+      }))
+    }
 
     return payload
   }
@@ -1077,7 +1224,7 @@ export default function ProposerPage() {
     }
   }
 
-  if (status === "loading" || loading) {
+  if (status === "loading" || initialLoading) {
     return (
       <div className="flex items-center justify-center min-h-[70vh]">
         <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-[#eb6c6c]" />
@@ -1360,6 +1507,51 @@ export default function ProposerPage() {
                       placeholder="0"
                     />
                   </div>
+
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <div>
+                        <Label>Supervisor Data Fields (Optional)</Label>
+                        <p className="text-xs text-muted-foreground">
+                          Add key/value metadata tags for supervisor export records.
+                        </p>
+                      </div>
+                      <Button type="button" variant="outline" size="sm" onClick={addWorkflowSupervisorDataField}>
+                        <Plus className="mr-2 h-4 w-4" />
+                        Add Field
+                      </Button>
+                    </div>
+
+                    {workflowSupervisorDataFields.length === 0 ? (
+                      <p className="text-xs text-muted-foreground">No supervisor data fields added.</p>
+                    ) : (
+                      <div className="space-y-2">
+                        {workflowSupervisorDataFields.map((field) => (
+                          <div key={field.id} className="grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
+                            <Input
+                              value={field.key}
+                              onChange={(e) => updateWorkflowSupervisorDataField(field.id, { key: e.target.value })}
+                              placeholder="Key (e.g. internal_reference)"
+                            />
+                            <Input
+                              value={field.value}
+                              onChange={(e) => updateWorkflowSupervisorDataField(field.id, { value: e.target.value })}
+                              placeholder="Value"
+                            />
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => removeWorkflowSupervisorDataField(field.id)}
+                              aria-label="Remove supervisor data field"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
             </CardContent>
@@ -1370,7 +1562,7 @@ export default function ProposerPage() {
 
             {roles.map((role, roleIndex) => (
               <Card key={role.client_id}>
-                <CardContent className="pt-4 space-y-4">
+                <CardContent className="pt-5 sm:pt-6 space-y-4">
                   <div className="flex items-center justify-between">
                     <Label className="text-sm text-muted-foreground">Role {roleIndex + 1}</Label>
                     {roles.length > 1 && (
@@ -1881,7 +2073,7 @@ export default function ProposerPage() {
                               }}
                             >
                               <Trash2 className="h-4 w-4 mr-2" />
-                              Delete
+                              Archive
                             </Button>
                           )}
 

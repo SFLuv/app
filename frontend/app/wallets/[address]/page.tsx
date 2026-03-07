@@ -1,21 +1,18 @@
 "use client"
 
-import { useState, useEffect, useMemo, useRef } from "react"
+import { useState, useEffect, useMemo, useRef, useCallback } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { Badge } from "@/components/ui/badge"
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
-import { Send, QrCode, Eye, EyeOff, RefreshCw, Settings, ArrowLeft, Wallet, Pencil, Check, X, BellOff, Bell, Banknote } from "lucide-react"
+import { Send, QrCode, Eye, EyeOff, RefreshCw, ArrowLeft, ArrowDownLeft, Wallet, Pencil, Check, X, BellOff, Bell, Banknote, Copy } from "lucide-react"
 import { SendCryptoModal } from "@/components/wallets/send-crypto-modal"
 import { ReceiveCryptoModal } from "@/components/wallets/receive-crypto-modal"
 import { TransactionHistoryList } from "@/components/wallets/transaction-history-list"
 import { WalletBalanceCard } from "@/components/wallets/wallet-balance-card"
-import { mockTransactions, mockWalletBalance } from "@/data/mock-wallet-data"
+import { TransactionModal } from "@/components/transactions/transaction-modal"
 import { useToast } from "@/hooks/use-toast"
-import { useParams, useRouter } from "next/navigation"
-import { useWallets } from "@privy-io/react-auth"
+import { useParams, useRouter, useSearchParams } from "next/navigation"
 import { useApp } from "@/context/AppProvider"
-import { CHAIN, HONEY_TOKEN, SFLUV_DECIMALS, SYMBOL } from "@/lib/constants"
+import { HONEY_TOKEN } from "@/lib/constants"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
@@ -23,6 +20,10 @@ import { CashOutCryptoModal } from "@/components/wallets/cashOut_crypto_modal"
 import { NotificationModal } from "@/components/notifications/notification-modal"
 import { useTransactions } from "@/context/TransactionProvider"
 import { WalletTransaction } from "@/types/privy-wallet"
+import type { Transaction } from "@/types/transaction"
+import { useIsMobile } from "@/hooks/use-mobile"
+
+type BalanceUpdateResult = "changed" | "unchanged" | "unknown"
 
 export default function WalletDetailsPage() {
   const [showSendModal, setShowSendModal] = useState(false)
@@ -37,13 +38,9 @@ export default function WalletDetailsPage() {
   const [isSavingName, setIsSavingName] = useState(false)
   const [notificationModalOpen, setNotificationModalOpen] = useState<boolean>(false)
   const [walletTransactions, setWalletTransactions] = useState<WalletTransaction[]>([])
-  const [historicalModalOpen, setHistoricalModalOpen] = useState<boolean>(false)
-  const [balanceAtDate, setBalanceAtDate] = useState<string>("")
-  const [balanceAtTime, setBalanceAtTime] = useState<string>("23:59")
-  const [historicalBalanceWei, setHistoricalBalanceWei] = useState<string | null>(null)
-  const [historicalBalanceTimestamp, setHistoricalBalanceTimestamp] = useState<number | null>(null)
-  const [historicalBalanceLoading, setHistoricalBalanceLoading] = useState<boolean>(false)
-  const [historicalBalanceError, setHistoricalBalanceError] = useState<string | null>(null)
+  const [walletTransactionDetails, setWalletTransactionDetails] = useState<Transaction[]>([])
+  const [selectedTransaction, setSelectedTransaction] = useState<Transaction | null>(null)
+  const [transactionModalOpen, setTransactionModalOpen] = useState(false)
   const [walletCanUnwrap, setWalletCanUnwrap] = useState<boolean>(false)
   const [walletCanMint, setWalletCanMint] = useState<boolean>(false)
   const [backingBalancesLoading, setBackingBalancesLoading] = useState<boolean>(false)
@@ -55,27 +52,37 @@ export default function WalletDetailsPage() {
   const [isMinting, setIsMinting] = useState<boolean>(false)
   const [mintError, setMintError] = useState<string | null>(null)
   const nameInputRef = useRef<HTMLInputElement>(null)
+  const latestTxMarkerRef = useRef<string | null>(null)
+  const txPollingInFlightRef = useRef(false)
+  const txLastPollAtRef = useRef(0)
+  const balanceSnapshotRef = useRef<number | null>(null)
+  const balanceRetryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const { toast } = useToast()
   const params = useParams()
   const router = useRouter()
+  const searchParams = useSearchParams()
   const walletAddress = params.address as string
+  const isMobile = useIsMobile()
   const {
     user,
     wallets,
     status,
     walletsStatus,
     updateWallet,
-    authFetch,
     ponderSubscriptions,
-    addPonderSubscription,
-    deletePonderSubscription
   } = useApp()
   const {
-    transactionsStatus,
     getTransactionsPage,
     refreshTransactions,
     toWalletTransaction
   } = useTransactions()
+  const getTransactionsPageRef = useRef(getTransactionsPage)
+  const refreshTransactionsRef = useRef(refreshTransactions)
+  const toWalletTransactionRef = useRef(toWalletTransaction)
+  const isAdminOrMerchant = user?.isAdmin === true || user?.isMerchant === true
+  const sendFlowDefault = !isAdminOrMerchant && isMobile ? "scan" : "manual"
+  const showScanSendButton = !isAdminOrMerchant
+  const fromWalletMenu = searchParams.get("fromWalletMenu") === "1"
 
   // Get the specific wallet by index
   const wallet = useMemo(() => {
@@ -88,7 +95,12 @@ export default function WalletDetailsPage() {
       return undefined
     }
     return w
-  }, [wallets])
+  }, [walletAddress, wallets, walletsStatus, router])
+  const displayWalletAddress = useMemo(() => {
+    if (!wallet?.address) return ""
+    if (wallet.address.length <= 12) return wallet.address
+    return `${wallet.address.slice(0, 6)}...${wallet.address.slice(-4)}`
+  }, [wallet?.address])
 
   const ponder = useMemo(() => {
     if(ponderSubscriptions?.length === 0) return undefined
@@ -96,10 +108,6 @@ export default function WalletDetailsPage() {
     let p = ponderSubscriptions?.find((s) => s.address?.toLowerCase() === walletAddress.toLowerCase())
     return p
   }, [ponderSubscriptions])
-
-  useEffect(() => {
-    txPageHandler()
-  }, [status])
 
   useEffect(() => {
     let cancelled = false
@@ -132,35 +140,147 @@ export default function WalletDetailsPage() {
     setWalletCanMint(wallet.isMinter === true)
   }, [wallet])
 
-  const txPageHandler = async () => {
-    const walletTxs = (await getTransactionsPage(walletAddress, 0, {
+  useEffect(() => {
+    getTransactionsPageRef.current = getTransactionsPage
+  }, [getTransactionsPage])
+
+  useEffect(() => {
+    refreshTransactionsRef.current = refreshTransactions
+  }, [refreshTransactions])
+
+  useEffect(() => {
+    toWalletTransactionRef.current = toWalletTransaction
+  }, [toWalletTransaction])
+
+  const getLatestTxMarker = useCallback((transactions: WalletTransaction[]) => {
+    if (transactions.length === 0) return null
+    const latest = transactions[0]
+    return `${latest.id}:${latest.hash || ""}`
+  }, [])
+
+  const txPageHandler = useCallback(async () => {
+    const walletTxs = (await getTransactionsPageRef.current(walletAddress, 0, {
       paginationDetails: {
         count: 5,
         desc: true
       }
     }))
 
-    setWalletTransactions(walletTxs.txs.map((w) => toWalletTransaction(walletAddress, w)))
-  }
+    setWalletTransactionDetails(walletTxs.txs)
+    const mapped = walletTxs.txs.map((w) => toWalletTransactionRef.current(walletAddress, w))
+    setWalletTransactions(mapped)
+    latestTxMarkerRef.current = getLatestTxMarker(mapped)
+  }, [getLatestTxMarker, walletAddress])
 
-    const txPageRefresher = async () => {
-    const walletTxs = (await refreshTransactions(walletAddress, 0, {
+  const txPageRefresher = useCallback(async () => {
+    const walletTxs = (await refreshTransactionsRef.current(walletAddress, 0, {
       paginationDetails: {
         count: 5,
         desc: true
       }
     }))
 
-    setWalletTransactions(walletTxs.txs.map((w) => toWalletTransaction(walletAddress, w)))
-  }
+    setWalletTransactionDetails(walletTxs.txs)
+    const mapped = walletTxs.txs.map((w) => toWalletTransactionRef.current(walletAddress, w))
+    setWalletTransactions(mapped)
+    latestTxMarkerRef.current = getLatestTxMarker(mapped)
+  }, [getLatestTxMarker, walletAddress])
 
+  useEffect(() => {
+    if (status !== "authenticated") return
+    void txPageHandler()
+  }, [status, txPageHandler])
+
+
+  const updateBalance = useCallback(async (): Promise<BalanceUpdateResult> => {
+    if(!wallet) return "unknown"
+    try {
+      const b = await wallet.getSFLUVBalanceFormatted()
+      if(b === null) {
+        setError("Wallet not initialized.")
+        return "unknown"
+      }
+      const previous = balanceSnapshotRef.current
+      balanceSnapshotRef.current = b
+      setBalance(b)
+      if (previous === null) return "changed"
+      return b !== previous ? "changed" : "unchanged"
+    }
+    catch(error) {
+      console.error(error)
+      return "unknown"
+    }
+  }, [wallet])
+
+  useEffect(() => {
+    balanceSnapshotRef.current = balance
+  }, [balance])
+
+  useEffect(() => {
+    return () => {
+      if (balanceRetryTimeoutRef.current) {
+        clearTimeout(balanceRetryTimeoutRef.current)
+      }
+    }
+  }, [])
+
+  const updateBalanceWithRetry = useCallback(async () => {
+    const balanceUpdate = await updateBalance()
+    if (balanceUpdate !== "unchanged") {
+      return
+    }
+    if (balanceRetryTimeoutRef.current) {
+      clearTimeout(balanceRetryTimeoutRef.current)
+    }
+    balanceRetryTimeoutRef.current = setTimeout(() => {
+      void updateBalance()
+      balanceRetryTimeoutRef.current = null
+    }, 2000)
+  }, [updateBalance])
+
+  const updateBackingBalances = useCallback(async () => {
+    if (!wallet || !walletCanMint) {
+      setByusdBalance(null)
+      setHoneyBalance(null)
+      setBackingBalancesLoading(false)
+      return
+    }
+
+    setBackingBalancesLoading(true)
+    try {
+      const [byusd, honey] = await Promise.all([
+        wallet.getBYUSDBalanceFormatted(),
+        wallet.getHoneyBalanceFormatted()
+      ])
+      setByusdBalance(byusd)
+      setHoneyBalance(honey)
+    }
+    catch (error) {
+      console.error(error)
+      setByusdBalance(null)
+      setHoneyBalance(null)
+    } finally {
+      setBackingBalancesLoading(false)
+    }
+  }, [wallet, walletCanMint])
+
+  const updateBalanceWithRetryRef = useRef(updateBalanceWithRetry)
+  const updateBackingBalancesRef = useRef(updateBackingBalances)
+
+  useEffect(() => {
+    updateBalanceWithRetryRef.current = updateBalanceWithRetry
+  }, [updateBalanceWithRetry])
+
+  useEffect(() => {
+    updateBackingBalancesRef.current = updateBackingBalances
+  }, [updateBackingBalances])
 
   useEffect(() => {
     if(!showReceiveModal && !showSendModal) {
-      updateBalance()
-      updateBackingBalances()
+      void updateBalance()
+      void updateBackingBalances()
     }
-  }, [showReceiveModal, showSendModal, walletCanMint])
+  }, [showReceiveModal, showSendModal, updateBalance, updateBackingBalances])
 
   const toggleNotificationModal = () => {
     setNotificationModalOpen(!notificationModalOpen)
@@ -212,44 +332,20 @@ export default function WalletDetailsPage() {
     }
   }
 
-  const updateBalance = async () => {
-    if(!wallet) return
+  const handleCopyWalletAddress = async () => {
+    if (!wallet?.address) return
     try {
-      const b = await wallet.getSFLUVBalanceFormatted()
-      if(b === null) {
-        setError("Wallet not initialized.")
-        return
-      }
-      setBalance(b)
-    }
-    catch(error) {
-      console.error(error)
-    }
-  }
-
-  const updateBackingBalances = async () => {
-    if (!wallet || !walletCanMint) {
-      setByusdBalance(null)
-      setHoneyBalance(null)
-      setBackingBalancesLoading(false)
-      return
-    }
-
-    setBackingBalancesLoading(true)
-    try {
-      const [byusd, honey] = await Promise.all([
-        wallet.getBYUSDBalanceFormatted(),
-        wallet.getHoneyBalanceFormatted()
-      ])
-      setByusdBalance(byusd)
-      setHoneyBalance(honey)
-    }
-    catch (error) {
-      console.error(error)
-      setByusdBalance(null)
-      setHoneyBalance(null)
-    } finally {
-      setBackingBalancesLoading(false)
+      await navigator.clipboard.writeText(wallet.address)
+      toast({
+        title: "Address Copied",
+        description: "Wallet address copied to clipboard.",
+      })
+    } catch {
+      toast({
+        title: "Copy Failed",
+        description: "Unable to copy wallet address.",
+        variant: "destructive",
+      })
     }
   }
 
@@ -316,83 +412,56 @@ export default function WalletDetailsPage() {
     }
   }
 
-  const formatWeiToTwoDecimals = (wei: string) => {
-    try {
-      const value = BigInt(wei)
-      const negative = value < 0n
-      const abs = negative ? -value : value
-      const scale = BigInt(10) ** BigInt(SFLUV_DECIMALS)
-      const cents = (abs * 100n) / scale
-      const whole = cents / 100n
-      const fraction = cents % 100n
-      const formatted = `${whole.toString()}.${fraction.toString().padStart(2, "0")}`
-      return negative ? `-${formatted}` : formatted
-    } catch {
-      return "0.00"
-    }
-  }
-
-  const formatTimestamp = (timestamp?: number | null) => {
-    if(!timestamp) return ""
-    const date = new Date(timestamp * 1000)
-    return date.toLocaleString("en-US", {
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit"
-    })
-  }
-
   useEffect(() => {
-    if(!historicalModalOpen) return
-    if(!balanceAtDate) {
-      const today = new Date()
-      const isoDate = new Date(today.getTime() - today.getTimezoneOffset() * 60000).toISOString().slice(0, 10)
-      setBalanceAtDate(isoDate)
-    }
-    setBalanceAtTime("23:59")
-  }, [historicalModalOpen])
+    if (status !== "authenticated" || !wallet?.address) return
 
-  useEffect(() => {
-    if(balanceAtDate) {
-      setBalanceAtTime("23:59")
-    }
-  }, [balanceAtDate])
+    let active = true
+    txLastPollAtRef.current = 0
 
-  const handleBalanceAtTime = async () => {
-    if(!wallet?.address) return
-    if(!balanceAtDate) {
-      setHistoricalBalanceError("Please select a date.")
-      return
-    }
-    const timeValue = balanceAtTime || "23:59"
-    const timeWithSeconds = timeValue.length === 5 ? `${timeValue}:00` : timeValue
-    const parsed = new Date(`${balanceAtDate}T${timeWithSeconds}`).getTime()
-    if(Number.isNaN(parsed)) {
-      setHistoricalBalanceError("Invalid date/time.")
-      return
-    }
-    const timestamp = Math.floor(parsed / 1000)
-    setHistoricalBalanceLoading(true)
-    setHistoricalBalanceError(null)
-    try {
-      const res = await authFetch(`/transactions/balance?address=${encodeURIComponent(wallet.address)}&timestamp=${timestamp}`)
-      if(!res.ok) {
-        throw new Error("Failed to fetch balance at time.")
+    const pollTransactions = async () => {
+      if (!active || txPollingInFlightRef.current) return
+      const now = Date.now()
+      if (now - txLastPollAtRef.current < 2000) return
+      txPollingInFlightRef.current = true
+      txLastPollAtRef.current = now
+
+      try {
+        const walletTxs = await refreshTransactionsRef.current(walletAddress, 0, {
+          paginationDetails: {
+            count: 5,
+            desc: true
+          }
+        })
+
+        const mapped = walletTxs.txs.map((w) => toWalletTransactionRef.current(walletAddress, w))
+        setWalletTransactionDetails(walletTxs.txs)
+        const nextMarker = getLatestTxMarker(mapped)
+        const previousMarker = latestTxMarkerRef.current
+
+        setWalletTransactions(mapped)
+        latestTxMarkerRef.current = nextMarker
+
+        if (nextMarker && nextMarker !== previousMarker) {
+          await updateBalanceWithRetryRef.current()
+          await updateBackingBalancesRef.current()
+        }
+      } catch (pollError) {
+        console.error(pollError)
+      } finally {
+        txPollingInFlightRef.current = false
       }
-      const data = await res.json()
-      setHistoricalBalanceWei(data?.balance ?? "0")
-      setHistoricalBalanceTimestamp(data?.timestamp ?? timestamp)
-    } catch (error) {
-      console.error(error)
-      setHistoricalBalanceError("Unable to load balance at that time.")
-      setHistoricalBalanceWei(null)
-      setHistoricalBalanceTimestamp(null)
-    } finally {
-      setHistoricalBalanceLoading(false)
     }
-  }
+
+    const intervalId = setInterval(() => {
+      void pollTransactions()
+    }, 2000)
+
+    return () => {
+      active = false
+      clearInterval(intervalId)
+      txLastPollAtRef.current = 0
+    }
+  }, [getLatestTxMarker, status, wallet?.address, walletAddress])
 
 
   useEffect(() => {
@@ -418,6 +487,29 @@ export default function WalletDetailsPage() {
     })
   }
 
+  const handleBackNavigation = () => {
+    if (fromWalletMenu) {
+      router.push("/wallets")
+      return
+    }
+    router.back()
+  }
+
+  const handleSelectTransaction = useCallback((walletTx: WalletTransaction) => {
+    const match = walletTransactionDetails.find((tx) => tx.id === walletTx.id || tx.transactionId === walletTx.hash)
+    if (!match) {
+      return
+    }
+
+    setSelectedTransaction(match)
+    setTransactionModalOpen(true)
+  }, [walletTransactionDetails])
+
+  const handleCloseTransactionModal = () => {
+    setTransactionModalOpen(false)
+    setSelectedTransaction(null)
+  }
+
 
   if (status === "loading" || walletsStatus === "loading") {
     return (
@@ -441,12 +533,12 @@ export default function WalletDetailsPage() {
   }
 
   return (
-    <div className="min-h-screen bg-background mt--6">
+    <div className="min-h-screen bg-background">
       {/* Fixed Mobile Header with proper z-index */}
       <div className="relative top-0 z-50 bg-background/95 backdrop-blur-md supports-[backdrop-filter]:bg-background/80 border-b shadow-sm">
         <div className="flex items-center justify-between p-3 sm:p-4">
           <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
-            <Button variant="ghost" size="sm" onClick={() => router.back()} className="flex-shrink-0">
+            <Button variant="ghost" size="sm" onClick={handleBackNavigation} className="flex-shrink-0">
               <ArrowLeft className="h-4 w-4" />
             </Button>
             <div className="flex items-center gap-2 min-w-0 flex-1">
@@ -506,9 +598,18 @@ export default function WalletDetailsPage() {
                     </Button>
                   </div>
                 )}
-                <Badge variant="secondary" className="text-xs mt-0.5">
-                  {CHAIN.name}
-                </Badge>
+                <div className="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground">
+                  <span className="truncate font-mono">{displayWalletAddress}</span>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={handleCopyWalletAddress}
+                    className="h-5 w-5 p-0 text-muted-foreground hover:text-foreground"
+                    aria-label="Copy wallet address"
+                  >
+                    <Copy className="h-3 w-3" />
+                  </Button>
+                </div>
               </div>
             </div>
           </div>
@@ -533,10 +634,8 @@ export default function WalletDetailsPage() {
         <div className="container mx-auto px-3 sm:px-4 pt-4 sm:pt-6 space-y-4 sm:space-y-6 max-w-2xl">
           {/* Balance Card */}
           <WalletBalanceCard
-            wallet={wallet}
             balance={balance || 0}
             showBalance={showBalance}
-            onShowHistoricalBalance={() => setHistoricalModalOpen(true)}
           />
 
           {/* Quick Actions */}
@@ -551,8 +650,12 @@ export default function WalletDetailsPage() {
                   onClick={() => setShowSendModal(true)}
                   className="h-14 sm:h-16 flex-col gap-1.5 sm:gap-2 text-sm"
                 >
-                  <Send className="h-4 w-4 sm:h-5 sm:w-5" />
-                  <span>Send</span>
+                  {showScanSendButton ? (
+                    <QrCode className="h-4 w-4 sm:h-5 sm:w-5" />
+                  ) : (
+                    <Send className="h-4 w-4 sm:h-5 sm:w-5" />
+                  )}
+                  <span>{showScanSendButton ? "Scan/Send" : "Send"}</span>
                 </Button>
 
                 <Button
@@ -560,7 +663,7 @@ export default function WalletDetailsPage() {
                   onClick={() => setShowReceiveModal(true)}
                   className="h-14 sm:h-16 flex-col gap-1.5 sm:gap-2 text-sm hover:bg-primary/65"
                 >
-                  <QrCode className="h-4 w-4 sm:h-5 sm:w-5" />
+                  <ArrowDownLeft className="h-4 w-4 sm:h-5 sm:w-5" />
                   <span>Receive</span>
                 </Button>
 
@@ -682,36 +785,25 @@ export default function WalletDetailsPage() {
               </div>
             </CardHeader>
             <CardContent className="px-3 sm:px-4 pb-3 sm:pb-4">
-              {
-                transactionsStatus === "loading" ?
-                <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-[#eb6c6c]"></div>
-                :
-                <TransactionHistoryList transactions={walletTransactions.slice(0, 10)} walletAddress={wallet.address || "0x"} />
-              }
+              <TransactionHistoryList
+                transactions={walletTransactions.slice(0, 10)}
+                walletAddress={wallet.address || "0x"}
+                onSelectTransaction={handleSelectTransaction}
+              />
             </CardContent>
           </Card>
 
-          {/* Security Notice */}
-          <Card className="border-amber-200 dark:border-amber-800 bg-amber-50/50 dark:bg-amber-900/10">
-            <CardContent className="p-3 sm:p-4">
-              <div className="flex items-start gap-2 sm:gap-3">
-                <div className="h-7 w-7 sm:h-8 sm:w-8 rounded-full bg-amber-100 dark:bg-amber-900/20 flex items-center justify-center flex-shrink-0 mt-0.5">
-                  <Wallet className="h-3.5 w-3.5 sm:h-4 sm:w-4 text-amber-600 dark:text-amber-400" />
-                </div>
-                <div className="space-y-1 min-w-0">
-                  <p className="font-medium text-xs sm:text-sm">Keep Your Wallet Secure</p>
-                  <p className="text-xs text-muted-foreground leading-relaxed">
-                    Never share your private keys or seed phrase. Always verify recipient addresses before sending.
-                  </p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
         </div>
       </div>
 
       {/* Modals */}
-      <SendCryptoModal open={showSendModal} onOpenChange={setShowSendModal} wallet={wallet} balance={balance || 0} />
+      <SendCryptoModal
+        open={showSendModal}
+        onOpenChange={setShowSendModal}
+        wallet={wallet}
+        balance={balance || 0}
+        defaultFlow={sendFlowDefault}
+      />
       <ReceiveCryptoModal open={showReceiveModal} onOpenChange={setShowReceiveModal} wallet={wallet} />
       <CashOutCryptoModal open={showCashoutModal} onOpenChange={setShowCashoutModal} wallet={wallet} />
       <NotificationModal
@@ -721,71 +813,12 @@ export default function WalletDetailsPage() {
         emailAddress={ponder?.data}
         address={wallet?.address || ""}
       />
-
-      <Dialog open={historicalModalOpen} onOpenChange={setHistoricalModalOpen}>
-        <DialogContent className="sm:max-w-[520px]">
-          <DialogHeader>
-            <DialogTitle>Historical Balance</DialogTitle>
-            <DialogDescription>
-              Select a day to see the balance at the end of that day (23:59).
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div className="grid gap-2">
-              <Label htmlFor="balance-date" className="text-xs sm:text-sm">Date</Label>
-              <Input
-                id="balance-date"
-                type="date"
-                value={balanceAtDate}
-                onChange={(e) => setBalanceAtDate(e.target.value)}
-              />
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="balance-time" className="text-xs sm:text-sm">Time</Label>
-              <Input
-                id="balance-time"
-                type="time"
-                step="60"
-                value={balanceAtTime}
-                onChange={(e) => setBalanceAtTime(e.target.value)}
-              />
-              <p className="text-xs text-muted-foreground">
-                Time defaults to 23:59 whenever you change the date.
-              </p>
-            </div>
-            {historicalBalanceError && (
-              <p className="text-xs text-red-600">{historicalBalanceError}</p>
-            )}
-            {historicalBalanceWei !== null && historicalBalanceTimestamp && (
-              <div className="rounded-md bg-secondary/50 p-3 text-sm space-y-1">
-                <p className="text-xs text-muted-foreground">
-                  As of {formatTimestamp(historicalBalanceTimestamp)}
-                </p>
-                <p className="text-lg font-semibold">
-                  {formatWeiToTwoDecimals(historicalBalanceWei)} {SYMBOL}
-                </p>
-                {BigInt(historicalBalanceWei) < 0n && (
-                  <p className="text-xs text-amber-600">
-                    History may be incomplete before the indexer start block.
-                  </p>
-                )}
-              </div>
-            )}
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setHistoricalModalOpen(false)}>
-              Close
-            </Button>
-            <Button
-              onClick={handleBalanceAtTime}
-              disabled={historicalBalanceLoading}
-              className="bg-[#eb6c6c] hover:bg-[#d55c5c]"
-            >
-              {historicalBalanceLoading ? "Checking..." : "Get Balance"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <TransactionModal
+        transaction={selectedTransaction}
+        wallet={wallet?.address || walletAddress}
+        isOpen={transactionModalOpen}
+        onClose={handleCloseTransactionModal}
+      />
 
       <Dialog open={showMintModal} onOpenChange={setShowMintModal}>
         <DialogContent className="sm:max-w-[520px]">
