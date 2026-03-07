@@ -6,6 +6,7 @@ type Event struct {
 	Description string `json:"description"`
 	Codes       uint32 `json:"codes"`
 	Amount      uint64 `json:"amount"`
+	StartAt     uint64 `json:"start_at"`
 	Expiration  uint64 `json:"expiration"`
 	Owner       string `json:"owner"`
 }

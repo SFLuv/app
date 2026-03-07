@@ -515,6 +515,7 @@ func (s *AppDB) CreateTables() error {
 			title TEXT NOT NULL,
 			description TEXT NOT NULL DEFAULT '',
 			recurrence TEXT NOT NULL,
+			supervisor_data_json JSONB NOT NULL DEFAULT '[]'::jsonb,
 			created_at BIGINT NOT NULL DEFAULT unix_now(),
 			updated_at BIGINT NOT NULL DEFAULT unix_now(),
 			CHECK (recurrence IN ('one_time', 'daily', 'weekly', 'monthly'))
@@ -630,6 +631,7 @@ func (s *AppDB) CreateTables() error {
 					series_id TEXT,
 					supervisor_user_id TEXT REFERENCES users(id),
 					supervisor_bounty BIGINT,
+					supervisor_data_json JSONB NOT NULL DEFAULT '[]'::jsonb,
 					manager_json JSONB,
 					roles_json JSONB NOT NULL DEFAULT '[]'::jsonb,
 					steps_json JSONB NOT NULL DEFAULT '[]'::jsonb,
@@ -647,11 +649,17 @@ func (s *AppDB) CreateTables() error {
 	}
 
 	_, err = s.db.Exec(context.Background(), `
+				ALTER TABLE workflow_series
+				ADD COLUMN IF NOT EXISTS supervisor_data_json JSONB NOT NULL DEFAULT '[]'::jsonb;
+
 				ALTER TABLE workflow_templates
 				ADD COLUMN IF NOT EXISTS supervisor_user_id TEXT REFERENCES users(id);
 
 				ALTER TABLE workflow_templates
 				ADD COLUMN IF NOT EXISTS supervisor_bounty BIGINT;
+
+				ALTER TABLE workflow_templates
+				ADD COLUMN IF NOT EXISTS supervisor_data_json JSONB NOT NULL DEFAULT '[]'::jsonb;
 
 				ALTER TABLE workflow_templates
 				ADD COLUMN IF NOT EXISTS manager_json JSONB;

@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/SFLuv/app/backend/bot"
 	"github.com/SFLuv/app/backend/db"
@@ -97,6 +98,33 @@ func normalizeRedeemCode(raw string) string {
 	return strings.ToLower(code)
 }
 
+func validateEventTiming(event *structs.Event) error {
+	if event == nil {
+		return fmt.Errorf("invalid event payload")
+	}
+	if event.StartAt == 0 {
+		return fmt.Errorf("start_at_required")
+	}
+	if event.Expiration == 0 {
+		return fmt.Errorf("expiration_required")
+	}
+
+	now := time.Now().Unix()
+	const startAtGraceSeconds int64 = 5
+	// Allow small clock/network drift so "start now" submissions are not rejected as elapsed.
+	if int64(event.StartAt)+startAtGraceSeconds < now {
+		return fmt.Errorf("start_at_elapsed")
+	}
+	if int64(event.Expiration) < now {
+		return fmt.Errorf("expiration_elapsed")
+	}
+	if event.Expiration <= event.StartAt {
+		return fmt.Errorf("expiration_before_start_at")
+	}
+
+	return nil
+}
+
 // Create an event with x amount of available codes, y $SFLUV per code, and z expiration date. Responds with event id
 func (s *BotService) NewEvent(w http.ResponseWriter, r *http.Request) {
 	body := EnsureBody(w, r)
@@ -116,6 +144,24 @@ func (s *BotService) NewEvent(w http.ResponseWriter, r *http.Request) {
 		if adminId, err := s.appDb.GetFirstAdminId(r.Context()); err == nil && adminId != "" {
 			event.Owner = adminId
 		}
+	}
+	if err := validateEventTiming(event); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		switch err.Error() {
+		case "start_at_required":
+			w.Write([]byte("start_at is required"))
+		case "expiration_required":
+			w.Write([]byte("expiration is required"))
+		case "start_at_elapsed":
+			w.Write([]byte("start_at must not be in the past"))
+		case "expiration_elapsed":
+			w.Write([]byte("expiration must not be in the past"))
+		case "expiration_before_start_at":
+			w.Write([]byte("expiration must be after start_at"))
+		default:
+			w.Write([]byte("invalid event timing"))
+		}
+		return
 	}
 
 	eventTotal := big.NewInt(int64(event.Amount) * int64(event.Codes))
@@ -232,8 +278,14 @@ func (s *BotService) GetEvents(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		count = 10
 	}
+	if count <= 0 {
+		count = 10
+	}
 	page, err := strconv.Atoi(params.Get("page"))
 	if err != nil {
+		page = 0
+	}
+	if page < 0 {
 		page = 0
 	}
 	search := params.Get("search")
@@ -366,6 +418,24 @@ func (s *BotService) AffiliateNewEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	event.Owner = *userDid
+	if err := validateEventTiming(event); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		switch err.Error() {
+		case "start_at_required":
+			w.Write([]byte("start_at is required"))
+		case "expiration_required":
+			w.Write([]byte("expiration is required"))
+		case "start_at_elapsed":
+			w.Write([]byte("start_at must not be in the past"))
+		case "expiration_elapsed":
+			w.Write([]byte("expiration must not be in the past"))
+		case "expiration_before_start_at":
+			w.Write([]byte("expiration must be after start_at"))
+		default:
+			w.Write([]byte("invalid event timing"))
+		}
+		return
+	}
 
 	eventTotal := uint64(event.Amount) * uint64(event.Codes)
 	reservation, err := s.appDb.ReserveAffiliateBalance(r.Context(), *userDid, eventTotal)
@@ -485,8 +555,14 @@ func (s *BotService) AffiliateGetEvents(w http.ResponseWriter, r *http.Request) 
 	if err != nil {
 		count = 10
 	}
+	if count <= 0 {
+		count = 10
+	}
 	page, err := strconv.Atoi(params.Get("page"))
 	if err != nil {
+		page = 0
+	}
+	if page < 0 {
 		page = 0
 	}
 	search := params.Get("search")
@@ -708,42 +784,47 @@ func (s *BotService) Redeem(w http.ResponseWriter, r *http.Request) {
 	}
 
 	request.Code = normalizeRedeemCode(request.Code)
-
-	amount, tx, err := s.db.Redeem(r.Context(), request.Code, request.Address)
-	if err != nil {
+	request.Address = strings.ToLower(strings.TrimSpace(request.Address))
+	if request.Code == "" || !common.IsHexAddress(request.Address) {
 		w.WriteHeader(http.StatusBadRequest)
-
-		switch err.Error() {
-		case "code expired":
-			w.Write([]byte("code expired"))
-		case "code redeemed":
-			w.Write([]byte("code redeemed"))
-		case "user redeemed":
-			w.Write([]byte("user redeemed"))
-		}
-
-		fmt.Println(err)
 		return
 	}
+	request.Address = strings.ToLower(common.HexToAddress(request.Address).Hex())
 
+	complianceCtx, complianceCancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer complianceCancel()
+
+	amount := uint64(0)
 	if s.w9 != nil {
 		decimalString := os.Getenv("TOKEN_DECIMALS")
 		decimals, ok := new(big.Int).SetString(decimalString, 10)
 		if !ok {
-			tx.Rollback(context.Background())
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+
+		redeemInfoCtx, redeemInfoCancel := context.WithTimeout(context.Background(), 8*time.Second)
+		var amountErr error
+		amount, amountErr = s.db.GetCodeAmount(redeemInfoCtx, request.Code)
+		redeemInfoCancel()
+		if amountErr != nil {
+			if amountErr == pgx.ErrNoRows {
+				w.WriteHeader(http.StatusBadRequest)
+				w.Write([]byte("code redeemed"))
+				return
+			}
+			fmt.Printf("error loading redemption amount for code %s: %s\n", request.Code, amountErr)
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
 
 		amountWei := new(big.Int).Mul(decimals, big.NewInt(int64(amount)))
-		resp, err := s.w9.CheckCompliance(r.Context(), os.Getenv("BOT_ADDRESS"), request.Address, amountWei)
+		resp, err := s.w9.CheckCompliance(complianceCtx, os.Getenv("BOT_ADDRESS"), request.Address, amountWei)
 		if err != nil {
-			tx.Rollback(context.Background())
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
 		if !resp.Allowed {
-			tx.Rollback(context.Background())
 			bytes, _ := json.Marshal(resp)
 			w.WriteHeader(http.StatusForbidden)
 			w.Write(bytes)
@@ -751,18 +832,34 @@ func (s *BotService) Redeem(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	err = s.bot.Send(amount, request.Address)
+	redeemCtx, redeemCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer redeemCancel()
+
+	amount, err := s.db.Redeem(redeemCtx, request.Code, request.Address)
 	if err != nil {
-		fmt.Println("this is the bot error:")
-		fmt.Println(err)
-		w.WriteHeader(http.StatusInternalServerError)
+		switch err.Error() {
+		case "code not started":
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte("code not started"))
+		case "code expired":
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte("code expired"))
+		case "code redeemed":
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte("code redeemed"))
+		case "user redeemed":
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte("user redeemed"))
+		default:
+			fmt.Printf("error reserving redemption for code %s address %s: %s\n", request.Code, request.Address, err)
+			w.WriteHeader(http.StatusInternalServerError)
+		}
 		return
 	}
 
-	err = tx.Commit(context.Background())
-	if err != nil {
-		fmt.Printf("error committing code redemption: %s\n", err)
-		w.WriteHeader(http.StatusOK)
+	if err := s.bot.Send(amount, request.Address); err != nil {
+		fmt.Printf("error sending redeem payout for code %s address %s: %s\n", request.Code, request.Address, err)
+		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 

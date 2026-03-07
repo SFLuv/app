@@ -109,14 +109,87 @@ func redactWorkflowSubmissionDataForUserInList(workflows []*structs.Workflow, us
 	}
 }
 
-func sanitizeWorkflowForUser(workflow *structs.Workflow, userID string, isAdmin bool) {
+func canUserViewWorkflowSupervisorData(workflow *structs.Workflow, userID string) bool {
+	if workflow == nil || userID == "" {
+		return false
+	}
+	if workflow.SupervisorUserId == nil {
+		return false
+	}
+	return strings.TrimSpace(*workflow.SupervisorUserId) == strings.TrimSpace(userID)
+}
+
+const (
+	workflowPayoutErrorNoImproverAssigned = "Workflow payout failed: no assigned improver."
+	workflowPayoutErrorNoPayoutWallet     = "Workflow payout failed: payout wallet is not configured."
+	workflowPayoutErrorInsufficientFaucet = "Workflow payout failed: insufficient faucet balance."
+	workflowPayoutErrorTransferFailed     = "Workflow payout failed: transfer failed. Please retry."
+	workflowPayoutErrorProcessingFailed   = "Workflow payout failed: processing error."
+	workflowPayoutErrorUnknown            = "Workflow payout failed. Please retry."
+)
+
+func normalizeWorkflowPayoutErrorForClient(raw *string) *string {
+	if raw == nil {
+		return nil
+	}
+	message := strings.TrimSpace(*raw)
+	if message == "" {
+		return nil
+	}
+
+	lower := strings.ToLower(message)
+	switch {
+	case strings.Contains(lower, "no assigned improver"), strings.Contains(lower, "no improver is assigned"):
+		normalized := workflowPayoutErrorNoImproverAssigned
+		return &normalized
+	case strings.Contains(lower, "no payout wallet"), strings.Contains(lower, "wallet is not configured"):
+		normalized := workflowPayoutErrorNoPayoutWallet
+		return &normalized
+	case strings.Contains(lower, "insufficient faucet balance"):
+		normalized := workflowPayoutErrorInsufficientFaucet
+		return &normalized
+	case strings.Contains(lower, "transfer failed"):
+		normalized := workflowPayoutErrorTransferFailed
+		return &normalized
+	case strings.Contains(lower, "processing error"), strings.Contains(lower, "state update failed"):
+		normalized := workflowPayoutErrorProcessingFailed
+		return &normalized
+	default:
+		normalized := workflowPayoutErrorUnknown
+		return &normalized
+	}
+}
+
+func normalizeWorkflowPayoutErrorsForClient(workflow *structs.Workflow) {
+	if workflow == nil {
+		return
+	}
+	workflow.SupervisorPayoutError = normalizeWorkflowPayoutErrorForClient(workflow.SupervisorPayoutError)
+	for idx := range workflow.Steps {
+		workflow.Steps[idx].PayoutError = normalizeWorkflowPayoutErrorForClient(workflow.Steps[idx].PayoutError)
+	}
+}
+
+func sanitizeWorkflowForUserWithOptions(workflow *structs.Workflow, userID string, isAdmin bool, includeSupervisorData bool) {
 	redactWorkflowItemNotifyEmailsForUser(workflow, userID)
 	redactWorkflowSubmissionDataForUser(workflow, userID, isAdmin)
+	normalizeWorkflowPayoutErrorsForClient(workflow)
+	if !includeSupervisorData {
+		workflow.SupervisorDataFields = nil
+	}
+}
+
+func sanitizeWorkflowForUser(workflow *structs.Workflow, userID string, isAdmin bool) {
+	sanitizeWorkflowForUserWithOptions(workflow, userID, isAdmin, false)
 }
 
 func sanitizeWorkflowListForUser(workflows []*structs.Workflow, userID string, isAdmin bool) {
 	redactWorkflowItemNotifyEmailsForUserInList(workflows, userID)
 	redactWorkflowSubmissionDataForUserInList(workflows, userID, isAdmin)
+	for _, workflow := range workflows {
+		normalizeWorkflowPayoutErrorsForClient(workflow)
+		workflow.SupervisorDataFields = nil
+	}
 }
 
 func (a *AppService) refreshWorkflowStartAvailabilityAndNotify(ctx context.Context) error {
@@ -831,12 +904,12 @@ func (a *AppService) DeleteProposerWorkflow(w http.ResponseWriter, r *http.Reque
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
-		if strings.Contains(err.Error(), "cannot be deleted") {
+		if strings.Contains(err.Error(), "cannot be archived") || strings.Contains(err.Error(), "already archived") {
 			w.WriteHeader(http.StatusBadRequest)
 			w.Write([]byte(err.Error()))
 			return
 		}
-		a.logger.Logf("error deleting workflow %s for proposer %s: %s", workflowId, *userDid, err)
+		a.logger.Logf("error archiving workflow %s for proposer %s: %s", workflowId, *userDid, err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
@@ -851,6 +924,17 @@ func (a *AppService) GetWorkflow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	isAdmin := a.IsAdmin(r.Context(), *userDid)
+	includeSupervisorData := false
+	includeSupervisorDataRaw := strings.TrimSpace(r.URL.Query().Get("include_supervisor_data"))
+	if includeSupervisorDataRaw != "" {
+		parsed, parseErr := strconv.ParseBool(includeSupervisorDataRaw)
+		if parseErr != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte("invalid include_supervisor_data value"))
+			return
+		}
+		includeSupervisorData = parsed
+	}
 
 	workflowId := strings.TrimSpace(r.PathValue("workflow_id"))
 	if workflowId == "" {
@@ -874,7 +958,8 @@ func (a *AppService) GetWorkflow(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
-	sanitizeWorkflowForUser(workflow, *userDid, isAdmin)
+	allowSupervisorData := includeSupervisorData && canUserViewWorkflowSupervisorData(workflow, *userDid)
+	sanitizeWorkflowForUserWithOptions(workflow, *userDid, isAdmin, allowSupervisorData)
 
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(workflow)
@@ -1581,7 +1666,22 @@ func buildSupervisorWorkflowCSV(
 
 	dynamicColumns := map[string]supervisorExportColumn{}
 	usedHeaders := map[string]int{}
+	metadataColumns := map[string]supervisorExportColumn{}
 	for _, workflow := range workflows {
+		for _, metadataField := range workflow.SupervisorDataFields {
+			header := strings.TrimSpace(metadataField.Key)
+			if header == "" {
+				continue
+			}
+			key := strings.ToLower(header)
+			if _, exists := metadataColumns[key]; exists {
+				continue
+			}
+			metadataColumns[key] = supervisorExportColumn{
+				Key:    key,
+				Header: header,
+			}
+		}
 		for _, step := range workflow.Steps {
 			for _, item := range step.WorkItems {
 				title := strings.TrimSpace(item.Title)
@@ -1645,6 +1745,13 @@ func buildSupervisorWorkflowCSV(
 	sort.Slice(dynamicOrder, func(i, j int) bool {
 		return dynamicOrder[i].Header < dynamicOrder[j].Header
 	})
+	metadataOrder := make([]supervisorExportColumn, 0, len(metadataColumns))
+	for _, column := range metadataColumns {
+		metadataOrder = append(metadataOrder, column)
+	}
+	sort.Slice(metadataOrder, func(i, j int) bool {
+		return strings.ToLower(metadataOrder[i].Header) < strings.ToLower(metadataOrder[j].Header)
+	})
 
 	headers := []string{
 		"id",
@@ -1655,6 +1762,9 @@ func buildSupervisorWorkflowCSV(
 		"step_number",
 		"status",
 		"improver_email",
+	}
+	for _, column := range metadataOrder {
+		headers = append(headers, column.Header)
 	}
 	for _, column := range dynamicOrder {
 		headers = append(headers, column.Header)
@@ -1710,6 +1820,17 @@ func buildSupervisorWorkflowCSV(
 				strconv.Itoa(step.StepOrder),
 				statusValue,
 				improverEmail,
+			}
+			metadataValuesByKey := map[string]string{}
+			for _, metadataField := range workflow.SupervisorDataFields {
+				key := strings.ToLower(strings.TrimSpace(metadataField.Key))
+				if key == "" {
+					continue
+				}
+				metadataValuesByKey[key] = strings.TrimSpace(metadataField.Value)
+			}
+			for _, column := range metadataOrder {
+				row = append(row, metadataValuesByKey[column.Key])
 			}
 
 			valuesByKey := map[string]string{}
@@ -2907,8 +3028,19 @@ func (a *AppService) GetAdminWorkflows(w http.ResponseWriter, r *http.Request) {
 	if count <= 0 {
 		count = 20
 	}
+	includeArchived := false
+	includeArchivedRaw := strings.TrimSpace(r.URL.Query().Get("include_archived"))
+	if includeArchivedRaw != "" {
+		parsed, parseErr := strconv.ParseBool(includeArchivedRaw)
+		if parseErr != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte("invalid include_archived value"))
+			return
+		}
+		includeArchived = parsed
+	}
 
-	response, err := a.db.GetAdminWorkflows(r.Context(), search, page, count)
+	response, err := a.db.GetAdminWorkflows(r.Context(), search, page, count, includeArchived)
 	if err != nil {
 		errMsg := err.Error()
 		if strings.Contains(errMsg, "invalid") || strings.Contains(errMsg, "required") {
@@ -4145,7 +4277,7 @@ func (a *AppService) processWorkflowSeriesPayouts(ctx context.Context, triggerWo
 
 				walletAddress := ""
 				if target.ImproverId == "" {
-					errMsg := "workflow payout cannot proceed because no improver is assigned"
+					errMsg := workflowPayoutErrorNoImproverAssigned
 					if target.IsManager {
 						if dbErr := a.db.MarkWorkflowManagerPayoutFailed(ctx, target.WorkflowId, errMsg); dbErr != nil {
 							a.logger.Logf("error recording manager payout assignment failure for workflow %s: %s", target.WorkflowId, dbErr)
@@ -4161,7 +4293,7 @@ func (a *AppService) processWorkflowSeriesPayouts(ctx context.Context, triggerWo
 
 				walletAddress, err = a.db.GetPreferredWorkflowPayoutAddressForUser(ctx, target.ImproverId, target.IsManager)
 				if err != nil {
-					errMsg := fmt.Sprintf("workflow payout cannot proceed because no payout wallet is configured: %s", err)
+					errMsg := workflowPayoutErrorNoPayoutWallet
 					if target.IsManager {
 						if dbErr := a.db.MarkWorkflowManagerPayoutFailed(ctx, target.WorkflowId, errMsg); dbErr != nil {
 							a.logger.Logf("error recording manager payout wallet failure for workflow %s: %s", target.WorkflowId, dbErr)
@@ -4171,13 +4303,16 @@ func (a *AppService) processWorkflowSeriesPayouts(ctx context.Context, triggerWo
 							a.logger.Logf("error recording step payout wallet failure for workflow %s step %s: %s", target.WorkflowId, target.StepId, dbErr)
 						}
 					}
-					a.sendWorkflowPayoutErrorEmail(ctx, target, walletAddress, errMsg, nil, nil, false)
+					a.sendWorkflowPayoutErrorEmail(ctx, target, walletAddress, fmt.Sprintf("%s Detail: %s", errMsg, err), nil, nil, false)
 					return
 				}
 
 				currentBalance, neededBalance, insufficient, transferErr := a.attemptWorkflowPayoutTransfer(ctx, target.Amount, walletAddress)
 				if transferErr != nil {
-					errMsg := fmt.Sprintf("workflow payout transfer failed: %s", transferErr)
+					errMsg := workflowPayoutErrorTransferFailed
+					if insufficient {
+						errMsg = workflowPayoutErrorInsufficientFaucet
+					}
 					if target.IsManager {
 						if dbErr := a.db.MarkWorkflowManagerPayoutFailed(ctx, target.WorkflowId, errMsg); dbErr != nil {
 							a.logger.Logf("error recording manager payout transfer failure for workflow %s: %s", target.WorkflowId, dbErr)
@@ -4187,7 +4322,7 @@ func (a *AppService) processWorkflowSeriesPayouts(ctx context.Context, triggerWo
 							a.logger.Logf("error recording step payout transfer failure for workflow %s step %s: %s", target.WorkflowId, target.StepId, dbErr)
 						}
 					}
-					a.sendWorkflowPayoutErrorEmail(ctx, target, walletAddress, errMsg, currentBalance, neededBalance, insufficient)
+					a.sendWorkflowPayoutErrorEmail(ctx, target, walletAddress, fmt.Sprintf("%s Detail: %s", errMsg, transferErr), currentBalance, neededBalance, insufficient)
 					return
 				}
 
