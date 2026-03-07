@@ -364,6 +364,11 @@ func (a *AppService) ApproveW9Submission(w http.ResponseWriter, r *http.Request)
 		if adminEmail == "" {
 			adminEmail = "admin@sfluv.org"
 		}
+		fromDomain := os.Getenv("MAILGUN_DOMAIN")
+		fromEmail := "no_reply@sfluv.org"
+		if fromDomain != "" {
+			fromEmail = "no_reply@" + fromDomain
+		}
 		contact := strings.TrimSpace(submission.Email)
 		if contact == "" {
 			contact = submission.WalletAddress
@@ -380,7 +385,7 @@ func (a *AppService) ApproveW9Submission(w http.ResponseWriter, r *http.Request)
 			"SFLuv Admin",
 			subject,
 			body,
-			"no_reply@sfluv.org",
+			fromEmail,
 			"SFLuv Admin",
 		)
 		if err != nil {
