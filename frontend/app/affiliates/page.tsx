@@ -46,7 +46,7 @@ export default function AffiliatesPage() {
     }
   }
 
-  const handleAddEvent = async (ev: Event) => {
+  const handleAddEvent = async (ev: Event): Promise<boolean> => {
     const url = "/affiliates/events"
     try {
       const res = await authFetch(url, {
@@ -58,14 +58,14 @@ export default function AffiliatesPage() {
         throw new Error(message || "Error adding event. Please try again later.")
       }
       setEventsError("")
+      await getEvents()
+      await getBalance()
+      return true
     } catch (error) {
       const message = error instanceof Error ? error.message : null
       setEventsError(message || "Error adding event. Please try again later.")
+      return false
     }
-
-    await getEvents()
-    await getBalance()
-    toggleNewEventModal()
   }
 
   const handleDeleteEvent = async (id: string) => {

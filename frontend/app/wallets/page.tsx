@@ -6,7 +6,7 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
-import { Plus, Wallet, Settings, ArrowRight, CheckCircle2 } from "lucide-react"
+import { Plus, Wallet, Settings, ArrowRight, CheckCircle2, RefreshCw } from "lucide-react"
 import { WalletDetailModal } from "@/components/wallets/wallet-detail-modal"
 import { useWallets } from "@privy-io/react-auth"
 import type { ConnectedWallet } from "@/types/privy-wallet"
@@ -25,6 +25,7 @@ export default function WalletsPage() {
     wallets,
     user,
     userLocations,
+    error,
     status,
     walletsStatus,
     importWallet,
@@ -47,6 +48,15 @@ export default function WalletsPage() {
       }),
     [wallets, unwrapEnabledByAddress]
   )
+  const walletsErrorMessage = useMemo(() => {
+    if (typeof error === "string" && error.trim() !== "") {
+      return error
+    }
+    if (error instanceof Error && error.message.trim() !== "") {
+      return error.message
+    }
+    return "We couldn't load your connected wallets right now."
+  }, [error])
 
 
   useEffect(() => {
@@ -126,6 +136,11 @@ export default function WalletsPage() {
     }
   }
 
+  const formatAddress = (address: string) => {
+    if (address.length <= 12) return address
+    return `${address.slice(0, 6)}...${address.slice(-4)}`
+  }
+
   const handleSelectWallet = (address: string) => {
     router.push(`/wallets/${address}`)
   }
@@ -143,7 +158,7 @@ export default function WalletsPage() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="mx-auto w-full max-w-4xl space-y-4 px-3 pb-6 pt-2 sm:space-y-6 sm:px-6">
       <ConnectWalletModal
         open={connectWalletModalOpen}
         onOpenChange={() => setConnectWalletModalOpen(!connectWalletModalOpen)}
@@ -166,10 +181,10 @@ export default function WalletsPage() {
       {/* Header */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-black dark:text-white">
+          <h1 className="text-2xl font-bold text-black dark:text-white sm:text-3xl">
             Connected Wallets
           </h1>
-          <p className="text-gray-600 dark:text-gray-400 mt-1">
+          <p className="mt-1 text-sm text-gray-600 dark:text-gray-400 sm:text-base">
             Manage wallets connected to your SFLuv account
           </p>
         </div>
@@ -178,7 +193,7 @@ export default function WalletsPage() {
           <Button
             variant="outline"
             onClick={toggleAddPayPalModal}
-            className="h-10 px-4 whitespace-nowrap flex items-center gap-2"
+            className="h-10 w-full whitespace-nowrap sm:w-auto"
           >
             <Wallet className="h-4 w-4" />
             Connect PayPal Account
@@ -186,7 +201,7 @@ export default function WalletsPage() {
         )}
       </div>
 
-      <div className="flex items-center space-x-2">
+      <div className="flex items-center space-x-2 rounded-lg border bg-muted/25 px-3 py-2">
         <Checkbox
           id="show-eoas"
           checked={showEoas}
@@ -200,13 +215,31 @@ export default function WalletsPage() {
         </Label>
       </div>
 
-      <div className="space-y-4">
+      <div className="space-y-3 sm:space-y-4">
         {wallets.length === 0 ? (
-          <div className="text-center py-12">
-            <h3 className="text-xl font-medium text-black dark:text-white mb-2">
-              Error getting connected wallets.
-            </h3>
-          </div>
+          <Card className="border-rose-200/70 bg-rose-50/70 dark:border-rose-900/40 dark:bg-rose-950/20">
+            <CardContent className="px-4 py-8 sm:px-6 sm:py-10">
+              <div className="mx-auto flex max-w-md flex-col items-center text-center">
+                <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-rose-100 dark:bg-rose-900/40">
+                  <Wallet className="h-6 w-6 text-rose-600 dark:text-rose-300" />
+                </div>
+                <h3 className="text-lg font-semibold text-black dark:text-white sm:text-xl">
+                  Unable to load connected wallets
+                </h3>
+                <p className="mt-2 text-sm text-gray-700 dark:text-gray-300 sm:text-base">
+                  {walletsErrorMessage}
+                </p>
+                <Button
+                  variant="outline"
+                  className="mt-5 bg-background/80"
+                  onClick={() => void refreshWallets()}
+                >
+                  <RefreshCw className="mr-2 h-4 w-4" />
+                  Try Again
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
         ) : (
           wallets.map((wallet) => {
             if (wallet.type === "eoa" && !showEoas) return null
@@ -218,25 +251,24 @@ export default function WalletsPage() {
               <Card
                 key={wallet.address}
                 onClick={() => handleSelectWallet(wallet.address || "0x")}
-                className="overflow-hidden cursor-pointer hover:shadow-md transition-shadow"
+                className="cursor-pointer overflow-hidden border border-border/70 bg-card/90 shadow-sm transition-all hover:shadow-md"
               >
-                <CardContent className="p-4">
-                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <CardContent className="p-3 sm:p-4">
+                  <div className="flex flex-col justify-between gap-3 sm:gap-4 md:flex-row md:items-center">
                     <div className="flex items-center gap-3">
                       <div>
-                        <div className="flex items-center gap-2">
-                          <h3 className="font-medium text-black dark:text-white">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <h3 className="text-sm font-medium text-black dark:text-white sm:text-base">
                             {getWalletDisplayName(wallet.name)}
                           </h3>
-                          <Badge variant="outline" className="bg-secondary">
+                          <Badge variant="outline" className="bg-secondary/70 text-[10px] sm:text-xs">
                             {getNetworkDisplayName(wallet.type)}
                           </Badge>
                         </div>
 
                         {wallet.address && (
-                          <p className="text-sm text-gray-600 dark:text-gray-400 truncate max-w-[200px] md:max-w-[300px] font-mono">
-                            {wallet.address.slice(0, 8)}...
-                            {wallet.address.slice(-6)}
+                          <p className="mt-1 inline-flex rounded-md bg-muted/50 px-2 py-0.5 font-mono text-xs text-gray-600 dark:text-gray-400">
+                            {formatAddress(wallet.address)}
                           </p>
                         )}
                         {walletUnwrapEnabled && (
@@ -252,7 +284,7 @@ export default function WalletsPage() {
 
                     <Button
                       onClick={() => handleSelectWallet(wallet.address || "0x")}
-                      className="bg-[#eb6c6c] hover:bg-[#d55c5c]"
+                      className="h-9 w-full bg-[#eb6c6c] text-sm hover:bg-[#d55c5c] sm:w-auto"
                     >
                       Open Wallet
                       <ArrowRight className="h-4 w-4 ml-2" />
@@ -265,9 +297,9 @@ export default function WalletsPage() {
         )}
       </div>
 
-      <div className="flex flex-col sm:flex-row gap-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:gap-4">
         <Button
-          className="bg-[#eb6c6c] hover:bg-[#d55c5c]"
+          className="w-full bg-[#eb6c6c] hover:bg-[#d55c5c] sm:w-auto"
           onClick={toggleAddWalletModal}
         >
           <Plus className="h-4 w-4 mr-2" />
@@ -275,7 +307,7 @@ export default function WalletsPage() {
         </Button>
       </div>
 
-      <div className="text-sm text-gray-500 dark:text-gray-400">
+      <div className="text-xs text-gray-500 dark:text-gray-400 sm:text-sm">
         Showing{" "}
         {
           wallets.filter(

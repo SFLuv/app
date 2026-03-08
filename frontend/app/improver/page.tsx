@@ -26,6 +26,7 @@ import { formatStatusLabel } from "@/lib/status-labels"
 import { formatWorkflowDisplayStatus } from "@/lib/workflow-status"
 import { cn } from "@/lib/utils"
 import { AlertTriangle, CheckCircle2, ChevronLeft, ChevronRight, ChevronsUpDown, ClipboardCheck, Search, Wrench } from "lucide-react"
+import { usePathname, useRouter, useSearchParams } from "next/navigation"
 import { CredentialRequest } from "@/types/issuer"
 import {
   CredentialType,
@@ -67,6 +68,18 @@ type WorkflowSeriesCardGroup = {
   primaryStepOrder: number | null
   primaryStepTitle: string | null
   workflows: Workflow[]
+}
+
+type ImproverTab = "my-workflows" | "workflow-board" | "unpaid-workflows" | "credentials" | "absence"
+
+const isImproverTab = (value: string | null): value is ImproverTab => {
+  return (
+    value === "my-workflows"
+    || value === "workflow-board"
+    || value === "unpaid-workflows"
+    || value === "credentials"
+    || value === "absence"
+  )
 }
 
 const defaultItemFormState: ItemFormState = {
@@ -237,6 +250,10 @@ function LocalPhotoThumbnail({
 }
 
 export default function ImproverPage() {
+  const searchParams = useSearchParams()
+  const pathname = usePathname()
+  const router = useRouter()
+  const tabFromQuery = searchParams.get("tab")
   const { authFetch, status, user } = useApp()
   const [workflows, setWorkflows] = useState<Workflow[]>([])
   const [unpaidWorkflows, setUnpaidWorkflows] = useState<Workflow[]>([])
@@ -247,7 +264,7 @@ export default function ImproverPage() {
   const [absencePeriods, setAbsencePeriods] = useState<ImproverAbsencePeriod[]>([])
   const [error, setError] = useState<string>("")
   const [notice, setNotice] = useState<string>("")
-  const [loading, setLoading] = useState<boolean>(true)
+  const [initialLoading, setInitialLoading] = useState<boolean>(true)
   const [submitting, setSubmitting] = useState<string>("")
   const [forms, setForms] = useState<Record<string, Record<string, ItemFormState>>>({})
   const [stepSubmitErrors, setStepSubmitErrors] = useState<Record<string, string>>({})
@@ -279,76 +296,163 @@ export default function ImproverPage() {
   } | null>(null)
   const [seriesCardIndexByKey, setSeriesCardIndexByKey] = useState<Record<string, number>>({})
   const [downloadingPhotoId, setDownloadingPhotoId] = useState<string | null>(null)
-  const [boardSearch, setBoardSearch] = useState<string>("")
-  const [myWorkflowsSearch, setMyWorkflowsSearch] = useState<string>("")
-  const [showOnlyActiveSeries, setShowOnlyActiveSeries] = useState<boolean>(true)
-  const [unpaidSearch, setUnpaidSearch] = useState<string>("")
-  const [absenceSearch, setAbsenceSearch] = useState<string>("")
+  const [activeTab, setActiveTab] = useState<ImproverTab>(isImproverTab(tabFromQuery) ? tabFromQuery : "my-workflows")
+  const [boardSearch, setBoardSearch] = useState<string>(searchParams.get("board_search") || "")
+  const [myWorkflowsSearch, setMyWorkflowsSearch] = useState<string>(searchParams.get("my_workflows_search") || "")
+  const [showOnlyActiveSeries, setShowOnlyActiveSeries] = useState<boolean>(searchParams.get("my_active_only") !== "false")
+  const [unpaidSearch, setUnpaidSearch] = useState<string>(searchParams.get("unpaid_search") || "")
+  const [absenceSearch, setAbsenceSearch] = useState<string>(searchParams.get("absence_search") || "")
   const [credentialComboOpen, setCredentialComboOpen] = useState<boolean>(false)
-  const [credentialSearch, setCredentialSearch] = useState<string>("")
+  const [credentialSearch, setCredentialSearch] = useState<string>(searchParams.get("credential_search") || "")
   const videoElementRefs = useRef<Record<string, HTMLVideoElement | null>>({})
   const cameraStreamRefs = useRef<Record<string, MediaStream | null>>({})
   const cameraVideoRefCallbacks = useRef<Record<string, (element: HTMLVideoElement | null) => void>>({})
 
   const canUsePanel = Boolean(user?.isImprover || user?.isAdmin)
+  const hasLoadedDataRef = useRef(false)
 
-  const loadFeed = useCallback(async () => {
-    if (!canUsePanel) {
-      setLoading(false)
-      return
-    }
+  const loadFeed = useCallback(
+    async (mode: "initial" | "tab" | "background" = "background") => {
+      const isInitialFetch = !hasLoadedDataRef.current
 
-    try {
-      const [feedRes, unpaidRes, absenceRes, credentialTypesRes, credentialRequestsRes] = await Promise.all([
-        authFetch("/improvers/workflows"),
-        authFetch("/improvers/unpaid-workflows"),
-        authFetch("/improvers/workflows/absence-periods"),
-        authFetch("/credentials/types"),
-        authFetch("/improvers/credential-requests"),
-      ])
-      if (!feedRes.ok) {
-        const text = await feedRes.text()
-        throw new Error(text || "Unable to load improver workflows.")
+      if (!canUsePanel) {
+        if (isInitialFetch || mode === "initial") {
+          hasLoadedDataRef.current = true
+          setInitialLoading(false)
+        }
+        return
       }
-      const data = (await feedRes.json()) as ImproverWorkflowFeed
-      setWorkflows(data.workflows || [])
-      setActiveCredentials((data.active_credentials || []) as CredentialType[])
-      if (unpaidRes.ok) {
-        const unpaidData = (await unpaidRes.json()) as Workflow[]
-        setUnpaidWorkflows(unpaidData || [])
-      } else {
-        setUnpaidWorkflows([])
+
+      if (isInitialFetch || mode === "initial") {
+        setInitialLoading(true)
       }
-      if (absenceRes.ok) {
-        const absenceData = (await absenceRes.json()) as ImproverAbsencePeriod[]
-        setAbsencePeriods(absenceData || [])
-      } else {
-        setAbsencePeriods([])
+
+      try {
+        const [feedRes, unpaidRes, absenceRes, credentialTypesRes, credentialRequestsRes] = await Promise.all([
+          authFetch("/improvers/workflows"),
+          authFetch("/improvers/unpaid-workflows"),
+          authFetch("/improvers/workflows/absence-periods"),
+          authFetch("/credentials/types"),
+          authFetch("/improvers/credential-requests"),
+        ])
+        if (!feedRes.ok) {
+          const text = await feedRes.text()
+          throw new Error(text || "Unable to load improver workflows.")
+        }
+        const data = (await feedRes.json()) as ImproverWorkflowFeed
+        setWorkflows(data.workflows || [])
+        setActiveCredentials((data.active_credentials || []) as CredentialType[])
+        if (unpaidRes.ok) {
+          const unpaidData = (await unpaidRes.json()) as Workflow[]
+          setUnpaidWorkflows(unpaidData || [])
+        } else {
+          setUnpaidWorkflows([])
+        }
+        if (absenceRes.ok) {
+          const absenceData = (await absenceRes.json()) as ImproverAbsencePeriod[]
+          setAbsencePeriods(absenceData || [])
+        } else {
+          setAbsencePeriods([])
+        }
+        if (credentialTypesRes.ok) {
+          const typeData = (await credentialTypesRes.json()) as GlobalCredentialType[]
+          setCredentialTypes(typeData || [])
+        } else {
+          setCredentialTypes([])
+        }
+        if (credentialRequestsRes.ok) {
+          const requestData = (await credentialRequestsRes.json()) as CredentialRequest[]
+          setCredentialRequests(requestData || [])
+        } else {
+          setCredentialRequests([])
+        }
+        setError("")
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Unable to load improver workflows.")
+      } finally {
+        if (isInitialFetch || mode === "initial") {
+          hasLoadedDataRef.current = true
+          setInitialLoading(false)
+        }
       }
-      if (credentialTypesRes.ok) {
-        const typeData = (await credentialTypesRes.json()) as GlobalCredentialType[]
-        setCredentialTypes(typeData || [])
-      } else {
-        setCredentialTypes([])
-      }
-      if (credentialRequestsRes.ok) {
-        const requestData = (await credentialRequestsRes.json()) as CredentialRequest[]
-        setCredentialRequests(requestData || [])
-      } else {
-        setCredentialRequests([])
-      }
-      setError("")
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to load improver workflows.")
-    } finally {
-      setLoading(false)
-    }
-  }, [authFetch, canUsePanel])
+    },
+    [authFetch, canUsePanel],
+  )
 
   useEffect(() => {
-    if (status !== "authenticated") return
-    loadFeed()
-  }, [status, loadFeed])
+    const nextTab = searchParams.get("tab")
+    if (isImproverTab(nextTab)) {
+      setActiveTab((prev) => (nextTab === prev ? prev : nextTab))
+    }
+
+    const nextBoardSearch = searchParams.get("board_search") || ""
+    setBoardSearch((prev) => (nextBoardSearch === prev ? prev : nextBoardSearch))
+
+    const nextMyWorkflowsSearch = searchParams.get("my_workflows_search") || ""
+    setMyWorkflowsSearch((prev) => (nextMyWorkflowsSearch === prev ? prev : nextMyWorkflowsSearch))
+
+    const nextShowOnlyActiveSeries = searchParams.get("my_active_only") !== "false"
+    setShowOnlyActiveSeries((prev) => (nextShowOnlyActiveSeries === prev ? prev : nextShowOnlyActiveSeries))
+
+    const nextUnpaidSearch = searchParams.get("unpaid_search") || ""
+    setUnpaidSearch((prev) => (nextUnpaidSearch === prev ? prev : nextUnpaidSearch))
+
+    const nextAbsenceSearch = searchParams.get("absence_search") || ""
+    setAbsenceSearch((prev) => (nextAbsenceSearch === prev ? prev : nextAbsenceSearch))
+
+    const nextCredentialSearch = searchParams.get("credential_search") || ""
+    setCredentialSearch((prev) => (nextCredentialSearch === prev ? prev : nextCredentialSearch))
+  }, [searchParams])
+
+  useEffect(() => {
+    const params = new URLSearchParams(searchParams.toString())
+    params.set("tab", activeTab)
+
+    if (boardSearch) params.set("board_search", boardSearch)
+    else params.delete("board_search")
+
+    if (myWorkflowsSearch) params.set("my_workflows_search", myWorkflowsSearch)
+    else params.delete("my_workflows_search")
+
+    if (!showOnlyActiveSeries) params.set("my_active_only", "false")
+    else params.delete("my_active_only")
+
+    if (unpaidSearch) params.set("unpaid_search", unpaidSearch)
+    else params.delete("unpaid_search")
+
+    if (absenceSearch) params.set("absence_search", absenceSearch)
+    else params.delete("absence_search")
+
+    if (credentialSearch) params.set("credential_search", credentialSearch)
+    else params.delete("credential_search")
+
+    const nextQuery = params.toString()
+    if (nextQuery !== searchParams.toString()) {
+      router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname, { scroll: false })
+    }
+  }, [
+    absenceSearch,
+    activeTab,
+    boardSearch,
+    credentialSearch,
+    myWorkflowsSearch,
+    pathname,
+    router,
+    searchParams,
+    showOnlyActiveSeries,
+    unpaidSearch,
+  ])
+
+  useEffect(() => {
+    if (status === "loading") return
+    void loadFeed("initial")
+  }, [canUsePanel, loadFeed, status])
+
+  useEffect(() => {
+    if (status !== "authenticated" || !canUsePanel) return
+    if (!hasLoadedDataRef.current) return
+    void loadFeed("tab")
+  }, [activeTab, canUsePanel, loadFeed, status])
 
   const credentialSet = useMemo(() => {
     const set = new Set<string>()
@@ -2198,7 +2302,7 @@ export default function ImproverPage() {
     )
   }
 
-  if (status === "loading" || loading) {
+  if (status === "loading" || initialLoading) {
     return (
       <div className="flex items-center justify-center min-h-[70vh]">
         <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-[#eb6c6c]"></div>
@@ -2242,16 +2346,16 @@ export default function ImproverPage() {
         </div>
       )}
 
-	      <Tabs defaultValue="my-workflows" className="space-y-4">
-	        <TabsList className="grid h-auto w-full grid-cols-1 gap-2 p-1 sm:grid-cols-2 lg:grid-cols-3">
-	          <TabsTrigger value="my-workflows">My Workflows</TabsTrigger>
-	          <TabsTrigger value="workflow-board">Workflow Board</TabsTrigger>
-	          <TabsTrigger value="unpaid-workflows">Unpaid Workflows</TabsTrigger>
-	          <TabsTrigger value="credentials">Credentials</TabsTrigger>
-	          <TabsTrigger value="absence">Absence Coverage</TabsTrigger>
-	        </TabsList>
+      <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as ImproverTab)} className="space-y-4">
+        <TabsList className="grid h-auto w-full grid-cols-1 gap-2 p-1 sm:grid-cols-2 lg:grid-cols-3">
+          <TabsTrigger value="my-workflows">My Workflows</TabsTrigger>
+          <TabsTrigger value="workflow-board">Workflow Board</TabsTrigger>
+          <TabsTrigger value="unpaid-workflows">Unpaid Workflows</TabsTrigger>
+          <TabsTrigger value="credentials">Credentials</TabsTrigger>
+          <TabsTrigger value="absence">Absence Coverage</TabsTrigger>
+        </TabsList>
 
-	        <TabsContent value="workflow-board" className="space-y-3">
+        <TabsContent value="workflow-board" className="space-y-3">
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input

@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useApp } from "@/context/AppProvider"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -12,6 +12,7 @@ import { formatWorkflowDisplayStatus } from "@/lib/workflow-status"
 import { ActiveWorkflowListItem, Workflow, WorkflowDeletionProposal, WorkflowDeletionTargetType } from "@/types/workflow"
 import { Input } from "@/components/ui/input"
 import { AlertTriangle, Clock3, Search, Vote } from "lucide-react"
+import { usePathname, useRouter, useSearchParams } from "next/navigation"
 
 function countdownText(finalizeAt?: number | null): string {
   if (!finalizeAt) return "Countdown not started"
@@ -23,65 +24,126 @@ function countdownText(finalizeAt?: number | null): string {
   return `${hours}h ${minutes}m remaining`
 }
 
+type VoterTab = "workflow-votes" | "deletion-votes" | "active-workflows"
+
+const isVoterTab = (value: string | null): value is VoterTab => {
+  return value === "workflow-votes" || value === "deletion-votes" || value === "active-workflows"
+}
+
 export default function VoterPage() {
+  const searchParams = useSearchParams()
+  const pathname = usePathname()
+  const router = useRouter()
+  const tabFromQuery = searchParams.get("tab")
+  const workflowSearchFromQuery = searchParams.get("workflow_search") || ""
+  const deletionSearchFromQuery = searchParams.get("deletion_search") || ""
   const { authFetch, status, user } = useApp()
   const [workflows, setWorkflows] = useState<Workflow[]>([])
   const [activeWorkflows, setActiveWorkflows] = useState<ActiveWorkflowListItem[]>([])
   const [deletionProposals, setDeletionProposals] = useState<WorkflowDeletionProposal[]>([])
-  const [loading, setLoading] = useState<boolean>(true)
+  const [initialLoading, setInitialLoading] = useState<boolean>(true)
   const [error, setError] = useState<string>("")
   const [submittingId, setSubmittingId] = useState<string>("")
   const [detailWorkflow, setDetailWorkflow] = useState<Workflow | null>(null)
   const [detailOpen, setDetailOpen] = useState<boolean>(false)
   const [detailLoading, setDetailLoading] = useState<boolean>(false)
   const [detailSource, setDetailSource] = useState<"workflow-votes" | "active-workflows">("workflow-votes")
-  const [workflowSearch, setWorkflowSearch] = useState<string>("")
-  const [deletionSearch, setDeletionSearch] = useState<string>("")
+  const [activeTab, setActiveTab] = useState<VoterTab>(isVoterTab(tabFromQuery) ? tabFromQuery : "workflow-votes")
+  const [workflowSearch, setWorkflowSearch] = useState<string>(workflowSearchFromQuery)
+  const [deletionSearch, setDeletionSearch] = useState<string>(deletionSearchFromQuery)
 
   const canVote = Boolean(user?.isVoter || user?.isAdmin)
+  const hasLoadedDataRef = useRef(false)
 
-  const loadWorkflows = useCallback(async () => {
-    if (!canVote) {
-      setLoading(false)
-      return
-    }
+  const loadWorkflows = useCallback(
+    async (mode: "initial" | "tab" | "background" = "background") => {
+      const isInitialFetch = !hasLoadedDataRef.current
 
-    try {
-      const [workflowRes, deletionRes, activeRes] = await Promise.all([
-        authFetch("/voters/workflows"),
-        authFetch("/voters/workflow-deletion-proposals"),
-        authFetch("/workflows/active"),
-      ])
-      if (!workflowRes.ok) throw new Error()
-
-      const workflowData = (await workflowRes.json()) as Workflow[]
-      setWorkflows(workflowData || [])
-
-      if (deletionRes.ok) {
-        const deletionData = (await deletionRes.json()) as WorkflowDeletionProposal[]
-        setDeletionProposals(deletionData || [])
-      } else {
-        setDeletionProposals([])
+      if (!canVote) {
+        if (isInitialFetch || mode === "initial") {
+          hasLoadedDataRef.current = true
+          setInitialLoading(false)
+        }
+        return
       }
 
-      if (activeRes.ok) {
-        const activeData = (await activeRes.json()) as ActiveWorkflowListItem[]
-        setActiveWorkflows(activeData || [])
-      } else {
-        setActiveWorkflows([])
+      if (isInitialFetch || mode === "initial") {
+        setInitialLoading(true)
       }
-      setError("")
-    } catch {
-      setError("Unable to load workflows for voting right now.")
-    } finally {
-      setLoading(false)
-    }
-  }, [authFetch, canVote])
+
+      try {
+        const [workflowRes, deletionRes, activeRes] = await Promise.all([
+          authFetch("/voters/workflows"),
+          authFetch("/voters/workflow-deletion-proposals"),
+          authFetch("/workflows/active"),
+        ])
+        if (!workflowRes.ok) throw new Error()
+
+        const workflowData = (await workflowRes.json()) as Workflow[]
+        setWorkflows(workflowData || [])
+
+        if (deletionRes.ok) {
+          const deletionData = (await deletionRes.json()) as WorkflowDeletionProposal[]
+          setDeletionProposals(deletionData || [])
+        } else {
+          setDeletionProposals([])
+        }
+
+        if (activeRes.ok) {
+          const activeData = (await activeRes.json()) as ActiveWorkflowListItem[]
+          setActiveWorkflows(activeData || [])
+        } else {
+          setActiveWorkflows([])
+        }
+        setError("")
+      } catch {
+        setError("Unable to load workflows for voting right now.")
+      } finally {
+        if (isInitialFetch || mode === "initial") {
+          hasLoadedDataRef.current = true
+          setInitialLoading(false)
+        }
+      }
+    },
+    [authFetch, canVote],
+  )
 
   useEffect(() => {
-    if (status !== "authenticated") return
-    loadWorkflows()
-  }, [status, loadWorkflows])
+    const nextTab = searchParams.get("tab")
+    if (isVoterTab(nextTab)) {
+      setActiveTab((prev) => (nextTab === prev ? prev : nextTab))
+    }
+
+    const nextWorkflowSearch = searchParams.get("workflow_search") || ""
+    setWorkflowSearch((prev) => (nextWorkflowSearch === prev ? prev : nextWorkflowSearch))
+
+    const nextDeletionSearch = searchParams.get("deletion_search") || ""
+    setDeletionSearch((prev) => (nextDeletionSearch === prev ? prev : nextDeletionSearch))
+  }, [searchParams])
+
+  useEffect(() => {
+    const params = new URLSearchParams(searchParams.toString())
+    params.set("tab", activeTab)
+    if (workflowSearch) params.set("workflow_search", workflowSearch)
+    else params.delete("workflow_search")
+    if (deletionSearch) params.set("deletion_search", deletionSearch)
+    else params.delete("deletion_search")
+    const nextQuery = params.toString()
+    if (nextQuery !== searchParams.toString()) {
+      router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname, { scroll: false })
+    }
+  }, [activeTab, deletionSearch, pathname, router, searchParams, workflowSearch])
+
+  useEffect(() => {
+    if (status === "loading") return
+    void loadWorkflows("initial")
+  }, [canVote, loadWorkflows, status])
+
+  useEffect(() => {
+    if (status !== "authenticated" || !canVote) return
+    if (!hasLoadedDataRef.current) return
+    void loadWorkflows("tab")
+  }, [activeTab, canVote, loadWorkflows, status])
 
   useEffect(() => {
     if (status !== "authenticated" || !canVote) return
@@ -269,7 +331,7 @@ export default function VoterPage() {
     )
   }, [deletionProposals, deletionSearch])
 
-  if (status === "loading" || loading) {
+  if (status === "loading" || initialLoading) {
     return (
       <div className="flex items-center justify-center min-h-[70vh]">
         <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-[#eb6c6c]"></div>
@@ -306,7 +368,7 @@ export default function VoterPage() {
         </div>
       )}
 
-      <Tabs defaultValue="workflow-votes" className="space-y-4">
+      <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as VoterTab)} className="space-y-4">
         <TabsList className="grid h-auto w-full grid-cols-1 gap-2 p-1 sm:grid-cols-3">
           <TabsTrigger value="workflow-votes">Workflow Votes ({pendingCount})</TabsTrigger>
           <TabsTrigger value="deletion-votes">Deletion Votes ({pendingDeletionCount})</TabsTrigger>

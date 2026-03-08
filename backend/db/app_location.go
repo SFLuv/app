@@ -319,16 +319,17 @@ func (s *AppDB) GetAuthedLocations(ctx context.Context, r *structs.LocationsPage
 
 func (a *AppDB) AddLocation(ctx context.Context, location *structs.Location) error {
 	_, err := a.db.Exec(ctx, `
-		INSERT INTO locations (
-			google_id,
-			owner_id,
-			name,
-			description,
-			type,
-			approval,
-			street,
-			city,
-			state,
+			INSERT INTO locations (
+				google_id,
+				owner_id,
+				name,
+				description,
+				type,
+				approval,
+				approved_at,
+				street,
+				city,
+				state,
 			zip,
 			lat,
 			lng,
@@ -351,13 +352,15 @@ func (a *AppDB) AddLocation(ctx context.Context, location *structs.Location) err
 			service_stations,
 			tablet_model,
 			messaging_service,
-			reference
-		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-			$11, $12, $13, $14, $15, $16, $17, $18,
-			$19, $20, $21, $22, $23, $24, $25, $26,
-			$27, $28, $29, $30, $31, $32
-		);`,
+				reference
+			) VALUES (
+				$1, $2, $3, $4, $5, $6,
+				CASE WHEN $6 IS TRUE THEN NOW() ELSE NULL END,
+				$7, $8, $9, $10,
+				$11, $12, $13, $14, $15, $16, $17, $18,
+				$19, $20, $21, $22, $23, $24, $25, $26,
+				$27, $28, $29, $30, $31, $32
+			);`,
 		&location.GoogleID,
 		&location.OwnerID,
 		&location.Name,
@@ -429,15 +432,19 @@ func (a *AppDB) AddLocation(ctx context.Context, location *structs.Location) err
 
 func (a *AppDB) UpdateLocation(ctx context.Context, location *structs.Location) error {
 	result, err := a.db.Exec(ctx, `
-    UPDATE locations
-    SET
+	    UPDATE locations
+	    SET
         google_id = $1,
         owner_id = $2,
         name = $3,
         description = $4,
-        type = $5,
-        approval = $6,
-        street = $7,
+	        type = $5,
+	        approval = $6,
+	        approved_at = CASE
+	        	WHEN $6 IS TRUE THEN COALESCE(approved_at, NOW())
+	        	ELSE NULL
+	        END,
+	        street = $7,
         city = $8,
         state = $9,
         zip = $10,

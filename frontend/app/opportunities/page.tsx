@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { useSearchParams, useRouter } from "next/navigation"
+import { usePathname, useRouter, useSearchParams } from "next/navigation"
 import { OpportunityCard } from "@/components/opportunities/opportunity-card"
 import { OpportunityModal } from "@/components/opportunities/opportunity-modal"
 import { SearchFilters } from "@/components/opportunities/search-filters"
@@ -16,23 +16,39 @@ import { useOpportunities } from "@/hooks/api/use-opportunities"
 import { useApp } from "@/context/AppProvider"
 
 const ITEMS_PER_PAGE = 6
+const isSortOption = (value: string | null): value is SortOption => {
+  return value === "date" || value === "reward" || value === "proximity" || value === "organizer"
+}
+
+const isSortDirection = (value: string | null): value is SortDirection => {
+  return value === "asc" || value === "desc"
+}
 
 export default function OpportunitiesPage() {
   const router = useRouter()
+  const pathname = usePathname()
   const searchParams = useSearchParams()
   const opportunityId = searchParams.get("id")
   const { user } = useApp()
+  const searchFromQuery = searchParams.get("search") || ""
+  const sortFromQuery = searchParams.get("sort")
+  const directionFromQuery = searchParams.get("direction")
+  const pageFromQuery = Number(searchParams.get("page") || "1")
+  const organizersFromQuery = Array.from(new Set(searchParams.getAll("organizer").filter(Boolean)))
+  const locationFromQuery = searchParams.get("location") || defaultLocation.address || ""
 
   // State for search and filters
-  const [searchQuery, setSearchQuery] = useState("")
-  const [sortOption, setSortOption] = useState<SortOption>("date")
-  const [sortDirection, setSortDirection] = useState<SortDirection>("asc")
-  const [selectedOrganizers, setSelectedOrganizers] = useState<string[]>([])
-  const [userLocationInput, setUserLocationInput] = useState(defaultLocation.address || "")
+  const [searchQuery, setSearchQuery] = useState(searchFromQuery)
+  const [sortOption, setSortOption] = useState<SortOption>(isSortOption(sortFromQuery) ? sortFromQuery : "date")
+  const [sortDirection, setSortDirection] = useState<SortDirection>(isSortDirection(directionFromQuery) ? directionFromQuery : "asc")
+  const [selectedOrganizers, setSelectedOrganizers] = useState<string[]>(organizersFromQuery)
+  const [userLocationInput, setUserLocationInput] = useState(locationFromQuery)
   const [userLocation, setUserLocation] = useState<UserLocation>(defaultLocation)
 
   // State for pagination
-  const [currentPage, setCurrentPage] = useState(1)
+  const [currentPage, setCurrentPage] = useState(
+    Number.isFinite(pageFromQuery) && pageFromQuery >= 1 ? pageFromQuery : 1
+  )
 
   // State for modal
   const [selectedOpportunity, setSelectedOpportunity] = useState<Opportunity | null>(null)
@@ -55,6 +71,67 @@ export default function OpportunitiesPage() {
       }
     }
   }, [opportunityId, opportunities])
+
+  useEffect(() => {
+    const nextSearch = searchParams.get("search") || ""
+    setSearchQuery((prev) => (nextSearch === prev ? prev : nextSearch))
+
+    const nextSort = searchParams.get("sort")
+    const normalizedSort: SortOption = isSortOption(nextSort) ? nextSort : "date"
+    setSortOption((prev) => (normalizedSort === prev ? prev : normalizedSort))
+
+    const nextDirection = searchParams.get("direction")
+    const normalizedDirection: SortDirection = isSortDirection(nextDirection) ? nextDirection : "asc"
+    setSortDirection((prev) => (normalizedDirection === prev ? prev : normalizedDirection))
+
+    const nextPageRaw = Number(searchParams.get("page") || "1")
+    const normalizedPage = Number.isFinite(nextPageRaw) && nextPageRaw >= 1 ? nextPageRaw : 1
+    setCurrentPage((prev) => (normalizedPage === prev ? prev : normalizedPage))
+
+    const nextOrganizers = Array.from(new Set(searchParams.getAll("organizer").filter(Boolean)))
+    setSelectedOrganizers((prev) => {
+      const organizersChanged =
+        nextOrganizers.length !== prev.length || nextOrganizers.some((organizer, index) => organizer !== prev[index])
+      return organizersChanged ? nextOrganizers : prev
+    })
+
+    const nextLocation = searchParams.get("location") || defaultLocation.address || ""
+    setUserLocationInput((prev) => (nextLocation === prev ? prev : nextLocation))
+  }, [searchParams])
+
+  useEffect(() => {
+    const params = new URLSearchParams(searchParams.toString())
+
+    if (searchQuery) params.set("search", searchQuery)
+    else params.delete("search")
+
+    params.set("sort", sortOption)
+    params.set("direction", sortDirection)
+
+    if (currentPage > 1) params.set("page", String(currentPage))
+    else params.delete("page")
+
+    params.delete("organizer")
+    selectedOrganizers.forEach((organizer) => params.append("organizer", organizer))
+
+    if (userLocationInput) params.set("location", userLocationInput)
+    else params.delete("location")
+
+    const nextQuery = params.toString()
+    if (nextQuery !== searchParams.toString()) {
+      router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname, { scroll: false })
+    }
+  }, [
+    currentPage,
+    pathname,
+    router,
+    searchParams,
+    searchQuery,
+    selectedOrganizers,
+    sortDirection,
+    sortOption,
+    userLocationInput,
+  ])
 
   const handleCreateOpportunity = async (opportunityData: any) => {
     try {
@@ -133,7 +210,10 @@ export default function OpportunitiesPage() {
     setSelectedOpportunity(opportunity)
     setIsModalOpen(true)
     // Update URL with opportunity ID
-    router.push(`/opportunities?id=${opportunity.id}`, { scroll: false })
+    const params = new URLSearchParams(searchParams.toString())
+    params.set("id", opportunity.id)
+    const nextQuery = params.toString()
+    router.push(nextQuery ? `${pathname}?${nextQuery}` : pathname, { scroll: false })
   }
 
   // Handle modal close
@@ -141,7 +221,10 @@ export default function OpportunitiesPage() {
     setIsModalOpen(false)
     setSelectedOpportunity(null)
     // Remove opportunity ID from URL
-    router.push("/opportunities", { scroll: false })
+    const params = new URLSearchParams(searchParams.toString())
+    params.delete("id")
+    const nextQuery = params.toString()
+    router.push(nextQuery ? `${pathname}?${nextQuery}` : pathname, { scroll: false })
   }
 
   // Handle registration

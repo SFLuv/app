@@ -4,6 +4,9 @@ export const formatStatusLabel = (value?: string | null): string => {
   if (normalized === "paid_out") {
     return "Finalized"
   }
+  if (normalized === "deleted" || normalized === "archived") {
+    return "Archived"
+  }
   return value
     .replace(/_/g, " ")
     .trim()

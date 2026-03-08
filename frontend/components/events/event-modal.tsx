@@ -164,6 +164,15 @@ export function EventModal({
             </div>
 
             <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+              <span className="text-muted-foreground text-sm">Start At: </span>
+              <span className="font-mono text-sm text-left sm:text-right">
+                {event.start_at
+                  ? (new Date(event.start_at * 1000)).toLocaleDateString() + " " + (new Date(event.start_at * 1000)).toLocaleTimeString().split(" ")[0] + " " + (new Date(event.start_at * 1000)).toLocaleTimeString().split(" ")[1]
+                  : "Immediate"}
+              </span>
+            </div>
+
+            <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
               <span className="text-muted-foreground text-sm">Expiration: </span>
               <span className="font-mono text-sm text-left sm:text-right">
                 {(new Date(event.expiration * 1000)).toLocaleDateString() + " " + (new Date(event.expiration * 1000)).toLocaleTimeString().split(" ")[0] + " " + (new Date(event.expiration * 1000)).toLocaleTimeString().split(" ")[1]}

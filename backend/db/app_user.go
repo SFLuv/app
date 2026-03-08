@@ -60,15 +60,15 @@ func (a *AppDB) UpdateUserPayPalEth(ctx context.Context, userId string, paypalEt
 
 func (a *AppDB) UpdateUserRole(ctx context.Context, userId string, role string, value bool) error {
 	roles := map[string]string{
-		"admin":     "is_admin",
-		"merchant":  "is_merchant",
-		"organizer": "is_organizer",
-		"improver":  "is_improver",
-		"proposer":  "is_proposer",
-		"voter":     "is_voter",
-		"issuer":    "is_issuer",
+		"admin":      "is_admin",
+		"merchant":   "is_merchant",
+		"organizer":  "is_organizer",
+		"improver":   "is_improver",
+		"proposer":   "is_proposer",
+		"voter":      "is_voter",
+		"issuer":     "is_issuer",
 		"supervisor": "is_supervisor",
-		"affiliate": "is_affiliate",
+		"affiliate":  "is_affiliate",
 	}
 
 	role, ok := roles[role]
@@ -143,13 +143,13 @@ func (a *AppDB) GetUsers(ctx context.Context, page int, count int) ([]*structs.U
 			&user.IsAdmin,
 			&user.IsMerchant,
 			&user.IsOrganizer,
-				&user.IsImprover,
-				&user.IsProposer,
-				&user.IsVoter,
-				&user.IsIssuer,
-				&user.IsSupervisor,
-				&user.IsAffiliate,
-				&user.Email,
+			&user.IsImprover,
+			&user.IsProposer,
+			&user.IsVoter,
+			&user.IsIssuer,
+			&user.IsSupervisor,
+			&user.IsAffiliate,
+			&user.Email,
 			&user.Phone,
 			&user.Name,
 			&user.PayPalEth,
@@ -210,4 +210,28 @@ func (a *AppDB) GetUserById(ctx context.Context, userId string) (*structs.User, 
 	}
 
 	return &user, nil
+}
+
+func (a *AppDB) GetAllUserIDs(ctx context.Context) ([]string, error) {
+	rows, err := a.db.Query(ctx, `
+		SELECT
+			id
+		FROM
+			users;
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("error getting all user ids: %s", err)
+	}
+	defer rows.Close()
+
+	ids := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			continue
+		}
+		ids = append(ids, id)
+	}
+
+	return ids, nil
 }

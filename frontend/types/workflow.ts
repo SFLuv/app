@@ -119,6 +119,7 @@ export interface Workflow {
   supervisor_required: boolean
   supervisor_user_id?: string | null
   supervisor_bounty: number
+  supervisor_data_fields?: WorkflowSupervisorDataField[]
   supervisor_paid_out_at?: number | null
   supervisor_payout_error?: string | null
   supervisor_payout_last_try_at?: number | null
@@ -158,7 +159,7 @@ export interface AdminWorkflowListItem {
   title: string
   description: string
   recurrence: WorkflowRecurrence
-  status: "approved" | "blocked" | "in_progress" | "completed" | "paid_out"
+  status: "approved" | "blocked" | "in_progress" | "completed" | "paid_out" | "deleted"
   start_at: number
   created_at: number
   updated_at: number
@@ -241,6 +242,11 @@ export interface WorkflowSupervisorCreateInput {
   bounty: number
 }
 
+export interface WorkflowSupervisorDataField {
+  key: string
+  value: string
+}
+
 export interface WorkflowCreateRequest {
   series_id?: string
   title: string
@@ -248,6 +254,7 @@ export interface WorkflowCreateRequest {
   recurrence: WorkflowRecurrence
   start_at: string
   supervisor?: WorkflowSupervisorCreateInput
+  supervisor_data_fields?: WorkflowSupervisorDataField[]
   roles: WorkflowRoleCreateInput[]
   steps: WorkflowStepCreateInput[]
 }
@@ -260,6 +267,7 @@ export interface WorkflowTemplateCreateRequest {
   start_at: string
   supervisor_user_id?: string
   supervisor_bounty?: number
+  supervisor_data_fields?: WorkflowSupervisorDataField[]
   roles: WorkflowRoleCreateInput[]
   steps: WorkflowStepCreateInput[]
 }
@@ -276,6 +284,7 @@ export interface WorkflowTemplate {
   series_id?: string | null
   supervisor_user_id?: string | null
   supervisor_bounty?: number | null
+  supervisor_data_fields?: WorkflowSupervisorDataField[]
   roles: WorkflowRoleCreateInput[]
   steps: WorkflowStepCreateInput[]
   created_at: number

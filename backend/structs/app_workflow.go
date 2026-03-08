@@ -106,33 +106,40 @@ type SupervisorUpdateRequest struct {
 }
 
 type WorkflowCreateRequest struct {
-	SeriesId    *string                        `json:"series_id,omitempty"`
-	Title       string                         `json:"title"`
-	Description string                         `json:"description"`
-	Recurrence  string                         `json:"recurrence"`
-	StartAt     string                         `json:"start_at"`
-	Supervisor  *WorkflowSupervisorCreateInput `json:"supervisor,omitempty"`
-	Manager     *WorkflowManagerCreateInput    `json:"manager,omitempty"`
-	Roles       []WorkflowRoleCreateInput      `json:"roles"`
-	Steps       []WorkflowStepCreateInput      `json:"steps"`
+	SeriesId             *string                        `json:"series_id,omitempty"`
+	Title                string                         `json:"title"`
+	Description          string                         `json:"description"`
+	Recurrence           string                         `json:"recurrence"`
+	StartAt              string                         `json:"start_at"`
+	Supervisor           *WorkflowSupervisorCreateInput `json:"supervisor,omitempty"`
+	SupervisorDataFields []WorkflowSupervisorDataField  `json:"supervisor_data_fields,omitempty"`
+	Manager              *WorkflowManagerCreateInput    `json:"manager,omitempty"`
+	Roles                []WorkflowRoleCreateInput      `json:"roles"`
+	Steps                []WorkflowStepCreateInput      `json:"steps"`
 }
 
 type WorkflowTemplateCreateRequest struct {
-	TemplateTitle       string                      `json:"template_title"`
-	TemplateDescription string                      `json:"template_description"`
-	SeriesId            *string                     `json:"series_id,omitempty"`
-	Recurrence          string                      `json:"recurrence"`
-	StartAt             string                      `json:"start_at"`
-	SupervisorUserId    *string                     `json:"supervisor_user_id,omitempty"`
-	SupervisorBounty    *uint64                     `json:"supervisor_bounty,omitempty"`
-	Manager             *WorkflowManagerCreateInput `json:"manager,omitempty"`
-	Roles               []WorkflowRoleCreateInput   `json:"roles"`
-	Steps               []WorkflowStepCreateInput   `json:"steps"`
+	TemplateTitle        string                        `json:"template_title"`
+	TemplateDescription  string                        `json:"template_description"`
+	SeriesId             *string                       `json:"series_id,omitempty"`
+	Recurrence           string                        `json:"recurrence"`
+	StartAt              string                        `json:"start_at"`
+	SupervisorUserId     *string                       `json:"supervisor_user_id,omitempty"`
+	SupervisorBounty     *uint64                       `json:"supervisor_bounty,omitempty"`
+	SupervisorDataFields []WorkflowSupervisorDataField `json:"supervisor_data_fields,omitempty"`
+	Manager              *WorkflowManagerCreateInput   `json:"manager,omitempty"`
+	Roles                []WorkflowRoleCreateInput     `json:"roles"`
+	Steps                []WorkflowStepCreateInput     `json:"steps"`
 }
 
 type WorkflowSupervisorCreateInput struct {
 	UserId string `json:"user_id"`
 	Bounty uint64 `json:"bounty"`
+}
+
+type WorkflowSupervisorDataField struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
 }
 
 type WorkflowManagerCreateInput struct {
@@ -184,49 +191,51 @@ type WorkflowDropdownOption struct {
 }
 
 type Workflow struct {
-	Id                         string         `json:"id"`
-	SeriesId                   string         `json:"series_id"`
-	ProposerId                 string         `json:"proposer_id"`
-	Title                      string         `json:"title"`
-	Description                string         `json:"description"`
-	Recurrence                 string         `json:"recurrence"`
-	StartAt                    int64          `json:"start_at"`
-	Status                     string         `json:"status"`
-	IsStartBlocked             bool           `json:"is_start_blocked"`
-	BlockedByWorkflowId        *string        `json:"blocked_by_workflow_id,omitempty"`
-	TotalBounty                uint64         `json:"total_bounty"`
-	WeeklyBountyRequirement    uint64         `json:"weekly_bounty_requirement"`
-	BudgetWeeklyDeducted       uint64         `json:"budget_weekly_deducted"`
-	BudgetOneTimeDeducted      uint64         `json:"budget_one_time_deducted"`
-	VoteQuorumReachedAt        *int64         `json:"vote_quorum_reached_at,omitempty"`
-	VoteFinalizeAt             *int64         `json:"vote_finalize_at,omitempty"`
-	VoteFinalizedAt            *int64         `json:"vote_finalized_at,omitempty"`
-	VoteFinalizedByUserId      *string        `json:"vote_finalized_by_user_id,omitempty"`
-	VoteDecision               *string        `json:"vote_decision,omitempty"`
-	SupervisorRequired         bool           `json:"supervisor_required"`
-	SupervisorUserId           *string        `json:"supervisor_user_id,omitempty"`
-	SupervisorBounty           uint64         `json:"supervisor_bounty"`
-	SupervisorPaidOutAt        *int64         `json:"supervisor_paid_out_at,omitempty"`
-	SupervisorPayoutError      *string        `json:"supervisor_payout_error,omitempty"`
-	SupervisorPayoutLastTryAt  *int64         `json:"supervisor_payout_last_try_at,omitempty"`
-	SupervisorRetryRequestedAt *int64         `json:"supervisor_retry_requested_at,omitempty"`
-	SupervisorRetryRequestedBy *string        `json:"supervisor_retry_requested_by,omitempty"`
-	SupervisorTitle            *string        `json:"supervisor_title,omitempty"`
-	SupervisorOrganization     *string        `json:"supervisor_organization,omitempty"`
-	ManagerRequired            bool           `json:"-"`
-	ManagerRoleId              *string        `json:"-"`
-	ManagerImproverId          *string        `json:"-"`
-	ManagerBounty              uint64         `json:"-"`
-	ManagerPaidOutAt           *int64         `json:"-"`
-	ManagerPayoutError         *string        `json:"-"`
-	ManagerPayoutLastTryAt     *int64         `json:"-"`
-	ManagerRetryRequestedAt    *int64         `json:"-"`
-	ManagerRetryRequestedBy    *string        `json:"-"`
-	CreatedAt                  int64          `json:"created_at"`
-	UpdatedAt                  int64          `json:"updated_at"`
-	Roles                      []WorkflowRole `json:"roles"`
-	Steps                      []WorkflowStep `json:"steps"`
-	Votes                      WorkflowVotes  `json:"votes"`
+	Id                         string                        `json:"id"`
+	SeriesId                   string                        `json:"series_id"`
+	ProposerId                 string                        `json:"proposer_id"`
+	Title                      string                        `json:"title"`
+	Description                string                        `json:"description"`
+	Recurrence                 string                        `json:"recurrence"`
+	StartAt                    int64                         `json:"start_at"`
+	Status                     string                        `json:"status"`
+	IsStartBlocked             bool                          `json:"is_start_blocked"`
+	BlockedByWorkflowId        *string                       `json:"blocked_by_workflow_id,omitempty"`
+	TotalBounty                uint64                        `json:"total_bounty"`
+	WeeklyBountyRequirement    uint64                        `json:"weekly_bounty_requirement"`
+	BudgetWeeklyDeducted       uint64                        `json:"budget_weekly_deducted"`
+	BudgetOneTimeDeducted      uint64                        `json:"budget_one_time_deducted"`
+	VoteQuorumReachedAt        *int64                        `json:"vote_quorum_reached_at,omitempty"`
+	VoteFinalizeAt             *int64                        `json:"vote_finalize_at,omitempty"`
+	VoteFinalizedAt            *int64                        `json:"vote_finalized_at,omitempty"`
+	VoteFinalizedByUserId      *string                       `json:"vote_finalized_by_user_id,omitempty"`
+	VoteDecision               *string                       `json:"vote_decision,omitempty"`
+	SupervisorRequired         bool                          `json:"supervisor_required"`
+	SupervisorUserId           *string                       `json:"supervisor_user_id,omitempty"`
+	SupervisorBounty           uint64                        `json:"supervisor_bounty"`
+	SupervisorDataFields       []WorkflowSupervisorDataField `json:"supervisor_data_fields,omitempty"`
+	SupervisorPaidOutAt        *int64                        `json:"supervisor_paid_out_at,omitempty"`
+	SupervisorPayoutError      *string                       `json:"supervisor_payout_error,omitempty"`
+	SupervisorPayoutLastTryAt  *int64                        `json:"supervisor_payout_last_try_at,omitempty"`
+	SupervisorRetryRequestedAt *int64                        `json:"supervisor_retry_requested_at,omitempty"`
+	SupervisorRetryRequestedBy *string                       `json:"supervisor_retry_requested_by,omitempty"`
+	SupervisorTitle            *string                       `json:"supervisor_title,omitempty"`
+	SupervisorOrganization     *string                       `json:"supervisor_organization,omitempty"`
+	ManagerRequired            bool                          `json:"-"`
+	ManagerRoleId              *string                       `json:"-"`
+	ManagerImproverId          *string                       `json:"-"`
+	ManagerBounty              uint64                        `json:"-"`
+	ManagerPaidOutAt           *int64                        `json:"-"`
+	ManagerPayoutError         *string                       `json:"-"`
+	ManagerPayoutLastTryAt     *int64                        `json:"-"`
+	ManagerPayoutInProgress    bool                          `json:"-"`
+	ManagerRetryRequestedAt    *int64                        `json:"-"`
+	ManagerRetryRequestedBy    *string                       `json:"-"`
+	CreatedAt                  int64                         `json:"created_at"`
+	UpdatedAt                  int64                         `json:"updated_at"`
+	Roles                      []WorkflowRole                `json:"roles"`
+	Steps                      []WorkflowStep                `json:"steps"`
+	Votes                      WorkflowVotes                 `json:"votes"`
 }
 
 type ActiveWorkflowListItem struct {
@@ -332,22 +341,23 @@ type WorkflowProposalOutcomeNotification struct {
 }
 
 type WorkflowTemplate struct {
-	Id                  string                      `json:"id"`
-	TemplateTitle       string                      `json:"template_title"`
-	TemplateDescription string                      `json:"template_description"`
-	OwnerUserId         *string                     `json:"owner_user_id,omitempty"`
-	CreatedByUserId     string                      `json:"created_by_user_id"`
-	IsDefault           bool                        `json:"is_default"`
-	Recurrence          string                      `json:"recurrence"`
-	StartAt             int64                       `json:"start_at"`
-	SeriesId            *string                     `json:"series_id,omitempty"`
-	SupervisorUserId    *string                     `json:"supervisor_user_id,omitempty"`
-	SupervisorBounty    *uint64                     `json:"supervisor_bounty,omitempty"`
-	Manager             *WorkflowManagerCreateInput `json:"-"`
-	Roles               []WorkflowRoleCreateInput   `json:"roles"`
-	Steps               []WorkflowStepCreateInput   `json:"steps"`
-	CreatedAt           int64                       `json:"created_at"`
-	UpdatedAt           int64                       `json:"updated_at"`
+	Id                   string                        `json:"id"`
+	TemplateTitle        string                        `json:"template_title"`
+	TemplateDescription  string                        `json:"template_description"`
+	OwnerUserId          *string                       `json:"owner_user_id,omitempty"`
+	CreatedByUserId      string                        `json:"created_by_user_id"`
+	IsDefault            bool                          `json:"is_default"`
+	Recurrence           string                        `json:"recurrence"`
+	StartAt              int64                         `json:"start_at"`
+	SeriesId             *string                       `json:"series_id,omitempty"`
+	SupervisorUserId     *string                       `json:"supervisor_user_id,omitempty"`
+	SupervisorBounty     *uint64                       `json:"supervisor_bounty,omitempty"`
+	SupervisorDataFields []WorkflowSupervisorDataField `json:"supervisor_data_fields,omitempty"`
+	Manager              *WorkflowManagerCreateInput   `json:"-"`
+	Roles                []WorkflowRoleCreateInput     `json:"roles"`
+	Steps                []WorkflowStepCreateInput     `json:"steps"`
+	CreatedAt            int64                         `json:"created_at"`
+	UpdatedAt            int64                         `json:"updated_at"`
 }
 
 type WorkflowRole struct {
@@ -374,6 +384,7 @@ type WorkflowStep struct {
 	CompletedAt          *int64                  `json:"completed_at,omitempty"`
 	PayoutError          *string                 `json:"payout_error,omitempty"`
 	PayoutLastTryAt      *int64                  `json:"payout_last_try_at,omitempty"`
+	PayoutInProgress     bool                    `json:"-"`
 	RetryRequestedAt     *int64                  `json:"retry_requested_at,omitempty"`
 	RetryRequestedBy     *string                 `json:"retry_requested_by,omitempty"`
 	Submission           *WorkflowStepSubmission `json:"submission,omitempty"`
@@ -534,6 +545,13 @@ type WorkflowStepCompleteRequest struct {
 	StepNotPossible        bool                       `json:"step_not_possible"`
 	StepNotPossibleDetails *string                    `json:"step_not_possible_details,omitempty"`
 	Items                  []WorkflowStepItemResponse `json:"items"`
+}
+
+type AdminWorkflowPayoutResolutionRequest struct {
+	TargetType   string `json:"target_type"`
+	Action       string `json:"action"`
+	StepId       string `json:"step_id,omitempty"`
+	ErrorMessage string `json:"error_message,omitempty"`
 }
 
 type WorkflowStepAvailabilityNotification struct {
