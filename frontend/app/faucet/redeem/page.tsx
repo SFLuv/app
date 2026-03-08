@@ -32,6 +32,7 @@ const Page = () => {
   const [continueWithWebWalletRequested, setContinueWithWebWalletRequested] = useState<boolean>(false)
   const [continuingWithWebWallet, setContinuingWithWebWallet] = useState<boolean>(false)
   const [webWalletError, setWebWalletError] = useState<string | null>(null)
+  const [successRedirectTo, setSuccessRedirectTo] = useState<string | null>(null)
   const directRedeemAttemptedRef = useRef<boolean>(false)
   const webWalletRedeemAttemptedRef = useRef<boolean>(false)
   const redirectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -64,10 +65,11 @@ const Page = () => {
     }
   }
 
-  const sendBotRequest = async (address: string) => {
+  const sendBotRequest = async (address: string, overrideReturnTo?: string) => {
     // let verified = verifyAccountOwnership()
     //implement real verification
     try {
+      setSuccessRedirectTo(overrideReturnTo || null)
       setRedeemAccount(address)
       const controller = new AbortController()
       const timeoutId = setTimeout(() => controller.abort(), 20000)
@@ -204,7 +206,10 @@ const Page = () => {
         ensureWebWalletQueryParams(smartWalletReturnTo)
       }
 
-      await sendBotRequest(smartWallet.address)
+      await sendBotRequest(
+        smartWallet.address,
+        !returnTo || returnTo === "/wallets" ? smartWalletReturnTo : undefined
+      )
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unable to continue with web wallet."
       setError(message)
@@ -248,6 +253,7 @@ const Page = () => {
     webWalletRedeemAttemptedRef.current = false
     setContinueWithWebWalletRequested(false)
     setContinuingWithWebWallet(false)
+    setSuccessRedirectTo(null)
   }, [code, sigAuthAccount, sigAuthSignature])
 
   useEffect(() => {
@@ -311,10 +317,10 @@ const Page = () => {
     redirectTimeoutRef.current = setTimeout(() => {
       const destination = hasSigAuth && sigAuthRedirect
         ? `${sigAuthRedirect}/close`
-        : (returnTo || "/wallets")
+        : (success ? (successRedirectTo || returnTo || "/wallets") : (returnTo || "/wallets"))
       router.replace(destination)
     }, 2000)
-  }, [hasSigAuth, returnTo, router, shouldAutoRedirect, sigAuthRedirect])
+  }, [hasSigAuth, returnTo, router, shouldAutoRedirect, sigAuthRedirect, success, successRedirectTo])
 
   useEffect(() => {
     return () => {
