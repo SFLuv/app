@@ -152,9 +152,12 @@ const Page = () => {
     }
 
     const existingReturnTo = normalizeReturnTo(params.get("returnTo"))
-    if (!existingReturnTo && fallbackReturnTo) {
-      params.set("returnTo", fallbackReturnTo)
-      shouldReplace = true
+    if (fallbackReturnTo) {
+      const shouldSetReturnTo = !existingReturnTo || existingReturnTo === "/wallets"
+      if (shouldSetReturnTo && existingReturnTo !== fallbackReturnTo) {
+        params.set("returnTo", fallbackReturnTo)
+        shouldReplace = true
+      }
     }
 
     if (shouldReplace) {
