@@ -21,6 +21,7 @@ import ContactOrAddressInput from "../contacts/contact-or-address-input"
 import type { W9Submission } from "@/types/w9"
 import { usePathname, useRouter, useSearchParams } from "next/navigation"
 import { extractEthereumAddressFromPayload, extractRedeemParamsFromPayload } from "@/lib/qr/payload"
+import jsQR from "jsqr"
 
 type SendFlowMode = "manual" | "scan"
 
@@ -172,17 +173,42 @@ export function SendCryptoModal({ open, onOpenChange, wallet, balance, defaultFl
 
   const detectFromSource = async (source: ImageBitmapSource) => {
     const barcodeDetector = (window as any)?.BarcodeDetector
-    if (!barcodeDetector) {
-      setScannerSupported(false)
-      throw new Error("QR scanning is not supported in this browser.")
+    if (barcodeDetector) {
+      const detector = new barcodeDetector({ formats: ["qr_code"] })
+      const codes = await detector.detect(source)
+      if (codes && codes.length > 0 && codes[0]?.rawValue) {
+        await processScannedPayload(codes[0].rawValue)
+        return
+      }
     }
 
-    const detector = new barcodeDetector({ formats: ["qr_code"] })
-    const codes = await detector.detect(source)
-    if (!codes || codes.length === 0 || !codes[0]?.rawValue) {
+    const width = source instanceof HTMLVideoElement
+      ? source.videoWidth || source.clientWidth
+      : ((source as { width?: number }).width ?? 0)
+    const height = source instanceof HTMLVideoElement
+      ? source.videoHeight || source.clientHeight
+      : ((source as { height?: number }).height ?? 0)
+
+    if (!width || !height) {
       throw new Error("No QR code detected. Try again.")
     }
-    await processScannedPayload(codes[0].rawValue)
+
+    const canvas = document.createElement("canvas")
+    canvas.width = width
+    canvas.height = height
+    const ctx = canvas.getContext("2d", { willReadFrequently: true })
+    if (!ctx) {
+      throw new Error("No QR code detected. Try again.")
+    }
+
+    ctx.drawImage(source as CanvasImageSource, 0, 0, width, height)
+    const imageData = ctx.getImageData(0, 0, width, height)
+    const decoded = jsQR(imageData.data, width, height, { inversionAttempts: "attemptBoth" })
+    if (!decoded?.data) {
+      throw new Error("No QR code detected. Try again.")
+    }
+
+    await processScannedPayload(decoded.data)
   }
 
   const startScanner = async () => {
@@ -209,14 +235,6 @@ export function SendCryptoModal({ open, onOpenChange, wallet, balance, defaultFl
       if (videoRef.current) {
         videoRef.current.srcObject = stream
         await videoRef.current.play()
-      }
-
-      const barcodeDetector = (window as any)?.BarcodeDetector
-      if (!barcodeDetector) {
-        setScannerSupported(false)
-        setScanError("Live QR scan is unavailable in this browser. Use photo upload or manual flow.")
-        stopScanner()
-        return
       }
 
       setScannerRunning(true)
