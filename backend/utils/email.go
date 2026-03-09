@@ -16,6 +16,12 @@ type EmailSender struct {
 }
 
 func NotificationFromEmail() string {
+	if explicit := strings.TrimSpace(os.Getenv("NOTIFICATION_FROM_EMAIL")); explicit != "" {
+		return explicit
+	}
+	if domain := strings.TrimSpace(os.Getenv("MAILGUN_DOMAIN")); domain != "" {
+		return "no_reply@" + domain
+	}
 	return "no_reply@sfluv.org"
 }
 
