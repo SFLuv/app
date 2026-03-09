@@ -3,18 +3,19 @@ package bot
 import (
 	"context"
 	"crypto/ecdsa"
+	"errors"
 	"fmt"
 	"math/big"
 	"os"
+	"time"
 
 	"github.com/SFLuv/app/backend/abi"
 	"github.com/ethereum/go-ethereum"
-	"github.com/ethereum/go-ethereum/accounts/abi/bind/v2"
+	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethclient"
-	"golang.org/x/crypto/sha3"
 )
 
 type IBot interface {
@@ -28,6 +29,37 @@ type Bot struct {
 	pKey    string
 	tokenId string
 	client  *ethclient.Client
+}
+
+type SendError struct {
+	err              error
+	revertRedemption bool
+}
+
+func (e *SendError) Error() string {
+	return e.err.Error()
+}
+
+func (e *SendError) Unwrap() error {
+	return e.err
+}
+
+func newSendError(err error, revertRedemption bool) error {
+	if err == nil {
+		return nil
+	}
+	return &SendError{
+		err:              err,
+		revertRedemption: revertRedemption,
+	}
+}
+
+func ShouldRevertRedemption(err error) bool {
+	var sendErr *SendError
+	if errors.As(err, &sendErr) {
+		return sendErr.revertRedemption
+	}
+	return true
 }
 
 func Init() (*Bot, error) {
@@ -51,6 +83,10 @@ func (b *Bot) Key() string {
 
 // send {amount} tokens to {address}
 func (b *Bot) Send(amount uint64, address string) error {
+	if !common.IsHexAddress(address) {
+		return fmt.Errorf("invalid recipient address: %s", address)
+	}
+
 	decimalString := os.Getenv("TOKEN_DECIMALS")
 	decimals, ok := new(big.Int).SetString(decimalString, 10)
 	if !ok {
@@ -60,75 +96,91 @@ func (b *Bot) Send(amount uint64, address string) error {
 	tokenAmount := new(big.Int).Mul(decimals, big.NewInt(int64(amount)))
 	toAddress := common.HexToAddress(address)
 	tokenAddress := common.HexToAddress(b.tokenId)
-	method := methodId("transfer(address,uint256)")
-
-	paddedAmount := common.LeftPadBytes(tokenAmount.Bytes(), 32)
-	paddedAddress := common.LeftPadBytes(toAddress.Bytes(), 32)
-
-	var data []byte
-	data = append(data, method...)
-	data = append(data, paddedAddress...)
-	data = append(data, paddedAmount...)
-
-	gasPrice, err := b.client.SuggestGasPrice(context.Background())
+	contract, err := abi.NewSFLUVv2(tokenAddress, b.client)
 	if err != nil {
-		err = fmt.Errorf("error getting suggested gas price: %s", err)
-		return err
+		return newSendError(fmt.Errorf("error creating sfluv contract instance: %s", err), true)
 	}
 
 	privateKey, err := crypto.HexToECDSA(b.pKey)
 	if err != nil {
 		err = fmt.Errorf("error parsing private key: %s", err)
-		return err
+		return newSendError(err, true)
 	}
 
 	publicKey := privateKey.Public()
 	publicKeyECDSA, ok := publicKey.(*ecdsa.PublicKey)
 	if !ok {
 		err = fmt.Errorf("error asserting type: publicKey is not of type ecdsa.PublicKey")
-		return err
+		return newSendError(err, true)
 	}
 
 	fromAddress := crypto.PubkeyToAddress(*publicKeyECDSA)
-	nonce, err := b.client.PendingNonceAt(context.Background(), fromAddress)
+
+	contractABI, err := abi.SFLUVv2MetaData.GetAbi()
 	if err != nil {
-		err = fmt.Errorf("error retrieving nonce: %s", err)
-		return err
+		return newSendError(fmt.Errorf("error loading sfluv contract abi: %s", err), true)
 	}
 
-	gasLimit, err := b.client.EstimateGas(context.Background(), ethereum.CallMsg{
+	callData, err := contractABI.Pack("transfer", toAddress, tokenAmount)
+	if err != nil {
+		return newSendError(fmt.Errorf("error packing transfer call data: %s", err), true)
+	}
+
+	simCtx, simCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer simCancel()
+	simResult, err := b.client.CallContract(simCtx, ethereum.CallMsg{
 		From: fromAddress,
 		To:   &tokenAddress,
-		Data: data,
-	})
+		Data: callData,
+	}, nil)
 	if err != nil {
-		err = fmt.Errorf("error estimating gas cost: %s", err)
-		return err
+		return newSendError(fmt.Errorf("transfer simulation failed: %s", err), true)
 	}
 
-	// changed from value to tokenAmount, now not using value
-	tx := types.NewTransaction(nonce, tokenAddress, big.NewInt(0), gasLimit, gasPrice, data)
-
-	chainId, err := b.client.NetworkID(context.Background())
+	decoded, err := contractABI.Unpack("transfer", simResult)
 	if err != nil {
-		err = fmt.Errorf("error getting chainId from rpc node: %s", err)
-		return err
+		return newSendError(fmt.Errorf("error decoding transfer simulation result: %s", err), true)
+	}
+	if len(decoded) > 0 {
+		if ok, cast := decoded[0].(bool); cast && !ok {
+			return newSendError(fmt.Errorf("transfer simulation failed: contract returned false"), true)
+		}
 	}
 
-	signedTx, err := types.SignTx(tx, types.NewEIP155Signer(chainId), privateKey)
+	chainId, err := b.client.ChainID(context.Background())
 	if err != nil {
-		err = fmt.Errorf("error signing transaction: %s", err)
-		return err
+		return newSendError(fmt.Errorf("error getting chainId from rpc node: %s", err), true)
 	}
 
-	err = b.client.SendTransaction(context.Background(), signedTx)
+	s, err := bind.NewKeyedTransactorWithChainID(privateKey, chainId)
 	if err != nil {
-		err = fmt.Errorf("error sending signed transaction: %s", err)
-		return err
+		return newSendError(fmt.Errorf("error creating transactor: %s", err), true)
+	}
+	opts := &bind.TransactOpts{
+		From:    fromAddress,
+		Signer:  s.Signer,
+		Context: context.Background(),
 	}
 
-	fmt.Printf("Sent Transaction: %s\n", signedTx.Hash().Hex())
-	// return err if err
+	tx, err := contract.Transfer(opts, toAddress, tokenAmount)
+	if err != nil {
+		return newSendError(fmt.Errorf("error sending transfer transaction: %s", err), true)
+	}
+
+	waitCtx, waitCancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer waitCancel()
+	receipt, err := bind.WaitMined(waitCtx, b.client, tx)
+	if err != nil {
+		return newSendError(fmt.Errorf("error waiting for transfer tx %s: %w", tx.Hash().Hex(), err), false)
+	}
+	if receipt == nil {
+		return newSendError(fmt.Errorf("missing receipt for transfer tx %s", tx.Hash().Hex()), false)
+	}
+	if receipt.Status != types.ReceiptStatusSuccessful {
+		return newSendError(fmt.Errorf("transfer transaction reverted: %s", tx.Hash().Hex()), true)
+	}
+
+	fmt.Printf("Sent Transaction: %s\n", tx.Hash().Hex())
 	return nil
 }
 
@@ -161,7 +213,10 @@ func (b *Bot) Drain(address common.Address) error {
 		return fmt.Errorf("error parsing public key into ecdsa type")
 	}
 
-	s := bind.NewKeyedTransactor(privKey, chid)
+	s, err := bind.NewKeyedTransactorWithChainID(privKey, chid)
+	if err != nil {
+		return fmt.Errorf("error creating transactor: %s", err)
+	}
 
 	opts := &bind.TransactOpts{
 		From:    crypto.PubkeyToAddress(*pubKey),
@@ -186,14 +241,4 @@ func (b *Bot) Balance() (*big.Int, error) {
 	}
 
 	return contract.BalanceOf(nil, common.HexToAddress(os.Getenv("BOT_ADDRESS")))
-}
-
-func methodId(signature string) []byte {
-	transferFnSignature := []byte(signature)
-
-	hash := sha3.NewLegacyKeccak256()
-	hash.Write(transferFnSignature)
-	methodId := hash.Sum(nil)[:4]
-
-	return methodId
 }

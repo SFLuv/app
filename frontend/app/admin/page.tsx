@@ -1,6 +1,7 @@
 "use client"
 
 import React, { useEffect, useMemo, useState } from "react"
+import { usePathname, useRouter, useSearchParams } from "next/navigation"
 import { useApp } from "@/context/AppProvider"
 import { useMerchants } from "@/hooks/api/use-merchants"
 import { useToast } from "@/hooks/use-toast"
@@ -12,6 +13,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Badge } from "@/components/ui/badge"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Switch } from "@/components/ui/switch"
 import { buildCredentialLabelMap, formatCredentialLabel } from "@/lib/credential-labels"
 import { formatStatusLabel } from "@/lib/status-labels"
 import { formatWorkflowDisplayStatus } from "@/lib/workflow-status"
@@ -122,6 +124,46 @@ export default function AdminPage() {
   const { user, wallets, authFetch, status } = useApp()
   const { getAuthedMapLocations, authedMapLocations} = useLocation()
   const { toast } = useToast()
+  const pathname = usePathname()
+  const router = useRouter()
+  const searchParams = useSearchParams()
+
+  const readQueryNumber = (key: string, fallback: number) => {
+    const rawValue = searchParams.get(key)
+    if (rawValue === null || rawValue.trim() === "") return fallback
+    const raw = Number(rawValue)
+    if (!Number.isFinite(raw)) return fallback
+    return raw >= 0 ? raw : fallback
+  }
+
+  const readQueryBoolean = (key: string, fallback: boolean) => {
+    const raw = searchParams.get(key)
+    if (raw === "true") return true
+    if (raw === "false") return false
+    return fallback
+  }
+
+  const readQueryText = (key: string, fallback: string) => {
+    const raw = searchParams.get(key)
+    return raw === null ? fallback : raw
+  }
+
+  const tabFromQuery = searchParams.get("tab")
+  const isValidAdminTab = (value: string | null): value is string => {
+    if (!value) return false
+    return [
+      "events",
+      "w9",
+      "merchants",
+      "affiliates",
+      "proposers",
+      "improvers",
+      "supervisors",
+      "workflows",
+      "issuers",
+      "credential-types",
+    ].includes(value)
+  }
 
   // Global wallet selection
   const [selectedWallet, setSelectedWallet] = useState<AppWallet | null>(null)
@@ -157,8 +199,8 @@ export default function AdminPage() {
   // Merchant review modal state
   const [selectedLocationForReview, setselectedLocationForReview] = useState<any>(null)
   const [isLocationReviewModalOpen, setisLocationReviewModalOpen] = useState(false)
-  const [merchantStatusFilter, setMerchantStatusFilter] = useState<string>("all")
-  const [merchantSearch, setMerchantSearch] = useState<string>("")
+  const [merchantStatusFilter, setMerchantStatusFilter] = useState<string>(readQueryText("merchant_status", "all"))
+  const [merchantSearch, setMerchantSearch] = useState<string>(readQueryText("merchant_search", ""))
   const [merchantStatusDraft, setMerchantStatusDraft] = useState<ApprovalStatus>("pending")
   const [merchantModalSaving, setMerchantModalSaving] = useState<boolean>(false)
   const [merchantModalError, setMerchantModalError] = useState<string>("")
@@ -175,15 +217,16 @@ export default function AdminPage() {
   const [pendingLocations, setPendingLocations] = useState<AuthedLocation[]>([])
   const [faucetBalance, setFaucetBalance] = useState<string | bigint>("-")
   const [unallocatedBalance, setUnallocatedBalance] = useState<number | undefined>(undefined)
+  const [activeTab, setActiveTab] = useState<string>(isValidAdminTab(tabFromQuery) ? (tabFromQuery as string) : "merchants")
 
   // Events
   const [events, setEvents] = useState<Event[]>([])
   const [eventsStatus, setEventsStatus] = useState<EventsStatus>("loading")
   const [eventsError, setEventsError] = useState<string>("")
-  const [eventsSearch, setEventsSearch] = useState<string>("")
-  const [eventsPage, setEventsPage] = useState<number>(0)
-  const [eventsCount, setEventsCount] = useState<number>(10)
-  const [eventsExpired, setEventsExpired] = useState<boolean>(false)
+  const [eventsSearch, setEventsSearch] = useState<string>(readQueryText("events_search", ""))
+  const [eventsPage, setEventsPage] = useState<number>(readQueryNumber("events_page", 0))
+  const [eventsCount, setEventsCount] = useState<number>(readQueryNumber("events_count", 10))
+  const [eventsExpired, setEventsExpired] = useState<boolean>(readQueryBoolean("events_expired", false))
   const [eventsModalOpen, setEventsModalOpen] = useState<boolean>(false)
   const [eventDetailModalOpen, setEventDetailModalOpen] = useState<boolean>(false)
   const [deleteEventError, setDeleteEventError] = useState<string | undefined>(undefined)
@@ -201,11 +244,11 @@ export default function AdminPage() {
   const [affiliateBonus, setAffiliateBonus] = useState<string>("")
   const [affiliateUpdating, setAffiliateUpdating] = useState<boolean>(false)
   const [affiliateModalError, setAffiliateModalError] = useState<string>("")
-  const [eventsOwnerFilter, setEventsOwnerFilter] = useState<string>("all")
-  const [affiliateStatusFilter, setAffiliateStatusFilter] = useState<string>("all")
+  const [eventsOwnerFilter, setEventsOwnerFilter] = useState<string>(readQueryText("events_owner", "all"))
+  const [affiliateStatusFilter, setAffiliateStatusFilter] = useState<string>(readQueryText("affiliate_status", "all"))
   const [affiliateStatusDraft, setAffiliateStatusDraft] = useState<Affiliate["status"]>("pending")
-  const [affiliateSearch, setAffiliateSearch] = useState<string>("")
-  const [affiliatePage, setAffiliatePage] = useState<number>(0)
+  const [affiliateSearch, setAffiliateSearch] = useState<string>(readQueryText("affiliate_search", ""))
+  const [affiliatePage, setAffiliatePage] = useState<number>(readQueryNumber("affiliate_page", 0))
 
   // Proposers
   const [proposers, setProposers] = useState<Proposer[]>([])
@@ -215,35 +258,35 @@ export default function AdminPage() {
   const [proposerNickname, setProposerNickname] = useState<string>("")
   const [proposerUpdating, setProposerUpdating] = useState<boolean>(false)
   const [proposerModalError, setProposerModalError] = useState<string>("")
-  const [proposerStatusFilter, setProposerStatusFilter] = useState<string>("all")
+  const [proposerStatusFilter, setProposerStatusFilter] = useState<string>(readQueryText("proposer_status", "all"))
   const [proposerStatusDraft, setProposerStatusDraft] = useState<Proposer["status"]>("pending")
-  const [proposerSearch, setProposerSearch] = useState<string>("")
-  const [proposerPage, setProposerPage] = useState<number>(0)
+  const [proposerSearch, setProposerSearch] = useState<string>(readQueryText("proposer_search", ""))
+  const [proposerPage, setProposerPage] = useState<number>(readQueryNumber("proposer_page", 0))
 
   // Improvers
   const [improvers, setImprovers] = useState<Improver[]>([])
   const [improversError, setImproversError] = useState<string>("")
-  const [improverStatusFilter, setImproverStatusFilter] = useState<string>("all")
+  const [improverStatusFilter, setImproverStatusFilter] = useState<string>(readQueryText("improver_status", "all"))
   const [improverModalOpen, setImproverModalOpen] = useState<boolean>(false)
   const [selectedImprover, setSelectedImprover] = useState<Improver | null>(null)
   const [improverStatusDraft, setImproverStatusDraft] = useState<Improver["status"]>("pending")
   const [improverModalUpdating, setImproverModalUpdating] = useState<boolean>(false)
   const [improverModalError, setImproverModalError] = useState<string>("")
-  const [improverSearch, setImproverSearch] = useState<string>("")
-  const [improverPage, setImproverPage] = useState<number>(0)
+  const [improverSearch, setImproverSearch] = useState<string>(readQueryText("improver_search", ""))
+  const [improverPage, setImproverPage] = useState<number>(readQueryNumber("improver_page", 0))
 
   // Supervisors
   const [supervisors, setSupervisors] = useState<Supervisor[]>([])
   const [supervisorsError, setSupervisorsError] = useState<string>("")
-  const [supervisorStatusFilter, setSupervisorStatusFilter] = useState<string>("all")
+  const [supervisorStatusFilter, setSupervisorStatusFilter] = useState<string>(readQueryText("supervisor_status", "all"))
   const [supervisorModalOpen, setSupervisorModalOpen] = useState<boolean>(false)
   const [selectedSupervisor, setSelectedSupervisor] = useState<Supervisor | null>(null)
   const [supervisorNickname, setSupervisorNickname] = useState<string>("")
   const [supervisorStatusDraft, setSupervisorStatusDraft] = useState<Supervisor["status"]>("pending")
   const [supervisorModalUpdating, setSupervisorModalUpdating] = useState<boolean>(false)
   const [supervisorModalError, setSupervisorModalError] = useState<string>("")
-  const [supervisorSearch, setSupervisorSearch] = useState<string>("")
-  const [supervisorPage, setSupervisorPage] = useState<number>(0)
+  const [supervisorSearch, setSupervisorSearch] = useState<string>(readQueryText("supervisor_search", ""))
+  const [supervisorPage, setSupervisorPage] = useState<number>(readQueryNumber("supervisor_page", 0))
 
   // Issuer requests
   const [issuerRequests, setIssuerRequests] = useState<IssuerRecord[]>([])
@@ -254,9 +297,9 @@ export default function AdminPage() {
   const [issuerRequestNickname, setIssuerRequestNickname] = useState<string>("")
   const [issuerRequestStatusDraft, setIssuerRequestStatusDraft] = useState<string>("pending")
   const [issuerRequestModalError, setIssuerRequestModalError] = useState<string>("")
-  const [issuerStatusFilter, setIssuerStatusFilter] = useState<string>("all")
-  const [issuerRequestSearch, setIssuerRequestSearch] = useState<string>("")
-  const [issuerRequestPage, setIssuerRequestPage] = useState<number>(0)
+  const [issuerStatusFilter, setIssuerStatusFilter] = useState<string>(readQueryText("issuer_status", "all"))
+  const [issuerRequestSearch, setIssuerRequestSearch] = useState<string>(readQueryText("issuer_search", ""))
+  const [issuerRequestPage, setIssuerRequestPage] = useState<number>(readQueryNumber("issuer_page", 0))
 
   // Issuer credential scopes
   const [issuers, setIssuers] = useState<IssuerWithScopes[]>([])
@@ -275,9 +318,10 @@ export default function AdminPage() {
   // Workflows (admin)
   const [adminWorkflows, setAdminWorkflows] = useState<AdminWorkflowListItem[]>([])
   const [adminWorkflowsTotal, setAdminWorkflowsTotal] = useState<number>(0)
-  const [adminWorkflowsPage, setAdminWorkflowsPage] = useState<number>(0)
+  const [adminWorkflowsPage, setAdminWorkflowsPage] = useState<number>(readQueryNumber("workflow_page", 0))
   const [adminWorkflowsCount] = useState<number>(20)
-  const [adminWorkflowsSearch, setAdminWorkflowsSearch] = useState<string>("")
+  const [adminWorkflowsSearch, setAdminWorkflowsSearch] = useState<string>(readQueryText("workflow_search", ""))
+  const [adminWorkflowsIncludeArchived, setAdminWorkflowsIncludeArchived] = useState<boolean>(readQueryBoolean("workflow_include_archived", false))
   const [adminWorkflowsError, setAdminWorkflowsError] = useState<string>("")
   const [adminWorkflowDetail, setAdminWorkflowDetail] = useState<Workflow | null>(null)
   const [adminWorkflowDetailOpen, setAdminWorkflowDetailOpen] = useState<boolean>(false)
@@ -351,22 +395,28 @@ export default function AdminPage() {
     getUnallocatedBalance()
   }
 
-  const handleAddEvent = async (ev: Event) => {
+  const handleAddEvent = async (ev: Event): Promise<boolean> => {
     const url = "/events"
     try {
       const res = await authFetch(url, {
         method: "POST",
         body: JSON.stringify(ev)
       })
+      if (!res.ok) {
+        const message = (await res.text()).trim()
+        throw new Error(message || "Error adding event. Please try again later.")
+      }
+      setEventsError("")
+      await getEvents()
+      getUnallocatedBalance()
+      return true
     }
-    catch {
+    catch (error) {
+      const message = error instanceof Error ? error.message : "Error adding event. Please try again later."
       setEventsStatus("error")
-      setEventsError("Error adding event. Please try again later.")
+      setEventsError(message)
+      return false
     }
-
-    await getEvents()
-    toggleNewEventModal()
-    getUnallocatedBalance()
   }
 
   const getFaucetBalance = async () => {
@@ -932,13 +982,20 @@ export default function AdminPage() {
     setIssuerRequestModalOpen(false)
   }
 
-  const getAdminWorkflows = async (search = adminWorkflowsSearch, page = adminWorkflowsPage) => {
+  const getAdminWorkflows = async (
+    search = adminWorkflowsSearch,
+    page = adminWorkflowsPage,
+    includeArchived = adminWorkflowsIncludeArchived,
+  ) => {
     try {
       const params = new URLSearchParams({
         search,
         page: String(page),
         count: String(adminWorkflowsCount),
       })
+      if (includeArchived) {
+        params.set("include_archived", "true")
+      }
       const res = await authFetch(`/admin/workflows?${params}`)
       if (!res.ok) throw new Error()
       const data = (await res.json()) as AdminWorkflowListResponse
@@ -1040,7 +1097,7 @@ export default function AdminPage() {
         description: `Released ${result.released_count} assignment(s).${skipped}`,
       })
       setAdminRevokeModalOpen(false)
-      await getAdminWorkflows(adminWorkflowsSearch, adminWorkflowsPage)
+      await getAdminWorkflows(adminWorkflowsSearch, adminWorkflowsPage, adminWorkflowsIncludeArchived)
       if (adminWorkflowDetail?.id) {
         const resWorkflow = await authFetch(`/workflows/${adminWorkflowDetail.id}`)
         if (resWorkflow.ok) {
@@ -1054,6 +1111,170 @@ export default function AdminPage() {
       setAdminRevokeSubmitting(false)
     }
   }
+
+  useEffect(() => {
+    const nextTab = searchParams.get("tab")
+    if (isValidAdminTab(nextTab) && nextTab !== activeTab) {
+      setActiveTab(nextTab)
+    }
+
+    const nextMerchantSearch = readQueryText("merchant_search", "")
+    if (nextMerchantSearch !== merchantSearch) setMerchantSearch(nextMerchantSearch)
+    const nextMerchantStatus = readQueryText("merchant_status", "all")
+    if (nextMerchantStatus !== merchantStatusFilter) setMerchantStatusFilter(nextMerchantStatus)
+
+    const nextEventsSearch = readQueryText("events_search", "")
+    if (nextEventsSearch !== eventsSearch) setEventsSearch(nextEventsSearch)
+    const nextEventsPage = readQueryNumber("events_page", 0)
+    if (nextEventsPage !== eventsPage) setEventsPage(nextEventsPage)
+    const nextEventsCount = readQueryNumber("events_count", 10)
+    if (nextEventsCount !== eventsCount) setEventsCount(nextEventsCount)
+    const nextEventsExpired = readQueryBoolean("events_expired", false)
+    if (nextEventsExpired !== eventsExpired) setEventsExpired(nextEventsExpired)
+    const nextEventsOwner = readQueryText("events_owner", "all")
+    if (nextEventsOwner !== eventsOwnerFilter) setEventsOwnerFilter(nextEventsOwner)
+
+    const nextAffiliateSearch = readQueryText("affiliate_search", "")
+    if (nextAffiliateSearch !== affiliateSearch) setAffiliateSearch(nextAffiliateSearch)
+    const nextAffiliatePage = readQueryNumber("affiliate_page", 0)
+    if (nextAffiliatePage !== affiliatePage) setAffiliatePage(nextAffiliatePage)
+    const nextAffiliateStatus = readQueryText("affiliate_status", "all")
+    if (nextAffiliateStatus !== affiliateStatusFilter) setAffiliateStatusFilter(nextAffiliateStatus)
+
+    const nextProposerSearch = readQueryText("proposer_search", "")
+    if (nextProposerSearch !== proposerSearch) setProposerSearch(nextProposerSearch)
+    const nextProposerPage = readQueryNumber("proposer_page", 0)
+    if (nextProposerPage !== proposerPage) setProposerPage(nextProposerPage)
+    const nextProposerStatus = readQueryText("proposer_status", "all")
+    if (nextProposerStatus !== proposerStatusFilter) setProposerStatusFilter(nextProposerStatus)
+
+    const nextImproverSearch = readQueryText("improver_search", "")
+    if (nextImproverSearch !== improverSearch) setImproverSearch(nextImproverSearch)
+    const nextImproverPage = readQueryNumber("improver_page", 0)
+    if (nextImproverPage !== improverPage) setImproverPage(nextImproverPage)
+    const nextImproverStatus = readQueryText("improver_status", "all")
+    if (nextImproverStatus !== improverStatusFilter) setImproverStatusFilter(nextImproverStatus)
+
+    const nextSupervisorSearch = readQueryText("supervisor_search", "")
+    if (nextSupervisorSearch !== supervisorSearch) setSupervisorSearch(nextSupervisorSearch)
+    const nextSupervisorPage = readQueryNumber("supervisor_page", 0)
+    if (nextSupervisorPage !== supervisorPage) setSupervisorPage(nextSupervisorPage)
+    const nextSupervisorStatus = readQueryText("supervisor_status", "all")
+    if (nextSupervisorStatus !== supervisorStatusFilter) setSupervisorStatusFilter(nextSupervisorStatus)
+
+    const nextIssuerSearch = readQueryText("issuer_search", "")
+    if (nextIssuerSearch !== issuerRequestSearch) setIssuerRequestSearch(nextIssuerSearch)
+    const nextIssuerPage = readQueryNumber("issuer_page", 0)
+    if (nextIssuerPage !== issuerRequestPage) setIssuerRequestPage(nextIssuerPage)
+    const nextIssuerStatus = readQueryText("issuer_status", "all")
+    if (nextIssuerStatus !== issuerStatusFilter) setIssuerStatusFilter(nextIssuerStatus)
+
+    const nextWorkflowSearch = readQueryText("workflow_search", "")
+    if (nextWorkflowSearch !== adminWorkflowsSearch) setAdminWorkflowsSearch(nextWorkflowSearch)
+    const nextWorkflowPage = readQueryNumber("workflow_page", 0)
+    if (nextWorkflowPage !== adminWorkflowsPage) setAdminWorkflowsPage(nextWorkflowPage)
+    const nextWorkflowIncludeArchived = readQueryBoolean("workflow_include_archived", false)
+    if (nextWorkflowIncludeArchived !== adminWorkflowsIncludeArchived) setAdminWorkflowsIncludeArchived(nextWorkflowIncludeArchived)
+  }, [searchParams])
+
+  useEffect(() => {
+    const params = new URLSearchParams(searchParams.toString())
+
+    params.set("tab", activeTab)
+
+    if (merchantSearch) params.set("merchant_search", merchantSearch)
+    else params.delete("merchant_search")
+    if (merchantStatusFilter !== "all") params.set("merchant_status", merchantStatusFilter)
+    else params.delete("merchant_status")
+
+    if (eventsSearch) params.set("events_search", eventsSearch)
+    else params.delete("events_search")
+    if (eventsPage > 0) params.set("events_page", String(eventsPage))
+    else params.delete("events_page")
+    if (eventsCount !== 10) params.set("events_count", String(eventsCount))
+    else params.delete("events_count")
+    if (eventsExpired) params.set("events_expired", "true")
+    else params.delete("events_expired")
+    if (eventsOwnerFilter !== "all") params.set("events_owner", eventsOwnerFilter)
+    else params.delete("events_owner")
+
+    if (affiliateSearch) params.set("affiliate_search", affiliateSearch)
+    else params.delete("affiliate_search")
+    if (affiliatePage > 0) params.set("affiliate_page", String(affiliatePage))
+    else params.delete("affiliate_page")
+    if (affiliateStatusFilter !== "all") params.set("affiliate_status", affiliateStatusFilter)
+    else params.delete("affiliate_status")
+
+    if (proposerSearch) params.set("proposer_search", proposerSearch)
+    else params.delete("proposer_search")
+    if (proposerPage > 0) params.set("proposer_page", String(proposerPage))
+    else params.delete("proposer_page")
+    if (proposerStatusFilter !== "all") params.set("proposer_status", proposerStatusFilter)
+    else params.delete("proposer_status")
+
+    if (improverSearch) params.set("improver_search", improverSearch)
+    else params.delete("improver_search")
+    if (improverPage > 0) params.set("improver_page", String(improverPage))
+    else params.delete("improver_page")
+    if (improverStatusFilter !== "all") params.set("improver_status", improverStatusFilter)
+    else params.delete("improver_status")
+
+    if (supervisorSearch) params.set("supervisor_search", supervisorSearch)
+    else params.delete("supervisor_search")
+    if (supervisorPage > 0) params.set("supervisor_page", String(supervisorPage))
+    else params.delete("supervisor_page")
+    if (supervisorStatusFilter !== "all") params.set("supervisor_status", supervisorStatusFilter)
+    else params.delete("supervisor_status")
+
+    if (issuerRequestSearch) params.set("issuer_search", issuerRequestSearch)
+    else params.delete("issuer_search")
+    if (issuerRequestPage > 0) params.set("issuer_page", String(issuerRequestPage))
+    else params.delete("issuer_page")
+    if (issuerStatusFilter !== "all") params.set("issuer_status", issuerStatusFilter)
+    else params.delete("issuer_status")
+
+    if (adminWorkflowsSearch) params.set("workflow_search", adminWorkflowsSearch)
+    else params.delete("workflow_search")
+    if (adminWorkflowsPage > 0) params.set("workflow_page", String(adminWorkflowsPage))
+    else params.delete("workflow_page")
+    if (adminWorkflowsIncludeArchived) params.set("workflow_include_archived", "true")
+    else params.delete("workflow_include_archived")
+
+    const nextQuery = params.toString()
+    if (nextQuery !== searchParams.toString()) {
+      router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname, { scroll: false })
+    }
+  }, [
+    activeTab,
+    merchantSearch,
+    merchantStatusFilter,
+    eventsSearch,
+    eventsPage,
+    eventsCount,
+    eventsExpired,
+    eventsOwnerFilter,
+    affiliateSearch,
+    affiliatePage,
+    affiliateStatusFilter,
+    proposerSearch,
+    proposerPage,
+    proposerStatusFilter,
+    improverSearch,
+    improverPage,
+    improverStatusFilter,
+    supervisorSearch,
+    supervisorPage,
+    supervisorStatusFilter,
+    issuerRequestSearch,
+    issuerRequestPage,
+    issuerStatusFilter,
+    adminWorkflowsSearch,
+    adminWorkflowsPage,
+    adminWorkflowsIncludeArchived,
+    pathname,
+    router,
+    searchParams,
+  ])
 
   useEffect(() => {
     if(wallets.length) {
@@ -1073,7 +1294,64 @@ export default function AdminPage() {
   useEffect(() => { getImprovers(improverSearch, improverPage) }, [improverSearch, improverPage])
   useEffect(() => { getSupervisors(supervisorSearch, supervisorPage) }, [supervisorSearch, supervisorPage])
   useEffect(() => { getIssuerRequests(issuerRequestSearch, issuerRequestPage) }, [issuerRequestSearch, issuerRequestPage])
-  useEffect(() => { getAdminWorkflows(adminWorkflowsSearch, adminWorkflowsPage) }, [adminWorkflowsSearch, adminWorkflowsPage])
+  useEffect(() => { getAdminWorkflows(adminWorkflowsSearch, adminWorkflowsPage, adminWorkflowsIncludeArchived) }, [adminWorkflowsSearch, adminWorkflowsPage, adminWorkflowsIncludeArchived])
+
+  useEffect(() => {
+    if (status !== "authenticated") return
+
+    switch (activeTab) {
+      case "merchants":
+        void getAuthedMapLocations()
+        break
+      case "events":
+        void getEvents()
+        void getUnallocatedBalance()
+        break
+      case "w9":
+        void fetchPendingW9Submissions()
+        break
+      case "affiliates":
+        void getAffiliates(affiliateSearch, affiliatePage)
+        break
+      case "proposers":
+        void getProposers(proposerSearch, proposerPage)
+        break
+      case "improvers":
+        void getImprovers(improverSearch, improverPage)
+        break
+      case "supervisors":
+        void getSupervisors(supervisorSearch, supervisorPage)
+        break
+      case "workflows":
+        void getAdminWorkflows(adminWorkflowsSearch, adminWorkflowsPage, adminWorkflowsIncludeArchived)
+        break
+      case "issuers":
+        void getIssuerRequests(issuerRequestSearch, issuerRequestPage)
+        void getIssuers()
+        break
+      case "credential-types":
+        void getCredentialTypes()
+        break
+      default:
+        break
+    }
+  }, [
+    activeTab,
+    status,
+    affiliateSearch,
+    affiliatePage,
+    proposerSearch,
+    proposerPage,
+    improverSearch,
+    improverPage,
+    supervisorSearch,
+    supervisorPage,
+    adminWorkflowsSearch,
+    adminWorkflowsPage,
+    adminWorkflowsIncludeArchived,
+    issuerRequestSearch,
+    issuerRequestPage,
+  ])
 
   const fetchPendingW9Submissions = async () => {
     if (!user?.isAdmin) return
@@ -1650,7 +1928,7 @@ export default function AdminPage() {
         </div>
       </div>
 
-      <Tabs defaultValue="merchants" className="space-y-4 lg:space-y-0">
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4 lg:space-y-0">
         <div className="grid gap-4 lg:grid-cols-[280px_minmax(0,1fr)] lg:items-start lg:gap-6">
           <TabsList className="h-fit w-full flex-col items-stretch gap-2 rounded-xl bg-secondary p-3 lg:sticky lg:top-4 lg:min-w-[280px]">
             <TabsTrigger value="events" className="w-full justify-between px-3 py-2">
@@ -2978,8 +3256,23 @@ export default function AdminPage() {
                     className="pl-9"
                   />
                 </div>
-                <div className="text-sm text-muted-foreground">
-                  Showing {groupedAdminWorkflows.length} series entries from {adminWorkflowsTotal} workflows
+                <div className="flex items-center gap-4">
+                  <div className="text-sm text-muted-foreground">
+                    Showing {groupedAdminWorkflows.length} series entries from {adminWorkflowsTotal} workflows
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Label htmlFor="workflow-include-archived" className="text-sm font-normal text-muted-foreground">
+                      Include archived
+                    </Label>
+                    <Switch
+                      id="workflow-include-archived"
+                      checked={adminWorkflowsIncludeArchived}
+                      onCheckedChange={(checked) => {
+                        setAdminWorkflowsIncludeArchived(Boolean(checked))
+                        setAdminWorkflowsPage(0)
+                      }}
+                    />
+                  </div>
                 </div>
               </div>
 

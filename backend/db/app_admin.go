@@ -81,13 +81,17 @@ func (a *AppDB) UpdateLocationApproval(ctx context.Context, id uint, approval *b
 	}
 
 	_, err = tx.Exec(ctx, `
-		UPDATE
-			locations
-		SET
-			approval = $1
-		WHERE
-			id = $2;
-	`, approval, id)
+			UPDATE
+				locations
+			SET
+				approval = $1,
+				approved_at = CASE
+					WHEN $1 IS TRUE THEN COALESCE(approved_at, NOW())
+					ELSE NULL
+				END
+			WHERE
+				id = $2;
+		`, approval, id)
 	if err != nil {
 		return fmt.Errorf("error updating approval for location %d: %s", id, err)
 	}

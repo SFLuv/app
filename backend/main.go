@@ -96,7 +96,10 @@ func main() {
 	a.SetBotService(s)
 	a.SetRedeemerService(redeemer)
 	a.SetMinterService(minter)
-	p := handlers.NewPonderService(ponderDb, appLogger)
+	if err := a.SyncPrivyLinkedEmailsForAllUsers(ctx); err != nil {
+		appLogger.Logf("error syncing Privy linked emails on startup: %s", err)
+	}
+	p := handlers.NewPonderService(ponderDb, appDb, appLogger)
 
 	r := router.New(s, a, p)
 	port := os.Getenv("PORT")

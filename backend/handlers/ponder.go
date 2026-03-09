@@ -7,9 +7,14 @@ import (
 
 type PonderService struct {
 	db     *db.PonderDB
+	appDB  *db.AppDB
 	logger *logger.LogCloser
 }
 
-func NewPonderService(db *db.PonderDB, logger *logger.LogCloser) *PonderService {
-	return &PonderService{db, logger}
+func NewPonderService(db *db.PonderDB, appDB *db.AppDB, logger *logger.LogCloser) *PonderService {
+	return &PonderService{
+		db:     db,
+		appDB:  appDB,
+		logger: logger,
+	}
 }

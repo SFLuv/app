@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -9,6 +10,7 @@ import (
 	"github.com/SFLuv/app/backend/structs"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -24,26 +26,30 @@ func (s *BotDB) CreateTables(defaultOwner string) error {
 
 	//	Event Table
 	_, err := s.db.Exec(context.Background(), `
-		CREATE TABLE IF NOT EXISTS events(
-			id TEXT PRIMARY KEY NOT NULL,
-			title TEXT,
-			description TEXT,
-			expiration INTEGER,
-			amount INTEGER NOT NULL,
-			owner TEXT
-		);
-	`)
+			CREATE TABLE IF NOT EXISTS events(
+				id TEXT PRIMARY KEY NOT NULL,
+				title TEXT,
+				description TEXT,
+				start_at INTEGER NOT NULL DEFAULT 0,
+				expiration INTEGER,
+				amount INTEGER NOT NULL,
+				owner TEXT
+			);
+		`)
 	if err != nil {
 		err = fmt.Errorf("error creating events table: %s", err)
 		return err
 	}
 
 	_, err = s.db.Exec(context.Background(), `
-		ALTER TABLE events
-		ADD COLUMN IF NOT EXISTS owner TEXT;
+			ALTER TABLE events
+			ADD COLUMN IF NOT EXISTS owner TEXT;
 
-		CREATE INDEX IF NOT EXISTS events_owner_idx ON events(owner);
-	`)
+			ALTER TABLE events
+			ADD COLUMN IF NOT EXISTS start_at INTEGER NOT NULL DEFAULT 0;
+
+			CREATE INDEX IF NOT EXISTS events_owner_idx ON events(owner);
+		`)
 	if err != nil {
 		err = fmt.Errorf("error altering events table for owner column: %s", err)
 		return err
@@ -88,17 +94,90 @@ func (s *BotDB) CreateTables(defaultOwner string) error {
 
 	// Redemptions Table (accounts - events join table)
 	_, err = s.db.Exec(context.Background(), `
-		CREATE TABLE IF NOT EXISTS redemptions(
-			id SERIAL PRIMARY KEY,
-			address TEXT,
-			code TEXT,
-			FOREIGN KEY (code) REFERENCES codes(id)
-		);
+			CREATE TABLE IF NOT EXISTS redemptions(
+				id SERIAL PRIMARY KEY,
+				address TEXT,
+				code TEXT,
+				FOREIGN KEY (code) REFERENCES codes(id)
+			);
 
-		CREATE INDEX IF NOT EXISTS redemption_address ON redemptions(address);
-	`)
+			CREATE INDEX IF NOT EXISTS redemption_address ON redemptions(address);
+		`)
 	if err != nil {
 		err = fmt.Errorf("error creating redemptions table: %s", err)
+		return err
+	}
+
+	_, err = s.db.Exec(context.Background(), `
+		ALTER TABLE redemptions
+		ADD COLUMN IF NOT EXISTS event TEXT;
+
+		UPDATE redemptions r
+		SET event = c.event
+		FROM codes c
+		WHERE r.code = c.id
+		AND (r.event IS NULL OR r.event = '');
+
+		UPDATE redemptions
+		SET address = LOWER(TRIM(address))
+		WHERE address IS NOT NULL;
+
+		DELETE FROM redemptions
+		WHERE address IS NULL
+		OR address = ''
+		OR code IS NULL
+		OR code = ''
+		OR event IS NULL
+		OR event = '';
+
+		DELETE FROM redemptions r
+		USING redemptions dup
+		WHERE r.code = dup.code
+		AND r.id > dup.id;
+
+		DELETE FROM redemptions r
+		USING redemptions dup
+		WHERE r.id > dup.id
+		AND r.address = dup.address
+		AND r.event = dup.event;
+
+		ALTER TABLE redemptions
+		ALTER COLUMN address SET NOT NULL;
+
+		ALTER TABLE redemptions
+		ALTER COLUMN code SET NOT NULL;
+
+		ALTER TABLE redemptions
+		ALTER COLUMN event SET NOT NULL;
+
+		CREATE INDEX IF NOT EXISTS redemption_event_idx ON redemptions(event);
+		CREATE INDEX IF NOT EXISTS redemption_address_event_idx ON redemptions(address, event);
+		CREATE UNIQUE INDEX IF NOT EXISTS redemptions_code_unique_idx ON redemptions(code);
+		CREATE UNIQUE INDEX IF NOT EXISTS redemptions_address_event_unique_idx ON redemptions(address, event);
+	`)
+	if err != nil {
+		err = fmt.Errorf("error migrating redemptions table constraints: %s", err)
+		return err
+	}
+
+	_, err = s.db.Exec(context.Background(), `
+		ALTER TABLE codes
+		ALTER COLUMN redeemed DROP DEFAULT;
+
+		ALTER TABLE codes
+		ALTER COLUMN redeemed TYPE BOOLEAN
+		USING CASE
+			WHEN redeemed IS NULL THEN FALSE
+			WHEN redeemed::text ~ '^-?[0-9]+$' THEN (redeemed::text)::bigint <> 0
+			WHEN LOWER(redeemed::text) IN ('t', 'true', 'y', 'yes', 'on') THEN TRUE
+			ELSE FALSE
+		END;
+
+		ALTER TABLE codes
+		ALTER COLUMN redeemed SET DEFAULT FALSE;
+	`)
+	if err != nil {
+		err = fmt.Errorf("error normalizing codes.redeemed column type: %s", err)
 		return err
 	}
 
@@ -115,10 +194,10 @@ func (s *BotDB) NewEvent(ctx context.Context, e *structs.Event) (string, error) 
 
 	_, err = tx.Exec(ctx, `
 		INSERT INTO events
-			(id, title, description, amount, expiration, owner)
+			(id, title, description, amount, start_at, expiration, owner)
 		VALUES
-		 ($1, $2, $3, $4, $5, $6);
-	`, id, e.Title, e.Description, e.Amount, e.Expiration, e.Owner)
+		 ($1, $2, $3, $4, $5, $6, $7);
+	`, id, e.Title, e.Description, e.Amount, e.StartAt, e.Expiration, e.Owner)
 	if err != nil {
 		tx.Rollback(ctx)
 		err = fmt.Errorf("error inserting event object: %s", err)
@@ -160,6 +239,7 @@ func (s *BotDB) GetEvents(ctx context.Context, e *structs.EventsRequest) ([]*str
 			e.title,
 			e.description,
 			e.amount,
+			e.start_at,
 			e.expiration,
 			e.owner,
 			COUNT(c.id)
@@ -201,6 +281,7 @@ func (s *BotDB) GetEvents(ctx context.Context, e *structs.EventsRequest) ([]*str
 			&event.Title,
 			&event.Description,
 			&event.Amount,
+			&event.StartAt,
 			&event.Expiration,
 			&event.Owner,
 			&event.Codes,
@@ -224,6 +305,7 @@ func (s *BotDB) GetEventsByOwner(ctx context.Context, e *structs.EventsRequest, 
 			e.title,
 			e.description,
 			e.amount,
+			e.start_at,
 			e.expiration,
 			e.owner,
 			COUNT(c.id)
@@ -267,6 +349,7 @@ func (s *BotDB) GetEventsByOwner(ctx context.Context, e *structs.EventsRequest, 
 			&event.Title,
 			&event.Description,
 			&event.Amount,
+			&event.StartAt,
 			&event.Expiration,
 			&event.Owner,
 			&event.Codes,
@@ -448,9 +531,16 @@ func (s *BotDB) NewCode(ctx context.Context, code *structs.Code) (string, error)
 func (s *BotDB) GetCodes(ctx context.Context, r *structs.CodesPageRequest) ([]*structs.Code, error) {
 	offset := r.Page * r.Count
 
-	rows, err := s.db.Query(context.Background(), `
-		SELECT
-			id, redeemed, event
+	rows, err := s.db.Query(ctx, `
+			SELECT
+				id,
+				CASE
+					WHEN redeemed IS NULL THEN false
+					WHEN redeemed::text ~ '^-?[0-9]+$' THEN (redeemed::text)::bigint <> 0
+					WHEN LOWER(redeemed::text) IN ('t', 'true', 'y', 'yes', 'on') THEN true
+					ELSE false
+				END AS redeemed,
+				event
 		FROM codes
 		WHERE event = $1
 		LIMIT $2
@@ -519,98 +609,186 @@ func (s *BotDB) NewCodes(ctx context.Context, r *structs.NewCodesRequest) ([]*st
 	return results, nil
 }
 
-func (s *BotDB) Redeem(ctx context.Context, id string, account string) (uint64, pgx.Tx, error) {
-	tx, err := s.db.Begin(context.Background())
+func (s *BotDB) Redeem(ctx context.Context, id string, account string) (uint64, error) {
+	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		err = fmt.Errorf("error creating db tx: %s", err)
-		return 0, nil, err
+		return 0, err
 	}
+	defer tx.Rollback(context.Background())
 
-	row := tx.QueryRow(context.Background(), `
+	row := tx.QueryRow(ctx, `
 		SELECT
-			event
+			c.event,
+			c.redeemed,
+			e.amount,
+			e.start_at,
+			e.expiration
 		FROM
 			codes c
 		JOIN
-			redemptions r
+			events e
 		ON
-			c.id = r.code
+			e.id = c.event
 		WHERE
-			r.address = $1
-		AND
-			c.event = (
-				SELECT
-					event
-				FROM
-					codes
-				WHERE
-					id = $2
-			);
-	`, account, id)
+			c.id = $1
+		FOR UPDATE;
+	`, id)
 
-	var redeemed string
-	err = row.Scan(&redeemed)
-	if err != pgx.ErrNoRows {
-		fmt.Println(err)
-		err = fmt.Errorf("user redeemed")
-		tx.Rollback(context.Background())
-		return 0, nil, err
+	var eventID string
+	var codeRedeemed bool
+	var amount uint64
+	var startAt int64
+	var expiration int64
+	err = row.Scan(&eventID, &codeRedeemed, &amount, &startAt, &expiration)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return 0, fmt.Errorf("code redeemed")
+		}
+		return 0, fmt.Errorf("error loading redemption code: %w", err)
+	}
+	if codeRedeemed {
+		return 0, fmt.Errorf("code redeemed")
 	}
 
-	time := time.Now().Unix()
+	currentTime := time.Now().Unix()
+	if startAt > currentTime && startAt != 0 {
+		return 0, fmt.Errorf("code not started")
+	}
+	if expiration < currentTime && expiration != 0 {
+		return 0, fmt.Errorf("code expired")
+	}
 
-	row = tx.QueryRow(ctx, `
+	tag, err := tx.Exec(ctx, `
+		UPDATE codes
+		SET redeemed = true
+		WHERE id = $1
+		AND redeemed = false;
+	`, id)
+	if err != nil {
+		return 0, fmt.Errorf("error updating code redemption status: %w", err)
+	}
+	if tag.RowsAffected() != 1 {
+		return 0, fmt.Errorf("code redeemed")
+	}
+
+	_, err = tx.Exec(ctx, `
+		INSERT INTO redemptions(address, code, event)
+		VALUES ($1, $2, $3);
+	`, account, id, eventID)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			switch pgErr.ConstraintName {
+			case "redemptions_address_event_unique_idx":
+				return 0, fmt.Errorf("user redeemed")
+			case "redemptions_code_unique_idx":
+				return 0, fmt.Errorf("code redeemed")
+			}
+		}
+		return 0, fmt.Errorf("error inserting code redemption: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return 0, fmt.Errorf("error committing code redemption: %w", err)
+	}
+
+	return amount, nil
+}
+
+func (s *BotDB) GetCodeAmount(ctx context.Context, id string) (uint64, error) {
+	row := s.db.QueryRow(ctx, `
 		SELECT
-			amount, expiration
-		FROM events
+			e.amount
+		FROM
+			codes c
+		JOIN
+			events e
+		ON
+			e.id = c.event
 		WHERE
-			id = (
-				SELECT
-					(event)
-				FROM codes
-				WHERE
-					(id = $1 AND redeemed = false)
-			);
+			c.id = $1
+		AND
+			c.redeemed = false;
 	`, id)
 
 	var amount uint64
-	var expiration int64
-	err = row.Scan(&amount, &expiration)
-	if err != nil {
-		if err == pgx.ErrNoRows {
-			err = fmt.Errorf("code redeemed")
-		}
-		tx.Rollback(ctx)
-		return 0, nil, err
+	if err := row.Scan(&amount); err != nil {
+		return 0, err
 	}
-	if expiration < time && expiration != 0 {
-		err = fmt.Errorf("code expired")
-		tx.Rollback(ctx)
-		return 0, nil, err
+
+	return amount, nil
+}
+
+func (s *BotDB) UndoRedeem(ctx context.Context, id string, account string) error {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("error creating db tx for redeem undo: %w", err)
+	}
+	defer tx.Rollback(context.Background())
+
+	row := tx.QueryRow(ctx, `
+		SELECT
+			redeemed
+		FROM
+			codes
+		WHERE
+			id = $1
+		FOR UPDATE;
+	`, id)
+
+	var redeemed bool
+	if err := row.Scan(&redeemed); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		return fmt.Errorf("error locking code for redeem undo: %w", err)
+	}
+	if !redeemed {
+		return nil
+	}
+
+	tag, err := tx.Exec(ctx, `
+		DELETE FROM
+			redemptions
+		WHERE
+			code = $1
+		AND
+			address = $2;
+	`, id, account)
+	if err != nil {
+		return fmt.Errorf("error deleting redemption during undo: %w", err)
+	}
+	if tag.RowsAffected() != 1 {
+		return fmt.Errorf("no matching redemption found to undo for code %s", id)
 	}
 
 	_, err = tx.Exec(ctx, `
-		UPDATE codes
-		SET redeemed = true
-		WHERE id = $1;
+		UPDATE
+			codes
+		SET
+			redeemed = false
+		WHERE
+			id = $1
+		AND
+			NOT EXISTS (
+				SELECT
+					1
+				FROM
+					redemptions
+				WHERE
+					code = $1
+			);
 	`, id)
 	if err != nil {
-		err = fmt.Errorf("error updating code redemption status: %s", err)
-		tx.Rollback(ctx)
-		return 0, nil, err
+		return fmt.Errorf("error updating code status during redeem undo: %w", err)
 	}
 
-	_, err = tx.Exec(ctx, `
-		INSERT INTO redemptions(address, code)
-		VALUES ($1, $2);
-	`, account, id)
-	if err != nil {
-		err = fmt.Errorf("error inserting code redemption: %s", err)
-		tx.Rollback(ctx)
-		return 0, nil, err
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("error committing redeem undo: %w", err)
 	}
 
-	return amount, tx, nil
+	return nil
 }
 
 func (s *BotDB) AllocatedBalance(ctx context.Context) (uint64, error) {

@@ -396,7 +396,7 @@ func (a *AppDB) UpsertImproverRequest(ctx context.Context, userId string, req *s
 		return nil, fmt.Errorf("error loading default improver rewards account: %s", err)
 	}
 
-	var status string
+	var existingStatus string
 	err = tx.QueryRow(ctx, `
 		SELECT
 			status
@@ -404,13 +404,13 @@ func (a *AppDB) UpsertImproverRequest(ctx context.Context, userId string, req *s
 			improvers
 		WHERE
 			user_id = $1;
-	`, userId).Scan(&status)
+	`, userId).Scan(&existingStatus)
 	if err == pgx.ErrNoRows {
 		_, err = tx.Exec(ctx, `
 			INSERT INTO improvers
 				(user_id, first_name, last_name, email, primary_rewards_account, status)
 			VALUES
-				($1, $2, $3, $4, $5, 'pending');
+				($1, $2, $3, $4, $5, 'approved');
 		`, userId, first, last, email, defaultRewardsAccount)
 		if err != nil {
 			return nil, fmt.Errorf("error inserting improver request: %s", err)
@@ -418,10 +418,6 @@ func (a *AppDB) UpsertImproverRequest(ctx context.Context, userId string, req *s
 	} else if err != nil {
 		return nil, err
 	} else {
-		if status == "approved" {
-			return nil, fmt.Errorf("improver already approved")
-		}
-
 		_, err = tx.Exec(ctx, `
 			UPDATE
 				improvers
@@ -430,7 +426,7 @@ func (a *AppDB) UpsertImproverRequest(ctx context.Context, userId string, req *s
 				last_name = $3,
 				email = $4,
 				primary_rewards_account = COALESCE(NULLIF(TRIM(primary_rewards_account), ''), $5, ''),
-				status = 'pending',
+				status = 'approved',
 				updated_at = NOW()
 			WHERE
 				user_id = $1;
@@ -445,7 +441,7 @@ func (a *AppDB) UpsertImproverRequest(ctx context.Context, userId string, req *s
 		UPDATE
 			users
 		SET
-			is_improver = false,
+			is_improver = true,
 			contact_name = COALESCE(NULLIF($2, ''), contact_name),
 			contact_email = COALESCE(NULLIF($3, ''), contact_email)
 		WHERE
@@ -1091,14 +1087,45 @@ func getSupervisorByUser(ctx context.Context, querier interface {
 }
 
 type normalizedWorkflowTemplateData struct {
-	SeriesId         *string
-	Recurrence       string
-	StartAt          time.Time
-	SupervisorUserId *string
-	SupervisorBounty *uint64
-	Roles            []structs.WorkflowRoleCreateInput
-	Steps            []structs.WorkflowStepCreateInput
-	TotalBounty      uint64
+	SeriesId             *string
+	Recurrence           string
+	StartAt              time.Time
+	SupervisorUserId     *string
+	SupervisorBounty     *uint64
+	SupervisorDataFields []structs.WorkflowSupervisorDataField
+	Roles                []structs.WorkflowRoleCreateInput
+	Steps                []structs.WorkflowStepCreateInput
+	TotalBounty          uint64
+}
+
+func normalizeWorkflowSupervisorDataFields(fields []structs.WorkflowSupervisorDataField) ([]structs.WorkflowSupervisorDataField, error) {
+	if len(fields) == 0 {
+		return []structs.WorkflowSupervisorDataField{}, nil
+	}
+
+	normalized := make([]structs.WorkflowSupervisorDataField, 0, len(fields))
+	seenKeys := map[string]struct{}{}
+	for _, field := range fields {
+		key := strings.TrimSpace(field.Key)
+		value := strings.TrimSpace(field.Value)
+		if key == "" && value == "" {
+			continue
+		}
+		if key == "" || value == "" {
+			return nil, fmt.Errorf("supervisor data fields require both key and value")
+		}
+		keyLookup := strings.ToLower(key)
+		if _, exists := seenKeys[keyLookup]; exists {
+			return nil, fmt.Errorf("duplicate supervisor data field key: %s", key)
+		}
+		seenKeys[keyLookup] = struct{}{}
+		normalized = append(normalized, structs.WorkflowSupervisorDataField{
+			Key:   key,
+			Value: value,
+		})
+	}
+
+	return normalized, nil
 }
 
 func normalizeWorkflowTemplateData(req *structs.WorkflowTemplateCreateRequest, startAt time.Time, validCredentials map[string]struct{}) (*normalizedWorkflowTemplateData, error) {
@@ -1178,6 +1205,14 @@ func normalizeWorkflowTemplateData(req *structs.WorkflowTemplateCreateRequest, s
 		value := req.Manager.Bounty
 		supervisorBounty = &value
 		totalBounty += value
+	}
+
+	normalizedSupervisorDataFields, err := normalizeWorkflowSupervisorDataFields(req.SupervisorDataFields)
+	if err != nil {
+		return nil, err
+	}
+	if len(normalizedSupervisorDataFields) > 0 && supervisorUserId == nil {
+		return nil, fmt.Errorf("workflow supervisor user_id is required when supervisor data fields are provided")
 	}
 
 	normalizedSteps := make([]structs.WorkflowStepCreateInput, 0, len(req.Steps))
@@ -1288,14 +1323,15 @@ func normalizeWorkflowTemplateData(req *structs.WorkflowTemplateCreateRequest, s
 	}
 
 	return &normalizedWorkflowTemplateData{
-		SeriesId:         seriesId,
-		Recurrence:       recurrence,
-		StartAt:          startAt,
-		SupervisorUserId: supervisorUserId,
-		SupervisorBounty: supervisorBounty,
-		Roles:            normalizedRoles,
-		Steps:            normalizedSteps,
-		TotalBounty:      totalBounty,
+		SeriesId:             seriesId,
+		Recurrence:           recurrence,
+		StartAt:              startAt,
+		SupervisorUserId:     supervisorUserId,
+		SupervisorBounty:     supervisorBounty,
+		SupervisorDataFields: normalizedSupervisorDataFields,
+		Roles:                normalizedRoles,
+		Steps:                normalizedSteps,
+		TotalBounty:          totalBounty,
 	}, nil
 }
 
@@ -1334,6 +1370,10 @@ func (a *AppDB) CreateWorkflowTemplate(
 	if err != nil {
 		return nil, fmt.Errorf("error marshalling template steps: %s", err)
 	}
+	supervisorDataJSON, err := json.Marshal(normalized.SupervisorDataFields)
+	if err != nil {
+		return nil, fmt.Errorf("error marshalling template supervisor data fields: %s", err)
+	}
 	templateId := uuid.NewString()
 	_, err = a.db.Exec(ctx, `
 		INSERT INTO workflow_templates
@@ -1349,12 +1389,13 @@ func (a *AppDB) CreateWorkflowTemplate(
 					series_id,
 					supervisor_user_id,
 					supervisor_bounty,
+					supervisor_data_json,
 					roles_json,
 					steps_json
 				)
 			VALUES
-				($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13::jsonb);
-		`, templateId, templateTitle, templateDescription, ownerUserId, creatorUserId, isDefault, normalized.Recurrence, normalized.StartAt.UTC().Unix(), normalized.SeriesId, normalized.SupervisorUserId, normalized.SupervisorBounty, string(rolesJSON), string(stepsJSON))
+				($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13::jsonb, $14::jsonb);
+		`, templateId, templateTitle, templateDescription, ownerUserId, creatorUserId, isDefault, normalized.Recurrence, normalized.StartAt.UTC().Unix(), normalized.SeriesId, normalized.SupervisorUserId, normalized.SupervisorBounty, string(supervisorDataJSON), string(rolesJSON), string(stepsJSON))
 	if err != nil {
 		return nil, fmt.Errorf("error creating workflow template: %s", err)
 	}
@@ -1376,6 +1417,7 @@ func (a *AppDB) GetWorkflowTemplateByID(ctx context.Context, templateId string) 
 				series_id,
 				supervisor_user_id,
 				supervisor_bounty,
+				COALESCE(supervisor_data_json, '[]'::jsonb),
 				roles_json,
 				steps_json,
 				created_at,
@@ -1389,6 +1431,7 @@ func (a *AppDB) GetWorkflowTemplateByID(ctx context.Context, templateId string) 
 	template := &structs.WorkflowTemplate{}
 	var supervisorUserId *string
 	var supervisorBounty *uint64
+	var supervisorDataBytes []byte
 	var rolesBytes []byte
 	var stepsBytes []byte
 	if err := row.Scan(
@@ -1403,6 +1446,7 @@ func (a *AppDB) GetWorkflowTemplateByID(ctx context.Context, templateId string) 
 		&template.SeriesId,
 		&supervisorUserId,
 		&supervisorBounty,
+		&supervisorDataBytes,
 		&rolesBytes,
 		&stepsBytes,
 		&template.CreatedAt,
@@ -1413,6 +1457,12 @@ func (a *AppDB) GetWorkflowTemplateByID(ctx context.Context, templateId string) 
 
 	template.SupervisorUserId = supervisorUserId
 	template.SupervisorBounty = supervisorBounty
+	template.SupervisorDataFields = []structs.WorkflowSupervisorDataField{}
+	if len(supervisorDataBytes) > 0 {
+		if err := json.Unmarshal(supervisorDataBytes, &template.SupervisorDataFields); err != nil {
+			return nil, fmt.Errorf("error unmarshalling template supervisor data fields: %s", err)
+		}
+	}
 	template.Manager = nil
 
 	template.Roles = []structs.WorkflowRoleCreateInput{}
@@ -1446,6 +1496,7 @@ func (a *AppDB) GetWorkflowTemplatesForProposer(ctx context.Context, proposerId 
 				series_id,
 				supervisor_user_id,
 				supervisor_bounty,
+				COALESCE(supervisor_data_json, '[]'::jsonb),
 				roles_json,
 				steps_json,
 				created_at,
@@ -1470,6 +1521,7 @@ func (a *AppDB) GetWorkflowTemplatesForProposer(ctx context.Context, proposerId 
 		template := &structs.WorkflowTemplate{}
 		var supervisorUserId *string
 		var supervisorBounty *uint64
+		var supervisorDataBytes []byte
 		var rolesBytes []byte
 		var stepsBytes []byte
 		if err := rows.Scan(
@@ -1484,6 +1536,7 @@ func (a *AppDB) GetWorkflowTemplatesForProposer(ctx context.Context, proposerId 
 			&template.SeriesId,
 			&supervisorUserId,
 			&supervisorBounty,
+			&supervisorDataBytes,
 			&rolesBytes,
 			&stepsBytes,
 			&template.CreatedAt,
@@ -1494,6 +1547,12 @@ func (a *AppDB) GetWorkflowTemplatesForProposer(ctx context.Context, proposerId 
 
 		template.SupervisorUserId = supervisorUserId
 		template.SupervisorBounty = supervisorBounty
+		template.SupervisorDataFields = []structs.WorkflowSupervisorDataField{}
+		if len(supervisorDataBytes) > 0 {
+			if err := json.Unmarshal(supervisorDataBytes, &template.SupervisorDataFields); err != nil {
+				return nil, fmt.Errorf("error unmarshalling workflow template supervisor data fields: %s", err)
+			}
+		}
 		template.Manager = nil
 
 		template.Roles = []structs.WorkflowRoleCreateInput{}
@@ -1563,6 +1622,17 @@ func (a *AppDB) CreateWorkflow(ctx context.Context, proposerId string, req *stru
 		}
 		supervisorUserID = &normalizedSupervisorID
 		supervisorBounty = req.Supervisor.Bounty
+	}
+	supervisorDataFields, err := normalizeWorkflowSupervisorDataFields(req.SupervisorDataFields)
+	if err != nil {
+		return nil, err
+	}
+	if len(supervisorDataFields) > 0 && !supervisorRequired {
+		return nil, fmt.Errorf("workflow supervisor must be enabled when supervisor data fields are provided")
+	}
+	supervisorDataJSON, err := json.Marshal(supervisorDataFields)
+	if err != nil {
+		return nil, fmt.Errorf("error marshalling workflow supervisor data fields: %s", err)
 	}
 
 	totalBounty := uint64(0)
@@ -1650,11 +1720,12 @@ func (a *AppDB) CreateWorkflow(ctx context.Context, proposerId string, req *stru
 			proposer_id,
 			title,
 			description,
-			recurrence
+			recurrence,
+			supervisor_data_json
 		)
 		VALUES
-			($1, $2, $3, $4, $5);
-	`, seriesId, proposerId, strings.TrimSpace(req.Title), strings.TrimSpace(req.Description), req.Recurrence)
+			($1, $2, $3, $4, $5, $6::jsonb);
+	`, seriesId, proposerId, strings.TrimSpace(req.Title), strings.TrimSpace(req.Description), req.Recurrence, string(supervisorDataJSON))
 	if err != nil {
 		return nil, fmt.Errorf("error inserting workflow series: %s", err)
 	}
@@ -1912,6 +1983,8 @@ func (a *AppDB) GetWorkflowsByProposer(ctx context.Context, proposerId string) (
 			workflows
 		WHERE
 			proposer_id = $1
+		AND
+			status <> 'deleted'
 		ORDER BY
 			created_at DESC;
 	`, proposerId)
@@ -1949,6 +2022,7 @@ func (a *AppDB) GetWorkflowByID(ctx context.Context, workflowId string) (*struct
 			COALESCE(NULLIF(TRIM(s.title), ''), ''),
 			COALESCE(s.description, ''),
 			COALESCE(NULLIF(TRIM(s.recurrence), ''), 'one_time'),
+			COALESCE(s.supervisor_data_json, '[]'::jsonb),
 			w.start_at,
 			w.status,
 			w.is_start_blocked,
@@ -1969,6 +2043,7 @@ func (a *AppDB) GetWorkflowByID(ctx context.Context, workflowId string) (*struct
 			w.manager_paid_out_at,
 			w.manager_payout_error,
 			w.manager_payout_last_try_at,
+			w.manager_payout_in_progress,
 			w.manager_retry_requested_at,
 			w.manager_retry_requested_by,
 			w.created_at,
@@ -1984,6 +2059,7 @@ func (a *AppDB) GetWorkflowByID(ctx context.Context, workflowId string) (*struct
 	`, workflowId)
 
 	workflow := &structs.Workflow{}
+	var supervisorDataBytes []byte
 	err := row.Scan(
 		&workflow.Id,
 		&workflow.SeriesId,
@@ -1991,6 +2067,7 @@ func (a *AppDB) GetWorkflowByID(ctx context.Context, workflowId string) (*struct
 		&workflow.Title,
 		&workflow.Description,
 		&workflow.Recurrence,
+		&supervisorDataBytes,
 		&workflow.StartAt,
 		&workflow.Status,
 		&workflow.IsStartBlocked,
@@ -2011,6 +2088,7 @@ func (a *AppDB) GetWorkflowByID(ctx context.Context, workflowId string) (*struct
 		&workflow.ManagerPaidOutAt,
 		&workflow.ManagerPayoutError,
 		&workflow.ManagerPayoutLastTryAt,
+		&workflow.ManagerPayoutInProgress,
 		&workflow.ManagerRetryRequestedAt,
 		&workflow.ManagerRetryRequestedBy,
 		&workflow.CreatedAt,
@@ -2018,6 +2096,12 @@ func (a *AppDB) GetWorkflowByID(ctx context.Context, workflowId string) (*struct
 	)
 	if err != nil {
 		return nil, err
+	}
+	workflow.SupervisorDataFields = []structs.WorkflowSupervisorDataField{}
+	if len(supervisorDataBytes) > 0 {
+		if err := json.Unmarshal(supervisorDataBytes, &workflow.SupervisorDataFields); err != nil {
+			return nil, fmt.Errorf("error unmarshalling workflow supervisor data fields: %s", err)
+		}
 	}
 
 	workflow.SupervisorRequired = workflow.ManagerRequired
@@ -2155,6 +2239,7 @@ func (a *AppDB) getWorkflowSteps(ctx context.Context, workflowId string) ([]stru
 			ws.completed_at,
 			ws.payout_error,
 			ws.payout_last_try_at,
+			ws.payout_in_progress,
 			ws.retry_requested_at,
 			ws.retry_requested_by
 		FROM
@@ -2193,6 +2278,7 @@ func (a *AppDB) getWorkflowSteps(ctx context.Context, workflowId string) ([]stru
 			&step.CompletedAt,
 			&step.PayoutError,
 			&step.PayoutLastTryAt,
+			&step.PayoutInProgress,
 			&step.RetryRequestedAt,
 			&step.RetryRequestedBy,
 		); err != nil {
@@ -2497,15 +2583,27 @@ func (a *AppDB) DeleteWorkflowByProposer(ctx context.Context, workflowId string,
 		return err
 	}
 
+	if status == "deleted" {
+		return fmt.Errorf("workflow already archived")
+	}
+
 	if status != "pending" && status != "rejected" && status != "expired" {
-		return fmt.Errorf("workflow cannot be deleted in current status")
+		return fmt.Errorf("workflow cannot be archived in current status")
 	}
 
 	_, err = tx.Exec(ctx, `
-		DELETE FROM workflows WHERE id = $1;
+		UPDATE
+			workflows
+		SET
+			status = 'deleted',
+			is_start_blocked = false,
+			blocked_by_workflow_id = NULL,
+			updated_at = unix_now()
+		WHERE
+			id = $1;
 	`, workflowId)
 	if err != nil {
-		return fmt.Errorf("error deleting workflow: %s", err)
+		return fmt.Errorf("error archiving workflow: %s", err)
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -6057,6 +6155,7 @@ func (a *AppDB) CompleteWorkflowStep(
 				bounty = 0,
 				payout_error = NULL,
 				payout_last_try_at = NULL,
+				payout_in_progress = false,
 				retry_requested_at = NULL,
 				retry_requested_by = NULL,
 				updated_at = unix_now()
@@ -6078,6 +6177,7 @@ func (a *AppDB) CompleteWorkflowStep(
 				manager_paid_out_at = NULL,
 				manager_payout_error = NULL,
 				manager_payout_last_try_at = NULL,
+				manager_payout_in_progress = false,
 				manager_retry_requested_at = NULL,
 				manager_retry_requested_by = NULL,
 				updated_at = unix_now()
@@ -6105,6 +6205,7 @@ func (a *AppDB) CompleteWorkflowStep(
 			status = 'completed',
 			started_at = COALESCE(started_at, unix_now()),
 			completed_at = unix_now(),
+			payout_in_progress = false,
 			updated_at = unix_now()
 		WHERE
 			id = $1;
@@ -6479,6 +6580,312 @@ func truncateWorkflowPayoutErrorMessage(message string) string {
 	return message[:800]
 }
 
+func normalizeAdminWorkflowPayoutResolutionTargetType(value string) (string, error) {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	switch normalized {
+	case "step", "supervisor":
+		return normalized, nil
+	default:
+		return "", fmt.Errorf("invalid payout resolution target type")
+	}
+}
+
+func normalizeAdminWorkflowPayoutResolutionAction(value string) (string, error) {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	switch normalized {
+	case "mark_paid_out", "mark_failed":
+		return normalized, nil
+	default:
+		return "", fmt.Errorf("invalid payout resolution action")
+	}
+}
+
+func (a *AppDB) ResolveWorkflowPayoutLockByAdmin(
+	ctx context.Context,
+	adminId string,
+	workflowId string,
+	req *structs.AdminWorkflowPayoutResolutionRequest,
+) error {
+	adminId = strings.TrimSpace(adminId)
+	workflowId = strings.TrimSpace(workflowId)
+	if adminId == "" {
+		return fmt.Errorf("admin id is required")
+	}
+	if workflowId == "" {
+		return fmt.Errorf("workflow id is required")
+	}
+	if req == nil {
+		return fmt.Errorf("request is required")
+	}
+
+	targetType, err := normalizeAdminWorkflowPayoutResolutionTargetType(req.TargetType)
+	if err != nil {
+		return err
+	}
+	action, err := normalizeAdminWorkflowPayoutResolutionAction(req.Action)
+	if err != nil {
+		return err
+	}
+	stepId := strings.TrimSpace(req.StepId)
+	errorMessage := truncateWorkflowPayoutErrorMessage(req.ErrorMessage)
+	if action == "mark_failed" && errorMessage == "" {
+		errorMessage = "admin manually marked payout as failed"
+	}
+
+	tx, err := a.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	switch targetType {
+	case "step":
+		if stepId == "" {
+			return fmt.Errorf("step id is required for step payout resolution")
+		}
+
+		var stepStatus string
+		var payoutInProgress bool
+		var stepBounty uint64
+		err = tx.QueryRow(ctx, `
+			SELECT
+				status,
+				payout_in_progress,
+				bounty
+			FROM
+				workflow_steps
+			WHERE
+				id = $1
+			AND
+				workflow_id = $2
+			FOR UPDATE;
+		`, stepId, workflowId).Scan(&stepStatus, &payoutInProgress, &stepBounty)
+		if err != nil {
+			return err
+		}
+
+		if stepStatus != "completed" {
+			return fmt.Errorf("workflow step payout resolution requires completed step status")
+		}
+		if stepBounty == 0 {
+			return fmt.Errorf("workflow step payout resolution is not applicable for zero-bounty step")
+		}
+		if !payoutInProgress {
+			return fmt.Errorf("workflow step payout is not currently locked in progress")
+		}
+
+		if action == "mark_paid_out" {
+			_, err = tx.Exec(ctx, `
+				UPDATE
+					workflow_steps
+				SET
+					status = 'paid_out',
+					payout_error = NULL,
+					payout_last_try_at = unix_now(),
+					payout_in_progress = false,
+					retry_requested_at = NULL,
+					retry_requested_by = NULL,
+					updated_at = unix_now()
+				WHERE
+					id = $1
+				AND
+					workflow_id = $2;
+			`, stepId, workflowId)
+			if err != nil {
+				return fmt.Errorf("error marking workflow step paid out during admin payout resolution: %s", err)
+			}
+		} else {
+			_, err = tx.Exec(ctx, `
+				UPDATE
+					workflow_steps
+				SET
+					payout_error = $3,
+					payout_last_try_at = unix_now(),
+					payout_in_progress = false,
+					retry_requested_at = NULL,
+					retry_requested_by = NULL,
+					updated_at = unix_now()
+				WHERE
+					id = $1
+				AND
+					workflow_id = $2;
+			`, stepId, workflowId, errorMessage)
+			if err != nil {
+				return fmt.Errorf("error marking workflow step payout failure during admin payout resolution: %s", err)
+			}
+		}
+
+	case "supervisor":
+		if stepId != "" {
+			return fmt.Errorf("step id is not allowed for supervisor payout resolution")
+		}
+
+		var workflowStatus string
+		var managerBounty uint64
+		var managerImproverId *string
+		var managerPaidOutAt *int64
+		var managerPayoutInProgress bool
+		err = tx.QueryRow(ctx, `
+			SELECT
+				status,
+				manager_bounty,
+				manager_improver_id,
+				manager_paid_out_at,
+				manager_payout_in_progress
+			FROM
+				workflows
+			WHERE
+				id = $1
+			FOR UPDATE;
+		`, workflowId).Scan(
+			&workflowStatus,
+			&managerBounty,
+			&managerImproverId,
+			&managerPaidOutAt,
+			&managerPayoutInProgress,
+		)
+		if err != nil {
+			return err
+		}
+
+		if workflowStatus != "completed" {
+			return fmt.Errorf("workflow supervisor payout resolution requires completed workflow status")
+		}
+		if managerBounty == 0 || managerImproverId == nil || strings.TrimSpace(*managerImproverId) == "" {
+			return fmt.Errorf("workflow supervisor payout resolution is not applicable for this workflow")
+		}
+		if managerPaidOutAt != nil {
+			return fmt.Errorf("workflow supervisor payout is already marked paid out")
+		}
+		if !managerPayoutInProgress {
+			return fmt.Errorf("workflow supervisor payout is not currently locked in progress")
+		}
+
+		if action == "mark_paid_out" {
+			_, err = tx.Exec(ctx, `
+				UPDATE
+					workflows
+				SET
+					manager_paid_out_at = unix_now(),
+					manager_payout_error = NULL,
+					manager_payout_last_try_at = unix_now(),
+					manager_payout_in_progress = false,
+					manager_retry_requested_at = NULL,
+					manager_retry_requested_by = NULL,
+					updated_at = unix_now()
+				WHERE
+					id = $1;
+			`, workflowId)
+			if err != nil {
+				return fmt.Errorf("error marking workflow supervisor paid out during admin payout resolution: %s", err)
+			}
+		} else {
+			_, err = tx.Exec(ctx, `
+				UPDATE
+					workflows
+				SET
+					manager_payout_error = $2,
+					manager_payout_last_try_at = unix_now(),
+					manager_payout_in_progress = false,
+					manager_retry_requested_at = NULL,
+					manager_retry_requested_by = NULL,
+					updated_at = unix_now()
+				WHERE
+					id = $1;
+			`, workflowId, errorMessage)
+			if err != nil {
+				return fmt.Errorf("error marking workflow supervisor payout failure during admin payout resolution: %s", err)
+			}
+		}
+	}
+
+	var stepIDValue any
+	if targetType == "step" {
+		stepIDValue = stepId
+	} else {
+		stepIDValue = nil
+	}
+	_, err = tx.Exec(ctx, `
+		INSERT INTO workflow_payout_admin_actions(
+			id,
+			workflow_id,
+			step_id,
+			target_type,
+			action,
+			error_message,
+			performed_by_user_id
+		)
+		VALUES
+			($1, $2, $3, $4, $5, $6, $7);
+	`, uuid.NewString(), workflowId, stepIDValue, targetType, action, errorMessage, adminId)
+	if err != nil {
+		return fmt.Errorf("error recording workflow payout admin action: %s", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (a *AppDB) ClaimWorkflowStepPayoutAttempt(ctx context.Context, workflowId string, stepId string) (bool, error) {
+	cmd, err := a.db.Exec(ctx, `
+		UPDATE
+			workflow_steps
+		SET
+			payout_in_progress = true,
+			payout_error = NULL,
+			payout_last_try_at = unix_now(),
+			retry_requested_at = NULL,
+			retry_requested_by = NULL,
+			updated_at = unix_now()
+		WHERE
+			id = $1
+		AND
+			workflow_id = $2
+		AND
+			status = 'completed'
+		AND
+			bounty > 0
+		AND
+			payout_in_progress = false;
+	`, stepId, workflowId)
+	if err != nil {
+		return false, fmt.Errorf("error claiming workflow step payout attempt: %s", err)
+	}
+	return cmd.RowsAffected() > 0, nil
+}
+
+func (a *AppDB) ClaimWorkflowManagerPayoutAttempt(ctx context.Context, workflowId string) (bool, error) {
+	cmd, err := a.db.Exec(ctx, `
+		UPDATE
+			workflows
+		SET
+			manager_payout_in_progress = true,
+			manager_payout_error = NULL,
+			manager_payout_last_try_at = unix_now(),
+			manager_retry_requested_at = NULL,
+			manager_retry_requested_by = NULL,
+			updated_at = unix_now()
+		WHERE
+			id = $1
+		AND
+			status = 'completed'
+		AND
+			manager_bounty > 0
+		AND
+			manager_improver_id IS NOT NULL
+		AND
+			manager_paid_out_at IS NULL
+		AND
+			manager_payout_in_progress = false;
+	`, workflowId)
+	if err != nil {
+		return false, fmt.Errorf("error claiming workflow manager payout attempt: %s", err)
+	}
+	return cmd.RowsAffected() > 0, nil
+}
+
 func (a *AppDB) MarkWorkflowStepPayoutFailed(ctx context.Context, workflowId string, stepId string, errorMessage string) error {
 	errorMessage = truncateWorkflowPayoutErrorMessage(errorMessage)
 	cmd, err := a.db.Exec(ctx, `
@@ -6487,6 +6894,7 @@ func (a *AppDB) MarkWorkflowStepPayoutFailed(ctx context.Context, workflowId str
 		SET
 			payout_error = $3,
 			payout_last_try_at = unix_now(),
+			payout_in_progress = false,
 			retry_requested_at = NULL,
 			retry_requested_by = NULL,
 			updated_at = unix_now()
@@ -6514,6 +6922,7 @@ func (a *AppDB) MarkWorkflowManagerPayoutFailed(ctx context.Context, workflowId 
 		SET
 			manager_payout_error = $2,
 			manager_payout_last_try_at = unix_now(),
+			manager_payout_in_progress = false,
 			manager_retry_requested_at = NULL,
 			manager_retry_requested_by = NULL,
 			updated_at = unix_now()
@@ -6545,6 +6954,7 @@ func (a *AppDB) MarkWorkflowStepPaidOut(ctx context.Context, workflowId string, 
 			status = 'paid_out',
 			payout_error = NULL,
 			payout_last_try_at = unix_now(),
+			payout_in_progress = false,
 			retry_requested_at = NULL,
 			retry_requested_by = NULL,
 			updated_at = unix_now()
@@ -6553,7 +6963,9 @@ func (a *AppDB) MarkWorkflowStepPaidOut(ctx context.Context, workflowId string, 
 		AND
 			workflow_id = $2
 		AND
-			status = 'completed';
+			status = 'completed'
+		AND
+			(payout_in_progress = true OR bounty = 0);
 	`, stepId, workflowId)
 	if err != nil {
 		return false, fmt.Errorf("error marking workflow step paid out: %s", err)
@@ -6569,6 +6981,7 @@ func (a *AppDB) MarkWorkflowManagerPaidOut(ctx context.Context, workflowId strin
 			manager_paid_out_at = unix_now(),
 			manager_payout_error = NULL,
 			manager_payout_last_try_at = unix_now(),
+			manager_payout_in_progress = false,
 			manager_retry_requested_at = NULL,
 			manager_retry_requested_by = NULL,
 			updated_at = unix_now()
@@ -6581,7 +6994,9 @@ func (a *AppDB) MarkWorkflowManagerPaidOut(ctx context.Context, workflowId strin
 		AND
 			manager_improver_id IS NOT NULL
 		AND
-			manager_paid_out_at IS NULL;
+			manager_paid_out_at IS NULL
+		AND
+			manager_payout_in_progress = true;
 	`, workflowId)
 	if err != nil {
 		return false, fmt.Errorf("error marking workflow manager paid out: %s", err)
@@ -6600,18 +7015,20 @@ func (a *AppDB) FinalizeWorkflowPaidOutIfSettled(ctx context.Context, workflowId
 	var managerBounty uint64
 	var managerImproverID *string
 	var managerPaidOutAt *int64
+	var managerPayoutInProgress bool
 	err = tx.QueryRow(ctx, `
 		SELECT
 			status,
 			manager_bounty,
 			manager_improver_id,
-			manager_paid_out_at
+			manager_paid_out_at,
+			manager_payout_in_progress
 		FROM
 			workflows
 		WHERE
 			id = $1
 		FOR UPDATE;
-	`, workflowId).Scan(&status, &managerBounty, &managerImproverID, &managerPaidOutAt)
+	`, workflowId).Scan(&status, &managerBounty, &managerImproverID, &managerPaidOutAt, &managerPayoutInProgress)
 	if err != nil {
 		return false, err
 	}
@@ -6630,6 +7047,7 @@ func (a *AppDB) FinalizeWorkflowPaidOutIfSettled(ctx context.Context, workflowId
 			status = 'paid_out',
 			payout_error = NULL,
 			payout_last_try_at = COALESCE(payout_last_try_at, unix_now()),
+			payout_in_progress = false,
 			retry_requested_at = NULL,
 			retry_requested_by = NULL,
 			updated_at = unix_now()
@@ -6665,7 +7083,7 @@ func (a *AppDB) FinalizeWorkflowPaidOutIfSettled(ctx context.Context, workflowId
 		return false, nil
 	}
 
-	if managerBounty > 0 && managerImproverID != nil && managerPaidOutAt == nil {
+	if managerBounty > 0 && managerImproverID != nil && (managerPaidOutAt == nil || managerPayoutInProgress) {
 		if err := tx.Commit(ctx); err != nil {
 			return false, err
 		}
@@ -6729,6 +7147,8 @@ func (a *AppDB) RequestWorkflowStepPayoutRetry(ctx context.Context, workflowId s
 		AND
 			bounty > 0
 		AND
+			payout_in_progress = false
+		AND
 			COALESCE(NULLIF(TRIM(payout_error), ''), '') <> '';
 	`, stepId, workflowId, improverId)
 	if err != nil {
@@ -6758,6 +7178,8 @@ func (a *AppDB) RequestWorkflowManagerPayoutRetry(ctx context.Context, workflowI
 			manager_improver_id = $2
 		AND
 			manager_paid_out_at IS NULL
+		AND
+			manager_payout_in_progress = false
 		AND
 			COALESCE(NULLIF(TRIM(manager_payout_error), ''), '') <> '';
 	`, workflowId, improverId)
@@ -7508,7 +7930,7 @@ func (a *AppDB) GetActiveWorkflows(ctx context.Context) ([]*structs.ActiveWorkfl
 	return results, nil
 }
 
-func (a *AppDB) GetAdminWorkflows(ctx context.Context, search string, page, count int) (*structs.AdminWorkflowListResponse, error) {
+func (a *AppDB) GetAdminWorkflows(ctx context.Context, search string, page, count int, includeArchived bool) (*structs.AdminWorkflowListResponse, error) {
 	if page < 0 {
 		page = 0
 	}
@@ -7571,21 +7993,25 @@ func (a *AppDB) GetAdminWorkflows(ctx context.Context, search string, page, coun
 				ON
 				a.workflow_id = w.id
 			WHERE
-				w.status IN ('approved', 'blocked', 'in_progress', 'completed', 'paid_out')
+				(
+					w.status IN ('approved', 'blocked', 'in_progress', 'completed', 'paid_out')
+				OR
+					($1 AND w.status = 'deleted')
+				)
 		)
 	`
 
 	whereClause := `
 		(
-			$1 = ''
-			OR base.title ILIKE $2
+			$2 = ''
+			OR base.title ILIKE $3
 			OR EXISTS (
 				SELECT
 					1
 				FROM
 					UNNEST(base.assigned_improver_emails) AS email
 				WHERE
-					email ILIKE $2
+					email ILIKE $3
 			)
 		)
 	`
@@ -7599,7 +8025,7 @@ func (a *AppDB) GetAdminWorkflows(ctx context.Context, search string, page, coun
 		WHERE
 			%s;
 	`, whereClause)
-	if err := a.db.QueryRow(ctx, countQuery, trimmedSearch, likeSearch).Scan(&total); err != nil {
+	if err := a.db.QueryRow(ctx, countQuery, includeArchived, trimmedSearch, likeSearch).Scan(&total); err != nil {
 		return nil, fmt.Errorf("error counting admin workflows: %s", err)
 	}
 
@@ -7622,11 +8048,11 @@ func (a *AppDB) GetAdminWorkflows(ctx context.Context, search string, page, coun
 		ORDER BY
 			base.start_at DESC,
 			base.created_at DESC
-		LIMIT $3
-		OFFSET $4;
+		LIMIT $4
+		OFFSET $5;
 	`, whereClause)
 
-	rows, err := a.db.Query(ctx, listQuery, trimmedSearch, likeSearch, count, offset)
+	rows, err := a.db.Query(ctx, listQuery, includeArchived, trimmedSearch, likeSearch, count, offset)
 	if err != nil {
 		return nil, fmt.Errorf("error querying admin workflows: %s", err)
 	}
@@ -8538,7 +8964,7 @@ func finalizeWorkflowDeletionApprovalTx(
 				WHERE
 					id = $1
 				AND
-					status IN ('approved', 'blocked', 'in_progress', 'completed')
+					status <> 'deleted'
 				RETURNING
 					id
 			)
@@ -8555,7 +8981,7 @@ func finalizeWorkflowDeletionApprovalTx(
 				blocked_by_workflow_id IN (SELECT id FROM deleted);
 		`, *targetWorkflowId)
 		if err != nil {
-			return fmt.Errorf("error deleting workflow from approved deletion vote: %s", err)
+			return fmt.Errorf("error archiving workflow from approved deletion vote: %s", err)
 		}
 	}
 
@@ -8570,7 +8996,7 @@ func finalizeWorkflowDeletionApprovalTx(
 				WHERE
 					series_id = $1
 				AND
-					status IN ('approved', 'blocked', 'in_progress', 'completed')
+					status <> 'deleted'
 				RETURNING
 					id
 			)
@@ -8587,7 +9013,7 @@ func finalizeWorkflowDeletionApprovalTx(
 				blocked_by_workflow_id IN (SELECT id FROM deleted);
 		`, *targetSeriesId)
 		if err != nil {
-			return fmt.Errorf("error deleting workflow series from approved deletion vote: %s", err)
+			return fmt.Errorf("error archiving workflow series from approved deletion vote: %s", err)
 		}
 	}
 

@@ -1,7 +1,7 @@
 "use client"
 
-import { useState } from "react"
-import { useRouter } from "next/navigation"
+import { useEffect, useState } from "react"
+import { usePathname, useRouter, useSearchParams } from "next/navigation"
 import { Search, Plus, Calendar } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -17,9 +17,15 @@ const ITEMS_PER_PAGE = 10
 
 export default function YourOpportunitiesPage() {
   const router = useRouter()
+  const pathname = usePathname()
+  const searchParams = useSearchParams()
   const { user } = useApp()
-  const [searchQuery, setSearchQuery] = useState("")
-  const [currentPage, setCurrentPage] = useState(1)
+  const searchFromQuery = searchParams.get("search") || ""
+  const pageFromQuery = Number(searchParams.get("page") || "1")
+  const [searchQuery, setSearchQuery] = useState(searchFromQuery)
+  const [currentPage, setCurrentPage] = useState(
+    Number.isFinite(pageFromQuery) && pageFromQuery >= 1 ? pageFromQuery : 1
+  )
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false)
 
   // Use our custom hook
@@ -50,6 +56,26 @@ export default function YourOpportunitiesPage() {
     (currentPage - 1) * ITEMS_PER_PAGE,
     currentPage * ITEMS_PER_PAGE,
   )
+
+  useEffect(() => {
+    const nextSearch = searchParams.get("search") || ""
+    setSearchQuery((prev) => (nextSearch === prev ? prev : nextSearch))
+    const nextPageRaw = Number(searchParams.get("page") || "1")
+    const normalizedPage = Number.isFinite(nextPageRaw) && nextPageRaw >= 1 ? nextPageRaw : 1
+    setCurrentPage((prev) => (normalizedPage === prev ? prev : normalizedPage))
+  }, [searchParams])
+
+  useEffect(() => {
+    const params = new URLSearchParams(searchParams.toString())
+    if (searchQuery) params.set("search", searchQuery)
+    else params.delete("search")
+    if (currentPage > 1) params.set("page", String(currentPage))
+    else params.delete("page")
+    const nextQuery = params.toString()
+    if (nextQuery !== searchParams.toString()) {
+      router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname, { scroll: false })
+    }
+  }, [currentPage, pathname, router, searchParams, searchQuery])
 
   // Handle page change
   const handlePageChange = (page: number) => {

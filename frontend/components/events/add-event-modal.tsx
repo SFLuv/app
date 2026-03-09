@@ -6,6 +6,7 @@ import { QRCode } from "react-qrcode-logo"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Card, CardContent } from "@/components/ui/card"
 import { Copy, CheckCircle, ChevronLeft, ChevronDown, ChevronRight, AlertTriangle } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
@@ -23,7 +24,7 @@ import { DateTimePicker } from "../ui/datetime-picker"
 interface AddEventModalProps {
   open: boolean
   onOpenChange: (open: boolean) => void
-  handleAddEvent: (e: Event) => Promise<void>
+  handleAddEvent: (e: Event) => Promise<boolean>
   addEventError: unknown
   currentBalance: number
 }
@@ -33,10 +34,13 @@ export function AddEventModal({ open, onOpenChange, handleAddEvent, addEventErro
   const [description, setDescription] = useState<string>("")
   const [amount, setAmount] = useState<number>(0)
   const [codes, setCodes] = useState<number>(0)
+  const [startAt, setStartAt] = useState<number>(0)
   const [expiration, setExpiration] = useState<number>(0)
   const [addError, setAddError] = useState<string | null>(null)
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false)
-  const [datePickerOpen, setDatePickerOpen] = useState<boolean>(false)
+  const [startDatePickerOpen, setStartDatePickerOpen] = useState<boolean>(false)
+  const [expirationDatePickerOpen, setExpirationDatePickerOpen] = useState<boolean>(false)
+  const [startNow, setStartNow] = useState<boolean>(false)
   const [timezone, setTimezone] = useState<string | undefined>(undefined)
 
   useEffect(() => {
@@ -47,6 +51,13 @@ export function AddEventModal({ open, onOpenChange, handleAddEvent, addEventErro
     setTitle("")
     setDescription("")
     setAmount(0)
+    setCodes(0)
+    setStartAt(0)
+    setExpiration(0)
+    setAddError(null)
+    setStartDatePickerOpen(false)
+    setExpirationDatePickerOpen(false)
+    setStartNow(false)
     setIsSubmitting(false)
   }, [open])
 
@@ -68,24 +79,48 @@ export function AddEventModal({ open, onOpenChange, handleAddEvent, addEventErro
       return
     }
 
+    if(!startNow && startAt <= 0) {
+      setAddError("Start time must be set.")
+      return
+    }
+
     if(expiration <= 0) {
       setAddError("Expiration date must be set.")
       return
     }
 
+    const now = Math.floor(Date.now() / 1000)
+    const effectiveStartAt = startNow ? now : startAt
+    if(effectiveStartAt < now) {
+      setAddError("Start time cannot be in the past.")
+      return
+    }
+
+    if(expiration < now) {
+      setAddError("Expiration cannot be in the past.")
+      return
+    }
+
+    if(expiration <= effectiveStartAt) {
+      setAddError("Expiration must be after start time.")
+      return
+    }
+
     setIsSubmitting(true)
-    await handleAddEvent({
+    const ok = await handleAddEvent({
       id: "",
       title,
       description,
       amount,
       codes,
+      start_at: effectiveStartAt,
       expiration
     })
-    if(!addEventError) {
-      onOpenChange(open)
+    if(ok) {
+      onOpenChange(false)
     } else {
-      setAddError("Encountered a server error while adding contact. Please try again later.")
+      const parentError = typeof addEventError === "string" ? addEventError.trim() : ""
+      setAddError(parentError || "Encountered a server error while adding event. Please try again later.")
     }
 
     setIsSubmitting(false)
@@ -163,12 +198,48 @@ export function AddEventModal({ open, onOpenChange, handleAddEvent, addEventErro
             </div>
 
             <div className="space-y-2">
+              <Label className="text-sm font-medium">Start At *</Label>
+              {!startNow && (
+                <DateTimePicker
+                  key={`event-start-${open ? "open" : "closed"}`}
+                  date={startAt}
+                  setDate={setStartAt}
+                  open={startDatePickerOpen}
+                  setOpen={setStartDatePickerOpen}
+                  timezone={timezone}
+                />
+              )}
+              <div className="flex items-center gap-2 pt-1">
+                <Checkbox
+                  id="event-start-now"
+                  checked={startNow}
+                  onCheckedChange={(checked) => {
+                    const next = checked === true
+                    setStartNow(next)
+                    if (next) {
+                      setStartDatePickerOpen(false)
+                    }
+                  }}
+                />
+                <Label htmlFor="event-start-now" className="text-sm font-normal">
+                  Start now
+                </Label>
+              </div>
+              {startNow && (
+                <p className="text-xs text-muted-foreground">
+                  Start time will be set to the current timestamp when you submit.
+                </p>
+              )}
+            </div>
+
+            <div className="space-y-2">
               <Label className="text-sm font-medium">Expiration *</Label>
               <DateTimePicker
+                key={`event-expiration-${open ? "open" : "closed"}`}
                 date={expiration}
                 setDate={setExpiration}
-                open={datePickerOpen}
-                setOpen={setDatePickerOpen}
+                open={expirationDatePickerOpen}
+                setOpen={setExpirationDatePickerOpen}
                 timezone={timezone}
                 />
             </div>

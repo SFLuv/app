@@ -11,7 +11,7 @@ export interface ServerTransaction {
   timestamp: number;
   from: string;
   to: string;
-
+  memo?: string;
 }
 
 export interface Transaction {
@@ -24,6 +24,7 @@ export interface Transaction {
   fromAddress: string
   toName?: string
   toAddress: string
+  memo?: string
   description?: string
   transactionId: string
   category?: string

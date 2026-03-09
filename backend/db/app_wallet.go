@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/SFLuv/app/backend/structs"
@@ -162,6 +163,156 @@ func (a *AppDB) GetWalletByUserAndAddress(ctx context.Context, userId string, ad
 	}
 
 	return &w, nil
+}
+
+func (a *AppDB) GetWalletAddressOwnerLookup(ctx context.Context, address string) (*structs.WalletAddressOwnerLookup, error) {
+	row := a.db.QueryRow(ctx, `
+		SELECT
+			u.id AS user_id,
+			u.is_merchant,
+			COALESCE(
+				NULLIF(TRIM(first_approved_location.name), ''),
+				NULLIF(TRIM(u.contact_name), ''),
+				NULLIF(TRIM(w.name), ''),
+				''
+			) AS merchant_name,
+			w.name AS wallet_name,
+			CASE
+				WHEN LOWER(w.smart_address) = LOWER($1) THEN COALESCE(w.smart_address, '')
+				ELSE w.eoa_address
+			END AS matched_address
+		FROM
+			wallets w
+		JOIN
+			users u
+		ON
+			u.id = w.owner
+		LEFT JOIN LATERAL (
+			SELECT
+				l.name
+			FROM
+				locations l
+			WHERE
+				l.owner_id = u.id
+			AND
+				l.approval = TRUE
+			ORDER BY
+				l.approved_at ASC NULLS LAST,
+				l.id ASC
+			LIMIT 1
+		) first_approved_location
+		ON TRUE
+		WHERE
+			LOWER(w.smart_address) = LOWER($1)
+		OR
+			LOWER(w.eoa_address) = LOWER($1)
+		ORDER BY
+			CASE
+				WHEN LOWER(w.smart_address) = LOWER($1) THEN 0
+				WHEN w.is_eoa = TRUE AND LOWER(w.eoa_address) = LOWER($1) THEN 1
+				ELSE 2
+			END,
+			w.id ASC
+		LIMIT 1;
+	`, address)
+
+	var lookup structs.WalletAddressOwnerLookup
+	err := row.Scan(
+		&lookup.UserID,
+		&lookup.IsMerchant,
+		&lookup.MerchantName,
+		&lookup.WalletName,
+		&lookup.MatchedAddress,
+	)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	return &lookup, nil
+}
+
+func (a *AppDB) GetOwnedWalletAddressSet(ctx context.Context, userID string) (map[string]struct{}, error) {
+	rows, err := a.db.Query(ctx, `
+		SELECT
+			LOWER(eoa_address),
+			LOWER(smart_address)
+		FROM
+			wallets
+		WHERE
+			owner = $1;
+	`, userID)
+	if err != nil {
+		return nil, fmt.Errorf("error querying wallet addresses for user %s: %w", userID, err)
+	}
+	defer rows.Close()
+
+	addressSet := map[string]struct{}{}
+	for rows.Next() {
+		var eoa string
+		var smart sql.NullString
+		if err := rows.Scan(&eoa, &smart); err != nil {
+			return nil, fmt.Errorf("error scanning wallet addresses for user %s: %w", userID, err)
+		}
+		eoa = strings.TrimSpace(strings.ToLower(eoa))
+		if eoa != "" {
+			addressSet[eoa] = struct{}{}
+		}
+		if smart.Valid {
+			smartAddress := strings.TrimSpace(strings.ToLower(smart.String))
+			if smartAddress != "" {
+				addressSet[smartAddress] = struct{}{}
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating wallet addresses for user %s: %w", userID, err)
+	}
+
+	return addressSet, nil
+}
+
+func (a *AppDB) UserOwnsAnyWalletAddress(ctx context.Context, userID string, addresses []string) (bool, error) {
+	normalized := make([]string, 0, len(addresses))
+	seen := map[string]struct{}{}
+	for _, address := range addresses {
+		addr := strings.TrimSpace(strings.ToLower(address))
+		if addr == "" {
+			continue
+		}
+		if _, ok := seen[addr]; ok {
+			continue
+		}
+		seen[addr] = struct{}{}
+		normalized = append(normalized, addr)
+	}
+
+	if len(normalized) == 0 {
+		return false, nil
+	}
+
+	row := a.db.QueryRow(ctx, `
+		SELECT
+			EXISTS (
+				SELECT 1
+				FROM wallets
+				WHERE owner = $1
+				AND (
+					LOWER(eoa_address) = ANY($2)
+					OR
+					LOWER(COALESCE(smart_address, '')) = ANY($2)
+				)
+			);
+	`, userID, normalized)
+
+	var ownsAny bool
+	if err := row.Scan(&ownsAny); err != nil {
+		return false, fmt.Errorf("error checking wallet address ownership for user %s: %w", userID, err)
+	}
+
+	return ownsAny, nil
 }
 
 func (a *AppDB) UpdateWallet(ctx context.Context, wallet *structs.Wallet) error {

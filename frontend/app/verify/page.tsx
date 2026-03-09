@@ -95,7 +95,7 @@ export default function VerifyEmailPage() {
 
           <div className="flex flex-wrap gap-2">
             <Button onClick={() => router.push("/settings")}>Go to Settings</Button>
-            <Button variant="outline" onClick={() => router.push("/")}>
+            <Button variant="outline" onClick={() => router.push("/map")}>
               Back Home
             </Button>
           </div>

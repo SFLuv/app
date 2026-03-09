@@ -116,6 +116,7 @@ const defaultTxState: TxState = {
 }
 
 const AppContext = createContext<AppContextType | null>(null);
+const AppStatusContext = createContext<UserStatus>("loading")
 
 export default function AppProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
@@ -218,15 +219,6 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     if(!privyReady) return;
     if(!walletsReady) return;
 
-    if(pathname.startsWith("/faucet")) {
-      setUser(null)
-      setStatus("unauthenticated")
-      setWallets([])
-      setWalletsStatus("unavailable")
-      setError(null)
-      return
-    }
-
     if(!privyAuthenticated) {
       _resetAppState()
       return
@@ -234,7 +226,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
 
     _userLogin()
 
-  }, [privyReady, privyAuthenticated, walletsReady, privyUser])
+  }, [privyReady, privyAuthenticated, walletsReady, privyUser, pathname])
 
 
   useEffect(() => {
@@ -313,7 +305,13 @@ export default function AppProvider({ children }: { children: ReactNode }) {
   }
 
   const _resetAppState = async () => {
-    replace("/")
+    const allowUnauthedRoute =
+      pathname === "/map" ||
+      pathname.startsWith("/faucet") ||
+      pathname.startsWith("/improver/join")
+    if (!allowUnauthedRoute) {
+      replace("/map")
+    }
     setUser(null)
     setAffiliate(null)
     setProposer(null)
@@ -400,6 +398,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
       if(extWallets === undefined) {
         extWallets = await _getWallets()
       }
+      const isNewAccount = extWallets.length === 0
 
       let wResults: Promise<AppWallet>[] = []
       let cResults: Promise<void>[] = []
@@ -434,7 +433,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
           })
           if(!extSmartWallet) continue
 
-          wResults.push(_initSmartWallet(privyWallet, extSmartWallet, index, i))
+          wResults.push(_initSmartWallet(privyWallet, extSmartWallet, index, i, isNewAccount))
         }
       }
       await Promise.all(cResults)
@@ -477,9 +476,21 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     return w
   }
 
-  const _initSmartWallet = async (privyWallet: ConnectedWallet, wallet: WalletResponse, index: bigint, i: number): Promise<AppWallet> => {
+  const _initSmartWallet = async (
+    privyWallet: ConnectedWallet,
+    wallet: WalletResponse,
+    index: bigint,
+    i: number,
+    isNewAccount: boolean
+  ): Promise<AppWallet> => {
     if(wallet.is_eoa) throw new Error("trying to initialize smart wallet with eoa")
-    const smartWalletName = wallet?.name || "SW-" + (i+1) + "-" + (index + 1n).toString()
+    const existingName = wallet?.name?.trim() || ""
+    const defaultSmartWalletName = "SW-" + (i + 1) + "-" + (index + 1n).toString()
+    const generatedSmartWalletName = index === 0n && isNewAccount ? "Primary Wallet" : defaultSmartWalletName
+    const smartWalletName = existingName || (wallet.id === null ? generatedSmartWalletName : defaultSmartWalletName)
+    if (!existingName && wallet.id === null) {
+      wallet.name = generatedSmartWalletName
+    }
 
     const w = new AppWallet(privyWallet, smartWalletName, {
       index,
@@ -526,7 +537,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
       eoa_address: privyWallet.address,
     }
 
-    const w = await _initSmartWallet(privyWallet, wallet, BigInt(n), 1)
+    const w = await _initSmartWallet(privyWallet, wallet, BigInt(n), 1, false)
     setWallets([...wallets, w])
   }
 
@@ -718,6 +729,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
   }
 
   return (
+      <AppStatusContext.Provider value={status}>
       <AppContext.Provider
         value={{
           status,
@@ -766,6 +778,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
           {children}
         </>
       </AppContext.Provider>
+      </AppStatusContext.Provider>
   )
 }
 
@@ -775,4 +788,8 @@ export function useApp() {
     throw new Error("useApp must be used within an AppProvider");
   }
   return context;
+}
+
+export function useAppStatus() {
+  return useContext(AppStatusContext)
 }
