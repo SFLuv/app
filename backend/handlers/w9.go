@@ -276,7 +276,7 @@ func (a *AppService) SubmitW9(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	stored, ok := a.submitW9(r.Context(), w, &req)
+	stored, ok := a.submitW9(r.Context(), w, &req, "webapp")
 	if !ok {
 		return
 	}
@@ -358,42 +358,7 @@ func (a *AppService) ApproveW9Submission(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	sender := utils.NewEmailSender()
-	if sender != nil {
-		adminEmail := os.Getenv("W9_ADMIN_EMAIL")
-		if adminEmail == "" {
-			adminEmail = "admin@sfluv.org"
-		}
-		fromDomain := os.Getenv("MAILGUN_DOMAIN")
-		fromEmail := "no_reply@sfluv.org"
-		if fromDomain != "" {
-			fromEmail = "no_reply@" + fromDomain
-		}
-		contact := strings.TrimSpace(submission.Email)
-		if contact == "" {
-			contact = submission.WalletAddress
-		}
-		subject := fmt.Sprintf("W9 required for wallet %s", submission.WalletAddress)
-		body := fmt.Sprintf(
-			"%s has reached the 1099 limit and needs a W9 submission form. Please send them a form using <a href=\"https://app.getw9.tax/subscriber\">https://app.getw9.tax/subscriber</a>.<br/><br/>Wallet: %s<br/>Year: %d",
-			contact,
-			submission.WalletAddress,
-			submission.Year,
-		)
-		err = sender.SendEmail(
-			adminEmail,
-			"SFLuv Admin",
-			subject,
-			body,
-			fromEmail,
-			"SFLuv Admin",
-		)
-		if err != nil {
-			a.logger.Logf("error sending w9 admin alert email: %s", err)
-		}
-	} else {
-		a.logger.Logf("w9 admin email not sent; mailgun not configured")
-	}
+	a.sendW9ApprovedUserEmail(r.Context(), submission)
 
 	resp := map[string]any{
 		"submission": submission,
@@ -491,7 +456,7 @@ func (a *AppService) SubmitW9Webhook(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	stored, ok := a.submitW9(r.Context(), w, &req)
+	stored, ok := a.submitW9(r.Context(), w, &req, "wordpress")
 	if !ok {
 		return
 	}
@@ -499,7 +464,7 @@ func (a *AppService) SubmitW9Webhook(w http.ResponseWriter, r *http.Request) {
 	a.writeW9SubmissionResponse(w, stored)
 }
 
-func (a *AppService) submitW9(ctx context.Context, w http.ResponseWriter, req *structs.W9SubmitRequest) (*structs.W9Submission, bool) {
+func (a *AppService) submitW9(ctx context.Context, w http.ResponseWriter, req *structs.W9SubmitRequest, source string) (*structs.W9Submission, bool) {
 	if req.WalletAddress == "" || req.Email == "" {
 		w.WriteHeader(http.StatusBadRequest)
 		return nil, false
@@ -539,7 +504,119 @@ func (a *AppService) submitW9(ctx context.Context, w http.ResponseWriter, req *s
 		w.WriteHeader(http.StatusInternalServerError)
 		return nil, false
 	}
+	a.sendW9AdminAlertEmail(stored, source)
 	return stored, true
+}
+
+func (a *AppService) sendW9ApprovedUserEmail(ctx context.Context, submission *structs.W9Submission) {
+	sender := utils.NewEmailSender()
+	if sender == nil {
+		a.logger.Logf("w9 user approval email not sent; mailgun not configured")
+		return
+	}
+
+	recipientEmail := strings.TrimSpace(submission.Email)
+	if recipientEmail == "" {
+		userId, err := a.db.GetUserIdByWalletAddress(ctx, submission.WalletAddress)
+		if err != nil {
+			a.logger.Logf("error resolving user for w9 approval email: %s", err)
+		} else if userId != nil {
+			email, err := a.db.GetUserContactEmail(ctx, *userId)
+			if err != nil {
+				a.logger.Logf("error resolving user contact email for w9 approval email: %s", err)
+			} else if email != nil {
+				recipientEmail = strings.TrimSpace(*email)
+			}
+		}
+	}
+
+	if recipientEmail == "" {
+		a.logger.Logf("w9 user approval email not sent; no recipient email for wallet %s", submission.WalletAddress)
+		return
+	}
+
+	subject := "W9 approved - restriction removed"
+	body := fmt.Sprintf(
+		"Your W9 has been approved for wallet %s. The $600 restriction has been removed.",
+		submission.WalletAddress,
+	)
+
+	err := sender.SendEmail(
+		recipientEmail,
+		"SFLuv User",
+		subject,
+		body,
+		w9NoReplyFromEmail(),
+		"SFLuv Admin",
+	)
+	if err != nil {
+		a.logger.Logf("error sending w9 approval email: %s", err)
+	}
+}
+
+func (a *AppService) sendW9AdminAlertEmail(submission *structs.W9Submission, source string) {
+	sender := utils.NewEmailSender()
+	if sender == nil {
+		a.logger.Logf("w9 admin email not sent; mailgun not configured")
+		return
+	}
+
+	adminEmail := strings.TrimSpace(os.Getenv("W9_ADMIN_EMAIL"))
+	if adminEmail == "" {
+		adminEmail = "admin@sfluv.org"
+	}
+
+	subject := fmt.Sprintf("W9 required for wallet %s", submission.WalletAddress)
+	contact := strings.TrimSpace(submission.Email)
+	if contact == "" {
+		contact = submission.WalletAddress
+	}
+
+	sourceName := strings.TrimSpace(source)
+	if sourceName == "" {
+		sourceName = "webapp"
+	}
+
+	submittedAtUTC := submission.SubmittedAt.UTC().Format(time.RFC3339)
+	body := fmt.Sprintf(
+		"%s has reached the 1099 limit and needs a W9 submission form. Please send them a form using <a href=\"https://app.getw9.tax/subscriber\">https://app.getw9.tax/subscriber</a>.<br/><br/>Wallet: %s<br/>Email: %s<br/>Year: %d<br/>Source: %s<br/>Submitted at (UTC): %s",
+		contact,
+		submission.WalletAddress,
+		submission.Email,
+		submission.Year,
+		sourceName,
+		submittedAtUTC,
+	)
+	if sourceName == "wordpress" {
+		body = fmt.Sprintf(
+			"A request for a W9 form has been submitted from the Wordpress site.<br/><br/>Wallet: %s<br/>Email: %s<br/>Year: %d<br/>Source: %s<br/>Submitted at (UTC): %s",
+			submission.WalletAddress,
+			submission.Email,
+			submission.Year,
+			sourceName,
+			submittedAtUTC,
+		)
+	}
+
+	err := sender.SendEmail(
+		adminEmail,
+		"SFLuv Admin",
+		subject,
+		body,
+		w9NoReplyFromEmail(),
+		"SFLuv Admin",
+	)
+	if err != nil {
+		a.logger.Logf("error sending w9 admin alert email: %s", err)
+	}
+}
+
+func w9NoReplyFromEmail() string {
+	fromDomain := strings.TrimSpace(os.Getenv("MAILGUN_DOMAIN"))
+	if fromDomain == "" {
+		return "no_reply@sfluv.org"
+	}
+	return "no_reply@" + fromDomain
 }
 
 func (a *AppService) writeW9SubmissionResponse(w http.ResponseWriter, stored *structs.W9Submission) {
