@@ -19,7 +19,7 @@ func NotificationFromEmail() string {
 	if domain := strings.TrimSpace(os.Getenv("MAILGUN_DOMAIN")); domain != "" {
 		return "no_reply@" + domain
 	}
-	return "no_reply@sfluv.org"
+	return "no_reply@mail.sfluv.org"
 }
 
 func NewEmailSender() *EmailSender {
