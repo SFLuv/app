@@ -415,15 +415,20 @@ func (a *AppService) RejectW9Submission(w http.ResponseWriter, r *http.Request) 
 }
 
 func (a *AppService) SubmitW9Webhook(w http.ResponseWriter, r *http.Request) {
-	if secret := os.Getenv("W9_WEBHOOK_SECRET"); secret != "" {
-		key := r.Header.Get("X-W9-Secret")
-		if key == "" {
-			key = r.Header.Get("X-W9-Key")
-		}
-		if key != secret {
-			w.WriteHeader(http.StatusForbidden)
-			return
-		}
+	secret := strings.TrimSpace(os.Getenv("W9_WEBHOOK_SECRET"))
+	if secret == "" {
+		a.logger.Logf("w9 webhook rejected; W9_WEBHOOK_SECRET is not configured")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		return
+	}
+
+	key := r.Header.Get("X-W9-Secret")
+	if key == "" {
+		key = r.Header.Get("X-W9-Key")
+	}
+	if key != secret {
+		w.WriteHeader(http.StatusForbidden)
+		return
 	}
 
 	var req structs.W9SubmitRequest
