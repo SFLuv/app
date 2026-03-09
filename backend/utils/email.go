@@ -15,6 +15,10 @@ type EmailSender struct {
 	mg mailgun.Mailgun
 }
 
+func NotificationFromEmail() string {
+	return "no_reply@sfluv.org"
+}
+
 func NewEmailSender() *EmailSender {
 	domain := os.Getenv("MAILGUN_DOMAIN")
 	apiKey := os.Getenv("MAILGUN_API_KEY")

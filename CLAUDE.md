@@ -13,7 +13,7 @@ SFLUV is a local currency platform using a wrapped HONEY token on Berachain. Thi
 go run ./backend                                    # Run the backend server
 go test -vet=off ./db ./handlers ./router ./structs # Run backend tests
 ```
-Backend env: `backend/.env` — requires `DB_USER`, `DB_PASSWORD`, `DB_URL` (for app, bot, and ponder DBs), `PRIVY_APP_ID`, `PRIVY_VKEY`, `RPC_URL`, `MAILGUN_API_KEY`, `MAILGUN_DOMAIN`, `PONDER_SERVER_BASE_URL`, `PONDER_KEY`, `W9_WEBHOOK_SECRET`.
+Backend env: `backend/.env` — requires `DB_USER`, `DB_PASSWORD`, `DB_URL` (for app, bot, and ponder DBs), `PRIVY_APP_ID`, `PRIVY_VKEY`, `RPC_URL`, `MAILGUN_API_KEY`, `MAILGUN_DOMAIN`, `PONDER_SERVER_BASE_URL`, `PONDER_KEY`.
 
 ### Frontend (Next.js)
 ```bash
@@ -131,7 +131,7 @@ Mailgun is used for all transactional email. Styled HTML templates are construct
 Affiliates (`isAffiliate`) have a separate event/payout flow. `AffiliatScheduler` in `backend/handlers/affiliate_scheduler.go` runs recurring payouts. Routes under `/affiliates/*` are affiliate-guarded.
 
 ### W9 / Compliance
-W9 submissions arrive via a Wordpress webhook (`POST /w9/webhook`, validated with `W9_WEBHOOK_SECRET`). Eligibility and unwrap flows in `backend/handlers/w9.go` and `backend/handlers/unwrap.go`.
+W9 submissions are created via `POST /w9/submit`. Eligibility and unwrap flows in `backend/handlers/w9.go` and `backend/handlers/unwrap.go`.
 
 ### Account Abstraction
 Frontend uses Permissionless SDK (`frontend/lib/paymaster/`) for smart accounts and transaction batching via a bundler client.

@@ -3729,12 +3729,6 @@ func (a *AppService) sendWorkflowProposalOutcomeEmail(notification structs.Workf
 		return
 	}
 
-	fromDomain := os.Getenv("MAILGUN_DOMAIN")
-	fromEmail := "no_reply@sfluv.org"
-	if fromDomain != "" {
-		fromEmail = "no_reply@" + fromDomain
-	}
-
 	outcomeLabel := "approved"
 	subtitle := "Your workflow proposal has been approved."
 	title := "Workflow Proposal Approved"
@@ -3763,7 +3757,7 @@ func (a *AppService) sendWorkflowProposalOutcomeEmail(notification structs.Workf
 </table>`, notification.WorkflowTitle, notification.WorkflowId, strings.ToUpper(outcomeLabel)),
 	)
 
-	if err := emailSender.SendEmail(toEmail, "Proposer", title, htmlContent, fromEmail, "SFLuv Workflows"); err != nil {
+	if err := emailSender.SendEmail(toEmail, "Proposer", title, htmlContent, utils.NotificationFromEmail(), "SFLuv Workflows"); err != nil {
 		a.logger.Logf("error sending workflow proposal outcome email for %s: %s", notification.WorkflowId, err)
 	}
 }
@@ -3777,12 +3771,6 @@ func (a *AppService) sendWorkflowProposalExpiredEmail(notification structs.Workf
 	emailSender := utils.NewEmailSender()
 	if emailSender == nil {
 		return
-	}
-
-	fromDomain := os.Getenv("MAILGUN_DOMAIN")
-	fromEmail := "no_reply@sfluv.org"
-	if fromDomain != "" {
-		fromEmail = "no_reply@" + fromDomain
 	}
 
 	title := "Workflow Proposal Expired"
@@ -3802,7 +3790,7 @@ func (a *AppService) sendWorkflowProposalExpiredEmail(notification structs.Workf
 </table>`, notification.WorkflowTitle, notification.WorkflowId),
 	)
 
-	if err := emailSender.SendEmail(toEmail, "Proposer", title, htmlContent, fromEmail, "SFLuv Workflows"); err != nil {
+	if err := emailSender.SendEmail(toEmail, "Proposer", title, htmlContent, utils.NotificationFromEmail(), "SFLuv Workflows"); err != nil {
 		a.logger.Logf("error sending workflow proposal expiry email for %s: %s", notification.WorkflowId, err)
 	}
 }
@@ -3821,14 +3809,8 @@ func (a *AppService) sendRoleRequestEmail(envKey string, title string, subtitle 
 		return
 	}
 
-	fromDomain := os.Getenv("MAILGUN_DOMAIN")
-	fromEmail := "no_reply@sfluv.org"
-	if fromDomain != "" {
-		fromEmail = "no_reply@" + fromDomain
-	}
-
 	htmlContent := utils.BuildStyledEmail(title, subtitle, details)
-	if err := emailSender.SendEmail(adminEmail, "Admin", title, htmlContent, fromEmail, "SFLuv Workflows"); err != nil {
+	if err := emailSender.SendEmail(adminEmail, "Admin", title, htmlContent, utils.NotificationFromEmail(), "SFLuv Workflows"); err != nil {
 		a.logger.Logf("error sending %s email: %s", title, err.Error())
 	}
 }
@@ -3846,12 +3828,6 @@ func (a *AppService) sendCredentialRequestEmails(ctx context.Context, request st
 	emailSender := utils.NewEmailSender()
 	if emailSender == nil {
 		return
-	}
-
-	fromDomain := os.Getenv("MAILGUN_DOMAIN")
-	fromEmail := "no_reply@sfluv.org"
-	if fromDomain != "" {
-		fromEmail = "no_reply@" + fromDomain
 	}
 
 	credentialLabel := request.CredentialType
@@ -3922,7 +3898,7 @@ func (a *AppService) sendCredentialRequestEmails(ctx context.Context, request st
 			recipientName = "Issuer"
 		}
 
-		if err := emailSender.SendEmail(toEmail, recipientName, title, htmlContent, fromEmail, "SFLuv Workflows"); err != nil {
+		if err := emailSender.SendEmail(toEmail, recipientName, title, htmlContent, utils.NotificationFromEmail(), "SFLuv Workflows"); err != nil {
 			a.logger.Logf("error sending credential request email %s to issuer %s: %s", request.Id, recipient.UserId, err.Error())
 		}
 	}
@@ -4370,12 +4346,6 @@ func (a *AppService) sendWorkflowStepAvailableEmail(notification structs.Workflo
 		return
 	}
 
-	fromDomain := os.Getenv("MAILGUN_DOMAIN")
-	fromEmail := "no_reply@sfluv.org"
-	if fromDomain != "" {
-		fromEmail = "no_reply@" + fromDomain
-	}
-
 	recipientName := strings.TrimSpace(notification.Name)
 	if recipientName == "" {
 		recipientName = "Improver"
@@ -4402,7 +4372,7 @@ func (a *AppService) sendWorkflowStepAvailableEmail(notification structs.Workflo
 </table>`, notification.WorkflowTitle, notification.StepTitle, notification.WorkflowId),
 	)
 
-	if err := emailSender.SendEmail(toEmail, recipientName, title, htmlContent, fromEmail, "SFLuv Workflows"); err != nil {
+	if err := emailSender.SendEmail(toEmail, recipientName, title, htmlContent, utils.NotificationFromEmail(), "SFLuv Workflows"); err != nil {
 		a.logger.Logf("error sending step-available email for workflow %s step %s user %s: %s", notification.WorkflowId, notification.StepId, notification.UserId, err.Error())
 	}
 }
@@ -4415,12 +4385,6 @@ func (a *AppService) sendWorkflowDropdownAlertEmail(notification structs.Workflo
 	emailSender := utils.NewEmailSender()
 	if emailSender == nil {
 		return
-	}
-
-	fromDomain := os.Getenv("MAILGUN_DOMAIN")
-	fromEmail := "no_reply@sfluv.org"
-	if fromDomain != "" {
-		fromEmail = "no_reply@" + fromDomain
 	}
 
 	title := "Workflow Dropdown Alert"
@@ -4457,7 +4421,7 @@ func (a *AppService) sendWorkflowDropdownAlertEmail(notification structs.Workflo
 		if toEmail == "" {
 			continue
 		}
-		if err := emailSender.SendEmail(toEmail, "Workflow Watcher", title, htmlContent, fromEmail, "SFLuv Workflows"); err != nil {
+		if err := emailSender.SendEmail(toEmail, "Workflow Watcher", title, htmlContent, utils.NotificationFromEmail(), "SFLuv Workflows"); err != nil {
 			a.logger.Logf("error sending dropdown-alert email for workflow %s step %s item %s to %s: %s", notification.WorkflowId, notification.StepId, notification.ItemId, toEmail, err.Error())
 		}
 	}
