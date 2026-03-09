@@ -10,13 +10,13 @@ import (
 )
 
 func GroupW9Handlers(t *testing.T) {
-	t.Run("submit w9 requires auth", ModuleSubmitW9RequiresAuth)
+	t.Run("submit w9 requires admin", ModuleSubmitW9RequiresAdmin)
 	t.Run("webhook requires secret", ModuleSubmitW9WebhookRequiresSecret)
 	t.Run("webhook rejects when secret missing", ModuleSubmitW9WebhookRequiresConfiguredSecret)
 }
 
-func ModuleSubmitW9RequiresAuth(t *testing.T) {
-	Spoofer.SetValue("userDid", nil)
+func ModuleSubmitW9RequiresAdmin(t *testing.T) {
+	Spoofer.SetValue("userDid", TEST_USER_2.Id)
 	defer Spoofer.SetValue("userDid", TEST_USER_1.Id)
 
 	reqBody := structs.W9SubmitRequest{
@@ -39,7 +39,7 @@ func ModuleSubmitW9RequiresAuth(t *testing.T) {
 	}
 
 	if res.StatusCode != http.StatusForbidden {
-		t.Fatalf("expected 403 for unauthenticated w9 submit, got %d", res.StatusCode)
+		t.Fatalf("expected 403 for non-admin w9 submit, got %d", res.StatusCode)
 	}
 }
 
