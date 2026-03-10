@@ -52,6 +52,10 @@ func (es *EmailSender) SendEmail(toEmail, toName, subject, htmlContent string, f
 }
 
 func BuildStyledEmail(title, subtitle, contentHTML string) string {
+	return BuildStyledEmailWithFooter(title, subtitle, contentHTML, "SFLuv · Notifications")
+}
+
+func BuildStyledEmailWithFooter(title, subtitle, contentHTML string, footerText string) string {
 	template := `<!doctype html>
 <html lang="en">
   <head>
@@ -91,7 +95,7 @@ func BuildStyledEmail(title, subtitle, contentHTML string) string {
               </td>
             </tr>
           </table>
-          <p style="margin:16px 0 0; font-size:11px; color:#9ca3af;">SFLuv · Notifications</p>
+          <p style="margin:16px 0 0; font-size:11px; color:#9ca3af;">{{FOOTER}}</p>
         </td>
       </tr>
     </table>
@@ -102,6 +106,7 @@ func BuildStyledEmail(title, subtitle, contentHTML string) string {
 		"{{TITLE}}", title,
 		"{{SUBTITLE}}", subtitle,
 		"{{CONTENT}}", contentHTML,
+		"{{FOOTER}}", footerText,
 	)
 	return replacer.Replace(template)
 }

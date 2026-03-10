@@ -342,10 +342,11 @@ func (a *AppService) PonderHookHandler(w http.ResponseWriter, r *http.Request) {
 			toLine,
 			tx.Hash,
 		)
-		htmlContent := utils.BuildStyledEmail(
-			subject,
-			"Incoming transaction recorded",
+		htmlContent := utils.BuildStyledEmailWithFooter(
+			"SFLuv Transaction Alert",
+			"A new transaction has been recorded.",
 			details,
+			"SFLuv · Transaction Notifications",
 		)
 
 		err = sender.SendEmail(
