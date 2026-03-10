@@ -33,6 +33,15 @@ func (w *W9Service) adminAddresses() []string {
 	return utils.ParseAddressList(os.Getenv("PAID_ADMIN_ADDRESSES"))
 }
 
+func resolveW9AdminEmail() string {
+	for _, key := range []string{"W9_ADMIN_EMAIL", "IMPROVER_ADMIN_EMAIL", "AFFILIATE_ADMIN_EMAIL"} {
+		if email := strings.TrimSpace(os.Getenv(key)); email != "" {
+			return email
+		}
+	}
+	return "admin@sfluv.org"
+}
+
 func requiresApprovedW9(newTotal *big.Int, limit *big.Int) bool {
 	if newTotal == nil || limit == nil {
 		return false
@@ -552,10 +561,7 @@ func (a *AppService) sendW9AdminAlertEmail(submission *structs.W9Submission) {
 		return
 	}
 
-	adminEmail := strings.TrimSpace(os.Getenv("W9_ADMIN_EMAIL"))
-	if adminEmail == "" {
-		adminEmail = "admin@sfluv.org"
-	}
+	adminEmail := resolveW9AdminEmail()
 
 	subject := fmt.Sprintf("W9 request received for %s", submission.WalletAddress)
 	submittedAtUTC := submission.SubmittedAt.UTC().Format(time.RFC3339)
