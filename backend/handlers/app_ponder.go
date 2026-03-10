@@ -312,35 +312,6 @@ func (a *AppService) PonderHookHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	root, err := utils.GetProjectRoot()
-	if err != nil {
-		a.logger.Logf("error getting project root directory in ponder hook handler: %s", err)
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
-	file, err := os.ReadFile(fmt.Sprintf("%s/mail/schemas/notification.json", root))
-	if err != nil {
-		a.logger.Logf("error getting email notification mask: %s", err)
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
-	var mask structs.EmailMask
-	err = json.Unmarshal(file, &mask)
-	if err != nil {
-		a.logger.Logf("error unmarshalling notification mask into mask struct: %s", err)
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
-	html, err := os.ReadFile(fmt.Sprintf("%s/%s", root, mask.HtmlContent))
-	if err != nil {
-		a.logger.Logf("error getting html body for email notification: %s", err)
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
 	for _, l := range listeners {
 		w, err := a.db.GetWalletByUserAndAddress(r.Context(), l.Owner, l.Address)
 		if err != nil {
@@ -356,13 +327,59 @@ func (a *AppService) PonderHookHandler(w http.ResponseWriter, r *http.Request) {
 			toLine = fmt.Sprintf("%s (%s)", w.Name, tx.To)
 		}
 
+		subject := fmt.Sprintf("%s $SFLuv Incoming %s", formattedAmount, subjectTail)
+		sections := fmt.Sprintf(`
+            <tr>
+              <td style="padding:24px 28px 8px;">
+                <p style="margin:0 0 8px; font-size:14px; color:#6b7280;">Summary</p>
+                <p style="margin:0; font-size:18px; font-weight:600; color:#111827;">Value: %s SFLuv</p>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:0 28px 24px;">
+                <table role="presentation" width="100%%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
+                  <tr>
+                    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280; width:120px;">From</td>
+                    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827; word-break:break-all;">%s</td>
+                  </tr>
+                  <tr>
+                    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280;">To</td>
+                    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827; word-break:break-all;">%s</td>
+                  </tr>
+                  <tr>
+                    <td style="padding:12px 0; font-size:13px; color:#6b7280;">Hash</td>
+                    <td style="padding:12px 0; font-size:13px; color:#111827; word-break:break-all;">%s</td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:0 28px 24px;">
+                <div style="background-color:#f9fafb; border-radius:12px; padding:14px 16px; font-size:12px; color:#6b7280;">
+                  If you did not expect this transaction, please contact the SFLuv team.
+                </div>
+              </td>
+            </tr>`,
+			formattedAmount,
+			tx.From,
+			toLine,
+			tx.Hash,
+		)
+		htmlContent := utils.BuildStyledEmailWithSections(
+			"SFLuv Transaction Alert",
+			"A new transaction has been recorded.",
+			sections,
+			"SFLuv · Transaction Notifications",
+		)
+
 		err = sender.SendEmail(
-			fmt.Sprintf(mask.ToEmail, l.Data),
-			mask.ToName,
-			fmt.Sprintf(mask.Subject, formattedAmount, subjectTail),
-			fmt.Sprintf(string(html), formattedAmount, tx.From, toLine, tx.Hash),
-			mask.FromEmail,
-			mask.FromName)
+			string(l.Data),
+			"Merchant",
+			subject,
+			htmlContent,
+			utils.NotificationFromEmail(),
+			"SFLuv Transactions",
+		)
 	}
 	if err != nil {
 		a.logger.Logf("error sending transaction receipt email: %s", err.Error())

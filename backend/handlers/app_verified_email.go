@@ -29,12 +29,6 @@ func (a *AppService) sendUserEmailVerificationEmail(toEmail string, token string
 		return fmt.Errorf("email sender is not configured")
 	}
 
-	fromDomain := os.Getenv("MAILGUN_DOMAIN")
-	fromEmail := "no_reply@sfluv.org"
-	if fromDomain != "" {
-		fromEmail = "no_reply@" + fromDomain
-	}
-
 	verifyURL := a.appVerifyURL(token)
 	expiryLabel := "30 minutes"
 	if expiresAt != nil {
@@ -67,7 +61,7 @@ func (a *AppService) sendUserEmailVerificationEmail(toEmail string, token string
 </p>`, toEmail, verifyURL, expiryLabel),
 	)
 
-	return emailSender.SendEmail(toEmail, "SFLuv User", title, htmlContent, fromEmail, "SFLuv")
+	return emailSender.SendEmail(toEmail, "SFLuv User", title, htmlContent, utils.NotificationFromEmail(), "SFLuv")
 }
 
 func (a *AppService) GetUserVerifiedEmails(w http.ResponseWriter, r *http.Request) {

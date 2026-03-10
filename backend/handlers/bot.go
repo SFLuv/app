@@ -491,12 +491,6 @@ func (s *BotService) AffiliateNewEvent(w http.ResponseWriter, r *http.Request) {
 		adminEmail := os.Getenv("AFFILIATE_ADMIN_EMAIL")
 		emailSender := utils.NewEmailSender()
 		if adminEmail != "" && emailSender != nil {
-			fromDomain := os.Getenv("MAILGUN_DOMAIN")
-			fromEmail := "no_reply@sfluv.org"
-			if fromDomain != "" {
-				fromEmail = "no_reply@" + fromDomain
-			}
-
 			availableTokens := new(big.Int).Div(unallocated, big.NewInt(int64(decimals)))
 			subject := "Failed Affiliate Event Creation (Faucet Balance)"
 			details := fmt.Sprintf(`
@@ -521,7 +515,7 @@ func (s *BotService) AffiliateNewEvent(w http.ResponseWriter, r *http.Request) {
 				details,
 			)
 
-			err = emailSender.SendEmail(adminEmail, "Admin", subject, htmlContent, fromEmail, "SFLuv Affiliates")
+			err = emailSender.SendEmail(adminEmail, "Admin", subject, htmlContent, utils.NotificationFromEmail(), "SFLuv Affiliates")
 			if err != nil {
 				fmt.Printf("error sending affiliate faucet balance email: %s\n", err)
 			}

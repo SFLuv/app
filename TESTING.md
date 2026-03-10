@@ -51,20 +51,16 @@ Open the printed URL to confirm the **W9 Required** UI state (button + message).
 This submits a W9 for the latest faucet transfer recipient (pulled from `ponder.transfer_event`).
 Use this to test the **W9 Pending** UI state.
 
-## Wordpress Webhook
-Use the webhook endpoint to submit W9s from Wordpress.
+## Submit W9 Directly
+Use the submit endpoint to create W9 submissions from either the app or the Wordpress form.
 
 Endpoint:
 ```
-POST /w9/webhook
+POST /w9/submit
 ```
 
 Accepted payloads:
 - JSON: `{ "wallet_address": "...", "email": "...", "year": 2026 }`
-- Form-encoded: `wallet=<...>&email=<...>&year=2026`
-
-Optional security:
-- If `W9_WEBHOOK_SECRET` is set, include header `X-W9-Secret: <secret>` (or `X-W9-Key`).
 
 ## Approve + Verify Unblocked
 1. Approve the pending submission in Admin → W9 tab.
