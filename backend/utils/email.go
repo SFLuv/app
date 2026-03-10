@@ -56,6 +56,15 @@ func BuildStyledEmail(title, subtitle, contentHTML string) string {
 }
 
 func BuildStyledEmailWithFooter(title, subtitle, contentHTML string, footerText string) string {
+	sectionsHTML := fmt.Sprintf(`<tr>
+              <td style="padding:24px 28px 24px;">
+                %s
+              </td>
+            </tr>`, contentHTML)
+	return BuildStyledEmailWithSections(title, subtitle, sectionsHTML, footerText)
+}
+
+func BuildStyledEmailWithSections(title, subtitle, sectionsHTML string, footerText string) string {
 	template := `<!doctype html>
 <html lang="en">
   <head>
@@ -89,11 +98,7 @@ func BuildStyledEmailWithFooter(title, subtitle, contentHTML string, footerText 
                 </table>
               </td>
             </tr>
-            <tr>
-              <td style="padding:24px 28px 24px;">
-                {{CONTENT}}
-              </td>
-            </tr>
+            {{SECTIONS}}
           </table>
           <p style="margin:16px 0 0; font-size:11px; color:#9ca3af;">{{FOOTER}}</p>
         </td>
@@ -105,7 +110,7 @@ func BuildStyledEmailWithFooter(title, subtitle, contentHTML string, footerText 
 	replacer := strings.NewReplacer(
 		"{{TITLE}}", title,
 		"{{SUBTITLE}}", subtitle,
-		"{{CONTENT}}", contentHTML,
+		"{{SECTIONS}}", sectionsHTML,
 		"{{FOOTER}}", footerText,
 	)
 	return replacer.Replace(template)

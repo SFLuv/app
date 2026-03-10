@@ -328,24 +328,47 @@ func (a *AppService) PonderHookHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		subject := fmt.Sprintf("%s $SFLuv Incoming %s", formattedAmount, subjectTail)
-		details := fmt.Sprintf(
-			"<p style=\"margin:0 0 16px; line-height:1.6;\">A new transaction has been recorded for your wallet subscription.</p>"+
-				"<table role=\"presentation\" width=\"100%%\" cellpadding=\"0\" cellspacing=\"0\" style=\"border-collapse:collapse; margin:0 0 16px;\">"+
-				"<tr><td style=\"padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280; width:120px;\">Value</td><td style=\"padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827; font-weight:600;\">%s SFLuv</td></tr>"+
-				"<tr><td style=\"padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280;\">From</td><td style=\"padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827; word-break:break-all;\">%s</td></tr>"+
-				"<tr><td style=\"padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280;\">To</td><td style=\"padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827; word-break:break-all;\">%s</td></tr>"+
-				"<tr><td style=\"padding:12px 0; font-size:13px; color:#6b7280;\">Hash</td><td style=\"padding:12px 0; font-size:13px; color:#111827; word-break:break-all;\">%s</td></tr>"+
-				"</table>"+
-				"<div style=\"background-color:#f9fafb; border-radius:12px; padding:14px 16px; font-size:12px; color:#6b7280;\">If you did not expect this transaction, please contact the SFLuv team.</div>",
+		sections := fmt.Sprintf(`
+            <tr>
+              <td style="padding:24px 28px 8px;">
+                <p style="margin:0 0 8px; font-size:14px; color:#6b7280;">Summary</p>
+                <p style="margin:0; font-size:18px; font-weight:600; color:#111827;">Value: %s SFLuv</p>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:0 28px 24px;">
+                <table role="presentation" width="100%%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
+                  <tr>
+                    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280; width:120px;">From</td>
+                    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827; word-break:break-all;">%s</td>
+                  </tr>
+                  <tr>
+                    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280;">To</td>
+                    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827; word-break:break-all;">%s</td>
+                  </tr>
+                  <tr>
+                    <td style="padding:12px 0; font-size:13px; color:#6b7280;">Hash</td>
+                    <td style="padding:12px 0; font-size:13px; color:#111827; word-break:break-all;">%s</td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:0 28px 24px;">
+                <div style="background-color:#f9fafb; border-radius:12px; padding:14px 16px; font-size:12px; color:#6b7280;">
+                  If you did not expect this transaction, please contact the SFLuv team.
+                </div>
+              </td>
+            </tr>`,
 			formattedAmount,
 			tx.From,
 			toLine,
 			tx.Hash,
 		)
-		htmlContent := utils.BuildStyledEmailWithFooter(
+		htmlContent := utils.BuildStyledEmailWithSections(
 			"SFLuv Transaction Alert",
 			"A new transaction has been recorded.",
-			details,
+			sections,
 			"SFLuv · Transaction Notifications",
 		)
 
