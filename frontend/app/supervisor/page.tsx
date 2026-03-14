@@ -27,6 +27,8 @@ const SUPERVISOR_STATUS_FILTERS = new Set([
   "completed",
   "paid_out",
   "expired",
+  "failed",
+  "skipped",
   "deleted",
 ])
 
@@ -353,6 +355,8 @@ export default function SupervisorPage() {
                   <SelectItem value="completed">Completed</SelectItem>
                   <SelectItem value="paid_out">Finalized</SelectItem>
                   <SelectItem value="expired">Expired</SelectItem>
+                  <SelectItem value="failed">Failed</SelectItem>
+                  <SelectItem value="skipped">Skipped</SelectItem>
                   <SelectItem value="deleted">Archived</SelectItem>
                 </SelectContent>
               </Select>

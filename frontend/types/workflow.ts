@@ -99,12 +99,14 @@ export interface WorkflowVotes {
 export interface Workflow {
   id: string
   series_id: string
+  workflow_state_id?: string | null
   proposer_id: string
   title: string
   description: string
   recurrence: WorkflowRecurrence
+  recurrence_end_at?: number | null
   start_at: number
-  status: "pending" | "approved" | "rejected" | "in_progress" | "completed" | "paid_out" | "blocked" | "expired" | "deleted"
+  status: "pending" | "approved" | "rejected" | "in_progress" | "completed" | "paid_out" | "blocked" | "expired" | "failed" | "skipped" | "deleted"
   is_start_blocked: boolean
   blocked_by_workflow_id?: string | null
   total_bounty: number
@@ -137,10 +139,12 @@ export interface Workflow {
 export interface ActiveWorkflowListItem {
   id: string
   series_id: string
+  workflow_state_id?: string | null
   proposer_id: string
   title: string
   description: string
   recurrence: WorkflowRecurrence
+  recurrence_end_at?: number | null
   start_at: number
   status: "approved" | "blocked" | "in_progress" | "completed"
   is_start_blocked: boolean
@@ -159,7 +163,7 @@ export interface AdminWorkflowListItem {
   title: string
   description: string
   recurrence: WorkflowRecurrence
-  status: "approved" | "blocked" | "in_progress" | "completed" | "paid_out" | "deleted"
+  status: "approved" | "blocked" | "in_progress" | "completed" | "paid_out" | "failed" | "skipped" | "deleted"
   start_at: number
   created_at: number
   updated_at: number
@@ -252,6 +256,7 @@ export interface WorkflowCreateRequest {
   title: string
   description: string
   recurrence: WorkflowRecurrence
+  recurrence_end_at?: string
   start_at: string
   supervisor?: WorkflowSupervisorCreateInput
   supervisor_data_fields?: WorkflowSupervisorDataField[]
@@ -259,12 +264,55 @@ export interface WorkflowCreateRequest {
   steps: WorkflowStepCreateInput[]
 }
 
+export interface WorkflowEditProposalCreateRequest {
+  title: string
+  description: string
+  recurrence: WorkflowRecurrence
+  recurrence_end_at?: string
+  supervisor?: WorkflowSupervisorCreateInput
+  supervisor_data_fields?: WorkflowSupervisorDataField[]
+  roles: WorkflowRoleCreateInput[]
+  steps: WorkflowStepCreateInput[]
+  reason?: string
+}
+
+export interface WorkflowEditProposalVoteRequest {
+  decision: "approve" | "deny"
+  comment?: string
+}
+
+export interface WorkflowEditProposal {
+  id: string
+  series_id: string
+  target_workflow_id?: string | null
+  proposed_state_id: string
+  requested_by_user_id: string
+  reason: string
+  status: "pending" | "approved" | "denied" | "expired"
+  vote_quorum_reached_at?: number | null
+  vote_finalize_at?: number | null
+  vote_finalized_at?: number | null
+  vote_finalized_by_user_id?: string | null
+  vote_decision?: "approve" | "deny" | "admin_approve" | null
+  created_at: number
+  updated_at: number
+  workflow_title: string
+  workflow_description: string
+  recurrence: WorkflowRecurrence
+  recurrence_end_at?: number | null
+  supervisor_required: boolean
+  supervisor_user_id?: string | null
+  supervisor_bounty: number
+  total_bounty: number
+  weekly_bounty_requirement: number
+  votes: WorkflowVotes
+}
+
 export interface WorkflowTemplateCreateRequest {
   template_title: string
   template_description: string
   series_id?: string
   recurrence: WorkflowRecurrence
-  start_at: string
   supervisor_user_id?: string
   supervisor_bounty?: number
   supervisor_data_fields?: WorkflowSupervisorDataField[]

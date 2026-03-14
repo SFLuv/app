@@ -360,7 +360,13 @@ func (a *AppService) PonderHookHandler(w http.ResponseWriter, r *http.Request) {
 			fmt.Sprintf(mask.ToEmail, l.Data),
 			mask.ToName,
 			fmt.Sprintf(mask.Subject, formattedAmount, subjectTail),
-			fmt.Sprintf(string(html), formattedAmount, tx.From, toLine, tx.Hash),
+			fmt.Sprintf(
+				string(html),
+				utils.EscapeEmailHTML(formattedAmount),
+				utils.EscapeEmailHTML(tx.From),
+				utils.EscapeEmailHTML(toLine),
+				utils.EscapeEmailHTML(tx.Hash),
+			),
 			mask.FromEmail,
 			mask.FromName)
 	}

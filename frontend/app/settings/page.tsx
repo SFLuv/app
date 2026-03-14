@@ -33,7 +33,23 @@ export default function SettingsPage() {
   const router = useRouter()
   const pathname = usePathname()
   const searchParams = useSearchParams()
-  const { user, userLocations, status, affiliate, setAffiliate, proposer, setProposer, improver, setImprover, issuer, setIssuer, supervisor, setSupervisor, authFetch } = useApp()
+  const {
+    user,
+    userLocations,
+    status,
+    affiliate,
+    setAffiliate,
+    proposer,
+    setProposer,
+    improver,
+    setImprover,
+    issuer,
+    setIssuer,
+    supervisor,
+    setSupervisor,
+    authFetch,
+    refreshWallets
+  } = useApp()
   const userRole = useMemo(() => user?.isAdmin ? "admin" : user?.isMerchant ? "merchant" : "user", [user])
 
   const merchantStatus: MerchantStatus = useMemo(() => {
@@ -501,6 +517,22 @@ export default function SettingsPage() {
         res = await authFetch("/supervisors/request", { method: "POST", body: JSON.stringify({ organization: roleOrg.trim(), email: roleEmail.trim() }) })
         if (res.ok) { const data = await res.json(); setSupervisor(data) }
       } else {
+        await refreshWallets()
+        const walletsRes = await authFetch("/wallets")
+        if (!walletsRes.ok) {
+          throw new Error("Unable to verify wallet setup.")
+        }
+        const wallets = (await walletsRes.json()) as WalletResponse[]
+        const hasSmartWalletIndexZero = wallets.some((wallet) =>
+          wallet.is_eoa === false &&
+          wallet.smart_index === 0 &&
+          typeof wallet.smart_address === "string" &&
+          wallet.smart_address.trim() !== ""
+        )
+        if (!hasSmartWalletIndexZero) {
+          throw new Error("Primary smart wallet is still initializing. Please try again in a few seconds.")
+        }
+
         res = await authFetch("/improvers/request", { method: "POST", body: JSON.stringify({ first_name: roleFirstName.trim(), last_name: roleLastName.trim(), email: roleEmail.trim() }) })
         if (res.ok) { const data = await res.json(); setImprover(data) }
       }
@@ -518,8 +550,8 @@ export default function SettingsPage() {
       setRoleEmail(verifiedEmailOptions[0]?.email || "")
       setRoleFirstName("")
       setRoleLastName("")
-    } catch {
-      setRoleError("Unable to submit your request. Please try again.")
+    } catch (err) {
+      setRoleError(err instanceof Error && err.message ? err.message : "Unable to submit your request. Please try again.")
     } finally {
       setRoleSubmitting(false)
     }

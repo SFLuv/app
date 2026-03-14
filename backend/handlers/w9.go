@@ -371,8 +371,8 @@ func (a *AppService) ApproveW9Submission(w http.ResponseWriter, r *http.Request)
 		subject := fmt.Sprintf("W9 required for wallet %s", submission.WalletAddress)
 		body := fmt.Sprintf(
 			"%s has reached the 1099 limit and needs a W9 submission form. Please send them a form using <a href=\"https://app.getw9.tax/subscriber\">https://app.getw9.tax/subscriber</a>.<br/><br/>Wallet: %s<br/>Year: %d",
-			contact,
-			submission.WalletAddress,
+			utils.EscapeEmailHTML(contact),
+			utils.EscapeEmailHTML(submission.WalletAddress),
 			submission.Year,
 		)
 		err = sender.SendEmail(

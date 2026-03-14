@@ -28,6 +28,7 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  useSidebar,
 } from "@/components/ui/sidebar"
 import { ForwardRefExoticComponent } from "react"
 
@@ -35,6 +36,7 @@ export function DashboardSidebar() {
   const router = useRouter()
   const pathname = usePathname()
   const isMobile = useIsMobile()
+  const { setOpenMobile } = useSidebar()
   const { user, logout, status, login, userLocations, wallets } = useApp()
 
   const isNonAdminNonMerchant = user?.isAdmin !== true && user?.isMerchant !== true
@@ -54,7 +56,17 @@ export function DashboardSidebar() {
     return pathname.startsWith(pathWithoutQuery)
   }
 
+  const navigateTo = (path: string) => {
+    if (isMobile) {
+      setOpenMobile(false)
+    }
+    router.push(path)
+  }
+
   const handleLogout = () => {
+    if (isMobile) {
+      setOpenMobile(false)
+    }
     logout()
     router.push("/map")
   }
@@ -255,7 +267,7 @@ export function DashboardSidebar() {
       <SidebarHeader className="border-b bg-secondary dark:bg-secondary">
         <div
           className="flex items-center p-2 cursor-pointer hover:bg-secondary/80 transition-colors"
-          onClick={() => router.push("/map")}
+          onClick={() => navigateTo("/map")}
         >
           <div className="flex-1 overflow-hidden">
             <h2 className="text-lg font-semibold text-black dark:text-white truncate">SFLuv Dashboard</h2>
@@ -278,7 +290,7 @@ export function DashboardSidebar() {
                       ? "bg-primary text-primary-foreground hover:bg-primary/90"
                       : "text-black dark:text-white",
                   )}
-                  onClick={() => router.push(item.path)}
+                  onClick={() => navigateTo(item.path)}
                 >
                   <item.icon className="mr-2 h-4 w-4" />
                   <span>{item.title}</span>
@@ -295,7 +307,7 @@ export function DashboardSidebar() {
           <Button
               variant="outline"
               className="bg-secondary text-[#eb6c6c] border-[#eb6c6c] hover:bg-[#eb6c6c] hover:text-white"
-              onClick={() => router.push("/settings/merchant-approval")}>
+              onClick={() => navigateTo("/settings/merchant-approval")}>
               {userLocations.length === 0 ?
               "Apply to Become a Merchant" :
               "Submit Another Application"
@@ -312,9 +324,7 @@ export function DashboardSidebar() {
                       ? "bg-primary text-primary-foreground hover:bg-primary/90 rounded-md"
                       : "text-black dark:text-white",
                   )}
-                  onClick={() => {router.push("/settings");
-                  }
-                  }
+                  onClick={() => navigateTo("/settings")}
                 >
                   <Settings className="mr-2 h-4 w-4" />
                   <span>Settings</span>

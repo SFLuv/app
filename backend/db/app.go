@@ -311,15 +311,15 @@ func (s *AppDB) CreateTables() error {
 		ALTER TABLE improvers
 		ADD COLUMN IF NOT EXISTS primary_rewards_account TEXT NOT NULL DEFAULT '';
 
-		UPDATE improvers i
-		SET primary_rewards_account = COALESCE(
-			(
-				SELECT
-					COALESCE(NULLIF(TRIM(w.smart_address), ''), NULLIF(TRIM(w.eoa_address), ''))
-				FROM
-					wallets w
-				WHERE
-					w.owner = i.user_id
+			UPDATE improvers i
+			SET primary_rewards_account = COALESCE(
+				(
+					SELECT
+						NULLIF(TRIM(w.smart_address), '')
+					FROM
+						wallets w
+					WHERE
+						w.owner = i.user_id
 				AND
 					w.is_eoa = false
 				AND
@@ -370,15 +370,15 @@ func (s *AppDB) CreateTables() error {
 			AND
 				TRIM(COALESCE(s.email, '')) = '';
 
-			UPDATE supervisors s
-			SET primary_rewards_account = COALESCE(
-				(
-					SELECT
-						COALESCE(NULLIF(TRIM(w.smart_address), ''), NULLIF(TRIM(w.eoa_address), ''))
-					FROM
-						wallets w
-					WHERE
-						w.owner = s.user_id
+				UPDATE supervisors s
+				SET primary_rewards_account = COALESCE(
+					(
+						SELECT
+							NULLIF(TRIM(w.smart_address), '')
+						FROM
+							wallets w
+						WHERE
+							w.owner = s.user_id
 					AND
 						w.is_eoa = false
 					AND
@@ -467,6 +467,7 @@ func (s *AppDB) CreateTables() error {
 			CREATE TABLE IF NOT EXISTS workflows(
 				id TEXT PRIMARY KEY,
 				series_id TEXT NOT NULL,
+				workflow_state_id TEXT,
 				proposer_id TEXT NOT NULL REFERENCES users(id),
 				start_at BIGINT NOT NULL,
 				status TEXT NOT NULL DEFAULT 'pending',
@@ -495,7 +496,7 @@ func (s *AppDB) CreateTables() error {
 				approved_by_user_id TEXT,
 				created_at BIGINT NOT NULL DEFAULT unix_now(),
 				updated_at BIGINT NOT NULL DEFAULT unix_now(),
-				CHECK (status IN ('pending', 'approved', 'rejected', 'in_progress', 'completed', 'paid_out', 'blocked', 'expired', 'deleted')),
+				CHECK (status IN ('pending', 'approved', 'rejected', 'in_progress', 'completed', 'paid_out', 'blocked', 'expired', 'failed', 'skipped', 'deleted')),
 				CHECK (vote_decision IN ('approve', 'deny', 'admin_approve') OR vote_decision IS NULL)
 			);
 
@@ -515,6 +516,8 @@ func (s *AppDB) CreateTables() error {
 			title TEXT NOT NULL,
 			description TEXT NOT NULL DEFAULT '',
 			recurrence TEXT NOT NULL,
+			recurrence_end_at BIGINT,
+			current_state_id TEXT,
 			supervisor_data_json JSONB NOT NULL DEFAULT '[]'::jsonb,
 			created_at BIGINT NOT NULL DEFAULT unix_now(),
 			updated_at BIGINT NOT NULL DEFAULT unix_now(),
@@ -571,6 +574,389 @@ func (s *AppDB) CreateTables() error {
 	}
 
 	_, err = s.db.Exec(context.Background(), `
+		CREATE TABLE IF NOT EXISTS workflow_states(
+			id TEXT PRIMARY KEY,
+			series_id TEXT NOT NULL REFERENCES workflow_series(id) ON DELETE CASCADE,
+			proposer_id TEXT NOT NULL REFERENCES users(id),
+			title TEXT NOT NULL,
+			description TEXT NOT NULL DEFAULT '',
+			recurrence TEXT NOT NULL,
+			recurrence_end_at BIGINT,
+			supervisor_user_id TEXT REFERENCES users(id),
+			supervisor_bounty BIGINT NOT NULL DEFAULT 0,
+			supervisor_data_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+			roles_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+			steps_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+			source_workflow_id TEXT,
+			proposed_by_user_id TEXT REFERENCES users(id),
+			created_at BIGINT NOT NULL DEFAULT unix_now(),
+			updated_at BIGINT NOT NULL DEFAULT unix_now(),
+			CHECK (recurrence IN ('one_time', 'daily', 'weekly', 'monthly'))
+		);
+
+		CREATE INDEX IF NOT EXISTS workflow_states_series_idx ON workflow_states(series_id);
+		CREATE INDEX IF NOT EXISTS workflow_states_proposer_idx ON workflow_states(proposer_id);
+	`)
+	if err != nil {
+		return fmt.Errorf("error creating workflow_states table: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
+		ALTER TABLE workflows
+		ADD COLUMN IF NOT EXISTS workflow_state_id TEXT;
+
+		ALTER TABLE workflow_series
+		ADD COLUMN IF NOT EXISTS recurrence_end_at BIGINT;
+
+		ALTER TABLE workflow_series
+		ADD COLUMN IF NOT EXISTS current_state_id TEXT;
+	`)
+	if err != nil {
+		return fmt.Errorf("error altering workflow state columns: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
+		CREATE TABLE IF NOT EXISTS workflow_roles(
+			id TEXT PRIMARY KEY,
+			workflow_id TEXT NOT NULL REFERENCES workflows(id) ON DELETE CASCADE,
+			title TEXT NOT NULL
+		);
+		CREATE INDEX IF NOT EXISTS workflow_roles_workflow_idx ON workflow_roles(workflow_id);
+
+		ALTER TABLE workflow_roles
+		ADD COLUMN IF NOT EXISTS is_manager BOOLEAN NOT NULL DEFAULT false;
+
+		CREATE TABLE IF NOT EXISTS workflow_role_credentials(
+			role_id TEXT NOT NULL REFERENCES workflow_roles(id) ON DELETE CASCADE,
+			credential_type TEXT NOT NULL,
+			PRIMARY KEY (role_id, credential_type),
+			CHECK (credential_type IN ('dpw_certified', 'sfluv_verifier'))
+		);
+
+		CREATE TABLE IF NOT EXISTS workflow_steps(
+			id TEXT PRIMARY KEY,
+			series_id TEXT NOT NULL REFERENCES workflow_series(id) ON DELETE CASCADE,
+			workflow_id TEXT NOT NULL,
+			step_order INTEGER NOT NULL,
+			title TEXT NOT NULL,
+			description TEXT NOT NULL,
+			bounty BIGINT NOT NULL DEFAULT 0,
+			role_id TEXT REFERENCES workflow_roles(id),
+			assigned_improver_id TEXT REFERENCES users(id),
+			allow_step_not_possible BOOLEAN NOT NULL DEFAULT false,
+			status TEXT NOT NULL DEFAULT 'locked',
+			started_at BIGINT,
+			completed_at BIGINT,
+			payout_error TEXT,
+			payout_last_try_at BIGINT,
+			payout_in_progress BOOLEAN NOT NULL DEFAULT false,
+			retry_requested_at BIGINT,
+			retry_requested_by TEXT REFERENCES users(id),
+			created_at BIGINT NOT NULL DEFAULT unix_now(),
+			updated_at BIGINT NOT NULL DEFAULT unix_now(),
+			UNIQUE (workflow_id, step_order),
+			CHECK (status IN ('locked', 'available', 'in_progress', 'completed', 'paid_out'))
+		);
+		CREATE INDEX IF NOT EXISTS workflow_steps_workflow_idx ON workflow_steps(workflow_id);
+
+		CREATE TABLE IF NOT EXISTS workflow_step_items(
+			id TEXT PRIMARY KEY,
+			step_id TEXT NOT NULL REFERENCES workflow_steps(id) ON DELETE CASCADE,
+			item_order INTEGER NOT NULL,
+			title TEXT NOT NULL,
+			description TEXT NOT NULL,
+			is_optional BOOLEAN NOT NULL DEFAULT false,
+			requires_photo BOOLEAN NOT NULL DEFAULT false,
+			camera_capture_only BOOLEAN NOT NULL DEFAULT false,
+			photo_required_count INTEGER NOT NULL DEFAULT 1,
+			photo_allow_any_count BOOLEAN NOT NULL DEFAULT false,
+			photo_aspect_ratio TEXT NOT NULL DEFAULT 'square',
+			requires_written_response BOOLEAN NOT NULL DEFAULT false,
+			requires_dropdown BOOLEAN NOT NULL DEFAULT false,
+			dropdown_options JSONB NOT NULL DEFAULT '[]'::jsonb,
+			dropdown_requires_written_response JSONB NOT NULL DEFAULT '{}'::jsonb,
+			notify_emails JSONB NOT NULL DEFAULT '[]'::jsonb,
+			notify_on_dropdown_values JSONB NOT NULL DEFAULT '[]'::jsonb,
+			UNIQUE (step_id, item_order),
+			CHECK (photo_required_count >= 1),
+			CHECK (photo_aspect_ratio IN ('vertical', 'square', 'horizontal'))
+		);
+		CREATE INDEX IF NOT EXISTS workflow_step_items_step_idx ON workflow_step_items(step_id);
+	`)
+	if err != nil {
+		return fmt.Errorf("error ensuring workflow definition tables before state backfill: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
+		WITH role_payload AS (
+			SELECT
+				r.workflow_id,
+				COALESCE(
+					JSONB_AGG(
+						JSONB_BUILD_OBJECT(
+							'client_id', r.id,
+							'title', COALESCE(r.title, ''),
+							'required_credentials',
+							COALESCE(
+								(
+									SELECT
+										JSONB_AGG(rc.credential_type ORDER BY rc.credential_type)
+									FROM
+										workflow_role_credentials rc
+									WHERE
+										rc.role_id = r.id
+								),
+								'[]'::jsonb
+							)
+						)
+						ORDER BY
+							r.id
+					),
+					'[]'::jsonb
+				) AS roles_json
+			FROM
+				workflow_roles r
+			WHERE
+				COALESCE(r.is_manager, false) = false
+			GROUP BY
+				r.workflow_id
+		),
+		step_payload AS (
+			SELECT
+				ws.workflow_id,
+				COALESCE(
+					JSONB_AGG(
+						JSONB_BUILD_OBJECT(
+							'title', COALESCE(ws.title, ''),
+							'description', COALESCE(ws.description, ''),
+							'bounty', COALESCE(ws.bounty, 0),
+							'role_client_id', COALESCE(ws.role_id, ''),
+							'allow_step_not_possible', COALESCE(ws.allow_step_not_possible, false),
+							'work_items',
+							COALESCE(
+								(
+									SELECT
+										JSONB_AGG(
+											JSONB_BUILD_OBJECT(
+												'title', COALESCE(wi.title, ''),
+												'description', COALESCE(wi.description, ''),
+												'optional', COALESCE(wi.is_optional, false),
+												'requires_photo', COALESCE(wi.requires_photo, false),
+												'camera_capture_only', COALESCE(wi.camera_capture_only, false),
+												'photo_required_count', GREATEST(1, COALESCE(wi.photo_required_count, 1)),
+												'photo_allow_any_count', COALESCE(wi.photo_allow_any_count, false),
+												'photo_aspect_ratio', COALESCE(NULLIF(BTRIM(wi.photo_aspect_ratio), ''), 'square'),
+												'requires_written_response', COALESCE(wi.requires_written_response, false),
+												'requires_dropdown', COALESCE(wi.requires_dropdown, false),
+												'dropdown_options',
+												COALESCE(
+													(
+														SELECT
+															JSONB_AGG(
+																JSONB_BUILD_OBJECT(
+																	'label',
+																	COALESCE(
+																		NULLIF(BTRIM(option_value->>'label'), ''),
+																		NULLIF(BTRIM(option_value->>'value'), ''),
+																		CONCAT('Option ', option_index::text)
+																	),
+																	'requires_written_response',
+																	(COALESCE(LOWER(option_value->>'requires_written_response'), 'false') = 'true'),
+																	'notify_emails',
+																	CASE
+																		WHEN JSONB_TYPEOF(option_value->'notify_emails') = 'array' THEN option_value->'notify_emails'
+																		ELSE '[]'::jsonb
+																	END
+																)
+																ORDER BY
+																	option_index
+															)
+														FROM
+															JSONB_ARRAY_ELEMENTS(COALESCE(wi.dropdown_options, '[]'::jsonb)) WITH ORDINALITY AS options(option_value, option_index)
+													),
+													'[]'::jsonb
+												)
+											)
+											ORDER BY
+												wi.item_order
+										)
+									FROM
+										workflow_step_items wi
+									WHERE
+										wi.step_id = ws.id
+								),
+								'[]'::jsonb
+							)
+						)
+						ORDER BY
+							ws.step_order
+					),
+					'[]'::jsonb
+				) AS steps_json
+			FROM
+				workflow_steps ws
+			GROUP BY
+				ws.workflow_id
+		),
+		payload AS (
+			SELECT
+				w.id AS workflow_id,
+				w.series_id,
+				w.proposer_id,
+				COALESCE(NULLIF(BTRIM(s.title), ''), CONCAT('Workflow ', UPPER(SUBSTRING(w.series_id FROM 1 FOR 8)))) AS title,
+				COALESCE(s.description, '') AS description,
+				COALESCE(NULLIF(BTRIM(s.recurrence), ''), 'one_time') AS recurrence,
+				s.recurrence_end_at,
+				w.manager_improver_id AS supervisor_user_id,
+				GREATEST(0, COALESCE(w.manager_bounty, 0)) AS supervisor_bounty,
+				COALESCE(s.supervisor_data_json, '[]'::jsonb) AS supervisor_data_json,
+				COALESCE(rp.roles_json, '[]'::jsonb) AS roles_json,
+				COALESCE(sp.steps_json, '[]'::jsonb) AS steps_json
+			FROM
+				workflows w
+			LEFT JOIN
+				workflow_series s
+			ON
+				s.id = w.series_id
+			LEFT JOIN
+				role_payload rp
+			ON
+				rp.workflow_id = w.id
+			LEFT JOIN
+				step_payload sp
+			ON
+				sp.workflow_id = w.id
+			WHERE
+				w.workflow_state_id IS NULL
+		)
+		INSERT INTO workflow_states(
+			id,
+			series_id,
+			proposer_id,
+			title,
+			description,
+			recurrence,
+			recurrence_end_at,
+			supervisor_user_id,
+			supervisor_bounty,
+			supervisor_data_json,
+			roles_json,
+			steps_json,
+			source_workflow_id,
+			proposed_by_user_id
+		)
+		SELECT
+			MD5(CONCAT('workflow-state:', p.workflow_id)),
+			p.series_id,
+			p.proposer_id,
+			p.title,
+			p.description,
+			p.recurrence,
+			p.recurrence_end_at,
+			p.supervisor_user_id,
+			p.supervisor_bounty,
+			p.supervisor_data_json,
+			p.roles_json,
+			p.steps_json,
+			p.workflow_id,
+			p.proposer_id
+		FROM
+			payload p
+		ON CONFLICT (id) DO NOTHING;
+
+		UPDATE workflows w
+		SET
+			workflow_state_id = MD5(CONCAT('workflow-state:', w.id))
+		WHERE
+			w.workflow_state_id IS NULL;
+
+		WITH ranked AS (
+			SELECT
+				w.series_id,
+				w.workflow_state_id,
+				ROW_NUMBER() OVER (
+					PARTITION BY w.series_id
+					ORDER BY
+						CASE WHEN w.status <> 'deleted' THEN 0 ELSE 1 END,
+						w.start_at DESC,
+						w.created_at DESC,
+						w.id DESC
+				) AS row_rank
+			FROM
+				workflows w
+			WHERE
+				w.workflow_state_id IS NOT NULL
+		)
+		UPDATE workflow_series s
+		SET
+			current_state_id = r.workflow_state_id,
+			updated_at = unix_now()
+		FROM
+			ranked r
+		WHERE
+			s.id = r.series_id
+		AND
+			r.row_rank = 1
+		AND
+			(s.current_state_id IS NULL OR BTRIM(s.current_state_id) = '');
+
+		UPDATE workflow_series s
+		SET
+			title = st.title,
+			description = st.description,
+			recurrence = st.recurrence,
+			recurrence_end_at = st.recurrence_end_at,
+			supervisor_data_json = st.supervisor_data_json,
+			updated_at = unix_now()
+		FROM
+			workflow_states st
+		WHERE
+			st.id = s.current_state_id
+		AND
+			st.series_id = s.id;
+	`)
+	if err != nil {
+		return fmt.Errorf("error backfilling workflow state snapshots: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
+		CREATE INDEX IF NOT EXISTS workflow_series_current_state_idx
+			ON workflow_series(current_state_id);
+		CREATE INDEX IF NOT EXISTS workflows_state_idx
+			ON workflows(workflow_state_id);
+
+		DO $$
+		BEGIN
+			IF NOT EXISTS (
+				SELECT 1
+				FROM pg_constraint
+				WHERE conname = 'workflow_series_current_state_fk'
+			) THEN
+				ALTER TABLE workflow_series
+				ADD CONSTRAINT workflow_series_current_state_fk
+				FOREIGN KEY (current_state_id)
+				REFERENCES workflow_states(id)
+				ON DELETE SET NULL;
+			END IF;
+
+			IF NOT EXISTS (
+				SELECT 1
+				FROM pg_constraint
+				WHERE conname = 'workflows_workflow_state_fk'
+			) THEN
+				ALTER TABLE workflows
+				ADD CONSTRAINT workflows_workflow_state_fk
+				FOREIGN KEY (workflow_state_id)
+				REFERENCES workflow_states(id)
+				ON DELETE SET NULL;
+			END IF;
+		END $$;
+	`)
+	if err != nil {
+		return fmt.Errorf("error adding workflow state foreign keys: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
 			DO $$
 			BEGIN
 			IF NOT EXISTS (
@@ -612,10 +998,23 @@ func (s *AppDB) CreateTables() error {
 
 		ALTER TABLE workflows
 		ADD CONSTRAINT workflows_status_check
-		CHECK (status IN ('pending', 'approved', 'rejected', 'in_progress', 'completed', 'paid_out', 'blocked', 'expired', 'deleted'));
+		CHECK (status IN ('pending', 'approved', 'rejected', 'in_progress', 'completed', 'paid_out', 'blocked', 'expired', 'failed', 'skipped', 'deleted'));
 	`)
 	if err != nil {
 		return fmt.Errorf("error updating workflows status constraint: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
+		UPDATE
+			workflows
+		SET
+			status = 'skipped',
+			updated_at = unix_now()
+		WHERE
+			status = 'failed';
+	`)
+	if err != nil {
+		return fmt.Errorf("error migrating failed workflow statuses to skipped: %s", err)
 	}
 
 	_, err = s.db.Exec(context.Background(), `
@@ -1221,6 +1620,54 @@ func (s *AppDB) CreateTables() error {
 	`)
 	if err != nil {
 		return fmt.Errorf("error creating workflow deletion vote tables: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
+		CREATE TABLE IF NOT EXISTS workflow_edit_proposals(
+			id TEXT PRIMARY KEY,
+			series_id TEXT NOT NULL REFERENCES workflow_series(id) ON DELETE CASCADE,
+			target_workflow_id TEXT REFERENCES workflows(id) ON DELETE SET NULL,
+			proposed_state_id TEXT NOT NULL REFERENCES workflow_states(id) ON DELETE CASCADE,
+			requested_by_user_id TEXT NOT NULL REFERENCES users(id),
+			reason TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT 'pending',
+			vote_quorum_reached_at BIGINT,
+			vote_finalize_at BIGINT,
+			vote_finalized_at BIGINT,
+			vote_finalized_by_user_id TEXT REFERENCES users(id),
+			vote_decision TEXT,
+			created_at BIGINT NOT NULL DEFAULT unix_now(),
+			updated_at BIGINT NOT NULL DEFAULT unix_now(),
+			CHECK (status IN ('pending', 'approved', 'denied', 'expired')),
+			CHECK (vote_decision IN ('approve', 'deny', 'admin_approve') OR vote_decision IS NULL)
+		);
+
+		CREATE INDEX IF NOT EXISTS workflow_edit_proposals_status_idx
+			ON workflow_edit_proposals(status);
+		CREATE INDEX IF NOT EXISTS workflow_edit_proposals_series_idx
+			ON workflow_edit_proposals(series_id);
+		CREATE INDEX IF NOT EXISTS workflow_edit_proposals_target_workflow_idx
+			ON workflow_edit_proposals(target_workflow_id);
+		CREATE UNIQUE INDEX IF NOT EXISTS workflow_edit_proposals_pending_unique_idx
+			ON workflow_edit_proposals(series_id)
+			WHERE status = 'pending';
+
+		CREATE TABLE IF NOT EXISTS workflow_edit_votes(
+			proposal_id TEXT NOT NULL REFERENCES workflow_edit_proposals(id) ON DELETE CASCADE,
+			voter_id TEXT NOT NULL REFERENCES users(id),
+			decision TEXT NOT NULL,
+			comment TEXT,
+			created_at BIGINT NOT NULL DEFAULT unix_now(),
+			updated_at BIGINT NOT NULL DEFAULT unix_now(),
+			PRIMARY KEY (proposal_id, voter_id),
+			CHECK (decision IN ('approve', 'deny'))
+		);
+
+		CREATE INDEX IF NOT EXISTS workflow_edit_votes_proposal_idx
+			ON workflow_edit_votes(proposal_id);
+	`)
+	if err != nil {
+		return fmt.Errorf("error creating workflow edit proposal vote tables: %s", err)
 	}
 
 	_, err = s.db.Exec(context.Background(), `

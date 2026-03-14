@@ -3,6 +3,7 @@ package utils
 import (
 	"context"
 	"fmt"
+	"html"
 	"net/http"
 	"os"
 	"strings"
@@ -92,11 +93,15 @@ func BuildStyledEmail(title, subtitle, contentHTML string) string {
 </html>`
 
 	replacer := strings.NewReplacer(
-		"{{TITLE}}", title,
-		"{{SUBTITLE}}", subtitle,
+		"{{TITLE}}", EscapeEmailHTML(title),
+		"{{SUBTITLE}}", EscapeEmailHTML(subtitle),
 		"{{CONTENT}}", contentHTML,
 	)
 	return replacer.Replace(template)
+}
+
+func EscapeEmailHTML(value string) string {
+	return html.EscapeString(value)
 }
 
 func (es *EmailSender) AddAuthorizedRecipient(toEmail string) error {

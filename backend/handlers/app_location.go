@@ -179,7 +179,7 @@ func (a *AppService) AddLocation(w http.ResponseWriter, r *http.Request) {
     <td style="padding:12px 0; font-size:13px; color:#6b7280;">Submitted By</td>
     <td style="padding:12px 0; font-size:13px; color:#111827; word-break:break-all;">%s</td>
   </tr>
-</table>`, location.Name, location.OwnerID),
+</table>`, utils.EscapeEmailHTML(location.Name), utils.EscapeEmailHTML(location.OwnerID)),
 	)
 
 	w.WriteHeader(http.StatusCreated)
@@ -235,7 +235,7 @@ func (a *AppService) UpdateLocation(w http.ResponseWriter, r *http.Request) {
     <td style="padding:12px 0; font-size:13px; color:#6b7280;">Status</td>
     <td style="padding:12px 0; font-size:13px; color:#111827;">Approved</td>
   </tr>
-</table>`, location.Name)
+</table>`, utils.EscapeEmailHTML(location.Name))
 
 			htmlContent := utils.BuildStyledEmail(
 				"Location Approved",

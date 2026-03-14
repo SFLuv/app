@@ -251,6 +251,7 @@ function LocalPhotoThumbnail({
 
 export default function ImproverPage() {
   const searchParams = useSearchParams()
+  const searchParamsString = searchParams.toString()
   const pathname = usePathname()
   const router = useRouter()
   const tabFromQuery = searchParams.get("tab")
@@ -307,6 +308,7 @@ export default function ImproverPage() {
   const videoElementRefs = useRef<Record<string, HTMLVideoElement | null>>({})
   const cameraStreamRefs = useRef<Record<string, MediaStream | null>>({})
   const cameraVideoRefCallbacks = useRef<Record<string, (element: HTMLVideoElement | null) => void>>({})
+  const skipNextQueryWriteRef = useRef(false)
 
   const canUsePanel = Boolean(user?.isImprover || user?.isAdmin)
   const hasLoadedDataRef = useRef(false)
@@ -379,33 +381,83 @@ export default function ImproverPage() {
     [authFetch, canUsePanel],
   )
 
+  const navigateToImproverTab = useCallback((nextTab: ImproverTab) => {
+    const params = new URLSearchParams(searchParamsString)
+    params.set("tab", nextTab)
+
+    if (boardSearch) params.set("board_search", boardSearch)
+    else params.delete("board_search")
+
+    if (myWorkflowsSearch) params.set("my_workflows_search", myWorkflowsSearch)
+    else params.delete("my_workflows_search")
+
+    if (!showOnlyActiveSeries) params.set("my_active_only", "false")
+    else params.delete("my_active_only")
+
+    if (unpaidSearch) params.set("unpaid_search", unpaidSearch)
+    else params.delete("unpaid_search")
+
+    if (absenceSearch) params.set("absence_search", absenceSearch)
+    else params.delete("absence_search")
+
+    if (credentialSearch) params.set("credential_search", credentialSearch)
+    else params.delete("credential_search")
+
+    const nextQuery = params.toString()
+    if (nextQuery === searchParamsString) return
+    router.push(nextQuery ? `${pathname}?${nextQuery}` : pathname, { scroll: false })
+  }, [
+    absenceSearch,
+    boardSearch,
+    credentialSearch,
+    myWorkflowsSearch,
+    pathname,
+    router,
+    searchParamsString,
+    showOnlyActiveSeries,
+    unpaidSearch,
+  ])
+
   useEffect(() => {
-    const nextTab = searchParams.get("tab")
-    if (isImproverTab(nextTab)) {
-      setActiveTab((prev) => (nextTab === prev ? prev : nextTab))
+    const params = new URLSearchParams(searchParamsString)
+
+    const nextTabRaw = params.get("tab")
+    const nextTab: ImproverTab = isImproverTab(nextTabRaw) ? nextTabRaw : "my-workflows"
+    const nextBoardSearch = params.get("board_search") || ""
+    const nextMyWorkflowsSearch = params.get("my_workflows_search") || ""
+    const nextShowOnlyActiveSeries = params.get("my_active_only") !== "false"
+    const nextUnpaidSearch = params.get("unpaid_search") || ""
+    const nextAbsenceSearch = params.get("absence_search") || ""
+    const nextCredentialSearch = params.get("credential_search") || ""
+
+    const shouldSyncFromQuery =
+      nextTab !== activeTab ||
+      nextBoardSearch !== boardSearch ||
+      nextMyWorkflowsSearch !== myWorkflowsSearch ||
+      nextShowOnlyActiveSeries !== showOnlyActiveSeries ||
+      nextUnpaidSearch !== unpaidSearch ||
+      nextAbsenceSearch !== absenceSearch ||
+      nextCredentialSearch !== credentialSearch
+
+    if (shouldSyncFromQuery) {
+      skipNextQueryWriteRef.current = true
     }
 
-    const nextBoardSearch = searchParams.get("board_search") || ""
+    setActiveTab((prev) => (nextTab === prev ? prev : nextTab))
     setBoardSearch((prev) => (nextBoardSearch === prev ? prev : nextBoardSearch))
-
-    const nextMyWorkflowsSearch = searchParams.get("my_workflows_search") || ""
     setMyWorkflowsSearch((prev) => (nextMyWorkflowsSearch === prev ? prev : nextMyWorkflowsSearch))
-
-    const nextShowOnlyActiveSeries = searchParams.get("my_active_only") !== "false"
     setShowOnlyActiveSeries((prev) => (nextShowOnlyActiveSeries === prev ? prev : nextShowOnlyActiveSeries))
-
-    const nextUnpaidSearch = searchParams.get("unpaid_search") || ""
     setUnpaidSearch((prev) => (nextUnpaidSearch === prev ? prev : nextUnpaidSearch))
-
-    const nextAbsenceSearch = searchParams.get("absence_search") || ""
     setAbsenceSearch((prev) => (nextAbsenceSearch === prev ? prev : nextAbsenceSearch))
-
-    const nextCredentialSearch = searchParams.get("credential_search") || ""
     setCredentialSearch((prev) => (nextCredentialSearch === prev ? prev : nextCredentialSearch))
-  }, [searchParams])
+  }, [searchParamsString])
 
   useEffect(() => {
-    const params = new URLSearchParams(searchParams.toString())
+    const currentParams = new URLSearchParams(searchParamsString)
+    const currentTabRaw = currentParams.get("tab")
+    const currentTab: ImproverTab = isImproverTab(currentTabRaw) ? currentTabRaw : "my-workflows"
+
+    const params = new URLSearchParams(currentParams.toString())
     params.set("tab", activeTab)
 
     if (boardSearch) params.set("board_search", boardSearch)
@@ -427,8 +479,18 @@ export default function ImproverPage() {
     else params.delete("credential_search")
 
     const nextQuery = params.toString()
-    if (nextQuery !== searchParams.toString()) {
-      router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname, { scroll: false })
+    if (skipNextQueryWriteRef.current) {
+      skipNextQueryWriteRef.current = false
+      return
+    }
+
+    if (nextQuery !== searchParamsString) {
+      const destination = nextQuery ? `${pathname}?${nextQuery}` : pathname
+      if (currentTab !== activeTab) {
+        router.push(destination, { scroll: false })
+      } else {
+        router.replace(destination, { scroll: false })
+      }
     }
   }, [
     absenceSearch,
@@ -438,7 +500,7 @@ export default function ImproverPage() {
     myWorkflowsSearch,
     pathname,
     router,
-    searchParams,
+    searchParamsString,
     showOnlyActiveSeries,
     unpaidSearch,
   ])
@@ -580,6 +642,18 @@ export default function ImproverPage() {
     (workflow: Workflow) => {
       if (!user?.id) return false
       return workflow.steps.some((step) => step.assigned_improver_id === user.id)
+    },
+    [user?.id],
+  )
+
+  const isWorkflowActiveForUser = useCallback(
+    (workflow: Workflow) => {
+      if (!user?.id) return false
+      return workflow.steps.some(
+        (step) =>
+          step.assigned_improver_id === user.id &&
+          (step.status === "available" || step.status === "in_progress"),
+      )
     },
     [user?.id],
   )
@@ -1325,10 +1399,11 @@ export default function ImproverPage() {
     }
 
     addItemPhoto(stepId, itemId, preparedPhoto)
+    stopCameraStreamByKey(cameraKey)
     setCameraStates((prev) => ({
       ...prev,
       [cameraKey]: {
-        open: true,
+        open: false,
         error: "",
       },
     }))
@@ -1570,11 +1645,16 @@ export default function ImproverPage() {
         workflows: [...group.workflows].sort((a, b) => a.start_at - b.start_at),
       }))
       .sort((a, b) => {
+        const aHasActiveWorkflow = a.workflows.some((workflow) => isWorkflowActiveForUser(workflow))
+        const bHasActiveWorkflow = b.workflows.some((workflow) => isWorkflowActiveForUser(workflow))
+        if (aHasActiveWorkflow !== bHasActiveWorkflow) {
+          return aHasActiveWorkflow ? -1 : 1
+        }
         const aLatest = a.workflows[a.workflows.length - 1]?.start_at || 0
         const bLatest = b.workflows[b.workflows.length - 1]?.start_at || 0
         return bLatest - aLatest
       })
-  }, [myClaimedWorkflows, user?.id])
+  }, [isWorkflowActiveForUser, myClaimedWorkflows, user?.id])
 
   const getInitialStepIndexForMyWorkflow = useCallback(
     (workflow: Workflow) => {
@@ -1658,11 +1738,18 @@ export default function ImproverPage() {
     if (group.workflows.length === 0) return 0
     const maxIndex = group.workflows.length - 1
     const currentIndex = seriesCardIndexByKey[group.key]
-    if (currentIndex == null) return maxIndex
+    if (currentIndex == null) {
+      for (let i = maxIndex; i >= 0; i -= 1) {
+        if (isWorkflowActiveForUser(group.workflows[i])) {
+          return i
+        }
+      }
+      return maxIndex
+    }
     if (currentIndex < 0) return 0
     if (currentIndex > maxIndex) return maxIndex
     return currentIndex
-  }, [seriesCardIndexByKey])
+  }, [isWorkflowActiveForUser, seriesCardIndexByKey])
 
   const shiftSeriesCardIndex = useCallback((group: WorkflowSeriesCardGroup, direction: number) => {
     if (group.workflows.length <= 1) return
@@ -1706,7 +1793,12 @@ export default function ImproverPage() {
 
   const shiftDetailSeriesWorkflow = useCallback(async (direction: number) => {
     if (!detailSeriesContext || detailSeriesContext.workflowIds.length <= 1) return
-    const nextIndex = detailSeriesContext.index + direction
+    const indexFromWorkflow =
+      detailWorkflow
+        ? detailSeriesContext.workflowIds.findIndex((id) => id === detailWorkflow.id)
+        : -1
+    const currentIndex = indexFromWorkflow >= 0 ? indexFromWorkflow : detailSeriesContext.index
+    const nextIndex = currentIndex + direction
     if (nextIndex < 0 || nextIndex >= detailSeriesContext.workflowIds.length) return
     const nextWorkflowId = detailSeriesContext.workflowIds[nextIndex]
     const nextWorkflow = workflows.find((item) => item.id === nextWorkflowId) || unpaidWorkflows.find((item) => item.id === nextWorkflowId)
@@ -1723,7 +1815,7 @@ export default function ImproverPage() {
         index: nextIndex,
       },
     })
-  }, [detailSeriesContext, workflows, unpaidWorkflows, getInitialStepIndexForMyWorkflow, user?.id])
+  }, [detailSeriesContext, detailWorkflow, workflows, unpaidWorkflows, getInitialStepIndexForMyWorkflow, user?.id])
 
   const parseAttachmentFilename = (value: string | null) => {
     if (!value) return ""
@@ -1746,12 +1838,10 @@ export default function ImproverPage() {
 
     if (showOnlyActiveSeries) {
       filtered = filtered.filter((group) =>
-        group.workflows.some((workflow) =>
-          workflow.steps.some(
-            (step) =>
-              step.assigned_improver_id === user?.id &&
-              (step.status === "available" || step.status === "in_progress"),
-          ),
+        group.workflows.some(
+          (workflow) =>
+            workflow.recurrence !== "one_time" ||
+            (workflow.status !== "completed" && workflow.status !== "paid_out"),
         ),
       )
     }
@@ -1760,7 +1850,7 @@ export default function ImproverPage() {
     return filtered.filter((group) =>
       group.workflows.some((workflow) => workflow.title.toLowerCase().includes(s)),
     )
-  }, [myWorkflowSeriesGroups, myWorkflowsSearch, showOnlyActiveSeries, user?.id])
+  }, [myWorkflowSeriesGroups, myWorkflowsSearch, showOnlyActiveSeries])
 
   const filteredUnpaidWorkflows = useMemo(() => {
     const s = unpaidSearch.trim().toLowerCase()
@@ -1878,10 +1968,18 @@ export default function ImproverPage() {
 
   const renderWorkflowHeaderActions = (workflow: Workflow) => {
     if (!detailSeriesContext) return null
-    const workflowIndex = detailSeriesContext.workflowIds.findIndex((id) => id === workflow.id)
-    if (workflowIndex === -1) return null
+    if (detailSeriesContext.workflowIds.length === 0) return null
 
-    const hasSeriesNavigation = workflow.recurrence !== "one_time" && detailSeriesContext.workflowIds.length > 1
+    const workflowIndexFromId = detailSeriesContext.workflowIds.findIndex((id) => id === workflow.id)
+    const workflowIndex =
+      workflowIndexFromId >= 0
+        ? workflowIndexFromId
+        : Math.min(
+            detailSeriesContext.workflowIds.length - 1,
+            Math.max(0, detailSeriesContext.index),
+          )
+
+    const hasSeriesNavigation = detailSeriesContext.workflowIds.length > 1
     const canShiftBackward = hasSeriesNavigation && workflowIndex > 0
     const canShiftForward = hasSeriesNavigation && workflowIndex < detailSeriesContext.workflowIds.length - 1
 
@@ -2074,6 +2172,42 @@ export default function ImproverPage() {
                             </p>
                           </div>
 
+                          {form.photos.length > 0 ? (
+                            <div className="space-y-2">
+                              <p className="text-xs text-muted-foreground">
+                                {form.photos.length} captured photo{form.photos.length === 1 ? "" : "s"}
+                              </p>
+                              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                                {form.photos.map((photo, photoIndex) => (
+                                  <div
+                                    key={`${photo.name}-${photo.lastModified}-${photoIndex}`}
+                                    className="space-y-2 rounded border p-2 text-xs"
+                                  >
+                                    <LocalPhotoThumbnail
+                                      file={photo}
+                                      onOpen={openLocalPhotoPreview}
+                                      disabled={Boolean(submitting)}
+                                    />
+                                    <div className="flex items-center justify-between gap-2">
+                                      <span className="truncate">{photo.name}</span>
+                                      <Button
+                                        type="button"
+                                        size="sm"
+                                        variant="ghost"
+                                        onClick={() => removeItemPhoto(step.id, item.id, photoIndex)}
+                                        disabled={Boolean(submitting) || stepNotPossibleSelected}
+                                      >
+                                        Remove
+                                      </Button>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          ) : (
+                            <p className="text-xs text-muted-foreground">No captured photos yet.</p>
+                          )}
+
                           <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
                             <Button
                               className="w-full sm:w-auto"
@@ -2083,7 +2217,7 @@ export default function ImproverPage() {
                               onClick={() => startCameraCapture(step.id, item.id)}
                               disabled={Boolean(submitting) || stepNotPossibleSelected}
                             >
-                              {cameraState.open ? "Restart Camera" : "Open Camera"}
+                              {cameraState.open ? "Restart Camera" : form.photos.length > 0 ? "Take Another Photo" : "Open Camera"}
                             </Button>
                             {cameraState.open && (
                                 <Button
@@ -2136,42 +2270,6 @@ export default function ImproverPage() {
                                 autoPlay
                               />
                             </div>
-                          )}
-
-                          {form.photos.length > 0 ? (
-                            <div className="space-y-2">
-                              <p className="text-xs text-muted-foreground">
-                                {form.photos.length} captured photo{form.photos.length === 1 ? "" : "s"}
-                              </p>
-                              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                                {form.photos.map((photo, photoIndex) => (
-                                  <div
-                                    key={`${photo.name}-${photo.lastModified}-${photoIndex}`}
-                                    className="space-y-2 rounded border p-2 text-xs"
-                                  >
-                                    <LocalPhotoThumbnail
-                                      file={photo}
-                                      onOpen={openLocalPhotoPreview}
-                                      disabled={Boolean(submitting)}
-                                    />
-                                    <div className="flex items-center justify-between gap-2">
-                                      <span className="truncate">{photo.name}</span>
-                                      <Button
-                                        type="button"
-                                        size="sm"
-                                        variant="ghost"
-                                        onClick={() => removeItemPhoto(step.id, item.id, photoIndex)}
-                                        disabled={Boolean(submitting) || stepNotPossibleSelected}
-                                      >
-                                        Remove
-                                      </Button>
-                                    </div>
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-                          ) : (
-                            <p className="text-xs text-muted-foreground">No captured photos yet.</p>
                           )}
                         </div>
                       ) : (
@@ -2346,7 +2444,14 @@ export default function ImproverPage() {
         </div>
       )}
 
-      <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as ImproverTab)} className="space-y-4">
+      <Tabs
+        value={activeTab}
+        onValueChange={(value) => {
+          if (!isImproverTab(value)) return
+          navigateToImproverTab(value)
+        }}
+        className="space-y-4"
+      >
         <TabsList className="grid h-auto w-full grid-cols-1 gap-2 p-1 sm:grid-cols-2 lg:grid-cols-3">
           <TabsTrigger value="my-workflows">My Workflows</TabsTrigger>
           <TabsTrigger value="workflow-board">Workflow Board</TabsTrigger>
@@ -2433,7 +2538,7 @@ export default function ImproverPage() {
               onCheckedChange={(checked: boolean | "indeterminate") => setShowOnlyActiveSeries(Boolean(checked))}
             />
             <Label htmlFor="my-workflows-active-only" className="text-sm font-normal cursor-pointer">
-              Show only active workflow series
+              Hide finished workflows.
             </Label>
           </div>
           {filteredActiveSeriesGroups.length === 0 ? (
@@ -2442,7 +2547,7 @@ export default function ImproverPage() {
                 <CardTitle>No Claimed Workflows</CardTitle>
                 <CardDescription>
                   {showOnlyActiveSeries
-                    ? "No active workflow series match your filter."
+                    ? "No workflows match your filter."
                     : "Workflows you claim will appear here."}
                 </CardDescription>
               </CardHeader>
@@ -2455,14 +2560,20 @@ export default function ImproverPage() {
                   if (group.workflows.length === 0) return null
                   const cardIndex = getSeriesCardIndex(group)
                   const workflow = group.workflows[cardIndex]
-                  const hasSeriesNavigation = workflow.recurrence !== "one_time" && group.workflows.length > 1
+                  const workflowIsActive = isWorkflowActiveForUser(workflow)
+                  const hasSeriesNavigation = group.workflows.length > 1
                   const canShiftBackward = hasSeriesNavigation && cardIndex > 0
                   const canShiftForward = hasSeriesNavigation && cardIndex < group.workflows.length - 1
 
                   return (
                     <Card
                       key={`series-${group.key}`}
-                      className="cursor-pointer transition-colors hover:bg-muted/30"
+                      className={cn(
+                        "cursor-pointer transition-colors",
+                        workflowIsActive
+                          ? "border-[#eb6c6c]/50 bg-[#eb6c6c]/10 hover:bg-[#eb6c6c]/15"
+                          : "hover:bg-muted/30",
+                      )}
                       onClick={() => void openSeriesWorkflowDetails(group, cardIndex)}
                     >
                       <CardContent className="pt-4 space-y-3">

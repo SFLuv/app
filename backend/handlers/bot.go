@@ -98,6 +98,43 @@ func normalizeRedeemCode(raw string) string {
 	return strings.ToLower(code)
 }
 
+func (s *BotService) resolveRedeemPayoutAddress(ctx context.Context, requestedAddress string) string {
+	normalizedRequestedAddress := strings.ToLower(strings.TrimSpace(requestedAddress))
+	if !common.IsHexAddress(normalizedRequestedAddress) {
+		return normalizedRequestedAddress
+	}
+	normalizedRequestedAddress = strings.ToLower(common.HexToAddress(normalizedRequestedAddress).Hex())
+
+	if s.appDb == nil {
+		return normalizedRequestedAddress
+	}
+
+	ownerLookup, err := s.appDb.GetWalletAddressOwnerLookup(ctx, normalizedRequestedAddress)
+	if err != nil {
+		fmt.Printf("error resolving wallet owner for redeem address %s: %s\n", normalizedRequestedAddress, err)
+		return normalizedRequestedAddress
+	}
+	if ownerLookup == nil || strings.TrimSpace(ownerLookup.UserID) == "" {
+		return normalizedRequestedAddress
+	}
+
+	primarySmartWallet, err := s.appDb.GetSmartWalletByOwnerIndex(ctx, ownerLookup.UserID, 0)
+	if err != nil {
+		fmt.Printf("error loading primary smart wallet for owner %s redeem address %s: %s\n", ownerLookup.UserID, normalizedRequestedAddress, err)
+		return normalizedRequestedAddress
+	}
+	if primarySmartWallet == nil || primarySmartWallet.SmartAddress == nil {
+		return normalizedRequestedAddress
+	}
+
+	smartWalletAddress := strings.TrimSpace(*primarySmartWallet.SmartAddress)
+	if !common.IsHexAddress(smartWalletAddress) {
+		return normalizedRequestedAddress
+	}
+
+	return strings.ToLower(common.HexToAddress(smartWalletAddress).Hex())
+}
+
 func validateEventTiming(event *structs.Event) error {
 	if event == nil {
 		return fmt.Errorf("invalid event payload")
@@ -513,7 +550,7 @@ func (s *BotService) AffiliateNewEvent(w http.ResponseWriter, r *http.Request) {
     <td style="padding:12px 0; font-size:13px; color:#6b7280;">Available Faucet Balance</td>
     <td style="padding:12px 0; font-size:13px; color:#111827;">%s SFLuv</td>
   </tr>
-</table>`, *userDid, eventTotal, availableTokens.String())
+</table>`, utils.EscapeEmailHTML(*userDid), eventTotal, utils.EscapeEmailHTML(availableTokens.String()))
 
 			htmlContent := utils.BuildStyledEmail(
 				"Failed Affiliate Event Creation",
@@ -790,6 +827,10 @@ func (s *BotService) Redeem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	request.Address = strings.ToLower(common.HexToAddress(request.Address).Hex())
+
+	resolveAddressCtx, resolveAddressCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	request.Address = s.resolveRedeemPayoutAddress(resolveAddressCtx, request.Address)
+	resolveAddressCancel()
 
 	complianceCtx, complianceCancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer complianceCancel()

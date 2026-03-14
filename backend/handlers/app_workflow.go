@@ -260,7 +260,7 @@ func (a *AppService) RequestProposerStatus(w http.ResponseWriter, r *http.Reques
     <td style="padding:12px 0; font-size:13px; color:#6b7280;">Notification Email</td>
     <td style="padding:12px 0; font-size:13px; color:#111827;">%s</td>
   </tr>
-</table>`, proposer.UserId, proposer.Organization, proposer.Email),
+</table>`, utils.EscapeEmailHTML(proposer.UserId), utils.EscapeEmailHTML(proposer.Organization), utils.EscapeEmailHTML(proposer.Email)),
 	)
 
 	w.WriteHeader(http.StatusCreated)
@@ -372,7 +372,7 @@ func (a *AppService) RequestImproverStatus(w http.ResponseWriter, r *http.Reques
     <td style="padding:12px 0; font-size:13px; color:#6b7280;">Email</td>
     <td style="padding:12px 0; font-size:13px; color:#111827;">%s</td>
   </tr>
-</table>`, improver.UserId, improver.FirstName, improver.LastName, improver.Email),
+</table>`, utils.EscapeEmailHTML(improver.UserId), utils.EscapeEmailHTML(improver.FirstName), utils.EscapeEmailHTML(improver.LastName), utils.EscapeEmailHTML(improver.Email)),
 	)
 
 	w.WriteHeader(http.StatusCreated)
@@ -521,7 +521,7 @@ func (a *AppService) RequestSupervisorStatus(w http.ResponseWriter, r *http.Requ
     <td style="padding:12px 0; font-size:13px; color:#6b7280;">Notification Email</td>
     <td style="padding:12px 0; font-size:13px; color:#111827;">%s</td>
   </tr>
-</table>`, supervisor.UserId, supervisor.Organization, supervisor.Email),
+</table>`, utils.EscapeEmailHTML(supervisor.UserId), utils.EscapeEmailHTML(supervisor.Organization), utils.EscapeEmailHTML(supervisor.Email)),
 	)
 
 	w.WriteHeader(http.StatusCreated)
@@ -684,13 +684,7 @@ func (a *AppService) CreateProposerWorkflowTemplate(w http.ResponseWriter, r *ht
 		return
 	}
 
-	startAt, err := parseWorkflowStartAt(req.StartAt)
-	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		return
-	}
-
-	template, err := a.db.CreateWorkflowTemplate(r.Context(), *userDid, &req, startAt, false)
+	template, err := a.db.CreateWorkflowTemplate(r.Context(), *userDid, &req, false)
 	if err != nil {
 		errMsg := err.Error()
 		if strings.Contains(errMsg, "required") || strings.Contains(errMsg, "invalid") || strings.Contains(errMsg, "duplicate") || strings.Contains(errMsg, "unknown") {
@@ -741,13 +735,7 @@ func (a *AppService) CreateDefaultWorkflowTemplate(w http.ResponseWriter, r *htt
 		return
 	}
 
-	startAt, err := parseWorkflowStartAt(req.StartAt)
-	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		return
-	}
-
-	template, err := a.db.CreateWorkflowTemplate(r.Context(), *adminId, &req, startAt, true)
+	template, err := a.db.CreateWorkflowTemplate(r.Context(), *adminId, &req, true)
 	if err != nil {
 		errMsg := err.Error()
 		if strings.Contains(errMsg, "required") || strings.Contains(errMsg, "invalid") || strings.Contains(errMsg, "duplicate") || strings.Contains(errMsg, "unknown") {
@@ -804,8 +792,24 @@ func (a *AppService) CreateWorkflow(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
+	recurrenceEndAt, err := parseOptionalWorkflowDatetime(req.RecurrenceEndAt, "recurrence_end_at")
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(err.Error()))
+		return
+	}
+	if req.Recurrence == "one_time" && recurrenceEndAt != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte("recurrence_end_at is only valid for recurring workflows"))
+		return
+	}
+	if req.Recurrence != "one_time" && recurrenceEndAt != nil && recurrenceEndAt.UTC().Unix() < startAt.UTC().Unix() {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte("recurrence_end_at must be on or after start_at"))
+		return
+	}
 
-	workflow, err := a.db.CreateWorkflow(r.Context(), *userDid, &req, startAt)
+	workflow, err := a.db.CreateWorkflow(r.Context(), *userDid, &req, startAt, recurrenceEndAt)
 	if err != nil {
 		errMsg := err.Error()
 		if strings.Contains(errMsg, "not approved") {
@@ -836,6 +840,12 @@ func (a *AppService) GetProposerWorkflows(w http.ResponseWriter, r *http.Request
 		return
 	}
 	isAdmin := a.IsAdmin(r.Context(), *userDid)
+
+	if err := a.refreshWorkflowStartAvailabilityAndNotify(r.Context()); err != nil {
+		a.logger.Logf("error refreshing workflow availability before proposer workflows list for user %s: %s", *userDid, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
 
 	workflows, err := a.db.GetWorkflowsByProposer(r.Context(), *userDid)
 	if err != nil {
@@ -995,7 +1005,7 @@ func (a *AppService) GetImproverWorkflows(w http.ResponseWriter, r *http.Request
 		activeSet[credential] = struct{}{}
 	}
 
-	workflows, err := a.db.GetImproverWorkflows(r.Context())
+	workflows, err := a.db.GetImproverWorkflows(r.Context(), *userDid)
 	if err != nil {
 		a.logger.Logf("error loading improver workflows for %s: %s", *userDid, err)
 		w.WriteHeader(http.StatusInternalServerError)
@@ -1636,7 +1646,11 @@ type supervisorExportColumn struct {
 	Header string
 }
 
-func deriveSupervisorCSVStepStatus(step structs.WorkflowStep) string {
+func deriveSupervisorCSVStepStatus(step structs.WorkflowStep, workflowStatus string) string {
+	if strings.EqualFold(strings.TrimSpace(workflowStatus), "skipped") {
+		return "skipped"
+	}
+
 	if step.Submission != nil {
 		if step.Submission.StepNotPossible {
 			return "failed"
@@ -1789,7 +1803,7 @@ func buildSupervisorWorkflowCSV(
 					responseByItem[response.ItemId] = response
 				}
 			}
-			statusValue := deriveSupervisorCSVStepStatus(step)
+			statusValue := deriveSupervisorCSVStepStatus(step, workflow.Status)
 
 			improverID := ""
 			if step.AssignedImproverId != nil {
@@ -3124,6 +3138,176 @@ func (a *AppService) RevokeAdminWorkflowSeriesImproverClaim(w http.ResponseWrite
 	_ = json.NewEncoder(w).Encode(result)
 }
 
+func (a *AppService) ProposeWorkflowEdit(w http.ResponseWriter, r *http.Request) {
+	requesterID := utils.GetDid(r)
+	if requesterID == nil {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	workflowID := strings.TrimSpace(r.PathValue("workflow_id"))
+	if workflowID == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte("workflow_id is required"))
+		return
+	}
+
+	defer r.Body.Close()
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		a.logger.Logf("error reading workflow edit proposal body for workflow %s proposer %s: %s", workflowID, *requesterID, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	var req structs.WorkflowEditProposalCreateRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	req.Recurrence = strings.TrimSpace(req.Recurrence)
+	switch req.Recurrence {
+	case "one_time", "daily", "weekly", "monthly":
+	default:
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte("invalid recurrence"))
+		return
+	}
+
+	recurrenceEndAt, err := parseOptionalWorkflowDatetime(req.RecurrenceEndAt, "recurrence_end_at")
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(err.Error()))
+		return
+	}
+	if req.Recurrence == "one_time" && recurrenceEndAt != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte("recurrence_end_at is only valid for recurring workflows"))
+		return
+	}
+
+	proposal, err := a.db.CreateWorkflowEditProposal(r.Context(), *requesterID, workflowID, &req, recurrenceEndAt)
+	if err != nil {
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "required") ||
+			strings.Contains(errMsg, "invalid") ||
+			strings.Contains(errMsg, "duplicate") ||
+			strings.Contains(errMsg, "unknown") ||
+			strings.Contains(errMsg, "already exists") ||
+			strings.Contains(errMsg, "pending workflow edit vote") ||
+			strings.Contains(errMsg, "can only be proposed") {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(errMsg))
+			return
+		}
+		if strings.Contains(errMsg, "not found") {
+			w.WriteHeader(http.StatusNotFound)
+			w.Write([]byte(errMsg))
+			return
+		}
+		if strings.Contains(errMsg, "original proposer") || strings.Contains(errMsg, "not approved") {
+			w.WriteHeader(http.StatusForbidden)
+			w.Write([]byte(errMsg))
+			return
+		}
+		a.logger.Logf("error creating workflow edit proposal for workflow %s proposer %s: %s", workflowID, *requesterID, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(proposal)
+}
+
+func (a *AppService) GetVoterWorkflowEditProposals(w http.ResponseWriter, r *http.Request) {
+	voterID := utils.GetDid(r)
+	if voterID == nil {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	proposals, err := a.db.GetWorkflowEditProposalsForVoter(r.Context(), *voterID)
+	if err != nil {
+		a.logger.Logf("error loading workflow edit proposals for voter %s: %s", *voterID, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(proposals)
+}
+
+func (a *AppService) VoteWorkflowEditProposal(w http.ResponseWriter, r *http.Request) {
+	voterID := utils.GetDid(r)
+	if voterID == nil {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	proposalID := strings.TrimSpace(r.PathValue("proposal_id"))
+	if proposalID == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	defer r.Body.Close()
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		a.logger.Logf("error reading workflow edit vote body: %s", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	var req structs.WorkflowEditProposalVoteRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	req.Decision = strings.ToLower(strings.TrimSpace(req.Decision))
+	if req.Decision != "approve" && req.Decision != "deny" {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	proposal, err := a.db.GetWorkflowEditProposalByIDForUser(r.Context(), proposalID, voterID)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		a.logger.Logf("error loading workflow edit proposal %s for vote: %s", proposalID, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	if proposal.Status != "pending" {
+		w.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(w).Encode(proposal)
+		return
+	}
+
+	if _, err := a.db.RecordWorkflowEditVote(r.Context(), proposalID, *voterID, req.Decision, req.Comment); err != nil {
+		a.logger.Logf("error recording workflow edit vote %s by %s: %s", proposalID, *voterID, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	updatedProposal, err := a.db.EvaluateWorkflowEditVoteState(r.Context(), proposalID)
+	if err != nil {
+		a.logger.Logf("error evaluating workflow edit vote state %s: %s", proposalID, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	proposalWithVotes, err := a.db.GetWorkflowEditProposalByIDForUser(r.Context(), proposalID, voterID)
+	if err == nil {
+		updatedProposal.Votes = proposalWithVotes.Votes
+	}
+
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(updatedProposal)
+}
+
 func (a *AppService) ProposeWorkflowDeletion(w http.ResponseWriter, r *http.Request) {
 	requesterId := utils.GetDid(r)
 	if requesterId == nil {
@@ -3698,11 +3882,14 @@ func (a *AppService) expireStaleWorkflowProposalsAndNotify(ctx context.Context) 
 	expiredNotices, err := a.db.ExpireStaleWorkflowProposals(ctx)
 	if err != nil {
 		a.logger.Logf("error expiring stale workflow proposals: %s", err)
-		return
+	} else {
+		for _, notice := range expiredNotices {
+			a.sendWorkflowProposalExpiredEmail(notice)
+		}
 	}
 
-	for _, notice := range expiredNotices {
-		a.sendWorkflowProposalExpiredEmail(notice)
+	if err := a.db.ExpireStaleWorkflowEditProposals(ctx); err != nil {
+		a.logger.Logf("error expiring stale workflow edit proposals: %s", err)
 	}
 }
 
@@ -3760,7 +3947,7 @@ func (a *AppService) sendWorkflowProposalOutcomeEmail(notification structs.Workf
     <td style="padding:12px 0; font-size:13px; color:#6b7280;">Outcome</td>
     <td style="padding:12px 0; font-size:13px; color:#111827; font-weight:600;">%s</td>
   </tr>
-</table>`, notification.WorkflowTitle, notification.WorkflowId, strings.ToUpper(outcomeLabel)),
+</table>`, utils.EscapeEmailHTML(notification.WorkflowTitle), utils.EscapeEmailHTML(notification.WorkflowId), utils.EscapeEmailHTML(strings.ToUpper(outcomeLabel))),
 	)
 
 	if err := emailSender.SendEmail(toEmail, "Proposer", title, htmlContent, fromEmail, "SFLuv Workflows"); err != nil {
@@ -3799,7 +3986,7 @@ func (a *AppService) sendWorkflowProposalExpiredEmail(notification structs.Workf
     <td style="padding:12px 0; font-size:13px; color:#6b7280;">Workflow ID</td>
     <td style="padding:12px 0; font-size:13px; color:#111827; word-break:break-all;">%s</td>
   </tr>
-</table>`, notification.WorkflowTitle, notification.WorkflowId),
+</table>`, utils.EscapeEmailHTML(notification.WorkflowTitle), utils.EscapeEmailHTML(notification.WorkflowId)),
 	)
 
 	if err := emailSender.SendEmail(toEmail, "Proposer", title, htmlContent, fromEmail, "SFLuv Workflows"); err != nil {
@@ -3896,13 +4083,13 @@ func (a *AppService) sendCredentialRequestEmails(ctx context.Context, request st
     <td style="padding:12px 0; font-size:13px; color:#111827;">%s</td>
   </tr>
 </table>`,
-			request.RequesterName,
-			request.RequesterEmail,
-			credentialLabel,
-			request.CredentialType,
-			request.Id,
-			request.UserId,
-			request.RequestedAt.UTC().Format(time.RFC3339),
+			utils.EscapeEmailHTML(request.RequesterName),
+			utils.EscapeEmailHTML(request.RequesterEmail),
+			utils.EscapeEmailHTML(credentialLabel),
+			utils.EscapeEmailHTML(request.CredentialType),
+			utils.EscapeEmailHTML(request.Id),
+			utils.EscapeEmailHTML(request.UserId),
+			utils.EscapeEmailHTML(request.RequestedAt.UTC().Format(time.RFC3339)),
 		),
 	)
 
@@ -3988,7 +4175,7 @@ func (a *AppService) sendWorkflowSeriesFundingShortfallEmails(ctx context.Contex
     <td style="padding:12px 0; font-size:13px; color:#6b7280;">Amount Needed</td>
     <td style="padding:12px 0; font-size:13px; color:#111827; font-weight:600;">%s SFLuv</td>
   </tr>
-</table>`, check.WorkflowTitle, check.WorkflowId, check.SeriesId, check.Recurrence, time.Unix(check.StartAt, 0).UTC().Format(time.RFC3339), requiredTokens.String(), unallocatedTokens.String(), shortfallTokens.String()),
+</table>`, utils.EscapeEmailHTML(check.WorkflowTitle), utils.EscapeEmailHTML(check.WorkflowId), utils.EscapeEmailHTML(check.SeriesId), utils.EscapeEmailHTML(check.Recurrence), utils.EscapeEmailHTML(time.Unix(check.StartAt, 0).UTC().Format(time.RFC3339)), utils.EscapeEmailHTML(requiredTokens.String()), utils.EscapeEmailHTML(unallocatedTokens.String()), utils.EscapeEmailHTML(shortfallTokens.String())),
 		)
 	}
 }
@@ -4145,7 +4332,7 @@ func (a *AppService) sendWorkflowPayoutErrorEmail(
   <tr>
     <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280;">Amount Needed</td>
     <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827; font-weight:600;">%s SFLuv</td>
-  </tr>`, currentBalance.String(), neededBalance.String(), shortfall.String())
+  </tr>`, utils.EscapeEmailHTML(currentBalance.String()), utils.EscapeEmailHTML(neededBalance.String()), utils.EscapeEmailHTML(shortfall.String()))
 	}
 
 	a.sendRoleRequestEmail(
@@ -4195,18 +4382,18 @@ func (a *AppService) sendWorkflowPayoutErrorEmail(
     <td style="padding:12px 0; font-size:13px; color:#111827; white-space:pre-wrap;">%s</td>
   </tr>
 </table>`,
-			target.WorkflowTitle,
-			target.WorkflowId,
-			target.SeriesId,
-			targetLabel,
-			targetDetails,
-			improverName,
-			target.ImproverId,
-			improverEmail,
-			strings.TrimSpace(walletAddress),
+			utils.EscapeEmailHTML(target.WorkflowTitle),
+			utils.EscapeEmailHTML(target.WorkflowId),
+			utils.EscapeEmailHTML(target.SeriesId),
+			utils.EscapeEmailHTML(targetLabel),
+			utils.EscapeEmailHTML(targetDetails),
+			utils.EscapeEmailHTML(improverName),
+			utils.EscapeEmailHTML(target.ImproverId),
+			utils.EscapeEmailHTML(improverEmail),
+			utils.EscapeEmailHTML(strings.TrimSpace(walletAddress)),
 			target.Amount,
 			extraRows,
-			errorMessage,
+			utils.EscapeEmailHTML(errorMessage),
 		),
 	)
 }
@@ -4399,7 +4586,7 @@ func (a *AppService) sendWorkflowStepAvailableEmail(notification structs.Workflo
     <td style="padding:12px 0; font-size:13px; color:#6b7280;">Workflow ID</td>
     <td style="padding:12px 0; font-size:13px; color:#111827; word-break:break-all;">%s</td>
   </tr>
-</table>`, notification.WorkflowTitle, notification.StepTitle, notification.WorkflowId),
+</table>`, utils.EscapeEmailHTML(notification.WorkflowTitle), utils.EscapeEmailHTML(notification.StepTitle), utils.EscapeEmailHTML(notification.WorkflowId)),
 	)
 
 	if err := emailSender.SendEmail(toEmail, recipientName, title, htmlContent, fromEmail, "SFLuv Workflows"); err != nil {
@@ -4449,7 +4636,7 @@ func (a *AppService) sendWorkflowDropdownAlertEmail(notification structs.Workflo
     <td style="padding:12px 0; font-size:13px; color:#6b7280;">Workflow ID</td>
     <td style="padding:12px 0; font-size:13px; color:#111827; word-break:break-all;">%s</td>
   </tr>
-</table>`, notification.WorkflowTitle, notification.StepTitle, notification.ItemTitle, notification.DropdownValue, notification.WorkflowId),
+</table>`, utils.EscapeEmailHTML(notification.WorkflowTitle), utils.EscapeEmailHTML(notification.StepTitle), utils.EscapeEmailHTML(notification.ItemTitle), utils.EscapeEmailHTML(notification.DropdownValue), utils.EscapeEmailHTML(notification.WorkflowId)),
 	)
 
 	for _, toEmail := range notification.Emails {
@@ -4483,6 +4670,21 @@ func parseWorkflowStartAt(value string) (time.Time, error) {
 	}
 
 	return time.Time{}, fmt.Errorf("invalid start_at")
+}
+
+func parseOptionalWorkflowDatetime(value *string, fieldName string) (*time.Time, error) {
+	if value == nil {
+		return nil, nil
+	}
+	trimmed := strings.TrimSpace(*value)
+	if trimmed == "" {
+		return nil, nil
+	}
+	parsed, err := parseWorkflowStartAt(trimmed)
+	if err != nil {
+		return nil, fmt.Errorf("invalid %s", fieldName)
+	}
+	return &parsed, nil
 }
 
 func parseAbsenceBoundary(value string, isEnd bool) (time.Time, error) {
@@ -4605,7 +4807,7 @@ func (a *AppService) RequestIssuerStatus(w http.ResponseWriter, r *http.Request)
     <td style="padding:12px 0; font-size:13px; color:#6b7280;">Notification Email</td>
     <td style="padding:12px 0; font-size:13px; color:#111827;">%s</td>
   </tr>
-</table>`, issuer.UserId, issuer.Organization, issuer.Email),
+</table>`, utils.EscapeEmailHTML(issuer.UserId), utils.EscapeEmailHTML(issuer.Organization), utils.EscapeEmailHTML(issuer.Email)),
 	)
 
 	w.WriteHeader(http.StatusCreated)
