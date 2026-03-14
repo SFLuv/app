@@ -529,7 +529,10 @@ func (a *AppService) sendW9ApprovedUserEmail(ctx context.Context, submission *st
 	body := utils.BuildStyledEmail(
 		subject,
 		"Approval confirmed",
-		fmt.Sprintf("<p style=\"margin:0 0 16px; line-height:1.6;\">Your W9 form has been approved for wallet <strong>%s</strong>.</p><p style=\"margin:0; line-height:1.6;\">The restriction has been removed.</p>", submission.WalletAddress),
+		fmt.Sprintf(
+			"<p style=\"margin:0 0 16px; line-height:1.6;\">Your W9 form has been approved for wallet <strong>%s</strong>.</p><p style=\"margin:0; line-height:1.6;\">The restriction has been removed.</p>",
+			utils.EscapeEmailHTML(submission.WalletAddress),
+		),
 	)
 
 	err := sender.SendEmail(
@@ -561,11 +564,11 @@ func (a *AppService) sendW9AdminAlertEmail(submission *structs.W9Submission) {
 	submittedAtUTC := submission.SubmittedAt.UTC().Format(time.RFC3339)
 	details := fmt.Sprintf(
 		"<p style=\"margin:0 0 16px; line-height:1.6;\"><strong>%s</strong> has submitted a request for a W9 form for wallet address <strong>%s</strong>.</p><p style=\"margin:0; line-height:1.7;\"><strong>Email:</strong> %s<br/><strong>Year:</strong> %d<br/><strong>Submitted at (UTC):</strong> %s</p>",
-		submission.Email,
-		submission.WalletAddress,
-		submission.Email,
+		utils.EscapeEmailHTML(submission.Email),
+		utils.EscapeEmailHTML(submission.WalletAddress),
+		utils.EscapeEmailHTML(submission.Email),
 		submission.Year,
-		submittedAtUTC,
+		utils.EscapeEmailHTML(submittedAtUTC),
 	)
 	body := utils.BuildStyledEmail(
 		subject,

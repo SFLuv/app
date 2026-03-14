@@ -360,10 +360,10 @@ func (a *AppService) PonderHookHandler(w http.ResponseWriter, r *http.Request) {
                 </div>
               </td>
             </tr>`,
-			formattedAmount,
-			tx.From,
-			toLine,
-			tx.Hash,
+			utils.EscapeEmailHTML(formattedAmount),
+			utils.EscapeEmailHTML(tx.From),
+			utils.EscapeEmailHTML(toLine),
+			utils.EscapeEmailHTML(tx.Hash),
 		)
 		htmlContent := utils.BuildStyledEmailWithSections(
 			"SFLuv Transaction Alert",
@@ -373,18 +373,13 @@ func (a *AppService) PonderHookHandler(w http.ResponseWriter, r *http.Request) {
 		)
 
 		err = sender.SendEmail(
-			fmt.Sprintf(mask.ToEmail, l.Data),
-			mask.ToName,
-			fmt.Sprintf(mask.Subject, formattedAmount, subjectTail),
-			fmt.Sprintf(
-				string(html),
-				utils.EscapeEmailHTML(formattedAmount),
-				utils.EscapeEmailHTML(tx.From),
-				utils.EscapeEmailHTML(toLine),
-				utils.EscapeEmailHTML(tx.Hash),
-			),
-			mask.FromEmail,
-			mask.FromName)
+			strings.TrimSpace(string(l.Data)),
+			"Merchant",
+			subject,
+			htmlContent,
+			utils.NotificationFromEmail(),
+			"SFLuv Transactions",
+		)
 	}
 	if err != nil {
 		a.logger.Logf("error sending transaction receipt email: %s", err.Error())

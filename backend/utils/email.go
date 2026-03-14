@@ -108,11 +108,15 @@ func BuildStyledEmailWithSections(title, subtitle, sectionsHTML string, footerTe
   </body>
 </html>`
 
+	escapedTitle := html.EscapeString(title)
+	escapedSubtitle := html.EscapeString(subtitle)
+	escapedFooter := html.EscapeString(footerText)
+
 	replacer := strings.NewReplacer(
-		"{{TITLE}}", title,
-		"{{SUBTITLE}}", subtitle,
+		"{{TITLE}}", escapedTitle,
+		"{{SUBTITLE}}", escapedSubtitle,
 		"{{SECTIONS}}", sectionsHTML,
-		"{{FOOTER}}", footerText,
+		"{{FOOTER}}", escapedFooter,
 	)
 	return replacer.Replace(template)
 }
