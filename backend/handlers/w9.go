@@ -9,7 +9,6 @@ import (
 	"math/big"
 	"net/http"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
@@ -32,6 +31,13 @@ func NewW9Service(appDb *db.AppDB, ponderDb *db.PonderDB, logger *logger.LogClos
 
 func (w *W9Service) adminAddresses() []string {
 	return utils.ParseAddressList(os.Getenv("PAID_ADMIN_ADDRESSES"))
+}
+
+func requiresApprovedW9(newTotal *big.Int, limit *big.Int) bool {
+	if newTotal == nil || limit == nil {
+		return false
+	}
+	return newTotal.Cmp(limit) >= 0
 }
 
 func (w *W9Service) CheckCompliance(ctx context.Context, fromAddress string, toAddress string, amount *big.Int) (*structs.W9CheckResponse, error) {
@@ -127,7 +133,7 @@ func (w *W9Service) CheckCompliance(ctx context.Context, fromAddress string, toA
 		approved = true
 	}
 
-	allowed := !(newTotal.Cmp(limit) > 0 && !approved)
+	allowed := !(requiresApprovedW9(newTotal, limit) && !approved)
 	recipientEmail, err := w.resolveRecipientEmail(ctx, userId, submission)
 	if err != nil {
 		return nil, err
@@ -358,37 +364,7 @@ func (a *AppService) ApproveW9Submission(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	sender := utils.NewEmailSender()
-	if sender != nil {
-		adminEmail := os.Getenv("W9_ADMIN_EMAIL")
-		if adminEmail == "" {
-			adminEmail = "admin@sfluv.org"
-		}
-		contact := strings.TrimSpace(submission.Email)
-		if contact == "" {
-			contact = submission.WalletAddress
-		}
-		subject := fmt.Sprintf("W9 required for wallet %s", submission.WalletAddress)
-		body := fmt.Sprintf(
-			"%s has reached the 1099 limit and needs a W9 submission form. Please send them a form using <a href=\"https://app.getw9.tax/subscriber\">https://app.getw9.tax/subscriber</a>.<br/><br/>Wallet: %s<br/>Year: %d",
-			utils.EscapeEmailHTML(contact),
-			utils.EscapeEmailHTML(submission.WalletAddress),
-			submission.Year,
-		)
-		err = sender.SendEmail(
-			adminEmail,
-			"SFLuv Admin",
-			subject,
-			body,
-			"no_reply@sfluv.org",
-			"SFLuv Admin",
-		)
-		if err != nil {
-			a.logger.Logf("error sending w9 admin alert email: %s", err)
-		}
-	} else {
-		a.logger.Logf("w9 admin email not sent; mailgun not configured")
-	}
+	a.sendW9ApprovedUserEmail(r.Context(), submission)
 
 	resp := map[string]any{
 		"submission": submission,
@@ -444,56 +420,6 @@ func (a *AppService) RejectW9Submission(w http.ResponseWriter, r *http.Request) 
 	w.Write(bytes)
 }
 
-func (a *AppService) SubmitW9Webhook(w http.ResponseWriter, r *http.Request) {
-	if secret := os.Getenv("W9_WEBHOOK_SECRET"); secret != "" {
-		key := r.Header.Get("X-W9-Secret")
-		if key == "" {
-			key = r.Header.Get("X-W9-Key")
-		}
-		if key != secret {
-			w.WriteHeader(http.StatusForbidden)
-			return
-		}
-	}
-
-	var req structs.W9SubmitRequest
-	contentType := r.Header.Get("Content-Type")
-	if strings.Contains(contentType, "application/json") {
-		defer r.Body.Close()
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-		if err := json.Unmarshal(body, &req); err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-	} else {
-		if err := r.ParseForm(); err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-		req.WalletAddress = r.FormValue("wallet")
-		if req.WalletAddress == "" {
-			req.WalletAddress = r.FormValue("wallet_address")
-		}
-		req.Email = r.FormValue("email")
-		if yearStr := r.FormValue("year"); yearStr != "" {
-			if parsed, err := strconv.Atoi(yearStr); err == nil {
-				req.Year = &parsed
-			}
-		}
-	}
-
-	stored, ok := a.submitW9(r.Context(), w, &req)
-	if !ok {
-		return
-	}
-
-	a.writeW9SubmissionResponse(w, stored)
-}
-
 func (a *AppService) submitW9(ctx context.Context, w http.ResponseWriter, req *structs.W9SubmitRequest) (*structs.W9Submission, bool) {
 	if req.WalletAddress == "" || req.Email == "" {
 		w.WriteHeader(http.StatusBadRequest)
@@ -534,7 +460,130 @@ func (a *AppService) submitW9(ctx context.Context, w http.ResponseWriter, req *s
 		w.WriteHeader(http.StatusInternalServerError)
 		return nil, false
 	}
+	a.sendW9AdminAlertEmail(stored)
+	a.sendW9SubmissionReceivedUserEmail(stored)
 	return stored, true
+}
+
+func (a *AppService) sendW9SubmissionReceivedUserEmail(submission *structs.W9Submission) {
+	sender := utils.NewEmailSender()
+	if sender == nil {
+		a.logger.Logf("w9 submission received email not sent; mailgun not configured")
+		return
+	}
+
+	recipientEmail := strings.TrimSpace(submission.Email)
+	if recipientEmail == "" {
+		a.logger.Logf("w9 submission received email not sent; no recipient email for wallet %s", submission.WalletAddress)
+		return
+	}
+
+	subject := "We received your W9 request"
+	body := utils.BuildStyledEmail(
+		subject,
+		"We'll follow up shortly",
+		"<p style=\"margin:0 0 16px; line-height:1.6;\">Thank you for reaching out about your W9 form.</p><p style=\"margin:0; line-height:1.6;\">We will get back to you shortly.</p>",
+	)
+
+	err := sender.SendEmail(
+		recipientEmail,
+		"SFLuv User",
+		subject,
+		body,
+		utils.NotificationFromEmail(),
+		"SFLuv Admin",
+	)
+	if err != nil {
+		a.logger.Logf("error sending w9 submission received email: %s", err)
+	}
+}
+
+func (a *AppService) sendW9ApprovedUserEmail(ctx context.Context, submission *structs.W9Submission) {
+	sender := utils.NewEmailSender()
+	if sender == nil {
+		a.logger.Logf("w9 user approval email not sent; mailgun not configured")
+		return
+	}
+
+	recipientEmail := strings.TrimSpace(submission.Email)
+	if recipientEmail == "" {
+		userId, err := a.db.GetUserIdByWalletAddress(ctx, submission.WalletAddress)
+		if err != nil {
+			a.logger.Logf("error resolving user for w9 approval email: %s", err)
+		} else if userId != nil {
+			email, err := a.db.GetUserContactEmail(ctx, *userId)
+			if err != nil {
+				a.logger.Logf("error resolving user contact email for w9 approval email: %s", err)
+			} else if email != nil {
+				recipientEmail = strings.TrimSpace(*email)
+			}
+		}
+	}
+
+	if recipientEmail == "" {
+		a.logger.Logf("w9 user approval email not sent; no recipient email for wallet %s", submission.WalletAddress)
+		return
+	}
+
+	subject := "Your W9 form has been approved"
+	body := utils.BuildStyledEmail(
+		subject,
+		"Approval confirmed",
+		fmt.Sprintf("<p style=\"margin:0 0 16px; line-height:1.6;\">Your W9 form has been approved for wallet <strong>%s</strong>.</p><p style=\"margin:0; line-height:1.6;\">The restriction has been removed.</p>", submission.WalletAddress),
+	)
+
+	err := sender.SendEmail(
+		recipientEmail,
+		"SFLuv User",
+		subject,
+		body,
+		utils.NotificationFromEmail(),
+		"SFLuv Admin",
+	)
+	if err != nil {
+		a.logger.Logf("error sending w9 approval email: %s", err)
+	}
+}
+
+func (a *AppService) sendW9AdminAlertEmail(submission *structs.W9Submission) {
+	sender := utils.NewEmailSender()
+	if sender == nil {
+		a.logger.Logf("w9 admin email not sent; mailgun not configured")
+		return
+	}
+
+	adminEmail := strings.TrimSpace(os.Getenv("W9_ADMIN_EMAIL"))
+	if adminEmail == "" {
+		adminEmail = "admin@sfluv.org"
+	}
+
+	subject := fmt.Sprintf("W9 request received for %s", submission.WalletAddress)
+	submittedAtUTC := submission.SubmittedAt.UTC().Format(time.RFC3339)
+	details := fmt.Sprintf(
+		"<p style=\"margin:0 0 16px; line-height:1.6;\"><strong>%s</strong> has submitted a request for a W9 form for wallet address <strong>%s</strong>.</p><p style=\"margin:0; line-height:1.7;\"><strong>Email:</strong> %s<br/><strong>Year:</strong> %d<br/><strong>Submitted at (UTC):</strong> %s</p>",
+		submission.Email,
+		submission.WalletAddress,
+		submission.Email,
+		submission.Year,
+		submittedAtUTC,
+	)
+	body := utils.BuildStyledEmail(
+		subject,
+		"Admin follow-up required",
+		details,
+	)
+
+	err := sender.SendEmail(
+		adminEmail,
+		"SFLuv Admin",
+		subject,
+		body,
+		utils.NotificationFromEmail(),
+		"SFLuv Admin",
+	)
+	if err != nil {
+		a.logger.Logf("error sending w9 admin alert email: %s", err)
+	}
 }
 
 func (a *AppService) writeW9SubmissionResponse(w http.ResponseWriter, stored *structs.W9Submission) {

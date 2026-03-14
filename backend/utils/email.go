@@ -16,6 +16,13 @@ type EmailSender struct {
 	mg mailgun.Mailgun
 }
 
+func NotificationFromEmail() string {
+	if domain := strings.TrimSpace(os.Getenv("MAILGUN_DOMAIN")); domain != "" {
+		return "no_reply@" + domain
+	}
+	return "no_reply@mail.sfluv.org"
+}
+
 func NewEmailSender() *EmailSender {
 	domain := os.Getenv("MAILGUN_DOMAIN")
 	apiKey := os.Getenv("MAILGUN_API_KEY")
@@ -46,6 +53,19 @@ func (es *EmailSender) SendEmail(toEmail, toName, subject, htmlContent string, f
 }
 
 func BuildStyledEmail(title, subtitle, contentHTML string) string {
+	return BuildStyledEmailWithFooter(title, subtitle, contentHTML, "SFLuv · Notifications")
+}
+
+func BuildStyledEmailWithFooter(title, subtitle, contentHTML string, footerText string) string {
+	sectionsHTML := fmt.Sprintf(`<tr>
+              <td style="padding:24px 28px 24px;">
+                %s
+              </td>
+            </tr>`, contentHTML)
+	return BuildStyledEmailWithSections(title, subtitle, sectionsHTML, footerText)
+}
+
+func BuildStyledEmailWithSections(title, subtitle, sectionsHTML string, footerText string) string {
 	template := `<!doctype html>
 <html lang="en">
   <head>
@@ -79,13 +99,9 @@ func BuildStyledEmail(title, subtitle, contentHTML string) string {
                 </table>
               </td>
             </tr>
-            <tr>
-              <td style="padding:24px 28px 24px;">
-                {{CONTENT}}
-              </td>
-            </tr>
+            {{SECTIONS}}
           </table>
-          <p style="margin:16px 0 0; font-size:11px; color:#9ca3af;">SFLuv · Notifications</p>
+          <p style="margin:16px 0 0; font-size:11px; color:#9ca3af;">{{FOOTER}}</p>
         </td>
       </tr>
     </table>
@@ -93,9 +109,10 @@ func BuildStyledEmail(title, subtitle, contentHTML string) string {
 </html>`
 
 	replacer := strings.NewReplacer(
-		"{{TITLE}}", EscapeEmailHTML(title),
-		"{{SUBTITLE}}", EscapeEmailHTML(subtitle),
-		"{{CONTENT}}", contentHTML,
+		"{{TITLE}}", title,
+		"{{SUBTITLE}}", subtitle,
+		"{{SECTIONS}}", sectionsHTML,
+		"{{FOOTER}}", footerText,
 	)
 	return replacer.Replace(template)
 }

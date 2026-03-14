@@ -243,7 +243,7 @@ func (a *AppService) UpdateLocation(w http.ResponseWriter, r *http.Request) {
 				details,
 			)
 
-			err = sender.SendEmail(location.AdminEmail, fmt.Sprintf("%s %s", location.ContactFirstName, location.ContactLastName), "Location Approved", htmlContent, "no_reply@sfluv.org", "SFLuv Admin")
+			err = sender.SendEmail(location.AdminEmail, fmt.Sprintf("%s %s", location.ContactFirstName, location.ContactLastName), "Location Approved", htmlContent, utils.NotificationFromEmail(), "SFLuv Admin")
 			if err != nil {
 				a.logger.Logf("error sending confirmation email: %s", err.Error())
 			}

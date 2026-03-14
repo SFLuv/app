@@ -353,6 +353,7 @@ func GroupHandlers(t *testing.T) {
 	router.AddWalletRoutes(testRouter, appService)
 	router.AddLocationRoutes(testRouter, appService)
 	router.AddContactRoutes(testRouter, appService)
+	router.AddW9Routes(testRouter, appService)
 
 	TestServer = httptest.NewServer(testRouter)
 	defer TestServer.Close()
@@ -380,5 +381,10 @@ func GroupHandlers(t *testing.T) {
 	adminHandlers := t.Run("admin handlers group", GroupAdminHandlers)
 	if !adminHandlers {
 		t.Fatal("admin handlers group failed")
+	}
+
+	w9Handlers := t.Run("w9 handlers group", GroupW9Handlers)
+	if !w9Handlers {
+		t.Fatal("w9 handlers group failed")
 	}
 }
