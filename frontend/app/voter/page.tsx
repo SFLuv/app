@@ -9,7 +9,13 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { WorkflowDetailsModal } from "@/components/workflows/workflow-details-modal"
 import { formatStatusLabel } from "@/lib/status-labels"
 import { formatWorkflowDisplayStatus } from "@/lib/workflow-status"
-import { ActiveWorkflowListItem, Workflow, WorkflowDeletionProposal, WorkflowDeletionTargetType } from "@/types/workflow"
+import {
+  ActiveWorkflowListItem,
+  Workflow,
+  WorkflowDeletionProposal,
+  WorkflowDeletionTargetType,
+  WorkflowEditProposal,
+} from "@/types/workflow"
 import { Input } from "@/components/ui/input"
 import { AlertTriangle, Clock3, Search, Vote } from "lucide-react"
 import { usePathname, useRouter, useSearchParams } from "next/navigation"
@@ -24,10 +30,10 @@ function countdownText(finalizeAt?: number | null): string {
   return `${hours}h ${minutes}m remaining`
 }
 
-type VoterTab = "workflow-votes" | "deletion-votes" | "active-workflows"
+type VoterTab = "workflow-votes" | "edit-votes" | "deletion-votes" | "active-workflows"
 
 const isVoterTab = (value: string | null): value is VoterTab => {
-  return value === "workflow-votes" || value === "deletion-votes" || value === "active-workflows"
+  return value === "workflow-votes" || value === "edit-votes" || value === "deletion-votes" || value === "active-workflows"
 }
 
 export default function VoterPage() {
@@ -36,9 +42,11 @@ export default function VoterPage() {
   const router = useRouter()
   const tabFromQuery = searchParams.get("tab")
   const workflowSearchFromQuery = searchParams.get("workflow_search") || ""
+  const editSearchFromQuery = searchParams.get("edit_search") || ""
   const deletionSearchFromQuery = searchParams.get("deletion_search") || ""
   const { authFetch, status, user } = useApp()
   const [workflows, setWorkflows] = useState<Workflow[]>([])
+  const [editProposals, setEditProposals] = useState<WorkflowEditProposal[]>([])
   const [activeWorkflows, setActiveWorkflows] = useState<ActiveWorkflowListItem[]>([])
   const [deletionProposals, setDeletionProposals] = useState<WorkflowDeletionProposal[]>([])
   const [initialLoading, setInitialLoading] = useState<boolean>(true)
@@ -50,6 +58,7 @@ export default function VoterPage() {
   const [detailSource, setDetailSource] = useState<"workflow-votes" | "active-workflows">("workflow-votes")
   const [activeTab, setActiveTab] = useState<VoterTab>(isVoterTab(tabFromQuery) ? tabFromQuery : "workflow-votes")
   const [workflowSearch, setWorkflowSearch] = useState<string>(workflowSearchFromQuery)
+  const [editSearch, setEditSearch] = useState<string>(editSearchFromQuery)
   const [deletionSearch, setDeletionSearch] = useState<string>(deletionSearchFromQuery)
 
   const canVote = Boolean(user?.isVoter || user?.isAdmin)
@@ -72,8 +81,9 @@ export default function VoterPage() {
       }
 
       try {
-        const [workflowRes, deletionRes, activeRes] = await Promise.all([
+        const [workflowRes, editRes, deletionRes, activeRes] = await Promise.all([
           authFetch("/voters/workflows"),
+          authFetch("/voters/workflow-edit-proposals"),
           authFetch("/voters/workflow-deletion-proposals"),
           authFetch("/workflows/active"),
         ])
@@ -81,6 +91,13 @@ export default function VoterPage() {
 
         const workflowData = (await workflowRes.json()) as Workflow[]
         setWorkflows(workflowData || [])
+
+        if (editRes.ok) {
+          const editData = (await editRes.json()) as WorkflowEditProposal[]
+          setEditProposals(editData || [])
+        } else {
+          setEditProposals([])
+        }
 
         if (deletionRes.ok) {
           const deletionData = (await deletionRes.json()) as WorkflowDeletionProposal[]
@@ -113,26 +130,43 @@ export default function VoterPage() {
     if (isVoterTab(nextTab)) {
       setActiveTab((prev) => (nextTab === prev ? prev : nextTab))
     }
-
-    const nextWorkflowSearch = searchParams.get("workflow_search") || ""
-    setWorkflowSearch((prev) => (nextWorkflowSearch === prev ? prev : nextWorkflowSearch))
-
-    const nextDeletionSearch = searchParams.get("deletion_search") || ""
-    setDeletionSearch((prev) => (nextDeletionSearch === prev ? prev : nextDeletionSearch))
   }, [searchParams])
+
+  const applySearchQueryParams = useCallback(
+    (params: URLSearchParams) => {
+      if (workflowSearch) params.set("workflow_search", workflowSearch)
+      else params.delete("workflow_search")
+      if (editSearch) params.set("edit_search", editSearch)
+      else params.delete("edit_search")
+      if (deletionSearch) params.set("deletion_search", deletionSearch)
+      else params.delete("deletion_search")
+    },
+    [deletionSearch, editSearch, workflowSearch],
+  )
+
+  const handleTabChange = useCallback(
+    (nextTab: VoterTab) => {
+      setActiveTab(nextTab)
+
+      const params = new URLSearchParams(searchParams.toString())
+      params.set("tab", nextTab)
+      applySearchQueryParams(params)
+      const nextQuery = params.toString()
+      if (nextQuery !== searchParams.toString()) {
+        router.push(nextQuery ? `${pathname}?${nextQuery}` : pathname, { scroll: false })
+      }
+    },
+    [applySearchQueryParams, pathname, router, searchParams],
+  )
 
   useEffect(() => {
     const params = new URLSearchParams(searchParams.toString())
-    params.set("tab", activeTab)
-    if (workflowSearch) params.set("workflow_search", workflowSearch)
-    else params.delete("workflow_search")
-    if (deletionSearch) params.set("deletion_search", deletionSearch)
-    else params.delete("deletion_search")
+    applySearchQueryParams(params)
     const nextQuery = params.toString()
     if (nextQuery !== searchParams.toString()) {
       router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname, { scroll: false })
     }
-  }, [activeTab, deletionSearch, pathname, router, searchParams, workflowSearch])
+  }, [applySearchQueryParams, pathname, router, searchParams])
 
   useEffect(() => {
     if (status === "loading") return
@@ -186,6 +220,25 @@ export default function VoterPage() {
       await loadWorkflows()
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to submit deletion vote right now.")
+    } finally {
+      setSubmittingId("")
+    }
+  }
+
+  const voteEditProposal = async (proposalId: string, decision: "approve" | "deny") => {
+    setSubmittingId(`edit:${proposalId}:${decision}`)
+    try {
+      const res = await authFetch(`/workflow-edit-proposals/${proposalId}/votes`, {
+        method: "POST",
+        body: JSON.stringify({ decision }),
+      })
+      if (!res.ok) {
+        const text = await res.text()
+        throw new Error(text || "Unable to submit workflow edit vote.")
+      }
+      await loadWorkflows()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to submit workflow edit vote right now.")
     } finally {
       setSubmittingId("")
     }
@@ -306,6 +359,10 @@ export default function VoterPage() {
   }
 
   const pendingCount = useMemo(() => workflows.filter((workflow) => workflow.status === "pending").length, [workflows])
+  const pendingEditCount = useMemo(
+    () => editProposals.filter((proposal) => proposal.status === "pending").length,
+    [editProposals],
+  )
   const pendingDeletionCount = useMemo(
     () => deletionProposals.filter((proposal) => proposal.status === "pending").length,
     [deletionProposals],
@@ -321,6 +378,16 @@ export default function VoterPage() {
     if (!s) return workflowVotesList
     return workflowVotesList.filter((w) => w.title.toLowerCase().includes(s))
   }, [workflowVotesList, workflowSearch])
+
+  const filteredEditProposals = useMemo(() => {
+    const s = editSearch.trim().toLowerCase()
+    if (!s) return editProposals
+    return editProposals.filter((proposal) =>
+      proposal.workflow_title.toLowerCase().includes(s) ||
+      (proposal.workflow_description || "").toLowerCase().includes(s) ||
+      proposal.status.toLowerCase().includes(s)
+    )
+  }, [editProposals, editSearch])
 
   const filteredDeletionProposals = useMemo(() => {
     const s = deletionSearch.trim().toLowerCase()
@@ -358,7 +425,7 @@ export default function VoterPage() {
     <div className="container mx-auto p-4 space-y-6">
       <div>
         <h1 className="text-3xl font-bold">Voter Panel</h1>
-        <p className="text-muted-foreground">Review workflow proposals and deletion proposals, then vote.</p>
+        <p className="text-muted-foreground">Review workflow proposals, workflow edit proposals, and deletion proposals.</p>
       </div>
 
       {error && (
@@ -368,9 +435,10 @@ export default function VoterPage() {
         </div>
       )}
 
-      <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as VoterTab)} className="space-y-4">
-        <TabsList className="grid h-auto w-full grid-cols-1 gap-2 p-1 sm:grid-cols-3">
+      <Tabs value={activeTab} onValueChange={(value) => handleTabChange(value as VoterTab)} className="space-y-4">
+        <TabsList className="grid h-auto w-full grid-cols-1 gap-2 p-1 sm:grid-cols-4">
           <TabsTrigger value="workflow-votes">Workflow Votes ({pendingCount})</TabsTrigger>
+          <TabsTrigger value="edit-votes">Edit Votes ({pendingEditCount})</TabsTrigger>
           <TabsTrigger value="deletion-votes">Deletion Votes ({pendingDeletionCount})</TabsTrigger>
           <TabsTrigger value="active-workflows">Active Workflows</TabsTrigger>
         </TabsList>
@@ -484,6 +552,104 @@ export default function VoterPage() {
                                   {submittingId === workflow.id + "force" ? "Submitting..." : "Force Approve"}
                                 </Button>
                               )}
+                            </div>
+                          )}
+                        </CardContent>
+                      </Card>
+                    )
+                  })}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="edit-votes">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Vote className="h-5 w-5" />
+                Workflow Edit Votes
+              </CardTitle>
+              <CardDescription>
+                Pending edit proposals: <span className="font-medium">{pendingEditCount}</span>
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Input
+                  placeholder="Search edit proposals..."
+                  value={editSearch}
+                  onChange={(e) => setEditSearch(e.target.value)}
+                  className="pl-9"
+                />
+              </div>
+              {filteredEditProposals.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No workflow edit proposals available.</p>
+              ) : (
+                <div className="space-y-4">
+                  {filteredEditProposals.map((proposal) => {
+                    const pending = proposal.status === "pending"
+
+                    return (
+                      <Card key={proposal.id}>
+                        <CardContent className="p-4 space-y-3">
+                          <div className="flex flex-wrap items-center justify-between gap-3">
+                            <div>
+                              <h3 className="font-semibold">{proposal.workflow_title}</h3>
+                            </div>
+                            <Badge variant={pending ? "outline" : proposal.status === "approved" ? "default" : "secondary"}>
+                              {formatStatusLabel(proposal.status)}
+                            </Badge>
+                          </div>
+
+                          <p className="text-sm text-muted-foreground">{proposal.workflow_description}</p>
+
+                          <div className="grid gap-2 text-xs text-muted-foreground md:grid-cols-3">
+                            <span>
+                              Votes: {proposal.votes.approve} approve / {proposal.votes.deny} deny ({proposal.votes.votes_cast}/{proposal.votes.total_voters})
+                            </span>
+                            <span>Quorum threshold: {proposal.votes.quorum_threshold}</span>
+                            <span>Recurrence: {proposal.recurrence}</span>
+                          </div>
+                          <div className="grid gap-2 text-xs text-muted-foreground md:grid-cols-3">
+                            <span>Total bounty: {proposal.total_bounty}</span>
+                            <span>Weekly requirement: {proposal.weekly_bounty_requirement}</span>
+                            <span>Created: {new Date(proposal.created_at * 1000).toLocaleString()}</span>
+                          </div>
+
+                          {pending && proposal.votes.quorum_reached && (
+                            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                              <Clock3 className="h-3 w-3" />
+                              <span>Countdown: {countdownText(proposal.votes.finalize_at)}</span>
+                            </div>
+                          )}
+
+                          <div className="flex flex-wrap items-center gap-2">
+                            {proposal.votes.my_decision && <Badge variant="secondary">Your vote: {formatStatusLabel(proposal.votes.my_decision)}</Badge>}
+                            {proposal.votes.decision && <Badge variant="secondary">Decision: {formatStatusLabel(proposal.votes.decision)}</Badge>}
+                          </div>
+
+                          {pending && (
+                            <div className="flex flex-wrap gap-2 pt-1">
+                              <Button
+                                className="w-full sm:w-auto"
+                                size="sm"
+                                onClick={() => voteEditProposal(proposal.id, "approve")}
+                                disabled={Boolean(submittingId)}
+                              >
+                                {submittingId === `edit:${proposal.id}:approve` ? "Submitting..." : "Approve"}
+                              </Button>
+                              <Button
+                                className="w-full sm:w-auto"
+                                size="sm"
+                                variant="outline"
+                                onClick={() => voteEditProposal(proposal.id, "deny")}
+                                disabled={Boolean(submittingId)}
+                              >
+                                {submittingId === `edit:${proposal.id}:deny` ? "Submitting..." : "Deny"}
+                              </Button>
                             </div>
                           )}
                         </CardContent>

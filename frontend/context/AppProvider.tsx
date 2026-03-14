@@ -90,6 +90,7 @@ interface AppContextType {
   importWallet: (walletName: string, privateKey: string) => Promise<void>
   updateWallet: (id: number, name: string) => Promise<string | null>
   refreshWallets: () => Promise<void>
+  ensurePrimarySmartWallet: () => Promise<boolean>
 
   // App Functionality
   mapLocations: Location[]
@@ -621,6 +622,77 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     setWalletsStatus(s)
   }
 
+  const ensurePrimarySmartWallet = async (): Promise<boolean> => {
+    if(!privyUser?.id) {
+      return false
+    }
+
+    const managedPrivyWallets = getManagedPrivyWallets()
+    const primaryPrivyWallet = managedPrivyWallets[0]
+    if(!primaryPrivyWallet?.address) {
+      return false
+    }
+    const primaryEoaAddress = primaryPrivyWallet.address.toLowerCase()
+
+    const hasPrimaryWallet = (walletList: WalletResponse[]) =>
+      walletList.some((wallet) =>
+        wallet.is_eoa === false &&
+        wallet.smart_index === 0 &&
+        wallet.eoa_address?.toLowerCase() === primaryEoaAddress &&
+        typeof wallet.smart_address === "string" &&
+        wallet.smart_address.trim() !== ""
+      )
+
+    await refreshWallets()
+    let backendWallets = await _getWallets()
+    const isNewAccount = backendWallets.length === 0
+    if(hasPrimaryWallet(backendWallets)) {
+      return true
+    }
+
+    try {
+      await primaryPrivyWallet.switchChain(CHAIN_ID)
+    }
+    catch(error) {
+      console.error("error switching chain while ensuring primary smart wallet", error)
+    }
+
+    const existingEOAWallet = backendWallets.find((wallet) =>
+      wallet.is_eoa === true &&
+      wallet.eoa_address?.toLowerCase() === primaryEoaAddress
+    )
+    if(!existingEOAWallet) {
+      try {
+        await _initEOAWallet(primaryPrivyWallet, undefined, 0)
+      }
+      catch(error) {
+        console.error("error creating missing eoa wallet while ensuring primary smart wallet", error)
+      }
+    }
+
+    const smartWalletTemplate: WalletResponse = {
+      id: null,
+      owner: privyUser.id,
+      name: "",
+      is_eoa: false,
+      is_redeemer: false,
+      is_minter: false,
+      eoa_address: primaryPrivyWallet.address,
+      smart_index: 0,
+    }
+
+    try {
+      await _initSmartWallet(primaryPrivyWallet, smartWalletTemplate, 0n, 0, isNewAccount)
+    }
+    catch(error) {
+      console.error("error upserting primary smart wallet while ensuring wallet availability", error)
+    }
+
+    await refreshWallets()
+    backendWallets = await _getWallets()
+    return hasPrimaryWallet(backendWallets)
+  }
+
 
   const login = async () => {
     if(!privyReady) {
@@ -753,6 +825,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
           importWallet,
           updateWallet,
           refreshWallets,
+          ensurePrimarySmartWallet,
           error,
           setError,
           login,

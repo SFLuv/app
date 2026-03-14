@@ -5,9 +5,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { usePrivy, useWallets } from "@privy-io/react-auth";
-import { AppWallet } from "@/lib/wallets/wallets";
-import { BACKEND, CHAIN_ID } from "@/lib/constants";
+import { BACKEND } from "@/lib/constants";
 import { normalizeRedeemCode } from "@/lib/redeem-link";
+import { useApp } from "@/context/AppProvider";
+import { WalletResponse } from "@/types/server";
 
 const normalizeReturnTo = (rawValue: string | null): string | null => {
   if (!rawValue) return null
@@ -17,10 +18,16 @@ const normalizeReturnTo = (rawValue: string | null): string | null => {
   return trimmed
 }
 
+const isHexAddress = (value: string) => /^0x[a-fA-F0-9]{40}$/.test(value)
+const loginRedirectPendingKey = "faucet_redeem_login_redirect_pending"
+const loginRedirectPendingTimeoutMs = 15000
+
 const Page = () => {
   const missingSigAuthMessage = "Please download the CitizenWallet app, then scan your QR code again."
+  const missingPrimarySmartWalletMessage = "Primary smart wallet is still initializing. Please wait a few seconds and try again."
   const searchParams = useSearchParams();
   const router = useRouter();
+  const { ensurePrimarySmartWallet, authFetch, status: appStatus, walletsStatus: appWalletsStatus } = useApp()
   const { login, authenticated, ready: privyReady } = usePrivy()
   const { wallets, ready: walletsReady } = useWallets()
 
@@ -31,6 +38,10 @@ const Page = () => {
   const [redeemAccount, setRedeemAccount] = useState<string | null>(null)
   const [continueWithWebWalletRequested, setContinueWithWebWalletRequested] = useState<boolean>(false)
   const [continuingWithWebWallet, setContinuingWithWebWallet] = useState<boolean>(false)
+  const [loginRedirectPending, setLoginRedirectPending] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false
+    return window.sessionStorage.getItem(loginRedirectPendingKey) === "1"
+  })
   const [webWalletError, setWebWalletError] = useState<string | null>(null)
   const [successRedirectTo, setSuccessRedirectTo] = useState<string | null>(null)
   const directRedeemAttemptedRef = useRef<boolean>(false)
@@ -44,6 +55,41 @@ const Page = () => {
   const shouldUseWebWalletFlow = !hasSigAuth
   const returnTo = normalizeReturnTo(searchParams.get("returnTo"))
   const code = normalizeRedeemCode(searchParams.get("code"))
+  const isWebWalletSessionReady =
+    authenticated &&
+    privyReady &&
+    walletsReady &&
+    appStatus === "authenticated" &&
+    appWalletsStatus === "available"
+  const isFinalErrorState = Boolean(
+    error &&
+    error !== missingSigAuthMessage &&
+    error !== "W9 Required" &&
+    error !== "W9 Pending"
+  )
+  const shouldAutoRedirect = success || isFinalErrorState
+  const markLoginRedirectPending = useCallback(() => {
+    if (typeof window === "undefined") return
+    try {
+      window.sessionStorage.setItem(loginRedirectPendingKey, "1")
+    } catch {
+      // ignore storage errors
+    }
+  }, [])
+  const clearLoginRedirectPending = useCallback(() => {
+    if (typeof window !== "undefined") {
+      try {
+        window.sessionStorage.removeItem(loginRedirectPendingKey)
+      } catch {
+        // ignore storage errors
+      }
+    }
+    setLoginRedirectPending(false)
+  }, [])
+  const waitingOnPostLoginSetup =
+    shouldUseWebWalletFlow &&
+    !isWebWalletSessionReady &&
+    (!error || error === missingSigAuthMessage)
 
 
   const buildW9Url = (baseUrl: string, walletAddress: string, email?: string | null) => {
@@ -165,9 +211,45 @@ const Page = () => {
     }
   }, [router, searchParams])
 
+  const resolvePrimarySmartWalletAddress = useCallback(async (primaryEoaAddress: string): Promise<string> => {
+    const hasPrimarySmartWallet = await ensurePrimarySmartWallet()
+    if (!hasPrimarySmartWallet) {
+      throw new Error(missingPrimarySmartWalletMessage)
+    }
+
+    const walletsRes = await authFetch("/wallets")
+    if (!walletsRes.ok) {
+      throw new Error("Unable to verify primary smart wallet. Please try again.")
+    }
+    const backendWallets = (await walletsRes.json()) as WalletResponse[]
+    const normalizedPrimaryEoaAddress = (primaryEoaAddress || "").trim().toLowerCase()
+
+    const preferredSmartWallet = backendWallets.find((wallet) =>
+      wallet.is_eoa === false &&
+      wallet.smart_index === 0 &&
+      wallet.eoa_address?.toLowerCase() === normalizedPrimaryEoaAddress &&
+      typeof wallet.smart_address === "string" &&
+      isHexAddress(wallet.smart_address.trim())
+    ) || backendWallets.find((wallet) =>
+      wallet.is_eoa === false &&
+      wallet.smart_index === 0 &&
+      typeof wallet.smart_address === "string" &&
+      isHexAddress(wallet.smart_address.trim())
+    )
+
+    const smartWalletAddress = typeof preferredSmartWallet?.smart_address === "string"
+      ? preferredSmartWallet.smart_address.trim()
+      : ""
+    if (!isHexAddress(smartWalletAddress)) {
+      throw new Error(missingPrimarySmartWalletMessage)
+    }
+
+    return smartWalletAddress.toLowerCase()
+  }, [authFetch, ensurePrimarySmartWallet])
+
   const redeemWithWebWallet = useCallback(async () => {
     if (webWalletRedeemAttemptedRef.current || success) return
-    if (!authenticated || !privyReady || !walletsReady) return
+    if (!isWebWalletSessionReady) return
     if (!code) {
       setError("Invalid redeem code.")
       setWebWalletError("Invalid redeem code.")
@@ -185,32 +267,15 @@ const Page = () => {
         throw new Error("No web wallet found. Connect a wallet and try again.")
       }
 
-      await Promise.race([
-        primaryWallet.switchChain(CHAIN_ID),
-        new Promise<never>((_, reject) => {
-          setTimeout(() => reject(new Error("Wallet network switch timed out. Please try again.")), 15000)
-        }),
-      ])
+      const smartWalletAddress = await resolvePrimarySmartWalletAddress(primaryWallet.address)
 
-      const smartWallet = new AppWallet(primaryWallet, "SW-1", { index: 0n })
-      await Promise.race([
-        smartWallet.init(),
-        new Promise<never>((_, reject) => {
-          setTimeout(() => reject(new Error("Smart wallet initialization timed out. Please try again.")), 15000)
-        }),
-      ])
-
-      if (!smartWallet.address) {
-        throw new Error("Unable to resolve Smart Wallet 1 address.")
-      }
-
-      const smartWalletReturnTo = `/wallets/${smartWallet.address}`
+      const smartWalletReturnTo = `/wallets/${smartWalletAddress}`
       if (!returnTo || returnTo === "/wallets") {
         ensureWebWalletQueryParams(smartWalletReturnTo)
       }
 
       await sendBotRequest(
-        smartWallet.address,
+        smartWalletAddress,
         !returnTo || returnTo === "/wallets" ? smartWalletReturnTo : undefined
       )
     } catch (err) {
@@ -221,7 +286,7 @@ const Page = () => {
       setContinuingWithWebWallet(false)
       setContinueWithWebWalletRequested(false)
     }
-  }, [authenticated, code, ensureWebWalletQueryParams, privyReady, returnTo, success, wallets, walletsReady])
+  }, [code, ensureWebWalletQueryParams, isWebWalletSessionReady, resolvePrimarySmartWalletAddress, returnTo, success, wallets])
 
   const continueWithWebWallet = useCallback(async () => {
     if (!code) {
@@ -240,16 +305,20 @@ const Page = () => {
 
     if (!authenticated) {
       try {
+        markLoginRedirectPending()
         await login()
       } catch {
+        clearLoginRedirectPending()
         setWebWalletError("Login was cancelled. Please try again.")
         setContinueWithWebWalletRequested(false)
         setError(missingSigAuthMessage)
       }
       return
     }
-    void redeemWithWebWallet()
-  }, [authenticated, code, ensureWebWalletQueryParams, login, privyReady, redeemWithWebWallet])
+    if (isWebWalletSessionReady) {
+      void redeemWithWebWallet()
+    }
+  }, [authenticated, clearLoginRedirectPending, code, ensureWebWalletQueryParams, isWebWalletSessionReady, login, markLoginRedirectPending, privyReady, redeemWithWebWallet])
 
   useEffect(() => {
     directRedeemAttemptedRef.current = false
@@ -275,63 +344,98 @@ const Page = () => {
     ensureWebWalletQueryParams("/wallets")
 
     if (authenticated) {
-      setError(null)
+      setError((previous) => {
+        if (previous === missingSigAuthMessage) {
+          return null
+        }
+        return previous
+      })
       return
     }
 
-    setError(missingSigAuthMessage)
-  }, [authenticated, code, ensureWebWalletQueryParams, sigAuthAccount, sigAuthSignature])
+    if (!continueWithWebWalletRequested && !continuingWithWebWallet && !isFinalErrorState) {
+      setError(missingSigAuthMessage)
+    }
+  }, [
+    authenticated,
+    code,
+    continueWithWebWalletRequested,
+    continuingWithWebWallet,
+    ensureWebWalletQueryParams,
+    isFinalErrorState,
+    sigAuthAccount,
+    sigAuthSignature,
+  ])
 
   useEffect(() => {
     if (!shouldUseWebWalletFlow) return
     if (!code) return
     if (hasSigAuth) return
-    if (!authenticated || !privyReady || !walletsReady) return
+    if (!isWebWalletSessionReady) return
     void redeemWithWebWallet()
   }, [
-    authenticated,
+    isWebWalletSessionReady,
     code,
     hasSigAuth,
-    privyReady,
     shouldUseWebWalletFlow,
-    walletsReady,
     redeemWithWebWallet,
   ])
 
   useEffect(() => {
     if (!continueWithWebWalletRequested) return
-    if (!authenticated || !privyReady || !walletsReady) return
+    if (!isWebWalletSessionReady) return
     void redeemWithWebWallet()
-  }, [continueWithWebWalletRequested, authenticated, privyReady, walletsReady, redeemWithWebWallet])
-
-  const showDownloadPrompt = error === missingSigAuthMessage && privyReady && !authenticated
-  const isFinalErrorState = Boolean(
-    error &&
-    error !== missingSigAuthMessage &&
-    error !== "W9 Required" &&
-    error !== "W9 Pending"
-  )
-  const shouldAutoRedirect = success || isFinalErrorState
+  }, [continueWithWebWalletRequested, isWebWalletSessionReady, redeemWithWebWallet])
 
   useEffect(() => {
-    if (!shouldAutoRedirect) return
-    if (redirectTimeoutRef.current) return
+    if (!loginRedirectPending) return
+    const timeoutId = setTimeout(() => {
+      clearLoginRedirectPending()
+    }, loginRedirectPendingTimeoutMs)
+
+    return () => {
+      clearTimeout(timeoutId)
+    }
+  }, [clearLoginRedirectPending, loginRedirectPending])
+
+  useEffect(() => {
+    if (!loginRedirectPending) return
+    if (isWebWalletSessionReady || isFinalErrorState || success || !shouldUseWebWalletFlow) {
+      clearLoginRedirectPending()
+    }
+  }, [clearLoginRedirectPending, isFinalErrorState, isWebWalletSessionReady, loginRedirectPending, shouldUseWebWalletFlow, success])
+
+  const showDownloadPrompt = error === missingSigAuthMessage && privyReady && !authenticated
+
+  useEffect(() => {
+    if (!shouldAutoRedirect) {
+      if (redirectTimeoutRef.current) {
+        clearTimeout(redirectTimeoutRef.current)
+        redirectTimeoutRef.current = null
+      }
+      return
+    }
+
+    if (redirectTimeoutRef.current) {
+      clearTimeout(redirectTimeoutRef.current)
+      redirectTimeoutRef.current = null
+    }
 
     redirectTimeoutRef.current = setTimeout(() => {
       const destination = hasSigAuth && sigAuthRedirect
         ? `${sigAuthRedirect}/close`
         : (success ? (successRedirectTo || returnTo || "/wallets") : (returnTo || "/wallets"))
+      redirectTimeoutRef.current = null
       router.replace(destination)
     }, 2000)
-  }, [hasSigAuth, returnTo, router, shouldAutoRedirect, sigAuthRedirect, success, successRedirectTo])
 
-  useEffect(() => {
     return () => {
       if (redirectTimeoutRef.current) {
         clearTimeout(redirectTimeoutRef.current)
+        redirectTimeoutRef.current = null
       }
     }
-  }, [])
+  }, [hasSigAuth, returnTo, router, shouldAutoRedirect, sigAuthRedirect, success, successRedirectTo])
 
   return (
     <div className="min-h-screen flex items-center justify-center">

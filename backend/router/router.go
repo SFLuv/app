@@ -99,6 +99,7 @@ func AddWorkflowRoutes(r *chi.Mux, s *handlers.BotService, a *handlers.AppServic
 	r.Post("/proposers/workflows", withProposer(a.CreateWorkflow, a))
 	r.Get("/proposers/workflows", withProposer(a.GetProposerWorkflows, a))
 	r.Get("/proposers/workflows/{workflow_id}", withProposer(a.GetProposerWorkflow, a))
+	r.Post("/proposers/workflows/{workflow_id}/edit-proposals", withProposer(a.ProposeWorkflowEdit, a))
 	r.Delete("/proposers/workflows/{workflow_id}", withProposer(a.DeleteProposerWorkflow, a))
 	r.Post("/proposers/workflow-deletion-proposals", withProposer(a.ProposeWorkflowDeletion, a))
 
@@ -142,12 +143,14 @@ func AddWorkflowRoutes(r *chi.Mux, s *handlers.BotService, a *handlers.AppServic
 	r.Post("/admin/workflows/{workflow_id}/payout-lock-resolution", withAdmin(a.ResolveAdminWorkflowPayoutLock, a))
 
 	r.Get("/voters/workflows", withVoter(a.GetVoterWorkflows, a))
+	r.Get("/voters/workflow-edit-proposals", withVoter(a.GetVoterWorkflowEditProposals, a))
 	r.Get("/voters/workflow-deletion-proposals", withVoter(a.GetVoterWorkflowDeletionProposals, a))
 	r.Post("/voters/workflow-deletion-proposals", withVoter(a.ProposeWorkflowDeletion, a))
 	r.Get("/workflows/active", withAuth(a.GetActiveWorkflows))
 	r.Get("/workflows/{workflow_id}", withAuth(a.GetWorkflow))
 	r.Get("/workflow-photos/{photo_id}", withAuth(a.GetWorkflowPhoto))
 	r.Post("/workflows/{workflow_id}/votes", withVoter(a.VoteWorkflow, a))
+	r.Post("/workflow-edit-proposals/{proposal_id}/votes", withVoter(a.VoteWorkflowEditProposal, a))
 	r.Post("/workflow-deletion-proposals/{proposal_id}/votes", withVoter(a.VoteWorkflowDeletionProposal, a))
 
 	r.Get("/issuers/scopes", withIssuer(a.GetMyIssuerScopes, a))

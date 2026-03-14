@@ -110,6 +110,7 @@ type WorkflowCreateRequest struct {
 	Title                string                         `json:"title"`
 	Description          string                         `json:"description"`
 	Recurrence           string                         `json:"recurrence"`
+	RecurrenceEndAt      *string                        `json:"recurrence_end_at,omitempty"`
 	StartAt              string                         `json:"start_at"`
 	Supervisor           *WorkflowSupervisorCreateInput `json:"supervisor,omitempty"`
 	SupervisorDataFields []WorkflowSupervisorDataField  `json:"supervisor_data_fields,omitempty"`
@@ -123,7 +124,6 @@ type WorkflowTemplateCreateRequest struct {
 	TemplateDescription  string                        `json:"template_description"`
 	SeriesId             *string                       `json:"series_id,omitempty"`
 	Recurrence           string                        `json:"recurrence"`
-	StartAt              string                        `json:"start_at"`
 	SupervisorUserId     *string                       `json:"supervisor_user_id,omitempty"`
 	SupervisorBounty     *uint64                       `json:"supervisor_bounty,omitempty"`
 	SupervisorDataFields []WorkflowSupervisorDataField `json:"supervisor_data_fields,omitempty"`
@@ -193,10 +193,12 @@ type WorkflowDropdownOption struct {
 type Workflow struct {
 	Id                         string                        `json:"id"`
 	SeriesId                   string                        `json:"series_id"`
+	WorkflowStateId            *string                       `json:"workflow_state_id,omitempty"`
 	ProposerId                 string                        `json:"proposer_id"`
 	Title                      string                        `json:"title"`
 	Description                string                        `json:"description"`
 	Recurrence                 string                        `json:"recurrence"`
+	RecurrenceEndAt            *int64                        `json:"recurrence_end_at,omitempty"`
 	StartAt                    int64                         `json:"start_at"`
 	Status                     string                        `json:"status"`
 	IsStartBlocked             bool                          `json:"is_start_blocked"`
@@ -241,10 +243,12 @@ type Workflow struct {
 type ActiveWorkflowListItem struct {
 	Id                      string  `json:"id"`
 	SeriesId                string  `json:"series_id"`
+	WorkflowStateId         *string `json:"workflow_state_id,omitempty"`
 	ProposerId              string  `json:"proposer_id"`
 	Title                   string  `json:"title"`
 	Description             string  `json:"description"`
 	Recurrence              string  `json:"recurrence"`
+	RecurrenceEndAt         *int64  `json:"recurrence_end_at,omitempty"`
 	StartAt                 int64   `json:"start_at"`
 	Status                  string  `json:"status"`
 	IsStartBlocked          bool    `json:"is_start_blocked"`
@@ -322,6 +326,50 @@ type WorkflowDeletionProposal struct {
 	VoteDecision        *string       `json:"vote_decision,omitempty"`
 	CreatedAt           int64         `json:"created_at"`
 	UpdatedAt           int64         `json:"updated_at"`
+	Votes               WorkflowVotes `json:"votes"`
+}
+
+type WorkflowEditProposalCreateRequest struct {
+	Title                string                        `json:"title"`
+	Description          string                        `json:"description"`
+	Recurrence           string                        `json:"recurrence"`
+	RecurrenceEndAt      *string                       `json:"recurrence_end_at,omitempty"`
+	Supervisor           *WorkflowSupervisorCreateInput `json:"supervisor,omitempty"`
+	SupervisorDataFields []WorkflowSupervisorDataField `json:"supervisor_data_fields,omitempty"`
+	Roles                []WorkflowRoleCreateInput     `json:"roles"`
+	Steps                []WorkflowStepCreateInput     `json:"steps"`
+	Reason               string                        `json:"reason,omitempty"`
+}
+
+type WorkflowEditProposalVoteRequest struct {
+	Decision string `json:"decision"`
+	Comment  string `json:"comment,omitempty"`
+}
+
+type WorkflowEditProposal struct {
+	Id                  string        `json:"id"`
+	SeriesId            string        `json:"series_id"`
+	TargetWorkflowId    *string       `json:"target_workflow_id,omitempty"`
+	ProposedStateId     string        `json:"proposed_state_id"`
+	RequestedByUserId   string        `json:"requested_by_user_id"`
+	Reason              string        `json:"reason"`
+	Status              string        `json:"status"`
+	VoteQuorumReachedAt *int64        `json:"vote_quorum_reached_at,omitempty"`
+	VoteFinalizeAt      *int64        `json:"vote_finalize_at,omitempty"`
+	VoteFinalizedAt     *int64        `json:"vote_finalized_at,omitempty"`
+	VoteFinalizedBy     *string       `json:"vote_finalized_by_user_id,omitempty"`
+	VoteDecision        *string       `json:"vote_decision,omitempty"`
+	CreatedAt           int64         `json:"created_at"`
+	UpdatedAt           int64         `json:"updated_at"`
+	WorkflowTitle       string        `json:"workflow_title"`
+	WorkflowDescription string        `json:"workflow_description"`
+	Recurrence          string        `json:"recurrence"`
+	RecurrenceEndAt     *int64        `json:"recurrence_end_at,omitempty"`
+	SupervisorRequired  bool          `json:"supervisor_required"`
+	SupervisorUserId    *string       `json:"supervisor_user_id,omitempty"`
+	SupervisorBounty    uint64        `json:"supervisor_bounty"`
+	TotalBounty         uint64        `json:"total_bounty"`
+	WeeklyRequirement   uint64        `json:"weekly_bounty_requirement"`
 	Votes               WorkflowVotes `json:"votes"`
 }
 

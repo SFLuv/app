@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { DragEvent, MouseEvent, PointerEvent, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useApp } from "@/context/AppProvider"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -11,6 +11,7 @@ import { Badge } from "@/components/ui/badge"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { usePathname, useRouter, useSearchParams } from "next/navigation"
 import {
@@ -24,11 +25,13 @@ import {
 import { formatWorkflowDisplayStatus } from "@/lib/workflow-status"
 import { cn } from "@/lib/utils"
 import { useToast } from "@/hooks/use-toast"
-import { AlertTriangle, CheckCircle2, ChevronsUpDown, Clock, Loader2, Plus, Search, Trash2, X } from "lucide-react"
+import { AlertTriangle, CheckCircle2, ChevronDown, ChevronsUpDown, Clock, GripVertical, Loader2, Plus, Search, Trash2, X } from "lucide-react"
 import {
   GlobalCredentialType,
   Workflow,
   WorkflowCreateRequest,
+  WorkflowEditProposal,
+  WorkflowEditProposalCreateRequest,
   WorkflowDeletionTargetType,
   WorkflowDropdownOptionCreateInput,
   WorkflowPhotoAspectRatio,
@@ -82,6 +85,20 @@ interface WorkflowSeriesGroup {
   workflows: Workflow[]
 }
 
+type DraftReorderDragState =
+  | { type: "step"; stepId: string }
+  | { type: "work-item"; stepId: string; itemId: string }
+  | { type: "dropdown-option"; stepId: string; itemId: string; optionIndex: number }
+
+type DraftReorderDropPosition = "before" | "after"
+
+type DraftReorderDropIndicator =
+  | { type: "step"; targetStepId: string; position: DraftReorderDropPosition }
+  | { type: "work-item"; stepId: string; targetItemId: string; position: DraftReorderDropPosition }
+  | { type: "dropdown-option"; stepId: string; itemId: string; targetOptionIndex: number; position: DraftReorderDropPosition }
+
+const draftReorderMimeType = "text/plain"
+
 const createDraftRole = (): DraftRole => ({
   client_id: crypto.randomUUID(),
   title: "",
@@ -134,6 +151,8 @@ const WORKFLOW_STATUS_FILTER_OPTIONS: Array<{
   { value: "approved", label: "Approved" },
   { value: "rejected", label: "Rejected" },
   { value: "expired", label: "Expired" },
+  { value: "failed", label: "Failed" },
+  { value: "skipped", label: "Skipped" },
   { value: "blocked", label: "Blocked" },
   { value: "in_progress", label: "In Progress" },
   { value: "completed", label: "Completed" },
@@ -156,21 +175,33 @@ const isWellFormedWorkflowNotificationEmail = (value: string) => {
   return workflowNotificationEmailPattern.test(value)
 }
 
-const nowForDatetimeLocal = () => {
-  const date = new Date()
-  return new Date(date.getTime() - date.getTimezoneOffset() * 60_000)
-    .toISOString()
-    .slice(0, 16)
+const moveArrayItem = <T,>(items: T[], fromIndex: number, toIndex: number): T[] => {
+  if (fromIndex === toIndex) return items
+  if (fromIndex < 0 || toIndex < 0 || fromIndex >= items.length || toIndex >= items.length) return items
+  const next = [...items]
+  const [moved] = next.splice(fromIndex, 1)
+  if (moved === undefined) return items
+  next.splice(toIndex, 0, moved)
+  return next
 }
 
-const toDatetimeLocalValue = (value: number) => {
-  const date = new Date(value * 1000)
-  if (Number.isNaN(date.getTime())) {
-    return nowForDatetimeLocal()
+const reorderTargetIndex = (
+  sourceIndex: number,
+  targetIndex: number,
+  position: DraftReorderDropPosition,
+  length: number,
+) => {
+  if (sourceIndex < 0 || targetIndex < 0 || sourceIndex >= length || targetIndex >= length) {
+    return sourceIndex
   }
-  return new Date(date.getTime() - date.getTimezoneOffset() * 60_000)
-    .toISOString()
-    .slice(0, 16)
+
+  let insertionIndex = position === "before" ? targetIndex : targetIndex + 1
+  if (sourceIndex < insertionIndex) {
+    insertionIndex -= 1
+  }
+  if (insertionIndex < 0) return 0
+  if (insertionIndex >= length) return length - 1
+  return insertionIndex
 }
 
 const toUTCISOStringFromDatetimeLocal = (value: string) => {
@@ -179,6 +210,23 @@ const toUTCISOStringFromDatetimeLocal = (value: string) => {
     throw new Error("Workflow start date/time is invalid.")
   }
   return date.toISOString()
+}
+
+const toDatetimeLocalValueFromUnix = (value?: number | null) => {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return ""
+  const date = new Date(value * 1000)
+  if (Number.isNaN(date.getTime())) return ""
+  const offsetMs = date.getTimezoneOffset() * 60 * 1000
+  return new Date(date.getTime() - offsetMs).toISOString().slice(0, 16)
+}
+
+const sectionCardOpenByDefault = (state: Record<string, boolean>, key: string) => state[key] === true
+const nestedCardOpenByDefault = (state: Record<string, boolean>, key: string) => state[key] !== false
+
+const didClickInteractiveElement = (event: MouseEvent<HTMLElement>) => {
+  const target = event.target as HTMLElement | null
+  if (!target) return false
+  return Boolean(target.closest("button, a, input, textarea, select, [role='button']"))
 }
 
 export default function ProposerPage() {
@@ -231,15 +279,36 @@ export default function ProposerPage() {
   const [title, setTitle] = useState("")
   const [description, setDescription] = useState("")
   const [recurrence, setRecurrence] = useState<WorkflowRecurrence>("one_time")
-  const [startAt, setStartAt] = useState(nowForDatetimeLocal())
+  const [startAt, setStartAt] = useState("")
+  const [hasRecurrenceEndDate, setHasRecurrenceEndDate] = useState(false)
+  const [recurrenceEndAt, setRecurrenceEndAt] = useState("")
+  const [editProposalWorkflowId, setEditProposalWorkflowId] = useState("")
+  const [editProposalReason, setEditProposalReason] = useState("")
   const [roles, setRoles] = useState<DraftRole[]>([createDraftRole()])
   const [workflowSupervisor, setWorkflowSupervisor] = useState<DraftWorkflowSupervisor>(createDraftWorkflowSupervisor())
   const [workflowSupervisorDataFields, setWorkflowSupervisorDataFields] = useState<DraftSupervisorDataField[]>([])
   const [steps, setSteps] = useState<DraftStep[]>([createDraftStep()])
+  const [dragState, setDragState] = useState<DraftReorderDragState | null>(null)
+  const [dropIndicator, setDropIndicator] = useState<DraftReorderDropIndicator | null>(null)
+  const [templateLibraryOpen, setTemplateLibraryOpen] = useState(false)
+  const [workflowSupervisorOpen, setWorkflowSupervisorOpen] = useState(false)
+  const [workflowRolesOpen, setWorkflowRolesOpen] = useState(false)
+  const [roleCardOpenState, setRoleCardOpenState] = useState<Record<string, boolean>>({})
+  const [stepCardOpenState, setStepCardOpenState] = useState<Record<string, boolean>>({})
+  const [workItemCardOpenState, setWorkItemCardOpenState] = useState<Record<string, boolean>>({})
 
   const isApproved = Boolean(user?.isProposer || user?.isAdmin)
   const hasLoadedDataRef = useRef(false)
   const canProposeDeletion = Boolean(user?.isProposer)
+  const isEditProposalMode = editProposalWorkflowId.trim().length > 0
+  const touchDragRef = useRef<{
+    pointerId: number
+    payload: DraftReorderDragState
+  } | null>(null)
+  const touchScrollRestoreRef = useRef<{
+    overflow: string
+    touchAction: string
+  } | null>(null)
 
   const totalDraftBounty = useMemo(() => {
     const stepTotal = steps.reduce((sum, step) => sum + (Number(step.bounty) || 0), 0)
@@ -402,6 +471,23 @@ export default function ProposerPage() {
   }, [isApproved, loadData, status])
 
   useEffect(() => {
+    if (recurrence !== "one_time") return
+    setHasRecurrenceEndDate(false)
+    setRecurrenceEndAt("")
+  }, [recurrence])
+
+  useEffect(() => {
+    return () => {
+      touchDragRef.current = null
+      if (typeof document !== "undefined" && touchScrollRestoreRef.current) {
+        document.body.style.overflow = touchScrollRestoreRef.current.overflow
+        document.body.style.touchAction = touchScrollRestoreRef.current.touchAction
+        touchScrollRestoreRef.current = null
+      }
+    }
+  }, [])
+
+  useEffect(() => {
     if (status !== "authenticated" || !isApproved) return
     if (!hasLoadedDataRef.current) return
     void loadData("tab")
@@ -420,6 +506,9 @@ export default function ProposerPage() {
     description,
     recurrence,
     startAt,
+    hasRecurrenceEndDate,
+    recurrenceEndAt,
+    editProposalReason,
     templateTitle,
     templateDescription,
     selectedTemplateId,
@@ -459,6 +548,270 @@ export default function ProposerPage() {
         return {
           ...step,
           work_items: step.work_items.map((item) => (item.id === itemId ? { ...item, ...update } : item)),
+        }
+      }),
+    )
+  }
+
+  const dragPreviewFromElement = (event: DragEvent<HTMLElement>) => {
+    const sourceElement = (event.currentTarget as HTMLElement).closest<HTMLElement>("[data-reorder-preview]")
+    if (!sourceElement) return
+    const sourceRect = sourceElement.getBoundingClientRect()
+    if (!sourceRect.width || !sourceRect.height) return
+
+    const clone = sourceElement.cloneNode(true) as HTMLElement
+    clone.style.position = "fixed"
+    clone.style.top = "-9999px"
+    clone.style.left = "-9999px"
+    clone.style.width = `${sourceRect.width}px`
+    clone.style.pointerEvents = "none"
+    clone.style.opacity = "0.95"
+    clone.style.transform = "scale(0.98)"
+    clone.style.boxShadow = "0 14px 28px rgba(0,0,0,0.2)"
+    document.body.appendChild(clone)
+
+    event.dataTransfer.setDragImage(clone, Math.min(40, sourceRect.width / 2), 20)
+    window.setTimeout(() => {
+      clone.remove()
+    }, 0)
+  }
+
+  const dropPositionFromCoordinates = (clientY: number, element: HTMLElement): DraftReorderDropPosition => {
+    const rect = element.getBoundingClientRect()
+    const midpoint = rect.top + rect.height / 2
+    return clientY < midpoint ? "before" : "after"
+  }
+
+  const dropPositionFromPointer = (event: DragEvent<HTMLElement>): DraftReorderDropPosition => {
+    return dropPositionFromCoordinates(event.clientY, event.currentTarget)
+  }
+
+  const isTouchLikePointer = (event: PointerEvent<HTMLElement>) =>
+    event.pointerType === "touch" || event.pointerType === "pen"
+
+  const lockTouchScroll = () => {
+    if (typeof document === "undefined") return
+    if (touchScrollRestoreRef.current) return
+
+    touchScrollRestoreRef.current = {
+      overflow: document.body.style.overflow,
+      touchAction: document.body.style.touchAction,
+    }
+    document.body.style.overflow = "hidden"
+    document.body.style.touchAction = "none"
+  }
+
+  const unlockTouchScroll = () => {
+    if (typeof document === "undefined") return
+    if (!touchScrollRestoreRef.current) return
+
+    document.body.style.overflow = touchScrollRestoreRef.current.overflow
+    document.body.style.touchAction = touchScrollRestoreRef.current.touchAction
+    touchScrollRestoreRef.current = null
+  }
+
+  const resolveTouchDropIndicator = (
+    payload: DraftReorderDragState,
+    clientX: number,
+    clientY: number,
+  ): DraftReorderDropIndicator | null => {
+    if (typeof document === "undefined") return null
+    const target = document.elementFromPoint(clientX, clientY) as HTMLElement | null
+    if (!target) return null
+
+    if (payload.type === "step") {
+      const dropTarget = target.closest<HTMLElement>("[data-drop-step-id]")
+      const targetStepId = dropTarget?.dataset.dropStepId?.trim()
+      if (!dropTarget || !targetStepId) return null
+      return {
+        type: "step",
+        targetStepId,
+        position: dropPositionFromCoordinates(clientY, dropTarget),
+      }
+    }
+
+    if (payload.type === "work-item") {
+      const dropTarget = target.closest<HTMLElement>("[data-drop-work-item-id]")
+      const stepId = dropTarget?.dataset.dropWorkItemStepId?.trim()
+      const targetItemId = dropTarget?.dataset.dropWorkItemId?.trim()
+      if (!dropTarget || !stepId || !targetItemId) return null
+      if (stepId !== payload.stepId) return null
+      return {
+        type: "work-item",
+        stepId,
+        targetItemId,
+        position: dropPositionFromCoordinates(clientY, dropTarget),
+      }
+    }
+
+    const dropTarget = target.closest<HTMLElement>("[data-drop-option-index]")
+    const stepId = dropTarget?.dataset.dropOptionStepId?.trim()
+    const itemId = dropTarget?.dataset.dropOptionItemId?.trim()
+    const targetOptionIndexRaw = dropTarget?.dataset.dropOptionIndex
+    const targetOptionIndex = Number.parseInt(targetOptionIndexRaw || "", 10)
+    if (!dropTarget || !stepId || !itemId || Number.isNaN(targetOptionIndex)) return null
+    if (stepId !== payload.stepId || itemId !== payload.itemId) return null
+    return {
+      type: "dropdown-option",
+      stepId,
+      itemId,
+      targetOptionIndex,
+      position: dropPositionFromCoordinates(clientY, dropTarget),
+    }
+  }
+
+  const beginTouchReorderDrag = (event: PointerEvent<HTMLElement>, payload: DraftReorderDragState) => {
+    if (!isTouchLikePointer(event)) return
+    event.preventDefault()
+    event.stopPropagation()
+
+    touchDragRef.current = {
+      pointerId: event.pointerId,
+      payload,
+    }
+    lockTouchScroll()
+    setDragState(payload)
+    setDropIndicator(null)
+    event.currentTarget.setPointerCapture(event.pointerId)
+  }
+
+  const updateTouchReorderDrag = (event: PointerEvent<HTMLElement>) => {
+    const touchDrag = touchDragRef.current
+    if (!touchDrag || touchDrag.pointerId !== event.pointerId) return
+    event.preventDefault()
+    event.stopPropagation()
+
+    const nextDropIndicator = resolveTouchDropIndicator(touchDrag.payload, event.clientX, event.clientY)
+    setDropIndicator(nextDropIndicator)
+  }
+
+  const completeTouchReorderDrag = (event: PointerEvent<HTMLElement>) => {
+    const touchDrag = touchDragRef.current
+    if (!touchDrag || touchDrag.pointerId !== event.pointerId) return
+    event.preventDefault()
+    event.stopPropagation()
+
+    const target = resolveTouchDropIndicator(touchDrag.payload, event.clientX, event.clientY)
+    if (target) {
+      switch (touchDrag.payload.type) {
+        case "step":
+          if (target.type === "step" && touchDrag.payload.stepId !== target.targetStepId) {
+            reorderSteps(touchDrag.payload.stepId, target.targetStepId, target.position)
+          }
+          break
+        case "work-item":
+          if (
+            target.type === "work-item" &&
+            touchDrag.payload.stepId === target.stepId &&
+            touchDrag.payload.itemId !== target.targetItemId
+          ) {
+            reorderWorkItems(target.stepId, touchDrag.payload.itemId, target.targetItemId, target.position)
+          }
+          break
+        case "dropdown-option":
+          if (
+            target.type === "dropdown-option" &&
+            touchDrag.payload.stepId === target.stepId &&
+            touchDrag.payload.itemId === target.itemId &&
+            touchDrag.payload.optionIndex !== target.targetOptionIndex
+          ) {
+            reorderDropdownOptions(
+              target.stepId,
+              target.itemId,
+              touchDrag.payload.optionIndex,
+              target.targetOptionIndex,
+              target.position,
+            )
+          }
+          break
+      }
+    }
+
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+    touchDragRef.current = null
+    unlockTouchScroll()
+    endReorderDrag()
+  }
+
+  const cancelTouchReorderDrag = (event: PointerEvent<HTMLElement>) => {
+    const touchDrag = touchDragRef.current
+    if (!touchDrag || touchDrag.pointerId !== event.pointerId) return
+
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+    touchDragRef.current = null
+    unlockTouchScroll()
+    endReorderDrag()
+  }
+
+  const endReorderDrag = () => {
+    setDragState(null)
+    setDropIndicator(null)
+  }
+
+  const beginReorderDrag = (event: DragEvent<HTMLElement>, payload: DraftReorderDragState) => {
+    event.dataTransfer.effectAllowed = "move"
+    event.dataTransfer.setData(draftReorderMimeType, JSON.stringify(payload))
+    dragPreviewFromElement(event)
+    setDragState(payload)
+    setDropIndicator(null)
+  }
+
+  const reorderSteps = (sourceStepId: string, targetStepId: string, position: DraftReorderDropPosition) => {
+    if (sourceStepId === targetStepId) return
+    setSteps((prev) => {
+      const sourceIndex = prev.findIndex((step) => step.id === sourceStepId)
+      const targetIndex = prev.findIndex((step) => step.id === targetStepId)
+      const nextIndex = reorderTargetIndex(sourceIndex, targetIndex, position, prev.length)
+      return moveArrayItem(prev, sourceIndex, nextIndex)
+    })
+  }
+
+  const reorderWorkItems = (
+    stepId: string,
+    sourceItemId: string,
+    targetItemId: string,
+    position: DraftReorderDropPosition,
+  ) => {
+    if (sourceItemId === targetItemId) return
+    setSteps((prev) =>
+      prev.map((step) => {
+        if (step.id !== stepId) return step
+        const sourceIndex = step.work_items.findIndex((item) => item.id === sourceItemId)
+        const targetIndex = step.work_items.findIndex((item) => item.id === targetItemId)
+        const nextIndex = reorderTargetIndex(sourceIndex, targetIndex, position, step.work_items.length)
+        return {
+          ...step,
+          work_items: moveArrayItem(step.work_items, sourceIndex, nextIndex),
+        }
+      }),
+    )
+  }
+
+  const reorderDropdownOptions = (
+    stepId: string,
+    itemId: string,
+    sourceIndex: number,
+    targetIndex: number,
+    position: DraftReorderDropPosition,
+  ) => {
+    if (sourceIndex === targetIndex) return
+    setSteps((prev) =>
+      prev.map((step) => {
+        if (step.id !== stepId) return step
+        return {
+          ...step,
+          work_items: step.work_items.map((item) => {
+            if (item.id !== itemId) return item
+            const nextIndex = reorderTargetIndex(sourceIndex, targetIndex, position, item.dropdown_options.length)
+            return {
+              ...item,
+              dropdown_options: moveArrayItem(item.dropdown_options, sourceIndex, nextIndex),
+            }
+          }),
         }
       }),
     )
@@ -634,15 +987,29 @@ export default function ProposerPage() {
     setWorkflowSupervisorDataFields((prev) => prev.filter((field) => field.id !== fieldId))
   }
 
+  const workItemCollapseKey = (stepId: string, itemId: string) => `${stepId}:${itemId}`
+
   const resetForm = () => {
     setTitle("")
     setDescription("")
     setRecurrence("one_time")
-    setStartAt(nowForDatetimeLocal())
+    setStartAt("")
+    setHasRecurrenceEndDate(false)
+    setRecurrenceEndAt("")
+    setEditProposalWorkflowId("")
+    setEditProposalReason("")
     setRoles([createDraftRole()])
     setWorkflowSupervisor(createDraftWorkflowSupervisor())
     setWorkflowSupervisorDataFields([])
     setSteps([createDraftStep()])
+    setDragState(null)
+    setDropIndicator(null)
+    setTemplateLibraryOpen(false)
+    setWorkflowSupervisorOpen(false)
+    setWorkflowRolesOpen(false)
+    setRoleCardOpenState({})
+    setStepCardOpenState({})
+    setWorkItemCardOpenState({})
   }
 
   const normalizeDraftWorkflowFields = () => {
@@ -692,8 +1059,8 @@ export default function ProposerPage() {
       }),
     }))
 
-    if (normalizedSteps.some((step) => !step.title || !step.description || Number.isNaN(step.bounty) || step.bounty < 0 || !step.role_client_id)) {
-      throw new Error("Every step needs a title, description, role assignment, and bounty zero or greater.")
+    if (normalizedSteps.some((step) => !step.title || Number.isNaN(step.bounty) || step.bounty < 0 || !step.role_client_id)) {
+      throw new Error("Every step needs a title, role assignment, and bounty zero or greater.")
     }
 
     for (const step of normalizedSteps) {
@@ -762,12 +1129,10 @@ export default function ProposerPage() {
 
   const buildTemplatePayload = (): WorkflowTemplateCreateRequest => {
     const { normalizedRoles, normalizedSteps, normalizedSupervisor, normalizedSupervisorDataFields } = normalizeDraftWorkflowFields()
-    const startAtISO = toUTCISOStringFromDatetimeLocal(startAt)
     const payload: WorkflowTemplateCreateRequest = {
       template_title: templateTitle.trim(),
       template_description: templateDescription.trim(),
       recurrence,
-      start_at: startAtISO,
       roles: normalizedRoles,
       steps: normalizedSteps,
     }
@@ -900,11 +1265,122 @@ export default function ProposerPage() {
     })
     setWorkflowSupervisorDataFields(templateSupervisorDataFields)
     setRecurrence(template.recurrence)
-    setStartAt(toDatetimeLocalValue(template.start_at))
+    setStartAt("")
+    setHasRecurrenceEndDate(false)
+    setRecurrenceEndAt("")
+    setEditProposalWorkflowId("")
+    setEditProposalReason("")
     setRoles(mappedRoles.length ? mappedRoles : [createDraftRole()])
     setSteps(mappedSteps.length ? mappedSteps : [createDraftStep()])
+    setRoleCardOpenState({})
+    setStepCardOpenState({})
+    setWorkItemCardOpenState({})
+    setWorkflowRolesOpen(false)
     setError("")
     setSuccessMessage(`Applied template: ${template.template_title}`)
+  }
+
+  const beginWorkflowEditProposal = (workflow: Workflow) => {
+    if (!workflow) return
+
+    const roleIdMap = new Map<string, string>()
+    const mappedRoles: DraftRole[] = workflow.roles.map((role, index) => {
+      const fallbackClientId = `role-${index + 1}`
+      const sourceClientId = (role.id || "").trim() || fallbackClientId
+      const newClientId = crypto.randomUUID()
+      roleIdMap.set(sourceClientId, newClientId)
+      return {
+        client_id: newClientId,
+        title: role.title,
+        required_credentials: role.required_credentials || [],
+      }
+    })
+
+    const mappedSteps: DraftStep[] = [...workflow.steps]
+      .sort((a, b) => a.step_order - b.step_order)
+      .map((step) => ({
+        id: crypto.randomUUID(),
+        title: step.title,
+        description: step.description,
+        bounty: String(step.bounty),
+        role_client_id: step.role_id ? roleIdMap.get(step.role_id) || "" : "",
+        allow_step_not_possible: Boolean(step.allow_step_not_possible),
+        work_items: [...step.work_items]
+          .sort((a, b) => a.item_order - b.item_order)
+          .map((item) => ({
+            id: crypto.randomUUID(),
+            title: item.title,
+            description: item.description,
+            optional: item.optional,
+            requires_photo: item.requires_photo,
+            camera_capture_only: Boolean(item.camera_capture_only),
+            photo_required_count:
+              typeof item.photo_required_count === "number" && Number.isFinite(item.photo_required_count)
+                ? Math.max(1, Math.floor(item.photo_required_count))
+                : 1,
+            photo_allow_any_count: Boolean(item.photo_allow_any_count),
+            photo_aspect_ratio: normalizeWorkflowPhotoAspectRatio(item.photo_aspect_ratio || "square"),
+            requires_written_response: item.requires_written_response,
+            requires_dropdown: item.requires_dropdown,
+            dropdown_options: (item.dropdown_options || []).map((option) => ({
+              label: option.label,
+              requires_written_response: option.requires_written_response,
+              notify_emails: option.notify_emails || [],
+              notify_email_input: "",
+            })),
+          })),
+      }))
+
+    const supervisorUserId = (workflow.supervisor_user_id || "").trim()
+    const supervisorDataFields = (workflow.supervisor_data_fields || [])
+      .map((field) => ({
+        id: crypto.randomUUID(),
+        key: (field.key || "").trim(),
+        value: (field.value || "").trim(),
+      }))
+      .filter((field) => field.key || field.value)
+    const hasSupervisor =
+      supervisorUserId.length > 0 ||
+      (workflow.supervisor_bounty !== undefined && workflow.supervisor_bounty !== null) ||
+      supervisorDataFields.length > 0
+
+    const recurrenceEndAtValue = toDatetimeLocalValueFromUnix(workflow.recurrence_end_at)
+
+    setTitle(workflow.title || "")
+    setDescription(workflow.description || "")
+    setRecurrence(workflow.recurrence)
+    setStartAt("")
+    setHasRecurrenceEndDate(recurrenceEndAtValue.length > 0)
+    setRecurrenceEndAt(recurrenceEndAtValue)
+    setWorkflowSupervisor({
+      enabled: hasSupervisor,
+      user_id: supervisorUserId,
+      bounty:
+        workflow.supervisor_bounty !== undefined && workflow.supervisor_bounty !== null
+          ? String(workflow.supervisor_bounty)
+          : "",
+    })
+    setWorkflowSupervisorDataFields(supervisorDataFields)
+    setRoles(mappedRoles.length ? mappedRoles : [createDraftRole()])
+    setSteps(mappedSteps.length ? mappedSteps : [createDraftStep()])
+    setRoleCardOpenState({})
+    setStepCardOpenState({})
+    setWorkItemCardOpenState({})
+    setWorkflowRolesOpen(false)
+    setEditProposalWorkflowId(workflow.id)
+    setEditProposalReason("")
+    setSelectedTemplateId("")
+    setError("")
+    setSuccessMessage(`Editing workflow: ${workflow.title}`)
+    setDetailOpen(false)
+    setDetailWorkflow(null)
+    setActiveTab("create-workflow")
+  }
+
+  const cancelWorkflowEditProposalDraft = () => {
+    resetForm()
+    setError("")
+    setSuccessMessage("Exited workflow edit mode.")
   }
 
   const submitWorkflow = async () => {
@@ -931,23 +1407,98 @@ export default function ProposerPage() {
       return
     }
 
-    const payload: WorkflowCreateRequest = {
-      title: title.trim(),
-      description: description.trim(),
-      recurrence,
-      start_at: toUTCISOStringFromDatetimeLocal(startAt),
-      roles: normalizedRoles,
-      steps: normalizedSteps,
-    }
-    if (normalizedSupervisor) {
-      payload.supervisor = normalizedSupervisor
-      if (normalizedSupervisorDataFields.length > 0) {
-        payload.supervisor_data_fields = normalizedSupervisorDataFields
+    let recurrenceEndAtISO: string | undefined
+    if (recurrence !== "one_time" && hasRecurrenceEndDate) {
+      if (!recurrenceEndAt.trim()) {
+        setError("Workflow recurrence end date/time is required when enabled.")
+        return
+      }
+      try {
+        recurrenceEndAtISO = toUTCISOStringFromDatetimeLocal(recurrenceEndAt)
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Workflow recurrence end date/time is invalid.")
+        return
       }
     }
 
     setSubmitting(true)
     try {
+      if (editProposalWorkflowId) {
+        const payload: WorkflowEditProposalCreateRequest = {
+          title: title.trim(),
+          description: description.trim(),
+          recurrence,
+          roles: normalizedRoles,
+          steps: normalizedSteps,
+        }
+        if (recurrenceEndAtISO) {
+          payload.recurrence_end_at = recurrenceEndAtISO
+        }
+        if (normalizedSupervisor) {
+          payload.supervisor = normalizedSupervisor
+          if (normalizedSupervisorDataFields.length > 0) {
+            payload.supervisor_data_fields = normalizedSupervisorDataFields
+          }
+        }
+        if (editProposalReason.trim()) {
+          payload.reason = editProposalReason.trim()
+        }
+
+        const res = await authFetch(`/proposers/workflows/${editProposalWorkflowId}/edit-proposals`, {
+          method: "POST",
+          body: JSON.stringify(payload),
+        })
+
+        if (!res.ok) {
+          const text = await res.text()
+          throw new Error(text || "Unable to submit workflow edit proposal right now.")
+        }
+
+        const created = (await res.json()) as WorkflowEditProposal
+        resetForm()
+        setSuccessMessage(created.status === "approved" ? "Workflow edit was auto-approved and applied." : "Workflow edit proposal submitted successfully.")
+        toast({
+          title: created.status === "approved" ? "Workflow edit applied" : "Workflow edit proposal submitted",
+          description: created.workflow_title,
+        })
+        await loadData()
+        return
+      }
+
+      let startAtISO = ""
+      try {
+        startAtISO = toUTCISOStringFromDatetimeLocal(startAt)
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Workflow start date/time is invalid.")
+        return
+      }
+      if (recurrenceEndAtISO) {
+        const startUnix = Math.floor(new Date(startAtISO).getTime() / 1000)
+        const endUnix = Math.floor(new Date(recurrenceEndAtISO).getTime() / 1000)
+        if (endUnix < startUnix) {
+          setError("Workflow recurrence end date/time must be on or after start date/time.")
+          return
+        }
+      }
+
+      const payload: WorkflowCreateRequest = {
+        title: title.trim(),
+        description: description.trim(),
+        recurrence,
+        start_at: startAtISO,
+        roles: normalizedRoles,
+        steps: normalizedSteps,
+      }
+      if (recurrenceEndAtISO) {
+        payload.recurrence_end_at = recurrenceEndAtISO
+      }
+      if (normalizedSupervisor) {
+        payload.supervisor = normalizedSupervisor
+        if (normalizedSupervisorDataFields.length > 0) {
+          payload.supervisor_data_fields = normalizedSupervisorDataFields
+        }
+      }
+
       const res = await authFetch("/proposers/workflows", {
         method: "POST",
         body: JSON.stringify(payload),
@@ -1056,6 +1607,15 @@ export default function ProposerPage() {
     workflow.status === "completed" ||
     workflow.status === "paid_out"
 
+  const canProposeWorkflowEditFromWorkflow = (workflow: Workflow) =>
+    workflow.status === "approved" ||
+    workflow.status === "blocked" ||
+    workflow.status === "in_progress" ||
+    workflow.status === "completed" ||
+    workflow.status === "paid_out" ||
+    workflow.status === "failed" ||
+    workflow.status === "skipped"
+
   const openWorkflowDetails = async (workflowId: string, fallback?: Workflow) => {
     setDetailOpen(true)
     setDetailLoading(true)
@@ -1150,7 +1710,6 @@ export default function ProposerPage() {
       template_title: templateTitleValue,
       template_description: templateDescriptionValue,
       recurrence: workflow.recurrence,
-      start_at: new Date(workflow.start_at * 1000).toISOString(),
       roles,
       steps,
     }
@@ -1277,9 +1836,11 @@ export default function ProposerPage() {
         <TabsContent value="create-workflow" className="mt-4 space-y-6">
           <Card>
             <CardHeader>
-              <CardTitle>Create Workflow Proposal</CardTitle>
+              <CardTitle>{isEditProposalMode ? "Edit Workflow Proposal" : "Create Workflow Proposal"}</CardTitle>
               <CardDescription>
-                Steps unlock sequentially. Each step has one assignee role and configurable work-item evidence requirements.
+                {isEditProposalMode
+                  ? "Propose a new workflow state for this recurring series. Existing workflows keep their current state snapshots."
+                  : "Steps unlock sequentially. Each step has one assignee role and configurable work-item evidence requirements."}
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
@@ -1292,120 +1853,152 @@ export default function ProposerPage() {
                       Submitting...
                     </>
                   ) : (
-                    "Submit Workflow Proposal"
+                    isEditProposalMode ? "Submit Workflow Edit Proposal" : "Submit Workflow Proposal"
                   )}
                 </Button>
-              </div>
-
-              <div className="space-y-4 rounded-lg border p-4">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <h3 className="text-base font-medium">Template Library</h3>
-                <p className="text-xs text-muted-foreground">
-                  Apply a saved template to prefill workflow fields. Workflow title and description stay manual.
-                </p>
-              </div>
-              <Badge variant="outline">{templates.length} templates</Badge>
-            </div>
-
-            <div className="grid gap-3">
-              <Popover open={templateComboOpen} onOpenChange={setTemplateComboOpen}>
-                <PopoverTrigger asChild>
-                  <Button variant="outline" role="combobox" className="w-full justify-between font-normal">
-                    <span className="truncate">
-                      {selectedTemplate ? `${selectedTemplate.template_title} (${selectedTemplate.is_default ? "Default" : "Personal"})` : "Select a template"}
-                    </span>
-                    <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                {isEditProposalMode && (
+                  <Button type="button" variant="outline" onClick={cancelWorkflowEditProposalDraft} disabled={submitting}>
+                    Cancel Edit Mode
                   </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-[--radix-popover-trigger-width] p-2" align="start">
-                  <div className="relative mb-2">
-                    <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                    <Input
-                      placeholder="Search templates..."
-                      value={templateSearch}
-                      onChange={(e) => setTemplateSearch(e.target.value)}
-                      className="pl-8 h-8 text-sm"
-                    />
-                  </div>
-                  <div className="max-h-60 overflow-y-auto space-y-0.5">
-                    {filteredTemplates.length === 0 ? (
-                      <p className="text-sm text-muted-foreground px-2 py-1.5">No templates found.</p>
-                    ) : (
-                      filteredTemplates.map((template) => (
-                        <div
-                          key={template.id}
-                          className={cn(
-                            "flex items-center justify-between gap-2 rounded px-2 py-1.5 text-sm group",
-                            selectedTemplateId === template.id ? "bg-accent font-medium" : "hover:bg-accent"
-                          )}
-                        >
-                          <button
-                            type="button"
-                            className="flex-1 text-left min-w-0"
-                            onClick={() => {
-                              setSelectedTemplateId(template.id)
-                              applyTemplate(template.id)
-                              setTemplateComboOpen(false)
-                              setTemplateSearch("")
-                            }}
-                          >
-                            <span className="block truncate">{template.template_title}</span>
-                            <span className="text-xs text-muted-foreground">{template.is_default ? "Default" : "Personal"}</span>
-                          </button>
-                          {(!template.is_default || user?.isAdmin) && (
-                            <button
-                              type="button"
-                              className="shrink-0 text-muted-foreground hover:text-destructive transition-colors p-0.5"
-                              title="Delete template"
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                setDeleteTemplateId(template.id)
-                                setDeleteConfirmOpen(true)
-                                setTemplateComboOpen(false)
-                              }}
-                            >
-                              <Trash2 className="h-3.5 w-3.5" />
-                            </button>
-                          )}
-                        </div>
-                      ))
-                    )}
-                  </div>
-                </PopoverContent>
-              </Popover>
-            </div>
-
-            <div className="grid gap-3 md:grid-cols-2">
-              <div className="space-y-2">
-                <Label>Template Title</Label>
-                <Input
-                  value={templateTitle}
-                  onChange={(e) => setTemplateTitle(e.target.value)}
-                  placeholder="Storefront verification baseline"
-                />
+                )}
               </div>
-              <div className="space-y-2">
-                <Label>Template Description</Label>
-                <Input
-                  value={templateDescription}
-                  onChange={(e) => setTemplateDescription(e.target.value)}
-                  placeholder="Reusable workflow shape for recurring storefront checks"
-                />
-              </div>
-            </div>
 
-            <div className="flex flex-wrap gap-2">
-              <Button type="button" variant="outline" onClick={() => saveTemplate(false)} disabled={templateSaving}>
-                {templateSaving ? "Saving..." : `Save${user?.isAdmin ? " Personal" : ""} Template`}
-              </Button>
-              {user?.isAdmin && (
-                <Button type="button" onClick={() => saveTemplate(true)} disabled={templateSaving}>
-                  {templateSaving ? "Saving..." : "Save Default Template"}
-                </Button>
+              {isEditProposalMode && (
+                <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+                  You are editing a workflow series definition. Existing workflows in this series will keep their current state.
+                  Only newly generated recurring workflows will use approved edits.
+                </div>
               )}
-            </div>
-          </div>
+
+	              <Card>
+	                <Collapsible open={templateLibraryOpen} onOpenChange={setTemplateLibraryOpen}>
+	                  <CardHeader
+	                    className="cursor-pointer pb-3"
+	                    onClick={(event) => {
+	                      if (didClickInteractiveElement(event)) return
+	                      setTemplateLibraryOpen((prev) => !prev)
+	                    }}
+	                  >
+	                    <div className="flex items-center justify-between gap-3">
+	                      <div>
+	                        <CardTitle className="text-base">Template Library</CardTitle>
+	                        <CardDescription>
+	                          Apply a saved template to prefill workflow fields. Workflow title and description stay manual.
+	                        </CardDescription>
+	                      </div>
+	                      <div className="flex items-center gap-2">
+	                        <Badge variant="outline">{templates.length} templates</Badge>
+	                        <CollapsibleTrigger asChild>
+	                          <Button type="button" variant="ghost" size="icon" aria-label={templateLibraryOpen ? "Collapse template library" : "Expand template library"}>
+	                            <ChevronDown className={cn("h-4 w-4 transition-transform", !templateLibraryOpen && "-rotate-90")} />
+	                          </Button>
+	                        </CollapsibleTrigger>
+	                      </div>
+	                    </div>
+	                  </CardHeader>
+	                  <CollapsibleContent>
+	                    <CardContent className="space-y-4">
+	                      <div className="grid gap-3">
+	                        <Popover open={templateComboOpen} onOpenChange={setTemplateComboOpen}>
+	                          <PopoverTrigger asChild>
+	                            <Button variant="outline" role="combobox" className="w-full justify-between font-normal">
+	                              <span className="truncate">
+	                                {selectedTemplate ? `${selectedTemplate.template_title} (${selectedTemplate.is_default ? "Default" : "Personal"})` : "Select a template"}
+	                              </span>
+	                              <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+	                            </Button>
+	                          </PopoverTrigger>
+	                          <PopoverContent className="w-[--radix-popover-trigger-width] p-2" align="start">
+	                            <div className="relative mb-2">
+	                              <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+	                              <Input
+	                                placeholder="Search templates..."
+	                                value={templateSearch}
+	                                onChange={(e) => setTemplateSearch(e.target.value)}
+	                                className="pl-8 h-8 text-sm"
+	                              />
+	                            </div>
+	                            <div className="max-h-60 overflow-y-auto space-y-0.5">
+	                              {filteredTemplates.length === 0 ? (
+	                                <p className="text-sm text-muted-foreground px-2 py-1.5">No templates found.</p>
+	                              ) : (
+	                                filteredTemplates.map((template) => (
+	                                  <div
+	                                    key={template.id}
+	                                    className={cn(
+	                                      "flex items-center justify-between gap-2 rounded px-2 py-1.5 text-sm group",
+	                                      selectedTemplateId === template.id ? "bg-accent font-medium" : "hover:bg-accent"
+	                                    )}
+	                                  >
+	                                    <button
+	                                      type="button"
+	                                      className="flex-1 text-left min-w-0"
+	                                      onClick={() => {
+	                                        setSelectedTemplateId(template.id)
+	                                        applyTemplate(template.id)
+	                                        setTemplateComboOpen(false)
+	                                        setTemplateSearch("")
+	                                      }}
+	                                    >
+	                                      <span className="block truncate">{template.template_title}</span>
+	                                      <span className="text-xs text-muted-foreground">{template.is_default ? "Default" : "Personal"}</span>
+	                                    </button>
+	                                    {(!template.is_default || user?.isAdmin) && (
+	                                      <button
+	                                        type="button"
+	                                        className="shrink-0 text-muted-foreground hover:text-destructive transition-colors p-0.5"
+	                                        title="Delete template"
+	                                        onClick={(e) => {
+	                                          e.stopPropagation()
+	                                          setDeleteTemplateId(template.id)
+	                                          setDeleteConfirmOpen(true)
+	                                          setTemplateComboOpen(false)
+	                                        }}
+	                                      >
+	                                        <Trash2 className="h-3.5 w-3.5" />
+	                                      </button>
+	                                    )}
+	                                  </div>
+	                                ))
+	                              )}
+	                            </div>
+	                          </PopoverContent>
+	                        </Popover>
+	                      </div>
+
+	                      <div className="grid gap-3 md:grid-cols-2">
+	                        <div className="space-y-2">
+	                          <Label>Template Title</Label>
+	                          <Input
+	                            value={templateTitle}
+	                            onChange={(e) => setTemplateTitle(e.target.value)}
+	                            placeholder="Storefront verification baseline"
+	                          />
+	                        </div>
+	                        <div className="space-y-2">
+	                          <Label>Template Description</Label>
+	                          <Input
+	                            value={templateDescription}
+	                            onChange={(e) => setTemplateDescription(e.target.value)}
+	                            placeholder="Reusable workflow shape for recurring storefront checks"
+	                          />
+	                        </div>
+	                      </div>
+
+	                      <div className="flex flex-wrap gap-2">
+	                        <Button type="button" variant="outline" onClick={() => saveTemplate(false)} disabled={templateSaving}>
+	                          {templateSaving ? "Saving..." : `Save${user?.isAdmin ? " Personal" : ""} Template`}
+	                        </Button>
+	                        {user?.isAdmin && (
+	                          <Button type="button" onClick={() => saveTemplate(true)} disabled={templateSaving}>
+	                            {templateSaving ? "Saving..." : "Save Default Template"}
+	                          </Button>
+	                        )}
+	                      </div>
+	                    </CardContent>
+	                  </CollapsibleContent>
+	                </Collapsible>
+	              </Card>
 
 	          <div className="grid gap-4 md:grid-cols-2">
             <div className="space-y-2 md:col-span-2">
@@ -1434,234 +2027,509 @@ export default function ProposerPage() {
                 </SelectContent>
               </Select>
             </div>
-            <div className="space-y-2">
-              <Label>Start Date & Time</Label>
-              <Input type="datetime-local" value={startAt} onChange={(e) => setStartAt(e.target.value)} />
-            </div>
+
+            {!isEditProposalMode && (
+              <div className="space-y-2">
+                <Label>Start Date & Time</Label>
+                <Input type="datetime-local" value={startAt} onChange={(e) => setStartAt(e.target.value)} required />
+              </div>
+            )}
+
+            {recurrence !== "one_time" && (
+              <div className={cn("space-y-2", isEditProposalMode && "md:col-span-2")}>
+                <Label>Recurrence End Date (Optional)</Label>
+                <label className="flex items-center gap-2 text-sm">
+                  <Checkbox
+                    checked={hasRecurrenceEndDate}
+                    onCheckedChange={(checked) => {
+                      const enabled = Boolean(checked)
+                      setHasRecurrenceEndDate(enabled)
+                      if (!enabled) {
+                        setRecurrenceEndAt("")
+                      }
+                    }}
+                  />
+                  Specify an end date
+                </label>
+                {!hasRecurrenceEndDate ? (
+                  <p className="text-xs text-muted-foreground">No end date specified. Recurring generation will continue indefinitely.</p>
+                ) : (
+                  <Input type="datetime-local" value={recurrenceEndAt} onChange={(e) => setRecurrenceEndAt(e.target.value)} />
+                )}
+              </div>
+            )}
+
+            {isEditProposalMode && (
+              <div className="space-y-2 md:col-span-2">
+                <Label>Edit Proposal Reason (Optional)</Label>
+                <Textarea
+                  value={editProposalReason}
+                  onChange={(event) => setEditProposalReason(event.target.value)}
+                  placeholder="Describe why this edit is needed."
+                />
+              </div>
+            )}
 	          </div>
 
+	          <Card>
+	            <Collapsible open={workflowSupervisorOpen} onOpenChange={setWorkflowSupervisorOpen}>
+	              <CardHeader
+	                className="cursor-pointer pb-3"
+	                onClick={(event) => {
+	                  if (didClickInteractiveElement(event)) return
+	                  setWorkflowSupervisorOpen((prev) => !prev)
+	                }}
+	              >
+	                <div className="flex items-center justify-between gap-3">
+	                  <div>
+	                    <CardTitle className="text-base">Workflow Supervisor (Optional)</CardTitle>
+	                    <CardDescription>
+	                      Assign an approved supervisor to this workflow and optionally reserve a supervisor completion payout.
+	                    </CardDescription>
+	                  </div>
+	                  <div className="flex items-center gap-2">
+	                    {workflowSupervisor.enabled && <Badge variant="outline">Enabled</Badge>}
+	                    <CollapsibleTrigger asChild>
+	                      <Button type="button" variant="ghost" size="icon" aria-label={workflowSupervisorOpen ? "Collapse workflow supervisor" : "Expand workflow supervisor"}>
+	                        <ChevronDown className={cn("h-4 w-4 transition-transform", !workflowSupervisorOpen && "-rotate-90")} />
+	                      </Button>
+	                    </CollapsibleTrigger>
+	                  </div>
+	                </div>
+	              </CardHeader>
+	              <CollapsibleContent>
+	                <CardContent className="space-y-4">
+	                  <label className="flex items-center gap-2 text-sm">
+	                    <Checkbox
+	                      checked={workflowSupervisor.enabled}
+	                      onCheckedChange={(checked) =>
+	                        setWorkflowSupervisor((prev) => ({
+	                          ...prev,
+	                          enabled: Boolean(checked),
+	                        }))
+	                      }
+	                    />
+	                    Enable Workflow Supervisor
+	                  </label>
+
+	                  {workflowSupervisor.enabled && (
+	                    <div className="space-y-4">
+	                      <div className="space-y-2">
+	                        <Label>Supervisor</Label>
+	                        {supervisors.length === 0 ? (
+	                          <p className="text-xs text-muted-foreground">
+	                            No approved supervisors available yet.
+	                          </p>
+	                        ) : (
+	                          <Select
+	                            value={workflowSupervisor.user_id}
+	                            onValueChange={(value) =>
+	                              setWorkflowSupervisor((prev) => ({
+	                                ...prev,
+	                                user_id: value,
+	                              }))
+	                            }
+	                          >
+	                            <SelectTrigger>
+	                              <SelectValue placeholder="Select a supervisor..." />
+	                            </SelectTrigger>
+	                            <SelectContent>
+	                              {supervisors.map((supervisor) => (
+	                                <SelectItem key={supervisor.user_id} value={supervisor.user_id}>
+	                                  {supervisor.nickname || supervisor.organization}
+	                                </SelectItem>
+	                              ))}
+	                            </SelectContent>
+	                          </Select>
+	                        )}
+	                      </div>
+	                      <div className="space-y-2">
+	                        <Label>Supervisor Completion Payout (Optional)</Label>
+	                        <Input
+	                          type="number"
+	                          min="0"
+	                          value={workflowSupervisor.bounty}
+	                          onChange={(e) =>
+	                            setWorkflowSupervisor((prev) => ({
+	                              ...prev,
+	                              bounty: e.target.value,
+	                            }))
+	                          }
+	                          placeholder="0"
+	                        />
+	                      </div>
+
+	                      <div className="space-y-3">
+	                        <div className="flex items-center justify-between gap-2">
+	                          <div>
+	                            <Label>Supervisor Data Fields (Optional)</Label>
+	                            <p className="text-xs text-muted-foreground">
+	                              Add key/value metadata tags for supervisor export records.
+	                            </p>
+	                          </div>
+	                          <Button type="button" variant="outline" size="sm" onClick={addWorkflowSupervisorDataField}>
+	                            <Plus className="mr-2 h-4 w-4" />
+	                            Add Field
+	                          </Button>
+	                        </div>
+
+	                        {workflowSupervisorDataFields.length === 0 ? (
+	                          <p className="text-xs text-muted-foreground">No supervisor data fields added.</p>
+	                        ) : (
+	                          <div className="space-y-2">
+	                            {workflowSupervisorDataFields.map((field) => (
+	                              <div key={field.id} className="grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
+	                                <Input
+	                                  value={field.key}
+	                                  onChange={(e) => updateWorkflowSupervisorDataField(field.id, { key: e.target.value })}
+	                                  placeholder="Key (e.g. internal_reference)"
+	                                />
+	                                <Input
+	                                  value={field.value}
+	                                  onChange={(e) => updateWorkflowSupervisorDataField(field.id, { value: e.target.value })}
+	                                  placeholder="Value"
+	                                />
+	                                <Button
+	                                  type="button"
+	                                  variant="ghost"
+	                                  size="icon"
+	                                  onClick={() => removeWorkflowSupervisorDataField(field.id)}
+	                                  aria-label="Remove supervisor data field"
+	                                >
+	                                  <Trash2 className="h-4 w-4" />
+	                                </Button>
+	                              </div>
+	                            ))}
+	                          </div>
+	                        )}
+	                      </div>
+	                    </div>
+	                  )}
+	                </CardContent>
+	              </CollapsibleContent>
+	            </Collapsible>
+	          </Card>
+
           <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-base">Workflow Supervisor (Optional)</CardTitle>
-              <CardDescription>
-                Assign an approved supervisor to this workflow and optionally reserve a supervisor completion payout.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <label className="flex items-center gap-2 text-sm">
-                <Checkbox
-                  checked={workflowSupervisor.enabled}
-                  onCheckedChange={(checked) =>
-                    setWorkflowSupervisor((prev) => ({
-                      ...prev,
-                      enabled: Boolean(checked),
-                    }))
-                  }
-                />
-                Enable Workflow Supervisor
-              </label>
-
-              {workflowSupervisor.enabled && (
-                <div className="space-y-4">
-                  <div className="space-y-2">
-                    <Label>Supervisor</Label>
-                    {supervisors.length === 0 ? (
-                      <p className="text-xs text-muted-foreground">
-                        No approved supervisors available yet.
-                      </p>
-                    ) : (
-                      <Select
-                        value={workflowSupervisor.user_id}
-                        onValueChange={(value) =>
-                          setWorkflowSupervisor((prev) => ({
-                            ...prev,
-                            user_id: value,
-                          }))
-                        }
-                      >
-                        <SelectTrigger>
-                          <SelectValue placeholder="Select a supervisor..." />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {supervisors.map((supervisor) => (
-                            <SelectItem key={supervisor.user_id} value={supervisor.user_id}>
-                              {supervisor.nickname || supervisor.organization}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    )}
+            <Collapsible
+              open={workflowRolesOpen}
+              onOpenChange={(open) => {
+                setWorkflowRolesOpen(open)
+                if (!open) return
+                setRoleCardOpenState((prev) => {
+                  const next = { ...prev }
+                  roles.forEach((role) => {
+                    next[role.client_id] = true
+                  })
+                  return next
+                })
+              }}
+            >
+              <CardHeader
+                className="cursor-pointer pb-3"
+                onClick={(event) => {
+                  if (didClickInteractiveElement(event)) return
+                  const nextOpen = !workflowRolesOpen
+                  setWorkflowRolesOpen(nextOpen)
+                  if (!nextOpen) return
+                  setRoleCardOpenState((prev) => {
+                    const next = { ...prev }
+                    roles.forEach((role) => {
+                      next[role.client_id] = true
+                    })
+                    return next
+                  })
+                }}
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <CardTitle className="text-base">Workflow Roles</CardTitle>
+                    <CardDescription>Define required roles and credentials for workflow assignments.</CardDescription>
                   </div>
-                  <div className="space-y-2">
-                    <Label>Supervisor Completion Payout (Optional)</Label>
-                    <Input
-                      type="number"
-                      min="0"
-                      value={workflowSupervisor.bounty}
-                      onChange={(e) =>
-                        setWorkflowSupervisor((prev) => ({
-                          ...prev,
-                          bounty: e.target.value,
-                        }))
-                      }
-                      placeholder="0"
-                    />
-                  </div>
-
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between gap-2">
-                      <div>
-                        <Label>Supervisor Data Fields (Optional)</Label>
-                        <p className="text-xs text-muted-foreground">
-                          Add key/value metadata tags for supervisor export records.
-                        </p>
-                      </div>
-                      <Button type="button" variant="outline" size="sm" onClick={addWorkflowSupervisorDataField}>
-                        <Plus className="mr-2 h-4 w-4" />
-                        Add Field
-                      </Button>
-                    </div>
-
-                    {workflowSupervisorDataFields.length === 0 ? (
-                      <p className="text-xs text-muted-foreground">No supervisor data fields added.</p>
-                    ) : (
-                      <div className="space-y-2">
-                        {workflowSupervisorDataFields.map((field) => (
-                          <div key={field.id} className="grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
-                            <Input
-                              value={field.key}
-                              onChange={(e) => updateWorkflowSupervisorDataField(field.id, { key: e.target.value })}
-                              placeholder="Key (e.g. internal_reference)"
-                            />
-                            <Input
-                              value={field.value}
-                              onChange={(e) => updateWorkflowSupervisorDataField(field.id, { value: e.target.value })}
-                              placeholder="Value"
-                            />
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon"
-                              onClick={() => removeWorkflowSupervisorDataField(field.id)}
-                              aria-label="Remove supervisor data field"
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </Button>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-
-		          <div className="space-y-4">
-            <h3 className="text-lg font-medium">Workflow Roles</h3>
-
-            {roles.map((role, roleIndex) => (
-              <Card key={role.client_id}>
-                <CardContent className="pt-5 sm:pt-6 space-y-4">
-                  <div className="flex items-center justify-between">
-                    <Label className="text-sm text-muted-foreground">Role {roleIndex + 1}</Label>
-                    {roles.length > 1 && (
+                  <div className="flex items-center gap-2">
+                    <Badge variant="outline">
+                      {roles.length} {roles.length === 1 ? "Role" : "Roles"}
+                    </Badge>
+                    <CollapsibleTrigger asChild>
                       <Button
                         type="button"
                         variant="ghost"
-                        size="sm"
-                        onClick={() => setRoles((prev) => prev.filter((item) => item.client_id !== role.client_id))}
+                        size="icon"
+                        aria-label={workflowRolesOpen ? "Collapse workflow roles" : "Expand workflow roles"}
                       >
-                        <Trash2 className="h-4 w-4" />
+                        <ChevronDown className={cn("h-4 w-4 transition-transform", !workflowRolesOpen && "-rotate-90")} />
                       </Button>
-                    )}
+                    </CollapsibleTrigger>
                   </div>
+                </div>
+              </CardHeader>
+              <CollapsibleContent>
+                <CardContent className="space-y-4">
+                  {roles.map((role, roleIndex) => {
+                    const roleCardOpen = nestedCardOpenByDefault(roleCardOpenState, role.client_id)
 
-                  <div className="space-y-2">
-                    <Label>Role Title</Label>
-                    <Input
-                      value={role.title}
-                      onChange={(e) => updateRole(role.client_id, { title: e.target.value })}
-                      placeholder="Field verifier"
-                    />
-                  </div>
+                    return (
+                      <Card key={role.client_id}>
+                        <Collapsible
+                          open={roleCardOpen}
+                          onOpenChange={(open) =>
+                            setRoleCardOpenState((prev) => ({
+                              ...prev,
+                              [role.client_id]: open,
+                            }))
+                          }
+                        >
+	                          <CardHeader
+	                            className="cursor-pointer pb-3"
+	                            onClick={(event) => {
+	                              if (didClickInteractiveElement(event)) return
+	                              setRoleCardOpenState((prev) => ({
+	                                ...prev,
+	                                [role.client_id]: !roleCardOpen,
+	                              }))
+	                            }}
+	                          >
+                            <div className="flex items-center justify-between gap-3">
+                              <div className="min-w-0">
+                                <CardTitle className="truncate text-sm">
+                                  Role {roleIndex + 1}: {role.title.trim() || "Untitled role"}
+                                </CardTitle>
+                                <CardDescription>
+                                  {role.required_credentials.length}{" "}
+                                  {role.required_credentials.length === 1 ? "credential" : "credentials"} required
+                                </CardDescription>
+                              </div>
+                              <div className="flex items-center gap-1">
+                                {roles.length > 1 && (
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => setRoles((prev) => prev.filter((item) => item.client_id !== role.client_id))}
+                                    aria-label={`Delete role ${roleIndex + 1}`}
+                                  >
+                                    <Trash2 className="h-4 w-4" />
+                                  </Button>
+                                )}
+                                <CollapsibleTrigger asChild>
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="icon"
+                                    aria-label={roleCardOpen ? `Collapse role ${roleIndex + 1}` : `Expand role ${roleIndex + 1}`}
+                                  >
+                                    <ChevronDown className={cn("h-4 w-4 transition-transform", !roleCardOpen && "-rotate-90")} />
+                                  </Button>
+                                </CollapsibleTrigger>
+                              </div>
+                            </div>
+                          </CardHeader>
+                          <CollapsibleContent>
+                            <CardContent className="space-y-4">
+                              <div className="space-y-2">
+                                <Label>Role Title</Label>
+                                <Input
+                                  value={role.title}
+                                  onChange={(e) => updateRole(role.client_id, { title: e.target.value })}
+                                  placeholder="Field verifier"
+                                />
+                              </div>
 
-                  <div className="space-y-2">
-                    <Label>Required Credentials</Label>
-                    {credentialTypes.length === 0 ? (
-                      <p className="text-xs text-muted-foreground">No credential types defined. Add them in the Admin panel.</p>
-                    ) : (
-                      <Select
-                        value=""
-                        onValueChange={(value) => toggleRoleCredential(role.client_id, value, true)}
-                      >
-                        <SelectTrigger>
-                          <SelectValue placeholder="Add a required credential..." />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {credentialTypes
-                            .filter((ct) => !role.required_credentials.includes(ct.value))
-                            .map((ct) => (
-                              <SelectItem key={ct.value} value={ct.value}>
-                                {ct.label}
-                              </SelectItem>
-                            ))}
-                        </SelectContent>
-                      </Select>
-                    )}
-                    {role.required_credentials.length > 0 && (
-                      <div className="flex flex-wrap gap-1.5 pt-1">
-                        {role.required_credentials.map((cred) => {
-                          const label = credentialTypes.find((ct) => ct.value === cred)?.label || cred
-                          return (
-                            <Badge key={cred} variant="secondary" className="gap-1 pr-1">
-                              {label}
-                              <button
-                                type="button"
-                                className="ml-0.5 rounded-sm opacity-70 hover:opacity-100"
-                                onClick={() => toggleRoleCredential(role.client_id, cred, false)}
-                              >
-                                <X className="h-3 w-3" />
-                              </button>
-                            </Badge>
-                          )
-                        })}
-                      </div>
-                    )}
+                              <div className="space-y-2">
+                                <Label>Required Credentials</Label>
+                                {credentialTypes.length === 0 ? (
+                                  <p className="text-xs text-muted-foreground">
+                                    No credential types defined. Add them in the Admin panel.
+                                  </p>
+                                ) : (
+                                  <Select
+                                    value=""
+                                    onValueChange={(value) => toggleRoleCredential(role.client_id, value, true)}
+                                  >
+                                    <SelectTrigger>
+                                      <SelectValue placeholder="Add a required credential..." />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      {credentialTypes
+                                        .filter((ct) => !role.required_credentials.includes(ct.value))
+                                        .map((ct) => (
+                                          <SelectItem key={ct.value} value={ct.value}>
+                                            {ct.label}
+                                          </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                  </Select>
+                                )}
+                                {role.required_credentials.length > 0 && (
+                                  <div className="flex flex-wrap gap-1.5 pt-1">
+                                    {role.required_credentials.map((cred) => {
+                                      const label = credentialTypes.find((ct) => ct.value === cred)?.label || cred
+                                      return (
+                                        <Badge key={cred} variant="secondary" className="gap-1 pr-1">
+                                          {label}
+                                          <button
+                                            type="button"
+                                            className="ml-0.5 rounded-sm opacity-70 hover:opacity-100"
+                                            onClick={() => toggleRoleCredential(role.client_id, cred, false)}
+                                          >
+                                            <X className="h-3 w-3" />
+                                          </button>
+                                        </Badge>
+                                      )
+                                    })}
+                                  </div>
+                                )}
+                              </div>
+                            </CardContent>
+                          </CollapsibleContent>
+                        </Collapsible>
+                      </Card>
+                    )
+                  })}
+
+                  <div className="flex justify-end">
+                    <Button type="button" variant="outline" onClick={() => setRoles((prev) => [...prev, createDraftRole()])}>
+                      <Plus className="h-4 w-4 mr-2" />
+                      Add Role
+                    </Button>
                   </div>
                 </CardContent>
-              </Card>
-            ))}
-
-            <div className="flex justify-end">
-              <Button type="button" variant="outline" onClick={() => setRoles((prev) => [...prev, createDraftRole()])}>
-                <Plus className="h-4 w-4 mr-2" />
-                Add Role
-              </Button>
-            </div>
-          </div>
+              </CollapsibleContent>
+            </Collapsible>
+          </Card>
 
           <div className="space-y-4">
             <h3 className="text-lg font-medium">Workflow Steps</h3>
 
-            {steps.map((step, stepIndex) => (
-              <Card key={step.id}>
-                <CardHeader className="pb-3">
-                  <div className="flex items-center justify-between">
-                    <CardTitle className="text-base">Step {stepIndex + 1}</CardTitle>
-                    {steps.length > 1 && (
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => setSteps((prev) => prev.filter((item) => item.id !== step.id))}
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
-                    )}
-                  </div>
-                </CardHeader>
-                <CardContent className="space-y-4">
+            {steps.map((step, stepIndex) => {
+              const draggingStep = dragState?.type === "step" && dragState.stepId === step.id
+              const stepCardOpen = sectionCardOpenByDefault(stepCardOpenState, step.id)
+              const stepTitle = step.title.trim() || `Step ${stepIndex + 1}`
+              const stepDropBefore =
+                dropIndicator?.type === "step" &&
+                dropIndicator.targetStepId === step.id &&
+                dropIndicator.position === "before"
+              const stepDropAfter =
+                dropIndicator?.type === "step" &&
+                dropIndicator.targetStepId === step.id &&
+                dropIndicator.position === "after"
+
+              return (
+                <div key={step.id} className="space-y-2">
+                  {stepDropBefore && <div className="h-1.5 rounded-full bg-[#eb6c6c] shadow-sm" />}
+                  <Card
+                    data-reorder-preview
+                    data-drop-step-id={step.id}
+                    className={cn(draggingStep && "opacity-60 ring-2 ring-[#eb6c6c]/50")}
+                    onDragOver={(event) => {
+                      if (dragState?.type !== "step" || dragState.stepId === step.id) return
+                      event.preventDefault()
+                      const position = dropPositionFromPointer(event)
+                      setDropIndicator({ type: "step", targetStepId: step.id, position })
+                    }}
+                    onDragLeave={(event) => {
+                      const relatedTarget = event.relatedTarget as Node | null
+                      if (relatedTarget && event.currentTarget.contains(relatedTarget)) return
+                      setDropIndicator((prev) => {
+                        if (prev?.type !== "step" || prev.targetStepId !== step.id) return prev
+                        return null
+                      })
+                    }}
+                    onDrop={(event) => {
+                      if (dragState?.type !== "step" || dragState.stepId === step.id) return
+                      event.preventDefault()
+                      const position =
+                        dropIndicator?.type === "step" && dropIndicator.targetStepId === step.id
+                          ? dropIndicator.position
+                          : dropPositionFromPointer(event)
+                      reorderSteps(dragState.stepId, step.id, position)
+                      endReorderDrag()
+                    }}
+                  >
+                    <Collapsible
+                      open={stepCardOpen}
+                      onOpenChange={(open) => {
+                        setStepCardOpenState((prev) => ({
+                          ...prev,
+                          [step.id]: open,
+                        }))
+                        if (!open) return
+                        setWorkItemCardOpenState((prev) => {
+                          const next = { ...prev }
+                          step.work_items.forEach((item) => {
+                            next[workItemCollapseKey(step.id, item.id)] = true
+                          })
+                          return next
+                        })
+                      }}
+                    >
+	                      <CardHeader
+	                        className="cursor-pointer pb-3"
+	                        onClick={(event) => {
+	                          if (didClickInteractiveElement(event)) return
+                          const nextOpen = !stepCardOpen
+	                          setStepCardOpenState((prev) => ({
+	                            ...prev,
+	                            [step.id]: nextOpen,
+	                          }))
+                          if (!nextOpen) return
+                          setWorkItemCardOpenState((prev) => {
+                            const next = { ...prev }
+                            step.work_items.forEach((item) => {
+                              next[workItemCollapseKey(step.id, item.id)] = true
+                            })
+                            return next
+                          })
+	                        }}
+	                      >
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="flex min-w-0 items-center gap-2">
+                            <button
+                              type="button"
+                              aria-label={`Drag step ${stepIndex + 1}`}
+                              className="inline-flex h-8 w-8 touch-none items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted cursor-grab active:cursor-grabbing"
+                              draggable
+                              onDragStart={(event) => beginReorderDrag(event, { type: "step", stepId: step.id })}
+                              onDragEnd={endReorderDrag}
+                              onPointerDown={(event) => beginTouchReorderDrag(event, { type: "step", stepId: step.id })}
+                              onPointerMove={updateTouchReorderDrag}
+                              onPointerUp={completeTouchReorderDrag}
+                              onPointerCancel={cancelTouchReorderDrag}
+                            >
+                              <GripVertical className="h-4 w-4" />
+                            </button>
+                            <div className="min-w-0">
+                              <CardTitle className="truncate text-base">{stepTitle}</CardTitle>
+                              <CardDescription>Step {stepIndex + 1}</CardDescription>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            {steps.length > 1 && (
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => setSteps((prev) => prev.filter((item) => item.id !== step.id))}
+                                aria-label={`Delete step ${stepIndex + 1}`}
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            )}
+                            <CollapsibleTrigger asChild>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                aria-label={stepCardOpen ? `Collapse step ${stepIndex + 1}` : `Expand step ${stepIndex + 1}`}
+                              >
+                                <ChevronDown className={cn("h-4 w-4 transition-transform", !stepCardOpen && "-rotate-90")} />
+                              </Button>
+                            </CollapsibleTrigger>
+                          </div>
+                        </div>
+                      </CardHeader>
+                      <CollapsibleContent>
+                        <CardContent className="space-y-4">
                   <div className="grid gap-4 md:grid-cols-2">
                     <div className="space-y-2 md:col-span-2">
                       <Label>Step Title</Label>
@@ -1672,7 +2540,7 @@ export default function ProposerPage() {
                       />
                     </div>
                     <div className="space-y-2 md:col-span-2">
-                      <Label>Step Description</Label>
+                      <Label>Step Description (Optional)</Label>
                       <Textarea
                         value={step.description}
                         onChange={(e) => updateStep(step.id, { description: e.target.value })}
@@ -1716,17 +2584,132 @@ export default function ProposerPage() {
                   <div className="space-y-4">
                     <Label>Work Items</Label>
 
-                    {step.work_items.map((item, itemIndex) => (
-                      <Card key={item.id}>
-                        <CardContent className="pt-4 space-y-3">
-                          <div className="flex items-center justify-between">
-                            <Label className="text-sm text-muted-foreground">Item {itemIndex + 1}</Label>
-                            <Button type="button" variant="ghost" size="sm" onClick={() => removeWorkItem(step.id, item.id)}>
-                              <Trash2 className="h-4 w-4" />
-                            </Button>
-                          </div>
+                    {step.work_items.map((item, itemIndex) => {
+                      const draggingItem =
+                        dragState?.type === "work-item" &&
+                        dragState.stepId === step.id &&
+                        dragState.itemId === item.id
+                      const itemCollapseId = workItemCollapseKey(step.id, item.id)
+                      const itemCardOpen = nestedCardOpenByDefault(workItemCardOpenState, itemCollapseId)
+                      const itemTitle = item.title.trim() || `Item ${itemIndex + 1}`
+                      const workItemDropBefore =
+                        dropIndicator?.type === "work-item" &&
+                        dropIndicator.stepId === step.id &&
+                        dropIndicator.targetItemId === item.id &&
+                        dropIndicator.position === "before"
+                      const workItemDropAfter =
+                        dropIndicator?.type === "work-item" &&
+                        dropIndicator.stepId === step.id &&
+                        dropIndicator.targetItemId === item.id &&
+                        dropIndicator.position === "after"
 
-                          <Input
+                      return (
+                        <div key={item.id} className="space-y-1.5">
+                          {workItemDropBefore && <div className="h-1.5 rounded-full bg-[#eb6c6c] shadow-sm" />}
+                          <Card
+                            data-reorder-preview
+                            data-drop-work-item-step-id={step.id}
+                            data-drop-work-item-id={item.id}
+                            className={cn(draggingItem && "opacity-60 ring-2 ring-[#eb6c6c]/40")}
+                            onDragOver={(event) => {
+                              if (dragState?.type !== "work-item" || dragState.stepId !== step.id || dragState.itemId === item.id) return
+                              event.preventDefault()
+                              event.stopPropagation()
+                              const position = dropPositionFromPointer(event)
+                              setDropIndicator({ type: "work-item", stepId: step.id, targetItemId: item.id, position })
+                            }}
+                            onDragLeave={(event) => {
+                              const relatedTarget = event.relatedTarget as Node | null
+                              if (relatedTarget && event.currentTarget.contains(relatedTarget)) return
+                              setDropIndicator((prev) => {
+                                if (prev?.type !== "work-item" || prev.stepId !== step.id || prev.targetItemId !== item.id) return prev
+                                return null
+                              })
+                            }}
+                            onDrop={(event) => {
+                              if (dragState?.type !== "work-item" || dragState.stepId !== step.id || dragState.itemId === item.id) return
+                              event.preventDefault()
+                              event.stopPropagation()
+                              const position =
+                                dropIndicator?.type === "work-item" &&
+                                dropIndicator.stepId === step.id &&
+                                dropIndicator.targetItemId === item.id
+                                  ? dropIndicator.position
+                                  : dropPositionFromPointer(event)
+                              reorderWorkItems(step.id, dragState.itemId, item.id, position)
+                              endReorderDrag()
+                            }}
+                          >
+                            <Collapsible
+                              open={itemCardOpen}
+                              onOpenChange={(open) =>
+                                setWorkItemCardOpenState((prev) => ({
+                                  ...prev,
+                                  [itemCollapseId]: open,
+                                }))
+                              }
+                            >
+	                              <CardHeader
+	                                className="cursor-pointer pb-3 pt-4"
+	                                onClick={(event) => {
+	                                  if (didClickInteractiveElement(event)) return
+	                                  setWorkItemCardOpenState((prev) => ({
+	                                    ...prev,
+	                                    [itemCollapseId]: !itemCardOpen,
+	                                  }))
+	                                }}
+	                              >
+                                <div className="flex items-center justify-between gap-3">
+                                  <div className="flex min-w-0 items-center gap-2">
+                                    <button
+                                      type="button"
+                                      aria-label={`Drag work item ${itemIndex + 1}`}
+                                      className="inline-flex h-7 w-7 touch-none items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted cursor-grab active:cursor-grabbing"
+                                      draggable
+                                      onDragStart={(event) =>
+                                        beginReorderDrag(event, { type: "work-item", stepId: step.id, itemId: item.id })
+                                      }
+                                      onDragEnd={endReorderDrag}
+                                      onPointerDown={(event) =>
+                                        beginTouchReorderDrag(event, { type: "work-item", stepId: step.id, itemId: item.id })
+                                      }
+                                      onPointerMove={updateTouchReorderDrag}
+                                      onPointerUp={completeTouchReorderDrag}
+                                      onPointerCancel={cancelTouchReorderDrag}
+                                    >
+                                      <GripVertical className="h-4 w-4" />
+                                    </button>
+                                    <div className="min-w-0">
+                                      <CardTitle className="truncate text-sm">{itemTitle}</CardTitle>
+                                      <CardDescription>Item {itemIndex + 1}</CardDescription>
+                                    </div>
+                                  </div>
+                                  <div className="flex items-center gap-1">
+                                    <Button
+                                      type="button"
+                                      variant="ghost"
+                                      size="sm"
+                                      onClick={() => removeWorkItem(step.id, item.id)}
+                                      aria-label={`Delete item ${itemIndex + 1}`}
+                                    >
+                                      <Trash2 className="h-4 w-4" />
+                                    </Button>
+                                    <CollapsibleTrigger asChild>
+                                      <Button
+                                        type="button"
+                                        variant="ghost"
+                                        size="icon"
+                                        aria-label={itemCardOpen ? `Collapse item ${itemIndex + 1}` : `Expand item ${itemIndex + 1}`}
+                                      >
+                                        <ChevronDown className={cn("h-4 w-4 transition-transform", !itemCardOpen && "-rotate-90")} />
+                                      </Button>
+                                    </CollapsibleTrigger>
+                                  </div>
+                                </div>
+                              </CardHeader>
+                              <CollapsibleContent>
+                                <CardContent className="space-y-3">
+                                  <Input
                             value={item.title}
                             onChange={(e) => updateWorkItem(step.id, item.id, { title: e.target.value })}
                             placeholder="Item title"
@@ -1857,9 +2840,123 @@ export default function ProposerPage() {
                             <div className="space-y-3 border rounded-md p-3 bg-secondary/50">
                               <Label className="text-sm">Dropdown Options</Label>
 
-                              {item.dropdown_options.map((option, optionIndex) => (
-                                <div key={`${item.id}-${optionIndex}`} className="space-y-2 rounded-md border p-3">
-                                  <div className="grid gap-2 md:grid-cols-[1fr,auto,auto]">
+                              {item.dropdown_options.map((option, optionIndex) => {
+                                const draggingOption =
+                                  dragState?.type === "dropdown-option" &&
+                                  dragState.stepId === step.id &&
+                                  dragState.itemId === item.id &&
+                                  dragState.optionIndex === optionIndex
+                                const optionDropBefore =
+                                  dropIndicator?.type === "dropdown-option" &&
+                                  dropIndicator.stepId === step.id &&
+                                  dropIndicator.itemId === item.id &&
+                                  dropIndicator.targetOptionIndex === optionIndex &&
+                                  dropIndicator.position === "before"
+                                const optionDropAfter =
+                                  dropIndicator?.type === "dropdown-option" &&
+                                  dropIndicator.stepId === step.id &&
+                                  dropIndicator.itemId === item.id &&
+                                  dropIndicator.targetOptionIndex === optionIndex &&
+                                  dropIndicator.position === "after"
+
+                                return (
+                                <div key={`${item.id}-${optionIndex}`} className="space-y-1.5">
+                                  {optionDropBefore && <div className="h-1 rounded-full bg-[#eb6c6c] shadow-sm" />}
+                                  <div
+                                    data-reorder-preview
+                                    data-drop-option-step-id={step.id}
+                                    data-drop-option-item-id={item.id}
+                                    data-drop-option-index={optionIndex}
+                                    className={cn(
+                                      "space-y-2 rounded-md border p-3",
+                                      draggingOption && "opacity-60 ring-2 ring-[#eb6c6c]/40",
+                                    )}
+                                    onDragOver={(event) => {
+                                      if (
+                                        dragState?.type !== "dropdown-option" ||
+                                        dragState.stepId !== step.id ||
+                                        dragState.itemId !== item.id ||
+                                        dragState.optionIndex === optionIndex
+                                      ) {
+                                        return
+                                      }
+                                      event.preventDefault()
+                                      event.stopPropagation()
+                                      const position = dropPositionFromPointer(event)
+                                      setDropIndicator({
+                                        type: "dropdown-option",
+                                        stepId: step.id,
+                                        itemId: item.id,
+                                        targetOptionIndex: optionIndex,
+                                        position,
+                                      })
+                                    }}
+                                    onDragLeave={(event) => {
+                                      const relatedTarget = event.relatedTarget as Node | null
+                                      if (relatedTarget && event.currentTarget.contains(relatedTarget)) return
+                                      setDropIndicator((prev) => {
+                                        if (
+                                          prev?.type !== "dropdown-option" ||
+                                          prev.stepId !== step.id ||
+                                          prev.itemId !== item.id ||
+                                          prev.targetOptionIndex !== optionIndex
+                                        ) {
+                                          return prev
+                                        }
+                                        return null
+                                      })
+                                    }}
+                                    onDrop={(event) => {
+                                      if (
+                                        dragState?.type !== "dropdown-option" ||
+                                        dragState.stepId !== step.id ||
+                                        dragState.itemId !== item.id ||
+                                        dragState.optionIndex === optionIndex
+                                      ) {
+                                        return
+                                      }
+                                      event.preventDefault()
+                                      event.stopPropagation()
+                                      const position =
+                                        dropIndicator?.type === "dropdown-option" &&
+                                        dropIndicator.stepId === step.id &&
+                                        dropIndicator.itemId === item.id &&
+                                        dropIndicator.targetOptionIndex === optionIndex
+                                          ? dropIndicator.position
+                                          : dropPositionFromPointer(event)
+                                      reorderDropdownOptions(step.id, item.id, dragState.optionIndex, optionIndex, position)
+                                      endReorderDrag()
+                                    }}
+                                  >
+                                  <div className="grid gap-2 md:grid-cols-[auto,1fr,auto,auto]">
+                                    <button
+                                      type="button"
+                                      aria-label={`Drag dropdown option ${optionIndex + 1}`}
+                                      className="inline-flex h-9 w-9 touch-none items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted cursor-grab active:cursor-grabbing"
+                                      draggable
+                                      onDragStart={(event) =>
+                                        beginReorderDrag(event, {
+                                          type: "dropdown-option",
+                                          stepId: step.id,
+                                          itemId: item.id,
+                                          optionIndex,
+                                        })
+                                      }
+                                      onDragEnd={endReorderDrag}
+                                      onPointerDown={(event) =>
+                                        beginTouchReorderDrag(event, {
+                                          type: "dropdown-option",
+                                          stepId: step.id,
+                                          itemId: item.id,
+                                          optionIndex,
+                                        })
+                                      }
+                                      onPointerMove={updateTouchReorderDrag}
+                                      onPointerUp={completeTouchReorderDrag}
+                                      onPointerCancel={cancelTouchReorderDrag}
+                                    >
+                                      <GripVertical className="h-4 w-4" />
+                                    </button>
                                     <Input
                                       value={option.label}
                                       onChange={(e) => updateDropdownOption(step.id, item.id, optionIndex, { label: e.target.value })}
@@ -1924,8 +3021,11 @@ export default function ProposerPage() {
                                       </Button>
                                     </div>
                                   </div>
+                                  </div>
+                                  {optionDropAfter && <div className="h-1 rounded-full bg-[#eb6c6c] shadow-sm" />}
                                 </div>
-                              ))}
+                                )
+                              })}
 
                               <div className="flex justify-end">
                                 <Button type="button" variant="outline" size="sm" onClick={() => addDropdownOption(step.id, item.id)}>
@@ -1935,9 +3035,14 @@ export default function ProposerPage() {
                               </div>
                             </div>
                           )}
-                        </CardContent>
-                      </Card>
-                    ))}
+                                </CardContent>
+                              </CollapsibleContent>
+                            </Collapsible>
+                          </Card>
+                        {workItemDropAfter && <div className="h-1.5 rounded-full bg-[#eb6c6c] shadow-sm" />}
+                      </div>
+                      )
+                    })}
 
                     <div className="flex justify-end">
                       <Button type="button" variant="outline" size="sm" onClick={() => addWorkItem(step.id)}>
@@ -1946,9 +3051,14 @@ export default function ProposerPage() {
                       </Button>
                     </div>
                   </div>
-                </CardContent>
-              </Card>
-            ))}
+                        </CardContent>
+                      </CollapsibleContent>
+                    </Collapsible>
+                  </Card>
+                {stepDropAfter && <div className="h-1.5 rounded-full bg-[#eb6c6c] shadow-sm" />}
+              </div>
+              )
+            })}
 
             <div className="flex justify-end">
               <Button type="button" variant="outline" onClick={() => setSteps((prev) => [...prev, createDraftStep()])}>
@@ -1974,9 +3084,14 @@ export default function ProposerPage() {
                       Submitting...
                     </>
                   ) : (
-                    "Submit Workflow Proposal"
+                    isEditProposalMode ? "Submit Workflow Edit Proposal" : "Submit Workflow Proposal"
                   )}
                 </Button>
+                {isEditProposalMode && (
+                  <Button type="button" variant="outline" onClick={cancelWorkflowEditProposalDraft} disabled={submitting}>
+                    Cancel Edit Mode
+                  </Button>
+                )}
               </div>
             </CardContent>
           </Card>
@@ -2063,7 +3178,7 @@ export default function ProposerPage() {
                             View Details
                           </Button>
 
-                          {(workflow.status === "pending" || workflow.status === "rejected" || workflow.status === "expired") && (
+                          {(workflow.status === "pending" || workflow.status === "rejected" || workflow.status === "expired" || workflow.status === "failed" || workflow.status === "skipped") && (
                             <Button
                               className="w-full sm:w-auto"
                               variant="outline"
@@ -2118,20 +3233,34 @@ export default function ProposerPage() {
         loading={detailLoading}
         disableStepPagination
         hideSubmissionData
-        renderBottomActions={(workflow) =>
-          canSaveTemplateFromWorkflow(workflow) ? (
-            <div className="flex justify-end">
-              <Button
-                className="w-full sm:w-auto"
-                variant="outline"
-                onClick={() => openSaveFromWorkflowModal(workflow)}
-                disabled={saveFromWorkflowSubmitting}
-              >
-                Save as Template
-              </Button>
+        renderBottomActions={(workflow) => {
+          const canSaveTemplate = canSaveTemplateFromWorkflow(workflow)
+          const canEditWorkflow = canProposeWorkflowEditFromWorkflow(workflow)
+          if (!canSaveTemplate && !canEditWorkflow) return null
+
+          return (
+            <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
+              {canEditWorkflow && (
+                <Button
+                  className="w-full sm:w-auto"
+                  onClick={() => beginWorkflowEditProposal(workflow)}
+                >
+                  Edit Workflow
+                </Button>
+              )}
+              {canSaveTemplate && (
+                <Button
+                  className="w-full sm:w-auto"
+                  variant="outline"
+                  onClick={() => openSaveFromWorkflowModal(workflow)}
+                  disabled={saveFromWorkflowSubmitting}
+                >
+                  Save as Template
+                </Button>
+              )}
             </div>
-          ) : null
-        }
+          )
+        }}
       />
 
       <Dialog open={deleteConfirmOpen} onOpenChange={setDeleteConfirmOpen}>

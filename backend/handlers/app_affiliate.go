@@ -60,7 +60,7 @@ func (a *AppService) RequestAffiliateStatus(w http.ResponseWriter, r *http.Reque
     <td style="padding:12px 0; font-size:13px; color:#6b7280;">Organization</td>
     <td style="padding:12px 0; font-size:13px; color:#111827;">%s</td>
   </tr>
-</table>`, affiliate.UserId, affiliate.Organization),
+</table>`, utils.EscapeEmailHTML(affiliate.UserId), utils.EscapeEmailHTML(affiliate.Organization)),
 	)
 
 	w.WriteHeader(http.StatusCreated)

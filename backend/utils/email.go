@@ -3,6 +3,7 @@ package utils
 import (
 	"context"
 	"fmt"
+	"html"
 	"net/http"
 	"os"
 	"strings"
@@ -107,13 +108,21 @@ func BuildStyledEmailWithSections(title, subtitle, sectionsHTML string, footerTe
   </body>
 </html>`
 
+	escapedTitle := html.EscapeString(title)
+	escapedSubtitle := html.EscapeString(subtitle)
+	escapedFooter := html.EscapeString(footerText)
+
 	replacer := strings.NewReplacer(
-		"{{TITLE}}", title,
-		"{{SUBTITLE}}", subtitle,
+		"{{TITLE}}", escapedTitle,
+		"{{SUBTITLE}}", escapedSubtitle,
 		"{{SECTIONS}}", sectionsHTML,
-		"{{FOOTER}}", footerText,
+		"{{FOOTER}}", escapedFooter,
 	)
 	return replacer.Replace(template)
+}
+
+func EscapeEmailHTML(value string) string {
+	return html.EscapeString(value)
 }
 
 func (es *EmailSender) AddAuthorizedRecipient(toEmail string) error {

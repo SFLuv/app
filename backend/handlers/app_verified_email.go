@@ -58,7 +58,7 @@ func (a *AppService) sendUserEmailVerificationEmail(toEmail string, token string
 </table>
 <p style="margin:14px 0 0; font-size:12px; color:#6b7280;">
   If you did not request this, you can ignore this email.
-</p>`, toEmail, verifyURL, expiryLabel),
+</p>`, utils.EscapeEmailHTML(toEmail), utils.EscapeEmailHTML(verifyURL), utils.EscapeEmailHTML(expiryLabel)),
 	)
 
 	return emailSender.SendEmail(toEmail, "SFLuv User", title, htmlContent, utils.NotificationFromEmail(), "SFLuv")

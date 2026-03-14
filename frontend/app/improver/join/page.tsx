@@ -40,7 +40,7 @@ const findCredentialMatch = (role: string, types: GlobalCredentialType[]) => {
 export default function ImproverJoinPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
-  const { status, login, user, authFetch, setImprover, updateUser } = useApp()
+  const { status, login, user, authFetch, setImprover, updateUser, ensurePrimarySmartWallet } = useApp()
 
   const roleParam = (searchParams.get("role") || "").trim()
 
@@ -146,6 +146,11 @@ export default function ImproverJoinPage() {
     }
     setSubmitting(true)
     try {
+      const hasSmartWalletIndexZero = await ensurePrimarySmartWallet()
+      if (!hasSmartWalletIndexZero) {
+        throw new Error("Primary smart wallet is still initializing. Please wait a few seconds and try again.")
+      }
+
       const improverRes = await authFetch("/improvers/request", {
         method: "POST",
         body: JSON.stringify({

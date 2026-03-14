@@ -360,10 +360,10 @@ func (a *AppService) PonderHookHandler(w http.ResponseWriter, r *http.Request) {
                 </div>
               </td>
             </tr>`,
-			formattedAmount,
-			tx.From,
-			toLine,
-			tx.Hash,
+			utils.EscapeEmailHTML(formattedAmount),
+			utils.EscapeEmailHTML(tx.From),
+			utils.EscapeEmailHTML(toLine),
+			utils.EscapeEmailHTML(tx.Hash),
 		)
 		htmlContent := utils.BuildStyledEmailWithSections(
 			"SFLuv Transaction Alert",
@@ -373,7 +373,7 @@ func (a *AppService) PonderHookHandler(w http.ResponseWriter, r *http.Request) {
 		)
 
 		err = sender.SendEmail(
-			string(l.Data),
+			strings.TrimSpace(string(l.Data)),
 			"Merchant",
 			subject,
 			htmlContent,
