@@ -165,10 +165,10 @@ export function WalletDetailModal({ wallet, isOpen, onClose, onDisconnect }: Wal
                 {getWalletDisplayName(wallet.name)}
               </DialogTitle>
               <DialogDescription className="flex items-center gap-2">
-                <Badge variant="outline" className="bg-secondary text-black dark:text-white">
+                <Badge variant="outline" className="bg-secondary/70 text-[10px] sm:text-xs">
                   {getNetworkDisplayName(wallet.type)}
                 </Badge>
-                <Badge variant="outline" className="bg-secondary text-black dark:text-white">
+                <Badge variant="outline" className="bg-secondary/70 text-[10px] sm:text-xs">
                   {wallet.name}
                 </Badge>
               </DialogDescription>

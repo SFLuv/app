@@ -21,11 +21,11 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { WorkflowDetailsModal } from "@/components/workflows/workflow-details-modal"
-import { buildCredentialLabelMap, formatCredentialLabel } from "@/lib/credential-labels"
+import { buildCredentialBadgeDataUrl, buildCredentialLabelMap, formatCredentialLabel } from "@/lib/credential-labels"
 import { formatStatusLabel } from "@/lib/status-labels"
 import { formatWorkflowDisplayStatus } from "@/lib/workflow-status"
 import { cn } from "@/lib/utils"
-import { AlertTriangle, CheckCircle2, ChevronLeft, ChevronRight, ChevronsUpDown, ClipboardCheck, Search, Wrench } from "lucide-react"
+import { AlertTriangle, CheckCircle2, ChevronLeft, ChevronRight, ChevronsUpDown, ClipboardCheck, Search, Wrench, Award } from "lucide-react"
 import { usePathname, useRouter, useSearchParams } from "next/navigation"
 import { CredentialRequest } from "@/types/issuer"
 import {
@@ -70,13 +70,14 @@ type WorkflowSeriesCardGroup = {
   workflows: Workflow[]
 }
 
-type ImproverTab = "my-workflows" | "workflow-board" | "unpaid-workflows" | "credentials" | "absence"
+type ImproverTab = "my-workflows" | "workflow-board" | "unpaid-workflows" | "my-badges" | "credentials" | "absence"
 
 const isImproverTab = (value: string | null): value is ImproverTab => {
   return (
     value === "my-workflows"
     || value === "workflow-board"
     || value === "unpaid-workflows"
+    || value === "my-badges"
     || value === "credentials"
     || value === "absence"
   )
@@ -102,6 +103,7 @@ const maxWorkflowPhotoUploadBytes = 2 * 1024 * 1024
 const maxWorkflowPhotoUploadLabel = "2MB"
 const minWorkflowPhotoResizeDimension = 640
 const maxWorkflowPhotoInitialDimension = 4096
+const myBadgesPageSize = 5
 
 const workflowPhotoAspectRatios: Record<WorkflowPhotoAspectRatio, number> = {
   vertical: 3 / 4,
@@ -297,6 +299,8 @@ export default function ImproverPage() {
   } | null>(null)
   const [seriesCardIndexByKey, setSeriesCardIndexByKey] = useState<Record<string, number>>({})
   const [downloadingPhotoId, setDownloadingPhotoId] = useState<string | null>(null)
+  const [myBadgesPage, setMyBadgesPage] = useState<number>(0)
+  const [badgePreview, setBadgePreview] = useState<{ label: string; imageUrl: string } | null>(null)
   const [activeTab, setActiveTab] = useState<ImproverTab>(isImproverTab(tabFromQuery) ? tabFromQuery : "my-workflows")
   const [boardSearch, setBoardSearch] = useState<string>(searchParams.get("board_search") || "")
   const [myWorkflowsSearch, setMyWorkflowsSearch] = useState<string>(searchParams.get("my_workflows_search") || "")
@@ -547,6 +551,32 @@ export default function ImproverPage() {
     [credentialLabelMap],
   )
 
+  const myBadgeItems = useMemo(() => {
+    const credentialTypeByValue = new Map<string, GlobalCredentialType>()
+    credentialTypes.forEach((credentialType) => credentialTypeByValue.set(credentialType.value, credentialType))
+
+    return activeCredentials
+      .map((credential) => {
+        const credentialType = credentialTypeByValue.get(credential)
+        return {
+          credential,
+          label: getCredentialLabel(credential),
+          badgeUrl: buildCredentialBadgeDataUrl(credentialType),
+        }
+      })
+      .sort((a, b) => a.label.localeCompare(b.label))
+  }, [activeCredentials, credentialTypes, getCredentialLabel])
+
+  const myBadgesTotalPages = useMemo(
+    () => Math.max(1, Math.ceil(myBadgeItems.length / myBadgesPageSize)),
+    [myBadgeItems.length],
+  )
+
+  const paginatedMyBadgeItems = useMemo(() => {
+    const start = myBadgesPage * myBadgesPageSize
+    return myBadgeItems.slice(start, start + myBadgesPageSize)
+  }, [myBadgeItems, myBadgesPage])
+
   useEffect(() => {
     if (requestableCredentialTypes.length === 0) {
       if (credentialRequestType !== "") setCredentialRequestType("")
@@ -558,6 +588,13 @@ export default function ImproverPage() {
       setCredentialRequestType(requestableCredentialTypes[0].value)
     }
   }, [credentialRequestType, requestableCredentialTypes])
+
+  useEffect(() => {
+    setMyBadgesPage((prev) => {
+      const maxPage = Math.max(0, myBadgesTotalPages - 1)
+      return prev > maxPage ? maxPage : prev
+    })
+  }, [myBadgesTotalPages])
 
   type RecurringClaimOption = {
     key: string
@@ -2452,10 +2489,11 @@ export default function ImproverPage() {
         }}
         className="space-y-4"
       >
-        <TabsList className="grid h-auto w-full grid-cols-1 gap-2 p-1 sm:grid-cols-2 lg:grid-cols-3">
+        <TabsList className="grid h-auto w-full grid-cols-1 gap-2 p-1 sm:grid-cols-2 lg:grid-cols-6">
           <TabsTrigger value="my-workflows">My Workflows</TabsTrigger>
           <TabsTrigger value="workflow-board">Workflow Board</TabsTrigger>
           <TabsTrigger value="unpaid-workflows">Unpaid Workflows</TabsTrigger>
+          <TabsTrigger value="my-badges">My Badges</TabsTrigger>
           <TabsTrigger value="credentials">Credentials</TabsTrigger>
           <TabsTrigger value="absence">Absence Coverage</TabsTrigger>
         </TabsList>
@@ -2751,6 +2789,84 @@ export default function ImproverPage() {
 	              )}
 	            </CardContent>
 	          </Card>
+	        </TabsContent>
+
+	        <TabsContent value="my-badges" className="space-y-4">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Award className="h-5 w-5" />
+                My Badges
+              </CardTitle>
+              <CardDescription>Credential badges associated with your currently active credentials.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {myBadgeItems.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No active credential badges yet.</p>
+              ) : (
+                <div className="space-y-4">
+                  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                    {paginatedMyBadgeItems.map((badge) => {
+                      const badgeCardClassName = "rounded-lg border bg-secondary/20 p-3 text-left"
+                      if (badge.badgeUrl) {
+                        const badgeUrl = badge.badgeUrl
+                        return (
+                          <button
+                            key={badge.credential}
+                            type="button"
+                            className={cn(badgeCardClassName, "transition-colors hover:bg-secondary/30 active:bg-secondary/40")}
+                            onClick={() => setBadgePreview({ label: badge.label, imageUrl: badgeUrl })}
+                          >
+                            <div className="overflow-hidden rounded-md border bg-background">
+                              <img
+                                src={badgeUrl}
+                                alt={`${badge.label} badge`}
+                                className="h-36 w-full object-cover sm:h-44"
+                              />
+                            </div>
+                            <p className="mt-3 text-sm font-medium">{badge.label}</p>
+                          </button>
+                        )
+                      }
+
+                      return (
+                        <div key={badge.credential} className={badgeCardClassName}>
+                          <div className="flex h-36 items-center justify-center rounded-md border bg-background sm:h-44">
+                            <Award className="h-8 w-8 text-muted-foreground" />
+                          </div>
+                          <p className="mt-3 text-sm font-medium">{badge.label}</p>
+                        </div>
+                      )
+                    })}
+                  </div>
+
+                  <div className="flex items-center justify-between">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setMyBadgesPage((page) => Math.max(0, page - 1))}
+                      disabled={myBadgesPage === 0}
+                    >
+                      <ChevronLeft className="h-4 w-4" />
+                      Previous
+                    </Button>
+                    <span className="text-sm text-muted-foreground">
+                      Page {Math.min(myBadgesPage + 1, myBadgesTotalPages)} of {myBadgesTotalPages}
+                    </span>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setMyBadgesPage((page) => page + 1)}
+                      disabled={myBadgesPage >= myBadgesTotalPages - 1}
+                    >
+                      Next
+                      <ChevronRight className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </CardContent>
+          </Card>
 	        </TabsContent>
 
 	        <TabsContent value="credentials" className="space-y-4">
@@ -3050,6 +3166,38 @@ export default function ImproverPage() {
               />
               <div className="flex justify-end">
                 <Button type="button" variant="outline" onClick={closeLocalPhotoPreview}>
+                  Close
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">Preview unavailable.</p>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={Boolean(badgePreview)}
+        onOpenChange={(open) => {
+          if (!open) {
+            setBadgePreview(null)
+          }
+        }}
+      >
+        <DialogContent className="w-[95vw] max-w-md sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>{badgePreview?.label || "Badge Preview"}</DialogTitle>
+            <DialogDescription>Tap outside or close to return to your badges.</DialogDescription>
+          </DialogHeader>
+          {badgePreview ? (
+            <div className="space-y-3">
+              <img
+                src={badgePreview.imageUrl}
+                alt={`${badgePreview.label} badge`}
+                className="max-h-[70vh] w-full rounded border object-contain bg-secondary/20"
+              />
+              <div className="flex justify-end">
+                <Button type="button" variant="outline" onClick={() => setBadgePreview(null)}>
                   Close
                 </Button>
               </div>

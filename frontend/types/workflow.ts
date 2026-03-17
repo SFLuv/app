@@ -6,7 +6,10 @@ export type CredentialType = string
 export interface GlobalCredentialType {
   value: string
   label: string
+  badge_content_type?: string | null
+  badge_data_base64?: string | null
   created_at: string
+  updated_at?: string
 }
 
 export interface WorkflowDropdownOption {

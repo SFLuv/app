@@ -1885,8 +1885,10 @@ export default function ProposerPage() {
 	                          Apply a saved template to prefill workflow fields. Workflow title and description stay manual.
 	                        </CardDescription>
 	                      </div>
-	                      <div className="flex items-center gap-2">
-	                        <Badge variant="outline">{templates.length} templates</Badge>
+	                      <div className="flex items-center gap-2 shrink-0">
+	                        <Badge variant="outline" className="shrink-0">
+	                          {templates.length} templates
+	                        </Badge>
 	                        <CollapsibleTrigger asChild>
 	                          <Button type="button" variant="ghost" size="icon" aria-label={templateLibraryOpen ? "Collapse template library" : "Expand template library"}>
 	                            <ChevronDown className={cn("h-4 w-4 transition-transform", !templateLibraryOpen && "-rotate-90")} />
@@ -2245,8 +2247,8 @@ export default function ProposerPage() {
                     <CardTitle className="text-base">Workflow Roles</CardTitle>
                     <CardDescription>Define required roles and credentials for workflow assignments.</CardDescription>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <Badge variant="outline">
+                  <div className="flex items-center gap-2 shrink-0">
+                    <Badge variant="outline" className="shrink-0">
                       {roles.length} {roles.length === 1 ? "Role" : "Roles"}
                     </Badge>
                     <CollapsibleTrigger asChild>

@@ -1,7 +1,7 @@
 import { ConnectedWallet, EIP1193Provider } from "@privy-io/react-auth";
 import { BrowserProvider, JsonRpcSigner, Signer } from "ethers";
 import { toSimpleSmartAccount, ToSimpleSmartAccountReturnType } from "permissionless/accounts";
-import { Address, createPublicClient, createWalletClient, custom, encodeFunctionData, Hex, hexToBytes, parseUnits, PublicClient } from "viem";
+import { Address, createPublicClient, createWalletClient, custom, encodeFunctionData, formatUnits, Hex, hexToBytes, parseUnits, PublicClient } from "viem";
 import { CHAIN, BYUSD_DECIMALS, HONEY_DECIMALS, SFLUV_DECIMALS, FACTORY, SFLUV_TOKEN, BYUSD_TOKEN, HONEY_TOKEN, ZAPPER_CONTRACT_ADDRESS } from "../constants";
 import { entryPoint07Address } from "viem/account-abstraction";
 import { Hash } from "viem";
@@ -125,24 +125,36 @@ export class AppWallet {
 
 
 
-  private _beforeTx = (): { wallet: ToSimpleSmartAccountReturnType<"0.7">, signer: Signer } | null => {
+  private _beforeTx(): { wallet: ToSimpleSmartAccountReturnType<"0.7">, signer: Signer } | null
+  private _beforeTx(options: { allowEOA: true }): { signer: Signer } | null
+  private _beforeTx(options?: { allowEOA?: boolean }): { wallet: ToSimpleSmartAccountReturnType<"0.7">, signer: Signer } | { signer: Signer } | null {
     if(!this.initialized) {
       console.error("wallet not yet initialized")
       return null
     }
 
-    if(!(this.type === "smartwallet")) {
-      console.error("eoa transactions not yet implemented")
-      return null
-    }
-
     if(!this.ethersSigner) {
+      console.error("signer not ready")
       return null
     }
 
-    return {
-      wallet: this.wallet as ToSimpleSmartAccountReturnType<"0.7">, signer: this.ethersSigner
+    if(this.type === "smartwallet") {
+      if(!this.wallet) {
+        console.error("smartwallet not available")
+        return null
+      }
+
+      return {
+        wallet: this.wallet as ToSimpleSmartAccountReturnType<"0.7">, signer: this.ethersSigner
+      }
     }
+
+    if (options?.allowEOA) {
+      return { signer: this.ethersSigner }
+    }
+
+    console.error("transaction type requires a smartwallet")
+    return null
   }
 
   private _execTx = async (account: ToSimpleSmartAccountReturnType<"0.7">, signer: Signer, callData: Hash, contract?: Address): Promise<TxState> => {
@@ -429,6 +441,34 @@ export class AppWallet {
         receipt.error = "eoa signer not ready"
         return receipt
       }
+      return this._submitEOATransaction(contract, callData, value)
+    }
+    catch (error) {
+      const message = error instanceof Error ? error.message : "unknown error"
+      receipt.error = `error sending transaction: ${message}`
+      console.error(error)
+      return receipt
+    }
+  }
+
+  private _submitEOATransaction = async (contract: Address, callData: Hash, value: bigint = 0n): Promise<TxState> => {
+    const receipt: TxState = {
+      sending: false,
+      error: null,
+      hash: null
+    }
+
+    if (!this.initialized || !this.address) {
+      receipt.error = "wallet not initialized"
+      return receipt
+    }
+
+    if (!this.ethersSigner) {
+      receipt.error = "eoa signer not ready"
+      return receipt
+    }
+
+    try {
       const tx = await this._withTimeout(
         this.ethersSigner.sendTransaction({
           to: contract,
@@ -1078,8 +1118,7 @@ export class AppWallet {
    }
 
   send = async (amount: bigint, to: Address): Promise<TxState | null> => {
-    const t = this._beforeTx()
-    if(!t) return null
+    if(!this._beforeTx({ allowEOA: true })) return null
 
     const callData = encodeFunctionData({
       abi: [transfer],
@@ -1087,12 +1126,15 @@ export class AppWallet {
       args: [to, amount]
     })
 
-    return this._execTx(t.wallet, t.signer, callData)
+    if (this.type === "eoa") {
+      return this._submitEOATransaction(SFLUV_TOKEN, callData)
+    }
+
+    return this._submitContractCall(SFLUV_TOKEN, callData)
   }
 
   sendBYUSD = async (amount: bigint, to: Address): Promise<TxState | null> => {
-    const t = this._beforeTx()
-    if(!t) return null
+    if(!this._beforeTx({ allowEOA: true })) return null
 
     const callData = encodeFunctionData({
       abi: [transfer],
@@ -1100,7 +1142,11 @@ export class AppWallet {
       args: [to, amount]
     })
 
-    return this._execTx(t.wallet, t.signer, callData, BYUSD_TOKEN)
+    if (this.type === "eoa") {
+      return this._submitEOATransaction(BYUSD_TOKEN, callData)
+    }
+
+    return this._submitContractCall(BYUSD_TOKEN, callData)
   }
 
   getBalance = async (token: Address): Promise<bigint | null> => {
@@ -1143,6 +1189,32 @@ export class AppWallet {
       console.error("error reading token balance", error)
       return null
     }
+  }
+
+  getGasTokenBalance = async (): Promise<bigint | null> => {
+    if(!this.initialized) return null
+    if(!this.publicClient) return null
+    if(!this.address) return null
+
+    try {
+      const balance = await this.publicClient.getBalance({
+        address: this.address
+      })
+      return balance
+    }
+    catch (error) {
+      console.error("error reading gas token balance", error)
+      return null
+    }
+  }
+
+  getGasTokenBalanceFormatted = async (): Promise<number | null> => {
+    const b = await this.getGasTokenBalance()
+    if(b === null) return null
+
+    const formatted = Number(formatUnits(b, CHAIN.nativeCurrency.decimals))
+    if (!Number.isFinite(formatted)) return null
+    return formatted
   }
 
   getSFLUVBalanceFormatted = async (): Promise<number | null> => {

@@ -14,7 +14,7 @@ import { Badge } from "@/components/ui/badge"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
-import { buildCredentialLabelMap, formatCredentialLabel } from "@/lib/credential-labels"
+import { buildCredentialBadgeDataUrl, buildCredentialLabelMap, formatCredentialLabel } from "@/lib/credential-labels"
 import { formatStatusLabel } from "@/lib/status-labels"
 import { formatWorkflowDisplayStatus } from "@/lib/workflow-status"
 import {
@@ -56,6 +56,7 @@ import {
   Search,
   ChevronLeft,
   ChevronRight,
+  Copy,
 } from "lucide-react"
 import { useLocation } from "@/context/LocationProvider"
 import { AuthedLocation, UpdateLocationApprovalRequest } from "@/types/location"
@@ -119,6 +120,10 @@ type AdminWorkflowSeriesGroup = {
   seriesId: string
   workflows: AdminWorkflowListItem[]
 }
+
+const maxCredentialBadgeUploadBytes = 2 * 1024 * 1024
+const maxCredentialBadgeUploadLabel = "2MB"
+const credentialTypesPageSize = 5
 
 export default function AdminPage() {
   const { user, wallets, authFetch, status } = useApp()
@@ -314,6 +319,16 @@ export default function AdminPage() {
   const [newCredentialValue, setNewCredentialValue] = useState<string>("")
   const [newCredentialLabel, setNewCredentialLabel] = useState<string>("")
   const [credentialTypeSaving, setCredentialTypeSaving] = useState<boolean>(false)
+  const [credentialTypeSearch, setCredentialTypeSearch] = useState<string>("")
+  const [credentialTypePage, setCredentialTypePage] = useState<number>(0)
+  const [credentialTypeModalOpen, setCredentialTypeModalOpen] = useState<boolean>(false)
+  const [selectedCredentialType, setSelectedCredentialType] = useState<GlobalCredentialType | null>(null)
+  const [credentialTypeDraftLabel, setCredentialTypeDraftLabel] = useState<string>("")
+  const [credentialTypeDraftBadgeDataBase64, setCredentialTypeDraftBadgeDataBase64] = useState<string>("")
+  const [credentialTypeDraftBadgeContentType, setCredentialTypeDraftBadgeContentType] = useState<string>("")
+  const [credentialTypeDraftClearBadge, setCredentialTypeDraftClearBadge] = useState<boolean>(false)
+  const [credentialTypeModalSaving, setCredentialTypeModalSaving] = useState<boolean>(false)
+  const [credentialTypeModalError, setCredentialTypeModalError] = useState<string>("")
 
   // Workflows (admin)
   const [adminWorkflows, setAdminWorkflows] = useState<AdminWorkflowListItem[]>([])
@@ -525,6 +540,39 @@ export default function AdminPage() {
     if (issuerStatusFilter === "all") return issuerRequests
     return issuerRequests.filter((issuer) => issuer.status === issuerStatusFilter)
   }, [issuerRequests, issuerStatusFilter])
+
+  const filteredCredentialTypes = useMemo(() => {
+    const search = credentialTypeSearch.trim().toLowerCase()
+    if (!search) return credentialTypes
+    return credentialTypes.filter((credentialType) => {
+      const label = credentialType.label.toLowerCase()
+      const slug = credentialType.value.toLowerCase()
+      return label.includes(search) || slug.includes(search)
+    })
+  }, [credentialTypeSearch, credentialTypes])
+
+  const credentialTypesTotalPages = useMemo(
+    () => Math.max(1, Math.ceil(filteredCredentialTypes.length / credentialTypesPageSize)),
+    [filteredCredentialTypes.length],
+  )
+
+  const paginatedCredentialTypes = useMemo(() => {
+    const start = credentialTypePage * credentialTypesPageSize
+    return filteredCredentialTypes.slice(start, start + credentialTypesPageSize)
+  }, [credentialTypePage, filteredCredentialTypes])
+
+  const credentialTypeDraftBadgePreview = useMemo(() => {
+    if (credentialTypeDraftClearBadge) return null
+    if (credentialTypeDraftBadgeDataBase64 && credentialTypeDraftBadgeContentType) {
+      return `data:${credentialTypeDraftBadgeContentType};base64,${credentialTypeDraftBadgeDataBase64}`
+    }
+    return buildCredentialBadgeDataUrl(selectedCredentialType)
+  }, [
+    credentialTypeDraftBadgeContentType,
+    credentialTypeDraftBadgeDataBase64,
+    credentialTypeDraftClearBadge,
+    selectedCredentialType,
+  ])
 
   const groupedAdminWorkflows = useMemo<AdminWorkflowSeriesGroup[]>(() => {
     const groups = new Map<string, AdminWorkflowSeriesGroup>()
@@ -862,6 +910,22 @@ export default function AdminPage() {
     }
   }
 
+  const fileToBase64 = (file: File) =>
+    new Promise<string>((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => {
+        const result = reader.result
+        if (typeof result !== "string") {
+          reject(new Error("Unable to process selected image."))
+          return
+        }
+        const commaIndex = result.indexOf(",")
+        resolve(commaIndex >= 0 ? result.slice(commaIndex + 1) : result)
+      }
+      reader.onerror = () => reject(new Error("Unable to read selected image."))
+      reader.readAsDataURL(file)
+    })
+
   const createCredentialType = async (e: React.FormEvent) => {
     e.preventDefault()
     const value = newCredentialValue.trim()
@@ -882,6 +946,8 @@ export default function AdminPage() {
       setCredentialTypes((prev) => [...prev, created])
       setNewCredentialValue("")
       setNewCredentialLabel("")
+      setCredentialTypeSearch("")
+      setCredentialTypePage(0)
     } catch (err) {
       setCredentialTypesError(err instanceof Error ? err.message : "Unable to create credential type.")
     } finally {
@@ -889,15 +955,148 @@ export default function AdminPage() {
     }
   }
 
+  const openCredentialTypeModal = (credentialType: GlobalCredentialType) => {
+    setSelectedCredentialType(credentialType)
+    setCredentialTypeDraftLabel(credentialType.label)
+    setCredentialTypeDraftBadgeDataBase64("")
+    setCredentialTypeDraftBadgeContentType("")
+    setCredentialTypeDraftClearBadge(false)
+    setCredentialTypeModalError("")
+    setCredentialTypeModalOpen(true)
+  }
+
+  const closeCredentialTypeModal = () => {
+    setCredentialTypeModalOpen(false)
+    setCredentialTypeModalSaving(false)
+    setCredentialTypeModalError("")
+    setCredentialTypeDraftBadgeDataBase64("")
+    setCredentialTypeDraftBadgeContentType("")
+    setCredentialTypeDraftClearBadge(false)
+  }
+
+  const uploadCredentialBadge = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    event.target.value = ""
+    if (!file) return
+
+    if (!file.type.startsWith("image/")) {
+      setCredentialTypeModalError("Please upload an image file.")
+      return
+    }
+
+    if (file.size > maxCredentialBadgeUploadBytes) {
+      setCredentialTypeModalError(`Badge image must be ${maxCredentialBadgeUploadLabel} or smaller.`)
+      return
+    }
+
+    try {
+      const base64 = await fileToBase64(file)
+      setCredentialTypeDraftBadgeDataBase64(base64)
+      setCredentialTypeDraftBadgeContentType(file.type || "image/jpeg")
+      setCredentialTypeDraftClearBadge(false)
+      setCredentialTypeModalError("")
+    } catch (err) {
+      setCredentialTypeModalError(err instanceof Error ? err.message : "Unable to read selected image.")
+    }
+  }
+
+  const clearCredentialBadge = () => {
+    setCredentialTypeDraftBadgeDataBase64("")
+    setCredentialTypeDraftBadgeContentType("")
+    setCredentialTypeDraftClearBadge(true)
+    setCredentialTypeModalError("")
+  }
+
+  const copyCredentialSlug = async () => {
+    if (!selectedCredentialType) return
+    try {
+      await navigator.clipboard.writeText(selectedCredentialType.value)
+      toast({
+        title: "Copied",
+        description: "Credential slug copied to clipboard.",
+      })
+    } catch {
+      setCredentialTypeModalError("Unable to copy slug automatically.")
+    }
+  }
+
+  const saveCredentialTypeModal = async () => {
+    if (!selectedCredentialType) return
+
+    const label = credentialTypeDraftLabel.trim()
+    if (!label) {
+      setCredentialTypeModalError("Credential title is required.")
+      return
+    }
+
+    setCredentialTypeModalSaving(true)
+    setCredentialTypeModalError("")
+    setCredentialTypesError("")
+    try {
+      const payload: {
+        label: string
+        badge_content_type?: string
+        badge_data_base64?: string
+        clear_badge?: boolean
+      } = { label }
+
+      if (credentialTypeDraftClearBadge) payload.clear_badge = true
+      if (credentialTypeDraftBadgeDataBase64 && credentialTypeDraftBadgeContentType) {
+        payload.badge_data_base64 = credentialTypeDraftBadgeDataBase64
+        payload.badge_content_type = credentialTypeDraftBadgeContentType
+      }
+
+      const res = await authFetch(`/admin/credential-types/${encodeURIComponent(selectedCredentialType.value)}`, {
+        method: "PUT",
+        body: JSON.stringify(payload),
+      })
+      if (!res.ok) {
+        const text = await res.text()
+        throw new Error(text || "Unable to update credential type.")
+      }
+
+      const updated = await res.json() as GlobalCredentialType
+      setCredentialTypes((prev) => prev.map((credentialType) => (
+        credentialType.value === updated.value ? updated : credentialType
+      )))
+      setSelectedCredentialType(updated)
+      setCredentialTypeDraftLabel(updated.label)
+      setCredentialTypeDraftBadgeDataBase64("")
+      setCredentialTypeDraftBadgeContentType("")
+      setCredentialTypeDraftClearBadge(false)
+      toast({
+        title: "Credential updated",
+        description: "Credential type changes were saved.",
+      })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unable to update credential type."
+      setCredentialTypeModalError(message)
+      setCredentialTypesError(message)
+    } finally {
+      setCredentialTypeModalSaving(false)
+    }
+  }
+
   const deleteCredentialType = async (credentialType: GlobalCredentialType) => {
     if (!window.confirm(`Delete credential type "${credentialType.label}"? This does not revoke existing grants.`)) return
     setCredentialTypesError("")
+    setCredentialTypeModalError("")
     try {
       const res = await authFetch(`/admin/credential-types/${encodeURIComponent(credentialType.value)}`, { method: "DELETE" })
       if (!res.ok) throw new Error()
       setCredentialTypes((prev) => prev.filter((ct) => ct.value !== credentialType.value))
+      if (selectedCredentialType?.value === credentialType.value) {
+        setSelectedCredentialType(null)
+        closeCredentialTypeModal()
+      }
+      toast({
+        title: "Credential deleted",
+        description: `${credentialType.label} was deleted.`,
+      })
     } catch {
-      setCredentialTypesError("Unable to delete credential type right now. Please try again.")
+      const message = "Unable to delete credential type right now. Please try again."
+      setCredentialTypesError(message)
+      setCredentialTypeModalError(message)
     }
   }
 
@@ -1111,6 +1310,38 @@ export default function AdminPage() {
       setAdminRevokeSubmitting(false)
     }
   }
+
+  useEffect(() => {
+    setCredentialTypePage((prev) => {
+      const maxPage = Math.max(0, credentialTypesTotalPages - 1)
+      return prev > maxPage ? maxPage : prev
+    })
+  }, [credentialTypesTotalPages])
+
+  useEffect(() => {
+    if (!selectedCredentialType) return
+    const current = credentialTypes.find((credentialType) => credentialType.value === selectedCredentialType.value)
+    if (!current) {
+      setSelectedCredentialType(null)
+      setCredentialTypeModalOpen(false)
+      setCredentialTypeModalSaving(false)
+      setCredentialTypeModalError("")
+      setCredentialTypeDraftBadgeDataBase64("")
+      setCredentialTypeDraftBadgeContentType("")
+      setCredentialTypeDraftClearBadge(false)
+      return
+    }
+    if (
+      current.label !== selectedCredentialType.label
+      || current.badge_content_type !== selectedCredentialType.badge_content_type
+      || current.badge_data_base64 !== selectedCredentialType.badge_data_base64
+    ) {
+      setSelectedCredentialType(current)
+    }
+    if (!credentialTypeModalSaving) {
+      setCredentialTypeDraftLabel(current.label)
+    }
+  }, [credentialTypeModalSaving, credentialTypes, selectedCredentialType])
 
   useEffect(() => {
     const nextTab = searchParams.get("tab")
@@ -1873,15 +2104,18 @@ export default function AdminPage() {
 
   const getAdminSeriesCardIndex = (group: AdminWorkflowSeriesGroup) => {
     if (group.workflows.length === 0) return 0
-    const currentIndex = adminSeriesCardIndexById[group.seriesId] ?? 0
-    return ((currentIndex % group.workflows.length) + group.workflows.length) % group.workflows.length
+    const defaultIndex = group.workflows.length - 1
+    const currentIndex = adminSeriesCardIndexById[group.seriesId] ?? defaultIndex
+    return Math.max(0, Math.min(group.workflows.length - 1, currentIndex))
   }
 
   const shiftAdminSeriesCardIndex = (group: AdminWorkflowSeriesGroup, direction: number) => {
     if (group.workflows.length <= 1) return
     setAdminSeriesCardIndexById((prev) => {
-      const currentIndex = prev[group.seriesId] ?? 0
-      const nextIndex = ((currentIndex + direction) % group.workflows.length + group.workflows.length) % group.workflows.length
+      const defaultIndex = group.workflows.length - 1
+      const currentIndex = prev[group.seriesId] ?? defaultIndex
+      const nextIndex = Math.max(0, Math.min(group.workflows.length - 1, currentIndex + direction))
+      if (nextIndex === currentIndex) return prev
       return {
         ...prev,
         [group.seriesId]: nextIndex,
@@ -1891,7 +2125,7 @@ export default function AdminPage() {
 
   const openAdminSeriesWorkflowDetails = async (group: AdminWorkflowSeriesGroup, index: number) => {
     if (group.workflows.length === 0) return
-    const safeIndex = ((index % group.workflows.length) + group.workflows.length) % group.workflows.length
+    const safeIndex = Math.max(0, Math.min(group.workflows.length - 1, index))
     const selectedWorkflow = group.workflows[safeIndex]
     await openAdminWorkflowDetails(selectedWorkflow.id, undefined, {
       seriesId: group.seriesId,
@@ -2444,7 +2678,7 @@ export default function AdminPage() {
                       onClick={() => openMerchantModal(location)}
                     >
                       <CardContent className="p-4">
-                        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                        <div className="flex flex-col items-start gap-4 sm:flex-row sm:justify-between">
                           <div className="flex min-w-0 flex-1 items-start gap-4">
                             <Avatar className="h-12 w-12">
                               <AvatarImage src={location.image_url || "/placeholder.svg"} alt={location.name} />
@@ -2717,7 +2951,7 @@ export default function AdminPage() {
                       className="cursor-pointer hover:shadow-md transition-shadow"
                       onClick={() => openAffiliateModal(affiliate)}
                     >
-                      <CardContent className="flex flex-col gap-2 p-4 sm:flex-row sm:items-center sm:justify-between">
+                      <CardContent className="flex flex-col items-start gap-2 p-4 sm:flex-row sm:items-center sm:justify-between">
                         <div>
                           <p className="font-medium text-black dark:text-white">
                             {affiliate.nickname || affiliate.organization}
@@ -2870,7 +3104,7 @@ export default function AdminPage() {
                       className="cursor-pointer hover:shadow-md transition-shadow"
                       onClick={() => openProposerModal(proposer)}
                     >
-                      <CardContent className="flex flex-col gap-2 p-4 sm:flex-row sm:items-center sm:justify-between">
+                      <CardContent className="flex flex-col items-start gap-2 p-4 sm:flex-row sm:items-center sm:justify-between">
                         <div>
                           <p className="font-medium text-black dark:text-white">
                             {proposer.nickname || proposer.organization}
@@ -3016,7 +3250,7 @@ export default function AdminPage() {
                       onClick={() => openImproverModal(improver)}
                     >
                       <CardContent className="p-4">
-                        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                        <div className="flex flex-col items-start gap-3 md:flex-row md:items-center md:justify-between">
                           <div>
                             <p className="font-medium text-black dark:text-white">
                               {improver.first_name} {improver.last_name}
@@ -3183,7 +3417,7 @@ export default function AdminPage() {
                       onClick={() => openSupervisorModal(supervisor)}
                     >
                       <CardContent className="p-4">
-                        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                        <div className="flex flex-col items-start gap-3 md:flex-row md:items-center md:justify-between">
                           <div>
                             <p className="font-medium text-black dark:text-white">
                               {supervisor.nickname || supervisor.organization}
@@ -3243,8 +3477,8 @@ export default function AdminPage() {
               <CardDescription>Search workflows by title or assigned improver email, then manage series claims.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-                <div className="relative flex-1">
+              <div className="space-y-3">
+                <div className="relative">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                   <Input
                     placeholder="Search workflows by title or improver email..."
@@ -3256,9 +3490,9 @@ export default function AdminPage() {
                     className="pl-9"
                   />
                 </div>
-                <div className="flex items-center gap-4">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                   <div className="text-sm text-muted-foreground">
-                    Showing {groupedAdminWorkflows.length} series entries from {adminWorkflowsTotal} workflows
+                    {groupedAdminWorkflows.length} of {adminWorkflowsTotal} series
                   </div>
                   <div className="flex items-center gap-2">
                     <Label htmlFor="workflow-include-archived" className="text-sm font-normal text-muted-foreground">
@@ -3288,6 +3522,8 @@ export default function AdminPage() {
                     if (group.workflows.length === 0) return null
                     const cardIndex = getAdminSeriesCardIndex(group)
                     const workflow = group.workflows[cardIndex]
+                    const canShiftBackward = cardIndex > 0
+                    const canShiftForward = cardIndex < group.workflows.length - 1
 
                     return (
                       <Card
@@ -3296,7 +3532,7 @@ export default function AdminPage() {
                         onClick={() => void openAdminSeriesWorkflowDetails(group, cardIndex)}
                       >
                         <CardContent className="p-4 space-y-3">
-                          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                          <div className="flex flex-col items-start gap-3 md:flex-row md:items-center md:justify-between">
                             <div>
                               <p className="font-medium text-black dark:text-white">{workflow.title}</p>
                               <p className="text-xs text-muted-foreground">
@@ -3326,60 +3562,66 @@ export default function AdminPage() {
                               <Badge variant="outline">No assigned improvers</Badge>
                             ) : (
                               workflow.assigned_improver_emails.map((email) => (
-                                <Badge key={`${workflow.id}-${email}`} variant="secondary">
+                                <Badge key={`${workflow.id}-${email}`} variant="secondary" className="max-w-full truncate">
                                   {email}
                                 </Badge>
                               ))
                             )}
                           </div>
 
-                          <div className="flex w-full flex-col gap-2 pt-1 sm:w-auto sm:flex-row sm:flex-wrap">
-                            <Button
-                              className="w-full sm:w-auto"
-                              size="sm"
-                              variant="outline"
-                              onClick={(event) => {
-                                event.stopPropagation()
-                                void openAdminSeriesWorkflowDetails(group, cardIndex)
-                              }}
-                            >
-                              View Details
-                            </Button>
-                            <Button
-                              className="w-full sm:w-auto"
-                              size="sm"
-                              variant="outline"
-                              onClick={(event) => {
-                                event.stopPropagation()
-                                shiftAdminSeriesCardIndex(group, -1)
-                              }}
-                              disabled={group.workflows.length <= 1}
-                            >
-                              <ChevronLeft className="h-4 w-4" />
-                            </Button>
-                            <Button
-                              className="w-full sm:w-auto"
-                              size="sm"
-                              variant="outline"
-                              onClick={(event) => {
-                                event.stopPropagation()
-                                shiftAdminSeriesCardIndex(group, 1)
-                              }}
-                              disabled={group.workflows.length <= 1}
-                            >
-                              <ChevronRight className="h-4 w-4" />
-                            </Button>
-                            <Button
-                              className="w-full sm:w-auto"
-                              size="sm"
-                              variant="destructive"
-                              onClick={(event) => {
-                                event.stopPropagation()
-                                void openAdminRevokeModal(group.seriesId)
-                              }}
-                            >
-                              Revoke Improver Claim
-                            </Button>
+                          <div className="space-y-2 border-t border-border/60 pt-3">
+                            <div className="grid grid-cols-2 gap-2 sm:w-fit">
+                              <Button
+                                className="w-full"
+                                size="sm"
+                                variant="outline"
+                                onClick={(event) => {
+                                  event.stopPropagation()
+                                  shiftAdminSeriesCardIndex(group, -1)
+                                }}
+                                disabled={!canShiftBackward}
+                                aria-label="Show previous workflow in this series"
+                              >
+                                <ChevronLeft className="h-4 w-4" />
+                              </Button>
+                              <Button
+                                className="w-full"
+                                size="sm"
+                                variant="outline"
+                                onClick={(event) => {
+                                  event.stopPropagation()
+                                  shiftAdminSeriesCardIndex(group, 1)
+                                }}
+                                disabled={!canShiftForward}
+                                aria-label="Show next workflow in this series"
+                              >
+                                <ChevronRight className="h-4 w-4" />
+                              </Button>
+                            </div>
+                            <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+                              <Button
+                                className="w-full sm:w-auto"
+                                size="sm"
+                                variant="outline"
+                                onClick={(event) => {
+                                  event.stopPropagation()
+                                  void openAdminSeriesWorkflowDetails(group, cardIndex)
+                                }}
+                              >
+                                View Details
+                              </Button>
+                              <Button
+                                className="w-full sm:w-auto"
+                                size="sm"
+                                variant="destructive"
+                                onClick={(event) => {
+                                  event.stopPropagation()
+                                  void openAdminRevokeModal(group.seriesId)
+                                }}
+                              >
+                                Revoke Improver Claim
+                              </Button>
+                            </div>
                           </div>
                         </CardContent>
                       </Card>
@@ -3403,7 +3645,7 @@ export default function AdminPage() {
                   variant="outline"
                   size="sm"
                   onClick={() => setAdminWorkflowsPage((page) => page + 1)}
-                  disabled={adminWorkflows.length < adminWorkflowsCount}
+                  disabled={(adminWorkflowsPage + 1) * adminWorkflowsCount >= adminWorkflowsTotal}
                 >
                   Next
                   <ChevronRight className="h-4 w-4" />
@@ -3582,7 +3824,7 @@ export default function AdminPage() {
                       className={`cursor-pointer hover:shadow-md transition-shadow ${selectedIssuerRequest?.user_id === req.user_id ? "ring-2 ring-primary" : ""}`}
                       onClick={() => openIssuerRequestModal(req)}
                     >
-                      <CardContent className="flex flex-col gap-2 p-4 sm:flex-row sm:items-center sm:justify-between">
+                      <CardContent className="flex flex-col items-start gap-2 p-4 sm:flex-row sm:items-center sm:justify-between">
                         <div>
                           <p className="font-medium text-black dark:text-white break-words">{req.nickname || req.organization}</p>
                           {req.nickname && <p className="text-xs text-muted-foreground">{req.organization}</p>}
@@ -3636,31 +3878,8 @@ export default function AdminPage() {
               </CardTitle>
               <CardDescription>Define the credential types that issuers can grant to users.</CardDescription>
             </CardHeader>
-            <CardContent className="space-y-4">
-              {credentialTypes.length === 0 ? (
-                <p className="text-sm text-muted-foreground py-4 text-center">No credential types defined yet.</p>
-              ) : (
-                <div className="space-y-2">
-                  {credentialTypes.map((ct) => (
-                    <div key={ct.value} className="flex flex-col gap-3 rounded-lg border p-3 sm:flex-row sm:items-center sm:justify-between">
-                      <div>
-                        <p className="font-medium text-sm">{ct.label}</p>
-                      </div>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="w-full text-red-600 border-red-300 hover:bg-red-50 sm:w-auto"
-                        onClick={() => deleteCredentialType(ct)}
-                      >
-                        <X className="h-4 w-4" />
-                        Delete
-                      </Button>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              <form onSubmit={createCredentialType} className="space-y-3 pt-4 border-t">
+            <CardContent className="space-y-6">
+              <form onSubmit={createCredentialType} className="space-y-3">
                 <p className="text-sm font-medium">Add New Credential Type</p>
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <div className="space-y-1">
@@ -3690,8 +3909,215 @@ export default function AdminPage() {
                   </Button>
                 </div>
               </form>
+
+              <div className="space-y-4 border-t pt-4">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+                  <div className="relative flex-1">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                    <Input
+                      placeholder="Search by credential title or slug..."
+                      value={credentialTypeSearch}
+                      onChange={(event) => {
+                        setCredentialTypeSearch(event.target.value)
+                        setCredentialTypePage(0)
+                      }}
+                      className="pl-9"
+                    />
+                  </div>
+                  <p className="text-xs text-muted-foreground sm:text-right">
+                    {filteredCredentialTypes.length} credential{filteredCredentialTypes.length === 1 ? "" : "s"} found
+                  </p>
+                </div>
+
+                {filteredCredentialTypes.length === 0 ? (
+                  <p className="text-sm text-muted-foreground py-4 text-center">No credential types match your search.</p>
+                ) : (
+                  <div className="space-y-2">
+                    {paginatedCredentialTypes.map((credentialType) => {
+                      const badgePreview = buildCredentialBadgeDataUrl(credentialType)
+                      return (
+                        <Card
+                          key={credentialType.value}
+                          className={cn(
+                            "cursor-pointer transition-shadow hover:shadow-md",
+                            selectedCredentialType?.value === credentialType.value && "ring-2 ring-primary",
+                          )}
+                          onClick={() => openCredentialTypeModal(credentialType)}
+                        >
+                          <CardContent className="flex flex-col gap-3 p-3 sm:flex-row sm:items-center sm:justify-between">
+                            <div className="flex items-center gap-3 min-w-0">
+                              <div className="h-12 w-12 shrink-0 overflow-hidden rounded-md border bg-secondary/40">
+                                {badgePreview ? (
+                                  <img
+                                    src={badgePreview}
+                                    alt={`${credentialType.label} badge`}
+                                    className="h-full w-full object-cover"
+                                  />
+                                ) : (
+                                  <div className="flex h-full w-full items-center justify-center text-muted-foreground">
+                                    <FileCheck className="h-4 w-4" />
+                                  </div>
+                                )}
+                              </div>
+                              <div className="min-w-0">
+                                <p className="font-medium text-sm truncate">{credentialType.label}</p>
+                                <p className="font-mono text-xs text-muted-foreground truncate">{credentialType.value}</p>
+                              </div>
+                            </div>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="w-full text-red-600 border-red-300 hover:bg-red-50 sm:w-auto"
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                void deleteCredentialType(credentialType)
+                              }}
+                            >
+                              <X className="h-4 w-4" />
+                              Delete
+                            </Button>
+                          </CardContent>
+                        </Card>
+                      )
+                    })}
+                  </div>
+                )}
+
+                <div className="flex items-center justify-between pt-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setCredentialTypePage((page) => Math.max(0, page - 1))}
+                    disabled={credentialTypePage === 0}
+                  >
+                    <ChevronLeft className="h-4 w-4" />
+                    Previous
+                  </Button>
+                  <span className="text-sm text-muted-foreground">
+                    Page {Math.min(credentialTypePage + 1, credentialTypesTotalPages)} of {credentialTypesTotalPages}
+                  </span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setCredentialTypePage((page) => page + 1)}
+                    disabled={credentialTypePage >= credentialTypesTotalPages - 1 || filteredCredentialTypes.length === 0}
+                  >
+                    Next
+                    <ChevronRight className="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
             </CardContent>
           </Card>
+
+          <Dialog
+            open={credentialTypeModalOpen}
+            onOpenChange={(open) => {
+              if (open) {
+                setCredentialTypeModalOpen(true)
+                return
+              }
+              closeCredentialTypeModal()
+            }}
+          >
+            <DialogContent className="w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] max-h-[90vh] overflow-y-auto sm:max-w-lg">
+              <DialogHeader>
+                <DialogTitle>Credential Type Details</DialogTitle>
+                <DialogDescription>View and edit the credential title, slug, and badge image.</DialogDescription>
+              </DialogHeader>
+
+              {selectedCredentialType && (
+                <div className="space-y-4">
+                  <div className="space-y-1">
+                    <Label htmlFor="credential-type-title">Credential Title</Label>
+                    <Input
+                      id="credential-type-title"
+                      value={credentialTypeDraftLabel}
+                      onChange={(event) => setCredentialTypeDraftLabel(event.target.value)}
+                      placeholder="Credential title"
+                    />
+                  </div>
+
+                  <div className="space-y-1">
+                    <Label htmlFor="credential-type-slug">Credential Slug</Label>
+                    <div className="flex gap-2">
+                      <Input
+                        id="credential-type-slug"
+                        value={selectedCredentialType.value}
+                        readOnly
+                        className="font-mono text-sm"
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={copyCredentialSlug}
+                        className="shrink-0"
+                      >
+                        <Copy className="mr-2 h-4 w-4" />
+                        Copy
+                      </Button>
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label>Badge Image</Label>
+                    <div className="flex items-center gap-3">
+                      <div className="h-20 w-20 overflow-hidden rounded-md border bg-secondary/40">
+                        {credentialTypeDraftBadgePreview ? (
+                          <img
+                            src={credentialTypeDraftBadgePreview}
+                            alt={`${selectedCredentialType.label} badge`}
+                            className="h-full w-full object-cover"
+                          />
+                        ) : (
+                          <div className="flex h-full w-full items-center justify-center text-xs text-muted-foreground text-center px-2">
+                            No badge
+                          </div>
+                        )}
+                      </div>
+                      <div className="space-y-2">
+                        <Input type="file" accept="image/*" onChange={uploadCredentialBadge} />
+                        <p className="text-xs text-muted-foreground">PNG, JPG, GIF, and WebP up to {maxCredentialBadgeUploadLabel}.</p>
+                        {credentialTypeDraftBadgePreview && (
+                          <Button type="button" variant="outline" size="sm" onClick={clearCredentialBadge}>
+                            Remove Badge
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  {credentialTypeModalError && (
+                    <div className="flex items-center gap-2 text-red-600 text-sm p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
+                      <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+                      <span>{credentialTypeModalError}</span>
+                    </div>
+                  )}
+
+                  <DialogFooter className="flex-col-reverse gap-2 sm:flex-row sm:justify-between">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="w-full text-red-600 border-red-300 hover:bg-red-50 sm:w-auto"
+                      disabled={credentialTypeModalSaving}
+                      onClick={() => void deleteCredentialType(selectedCredentialType)}
+                    >
+                      <X className="mr-2 h-4 w-4" />
+                      Delete Type
+                    </Button>
+                    <Button
+                      type="button"
+                      className="w-full sm:w-auto"
+                      onClick={saveCredentialTypeModal}
+                      disabled={credentialTypeModalSaving || !credentialTypeDraftLabel.trim()}
+                    >
+                      {credentialTypeModalSaving ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Saving...</> : "Save Changes"}
+                    </Button>
+                  </DialogFooter>
+                </div>
+              )}
+            </DialogContent>
+          </Dialog>
         </TabsContent>
 
         <TabsContent value="events" className="space-y-6">
@@ -4330,20 +4756,22 @@ export default function AdminPage() {
                       {hasSeriesNavigation && (
                         <div className="flex items-center gap-2">
                           <Button
-                            className="w-full sm:w-auto"
+                            className="h-8 w-8 p-0"
                             size="sm"
                             variant="outline"
                             onClick={() => void shiftAdminDetailSeriesWorkflow(-1)}
                             disabled={!canShiftBackward}
+                            aria-label="Show previous workflow in this series"
                           >
                             <ChevronLeft className="h-4 w-4" />
                           </Button>
                           <Button
-                            className="w-full sm:w-auto"
+                            className="h-8 w-8 p-0"
                             size="sm"
                             variant="outline"
                             onClick={() => void shiftAdminDetailSeriesWorkflow(1)}
                             disabled={!canShiftForward}
+                            aria-label="Show next workflow in this series"
                           >
                             <ChevronRight className="h-4 w-4" />
                           </Button>
