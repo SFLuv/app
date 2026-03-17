@@ -10538,19 +10538,11 @@ func getCredentialRequestByIDTx(ctx context.Context, tx pgx.Tx, requestId string
 	return scanCredentialRequest(row)
 }
 
-func (a *AppDB) CreateCredentialRequest(ctx context.Context, userId string, credentialType string) (*structs.CredentialRequest, error) {
+func (a *AppDB) CreateCredentialRequest(ctx context.Context, userId string, credentialType string, allowUnlisted bool) (*structs.CredentialRequest, error) {
 	userId = strings.TrimSpace(userId)
 	credentialType = strings.TrimSpace(credentialType)
 	if userId == "" || credentialType == "" {
 		return nil, fmt.Errorf("user_id and credential_type are required")
-	}
-
-	valid, err := a.IsGlobalCredentialType(ctx, credentialType)
-	if err != nil {
-		return nil, fmt.Errorf("error validating credential type: %s", err)
-	}
-	if !valid {
-		return nil, fmt.Errorf("invalid credential type")
 	}
 
 	tx, err := a.db.Begin(ctx)
@@ -10558,6 +10550,32 @@ func (a *AppDB) CreateCredentialRequest(ctx context.Context, userId string, cred
 		return nil, err
 	}
 	defer tx.Rollback(ctx)
+
+	var visibilityRaw string
+	if err := tx.QueryRow(ctx, `
+		SELECT
+			visibility
+		FROM
+			credential_type_definitions
+		WHERE
+			value = $1;
+	`, credentialType).Scan(&visibilityRaw); err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, fmt.Errorf("invalid credential type")
+		}
+		return nil, fmt.Errorf("error validating credential type: %s", err)
+	}
+
+	visibility, err := normalizeCredentialVisibility(visibilityRaw)
+	if err != nil {
+		return nil, fmt.Errorf("error validating credential visibility: %s", err)
+	}
+	if visibility == string(structs.CredentialVisibilityPrivate) {
+		return nil, fmt.Errorf("credential type is not requestable")
+	}
+	if visibility == string(structs.CredentialVisibilityUnlisted) && !allowUnlisted {
+		return nil, fmt.Errorf("credential type is not requestable")
+	}
 
 	var existingUser string
 	if err := tx.QueryRow(ctx, `
@@ -11018,6 +11036,21 @@ func (a *AppDB) IsGlobalCredentialType(ctx context.Context, value string) (bool,
 	return count > 0, nil
 }
 
+func normalizeCredentialVisibility(input string) (string, error) {
+	normalized := strings.ToLower(strings.TrimSpace(input))
+	if normalized == "" {
+		return string(structs.CredentialVisibilityPublic), nil
+	}
+	switch normalized {
+	case string(structs.CredentialVisibilityPublic),
+		string(structs.CredentialVisibilityPrivate),
+		string(structs.CredentialVisibilityUnlisted):
+		return normalized, nil
+	default:
+		return "", fmt.Errorf("invalid credential visibility")
+	}
+}
+
 const maxCredentialBadgeUploadBytes = 2 * 1024 * 1024
 
 type parsedCredentialBadgeUpload struct {
@@ -11070,6 +11103,7 @@ func (a *AppDB) GetGlobalCredentialTypes(ctx context.Context) ([]*structs.Global
 		SELECT
 			value,
 			label,
+			visibility,
 			badge_content_type,
 			CASE
 				WHEN badge_data IS NULL THEN NULL
@@ -11091,6 +11125,7 @@ func (a *AppDB) GetGlobalCredentialTypes(ctx context.Context) ([]*structs.Global
 		if err := rows.Scan(
 			&t.Value,
 			&t.Label,
+			&t.Visibility,
 			&t.BadgeContentType,
 			&t.BadgeDataBase64,
 			&t.CreatedAt,
@@ -11103,19 +11138,26 @@ func (a *AppDB) GetGlobalCredentialTypes(ctx context.Context) ([]*structs.Global
 	return results, nil
 }
 
-func (a *AppDB) CreateGlobalCredentialType(ctx context.Context, value, label string) (*structs.GlobalCredentialType, error) {
+func (a *AppDB) CreateGlobalCredentialType(ctx context.Context, value, label, visibility string) (*structs.GlobalCredentialType, error) {
 	value = strings.TrimSpace(value)
 	label = strings.TrimSpace(label)
 	if value == "" || label == "" {
 		return nil, fmt.Errorf("value and label are required")
 	}
+
+	normalizedVisibility, err := normalizeCredentialVisibility(visibility)
+	if err != nil {
+		return nil, err
+	}
+
 	t := structs.GlobalCredentialType{}
-	err := a.db.QueryRow(ctx, `
-		INSERT INTO credential_type_definitions (value, label)
-		VALUES ($1, $2)
+	err = a.db.QueryRow(ctx, `
+		INSERT INTO credential_type_definitions (value, label, visibility)
+		VALUES ($1, $2, $3)
 		RETURNING
 			value,
 			label,
+			visibility,
 			badge_content_type,
 			CASE
 				WHEN badge_data IS NULL THEN NULL
@@ -11123,9 +11165,10 @@ func (a *AppDB) CreateGlobalCredentialType(ctx context.Context, value, label str
 			END AS badge_data_base64,
 			created_at,
 			updated_at;
-	`, value, label).Scan(
+	`, value, label, normalizedVisibility).Scan(
 		&t.Value,
 		&t.Label,
+		&t.Visibility,
 		&t.BadgeContentType,
 		&t.BadgeDataBase64,
 		&t.CreatedAt,
@@ -11144,6 +11187,7 @@ func (a *AppDB) UpdateGlobalCredentialType(
 	ctx context.Context,
 	value string,
 	label string,
+	visibility *string,
 	badgeContentType *string,
 	badgeDataBase64 *string,
 	clearBadge bool,
@@ -11155,6 +11199,17 @@ func (a *AppDB) UpdateGlobalCredentialType(
 	}
 	if label == "" {
 		return nil, fmt.Errorf("label is required")
+	}
+
+	var normalizedVisibility string
+	hasVisibility := false
+	if visibility != nil {
+		parsedVisibility, err := normalizeCredentialVisibility(*visibility)
+		if err != nil {
+			return nil, err
+		}
+		normalizedVisibility = parsedVisibility
+		hasVisibility = true
 	}
 
 	normalizedBadgeContentType := ""
@@ -11189,34 +11244,40 @@ func (a *AppDB) UpdateGlobalCredentialType(
 
 	t := structs.GlobalCredentialType{}
 	err := a.db.QueryRow(ctx, `
-		UPDATE credential_type_definitions
-		SET
-			label = $2,
-			badge_data = CASE
-				WHEN $3 THEN NULL
-				WHEN $6 THEN $4
-				ELSE badge_data
-			END,
-			badge_content_type = CASE
-				WHEN $3 THEN NULL
-				WHEN $6 THEN $5
-				ELSE badge_content_type
-			END,
-			updated_at = NOW()
+			UPDATE credential_type_definitions
+			SET
+				label = $2,
+				visibility = CASE
+					WHEN $3 THEN $4
+					ELSE visibility
+				END,
+				badge_data = CASE
+					WHEN $5 THEN NULL
+					WHEN $8 THEN $6
+					ELSE badge_data
+				END,
+				badge_content_type = CASE
+					WHEN $5 THEN NULL
+					WHEN $8 THEN $7
+					ELSE badge_content_type
+				END,
+				updated_at = NOW()
 		WHERE value = $1
 		RETURNING
 			value,
 			label,
+			visibility,
 			badge_content_type,
 			CASE
 				WHEN badge_data IS NULL THEN NULL
 				ELSE ENCODE(badge_data, 'base64')
-			END AS badge_data_base64,
-			created_at,
-			updated_at;
-	`, value, label, clearBadge, badgeData, contentTypeParam, hasBadgePayload).Scan(
+				END AS badge_data_base64,
+				created_at,
+				updated_at;
+		`, value, label, hasVisibility, normalizedVisibility, clearBadge, badgeData, contentTypeParam, hasBadgePayload).Scan(
 		&t.Value,
 		&t.Label,
+		&t.Visibility,
 		&t.BadgeContentType,
 		&t.BadgeDataBase64,
 		&t.CreatedAt,

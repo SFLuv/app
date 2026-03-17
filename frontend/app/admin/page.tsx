@@ -70,6 +70,7 @@ import { IssuerRecord, IssuerWithScopes } from "@/types/issuer"
 import {
   AdminWorkflowListItem,
   AdminWorkflowListResponse,
+  CredentialVisibility,
   CredentialType,
   GlobalCredentialType,
   Workflow,
@@ -124,6 +125,46 @@ type AdminWorkflowSeriesGroup = {
 const maxCredentialBadgeUploadBytes = 2 * 1024 * 1024
 const maxCredentialBadgeUploadLabel = "2MB"
 const credentialTypesPageSize = 5
+
+const credentialVisibilityOptions: Array<{
+  value: CredentialVisibility
+  label: string
+  description: string
+}> = [
+  {
+    value: "public",
+    label: "Public",
+    description: "Any improver can request this credential at any time.",
+  },
+  {
+    value: "unlisted",
+    label: "Unlisted",
+    description: "Only requestable via a direct /improvers/join link.",
+  },
+  {
+    value: "private",
+    label: "Private",
+    description: "Never requestable by improvers.",
+  },
+]
+
+const normalizeCredentialVisibility = (value?: string | null): CredentialVisibility => {
+  if (value === "private" || value === "unlisted") return value
+  return "public"
+}
+
+const getCredentialVisibilityLabel = (value?: string | null): string => {
+  const visibility = normalizeCredentialVisibility(value)
+  const option = credentialVisibilityOptions.find((candidate) => candidate.value === visibility)
+  return option?.label || "Public"
+}
+
+const getCredentialVisibilityBadgeClassName = (value?: string | null): string => {
+  const visibility = normalizeCredentialVisibility(value)
+  if (visibility === "private") return "border-red-300 text-red-700 bg-red-50 dark:border-red-900/60 dark:text-red-300 dark:bg-red-950/30"
+  if (visibility === "unlisted") return "border-amber-300 text-amber-700 bg-amber-50 dark:border-amber-900/60 dark:text-amber-300 dark:bg-amber-950/30"
+  return "border-emerald-300 text-emerald-700 bg-emerald-50 dark:border-emerald-900/60 dark:text-emerald-300 dark:bg-emerald-950/30"
+}
 
 export default function AdminPage() {
   const { user, wallets, authFetch, status } = useApp()
@@ -318,12 +359,14 @@ export default function AdminPage() {
   const [credentialTypesError, setCredentialTypesError] = useState<string>("")
   const [newCredentialValue, setNewCredentialValue] = useState<string>("")
   const [newCredentialLabel, setNewCredentialLabel] = useState<string>("")
+  const [newCredentialVisibility, setNewCredentialVisibility] = useState<CredentialVisibility>("public")
   const [credentialTypeSaving, setCredentialTypeSaving] = useState<boolean>(false)
   const [credentialTypeSearch, setCredentialTypeSearch] = useState<string>("")
   const [credentialTypePage, setCredentialTypePage] = useState<number>(0)
   const [credentialTypeModalOpen, setCredentialTypeModalOpen] = useState<boolean>(false)
   const [selectedCredentialType, setSelectedCredentialType] = useState<GlobalCredentialType | null>(null)
   const [credentialTypeDraftLabel, setCredentialTypeDraftLabel] = useState<string>("")
+  const [credentialTypeDraftVisibility, setCredentialTypeDraftVisibility] = useState<CredentialVisibility>("public")
   const [credentialTypeDraftBadgeDataBase64, setCredentialTypeDraftBadgeDataBase64] = useState<string>("")
   const [credentialTypeDraftBadgeContentType, setCredentialTypeDraftBadgeContentType] = useState<string>("")
   const [credentialTypeDraftClearBadge, setCredentialTypeDraftClearBadge] = useState<boolean>(false)
@@ -930,13 +973,14 @@ export default function AdminPage() {
     e.preventDefault()
     const value = newCredentialValue.trim()
     const label = newCredentialLabel.trim()
+    const visibility = normalizeCredentialVisibility(newCredentialVisibility)
     if (!value || !label) return
     setCredentialTypeSaving(true)
     setCredentialTypesError("")
     try {
       const res = await authFetch("/admin/credential-types", {
         method: "POST",
-        body: JSON.stringify({ value, label }),
+        body: JSON.stringify({ value, label, visibility }),
       })
       if (!res.ok) {
         const text = await res.text()
@@ -946,6 +990,7 @@ export default function AdminPage() {
       setCredentialTypes((prev) => [...prev, created])
       setNewCredentialValue("")
       setNewCredentialLabel("")
+      setNewCredentialVisibility("public")
       setCredentialTypeSearch("")
       setCredentialTypePage(0)
     } catch (err) {
@@ -958,6 +1003,7 @@ export default function AdminPage() {
   const openCredentialTypeModal = (credentialType: GlobalCredentialType) => {
     setSelectedCredentialType(credentialType)
     setCredentialTypeDraftLabel(credentialType.label)
+    setCredentialTypeDraftVisibility(normalizeCredentialVisibility(credentialType.visibility))
     setCredentialTypeDraftBadgeDataBase64("")
     setCredentialTypeDraftBadgeContentType("")
     setCredentialTypeDraftClearBadge(false)
@@ -969,6 +1015,7 @@ export default function AdminPage() {
     setCredentialTypeModalOpen(false)
     setCredentialTypeModalSaving(false)
     setCredentialTypeModalError("")
+    setCredentialTypeDraftVisibility("public")
     setCredentialTypeDraftBadgeDataBase64("")
     setCredentialTypeDraftBadgeContentType("")
     setCredentialTypeDraftClearBadge(false)
@@ -1035,10 +1082,14 @@ export default function AdminPage() {
     try {
       const payload: {
         label: string
+        visibility: CredentialVisibility
         badge_content_type?: string
         badge_data_base64?: string
         clear_badge?: boolean
-      } = { label }
+      } = {
+        label,
+        visibility: normalizeCredentialVisibility(credentialTypeDraftVisibility),
+      }
 
       if (credentialTypeDraftClearBadge) payload.clear_badge = true
       if (credentialTypeDraftBadgeDataBase64 && credentialTypeDraftBadgeContentType) {
@@ -1061,6 +1112,7 @@ export default function AdminPage() {
       )))
       setSelectedCredentialType(updated)
       setCredentialTypeDraftLabel(updated.label)
+      setCredentialTypeDraftVisibility(normalizeCredentialVisibility(updated.visibility))
       setCredentialTypeDraftBadgeDataBase64("")
       setCredentialTypeDraftBadgeContentType("")
       setCredentialTypeDraftClearBadge(false)
@@ -1326,6 +1378,7 @@ export default function AdminPage() {
       setCredentialTypeModalOpen(false)
       setCredentialTypeModalSaving(false)
       setCredentialTypeModalError("")
+      setCredentialTypeDraftVisibility("public")
       setCredentialTypeDraftBadgeDataBase64("")
       setCredentialTypeDraftBadgeContentType("")
       setCredentialTypeDraftClearBadge(false)
@@ -1333,6 +1386,7 @@ export default function AdminPage() {
     }
     if (
       current.label !== selectedCredentialType.label
+      || current.visibility !== selectedCredentialType.visibility
       || current.badge_content_type !== selectedCredentialType.badge_content_type
       || current.badge_data_base64 !== selectedCredentialType.badge_data_base64
     ) {
@@ -1340,6 +1394,7 @@ export default function AdminPage() {
     }
     if (!credentialTypeModalSaving) {
       setCredentialTypeDraftLabel(current.label)
+      setCredentialTypeDraftVisibility(normalizeCredentialVisibility(current.visibility))
     }
   }, [credentialTypeModalSaving, credentialTypes, selectedCredentialType])
 
@@ -3881,7 +3936,7 @@ export default function AdminPage() {
             <CardContent className="space-y-6">
               <form onSubmit={createCredentialType} className="space-y-3">
                 <p className="text-sm font-medium">Add New Credential Type</p>
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                   <div className="space-y-1">
                     <Label htmlFor="cred-value" className="text-xs">Value (slug)</Label>
                     <Input
@@ -3901,7 +3956,28 @@ export default function AdminPage() {
                       placeholder="e.g. DPW Certified"
                     />
                   </div>
+                  <div className="space-y-1">
+                    <Label htmlFor="cred-visibility" className="text-xs">Visibility</Label>
+                    <Select
+                      value={newCredentialVisibility}
+                      onValueChange={(value) => setNewCredentialVisibility(normalizeCredentialVisibility(value))}
+                    >
+                      <SelectTrigger id="cred-visibility">
+                        <SelectValue placeholder="Select visibility" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {credentialVisibilityOptions.map((option) => (
+                          <SelectItem key={option.value} value={option.value}>
+                            {option.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
                 </div>
+                <p className="text-xs text-muted-foreground">
+                  {credentialVisibilityOptions.find((option) => option.value === newCredentialVisibility)?.description}
+                </p>
                 <p className="text-xs text-muted-foreground">Note: Deleting a credential type does not revoke existing grants.</p>
                 <div className="flex justify-end">
                   <Button className="w-full sm:w-auto" type="submit" disabled={credentialTypeSaving || !newCredentialValue || !newCredentialLabel}>
@@ -3962,6 +4038,15 @@ export default function AdminPage() {
                               <div className="min-w-0">
                                 <p className="font-medium text-sm truncate">{credentialType.label}</p>
                                 <p className="font-mono text-xs text-muted-foreground truncate">{credentialType.value}</p>
+                                <Badge
+                                  variant="outline"
+                                  className={cn(
+                                    "mt-2 capitalize text-[10px] leading-none",
+                                    getCredentialVisibilityBadgeClassName(credentialType.visibility),
+                                  )}
+                                >
+                                  {getCredentialVisibilityLabel(credentialType.visibility)}
+                                </Badge>
                               </div>
                             </div>
                             <Button
@@ -4023,7 +4108,7 @@ export default function AdminPage() {
             <DialogContent className="w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] max-h-[90vh] overflow-y-auto sm:max-w-lg">
               <DialogHeader>
                 <DialogTitle>Credential Type Details</DialogTitle>
-                <DialogDescription>View and edit the credential title, slug, and badge image.</DialogDescription>
+                <DialogDescription>View and edit credential title, slug, visibility, and badge image.</DialogDescription>
               </DialogHeader>
 
               {selectedCredentialType && (
@@ -4057,6 +4142,28 @@ export default function AdminPage() {
                         Copy
                       </Button>
                     </div>
+                  </div>
+
+                  <div className="space-y-1">
+                    <Label htmlFor="credential-type-visibility">Visibility</Label>
+                    <Select
+                      value={credentialTypeDraftVisibility}
+                      onValueChange={(value) => setCredentialTypeDraftVisibility(normalizeCredentialVisibility(value))}
+                    >
+                      <SelectTrigger id="credential-type-visibility">
+                        <SelectValue placeholder="Select visibility" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {credentialVisibilityOptions.map((option) => (
+                          <SelectItem key={option.value} value={option.value}>
+                            {option.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground">
+                      {credentialVisibilityOptions.find((option) => option.value === credentialTypeDraftVisibility)?.description}
+                    </p>
                   </div>
 
                   <div className="space-y-2">

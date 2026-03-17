@@ -2,10 +2,12 @@ export type WorkflowRecurrence = "one_time" | "daily" | "weekly" | "monthly"
 export type WorkflowPhotoAspectRatio = "vertical" | "square" | "horizontal"
 
 export type CredentialType = string
+export type CredentialVisibility = "public" | "private" | "unlisted"
 
 export interface GlobalCredentialType {
   value: string
   label: string
+  visibility?: CredentialVisibility
   badge_content_type?: string | null
   badge_data_base64?: string | null
   created_at: string

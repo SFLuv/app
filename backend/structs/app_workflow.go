@@ -4,6 +4,14 @@ import "time"
 
 type CredentialType = string
 
+type CredentialVisibility = string
+
+const (
+	CredentialVisibilityPublic   CredentialVisibility = "public"
+	CredentialVisibilityPrivate  CredentialVisibility = "private"
+	CredentialVisibilityUnlisted CredentialVisibility = "unlisted"
+)
+
 type Issuer struct {
 	UserId       string    `json:"user_id"`
 	Organization string    `json:"organization"`
@@ -28,6 +36,7 @@ type IssuerUpdateRequest struct {
 type GlobalCredentialType struct {
 	Value            string    `json:"value"`
 	Label            string    `json:"label"`
+	Visibility       string    `json:"visibility"`
 	BadgeContentType *string   `json:"badge_content_type,omitempty"`
 	BadgeDataBase64  *string   `json:"badge_data_base64,omitempty"`
 	CreatedAt        time.Time `json:"created_at"`
@@ -35,12 +44,14 @@ type GlobalCredentialType struct {
 }
 
 type GlobalCredentialTypeRequest struct {
-	Value string `json:"value"`
-	Label string `json:"label"`
+	Value      string `json:"value"`
+	Label      string `json:"label"`
+	Visibility string `json:"visibility,omitempty"`
 }
 
 type GlobalCredentialTypeUpdateRequest struct {
 	Label            string  `json:"label"`
+	Visibility       *string `json:"visibility,omitempty"`
 	BadgeContentType *string `json:"badge_content_type,omitempty"`
 	BadgeDataBase64  *string `json:"badge_data_base64,omitempty"`
 	ClearBadge       bool    `json:"clear_badge,omitempty"`
@@ -691,6 +702,7 @@ type CredentialRequest struct {
 
 type CredentialRequestCreateRequest struct {
 	CredentialType string `json:"credential_type"`
+	AllowUnlisted  bool   `json:"allow_unlisted,omitempty"`
 }
 
 type CredentialRequestDecisionRequest struct {

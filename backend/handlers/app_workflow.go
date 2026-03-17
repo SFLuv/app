@@ -3563,11 +3563,16 @@ func (a *AppService) CreateImproverCredentialRequest(w http.ResponseWriter, r *h
 		return
 	}
 
-	created, err := a.db.CreateCredentialRequest(r.Context(), *userDid, req.CredentialType)
+	created, err := a.db.CreateCredentialRequest(r.Context(), *userDid, req.CredentialType, req.AllowUnlisted)
 	if err != nil {
 		errMsg := err.Error()
 		if strings.Contains(errMsg, "required") || strings.Contains(errMsg, "invalid") {
 			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(errMsg))
+			return
+		}
+		if strings.Contains(errMsg, "not requestable") {
+			w.WriteHeader(http.StatusForbidden)
 			w.Write([]byte(errMsg))
 			return
 		}
@@ -4855,10 +4860,10 @@ func (a *AppService) CreateAdminCredentialType(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	t, err := a.db.CreateGlobalCredentialType(r.Context(), req.Value, req.Label)
+	t, err := a.db.CreateGlobalCredentialType(r.Context(), req.Value, req.Label, req.Visibility)
 	if err != nil {
 		errMsg := err.Error()
-		if strings.Contains(errMsg, "required") || strings.Contains(errMsg, "already exists") {
+		if strings.Contains(errMsg, "required") || strings.Contains(errMsg, "already exists") || strings.Contains(errMsg, "visibility") {
 			w.WriteHeader(http.StatusBadRequest)
 			w.Write([]byte(errMsg))
 			return
@@ -4922,6 +4927,7 @@ func (a *AppService) UpdateAdminCredentialType(w http.ResponseWriter, r *http.Re
 		r.Context(),
 		value,
 		req.Label,
+		req.Visibility,
 		req.BadgeContentType,
 		req.BadgeDataBase64,
 		req.ClearBadge,
@@ -4930,6 +4936,7 @@ func (a *AppService) UpdateAdminCredentialType(w http.ResponseWriter, r *http.Re
 		errMsg := err.Error()
 		if strings.Contains(errMsg, "required") ||
 			strings.Contains(errMsg, "invalid") ||
+			strings.Contains(errMsg, "visibility") ||
 			strings.Contains(errMsg, "cannot upload and clear") ||
 			strings.Contains(errMsg, "must be an image") ||
 			strings.Contains(errMsg, "exceeds maximum size") {

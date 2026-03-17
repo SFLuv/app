@@ -1981,10 +1981,47 @@ func (s *AppDB) CreateTables() error {
 		ALTER TABLE credential_type_definitions
 		ADD COLUMN IF NOT EXISTS badge_data BYTEA,
 		ADD COLUMN IF NOT EXISTS badge_content_type TEXT,
+		ADD COLUMN IF NOT EXISTS visibility TEXT NOT NULL DEFAULT 'public',
 		ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT NOW();
 	`)
 	if err != nil {
 		return fmt.Errorf("error updating credential_type_definitions columns: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
+		UPDATE credential_type_definitions
+		SET visibility = 'public'
+		WHERE
+			visibility IS NULL
+		OR
+			TRIM(COALESCE(visibility, '')) = ''
+		OR
+			visibility NOT IN ('public', 'private', 'unlisted');
+
+		ALTER TABLE credential_type_definitions
+		ALTER COLUMN visibility SET DEFAULT 'public',
+		ALTER COLUMN visibility SET NOT NULL;
+	`)
+	if err != nil {
+		return fmt.Errorf("error normalizing credential type visibility values: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
+		DO $$
+		BEGIN
+			IF NOT EXISTS (
+				SELECT 1
+				FROM pg_constraint
+				WHERE conname = 'credential_type_definitions_visibility_check'
+			) THEN
+				ALTER TABLE credential_type_definitions
+				ADD CONSTRAINT credential_type_definitions_visibility_check
+				CHECK (visibility IN ('public', 'private', 'unlisted'));
+			END IF;
+		END $$;
+	`)
+	if err != nil {
+		return fmt.Errorf("error adding credential type visibility constraint: %s", err)
 	}
 
 	_, err = s.db.Exec(context.Background(), `

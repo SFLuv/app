@@ -4,7 +4,7 @@ import { FormEvent, useEffect, useMemo, useState } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import { useApp } from "@/context/AppProvider"
 import { VerifiedEmailResponse } from "@/types/server"
-import { GlobalCredentialType } from "@/types/workflow"
+import { CredentialVisibility, GlobalCredentialType } from "@/types/workflow"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -35,6 +35,11 @@ const findCredentialMatch = (role: string, types: GlobalCredentialType[]) => {
     types.find((type) => slugify(type.label) === roleSlug) ||
     null
   )
+}
+
+const normalizeCredentialVisibility = (value?: string | null): CredentialVisibility => {
+  if (value === "private" || value === "unlisted") return value
+  return "public"
 }
 
 export default function ImproverJoinPage() {
@@ -116,7 +121,12 @@ export default function ImproverJoinPage() {
     () => (roleParam ? findCredentialMatch(roleParam, credentialTypes) : null),
     [roleParam, credentialTypes],
   )
-  const roleNotFound = !roleParam || (status === "authenticated" && credentialTypesLoaded && !credentialMatch)
+  const credentialVisibility = normalizeCredentialVisibility(credentialMatch?.visibility)
+  const roleNotFound = !roleParam || (
+    status === "authenticated"
+    && credentialTypesLoaded
+    && (!credentialMatch || credentialVisibility === "private")
+  )
   const credentialTypeValue = credentialMatch?.value || roleParam
   const roleDisplayName = credentialMatch?.label || toDisplayRole(roleParam)
   const canSubmit = Boolean(
@@ -125,7 +135,8 @@ export default function ImproverJoinPage() {
       lastName.trim() &&
       selectedEmail &&
       verifiedEmails.length > 0 &&
-      credentialMatch,
+      credentialMatch &&
+      credentialVisibility !== "private",
   )
 
   const handleJoin = async (event: FormEvent<HTMLFormElement>) => {
@@ -134,6 +145,10 @@ export default function ImproverJoinPage() {
 
     if (!roleParam || !credentialMatch) {
       setError("Role not found.")
+      return
+    }
+    if (credentialVisibility === "private") {
+      setError("This credential cannot be requested.")
       return
     }
     if (!firstName.trim() || !lastName.trim()) {
@@ -174,7 +189,10 @@ export default function ImproverJoinPage() {
 
       const credentialRes = await authFetch("/improvers/credential-requests", {
         method: "POST",
-        body: JSON.stringify({ credential_type: credentialTypeValue }),
+        body: JSON.stringify({
+          credential_type: credentialTypeValue,
+          allow_unlisted: credentialVisibility === "unlisted",
+        }),
       })
       if (!credentialRes.ok && credentialRes.status !== 409) {
         throw new Error((await credentialRes.text()) || "Unable to request credential status.")

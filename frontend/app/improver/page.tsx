@@ -29,6 +29,7 @@ import { AlertTriangle, CheckCircle2, ChevronLeft, ChevronRight, ChevronsUpDown,
 import { usePathname, useRouter, useSearchParams } from "next/navigation"
 import { CredentialRequest } from "@/types/issuer"
 import {
+  CredentialVisibility,
   CredentialType,
   GlobalCredentialType,
   ImproverAbsencePeriod,
@@ -104,6 +105,11 @@ const maxWorkflowPhotoUploadLabel = "2MB"
 const minWorkflowPhotoResizeDimension = 640
 const maxWorkflowPhotoInitialDimension = 4096
 const myBadgesPageSize = 5
+
+const normalizeCredentialVisibility = (value?: string | null): CredentialVisibility => {
+  if (value === "private" || value === "unlisted") return value
+  return "public"
+}
 
 const workflowPhotoAspectRatios: Record<WorkflowPhotoAspectRatio, number> = {
   vertical: 3 / 4,
@@ -537,7 +543,11 @@ export default function ImproverPage() {
   }, [credentialRequests])
 
   const requestableCredentialTypes = useMemo(
-    () => credentialTypes.filter((type) => !credentialSet.has(type.value)),
+    () =>
+      credentialTypes.filter((type) => {
+        if (credentialSet.has(type.value)) return false
+        return normalizeCredentialVisibility(type.visibility) === "public"
+      }),
     [credentialSet, credentialTypes]
   )
 
