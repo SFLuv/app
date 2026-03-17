@@ -134,6 +134,7 @@ func AddWorkflowRoutes(r *chi.Mux, s *handlers.BotService, a *handlers.AppServic
 	r.Put("/admin/issuer-requests", withAdmin(a.UpdateIssuerRequest, a))
 	r.Get("/admin/credential-types", withAdmin(a.GetAdminCredentialTypes, a))
 	r.Post("/admin/credential-types", withAdmin(a.CreateAdminCredentialType, a))
+	r.Put("/admin/credential-types/{value}", withAdmin(a.UpdateAdminCredentialType, a))
 	r.Delete("/admin/credential-types/{value}", withAdmin(a.DeleteAdminCredentialType, a))
 	r.Post("/admin/workflow-templates/default", withAdmin(a.CreateDefaultWorkflowTemplate, a))
 	r.Get("/admin/workflows", withAdmin(a.GetAdminWorkflows, a))

@@ -1978,6 +1978,16 @@ func (s *AppDB) CreateTables() error {
 	}
 
 	_, err = s.db.Exec(context.Background(), `
+		ALTER TABLE credential_type_definitions
+		ADD COLUMN IF NOT EXISTS badge_data BYTEA,
+		ADD COLUMN IF NOT EXISTS badge_content_type TEXT,
+		ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT NOW();
+	`)
+	if err != nil {
+		return fmt.Errorf("error updating credential_type_definitions columns: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
 		ALTER TABLE issuer_credential_scopes
 		DROP CONSTRAINT IF EXISTS issuer_credential_scopes_credential_type_check;
 

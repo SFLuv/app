@@ -8334,38 +8334,86 @@ func (a *AppDB) GetAdminWorkflows(ctx context.Context, search string, page, coun
 
 	var total int
 	countQuery := baseCTE + fmt.Sprintf(`
+		,
+		matching_series AS (
+			SELECT DISTINCT
+				base.series_id
+			FROM
+				base
+			WHERE
+				%s
+		)
 		SELECT
 			COUNT(*)
 		FROM
-			base
-		WHERE
-			%s;
+			matching_series;
 	`, whereClause)
 	if err := a.db.QueryRow(ctx, countQuery, includeArchived, trimmedSearch, likeSearch).Scan(&total); err != nil {
 		return nil, fmt.Errorf("error counting admin workflows: %s", err)
 	}
 
 	listQuery := baseCTE + fmt.Sprintf(`
+		,
+		matching_series AS (
+			SELECT DISTINCT
+				base.series_id
+			FROM
+				base
+			WHERE
+				%s
+		),
+		series_ranked AS (
+			SELECT
+				b.series_id,
+				MAX(b.start_at) AS latest_start_at,
+				MAX(b.created_at) AS latest_created_at
+			FROM
+				base b
+			INNER JOIN
+				matching_series ms
+			ON
+				ms.series_id = b.series_id
+			GROUP BY
+				b.series_id
+		),
+		selected_series AS (
+			SELECT
+				sr.series_id,
+				sr.latest_start_at,
+				sr.latest_created_at
+			FROM
+				series_ranked sr
+			ORDER BY
+				sr.latest_start_at DESC,
+				sr.latest_created_at DESC,
+				sr.series_id DESC
+			LIMIT $4
+			OFFSET $5
+		)
 		SELECT
-			base.id,
-			base.series_id,
-			base.title,
-			base.description,
-			base.recurrence,
-			base.status,
-			base.start_at,
-			base.created_at,
-			base.updated_at,
-			base.assigned_improver_emails
+			b.id,
+			b.series_id,
+			b.title,
+			b.description,
+			b.recurrence,
+			b.status,
+			b.start_at,
+			b.created_at,
+			b.updated_at,
+			b.assigned_improver_emails
 		FROM
-			base
-		WHERE
-			%s
+			base b
+		INNER JOIN
+			selected_series ss
+		ON
+			ss.series_id = b.series_id
 		ORDER BY
-			base.start_at DESC,
-			base.created_at DESC
-		LIMIT $4
-		OFFSET $5;
+			ss.latest_start_at DESC,
+			ss.latest_created_at DESC,
+			ss.series_id DESC,
+			b.start_at ASC,
+			b.created_at ASC,
+			b.id ASC;
 	`, whereClause)
 
 	rows, err := a.db.Query(ctx, listQuery, includeArchived, trimmedSearch, likeSearch, count, offset)
@@ -10970,9 +11018,65 @@ func (a *AppDB) IsGlobalCredentialType(ctx context.Context, value string) (bool,
 	return count > 0, nil
 }
 
+const maxCredentialBadgeUploadBytes = 2 * 1024 * 1024
+
+type parsedCredentialBadgeUpload struct {
+	ContentType string
+	Data        []byte
+}
+
+func parseCredentialBadgeUpload(contentTypeInput, base64PayloadInput string) (*parsedCredentialBadgeUpload, error) {
+	base64Payload := strings.TrimSpace(base64PayloadInput)
+	if base64Payload == "" {
+		return nil, fmt.Errorf("badge upload data is required")
+	}
+	if commaIdx := strings.Index(base64Payload, ","); commaIdx >= 0 {
+		prefix := strings.ToLower(strings.TrimSpace(base64Payload[:commaIdx]))
+		if strings.Contains(prefix, "base64") {
+			base64Payload = strings.TrimSpace(base64Payload[commaIdx+1:])
+		}
+	}
+
+	decoded, err := base64.StdEncoding.DecodeString(base64Payload)
+	if err != nil {
+		decoded, err = base64.RawStdEncoding.DecodeString(base64Payload)
+		if err != nil {
+			return nil, fmt.Errorf("invalid badge image payload")
+		}
+	}
+	if len(decoded) == 0 {
+		return nil, fmt.Errorf("badge upload payload is empty")
+	}
+	if len(decoded) > maxCredentialBadgeUploadBytes {
+		return nil, fmt.Errorf("badge upload exceeds maximum size of 2MB")
+	}
+
+	contentType := strings.ToLower(strings.TrimSpace(contentTypeInput))
+	if contentType == "" {
+		contentType = strings.ToLower(http.DetectContentType(decoded))
+	}
+	if !strings.HasPrefix(contentType, "image/") {
+		return nil, fmt.Errorf("badge upload must be an image")
+	}
+
+	return &parsedCredentialBadgeUpload{
+		ContentType: contentType,
+		Data:        decoded,
+	}, nil
+}
+
 func (a *AppDB) GetGlobalCredentialTypes(ctx context.Context) ([]*structs.GlobalCredentialType, error) {
 	rows, err := a.db.Query(ctx, `
-		SELECT value, label, created_at
+		SELECT
+			value,
+			label,
+			badge_content_type,
+			CASE
+				WHEN badge_data IS NULL THEN NULL
+				ELSE ENCODE(badge_data, 'base64')
+			END AS badge_data_base64,
+			created_at,
+			updated_at
 		FROM credential_type_definitions
 		ORDER BY created_at ASC;
 	`)
@@ -10984,7 +11088,14 @@ func (a *AppDB) GetGlobalCredentialTypes(ctx context.Context) ([]*structs.Global
 	results := []*structs.GlobalCredentialType{}
 	for rows.Next() {
 		t := structs.GlobalCredentialType{}
-		if err := rows.Scan(&t.Value, &t.Label, &t.CreatedAt); err != nil {
+		if err := rows.Scan(
+			&t.Value,
+			&t.Label,
+			&t.BadgeContentType,
+			&t.BadgeDataBase64,
+			&t.CreatedAt,
+			&t.UpdatedAt,
+		); err != nil {
 			return nil, fmt.Errorf("error scanning credential type: %s", err)
 		}
 		results = append(results, &t)
@@ -11002,14 +11113,122 @@ func (a *AppDB) CreateGlobalCredentialType(ctx context.Context, value, label str
 	err := a.db.QueryRow(ctx, `
 		INSERT INTO credential_type_definitions (value, label)
 		VALUES ($1, $2)
-		RETURNING value, label, created_at;
-	`, value, label).Scan(&t.Value, &t.Label, &t.CreatedAt)
+		RETURNING
+			value,
+			label,
+			badge_content_type,
+			CASE
+				WHEN badge_data IS NULL THEN NULL
+				ELSE ENCODE(badge_data, 'base64')
+			END AS badge_data_base64,
+			created_at,
+			updated_at;
+	`, value, label).Scan(
+		&t.Value,
+		&t.Label,
+		&t.BadgeContentType,
+		&t.BadgeDataBase64,
+		&t.CreatedAt,
+		&t.UpdatedAt,
+	)
 	if err != nil {
 		if strings.Contains(err.Error(), "duplicate") || strings.Contains(err.Error(), "unique") {
 			return nil, fmt.Errorf("credential type already exists")
 		}
 		return nil, fmt.Errorf("error creating credential type: %s", err)
 	}
+	return &t, nil
+}
+
+func (a *AppDB) UpdateGlobalCredentialType(
+	ctx context.Context,
+	value string,
+	label string,
+	badgeContentType *string,
+	badgeDataBase64 *string,
+	clearBadge bool,
+) (*structs.GlobalCredentialType, error) {
+	value = strings.TrimSpace(value)
+	label = strings.TrimSpace(label)
+	if value == "" {
+		return nil, fmt.Errorf("value is required")
+	}
+	if label == "" {
+		return nil, fmt.Errorf("label is required")
+	}
+
+	normalizedBadgeContentType := ""
+	if badgeContentType != nil {
+		normalizedBadgeContentType = strings.TrimSpace(*badgeContentType)
+	}
+	normalizedBadgeDataBase64 := ""
+	if badgeDataBase64 != nil {
+		normalizedBadgeDataBase64 = strings.TrimSpace(*badgeDataBase64)
+	}
+	hasBadgePayload := normalizedBadgeContentType != "" || normalizedBadgeDataBase64 != ""
+
+	if clearBadge && hasBadgePayload {
+		return nil, fmt.Errorf("cannot upload and clear badge in the same request")
+	}
+
+	var badgeData []byte
+	var parsedContentType string
+	if hasBadgePayload {
+		if normalizedBadgeDataBase64 == "" {
+			return nil, fmt.Errorf("badge_data_base64 is required when uploading a badge")
+		}
+		parsedBadge, err := parseCredentialBadgeUpload(normalizedBadgeContentType, normalizedBadgeDataBase64)
+		if err != nil {
+			return nil, err
+		}
+		badgeData = parsedBadge.Data
+		parsedContentType = parsedBadge.ContentType
+	}
+
+	contentTypeParam := parsedContentType
+
+	t := structs.GlobalCredentialType{}
+	err := a.db.QueryRow(ctx, `
+		UPDATE credential_type_definitions
+		SET
+			label = $2,
+			badge_data = CASE
+				WHEN $3 THEN NULL
+				WHEN $6 THEN $4
+				ELSE badge_data
+			END,
+			badge_content_type = CASE
+				WHEN $3 THEN NULL
+				WHEN $6 THEN $5
+				ELSE badge_content_type
+			END,
+			updated_at = NOW()
+		WHERE value = $1
+		RETURNING
+			value,
+			label,
+			badge_content_type,
+			CASE
+				WHEN badge_data IS NULL THEN NULL
+				ELSE ENCODE(badge_data, 'base64')
+			END AS badge_data_base64,
+			created_at,
+			updated_at;
+	`, value, label, clearBadge, badgeData, contentTypeParam, hasBadgePayload).Scan(
+		&t.Value,
+		&t.Label,
+		&t.BadgeContentType,
+		&t.BadgeDataBase64,
+		&t.CreatedAt,
+		&t.UpdatedAt,
+	)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, fmt.Errorf("credential type not found")
+		}
+		return nil, fmt.Errorf("error updating credential type: %s", err)
+	}
+
 	return &t, nil
 }
 

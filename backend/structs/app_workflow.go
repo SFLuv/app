@@ -26,14 +26,24 @@ type IssuerUpdateRequest struct {
 }
 
 type GlobalCredentialType struct {
-	Value     string    `json:"value"`
-	Label     string    `json:"label"`
-	CreatedAt time.Time `json:"created_at"`
+	Value            string    `json:"value"`
+	Label            string    `json:"label"`
+	BadgeContentType *string   `json:"badge_content_type,omitempty"`
+	BadgeDataBase64  *string   `json:"badge_data_base64,omitempty"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
 }
 
 type GlobalCredentialTypeRequest struct {
 	Value string `json:"value"`
 	Label string `json:"label"`
+}
+
+type GlobalCredentialTypeUpdateRequest struct {
+	Label            string  `json:"label"`
+	BadgeContentType *string `json:"badge_content_type,omitempty"`
+	BadgeDataBase64  *string `json:"badge_data_base64,omitempty"`
+	ClearBadge       bool    `json:"clear_badge,omitempty"`
 }
 
 type Proposer struct {
@@ -330,15 +340,15 @@ type WorkflowDeletionProposal struct {
 }
 
 type WorkflowEditProposalCreateRequest struct {
-	Title                string                        `json:"title"`
-	Description          string                        `json:"description"`
-	Recurrence           string                        `json:"recurrence"`
-	RecurrenceEndAt      *string                       `json:"recurrence_end_at,omitempty"`
+	Title                string                         `json:"title"`
+	Description          string                         `json:"description"`
+	Recurrence           string                         `json:"recurrence"`
+	RecurrenceEndAt      *string                        `json:"recurrence_end_at,omitempty"`
 	Supervisor           *WorkflowSupervisorCreateInput `json:"supervisor,omitempty"`
-	SupervisorDataFields []WorkflowSupervisorDataField `json:"supervisor_data_fields,omitempty"`
-	Roles                []WorkflowRoleCreateInput     `json:"roles"`
-	Steps                []WorkflowStepCreateInput     `json:"steps"`
-	Reason               string                        `json:"reason,omitempty"`
+	SupervisorDataFields []WorkflowSupervisorDataField  `json:"supervisor_data_fields,omitempty"`
+	Roles                []WorkflowRoleCreateInput      `json:"roles"`
+	Steps                []WorkflowStepCreateInput      `json:"steps"`
+	Reason               string                         `json:"reason,omitempty"`
 }
 
 type WorkflowEditProposalVoteRequest struct {
