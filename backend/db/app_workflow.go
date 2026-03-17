@@ -1515,7 +1515,9 @@ func normalizeWorkflowDefinitionData(
 	}, nil
 }
 
-func insertWorkflowStateTx(
+// upsertWorkflowStateVersionTx reuses an existing state/version id when the
+// normalized definition payload is unchanged for a series.
+func upsertWorkflowStateVersionTx(
 	ctx context.Context,
 	tx pgx.Tx,
 	seriesId string,
@@ -1539,6 +1541,45 @@ func insertWorkflowStateTx(
 	supervisorDataJSON, err := json.Marshal(def.SupervisorDataFields)
 	if err != nil {
 		return "", fmt.Errorf("error marshalling workflow state supervisor data: %s", err)
+	}
+
+	var existingStateID string
+	err = tx.QueryRow(ctx, `
+		SELECT
+			ws.id
+		FROM
+			workflow_states ws
+		WHERE
+			ws.series_id = $1
+		AND
+			ws.title = $2
+		AND
+			ws.description = $3
+		AND
+			ws.recurrence = $4
+		AND
+			ws.recurrence_end_at IS NOT DISTINCT FROM $5
+		AND
+			ws.supervisor_user_id IS NOT DISTINCT FROM $6
+		AND
+			ws.supervisor_bounty = $7
+		AND
+			ws.supervisor_data_json = $8::jsonb
+		AND
+			ws.roles_json = $9::jsonb
+		AND
+			ws.steps_json = $10::jsonb
+		ORDER BY
+			ws.created_at ASC,
+			ws.id ASC
+		LIMIT 1
+		FOR UPDATE;
+	`, seriesId, def.Title, def.Description, def.Recurrence, def.RecurrenceEndAt, def.SupervisorUserId, def.SupervisorBounty, string(supervisorDataJSON), string(rolesJSON), string(stepsJSON)).Scan(&existingStateID)
+	if err == nil && strings.TrimSpace(existingStateID) != "" {
+		return existingStateID, nil
+	}
+	if err != nil && err != pgx.ErrNoRows {
+		return "", fmt.Errorf("error checking for existing workflow state version: %s", err)
 	}
 
 	stateID := uuid.NewString()
@@ -1569,7 +1610,7 @@ func insertWorkflowStateTx(
 	return stateID, nil
 }
 
-func applyWorkflowStateToSeriesTx(ctx context.Context, tx pgx.Tx, seriesId string, stateID string) error {
+func applyWorkflowStateVersionToSeriesTx(ctx context.Context, tx pgx.Tx, seriesId string, stateID string) error {
 	cmd, err := tx.Exec(ctx, `
 		UPDATE workflow_series s
 		SET
@@ -1987,11 +2028,11 @@ func (a *AppDB) CreateWorkflow(
 		return nil, fmt.Errorf("error inserting workflow series: %s", err)
 	}
 
-	stateID, err := insertWorkflowStateTx(ctx, tx, seriesId, proposerId, definition, nil, &proposerActorID)
+	stateID, err := upsertWorkflowStateVersionTx(ctx, tx, seriesId, proposerId, definition, nil, &proposerActorID)
 	if err != nil {
 		return nil, err
 	}
-	if err := applyWorkflowStateToSeriesTx(ctx, tx, seriesId, stateID); err != nil {
+	if err := applyWorkflowStateVersionToSeriesTx(ctx, tx, seriesId, stateID); err != nil {
 		return nil, err
 	}
 
@@ -3254,11 +3295,6 @@ func ensureRecurringWorkflowSuccessorTx(
 	successorStatus := "approved"
 	successorIsBlocked := false
 	var blockedByWorkflowId *string
-	if seed.Status == "completed" {
-		successorStatus = "blocked"
-		successorIsBlocked = true
-		blockedByWorkflowId = &seed.Id
-	}
 
 	successorId := uuid.NewString()
 	_, err = tx.Exec(ctx, `
@@ -3530,7 +3566,7 @@ func ensureRecurringWorkflowSeriesCatchUpTx(ctx context.Context, tx pgx.Tx, seri
 			return nil
 		}
 
-		if status == "approved" || status == "in_progress" {
+		if status == "approved" || status == "in_progress" || status == "blocked" {
 			if _, err := tx.Exec(ctx, `
 				UPDATE
 					workflows
@@ -3542,7 +3578,7 @@ func ensureRecurringWorkflowSeriesCatchUpTx(ctx context.Context, tx pgx.Tx, seri
 				WHERE
 					id = $1
 				AND
-					status IN ('approved', 'in_progress');
+					status IN ('approved', 'in_progress', 'blocked');
 			`, workflowId); err != nil {
 				return fmt.Errorf("error skipping elapsed recurring workflow: %s", err)
 			}
@@ -3788,6 +3824,26 @@ func getCredentialTypeSetTx(ctx context.Context, tx pgx.Tx) (map[string]struct{}
 func (a *AppDB) RefreshWorkflowStartAvailability(ctx context.Context) (*structs.WorkflowStartRefreshResult, error) {
 	if err := a.ensureRecurringWorkflowContinuity(ctx); err != nil {
 		return nil, fmt.Errorf("error ensuring recurring workflow continuity: %s", err)
+	}
+
+	if _, err := a.db.Exec(ctx, `
+		UPDATE
+			workflows
+		SET
+			is_start_blocked = false,
+			blocked_by_workflow_id = NULL,
+			status = 'approved',
+			updated_at = unix_now()
+		WHERE
+			status = 'blocked'
+		AND
+			blocked_by_workflow_id IS NOT NULL
+		AND
+			blocked_by_workflow_id IN (
+				SELECT id FROM workflows WHERE status IN ('completed', 'paid_out', 'skipped', 'failed', 'deleted')
+			);
+	`); err != nil {
+		return nil, fmt.Errorf("error repairing blocked workflows with resolved predecessors: %s", err)
 	}
 
 	rows, err := a.db.Query(ctx, `
@@ -8076,9 +8132,8 @@ func (a *AppDB) GetVoterWorkflows(ctx context.Context, voterId string) ([]*struc
 		FROM
 			workflows
 		WHERE
-			status IN ('pending', 'approved', 'blocked', 'rejected')
+			status = 'pending'
 		ORDER BY
-			CASE WHEN status = 'pending' THEN 0 ELSE 1 END,
 			created_at DESC
 		LIMIT 200;
 	`)
@@ -8829,7 +8884,7 @@ func (a *AppDB) CreateWorkflowEditProposal(
 
 	proposedByID := requesterId
 	sourceWorkflowID := targetWorkflowID
-	proposedStateID, err := insertWorkflowStateTx(ctx, tx, seriesID, proposerID, definition, &sourceWorkflowID, &proposedByID)
+	proposedStateID, err := upsertWorkflowStateVersionTx(ctx, tx, seriesID, proposerID, definition, &sourceWorkflowID, &proposedByID)
 	if err != nil {
 		return nil, err
 	}
@@ -8958,8 +9013,9 @@ func (a *AppDB) GetWorkflowEditProposalsForVoter(ctx context.Context, voterID st
 			id
 		FROM
 			workflow_edit_proposals
+		WHERE
+			status = 'pending'
 		ORDER BY
-			CASE WHEN status = 'pending' THEN 0 ELSE 1 END,
 			created_at DESC
 		LIMIT 200;
 	`)
@@ -9096,7 +9152,7 @@ func finalizeWorkflowEditApprovalTx(
 	actorUserID *string,
 	decision string,
 ) error {
-	if err := applyWorkflowStateToSeriesTx(ctx, tx, seriesID, proposedStateID); err != nil {
+	if err := applyWorkflowStateVersionToSeriesTx(ctx, tx, seriesID, proposedStateID); err != nil {
 		return err
 	}
 	_, err := tx.Exec(ctx, `
@@ -9479,6 +9535,7 @@ func (a *AppDB) GetWorkflowDeletionProposalByIDForUser(ctx context.Context, prop
 			p.target_workflow_id,
 			CASE
 				WHEN p.target_type = 'workflow' THEN COALESCE(NULLIF(TRIM(st.title), ''), COALESCE(NULLIF(TRIM(sr.title), ''), ''))
+				WHEN p.target_type = 'series' THEN COALESCE(NULLIF(TRIM(tsr.title), ''), '')
 				ELSE NULL
 			END,
 			p.target_series_id,
@@ -9506,6 +9563,10 @@ func (a *AppDB) GetWorkflowDeletionProposalByIDForUser(ctx context.Context, prop
 			workflow_series sr
 		ON
 			sr.id = w.series_id
+		LEFT JOIN
+			workflow_series tsr
+		ON
+			tsr.id = p.target_series_id
 		WHERE
 			p.id = $1;
 	`, proposalId)
@@ -9547,9 +9608,8 @@ func (a *AppDB) GetWorkflowDeletionProposalsForVoter(ctx context.Context, voterI
 		FROM
 			workflow_deletion_proposals
 		WHERE
-			status IN ('pending', 'approved', 'denied')
+			status = 'pending'
 		ORDER BY
-			CASE WHEN status = 'pending' THEN 0 ELSE 1 END,
 			created_at DESC
 		LIMIT 300;
 	`)

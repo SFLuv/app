@@ -316,16 +316,9 @@ export default function ProposerPage() {
     return stepTotal + supervisorBounty
   }, [steps, workflowSupervisor.bounty, workflowSupervisor.enabled])
 
-  const filteredWorkflows = useMemo(() => {
-    if (workflowStatusFilter === "all") {
-      return workflows
-    }
-    return workflows.filter((workflow) => workflow.status === workflowStatusFilter)
-  }, [workflowStatusFilter, workflows])
-
   const workflowSeriesGroups = useMemo<WorkflowSeriesGroup[]>(() => {
     const bySeries = new Map<string, Workflow[]>()
-    for (const workflow of filteredWorkflows) {
+    for (const workflow of workflows) {
       const key = workflow.series_id?.trim() || workflow.id
       const existing = bySeries.get(key)
       if (existing) {
@@ -335,7 +328,7 @@ export default function ProposerPage() {
       }
     }
 
-    const groups = Array.from(bySeries.entries()).map(([seriesId, items]) => {
+    let groups = Array.from(bySeries.entries()).map(([seriesId, items]) => {
       const sorted = [...items].sort((a, b) => {
         if (a.start_at !== b.start_at) return a.start_at - b.start_at
         if (a.created_at !== b.created_at) return a.created_at - b.created_at
@@ -348,6 +341,12 @@ export default function ProposerPage() {
       }
     })
 
+    if (workflowStatusFilter !== "all") {
+      groups = groups.filter((group) =>
+        group.workflows.some((workflow) => workflow.status === workflowStatusFilter),
+      )
+    }
+
     groups.sort((a, b) => {
       const latestA = a.workflows[a.workflows.length - 1]
       const latestB = b.workflows[b.workflows.length - 1]
@@ -356,7 +355,7 @@ export default function ProposerPage() {
     })
 
     return groups
-  }, [filteredWorkflows])
+  }, [workflows, workflowStatusFilter])
 
   const filteredTemplates = useMemo(() => {
     const s = templateSearch.trim().toLowerCase()
