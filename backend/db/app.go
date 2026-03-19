@@ -1671,6 +1671,94 @@ func (s *AppDB) CreateTables() error {
 	}
 
 	_, err = s.db.Exec(context.Background(), `
+		WITH ranked AS (
+			SELECT
+				ws.id,
+				FIRST_VALUE(ws.id) OVER (
+					PARTITION BY
+						ws.series_id,
+						COALESCE(NULLIF(BTRIM(ws.title), ''), ''),
+						COALESCE(ws.description, ''),
+						COALESCE(NULLIF(BTRIM(ws.recurrence), ''), 'one_time'),
+						ws.recurrence_end_at,
+						ws.supervisor_user_id,
+						ws.supervisor_bounty,
+						COALESCE(ws.supervisor_data_json, '[]'::jsonb),
+						COALESCE(ws.roles_json, '[]'::jsonb),
+						COALESCE(ws.steps_json, '[]'::jsonb)
+					ORDER BY
+						ws.created_at ASC,
+						ws.id ASC
+				) AS canonical_id,
+				ROW_NUMBER() OVER (
+					PARTITION BY
+						ws.series_id,
+						COALESCE(NULLIF(BTRIM(ws.title), ''), ''),
+						COALESCE(ws.description, ''),
+						COALESCE(NULLIF(BTRIM(ws.recurrence), ''), 'one_time'),
+						ws.recurrence_end_at,
+						ws.supervisor_user_id,
+						ws.supervisor_bounty,
+						COALESCE(ws.supervisor_data_json, '[]'::jsonb),
+						COALESCE(ws.roles_json, '[]'::jsonb),
+						COALESCE(ws.steps_json, '[]'::jsonb)
+					ORDER BY
+						ws.created_at ASC,
+						ws.id ASC
+				) AS row_rank
+			FROM
+				workflow_states ws
+		),
+		dupes AS (
+			SELECT
+				r.id,
+				r.canonical_id
+			FROM
+				ranked r
+			WHERE
+				r.row_rank > 1
+			AND
+				r.id <> r.canonical_id
+		),
+		updated_workflows AS (
+			UPDATE
+				workflows w
+			SET
+				workflow_state_id = d.canonical_id
+			FROM
+				dupes d
+			WHERE
+				w.workflow_state_id = d.id
+		),
+		updated_series AS (
+			UPDATE
+				workflow_series s
+			SET
+				current_state_id = d.canonical_id
+			FROM
+				dupes d
+			WHERE
+				s.current_state_id = d.id
+		),
+		updated_edit_proposals AS (
+			UPDATE
+				workflow_edit_proposals p
+			SET
+				proposed_state_id = d.canonical_id
+			FROM
+				dupes d
+			WHERE
+				p.proposed_state_id = d.id
+		)
+		DELETE FROM workflow_states ws
+		USING dupes d
+		WHERE ws.id = d.id;
+	`)
+	if err != nil {
+		return fmt.Errorf("error deduplicating workflow state versions: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
 		ALTER TABLE affiliates
 		ADD COLUMN IF NOT EXISTS affiliate_logo TEXT;
 
@@ -1887,6 +1975,53 @@ func (s *AppDB) CreateTables() error {
 	`)
 	if err != nil {
 		return fmt.Errorf("error creating credential_type_definitions table: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
+		ALTER TABLE credential_type_definitions
+		ADD COLUMN IF NOT EXISTS badge_data BYTEA,
+		ADD COLUMN IF NOT EXISTS badge_content_type TEXT,
+		ADD COLUMN IF NOT EXISTS visibility TEXT NOT NULL DEFAULT 'public',
+		ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT NOW();
+	`)
+	if err != nil {
+		return fmt.Errorf("error updating credential_type_definitions columns: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
+		UPDATE credential_type_definitions
+		SET visibility = 'public'
+		WHERE
+			visibility IS NULL
+		OR
+			TRIM(COALESCE(visibility, '')) = ''
+		OR
+			visibility NOT IN ('public', 'private', 'unlisted');
+
+		ALTER TABLE credential_type_definitions
+		ALTER COLUMN visibility SET DEFAULT 'public',
+		ALTER COLUMN visibility SET NOT NULL;
+	`)
+	if err != nil {
+		return fmt.Errorf("error normalizing credential type visibility values: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
+		DO $$
+		BEGIN
+			IF NOT EXISTS (
+				SELECT 1
+				FROM pg_constraint
+				WHERE conname = 'credential_type_definitions_visibility_check'
+			) THEN
+				ALTER TABLE credential_type_definitions
+				ADD CONSTRAINT credential_type_definitions_visibility_check
+				CHECK (visibility IN ('public', 'private', 'unlisted'));
+			END IF;
+		END $$;
+	`)
+	if err != nil {
+		return fmt.Errorf("error adding credential type visibility constraint: %s", err)
 	}
 
 	_, err = s.db.Exec(context.Background(), `

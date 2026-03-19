@@ -3563,11 +3563,16 @@ func (a *AppService) CreateImproverCredentialRequest(w http.ResponseWriter, r *h
 		return
 	}
 
-	created, err := a.db.CreateCredentialRequest(r.Context(), *userDid, req.CredentialType)
+	created, err := a.db.CreateCredentialRequest(r.Context(), *userDid, req.CredentialType, req.AllowUnlisted)
 	if err != nil {
 		errMsg := err.Error()
 		if strings.Contains(errMsg, "required") || strings.Contains(errMsg, "invalid") {
 			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(errMsg))
+			return
+		}
+		if strings.Contains(errMsg, "not requestable") {
+			w.WriteHeader(http.StatusForbidden)
 			w.Write([]byte(errMsg))
 			return
 		}
@@ -4855,10 +4860,10 @@ func (a *AppService) CreateAdminCredentialType(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	t, err := a.db.CreateGlobalCredentialType(r.Context(), req.Value, req.Label)
+	t, err := a.db.CreateGlobalCredentialType(r.Context(), req.Value, req.Label, req.Visibility)
 	if err != nil {
 		errMsg := err.Error()
-		if strings.Contains(errMsg, "required") || strings.Contains(errMsg, "already exists") {
+		if strings.Contains(errMsg, "required") || strings.Contains(errMsg, "already exists") || strings.Contains(errMsg, "visibility") {
 			w.WriteHeader(http.StatusBadRequest)
 			w.Write([]byte(errMsg))
 			return
@@ -4895,6 +4900,61 @@ func (a *AppService) DeleteAdminCredentialType(w http.ResponseWriter, r *http.Re
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *AppService) UpdateAdminCredentialType(w http.ResponseWriter, r *http.Request) {
+	value := strings.TrimSpace(r.PathValue("value"))
+	if value == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	defer r.Body.Close()
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		a.logger.Logf("error reading update credential type body for %s: %s", value, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	var req structs.GlobalCredentialTypeUpdateRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	updated, err := a.db.UpdateGlobalCredentialType(
+		r.Context(),
+		value,
+		req.Label,
+		req.Visibility,
+		req.BadgeContentType,
+		req.BadgeDataBase64,
+		req.ClearBadge,
+	)
+	if err != nil {
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "required") ||
+			strings.Contains(errMsg, "invalid") ||
+			strings.Contains(errMsg, "visibility") ||
+			strings.Contains(errMsg, "cannot upload and clear") ||
+			strings.Contains(errMsg, "must be an image") ||
+			strings.Contains(errMsg, "exceeds maximum size") {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(errMsg))
+			return
+		}
+		if strings.Contains(errMsg, "not found") {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		a.logger.Logf("error updating credential type %s: %s", value, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(updated)
 }
 
 func (a *AppService) GetUserByAddress(w http.ResponseWriter, r *http.Request) {

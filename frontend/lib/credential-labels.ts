@@ -48,3 +48,13 @@ export const formatCredentialLabel = (
 
   return humanizeCredentialValue(value)
 }
+
+export const buildCredentialBadgeDataUrl = (
+  credentialType: Pick<GlobalCredentialType, "badge_content_type" | "badge_data_base64"> | null | undefined,
+): string | null => {
+  if (!credentialType) return null
+  const contentType = credentialType.badge_content_type?.trim()
+  const base64Payload = credentialType.badge_data_base64?.trim()
+  if (!contentType || !base64Payload) return null
+  return `data:${contentType};base64,${base64Payload}`
+}

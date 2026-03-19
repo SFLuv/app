@@ -1515,7 +1515,9 @@ func normalizeWorkflowDefinitionData(
 	}, nil
 }
 
-func insertWorkflowStateTx(
+// upsertWorkflowStateVersionTx reuses an existing state/version id when the
+// normalized definition payload is unchanged for a series.
+func upsertWorkflowStateVersionTx(
 	ctx context.Context,
 	tx pgx.Tx,
 	seriesId string,
@@ -1539,6 +1541,45 @@ func insertWorkflowStateTx(
 	supervisorDataJSON, err := json.Marshal(def.SupervisorDataFields)
 	if err != nil {
 		return "", fmt.Errorf("error marshalling workflow state supervisor data: %s", err)
+	}
+
+	var existingStateID string
+	err = tx.QueryRow(ctx, `
+		SELECT
+			ws.id
+		FROM
+			workflow_states ws
+		WHERE
+			ws.series_id = $1
+		AND
+			ws.title = $2
+		AND
+			ws.description = $3
+		AND
+			ws.recurrence = $4
+		AND
+			ws.recurrence_end_at IS NOT DISTINCT FROM $5
+		AND
+			ws.supervisor_user_id IS NOT DISTINCT FROM $6
+		AND
+			ws.supervisor_bounty = $7
+		AND
+			ws.supervisor_data_json = $8::jsonb
+		AND
+			ws.roles_json = $9::jsonb
+		AND
+			ws.steps_json = $10::jsonb
+		ORDER BY
+			ws.created_at ASC,
+			ws.id ASC
+		LIMIT 1
+		FOR UPDATE;
+	`, seriesId, def.Title, def.Description, def.Recurrence, def.RecurrenceEndAt, def.SupervisorUserId, def.SupervisorBounty, string(supervisorDataJSON), string(rolesJSON), string(stepsJSON)).Scan(&existingStateID)
+	if err == nil && strings.TrimSpace(existingStateID) != "" {
+		return existingStateID, nil
+	}
+	if err != nil && err != pgx.ErrNoRows {
+		return "", fmt.Errorf("error checking for existing workflow state version: %s", err)
 	}
 
 	stateID := uuid.NewString()
@@ -1569,7 +1610,7 @@ func insertWorkflowStateTx(
 	return stateID, nil
 }
 
-func applyWorkflowStateToSeriesTx(ctx context.Context, tx pgx.Tx, seriesId string, stateID string) error {
+func applyWorkflowStateVersionToSeriesTx(ctx context.Context, tx pgx.Tx, seriesId string, stateID string) error {
 	cmd, err := tx.Exec(ctx, `
 		UPDATE workflow_series s
 		SET
@@ -1987,11 +2028,11 @@ func (a *AppDB) CreateWorkflow(
 		return nil, fmt.Errorf("error inserting workflow series: %s", err)
 	}
 
-	stateID, err := insertWorkflowStateTx(ctx, tx, seriesId, proposerId, definition, nil, &proposerActorID)
+	stateID, err := upsertWorkflowStateVersionTx(ctx, tx, seriesId, proposerId, definition, nil, &proposerActorID)
 	if err != nil {
 		return nil, err
 	}
-	if err := applyWorkflowStateToSeriesTx(ctx, tx, seriesId, stateID); err != nil {
+	if err := applyWorkflowStateVersionToSeriesTx(ctx, tx, seriesId, stateID); err != nil {
 		return nil, err
 	}
 
@@ -3254,11 +3295,6 @@ func ensureRecurringWorkflowSuccessorTx(
 	successorStatus := "approved"
 	successorIsBlocked := false
 	var blockedByWorkflowId *string
-	if seed.Status == "completed" {
-		successorStatus = "blocked"
-		successorIsBlocked = true
-		blockedByWorkflowId = &seed.Id
-	}
 
 	successorId := uuid.NewString()
 	_, err = tx.Exec(ctx, `
@@ -3530,7 +3566,7 @@ func ensureRecurringWorkflowSeriesCatchUpTx(ctx context.Context, tx pgx.Tx, seri
 			return nil
 		}
 
-		if status == "approved" || status == "in_progress" {
+		if status == "approved" || status == "in_progress" || status == "blocked" {
 			if _, err := tx.Exec(ctx, `
 				UPDATE
 					workflows
@@ -3542,7 +3578,7 @@ func ensureRecurringWorkflowSeriesCatchUpTx(ctx context.Context, tx pgx.Tx, seri
 				WHERE
 					id = $1
 				AND
-					status IN ('approved', 'in_progress');
+					status IN ('approved', 'in_progress', 'blocked');
 			`, workflowId); err != nil {
 				return fmt.Errorf("error skipping elapsed recurring workflow: %s", err)
 			}
@@ -3788,6 +3824,26 @@ func getCredentialTypeSetTx(ctx context.Context, tx pgx.Tx) (map[string]struct{}
 func (a *AppDB) RefreshWorkflowStartAvailability(ctx context.Context) (*structs.WorkflowStartRefreshResult, error) {
 	if err := a.ensureRecurringWorkflowContinuity(ctx); err != nil {
 		return nil, fmt.Errorf("error ensuring recurring workflow continuity: %s", err)
+	}
+
+	if _, err := a.db.Exec(ctx, `
+		UPDATE
+			workflows
+		SET
+			is_start_blocked = false,
+			blocked_by_workflow_id = NULL,
+			status = 'approved',
+			updated_at = unix_now()
+		WHERE
+			status = 'blocked'
+		AND
+			blocked_by_workflow_id IS NOT NULL
+		AND
+			blocked_by_workflow_id IN (
+				SELECT id FROM workflows WHERE status IN ('completed', 'paid_out', 'skipped', 'failed', 'deleted')
+			);
+	`); err != nil {
+		return nil, fmt.Errorf("error repairing blocked workflows with resolved predecessors: %s", err)
 	}
 
 	rows, err := a.db.Query(ctx, `
@@ -8076,9 +8132,8 @@ func (a *AppDB) GetVoterWorkflows(ctx context.Context, voterId string) ([]*struc
 		FROM
 			workflows
 		WHERE
-			status IN ('pending', 'approved', 'blocked', 'rejected')
+			status = 'pending'
 		ORDER BY
-			CASE WHEN status = 'pending' THEN 0 ELSE 1 END,
 			created_at DESC
 		LIMIT 200;
 	`)
@@ -8279,38 +8334,86 @@ func (a *AppDB) GetAdminWorkflows(ctx context.Context, search string, page, coun
 
 	var total int
 	countQuery := baseCTE + fmt.Sprintf(`
+		,
+		matching_series AS (
+			SELECT DISTINCT
+				base.series_id
+			FROM
+				base
+			WHERE
+				%s
+		)
 		SELECT
 			COUNT(*)
 		FROM
-			base
-		WHERE
-			%s;
+			matching_series;
 	`, whereClause)
 	if err := a.db.QueryRow(ctx, countQuery, includeArchived, trimmedSearch, likeSearch).Scan(&total); err != nil {
 		return nil, fmt.Errorf("error counting admin workflows: %s", err)
 	}
 
 	listQuery := baseCTE + fmt.Sprintf(`
+		,
+		matching_series AS (
+			SELECT DISTINCT
+				base.series_id
+			FROM
+				base
+			WHERE
+				%s
+		),
+		series_ranked AS (
+			SELECT
+				b.series_id,
+				MAX(b.start_at) AS latest_start_at,
+				MAX(b.created_at) AS latest_created_at
+			FROM
+				base b
+			INNER JOIN
+				matching_series ms
+			ON
+				ms.series_id = b.series_id
+			GROUP BY
+				b.series_id
+		),
+		selected_series AS (
+			SELECT
+				sr.series_id,
+				sr.latest_start_at,
+				sr.latest_created_at
+			FROM
+				series_ranked sr
+			ORDER BY
+				sr.latest_start_at DESC,
+				sr.latest_created_at DESC,
+				sr.series_id DESC
+			LIMIT $4
+			OFFSET $5
+		)
 		SELECT
-			base.id,
-			base.series_id,
-			base.title,
-			base.description,
-			base.recurrence,
-			base.status,
-			base.start_at,
-			base.created_at,
-			base.updated_at,
-			base.assigned_improver_emails
+			b.id,
+			b.series_id,
+			b.title,
+			b.description,
+			b.recurrence,
+			b.status,
+			b.start_at,
+			b.created_at,
+			b.updated_at,
+			b.assigned_improver_emails
 		FROM
-			base
-		WHERE
-			%s
+			base b
+		INNER JOIN
+			selected_series ss
+		ON
+			ss.series_id = b.series_id
 		ORDER BY
-			base.start_at DESC,
-			base.created_at DESC
-		LIMIT $4
-		OFFSET $5;
+			ss.latest_start_at DESC,
+			ss.latest_created_at DESC,
+			ss.series_id DESC,
+			b.start_at ASC,
+			b.created_at ASC,
+			b.id ASC;
 	`, whereClause)
 
 	rows, err := a.db.Query(ctx, listQuery, includeArchived, trimmedSearch, likeSearch, count, offset)
@@ -8829,7 +8932,7 @@ func (a *AppDB) CreateWorkflowEditProposal(
 
 	proposedByID := requesterId
 	sourceWorkflowID := targetWorkflowID
-	proposedStateID, err := insertWorkflowStateTx(ctx, tx, seriesID, proposerID, definition, &sourceWorkflowID, &proposedByID)
+	proposedStateID, err := upsertWorkflowStateVersionTx(ctx, tx, seriesID, proposerID, definition, &sourceWorkflowID, &proposedByID)
 	if err != nil {
 		return nil, err
 	}
@@ -8958,8 +9061,9 @@ func (a *AppDB) GetWorkflowEditProposalsForVoter(ctx context.Context, voterID st
 			id
 		FROM
 			workflow_edit_proposals
+		WHERE
+			status = 'pending'
 		ORDER BY
-			CASE WHEN status = 'pending' THEN 0 ELSE 1 END,
 			created_at DESC
 		LIMIT 200;
 	`)
@@ -9096,7 +9200,7 @@ func finalizeWorkflowEditApprovalTx(
 	actorUserID *string,
 	decision string,
 ) error {
-	if err := applyWorkflowStateToSeriesTx(ctx, tx, seriesID, proposedStateID); err != nil {
+	if err := applyWorkflowStateVersionToSeriesTx(ctx, tx, seriesID, proposedStateID); err != nil {
 		return err
 	}
 	_, err := tx.Exec(ctx, `
@@ -9479,6 +9583,7 @@ func (a *AppDB) GetWorkflowDeletionProposalByIDForUser(ctx context.Context, prop
 			p.target_workflow_id,
 			CASE
 				WHEN p.target_type = 'workflow' THEN COALESCE(NULLIF(TRIM(st.title), ''), COALESCE(NULLIF(TRIM(sr.title), ''), ''))
+				WHEN p.target_type = 'series' THEN COALESCE(NULLIF(TRIM(tsr.title), ''), '')
 				ELSE NULL
 			END,
 			p.target_series_id,
@@ -9506,6 +9611,10 @@ func (a *AppDB) GetWorkflowDeletionProposalByIDForUser(ctx context.Context, prop
 			workflow_series sr
 		ON
 			sr.id = w.series_id
+		LEFT JOIN
+			workflow_series tsr
+		ON
+			tsr.id = p.target_series_id
 		WHERE
 			p.id = $1;
 	`, proposalId)
@@ -9547,9 +9656,8 @@ func (a *AppDB) GetWorkflowDeletionProposalsForVoter(ctx context.Context, voterI
 		FROM
 			workflow_deletion_proposals
 		WHERE
-			status IN ('pending', 'approved', 'denied')
+			status = 'pending'
 		ORDER BY
-			CASE WHEN status = 'pending' THEN 0 ELSE 1 END,
 			created_at DESC
 		LIMIT 300;
 	`)
@@ -10430,19 +10538,11 @@ func getCredentialRequestByIDTx(ctx context.Context, tx pgx.Tx, requestId string
 	return scanCredentialRequest(row)
 }
 
-func (a *AppDB) CreateCredentialRequest(ctx context.Context, userId string, credentialType string) (*structs.CredentialRequest, error) {
+func (a *AppDB) CreateCredentialRequest(ctx context.Context, userId string, credentialType string, allowUnlisted bool) (*structs.CredentialRequest, error) {
 	userId = strings.TrimSpace(userId)
 	credentialType = strings.TrimSpace(credentialType)
 	if userId == "" || credentialType == "" {
 		return nil, fmt.Errorf("user_id and credential_type are required")
-	}
-
-	valid, err := a.IsGlobalCredentialType(ctx, credentialType)
-	if err != nil {
-		return nil, fmt.Errorf("error validating credential type: %s", err)
-	}
-	if !valid {
-		return nil, fmt.Errorf("invalid credential type")
 	}
 
 	tx, err := a.db.Begin(ctx)
@@ -10450,6 +10550,32 @@ func (a *AppDB) CreateCredentialRequest(ctx context.Context, userId string, cred
 		return nil, err
 	}
 	defer tx.Rollback(ctx)
+
+	var visibilityRaw string
+	if err := tx.QueryRow(ctx, `
+		SELECT
+			visibility
+		FROM
+			credential_type_definitions
+		WHERE
+			value = $1;
+	`, credentialType).Scan(&visibilityRaw); err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, fmt.Errorf("invalid credential type")
+		}
+		return nil, fmt.Errorf("error validating credential type: %s", err)
+	}
+
+	visibility, err := normalizeCredentialVisibility(visibilityRaw)
+	if err != nil {
+		return nil, fmt.Errorf("error validating credential visibility: %s", err)
+	}
+	if visibility == string(structs.CredentialVisibilityPrivate) {
+		return nil, fmt.Errorf("credential type is not requestable")
+	}
+	if visibility == string(structs.CredentialVisibilityUnlisted) && !allowUnlisted {
+		return nil, fmt.Errorf("credential type is not requestable")
+	}
 
 	var existingUser string
 	if err := tx.QueryRow(ctx, `
@@ -10910,9 +11036,81 @@ func (a *AppDB) IsGlobalCredentialType(ctx context.Context, value string) (bool,
 	return count > 0, nil
 }
 
+func normalizeCredentialVisibility(input string) (string, error) {
+	normalized := strings.ToLower(strings.TrimSpace(input))
+	if normalized == "" {
+		return string(structs.CredentialVisibilityPublic), nil
+	}
+	switch normalized {
+	case string(structs.CredentialVisibilityPublic),
+		string(structs.CredentialVisibilityPrivate),
+		string(structs.CredentialVisibilityUnlisted):
+		return normalized, nil
+	default:
+		return "", fmt.Errorf("invalid credential visibility")
+	}
+}
+
+const maxCredentialBadgeUploadBytes = 2 * 1024 * 1024
+
+type parsedCredentialBadgeUpload struct {
+	ContentType string
+	Data        []byte
+}
+
+func parseCredentialBadgeUpload(contentTypeInput, base64PayloadInput string) (*parsedCredentialBadgeUpload, error) {
+	base64Payload := strings.TrimSpace(base64PayloadInput)
+	if base64Payload == "" {
+		return nil, fmt.Errorf("badge upload data is required")
+	}
+	if commaIdx := strings.Index(base64Payload, ","); commaIdx >= 0 {
+		prefix := strings.ToLower(strings.TrimSpace(base64Payload[:commaIdx]))
+		if strings.Contains(prefix, "base64") {
+			base64Payload = strings.TrimSpace(base64Payload[commaIdx+1:])
+		}
+	}
+
+	decoded, err := base64.StdEncoding.DecodeString(base64Payload)
+	if err != nil {
+		decoded, err = base64.RawStdEncoding.DecodeString(base64Payload)
+		if err != nil {
+			return nil, fmt.Errorf("invalid badge image payload")
+		}
+	}
+	if len(decoded) == 0 {
+		return nil, fmt.Errorf("badge upload payload is empty")
+	}
+	if len(decoded) > maxCredentialBadgeUploadBytes {
+		return nil, fmt.Errorf("badge upload exceeds maximum size of 2MB")
+	}
+
+	contentType := strings.ToLower(strings.TrimSpace(contentTypeInput))
+	if contentType == "" {
+		contentType = strings.ToLower(http.DetectContentType(decoded))
+	}
+	if !strings.HasPrefix(contentType, "image/") {
+		return nil, fmt.Errorf("badge upload must be an image")
+	}
+
+	return &parsedCredentialBadgeUpload{
+		ContentType: contentType,
+		Data:        decoded,
+	}, nil
+}
+
 func (a *AppDB) GetGlobalCredentialTypes(ctx context.Context) ([]*structs.GlobalCredentialType, error) {
 	rows, err := a.db.Query(ctx, `
-		SELECT value, label, created_at
+		SELECT
+			value,
+			label,
+			visibility,
+			badge_content_type,
+			CASE
+				WHEN badge_data IS NULL THEN NULL
+				ELSE ENCODE(badge_data, 'base64')
+			END AS badge_data_base64,
+			created_at,
+			updated_at
 		FROM credential_type_definitions
 		ORDER BY created_at ASC;
 	`)
@@ -10924,7 +11122,15 @@ func (a *AppDB) GetGlobalCredentialTypes(ctx context.Context) ([]*structs.Global
 	results := []*structs.GlobalCredentialType{}
 	for rows.Next() {
 		t := structs.GlobalCredentialType{}
-		if err := rows.Scan(&t.Value, &t.Label, &t.CreatedAt); err != nil {
+		if err := rows.Scan(
+			&t.Value,
+			&t.Label,
+			&t.Visibility,
+			&t.BadgeContentType,
+			&t.BadgeDataBase64,
+			&t.CreatedAt,
+			&t.UpdatedAt,
+		); err != nil {
 			return nil, fmt.Errorf("error scanning credential type: %s", err)
 		}
 		results = append(results, &t)
@@ -10932,24 +11138,158 @@ func (a *AppDB) GetGlobalCredentialTypes(ctx context.Context) ([]*structs.Global
 	return results, nil
 }
 
-func (a *AppDB) CreateGlobalCredentialType(ctx context.Context, value, label string) (*structs.GlobalCredentialType, error) {
+func (a *AppDB) CreateGlobalCredentialType(ctx context.Context, value, label, visibility string) (*structs.GlobalCredentialType, error) {
 	value = strings.TrimSpace(value)
 	label = strings.TrimSpace(label)
 	if value == "" || label == "" {
 		return nil, fmt.Errorf("value and label are required")
 	}
+
+	normalizedVisibility, err := normalizeCredentialVisibility(visibility)
+	if err != nil {
+		return nil, err
+	}
+
 	t := structs.GlobalCredentialType{}
-	err := a.db.QueryRow(ctx, `
-		INSERT INTO credential_type_definitions (value, label)
-		VALUES ($1, $2)
-		RETURNING value, label, created_at;
-	`, value, label).Scan(&t.Value, &t.Label, &t.CreatedAt)
+	err = a.db.QueryRow(ctx, `
+		INSERT INTO credential_type_definitions (value, label, visibility)
+		VALUES ($1, $2, $3)
+		RETURNING
+			value,
+			label,
+			visibility,
+			badge_content_type,
+			CASE
+				WHEN badge_data IS NULL THEN NULL
+				ELSE ENCODE(badge_data, 'base64')
+			END AS badge_data_base64,
+			created_at,
+			updated_at;
+	`, value, label, normalizedVisibility).Scan(
+		&t.Value,
+		&t.Label,
+		&t.Visibility,
+		&t.BadgeContentType,
+		&t.BadgeDataBase64,
+		&t.CreatedAt,
+		&t.UpdatedAt,
+	)
 	if err != nil {
 		if strings.Contains(err.Error(), "duplicate") || strings.Contains(err.Error(), "unique") {
 			return nil, fmt.Errorf("credential type already exists")
 		}
 		return nil, fmt.Errorf("error creating credential type: %s", err)
 	}
+	return &t, nil
+}
+
+func (a *AppDB) UpdateGlobalCredentialType(
+	ctx context.Context,
+	value string,
+	label string,
+	visibility *string,
+	badgeContentType *string,
+	badgeDataBase64 *string,
+	clearBadge bool,
+) (*structs.GlobalCredentialType, error) {
+	value = strings.TrimSpace(value)
+	label = strings.TrimSpace(label)
+	if value == "" {
+		return nil, fmt.Errorf("value is required")
+	}
+	if label == "" {
+		return nil, fmt.Errorf("label is required")
+	}
+
+	var normalizedVisibility string
+	hasVisibility := false
+	if visibility != nil {
+		parsedVisibility, err := normalizeCredentialVisibility(*visibility)
+		if err != nil {
+			return nil, err
+		}
+		normalizedVisibility = parsedVisibility
+		hasVisibility = true
+	}
+
+	normalizedBadgeContentType := ""
+	if badgeContentType != nil {
+		normalizedBadgeContentType = strings.TrimSpace(*badgeContentType)
+	}
+	normalizedBadgeDataBase64 := ""
+	if badgeDataBase64 != nil {
+		normalizedBadgeDataBase64 = strings.TrimSpace(*badgeDataBase64)
+	}
+	hasBadgePayload := normalizedBadgeContentType != "" || normalizedBadgeDataBase64 != ""
+
+	if clearBadge && hasBadgePayload {
+		return nil, fmt.Errorf("cannot upload and clear badge in the same request")
+	}
+
+	var badgeData []byte
+	var parsedContentType string
+	if hasBadgePayload {
+		if normalizedBadgeDataBase64 == "" {
+			return nil, fmt.Errorf("badge_data_base64 is required when uploading a badge")
+		}
+		parsedBadge, err := parseCredentialBadgeUpload(normalizedBadgeContentType, normalizedBadgeDataBase64)
+		if err != nil {
+			return nil, err
+		}
+		badgeData = parsedBadge.Data
+		parsedContentType = parsedBadge.ContentType
+	}
+
+	contentTypeParam := parsedContentType
+
+	t := structs.GlobalCredentialType{}
+	err := a.db.QueryRow(ctx, `
+			UPDATE credential_type_definitions
+			SET
+				label = $2,
+				visibility = CASE
+					WHEN $3 THEN $4
+					ELSE visibility
+				END,
+				badge_data = CASE
+					WHEN $5 THEN NULL
+					WHEN $8 THEN $6
+					ELSE badge_data
+				END,
+				badge_content_type = CASE
+					WHEN $5 THEN NULL
+					WHEN $8 THEN $7
+					ELSE badge_content_type
+				END,
+				updated_at = NOW()
+		WHERE value = $1
+		RETURNING
+			value,
+			label,
+			visibility,
+			badge_content_type,
+			CASE
+				WHEN badge_data IS NULL THEN NULL
+				ELSE ENCODE(badge_data, 'base64')
+				END AS badge_data_base64,
+				created_at,
+				updated_at;
+		`, value, label, hasVisibility, normalizedVisibility, clearBadge, badgeData, contentTypeParam, hasBadgePayload).Scan(
+		&t.Value,
+		&t.Label,
+		&t.Visibility,
+		&t.BadgeContentType,
+		&t.BadgeDataBase64,
+		&t.CreatedAt,
+		&t.UpdatedAt,
+	)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, fmt.Errorf("credential type not found")
+		}
+		return nil, fmt.Errorf("error updating credential type: %s", err)
+	}
+
 	return &t, nil
 }
 

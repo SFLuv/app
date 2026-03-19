@@ -3,6 +3,7 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
+import { Badge } from "@/components/ui/badge"
 import { Send, QrCode, Eye, EyeOff, RefreshCw, ArrowLeft, ArrowDownLeft, Wallet, Pencil, Check, X, BellOff, Bell, Banknote, Copy } from "lucide-react"
 import { SendCryptoModal } from "@/components/wallets/send-crypto-modal"
 import { ReceiveCryptoModal } from "@/components/wallets/receive-crypto-modal"
@@ -12,7 +13,7 @@ import { TransactionModal } from "@/components/transactions/transaction-modal"
 import { useToast } from "@/hooks/use-toast"
 import { useParams, useRouter, useSearchParams } from "next/navigation"
 import { useApp } from "@/context/AppProvider"
-import { HONEY_TOKEN } from "@/lib/constants"
+import { CHAIN, HONEY_TOKEN } from "@/lib/constants"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
@@ -43,6 +44,7 @@ export default function WalletDetailsPage() {
   const [transactionModalOpen, setTransactionModalOpen] = useState(false)
   const [walletCanUnwrap, setWalletCanUnwrap] = useState<boolean>(false)
   const [walletCanMint, setWalletCanMint] = useState<boolean>(false)
+  const [gasTokenBalance, setGasTokenBalance] = useState<number | null>(null)
   const [backingBalancesLoading, setBackingBalancesLoading] = useState<boolean>(false)
   const [byusdBalance, setByusdBalance] = useState<number | null>(null)
   const [honeyBalance, setHoneyBalance] = useState<number | null>(null)
@@ -101,6 +103,12 @@ export default function WalletDetailsPage() {
     if (wallet.address.length <= 12) return wallet.address
     return `${wallet.address.slice(0, 6)}...${wallet.address.slice(-4)}`
   }, [wallet?.address])
+  const formatGasBalance = useCallback((value: number | null): string => {
+    if (value === null) return "..."
+    if (value >= 1000) return value.toLocaleString(undefined, { maximumFractionDigits: 2 })
+    if (value >= 1) return value.toLocaleString(undefined, { maximumFractionDigits: 4 })
+    return value.toLocaleString(undefined, { maximumFractionDigits: 6 })
+  }, [])
 
   const ponder = useMemo(() => {
     if(ponderSubscriptions?.length === 0) return undefined
@@ -264,8 +272,25 @@ export default function WalletDetailsPage() {
     }
   }, [wallet, walletCanMint])
 
+  const updateGasBalance = useCallback(async () => {
+    if (!wallet || wallet.type !== "eoa") {
+      setGasTokenBalance(null)
+      return
+    }
+
+    try {
+      const nativeBalance = await wallet.getGasTokenBalanceFormatted()
+      setGasTokenBalance(nativeBalance)
+    }
+    catch (error) {
+      console.error(error)
+      setGasTokenBalance(null)
+    }
+  }, [wallet])
+
   const updateBalanceWithRetryRef = useRef(updateBalanceWithRetry)
   const updateBackingBalancesRef = useRef(updateBackingBalances)
+  const updateGasBalanceRef = useRef(updateGasBalance)
 
   useEffect(() => {
     updateBalanceWithRetryRef.current = updateBalanceWithRetry
@@ -276,11 +301,16 @@ export default function WalletDetailsPage() {
   }, [updateBackingBalances])
 
   useEffect(() => {
+    updateGasBalanceRef.current = updateGasBalance
+  }, [updateGasBalance])
+
+  useEffect(() => {
     if(!showReceiveModal && !showSendModal) {
       void updateBalance()
       void updateBackingBalances()
+      void updateGasBalance()
     }
-  }, [showReceiveModal, showSendModal, updateBalance, updateBackingBalances])
+  }, [showReceiveModal, showSendModal, updateBalance, updateBackingBalances, updateGasBalance])
 
   const toggleNotificationModal = () => {
     setNotificationModalOpen(!notificationModalOpen)
@@ -444,6 +474,7 @@ export default function WalletDetailsPage() {
         if (nextMarker && nextMarker !== previousMarker) {
           await updateBalanceWithRetryRef.current()
           await updateBackingBalancesRef.current()
+          await updateGasBalanceRef.current()
         }
       } catch (pollError) {
         console.error(pollError)
@@ -479,6 +510,7 @@ export default function WalletDetailsPage() {
     setIsRefreshing(true)
     // Mock refresh delay
     await updateBalance()
+    await updateGasBalance()
     await txPageRefresher()
     setIsRefreshing(false)
     toast({
@@ -610,6 +642,13 @@ export default function WalletDetailsPage() {
                     <Copy className="h-3 w-3" />
                   </Button>
                 </div>
+                {wallet.type === "eoa" && (
+                  <div className="mt-1">
+                    <Badge variant="warning" className="text-[10px] sm:text-xs">
+                      Gas: {formatGasBalance(gasTokenBalance)} {CHAIN.nativeCurrency.symbol}
+                    </Badge>
+                  </div>
+                )}
               </div>
             </div>
           </div>

@@ -368,16 +368,11 @@ export default function VoterPage() {
     [deletionProposals],
   )
 
-  const workflowVotesList = useMemo(
-    () => workflows.filter((workflow) => workflow.status !== "approved"),
-    [workflows],
-  )
-
   const filteredWorkflows = useMemo(() => {
     const s = workflowSearch.trim().toLowerCase()
-    if (!s) return workflowVotesList
-    return workflowVotesList.filter((w) => w.title.toLowerCase().includes(s))
-  }, [workflowVotesList, workflowSearch])
+    if (!s) return workflows
+    return workflows.filter((w) => w.title.toLowerCase().includes(s))
+  }, [workflows, workflowSearch])
 
   const filteredEditProposals = useMemo(() => {
     const s = editSearch.trim().toLowerCase()
@@ -394,7 +389,8 @@ export default function VoterPage() {
     if (!s) return deletionProposals
     return deletionProposals.filter((p) =>
       (p.target_workflow_title || "").toLowerCase().includes(s) ||
-      p.target_type.toLowerCase().includes(s)
+      p.target_type.toLowerCase().includes(s) ||
+      (p.reason || "").toLowerCase().includes(s)
     )
   }, [deletionProposals, deletionSearch])
 
@@ -695,19 +691,20 @@ export default function VoterPage() {
                           <div className="flex flex-wrap items-center justify-between gap-3">
                             <div>
                               <h3 className="font-semibold">
-                                {proposal.target_type === "series" ? "Series Deletion" : "Workflow Deletion"}
+                                {proposal.target_workflow_title || (proposal.target_type === "series" ? "Series Deletion" : "Workflow Deletion")}
                               </h3>
+                              <p className="text-xs text-muted-foreground">
+                                {proposal.target_type === "series" ? "Entire Series" : "Single Workflow"}
+                              </p>
                             </div>
                             <Badge variant={pending ? "outline" : proposal.status === "approved" ? "default" : "secondary"}>
                               {formatStatusLabel(proposal.status)}
                             </Badge>
                           </div>
 
-                          <div className="grid gap-2 text-xs text-muted-foreground md:grid-cols-3">
-                            <span>Target Type: {proposal.target_type}</span>
-                            <span>Workflow: {proposal.target_workflow_title || "--"}</span>
-                            <span>{proposal.target_type === "series" ? "Target: Entire Series" : "Target: Single Workflow"}</span>
-                          </div>
+                          {proposal.reason && (
+                            <p className="text-sm text-muted-foreground">{proposal.reason}</p>
+                          )}
                           <div className="grid gap-2 text-xs text-muted-foreground md:grid-cols-3">
                             <span>
                               Votes: {proposal.votes.approve} approve / {proposal.votes.deny} deny ({proposal.votes.votes_cast}/{proposal.votes.total_voters})
