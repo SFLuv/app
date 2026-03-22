@@ -21,12 +21,11 @@ export const QRCodeCard = ({ code }: { code: string }) => {
           fontSize: "18px"
         }}>Thank you from SFLuv!</h1>
         <h3 style={{margin: "10px"}}>To redeem your tokens:</h3>
-        <ol style={{textAlign: "center", width: "70%", margin: "auto", fontSize: "10px"}}>
-          <li>1. Scan the QR code</li>
-          <li>2. Download the app (CitizenWallet)</li>
-          <li>3. Select "Browse Communities"</li>
-          <li>4. Select "SFLUV Community"</li>
-          <li>5. Scan the QR again to claim your $SFLUV!</li>
+        <ol style={{textAlign: "center", width: "70%", margin: "auto", fontSize: "12px"}}>
+          <li>1. Scan the QR code.</li>
+          <li>2. Select "Continue with Web Wallet".</li>
+          <li>3. Sign up with Google or your preferred email account.</li>
+          <li>4. Wait to receive your SFLuv!</li>
         </ol>
       </div>
 
@@ -38,7 +37,7 @@ export const QRCodeCard = ({ code }: { code: string }) => {
           viewBox={`0 0 256 256`}
         />
       </div>
-      <div style={{textAlign: "center", fontSize: "8px"}}>
+      <div style={{textAlign: "center", fontSize: "10px"}}>
         <p>Interested in more SFLuv supported events?<br/>
           Visit <a>www.sfluv.org/volunteers</a>
         </p>
