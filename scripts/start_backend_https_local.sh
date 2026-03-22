@@ -29,5 +29,5 @@ echo "Open https://localhost:8443 once and proceed through the warning."
 
 (
   cd "$ROOT_DIR/backend"
-  TLS_CERT_FILE="$CERT" TLS_KEY_FILE="$KEY" TLS_PORT=8443 nohup go run main.go > /tmp/sfluv_backend.log 2>&1 &
+  TLS_CERT_FILE="$CERT" TLS_KEY_FILE="$KEY" TLS_PORT=8443 nohup go run ./cmd/server > /tmp/sfluv_backend.log 2>&1 &
 )
