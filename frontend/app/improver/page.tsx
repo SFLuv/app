@@ -2278,44 +2278,44 @@ export default function ImproverPage() {
                                 Stop Camera
                               </Button>
                             )}
-                            {cameraState.open && (
-                                <Button
-                                  className="w-full sm:w-auto"
-                                  type="button"
-                                  size="sm"
-                                  onClick={() =>
-                                    captureCameraPhoto(
-                                      step.id,
-                                      item.id,
-                                      item.title,
-                                      normalizeWorkflowPhotoAspectRatio(item.photo_aspect_ratio || "square"),
-                                    )
-                                  }
-                                  disabled={Boolean(submitting) || stepNotPossibleSelected}
-                                >
-                                Capture Photo
-                              </Button>
-                            )}
                           </div>
 
                           {cameraState.error && <p className="text-xs text-red-600">{cameraState.error}</p>}
 
                           {cameraState.open && (
-                            <div
-                              className="overflow-hidden rounded border bg-black/80"
-                              style={{
-                                aspectRatio: String(
-                                  workflowPhotoAspectRatios[normalizeWorkflowPhotoAspectRatio(item.photo_aspect_ratio || "square")],
-                                ),
-                              }}
-                            >
-                              <video
-                                ref={getCameraVideoRef(cameraKey)}
-                                className="h-full w-full object-cover"
-                                playsInline
-                                muted
-                                autoPlay
-                              />
+                            <div className="space-y-2">
+                              <div
+                                className="overflow-hidden rounded border bg-black/80"
+                                style={{
+                                  aspectRatio: String(
+                                    workflowPhotoAspectRatios[normalizeWorkflowPhotoAspectRatio(item.photo_aspect_ratio || "square")],
+                                  ),
+                                }}
+                              >
+                                <video
+                                  ref={getCameraVideoRef(cameraKey)}
+                                  className="h-full w-full object-cover"
+                                  playsInline
+                                  muted
+                                  autoPlay
+                                />
+                              </div>
+                              <Button
+                                className="w-full sm:w-auto"
+                                type="button"
+                                size="sm"
+                                onClick={() =>
+                                  captureCameraPhoto(
+                                    step.id,
+                                    item.id,
+                                    item.title,
+                                    normalizeWorkflowPhotoAspectRatio(item.photo_aspect_ratio || "square"),
+                                  )
+                                }
+                                disabled={Boolean(submitting) || stepNotPossibleSelected}
+                              >
+                                Capture Photo
+                              </Button>
                             </div>
                           )}
                         </div>

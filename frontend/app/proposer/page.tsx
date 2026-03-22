@@ -30,6 +30,7 @@ import {
   GlobalCredentialType,
   Workflow,
   WorkflowCreateRequest,
+  WorkflowDeletionProposal,
   WorkflowEditProposal,
   WorkflowEditProposalCreateRequest,
   WorkflowDeletionTargetType,
@@ -220,6 +221,11 @@ const toDatetimeLocalValueFromUnix = (value?: number | null) => {
   return new Date(date.getTime() - offsetMs).toISOString().slice(0, 16)
 }
 
+const formatRecurrenceLabel = (value: WorkflowRecurrence) => {
+  if (value === "one_time") return "One Time"
+  return `${value.slice(0, 1).toUpperCase()}${value.slice(1)}`
+}
+
 const sectionCardOpenByDefault = (state: Record<string, boolean>, key: string) => state[key] === true
 const nestedCardOpenByDefault = (state: Record<string, boolean>, key: string) => state[key] !== false
 
@@ -243,6 +249,7 @@ export default function ProposerPage() {
   const [templates, setTemplates] = useState<WorkflowTemplate[]>([])
   const [credentialTypes, setCredentialTypes] = useState<GlobalCredentialType[]>([])
   const [supervisors, setSupervisors] = useState<Supervisor[]>([])
+  const [deletionProposals, setDeletionProposals] = useState<WorkflowDeletionProposal[]>([])
   const [initialLoading, setInitialLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
   const [templateSaving, setTemplateSaving] = useState(false)
@@ -385,11 +392,12 @@ export default function ProposerPage() {
       }
 
       try {
-        const [workflowsRes, templatesRes, credentialTypesRes, supervisorsRes] = await Promise.all([
+        const [workflowsRes, templatesRes, credentialTypesRes, supervisorsRes, deletionProposalsRes] = await Promise.all([
           authFetch("/proposers/workflows"),
           authFetch("/proposers/workflow-templates"),
           authFetch("/credentials/types"),
           authFetch("/supervisors/approved"),
+          authFetch("/proposers/workflow-deletion-proposals"),
         ])
 
         if (workflowsRes.ok) {
@@ -412,6 +420,13 @@ export default function ProposerPage() {
           setSupervisors(supervisorsJson || [])
         } else {
           setSupervisors([])
+        }
+
+        if (deletionProposalsRes.ok) {
+          const deletionProposalsJson = await deletionProposalsRes.json()
+          setDeletionProposals(deletionProposalsJson || [])
+        } else {
+          setDeletionProposals([])
         }
 
         setError("")
@@ -1197,6 +1212,7 @@ export default function ProposerPage() {
   const applyTemplate = (templateId: string) => {
     const template = templates.find((value) => value.id === templateId)
     if (!template) return
+    const preserveEditMode = isEditProposalMode
 
     const roleIdMap = new Map<string, string>()
     const mappedRoles: DraftRole[] = template.roles.map((role, index) => {
@@ -1263,12 +1279,14 @@ export default function ProposerPage() {
           : "",
     })
     setWorkflowSupervisorDataFields(templateSupervisorDataFields)
-    setRecurrence(template.recurrence)
-    setStartAt("")
-    setHasRecurrenceEndDate(false)
-    setRecurrenceEndAt("")
-    setEditProposalWorkflowId("")
-    setEditProposalReason("")
+    if (!preserveEditMode) {
+      setRecurrence(template.recurrence)
+      setStartAt("")
+      setHasRecurrenceEndDate(false)
+      setRecurrenceEndAt("")
+      setEditProposalWorkflowId("")
+      setEditProposalReason("")
+    }
     setRoles(mappedRoles.length ? mappedRoles : [createDraftRole()])
     setSteps(mappedSteps.length ? mappedSteps : [createDraftStep()])
     setRoleCardOpenState({})
@@ -1276,7 +1294,11 @@ export default function ProposerPage() {
     setWorkItemCardOpenState({})
     setWorkflowRolesOpen(false)
     setError("")
-    setSuccessMessage(`Applied template: ${template.template_title}`)
+    setSuccessMessage(
+      preserveEditMode
+        ? `Applied template to workflow edit: ${template.template_title}`
+        : `Applied template: ${template.template_title}`,
+    )
   }
 
   const beginWorkflowEditProposal = (workflow: Workflow) => {
@@ -1348,7 +1370,7 @@ export default function ProposerPage() {
     setTitle(workflow.title || "")
     setDescription(workflow.description || "")
     setRecurrence(workflow.recurrence)
-    setStartAt("")
+    setStartAt(toDatetimeLocalValueFromUnix(workflow.start_at))
     setHasRecurrenceEndDate(recurrenceEndAtValue.length > 0)
     setRecurrenceEndAt(recurrenceEndAtValue)
     setWorkflowSupervisor({
@@ -1426,12 +1448,8 @@ export default function ProposerPage() {
         const payload: WorkflowEditProposalCreateRequest = {
           title: title.trim(),
           description: description.trim(),
-          recurrence,
           roles: normalizedRoles,
           steps: normalizedSteps,
-        }
-        if (recurrenceEndAtISO) {
-          payload.recurrence_end_at = recurrenceEndAtISO
         }
         if (normalizedSupervisor) {
           payload.supervisor = normalizedSupervisor
@@ -1598,6 +1616,13 @@ export default function ProposerPage() {
     workflow.status === "blocked" ||
     workflow.status === "in_progress" ||
     workflow.status === "completed"
+  const getPendingDeletionProposal = (workflow: Workflow) =>
+    deletionProposals.find(
+      (proposal) =>
+        proposal.status === "pending" &&
+        ((proposal.target_type === "series" && proposal.target_series_id === workflow.series_id) ||
+          (proposal.target_type === "workflow" && proposal.target_workflow_id === workflow.id)),
+    ) ?? null
 
   const canSaveTemplateFromWorkflow = (workflow: Workflow) =>
     workflow.status === "approved" ||
@@ -1863,9 +1888,9 @@ export default function ProposerPage() {
               </div>
 
               {isEditProposalMode && (
-                <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
-                  You are editing a workflow series definition. Existing workflows in this series will keep their current state.
-                  Only newly generated recurring workflows will use approved edits.
+                <div className="rounded-xl border border-border/70 bg-muted/40 px-4 py-3 text-sm">
+                  <span className="font-medium text-foreground">Edit mode.</span>{" "}
+                  <span className="text-muted-foreground">Approved changes apply to future workflows only.</span>
                 </div>
               )}
 
@@ -2014,50 +2039,75 @@ export default function ProposerPage() {
                 placeholder="Describe the outcome, stakeholders, and acceptance criteria."
               />
             </div>
-            <div className="space-y-2">
-              <Label>Recurrence</Label>
-              <Select value={recurrence} onValueChange={(value: WorkflowRecurrence) => setRecurrence(value)}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="one_time">One Time</SelectItem>
-                  <SelectItem value="daily">Daily</SelectItem>
-                  <SelectItem value="weekly">Weekly</SelectItem>
-                  <SelectItem value="monthly">Monthly</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-
-            {!isEditProposalMode && (
-              <div className="space-y-2">
-                <Label>Start Date & Time</Label>
-                <Input type="datetime-local" value={startAt} onChange={(e) => setStartAt(e.target.value)} required />
+            {isEditProposalMode ? (
+              <div className="space-y-4 md:col-span-2">
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label>Recurrence</Label>
+                    <Input value={formatRecurrenceLabel(recurrence)} readOnly disabled />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Start Date & Time</Label>
+                    <Input type="datetime-local" value={startAt} readOnly disabled />
+                  </div>
+                  {recurrence !== "one_time" && (
+                    <div className="space-y-2 md:col-span-2">
+                      <Label>Recurrence End Date</Label>
+                      {hasRecurrenceEndDate ? (
+                        <Input type="datetime-local" value={recurrenceEndAt} readOnly disabled />
+                      ) : (
+                        <p className="text-xs text-muted-foreground">No end date specified. Recurring generation continues indefinitely.</p>
+                      )}
+                    </div>
+                  )}
+                </div>
               </div>
-            )}
+            ) : (
+              <>
+                <div className="space-y-2">
+                  <Label>Recurrence</Label>
+                  <Select value={recurrence} onValueChange={(value: WorkflowRecurrence) => setRecurrence(value)}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="one_time">One Time</SelectItem>
+                      <SelectItem value="daily">Daily</SelectItem>
+                      <SelectItem value="weekly">Weekly</SelectItem>
+                      <SelectItem value="monthly">Monthly</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
 
-            {recurrence !== "one_time" && (
-              <div className={cn("space-y-2", isEditProposalMode && "md:col-span-2")}>
-                <Label>Recurrence End Date (Optional)</Label>
-                <label className="flex items-center gap-2 text-sm">
-                  <Checkbox
-                    checked={hasRecurrenceEndDate}
-                    onCheckedChange={(checked) => {
-                      const enabled = Boolean(checked)
-                      setHasRecurrenceEndDate(enabled)
-                      if (!enabled) {
-                        setRecurrenceEndAt("")
-                      }
-                    }}
-                  />
-                  Specify an end date
-                </label>
-                {!hasRecurrenceEndDate ? (
-                  <p className="text-xs text-muted-foreground">No end date specified. Recurring generation will continue indefinitely.</p>
-                ) : (
-                  <Input type="datetime-local" value={recurrenceEndAt} onChange={(e) => setRecurrenceEndAt(e.target.value)} />
+                <div className="space-y-2">
+                  <Label>Start Date & Time</Label>
+                  <Input type="datetime-local" value={startAt} onChange={(e) => setStartAt(e.target.value)} required />
+                </div>
+
+                {recurrence !== "one_time" && (
+                  <div className="space-y-2 md:col-span-2">
+                    <Label>Recurrence End Date (Optional)</Label>
+                    <label className="flex items-center gap-2 text-sm">
+                      <Checkbox
+                        checked={hasRecurrenceEndDate}
+                        onCheckedChange={(checked) => {
+                          const enabled = Boolean(checked)
+                          setHasRecurrenceEndDate(enabled)
+                          if (!enabled) {
+                            setRecurrenceEndAt("")
+                          }
+                        }}
+                      />
+                      Specify an end date
+                    </label>
+                    {!hasRecurrenceEndDate ? (
+                      <p className="text-xs text-muted-foreground">No end date specified. Recurring generation will continue indefinitely.</p>
+                    ) : (
+                      <Input type="datetime-local" value={recurrenceEndAt} onChange={(e) => setRecurrenceEndAt(e.target.value)} />
+                    )}
+                  </div>
                 )}
-              </div>
+              </>
             )}
 
             {isEditProposalMode && (
@@ -3128,7 +3178,10 @@ export default function ProposerPage() {
               ) : (
                 workflowSeriesGroups.map((group) => {
                   const workflow = group.workflows[group.workflows.length - 1]
-                  const deletionTargetType: WorkflowDeletionTargetType = isSeriesWorkflow(workflow) ? "series" : "workflow"
+                  const pendingDeletionProposal = getPendingDeletionProposal(workflow)
+                  const deletionTargetType: WorkflowDeletionTargetType =
+                    pendingDeletionProposal?.target_type ?? (isSeriesWorkflow(workflow) ? "series" : "workflow")
+                  const deletionAlreadyProposed = Boolean(pendingDeletionProposal)
 
                   return (
                   <Card key={group.key}>
@@ -3201,13 +3254,17 @@ export default function ProposerPage() {
                                 event.stopPropagation()
                                 void proposeDeletion(workflow.id, deletionTargetType)
                               }}
-                              disabled={Boolean(deletionSubmitting)}
+                              disabled={Boolean(deletionSubmitting) || deletionAlreadyProposed}
                             >
                               {deletionSubmitting === `${workflow.id}:${deletionTargetType}`
                                 ? "Submitting..."
-                                : deletionTargetType === "series"
-                                  ? "Propose Series Deletion"
-                                  : "Propose Workflow Deletion"}
+                                : deletionAlreadyProposed
+                                  ? deletionTargetType === "series"
+                                    ? "Series Deletion Proposed"
+                                    : "Workflow Deletion Proposed"
+                                  : deletionTargetType === "series"
+                                    ? "Propose Series Deletion"
+                                    : "Propose Workflow Deletion"}
                             </Button>
                           )}
 
@@ -3234,13 +3291,13 @@ export default function ProposerPage() {
         loading={detailLoading}
         disableStepPagination
         hideSubmissionData
-        renderBottomActions={(workflow) => {
-          const canSaveTemplate = canSaveTemplateFromWorkflow(workflow)
+        renderWorkflowActions={(workflow) => {
           const canEditWorkflow = canProposeWorkflowEditFromWorkflow(workflow)
-          if (!canSaveTemplate && !canEditWorkflow) return null
+          const canSaveTemplate = canSaveTemplateFromWorkflow(workflow)
+          if (!canEditWorkflow && !canSaveTemplate) return null
 
           return (
-            <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
+            <div className="flex w-full flex-col gap-2 sm:flex-row sm:justify-end">
               {canEditWorkflow && (
                 <Button
                   className="w-full sm:w-auto"

@@ -8805,7 +8805,6 @@ func (a *AppDB) CreateWorkflowEditProposal(
 	requesterId string,
 	targetWorkflowID string,
 	req *structs.WorkflowEditProposalCreateRequest,
-	recurrenceEndAt *time.Time,
 ) (*structs.WorkflowEditProposal, error) {
 	if req == nil {
 		return nil, fmt.Errorf("request is required")
@@ -8820,25 +8819,6 @@ func (a *AppDB) CreateWorkflowEditProposal(
 		return nil, fmt.Errorf("reason is too long")
 	}
 
-	validCredentialTypes, err := a.getValidCredentialTypeSet(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("error loading credential types: %s", err)
-	}
-	definition, err := normalizeWorkflowDefinitionData(
-		req.Title,
-		req.Description,
-		req.Recurrence,
-		recurrenceEndAt,
-		req.Supervisor,
-		req.SupervisorDataFields,
-		req.Roles,
-		req.Steps,
-		validCredentialTypes,
-	)
-	if err != nil {
-		return nil, err
-	}
-
 	tx, err := a.db.Begin(ctx)
 	if err != nil {
 		return nil, err
@@ -8848,11 +8828,15 @@ func (a *AppDB) CreateWorkflowEditProposal(
 	var seriesID string
 	var proposerID string
 	var targetWorkflowStatus string
+	var seriesRecurrence string
+	var seriesRecurrenceEndAt *int64
 	err = tx.QueryRow(ctx, `
 		SELECT
 			w.series_id,
 			s.proposer_id,
-			w.status
+			w.status,
+			s.recurrence,
+			s.recurrence_end_at
 		FROM
 			workflows w
 		JOIN
@@ -8862,7 +8846,7 @@ func (a *AppDB) CreateWorkflowEditProposal(
 		WHERE
 			w.id = $1
 		FOR UPDATE OF w, s;
-	`, targetWorkflowID).Scan(&seriesID, &proposerID, &targetWorkflowStatus)
+	`, targetWorkflowID).Scan(&seriesID, &proposerID, &targetWorkflowStatus, &seriesRecurrence, &seriesRecurrenceEndAt)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, fmt.Errorf("workflow not found")
@@ -8894,6 +8878,32 @@ func (a *AppDB) CreateWorkflowEditProposal(
 	}
 	if pendingCount > 0 {
 		return nil, fmt.Errorf("a pending workflow edit vote already exists for this series")
+	}
+
+	validCredentialTypes, err := a.getValidCredentialTypeSet(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("error loading credential types: %s", err)
+	}
+
+	var recurrenceEndAt *time.Time
+	if seriesRecurrenceEndAt != nil {
+		endAt := time.Unix(*seriesRecurrenceEndAt, 0).UTC()
+		recurrenceEndAt = &endAt
+	}
+
+	definition, err := normalizeWorkflowDefinitionData(
+		req.Title,
+		req.Description,
+		seriesRecurrence,
+		recurrenceEndAt,
+		req.Supervisor,
+		req.SupervisorDataFields,
+		req.Roles,
+		req.Steps,
+		validCredentialTypes,
+	)
+	if err != nil {
+		return nil, err
 	}
 
 	if definition.SupervisorUserId != nil {
@@ -8986,13 +8996,19 @@ func (a *AppDB) GetWorkflowEditProposalByIDForUser(ctx context.Context, proposal
 			p.updated_at,
 			COALESCE(NULLIF(TRIM(st.title), ''), COALESCE(NULLIF(TRIM(sr.title), ''), '')),
 			COALESCE(st.description, sr.description, ''),
+			COALESCE(tw.start_at, 0),
 			COALESCE(NULLIF(TRIM(st.recurrence), ''), COALESCE(NULLIF(TRIM(sr.recurrence), ''), 'one_time')),
 			COALESCE(st.recurrence_end_at, sr.recurrence_end_at),
 			st.supervisor_user_id,
 			COALESCE(st.supervisor_bounty, 0),
+			COALESCE(st.roles_json, '[]'::jsonb),
 			COALESCE(st.steps_json, '[]'::jsonb)
 		FROM
 			workflow_edit_proposals p
+		LEFT JOIN
+			workflows tw
+		ON
+			tw.id = p.target_workflow_id
 		LEFT JOIN
 			workflow_series sr
 		ON
@@ -9006,6 +9022,7 @@ func (a *AppDB) GetWorkflowEditProposalByIDForUser(ctx context.Context, proposal
 	`, proposalID)
 
 	proposal := &structs.WorkflowEditProposal{}
+	var rolesJSON []byte
 	var stepsJSON []byte
 	if err := row.Scan(
 		&proposal.Id,
@@ -9024,22 +9041,32 @@ func (a *AppDB) GetWorkflowEditProposalByIDForUser(ctx context.Context, proposal
 		&proposal.UpdatedAt,
 		&proposal.WorkflowTitle,
 		&proposal.WorkflowDescription,
+		&proposal.WorkflowStartAt,
 		&proposal.Recurrence,
 		&proposal.RecurrenceEndAt,
 		&proposal.SupervisorUserId,
 		&proposal.SupervisorBounty,
+		&rolesJSON,
 		&stepsJSON,
 	); err != nil {
 		return nil, err
 	}
 
 	proposal.SupervisorRequired = proposal.SupervisorUserId != nil && strings.TrimSpace(*proposal.SupervisorUserId) != ""
+	roles := []structs.WorkflowRoleCreateInput{}
+	if len(rolesJSON) > 0 {
+		if err := json.Unmarshal(rolesJSON, &roles); err != nil {
+			return nil, fmt.Errorf("error decoding workflow edit proposal roles: %s", err)
+		}
+	}
 	steps := []structs.WorkflowStepCreateInput{}
 	if len(stepsJSON) > 0 {
 		if err := json.Unmarshal(stepsJSON, &steps); err != nil {
 			return nil, fmt.Errorf("error decoding workflow edit proposal steps: %s", err)
 		}
 	}
+	proposal.Roles = roles
+	proposal.Steps = sanitizeWorkflowEditProposalPreviewSteps(steps)
 	totalBounty := proposal.SupervisorBounty
 	for _, step := range steps {
 		totalBounty += step.Bounty
@@ -9053,6 +9080,44 @@ func (a *AppDB) GetWorkflowEditProposalByIDForUser(ctx context.Context, proposal
 	}
 	proposal.Votes = *votes
 	return proposal, nil
+}
+
+func sanitizeWorkflowEditProposalPreviewSteps(steps []structs.WorkflowStepCreateInput) []structs.WorkflowStepCreateInput {
+	if len(steps) == 0 {
+		return []structs.WorkflowStepCreateInput{}
+	}
+
+	sanitized := make([]structs.WorkflowStepCreateInput, len(steps))
+	for stepIdx, step := range steps {
+		sanitizedStep := step
+		if len(step.WorkItems) > 0 {
+			sanitizedStep.WorkItems = make([]structs.WorkflowWorkItemCreateInput, len(step.WorkItems))
+			for itemIdx, item := range step.WorkItems {
+				sanitizedItem := item
+				if len(item.DropdownOptions) > 0 {
+					sanitizedItem.DropdownOptions = make([]structs.WorkflowDropdownOptionCreateInput, len(item.DropdownOptions))
+					for optionIdx, option := range item.DropdownOptions {
+						sanitizedOption := option
+						notifyEmailCount := sanitizedOption.NotifyEmailCount
+						if len(sanitizedOption.NotifyEmails) > notifyEmailCount {
+							notifyEmailCount = len(sanitizedOption.NotifyEmails)
+						}
+						sanitizedOption.NotifyEmailCount = notifyEmailCount
+						sanitizedOption.NotifyEmails = nil
+						sanitizedItem.DropdownOptions[optionIdx] = sanitizedOption
+					}
+				} else {
+					sanitizedItem.DropdownOptions = []structs.WorkflowDropdownOptionCreateInput{}
+				}
+				sanitizedStep.WorkItems[itemIdx] = sanitizedItem
+			}
+		} else {
+			sanitizedStep.WorkItems = []structs.WorkflowWorkItemCreateInput{}
+		}
+		sanitized[stepIdx] = sanitizedStep
+	}
+
+	return sanitized
 }
 
 func (a *AppDB) GetWorkflowEditProposalsForVoter(ctx context.Context, voterID string) ([]*structs.WorkflowEditProposal, error) {
@@ -9581,6 +9646,7 @@ func (a *AppDB) GetWorkflowDeletionProposalByIDForUser(ctx context.Context, prop
 			p.id,
 			p.target_type,
 			p.target_workflow_id,
+			COALESCE(p.target_workflow_id, pw.id),
 			CASE
 				WHEN p.target_type = 'workflow' THEN COALESCE(NULLIF(TRIM(st.title), ''), COALESCE(NULLIF(TRIM(sr.title), ''), ''))
 				WHEN p.target_type = 'series' THEN COALESCE(NULLIF(TRIM(tsr.title), ''), '')
@@ -9615,6 +9681,27 @@ func (a *AppDB) GetWorkflowDeletionProposalByIDForUser(ctx context.Context, prop
 			workflow_series tsr
 		ON
 			tsr.id = p.target_series_id
+		LEFT JOIN LATERAL (
+			SELECT
+				w2.id
+			FROM
+				workflows w2
+			WHERE
+				w2.series_id = p.target_series_id
+			AND
+				w2.status <> 'deleted'
+			ORDER BY
+				CASE
+					WHEN w2.status IN ('approved', 'blocked', 'in_progress', 'completed') THEN 0
+					ELSE 1
+				END,
+				w2.start_at ASC,
+				w2.created_at DESC,
+				w2.id DESC
+			LIMIT 1
+		) pw
+		ON
+			TRUE
 		WHERE
 			p.id = $1;
 	`, proposalId)
@@ -9624,6 +9711,7 @@ func (a *AppDB) GetWorkflowDeletionProposalByIDForUser(ctx context.Context, prop
 		&proposal.Id,
 		&proposal.TargetType,
 		&proposal.TargetWorkflowId,
+		&proposal.PreviewWorkflowId,
 		&proposal.TargetWorkflowTitle,
 		&proposal.TargetSeriesId,
 		&proposal.Reason,
@@ -9684,6 +9772,51 @@ func (a *AppDB) GetWorkflowDeletionProposalsForVoter(ctx context.Context, voterI
 		proposals = append(proposals, proposal)
 	}
 	return proposals, nil
+}
+
+func (a *AppDB) ForceApproveWorkflowEditProposalAsAdmin(ctx context.Context, proposalID string, adminID string) error {
+	tx, err := a.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	var status string
+	var seriesID string
+	var proposedStateID string
+	err = tx.QueryRow(ctx, `
+		SELECT
+			status,
+			series_id,
+			proposed_state_id
+		FROM
+			workflow_edit_proposals
+		WHERE
+			id = $1
+		FOR UPDATE;
+	`, proposalID).Scan(&status, &seriesID, &proposedStateID)
+	if err != nil {
+		return err
+	}
+
+	if status == "approved" {
+		if err := tx.Commit(ctx); err != nil {
+			return err
+		}
+		return nil
+	}
+	if status != "pending" {
+		return fmt.Errorf("workflow edit proposal is not pending")
+	}
+
+	if err := finalizeWorkflowEditApprovalTx(ctx, tx, proposalID, seriesID, proposedStateID, &adminID, "admin_approve"); err != nil {
+		return err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (a *AppDB) getWorkflowDeletionVotesInternal(ctx context.Context, proposalId string, voterId *string) (*structs.WorkflowVotes, error) {
@@ -9882,6 +10015,53 @@ func (a *AppDB) EvaluateWorkflowDeletionVoteState(ctx context.Context, proposalI
 	}
 
 	return a.GetWorkflowDeletionProposalByIDForUser(ctx, proposalId, nil)
+}
+
+func (a *AppDB) ForceApproveWorkflowDeletionProposalAsAdmin(ctx context.Context, proposalId string, adminId string) error {
+	tx, err := a.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	var status string
+	var targetType string
+	var targetWorkflowId *string
+	var targetSeriesId *string
+	err = tx.QueryRow(ctx, `
+		SELECT
+			status,
+			target_type,
+			target_workflow_id,
+			target_series_id
+		FROM
+			workflow_deletion_proposals
+		WHERE
+			id = $1
+		FOR UPDATE;
+	`, proposalId).Scan(&status, &targetType, &targetWorkflowId, &targetSeriesId)
+	if err != nil {
+		return err
+	}
+
+	if status == "approved" {
+		if err := tx.Commit(ctx); err != nil {
+			return err
+		}
+		return nil
+	}
+	if status != "pending" {
+		return fmt.Errorf("workflow deletion proposal is not pending")
+	}
+
+	if err := finalizeWorkflowDeletionApprovalTx(ctx, tx, proposalId, targetType, targetWorkflowId, targetSeriesId, &adminId, "admin_approve"); err != nil {
+		return err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	return nil
 }
 
 func countWorkflowDeletionVotesTx(ctx context.Context, tx pgx.Tx, proposalId string) (int, int, error) {

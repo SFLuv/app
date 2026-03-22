@@ -10,8 +10,9 @@ SFLUV is a local currency platform using a wrapped HONEY token on Berachain. Thi
 
 ### Backend (Go)
 ```bash
-go run ./backend                                    # Run the backend server
-go test -vet=off ./db ./handlers ./router ./structs # Run backend tests
+cd backend && go run ./cmd/init                     # Run DB init / migrations only
+cd backend && go run ./cmd/server                   # Run the backend server
+cd backend && go test -vet=off ./db ./handlers ./router ./structs # Run backend tests
 ```
 Backend env: `backend/.env` — requires `DB_USER`, `DB_PASSWORD`, `DB_URL` (for app, bot, and ponder DBs), `PRIVY_APP_ID`, `PRIVY_VKEY`, `RPC_URL`, `MAILGUN_API_KEY`, `MAILGUN_DOMAIN`, `PONDER_SERVER_BASE_URL`, `PONDER_KEY`.
 
@@ -48,7 +49,9 @@ Frontend uses Privy (`usePrivy`, `getAccessToken()`) to get a JWT Bearer token. 
 ### Backend Structure
 ```
 backend/
-  main.go          — startup, DB init, service wiring
+  cmd/server/      — server startup and service wiring
+  cmd/init/        — DB init / migration entrypoint
+  bootstrap/       — shared startup helpers for env, DB pools, logger, wiring
   db/              — all DB query logic (app.go, app_workflow.go, bot.go, etc.)
   handlers/        — HTTP handlers grouped by role (app.go, app_workflow.go, bot.go)
   router/          — route definitions with role middleware guards
