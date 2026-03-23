@@ -71,7 +71,7 @@ fi
 echo "Starting backend with test env..."
 (
   cd "$ROOT_DIR/backend"
-  ENV_FILE="$BACKEND_ENV" nohup go run main.go > /tmp/sfluv_backend.log 2>&1 &
+  ENV_FILE="$BACKEND_ENV" nohup go run ./cmd/server > /tmp/sfluv_backend.log 2>&1 &
 )
 
 echo "Starting ponder with test env..."
