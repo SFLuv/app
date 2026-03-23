@@ -31,9 +31,160 @@ function countdownText(finalizeAt?: number | null): string {
 }
 
 type VoterTab = "workflow-votes" | "edit-votes" | "deletion-votes" | "active-workflows"
+type DetailSource = "workflow-votes" | "edit-votes" | "deletion-votes" | "active-workflows"
 
 const isVoterTab = (value: string | null): value is VoterTab => {
   return value === "workflow-votes" || value === "edit-votes" || value === "deletion-votes" || value === "active-workflows"
+}
+
+function buildPreviewOptionValue(label: string, optionIndex: number): string {
+  const normalized = label
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+  return normalized || `option_${optionIndex + 1}`
+}
+
+function buildEditProposalPreviewWorkflow(proposal: WorkflowEditProposal): Workflow {
+  const roles = (proposal.roles || []).map((role, roleIndex) => ({
+    id: role.client_id || `preview-role-${roleIndex + 1}`,
+    workflow_id: proposal.target_workflow_id || proposal.id,
+    title: role.title,
+    required_credentials: role.required_credentials || [],
+  }))
+
+  const steps = (proposal.steps || []).map((step, stepIndex) => ({
+    id: `preview-step-${stepIndex + 1}`,
+    workflow_id: proposal.target_workflow_id || proposal.id,
+    step_order: stepIndex + 1,
+    title: step.title,
+    description: step.description,
+    bounty: step.bounty,
+    allow_step_not_possible: step.allow_step_not_possible,
+    role_id: step.role_client_id || null,
+    assigned_improver_id: null,
+    assigned_improver_name: null,
+    status: "locked" as const,
+    started_at: null,
+    completed_at: null,
+    payout_error: null,
+    payout_last_try_at: null,
+    retry_requested_at: null,
+    retry_requested_by: null,
+    submission: null,
+    work_items: step.work_items.map((item, itemIndex) => {
+      const dropdownOptions = item.dropdown_options.map((option, optionIndex) => ({
+        value: buildPreviewOptionValue(option.label, optionIndex),
+        label: option.label,
+        requires_written_response: option.requires_written_response,
+        notify_emails: [],
+        notify_email_count: option.notify_email_count ?? option.notify_emails.length,
+      }))
+
+      return {
+        id: `preview-step-${stepIndex + 1}-item-${itemIndex + 1}`,
+        step_id: `preview-step-${stepIndex + 1}`,
+        item_order: itemIndex + 1,
+        title: item.title,
+        description: item.description,
+        optional: item.optional,
+        requires_photo: item.requires_photo,
+        camera_capture_only: item.camera_capture_only,
+        photo_required_count: item.photo_required_count,
+        photo_allow_any_count: item.photo_allow_any_count,
+        photo_aspect_ratio: item.photo_aspect_ratio,
+        requires_written_response: item.requires_written_response,
+        requires_dropdown: item.requires_dropdown,
+        dropdown_options: dropdownOptions,
+        dropdown_requires_written_response: Object.fromEntries(
+          dropdownOptions.map((option) => [option.value, option.requires_written_response]),
+        ),
+      }
+    }),
+  }))
+
+  return {
+    id: proposal.target_workflow_id || `edit-proposal-${proposal.id}`,
+    series_id: proposal.series_id,
+    workflow_state_id: proposal.proposed_state_id,
+    proposer_id: proposal.requested_by_user_id,
+    title: proposal.workflow_title,
+    description: proposal.workflow_description,
+    recurrence: proposal.recurrence,
+    recurrence_end_at: proposal.recurrence_end_at,
+    start_at: proposal.workflow_start_at,
+    status: proposal.status === "denied" ? "rejected" : proposal.status,
+    is_start_blocked: false,
+    blocked_by_workflow_id: null,
+    total_bounty: proposal.total_bounty,
+    weekly_bounty_requirement: proposal.weekly_bounty_requirement,
+    budget_weekly_deducted: 0,
+    budget_one_time_deducted: 0,
+    vote_quorum_reached_at: proposal.vote_quorum_reached_at,
+    vote_finalize_at: proposal.vote_finalize_at,
+    vote_finalized_at: proposal.vote_finalized_at,
+    vote_finalized_by_user_id: proposal.vote_finalized_by_user_id,
+    vote_decision: proposal.vote_decision,
+    supervisor_required: proposal.supervisor_required,
+    supervisor_user_id: proposal.supervisor_user_id,
+    supervisor_bounty: proposal.supervisor_bounty,
+    supervisor_data_fields: [],
+    supervisor_paid_out_at: null,
+    supervisor_payout_error: null,
+    supervisor_payout_last_try_at: null,
+    supervisor_retry_requested_at: null,
+    supervisor_retry_requested_by: null,
+    supervisor_title: null,
+    supervisor_organization: null,
+    created_at: proposal.created_at,
+    updated_at: proposal.updated_at,
+    roles,
+    steps,
+    votes: proposal.votes,
+  }
+}
+
+function buildDeletionProposalFallbackWorkflow(proposal: WorkflowDeletionProposal): Workflow {
+  return {
+    id: proposal.target_workflow_id || `deletion-proposal-${proposal.id}`,
+    series_id: proposal.target_series_id || proposal.id,
+    workflow_state_id: null,
+    proposer_id: proposal.requested_by_user_id,
+    title: proposal.target_workflow_title || "Workflow Deletion Proposal",
+    description: "",
+    recurrence: "one_time",
+    recurrence_end_at: null,
+    start_at: proposal.created_at,
+    status: proposal.status === "denied" ? "rejected" : proposal.status,
+    is_start_blocked: false,
+    blocked_by_workflow_id: null,
+    total_bounty: 0,
+    weekly_bounty_requirement: 0,
+    budget_weekly_deducted: 0,
+    budget_one_time_deducted: 0,
+    vote_quorum_reached_at: proposal.vote_quorum_reached_at,
+    vote_finalize_at: proposal.vote_finalize_at,
+    vote_finalized_at: proposal.vote_finalized_at,
+    vote_finalized_by_user_id: proposal.vote_finalized_by_user_id,
+    vote_decision: proposal.vote_decision,
+    supervisor_required: false,
+    supervisor_user_id: null,
+    supervisor_bounty: 0,
+    supervisor_data_fields: [],
+    supervisor_paid_out_at: null,
+    supervisor_payout_error: null,
+    supervisor_payout_last_try_at: null,
+    supervisor_retry_requested_at: null,
+    supervisor_retry_requested_by: null,
+    supervisor_title: null,
+    supervisor_organization: null,
+    created_at: proposal.created_at,
+    updated_at: proposal.updated_at,
+    roles: [],
+    steps: [],
+    votes: proposal.votes,
+  }
 }
 
 export default function VoterPage() {
@@ -55,7 +206,9 @@ export default function VoterPage() {
   const [detailWorkflow, setDetailWorkflow] = useState<Workflow | null>(null)
   const [detailOpen, setDetailOpen] = useState<boolean>(false)
   const [detailLoading, setDetailLoading] = useState<boolean>(false)
-  const [detailSource, setDetailSource] = useState<"workflow-votes" | "active-workflows">("workflow-votes")
+  const [detailSource, setDetailSource] = useState<DetailSource>("workflow-votes")
+  const [detailEditProposal, setDetailEditProposal] = useState<WorkflowEditProposal | null>(null)
+  const [detailDeletionProposal, setDetailDeletionProposal] = useState<WorkflowDeletionProposal | null>(null)
   const [activeTab, setActiveTab] = useState<VoterTab>(isVoterTab(tabFromQuery) ? tabFromQuery : "workflow-votes")
   const [workflowSearch, setWorkflowSearch] = useState<string>(workflowSearchFromQuery)
   const [editSearch, setEditSearch] = useState<string>(editSearchFromQuery)
@@ -262,6 +415,42 @@ export default function VoterPage() {
     }
   }
 
+  const forceApproveEditProposal = async (proposalId: string) => {
+    setSubmittingId(`edit:${proposalId}:force`)
+    try {
+      const res = await authFetch(`/admin/workflow-edit-proposals/${proposalId}/force-approve`, {
+        method: "POST",
+      })
+      if (!res.ok) {
+        const text = await res.text()
+        throw new Error(text || "Unable to force approve workflow edit proposal.")
+      }
+      await loadWorkflows()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to force approve workflow edit proposal.")
+    } finally {
+      setSubmittingId("")
+    }
+  }
+
+  const forceApproveDeletionProposal = async (proposalId: string) => {
+    setSubmittingId(`deletion:${proposalId}:force`)
+    try {
+      const res = await authFetch(`/admin/workflow-deletion-proposals/${proposalId}/force-approve`, {
+        method: "POST",
+      })
+      if (!res.ok) {
+        const text = await res.text()
+        throw new Error(text || "Unable to force approve workflow deletion proposal.")
+      }
+      await loadWorkflows()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to force approve workflow deletion proposal.")
+    } finally {
+      setSubmittingId("")
+    }
+  }
+
   const getDeletionTargetType = useCallback(
     (workflow: Workflow): WorkflowDeletionTargetType => {
       const appearsSeriesWorkflow =
@@ -318,10 +507,12 @@ export default function VoterPage() {
   const openWorkflowDetails = async (
     workflowId: string,
     workflow?: Workflow,
-    source: "workflow-votes" | "active-workflows" = "workflow-votes",
+    source: DetailSource = "workflow-votes",
   ) => {
     setError("")
     setDetailSource(source)
+    setDetailEditProposal(null)
+    setDetailDeletionProposal(null)
 
     if (workflow) {
       setDetailWorkflow(workflow)
@@ -343,7 +534,7 @@ export default function VoterPage() {
     setDetailOpen(true)
 
     try {
-      const res = await authFetch(`/workflows/${workflowId}`)
+      const res = await authFetch(`/voters/workflows/${workflowId}`)
       if (!res.ok) {
         const text = await res.text()
         throw new Error(text || "Unable to load workflow details.")
@@ -357,6 +548,50 @@ export default function VoterPage() {
       setDetailLoading(false)
     }
   }
+
+  const openEditProposalDetails = useCallback((proposal: WorkflowEditProposal) => {
+    setError("")
+    setDetailSource("edit-votes")
+    setDetailEditProposal(proposal)
+    setDetailDeletionProposal(null)
+    setDetailWorkflow(buildEditProposalPreviewWorkflow(proposal))
+    setDetailLoading(false)
+    setDetailOpen(true)
+  }, [])
+
+  const openDeletionProposalDetails = useCallback(
+    async (proposal: WorkflowDeletionProposal) => {
+      setError("")
+      setDetailSource("deletion-votes")
+      setDetailEditProposal(null)
+      setDetailDeletionProposal(proposal)
+      setDetailWorkflow(null)
+      setDetailLoading(true)
+      setDetailOpen(true)
+
+      if (!proposal.preview_workflow_id) {
+        setDetailWorkflow(buildDeletionProposalFallbackWorkflow(proposal))
+        setDetailLoading(false)
+        return
+      }
+
+      try {
+        const res = await authFetch(`/voters/workflows/${proposal.preview_workflow_id}`)
+        if (!res.ok) {
+          const text = await res.text()
+          throw new Error(text || "Unable to load deletion proposal details.")
+        }
+        const workflowDetails = (await res.json()) as Workflow
+        setDetailWorkflow(workflowDetails)
+      } catch (err) {
+        setDetailWorkflow(buildDeletionProposalFallbackWorkflow(proposal))
+        setError(err instanceof Error ? err.message : "Unable to load deletion proposal details.")
+      } finally {
+        setDetailLoading(false)
+      }
+    },
+    [authFetch],
+  )
 
   const pendingCount = useMemo(() => workflows.filter((workflow) => workflow.status === "pending").length, [workflows])
   const pendingEditCount = useMemo(
@@ -589,7 +824,11 @@ export default function VoterPage() {
                     const pending = proposal.status === "pending"
 
                     return (
-                      <Card key={proposal.id}>
+                      <Card
+                        key={proposal.id}
+                        className="cursor-pointer transition-colors hover:bg-muted/30"
+                        onClick={() => openEditProposalDetails(proposal)}
+                      >
                         <CardContent className="p-4 space-y-3">
                           <div className="flex flex-wrap items-center justify-between gap-3">
                             <div>
@@ -632,7 +871,10 @@ export default function VoterPage() {
                               <Button
                                 className="w-full sm:w-auto"
                                 size="sm"
-                                onClick={() => voteEditProposal(proposal.id, "approve")}
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  void voteEditProposal(proposal.id, "approve")
+                                }}
                                 disabled={Boolean(submittingId)}
                               >
                                 {submittingId === `edit:${proposal.id}:approve` ? "Submitting..." : "Approve"}
@@ -641,11 +883,28 @@ export default function VoterPage() {
                                 className="w-full sm:w-auto"
                                 size="sm"
                                 variant="outline"
-                                onClick={() => voteEditProposal(proposal.id, "deny")}
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  void voteEditProposal(proposal.id, "deny")
+                                }}
                                 disabled={Boolean(submittingId)}
                               >
                                 {submittingId === `edit:${proposal.id}:deny` ? "Submitting..." : "Deny"}
                               </Button>
+                              {user?.isAdmin && (
+                                <Button
+                                  className="w-full sm:w-auto"
+                                  size="sm"
+                                  variant="secondary"
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    void forceApproveEditProposal(proposal.id)
+                                  }}
+                                  disabled={Boolean(submittingId)}
+                                >
+                                  {submittingId === `edit:${proposal.id}:force` ? "Submitting..." : "Force Approve"}
+                                </Button>
+                              )}
                             </div>
                           )}
                         </CardContent>
@@ -686,7 +945,11 @@ export default function VoterPage() {
                   {filteredDeletionProposals.map((proposal) => {
                     const pending = proposal.status === "pending"
                     return (
-                      <Card key={proposal.id}>
+                      <Card
+                        key={proposal.id}
+                        className="cursor-pointer transition-colors hover:bg-muted/30"
+                        onClick={() => void openDeletionProposalDetails(proposal)}
+                      >
                         <CardContent className="p-4 space-y-3">
                           <div className="flex flex-wrap items-center justify-between gap-3">
                             <div>
@@ -730,7 +993,10 @@ export default function VoterPage() {
                               <Button
                                 className="w-full sm:w-auto"
                                 size="sm"
-                                onClick={() => voteDeletionProposal(proposal.id, "approve")}
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  void voteDeletionProposal(proposal.id, "approve")
+                                }}
                                 disabled={Boolean(submittingId)}
                               >
                                 {submittingId === `deletion:${proposal.id}:approve` ? "Submitting..." : "Approve"}
@@ -739,11 +1005,28 @@ export default function VoterPage() {
                                 className="w-full sm:w-auto"
                                 size="sm"
                                 variant="outline"
-                                onClick={() => voteDeletionProposal(proposal.id, "deny")}
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  void voteDeletionProposal(proposal.id, "deny")
+                                }}
                                 disabled={Boolean(submittingId)}
                               >
                                 {submittingId === `deletion:${proposal.id}:deny` ? "Submitting..." : "Deny"}
                               </Button>
+                              {user?.isAdmin && (
+                                <Button
+                                  className="w-full sm:w-auto"
+                                  size="sm"
+                                  variant="secondary"
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    void forceApproveDeletionProposal(proposal.id)
+                                  }}
+                                  disabled={Boolean(submittingId)}
+                                >
+                                  {submittingId === `deletion:${proposal.id}:force` ? "Submitting..." : "Force Approve"}
+                                </Button>
+                              )}
                             </div>
                           )}
                         </CardContent>
@@ -795,8 +1078,15 @@ export default function VoterPage() {
       <WorkflowDetailsModal
         workflow={detailWorkflow}
         open={detailOpen}
-        onOpenChange={(open) => setDetailOpen(open)}
+        onOpenChange={(open) => {
+          setDetailOpen(open)
+          if (!open) {
+            setDetailEditProposal(null)
+            setDetailDeletionProposal(null)
+          }
+        }}
         loading={detailLoading}
+        hideSubmissionData={detailSource !== "active-workflows"}
         renderWorkflowActions={
           detailSource === "active-workflows"
             ? (workflow) => {
@@ -816,12 +1106,53 @@ export default function VoterPage() {
                       onClick={() => void proposeDeletionFromActiveWorkflow(workflow)}
                       disabled={Boolean(submittingId) || pending}
                     >
-                      {createSubmitting ? "Submitting..." : pending ? "Deletion Vote Pending" : "Propose Deletion Vote"}
+                      {createSubmitting
+                        ? "Submitting..."
+                        : pending
+                          ? targetType === "series"
+                            ? "Series Deletion Proposed"
+                            : "Workflow Deletion Proposed"
+                          : "Propose Deletion Vote"}
                     </Button>
                   </div>
                 )
               }
-            : undefined
+            : detailSource === "edit-votes" && detailEditProposal
+              ? () => (
+                  <div className="space-y-2 rounded-md border bg-secondary/30 p-3 text-sm">
+                    <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                      <span>
+                        Votes: {detailEditProposal.votes.approve} approve / {detailEditProposal.votes.deny} deny (
+                        {detailEditProposal.votes.votes_cast}/{detailEditProposal.votes.total_voters})
+                      </span>
+                      <span>Created: {new Date(detailEditProposal.created_at * 1000).toLocaleString()}</span>
+                    </div>
+                    {detailEditProposal.reason ? (
+                      <p className="whitespace-pre-wrap">{detailEditProposal.reason}</p>
+                    ) : (
+                      <p className="text-muted-foreground">No proposal reason provided.</p>
+                    )}
+                  </div>
+                )
+              : detailSource === "deletion-votes" && detailDeletionProposal
+                ? () => (
+                    <div className="space-y-2 rounded-md border bg-secondary/30 p-3 text-sm">
+                      <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                        <span>Target: {detailDeletionProposal.target_type === "series" ? "Entire Series" : "Single Workflow"}</span>
+                        <span>
+                          Votes: {detailDeletionProposal.votes.approve} approve / {detailDeletionProposal.votes.deny} deny (
+                          {detailDeletionProposal.votes.votes_cast}/{detailDeletionProposal.votes.total_voters})
+                        </span>
+                        <span>Created: {new Date(detailDeletionProposal.created_at * 1000).toLocaleString()}</span>
+                      </div>
+                      {detailDeletionProposal.reason ? (
+                        <p className="whitespace-pre-wrap">{detailDeletionProposal.reason}</p>
+                      ) : (
+                        <p className="text-muted-foreground">No proposal reason provided.</p>
+                      )}
+                    </div>
+                  )
+                : undefined
         }
       />
     </div>

@@ -201,6 +201,7 @@ type WorkflowDropdownOptionCreateInput struct {
 	Label                   string   `json:"label"`
 	RequiresWrittenResponse bool     `json:"requires_written_response"`
 	NotifyEmails            []string `json:"notify_emails"`
+	NotifyEmailCount        int      `json:"notify_email_count,omitempty"`
 }
 
 type WorkflowDropdownOption struct {
@@ -335,6 +336,7 @@ type WorkflowDeletionProposal struct {
 	Id                  string        `json:"id"`
 	TargetType          string        `json:"target_type"`
 	TargetWorkflowId    *string       `json:"target_workflow_id,omitempty"`
+	PreviewWorkflowId   *string       `json:"preview_workflow_id,omitempty"`
 	TargetWorkflowTitle *string       `json:"target_workflow_title,omitempty"`
 	TargetSeriesId      *string       `json:"target_series_id,omitempty"`
 	Reason              string        `json:"reason"`
@@ -353,8 +355,6 @@ type WorkflowDeletionProposal struct {
 type WorkflowEditProposalCreateRequest struct {
 	Title                string                         `json:"title"`
 	Description          string                         `json:"description"`
-	Recurrence           string                         `json:"recurrence"`
-	RecurrenceEndAt      *string                        `json:"recurrence_end_at,omitempty"`
 	Supervisor           *WorkflowSupervisorCreateInput `json:"supervisor,omitempty"`
 	SupervisorDataFields []WorkflowSupervisorDataField  `json:"supervisor_data_fields,omitempty"`
 	Roles                []WorkflowRoleCreateInput      `json:"roles"`
@@ -384,6 +384,7 @@ type WorkflowEditProposal struct {
 	UpdatedAt           int64         `json:"updated_at"`
 	WorkflowTitle       string        `json:"workflow_title"`
 	WorkflowDescription string        `json:"workflow_description"`
+	WorkflowStartAt     int64         `json:"workflow_start_at"`
 	Recurrence          string        `json:"recurrence"`
 	RecurrenceEndAt     *int64        `json:"recurrence_end_at,omitempty"`
 	SupervisorRequired  bool          `json:"supervisor_required"`
@@ -391,6 +392,8 @@ type WorkflowEditProposal struct {
 	SupervisorBounty    uint64        `json:"supervisor_bounty"`
 	TotalBounty         uint64        `json:"total_bounty"`
 	WeeklyRequirement   uint64        `json:"weekly_bounty_requirement"`
+	Roles               []WorkflowRoleCreateInput `json:"roles,omitempty"`
+	Steps               []WorkflowStepCreateInput `json:"steps,omitempty"`
 	Votes               WorkflowVotes `json:"votes"`
 }
 

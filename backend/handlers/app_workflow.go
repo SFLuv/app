@@ -49,6 +49,13 @@ func redactWorkflowItemNotifyEmailsForUser(workflow *structs.Workflow, userID st
 	if userCanViewWorkflowNotifyEmails(workflow, userID) {
 		return
 	}
+	redactWorkflowItemNotifyEmails(workflow)
+}
+
+func redactWorkflowItemNotifyEmails(workflow *structs.Workflow) {
+	if workflow == nil {
+		return
+	}
 	for stepIdx := range workflow.Steps {
 		for itemIdx := range workflow.Steps[stepIdx].WorkItems {
 			for optionIdx := range workflow.Steps[stepIdx].WorkItems[itemIdx].DropdownOptions {
@@ -61,6 +68,12 @@ func redactWorkflowItemNotifyEmailsForUser(workflow *structs.Workflow, userID st
 				option.NotifyEmails = nil
 			}
 		}
+	}
+}
+
+func redactWorkflowItemNotifyEmailsInList(workflows []*structs.Workflow) {
+	for _, workflow := range workflows {
+		redactWorkflowItemNotifyEmails(workflow)
 	}
 }
 
@@ -183,12 +196,47 @@ func sanitizeWorkflowForUser(workflow *structs.Workflow, userID string, isAdmin 
 	sanitizeWorkflowForUserWithOptions(workflow, userID, isAdmin, false)
 }
 
+func sanitizeWorkflowForVoteView(workflow *structs.Workflow, userID string, isAdmin bool) {
+	redactWorkflowItemNotifyEmails(workflow)
+	redactWorkflowSubmissionDataForUser(workflow, userID, isAdmin)
+	normalizeWorkflowPayoutErrorsForClient(workflow)
+	workflow.SupervisorDataFields = nil
+}
+
 func sanitizeWorkflowListForUser(workflows []*structs.Workflow, userID string, isAdmin bool) {
 	redactWorkflowItemNotifyEmailsForUserInList(workflows, userID)
 	redactWorkflowSubmissionDataForUserInList(workflows, userID, isAdmin)
 	for _, workflow := range workflows {
 		normalizeWorkflowPayoutErrorsForClient(workflow)
 		workflow.SupervisorDataFields = nil
+	}
+}
+
+func sanitizeWorkflowListForVoteView(workflows []*structs.Workflow, userID string, isAdmin bool) {
+	redactWorkflowItemNotifyEmailsInList(workflows)
+	redactWorkflowSubmissionDataForUserInList(workflows, userID, isAdmin)
+	for _, workflow := range workflows {
+		normalizeWorkflowPayoutErrorsForClient(workflow)
+		workflow.SupervisorDataFields = nil
+	}
+}
+
+func sanitizeWorkflowEditProposalForVoteView(proposal *structs.WorkflowEditProposal) {
+	if proposal == nil {
+		return
+	}
+	for stepIdx := range proposal.Steps {
+		for itemIdx := range proposal.Steps[stepIdx].WorkItems {
+			for optionIdx := range proposal.Steps[stepIdx].WorkItems[itemIdx].DropdownOptions {
+				option := &proposal.Steps[stepIdx].WorkItems[itemIdx].DropdownOptions[optionIdx]
+				notifyEmailCount := option.NotifyEmailCount
+				if len(option.NotifyEmails) > notifyEmailCount {
+					notifyEmailCount = len(option.NotifyEmails)
+				}
+				option.NotifyEmailCount = notifyEmailCount
+				option.NotifyEmails = nil
+			}
+		}
 	}
 }
 
@@ -2766,10 +2814,46 @@ func (a *AppService) GetVoterWorkflows(w http.ResponseWriter, r *http.Request) {
 		}
 		workflows[idx] = evaluatedWorkflow
 	}
-	sanitizeWorkflowListForUser(workflows, *userDid, isAdmin)
+	sanitizeWorkflowListForVoteView(workflows, *userDid, isAdmin)
 
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(workflows)
+}
+
+func (a *AppService) GetVoterWorkflow(w http.ResponseWriter, r *http.Request) {
+	userDid := utils.GetDid(r)
+	if userDid == nil {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+	isAdmin := a.IsAdmin(r.Context(), *userDid)
+
+	workflowId := strings.TrimSpace(r.PathValue("workflow_id"))
+	if workflowId == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	if err := a.refreshWorkflowStartAvailabilityAndNotify(r.Context()); err != nil {
+		a.logger.Logf("error refreshing workflow availability before voter workflow detail %s for user %s: %s", workflowId, *userDid, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	workflow, err := a.db.GetWorkflowByID(r.Context(), workflowId)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		a.logger.Logf("error getting voter workflow %s for %s: %s", workflowId, *userDid, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	sanitizeWorkflowForVoteView(workflow, *userDid, isAdmin)
+
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(workflow)
 }
 
 func (a *AppService) VoteWorkflow(w http.ResponseWriter, r *http.Request) {
@@ -3161,33 +3245,13 @@ func (a *AppService) ProposeWorkflowEdit(w http.ResponseWriter, r *http.Request)
 	}
 
 	var req structs.WorkflowEditProposalCreateRequest
-	if err := json.Unmarshal(body, &req); err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		return
-	}
-
-	req.Recurrence = strings.TrimSpace(req.Recurrence)
-	switch req.Recurrence {
-	case "one_time", "daily", "weekly", "monthly":
-	default:
-		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte("invalid recurrence"))
-		return
-	}
-
-	recurrenceEndAt, err := parseOptionalWorkflowDatetime(req.RecurrenceEndAt, "recurrence_end_at")
-	if err != nil {
+	if err := decodeWorkflowEditProposalCreateRequest(body, &req); err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		w.Write([]byte(err.Error()))
 		return
 	}
-	if req.Recurrence == "one_time" && recurrenceEndAt != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte("recurrence_end_at is only valid for recurring workflows"))
-		return
-	}
 
-	proposal, err := a.db.CreateWorkflowEditProposal(r.Context(), *requesterID, workflowID, &req, recurrenceEndAt)
+	proposal, err := a.db.CreateWorkflowEditProposal(r.Context(), *requesterID, workflowID, &req)
 	if err != nil {
 		errMsg := err.Error()
 		if strings.Contains(errMsg, "required") ||
@@ -3220,6 +3284,30 @@ func (a *AppService) ProposeWorkflowEdit(w http.ResponseWriter, r *http.Request)
 	_ = json.NewEncoder(w).Encode(proposal)
 }
 
+func decodeWorkflowEditProposalCreateRequest(body []byte, req *structs.WorkflowEditProposalCreateRequest) error {
+	if req == nil {
+		return fmt.Errorf("request is required")
+	}
+
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return fmt.Errorf("invalid workflow edit proposal payload")
+	}
+
+	forbiddenFields := []string{"start_at", "recurrence", "recurrence_end_at"}
+	for _, field := range forbiddenFields {
+		if _, exists := raw[field]; exists {
+			return fmt.Errorf("%s cannot be edited on an existing workflow", field)
+		}
+	}
+
+	if err := json.Unmarshal(body, req); err != nil {
+		return fmt.Errorf("invalid workflow edit proposal payload")
+	}
+
+	return nil
+}
+
 func (a *AppService) GetVoterWorkflowEditProposals(w http.ResponseWriter, r *http.Request) {
 	voterID := utils.GetDid(r)
 	if voterID == nil {
@@ -3232,6 +3320,9 @@ func (a *AppService) GetVoterWorkflowEditProposals(w http.ResponseWriter, r *htt
 		a.logger.Logf("error loading workflow edit proposals for voter %s: %s", *voterID, err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
+	}
+	for _, proposal := range proposals {
+		sanitizeWorkflowEditProposalForVoteView(proposal)
 	}
 
 	w.WriteHeader(http.StatusOK)
@@ -3301,8 +3392,58 @@ func (a *AppService) VoteWorkflowEditProposal(w http.ResponseWriter, r *http.Req
 
 	proposalWithVotes, err := a.db.GetWorkflowEditProposalByIDForUser(r.Context(), proposalID, voterID)
 	if err == nil {
+		sanitizeWorkflowEditProposalForVoteView(proposalWithVotes)
 		updatedProposal.Votes = proposalWithVotes.Votes
 	}
+	sanitizeWorkflowEditProposalForVoteView(updatedProposal)
+
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(updatedProposal)
+}
+
+func (a *AppService) AdminForceApproveWorkflowEditProposal(w http.ResponseWriter, r *http.Request) {
+	adminId := utils.GetDid(r)
+	if adminId == nil {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	proposalID := strings.TrimSpace(r.PathValue("proposal_id"))
+	if proposalID == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	proposal, err := a.db.GetWorkflowEditProposalByIDForUser(r.Context(), proposalID, nil)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		a.logger.Logf("error loading workflow edit proposal %s for admin force approve: %s", proposalID, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	if proposal.Status != "pending" {
+		w.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(w).Encode(proposal)
+		return
+	}
+
+	if err := a.db.ForceApproveWorkflowEditProposalAsAdmin(r.Context(), proposalID, *adminId); err != nil {
+		a.logger.Logf("error force approving workflow edit proposal %s by admin %s: %s", proposalID, *adminId, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	updatedProposal, err := a.db.GetWorkflowEditProposalByIDForUser(r.Context(), proposalID, nil)
+	if err != nil {
+		a.logger.Logf("error loading workflow edit proposal %s after admin force approve: %s", proposalID, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	sanitizeWorkflowEditProposalForVoteView(updatedProposal)
 
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(updatedProposal)
@@ -3382,6 +3523,24 @@ func (a *AppService) GetVoterWorkflowDeletionProposals(w http.ResponseWriter, r 
 	_ = json.NewEncoder(w).Encode(proposals)
 }
 
+func (a *AppService) GetProposerWorkflowDeletionProposals(w http.ResponseWriter, r *http.Request) {
+	proposerId := utils.GetDid(r)
+	if proposerId == nil {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	proposals, err := a.db.GetWorkflowDeletionProposalsForVoter(r.Context(), *proposerId)
+	if err != nil {
+		a.logger.Logf("error loading workflow deletion proposals for proposer %s: %s", *proposerId, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(proposals)
+}
+
 func (a *AppService) VoteWorkflowDeletionProposal(w http.ResponseWriter, r *http.Request) {
 	voterId := utils.GetDid(r)
 	if voterId == nil {
@@ -3446,6 +3605,53 @@ func (a *AppService) VoteWorkflowDeletionProposal(w http.ResponseWriter, r *http
 	proposalWithVotes, err := a.db.GetWorkflowDeletionProposalByIDForUser(r.Context(), proposalId, voterId)
 	if err == nil {
 		updatedProposal.Votes = proposalWithVotes.Votes
+	}
+
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(updatedProposal)
+}
+
+func (a *AppService) AdminForceApproveWorkflowDeletionProposal(w http.ResponseWriter, r *http.Request) {
+	adminId := utils.GetDid(r)
+	if adminId == nil {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	proposalId := strings.TrimSpace(r.PathValue("proposal_id"))
+	if proposalId == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	proposal, err := a.db.GetWorkflowDeletionProposalByIDForUser(r.Context(), proposalId, nil)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		a.logger.Logf("error loading workflow deletion proposal %s for admin force approve: %s", proposalId, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	if proposal.Status != "pending" {
+		w.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(w).Encode(proposal)
+		return
+	}
+
+	if err := a.db.ForceApproveWorkflowDeletionProposalAsAdmin(r.Context(), proposalId, *adminId); err != nil {
+		a.logger.Logf("error force approving workflow deletion proposal %s by admin %s: %s", proposalId, *adminId, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	updatedProposal, err := a.db.GetWorkflowDeletionProposalByIDForUser(r.Context(), proposalId, nil)
+	if err != nil {
+		a.logger.Logf("error loading workflow deletion proposal %s after admin force approve: %s", proposalId, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
 	}
 
 	w.WriteHeader(http.StatusOK)

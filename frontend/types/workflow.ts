@@ -26,6 +26,7 @@ export interface WorkflowDropdownOptionCreateInput {
   label: string
   requires_written_response: boolean
   notify_emails: string[]
+  notify_email_count?: number
 }
 
 export interface WorkflowWorkItem {
@@ -202,6 +203,7 @@ export interface WorkflowDeletionProposal {
   id: string
   target_type: WorkflowDeletionTargetType
   target_workflow_id?: string | null
+  preview_workflow_id?: string | null
   target_workflow_title?: string | null
   target_series_id?: string | null
   reason: string
@@ -272,8 +274,6 @@ export interface WorkflowCreateRequest {
 export interface WorkflowEditProposalCreateRequest {
   title: string
   description: string
-  recurrence: WorkflowRecurrence
-  recurrence_end_at?: string
   supervisor?: WorkflowSupervisorCreateInput
   supervisor_data_fields?: WorkflowSupervisorDataField[]
   roles: WorkflowRoleCreateInput[]
@@ -303,6 +303,7 @@ export interface WorkflowEditProposal {
   updated_at: number
   workflow_title: string
   workflow_description: string
+  workflow_start_at: number
   recurrence: WorkflowRecurrence
   recurrence_end_at?: number | null
   supervisor_required: boolean
@@ -310,6 +311,8 @@ export interface WorkflowEditProposal {
   supervisor_bounty: number
   total_bounty: number
   weekly_bounty_requirement: number
+  roles?: WorkflowRoleCreateInput[]
+  steps?: WorkflowStepCreateInput[]
   votes: WorkflowVotes
 }
 

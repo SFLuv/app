@@ -39,3 +39,24 @@
 
 ## Validation
 - `GOCACHE=/tmp/go-build go test -vet=off ./db ./handlers ./router ./structs` passes.
+
+## Follow-Up
+- Locked workflow edit proposals so recurrence, recurrence end date, and start date/time can no longer be changed during edit mode. The proposer UI now shows them as read-only, and the backend always reuses the existing series schedule when building an edit proposal.
+- Investigated workflow edit behavior before improver claims. Root issue: approved edit proposals update `workflow_series.current_state_id` but do not retarget the existing unclaimed workflow instance or rebuild its copied roles/steps, so the live workflow stays on the old state while the series points at the new one. Secondary frontend footgun: template application clears `editProposalWorkflowId`, which would fall the shared form back to create mode and produce a genuinely new series if used during edit mode.
+
+- Backend now explicitly rejects workflow edit proposal payloads that include `start_at`, `recurrence`, or `recurrence_end_at`, instead of silently ignoring them.
+- Backend startup has been split so DB initialization/migrations now live at `backend/cmd/init/main.go`, while the normal server boot path lives at `backend/cmd/server/main.go` and assumes schema setup has already been handled.
+- Applying a template during workflow edit mode now preserves `editProposalWorkflowId` and the locked schedule fields, so template use no longer falls the proposer form back into create mode.
+- Restyled the proposer edit-mode notice to a neutral card treatment and shortened the copy.
+- Moved the proposer workflow modal edit action to the top-right action area and moved the improver live camera capture button below the camera preview.
+- Moved the proposer workflow modal `Save as Template` action into the same top action area as `Edit Workflow`.
+- Repositioned the proposer workflow modal actions so they sit right-aligned above the roles section instead of beside the title.
+- Restored the proposer modal `Edit Workflow` button to its filled styling while keeping the new placement above the roles section.
+
+- Voter panel now supports admin force approval for workflow edit and deletion proposals, and edit/deletion proposal cards are clickable to open redacted detail previews in the workflow modal.
+- Moved redeemer role sync, minter role sync, and Privy linked-email sync out of cmd/server startup and into cmd/init, so normal server boot no longer blocks on those startup-wide synchronization passes.
+- Updated the voter active-workflow deletion proposal button so pending proposals now show `Workflow Deletion Proposed` or `Series Deletion Proposed` and remain disabled.
+- Added proposer-side pending deletion proposal awareness so the deletion button now disables and switches to `Workflow Deletion Proposed` or `Series Deletion Proposed` once a matching deletion proposal already exists.
+- Fixed proposer deletion-button matching so pending deletion proposals are detected by either matching series id or workflow id first, then the button label uses the actual pending proposal target type instead of relying only on the current inferred deletion target.
+- Enforced vote-view notify-email redaction in the voter panel modal by stripping dropdown option `notify_emails` and preserving only `notify_email_count` for workflow, edit-proposal, and deletion-proposal detail views.
+- Moved vote-view notify-email redaction into backend voter routes by adding a voter-specific workflow detail endpoint and explicit vote-view sanitization for voter workflow lists/details and edit proposal payloads.
