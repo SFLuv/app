@@ -16,7 +16,7 @@ import { Switch } from "@/components/ui/switch"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Check, Loader2, Upload, User, Clock, XCircle, AlertTriangle } from "lucide-react"
-import { VerifiedEmailResponse, WalletResponse } from "@/types/server"
+import { UserResponse, VerifiedEmailResponse, WalletResponse } from "@/types/server"
 import { getAddress, isAddress } from "viem"
 
 type MerchantStatus = "approved" | "pending" | "rejected" | "none"
@@ -47,6 +47,7 @@ export default function SettingsPage() {
     setIssuer,
     supervisor,
     setSupervisor,
+    updateUser,
     authFetch,
     refreshWallets
   } = useApp()
@@ -130,6 +131,14 @@ export default function SettingsPage() {
   const [rewardsWallets, setRewardsWallets] = useState<WalletResponse[]>([])
   const [rewardsWalletsLoading, setRewardsWalletsLoading] = useState(false)
   const [rewardsWalletsError, setRewardsWalletsError] = useState("")
+  const [walletVisibilitySavingId, setWalletVisibilitySavingId] = useState<number | null>(null)
+  const [walletVisibilityError, setWalletVisibilityError] = useState("")
+  const [walletVisibilitySuccess, setWalletVisibilitySuccess] = useState("")
+  const [primaryWalletSelection, setPrimaryWalletSelection] = useState("")
+  const [primaryWalletCustomAddress, setPrimaryWalletCustomAddress] = useState("")
+  const [primaryWalletSaving, setPrimaryWalletSaving] = useState(false)
+  const [primaryWalletError, setPrimaryWalletError] = useState("")
+  const [primaryWalletSuccess, setPrimaryWalletSuccess] = useState("")
 
   const [improverRewardsSelection, setImproverRewardsSelection] = useState("")
   const [improverCustomRewardsAccount, setImproverCustomRewardsAccount] = useState("")
@@ -217,18 +226,17 @@ export default function SettingsPage() {
     const options: Array<{ value: string; label: string; isSmartWalletZero: boolean }> = []
 
     for (const wallet of rewardsWallets) {
-      const rawAddress = (wallet.smart_address || wallet.eoa_address || "").trim()
+      if (wallet.is_eoa) continue
+      const rawAddress = (wallet.smart_address || "").trim()
       if (!rawAddress || !isAddress(rawAddress)) continue
       const normalizedAddress = getAddress(rawAddress)
       const key = normalizedAddress.toLowerCase()
       if (seen.has(key)) continue
       seen.add(key)
 
-      const fallbackName = wallet.is_eoa
-        ? "EOA Account"
-        : wallet.smart_index !== undefined
-          ? `Smart Wallet ${wallet.smart_index + 1}`
-          : "Smart Wallet"
+      const fallbackName = wallet.smart_index !== undefined
+        ? `Smart Wallet ${wallet.smart_index + 1}`
+        : "Smart Wallet"
       const displayName = (wallet.name || "").trim() || fallbackName
       const shortAddress = `${normalizedAddress.slice(0, 6)}...${normalizedAddress.slice(-4)}`
       options.push({
@@ -242,10 +250,83 @@ export default function SettingsPage() {
   }, [rewardsWallets])
 
   const defaultRewardsAccount = useMemo(() => {
+    const currentPrimaryWallet = (user?.primaryWalletAddress || "").trim()
+    if (currentPrimaryWallet && isAddress(currentPrimaryWallet)) {
+      return getAddress(currentPrimaryWallet)
+    }
+
+    const primaryEoaAddress = rewardsWallets
+      .filter((wallet) => wallet.is_eoa && typeof wallet.id === "number")
+      .sort((a, b) => (a.id ?? Number.MAX_SAFE_INTEGER) - (b.id ?? Number.MAX_SAFE_INTEGER))[0]?.eoa_address?.trim().toLowerCase() || ""
+
+    if (primaryEoaAddress) {
+      const preferredSmartWallet = rewardsWallets.find((wallet) =>
+        wallet.is_eoa === false &&
+        wallet.smart_index === 0 &&
+        wallet.eoa_address?.trim().toLowerCase() === primaryEoaAddress &&
+        typeof wallet.smart_address === "string" &&
+        isAddress(wallet.smart_address.trim())
+      )
+      if (preferredSmartWallet?.smart_address) {
+        return getAddress(preferredSmartWallet.smart_address.trim())
+      }
+    }
+
     const smartWalletZero = rewardsAccountOptions.find((option) => option.isSmartWalletZero)
     if (smartWalletZero) return smartWalletZero.value
     return rewardsAccountOptions[0]?.value || ""
-  }, [rewardsAccountOptions])
+  }, [rewardsAccountOptions, rewardsWallets, user?.primaryWalletAddress])
+
+  const getWalletSelectionState = (currentAddress: string, fallbackAddress = "") => {
+    const normalizedCurrent = currentAddress.trim() && isAddress(currentAddress.trim()) ? getAddress(currentAddress.trim()) : ""
+    if (normalizedCurrent && rewardsAccountOptions.some((option) => option.value.toLowerCase() === normalizedCurrent.toLowerCase())) {
+      return {
+        selection: normalizedCurrent,
+        customAddress: "",
+      }
+    }
+    if (normalizedCurrent) {
+      return {
+        selection: CUSTOM_REWARDS_ACCOUNT_VALUE,
+        customAddress: normalizedCurrent,
+      }
+    }
+
+    const normalizedFallback = fallbackAddress.trim() && isAddress(fallbackAddress.trim()) ? getAddress(fallbackAddress.trim()) : ""
+    if (normalizedFallback && rewardsAccountOptions.some((option) => option.value.toLowerCase() === normalizedFallback.toLowerCase())) {
+      return {
+        selection: normalizedFallback,
+        customAddress: "",
+      }
+    }
+    if (normalizedFallback) {
+      return {
+        selection: CUSTOM_REWARDS_ACCOUNT_VALUE,
+        customAddress: normalizedFallback,
+      }
+    }
+
+    return {
+      selection: rewardsAccountOptions[0]?.value || CUSTOM_REWARDS_ACCOUNT_VALUE,
+      customAddress: "",
+    }
+  }
+
+  const formatWalletAddress = (wallet: WalletResponse) => {
+    const rawAddress = (wallet.smart_address || wallet.eoa_address || "").trim()
+    if (!rawAddress) return "No address"
+    if (!isAddress(rawAddress)) return rawAddress
+    const normalized = getAddress(rawAddress)
+    return `${normalized.slice(0, 6)}...${normalized.slice(-4)}`
+  }
+
+  const isWalletPrimary = (wallet: WalletResponse) => {
+    const walletAddress = (wallet.smart_address || wallet.eoa_address || "").trim()
+    const primaryWalletAddress = (user?.primaryWalletAddress || "").trim()
+    if (!walletAddress || !primaryWalletAddress) return false
+    if (!isAddress(walletAddress) || !isAddress(primaryWalletAddress)) return false
+    return getAddress(walletAddress).toLowerCase() === getAddress(primaryWalletAddress).toLowerCase()
+  }
 
   useEffect(() => {
     if (verifiedEmailOptions.length === 0) {
@@ -315,51 +396,25 @@ export default function SettingsPage() {
   }, [activeTab, status])
 
   useEffect(() => {
+    const selectionState = getWalletSelectionState(user?.primaryWalletAddress || "", defaultRewardsAccount)
+    setPrimaryWalletSelection(selectionState.selection)
+    setPrimaryWalletCustomAddress(selectionState.customAddress)
+  }, [defaultRewardsAccount, rewardsAccountOptions, user?.primaryWalletAddress])
+
+  useEffect(() => {
     if (improverStatus !== "approved") return
 
-    const current = (improver?.primary_rewards_account || "").trim()
-    const normalizedCurrent = current && isAddress(current) ? getAddress(current) : ""
-    if (normalizedCurrent && rewardsAccountOptions.some((option) => option.value.toLowerCase() === normalizedCurrent.toLowerCase())) {
-      setImproverRewardsSelection(normalizedCurrent)
-      setImproverCustomRewardsAccount("")
-      return
-    }
-    if (normalizedCurrent) {
-      setImproverRewardsSelection(CUSTOM_REWARDS_ACCOUNT_VALUE)
-      setImproverCustomRewardsAccount(normalizedCurrent)
-      return
-    }
-    if (defaultRewardsAccount) {
-      setImproverRewardsSelection(defaultRewardsAccount)
-      setImproverCustomRewardsAccount("")
-      return
-    }
-    setImproverRewardsSelection(CUSTOM_REWARDS_ACCOUNT_VALUE)
-    setImproverCustomRewardsAccount("")
+    const selectionState = getWalletSelectionState(improver?.primary_rewards_account || "", defaultRewardsAccount)
+    setImproverRewardsSelection(selectionState.selection)
+    setImproverCustomRewardsAccount(selectionState.customAddress)
   }, [improverStatus, improver?.primary_rewards_account, rewardsAccountOptions, defaultRewardsAccount])
 
   useEffect(() => {
     if (supervisorStatus !== "approved") return
 
-    const current = (supervisor?.primary_rewards_account || "").trim()
-    const normalizedCurrent = current && isAddress(current) ? getAddress(current) : ""
-    if (normalizedCurrent && rewardsAccountOptions.some((option) => option.value.toLowerCase() === normalizedCurrent.toLowerCase())) {
-      setSupervisorRewardsSelection(normalizedCurrent)
-      setSupervisorCustomRewardsAccount("")
-      return
-    }
-    if (normalizedCurrent) {
-      setSupervisorRewardsSelection(CUSTOM_REWARDS_ACCOUNT_VALUE)
-      setSupervisorCustomRewardsAccount(normalizedCurrent)
-      return
-    }
-    if (defaultRewardsAccount) {
-      setSupervisorRewardsSelection(defaultRewardsAccount)
-      setSupervisorCustomRewardsAccount("")
-      return
-    }
-    setSupervisorRewardsSelection(CUSTOM_REWARDS_ACCOUNT_VALUE)
-    setSupervisorCustomRewardsAccount("")
+    const selectionState = getWalletSelectionState(supervisor?.primary_rewards_account || "", defaultRewardsAccount)
+    setSupervisorRewardsSelection(selectionState.selection)
+    setSupervisorCustomRewardsAccount(selectionState.customAddress)
   }, [supervisorStatus, supervisor?.primary_rewards_account, rewardsAccountOptions, defaultRewardsAccount])
 
   const handleAddVerifiedEmail = async (e: React.FormEvent) => {
@@ -593,6 +648,79 @@ export default function SettingsPage() {
       setImproverRewardsError(err instanceof Error ? err.message : "Unable to update improver rewards account.")
     } finally {
       setImproverRewardsSaving(false)
+    }
+  }
+
+  const handleSavePrimaryWallet = async () => {
+    setPrimaryWalletError("")
+    setPrimaryWalletSuccess("")
+
+    const selectedValue = primaryWalletSelection === CUSTOM_REWARDS_ACCOUNT_VALUE
+      ? primaryWalletCustomAddress.trim()
+      : primaryWalletSelection.trim()
+
+    if (!selectedValue) {
+      setPrimaryWalletError("Primary wallet is required.")
+      return
+    }
+    if (!isAddress(selectedValue)) {
+      setPrimaryWalletError("Enter a valid Ethereum address.")
+      return
+    }
+
+    const normalized = getAddress(selectedValue)
+    setPrimaryWalletSaving(true)
+    try {
+      const res = await authFetch("/users/primary-wallet", {
+        method: "PUT",
+        body: JSON.stringify({ primary_wallet_address: normalized }),
+      })
+      if (!res.ok) {
+        const text = await res.text()
+        throw new Error(text || "Unable to update primary wallet.")
+      }
+
+      const data = await res.json() as UserResponse
+      updateUser({ primaryWalletAddress: data.primary_wallet_address })
+      setPrimaryWalletSuccess("Primary wallet updated.")
+    } catch (err) {
+      setPrimaryWalletError(err instanceof Error ? err.message : "Unable to update primary wallet.")
+    } finally {
+      setPrimaryWalletSaving(false)
+    }
+  }
+
+  const handleWalletVisibilityChange = async (wallet: WalletResponse, shouldShow: boolean) => {
+    if (wallet.id === null) return
+
+    setWalletVisibilitySavingId(wallet.id)
+    setWalletVisibilityError("")
+    setWalletVisibilitySuccess("")
+    try {
+      const res = await authFetch("/wallets", {
+        method: "PUT",
+        body: JSON.stringify({
+          id: wallet.id,
+          name: wallet.name,
+          is_hidden: !shouldShow,
+        }),
+      })
+      if (!res.ok) {
+        const text = await res.text()
+        throw new Error(text || "Unable to update wallet visibility.")
+      }
+
+      setRewardsWallets((current) =>
+        current.map((entry) =>
+          entry.id === wallet.id ? { ...entry, is_hidden: !shouldShow } : entry
+        )
+      )
+      await refreshWallets()
+      setWalletVisibilitySuccess("Wallet visibility updated.")
+    } catch (err) {
+      setWalletVisibilityError(err instanceof Error ? err.message : "Unable to update wallet visibility.")
+    } finally {
+      setWalletVisibilitySavingId(null)
     }
   }
 
@@ -1012,78 +1140,6 @@ export default function SettingsPage() {
             </CardContent>
           </Card>
 
-          {affiliateStatus === "rejected" && (
-            <Card className="mt-6 border-red-300 dark:border-red-700">
-              <CardHeader className="bg-red-50 dark:bg-red-900/20 rounded-t-lg">
-                <CardTitle className="text-black dark:text-white flex items-center">
-                  <XCircle className="h-5 w-5 text-red-500 mr-2" />
-                  Affiliate Request Not Approved
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="pt-4">
-                <p className="text-gray-600 dark:text-gray-400">
-                  Your affiliate request was not approved. Use the form below to submit another request.
-                </p>
-              </CardContent>
-            </Card>
-          )}
-
-          {proposerStatus === "rejected" && (
-            <Card className="mt-6 border-red-300 dark:border-red-700">
-              <CardHeader className="bg-red-50 dark:bg-red-900/20 rounded-t-lg">
-                <CardTitle className="text-black dark:text-white flex items-center">
-                  <XCircle className="h-5 w-5 text-red-500 mr-2" />
-                  Proposer Request Not Approved
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="pt-4">
-                <p className="text-gray-600 dark:text-gray-400">Your proposer request was not approved. Use the form below to submit another request.</p>
-              </CardContent>
-            </Card>
-          )}
-
-          {improverStatus === "rejected" && (
-            <Card className="mt-6 border-red-300 dark:border-red-700">
-              <CardHeader className="bg-red-50 dark:bg-red-900/20 rounded-t-lg">
-                <CardTitle className="text-black dark:text-white flex items-center">
-                  <XCircle className="h-5 w-5 text-red-500 mr-2" />
-                  Improver Request Not Approved
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="pt-4">
-                <p className="text-gray-600 dark:text-gray-400">Your improver request was not approved. Use the form below to submit another request.</p>
-              </CardContent>
-            </Card>
-          )}
-
-          {issuerStatus === "rejected" && (
-            <Card className="mt-6 border-red-300 dark:border-red-700">
-              <CardHeader className="bg-red-50 dark:bg-red-900/20 rounded-t-lg">
-                <CardTitle className="text-black dark:text-white flex items-center">
-                  <XCircle className="h-5 w-5 text-red-500 mr-2" />
-                  Issuer Request Not Approved
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="pt-4">
-                <p className="text-gray-600 dark:text-gray-400">Your issuer request was not approved. Use the form below to submit another request.</p>
-              </CardContent>
-            </Card>
-          )}
-
-          {supervisorStatus === "rejected" && (
-            <Card className="mt-6 border-red-300 dark:border-red-700">
-              <CardHeader className="bg-red-50 dark:bg-red-900/20 rounded-t-lg">
-                <CardTitle className="text-black dark:text-white flex items-center">
-                  <XCircle className="h-5 w-5 text-red-500 mr-2" />
-                  Supervisor Request Not Approved
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="pt-4">
-                <p className="text-gray-600 dark:text-gray-400">Your supervisor request was not approved. Use the form below to submit another request.</p>
-              </CardContent>
-            </Card>
-          )}
-
           {(merchantStatus === "none" || merchantStatus === "rejected" || affiliateStatus === "none" || affiliateStatus === "rejected" || proposerStatus === "none" || proposerStatus === "rejected" || improverStatus === "none" || improverStatus === "rejected" || issuerStatus === "none" || issuerStatus === "rejected" || supervisorStatus === "none" || supervisorStatus === "rejected") && (
             <Card className="mt-6">
               <CardHeader>
@@ -1207,7 +1263,217 @@ export default function SettingsPage() {
             </Card>
           )}
 
+          <Card className="mt-6">
+            <CardHeader>
+              <CardTitle className="text-black dark:text-white">Primary Wallet</CardTitle>
+              <CardDescription>
+                This wallet is used as your default account anywhere a wallet is needed and you have not chosen a more specific one.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="primary-wallet" className="text-black dark:text-white">
+                  Default Wallet
+                </Label>
+                <Select
+                  value={primaryWalletSelection || CUSTOM_REWARDS_ACCOUNT_VALUE}
+                  onValueChange={(value) => {
+                    setPrimaryWalletSelection(value)
+                    setPrimaryWalletError("")
+                    setPrimaryWalletSuccess("")
+                  }}
+                >
+                  <SelectTrigger id="primary-wallet" className="text-black dark:text-white bg-secondary">
+                    <SelectValue placeholder={rewardsWalletsLoading ? "Loading wallets..." : "Select a wallet"} />
+                  </SelectTrigger>
+                  <SelectContent className="bg-secondary text-black dark:text-white">
+                    {rewardsAccountOptions.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
+                    <SelectItem value={CUSTOM_REWARDS_ACCOUNT_VALUE}>Other</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
 
+              {primaryWalletSelection === CUSTOM_REWARDS_ACCOUNT_VALUE && (
+                <div className="space-y-2">
+                  <Label htmlFor="primary-wallet-custom" className="text-black dark:text-white">
+                    Wallet Address
+                  </Label>
+                  <Input
+                    id="primary-wallet-custom"
+                    value={primaryWalletCustomAddress}
+                    onChange={(e) => {
+                      setPrimaryWalletCustomAddress(e.target.value)
+                      setPrimaryWalletError("")
+                      setPrimaryWalletSuccess("")
+                    }}
+                    placeholder="0x..."
+                    className="text-black dark:text-white bg-secondary"
+                  />
+                </div>
+              )}
+
+              {rewardsWalletsError && (
+                <p className="text-sm text-red-600 dark:text-red-400">{rewardsWalletsError}</p>
+              )}
+              {primaryWalletError && (
+                <p className="text-sm text-red-600 dark:text-red-400">{primaryWalletError}</p>
+              )}
+              {primaryWalletSuccess && (
+                <p className="text-sm text-green-600 dark:text-green-400">{primaryWalletSuccess}</p>
+              )}
+
+              <Button
+                type="button"
+                variant="outline"
+                className="bg-secondary text-[#eb6c6c] border-[#eb6c6c] hover:bg-[#eb6c6c] hover:text-white"
+                onClick={handleSavePrimaryWallet}
+                disabled={primaryWalletSaving}
+              >
+                {primaryWalletSaving ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Saving...</> : "Save Primary Wallet"}
+              </Button>
+            </CardContent>
+          </Card>
+
+          <Card className="mt-6">
+            <CardHeader>
+              <CardTitle className="text-black dark:text-white">Wallet Visibility</CardTitle>
+              <CardDescription>
+                Choose which wallets appear on your wallets page.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {rewardsWalletsLoading ? (
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Loading wallets...
+                </div>
+              ) : rewardsWallets.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No wallets available yet.</p>
+              ) : (
+                <div className="space-y-3">
+                  {rewardsWallets.map((wallet) => (
+                    <div
+                      key={`${wallet.id ?? "wallet"}-${wallet.smart_address || wallet.eoa_address}`}
+                      className="flex flex-col gap-3 rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-900/30 sm:flex-row sm:items-center sm:justify-between"
+                    >
+                      <div className="space-y-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="font-medium text-black dark:text-white">{wallet.name}</p>
+                          {isWalletPrimary(wallet) && (
+                            <span className="rounded-full border border-[#eb6c6c]/40 bg-[#eb6c6c]/10 px-2 py-0.5 text-[11px] font-medium text-[#eb6c6c]">
+                              Primary Wallet
+                            </span>
+                          )}
+                        </div>
+                        <p className="font-mono text-xs text-gray-500 dark:text-gray-400">
+                          {formatWalletAddress(wallet)}
+                        </p>
+                      </div>
+
+                      <div className="flex items-center justify-between gap-3 sm:justify-end">
+                        <div className="text-right">
+                          <p className="text-sm font-medium text-black dark:text-white">Show on wallets page</p>
+                          <p className="text-xs text-gray-500 dark:text-gray-400">
+                            Hidden wallets stay usable elsewhere.
+                          </p>
+                        </div>
+                        <Switch
+                          checked={!wallet.is_hidden}
+                          disabled={walletVisibilitySavingId === wallet.id}
+                          onCheckedChange={(checked) => {
+                            void handleWalletVisibilityChange(wallet, checked)
+                          }}
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {walletVisibilityError && (
+                <p className="text-sm text-red-600 dark:text-red-400">{walletVisibilityError}</p>
+              )}
+              {walletVisibilitySuccess && (
+                <p className="text-sm text-green-600 dark:text-green-400">{walletVisibilitySuccess}</p>
+              )}
+            </CardContent>
+          </Card>
+
+          {affiliateStatus === "rejected" && (
+            <Card className="mt-6 border-red-300 dark:border-red-700">
+              <CardHeader className="bg-red-50 dark:bg-red-900/20 rounded-t-lg">
+                <CardTitle className="text-black dark:text-white flex items-center">
+                  <XCircle className="h-5 w-5 text-red-500 mr-2" />
+                  Affiliate Request Not Approved
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="pt-4">
+                <p className="text-gray-600 dark:text-gray-400">
+                  Your affiliate request was not approved. Use the form below to submit another request.
+                </p>
+              </CardContent>
+            </Card>
+          )}
+
+          {proposerStatus === "rejected" && (
+            <Card className="mt-6 border-red-300 dark:border-red-700">
+              <CardHeader className="bg-red-50 dark:bg-red-900/20 rounded-t-lg">
+                <CardTitle className="text-black dark:text-white flex items-center">
+                  <XCircle className="h-5 w-5 text-red-500 mr-2" />
+                  Proposer Request Not Approved
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="pt-4">
+                <p className="text-gray-600 dark:text-gray-400">Your proposer request was not approved. Use the form below to submit another request.</p>
+              </CardContent>
+            </Card>
+          )}
+
+          {improverStatus === "rejected" && (
+            <Card className="mt-6 border-red-300 dark:border-red-700">
+              <CardHeader className="bg-red-50 dark:bg-red-900/20 rounded-t-lg">
+                <CardTitle className="text-black dark:text-white flex items-center">
+                  <XCircle className="h-5 w-5 text-red-500 mr-2" />
+                  Improver Request Not Approved
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="pt-4">
+                <p className="text-gray-600 dark:text-gray-400">Your improver request was not approved. Use the form below to submit another request.</p>
+              </CardContent>
+            </Card>
+          )}
+
+          {issuerStatus === "rejected" && (
+            <Card className="mt-6 border-red-300 dark:border-red-700">
+              <CardHeader className="bg-red-50 dark:bg-red-900/20 rounded-t-lg">
+                <CardTitle className="text-black dark:text-white flex items-center">
+                  <XCircle className="h-5 w-5 text-red-500 mr-2" />
+                  Issuer Request Not Approved
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="pt-4">
+                <p className="text-gray-600 dark:text-gray-400">Your issuer request was not approved. Use the form below to submit another request.</p>
+              </CardContent>
+            </Card>
+          )}
+
+          {supervisorStatus === "rejected" && (
+            <Card className="mt-6 border-red-300 dark:border-red-700">
+              <CardHeader className="bg-red-50 dark:bg-red-900/20 rounded-t-lg">
+                <CardTitle className="text-black dark:text-white flex items-center">
+                  <XCircle className="h-5 w-5 text-red-500 mr-2" />
+                  Supervisor Request Not Approved
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="pt-4">
+                <p className="text-gray-600 dark:text-gray-400">Your supervisor request was not approved. Use the form below to submit another request.</p>
+              </CardContent>
+            </Card>
+          )}
 
           {/* {user?.merchantStatus === "rejected" && (
             <Card className="mt-6 border-red-300 dark:border-red-700">
@@ -1481,11 +1747,11 @@ export default function SettingsPage() {
                           Primary Rewards Account
                         </Label>
                         <p className="text-xs text-gray-500 dark:text-gray-400">
-                          Workflow rewards are paid to this account. Smart Wallet 1 is used by default.
+                          Workflow rewards are paid to this account. Your primary wallet is used by default until you choose a different rewards account here.
                         </p>
                       </div>
                       <Select
-                        value={improverRewardsSelection || (defaultRewardsAccount || CUSTOM_REWARDS_ACCOUNT_VALUE)}
+                        value={improverRewardsSelection || CUSTOM_REWARDS_ACCOUNT_VALUE}
                         onValueChange={(value) => {
                           setImproverRewardsSelection(value)
                           setImproverRewardsError("")
@@ -1498,10 +1764,10 @@ export default function SettingsPage() {
                         <SelectContent className="bg-secondary text-black dark:text-white">
                           {rewardsAccountOptions.map((option) => (
                             <SelectItem key={option.value} value={option.value}>
-                              {option.label}{option.isSmartWalletZero ? " (Default)" : ""}
+                              {option.label}
                             </SelectItem>
                           ))}
-                          <SelectItem value={CUSTOM_REWARDS_ACCOUNT_VALUE}>Custom account</SelectItem>
+                          <SelectItem value={CUSTOM_REWARDS_ACCOUNT_VALUE}>Other</SelectItem>
                         </SelectContent>
                       </Select>
                       {improverRewardsSelection === CUSTOM_REWARDS_ACCOUNT_VALUE && (
@@ -1586,11 +1852,11 @@ export default function SettingsPage() {
                           Primary Rewards Account
                         </Label>
                         <p className="text-xs text-gray-500 dark:text-gray-400">
-                          Supervisor workflow rewards are paid to this account. Smart Wallet 1 is used by default.
+                          Supervisor workflow rewards are paid to this account. Your primary wallet is used by default until you choose a different rewards account here.
                         </p>
                       </div>
                       <Select
-                        value={supervisorRewardsSelection || (defaultRewardsAccount || CUSTOM_REWARDS_ACCOUNT_VALUE)}
+                        value={supervisorRewardsSelection || CUSTOM_REWARDS_ACCOUNT_VALUE}
                         onValueChange={(value) => {
                           setSupervisorRewardsSelection(value)
                           setSupervisorRewardsError("")
@@ -1603,10 +1869,10 @@ export default function SettingsPage() {
                         <SelectContent className="bg-secondary text-black dark:text-white">
                           {rewardsAccountOptions.map((option) => (
                             <SelectItem key={option.value} value={option.value}>
-                              {option.label}{option.isSmartWalletZero ? " (Default)" : ""}
+                              {option.label}
                             </SelectItem>
                           ))}
-                          <SelectItem value={CUSTOM_REWARDS_ACCOUNT_VALUE}>Custom account</SelectItem>
+                          <SelectItem value={CUSTOM_REWARDS_ACCOUNT_VALUE}>Other</SelectItem>
                         </SelectContent>
                       </Select>
                       {supervisorRewardsSelection === CUSTOM_REWARDS_ACCOUNT_VALUE && (

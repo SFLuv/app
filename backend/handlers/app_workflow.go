@@ -889,12 +889,6 @@ func (a *AppService) GetProposerWorkflows(w http.ResponseWriter, r *http.Request
 	}
 	isAdmin := a.IsAdmin(r.Context(), *userDid)
 
-	if err := a.refreshWorkflowStartAvailabilityAndNotify(r.Context()); err != nil {
-		a.logger.Logf("error refreshing workflow availability before proposer workflows list for user %s: %s", *userDid, err)
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
 	workflows, err := a.db.GetWorkflowsByProposer(r.Context(), *userDid)
 	if err != nil {
 		a.logger.Logf("error getting workflows for proposer %s: %s", *userDid, err)
@@ -4596,6 +4590,11 @@ func (a *AppService) processWorkflowSeriesPayouts(ctx context.Context, triggerWo
 		return
 	}
 
+	if err := a.refreshWorkflowStartAvailabilityAndNotify(ctx); err != nil {
+		a.logger.Logf("error refreshing workflow availability before payout processing for %s: %s", triggerWorkflowID, err)
+		return
+	}
+
 	workflowIDs, err := a.db.GetWorkflowSeriesOrderedIDs(ctx, triggerWorkflowID)
 	if err != nil {
 		a.logger.Logf("error loading workflow series order for payout processing %s: %s", triggerWorkflowID, err)
@@ -4610,7 +4609,7 @@ func (a *AppService) processWorkflowSeriesPayouts(ctx context.Context, triggerWo
 		}
 
 		switch workflow.Status {
-		case "deleted", "rejected", "expired", "paid_out":
+		case "deleted", "rejected", "expired", "paid_out", "failed", "skipped":
 			continue
 		case "completed":
 			targets := collectWorkflowPayoutTargets(workflow)

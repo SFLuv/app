@@ -58,6 +58,27 @@ func (a *AppDB) UpdateUserPayPalEth(ctx context.Context, userId string, paypalEt
 	return nil
 }
 
+func (a *AppDB) UpdateUserPrimaryWallet(ctx context.Context, userId string, primaryWalletAddress string) (*structs.User, error) {
+	normalizedAddress, err := normalizeEthereumAddressForField(primaryWalletAddress, "primary wallet")
+	if err != nil {
+		return nil, err
+	}
+
+	_, err = a.db.Exec(ctx, `
+		UPDATE
+			users
+		SET
+			primary_wallet_address = $1
+		WHERE
+			id = $2;
+	`, normalizedAddress, userId)
+	if err != nil {
+		return nil, fmt.Errorf("error updating user primary wallet: %s", err)
+	}
+
+	return a.GetUserById(ctx, userId)
+}
+
 func (a *AppDB) UpdateUserRole(ctx context.Context, userId string, role string, value bool) error {
 	roles := map[string]string{
 		"admin":      "is_admin",
@@ -124,6 +145,7 @@ func (a *AppDB) GetUsers(ctx context.Context, page int, count int) ([]*structs.U
 			contact_email,
 			contact_phone,
 			contact_name,
+			primary_wallet_address,
 			paypal_eth
 		FROM
 			users
@@ -152,6 +174,7 @@ func (a *AppDB) GetUsers(ctx context.Context, page int, count int) ([]*structs.U
 			&user.Email,
 			&user.Phone,
 			&user.Name,
+			&user.PrimaryWalletAddress,
 			&user.PayPalEth,
 		)
 		if err != nil {
@@ -181,6 +204,7 @@ func (a *AppDB) GetUserById(ctx context.Context, userId string) (*structs.User, 
 			contact_email,
 			contact_phone,
 			contact_name,
+			primary_wallet_address,
 			paypal_eth,
 			last_redemption
 		FROM
@@ -202,6 +226,7 @@ func (a *AppDB) GetUserById(ctx context.Context, userId string) (*structs.User, 
 		&user.Email,
 		&user.Phone,
 		&user.Name,
+		&user.PrimaryWalletAddress,
 		&user.PayPalEth,
 		&user.LastRedemption,
 	)

@@ -118,6 +118,16 @@ func (s *BotService) resolveRedeemPayoutAddress(ctx context.Context, requestedAd
 		return normalizedRequestedAddress
 	}
 
+	user, err := s.appDb.GetUserById(ctx, ownerLookup.UserID)
+	if err == nil {
+		primaryWalletAddress := strings.TrimSpace(user.PrimaryWalletAddress)
+		if common.IsHexAddress(primaryWalletAddress) {
+			return strings.ToLower(common.HexToAddress(primaryWalletAddress).Hex())
+		}
+	} else {
+		fmt.Printf("error loading user primary wallet for owner %s redeem address %s: %s\n", ownerLookup.UserID, normalizedRequestedAddress, err)
+	}
+
 	primarySmartWallet, err := s.appDb.GetSmartWalletByOwnerIndex(ctx, ownerLookup.UserID, 0)
 	if err != nil {
 		fmt.Printf("error loading primary smart wallet for owner %s redeem address %s: %s\n", ownerLookup.UserID, normalizedRequestedAddress, err)

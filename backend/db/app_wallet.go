@@ -17,6 +17,7 @@ func (a *AppDB) AddWallet(ctx context.Context, wallet *structs.Wallet) (int, err
 			owner,
 			name,
 			is_eoa,
+			is_hidden,
 			eoa_address,
 			smart_address,
 			smart_index
@@ -26,7 +27,8 @@ func (a *AppDB) AddWallet(ctx context.Context, wallet *structs.Wallet) (int, err
 			$3,
 			$4,
 			$5,
-			$6
+			$6,
+			$7
 		)
 		ON CONFLICT (owner, is_eoa, eoa_address, smart_index)
 		DO NOTHING
@@ -35,6 +37,7 @@ func (a *AppDB) AddWallet(ctx context.Context, wallet *structs.Wallet) (int, err
 		wallet.Owner,
 		wallet.Name,
 		wallet.IsEoa,
+		wallet.IsHidden,
 		wallet.EoaAddress,
 		wallet.SmartAddress,
 		wallet.SmartIndex,
@@ -52,7 +55,7 @@ func (a *AppDB) AddWallet(ctx context.Context, wallet *structs.Wallet) (int, err
 func (a *AppDB) GetWalletsByUser(ctx context.Context, userId string) ([]*structs.Wallet, error) {
 	rows, err := a.db.Query(ctx, `
 	SELECT
-		wallets.id, wallets.owner, wallets.name, wallets.is_eoa, wallets.is_redeemer, wallets.is_minter, wallets.eoa_address, wallets.smart_address, wallets.smart_index, wallets.last_unwrap_at
+		wallets.id, wallets.owner, wallets.name, wallets.is_eoa, wallets.is_hidden, wallets.is_redeemer, wallets.is_minter, wallets.eoa_address, wallets.smart_address, wallets.smart_index, wallets.last_unwrap_at
 	FROM
 		wallets JOIN users ON wallets.owner = users.id
 	WHERE
@@ -74,6 +77,7 @@ func (a *AppDB) GetWalletsByUser(ctx context.Context, userId string) ([]*structs
 			&wallet.Owner,
 			&wallet.Name,
 			&wallet.IsEoa,
+			&wallet.IsHidden,
 			&wallet.IsRedeemer,
 			&wallet.IsMinter,
 			&wallet.EoaAddress,
@@ -110,6 +114,7 @@ func (a *AppDB) GetWalletByUserAndAddress(ctx context.Context, userId string, ad
 			owner,
 			name,
 			is_eoa,
+			is_hidden,
 			is_redeemer,
 			is_minter,
 			eoa_address,
@@ -139,6 +144,7 @@ func (a *AppDB) GetWalletByUserAndAddress(ctx context.Context, userId string, ad
 		&w.Owner,
 		&w.Name,
 		&w.IsEoa,
+		&w.IsHidden,
 		&w.IsRedeemer,
 		&w.IsMinter,
 		&w.EoaAddress,
@@ -316,14 +322,19 @@ func (a *AppDB) UserOwnsAnyWalletAddress(ctx context.Context, userID string, add
 }
 
 func (a *AppDB) UpdateWallet(ctx context.Context, wallet *structs.Wallet) error {
+	if wallet.Id == nil {
+		return fmt.Errorf("wallet id is required")
+	}
+
 	_, err := a.db.Exec(ctx, `
 		UPDATE
 			wallets
 		SET
-			name = $1
+			name = $1,
+			is_hidden = $2
 		WHERE
-			(id = $2 AND owner = $3);
-	`, wallet.Name, *wallet.Id, wallet.Owner)
+			(id = $3 AND owner = $4);
+	`, wallet.Name, wallet.IsHidden, *wallet.Id, wallet.Owner)
 	if err != nil {
 		return err
 	}
@@ -357,6 +368,7 @@ func (a *AppDB) GetSmartWalletByOwnerIndex(ctx context.Context, owner string, in
 			owner,
 			name,
 			is_eoa,
+			is_hidden,
 			is_redeemer,
 			is_minter,
 			eoa_address,
@@ -384,6 +396,7 @@ func (a *AppDB) GetSmartWalletByOwnerIndex(ctx context.Context, owner string, in
 		&wallet.Owner,
 		&wallet.Name,
 		&wallet.IsEoa,
+		&wallet.IsHidden,
 		&wallet.IsRedeemer,
 		&wallet.IsMinter,
 		&wallet.EoaAddress,
@@ -456,6 +469,7 @@ func (a *AppDB) GetAllWallets(ctx context.Context) ([]*structs.Wallet, error) {
 			owner,
 			name,
 			is_eoa,
+			is_hidden,
 			is_redeemer,
 			is_minter,
 			eoa_address,
@@ -482,6 +496,7 @@ func (a *AppDB) GetAllWallets(ctx context.Context) ([]*structs.Wallet, error) {
 			&wallet.Owner,
 			&wallet.Name,
 			&wallet.IsEoa,
+			&wallet.IsHidden,
 			&wallet.IsRedeemer,
 			&wallet.IsMinter,
 			&wallet.EoaAddress,

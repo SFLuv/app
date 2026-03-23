@@ -33,6 +33,7 @@ func (s *AppDB) CreateTables() error {
 				contact_email TEXT,
 				contact_phone TEXT,
 				contact_name TEXT,
+				primary_wallet_address TEXT NOT NULL DEFAULT '',
 				paypal_eth TEXT NOT NULL DEFAULT '',
 			last_redemption INTEGER NOT NULL DEFAULT 0
 		);
@@ -93,10 +94,13 @@ func (s *AppDB) CreateTables() error {
 
 	_, err = s.db.Exec(context.Background(), `
 		ALTER TABLE users
+		ADD COLUMN IF NOT EXISTS primary_wallet_address TEXT NOT NULL DEFAULT '';
+
+		ALTER TABLE users
 		ADD COLUMN IF NOT EXISTS paypal_eth TEXT NOT NULL DEFAULT '';
 	`)
 	if err != nil {
-		return fmt.Errorf("error adding paypal_eth column: %s", err)
+		return fmt.Errorf("error altering user wallet/payment columns: %s", err)
 	}
 
 	_, err = s.db.Exec(context.Background(), `
@@ -169,6 +173,7 @@ func (s *AppDB) CreateTables() error {
 			owner TEXT NOT NULL REFERENCES users(id),
 			name TEXT NOT NULL,
 			is_eoa BOOLEAN NOT NULL,
+			is_hidden BOOLEAN NOT NULL DEFAULT false,
 			is_redeemer BOOLEAN NOT NULL DEFAULT false,
 			is_minter BOOLEAN NOT NULL DEFAULT false,
 			eoa_address TEXT NOT NULL,
@@ -179,6 +184,14 @@ func (s *AppDB) CreateTables() error {
 	`)
 	if err != nil {
 		return fmt.Errorf("error creating wallets table: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
+		ALTER TABLE wallets
+		ADD COLUMN IF NOT EXISTS is_hidden BOOLEAN NOT NULL DEFAULT false;
+	`)
+	if err != nil {
+		return fmt.Errorf("error adding is_hidden column to wallets table: %s", err)
 	}
 
 	_, err = s.db.Exec(context.Background(), `
@@ -215,6 +228,49 @@ func (s *AppDB) CreateTables() error {
 	`)
 	if err != nil {
 		return fmt.Errorf("error creating wallet address lookup indexes: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
+		UPDATE users u
+		SET primary_wallet_address = COALESCE(
+			(
+				SELECT
+					NULLIF(TRIM(w.smart_address), '')
+				FROM
+					wallets w
+				WHERE
+					w.owner = u.id
+				AND
+					w.is_eoa = false
+				AND
+					w.smart_index = 0
+				ORDER BY
+					CASE
+						WHEN LOWER(TRIM(COALESCE(w.eoa_address, ''))) = COALESCE((
+							SELECT
+								LOWER(TRIM(e.eoa_address))
+							FROM
+								wallets e
+							WHERE
+								e.owner = u.id
+							AND
+								e.is_eoa = true
+							ORDER BY
+								e.id ASC
+							LIMIT 1
+						), '') THEN 0
+						ELSE 1
+					END,
+					w.id ASC
+				LIMIT 1
+			),
+			TRIM(COALESCE(u.primary_wallet_address, ''))
+		)
+		WHERE
+			TRIM(COALESCE(u.primary_wallet_address, '')) = '';
+	`)
+	if err != nil {
+		return fmt.Errorf("error backfilling user primary wallet address: %s", err)
 	}
 
 	_, err = s.db.Exec(context.Background(), `
@@ -503,6 +559,9 @@ func (s *AppDB) CreateTables() error {
 		CREATE INDEX IF NOT EXISTS workflows_series_idx ON workflows(series_id);
 		CREATE INDEX IF NOT EXISTS workflows_status_idx ON workflows(status);
 		CREATE INDEX IF NOT EXISTS workflows_proposer_idx ON workflows(proposer_id);
+		CREATE INDEX IF NOT EXISTS workflows_proposer_created_active_idx
+			ON workflows(proposer_id, created_at DESC)
+			WHERE status <> 'deleted';
 		CREATE INDEX IF NOT EXISTS workflows_start_idx ON workflows(start_at);
 	`)
 	if err != nil {

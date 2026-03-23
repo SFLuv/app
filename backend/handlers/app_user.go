@@ -199,3 +199,45 @@ func (a *AppService) UpdateUserPayPalEth(w http.ResponseWriter, r *http.Request)
 
 	w.WriteHeader(http.StatusCreated)
 }
+
+func (a *AppService) UpdateUserPrimaryWallet(w http.ResponseWriter, r *http.Request) {
+	userDid := utils.GetDid(r)
+	if userDid == nil {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	defer r.Body.Close()
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		a.logger.Logf("error reading primary wallet body from user %s: %s", *userDid, err.Error())
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	var req structs.UserPrimaryWalletUpdateRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	user, err := a.db.UpdateUserPrimaryWallet(r.Context(), *userDid, req.PrimaryWalletAddress)
+	if err != nil {
+		errMsg := err.Error()
+		if errMsg != "" && (containsUserWalletValidationError(errMsg)) {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(errMsg))
+			return
+		}
+		a.logger.Logf("error updating primary wallet for user %s: %s", *userDid, errMsg)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(user)
+}
+
+func containsUserWalletValidationError(errMsg string) bool {
+	return errMsg == "primary wallet is required" || errMsg == "primary wallet must be a valid ethereum address"
+}

@@ -57,6 +57,7 @@ func AddUserRoutes(r *chi.Mux, s *handlers.AppService) {
 	r.Post("/users", withAuth(s.AddUser))
 	r.Get("/users", withAuth(s.GetUserAuthed))
 	r.Put("/users", withAuth(s.UpdateUserInfo))
+	r.Put("/users/primary-wallet", withAuth(s.UpdateUserPrimaryWallet))
 	r.Put("/paypaleth", withAuth(s.UpdateUserPayPalEth))
 	r.Get("/users/verified-emails", withAuth(s.GetUserVerifiedEmails))
 	r.Post("/users/verified-emails", withAuth(s.RequestUserEmailVerification))

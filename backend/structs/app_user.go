@@ -17,6 +17,7 @@ type User struct {
 	Email          *string `json:"contact_email"`
 	Phone          *string `json:"contact_phone"`
 	Name           *string `json:"contact_name"`
+	PrimaryWalletAddress string `json:"primary_wallet_address"`
 	PayPalEth      string  `json:"paypal_eth"`
 	LastRedemption int     `json:"last_redemption"`
 }
@@ -59,4 +60,8 @@ type UserVerifiedEmailRequest struct {
 
 type UserEmailVerificationTokenRequest struct {
 	Token string `json:"token"`
+}
+
+type UserPrimaryWalletUpdateRequest struct {
+	PrimaryWalletAddress string `json:"primary_wallet_address"`
 }

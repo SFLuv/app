@@ -48,6 +48,7 @@ export interface User {
   isVoter: boolean
   isIssuer: boolean
   isSupervisor: boolean
+  primaryWalletAddress: string
   paypalEthAddress: string
   lastRedemption: number
   isAffiliate: boolean
@@ -262,6 +263,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
         isVoter: r.user.is_voter,
         isIssuer: r.user.is_issuer,
         isSupervisor: r.user.is_supervisor,
+        primaryWalletAddress: r.user.primary_wallet_address,
         paypalEthAddress: r.user.paypal_eth,
         lastRedemption: r.user.last_redemption,
         isAffiliate: r.user.is_affiliate
@@ -291,8 +293,18 @@ export default function AppProvider({ children }: { children: ReactNode }) {
         throw new Error("error posting user")
       }
 
-      await _userResponseToUser(userResponse)
       await _initWallets(userResponse.wallets)
+      const latestWallets = await _getWallets()
+      try {
+        const defaultPrimaryWallet = await _ensureDefaultPrimaryWallet(userResponse.user, latestWallets)
+        if (defaultPrimaryWallet) {
+          userResponse.user.primary_wallet_address = defaultPrimaryWallet
+        }
+      } catch (error) {
+        console.error("error ensuring default primary wallet", error)
+      }
+      userResponse.wallets = latestWallets
+      await _userResponseToUser(userResponse)
       await getPonderSubscriptions()
       setUserLocations(userResponse.locations)
 
@@ -364,6 +376,48 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     return await res.json() as WalletResponse[]
   }
 
+  const _ensureDefaultPrimaryWallet = async (currentUser: GetUserResponse["user"], walletList: WalletResponse[]): Promise<string> => {
+    const existingPrimaryWallet = (currentUser.primary_wallet_address || "").trim()
+    if (existingPrimaryWallet) {
+      return existingPrimaryWallet
+    }
+
+    const managedPrivyWallets = getManagedPrivyWallets()
+    const primaryPrivyWallet = managedPrivyWallets[0]
+    const preferredSmartWallet = primaryPrivyWallet?.address
+      ? walletList.find((wallet) =>
+          wallet.is_eoa === false &&
+          wallet.smart_index === 0 &&
+          wallet.eoa_address?.toLowerCase() === primaryPrivyWallet.address.toLowerCase() &&
+          typeof wallet.smart_address === "string" &&
+          wallet.smart_address.trim() !== ""
+        )
+      : undefined
+
+    const fallbackSmartWallet = walletList.find((wallet) =>
+      wallet.is_eoa === false &&
+      wallet.smart_index === 0 &&
+      typeof wallet.smart_address === "string" &&
+      wallet.smart_address.trim() !== ""
+    )
+
+    const rawDefaultAddress = (preferredSmartWallet?.smart_address || fallbackSmartWallet?.smart_address || "").trim()
+    if (!rawDefaultAddress) {
+      return ""
+    }
+
+    const res = await authFetch("/users/primary-wallet", {
+      method: "PUT",
+      body: JSON.stringify({ primary_wallet_address: rawDefaultAddress })
+    })
+    if (res.status !== 200) {
+      throw new Error("error setting default primary wallet")
+    }
+
+    const updatedUser = await res.json() as UserResponse
+    return updatedUser.primary_wallet_address
+  }
+
 
   const _postWallet = async (wallet: WalletResponse): Promise<number> => {
     const res = await authFetch("/wallets", {
@@ -378,7 +432,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     return await res.json()
   }
 
-  const _updateWallet = async (w: WalletResponse) => {
+  const _updateWallet = async (w: Partial<WalletResponse> & Pick<WalletResponse, "id" | "owner" | "name">) => {
     const res = await authFetch("/wallets", {
       method: "PUT",
       body: JSON.stringify(w)
@@ -419,6 +473,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
             owner: privyUser.id,
             name: "",
             is_eoa: false,
+            is_hidden: false,
             is_redeemer: false,
             is_minter: false,
             eoa_address: privyWallet.address,
@@ -458,6 +513,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
         owner: privyUser.id,
         name: "EOA-" + (i + 1),
         is_eoa: true,
+        is_hidden: false,
         is_redeemer: false,
         is_minter: false,
         eoa_address: privyWallet.address
@@ -467,11 +523,13 @@ export default function AppProvider({ children }: { children: ReactNode }) {
       wallet.id = id
     }
 
-    const eoaName = wallet.name
+    const resolvedWallet = wallet
+    const eoaName = resolvedWallet.name
     const w = new AppWallet(privyWallet, eoaName, {
-      id: wallet.id || undefined,
-      isRedeemer: wallet.is_redeemer,
-      isMinter: wallet.is_minter
+      id: resolvedWallet.id || undefined,
+      isHidden: resolvedWallet.is_hidden,
+      isRedeemer: resolvedWallet.is_redeemer,
+      isMinter: resolvedWallet.is_minter
     })
     await w.init()
     return w
@@ -496,6 +554,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     const w = new AppWallet(privyWallet, smartWalletName, {
       index,
       id: wallet.id || undefined,
+      isHidden: wallet.is_hidden,
       isRedeemer: wallet.is_redeemer,
       isMinter: wallet.is_minter
     })
@@ -547,6 +606,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
       owner: privyUser.id,
       name: walletName,
       is_eoa: false,
+      is_hidden: false,
       is_redeemer: false,
       is_minter: false,
       eoa_address: privyWallet.address,
@@ -574,6 +634,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
         owner: privyUser.id,
         name: walletName,
         is_eoa: true,
+        is_hidden: false,
         is_redeemer: false,
         is_minter: false,
         eoa_address: address
@@ -602,18 +663,19 @@ export default function AppProvider({ children }: { children: ReactNode }) {
       if(!user) {
         throw new Error("no user logged in")
       }
-      var sWallet: WalletResponse = {
-        id: id,
+      const existingWallet = wallets.find((wallet) => wallet.id === id)
+      const sWallet = {
+        id,
         owner: user.id,
-        name: name,
-        is_eoa: true,
-        is_redeemer: false,
-        is_minter: false,
-        eoa_address: "0x"
+        name,
+        is_hidden: existingWallet?.isHidden === true,
       }
 
       await _updateWallet(sWallet)
       n = name
+      if (existingWallet) {
+        existingWallet.name = name
+      }
       await refreshWallets()
     }
     catch(error) {
@@ -689,6 +751,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
       owner: privyUser.id,
       name: "",
       is_eoa: false,
+      is_hidden: false,
       is_redeemer: false,
       is_minter: false,
       eoa_address: primaryPrivyWallet.address,
