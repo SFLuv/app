@@ -24,6 +24,8 @@ interface AppWalletOptions {
 }
 
 const MAX_UINT256 = (1n << 256n) - 1n
+const SMART_WALLET_DEPLOYMENT_TIMEOUT_MS = 90_000
+const SMART_WALLET_DEPLOYMENT_POLL_INTERVAL_MS = 1_500
 
 
 export class AppWallet {
@@ -109,6 +111,57 @@ export class AppWallet {
     this.initialized = true
 
     return true
+  }
+
+  private _hasCodeAt = async (address: Address): Promise<boolean> => {
+    if (!this.publicClient) {
+      return false
+    }
+
+    try {
+      const code = await this.publicClient.getCode({ address })
+      return code !== undefined && code !== null && code !== "0x"
+    }
+    catch (error) {
+      console.error("error checking deployed smart wallet code", error)
+      return false
+    }
+  }
+
+  private _waitForCodeAt = async (address: Address): Promise<boolean> => {
+    const start = Date.now()
+
+    while (Date.now() - start < SMART_WALLET_DEPLOYMENT_TIMEOUT_MS) {
+      if (await this._hasCodeAt(address)) {
+        return true
+      }
+      await new Promise((resolve) => setTimeout(resolve, SMART_WALLET_DEPLOYMENT_POLL_INTERVAL_MS))
+    }
+
+    return false
+  }
+
+  async ensureSmartWalletDeployed(): Promise<boolean> {
+    if (!this.initialized || this.type !== "smartwallet" || !this.address) {
+      return false
+    }
+
+    if (await this._hasCodeAt(this.address)) {
+      return true
+    }
+
+    const deploymentReceipt = await this._setTokenAllowance(SFLUV_TOKEN, this.address, 0n)
+    if (deploymentReceipt.error || !deploymentReceipt.hash) {
+      console.error("error submitting smart wallet deployment user operation", deploymentReceipt.error)
+      return false
+    }
+
+    const deployed = await this._waitForCodeAt(this.address)
+    if (!deployed) {
+      console.error("smart wallet deployment confirmation timed out", this.address)
+    }
+
+    return deployed
   }
 
   // async deploy(): Promise<boolean> {

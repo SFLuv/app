@@ -60,3 +60,4 @@
 - Fixed proposer deletion-button matching so pending deletion proposals are detected by either matching series id or workflow id first, then the button label uses the actual pending proposal target type instead of relying only on the current inferred deletion target.
 - Enforced vote-view notify-email redaction in the voter panel modal by stripping dropdown option `notify_emails` and preserving only `notify_email_count` for workflow, edit-proposal, and deletion-proposal detail views.
 - Moved vote-view notify-email redaction into backend voter routes by adding a voter-specific workflow detail endpoint and explicit vote-view sanitization for voter workflow lists/details and edit proposal payloads.
+- Smart wallet initialization now deploys code on the client during sign-in whenever an initialized smart wallet is still undeployed, and newly created smart wallets (signup/manual add) now require deployment to succeed before the wallet row is finalized.
