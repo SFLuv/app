@@ -825,7 +825,9 @@ func (s *AppDB) CreateTables() error {
 																	CASE
 																		WHEN JSONB_TYPEOF(option_value->'notify_emails') = 'array' THEN option_value->'notify_emails'
 																		ELSE '[]'::jsonb
-																	END
+																	END,
+																	'send_pictures_with_email',
+																	(COALESCE(LOWER(option_value->>'send_pictures_with_email'), 'false') = 'true')
 																)
 																ORDER BY
 																	option_index

@@ -20,6 +20,7 @@ export interface WorkflowDropdownOption {
   requires_written_response: boolean
   notify_emails?: string[]
   notify_email_count?: number
+  send_pictures_with_email?: boolean
 }
 
 export interface WorkflowDropdownOptionCreateInput {
@@ -27,6 +28,7 @@ export interface WorkflowDropdownOptionCreateInput {
   requires_written_response: boolean
   notify_emails: string[]
   notify_email_count?: number
+  send_pictures_with_email?: boolean
 }
 
 export interface WorkflowWorkItem {

@@ -1598,6 +1598,16 @@ func buildSupervisorWorkflowPhotoArchiveName(
 	return archiveName
 }
 
+func supervisorWorkflowPhotoShouldUseOriginalBytes(contentType string, fileName string) bool {
+	contentType = strings.ToLower(strings.TrimSpace(contentType))
+	if strings.Contains(contentType, "image/jpeg") || strings.Contains(contentType, "image/jpg") {
+		return true
+	}
+
+	ext := strings.ToLower(strings.TrimSpace(filepath.Ext(fileName)))
+	return ext == ".jpg" || ext == ".jpeg"
+}
+
 func uniqueSupervisorCSVHeader(base string, seen map[string]int) string {
 	if seen == nil {
 		return base
@@ -2043,23 +2053,28 @@ func (a *AppService) ExportSupervisorWorkflowData(w http.ResponseWriter, r *http
 			continue
 		}
 		for _, photoExport := range photos {
-			img, _, decodeErr := image.Decode(bytes.NewReader(photoExport.Photo.PhotoData))
-			if decodeErr != nil {
-				continue
-			}
-
-			var jpegBuffer bytes.Buffer
-			if err := jpeg.Encode(&jpegBuffer, img, &jpeg.Options{Quality: 90}); err != nil {
-				continue
-			}
-
 			archiveName := buildSupervisorWorkflowPhotoArchiveName(photoExport, workflow.StartAt, fileNameCounts)
+			photoBytes := photoExport.Photo.PhotoData
+			if !supervisorWorkflowPhotoShouldUseOriginalBytes(photoExport.Photo.ContentType, photoExport.Photo.FileName) {
+				img, _, decodeErr := image.Decode(bytes.NewReader(photoExport.Photo.PhotoData))
+				if decodeErr != nil {
+					a.logger.Logf("error decoding supervisor export photo %s for workflow %s: %s", photoExport.Photo.Id, workflow.Id, decodeErr)
+					continue
+				}
+
+				var jpegBuffer bytes.Buffer
+				if err := jpeg.Encode(&jpegBuffer, img, &jpeg.Options{Quality: 92}); err != nil {
+					a.logger.Logf("error encoding supervisor export photo %s for workflow %s: %s", photoExport.Photo.Id, workflow.Id, err)
+					continue
+				}
+				photoBytes = jpegBuffer.Bytes()
+			}
 
 			entryWriter, entryErr := zipWriter.Create(filepath.Join("photos", archiveName))
 			if entryErr != nil {
 				continue
 			}
-			if _, writeErr := entryWriter.Write(jpegBuffer.Bytes()); writeErr != nil {
+			if _, writeErr := entryWriter.Write(photoBytes); writeErr != nil {
 				continue
 			}
 			photoFileNamesByID[photoExport.Photo.Id] = archiveName
@@ -2747,7 +2762,7 @@ func (a *AppService) CompleteWorkflowStep(w http.ResponseWriter, r *http.Request
 		a.sendWorkflowStepAvailableEmail(notification)
 	}
 	for _, notification := range result.DropdownNotifications {
-		a.sendWorkflowDropdownAlertEmail(notification)
+		a.sendWorkflowDropdownAlertEmail(r.Context(), notification)
 	}
 
 	a.processWorkflowSeriesPayouts(r.Context(), workflowId)
@@ -4774,7 +4789,136 @@ func (a *AppService) sendWorkflowStepAvailableEmail(notification structs.Workflo
 	}
 }
 
-func (a *AppService) sendWorkflowDropdownAlertEmail(notification structs.WorkflowDropdownNotification) {
+const (
+	workflowDropdownEmailAttachmentMaxDimension = 1280
+	workflowDropdownEmailAttachmentJPEGQuality  = 82
+)
+
+func resizeWorkflowEmailAttachmentImage(img image.Image, maxDimension int) image.Image {
+	if img == nil || maxDimension <= 0 {
+		return img
+	}
+	bounds := img.Bounds()
+	width := bounds.Dx()
+	height := bounds.Dy()
+	if width <= 0 || height <= 0 {
+		return img
+	}
+
+	longestEdge := width
+	if height > longestEdge {
+		longestEdge = height
+	}
+	if longestEdge <= maxDimension {
+		return img
+	}
+
+	targetWidth := width
+	targetHeight := height
+	if width >= height {
+		targetWidth = maxDimension
+		targetHeight = max(1, int(float64(height)*float64(maxDimension)/float64(width)))
+	} else {
+		targetHeight = maxDimension
+		targetWidth = max(1, int(float64(width)*float64(maxDimension)/float64(height)))
+	}
+
+	scaled := image.NewRGBA(image.Rect(0, 0, targetWidth, targetHeight))
+	for y := 0; y < targetHeight; y++ {
+		sourceY := bounds.Min.Y + (y * height / targetHeight)
+		for x := 0; x < targetWidth; x++ {
+			sourceX := bounds.Min.X + (x * width / targetWidth)
+			scaled.Set(x, y, img.At(sourceX, sourceY))
+		}
+	}
+	return scaled
+}
+
+func sanitizeWorkflowEmailAttachmentBase(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return ""
+	}
+	base := strings.TrimSuffix(filepath.Base(trimmed), filepath.Ext(trimmed))
+	if base == "" {
+		return ""
+	}
+
+	var builder strings.Builder
+	lastUnderscore := false
+	for _, r := range base {
+		switch {
+		case (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9'):
+			builder.WriteRune(r)
+			lastUnderscore = false
+		case !lastUnderscore:
+			builder.WriteByte('_')
+			lastUnderscore = true
+		}
+	}
+
+	sanitized := strings.Trim(builder.String(), "_")
+	if sanitized == "" {
+		return ""
+	}
+	return sanitized
+}
+
+func (a *AppService) buildWorkflowDropdownAlertAttachments(
+	ctx context.Context,
+	notification structs.WorkflowDropdownNotification,
+) []utils.EmailAttachment {
+	if !notification.SendPicturesWithEmail || len(notification.PhotoIDs) == 0 {
+		return nil
+	}
+
+	attachments := make([]utils.EmailAttachment, 0, len(notification.PhotoIDs))
+	seenPhotoIDs := map[string]struct{}{}
+	for attachmentIndex, rawPhotoID := range notification.PhotoIDs {
+		photoID := strings.TrimSpace(rawPhotoID)
+		if photoID == "" {
+			continue
+		}
+		if _, exists := seenPhotoIDs[photoID]; exists {
+			continue
+		}
+		seenPhotoIDs[photoID] = struct{}{}
+
+		photo, err := a.db.GetWorkflowSubmissionPhotoBlobByID(ctx, photoID)
+		if err != nil {
+			a.logger.Logf("error loading dropdown-alert photo %s for workflow %s: %s", photoID, notification.WorkflowId, err)
+			continue
+		}
+
+		decodedImage, _, err := image.Decode(bytes.NewReader(photo.PhotoData))
+		if err != nil {
+			a.logger.Logf("error decoding dropdown-alert photo %s for workflow %s: %s", photoID, notification.WorkflowId, err)
+			continue
+		}
+
+		scaledImage := resizeWorkflowEmailAttachmentImage(decodedImage, workflowDropdownEmailAttachmentMaxDimension)
+
+		var jpegBuffer bytes.Buffer
+		if err := jpeg.Encode(&jpegBuffer, scaledImage, &jpeg.Options{Quality: workflowDropdownEmailAttachmentJPEGQuality}); err != nil {
+			a.logger.Logf("error encoding dropdown-alert photo %s for workflow %s: %s", photoID, notification.WorkflowId, err)
+			continue
+		}
+
+		baseName := sanitizeWorkflowEmailAttachmentBase(photo.FileName)
+		if baseName == "" {
+			baseName = "workflow_photo"
+		}
+		filename := fmt.Sprintf("%s_%02d.jpg", baseName, attachmentIndex+1)
+		attachments = append(attachments, utils.EmailAttachment{
+			Filename: filename,
+			Data:     jpegBuffer.Bytes(),
+		})
+	}
+
+	return attachments
+}
+
+func (a *AppService) sendWorkflowDropdownAlertEmail(ctx context.Context, notification structs.WorkflowDropdownNotification) {
 	if len(notification.Emails) == 0 {
 		return
 	}
@@ -4782,6 +4926,16 @@ func (a *AppService) sendWorkflowDropdownAlertEmail(notification structs.Workflo
 	emailSender := utils.NewEmailSender()
 	if emailSender == nil {
 		return
+	}
+
+	attachments := a.buildWorkflowDropdownAlertAttachments(ctx, notification)
+	attachmentNoteRow := ""
+	if len(attachments) > 0 {
+		attachmentNoteRow = `
+  <tr>
+    <td style="padding:12px 0; font-size:13px; color:#6b7280;">Photos</td>
+    <td style="padding:12px 0; font-size:13px; color:#111827;">Attached to this email</td>
+  </tr>`
 	}
 
 	title := "Workflow Dropdown Alert"
@@ -4810,7 +4964,8 @@ func (a *AppService) sendWorkflowDropdownAlertEmail(notification structs.Workflo
     <td style="padding:12px 0; font-size:13px; color:#6b7280;">Workflow ID</td>
     <td style="padding:12px 0; font-size:13px; color:#111827; word-break:break-all;">%s</td>
   </tr>
-</table>`, utils.EscapeEmailHTML(notification.WorkflowTitle), utils.EscapeEmailHTML(notification.StepTitle), utils.EscapeEmailHTML(notification.ItemTitle), utils.EscapeEmailHTML(notification.DropdownValue), utils.EscapeEmailHTML(notification.WorkflowId)),
+%s
+</table>`, utils.EscapeEmailHTML(notification.WorkflowTitle), utils.EscapeEmailHTML(notification.StepTitle), utils.EscapeEmailHTML(notification.ItemTitle), utils.EscapeEmailHTML(notification.DropdownValue), utils.EscapeEmailHTML(notification.WorkflowId), attachmentNoteRow),
 	)
 
 	for _, toEmail := range notification.Emails {
@@ -4818,7 +4973,13 @@ func (a *AppService) sendWorkflowDropdownAlertEmail(notification structs.Workflo
 		if toEmail == "" {
 			continue
 		}
-		if err := emailSender.SendEmail(toEmail, "Workflow Watcher", title, htmlContent, utils.NotificationFromEmail(), "SFLuv Workflows"); err != nil {
+		var err error
+		if len(attachments) > 0 {
+			err = emailSender.SendEmailWithAttachments(toEmail, "Workflow Watcher", title, htmlContent, utils.NotificationFromEmail(), "SFLuv Workflows", attachments)
+		} else {
+			err = emailSender.SendEmail(toEmail, "Workflow Watcher", title, htmlContent, utils.NotificationFromEmail(), "SFLuv Workflows")
+		}
+		if err != nil {
 			a.logger.Logf("error sending dropdown-alert email for workflow %s step %s item %s to %s: %s", notification.WorkflowId, notification.StepId, notification.ItemId, toEmail, err.Error())
 		}
 	}

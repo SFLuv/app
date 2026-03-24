@@ -1325,6 +1325,12 @@ export default function ImproverPage() {
           facingMode: {
             ideal: "environment",
           },
+          width: {
+            ideal: 2560,
+          },
+          height: {
+            ideal: 2560,
+          },
         },
         audio: false,
       })
