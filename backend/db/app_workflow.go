@@ -1418,6 +1418,7 @@ func normalizeWorkflowTemplateData(req *structs.WorkflowTemplateCreateRequest, v
 						Label:                   label,
 						RequiresWrittenResponse: option.RequiresWrittenResponse,
 						NotifyEmails:            notifyEmails,
+						SendPicturesWithEmail:   option.SendPicturesWithEmail,
 					})
 				}
 			}
@@ -2225,6 +2226,7 @@ func (a *AppDB) CreateWorkflow(
 					Label:                   label,
 					RequiresWrittenResponse: option.RequiresWrittenResponse,
 					NotifyEmails:            option.NotifyEmails,
+					SendPicturesWithEmail:   option.SendPicturesWithEmail,
 				})
 				dropdownRequiresWritten[value] = option.RequiresWrittenResponse
 			}
@@ -6477,14 +6479,15 @@ func (a *AppDB) CompleteWorkflowStep(
 					emails := normalizeEmailList(selectedOption.NotifyEmails)
 					if len(emails) > 0 {
 						result.DropdownNotifications = append(result.DropdownNotifications, structs.WorkflowDropdownNotification{
-							WorkflowId:    workflowId,
-							WorkflowTitle: workflowTitle,
-							StepId:        stepId,
-							StepTitle:     stepTitle,
-							ItemId:        item.Id,
-							ItemTitle:     item.Title,
-							DropdownValue: *response.DropdownValue,
-							Emails:        emails,
+							WorkflowId:            workflowId,
+							WorkflowTitle:         workflowTitle,
+							StepId:                stepId,
+							StepTitle:             stepTitle,
+							ItemId:                item.Id,
+							ItemTitle:             item.Title,
+							DropdownValue:         *response.DropdownValue,
+							Emails:                emails,
+							SendPicturesWithEmail: selectedOption.SendPicturesWithEmail,
 						})
 					}
 				}
@@ -6568,6 +6571,24 @@ func (a *AppDB) CompleteWorkflowStep(
 		response.PhotoUploads = nil
 		response.Photos = nil
 		serializedResponses[responseIndex] = response
+	}
+
+	if len(result.DropdownNotifications) > 0 {
+		allPhotoIDs := make([]string, 0)
+		for _, response := range serializedResponses {
+			if len(response.PhotoIDs) == 0 {
+				continue
+			}
+			allPhotoIDs = append(allPhotoIDs, response.PhotoIDs...)
+		}
+		if len(allPhotoIDs) > 0 {
+			for idx := range result.DropdownNotifications {
+				if !result.DropdownNotifications[idx].SendPicturesWithEmail {
+					continue
+				}
+				result.DropdownNotifications[idx].PhotoIDs = append([]string{}, allPhotoIDs...)
+			}
+		}
 	}
 
 	responsesJSON, err := json.Marshal(serializedResponses)

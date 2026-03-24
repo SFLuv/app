@@ -202,6 +202,7 @@ type WorkflowDropdownOptionCreateInput struct {
 	RequiresWrittenResponse bool     `json:"requires_written_response"`
 	NotifyEmails            []string `json:"notify_emails"`
 	NotifyEmailCount        int      `json:"notify_email_count,omitempty"`
+	SendPicturesWithEmail   bool     `json:"send_pictures_with_email,omitempty"`
 }
 
 type WorkflowDropdownOption struct {
@@ -210,6 +211,7 @@ type WorkflowDropdownOption struct {
 	RequiresWrittenResponse bool     `json:"requires_written_response"`
 	NotifyEmails            []string `json:"notify_emails,omitempty"`
 	NotifyEmailCount        int      `json:"notify_email_count,omitempty"`
+	SendPicturesWithEmail   bool     `json:"send_pictures_with_email,omitempty"`
 }
 
 type Workflow struct {
@@ -368,33 +370,33 @@ type WorkflowEditProposalVoteRequest struct {
 }
 
 type WorkflowEditProposal struct {
-	Id                  string        `json:"id"`
-	SeriesId            string        `json:"series_id"`
-	TargetWorkflowId    *string       `json:"target_workflow_id,omitempty"`
-	ProposedStateId     string        `json:"proposed_state_id"`
-	RequestedByUserId   string        `json:"requested_by_user_id"`
-	Reason              string        `json:"reason"`
-	Status              string        `json:"status"`
-	VoteQuorumReachedAt *int64        `json:"vote_quorum_reached_at,omitempty"`
-	VoteFinalizeAt      *int64        `json:"vote_finalize_at,omitempty"`
-	VoteFinalizedAt     *int64        `json:"vote_finalized_at,omitempty"`
-	VoteFinalizedBy     *string       `json:"vote_finalized_by_user_id,omitempty"`
-	VoteDecision        *string       `json:"vote_decision,omitempty"`
-	CreatedAt           int64         `json:"created_at"`
-	UpdatedAt           int64         `json:"updated_at"`
-	WorkflowTitle       string        `json:"workflow_title"`
-	WorkflowDescription string        `json:"workflow_description"`
-	WorkflowStartAt     int64         `json:"workflow_start_at"`
-	Recurrence          string        `json:"recurrence"`
-	RecurrenceEndAt     *int64        `json:"recurrence_end_at,omitempty"`
-	SupervisorRequired  bool          `json:"supervisor_required"`
-	SupervisorUserId    *string       `json:"supervisor_user_id,omitempty"`
-	SupervisorBounty    uint64        `json:"supervisor_bounty"`
-	TotalBounty         uint64        `json:"total_bounty"`
-	WeeklyRequirement   uint64        `json:"weekly_bounty_requirement"`
+	Id                  string                    `json:"id"`
+	SeriesId            string                    `json:"series_id"`
+	TargetWorkflowId    *string                   `json:"target_workflow_id,omitempty"`
+	ProposedStateId     string                    `json:"proposed_state_id"`
+	RequestedByUserId   string                    `json:"requested_by_user_id"`
+	Reason              string                    `json:"reason"`
+	Status              string                    `json:"status"`
+	VoteQuorumReachedAt *int64                    `json:"vote_quorum_reached_at,omitempty"`
+	VoteFinalizeAt      *int64                    `json:"vote_finalize_at,omitempty"`
+	VoteFinalizedAt     *int64                    `json:"vote_finalized_at,omitempty"`
+	VoteFinalizedBy     *string                   `json:"vote_finalized_by_user_id,omitempty"`
+	VoteDecision        *string                   `json:"vote_decision,omitempty"`
+	CreatedAt           int64                     `json:"created_at"`
+	UpdatedAt           int64                     `json:"updated_at"`
+	WorkflowTitle       string                    `json:"workflow_title"`
+	WorkflowDescription string                    `json:"workflow_description"`
+	WorkflowStartAt     int64                     `json:"workflow_start_at"`
+	Recurrence          string                    `json:"recurrence"`
+	RecurrenceEndAt     *int64                    `json:"recurrence_end_at,omitempty"`
+	SupervisorRequired  bool                      `json:"supervisor_required"`
+	SupervisorUserId    *string                   `json:"supervisor_user_id,omitempty"`
+	SupervisorBounty    uint64                    `json:"supervisor_bounty"`
+	TotalBounty         uint64                    `json:"total_bounty"`
+	WeeklyRequirement   uint64                    `json:"weekly_bounty_requirement"`
 	Roles               []WorkflowRoleCreateInput `json:"roles,omitempty"`
 	Steps               []WorkflowStepCreateInput `json:"steps,omitempty"`
-	Votes               WorkflowVotes `json:"votes"`
+	Votes               WorkflowVotes             `json:"votes"`
 }
 
 type WorkflowProposalExpiryNotice struct {
@@ -652,14 +654,16 @@ type WorkflowStartRefreshResult struct {
 }
 
 type WorkflowDropdownNotification struct {
-	WorkflowId    string   `json:"workflow_id"`
-	WorkflowTitle string   `json:"workflow_title"`
-	StepId        string   `json:"step_id"`
-	StepTitle     string   `json:"step_title"`
-	ItemId        string   `json:"item_id"`
-	ItemTitle     string   `json:"item_title"`
-	DropdownValue string   `json:"dropdown_value"`
-	Emails        []string `json:"emails"`
+	WorkflowId            string   `json:"workflow_id"`
+	WorkflowTitle         string   `json:"workflow_title"`
+	StepId                string   `json:"step_id"`
+	StepTitle             string   `json:"step_title"`
+	ItemId                string   `json:"item_id"`
+	ItemTitle             string   `json:"item_title"`
+	DropdownValue         string   `json:"dropdown_value"`
+	Emails                []string `json:"emails"`
+	SendPicturesWithEmail bool     `json:"send_pictures_with_email,omitempty"`
+	PhotoIDs              []string `json:"photo_ids,omitempty"`
 }
 
 type WorkflowStepCompletionResult struct {

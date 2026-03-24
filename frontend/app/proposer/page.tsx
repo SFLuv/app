@@ -226,6 +226,12 @@ const formatRecurrenceLabel = (value: WorkflowRecurrence) => {
   return `${value.slice(0, 1).toUpperCase()}${value.slice(1)}`
 }
 
+const formatStepBountyIndicator = (value: string) => {
+  const parsed = Number(value)
+  const normalized = Number.isFinite(parsed) && parsed >= 0 ? parsed : 0
+  return `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(normalized)} SFLuv`
+}
+
 const sectionCardOpenByDefault = (state: Record<string, boolean>, key: string) => state[key] === true
 const nestedCardOpenByDefault = (state: Record<string, boolean>, key: string) => state[key] !== false
 
@@ -909,6 +915,7 @@ export default function ProposerPage() {
                   requires_written_response: false,
                   notify_emails: [],
                   notify_email_input: "",
+                  send_pictures_with_email: false,
                 },
               ],
             }
@@ -1110,6 +1117,7 @@ export default function ProposerPage() {
             label: option.label.trim(),
             requires_written_response: option.requires_written_response,
             notify_emails: normalizeOptionNotificationEmails(stepIndex + 1, itemIndex + 1, optionIndex + 1, option),
+            send_pictures_with_email: Boolean(option.send_pictures_with_email),
           })),
         }
       }),
@@ -1296,6 +1304,7 @@ export default function ProposerPage() {
           requires_written_response: option.requires_written_response,
           notify_emails: option.notify_emails || [],
           notify_email_input: "",
+          send_pictures_with_email: Boolean(option.send_pictures_with_email),
         })),
       })),
     }))
@@ -1390,6 +1399,7 @@ export default function ProposerPage() {
               requires_written_response: option.requires_written_response,
               notify_emails: option.notify_emails || [],
               notify_email_input: "",
+              send_pictures_with_email: Boolean(option.send_pictures_with_email),
             })),
           })),
       }))
@@ -1773,6 +1783,7 @@ export default function ProposerPage() {
                 label: option.label,
                 requires_written_response: Boolean(option.requires_written_response),
                 notify_emails: option.notify_emails || [],
+                send_pictures_with_email: Boolean(option.send_pictures_with_email),
               })),
             })),
         }
@@ -2620,6 +2631,9 @@ export default function ProposerPage() {
                             </div>
                           </div>
                           <div className="flex items-center gap-1">
+                            <Badge className="border border-[#f3b1a6] bg-[#fff1ec] text-[#b64545] hover:bg-[#fff1ec]">
+                              {formatStepBountyIndicator(step.bounty)}
+                            </Badge>
                             {steps.length > 1 && (
                               <Button
                                 type="button"
@@ -3099,9 +3113,9 @@ export default function ProposerPage() {
                                     </Button>
                                   </div>
 
-                                  <div className="space-y-2">
-                                    <Label className="text-xs">Notify Emails For This Option</Label>
-                                    <Input
+                                    <div className="space-y-2">
+                                      <Label className="text-xs">Notify Emails For This Option</Label>
+                                      <Input
                                       value={option.notify_email_input}
                                       onChange={(e) =>
                                         updateDropdownOption(step.id, item.id, optionIndex, {
@@ -3136,6 +3150,17 @@ export default function ProposerPage() {
                                         Add Email
                                       </Button>
                                     </div>
+                                    <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                                      <Checkbox
+                                        checked={Boolean(option.send_pictures_with_email)}
+                                        onCheckedChange={(value) =>
+                                          updateDropdownOption(step.id, item.id, optionIndex, {
+                                            send_pictures_with_email: Boolean(value),
+                                          })
+                                        }
+                                      />
+                                      Send pictures with email
+                                    </label>
                                   </div>
                                   </div>
                                   {optionDropAfter && <div className="h-1 rounded-full bg-[#eb6c6c] shadow-sm" />}

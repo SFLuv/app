@@ -16,6 +16,11 @@ type EmailSender struct {
 	mg mailgun.Mailgun
 }
 
+type EmailAttachment struct {
+	Filename string
+	Data     []byte
+}
+
 func NotificationFromEmail() string {
 	if domain := strings.TrimSpace(os.Getenv("MAILGUN_DOMAIN")); domain != "" {
 		return "no_reply@" + domain
@@ -35,8 +40,6 @@ func NewEmailSender() *EmailSender {
 }
 
 func (es *EmailSender) SendEmail(toEmail, toName, subject, htmlContent string, fromEmail, fromName string) error {
-	// fromEmail = "no_reply@" + os.Getenv("MAILGUN_DOMAIN")
-	// fromName = "SFLuv Admin"
 	m := mailgun.NewMessage(
 		fmt.Sprintf("%s <%s>", fromName, fromEmail),
 		subject,
@@ -44,6 +47,37 @@ func (es *EmailSender) SendEmail(toEmail, toName, subject, htmlContent string, f
 		toEmail,
 	)
 	m.SetHTML(htmlContent)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
+	defer cancel()
+
+	_, _, err := es.mg.Send(ctx, m)
+	return err
+}
+
+func (es *EmailSender) SendEmailWithAttachments(
+	toEmail string,
+	toName string,
+	subject string,
+	htmlContent string,
+	fromEmail string,
+	fromName string,
+	attachments []EmailAttachment,
+) error {
+	m := mailgun.NewMessage(
+		fmt.Sprintf("%s <%s>", fromName, fromEmail),
+		subject,
+		"",
+		toEmail,
+	)
+	m.SetHTML(htmlContent)
+	for _, attachment := range attachments {
+		filename := strings.TrimSpace(attachment.Filename)
+		if filename == "" || len(attachment.Data) == 0 {
+			continue
+		}
+		m.AddBufferAttachment(filename, attachment.Data)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
 	defer cancel()
