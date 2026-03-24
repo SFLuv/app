@@ -7,6 +7,7 @@ type Wallet struct {
 	Owner        string     `json:"owner"`
 	Name         string     `json:"name"`
 	IsEoa        bool       `json:"is_eoa"`
+	IsHidden     bool       `json:"is_hidden"`
 	IsRedeemer   bool       `json:"is_redeemer"`
 	IsMinter     bool       `json:"is_minter"`
 	EoaAddress   string     `json:"eoa_address"`

@@ -78,22 +78,44 @@ func (a *AppDB) getBoolUserRole(ctx context.Context, id string, column string) (
 	return value, nil
 }
 
-func normalizeEthereumAddress(value string) (string, error) {
+func normalizeEthereumAddressForField(value string, fieldName string) (string, error) {
 	normalized := strings.TrimSpace(value)
 	if normalized == "" {
-		return "", fmt.Errorf("primary rewards account is required")
+		return "", fmt.Errorf("%s is required", fieldName)
 	}
 	if !common.IsHexAddress(normalized) {
-		return "", fmt.Errorf("primary rewards account must be a valid ethereum address")
+		return "", fmt.Errorf("%s must be a valid ethereum address", fieldName)
 	}
 	return common.HexToAddress(normalized).Hex(), nil
+}
+
+func normalizeEthereumAddress(value string) (string, error) {
+	return normalizeEthereumAddressForField(value, "primary rewards account")
 }
 
 func getDefaultPrimaryRewardsAccountForUser(ctx context.Context, querier interface {
 	QueryRow(context.Context, string, ...any) pgx.Row
 }, userId string) (string, error) {
-	var account string
+	var primaryWalletAddress string
 	err := querier.QueryRow(ctx, `
+		SELECT
+			COALESCE(NULLIF(TRIM(primary_wallet_address), ''), '')
+		FROM
+			users
+		WHERE
+			id = $1;
+	`, userId).Scan(&primaryWalletAddress)
+	if err == nil {
+		primaryWalletAddress = strings.TrimSpace(primaryWalletAddress)
+		if primaryWalletAddress != "" && common.IsHexAddress(primaryWalletAddress) {
+			return common.HexToAddress(primaryWalletAddress).Hex(), nil
+		}
+	} else if err != pgx.ErrNoRows {
+		return "", err
+	}
+
+	var account string
+	err = querier.QueryRow(ctx, `
 		SELECT
 			NULLIF(TRIM(w.smart_address), '')
 		FROM
@@ -105,6 +127,22 @@ func getDefaultPrimaryRewardsAccountForUser(ctx context.Context, querier interfa
 		AND
 			w.smart_index = 0
 		ORDER BY
+			CASE
+				WHEN LOWER(TRIM(COALESCE(w.eoa_address, ''))) = COALESCE((
+					SELECT
+						LOWER(TRIM(e.eoa_address))
+					FROM
+						wallets e
+					WHERE
+						e.owner = $1
+					AND
+						e.is_eoa = true
+					ORDER BY
+						e.id ASC
+					LIMIT 1
+				), '') THEN 0
+				ELSE 1
+			END,
 			w.id ASC
 		LIMIT 1;
 	`, userId).Scan(&account)
@@ -1639,6 +1677,37 @@ func applyWorkflowStateVersionToSeriesTx(ctx context.Context, tx pgx.Tx, seriesI
 	return nil
 }
 
+func syncWorkflowLinkedStatePresentationFieldsTx(ctx context.Context, tx pgx.Tx, seriesId string, stateID string) error {
+	cmd, err := tx.Exec(ctx, `
+		UPDATE workflow_states ws
+		SET
+			title = st.title,
+			description = st.description
+		FROM
+			workflow_states st
+		WHERE
+			st.id = $2
+		AND
+			ws.id IN (
+				SELECT DISTINCT
+					w.workflow_state_id
+				FROM
+					workflows w
+				WHERE
+					w.series_id = $1
+				AND
+					w.workflow_state_id IS NOT NULL
+			);
+	`, seriesId, stateID)
+	if err != nil {
+		return fmt.Errorf("error syncing workflow state presentation fields: %s", err)
+	}
+	if cmd.RowsAffected() == 0 {
+		return nil
+	}
+	return nil
+}
+
 func (a *AppDB) CreateWorkflowTemplate(
 	ctx context.Context,
 	creatorUserId string,
@@ -2224,40 +2293,152 @@ func (a *AppDB) CreateWorkflow(
 }
 
 func (a *AppDB) GetWorkflowsByProposer(ctx context.Context, proposerId string) ([]*structs.Workflow, error) {
+	totalVoters, err := a.CountEligibleVoters(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("error counting eligible voters: %s", err)
+	}
+
 	rows, err := a.db.Query(ctx, `
 		SELECT
-			id
+			w.id,
+			w.series_id,
+			w.workflow_state_id,
+			w.proposer_id,
+			COALESCE(NULLIF(TRIM(st.title), ''), COALESCE(NULLIF(TRIM(s.title), ''), '')),
+			COALESCE(st.description, s.description, ''),
+			COALESCE(NULLIF(TRIM(st.recurrence), ''), COALESCE(NULLIF(TRIM(s.recurrence), ''), 'one_time')),
+			COALESCE(st.recurrence_end_at, s.recurrence_end_at),
+			w.start_at,
+			w.status,
+			w.is_start_blocked,
+			w.blocked_by_workflow_id,
+			w.total_bounty,
+			w.weekly_bounty_requirement,
+			w.budget_weekly_deducted,
+			w.budget_one_time_deducted,
+			w.vote_quorum_reached_at,
+			w.vote_finalize_at,
+			w.vote_finalized_at,
+			w.vote_finalized_by_user_id,
+			w.vote_decision,
+			w.manager_required,
+			w.manager_improver_id,
+			w.manager_bounty,
+			w.manager_paid_out_at,
+			w.manager_payout_error,
+			w.manager_payout_last_try_at,
+			w.manager_retry_requested_at,
+			w.manager_retry_requested_by,
+			w.created_at,
+			w.updated_at,
+			COALESCE(v.approve_count, 0) AS approve_count,
+			COALESCE(v.deny_count, 0) AS deny_count
 		FROM
-			workflows
+			workflows w
+		LEFT JOIN
+			workflow_states st
+		ON
+			st.id = w.workflow_state_id
+		LEFT JOIN
+			workflow_series s
+		ON
+			s.id = w.series_id
+		LEFT JOIN LATERAL (
+			SELECT
+				COUNT(*) FILTER (WHERE decision = 'approve') AS approve_count,
+				COUNT(*) FILTER (WHERE decision = 'deny') AS deny_count
+			FROM
+				workflow_votes
+			WHERE
+				workflow_id = w.id
+		) v
+		ON
+			true
 		WHERE
-			proposer_id = $1
+			w.proposer_id = $1
 		AND
-			status <> 'deleted'
+			w.status <> 'deleted'
 		ORDER BY
-			created_at DESC;
+			w.created_at DESC;
 	`, proposerId)
 	if err != nil {
-		return nil, fmt.Errorf("error querying workflows: %s", err)
+		return nil, fmt.Errorf("error querying proposer workflows: %s", err)
 	}
 	defer rows.Close()
 
-	workflowIDs := []string{}
+	results := []*structs.Workflow{}
 	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("error scanning workflow id: %s", err)
+		workflow := &structs.Workflow{
+			Roles:                []structs.WorkflowRole{},
+			Steps:                []structs.WorkflowStep{},
+			SupervisorDataFields: []structs.WorkflowSupervisorDataField{},
 		}
-		workflowIDs = append(workflowIDs, id)
+		var approveCount int
+		var denyCount int
+		if err := rows.Scan(
+			&workflow.Id,
+			&workflow.SeriesId,
+			&workflow.WorkflowStateId,
+			&workflow.ProposerId,
+			&workflow.Title,
+			&workflow.Description,
+			&workflow.Recurrence,
+			&workflow.RecurrenceEndAt,
+			&workflow.StartAt,
+			&workflow.Status,
+			&workflow.IsStartBlocked,
+			&workflow.BlockedByWorkflowId,
+			&workflow.TotalBounty,
+			&workflow.WeeklyBountyRequirement,
+			&workflow.BudgetWeeklyDeducted,
+			&workflow.BudgetOneTimeDeducted,
+			&workflow.VoteQuorumReachedAt,
+			&workflow.VoteFinalizeAt,
+			&workflow.VoteFinalizedAt,
+			&workflow.VoteFinalizedByUserId,
+			&workflow.VoteDecision,
+			&workflow.ManagerRequired,
+			&workflow.ManagerImproverId,
+			&workflow.ManagerBounty,
+			&workflow.ManagerPaidOutAt,
+			&workflow.ManagerPayoutError,
+			&workflow.ManagerPayoutLastTryAt,
+			&workflow.SupervisorRetryRequestedAt,
+			&workflow.SupervisorRetryRequestedBy,
+			&workflow.CreatedAt,
+			&workflow.UpdatedAt,
+			&approveCount,
+			&denyCount,
+		); err != nil {
+			return nil, fmt.Errorf("error scanning proposer workflow summary: %s", err)
+		}
+
+		workflow.SupervisorRequired = workflow.ManagerRequired
+		workflow.SupervisorUserId = workflow.ManagerImproverId
+		workflow.SupervisorBounty = workflow.ManagerBounty
+		workflow.SupervisorPaidOutAt = workflow.ManagerPaidOutAt
+		workflow.SupervisorPayoutError = workflow.ManagerPayoutError
+		workflow.SupervisorPayoutLastTryAt = workflow.ManagerPayoutLastTryAt
+
+		workflow.Votes = structs.WorkflowVotes{
+			Approve:         approveCount,
+			Deny:            denyCount,
+			TotalVoters:     totalVoters,
+			VotesCast:       approveCount + denyCount,
+			QuorumThreshold: quorumVotesRequired(totalVoters),
+			QuorumReachedAt: workflow.VoteQuorumReachedAt,
+			FinalizeAt:      workflow.VoteFinalizeAt,
+			FinalizedAt:     workflow.VoteFinalizedAt,
+			Decision:        workflow.VoteDecision,
+		}
+		workflow.Votes.QuorumReached = workflow.Votes.VotesCast >= workflow.Votes.QuorumThreshold && totalVoters > 0
+
+		results = append(results, workflow)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating proposer workflow summaries: %s", err)
 	}
 
-	results := make([]*structs.Workflow, 0, len(workflowIDs))
-	for _, id := range workflowIDs {
-		wf, err := a.GetWorkflowByID(ctx, id)
-		if err != nil {
-			return nil, err
-		}
-		results = append(results, wf)
-	}
 	return results, nil
 }
 
@@ -9266,6 +9447,9 @@ func finalizeWorkflowEditApprovalTx(
 	decision string,
 ) error {
 	if err := applyWorkflowStateVersionToSeriesTx(ctx, tx, seriesID, proposedStateID); err != nil {
+		return err
+	}
+	if err := syncWorkflowLinkedStatePresentationFieldsTx(ctx, tx, seriesID, proposedStateID); err != nil {
 		return err
 	}
 	_, err := tx.Exec(ctx, `

@@ -57,6 +57,10 @@ func (a *AppService) AddWallet(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
+	if wallet.Id == nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
 	wallet.Owner = *userDid
 
 	id, err := a.db.AddWallet(r.Context(), &wallet)

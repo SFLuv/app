@@ -13,7 +13,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
-import { usePathname, useRouter, useSearchParams } from "next/navigation"
+import { usePathname, useSearchParams } from "next/navigation"
 import {
   Dialog,
   DialogContent,
@@ -240,7 +240,6 @@ export default function ProposerPage() {
   const { toast } = useToast()
   const searchParams = useSearchParams()
   const pathname = usePathname()
-  const router = useRouter()
   const tabFromQuery = searchParams.get("tab")
   const workflowStatusFromQuery = searchParams.get("workflow_status")
   const templateSearchFromQuery = searchParams.get("template_search")
@@ -250,7 +249,10 @@ export default function ProposerPage() {
   const [credentialTypes, setCredentialTypes] = useState<GlobalCredentialType[]>([])
   const [supervisors, setSupervisors] = useState<Supervisor[]>([])
   const [deletionProposals, setDeletionProposals] = useState<WorkflowDeletionProposal[]>([])
-  const [initialLoading, setInitialLoading] = useState(true)
+  const [createDataLoading, setCreateDataLoading] = useState(false)
+  const [createDataLoaded, setCreateDataLoaded] = useState(false)
+  const [workflowListLoading, setWorkflowListLoading] = useState(false)
+  const [workflowListLoaded, setWorkflowListLoaded] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [templateSaving, setTemplateSaving] = useState(false)
   const [deletionSubmitting, setDeletionSubmitting] = useState("")
@@ -305,7 +307,10 @@ export default function ProposerPage() {
   const [workItemCardOpenState, setWorkItemCardOpenState] = useState<Record<string, boolean>>({})
 
   const isApproved = Boolean(user?.isProposer || user?.isAdmin)
-  const hasLoadedDataRef = useRef(false)
+  const createDataLoadedRef = useRef(false)
+  const workflowListLoadedRef = useRef(false)
+  const createDataRequestRef = useRef<Promise<void> | null>(null)
+  const workflowListRequestRef = useRef<Promise<void> | null>(null)
   const canProposeDeletion = Boolean(user?.isProposer)
   const isEditProposalMode = editProposalWorkflowId.trim().length > 0
   const touchDragRef = useRef<{
@@ -375,93 +380,123 @@ export default function ProposerPage() {
     [templates, selectedTemplateId]
   )
 
-  const loadData = useCallback(
-    async (mode: "initial" | "tab" | "background" = "background") => {
-      const isInitialFetch = !hasLoadedDataRef.current
-
+  const loadCreateData = useCallback(
+    async (mode: "blocking" | "background" = "background") => {
       if (!isApproved) {
-        if (isInitialFetch || mode === "initial") {
-          hasLoadedDataRef.current = true
-          setInitialLoading(false)
-        }
+        createDataLoadedRef.current = true
+        setCreateDataLoaded(true)
         return
       }
-
-      if (isInitialFetch || mode === "initial") {
-        setInitialLoading(true)
+      if (createDataRequestRef.current) {
+        return createDataRequestRef.current
       }
 
-      try {
-        const [workflowsRes, templatesRes, credentialTypesRes, supervisorsRes, deletionProposalsRes] = await Promise.all([
-          authFetch("/proposers/workflows"),
-          authFetch("/proposers/workflow-templates"),
-          authFetch("/credentials/types"),
-          authFetch("/supervisors/approved"),
-          authFetch("/proposers/workflow-deletion-proposals"),
-        ])
+      const shouldSurfaceError = mode === "blocking" || !createDataLoadedRef.current
+      const request = (async () => {
+        setCreateDataLoading(true)
+        try {
+          const [templatesRes, credentialTypesRes, supervisorsRes] = await Promise.all([
+            authFetch("/proposers/workflow-templates"),
+            authFetch("/credentials/types"),
+            authFetch("/supervisors/approved"),
+          ])
 
-        if (workflowsRes.ok) {
-          const workflowsJson = await workflowsRes.json()
-          setWorkflows(workflowsJson || [])
-        }
+          if (templatesRes.ok) {
+            const templatesJson = await templatesRes.json()
+            setTemplates(templatesJson || [])
+          } else {
+            setTemplates([])
+          }
 
-        if (templatesRes.ok) {
-          const templatesJson = await templatesRes.json()
-          setTemplates(templatesJson || [])
-        }
+          if (credentialTypesRes.ok) {
+            const credentialTypesJson = await credentialTypesRes.json()
+            setCredentialTypes(credentialTypesJson || [])
+          } else {
+            setCredentialTypes([])
+          }
 
-        if (credentialTypesRes.ok) {
-          const credentialTypesJson = await credentialTypesRes.json()
-          setCredentialTypes(credentialTypesJson || [])
-        }
+          if (supervisorsRes.ok) {
+            const supervisorsJson = await supervisorsRes.json()
+            setSupervisors(supervisorsJson || [])
+          } else {
+            setSupervisors([])
+          }
 
-        if (supervisorsRes.ok) {
-          const supervisorsJson = await supervisorsRes.json()
-          setSupervisors(supervisorsJson || [])
-        } else {
-          setSupervisors([])
+          setError((prev) => (prev === "Unable to load proposer form data right now." ? "" : prev))
+        } catch {
+          if (shouldSurfaceError) {
+            setError("Unable to load proposer form data right now.")
+          }
+        } finally {
+          createDataLoadedRef.current = true
+          createDataRequestRef.current = null
+          setCreateDataLoaded(true)
+          setCreateDataLoading(false)
         }
+      })()
 
-        if (deletionProposalsRes.ok) {
-          const deletionProposalsJson = await deletionProposalsRes.json()
-          setDeletionProposals(deletionProposalsJson || [])
-        } else {
-          setDeletionProposals([])
-        }
+      createDataRequestRef.current = request
+      return request
+    },
+    [authFetch, isApproved],
+  )
 
-        setError("")
-      } catch {
-        setError("Unable to load proposer data right now.")
-      } finally {
-        if (isInitialFetch || mode === "initial") {
-          hasLoadedDataRef.current = true
-          setInitialLoading(false)
-        }
+  const loadWorkflowListData = useCallback(
+    async (mode: "blocking" | "background" = "background") => {
+      if (!isApproved) {
+        workflowListLoadedRef.current = true
+        setWorkflowListLoaded(true)
+        return
       }
+      if (workflowListRequestRef.current) {
+        return workflowListRequestRef.current
+      }
+
+      const shouldSurfaceError = mode === "blocking" || !workflowListLoadedRef.current
+      const request = (async () => {
+        setWorkflowListLoading(true)
+        try {
+          const [workflowsRes, deletionProposalsRes] = await Promise.all([
+            authFetch("/proposers/workflows"),
+            authFetch("/proposers/workflow-deletion-proposals"),
+          ])
+
+          if (workflowsRes.ok) {
+            const workflowsJson = await workflowsRes.json()
+            setWorkflows(workflowsJson || [])
+          } else {
+            setWorkflows([])
+          }
+
+          if (deletionProposalsRes.ok) {
+            const deletionProposalsJson = await deletionProposalsRes.json()
+            setDeletionProposals(deletionProposalsJson || [])
+          } else {
+            setDeletionProposals([])
+          }
+
+          setError((prev) => (prev === "Unable to load your workflows right now." ? "" : prev))
+        } catch {
+          if (shouldSurfaceError) {
+            setError("Unable to load your workflows right now.")
+          }
+        } finally {
+          workflowListLoadedRef.current = true
+          workflowListRequestRef.current = null
+          setWorkflowListLoaded(true)
+          setWorkflowListLoading(false)
+        }
+      })()
+
+      workflowListRequestRef.current = request
+      return request
     },
     [authFetch, isApproved],
   )
 
   useEffect(() => {
-    const nextTab = searchParams.get("tab")
-    if (nextTab !== "create-workflow" && nextTab !== "your-workflows") return
-    setActiveTab((prev) => (nextTab === prev ? prev : nextTab))
-  }, [searchParams])
-
-  useEffect(() => {
-    const nextFilter = searchParams.get("workflow_status")
-    if (!nextFilter) return
-    if (!WORKFLOW_STATUS_FILTER_OPTIONS.some((option) => option.value === nextFilter)) return
-    setWorkflowStatusFilter((prev) => (nextFilter === prev ? prev : (nextFilter as "all" | Workflow["status"])))
-  }, [searchParams])
-
-  useEffect(() => {
-    const nextTemplateSearch = searchParams.get("template_search") || ""
-    setTemplateSearch((prev) => (nextTemplateSearch === prev ? prev : nextTemplateSearch))
-  }, [searchParams])
-
-  useEffect(() => {
-    const params = new URLSearchParams(searchParams.toString())
+    if (typeof window === "undefined") return
+    const params = new URLSearchParams(window.location.search)
     params.set("tab", activeTab)
     if (workflowStatusFilter === "all") {
       params.delete("workflow_status")
@@ -474,15 +509,28 @@ export default function ProposerPage() {
       params.delete("template_search")
     }
     const nextQuery = params.toString()
-    if (nextQuery !== searchParams.toString()) {
-      router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname, { scroll: false })
+    const currentQuery = window.location.search.replace(/^\?/, "")
+    if (nextQuery !== currentQuery) {
+      window.history.replaceState(window.history.state, "", nextQuery ? `${pathname}?${nextQuery}` : pathname)
     }
-  }, [activeTab, templateSearch, workflowStatusFilter, pathname, router, searchParams])
+  }, [activeTab, templateSearch, workflowStatusFilter, pathname])
 
   useEffect(() => {
-    if (status === "loading") return
-    void loadData("initial")
-  }, [isApproved, loadData, status])
+    if (status !== "authenticated" || !isApproved) return
+
+    if (activeTab === "your-workflows") {
+      void loadWorkflowListData(workflowListLoadedRef.current ? "background" : "blocking")
+      if (!createDataLoadedRef.current) {
+        void loadCreateData("background")
+      }
+      return
+    }
+
+    void loadCreateData(createDataLoadedRef.current ? "background" : "blocking")
+    if (!workflowListLoadedRef.current) {
+      void loadWorkflowListData("background")
+    }
+  }, [activeTab, isApproved, loadCreateData, loadWorkflowListData, status])
 
   useEffect(() => {
     if (recurrence !== "one_time") return
@@ -500,12 +548,6 @@ export default function ProposerPage() {
       }
     }
   }, [])
-
-  useEffect(() => {
-    if (status !== "authenticated" || !isApproved) return
-    if (!hasLoadedDataRef.current) return
-    void loadData("tab")
-  }, [activeTab, isApproved, loadData, status])
 
   useEffect(() => {
     setError("")
@@ -1478,7 +1520,7 @@ export default function ProposerPage() {
           title: created.status === "approved" ? "Workflow edit applied" : "Workflow edit proposal submitted",
           description: created.workflow_title,
         })
-        await loadData()
+        await loadWorkflowListData("background")
         return
       }
 
@@ -1527,6 +1569,8 @@ export default function ProposerPage() {
       }
 
       const created = (await res.json()) as Workflow
+      workflowListLoadedRef.current = true
+      setWorkflowListLoaded(true)
       setWorkflows((prev) => [created, ...prev])
       resetForm()
       setSuccessMessage("Workflow proposal created successfully.")
@@ -1534,7 +1578,7 @@ export default function ProposerPage() {
         title: "Workflow proposal created",
         description: created.title,
       })
-      await loadData()
+      await loadWorkflowListData("background")
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to create workflow right now.")
     } finally {
@@ -1553,7 +1597,9 @@ export default function ProposerPage() {
         throw new Error(text || "Unable to archive workflow.")
       }
       setWorkflows((prev) => prev.filter((workflow) => workflow.id !== workflowId))
-      await loadData()
+      workflowListLoadedRef.current = true
+      setWorkflowListLoaded(true)
+      await loadWorkflowListData("background")
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to archive workflow.")
     }
@@ -1574,7 +1620,9 @@ export default function ProposerPage() {
         const text = await res.text()
         throw new Error(text || "Unable to create deletion proposal.")
       }
-      await loadData()
+      workflowListLoadedRef.current = true
+      setWorkflowListLoaded(true)
+      await loadWorkflowListData("background")
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to create deletion proposal.")
     } finally {
@@ -1807,7 +1855,7 @@ export default function ProposerPage() {
     }
   }
 
-  if (status === "loading" || initialLoading) {
+  if (status === "loading") {
     return (
       <div className="flex items-center justify-center min-h-[70vh]">
         <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-[#eb6c6c]" />
@@ -1858,6 +1906,16 @@ export default function ProposerPage() {
         </TabsList>
 
         <TabsContent value="create-workflow" className="mt-4 space-y-6">
+          {!createDataLoaded ? (
+            <Card>
+              <CardContent className="flex min-h-[320px] items-center justify-center">
+                <div className="flex items-center gap-3 text-sm text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <span>Loading workflow form data...</span>
+                </div>
+              </CardContent>
+            </Card>
+          ) : (
           <Card>
             <CardHeader>
               <CardTitle>{isEditProposalMode ? "Edit Workflow Proposal" : "Create Workflow Proposal"}</CardTitle>
@@ -1868,6 +1926,13 @@ export default function ProposerPage() {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
+              {createDataLoading && (
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  <span>Refreshing workflow form data...</span>
+                </div>
+              )}
+
               <div className="flex flex-wrap items-center gap-3">
                 <Badge variant="outline">Draft Total Bounty: {totalDraftBounty} SFLuv</Badge>
                 <Button onClick={submitWorkflow} disabled={submitting}>
@@ -3146,6 +3211,7 @@ export default function ProposerPage() {
               </div>
             </CardContent>
           </Card>
+          )}
         </TabsContent>
 
         <TabsContent value="your-workflows" className="mt-4 space-y-6">
@@ -3157,6 +3223,22 @@ export default function ProposerPage() {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
+              {workflowListLoading && workflowListLoaded && (
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  <span>Refreshing workflows...</span>
+                </div>
+              )}
+
+              {!workflowListLoaded ? (
+                <div className="flex min-h-[220px] items-center justify-center">
+                  <div className="flex items-center gap-3 text-sm text-muted-foreground">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    <span>Loading your workflows...</span>
+                  </div>
+                </div>
+              ) : (
+                <>
               <div className="w-full max-w-xs space-y-2">
                 <Label>Filter By Approval Status</Label>
                 <Select value={workflowStatusFilter} onValueChange={(value) => setWorkflowStatusFilter(value as "all" | Workflow["status"])}>
@@ -3273,6 +3355,8 @@ export default function ProposerPage() {
                     </CardContent>
                   </Card>
                 )})
+              )}
+                </>
               )}
             </CardContent>
           </Card>

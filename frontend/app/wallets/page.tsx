@@ -5,11 +5,7 @@ import { useRouter } from "next/navigation"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
-import { Plus, Wallet, Settings, ArrowRight, CheckCircle2, RefreshCw } from "lucide-react"
-import { WalletDetailModal } from "@/components/wallets/wallet-detail-modal"
-import { useWallets } from "@privy-io/react-auth"
-import type { ConnectedWallet } from "@/types/privy-wallet"
+import { Plus, Wallet, ArrowRight, CheckCircle2, RefreshCw } from "lucide-react"
 import { useApp } from "@/context/AppProvider"
 import { AppWallet } from "@/lib/wallets/wallets"
 import { ConnectWalletModal, } from "@/components/wallets/connect-wallet-modal"
@@ -17,6 +13,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Label } from "@/components/ui/label"
 import { NewWalletModal } from "@/components/wallets/new-wallet-modal"
 import { UpdatePayPalAccountModal } from "@/components/wallets/add-paypal-account-modal"
+import { getAddress, isAddress } from "viem"
 
 export default function WalletsPage() {
   const router = useRouter()
@@ -57,6 +54,22 @@ export default function WalletsPage() {
     }
     return "We couldn't load your connected wallets right now."
   }, [error])
+
+  const normalizedPrimaryWalletAddress = useMemo(() => {
+    const current = (user?.primaryWalletAddress || "").trim()
+    if (!current || !isAddress(current)) return ""
+    return getAddress(current).toLowerCase()
+  }, [user?.primaryWalletAddress])
+
+  const visibleWallets = useMemo(
+    () =>
+      wallets.filter((wallet) => {
+        if (wallet.isHidden) return false
+        if (wallet.type === "eoa" && !showEoas) return false
+        return true
+      }),
+    [showEoas, wallets]
+  )
 
 
   useEffect(() => {
@@ -116,23 +129,6 @@ export default function WalletsPage() {
         return "Trust Wallet"
       default:
         return walletType.charAt(0).toUpperCase() + walletType.slice(1)
-    }
-  }
-
-  const getNetworkDisplayName = (chainType: string) => {
-    switch (chainType) {
-      case "ethereum":
-        return "Ethereum"
-      case "polygon":
-        return "Polygon"
-      case "arbitrum":
-        return "Arbitrum"
-      case "optimism":
-        return "Optimism"
-      case "base":
-        return "Base"
-      default:
-        return chainType.charAt(0).toUpperCase() + chainType.slice(1)
     }
   }
 
@@ -240,11 +236,29 @@ export default function WalletsPage() {
               </div>
             </CardContent>
           </Card>
+        ) : visibleWallets.length === 0 ? (
+          <Card className="border-border/70 bg-card/90 shadow-sm">
+            <CardContent className="px-4 py-8 sm:px-6 sm:py-10">
+              <div className="mx-auto flex max-w-md flex-col items-center text-center">
+                <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-muted">
+                  <Wallet className="h-6 w-6 text-muted-foreground" />
+                </div>
+                <h3 className="text-lg font-semibold text-black dark:text-white sm:text-xl">
+                  No wallets are currently visible
+                </h3>
+                <p className="mt-2 text-sm text-gray-700 dark:text-gray-300 sm:text-base">
+                  Unhide wallets from your account settings to show them here.
+                </p>
+              </div>
+            </CardContent>
+          </Card>
         ) : (
-          wallets.map((wallet) => {
-            if (wallet.type === "eoa" && !showEoas) return null
+          visibleWallets.map((wallet) => {
             const walletUnwrapEnabled = wallet.address
               ? unwrapEnabledByAddress[wallet.address.toLowerCase()] === true
+              : false
+            const isPrimaryWallet = wallet.address
+              ? wallet.address.toLowerCase() === normalizedPrimaryWalletAddress
               : false
 
             return (
@@ -261,9 +275,11 @@ export default function WalletsPage() {
                           <h3 className="text-sm font-medium text-black dark:text-white sm:text-base">
                             {getWalletDisplayName(wallet.name)}
                           </h3>
-                          <Badge variant="outline" className="bg-secondary/70 text-[10px] sm:text-xs">
-                            {getNetworkDisplayName(wallet.type)}
-                          </Badge>
+                          {isPrimaryWallet && (
+                            <Badge variant="outline" className="border-[#eb6c6c]/40 bg-[#eb6c6c]/10 text-[10px] text-[#eb6c6c] sm:text-xs">
+                              Primary Wallet
+                            </Badge>
+                          )}
                         </div>
 
                         {wallet.address && (
@@ -308,14 +324,8 @@ export default function WalletsPage() {
       </div>
 
       <div className="text-xs text-gray-500 dark:text-gray-400 sm:text-sm">
-        Showing{" "}
-        {
-          wallets.filter(
-            (wallet) => wallet.type !== "eoa" || showEoas
-          ).length
-        }{" "}
-        connected {showEoas ? "" : "smart"} wallet
-        {wallets.filter((wallet) => wallet.type !== "eoa" || showEoas).length !==
+        Showing {visibleWallets.length} connected {showEoas ? "" : "smart"} wallet
+        {visibleWallets.length !==
         1
           ? "s"
           : ""}

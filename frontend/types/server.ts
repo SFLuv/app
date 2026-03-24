@@ -20,6 +20,7 @@ export interface UserResponse {
   contact_email?: string
   contact_phone?: string
   contact_name?: string
+  primary_wallet_address: string
   paypal_eth: string
   last_redemption: number
 }
@@ -37,6 +38,7 @@ export interface WalletResponse {
   owner: string
   name: string
   is_eoa: boolean
+  is_hidden: boolean
   is_redeemer: boolean
   is_minter: boolean
   eoa_address: string

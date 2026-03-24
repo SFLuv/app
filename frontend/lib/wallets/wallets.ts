@@ -19,6 +19,7 @@ interface TxState {
 interface AppWalletOptions {
   index?: bigint
   id?: number
+  isHidden?: boolean
   isRedeemer?: boolean
   isMinter?: boolean
 }
@@ -35,6 +36,7 @@ export class AppWallet {
 
   name: string;
   id?: number;
+  isHidden: boolean;
   isRedeemer: boolean;
   isMinter: boolean;
   type: WalletType;
@@ -55,6 +57,7 @@ export class AppWallet {
     this.owner = owner
     this.index = options?.index
     this.id = options?.id
+    this.isHidden = options?.isHidden === true
     this.isRedeemer = options?.isRedeemer === true
     this.isMinter = options?.isMinter === true
     this.name = name
@@ -638,6 +641,10 @@ export class AppWallet {
 
   setId = (id: number) => {
     this.id = id
+  }
+
+  setHidden = (isHidden: boolean) => {
+    this.isHidden = isHidden
   }
 
   wrap = async (amount: bigint): Promise<TxState | null>  => {
