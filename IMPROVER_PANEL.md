@@ -120,3 +120,11 @@
 - Workflow submission success state now appears both in the modal header and in the step action area where the submit button normally sits.
 
 - Mirrored proposer workflow submit success messages above the bottom submit actions, while keeping the existing top-of-page success banner.
+
+- Switched improver submission-complete and submitted-state cards to dark-mode-safe success styling instead of hardcoded light emerald gradients.
+
+- Added root-level SVG previews for the current light and dark improver submission-complete cards: submission-complete-preview-light.svg and submission-complete-preview-dark.svg.
+
+- Switched improver submission-complete cards and regenerated the root SVG previews to use the SFLuv red accent palette in both light and dark mode.
+
+- Kept submission-complete cards on the SFLuv red palette while switching the success checkmark icon circles back to green in UI and SVG previews.

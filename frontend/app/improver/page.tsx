@@ -2552,15 +2552,15 @@ export default function ImproverPage() {
     if (!completionSuccess) return null
 
     return (
-      <Card className="overflow-hidden border-emerald-200/80 bg-[linear-gradient(135deg,rgba(236,253,245,0.98),rgba(209,250,229,0.92))] shadow-sm">
+      <Card className="overflow-hidden border-[#eb6c6c]/25 bg-[#fff4f1] shadow-sm dark:border-[#eb6c6c]/30 dark:bg-[#3a1d1d]/55">
         <CardContent className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-start gap-4">
-            <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-emerald-600 text-white shadow-sm">
+            <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-emerald-600 text-white shadow-sm dark:bg-emerald-500">
               <CheckCircle2 className="h-8 w-8" />
             </div>
             <div className="space-y-1">
-              <p className="text-lg font-semibold tracking-tight text-emerald-900">Submission Complete</p>
-              <p className="text-sm text-emerald-900/80">
+              <p className="text-lg font-semibold tracking-tight text-[#8c2f29] dark:text-[#ffe2dd]">Submission Complete</p>
+              <p className="text-sm text-[#a34841]/85 dark:text-[#f7c5bf]/80">
                 {completionSuccess.stepTitle} was submitted successfully.
               </p>
             </div>
@@ -2568,7 +2568,7 @@ export default function ImproverPage() {
           <Button
             size="sm"
             variant="outline"
-            className="border-emerald-300 bg-white/80 text-emerald-900 hover:bg-white"
+            className="border-[#eb6c6c]/25 bg-white/90 text-[#8c2f29] hover:bg-white dark:border-[#eb6c6c]/30 dark:bg-[#281515]/70 dark:text-[#ffe2dd] dark:hover:bg-[#331919]"
             onClick={() => setDetailOpen(false)}
           >
             Done
