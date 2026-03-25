@@ -586,7 +586,11 @@ type WorkflowPhotoUpload struct {
 }
 
 type WorkflowStepPhotoUploadResult struct {
-	Photo WorkflowSubmissionPhoto `json:"photo"`
+	UploadId       string                   `json:"upload_id,omitempty"`
+	Complete       bool                     `json:"complete"`
+	ReceivedChunks int                      `json:"received_chunks,omitempty"`
+	TotalChunks    int                      `json:"total_chunks,omitempty"`
+	Photo          *WorkflowSubmissionPhoto `json:"photo,omitempty"`
 }
 
 type WorkflowSubmissionPhoto struct {

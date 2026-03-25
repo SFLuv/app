@@ -431,7 +431,11 @@ export interface WorkflowSubmissionPhoto {
 }
 
 export interface WorkflowStepPhotoUploadResult {
-  photo: WorkflowSubmissionPhoto
+  upload_id?: string
+  complete: boolean
+  received_chunks?: number
+  total_chunks?: number
+  photo?: WorkflowSubmissionPhoto
 }
 
 export interface SupervisorWorkflowListItem {

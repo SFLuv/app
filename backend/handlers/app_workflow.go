@@ -2904,10 +2904,24 @@ func (a *AppService) UploadWorkflowStepPhoto(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	file, header, err := r.FormFile("photo")
+	uploadId := strings.TrimSpace(r.FormValue("upload_id"))
+	chunkIndexRaw := strings.TrimSpace(r.FormValue("chunk_index"))
+	totalChunksRaw := strings.TrimSpace(r.FormValue("total_chunks"))
+	isChunkedUpload := uploadId != "" || chunkIndexRaw != "" || totalChunksRaw != ""
+
+	fileFieldName := "photo"
+	if isChunkedUpload {
+		fileFieldName = "chunk"
+	}
+
+	file, header, err := r.FormFile(fileFieldName)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte("photo is required"))
+		if isChunkedUpload {
+			w.Write([]byte("chunk is required"))
+		} else {
+			w.Write([]byte("photo is required"))
+		}
 		return
 	}
 	defer file.Close()
@@ -2922,6 +2936,68 @@ func (a *AppService) UploadWorkflowStepPhoto(w http.ResponseWriter, r *http.Requ
 	contentType := strings.TrimSpace(header.Header.Get("Content-Type"))
 	if contentType == "" {
 		contentType = http.DetectContentType(data)
+	}
+
+	if isChunkedUpload {
+		if uploadId == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte("upload_id is required for chunked photo uploads"))
+			return
+		}
+		chunkIndex, err := strconv.Atoi(chunkIndexRaw)
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte("chunk_index must be a valid integer"))
+			return
+		}
+		totalChunks, err := strconv.Atoi(totalChunksRaw)
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte("total_chunks must be a valid integer"))
+			return
+		}
+
+		result, err := a.db.CreateWorkflowStepPhotoUploadChunk(
+			r.Context(),
+			workflowId,
+			stepId,
+			itemId,
+			*userDid,
+			uploadId,
+			strings.TrimSpace(r.FormValue("file_name")),
+			strings.TrimSpace(r.FormValue("content_type")),
+			chunkIndex,
+			totalChunks,
+			data,
+		)
+		if err != nil {
+			errMsg := err.Error()
+			if strings.Contains(errMsg, "not assigned") {
+				w.WriteHeader(http.StatusForbidden)
+				w.Write([]byte(errMsg))
+				return
+			}
+			if strings.Contains(errMsg, "required") || strings.Contains(errMsg, "invalid") || strings.Contains(errMsg, "missing") || strings.Contains(errMsg, "not available yet") || strings.Contains(errMsg, "already been completed") || strings.Contains(errMsg, "does not belong") || strings.Contains(errMsg, "not active") || strings.Contains(errMsg, "exceeds maximum size") || strings.Contains(errMsg, "out of range") {
+				w.WriteHeader(http.StatusBadRequest)
+				w.Write([]byte(errMsg))
+				return
+			}
+			if err == pgx.ErrNoRows {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			a.logger.Logf("error uploading workflow photo chunk for improver %s workflow %s step %s: %s", *userDid, workflowId, stepId, err)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+
+		statusCode := http.StatusAccepted
+		if result.Complete {
+			statusCode = http.StatusCreated
+		}
+		w.WriteHeader(statusCode)
+		_ = json.NewEncoder(w).Encode(result)
+		return
 	}
 
 	photo, err := a.db.CreateWorkflowStepPhotoUpload(r.Context(), workflowId, stepId, itemId, *userDid, header.Filename, contentType, data)
@@ -2947,7 +3023,10 @@ func (a *AppService) UploadWorkflowStepPhoto(w http.ResponseWriter, r *http.Requ
 	}
 
 	w.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(w).Encode(structs.WorkflowStepPhotoUploadResult{Photo: *photo})
+	_ = json.NewEncoder(w).Encode(structs.WorkflowStepPhotoUploadResult{
+		Complete: true,
+		Photo:    photo,
+	})
 }
 
 func (a *AppService) GetVoterWorkflows(w http.ResponseWriter, r *http.Request) {

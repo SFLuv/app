@@ -6844,6 +6844,319 @@ func (a *AppDB) CreateWorkflowStepPhotoUpload(
 	}, nil
 }
 
+func validateWorkflowStepPhotoUploadTargetTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	workflowId string,
+	stepId string,
+	itemId string,
+	improverId string,
+) error {
+	var workflowStatus string
+	var workflowStartAt int64
+	err := tx.QueryRow(ctx, `
+		SELECT
+			status,
+			start_at
+		FROM
+			workflows
+		WHERE
+			id = $1
+		FOR UPDATE;
+	`, workflowId).Scan(&workflowStatus, &workflowStartAt)
+	if err != nil {
+		return err
+	}
+	if workflowStatus != "approved" && workflowStatus != "in_progress" {
+		return fmt.Errorf("workflow is not active")
+	}
+
+	var stepWorkflowId string
+	var stepOrder int
+	var stepStatus string
+	var assignedImproverId *string
+	err = tx.QueryRow(ctx, `
+		SELECT
+			workflow_id,
+			step_order,
+			status,
+			assigned_improver_id
+		FROM
+			workflow_steps
+		WHERE
+			id = $1
+		FOR UPDATE;
+	`, stepId).Scan(&stepWorkflowId, &stepOrder, &stepStatus, &assignedImproverId)
+	if err != nil {
+		return err
+	}
+	if stepWorkflowId != workflowId {
+		return fmt.Errorf("step does not belong to workflow")
+	}
+	if assignedImproverId == nil || *assignedImproverId != improverId {
+		return fmt.Errorf("step is not assigned to this improver")
+	}
+	if stepStatus == "completed" || stepStatus == "paid_out" {
+		return fmt.Errorf("step has already been completed")
+	}
+
+	canUnlock, err := canStepTransitionToAvailableTx(ctx, tx, workflowId, stepOrder, workflowStartAt)
+	if err != nil {
+		return err
+	}
+	if stepStatus == "locked" && !canUnlock {
+		return fmt.Errorf("step is not available yet")
+	}
+
+	var itemStepId string
+	err = tx.QueryRow(ctx, `
+		SELECT
+			step_id
+		FROM
+			workflow_step_items
+		WHERE
+			id = $1
+		FOR UPDATE;
+	`, itemId).Scan(&itemStepId)
+	if err != nil {
+		return err
+	}
+	if itemStepId != stepId {
+		return fmt.Errorf("work item does not belong to step")
+	}
+	return nil
+}
+
+func (a *AppDB) CreateWorkflowStepPhotoUploadChunk(
+	ctx context.Context,
+	workflowId string,
+	stepId string,
+	itemId string,
+	improverId string,
+	uploadId string,
+	fileName string,
+	contentType string,
+	chunkIndex int,
+	totalChunks int,
+	data []byte,
+) (*structs.WorkflowStepPhotoUploadResult, error) {
+	if uploadId == "" {
+		return nil, fmt.Errorf("upload_id is required")
+	}
+	if totalChunks <= 0 {
+		return nil, fmt.Errorf("total_chunks must be greater than zero")
+	}
+	if chunkIndex < 0 || chunkIndex >= totalChunks {
+		return nil, fmt.Errorf("chunk_index is out of range")
+	}
+	if len(data) == 0 {
+		return nil, fmt.Errorf("photo upload chunk is empty")
+	}
+
+	tx, err := a.db.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	if err := validateWorkflowStepPhotoUploadTargetTx(ctx, tx, workflowId, stepId, itemId, improverId); err != nil {
+		return nil, err
+	}
+
+	_, err = tx.Exec(ctx, `
+		INSERT INTO workflow_step_photo_upload_sessions
+			(
+				id,
+				workflow_id,
+				step_id,
+				item_id,
+				improver_id,
+				file_name,
+				content_type,
+				total_chunks,
+				updated_at
+			)
+		VALUES
+			($1, $2, $3, $4, $5, $6, $7, $8, unix_now())
+		ON CONFLICT (id)
+		DO UPDATE SET
+			file_name = EXCLUDED.file_name,
+			content_type = EXCLUDED.content_type,
+			total_chunks = EXCLUDED.total_chunks,
+			updated_at = unix_now()
+		WHERE
+			workflow_step_photo_upload_sessions.workflow_id = EXCLUDED.workflow_id
+		AND
+			workflow_step_photo_upload_sessions.step_id = EXCLUDED.step_id
+		AND
+			workflow_step_photo_upload_sessions.item_id = EXCLUDED.item_id
+		AND
+			workflow_step_photo_upload_sessions.improver_id = EXCLUDED.improver_id;
+	`, uploadId, workflowId, stepId, itemId, improverId, strings.TrimSpace(fileName), strings.TrimSpace(contentType), totalChunks)
+	if err != nil {
+		return nil, fmt.Errorf("error upserting workflow photo upload session: %s", err)
+	}
+
+	var sessionExists bool
+	if err := tx.QueryRow(ctx, `
+		SELECT
+			EXISTS (
+				SELECT 1
+				FROM workflow_step_photo_upload_sessions
+				WHERE id = $1
+				AND workflow_id = $2
+				AND step_id = $3
+				AND item_id = $4
+				AND improver_id = $5
+				AND total_chunks = $6
+			);
+	`, uploadId, workflowId, stepId, itemId, improverId, totalChunks).Scan(&sessionExists); err != nil {
+		return nil, fmt.Errorf("error validating workflow photo upload session: %s", err)
+	}
+	if !sessionExists {
+		return nil, fmt.Errorf("upload_id is already in use for a different workflow step upload")
+	}
+
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO workflow_step_photo_upload_chunks
+			(
+				upload_id,
+				chunk_index,
+				chunk_data,
+				size_bytes
+			)
+		VALUES
+			($1, $2, $3, $4)
+		ON CONFLICT (upload_id, chunk_index)
+		DO UPDATE SET
+			chunk_data = EXCLUDED.chunk_data,
+			size_bytes = EXCLUDED.size_bytes;
+	`, uploadId, chunkIndex, data, len(data)); err != nil {
+		return nil, fmt.Errorf("error storing workflow photo upload chunk: %s", err)
+	}
+
+	var receivedChunks int
+	if err := tx.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM workflow_step_photo_upload_chunks
+		WHERE upload_id = $1;
+	`, uploadId).Scan(&receivedChunks); err != nil {
+		return nil, fmt.Errorf("error counting workflow photo upload chunks: %s", err)
+	}
+
+	result := &structs.WorkflowStepPhotoUploadResult{
+		UploadId:       uploadId,
+		Complete:       false,
+		ReceivedChunks: receivedChunks,
+		TotalChunks:    totalChunks,
+	}
+	if receivedChunks < totalChunks {
+		if err := tx.Commit(ctx); err != nil {
+			return nil, err
+		}
+		return result, nil
+	}
+
+	rows, err := tx.Query(ctx, `
+		SELECT
+			chunk_index,
+			chunk_data
+		FROM
+			workflow_step_photo_upload_chunks
+		WHERE
+			upload_id = $1
+		ORDER BY
+			chunk_index ASC;
+	`, uploadId)
+	if err != nil {
+		return nil, fmt.Errorf("error loading workflow photo upload chunks: %s", err)
+	}
+	defer rows.Close()
+
+	assembledData := make([]byte, 0)
+	expectedChunkIndex := 0
+	for rows.Next() {
+		var rowChunkIndex int
+		var chunkData []byte
+		if err := rows.Scan(&rowChunkIndex, &chunkData); err != nil {
+			return nil, fmt.Errorf("error scanning workflow photo upload chunk: %s", err)
+		}
+		if rowChunkIndex != expectedChunkIndex {
+			return nil, fmt.Errorf("workflow photo upload is missing chunk %d", expectedChunkIndex)
+		}
+		assembledData = append(assembledData, chunkData...)
+		expectedChunkIndex += 1
+	}
+	if expectedChunkIndex != totalChunks {
+		return nil, fmt.Errorf("workflow photo upload is missing one or more chunks")
+	}
+
+	var sessionFileName string
+	var sessionContentType string
+	if err := tx.QueryRow(ctx, `
+		SELECT
+			file_name,
+			content_type
+		FROM
+			workflow_step_photo_upload_sessions
+		WHERE
+			id = $1
+		FOR UPDATE;
+	`, uploadId).Scan(&sessionFileName, &sessionContentType); err != nil {
+		return nil, fmt.Errorf("error loading workflow photo upload session metadata: %s", err)
+	}
+
+	parsedUpload, err := normalizeWorkflowPhotoUploadData(sessionFileName, sessionContentType, assembledData)
+	if err != nil {
+		return nil, err
+	}
+
+	photoID := uuid.NewString()
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO workflow_step_photo_uploads
+			(
+				id,
+				workflow_id,
+				step_id,
+				item_id,
+				improver_id,
+				file_name,
+				content_type,
+				photo_data,
+				size_bytes
+			)
+		VALUES
+			($1, $2, $3, $4, $5, $6, $7, $8, $9);
+	`, photoID, workflowId, stepId, itemId, improverId, parsedUpload.FileName, parsedUpload.ContentType, parsedUpload.Data, len(parsedUpload.Data)); err != nil {
+		return nil, fmt.Errorf("error finalizing workflow photo upload: %s", err)
+	}
+
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM workflow_step_photo_upload_sessions
+		WHERE id = $1;
+	`, uploadId); err != nil {
+		return nil, fmt.Errorf("error cleaning workflow photo upload session: %s", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+
+	result.Complete = true
+	result.Photo = &structs.WorkflowSubmissionPhoto{
+		Id:           photoID,
+		WorkflowId:   workflowId,
+		StepId:       stepId,
+		ItemId:       itemId,
+		SubmissionId: "",
+		FileName:     parsedUpload.FileName,
+		ContentType:  parsedUpload.ContentType,
+		SizeBytes:    len(parsedUpload.Data),
+		CreatedAt:    time.Now().Unix(),
+	}
+	return result, nil
+}
+
 func (a *AppDB) CompleteWorkflowStep(
 	ctx context.Context,
 	workflowId string,
