@@ -7275,6 +7275,7 @@ func (a *AppDB) CompleteWorkflowStep(
 	serializedResponses := []structs.WorkflowStepItemResponse{}
 	photoUploadsByItem := map[string][]parsedWorkflowPhotoUpload{}
 	uploadedPhotoIDsByItem := map[string][]string{}
+	itemTitlesByID := map[string]string{}
 	if !stepNotPossible {
 		itemRows, err := tx.Query(ctx, `
 			SELECT
@@ -7415,6 +7416,7 @@ func (a *AppDB) CompleteWorkflowStep(
 
 			items = append(items, item)
 			itemByID[item.Id] = item
+			itemTitlesByID[item.Id] = item.Title
 		}
 
 		responseMap := map[string]structs.WorkflowStepItemResponse{}
@@ -7698,11 +7700,20 @@ func (a *AppDB) CompleteWorkflowStep(
 
 	if len(result.DropdownNotifications) > 0 {
 		allPhotoIDs := make([]string, 0)
+		allPhotoLinks := make([]structs.WorkflowDropdownNotificationPhotoLink, 0)
 		for _, response := range serializedResponses {
 			if len(response.PhotoIDs) == 0 {
 				continue
 			}
 			allPhotoIDs = append(allPhotoIDs, response.PhotoIDs...)
+			itemTitle := strings.TrimSpace(itemTitlesByID[response.ItemId])
+			for _, photoID := range response.PhotoIDs {
+				allPhotoLinks = append(allPhotoLinks, structs.WorkflowDropdownNotificationPhotoLink{
+					PhotoID:   photoID,
+					ItemID:    response.ItemId,
+					ItemTitle: itemTitle,
+				})
+			}
 		}
 		if len(allPhotoIDs) > 0 {
 			for idx := range result.DropdownNotifications {
@@ -7710,6 +7721,7 @@ func (a *AppDB) CompleteWorkflowStep(
 					continue
 				}
 				result.DropdownNotifications[idx].PhotoIDs = append([]string{}, allPhotoIDs...)
+				result.DropdownNotifications[idx].PhotoLinks = append([]structs.WorkflowDropdownNotificationPhotoLink{}, allPhotoLinks...)
 			}
 		}
 	}

@@ -4,9 +4,11 @@ import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "re
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import { useApp } from "@/context/AppProvider"
 import { buildCredentialLabelMap, formatCredentialLabel } from "@/lib/credential-labels"
 import { formatStatusLabel } from "@/lib/status-labels"
+import { cn } from "@/lib/utils"
 import { formatWorkflowDisplayStatus } from "@/lib/workflow-status"
 import {
   Dialog,
@@ -17,7 +19,7 @@ import {
 } from "@/components/ui/dialog"
 import { Separator } from "@/components/ui/separator"
 import { GlobalCredentialType, Workflow, WorkflowStep, WorkflowStepItemResponseInput, WorkflowWorkItem } from "@/types/workflow"
-import { ChevronLeft, ChevronRight, Loader2 } from "lucide-react"
+import { CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, Loader2 } from "lucide-react"
 
 interface WorkflowDetailsModalProps {
   workflow: Workflow | null
@@ -81,7 +83,12 @@ export function WorkflowDetailsModal({
   const [photoPreviewURLs, setPhotoPreviewURLs] = useState<Record<string, string>>({})
   const [photoPreviewLoading, setPhotoPreviewLoading] = useState<Record<string, boolean>>({})
   const [expandedPhoto, setExpandedPhoto] = useState<{ id: string; label: string } | null>(null)
+  const [submissionDetailsOpen, setSubmissionDetailsOpen] = useState<Record<string, boolean>>({})
   const photoPreviewURLRef = useRef<Record<string, string>>({})
+
+  useEffect(() => {
+    setSubmissionDetailsOpen({})
+  }, [workflow?.id, open])
 
   useEffect(() => {
     if (status !== "authenticated") return
@@ -238,6 +245,200 @@ export function WorkflowDetailsModal({
 
   const renderStepCard = (step: WorkflowStep, includeStepActions: boolean) => {
     const itemList = step.work_items.slice().sort((a, b) => a.item_order - b.item_order)
+    const hasSubmission = !hideSubmissionData && Boolean(step.submission)
+    const isSubmissionDetailsExpanded = Boolean(submissionDetailsOpen[step.id])
+
+    const renderWorkItems = () => (
+      <div className="space-y-3">
+        <p className="text-sm font-medium">Work Items</p>
+        {itemList.length === 0 ? (
+          <p className="text-xs text-muted-foreground">No work items on this step.</p>
+        ) : (
+          itemList.map((item) => {
+            const itemResponses: WorkflowStepItemResponseInput[] =
+              !hideSubmissionData && step.submission && !step.submission.step_not_possible
+                ? step.submission.item_responses.filter((response) => response.item_id === item.id)
+                : []
+
+            return (
+              <Card
+                key={item.id}
+                className={cn(hasSubmission && "border-border/70 bg-background/90 shadow-none")}
+              >
+                <CardContent className="pt-3 space-y-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="text-sm font-medium">
+                      Item {item.item_order}: {item.title}
+                    </p>
+                    {item.optional && <Badge variant="outline">Optional</Badge>}
+                  </div>
+                  <p className="text-xs text-muted-foreground whitespace-pre-wrap">{item.description}</p>
+                  <p className="text-xs text-muted-foreground">
+                    Requirements: {formatWorkItemRequirements(item)}
+                  </p>
+
+                  {item.requires_dropdown && (
+                    <div className="space-y-1.5">
+                      <p className="text-xs font-medium">Dropdown Options</p>
+                      {item.dropdown_options.length === 0 ? (
+                        <p className="text-xs text-muted-foreground">No dropdown options configured.</p>
+                      ) : (
+                        item.dropdown_options.map((option) => (
+                          <div
+                            key={`${item.id}-${option.value}`}
+                            className={cn(
+                              "rounded border p-2 text-xs space-y-1",
+                              hasSubmission && "border-border/70 bg-secondary/20",
+                            )}
+                          >
+                            <p>{option.label}</p>
+                            {option.requires_written_response && (
+                              <p className="text-muted-foreground">Requires written response when selected</p>
+                            )}
+                            {option.requires_photo_attachment && (
+                              <p className="text-muted-foreground">Requires photo attachment when selected</p>
+                            )}
+                            {option.photo_instructions && (
+                              <p className="text-muted-foreground whitespace-pre-wrap">
+                                Photo instructions: {option.photo_instructions}
+                              </p>
+                            )}
+                            {option.notify_emails && option.notify_emails.length > 0 && (
+                              <p className="text-muted-foreground break-all">
+                                Notify: {option.notify_emails.join(", ")}
+                              </p>
+                            )}
+                            {(!option.notify_emails || option.notify_emails.length === 0) &&
+                              (option.notify_email_count ?? 0) > 0 && (
+                                <p className="text-muted-foreground">Notification email configured</p>
+                            )}
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  )}
+
+                  {!hideSubmissionData && step.submission && !step.submission.step_not_possible && (
+                    <div className="space-y-2 rounded-xl border border-border/70 bg-secondary/20 p-3">
+                      <p className="text-xs font-medium tracking-wide text-foreground/90">Submitted Response</p>
+                      {itemResponses.length === 0 ? (
+                        <p className="text-xs text-muted-foreground">
+                          No response submitted for this item.
+                        </p>
+                      ) : (
+                        itemResponses.map((response, responseIndex) => {
+                          const dropdownLabel =
+                            response.dropdown_value
+                              ? item.dropdown_options.find((option) => option.value === response.dropdown_value)?.label ||
+                                response.dropdown_value
+                              : response.dropdown_value
+                          const hasResponseContent =
+                            Boolean(response.dropdown_value) ||
+                            Boolean(response.written_response) ||
+                            Boolean(response.photo_ids && response.photo_ids.length > 0) ||
+                            Boolean(response.photo_urls && response.photo_urls.length > 0)
+
+                          return (
+                            <div
+                              key={`${item.id}-submitted-${responseIndex}`}
+                              className="rounded-xl border border-border/70 bg-background p-3 text-xs space-y-2"
+                            >
+                              {itemResponses.length > 1 && <p className="font-medium">Response {responseIndex + 1}</p>}
+                              {response.dropdown_value && <p>Dropdown: {dropdownLabel}</p>}
+                              {response.written_response && (
+                                <p className="whitespace-pre-wrap">Written: {response.written_response}</p>
+                              )}
+                              {response.photo_ids && response.photo_ids.length > 0 && (
+                                <div className="space-y-2">
+                                  <p className="font-medium text-foreground/85">Photos</p>
+                                  {response.photo_ids.map((photoId, photoIndex) => {
+                                    const photoMeta = response.photos?.find((photo) => photo.id === photoId)
+                                    const previewURL = photoPreviewURLs[photoId]
+                                    const isPreviewLoading = Boolean(photoPreviewLoading[photoId])
+                                    return (
+                                      <div
+                                        key={`${photoId}-${photoIndex}`}
+                                        className="space-y-2 rounded-lg border border-border/70 bg-secondary/10 p-2.5"
+                                      >
+                                        <span className="block break-all text-muted-foreground">
+                                          {photoMeta?.file_name || `Photo ${photoIndex + 1}`}
+                                        </span>
+                                        <button
+                                          type="button"
+                                          className="w-full overflow-hidden rounded-lg border border-border/70 bg-secondary/20"
+                                          onClick={() => {
+                                            if (!previewURL) return
+                                            setExpandedPhoto({
+                                              id: photoId,
+                                              label: photoMeta?.file_name || `Photo ${photoIndex + 1}`,
+                                            })
+                                          }}
+                                          disabled={!previewURL}
+                                        >
+                                          {previewURL ? (
+                                            <img
+                                              src={previewURL}
+                                              alt={photoMeta?.file_name || `Photo ${photoIndex + 1}`}
+                                              className="h-36 w-full object-cover"
+                                            />
+                                          ) : (
+                                            <div className="flex h-24 items-center justify-center text-[11px] text-muted-foreground">
+                                              {isPreviewLoading ? "Loading preview..." : "Preview unavailable"}
+                                            </div>
+                                          )}
+                                        </button>
+                                        <div className="flex flex-wrap gap-2">
+                                          {onDownloadPhoto ? (
+                                            <Button
+                                              className="w-full sm:w-auto"
+                                              size="sm"
+                                              variant="outline"
+                                              onClick={() => onDownloadPhoto(photoId)}
+                                              disabled={downloadingPhotoId === photoId}
+                                            >
+                                              {downloadingPhotoId === photoId ? "Downloading..." : "Download"}
+                                            </Button>
+                                          ) : (
+                                            <Badge variant="outline">Photo ID</Badge>
+                                          )}
+                                        </div>
+                                      </div>
+                                    )
+                                  })}
+                                </div>
+                              )}
+                              {response.photo_urls && response.photo_urls.length > 0 && (
+                                <div className="space-y-1">
+                                  <p>Legacy Photos:</p>
+                                  {response.photo_urls.map((url) => (
+                                    <a
+                                      key={url}
+                                      href={url}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      className="block break-all text-[#d55c5c] underline underline-offset-2"
+                                    >
+                                      {url}
+                                    </a>
+                                  ))}
+                                </div>
+                              )}
+                              {!hasResponseContent && (
+                                <p className="text-muted-foreground">No response data recorded.</p>
+                              )}
+                            </div>
+                          )
+                        })
+                      )}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            )
+          })
+        )}
+      </div>
+    )
 
     return (
       <Card key={step.id}>
@@ -249,7 +450,6 @@ export function WorkflowDetailsModal({
                   <h3 className="font-semibold">
                     Step {step.step_order}: {step.title}
                   </h3>
-                  <p className="text-sm text-muted-foreground whitespace-pre-wrap">{step.description}</p>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
                   <Badge variant="outline">{formatStatusLabel(step.status)}</Badge>
@@ -260,203 +460,81 @@ export function WorkflowDetailsModal({
                 </div>
               </div>
 
-              {!hideSubmissionData && step.submission && (
-                <p className="text-xs text-muted-foreground">
-                  Submitted on {new Date(step.submission.submitted_at * 1000).toLocaleString()}
-                </p>
-              )}
-
-              {!hideSubmissionData && step.submission?.step_not_possible && (
-                <div className="rounded border bg-secondary/30 p-2.5 text-xs space-y-1">
-                  <p className="font-medium">Step marked as not possible</p>
-                  {step.submission.step_not_possible_details ? (
-                    <p className="whitespace-pre-wrap">{step.submission.step_not_possible_details}</p>
-                  ) : (
-                    <p className="text-muted-foreground">No details were recorded.</p>
-                  )}
-                </div>
-              )}
-
-              <div className="space-y-3">
-                <p className="text-sm font-medium">Work Items</p>
-                {itemList.length === 0 ? (
-                  <p className="text-xs text-muted-foreground">No work items on this step.</p>
-                ) : (
-                  itemList.map((item) => {
-                    const itemResponses: WorkflowStepItemResponseInput[] =
-                      !hideSubmissionData && step.submission && !step.submission.step_not_possible
-                        ? step.submission.item_responses.filter((response) => response.item_id === item.id)
-                        : []
-
-                    return (
-                      <Card key={item.id}>
-                        <CardContent className="pt-3 space-y-2">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <p className="text-sm font-medium">
-                              Item {item.item_order}: {item.title}
-                            </p>
-                            {item.optional && <Badge variant="outline">Optional</Badge>}
-                          </div>
-                          <p className="text-xs text-muted-foreground whitespace-pre-wrap">{item.description}</p>
-                          <p className="text-xs text-muted-foreground">
-                            Requirements: {formatWorkItemRequirements(item)}
+              {hasSubmission ? (
+                <Card className="overflow-hidden border-emerald-200/80 bg-[linear-gradient(135deg,rgba(236,253,245,0.98),rgba(220,252,231,0.9))] shadow-sm">
+                  <CardContent className="space-y-3 p-3 sm:p-4">
+                    <div className="flex items-start gap-3">
+                      <div className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-emerald-600 text-white shadow-sm">
+                        <CheckCircle2 className="h-5 w-5" />
+                      </div>
+                      <div className="min-w-0 space-y-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="text-sm font-semibold text-emerald-950">
+                            {step.submission?.step_not_possible ? "Submitted as not possible" : "Submitted"}
                           </p>
+                          <Badge className="border-emerald-200 bg-white/80 text-emerald-900 hover:bg-white">
+                            Recorded
+                          </Badge>
+                        </div>
+                        <p className="text-xs text-emerald-900/75">
+                          Submitted on {new Date(step.submission!.submitted_at * 1000).toLocaleString()}
+                        </p>
+                      </div>
+                    </div>
 
-                          {item.requires_dropdown && (
-                            <div className="space-y-1">
-                              <p className="text-xs font-medium">Dropdown Options</p>
-                              {item.dropdown_options.length === 0 ? (
-                                <p className="text-xs text-muted-foreground">No dropdown options configured.</p>
-                              ) : (
-                                item.dropdown_options.map((option) => (
-                                  <div key={`${item.id}-${option.value}`} className="rounded border p-2 text-xs space-y-1">
-                                    <p>{option.label}</p>
-                                    {option.requires_written_response && (
-                                      <p className="text-muted-foreground">Requires written response when selected</p>
-                                    )}
-                                    {option.requires_photo_attachment && (
-                                      <p className="text-muted-foreground">Requires photo attachment when selected</p>
-                                    )}
-                                    {option.photo_instructions && (
-                                      <p className="text-muted-foreground whitespace-pre-wrap">
-                                        Photo instructions: {option.photo_instructions}
-                                      </p>
-                                    )}
-                                    {option.notify_emails && option.notify_emails.length > 0 && (
-                                      <p className="text-muted-foreground break-all">
-                                        Notify: {option.notify_emails.join(", ")}
-                                      </p>
-                                    )}
-                                    {(!option.notify_emails || option.notify_emails.length === 0) &&
-                                      (option.notify_email_count ?? 0) > 0 && (
-                                        <p className="text-muted-foreground">Notification email configured</p>
-                                    )}
-                                  </div>
-                                ))
-                              )}
-                            </div>
-                          )}
+                    <Collapsible
+                      open={isSubmissionDetailsExpanded}
+                      onOpenChange={(nextOpen) =>
+                        setSubmissionDetailsOpen((prev) => ({
+                          ...prev,
+                          [step.id]: nextOpen,
+                        }))
+                      }
+                    >
+                      <CollapsibleTrigger asChild>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          className="h-auto w-full justify-between rounded-lg border border-emerald-200/80 bg-white/75 px-3 py-2 text-sm font-medium text-emerald-950 hover:bg-white"
+                        >
+                          <span>{isSubmissionDetailsExpanded ? "Hide details" : "View details"}</span>
+                          <ChevronDown
+                            className={cn(
+                              "h-4 w-4 text-emerald-900/70 transition-transform",
+                              isSubmissionDetailsExpanded && "rotate-180",
+                            )}
+                          />
+                        </Button>
+                      </CollapsibleTrigger>
+                      <CollapsibleContent className="space-y-3 pt-3">
+                        <p className="text-sm text-muted-foreground whitespace-pre-wrap">
+                          {step.description || "No step description provided."}
+                        </p>
 
-                          {!hideSubmissionData && step.submission && !step.submission.step_not_possible && (
-                            <div className="space-y-2 rounded-md border bg-secondary/30 p-2.5">
-                              <p className="text-xs font-medium">Submitted Response</p>
-                              {itemResponses.length === 0 ? (
-                                <p className="text-xs text-muted-foreground">
-                                  No response submitted for this item.
-                                </p>
-                              ) : (
-                                itemResponses.map((response, responseIndex) => {
-                                  const dropdownLabel =
-                                    response.dropdown_value
-                                      ? item.dropdown_options.find((option) => option.value === response.dropdown_value)?.label ||
-                                        response.dropdown_value
-                                      : response.dropdown_value
-                                  const hasResponseContent =
-                                    Boolean(response.dropdown_value) ||
-                                    Boolean(response.written_response) ||
-                                    Boolean(response.photo_ids && response.photo_ids.length > 0) ||
-                                    Boolean(response.photo_urls && response.photo_urls.length > 0)
+                        {step.submission?.step_not_possible && (
+                          <div className="rounded-xl border border-amber-200 bg-amber-50/80 p-3 text-xs text-amber-950 space-y-1.5">
+                            <p className="font-medium">Step marked as not possible</p>
+                            {step.submission.step_not_possible_details ? (
+                              <p className="whitespace-pre-wrap text-amber-900/90">{step.submission.step_not_possible_details}</p>
+                            ) : (
+                              <p className="text-amber-900/70">No details were recorded.</p>
+                            )}
+                          </div>
+                        )}
 
-                                  return (
-                                    <div
-                                      key={`${item.id}-submitted-${responseIndex}`}
-                                      className="rounded border bg-background p-2 text-xs space-y-1"
-                                    >
-                                      {itemResponses.length > 1 && <p className="font-medium">Response {responseIndex + 1}</p>}
-                                      {response.dropdown_value && <p>Dropdown: {dropdownLabel}</p>}
-                                      {response.written_response && (
-                                        <p className="whitespace-pre-wrap">Written: {response.written_response}</p>
-                                      )}
-                                      {response.photo_ids && response.photo_ids.length > 0 && (
-                                        <div className="space-y-1">
-                                          <p>Photos:</p>
-                                          {response.photo_ids.map((photoId, photoIndex) => {
-                                            const photoMeta = response.photos?.find((photo) => photo.id === photoId)
-                                            const previewURL = photoPreviewURLs[photoId]
-                                            const isPreviewLoading = Boolean(photoPreviewLoading[photoId])
-                                            return (
-                                              <div
-                                                key={`${photoId}-${photoIndex}`}
-                                                className="space-y-2 rounded border p-2"
-                                              >
-                                                <span className="block break-all">
-                                                  {photoMeta?.file_name || `Photo ${photoIndex + 1}`}
-                                                </span>
-                                                <button
-                                                  type="button"
-                                                  className="w-full overflow-hidden rounded border bg-secondary/20"
-                                                  onClick={() => {
-                                                    if (!previewURL) return
-                                                    setExpandedPhoto({
-                                                      id: photoId,
-                                                      label: photoMeta?.file_name || `Photo ${photoIndex + 1}`,
-                                                    })
-                                                  }}
-                                                  disabled={!previewURL}
-                                                >
-                                                  {previewURL ? (
-                                                    <img
-                                                      src={previewURL}
-                                                      alt={photoMeta?.file_name || `Photo ${photoIndex + 1}`}
-                                                      className="h-36 w-full object-cover"
-                                                    />
-                                                  ) : (
-                                                    <div className="flex h-24 items-center justify-center text-[11px] text-muted-foreground">
-                                                      {isPreviewLoading ? "Loading preview..." : "Preview unavailable"}
-                                                    </div>
-                                                  )}
-                                                </button>
-                                                <div className="flex flex-wrap gap-2">
-                                                  {onDownloadPhoto ? (
-                                                    <Button
-                                                      className="w-full sm:w-auto"
-                                                      size="sm"
-                                                      variant="outline"
-                                                      onClick={() => onDownloadPhoto(photoId)}
-                                                      disabled={downloadingPhotoId === photoId}
-                                                    >
-                                                      {downloadingPhotoId === photoId ? "Downloading..." : "Download"}
-                                                    </Button>
-                                                  ) : (
-                                                    <Badge variant="outline">Photo ID</Badge>
-                                                  )}
-                                                </div>
-                                              </div>
-                                            )
-                                          })}
-                                        </div>
-                                      )}
-                                      {response.photo_urls && response.photo_urls.length > 0 && (
-                                        <div className="space-y-1">
-                                          <p>Legacy Photos:</p>
-                                          {response.photo_urls.map((url) => (
-                                            <a
-                                              key={url}
-                                              href={url}
-                                              target="_blank"
-                                              rel="noreferrer"
-                                              className="block text-blue-600 underline break-all"
-                                            >
-                                              {url}
-                                            </a>
-                                          ))}
-                                        </div>
-                                      )}
-                                      {!hasResponseContent && (
-                                        <p className="text-muted-foreground">No response data recorded.</p>
-                                      )}
-                                    </div>
-                                  )
-                                })
-                              )}
-                            </div>
-                          )}
-                        </CardContent>
-                      </Card>
-                    )
-                  })
-                )}
-              </div>
+                        {renderWorkItems()}
+                      </CollapsibleContent>
+                    </Collapsible>
+                  </CardContent>
+                </Card>
+              ) : (
+                <>
+                  <p className="text-sm text-muted-foreground whitespace-pre-wrap">
+                    {step.description || "No step description provided."}
+                  </p>
+                  {renderWorkItems()}
+                </>
+              )}
             </>
           )}
 

@@ -112,3 +112,11 @@
 - Moved improver chunked-upload progress UI into the step action area so it appears where the submit button normally sits.
 
 - Allowed public workflow photo routes under /photos and /photo to bypass unauthenticated redirect-to-map behavior in AppProvider.
+
+- Workflow dropdown alert email photo links now use the actual source step item title, number repeated photos per item, and HTML-escape those labels before rendering.
+
+- Restyled submitted-step modal view and collapsed submitted details behind a dropdown under the submitted indicator for a cleaner single-screen mobile first view.
+
+- Workflow submission success state now appears both in the modal header and in the step action area where the submit button normally sits.
+
+- Mirrored proposer workflow submit success messages above the bottom submit actions, while keeping the existing top-of-page success banner.

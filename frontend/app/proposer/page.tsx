@@ -1523,6 +1523,11 @@ export default function ProposerPage() {
     setSuccessMessage("Exited workflow edit mode.")
   }
 
+  const showWorkflowSubmitSuccessInline =
+    successMessage === "Workflow proposal created successfully." ||
+    successMessage === "Workflow edit proposal submitted successfully." ||
+    successMessage === "Workflow edit was auto-approved and applied."
+
   const submitWorkflow = async () => {
     setError("")
     setSuccessMessage("")
@@ -3371,6 +3376,13 @@ export default function ProposerPage() {
                 <div className="flex items-center gap-2 text-red-600 text-sm p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
                   <AlertTriangle className="h-4 w-4 flex-shrink-0" />
                   <span>{error}</span>
+                </div>
+              )}
+
+              {showWorkflowSubmitSuccessInline && (
+                <div className="flex items-center gap-2 rounded-lg bg-green-50 p-3 text-sm text-green-700 dark:bg-green-900/20">
+                  <CheckCircle2 className="h-4 w-4 flex-shrink-0" />
+                  <span>{successMessage}</span>
                 </div>
               )}
 
