@@ -114,3 +114,5 @@
 - Allowed public workflow photo routes under /photos and /photo to bypass unauthenticated redirect-to-map behavior in AppProvider.
 
 - Workflow dropdown alert email photo links now use the actual source step item title, number repeated photos per item, and HTML-escape those labels before rendering.
+
+- Restyled submitted-step modal view and collapsed submitted details behind a dropdown under the submitted indicator for a cleaner single-screen mobile first view.
