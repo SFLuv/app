@@ -430,6 +430,10 @@ export interface WorkflowSubmissionPhoto {
   created_at: number
 }
 
+export interface WorkflowStepPhotoUploadResult {
+  photo: WorkflowSubmissionPhoto
+}
+
 export interface SupervisorWorkflowListItem {
   id: string
   series_id: string

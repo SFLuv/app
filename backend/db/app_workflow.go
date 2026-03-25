@@ -6656,6 +6656,41 @@ type parsedWorkflowPhotoUpload struct {
 	Data        []byte
 }
 
+func normalizeWorkflowPhotoUploadData(fileNameInput, contentTypeInput string, data []byte) (*parsedWorkflowPhotoUpload, error) {
+	if len(data) == 0 {
+		return nil, fmt.Errorf("photo upload payload is empty")
+	}
+	if len(data) > maxWorkflowPhotoUploadBytes {
+		return nil, fmt.Errorf("photo upload exceeds maximum size of 2MB")
+	}
+
+	contentType := strings.ToLower(strings.TrimSpace(contentTypeInput))
+	if contentType == "" {
+		contentType = strings.ToLower(http.DetectContentType(data))
+	}
+	if !strings.HasPrefix(contentType, "image/") {
+		return nil, fmt.Errorf("photo upload must be an image")
+	}
+
+	fileName := strings.TrimSpace(fileNameInput)
+	if fileName != "" {
+		fileName = filepath.Base(fileName)
+	}
+	if fileName == "" || fileName == "." || fileName == string(filepath.Separator) {
+		fileName = "photo"
+	}
+	fileName = strings.ReplaceAll(fileName, "\x00", "")
+	if len(fileName) > 180 {
+		fileName = fileName[:180]
+	}
+
+	return &parsedWorkflowPhotoUpload{
+		FileName:    fileName,
+		ContentType: contentType,
+		Data:        data,
+	}, nil
+}
+
 func parseWorkflowPhotoUpload(upload structs.WorkflowPhotoUpload) (*parsedWorkflowPhotoUpload, error) {
 	base64Payload := strings.TrimSpace(upload.DataBase64)
 	if base64Payload == "" {
@@ -6675,37 +6710,137 @@ func parseWorkflowPhotoUpload(upload structs.WorkflowPhotoUpload) (*parsedWorkfl
 			return nil, fmt.Errorf("invalid base64 image payload")
 		}
 	}
-	if len(decoded) == 0 {
-		return nil, fmt.Errorf("photo upload payload is empty")
-	}
-	if len(decoded) > maxWorkflowPhotoUploadBytes {
-		return nil, fmt.Errorf("photo upload exceeds maximum size of 2MB")
+	return normalizeWorkflowPhotoUploadData(upload.FileName, upload.ContentType, decoded)
+}
+
+func (a *AppDB) CreateWorkflowStepPhotoUpload(
+	ctx context.Context,
+	workflowId string,
+	stepId string,
+	itemId string,
+	improverId string,
+	fileName string,
+	contentType string,
+	data []byte,
+) (*structs.WorkflowSubmissionPhoto, error) {
+	parsedUpload, err := normalizeWorkflowPhotoUploadData(fileName, contentType, data)
+	if err != nil {
+		return nil, err
 	}
 
-	contentType := strings.ToLower(strings.TrimSpace(upload.ContentType))
-	if contentType == "" {
-		contentType = strings.ToLower(http.DetectContentType(decoded))
+	tx, err := a.db.Begin(ctx)
+	if err != nil {
+		return nil, err
 	}
-	if !strings.HasPrefix(contentType, "image/") {
-		return nil, fmt.Errorf("photo upload must be an image")
+	defer tx.Rollback(ctx)
+
+	var workflowStatus string
+	var workflowStartAt int64
+	err = tx.QueryRow(ctx, `
+		SELECT
+			status,
+			start_at
+		FROM
+			workflows
+		WHERE
+			id = $1
+		FOR UPDATE;
+	`, workflowId).Scan(&workflowStatus, &workflowStartAt)
+	if err != nil {
+		return nil, err
+	}
+	if workflowStatus != "approved" && workflowStatus != "in_progress" {
+		return nil, fmt.Errorf("workflow is not active")
 	}
 
-	fileName := strings.TrimSpace(upload.FileName)
-	if fileName != "" {
-		fileName = filepath.Base(fileName)
+	var stepWorkflowId string
+	var stepOrder int
+	var stepStatus string
+	var assignedImproverId *string
+	err = tx.QueryRow(ctx, `
+		SELECT
+			workflow_id,
+			step_order,
+			status,
+			assigned_improver_id
+		FROM
+			workflow_steps
+		WHERE
+			id = $1
+		FOR UPDATE;
+	`, stepId).Scan(&stepWorkflowId, &stepOrder, &stepStatus, &assignedImproverId)
+	if err != nil {
+		return nil, err
 	}
-	if fileName == "" || fileName == "." || fileName == string(filepath.Separator) {
-		fileName = "photo"
+	if stepWorkflowId != workflowId {
+		return nil, fmt.Errorf("step does not belong to workflow")
 	}
-	fileName = strings.ReplaceAll(fileName, "\x00", "")
-	if len(fileName) > 180 {
-		fileName = fileName[:180]
+	if assignedImproverId == nil || *assignedImproverId != improverId {
+		return nil, fmt.Errorf("step is not assigned to this improver")
+	}
+	if stepStatus == "completed" || stepStatus == "paid_out" {
+		return nil, fmt.Errorf("step has already been completed")
 	}
 
-	return &parsedWorkflowPhotoUpload{
-		FileName:    fileName,
-		ContentType: contentType,
-		Data:        decoded,
+	canUnlock, err := canStepTransitionToAvailableTx(ctx, tx, workflowId, stepOrder, workflowStartAt)
+	if err != nil {
+		return nil, err
+	}
+	if stepStatus == "locked" && !canUnlock {
+		return nil, fmt.Errorf("step is not available yet")
+	}
+
+	var itemStepId string
+	err = tx.QueryRow(ctx, `
+		SELECT
+			step_id
+		FROM
+			workflow_step_items
+		WHERE
+			id = $1
+		FOR UPDATE;
+	`, itemId).Scan(&itemStepId)
+	if err != nil {
+		return nil, err
+	}
+	if itemStepId != stepId {
+		return nil, fmt.Errorf("work item does not belong to step")
+	}
+
+	photoID := uuid.NewString()
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO workflow_step_photo_uploads
+			(
+				id,
+				workflow_id,
+				step_id,
+				item_id,
+				improver_id,
+				file_name,
+				content_type,
+				photo_data,
+				size_bytes
+			)
+		VALUES
+			($1, $2, $3, $4, $5, $6, $7, $8, $9);
+	`, photoID, workflowId, stepId, itemId, improverId, parsedUpload.FileName, parsedUpload.ContentType, parsedUpload.Data, len(parsedUpload.Data)); err != nil {
+		return nil, fmt.Errorf("error inserting workflow step photo upload: %s", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+
+	return &structs.WorkflowSubmissionPhoto{
+		Id:           photoID,
+		WorkflowId:   workflowId,
+		StepId:       stepId,
+		ItemId:       itemId,
+		SubmissionId: "",
+		FileName:     parsedUpload.FileName,
+		ContentType:  parsedUpload.ContentType,
+		SizeBytes:    len(parsedUpload.Data),
+		CreatedAt:    time.Now().Unix(),
 	}, nil
 }
 
@@ -6826,6 +6961,7 @@ func (a *AppDB) CompleteWorkflowStep(
 
 	serializedResponses := []structs.WorkflowStepItemResponse{}
 	photoUploadsByItem := map[string][]parsedWorkflowPhotoUpload{}
+	uploadedPhotoIDsByItem := map[string][]string{}
 	if !stepNotPossible {
 		itemRows, err := tx.Query(ctx, `
 			SELECT
@@ -6991,6 +7127,24 @@ func (a *AppDB) CompleteWorkflowStep(
 			}
 			photoUploadsByItem[itemId] = cleanUploads
 
+			cleanPhotoIDs := make([]string, 0, len(response.PhotoIDs))
+			seenPhotoIDs := map[string]struct{}{}
+			for _, rawPhotoID := range response.PhotoIDs {
+				photoID := strings.TrimSpace(rawPhotoID)
+				if photoID == "" {
+					continue
+				}
+				if _, exists := seenPhotoIDs[photoID]; exists {
+					continue
+				}
+				seenPhotoIDs[photoID] = struct{}{}
+				cleanPhotoIDs = append(cleanPhotoIDs, photoID)
+			}
+			if len(cleanUploads) > 0 && len(cleanPhotoIDs) > 0 {
+				return nil, fmt.Errorf("step item cannot mix inline photo uploads with uploaded photo ids: %s", itemByID[itemId].Title)
+			}
+			uploadedPhotoIDsByItem[itemId] = cleanPhotoIDs
+
 			if response.WrittenResponse != nil {
 				trimmed := strings.TrimSpace(*response.WrittenResponse)
 				if trimmed == "" {
@@ -7010,7 +7164,7 @@ func (a *AppDB) CompleteWorkflowStep(
 
 			response.ItemId = itemId
 			response.PhotoURLs = nil
-			response.PhotoIDs = nil
+			response.PhotoIDs = append([]string{}, cleanPhotoIDs...)
 			response.PhotoUploads = nil
 			response.Photos = nil
 			responseMap[itemId] = response
@@ -7026,17 +7180,19 @@ func (a *AppDB) CompleteWorkflowStep(
 			}
 
 			photoUploads := photoUploadsByItem[item.Id]
-			hasAnyResponse := len(photoUploads) > 0 || response.WrittenResponse != nil || response.DropdownValue != nil
+			uploadedPhotoIDs := uploadedPhotoIDsByItem[item.Id]
+			totalPhotoCount := len(photoUploads) + len(uploadedPhotoIDs)
+			hasAnyResponse := totalPhotoCount > 0 || response.WrittenResponse != nil || response.DropdownValue != nil
 			if item.Optional && !hasAnyResponse {
 				continue
 			}
 
 			if item.RequiresPhoto {
 				if item.PhotoAllowAnyCount {
-					if len(photoUploads) == 0 {
+					if totalPhotoCount == 0 {
 						return nil, fmt.Errorf("step item requires photo evidence: %s", item.Title)
 					}
-				} else if len(photoUploads) != item.PhotoRequiredCount {
+				} else if totalPhotoCount != item.PhotoRequiredCount {
 					return nil, fmt.Errorf("step item requires exactly %d photo(s): %s", item.PhotoRequiredCount, item.Title)
 				}
 			}
@@ -7066,7 +7222,7 @@ func (a *AppDB) CompleteWorkflowStep(
 				}
 
 				if selectedOption != nil {
-					if selectedOption.RequiresPhotoAttachment && len(photoUploads) == 0 {
+					if selectedOption.RequiresPhotoAttachment && totalPhotoCount == 0 {
 						instructions := strings.TrimSpace(selectedOption.PhotoInstructions)
 						if instructions != "" {
 							return nil, fmt.Errorf("dropdown selection requires photo attachment for step item %s: %s", item.Title, instructions)
@@ -7135,11 +7291,12 @@ func (a *AppDB) CompleteWorkflowStep(
 	for responseIndex := range serializedResponses {
 		response := serializedResponses[responseIndex]
 		uploads := photoUploadsByItem[response.ItemId]
-		if len(uploads) == 0 {
+		uploadedPhotoIDs := uploadedPhotoIDsByItem[response.ItemId]
+		if len(uploads) == 0 && len(uploadedPhotoIDs) == 0 {
 			continue
 		}
 
-		photoIDs := make([]string, 0, len(uploads))
+		photoIDs := make([]string, 0, len(uploads)+len(uploadedPhotoIDs))
 		for _, upload := range uploads {
 			photoID := uuid.NewString()
 			if _, err := tx.Exec(ctx, `
@@ -7159,6 +7316,62 @@ func (a *AppDB) CompleteWorkflowStep(
 					($1, $2, $3, $4, $5, $6, $7, $8, $9);
 			`, photoID, workflowId, stepId, response.ItemId, submissionId, upload.FileName, upload.ContentType, upload.Data, len(upload.Data)); err != nil {
 				return nil, fmt.Errorf("error inserting workflow submission photo: %s", err)
+			}
+			photoIDs = append(photoIDs, photoID)
+		}
+
+		for _, photoID := range uploadedPhotoIDs {
+			cmd, err := tx.Exec(ctx, `
+				INSERT INTO workflow_submission_photos
+					(
+						id,
+						workflow_id,
+						step_id,
+						item_id,
+						submission_id,
+						file_name,
+						content_type,
+						photo_data,
+						size_bytes,
+						created_at,
+						updated_at
+					)
+				SELECT
+					id,
+					workflow_id,
+					step_id,
+					item_id,
+					$2,
+					file_name,
+					content_type,
+					photo_data,
+					size_bytes,
+					created_at,
+					unix_now()
+				FROM
+					workflow_step_photo_uploads
+				WHERE
+					id = $1
+				AND
+					workflow_id = $3
+				AND
+					step_id = $4
+				AND
+					item_id = $5
+				AND
+					improver_id = $6;
+			`, photoID, submissionId, workflowId, stepId, response.ItemId, improverId)
+			if err != nil {
+				return nil, fmt.Errorf("error attaching workflow submission photo upload: %s", err)
+			}
+			if cmd.RowsAffected() == 0 {
+				return nil, fmt.Errorf("invalid uploaded photo reference for step item: %s", response.ItemId)
+			}
+			if _, err := tx.Exec(ctx, `
+				DELETE FROM workflow_step_photo_uploads
+				WHERE id = $1;
+			`, photoID); err != nil {
+				return nil, fmt.Errorf("error finalizing workflow submission photo upload: %s", err)
 			}
 			photoIDs = append(photoIDs, photoID)
 		}

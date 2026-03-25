@@ -585,6 +585,10 @@ type WorkflowPhotoUpload struct {
 	DataBase64  string `json:"data_base64"`
 }
 
+type WorkflowStepPhotoUploadResult struct {
+	Photo WorkflowSubmissionPhoto `json:"photo"`
+}
+
 type WorkflowSubmissionPhoto struct {
 	Id           string `json:"id"`
 	WorkflowId   string `json:"workflow_id"`

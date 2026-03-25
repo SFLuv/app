@@ -1496,6 +1496,30 @@ func (s *AppDB) CreateTables() error {
 	}
 
 	_, err = s.db.Exec(context.Background(), `
+			CREATE TABLE IF NOT EXISTS workflow_step_photo_uploads(
+				id TEXT PRIMARY KEY,
+				workflow_id TEXT NOT NULL REFERENCES workflows(id) ON DELETE CASCADE,
+				step_id TEXT NOT NULL REFERENCES workflow_steps(id) ON DELETE CASCADE,
+				item_id TEXT NOT NULL REFERENCES workflow_step_items(id) ON DELETE CASCADE,
+				improver_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+				file_name TEXT NOT NULL DEFAULT '',
+				content_type TEXT NOT NULL DEFAULT 'application/octet-stream',
+				photo_data BYTEA NOT NULL,
+				size_bytes INTEGER NOT NULL DEFAULT 0,
+				created_at BIGINT NOT NULL DEFAULT unix_now(),
+				updated_at BIGINT NOT NULL DEFAULT unix_now()
+			);
+
+			CREATE INDEX IF NOT EXISTS workflow_step_photo_uploads_step_item_idx
+				ON workflow_step_photo_uploads(step_id, item_id);
+			CREATE INDEX IF NOT EXISTS workflow_step_photo_uploads_improver_idx
+				ON workflow_step_photo_uploads(improver_id, created_at DESC);
+		`)
+	if err != nil {
+		return fmt.Errorf("error creating workflow_step_photo_uploads table: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
 		CREATE TABLE IF NOT EXISTS workflow_step_notifications(
 			step_id TEXT NOT NULL REFERENCES workflow_steps(id) ON DELETE CASCADE,
 			user_id TEXT NOT NULL REFERENCES users(id),

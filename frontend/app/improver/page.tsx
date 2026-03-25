@@ -25,8 +25,8 @@ import { buildCredentialBadgeDataUrl, buildCredentialLabelMap, formatCredentialL
 import { formatStatusLabel } from "@/lib/status-labels"
 import { formatWorkflowDisplayStatus } from "@/lib/workflow-status"
 import { cn } from "@/lib/utils"
-import { AlertTriangle, CheckCircle2, ChevronLeft, ChevronRight, ChevronsUpDown, ClipboardCheck, Search, Wrench, Award } from "lucide-react"
-import { usePathname, useRouter, useSearchParams } from "next/navigation"
+import { AlertTriangle, Award, CheckCircle2, ChevronLeft, ChevronRight, ChevronsUpDown, ClipboardCheck, Loader2, Search, Wrench } from "lucide-react"
+import { usePathname, useSearchParams } from "next/navigation"
 import { CredentialRequest } from "@/types/issuer"
 import {
   CredentialVisibility,
@@ -39,6 +39,7 @@ import {
   ImproverWorkflowSeriesUnclaimResult,
   WorkflowPhotoAspectRatio,
   Workflow,
+  WorkflowStepPhotoUploadResult,
   WorkflowStep,
 } from "@/types/workflow"
 
@@ -83,6 +84,22 @@ type WorkflowSeriesCardGroup = {
   workflows: Workflow[]
 }
 
+type WorkflowStepCompletionPayload = {
+  step_not_possible: boolean
+  step_not_possible_details?: string
+  items: Array<{
+    item_id: string
+    photo_ids?: string[]
+    photo_uploads?: Array<{
+      file_name: string
+      content_type: string
+      data_base64: string
+    }>
+    written_response?: string
+    dropdown_value?: string
+  }>
+}
+
 type ImproverTab = "my-workflows" | "workflow-board" | "unpaid-workflows" | "my-badges" | "credentials" | "absence"
 
 const isImproverTab = (value: string | null): value is ImproverTab => {
@@ -114,19 +131,18 @@ const defaultStepNotPossibleFormState: StepNotPossibleFormState = {
 
 const maxWorkflowPhotoUploadBytes = 2 * 1024 * 1024
 const maxWorkflowPhotoUploadLabel = "2MB"
-const maxWorkflowStepCompletionRequestBytes = 16 * 1024 * 1024
-const maxWorkflowStepCompletionEstimatedPayloadBytes = maxWorkflowStepCompletionRequestBytes - 128 * 1024
-const workflowPhotoTransportRecompressTargets = [
-  Math.floor(1.4 * 1024 * 1024),
-  Math.floor(1.1 * 1024 * 1024),
-  Math.floor(0.9 * 1024 * 1024),
-]
 const minWorkflowPhotoResizeDimension = 640
 const maxWorkflowPhotoInitialDimension = 4096
 const workflowPhotoCaptureIdealWidth = 4032
 const workflowPhotoCaptureIdealHeight = 3024
 const workflowPhotoCaptureFallbackMaxDimensions = [3072, 2560, 2048, 1600, 1280]
 const myBadgesPageSize = 5
+
+const formatWorkflowByteLimitLabel = (bytes: number) => {
+  const inMB = bytes / (1024 * 1024)
+  if (Number.isInteger(inMB)) return `${inMB}MB`
+  return `${inMB.toFixed(1).replace(/\.0$/, "")}MB`
+}
 
 const normalizeCredentialVisibility = (value?: string | null): CredentialVisibility => {
   if (value === "private" || value === "unlisted") return value
@@ -166,34 +182,6 @@ const computeCropForAspectRatio = (width: number, height: number, aspectRatio: n
   const cropHeight = Math.max(1, Math.floor(width / aspectRatio))
   const y = Math.max(0, Math.floor((height - cropHeight) / 2))
   return { x: 0, y, width, height: cropHeight }
-}
-
-const estimateBase64EncodedLength = (rawBytes: number) => Math.ceil(rawBytes / 3) * 4
-
-const formatWorkflowByteLimitLabel = (bytes: number) => {
-  const inMB = bytes / (1024 * 1024)
-  if (Number.isInteger(inMB)) return `${inMB}MB`
-  return `${inMB.toFixed(1).replace(/\.0$/, "")}MB`
-}
-
-const estimatePreparedWorkflowStepCompletionPayloadBytes = (
-  items: PreparedWorkflowStepCompletionItem[],
-  stepNotPossible: boolean,
-  stepNotPossibleDetails: string,
-) => {
-  let total = 512
-  if (stepNotPossible) {
-    total += 64 + stepNotPossibleDetails.length
-  }
-
-  for (const item of items) {
-    total += 128 + item.itemId.length + (item.dropdownValue?.length || 0) + (item.writtenResponse?.length || 0)
-    for (const upload of item.photoUploads) {
-      total += 192 + upload.file.name.length + upload.file.type.length + estimateBase64EncodedLength(upload.file.size)
-    }
-  }
-
-  return total
 }
 
 const buildWorkflowPhotoCaptureConstraintAttempts = (aspectRatio: WorkflowPhotoAspectRatio): MediaTrackConstraints[] => {
@@ -413,11 +401,22 @@ function LocalPhotoThumbnail({
   )
 }
 
+function ImproverTabLoadingCard({ label }: { label: string }) {
+  return (
+    <Card>
+      <CardContent className="flex min-h-[260px] items-center justify-center">
+        <div className="flex items-center gap-3 text-sm text-muted-foreground">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          <span>{label}</span>
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
 export default function ImproverPage() {
   const searchParams = useSearchParams()
-  const searchParamsString = searchParams.toString()
   const pathname = usePathname()
-  const router = useRouter()
   const tabFromQuery = searchParams.get("tab")
   const { authFetch, status, user } = useApp()
   const [workflows, setWorkflows] = useState<Workflow[]>([])
@@ -430,6 +429,14 @@ export default function ImproverPage() {
   const [error, setError] = useState<string>("")
   const [notice, setNotice] = useState<string>("")
   const [initialLoading, setInitialLoading] = useState<boolean>(true)
+  const [workflowDataLoading, setWorkflowDataLoading] = useState(false)
+  const [workflowDataLoaded, setWorkflowDataLoaded] = useState(false)
+  const [unpaidDataLoading, setUnpaidDataLoading] = useState(false)
+  const [unpaidDataLoaded, setUnpaidDataLoaded] = useState(false)
+  const [absenceDataLoading, setAbsenceDataLoading] = useState(false)
+  const [absenceDataLoaded, setAbsenceDataLoaded] = useState(false)
+  const [credentialDataLoading, setCredentialDataLoading] = useState(false)
+  const [credentialDataLoaded, setCredentialDataLoaded] = useState(false)
   const [submitting, setSubmitting] = useState<string>("")
   const [forms, setForms] = useState<Record<string, Record<string, ItemFormState>>>({})
   const [stepSubmitErrors, setStepSubmitErrors] = useState<Record<string, string>>({})
@@ -474,156 +481,206 @@ export default function ImproverPage() {
   const videoElementRefs = useRef<Record<string, HTMLVideoElement | null>>({})
   const cameraStreamRefs = useRef<Record<string, MediaStream | null>>({})
   const cameraVideoRefCallbacks = useRef<Record<string, (element: HTMLVideoElement | null) => void>>({})
-  const skipNextQueryWriteRef = useRef(false)
+  const workflowDataLoadedRef = useRef(false)
+  const unpaidDataLoadedRef = useRef(false)
+  const absenceDataLoadedRef = useRef(false)
+  const credentialDataLoadedRef = useRef(false)
+  const workflowDataRequestRef = useRef<Promise<void> | null>(null)
+  const unpaidDataRequestRef = useRef<Promise<void> | null>(null)
+  const absenceDataRequestRef = useRef<Promise<void> | null>(null)
+  const credentialDataRequestRef = useRef<Promise<void> | null>(null)
 
   const canUsePanel = Boolean(user?.isImprover || user?.isAdmin)
-  const hasLoadedDataRef = useRef(false)
 
-  const loadFeed = useCallback(
-    async (mode: "initial" | "tab" | "background" = "background") => {
-      const isInitialFetch = !hasLoadedDataRef.current
-
+  const loadWorkflowData = useCallback(
+    async (mode: "blocking" | "background" = "background") => {
       if (!canUsePanel) {
-        if (isInitialFetch || mode === "initial") {
-          hasLoadedDataRef.current = true
-          setInitialLoading(false)
-        }
+        workflowDataLoadedRef.current = true
+        setWorkflowDataLoaded(true)
         return
       }
-
-      if (isInitialFetch || mode === "initial") {
-        setInitialLoading(true)
+      if (workflowDataRequestRef.current) {
+        return workflowDataRequestRef.current
       }
 
-      try {
-        const [feedRes, unpaidRes, absenceRes, credentialTypesRes, credentialRequestsRes] = await Promise.all([
-          authFetch("/improvers/workflows"),
-          authFetch("/improvers/unpaid-workflows"),
-          authFetch("/improvers/workflows/absence-periods"),
-          authFetch("/credentials/types"),
-          authFetch("/improvers/credential-requests"),
-        ])
-        if (!feedRes.ok) {
-          const text = await feedRes.text()
-          throw new Error(text || "Unable to load improver workflows.")
+      const shouldSurfaceError = mode === "blocking" || !workflowDataLoadedRef.current
+      const request = (async () => {
+        setWorkflowDataLoading(true)
+        try {
+          const feedRes = await authFetch("/improvers/workflows")
+          if (!feedRes.ok) {
+            const text = await feedRes.text()
+            throw new Error(text || "Unable to load improver workflows.")
+          }
+          const data = (await feedRes.json()) as ImproverWorkflowFeed
+          setWorkflows(data.workflows || [])
+          setActiveCredentials((data.active_credentials || []) as CredentialType[])
+          setError((prev) => (prev === "Unable to load improver workflows." ? "" : prev))
+        } catch (err) {
+          if (shouldSurfaceError) {
+            setError(err instanceof Error ? err.message : "Unable to load improver workflows.")
+          }
+        } finally {
+          workflowDataLoadedRef.current = true
+          workflowDataRequestRef.current = null
+          setWorkflowDataLoaded(true)
+          setWorkflowDataLoading(false)
         }
-        const data = (await feedRes.json()) as ImproverWorkflowFeed
-        setWorkflows(data.workflows || [])
-        setActiveCredentials((data.active_credentials || []) as CredentialType[])
-        if (unpaidRes.ok) {
-          const unpaidData = (await unpaidRes.json()) as Workflow[]
-          setUnpaidWorkflows(unpaidData || [])
-        } else {
-          setUnpaidWorkflows([])
-        }
-        if (absenceRes.ok) {
-          const absenceData = (await absenceRes.json()) as ImproverAbsencePeriod[]
-          setAbsencePeriods(absenceData || [])
-        } else {
-          setAbsencePeriods([])
-        }
-        if (credentialTypesRes.ok) {
-          const typeData = (await credentialTypesRes.json()) as GlobalCredentialType[]
-          setCredentialTypes(typeData || [])
-        } else {
-          setCredentialTypes([])
-        }
-        if (credentialRequestsRes.ok) {
-          const requestData = (await credentialRequestsRes.json()) as CredentialRequest[]
-          setCredentialRequests(requestData || [])
-        } else {
-          setCredentialRequests([])
-        }
-        setError("")
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Unable to load improver workflows.")
-      } finally {
-        if (isInitialFetch || mode === "initial") {
-          hasLoadedDataRef.current = true
-          setInitialLoading(false)
-        }
-      }
+      })()
+
+      workflowDataRequestRef.current = request
+      return request
     },
     [authFetch, canUsePanel],
   )
 
-  const navigateToImproverTab = useCallback((nextTab: ImproverTab) => {
-    const params = new URLSearchParams(searchParamsString)
-    params.set("tab", nextTab)
+  const loadUnpaidData = useCallback(
+    async (mode: "blocking" | "background" = "background") => {
+      if (!canUsePanel) {
+        unpaidDataLoadedRef.current = true
+        setUnpaidDataLoaded(true)
+        return
+      }
+      if (unpaidDataRequestRef.current) {
+        return unpaidDataRequestRef.current
+      }
 
-    if (boardSearch) params.set("board_search", boardSearch)
-    else params.delete("board_search")
+      const shouldSurfaceError = mode === "blocking" || !unpaidDataLoadedRef.current
+      const request = (async () => {
+        setUnpaidDataLoading(true)
+        try {
+          const unpaidRes = await authFetch("/improvers/unpaid-workflows")
+          if (!unpaidRes.ok) {
+            const text = await unpaidRes.text()
+            throw new Error(text || "Unable to load unpaid workflows.")
+          }
+          const unpaidData = (await unpaidRes.json()) as Workflow[]
+          setUnpaidWorkflows(unpaidData || [])
+          setError((prev) => (prev === "Unable to load unpaid workflows." ? "" : prev))
+        } catch (err) {
+          if (shouldSurfaceError) {
+            setError(err instanceof Error ? err.message : "Unable to load unpaid workflows.")
+          }
+        } finally {
+          unpaidDataLoadedRef.current = true
+          unpaidDataRequestRef.current = null
+          setUnpaidDataLoaded(true)
+          setUnpaidDataLoading(false)
+        }
+      })()
 
-    if (myWorkflowsSearch) params.set("my_workflows_search", myWorkflowsSearch)
-    else params.delete("my_workflows_search")
+      unpaidDataRequestRef.current = request
+      return request
+    },
+    [authFetch, canUsePanel],
+  )
 
-    if (!showOnlyActiveSeries) params.set("my_active_only", "false")
-    else params.delete("my_active_only")
+  const loadAbsenceData = useCallback(
+    async (mode: "blocking" | "background" = "background") => {
+      if (!canUsePanel) {
+        absenceDataLoadedRef.current = true
+        setAbsenceDataLoaded(true)
+        return
+      }
+      if (absenceDataRequestRef.current) {
+        return absenceDataRequestRef.current
+      }
 
-    if (unpaidSearch) params.set("unpaid_search", unpaidSearch)
-    else params.delete("unpaid_search")
+      const shouldSurfaceError = mode === "blocking" || !absenceDataLoadedRef.current
+      const request = (async () => {
+        setAbsenceDataLoading(true)
+        try {
+          const absenceRes = await authFetch("/improvers/workflows/absence-periods")
+          if (!absenceRes.ok) {
+            const text = await absenceRes.text()
+            throw new Error(text || "Unable to load absence coverage.")
+          }
+          const absenceData = (await absenceRes.json()) as ImproverAbsencePeriod[]
+          setAbsencePeriods(absenceData || [])
+          setError((prev) => (prev === "Unable to load absence coverage." ? "" : prev))
+        } catch (err) {
+          if (shouldSurfaceError) {
+            setError(err instanceof Error ? err.message : "Unable to load absence coverage.")
+          }
+        } finally {
+          absenceDataLoadedRef.current = true
+          absenceDataRequestRef.current = null
+          setAbsenceDataLoaded(true)
+          setAbsenceDataLoading(false)
+        }
+      })()
 
-    if (absenceSearch) params.set("absence_search", absenceSearch)
-    else params.delete("absence_search")
+      absenceDataRequestRef.current = request
+      return request
+    },
+    [authFetch, canUsePanel],
+  )
 
-    if (credentialSearch) params.set("credential_search", credentialSearch)
-    else params.delete("credential_search")
+  const loadCredentialData = useCallback(
+    async (mode: "blocking" | "background" = "background") => {
+      if (!canUsePanel) {
+        credentialDataLoadedRef.current = true
+        setCredentialDataLoaded(true)
+        return
+      }
+      if (credentialDataRequestRef.current) {
+        return credentialDataRequestRef.current
+      }
 
-    const nextQuery = params.toString()
-    if (nextQuery === searchParamsString) return
-    router.push(nextQuery ? `${pathname}?${nextQuery}` : pathname, { scroll: false })
-  }, [
-    absenceSearch,
-    boardSearch,
-    credentialSearch,
-    myWorkflowsSearch,
-    pathname,
-    router,
-    searchParamsString,
-    showOnlyActiveSeries,
-    unpaidSearch,
-  ])
+      const shouldSurfaceError = mode === "blocking" || !credentialDataLoadedRef.current
+      const request = (async () => {
+        setCredentialDataLoading(true)
+        try {
+          const [credentialTypesRes, credentialRequestsRes] = await Promise.all([
+            authFetch("/credentials/types"),
+            authFetch("/improvers/credential-requests"),
+          ])
+
+          if (credentialTypesRes.ok) {
+            const typeData = (await credentialTypesRes.json()) as GlobalCredentialType[]
+            setCredentialTypes(typeData || [])
+          } else {
+            setCredentialTypes([])
+          }
+
+          if (credentialRequestsRes.ok) {
+            const requestData = (await credentialRequestsRes.json()) as CredentialRequest[]
+            setCredentialRequests(requestData || [])
+          } else {
+            setCredentialRequests([])
+          }
+
+          setError((prev) => (prev === "Unable to load credentials right now." ? "" : prev))
+        } catch {
+          if (shouldSurfaceError) {
+            setError("Unable to load credentials right now.")
+          }
+        } finally {
+          credentialDataLoadedRef.current = true
+          credentialDataRequestRef.current = null
+          setCredentialDataLoaded(true)
+          setCredentialDataLoading(false)
+        }
+      })()
+
+      credentialDataRequestRef.current = request
+      return request
+    },
+    [authFetch, canUsePanel],
+  )
+
+  const loadFeed = useCallback(async () => {
+    await Promise.allSettled([
+      loadWorkflowData("background"),
+      loadUnpaidData("background"),
+      loadAbsenceData("background"),
+      loadCredentialData("background"),
+    ])
+  }, [loadAbsenceData, loadCredentialData, loadUnpaidData, loadWorkflowData])
 
   useEffect(() => {
-    const params = new URLSearchParams(searchParamsString)
-
-    const nextTabRaw = params.get("tab")
-    const nextTab: ImproverTab = isImproverTab(nextTabRaw) ? nextTabRaw : "my-workflows"
-    const nextBoardSearch = params.get("board_search") || ""
-    const nextMyWorkflowsSearch = params.get("my_workflows_search") || ""
-    const nextShowOnlyActiveSeries = params.get("my_active_only") !== "false"
-    const nextUnpaidSearch = params.get("unpaid_search") || ""
-    const nextAbsenceSearch = params.get("absence_search") || ""
-    const nextCredentialSearch = params.get("credential_search") || ""
-
-    const shouldSyncFromQuery =
-      nextTab !== activeTab ||
-      nextBoardSearch !== boardSearch ||
-      nextMyWorkflowsSearch !== myWorkflowsSearch ||
-      nextShowOnlyActiveSeries !== showOnlyActiveSeries ||
-      nextUnpaidSearch !== unpaidSearch ||
-      nextAbsenceSearch !== absenceSearch ||
-      nextCredentialSearch !== credentialSearch
-
-    if (shouldSyncFromQuery) {
-      skipNextQueryWriteRef.current = true
-    }
-
-    setActiveTab((prev) => (nextTab === prev ? prev : nextTab))
-    setBoardSearch((prev) => (nextBoardSearch === prev ? prev : nextBoardSearch))
-    setMyWorkflowsSearch((prev) => (nextMyWorkflowsSearch === prev ? prev : nextMyWorkflowsSearch))
-    setShowOnlyActiveSeries((prev) => (nextShowOnlyActiveSeries === prev ? prev : nextShowOnlyActiveSeries))
-    setUnpaidSearch((prev) => (nextUnpaidSearch === prev ? prev : nextUnpaidSearch))
-    setAbsenceSearch((prev) => (nextAbsenceSearch === prev ? prev : nextAbsenceSearch))
-    setCredentialSearch((prev) => (nextCredentialSearch === prev ? prev : nextCredentialSearch))
-  }, [searchParamsString])
-
-  useEffect(() => {
-    const currentParams = new URLSearchParams(searchParamsString)
-    const currentTabRaw = currentParams.get("tab")
-    const currentTab: ImproverTab = isImproverTab(currentTabRaw) ? currentTabRaw : "my-workflows"
-
-    const params = new URLSearchParams(currentParams.toString())
+    if (typeof window === "undefined") return
+    const params = new URLSearchParams(window.location.search)
     params.set("tab", activeTab)
 
     if (boardSearch) params.set("board_search", boardSearch)
@@ -645,18 +702,9 @@ export default function ImproverPage() {
     else params.delete("credential_search")
 
     const nextQuery = params.toString()
-    if (skipNextQueryWriteRef.current) {
-      skipNextQueryWriteRef.current = false
-      return
-    }
-
-    if (nextQuery !== searchParamsString) {
-      const destination = nextQuery ? `${pathname}?${nextQuery}` : pathname
-      if (currentTab !== activeTab) {
-        router.push(destination, { scroll: false })
-      } else {
-        router.replace(destination, { scroll: false })
-      }
+    const currentQuery = window.location.search.replace(/^\?/, "")
+    if (nextQuery !== currentQuery) {
+      window.history.replaceState(window.history.state, "", nextQuery ? `${pathname}?${nextQuery}` : pathname)
     }
   }, [
     absenceSearch,
@@ -665,22 +713,45 @@ export default function ImproverPage() {
     credentialSearch,
     myWorkflowsSearch,
     pathname,
-    router,
-    searchParamsString,
     showOnlyActiveSeries,
     unpaidSearch,
   ])
 
   useEffect(() => {
     if (status === "loading") return
-    void loadFeed("initial")
-  }, [canUsePanel, loadFeed, status])
+    if (!canUsePanel) {
+      setInitialLoading(false)
+      return
+    }
 
-  useEffect(() => {
-    if (status !== "authenticated" || !canUsePanel) return
-    if (!hasLoadedDataRef.current) return
-    void loadFeed("tab")
-  }, [activeTab, canUsePanel, loadFeed, status])
+    const blockingTasks: Promise<void>[] = []
+    const backgroundTasks: Promise<void>[] = []
+
+    const queue = (
+      loader: (mode: "blocking" | "background") => Promise<void> | undefined,
+      loadedRef: { current: boolean },
+      required: boolean,
+    ) => {
+      if (required) {
+        blockingTasks.push(loader(loadedRef.current ? "background" : "blocking") ?? Promise.resolve())
+      } else if (!loadedRef.current) {
+        backgroundTasks.push(loader("background") ?? Promise.resolve())
+      }
+    }
+
+    queue(loadWorkflowData, workflowDataLoadedRef, activeTab === "workflow-board" || activeTab === "my-workflows" || activeTab === "absence" || activeTab === "my-badges" || activeTab === "credentials")
+    queue(loadCredentialData, credentialDataLoadedRef, activeTab === "my-badges" || activeTab === "credentials")
+    queue(loadUnpaidData, unpaidDataLoadedRef, activeTab === "unpaid-workflows")
+    queue(loadAbsenceData, absenceDataLoadedRef, activeTab === "absence")
+
+    void Promise.all(blockingTasks).finally(() => {
+      setInitialLoading(false)
+    })
+
+    if (backgroundTasks.length > 0) {
+      void Promise.allSettled(backgroundTasks)
+    }
+  }, [activeTab, canUsePanel, loadAbsenceData, loadCredentialData, loadUnpaidData, loadWorkflowData, status])
 
   const credentialSet = useMemo(() => {
     const set = new Set<string>()
@@ -1681,71 +1752,33 @@ export default function ImproverPage() {
     }
   }, [detailOpen, stopAllCameraCaptures])
 
-  const fileToBase64 = (file: File) =>
-    new Promise<string>((resolve, reject) => {
-      const reader = new FileReader()
-      reader.onload = () => {
-        const result = reader.result
-        if (typeof result !== "string") {
-          reject(new Error("Unable to read uploaded photo."))
-          return
-        }
-        const commaIndex = result.indexOf(",")
-        resolve(commaIndex >= 0 ? result.slice(commaIndex + 1) : result)
-      }
-      reader.onerror = () => reject(new Error("Unable to read uploaded photo."))
-      reader.readAsDataURL(file)
+  const uploadPreparedWorkflowPhoto = useCallback(async (
+    workflowId: string,
+    stepId: string,
+    itemId: string,
+    upload: PreparedWorkflowPhotoUpload,
+  ) => {
+    const formData = new FormData()
+    formData.set("item_id", itemId)
+    formData.set("photo", upload.file, upload.file.name || "photo.jpg")
+
+    const res = await authFetch(`/improvers/workflows/${workflowId}/steps/${stepId}/photos`, {
+      method: "POST",
+      body: formData,
     })
+    if (!res.ok) {
+      const text = await res.text()
+      throw new Error(text || "Unable to upload photo for this step.")
+    }
 
-  const fitPreparedStepItemsWithinTransportLimit = useCallback(
-    async (
-      items: PreparedWorkflowStepCompletionItem[],
-      stepNotPossible: boolean,
-      stepNotPossibleDetails: string,
-    ) => {
-      const estimatedBytes = () =>
-        estimatePreparedWorkflowStepCompletionPayloadBytes(items, stepNotPossible, stepNotPossibleDetails)
+    const json = await res.json() as WorkflowStepPhotoUploadResult
+    if (!json.photo?.id) {
+      throw new Error("Uploaded workflow photo is missing an id.")
+    }
+    return json.photo.id
+  }, [authFetch])
 
-      if (estimatedBytes() <= maxWorkflowStepCompletionEstimatedPayloadBytes) {
-        return items
-      }
-
-      for (const targetBytes of workflowPhotoTransportRecompressTargets) {
-        const photoRefs = items
-          .flatMap((item) =>
-            item.photoUploads.map((upload, uploadIndex) => ({
-              item,
-              uploadIndex,
-              upload,
-            })),
-          )
-          .sort((left, right) => right.upload.file.size - left.upload.file.size)
-
-        for (const ref of photoRefs) {
-          if (estimatedBytes() <= maxWorkflowStepCompletionEstimatedPayloadBytes) {
-            return items
-          }
-          if (ref.upload.file.size <= targetBytes) {
-            continue
-          }
-
-          ref.item.photoUploads[ref.uploadIndex] = {
-            ...ref.upload,
-            file: await shrinkPhotoToUploadLimit(ref.upload.file, ref.upload.aspectRatio, targetBytes),
-          }
-        }
-
-        if (estimatedBytes() <= maxWorkflowStepCompletionEstimatedPayloadBytes) {
-          return items
-        }
-      }
-
-      throw new Error("Selected photos are too large to submit together. Reduce the number of photos or retake them at a lower resolution.")
-    },
-    [shrinkPhotoToUploadLimit],
-  )
-
-  const buildCompletionPayload = async (step: WorkflowStep) => {
+  const buildCompletionPayload = async (workflowId: string, step: WorkflowStep): Promise<WorkflowStepCompletionPayload> => {
     const stepNotPossibleForm = stepNotPossibleForms[step.id] || defaultStepNotPossibleFormState
     const stepNotPossible = step.allow_step_not_possible && stepNotPossibleForm.selected
     const stepNotPossibleDetails = stepNotPossibleForm.details.trim()
@@ -1828,40 +1861,17 @@ export default function ImproverPage() {
       })
     }
 
-    await fitPreparedStepItemsWithinTransportLimit(preparedItems, false, "")
-
-    const items: Array<{
-      item_id: string
-      photo_uploads?: Array<{
-        file_name: string
-        content_type: string
-        data_base64: string
-      }>
-      written_response?: string
-      dropdown_value?: string
-    }> = []
-
+    const items: WorkflowStepCompletionPayload["items"] = []
     for (const preparedItem of preparedItems) {
-      const payloadItem: {
-        item_id: string
-        photo_uploads?: Array<{
-          file_name: string
-          content_type: string
-          data_base64: string
-        }>
-        written_response?: string
-        dropdown_value?: string
-      } = {
+      const payloadItem: WorkflowStepCompletionPayload["items"][number] = {
         item_id: preparedItem.itemId,
       }
 
       if (preparedItem.photoUploads.length > 0) {
-        payloadItem.photo_uploads = await Promise.all(
-          preparedItem.photoUploads.map(async (upload) => ({
-            file_name: upload.file.name || "photo",
-            content_type: upload.file.type || "image/jpeg",
-            data_base64: await fileToBase64(upload.file),
-          })),
+        payloadItem.photo_ids = await Promise.all(
+          preparedItem.photoUploads.map((upload) =>
+            uploadPreparedWorkflowPhoto(workflowId, step.id, preparedItem.itemId, upload),
+          ),
         )
       }
       if (preparedItem.writtenResponse) payloadItem.written_response = preparedItem.writtenResponse
@@ -1880,9 +1890,12 @@ export default function ImproverPage() {
     setError("")
     setSubmitting(`complete:${step.id}`)
     try {
-      const payload = await buildCompletionPayload(step)
+      const payload = await buildCompletionPayload(workflowId, step)
       const res = await authFetch(`/improvers/workflows/${workflowId}/steps/${step.id}/complete`, {
         method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
         body: JSON.stringify(payload),
       })
       if (!res.ok) {
@@ -1905,7 +1918,10 @@ export default function ImproverPage() {
       })
       clearStepSubmitError(step.id)
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Unable to complete this step."
+      const message =
+        err instanceof Error
+          ? err.message
+          : "Unable to complete this step."
       setStepSubmitErrors((prev) => ({
         ...prev,
         [step.id]: message,
@@ -2816,7 +2832,7 @@ export default function ImproverPage() {
         value={activeTab}
         onValueChange={(value) => {
           if (!isImproverTab(value)) return
-          navigateToImproverTab(value)
+          setActiveTab(value)
         }}
         className="space-y-4"
       >
@@ -2830,6 +2846,16 @@ export default function ImproverPage() {
         </TabsList>
 
         <TabsContent value="workflow-board" className="space-y-3">
+          {!workflowDataLoaded ? (
+            <ImproverTabLoadingCard label="Loading workflow board..." />
+          ) : (
+            <>
+          {workflowDataLoading && (
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              <span>Refreshing workflow board...</span>
+            </div>
+          )}
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input
@@ -2884,13 +2910,25 @@ export default function ImproverPage() {
                       </Button>
 	                    </div>
 	                  </CardContent>
-	                </Card>
+                </Card>
               )
             })
+          )}
+            </>
           )}
 	        </TabsContent>
 
         <TabsContent value="my-workflows" className="space-y-3">
+          {!workflowDataLoaded ? (
+            <ImproverTabLoadingCard label="Loading your workflows..." />
+          ) : (
+            <>
+          {workflowDataLoading && (
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              <span>Refreshing your workflows...</span>
+            </div>
+          )}
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input
@@ -3025,9 +3063,14 @@ export default function ImproverPage() {
               </div>
             </div>
           )}
+            </>
+          )}
         </TabsContent>
 
 	        <TabsContent value="unpaid-workflows" className="space-y-4">
+          {!unpaidDataLoaded ? (
+            <ImproverTabLoadingCard label="Loading unpaid workflows..." />
+          ) : (
 	          <Card>
 	            <CardHeader>
 	              <CardTitle>Unpaid Workflows</CardTitle>
@@ -3045,6 +3088,12 @@ export default function ImproverPage() {
 	                  className="pl-9"
 	                />
 	              </div>
+                {unpaidDataLoading && (
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    <span>Refreshing unpaid workflows...</span>
+                  </div>
+                )}
 	              {filteredUnpaidWorkflows.length === 0 ? (
 	                <p className="text-sm text-muted-foreground">No unpaid workflow payouts are pending for you.</p>
 	              ) : (
@@ -3120,9 +3169,13 @@ export default function ImproverPage() {
 	              )}
 	            </CardContent>
 	          </Card>
+          )}
 	        </TabsContent>
 
 	        <TabsContent value="my-badges" className="space-y-4">
+          {!workflowDataLoaded || !credentialDataLoaded ? (
+            <ImproverTabLoadingCard label="Loading your badges..." />
+          ) : (
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
@@ -3198,9 +3251,20 @@ export default function ImproverPage() {
               )}
             </CardContent>
           </Card>
+          )}
 	        </TabsContent>
 
 	        <TabsContent value="credentials" className="space-y-4">
+          {!workflowDataLoaded || !credentialDataLoaded ? (
+            <ImproverTabLoadingCard label="Loading credentials..." />
+          ) : (
+          <>
+          {(workflowDataLoading || credentialDataLoading) && (
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              <span>Refreshing credentials...</span>
+            </div>
+          )}
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
@@ -3299,9 +3363,14 @@ export default function ImproverPage() {
               )}
             </CardContent>
           </Card>
+          </>
+          )}
         </TabsContent>
 
         <TabsContent value="absence" className="space-y-4">
+          {!workflowDataLoaded || !absenceDataLoaded ? (
+            <ImproverTabLoadingCard label="Loading absence coverage..." />
+          ) : (
           <Card>
             <CardHeader>
               <CardTitle>Recurring Absence Coverage</CardTitle>
@@ -3310,6 +3379,12 @@ export default function ImproverPage() {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
+              {(workflowDataLoading || absenceDataLoading) && (
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  <span>Refreshing absence coverage...</span>
+                </div>
+              )}
               {recurringClaimOptions.length === 0 ? (
                 <p className="text-sm text-muted-foreground">
                   No recurring claimed workpieces found yet. Claim a recurring workflow step first to configure absence coverage.
@@ -3471,6 +3546,7 @@ export default function ImproverPage() {
               )}
             </CardContent>
           </Card>
+          )}
         </TabsContent>
 
       </Tabs>
