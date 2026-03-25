@@ -461,7 +461,7 @@ export function WorkflowDetailsModal({
               </div>
 
               {hasSubmission ? (
-                <Card className="overflow-hidden border-emerald-500/20 bg-emerald-50/90 shadow-sm dark:border-emerald-500/30 dark:bg-emerald-950/35">
+                <Card className="overflow-hidden border-[#eb6c6c]/25 bg-[#fff4f1] shadow-sm dark:border-[#eb6c6c]/30 dark:bg-[#3a1d1d]/50">
                   <CardContent className="space-y-3 p-3 sm:p-4">
                     <div className="flex items-start gap-3">
                       <div className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-emerald-600 text-white shadow-sm dark:bg-emerald-500">
@@ -469,14 +469,14 @@ export function WorkflowDetailsModal({
                       </div>
                       <div className="min-w-0 space-y-1">
                         <div className="flex flex-wrap items-center gap-2">
-                          <p className="text-sm font-semibold text-emerald-950 dark:text-emerald-50">
+                          <p className="text-sm font-semibold text-[#8c2f29] dark:text-[#ffe2dd]">
                             {step.submission?.step_not_possible ? "Submitted as not possible" : "Submitted"}
                           </p>
-                          <Badge className="border-emerald-200 bg-white/85 text-emerald-900 hover:bg-white dark:border-emerald-500/30 dark:bg-emerald-950/55 dark:text-emerald-50 dark:hover:bg-emerald-950/70">
+                          <Badge className="border-[#eb6c6c]/25 bg-white/90 text-[#8c2f29] hover:bg-white dark:border-[#eb6c6c]/30 dark:bg-[#281515]/70 dark:text-[#ffe2dd] dark:hover:bg-[#331919]">
                             Recorded
                           </Badge>
                         </div>
-                        <p className="text-xs text-emerald-900/75 dark:text-emerald-100/75">
+                        <p className="text-xs text-[#a34841]/85 dark:text-[#f7c5bf]/80">
                           Submitted on {new Date(step.submission!.submitted_at * 1000).toLocaleString()}
                         </p>
                       </div>
@@ -495,12 +495,12 @@ export function WorkflowDetailsModal({
                         <Button
                           type="button"
                           variant="ghost"
-                          className="h-auto w-full justify-between rounded-lg border border-emerald-200/80 bg-white/80 px-3 py-2 text-sm font-medium text-emerald-950 hover:bg-white dark:border-emerald-500/30 dark:bg-emerald-950/55 dark:text-emerald-50 dark:hover:bg-emerald-950/70"
+                          className="h-auto w-full justify-between rounded-lg border border-[#eb6c6c]/25 bg-white/85 px-3 py-2 text-sm font-medium text-[#8c2f29] hover:bg-white dark:border-[#eb6c6c]/30 dark:bg-[#281515]/70 dark:text-[#ffe2dd] dark:hover:bg-[#331919]"
                         >
                           <span>{isSubmissionDetailsExpanded ? "Hide details" : "View details"}</span>
                           <ChevronDown
                             className={cn(
-                              "h-4 w-4 text-emerald-900/70 transition-transform dark:text-emerald-100/70",
+                              "h-4 w-4 text-[#a34841]/80 transition-transform dark:text-[#f7c5bf]/80",
                               isSubmissionDetailsExpanded && "rotate-180",
                             )}
                           />
