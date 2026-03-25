@@ -154,6 +154,7 @@ func AddWorkflowRoutes(r *chi.Mux, s *handlers.BotService, a *handlers.AppServic
 	r.Post("/voters/workflow-deletion-proposals", withVoter(a.ProposeWorkflowDeletion, a))
 	r.Get("/workflows/active", withAuth(a.GetActiveWorkflows))
 	r.Get("/workflows/{workflow_id}", withAuth(a.GetWorkflow))
+	r.Get("/workflow-photos/public/{photo_id}", a.GetPublicWorkflowPhoto)
 	r.Get("/workflow-photos/{photo_id}", withAuth(a.GetWorkflowPhoto))
 	r.Post("/workflows/{workflow_id}/votes", withVoter(a.VoteWorkflow, a))
 	r.Post("/workflow-edit-proposals/{proposal_id}/votes", withVoter(a.VoteWorkflowEditProposal, a))

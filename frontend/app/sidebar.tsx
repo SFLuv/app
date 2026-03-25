@@ -24,7 +24,7 @@ export default function Sidebar({
   const [open, setOpen] = useState(false);
   const pathname = usePathname()
   const search = useSearchParams()
-  const shouldHideSidebar = pathname == "/faucet/redeem" || search.get("sidebar") === "false"
+  const shouldHideSidebar = pathname == "/faucet/redeem" || pathname.startsWith("/photos/") || search.get("sidebar") === "false"
 
   useEffect(() => {
     if(status == "authenticated") setOpen(true)

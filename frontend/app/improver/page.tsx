@@ -104,6 +104,8 @@ const maxWorkflowPhotoUploadBytes = 2 * 1024 * 1024
 const maxWorkflowPhotoUploadLabel = "2MB"
 const minWorkflowPhotoResizeDimension = 640
 const maxWorkflowPhotoInitialDimension = 4096
+const workflowPhotoCaptureIdealWidth = 4032
+const workflowPhotoCaptureIdealHeight = 3024
 const myBadgesPageSize = 5
 
 const normalizeCredentialVisibility = (value?: string | null): CredentialVisibility => {
@@ -178,6 +180,8 @@ const renderJpegBlob = (
       return
     }
     if (sourceCrop) {
+      ctx.imageSmoothingEnabled = true
+      ctx.imageSmoothingQuality = "high"
       ctx.drawImage(
         image,
         sourceCrop.x,
@@ -190,6 +194,8 @@ const renderJpegBlob = (
         height,
       )
     } else {
+      ctx.imageSmoothingEnabled = true
+      ctx.imageSmoothingQuality = "high"
       ctx.drawImage(image, 0, 0, width, height)
     }
     canvas.toBlob((blob) => resolve(blob), "image/jpeg", quality)
@@ -202,6 +208,17 @@ const toJpegFileName = (fileName: string) => {
   if (dotIndex <= 0) return `${trimmed}.jpg`
   return `${trimmed.slice(0, dotIndex)}.jpg`
 }
+
+const isPreservableWorkflowUploadType = (contentType: string) => {
+  const normalized = contentType.trim().toLowerCase()
+  return normalized === "image/jpeg" || normalized === "image/jpg" || normalized === "image/png" || normalized === "image/webp"
+}
+
+const cropMatchesFullImage = (
+  crop: { x: number; y: number; width: number; height: number },
+  imageWidth: number,
+  imageHeight: number,
+) => crop.x === 0 && crop.y === 0 && crop.width === imageWidth && crop.height === imageHeight
 
 const dateInputPattern = /^\d{4}-\d{2}-\d{2}$/
 
@@ -1130,7 +1147,7 @@ export default function ImproverPage() {
     })
   }
 
-  const shrinkPhotoToUploadLimit = useCallback(async (file: File, aspectRatio: WorkflowPhotoAspectRatio = "square") => {
+  const shrinkPhotoToUploadLimit = useCallback(async (file: File, aspectRatio?: WorkflowPhotoAspectRatio | null) => {
     if (!file.type.startsWith("image/")) {
       throw new Error(`Only image uploads are allowed: ${file.name}`)
     }
@@ -1142,9 +1159,18 @@ export default function ImproverPage() {
       throw new Error(`Unable to process image dimensions for ${file.name}`)
     }
 
-    const normalizedAspect = normalizeWorkflowPhotoAspectRatio(aspectRatio)
-    const targetAspect = workflowPhotoAspectRatios[normalizedAspect]
-    const crop = computeCropForAspectRatio(imageWidth, imageHeight, targetAspect)
+    const normalizedAspect = aspectRatio ? normalizeWorkflowPhotoAspectRatio(aspectRatio) : null
+    const crop = normalizedAspect
+      ? computeCropForAspectRatio(imageWidth, imageHeight, workflowPhotoAspectRatios[normalizedAspect])
+      : { x: 0, y: 0, width: imageWidth, height: imageHeight }
+
+    if (
+      file.size <= maxWorkflowPhotoUploadBytes &&
+      cropMatchesFullImage(crop, imageWidth, imageHeight) &&
+      isPreservableWorkflowUploadType(file.type)
+    ) {
+      return file
+    }
 
     let targetWidth = crop.width
     let targetHeight = crop.height
@@ -1155,12 +1181,41 @@ export default function ImproverPage() {
       targetHeight = Math.max(minWorkflowPhotoResizeDimension, Math.round(targetHeight * initialScale))
     }
 
-    const qualitySteps = [0.9, 0.82, 0.74, 0.66, 0.58, 0.5, 0.42]
-    for (let scaleAttempt = 0; scaleAttempt < 6; scaleAttempt += 1) {
-      for (const quality of qualitySteps) {
-        const blob = await renderJpegBlob(image, targetWidth, targetHeight, quality, crop)
-        if (!blob) continue
-        if (blob.size > maxWorkflowPhotoUploadBytes) continue
+    const encodeBestJpegBlobForCurrentSize = async () => {
+      const highestQualityBlob = await renderJpegBlob(image, targetWidth, targetHeight, 0.99, crop)
+      if (highestQualityBlob && highestQualityBlob.size <= maxWorkflowPhotoUploadBytes) {
+        return highestQualityBlob
+      }
+
+      const lowestQualityBlob = await renderJpegBlob(image, targetWidth, targetHeight, 0.5, crop)
+      if (!lowestQualityBlob || lowestQualityBlob.size > maxWorkflowPhotoUploadBytes) {
+        return null
+      }
+
+      let bestBlob = lowestQualityBlob
+      let lowQuality = 0.5
+      let highQuality = 0.99
+      for (let attempt = 0; attempt < 7; attempt += 1) {
+        const midQuality = (lowQuality + highQuality) / 2
+        const blob = await renderJpegBlob(image, targetWidth, targetHeight, midQuality, crop)
+        if (!blob) {
+          highQuality = midQuality
+          continue
+        }
+        if (blob.size <= maxWorkflowPhotoUploadBytes) {
+          bestBlob = blob
+          lowQuality = midQuality
+        } else {
+          highQuality = midQuality
+        }
+      }
+
+      return bestBlob
+    }
+
+    for (let scaleAttempt = 0; scaleAttempt < 7; scaleAttempt += 1) {
+      const blob = await encodeBestJpegBlobForCurrentSize()
+      if (blob) {
         return new File([blob], toJpegFileName(file.name), {
           type: "image/jpeg",
           lastModified: Date.now(),
@@ -1170,15 +1225,15 @@ export default function ImproverPage() {
       if (targetWidth <= minWorkflowPhotoResizeDimension && targetHeight <= minWorkflowPhotoResizeDimension) {
         break
       }
-      targetWidth = Math.max(minWorkflowPhotoResizeDimension, Math.round(targetWidth * 0.8))
-      targetHeight = Math.max(minWorkflowPhotoResizeDimension, Math.round(targetHeight * 0.8))
+      targetWidth = Math.max(minWorkflowPhotoResizeDimension, Math.round(targetWidth * 0.9))
+      targetHeight = Math.max(minWorkflowPhotoResizeDimension, Math.round(targetHeight * 0.9))
     }
 
     throw new Error(`Unable to downsize ${file.name} below ${maxWorkflowPhotoUploadLabel}.`)
   }, [])
 
   const prepareSelectedPhotos = useCallback(
-    async (files: File[], aspectRatio: WorkflowPhotoAspectRatio) => {
+    async (files: File[], aspectRatio?: WorkflowPhotoAspectRatio | null) => {
       const processed: File[] = []
       for (const file of files) {
         processed.push(await shrinkPhotoToUploadLimit(file, aspectRatio))
@@ -1189,7 +1244,7 @@ export default function ImproverPage() {
   )
 
   const replaceItemPhotosFromSelection = useCallback(
-    async (stepId: string, itemId: string, aspectRatio: WorkflowPhotoAspectRatio, selectedFiles: FileList | null) => {
+    async (stepId: string, itemId: string, aspectRatio: WorkflowPhotoAspectRatio | null, selectedFiles: FileList | null) => {
       const files = Array.from(selectedFiles || [])
       if (files.length === 0) {
         updateItemForm(stepId, itemId, { photos: [] })
@@ -1326,10 +1381,10 @@ export default function ImproverPage() {
             ideal: "environment",
           },
           width: {
-            ideal: 2560,
+            ideal: workflowPhotoCaptureIdealWidth,
           },
           height: {
-            ideal: 2560,
+            ideal: workflowPhotoCaptureIdealHeight,
           },
         },
         audio: false,
@@ -1411,9 +1466,11 @@ export default function ImproverPage() {
       return
     }
 
+    ctx.imageSmoothingEnabled = true
+    ctx.imageSmoothingQuality = "high"
     ctx.drawImage(videoElement, crop.x, crop.y, crop.width, crop.height, 0, 0, crop.width, crop.height)
     const blob = await new Promise<Blob | null>((resolve) => {
-      canvas.toBlob((value) => resolve(value), "image/jpeg", 0.92)
+      canvas.toBlob((value) => resolve(value), "image/jpeg", 0.98)
     })
     if (!blob) {
       setCameraStates((prev) => ({
@@ -1536,7 +1593,11 @@ export default function ImproverPage() {
 
       const dropdownValue = form.dropdown.trim()
       const writtenResponse = form.written.trim()
+      const selectedDropdownOption = dropdownValue
+        ? item.dropdown_options.find((option) => option.value === dropdownValue)
+        : undefined
       const dropdownRequiresWritten = dropdownValue ? Boolean(item.dropdown_requires_written_response?.[dropdownValue]) : false
+      const dropdownRequiresPhoto = Boolean(selectedDropdownOption?.requires_photo_attachment)
       const requiredWritten = item.requires_written_response || dropdownRequiresWritten
 
       const hasAnyInput = photoUploads.length > 0 || dropdownValue.length > 0 || writtenResponse.length > 0
@@ -1553,6 +1614,13 @@ export default function ImproverPage() {
         } else if (photoUploads.length !== requiredCount) {
           throw new Error(`Exactly ${requiredCount} photo${requiredCount === 1 ? "" : "s"} required for: ${item.title}`)
         }
+      } else if (dropdownRequiresPhoto && photoUploads.length === 0) {
+        const instructions = (selectedDropdownOption?.photo_instructions || "").trim()
+        throw new Error(
+          instructions
+            ? `Photo attachment required for "${item.title}": ${instructions}`
+            : `Photo attachment is required for: ${item.title}`,
+        )
       }
       if (item.requires_dropdown && dropdownValue.length === 0) {
         throw new Error(`Dropdown selection is required for: ${item.title}`)
@@ -2201,6 +2269,21 @@ export default function ImproverPage() {
               const form = forms[step.id]?.[item.id] || defaultItemFormState
               const cameraKey = cameraKeyForItem(step.id, item.id)
               const cameraState = cameraStates[cameraKey] || defaultCameraCaptureState
+              const selectedDropdownOption = form.dropdown
+                ? item.dropdown_options.find((option) => option.value === form.dropdown)
+                : undefined
+              const dropdownRequiresPhoto = Boolean(selectedDropdownOption?.requires_photo_attachment)
+              const effectiveRequiresPhoto = item.requires_photo || dropdownRequiresPhoto
+              const effectiveCameraCaptureOnly = item.requires_photo && item.camera_capture_only
+              const effectivePhotoAllowAnyCount = item.requires_photo ? item.photo_allow_any_count : false
+              const effectivePhotoRequiredCount = item.requires_photo ? Math.max(1, item.photo_required_count || 1) : 1
+              const effectivePhotoAspectRatio = item.requires_photo
+                ? normalizeWorkflowPhotoAspectRatio(item.photo_aspect_ratio || "square")
+                : null
+              const dropdownPhotoInstructions = (selectedDropdownOption?.photo_instructions || "").trim()
+              const effectiveWrittenRequired =
+                item.requires_written_response ||
+                (form.dropdown.length > 0 && Boolean(item.dropdown_requires_written_response?.[form.dropdown]))
 
               return (
                 <Card key={item.id} className={cn(stepNotPossibleSelected && "opacity-60")}>
@@ -2211,18 +2294,21 @@ export default function ImproverPage() {
                     </div>
                     <p className="text-xs text-muted-foreground">{item.description}</p>
 
-                    {item.requires_photo &&
-                      (item.camera_capture_only ? (
+                    {effectiveRequiresPhoto &&
+                      (effectiveCameraCaptureOnly ? (
                         <div className="space-y-2">
                           <div>
                             <Label className="text-xs">Camera Capture</Label>
                             <p className="text-xs text-muted-foreground">
                               Camera roll uploads are disabled for this work item.{" "}
-                              {item.photo_allow_any_count
+                              {effectivePhotoAllowAnyCount
                                 ? "Capture any number of photos."
-                                : `Capture exactly ${Math.max(1, item.photo_required_count || 1)} photo${Math.max(1, item.photo_required_count || 1) === 1 ? "" : "s"}.`}{" "}
+                                : `Capture exactly ${effectivePhotoRequiredCount} photo${effectivePhotoRequiredCount === 1 ? "" : "s"}.`}{" "}
                               Each photo must be under {maxWorkflowPhotoUploadLabel}.
                             </p>
+                            {dropdownPhotoInstructions && (
+                              <p className="text-xs text-muted-foreground whitespace-pre-wrap">{dropdownPhotoInstructions}</p>
+                            )}
                           </div>
 
                           {form.photos.length > 0 ? (
@@ -2315,7 +2401,7 @@ export default function ImproverPage() {
                                     step.id,
                                     item.id,
                                     item.title,
-                                    normalizeWorkflowPhotoAspectRatio(item.photo_aspect_ratio || "square"),
+                                    effectivePhotoAspectRatio || "square",
                                   )
                                 }
                                 disabled={Boolean(submitting) || stepNotPossibleSelected}
@@ -2327,22 +2413,27 @@ export default function ImproverPage() {
                         </div>
                       ) : (
                         <div className="space-y-1">
-                          <Label className="text-xs">Upload Photos</Label>
+                          <Label className="text-xs">{item.requires_photo ? "Upload Photos" : "Photo Attachment"}</Label>
                           <p className="text-xs text-muted-foreground">
-                            {item.photo_allow_any_count
+                            {item.requires_photo
+                              ? effectivePhotoAllowAnyCount
                               ? "Upload any number of photos."
-                              : `Upload exactly ${Math.max(1, item.photo_required_count || 1)} photo${Math.max(1, item.photo_required_count || 1) === 1 ? "" : "s"}.`}{" "}
+                              : `Upload exactly ${effectivePhotoRequiredCount} photo${effectivePhotoRequiredCount === 1 ? "" : "s"}.`
+                              : "Upload one photo attachment for the selected dropdown option."}{" "}
                             Each photo must be under {maxWorkflowPhotoUploadLabel}. Oversized images are resized automatically when possible.
                           </p>
+                          {dropdownPhotoInstructions && (
+                            <p className="text-xs text-muted-foreground whitespace-pre-wrap">{dropdownPhotoInstructions}</p>
+                          )}
                           <Input
                             type="file"
                             accept="image/*"
-                            multiple
+                            multiple={item.requires_photo ? effectivePhotoAllowAnyCount || effectivePhotoRequiredCount > 1 : false}
                             onChange={(e) =>
                               void replaceItemPhotosFromSelection(
                                 step.id,
                                 item.id,
-                                normalizeWorkflowPhotoAspectRatio(item.photo_aspect_ratio || "square"),
+                                effectivePhotoAspectRatio,
                                 e.target.files,
                               )
                             }
@@ -2391,7 +2482,16 @@ export default function ImproverPage() {
                         <Label className="text-xs">Dropdown Selection</Label>
                         <Select
                           value={form.dropdown}
-                          onValueChange={(value) => updateItemForm(step.id, item.id, { dropdown: value })}
+                          onValueChange={(value) => {
+                            const nextSelectedOption = item.dropdown_options.find((option) => option.value === value)
+                            updateItemForm(step.id, item.id, {
+                              dropdown: value,
+                              photos:
+                                item.requires_photo || Boolean(nextSelectedOption?.requires_photo_attachment)
+                                  ? form.photos
+                                  : [],
+                            })
+                          }}
                           disabled={stepNotPossibleSelected || Boolean(submitting)}
                         >
                           <SelectTrigger>
@@ -2408,8 +2508,7 @@ export default function ImproverPage() {
                       </div>
                     )}
 
-                    {(item.requires_written_response ||
-                      (form.dropdown.length > 0 && Boolean(item.dropdown_requires_written_response?.[form.dropdown]))) && (
+                    {effectiveWrittenRequired && (
                       <div className="space-y-1">
                         <Label className="text-xs">Written Response</Label>
                         <Textarea

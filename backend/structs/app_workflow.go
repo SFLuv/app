@@ -145,6 +145,7 @@ type WorkflowTemplateCreateRequest struct {
 	TemplateDescription  string                        `json:"template_description"`
 	SeriesId             *string                       `json:"series_id,omitempty"`
 	Recurrence           string                        `json:"recurrence"`
+	StartAt              *string                       `json:"start_at,omitempty"`
 	SupervisorUserId     *string                       `json:"supervisor_user_id,omitempty"`
 	SupervisorBounty     *uint64                       `json:"supervisor_bounty,omitempty"`
 	SupervisorDataFields []WorkflowSupervisorDataField `json:"supervisor_data_fields,omitempty"`
@@ -200,6 +201,8 @@ type WorkflowWorkItemCreateInput struct {
 type WorkflowDropdownOptionCreateInput struct {
 	Label                   string   `json:"label"`
 	RequiresWrittenResponse bool     `json:"requires_written_response"`
+	RequiresPhotoAttachment bool     `json:"requires_photo_attachment,omitempty"`
+	PhotoInstructions       string   `json:"photo_instructions,omitempty"`
 	NotifyEmails            []string `json:"notify_emails"`
 	NotifyEmailCount        int      `json:"notify_email_count,omitempty"`
 	SendPicturesWithEmail   bool     `json:"send_pictures_with_email,omitempty"`
@@ -209,6 +212,8 @@ type WorkflowDropdownOption struct {
 	Value                   string   `json:"value"`
 	Label                   string   `json:"label"`
 	RequiresWrittenResponse bool     `json:"requires_written_response"`
+	RequiresPhotoAttachment bool     `json:"requires_photo_attachment,omitempty"`
+	PhotoInstructions       string   `json:"photo_instructions,omitempty"`
 	NotifyEmails            []string `json:"notify_emails,omitempty"`
 	NotifyEmailCount        int      `json:"notify_email_count,omitempty"`
 	SendPicturesWithEmail   bool     `json:"send_pictures_with_email,omitempty"`
@@ -355,13 +360,16 @@ type WorkflowDeletionProposal struct {
 }
 
 type WorkflowEditProposalCreateRequest struct {
-	Title                string                         `json:"title"`
-	Description          string                         `json:"description"`
-	Supervisor           *WorkflowSupervisorCreateInput `json:"supervisor,omitempty"`
-	SupervisorDataFields []WorkflowSupervisorDataField  `json:"supervisor_data_fields,omitempty"`
-	Roles                []WorkflowRoleCreateInput      `json:"roles"`
-	Steps                []WorkflowStepCreateInput      `json:"steps"`
-	Reason               string                         `json:"reason,omitempty"`
+	Title                 string                         `json:"title"`
+	Description           string                         `json:"description"`
+	StartAt               *string                        `json:"start_at,omitempty"`
+	TimezoneOffsetMinutes *int                           `json:"timezone_offset_minutes,omitempty"`
+	RecurrenceEndAt       *string                        `json:"recurrence_end_at,omitempty"`
+	Supervisor            *WorkflowSupervisorCreateInput `json:"supervisor,omitempty"`
+	SupervisorDataFields  []WorkflowSupervisorDataField  `json:"supervisor_data_fields,omitempty"`
+	Roles                 []WorkflowRoleCreateInput      `json:"roles"`
+	Steps                 []WorkflowStepCreateInput      `json:"steps"`
+	Reason                string                         `json:"reason,omitempty"`
 }
 
 type WorkflowEditProposalVoteRequest struct {
@@ -748,6 +756,7 @@ type SupervisorWorkflowExportRequest struct {
 	DateField   string   `json:"date_field"`
 	DateFrom    string   `json:"date_from"`
 	DateTo      string   `json:"date_to"`
+	Timezone    string   `json:"timezone,omitempty"`
 }
 
 type UserCredential struct {
