@@ -106,6 +106,7 @@ const minWorkflowPhotoResizeDimension = 640
 const maxWorkflowPhotoInitialDimension = 4096
 const workflowPhotoCaptureIdealWidth = 4032
 const workflowPhotoCaptureIdealHeight = 3024
+const workflowPhotoCaptureFallbackMaxDimensions = [3072, 2560, 2048, 1600, 1280]
 const myBadgesPageSize = 5
 
 const normalizeCredentialVisibility = (value?: string | null): CredentialVisibility => {
@@ -146,6 +147,97 @@ const computeCropForAspectRatio = (width: number, height: number, aspectRatio: n
   const cropHeight = Math.max(1, Math.floor(width / aspectRatio))
   const y = Math.max(0, Math.floor((height - cropHeight) / 2))
   return { x: 0, y, width, height: cropHeight }
+}
+
+const buildWorkflowPhotoCaptureConstraintAttempts = (aspectRatio: WorkflowPhotoAspectRatio): MediaTrackConstraints[] => {
+  const normalizedAspect = normalizeWorkflowPhotoAspectRatio(aspectRatio)
+  const targetAspectRatio = workflowPhotoAspectRatios[normalizedAspect]
+  const withAspectRatio = (constraints: MediaTrackConstraints): MediaTrackConstraints => ({
+    ...constraints,
+    aspectRatio: {
+      ideal: targetAspectRatio,
+    },
+  })
+
+  return [
+    withAspectRatio({
+      facingMode: {
+        ideal: "environment",
+      },
+      width: {
+        ideal: workflowPhotoCaptureIdealWidth,
+      },
+      height: {
+        ideal: workflowPhotoCaptureIdealHeight,
+      },
+    }),
+    withAspectRatio({
+      facingMode: {
+        ideal: "environment",
+      },
+      width: {
+        ideal: 2560,
+      },
+      height: {
+        ideal: 1920,
+      },
+    }),
+    withAspectRatio({
+      facingMode: {
+        ideal: "environment",
+      },
+      width: {
+        ideal: 1920,
+      },
+      height: {
+        ideal: 1440,
+      },
+    }),
+    withAspectRatio({
+      facingMode: {
+        ideal: "environment",
+      },
+      width: {
+        ideal: 1280,
+      },
+      height: {
+        ideal: 960,
+      },
+    }),
+    withAspectRatio({
+      facingMode: {
+        ideal: "environment",
+      },
+    }),
+    {
+      facingMode: {
+        ideal: "environment",
+      },
+    },
+  ]
+}
+
+const buildWorkflowPhotoCaptureSizeCandidates = (width: number, height: number) => {
+  const candidates: Array<{ width: number; height: number }> = []
+  const seen = new Set<string>()
+  const pushCandidate = (candidateWidth: number, candidateHeight: number) => {
+    const normalizedWidth = Math.max(1, Math.round(candidateWidth))
+    const normalizedHeight = Math.max(1, Math.round(candidateHeight))
+    const key = `${normalizedWidth}x${normalizedHeight}`
+    if (seen.has(key)) return
+    seen.add(key)
+    candidates.push({ width: normalizedWidth, height: normalizedHeight })
+  }
+
+  pushCandidate(width, height)
+  const largestDimension = Math.max(width, height)
+  workflowPhotoCaptureFallbackMaxDimensions.forEach((maxDimension) => {
+    if (largestDimension <= maxDimension) return
+    const scale = maxDimension / largestDimension
+    pushCandidate(width * scale, height * scale)
+  })
+
+  return candidates
 }
 
 const loadImageFromFile = (file: File) =>
@@ -1358,7 +1450,7 @@ export default function ImproverPage() {
     [attachCameraVideoRef],
   )
 
-  const startCameraCapture = async (stepId: string, itemId: string) => {
+  const startCameraCapture = async (stepId: string, itemId: string, aspectRatio: WorkflowPhotoAspectRatio) => {
     const cameraKey = cameraKeyForItem(stepId, itemId)
 
     if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
@@ -1375,20 +1467,23 @@ export default function ImproverPage() {
     stopCameraStreamByKey(cameraKey)
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: {
-            ideal: "environment",
-          },
-          width: {
-            ideal: workflowPhotoCaptureIdealWidth,
-          },
-          height: {
-            ideal: workflowPhotoCaptureIdealHeight,
-          },
-        },
-        audio: false,
-      })
+      let stream: MediaStream | null = null
+      let lastError: unknown = null
+      for (const videoConstraints of buildWorkflowPhotoCaptureConstraintAttempts(aspectRatio)) {
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: videoConstraints,
+            audio: false,
+          })
+          break
+        } catch (error) {
+          lastError = error
+        }
+      }
+      if (!stream) {
+        throw lastError instanceof Error ? lastError : new Error("Unable to start camera.")
+      }
+
       cameraStreamRefs.current[cameraKey] = stream
       setCameraStates((prev) => ({
         ...prev,
@@ -1403,12 +1498,16 @@ export default function ImproverPage() {
         videoElement.srcObject = stream
         void videoElement.play().catch(() => undefined)
       }
-    } catch {
+    } catch (error) {
+      const message =
+        error instanceof Error && error.message.trim() !== ""
+          ? error.message
+          : "Camera access is required for this work item."
       setCameraStates((prev) => ({
         ...prev,
         [cameraKey]: {
           open: false,
-          error: "Camera access is required for this work item.",
+          error: message,
         },
       }))
     }
@@ -1451,60 +1550,57 @@ export default function ImproverPage() {
     const targetAspect = workflowPhotoAspectRatios[normalizedAspect]
     const crop = computeCropForAspectRatio(width, height, targetAspect)
 
-    const canvas = document.createElement("canvas")
-    canvas.width = crop.width
-    canvas.height = crop.height
-    const ctx = canvas.getContext("2d")
-    if (!ctx) {
-      setCameraStates((prev) => ({
-        ...prev,
-        [cameraKey]: {
-          open: true,
-          error: "Unable to capture photo from the camera stream.",
-        },
-      }))
-      return
-    }
-
-    ctx.imageSmoothingEnabled = true
-    ctx.imageSmoothingQuality = "high"
-    ctx.drawImage(videoElement, crop.x, crop.y, crop.width, crop.height, 0, 0, crop.width, crop.height)
-    const blob = await new Promise<Blob | null>((resolve) => {
-      canvas.toBlob((value) => resolve(value), "image/jpeg", 0.98)
-    })
-    if (!blob) {
-      setCameraStates((prev) => ({
-        ...prev,
-        [cameraKey]: {
-          open: true,
-          error: "Unable to capture photo from the camera stream.",
-        },
-      }))
-      return
-    }
-
     const slug = itemTitle
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, "_")
       .replace(/^_+|_+$/g, "")
     const filenamePrefix = slug || "workflow_photo"
-    const photo = new File([blob], `${filenamePrefix}_${Date.now()}.jpg`, {
-      type: blob.type || "image/jpeg",
-      lastModified: Date.now(),
-    })
-    let preparedPhoto: File
-    try {
-      preparedPhoto = await shrinkPhotoToUploadLimit(photo, normalizedAspect)
-    } catch (err) {
-      const message = err instanceof Error ? err.message : `Unable to process captured photo for ${maxWorkflowPhotoUploadLabel} limit.`
+    let preparedPhoto: File | null = null
+    let lastProcessingError = "Unable to capture photo from the camera stream."
+    for (const size of buildWorkflowPhotoCaptureSizeCandidates(crop.width, crop.height)) {
+      const canvas = document.createElement("canvas")
+      canvas.width = size.width
+      canvas.height = size.height
+      const ctx = canvas.getContext("2d")
+      if (!ctx) {
+        lastProcessingError = "Unable to capture photo from the camera stream."
+        break
+      }
+
+      ctx.imageSmoothingEnabled = true
+      ctx.imageSmoothingQuality = "high"
+      ctx.drawImage(videoElement, crop.x, crop.y, crop.width, crop.height, 0, 0, size.width, size.height)
+      const blob = await new Promise<Blob | null>((resolve) => {
+        canvas.toBlob((value) => resolve(value), "image/jpeg", 0.98)
+      })
+      if (!blob) {
+        lastProcessingError = "Unable to capture photo from the camera stream."
+        continue
+      }
+
+      const photo = new File([blob], `${filenamePrefix}_${Date.now()}.jpg`, {
+        type: blob.type || "image/jpeg",
+        lastModified: Date.now(),
+      })
+
+      try {
+        preparedPhoto = await shrinkPhotoToUploadLimit(photo, normalizedAspect)
+        break
+      } catch (err) {
+        lastProcessingError =
+          err instanceof Error ? err.message : `Unable to process captured photo for ${maxWorkflowPhotoUploadLabel} limit.`
+      }
+    }
+
+    if (!preparedPhoto) {
       setCameraStates((prev) => ({
         ...prev,
         [cameraKey]: {
           open: true,
-          error: message,
+          error: lastProcessingError,
         },
       }))
-      setError(message)
+      setError(lastProcessingError)
       return
     }
 
@@ -2300,11 +2396,9 @@ export default function ImproverPage() {
                           <div>
                             <Label className="text-xs">Camera Capture</Label>
                             <p className="text-xs text-muted-foreground">
-                              Camera roll uploads are disabled for this work item.{" "}
                               {effectivePhotoAllowAnyCount
                                 ? "Capture any number of photos."
-                                : `Capture exactly ${effectivePhotoRequiredCount} photo${effectivePhotoRequiredCount === 1 ? "" : "s"}.`}{" "}
-                              Each photo must be under {maxWorkflowPhotoUploadLabel}.
+                                : `Capture exactly ${effectivePhotoRequiredCount} photo${effectivePhotoRequiredCount === 1 ? "" : "s"}.`}
                             </p>
                             {dropdownPhotoInstructions && (
                               <p className="text-xs text-muted-foreground whitespace-pre-wrap">{dropdownPhotoInstructions}</p>
@@ -2353,7 +2447,7 @@ export default function ImproverPage() {
                               type="button"
                               size="sm"
                               variant="outline"
-                              onClick={() => startCameraCapture(step.id, item.id)}
+                              onClick={() => startCameraCapture(step.id, item.id, effectivePhotoAspectRatio || "square")}
                               disabled={Boolean(submitting) || stepNotPossibleSelected}
                             >
                               {cameraState.open ? "Restart Camera" : form.photos.length > 0 ? "Take Another Photo" : "Open Camera"}
