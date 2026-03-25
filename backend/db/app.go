@@ -640,6 +640,7 @@ func (s *AppDB) CreateTables() error {
 			title TEXT NOT NULL,
 			description TEXT NOT NULL DEFAULT '',
 			recurrence TEXT NOT NULL,
+			start_at BIGINT,
 			recurrence_end_at BIGINT,
 			supervisor_user_id TEXT REFERENCES users(id),
 			supervisor_bounty BIGINT NOT NULL DEFAULT 0,
@@ -669,6 +670,9 @@ func (s *AppDB) CreateTables() error {
 
 		ALTER TABLE workflow_series
 		ADD COLUMN IF NOT EXISTS current_state_id TEXT;
+
+		ALTER TABLE workflow_states
+		ADD COLUMN IF NOT EXISTS start_at BIGINT;
 	`)
 	if err != nil {
 		return fmt.Errorf("error altering workflow state columns: %s", err)
@@ -867,6 +871,7 @@ func (s *AppDB) CreateTables() error {
 				COALESCE(NULLIF(BTRIM(s.title), ''), CONCAT('Workflow ', UPPER(SUBSTRING(w.series_id FROM 1 FOR 8)))) AS title,
 				COALESCE(s.description, '') AS description,
 				COALESCE(NULLIF(BTRIM(s.recurrence), ''), 'one_time') AS recurrence,
+				w.start_at,
 				s.recurrence_end_at,
 				w.manager_improver_id AS supervisor_user_id,
 				GREATEST(0, COALESCE(w.manager_bounty, 0)) AS supervisor_bounty,
@@ -897,6 +902,7 @@ func (s *AppDB) CreateTables() error {
 			title,
 			description,
 			recurrence,
+			start_at,
 			recurrence_end_at,
 			supervisor_user_id,
 			supervisor_bounty,
@@ -913,6 +919,7 @@ func (s *AppDB) CreateTables() error {
 			p.title,
 			p.description,
 			p.recurrence,
+			p.start_at,
 			p.recurrence_end_at,
 			p.supervisor_user_id,
 			p.supervisor_bounty,
@@ -975,6 +982,17 @@ func (s *AppDB) CreateTables() error {
 			st.id = s.current_state_id
 		AND
 			st.series_id = s.id;
+
+		UPDATE workflow_states ws
+		SET
+			start_at = w.start_at,
+			updated_at = unix_now()
+		FROM
+			workflows w
+		WHERE
+			ws.start_at IS NULL
+		AND
+			ws.source_workflow_id = w.id;
 	`)
 	if err != nil {
 		return fmt.Errorf("error backfilling workflow state snapshots: %s", err)
@@ -1280,7 +1298,7 @@ func (s *AppDB) CreateTables() error {
 			);
 
 			CREATE INDEX IF NOT EXISTS workflow_steps_workflow_idx ON workflow_steps(workflow_id);
-			CREATE UNIQUE INDEX IF NOT EXISTS workflow_single_assignment_per_improver_idx
+			CREATE INDEX IF NOT EXISTS workflow_steps_workflow_assigned_improver_idx
 				ON workflow_steps(workflow_id, assigned_improver_id)
 				WHERE assigned_improver_id IS NOT NULL;
 		`)
@@ -1350,7 +1368,9 @@ func (s *AppDB) CreateTables() error {
 			ALTER COLUMN series_id SET NOT NULL;
 
 			CREATE INDEX IF NOT EXISTS workflow_steps_series_idx ON workflow_steps(series_id);
-			CREATE UNIQUE INDEX IF NOT EXISTS workflow_single_assignment_per_improver_idx
+			DROP INDEX IF EXISTS workflow_single_assignment_per_improver_idx;
+
+			CREATE INDEX IF NOT EXISTS workflow_steps_workflow_assigned_improver_idx
 				ON workflow_steps(workflow_id, assigned_improver_id)
 				WHERE assigned_improver_id IS NOT NULL;
 		`)
@@ -1689,6 +1709,7 @@ func (s *AppDB) CreateTables() error {
 			series_id TEXT NOT NULL REFERENCES workflow_series(id) ON DELETE CASCADE,
 			target_workflow_id TEXT REFERENCES workflows(id) ON DELETE SET NULL,
 			proposed_state_id TEXT NOT NULL REFERENCES workflow_states(id) ON DELETE CASCADE,
+			proposed_start_at BIGINT,
 			requested_by_user_id TEXT NOT NULL REFERENCES users(id),
 			reason TEXT NOT NULL DEFAULT '',
 			status TEXT NOT NULL DEFAULT 'pending',
@@ -1732,6 +1753,14 @@ func (s *AppDB) CreateTables() error {
 	}
 
 	_, err = s.db.Exec(context.Background(), `
+		ALTER TABLE workflow_edit_proposals
+		ADD COLUMN IF NOT EXISTS proposed_start_at BIGINT;
+	`)
+	if err != nil {
+		return fmt.Errorf("error altering workflow edit proposal schedule columns: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
 		WITH ranked AS (
 			SELECT
 				ws.id,
@@ -1741,6 +1770,7 @@ func (s *AppDB) CreateTables() error {
 						COALESCE(NULLIF(BTRIM(ws.title), ''), ''),
 						COALESCE(ws.description, ''),
 						COALESCE(NULLIF(BTRIM(ws.recurrence), ''), 'one_time'),
+						ws.start_at,
 						ws.recurrence_end_at,
 						ws.supervisor_user_id,
 						ws.supervisor_bounty,
@@ -1757,6 +1787,7 @@ func (s *AppDB) CreateTables() error {
 						COALESCE(NULLIF(BTRIM(ws.title), ''), ''),
 						COALESCE(ws.description, ''),
 						COALESCE(NULLIF(BTRIM(ws.recurrence), ''), 'one_time'),
+						ws.start_at,
 						ws.recurrence_end_at,
 						ws.supervisor_user_id,
 						ws.supervisor_bounty,

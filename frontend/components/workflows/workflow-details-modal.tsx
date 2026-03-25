@@ -312,6 +312,14 @@ export function WorkflowDetailsModal({
                                     {option.requires_written_response && (
                                       <p className="text-muted-foreground">Requires written response when selected</p>
                                     )}
+                                    {option.requires_photo_attachment && (
+                                      <p className="text-muted-foreground">Requires photo attachment when selected</p>
+                                    )}
+                                    {option.photo_instructions && (
+                                      <p className="text-muted-foreground whitespace-pre-wrap">
+                                        Photo instructions: {option.photo_instructions}
+                                      </p>
+                                    )}
                                     {option.notify_emails && option.notify_emails.length > 0 && (
                                       <p className="text-muted-foreground break-all">
                                         Notify: {option.notify_emails.join(", ")}

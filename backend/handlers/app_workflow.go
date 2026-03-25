@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	"image/jpeg"
@@ -13,6 +14,7 @@ import (
 	"math/big"
 	"mime"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -28,6 +30,8 @@ import (
 	_ "image/gif"
 	_ "image/png"
 )
+
+const maxWorkflowStepCompletionRequestBytes int64 = 16 * 1024 * 1024
 
 func userCanViewWorkflowNotifyEmails(workflow *structs.Workflow, userID string) bool {
 	if workflow == nil || userID == "" {
@@ -1578,9 +1582,41 @@ func sanitizeSupervisorCSVHeaderToken(value string) string {
 	return value
 }
 
+func resolveSupervisorExportTimezone(requested string) (*time.Location, string) {
+	requested = strings.TrimSpace(requested)
+	if requested == "" {
+		return time.UTC, "UTC"
+	}
+	location, err := time.LoadLocation(requested)
+	if err != nil {
+		return time.UTC, "UTC"
+	}
+	return location, requested
+}
+
+func formatSupervisorExportDateTime(unixSeconds int64, location *time.Location) string {
+	if unixSeconds <= 0 {
+		return ""
+	}
+	if location == nil {
+		location = time.UTC
+	}
+	return time.Unix(unixSeconds, 0).In(location).Format("2006-01-02 15:04:05")
+}
+
+func formatSupervisorExportTimestampToken(unixSeconds int64, location *time.Location) string {
+	formatted := formatSupervisorExportDateTime(unixSeconds, location)
+	if formatted == "" {
+		return "UNKNOWN_TIME"
+	}
+	return sanitizeSupervisorExportToken(formatted)
+}
+
 func buildSupervisorWorkflowPhotoArchiveName(
 	photoExport *structs.WorkflowSubmissionPhotoExport,
 	defaultWorkflowStartAt int64,
+	location *time.Location,
+	exportTimezone string,
 	fileNameCounts map[string]int,
 ) string {
 	workflowToken := sanitizeSupervisorExportToken(photoExport.WorkflowTitle)
@@ -1589,7 +1625,9 @@ func buildSupervisorWorkflowPhotoArchiveName(
 	if photoExport.WorkflowStartAt > 0 {
 		timestampUnix = photoExport.WorkflowStartAt
 	}
-	baseName := fmt.Sprintf("%s_%d_%d_%s", workflowToken, timestampUnix, photoExport.StepOrder, itemToken)
+	timestampToken := formatSupervisorExportTimestampToken(timestampUnix, location)
+	timezoneToken := sanitizeSupervisorExportToken(exportTimezone)
+	baseName := fmt.Sprintf("%s_%s_%s_%d_%s", workflowToken, timestampToken, timezoneToken, photoExport.StepOrder, itemToken)
 	archiveName := baseName + ".jpeg"
 	if seenCount := fileNameCounts[archiveName]; seenCount > 0 {
 		archiveName = fmt.Sprintf("%s_%d.jpeg", baseName, seenCount+1)
@@ -1725,6 +1763,8 @@ func buildSupervisorWorkflowCSV(
 	workflows []*structs.Workflow,
 	improverEmails map[string]string,
 	photoFileNamesByID map[string]string,
+	location *time.Location,
+	exportTimezone string,
 ) ([]byte, error) {
 	if len(workflows) == 0 {
 		return nil, fmt.Errorf("no workflows provided")
@@ -1823,8 +1863,9 @@ func buildSupervisorWorkflowCSV(
 		"id",
 		"series_id",
 		"title",
-		"start_timestamp",
-		"completed_timestamp",
+		"start_local_datetime",
+		"completed_local_datetime",
+		"export_timezone",
 		"step_number",
 		"status",
 		"improver_email",
@@ -1871,18 +1912,19 @@ func buildSupervisorWorkflowCSV(
 
 			completedAt := ""
 			if step.CompletedAt != nil {
-				completedAt = strconv.FormatInt(*step.CompletedAt, 10)
+				completedAt = formatSupervisorExportDateTime(*step.CompletedAt, location)
 			}
 			if completedAt == "" && step.Submission != nil {
-				completedAt = strconv.FormatInt(step.Submission.SubmittedAt, 10)
+				completedAt = formatSupervisorExportDateTime(step.Submission.SubmittedAt, location)
 			}
 
 			row := []string{
 				workflow.Id,
 				workflow.SeriesId,
 				workflow.Title,
-				strconv.FormatInt(workflow.StartAt, 10),
+				formatSupervisorExportDateTime(workflow.StartAt, location),
 				completedAt,
+				exportTimezone,
 				strconv.Itoa(step.StepOrder),
 				statusValue,
 				improverEmail,
@@ -1996,6 +2038,8 @@ func (a *AppService) ExportSupervisorWorkflowData(w http.ResponseWriter, r *http
 		return
 	}
 
+	exportLocation, exportTimezone := resolveSupervisorExportTimezone(req.Timezone)
+
 	workflows := make([]*structs.Workflow, 0, len(workflowIDs))
 	improverIDs := map[string]struct{}{}
 	for _, workflowID := range workflowIDs {
@@ -2053,7 +2097,7 @@ func (a *AppService) ExportSupervisorWorkflowData(w http.ResponseWriter, r *http
 			continue
 		}
 		for _, photoExport := range photos {
-			archiveName := buildSupervisorWorkflowPhotoArchiveName(photoExport, workflow.StartAt, fileNameCounts)
+			archiveName := buildSupervisorWorkflowPhotoArchiveName(photoExport, workflow.StartAt, exportLocation, exportTimezone, fileNameCounts)
 			photoBytes := photoExport.Photo.PhotoData
 			if !supervisorWorkflowPhotoShouldUseOriginalBytes(photoExport.Photo.ContentType, photoExport.Photo.FileName) {
 				img, _, decodeErr := image.Decode(bytes.NewReader(photoExport.Photo.PhotoData))
@@ -2063,7 +2107,7 @@ func (a *AppService) ExportSupervisorWorkflowData(w http.ResponseWriter, r *http
 				}
 
 				var jpegBuffer bytes.Buffer
-				if err := jpeg.Encode(&jpegBuffer, img, &jpeg.Options{Quality: 92}); err != nil {
+				if err := jpeg.Encode(&jpegBuffer, img, &jpeg.Options{Quality: 97}); err != nil {
 					a.logger.Logf("error encoding supervisor export photo %s for workflow %s: %s", photoExport.Photo.Id, workflow.Id, err)
 					continue
 				}
@@ -2081,7 +2125,7 @@ func (a *AppService) ExportSupervisorWorkflowData(w http.ResponseWriter, r *http
 		}
 	}
 
-	csvData, err := buildSupervisorWorkflowCSV(workflows, improverEmails, photoFileNamesByID)
+	csvData, err := buildSupervisorWorkflowCSV(workflows, improverEmails, photoFileNamesByID, exportLocation, exportTimezone)
 	if err != nil {
 		a.logger.Logf("error building supervisor workflow csv for %s: %s", *userDid, err)
 		w.WriteHeader(http.StatusInternalServerError)
@@ -2282,6 +2326,57 @@ func valueOrEmpty(value *string) string {
 	return *value
 }
 
+func writeWorkflowPhotoResponse(w http.ResponseWriter, photo *structs.WorkflowSubmissionPhotoBlob, inline bool) {
+	if photo == nil {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+
+	contentType := strings.TrimSpace(photo.ContentType)
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+	filename := strings.TrimSpace(filepath.Base(photo.FileName))
+	if filename == "" {
+		filename = photo.Id + workflowPhotoFileExtension(contentType, "")
+	}
+
+	dispositionType := "attachment"
+	cacheControl := "no-store"
+	if inline {
+		dispositionType = "inline"
+		cacheControl = "public, max-age=31536000, immutable"
+		w.Header().Set("X-Robots-Tag", "noindex, nofollow, noimageindex")
+	}
+
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Disposition", fmt.Sprintf("%s; filename=\"%s\"", dispositionType, filename))
+	w.Header().Set("Cache-Control", cacheControl)
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(photo.PhotoData)
+}
+
+func (a *AppService) GetPublicWorkflowPhoto(w http.ResponseWriter, r *http.Request) {
+	photoID := strings.TrimSpace(r.PathValue("photo_id"))
+	if photoID == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	photo, err := a.db.GetWorkflowSubmissionPhotoBlobByID(r.Context(), photoID)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		a.logger.Logf("error loading public workflow photo %s: %s", photoID, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	writeWorkflowPhotoResponse(w, photo, true)
+}
+
 func (a *AppService) GetWorkflowPhoto(w http.ResponseWriter, r *http.Request) {
 	userDid := utils.GetDid(r)
 	if userDid == nil {
@@ -2325,20 +2420,7 @@ func (a *AppService) GetWorkflowPhoto(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	contentType := strings.TrimSpace(photo.ContentType)
-	if contentType == "" {
-		contentType = "application/octet-stream"
-	}
-	filename := strings.TrimSpace(filepath.Base(photo.FileName))
-	if filename == "" {
-		filename = photo.Id + workflowPhotoFileExtension(contentType, "")
-	}
-
-	w.Header().Set("Content-Type", contentType)
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename))
-	w.Header().Set("Cache-Control", "no-store")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(photo.PhotoData)
+	writeWorkflowPhotoResponse(w, photo, false)
 }
 
 func (a *AppService) GetImproverAbsencePeriods(w http.ResponseWriter, r *http.Request) {
@@ -2608,7 +2690,7 @@ func (a *AppService) ClaimWorkflowStep(w http.ResponseWriter, r *http.Request) {
 			w.Write([]byte(errMsg))
 			return
 		}
-		if strings.Contains(errMsg, "already assigned") || strings.Contains(errMsg, "already claimed") {
+		if strings.Contains(errMsg, "already assigned") || strings.Contains(errMsg, "already claimed") || strings.Contains(errMsg, "role is already claimed") {
 			w.WriteHeader(http.StatusConflict)
 			w.Write([]byte(errMsg))
 			return
@@ -2721,8 +2803,15 @@ func (a *AppService) CompleteWorkflowStep(w http.ResponseWriter, r *http.Request
 	}
 
 	defer r.Body.Close()
+	r.Body = http.MaxBytesReader(w, r.Body, maxWorkflowStepCompletionRequestBytes)
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			w.WriteHeader(http.StatusRequestEntityTooLarge)
+			w.Write([]byte("workflow step submission is too large; reduce the number or size of uploaded photos"))
+			return
+		}
 		a.logger.Logf("error reading workflow step completion body: %s", err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
@@ -3269,7 +3358,8 @@ func (a *AppService) ProposeWorkflowEdit(w http.ResponseWriter, r *http.Request)
 			strings.Contains(errMsg, "unknown") ||
 			strings.Contains(errMsg, "already exists") ||
 			strings.Contains(errMsg, "pending workflow edit vote") ||
-			strings.Contains(errMsg, "can only be proposed") {
+			strings.Contains(errMsg, "can only be proposed") ||
+			strings.Contains(errMsg, "can no longer be edited") {
 			w.WriteHeader(http.StatusBadRequest)
 			w.Write([]byte(errMsg))
 			return
@@ -3303,7 +3393,7 @@ func decodeWorkflowEditProposalCreateRequest(body []byte, req *structs.WorkflowE
 		return fmt.Errorf("invalid workflow edit proposal payload")
 	}
 
-	forbiddenFields := []string{"start_at", "recurrence", "recurrence_end_at"}
+	forbiddenFields := []string{"recurrence"}
 	for _, field := range forbiddenFields {
 		if _, exists := raw[field]; exists {
 			return fmt.Errorf("%s cannot be edited on an existing workflow", field)
@@ -4918,6 +5008,53 @@ func (a *AppService) buildWorkflowDropdownAlertAttachments(
 	return attachments
 }
 
+func workflowPhotoPublicPageURL(photoID string) string {
+	baseURL := strings.TrimSpace(os.Getenv("APP_BASE_URL"))
+	if baseURL == "" {
+		baseURL = "https://app.sfluv.org"
+	}
+	baseURL = strings.TrimRight(baseURL, "/")
+	return baseURL + "/photos/" + url.PathEscape(photoID)
+}
+
+func buildWorkflowDropdownAlertPhotoLinksHTML(notification structs.WorkflowDropdownNotification) string {
+	if !notification.SendPicturesWithEmail || len(notification.PhotoIDs) == 0 {
+		return ""
+	}
+
+	links := make([]string, 0, len(notification.PhotoIDs))
+	seenPhotoIDs := map[string]struct{}{}
+	linkLabel := fmt.Sprintf("View %s", strings.TrimSpace(notification.ItemTitle))
+	if strings.TrimSpace(notification.ItemTitle) == "" {
+		linkLabel = "View Photo"
+	}
+	for _, rawPhotoID := range notification.PhotoIDs {
+		photoID := strings.TrimSpace(rawPhotoID)
+		if photoID == "" {
+			continue
+		}
+		if _, exists := seenPhotoIDs[photoID]; exists {
+			continue
+		}
+		seenPhotoIDs[photoID] = struct{}{}
+
+		linkURL := workflowPhotoPublicPageURL(photoID)
+		links = append(
+			links,
+			fmt.Sprintf(
+				`<a href="%s" style="color:#d55c5c; text-decoration:none; font-weight:600;">%s</a>`,
+				utils.EscapeEmailHTML(linkURL),
+				utils.EscapeEmailHTML(linkLabel),
+			),
+		)
+	}
+	if len(links) == 0 {
+		return ""
+	}
+
+	return strings.Join(links, `<span style="color:#d1d5db; padding:0 6px;">•</span>`)
+}
+
 func (a *AppService) sendWorkflowDropdownAlertEmail(ctx context.Context, notification structs.WorkflowDropdownNotification) {
 	if len(notification.Emails) == 0 {
 		return
@@ -4928,17 +5065,17 @@ func (a *AppService) sendWorkflowDropdownAlertEmail(ctx context.Context, notific
 		return
 	}
 
-	attachments := a.buildWorkflowDropdownAlertAttachments(ctx, notification)
-	attachmentNoteRow := ""
-	if len(attachments) > 0 {
-		attachmentNoteRow = `
+	photoLinksHTML := buildWorkflowDropdownAlertPhotoLinksHTML(notification)
+	photoLinksRow := ""
+	if photoLinksHTML != "" {
+		photoLinksRow = fmt.Sprintf(`
   <tr>
     <td style="padding:12px 0; font-size:13px; color:#6b7280;">Photos</td>
-    <td style="padding:12px 0; font-size:13px; color:#111827;">Attached to this email</td>
-  </tr>`
+    <td style="padding:12px 0; font-size:13px; color:#111827;">%s</td>
+  </tr>`, photoLinksHTML)
 	}
 
-	title := "Workflow Dropdown Alert"
+	title := "Workflow Alert"
 	htmlContent := utils.BuildStyledEmail(
 		title,
 		"A watched dropdown response was submitted.",
@@ -4960,12 +5097,8 @@ func (a *AppService) sendWorkflowDropdownAlertEmail(ctx context.Context, notific
     <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280;">Response</td>
     <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827;">%s</td>
   </tr>
-  <tr>
-    <td style="padding:12px 0; font-size:13px; color:#6b7280;">Workflow ID</td>
-    <td style="padding:12px 0; font-size:13px; color:#111827; word-break:break-all;">%s</td>
-  </tr>
 %s
-</table>`, utils.EscapeEmailHTML(notification.WorkflowTitle), utils.EscapeEmailHTML(notification.StepTitle), utils.EscapeEmailHTML(notification.ItemTitle), utils.EscapeEmailHTML(notification.DropdownValue), utils.EscapeEmailHTML(notification.WorkflowId), attachmentNoteRow),
+</table>`, utils.EscapeEmailHTML(notification.WorkflowTitle), utils.EscapeEmailHTML(notification.StepTitle), utils.EscapeEmailHTML(notification.ItemTitle), utils.EscapeEmailHTML(notification.DropdownValue), photoLinksRow),
 	)
 
 	for _, toEmail := range notification.Emails {
@@ -4973,12 +5106,7 @@ func (a *AppService) sendWorkflowDropdownAlertEmail(ctx context.Context, notific
 		if toEmail == "" {
 			continue
 		}
-		var err error
-		if len(attachments) > 0 {
-			err = emailSender.SendEmailWithAttachments(toEmail, "Workflow Watcher", title, htmlContent, utils.NotificationFromEmail(), "SFLuv Workflows", attachments)
-		} else {
-			err = emailSender.SendEmail(toEmail, "Workflow Watcher", title, htmlContent, utils.NotificationFromEmail(), "SFLuv Workflows")
-		}
+		err := emailSender.SendEmail(toEmail, "Workflow Watcher", title, htmlContent, utils.NotificationFromEmail(), "SFLuv Workflows")
 		if err != nil {
 			a.logger.Logf("error sending dropdown-alert email for workflow %s step %s item %s to %s: %s", notification.WorkflowId, notification.StepId, notification.ItemId, toEmail, err.Error())
 		}

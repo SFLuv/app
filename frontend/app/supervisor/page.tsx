@@ -271,11 +271,13 @@ export default function SupervisorPage() {
     setError("")
     setNotice("")
     try {
+      const exportTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"
       const payload: SupervisorWorkflowExportRequest = {
         workflow_ids: Array.from(selectedIDs),
         date_field: selectedIDs.size > 0 ? "" : dateField,
         date_from: selectedIDs.size > 0 ? "" : toLocalDateBoundaryISO(dateFrom, "start"),
         date_to: selectedIDs.size > 0 ? "" : toLocalDateBoundaryISO(dateTo, "end"),
+        timezone: exportTimezone,
       }
       const res = await authFetch("/supervisors/workflows/export", {
         method: "POST",

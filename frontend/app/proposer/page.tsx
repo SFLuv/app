@@ -1,6 +1,6 @@
 "use client"
 
-import { DragEvent, MouseEvent, PointerEvent, useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { DragEvent, MouseEvent, PointerEvent, WheelEvent, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useApp } from "@/context/AppProvider"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -219,6 +219,52 @@ const toDatetimeLocalValueFromUnix = (value?: number | null) => {
   if (Number.isNaN(date.getTime())) return ""
   const offsetMs = date.getTimezoneOffset() * 60 * 1000
   return new Date(date.getTime() - offsetMs).toISOString().slice(0, 16)
+}
+
+const getDatePartFromDatetimeLocal = (value: string) => {
+  const trimmed = value.trim()
+  return trimmed.length >= 10 ? trimmed.slice(0, 10) : ""
+}
+
+const getTimePartFromDatetimeLocal = (value: string) => {
+  const trimmed = value.trim()
+  return trimmed.length >= 16 ? trimmed.slice(11, 16) : ""
+}
+
+const replaceTimePartInDatetimeLocal = (value: string, nextTime: string) => {
+  const datePart = getDatePartFromDatetimeLocal(value)
+  if (!datePart) return value
+  const trimmedTime = nextTime.trim()
+  if (!trimmedTime) return `${datePart}T00:00`
+  return `${datePart}T${trimmedTime}`
+}
+
+const toTimeValueFromTemplateStartAt = (value?: number | null) => {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return ""
+  const totalSeconds = Math.max(0, Math.floor(value) - 1)
+  const hours = Math.floor(totalSeconds / 3600) % 24
+  const minutes = Math.floor((totalSeconds % 3600) / 60)
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`
+}
+
+const getTodayDatePart = () => {
+  const now = new Date()
+  const offsetMs = now.getTimezoneOffset() * 60 * 1000
+  return new Date(now.getTime() - offsetMs).toISOString().slice(0, 10)
+}
+
+const applyTemplateStartTimeToDatetimeLocal = (currentValue: string, templateStartAt?: number | null) => {
+  const templateTime = toTimeValueFromTemplateStartAt(templateStartAt)
+  if (!templateTime) {
+    return currentValue
+  }
+
+  const datePart = getDatePartFromDatetimeLocal(currentValue) || getTodayDatePart()
+  return `${datePart}T${templateTime}`
+}
+
+const preventNumberInputScrollChange = (event: WheelEvent<HTMLInputElement>) => {
+  event.currentTarget.blur()
 }
 
 const formatRecurrenceLabel = (value: WorkflowRecurrence) => {
@@ -913,6 +959,8 @@ export default function ProposerPage() {
                 {
                   label: "",
                   requires_written_response: false,
+                  requires_photo_attachment: false,
+                  photo_instructions: "",
                   notify_emails: [],
                   notify_email_input: "",
                   send_pictures_with_email: false,
@@ -1059,6 +1107,7 @@ export default function ProposerPage() {
     setStartAt("")
     setHasRecurrenceEndDate(false)
     setRecurrenceEndAt("")
+    setSelectedTemplateId("")
     setEditProposalWorkflowId("")
     setEditProposalReason("")
     setRoles([createDraftRole()])
@@ -1116,6 +1165,8 @@ export default function ProposerPage() {
           dropdown_options: item.dropdown_options.map((option, optionIndex) => ({
             label: option.label.trim(),
             requires_written_response: option.requires_written_response,
+            requires_photo_attachment: Boolean(option.requires_photo_attachment),
+            photo_instructions: Boolean(option.requires_photo_attachment) ? (option.photo_instructions || "").trim() : "",
             notify_emails: normalizeOptionNotificationEmails(stepIndex + 1, itemIndex + 1, optionIndex + 1, option),
             send_pictures_with_email: Boolean(option.send_pictures_with_email),
           })),
@@ -1199,6 +1250,10 @@ export default function ProposerPage() {
       recurrence,
       roles: normalizedRoles,
       steps: normalizedSteps,
+    }
+    const startTime = getTimePartFromDatetimeLocal(startAt)
+    if (startTime) {
+      payload.start_at = startTime
     }
     if (normalizedSupervisor) {
       payload.supervisor_user_id = normalizedSupervisor.user_id
@@ -1302,6 +1357,8 @@ export default function ProposerPage() {
         dropdown_options: item.dropdown_options.map((option) => ({
           label: option.label,
           requires_written_response: option.requires_written_response,
+          requires_photo_attachment: Boolean(option.requires_photo_attachment),
+          photo_instructions: option.photo_instructions || "",
           notify_emails: option.notify_emails || [],
           notify_email_input: "",
           send_pictures_with_email: Boolean(option.send_pictures_with_email),
@@ -1330,13 +1387,16 @@ export default function ProposerPage() {
           : "",
     })
     setWorkflowSupervisorDataFields(templateSupervisorDataFields)
+    const nextStartAtValue = applyTemplateStartTimeToDatetimeLocal(startAt, template.start_at)
     if (!preserveEditMode) {
       setRecurrence(template.recurrence)
-      setStartAt("")
+      setStartAt(nextStartAtValue)
       setHasRecurrenceEndDate(false)
       setRecurrenceEndAt("")
       setEditProposalWorkflowId("")
       setEditProposalReason("")
+    } else if (nextStartAtValue !== startAt) {
+      setStartAt(nextStartAtValue)
     }
     setRoles(mappedRoles.length ? mappedRoles : [createDraftRole()])
     setSteps(mappedSteps.length ? mappedSteps : [createDraftStep()])
@@ -1354,6 +1414,11 @@ export default function ProposerPage() {
 
   const beginWorkflowEditProposal = (workflow: Workflow) => {
     if (!workflow) return
+    if (!canProposeWorkflowEditFromWorkflow(workflow)) {
+      setError("This workflow has ended and can no longer be edited.")
+      setSuccessMessage("")
+      return
+    }
 
     const roleIdMap = new Map<string, string>()
     const mappedRoles: DraftRole[] = workflow.roles.map((role, index) => {
@@ -1397,6 +1462,8 @@ export default function ProposerPage() {
             dropdown_options: (item.dropdown_options || []).map((option) => ({
               label: option.label,
               requires_written_response: option.requires_written_response,
+              requires_photo_attachment: Boolean(option.requires_photo_attachment),
+              photo_instructions: option.photo_instructions || "",
               notify_emails: option.notify_emails || [],
               notify_email_input: "",
               send_pictures_with_email: Boolean(option.send_pictures_with_email),
@@ -1493,6 +1560,20 @@ export default function ProposerPage() {
         return
       }
     }
+    if (recurrenceEndAtISO) {
+      try {
+        const startAtISOForValidation = toUTCISOStringFromDatetimeLocal(startAt)
+        const startUnix = Math.floor(new Date(startAtISOForValidation).getTime() / 1000)
+        const endUnix = Math.floor(new Date(recurrenceEndAtISO).getTime() / 1000)
+        if (endUnix < startUnix) {
+          setError("Workflow recurrence end date/time must be on or after start date/time.")
+          return
+        }
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Workflow start date/time is invalid.")
+        return
+      }
+    }
 
     setSubmitting(true)
     try {
@@ -1500,8 +1581,13 @@ export default function ProposerPage() {
         const payload: WorkflowEditProposalCreateRequest = {
           title: title.trim(),
           description: description.trim(),
+          start_at: toUTCISOStringFromDatetimeLocal(startAt),
+          timezone_offset_minutes: new Date().getTimezoneOffset(),
           roles: normalizedRoles,
           steps: normalizedSteps,
+        }
+        if (recurrence !== "one_time") {
+          payload.recurrence_end_at = recurrenceEndAtISO || ""
         }
         if (normalizedSupervisor) {
           payload.supervisor = normalizedSupervisor
@@ -1541,15 +1627,6 @@ export default function ProposerPage() {
         setError(err instanceof Error ? err.message : "Workflow start date/time is invalid.")
         return
       }
-      if (recurrenceEndAtISO) {
-        const startUnix = Math.floor(new Date(startAtISO).getTime() / 1000)
-        const endUnix = Math.floor(new Date(recurrenceEndAtISO).getTime() / 1000)
-        if (endUnix < startUnix) {
-          setError("Workflow recurrence end date/time must be on or after start date/time.")
-          return
-        }
-      }
-
       const payload: WorkflowCreateRequest = {
         title: title.trim(),
         description: description.trim(),
@@ -1689,14 +1766,28 @@ export default function ProposerPage() {
     workflow.status === "completed" ||
     workflow.status === "paid_out"
 
+  const hasWorkflowEndedForEdit = (workflow: Workflow) => {
+    const nowUnix = Math.floor(Date.now() / 1000)
+    if (workflow.recurrence !== "one_time") {
+      return typeof workflow.recurrence_end_at === "number" && workflow.recurrence_end_at > 0 && workflow.recurrence_end_at < nowUnix
+    }
+    return (
+      workflow.status === "completed" ||
+      workflow.status === "paid_out" ||
+      workflow.status === "failed" ||
+      workflow.status === "skipped"
+    )
+  }
+
   const canProposeWorkflowEditFromWorkflow = (workflow: Workflow) =>
-    workflow.status === "approved" ||
-    workflow.status === "blocked" ||
-    workflow.status === "in_progress" ||
-    workflow.status === "completed" ||
-    workflow.status === "paid_out" ||
-    workflow.status === "failed" ||
-    workflow.status === "skipped"
+    !hasWorkflowEndedForEdit(workflow) &&
+    (workflow.status === "approved" ||
+      workflow.status === "blocked" ||
+      workflow.status === "in_progress" ||
+      workflow.status === "completed" ||
+      workflow.status === "paid_out" ||
+      workflow.status === "failed" ||
+      workflow.status === "skipped")
 
   const openWorkflowDetails = async (workflowId: string, fallback?: Workflow) => {
     setDetailOpen(true)
@@ -1782,6 +1873,8 @@ export default function ProposerPage() {
               dropdown_options: item.dropdown_options.map((option) => ({
                 label: option.label,
                 requires_written_response: Boolean(option.requires_written_response),
+                requires_photo_attachment: Boolean(option.requires_photo_attachment),
+                photo_instructions: option.photo_instructions || "",
                 notify_emails: option.notify_emails || [],
                 send_pictures_with_email: Boolean(option.send_pictures_with_email),
               })),
@@ -1796,16 +1889,25 @@ export default function ProposerPage() {
       roles,
       steps,
     }
-
-    if (workflow.supervisor_required && workflow.supervisor_user_id) {
-      payload.supervisor_user_id = workflow.supervisor_user_id
-      payload.supervisor_bounty = workflow.supervisor_bounty
+    const workflowStartTime = getTimePartFromDatetimeLocal(toDatetimeLocalValueFromUnix(workflow.start_at))
+    if (workflowStartTime) {
+      payload.start_at = workflowStartTime
     }
-    if ((workflow.supervisor_data_fields || []).length > 0) {
-      payload.supervisor_data_fields = (workflow.supervisor_data_fields || []).map((field) => ({
+
+    const supervisorUserId = (workflow.supervisor_user_id || "").trim()
+    const supervisorDataFields = (workflow.supervisor_data_fields || [])
+      .map((field) => ({
         key: (field.key || "").trim(),
         value: (field.value || "").trim(),
       }))
+      .filter((field) => field.key || field.value)
+
+    if (supervisorUserId) {
+      payload.supervisor_user_id = supervisorUserId
+      payload.supervisor_bounty = workflow.supervisor_bounty
+    }
+    if (supervisorDataFields.length > 0) {
+      payload.supervisor_data_fields = supervisorDataFields
     }
 
     return payload
@@ -2123,14 +2225,36 @@ export default function ProposerPage() {
                     <Input value={formatRecurrenceLabel(recurrence)} readOnly disabled />
                   </div>
                   <div className="space-y-2">
-                    <Label>Start Date & Time</Label>
-                    <Input type="datetime-local" value={startAt} readOnly disabled />
+                    <Label>Start Date</Label>
+                    <Input type="date" value={getDatePartFromDatetimeLocal(startAt)} readOnly disabled />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Start Time</Label>
+                    <Input
+                      type="time"
+                      value={getTimePartFromDatetimeLocal(startAt)}
+                      onChange={(e) => setStartAt((prev) => replaceTimePartInDatetimeLocal(prev, e.target.value))}
+                    />
+                    <p className="text-xs text-muted-foreground">The date stays locked. Only the start time can be edited.</p>
                   </div>
                   {recurrence !== "one_time" && (
                     <div className="space-y-2 md:col-span-2">
-                      <Label>Recurrence End Date</Label>
+                      <Label>Recurrence End Date (Optional)</Label>
+                      <label className="flex items-center gap-2 text-sm">
+                        <Checkbox
+                          checked={hasRecurrenceEndDate}
+                          onCheckedChange={(checked) => {
+                            const enabled = Boolean(checked)
+                            setHasRecurrenceEndDate(enabled)
+                            if (!enabled) {
+                              setRecurrenceEndAt("")
+                            }
+                          }}
+                        />
+                        Specify an end date
+                      </label>
                       {hasRecurrenceEndDate ? (
-                        <Input type="datetime-local" value={recurrenceEndAt} readOnly disabled />
+                        <Input type="datetime-local" value={recurrenceEndAt} onChange={(e) => setRecurrenceEndAt(e.target.value)} />
                       ) : (
                         <p className="text-xs text-muted-foreground">No end date specified. Recurring generation continues indefinitely.</p>
                       )}
@@ -2276,6 +2400,7 @@ export default function ProposerPage() {
 	                          type="number"
 	                          min="0"
 	                          value={workflowSupervisor.bounty}
+                              onWheel={preventNumberInputScrollChange}
 	                          onChange={(e) =>
 	                            setWorkflowSupervisor((prev) => ({
 	                              ...prev,
@@ -2631,9 +2756,14 @@ export default function ProposerPage() {
                             </div>
                           </div>
                           <div className="flex items-center gap-1">
-                            <Badge className="border border-[#f3b1a6] bg-[#fff1ec] text-[#b64545] hover:bg-[#fff1ec]">
-                              {formatStepBountyIndicator(step.bounty)}
-                            </Badge>
+                            <div className="inline-flex items-center gap-2 rounded-full border border-border/70 bg-muted/40 px-2.5 py-1 text-xs shadow-sm">
+                              <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+                                Bounty
+                              </span>
+                              <span className="font-semibold text-foreground">
+                                {formatStepBountyIndicator(step.bounty)}
+                              </span>
+                            </div>
                             {steps.length > 1 && (
                               <Button
                                 type="button"
@@ -2683,6 +2813,7 @@ export default function ProposerPage() {
                         type="number"
                         min="0"
                         value={step.bounty}
+                        onWheel={preventNumberInputScrollChange}
                         onChange={(e) => updateStep(step.id, { bounty: e.target.value })}
                       />
                     </div>
@@ -2952,6 +3083,7 @@ export default function ProposerPage() {
                                         type="number"
                                         min={1}
                                         value={item.photo_required_count}
+                                        onWheel={preventNumberInputScrollChange}
                                         onChange={(e) =>
                                           updateWorkItem(step.id, item.id, {
                                             photo_required_count: Math.max(1, Number(e.target.value) || 1),
@@ -3103,6 +3235,18 @@ export default function ProposerPage() {
                                       />
                                       Needs write-up
                                     </label>
+                                    <label className="flex items-center gap-2 text-xs">
+                                      <Checkbox
+                                        checked={Boolean(option.requires_photo_attachment)}
+                                        onCheckedChange={(value) =>
+                                          updateDropdownOption(step.id, item.id, optionIndex, {
+                                            requires_photo_attachment: Boolean(value),
+                                            photo_instructions: Boolean(value) ? option.photo_instructions || "" : "",
+                                          })
+                                        }
+                                      />
+                                      Needs photo
+                                    </label>
                                     <Button
                                       type="button"
                                       size="sm"
@@ -3114,6 +3258,20 @@ export default function ProposerPage() {
                                   </div>
 
                                     <div className="space-y-2">
+                                      {option.requires_photo_attachment && (
+                                        <div className="space-y-1">
+                                          <Label className="text-xs">Photo Instructions</Label>
+                                          <Textarea
+                                            value={option.photo_instructions || ""}
+                                            onChange={(e) =>
+                                              updateDropdownOption(step.id, item.id, optionIndex, {
+                                                photo_instructions: e.target.value,
+                                              })
+                                            }
+                                            placeholder="Explain what photo should be attached when this option is selected."
+                                          />
+                                        </div>
+                                      )}
                                       <Label className="text-xs">Notify Emails For This Option</Label>
                                       <Input
                                       value={option.notify_email_input}

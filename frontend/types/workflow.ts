@@ -18,6 +18,8 @@ export interface WorkflowDropdownOption {
   value: string
   label: string
   requires_written_response: boolean
+  requires_photo_attachment?: boolean
+  photo_instructions?: string
   notify_emails?: string[]
   notify_email_count?: number
   send_pictures_with_email?: boolean
@@ -26,6 +28,8 @@ export interface WorkflowDropdownOption {
 export interface WorkflowDropdownOptionCreateInput {
   label: string
   requires_written_response: boolean
+  requires_photo_attachment?: boolean
+  photo_instructions?: string
   notify_emails: string[]
   notify_email_count?: number
   send_pictures_with_email?: boolean
@@ -276,6 +280,9 @@ export interface WorkflowCreateRequest {
 export interface WorkflowEditProposalCreateRequest {
   title: string
   description: string
+  start_at?: string
+  timezone_offset_minutes?: number
+  recurrence_end_at?: string
   supervisor?: WorkflowSupervisorCreateInput
   supervisor_data_fields?: WorkflowSupervisorDataField[]
   roles: WorkflowRoleCreateInput[]
@@ -323,6 +330,7 @@ export interface WorkflowTemplateCreateRequest {
   template_description: string
   series_id?: string
   recurrence: WorkflowRecurrence
+  start_at?: string
   supervisor_user_id?: string
   supervisor_bounty?: number
   supervisor_data_fields?: WorkflowSupervisorDataField[]
@@ -447,6 +455,7 @@ export interface SupervisorWorkflowExportRequest {
   date_field: "created_at" | "completed_at" | "start_at" | ""
   date_from: string
   date_to: string
+  timezone?: string
 }
 
 export interface WorkflowStepCompleteRequest {

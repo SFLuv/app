@@ -78,6 +78,8 @@ function buildEditProposalPreviewWorkflow(proposal: WorkflowEditProposal): Workf
         value: buildPreviewOptionValue(option.label, optionIndex),
         label: option.label,
         requires_written_response: option.requires_written_response,
+        requires_photo_attachment: Boolean(option.requires_photo_attachment),
+        photo_instructions: option.photo_instructions || "",
         notify_emails: [],
         notify_email_count: option.notify_email_count ?? option.notify_emails.length,
       }))
