@@ -680,6 +680,13 @@ type WorkflowDropdownNotification struct {
 	Emails                []string `json:"emails"`
 	SendPicturesWithEmail bool     `json:"send_pictures_with_email,omitempty"`
 	PhotoIDs              []string `json:"photo_ids,omitempty"`
+	PhotoLinks            []WorkflowDropdownNotificationPhotoLink `json:"photo_links,omitempty"`
+}
+
+type WorkflowDropdownNotificationPhotoLink struct {
+	PhotoID   string `json:"photo_id"`
+	ItemID    string `json:"item_id"`
+	ItemTitle string `json:"item_title"`
 }
 
 type WorkflowStepCompletionResult struct {

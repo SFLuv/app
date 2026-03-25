@@ -5179,18 +5179,60 @@ func workflowPhotoPublicPageURL(photoID string) string {
 }
 
 func buildWorkflowDropdownAlertPhotoLinksHTML(notification structs.WorkflowDropdownNotification) string {
-	if !notification.SendPicturesWithEmail || len(notification.PhotoIDs) == 0 {
+	if !notification.SendPicturesWithEmail || (len(notification.PhotoLinks) == 0 && len(notification.PhotoIDs) == 0) {
 		return ""
 	}
 
-	links := make([]string, 0, len(notification.PhotoIDs))
-	seenPhotoIDs := map[string]struct{}{}
-	linkLabel := fmt.Sprintf("View %s", strings.TrimSpace(notification.ItemTitle))
-	if strings.TrimSpace(notification.ItemTitle) == "" {
-		linkLabel = "View Photo"
+	linkCapacity := len(notification.PhotoLinks)
+	if len(notification.PhotoIDs) > linkCapacity {
+		linkCapacity = len(notification.PhotoIDs)
 	}
-	for _, rawPhotoID := range notification.PhotoIDs {
-		photoID := strings.TrimSpace(rawPhotoID)
+	links := make([]string, 0, linkCapacity)
+	seenPhotoIDs := map[string]struct{}{}
+
+	type photoLinkMeta struct {
+		PhotoID   string
+		ItemID    string
+		ItemTitle string
+	}
+
+	linkMetas := make([]photoLinkMeta, 0, linkCapacity)
+	if len(notification.PhotoLinks) > 0 {
+		for _, link := range notification.PhotoLinks {
+			linkMetas = append(linkMetas, photoLinkMeta{
+				PhotoID:   strings.TrimSpace(link.PhotoID),
+				ItemID:    strings.TrimSpace(link.ItemID),
+				ItemTitle: strings.TrimSpace(link.ItemTitle),
+			})
+		}
+	} else {
+		for _, rawPhotoID := range notification.PhotoIDs {
+			linkMetas = append(linkMetas, photoLinkMeta{
+				PhotoID:   strings.TrimSpace(rawPhotoID),
+				ItemID:    strings.TrimSpace(notification.ItemId),
+				ItemTitle: strings.TrimSpace(notification.ItemTitle),
+			})
+		}
+	}
+
+	totalPhotosByItem := map[string]int{}
+	for _, meta := range linkMetas {
+		if meta.PhotoID == "" {
+			continue
+		}
+		groupKey := meta.ItemID
+		if groupKey == "" {
+			groupKey = meta.ItemTitle
+		}
+		if groupKey == "" {
+			groupKey = meta.PhotoID
+		}
+		totalPhotosByItem[groupKey]++
+	}
+
+	photoIndexByItem := map[string]int{}
+	for _, meta := range linkMetas {
+		photoID := meta.PhotoID
 		if photoID == "" {
 			continue
 		}
@@ -5198,6 +5240,22 @@ func buildWorkflowDropdownAlertPhotoLinksHTML(notification structs.WorkflowDropd
 			continue
 		}
 		seenPhotoIDs[photoID] = struct{}{}
+
+		groupKey := meta.ItemID
+		if groupKey == "" {
+			groupKey = meta.ItemTitle
+		}
+		if groupKey == "" {
+			groupKey = photoID
+		}
+		photoIndexByItem[groupKey]++
+		linkLabel := fmt.Sprintf("View %s", strings.TrimSpace(meta.ItemTitle))
+		if strings.TrimSpace(meta.ItemTitle) == "" {
+			linkLabel = "View Photo"
+		}
+		if totalPhotosByItem[groupKey] > 1 {
+			linkLabel = fmt.Sprintf("%s %d", linkLabel, photoIndexByItem[groupKey])
+		}
 
 		linkURL := workflowPhotoPublicPageURL(photoID)
 		links = append(

@@ -112,3 +112,5 @@
 - Moved improver chunked-upload progress UI into the step action area so it appears where the submit button normally sits.
 
 - Allowed public workflow photo routes under /photos and /photo to bypass unauthenticated redirect-to-map behavior in AppProvider.
+
+- Workflow dropdown alert email photo links now use the actual source step item title, number repeated photos per item, and HTML-escape those labels before rendering.
