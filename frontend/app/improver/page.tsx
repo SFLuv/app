@@ -2541,6 +2541,43 @@ export default function ImproverPage() {
     )
   }
 
+  const getWorkflowCompletionSuccess = useCallback((workflow: Workflow) => {
+    const matchingStep = workflow.steps.find((step) => stepCompletionSuccess[step.id]?.workflowId === workflow.id)
+    if (!matchingStep) return null
+    return stepCompletionSuccess[matchingStep.id]
+  }, [stepCompletionSuccess])
+
+  const renderWorkflowSuccessHeader = (workflow: Workflow) => {
+    const completionSuccess = getWorkflowCompletionSuccess(workflow)
+    if (!completionSuccess) return null
+
+    return (
+      <Card className="overflow-hidden border-emerald-200/80 bg-[linear-gradient(135deg,rgba(236,253,245,0.98),rgba(209,250,229,0.92))] shadow-sm">
+        <CardContent className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-start gap-4">
+            <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-emerald-600 text-white shadow-sm">
+              <CheckCircle2 className="h-8 w-8" />
+            </div>
+            <div className="space-y-1">
+              <p className="text-lg font-semibold tracking-tight text-emerald-900">Submission Complete</p>
+              <p className="text-sm text-emerald-900/80">
+                {completionSuccess.stepTitle} was submitted successfully.
+              </p>
+            </div>
+          </div>
+          <Button
+            size="sm"
+            variant="outline"
+            className="border-emerald-300 bg-white/80 text-emerald-900 hover:bg-white"
+            onClick={() => setDetailOpen(false)}
+          >
+            Done
+          </Button>
+        </CardContent>
+      </Card>
+    )
+  }
+
   const renderWorkflowTopRightActions = (workflow: Workflow) => {
     if (!detailSeriesContext || detailSeriesContext.stepOrder == null) return null
     if (workflow.recurrence === "one_time") return null
@@ -2573,7 +2610,6 @@ export default function ImproverPage() {
     const claimable = canClaimStep(workflow, step)
     const stepSubmitError = stepSubmitErrors[step.id] || ""
     const uploadProgress = stepUploadProgress[step.id]
-    const completionSuccess = stepCompletionSuccess[step.id]
     const stepNotPossibleState = stepNotPossibleForms[step.id] || defaultStepNotPossibleFormState
     const stepNotPossibleSelected = step.allow_step_not_possible && stepNotPossibleState.selected
     const nowUnix = Math.floor(Date.now() / 1000)
@@ -2586,71 +2622,12 @@ export default function ImproverPage() {
               (candidate.status === "completed" || candidate.status === "paid_out"),
           )
 
-    if (completionSuccess?.workflowId === workflow.id) {
-      return (
-        <Card className="border-green-200 bg-green-50/80">
-          <CardContent className="flex flex-col items-center justify-center gap-4 py-10 text-center">
-            <div className="rounded-full bg-green-100 p-4 text-green-600">
-              <CheckCircle2 className="h-14 w-14" />
-            </div>
-            <div className="space-y-1">
-              <p className="text-lg font-semibold text-green-700">Submission Complete</p>
-              <p className="text-sm text-green-700/90">
-                {completionSuccess.stepTitle} was submitted successfully.
-              </p>
-            </div>
-            <Button
-              size="sm"
-              variant="outline"
-              className="border-green-200 bg-white text-green-700 hover:bg-green-100"
-              onClick={() => setDetailOpen(false)}
-            >
-              Done
-            </Button>
-          </CardContent>
-        </Card>
-      )
-    }
+    if (getWorkflowCompletionSuccess(workflow)) return null
 
     if (!mine && !claimable) return null
 
     return (
       <div className="space-y-4">
-        {uploadProgress && uploadProgress.totalUnits > 0 && (
-          <Card className="border-[#eb6c6c]/30 bg-[#eb6c6c]/5">
-            <CardContent className="space-y-3 p-3">
-              <div className="flex items-center justify-between gap-3">
-                <p className="text-sm font-medium">{uploadProgress.label}</p>
-                <span className="text-xs text-muted-foreground">
-                  {Math.min(
-                    100,
-                    Math.round((uploadProgress.uploadedUnits / Math.max(1, uploadProgress.totalUnits)) * 100),
-                  )}
-                  %
-                </span>
-              </div>
-              <div className="h-2 overflow-hidden rounded-full bg-secondary">
-                <div
-                  className="h-full rounded-full bg-[#eb6c6c] transition-all duration-200"
-                  style={{
-                    width: `${Math.min(
-                      100,
-                      uploadProgress.uploadedUnits === 0
-                        ? 0
-                        : Math.max(4, (uploadProgress.uploadedUnits / Math.max(1, uploadProgress.totalUnits)) * 100),
-                    )}%`,
-                  }}
-                />
-              </div>
-              <p className="text-xs text-muted-foreground">
-                Uploaded {uploadProgress.uploadedUnits} of {uploadProgress.totalUnits} transfer
-                {uploadProgress.totalUnits === 1 ? "" : "s"} across {uploadProgress.completedFiles} of {uploadProgress.totalFiles} photo
-                {uploadProgress.totalFiles === 1 ? "" : "s"}.
-              </p>
-            </CardContent>
-          </Card>
-        )}
-
         {claimable && (
           <Button
             className="w-full sm:w-auto"
@@ -2996,21 +2973,56 @@ export default function ImproverPage() {
               </div>
             )}
 
-            <Button
-              className="w-full sm:w-auto"
-              size="sm"
-              onClick={() => completeStep(workflow.id, step)}
-              disabled={Boolean(submitting)}
-            >
-              {submitting === `complete:${step.id}` ? (
-                "Submitting..."
-              ) : (
-                <>
-                  <CheckCircle2 className="mr-2 h-4 w-4" />
-                  {stepNotPossibleSelected ? "Mark Step Not Possible" : "Complete Step"}
-                </>
-              )}
-            </Button>
+            {uploadProgress && uploadProgress.totalUnits > 0 ? (
+              <Card className="border-[#eb6c6c]/30 bg-[#eb6c6c]/5">
+                <CardContent className="space-y-3 p-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-sm font-medium">{uploadProgress.label}</p>
+                    <span className="text-xs text-muted-foreground">
+                      {Math.min(
+                        100,
+                        Math.round((uploadProgress.uploadedUnits / Math.max(1, uploadProgress.totalUnits)) * 100),
+                      )}
+                      %
+                    </span>
+                  </div>
+                  <div className="h-2 overflow-hidden rounded-full bg-secondary">
+                    <div
+                      className="h-full rounded-full bg-[#eb6c6c] transition-all duration-200"
+                      style={{
+                        width: `${Math.min(
+                          100,
+                          uploadProgress.uploadedUnits === 0
+                            ? 0
+                            : Math.max(4, (uploadProgress.uploadedUnits / Math.max(1, uploadProgress.totalUnits)) * 100),
+                        )}%`,
+                      }}
+                    />
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Uploaded {uploadProgress.uploadedUnits} of {uploadProgress.totalUnits} transfer
+                    {uploadProgress.totalUnits === 1 ? "" : "s"} across {uploadProgress.completedFiles} of{" "}
+                    {uploadProgress.totalFiles} photo{uploadProgress.totalFiles === 1 ? "" : "s"}.
+                  </p>
+                </CardContent>
+              </Card>
+            ) : (
+              <Button
+                className="w-full sm:w-auto"
+                size="sm"
+                onClick={() => completeStep(workflow.id, step)}
+                disabled={Boolean(submitting)}
+              >
+                {submitting === `complete:${step.id}` ? (
+                  "Submitting..."
+                ) : (
+                  <>
+                    <CheckCircle2 className="mr-2 h-4 w-4" />
+                    {stepNotPossibleSelected ? "Mark Step Not Possible" : "Complete Step"}
+                  </>
+                )}
+              </Button>
+            )}
           </div>
         )}
       </div>
@@ -3902,6 +3914,7 @@ export default function ImproverPage() {
         }}
         loading={detailLoading}
         initialStepIndex={detailInitialStepIndex}
+        renderHeaderContent={renderWorkflowSuccessHeader}
         renderTopRightActions={renderWorkflowTopRightActions}
         renderWorkflowActions={renderWorkflowHeaderActions}
         renderStepActions={renderWorkflowStepActions}
