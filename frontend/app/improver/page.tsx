@@ -76,6 +76,19 @@ type PreparedWorkflowStepCompletionItem = {
   photoUploads: PreparedWorkflowPhotoUpload[]
 }
 
+type StepUploadProgressState = {
+  uploadedUnits: number
+  totalUnits: number
+  completedFiles: number
+  totalFiles: number
+  label: string
+}
+
+type StepCompletionSuccessState = {
+  workflowId: string
+  stepTitle: string
+}
+
 type WorkflowSeriesCardGroup = {
   key: string
   seriesId: string
@@ -131,6 +144,8 @@ const defaultStepNotPossibleFormState: StepNotPossibleFormState = {
 
 const maxWorkflowPhotoUploadBytes = 2 * 1024 * 1024
 const maxWorkflowPhotoUploadLabel = "2MB"
+const workflowStepPhotoChunkUploadBytes = 256 * 1024
+const workflowStepPhotoChunkThresholdBytes = 512 * 1024
 const minWorkflowPhotoResizeDimension = 640
 const maxWorkflowPhotoInitialDimension = 4096
 const workflowPhotoCaptureIdealWidth = 4032
@@ -142,6 +157,13 @@ const formatWorkflowByteLimitLabel = (bytes: number) => {
   const inMB = bytes / (1024 * 1024)
   if (Number.isInteger(inMB)) return `${inMB}MB`
   return `${inMB.toFixed(1).replace(/\.0$/, "")}MB`
+}
+
+const createWorkflowPhotoUploadId = () => {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID()
+  }
+  return `workflow-photo-${Date.now()}-${Math.random().toString(16).slice(2)}`
 }
 
 const normalizeCredentialVisibility = (value?: string | null): CredentialVisibility => {
@@ -440,6 +462,8 @@ export default function ImproverPage() {
   const [submitting, setSubmitting] = useState<string>("")
   const [forms, setForms] = useState<Record<string, Record<string, ItemFormState>>>({})
   const [stepSubmitErrors, setStepSubmitErrors] = useState<Record<string, string>>({})
+  const [stepUploadProgress, setStepUploadProgress] = useState<Record<string, StepUploadProgressState>>({})
+  const [stepCompletionSuccess, setStepCompletionSuccess] = useState<Record<string, StepCompletionSuccessState>>({})
   const [cameraStates, setCameraStates] = useState<Record<string, CameraCaptureState>>({})
   const [stepNotPossibleForms, setStepNotPossibleForms] = useState<Record<string, StepNotPossibleFormState>>({})
   const [localPhotoPreview, setLocalPhotoPreview] = useState<LocalPhotoPreviewState | null>(null)
@@ -1749,15 +1773,63 @@ export default function ImproverPage() {
   useEffect(() => {
     if (!detailOpen) {
       stopAllCameraCaptures()
+      setStepUploadProgress({})
+      setStepCompletionSuccess({})
     }
   }, [detailOpen, stopAllCameraCaptures])
+
+  useEffect(() => {
+    setStepUploadProgress({})
+    setStepCompletionSuccess({})
+  }, [detailWorkflow?.id])
 
   const uploadPreparedWorkflowPhoto = useCallback(async (
     workflowId: string,
     stepId: string,
     itemId: string,
     upload: PreparedWorkflowPhotoUpload,
+    onUnitUploaded?: () => void,
   ) => {
+    if (upload.file.size > workflowStepPhotoChunkThresholdBytes) {
+      const uploadId = createWorkflowPhotoUploadId()
+      const totalChunks = Math.max(1, Math.ceil(upload.file.size / workflowStepPhotoChunkUploadBytes))
+      let finalPhotoId = ""
+
+      for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex += 1) {
+        const start = chunkIndex * workflowStepPhotoChunkUploadBytes
+        const end = Math.min(upload.file.size, start + workflowStepPhotoChunkUploadBytes)
+        const chunkBlob = upload.file.slice(start, end)
+        const formData = new FormData()
+        formData.set("item_id", itemId)
+        formData.set("upload_id", uploadId)
+        formData.set("chunk_index", String(chunkIndex))
+        formData.set("total_chunks", String(totalChunks))
+        formData.set("file_name", upload.file.name || "photo.jpg")
+        formData.set("content_type", upload.file.type || "image/jpeg")
+        formData.set("chunk", chunkBlob, upload.file.name || `chunk-${chunkIndex}.part`)
+
+        const res = await authFetch(`/improvers/workflows/${workflowId}/steps/${stepId}/photos`, {
+          method: "POST",
+          body: formData,
+        })
+        if (!res.ok) {
+          const text = await res.text()
+          throw new Error(text || "Unable to upload photo for this step.")
+        }
+
+        const json = await res.json() as WorkflowStepPhotoUploadResult
+        onUnitUploaded?.()
+        if (json.complete && json.photo?.id) {
+          finalPhotoId = json.photo.id
+        }
+      }
+
+      if (!finalPhotoId) {
+        throw new Error("Uploaded workflow photo did not finalize correctly.")
+      }
+      return finalPhotoId
+    }
+
     const formData = new FormData()
     formData.set("item_id", itemId)
     formData.set("photo", upload.file, upload.file.name || "photo.jpg")
@@ -1772,11 +1844,28 @@ export default function ImproverPage() {
     }
 
     const json = await res.json() as WorkflowStepPhotoUploadResult
+    onUnitUploaded?.()
     if (!json.photo?.id) {
       throw new Error("Uploaded workflow photo is missing an id.")
     }
     return json.photo.id
   }, [authFetch])
+
+  const mergeWorkflowIntoFeed = useCallback((updatedWorkflow: Workflow) => {
+    setWorkflows((prev) => {
+      const exists = prev.some((workflow) => workflow.id === updatedWorkflow.id)
+      if (!exists) return prev
+      return prev.map((workflow) => (workflow.id === updatedWorkflow.id ? updatedWorkflow : workflow))
+    })
+    setUnpaidWorkflows((prev) => {
+      const exists = prev.some((workflow) => workflow.id === updatedWorkflow.id)
+      if (!exists) return prev
+      return prev.map((workflow) => (workflow.id === updatedWorkflow.id ? updatedWorkflow : workflow))
+    })
+    if (detailOpen && detailWorkflow?.id === updatedWorkflow.id) {
+      setDetailWorkflow(updatedWorkflow)
+    }
+  }, [detailOpen, detailWorkflow?.id])
 
   const buildCompletionPayload = async (workflowId: string, step: WorkflowStep): Promise<WorkflowStepCompletionPayload> => {
     const stepNotPossibleForm = stepNotPossibleForms[step.id] || defaultStepNotPossibleFormState
@@ -1862,17 +1951,77 @@ export default function ImproverPage() {
     }
 
     const items: WorkflowStepCompletionPayload["items"] = []
+    const uploadPlan = preparedItems.flatMap((preparedItem) =>
+      preparedItem.photoUploads.map((upload) => ({
+        itemId: preparedItem.itemId,
+        upload,
+        unitCount:
+          upload.file.size > workflowStepPhotoChunkThresholdBytes
+            ? Math.max(1, Math.ceil(upload.file.size / workflowStepPhotoChunkUploadBytes))
+            : 1,
+      })),
+    )
+    const totalUploadUnits = uploadPlan.reduce((sum, entry) => sum + entry.unitCount, 0)
+    const totalUploadFiles = uploadPlan.length
+    let uploadedUnits = 0
+    let completedFiles = 0
+
+    if (totalUploadUnits > 0) {
+      setStepUploadProgress((prev) => ({
+        ...prev,
+        [step.id]: {
+          uploadedUnits: 0,
+          totalUnits: totalUploadUnits,
+          completedFiles: 0,
+          totalFiles: totalUploadFiles,
+          label: totalUploadFiles === 1 ? "Uploading photo..." : "Uploading photos...",
+        },
+      }))
+    }
+
     for (const preparedItem of preparedItems) {
       const payloadItem: WorkflowStepCompletionPayload["items"][number] = {
         item_id: preparedItem.itemId,
       }
 
       if (preparedItem.photoUploads.length > 0) {
-        payloadItem.photo_ids = await Promise.all(
-          preparedItem.photoUploads.map((upload) =>
-            uploadPreparedWorkflowPhoto(workflowId, step.id, preparedItem.itemId, upload),
-          ),
-        )
+        const uploadedPhotoIds: string[] = []
+        for (const upload of preparedItem.photoUploads) {
+          const uploadedPhotoId = await uploadPreparedWorkflowPhoto(
+            workflowId,
+            step.id,
+            preparedItem.itemId,
+            upload,
+            () => {
+              uploadedUnits += 1
+              setStepUploadProgress((prev) => {
+                const current = prev[step.id]
+                if (!current) return prev
+                return {
+                  ...prev,
+                  [step.id]: {
+                    ...current,
+                    uploadedUnits,
+                  },
+                }
+              })
+            },
+          )
+          completedFiles += 1
+          setStepUploadProgress((prev) => {
+            const current = prev[step.id]
+            if (!current) return prev
+            return {
+              ...prev,
+              [step.id]: {
+                ...current,
+                completedFiles,
+              },
+            }
+          })
+          uploadedPhotoIds.push(uploadedPhotoId)
+        }
+        payloadItem.photo_ids = uploadedPhotoIds
       }
       if (preparedItem.writtenResponse) payloadItem.written_response = preparedItem.writtenResponse
       if (preparedItem.dropdownValue) payloadItem.dropdown_value = preparedItem.dropdownValue
@@ -1902,8 +2051,23 @@ export default function ImproverPage() {
         const text = await res.text()
         throw new Error(text || "Unable to complete this step.")
       }
-      await loadFeed()
-      await refreshDetailWorkflow(workflowId)
+      const updatedWorkflow = (await res.json()) as Workflow
+      mergeWorkflowIntoFeed(updatedWorkflow)
+      setStepCompletionSuccess((prev) => ({
+        ...prev,
+        [step.id]: {
+          workflowId,
+          stepTitle: step.title,
+        },
+      }))
+      setStepUploadProgress((prev) => {
+        if (!prev[step.id]) return prev
+        const next = { ...prev }
+        delete next[step.id]
+        return next
+      })
+      void loadFeed()
+      void refreshDetailWorkflow(workflowId)
       stopCameraCapturesForStep(step.id)
       setForms((prev) => {
         const next = { ...prev }
@@ -1918,6 +2082,12 @@ export default function ImproverPage() {
       })
       clearStepSubmitError(step.id)
     } catch (err) {
+      setStepUploadProgress((prev) => {
+        if (!prev[step.id]) return prev
+        const next = { ...prev }
+        delete next[step.id]
+        return next
+      })
       const message =
         err instanceof Error
           ? err.message
@@ -2402,6 +2572,8 @@ export default function ImproverPage() {
     const mine = step.assigned_improver_id === user?.id
     const claimable = canClaimStep(workflow, step)
     const stepSubmitError = stepSubmitErrors[step.id] || ""
+    const uploadProgress = stepUploadProgress[step.id]
+    const completionSuccess = stepCompletionSuccess[step.id]
     const stepNotPossibleState = stepNotPossibleForms[step.id] || defaultStepNotPossibleFormState
     const stepNotPossibleSelected = step.allow_step_not_possible && stepNotPossibleState.selected
     const nowUnix = Math.floor(Date.now() / 1000)
@@ -2414,10 +2586,71 @@ export default function ImproverPage() {
               (candidate.status === "completed" || candidate.status === "paid_out"),
           )
 
+    if (completionSuccess?.workflowId === workflow.id) {
+      return (
+        <Card className="border-green-200 bg-green-50/80">
+          <CardContent className="flex flex-col items-center justify-center gap-4 py-10 text-center">
+            <div className="rounded-full bg-green-100 p-4 text-green-600">
+              <CheckCircle2 className="h-14 w-14" />
+            </div>
+            <div className="space-y-1">
+              <p className="text-lg font-semibold text-green-700">Submission Complete</p>
+              <p className="text-sm text-green-700/90">
+                {completionSuccess.stepTitle} was submitted successfully.
+              </p>
+            </div>
+            <Button
+              size="sm"
+              variant="outline"
+              className="border-green-200 bg-white text-green-700 hover:bg-green-100"
+              onClick={() => setDetailOpen(false)}
+            >
+              Done
+            </Button>
+          </CardContent>
+        </Card>
+      )
+    }
+
     if (!mine && !claimable) return null
 
     return (
       <div className="space-y-4">
+        {uploadProgress && uploadProgress.totalUnits > 0 && (
+          <Card className="border-[#eb6c6c]/30 bg-[#eb6c6c]/5">
+            <CardContent className="space-y-3 p-3">
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-sm font-medium">{uploadProgress.label}</p>
+                <span className="text-xs text-muted-foreground">
+                  {Math.min(
+                    100,
+                    Math.round((uploadProgress.uploadedUnits / Math.max(1, uploadProgress.totalUnits)) * 100),
+                  )}
+                  %
+                </span>
+              </div>
+              <div className="h-2 overflow-hidden rounded-full bg-secondary">
+                <div
+                  className="h-full rounded-full bg-[#eb6c6c] transition-all duration-200"
+                  style={{
+                    width: `${Math.min(
+                      100,
+                      uploadProgress.uploadedUnits === 0
+                        ? 0
+                        : Math.max(4, (uploadProgress.uploadedUnits / Math.max(1, uploadProgress.totalUnits)) * 100),
+                    )}%`,
+                  }}
+                />
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Uploaded {uploadProgress.uploadedUnits} of {uploadProgress.totalUnits} transfer
+                {uploadProgress.totalUnits === 1 ? "" : "s"} across {uploadProgress.completedFiles} of {uploadProgress.totalFiles} photo
+                {uploadProgress.totalFiles === 1 ? "" : "s"}.
+              </p>
+            </CardContent>
+          </Card>
+        )}
+
         {claimable && (
           <Button
             className="w-full sm:w-auto"
