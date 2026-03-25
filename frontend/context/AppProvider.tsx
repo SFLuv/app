@@ -321,7 +321,9 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     const allowUnauthedRoute =
       pathname === "/map" ||
       pathname.startsWith("/faucet") ||
-      pathname.startsWith("/improver/join")
+      pathname.startsWith("/improver/join") ||
+      pathname.startsWith("/photos/") ||
+      pathname.startsWith("/photo/")
     if (!allowUnauthedRoute) {
       replace("/map")
     }

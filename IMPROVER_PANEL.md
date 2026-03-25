@@ -110,3 +110,5 @@
 - Improver panel tab switching now mirrors the proposer panel behavior: tabs update the URL with `window.history.replaceState` instead of router navigation, each tab loads only the data it needs, already-loaded tab data stays on screen during background refreshes, and first-time tab visits show local tab-level loaders instead of retriggering the page-wide loading state.
 
 - Moved improver chunked-upload progress UI into the step action area so it appears where the submit button normally sits.
+
+- Allowed public workflow photo routes under /photos and /photo to bypass unauthenticated redirect-to-map behavior in AppProvider.
