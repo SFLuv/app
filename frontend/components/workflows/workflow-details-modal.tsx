@@ -25,6 +25,7 @@ interface WorkflowDetailsModalProps {
   onOpenChange: (open: boolean) => void
   loading?: boolean
   initialStepIndex?: number
+  renderHeaderContent?: (workflow: Workflow) => ReactNode
   renderTopRightActions?: (workflow: Workflow) => ReactNode
   renderWorkflowActions?: (workflow: Workflow) => ReactNode
   renderBottomActions?: (workflow: Workflow) => ReactNode
@@ -63,6 +64,7 @@ export function WorkflowDetailsModal({
   onOpenChange,
   loading = false,
   initialStepIndex = 0,
+  renderHeaderContent,
   renderTopRightActions,
   renderWorkflowActions,
   renderBottomActions,
@@ -495,6 +497,8 @@ export function WorkflowDetailsModal({
 
           {!loading && workflow && (
             <>
+              {renderHeaderContent ? renderHeaderContent(workflow) : null}
+
               <div className="grid gap-2 text-xs text-muted-foreground sm:grid-cols-2 lg:grid-cols-2">
                 <span>Status: {formatWorkflowDisplayStatus(workflow)}</span>
                 <span>Start: {new Date(workflow.start_at * 1000).toLocaleString()}</span>
