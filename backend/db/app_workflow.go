@@ -3243,6 +3243,110 @@ func sameLocalWorkflowDateWithOffset(currentStartAt int64, proposedStartAt int64
 	return currentYear == proposedYear && currentMonth == proposedMonth && currentDay == proposedDay
 }
 
+func getWorkflowRoleStepOrdersTx(ctx context.Context, tx pgx.Tx, workflowId string, roleId string) ([]int, error) {
+	rows, err := tx.Query(ctx, `
+		SELECT
+			step_order
+		FROM
+			workflow_steps
+		WHERE
+			workflow_id = $1
+		AND
+			role_id = $2
+		ORDER BY
+			step_order ASC;
+	`, workflowId, roleId)
+	if err != nil {
+		return nil, fmt.Errorf("error querying workflow role step orders: %s", err)
+	}
+	defer rows.Close()
+
+	stepOrders := []int{}
+	for rows.Next() {
+		var stepOrder int
+		if err := rows.Scan(&stepOrder); err != nil {
+			return nil, fmt.Errorf("error scanning workflow role step order: %s", err)
+		}
+		stepOrders = append(stepOrders, stepOrder)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating workflow role step orders: %s", err)
+	}
+	return stepOrders, nil
+}
+
+func getWorkflowSeriesRelatedStepOrdersTx(ctx context.Context, tx pgx.Tx, seriesId string, stepOrder int) ([]int, error) {
+	rows, err := tx.Query(ctx, `
+		WITH anchor AS (
+			SELECT
+				ws.workflow_id,
+				ws.role_id
+			FROM
+				workflow_steps ws
+			JOIN
+				workflows w
+			ON
+				w.id = ws.workflow_id
+			WHERE
+				w.series_id = $1
+			AND
+				ws.step_order = $2
+			AND
+				w.status <> 'deleted'
+			ORDER BY
+				CASE
+					WHEN w.status IN ('approved', 'blocked', 'in_progress') THEN 0
+					WHEN w.status IN ('completed', 'paid_out', 'failed', 'skipped') THEN 1
+					ELSE 2
+				END ASC,
+				w.start_at DESC,
+				w.created_at DESC,
+				w.id DESC
+			LIMIT 1
+		)
+		SELECT
+			related.step_order
+		FROM
+			workflow_steps related
+		JOIN
+			anchor a
+		ON
+			a.workflow_id = related.workflow_id
+		WHERE
+			related.role_id IS NOT DISTINCT FROM a.role_id
+		ORDER BY
+			related.step_order ASC;
+	`, seriesId, stepOrder)
+	if err != nil {
+		return nil, fmt.Errorf("error querying related workflow series step orders: %s", err)
+	}
+	defer rows.Close()
+
+	stepOrders := []int{}
+	for rows.Next() {
+		var relatedStepOrder int
+		if err := rows.Scan(&relatedStepOrder); err != nil {
+			return nil, fmt.Errorf("error scanning related workflow series step order: %s", err)
+		}
+		stepOrders = append(stepOrders, relatedStepOrder)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating related workflow series step orders: %s", err)
+	}
+	if len(stepOrders) == 0 {
+		return []int{stepOrder}, nil
+	}
+	return stepOrders, nil
+}
+
+func workflowStepOrdersToInt32(values []int) []int32 {
+	converted := make([]int32, 0, len(values))
+	for _, value := range values {
+		converted = append(converted, int32(value))
+	}
+	return converted
+}
+
 func ensureWorkflowSeriesClaimTx(
 	ctx context.Context,
 	tx pgx.Tx,
@@ -3319,6 +3423,8 @@ func propagateWorkflowSeriesClaimTx(
 						existing.workflow_id = ws.workflow_id
 					AND
 						existing.assigned_improver_id = $3
+					AND
+						existing.role_id IS DISTINCT FROM ws.role_id
 				)
 			AND
 				NOT EXISTS (
@@ -3386,11 +3492,11 @@ func applyWorkflowSeriesClaimsToWorkflowTx(ctx context.Context, tx pgx.Tx, workf
 				ws.id AS step_id,
 				ws.step_order,
 				ws.status AS step_status,
+				ws.role_id,
 				c.improver_id,
-				ROW_NUMBER() OVER (
-					PARTITION BY c.improver_id
-					ORDER BY ws.step_order ASC
-				) AS improver_rank
+				MIN(ws.step_order) OVER (
+					PARTITION BY c.improver_id, ws.role_id
+				) AS role_first_step_order
 			FROM
 				workflow_steps ws
 			JOIN
@@ -3421,6 +3527,8 @@ func applyWorkflowSeriesClaimsToWorkflowTx(ctx context.Context, tx pgx.Tx, workf
 						existing.workflow_id = ws.workflow_id
 					AND
 						existing.assigned_improver_id = c.improver_id
+					AND
+						existing.role_id IS DISTINCT FROM ws.role_id
 				)
 			AND
 				NOT EXISTS (
@@ -3440,6 +3548,34 @@ func applyWorkflowSeriesClaimsToWorkflowTx(ctx context.Context, tx pgx.Tx, workf
 						wm.start_at < abs.absent_until
 				)
 		),
+		preferred_roles AS (
+			SELECT
+				cr.improver_id,
+				cr.role_id,
+				MIN(cr.role_first_step_order) AS first_step_order
+			FROM
+				candidate_raw cr
+			GROUP BY
+				cr.improver_id,
+				cr.role_id
+		),
+		preferred_role_choice AS (
+			SELECT
+				pr.improver_id,
+				pr.role_id
+			FROM (
+				SELECT
+					pr.*,
+					ROW_NUMBER() OVER (
+						PARTITION BY pr.improver_id
+						ORDER BY pr.first_step_order ASC, pr.role_id ASC NULLS LAST
+					) AS role_rank
+				FROM
+					preferred_roles pr
+			) pr
+			WHERE
+				pr.role_rank = 1
+		),
 		candidates AS (
 			SELECT
 				cr.step_id,
@@ -3447,8 +3583,12 @@ func applyWorkflowSeriesClaimsToWorkflowTx(ctx context.Context, tx pgx.Tx, workf
 				cr.step_status
 			FROM
 				candidate_raw cr
-			WHERE
-				cr.improver_rank = 1
+			JOIN
+				preferred_role_choice rc
+			ON
+				rc.improver_id = cr.improver_id
+			AND
+				rc.role_id IS NOT DISTINCT FROM cr.role_id
 		),
 		assigned AS (
 			UPDATE
@@ -3574,12 +3714,6 @@ func ensureRecurringWorkflowSuccessorTx(
 	if err != nil {
 		return "", err
 	}
-	for nextStartAt <= nowUnix {
-		nextStartAt, err = nextRecurringStartAtWithAnchor(nextStartAt, seed.Recurrence, seed.AnchorStartAt)
-		if err != nil {
-			return "", err
-		}
-	}
 	if seed.RecurrenceEndAt != nil && nextStartAt > *seed.RecurrenceEndAt {
 		return "", nil
 	}
@@ -3623,7 +3757,7 @@ func ensureRecurringWorkflowSuccessorTx(
 	if err != nil {
 		return "", fmt.Errorf("error checking recurring future workflow window: %s", err)
 	}
-	if futureWorkflowCount > 0 {
+	if futureWorkflowCount > 0 && nextStartAt > nowUnix {
 		return "", nil
 	}
 
@@ -3859,6 +3993,158 @@ func ensureRecurringWorkflowSuccessorTx(
 	return successorId, nil
 }
 
+func workflowHasImproverActivityTx(ctx context.Context, tx pgx.Tx, workflowId string) (bool, error) {
+	var hasActivity bool
+	err := tx.QueryRow(ctx, `
+		SELECT
+			EXISTS (
+				SELECT
+					1
+				FROM
+					workflow_steps ws
+				WHERE
+					ws.workflow_id = $1
+				AND (
+					ws.assigned_improver_id IS NOT NULL
+					OR ws.started_at IS NOT NULL
+					OR ws.status IN ('in_progress', 'completed', 'paid_out')
+				)
+			)
+			OR EXISTS (
+				SELECT
+					1
+				FROM
+					workflow_step_submissions sub
+				WHERE
+					sub.workflow_id = $1
+			)
+			OR EXISTS (
+				SELECT
+					1
+				FROM
+					workflows w
+				WHERE
+					w.id = $1
+				AND
+					w.manager_improver_id IS NOT NULL
+			);
+	`, workflowId).Scan(&hasActivity)
+	if err != nil {
+		return false, fmt.Errorf("error checking recurring workflow activity: %s", err)
+	}
+	return hasActivity, nil
+}
+
+func pruneUnclaimedFutureRecurringWorkflowsTx(ctx context.Context, tx pgx.Tx, seriesId string, retainStartAt int64) error {
+	_, err := tx.Exec(ctx, `
+		WITH deletable AS (
+			SELECT
+				w.id
+			FROM
+				workflows w
+			WHERE
+				w.series_id = $1
+			AND
+				w.start_at > $2
+			AND
+				w.status IN ('approved', 'blocked', 'in_progress')
+			AND
+				w.manager_improver_id IS NULL
+			AND
+				NOT EXISTS (
+					SELECT
+						1
+					FROM
+						workflow_steps ws
+					WHERE
+						ws.workflow_id = w.id
+					AND (
+						ws.assigned_improver_id IS NOT NULL
+						OR ws.started_at IS NOT NULL
+						OR ws.status IN ('in_progress', 'completed', 'paid_out')
+					)
+				)
+			AND
+				NOT EXISTS (
+					SELECT
+						1
+					FROM
+						workflow_step_submissions sub
+					WHERE
+						sub.workflow_id = w.id
+				)
+		)
+		UPDATE
+			workflows
+		SET
+			status = 'deleted',
+			is_start_blocked = false,
+			blocked_by_workflow_id = NULL,
+			updated_at = unix_now()
+		WHERE
+			id IN (SELECT id FROM deletable);
+	`, seriesId, retainStartAt)
+	if err != nil {
+		return fmt.Errorf("error pruning future recurring workflows: %s", err)
+	}
+	return nil
+}
+
+func skipUnclaimedPastRecurringWorkflowsTx(ctx context.Context, tx pgx.Tx, seriesId string, retainStartAt int64) error {
+	_, err := tx.Exec(ctx, `
+		WITH skippable AS (
+			SELECT
+				w.id
+			FROM
+				workflows w
+			WHERE
+				w.series_id = $1
+			AND
+				w.start_at < $2
+			AND
+				w.status IN ('approved', 'blocked', 'in_progress')
+			AND
+				w.manager_improver_id IS NULL
+			AND
+				NOT EXISTS (
+					SELECT
+						1
+					FROM
+						workflow_steps ws
+					WHERE
+						ws.workflow_id = w.id
+					AND (
+						ws.assigned_improver_id IS NOT NULL
+						OR ws.started_at IS NOT NULL
+						OR ws.status IN ('in_progress', 'completed', 'paid_out')
+					)
+				)
+			AND
+				NOT EXISTS (
+					SELECT
+						1
+					FROM
+						workflow_step_submissions sub
+					WHERE
+						sub.workflow_id = w.id
+				)
+		)
+		UPDATE
+			workflows
+		SET
+			status = 'skipped',
+			is_start_blocked = false,
+			blocked_by_workflow_id = NULL,
+			updated_at = unix_now()
+		WHERE
+			id IN (SELECT id FROM skippable);
+	`, seriesId, retainStartAt)
+	if err != nil {
+		return fmt.Errorf("error skipping prior recurring workflows: %s", err)
+	}
+	return nil
+}
+
 func ensureRecurringWorkflowSeriesCatchUpTx(ctx context.Context, tx pgx.Tx, seriesId string, nowUnix int64) error {
 	if strings.TrimSpace(seriesId) == "" {
 		return nil
@@ -3903,12 +4189,23 @@ func ensureRecurringWorkflowSeriesCatchUpTx(ctx context.Context, tx pgx.Tx, seri
 			AND
 				w.status <> 'deleted'
 			ORDER BY
-				w.start_at DESC,
+				CASE
+					WHEN w.start_at <= $2 THEN 0
+					ELSE 1
+				END ASC,
+				CASE
+					WHEN w.start_at <= $2 THEN w.start_at
+					ELSE NULL
+				END DESC NULLS LAST,
+				CASE
+					WHEN w.start_at > $2 THEN w.start_at
+					ELSE NULL
+				END ASC NULLS LAST,
 				w.created_at DESC,
 				w.id DESC
 			LIMIT 1
 			FOR UPDATE OF w, s;
-		`, seriesId).Scan(&workflowId, &recurrence, &recurrenceEndAt, &startAt, &anchorStartAt, &status)
+		`, seriesId, nowUnix).Scan(&workflowId, &recurrence, &recurrenceEndAt, &startAt, &anchorStartAt, &status)
 		if err == pgx.ErrNoRows {
 			return nil
 		}
@@ -3925,6 +4222,22 @@ func ensureRecurringWorkflowSeriesCatchUpTx(ctx context.Context, tx pgx.Tx, seri
 			return err
 		}
 		if nextStartAt > nowUnix {
+			if startAt <= nowUnix {
+				if err := skipUnclaimedPastRecurringWorkflowsTx(ctx, tx, seriesId, startAt); err != nil {
+					return err
+				}
+			}
+			if status == "approved" || status == "in_progress" || status == "blocked" {
+				hasActivity, activityErr := workflowHasImproverActivityTx(ctx, tx, workflowId)
+				if activityErr != nil {
+					return activityErr
+				}
+				if !hasActivity && startAt <= nowUnix {
+					if err := pruneUnclaimedFutureRecurringWorkflowsTx(ctx, tx, seriesId, startAt); err != nil {
+						return err
+					}
+				}
+			}
 			return nil
 		}
 
@@ -5798,23 +6111,6 @@ func (a *AppDB) ClaimWorkflowStep(
 		return nil, nil, fmt.Errorf("workflow is not available for claiming")
 	}
 
-	var claimedAssignments int
-	err = tx.QueryRow(ctx, `
-		SELECT
-			COUNT(*)
-		FROM
-			workflow_steps
-		WHERE
-			workflow_id = $1
-		AND
-			assigned_improver_id = $2;
-	`, workflowId, improverId).Scan(&claimedAssignments)
-	if err != nil {
-		return nil, nil, err
-	}
-	if claimedAssignments > 0 {
-		return nil, nil, fmt.Errorf("improver already assigned within this workflow")
-	}
 	if managerImproverID != nil && *managerImproverID == improverId {
 		return nil, nil, fmt.Errorf("improver already assigned within this workflow")
 	}
@@ -5851,8 +6147,37 @@ func (a *AppDB) ClaimWorkflowStep(
 	if roleId == nil {
 		return nil, nil, fmt.Errorf("workflow step is missing a role")
 	}
+	var claimedAssignments int
+	err = tx.QueryRow(ctx, `
+		SELECT
+			COUNT(*)
+		FROM
+			workflow_steps
+		WHERE
+			workflow_id = $1
+		AND
+			assigned_improver_id = $2
+		AND
+			role_id IS DISTINCT FROM $3;
+	`, workflowId, improverId, *roleId).Scan(&claimedAssignments)
+	if err != nil {
+		return nil, nil, err
+	}
+	if claimedAssignments > 0 {
+		return nil, nil, fmt.Errorf("improver already assigned within this workflow")
+	}
 	if stepStatus != "locked" && stepStatus != "available" {
 		return nil, nil, fmt.Errorf("workflow step is not claimable")
+	}
+	canUnlockOnClaim := stepStatus == "available"
+	if stepStatus == "locked" {
+		canUnlockOnClaim, err = canStepTransitionToAvailableTx(ctx, tx, workflowId, stepOrder, workflowStartAt)
+		if err != nil {
+			return nil, nil, err
+		}
+		if !canUnlockOnClaim {
+			return nil, nil, fmt.Errorf("workflow step is not available yet")
+		}
 	}
 	if workflowRecurrence != "one_time" {
 		isUnavailableForAbsence, err := hasImproverAbsenceCoverageTx(ctx, tx, improverId, workflowSeriesId, stepOrder, workflowStartAt)
@@ -5862,6 +6187,27 @@ func (a *AppDB) ClaimWorkflowStep(
 		if isUnavailableForAbsence {
 			return nil, nil, fmt.Errorf("step is unavailable during your absence period")
 		}
+	}
+	var sameRoleClaimedByOthers int
+	err = tx.QueryRow(ctx, `
+		SELECT
+			COUNT(*)
+		FROM
+			workflow_steps
+		WHERE
+			workflow_id = $1
+		AND
+			role_id = $2
+		AND
+			assigned_improver_id IS NOT NULL
+		AND
+			assigned_improver_id <> $3;
+	`, workflowId, *roleId, improverId).Scan(&sameRoleClaimedByOthers)
+	if err != nil {
+		return nil, nil, err
+	}
+	if sameRoleClaimedByOthers > 0 {
+		return nil, nil, fmt.Errorf("workflow role is already claimed within this workflow")
 	}
 
 	requiredRows, err := tx.Query(ctx, `
@@ -5912,22 +6258,59 @@ func (a *AppDB) ClaimWorkflowStep(
 		}
 	}
 
+	relatedStepOrders, err := getWorkflowRoleStepOrdersTx(ctx, tx, workflowId, *roleId)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(relatedStepOrders) == 0 {
+		relatedStepOrders = []int{stepOrder}
+	}
+	relatedStepOrderParams := workflowStepOrdersToInt32(relatedStepOrders)
+
 	var postClaimStatus string
 	err = tx.QueryRow(ctx, `
-		UPDATE
-			workflow_steps
-		SET
-			assigned_improver_id = $2,
-			status = CASE
-				WHEN status = 'locked' AND step_order = 1 AND $3 <= unix_now() THEN 'available'
-				ELSE status
-			END,
-			updated_at = unix_now()
-		WHERE
-			id = $1
-		RETURNING
-			status;
-		`, stepId, improverId, workflowStartAt).Scan(&postClaimStatus)
+		WITH assigned AS (
+			UPDATE
+				workflow_steps
+			SET
+				assigned_improver_id = $2,
+				status = CASE
+					WHEN id = $5 AND status = 'locked' AND $4 THEN 'available'
+					ELSE status
+				END,
+				updated_at = unix_now()
+			WHERE
+				workflow_id = $1
+			AND
+				step_order = ANY($3)
+			AND
+				assigned_improver_id IS NULL
+			AND
+				status IN ('locked', 'available')
+			RETURNING
+				id,
+				status
+		)
+		SELECT
+			COALESCE(
+				(
+					SELECT
+						status
+					FROM
+						assigned
+					WHERE
+						id = $5
+				),
+				(
+					SELECT
+						status
+					FROM
+						workflow_steps
+					WHERE
+						id = $5
+				)
+			);
+		`, workflowId, improverId, relatedStepOrderParams, canUnlockOnClaim, stepId).Scan(&postClaimStatus)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "workflow_single_assignment_per_improver_idx" {
@@ -5937,11 +6320,13 @@ func (a *AppDB) ClaimWorkflowStep(
 	}
 
 	if workflowRecurrence != "one_time" {
-		if err := ensureWorkflowSeriesClaimTx(ctx, tx, workflowSeriesId, stepOrder, improverId); err != nil {
-			return nil, nil, err
-		}
-		if err := propagateWorkflowSeriesClaimTx(ctx, tx, workflowSeriesId, stepOrder, improverId, workflowStartAt); err != nil {
-			return nil, nil, err
+		for _, relatedStepOrder := range relatedStepOrders {
+			if err := ensureWorkflowSeriesClaimTx(ctx, tx, workflowSeriesId, relatedStepOrder, improverId); err != nil {
+				return nil, nil, err
+			}
+			if err := propagateWorkflowSeriesClaimTx(ctx, tx, workflowSeriesId, relatedStepOrder, improverId, workflowStartAt); err != nil {
+				return nil, nil, err
+			}
 		}
 	}
 
@@ -8964,6 +9349,12 @@ func (a *AppDB) UnclaimImproverWorkflowSeriesStep(
 	}
 	defer tx.Rollback(ctx)
 
+	relatedStepOrders, err := getWorkflowSeriesRelatedStepOrdersTx(ctx, tx, seriesId, stepOrder)
+	if err != nil {
+		return nil, err
+	}
+	relatedStepOrderParams := workflowStepOrdersToInt32(relatedStepOrders)
+
 	var targetedCount int
 	err = tx.QueryRow(ctx, `
 			SELECT
@@ -8983,14 +9374,14 @@ func (a *AppDB) UnclaimImproverWorkflowSeriesStep(
 			AND
 				COALESCE(NULLIF(TRIM(sr.recurrence), ''), 'one_time') <> 'one_time'
 			AND
-				ws.step_order = $2
+				ws.step_order = ANY($2)
 		AND
 			ws.assigned_improver_id = $3
 		AND
 			w.status IN ('approved', 'blocked', 'in_progress')
 		AND
 			ws.status IN ('locked', 'available', 'in_progress');
-	`, seriesId, stepOrder, improverId).Scan(&targetedCount)
+	`, seriesId, relatedStepOrderParams, improverId).Scan(&targetedCount)
 	if err != nil {
 		return nil, fmt.Errorf("error counting improver workflow series claims: %s", err)
 	}
@@ -9018,7 +9409,7 @@ func (a *AppDB) UnclaimImproverWorkflowSeriesStep(
 				AND
 					COALESCE(NULLIF(TRIM(sr.recurrence), ''), 'one_time') <> 'one_time'
 				AND
-					ws.step_order = $2
+					ws.step_order = ANY($2)
 			AND
 				ws.assigned_improver_id = $3
 			AND
@@ -9051,7 +9442,7 @@ func (a *AppDB) UnclaimImproverWorkflowSeriesStep(
 			COUNT(*)
 		FROM
 			released;
-	`, seriesId, stepOrder, improverId).Scan(&releasedCount)
+	`, seriesId, relatedStepOrderParams, improverId).Scan(&releasedCount)
 	if err != nil {
 		return nil, fmt.Errorf("error releasing workflow series claims: %s", err)
 	}
@@ -9064,10 +9455,10 @@ func (a *AppDB) UnclaimImproverWorkflowSeriesStep(
 		WHERE
 			series_id = $1
 		AND
-			step_order = $2
+			step_order = ANY($2)
 		AND
 			improver_id = $3;
-	`, seriesId, stepOrder, improverId)
+	`, seriesId, relatedStepOrderParams, improverId)
 	if err != nil {
 		return nil, fmt.Errorf("error removing workflow series claim mapping: %s", err)
 	}
@@ -9793,6 +10184,7 @@ func applyWorkflowEditStartTimeToSeriesTx(
 	}
 
 	updates := []futureWorkflowUpdate{}
+	deleteIDs := []string{}
 	var previousStartAt int64
 	for rows.Next() {
 		var workflowID string
@@ -9803,10 +10195,12 @@ func applyWorkflowEditStartTimeToSeriesTx(
 
 		newStartAt := applyWorkflowStartTimeAnchor(currentStartAt, proposedStartAt)
 		if newStartAt <= nowUnix {
-			return fmt.Errorf("workflow start time change would place future workflows in the past")
+			deleteIDs = append(deleteIDs, workflowID)
+			continue
 		}
 		if len(updates) > 0 && newStartAt <= previousStartAt {
-			return fmt.Errorf("workflow start time change would create overlapping workflows")
+			deleteIDs = append(deleteIDs, workflowID)
+			continue
 		}
 		previousStartAt = newStartAt
 		updates = append(updates, futureWorkflowUpdate{ID: workflowID, NewStartAt: newStartAt, CurrentUnix: currentStartAt})
@@ -9829,6 +10223,66 @@ func applyWorkflowEditStartTimeToSeriesTx(
 				id = $1;
 		`, update.ID, update.NewStartAt); err != nil {
 			return fmt.Errorf("error updating future workflow start time: %s", err)
+		}
+	}
+
+	if len(deleteIDs) > 0 {
+		if _, err := tx.Exec(ctx, `
+			UPDATE
+				workflows
+			SET
+				status = 'deleted',
+				is_start_blocked = false,
+				blocked_by_workflow_id = NULL,
+				updated_at = unix_now()
+			WHERE
+				id = ANY($1);
+		`, deleteIDs); err != nil {
+			return fmt.Errorf("error deleting invalid future workflows after start time edit: %s", err)
+		}
+	}
+
+	var remainingFutureCount int
+	if err := tx.QueryRow(ctx, `
+		SELECT
+			COUNT(*)
+		FROM
+			workflows
+		WHERE
+			series_id = $1
+		AND
+			status <> 'deleted'
+		AND
+			start_at > $2;
+	`, seriesID, nowUnix).Scan(&remainingFutureCount); err != nil {
+		return fmt.Errorf("error checking remaining future workflows after start time edit: %s", err)
+	}
+
+	if remainingFutureCount == 0 {
+		var latestWorkflowID string
+		err := tx.QueryRow(ctx, `
+			SELECT
+				id
+			FROM
+				workflows
+			WHERE
+				series_id = $1
+			AND
+				status <> 'deleted'
+			ORDER BY
+				start_at DESC,
+				created_at DESC,
+				id DESC
+			LIMIT 1
+			FOR UPDATE;
+		`, seriesID).Scan(&latestWorkflowID)
+		if err != nil && err != pgx.ErrNoRows {
+			return fmt.Errorf("error loading latest workflow after start time edit: %s", err)
+		}
+		if err == nil {
+			if _, err := ensureRecurringWorkflowSuccessorTx(ctx, tx, latestWorkflowID); err != nil {
+				return err
+			}
 		}
 	}
 

@@ -1298,7 +1298,7 @@ func (s *AppDB) CreateTables() error {
 			);
 
 			CREATE INDEX IF NOT EXISTS workflow_steps_workflow_idx ON workflow_steps(workflow_id);
-			CREATE UNIQUE INDEX IF NOT EXISTS workflow_single_assignment_per_improver_idx
+			CREATE INDEX IF NOT EXISTS workflow_steps_workflow_assigned_improver_idx
 				ON workflow_steps(workflow_id, assigned_improver_id)
 				WHERE assigned_improver_id IS NOT NULL;
 		`)
@@ -1368,7 +1368,9 @@ func (s *AppDB) CreateTables() error {
 			ALTER COLUMN series_id SET NOT NULL;
 
 			CREATE INDEX IF NOT EXISTS workflow_steps_series_idx ON workflow_steps(series_id);
-			CREATE UNIQUE INDEX IF NOT EXISTS workflow_single_assignment_per_improver_idx
+			DROP INDEX IF EXISTS workflow_single_assignment_per_improver_idx;
+
+			CREATE INDEX IF NOT EXISTS workflow_steps_workflow_assigned_improver_idx
 				ON workflow_steps(workflow_id, assigned_improver_id)
 				WHERE assigned_improver_id IS NOT NULL;
 		`)

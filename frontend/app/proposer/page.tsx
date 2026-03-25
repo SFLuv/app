@@ -1,6 +1,6 @@
 "use client"
 
-import { DragEvent, MouseEvent, PointerEvent, useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { DragEvent, MouseEvent, PointerEvent, WheelEvent, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useApp } from "@/context/AppProvider"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -261,6 +261,10 @@ const applyTemplateStartTimeToDatetimeLocal = (currentValue: string, templateSta
 
   const datePart = getDatePartFromDatetimeLocal(currentValue) || getTodayDatePart()
   return `${datePart}T${templateTime}`
+}
+
+const preventNumberInputScrollChange = (event: WheelEvent<HTMLInputElement>) => {
+  event.currentTarget.blur()
 }
 
 const formatRecurrenceLabel = (value: WorkflowRecurrence) => {
@@ -1103,6 +1107,7 @@ export default function ProposerPage() {
     setStartAt("")
     setHasRecurrenceEndDate(false)
     setRecurrenceEndAt("")
+    setSelectedTemplateId("")
     setEditProposalWorkflowId("")
     setEditProposalReason("")
     setRoles([createDraftRole()])
@@ -1889,15 +1894,20 @@ export default function ProposerPage() {
       payload.start_at = workflowStartTime
     }
 
-    if (workflow.supervisor_required && workflow.supervisor_user_id) {
-      payload.supervisor_user_id = workflow.supervisor_user_id
-      payload.supervisor_bounty = workflow.supervisor_bounty
-    }
-    if ((workflow.supervisor_data_fields || []).length > 0) {
-      payload.supervisor_data_fields = (workflow.supervisor_data_fields || []).map((field) => ({
+    const supervisorUserId = (workflow.supervisor_user_id || "").trim()
+    const supervisorDataFields = (workflow.supervisor_data_fields || [])
+      .map((field) => ({
         key: (field.key || "").trim(),
         value: (field.value || "").trim(),
       }))
+      .filter((field) => field.key || field.value)
+
+    if (supervisorUserId) {
+      payload.supervisor_user_id = supervisorUserId
+      payload.supervisor_bounty = workflow.supervisor_bounty
+    }
+    if (supervisorDataFields.length > 0) {
+      payload.supervisor_data_fields = supervisorDataFields
     }
 
     return payload
@@ -2390,6 +2400,7 @@ export default function ProposerPage() {
 	                          type="number"
 	                          min="0"
 	                          value={workflowSupervisor.bounty}
+                              onWheel={preventNumberInputScrollChange}
 	                          onChange={(e) =>
 	                            setWorkflowSupervisor((prev) => ({
 	                              ...prev,
@@ -2745,9 +2756,14 @@ export default function ProposerPage() {
                             </div>
                           </div>
                           <div className="flex items-center gap-1">
-                            <Badge className="border border-[#f3b1a6] bg-[#fff1ec] text-[#b64545] hover:bg-[#fff1ec]">
-                              {formatStepBountyIndicator(step.bounty)}
-                            </Badge>
+                            <div className="inline-flex items-center gap-2 rounded-full border border-border/70 bg-muted/40 px-2.5 py-1 text-xs shadow-sm">
+                              <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+                                Bounty
+                              </span>
+                              <span className="font-semibold text-foreground">
+                                {formatStepBountyIndicator(step.bounty)}
+                              </span>
+                            </div>
                             {steps.length > 1 && (
                               <Button
                                 type="button"
@@ -2797,6 +2813,7 @@ export default function ProposerPage() {
                         type="number"
                         min="0"
                         value={step.bounty}
+                        onWheel={preventNumberInputScrollChange}
                         onChange={(e) => updateStep(step.id, { bounty: e.target.value })}
                       />
                     </div>
@@ -3066,6 +3083,7 @@ export default function ProposerPage() {
                                         type="number"
                                         min={1}
                                         value={item.photo_required_count}
+                                        onWheel={preventNumberInputScrollChange}
                                         onChange={(e) =>
                                           updateWorkItem(step.id, item.id, {
                                             photo_required_count: Math.max(1, Number(e.target.value) || 1),

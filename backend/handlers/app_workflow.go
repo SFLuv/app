@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	"image/jpeg"
@@ -29,6 +30,8 @@ import (
 	_ "image/gif"
 	_ "image/png"
 )
+
+const maxWorkflowStepCompletionRequestBytes int64 = 16 * 1024 * 1024
 
 func userCanViewWorkflowNotifyEmails(workflow *structs.Workflow, userID string) bool {
 	if workflow == nil || userID == "" {
@@ -2687,7 +2690,7 @@ func (a *AppService) ClaimWorkflowStep(w http.ResponseWriter, r *http.Request) {
 			w.Write([]byte(errMsg))
 			return
 		}
-		if strings.Contains(errMsg, "already assigned") || strings.Contains(errMsg, "already claimed") {
+		if strings.Contains(errMsg, "already assigned") || strings.Contains(errMsg, "already claimed") || strings.Contains(errMsg, "role is already claimed") {
 			w.WriteHeader(http.StatusConflict)
 			w.Write([]byte(errMsg))
 			return
@@ -2800,8 +2803,15 @@ func (a *AppService) CompleteWorkflowStep(w http.ResponseWriter, r *http.Request
 	}
 
 	defer r.Body.Close()
+	r.Body = http.MaxBytesReader(w, r.Body, maxWorkflowStepCompletionRequestBytes)
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			w.WriteHeader(http.StatusRequestEntityTooLarge)
+			w.Write([]byte("workflow step submission is too large; reduce the number or size of uploaded photos"))
+			return
+		}
 		a.logger.Logf("error reading workflow step completion body: %s", err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
@@ -5014,6 +5024,10 @@ func buildWorkflowDropdownAlertPhotoLinksHTML(notification structs.WorkflowDropd
 
 	links := make([]string, 0, len(notification.PhotoIDs))
 	seenPhotoIDs := map[string]struct{}{}
+	linkLabel := fmt.Sprintf("View %s", strings.TrimSpace(notification.ItemTitle))
+	if strings.TrimSpace(notification.ItemTitle) == "" {
+		linkLabel = "View Photo"
+	}
 	for _, rawPhotoID := range notification.PhotoIDs {
 		photoID := strings.TrimSpace(rawPhotoID)
 		if photoID == "" {
@@ -5025,13 +5039,12 @@ func buildWorkflowDropdownAlertPhotoLinksHTML(notification structs.WorkflowDropd
 		seenPhotoIDs[photoID] = struct{}{}
 
 		linkURL := workflowPhotoPublicPageURL(photoID)
-		linkNumber := len(links) + 1
 		links = append(
 			links,
 			fmt.Sprintf(
-				`<a href="%s" style="color:#d55c5c; text-decoration:none; font-weight:600;">View Photo %d</a>`,
+				`<a href="%s" style="color:#d55c5c; text-decoration:none; font-weight:600;">%s</a>`,
 				utils.EscapeEmailHTML(linkURL),
-				linkNumber,
+				utils.EscapeEmailHTML(linkLabel),
 			),
 		)
 	}
@@ -5062,7 +5075,7 @@ func (a *AppService) sendWorkflowDropdownAlertEmail(ctx context.Context, notific
   </tr>`, photoLinksHTML)
 	}
 
-	title := "Workflow Dropdown Alert"
+	title := "Workflow Alert"
 	htmlContent := utils.BuildStyledEmail(
 		title,
 		"A watched dropdown response was submitted.",
@@ -5084,12 +5097,8 @@ func (a *AppService) sendWorkflowDropdownAlertEmail(ctx context.Context, notific
     <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280;">Response</td>
     <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827;">%s</td>
   </tr>
-  <tr>
-    <td style="padding:12px 0; font-size:13px; color:#6b7280;">Workflow ID</td>
-    <td style="padding:12px 0; font-size:13px; color:#111827; word-break:break-all;">%s</td>
-  </tr>
 %s
-</table>`, utils.EscapeEmailHTML(notification.WorkflowTitle), utils.EscapeEmailHTML(notification.StepTitle), utils.EscapeEmailHTML(notification.ItemTitle), utils.EscapeEmailHTML(notification.DropdownValue), utils.EscapeEmailHTML(notification.WorkflowId), photoLinksRow),
+</table>`, utils.EscapeEmailHTML(notification.WorkflowTitle), utils.EscapeEmailHTML(notification.StepTitle), utils.EscapeEmailHTML(notification.ItemTitle), utils.EscapeEmailHTML(notification.DropdownValue), photoLinksRow),
 	)
 
 	for _, toEmail := range notification.Emails {

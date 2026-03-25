@@ -63,6 +63,18 @@ type LocalPhotoPreviewState = {
   label: string
 }
 
+type PreparedWorkflowPhotoUpload = {
+  file: File
+  aspectRatio: WorkflowPhotoAspectRatio | null
+}
+
+type PreparedWorkflowStepCompletionItem = {
+  itemId: string
+  dropdownValue?: string
+  writtenResponse?: string
+  photoUploads: PreparedWorkflowPhotoUpload[]
+}
+
 type WorkflowSeriesCardGroup = {
   key: string
   seriesId: string
@@ -102,6 +114,13 @@ const defaultStepNotPossibleFormState: StepNotPossibleFormState = {
 
 const maxWorkflowPhotoUploadBytes = 2 * 1024 * 1024
 const maxWorkflowPhotoUploadLabel = "2MB"
+const maxWorkflowStepCompletionRequestBytes = 16 * 1024 * 1024
+const maxWorkflowStepCompletionEstimatedPayloadBytes = maxWorkflowStepCompletionRequestBytes - 128 * 1024
+const workflowPhotoTransportRecompressTargets = [
+  Math.floor(1.4 * 1024 * 1024),
+  Math.floor(1.1 * 1024 * 1024),
+  Math.floor(0.9 * 1024 * 1024),
+]
 const minWorkflowPhotoResizeDimension = 640
 const maxWorkflowPhotoInitialDimension = 4096
 const workflowPhotoCaptureIdealWidth = 4032
@@ -147,6 +166,34 @@ const computeCropForAspectRatio = (width: number, height: number, aspectRatio: n
   const cropHeight = Math.max(1, Math.floor(width / aspectRatio))
   const y = Math.max(0, Math.floor((height - cropHeight) / 2))
   return { x: 0, y, width, height: cropHeight }
+}
+
+const estimateBase64EncodedLength = (rawBytes: number) => Math.ceil(rawBytes / 3) * 4
+
+const formatWorkflowByteLimitLabel = (bytes: number) => {
+  const inMB = bytes / (1024 * 1024)
+  if (Number.isInteger(inMB)) return `${inMB}MB`
+  return `${inMB.toFixed(1).replace(/\.0$/, "")}MB`
+}
+
+const estimatePreparedWorkflowStepCompletionPayloadBytes = (
+  items: PreparedWorkflowStepCompletionItem[],
+  stepNotPossible: boolean,
+  stepNotPossibleDetails: string,
+) => {
+  let total = 512
+  if (stepNotPossible) {
+    total += 64 + stepNotPossibleDetails.length
+  }
+
+  for (const item of items) {
+    total += 128 + item.itemId.length + (item.dropdownValue?.length || 0) + (item.writtenResponse?.length || 0)
+    for (const upload of item.photoUploads) {
+      total += 192 + upload.file.name.length + upload.file.type.length + estimateBase64EncodedLength(upload.file.size)
+    }
+  }
+
+  return total
 }
 
 const buildWorkflowPhotoCaptureConstraintAttempts = (aspectRatio: WorkflowPhotoAspectRatio): MediaTrackConstraints[] => {
@@ -1239,10 +1286,15 @@ export default function ImproverPage() {
     })
   }
 
-  const shrinkPhotoToUploadLimit = useCallback(async (file: File, aspectRatio?: WorkflowPhotoAspectRatio | null) => {
+  const shrinkPhotoToUploadLimit = useCallback(async (
+    file: File,
+    aspectRatio?: WorkflowPhotoAspectRatio | null,
+    maxBytes: number = maxWorkflowPhotoUploadBytes,
+  ) => {
     if (!file.type.startsWith("image/")) {
       throw new Error(`Only image uploads are allowed: ${file.name}`)
     }
+    const effectiveMaxBytes = Math.max(64 * 1024, Math.min(maxBytes, maxWorkflowPhotoUploadBytes))
 
     const image = await loadImageFromFile(file)
     const imageWidth = image.naturalWidth || image.width
@@ -1257,7 +1309,7 @@ export default function ImproverPage() {
       : { x: 0, y: 0, width: imageWidth, height: imageHeight }
 
     if (
-      file.size <= maxWorkflowPhotoUploadBytes &&
+      file.size <= effectiveMaxBytes &&
       cropMatchesFullImage(crop, imageWidth, imageHeight) &&
       isPreservableWorkflowUploadType(file.type)
     ) {
@@ -1275,12 +1327,12 @@ export default function ImproverPage() {
 
     const encodeBestJpegBlobForCurrentSize = async () => {
       const highestQualityBlob = await renderJpegBlob(image, targetWidth, targetHeight, 0.99, crop)
-      if (highestQualityBlob && highestQualityBlob.size <= maxWorkflowPhotoUploadBytes) {
+      if (highestQualityBlob && highestQualityBlob.size <= effectiveMaxBytes) {
         return highestQualityBlob
       }
 
       const lowestQualityBlob = await renderJpegBlob(image, targetWidth, targetHeight, 0.5, crop)
-      if (!lowestQualityBlob || lowestQualityBlob.size > maxWorkflowPhotoUploadBytes) {
+      if (!lowestQualityBlob || lowestQualityBlob.size > effectiveMaxBytes) {
         return null
       }
 
@@ -1294,7 +1346,7 @@ export default function ImproverPage() {
           highQuality = midQuality
           continue
         }
-        if (blob.size <= maxWorkflowPhotoUploadBytes) {
+        if (blob.size <= effectiveMaxBytes) {
           bestBlob = blob
           lowQuality = midQuality
         } else {
@@ -1321,7 +1373,7 @@ export default function ImproverPage() {
       targetHeight = Math.max(minWorkflowPhotoResizeDimension, Math.round(targetHeight * 0.9))
     }
 
-    throw new Error(`Unable to downsize ${file.name} below ${maxWorkflowPhotoUploadLabel}.`)
+    throw new Error(`Unable to downsize ${file.name} below ${formatWorkflowByteLimitLabel(effectiveMaxBytes)}.`)
   }, [])
 
   const prepareSelectedPhotos = useCallback(
@@ -1645,6 +1697,54 @@ export default function ImproverPage() {
       reader.readAsDataURL(file)
     })
 
+  const fitPreparedStepItemsWithinTransportLimit = useCallback(
+    async (
+      items: PreparedWorkflowStepCompletionItem[],
+      stepNotPossible: boolean,
+      stepNotPossibleDetails: string,
+    ) => {
+      const estimatedBytes = () =>
+        estimatePreparedWorkflowStepCompletionPayloadBytes(items, stepNotPossible, stepNotPossibleDetails)
+
+      if (estimatedBytes() <= maxWorkflowStepCompletionEstimatedPayloadBytes) {
+        return items
+      }
+
+      for (const targetBytes of workflowPhotoTransportRecompressTargets) {
+        const photoRefs = items
+          .flatMap((item) =>
+            item.photoUploads.map((upload, uploadIndex) => ({
+              item,
+              uploadIndex,
+              upload,
+            })),
+          )
+          .sort((left, right) => right.upload.file.size - left.upload.file.size)
+
+        for (const ref of photoRefs) {
+          if (estimatedBytes() <= maxWorkflowStepCompletionEstimatedPayloadBytes) {
+            return items
+          }
+          if (ref.upload.file.size <= targetBytes) {
+            continue
+          }
+
+          ref.item.photoUploads[ref.uploadIndex] = {
+            ...ref.upload,
+            file: await shrinkPhotoToUploadLimit(ref.upload.file, ref.upload.aspectRatio, targetBytes),
+          }
+        }
+
+        if (estimatedBytes() <= maxWorkflowStepCompletionEstimatedPayloadBytes) {
+          return items
+        }
+      }
+
+      throw new Error("Selected photos are too large to submit together. Reduce the number of photos or retake them at a lower resolution.")
+    },
+    [shrinkPhotoToUploadLimit],
+  )
+
   const buildCompletionPayload = async (step: WorkflowStep) => {
     const stepNotPossibleForm = stepNotPossibleForms[step.id] || defaultStepNotPossibleFormState
     const stepNotPossible = step.allow_step_not_possible && stepNotPossibleForm.selected
@@ -1661,31 +1761,22 @@ export default function ImproverPage() {
     }
 
     const stepForms = forms[step.id] || {}
-    const items: Array<{
-      item_id: string
-      photo_uploads?: Array<{
-        file_name: string
-        content_type: string
-        data_base64: string
-      }>
-      written_response?: string
-      dropdown_value?: string
-    }> = []
+    const preparedItems: PreparedWorkflowStepCompletionItem[] = []
 
     for (const item of step.work_items) {
       const form = stepForms[item.id] || defaultItemFormState
-      const photoUploads = await Promise.all(
-        form.photos.map(async (file) => {
-          if (file.size > maxWorkflowPhotoUploadBytes) {
-            throw new Error(`Photo ${file.name || "upload"} exceeds ${maxWorkflowPhotoUploadLabel}.`)
-          }
-          return {
-            file_name: file.name || "photo",
-            content_type: file.type || "image/jpeg",
-            data_base64: await fileToBase64(file),
-          }
-        })
-      )
+      const photoAspectRatio = item.requires_photo
+        ? normalizeWorkflowPhotoAspectRatio(item.photo_aspect_ratio || "square")
+        : null
+      const photoUploads = form.photos.map((file) => {
+        if (file.size > maxWorkflowPhotoUploadBytes) {
+          throw new Error(`Photo ${file.name || "upload"} exceeds ${maxWorkflowPhotoUploadLabel}.`)
+        }
+        return {
+          file,
+          aspectRatio: photoAspectRatio,
+        }
+      })
 
       const dropdownValue = form.dropdown.trim()
       const writtenResponse = form.written.trim()
@@ -1729,6 +1820,28 @@ export default function ImproverPage() {
         continue
       }
 
+      preparedItems.push({
+        itemId: item.id,
+        photoUploads,
+        ...(writtenResponse.length > 0 ? { writtenResponse } : {}),
+        ...(dropdownValue.length > 0 ? { dropdownValue } : {}),
+      })
+    }
+
+    await fitPreparedStepItemsWithinTransportLimit(preparedItems, false, "")
+
+    const items: Array<{
+      item_id: string
+      photo_uploads?: Array<{
+        file_name: string
+        content_type: string
+        data_base64: string
+      }>
+      written_response?: string
+      dropdown_value?: string
+    }> = []
+
+    for (const preparedItem of preparedItems) {
       const payloadItem: {
         item_id: string
         photo_uploads?: Array<{
@@ -1739,11 +1852,20 @@ export default function ImproverPage() {
         written_response?: string
         dropdown_value?: string
       } = {
-        item_id: item.id,
+        item_id: preparedItem.itemId,
       }
-      if (photoUploads.length > 0) payloadItem.photo_uploads = photoUploads
-      if (writtenResponse.length > 0) payloadItem.written_response = writtenResponse
-      if (dropdownValue.length > 0) payloadItem.dropdown_value = dropdownValue
+
+      if (preparedItem.photoUploads.length > 0) {
+        payloadItem.photo_uploads = await Promise.all(
+          preparedItem.photoUploads.map(async (upload) => ({
+            file_name: upload.file.name || "photo",
+            content_type: upload.file.type || "image/jpeg",
+            data_base64: await fileToBase64(upload.file),
+          })),
+        )
+      }
+      if (preparedItem.writtenResponse) payloadItem.written_response = preparedItem.writtenResponse
+      if (preparedItem.dropdownValue) payloadItem.dropdown_value = preparedItem.dropdownValue
       items.push(payloadItem)
     }
 
