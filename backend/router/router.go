@@ -117,6 +117,7 @@ func AddWorkflowRoutes(r *chi.Mux, s *handlers.BotService, a *handlers.AppServic
 	r.Post("/improvers/workflow-series/unclaim", withImprover(a.UnclaimImproverWorkflowSeries, a))
 	r.Post("/improvers/workflows/{workflow_id}/steps/{step_id}/claim", withImprover(a.ClaimWorkflowStep, a))
 	r.Post("/improvers/workflows/{workflow_id}/steps/{step_id}/start", withImprover(a.StartWorkflowStep, a))
+	r.Post("/improvers/workflows/{workflow_id}/steps/{step_id}/photos", withImprover(a.UploadWorkflowStepPhoto, a))
 	r.Post("/improvers/workflows/{workflow_id}/steps/{step_id}/complete", withImprover(a.CompleteWorkflowStep, a))
 	r.Post("/improvers/workflows/{workflow_id}/steps/{step_id}/payout-request", withImprover(a.RequestWorkflowStepPayoutRetry, a))
 

@@ -32,6 +32,7 @@ import (
 )
 
 const maxWorkflowStepCompletionRequestBytes int64 = 16 * 1024 * 1024
+const maxWorkflowStepPhotoUploadRequestBytes int64 = 4 * 1024 * 1024
 
 func userCanViewWorkflowNotifyEmails(workflow *structs.Workflow, userID string) bool {
 	if workflow == nil || userID == "" {
@@ -2866,6 +2867,87 @@ func (a *AppService) CompleteWorkflowStep(w http.ResponseWriter, r *http.Request
 
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(workflow)
+}
+
+func (a *AppService) UploadWorkflowStepPhoto(w http.ResponseWriter, r *http.Request) {
+	userDid := utils.GetDid(r)
+	if userDid == nil {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	workflowId := strings.TrimSpace(r.PathValue("workflow_id"))
+	stepId := strings.TrimSpace(r.PathValue("step_id"))
+	if workflowId == "" || stepId == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	defer r.Body.Close()
+	r.Body = http.MaxBytesReader(w, r.Body, maxWorkflowStepPhotoUploadRequestBytes)
+	if err := r.ParseMultipartForm(maxWorkflowStepPhotoUploadRequestBytes); err != nil {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			w.WriteHeader(http.StatusRequestEntityTooLarge)
+			w.Write([]byte("workflow photo upload is too large; each photo must be 2MB or less"))
+			return
+		}
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte("invalid workflow photo upload request"))
+		return
+	}
+
+	itemId := strings.TrimSpace(r.FormValue("item_id"))
+	if itemId == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte("item_id is required"))
+		return
+	}
+
+	file, header, err := r.FormFile("photo")
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte("photo is required"))
+		return
+	}
+	defer file.Close()
+
+	data, err := io.ReadAll(file)
+	if err != nil {
+		a.logger.Logf("error reading workflow photo upload body for improver %s step %s: %s", *userDid, stepId, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	contentType := strings.TrimSpace(header.Header.Get("Content-Type"))
+	if contentType == "" {
+		contentType = http.DetectContentType(data)
+	}
+
+	photo, err := a.db.CreateWorkflowStepPhotoUpload(r.Context(), workflowId, stepId, itemId, *userDid, header.Filename, contentType, data)
+	if err != nil {
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "not assigned") {
+			w.WriteHeader(http.StatusForbidden)
+			w.Write([]byte(errMsg))
+			return
+		}
+		if strings.Contains(errMsg, "required") || strings.Contains(errMsg, "invalid") || strings.Contains(errMsg, "missing") || strings.Contains(errMsg, "not available yet") || strings.Contains(errMsg, "already been completed") || strings.Contains(errMsg, "does not belong") || strings.Contains(errMsg, "not active") || strings.Contains(errMsg, "exceeds maximum size") {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(errMsg))
+			return
+		}
+		if err == pgx.ErrNoRows {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		a.logger.Logf("error uploading workflow photo for improver %s workflow %s step %s: %s", *userDid, workflowId, stepId, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(structs.WorkflowStepPhotoUploadResult{Photo: *photo})
 }
 
 func (a *AppService) GetVoterWorkflows(w http.ResponseWriter, r *http.Request) {
