@@ -130,3 +130,9 @@
 - Kept submission-complete cards on the SFLuv red palette while switching the success checkmark icon circles back to green in UI and SVG previews.
 
 - Signup no longer hard-fails on smart-wallet deployment; new wallet rows are saved first, then smart-wallet code deployment is attempted best-effort afterward. Wallet creation now ignores client-supplied ids on add.
+
+- Wallet nav shortcut now prefers the saved primary wallet when it matches a stored wallet, and only falls back to smart wallet 0 for custom/manual primary wallet addresses.
+
+- Wallet sidebar tab now points directly to the saved stored primary wallet across the app, not just on mobile; custom/manual primary addresses still fall back to smart wallet 0.
+
+- Restored wallet-tab shortcut behavior to mobile-only; desktop continues to open the wallet list while mobile still targets the saved stored primary wallet when available.
