@@ -561,26 +561,24 @@ export default function AppProvider({ children }: { children: ReactNode }) {
       isMinter: wallet.is_minter
     })
     const isDeployed = await w.init()
-    if (!isDeployed) {
-      const deployedNow = await w.ensureSmartWalletDeployed()
-      if (!deployedNow && wallet.id === null) {
-        throw new Error("error deploying smart wallet during initialization")
-      }
-      if (!deployedNow) {
-        console.error("smart wallet remained undeployed after sign-in initialization", {
-          owner: wallet.owner,
-          eoaAddress: wallet.eoa_address,
-          smartIndex: index.toString(),
-          smartAddress: w.address
-        })
-      }
-    }
-
     if(wallet.id === null) {
       wallet.smart_address = w.address
       wallet.smart_index = Number(index)
       let id = await _postWallet(wallet)
       w.setId(id)
+    }
+
+    if (!isDeployed) {
+      const deployedNow = await w.ensureSmartWalletDeployed()
+      if (!deployedNow) {
+        console.error("smart wallet remained undeployed after initialization", {
+          owner: wallet.owner,
+          eoaAddress: wallet.eoa_address,
+          smartIndex: index.toString(),
+          smartAddress: w.address,
+          walletId: wallet.id
+        })
+      }
     }
 
     return w

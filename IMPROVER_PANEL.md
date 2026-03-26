@@ -128,3 +128,5 @@
 - Switched improver submission-complete cards and regenerated the root SVG previews to use the SFLuv red accent palette in both light and dark mode.
 
 - Kept submission-complete cards on the SFLuv red palette while switching the success checkmark icon circles back to green in UI and SVG previews.
+
+- Signup no longer hard-fails on smart-wallet deployment; new wallet rows are saved first, then smart-wallet code deployment is attempted best-effort afterward. Wallet creation now ignores client-supplied ids on add.
