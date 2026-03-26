@@ -41,14 +41,20 @@ export function DashboardSidebar() {
 
   const isNonAdminNonMerchant = user?.isAdmin !== true && user?.isMerchant !== true
   const shouldShortcutToWallet = status === "authenticated" && isMobile && isNonAdminNonMerchant
-  const primarySmartWallet =
+  const normalizedPrimaryWalletAddress = (user?.primaryWalletAddress || "").trim().toLowerCase()
+  const selectedPrimaryWallet =
+    normalizedPrimaryWalletAddress.length > 0
+      ? wallets.find((wallet) => wallet.address?.toLowerCase() === normalizedPrimaryWalletAddress)
+      : undefined
+  const fallbackSmartWallet =
     wallets.find((wallet) => wallet.type === "smartwallet" && wallet.index === 0n) ??
     wallets.find((wallet) => wallet.type === "smartwallet")
-  const hasWalletShortcutTarget = shouldShortcutToWallet && Boolean(primarySmartWallet?.address)
+  const walletShortcutTarget = selectedPrimaryWallet ?? fallbackSmartWallet
+  const hasWalletShortcutTarget = shouldShortcutToWallet && Boolean(walletShortcutTarget?.address)
   const walletNavTitle = hasWalletShortcutTarget ? "Wallet" : "Connected Wallets"
   const walletNavPath =
-    hasWalletShortcutTarget && primarySmartWallet?.address
-      ? `/wallets/${primarySmartWallet.address}?fromWalletMenu=1`
+    hasWalletShortcutTarget && walletShortcutTarget?.address
+      ? `/wallets/${walletShortcutTarget.address}?fromWalletMenu=1`
       : "/wallets"
 
   const isActive = (path: string) => {
