@@ -4,11 +4,11 @@ import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
-import { usePrivy, useWallets } from "@privy-io/react-auth";
+import { usePrivy } from "@privy-io/react-auth";
 import { BACKEND } from "@/lib/constants";
 import { normalizeRedeemCode } from "@/lib/redeem-link";
 import { useApp } from "@/context/AppProvider";
-import { WalletResponse } from "@/types/server";
+import { GetUserResponse, WalletResponse } from "@/types/server";
 
 const normalizeReturnTo = (rawValue: string | null): string | null => {
   if (!rawValue) return null
@@ -23,13 +23,11 @@ const loginRedirectPendingKey = "faucet_redeem_login_redirect_pending"
 const loginRedirectPendingTimeoutMs = 15000
 
 const Page = () => {
-  const missingSigAuthMessage = "Please download the CitizenWallet app, then scan your QR code again."
-  const missingPrimarySmartWalletMessage = "Primary smart wallet is still initializing. Please wait a few seconds and try again."
+  const missingPrimarySmartWalletMessage = "Your default wallet is still initializing. Please wait a few seconds and try again."
   const searchParams = useSearchParams();
   const router = useRouter();
-  const { ensurePrimarySmartWallet, authFetch, status: appStatus, walletsStatus: appWalletsStatus } = useApp()
+  const { ensurePrimarySmartWallet, authFetch, status: appStatus, walletsStatus: appWalletsStatus, user, wallets: appWallets } = useApp()
   const { login, authenticated, ready: privyReady } = usePrivy()
-  const { wallets, ready: walletsReady } = useWallets()
 
   const [error, setError] = useState<string | null>();
   const [success, setSuccess] = useState<boolean>(false);
@@ -46,6 +44,8 @@ const Page = () => {
   const [successRedirectTo, setSuccessRedirectTo] = useState<string | null>(null)
   const directRedeemAttemptedRef = useRef<boolean>(false)
   const webWalletRedeemAttemptedRef = useRef<boolean>(false)
+  const webWalletRedeemInFlightRef = useRef<boolean>(false)
+  const autoLoginAttemptedRef = useRef<boolean>(false)
   const redirectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const sigAuthAccount = searchParams.get("sigAuthAccount")
@@ -58,12 +58,11 @@ const Page = () => {
   const isWebWalletSessionReady =
     authenticated &&
     privyReady &&
-    walletsReady &&
     appStatus === "authenticated" &&
-    appWalletsStatus === "available"
+    appWalletsStatus === "available" &&
+    Boolean(user)
   const isFinalErrorState = Boolean(
     error &&
-    error !== missingSigAuthMessage &&
     error !== "W9 Required" &&
     error !== "W9 Pending"
   )
@@ -86,12 +85,6 @@ const Page = () => {
     }
     setLoginRedirectPending(false)
   }, [])
-  const waitingOnPostLoginSetup =
-    shouldUseWebWalletFlow &&
-    !isWebWalletSessionReady &&
-    (!error || error === missingSigAuthMessage)
-
-
   const buildW9Url = (baseUrl: string, walletAddress: string, email?: string | null) => {
     if (!baseUrl) return baseUrl
     if (!walletAddress) return baseUrl
@@ -211,44 +204,86 @@ const Page = () => {
     }
   }, [router, searchParams])
 
-  const resolvePrimarySmartWalletAddress = useCallback(async (primaryEoaAddress: string): Promise<string> => {
+  const getStoredWalletAddress = (wallet: WalletResponse | undefined): string => {
+    if (!wallet) return ""
+    const rawAddress = wallet.is_eoa ? wallet.eoa_address : wallet.smart_address
+    return typeof rawAddress === "string" ? rawAddress.trim() : ""
+  }
+
+  const getWalletRouteForAddress = useCallback((walletAddress: string, backendWallets?: WalletResponse[]) => {
+    const normalizedAddress = walletAddress.trim().toLowerCase()
+    if (!normalizedAddress) return "/wallets"
+
+    const backendMatch = (backendWallets || []).some((wallet) => getStoredWalletAddress(wallet).toLowerCase() === normalizedAddress)
+    const frontendMatch = appWallets.some((wallet) => wallet.address?.toLowerCase() === normalizedAddress)
+
+    return backendMatch || frontendMatch ? `/wallets/${walletAddress}` : "/wallets"
+  }, [appWallets])
+
+  const loadAuthedUserRecord = useCallback(async (): Promise<GetUserResponse> => {
+    const res = await authFetch("/users")
+    if (!res.ok) {
+      throw new Error("Unable to load your account details. Please try again.")
+    }
+    return await res.json() as GetUserResponse
+  }, [authFetch])
+
+  const resolveDefaultRedeemWallet = useCallback(async (): Promise<{ address: string; walletPath: string }> => {
+    const normalizeWalletAddress = (value?: string | null) => {
+      const trimmed = (value || "").trim()
+      return isHexAddress(trimmed) ? trimmed.toLowerCase() : ""
+    }
+
+    const currentPrimaryAddress = normalizeWalletAddress(user?.primaryWalletAddress)
+    if (currentPrimaryAddress) {
+      return {
+        address: currentPrimaryAddress,
+        walletPath: getWalletRouteForAddress(currentPrimaryAddress),
+      }
+    }
+
+    let userResponse = await loadAuthedUserRecord()
+    let resolvedAddress = normalizeWalletAddress(userResponse.user.primary_wallet_address)
+    if (resolvedAddress) {
+      return {
+        address: resolvedAddress,
+        walletPath: getWalletRouteForAddress(resolvedAddress, userResponse.wallets),
+      }
+    }
+
     const hasPrimarySmartWallet = await ensurePrimarySmartWallet()
     if (!hasPrimarySmartWallet) {
       throw new Error(missingPrimarySmartWalletMessage)
     }
 
-    const walletsRes = await authFetch("/wallets")
-    if (!walletsRes.ok) {
-      throw new Error("Unable to verify primary smart wallet. Please try again.")
+    userResponse = await loadAuthedUserRecord()
+    resolvedAddress = normalizeWalletAddress(userResponse.user.primary_wallet_address)
+    if (resolvedAddress) {
+      return {
+        address: resolvedAddress,
+        walletPath: getWalletRouteForAddress(resolvedAddress, userResponse.wallets),
+      }
     }
-    const backendWallets = (await walletsRes.json()) as WalletResponse[]
-    const normalizedPrimaryEoaAddress = (primaryEoaAddress || "").trim().toLowerCase()
 
-    const preferredSmartWallet = backendWallets.find((wallet) =>
-      wallet.is_eoa === false &&
-      wallet.smart_index === 0 &&
-      wallet.eoa_address?.toLowerCase() === normalizedPrimaryEoaAddress &&
-      typeof wallet.smart_address === "string" &&
-      isHexAddress(wallet.smart_address.trim())
-    ) || backendWallets.find((wallet) =>
+    const fallbackSmartWallet = userResponse.wallets.find((wallet) =>
       wallet.is_eoa === false &&
       wallet.smart_index === 0 &&
       typeof wallet.smart_address === "string" &&
       isHexAddress(wallet.smart_address.trim())
     )
-
-    const smartWalletAddress = typeof preferredSmartWallet?.smart_address === "string"
-      ? preferredSmartWallet.smart_address.trim()
-      : ""
-    if (!isHexAddress(smartWalletAddress)) {
-      throw new Error(missingPrimarySmartWalletMessage)
+    const fallbackAddress = normalizeWalletAddress(getStoredWalletAddress(fallbackSmartWallet))
+    if (fallbackAddress) {
+      return {
+        address: fallbackAddress,
+        walletPath: getWalletRouteForAddress(fallbackAddress, userResponse.wallets),
+      }
     }
 
-    return smartWalletAddress.toLowerCase()
-  }, [authFetch, ensurePrimarySmartWallet])
+    throw new Error(missingPrimarySmartWalletMessage)
+  }, [ensurePrimarySmartWallet, getWalletRouteForAddress, loadAuthedUserRecord, user?.primaryWalletAddress])
 
   const redeemWithWebWallet = useCallback(async () => {
-    if (webWalletRedeemAttemptedRef.current || success) return
+    if (webWalletRedeemAttemptedRef.current || webWalletRedeemInFlightRef.current || success) return
     if (!isWebWalletSessionReady) return
     if (!code) {
       setError("Invalid redeem code.")
@@ -257,36 +292,34 @@ const Page = () => {
       return
     }
 
-    webWalletRedeemAttemptedRef.current = true
+    webWalletRedeemInFlightRef.current = true
     setContinuingWithWebWallet(true)
     setWebWalletError(null)
     setError(null)
     try {
-      const primaryWallet = wallets[0]
-      if (!primaryWallet) {
-        throw new Error("No web wallet found. Connect a wallet and try again.")
-      }
-
-      const smartWalletAddress = await resolvePrimarySmartWalletAddress(primaryWallet.address)
-
-      const smartWalletReturnTo = `/wallets/${smartWalletAddress}`
+      const { address: defaultWalletAddress, walletPath } = await resolveDefaultRedeemWallet()
       if (!returnTo || returnTo === "/wallets") {
-        ensureWebWalletQueryParams(smartWalletReturnTo)
+        ensureWebWalletQueryParams(walletPath)
       }
 
+      webWalletRedeemAttemptedRef.current = true
       await sendBotRequest(
-        smartWalletAddress,
-        !returnTo || returnTo === "/wallets" ? smartWalletReturnTo : undefined
+        defaultWalletAddress,
+        !returnTo || returnTo === "/wallets" ? walletPath : undefined
       )
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unable to continue with web wallet."
+      if (message === missingPrimarySmartWalletMessage || message === "Unable to load your account details. Please try again.") {
+        webWalletRedeemAttemptedRef.current = false
+      }
       setError(message)
       setWebWalletError(message)
     } finally {
+      webWalletRedeemInFlightRef.current = false
       setContinuingWithWebWallet(false)
       setContinueWithWebWalletRequested(false)
     }
-  }, [code, ensureWebWalletQueryParams, isWebWalletSessionReady, resolvePrimarySmartWalletAddress, returnTo, success, wallets])
+  }, [code, ensureWebWalletQueryParams, isWebWalletSessionReady, missingPrimarySmartWalletMessage, resolveDefaultRedeemWallet, returnTo, success])
 
   const continueWithWebWallet = useCallback(async () => {
     if (!code) {
@@ -311,7 +344,7 @@ const Page = () => {
         clearLoginRedirectPending()
         setWebWalletError("Login was cancelled. Please try again.")
         setContinueWithWebWalletRequested(false)
-        setError(missingSigAuthMessage)
+        setError(null)
       }
       return
     }
@@ -323,9 +356,11 @@ const Page = () => {
   useEffect(() => {
     directRedeemAttemptedRef.current = false
     webWalletRedeemAttemptedRef.current = false
+    autoLoginAttemptedRef.current = false
     setContinueWithWebWalletRequested(false)
     setContinuingWithWebWallet(false)
     setSuccessRedirectTo(null)
+    setWebWalletError(null)
   }, [code, sigAuthAccount, sigAuthSignature])
 
   useEffect(() => {
@@ -344,25 +379,12 @@ const Page = () => {
     ensureWebWalletQueryParams("/wallets")
 
     if (authenticated) {
-      setError((previous) => {
-        if (previous === missingSigAuthMessage) {
-          return null
-        }
-        return previous
-      })
       return
-    }
-
-    if (!continueWithWebWalletRequested && !continuingWithWebWallet && !isFinalErrorState) {
-      setError(missingSigAuthMessage)
     }
   }, [
     authenticated,
     code,
-    continueWithWebWalletRequested,
-    continuingWithWebWallet,
     ensureWebWalletQueryParams,
-    isFinalErrorState,
     sigAuthAccount,
     sigAuthSignature,
   ])
@@ -388,6 +410,28 @@ const Page = () => {
   }, [continueWithWebWalletRequested, isWebWalletSessionReady, redeemWithWebWallet])
 
   useEffect(() => {
+    if (!shouldUseWebWalletFlow) return
+    if (!code) return
+    if (hasSigAuth) return
+    if (!privyReady) return
+    if (authenticated) return
+    if (continuingWithWebWallet || loginRedirectPending) return
+    if (autoLoginAttemptedRef.current) return
+
+    autoLoginAttemptedRef.current = true
+    void continueWithWebWallet()
+  }, [
+    authenticated,
+    code,
+    continueWithWebWallet,
+    continuingWithWebWallet,
+    hasSigAuth,
+    loginRedirectPending,
+    privyReady,
+    shouldUseWebWalletFlow,
+  ])
+
+  useEffect(() => {
     if (!loginRedirectPending) return
     const timeoutId = setTimeout(() => {
       clearLoginRedirectPending()
@@ -405,7 +449,7 @@ const Page = () => {
     }
   }, [clearLoginRedirectPending, isFinalErrorState, isWebWalletSessionReady, loginRedirectPending, shouldUseWebWalletFlow, success])
 
-  const showDownloadPrompt = error === missingSigAuthMessage && privyReady && !authenticated
+  const showLoginRetry = shouldUseWebWalletFlow && privyReady && !authenticated && Boolean(webWalletError)
 
   useEffect(() => {
     if (!shouldAutoRedirect) {
@@ -446,14 +490,29 @@ const Page = () => {
             Code redeemed!
           </h2>
         </div>
-        : (!error || (error === missingSigAuthMessage && !showDownloadPrompt)) ?
+        : showLoginRetry ?
+        <div className="mx-auto w-full max-w-lg px-4 text-center">
+          <div className="mx-auto mt-4 w-full max-w-md space-y-4 rounded-2xl border bg-card/95 p-4 shadow-sm">
+            <p className="text-sm text-muted-foreground">
+              {webWalletError}
+            </p>
+            <Button
+              onClick={continueWithWebWallet}
+              disabled={continuingWithWebWallet}
+              className="w-full bg-[#eb6c6c] hover:bg-[#d55c5c]"
+            >
+              {continuingWithWebWallet ? "Continuing..." : "Try Logging In Again"}
+            </Button>
+          </div>
+        </div>
+        : !error ?
         <div className="text-center space-y-6 justify-center items-center">
           <h2 className="text-3xl font-bold text-black dark:text-white">Redeeming...</h2>
           <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-[#eb6c6c] m-auto"></div>
         </div>
         : error ?
         <div className="mx-auto w-full max-w-lg px-4 text-center">
-          <h2 className={`font-bold text-black dark:text-white ${error === missingSigAuthMessage ? "text-xl sm:text-2xl" : "text-3xl"}`}>
+          <h2 className="text-3xl font-bold text-black dark:text-white">
             {error}
           </h2>
           {error === "W9 Required" && (
@@ -482,55 +541,6 @@ const Page = () => {
               </p>
             </div>
           )}
-          {showDownloadPrompt &&
-            <div className="mx-auto mt-4 w-full max-w-md space-y-4 rounded-2xl border bg-card/95 p-4 shadow-sm">
-              <p className="text-sm text-muted-foreground">
-                Redeem with CitizenWallet or continue here using your web wallet.
-              </p>
-
-              <div className="grid grid-cols-2 gap-3">
-                <a
-                  href="https://apps.apple.com/us/app/citizen-wallet/id6460822891"
-                  className="inline-flex items-center justify-center rounded-lg border bg-background/60 p-2 transition-colors hover:bg-background"
-                >
-                  <img
-                    className="h-auto w-full max-w-[180px]"
-                    src="/appstore.svg"
-                    alt="Download on the App Store"
-                    />
-                </a>
-                <a
-                  href="https://play.google.com/store/apps/details?id=xyz.citizenwallet.wallet&hl=en&pli=1"
-                  className="inline-flex items-center justify-center rounded-lg border bg-background/60 p-2 transition-colors hover:bg-background"
-                >
-                  <img
-                    className="h-auto w-full max-w-[180px]"
-                    src="/googleplaystore.svg"
-                    alt="Get it on Google Play"
-                    />
-                </a>
-              </div>
-
-              <div className="flex items-center gap-3 text-xs font-medium uppercase tracking-[0.2em] text-muted-foreground">
-                <span className="h-px flex-1 bg-border" />
-                <span>or</span>
-                <span className="h-px flex-1 bg-border" />
-              </div>
-
-              <div className="space-y-2">
-                <Button
-                  onClick={continueWithWebWallet}
-                  disabled={continuingWithWebWallet}
-                  className="w-full bg-[#eb6c6c] hover:bg-[#d55c5c]"
-                >
-                  {continuingWithWebWallet ? "Continuing..." : "Continue with Web Wallet"}
-                </Button>
-                {webWalletError && (
-                  <p className="text-xs text-red-600">{webWalletError}</p>
-                )}
-              </div>
-            </div>
-            }
         </div>
         :
         <div className="text-center space-y-6 justify-center items-center">

@@ -3219,6 +3219,30 @@ export default function AdminPage() {
                     <Input value={selectedImprover.user_id} disabled className="font-mono text-xs" />
                   </div>
                   <div className="space-y-1">
+                    <Label>Payout Wallet</Label>
+                    <Input
+                      value={selectedImprover.primary_rewards_account || "No payout wallet set"}
+                      disabled
+                      className={selectedImprover.primary_rewards_account ? "font-mono text-xs" : ""}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Credentials</Label>
+                    {selectedImprover.active_credentials.length === 0 ? (
+                      <div className="rounded-md border border-dashed px-3 py-2 text-sm text-muted-foreground">
+                        No active credentials
+                      </div>
+                    ) : (
+                      <div className="flex flex-wrap gap-2">
+                        {selectedImprover.active_credentials.map((credential) => (
+                          <Badge key={credential} variant="outline">
+                            {formatCredentialLabel(credential, credentialLabelMap)}
+                          </Badge>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <div className="space-y-1">
                     <Label>Change Approval Status</Label>
                     <Select
                       value={improverStatusDraft}

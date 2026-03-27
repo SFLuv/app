@@ -4640,7 +4640,13 @@ type workflowPayoutTarget struct {
 }
 
 func collectWorkflowPayoutTargets(workflow *structs.Workflow) []workflowPayoutTarget {
-	if workflow == nil || workflow.Status != "completed" {
+	if workflow == nil {
+		return []workflowPayoutTarget{}
+	}
+
+	allowStepPayouts := workflow.Status == "in_progress" || workflow.Status == "completed"
+	allowManagerPayout := workflow.Status == "completed"
+	if !allowStepPayouts {
 		return []workflowPayoutTarget{}
 	}
 
@@ -4679,7 +4685,8 @@ func collectWorkflowPayoutTargets(workflow *structs.Workflow) []workflowPayoutTa
 	}
 
 	managerRetryRequired := workflow.ManagerPayoutError != nil && strings.TrimSpace(*workflow.ManagerPayoutError) != ""
-	if workflow.ManagerBounty > 0 &&
+	if allowManagerPayout &&
+		workflow.ManagerBounty > 0 &&
 		workflow.ManagerImproverId != nil &&
 		workflow.ManagerPaidOutAt == nil &&
 		!workflow.ManagerPayoutInProgress &&
@@ -4877,6 +4884,68 @@ func (a *AppService) processWorkflowSeriesPayouts(ctx context.Context, triggerWo
 		switch workflow.Status {
 		case "deleted", "rejected", "expired", "paid_out", "failed", "skipped":
 			continue
+		case "in_progress":
+			targets := collectWorkflowPayoutTargets(workflow)
+			for _, target := range targets {
+				if target.Amount == 0 {
+					if _, markErr := a.db.MarkWorkflowStepPaidOut(ctx, target.WorkflowId, target.StepId); markErr != nil {
+						a.logger.Logf("error auto-settling zero-value workflow step payout target workflow %s step %s: %s", target.WorkflowId, target.StepId, markErr)
+						return
+					}
+					continue
+				}
+
+				claimed, claimErr := a.db.ClaimWorkflowStepPayoutAttempt(ctx, target.WorkflowId, target.StepId)
+				if claimErr != nil {
+					a.logger.Logf("error claiming step payout attempt lock for workflow %s step %s: %s", target.WorkflowId, target.StepId, claimErr)
+					return
+				}
+				if !claimed {
+					continue
+				}
+
+				walletAddress := ""
+				if target.ImproverId == "" {
+					errMsg := workflowPayoutErrorNoImproverAssigned
+					if dbErr := a.db.MarkWorkflowStepPayoutFailed(ctx, target.WorkflowId, target.StepId, errMsg); dbErr != nil {
+						a.logger.Logf("error recording step payout assignment failure for workflow %s step %s: %s", target.WorkflowId, target.StepId, dbErr)
+					}
+					a.sendWorkflowPayoutErrorEmail(ctx, target, walletAddress, errMsg, nil, nil, false)
+					return
+				}
+
+				walletAddress, err = a.db.GetPreferredWorkflowPayoutAddressForUser(ctx, target.ImproverId, false)
+				if err != nil {
+					errMsg := workflowPayoutErrorNoPayoutWallet
+					if dbErr := a.db.MarkWorkflowStepPayoutFailed(ctx, target.WorkflowId, target.StepId, errMsg); dbErr != nil {
+						a.logger.Logf("error recording step payout wallet failure for workflow %s step %s: %s", target.WorkflowId, target.StepId, dbErr)
+					}
+					a.sendWorkflowPayoutErrorEmail(ctx, target, walletAddress, fmt.Sprintf("%s Detail: %s", errMsg, err), nil, nil, false)
+					return
+				}
+
+				currentBalance, neededBalance, insufficient, transferErr := a.attemptWorkflowPayoutTransfer(ctx, target.Amount, walletAddress)
+				if transferErr != nil {
+					errMsg := workflowPayoutErrorTransferFailed
+					if insufficient {
+						errMsg = workflowPayoutErrorInsufficientFaucet
+					}
+					if dbErr := a.db.MarkWorkflowStepPayoutFailed(ctx, target.WorkflowId, target.StepId, errMsg); dbErr != nil {
+						a.logger.Logf("error recording step payout transfer failure for workflow %s step %s: %s", target.WorkflowId, target.StepId, dbErr)
+					}
+					a.sendWorkflowPayoutErrorEmail(ctx, target, walletAddress, fmt.Sprintf("%s Detail: %s", errMsg, transferErr), currentBalance, neededBalance, insufficient)
+					return
+				}
+
+				if _, err := a.db.MarkWorkflowStepPaidOut(ctx, target.WorkflowId, target.StepId); err != nil {
+					errMsg := fmt.Sprintf("workflow payout post-transfer state update failed: %s", err)
+					a.logger.Logf("error marking step payout complete for workflow %s step %s: %s", target.WorkflowId, target.StepId, err)
+					a.sendWorkflowPayoutErrorEmail(ctx, target, walletAddress, errMsg, nil, nil, false)
+					return
+				}
+			}
+			// Hold later workflows in the series until this workflow is fully finished.
+			return
 		case "completed":
 			targets := collectWorkflowPayoutTargets(workflow)
 			for _, target := range targets {

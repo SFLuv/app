@@ -15,7 +15,7 @@ const Providers = ({ children }: { children: ReactNode }) => {
     <PrivyProvider
       appId={PRIVY_ID}
       config={{
-        loginMethods: ["wallet", "email", "google"],
+        loginMethods: ["email", "google"],
         appearance: {
           theme: resolvedTheme as any || "light",
           accentColor: "#eb6c6c",

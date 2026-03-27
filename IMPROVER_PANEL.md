@@ -136,3 +136,6 @@
 - Wallet sidebar tab now points directly to the saved stored primary wallet across the app, not just on mobile; custom/manual primary addresses still fall back to smart wallet 0.
 
 - Restored wallet-tab shortcut behavior to mobile-only; desktop continues to open the wallet list while mobile still targets the saved stored primary wallet when available.
+- Workflow step bounties now pay out as soon as the individual step is completed, while workflow-level supervisor payout and full workflow finalization still wait until the overall workflow is complete; the improver unpaid-workflows query now includes in-progress workflows with completed unpaid steps.
+- Admin improver modals now show each improver's payout wallet address and active credential list, with credential ids rendered by label on the frontend.
+- Authenticated clients now refresh their `/users` record in the background (on focus, when the tab becomes visible, and on a short interval), so newly approved roles appear on the frontend without requiring the user to log out and back in.

@@ -84,6 +84,7 @@ type Improver struct {
 	LastName              string    `json:"last_name"`
 	Email                 string    `json:"email"`
 	PrimaryRewardsAccount string    `json:"primary_rewards_account"`
+	ActiveCredentials     []string  `json:"active_credentials"`
 	Status                string    `json:"status"`
 	CreatedAt             time.Time `json:"created_at"`
 	UpdatedAt             time.Time `json:"updated_at"`
@@ -670,16 +671,16 @@ type WorkflowStartRefreshResult struct {
 }
 
 type WorkflowDropdownNotification struct {
-	WorkflowId            string   `json:"workflow_id"`
-	WorkflowTitle         string   `json:"workflow_title"`
-	StepId                string   `json:"step_id"`
-	StepTitle             string   `json:"step_title"`
-	ItemId                string   `json:"item_id"`
-	ItemTitle             string   `json:"item_title"`
-	DropdownValue         string   `json:"dropdown_value"`
-	Emails                []string `json:"emails"`
-	SendPicturesWithEmail bool     `json:"send_pictures_with_email,omitempty"`
-	PhotoIDs              []string `json:"photo_ids,omitempty"`
+	WorkflowId            string                                  `json:"workflow_id"`
+	WorkflowTitle         string                                  `json:"workflow_title"`
+	StepId                string                                  `json:"step_id"`
+	StepTitle             string                                  `json:"step_title"`
+	ItemId                string                                  `json:"item_id"`
+	ItemTitle             string                                  `json:"item_title"`
+	DropdownValue         string                                  `json:"dropdown_value"`
+	Emails                []string                                `json:"emails"`
+	SendPicturesWithEmail bool                                    `json:"send_pictures_with_email,omitempty"`
+	PhotoIDs              []string                                `json:"photo_ids,omitempty"`
 	PhotoLinks            []WorkflowDropdownNotificationPhotoLink `json:"photo_links,omitempty"`
 }
 

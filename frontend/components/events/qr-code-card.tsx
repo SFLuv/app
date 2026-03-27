@@ -23,9 +23,8 @@ export const QRCodeCard = ({ code }: { code: string }) => {
         <h3 style={{margin: "10px"}}>To redeem your tokens:</h3>
         <ol style={{textAlign: "center", width: "70%", margin: "auto", fontSize: "12px"}}>
           <li>1. Scan the QR code.</li>
-          <li>2. Select "Continue with Web Wallet".</li>
-          <li>3. Sign up with Google or your preferred email account.</li>
-          <li>4. Wait to receive your SFLuv!</li>
+          <li>2. Sign up or sign in with Google or your preferred email account.</li>
+          <li>3. Wait to receive your SFLuv!</li>
         </ol>
       </div>
 
