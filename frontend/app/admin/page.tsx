@@ -1575,10 +1575,14 @@ export default function AdminPage() {
 
   useEffect(() => {
     getAuthedMapLocations()
-    getEvents()
     getIssuers()
     getCredentialTypes()
   }, [])
+
+  useEffect(() => {
+    if (status !== "authenticated") return
+    void getEvents()
+  }, [status, eventsSearch, eventsPage, eventsCount, eventsExpired])
 
   useEffect(() => { getAffiliates(affiliateSearch, affiliatePage) }, [affiliateSearch, affiliatePage])
   useEffect(() => { getProposers(proposerSearch, proposerPage) }, [proposerSearch, proposerPage])
@@ -1595,7 +1599,6 @@ export default function AdminPage() {
         void getAuthedMapLocations()
         break
       case "events":
-        void getEvents()
         void getUnallocatedBalance()
         break
       case "w9":
