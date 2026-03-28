@@ -1,16 +1,15 @@
 "use client"
 
-import { Dispatch, SetStateAction, useEffect, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
-import { AlertTriangle, Container, Divide, Trash2 } from "lucide-react"
+import { AlertTriangle, Download, Loader2, Trash2 } from "lucide-react"
 import { Event } from "@/types/event"
 import { DeleteEventModal } from "./delete-event-modal"
 import { QRCodeCard } from "./qr-code-card"
 import { AffiliateQRCodeCard } from "./affiliate-qr-code-card"
 import { useApp } from "@/context/AppProvider"
-import { Margin, Options, usePDF } from "react-to-pdf";
-import ReactPDF from '@react-pdf/renderer';
+import generatePDF, { Margin, Resolution } from "react-to-pdf"
 
 interface EventModalProps {
   open: boolean
@@ -34,6 +33,7 @@ export function EventModal({
   if(!event) return
 
   const { authFetch, affiliate, user } = useApp()
+  const exportTargetRef = useRef<HTMLDivElement | null>(null)
 
   const [deleteError, setDeleteError]= useState<string | null>()
   const [deleteModalOpen, setDeleteModalOpen] = useState<boolean>(false)
@@ -42,12 +42,24 @@ export function EventModal({
   const [codesError, setCodesError] = useState<string | undefined>()
   const [affiliateLogo, setAffiliateLogo] = useState<string | null>(null)
   const [affiliateOrganization, setAffiliateOrganization] = useState<string | null>(null)
+  const [exportCodes, setExportCodes] = useState<string[]>([])
+  const [downloadingPdf, setDownloadingPdf] = useState<boolean>(false)
 
-  const { toPDF, targetRef } = usePDF({
-    method: "save",
-    filename: event.title.toLowerCase().split(" ").join("-") + ".pdf",
-    page: { margin: Margin.NONE, format: [55, 42.5] },
-  });
+  const maxCodesPerPdf = 30
+  const eventFilenameBase = useMemo(() => (
+    event.title
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "") || "event"
+  ), [event.title])
+  const codeBatches = useMemo(() => {
+    const batches: string[][] = []
+    for (let index = 0; index < codes.length; index += maxCodesPerPdf) {
+      batches.push(codes.slice(index, index + maxCodesPerPdf))
+    }
+    return batches
+  }, [codes])
 
 
 
@@ -99,6 +111,7 @@ export function EventModal({
   useEffect(() => {
     setDeleteError(null)
     setCodesError(undefined)
+    setExportCodes([])
     if(open) {
       setAffiliateLogo(null)
       setAffiliateOrganization(null)
@@ -117,6 +130,64 @@ export function EventModal({
       onOpenChange()
     } else {
       setDeleteError("Encountered a server error while deleting event. Please try again later.")
+    }
+  }
+
+  const waitForExportRender = async () => {
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+    await new Promise<void>((resolve) => setTimeout(() => resolve(), 50))
+  }
+
+  const downloadCodeBatch = async (batchCodes: string[], batchIndex?: number) => {
+    setExportCodes(batchCodes)
+    await waitForExportRender()
+    await generatePDF(() => exportTargetRef.current, {
+      method: "save",
+      filename: batchIndex === undefined
+        ? `${eventFilenameBase}.pdf`
+        : `${eventFilenameBase}-batch-${batchIndex + 1}.pdf`,
+      resolution: Resolution.NORMAL,
+      page: { margin: Margin.NONE, format: [55, 42.5] },
+      canvas: {
+        mimeType: "image/jpeg",
+        qualityRatio: 0.95,
+        useCORS: true,
+      },
+    })
+  }
+
+  const handleDownloadPdf = async (specificBatchIndex?: number) => {
+    if (codes.length === 0) {
+      setCodesError("Error fetching codes.")
+      return
+    }
+
+    setDownloadingPdf(true)
+    setCodesError(undefined)
+    try {
+      if (specificBatchIndex !== undefined) {
+        const batch = codeBatches[specificBatchIndex]
+        if (!batch?.length) {
+          throw new Error("Unable to prepare this QR code batch.")
+        }
+        await downloadCodeBatch(batch, specificBatchIndex)
+      } else if (codeBatches.length <= 1) {
+        await downloadCodeBatch(codes)
+      } else {
+        for (let batchIndex = 0; batchIndex < codeBatches.length; batchIndex += 1) {
+          await downloadCodeBatch(codeBatches[batchIndex], batchIndex)
+        }
+      }
+    } catch {
+      setCodesError(
+        codeBatches.length > 1
+          ? "Unable to generate one or more QR code PDF batches. Try downloading an individual batch."
+          : "Unable to generate the QR code PDF right now. Please try again.",
+      )
+    } finally {
+      setDownloadingPdf(false)
+      setExportCodes([])
     }
   }
 
@@ -181,9 +252,12 @@ export function EventModal({
 
             {/* Download Button */}
             <div className="pt-2 text-center">
-              <div style={{top: 100000, position: "relative"}}>
-                <div ref={targetRef} style={{zIndex: -1, position: "fixed", width: "425px", padding: 0}}>
-                  {codes.map((code) => (
+              <div
+                aria-hidden="true"
+                className="pointer-events-none fixed left-[-10000px] top-0 z-[-1] opacity-0"
+              >
+                <div ref={exportTargetRef} style={{ width: "425px", padding: 0 }}>
+                  {exportCodes.map((code) => (
                     affiliateLogo
                       ? <AffiliateQRCodeCard
                           key={code}
@@ -195,19 +269,47 @@ export function EventModal({
                   ))}
                 </div>
               </div>
-              <Button
-                type="button"
-                className="w-full sm:w-auto"
-                onClick={() => {
-                  if(codes.length == 0) {
-                    setCodesError("Error fetching codes.")
-                    return
-                  }
-                  toPDF()
-                }}
-              >
-                Download QR Codes
-              </Button>
+              <div className="space-y-3">
+                <Button
+                  type="button"
+                  className="w-full sm:w-auto"
+                  onClick={() => void handleDownloadPdf()}
+                  disabled={downloadingPdf}
+                >
+                  {downloadingPdf ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Preparing PDF{codeBatches.length > 1 ? "s" : ""}
+                    </>
+                  ) : (
+                    <>
+                      <Download className="mr-2 h-4 w-4" />
+                      {codeBatches.length > 1 ? `Download All QR Code PDFs (${codeBatches.length})` : "Download QR Codes"}
+                    </>
+                  )}
+                </Button>
+                {codeBatches.length > 1 && (
+                  <div className="space-y-2">
+                    <p className="text-xs text-muted-foreground">
+                      Large events are split into batches of up to {maxCodesPerPdf} QR codes per PDF to avoid blank downloads.
+                    </p>
+                    <div className="flex flex-wrap justify-center gap-2">
+                      {codeBatches.map((batch, batchIndex) => (
+                        <Button
+                          key={`batch-${batchIndex}`}
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          disabled={downloadingPdf}
+                          onClick={() => void handleDownloadPdf(batchIndex)}
+                        >
+                          Batch {batchIndex + 1} ({batch.length})
+                        </Button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
               {codesError && (
                 <div className="flex items-center gap-2 text-red-600 text-sm p-3 mt-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
                   <AlertTriangle className="h-4 w-4 flex-shrink-0" />
