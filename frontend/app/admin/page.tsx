@@ -564,6 +564,11 @@ export default function AdminPage() {
     return affiliates.filter((affiliate) => affiliate.status === affiliateStatusFilter)
   }, [affiliates, affiliateStatusFilter])
 
+  const canLoadPreviousEventsPage = eventsPage > 0
+  const canLoadNextEventsPage = events.length >= eventsCount
+  const canLoadPreviousAffiliatePage = affiliatePage > 0
+  const canLoadNextAffiliatePage = affiliates.length >= 20
+
   const filteredProposers = useMemo(() => {
     if (proposerStatusFilter === "all") return proposers
     return proposers.filter((proposer) => proposer.status === proposerStatusFilter)
@@ -3024,11 +3029,21 @@ export default function AdminPage() {
                 </div>
               )}
               <div className="flex items-center justify-between pt-2">
-                <Button variant="outline" size="sm" onClick={() => setAffiliatePage((p) => Math.max(0, p - 1))} disabled={affiliatePage === 0}>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setAffiliatePage((p) => Math.max(0, p - 1))}
+                  disabled={!canLoadPreviousAffiliatePage}
+                >
                   <ChevronLeft className="h-4 w-4" />Previous
                 </Button>
                 <span className="text-sm text-muted-foreground">Page {affiliatePage + 1}</span>
-                <Button variant="outline" size="sm" onClick={() => setAffiliatePage((p) => p + 1)} disabled={affiliates.length < 20}>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setAffiliatePage((p) => p + 1)}
+                  disabled={!canLoadNextAffiliatePage}
+                >
                   Next<ChevronRight className="h-4 w-4" />
                 </Button>
               </div>
@@ -4338,6 +4353,25 @@ export default function AdminPage() {
                   ))}
                 </div>
               )}
+              <div className="flex items-center justify-between pt-4">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setEventsPage((p) => Math.max(0, p - 1))}
+                  disabled={!canLoadPreviousEventsPage}
+                >
+                  <ChevronLeft className="h-4 w-4" />Previous
+                </Button>
+                <span className="text-sm text-muted-foreground">Page {eventsPage + 1}</span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setEventsPage((p) => p + 1)}
+                  disabled={!canLoadNextEventsPage}
+                >
+                  Next<ChevronRight className="h-4 w-4" />
+                </Button>
+              </div>
             </CardContent>
           </Card>
         </TabsContent>
