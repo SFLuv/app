@@ -53,12 +53,14 @@ export default function WalletDetailsPage() {
   const [mintAmount, setMintAmount] = useState<string>("")
   const [isMinting, setIsMinting] = useState<boolean>(false)
   const [mintError, setMintError] = useState<string | null>(null)
+  const [addressCopied, setAddressCopied] = useState(false)
   const nameInputRef = useRef<HTMLInputElement>(null)
   const latestTxMarkerRef = useRef<string | null>(null)
   const txPollingInFlightRef = useRef(false)
   const txLastPollAtRef = useRef(0)
   const balanceSnapshotRef = useRef<number | null>(null)
   const balanceRetryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const addressCopiedTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const { toast } = useToast()
   const params = useParams()
   const router = useRouter()
@@ -366,6 +368,14 @@ export default function WalletDetailsPage() {
     if (!wallet?.address) return
     try {
       await navigator.clipboard.writeText(wallet.address)
+      setAddressCopied(true)
+      if (addressCopiedTimeoutRef.current) {
+        clearTimeout(addressCopiedTimeoutRef.current)
+      }
+      addressCopiedTimeoutRef.current = setTimeout(() => {
+        setAddressCopied(false)
+        addressCopiedTimeoutRef.current = null
+      }, 1500)
       toast({
         title: "Address Copied",
         description: "Wallet address copied to clipboard.",
@@ -378,6 +388,14 @@ export default function WalletDetailsPage() {
       })
     }
   }
+
+  useEffect(() => {
+    return () => {
+      if (addressCopiedTimeoutRef.current) {
+        clearTimeout(addressCopiedTimeoutRef.current)
+      }
+    }
+  }, [])
 
   const openMintModal = (asset: "BYUSD" | "HONEY") => {
     setMintAsset(asset)
@@ -639,7 +657,7 @@ export default function WalletDetailsPage() {
                     className="h-5 w-5 p-0 text-muted-foreground hover:text-foreground"
                     aria-label="Copy wallet address"
                   >
-                    <Copy className="h-3 w-3" />
+                    {addressCopied ? <Check className="h-3 w-3 text-green-600" /> : <Copy className="h-3 w-3" />}
                   </Button>
                 </div>
                 {wallet.type === "eoa" && (

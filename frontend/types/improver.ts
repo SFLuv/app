@@ -6,6 +6,7 @@ export interface Improver {
   last_name: string
   email: string
   primary_rewards_account: string
+  active_credentials: string[]
   status: ImproverStatus
   created_at: string
   updated_at: string

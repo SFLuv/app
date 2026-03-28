@@ -611,20 +611,35 @@ func (a *AppDB) GetImprovers(ctx context.Context, search string, page, count int
 	likeSearch := "%" + search + "%"
 	rows, err := a.db.Query(ctx, `
 		SELECT
-			user_id,
-			first_name,
-			last_name,
-			email,
-			primary_rewards_account,
-			status,
-			created_at,
-			updated_at
+			i.user_id,
+			i.first_name,
+			i.last_name,
+			i.email,
+			i.primary_rewards_account,
+			COALESCE(
+				ARRAY(
+					SELECT
+						uc.credential_type
+					FROM
+						user_credentials uc
+					WHERE
+						uc.user_id = i.user_id
+					AND
+						uc.is_revoked = false
+					ORDER BY
+						uc.credential_type ASC
+				),
+				ARRAY[]::TEXT[]
+			),
+			i.status,
+			i.created_at,
+			i.updated_at
 		FROM
-			improvers
+			improvers i
 		WHERE
-			(first_name ILIKE $1 OR last_name ILIKE $1 OR email ILIKE $1)
+			(i.first_name ILIKE $1 OR i.last_name ILIKE $1 OR i.email ILIKE $1)
 		ORDER BY
-			created_at DESC
+			i.created_at DESC
 		LIMIT $2
 		OFFSET $3;
 	`, likeSearch, count, offset)
@@ -642,6 +657,7 @@ func (a *AppDB) GetImprovers(ctx context.Context, search string, page, count int
 			&improver.LastName,
 			&improver.Email,
 			&improver.PrimaryRewardsAccount,
+			&improver.ActiveCredentials,
 			&improver.Status,
 			&improver.CreatedAt,
 			&improver.UpdatedAt,
@@ -804,18 +820,33 @@ func getImproverByUser(ctx context.Context, querier interface {
 }, userId string) (*structs.Improver, error) {
 	row := querier.QueryRow(ctx, `
 		SELECT
-			user_id,
-			first_name,
-			last_name,
-			email,
-			primary_rewards_account,
-			status,
-			created_at,
-			updated_at
+			i.user_id,
+			i.first_name,
+			i.last_name,
+			i.email,
+			i.primary_rewards_account,
+			COALESCE(
+				ARRAY(
+					SELECT
+						uc.credential_type
+					FROM
+						user_credentials uc
+					WHERE
+						uc.user_id = i.user_id
+					AND
+						uc.is_revoked = false
+					ORDER BY
+						uc.credential_type ASC
+				),
+				ARRAY[]::TEXT[]
+			),
+			i.status,
+			i.created_at,
+			i.updated_at
 		FROM
-			improvers
+			improvers i
 		WHERE
-			user_id = $1;
+			i.user_id = $1;
 	`, userId)
 
 	improver := structs.Improver{}
@@ -825,6 +856,7 @@ func getImproverByUser(ctx context.Context, querier interface {
 		&improver.LastName,
 		&improver.Email,
 		&improver.PrimaryRewardsAccount,
+		&improver.ActiveCredentials,
 		&improver.Status,
 		&improver.CreatedAt,
 		&improver.UpdatedAt,
@@ -7995,7 +8027,7 @@ func (a *AppDB) GetImproverUnpaidWorkflows(ctx context.Context, improverId strin
 		FROM
 			workflows w
 		WHERE
-			w.status = 'completed'
+			w.status IN ('in_progress', 'completed')
 		AND
 			(
 				(

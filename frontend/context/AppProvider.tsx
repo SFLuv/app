@@ -378,6 +378,64 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     return await res.json() as WalletResponse[]
   }
 
+  useEffect(() => {
+    if (status !== "authenticated" || !privyAuthenticated) {
+      return
+    }
+
+    let cancelled = false
+    let inFlight = false
+
+    const refreshAuthenticatedUserRecord = async () => {
+      if (cancelled || inFlight) {
+        return
+      }
+
+      inFlight = true
+      try {
+        const response = await _getUser()
+        if (cancelled || response === null) {
+          return
+        }
+        await _userResponseToUser(response)
+        if (!cancelled) {
+          setUserLocations(response.locations)
+        }
+      } catch (error) {
+        console.error("error refreshing authenticated user record", error)
+      } finally {
+        inFlight = false
+      }
+    }
+
+    const handleWindowFocus = () => {
+      void refreshAuthenticatedUserRecord()
+    }
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        void refreshAuthenticatedUserRecord()
+      }
+    }
+
+    const refreshInterval = window.setInterval(() => {
+      if (document.visibilityState === "visible") {
+        void refreshAuthenticatedUserRecord()
+      }
+    }, 15000)
+
+    window.addEventListener("focus", handleWindowFocus)
+    document.addEventListener("visibilitychange", handleVisibilityChange)
+    void refreshAuthenticatedUserRecord()
+
+    return () => {
+      cancelled = true
+      window.clearInterval(refreshInterval)
+      window.removeEventListener("focus", handleWindowFocus)
+      document.removeEventListener("visibilitychange", handleVisibilityChange)
+    }
+  }, [status, privyAuthenticated])
+
   const _ensureDefaultPrimaryWallet = async (currentUser: GetUserResponse["user"], walletList: WalletResponse[]): Promise<string> => {
     const existingPrimaryWallet = (currentUser.primary_wallet_address || "").trim()
     if (existingPrimaryWallet) {
