@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 
 	"github.com/SFLuv/app/backend/structs"
@@ -11,34 +12,63 @@ import (
 func (a *AppDB) GetLocation(ctx context.Context, id uint64) (*structs.PublicLocation, error) {
 	row := a.db.QueryRow(ctx, `
 		SELECT
-			id,
-			google_id,
-			name,
-			approval,
-			description,
-			type,
-			street,
-			city,
-			state,
-			zip,
-			lat,
-			lng,
-			phone,
-			email,
-			website,
-			image_url,
-			rating,
-			maps_page
-		FROM locations
-		WHERE id = $1;
+			l.id,
+			l.google_id,
+			l.name,
+			l.approval,
+			COALESCE(
+				NULLIF(TRIM(u.primary_wallet_address), ''),
+				NULLIF(TRIM(legacy_wallet.smart_address), ''),
+				''
+			) AS pay_to_address,
+			l.description,
+			l.type,
+			l.street,
+			l.city,
+			l.state,
+			l.zip,
+			l.lat,
+			l.lng,
+			l.phone,
+			l.email,
+			l.website,
+			l.image_url,
+			l.rating,
+			l.maps_page
+		FROM locations l
+		LEFT JOIN users u
+			ON u.id = l.owner_id
+		LEFT JOIN LATERAL (
+			SELECT
+				w.smart_address
+			FROM
+				wallets w
+			WHERE
+				w.owner = l.owner_id
+			AND
+				w.is_eoa = FALSE
+			AND
+				w.smart_index = 0
+			AND
+				w.smart_address IS NOT NULL
+			AND
+				TRIM(w.smart_address) <> ''
+			ORDER BY
+				w.id ASC
+			LIMIT 1
+		) legacy_wallet
+			ON TRUE
+		WHERE l.id = $1;
 	`, id)
 
 	location := structs.PublicLocation{}
+	var payToAddress sql.NullString
 	err := row.Scan(
 		&location.ID,
 		&location.GoogleID,
 		&location.Name,
 		&location.Approval,
+		&payToAddress,
 		&location.Description,
 		&location.Type,
 		&location.Street,
@@ -56,6 +86,9 @@ func (a *AppDB) GetLocation(ctx context.Context, id uint64) (*structs.PublicLoca
 	)
 	if err != nil {
 		return nil, err
+	}
+	if payToAddress.Valid {
+		location.PayToAddress = payToAddress.String
 	}
 
 	rows, err := a.db.Query(ctx, `
@@ -91,26 +124,53 @@ func (s *AppDB) GetLocations(ctx context.Context, r *structs.LocationsPageReques
 
 	rows, err := s.db.Query(ctx, `
 		SELECT
-			id,
-			google_id,
-			name,
-			description,
-			type,
-			street,
-			city,
-			state,
-			zip,
-			lat,
-			lng,
-			phone,
-			email,
-			website,
-			image_url,
-			rating,
-			maps_page
-		FROM locations
-		WHERE approval = TRUE
-		ORDER BY id
+			l.id,
+			l.google_id,
+			l.name,
+			COALESCE(
+				NULLIF(TRIM(u.primary_wallet_address), ''),
+				NULLIF(TRIM(legacy_wallet.smart_address), ''),
+				''
+			) AS pay_to_address,
+			l.description,
+			l.type,
+			l.street,
+			l.city,
+			l.state,
+			l.zip,
+			l.lat,
+			l.lng,
+			l.phone,
+			l.email,
+			l.website,
+			l.image_url,
+			l.rating,
+			l.maps_page
+		FROM locations l
+		LEFT JOIN users u
+			ON u.id = l.owner_id
+		LEFT JOIN LATERAL (
+			SELECT
+				w.smart_address
+			FROM
+				wallets w
+			WHERE
+				w.owner = l.owner_id
+			AND
+				w.is_eoa = FALSE
+			AND
+				w.smart_index = 0
+			AND
+				w.smart_address IS NOT NULL
+			AND
+				TRIM(w.smart_address) <> ''
+			ORDER BY
+				w.id ASC
+			LIMIT 1
+		) legacy_wallet
+			ON TRUE
+		WHERE l.approval = TRUE
+		ORDER BY l.id
 		LIMIT $1
 		OFFSET $2;
 	`, r.Count, offset)
@@ -123,11 +183,13 @@ func (s *AppDB) GetLocations(ctx context.Context, r *structs.LocationsPageReques
 
 	for rows.Next() {
 		location := structs.PublicLocation{}
+		var payToAddress sql.NullString
 
 		err = rows.Scan(
 			&location.ID,
 			&location.GoogleID,
 			&location.Name,
+			&payToAddress,
 			&location.Description,
 			&location.Type,
 			&location.Street,
@@ -146,6 +208,9 @@ func (s *AppDB) GetLocations(ctx context.Context, r *structs.LocationsPageReques
 
 		if err != nil {
 			return nil, fmt.Errorf("error scanning location row: %w", err)
+		}
+		if payToAddress.Valid {
+			location.PayToAddress = payToAddress.String
 		}
 		locations = append(locations, &location)
 	}

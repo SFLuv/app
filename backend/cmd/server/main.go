@@ -26,6 +26,14 @@ func main() {
 	}
 	defer appLogger.Close()
 
+	if err := bootstrap.InitializeDatabases(ctx, pools, appLogger); err != nil {
+		log.Fatal(err)
+	}
+
+	if err := bootstrap.RunInitializationSyncs(ctx, pools, appLogger); err != nil {
+		log.Fatal(err)
+	}
+
 	handler, err := bootstrap.NewServerHandler(ctx, pools, appLogger)
 	if err != nil {
 		log.Fatal(err)

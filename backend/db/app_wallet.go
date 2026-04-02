@@ -31,7 +31,9 @@ func (a *AppDB) AddWallet(ctx context.Context, wallet *structs.Wallet) (int, err
 			$7
 		)
 		ON CONFLICT (owner, is_eoa, eoa_address, smart_index)
-		DO NOTHING
+		DO UPDATE
+		SET
+			name = wallets.name
 		RETURNING id;
 	`,
 		wallet.Owner,
