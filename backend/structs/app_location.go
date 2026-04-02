@@ -67,6 +67,7 @@ type PublicLocation struct {
 	GoogleID     string   `json:"google_id"`
 	Name         string   `json:"name"`
 	Approval     bool     `json:"approval"`
+	PayToAddress string   `json:"pay_to_address"`
 	Description  string   `json:"description"`
 	Type         string   `json:"type"`
 	Street       string   `json:"street"`
