@@ -1,5 +1,10 @@
 # Pay Merchant And Tipping Improvements Checklist
 
+Schema migration rule:
+- `backend/db/app.go` remains the baseline `CreateTables()` snapshot.
+- Any schema change after baseline must be added as a new ordered migration in `backend/bootstrap/schema_migrations.go`.
+- Do not tuck new production schema changes directly into `CreateTables()` unless the whole baseline is intentionally being redefined.
+
 Branch:
 - `codex/pay-merchant-and-tipping-improvements`
 
@@ -7,6 +12,7 @@ Scope:
 - improve merchant wallet selection in the web app
 - add first-class merchant tipping wallet support in backend + web frontend
 - prepare the shared merchant payload so pay flows can distinguish merchant payment destination vs tip destination
+- keep mobile app changes out of this branch until backend/web changes settle
 
 Non-goals:
 - no QR payload changes
@@ -16,67 +22,83 @@ Non-goals:
 
 ## Product Rules
 
-- Any user can set a `primary wallet`.
-- Only merchant users can set a `tipping wallet`.
-- A merchant tipping wallet is optional.
-- A merchant tipping wallet must be different from the merchant primary wallet.
+- Any user can still have a `primary wallet`.
+- Merchant payment wallets are location-owned, not user-owned.
+- A merchant location can have multiple payment wallets.
+- Each merchant location has at most one default payment wallet.
+- A merchant tipping wallet is optional and location-owned.
+- Only merchants can configure payment wallets and tipping wallets in the UX.
+- The wallet panel should not be used to configure merchant payment or tipping wallets.
+- A location tipping wallet must not match any configured payment wallet for that location.
 - Tip money must stay distinguishable from base payment money.
   - Do not collapse payment + tip into one destination.
-  - If the merchant has a tip wallet configured, the future pay flow should treat payment and tip as separate transfers.
+  - If the merchant has a tip wallet configured, payment and tip should remain separate transfers.
 
 ## Backend Plan
 
-### 1. Add tipping wallet storage on users
+### 1. Store tipping wallet on locations
 
-- Add nullable `tipping_wallet_address` to `users`.
-- Do not auto-backfill this from `primary_wallet_address`.
-- Do not default it to the primary wallet.
-
-Files:
-- `backend/db/app_user.go`
-- `backend/structs/app_user.go`
-- database migration files if this repo uses explicit migrations outside these folders
-
-### 2. Extend user read/write models
-
-- Include `tipping_wallet_address` in:
-  - user struct serialization
-  - authed user response
-  - frontend server types
-- Keep naming parallel to `primary_wallet_address`.
+- Add `tipping_wallet_address` to `locations`.
+- Keep it optional.
+- Do not default it to the owner's primary wallet.
 
 Files:
-- `backend/structs/app_user.go`
-- `frontend/types/server.ts`
-- `frontend/context/AppProvider.tsx`
+- `backend/structs/app_location.go`
+- `backend/db/app_location.go`
+- `backend/bootstrap/schema_migrations.go`
 
-### 3. Add tipping-wallet update endpoint
+### 2. Add linked location payment wallets table
+
+- Create `location_payment_wallets` to support multiple payment wallets per merchant location.
+- Fields:
+  - `id`
+  - `location_id`
+  - `wallet_address`
+  - `is_default`
+- Enforce one default payment wallet per location.
+- Keep wallet addresses unique per location.
+
+Files:
+- `backend/db/app_location_wallet.go`
+- `backend/bootstrap/schema_migrations.go`
+
+### 3. Keep baseline schema clean and use migrations
+
+- Keep `backend/db/app.go` as the baseline schema snapshot.
+- Add location tipping/payment-wallet storage in a new ordered migration, not inline in `CreateTables()`.
+- Current branch uses migration `1.2` for this.
+
+Files:
+- `backend/db/app.go`
+- `backend/bootstrap/schema_migrations.go`
+
+### 4. Add merchant-only location wallet settings endpoint
 
 - Add authenticated route:
-  - `PUT /users/tipping-wallet`
-- Request body:
-  - `{ "tipping_wallet_address": "0x..." }`
+  - `PUT /locations/{id}/wallet-settings`
+- Request body should support:
+  - replacing the location payment-wallet list
+  - setting the default payment wallet
+  - setting or clearing the location tipping wallet
 - Validation rules:
-  - caller must be a merchant or admin acting as merchant if that pattern already exists
-  - wallet must be a valid Ethereum address
-  - wallet must belong to the authenticated user
-  - wallet must not equal `primary_wallet_address`
-- Decide whether empty string clears the tipping wallet.
-  - recommended: allow clearing
+  - caller must own the location or be an admin
+  - all payment wallets must be valid owned wallets
+  - tipping wallet must be a valid owned wallet
+  - tipping wallet must not match any payment wallet for the location
+  - only merchants should reach this UX
 
 Files:
 - `backend/router/router.go`
-- `backend/handlers/app_user.go`
-- `backend/db/app_user.go`
-- `backend/structs/app_user.go`
+- `backend/handlers/app_location.go`
+- `backend/db/app_location_wallet.go`
+- `backend/structs/app_location.go`
 
-### 4. Expose tip destination in merchant/public location payloads
+### 5. Expose payment/tip destinations in merchant/public location payloads
 
 - Add `tip_to_address` to public location responses.
-- Keep `pay_to_address` logic as-is:
-  - `primary_wallet_address`
-  - fallback smart wallet index `0`
-- `tip_to_address` should come only from `users.tipping_wallet_address`.
+- `pay_to_address` should resolve from the location default payment wallet.
+- If no location payment wallet exists, fall back to owner primary wallet and then legacy smart wallet `0`.
+- `tip_to_address` should come only from `locations.tipping_wallet_address`.
 - Do not silently fall back `tip_to_address` to `pay_to_address`, because that defeats accounting separation.
 
 Files:
@@ -85,12 +107,13 @@ Files:
 - `frontend/types/location.ts`
 - `frontend/context/LocationProvider.tsx` if field mapping is needed
 
-### 5. Tighten wallet lookup metadata if needed
+### 6. Tighten wallet lookup metadata
 
 - Review whether `/wallets/lookup/:address` should expose whether an address is:
-  - merchant primary wallet
-  - merchant tipping wallet
-- This is optional for v1, but useful if pay/send UI needs to label the destination role.
+  - a merchant location payment wallet
+  - a merchant tipping wallet
+  - tied to which merchant location
+- This is useful for post-payment tipping prompts.
 
 Files:
 - `backend/db/app_wallet.go`
@@ -100,69 +123,48 @@ Files:
 
 ## Web Frontend Plan
 
-### 6. Add easy wallet-role actions on wallet cards
+### 7. Keep primary-wallet controls in settings, not wallet cards
 
-- On the main wallets page, add a per-wallet dropdown or action menu:
-  - `Set as primary wallet`
-  - `Set as tipping wallet`
-- Show `Set as tipping wallet` only for merchant users.
-- Hide or disable `Set as tipping wallet` if:
-  - wallet is already the current primary wallet
-  - wallet address is invalid/missing
-
-Files:
-- `frontend/app/wallets/page.tsx`
-
-### 7. Show wallet-role badges
-
-- On wallet cards, show badges:
-  - `Primary Wallet`
-  - `Tipping Wallet`
-- A wallet should never show both at once.
-
-Files:
-- `frontend/app/wallets/page.tsx`
-
-### 8. Keep settings page in sync
-
-- Keep the existing primary wallet selector in settings.
-- Add a merchant-only tipping wallet selector to settings as a secondary management surface.
-- Apply the same validation:
-  - tipping wallet cannot equal primary wallet
-- If primary wallet changes to the currently selected tipping wallet:
-  - block save, or
-  - clear tip selection and require merchant to choose another tip wallet
-- recommended: block save with explicit error until the conflict is resolved
+- Do not let users set primary or tipping wallets from the wallet panel.
+- Merchant payment/tipping wallet controls should live in settings under merchant location management.
+- Keep general primary-wallet selection in settings for all users.
 
 Files:
 - `frontend/app/settings/page.tsx`
+- `frontend/app/wallets/page.tsx`
 
-### 9. Update frontend user state and helpers
+### 8. Add merchant location wallet settings UI
 
-- Store `tippingWalletAddress` in `useApp()` user state.
-- Ensure `updateUser(...)` can refresh it cleanly after save actions.
-- Keep the existing default-primary-wallet initialization logic unchanged.
-- Do not add default tipping-wallet initialization.
+- For each merchant location in settings, allow:
+  - viewing configured payment wallets
+  - adding/removing payment wallets
+  - selecting the default payment wallet
+  - setting or clearing the tipping wallet
+- Only show this surface to merchants.
+- Prevent choosing a tipping wallet that matches any location payment wallet.
 
 Files:
-- `frontend/context/AppProvider.tsx`
-- `frontend/types/server.ts`
+- `frontend/app/settings/page.tsx`
+- `frontend/types/location.ts`
+
+### 9. Keep user primary-wallet state unchanged
+
+- Keep the existing user-level primary-wallet flow intact.
+- Do not add user-level tipping-wallet state in frontend user context.
 
 ## Merchant Pay Flow Plan
 
 ### 10. Add merchant tip support to web pay/send flow
 
-- When the recipient is a merchant and `tip_to_address` exists:
-  - show a tip input
-  - show item total vs tip total separately
+- When the recipient address matches a merchant location payment wallet and `tip_to_address` exists:
+  - show a post-payment tip prompt
+  - keep item total vs tip total separate
 - Execution model:
-  - base payment transfer -> `pay_to_address`
-  - tip transfer -> `tip_to_address`
+  - base payment transfer -> matched/default location payment wallet
+  - tip transfer -> location tipping wallet
 - Treat this as two separate transfers, not one combined transfer.
 - If `tip_to_address` is missing:
-  - either hide tip UI
-  - or show tip UI disabled with explanation
-- recommended for first pass: hide tip UI unless merchant tip wallet exists
+  - do not show tip UI
 
 Files:
 - `frontend/components/wallets/send-crypto-modal.tsx`
@@ -171,7 +173,7 @@ Files:
 ### 11. Merchant map/details consumption
 
 - If merchant map/detail UI uses public location payloads, wire `tip_to_address` through those types now.
-- No UX change required immediately if tip input is only added in send flow.
+- No extra tip UX is required on the details screen immediately if the tip prompt is post-payment.
 
 Files:
 - `frontend/context/LocationProvider.tsx`
@@ -184,34 +186,41 @@ Files:
   - valid owned wallet
   - available to all users
 
-- Tipping wallet:
+- Location payment wallets:
+  - valid owned wallets
+  - merchant-only UX
+  - multiple allowed
+  - at most one default per location
+
+- Location tipping wallet:
   - valid owned wallet
-  - merchant-only
-  - cannot equal primary wallet
+  - merchant-only UX
+  - cannot equal any configured payment wallet for that location
   - can be unset
 
 - Merchant pay payload:
-  - `pay_to_address` may fall back to smart wallet `0`
+  - `pay_to_address` may fall back to owner primary wallet, then legacy smart wallet `0`
   - `tip_to_address` must not fall back to `pay_to_address`
 
 ## Testing Checklist
 
 ### Backend
 
-- Merchant can set primary wallet.
-- Merchant can set tipping wallet.
-- Non-merchant cannot set tipping wallet.
-- Merchant cannot set tipping wallet equal to primary wallet.
+- Merchant can save multiple payment wallets for a location.
+- Merchant can choose one default payment wallet per location.
+- Merchant can set a location tipping wallet.
+- Merchant cannot set a location tipping wallet equal to any location payment wallet.
+- Non-merchant cannot access merchant location wallet settings.
 - Public `/locations` payload returns:
   - `pay_to_address`
   - `tip_to_address` only when configured
 
 ### Web frontend
 
-- Regular users see primary-wallet controls only.
-- Merchants see both primary-wallet and tipping-wallet controls.
-- Wallet cards correctly badge primary vs tipping.
-- Settings page and wallets page stay in sync after updates.
+- Regular users only see primary-wallet settings.
+- Merchants see location payment/tipping wallet settings in settings.
+- Wallet panel does not expose merchant payment/tipping wallet actions.
+- Send flow shows the tip follow-up only after a payment to a merchant payment wallet.
 
 ### Merchant pay flow
 

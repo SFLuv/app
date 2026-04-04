@@ -28,6 +28,10 @@ func main() {
 		log.Fatal(err)
 	}
 
+	if err := bootstrap.RunPendingMigrations(ctx, pools, appLogger); err != nil {
+		log.Fatal(err)
+	}
+
 	if err := bootstrap.RunInitializationSyncs(ctx, pools, appLogger); err != nil {
 		log.Fatal(err)
 	}

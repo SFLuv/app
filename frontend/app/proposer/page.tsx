@@ -28,6 +28,7 @@ import { useToast } from "@/hooks/use-toast"
 import { AlertTriangle, CheckCircle2, ChevronDown, ChevronsUpDown, Clock, GripVertical, Loader2, Plus, Search, Trash2, X } from "lucide-react"
 import {
   GlobalCredentialType,
+  ProposerWorkflowListResponse,
   Workflow,
   WorkflowCreateRequest,
   WorkflowDeletionProposal,
@@ -43,6 +44,7 @@ import {
   WorkflowSupervisorDataField,
 } from "@/types/workflow"
 import { Supervisor } from "@/types/supervisor"
+import { Proposer } from "@/types/proposer"
 import { WorkflowDetailsModal } from "@/components/workflows/workflow-details-modal"
 
 interface DraftRole {
@@ -84,6 +86,11 @@ interface WorkflowSeriesGroup {
   key: string
   series_id: string
   workflows: Workflow[]
+}
+
+interface PendingWorkflowSubmissionPreview {
+  payload: WorkflowCreateRequest
+  workflow: Workflow
 }
 
 type DraftReorderDragState =
@@ -253,6 +260,15 @@ const getTodayDatePart = () => {
   return new Date(now.getTime() - offsetMs).toISOString().slice(0, 10)
 }
 
+const slugifyWorkflowPreviewOptionValue = (label: string, optionIndex: number) => {
+  const base = label
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+  return base || `option_${optionIndex + 1}`
+}
+
 const applyTemplateStartTimeToDatetimeLocal = (currentValue: string, templateStartAt?: number | null) => {
   const templateTime = toTimeValueFromTemplateStartAt(templateStartAt)
   if (!templateTime) {
@@ -295,12 +311,18 @@ export default function ProposerPage() {
   const tabFromQuery = searchParams.get("tab")
   const workflowStatusFromQuery = searchParams.get("workflow_status")
   const templateSearchFromQuery = searchParams.get("template_search")
+  const workflowSearchFromQuery = searchParams.get("workflow_search")
+  const workflowProposerFromQuery = searchParams.get("workflow_proposer")
+  const workflowPageFromQueryRaw = Number(searchParams.get("workflow_page") || "0")
+  const workflowPageFromQuery = Number.isFinite(workflowPageFromQueryRaw) && workflowPageFromQueryRaw >= 0 ? workflowPageFromQueryRaw : 0
 
   const [workflows, setWorkflows] = useState<Workflow[]>([])
   const [templates, setTemplates] = useState<WorkflowTemplate[]>([])
   const [credentialTypes, setCredentialTypes] = useState<GlobalCredentialType[]>([])
   const [supervisors, setSupervisors] = useState<Supervisor[]>([])
+  const [proposerOptions, setProposerOptions] = useState<Proposer[]>([])
   const [deletionProposals, setDeletionProposals] = useState<WorkflowDeletionProposal[]>([])
+  const [workflowTotal, setWorkflowTotal] = useState(0)
   const [createDataLoading, setCreateDataLoading] = useState(false)
   const [createDataLoaded, setCreateDataLoaded] = useState(false)
   const [workflowListLoading, setWorkflowListLoading] = useState(false)
@@ -322,6 +344,9 @@ export default function ProposerPage() {
   const [selectedTemplateId, setSelectedTemplateId] = useState("")
   const [templateComboOpen, setTemplateComboOpen] = useState(false)
   const [templateSearch, setTemplateSearch] = useState(templateSearchFromQuery || "")
+  const [workflowSearch, setWorkflowSearch] = useState(workflowSearchFromQuery || "")
+  const [workflowPage, setWorkflowPage] = useState(workflowPageFromQuery)
+  const [workflowProposerFilter, setWorkflowProposerFilter] = useState(workflowProposerFromQuery || "all")
   const [deleteTemplateId, setDeleteTemplateId] = useState("")
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
   const [deleteTemplateLoading, setDeleteTemplateLoading] = useState(false)
@@ -330,6 +355,9 @@ export default function ProposerPage() {
   const [detailOpen, setDetailOpen] = useState(false)
   const [detailLoading, setDetailLoading] = useState(false)
   const [detailWorkflow, setDetailWorkflow] = useState<Workflow | null>(null)
+  const [submissionPreviewOpen, setSubmissionPreviewOpen] = useState(false)
+  const [pendingWorkflowSubmission, setPendingWorkflowSubmission] = useState<PendingWorkflowSubmissionPreview | null>(null)
+  const [submissionPreviewError, setSubmissionPreviewError] = useState("")
 
   const [saveFromWorkflowOpen, setSaveFromWorkflowOpen] = useState(false)
   const [saveFromWorkflowTitle, setSaveFromWorkflowTitle] = useState("")
@@ -359,10 +387,12 @@ export default function ProposerPage() {
   const [workItemCardOpenState, setWorkItemCardOpenState] = useState<Record<string, boolean>>({})
 
   const isApproved = Boolean(user?.isProposer || user?.isAdmin)
+  const isAdminUser = Boolean(user?.isAdmin)
+  const workflowPageSize = isAdminUser ? 10 : 200
   const createDataLoadedRef = useRef(false)
   const workflowListLoadedRef = useRef(false)
   const createDataRequestRef = useRef<Promise<void> | null>(null)
-  const workflowListRequestRef = useRef<Promise<void> | null>(null)
+  const workflowListRequestIdRef = useRef(0)
   const canProposeDeletion = Boolean(user?.isProposer)
   const isEditProposalMode = editProposalWorkflowId.trim().length > 0
   const touchDragRef = useRef<{
@@ -432,6 +462,16 @@ export default function ProposerPage() {
     [templates, selectedTemplateId]
   )
 
+  const proposerLabelById = useMemo(() => {
+    const entries = proposerOptions.map((proposer) => {
+      const label = (proposer.nickname || "").trim() || proposer.organization.trim() || proposer.email.trim() || proposer.user_id
+      return [proposer.user_id, label] as const
+    })
+    return new Map(entries)
+  }, [proposerOptions])
+
+  const workflowPageCount = Math.max(1, Math.ceil(workflowTotal / workflowPageSize))
+
   const loadCreateData = useCallback(
     async (mode: "blocking" | "background" = "background") => {
       if (!isApproved) {
@@ -500,50 +540,95 @@ export default function ProposerPage() {
         setWorkflowListLoaded(true)
         return
       }
-      if (workflowListRequestRef.current) {
-        return workflowListRequestRef.current
-      }
 
       const shouldSurfaceError = mode === "blocking" || !workflowListLoadedRef.current
-      const request = (async () => {
-        setWorkflowListLoading(true)
-        try {
-          const [workflowsRes, deletionProposalsRes] = await Promise.all([
-            authFetch("/proposers/workflows"),
-            authFetch("/proposers/workflow-deletion-proposals"),
-          ])
+      const requestId = workflowListRequestIdRef.current + 1
+      workflowListRequestIdRef.current = requestId
 
-          if (workflowsRes.ok) {
-            const workflowsJson = await workflowsRes.json()
-            setWorkflows(workflowsJson || [])
-          } else {
-            setWorkflows([])
-          }
-
-          if (deletionProposalsRes.ok) {
-            const deletionProposalsJson = await deletionProposalsRes.json()
-            setDeletionProposals(deletionProposalsJson || [])
-          } else {
-            setDeletionProposals([])
-          }
-
-          setError((prev) => (prev === "Unable to load your workflows right now." ? "" : prev))
-        } catch {
-          if (shouldSurfaceError) {
-            setError("Unable to load your workflows right now.")
-          }
-        } finally {
-          workflowListLoadedRef.current = true
-          workflowListRequestRef.current = null
-          setWorkflowListLoaded(true)
-          setWorkflowListLoading(false)
+      setWorkflowListLoading(true)
+      try {
+        const params = new URLSearchParams()
+        const effectiveWorkflowPage = isAdminUser ? workflowPage : 0
+        params.set("page", String(effectiveWorkflowPage))
+        params.set("count", String(workflowPageSize))
+        if (workflowStatusFilter !== "all") {
+          params.set("status", workflowStatusFilter)
         }
-      })()
+        const trimmedWorkflowSearch = workflowSearch.trim()
+        if (trimmedWorkflowSearch) {
+          params.set("search", trimmedWorkflowSearch)
+        }
+        if (isAdminUser && workflowProposerFilter !== "all") {
+          params.set("proposer_id", workflowProposerFilter)
+        }
 
-      workflowListRequestRef.current = request
-      return request
+        const workflowUrl = `/proposers/workflows${params.toString() ? `?${params.toString()}` : ""}`
+        const requests: Promise<Response>[] = [
+          authFetch(workflowUrl),
+          authFetch("/proposers/workflow-deletion-proposals"),
+        ]
+
+        if (isAdminUser) {
+          requests.push(authFetch("/admin/proposers?page=0&count=500"))
+        }
+
+        const [workflowsRes, deletionProposalsRes, proposersRes] = await Promise.all(requests)
+        if (requestId !== workflowListRequestIdRef.current) {
+          return
+        }
+
+        if (workflowsRes.ok) {
+          const workflowsJson = (await workflowsRes.json()) as ProposerWorkflowListResponse
+          const nextItems = workflowsJson?.items || []
+          const nextTotal = workflowsJson?.total || 0
+          const maxPage = nextTotal > 0 ? Math.max(0, Math.ceil(nextTotal / workflowPageSize) - 1) : 0
+          if (effectiveWorkflowPage > maxPage) {
+            setWorkflowPage(maxPage)
+            return
+          }
+          setWorkflows(nextItems)
+          setWorkflowTotal(nextTotal)
+        } else {
+          setWorkflows([])
+          setWorkflowTotal(0)
+        }
+
+        if (deletionProposalsRes.ok) {
+          const deletionProposalsJson = await deletionProposalsRes.json()
+          setDeletionProposals(deletionProposalsJson || [])
+        } else {
+          setDeletionProposals([])
+        }
+
+        if (isAdminUser) {
+          if (proposersRes && proposersRes.ok) {
+            const proposersJson = (await proposersRes.json()) as Proposer[]
+            setProposerOptions(proposersJson || [])
+          } else {
+            setProposerOptions([])
+          }
+        } else {
+          setProposerOptions([])
+        }
+
+        setError((prev) => (prev === "Unable to load your workflows right now." ? "" : prev))
+      } catch {
+        if (requestId !== workflowListRequestIdRef.current) {
+          return
+        }
+        if (shouldSurfaceError) {
+          setError("Unable to load your workflows right now.")
+        }
+      } finally {
+        if (requestId !== workflowListRequestIdRef.current) {
+          return
+        }
+        workflowListLoadedRef.current = true
+        setWorkflowListLoaded(true)
+        setWorkflowListLoading(false)
+      }
     },
-    [authFetch, isApproved],
+    [authFetch, isAdminUser, isApproved, workflowPage, workflowPageSize, workflowProposerFilter, workflowSearch, workflowStatusFilter],
   )
 
   useEffect(() => {
@@ -560,12 +645,27 @@ export default function ProposerPage() {
     } else {
       params.delete("template_search")
     }
+    if (workflowSearch) {
+      params.set("workflow_search", workflowSearch)
+    } else {
+      params.delete("workflow_search")
+    }
+    if (isAdminUser && workflowProposerFilter !== "all") {
+      params.set("workflow_proposer", workflowProposerFilter)
+    } else {
+      params.delete("workflow_proposer")
+    }
+    if (isAdminUser && workflowPage > 0) {
+      params.set("workflow_page", String(workflowPage))
+    } else {
+      params.delete("workflow_page")
+    }
     const nextQuery = params.toString()
     const currentQuery = window.location.search.replace(/^\?/, "")
     if (nextQuery !== currentQuery) {
       window.history.replaceState(window.history.state, "", nextQuery ? `${pathname}?${nextQuery}` : pathname)
     }
-  }, [activeTab, templateSearch, workflowStatusFilter, pathname])
+  }, [activeTab, isAdminUser, pathname, templateSearch, workflowPage, workflowProposerFilter, workflowSearch, workflowStatusFilter])
 
   useEffect(() => {
     if (status !== "authenticated" || !isApproved) return
@@ -1266,6 +1366,139 @@ export default function ProposerPage() {
     return payload
   }
 
+  const buildWorkflowSubmissionPreview = (
+    payload: WorkflowCreateRequest,
+    normalizedSupervisorDataFields: WorkflowSupervisorDataField[],
+  ): Workflow => {
+    const nowUnix = Math.floor(Date.now() / 1000)
+    const workflowStartUnix = Math.floor(new Date(payload.start_at).getTime() / 1000)
+    const recurrenceEndUnix =
+      payload.recurrence_end_at && payload.recurrence_end_at.trim()
+        ? Math.floor(new Date(payload.recurrence_end_at).getTime() / 1000)
+        : null
+
+    const rolesByClientId = new Map<string, string>()
+    const previewRoles = payload.roles.map((role, roleIndex) => {
+      const roleId = `preview-role-${roleIndex + 1}`
+      rolesByClientId.set(role.client_id, roleId)
+      return {
+        id: roleId,
+        workflow_id: "preview-workflow",
+        title: role.title,
+        required_credentials: role.required_credentials,
+      }
+    })
+
+    const previewSteps = payload.steps.map((step, stepIndex) => ({
+      id: `preview-step-${stepIndex + 1}`,
+      workflow_id: "preview-workflow",
+      step_order: stepIndex + 1,
+      title: step.title,
+      description: step.description,
+      bounty: step.bounty,
+      allow_step_not_possible: Boolean(step.allow_step_not_possible),
+      role_id: rolesByClientId.get(step.role_client_id) || null,
+      assigned_improver_id: null,
+      assigned_improver_name: null,
+      status: "locked" as const,
+      started_at: null,
+      completed_at: null,
+      payout_error: null,
+      payout_last_try_at: null,
+      retry_requested_at: null,
+      retry_requested_by: null,
+      submission: null,
+      work_items: step.work_items.map((item, itemIndex) => ({
+        id: `preview-step-${stepIndex + 1}-item-${itemIndex + 1}`,
+        step_id: `preview-step-${stepIndex + 1}`,
+        item_order: itemIndex + 1,
+        title: item.title,
+        description: item.description,
+        optional: item.optional,
+        requires_photo: item.requires_photo,
+        camera_capture_only: Boolean(item.camera_capture_only),
+        photo_required_count: Math.max(1, item.photo_required_count || 1),
+        photo_allow_any_count: Boolean(item.photo_allow_any_count),
+        photo_aspect_ratio: normalizeWorkflowPhotoAspectRatio(item.photo_aspect_ratio || "square"),
+        requires_written_response: item.requires_written_response,
+        requires_dropdown: item.requires_dropdown,
+        dropdown_options: item.dropdown_options.map((option, optionIndex) => ({
+          value: slugifyWorkflowPreviewOptionValue(option.label, optionIndex),
+          label: option.label,
+          requires_written_response: Boolean(option.requires_written_response),
+          requires_photo_attachment: Boolean(option.requires_photo_attachment),
+          photo_instructions: option.photo_instructions || "",
+          notify_emails: option.notify_emails || [],
+          notify_email_count: option.notify_emails?.length || 0,
+          send_pictures_with_email: Boolean(option.send_pictures_with_email),
+        })),
+        dropdown_requires_written_response: Object.fromEntries(
+          item.dropdown_options.map((option, optionIndex) => [
+            slugifyWorkflowPreviewOptionValue(option.label, optionIndex),
+            Boolean(option.requires_written_response),
+          ]),
+        ),
+      })),
+    }))
+
+    const supervisorId = payload.supervisor?.user_id?.trim() || null
+    const selectedSupervisor = supervisorId
+      ? supervisors.find((candidate) => candidate.user_id === supervisorId) || null
+      : null
+
+    return {
+      id: "preview-workflow",
+      series_id: "preview-series",
+      workflow_state_id: null,
+      proposer_id: user?.id || "preview-proposer",
+      title: payload.title,
+      description: payload.description,
+      recurrence: payload.recurrence as WorkflowRecurrence,
+      recurrence_end_at: recurrenceEndUnix,
+      start_at: workflowStartUnix,
+      status: "pending",
+      is_start_blocked: false,
+      blocked_by_workflow_id: null,
+      total_bounty: previewSteps.reduce((sum, step) => sum + step.bounty, 0) + (payload.supervisor?.bounty || 0),
+      weekly_bounty_requirement: 0,
+      budget_weekly_deducted: 0,
+      budget_one_time_deducted: 0,
+      vote_quorum_reached_at: null,
+      vote_finalize_at: null,
+      vote_finalized_at: null,
+      vote_finalized_by_user_id: null,
+      vote_decision: null,
+      supervisor_required: Boolean(payload.supervisor),
+      supervisor_user_id: supervisorId,
+      supervisor_bounty: payload.supervisor?.bounty || 0,
+      supervisor_data_fields: normalizedSupervisorDataFields,
+      supervisor_paid_out_at: null,
+      supervisor_payout_error: null,
+      supervisor_payout_last_try_at: null,
+      supervisor_retry_requested_at: null,
+      supervisor_retry_requested_by: null,
+      supervisor_title: selectedSupervisor?.nickname || null,
+      supervisor_organization: selectedSupervisor?.organization || null,
+      created_at: nowUnix,
+      updated_at: nowUnix,
+      roles: previewRoles,
+      steps: previewSteps,
+      votes: {
+        approve: 0,
+        deny: 0,
+        votes_cast: 0,
+        total_voters: 0,
+        quorum_reached: false,
+        quorum_threshold: 0,
+        quorum_reached_at: null,
+        finalize_at: null,
+        finalized_at: null,
+        decision: null,
+        my_decision: null,
+      },
+    }
+  }
+
   const saveTemplate = async (asDefault: boolean) => {
     setError("")
     setSuccessMessage("")
@@ -1528,6 +1761,50 @@ export default function ProposerPage() {
     successMessage === "Workflow edit proposal submitted successfully." ||
     successMessage === "Workflow edit was auto-approved and applied."
 
+  const confirmWorkflowSubmission = async () => {
+    if (!pendingWorkflowSubmission) {
+      setError("Unable to submit workflow right now.")
+      return
+    }
+
+    setSubmitting(true)
+    setError("")
+    setSuccessMessage("")
+    setSubmissionPreviewError("")
+    try {
+      const res = await authFetch("/proposers/workflows", {
+        method: "POST",
+        body: JSON.stringify(pendingWorkflowSubmission.payload),
+      })
+
+      if (!res.ok) {
+        const text = await res.text()
+        throw new Error(text || "Unable to create workflow right now.")
+      }
+
+      const created = (await res.json()) as Workflow
+      workflowListLoadedRef.current = true
+      setWorkflowListLoaded(true)
+      setWorkflows((prev) => [created, ...prev])
+      setSubmissionPreviewOpen(false)
+      setPendingWorkflowSubmission(null)
+      setSubmissionPreviewError("")
+      resetForm()
+      setSuccessMessage("Workflow proposal created successfully.")
+      toast({
+        title: "Workflow proposal created",
+        description: created.title,
+      })
+      await loadWorkflowListData("background")
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unable to create workflow right now."
+      setSubmissionPreviewError(message)
+      setError(message)
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
   const submitWorkflow = async () => {
     setError("")
     setSuccessMessage("")
@@ -1649,28 +1926,13 @@ export default function ProposerPage() {
           payload.supervisor_data_fields = normalizedSupervisorDataFields
         }
       }
-
-      const res = await authFetch("/proposers/workflows", {
-        method: "POST",
-        body: JSON.stringify(payload),
+      const previewWorkflow = buildWorkflowSubmissionPreview(payload, normalizedSupervisorDataFields)
+      setSubmissionPreviewError("")
+      setPendingWorkflowSubmission({
+        payload,
+        workflow: previewWorkflow,
       })
-
-      if (!res.ok) {
-        const text = await res.text()
-        throw new Error(text || "Unable to create workflow right now.")
-      }
-
-      const created = (await res.json()) as Workflow
-      workflowListLoadedRef.current = true
-      setWorkflowListLoaded(true)
-      setWorkflows((prev) => [created, ...prev])
-      resetForm()
-      setSuccessMessage("Workflow proposal created successfully.")
-      toast({
-        title: "Workflow proposal created",
-        description: created.title,
-      })
-      await loadWorkflowListData("background")
+      setSubmissionPreviewOpen(true)
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to create workflow right now.")
     } finally {
@@ -1751,6 +2013,7 @@ export default function ProposerPage() {
   const isSeriesWorkflow = (workflow: Workflow) =>
     workflow.recurrence !== "one_time" ||
     workflows.some((candidate) => candidate.id !== workflow.id && candidate.series_id === workflow.series_id)
+  const isWorkflowOwner = (workflow: Workflow) => workflow.proposer_id === user?.id
   const canProposeDeletionForStatus = (workflow: Workflow) =>
     workflow.status === "approved" ||
     workflow.status === "blocked" ||
@@ -1765,11 +2028,12 @@ export default function ProposerPage() {
     ) ?? null
 
   const canSaveTemplateFromWorkflow = (workflow: Workflow) =>
-    workflow.status === "approved" ||
-    workflow.status === "blocked" ||
-    workflow.status === "in_progress" ||
-    workflow.status === "completed" ||
-    workflow.status === "paid_out"
+    (isAdminUser || isWorkflowOwner(workflow)) &&
+    (workflow.status === "approved" ||
+      workflow.status === "blocked" ||
+      workflow.status === "in_progress" ||
+      workflow.status === "completed" ||
+      workflow.status === "paid_out")
 
   const hasWorkflowEndedForEdit = (workflow: Workflow) => {
     const nowUnix = Math.floor(Date.now() / 1000)
@@ -1785,6 +2049,7 @@ export default function ProposerPage() {
   }
 
   const canProposeWorkflowEditFromWorkflow = (workflow: Workflow) =>
+    (isAdminUser || isWorkflowOwner(workflow)) &&
     !hasWorkflowEndedForEdit(workflow) &&
     (workflow.status === "approved" ||
       workflow.status === "blocked" ||
@@ -1819,7 +2084,7 @@ export default function ProposerPage() {
 
   const openSaveFromWorkflowModal = (workflow: Workflow) => {
     if (!canSaveTemplateFromWorkflow(workflow)) {
-      setError("Only approved workflows can be saved as templates.")
+      setError("Only approved or active workflows can be saved as templates.")
       return
     }
     setError("")
@@ -1925,7 +2190,7 @@ export default function ProposerPage() {
       return
     }
     if (!canSaveTemplateFromWorkflow(detailWorkflow)) {
-      setSaveFromWorkflowError("Only approved workflows can be saved as templates.")
+      setSaveFromWorkflowError("Only approved or active workflows can be saved as templates.")
       return
     }
 
@@ -3412,9 +3677,11 @@ export default function ProposerPage() {
         <TabsContent value="your-workflows" className="mt-4 space-y-6">
           <Card>
             <CardHeader>
-              <CardTitle>Your Workflows</CardTitle>
+              <CardTitle>{isAdminUser ? "All Workflows" : "Your Workflows"}</CardTitle>
               <CardDescription>
-                Review only your submitted workflows, filter by status, and propose deletions for active workflows.
+                {isAdminUser
+                  ? "Review workflows across all proposers, search by title or description, and filter by proposer."
+                  : "Review only your submitted workflows, filter by status, and propose deletions for active workflows."}
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -3429,26 +3696,84 @@ export default function ProposerPage() {
                 <div className="flex min-h-[220px] items-center justify-center">
                   <div className="flex items-center gap-3 text-sm text-muted-foreground">
                     <Loader2 className="h-4 w-4 animate-spin" />
-                    <span>Loading your workflows...</span>
+                    <span>{isAdminUser ? "Loading workflows..." : "Loading your workflows..."}</span>
                   </div>
                 </div>
               ) : (
                 <>
-              <div className="w-full max-w-xs space-y-2">
-                <Label>Filter By Approval Status</Label>
-                <Select value={workflowStatusFilter} onValueChange={(value) => setWorkflowStatusFilter(value as "all" | Workflow["status"])}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {WORKFLOW_STATUS_FILTER_OPTIONS.map((option) => (
-                      <SelectItem key={option.value} value={option.value}>
-                        {option.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+              <div className="grid gap-4 lg:grid-cols-[minmax(0,1.35fr)_minmax(220px,0.75fr)_minmax(220px,0.85fr)]">
+                <div className="space-y-2">
+                  <Label>{isAdminUser ? "Search Workflows" : "Search"}</Label>
+                  <div className="relative">
+                    <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                    <Input
+                      value={workflowSearch}
+                      onChange={(event) => {
+                        setWorkflowSearch(event.target.value)
+                        setWorkflowPage(0)
+                      }}
+                      placeholder={isAdminUser ? "Search title or description" : "Search title or description"}
+                      className="pl-9"
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <Label>Filter By Approval Status</Label>
+                  <Select
+                    value={workflowStatusFilter}
+                    onValueChange={(value) => {
+                      setWorkflowStatusFilter(value as "all" | Workflow["status"])
+                      setWorkflowPage(0)
+                    }}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {WORKFLOW_STATUS_FILTER_OPTIONS.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {isAdminUser && (
+                  <div className="space-y-2">
+                    <Label>Filter By Proposer</Label>
+                    <Select
+                      value={workflowProposerFilter}
+                      onValueChange={(value) => {
+                        setWorkflowProposerFilter(value)
+                        setWorkflowPage(0)
+                      }}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All Proposers</SelectItem>
+                        {proposerOptions.map((proposer) => {
+                          const label = proposerLabelById.get(proposer.user_id) || proposer.user_id
+                          return (
+                            <SelectItem key={proposer.user_id} value={proposer.user_id}>
+                              {label}
+                            </SelectItem>
+                          )
+                        })}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
               </div>
+
+              {isAdminUser && (
+                <div className="text-xs text-muted-foreground">
+                  Showing {workflowSeriesGroups.length} series on this page, {workflowTotal} total.
+                </div>
+              )}
 
               {workflowSeriesGroups.length === 0 ? (
                 <p className="text-sm text-muted-foreground">No workflows found for the selected status.</p>
@@ -3459,6 +3784,8 @@ export default function ProposerPage() {
                   const deletionTargetType: WorkflowDeletionTargetType =
                     pendingDeletionProposal?.target_type ?? (isSeriesWorkflow(workflow) ? "series" : "workflow")
                   const deletionAlreadyProposed = Boolean(pendingDeletionProposal)
+                  const isOwner = isWorkflowOwner(workflow)
+                  const proposerLabel = proposerLabelById.get(workflow.proposer_id) || workflow.proposer_id
 
                   return (
                   <Card key={group.key}>
@@ -3488,6 +3815,7 @@ export default function ProposerPage() {
                             <span>Recurring: {workflow.recurrence}</span>
                             <span>Total bounty: {workflow.total_bounty}</span>
                             <span>Weekly requirement: {workflow.weekly_bounty_requirement}</span>
+                            {isAdminUser && <span>Proposer: {proposerLabel}</span>}
                           </div>
                           <div className="flex items-center gap-2 text-xs text-muted-foreground">
                             <Clock className="h-3 w-3" />
@@ -3509,7 +3837,7 @@ export default function ProposerPage() {
                             View Details
                           </Button>
 
-                          {(workflow.status === "pending" || workflow.status === "rejected" || workflow.status === "expired" || workflow.status === "failed" || workflow.status === "skipped") && (
+                          {isOwner && (workflow.status === "pending" || workflow.status === "rejected" || workflow.status === "expired" || workflow.status === "failed" || workflow.status === "skipped") && (
                             <Button
                               className="w-full sm:w-auto"
                               variant="outline"
@@ -3523,7 +3851,7 @@ export default function ProposerPage() {
                             </Button>
                           )}
 
-                          {canProposeDeletion && canProposeDeletionForStatus(workflow) && (
+                          {isOwner && canProposeDeletion && canProposeDeletionForStatus(workflow) && (
                             <Button
                               className="w-full sm:w-auto"
                               variant="outline"
@@ -3551,12 +3879,89 @@ export default function ProposerPage() {
                   </Card>
                 )})
               )}
+
+              {isAdminUser && workflowTotal > workflowPageSize && (
+                <div className="flex flex-col gap-3 border-t pt-4 sm:flex-row sm:items-center sm:justify-between">
+                  <p className="text-xs text-muted-foreground">
+                    Page {workflowPage + 1} of {workflowPageCount}
+                  </p>
+                  <div className="flex gap-2">
+                    <Button
+                      variant="outline"
+                      onClick={() => setWorkflowPage((prev) => Math.max(0, prev - 1))}
+                      disabled={workflowPage === 0 || workflowListLoading}
+                    >
+                      Previous
+                    </Button>
+                    <Button
+                      variant="outline"
+                      onClick={() => setWorkflowPage((prev) => prev + 1)}
+                      disabled={workflowPage + 1 >= workflowPageCount || workflowListLoading}
+                    >
+                      Next
+                    </Button>
+                  </div>
+                </div>
+              )}
                 </>
               )}
             </CardContent>
           </Card>
         </TabsContent>
       </Tabs>
+
+      <WorkflowDetailsModal
+        workflow={pendingWorkflowSubmission?.workflow || null}
+        open={submissionPreviewOpen}
+        onOpenChange={(open) => {
+          if (submitting) return
+          setSubmissionPreviewOpen(open)
+          if (!open) {
+            setPendingWorkflowSubmission(null)
+            setSubmissionPreviewError("")
+          }
+        }}
+        renderHeaderContent={() => (
+          <div className="space-y-3">
+            <div className="rounded-xl border border-border/70 bg-secondary/20 p-3 text-sm text-muted-foreground">
+              Review the workflow details below. Nothing is submitted until you confirm.
+            </div>
+            {submissionPreviewError && (
+              <div className="flex items-center gap-2 rounded-lg bg-red-50 p-3 text-sm text-red-700 dark:bg-red-900/20 dark:text-red-300">
+                <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+                <span>{submissionPreviewError}</span>
+              </div>
+            )}
+          </div>
+        )}
+        renderBottomActions={() => (
+          <div className="flex flex-col gap-3 border-t pt-4 sm:flex-row sm:items-center sm:justify-end">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                if (submitting) return
+                setSubmissionPreviewOpen(false)
+                setPendingWorkflowSubmission(null)
+                setSubmissionPreviewError("")
+              }}
+              disabled={submitting}
+            >
+              Back to Edit
+            </Button>
+            <Button type="button" onClick={confirmWorkflowSubmission} disabled={submitting}>
+              {submitting ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Submitting...
+                </>
+              ) : (
+                "Confirm Submission"
+              )}
+            </Button>
+          </div>
+        )}
+      />
 
       <WorkflowDetailsModal
         workflow={detailWorkflow}

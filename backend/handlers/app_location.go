@@ -41,15 +41,7 @@ func (a *AppService) GetLocation(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *AppService) GetLocations(w http.ResponseWriter, r *http.Request) {
-	params := r.URL.Query()
-	count, err := strconv.Atoi(params.Get("count"))
-	if err != nil {
-		count = 1000
-	}
-	page, err := strconv.Atoi(params.Get("page"))
-	if err != nil {
-		page = 0
-	}
+	page, count := parsePageAndCount(r.URL.Query(), 100, 200)
 
 	request := structs.LocationsPageRequest{
 		Page:  uint(page),
@@ -75,15 +67,7 @@ func (a *AppService) GetLocations(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *AppService) GetAuthedLocations(w http.ResponseWriter, r *http.Request) {
-	params := r.URL.Query()
-	count, err := strconv.Atoi(params.Get("count"))
-	if err != nil {
-		count = 1000
-	}
-	page, err := strconv.Atoi(params.Get("page"))
-	if err != nil {
-		page = 0
-	}
+	page, count := parsePageAndCount(r.URL.Query(), 100, 200)
 
 	request := structs.LocationsPageRequest{
 		Page:  uint(page),

@@ -148,6 +148,13 @@ export interface Workflow {
   votes: WorkflowVotes
 }
 
+export interface ProposerWorkflowListResponse {
+  items: Workflow[]
+  total: number
+  page: number
+  count: number
+}
+
 export interface ActiveWorkflowListItem {
   id: string
   series_id: string

@@ -59,9 +59,11 @@ func (a *AppDB) GetWalletsByUser(ctx context.Context, userId string) ([]*structs
 	SELECT
 		wallets.id, wallets.owner, wallets.name, wallets.is_eoa, wallets.is_hidden, wallets.is_redeemer, wallets.is_minter, wallets.eoa_address, wallets.smart_address, wallets.smart_index, wallets.last_unwrap_at
 	FROM
-		wallets JOIN users ON wallets.owner = users.id
+		wallets
 	WHERE
-		users.id = $1;
+		wallets.owner = $1
+	ORDER BY
+		wallets.id ASC;
 	`, userId)
 	if err != nil {
 		return nil, fmt.Errorf("error querying user wallets: %s", err)

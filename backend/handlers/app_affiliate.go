@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strconv"
 
 	"github.com/SFLuv/app/backend/structs"
 	"github.com/SFLuv/app/backend/utils"
@@ -69,11 +68,7 @@ func (a *AppService) RequestAffiliateStatus(w http.ResponseWriter, r *http.Reque
 
 func (a *AppService) GetAffiliates(w http.ResponseWriter, r *http.Request) {
 	search := r.URL.Query().Get("search")
-	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
-	count, _ := strconv.Atoi(r.URL.Query().Get("count"))
-	if count <= 0 {
-		count = 20
-	}
+	page, count := parsePageAndCount(r.URL.Query(), 20, 100)
 	affiliates, err := a.db.GetAffiliates(r.Context(), search, page, count)
 	if err != nil {
 		a.logger.Logf("error getting affiliates: %s", err.Error())
