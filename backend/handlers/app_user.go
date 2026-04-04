@@ -239,5 +239,11 @@ func (a *AppService) UpdateUserPrimaryWallet(w http.ResponseWriter, r *http.Requ
 }
 
 func containsUserWalletValidationError(errMsg string) bool {
-	return errMsg == "primary wallet is required" || errMsg == "primary wallet must be a valid ethereum address"
+	switch errMsg {
+	case "primary wallet is required",
+		"primary wallet must be a valid ethereum address":
+		return true
+	default:
+		return false
+	}
 }

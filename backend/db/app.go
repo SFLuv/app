@@ -1960,6 +1960,7 @@ func (s *AppDB) CreateTables() error {
 				service_stations INTEGER,
 				tablet_model TEXT,
 				messaging_service TEXT,
+				tipping_wallet_address TEXT NOT NULL DEFAULT '',
 				reference TEXT,
 				UNIQUE (google_id)
 		);
@@ -1972,6 +1973,9 @@ func (s *AppDB) CreateTables() error {
 			ALTER TABLE locations
 			ADD COLUMN IF NOT EXISTS approved_at TIMESTAMP;
 
+			ALTER TABLE locations
+			ADD COLUMN IF NOT EXISTS tipping_wallet_address TEXT NOT NULL DEFAULT '';
+
 			UPDATE locations
 			SET approved_at = NOW()
 			WHERE approval = TRUE
@@ -1979,6 +1983,51 @@ func (s *AppDB) CreateTables() error {
 		`)
 	if err != nil {
 		return fmt.Errorf("error ensuring locations.approved_at column: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
+		DO $$
+		BEGIN
+			IF EXISTS (
+				SELECT 1
+				FROM information_schema.columns
+				WHERE table_name = 'users'
+				AND column_name = 'tipping_wallet_address'
+			) THEN
+				EXECUTE $sql$
+					UPDATE locations l
+					SET tipping_wallet_address = TRIM(COALESCE(u.tipping_wallet_address, ''))
+					FROM users u
+					WHERE l.owner_id = u.id
+					AND TRIM(COALESCE(l.tipping_wallet_address, '')) = ''
+					AND TRIM(COALESCE(u.tipping_wallet_address, '')) <> ''
+				$sql$;
+			END IF;
+		END
+		$$;
+	`)
+	if err != nil {
+		return fmt.Errorf("error backfilling location tipping wallet address: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
+		CREATE TABLE IF NOT EXISTS location_payment_wallets(
+			id SERIAL PRIMARY KEY,
+			location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
+			wallet_address TEXT NOT NULL,
+			is_default BOOLEAN NOT NULL DEFAULT false,
+			UNIQUE (location_id, wallet_address)
+		);
+
+		CREATE INDEX IF NOT EXISTS location_payment_wallets_location_idx
+			ON location_payment_wallets(location_id);
+
+		CREATE UNIQUE INDEX IF NOT EXISTS location_payment_wallets_default_idx
+			ON location_payment_wallets(location_id)
+			WHERE is_default = TRUE;
+	`)
+	if err != nil {
+		return fmt.Errorf("error creating location_payment_wallets table: %s", err)
 	}
 
 	_, err = s.db.Exec(context.Background(), `

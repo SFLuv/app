@@ -148,6 +148,10 @@ func (a *AppService) LookupWalletOwnerByAddress(w http.ResponseWriter, r *http.R
 		response["is_merchant"] = lookup.IsMerchant
 		response["wallet_name"] = lookup.WalletName
 		response["address"] = lookup.MatchedAddress
+		response["matched_primary_wallet"] = lookup.MatchedPrimaryWallet
+		response["matched_payment_wallet"] = lookup.MatchedPaymentWallet
+		response["pay_to_address"] = lookup.PayToAddress
+		response["tip_to_address"] = lookup.TipToAddress
 		if lookup.IsMerchant && strings.TrimSpace(lookup.MerchantName) != "" {
 			response["merchant_name"] = strings.TrimSpace(lookup.MerchantName)
 		}

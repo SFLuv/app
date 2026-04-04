@@ -10,6 +10,7 @@ import (
 	"github.com/SFLuv/app/backend/structs"
 	"github.com/SFLuv/app/backend/utils"
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 )
 
 func (a *AppService) GetLocation(w http.ResponseWriter, r *http.Request) {
@@ -251,4 +252,73 @@ func (a *AppService) UpdateLocation(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusCreated)
+}
+
+func (a *AppService) UpdateLocationWalletSettings(w http.ResponseWriter, r *http.Request) {
+	userDid := utils.GetDid(r)
+	if userDid == nil {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	locationIDValue := chi.URLParam(r, "id")
+	locationID, err := strconv.ParseUint(locationIDValue, 10, 64)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	defer r.Body.Close()
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		a.logger.Logf("error reading location wallet settings body for user %s: %s", *userDid, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	var request structs.LocationWalletSettingsUpdateRequest
+	if err := json.Unmarshal(body, &request); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	location, err := a.db.UpdateLocationWalletSettings(r.Context(), *userDid, locationID, &request)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+
+		errMsg := err.Error()
+		if containsLocationWalletValidationError(errMsg) {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(errMsg))
+			return
+		}
+
+		a.logger.Logf("error updating location wallet settings for user %s and location %d: %s", *userDid, locationID, errMsg)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(location)
+}
+
+func containsLocationWalletValidationError(errMsg string) bool {
+	switch errMsg {
+	case
+		"only merchants can update merchant wallet settings",
+		"payment wallet is required",
+		"payment wallet must be a valid ethereum address",
+		"default payment wallet requires at least one payment wallet",
+		"default payment wallet must be a valid ethereum address",
+		"default payment wallet must be one of the payment wallets",
+		"tipping wallet must be a valid ethereum address",
+		"tipping wallet must be different from every payment wallet",
+		"tipping wallet must be different from the default payment wallet":
+		return true
+	default:
+		return false
+	}
 }

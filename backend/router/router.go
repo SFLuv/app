@@ -182,6 +182,7 @@ func AddLocationRoutes(r *chi.Mux, s *handlers.AppService) {
 	r.Get("/locations", s.GetLocations)
 	r.Get("/locations/user", withAuth(s.GetLocationsByUser))
 	r.Put("/locations", withAuth(s.UpdateLocation))
+	r.Put("/locations/{id}/wallet-settings", withAuth(s.UpdateLocationWalletSettings))
 }
 
 func AddContactRoutes(r *chi.Mux, s *handlers.AppService) {

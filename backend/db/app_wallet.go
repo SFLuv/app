@@ -174,6 +174,165 @@ func (a *AppDB) GetWalletByUserAndAddress(ctx context.Context, userId string, ad
 }
 
 func (a *AppDB) GetWalletAddressOwnerLookup(ctx context.Context, address string) (*structs.WalletAddressOwnerLookup, error) {
+	locationLookup, err := a.getLocationAddressOwnerLookup(ctx, address)
+	if err != nil {
+		return nil, err
+	}
+	if locationLookup != nil {
+		return locationLookup, nil
+	}
+
+	return a.getWalletAddressOwnerLookup(ctx, address)
+}
+
+func (a *AppDB) getLocationAddressOwnerLookup(ctx context.Context, address string) (*structs.WalletAddressOwnerLookup, error) {
+	row := a.db.QueryRow(ctx, `
+		SELECT
+			u.id AS user_id,
+			TRUE AS is_merchant,
+			COALESCE(
+				NULLIF(TRIM(l.name), ''),
+				NULLIF(TRIM(u.contact_name), ''),
+				'Merchant'
+			) AS merchant_name,
+			COALESCE(NULLIF(TRIM(matching_wallet.name), ''), '') AS wallet_name,
+			$1 AS matched_address,
+			TRUE AS matched_payment_wallet,
+			COALESCE(
+				NULLIF(TRIM(default_payment_wallet.wallet_address), ''),
+				NULLIF(TRIM(u.primary_wallet_address), ''),
+				NULLIF(TRIM(legacy_wallet.smart_address), ''),
+				''
+			) AS pay_to_address,
+			COALESCE(
+				NULLIF(TRIM(l.tipping_wallet_address), ''),
+				''
+			) AS tip_to_address
+		FROM
+			locations l
+		JOIN
+			users u
+		ON
+			u.id = l.owner_id
+		LEFT JOIN LATERAL (
+			SELECT
+				lpw.wallet_address
+			FROM
+				location_payment_wallets lpw
+			WHERE
+				lpw.location_id = l.id
+			ORDER BY
+				CASE
+					WHEN lpw.is_default = TRUE THEN 0
+					ELSE 1
+				END,
+				lpw.id ASC
+			LIMIT 1
+		) default_payment_wallet
+		ON TRUE
+		LEFT JOIN LATERAL (
+			SELECT
+				legacy_wallet.smart_address
+			FROM
+				wallets legacy_wallet
+			WHERE
+				legacy_wallet.owner = u.id
+			AND
+				legacy_wallet.is_eoa = FALSE
+			AND
+				legacy_wallet.smart_index = 0
+			AND
+				legacy_wallet.smart_address IS NOT NULL
+			AND
+				TRIM(legacy_wallet.smart_address) <> ''
+			ORDER BY
+				legacy_wallet.id ASC
+			LIMIT 1
+		) legacy_wallet
+		ON TRUE
+		LEFT JOIN LATERAL (
+			SELECT
+				w.name
+			FROM
+				wallets w
+			WHERE
+				w.owner = u.id
+			AND (
+				LOWER(COALESCE(w.smart_address, '')) = LOWER($1)
+				OR LOWER(COALESCE(w.eoa_address, '')) = LOWER($1)
+			)
+			ORDER BY
+				CASE
+					WHEN LOWER(COALESCE(w.smart_address, '')) = LOWER($1) THEN 0
+					WHEN w.is_eoa = TRUE AND LOWER(COALESCE(w.eoa_address, '')) = LOWER($1) THEN 1
+					ELSE 2
+				END,
+				w.id ASC
+			LIMIT 1
+		) matching_wallet
+		ON TRUE
+		WHERE
+			l.approval = TRUE
+		AND (
+			EXISTS (
+				SELECT 1
+				FROM location_payment_wallets lpw
+				WHERE lpw.location_id = l.id
+				AND LOWER(lpw.wallet_address) = LOWER($1)
+			)
+			OR (
+				NOT EXISTS (
+					SELECT 1
+					FROM location_payment_wallets lpw
+					WHERE lpw.location_id = l.id
+				)
+				AND LOWER($1) = LOWER(
+					COALESCE(
+						NULLIF(TRIM(u.primary_wallet_address), ''),
+						NULLIF(TRIM(legacy_wallet.smart_address), ''),
+						''
+					)
+				)
+			)
+		)
+		ORDER BY
+			CASE
+				WHEN EXISTS (
+					SELECT 1
+					FROM location_payment_wallets lpw
+					WHERE lpw.location_id = l.id
+					AND LOWER(lpw.wallet_address) = LOWER($1)
+				) THEN 0
+				ELSE 1
+			END,
+			l.approved_at ASC NULLS LAST,
+			l.id ASC
+		LIMIT 1;
+	`, address)
+
+	var lookup structs.WalletAddressOwnerLookup
+	err := row.Scan(
+		&lookup.UserID,
+		&lookup.IsMerchant,
+		&lookup.MerchantName,
+		&lookup.WalletName,
+		&lookup.MatchedAddress,
+		&lookup.MatchedPaymentWallet,
+		&lookup.PayToAddress,
+		&lookup.TipToAddress,
+	)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	lookup.MatchedPrimaryWallet = lookup.MatchedPaymentWallet
+	return &lookup, nil
+}
+
+func (a *AppDB) getWalletAddressOwnerLookup(ctx context.Context, address string) (*structs.WalletAddressOwnerLookup, error) {
 	row := a.db.QueryRow(ctx, `
 		SELECT
 			u.id AS user_id,
@@ -186,7 +345,7 @@ func (a *AppDB) GetWalletAddressOwnerLookup(ctx context.Context, address string)
 			) AS merchant_name,
 			w.name AS wallet_name,
 			CASE
-				WHEN LOWER(w.smart_address) = LOWER($1) THEN COALESCE(w.smart_address, '')
+				WHEN LOWER(COALESCE(w.smart_address, '')) = LOWER($1) THEN COALESCE(w.smart_address, '')
 				ELSE w.eoa_address
 			END AS matched_address
 		FROM
@@ -211,13 +370,13 @@ func (a *AppDB) GetWalletAddressOwnerLookup(ctx context.Context, address string)
 		) first_approved_location
 		ON TRUE
 		WHERE
-			LOWER(w.smart_address) = LOWER($1)
+			LOWER(COALESCE(w.smart_address, '')) = LOWER($1)
 		OR
-			LOWER(w.eoa_address) = LOWER($1)
+			LOWER(COALESCE(w.eoa_address, '')) = LOWER($1)
 		ORDER BY
 			CASE
-				WHEN LOWER(w.smart_address) = LOWER($1) THEN 0
-				WHEN w.is_eoa = TRUE AND LOWER(w.eoa_address) = LOWER($1) THEN 1
+				WHEN LOWER(COALESCE(w.smart_address, '')) = LOWER($1) THEN 0
+				WHEN w.is_eoa = TRUE AND LOWER(COALESCE(w.eoa_address, '')) = LOWER($1) THEN 1
 				ELSE 2
 			END,
 			w.id ASC

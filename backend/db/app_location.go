@@ -17,10 +17,15 @@ func (a *AppDB) GetLocation(ctx context.Context, id uint64) (*structs.PublicLoca
 			l.name,
 			l.approval,
 			COALESCE(
+				NULLIF(TRIM(default_payment_wallet.wallet_address), ''),
 				NULLIF(TRIM(u.primary_wallet_address), ''),
 				NULLIF(TRIM(legacy_wallet.smart_address), ''),
 				''
 			) AS pay_to_address,
+			COALESCE(
+				NULLIF(TRIM(l.tipping_wallet_address), ''),
+				''
+			) AS tip_to_address,
 			l.description,
 			l.type,
 			l.street,
@@ -38,6 +43,22 @@ func (a *AppDB) GetLocation(ctx context.Context, id uint64) (*structs.PublicLoca
 		FROM locations l
 		LEFT JOIN users u
 			ON u.id = l.owner_id
+		LEFT JOIN LATERAL (
+			SELECT
+				lpw.wallet_address
+			FROM
+				location_payment_wallets lpw
+			WHERE
+				lpw.location_id = l.id
+			ORDER BY
+				CASE
+					WHEN lpw.is_default = TRUE THEN 0
+					ELSE 1
+				END,
+				lpw.id ASC
+			LIMIT 1
+		) default_payment_wallet
+			ON TRUE
 		LEFT JOIN LATERAL (
 			SELECT
 				w.smart_address
@@ -63,12 +84,14 @@ func (a *AppDB) GetLocation(ctx context.Context, id uint64) (*structs.PublicLoca
 
 	location := structs.PublicLocation{}
 	var payToAddress sql.NullString
+	var tipToAddress sql.NullString
 	err := row.Scan(
 		&location.ID,
 		&location.GoogleID,
 		&location.Name,
 		&location.Approval,
 		&payToAddress,
+		&tipToAddress,
 		&location.Description,
 		&location.Type,
 		&location.Street,
@@ -89,6 +112,9 @@ func (a *AppDB) GetLocation(ctx context.Context, id uint64) (*structs.PublicLoca
 	}
 	if payToAddress.Valid {
 		location.PayToAddress = payToAddress.String
+	}
+	if tipToAddress.Valid {
+		location.TipToAddress = tipToAddress.String
 	}
 
 	rows, err := a.db.Query(ctx, `
@@ -128,10 +154,15 @@ func (s *AppDB) GetLocations(ctx context.Context, r *structs.LocationsPageReques
 			l.google_id,
 			l.name,
 			COALESCE(
+				NULLIF(TRIM(default_payment_wallet.wallet_address), ''),
 				NULLIF(TRIM(u.primary_wallet_address), ''),
 				NULLIF(TRIM(legacy_wallet.smart_address), ''),
 				''
 			) AS pay_to_address,
+			COALESCE(
+				NULLIF(TRIM(l.tipping_wallet_address), ''),
+				''
+			) AS tip_to_address,
 			l.description,
 			l.type,
 			l.street,
@@ -149,6 +180,22 @@ func (s *AppDB) GetLocations(ctx context.Context, r *structs.LocationsPageReques
 		FROM locations l
 		LEFT JOIN users u
 			ON u.id = l.owner_id
+		LEFT JOIN LATERAL (
+			SELECT
+				lpw.wallet_address
+			FROM
+				location_payment_wallets lpw
+			WHERE
+				lpw.location_id = l.id
+			ORDER BY
+				CASE
+					WHEN lpw.is_default = TRUE THEN 0
+					ELSE 1
+				END,
+				lpw.id ASC
+			LIMIT 1
+		) default_payment_wallet
+			ON TRUE
 		LEFT JOIN LATERAL (
 			SELECT
 				w.smart_address
@@ -184,12 +231,14 @@ func (s *AppDB) GetLocations(ctx context.Context, r *structs.LocationsPageReques
 	for rows.Next() {
 		location := structs.PublicLocation{}
 		var payToAddress sql.NullString
+		var tipToAddress sql.NullString
 
 		err = rows.Scan(
 			&location.ID,
 			&location.GoogleID,
 			&location.Name,
 			&payToAddress,
+			&tipToAddress,
 			&location.Description,
 			&location.Type,
 			&location.Street,
@@ -211,6 +260,9 @@ func (s *AppDB) GetLocations(ctx context.Context, r *structs.LocationsPageReques
 		}
 		if payToAddress.Valid {
 			location.PayToAddress = payToAddress.String
+		}
+		if tipToAddress.Valid {
+			location.TipToAddress = tipToAddress.String
 		}
 		locations = append(locations, &location)
 	}
@@ -256,41 +308,89 @@ func (s *AppDB) GetAuthedLocations(ctx context.Context, r *structs.LocationsPage
 
 	rows, err := s.db.Query(ctx, `
 		SELECT
-			id,
-			google_id,
-			owner_id,
-			name,
-			description,
-			type,
-			approval,
-			street,
-			city,
-			state,
-			zip,
-			lat,
-			lng,
-			phone,
-			email,
-			admin_phone,
-			admin_email,
-			website,
-			image_url,
-			rating,
-			maps_page,
-			contact_firstname,
-			contact_lastname,
-			contact_phone,
-			pos_system,
-			sole_proprietorship,
-			tipping_policy,
-			tipping_division,
-			table_coverage,
-			service_stations,
-			tablet_model,
-			messaging_service,
-			reference
-		FROM locations
-		ORDER BY id
+			l.id,
+			l.google_id,
+			l.owner_id,
+			l.name,
+			l.description,
+			l.type,
+			l.approval,
+			l.street,
+			l.city,
+			l.state,
+			l.zip,
+			l.lat,
+			l.lng,
+			l.phone,
+			l.email,
+			l.admin_phone,
+			l.admin_email,
+			l.website,
+			l.image_url,
+			l.rating,
+			l.maps_page,
+			l.contact_firstname,
+			l.contact_lastname,
+			l.contact_phone,
+			l.pos_system,
+			l.sole_proprietorship,
+			l.tipping_policy,
+			l.tipping_division,
+			l.table_coverage,
+			l.service_stations,
+			l.tablet_model,
+			l.messaging_service,
+			COALESCE(
+				NULLIF(TRIM(default_payment_wallet.wallet_address), ''),
+				NULLIF(TRIM(u.primary_wallet_address), ''),
+				NULLIF(TRIM(legacy_wallet.smart_address), ''),
+				''
+			) AS pay_to_address,
+			COALESCE(
+				NULLIF(TRIM(l.tipping_wallet_address), ''),
+				''
+			) AS tip_to_address,
+			l.reference
+		FROM locations l
+		LEFT JOIN users u
+			ON u.id = l.owner_id
+		LEFT JOIN LATERAL (
+			SELECT
+				lpw.wallet_address
+			FROM
+				location_payment_wallets lpw
+			WHERE
+				lpw.location_id = l.id
+			ORDER BY
+				CASE
+					WHEN lpw.is_default = TRUE THEN 0
+					ELSE 1
+				END,
+				lpw.id ASC
+			LIMIT 1
+		) default_payment_wallet
+			ON TRUE
+		LEFT JOIN LATERAL (
+			SELECT
+				w.smart_address
+			FROM
+				wallets w
+			WHERE
+				w.owner = l.owner_id
+			AND
+				w.is_eoa = FALSE
+			AND
+				w.smart_index = 0
+			AND
+				w.smart_address IS NOT NULL
+			AND
+				TRIM(w.smart_address) <> ''
+			ORDER BY
+				w.id ASC
+			LIMIT 1
+		) legacy_wallet
+			ON TRUE
+		ORDER BY l.id
 		LIMIT $1
 		OFFSET $2;
 	`, r.Count, offset)
@@ -303,6 +403,8 @@ func (s *AppDB) GetAuthedLocations(ctx context.Context, r *structs.LocationsPage
 
 	for rows.Next() {
 		location := structs.Location{}
+		var payToAddress sql.NullString
+		var tipToAddress sql.NullString
 
 		err = rows.Scan(
 			&location.ID,
@@ -337,11 +439,19 @@ func (s *AppDB) GetAuthedLocations(ctx context.Context, r *structs.LocationsPage
 			&location.ServiceStations,
 			&location.TabletModel,
 			&location.MessagingService,
+			&payToAddress,
+			&tipToAddress,
 			&location.Reference,
 		)
 
 		if err != nil {
 			return nil, fmt.Errorf("error scanning authed location row: %w", err)
+		}
+		if payToAddress.Valid {
+			location.PayToAddress = payToAddress.String
+		}
+		if tipToAddress.Valid {
+			location.TipToAddress = tipToAddress.String
 		}
 		authedLocations = append(authedLocations, &location)
 	}
@@ -377,6 +487,10 @@ func (s *AppDB) GetAuthedLocations(ctx context.Context, r *structs.LocationsPage
 		}
 
 		loc.OpeningHours = openingHours
+	}
+
+	if err := s.attachLocationPaymentWallets(ctx, authedLocations); err != nil {
+		return nil, err
 	}
 
 	return authedLocations, nil
@@ -602,41 +716,89 @@ func (a *AppDB) UpdateLocation(ctx context.Context, location *structs.Location) 
 func (a *AppDB) GetLocationsByUser(ctx context.Context, userId string) ([]*structs.Location, error) {
 	rows, err := a.db.Query(ctx, `
     SELECT
-        id,
-		google_id,
-		owner_id,
-		name,
-		description,
-		type,
-		approval,
-		street,
-		city,
-		state,
-		zip,
-		lat,
-		lng,
-		phone,
-		email,
-		admin_phone,
-		admin_email,
-		website,
-		image_url,
-		rating,
-		maps_page,
-		contact_firstname,
-		contact_lastname,
-		contact_phone,
-		pos_system,
-		sole_proprietorship,
-		tipping_policy,
-		tipping_division,
-		table_coverage,
-		service_stations,
-		tablet_model,
-		messaging_service,
-		reference
-    FROM locations
-    WHERE owner_id = $1;
+        l.id,
+		l.google_id,
+		l.owner_id,
+		l.name,
+		l.description,
+		l.type,
+		l.approval,
+		l.street,
+		l.city,
+		l.state,
+		l.zip,
+		l.lat,
+		l.lng,
+		l.phone,
+		l.email,
+		l.admin_phone,
+		l.admin_email,
+		l.website,
+		l.image_url,
+		l.rating,
+		l.maps_page,
+		l.contact_firstname,
+		l.contact_lastname,
+		l.contact_phone,
+		l.pos_system,
+		l.sole_proprietorship,
+		l.tipping_policy,
+		l.tipping_division,
+		l.table_coverage,
+		l.service_stations,
+		l.tablet_model,
+		l.messaging_service,
+		COALESCE(
+			NULLIF(TRIM(default_payment_wallet.wallet_address), ''),
+			NULLIF(TRIM(u.primary_wallet_address), ''),
+			NULLIF(TRIM(legacy_wallet.smart_address), ''),
+			''
+		) AS pay_to_address,
+		COALESCE(
+			NULLIF(TRIM(l.tipping_wallet_address), ''),
+			''
+		) AS tip_to_address,
+		l.reference
+    FROM locations l
+	LEFT JOIN users u
+		ON u.id = l.owner_id
+	LEFT JOIN LATERAL (
+		SELECT
+			lpw.wallet_address
+		FROM
+			location_payment_wallets lpw
+		WHERE
+			lpw.location_id = l.id
+		ORDER BY
+			CASE
+				WHEN lpw.is_default = TRUE THEN 0
+				ELSE 1
+			END,
+			lpw.id ASC
+		LIMIT 1
+	) default_payment_wallet
+		ON TRUE
+	LEFT JOIN LATERAL (
+		SELECT
+			w.smart_address
+		FROM
+			wallets w
+		WHERE
+			w.owner = l.owner_id
+		AND
+			w.is_eoa = FALSE
+		AND
+			w.smart_index = 0
+		AND
+			w.smart_address IS NOT NULL
+		AND
+			TRIM(w.smart_address) <> ''
+		ORDER BY
+			w.id ASC
+		LIMIT 1
+	) legacy_wallet
+		ON TRUE
+    WHERE l.owner_id = $1;
 `, userId)
 
 	if err != nil {
@@ -648,6 +810,8 @@ func (a *AppDB) GetLocationsByUser(ctx context.Context, userId string) ([]*struc
 
 	for rows.Next() {
 		var location structs.Location
+		var payToAddress sql.NullString
+		var tipToAddress sql.NullString
 		err := rows.Scan(
 			&location.ID,
 			&location.GoogleID,
@@ -681,10 +845,18 @@ func (a *AppDB) GetLocationsByUser(ctx context.Context, userId string) ([]*struc
 			&location.ServiceStations,
 			&location.TabletModel,
 			&location.MessagingService,
+			&payToAddress,
+			&tipToAddress,
 			&location.Reference,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("error scanning location data: %s", err)
+		}
+		if payToAddress.Valid {
+			location.PayToAddress = payToAddress.String
+		}
+		if tipToAddress.Valid {
+			location.TipToAddress = tipToAddress.String
 		}
 		locations = append(locations, &location)
 	}
@@ -722,6 +894,10 @@ func (a *AppDB) GetLocationsByUser(ctx context.Context, userId string) ([]*struc
 
 		loc.OpeningHours = openingHours
 		finalLocations = append(finalLocations, loc)
+	}
+
+	if err := a.attachLocationPaymentWallets(ctx, finalLocations); err != nil {
+		return nil, err
 	}
 
 	return finalLocations, nil
