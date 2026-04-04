@@ -56,9 +56,13 @@ func (a *AppDB) GetContacts(ctx context.Context, userId string) ([]*structs.Cont
 			c.address,
 			c.is_favorite
 		FROM
-			contacts AS c JOIN users AS u ON c.owner = u.id
+			contacts AS c
 		WHERE
-			u.id = $1;
+			c.owner = $1
+		ORDER BY
+			c.is_favorite DESC,
+			c.id ASC
+		LIMIT 500;
 	`, userId)
 	if err != nil {
 		return nil, err

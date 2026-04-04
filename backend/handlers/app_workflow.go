@@ -322,11 +322,7 @@ func (a *AppService) RequestProposerStatus(w http.ResponseWriter, r *http.Reques
 
 func (a *AppService) GetProposers(w http.ResponseWriter, r *http.Request) {
 	search := r.URL.Query().Get("search")
-	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
-	count, _ := strconv.Atoi(r.URL.Query().Get("count"))
-	if count <= 0 {
-		count = 20
-	}
+	page, count := parsePageAndCount(r.URL.Query(), 20, 100)
 	proposers, err := a.db.GetProposers(r.Context(), search, page, count)
 	if err != nil {
 		a.logger.Logf("error getting proposers: %s", err.Error())
@@ -434,11 +430,7 @@ func (a *AppService) RequestImproverStatus(w http.ResponseWriter, r *http.Reques
 
 func (a *AppService) GetImprovers(w http.ResponseWriter, r *http.Request) {
 	search := r.URL.Query().Get("search")
-	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
-	count, _ := strconv.Atoi(r.URL.Query().Get("count"))
-	if count <= 0 {
-		count = 20
-	}
+	page, count := parsePageAndCount(r.URL.Query(), 20, 100)
 	improvers, err := a.db.GetImprovers(r.Context(), search, page, count)
 	if err != nil {
 		a.logger.Logf("error getting improvers: %s", err.Error())
@@ -583,11 +575,7 @@ func (a *AppService) RequestSupervisorStatus(w http.ResponseWriter, r *http.Requ
 
 func (a *AppService) GetSupervisors(w http.ResponseWriter, r *http.Request) {
 	search := r.URL.Query().Get("search")
-	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
-	count, _ := strconv.Atoi(r.URL.Query().Get("count"))
-	if count <= 0 {
-		count = 20
-	}
+	page, count := parsePageAndCount(r.URL.Query(), 20, 100)
 	supervisors, err := a.db.GetSupervisors(r.Context(), search, page, count)
 	if err != nil {
 		a.logger.Logf("error getting supervisors: %s", err.Error())
@@ -894,16 +882,31 @@ func (a *AppService) GetProposerWorkflows(w http.ResponseWriter, r *http.Request
 	}
 	isAdmin := a.IsAdmin(r.Context(), *userDid)
 
-	workflows, err := a.db.GetWorkflowsByProposer(r.Context(), *userDid)
+	search := strings.TrimSpace(r.URL.Query().Get("search"))
+	proposerFilter := strings.TrimSpace(r.URL.Query().Get("proposer_id"))
+	statusFilter := strings.TrimSpace(r.URL.Query().Get("status"))
+	page, _ := strconv.Atoi(strings.TrimSpace(r.URL.Query().Get("page")))
+	count, _ := strconv.Atoi(strings.TrimSpace(r.URL.Query().Get("count")))
+	if count <= 0 {
+		count = 12
+	}
+
+	response, err := a.db.GetProposerWorkflowList(r.Context(), *userDid, isAdmin, search, proposerFilter, statusFilter, page, count)
 	if err != nil {
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "invalid") || strings.Contains(errMsg, "required") {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(errMsg))
+			return
+		}
 		a.logger.Logf("error getting workflows for proposer %s: %s", *userDid, err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
-	sanitizeWorkflowListForUser(workflows, *userDid, isAdmin)
+	sanitizeWorkflowListForUser(response.Items, *userDid, isAdmin)
 
 	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(workflows)
+	_ = json.NewEncoder(w).Encode(response)
 }
 
 func (a *AppService) GetProposerWorkflow(w http.ResponseWriter, r *http.Request) {
@@ -926,7 +929,13 @@ func (a *AppService) GetProposerWorkflow(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	workflow, err := a.db.GetWorkflowByIDAndProposer(r.Context(), workflowId, *userDid)
+	var workflow *structs.Workflow
+	var err error
+	if isAdmin {
+		workflow, err = a.db.GetWorkflowByID(r.Context(), workflowId)
+	} else {
+		workflow, err = a.db.GetWorkflowByIDAndProposer(r.Context(), workflowId, *userDid)
+	}
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			w.WriteHeader(http.StatusNotFound)
@@ -3487,6 +3496,7 @@ func (a *AppService) ProposeWorkflowEdit(w http.ResponseWriter, r *http.Request)
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}
+	isAdmin := a.IsAdmin(r.Context(), *requesterID)
 
 	workflowID := strings.TrimSpace(r.PathValue("workflow_id"))
 	if workflowID == "" {
@@ -3510,7 +3520,7 @@ func (a *AppService) ProposeWorkflowEdit(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	proposal, err := a.db.CreateWorkflowEditProposal(r.Context(), *requesterID, workflowID, &req)
+	proposal, err := a.db.CreateWorkflowEditProposal(r.Context(), *requesterID, isAdmin, workflowID, &req)
 	if err != nil {
 		errMsg := err.Error()
 		if strings.Contains(errMsg, "required") ||
@@ -3920,11 +3930,7 @@ func (a *AppService) AdminForceApproveWorkflowDeletionProposal(w http.ResponseWr
 
 func (a *AppService) GetIssuers(w http.ResponseWriter, r *http.Request) {
 	search := r.URL.Query().Get("search")
-	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
-	count, _ := strconv.Atoi(r.URL.Query().Get("count"))
-	if count <= 0 {
-		count = 20
-	}
+	page, count := parsePageAndCount(r.URL.Query(), 20, 100)
 	issuers, err := a.db.GetIssuersWithScopes(r.Context(), search, page, count)
 	if err != nil {
 		a.logger.Logf("error getting issuers: %s", err)
@@ -4071,11 +4077,7 @@ func (a *AppService) GetIssuerCredentialRequests(w http.ResponseWriter, r *http.
 	}
 
 	search := r.URL.Query().Get("search")
-	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
-	count, _ := strconv.Atoi(r.URL.Query().Get("count"))
-	if count <= 0 {
-		count = 20
-	}
+	page, count := parsePageAndCount(r.URL.Query(), 20, 100)
 
 	requests, err := a.db.GetCredentialRequestsForIssuer(r.Context(), *issuerId, search, page, count)
 	if err != nil {
@@ -5567,11 +5569,7 @@ func (a *AppService) RequestIssuerStatus(w http.ResponseWriter, r *http.Request)
 
 func (a *AppService) GetIssuerRequests(w http.ResponseWriter, r *http.Request) {
 	search := r.URL.Query().Get("search")
-	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
-	count, _ := strconv.Atoi(r.URL.Query().Get("count"))
-	if count <= 0 {
-		count = 20
-	}
+	page, count := parsePageAndCount(r.URL.Query(), 20, 100)
 	issuers, err := a.db.GetIssuerRequests(r.Context(), search, page, count)
 	if err != nil {
 		a.logger.Logf("error getting issuer requests: %s", err.Error())

@@ -355,8 +355,14 @@ func (a *AppDB) GetProposerByUser(ctx context.Context, userId string) (*structs.
 }
 
 func (a *AppDB) GetProposers(ctx context.Context, search string, page, count int) ([]*structs.Proposer, error) {
+	if page < 0 {
+		page = 0
+	}
 	if count <= 0 {
 		count = 20
+	}
+	if count > 100 {
+		count = 100
 	}
 	offset := page * count
 	likeSearch := "%" + search + "%"
@@ -604,8 +610,14 @@ func (a *AppDB) GetImproverByUser(ctx context.Context, userId string) (*structs.
 }
 
 func (a *AppDB) GetImprovers(ctx context.Context, search string, page, count int) ([]*structs.Improver, error) {
+	if page < 0 {
+		page = 0
+	}
 	if count <= 0 {
 		count = 20
+	}
+	if count > 100 {
+		count = 100
 	}
 	offset := page * count
 	likeSearch := "%" + search + "%"
@@ -968,8 +980,14 @@ func (a *AppDB) GetSupervisorByUser(ctx context.Context, userId string) (*struct
 }
 
 func (a *AppDB) GetSupervisors(ctx context.Context, search string, page, count int) ([]*structs.Supervisor, error) {
+	if page < 0 {
+		page = 0
+	}
 	if count <= 0 {
 		count = 20
+	}
+	if count > 100 {
+		count = 100
 	}
 	offset := page * count
 	likeSearch := "%" + search + "%"
@@ -1042,7 +1060,8 @@ func (a *AppDB) GetApprovedSupervisors(ctx context.Context) ([]*structs.Supervis
 			u.is_supervisor = true
 		ORDER BY
 			COALESCE(NULLIF(TRIM(s.nickname), ''), s.organization) ASC,
-			s.created_at DESC;
+			s.created_at DESC
+		LIMIT 500;
 	`)
 	if err != nil {
 		return nil, fmt.Errorf("error querying approved supervisors: %s", err)
@@ -2040,7 +2059,8 @@ func (a *AppDB) GetWorkflowTemplatesForProposer(ctx context.Context, proposerId 
 			owner_user_id = $1
 		ORDER BY
 			is_default DESC,
-			created_at DESC;
+			created_at DESC
+		LIMIT 500;
 	`, proposerId)
 	if err != nil {
 		return nil, fmt.Errorf("error querying workflow templates: %s", err)
@@ -2455,75 +2475,226 @@ func (a *AppDB) CreateWorkflow(
 	return a.GetWorkflowByID(ctx, workflowId)
 }
 
-func (a *AppDB) GetWorkflowsByProposer(ctx context.Context, proposerId string) ([]*structs.Workflow, error) {
+func (a *AppDB) GetProposerWorkflowList(
+	ctx context.Context,
+	requesterId string,
+	isAdmin bool,
+	search string,
+	proposerFilter string,
+	statusFilter string,
+	page int,
+	count int,
+) (*structs.ProposerWorkflowListResponse, error) {
+	if count <= 0 {
+		count = 12
+	}
+	if page < 0 {
+		page = 0
+	}
+
+	requesterId = strings.TrimSpace(requesterId)
+	proposerFilter = strings.TrimSpace(proposerFilter)
+	statusFilter = strings.TrimSpace(statusFilter)
+	if statusFilter == "all" {
+		statusFilter = ""
+	}
+
+	switch statusFilter {
+	case "", "pending", "approved", "rejected", "expired", "failed", "skipped", "blocked", "in_progress", "completed", "paid_out":
+	default:
+		return nil, fmt.Errorf("invalid workflow status filter")
+	}
+
+	if !isAdmin {
+		proposerFilter = ""
+	}
+
+	offset := page * count
+	trimmedSearch := strings.TrimSpace(search)
+	likeSearch := "%" + trimmedSearch + "%"
+
 	totalVoters, err := a.CountEligibleVoters(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("error counting eligible voters: %s", err)
 	}
 
-	rows, err := a.db.Query(ctx, `
-		SELECT
-			w.id,
-			w.series_id,
-			w.workflow_state_id,
-			w.proposer_id,
-			COALESCE(NULLIF(TRIM(st.title), ''), COALESCE(NULLIF(TRIM(s.title), ''), '')),
-			COALESCE(st.description, s.description, ''),
-			COALESCE(NULLIF(TRIM(st.recurrence), ''), COALESCE(NULLIF(TRIM(s.recurrence), ''), 'one_time')),
-			COALESCE(st.recurrence_end_at, s.recurrence_end_at),
-			w.start_at,
-			w.status,
-			w.is_start_blocked,
-			w.blocked_by_workflow_id,
-			w.total_bounty,
-			w.weekly_bounty_requirement,
-			w.budget_weekly_deducted,
-			w.budget_one_time_deducted,
-			w.vote_quorum_reached_at,
-			w.vote_finalize_at,
-			w.vote_finalized_at,
-			w.vote_finalized_by_user_id,
-			w.vote_decision,
-			w.manager_required,
-			w.manager_improver_id,
-			w.manager_bounty,
-			w.manager_paid_out_at,
-			w.manager_payout_error,
-			w.manager_payout_last_try_at,
-			w.manager_retry_requested_at,
-			w.manager_retry_requested_by,
-			w.created_at,
-			w.updated_at,
-			COALESCE(v.approve_count, 0) AS approve_count,
-			COALESCE(v.deny_count, 0) AS deny_count
-		FROM
-			workflows w
-		LEFT JOIN
-			workflow_states st
-		ON
-			st.id = w.workflow_state_id
-		LEFT JOIN
-			workflow_series s
-		ON
-			s.id = w.series_id
-		LEFT JOIN LATERAL (
+	baseCTE := `
+		WITH base AS (
 			SELECT
-				COUNT(*) FILTER (WHERE decision = 'approve') AS approve_count,
-				COUNT(*) FILTER (WHERE decision = 'deny') AS deny_count
+				w.id,
+				w.series_id,
+				w.workflow_state_id,
+				w.proposer_id,
+				COALESCE(NULLIF(TRIM(st.title), ''), COALESCE(NULLIF(TRIM(s.title), ''), '')) AS title,
+				COALESCE(st.description, s.description, '') AS description,
+				COALESCE(NULLIF(TRIM(st.recurrence), ''), COALESCE(NULLIF(TRIM(s.recurrence), ''), 'one_time')) AS recurrence,
+				COALESCE(st.recurrence_end_at, s.recurrence_end_at) AS recurrence_end_at,
+				w.start_at,
+				w.status,
+				w.is_start_blocked,
+				w.blocked_by_workflow_id,
+				w.total_bounty,
+				w.weekly_bounty_requirement,
+				w.budget_weekly_deducted,
+				w.budget_one_time_deducted,
+				w.vote_quorum_reached_at,
+				w.vote_finalize_at,
+				w.vote_finalized_at,
+				w.vote_finalized_by_user_id,
+				w.vote_decision,
+				w.manager_required,
+				w.manager_improver_id,
+				w.manager_bounty,
+				w.manager_paid_out_at,
+				w.manager_payout_error,
+				w.manager_payout_last_try_at,
+				w.manager_retry_requested_at,
+				w.manager_retry_requested_by,
+				w.created_at,
+				w.updated_at,
+				COALESCE(v.approve_count, 0) AS approve_count,
+				COALESCE(v.deny_count, 0) AS deny_count
 			FROM
-				workflow_votes
+				workflows w
+			LEFT JOIN
+				workflow_states st
+			ON
+				st.id = w.workflow_state_id
+			LEFT JOIN
+				workflow_series s
+			ON
+				s.id = w.series_id
+			LEFT JOIN LATERAL (
+				SELECT
+					COUNT(*) FILTER (WHERE decision = 'approve') AS approve_count,
+					COUNT(*) FILTER (WHERE decision = 'deny') AS deny_count
+				FROM
+					workflow_votes
+				WHERE
+					workflow_id = w.id
+			) v
+			ON
+				true
 			WHERE
-				workflow_id = w.id
-		) v
+				w.status <> 'deleted'
+			AND
+				($1 OR w.proposer_id = $2)
+			AND
+				($3 = '' OR w.proposer_id = $3)
+			AND
+				(
+					$4 = ''
+					OR COALESCE(NULLIF(TRIM(st.title), ''), COALESCE(NULLIF(TRIM(s.title), ''), '')) ILIKE $5
+					OR COALESCE(st.description, s.description, '') ILIKE $5
+				)
+			AND
+				($6 = '' OR w.status = $6)
+		)
+	`
+
+	countQuery := baseCTE + `
+		, matching_series AS (
+			SELECT DISTINCT
+				base.series_id
+			FROM
+				base
+		)
+		SELECT
+			COUNT(*)
+		FROM
+			matching_series;
+	`
+
+	var total int
+	if err := a.db.QueryRow(ctx, countQuery, isAdmin, requesterId, proposerFilter, trimmedSearch, likeSearch, statusFilter).Scan(&total); err != nil {
+		return nil, fmt.Errorf("error counting proposer workflows: %s", err)
+	}
+
+	listQuery := baseCTE + `
+		, matching_series AS (
+			SELECT DISTINCT
+				base.series_id
+			FROM
+				base
+		),
+		series_ranked AS (
+			SELECT
+				b.series_id,
+				MAX(b.start_at) AS latest_start_at,
+				MAX(b.created_at) AS latest_created_at
+			FROM
+				base b
+			INNER JOIN
+				matching_series ms
+			ON
+				ms.series_id = b.series_id
+			GROUP BY
+				b.series_id
+		),
+		selected_series AS (
+			SELECT
+				sr.series_id,
+				sr.latest_start_at,
+				sr.latest_created_at
+			FROM
+				series_ranked sr
+			ORDER BY
+				sr.latest_start_at DESC,
+				sr.latest_created_at DESC,
+				sr.series_id DESC
+			LIMIT $7
+			OFFSET $8
+		)
+		SELECT
+			b.id,
+			b.series_id,
+			b.workflow_state_id,
+			b.proposer_id,
+			b.title,
+			b.description,
+			b.recurrence,
+			b.recurrence_end_at,
+			b.start_at,
+			b.status,
+			b.is_start_blocked,
+			b.blocked_by_workflow_id,
+			b.total_bounty,
+			b.weekly_bounty_requirement,
+			b.budget_weekly_deducted,
+			b.budget_one_time_deducted,
+			b.vote_quorum_reached_at,
+			b.vote_finalize_at,
+			b.vote_finalized_at,
+			b.vote_finalized_by_user_id,
+			b.vote_decision,
+			b.manager_required,
+			b.manager_improver_id,
+			b.manager_bounty,
+			b.manager_paid_out_at,
+			b.manager_payout_error,
+			b.manager_payout_last_try_at,
+			b.manager_retry_requested_at,
+			b.manager_retry_requested_by,
+			b.created_at,
+			b.updated_at,
+			b.approve_count,
+			b.deny_count
+		FROM
+			base b
+		INNER JOIN
+			selected_series ss
 		ON
-			true
-		WHERE
-			w.proposer_id = $1
-		AND
-			w.status <> 'deleted'
+			ss.series_id = b.series_id
 		ORDER BY
-			w.created_at DESC;
-	`, proposerId)
+			ss.latest_start_at DESC,
+			ss.latest_created_at DESC,
+			ss.series_id DESC,
+			b.start_at ASC,
+			b.created_at ASC,
+			b.id ASC;
+	`
+
+	rows, err := a.db.Query(ctx, listQuery, isAdmin, requesterId, proposerFilter, trimmedSearch, likeSearch, statusFilter, count, offset)
 	if err != nil {
 		return nil, fmt.Errorf("error querying proposer workflows: %s", err)
 	}
@@ -2602,7 +2773,12 @@ func (a *AppDB) GetWorkflowsByProposer(ctx context.Context, proposerId string) (
 		return nil, fmt.Errorf("error iterating proposer workflow summaries: %s", err)
 	}
 
-	return results, nil
+	return &structs.ProposerWorkflowListResponse{
+		Items: results,
+		Total: total,
+		Page:  page,
+		Count: count,
+	}, nil
 }
 
 func (a *AppDB) GetWorkflowByID(ctx context.Context, workflowId string) (*structs.Workflow, error) {
@@ -10178,6 +10354,7 @@ func (a *AppDB) AdminRevokeWorkflowSeriesImproverClaims(
 func (a *AppDB) CreateWorkflowEditProposal(
 	ctx context.Context,
 	requesterId string,
+	requesterIsAdmin bool,
 	targetWorkflowID string,
 	req *structs.WorkflowEditProposalCreateRequest,
 ) (*structs.WorkflowEditProposal, error) {
@@ -10247,7 +10424,7 @@ func (a *AppDB) CreateWorkflowEditProposal(
 		return nil, fmt.Errorf("error loading workflow series for edit proposal: %s", err)
 	}
 
-	if strings.TrimSpace(proposerID) != strings.TrimSpace(requesterId) {
+	if !requesterIsAdmin && strings.TrimSpace(proposerID) != strings.TrimSpace(requesterId) {
 		return nil, fmt.Errorf("only the original proposer can propose workflow edits")
 	}
 
@@ -11835,8 +12012,14 @@ func finalizeWorkflowDeletionDenialTx(
 }
 
 func (a *AppDB) GetIssuersWithScopes(ctx context.Context, search string, page, count int) ([]*structs.IssuerWithScopes, error) {
+	if page < 0 {
+		page = 0
+	}
 	if count <= 0 {
 		count = 20
+	}
+	if count > 100 {
+		count = 100
 	}
 	offset := page * count
 	likeSearch := "%" + search + "%"
@@ -11865,6 +12048,7 @@ func (a *AppDB) GetIssuersWithScopes(ctx context.Context, search string, page, c
 	defer rows.Close()
 
 	results := []*structs.IssuerWithScopes{}
+	issuerIDs := []string{}
 	for rows.Next() {
 		issuer := structs.IssuerWithScopes{}
 		if err := rows.Scan(&issuer.UserId, &issuer.IsIssuer, &issuer.Organization, &issuer.Nickname); err != nil {
@@ -11872,14 +12056,48 @@ func (a *AppDB) GetIssuersWithScopes(ctx context.Context, search string, page, c
 		}
 		issuer.AllowedCredentials = []string{}
 		results = append(results, &issuer)
+		issuerIDs = append(issuerIDs, issuer.UserId)
+	}
+
+	if len(issuerIDs) == 0 {
+		return results, nil
+	}
+
+	scopeRows, err := a.db.Query(ctx, `
+		SELECT
+			issuer_id,
+			credential_type
+		FROM
+			issuer_credential_scopes
+		WHERE
+			issuer_id = ANY($1::text[])
+		ORDER BY
+			issuer_id ASC,
+			credential_type ASC;
+	`, issuerIDs)
+	if err != nil {
+		return nil, fmt.Errorf("error querying issuer scopes: %s", err)
+	}
+	defer scopeRows.Close()
+
+	scopesByIssuer := make(map[string][]string, len(issuerIDs))
+	for scopeRows.Next() {
+		var issuerID string
+		var credentialType string
+		if err := scopeRows.Scan(&issuerID, &credentialType); err != nil {
+			return nil, fmt.Errorf("error scanning issuer scope: %s", err)
+		}
+		scopesByIssuer[issuerID] = append(scopesByIssuer[issuerID], credentialType)
+	}
+	if err := scopeRows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating issuer scopes: %s", err)
 	}
 
 	for _, issuer := range results {
-		scopes, err := a.GetIssuerScopeCredentials(ctx, issuer.UserId)
-		if err != nil {
-			return nil, err
+		issuer.AllowedCredentials = scopesByIssuer[issuer.UserId]
+		if issuer.AllowedCredentials == nil {
+			issuer.AllowedCredentials = []string{}
 		}
-		issuer.AllowedCredentials = scopes
 	}
 
 	return results, nil
@@ -12508,8 +12726,14 @@ func (a *AppDB) GetCredentialRequestsForIssuer(ctx context.Context, issuerId, se
 	if issuerId == "" {
 		return nil, fmt.Errorf("issuer user_id is required")
 	}
+	if page < 0 {
+		page = 0
+	}
 	if count <= 0 {
 		count = 20
+	}
+	if count > 100 {
+		count = 100
 	}
 	offset := page * count
 	likeSearch := "%" + search + "%"
@@ -13191,8 +13415,14 @@ func (a *AppDB) GetIssuerByUser(ctx context.Context, userId string) (*structs.Is
 }
 
 func (a *AppDB) GetIssuerRequests(ctx context.Context, search string, page, count int) ([]*structs.Issuer, error) {
+	if page < 0 {
+		page = 0
+	}
 	if count <= 0 {
 		count = 20
+	}
+	if count > 100 {
+		count = 100
 	}
 	offset := page * count
 	likeSearch := "%" + search + "%"

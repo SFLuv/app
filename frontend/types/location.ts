@@ -1,7 +1,16 @@
+export interface LocationPaymentWallet {
+  id: number;
+  location_id: number;
+  wallet_address: string;
+  is_default: boolean;
+}
+
 export interface Location {
   id: number;
   google_id: string;
   name: string;
+  pay_to_address?: string;
+  tip_to_address?: string;
   description: string;
   type: string;
   street: string;
@@ -53,9 +62,11 @@ export interface AuthedLocation {
   service_stations: number;
   tablet_model: string;
   messaging_service: string;
+  pay_to_address?: string;
+  tip_to_address?: string;
+  payment_wallets: LocationPaymentWallet[];
   reference: string;
 }
-
 
 export interface GoogleSubLocation {
   google_id: string;
@@ -76,6 +87,6 @@ export interface GoogleSubLocation {
 }
 
 export interface UpdateLocationApprovalRequest {
-  id: number
-  approval: boolean | null
+  id: number;
+  approval: boolean | null;
 }

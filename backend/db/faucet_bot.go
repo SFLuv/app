@@ -231,7 +231,17 @@ func (s *BotDB) NewEvent(ctx context.Context, e *structs.Event) (string, error) 
 }
 
 func (s *BotDB) GetEvents(ctx context.Context, e *structs.EventsRequest) ([]*structs.Event, error) {
+	if e.Count <= 0 {
+		e.Count = 10
+	}
+	if e.Count > 100 {
+		e.Count = 100
+	}
+	if e.Page < 0 {
+		e.Page = 0
+	}
 	offset := e.Page * e.Count
+	likeSearch := "%" + strings.TrimSpace(e.Search) + "%"
 
 	rows, err := s.db.Query(ctx, `
 		SELECT
@@ -257,18 +267,19 @@ func (s *BotDB) GetEvents(ctx context.Context, e *structs.EventsRequest) ([]*str
 			END
 		AND
 			(
-				e.title ~* $2
+				COALESCE(e.title, '') ILIKE $2
 				OR
-				e.description ~* $3
+				COALESCE(e.description, '') ILIKE $2
 			)
 		GROUP BY
 			e.id,
 			e.owner
 		ORDER BY
-			e.expiration
-		LIMIT $4
-		OFFSET $5;
-	`, !e.Expired, e.Search, e.Search, e.Count, offset)
+			e.expiration ASC,
+			e.id ASC
+		LIMIT $3
+		OFFSET $4;
+	`, !e.Expired, likeSearch, e.Count, offset)
 	if err != nil {
 		return nil, fmt.Errorf("error querying for events: %s", err)
 	}
@@ -297,7 +308,17 @@ func (s *BotDB) GetEvents(ctx context.Context, e *structs.EventsRequest) ([]*str
 }
 
 func (s *BotDB) GetEventsByOwner(ctx context.Context, e *structs.EventsRequest, owner string) ([]*structs.Event, error) {
+	if e.Count <= 0 {
+		e.Count = 10
+	}
+	if e.Count > 100 {
+		e.Count = 100
+	}
+	if e.Page < 0 {
+		e.Page = 0
+	}
 	offset := e.Page * e.Count
+	likeSearch := "%" + strings.TrimSpace(e.Search) + "%"
 
 	rows, err := s.db.Query(ctx, `
 		SELECT
@@ -324,18 +345,19 @@ func (s *BotDB) GetEventsByOwner(ctx context.Context, e *structs.EventsRequest, 
 			END
 		AND
 			(
-				e.title ~* $3
+				COALESCE(e.title, '') ILIKE $3
 				OR
-				e.description ~* $4
+				COALESCE(e.description, '') ILIKE $3
 			)
 		GROUP BY
 			e.id,
 			e.owner
 		ORDER BY
-			e.expiration
-		LIMIT $5
-		OFFSET $6;
-	`, owner, !e.Expired, e.Search, e.Search, e.Count, offset)
+			e.expiration ASC,
+			e.id ASC
+		LIMIT $4
+		OFFSET $5;
+	`, owner, !e.Expired, likeSearch, e.Count, offset)
 	if err != nil {
 		return nil, fmt.Errorf("error querying for events: %s", err)
 	}
@@ -529,6 +551,12 @@ func (s *BotDB) NewCode(ctx context.Context, code *structs.Code) (string, error)
 }
 
 func (s *BotDB) GetCodes(ctx context.Context, r *structs.CodesPageRequest) ([]*structs.Code, error) {
+	if r.Count == 0 {
+		r.Count = 100
+	}
+	if r.Count > 200 {
+		r.Count = 200
+	}
 	offset := r.Page * r.Count
 
 	rows, err := s.db.Query(ctx, `
@@ -543,6 +571,7 @@ func (s *BotDB) GetCodes(ctx context.Context, r *structs.CodesPageRequest) ([]*s
 				event
 		FROM codes
 		WHERE event = $1
+		ORDER BY id ASC
 		LIMIT $2
 		OFFSET $3;
 	`, r.Event, r.Count, offset)

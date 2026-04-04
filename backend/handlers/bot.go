@@ -320,21 +320,7 @@ func (s *BotService) NewCodesRequest(w http.ResponseWriter, r *http.Request) {
 
 func (s *BotService) GetEvents(w http.ResponseWriter, r *http.Request) {
 	params := r.URL.Query()
-
-	count, err := strconv.Atoi(params.Get("count"))
-	if err != nil {
-		count = 10
-	}
-	if count <= 0 {
-		count = 10
-	}
-	page, err := strconv.Atoi(params.Get("page"))
-	if err != nil {
-		page = 0
-	}
-	if page < 0 {
-		page = 0
-	}
+	page, count := parsePageAndCount(params, 10, 100)
 	search := params.Get("search")
 	expired := params.Get("expired") == "true"
 
@@ -370,14 +356,7 @@ func (s *BotService) GetCodesRequest(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
-	count, err := strconv.Atoi(params.Get("count"))
-	if err != nil {
-		count = 100
-	}
-	page, err := strconv.Atoi(params.Get("page"))
-	if err != nil {
-		page = 0
-	}
+	page, count := parsePageAndCount(params, 100, 200)
 
 	if event == "" {
 		w.WriteHeader(http.StatusBadRequest)
@@ -591,21 +570,7 @@ func (s *BotService) AffiliateNewEvent(w http.ResponseWriter, r *http.Request) {
 
 func (s *BotService) AffiliateGetEvents(w http.ResponseWriter, r *http.Request) {
 	params := r.URL.Query()
-
-	count, err := strconv.Atoi(params.Get("count"))
-	if err != nil {
-		count = 10
-	}
-	if count <= 0 {
-		count = 10
-	}
-	page, err := strconv.Atoi(params.Get("page"))
-	if err != nil {
-		page = 0
-	}
-	if page < 0 {
-		page = 0
-	}
+	page, count := parsePageAndCount(params, 10, 100)
 	search := params.Get("search")
 	expired := params.Get("expired") == "true"
 
@@ -646,14 +611,7 @@ func (s *BotService) AffiliateGetCodes(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
-	count, err := strconv.Atoi(params.Get("count"))
-	if err != nil {
-		count = 100
-	}
-	page, err := strconv.Atoi(params.Get("page"))
-	if err != nil {
-		page = 0
-	}
+	page, count := parsePageAndCount(params, 100, 200)
 
 	userDid := utils.GetDid(r)
 	if userDid == nil {

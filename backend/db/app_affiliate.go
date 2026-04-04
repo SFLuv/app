@@ -87,8 +87,14 @@ func (a *AppDB) GetAffiliateByUser(ctx context.Context, userId string) (*structs
 }
 
 func (a *AppDB) GetAffiliates(ctx context.Context, search string, page, count int) ([]*structs.Affiliate, error) {
+	if page < 0 {
+		page = 0
+	}
 	if count <= 0 {
 		count = 20
+	}
+	if count > 100 {
+		count = 100
 	}
 	offset := page * count
 	likeSearch := "%" + search + "%"

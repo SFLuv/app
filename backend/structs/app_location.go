@@ -26,40 +26,56 @@ package structs
 }*/
 
 type Location struct {
-	ID                 uint     `json:"id"`
-	GoogleID           string   `json:"google_id"`
-	OwnerID            string   `json:"owner_id"`
-	Name               string   `json:"name"`
-	Description        string   `json:"description"`
-	Type               string   `json:"type"`
-	Approval           *bool    `json:"approval"`
-	Street             string   `json:"street"`
-	City               string   `json:"city"`
-	State              string   `json:"state"`
-	ZIP                string   `json:"zip"`
-	Lat                float64  `json:"lat"`
-	Lng                float64  `json:"lng"`
-	Phone              string   `json:"phone"`
-	Email              string   `json:"email"`
-	AdminPhone         string   `json:"admin_phone"`
-	AdminEmail         string   `json:"admin_email"`
-	Website            string   `json:"website"`
-	ImageURL           string   `json:"image_url"`
-	Rating             float64  `json:"rating"`
-	MapsPage           string   `json:"maps_page"`
-	OpeningHours       []string `json:"opening_hours"`
-	ContactFirstName   string   `json:"contact_firstname"`
-	ContactLastName    string   `json:"contact_lastname"`
-	ContactPhone       string   `json:"contact_phone"`
-	PosSystem          string   `json:"pos_system"`
-	SoleProprietorship string   `json:"sole_proprietorship"`
-	TippingPolicy      string   `json:"tipping_policy"`
-	TippingDivision    string   `json:"tipping_division"`
-	TableCoverage      string   `json:"table_coverage"`
-	ServiceStations    int      `json:"service_stations"`
-	TabletModel        string   `json:"tablet_model"`
-	MessagingService   string   `json:"messaging_service"`
-	Reference          string   `json:"reference"`
+	ID                 uint                    `json:"id"`
+	GoogleID           string                  `json:"google_id"`
+	OwnerID            string                  `json:"owner_id"`
+	Name               string                  `json:"name"`
+	Description        string                  `json:"description"`
+	Type               string                  `json:"type"`
+	Approval           *bool                   `json:"approval"`
+	Street             string                  `json:"street"`
+	City               string                  `json:"city"`
+	State              string                  `json:"state"`
+	ZIP                string                  `json:"zip"`
+	Lat                float64                 `json:"lat"`
+	Lng                float64                 `json:"lng"`
+	Phone              string                  `json:"phone"`
+	Email              string                  `json:"email"`
+	AdminPhone         string                  `json:"admin_phone"`
+	AdminEmail         string                  `json:"admin_email"`
+	Website            string                  `json:"website"`
+	ImageURL           string                  `json:"image_url"`
+	Rating             float64                 `json:"rating"`
+	MapsPage           string                  `json:"maps_page"`
+	OpeningHours       []string                `json:"opening_hours"`
+	ContactFirstName   string                  `json:"contact_firstname"`
+	ContactLastName    string                  `json:"contact_lastname"`
+	ContactPhone       string                  `json:"contact_phone"`
+	PosSystem          string                  `json:"pos_system"`
+	SoleProprietorship string                  `json:"sole_proprietorship"`
+	TippingPolicy      string                  `json:"tipping_policy"`
+	TippingDivision    string                  `json:"tipping_division"`
+	TableCoverage      string                  `json:"table_coverage"`
+	ServiceStations    int                     `json:"service_stations"`
+	TabletModel        string                  `json:"tablet_model"`
+	MessagingService   string                  `json:"messaging_service"`
+	PayToAddress       string                  `json:"pay_to_address"`
+	TipToAddress       string                  `json:"tip_to_address"`
+	PaymentWallets     []LocationPaymentWallet `json:"payment_wallets"`
+	Reference          string                  `json:"reference"`
+}
+
+type LocationPaymentWallet struct {
+	ID            int    `json:"id"`
+	LocationID    uint   `json:"location_id"`
+	WalletAddress string `json:"wallet_address"`
+	IsDefault     bool   `json:"is_default"`
+}
+
+type LocationWalletSettingsUpdateRequest struct {
+	PaymentWalletAddresses      []string `json:"payment_wallet_addresses"`
+	DefaultPaymentWalletAddress string   `json:"default_payment_wallet_address"`
+	TippingWalletAddress        string   `json:"tipping_wallet_address"`
 }
 
 type PublicLocation struct {
@@ -68,6 +84,7 @@ type PublicLocation struct {
 	Name         string   `json:"name"`
 	Approval     bool     `json:"approval"`
 	PayToAddress string   `json:"pay_to_address"`
+	TipToAddress string   `json:"tip_to_address"`
 	Description  string   `json:"description"`
 	Type         string   `json:"type"`
 	Street       string   `json:"street"`

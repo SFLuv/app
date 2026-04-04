@@ -17,9 +17,13 @@ type Wallet struct {
 }
 
 type WalletAddressOwnerLookup struct {
-	UserID         string `json:"user_id"`
-	IsMerchant     bool   `json:"is_merchant"`
-	MerchantName   string `json:"merchant_name"`
-	WalletName     string `json:"wallet_name"`
-	MatchedAddress string `json:"matched_address"`
+	UserID               string `json:"user_id"`
+	IsMerchant           bool   `json:"is_merchant"`
+	MerchantName         string `json:"merchant_name"`
+	WalletName           string `json:"wallet_name"`
+	MatchedAddress       string `json:"matched_address"`
+	MatchedPrimaryWallet bool   `json:"matched_primary_wallet"`
+	MatchedPaymentWallet bool   `json:"matched_payment_wallet"`
+	PayToAddress         string `json:"pay_to_address"`
+	TipToAddress         string `json:"tip_to_address"`
 }
