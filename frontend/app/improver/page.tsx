@@ -274,6 +274,53 @@ const buildWorkflowPhotoCaptureConstraintAttempts = (aspectRatio: WorkflowPhotoA
   ]
 }
 
+const isAndroidDevice = () => {
+  if (typeof navigator === "undefined") return false
+  return /android/i.test(navigator.userAgent || "")
+}
+
+const getFriendlyCameraErrorMessage = (error: unknown) => {
+  if (error instanceof DOMException) {
+    switch (error.name) {
+      case "NotAllowedError":
+      case "PermissionDeniedError":
+      case "SecurityError":
+        return "Camera access was denied. Allow camera permission in your browser settings and try again."
+      case "NotFoundError":
+      case "DevicesNotFoundError":
+        return "No camera was found on this device."
+      case "NotReadableError":
+      case "TrackStartError":
+      case "AbortError":
+        return "The camera could not be started. Close other apps using the camera and try again."
+      case "OverconstrainedError":
+      case "ConstraintNotSatisfiedError":
+        return "Unable to start the camera with this device configuration."
+      default:
+        break
+    }
+  }
+
+  if (error instanceof Error && error.message.trim() !== "") {
+    return error.message
+  }
+
+  return "Unable to start the camera."
+}
+
+const getCameraPermissionState = async (): Promise<PermissionState | "unsupported"> => {
+  if (typeof navigator === "undefined" || !navigator.permissions?.query) {
+    return "unsupported"
+  }
+
+  try {
+    const result = await navigator.permissions.query({ name: "camera" as PermissionName })
+    return result.state
+  } catch {
+    return "unsupported"
+  }
+}
+
 const buildWorkflowPhotoCaptureSizeCandidates = (width: number, height: number) => {
   const candidates: Array<{ width: number; height: number }> = []
   const seen = new Set<string>()
@@ -505,6 +552,7 @@ export default function ImproverPage() {
   const videoElementRefs = useRef<Record<string, HTMLVideoElement | null>>({})
   const cameraStreamRefs = useRef<Record<string, MediaStream | null>>({})
   const cameraVideoRefCallbacks = useRef<Record<string, (element: HTMLVideoElement | null) => void>>({})
+  const cameraFileInputRefs = useRef<Record<string, HTMLInputElement | null>>({})
   const workflowDataLoadedRef = useRef(false)
   const unpaidDataLoadedRef = useRef(false)
   const absenceDataLoadedRef = useRef(false)
@@ -1320,6 +1368,26 @@ export default function ImproverPage() {
     })
   }, [])
 
+  const setStepSubmitError = useCallback((stepId: string, message: string) => {
+    setStepSubmitErrors((prev) => ({
+      ...prev,
+      [stepId]: message,
+    }))
+  }, [])
+
+  const setCameraCaptureState = useCallback((cameraKey: string, nextState: Partial<CameraCaptureState>) => {
+    setCameraStates((prev) => {
+      const current = prev[cameraKey] || defaultCameraCaptureState
+      return {
+        ...prev,
+        [cameraKey]: {
+          ...current,
+          ...nextState,
+        },
+      }
+    })
+  }, [])
+
   const closeLocalPhotoPreview = useCallback(() => {
     setLocalPhotoPreview((prev) => {
       if (prev?.url) {
@@ -1486,20 +1554,21 @@ export default function ImproverPage() {
     async (stepId: string, itemId: string, aspectRatio: WorkflowPhotoAspectRatio | null, selectedFiles: FileList | null) => {
       const files = Array.from(selectedFiles || [])
       if (files.length === 0) {
-        updateItemForm(stepId, itemId, { photos: [] })
         return
       }
 
       try {
         const prepared = await prepareSelectedPhotos(files, aspectRatio)
         updateItemForm(stepId, itemId, { photos: prepared })
-        setError("")
+        clearStepSubmitError(stepId)
       } catch (err) {
-        updateItemForm(stepId, itemId, { photos: [] })
-        setError(err instanceof Error ? err.message : `Unable to process uploaded photos to fit ${maxWorkflowPhotoUploadLabel}.`)
+        setStepSubmitError(
+          stepId,
+          err instanceof Error ? err.message : `Unable to process uploaded photos to fit ${maxWorkflowPhotoUploadLabel}.`,
+        )
       }
     },
-    [prepareSelectedPhotos],
+    [clearStepSubmitError, prepareSelectedPhotos, setStepSubmitError],
   )
 
   const stopCameraStreamByKey = useCallback((cameraKey: string) => {
@@ -1597,23 +1666,104 @@ export default function ImproverPage() {
     [attachCameraVideoRef],
   )
 
+  const attachCameraFileInputRef = useCallback((cameraKey: string, element: HTMLInputElement | null) => {
+    if (element) {
+      cameraFileInputRefs.current[cameraKey] = element
+      return
+    }
+    delete cameraFileInputRefs.current[cameraKey]
+  }, [])
+
+  const triggerCameraFileInput = useCallback((cameraKey: string) => {
+    const input = cameraFileInputRefs.current[cameraKey]
+    if (!input) return false
+    input.value = ""
+    input.click()
+    return true
+  }, [])
+
+  const appendItemPhotosFromSelection = useCallback(
+    async (
+      stepId: string,
+      itemId: string,
+      aspectRatio: WorkflowPhotoAspectRatio | null,
+      selectedFiles: FileList | null,
+      onError?: (message: string) => void,
+    ) => {
+      const files = Array.from(selectedFiles || [])
+      if (files.length === 0) return
+
+      try {
+        const prepared = await prepareSelectedPhotos(files, aspectRatio)
+        clearStepSubmitError(stepId)
+        setForms((prev) => {
+          const stepForms = prev[stepId] || {}
+          const current = stepForms[itemId] || defaultItemFormState
+          return {
+            ...prev,
+            [stepId]: {
+              ...stepForms,
+              [itemId]: {
+                ...current,
+                photos: [...current.photos, ...prepared],
+              },
+            },
+          }
+        })
+      } catch (err) {
+        const message =
+          err instanceof Error ? err.message : `Unable to process uploaded photos to fit ${maxWorkflowPhotoUploadLabel}.`
+        if (onError) {
+          onError(message)
+          return
+        }
+        setStepSubmitError(stepId, message)
+      }
+    },
+    [clearStepSubmitError, prepareSelectedPhotos, setStepSubmitError],
+  )
+
   const startCameraCapture = async (stepId: string, itemId: string, aspectRatio: WorkflowPhotoAspectRatio) => {
     const cameraKey = cameraKeyForItem(stepId, itemId)
+    clearStepSubmitError(stepId)
+
+    if (isAndroidDevice()) {
+      if (triggerCameraFileInput(cameraKey)) {
+        setCameraCaptureState(cameraKey, {
+          open: false,
+          error: "",
+        })
+        return
+      }
+    }
 
     if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
-      setCameraStates((prev) => ({
-        ...prev,
-        [cameraKey]: {
+      if (triggerCameraFileInput(cameraKey)) {
+        setCameraCaptureState(cameraKey, {
           open: false,
-          error: "Camera capture is not supported in this browser.",
-        },
-      }))
+          error: "",
+        })
+        return
+      }
+      setCameraCaptureState(cameraKey, {
+        open: false,
+        error: "Camera capture is not supported in this browser.",
+      })
       return
     }
 
     stopCameraStreamByKey(cameraKey)
 
     try {
+      const permissionState = await getCameraPermissionState()
+      if (permissionState === "denied") {
+        setCameraCaptureState(cameraKey, {
+          open: false,
+          error: "Camera access is blocked. Enable camera permission in your browser settings and try again.",
+        })
+        return
+      }
+
       let stream: MediaStream | null = null
       let lastError: unknown = null
       for (const videoConstraints of buildWorkflowPhotoCaptureConstraintAttempts(aspectRatio)) {
@@ -1632,31 +1782,27 @@ export default function ImproverPage() {
       }
 
       cameraStreamRefs.current[cameraKey] = stream
-      setCameraStates((prev) => ({
-        ...prev,
-        [cameraKey]: {
-          open: true,
-          error: "",
-        },
-      }))
+      setCameraCaptureState(cameraKey, {
+        open: true,
+        error: "",
+      })
 
       const videoElement = videoElementRefs.current[cameraKey]
       if (videoElement) {
         videoElement.srcObject = stream
-        void videoElement.play().catch(() => undefined)
+        void videoElement.play().catch((playError) => {
+          setCameraCaptureState(cameraKey, {
+            open: false,
+            error: getFriendlyCameraErrorMessage(playError),
+          })
+          stopCameraStreamByKey(cameraKey)
+        })
       }
     } catch (error) {
-      const message =
-        error instanceof Error && error.message.trim() !== ""
-          ? error.message
-          : "Camera access is required for this work item."
-      setCameraStates((prev) => ({
-        ...prev,
-        [cameraKey]: {
-          open: false,
-          error: message,
-        },
-      }))
+      setCameraCaptureState(cameraKey, {
+        open: false,
+        error: getFriendlyCameraErrorMessage(error),
+      })
     }
   }
 
@@ -1667,100 +1813,93 @@ export default function ImproverPage() {
     aspectRatio: WorkflowPhotoAspectRatio,
   ) => {
     const cameraKey = cameraKeyForItem(stepId, itemId)
-    const stream = cameraStreamRefs.current[cameraKey]
-    const videoElement = videoElementRefs.current[cameraKey]
-    if (!stream || !videoElement) {
-      setCameraStates((prev) => ({
-        ...prev,
-        [cameraKey]: {
+    try {
+      const stream = cameraStreamRefs.current[cameraKey]
+      const videoElement = videoElementRefs.current[cameraKey]
+      if (!stream || !videoElement) {
+        setCameraCaptureState(cameraKey, {
           open: false,
           error: "Open your camera before capturing a photo.",
-        },
-      }))
-      return
-    }
+        })
+        return
+      }
 
-    const width = videoElement.videoWidth
-    const height = videoElement.videoHeight
-    if (!width || !height) {
-      setCameraStates((prev) => ({
-        ...prev,
-        [cameraKey]: {
+      const width = videoElement.videoWidth
+      const height = videoElement.videoHeight
+      if (!width || !height) {
+        setCameraCaptureState(cameraKey, {
           open: true,
           error: "Camera is still initializing. Try capture again.",
-        },
-      }))
-      return
-    }
-
-    const normalizedAspect = normalizeWorkflowPhotoAspectRatio(aspectRatio)
-    const targetAspect = workflowPhotoAspectRatios[normalizedAspect]
-    const crop = computeCropForAspectRatio(width, height, targetAspect)
-
-    const slug = itemTitle
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "_")
-      .replace(/^_+|_+$/g, "")
-    const filenamePrefix = slug || "workflow_photo"
-    let preparedPhoto: File | null = null
-    let lastProcessingError = "Unable to capture photo from the camera stream."
-    for (const size of buildWorkflowPhotoCaptureSizeCandidates(crop.width, crop.height)) {
-      const canvas = document.createElement("canvas")
-      canvas.width = size.width
-      canvas.height = size.height
-      const ctx = canvas.getContext("2d")
-      if (!ctx) {
-        lastProcessingError = "Unable to capture photo from the camera stream."
-        break
+        })
+        return
       }
 
-      ctx.imageSmoothingEnabled = true
-      ctx.imageSmoothingQuality = "high"
-      ctx.drawImage(videoElement, crop.x, crop.y, crop.width, crop.height, 0, 0, size.width, size.height)
-      const blob = await new Promise<Blob | null>((resolve) => {
-        canvas.toBlob((value) => resolve(value), "image/jpeg", 0.98)
-      })
-      if (!blob) {
-        lastProcessingError = "Unable to capture photo from the camera stream."
-        continue
+      const normalizedAspect = normalizeWorkflowPhotoAspectRatio(aspectRatio)
+      const targetAspect = workflowPhotoAspectRatios[normalizedAspect]
+      const crop = computeCropForAspectRatio(width, height, targetAspect)
+
+      const slug = itemTitle
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "_")
+        .replace(/^_+|_+$/g, "")
+      const filenamePrefix = slug || "workflow_photo"
+      let preparedPhoto: File | null = null
+      let lastProcessingError = "Unable to capture photo from the camera stream."
+      for (const size of buildWorkflowPhotoCaptureSizeCandidates(crop.width, crop.height)) {
+        try {
+          const canvas = document.createElement("canvas")
+          canvas.width = size.width
+          canvas.height = size.height
+          const ctx = canvas.getContext("2d")
+          if (!ctx) {
+            lastProcessingError = "Unable to capture photo from the camera stream."
+            break
+          }
+
+          ctx.imageSmoothingEnabled = true
+          ctx.imageSmoothingQuality = "high"
+          ctx.drawImage(videoElement, crop.x, crop.y, crop.width, crop.height, 0, 0, size.width, size.height)
+          const blob = await new Promise<Blob | null>((resolve) => {
+            canvas.toBlob((value) => resolve(value), "image/jpeg", 0.98)
+          })
+          if (!blob) {
+            lastProcessingError = "Unable to capture photo from the camera stream."
+            continue
+          }
+
+          const photo = new File([blob], `${filenamePrefix}_${Date.now()}.jpg`, {
+            type: blob.type || "image/jpeg",
+            lastModified: Date.now(),
+          })
+
+          preparedPhoto = await shrinkPhotoToUploadLimit(photo, normalizedAspect)
+          break
+        } catch (err) {
+          lastProcessingError =
+            err instanceof Error ? err.message : `Unable to process captured photo for ${maxWorkflowPhotoUploadLabel} limit.`
+        }
       }
 
-      const photo = new File([blob], `${filenamePrefix}_${Date.now()}.jpg`, {
-        type: blob.type || "image/jpeg",
-        lastModified: Date.now(),
-      })
-
-      try {
-        preparedPhoto = await shrinkPhotoToUploadLimit(photo, normalizedAspect)
-        break
-      } catch (err) {
-        lastProcessingError =
-          err instanceof Error ? err.message : `Unable to process captured photo for ${maxWorkflowPhotoUploadLabel} limit.`
-      }
-    }
-
-    if (!preparedPhoto) {
-      setCameraStates((prev) => ({
-        ...prev,
-        [cameraKey]: {
+      if (!preparedPhoto) {
+        setCameraCaptureState(cameraKey, {
           open: true,
           error: lastProcessingError,
-        },
-      }))
-      setError(lastProcessingError)
-      return
-    }
+        })
+        return
+      }
 
-    addItemPhoto(stepId, itemId, preparedPhoto)
-    stopCameraStreamByKey(cameraKey)
-    setCameraStates((prev) => ({
-      ...prev,
-      [cameraKey]: {
+      addItemPhoto(stepId, itemId, preparedPhoto)
+      stopCameraStreamByKey(cameraKey)
+      setCameraCaptureState(cameraKey, {
         open: false,
         error: "",
-      },
-    }))
-    setError("")
+      })
+    } catch (error) {
+      setCameraCaptureState(cameraKey, {
+        open: true,
+        error: getFriendlyCameraErrorMessage(error),
+      })
+    }
   }
 
   useEffect(() => {
@@ -2753,6 +2892,30 @@ export default function ImproverPage() {
                             )}
                           </div>
 
+                          <input
+                            ref={(element) => attachCameraFileInputRef(cameraKey, element)}
+                            type="file"
+                            accept="image/*"
+                            capture="environment"
+                            className="hidden"
+                            onChange={(e) => {
+                              void appendItemPhotosFromSelection(
+                                step.id,
+                                item.id,
+                                effectivePhotoAspectRatio,
+                                e.currentTarget.files,
+                                (message) => {
+                                  setCameraCaptureState(cameraKey, {
+                                    open: false,
+                                    error: message,
+                                  })
+                                },
+                              )
+                              e.currentTarget.value = ""
+                            }}
+                            disabled={stepNotPossibleSelected || Boolean(submitting)}
+                          />
+
                           {form.photos.length > 0 ? (
                             <div className="space-y-2">
                               <p className="text-xs text-muted-foreground">
@@ -2795,7 +2958,7 @@ export default function ImproverPage() {
                               type="button"
                               size="sm"
                               variant="outline"
-                              onClick={() => startCameraCapture(step.id, item.id, effectivePhotoAspectRatio || "square")}
+                              onClick={() => void startCameraCapture(step.id, item.id, effectivePhotoAspectRatio || "square")}
                               disabled={Boolean(submitting) || stepNotPossibleSelected}
                             >
                               {cameraState.open ? "Restart Camera" : form.photos.length > 0 ? "Take Another Photo" : "Open Camera"}

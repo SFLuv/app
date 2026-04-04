@@ -270,6 +270,13 @@ type Workflow struct {
 	Votes                      WorkflowVotes                 `json:"votes"`
 }
 
+type ProposerWorkflowListResponse struct {
+	Items []*Workflow `json:"items"`
+	Total int         `json:"total"`
+	Page  int         `json:"page"`
+	Count int         `json:"count"`
+}
+
 type ActiveWorkflowListItem struct {
 	Id                      string  `json:"id"`
 	SeriesId                string  `json:"series_id"`
