@@ -9,9 +9,10 @@ interface PlaceAutocompleteProps {
   setGoogleSubLocation: React.Dispatch<React.SetStateAction<GoogleSubLocation | null>>;
   setBusinessPhone: React.Dispatch<React.SetStateAction<string>>;
   setStreet: React.Dispatch<React.SetStateAction<string>>;
+  onSelect?: (location: GoogleSubLocation) => void;
 }
 
-export default function PlaceAutocomplete({ setGoogleSubLocation, setBusinessPhone, setStreet}: PlaceAutocompleteProps) {
+export default function PlaceAutocomplete({ setGoogleSubLocation, setBusinessPhone, setStreet, onSelect}: PlaceAutocompleteProps) {
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -61,6 +62,7 @@ export default function PlaceAutocomplete({ setGoogleSubLocation, setBusinessPho
             opening_hours: rawGoogleData.regularOpeningHours?.weekdayDescriptions || [],
         }
         setGoogleSubLocation(googleDetails)
+        onSelect?.(googleDetails)
         if (typeof googleDetails.phone === "string") {
         setBusinessPhone(googleDetails.phone)
         } else {

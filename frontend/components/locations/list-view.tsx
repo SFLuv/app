@@ -38,7 +38,7 @@ export function ListView({
       locations
         ?.filter(
           location =>
-            (selectedLocationType === "All Locations" || location.type === selectedLocationType) &&
+            (selectedLocationType === "All Locations" || (location.type || "").trim() === selectedLocationType) &&
             (searchQuery === "" ||
               location.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
               location.description.toLowerCase().includes(searchQuery.toLowerCase()) ||

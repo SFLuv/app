@@ -498,13 +498,13 @@ export default function ImproverPage() {
   const [error, setError] = useState<string>("")
   const [notice, setNotice] = useState<string>("")
   const [initialLoading, setInitialLoading] = useState<boolean>(true)
-  const [workflowDataLoading, setWorkflowDataLoading] = useState(false)
+  const [, setWorkflowDataLoading] = useState(false)
   const [workflowDataLoaded, setWorkflowDataLoaded] = useState(false)
-  const [unpaidDataLoading, setUnpaidDataLoading] = useState(false)
+  const [, setUnpaidDataLoading] = useState(false)
   const [unpaidDataLoaded, setUnpaidDataLoaded] = useState(false)
-  const [absenceDataLoading, setAbsenceDataLoading] = useState(false)
+  const [, setAbsenceDataLoading] = useState(false)
   const [absenceDataLoaded, setAbsenceDataLoaded] = useState(false)
-  const [credentialDataLoading, setCredentialDataLoading] = useState(false)
+  const [, setCredentialDataLoading] = useState(false)
   const [credentialDataLoaded, setCredentialDataLoaded] = useState(false)
   const [submitting, setSubmitting] = useState<string>("")
   const [forms, setForms] = useState<Record<string, Record<string, ItemFormState>>>({})
@@ -2557,6 +2557,50 @@ export default function ImproverPage() {
     }
   }
 
+  const requestWorkflowFailedPayouts = async (workflow: Workflow) => {
+    const failedSteps = workflow.steps.filter(
+      (step) =>
+        step.assigned_improver_id === user?.id
+        && step.status === "completed"
+        && step.bounty > 0
+        && Boolean(step.payout_error?.trim()),
+    )
+
+    if (failedSteps.length === 0) {
+      setError("No failed payouts are available to retry for this workflow.")
+      setNotice("")
+      return
+    }
+
+    const key = `retry-workflow:${workflow.id}`
+    setSubmitting(key)
+    try {
+      for (const step of failedSteps) {
+        const res = await authFetch(`/improvers/workflows/${workflow.id}/steps/${step.id}/payout-request`, {
+          method: "POST",
+        })
+        if (!res.ok) {
+          const text = await res.text()
+          throw new Error(text || "Unable to request payout retry.")
+        }
+      }
+
+      setNotice(
+        failedSteps.length === 1
+          ? "Step payout retry requested."
+          : `${failedSteps.length} payout retries requested.`,
+      )
+      setError("")
+      await loadFeed()
+      await refreshDetailWorkflow(workflow.id)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to request payout retries.")
+      setNotice("")
+    } finally {
+      setSubmitting("")
+    }
+  }
+
   const unclaimSeries = async (seriesId: string, stepOrder: number) => {
     const submitKey = `unclaim-series:${seriesId}:${stepOrder}`
     setSubmitting(submitKey)
@@ -2856,11 +2900,13 @@ export default function ImproverPage() {
                 ? item.dropdown_options.find((option) => option.value === form.dropdown)
                 : undefined
               const dropdownRequiresPhoto = Boolean(selectedDropdownOption?.requires_photo_attachment)
+              const dropdownCameraCaptureOnly =
+                Boolean(selectedDropdownOption?.requires_photo_attachment) && Boolean(selectedDropdownOption?.camera_capture_only)
               const effectiveRequiresPhoto = item.requires_photo || dropdownRequiresPhoto
-              const effectiveCameraCaptureOnly = item.requires_photo && item.camera_capture_only
+              const effectiveCameraCaptureOnly = (item.requires_photo && item.camera_capture_only) || dropdownCameraCaptureOnly
               const effectivePhotoAllowAnyCount = item.requires_photo ? item.photo_allow_any_count : false
               const effectivePhotoRequiredCount = item.requires_photo ? Math.max(1, item.photo_required_count || 1) : 1
-              const effectivePhotoAspectRatio = item.requires_photo
+              const effectivePhotoAspectRatio = effectiveRequiresPhoto
                 ? normalizeWorkflowPhotoAspectRatio(item.photo_aspect_ratio || "square")
                 : null
               const dropdownPhotoInstructions = (selectedDropdownOption?.photo_instructions || "").trim()
@@ -2887,6 +2933,11 @@ export default function ImproverPage() {
                                 ? "Capture any number of photos."
                                 : `Capture exactly ${effectivePhotoRequiredCount} photo${effectivePhotoRequiredCount === 1 ? "" : "s"}.`}
                             </p>
+                            {dropdownCameraCaptureOnly && !item.requires_photo && (
+                              <p className="text-xs text-muted-foreground">
+                                The selected dropdown option requires a live photo.
+                              </p>
+                            )}
                             {dropdownPhotoInstructions && (
                               <p className="text-xs text-muted-foreground whitespace-pre-wrap">{dropdownPhotoInstructions}</p>
                             )}
@@ -3089,10 +3140,14 @@ export default function ImproverPage() {
                           value={form.dropdown}
                           onValueChange={(value) => {
                             const nextSelectedOption = item.dropdown_options.find((option) => option.value === value)
+                            const nextRequiresLivePhoto =
+                              Boolean(nextSelectedOption?.requires_photo_attachment) && Boolean(nextSelectedOption?.camera_capture_only)
                             updateItemForm(step.id, item.id, {
                               dropdown: value,
                               photos:
-                                item.requires_photo || Boolean(nextSelectedOption?.requires_photo_attachment)
+                                nextRequiresLivePhoto
+                                  ? []
+                                  : item.requires_photo || Boolean(nextSelectedOption?.requires_photo_attachment)
                                   ? form.photos
                                   : [],
                             })
@@ -3258,12 +3313,6 @@ export default function ImproverPage() {
             <ImproverTabLoadingCard label="Loading workflow board..." />
           ) : (
             <>
-          {workflowDataLoading && (
-            <div className="flex items-center gap-2 text-xs text-muted-foreground">
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              <span>Refreshing workflow board...</span>
-            </div>
-          )}
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input
@@ -3331,12 +3380,6 @@ export default function ImproverPage() {
             <ImproverTabLoadingCard label="Loading your workflows..." />
           ) : (
             <>
-          {workflowDataLoading && (
-            <div className="flex items-center gap-2 text-xs text-muted-foreground">
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              <span>Refreshing your workflows...</span>
-            </div>
-          )}
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input
@@ -3496,12 +3539,6 @@ export default function ImproverPage() {
 	                  className="pl-9"
 	                />
 	              </div>
-                {unpaidDataLoading && (
-                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    <span>Refreshing unpaid workflows...</span>
-                  </div>
-                )}
 	              {filteredUnpaidWorkflows.length === 0 ? (
 	                <p className="text-sm text-muted-foreground">No unpaid workflow payouts are pending for you.</p>
 	              ) : (
@@ -3509,6 +3546,7 @@ export default function ImproverPage() {
                   const unpaidSteps = workflow.steps.filter(
                     (step) => step.assigned_improver_id === user?.id && step.status === "completed" && step.bounty > 0
                   )
+                  const failedUnpaidSteps = unpaidSteps.filter((step) => Boolean(step.payout_error?.trim()))
                   if (unpaidSteps.length === 0) {
                     return null
                   }
@@ -3527,12 +3565,48 @@ export default function ImproverPage() {
                           <span>
                             Pending payouts: {unpaidSteps.length}
                           </span>
+                          <span>
+                            Errors: {failedUnpaidSteps.length}
+                          </span>
                         </div>
+
+                        {failedUnpaidSteps.length > 0 && (
+                          <div className="flex flex-col gap-3 rounded-lg border border-red-200 bg-red-50/80 p-3 dark:border-red-900/60 dark:bg-red-950/20 sm:flex-row sm:items-center sm:justify-between">
+                            <div className="space-y-1">
+                              <p className="text-sm font-medium text-red-700 dark:text-red-300">
+                                {failedUnpaidSteps.length === 1
+                                  ? "1 payout needs attention"
+                                  : `${failedUnpaidSteps.length} payouts need attention`}
+                              </p>
+                              <p className="text-xs text-red-600/90 dark:text-red-300/90">
+                                Retry failed payouts here without opening each step individually.
+                              </p>
+                            </div>
+                            <Button
+                              className="w-full sm:w-auto"
+                              size="sm"
+                              onClick={() => requestWorkflowFailedPayouts(workflow)}
+                              disabled={Boolean(submitting)}
+                            >
+                              {submitting === `retry-workflow:${workflow.id}`
+                                ? "Requesting..."
+                                : failedUnpaidSteps.length === 1
+                                  ? "Retry Failed Payout"
+                                  : "Retry Failed Payouts"}
+                            </Button>
+                          </div>
+                        )}
 
 	                        {unpaidSteps.map((step) => {
 	                          const hasError = Boolean(step.payout_error?.trim())
 	                          return (
-	                            <div key={`unpaid-step-${step.id}`} className="rounded border p-3 space-y-2">
+	                            <div
+                                key={`unpaid-step-${step.id}`}
+                                className={cn(
+                                  "rounded border p-3 space-y-2",
+                                  hasError && "border-red-200 bg-red-50/60 dark:border-red-900/50 dark:bg-red-950/10",
+                                )}
+                              >
 	                              <div className="flex flex-wrap items-center justify-between gap-2">
 	                                <p className="text-sm font-medium">
 	                                  Step {step.step_order}: {step.title}
@@ -3667,12 +3741,6 @@ export default function ImproverPage() {
             <ImproverTabLoadingCard label="Loading credentials..." />
           ) : (
           <>
-          {(workflowDataLoading || credentialDataLoading) && (
-            <div className="flex items-center gap-2 text-xs text-muted-foreground">
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              <span>Refreshing credentials...</span>
-            </div>
-          )}
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
@@ -3782,17 +3850,11 @@ export default function ImproverPage() {
           <Card>
             <CardHeader>
               <CardTitle>Recurring Absence Coverage</CardTitle>
-              <CardDescription>
-                Set an absent period for a recurring claimed workpiece so other qualified improvers can claim those occurrences while you are away.
-              </CardDescription>
+            <CardDescription>
+              Set an absent period for a recurring claimed workpiece so other qualified improvers can claim those occurrences while you are away.
+            </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              {(workflowDataLoading || absenceDataLoading) && (
-                <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  <span>Refreshing absence coverage...</span>
-                </div>
-              )}
               {recurringClaimOptions.length === 0 ? (
                 <p className="text-sm text-muted-foreground">
                   No recurring claimed workpieces found yet. Claim a recurring workflow step first to configure absence coverage.

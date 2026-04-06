@@ -19,6 +19,7 @@ export interface WorkflowDropdownOption {
   label: string
   requires_written_response: boolean
   requires_photo_attachment?: boolean
+  camera_capture_only?: boolean
   photo_instructions?: string
   notify_emails?: string[]
   notify_email_count?: number
@@ -29,6 +30,7 @@ export interface WorkflowDropdownOptionCreateInput {
   label: string
   requires_written_response: boolean
   requires_photo_attachment?: boolean
+  camera_capture_only?: boolean
   photo_instructions?: string
   notify_emails: string[]
   notify_email_count?: number

@@ -3,50 +3,23 @@
 import { useEffect, useState } from "react"
 import { useApp } from "@/context/AppProvider"
 import { MerchantApprovalForm } from "@/components/merchant/merchant-approval-form"
-import { GOOGLE_MAPS_API_KEY } from "@/lib/constants"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
+import { ensureGooglePlacesScript, hasGoogleMapsPlaces } from "@/lib/google-places"
 
 export default function MerchantApprovalPage() {
   const { status, login } = useApp()
   const [googleReady, setGoogleReady] = useState(false)
   const [googleLoadError, setGoogleLoadError] = useState<string | null>(null)
 
-  const hasGoogleMaps = () => {
-    return typeof window !== "undefined" && !!(window as any).google?.maps?.importLibrary
-  }
-
-  const waitForGoogle = async (timeoutMs = 15000): Promise<void> => {
-    if (typeof window === "undefined") return
-
-    const started = Date.now()
-    while (Date.now() - started < timeoutMs) {
-      if (hasGoogleMaps()) return
-      await new Promise((resolve) => setTimeout(resolve, 50))
-    }
-
-    throw new Error("Google Maps script timed out")
-  }
-
   const ensureGoogleScript = async () => {
     if (typeof window === "undefined") return
-    if (hasGoogleMaps()) {
+    if (hasGoogleMapsPlaces()) {
       setGoogleReady(true)
       return
     }
 
-    const src = `https://maps.googleapis.com/maps/api/js?key=${GOOGLE_MAPS_API_KEY}&libraries=places`
-    const existingScript = document.querySelector<HTMLScriptElement>(`script[src^="https://maps.googleapis.com/maps/api/js"]`)
-
-    if (!existingScript) {
-      const script = document.createElement("script")
-      script.src = src
-      script.async = true
-      script.defer = true
-      document.head.appendChild(script)
-    }
-
-    await waitForGoogle()
+    await ensureGooglePlacesScript()
     setGoogleReady(true)
   }
 

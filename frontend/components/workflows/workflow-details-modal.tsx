@@ -298,6 +298,9 @@ export function WorkflowDetailsModal({
                             {option.requires_photo_attachment && (
                               <p className="text-muted-foreground">Requires photo attachment when selected</p>
                             )}
+                            {option.requires_photo_attachment && option.camera_capture_only && (
+                              <p className="text-muted-foreground">Live photo required when selected</p>
+                            )}
                             {option.photo_instructions && (
                               <p className="text-muted-foreground whitespace-pre-wrap">
                                 Photo instructions: {option.photo_instructions}

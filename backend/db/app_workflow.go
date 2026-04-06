@@ -1529,6 +1529,12 @@ func normalizeWorkflowTemplateData(req *structs.WorkflowTemplateCreateRequest, v
 						Label:                   label,
 						RequiresWrittenResponse: option.RequiresWrittenResponse,
 						RequiresPhotoAttachment: option.RequiresPhotoAttachment,
+						CameraCaptureOnly: func() bool {
+							if !option.RequiresPhotoAttachment {
+								return false
+							}
+							return option.CameraCaptureOnly
+						}(),
 						PhotoInstructions: func() string {
 							if !option.RequiresPhotoAttachment {
 								return ""
@@ -2405,6 +2411,7 @@ func (a *AppDB) CreateWorkflow(
 					Label:                   label,
 					RequiresWrittenResponse: option.RequiresWrittenResponse,
 					RequiresPhotoAttachment: option.RequiresPhotoAttachment,
+					CameraCaptureOnly:       option.RequiresPhotoAttachment && option.CameraCaptureOnly,
 					PhotoInstructions:       strings.TrimSpace(option.PhotoInstructions),
 					NotifyEmails:            option.NotifyEmails,
 					SendPicturesWithEmail:   option.SendPicturesWithEmail,
@@ -3145,6 +3152,9 @@ func (a *AppDB) getWorkflowSteps(ctx context.Context, workflowId string) ([]stru
 			}
 		}
 		for idx := range item.DropdownOptions {
+			if !item.DropdownOptions[idx].RequiresPhotoAttachment {
+				item.DropdownOptions[idx].CameraCaptureOnly = false
+			}
 			item.DropdownOptions[idx].NotifyEmails = normalizeEmailList(item.DropdownOptions[idx].NotifyEmails)
 		}
 
@@ -4142,6 +4152,7 @@ func ensureRecurringWorkflowSuccessorTx(
 					Label:                   label,
 					RequiresWrittenResponse: option.RequiresWrittenResponse,
 					RequiresPhotoAttachment: option.RequiresPhotoAttachment,
+					CameraCaptureOnly:       option.RequiresPhotoAttachment && option.CameraCaptureOnly,
 					PhotoInstructions:       strings.TrimSpace(option.PhotoInstructions),
 					NotifyEmails:            option.NotifyEmails,
 					SendPicturesWithEmail:   option.SendPicturesWithEmail,
@@ -7574,6 +7585,9 @@ func (a *AppDB) CompleteWorkflowStep(
 				}
 			}
 			for idx := range item.DropdownOptions {
+				if !item.DropdownOptions[idx].RequiresPhotoAttachment {
+					item.DropdownOptions[idx].CameraCaptureOnly = false
+				}
 				item.DropdownOptions[idx].NotifyEmails = normalizeEmailList(item.DropdownOptions[idx].NotifyEmails)
 			}
 			item.DropdownRequiresWrittenMap = map[string]bool{}
@@ -7747,10 +7761,14 @@ func (a *AppDB) CompleteWorkflowStep(
 				if selectedOption != nil {
 					if selectedOption.RequiresPhotoAttachment && totalPhotoCount == 0 {
 						instructions := strings.TrimSpace(selectedOption.PhotoInstructions)
-						if instructions != "" {
-							return nil, fmt.Errorf("dropdown selection requires photo attachment for step item %s: %s", item.Title, instructions)
+						requirementLabel := "photo attachment"
+						if selectedOption.CameraCaptureOnly {
+							requirementLabel = "live photo attachment"
 						}
-						return nil, fmt.Errorf("dropdown selection requires photo attachment for step item: %s", item.Title)
+						if instructions != "" {
+							return nil, fmt.Errorf("dropdown selection requires %s for step item %s: %s", requirementLabel, item.Title, instructions)
+						}
+						return nil, fmt.Errorf("dropdown selection requires %s for step item: %s", requirementLabel, item.Title)
 					}
 					emails := normalizeEmailList(selectedOption.NotifyEmails)
 					if len(emails) > 0 {

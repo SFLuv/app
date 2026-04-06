@@ -10,7 +10,6 @@ import {
   Settings,
   Wallet,
   Handshake,
-  FileCheck,
   SquareUserIcon,
   Shield,
   ClipboardList,
@@ -222,15 +221,6 @@ export function DashboardSidebar() {
     // Only show merchant items if user is a merchant with approved status
     if (user?.isMerchant) {
       items = [...items, ...merchantItems]
-    }
-
-    // Add merchant status link for users with any merchant status
-    if (userLocations.length !== 0) {
-      items.push({
-        title: "Merchant Status",
-        icon: FileCheck,
-        path: "/merchant-status",
-      })
     }
 
     if (user?.isOrganizer) {

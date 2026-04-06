@@ -203,6 +203,7 @@ type WorkflowDropdownOptionCreateInput struct {
 	Label                   string   `json:"label"`
 	RequiresWrittenResponse bool     `json:"requires_written_response"`
 	RequiresPhotoAttachment bool     `json:"requires_photo_attachment,omitempty"`
+	CameraCaptureOnly       bool     `json:"camera_capture_only,omitempty"`
 	PhotoInstructions       string   `json:"photo_instructions,omitempty"`
 	NotifyEmails            []string `json:"notify_emails"`
 	NotifyEmailCount        int      `json:"notify_email_count,omitempty"`
@@ -214,6 +215,7 @@ type WorkflowDropdownOption struct {
 	Label                   string   `json:"label"`
 	RequiresWrittenResponse bool     `json:"requires_written_response"`
 	RequiresPhotoAttachment bool     `json:"requires_photo_attachment,omitempty"`
+	CameraCaptureOnly       bool     `json:"camera_capture_only,omitempty"`
 	PhotoInstructions       string   `json:"photo_instructions,omitempty"`
 	NotifyEmails            []string `json:"notify_emails,omitempty"`
 	NotifyEmailCount        int      `json:"notify_email_count,omitempty"`

@@ -5,6 +5,7 @@ import type React from "react";
 import { useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useApp } from "@/context/AppProvider";
+import PlaceAutocomplete from "@/components/merchant/google_place_finder";
 import {
   Card,
   CardContent,
@@ -21,6 +22,11 @@ import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -29,6 +35,7 @@ import {
 } from "@/components/ui/select";
 import {
   Check,
+  ChevronDown,
   Loader2,
   Upload,
   User,
@@ -42,6 +49,8 @@ import {
   WalletResponse,
 } from "@/types/server";
 import { AuthedLocation } from "@/types/location";
+import { GoogleSubLocation } from "@/types/location";
+import { ensureGooglePlacesScript, hasGoogleMapsPlaces } from "@/lib/google-places";
 import { getAddress, isAddress } from "viem";
 
 type MerchantStatus = "approved" | "pending" | "rejected" | "none";
@@ -49,6 +58,7 @@ type LocationApplicationStatus = "approved" | "pending" | "rejected";
 const CUSTOM_REWARDS_ACCOUNT_VALUE = "__custom__";
 const CUSTOM_WALLET_VALUE = "__custom_wallet__";
 const NONE_WALLET_VALUE = "__none__";
+const SELECT_WALLET_PLACEHOLDER_VALUE = "__select_wallet__";
 
 type MerchantLocationWalletDraft = {
   paymentWalletAddresses: string[];
@@ -57,6 +67,29 @@ type MerchantLocationWalletDraft = {
   paymentAddCustomAddress: string;
   tippingWalletSelection: string;
   tippingWalletCustomAddress: string;
+  saving: boolean;
+  error: string;
+  success: string;
+};
+
+type MerchantLocationProfileDraft = {
+  googleId: string;
+  name: string;
+  description: string;
+  type: string;
+  street: string;
+  city: string;
+  state: string;
+  zip: string;
+  lat: number;
+  lng: number;
+  phone: string;
+  website: string;
+  imageUrl: string;
+  rating: number;
+  mapsPage: string;
+  openingHours: string[];
+  dirty: boolean;
   saving: boolean;
   error: string;
   success: string;
@@ -118,6 +151,22 @@ export default function SettingsPage() {
   const sortedUserLocations = useMemo(() => {
     return [...userLocations].sort((a, b) => b.id - a.id);
   }, [userLocations]);
+
+  const approvedMerchantLocations = useMemo(
+    () =>
+      sortedUserLocations.filter(
+        (location) => getLocationApplicationStatus(location.approval) === "approved",
+      ),
+    [sortedUserLocations],
+  );
+
+  const reviewMerchantLocations = useMemo(
+    () =>
+      sortedUserLocations.filter(
+        (location) => getLocationApplicationStatus(location.approval) !== "approved",
+      ),
+    [sortedUserLocations],
+  );
 
   const affiliateStatus = useMemo(() => {
     if (user?.isAffiliate) return "approved";
@@ -208,6 +257,14 @@ export default function SettingsPage() {
   const [locationWalletDrafts, setLocationWalletDrafts] = useState<
     Record<number, MerchantLocationWalletDraft>
   >({});
+  const [locationProfileDrafts, setLocationProfileDrafts] = useState<
+    Record<number, MerchantLocationProfileDraft>
+  >({});
+  const [merchantLocationCardOpen, setMerchantLocationCardOpen] = useState<
+    Record<number, boolean>
+  >({});
+  const [merchantPlacesReady, setMerchantPlacesReady] = useState(false);
+  const [merchantPlacesLoadError, setMerchantPlacesLoadError] = useState("");
 
   const [improverRewardsSelection, setImproverRewardsSelection] = useState("");
   const [improverCustomRewardsAccount, setImproverCustomRewardsAccount] =
@@ -223,6 +280,9 @@ export default function SettingsPage() {
   const [supervisorRewardsSaving, setSupervisorRewardsSaving] = useState(false);
   const [supervisorRewardsError, setSupervisorRewardsError] = useState("");
   const [supervisorRewardsSuccess, setSupervisorRewardsSuccess] = useState("");
+  const noopGoogleSubLocationSetter: React.Dispatch<
+    React.SetStateAction<GoogleSubLocation | null>
+  > = () => undefined;
 
   // Account form
   const [name, setName] = useState(user?.name || "");
@@ -233,21 +293,6 @@ export default function SettingsPage() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [passwordError, setPasswordError] = useState("");
 
-  // Merchant form (only for merchants)
-  const [merchantName, setMerchantName] = useState("Your Business Name");
-  const [merchantDescription, setMerchantDescription] = useState(
-    "A brief description of your business and what you offer to the community.",
-  );
-  const [merchantAddress, setMerchantAddress] = useState({
-    street: "123 Main St",
-    city: "San Francisco",
-    state: "CA",
-    zip: "94105",
-  });
-  const [merchantPhone, setMerchantPhone] = useState("(415) 555-1234");
-  const [merchantWebsite, setMerchantWebsite] = useState(
-    "www.yourbusiness.com",
-  );
   // Notification settings
   const [emailNotifications, setEmailNotifications] = useState(true);
   const [opportunityAlerts, setOpportunityAlerts] = useState(true);
@@ -530,18 +575,10 @@ export default function SettingsPage() {
       ? walletOptionLookup.get(normalizedTippingWalletAddress.toLowerCase())
       : null;
 
-    const firstAvailablePaymentWallet =
-      rewardsAccountOptions.find(
-        (option) =>
-          !paymentWalletAddresses.some(
-            (address) => address.toLowerCase() === option.value.toLowerCase(),
-          ),
-      )?.value || CUSTOM_WALLET_VALUE;
-
     return {
       paymentWalletAddresses,
       defaultPaymentWalletAddress: normalizedDefaultPaymentWalletAddress,
-      paymentAddSelection: firstAvailablePaymentWallet,
+      paymentAddSelection: SELECT_WALLET_PLACEHOLDER_VALUE,
       paymentAddCustomAddress: "",
       tippingWalletSelection: normalizedTippingWalletAddress
         ? tippingOption
@@ -556,6 +593,36 @@ export default function SettingsPage() {
       error: "",
       success: "",
     };
+  };
+
+  const buildLocationProfileDraft = (
+    location: AuthedLocation,
+  ): MerchantLocationProfileDraft => ({
+    googleId: location.google_id || "",
+    name: location.name || "",
+    description: location.description || "",
+    type: location.type || "",
+    street: location.street || "",
+    city: location.city || "",
+    state: location.state || "",
+    zip: location.zip || "",
+    lat: location.lat ?? 0,
+    lng: location.lng ?? 0,
+    phone: location.phone || "",
+    website: location.website || "",
+    imageUrl: location.image_url || "",
+    rating: location.rating ?? 0,
+    mapsPage: location.maps_page || "",
+    openingHours: location.opening_hours || [],
+    dirty: false,
+    saving: false,
+    error: "",
+    success: "",
+  });
+
+  const formatLocationAddressSummary = (location: AuthedLocation) => {
+    const cityState = [location.city, location.state].filter(Boolean).join(", ");
+    return [location.street, cityState, location.zip].filter(Boolean).join(" ").trim();
   };
 
   useEffect(() => {
@@ -674,6 +741,68 @@ export default function SettingsPage() {
     user?.isMerchant,
     walletOptionLookup,
   ]);
+
+  useEffect(() => {
+    if (!user?.isMerchant) {
+      setLocationProfileDrafts({});
+      return;
+    }
+
+    setLocationProfileDrafts((current) => {
+      const nextDrafts: Record<number, MerchantLocationProfileDraft> = {};
+      for (const location of approvedMerchantLocations) {
+        const existingDraft = current[location.id];
+        const nextDraft = buildLocationProfileDraft(location);
+        nextDrafts[location.id] =
+          existingDraft?.dirty || existingDraft?.saving
+            ? existingDraft
+            : {
+                ...nextDraft,
+                saving: existingDraft?.saving ?? false,
+                error: existingDraft?.error ?? "",
+                success: existingDraft?.success ?? "",
+              };
+      }
+      return nextDrafts;
+    });
+  }, [approvedMerchantLocations, user?.isMerchant]);
+
+  useEffect(() => {
+    setMerchantLocationCardOpen((current) => {
+      const nextState: Record<number, boolean> = {};
+      for (const location of approvedMerchantLocations) {
+        nextState[location.id] = current[location.id] ?? false;
+      }
+      return nextState;
+    });
+  }, [approvedMerchantLocations]);
+
+  useEffect(() => {
+    if (activeTab !== "merchant" || approvedMerchantLocations.length === 0) {
+      return;
+    }
+
+    let cancelled = false;
+    void ensureGooglePlacesScript()
+      .then(() => {
+        if (cancelled) return;
+        if (hasGoogleMapsPlaces()) {
+          setMerchantPlacesReady(true);
+          setMerchantPlacesLoadError("");
+        }
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        console.error(error);
+        setMerchantPlacesLoadError(
+          "Failed to load Google Places search. Please refresh and try again.",
+        );
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, approvedMerchantLocations.length]);
 
   useEffect(() => {
     if (improverStatus !== "approved") return;
@@ -802,18 +931,6 @@ export default function SettingsPage() {
       setNewPassword("");
       setConfirmPassword("");
       showSuccessMessage("Password changed successfully");
-    }, 1500);
-  };
-
-  // Handle merchant update
-  const handleMerchantUpdate = (e: React.FormEvent) => {
-    e.preventDefault();
-    setIsUpdating(true);
-
-    // Simulate API call
-    setTimeout(() => {
-      setIsUpdating(false);
-      showSuccessMessage("Merchant details updated successfully");
     }, 1500);
   };
 
@@ -1083,6 +1200,113 @@ export default function SettingsPage() {
     });
   };
 
+  const updateLocationProfileDraft = (
+    locationId: number,
+    updater: (
+      draft: MerchantLocationProfileDraft,
+    ) => MerchantLocationProfileDraft,
+  ) => {
+    setLocationProfileDrafts((current) => {
+      const existingDraft = current[locationId];
+      if (!existingDraft) return current;
+      return {
+        ...current,
+        [locationId]: updater(existingDraft),
+      };
+    });
+  };
+
+  const handleSaveLocationProfile = async (locationId: number) => {
+    const draft = locationProfileDrafts[locationId];
+    const location = approvedMerchantLocations.find((entry) => entry.id === locationId);
+    if (!draft || !location || draft.saving) return;
+
+    const nextLocation: AuthedLocation = {
+      ...location,
+      google_id: draft.googleId.trim(),
+      name: draft.name.trim(),
+      description: draft.description.trim(),
+      type: draft.type.trim(),
+      street: draft.street.trim(),
+      city: draft.city.trim(),
+      state: draft.state.trim(),
+      zip: draft.zip.trim(),
+      lat: draft.lat,
+      lng: draft.lng,
+      phone: draft.phone.trim(),
+      website: draft.website.trim(),
+      image_url: draft.imageUrl.trim(),
+      rating: draft.rating,
+      maps_page: draft.mapsPage.trim(),
+      opening_hours: draft.openingHours,
+    };
+
+    updateLocationProfileDraft(locationId, () => ({
+      ...draft,
+      saving: true,
+      error: "",
+      success: "",
+    }));
+
+    try {
+      const res = await authFetch("/locations", {
+        method: "PUT",
+        body: JSON.stringify(nextLocation),
+      });
+
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || "Unable to update location profile.");
+      }
+
+      setUserLocations((current) =>
+        current.map((entry) => (entry.id === locationId ? nextLocation : entry)),
+      );
+      updateLocationProfileDraft(locationId, () => ({
+        ...buildLocationProfileDraft(nextLocation),
+        dirty: false,
+        saving: false,
+        error: "",
+        success: "Location profile updated.",
+      }));
+    } catch (err) {
+      updateLocationProfileDraft(locationId, () => ({
+        ...draft,
+        saving: false,
+        error:
+          err instanceof Error ? err.message : "Unable to update location profile.",
+        success: "",
+      }));
+    }
+  };
+
+  const applyGoogleLocationSelection = (
+    locationId: number,
+    selection: GoogleSubLocation,
+  ) => {
+    updateLocationProfileDraft(locationId, (current) => ({
+      ...current,
+      googleId: selection.google_id || current.googleId,
+      name: selection.name || current.name,
+      type: selection.type || current.type,
+      street: selection.street || current.street,
+      city: selection.city || current.city,
+      state: selection.state || current.state,
+      zip: selection.zip || current.zip,
+      lat: selection.lat ?? current.lat,
+      lng: selection.lng ?? current.lng,
+      phone: selection.phone || current.phone,
+      website: selection.website || current.website,
+      imageUrl: selection.image_url || current.imageUrl,
+      rating: selection.rating ?? current.rating,
+      mapsPage: selection.maps_page || current.mapsPage,
+      openingHours: selection.opening_hours || current.openingHours,
+      dirty: true,
+      error: "",
+      success: "",
+    }));
+  };
+
   const resolveDraftAddress = (
     selection: string,
     customAddress: string,
@@ -1104,15 +1328,111 @@ export default function SettingsPage() {
     return getAddress(rawAddress);
   };
 
-  const handleAddLocationPaymentWallet = (locationId: number) => {
-    const draft = locationWalletDrafts[locationId];
-    if (!draft) return;
+  const commitLocationWalletSettings = async (
+    locationId: number,
+    nextDraft: MerchantLocationWalletDraft,
+    successMessage = "Updated.",
+  ) => {
+    const tippingWalletAddress = resolveDraftAddress(
+      nextDraft.tippingWalletSelection,
+      nextDraft.tippingWalletCustomAddress,
+      true,
+    );
+    if (
+      nextDraft.tippingWalletSelection !== NONE_WALLET_VALUE &&
+      tippingWalletAddress === null
+    ) {
+      updateLocationWalletDraft(locationId, (current) => ({
+        ...current,
+        error: "Enter a valid tipping wallet address.",
+        success: "",
+      }));
+      return;
+    }
+
+    if (
+      tippingWalletAddress &&
+      nextDraft.paymentWalletAddresses.some(
+        (address) =>
+          address.toLowerCase() === tippingWalletAddress.toLowerCase(),
+      )
+    ) {
+      updateLocationWalletDraft(locationId, (current) => ({
+        ...current,
+        error: "Tipping wallet must be different from every payment wallet.",
+        success: "",
+      }));
+      return;
+    }
+
+    updateLocationWalletDraft(locationId, () => ({
+      ...nextDraft,
+      saving: true,
+      error: "",
+      success: "",
+    }));
+
+    try {
+      const res = await authFetch(`/locations/${locationId}/wallet-settings`, {
+        method: "PUT",
+        body: JSON.stringify({
+          payment_wallet_addresses: nextDraft.paymentWalletAddresses,
+          default_payment_wallet_address: nextDraft.defaultPaymentWalletAddress,
+          tipping_wallet_address: tippingWalletAddress || "",
+        }),
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || "Unable to update merchant wallet settings.");
+      }
+
+      const updatedLocation = (await res.json()) as AuthedLocation;
+      setUserLocations((current) =>
+        current.map((location) =>
+          location.id === updatedLocation.id ? updatedLocation : location,
+        ),
+      );
+      updateLocationWalletDraft(locationId, () => ({
+        ...buildLocationWalletDraft(updatedLocation),
+        saving: false,
+        error: "",
+        success: successMessage,
+      }));
+    } catch (err) {
+      updateLocationWalletDraft(locationId, () => ({
+        ...nextDraft,
+        saving: false,
+        error:
+          err instanceof Error
+            ? err.message
+            : "Unable to update merchant wallet settings.",
+        success: "",
+      }));
+    }
+  };
+
+  const handleAddLocationPaymentWallet = async (
+    locationId: number,
+    options?: {
+      silentIfEmptyCustom?: boolean;
+      draftOverride?: MerchantLocationWalletDraft;
+    },
+  ) => {
+    const draft = options?.draftOverride || locationWalletDrafts[locationId];
+    if (!draft || draft.saving) return;
 
     const normalizedAddress = resolveDraftAddress(
       draft.paymentAddSelection,
       draft.paymentAddCustomAddress,
     );
     if (!normalizedAddress) {
+      if (
+        options?.silentIfEmptyCustom &&
+        draft.paymentAddSelection === CUSTOM_WALLET_VALUE &&
+        !draft.paymentAddCustomAddress.trim()
+      ) {
+        return;
+      }
       updateLocationWalletDraft(locationId, (current) => ({
         ...current,
         error: "Enter a valid payment wallet address before adding it.",
@@ -1151,135 +1471,105 @@ export default function SettingsPage() {
       return;
     }
 
-    updateLocationWalletDraft(locationId, (current) => {
-      const nextPaymentWalletAddresses = [
-        ...current.paymentWalletAddresses,
-        normalizedAddress,
-      ];
-      const nextAddSelection =
-        rewardsAccountOptions.find(
-          (option) =>
-            !nextPaymentWalletAddresses.some(
-              (address) => address.toLowerCase() === option.value.toLowerCase(),
-            ),
-        )?.value || CUSTOM_WALLET_VALUE;
+    const nextPaymentWalletAddresses = [
+      ...draft.paymentWalletAddresses,
+      normalizedAddress,
+    ];
+    const nextDraft: MerchantLocationWalletDraft = {
+      ...draft,
+      paymentWalletAddresses: nextPaymentWalletAddresses,
+      defaultPaymentWalletAddress:
+        draft.defaultPaymentWalletAddress || normalizedAddress,
+      paymentAddSelection: SELECT_WALLET_PLACEHOLDER_VALUE,
+      paymentAddCustomAddress: "",
+      error: "",
+      success: "",
+    };
 
-      return {
-        ...current,
-        paymentWalletAddresses: nextPaymentWalletAddresses,
-        defaultPaymentWalletAddress:
-          current.defaultPaymentWalletAddress || normalizedAddress,
-        paymentAddSelection: nextAddSelection,
-        paymentAddCustomAddress: "",
-        error: "",
-        success: "",
-      };
-    });
+    await commitLocationWalletSettings(
+      locationId,
+      nextDraft,
+      "Payment wallet added.",
+    );
   };
 
-  const handleRemoveLocationPaymentWallet = (
+  const handleRemoveLocationPaymentWallet = async (
     locationId: number,
     walletAddress: string,
   ) => {
-    updateLocationWalletDraft(locationId, (current) => {
-      const nextPaymentWalletAddresses = current.paymentWalletAddresses.filter(
-        (address) => address.toLowerCase() !== walletAddress.toLowerCase(),
-      );
-
-      return {
-        ...current,
-        paymentWalletAddresses: nextPaymentWalletAddresses,
-        defaultPaymentWalletAddress:
-          current.defaultPaymentWalletAddress.toLowerCase() ===
-          walletAddress.toLowerCase()
-            ? nextPaymentWalletAddresses[0] || ""
-            : current.defaultPaymentWalletAddress,
-        error: "",
-        success: "",
-      };
-    });
-  };
-
-  const handleSaveLocationWalletSettings = async (locationId: number) => {
     const draft = locationWalletDrafts[locationId];
-    if (!draft) return;
+    if (!draft || draft.saving) return;
 
-    const tippingWalletAddress = resolveDraftAddress(
-      draft.tippingWalletSelection,
-      draft.tippingWalletCustomAddress,
-      true,
+    const nextPaymentWalletAddresses = draft.paymentWalletAddresses.filter(
+      (address) => address.toLowerCase() !== walletAddress.toLowerCase(),
     );
-    if (
-      draft.tippingWalletSelection !== NONE_WALLET_VALUE &&
-      tippingWalletAddress === null
-    ) {
-      updateLocationWalletDraft(locationId, (current) => ({
-        ...current,
-        error: "Enter a valid tipping wallet address.",
-        success: "",
-      }));
-      return;
-    }
 
-    if (
-      tippingWalletAddress &&
-      draft.paymentWalletAddresses.some(
-        (address) =>
-          address.toLowerCase() === tippingWalletAddress.toLowerCase(),
-      )
-    ) {
-      updateLocationWalletDraft(locationId, (current) => ({
-        ...current,
-        error: "Tipping wallet must be different from every payment wallet.",
-        success: "",
-      }));
-      return;
-    }
-
-    updateLocationWalletDraft(locationId, (current) => ({
-      ...current,
-      saving: true,
+    const nextDraft: MerchantLocationWalletDraft = {
+      ...draft,
+      paymentWalletAddresses: nextPaymentWalletAddresses,
+      defaultPaymentWalletAddress:
+        draft.defaultPaymentWalletAddress.toLowerCase() ===
+        walletAddress.toLowerCase()
+          ? nextPaymentWalletAddresses[0] || ""
+          : draft.defaultPaymentWalletAddress,
       error: "",
       success: "",
-    }));
+    };
 
-    try {
-      const res = await authFetch(`/locations/${locationId}/wallet-settings`, {
-        method: "PUT",
-        body: JSON.stringify({
-          payment_wallet_addresses: draft.paymentWalletAddresses,
-          default_payment_wallet_address: draft.defaultPaymentWalletAddress,
-          tipping_wallet_address: tippingWalletAddress || "",
-        }),
-      });
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(text || "Unable to update merchant wallet settings.");
-      }
+    await commitLocationWalletSettings(
+      locationId,
+      nextDraft,
+      "Payment wallet removed.",
+    );
+  };
 
-      const updatedLocation = (await res.json()) as AuthedLocation;
-      setUserLocations((current) =>
-        current.map((location) =>
-          location.id === updatedLocation.id ? updatedLocation : location,
-        ),
-      );
-      updateLocationWalletDraft(locationId, (current) => ({
-        ...buildLocationWalletDraft(updatedLocation),
-        saving: false,
-        error: "",
-        success: "Merchant wallet settings updated.",
-      }));
-    } catch (err) {
-      updateLocationWalletDraft(locationId, (current) => ({
-        ...current,
-        saving: false,
-        error:
-          err instanceof Error
-            ? err.message
-            : "Unable to update merchant wallet settings.",
-        success: "",
-      }));
+  const handleSetLocationDefaultPaymentWallet = async (
+    locationId: number,
+    walletAddress: string,
+  ) => {
+    const draft = locationWalletDrafts[locationId];
+    if (!draft || draft.saving) return;
+
+    const nextDraft: MerchantLocationWalletDraft = {
+      ...draft,
+      defaultPaymentWalletAddress: walletAddress,
+      error: "",
+      success: "",
+    };
+    await commitLocationWalletSettings(
+      locationId,
+      nextDraft,
+      "Default payment wallet updated.",
+    );
+  };
+
+  const handleApplyLocationTippingWallet = async (
+    locationId: number,
+    options?: {
+      silentIfEmptyCustom?: boolean;
+      draftOverride?: MerchantLocationWalletDraft;
+    },
+  ) => {
+    const draft = options?.draftOverride || locationWalletDrafts[locationId];
+    if (!draft || draft.saving) return;
+
+    if (
+      options?.silentIfEmptyCustom &&
+      draft.tippingWalletSelection === CUSTOM_WALLET_VALUE &&
+      !draft.tippingWalletCustomAddress.trim()
+    ) {
+      return;
     }
+
+    await commitLocationWalletSettings(
+      locationId,
+      {
+        ...draft,
+        error: "",
+        success: "",
+      },
+      "Tip wallet updated.",
+    );
   };
 
   const handleWalletVisibilityChange = async (
@@ -2358,77 +2648,17 @@ export default function SettingsPage() {
 
         {merchantStatus !== "none" && (
           <TabsContent value="merchant" className="space-y-6">
-            <div className="space-y-2">
-              {sortedUserLocations.map((loc) => {
-                const applicationStatus = getLocationApplicationStatus(
-                  loc.approval,
-                );
-                const borderClass =
-                  applicationStatus === "approved"
-                    ? "border-green-300 dark:border-green-700"
-                    : applicationStatus === "rejected"
-                      ? "border-red-300 dark:border-red-700"
-                      : "border-yellow-300 dark:border-yellow-700";
-                const headerClass =
-                  applicationStatus === "approved"
-                    ? "bg-green-50 dark:bg-green-900/20 rounded-t-lg"
-                    : applicationStatus === "rejected"
-                      ? "bg-red-50 dark:bg-red-900/20 rounded-t-lg"
-                      : "bg-yellow-50 dark:bg-yellow-900/20 rounded-t-lg";
-                const Icon =
-                  applicationStatus === "approved"
-                    ? Check
-                    : applicationStatus === "rejected"
-                      ? XCircle
-                      : Clock;
-                const iconClass =
-                  applicationStatus === "approved"
-                    ? "h-5 w-5 text-green-500 mr-2"
-                    : applicationStatus === "rejected"
-                      ? "h-5 w-5 text-red-500 mr-2"
-                      : "h-5 w-5 text-yellow-500 mr-2";
-                const statusTitle =
-                  applicationStatus === "approved"
-                    ? "Location Application Approved"
-                    : applicationStatus === "rejected"
-                      ? "Location Application Not Approved"
-                      : "Location Application Pending";
-                const statusBody =
-                  applicationStatus === "approved"
-                    ? `Your application for ${loc.name} has been approved!`
-                    : applicationStatus === "rejected"
-                      ? `Your application for ${loc.name} was not approved.`
-                      : `Your application for ${loc.name} is currently under review.`;
-                return (
-                  <Card className={borderClass} key={loc.id}>
-                    <CardHeader className={headerClass}>
-                      <CardTitle className="text-black dark:text-white flex items-center">
-                        <Icon className={iconClass} />
-                        {statusTitle}
-                      </CardTitle>
-                    </CardHeader>
-                    <CardContent className="pt-4">
-                      <p className="text-gray-600 dark:text-gray-400">
-                        {statusBody}
-                      </p>
-                    </CardContent>
-                  </Card>
-                );
-              })}
-            </div>
-            <div className="space-y-4">
-              {sortedUserLocations
-                .filter(
-                  (loc) =>
-                    getLocationApplicationStatus(loc.approval) !== "rejected",
-                )
-                .map((loc) => {
-                  const draft = locationWalletDrafts[loc.id];
-                  if (!draft) return null;
+            {approvedMerchantLocations.length > 0 && (
+              <div className="space-y-4">
+                {approvedMerchantLocations.map((loc) => {
+                  const walletDraft = locationWalletDrafts[loc.id];
+                  const profileDraft = locationProfileDrafts[loc.id];
+                  if (!walletDraft || !profileDraft) return null;
 
+                  const isOpen = merchantLocationCardOpen[loc.id] ?? false;
                   const tippingWalletOptions = rewardsAccountOptions.filter(
                     (option) =>
-                      !draft.paymentWalletAddresses.some(
+                      !walletDraft.paymentWalletAddresses.some(
                         (address) =>
                           address.toLowerCase() === option.value.toLowerCase(),
                       ),
@@ -2436,513 +2666,699 @@ export default function SettingsPage() {
                   const availablePaymentWalletOptions =
                     rewardsAccountOptions.filter(
                       (option) =>
-                        !draft.paymentWalletAddresses.some(
+                        !walletDraft.paymentWalletAddresses.some(
                           (address) =>
-                            address.toLowerCase() ===
-                            option.value.toLowerCase(),
+                            address.toLowerCase() === option.value.toLowerCase(),
                         ),
                     );
-                  const effectivePaymentWallet = (
-                    loc.pay_to_address || ""
-                  ).trim();
-                  const locationStatus = getLocationApplicationStatus(
-                    loc.approval,
-                  );
+                  const effectivePaymentWallet = (loc.pay_to_address || "").trim();
+                  const effectiveTippingWallet = (loc.tip_to_address || "").trim();
+                  const paymentSummary =
+                    walletDraft.paymentWalletAddresses.length === 0
+                      ? "Primary wallet fallback"
+                      : `${walletDraft.paymentWalletAddresses.length} payment wallet${walletDraft.paymentWalletAddresses.length === 1 ? "" : "s"}`;
+                  const profileStatusLabel = profileDraft.saving
+                    ? "Saving profile"
+                    : profileDraft.success
+                      ? "Profile saved"
+                      : "Profile";
+                  const routingStatusLabel = walletDraft.saving
+                    ? "Saving routing"
+                    : walletDraft.success
+                      ? "Routing saved"
+                      : "Routing";
 
                   return (
-                    <Card key={`wallet-settings-${loc.id}`}>
-                      <CardHeader>
-                        <CardTitle className="text-black dark:text-white">
-                          {loc.name} Wallet Settings
-                        </CardTitle>
-                        <CardDescription>
-                          {locationStatus === "approved"
-                            ? "Control where customer payments and tips land for this merchant location."
-                            : "You can prepare payment and tipping destinations before this location is approved."}
-                        </CardDescription>
-                      </CardHeader>
-                      <CardContent className="space-y-5">
-                        <div className="rounded-lg border border-dashed border-[#eb6c6c]/30 bg-[#eb6c6c]/5 p-4">
-                          <div className="space-y-1">
-                            <h3 className="text-sm font-semibold text-black dark:text-white">
-                              Payment Wallets
-                            </h3>
-                            <p className="text-sm text-muted-foreground">
-                              If you do not add any location-specific payment
-                              wallets, this location will keep using your
-                              primary wallet by default.
-                            </p>
-                          </div>
-
-                          <div className="mt-4 rounded-md bg-white/70 p-3 text-sm dark:bg-gray-900/30">
-                            <p className="font-medium text-black dark:text-white">
-                              Current payment destination
-                            </p>
-                            <p className="mt-1 font-mono text-xs text-gray-500 dark:text-gray-400">
-                              {effectivePaymentWallet
-                                ? getManagedWalletLabel(effectivePaymentWallet)
-                                : "Not set"}
-                            </p>
-                            {draft.paymentWalletAddresses.length === 0 && (
-                              <p className="mt-2 text-xs text-muted-foreground">
-                                Using your primary wallet fallback for this
-                                location.
-                              </p>
-                            )}
-                          </div>
-
-                          <div className="mt-4 space-y-3">
-                            {draft.paymentWalletAddresses.length === 0 ? (
-                              <p className="text-sm text-muted-foreground">
-                                No location-specific payment wallets added yet.
-                              </p>
-                            ) : (
-                              draft.paymentWalletAddresses.map(
-                                (walletAddress) => (
-                                  <div
-                                    key={`${loc.id}-${walletAddress}`}
-                                    className="flex flex-col gap-3 rounded-lg border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-gray-900/30 sm:flex-row sm:items-center sm:justify-between"
-                                  >
-                                    <div>
-                                      <p className="font-medium text-black dark:text-white">
-                                        {getManagedWalletLabel(walletAddress)}
-                                      </p>
-                                      <p className="font-mono text-xs text-gray-500 dark:text-gray-400">
-                                        {formatManagedAddress(walletAddress)}
-                                      </p>
-                                    </div>
-                                    <div className="flex flex-wrap gap-2">
-                                      {draft.defaultPaymentWalletAddress.toLowerCase() ===
-                                      walletAddress.toLowerCase() ? (
-                                        <span className="rounded-full border border-[#eb6c6c]/40 bg-[#eb6c6c]/10 px-2 py-1 text-[11px] font-medium text-[#eb6c6c]">
-                                          Default payment wallet
-                                        </span>
-                                      ) : (
-                                        <Button
-                                          type="button"
-                                          size="sm"
-                                          variant="outline"
-                                          onClick={() => {
-                                            updateLocationWalletDraft(
-                                              loc.id,
-                                              (current) => ({
-                                                ...current,
-                                                defaultPaymentWalletAddress:
-                                                  walletAddress,
-                                                error: "",
-                                                success: "",
-                                              }),
-                                            );
-                                          }}
-                                        >
-                                          Set as default
-                                        </Button>
-                                      )}
-                                      <Button
-                                        type="button"
-                                        size="sm"
-                                        variant="outline"
-                                        onClick={() =>
-                                          handleRemoveLocationPaymentWallet(
-                                            loc.id,
-                                            walletAddress,
-                                          )
-                                        }
-                                      >
-                                        Remove
-                                      </Button>
-                                    </div>
-                                  </div>
-                                ),
-                              )
-                            )}
-                          </div>
-
-                          <div className="mt-4 grid gap-3 md:grid-cols-[minmax(0,1fr)_auto]">
-                            <div className="space-y-2">
-                              <Label
-                                htmlFor={`payment-wallet-${loc.id}`}
-                                className="text-black dark:text-white"
-                              >
-                                Add Payment Wallet
-                              </Label>
-                              <Select
-                                value={draft.paymentAddSelection}
-                                onValueChange={(value) => {
-                                  updateLocationWalletDraft(
-                                    loc.id,
-                                    (current) => ({
-                                      ...current,
-                                      paymentAddSelection: value,
-                                      error: "",
-                                      success: "",
-                                    }),
-                                  );
-                                }}
-                              >
-                                <SelectTrigger
-                                  id={`payment-wallet-${loc.id}`}
-                                  className="text-black dark:text-white bg-secondary"
-                                >
-                                  <SelectValue
-                                    placeholder={
-                                      rewardsWalletsLoading
-                                        ? "Loading wallets..."
-                                        : "Choose a wallet"
-                                    }
+                    <Collapsible
+                      key={`merchant-location-${loc.id}`}
+                      open={isOpen}
+                      onOpenChange={(open) =>
+                        setMerchantLocationCardOpen((current) => ({
+                          ...current,
+                          [loc.id]: open,
+                        }))
+                      }
+                    >
+                      <Card className="overflow-hidden">
+                        <CollapsibleTrigger asChild>
+                          <button
+                            type="button"
+                            className="w-full text-left transition-colors hover:bg-secondary/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#eb6c6c] focus-visible:ring-inset"
+                          >
+                            <CardHeader className="gap-4">
+                              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                                <div className="min-w-0 space-y-1">
+                                  <CardTitle className="truncate text-black dark:text-white">
+                                    {loc.name}
+                                  </CardTitle>
+                                  <CardDescription className="break-words">
+                                    {formatLocationAddressSummary(loc) || "Approved location"}
+                                  </CardDescription>
+                                </div>
+                                <div className="flex items-center gap-2 self-start text-sm font-medium text-muted-foreground">
+                                  <span>{isOpen ? "Hide settings" : "Location settings"}</span>
+                                  <ChevronDown
+                                    className={`h-4 w-4 transition-transform ${isOpen ? "rotate-180" : ""}`}
                                   />
-                                </SelectTrigger>
-                                <SelectContent className="bg-secondary text-black dark:text-white">
-                                  {availablePaymentWalletOptions.map(
-                                    (option) => (
-                                      <SelectItem
-                                        key={`${loc.id}-${option.value}`}
-                                        value={option.value}
-                                      >
-                                        {option.label}
-                                      </SelectItem>
-                                    ),
-                                  )}
-                                  <SelectItem value={CUSTOM_WALLET_VALUE}>
-                                    Other
-                                  </SelectItem>
-                                </SelectContent>
-                              </Select>
-                              {draft.paymentAddSelection ===
-                                CUSTOM_WALLET_VALUE && (
-                                <Input
-                                  value={draft.paymentAddCustomAddress}
-                                  onChange={(e) => {
-                                    updateLocationWalletDraft(
-                                      loc.id,
-                                      (current) => ({
+                                </div>
+                              </div>
+                              <div className="flex flex-wrap gap-2">
+                                <span className="rounded-full border px-3 py-1 text-xs text-muted-foreground">
+                                  {profileStatusLabel}
+                                </span>
+                                <span className="rounded-full border px-3 py-1 text-xs text-muted-foreground">
+                                  {routingStatusLabel}
+                                </span>
+                                <span className="rounded-full border px-3 py-1 text-xs text-muted-foreground">
+                                  {paymentSummary}
+                                </span>
+                                <span className="rounded-full border px-3 py-1 text-xs text-muted-foreground">
+                                  {effectiveTippingWallet ? "Tips enabled" : "No tip wallet"}
+                                </span>
+                              </div>
+                            </CardHeader>
+                          </button>
+                        </CollapsibleTrigger>
+
+                        <CollapsibleContent>
+                          <CardContent className="space-y-6 pt-0">
+                            <div className="grid gap-6 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
+                              <div className="space-y-4 rounded-xl border bg-background/70 p-4">
+                                <div className="space-y-1">
+                                  <h3 className="text-sm font-semibold text-black dark:text-white">
+                                    Location profile
+                                  </h3>
+                                  <p className="text-xs text-muted-foreground">
+                                    Update the public business details for this approved location.
+                                  </p>
+                                </div>
+
+                                <div className="space-y-2">
+                                  <Label
+                                    htmlFor={`merchant-location-name-${loc.id}`}
+                                    className="text-black dark:text-white"
+                                  >
+                                    Business name
+                                  </Label>
+                                  <Input
+                                    id={`merchant-location-name-${loc.id}`}
+                                    value={profileDraft.name}
+                                    onChange={(e) =>
+                                      updateLocationProfileDraft(loc.id, (current) => ({
                                         ...current,
-                                        paymentAddCustomAddress: e.target.value,
+                                        name: e.target.value,
+                                        dirty: true,
                                         error: "",
                                         success: "",
-                                      }),
-                                    );
-                                  }}
-                                  placeholder="0x..."
-                                  className="text-black dark:text-white bg-secondary"
-                                />
-                              )}
-                            </div>
-                            <div className="flex items-end">
-                              <Button
-                                type="button"
-                                variant="outline"
-                                onClick={() =>
-                                  handleAddLocationPaymentWallet(loc.id)
-                                }
-                              >
-                                Add Wallet
-                              </Button>
-                            </div>
-                          </div>
-                        </div>
+                                      }))
+                                    }
+                                    className="text-black dark:text-white bg-secondary"
+                                  />
+                                </div>
 
-                        <div className="rounded-lg border border-dashed border-amber-300/40 bg-amber-100/40 p-4 dark:border-amber-700/40 dark:bg-amber-900/20">
-                          <div className="space-y-1">
-                            <h3 className="text-sm font-semibold text-black dark:text-white">
-                              Tipping Wallet
-                            </h3>
-                            <p className="text-sm text-muted-foreground">
-                              Tip payouts stay separate from merchant payments.
-                              The tipping wallet cannot match any payment wallet
-                              for this location.
-                            </p>
-                          </div>
-
-                          <div className="mt-4 space-y-2">
-                            <Label
-                              htmlFor={`tipping-wallet-${loc.id}`}
-                              className="text-black dark:text-white"
-                            >
-                              Tip Destination
-                            </Label>
-                            <Select
-                              value={draft.tippingWalletSelection}
-                              onValueChange={(value) => {
-                                updateLocationWalletDraft(
-                                  loc.id,
-                                  (current) => ({
-                                    ...current,
-                                    tippingWalletSelection: value,
-                                    error: "",
-                                    success: "",
-                                  }),
-                                );
-                              }}
-                            >
-                              <SelectTrigger
-                                id={`tipping-wallet-${loc.id}`}
-                                className="text-black dark:text-white bg-secondary"
-                              >
-                                <SelectValue
-                                  placeholder={
-                                    rewardsWalletsLoading
-                                      ? "Loading wallets..."
-                                      : "Choose a wallet"
-                                  }
-                                />
-                              </SelectTrigger>
-                              <SelectContent className="bg-secondary text-black dark:text-white">
-                                <SelectItem value={NONE_WALLET_VALUE}>
-                                  No tipping wallet
-                                </SelectItem>
-                                {tippingWalletOptions.map((option) => (
-                                  <SelectItem
-                                    key={`${loc.id}-tip-${option.value}`}
-                                    value={option.value}
+                                <div className="space-y-2">
+                                  <Label
+                                    htmlFor={`merchant-location-description-${loc.id}`}
+                                    className="text-black dark:text-white"
                                   >
-                                    {option.label}
-                                  </SelectItem>
-                                ))}
-                                <SelectItem value={CUSTOM_WALLET_VALUE}>
-                                  Other
-                                </SelectItem>
-                              </SelectContent>
-                            </Select>
-                            {draft.tippingWalletSelection ===
-                              CUSTOM_WALLET_VALUE && (
-                              <Input
-                                value={draft.tippingWalletCustomAddress}
-                                onChange={(e) => {
-                                  updateLocationWalletDraft(
-                                    loc.id,
-                                    (current) => ({
-                                      ...current,
-                                      tippingWalletCustomAddress:
-                                        e.target.value,
-                                      error: "",
-                                      success: "",
-                                    }),
-                                  );
-                                }}
-                                placeholder="0x..."
-                                className="text-black dark:text-white bg-secondary"
-                              />
-                            )}
-                          </div>
-                        </div>
+                                    Description
+                                  </Label>
+                                  <Textarea
+                                    id={`merchant-location-description-${loc.id}`}
+                                    value={profileDraft.description}
+                                    onChange={(e) =>
+                                      updateLocationProfileDraft(loc.id, (current) => ({
+                                        ...current,
+                                        description: e.target.value,
+                                        dirty: true,
+                                        error: "",
+                                        success: "",
+                                      }))
+                                    }
+                                    className="min-h-[110px] text-black dark:text-white bg-secondary"
+                                  />
+                                </div>
 
-                        {draft.error && (
-                          <p className="text-sm text-red-600 dark:text-red-400">
-                            {draft.error}
-                          </p>
-                        )}
-                        {draft.success && (
-                          <p className="text-sm text-green-600 dark:text-green-400">
-                            {draft.success}
-                          </p>
-                        )}
+                                <div className="space-y-4">
+                                  <div className="space-y-2">
+                                    <Label className="text-black dark:text-white">
+                                      Search for your location name
+                                    </Label>
+                                    {merchantPlacesLoadError ? (
+                                      <div className="rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-700 dark:bg-red-900/20 dark:text-red-300">
+                                        {merchantPlacesLoadError}
+                                      </div>
+                                    ) : merchantPlacesReady ? (
+                                      <PlaceAutocomplete
+                                        key={`merchant-location-place-${loc.id}`}
+                                        setGoogleSubLocation={noopGoogleSubLocationSetter}
+                                        setBusinessPhone={(value) =>
+                                          updateLocationProfileDraft(loc.id, (current) => ({
+                                            ...current,
+                                            phone: value,
+                                            dirty: true,
+                                            error: "",
+                                            success: "",
+                                          }))
+                                        }
+                                        setStreet={(value) =>
+                                          updateLocationProfileDraft(loc.id, (current) => ({
+                                            ...current,
+                                            street: value,
+                                            dirty: true,
+                                            error: "",
+                                            success: "",
+                                          }))
+                                        }
+                                        onSelect={(selection) =>
+                                          applyGoogleLocationSelection(loc.id, selection)
+                                        }
+                                      />
+                                    ) : (
+                                      <div className="flex items-center gap-2 rounded-lg border px-3 py-2 text-sm text-muted-foreground">
+                                        <Loader2 className="h-4 w-4 animate-spin" />
+                                        Loading Google Places search...
+                                      </div>
+                                    )}
+                                    <p className="text-xs text-muted-foreground">
+                                      Re-select the location here whenever you want to refresh
+                                      the Google Maps address, coordinates, and related map
+                                      details.
+                                    </p>
+                                  </div>
 
-                        <div className="flex justify-end">
-                          <Button
-                            type="button"
-                            variant="outline"
-                            className="bg-secondary text-[#eb6c6c] border-[#eb6c6c] hover:bg-[#eb6c6c] hover:text-white"
-                            onClick={() =>
-                              handleSaveLocationWalletSettings(loc.id)
-                            }
-                            disabled={draft.saving}
-                          >
-                            {draft.saving ? (
-                              <>
-                                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                                Saving...
-                              </>
-                            ) : (
-                              "Save Merchant Wallet Settings"
-                            )}
-                          </Button>
-                        </div>
+                                  <div className="space-y-2">
+                                    <Label
+                                      htmlFor={`merchant-location-street-${loc.id}`}
+                                      className="text-black dark:text-white"
+                                    >
+                                      Street address
+                                    </Label>
+                                    <Input
+                                      id={`merchant-location-street-${loc.id}`}
+                                      value={profileDraft.street}
+                                      onChange={(e) =>
+                                        updateLocationProfileDraft(loc.id, (current) => ({
+                                          ...current,
+                                          street: e.target.value,
+                                          dirty: true,
+                                          error: "",
+                                          success: "",
+                                        }))
+                                      }
+                                      className="text-black dark:text-white bg-secondary"
+                                    />
+                                  </div>
+
+                                  <div className="grid gap-3 sm:grid-cols-3">
+                                    <div className="rounded-lg border bg-secondary/20 px-3 py-2">
+                                      <p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
+                                        City
+                                      </p>
+                                      <p className="mt-1 text-sm font-medium text-black dark:text-white">
+                                        {profileDraft.city || "Not set"}
+                                      </p>
+                                    </div>
+                                    <div className="rounded-lg border bg-secondary/20 px-3 py-2">
+                                      <p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
+                                        State
+                                      </p>
+                                      <p className="mt-1 text-sm font-medium text-black dark:text-white">
+                                        {profileDraft.state || "Not set"}
+                                      </p>
+                                    </div>
+                                    <div className="rounded-lg border bg-secondary/20 px-3 py-2">
+                                      <p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
+                                        ZIP
+                                      </p>
+                                      <p className="mt-1 text-sm font-medium text-black dark:text-white">
+                                        {profileDraft.zip || "Not set"}
+                                      </p>
+                                    </div>
+                                  </div>
+
+                                  <p className="text-xs text-muted-foreground">
+                                    Latitude, longitude, maps page, and other Google-linked
+                                    location metadata update automatically from the selected
+                                    place.
+                                  </p>
+                                </div>
+
+                                <div className="grid gap-4 sm:grid-cols-2">
+                                  <div className="space-y-2">
+                                    <Label
+                                      htmlFor={`merchant-location-phone-${loc.id}`}
+                                      className="text-black dark:text-white"
+                                    >
+                                      Phone
+                                    </Label>
+                                    <Input
+                                      id={`merchant-location-phone-${loc.id}`}
+                                      value={profileDraft.phone}
+                                      onChange={(e) =>
+                                        updateLocationProfileDraft(loc.id, (current) => ({
+                                          ...current,
+                                          phone: e.target.value,
+                                          dirty: true,
+                                          error: "",
+                                          success: "",
+                                        }))
+                                      }
+                                      className="text-black dark:text-white bg-secondary"
+                                    />
+                                  </div>
+
+                                  <div className="space-y-2 sm:col-span-2">
+                                    <Label
+                                      htmlFor={`merchant-location-website-${loc.id}`}
+                                      className="text-black dark:text-white"
+                                    >
+                                      Website
+                                    </Label>
+                                    <Input
+                                      id={`merchant-location-website-${loc.id}`}
+                                      value={profileDraft.website}
+                                      onChange={(e) =>
+                                        updateLocationProfileDraft(loc.id, (current) => ({
+                                          ...current,
+                                          website: e.target.value,
+                                          dirty: true,
+                                          error: "",
+                                          success: "",
+                                        }))
+                                      }
+                                      className="text-black dark:text-white bg-secondary"
+                                    />
+                                  </div>
+                                </div>
+
+                                {profileDraft.error && (
+                                  <p className="text-sm text-red-600 dark:text-red-400">
+                                    {profileDraft.error}
+                                  </p>
+                                )}
+                                {profileDraft.success && !profileDraft.saving && (
+                                  <p className="text-sm text-green-600 dark:text-green-400">
+                                    {profileDraft.success}
+                                  </p>
+                                )}
+
+                                <Button
+                                  type="button"
+                                  className="w-full bg-[#eb6c6c] hover:bg-[#d55c5c]"
+                                  disabled={profileDraft.saving}
+                                  onClick={() => void handleSaveLocationProfile(loc.id)}
+                                >
+                                  {profileDraft.saving ? (
+                                    <>
+                                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                      Saving...
+                                    </>
+                                  ) : (
+                                    "Save Location Profile"
+                                  )}
+                                </Button>
+                              </div>
+
+                              <div className="space-y-4">
+                                <div className="grid gap-3 sm:grid-cols-2">
+                                  <div className="rounded-xl border bg-secondary/25 p-4">
+                                    <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">
+                                      Payments
+                                    </p>
+                                    <p className="mt-2 truncate text-sm font-medium text-black dark:text-white">
+                                      {effectivePaymentWallet
+                                        ? getManagedWalletLabel(effectivePaymentWallet)
+                                        : "Primary wallet fallback"}
+                                    </p>
+                                    {effectivePaymentWallet && (
+                                      <p className="mt-1 break-all font-mono text-[11px] text-muted-foreground">
+                                        {formatManagedAddress(effectivePaymentWallet)}
+                                      </p>
+                                    )}
+                                  </div>
+                                  <div className="rounded-xl border bg-secondary/25 p-4">
+                                    <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">
+                                      Tips
+                                    </p>
+                                    <p className="mt-2 truncate text-sm font-medium text-black dark:text-white">
+                                      {effectiveTippingWallet
+                                        ? getManagedWalletLabel(effectiveTippingWallet)
+                                        : "No tip wallet"}
+                                    </p>
+                                    {effectiveTippingWallet && (
+                                      <p className="mt-1 break-all font-mono text-[11px] text-muted-foreground">
+                                        {formatManagedAddress(effectiveTippingWallet)}
+                                      </p>
+                                    )}
+                                  </div>
+                                </div>
+
+                                <div className="rounded-xl border bg-background/70 p-4">
+                                  <div className="space-y-1">
+                                    <h3 className="text-sm font-semibold text-black dark:text-white">
+                                      Payment wallets
+                                    </h3>
+                                    <p className="text-xs text-muted-foreground">
+                                      Tap a wallet to add it.
+                                    </p>
+                                  </div>
+
+                                  <div className="mt-4 space-y-3">
+                                    {walletDraft.paymentWalletAddresses.length === 0 ? (
+                                      <p className="rounded-lg border border-dashed px-3 py-4 text-sm text-muted-foreground">
+                                        No location-specific wallets yet.
+                                      </p>
+                                    ) : (
+                                      walletDraft.paymentWalletAddresses.map((walletAddress) => (
+                                        <div
+                                          key={`${loc.id}-${walletAddress}`}
+                                          className="flex flex-col gap-3 rounded-xl border bg-secondary/20 p-3 sm:flex-row sm:items-center sm:justify-between"
+                                        >
+                                          <div className="min-w-0 flex-1">
+                                            <div className="flex flex-wrap items-center gap-2">
+                                              <p className="truncate font-medium text-black dark:text-white">
+                                                {getManagedWalletLabel(walletAddress)}
+                                              </p>
+                                              {walletDraft.defaultPaymentWalletAddress.toLowerCase() ===
+                                                walletAddress.toLowerCase() && (
+                                                <span className="rounded-full bg-[#eb6c6c]/10 px-2 py-0.5 text-[11px] font-medium text-[#eb6c6c]">
+                                                  Default
+                                                </span>
+                                              )}
+                                            </div>
+                                            <p className="mt-1 break-all font-mono text-[11px] text-muted-foreground">
+                                              {formatManagedAddress(walletAddress)}
+                                            </p>
+                                          </div>
+                                          <div className="flex flex-wrap gap-2 sm:justify-end">
+                                            {walletDraft.defaultPaymentWalletAddress.toLowerCase() !==
+                                              walletAddress.toLowerCase() && (
+                                              <Button
+                                                type="button"
+                                                size="sm"
+                                                variant="outline"
+                                                onClick={() =>
+                                                  void handleSetLocationDefaultPaymentWallet(
+                                                    loc.id,
+                                                    walletAddress,
+                                                  )
+                                                }
+                                                disabled={walletDraft.saving}
+                                              >
+                                                Set default
+                                              </Button>
+                                            )}
+                                            <Button
+                                              type="button"
+                                              size="sm"
+                                              variant="outline"
+                                              onClick={() =>
+                                                void handleRemoveLocationPaymentWallet(
+                                                  loc.id,
+                                                  walletAddress,
+                                                )
+                                              }
+                                              disabled={walletDraft.saving}
+                                            >
+                                              Remove
+                                            </Button>
+                                          </div>
+                                        </div>
+                                      ))
+                                    )}
+                                  </div>
+
+                                  <div className="mt-4 space-y-2">
+                                    <Label
+                                      htmlFor={`payment-wallet-${loc.id}`}
+                                      className="text-black dark:text-white"
+                                    >
+                                      Add wallet
+                                    </Label>
+                                    <Select
+                                      value={
+                                        walletDraft.paymentAddSelection ||
+                                        SELECT_WALLET_PLACEHOLDER_VALUE
+                                      }
+                                      onValueChange={(value) => {
+                                        if (value === SELECT_WALLET_PLACEHOLDER_VALUE) {
+                                          return;
+                                        }
+                                        if (value === CUSTOM_WALLET_VALUE) {
+                                          updateLocationWalletDraft(loc.id, (current) => ({
+                                            ...current,
+                                            paymentAddSelection: value,
+                                            error: "",
+                                            success: "",
+                                          }));
+                                          return;
+                                        }
+                                        const nextDraft = {
+                                          ...walletDraft,
+                                          paymentAddSelection: value,
+                                          error: "",
+                                          success: "",
+                                        };
+                                        updateLocationWalletDraft(loc.id, () => nextDraft);
+                                        void handleAddLocationPaymentWallet(loc.id, {
+                                          draftOverride: nextDraft,
+                                        });
+                                      }}
+                                    >
+                                      <SelectTrigger
+                                        id={`payment-wallet-${loc.id}`}
+                                        className="w-full text-black dark:text-white bg-secondary"
+                                        disabled={walletDraft.saving}
+                                      >
+                                        <SelectValue
+                                          placeholder={
+                                            rewardsWalletsLoading
+                                              ? "Loading wallets..."
+                                              : "Select wallet"
+                                          }
+                                        />
+                                      </SelectTrigger>
+                                      <SelectContent className="bg-secondary text-black dark:text-white">
+                                        <SelectItem
+                                          value={SELECT_WALLET_PLACEHOLDER_VALUE}
+                                          disabled
+                                        >
+                                          Select wallet
+                                        </SelectItem>
+                                        {availablePaymentWalletOptions.map((option) => (
+                                          <SelectItem
+                                            key={`${loc.id}-${option.value}`}
+                                            value={option.value}
+                                          >
+                                            {option.label}
+                                          </SelectItem>
+                                        ))}
+                                        <SelectItem value={CUSTOM_WALLET_VALUE}>
+                                          Other
+                                        </SelectItem>
+                                      </SelectContent>
+                                    </Select>
+                                    {walletDraft.paymentAddSelection === CUSTOM_WALLET_VALUE && (
+                                      <Input
+                                        value={walletDraft.paymentAddCustomAddress}
+                                        onChange={(e) => {
+                                          updateLocationWalletDraft(loc.id, (current) => ({
+                                            ...current,
+                                            paymentAddCustomAddress: e.target.value,
+                                            error: "",
+                                            success: "",
+                                          }));
+                                        }}
+                                        onBlur={() =>
+                                          void handleAddLocationPaymentWallet(loc.id, {
+                                            silentIfEmptyCustom: true,
+                                          })
+                                        }
+                                        onKeyDown={(e) => {
+                                          if (e.key === "Enter") {
+                                            e.preventDefault();
+                                            void handleAddLocationPaymentWallet(loc.id, {
+                                              silentIfEmptyCustom: true,
+                                            });
+                                          }
+                                        }}
+                                        placeholder="Paste address and press Enter"
+                                        className="text-black dark:text-white bg-secondary"
+                                        disabled={walletDraft.saving}
+                                      />
+                                    )}
+                                  </div>
+                                </div>
+
+                                <div className="rounded-xl border bg-background/70 p-4">
+                                  <div className="space-y-1">
+                                    <h3 className="text-sm font-semibold text-black dark:text-white">
+                                      Tip wallet
+                                    </h3>
+                                    <p className="text-xs text-muted-foreground">
+                                      Must be different from every payment wallet.
+                                    </p>
+                                  </div>
+
+                                  <div className="mt-4 space-y-2">
+                                    <Label
+                                      htmlFor={`tipping-wallet-${loc.id}`}
+                                      className="text-black dark:text-white"
+                                    >
+                                      Tip destination
+                                    </Label>
+                                    <Select
+                                      value={walletDraft.tippingWalletSelection}
+                                      onValueChange={(value) => {
+                                        const nextDraft = {
+                                          ...walletDraft,
+                                          tippingWalletSelection: value,
+                                          error: "",
+                                          success: "",
+                                        };
+                                        updateLocationWalletDraft(loc.id, () => nextDraft);
+                                        if (value !== CUSTOM_WALLET_VALUE) {
+                                          void handleApplyLocationTippingWallet(loc.id, {
+                                            draftOverride: nextDraft,
+                                          });
+                                        }
+                                      }}
+                                    >
+                                      <SelectTrigger
+                                        id={`tipping-wallet-${loc.id}`}
+                                        className="w-full text-black dark:text-white bg-secondary"
+                                        disabled={walletDraft.saving}
+                                      >
+                                        <SelectValue
+                                          placeholder={
+                                            rewardsWalletsLoading
+                                              ? "Loading wallets..."
+                                              : "Choose a wallet"
+                                          }
+                                        />
+                                      </SelectTrigger>
+                                      <SelectContent className="bg-secondary text-black dark:text-white">
+                                        <SelectItem value={NONE_WALLET_VALUE}>
+                                          No tipping wallet
+                                        </SelectItem>
+                                        {tippingWalletOptions.map((option) => (
+                                          <SelectItem
+                                            key={`${loc.id}-tip-${option.value}`}
+                                            value={option.value}
+                                          >
+                                            {option.label}
+                                          </SelectItem>
+                                        ))}
+                                        <SelectItem value={CUSTOM_WALLET_VALUE}>
+                                          Other
+                                        </SelectItem>
+                                      </SelectContent>
+                                    </Select>
+                                    {walletDraft.tippingWalletSelection === CUSTOM_WALLET_VALUE && (
+                                      <Input
+                                        value={walletDraft.tippingWalletCustomAddress}
+                                        onChange={(e) => {
+                                          updateLocationWalletDraft(loc.id, (current) => ({
+                                            ...current,
+                                            tippingWalletCustomAddress: e.target.value,
+                                            error: "",
+                                            success: "",
+                                          }));
+                                        }}
+                                        onBlur={() =>
+                                          void handleApplyLocationTippingWallet(loc.id, {
+                                            silentIfEmptyCustom: true,
+                                          })
+                                        }
+                                        onKeyDown={(e) => {
+                                          if (e.key === "Enter") {
+                                            e.preventDefault();
+                                            void handleApplyLocationTippingWallet(loc.id, {
+                                              silentIfEmptyCustom: true,
+                                            });
+                                          }
+                                        }}
+                                        placeholder="Paste address and press Enter"
+                                        className="text-black dark:text-white bg-secondary"
+                                        disabled={walletDraft.saving}
+                                      />
+                                    )}
+                                  </div>
+                                </div>
+
+                                {walletDraft.error && (
+                                  <p className="text-sm text-red-600 dark:text-red-400">
+                                    {walletDraft.error}
+                                  </p>
+                                )}
+                                {walletDraft.success && !walletDraft.saving && (
+                                  <p className="text-sm text-green-600 dark:text-green-400">
+                                    {walletDraft.success}
+                                  </p>
+                                )}
+                              </div>
+                            </div>
+                          </CardContent>
+                        </CollapsibleContent>
+                      </Card>
+                    </Collapsible>
+                  );
+                })}
+              </div>
+            )}
+
+            {reviewMerchantLocations.length > 0 && (
+              <div className="space-y-3">
+                <div className="space-y-1">
+                  <h2 className="text-lg font-semibold text-black dark:text-white">
+                    Location requests
+                  </h2>
+                  <p className="text-sm text-muted-foreground">
+                    Pending and rejected locations stay here until they are approved.
+                  </p>
+                </div>
+
+                {reviewMerchantLocations.map((loc) => {
+                  const applicationStatus = getLocationApplicationStatus(loc.approval);
+                  const borderClass =
+                    applicationStatus === "rejected"
+                      ? "border-red-300 dark:border-red-700"
+                      : "border-yellow-300 dark:border-yellow-700";
+                  const headerClass =
+                    applicationStatus === "rejected"
+                      ? "bg-red-50 dark:bg-red-900/20 rounded-t-lg"
+                      : "bg-yellow-50 dark:bg-yellow-900/20 rounded-t-lg";
+                  const Icon = applicationStatus === "rejected" ? XCircle : Clock;
+                  const iconClass =
+                    applicationStatus === "rejected"
+                      ? "h-5 w-5 text-red-500 mr-2"
+                      : "h-5 w-5 text-yellow-500 mr-2";
+                  const statusTitle =
+                    applicationStatus === "rejected"
+                      ? "Location Application Not Approved"
+                      : "Location Application Pending";
+                  const statusBody =
+                    applicationStatus === "rejected"
+                      ? `Your application for ${loc.name} was not approved.`
+                      : `Your application for ${loc.name} is currently under review.`;
+
+                  return (
+                    <Card className={borderClass} key={`merchant-status-${loc.id}`}>
+                      <CardHeader className={headerClass}>
+                        <CardTitle className="text-black dark:text-white flex items-center">
+                          <Icon className={iconClass} />
+                          {statusTitle}
+                        </CardTitle>
+                      </CardHeader>
+                      <CardContent className="space-y-2 pt-4">
+                        <p className="font-medium text-black dark:text-white">{loc.name}</p>
+                        <p className="text-gray-600 dark:text-gray-400">{statusBody}</p>
                       </CardContent>
                     </Card>
                   );
                 })}
-            </div>
-            {merchantStatus === "approved" && (
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-black dark:text-white">
-                    Merchant Profile
-                  </CardTitle>
-                  <CardDescription>
-                    Update your business information
-                  </CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <form onSubmit={handleMerchantUpdate} className="space-y-6">
-                    <div className="space-y-2">
-                      <Label
-                        htmlFor="merchant-name"
-                        className="text-black dark:text-white"
-                      >
-                        Business Name
-                      </Label>
-                      <Input
-                        id="merchant-name"
-                        value={merchantName}
-                        onChange={(e) => setMerchantName(e.target.value)}
-                        className="text-black dark:text-white bg-secondary"
-                      />
-                    </div>
-
-                    <div className="space-y-2">
-                      <Label
-                        htmlFor="merchant-description"
-                        className="text-black dark:text-white"
-                      >
-                        Business Description
-                      </Label>
-                      <Textarea
-                        id="merchant-description"
-                        value={merchantDescription}
-                        onChange={(e) => setMerchantDescription(e.target.value)}
-                        className="text-black dark:text-white bg-secondary min-h-[100px]"
-                      />
-                    </div>
-
-                    <div>
-                      <h3 className="text-lg font-medium text-black dark:text-white mb-4">
-                        Business Address
-                      </h3>
-                      <div className="grid gap-4 md:grid-cols-2">
-                        <div className="space-y-2">
-                          <Label
-                            htmlFor="street"
-                            className="text-black dark:text-white"
-                          >
-                            Street Address
-                          </Label>
-                          <Input
-                            id="street"
-                            value={merchantAddress.street}
-                            onChange={(e) =>
-                              setMerchantAddress({
-                                ...merchantAddress,
-                                street: e.target.value,
-                              })
-                            }
-                            className="text-black dark:text-white bg-secondary"
-                          />
-                        </div>
-
-                        <div className="space-y-2">
-                          <Label
-                            htmlFor="city"
-                            className="text-black dark:text-white"
-                          >
-                            City
-                          </Label>
-                          <Input
-                            id="city"
-                            value={merchantAddress.city}
-                            onChange={(e) =>
-                              setMerchantAddress({
-                                ...merchantAddress,
-                                city: e.target.value,
-                              })
-                            }
-                            className="text-black dark:text-white bg-secondary"
-                          />
-                        </div>
-
-                        <div className="space-y-2">
-                          <Label
-                            htmlFor="state"
-                            className="text-black dark:text-white"
-                          >
-                            State
-                          </Label>
-                          <Input
-                            id="state"
-                            value={merchantAddress.state}
-                            onChange={(e) =>
-                              setMerchantAddress({
-                                ...merchantAddress,
-                                state: e.target.value,
-                              })
-                            }
-                            className="text-black dark:text-white bg-secondary"
-                          />
-                        </div>
-
-                        <div className="space-y-2">
-                          <Label
-                            htmlFor="zip"
-                            className="text-black dark:text-white"
-                          >
-                            ZIP Code
-                          </Label>
-                          <Input
-                            id="zip"
-                            value={merchantAddress.zip}
-                            onChange={(e) =>
-                              setMerchantAddress({
-                                ...merchantAddress,
-                                zip: e.target.value,
-                              })
-                            }
-                            className="text-black dark:text-white bg-secondary"
-                          />
-                        </div>
-                      </div>
-                    </div>
-
-                    <Separator />
-
-                    <div className="grid gap-4 md:grid-cols-2">
-                      <div className="space-y-2">
-                        <Label
-                          htmlFor="merchant-phone"
-                          className="text-black dark:text-white"
-                        >
-                          Business Phone
-                        </Label>
-                        <Input
-                          id="merchant-phone"
-                          value={merchantPhone}
-                          onChange={(e) => setMerchantPhone(e.target.value)}
-                          className="text-black dark:text-white bg-secondary"
-                        />
-                      </div>
-
-                      <div className="space-y-2">
-                        <Label
-                          htmlFor="merchant-website"
-                          className="text-black dark:text-white"
-                        >
-                          Business Website
-                        </Label>
-                        <Input
-                          id="merchant-website"
-                          value={merchantWebsite}
-                          onChange={(e) => setMerchantWebsite(e.target.value)}
-                          className="text-black dark:text-white bg-secondary"
-                        />
-                      </div>
-                    </div>
-
-                    <Button
-                      type="submit"
-                      className="w-full bg-[#eb6c6c] hover:bg-[#d55c5c]"
-                      disabled={isUpdating}
-                    >
-                      {isUpdating ? (
-                        <>
-                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                          Updating...
-                        </>
-                      ) : (
-                        "Update Merchant Profile"
-                      )}
-                    </Button>
-                  </form>
-                </CardContent>
-              </Card>
+              </div>
             )}
           </TabsContent>
         )}
