@@ -9,3 +9,5 @@ node_modules
 .DS_Store
 pnpm-lock.yaml
 ponder/generated
+backend/backend
+backend/builds-old

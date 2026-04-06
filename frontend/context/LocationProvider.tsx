@@ -27,7 +27,9 @@ let mapLocationsInFlight: Promise<LocationResponse> | null = null
 const getLocationTypes = (locations: Location[]): string[] => {
     const uniqueTypes = new Set<string>()
     for (const location of locations) {
-        uniqueTypes.add(location.type)
+        const normalizedType = (location.type || "").trim()
+        if (!normalizedType) continue
+        uniqueTypes.add(normalizedType)
     }
     return [...uniqueTypes, "All Locations"]
 }

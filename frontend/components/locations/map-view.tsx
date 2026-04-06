@@ -73,7 +73,10 @@ export function MapView({
   }
 
   const filteredLocations = useMemo(() => {
-    return locations?.filter(location => selectedLocationType === "All Locations" || location.type === selectedLocationType)
+    return locations?.filter(location => {
+      const locationType = (location.type || "").trim()
+      return selectedLocationType === "All Locations" || locationType === selectedLocationType
+    })
   }, [locations, selectedLocationType])
 
   if (mapLocationsStatus === "loading") {

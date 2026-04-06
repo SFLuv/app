@@ -79,6 +79,7 @@ function buildEditProposalPreviewWorkflow(proposal: WorkflowEditProposal): Workf
         label: option.label,
         requires_written_response: option.requires_written_response,
         requires_photo_attachment: Boolean(option.requires_photo_attachment),
+        camera_capture_only: Boolean(option.requires_photo_attachment) && Boolean(option.camera_capture_only),
         photo_instructions: option.photo_instructions || "",
         notify_emails: [],
         notify_email_count: option.notify_email_count ?? option.notify_emails.length,

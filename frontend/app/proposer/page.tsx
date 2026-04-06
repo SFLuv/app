@@ -1054,12 +1054,13 @@ export default function ProposerPage() {
             if (item.id !== itemId) return item
             return {
               ...item,
-              dropdown_options: [
+                dropdown_options: [
                 ...item.dropdown_options,
                 {
                   label: "",
                   requires_written_response: false,
                   requires_photo_attachment: false,
+                  camera_capture_only: false,
                   photo_instructions: "",
                   notify_emails: [],
                   notify_email_input: "",
@@ -1266,6 +1267,7 @@ export default function ProposerPage() {
             label: option.label.trim(),
             requires_written_response: option.requires_written_response,
             requires_photo_attachment: Boolean(option.requires_photo_attachment),
+            camera_capture_only: Boolean(option.requires_photo_attachment) && Boolean(option.camera_capture_only),
             photo_instructions: Boolean(option.requires_photo_attachment) ? (option.photo_instructions || "").trim() : "",
             notify_emails: normalizeOptionNotificationEmails(stepIndex + 1, itemIndex + 1, optionIndex + 1, option),
             send_pictures_with_email: Boolean(option.send_pictures_with_email),
@@ -1427,6 +1429,7 @@ export default function ProposerPage() {
           label: option.label,
           requires_written_response: Boolean(option.requires_written_response),
           requires_photo_attachment: Boolean(option.requires_photo_attachment),
+          camera_capture_only: Boolean(option.requires_photo_attachment) && Boolean(option.camera_capture_only),
           photo_instructions: option.photo_instructions || "",
           notify_emails: option.notify_emails || [],
           notify_email_count: option.notify_emails?.length || 0,
@@ -1591,6 +1594,7 @@ export default function ProposerPage() {
           label: option.label,
           requires_written_response: option.requires_written_response,
           requires_photo_attachment: Boolean(option.requires_photo_attachment),
+          camera_capture_only: Boolean(option.requires_photo_attachment) && Boolean(option.camera_capture_only),
           photo_instructions: option.photo_instructions || "",
           notify_emails: option.notify_emails || [],
           notify_email_input: "",
@@ -1645,7 +1649,7 @@ export default function ProposerPage() {
     )
   }
 
-  const beginWorkflowEditProposal = (workflow: Workflow) => {
+  const beginWorkflowEditProposal = async (workflow: Workflow) => {
     if (!workflow) return
     if (!canProposeWorkflowEditFromWorkflow(workflow)) {
       setError("This workflow has ended and can no longer be edited.")
@@ -1653,8 +1657,27 @@ export default function ProposerPage() {
       return
     }
 
+    let sourceWorkflow = workflow
+    setError("")
+    setDetailLoading(true)
+    try {
+      const res = await authFetch(`/proposers/workflows/${workflow.id}?include_notify_emails=true`)
+      if (!res.ok) {
+        const text = await res.text()
+        throw new Error(text || "Unable to load workflow details for editing.")
+      }
+      sourceWorkflow = (await res.json()) as Workflow
+      setDetailWorkflow(sourceWorkflow)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to load workflow details for editing.")
+      setSuccessMessage("")
+      return
+    } finally {
+      setDetailLoading(false)
+    }
+
     const roleIdMap = new Map<string, string>()
-    const mappedRoles: DraftRole[] = workflow.roles.map((role, index) => {
+    const mappedRoles: DraftRole[] = sourceWorkflow.roles.map((role, index) => {
       const fallbackClientId = `role-${index + 1}`
       const sourceClientId = (role.id || "").trim() || fallbackClientId
       const newClientId = crypto.randomUUID()
@@ -1666,7 +1689,7 @@ export default function ProposerPage() {
       }
     })
 
-    const mappedSteps: DraftStep[] = [...workflow.steps]
+    const mappedSteps: DraftStep[] = [...sourceWorkflow.steps]
       .sort((a, b) => a.step_order - b.step_order)
       .map((step) => ({
         id: crypto.randomUUID(),
@@ -1696,6 +1719,7 @@ export default function ProposerPage() {
               label: option.label,
               requires_written_response: option.requires_written_response,
               requires_photo_attachment: Boolean(option.requires_photo_attachment),
+              camera_capture_only: Boolean(option.requires_photo_attachment) && Boolean(option.camera_capture_only),
               photo_instructions: option.photo_instructions || "",
               notify_emails: option.notify_emails || [],
               notify_email_input: "",
@@ -1704,8 +1728,8 @@ export default function ProposerPage() {
           })),
       }))
 
-    const supervisorUserId = (workflow.supervisor_user_id || "").trim()
-    const supervisorDataFields = (workflow.supervisor_data_fields || [])
+    const supervisorUserId = (sourceWorkflow.supervisor_user_id || "").trim()
+    const supervisorDataFields = (sourceWorkflow.supervisor_data_fields || [])
       .map((field) => ({
         id: crypto.randomUUID(),
         key: (field.key || "").trim(),
@@ -1714,23 +1738,23 @@ export default function ProposerPage() {
       .filter((field) => field.key || field.value)
     const hasSupervisor =
       supervisorUserId.length > 0 ||
-      (workflow.supervisor_bounty !== undefined && workflow.supervisor_bounty !== null) ||
+      (sourceWorkflow.supervisor_bounty !== undefined && sourceWorkflow.supervisor_bounty !== null) ||
       supervisorDataFields.length > 0
 
-    const recurrenceEndAtValue = toDatetimeLocalValueFromUnix(workflow.recurrence_end_at)
+    const recurrenceEndAtValue = toDatetimeLocalValueFromUnix(sourceWorkflow.recurrence_end_at)
 
-    setTitle(workflow.title || "")
-    setDescription(workflow.description || "")
-    setRecurrence(workflow.recurrence)
-    setStartAt(toDatetimeLocalValueFromUnix(workflow.start_at))
+    setTitle(sourceWorkflow.title || "")
+    setDescription(sourceWorkflow.description || "")
+    setRecurrence(sourceWorkflow.recurrence)
+    setStartAt(toDatetimeLocalValueFromUnix(sourceWorkflow.start_at))
     setHasRecurrenceEndDate(recurrenceEndAtValue.length > 0)
     setRecurrenceEndAt(recurrenceEndAtValue)
     setWorkflowSupervisor({
       enabled: hasSupervisor,
       user_id: supervisorUserId,
       bounty:
-        workflow.supervisor_bounty !== undefined && workflow.supervisor_bounty !== null
-          ? String(workflow.supervisor_bounty)
+        sourceWorkflow.supervisor_bounty !== undefined && sourceWorkflow.supervisor_bounty !== null
+          ? String(sourceWorkflow.supervisor_bounty)
           : "",
     })
     setWorkflowSupervisorDataFields(supervisorDataFields)
@@ -1740,11 +1764,11 @@ export default function ProposerPage() {
     setStepCardOpenState({})
     setWorkItemCardOpenState({})
     setWorkflowRolesOpen(false)
-    setEditProposalWorkflowId(workflow.id)
+    setEditProposalWorkflowId(sourceWorkflow.id)
     setEditProposalReason("")
     setSelectedTemplateId("")
     setError("")
-    setSuccessMessage(`Editing workflow: ${workflow.title}`)
+    setSuccessMessage(`Editing workflow: ${sourceWorkflow.title}`)
     setDetailOpen(false)
     setDetailWorkflow(null)
     setActiveTab("create-workflow")
@@ -2144,6 +2168,7 @@ export default function ProposerPage() {
                 label: option.label,
                 requires_written_response: Boolean(option.requires_written_response),
                 requires_photo_attachment: Boolean(option.requires_photo_attachment),
+                camera_capture_only: Boolean(option.requires_photo_attachment) && Boolean(option.camera_capture_only),
                 photo_instructions: option.photo_instructions || "",
                 notify_emails: option.notify_emails || [],
                 send_pictures_with_email: Boolean(option.send_pictures_with_email),
@@ -3511,6 +3536,7 @@ export default function ProposerPage() {
                                         onCheckedChange={(value) =>
                                           updateDropdownOption(step.id, item.id, optionIndex, {
                                             requires_photo_attachment: Boolean(value),
+                                            camera_capture_only: Boolean(value) ? Boolean(option.camera_capture_only) : false,
                                             photo_instructions: Boolean(value) ? option.photo_instructions || "" : "",
                                           })
                                         }
@@ -3529,17 +3555,30 @@ export default function ProposerPage() {
 
                                     <div className="space-y-2">
                                       {option.requires_photo_attachment && (
-                                        <div className="space-y-1">
-                                          <Label className="text-xs">Photo Instructions</Label>
-                                          <Textarea
-                                            value={option.photo_instructions || ""}
-                                            onChange={(e) =>
-                                              updateDropdownOption(step.id, item.id, optionIndex, {
-                                                photo_instructions: e.target.value,
-                                              })
-                                            }
-                                            placeholder="Explain what photo should be attached when this option is selected."
-                                          />
+                                        <div className="space-y-3">
+                                          <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                                            <Checkbox
+                                              checked={Boolean(option.camera_capture_only)}
+                                              onCheckedChange={(value) =>
+                                                updateDropdownOption(step.id, item.id, optionIndex, {
+                                                  camera_capture_only: Boolean(value),
+                                                })
+                                              }
+                                            />
+                                            Require live photo
+                                          </label>
+                                          <div className="space-y-1">
+                                            <Label className="text-xs">Photo Instructions</Label>
+                                            <Textarea
+                                              value={option.photo_instructions || ""}
+                                              onChange={(e) =>
+                                                updateDropdownOption(step.id, item.id, optionIndex, {
+                                                  photo_instructions: e.target.value,
+                                                })
+                                              }
+                                              placeholder="Explain what photo should be attached when this option is selected."
+                                            />
+                                          </div>
                                         </div>
                                       )}
                                       <Label className="text-xs">Notify Emails For This Option</Label>

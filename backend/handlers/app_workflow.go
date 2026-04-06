@@ -188,8 +188,10 @@ func normalizeWorkflowPayoutErrorsForClient(workflow *structs.Workflow) {
 	}
 }
 
-func sanitizeWorkflowForUserWithOptions(workflow *structs.Workflow, userID string, isAdmin bool, includeSupervisorData bool) {
-	redactWorkflowItemNotifyEmailsForUser(workflow, userID)
+func sanitizeWorkflowForUserWithOptions(workflow *structs.Workflow, userID string, isAdmin bool, includeSupervisorData bool, includeNotifyEmails bool) {
+	if !(includeNotifyEmails && (isAdmin || userCanViewWorkflowNotifyEmails(workflow, userID))) {
+		redactWorkflowItemNotifyEmailsForUser(workflow, userID)
+	}
 	redactWorkflowSubmissionDataForUser(workflow, userID, isAdmin)
 	normalizeWorkflowPayoutErrorsForClient(workflow)
 	if !includeSupervisorData {
@@ -198,7 +200,7 @@ func sanitizeWorkflowForUserWithOptions(workflow *structs.Workflow, userID strin
 }
 
 func sanitizeWorkflowForUser(workflow *structs.Workflow, userID string, isAdmin bool) {
-	sanitizeWorkflowForUserWithOptions(workflow, userID, isAdmin, false)
+	sanitizeWorkflowForUserWithOptions(workflow, userID, isAdmin, false, false)
 }
 
 func sanitizeWorkflowForVoteView(workflow *structs.Workflow, userID string, isAdmin bool) {
@@ -1001,6 +1003,17 @@ func (a *AppService) GetWorkflow(w http.ResponseWriter, r *http.Request) {
 		}
 		includeSupervisorData = parsed
 	}
+	includeNotifyEmails := false
+	includeNotifyEmailsRaw := strings.TrimSpace(r.URL.Query().Get("include_notify_emails"))
+	if includeNotifyEmailsRaw != "" {
+		parsed, parseErr := strconv.ParseBool(includeNotifyEmailsRaw)
+		if parseErr != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte("invalid include_notify_emails value"))
+			return
+		}
+		includeNotifyEmails = parsed
+	}
 
 	workflowId := strings.TrimSpace(r.PathValue("workflow_id"))
 	if workflowId == "" {
@@ -1025,7 +1038,7 @@ func (a *AppService) GetWorkflow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	allowSupervisorData := includeSupervisorData && canUserViewWorkflowSupervisorData(workflow, *userDid)
-	sanitizeWorkflowForUserWithOptions(workflow, *userDid, isAdmin, allowSupervisorData)
+	sanitizeWorkflowForUserWithOptions(workflow, *userDid, isAdmin, allowSupervisorData, includeNotifyEmails)
 
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(workflow)
