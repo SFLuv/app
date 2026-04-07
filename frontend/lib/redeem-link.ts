@@ -161,27 +161,34 @@ export const decodeBase64UrlAddress = (encoded: string): string | null => {
 export const buildMerchantSendQrValue = ({ to, tipTo }: MerchantSendQrParams): string => {
   const trimmedTo = to.trim()
   const trimmedTipTo = (tipTo || "").trim()
-  const legacyPre = process.env.NEXT_PUBLIC_APP_REDEEM_URL_PRE?.trim()
-
-  const legacyConfig = parseLegacyRedeemConfig(legacyPre)
+  const legacyConfig = parseLegacyRedeemConfig(
+    process.env.NEXT_PUBLIC_APP_REDEEM_URL_PRE?.trim(),
+  )
 
   const appOrigin = legacyConfig?.appOrigin || DEFAULT_APP_ORIGIN
   const cwAlias = legacyConfig?.cwAlias || DEFAULT_CW_ALIAS
-  const cwBaseUrl = legacyConfig?.cwBaseUrl || DEFAULT_CW_BASE_URL
 
-  // Keep the base app endpoint flow so middleware still handles the hop;
-  // alias query params (page->p, redirect->r, mode->m, send->s, to->t,
-  // tipTo->tt) and base64url-encode addresses to shrink the encoded URL.
-  const encodedTo = encodeAddressToBase64Url(trimmedTo)
-  const encodedTipTo = trimmedTipTo && HEX_ADDRESS_PATTERN.test(trimmedTipTo)
-    ? encodeAddressToBase64Url(trimmedTipTo)
-    : ""
-
-  const parts = [`p=r`, `m=s`, `t=${encodedTo}`]
-  if (encodedTipTo) {
-    parts.push(`tt=${encodedTipTo}`)
+  // Produce a native sendtoUrl-format URL on our own domain. Citizen Wallet's
+  // Dart QR scanner (`parseQRFormat` in lib/utils/qr.dart) classifies ANY
+  // http(s) URL containing `sendto=` as `sendtoUrl` — no host check — and
+  // routes it to the native send screen with recipient, alias, and tipTo
+  // prefilled. The plugin/sigAuth in-app-browser flow cannot be used here
+  // because `ConnectedWebViewModal.handleDisplaySendActionModal` silently
+  // bails out when `amount` is absent, and `ConnectedWebViewSendModal`
+  // renders the amount read-only, which is incompatible with merchant QRs
+  // where the customer decides the amount at checkout.
+  //
+  // For users scanning with a regular camera, the URL lands on our app; the
+  // middleware picks up `p=r` and forwards to `/redirect`, which handles the
+  // login/wallet-ensure fallback path.
+  const parts = [
+    `p=r`,
+    `alias=${encodeURIComponent(cwAlias)}`,
+    `sendto=${encodeURIComponent(`${trimmedTo}@${cwAlias}`)}`,
+  ]
+  if (trimmedTipTo && HEX_ADDRESS_PATTERN.test(trimmedTipTo)) {
+    parts.push(`tipTo=${trimmedTipTo}`)
   }
-  const sendTarget = `${appOrigin}?${parts.join("&")}`
 
-  return `${cwBaseUrl}/#/?dl=plugin&alias=${encodeURIComponent(cwAlias)}&plugin=${encodeURIComponent(sendTarget)}`
+  return `${appOrigin}/?${parts.join("&")}`
 }

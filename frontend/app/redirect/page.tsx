@@ -2,10 +2,8 @@
 
 import { useEffect, useMemo, useRef, useState } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
-import { Address, isAddress } from "viem"
-import { generateReceiveLink } from "@citizenwallet/sdk"
+import { isAddress } from "viem"
 import { useApp } from "@/context/AppProvider"
-import { CW_APP_BASE_URL, COMMUNITY } from "@/lib/constants"
 import { Button } from "@/components/ui/button"
 import { AlertTriangle, Loader2 } from "lucide-react"
 import { decodeBase64UrlAddress } from "@/lib/redeem-link"
@@ -28,17 +26,35 @@ export default function RedirectPage() {
   const searchParams = useSearchParams()
   const { status, login, user, walletsStatus, ensurePrimarySmartWallet } = useApp()
 
-  // New aliased params (p=r, m=s, t=<base64url>, tt=<base64url>) take
-  // precedence; legacy params (mode, to, tipTo) are still honored for any
-  // previously generated links.
+  // Parameter sources, in priority order:
+  //   1. Native CW sendtoUrl format: `sendto=<hex>@<alias>`, `tipTo=<hex>`.
+  //      This is the canonical format for merchant QRs — CW's Dart scanner
+  //      parses it natively; we also accept it here so non-CW users landing
+  //      on our domain reach the same send flow.
+  //   2. Aliased short form: `m=s`, `t=<base64url>`, `tt=<base64url>`.
+  //   3. Legacy long form: `mode=send`, `to=<hex>`, `tipTo=<hex>`.
+
+  const sendtoParam = searchParams.get("sendto") || ""
+  const sendtoAddress = useMemo(() => {
+    if (!sendtoParam) return ""
+    const [addr] = sendtoParam.split("@")
+    return addr || ""
+  }, [sendtoParam])
+
   const rawMode = searchParams.get("m") || searchParams.get("mode")
   const mode = useMemo(() => {
-    if (!rawMode) return null
-    if (rawMode === "s" || rawMode === "send") return "send"
-    return rawMode
-  }, [rawMode])
+    if (rawMode) {
+      if (rawMode === "s" || rawMode === "send") return "send"
+      return rawMode
+    }
+    // When a sendto= param is present, default mode to "send" so the native
+    // CW sendtoUrl format works without an explicit mode param.
+    if (sendtoAddress) return "send"
+    return null
+  }, [rawMode, sendtoAddress])
 
   const to = useMemo(() => {
+    if (sendtoAddress && isAddress(sendtoAddress)) return sendtoAddress
     const aliasTo = searchParams.get("t")
     if (aliasTo) {
       const decoded = decodeBase64UrlAddress(aliasTo)
@@ -47,16 +63,18 @@ export default function RedirectPage() {
       if (isAddress(aliasTo)) return aliasTo
     }
     return searchParams.get("to") || ""
-  }, [searchParams])
+  }, [sendtoAddress, searchParams])
 
   const tipTo = useMemo(() => {
+    const rawTipTo = searchParams.get("tipTo")
+    if (rawTipTo && isAddress(rawTipTo)) return rawTipTo
     const aliasTipTo = searchParams.get("tt")
     if (aliasTipTo) {
       const decoded = decodeBase64UrlAddress(aliasTipTo)
       if (decoded) return decoded
       if (isAddress(aliasTipTo)) return aliasTipTo
     }
-    return searchParams.get("tipTo") || ""
+    return rawTipTo || ""
   }, [searchParams])
 
   const sigAuthAccount = searchParams.get("sigAuthAccount")
