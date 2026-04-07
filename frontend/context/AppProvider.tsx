@@ -365,6 +365,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
   const _resetAppState = async () => {
     const allowUnauthedRoute =
       pathname === "/map" ||
+      pathname === "/redirect" ||
       pathname.startsWith("/faucet") ||
       pathname.startsWith("/improver/join") ||
       pathname.startsWith("/photos/") ||

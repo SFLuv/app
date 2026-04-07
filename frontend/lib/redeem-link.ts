@@ -89,3 +89,33 @@ export const buildEventRedeemQrValue = (code: string): string => {
 
   return `${cwBaseUrl}/#/?dl=plugin&alias=${encodeURIComponent(cwAlias)}&plugin=${encodeURIComponent(redeemTarget)}`
 }
+
+export interface MerchantSendQrParams {
+  to: string
+  tipTo?: string | null
+}
+
+export const buildMerchantSendQrValue = ({ to, tipTo }: MerchantSendQrParams): string => {
+  const trimmedTo = to.trim()
+  const trimmedTipTo = (tipTo || "").trim()
+  const legacyPre = process.env.NEXT_PUBLIC_APP_REDEEM_URL_PRE?.trim()
+
+  const legacyConfig = parseLegacyRedeemConfig(legacyPre)
+
+  const appOrigin = legacyConfig?.appOrigin || DEFAULT_APP_ORIGIN
+  const cwAlias = legacyConfig?.cwAlias || DEFAULT_CW_ALIAS
+  const cwBaseUrl = legacyConfig?.cwBaseUrl || DEFAULT_CW_BASE_URL
+
+  // Keep the base app endpoint flow; middleware uses page=redirect to forward
+  // to the /redirect handler.
+  const sendQuery = new URLSearchParams()
+  sendQuery.set("page", "redirect")
+  sendQuery.set("mode", "send")
+  sendQuery.set("to", trimmedTo)
+  if (trimmedTipTo) {
+    sendQuery.set("tipTo", trimmedTipTo)
+  }
+  const sendTarget = `${appOrigin}?${sendQuery.toString()}`
+
+  return `${cwBaseUrl}/#/?dl=plugin&alias=${encodeURIComponent(cwAlias)}&plugin=${encodeURIComponent(sendTarget)}`
+}

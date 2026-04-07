@@ -1,6 +1,8 @@
 "use client"
 
-import React, { useEffect, useMemo, useState } from "react"
+import React, { useEffect, useMemo, useRef, useState } from "react"
+import { QRCode } from "react-qrcode-logo"
+import { buildMerchantSendQrValue } from "@/lib/redeem-link"
 import { usePathname, useRouter, useSearchParams } from "next/navigation"
 import { useApp } from "@/context/AppProvider"
 import { useMerchants } from "@/hooks/api/use-merchants"
@@ -250,6 +252,7 @@ export default function AdminPage() {
   const [merchantStatusDraft, setMerchantStatusDraft] = useState<ApprovalStatus>("pending")
   const [merchantModalSaving, setMerchantModalSaving] = useState<boolean>(false)
   const [merchantModalError, setMerchantModalError] = useState<string>("")
+  const merchantQrRef = useRef<QRCode>(null)
 
   // QR code generation state
   const [eventStartDate, setEventStartDate] = useState<Date>()
@@ -2044,6 +2047,32 @@ export default function AdminPage() {
     } finally {
       setMerchantModalSaving(false)
     }
+  }
+
+  const merchantPayToAddress: string = (selectedLocationForReview?.pay_to_address || "").trim()
+  const merchantTipToAddress: string = (selectedLocationForReview?.tip_to_address || "").trim()
+
+  const merchantSendQrValue = useMemo(() => {
+    if (!merchantPayToAddress) return ""
+    return buildMerchantSendQrValue({
+      to: merchantPayToAddress,
+      tipTo: merchantTipToAddress || null,
+    })
+  }, [merchantPayToAddress, merchantTipToAddress])
+
+  const handleDownloadMerchantQr = () => {
+    if (!merchantPayToAddress) return
+    const rawName: string = (selectedLocationForReview?.name || "merchant").toString()
+    const snakeName = rawName
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "_")
+      .replace(/^_+|_+$/g, "") || "merchant"
+    const now = new Date()
+    const mm = String(now.getMonth() + 1).padStart(2, "0")
+    const dd = String(now.getDate()).padStart(2, "0")
+    const yyyy = String(now.getFullYear())
+    const qrName = `${snakeName}_${mm}_${dd}_${yyyy}`
+    merchantQrRef.current?.download("png", qrName)
   }
 
   const handleGenerateQRCodes = async () => {
@@ -4734,6 +4763,52 @@ export default function AdminPage() {
                   </div>
                 </div>
               </div>
+
+              {/* Merchant Payment QR Section */}
+              {merchantPayToAddress && (
+                <div className="space-y-4">
+                  <h3 className="text-lg font-semibold text-foreground border-b pb-2">Payment QR Code</h3>
+                  <Card className="overflow-hidden border-primary/20 bg-gradient-to-b from-primary/5 via-background to-background">
+                    <CardContent className="p-4 sm:p-6">
+                      <div className="text-center space-y-3 sm:space-y-4">
+                        <div className="mx-auto my-2 w-full max-w-[280px] rounded-2xl border border-border/70 bg-white p-3 shadow-sm sm:my-3 sm:p-4">
+                          <QRCode
+                            ref={merchantQrRef}
+                            value={merchantSendQrValue}
+                            style={{
+                              display: "block",
+                              width: "100%",
+                              height: "100%",
+                              aspectRatio: "1 / 1",
+                              borderRadius: "12px",
+                            }}
+                            size={600}
+                            logoImage={"/icon.png"}
+                            removeQrCodeBehindLogo={true}
+                            logoPadding={1}
+                            logoPaddingStyle="circle"
+                            logoWidth={150}
+                            qrStyle="dots"
+                            eyeRadius={100}
+                            eyeColor={"#eb6c6c"}
+                            ecLevel="H"
+                            quietZone={20}
+                          />
+                        </div>
+                        <p className="text-sm text-muted-foreground">
+                          Scan this QR code to send SFLUV to {selectedLocationForReview.name}
+                          {merchantTipToAddress ? " (with tipping enabled)" : ""}.
+                        </p>
+                        <div className="pt-2 text-center">
+                          <Button onClick={handleDownloadMerchantQr}>
+                            Download QR Code
+                          </Button>
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+                </div>
+              )}
 
               {/* SFLuv Integration Section */}
               {/*

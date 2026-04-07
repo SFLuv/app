@@ -79,6 +79,7 @@ interface SendCryptoModalProps {
   wallet: AppWallet;
   balance: number;
   defaultFlow?: SendFlowMode;
+  defaultRecipient?: string;
 }
 
 export function SendCryptoModal({
@@ -87,6 +88,7 @@ export function SendCryptoModal({
   wallet,
   balance,
   defaultFlow = "manual",
+  defaultRecipient,
 }: SendCryptoModalProps) {
   const [step, setStep] = useState<SendStep>("form");
   const [flowMode, setFlowMode] = useState<SendFlowMode>(defaultFlow);
@@ -100,7 +102,7 @@ export function SendCryptoModal({
   const [w9EmailInput, setW9EmailInput] = useState<string>("");
   const [w9Submitting, setW9Submitting] = useState<boolean>(false);
   const [formData, setFormData] = useState({
-    recipient: "",
+    recipient: defaultRecipient ?? "",
     amount: "",
     memo: "",
   });
@@ -629,7 +631,10 @@ export function SendCryptoModal({
     setProcessingDetectedQr(false);
     setShowScanMoreOptions(false);
     scanLockedRef.current = false;
-  }, [open, defaultFlow]);
+    if (defaultRecipient) {
+      setFormData((prev) => ({ ...prev, recipient: defaultRecipient }));
+    }
+  }, [open, defaultFlow, defaultRecipient]);
 
   useEffect(() => {
     if (!open || step !== "form") return;
@@ -953,6 +958,7 @@ export function SendCryptoModal({
                     </Label>
                     <ContactOrAddressInput
                       id="recipient"
+                      initialValue={defaultRecipient}
                       onChange={(value) =>
                         setFormData({ ...formData, recipient: value })
                       }
