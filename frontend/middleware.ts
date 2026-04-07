@@ -11,10 +11,15 @@ const middleware = (request: NextRequest) => {
   const search = request?.nextUrl?.search
   const params = new URLSearchParams(search)
   const pageParam = params.get("page")
+  const pageAlias = params.get("p")
   const rawCode = params.get("code")
 
-  if (pageParam === "redirect") {
+  const isRedirect =
+    pageParam === "redirect" || pageAlias === "r" || pageAlias === "redirect"
+
+  if (isRedirect) {
     params.delete("page")
+    params.delete("p")
     return NextResponse.redirect(new URL(
       "/redirect?" + params.toString(),
       request.url
