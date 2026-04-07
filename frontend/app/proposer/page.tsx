@@ -3485,7 +3485,7 @@ export default function ProposerPage() {
                                       endReorderDrag()
                                     }}
                                   >
-                                  <div className="grid gap-2 md:grid-cols-[auto,1fr,auto,auto]">
+                                  <div className="grid gap-2 md:grid-cols-[auto,1fr,auto,auto]" /* drag, label, write-up, photo */>
                                     <button
                                       type="button"
                                       aria-label={`Drag dropdown option ${optionIndex + 1}`}
@@ -3543,14 +3543,6 @@ export default function ProposerPage() {
                                       />
                                       Needs photo
                                     </label>
-                                    <Button
-                                      type="button"
-                                      size="sm"
-                                      variant="ghost"
-                                      onClick={() => removeDropdownOption(step.id, item.id, optionIndex)}
-                                    >
-                                      <Trash2 className="h-4 w-4" />
-                                    </Button>
                                   </div>
 
                                     <div className="space-y-2">
@@ -3628,6 +3620,16 @@ export default function ProposerPage() {
                                       />
                                       Send pictures with email
                                     </label>
+                                    <div className="flex justify-end pt-2">
+                                      <Button
+                                        type="button"
+                                        size="sm"
+                                        variant="ghost"
+                                        onClick={() => removeDropdownOption(step.id, item.id, optionIndex)}
+                                      >
+                                        <Trash2 className="h-4 w-4" />
+                                      </Button>
+                                    </div>
                                   </div>
                                   </div>
                                   {optionDropAfter && <div className="h-1 rounded-full bg-[#eb6c6c] shadow-sm" />}
