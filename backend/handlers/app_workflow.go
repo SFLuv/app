@@ -919,6 +919,18 @@ func (a *AppService) GetProposerWorkflow(w http.ResponseWriter, r *http.Request)
 	}
 	isAdmin := a.IsAdmin(r.Context(), *userDid)
 
+	includeNotifyEmails := false
+	includeNotifyEmailsRaw := strings.TrimSpace(r.URL.Query().Get("include_notify_emails"))
+	if includeNotifyEmailsRaw != "" {
+		parsed, parseErr := strconv.ParseBool(includeNotifyEmailsRaw)
+		if parseErr != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte("invalid include_notify_emails value"))
+			return
+		}
+		includeNotifyEmails = parsed
+	}
+
 	workflowId := strings.TrimSpace(r.PathValue("workflow_id"))
 	if workflowId == "" {
 		w.WriteHeader(http.StatusBadRequest)
@@ -947,7 +959,7 @@ func (a *AppService) GetProposerWorkflow(w http.ResponseWriter, r *http.Request)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
-	sanitizeWorkflowForUser(workflow, *userDid, isAdmin)
+	sanitizeWorkflowForUserWithOptions(workflow, *userDid, isAdmin, false, includeNotifyEmails)
 
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(workflow)
