@@ -87,6 +87,9 @@ export default function WalletDetailsPage() {
   const sendFlowDefault = !isAdminOrMerchant && isMobile ? "scan" : "manual"
   const showScanSendButton = !isAdminOrMerchant
   const fromWalletMenu = searchParams.get("fromWalletMenu") === "1"
+  const sendQueryFlag = searchParams.get("send") === "1"
+  const sendToQuery = searchParams.get("to") || ""
+  const [pendingSendRecipient, setPendingSendRecipient] = useState<string | undefined>(undefined)
 
   // Get the specific wallet by index
   const wallet = useMemo(() => {
@@ -524,6 +527,17 @@ export default function WalletDetailsPage() {
     }
   }, [wallets, router])
 
+  // Honor send=1&to=<address> query params (e.g. from /redirect handoff)
+  useEffect(() => {
+    if (!sendQueryFlag) return
+    if (!wallet) return
+    const trimmed = sendToQuery.trim()
+    setPendingSendRecipient(trimmed || undefined)
+    setShowSendModal(true)
+    router.replace(`/wallets/${walletAddress}`)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sendQueryFlag, wallet?.address])
+
   const handleRefresh = async () => {
     setIsRefreshing(true)
     // Mock refresh delay
@@ -856,10 +870,14 @@ export default function WalletDetailsPage() {
       {/* Modals */}
       <SendCryptoModal
         open={showSendModal}
-        onOpenChange={setShowSendModal}
+        onOpenChange={(open) => {
+          setShowSendModal(open)
+          if (!open) setPendingSendRecipient(undefined)
+        }}
         wallet={wallet}
         balance={balance || 0}
-        defaultFlow={sendFlowDefault}
+        defaultFlow={pendingSendRecipient ? "manual" : sendFlowDefault}
+        defaultRecipient={pendingSendRecipient}
       />
       <ReceiveCryptoModal open={showReceiveModal} onOpenChange={setShowReceiveModal} wallet={wallet} />
       <CashOutCryptoModal open={showCashoutModal} onOpenChange={setShowCashoutModal} wallet={wallet} />

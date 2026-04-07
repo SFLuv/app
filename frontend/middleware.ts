@@ -10,9 +10,19 @@ const hasEmbeddedRedeemPage = (rawCode: string | null) => {
 const middleware = (request: NextRequest) => {
   const search = request?.nextUrl?.search
   const params = new URLSearchParams(search)
-  const isRedirect = params.get("page") === "redeem"
+  const pageParam = params.get("page")
   const rawCode = params.get("code")
-  const shouldRedirectRedeem = isRedirect || hasEmbeddedRedeemPage(rawCode)
+
+  if (pageParam === "redirect") {
+    params.delete("page")
+    return NextResponse.redirect(new URL(
+      "/redirect?" + params.toString(),
+      request.url
+    ))
+  }
+
+  const isRedeem = pageParam === "redeem"
+  const shouldRedirectRedeem = isRedeem || hasEmbeddedRedeemPage(rawCode)
 
   if (!shouldRedirectRedeem) {
     return

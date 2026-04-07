@@ -1,6 +1,6 @@
 import { cn } from "@/lib/utils";
 import { InputProps } from "../ui/input";
-import { ChangeEventHandler, ForwardedRef, forwardRef, HTMLInputAutoCompleteAttribute, useMemo, useState } from "react";
+import { ChangeEventHandler, ForwardedRef, forwardRef, HTMLInputAutoCompleteAttribute, useEffect, useMemo, useState } from "react";
 import { useContacts } from "@/context/ContactsProvider";
 import { AutocompleteInput, Suggestion } from "../ui/autocomplete-input";
 
@@ -8,20 +8,28 @@ interface ContactOrAddressInputProps  {
   onChange: (value: string) => void
   id: string
   className?: string
+  initialValue?: string
 }
 
 const ContactOrAddressInput = (
   {
     onChange,
     id,
-    className
+    className,
+    initialValue
   }: ContactOrAddressInputProps
 ) => {
-  const [innerValue, setInnerValue] = useState<string>("")
+  const [innerValue, setInnerValue] = useState<string>(initialValue ?? "")
   const [filteredValues, setFilteredValues] = useState<Suggestion[]>([])
   const {
     contacts
   } = useContacts()
+
+  useEffect(() => {
+    if (initialValue !== undefined) {
+      setInnerValue(initialValue)
+    }
+  }, [initialValue])
 
   const suggestions: Suggestion[] = useMemo(() => contacts.map((c) => [c.name, `${c.address.slice(0, 6)}...${c.address.slice(-4)}`]), [contacts])
 
