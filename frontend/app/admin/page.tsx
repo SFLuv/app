@@ -9,6 +9,7 @@ import { useMerchants } from "@/hooks/api/use-merchants"
 import { useToast } from "@/hooks/use-toast"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
@@ -56,6 +57,7 @@ import {
   Leaf,
   AlertTriangle,
   Search,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Copy,
@@ -252,7 +254,8 @@ export default function AdminPage() {
   const [merchantStatusDraft, setMerchantStatusDraft] = useState<ApprovalStatus>("pending")
   const [merchantModalSaving, setMerchantModalSaving] = useState<boolean>(false)
   const [merchantModalError, setMerchantModalError] = useState<string>("")
-  const merchantQrRef = useRef<QRCode>(null)
+  const merchantQrRefs = useRef<Map<number, QRCode | null>>(new Map())
+  const [openMerchantQrCardIds, setOpenMerchantQrCardIds] = useState<Set<number>>(new Set())
 
   // QR code generation state
   const [eventStartDate, setEventStartDate] = useState<Date>()
@@ -2011,6 +2014,8 @@ export default function AdminPage() {
     setselectedLocationForReview(location)
     setMerchantStatusDraft(approvalToStatus(location.approval))
     setMerchantModalError("")
+    setOpenMerchantQrCardIds(new Set())
+    merchantQrRefs.current = new Map()
     setisLocationReviewModalOpen(true)
   }
 
@@ -2049,30 +2054,54 @@ export default function AdminPage() {
     }
   }
 
-  const merchantPayToAddress: string = (selectedLocationForReview?.pay_to_address || "").trim()
-  const merchantTipToAddress: string = (selectedLocationForReview?.tip_to_address || "").trim()
+  // All locations belonging to the same merchant (owner) as the one being
+  // reviewed. We render one collapsible QR card per location so admins can
+  // download a payment QR for every storefront the merchant operates.
+  const merchantOwnerLocations: AuthedLocation[] = useMemo(() => {
+    if (!selectedLocationForReview) return []
+    const ownerId = (selectedLocationForReview as AuthedLocation).owner_id
+    if (!ownerId) return [selectedLocationForReview as AuthedLocation]
+    const sameOwner = authedMapLocations.filter(
+      (location) => location.owner_id === ownerId,
+    )
+    return sameOwner.length > 0 ? sameOwner : [selectedLocationForReview as AuthedLocation]
+  }, [selectedLocationForReview, authedMapLocations])
 
-  const merchantSendQrValue = useMemo(() => {
-    if (!merchantPayToAddress) return ""
+  const buildMerchantQrForLocation = (location: AuthedLocation): string => {
+    const payTo = (location.pay_to_address || "").trim()
+    if (!payTo) return ""
+    const tipTo = (location.tip_to_address || "").trim()
     return buildMerchantSendQrValue({
-      to: merchantPayToAddress,
-      tipTo: merchantTipToAddress || null,
+      to: payTo,
+      tipTo: tipTo || null,
+      locationId: location.id,
     })
-  }, [merchantPayToAddress, merchantTipToAddress])
+  }
 
-  const handleDownloadMerchantQr = () => {
-    if (!merchantPayToAddress) return
-    const rawName: string = (selectedLocationForReview?.name || "merchant").toString()
-    const snakeName = rawName
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "_")
-      .replace(/^_+|_+$/g, "") || "merchant"
+  const handleDownloadMerchantQrForLocation = (location: AuthedLocation) => {
+    const ref = merchantQrRefs.current.get(location.id)
+    if (!ref) return
+    const rawName: string = (location.name || "merchant").toString()
+    const snakeName =
+      rawName
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "_")
+        .replace(/^_+|_+$/g, "") || "merchant"
     const now = new Date()
     const mm = String(now.getMonth() + 1).padStart(2, "0")
     const dd = String(now.getDate()).padStart(2, "0")
     const yyyy = String(now.getFullYear())
     const qrName = `${snakeName}_${mm}_${dd}_${yyyy}`
-    merchantQrRef.current?.download("png", qrName)
+    ref.download("png", qrName)
+  }
+
+  const toggleMerchantQrCard = (locationId: number, open: boolean) => {
+    setOpenMerchantQrCardIds((prev) => {
+      const next = new Set(prev)
+      if (open) next.add(locationId)
+      else next.delete(locationId)
+      return next
+    })
   }
 
   const handleGenerateQRCodes = async () => {
@@ -4765,48 +4794,89 @@ export default function AdminPage() {
               </div>
 
               {/* Merchant Payment QR Section */}
-              {merchantPayToAddress && (
+              {merchantOwnerLocations.some((location) => (location.pay_to_address || "").trim()) && (
                 <div className="space-y-4">
-                  <h3 className="text-lg font-semibold text-foreground border-b pb-2">Payment QR Code</h3>
-                  <Card className="overflow-hidden border-primary/20 bg-gradient-to-b from-primary/5 via-background to-background">
-                    <CardContent className="p-4 sm:p-6">
-                      <div className="text-center space-y-3 sm:space-y-4">
-                        <div className="mx-auto my-2 w-full max-w-[280px] rounded-2xl border border-border/70 bg-white p-3 shadow-sm sm:my-3 sm:p-4">
-                          <QRCode
-                            ref={merchantQrRef}
-                            value={merchantSendQrValue}
-                            style={{
-                              display: "block",
-                              width: "100%",
-                              height: "100%",
-                              aspectRatio: "1 / 1",
-                              borderRadius: "12px",
-                            }}
-                            size={600}
-                            logoImage={"/icon.png"}
-                            removeQrCodeBehindLogo={true}
-                            logoPadding={2}
-                            logoPaddingStyle="circle"
-                            logoWidth={150}
-                            qrStyle="dots"
-                            eyeRadius={20}
-                            eyeColor={"#eb6c6c"}
-                            ecLevel="M"
-                            quietZone={20}
-                          />
-                        </div>
-                        <p className="text-sm text-muted-foreground">
-                          Scan this QR code to send SFLUV to {selectedLocationForReview.name}
-                          {merchantTipToAddress ? " (with tipping enabled)" : ""}.
-                        </p>
-                        <div className="pt-2 text-center">
-                          <Button onClick={handleDownloadMerchantQr}>
-                            Download QR Code
-                          </Button>
-                        </div>
-                      </div>
-                    </CardContent>
-                  </Card>
+                  <h3 className="text-lg font-semibold text-foreground border-b pb-2">Payment QR Codes</h3>
+                  <div className="space-y-3">
+                    {merchantOwnerLocations
+                      .filter((location) => (location.pay_to_address || "").trim())
+                      .map((location) => {
+                        const isOpen = openMerchantQrCardIds.has(location.id)
+                        const qrValue = buildMerchantQrForLocation(location)
+                        const hasTip = !!(location.tip_to_address || "").trim()
+                        return (
+                          <Collapsible
+                            key={location.id}
+                            open={isOpen}
+                            onOpenChange={(open) => toggleMerchantQrCard(location.id, open)}
+                          >
+                            <Card className="overflow-hidden border-primary/20">
+                              <CollapsibleTrigger asChild>
+                                <button
+                                  type="button"
+                                  className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-muted/50 sm:px-6"
+                                >
+                                  <span className="font-semibold text-foreground">
+                                    {location.name} QR
+                                  </span>
+                                  <ChevronDown
+                                    className={cn(
+                                      "h-4 w-4 text-muted-foreground transition-transform",
+                                      isOpen && "rotate-180",
+                                    )}
+                                  />
+                                </button>
+                              </CollapsibleTrigger>
+                              <CollapsibleContent>
+                                <CardContent className="border-t bg-gradient-to-b from-primary/5 via-background to-background p-4 sm:p-6">
+                                  <div className="text-center space-y-3 sm:space-y-4">
+                                    <div className="mx-auto my-2 w-full max-w-[280px] rounded-2xl border border-border/70 bg-white p-3 shadow-sm sm:my-3 sm:p-4">
+                                      <QRCode
+                                        ref={(node) => {
+                                          if (node) {
+                                            merchantQrRefs.current.set(location.id, node)
+                                          } else {
+                                            merchantQrRefs.current.delete(location.id)
+                                          }
+                                        }}
+                                        value={qrValue}
+                                        style={{
+                                          display: "block",
+                                          width: "100%",
+                                          height: "100%",
+                                          aspectRatio: "1 / 1",
+                                          borderRadius: "12px",
+                                        }}
+                                        size={600}
+                                        logoImage={"/icon.png"}
+                                        removeQrCodeBehindLogo={true}
+                                        logoPadding={2}
+                                        logoPaddingStyle="circle"
+                                        logoWidth={150}
+                                        qrStyle="dots"
+                                        eyeRadius={20}
+                                        eyeColor={"#eb6c6c"}
+                                        ecLevel="M"
+                                        quietZone={20}
+                                      />
+                                    </div>
+                                    <p className="text-sm text-muted-foreground">
+                                      Scan this QR code to send SFLUV to {location.name}
+                                      {hasTip ? " (with tipping enabled)" : ""}.
+                                    </p>
+                                    <div className="pt-2 text-center">
+                                      <Button onClick={() => handleDownloadMerchantQrForLocation(location)}>
+                                        Download QR Code
+                                      </Button>
+                                    </div>
+                                  </div>
+                                </CardContent>
+                              </CollapsibleContent>
+                            </Card>
+                          </Collapsible>
+                        )
+                      })}
+                  </div>
                 </div>
               )}
 
