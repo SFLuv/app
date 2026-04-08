@@ -2226,15 +2226,33 @@ export default function ProposerPage() {
       return
     }
 
+    setSaveFromWorkflowSubmitting(true)
+
+    // Admins viewing another user's workflow get notify_emails redacted by the
+    // backend (sanitizeWorkflowForUserWithOptions). Refetch the workflow with
+    // include_notify_emails=true so the resulting template carries the emails.
+    let sourceWorkflow = detailWorkflow
+    try {
+      const refetchRes = await authFetch(
+        `/proposers/workflows/${detailWorkflow.id}?include_notify_emails=true`,
+      )
+      if (refetchRes.ok) {
+        sourceWorkflow = (await refetchRes.json()) as Workflow
+      }
+    } catch {
+      // Fall back to detailWorkflow on refetch failure; emails may be missing
+      // for non-owned workflows but the rest of the template will still save.
+    }
+
     let payload: WorkflowTemplateCreateRequest
     try {
-      payload = buildTemplatePayloadFromWorkflow(detailWorkflow, templateTitleValue, templateDescriptionValue)
+      payload = buildTemplatePayloadFromWorkflow(sourceWorkflow, templateTitleValue, templateDescriptionValue)
     } catch (err) {
       setSaveFromWorkflowError(err instanceof Error ? err.message : "Unable to build template from workflow.")
+      setSaveFromWorkflowSubmitting(false)
       return
     }
 
-    setSaveFromWorkflowSubmitting(true)
     try {
       const res = await authFetch("/proposers/workflow-templates", {
         method: "POST",
