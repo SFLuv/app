@@ -672,6 +672,16 @@ export function SendCryptoModal({
     }
     setLinkProvidedTipTo(defaultTipTo ?? "");
     setLinkProvidedMerchantName("");
+
+    // When the modal is opened with a recipient already prefilled in the
+    // scan flow (e.g. arriving from /redirect after scanning a merchant QR
+    // with the system camera), skip the camera entirely and land directly
+    // on the scan-style confirm screen — the camera step has nothing left
+    // to do, and the confirm view has the better amount-entry UX.
+    if (defaultFlow === "scan" && defaultRecipient) {
+      stopScanner();
+      setStep("confirm");
+    }
   }, [open, defaultFlow, defaultRecipient, defaultTipTo]);
 
   useEffect(() => {
