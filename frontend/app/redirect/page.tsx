@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import { isAddress } from "viem"
 import { useApp } from "@/context/AppProvider"
+import { COMMUNITY } from "@/lib/constants"
 import { Button } from "@/components/ui/button"
 import { AlertTriangle, Loader2 } from "lucide-react"
 import { decodeBase64UrlAddress } from "@/lib/redeem-link"
@@ -19,6 +20,88 @@ type RedirectStage =
 // The app has not launched yet, so this currently no-ops and returns false.
 const tryOpenSfluvApp = async (_to: string, _tipTo: string): Promise<boolean> => {
   return false
+}
+
+// Build the query-string body shared by both Citizen Wallet target URLs
+// (custom scheme + universal link). CW's router accepts `sendto`, `tipTo`,
+// and `alias` at the top-level path; Flutter's `parseSendtoUrl` lifts these
+// straight into the native send screen.
+const buildCwSendQuery = (to: string, tipTo: string): string => {
+  const alias = COMMUNITY.community.alias
+  const params = new URLSearchParams()
+  params.set("alias", alias)
+  params.set("sendto", `${to}@${alias}`)
+  if (tipTo && isAddress(tipTo)) {
+    params.set("tipTo", tipTo)
+  }
+  return params.toString()
+}
+
+const buildCwUniversalLink = (to: string, tipTo: string): string =>
+  `https://app.citizenwallet.xyz/?${buildCwSendQuery(to, tipTo)}`
+
+// Probe for the Citizen Wallet app via its custom URL scheme. Resolves true
+// if the OS handed off to the app (detected via the page becoming hidden or
+// pagehide firing within the probe window), false otherwise.
+//
+// We use the `citizenwallet://` scheme rather than the `app.citizenwallet.xyz`
+// universal link because the universal link, when the app is NOT installed,
+// would navigate the browser away from this page to the CW web wallet — which
+// would short-circuit the SFLuv login fallback. The custom scheme either
+// opens the app or fails silently, leaving us on /redirect.
+const tryOpenCitizenWalletApp = (to: string, tipTo: string): Promise<boolean> => {
+  return new Promise((resolve) => {
+    if (typeof window === "undefined" || typeof document === "undefined") {
+      resolve(false)
+      return
+    }
+
+    const userAgent = typeof navigator !== "undefined" ? navigator.userAgent || "" : ""
+    const isMobile = /Android|iPhone|iPad|iPod/i.test(userAgent)
+    if (!isMobile) {
+      resolve(false)
+      return
+    }
+
+    if (document.hidden) {
+      // Tab is already backgrounded; visibility transitions can't be trusted.
+      resolve(false)
+      return
+    }
+
+    const cwDeepLink = `citizenwallet:///?${buildCwSendQuery(to, tipTo)}`
+
+    let resolved = false
+    const finish = (opened: boolean) => {
+      if (resolved) return
+      resolved = true
+      document.removeEventListener("visibilitychange", handleVisibilityChange)
+      window.removeEventListener("pagehide", handlePageHide)
+      window.removeEventListener("blur", handleBlur)
+      resolve(opened)
+    }
+
+    const handleVisibilityChange = () => {
+      if (document.hidden) finish(true)
+    }
+    const handlePageHide = () => finish(true)
+    const handleBlur = () => finish(true)
+
+    document.addEventListener("visibilitychange", handleVisibilityChange)
+    window.addEventListener("pagehide", handlePageHide)
+    window.addEventListener("blur", handleBlur)
+
+    try {
+      window.location.href = cwDeepLink
+    } catch {
+      // Navigation throw — treat as the app not being installed.
+    }
+
+    // 1500ms is the standard "app handoff" detection window: long enough for
+    // iOS/Android to switch context, short enough that users don't notice
+    // when CW isn't installed.
+    setTimeout(() => finish(false), 1500)
+  })
 }
 
 export default function RedirectPage() {
@@ -110,23 +193,24 @@ export default function RedirectPage() {
     handledInitialRef.current = true
 
     const run = async () => {
-      const opened = await tryOpenSfluvApp(to, tipTo)
-      if (opened) return
+      // 1. Try the SFLuv-native app deep link (currently a stub).
+      const sfluvOpened = await tryOpenSfluvApp(to, tipTo)
+      if (sfluvOpened) return
 
+      // 2. If the user came from CW's in-app browser (sigAuthAccount present),
+      // bounce them back into CW directly via the universal link — this is
+      // safe because they're already in the CW context.
       if (sigAuthAccount) {
-        let cwLink = generateReceiveLink(
-          CW_APP_BASE_URL,
-          COMMUNITY,
-          to as Address,
-        )
-        if (tipTo && isAddress(tipTo)) {
-          cwLink += `&tipTo=${tipTo}`
-        }
-        window.location.replace(cwLink)
+        window.location.replace(buildCwUniversalLink(to, tipTo))
         return
       }
 
-      // Fall through: wait for auth status to settle before showing login UI
+      // 3. Probe for the Citizen Wallet app via its custom scheme. If
+      // installed, the OS will hand off and this page will be backgrounded.
+      const cwOpened = await tryOpenCitizenWalletApp(to, tipTo)
+      if (cwOpened) return
+
+      // 4. Fall through: wait for auth status to settle before showing login UI
       setStage("checking")
     }
     void run()
@@ -179,9 +263,13 @@ export default function RedirectPage() {
         }
         if (cancelled) return
         setStage("redirecting")
-        router.replace(
-          `/wallets/${primary}?send=1&to=${encodeURIComponent(to)}`,
-        )
+        const walletQuery = new URLSearchParams()
+        walletQuery.set("send", "1")
+        walletQuery.set("to", to)
+        if (tipTo && isAddress(tipTo)) {
+          walletQuery.set("tipTo", tipTo)
+        }
+        router.replace(`/wallets/${primary}?${walletQuery.toString()}`)
       } catch {
         if (!cancelled) {
           setError("Failed to redirect to your wallet.")
@@ -203,6 +291,7 @@ export default function RedirectPage() {
     ensurePrimarySmartWallet,
     router,
     to,
+    tipTo,
   ])
 
   const handleLogin = async () => {

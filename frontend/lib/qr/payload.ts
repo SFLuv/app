@@ -1,6 +1,7 @@
-import { normalizeRedeemCode } from "@/lib/redeem-link"
+import { decodeBase64UrlAddress, normalizeRedeemCode } from "@/lib/redeem-link"
 
 const ETH_ADDRESS_PATTERN = /0x[a-fA-F0-9]{40}/
+const ETH_ADDRESS_EXACT_PATTERN = /^0x[a-fA-F0-9]{40}$/
 const UUID_IN_TEXT_PATTERN = /[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i
 
 const REDEEM_PARAM_KEYS = [
@@ -86,6 +87,89 @@ export const extractEthereumAddressFromPayload = (rawValue: string): string | nu
   const decodedMatch = decoded.match(ETH_ADDRESS_PATTERN)
   if (decodedMatch) {
     return decodedMatch[0]
+  }
+
+  return null
+}
+
+export interface MerchantSendPayload {
+  to: string
+  tipTo: string | null
+}
+
+const isValidEthAddress = (value: string | null | undefined): value is string =>
+  !!value && ETH_ADDRESS_EXACT_PATTERN.test(value)
+
+const resolveAddressFromParams = (
+  params: URLSearchParams,
+  primaryKey: string,
+  shortKey: string,
+  sendtoKey?: string,
+): string | null => {
+  if (sendtoKey) {
+    const sendto = params.get(sendtoKey)
+    if (sendto) {
+      const [addr] = sendto.split("@")
+      if (isValidEthAddress(addr)) return addr
+    }
+  }
+  const direct = params.get(primaryKey)
+  if (isValidEthAddress(direct)) return direct
+  const short = params.get(shortKey)
+  if (short) {
+    const decoded = decodeBase64UrlAddress(short)
+    if (isValidEthAddress(decoded)) return decoded
+    if (isValidEthAddress(short)) return short
+  }
+  return null
+}
+
+// Parses any payload that encodes a merchant-style payment link, returning
+// the recipient address (and optional tipTo). Recognizes:
+//   - Native CW sendtoUrl form: ?sendto=<hex>@<alias>&tipTo=<hex>
+//   - Aliased short form: ?t=<base64url>&tt=<base64url>
+//   - Legacy long form:    ?to=<hex>&tipTo=<hex>
+// Returns null if no recipient could be parsed.
+export const extractMerchantSendFromPayload = (
+  rawValue: string,
+): MerchantSendPayload | null => {
+  if (!rawValue) return null
+  const trimmed = rawValue.trim()
+  if (!trimmed) return null
+
+  const candidates: URLSearchParams[] = []
+
+  const directURL = toURL(trimmed)
+  if (directURL) {
+    candidates.push(...collectParamsFromURL(directURL))
+  }
+
+  const decoded = safeDecodeURIComponent(trimmed)
+  if (decoded !== trimmed) {
+    const decodedURL = toURL(decoded)
+    if (decodedURL) {
+      candidates.push(...collectParamsFromURL(decodedURL))
+    }
+  }
+
+  // Allow plain `?sendto=...&tipTo=...` (no host) as a fallback so users can
+  // paste just the query portion.
+  if (candidates.length === 0) {
+    const stripped = trimmed.startsWith("?") ? trimmed.slice(1) : trimmed
+    if (stripped.includes("=")) {
+      try {
+        candidates.push(new URLSearchParams(stripped))
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  for (const params of candidates) {
+    const to = resolveAddressFromParams(params, "to", "t", "sendto")
+    if (!to) continue
+    const tipTo = resolveAddressFromParams(params, "tipTo", "tt")
+    return { to, tipTo: tipTo || null }
   }
 
   return null
