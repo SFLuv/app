@@ -93,6 +93,7 @@ export const buildEventRedeemQrValue = (code: string): string => {
 export interface MerchantSendQrParams {
   to: string
   tipTo?: string | null
+  locationId?: string | number | null
 }
 
 const HEX_ADDRESS_PATTERN = /^0x[0-9a-fA-F]{40}$/
@@ -158,9 +159,11 @@ export const decodeBase64UrlAddress = (encoded: string): string | null => {
   }
 }
 
-export const buildMerchantSendQrValue = ({ to, tipTo }: MerchantSendQrParams): string => {
+export const buildMerchantSendQrValue = ({ to, tipTo, locationId }: MerchantSendQrParams): string => {
   const trimmedTo = to.trim()
   const trimmedTipTo = (tipTo || "").trim()
+  const trimmedLocationId =
+    locationId === undefined || locationId === null ? "" : String(locationId).trim()
   const legacyConfig = parseLegacyRedeemConfig(
     process.env.NEXT_PUBLIC_APP_REDEEM_URL_PRE?.trim(),
   )
@@ -188,6 +191,9 @@ export const buildMerchantSendQrValue = ({ to, tipTo }: MerchantSendQrParams): s
   ]
   if (trimmedTipTo && HEX_ADDRESS_PATTERN.test(trimmedTipTo)) {
     parts.push(`tipTo=${trimmedTipTo}`)
+  }
+  if (trimmedLocationId) {
+    parts.push(`l=${encodeURIComponent(trimmedLocationId)}`)
   }
 
   return `${appOrigin}/?${parts.join("&")}`
