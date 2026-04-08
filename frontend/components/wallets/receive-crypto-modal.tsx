@@ -139,14 +139,14 @@ export function ReceiveCryptoModal({ open, onOpenChange, wallet }: ReceiveCrypto
                     size={600}
                     logoImage={"/icon.png"}
                     removeQrCodeBehindLogo={true}
-                    logoPadding={1}
+                    logoPadding={2}
                     logoPaddingStyle="circle"
                     logoWidth={150}
                     qrStyle="dots"
-                    eyeRadius={100}
+                    eyeRadius={20}
                     eyeColor={"#eb6c6c"}
-                    ecLevel="H"
-                    quietZone={20}
+                    ecLevel="M"
+                    quietZone={15}
                   />
                 </div>
                 <p className="text-sm text-muted-foreground">

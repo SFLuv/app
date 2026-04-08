@@ -89,7 +89,9 @@ export default function WalletDetailsPage() {
   const fromWalletMenu = searchParams.get("fromWalletMenu") === "1"
   const sendQueryFlag = searchParams.get("send") === "1"
   const sendToQuery = searchParams.get("to") || ""
+  const sendTipToQuery = searchParams.get("tipTo") || ""
   const [pendingSendRecipient, setPendingSendRecipient] = useState<string | undefined>(undefined)
+  const [pendingSendTipTo, setPendingSendTipTo] = useState<string | undefined>(undefined)
 
   // Get the specific wallet by index
   const wallet = useMemo(() => {
@@ -527,12 +529,14 @@ export default function WalletDetailsPage() {
     }
   }, [wallets, router])
 
-  // Honor send=1&to=<address> query params (e.g. from /redirect handoff)
+  // Honor send=1&to=<address>&tipTo=<address> query params (e.g. from /redirect handoff)
   useEffect(() => {
     if (!sendQueryFlag) return
     if (!wallet) return
     const trimmed = sendToQuery.trim()
+    const trimmedTipTo = sendTipToQuery.trim()
     setPendingSendRecipient(trimmed || undefined)
+    setPendingSendTipTo(trimmedTipTo || undefined)
     setShowSendModal(true)
     router.replace(`/wallets/${walletAddress}`)
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -872,12 +876,16 @@ export default function WalletDetailsPage() {
         open={showSendModal}
         onOpenChange={(open) => {
           setShowSendModal(open)
-          if (!open) setPendingSendRecipient(undefined)
+          if (!open) {
+            setPendingSendRecipient(undefined)
+            setPendingSendTipTo(undefined)
+          }
         }}
         wallet={wallet}
         balance={balance || 0}
         defaultFlow={pendingSendRecipient ? "manual" : sendFlowDefault}
         defaultRecipient={pendingSendRecipient}
+        defaultTipTo={pendingSendTipTo}
       />
       <ReceiveCryptoModal open={showReceiveModal} onOpenChange={setShowReceiveModal} wallet={wallet} />
       <CashOutCryptoModal open={showCashoutModal} onOpenChange={setShowCashoutModal} wallet={wallet} />

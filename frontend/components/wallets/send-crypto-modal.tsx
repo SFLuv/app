@@ -39,6 +39,7 @@ import type { W9Submission } from "@/types/w9";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   extractEthereumAddressFromPayload,
+  extractMerchantSendFromPayload,
   extractRedeemParamsFromPayload,
 } from "@/lib/qr/payload";
 import jsQR from "jsqr";
@@ -80,6 +81,7 @@ interface SendCryptoModalProps {
   balance: number;
   defaultFlow?: SendFlowMode;
   defaultRecipient?: string;
+  defaultTipTo?: string;
 }
 
 export function SendCryptoModal({
@@ -89,6 +91,7 @@ export function SendCryptoModal({
   balance,
   defaultFlow = "manual",
   defaultRecipient,
+  defaultTipTo,
 }: SendCryptoModalProps) {
   const [step, setStep] = useState<SendStep>("form");
   const [flowMode, setFlowMode] = useState<SendFlowMode>(defaultFlow);
@@ -126,6 +129,11 @@ export function SendCryptoModal({
     useState<boolean>(false);
   const [recipientTipToAddress, setRecipientTipToAddress] =
     useState<string>("");
+  const [linkProvidedTipTo, setLinkProvidedTipTo] = useState<string>(
+    defaultTipTo ?? "",
+  );
+  const [linkProvidedMerchantName, setLinkProvidedMerchantName] =
+    useState<string>("");
   const [tipPrompt, setTipPrompt] = useState<TipPromptState | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -148,24 +156,38 @@ export function SendCryptoModal({
 
   const resolveTipPrompt = (): TipPromptState | null => {
     const normalizedRecipient = normalizedRecipientAddress(formData.recipient);
-    const normalizedTipAddress = normalizedRecipientAddress(
-      recipientTipToAddress,
-    );
-    if (!normalizedRecipient || !normalizedTipAddress) {
-      return null;
+    if (!normalizedRecipient) return null;
+
+    // Prefer the tipTo provided by a scanned/pasted payment link or by the
+    // /redirect handoff: those are an explicit instruction from the merchant
+    // and don't depend on the recipient being registered in our DB. Fall back
+    // to the merchant-lookup result for users entering an address manually.
+    let tipSource: string | null = null;
+    let merchantNameSource = "";
+
+    const normalizedLinkTip = normalizedRecipientAddress(linkProvidedTipTo);
+    if (normalizedLinkTip) {
+      tipSource = normalizedLinkTip;
+      merchantNameSource =
+        linkProvidedMerchantName || recipientMerchantName || "";
+    } else if (recipientIsMerchant && recipientMatchedPaymentWallet) {
+      const normalizedLookupTip = normalizedRecipientAddress(
+        recipientTipToAddress,
+      );
+      if (normalizedLookupTip) {
+        tipSource = normalizedLookupTip;
+        merchantNameSource = recipientMerchantName;
+      }
     }
-    if (!recipientIsMerchant || !recipientMatchedPaymentWallet) {
-      return null;
-    }
-    if (
-      normalizedRecipient.toLowerCase() === normalizedTipAddress.toLowerCase()
-    ) {
+
+    if (!tipSource) return null;
+    if (tipSource.toLowerCase() === normalizedRecipient.toLowerCase()) {
       return null;
     }
 
     return {
-      merchantName: recipientMerchantName || "this merchant",
-      tipToAddress: normalizedTipAddress,
+      merchantName: merchantNameSource || "this merchant",
+      tipToAddress: tipSource,
       amount: "",
     };
   };
@@ -242,6 +264,18 @@ export function SendCryptoModal({
         return;
       }
 
+      const merchantSend = extractMerchantSendFromPayload(value);
+      if (merchantSend) {
+        setFormData((prev) => ({ ...prev, recipient: merchantSend.to }));
+        setLinkProvidedTipTo(merchantSend.tipTo || "");
+        setLinkProvidedMerchantName("");
+        setScanInstruction("Payment link found. Opening payment details...");
+        stopScanner();
+        setStep("confirm");
+        scanLockedRef.current = false;
+        return;
+      }
+
       const recipientAddress = extractEthereumAddressFromPayload(value);
       if (!recipientAddress) {
         setScanError(
@@ -252,6 +286,8 @@ export function SendCryptoModal({
       }
 
       setFormData((prev) => ({ ...prev, recipient: recipientAddress }));
+      setLinkProvidedTipTo("");
+      setLinkProvidedMerchantName("");
       setScanInstruction("Address found. Opening payment details...");
       stopScanner();
       setStep("confirm");
@@ -634,7 +670,9 @@ export function SendCryptoModal({
     if (defaultRecipient) {
       setFormData((prev) => ({ ...prev, recipient: defaultRecipient }));
     }
-  }, [open, defaultFlow, defaultRecipient]);
+    setLinkProvidedTipTo(defaultTipTo ?? "");
+    setLinkProvidedMerchantName("");
+  }, [open, defaultFlow, defaultRecipient, defaultTipTo]);
 
   useEffect(() => {
     if (!open || step !== "form") return;
@@ -847,6 +885,8 @@ export function SendCryptoModal({
     setRecipientIsMerchant(false);
     setRecipientMatchedPaymentWallet(false);
     setRecipientTipToAddress("");
+    setLinkProvidedTipTo("");
+    setLinkProvidedMerchantName("");
     setTipPrompt(null);
     setShowScanMoreOptions(false);
     setHash(null);
@@ -868,6 +908,8 @@ export function SendCryptoModal({
       setRecipientMerchantName("");
       setRecipientIsMerchant(false);
       setRecipientMatchedPaymentWallet(false);
+      setLinkProvidedTipTo("");
+      setLinkProvidedMerchantName("");
       scanLockedRef.current = false;
     }
     setStep("form");
@@ -959,9 +1001,29 @@ export function SendCryptoModal({
                     <ContactOrAddressInput
                       id="recipient"
                       initialValue={defaultRecipient}
-                      onChange={(value) =>
-                        setFormData({ ...formData, recipient: value })
-                      }
+                      onChange={(value) => {
+                        // If the user pastes a payment link, lift out `to`
+                        // and `tipTo` and store the address into the form
+                        // (the contact-or-address-input would otherwise treat
+                        // the whole URL as an unrecognized recipient).
+                        const merchantSend =
+                          extractMerchantSendFromPayload(value);
+                        if (merchantSend) {
+                          setFormData({
+                            ...formData,
+                            recipient: merchantSend.to,
+                          });
+                          setLinkProvidedTipTo(merchantSend.tipTo || "");
+                          setLinkProvidedMerchantName("");
+                          return;
+                        }
+                        setFormData({ ...formData, recipient: value });
+                        // Clear any prior link-provided tipTo if the user is
+                        // now editing the recipient by hand to a different
+                        // value.
+                        setLinkProvidedTipTo("");
+                        setLinkProvidedMerchantName("");
+                      }}
                       className="font-mono text-sm h-11"
                     />
                   </div>

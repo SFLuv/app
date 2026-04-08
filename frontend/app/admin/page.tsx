@@ -4785,13 +4785,13 @@ export default function AdminPage() {
                             size={600}
                             logoImage={"/icon.png"}
                             removeQrCodeBehindLogo={true}
-                            logoPadding={1}
+                            logoPadding={2}
                             logoPaddingStyle="circle"
                             logoWidth={150}
                             qrStyle="dots"
-                            eyeRadius={100}
+                            eyeRadius={20}
                             eyeColor={"#eb6c6c"}
-                            ecLevel="H"
+                            ecLevel="M"
                             quietZone={20}
                           />
                         </div>
