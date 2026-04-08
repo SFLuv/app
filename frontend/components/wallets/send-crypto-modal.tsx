@@ -815,6 +815,7 @@ export function SendCryptoModal({
 
     if (user?.isAdmin) {
       try {
+        const amountWei = toAmountWei(formData.amount);
         const res = await authFetch("/w9/check", {
           method: "POST",
           body: JSON.stringify({
