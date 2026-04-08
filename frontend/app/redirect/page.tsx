@@ -138,7 +138,7 @@ export default function RedirectPage() {
   }, [mapLocations, mapLocationsStatus, locationIdParam, to])
 
   // Initial dispatch: validate params, then either bounce sigAuth users
-  // straight into CW or surface the wallet-choice screen.
+  // straight into CW or move into the auth-status check.
   useEffect(() => {
     if (handledInitialRef.current) return
 
@@ -171,8 +171,21 @@ export default function RedirectPage() {
       return
     }
 
-    setStage("choose-wallet")
+    setStage("checking")
   }, [mode, to, tipTo, sigAuthAccount])
+
+  // Auth-status gate: while we're in "checking" wait for Privy to resolve,
+  // then either skip the choose screen entirely (already authenticated) or
+  // surface it for unauthenticated users so they can pick their wallet.
+  useEffect(() => {
+    if (stage !== "checking") return
+    if (status === "loading") return
+    if (status === "authenticated") {
+      setStage("ensuring-wallet")
+    } else {
+      setStage("choose-wallet")
+    }
+  }, [stage, status])
 
   // Once authenticated (after the user picks "Pay with SFLuv Wallet"),
   // ensure a primary wallet exists and push to the wallet send screen.
