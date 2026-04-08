@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import { isAddress } from "viem"
 import { useApp } from "@/context/AppProvider"
+import { useLocation } from "@/context/LocationProvider"
 import { COMMUNITY } from "@/lib/constants"
 import { Button } from "@/components/ui/button"
 import { AlertTriangle, Loader2 } from "lucide-react"
@@ -11,16 +12,10 @@ import { decodeBase64UrlAddress } from "@/lib/redeem-link"
 
 type RedirectStage =
   | "checking"
-  | "needs-login"
+  | "choose-wallet"
   | "ensuring-wallet"
   | "redirecting"
   | "error"
-
-// Stub: SFLuv app deep-link probe. Returns true if the app caught the link.
-// The app has not launched yet, so this currently no-ops and returns false.
-const tryOpenSfluvApp = async (_to: string, _tipTo: string): Promise<boolean> => {
-  return false
-}
 
 // Build the query-string body shared by both Citizen Wallet target URLs
 // (custom scheme + universal link). CW's router accepts `sendto`, `tipTo`,
@@ -40,74 +35,19 @@ const buildCwSendQuery = (to: string, tipTo: string): string => {
 const buildCwUniversalLink = (to: string, tipTo: string): string =>
   `https://app.citizenwallet.xyz/?${buildCwSendQuery(to, tipTo)}`
 
-// Probe for the Citizen Wallet app via its custom URL scheme. Resolves true
-// if the OS handed off to the app (detected via the page becoming hidden or
-// pagehide firing within the probe window), false otherwise.
-//
-// We use the `citizenwallet://` scheme rather than the `app.citizenwallet.xyz`
-// universal link because the universal link, when the app is NOT installed,
-// would navigate the browser away from this page to the CW web wallet — which
-// would short-circuit the SFLuv login fallback. The custom scheme either
-// opens the app or fails silently, leaving us on /redirect.
-const tryOpenCitizenWalletApp = (to: string, tipTo: string): Promise<boolean> => {
-  return new Promise((resolve) => {
-    if (typeof window === "undefined" || typeof document === "undefined") {
-      resolve(false)
-      return
-    }
-
-    const userAgent = typeof navigator !== "undefined" ? navigator.userAgent || "" : ""
-    const isMobile = /Android|iPhone|iPad|iPod/i.test(userAgent)
-    if (!isMobile) {
-      resolve(false)
-      return
-    }
-
-    if (document.hidden) {
-      // Tab is already backgrounded; visibility transitions can't be trusted.
-      resolve(false)
-      return
-    }
-
-    const cwDeepLink = `citizenwallet:///?${buildCwSendQuery(to, tipTo)}`
-
-    let resolved = false
-    const finish = (opened: boolean) => {
-      if (resolved) return
-      resolved = true
-      document.removeEventListener("visibilitychange", handleVisibilityChange)
-      window.removeEventListener("pagehide", handlePageHide)
-      window.removeEventListener("blur", handleBlur)
-      resolve(opened)
-    }
-
-    const handleVisibilityChange = () => {
-      if (document.hidden) finish(true)
-    }
-    const handlePageHide = () => finish(true)
-    const handleBlur = () => finish(true)
-
-    document.addEventListener("visibilitychange", handleVisibilityChange)
-    window.addEventListener("pagehide", handlePageHide)
-    window.addEventListener("blur", handleBlur)
-
-    try {
-      window.location.href = cwDeepLink
-    } catch {
-      // Navigation throw — treat as the app not being installed.
-    }
-
-    // 1500ms is the standard "app handoff" detection window: long enough for
-    // iOS/Android to switch context, short enough that users don't notice
-    // when CW isn't installed.
-    setTimeout(() => finish(false), 1500)
-  })
-}
+// citizenwallet:// custom scheme. Used by the user-gated "Pay with
+// CitizenWallet" button — when the app is installed iOS/Android hand off
+// silently; when it isn't, iOS shows the "Cannot Open Page" dialog. Because
+// this only fires on explicit user click (not auto-load), users without CW
+// don't see the prompt unless they ask for it.
+const buildCwCustomSchemeLink = (to: string, tipTo: string): string =>
+  `citizenwallet:///?${buildCwSendQuery(to, tipTo)}`
 
 export default function RedirectPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const { status, login, user, walletsStatus, ensurePrimarySmartWallet } = useApp()
+  const { mapLocations, mapLocationsStatus } = useLocation()
 
   // Parameter sources, in priority order:
   //   1. Native CW sendtoUrl format: `sendto=<hex>@<alias>`, `tipTo=<hex>`.
@@ -160,6 +100,10 @@ export default function RedirectPage() {
     return rawTipTo || ""
   }, [searchParams])
 
+  // Optional location id appended to merchant QR URLs (l=<id>). Used as a
+  // fast path for resolving the merchant name without scanning all locations.
+  const locationIdParam = searchParams.get("l") || ""
+
   const sigAuthAccount = searchParams.get("sigAuthAccount")
 
   const [stage, setStage] = useState<RedirectStage>("checking")
@@ -167,7 +111,34 @@ export default function RedirectPage() {
   const handledInitialRef = useRef(false)
   const ensureInFlightRef = useRef(false)
 
-  // Initial dispatch: validate params, try app deep link, then CW deep link
+  // Resolve the merchant location name from the public locations list. If
+  // `l` is in the URL we use it directly; otherwise we fall back to matching
+  // by pay_to_address (case-insensitive).
+  const resolvedLocationName = useMemo(() => {
+    if (mapLocationsStatus !== "available") return ""
+    if (mapLocations.length === 0) return ""
+
+    if (locationIdParam) {
+      const numericId = Number(locationIdParam)
+      if (Number.isFinite(numericId)) {
+        const byId = mapLocations.find((location) => location.id === numericId)
+        if (byId?.name) return byId.name
+      }
+    }
+
+    if (to) {
+      const lowered = to.toLowerCase()
+      const byAddress = mapLocations.find(
+        (location) => (location.pay_to_address || "").toLowerCase() === lowered,
+      )
+      if (byAddress?.name) return byAddress.name
+    }
+
+    return ""
+  }, [mapLocations, mapLocationsStatus, locationIdParam, to])
+
+  // Initial dispatch: validate params, then either bounce sigAuth users
+  // straight into CW or surface the wallet-choice screen.
   useEffect(() => {
     if (handledInitialRef.current) return
 
@@ -192,52 +163,26 @@ export default function RedirectPage() {
 
     handledInitialRef.current = true
 
-    const run = async () => {
-      // 1. Try the SFLuv-native app deep link (currently a stub).
-      const sfluvOpened = await tryOpenSfluvApp(to, tipTo)
-      if (sfluvOpened) return
-
-      // 2. If the user came from CW's in-app browser (sigAuthAccount present),
-      // bounce them back into CW directly via the universal link — this is
-      // safe because they're already in the CW context.
-      if (sigAuthAccount) {
-        window.location.replace(buildCwUniversalLink(to, tipTo))
-        return
-      }
-
-      // 3. Probe for the Citizen Wallet app via its custom scheme. If
-      // installed, the OS will hand off and this page will be backgrounded.
-      const cwOpened = await tryOpenCitizenWalletApp(to, tipTo)
-      if (cwOpened) return
-
-      // 4. Fall through: wait for auth status to settle before showing login UI
-      setStage("checking")
-    }
-    void run()
-  }, [mode, to, tipTo, sigAuthAccount])
-
-  // Once auth status is known, route to login prompt or wallet ensure
-  useEffect(() => {
-    if (stage !== "checking") return
-    if (status === "loading") return
-    if (status === "authenticated") {
-      setStage("ensuring-wallet")
-    } else {
-      setStage("needs-login")
-    }
-  }, [stage, status])
-
-  // Once authenticated, ensure a primary wallet exists, then push to wallet send
-  useEffect(() => {
-    if (stage !== "needs-login" && stage !== "ensuring-wallet") {
+    // If the user came from CW's in-app browser (sigAuthAccount present),
+    // bounce them back into CW directly via the universal link — they're
+    // already in the CW context, so no choice screen is needed.
+    if (sigAuthAccount) {
+      window.location.replace(buildCwUniversalLink(to, tipTo))
       return
     }
+
+    setStage("choose-wallet")
+  }, [mode, to, tipTo, sigAuthAccount])
+
+  // Once authenticated (after the user picks "Pay with SFLuv Wallet"),
+  // ensure a primary wallet exists and push to the wallet send screen.
+  useEffect(() => {
+    if (stage !== "ensuring-wallet") return
     if (status !== "authenticated") return
     if (walletsStatus === "loading") return
     if (ensureInFlightRef.current) return
 
     ensureInFlightRef.current = true
-    setStage("ensuring-wallet")
 
     let cancelled = false
     const ensureAndRedirect = async () => {
@@ -294,12 +239,29 @@ export default function RedirectPage() {
     tipTo,
   ])
 
-  const handleLogin = async () => {
+  const handlePayWithSfluv = async () => {
     setError(null)
-    // Stage stays at "needs-login" while the Privy modal is open. If login
-    // succeeds, the auth-watch effect picks up status="authenticated" and
-    // advances; if the user cancels, they remain on this screen and can retry.
-    await login()
+    if (status === "authenticated") {
+      setStage("ensuring-wallet")
+      return
+    }
+    // Privy login modal: if the user completes it, the auth-watch effect
+    // above takes over once status flips to "authenticated". Pre-flip the
+    // stage so the spinner shows immediately.
+    setStage("ensuring-wallet")
+    try {
+      await login()
+    } catch {
+      // If login throws or the modal is dismissed, drop back to the choice
+      // screen so the user can retry.
+      setStage("choose-wallet")
+    }
+  }
+
+  const handlePayWithCitizenWallet = () => {
+    if (!to) return
+    setError(null)
+    window.location.href = buildCwCustomSchemeLink(to, tipTo)
   }
 
   const renderBody = () => {
@@ -315,16 +277,36 @@ export default function RedirectPage() {
       )
     }
 
-    if (stage === "needs-login") {
+    if (stage === "choose-wallet") {
       const recipientPreview = to ? `${to.slice(0, 6)}...${to.slice(-4)}` : ""
+      const recipientLabel = resolvedLocationName || recipientPreview
+      const recipientIsName = !!resolvedLocationName
       return (
         <div className="flex flex-col items-center gap-4 text-center">
           <h1 className="text-xl font-semibold">Send SFLUV</h1>
           <p className="text-sm text-muted-foreground">
-            Log in to send to{" "}
-            <span className="font-mono">{recipientPreview}</span>.
+            Send to{" "}
+            <span className={recipientIsName ? "font-semibold" : "font-mono"}>
+              {recipientLabel}
+            </span>
+            .
           </p>
-          <Button onClick={handleLogin}>Log In to Continue</Button>
+          <div className="flex w-full flex-col gap-2">
+            <Button
+              size="lg"
+              className="h-12 w-full text-base"
+              onClick={handlePayWithSfluv}
+            >
+              Pay with SFLuv Wallet
+            </Button>
+            <Button
+              variant="ghost"
+              className="h-9 w-full text-sm text-muted-foreground"
+              onClick={handlePayWithCitizenWallet}
+            >
+              Pay with CitizenWallet
+            </Button>
+          </div>
         </div>
       )
     }

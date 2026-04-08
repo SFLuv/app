@@ -883,7 +883,11 @@ export default function WalletDetailsPage() {
         }}
         wallet={wallet}
         balance={balance || 0}
-        defaultFlow={pendingSendRecipient ? "manual" : sendFlowDefault}
+        // Arrivals from /redirect already have a recipient — we want the
+        // scan-style confirm screen (better amount-entry UX), and the modal
+        // will skip past the camera step automatically when both
+        // defaultFlow=scan and defaultRecipient are set.
+        defaultFlow={pendingSendRecipient ? "scan" : sendFlowDefault}
         defaultRecipient={pendingSendRecipient}
         defaultTipTo={pendingSendTipTo}
       />
