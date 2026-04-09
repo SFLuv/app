@@ -93,10 +93,14 @@ const buildContentSecurityPolicy = (nonce: string, requestOrigin: string) => {
     "https://*.googleapis.com",
     "https://*.gstatic.com",
     "https://*.citizenwallet.xyz",
+    "https://vercel.live",
+    "https://*.vercel.live",
     "wss://relay.walletconnect.com",
     "wss://relay.walletconnect.org",
     "wss://www.walletlink.org",
     "wss://*.citizenwallet.xyz",
+    "wss://vercel.live",
+    "wss://*.vercel.live",
   ]
   if (requestOrigin) {
     appendUnique(connectSrc, [requestOrigin])

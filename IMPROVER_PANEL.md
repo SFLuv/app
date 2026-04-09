@@ -160,3 +160,5 @@
 - CSP origin allowlist now also accepts NEXT_PUBLIC_FRONTEND_URL so production app-host calls can be pinned explicitly alongside backend origins.
 
 - Removed script-src strict-dynamic from the frontend CSP because Next-managed _next asset loads were being blocked as blocked:csp without a fully propagated nonce pipeline.
+
+- CSP connect-src now explicitly allows vercel.live and *.vercel.live over https and wss so Vercel-hosted live/runtime calls do not get blocked in deployed environments.
