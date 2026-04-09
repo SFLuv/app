@@ -38,6 +38,25 @@ const getBackendOrigins = () => {
   return isProduction() ? [] : [LOCALHOST_BACKEND_ORIGIN]
 }
 
+const getRpcOrigins = () => {
+  const configuredOrigins = [
+    process.env.NEXT_PUBLIC_CHAIN_RPC_URL,
+    process.env.NEXT_PUBLIC_ENGINE_URL,
+    process.env.NEXT_PUBLIC_ALCHEMY_TRANSFERS_BASE_URL,
+  ]
+    .map((value) => value?.trim() || "")
+    .filter((value) => value.length > 0)
+    .map(normalizeOrigin)
+
+  const defaults = [
+    "https://rpc.berachain.com",
+    "https://*.g.alchemy.com",
+  ]
+
+  const combined = [...configuredOrigins, ...defaults]
+  return [...new Set(combined)]
+}
+
 const appendUnique = (values: string[], additions: string[]) => {
   for (const entry of additions) {
     if (entry && !values.includes(entry)) {
@@ -49,6 +68,7 @@ const appendUnique = (values: string[], additions: string[]) => {
 const buildContentSecurityPolicy = (nonce: string, requestOrigin: string) => {
   const production = isProduction()
   const backendOrigins = getBackendOrigins()
+  const rpcOrigins = getRpcOrigins()
 
   const scriptSrc = [
     "'self'",
@@ -109,6 +129,9 @@ const buildContentSecurityPolicy = (nonce: string, requestOrigin: string) => {
   }
   if (backendOrigins.length > 0) {
     appendUnique(connectSrc, backendOrigins)
+  }
+  if (rpcOrigins.length > 0) {
+    appendUnique(connectSrc, rpcOrigins)
   }
   if (!production) {
     appendUnique(connectSrc, [

@@ -166,3 +166,5 @@
 - CSP hardening follow-up: vercel.live feedback.js needed to be allowed under script-src, not just connect-src. Also made the App Router root layout request-bound via headers() so middleware-provided nonces can propagate to Next framework scripts in production, avoiding blank-page failures from blocked inline/bootstrap scripts.
 
 - Passed the middleware CSP nonce through RootLayout into next-themes ThemeProvider so its inline theme bootstrap script is permitted under script-src without needing unsafe-inline.
+
+- CSP connect-src now also allows configured chain RPC origins (NEXT_PUBLIC_CHAIN_RPC_URL, NEXT_PUBLIC_ENGINE_URL, NEXT_PUBLIC_ALCHEMY_TRANSFERS_BASE_URL) plus safe Berachain/Alchemy defaults so browser-side viem/paymaster calls are not blocked.
