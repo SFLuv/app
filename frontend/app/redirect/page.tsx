@@ -38,7 +38,7 @@ const buildCwUniversalLink = (to: string, tipTo: string): string =>
 export default function RedirectPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
-  const { status, login, user, walletsStatus, ensurePrimarySmartWallet, authFetch } = useApp()
+  const { status, login, user, wallets, walletsStatus, ensurePrimarySmartWallet, refreshWallets, authFetch } = useApp()
   const { mapLocations, mapLocationsStatus } = useLocation()
 
   // Parameter sources, in priority order:
@@ -111,7 +111,27 @@ export default function RedirectPage() {
     return await res.json() as GetUserResponse
   }, [authFetch])
 
-  const resolveDefaultPayWallet = useCallback(async (): Promise<string> => {
+  const getStoredWalletAddress = (wallet: GetUserResponse["wallets"][number] | undefined): string => {
+    if (!wallet) return ""
+    const rawAddress = wallet.is_eoa ? wallet.eoa_address : wallet.smart_address
+    return typeof rawAddress === "string" ? rawAddress.trim() : ""
+  }
+
+  const getWalletRouteForAddress = useCallback((walletAddress: string, backendWallets?: GetUserResponse["wallets"]): string => {
+    const normalizedAddress = walletAddress.trim().toLowerCase()
+    if (!normalizedAddress) return "/wallets"
+
+    const backendMatch = (backendWallets || []).some(
+      (wallet) => getStoredWalletAddress(wallet).toLowerCase() === normalizedAddress,
+    )
+    const frontendMatch = wallets.some(
+      (wallet) => wallet.address?.toLowerCase() === normalizedAddress,
+    )
+
+    return backendMatch || frontendMatch ? `/wallets/${walletAddress}` : "/wallets"
+  }, [wallets])
+
+  const resolveDefaultPayWallet = useCallback(async (): Promise<{ address: string; walletPath: string }> => {
     const normalizeWalletAddress = (value?: string | null) => {
       const trimmed = (value || "").trim()
       return isAddress(trimmed) ? trimmed : ""
@@ -119,13 +139,19 @@ export default function RedirectPage() {
 
     const currentPrimaryAddress = normalizeWalletAddress(user?.primaryWalletAddress)
     if (currentPrimaryAddress) {
-      return currentPrimaryAddress
+      return {
+        address: currentPrimaryAddress,
+        walletPath: getWalletRouteForAddress(currentPrimaryAddress),
+      }
     }
 
     let userResponse = await loadAuthedUserRecord()
     let resolvedAddress = normalizeWalletAddress(userResponse.user.primary_wallet_address)
     if (resolvedAddress) {
-      return resolvedAddress
+      return {
+        address: resolvedAddress,
+        walletPath: getWalletRouteForAddress(resolvedAddress, userResponse.wallets),
+      }
     }
 
     const hasPrimarySmartWallet = await ensurePrimarySmartWallet()
@@ -133,10 +159,14 @@ export default function RedirectPage() {
       throw new Error("Could not initialize your primary wallet.")
     }
 
+    await refreshWallets()
     userResponse = await loadAuthedUserRecord()
     resolvedAddress = normalizeWalletAddress(userResponse.user.primary_wallet_address)
     if (resolvedAddress) {
-      return resolvedAddress
+      return {
+        address: resolvedAddress,
+        walletPath: getWalletRouteForAddress(resolvedAddress, userResponse.wallets),
+      }
     }
 
     const fallbackSmartWallet = userResponse.wallets.find((wallet) =>
@@ -145,12 +175,22 @@ export default function RedirectPage() {
       typeof wallet.smart_address === "string" &&
       isAddress(wallet.smart_address.trim())
     )
-    if (fallbackSmartWallet?.smart_address) {
-      return fallbackSmartWallet.smart_address.trim()
+    const fallbackAddress = normalizeWalletAddress(getStoredWalletAddress(fallbackSmartWallet))
+    if (fallbackAddress) {
+      return {
+        address: fallbackAddress,
+        walletPath: getWalletRouteForAddress(fallbackAddress, userResponse.wallets),
+      }
     }
 
     throw new Error("Primary wallet is not yet available. Please try again.")
-  }, [ensurePrimarySmartWallet, loadAuthedUserRecord, user?.primaryWalletAddress])
+  }, [
+    ensurePrimarySmartWallet,
+    getWalletRouteForAddress,
+    loadAuthedUserRecord,
+    refreshWallets,
+    user?.primaryWalletAddress,
+  ])
 
   // Resolve the merchant location name from the public locations list. If
   // `l` is in the URL we use it directly; otherwise we fall back to matching
@@ -241,8 +281,11 @@ export default function RedirectPage() {
     let cancelled = false
     const ensureAndRedirect = async () => {
       try {
-        const primary = await resolveDefaultPayWallet()
+        const { walletPath } = await resolveDefaultPayWallet()
         if (cancelled) return
+        if (walletPath === "/wallets") {
+          throw new Error("Primary wallet is not yet available. Please try again.")
+        }
         setStage("redirecting")
         const walletQuery = new URLSearchParams()
         walletQuery.set("send", "1")
@@ -250,10 +293,14 @@ export default function RedirectPage() {
         if (tipTo && isAddress(tipTo)) {
           walletQuery.set("tipTo", tipTo)
         }
-        router.replace(`/wallets/${primary}?${walletQuery.toString()}`)
-      } catch {
+        router.replace(`${walletPath}?${walletQuery.toString()}`)
+      } catch (caughtError) {
         if (!cancelled) {
-          setError("Failed to redirect to your wallet.")
+          const message =
+            caughtError instanceof Error && caughtError.message
+              ? caughtError.message
+              : "Failed to redirect to your wallet."
+          setError(message)
           setStage("error")
         }
       } finally {
