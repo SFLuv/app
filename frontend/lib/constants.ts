@@ -18,6 +18,7 @@ export const PRIVY_ID = process.env.NEXT_PUBLIC_PRIVY_APP_ID as string
 export const BACKEND =
   process.env.NEXT_PUBLIC_BACKEND_URL ||
   process.env.NEXT_PUBLIC_BACKEND_BASE_URL ||
+  process.env.NEXT_PUBLIC_APP_BASE_URL ||
   "http://localhost:8080"
 export const COMMUNITY_TOKEN_INDEX = Object.keys(config.tokens)[0]
 export const COMMUNITY_ACCOUNT_INDEX = Object.keys(config.accounts)[0]

@@ -156,3 +156,5 @@
 - Workflow payouts now persist the token transfer tx hash immediately after submission, retry requests reconcile that hash against on-chain SFLUV `Transfer` events before any resend, already-complete payouts are finalized instead of retried, and still-pending payout transactions are blocked from duplicate resend attempts.
 
 - Added frontend nonce-based CSP/security headers plus env-driven CSP allowlist hooks, enabled Privy captcha/preserved MFA prompts, and locked backend API CORS to explicit origins with localhost defaults when not in production.
+
+- CSP origin allowlist now also accepts NEXT_PUBLIC_FRONTEND_URL so production app-host calls can be pinned explicitly alongside backend origins.

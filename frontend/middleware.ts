@@ -20,16 +20,22 @@ const normalizeOrigin = (value: string) => {
 const isProduction = () => process.env.IN_PRODUCTION?.trim().toLowerCase() === "true"
 const isCspReportOnly = () => process.env.NEXT_PUBLIC_CSP_REPORT_ONLY?.trim().toLowerCase() === "true"
 
-const getBackendOrigin = () => {
-  const configuredOrigin =
-    process.env.NEXT_PUBLIC_BACKEND_URL?.trim() ||
-    process.env.NEXT_PUBLIC_BACKEND_BASE_URL?.trim()
+const getBackendOrigins = () => {
+  const configuredOrigins = [
+    process.env.NEXT_PUBLIC_FRONTEND_URL,
+    process.env.NEXT_PUBLIC_BACKEND_URL,
+    process.env.NEXT_PUBLIC_BACKEND_BASE_URL,
+    process.env.NEXT_PUBLIC_APP_BASE_URL,
+  ]
+    .map((value) => value?.trim() || "")
+    .filter((value) => value.length > 0)
+    .map(normalizeOrigin)
 
-  if (configuredOrigin) {
-    return normalizeOrigin(configuredOrigin)
+  if (configuredOrigins.length > 0) {
+    return [...new Set(configuredOrigins)]
   }
 
-  return isProduction() ? "" : LOCALHOST_BACKEND_ORIGIN
+  return isProduction() ? [] : [LOCALHOST_BACKEND_ORIGIN]
 }
 
 const appendUnique = (values: string[], additions: string[]) => {
@@ -40,9 +46,9 @@ const appendUnique = (values: string[], additions: string[]) => {
   }
 }
 
-const buildContentSecurityPolicy = (nonce: string) => {
+const buildContentSecurityPolicy = (nonce: string, requestOrigin: string) => {
   const production = isProduction()
-  const backendOrigin = getBackendOrigin()
+  const backendOrigins = getBackendOrigins()
 
   const scriptSrc = [
     "'self'",
@@ -93,8 +99,11 @@ const buildContentSecurityPolicy = (nonce: string) => {
     "wss://www.walletlink.org",
     "wss://*.citizenwallet.xyz",
   ]
-  if (backendOrigin) {
-    appendUnique(connectSrc, [backendOrigin])
+  if (requestOrigin) {
+    appendUnique(connectSrc, [requestOrigin])
+  }
+  if (backendOrigins.length > 0) {
+    appendUnique(connectSrc, backendOrigins)
   }
   if (!production) {
     appendUnique(connectSrc, [
@@ -150,7 +159,7 @@ const buildContentSecurityPolicy = (nonce: string) => {
   return directives.join("; ")
 }
 
-const applySecurityHeaders = (response: NextResponse, nonce: string) => {
+const applySecurityHeaders = (response: NextResponse, nonce: string, requestOrigin: string) => {
   const cspHeaderName = isCspReportOnly()
     ? "Content-Security-Policy-Report-Only"
     : "Content-Security-Policy"
@@ -159,7 +168,7 @@ const applySecurityHeaders = (response: NextResponse, nonce: string) => {
     : "Content-Security-Policy-Report-Only"
 
   response.headers.delete(alternateCspHeaderName)
-  response.headers.set(cspHeaderName, buildContentSecurityPolicy(nonce))
+  response.headers.set(cspHeaderName, buildContentSecurityPolicy(nonce, requestOrigin))
   response.headers.set("Referrer-Policy", "strict-origin-when-cross-origin")
   response.headers.set("X-Content-Type-Options", "nosniff")
   response.headers.set("X-Frame-Options", "DENY")
@@ -188,6 +197,7 @@ const hasEmbeddedRedeemPage = (rawCode: string | null) => {
 
 const middleware = (request: NextRequest) => {
   const nonce = crypto.randomUUID().replace(/-/g, "")
+  const requestOrigin = request.nextUrl.origin
   const search = request?.nextUrl?.search
   const params = new URLSearchParams(search)
   const pageParam = params.get("page")
@@ -204,7 +214,7 @@ const middleware = (request: NextRequest) => {
       "/redirect?" + params.toString(),
       request.url
     ))
-    applySecurityHeaders(response, nonce)
+    applySecurityHeaders(response, nonce, requestOrigin)
     return response
   }
 
@@ -219,7 +229,7 @@ const middleware = (request: NextRequest) => {
         headers: requestHeaders,
       },
     })
-    applySecurityHeaders(response, nonce)
+    applySecurityHeaders(response, nonce, requestOrigin)
     return response
   }
 
@@ -233,7 +243,7 @@ const middleware = (request: NextRequest) => {
     "/faucet/redeem?" + params.toString(),
     request.url
   ))
-  applySecurityHeaders(response, nonce)
+  applySecurityHeaders(response, nonce, requestOrigin)
   return response
 }
 
