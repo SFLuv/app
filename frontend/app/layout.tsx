@@ -24,13 +24,12 @@ export default async function RootLayout({
 }>) {
   // Access the middleware-provided nonce header so the App Router render stays
   // request-bound and Next can propagate nonces to its framework scripts.
-  const nonce = (await headers()).get("x-nonce")
-  void nonce
+  const nonce = (await headers()).get("x-nonce") || undefined
 
   return (
     <html lang="en" suppressHydrationWarning>
       <body className={inter.className}>
-        <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
+        <ThemeProvider attribute="class" defaultTheme="system" enableSystem nonce={nonce}>
           <Providers>
             <Sidebar>{children}</Sidebar>
           </Providers>
