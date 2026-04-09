@@ -168,3 +168,7 @@
 - Passed the middleware CSP nonce through RootLayout into next-themes ThemeProvider so its inline theme bootstrap script is permitted under script-src without needing unsafe-inline.
 
 - CSP connect-src now also allows configured chain RPC origins (NEXT_PUBLIC_CHAIN_RPC_URL, NEXT_PUBLIC_ENGINE_URL, NEXT_PUBLIC_ALCHEMY_TRANSFERS_BASE_URL) plus safe Berachain/Alchemy defaults so browser-side viem/paymaster calls are not blocked.
+
+- Merchant location wallet auto-save now reverts the draft back to the persisted DB-backed location state on save failure, so tip/payment wallet selectors cannot continue to look saved when the backend update actually failed.
+
+- Merchant tipping now prompts on the initial send confirmation screen: the optional tip amount is entered there, the old second-step tip prompt screen is removed, and any entered tip is sent automatically as a separate follow-up transfer after the main payment succeeds.

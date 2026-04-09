@@ -595,6 +595,15 @@ export default function SettingsPage() {
     };
   };
 
+  const getPersistedMerchantLocation = (locationId: number): AuthedLocation | null => {
+    for (const location of sortedUserLocations) {
+      if (location.id === locationId) {
+        return location;
+      }
+    }
+    return null;
+  };
+
   const buildLocationProfileDraft = (
     location: AuthedLocation,
   ): MerchantLocationProfileDraft => ({
@@ -1399,8 +1408,11 @@ export default function SettingsPage() {
         success: successMessage,
       }));
     } catch (err) {
+      const persistedLocation = getPersistedMerchantLocation(locationId);
       updateLocationWalletDraft(locationId, () => ({
-        ...nextDraft,
+        ...(persistedLocation
+          ? buildLocationWalletDraft(persistedLocation)
+          : nextDraft),
         saving: false,
         error:
           err instanceof Error
