@@ -33,6 +33,8 @@ import (
 
 const maxWorkflowStepCompletionRequestBytes int64 = 16 * 1024 * 1024
 const maxWorkflowStepPhotoUploadRequestBytes int64 = 4 * 1024 * 1024
+const workflowPayoutProcessingTimeout = 15 * time.Minute
+const workflowPayoutStaleLockTimeout = 5 * time.Minute
 
 func userCanViewWorkflowNotifyEmails(workflow *structs.Workflow, userID string) bool {
 	if workflow == nil || userID == "" {
@@ -143,6 +145,7 @@ const (
 	workflowPayoutErrorInsufficientFaucet = "Workflow payout failed: insufficient faucet balance."
 	workflowPayoutErrorTransferFailed     = "Workflow payout failed: transfer failed. Please retry."
 	workflowPayoutErrorProcessingFailed   = "Workflow payout failed: processing error."
+	workflowPayoutErrorTimedOut           = "Workflow payout failed: previous payout attempt timed out. Please retry."
 	workflowPayoutErrorUnknown            = "Workflow payout failed. Please retry."
 )
 
@@ -168,6 +171,9 @@ func normalizeWorkflowPayoutErrorForClient(raw *string) *string {
 		return &normalized
 	case strings.Contains(lower, "transfer failed"):
 		normalized := workflowPayoutErrorTransferFailed
+		return &normalized
+	case strings.Contains(lower, "timed out"), strings.Contains(lower, "deadline exceeded"):
+		normalized := workflowPayoutErrorTimedOut
 		return &normalized
 	case strings.Contains(lower, "processing error"), strings.Contains(lower, "state update failed"):
 		normalized := workflowPayoutErrorProcessingFailed
@@ -217,6 +223,147 @@ func sanitizeWorkflowListForUser(workflows []*structs.Workflow, userID string, i
 		normalizeWorkflowPayoutErrorsForClient(workflow)
 		workflow.SupervisorDataFields = nil
 	}
+}
+
+func workflowHasBlockingPendingPayouts(workflow *structs.Workflow) bool {
+	if workflow == nil {
+		return false
+	}
+
+	for _, step := range workflow.Steps {
+		if step.Status == "paid_out" {
+			continue
+		}
+		if step.Status != "completed" {
+			return true
+		}
+		if step.Bounty == 0 {
+			return true
+		}
+		if step.PayoutInProgress {
+			return true
+		}
+		if step.PayoutError == nil || strings.TrimSpace(*step.PayoutError) == "" {
+			return true
+		}
+	}
+
+	if workflow.ManagerBounty == 0 || workflow.ManagerImproverId == nil || workflow.ManagerPaidOutAt != nil {
+		return false
+	}
+	if workflow.ManagerPayoutInProgress {
+		return true
+	}
+	return workflow.ManagerPayoutError == nil || strings.TrimSpace(*workflow.ManagerPayoutError) == ""
+}
+
+func (a *AppService) waitForWorkflowPayoutTransferConfirmation(ctx context.Context, txHash string, walletAddress string, amount uint64) error {
+	txHash = strings.TrimSpace(txHash)
+	if txHash == "" {
+		return fmt.Errorf("missing transfer transaction hash")
+	}
+
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		result, err := a.bot.bot.VerifyTransfer(ctx, txHash, walletAddress, amount)
+		if err != nil {
+			return err
+		}
+		if result != nil {
+			if result.Successful {
+				return nil
+			}
+			if result.Found && !result.Pending {
+				return fmt.Errorf("transfer tx %s did not produce the expected successful SFLUV transfer", txHash)
+			}
+		}
+
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("error waiting for transfer tx %s: %w", txHash, ctx.Err())
+		case <-ticker.C:
+		}
+	}
+}
+
+func (a *AppService) reconcileWorkflowStepPayoutByHash(ctx context.Context, workflowID string, stepID string, improverID string) (bool, bool, error) {
+	bounty, txHash, err := a.db.GetWorkflowStepRecordedPayoutTxHash(ctx, workflowID, stepID, improverID)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return false, false, nil
+		}
+		return false, false, err
+	}
+	if txHash == "" {
+		return false, false, nil
+	}
+
+	walletAddress, err := a.db.GetPreferredWorkflowPayoutAddressForUser(ctx, improverID, false)
+	if err != nil {
+		return false, false, err
+	}
+
+	checkCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	result, err := a.bot.bot.VerifyTransfer(checkCtx, txHash, walletAddress, bounty)
+	if err != nil {
+		return false, false, err
+	}
+	if result != nil && result.Pending {
+		return false, true, nil
+	}
+	if result == nil || !result.Successful {
+		return false, false, nil
+	}
+
+	if _, err := a.db.MarkWorkflowStepPaidOut(ctx, workflowID, stepID); err != nil {
+		return false, false, err
+	}
+	if _, err := a.db.FinalizeWorkflowPaidOutIfSettled(ctx, workflowID); err != nil {
+		return false, false, err
+	}
+	return true, false, nil
+}
+
+func (a *AppService) reconcileWorkflowManagerPayoutByHash(ctx context.Context, workflowID string, improverID string) (bool, bool, error) {
+	bounty, txHash, err := a.db.GetWorkflowManagerRecordedPayoutTxHash(ctx, workflowID, improverID)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return false, false, nil
+		}
+		return false, false, err
+	}
+	if txHash == "" {
+		return false, false, nil
+	}
+
+	walletAddress, err := a.db.GetPreferredWorkflowPayoutAddressForUser(ctx, improverID, true)
+	if err != nil {
+		return false, false, err
+	}
+
+	checkCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	result, err := a.bot.bot.VerifyTransfer(checkCtx, txHash, walletAddress, bounty)
+	if err != nil {
+		return false, false, err
+	}
+	if result != nil && result.Pending {
+		return false, true, nil
+	}
+	if result == nil || !result.Successful {
+		return false, false, nil
+	}
+
+	if _, err := a.db.MarkWorkflowManagerPaidOut(ctx, workflowID); err != nil {
+		return false, false, err
+	}
+	if _, err := a.db.FinalizeWorkflowPaidOutIfSettled(ctx, workflowID); err != nil {
+		return false, false, err
+	}
+	return true, false, nil
 }
 
 func sanitizeWorkflowListForVoteView(workflows []*structs.Workflow, userID string, isAdmin bool) {
@@ -1266,6 +1413,11 @@ func (a *AppService) GetImproverUnpaidWorkflows(w http.ResponseWriter, r *http.R
 		return
 	}
 	isAdmin := a.IsAdmin(r.Context(), *userDid)
+	staleBefore := time.Now().UTC().Add(-workflowPayoutStaleLockTimeout).Unix()
+
+	if _, _, err := a.db.RecoverStaleWorkflowPayoutLocksForImprover(r.Context(), *userDid, staleBefore, workflowPayoutErrorTimedOut); err != nil {
+		a.logger.Logf("error recovering stale payout locks for improver %s: %s", *userDid, err)
+	}
 
 	workflows, err := a.db.GetImproverUnpaidWorkflows(r.Context(), *userDid)
 	if err != nil {
@@ -1302,6 +1454,28 @@ func (a *AppService) RequestWorkflowStepPayoutRetry(w http.ResponseWriter, r *ht
 	stepID := strings.TrimSpace(r.PathValue("step_id"))
 	if workflowID == "" || stepID == "" {
 		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	staleBefore := time.Now().UTC().Add(-workflowPayoutStaleLockTimeout).Unix()
+	if _, err := a.db.RecoverStaleWorkflowStepPayoutLock(r.Context(), workflowID, stepID, *userDid, staleBefore, workflowPayoutErrorTimedOut); err != nil {
+		a.logger.Logf("error recovering stale payout lock for workflow %s step %s improver %s: %s", workflowID, stepID, *userDid, err)
+	}
+
+	reconciled, pendingConfirmation, err := a.reconcileWorkflowStepPayoutByHash(r.Context(), workflowID, stepID, *userDid)
+	if err != nil {
+		a.logger.Logf("error reconciling workflow payout by tx hash for workflow %s step %s improver %s: %s", workflowID, stepID, *userDid, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	if pendingConfirmation {
+		w.WriteHeader(http.StatusConflict)
+		w.Write([]byte("previous payout transaction is still pending confirmation"))
+		return
+	}
+	if reconciled {
+		w.WriteHeader(http.StatusConflict)
+		w.Write([]byte("payout already complete"))
 		return
 	}
 
@@ -1346,6 +1520,28 @@ func (a *AppService) RequestWorkflowManagerPayoutRetry(w http.ResponseWriter, r 
 	workflowID := strings.TrimSpace(r.PathValue("workflow_id"))
 	if workflowID == "" {
 		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	staleBefore := time.Now().UTC().Add(-workflowPayoutStaleLockTimeout).Unix()
+	if _, err := a.db.RecoverStaleWorkflowManagerPayoutLock(r.Context(), workflowID, *userDid, staleBefore, workflowPayoutErrorTimedOut); err != nil {
+		a.logger.Logf("error recovering stale manager payout lock for workflow %s improver %s: %s", workflowID, *userDid, err)
+	}
+
+	reconciled, pendingConfirmation, err := a.reconcileWorkflowManagerPayoutByHash(r.Context(), workflowID, *userDid)
+	if err != nil {
+		a.logger.Logf("error reconciling manager payout by tx hash for workflow %s improver %s: %s", workflowID, *userDid, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	if pendingConfirmation {
+		w.WriteHeader(http.StatusConflict)
+		w.Write([]byte("previous payout transaction is still pending confirmation"))
+		return
+	}
+	if reconciled {
+		w.WriteHeader(http.StatusConflict)
+		w.Write([]byte("payout already complete"))
 		return
 	}
 
@@ -4731,35 +4927,44 @@ func collectWorkflowPayoutTargets(workflow *structs.Workflow) []workflowPayoutTa
 	return targets
 }
 
-func (a *AppService) attemptWorkflowPayoutTransfer(ctx context.Context, amount uint64, walletAddress string) (*big.Int, *big.Int, bool, error) {
+func (a *AppService) attemptWorkflowPayoutTransfer(ctx context.Context, amount uint64, walletAddress string) (*big.Int, *big.Int, bool, string, error) {
 	neededTokens := new(big.Int).SetUint64(amount)
 
 	if a.bot == nil || a.bot.bot == nil {
-		return nil, neededTokens, false, fmt.Errorf("bot service is not configured")
+		return nil, neededTokens, false, "", fmt.Errorf("bot service is not configured")
 	}
 
 	faucetBalanceWei, err := a.bot.bot.Balance()
 	if err != nil {
-		return nil, neededTokens, false, fmt.Errorf("error checking faucet balance: %s", err)
+		return nil, neededTokens, false, "", fmt.Errorf("error checking faucet balance: %s", err)
 	}
 
 	multiplier, err := getTokenMultiplier()
 	if err != nil {
-		return nil, neededTokens, false, fmt.Errorf("error reading token decimals: %s", err)
+		return nil, neededTokens, false, "", fmt.Errorf("error reading token decimals: %s", err)
 	}
 
 	currentTokens := new(big.Int).Div(faucetBalanceWei, multiplier)
 	if currentTokens.Cmp(neededTokens) < 0 {
-		return currentTokens, neededTokens, true, fmt.Errorf("insufficient faucet balance for workflow payout")
+		return currentTokens, neededTokens, true, "", fmt.Errorf("insufficient faucet balance for workflow payout")
 	}
 
-	if err := a.bot.bot.Send(amount, walletAddress); err != nil {
+	txHash, err := a.bot.bot.SubmitTransfer(amount, walletAddress)
+	if err != nil {
 		errLower := strings.ToLower(err.Error())
 		isInsufficient := strings.Contains(errLower, "insufficient")
-		return currentTokens, neededTokens, isInsufficient, err
+		return currentTokens, neededTokens, isInsufficient, txHash, err
 	}
 
-	return currentTokens, neededTokens, false, nil
+	waitCtx, waitCancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer waitCancel()
+	if err := a.waitForWorkflowPayoutTransferConfirmation(waitCtx, txHash, walletAddress, amount); err != nil {
+		errLower := strings.ToLower(err.Error())
+		isInsufficient := strings.Contains(errLower, "insufficient")
+		return currentTokens, neededTokens, isInsufficient, txHash, err
+	}
+
+	return currentTokens, neededTokens, false, txHash, nil
 }
 
 func (a *AppService) sendWorkflowPayoutErrorEmail(
@@ -4885,9 +5090,25 @@ func (a *AppService) processWorkflowSeriesPayouts(ctx context.Context, triggerWo
 		return
 	}
 
+	processCtx, cancel := context.WithTimeout(context.Background(), workflowPayoutProcessingTimeout)
+	defer cancel()
+	ctx = processCtx
+
 	if a.bot == nil || a.bot.bot == nil {
 		a.logger.Logf("workflow payout processing skipped for %s: bot service is not configured", triggerWorkflowID)
 		return
+	}
+
+	staleBefore := time.Now().UTC().Add(-workflowPayoutStaleLockTimeout).Unix()
+	if recoveredSteps, recoveredManagers, err := a.db.RecoverStaleWorkflowPayoutLocksForSeries(ctx, triggerWorkflowID, staleBefore, workflowPayoutErrorTimedOut); err != nil {
+		a.logger.Logf("error recovering stale payout locks before payout processing for %s: %s", triggerWorkflowID, err)
+	} else if recoveredSteps > 0 || recoveredManagers > 0 {
+		a.logger.Logf(
+			"recovered stale payout locks before payout processing for %s: steps=%d managers=%d",
+			triggerWorkflowID,
+			recoveredSteps,
+			recoveredManagers,
+		)
 	}
 
 	if err := a.refreshWorkflowStartAvailabilityAndNotify(ctx); err != nil {
@@ -4936,9 +5157,10 @@ func (a *AppService) processWorkflowSeriesPayouts(ctx context.Context, triggerWo
 					errMsg := workflowPayoutErrorNoImproverAssigned
 					if dbErr := a.db.MarkWorkflowStepPayoutFailed(ctx, target.WorkflowId, target.StepId, errMsg); dbErr != nil {
 						a.logger.Logf("error recording step payout assignment failure for workflow %s step %s: %s", target.WorkflowId, target.StepId, dbErr)
+						return
 					}
 					a.sendWorkflowPayoutErrorEmail(ctx, target, walletAddress, errMsg, nil, nil, false)
-					return
+					continue
 				}
 
 				walletAddress, err = a.db.GetPreferredWorkflowPayoutAddressForUser(ctx, target.ImproverId, false)
@@ -4946,12 +5168,19 @@ func (a *AppService) processWorkflowSeriesPayouts(ctx context.Context, triggerWo
 					errMsg := workflowPayoutErrorNoPayoutWallet
 					if dbErr := a.db.MarkWorkflowStepPayoutFailed(ctx, target.WorkflowId, target.StepId, errMsg); dbErr != nil {
 						a.logger.Logf("error recording step payout wallet failure for workflow %s step %s: %s", target.WorkflowId, target.StepId, dbErr)
+						return
 					}
 					a.sendWorkflowPayoutErrorEmail(ctx, target, walletAddress, fmt.Sprintf("%s Detail: %s", errMsg, err), nil, nil, false)
-					return
+					continue
 				}
 
-				currentBalance, neededBalance, insufficient, transferErr := a.attemptWorkflowPayoutTransfer(ctx, target.Amount, walletAddress)
+				currentBalance, neededBalance, insufficient, txHash, transferErr := a.attemptWorkflowPayoutTransfer(ctx, target.Amount, walletAddress)
+				if strings.TrimSpace(txHash) != "" {
+					if dbErr := a.db.RecordWorkflowStepPayoutTxHash(ctx, target.WorkflowId, target.StepId, txHash); dbErr != nil {
+						a.logger.Logf("error recording step payout tx hash for workflow %s step %s: %s", target.WorkflowId, target.StepId, dbErr)
+						return
+					}
+				}
 				if transferErr != nil {
 					errMsg := workflowPayoutErrorTransferFailed
 					if insufficient {
@@ -4959,9 +5188,10 @@ func (a *AppService) processWorkflowSeriesPayouts(ctx context.Context, triggerWo
 					}
 					if dbErr := a.db.MarkWorkflowStepPayoutFailed(ctx, target.WorkflowId, target.StepId, errMsg); dbErr != nil {
 						a.logger.Logf("error recording step payout transfer failure for workflow %s step %s: %s", target.WorkflowId, target.StepId, dbErr)
+						return
 					}
 					a.sendWorkflowPayoutErrorEmail(ctx, target, walletAddress, fmt.Sprintf("%s Detail: %s", errMsg, transferErr), currentBalance, neededBalance, insufficient)
-					return
+					continue
 				}
 
 				if _, err := a.db.MarkWorkflowStepPaidOut(ctx, target.WorkflowId, target.StepId); err != nil {
@@ -5016,14 +5246,16 @@ func (a *AppService) processWorkflowSeriesPayouts(ctx context.Context, triggerWo
 					if target.IsManager {
 						if dbErr := a.db.MarkWorkflowManagerPayoutFailed(ctx, target.WorkflowId, errMsg); dbErr != nil {
 							a.logger.Logf("error recording manager payout assignment failure for workflow %s: %s", target.WorkflowId, dbErr)
+							return
 						}
 					} else {
 						if dbErr := a.db.MarkWorkflowStepPayoutFailed(ctx, target.WorkflowId, target.StepId, errMsg); dbErr != nil {
 							a.logger.Logf("error recording step payout assignment failure for workflow %s step %s: %s", target.WorkflowId, target.StepId, dbErr)
+							return
 						}
 					}
 					a.sendWorkflowPayoutErrorEmail(ctx, target, walletAddress, errMsg, nil, nil, false)
-					return
+					continue
 				}
 
 				walletAddress, err = a.db.GetPreferredWorkflowPayoutAddressForUser(ctx, target.ImproverId, target.IsManager)
@@ -5032,17 +5264,32 @@ func (a *AppService) processWorkflowSeriesPayouts(ctx context.Context, triggerWo
 					if target.IsManager {
 						if dbErr := a.db.MarkWorkflowManagerPayoutFailed(ctx, target.WorkflowId, errMsg); dbErr != nil {
 							a.logger.Logf("error recording manager payout wallet failure for workflow %s: %s", target.WorkflowId, dbErr)
+							return
 						}
 					} else {
 						if dbErr := a.db.MarkWorkflowStepPayoutFailed(ctx, target.WorkflowId, target.StepId, errMsg); dbErr != nil {
 							a.logger.Logf("error recording step payout wallet failure for workflow %s step %s: %s", target.WorkflowId, target.StepId, dbErr)
+							return
 						}
 					}
 					a.sendWorkflowPayoutErrorEmail(ctx, target, walletAddress, fmt.Sprintf("%s Detail: %s", errMsg, err), nil, nil, false)
-					return
+					continue
 				}
 
-				currentBalance, neededBalance, insufficient, transferErr := a.attemptWorkflowPayoutTransfer(ctx, target.Amount, walletAddress)
+				currentBalance, neededBalance, insufficient, txHash, transferErr := a.attemptWorkflowPayoutTransfer(ctx, target.Amount, walletAddress)
+				if strings.TrimSpace(txHash) != "" {
+					if target.IsManager {
+						if dbErr := a.db.RecordWorkflowManagerPayoutTxHash(ctx, target.WorkflowId, txHash); dbErr != nil {
+							a.logger.Logf("error recording manager payout tx hash for workflow %s: %s", target.WorkflowId, dbErr)
+							return
+						}
+					} else {
+						if dbErr := a.db.RecordWorkflowStepPayoutTxHash(ctx, target.WorkflowId, target.StepId, txHash); dbErr != nil {
+							a.logger.Logf("error recording step payout tx hash for workflow %s step %s: %s", target.WorkflowId, target.StepId, dbErr)
+							return
+						}
+					}
+				}
 				if transferErr != nil {
 					errMsg := workflowPayoutErrorTransferFailed
 					if insufficient {
@@ -5051,14 +5298,16 @@ func (a *AppService) processWorkflowSeriesPayouts(ctx context.Context, triggerWo
 					if target.IsManager {
 						if dbErr := a.db.MarkWorkflowManagerPayoutFailed(ctx, target.WorkflowId, errMsg); dbErr != nil {
 							a.logger.Logf("error recording manager payout transfer failure for workflow %s: %s", target.WorkflowId, dbErr)
+							return
 						}
 					} else {
 						if dbErr := a.db.MarkWorkflowStepPayoutFailed(ctx, target.WorkflowId, target.StepId, errMsg); dbErr != nil {
 							a.logger.Logf("error recording step payout transfer failure for workflow %s step %s: %s", target.WorkflowId, target.StepId, dbErr)
+							return
 						}
 					}
 					a.sendWorkflowPayoutErrorEmail(ctx, target, walletAddress, fmt.Sprintf("%s Detail: %s", errMsg, transferErr), currentBalance, neededBalance, insufficient)
-					return
+					continue
 				}
 
 				if target.IsManager {
@@ -5084,7 +5333,15 @@ func (a *AppService) processWorkflowSeriesPayouts(ctx context.Context, triggerWo
 				return
 			}
 			if !settled {
-				return
+				updatedWorkflow, refreshErr := a.db.GetWorkflowByID(ctx, workflowID)
+				if refreshErr != nil {
+					a.logger.Logf("error refreshing workflow %s after payout processing: %s", workflowID, refreshErr)
+					return
+				}
+				if workflowHasBlockingPendingPayouts(updatedWorkflow) {
+					return
+				}
+				continue
 			}
 		default:
 			// Stop processing here so later workflows in the same series remain held

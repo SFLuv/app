@@ -2543,6 +2543,13 @@ export default function ImproverPage() {
       })
       if (!res.ok) {
         const text = await res.text()
+        if ((text || "").toLowerCase().includes("payout already complete")) {
+          setNotice("Payout was already completed.")
+          setError("")
+          await loadFeed()
+          await refreshDetailWorkflow(workflowId)
+          return
+        }
         throw new Error(text || "Unable to request step payout retry.")
       }
       setNotice("Step payout retry requested.")
@@ -2575,21 +2582,31 @@ export default function ImproverPage() {
     const key = `retry-workflow:${workflow.id}`
     setSubmitting(key)
     try {
+      let alreadyCompletedCount = 0
       for (const step of failedSteps) {
         const res = await authFetch(`/improvers/workflows/${workflow.id}/steps/${step.id}/payout-request`, {
           method: "POST",
         })
         if (!res.ok) {
           const text = await res.text()
+          if ((text || "").toLowerCase().includes("payout already complete")) {
+            alreadyCompletedCount += 1
+            continue
+          }
           throw new Error(text || "Unable to request payout retry.")
         }
       }
 
-      setNotice(
-        failedSteps.length === 1
-          ? "Step payout retry requested."
-          : `${failedSteps.length} payout retries requested.`,
-      )
+      const requestedCount = failedSteps.length - alreadyCompletedCount
+      if (requestedCount <= 0 && alreadyCompletedCount > 0) {
+        setNotice(alreadyCompletedCount === 1 ? "Payout was already completed." : `${alreadyCompletedCount} payouts were already completed.`)
+      } else {
+        setNotice(
+          requestedCount === 1
+            ? "Step payout retry requested."
+            : `${requestedCount} payout retries requested.`,
+        )
+      }
       setError("")
       await loadFeed()
       await refreshDetailWorkflow(workflow.id)

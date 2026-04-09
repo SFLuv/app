@@ -544,6 +544,7 @@ func (s *AppDB) CreateTables() error {
 				manager_bounty BIGINT NOT NULL DEFAULT 0,
 				manager_paid_out_at BIGINT,
 				manager_payout_error TEXT,
+				manager_payout_tx_hash TEXT,
 				manager_payout_last_try_at BIGINT,
 				manager_payout_in_progress BOOLEAN NOT NULL DEFAULT false,
 				manager_retry_requested_at BIGINT,
@@ -1181,6 +1182,9 @@ func (s *AppDB) CreateTables() error {
 			ADD COLUMN IF NOT EXISTS manager_payout_error TEXT;
 
 			ALTER TABLE workflows
+			ADD COLUMN IF NOT EXISTS manager_payout_tx_hash TEXT;
+
+			ALTER TABLE workflows
 			ADD COLUMN IF NOT EXISTS manager_payout_last_try_at BIGINT;
 
 			ALTER TABLE workflows
@@ -1287,6 +1291,7 @@ func (s *AppDB) CreateTables() error {
 			started_at BIGINT,
 			completed_at BIGINT,
 			payout_error TEXT,
+			payout_tx_hash TEXT,
 			payout_last_try_at BIGINT,
 			payout_in_progress BOOLEAN NOT NULL DEFAULT false,
 			retry_requested_at BIGINT,
@@ -1318,6 +1323,9 @@ func (s *AppDB) CreateTables() error {
 
 		ALTER TABLE workflow_steps
 		ADD COLUMN IF NOT EXISTS payout_error TEXT;
+
+		ALTER TABLE workflow_steps
+		ADD COLUMN IF NOT EXISTS payout_tx_hash TEXT;
 
 		ALTER TABLE workflow_steps
 		ADD COLUMN IF NOT EXISTS payout_last_try_at BIGINT;

@@ -7981,6 +7981,7 @@ func (a *AppDB) CompleteWorkflowStep(
 				completed_at = COALESCE(completed_at, unix_now()),
 				bounty = 0,
 				payout_error = NULL,
+				payout_tx_hash = NULL,
 				payout_last_try_at = NULL,
 				payout_in_progress = false,
 				retry_requested_at = NULL,
@@ -8003,6 +8004,7 @@ func (a *AppDB) CompleteWorkflowStep(
 				manager_bounty = 0,
 				manager_paid_out_at = NULL,
 				manager_payout_error = NULL,
+				manager_payout_tx_hash = NULL,
 				manager_payout_last_try_at = NULL,
 				manager_payout_in_progress = false,
 				manager_retry_requested_at = NULL,
@@ -8745,6 +8747,64 @@ func (a *AppDB) ClaimWorkflowManagerPayoutAttempt(ctx context.Context, workflowI
 	return cmd.RowsAffected() > 0, nil
 }
 
+func (a *AppDB) RecordWorkflowStepPayoutTxHash(ctx context.Context, workflowId string, stepId string, txHash string) error {
+	txHash = strings.TrimSpace(txHash)
+	if txHash == "" {
+		return nil
+	}
+	cmd, err := a.db.Exec(ctx, `
+		UPDATE
+			workflow_steps
+		SET
+			payout_tx_hash = $3,
+			updated_at = unix_now()
+		WHERE
+			id = $1
+		AND
+			workflow_id = $2
+		AND
+			status = 'completed';
+	`, stepId, workflowId, txHash)
+	if err != nil {
+		return fmt.Errorf("error recording workflow step payout tx hash: %s", err)
+	}
+	if cmd.RowsAffected() == 0 {
+		return fmt.Errorf("workflow step payout tx hash cannot be recorded")
+	}
+	return nil
+}
+
+func (a *AppDB) RecordWorkflowManagerPayoutTxHash(ctx context.Context, workflowId string, txHash string) error {
+	txHash = strings.TrimSpace(txHash)
+	if txHash == "" {
+		return nil
+	}
+	cmd, err := a.db.Exec(ctx, `
+		UPDATE
+			workflows
+		SET
+			manager_payout_tx_hash = $2,
+			updated_at = unix_now()
+		WHERE
+			id = $1
+		AND
+			status = 'completed'
+		AND
+			manager_bounty > 0
+		AND
+			manager_improver_id IS NOT NULL
+		AND
+			manager_paid_out_at IS NULL;
+	`, workflowId, txHash)
+	if err != nil {
+		return fmt.Errorf("error recording workflow manager payout tx hash: %s", err)
+	}
+	if cmd.RowsAffected() == 0 {
+		return fmt.Errorf("workflow manager payout tx hash cannot be recorded")
+	}
+	return nil
+}
+
 func (a *AppDB) MarkWorkflowStepPayoutFailed(ctx context.Context, workflowId string, stepId string, errorMessage string) error {
 	errorMessage = truncateWorkflowPayoutErrorMessage(errorMessage)
 	cmd, err := a.db.Exec(ctx, `
@@ -8824,7 +8884,7 @@ func (a *AppDB) MarkWorkflowStepPaidOut(ctx context.Context, workflowId string, 
 		AND
 			status = 'completed'
 		AND
-			(payout_in_progress = true OR bounty = 0);
+			(payout_in_progress = true OR bounty = 0 OR COALESCE(NULLIF(TRIM(payout_tx_hash), ''), '') <> '');
 	`, stepId, workflowId)
 	if err != nil {
 		return false, fmt.Errorf("error marking workflow step paid out: %s", err)
@@ -8855,7 +8915,7 @@ func (a *AppDB) MarkWorkflowManagerPaidOut(ctx context.Context, workflowId strin
 		AND
 			manager_paid_out_at IS NULL
 		AND
-			manager_payout_in_progress = true;
+			(manager_payout_in_progress = true OR COALESCE(NULLIF(TRIM(manager_payout_tx_hash), ''), '') <> '');
 	`, workflowId)
 	if err != nil {
 		return false, fmt.Errorf("error marking workflow manager paid out: %s", err)
@@ -9019,6 +9079,32 @@ func (a *AppDB) RequestWorkflowStepPayoutRetry(ctx context.Context, workflowId s
 	return nil
 }
 
+func (a *AppDB) GetWorkflowStepRecordedPayoutTxHash(ctx context.Context, workflowId string, stepId string, improverId string) (uint64, string, error) {
+	var bounty uint64
+	var txHash string
+	err := a.db.QueryRow(ctx, `
+		SELECT
+			bounty,
+			COALESCE(payout_tx_hash, '')
+		FROM
+			workflow_steps
+		WHERE
+			id = $1
+		AND
+			workflow_id = $2
+		AND
+			assigned_improver_id = $3
+		AND
+			status = 'completed'
+		AND
+			bounty > 0;
+	`, stepId, workflowId, improverId).Scan(&bounty, &txHash)
+	if err != nil {
+		return 0, "", err
+	}
+	return bounty, strings.TrimSpace(txHash), nil
+}
+
 func (a *AppDB) RequestWorkflowManagerPayoutRetry(ctx context.Context, workflowId string, improverId string) error {
 	cmd, err := a.db.Exec(ctx, `
 		UPDATE
@@ -9049,6 +9135,261 @@ func (a *AppDB) RequestWorkflowManagerPayoutRetry(ctx context.Context, workflowI
 		return fmt.Errorf("no failed manager payout found for retry")
 	}
 	return nil
+}
+
+func (a *AppDB) GetWorkflowManagerRecordedPayoutTxHash(ctx context.Context, workflowId string, improverId string) (uint64, string, error) {
+	var bounty uint64
+	var txHash string
+	err := a.db.QueryRow(ctx, `
+		SELECT
+			manager_bounty,
+			COALESCE(manager_payout_tx_hash, '')
+		FROM
+			workflows
+		WHERE
+			id = $1
+		AND
+			manager_improver_id = $2
+		AND
+			status = 'completed'
+		AND
+			manager_bounty > 0
+		AND
+			manager_paid_out_at IS NULL;
+	`, workflowId, improverId).Scan(&bounty, &txHash)
+	if err != nil {
+		return 0, "", err
+	}
+	return bounty, strings.TrimSpace(txHash), nil
+}
+
+func (a *AppDB) RecoverStaleWorkflowPayoutLocksForImprover(ctx context.Context, improverId string, staleBefore int64, errorMessage string) (int64, int64, error) {
+	errorMessage = truncateWorkflowPayoutErrorMessage(errorMessage)
+
+	stepCmd, err := a.db.Exec(ctx, `
+		UPDATE
+			workflow_steps
+		SET
+			payout_error = CASE
+				WHEN COALESCE(NULLIF(TRIM(payout_error), ''), '') <> '' THEN payout_error
+				ELSE $2
+			END,
+			payout_in_progress = false,
+			retry_requested_at = NULL,
+			retry_requested_by = NULL,
+			updated_at = unix_now()
+		WHERE
+			assigned_improver_id = $1
+		AND
+			status = 'completed'
+		AND
+			bounty > 0
+		AND
+			payout_in_progress = true
+		AND
+			COALESCE(payout_last_try_at, 0) > 0
+		AND
+			payout_last_try_at <= $3;
+	`, improverId, errorMessage, staleBefore)
+	if err != nil {
+		return 0, 0, fmt.Errorf("error recovering stale workflow step payout locks: %s", err)
+	}
+
+	managerCmd, err := a.db.Exec(ctx, `
+		UPDATE
+			workflows
+		SET
+			manager_payout_error = CASE
+				WHEN COALESCE(NULLIF(TRIM(manager_payout_error), ''), '') <> '' THEN manager_payout_error
+				ELSE $2
+			END,
+			manager_payout_in_progress = false,
+			manager_retry_requested_at = NULL,
+			manager_retry_requested_by = NULL,
+			updated_at = unix_now()
+		WHERE
+			manager_improver_id = $1
+		AND
+			status = 'completed'
+		AND
+			manager_bounty > 0
+		AND
+			manager_paid_out_at IS NULL
+		AND
+			manager_payout_in_progress = true
+		AND
+			COALESCE(manager_payout_last_try_at, 0) > 0
+		AND
+			manager_payout_last_try_at <= $3;
+	`, improverId, errorMessage, staleBefore)
+	if err != nil {
+		return 0, 0, fmt.Errorf("error recovering stale workflow manager payout locks: %s", err)
+	}
+
+	return stepCmd.RowsAffected(), managerCmd.RowsAffected(), nil
+}
+
+func (a *AppDB) RecoverStaleWorkflowStepPayoutLock(ctx context.Context, workflowId string, stepId string, improverId string, staleBefore int64, errorMessage string) (bool, error) {
+	errorMessage = truncateWorkflowPayoutErrorMessage(errorMessage)
+	cmd, err := a.db.Exec(ctx, `
+		UPDATE
+			workflow_steps
+		SET
+			payout_error = CASE
+				WHEN COALESCE(NULLIF(TRIM(payout_error), ''), '') <> '' THEN payout_error
+				ELSE $4
+			END,
+			payout_in_progress = false,
+			retry_requested_at = NULL,
+			retry_requested_by = NULL,
+			updated_at = unix_now()
+		WHERE
+			id = $1
+		AND
+			workflow_id = $2
+		AND
+			assigned_improver_id = $3
+		AND
+			status = 'completed'
+		AND
+			bounty > 0
+		AND
+			payout_in_progress = true
+		AND
+			COALESCE(payout_last_try_at, 0) > 0
+		AND
+			payout_last_try_at <= $5;
+	`, stepId, workflowId, improverId, errorMessage, staleBefore)
+	if err != nil {
+		return false, fmt.Errorf("error recovering stale workflow step payout lock: %s", err)
+	}
+	return cmd.RowsAffected() > 0, nil
+}
+
+func (a *AppDB) RecoverStaleWorkflowManagerPayoutLock(ctx context.Context, workflowId string, improverId string, staleBefore int64, errorMessage string) (bool, error) {
+	errorMessage = truncateWorkflowPayoutErrorMessage(errorMessage)
+	cmd, err := a.db.Exec(ctx, `
+		UPDATE
+			workflows
+		SET
+			manager_payout_error = CASE
+				WHEN COALESCE(NULLIF(TRIM(manager_payout_error), ''), '') <> '' THEN manager_payout_error
+				ELSE $3
+			END,
+			manager_payout_in_progress = false,
+			manager_retry_requested_at = NULL,
+			manager_retry_requested_by = NULL,
+			updated_at = unix_now()
+		WHERE
+			id = $1
+		AND
+			manager_improver_id = $2
+		AND
+			status = 'completed'
+		AND
+			manager_bounty > 0
+		AND
+			manager_paid_out_at IS NULL
+		AND
+			manager_payout_in_progress = true
+		AND
+			COALESCE(manager_payout_last_try_at, 0) > 0
+		AND
+			manager_payout_last_try_at <= $4;
+	`, workflowId, improverId, errorMessage, staleBefore)
+	if err != nil {
+		return false, fmt.Errorf("error recovering stale workflow manager payout lock: %s", err)
+	}
+	return cmd.RowsAffected() > 0, nil
+}
+
+func (a *AppDB) RecoverStaleWorkflowPayoutLocksForSeries(ctx context.Context, triggerWorkflowId string, staleBefore int64, errorMessage string) (int64, int64, error) {
+	errorMessage = truncateWorkflowPayoutErrorMessage(errorMessage)
+
+	stepCmd, err := a.db.Exec(ctx, `
+		WITH trigger_series AS (
+			SELECT
+				series_id
+			FROM
+				workflows
+			WHERE
+				id = $1
+		)
+		UPDATE
+			workflow_steps ws
+		SET
+			payout_error = CASE
+				WHEN COALESCE(NULLIF(TRIM(ws.payout_error), ''), '') <> '' THEN ws.payout_error
+				ELSE $3
+			END,
+			payout_in_progress = false,
+			retry_requested_at = NULL,
+			retry_requested_by = NULL,
+			updated_at = unix_now()
+		FROM
+			workflows w,
+			trigger_series ts
+		WHERE
+			ws.workflow_id = w.id
+		AND
+			w.series_id = ts.series_id
+		AND
+			ws.status = 'completed'
+		AND
+			ws.bounty > 0
+		AND
+			ws.payout_in_progress = true
+		AND
+			COALESCE(ws.payout_last_try_at, 0) > 0
+		AND
+			ws.payout_last_try_at <= $2;
+	`, triggerWorkflowId, staleBefore, errorMessage)
+	if err != nil {
+		return 0, 0, fmt.Errorf("error recovering stale workflow step payout locks for series: %s", err)
+	}
+
+	managerCmd, err := a.db.Exec(ctx, `
+		WITH trigger_series AS (
+			SELECT
+				series_id
+			FROM
+				workflows
+			WHERE
+				id = $1
+		)
+		UPDATE
+			workflows w
+		SET
+			manager_payout_error = CASE
+				WHEN COALESCE(NULLIF(TRIM(w.manager_payout_error), ''), '') <> '' THEN w.manager_payout_error
+				ELSE $3
+			END,
+			manager_payout_in_progress = false,
+			manager_retry_requested_at = NULL,
+			manager_retry_requested_by = NULL,
+			updated_at = unix_now()
+		FROM
+			trigger_series ts
+		WHERE
+			w.series_id = ts.series_id
+		AND
+			w.status = 'completed'
+		AND
+			w.manager_bounty > 0
+		AND
+			w.manager_paid_out_at IS NULL
+		AND
+			w.manager_payout_in_progress = true
+		AND
+			COALESCE(w.manager_payout_last_try_at, 0) > 0
+		AND
+			w.manager_payout_last_try_at <= $2;
+	`, triggerWorkflowId, staleBefore, errorMessage)
+	if err != nil {
+		return 0, 0, fmt.Errorf("error recovering stale workflow manager payout locks for series: %s", err)
+	}
+
+	return stepCmd.RowsAffected(), managerCmd.RowsAffected(), nil
 }
 
 func (a *AppDB) CountEligibleVoters(ctx context.Context) (int, error) {
