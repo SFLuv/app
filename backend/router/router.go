@@ -3,7 +3,9 @@ package router
 import (
 	"context"
 	"net/http"
+	"net/url"
 	"os"
+	"strings"
 
 	"github.com/SFLuv/app/backend/handlers"
 	"github.com/go-chi/chi/v5"
@@ -13,12 +15,80 @@ import (
 	m "github.com/SFLuv/app/backend/utils/middleware"
 )
 
+func isProduction() bool {
+	return strings.EqualFold(strings.TrimSpace(os.Getenv("IN_PRODUCTION")), "true")
+}
+
+func parseOrigins(value string) []string {
+	entries := strings.Split(value, ",")
+	origins := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		trimmed := strings.TrimSpace(entry)
+		if trimmed == "" {
+			continue
+		}
+		if parsed, err := url.Parse(trimmed); err == nil && parsed.Scheme != "" && parsed.Host != "" {
+			origins = append(origins, parsed.Scheme+"://"+parsed.Host)
+			continue
+		}
+		origins = append(origins, trimmed)
+	}
+	return origins
+}
+
+func appendUnique(values []string, additions ...string) []string {
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		seen[value] = struct{}{}
+	}
+
+	for _, addition := range additions {
+		trimmed := strings.TrimSpace(addition)
+		if trimmed == "" {
+			continue
+		}
+		if parsed, err := url.Parse(trimmed); err == nil && parsed.Scheme != "" && parsed.Host != "" {
+			trimmed = parsed.Scheme + "://" + parsed.Host
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		values = append(values, trimmed)
+		seen[trimmed] = struct{}{}
+	}
+
+	return values
+}
+
+func allowedOrigins() []string {
+	if configured := parseOrigins(os.Getenv("CORS_ALLOWED_ORIGINS")); len(configured) > 0 {
+		return configured
+	}
+
+	origins := []string{}
+	if appBaseURL := strings.TrimSpace(os.Getenv("APP_BASE_URL")); appBaseURL != "" {
+		origins = appendUnique(origins, appBaseURL)
+	}
+
+	if !isProduction() {
+		origins = appendUnique(
+			origins,
+			"http://localhost:3000",
+			"http://127.0.0.1:3000",
+			"https://localhost:3000",
+			"https://127.0.0.1:3000",
+		)
+	}
+
+	return origins
+}
+
 func New(s *handlers.BotService, a *handlers.AppService, p *handlers.PonderService) *chi.Mux {
 	r := chi.NewRouter()
 
 	r.Use(middleware.Logger)
 	r.Use(cors.Handler(cors.Options{
-		AllowedOrigins:   []string{"*"},
+		AllowedOrigins:   allowedOrigins(),
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token", "Access-Token", "X-Admin-Key"},
 		ExposedHeaders:   []string{"Link"},
