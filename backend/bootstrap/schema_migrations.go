@@ -129,6 +129,23 @@ var schemaMigrations = []SchemaMigration{
 			return nil
 		},
 	},
+	{
+		Version:     "1.3",
+		Description: "track workflow payout transaction hashes for payout reconciliation",
+		Apply: func(ctx context.Context, pools *DBPools, appLogger *logger.LogCloser) error {
+			if _, err := pools.App.Exec(ctx, `
+				ALTER TABLE workflows
+				ADD COLUMN IF NOT EXISTS manager_payout_tx_hash TEXT;
+
+				ALTER TABLE workflow_steps
+				ADD COLUMN IF NOT EXISTS payout_tx_hash TEXT;
+			`); err != nil {
+				return err
+			}
+
+			return nil
+		},
+	},
 }
 
 type versionTarget struct {
