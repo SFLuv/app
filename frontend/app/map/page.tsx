@@ -8,6 +8,7 @@ import { LocationModal } from "@/components/locations/location-modal"
 import { defaultLocation } from "@/data/mock-merchants"
 import type { UserLocation } from "@/types/merchant"
 import { useLocation } from "@/context/LocationProvider"
+import { useApp } from "@/context/AppProvider"
 import { Location } from "@/types/location"
 import { usePathname, useRouter, useSearchParams } from "next/navigation"
 import { List, Map as MapIcon } from "lucide-react"
@@ -27,7 +28,9 @@ const LocationMapPageContent = memo(function LocationMapPageContent() {
   const [userLocation, setUserLocation] = useState<UserLocation>(defaultLocation)
   const [isInitialLoading, setIsInitialLoading] = useState(true)
   const { mapLocations, getMapLocations } = useLocation()
+  const { status } = useApp()
   const previousTabRef = useRef(activeTab)
+  const isPayEnabled = status === "authenticated"
 
   useEffect(() => {
     let isMounted = true
@@ -66,6 +69,7 @@ const LocationMapPageContent = memo(function LocationMapPageContent() {
   }
 
   const handlePayLocation = (location: Location) => {
+    if (!isPayEnabled) return
     const payToAddress = (location.pay_to_address || "").trim()
     if (!isAddress(payToAddress)) return
 
@@ -150,6 +154,7 @@ const LocationMapPageContent = memo(function LocationMapPageContent() {
               selectedLocationType={selectedLocationType}
               setSelectedLocationType={setSelectedLocationType}
               onSelectLocation={handleSelectLocation}
+              isPayEnabled={isPayEnabled}
               onPayLocation={handlePayLocation}
               userLocation={userLocation}
               setUserLocation={setUserLocation}
@@ -162,6 +167,7 @@ const LocationMapPageContent = memo(function LocationMapPageContent() {
         location={selectedLocation}
         isOpen={isModalOpen}
         onClose={handleCloseModal}
+        isPayEnabled={isPayEnabled}
         onPayLocation={handlePayLocation}
       />
     </div>

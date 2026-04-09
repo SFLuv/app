@@ -19,6 +19,7 @@ interface ListViewProps {
   selectedLocationType: string
   setSelectedLocationType: (type: string) => void
   onSelectLocation: (location: Location) => void
+  isPayEnabled: boolean
   onPayLocation: (location: Location) => void
   userLocation: UserLocation
   setUserLocation: (userlocation: UserLocation) => void
@@ -29,6 +30,7 @@ export function ListView({
   selectedLocationType,
   setSelectedLocationType,
   onSelectLocation,
+  isPayEnabled,
   onPayLocation,
   userLocation,
 }: ListViewProps) {
@@ -141,7 +143,7 @@ export function ListView({
         ) : (
           paginatedLocations.map(location => {
             const payToAddress = (location.pay_to_address || "").trim()
-            const canPay = isAddress(payToAddress)
+            const canPay = isPayEnabled && isAddress(payToAddress)
 
             return (
               <Card

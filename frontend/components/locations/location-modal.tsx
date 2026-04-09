@@ -14,15 +14,16 @@ interface LocationModalProps {
   location: Location | null
   isOpen: boolean
   onClose: () => void
+  isPayEnabled: boolean
   onPayLocation: (location: Location) => void
 }
 
-export function LocationModal({ location, isOpen, onClose, onPayLocation }: LocationModalProps) {
+export function LocationModal({ location, isOpen, onClose, isPayEnabled, onPayLocation }: LocationModalProps) {
   const [activeTab, setActiveTab] = useState("info")
 
   if (!location) return null
 
-  const canPay = isAddress((location.pay_to_address || "").trim())
+  const canPay = isPayEnabled && isAddress((location.pay_to_address || "").trim())
 
   const renderStars = (rating: number) => {
     return Array(5)

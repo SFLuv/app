@@ -17,10 +17,9 @@ type RedirectStage =
   | "redirecting"
   | "error"
 
-// Build the query-string body shared by both Citizen Wallet target URLs
-// (custom scheme + universal link). CW's router accepts `sendto`, `tipTo`,
-// and `alias` at the top-level path; Flutter's `parseSendtoUrl` lifts these
-// straight into the native send screen.
+// Build the query-string body shared by Citizen Wallet handoff URLs. CW's
+// router accepts `sendto`, `tipTo`, and `alias` at the top-level path;
+// Flutter's `parseSendtoUrl` lifts these straight into the native send screen.
 const buildCwSendQuery = (to: string, tipTo: string): string => {
   const alias = COMMUNITY.community.alias
   const params = new URLSearchParams()
@@ -34,14 +33,6 @@ const buildCwSendQuery = (to: string, tipTo: string): string => {
 
 const buildCwUniversalLink = (to: string, tipTo: string): string =>
   `https://app.citizenwallet.xyz/?${buildCwSendQuery(to, tipTo)}`
-
-// citizenwallet:// custom scheme. Used by the user-gated "Pay with
-// CitizenWallet" button — when the app is installed iOS/Android hand off
-// silently; when it isn't, iOS shows the "Cannot Open Page" dialog. Because
-// this only fires on explicit user click (not auto-load), users without CW
-// don't see the prompt unless they ask for it.
-const buildCwCustomSchemeLink = (to: string, tipTo: string): string =>
-  `citizenwallet:///?${buildCwSendQuery(to, tipTo)}`
 
 export default function RedirectPage() {
   const router = useRouter()
@@ -175,8 +166,8 @@ export default function RedirectPage() {
   }, [mode, to, tipTo, sigAuthAccount])
 
   // Auth-status gate: while we're in "checking" wait for Privy to resolve,
-  // then either skip the choose screen entirely (already authenticated) or
-  // surface it for unauthenticated users so they can pick their wallet.
+  // then either skip the chooser entirely (already authenticated) or surface
+  // the SFLuv wallet continuation button.
   useEffect(() => {
     if (stage !== "checking") return
     if (status === "loading") return
@@ -271,12 +262,6 @@ export default function RedirectPage() {
     }
   }
 
-  const handlePayWithCitizenWallet = () => {
-    if (!to) return
-    setError(null)
-    window.location.href = buildCwCustomSchemeLink(to, tipTo)
-  }
-
   const renderBody = () => {
     if (stage === "error") {
       return (
@@ -311,13 +296,6 @@ export default function RedirectPage() {
               onClick={handlePayWithSfluv}
             >
               Pay with SFLuv Wallet
-            </Button>
-            <Button
-              variant="ghost"
-              className="h-9 w-full text-sm text-muted-foreground"
-              onClick={handlePayWithCitizenWallet}
-            >
-              Pay with CitizenWallet
             </Button>
           </div>
         </div>
