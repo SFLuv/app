@@ -323,7 +323,6 @@ export default function ProposerPage() {
   const [proposerOptions, setProposerOptions] = useState<Proposer[]>([])
   const [deletionProposals, setDeletionProposals] = useState<WorkflowDeletionProposal[]>([])
   const [workflowTotal, setWorkflowTotal] = useState(0)
-  const [createDataLoading, setCreateDataLoading] = useState(false)
   const [createDataLoaded, setCreateDataLoaded] = useState(false)
   const [workflowListLoading, setWorkflowListLoading] = useState(false)
   const [workflowListLoaded, setWorkflowListLoaded] = useState(false)
@@ -485,7 +484,6 @@ export default function ProposerPage() {
 
       const shouldSurfaceError = mode === "blocking" || !createDataLoadedRef.current
       const request = (async () => {
-        setCreateDataLoading(true)
         try {
           const [templatesRes, credentialTypesRes, supervisorsRes] = await Promise.all([
             authFetch("/proposers/workflow-templates"),
@@ -523,7 +521,6 @@ export default function ProposerPage() {
           createDataLoadedRef.current = true
           createDataRequestRef.current = null
           setCreateDataLoaded(true)
-          setCreateDataLoading(false)
         }
       })()
 
@@ -2335,10 +2332,7 @@ export default function ProposerPage() {
           {!createDataLoaded ? (
             <Card>
               <CardContent className="flex min-h-[320px] items-center justify-center">
-                <div className="flex items-center gap-3 text-sm text-muted-foreground">
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  <span>Loading workflow form data...</span>
-                </div>
+                <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
               </CardContent>
             </Card>
           ) : (
@@ -2352,13 +2346,6 @@ export default function ProposerPage() {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
-              {createDataLoading && (
-                <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  <span>Refreshing workflow form data...</span>
-                </div>
-              )}
-
               <div className="flex flex-wrap items-center gap-3">
                 <Badge variant="outline">Draft Total Bounty: {totalDraftBounty} SFLuv</Badge>
                 <Button onClick={submitWorkflow} disabled={submitting}>
@@ -3744,19 +3731,9 @@ export default function ProposerPage() {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              {workflowListLoading && workflowListLoaded && (
-                <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  <span>Refreshing workflows...</span>
-                </div>
-              )}
-
               {!workflowListLoaded ? (
                 <div className="flex min-h-[220px] items-center justify-center">
-                  <div className="flex items-center gap-3 text-sm text-muted-foreground">
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                    <span>{isAdminUser ? "Loading workflows..." : "Loading your workflows..."}</span>
-                  </div>
+                  <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
                 </div>
               ) : (
                 <>
