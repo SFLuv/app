@@ -11,31 +11,48 @@ import TransactionProvider from "./TransactionProvider"
 
 const Providers = ({ children }: { children: ReactNode }) => {
   const { resolvedTheme } = useTheme()
+  const customOAuthRedirectUrl =
+    process.env.NEXT_PUBLIC_PRIVY_CUSTOM_OAUTH_REDIRECT_URL?.trim() || undefined
+  const loginMethods = useMemo(() => {
+    const methods = ["email", "google"] as Array<"email" | "google" | "passkey">
+    if (process.env.NEXT_PUBLIC_PRIVY_ENABLE_PASSKEY_LOGIN?.trim().toLowerCase() === "true") {
+      methods.push("passkey")
+    }
+    return methods
+  }, [])
+
+  const privyConfig = useMemo(() => ({
+    loginMethods,
+    appearance: {
+      theme: resolvedTheme as any || "light",
+      accentColor: "#eb6c6c",
+      logo: "/icon.png",
+      loginMessage: "Connect to the SFLuv Dashboard!"
+    },
+    captchaEnabled: true,
+    mfa: {
+      noPromptOnMfaRequired: false,
+    },
+    customOAuthRedirectUrl,
+    externalWallets: {
+      coinbaseWallet: {
+        connectionOptions: "eoaOnly"
+      }
+    },
+    embeddedWallets: {
+      ethereum: {
+          createOnLogin: 'users-without-wallets',
+      },
+      showWalletUIs: false
+    },
+    defaultChain: CHAIN,
+    supportedChains: [CHAIN]
+  }), [customOAuthRedirectUrl, loginMethods, resolvedTheme])
+
   return (
     <PrivyProvider
       appId={PRIVY_ID}
-      config={{
-        loginMethods: ["email", "google"],
-        appearance: {
-          theme: resolvedTheme as any || "light",
-          accentColor: "#eb6c6c",
-          logo: "/icon.png",
-          loginMessage: "Connect to the SFLuv Dashboard!"
-        },
-        externalWallets: {
-          coinbaseWallet: {
-            connectionOptions: "eoaOnly"
-          }
-        },
-        embeddedWallets: {
-          ethereum: {
-              createOnLogin: 'users-without-wallets',
-          },
-          showWalletUIs: false
-        },
-        defaultChain: CHAIN,
-        supportedChains: [CHAIN]
-      }}
+      config={privyConfig}
     >
       <AppProvider>
         <ContactsProvider>
