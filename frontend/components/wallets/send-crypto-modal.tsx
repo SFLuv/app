@@ -50,7 +50,6 @@ type SendStep =
   | "confirm"
   | "sending"
   | "success"
-  | "tip_prompt"
   | "tip_sending"
   | "tip_success"
   | "error";
@@ -451,12 +450,14 @@ export function SendCryptoModal({
     memo,
     onSuccess,
     successToast,
+    failureMessage = "Transaction failed. Please try again.",
   }: {
     recipient: string;
     amount: string;
     memo?: string;
-    onSuccess: (receiptHash: Hash) => void;
+    onSuccess: (receiptHash: Hash) => void | Promise<void>;
     successToast: string;
+    failureMessage?: string;
   }) => {
     try {
       const amountWei = toAmountWei(amount);
@@ -473,20 +474,69 @@ export function SendCryptoModal({
           await saveTransactionMemo(receipt.hash);
         }
         setHash(receipt.hash as Hash);
-        onSuccess(receipt.hash as Hash);
         toast({
           title: "Transaction Sent",
           description: successToast,
         });
+        await onSuccess(receipt.hash as Hash);
         return;
       }
 
       setStep("error");
-      setError("Transaction failed. Please try again.");
+      setError(failureMessage);
     } catch {
       setStep("error");
-      setError("Transaction failed. Please try again.");
+      setError(failureMessage);
     }
+  };
+
+  const getConfiguredTipPrompt = (): TipPromptState | null => {
+    if (!tipPrompt) return null;
+
+    const tipAmount = tipPrompt.amount.trim();
+    if (!tipAmount) return null;
+
+    const tipAmountNumber = Number.parseFloat(tipAmount);
+    const baseAmountNumber = Number.parseFloat(formData.amount);
+    if (!Number.isFinite(tipAmountNumber) || tipAmountNumber <= 0) {
+      setError("Tip amount must be greater than 0.");
+      return null;
+    }
+    if (!Number.isFinite(baseAmountNumber) || baseAmountNumber <= 0) {
+      setError("Amount must be greater than 0.");
+      return null;
+    }
+    if (tipAmountNumber > Math.max(balance - baseAmountNumber, 0)) {
+      setError("Insufficient balance for this tip.");
+      return null;
+    }
+
+    return {
+      ...tipPrompt,
+      amount: tipAmount,
+    };
+  };
+
+  const finalizePrimarySend = async (currentTipPrompt: TipPromptState | null) => {
+    if (!currentTipPrompt) {
+      setStep("success");
+      return;
+    }
+
+    setTipPrompt(currentTipPrompt);
+    setStep("tip_sending");
+    await executeSend({
+      recipient: currentTipPrompt.tipToAddress,
+      amount: currentTipPrompt.amount,
+      successToast: `Successfully sent a ${currentTipPrompt.amount} ${SYMBOL} tip to ${currentTipPrompt.merchantName}.`,
+      failureMessage: "Main payment sent, but the tip failed. Please try again.",
+      onSuccess: async () => {
+        setTipPrompt((existing) =>
+          existing ? { ...existing, amount: currentTipPrompt.amount } : currentTipPrompt,
+        );
+        setStep("tip_success");
+      },
+    });
   };
 
   const findPendingSubmissionId = async (
@@ -607,15 +657,18 @@ export function SendCryptoModal({
       setW9Email(email);
       setError("");
       setStep("sending");
-      const tipPromptState = resolveTipPrompt();
+      const configuredTipPrompt = getConfiguredTipPrompt();
+      if (tipPrompt && !configuredTipPrompt) {
+        setStep("confirm");
+        return;
+      }
       await executeSend({
         recipient: formData.recipient,
         amount: formData.amount,
         memo: formData.memo,
         successToast: `Successfully sent ${formData.amount} ${SYMBOL} to ${formData.recipient.slice(0, 6)}...${formData.recipient.slice(-4)}`,
-        onSuccess: () => {
-          setTipPrompt(tipPromptState);
-          setStep("success");
+        onSuccess: async () => {
+          await finalizePrimarySend(configuredTipPrompt);
         },
       });
     } catch (err) {
@@ -794,6 +847,18 @@ export function SendCryptoModal({
       setFormData((prev) => ({ ...prev, recipient: normalizedRecipient }));
     }
 
+    const tipPromptState = resolveTipPrompt();
+    if (!tipPromptState) {
+      setTipPrompt(null);
+    } else {
+      setTipPrompt((current) => ({
+        ...tipPromptState,
+        amount:
+          current?.tipToAddress === tipPromptState.tipToAddress
+            ? current.amount
+            : "",
+      }));
+    }
     setStep("confirm");
   };
 
@@ -820,6 +885,10 @@ export function SendCryptoModal({
     setW9Email(null);
     setW9EmailInput("");
     setError("");
+    const configuredTipPrompt = getConfiguredTipPrompt();
+    if (tipPrompt && !configuredTipPrompt) {
+      return;
+    }
 
     setStep("sending");
 
@@ -869,15 +938,13 @@ export function SendCryptoModal({
       }
     }
 
-    const tipPromptState = resolveTipPrompt();
     await executeSend({
       recipient: normalizedRecipient,
       amount: formData.amount,
       memo: formData.memo,
       successToast: `Successfully sent ${formData.amount} ${SYMBOL} to ${normalizedRecipient.slice(0, 6)}...${normalizedRecipient.slice(-4)}`,
-      onSuccess: () => {
-        setTipPrompt(tipPromptState);
-        setStep("success");
+      onSuccess: async () => {
+        await finalizePrimarySend(configuredTipPrompt);
       },
     });
   };
@@ -922,59 +989,9 @@ export function SendCryptoModal({
       setLinkProvidedTipTo("");
       setLinkProvidedMerchantName("");
       scanLockedRef.current = false;
+      setTipPrompt(null);
     }
     setStep("form");
-  };
-
-  const handleOpenTipPrompt = () => {
-    if (!tipPrompt) {
-      handleClose();
-      return;
-    }
-    setError("");
-    setStep("tip_prompt");
-  };
-
-  const handleSkipTip = () => {
-    handleClose();
-  };
-
-  const handleSendTip = async () => {
-    if (!tipPrompt) {
-      handleClose();
-      return;
-    }
-
-    const tipAmount = tipPrompt.amount.trim();
-    if (!tipAmount) {
-      setError("Enter a tip amount to continue.");
-      return;
-    }
-
-    const tipAmountNumber = Number.parseFloat(tipAmount);
-    const baseAmountNumber = Number.parseFloat(formData.amount);
-    if (!Number.isFinite(tipAmountNumber) || tipAmountNumber <= 0) {
-      setError("Tip amount must be greater than 0.");
-      return;
-    }
-    if (tipAmountNumber > Math.max(balance - baseAmountNumber, 0)) {
-      setError("Insufficient balance for this tip.");
-      return;
-    }
-
-    setError("");
-    setStep("tip_sending");
-    await executeSend({
-      recipient: tipPrompt.tipToAddress,
-      amount: tipAmount,
-      successToast: `Successfully sent a ${tipAmount} ${SYMBOL} tip to ${tipPrompt.merchantName}.`,
-      onSuccess: () => {
-        setTipPrompt((current) =>
-          current ? { ...current, amount: tipAmount } : current,
-        );
-        setStep("tip_success");
-      },
-    });
   };
 
   const shortenAddress = (address: string, start = 6, end = 4) => {
@@ -1290,6 +1307,46 @@ export function SendCryptoModal({
                       className="h-10"
                     />
                   </div>
+
+                  {tipPrompt && (
+                    <div className="space-y-2 rounded-xl border bg-background/80 p-3">
+                      <Label
+                        htmlFor="confirm-tip-amount"
+                        className="text-[11px] uppercase tracking-wide text-muted-foreground"
+                      >
+                        Optional Tip
+                      </Label>
+                      <div>
+                        <p className="text-sm font-semibold leading-tight">
+                          {tipPrompt.merchantName
+                            ? `Tip ${tipPrompt.merchantName}`
+                            : "Tip this merchant"}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          Sent as a separate transfer to the merchant&apos;s tipping wallet.
+                        </p>
+                      </div>
+                      <div className="relative">
+                        <Input
+                          id="confirm-tip-amount"
+                          type="number"
+                          step="0.00000001"
+                          min="0"
+                          placeholder="0.00"
+                          value={tipPrompt.amount}
+                          onChange={(e) =>
+                            setTipPrompt((current) =>
+                              current ? { ...current, amount: e.target.value } : current,
+                            )
+                          }
+                          className="h-10 pr-16"
+                        />
+                        <div className="absolute right-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground font-medium">
+                          {SYMBOL}
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </CardContent>
               </Card>
             ) : (
@@ -1347,6 +1404,41 @@ export function SendCryptoModal({
                       <p className="text-sm break-words">{formData.memo}</p>
                     </div>
                   )}
+
+                  {tipPrompt && (
+                    <div className="space-y-2 rounded-xl border bg-background/80 p-3">
+                      <p className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                        Optional Tip
+                      </p>
+                      <p className="text-sm font-semibold leading-tight">
+                        {tipPrompt.merchantName
+                          ? `Tip ${tipPrompt.merchantName}`
+                          : "Tip this merchant"}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        Sent as a separate transfer to the merchant&apos;s tipping wallet.
+                      </p>
+                      <div className="relative">
+                        <Input
+                          id="confirm-tip-amount-manual"
+                          type="number"
+                          step="0.00000001"
+                          min="0"
+                          placeholder="0.00"
+                          value={tipPrompt.amount}
+                          onChange={(e) =>
+                            setTipPrompt((current) =>
+                              current ? { ...current, amount: e.target.value } : current,
+                            )
+                          }
+                          className="h-10 pr-16"
+                        />
+                        <div className="absolute right-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground font-medium">
+                          {SYMBOL}
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </CardContent>
               </Card>
             )}
@@ -1367,7 +1459,7 @@ export function SendCryptoModal({
             >
               <Button onClick={handleConfirm} className="h-11 w-full">
                 <Send className="h-4 w-4 mr-2" />
-                Send
+                {tipPrompt?.amount.trim() ? "Send Payment and Tip" : "Send"}
               </Button>
               <Button
                 variant="outline"
@@ -1432,91 +1524,9 @@ export function SendCryptoModal({
                 </div>
               </div>
             </div>
-            {tipPrompt ? (
-              <div className="flex flex-col gap-3">
-                <Button onClick={handleOpenTipPrompt} className="w-full h-11">
-                  Continue
-                </Button>
-                <Button
-                  variant="outline"
-                  onClick={handleSkipTip}
-                  className="w-full h-11 bg-transparent"
-                >
-                  Done
-                </Button>
-              </div>
-            ) : (
-              <Button onClick={handleClose} className="w-full h-11">
-                Done
-              </Button>
-            )}
-          </div>
-        );
-
-      case "tip_prompt":
-        return (
-          <div className="space-y-5 py-2">
-            <div className="text-center space-y-2">
-              <h3 className="text-lg font-semibold">
-                Thank you! Would you like to leave a tip?
-              </h3>
-              <p className="text-sm text-muted-foreground">
-                {tipPrompt?.merchantName
-                  ? `Add an optional second payment for ${tipPrompt.merchantName}.`
-                  : "Add an optional second payment for this merchant."}
-              </p>
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="tip-amount" className="text-sm font-medium">
-                Tip Amount
-              </Label>
-              <div className="relative">
-                <Input
-                  id="tip-amount"
-                  type="number"
-                  step="0.00000001"
-                  min="0"
-                  placeholder="0.00"
-                  value={tipPrompt?.amount || ""}
-                  onChange={(e) =>
-                    setTipPrompt((current) =>
-                      current
-                        ? { ...current, amount: e.target.value }
-                        : current,
-                    )
-                  }
-                  className="h-11 pr-16"
-                />
-                <div className="absolute right-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground font-medium">
-                  {SYMBOL}
-                </div>
-              </div>
-              <p className="text-xs text-muted-foreground">
-                This tip is sent as a separate transfer to the merchant&apos;s
-                tipping wallet.
-              </p>
-            </div>
-
-            {error && (
-              <div className="flex items-center gap-2 text-red-600 text-sm p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
-                <AlertTriangle className="h-4 w-4 flex-shrink-0" />
-                <span>{error}</span>
-              </div>
-            )}
-
-            <div className="flex flex-col gap-3">
-              <Button onClick={handleSendTip} className="w-full h-11">
-                Send Tip
-              </Button>
-              <Button
-                variant="outline"
-                onClick={handleSkipTip}
-                className="w-full h-11 bg-transparent"
-              >
-                No thanks
-              </Button>
-            </div>
+            <Button onClick={handleClose} className="w-full h-11">
+              Done
+            </Button>
           </div>
         );
 
