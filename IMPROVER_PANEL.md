@@ -158,3 +158,5 @@
 - Added frontend nonce-based CSP/security headers plus env-driven CSP allowlist hooks, enabled Privy captcha/preserved MFA prompts, and locked backend API CORS to explicit origins with localhost defaults when not in production.
 
 - CSP origin allowlist now also accepts NEXT_PUBLIC_FRONTEND_URL so production app-host calls can be pinned explicitly alongside backend origins.
+
+- Removed script-src strict-dynamic from the frontend CSP because Next-managed _next asset loads were being blocked as blocked:csp without a fully propagated nonce pipeline.

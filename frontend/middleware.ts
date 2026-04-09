@@ -53,7 +53,6 @@ const buildContentSecurityPolicy = (nonce: string, requestOrigin: string) => {
   const scriptSrc = [
     "'self'",
     `'nonce-${nonce}'`,
-    "'strict-dynamic'",
     "https://challenges.cloudflare.com",
     "https://maps.googleapis.com",
   ]
