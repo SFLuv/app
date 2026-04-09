@@ -817,6 +817,34 @@ export function SendCryptoModal({
     };
   }, [authFetch, formData.recipient, open]);
 
+  useEffect(() => {
+    if (!open) return;
+
+    const nextTipPrompt = resolveTipPrompt();
+    setTipPrompt((current) => {
+      if (!nextTipPrompt) {
+        return null;
+      }
+
+      return {
+        ...nextTipPrompt,
+        amount:
+          current?.tipToAddress === nextTipPrompt.tipToAddress
+            ? current.amount
+            : "",
+      };
+    });
+  }, [
+    open,
+    formData.recipient,
+    linkProvidedTipTo,
+    linkProvidedMerchantName,
+    recipientIsMerchant,
+    recipientMatchedPaymentWallet,
+    recipientTipToAddress,
+    recipientMerchantName,
+  ]);
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
@@ -847,18 +875,6 @@ export function SendCryptoModal({
       setFormData((prev) => ({ ...prev, recipient: normalizedRecipient }));
     }
 
-    const tipPromptState = resolveTipPrompt();
-    if (!tipPromptState) {
-      setTipPrompt(null);
-    } else {
-      setTipPrompt((current) => ({
-        ...tipPromptState,
-        amount:
-          current?.tipToAddress === tipPromptState.tipToAddress
-            ? current.amount
-            : "",
-      }));
-    }
     setStep("confirm");
   };
 
