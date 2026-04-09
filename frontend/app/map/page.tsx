@@ -12,6 +12,8 @@ import { Location } from "@/types/location"
 import { usePathname, useRouter, useSearchParams } from "next/navigation"
 import { List, Map as MapIcon } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { buildMerchantRedirectPath } from "@/lib/redeem-link"
+import { isAddress } from "viem"
 
 const LocationMapPageContent = memo(function LocationMapPageContent() {
   const search = useSearchParams()
@@ -61,6 +63,18 @@ const LocationMapPageContent = memo(function LocationMapPageContent() {
   const handleSelectLocation = (location: Location) => {
     setSelectedLocation(location)
     setIsModalOpen(true)
+  }
+
+  const handlePayLocation = (location: Location) => {
+    const payToAddress = (location.pay_to_address || "").trim()
+    if (!isAddress(payToAddress)) return
+
+    handleCloseModal()
+    router.push(buildMerchantRedirectPath({
+      to: payToAddress,
+      tipTo: location.tip_to_address || null,
+      locationId: location.id,
+    }))
   }
 
   const handleCloseModal = () => {
@@ -136,6 +150,7 @@ const LocationMapPageContent = memo(function LocationMapPageContent() {
               selectedLocationType={selectedLocationType}
               setSelectedLocationType={setSelectedLocationType}
               onSelectLocation={handleSelectLocation}
+              onPayLocation={handlePayLocation}
               userLocation={userLocation}
               setUserLocation={setUserLocation}
             />
@@ -143,7 +158,12 @@ const LocationMapPageContent = memo(function LocationMapPageContent() {
         </TabsContent>
       </Tabs>
 
-      <LocationModal location={selectedLocation} isOpen={isModalOpen} onClose={handleCloseModal} />
+      <LocationModal
+        location={selectedLocation}
+        isOpen={isModalOpen}
+        onClose={handleCloseModal}
+        onPayLocation={handlePayLocation}
+      />
     </div>
   )
 })

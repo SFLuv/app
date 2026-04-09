@@ -6,19 +6,23 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Button } from "@/components/ui/button"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Badge } from "@/components/ui/badge"
-import { Star, MapPin, Phone, Mail, Globe, ExternalLink } from "lucide-react"
+import { Star, MapPin, Phone, Mail, Globe, ExternalLink, Wallet } from "lucide-react"
 import { Location } from "@/types/location"
+import { isAddress } from "viem"
 
 interface LocationModalProps {
   location: Location | null
   isOpen: boolean
   onClose: () => void
+  onPayLocation: (location: Location) => void
 }
 
-export function LocationModal({ location, isOpen, onClose }: LocationModalProps) {
+export function LocationModal({ location, isOpen, onClose, onPayLocation }: LocationModalProps) {
   const [activeTab, setActiveTab] = useState("info")
 
   if (!location) return null
+
+  const canPay = isAddress((location.pay_to_address || "").trim())
 
   const renderStars = (rating: number) => {
     return Array(5)
@@ -136,14 +140,23 @@ export function LocationModal({ location, isOpen, onClose }: LocationModalProps)
           </TabsContent>
         </Tabs>
 
-        <div className="mt-6 flex justify-end">
+        <div className="mt-6 flex flex-wrap justify-end gap-2">
           <Button
             onClick={onClose}
             variant="outline"
-            className="mr-2 text-black dark:text-white bg-secondary hover:bg-secondary/80"
+            className="text-black dark:text-white bg-secondary hover:bg-secondary/80"
           >
             Close
           </Button>
+          {canPay ? (
+            <Button
+              className="bg-[#eb6c6c] hover:bg-[#d55c5c]"
+              onClick={() => onPayLocation(location)}
+            >
+              <Wallet className="mr-2 h-4 w-4" />
+              Pay
+            </Button>
+          ) : null}
           <Button
             className="bg-[#eb6c6c] hover:bg-[#d55c5c]"
             onClick={() =>
