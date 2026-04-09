@@ -178,3 +178,5 @@
 - Merchant tipping detection is restored in the wallet send flow: tip prompts are now derived reactively from QR link tip targets and merchant wallet lookups, so tipping still appears in all prior cases while staying on the initial confirmation screen.
 
 - Wallet send manual entry now includes approved merchant location payment accounts alongside contacts in the recipient autocomplete, and selecting a merchant location also carries its tip wallet so the tip prompt appears correctly on confirm.
+
+- Merchant tipping prompt now happens only after the main payment succeeds: tip detection is unchanged, but the initial confirm screen no longer asks for a tip and the post-send success screen now offers optional tipping with safe retry behavior that does not resend the main payment.
