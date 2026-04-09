@@ -162,3 +162,5 @@
 - Removed script-src strict-dynamic from the frontend CSP because Next-managed _next asset loads were being blocked as blocked:csp without a fully propagated nonce pipeline.
 
 - CSP connect-src now explicitly allows vercel.live and *.vercel.live over https and wss so Vercel-hosted live/runtime calls do not get blocked in deployed environments.
+
+- CSP hardening follow-up: vercel.live feedback.js needed to be allowed under script-src, not just connect-src. Also made the App Router root layout request-bound via headers() so middleware-provided nonces can propagate to Next framework scripts in production, avoiding blank-page failures from blocked inline/bootstrap scripts.

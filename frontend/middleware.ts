@@ -55,6 +55,8 @@ const buildContentSecurityPolicy = (nonce: string, requestOrigin: string) => {
     `'nonce-${nonce}'`,
     "https://challenges.cloudflare.com",
     "https://maps.googleapis.com",
+    "https://vercel.live",
+    "https://*.vercel.live",
   ]
   if (!production) {
     scriptSrc.push("'unsafe-eval'")
