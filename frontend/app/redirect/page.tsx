@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import { isAddress } from "viem"
 import { useApp } from "@/context/AppProvider"
@@ -9,6 +9,7 @@ import { COMMUNITY } from "@/lib/constants"
 import { Button } from "@/components/ui/button"
 import { AlertTriangle, Loader2 } from "lucide-react"
 import { decodeBase64UrlAddress } from "@/lib/redeem-link"
+import { GetUserResponse } from "@/types/server"
 
 type RedirectStage =
   | "checking"
@@ -17,10 +18,9 @@ type RedirectStage =
   | "redirecting"
   | "error"
 
-// Build the query-string body shared by both Citizen Wallet target URLs
-// (custom scheme + universal link). CW's router accepts `sendto`, `tipTo`,
-// and `alias` at the top-level path; Flutter's `parseSendtoUrl` lifts these
-// straight into the native send screen.
+// Build the query-string body shared by Citizen Wallet handoff URLs. CW's
+// router accepts `sendto`, `tipTo`, and `alias` at the top-level path;
+// Flutter's `parseSendtoUrl` lifts these straight into the native send screen.
 const buildCwSendQuery = (to: string, tipTo: string): string => {
   const alias = COMMUNITY.community.alias
   const params = new URLSearchParams()
@@ -35,18 +35,10 @@ const buildCwSendQuery = (to: string, tipTo: string): string => {
 const buildCwUniversalLink = (to: string, tipTo: string): string =>
   `https://app.citizenwallet.xyz/?${buildCwSendQuery(to, tipTo)}`
 
-// citizenwallet:// custom scheme. Used by the user-gated "Pay with
-// CitizenWallet" button — when the app is installed iOS/Android hand off
-// silently; when it isn't, iOS shows the "Cannot Open Page" dialog. Because
-// this only fires on explicit user click (not auto-load), users without CW
-// don't see the prompt unless they ask for it.
-const buildCwCustomSchemeLink = (to: string, tipTo: string): string =>
-  `citizenwallet:///?${buildCwSendQuery(to, tipTo)}`
-
 export default function RedirectPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
-  const { status, login, user, walletsStatus, ensurePrimarySmartWallet } = useApp()
+  const { status, login, user, walletsStatus, ensurePrimarySmartWallet, authFetch } = useApp()
   const { mapLocations, mapLocationsStatus } = useLocation()
 
   // Parameter sources, in priority order:
@@ -110,6 +102,55 @@ export default function RedirectPage() {
   const [error, setError] = useState<string | null>(null)
   const handledInitialRef = useRef(false)
   const ensureInFlightRef = useRef(false)
+
+  const loadAuthedUserRecord = useCallback(async (): Promise<GetUserResponse> => {
+    const res = await authFetch("/users")
+    if (!res.ok) {
+      throw new Error("Unable to load your account details. Please try again.")
+    }
+    return await res.json() as GetUserResponse
+  }, [authFetch])
+
+  const resolveDefaultPayWallet = useCallback(async (): Promise<string> => {
+    const normalizeWalletAddress = (value?: string | null) => {
+      const trimmed = (value || "").trim()
+      return isAddress(trimmed) ? trimmed : ""
+    }
+
+    const currentPrimaryAddress = normalizeWalletAddress(user?.primaryWalletAddress)
+    if (currentPrimaryAddress) {
+      return currentPrimaryAddress
+    }
+
+    let userResponse = await loadAuthedUserRecord()
+    let resolvedAddress = normalizeWalletAddress(userResponse.user.primary_wallet_address)
+    if (resolvedAddress) {
+      return resolvedAddress
+    }
+
+    const hasPrimarySmartWallet = await ensurePrimarySmartWallet()
+    if (!hasPrimarySmartWallet) {
+      throw new Error("Could not initialize your primary wallet.")
+    }
+
+    userResponse = await loadAuthedUserRecord()
+    resolvedAddress = normalizeWalletAddress(userResponse.user.primary_wallet_address)
+    if (resolvedAddress) {
+      return resolvedAddress
+    }
+
+    const fallbackSmartWallet = userResponse.wallets.find((wallet) =>
+      wallet.is_eoa === false &&
+      wallet.smart_index === 0 &&
+      typeof wallet.smart_address === "string" &&
+      isAddress(wallet.smart_address.trim())
+    )
+    if (fallbackSmartWallet?.smart_address) {
+      return fallbackSmartWallet.smart_address.trim()
+    }
+
+    throw new Error("Primary wallet is not yet available. Please try again.")
+  }, [ensurePrimarySmartWallet, loadAuthedUserRecord, user?.primaryWalletAddress])
 
   // Resolve the merchant location name from the public locations list. If
   // `l` is in the URL we use it directly; otherwise we fall back to matching
@@ -175,8 +216,8 @@ export default function RedirectPage() {
   }, [mode, to, tipTo, sigAuthAccount])
 
   // Auth-status gate: while we're in "checking" wait for Privy to resolve,
-  // then either skip the choose screen entirely (already authenticated) or
-  // surface it for unauthenticated users so they can pick their wallet.
+  // then either skip the chooser entirely (already authenticated) or surface
+  // the SFLuv wallet continuation button.
   useEffect(() => {
     if (stage !== "checking") return
     if (status === "loading") return
@@ -200,25 +241,7 @@ export default function RedirectPage() {
     let cancelled = false
     const ensureAndRedirect = async () => {
       try {
-        let primary = user?.primaryWalletAddress?.trim() || ""
-        if (!primary) {
-          const ok = await ensurePrimarySmartWallet()
-          if (!ok) {
-            if (!cancelled) {
-              setError("Could not initialize your primary wallet.")
-              setStage("error")
-            }
-            return
-          }
-          primary = user?.primaryWalletAddress?.trim() || ""
-        }
-        if (!primary) {
-          if (!cancelled) {
-            setError("Primary wallet is not yet available. Please try again.")
-            setStage("error")
-          }
-          return
-        }
+        const primary = await resolveDefaultPayWallet()
         if (cancelled) return
         setStage("redirecting")
         const walletQuery = new URLSearchParams()
@@ -245,8 +268,7 @@ export default function RedirectPage() {
     stage,
     status,
     walletsStatus,
-    user?.primaryWalletAddress,
-    ensurePrimarySmartWallet,
+    resolveDefaultPayWallet,
     router,
     to,
     tipTo,
@@ -269,12 +291,6 @@ export default function RedirectPage() {
       // screen so the user can retry.
       setStage("choose-wallet")
     }
-  }
-
-  const handlePayWithCitizenWallet = () => {
-    if (!to) return
-    setError(null)
-    window.location.href = buildCwCustomSchemeLink(to, tipTo)
   }
 
   const renderBody = () => {
@@ -311,13 +327,6 @@ export default function RedirectPage() {
               onClick={handlePayWithSfluv}
             >
               Pay with SFLuv Wallet
-            </Button>
-            <Button
-              variant="ghost"
-              className="h-9 w-full text-sm text-muted-foreground"
-              onClick={handlePayWithCitizenWallet}
-            >
-              Pay with CitizenWallet
             </Button>
           </div>
         </div>
