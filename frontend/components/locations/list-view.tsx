@@ -4,19 +4,22 @@ import { useEffect, useMemo, useState } from "react"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Card, CardContent } from "@/components/ui/card"
-import { Search, MapPin, Star, Phone, SlidersHorizontal } from "lucide-react"
+import { Button } from "@/components/ui/button"
+import { Search, MapPin, Star, Phone, SlidersHorizontal, Wallet } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import type { UserLocation } from "@/types/merchant"
 import { calculateDistance, formatDistance } from "@/utils/location"
 import { Pagination } from "@/components/opportunities/pagination"
 import { useLocation } from "@/context/LocationProvider"
 import { Location } from "@/types/location"
+import { isAddress } from "viem"
 
 interface ListViewProps {
   locations: Location[]
   selectedLocationType: string
   setSelectedLocationType: (type: string) => void
   onSelectLocation: (location: Location) => void
+  onPayLocation: (location: Location) => void
   userLocation: UserLocation
   setUserLocation: (userlocation: UserLocation) => void
 }
@@ -26,6 +29,7 @@ export function ListView({
   selectedLocationType,
   setSelectedLocationType,
   onSelectLocation,
+  onPayLocation,
   userLocation,
 }: ListViewProps) {
   const [currentPage, setCurrentPage] = useState(1)
@@ -135,52 +139,76 @@ export function ListView({
             </p>
           </div>
         ) : (
-          paginatedLocations.map(location => (
-            <Card
-              key={location.google_id}
-              className="cursor-pointer overflow-hidden rounded-xl border-border/70 transition-all hover:-translate-y-0.5 hover:shadow-md"
-              onClick={() => onSelectLocation(location)}
-            >
-              <CardContent className="p-4 sm:p-5">
-                <div className="flex h-full flex-col justify-between space-y-4">
-                  <div className="space-y-3">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0 space-y-2">
-                        <h3 className="truncate text-lg font-semibold text-foreground sm:text-xl">{location.name}</h3>
-                        <div className="flex flex-wrap items-center gap-2">
-                          <Badge variant="outline" className="rounded-full bg-muted px-2.5 py-0.5 text-xs font-medium">
-                            {location.type.charAt(0).toUpperCase() + location.type.slice(1)}
-                          </Badge>
-                          <div className="flex items-center">
-                            {renderStars(location.rating)}
-                            <span className="ml-1 text-xs text-muted-foreground">{location.rating.toFixed(1)}</span>
+          paginatedLocations.map(location => {
+            const payToAddress = (location.pay_to_address || "").trim()
+            const canPay = isAddress(payToAddress)
+
+            return (
+              <Card
+                key={location.id}
+                className="cursor-pointer overflow-hidden rounded-xl border-border/70 transition-all hover:-translate-y-0.5 hover:shadow-md"
+                onClick={() => onSelectLocation(location)}
+              >
+                <CardContent className="p-4 sm:p-5">
+                  <div className="flex h-full flex-col justify-between space-y-4">
+                    <div className="space-y-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0 space-y-2">
+                          <h3 className="truncate text-lg font-semibold text-foreground sm:text-xl">{location.name}</h3>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Badge variant="outline" className="rounded-full bg-muted px-2.5 py-0.5 text-xs font-medium">
+                              {location.type.charAt(0).toUpperCase() + location.type.slice(1)}
+                            </Badge>
+                            <div className="flex items-center">
+                              {renderStars(location.rating)}
+                              <span className="ml-1 text-xs text-muted-foreground">{location.rating.toFixed(1)}</span>
+                            </div>
                           </div>
                         </div>
+                        <Badge className="rounded-full bg-[#eb6c6c] px-2.5 py-0.5 text-xs font-semibold text-white">
+                          {formatDistance(location.distance)}
+                        </Badge>
                       </div>
-                      <Badge className="rounded-full bg-[#eb6c6c] px-2.5 py-0.5 text-xs font-semibold text-white">
-                        {formatDistance(location.distance)}
-                      </Badge>
+
+                      <p className="line-clamp-2 text-sm text-muted-foreground sm:text-[0.95rem]">{location.description}</p>
                     </div>
 
-                    <p className="line-clamp-2 text-sm text-muted-foreground sm:text-[0.95rem]">{location.description}</p>
-                  </div>
+                    <div className="flex flex-col gap-3">
+                      <div className="grid gap-2 text-sm text-muted-foreground sm:grid-cols-2">
+                        <div className="flex items-center">
+                          <MapPin className="mr-2 h-4 w-4 text-[#eb6c6c]" />
+                          <span className="line-clamp-1">
+                            {location.street}, {location.city}
+                          </span>
+                        </div>
+                        <div className="flex items-center">
+                          <Phone className="mr-2 h-4 w-4 text-[#eb6c6c]" />
+                          <span className="line-clamp-1">{location.phone || "Not available"}</span>
+                        </div>
+                      </div>
 
-                  <div className="grid gap-2 text-sm text-muted-foreground sm:grid-cols-2">
-                    <div className="flex items-center">
-                      <MapPin className="mr-2 h-4 w-4 text-[#eb6c6c]" />
-                      <span className="line-clamp-1">
-                        {location.street}, {location.city}
-                      </span>
-                    </div>
-                    <div className="flex items-center">
-                      <Phone className="mr-2 h-4 w-4 text-[#eb6c6c]" />
-                      <span className="line-clamp-1">{location.phone || "Not available"}</span>
+                      {canPay ? (
+                        <div className="flex justify-end border-t border-border/60 pt-3">
+                          <Button
+                            type="button"
+                            size="sm"
+                            className="h-9 rounded-full bg-[#eb6c6c] px-4 text-sm font-semibold hover:bg-[#d55c5c]"
+                            onClick={event => {
+                              event.stopPropagation()
+                              onPayLocation(location)
+                            }}
+                          >
+                            <Wallet className="mr-2 h-4 w-4" />
+                            Pay
+                          </Button>
+                        </div>
+                      ) : null}
                     </div>
                   </div>
-                </div>
-              </CardContent>
-            </Card>
-          ))
+                </CardContent>
+              </Card>
+            )
+          })
         )}
       </div>
 

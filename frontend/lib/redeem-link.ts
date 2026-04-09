@@ -198,3 +198,26 @@ export const buildMerchantSendQrValue = ({ to, tipTo, locationId }: MerchantSend
 
   return `${appOrigin}/?${parts.join("&")}`
 }
+
+export const buildMerchantRedirectPath = ({
+  to,
+  tipTo,
+  locationId,
+}: MerchantSendQrParams): string => {
+  const trimmedTo = to.trim()
+  const trimmedTipTo = (tipTo || "").trim()
+  const trimmedLocationId =
+    locationId === undefined || locationId === null ? "" : String(locationId).trim()
+
+  const params = new URLSearchParams()
+  params.set("mode", "send")
+  params.set("to", trimmedTo)
+  if (trimmedTipTo && HEX_ADDRESS_PATTERN.test(trimmedTipTo)) {
+    params.set("tipTo", trimmedTipTo)
+  }
+  if (trimmedLocationId) {
+    params.set("l", trimmedLocationId)
+  }
+
+  return `/redirect?${params.toString()}`
+}
