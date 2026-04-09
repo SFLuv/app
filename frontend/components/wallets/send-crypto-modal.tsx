@@ -1045,7 +1045,8 @@ export function SendCryptoModal({
                     <ContactOrAddressInput
                       id="recipient"
                       initialValue={defaultRecipient}
-                      onChange={(value) => {
+                      includeMerchantLocations={true}
+                      onChange={(value, resolvedOption) => {
                         // If the user pastes a payment link, lift out `to`
                         // and `tipTo` and store the address into the form
                         // (the contact-or-address-input would otherwise treat
@@ -1062,11 +1063,16 @@ export function SendCryptoModal({
                           return;
                         }
                         setFormData({ ...formData, recipient: value });
-                        // Clear any prior link-provided tipTo if the user is
-                        // now editing the recipient by hand to a different
-                        // value.
-                        setLinkProvidedTipTo("");
-                        setLinkProvidedMerchantName("");
+                        if (resolvedOption?.kind === "merchant_location") {
+                          setLinkProvidedTipTo(resolvedOption.tipToAddress || "");
+                          setLinkProvidedMerchantName(resolvedOption.displayName);
+                        } else {
+                          // Clear any prior link-provided tipTo if the user is
+                          // now editing the recipient by hand to a different
+                          // value.
+                          setLinkProvidedTipTo("");
+                          setLinkProvidedMerchantName("");
+                        }
                       }}
                       className="font-mono text-sm h-11"
                     />
