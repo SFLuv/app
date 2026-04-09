@@ -172,3 +172,5 @@
 - Merchant location wallet auto-save now reverts the draft back to the persisted DB-backed location state on save failure, so tip/payment wallet selectors cannot continue to look saved when the backend update actually failed.
 
 - Merchant tipping now prompts on the initial send confirmation screen: the optional tip amount is entered there, the old second-step tip prompt screen is removed, and any entered tip is sent automatically as a separate follow-up transfer after the main payment succeeds.
+
+- Proposer panel loading banners are now gone: background refreshes in Create Workflow and Your Workflows run silently, and first-load tab placeholders use a centered spinner without loading text so the UI no longer shifts down.
