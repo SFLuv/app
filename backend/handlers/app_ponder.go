@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"math/big"
 	"net/http"
 	"os"
 	"strconv"
@@ -284,26 +283,12 @@ func (a *AppService) PonderHookHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	amount := new(big.Float)
-	decimals := new(big.Float)
-
-	_, ok := decimals.SetPrec(6).SetString(os.Getenv("TOKEN_DECIMALS"))
-	if !ok {
-		a.logger.Logf("error setting token decimals amount bigint from string: %s", err)
+	formattedAmount, err := utils.FormatTokenAmountFromStrings(tx.Amount, os.Getenv("TOKEN_DECIMALS"), 2)
+	if err != nil {
+		a.logger.Logf("error formatting ponder transaction amount %s: %s", tx.Amount, err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
-
-	_, ok = amount.SetPrec(6).SetString(tx.Amount)
-	if !ok {
-		a.logger.Logf("error setting tx amount bigint from string: %s", err)
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
-	formatted := new(big.Float)
-	formatted.Quo(amount, decimals)
-	formattedAmount := formatted.Text('f', 2)
 
 	listeners, err := a.db.GetPonderSubscriptions(r.Context(), tx.To)
 	if err != nil {

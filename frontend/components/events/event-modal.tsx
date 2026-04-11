@@ -46,6 +46,7 @@ export function EventModal({
   const [downloadingPdf, setDownloadingPdf] = useState<boolean>(false)
 
   const maxCodesPerPdf = 30
+  const eventCodesPageSize = 200
   const eventFilenameBase = useMemo(() => (
     event.title
       .trim()
@@ -64,16 +65,33 @@ export function EventModal({
 
 
   const getCodes = async () => {
-    const url = `${eventsBasePath}/${event.id}`
     try {
-      const res = await authFetch(url)
-      const codes = await res.json()
-      setCodes(codes.map(({ id }: { id: string }) => id))
+      const loadedCodes: string[] = []
+      for (let page = 0; ; page += 1) {
+        const url = `${eventsBasePath}/${event.id}?page=${page}&count=${eventCodesPageSize}`
+        const res = await authFetch(url)
+        if (!res.ok) {
+          if (res.status === 404 && page > 0) {
+            break
+          }
+          throw new Error("error fetching event codes")
+        }
+
+        const pageCodes = await res.json() as Array<{ id: string }>
+        loadedCodes.push(...pageCodes.map(({ id }) => id))
+
+        if (pageCodes.length < eventCodesPageSize) {
+          break
+        }
+      }
+
+      setCodes(loadedCodes)
 
       setCodesError(undefined)
     }
     catch {
       setCodes([])
+      setCodesError("Error fetching codes.")
     }
 
   }

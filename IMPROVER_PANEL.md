@@ -180,3 +180,7 @@
 - Wallet send manual entry now includes approved merchant location payment accounts alongside contacts in the recipient autocomplete, and selecting a merchant location also carries its tip wallet so the tip prompt appears correctly on confirm.
 
 - Merchant tipping prompt now happens only after the main payment succeeds: tip detection is unchanged, but the initial confirm screen no longer asks for a tip and the post-send success screen now offers optional tipping with safe retry behavior that does not resend the main payment.
+
+- Ponder transaction alert emails now format token amounts with integer-safe base-unit conversion instead of low-precision big.Float math, preventing slight balance drift in emailed SFLuv amounts.
+
+- Event QR PDF export now fetches all event code pages before batching, so large events are no longer capped by the first 100-code page when admins or affiliates download QR PDFs.
