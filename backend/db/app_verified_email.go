@@ -104,6 +104,8 @@ func (a *AppDB) GetUserVerifiedEmails(ctx context.Context, userId string) ([]*st
 			user_verified_emails
 		WHERE
 			user_id = $1
+		AND
+			active = TRUE
 		ORDER BY
 			CASE WHEN verified_at IS NULL THEN 1 ELSE 0 END,
 			created_at ASC;
@@ -148,6 +150,9 @@ func (a *AppDB) CreateOrRefreshUserEmailVerification(ctx context.Context, userId
 			user_id = $1
 		AND
 			email_normalized = $2
+		ORDER BY
+			created_at DESC
+		LIMIT 1
 		FOR UPDATE;
 	`, userId, normalized).Scan(&existingId, &existingVerifiedAt)
 	if err != nil && err != pgx.ErrNoRows {
@@ -190,6 +195,9 @@ func (a *AppDB) CreateOrRefreshUserEmailVerification(ctx context.Context, userId
 				verification_token = $4,
 				verification_sent_at = NOW(),
 				verification_token_expires_at = $5,
+				active = TRUE,
+				delete_date = NULL,
+				delete_reason = NULL,
 				updated_at = NOW()
 			WHERE
 				id = $1;
@@ -246,6 +254,8 @@ func (a *AppDB) ResendUserEmailVerification(ctx context.Context, userId string, 
 			id = $1
 		AND
 			user_id = $2
+		AND
+			active = TRUE
 		FOR UPDATE;
 	`, emailId, userId).Scan(&verifiedAt)
 	if err == pgx.ErrNoRows {
@@ -328,6 +338,8 @@ func (a *AppDB) VerifyUserEmailToken(ctx context.Context, token string) (*struct
 			user_verified_emails
 		WHERE
 			verification_token = $1
+		AND
+			active = TRUE
 		FOR UPDATE;
 	`, token).Scan(&id, &userId, &email, &verifiedAt, &verificationTokenExpiresAt)
 	if err == pgx.ErrNoRows {
@@ -369,7 +381,9 @@ func (a *AppDB) VerifyUserEmailToken(ctx context.Context, token string) (*struct
 				ELSE contact_email
 			END
 		WHERE
-			id = $1;
+			id = $1
+		AND
+			active = TRUE;
 	`, userId, email)
 	if err != nil {
 		return nil, fmt.Errorf("error updating user contact email after verification: %s", err)
@@ -419,6 +433,8 @@ func (a *AppDB) IsVerifiedEmailForUser(ctx context.Context, userId string, email
 					email_normalized = $2
 				AND
 					verified_at IS NOT NULL
+				AND
+					active = TRUE
 			);
 	`, userId, normalized)
 	var exists bool
@@ -448,7 +464,22 @@ func (a *AppDB) UpsertVerifiedUserEmail(ctx context.Context, userId string, emai
 			)
 		VALUES
 			(
-				MD5($1 || ':' || $2),
+				COALESCE(
+					(
+						SELECT
+							id
+						FROM
+							user_verified_emails
+						WHERE
+							user_id = $1
+						AND
+							email_normalized = $2
+						ORDER BY
+							created_at DESC
+						LIMIT 1
+					),
+					MD5($1 || ':' || $2)
+				),
 				$1,
 				$3,
 				$2,
@@ -457,13 +488,17 @@ func (a *AppDB) UpsertVerifiedUserEmail(ctx context.Context, userId string, emai
 				NULL,
 				NULL
 			)
-		ON CONFLICT (user_id, email_normalized) DO UPDATE
+		ON CONFLICT (id) DO UPDATE
 		SET
 			email = EXCLUDED.email,
+			email_normalized = EXCLUDED.email_normalized,
 			verified_at = COALESCE(user_verified_emails.verified_at, NOW()),
 			verification_token = NULL,
 			verification_sent_at = NULL,
 			verification_token_expires_at = NULL,
+			active = TRUE,
+			delete_date = NULL,
+			delete_reason = NULL,
 			updated_at = NOW()
 		RETURNING
 			id,

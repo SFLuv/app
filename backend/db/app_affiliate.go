@@ -416,7 +416,9 @@ func (a *AppDB) IsAffiliate(ctx context.Context, id string) (bool, error) {
 		FROM
 			users
 		WHERE
-			id = $1;
+			id = $1
+		AND
+			active = TRUE;
 	`, id)
 	var isAffiliate bool
 	err := row.Scan(&isAffiliate)
@@ -437,6 +439,8 @@ func (a *AppDB) GetFirstAdminId(ctx context.Context) (string, error) {
 			users
 		WHERE
 			is_admin = true
+		AND
+			active = TRUE
 		ORDER BY
 			id
 		LIMIT 1;

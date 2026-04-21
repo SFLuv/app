@@ -22,6 +22,49 @@ type User struct {
 	LastRedemption       int     `json:"last_redemption"`
 }
 
+type AccountDeletionStatus string
+
+const (
+	AccountDeletionStatusActive              AccountDeletionStatus = "active"
+	AccountDeletionStatusScheduled           AccountDeletionStatus = "scheduled_for_deletion"
+	AccountDeletionStatusReadyForManualPurge AccountDeletionStatus = "ready_for_manual_purge"
+)
+
+type AccountDeletionPreview struct {
+	UserId               string                `json:"user_id"`
+	Status               AccountDeletionStatus `json:"status"`
+	DeleteDate           *time.Time            `json:"delete_date,omitempty"`
+	RequestedAt          *time.Time            `json:"requested_at,omitempty"`
+	CanCancel            bool                  `json:"can_cancel"`
+	PrimaryWalletAddress string                `json:"primary_wallet_address"`
+	WalletAddresses      []string              `json:"wallet_addresses"`
+	Counts               AccountDeletionCounts `json:"counts"`
+	PurgeEnabled         bool                  `json:"purge_enabled"`
+}
+
+type AccountDeletionCounts struct {
+	Wallets             int `json:"wallets"`
+	Contacts            int `json:"contacts"`
+	Locations           int `json:"locations"`
+	LocationHours       int `json:"location_hours"`
+	LocationWallets     int `json:"location_wallets"`
+	PonderSubscriptions int `json:"ponder_subscriptions"`
+	VerifiedEmails      int `json:"verified_emails"`
+	Memos               int `json:"memos"`
+}
+
+type AccountDeletionStatusResponse struct {
+	UserId         string                `json:"user_id"`
+	Status         AccountDeletionStatus `json:"status"`
+	DeleteDate     *time.Time            `json:"delete_date,omitempty"`
+	RequestedAt    *time.Time            `json:"requested_at,omitempty"`
+	CanceledAt     *time.Time            `json:"canceled_at,omitempty"`
+	CompletedAt    *time.Time            `json:"completed_at,omitempty"`
+	CanCancel      bool                  `json:"can_cancel"`
+	PurgeEnabled   bool                  `json:"purge_enabled"`
+	PurgeEnabledBy string                `json:"purge_enabled_by,omitempty"`
+}
+
 type AuthedUserResponse struct {
 	User       User        `json:"user"`
 	Wallets    []*Wallet   `json:"wallets"`

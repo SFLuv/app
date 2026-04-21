@@ -3,6 +3,9 @@ package test
 import (
 	"context"
 	"testing"
+	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 func GroupUsersControllers(t *testing.T) {
@@ -11,6 +14,7 @@ func GroupUsersControllers(t *testing.T) {
 	t.Run("update user role controller", ModuleUpdateUserRoleController)
 	t.Run("get users paginated controller", ModuleGetUsersController)
 	t.Run("get user by id controller", ModuleGetUserById)
+	t.Run("account deletion controller", ModuleAccountDeletionController)
 }
 
 func ModuleAddUserController(t *testing.T) {
@@ -97,5 +101,46 @@ func ModuleGetUsersController(t *testing.T) {
 		if *user.Email != *TEST_USERS[n].Email {
 			t.Fatalf("email %s does not match expected %s", *user.Email, *TEST_USERS[n].Email)
 		}
+	}
+}
+
+func ModuleAccountDeletionController(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	userID := "test-delete-controller"
+	if err := AppDb.AddUser(ctx, userID); err != nil {
+		t.Fatalf("error creating deletion test user: %s", err)
+	}
+
+	preview, err := AppDb.GetAccountDeletionPreview(ctx, userID, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("error getting deletion preview: %s", err)
+	}
+	if preview.Status != "active" {
+		t.Fatalf("expected active preview status, got %s", preview.Status)
+	}
+
+	status, err := AppDb.ScheduleAccountDeletion(ctx, userID, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("error scheduling account deletion: %s", err)
+	}
+	if status.Status != "scheduled_for_deletion" {
+		t.Fatalf("expected scheduled status, got %s", status.Status)
+	}
+	if !status.CanCancel {
+		t.Fatal("expected scheduled deletion to be cancelable")
+	}
+
+	if _, err := AppDb.GetUserById(ctx, userID); err != pgx.ErrNoRows {
+		t.Fatalf("expected active lookup to hide deleted user, got err=%v", err)
+	}
+
+	status, err = AppDb.CancelAccountDeletion(ctx, userID, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("error canceling account deletion: %s", err)
+	}
+	if status.Status != "active" {
+		t.Fatalf("expected active status after cancel, got %s", status.Status)
 	}
 }

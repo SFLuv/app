@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/SFLuv/app/backend/structs"
 )
@@ -21,7 +22,16 @@ func (a *AppDB) AddPonderSubscription(ctx context.Context, s *structs.PonderSubs
 			$3,
 			$4,
 			$5
-		);
+		)
+		ON CONFLICT (id) DO UPDATE
+		SET
+			address = EXCLUDED.address,
+			type = EXCLUDED.type,
+			owner = EXCLUDED.owner,
+			data = EXCLUDED.data,
+			active = TRUE,
+			delete_date = NULL,
+			delete_reason = NULL;
 	`, s.Id, s.Address, s.Type, s.Owner, s.Data)
 
 	return err
@@ -39,6 +49,8 @@ func (a *AppDB) GetPonderSubscriptions(ctx context.Context, address string) ([]*
 			ponder_subscriptions
 		WHERE
 			address = LOWER($1)
+		AND
+			active = TRUE
 	`, address)
 	if err != nil {
 		return nil, fmt.Errorf("error querying for ponder subscriptions for address %s: %s", address, err)
@@ -77,6 +89,8 @@ func (a *AppDB) GetPonderSubscriptionsByUser(ctx context.Context, userDid string
 			ponder_subscriptions
 		WHERE
 			owner = $1
+		AND
+			active = TRUE
 	`, userDid)
 	if err != nil {
 		return nil, fmt.Errorf("error querying for ponder subscriptions for userDid %s: %s", userDid, err)
@@ -115,6 +129,8 @@ func (a *AppDB) GetPonderSubscription(ctx context.Context, id int) (*structs.Pon
 			ponder_subscriptions
 		WHERE
 			id = $1
+		AND
+			active = TRUE
 	`, id)
 
 	var subscription structs.PonderSubscription
@@ -134,11 +150,19 @@ func (a *AppDB) GetPonderSubscription(ctx context.Context, id int) (*structs.Pon
 
 func (a *AppDB) DeletePonderSubscription(ctx context.Context, id int, owner string) error {
 	_, err := a.db.Exec(ctx, `
-		DELETE FROM
+		UPDATE
 			ponder_subscriptions
+		SET
+			active = FALSE,
+			delete_date = $3,
+			delete_reason = $4
 		WHERE
-			id = $1 AND owner = $2;
-	`, id, owner)
+			id = $1
+		AND
+			owner = $2
+		AND
+			active = TRUE;
+	`, id, owner, time.Now().UTC().Add(accountDeletionGracePeriod), deleteReasonPonderDelete)
 
 	return err
 }

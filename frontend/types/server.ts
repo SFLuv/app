@@ -59,6 +59,70 @@ export interface GetUserResponse {
   supervisor?: Supervisor | null;
 }
 
+export type AccountDeletionStatus =
+  | "active"
+  | "scheduled_for_deletion"
+  | "ready_for_manual_purge";
+
+export interface AccountDeletionCounts {
+  wallets: number;
+  contacts: number;
+  locations: number;
+  location_hours: number;
+  location_wallets: number;
+  ponder_subscriptions: number;
+  verified_emails: number;
+  memos: number;
+}
+
+export interface AccountDeletionPreview {
+  user_id: string;
+  status: AccountDeletionStatus;
+  delete_date?: string | null;
+  requested_at?: string | null;
+  can_cancel: boolean;
+  primary_wallet_address: string;
+  wallet_addresses: string[];
+  counts: AccountDeletionCounts;
+  purge_enabled: boolean;
+}
+
+export interface AccountDeletionStatusResponse {
+  user_id: string;
+  status: AccountDeletionStatus;
+  delete_date?: string | null;
+  requested_at?: string | null;
+  canceled_at?: string | null;
+  completed_at?: string | null;
+  can_cancel: boolean;
+  purge_enabled: boolean;
+  purge_enabled_by?: string;
+}
+
+export type AppleRecoveryResolution =
+  | "current_account_exists"
+  | "recovery_suggested"
+  | "no_match"
+  | "ambiguous_match"
+  | "no_apple_account";
+
+export interface AppleRecoverySuggestedAccount {
+  user_id: string;
+  contact_name?: string;
+  verified_email?: string;
+  primary_wallet_address?: string;
+}
+
+export interface AppleRecoveryResponse {
+  current_user_id: string;
+  current_user_exists: boolean;
+  apple_linked: boolean;
+  apple_email?: string;
+  is_private_relay: boolean;
+  resolution: AppleRecoveryResolution;
+  suggested_existing_account?: AppleRecoverySuggestedAccount;
+}
+
 export type VerifiedEmailStatus = "verified" | "pending" | "expired";
 
 export interface VerifiedEmailResponse {

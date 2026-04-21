@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/SFLuv/app/backend/structs"
 )
@@ -18,8 +19,11 @@ func (a *AppDB) AddContact(ctx context.Context, c *structs.Contact, userId strin
 			$2,
 			$3
 		)
-		ON CONFLICT (owner, address)
-		DO NOTHING
+		ON CONFLICT (owner, address) WHERE active = TRUE
+		DO UPDATE
+		SET
+			name = EXCLUDED.name,
+			address = EXCLUDED.address
 		RETURNING id;
 	`, userId, c.Name, c.Address)
 
@@ -42,7 +46,7 @@ func (a *AppDB) UpdateContact(ctx context.Context, c *structs.Contact, userId st
 		FROM
 			contacts c INNER JOIN users u ON c.owner = u.id
 		WHERE
-			(contacts.id = $4 AND u.id = $5);
+			(contacts.id = $4 AND u.id = $5 AND contacts.active = TRUE AND u.active = TRUE);
 	`, c.Name, c.Address, c.IsFavorite, c.Id, userId)
 
 	return err
@@ -59,6 +63,8 @@ func (a *AppDB) GetContacts(ctx context.Context, userId string) ([]*structs.Cont
 			contacts AS c
 		WHERE
 			c.owner = $1
+		AND
+			c.active = TRUE
 		ORDER BY
 			c.is_favorite DESC,
 			c.id ASC
@@ -93,13 +99,19 @@ func (a *AppDB) GetContacts(ctx context.Context, userId string) ([]*structs.Cont
 
 func (a *AppDB) DeleteContact(ctx context.Context, contactId int, userId string) error {
 	_, err := a.db.Exec(ctx, `
-		DELETE FROM
+		UPDATE
 			contacts
-		USING
-			users
+		SET
+			active = FALSE,
+			delete_date = $3,
+			delete_reason = $4
 		WHERE
-			(contacts.id = $1 AND owner = users.id AND users.id = $2);
-	`, contactId, userId)
+			contacts.id = $1
+		AND
+			contacts.owner = $2
+		AND
+			contacts.active = TRUE;
+	`, contactId, userId, time.Now().UTC().Add(accountDeletionGracePeriod), deleteReasonContactDelete)
 
 	return err
 }

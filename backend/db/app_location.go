@@ -48,6 +48,8 @@ func (a *AppDB) getLocationHoursByIDs(ctx context.Context, ids []uint64) (map[ui
 			location_hours
 		WHERE
 			location_id = ANY($1::int4[])
+		AND
+			active = TRUE
 		ORDER BY
 			location_id ASC,
 			weekday ASC;
@@ -107,6 +109,7 @@ func (a *AppDB) GetLocation(ctx context.Context, id uint64) (*structs.PublicLoca
 		FROM locations l
 		LEFT JOIN users u
 			ON u.id = l.owner_id
+			AND u.active = TRUE
 		LEFT JOIN LATERAL (
 			SELECT
 				lpw.wallet_address
@@ -114,6 +117,8 @@ func (a *AppDB) GetLocation(ctx context.Context, id uint64) (*structs.PublicLoca
 				location_payment_wallets lpw
 			WHERE
 				lpw.location_id = l.id
+			AND
+				lpw.active = TRUE
 			ORDER BY
 				CASE
 					WHEN lpw.is_default = TRUE THEN 0
@@ -131,6 +136,8 @@ func (a *AppDB) GetLocation(ctx context.Context, id uint64) (*structs.PublicLoca
 			WHERE
 				w.owner = l.owner_id
 			AND
+				w.active = TRUE
+			AND
 				w.is_eoa = FALSE
 			AND
 				w.smart_index = 0
@@ -143,7 +150,8 @@ func (a *AppDB) GetLocation(ctx context.Context, id uint64) (*structs.PublicLoca
 			LIMIT 1
 		) legacy_wallet
 			ON TRUE
-		WHERE l.id = $1;
+		WHERE l.id = $1
+		AND l.active = TRUE;
 	`, id)
 
 	location := structs.PublicLocation{}
@@ -186,6 +194,7 @@ func (a *AppDB) GetLocation(ctx context.Context, id uint64) (*structs.PublicLoca
 			hours
 		FROM location_hours
 		WHERE location_id = $1
+		AND active = TRUE
 		ORDER BY weekday;
 	`, id)
 	if err != nil {
@@ -245,6 +254,7 @@ func (s *AppDB) GetLocations(ctx context.Context, r *structs.LocationsPageReques
 		FROM locations l
 		LEFT JOIN users u
 			ON u.id = l.owner_id
+			AND u.active = TRUE
 		LEFT JOIN LATERAL (
 			SELECT
 				lpw.wallet_address
@@ -252,6 +262,8 @@ func (s *AppDB) GetLocations(ctx context.Context, r *structs.LocationsPageReques
 				location_payment_wallets lpw
 			WHERE
 				lpw.location_id = l.id
+			AND
+				lpw.active = TRUE
 			ORDER BY
 				CASE
 					WHEN lpw.is_default = TRUE THEN 0
@@ -269,6 +281,8 @@ func (s *AppDB) GetLocations(ctx context.Context, r *structs.LocationsPageReques
 			WHERE
 				w.owner = l.owner_id
 			AND
+				w.active = TRUE
+			AND
 				w.is_eoa = FALSE
 			AND
 				w.smart_index = 0
@@ -282,6 +296,7 @@ func (s *AppDB) GetLocations(ctx context.Context, r *structs.LocationsPageReques
 		) legacy_wallet
 			ON TRUE
 		WHERE l.approval = TRUE
+		AND l.active = TRUE
 		ORDER BY l.id
 		LIMIT $1
 		OFFSET $2;
@@ -398,6 +413,7 @@ func (s *AppDB) GetAuthedLocations(ctx context.Context, r *structs.LocationsPage
 		FROM locations l
 		LEFT JOIN users u
 			ON u.id = l.owner_id
+			AND u.active = TRUE
 		LEFT JOIN LATERAL (
 			SELECT
 				lpw.wallet_address
@@ -405,6 +421,8 @@ func (s *AppDB) GetAuthedLocations(ctx context.Context, r *structs.LocationsPage
 				location_payment_wallets lpw
 			WHERE
 				lpw.location_id = l.id
+			AND
+				lpw.active = TRUE
 			ORDER BY
 				CASE
 					WHEN lpw.is_default = TRUE THEN 0
@@ -422,6 +440,8 @@ func (s *AppDB) GetAuthedLocations(ctx context.Context, r *structs.LocationsPage
 			WHERE
 				w.owner = l.owner_id
 			AND
+				w.active = TRUE
+			AND
 				w.is_eoa = FALSE
 			AND
 				w.smart_index = 0
@@ -434,6 +454,7 @@ func (s *AppDB) GetAuthedLocations(ctx context.Context, r *structs.LocationsPage
 			LIMIT 1
 		) legacy_wallet
 			ON TRUE
+		WHERE l.active = TRUE
 		ORDER BY l.id
 		LIMIT $1
 		OFFSET $2;
@@ -561,7 +582,44 @@ func (a *AppDB) AddLocation(ctx context.Context, location *structs.Location) err
 				$11, $12, $13, $14, $15, $16, $17, $18,
 				$19, $20, $21, $22, $23, $24, $25, $26,
 				$27, $28, $29, $30, $31, $32
-			);`,
+			)
+			ON CONFLICT (google_id) WHERE active = TRUE
+			DO UPDATE SET
+				owner_id = EXCLUDED.owner_id,
+				name = EXCLUDED.name,
+				description = EXCLUDED.description,
+				type = EXCLUDED.type,
+				approval = EXCLUDED.approval,
+				approved_at = EXCLUDED.approved_at,
+				street = EXCLUDED.street,
+				city = EXCLUDED.city,
+				state = EXCLUDED.state,
+				zip = EXCLUDED.zip,
+				lat = EXCLUDED.lat,
+				lng = EXCLUDED.lng,
+				phone = EXCLUDED.phone,
+				email = EXCLUDED.email,
+				admin_phone = EXCLUDED.admin_phone,
+				admin_email = EXCLUDED.admin_email,
+				website = EXCLUDED.website,
+				image_url = EXCLUDED.image_url,
+				rating = EXCLUDED.rating,
+				maps_page = EXCLUDED.maps_page,
+				contact_firstname = EXCLUDED.contact_firstname,
+				contact_lastname = EXCLUDED.contact_lastname,
+				contact_phone = EXCLUDED.contact_phone,
+				pos_system = EXCLUDED.pos_system,
+				sole_proprietorship = EXCLUDED.sole_proprietorship,
+				tipping_policy = EXCLUDED.tipping_policy,
+				tipping_division = EXCLUDED.tipping_division,
+				table_coverage = EXCLUDED.table_coverage,
+				service_stations = EXCLUDED.service_stations,
+				tablet_model = EXCLUDED.tablet_model,
+				messaging_service = EXCLUDED.messaging_service,
+				reference = EXCLUDED.reference,
+				active = TRUE,
+				delete_date = NULL,
+				delete_reason = NULL;`,
 		&location.GoogleID,
 		&location.OwnerID,
 		&location.Name,
@@ -604,7 +662,8 @@ func (a *AppDB) AddLocation(ctx context.Context, location *structs.Location) err
 		SELECT
 			id
 		FROM locations
-		WHERE google_id = $1;
+		WHERE google_id = $1
+		AND active = TRUE;
 	`, location.GoogleID,
 	)
 
@@ -671,7 +730,7 @@ func (a *AppDB) UpdateLocation(ctx context.Context, location *structs.Location) 
         tablet_model = $30,
         messaging_service = $31,
         reference = $32
-    WHERE (id = $33 AND owner_id = $34);
+    WHERE (id = $33 AND owner_id = $34 AND active = TRUE);
 	`,
 		location.GoogleID,
 		location.OwnerID,
@@ -722,7 +781,8 @@ func (a *AppDB) UpdateLocation(ctx context.Context, location *structs.Location) 
 		SET
 			weekday = $1,
 			hours = $2
-		WHERE location_id = $3;
+		WHERE location_id = $3
+		AND active = TRUE;
 		`,
 			i,
 			hours,
@@ -784,6 +844,7 @@ func (a *AppDB) GetLocationsByUser(ctx context.Context, userId string) ([]*struc
     FROM locations l
 	LEFT JOIN users u
 		ON u.id = l.owner_id
+		AND u.active = TRUE
 	LEFT JOIN LATERAL (
 		SELECT
 			lpw.wallet_address
@@ -791,6 +852,8 @@ func (a *AppDB) GetLocationsByUser(ctx context.Context, userId string) ([]*struc
 			location_payment_wallets lpw
 		WHERE
 			lpw.location_id = l.id
+		AND
+			lpw.active = TRUE
 		ORDER BY
 			CASE
 				WHEN lpw.is_default = TRUE THEN 0
@@ -808,6 +871,8 @@ func (a *AppDB) GetLocationsByUser(ctx context.Context, userId string) ([]*struc
 		WHERE
 			w.owner = l.owner_id
 		AND
+			w.active = TRUE
+		AND
 			w.is_eoa = FALSE
 		AND
 			w.smart_index = 0
@@ -821,6 +886,7 @@ func (a *AppDB) GetLocationsByUser(ctx context.Context, userId string) ([]*struc
 		) legacy_wallet
 			ON TRUE
     WHERE l.owner_id = $1
+	AND l.active = TRUE
 	ORDER BY l.id DESC
 	LIMIT 500;
 `, userId)

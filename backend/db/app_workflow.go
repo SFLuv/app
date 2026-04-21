@@ -38,7 +38,9 @@ func (a *AppDB) IsVoter(ctx context.Context, id string) (bool, error) {
 		FROM
 			users
 		WHERE
-			id = $1;
+			id = $1
+		AND
+			active = TRUE;
 	`, id)
 	var value bool
 	err := row.Scan(&value)
@@ -66,7 +68,9 @@ func (a *AppDB) getBoolUserRole(ctx context.Context, id string, column string) (
 		FROM
 			users
 		WHERE
-			id = $1;
+			id = $1
+		AND
+			active = TRUE;
 	`, column)
 
 	row := a.db.QueryRow(ctx, query, id)

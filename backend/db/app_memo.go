@@ -23,6 +23,10 @@ func (a *AppDB) UpsertTransactionMemo(ctx context.Context, txHash string, memo s
 		ON CONFLICT (tx_hash)
 		DO UPDATE SET
 			memo = EXCLUDED.memo,
+			owner = EXCLUDED.owner,
+			active = TRUE,
+			delete_date = NULL,
+			delete_reason = NULL,
 			updated_at = NOW();
 	`, normalizedHash, trimmedMemo, owner)
 	if err != nil {
@@ -58,7 +62,9 @@ func (a *AppDB) GetTransactionMemosByHashes(ctx context.Context, hashes []string
 		FROM
 			memos
 		WHERE
-			tx_hash = ANY($1);
+			tx_hash = ANY($1)
+		AND
+			active = TRUE;
 	`, normalizedHashes)
 	if err != nil {
 		return nil, fmt.Errorf("error querying transaction memos: %w", err)

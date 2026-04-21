@@ -5,10 +5,19 @@ import (
 	"fmt"
 
 	"github.com/SFLuv/app/backend/structs"
+	"github.com/jackc/pgx/v5"
 )
 
 func (a *AppDB) AddUser(ctx context.Context, id string) error {
-	_, err := a.db.Exec(ctx, `
+	state, err := loadUserDeletionState(ctx, a.db, id)
+	if err != nil && err != pgx.ErrNoRows {
+		return err
+	}
+	if err == nil && !state.Active {
+		return ErrUserPendingDeletion
+	}
+
+	_, err = a.db.Exec(ctx, `
 		INSERT INTO users
 			(id)
 		VALUES
@@ -33,7 +42,9 @@ func (a *AppDB) UpdateUserInfo(ctx context.Context, user *structs.User) error {
 			contact_phone = $2,
 			contact_name = $3
 		WHERE
-			id = $4;
+			id = $4
+		AND
+			active = TRUE;
 	`, user.Email, user.Phone, user.Name, user.Id)
 	if err != nil {
 		return err
@@ -50,7 +61,9 @@ func (a *AppDB) UpdateUserPayPalEth(ctx context.Context, userId string, paypalEt
 		SET
 			paypal_eth = $1
 		WHERE
-			id = $2;
+			id = $2
+		AND
+			active = TRUE;
 	`, paypalEthAddress, userId)
 	if err != nil {
 		return err
@@ -70,7 +83,9 @@ func (a *AppDB) UpdateUserPrimaryWallet(ctx context.Context, userId string, prim
 		SET
 			primary_wallet_address = $1
 		WHERE
-			id = $2;
+			id = $2
+		AND
+			active = TRUE;
 	`, normalizedAddress, userId)
 	if err != nil {
 		return nil, fmt.Errorf("error updating user primary wallet: %s", err)
@@ -103,7 +118,9 @@ func (a *AppDB) UpdateUserRole(ctx context.Context, userId string, role string, 
 		SET
 			%s = $1
 		WHERE
-			id = $2;
+			id = $2
+		AND
+			active = TRUE;
 	`, role), value, userId)
 	if err != nil {
 		return fmt.Errorf("error updating user: %s", err)
@@ -116,7 +133,9 @@ func (a *AppDB) UpdateUserRole(ctx context.Context, userId string, role string, 
 			SET
 				is_voter = true
 			WHERE
-				id = $1;
+				id = $1
+			AND
+				active = TRUE;
 		`, userId)
 		if err != nil {
 			return fmt.Errorf("error defaulting admin to voter: %s", err)
@@ -149,6 +168,8 @@ func (a *AppDB) GetUsers(ctx context.Context, page int, count int) ([]*structs.U
 			paypal_eth
 		FROM
 			users
+		WHERE
+			active = TRUE
 		LIMIT $1
 		OFFSET $2;
 	`, count, offset)
@@ -188,8 +209,16 @@ func (a *AppDB) GetUsers(ctx context.Context, page int, count int) ([]*structs.U
 }
 
 func (a *AppDB) GetUserById(ctx context.Context, userId string) (*structs.User, error) {
+	return a.getUserById(ctx, userId, false)
+}
+
+func (a *AppDB) GetUserByIdIncludingInactive(ctx context.Context, userId string) (*structs.User, error) {
+	return a.getUserById(ctx, userId, true)
+}
+
+func (a *AppDB) getUserById(ctx context.Context, userId string, includeInactive bool) (*structs.User, error) {
 	var user structs.User
-	row := a.db.QueryRow(ctx, `
+	query := `
 		SELECT
 			id,
 			is_admin,
@@ -210,8 +239,14 @@ func (a *AppDB) GetUserById(ctx context.Context, userId string) (*structs.User, 
 		FROM
 			users
 		WHERE
-			id = $1;
-	`, userId)
+			id = $1`
+	if !includeInactive {
+		query += `
+		AND
+			active = TRUE`
+	}
+	query += `;`
+	row := a.db.QueryRow(ctx, query, userId)
 	err := row.Scan(
 		&user.Id,
 		&user.IsAdmin,
@@ -242,7 +277,9 @@ func (a *AppDB) GetAllUserIDs(ctx context.Context) ([]string, error) {
 		SELECT
 			id
 		FROM
-			users;
+			users
+		WHERE
+			active = TRUE;
 	`)
 	if err != nil {
 		return nil, fmt.Errorf("error getting all user ids: %s", err)

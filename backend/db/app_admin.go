@@ -15,7 +15,9 @@ func (a *AppDB) IsAdmin(ctx context.Context, id string) (bool, error) {
 		FROM
 			users
 		WHERE
-			id = $1;
+			id = $1
+		AND
+			active = TRUE;
 	`, id)
 	var isAdmin bool
 	err := row.Scan(&isAdmin)
@@ -35,7 +37,9 @@ func (a *AppDB) GetAdminUserIDs(ctx context.Context) ([]string, error) {
 		FROM
 			users
 		WHERE
-			is_admin = TRUE;
+			is_admin = TRUE
+		AND
+			active = TRUE;
 	`)
 	if err != nil {
 		return nil, err
