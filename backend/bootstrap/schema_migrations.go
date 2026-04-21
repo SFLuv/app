@@ -346,6 +346,37 @@ var schemaMigrations = []SchemaMigration{
 			return nil
 		},
 	},
+	{
+		Version:     "1.6",
+		Description: "store mobile push subscriptions for Expo push delivery",
+		Apply: func(ctx context.Context, pools *DBPools, appLogger *logger.LogCloser) error {
+			if _, err := pools.App.Exec(ctx, `
+				CREATE TABLE IF NOT EXISTS mobile_push_subscriptions(
+					id SERIAL PRIMARY KEY,
+					owner TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+					token TEXT NOT NULL,
+					address TEXT NOT NULL,
+					created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+					active BOOLEAN NOT NULL DEFAULT true,
+					delete_date TIMESTAMPTZ,
+					delete_reason TEXT
+				);
+
+				CREATE INDEX IF NOT EXISTS mobile_push_subscriptions_owner_idx
+					ON mobile_push_subscriptions(owner);
+				CREATE INDEX IF NOT EXISTS mobile_push_subscriptions_address_idx
+					ON mobile_push_subscriptions(address);
+				CREATE INDEX IF NOT EXISTS mobile_push_subscriptions_token_idx
+					ON mobile_push_subscriptions(token);
+				CREATE UNIQUE INDEX IF NOT EXISTS mobile_push_subscriptions_token_address_idx
+					ON mobile_push_subscriptions(token, address);
+			`); err != nil {
+				return err
+			}
+
+			return nil
+		},
+	},
 }
 
 type versionTarget struct {

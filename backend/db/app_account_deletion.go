@@ -165,7 +165,11 @@ func (a *AppDB) GetAccountDeletionPreview(ctx context.Context, userID string, no
 				AND l.active = TRUE
 				AND lpw.active = TRUE
 			),
-			(SELECT COUNT(*) FROM ponder_subscriptions WHERE owner = $1 AND active = TRUE),
+			(
+				(SELECT COUNT(*) FROM ponder_subscriptions WHERE owner = $1 AND active = TRUE)
+				+
+				(SELECT COUNT(*) FROM mobile_push_subscriptions WHERE owner = $1 AND active = TRUE)
+			),
 			(SELECT COUNT(*) FROM user_verified_emails WHERE user_id = $1 AND active = TRUE),
 			(SELECT COUNT(*) FROM memos WHERE owner = $1 AND active = TRUE);
 	`, userID).Scan(
@@ -219,6 +223,7 @@ func markUserOwnedRowsInactive(ctx context.Context, tx pgx.Tx, userID string, de
 		`UPDATE wallets SET active = FALSE, delete_date = $2, delete_reason = $3 WHERE owner = $1 AND active = TRUE;`,
 		`UPDATE contacts SET active = FALSE, delete_date = $2, delete_reason = $3 WHERE owner = $1 AND active = TRUE;`,
 		`UPDATE ponder_subscriptions SET active = FALSE, delete_date = $2, delete_reason = $3 WHERE owner = $1 AND active = TRUE;`,
+		`UPDATE mobile_push_subscriptions SET active = FALSE, delete_date = $2, delete_reason = $3 WHERE owner = $1 AND active = TRUE;`,
 		`UPDATE memos SET active = FALSE, delete_date = $2, delete_reason = $3 WHERE owner = $1 AND active = TRUE;`,
 		`UPDATE affiliates SET active = FALSE, delete_date = $2, delete_reason = $3 WHERE user_id = $1 AND active = TRUE;`,
 		`UPDATE proposers SET active = FALSE, delete_date = $2, delete_reason = $3 WHERE user_id = $1 AND active = TRUE;`,
@@ -244,6 +249,7 @@ func restoreUserOwnedRowsForAccountDeletionCancel(ctx context.Context, tx pgx.Tx
 		`UPDATE wallets SET active = TRUE, delete_date = NULL, delete_reason = NULL WHERE owner = $1 AND delete_reason = $2 AND active = FALSE;`,
 		`UPDATE contacts SET active = TRUE, delete_date = NULL, delete_reason = NULL WHERE owner = $1 AND delete_reason = $2 AND active = FALSE;`,
 		`UPDATE ponder_subscriptions SET active = TRUE, delete_date = NULL, delete_reason = NULL WHERE owner = $1 AND delete_reason = $2 AND active = FALSE;`,
+		`UPDATE mobile_push_subscriptions SET active = TRUE, delete_date = NULL, delete_reason = NULL WHERE owner = $1 AND delete_reason = $2 AND active = FALSE;`,
 		`UPDATE memos SET active = TRUE, delete_date = NULL, delete_reason = NULL WHERE owner = $1 AND delete_reason = $2 AND active = FALSE;`,
 		`UPDATE affiliates SET active = TRUE, delete_date = NULL, delete_reason = NULL WHERE user_id = $1 AND delete_reason = $2 AND active = FALSE;`,
 		`UPDATE proposers SET active = TRUE, delete_date = NULL, delete_reason = NULL WHERE user_id = $1 AND delete_reason = $2 AND active = FALSE;`,
@@ -405,6 +411,7 @@ func (a *AppDB) PurgeDeletedUser(ctx context.Context, userID string, now time.Ti
 		`DELETE FROM locations WHERE owner_id = $1;`,
 		`DELETE FROM contacts WHERE owner = $1;`,
 		`DELETE FROM ponder_subscriptions WHERE owner = $1;`,
+		`DELETE FROM mobile_push_subscriptions WHERE owner = $1;`,
 		`DELETE FROM memos WHERE owner = $1;`,
 		`DELETE FROM affiliates WHERE user_id = $1;`,
 		`DELETE FROM proposers WHERE user_id = $1;`,

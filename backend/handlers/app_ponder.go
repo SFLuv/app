@@ -14,6 +14,20 @@ import (
 	"github.com/SFLuv/app/backend/utils"
 )
 
+const defaultExpoPushAPIURL = "https://exp.host/--/api/v2/push/send"
+
+func allowedWalletAddresses(wallets []*structs.Wallet) map[string]bool {
+	userWallets := make(map[string]bool, len(wallets))
+	for _, wallet := range wallets {
+		if !wallet.IsEoa && wallet.SmartAddress != nil {
+			userWallets[strings.ToLower(strings.TrimSpace(*wallet.SmartAddress))] = true
+			continue
+		}
+		userWallets[strings.ToLower(strings.TrimSpace(wallet.EoaAddress))] = true
+	}
+	return userWallets
+}
+
 func (a *AppService) AddPonderMerchantSubscription(w http.ResponseWriter, r *http.Request) {
 	userDid := utils.GetDid(r)
 	if userDid == nil {
@@ -77,16 +91,9 @@ func (a *AppService) AddPonderMerchantSubscription(w http.ResponseWriter, r *htt
 		return
 	}
 
-	userWallets := map[string]bool{}
-	for _, wallet := range wallets {
-		if !wallet.IsEoa && wallet.SmartAddress != nil {
-			userWallets[*wallet.SmartAddress] = true
-			continue
-		}
-		userWallets[wallet.EoaAddress] = true
-	}
+	userWallets := allowedWalletAddresses(wallets)
 
-	if !userWallets[req.Address] {
+	if !userWallets[strings.ToLower(strings.TrimSpace(req.Address))] {
 		fmt.Println("no address %s", req.Address)
 		w.WriteHeader(http.StatusBadRequest)
 		return
@@ -160,6 +167,114 @@ func (a *AppService) AddPonderMerchantSubscription(w http.ResponseWriter, r *htt
 	}
 
 	w.WriteHeader(http.StatusCreated)
+}
+
+func (a *AppService) SyncPonderPushSubscriptions(w http.ResponseWriter, r *http.Request) {
+	userDid := utils.GetDid(r)
+	if userDid == nil {
+		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		a.logger.Logf("error reading push subscription sync body for user %s: %s", *userDid, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	var req structs.PushSubscriptionSyncRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	req.Token = strings.TrimSpace(req.Token)
+	if req.Token == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	wallets, err := a.db.GetWalletsByUser(r.Context(), *userDid)
+	if err != nil {
+		a.logger.Logf("error getting wallets for push sync user %s: %s", *userDid, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	userWallets := allowedWalletAddresses(wallets)
+	normalizedAddresses := make([]string, 0, len(req.Addresses))
+	seenAddresses := make(map[string]struct{}, len(req.Addresses))
+	for _, rawAddress := range req.Addresses {
+		address := strings.ToLower(strings.TrimSpace(rawAddress))
+		if address == "" {
+			continue
+		}
+		if !userWallets[address] {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if _, seen := seenAddresses[address]; seen {
+			continue
+		}
+		seenAddresses[address] = struct{}{}
+		normalizedAddresses = append(normalizedAddresses, address)
+	}
+
+	if err := a.db.SyncMobilePushSubscriptions(r.Context(), *userDid, req.Token, normalizedAddresses); err != nil {
+		a.logger.Logf("error syncing push subscriptions for user %s: %s", *userDid, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *AppService) GetPonderPushSubscriptions(w http.ResponseWriter, r *http.Request) {
+	userDid := utils.GetDid(r)
+	if userDid == nil {
+		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+
+	subscriptions, err := a.db.GetMobilePushSubscriptionsByUser(r.Context(), *userDid)
+	if err != nil {
+		a.logger.Logf("error getting mobile push subscriptions for user %s: %s", *userDid, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	body, err := json.Marshal(subscriptions)
+	if err != nil {
+		a.logger.Logf("error marshalling mobile push subscriptions for user %s: %s", *userDid, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	w.Write(body)
+}
+
+func (a *AppService) DeletePonderPushSubscription(w http.ResponseWriter, r *http.Request) {
+	userDid := utils.GetDid(r)
+	if userDid == nil {
+		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+
+	subscriptionID, err := strconv.Atoi(r.URL.Query().Get("id"))
+	if err != nil || subscriptionID <= 0 {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	if err := a.db.DeleteMobilePushSubscription(r.Context(), subscriptionID, *userDid); err != nil {
+		a.logger.Logf("error deleting mobile push subscription %d for user %s: %s", subscriptionID, *userDid, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
 }
 
 func (a *AppService) DeletePonderMerchantSubscription(w http.ResponseWriter, r *http.Request) {
@@ -370,5 +485,80 @@ func (a *AppService) PonderHookHandler(w http.ResponseWriter, r *http.Request) {
 		a.logger.Logf("error sending transaction receipt email: %s", err.Error())
 	}
 
+	pushListeners, err := a.db.GetMobilePushSubscriptionsByAddress(r.Context(), tx.To)
+	if err != nil {
+		a.logger.Logf("error getting mobile push subscriptions for %s: %s", tx.To, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	for _, listener := range pushListeners {
+		wallet, walletErr := a.db.GetWalletByUserAndAddress(r.Context(), listener.Owner, listener.Address)
+		if walletErr != nil {
+			a.logger.Logf("error getting wallet for push notification user %s, address %s: %s", listener.Owner, listener.Address, walletErr)
+			continue
+		}
+
+		title := "SFLuv Transaction Alert"
+		body := fmt.Sprintf("%s SFLuv received.", formattedAmount)
+		if wallet.Name != "" {
+			body = fmt.Sprintf("%s SFLuv received in %s.", formattedAmount, wallet.Name)
+		}
+
+		if pushErr := sendExpoPushNotification(strings.TrimSpace(string(listener.Data)), title, body, map[string]string{
+			"hash":    tx.Hash,
+			"to":      tx.To,
+			"from":    tx.From,
+			"amount":  formattedAmount,
+			"address": listener.Address,
+		}); pushErr != nil {
+			a.logger.Logf("error sending Expo push notification for user %s, address %s: %s", listener.Owner, listener.Address, pushErr)
+		}
+	}
+
 	w.WriteHeader(http.StatusOK)
+}
+
+func sendExpoPushNotification(token string, title string, body string, data map[string]string) error {
+	if strings.TrimSpace(token) == "" {
+		return fmt.Errorf("empty Expo push token")
+	}
+
+	pushURL := strings.TrimSpace(os.Getenv("EXPO_PUSH_API_URL"))
+	if pushURL == "" {
+		pushURL = defaultExpoPushAPIURL
+	}
+
+	payload := map[string]any{
+		"to":    token,
+		"title": title,
+		"body":  body,
+		"sound": "default",
+		"data":  data,
+	}
+
+	reqBody, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, pushURL, bytes.NewReader(reqBody))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		bodyBytes, _ := io.ReadAll(res.Body)
+		return fmt.Errorf("expo push api returned %d: %s", res.StatusCode, strings.TrimSpace(string(bodyBytes)))
+	}
+
+	return nil
 }

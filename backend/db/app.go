@@ -2313,6 +2313,31 @@ func (s *AppDB) CreateTables() error {
 	}
 
 	_, err = s.db.Exec(context.Background(), `
+		CREATE TABLE IF NOT EXISTS mobile_push_subscriptions(
+			id SERIAL PRIMARY KEY,
+			owner TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			token TEXT NOT NULL,
+			address TEXT NOT NULL,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			active BOOLEAN NOT NULL DEFAULT true,
+			delete_date TIMESTAMPTZ,
+			delete_reason TEXT
+		);
+
+		CREATE INDEX IF NOT EXISTS mobile_push_subscriptions_owner_idx
+			ON mobile_push_subscriptions(owner);
+		CREATE INDEX IF NOT EXISTS mobile_push_subscriptions_address_idx
+			ON mobile_push_subscriptions(address);
+		CREATE INDEX IF NOT EXISTS mobile_push_subscriptions_token_idx
+			ON mobile_push_subscriptions(token);
+		CREATE UNIQUE INDEX IF NOT EXISTS mobile_push_subscriptions_token_address_idx
+			ON mobile_push_subscriptions(token, address);
+	`)
+	if err != nil {
+		return fmt.Errorf("error creating mobile push subscriptions table: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
 		CREATE TABLE IF NOT EXISTS issuers(
 			user_id TEXT PRIMARY KEY REFERENCES users(id),
 			organization TEXT NOT NULL DEFAULT '',
