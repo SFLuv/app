@@ -377,6 +377,30 @@ var schemaMigrations = []SchemaMigration{
 			return nil
 		},
 	},
+	{
+		Version:     "1.5",
+		Description: "require privacy-policy acceptance and record mailing-list opt-in preferences",
+		Apply: func(ctx context.Context, pools *DBPools, appLogger *logger.LogCloser) error {
+			if _, err := pools.App.Exec(ctx, `
+				ALTER TABLE users
+				ADD COLUMN IF NOT EXISTS accepted_privacy_policy BOOLEAN NOT NULL DEFAULT false;
+				ALTER TABLE users
+				ADD COLUMN IF NOT EXISTS accepted_privacy_policy_at TIMESTAMPTZ;
+				ALTER TABLE users
+				ADD COLUMN IF NOT EXISTS privacy_policy_version TEXT NOT NULL DEFAULT '';
+				ALTER TABLE users
+				ADD COLUMN IF NOT EXISTS mailing_list_opt_in BOOLEAN NOT NULL DEFAULT false;
+				ALTER TABLE users
+				ADD COLUMN IF NOT EXISTS mailing_list_opt_in_at TIMESTAMPTZ;
+				ALTER TABLE users
+				ADD COLUMN IF NOT EXISTS mailing_list_policy_version TEXT NOT NULL DEFAULT '';
+			`); err != nil {
+				return err
+			}
+
+			return nil
+		},
+	},
 }
 
 type versionTarget struct {

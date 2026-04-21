@@ -35,7 +35,13 @@ func (s *AppDB) CreateTables() error {
 				contact_name TEXT,
 				primary_wallet_address TEXT NOT NULL DEFAULT '',
 				paypal_eth TEXT NOT NULL DEFAULT '',
-			last_redemption INTEGER NOT NULL DEFAULT 0
+				last_redemption INTEGER NOT NULL DEFAULT 0,
+				accepted_privacy_policy BOOLEAN NOT NULL DEFAULT false,
+				accepted_privacy_policy_at TIMESTAMPTZ,
+				privacy_policy_version TEXT NOT NULL DEFAULT '',
+				mailing_list_opt_in BOOLEAN NOT NULL DEFAULT false,
+				mailing_list_opt_in_at TIMESTAMPTZ,
+				mailing_list_policy_version TEXT NOT NULL DEFAULT ''
 		);
 	`)
 	if err != nil {
@@ -106,9 +112,27 @@ func (s *AppDB) CreateTables() error {
 	_, err = s.db.Exec(context.Background(), `
 		ALTER TABLE users
 		ADD COLUMN IF NOT EXISTS last_redemption INTEGER NOT NULL DEFAULT 0;
+
+		ALTER TABLE users
+		ADD COLUMN IF NOT EXISTS accepted_privacy_policy BOOLEAN NOT NULL DEFAULT false;
+
+		ALTER TABLE users
+		ADD COLUMN IF NOT EXISTS accepted_privacy_policy_at TIMESTAMPTZ;
+
+		ALTER TABLE users
+		ADD COLUMN IF NOT EXISTS privacy_policy_version TEXT NOT NULL DEFAULT '';
+
+		ALTER TABLE users
+		ADD COLUMN IF NOT EXISTS mailing_list_opt_in BOOLEAN NOT NULL DEFAULT false;
+
+		ALTER TABLE users
+		ADD COLUMN IF NOT EXISTS mailing_list_opt_in_at TIMESTAMPTZ;
+
+		ALTER TABLE users
+		ADD COLUMN IF NOT EXISTS mailing_list_policy_version TEXT NOT NULL DEFAULT '';
 	`)
 	if err != nil {
-		return fmt.Errorf("error adding last_redemption column: %s", err)
+		return fmt.Errorf("error adding user policy columns: %s", err)
 	}
 
 	_, err = s.db.Exec(context.Background(), `

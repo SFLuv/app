@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/SFLuv/app/backend/structs"
 	"github.com/jackc/pgx/v5"
@@ -165,7 +166,13 @@ func (a *AppDB) GetUsers(ctx context.Context, page int, count int) ([]*structs.U
 			contact_phone,
 			contact_name,
 			primary_wallet_address,
-			paypal_eth
+			paypal_eth,
+			accepted_privacy_policy,
+			accepted_privacy_policy_at,
+			privacy_policy_version,
+			mailing_list_opt_in,
+			mailing_list_opt_in_at,
+			mailing_list_policy_version
 		FROM
 			users
 		WHERE
@@ -197,6 +204,12 @@ func (a *AppDB) GetUsers(ctx context.Context, page int, count int) ([]*structs.U
 			&user.Name,
 			&user.PrimaryWalletAddress,
 			&user.PayPalEth,
+			&user.AcceptedPrivacyPolicy,
+			&user.AcceptedPrivacyPolicyAt,
+			&user.PrivacyPolicyVersion,
+			&user.MailingListOptIn,
+			&user.MailingListOptInAt,
+			&user.MailingListPolicyVersion,
 		)
 		if err != nil {
 			continue
@@ -235,7 +248,13 @@ func (a *AppDB) getUserById(ctx context.Context, userId string, includeInactive 
 			contact_name,
 			primary_wallet_address,
 			paypal_eth,
-			last_redemption
+			last_redemption,
+			accepted_privacy_policy,
+			accepted_privacy_policy_at,
+			privacy_policy_version,
+			mailing_list_opt_in,
+			mailing_list_opt_in_at,
+			mailing_list_policy_version
 		FROM
 			users
 		WHERE
@@ -264,12 +283,125 @@ func (a *AppDB) getUserById(ctx context.Context, userId string, includeInactive 
 		&user.PrimaryWalletAddress,
 		&user.PayPalEth,
 		&user.LastRedemption,
+		&user.AcceptedPrivacyPolicy,
+		&user.AcceptedPrivacyPolicyAt,
+		&user.PrivacyPolicyVersion,
+		&user.MailingListOptIn,
+		&user.MailingListOptInAt,
+		&user.MailingListPolicyVersion,
 	)
 	if err != nil {
 		return nil, err
 	}
 
 	return &user, nil
+}
+
+func (a *AppDB) GetUserPolicyStatus(ctx context.Context, userId string) (*structs.UserPolicyStatusResponse, error) {
+	status := &structs.UserPolicyStatusResponse{}
+	row := a.db.QueryRow(ctx, `
+		SELECT
+			id,
+			active,
+			accepted_privacy_policy,
+			accepted_privacy_policy_at,
+			privacy_policy_version,
+			mailing_list_opt_in,
+			mailing_list_opt_in_at,
+			mailing_list_policy_version
+		FROM
+			users
+		WHERE
+			id = $1;
+	`, userId)
+	if err := row.Scan(
+		&status.UserId,
+		&status.Active,
+		&status.AcceptedPrivacyPolicy,
+		&status.AcceptedPrivacyPolicyAt,
+		&status.PrivacyPolicyVersion,
+		&status.MailingListOptIn,
+		&status.MailingListOptInAt,
+		&status.MailingListPolicyVersion,
+	); err != nil {
+		return nil, err
+	}
+
+	return status, nil
+}
+
+func (a *AppDB) UserHasAcceptedPrivacyPolicy(ctx context.Context, userId string) (bool, error) {
+	row := a.db.QueryRow(ctx, `
+		SELECT
+			accepted_privacy_policy
+		FROM
+			users
+		WHERE
+			id = $1
+		AND
+			active = TRUE;
+	`, userId)
+
+	var accepted bool
+	if err := row.Scan(&accepted); err != nil {
+		return false, err
+	}
+
+	return accepted, nil
+}
+
+func (a *AppDB) AcceptUserPolicies(
+	ctx context.Context,
+	userId string,
+	mailingListOptIn bool,
+	now time.Time,
+) (*structs.UserPolicyStatusResponse, error) {
+	row := a.db.QueryRow(ctx, `
+		UPDATE
+			users
+		SET
+			accepted_privacy_policy = TRUE,
+			accepted_privacy_policy_at = COALESCE(accepted_privacy_policy_at, $2),
+			privacy_policy_version = $3,
+			mailing_list_opt_in = $4,
+			mailing_list_opt_in_at = CASE
+				WHEN $4 THEN COALESCE(mailing_list_opt_in_at, $2)
+				ELSE NULL
+			END,
+			mailing_list_policy_version = CASE
+				WHEN $4 THEN $5
+				ELSE ''
+			END
+		WHERE
+			id = $1
+		AND
+			active = TRUE
+		RETURNING
+			id,
+			active,
+			accepted_privacy_policy,
+			accepted_privacy_policy_at,
+			privacy_policy_version,
+			mailing_list_opt_in,
+			mailing_list_opt_in_at,
+			mailing_list_policy_version;
+	`, userId, now.UTC(), structs.CurrentPrivacyPolicyVersion, mailingListOptIn, structs.CurrentMailingListPolicyVersion)
+
+	status := &structs.UserPolicyStatusResponse{}
+	if err := row.Scan(
+		&status.UserId,
+		&status.Active,
+		&status.AcceptedPrivacyPolicy,
+		&status.AcceptedPrivacyPolicyAt,
+		&status.PrivacyPolicyVersion,
+		&status.MailingListOptIn,
+		&status.MailingListOptInAt,
+		&status.MailingListPolicyVersion,
+	); err != nil {
+		return nil, err
+	}
+
+	return status, nil
 }
 
 func (a *AppDB) GetAllUserIDs(ctx context.Context) ([]string, error) {

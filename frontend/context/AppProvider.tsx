@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import {
   ConnectedWallet,
   EIP1193Provider,
@@ -72,6 +73,7 @@ import {
   AppleRecoveryResponse,
   AccountDeletionStatusResponse,
   GetUserResponse,
+  UserPolicyStatusResponse,
   UserResponse,
   WalletResponse,
 } from "@/types/server";
@@ -81,8 +83,20 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Contact } from "@/types/contact";
 import { useIdleTimer } from "react-idle-timer";
 import { IdleModal } from "@/components/idle/idle-modal";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Checkbox } from "@/components/ui/checkbox";
 import { PonderSubscription, PonderSubscriptionRequest } from "@/types/ponder";
 import { base64 } from "@scure/base";
+import {
+  EMAIL_OPT_IN_POLICY_PATH,
+  PRIVACY_POLICY_PATH,
+} from "@/lib/policies";
 
 // const mockUser: User = { id: "user3", name: "Bob Johnson", email: "bob@example.com", isMerchant: true, isAdmin: false, isOrganizer: false }
 export type UserStatus = "loading" | "authenticated" | "unauthenticated";
@@ -106,6 +120,12 @@ export interface User {
   paypalEthAddress: string;
   lastRedemption: number;
   isAffiliate: boolean;
+  acceptedPrivacyPolicy: boolean;
+  acceptedPrivacyPolicyAt?: string | null;
+  privacyPolicyVersion: string;
+  mailingListOptIn: boolean;
+  mailingListOptInAt?: string | null;
+  mailingListPolicyVersion: string;
 }
 
 interface TxState {
@@ -184,6 +204,10 @@ const defaultTxState: TxState = {
   error: null,
   hash: null,
 };
+const REACTIVATED_ACCOUNT_RECOVERY_NOTICE_STORAGE_KEY =
+  "sfluv_reactivated_account_recovery_notice";
+const ACCOUNT_RECOVERY_SUPPORT_EMAIL = "techsupport@sfluv.org";
+const POLICY_REQUIRED_HEADER = "X-SFLUV-Auth-Reason";
 
 const AppContext = createContext<AppContextType | null>(null);
 const AppStatusContext = createContext<UserStatus>("loading");
@@ -394,6 +418,8 @@ export default function AppProvider({ children }: { children: ReactNode }) {
   const [googleActionBusy, setGoogleActionBusy] = useState(false);
   const [googleMessage, setGoogleMessage] = useState("");
   const [idleModalOpen, setIdleModalOpen] = useState<boolean>(false);
+  const [showRecoveryFundsNotice, setShowRecoveryFundsNotice] =
+    useState(false);
   const [ponderSubscriptions, setPonderSubscriptions] = useState<
     PonderSubscription[]
   >([]);
@@ -653,6 +679,42 @@ export default function AppProvider({ children }: { children: ReactNode }) {
       pauseIdleTimer();
     }
   }, [status]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    if (status !== "authenticated" || deletedAccountStatus) {
+      setShowRecoveryFundsNotice(false);
+      return;
+    }
+
+    try {
+      setShowRecoveryFundsNotice(
+        window.localStorage.getItem(
+          REACTIVATED_ACCOUNT_RECOVERY_NOTICE_STORAGE_KEY,
+        ) === "pending",
+      );
+    } catch (error) {
+      console.error("Unable to load the account recovery notice state", error);
+    }
+  }, [deletedAccountStatus, status, user?.id]);
+
+  const dismissRecoveryFundsNotice = () => {
+    setShowRecoveryFundsNotice(false);
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    try {
+      window.localStorage.removeItem(
+        REACTIVATED_ACCOUNT_RECOVERY_NOTICE_STORAGE_KEY,
+      );
+    } catch (error) {
+      console.error("Unable to clear the account recovery notice state", error);
+    }
+  };
 
   const _userResponseToUser = async (r: GetUserResponse) => {
     const u: User = {
@@ -1470,6 +1532,17 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     setDeletedAccountError("");
     try {
       await _cancelDeleteAccount();
+      try {
+        window.localStorage.setItem(
+          REACTIVATED_ACCOUNT_RECOVERY_NOTICE_STORAGE_KEY,
+          "pending",
+        );
+      } catch (storageError) {
+        console.error(
+          "Unable to persist the account recovery notice state",
+          storageError,
+        );
+      }
       setDeletedAccountStatus(null);
       setStatus("loading");
     } catch (error) {
@@ -1760,6 +1833,10 @@ export default function AppProvider({ children }: { children: ReactNode }) {
             onOpenChange={toggleIdleModal}
             getRemainingTime={getRemainingTime}
           />
+          <RecoveryFundsNoticeDialog
+            open={showRecoveryFundsNotice}
+            onClose={dismissRecoveryFundsNotice}
+          />
           {deletedAccountStatus && privyAuthenticated ? (
             <DeletedAccountGate
               account={deletedAccountStatus}
@@ -1950,5 +2027,59 @@ function AppleRecoveryGate({
         </div>
       </div>
     </div>
+  );
+}
+
+function RecoveryFundsNoticeDialog({
+  open,
+  onClose,
+}: {
+  open: boolean;
+  onClose: () => void;
+}) {
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(nextOpen) => {
+        if (!nextOpen) {
+          onClose();
+        }
+      }}
+    >
+      <DialogContent className="w-[95vw] max-w-md">
+        <DialogHeader className="space-y-2">
+          <DialogTitle>Funds recovery</DialogTitle>
+          <DialogDescription>
+            Your account is active again, but transferred funds do not return
+            automatically.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3 text-sm text-muted-foreground">
+          <p>
+            Any SFLuv transferred out during the deletion request will need to
+            be restored manually.
+          </p>
+          <p>
+            Contact{" "}
+            <a
+              className="font-semibold text-foreground underline underline-offset-4"
+              href={`mailto:${ACCOUNT_RECOVERY_SUPPORT_EMAIL}`}
+            >
+              {ACCOUNT_RECOVERY_SUPPORT_EMAIL}
+            </a>{" "}
+            to recover your funds.
+          </p>
+        </div>
+        <div className="flex justify-end">
+          <button
+            type="button"
+            className="inline-flex min-h-11 items-center justify-center rounded-xl bg-[#eb6c6c] px-5 text-sm font-semibold text-white transition hover:bg-[#d55c5c]"
+            onClick={onClose}
+          >
+            Understood
+          </button>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }

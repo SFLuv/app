@@ -23,6 +23,23 @@ export interface UserResponse {
   primary_wallet_address: string;
   paypal_eth: string;
   last_redemption: number;
+  accepted_privacy_policy: boolean;
+  accepted_privacy_policy_at?: string | null;
+  privacy_policy_version: string;
+  mailing_list_opt_in: boolean;
+  mailing_list_opt_in_at?: string | null;
+  mailing_list_policy_version: string;
+}
+
+export interface UserPolicyStatusResponse {
+  user_id: string;
+  active: boolean;
+  accepted_privacy_policy: boolean;
+  accepted_privacy_policy_at?: string | null;
+  privacy_policy_version: string;
+  mailing_list_opt_in: boolean;
+  mailing_list_opt_in_at?: string | null;
+  mailing_list_policy_version: string;
 }
 
 export interface LocationResponse {

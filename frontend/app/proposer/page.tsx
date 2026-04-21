@@ -392,6 +392,7 @@ export default function ProposerPage() {
   const workflowListLoadedRef = useRef(false)
   const createDataRequestRef = useRef<Promise<void> | null>(null)
   const workflowListRequestIdRef = useRef(0)
+  const authFetchRef = useRef(authFetch)
   const canProposeDeletion = Boolean(user?.isProposer)
   const isEditProposalMode = editProposalWorkflowId.trim().length > 0
   const touchDragRef = useRef<{
@@ -408,6 +409,10 @@ export default function ProposerPage() {
     const supervisorBounty = workflowSupervisor.enabled ? Number(workflowSupervisor.bounty) || 0 : 0
     return stepTotal + supervisorBounty
   }, [steps, workflowSupervisor.bounty, workflowSupervisor.enabled])
+
+  useEffect(() => {
+    authFetchRef.current = authFetch
+  }, [authFetch])
 
   const workflowSeriesGroups = useMemo<WorkflowSeriesGroup[]>(() => {
     const bySeries = new Map<string, Workflow[]>()
@@ -486,9 +491,9 @@ export default function ProposerPage() {
       const request = (async () => {
         try {
           const [templatesRes, credentialTypesRes, supervisorsRes] = await Promise.all([
-            authFetch("/proposers/workflow-templates"),
-            authFetch("/credentials/types"),
-            authFetch("/supervisors/approved"),
+            authFetchRef.current("/proposers/workflow-templates"),
+            authFetchRef.current("/credentials/types"),
+            authFetchRef.current("/supervisors/approved"),
           ])
 
           if (templatesRes.ok) {
@@ -527,7 +532,7 @@ export default function ProposerPage() {
       createDataRequestRef.current = request
       return request
     },
-    [authFetch, isApproved],
+    [isApproved],
   )
 
   const loadWorkflowListData = useCallback(
@@ -542,7 +547,7 @@ export default function ProposerPage() {
       const requestId = workflowListRequestIdRef.current + 1
       workflowListRequestIdRef.current = requestId
 
-      setWorkflowListLoading(true)
+      setWorkflowListLoading(mode === "blocking" || !workflowListLoadedRef.current)
       try {
         const params = new URLSearchParams()
         const effectiveWorkflowPage = isAdminUser ? workflowPage : 0
@@ -561,12 +566,12 @@ export default function ProposerPage() {
 
         const workflowUrl = `/proposers/workflows${params.toString() ? `?${params.toString()}` : ""}`
         const requests: Promise<Response>[] = [
-          authFetch(workflowUrl),
-          authFetch("/proposers/workflow-deletion-proposals"),
+          authFetchRef.current(workflowUrl),
+          authFetchRef.current("/proposers/workflow-deletion-proposals"),
         ]
 
         if (isAdminUser) {
-          requests.push(authFetch("/admin/proposers?page=0&count=500"))
+          requests.push(authFetchRef.current("/admin/proposers?page=0&count=500"))
         }
 
         const [workflowsRes, deletionProposalsRes, proposersRes] = await Promise.all(requests)
@@ -625,7 +630,7 @@ export default function ProposerPage() {
         setWorkflowListLoading(false)
       }
     },
-    [authFetch, isAdminUser, isApproved, workflowPage, workflowPageSize, workflowProposerFilter, workflowSearch, workflowStatusFilter],
+    [isAdminUser, isApproved, workflowPage, workflowPageSize, workflowProposerFilter, workflowSearch, workflowStatusFilter],
   )
 
   useEffect(() => {
@@ -679,6 +684,23 @@ export default function ProposerPage() {
     if (!workflowListLoadedRef.current) {
       void loadWorkflowListData("background")
     }
+  }, [activeTab, isApproved, loadCreateData, loadWorkflowListData, status])
+
+  useEffect(() => {
+    if (status !== "authenticated" || !isApproved) return
+
+    const interval = window.setInterval(() => {
+      if (document.visibilityState !== "visible") return
+
+      if (activeTab === "your-workflows") {
+        void loadWorkflowListData("background")
+        return
+      }
+
+      void loadCreateData("background")
+    }, 30000)
+
+    return () => window.clearInterval(interval)
   }, [activeTab, isApproved, loadCreateData, loadWorkflowListData, status])
 
   useEffect(() => {

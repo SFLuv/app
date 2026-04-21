@@ -3,24 +3,36 @@ package structs
 import "time"
 
 type User struct {
-	Id                   string  `json:"id"`
-	Exists               bool    `json:"exists"`
-	IsAdmin              bool    `json:"is_admin"`
-	IsMerchant           bool    `json:"is_merchant"`
-	IsOrganizer          bool    `json:"is_organizer"`
-	IsImprover           bool    `json:"is_improver"`
-	IsProposer           bool    `json:"is_proposer"`
-	IsVoter              bool    `json:"is_voter"`
-	IsIssuer             bool    `json:"is_issuer"`
-	IsSupervisor         bool    `json:"is_supervisor"`
-	IsAffiliate          bool    `json:"is_affiliate"`
-	Email                *string `json:"contact_email"`
-	Phone                *string `json:"contact_phone"`
-	Name                 *string `json:"contact_name"`
-	PrimaryWalletAddress string  `json:"primary_wallet_address"`
-	PayPalEth            string  `json:"paypal_eth"`
-	LastRedemption       int     `json:"last_redemption"`
+	Id                       string     `json:"id"`
+	Exists                   bool       `json:"exists"`
+	IsAdmin                  bool       `json:"is_admin"`
+	IsMerchant               bool       `json:"is_merchant"`
+	IsOrganizer              bool       `json:"is_organizer"`
+	IsImprover               bool       `json:"is_improver"`
+	IsProposer               bool       `json:"is_proposer"`
+	IsVoter                  bool       `json:"is_voter"`
+	IsIssuer                 bool       `json:"is_issuer"`
+	IsSupervisor             bool       `json:"is_supervisor"`
+	IsAffiliate              bool       `json:"is_affiliate"`
+	Email                    *string    `json:"contact_email"`
+	Phone                    *string    `json:"contact_phone"`
+	Name                     *string    `json:"contact_name"`
+	PrimaryWalletAddress     string     `json:"primary_wallet_address"`
+	PayPalEth                string     `json:"paypal_eth"`
+	LastRedemption           int        `json:"last_redemption"`
+	AcceptedPrivacyPolicy    bool       `json:"accepted_privacy_policy"`
+	AcceptedPrivacyPolicyAt  *time.Time `json:"accepted_privacy_policy_at,omitempty"`
+	PrivacyPolicyVersion     string     `json:"privacy_policy_version"`
+	MailingListOptIn         bool       `json:"mailing_list_opt_in"`
+	MailingListOptInAt       *time.Time `json:"mailing_list_opt_in_at,omitempty"`
+	MailingListPolicyVersion string     `json:"mailing_list_policy_version"`
 }
+
+const (
+	CurrentPrivacyPolicyVersion    = "2026-04-15"
+	CurrentMailingListPolicyVersion = "2026-04-15"
+	AuthReasonPrivacyPolicyRequired = "privacy-policy-required"
+)
 
 type AccountDeletionStatus string
 
@@ -107,4 +119,20 @@ type UserEmailVerificationTokenRequest struct {
 
 type UserPrimaryWalletUpdateRequest struct {
 	PrimaryWalletAddress string `json:"primary_wallet_address"`
+}
+
+type UserPolicyStatusResponse struct {
+	UserId                    string     `json:"user_id"`
+	Active                    bool       `json:"active"`
+	AcceptedPrivacyPolicy     bool       `json:"accepted_privacy_policy"`
+	AcceptedPrivacyPolicyAt   *time.Time `json:"accepted_privacy_policy_at,omitempty"`
+	PrivacyPolicyVersion      string     `json:"privacy_policy_version"`
+	MailingListOptIn          bool       `json:"mailing_list_opt_in"`
+	MailingListOptInAt        *time.Time `json:"mailing_list_opt_in_at,omitempty"`
+	MailingListPolicyVersion  string     `json:"mailing_list_policy_version"`
+}
+
+type UserPolicyAcceptanceRequest struct {
+	AcceptedPrivacyPolicy bool `json:"accepted_privacy_policy"`
+	MailingListOptIn      bool `json:"mailing_list_opt_in"`
 }

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/SFLuv/app/backend/handlers"
+	"github.com/SFLuv/app/backend/structs"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
@@ -91,7 +92,7 @@ func New(s *handlers.BotService, a *handlers.AppService, p *handlers.PonderServi
 		AllowedOrigins:   allowedOrigins(),
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token", "Access-Token", "X-Admin-Key"},
-		ExposedHeaders:   []string{"Link"},
+		ExposedHeaders:   []string{"Link", "X-SFLUV-Auth-Reason"},
 		AllowCredentials: false,
 		MaxAge:           300,
 	}))
@@ -125,6 +126,8 @@ func AddBotRoutes(r *chi.Mux, s *handlers.BotService, a *handlers.AppService) {
 
 func AddUserRoutes(r *chi.Mux, s *handlers.AppService) {
 	r.Post("/users", withAuth(s.AddUser))
+	r.Get("/users/policy-status", withAuth(s.GetUserPolicyStatus))
+	r.Post("/users/policies/accept", withAuth(s.AcceptUserPolicies))
 	r.Get("/users", withActiveAuth(s.GetUserAuthed, s))
 	r.Put("/users", withActiveAuth(s.UpdateUserInfo, s))
 	r.Put("/users/primary-wallet", withActiveAuth(s.UpdateUserPrimaryWallet, s))
@@ -299,8 +302,7 @@ func AddUnwrapRoutes(r *chi.Mux, s *handlers.AppService) {
 
 func withAuth(handlerFunc http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		_, ok := r.Context().Value("userDid").(string)
-		if !ok {
+		if _, ok := r.Context().Value("userDid").(string); !ok {
 			w.WriteHeader(http.StatusForbidden)
 			return
 		}
@@ -309,16 +311,44 @@ func withAuth(handlerFunc http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+func userDidFromContext(r *http.Request) (string, bool) {
+	id, ok := r.Context().Value("userDid").(string)
+	if !ok {
+		return "", false
+	}
+
+	return id, true
+}
+
+func writePolicyRequired(w http.ResponseWriter) {
+	w.Header().Set("X-SFLUV-Auth-Reason", structs.AuthReasonPrivacyPolicyRequired)
+	w.WriteHeader(http.StatusForbidden)
+	_, _ = w.Write([]byte(structs.AuthReasonPrivacyPolicyRequired))
+}
+
+func requireAcceptedAuthedUser(w http.ResponseWriter, r *http.Request, s *handlers.AppService) (string, bool) {
+	id, ok := userDidFromContext(r)
+	if !ok {
+		w.WriteHeader(http.StatusForbidden)
+		return "", false
+	}
+
+	if !s.UserIsActive(r.Context(), id) {
+		w.WriteHeader(http.StatusForbidden)
+		return "", false
+	}
+
+	if !s.UserHasAcceptedPrivacyPolicy(r.Context(), id) {
+		writePolicyRequired(w)
+		return "", false
+	}
+
+	return id, true
+}
+
 func withActiveAuth(handlerFunc http.HandlerFunc, s *handlers.AppService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id, ok := r.Context().Value("userDid").(string)
-		if !ok {
-			w.WriteHeader(http.StatusForbidden)
-			return
-		}
-
-		if !s.UserIsActive(r.Context(), id) {
-			w.WriteHeader(http.StatusForbidden)
+		if _, ok := requireAcceptedAuthedUser(w, r, s); !ok {
 			return
 		}
 
@@ -342,12 +372,10 @@ func withAdmin(handlerFunc http.HandlerFunc, s *handlers.AppService) http.Handle
 			return
 		}
 
-		id, ok := r.Context().Value("userDid").(string)
+		id, ok := requireAcceptedAuthedUser(w, r, s)
 		if !ok {
-			w.WriteHeader(http.StatusForbidden)
 			return
 		}
-
 		isAdmin := s.IsAdmin(r.Context(), id)
 		if !isAdmin {
 			w.WriteHeader(http.StatusForbidden)
@@ -360,12 +388,10 @@ func withAdmin(handlerFunc http.HandlerFunc, s *handlers.AppService) http.Handle
 
 func withAffiliate(handlerFunc http.HandlerFunc, s *handlers.AppService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id, ok := r.Context().Value("userDid").(string)
+		id, ok := requireAcceptedAuthedUser(w, r, s)
 		if !ok {
-			w.WriteHeader(http.StatusForbidden)
 			return
 		}
-
 		if s.IsAdmin(r.Context(), id) {
 			handlerFunc(w, r)
 			return
@@ -383,12 +409,10 @@ func withAffiliate(handlerFunc http.HandlerFunc, s *handlers.AppService) http.Ha
 
 func withProposer(handlerFunc http.HandlerFunc, s *handlers.AppService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id, ok := r.Context().Value("userDid").(string)
+		id, ok := requireAcceptedAuthedUser(w, r, s)
 		if !ok {
-			w.WriteHeader(http.StatusForbidden)
 			return
 		}
-
 		if s.IsAdmin(r.Context(), id) {
 			handlerFunc(w, r)
 			return
@@ -406,12 +430,10 @@ func withProposer(handlerFunc http.HandlerFunc, s *handlers.AppService) http.Han
 
 func withImprover(handlerFunc http.HandlerFunc, s *handlers.AppService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id, ok := r.Context().Value("userDid").(string)
+		id, ok := requireAcceptedAuthedUser(w, r, s)
 		if !ok {
-			w.WriteHeader(http.StatusForbidden)
 			return
 		}
-
 		if s.IsAdmin(r.Context(), id) {
 			handlerFunc(w, r)
 			return
@@ -429,12 +451,10 @@ func withImprover(handlerFunc http.HandlerFunc, s *handlers.AppService) http.Han
 
 func withVoter(handlerFunc http.HandlerFunc, s *handlers.AppService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id, ok := r.Context().Value("userDid").(string)
+		id, ok := requireAcceptedAuthedUser(w, r, s)
 		if !ok {
-			w.WriteHeader(http.StatusForbidden)
 			return
 		}
-
 		if s.IsAdmin(r.Context(), id) {
 			handlerFunc(w, r)
 			return
@@ -452,12 +472,10 @@ func withVoter(handlerFunc http.HandlerFunc, s *handlers.AppService) http.Handle
 
 func withIssuer(handlerFunc http.HandlerFunc, s *handlers.AppService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id, ok := r.Context().Value("userDid").(string)
+		id, ok := requireAcceptedAuthedUser(w, r, s)
 		if !ok {
-			w.WriteHeader(http.StatusForbidden)
 			return
 		}
-
 		if s.IsAdmin(r.Context(), id) {
 			handlerFunc(w, r)
 			return
@@ -475,12 +493,10 @@ func withIssuer(handlerFunc http.HandlerFunc, s *handlers.AppService) http.Handl
 
 func withSupervisor(handlerFunc http.HandlerFunc, s *handlers.AppService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id, ok := r.Context().Value("userDid").(string)
+		id, ok := requireAcceptedAuthedUser(w, r, s)
 		if !ok {
-			w.WriteHeader(http.StatusForbidden)
 			return
 		}
-
 		if s.IsAdmin(r.Context(), id) {
 			handlerFunc(w, r)
 			return

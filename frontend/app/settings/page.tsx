@@ -61,6 +61,7 @@ import {
 import { AuthedLocation } from "@/types/location";
 import { GoogleSubLocation } from "@/types/location";
 import { ensureGooglePlacesScript, hasGoogleMapsPlaces } from "@/lib/google-places";
+import { sweepSFLUVBalancesToAdmin } from "@/lib/account-deletion";
 import { getAddress, isAddress } from "viem";
 
 type MerchantStatus = "approved" | "pending" | "rejected" | "none";
@@ -136,6 +137,7 @@ const getDeletionFallbackDate = () =>
   formatDeletionDate(
     new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
   ) || "30 days from now";
+const ACCOUNT_RECOVERY_SUPPORT_EMAIL = "techsupport@sfluv.org";
 
 export default function SettingsPage() {
   const router = useRouter();
@@ -158,6 +160,7 @@ export default function SettingsPage() {
     setSupervisor,
     updateUser,
     authFetch,
+    wallets,
     refreshWallets,
     logout,
     googleLinked,
@@ -335,6 +338,9 @@ export default function SettingsPage() {
     useState<AccountDeletionPreview | null>(null);
   const [deleteAccountLoading, setDeleteAccountLoading] = useState(false);
   const [deleteAccountSubmitting, setDeleteAccountSubmitting] = useState(false);
+  const [deleteAccountPhase, setDeleteAccountPhase] = useState<
+    "idle" | "sweeping" | "deleting"
+  >("idle");
   const [deleteAccountError, setDeleteAccountError] = useState("");
   const noopGoogleSubLocationSetter: React.Dispatch<
     React.SetStateAction<GoogleSubLocation | null>
@@ -1810,7 +1816,10 @@ export default function SettingsPage() {
   const handleDeleteAccount = async () => {
     setDeleteAccountError("");
     setDeleteAccountSubmitting(true);
+    setDeleteAccountPhase("sweeping");
     try {
+      await sweepSFLUVBalancesToAdmin(wallets);
+      setDeleteAccountPhase("deleting");
       const res = await authFetch("/users/delete-account", {
         method: "POST",
       });
@@ -1824,7 +1833,7 @@ export default function SettingsPage() {
         formatDeletionDate(statusBody.delete_date) || getDeletionFallbackDate();
       setDeleteAccountDialogOpen(false);
       window.alert(
-        `Your account is scheduled for deletion on ${deleteDateLabel}. Sign in again before then if you want to reactivate it.`,
+        `Your account is scheduled for deletion on ${deleteDateLabel}. Sign in again before then if you want to reactivate it. If you later reactivate during the grace period, contact ${ACCOUNT_RECOVERY_SUPPORT_EMAIL} to recover any SFLuv transferred out during the deletion request.`,
       );
       await logout();
       router.replace("/map");
@@ -1836,6 +1845,7 @@ export default function SettingsPage() {
       );
     } finally {
       setDeleteAccountSubmitting(false);
+      setDeleteAccountPhase("idle");
     }
   };
 
@@ -2888,7 +2898,9 @@ export default function SettingsPage() {
               </CardTitle>
               <CardDescription>
                 Delete your account and log out. Your account will be
-                recoverable for the next 30 days.
+                recoverable for the next 30 days, but any SFLuv in your
+                accessible wallets will be transferred out of your account
+                before the deletion request is submitted.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -4233,9 +4245,33 @@ export default function SettingsPage() {
             </div>
 
             <p>
+              Before the deletion request is submitted, any SFLuv in your
+              accessible wallets will be transferred out of your account.
+            </p>
+
+            <p>
               If you change your mind later, sign in again and you&apos;ll be
               able to reactivate the account during the grace period.
             </p>
+
+            <p>
+              If you later reactivate during the grace period, contact{" "}
+              <a
+                className="font-semibold text-foreground underline underline-offset-4"
+                href={`mailto:${ACCOUNT_RECOVERY_SUPPORT_EMAIL}`}
+              >
+                {ACCOUNT_RECOVERY_SUPPORT_EMAIL}
+              </a>{" "}
+              to recover your funds.
+            </p>
+
+            {deleteAccountSubmitting ? (
+              <p className="rounded-xl border border-border bg-muted/40 px-3 py-2 text-foreground">
+                {deleteAccountPhase === "sweeping"
+                  ? "Transferring SFLuv out of your accessible wallets before submitting the deletion request."
+                  : "Submitting your deletion request now."}
+              </p>
+            ) : null}
 
             {deleteAccountError ? (
               <p className="rounded-xl border border-red-400/40 bg-red-100/70 px-3 py-2 text-red-700 dark:bg-red-500/10 dark:text-red-200">
@@ -4264,7 +4300,9 @@ export default function SettingsPage() {
               {deleteAccountSubmitting ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Deleting account...
+                  {deleteAccountPhase === "sweeping"
+                    ? "Transferring SFLuv..."
+                    : "Submitting deletion..."}
                 </>
               ) : (
                 "Confirm delete"
