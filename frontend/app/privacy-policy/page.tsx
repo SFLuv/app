@@ -1,12 +1,13 @@
 import { PolicyPageShell } from "@/components/legal/policy-page-shell"
 import { PRIVACY_POLICY_LAST_UPDATED } from "@/lib/policies"
+import { ReactNode } from "react"
 
 function Section({
   title,
   children,
 }: {
   title: string
-  children: React.ReactNode
+  children: ReactNode
 }) {
   return (
     <section className="space-y-3">

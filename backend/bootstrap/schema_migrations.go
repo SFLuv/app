@@ -378,7 +378,7 @@ var schemaMigrations = []SchemaMigration{
 		},
 	},
 	{
-		Version:     "1.5",
+		Version:     "1.7",
 		Description: "require privacy-policy acceptance and record mailing-list opt-in preferences",
 		Apply: func(ctx context.Context, pools *DBPools, appLogger *logger.LogCloser) error {
 			if _, err := pools.App.Exec(ctx, `

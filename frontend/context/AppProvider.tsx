@@ -208,6 +208,7 @@ const REACTIVATED_ACCOUNT_RECOVERY_NOTICE_STORAGE_KEY =
   "sfluv_reactivated_account_recovery_notice";
 const ACCOUNT_RECOVERY_SUPPORT_EMAIL = "techsupport@sfluv.org";
 const POLICY_REQUIRED_HEADER = "X-SFLUV-Auth-Reason";
+const POLICY_REQUIRED_REASON = "privacy-policy-required";
 
 const AppContext = createContext<AppContextType | null>(null);
 const AppStatusContext = createContext<UserStatus>("loading");
@@ -420,6 +421,12 @@ export default function AppProvider({ children }: { children: ReactNode }) {
   const [idleModalOpen, setIdleModalOpen] = useState<boolean>(false);
   const [showRecoveryFundsNotice, setShowRecoveryFundsNotice] =
     useState(false);
+  const [policyStatus, setPolicyStatus] =
+    useState<UserPolicyStatusResponse | null>(null);
+  const [policyAction, setPolicyAction] = useState<
+    "idle" | "submitting" | "returning"
+  >("idle");
+  const [policyError, setPolicyError] = useState("");
   const [ponderSubscriptions, setPonderSubscriptions] = useState<
     PonderSubscription[]
   >([]);
@@ -584,6 +591,8 @@ export default function AppProvider({ children }: { children: ReactNode }) {
       pathname === "/redirect" ||
       pathname.startsWith("/faucet") ||
       pathname.startsWith("/improver/join") ||
+      pathname.startsWith(PRIVACY_POLICY_PATH) ||
+      pathname.startsWith(EMAIL_OPT_IN_POLICY_PATH) ||
       pathname.startsWith("/photos/") ||
       pathname.startsWith("/photo/");
 
@@ -613,6 +622,9 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     setPendingAppleTokens(null);
     setAppleLinkBusy(false);
     setAppleLinkMessage("");
+    setPolicyStatus(null);
+    setPolicyAction("idle");
+    setPolicyError("");
   };
 
   const activateDeletedAccountGate = (
@@ -622,6 +634,15 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     setDeletedAccountStatus(nextDeletedAccountStatus);
     setDeletedAccountAction("idle");
     setDeletedAccountError("");
+  };
+
+  const activatePolicyGate = (
+    nextPolicyStatus: UserPolicyStatusResponse,
+  ) => {
+    setPolicyStatus(nextPolicyStatus);
+    setPolicyAction("idle");
+    setPolicyError("");
+    setStatus("loading");
   };
 
   const toggleIdleModal = () => {
@@ -646,11 +667,16 @@ export default function AppProvider({ children }: { children: ReactNode }) {
       return;
     }
 
+    if (policyStatus) {
+      return;
+    }
+
     _userLogin();
   }, [
     appleRecovery,
     deletedAccountStatus,
     pathname,
+    policyStatus,
     privyAuthenticated,
     privyReady,
     privyUser,
@@ -685,7 +711,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    if (status !== "authenticated" || deletedAccountStatus) {
+    if (status !== "authenticated" || deletedAccountStatus || policyStatus) {
       setShowRecoveryFundsNotice(false);
       return;
     }
@@ -699,7 +725,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     } catch (error) {
       console.error("Unable to load the account recovery notice state", error);
     }
-  }, [deletedAccountStatus, status, user?.id]);
+  }, [deletedAccountStatus, policyStatus, status, user?.id]);
 
   const dismissRecoveryFundsNotice = () => {
     setShowRecoveryFundsNotice(false);
@@ -734,6 +760,12 @@ export default function AppProvider({ children }: { children: ReactNode }) {
       paypalEthAddress: r.user.paypal_eth,
       lastRedemption: r.user.last_redemption,
       isAffiliate: r.user.is_affiliate,
+      acceptedPrivacyPolicy: r.user.accepted_privacy_policy,
+      acceptedPrivacyPolicyAt: r.user.accepted_privacy_policy_at,
+      privacyPolicyVersion: r.user.privacy_policy_version,
+      mailingListOptIn: r.user.mailing_list_opt_in,
+      mailingListOptInAt: r.user.mailing_list_opt_in_at,
+      mailingListPolicyVersion: r.user.mailing_list_policy_version,
     };
     setUser(u);
     setAffiliate(r.affiliate ?? null);
@@ -747,12 +779,13 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     if (status === "authenticated") return;
 
     let userResponse: GetUserResponse | null;
+    let nextPolicyStatus: UserPolicyStatusResponse | null;
 
     setStatus("loading");
 
     try {
-      userResponse = await _getUser();
-      if (userResponse === null) {
+      nextPolicyStatus = await _getUserPolicyStatusRaw();
+      if (nextPolicyStatus === null) {
         if (appleLinked && !appleRecoveryBypassed) {
           try {
             const recovery = await _resolveAppleRecovery({
@@ -788,14 +821,33 @@ export default function AppProvider({ children }: { children: ReactNode }) {
 
         await _postUser();
         setAppleRecoveryBypassed(false);
-        userResponse = await _getUser();
+        nextPolicyStatus = await _getUserPolicyStatusRaw();
       }
-      if (userResponse === null) {
-        throw new Error("error posting user");
+      if (nextPolicyStatus === null) {
+        throw new Error("error loading user policy status");
+      }
+      if (!nextPolicyStatus.active) {
+        const accountDeletionStatus = await _getDeleteAccountStatus();
+        if (
+          accountDeletionStatus &&
+          accountDeletionStatus.status !== "active"
+        ) {
+          throw new DeletedAccountError(accountDeletionStatus);
+        }
+      }
+      if (!nextPolicyStatus.accepted_privacy_policy) {
+        activatePolicyGate(nextPolicyStatus);
+        return;
       }
 
       setAppleRecovery(null);
       setAppleRecoveryBypassed(false);
+      setPolicyStatus(null);
+
+      userResponse = await _getUser();
+      if (userResponse === null) {
+        throw new Error("error getting user");
+      }
 
       await _initWallets(userResponse.wallets);
       const latestWallets = await _getWallets();
@@ -831,18 +883,77 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     clearAuthenticatedState({ clearDeletedAccount: true, redirectToMap: true });
   };
 
-  const authFetch = async (
+  const rawAuthFetch = async (
     endpoint: string,
     options: RequestInit = {},
   ): Promise<Response> => {
     const accessToken = await getAccessToken();
-    if (!accessToken) throw new Error("no access token");
+    if (!accessToken) {
+      throw new Error("no access token");
+    }
     const h: HeadersInit = {
       ...options.headers,
       "Access-Token": accessToken,
     };
 
     return await fetch(BACKEND + endpoint, { ...options, headers: h });
+  };
+
+  const _getUserPolicyStatusRaw =
+    async (): Promise<UserPolicyStatusResponse | null> => {
+      const res = await rawAuthFetch("/users/policy-status");
+      if (res.status === 404) {
+        return null;
+      }
+      if (res.status !== 200) {
+        throw new Error("error getting user policy status");
+      }
+      return (await res.json()) as UserPolicyStatusResponse;
+    };
+
+  const _acceptUserPolicies = async (
+    mailingListOptIn: boolean,
+  ): Promise<UserPolicyStatusResponse> => {
+    const res = await rawAuthFetch("/users/policies/accept", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        accepted_privacy_policy: true,
+        mailing_list_opt_in: mailingListOptIn,
+      }),
+    });
+    if (res.status !== 200) {
+      throw new Error(
+        (await res.text()) || "Unable to save your policy preferences.",
+      );
+    }
+    return (await res.json()) as UserPolicyStatusResponse;
+  };
+
+  const authFetch = async (
+    endpoint: string,
+    options: RequestInit = {},
+  ): Promise<Response> => {
+    const response = await rawAuthFetch(endpoint, options);
+    if (
+      response.status === 403 &&
+      response.headers.get(POLICY_REQUIRED_HEADER) ===
+        POLICY_REQUIRED_REASON
+    ) {
+      try {
+        const nextPolicyStatus = await _getUserPolicyStatusRaw();
+        if (
+          nextPolicyStatus &&
+          nextPolicyStatus.accepted_privacy_policy !== true
+        ) {
+          activatePolicyGate(nextPolicyStatus);
+        }
+      } catch (error) {
+        console.error("Unable to load the user policy status", error);
+      }
+    }
+
+    return response;
   };
 
   const _storeAppleOAuthCredential = async (input: {
@@ -900,7 +1011,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
   };
 
   const _postUser = async () => {
-    let res = await authFetch("/users", { method: "POST" });
+    let res = await rawAuthFetch("/users", { method: "POST" });
     if (res.status != 201) {
       throw new Error("error posting user");
     }
@@ -908,7 +1019,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
 
   const _getDeleteAccountStatus =
     async (): Promise<AccountDeletionStatusResponse | null> => {
-      const res = await authFetch("/users/delete-account/status");
+      const res = await rawAuthFetch("/users/delete-account/status");
       if (res.status === 404) {
         return null;
       }
@@ -920,7 +1031,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
 
   const _cancelDeleteAccount =
     async (): Promise<AccountDeletionStatusResponse> => {
-      const res = await authFetch("/users/delete-account/cancel", {
+      const res = await rawAuthFetch("/users/delete-account/cancel", {
         method: "POST",
       });
       if (res.status === 410) {
@@ -938,6 +1049,13 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     const res = await authFetch("/users");
     if (res.status == 404) {
       return null;
+    }
+    if (
+      res.status === 403 &&
+      res.headers.get(POLICY_REQUIRED_HEADER) ===
+        POLICY_REQUIRED_REASON
+    ) {
+      throw new Error("privacy policy acceptance required");
     }
     if (res.status === 403) {
       const accountDeletionStatus = await _getDeleteAccountStatus();
@@ -998,7 +1116,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
   };
 
   useEffect(() => {
-    if (status !== "authenticated" || !privyAuthenticated) {
+    if (status !== "authenticated" || !privyAuthenticated || policyStatus) {
       return;
     }
 
@@ -1057,7 +1175,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
       window.removeEventListener("focus", handleWindowFocus);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-  }, [status, privyAuthenticated]);
+  }, [policyStatus, status, privyAuthenticated]);
 
   const _ensureDefaultPrimaryWallet = async (
     currentUser: GetUserResponse["user"],
@@ -1518,12 +1636,42 @@ export default function AppProvider({ children }: { children: ReactNode }) {
         setAppleRecoveryAction("idle");
         setAppleRecoveryError("");
         setAppleRecoveryBypassed(false);
+        setPolicyStatus(null);
+        setPolicyAction("idle");
+        setPolicyError("");
         await privyLogin();
         // move user data implementation to helper functions called in useEffect instead of passing into login() for real auth
         // localStorage.setItem("sfluv_user", JSON.stringify(mockUser))
       } catch (error) {
         setError(error);
       }
+    }
+  };
+
+  const acceptPolicies = async (mailingListOptIn: boolean) => {
+    setPolicyAction("submitting");
+    setPolicyError("");
+    try {
+      await _acceptUserPolicies(mailingListOptIn);
+      setPolicyStatus(null);
+      setStatus("loading");
+    } catch (error) {
+      setPolicyError(
+        (error as Error)?.message?.trim() ||
+          "Unable to save your policy preferences right now.",
+      );
+    } finally {
+      setPolicyAction("idle");
+    }
+  };
+
+  const returnPolicyGateToLogin = async () => {
+    setPolicyAction("returning");
+    setPolicyError("");
+    try {
+      await logout();
+    } finally {
+      setPolicyAction("idle");
     }
   };
 
@@ -1862,7 +2010,22 @@ export default function AppProvider({ children }: { children: ReactNode }) {
               }}
             />
           ) : (
-            children
+            <>
+              {children}
+              {policyStatus && privyAuthenticated ? (
+                <PolicyAcceptanceOverlay
+                  key={policyStatus.user_id}
+                  action={policyAction}
+                  error={policyError}
+                  onAccept={(mailingListOptIn) => {
+                    void acceptPolicies(mailingListOptIn);
+                  }}
+                  onReturnToLogin={() => {
+                    void returnPolicyGateToLogin();
+                  }}
+                />
+              ) : null}
+            </>
           )}
         </>
       </AppContext.Provider>
@@ -1880,6 +2043,135 @@ export function useApp() {
 
 export function useAppStatus() {
   return useContext(AppStatusContext);
+}
+
+function PolicyAcceptanceOverlay({
+  action,
+  error,
+  onAccept,
+  onReturnToLogin,
+}: {
+  action: "idle" | "submitting" | "returning";
+  error: string;
+  onAccept: (mailingListOptIn: boolean) => void;
+  onReturnToLogin: () => void;
+}) {
+  const [acceptedPrivacyPolicy, setAcceptedPrivacyPolicy] = useState(false);
+  const [mailingListOptIn, setMailingListOptIn] = useState(true);
+  const busy = action !== "idle";
+
+  return (
+    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/55 px-4 py-6 backdrop-blur-[2px]">
+      <div className="w-full max-w-2xl rounded-3xl border border-border/70 bg-card/95 p-6 shadow-[0_1px_3px_hsl(var(--foreground)/0.08),0_24px_60px_hsl(var(--foreground)/0.16)] sm:p-8">
+        <div className="space-y-4">
+          <p className="text-sm font-semibold uppercase tracking-[0.24em] text-[#eb6c6c]">
+            Privacy Policy
+          </p>
+          <h2 className="text-3xl font-semibold tracking-tight text-foreground">
+            Accept the Privacy Policy to keep using SFLuv
+          </h2>
+          <p className="text-sm leading-6 text-muted-foreground sm:text-base">
+            To use the app, You need to review and accept the{" "}
+            <Link
+              href={PRIVACY_POLICY_PATH}
+              target="_blank"
+              rel="noreferrer"
+              className="font-semibold text-foreground underline underline-offset-4"
+            >
+              Privacy Policy
+            </Link>
+            . You can also choose whether to opt in to SFLuv email updates under
+            the{" "}
+            <Link
+              href={EMAIL_OPT_IN_POLICY_PATH}
+              target="_blank"
+              rel="noreferrer"
+              className="font-semibold text-foreground underline underline-offset-4"
+            >
+              Email Opt-In Policy
+            </Link>
+            .
+          </p>
+
+          <div className="space-y-3 rounded-2xl border border-border/70 bg-muted/30 p-4">
+            <label className="flex items-start gap-3">
+              <Checkbox
+                checked={acceptedPrivacyPolicy}
+                disabled={busy}
+                onCheckedChange={(checked) =>
+                  setAcceptedPrivacyPolicy(Boolean(checked))
+                }
+              />
+              <span className="text-sm leading-6 text-foreground">
+                I have read and accept the{" "}
+                <Link
+                  href={PRIVACY_POLICY_PATH}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="font-semibold underline underline-offset-4"
+                >
+                  Privacy Policy
+                </Link>
+                .
+              </span>
+            </label>
+
+            <label className="flex items-start gap-3">
+              <Checkbox
+                checked={mailingListOptIn}
+                disabled={busy}
+                onCheckedChange={(checked) =>
+                  setMailingListOptIn(Boolean(checked))
+                }
+              />
+              <span className="text-sm leading-6 text-foreground">
+                I want to receive SFLuv emails in line with the{" "}
+                <Link
+                  href={EMAIL_OPT_IN_POLICY_PATH}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="font-semibold underline underline-offset-4"
+                >
+                  Email Opt-In Policy
+                </Link>
+                .
+              </span>
+            </label>
+          </div>
+
+          <p className="text-sm text-muted-foreground">
+            The Privacy Policy checkbox is required. Email opt-in is optional and
+            You can unsubscribe later at any time.
+          </p>
+
+          {error ? (
+            <p className="rounded-2xl border border-red-400/40 bg-red-100/70 px-4 py-3 text-sm leading-6 text-red-900 dark:bg-red-500/10 dark:text-red-100">
+              {error}
+            </p>
+          ) : null}
+        </div>
+
+        <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:justify-end">
+          <button
+            type="button"
+            className="inline-flex min-h-14 w-full items-center justify-center rounded-xl border border-border bg-background px-6 text-base font-semibold whitespace-nowrap text-foreground transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto sm:min-w-[190px]"
+            disabled={busy}
+            onClick={onReturnToLogin}
+          >
+            {action === "returning" ? "Logging out..." : "Log out"}
+          </button>
+          <button
+            type="button"
+            className="inline-flex min-h-14 w-full items-center justify-center rounded-xl bg-[#eb6c6c] px-6 text-base font-semibold whitespace-nowrap text-white transition hover:bg-[#d55c5c] disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto sm:min-w-[220px]"
+            disabled={busy || !acceptedPrivacyPolicy}
+            onClick={() => onAccept(mailingListOptIn)}
+          >
+            {action === "submitting" ? "Saving..." : "Continue"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function DeletedAccountGate({

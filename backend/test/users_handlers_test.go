@@ -10,6 +10,26 @@ import (
 	"github.com/SFLuv/app/backend/structs"
 )
 
+func acceptUserPolicies(t *testing.T, userID string) {
+	t.Helper()
+
+	Spoofer.SetValue("userDid", userID)
+	body := bytes.NewReader([]byte(`{"accepted_privacy_policy":true,"mailing_list_opt_in":true}`))
+	req, err := http.NewRequest(http.MethodPost, TestServer.URL+"/users/policies/accept", body)
+	if err != nil {
+		t.Fatalf("error creating policy acceptance request: %s", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	res, err := TestServer.Client().Do(req)
+	if err != nil {
+		t.Fatalf("error sending policy acceptance request: %s", err)
+	}
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("expected policy acceptance 200, got %d", res.StatusCode)
+	}
+}
+
 func GroupUsersHandlers(t *testing.T) {
 	t.Run("add user handler", ModuleAddUserHandler)
 	t.Run("update user info handler", ModuleUpdateUserInfoHandler)
@@ -52,6 +72,7 @@ func ModuleAddUserHandler(t *testing.T) {
 }
 
 func ModuleUpdateUserInfoHandler(t *testing.T) {
+	acceptUserPolicies(t, TEST_USER_2.Id)
 	Spoofer.SetValue("userDid", TEST_USER_2.Id)
 
 	body, err := json.Marshal(TEST_USER_2)
@@ -75,6 +96,7 @@ func ModuleUpdateUserInfoHandler(t *testing.T) {
 }
 
 func ModuleGetUserAuthedHandler(t *testing.T) {
+	acceptUserPolicies(t, TEST_USER_2.Id)
 	Spoofer.SetValue("userDid", TEST_USER_2.Id)
 
 	req, err := http.NewRequest(http.MethodGet, TestServer.URL+"/users", nil)
@@ -130,6 +152,8 @@ func ModuleAccountDeletionHandlers(t *testing.T) {
 	if res.StatusCode != http.StatusCreated {
 		t.Fatalf("expected add-user 201, got %d", res.StatusCode)
 	}
+
+	acceptUserPolicies(t, userID)
 
 	req, err = http.NewRequest(http.MethodGet, TestServer.URL+"/users/delete-account/preview", nil)
 	if err != nil {

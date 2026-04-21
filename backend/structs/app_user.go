@@ -29,7 +29,7 @@ type User struct {
 }
 
 const (
-	CurrentPrivacyPolicyVersion    = "2026-04-15"
+	CurrentPrivacyPolicyVersion     = "2026-04-15"
 	CurrentMailingListPolicyVersion = "2026-04-15"
 	AuthReasonPrivacyPolicyRequired = "privacy-policy-required"
 )
@@ -122,14 +122,14 @@ type UserPrimaryWalletUpdateRequest struct {
 }
 
 type UserPolicyStatusResponse struct {
-	UserId                    string     `json:"user_id"`
-	Active                    bool       `json:"active"`
-	AcceptedPrivacyPolicy     bool       `json:"accepted_privacy_policy"`
-	AcceptedPrivacyPolicyAt   *time.Time `json:"accepted_privacy_policy_at,omitempty"`
-	PrivacyPolicyVersion      string     `json:"privacy_policy_version"`
-	MailingListOptIn          bool       `json:"mailing_list_opt_in"`
-	MailingListOptInAt        *time.Time `json:"mailing_list_opt_in_at,omitempty"`
-	MailingListPolicyVersion  string     `json:"mailing_list_policy_version"`
+	UserId                   string     `json:"user_id"`
+	Active                   bool       `json:"active"`
+	AcceptedPrivacyPolicy    bool       `json:"accepted_privacy_policy"`
+	AcceptedPrivacyPolicyAt  *time.Time `json:"accepted_privacy_policy_at,omitempty"`
+	PrivacyPolicyVersion     string     `json:"privacy_policy_version"`
+	MailingListOptIn         bool       `json:"mailing_list_opt_in"`
+	MailingListOptInAt       *time.Time `json:"mailing_list_opt_in_at,omitempty"`
+	MailingListPolicyVersion string     `json:"mailing_list_policy_version"`
 }
 
 type UserPolicyAcceptanceRequest struct {
