@@ -18,6 +18,8 @@ export const BACKING_ASSETS = (process.env.NEXT_PUBLIC_BACKING_ASSETS || "")
   .filter((asset) => asset.length > 0) as Address[]
 export const FAUCET_ADDRESS = process.env.NEXT_PUBLIC_FAUCET_ADDRESS as Address
 export const PRIVY_ID = process.env.NEXT_PUBLIC_PRIVY_APP_ID as string
+export const PRIVY_CLIENT_ID =
+  process.env.NEXT_PUBLIC_PRIVY_CLIENT_ID?.trim() || undefined
 export const BACKEND =
   process.env.NEXT_PUBLIC_BACKEND_URL ||
   process.env.NEXT_PUBLIC_BACKEND_BASE_URL ||

@@ -3,7 +3,7 @@
 import { ReactNode, Suspense, useMemo } from "react"
 import AppProvider from "./AppProvider"
 import { PrivyProvider } from "@privy-io/react-auth"
-import { CHAIN, PRIVY_ID } from "@/lib/constants"
+import { CHAIN, PRIVY_CLIENT_ID, PRIVY_ID } from "@/lib/constants"
 import { useTheme } from "next-themes"
 import LocationProvider from "./LocationProvider"
 import ContactsProvider from "./ContactsProvider"
@@ -52,6 +52,7 @@ const Providers = ({ children }: { children: ReactNode }) => {
   return (
     <PrivyProvider
       appId={PRIVY_ID}
+      clientId={PRIVY_CLIENT_ID}
       config={privyConfig}
     >
       <AppProvider>
