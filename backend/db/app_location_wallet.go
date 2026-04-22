@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/SFLuv/app/backend/structs"
 	"github.com/jackc/pgx/v5"
@@ -68,6 +69,8 @@ func (a *AppDB) getLocationPaymentWalletsByLocationIDs(ctx context.Context, loca
 			location_payment_wallets
 		WHERE
 			location_id = ANY($1)
+		AND
+			active = TRUE
 		ORDER BY
 			location_id ASC,
 			CASE
@@ -190,6 +193,7 @@ func (a *AppDB) UpdateLocationWalletSettings(ctx context.Context, userID string,
 				FROM locations
 				WHERE id = $1
 				AND owner_id = $2
+				AND active = TRUE
 			);
 	`, locationID, userID).Scan(&locationExists); err != nil {
 		return nil, fmt.Errorf("error verifying location ownership: %w", err)
@@ -209,10 +213,19 @@ func (a *AppDB) UpdateLocationWalletSettings(ctx context.Context, userID string,
 	}
 
 	if _, err := tx.Exec(ctx, `
-		DELETE FROM location_payment_wallets
-		WHERE location_id = $1;
-	`, locationID); err != nil {
-		return nil, fmt.Errorf("error clearing location payment wallets: %w", err)
+		UPDATE location_payment_wallets
+		SET
+			active = FALSE,
+			delete_date = $2,
+			delete_reason = $3
+		WHERE
+			location_id = $1
+		AND
+			active = TRUE
+		AND
+			NOT (wallet_address = ANY($4));
+	`, locationID, time.Now().UTC().Add(accountDeletionGracePeriod), deleteReasonWalletSettings, normalizedPaymentWallets); err != nil {
+		return nil, fmt.Errorf("error retiring removed location payment wallets: %w", err)
 	}
 
 	for _, paymentWalletAddress := range normalizedPaymentWallets {
@@ -221,7 +234,13 @@ func (a *AppDB) UpdateLocationWalletSettings(ctx context.Context, userID string,
 				location_id,
 				wallet_address,
 				is_default
-			) VALUES ($1, $2, $3);
+			) VALUES ($1, $2, $3)
+			ON CONFLICT (location_id, wallet_address) WHERE active = TRUE
+			DO UPDATE SET
+				is_default = EXCLUDED.is_default,
+				active = TRUE,
+				delete_date = NULL,
+				delete_reason = NULL;
 		`, locationID, paymentWalletAddress, strings.EqualFold(paymentWalletAddress, normalizedDefaultPaymentWallet)); err != nil {
 			return nil, fmt.Errorf("error saving location payment wallet: %w", err)
 		}

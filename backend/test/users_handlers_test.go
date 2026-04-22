@@ -10,10 +10,31 @@ import (
 	"github.com/SFLuv/app/backend/structs"
 )
 
+func acceptUserPolicies(t *testing.T, userID string) {
+	t.Helper()
+
+	Spoofer.SetValue("userDid", userID)
+	body := bytes.NewReader([]byte(`{"accepted_privacy_policy":true,"mailing_list_opt_in":true}`))
+	req, err := http.NewRequest(http.MethodPost, TestServer.URL+"/users/policies/accept", body)
+	if err != nil {
+		t.Fatalf("error creating policy acceptance request: %s", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	res, err := TestServer.Client().Do(req)
+	if err != nil {
+		t.Fatalf("error sending policy acceptance request: %s", err)
+	}
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("expected policy acceptance 200, got %d", res.StatusCode)
+	}
+}
+
 func GroupUsersHandlers(t *testing.T) {
 	t.Run("add user handler", ModuleAddUserHandler)
 	t.Run("update user info handler", ModuleUpdateUserInfoHandler)
 	t.Run("get user authed handler", ModuleGetUserAuthedHandler)
+	t.Run("account deletion handlers", ModuleAccountDeletionHandlers)
 }
 
 func ModuleAddUserHandler(t *testing.T) {
@@ -51,6 +72,7 @@ func ModuleAddUserHandler(t *testing.T) {
 }
 
 func ModuleUpdateUserInfoHandler(t *testing.T) {
+	acceptUserPolicies(t, TEST_USER_2.Id)
 	Spoofer.SetValue("userDid", TEST_USER_2.Id)
 
 	body, err := json.Marshal(TEST_USER_2)
@@ -74,6 +96,7 @@ func ModuleUpdateUserInfoHandler(t *testing.T) {
 }
 
 func ModuleGetUserAuthedHandler(t *testing.T) {
+	acceptUserPolicies(t, TEST_USER_2.Id)
 	Spoofer.SetValue("userDid", TEST_USER_2.Id)
 
 	req, err := http.NewRequest(http.MethodGet, TestServer.URL+"/users", nil)
@@ -111,5 +134,96 @@ func ModuleGetUserAuthedHandler(t *testing.T) {
 
 	if *user.User.Email != *TEST_USER_2.Email {
 		t.Fatalf("got incorrect user email %s, expected %s", *user.User.Email, *TEST_USER_2.Email)
+	}
+}
+
+func ModuleAccountDeletionHandlers(t *testing.T) {
+	userID := "test-delete-handler"
+	Spoofer.SetValue("userDid", userID)
+
+	req, err := http.NewRequest(http.MethodPost, TestServer.URL+"/users", nil)
+	if err != nil {
+		t.Fatalf("error creating add-user request: %s", err)
+	}
+	res, err := TestServer.Client().Do(req)
+	if err != nil {
+		t.Fatalf("error sending add-user request: %s", err)
+	}
+	if res.StatusCode != http.StatusCreated {
+		t.Fatalf("expected add-user 201, got %d", res.StatusCode)
+	}
+
+	acceptUserPolicies(t, userID)
+
+	req, err = http.NewRequest(http.MethodGet, TestServer.URL+"/users/delete-account/preview", nil)
+	if err != nil {
+		t.Fatalf("error creating preview request: %s", err)
+	}
+	res, err = TestServer.Client().Do(req)
+	if err != nil {
+		t.Fatalf("error sending preview request: %s", err)
+	}
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("expected preview 200, got %d", res.StatusCode)
+	}
+
+	req, err = http.NewRequest(http.MethodPost, TestServer.URL+"/users/delete-account", nil)
+	if err != nil {
+		t.Fatalf("error creating delete-account request: %s", err)
+	}
+	res, err = TestServer.Client().Do(req)
+	if err != nil {
+		t.Fatalf("error sending delete-account request: %s", err)
+	}
+	if res.StatusCode != http.StatusAccepted {
+		t.Fatalf("expected delete-account 202, got %d", res.StatusCode)
+	}
+
+	req, err = http.NewRequest(http.MethodGet, TestServer.URL+"/users", nil)
+	if err != nil {
+		t.Fatalf("error creating inactive user request: %s", err)
+	}
+	res, err = TestServer.Client().Do(req)
+	if err != nil {
+		t.Fatalf("error sending inactive user request: %s", err)
+	}
+	if res.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected inactive user lookup 403, got %d", res.StatusCode)
+	}
+
+	req, err = http.NewRequest(http.MethodGet, TestServer.URL+"/users/delete-account/status", nil)
+	if err != nil {
+		t.Fatalf("error creating delete-account status request: %s", err)
+	}
+	res, err = TestServer.Client().Do(req)
+	if err != nil {
+		t.Fatalf("error sending delete-account status request: %s", err)
+	}
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("expected delete-account status 200, got %d", res.StatusCode)
+	}
+
+	req, err = http.NewRequest(http.MethodPost, TestServer.URL+"/users/delete-account/cancel", nil)
+	if err != nil {
+		t.Fatalf("error creating cancel delete-account request: %s", err)
+	}
+	res, err = TestServer.Client().Do(req)
+	if err != nil {
+		t.Fatalf("error sending cancel delete-account request: %s", err)
+	}
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("expected cancel delete-account 200, got %d", res.StatusCode)
+	}
+
+	req, err = http.NewRequest(http.MethodGet, TestServer.URL+"/users", nil)
+	if err != nil {
+		t.Fatalf("error creating restored user request: %s", err)
+	}
+	res, err = TestServer.Client().Do(req)
+	if err != nil {
+		t.Fatalf("error sending restored user request: %s", err)
+	}
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("expected restored user lookup 200, got %d", res.StatusCode)
 	}
 }

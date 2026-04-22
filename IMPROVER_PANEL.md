@@ -184,3 +184,9 @@
 - Ponder transaction alert emails now format token amounts with integer-safe base-unit conversion instead of low-precision big.Float math, preventing slight balance drift in emailed SFLuv amounts.
 
 - Event QR PDF export now fetches all event code pages before batching, so large events are no longer capped by the first 100-code page when admins or affiliates download QR PDFs.
+- Server boot now starts a daily deleted-account purge loop: it runs once on startup, then once per day after that, while still relying on the existing 30-day `delete_date` gate so only eligible soft-deleted accounts are purged.
+- Proposer panel polling is now explicit and silent: background 30-second refreshes no longer piggyback on app-level auth refreshes, and workflow-list polling no longer toggles visible loading state or jolt the workflow edit form.
+- Privacy Policy and Email Opt-In Policy pages now bypass the signed-in policy-acceptance overlay, hide the app sidebar/header, and render with full-bleed legal-page backgrounds instead of the old inset edge margin.
+- Account deletion no longer triggers a browser-native alert after confirmation; the flow now relies on the existing in-app confirmation dialog and then logs the user out cleanly.
+- Account deletion, account recovery, and policy-related flows now use the shared button component/variants instead of custom one-off button styling, bringing those screens in line with the rest of the app.
+- Settings now groups Google and Apple account connections under a single `Link Socials` card, with branded social logos and cleaner combined presentation.

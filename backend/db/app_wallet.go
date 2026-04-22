@@ -11,6 +11,51 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+func scanWalletRow(row interface {
+	Scan(...any) error
+}) (*structs.Wallet, error) {
+	var wallet structs.Wallet
+	var smartAddress sql.NullString
+	var smartIndex sql.NullInt64
+	var lastUnwrapAt sql.NullTime
+	var mergedWallets []string
+
+	if err := row.Scan(
+		&wallet.Id,
+		&wallet.Owner,
+		&wallet.Name,
+		&wallet.IsEoa,
+		&wallet.IsHidden,
+		&wallet.IsRedeemer,
+		&wallet.IsMinter,
+		&wallet.EoaAddress,
+		&smartAddress,
+		&smartIndex,
+		&mergedWallets,
+		&lastUnwrapAt,
+	); err != nil {
+		return nil, err
+	}
+
+	if smartAddress.Valid {
+		addr := smartAddress.String
+		wallet.SmartAddress = &addr
+	}
+	if smartIndex.Valid {
+		idx := int(smartIndex.Int64)
+		wallet.SmartIndex = &idx
+	}
+	if len(mergedWallets) > 0 {
+		wallet.MergedWallets = mergedWallets
+	}
+	if lastUnwrapAt.Valid {
+		unwrapAt := lastUnwrapAt.Time
+		wallet.LastUnwrapAt = &unwrapAt
+	}
+
+	return &wallet, nil
+}
+
 func (a *AppDB) AddWallet(ctx context.Context, wallet *structs.Wallet) (int, error) {
 	row := a.db.QueryRow(ctx, `
 		INSERT INTO wallets (
@@ -30,7 +75,7 @@ func (a *AppDB) AddWallet(ctx context.Context, wallet *structs.Wallet) (int, err
 			$6,
 			$7
 		)
-		ON CONFLICT (owner, is_eoa, eoa_address, smart_index)
+		ON CONFLICT (owner, is_eoa, eoa_address, smart_index) WHERE active = TRUE
 		DO UPDATE
 		SET
 			name = wallets.name
@@ -57,11 +102,13 @@ func (a *AppDB) AddWallet(ctx context.Context, wallet *structs.Wallet) (int, err
 func (a *AppDB) GetWalletsByUser(ctx context.Context, userId string) ([]*structs.Wallet, error) {
 	rows, err := a.db.Query(ctx, `
 	SELECT
-		wallets.id, wallets.owner, wallets.name, wallets.is_eoa, wallets.is_hidden, wallets.is_redeemer, wallets.is_minter, wallets.eoa_address, wallets.smart_address, wallets.smart_index, wallets.last_unwrap_at
+		wallets.id, wallets.owner, wallets.name, wallets.is_eoa, wallets.is_hidden, wallets.is_redeemer, wallets.is_minter, wallets.eoa_address, wallets.smart_address, wallets.smart_index, COALESCE(wallets.merged_wallets, ARRAY[]::TEXT[]), wallets.last_unwrap_at
 	FROM
 		wallets
 	WHERE
 		wallets.owner = $1
+	AND
+		wallets.active = TRUE
 	ORDER BY
 		wallets.id ASC;
 	`, userId)
@@ -72,40 +119,12 @@ func (a *AppDB) GetWalletsByUser(ctx context.Context, userId string) ([]*structs
 
 	wallets := []*structs.Wallet{}
 	for rows.Next() {
-		var wallet structs.Wallet
-		var smartAddress sql.NullString
-		var smartIndex sql.NullInt64
-		var lastUnwrapAt sql.NullTime
-		err := rows.Scan(
-			&wallet.Id,
-			&wallet.Owner,
-			&wallet.Name,
-			&wallet.IsEoa,
-			&wallet.IsHidden,
-			&wallet.IsRedeemer,
-			&wallet.IsMinter,
-			&wallet.EoaAddress,
-			&smartAddress,
-			&smartIndex,
-			&lastUnwrapAt,
-		)
+		wallet, err := scanWalletRow(rows)
 		if err != nil {
 			continue
 		}
-		if smartAddress.Valid {
-			addr := smartAddress.String
-			wallet.SmartAddress = &addr
-		}
-		if smartIndex.Valid {
-			idx := int(smartIndex.Int64)
-			wallet.SmartIndex = &idx
-		}
-		if lastUnwrapAt.Valid {
-			unwrapAt := lastUnwrapAt.Time
-			wallet.LastUnwrapAt = &unwrapAt
-		}
 
-		wallets = append(wallets, &wallet)
+		wallets = append(wallets, wallet)
 	}
 
 	return wallets, nil
@@ -124,11 +143,14 @@ func (a *AppDB) GetWalletByUserAndAddress(ctx context.Context, userId string, ad
 			eoa_address,
 			smart_address,
 			smart_index,
+			COALESCE(merged_wallets, ARRAY[]::TEXT[]),
 			last_unwrap_at
 		FROM
 			wallets
 		WHERE
 			owner = $1
+		AND
+			active = TRUE
 		AND (
 			LOWER(smart_address) = LOWER($2)
 			OR (
@@ -139,40 +161,11 @@ func (a *AppDB) GetWalletByUserAndAddress(ctx context.Context, userId string, ad
 		);
 	`, userId, address, address)
 
-	var w structs.Wallet
-	var smartAddress sql.NullString
-	var smartIndex sql.NullInt64
-	var lastUnwrapAt sql.NullTime
-	err := row.Scan(
-		&w.Id,
-		&w.Owner,
-		&w.Name,
-		&w.IsEoa,
-		&w.IsHidden,
-		&w.IsRedeemer,
-		&w.IsMinter,
-		&w.EoaAddress,
-		&smartAddress,
-		&smartIndex,
-		&lastUnwrapAt,
-	)
+	wallet, err := scanWalletRow(row)
 	if err != nil {
 		return nil, err
 	}
-	if smartAddress.Valid {
-		addr := smartAddress.String
-		w.SmartAddress = &addr
-	}
-	if smartIndex.Valid {
-		idx := int(smartIndex.Int64)
-		w.SmartIndex = &idx
-	}
-	if lastUnwrapAt.Valid {
-		unwrapAt := lastUnwrapAt.Time
-		w.LastUnwrapAt = &unwrapAt
-	}
-
-	return &w, nil
+	return wallet, nil
 }
 
 func (a *AppDB) GetWalletAddressOwnerLookup(ctx context.Context, address string) (*structs.WalletAddressOwnerLookup, error) {
@@ -216,6 +209,8 @@ func (a *AppDB) getLocationAddressOwnerLookup(ctx context.Context, address strin
 			users u
 		ON
 			u.id = l.owner_id
+		AND
+			u.active = TRUE
 		LEFT JOIN LATERAL (
 			SELECT
 				lpw.wallet_address
@@ -223,6 +218,8 @@ func (a *AppDB) getLocationAddressOwnerLookup(ctx context.Context, address strin
 				location_payment_wallets lpw
 			WHERE
 				lpw.location_id = l.id
+			AND
+				lpw.active = TRUE
 			ORDER BY
 				CASE
 					WHEN lpw.is_default = TRUE THEN 0
@@ -239,6 +236,8 @@ func (a *AppDB) getLocationAddressOwnerLookup(ctx context.Context, address strin
 				wallets legacy_wallet
 			WHERE
 				legacy_wallet.owner = u.id
+			AND
+				legacy_wallet.active = TRUE
 			AND
 				legacy_wallet.is_eoa = FALSE
 			AND
@@ -259,6 +258,8 @@ func (a *AppDB) getLocationAddressOwnerLookup(ctx context.Context, address strin
 				wallets w
 			WHERE
 				w.owner = u.id
+			AND
+				w.active = TRUE
 			AND (
 				LOWER(COALESCE(w.smart_address, '')) = LOWER($1)
 				OR LOWER(COALESCE(w.eoa_address, '')) = LOWER($1)
@@ -275,11 +276,14 @@ func (a *AppDB) getLocationAddressOwnerLookup(ctx context.Context, address strin
 		ON TRUE
 		WHERE
 			l.approval = TRUE
+		AND
+			l.active = TRUE
 		AND (
 			EXISTS (
 				SELECT 1
 				FROM location_payment_wallets lpw
 				WHERE lpw.location_id = l.id
+				AND lpw.active = TRUE
 				AND LOWER(lpw.wallet_address) = LOWER($1)
 			)
 			OR (
@@ -287,6 +291,7 @@ func (a *AppDB) getLocationAddressOwnerLookup(ctx context.Context, address strin
 					SELECT 1
 					FROM location_payment_wallets lpw
 					WHERE lpw.location_id = l.id
+					AND lpw.active = TRUE
 				)
 				AND LOWER($1) = LOWER(
 					COALESCE(
@@ -302,9 +307,10 @@ func (a *AppDB) getLocationAddressOwnerLookup(ctx context.Context, address strin
 				WHEN EXISTS (
 					SELECT 1
 					FROM location_payment_wallets lpw
-					WHERE lpw.location_id = l.id
-					AND LOWER(lpw.wallet_address) = LOWER($1)
-				) THEN 0
+				WHERE lpw.location_id = l.id
+				AND lpw.active = TRUE
+				AND LOWER(lpw.wallet_address) = LOWER($1)
+			) THEN 0
 				ELSE 1
 			END,
 			l.approved_at ASC NULLS LAST,
@@ -356,6 +362,8 @@ func (a *AppDB) getWalletAddressOwnerLookup(ctx context.Context, address string)
 			users u
 		ON
 			u.id = w.owner
+		AND
+			u.active = TRUE
 		LEFT JOIN LATERAL (
 			SELECT
 				l.name
@@ -363,6 +371,8 @@ func (a *AppDB) getWalletAddressOwnerLookup(ctx context.Context, address string)
 				locations l
 			WHERE
 				l.owner_id = u.id
+			AND
+				l.active = TRUE
 			AND
 				l.approval = TRUE
 			ORDER BY
@@ -372,9 +382,12 @@ func (a *AppDB) getWalletAddressOwnerLookup(ctx context.Context, address string)
 		) first_approved_location
 		ON TRUE
 		WHERE
+			w.active = TRUE
+		AND (
 			LOWER(COALESCE(w.smart_address, '')) = LOWER($1)
 		OR
 			LOWER(COALESCE(w.eoa_address, '')) = LOWER($1)
+		)
 		ORDER BY
 			CASE
 				WHEN LOWER(COALESCE(w.smart_address, '')) = LOWER($1) THEN 0
@@ -411,7 +424,9 @@ func (a *AppDB) GetOwnedWalletAddressSet(ctx context.Context, userID string) (ma
 		FROM
 			wallets
 		WHERE
-			owner = $1;
+			owner = $1
+		AND
+			active = TRUE;
 	`, userID)
 	if err != nil {
 		return nil, fmt.Errorf("error querying wallet addresses for user %s: %w", userID, err)
@@ -468,6 +483,7 @@ func (a *AppDB) UserOwnsAnyWalletAddress(ctx context.Context, userID string, add
 				SELECT 1
 				FROM wallets
 				WHERE owner = $1
+				AND active = TRUE
 				AND (
 					LOWER(eoa_address) = ANY($2)
 					OR
@@ -496,7 +512,7 @@ func (a *AppDB) UpdateWallet(ctx context.Context, wallet *structs.Wallet) error 
 			name = $1,
 			is_hidden = $2
 		WHERE
-			(id = $3 AND owner = $4);
+			(id = $3 AND owner = $4 AND active = TRUE);
 	`, wallet.Name, wallet.IsHidden, *wallet.Id, wallet.Owner)
 	if err != nil {
 		return err
@@ -512,6 +528,7 @@ func (a *AppDB) UserHasRedeemerWallet(ctx context.Context, userId string) (bool,
 				SELECT 1
 				FROM wallets
 				WHERE owner = $1
+				AND active = TRUE
 				AND is_redeemer = TRUE
 			);
 	`, userId)
@@ -537,11 +554,14 @@ func (a *AppDB) GetSmartWalletByOwnerIndex(ctx context.Context, owner string, in
 			eoa_address,
 			smart_address,
 			smart_index,
+			COALESCE(merged_wallets, ARRAY[]::TEXT[]),
 			last_unwrap_at
 		FROM
 			wallets
 		WHERE
 			owner = $1
+		AND
+			active = TRUE
 		AND
 			is_eoa = FALSE
 		AND
@@ -550,43 +570,14 @@ func (a *AppDB) GetSmartWalletByOwnerIndex(ctx context.Context, owner string, in
 		LIMIT 1;
 	`, owner, index)
 
-	var wallet structs.Wallet
-	var smartAddress sql.NullString
-	var smartIndex sql.NullInt64
-	var lastUnwrapAt sql.NullTime
-	err := row.Scan(
-		&wallet.Id,
-		&wallet.Owner,
-		&wallet.Name,
-		&wallet.IsEoa,
-		&wallet.IsHidden,
-		&wallet.IsRedeemer,
-		&wallet.IsMinter,
-		&wallet.EoaAddress,
-		&smartAddress,
-		&smartIndex,
-		&lastUnwrapAt,
-	)
+	wallet, err := scanWalletRow(row)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	if smartAddress.Valid {
-		addr := smartAddress.String
-		wallet.SmartAddress = &addr
-	}
-	if smartIndex.Valid {
-		idx := int(smartIndex.Int64)
-		wallet.SmartIndex = &idx
-	}
-	if lastUnwrapAt.Valid {
-		unwrapAt := lastUnwrapAt.Time
-		wallet.LastUnwrapAt = &unwrapAt
-	}
-
-	return &wallet, nil
+	return wallet, nil
 }
 
 func (a *AppDB) SetWalletRedeemerStatus(ctx context.Context, walletId int, isRedeemer bool) error {
@@ -596,7 +587,9 @@ func (a *AppDB) SetWalletRedeemerStatus(ctx context.Context, walletId int, isRed
 		SET
 			is_redeemer = $1
 		WHERE
-			id = $2;
+			id = $2
+		AND
+			active = TRUE;
 	`, isRedeemer, walletId)
 	return err
 }
@@ -608,7 +601,9 @@ func (a *AppDB) SetWalletMinterStatus(ctx context.Context, walletId int, isMinte
 		SET
 			is_minter = $1
 		WHERE
-			id = $2;
+			id = $2
+		AND
+			active = TRUE;
 	`, isMinter, walletId)
 	return err
 }
@@ -620,7 +615,9 @@ func (a *AppDB) SetWalletLastUnwrapAt(ctx context.Context, walletId int, lastUnw
 		SET
 			last_unwrap_at = $1
 		WHERE
-			id = $2;
+			id = $2
+		AND
+			active = TRUE;
 	`, lastUnwrapAt.UTC(), walletId)
 	return err
 }
@@ -638,9 +635,12 @@ func (a *AppDB) GetAllWallets(ctx context.Context) ([]*structs.Wallet, error) {
 			eoa_address,
 			smart_address,
 			smart_index,
+			COALESCE(merged_wallets, ARRAY[]::TEXT[]),
 			last_unwrap_at
 		FROM
 			wallets
+		WHERE
+			active = TRUE
 		ORDER BY id;
 	`)
 	if err != nil {
@@ -650,41 +650,12 @@ func (a *AppDB) GetAllWallets(ctx context.Context) ([]*structs.Wallet, error) {
 
 	wallets := make([]*structs.Wallet, 0)
 	for rows.Next() {
-		var wallet structs.Wallet
-		var smartAddress sql.NullString
-		var smartIndex sql.NullInt64
-		var lastUnwrapAt sql.NullTime
-		err := rows.Scan(
-			&wallet.Id,
-			&wallet.Owner,
-			&wallet.Name,
-			&wallet.IsEoa,
-			&wallet.IsHidden,
-			&wallet.IsRedeemer,
-			&wallet.IsMinter,
-			&wallet.EoaAddress,
-			&smartAddress,
-			&smartIndex,
-			&lastUnwrapAt,
-		)
+		wallet, err := scanWalletRow(rows)
 		if err != nil {
 			return nil, err
 		}
 
-		if smartAddress.Valid {
-			addr := smartAddress.String
-			wallet.SmartAddress = &addr
-		}
-		if smartIndex.Valid {
-			idx := int(smartIndex.Int64)
-			wallet.SmartIndex = &idx
-		}
-		if lastUnwrapAt.Valid {
-			unwrapAt := lastUnwrapAt.Time
-			wallet.LastUnwrapAt = &unwrapAt
-		}
-
-		wallets = append(wallets, &wallet)
+		wallets = append(wallets, wallet)
 	}
 
 	return wallets, nil

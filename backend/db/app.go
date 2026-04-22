@@ -35,7 +35,13 @@ func (s *AppDB) CreateTables() error {
 				contact_name TEXT,
 				primary_wallet_address TEXT NOT NULL DEFAULT '',
 				paypal_eth TEXT NOT NULL DEFAULT '',
-			last_redemption INTEGER NOT NULL DEFAULT 0
+				last_redemption INTEGER NOT NULL DEFAULT 0,
+				accepted_privacy_policy BOOLEAN NOT NULL DEFAULT false,
+				accepted_privacy_policy_at TIMESTAMPTZ,
+				privacy_policy_version TEXT NOT NULL DEFAULT '',
+				mailing_list_opt_in BOOLEAN NOT NULL DEFAULT false,
+				mailing_list_opt_in_at TIMESTAMPTZ,
+				mailing_list_policy_version TEXT NOT NULL DEFAULT ''
 		);
 	`)
 	if err != nil {
@@ -106,9 +112,50 @@ func (s *AppDB) CreateTables() error {
 	_, err = s.db.Exec(context.Background(), `
 		ALTER TABLE users
 		ADD COLUMN IF NOT EXISTS last_redemption INTEGER NOT NULL DEFAULT 0;
+
+		ALTER TABLE users
+		ADD COLUMN IF NOT EXISTS accepted_privacy_policy BOOLEAN NOT NULL DEFAULT false;
+
+		ALTER TABLE users
+		ADD COLUMN IF NOT EXISTS accepted_privacy_policy_at TIMESTAMPTZ;
+
+		ALTER TABLE users
+		ADD COLUMN IF NOT EXISTS privacy_policy_version TEXT NOT NULL DEFAULT '';
+
+		ALTER TABLE users
+		ADD COLUMN IF NOT EXISTS mailing_list_opt_in BOOLEAN NOT NULL DEFAULT false;
+
+		ALTER TABLE users
+		ADD COLUMN IF NOT EXISTS mailing_list_opt_in_at TIMESTAMPTZ;
+
+		ALTER TABLE users
+		ADD COLUMN IF NOT EXISTS mailing_list_policy_version TEXT NOT NULL DEFAULT '';
 	`)
 	if err != nil {
-		return fmt.Errorf("error adding last_redemption column: %s", err)
+		return fmt.Errorf("error adding user policy columns: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
+		ALTER TABLE users
+		ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT true;
+
+		ALTER TABLE users
+		ADD COLUMN IF NOT EXISTS delete_date TIMESTAMPTZ;
+
+		ALTER TABLE users
+		ADD COLUMN IF NOT EXISTS delete_reason TEXT;
+
+		ALTER TABLE users
+		ADD COLUMN IF NOT EXISTS deletion_requested_at TIMESTAMPTZ;
+
+		ALTER TABLE users
+		ADD COLUMN IF NOT EXISTS deletion_canceled_at TIMESTAMPTZ;
+
+		ALTER TABLE users
+		ADD COLUMN IF NOT EXISTS deletion_completed_at TIMESTAMPTZ;
+	`)
+	if err != nil {
+		return fmt.Errorf("error altering users soft-delete columns: %s", err)
 	}
 
 	_, err = s.db.Exec(context.Background(), `
@@ -149,6 +196,15 @@ func (s *AppDB) CreateTables() error {
 
 		ALTER TABLE user_verified_emails
 		ADD COLUMN IF NOT EXISTS email_normalized TEXT;
+
+		ALTER TABLE user_verified_emails
+		ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT true;
+
+		ALTER TABLE user_verified_emails
+		ADD COLUMN IF NOT EXISTS delete_date TIMESTAMPTZ;
+
+		ALTER TABLE user_verified_emails
+		ADD COLUMN IF NOT EXISTS delete_reason TEXT;
 	`)
 	if err != nil {
 		return fmt.Errorf("error altering user_verified_emails columns: %s", err)
@@ -165,6 +221,50 @@ func (s *AppDB) CreateTables() error {
 	`)
 	if err != nil {
 		return fmt.Errorf("error normalizing user_verified_emails rows: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
+		ALTER TABLE user_verified_emails
+		DROP CONSTRAINT IF EXISTS user_verified_emails_user_id_email_normalized_key;
+
+		DROP INDEX IF EXISTS user_verified_emails_user_email_unique_idx;
+		DROP INDEX IF EXISTS user_verified_emails_token_unique_idx;
+
+		CREATE UNIQUE INDEX IF NOT EXISTS user_verified_emails_user_email_active_idx
+			ON user_verified_emails(user_id, email_normalized)
+			WHERE active = TRUE;
+
+		CREATE UNIQUE INDEX IF NOT EXISTS user_verified_emails_token_active_idx
+			ON user_verified_emails(verification_token)
+			WHERE verification_token IS NOT NULL AND active = TRUE;
+	`)
+	if err != nil {
+		return fmt.Errorf("error updating user_verified_emails uniqueness indexes: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
+		CREATE TABLE IF NOT EXISTS user_oauth_credentials(
+			user_id TEXT NOT NULL,
+			provider TEXT NOT NULL,
+			provider_subject TEXT NOT NULL DEFAULT '',
+			provider_email TEXT NOT NULL DEFAULT '',
+			is_private_relay BOOLEAN NOT NULL DEFAULT false,
+			access_token_encrypted TEXT NOT NULL DEFAULT '',
+			refresh_token_encrypted TEXT NOT NULL DEFAULT '',
+			access_token_expires_at TIMESTAMPTZ,
+			refresh_token_expires_at TIMESTAMPTZ,
+			scopes TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			revoked_at TIMESTAMPTZ,
+			PRIMARY KEY (user_id, provider)
+		);
+
+		CREATE INDEX IF NOT EXISTS user_oauth_credentials_provider_subject_idx
+			ON user_oauth_credentials(provider, provider_subject);
+	`)
+	if err != nil {
+		return fmt.Errorf("error creating user_oauth_credentials table: %s", err)
 	}
 
 	_, err = s.db.Exec(context.Background(), `
@@ -216,6 +316,30 @@ func (s *AppDB) CreateTables() error {
 	`)
 	if err != nil {
 		return fmt.Errorf("error adding last_unwrap_at column to wallets table: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
+		ALTER TABLE wallets
+		ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT true;
+
+		ALTER TABLE wallets
+		ADD COLUMN IF NOT EXISTS delete_date TIMESTAMPTZ;
+
+		ALTER TABLE wallets
+		ADD COLUMN IF NOT EXISTS delete_reason TEXT;
+
+		ALTER TABLE wallets
+		ADD COLUMN IF NOT EXISTS merged_wallets TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[];
+
+		ALTER TABLE wallets
+		DROP CONSTRAINT IF EXISTS wallets_owner_is_eoa_eoa_address_smart_index_key;
+
+		CREATE UNIQUE INDEX IF NOT EXISTS wallets_identity_active_idx
+			ON wallets(owner, is_eoa, eoa_address, smart_index)
+			WHERE active = TRUE;
+	`)
+	if err != nil {
+		return fmt.Errorf("error altering wallets soft-delete columns: %s", err)
 	}
 
 	_, err = s.db.Exec(context.Background(), `
@@ -290,6 +414,20 @@ func (s *AppDB) CreateTables() error {
 	}
 
 	_, err = s.db.Exec(context.Background(), `
+		ALTER TABLE memos
+		ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT true;
+
+		ALTER TABLE memos
+		ADD COLUMN IF NOT EXISTS delete_date TIMESTAMPTZ;
+
+		ALTER TABLE memos
+		ADD COLUMN IF NOT EXISTS delete_reason TEXT;
+	`)
+	if err != nil {
+		return fmt.Errorf("error altering memos soft-delete columns: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
 		CREATE TABLE IF NOT EXISTS affiliates(
 			user_id TEXT PRIMARY KEY REFERENCES users(id),
 			organization TEXT NOT NULL,
@@ -307,6 +445,20 @@ func (s *AppDB) CreateTables() error {
 	`)
 	if err != nil {
 		return fmt.Errorf("error creating affiliates table: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
+		ALTER TABLE affiliates
+		ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT true;
+
+		ALTER TABLE affiliates
+		ADD COLUMN IF NOT EXISTS delete_date TIMESTAMPTZ;
+
+		ALTER TABLE affiliates
+		ADD COLUMN IF NOT EXISTS delete_reason TEXT;
+	`)
+	if err != nil {
+		return fmt.Errorf("error altering affiliates soft-delete columns: %s", err)
 	}
 
 	_, err = s.db.Exec(context.Background(), `
@@ -343,6 +495,20 @@ func (s *AppDB) CreateTables() error {
 	`)
 	if err != nil {
 		return fmt.Errorf("error altering proposers email column: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
+		ALTER TABLE proposers
+		ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT true;
+
+		ALTER TABLE proposers
+		ADD COLUMN IF NOT EXISTS delete_date TIMESTAMPTZ;
+
+		ALTER TABLE proposers
+		ADD COLUMN IF NOT EXISTS delete_reason TEXT;
+	`)
+	if err != nil {
+		return fmt.Errorf("error altering proposers soft-delete columns: %s", err)
 	}
 
 	_, err = s.db.Exec(context.Background(), `
@@ -391,6 +557,20 @@ func (s *AppDB) CreateTables() error {
 	`)
 	if err != nil {
 		return fmt.Errorf("error altering improvers primary rewards account column: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
+		ALTER TABLE improvers
+		ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT true;
+
+		ALTER TABLE improvers
+		ADD COLUMN IF NOT EXISTS delete_date TIMESTAMPTZ;
+
+		ALTER TABLE improvers
+		ADD COLUMN IF NOT EXISTS delete_reason TEXT;
+	`)
+	if err != nil {
+		return fmt.Errorf("error altering improvers soft-delete columns: %s", err)
 	}
 
 	_, err = s.db.Exec(context.Background(), `
@@ -450,6 +630,20 @@ func (s *AppDB) CreateTables() error {
 		`)
 	if err != nil {
 		return fmt.Errorf("error altering supervisors email column: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
+		ALTER TABLE supervisors
+		ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT true;
+
+		ALTER TABLE supervisors
+		ADD COLUMN IF NOT EXISTS delete_date TIMESTAMPTZ;
+
+		ALTER TABLE supervisors
+		ADD COLUMN IF NOT EXISTS delete_reason TEXT;
+	`)
+	if err != nil {
+		return fmt.Errorf("error altering supervisors soft-delete columns: %s", err)
 	}
 
 	_, err = s.db.Exec(context.Background(), `
@@ -1980,6 +2174,25 @@ func (s *AppDB) CreateTables() error {
 			ALTER TABLE locations
 			ADD COLUMN IF NOT EXISTS approved_at TIMESTAMP;
 
+			ALTER TABLE locations
+			ADD COLUMN IF NOT EXISTS tipping_wallet_address TEXT NOT NULL DEFAULT '';
+
+			ALTER TABLE locations
+			ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT true;
+
+			ALTER TABLE locations
+			ADD COLUMN IF NOT EXISTS delete_date TIMESTAMPTZ;
+
+			ALTER TABLE locations
+			ADD COLUMN IF NOT EXISTS delete_reason TEXT;
+
+			ALTER TABLE locations
+			DROP CONSTRAINT IF EXISTS locations_google_id_key;
+
+			CREATE UNIQUE INDEX IF NOT EXISTS locations_google_id_active_idx
+				ON locations(google_id)
+				WHERE active = TRUE AND google_id IS NOT NULL;
+
 			UPDATE locations
 			SET approved_at = NOW()
 			WHERE approval = TRUE
@@ -2001,6 +2214,57 @@ func (s *AppDB) CreateTables() error {
 	}
 
 	_, err = s.db.Exec(context.Background(), `
+		ALTER TABLE location_hours
+		ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT true;
+
+		ALTER TABLE location_hours
+		ADD COLUMN IF NOT EXISTS delete_date TIMESTAMPTZ;
+
+		ALTER TABLE location_hours
+		ADD COLUMN IF NOT EXISTS delete_reason TEXT;
+	`)
+	if err != nil {
+		return fmt.Errorf("error altering location_hours soft-delete columns: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
+		CREATE TABLE IF NOT EXISTS location_payment_wallets(
+			id SERIAL PRIMARY KEY,
+			location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
+			wallet_address TEXT NOT NULL,
+			is_default BOOLEAN NOT NULL DEFAULT false
+		);
+
+		ALTER TABLE location_payment_wallets
+		ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT true;
+
+		ALTER TABLE location_payment_wallets
+		ADD COLUMN IF NOT EXISTS delete_date TIMESTAMPTZ;
+
+		ALTER TABLE location_payment_wallets
+		ADD COLUMN IF NOT EXISTS delete_reason TEXT;
+
+		ALTER TABLE location_payment_wallets
+		DROP CONSTRAINT IF EXISTS location_payment_wallets_location_id_wallet_address_key;
+
+		CREATE INDEX IF NOT EXISTS location_payment_wallets_location_idx
+			ON location_payment_wallets(location_id);
+
+		CREATE UNIQUE INDEX IF NOT EXISTS location_payment_wallets_location_wallet_active_idx
+			ON location_payment_wallets(location_id, wallet_address)
+			WHERE active = TRUE;
+
+		DROP INDEX IF EXISTS location_payment_wallets_default_idx;
+
+		CREATE UNIQUE INDEX IF NOT EXISTS location_payment_wallets_default_active_idx
+			ON location_payment_wallets(location_id)
+			WHERE active = TRUE AND is_default = TRUE;
+	`)
+	if err != nil {
+		return fmt.Errorf("error creating location_payment_wallets table: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
 		CREATE TABLE IF NOT EXISTS contacts(
 			id SERIAL PRIMARY KEY NOT NULL,
 			owner TEXT NOT NULL REFERENCES users(id),
@@ -2013,6 +2277,34 @@ func (s *AppDB) CreateTables() error {
 	`)
 	if err != nil {
 		return fmt.Errorf("error creating contacts table: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
+		ALTER TABLE contacts
+		ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT true;
+
+		ALTER TABLE contacts
+		ADD COLUMN IF NOT EXISTS delete_date TIMESTAMPTZ;
+
+		ALTER TABLE contacts
+		ADD COLUMN IF NOT EXISTS delete_reason TEXT;
+
+		ALTER TABLE contacts
+		DROP CONSTRAINT IF EXISTS contacts_owner_address_key;
+
+		ALTER TABLE contacts
+		DROP CONSTRAINT IF EXISTS contacts_owner_name_key;
+
+		CREATE UNIQUE INDEX IF NOT EXISTS contacts_owner_address_active_idx
+			ON contacts(owner, address)
+			WHERE active = TRUE;
+
+		CREATE UNIQUE INDEX IF NOT EXISTS contacts_owner_name_active_idx
+			ON contacts(owner, name)
+			WHERE active = TRUE;
+	`)
+	if err != nil {
+		return fmt.Errorf("error altering contacts soft-delete columns: %s", err)
 	}
 
 	_, err = s.db.Exec(context.Background(), `
@@ -2031,6 +2323,45 @@ func (s *AppDB) CreateTables() error {
 	}
 
 	_, err = s.db.Exec(context.Background(), `
+		ALTER TABLE ponder_subscriptions
+		ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT true;
+
+		ALTER TABLE ponder_subscriptions
+		ADD COLUMN IF NOT EXISTS delete_date TIMESTAMPTZ;
+
+		ALTER TABLE ponder_subscriptions
+		ADD COLUMN IF NOT EXISTS delete_reason TEXT;
+	`)
+	if err != nil {
+		return fmt.Errorf("error altering ponder_subscriptions soft-delete columns: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
+		CREATE TABLE IF NOT EXISTS mobile_push_subscriptions(
+			id SERIAL PRIMARY KEY,
+			owner TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			token TEXT NOT NULL,
+			address TEXT NOT NULL,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			active BOOLEAN NOT NULL DEFAULT true,
+			delete_date TIMESTAMPTZ,
+			delete_reason TEXT
+		);
+
+		CREATE INDEX IF NOT EXISTS mobile_push_subscriptions_owner_idx
+			ON mobile_push_subscriptions(owner);
+		CREATE INDEX IF NOT EXISTS mobile_push_subscriptions_address_idx
+			ON mobile_push_subscriptions(address);
+		CREATE INDEX IF NOT EXISTS mobile_push_subscriptions_token_idx
+			ON mobile_push_subscriptions(token);
+		CREATE UNIQUE INDEX IF NOT EXISTS mobile_push_subscriptions_token_address_idx
+			ON mobile_push_subscriptions(token, address);
+	`)
+	if err != nil {
+		return fmt.Errorf("error creating mobile push subscriptions table: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
 		CREATE TABLE IF NOT EXISTS issuers(
 			user_id TEXT PRIMARY KEY REFERENCES users(id),
 			organization TEXT NOT NULL DEFAULT '',
@@ -2045,6 +2376,20 @@ func (s *AppDB) CreateTables() error {
 	`)
 	if err != nil {
 		return fmt.Errorf("error creating issuers table: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
+		ALTER TABLE issuers
+		ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT true;
+
+		ALTER TABLE issuers
+		ADD COLUMN IF NOT EXISTS delete_date TIMESTAMPTZ;
+
+		ALTER TABLE issuers
+		ADD COLUMN IF NOT EXISTS delete_reason TEXT;
+	`)
+	if err != nil {
+		return fmt.Errorf("error altering issuers soft-delete columns: %s", err)
 	}
 
 	_, err = s.db.Exec(context.Background(), `
@@ -2113,10 +2458,14 @@ func (s *AppDB) CreateTables() error {
 			candidate_emails
 		WHERE
 			TRIM(COALESCE(email, '')) <> ''
-		ON CONFLICT (user_id, email_normalized) DO UPDATE
+		ON CONFLICT (id) DO UPDATE
 		SET
 			email = EXCLUDED.email,
+			email_normalized = EXCLUDED.email_normalized,
 			verified_at = COALESCE(user_verified_emails.verified_at, EXCLUDED.verified_at),
+			active = TRUE,
+			delete_date = NULL,
+			delete_reason = NULL,
 			updated_at = NOW();
 	`)
 	if err != nil {

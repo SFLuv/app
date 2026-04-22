@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 
+	"github.com/SFLuv/app/backend/db"
 	"github.com/SFLuv/app/backend/structs"
 	"github.com/SFLuv/app/backend/utils"
 	"github.com/jackc/pgx/v5"
@@ -20,6 +21,10 @@ func (a *AppService) AddUser(w http.ResponseWriter, r *http.Request) {
 
 	err := a.db.AddUser(r.Context(), *userDid)
 	if err != nil {
+		if err == db.ErrUserPendingDeletion {
+			w.WriteHeader(http.StatusConflict)
+			return
+		}
 		a.logger.Logf("error adding user %s: %s", *userDid, err.Error())
 		w.WriteHeader(http.StatusInternalServerError)
 		return

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/SFLuv/app/backend/handlers"
+	"github.com/SFLuv/app/backend/structs"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
@@ -91,7 +92,7 @@ func New(s *handlers.BotService, a *handlers.AppService, p *handlers.PonderServi
 		AllowedOrigins:   allowedOrigins(),
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token", "Access-Token", "X-Admin-Key"},
-		ExposedHeaders:   []string{"Link"},
+		ExposedHeaders:   []string{"Link", "X-SFLUV-Auth-Reason"},
 		AllowCredentials: false,
 		MaxAge:           300,
 	}))
@@ -125,27 +126,36 @@ func AddBotRoutes(r *chi.Mux, s *handlers.BotService, a *handlers.AppService) {
 
 func AddUserRoutes(r *chi.Mux, s *handlers.AppService) {
 	r.Post("/users", withAuth(s.AddUser))
-	r.Get("/users", withAuth(s.GetUserAuthed))
-	r.Put("/users", withAuth(s.UpdateUserInfo))
-	r.Put("/users/primary-wallet", withAuth(s.UpdateUserPrimaryWallet))
-	r.Put("/paypaleth", withAuth(s.UpdateUserPayPalEth))
-	r.Get("/users/verified-emails", withAuth(s.GetUserVerifiedEmails))
-	r.Post("/users/verified-emails", withAuth(s.RequestUserEmailVerification))
-	r.Post("/users/verified-emails/{email_id}/resend", withAuth(s.ResendUserEmailVerification))
+	r.Get("/users/policy-status", withAuth(s.GetUserPolicyStatus))
+	r.Post("/users/policies/accept", withAuth(s.AcceptUserPolicies))
+	r.Get("/users", withActiveAuth(s.GetUserAuthed, s))
+	r.Put("/users", withActiveAuth(s.UpdateUserInfo, s))
+	r.Put("/users/primary-wallet", withActiveAuth(s.UpdateUserPrimaryWallet, s))
+	r.Put("/paypaleth", withActiveAuth(s.UpdateUserPayPalEth, s))
+	r.Post("/users/oauth/apple", withAuth(s.StoreAppleOAuthCredential))
+	r.Post("/users/apple/recovery", withAuth(s.ResolveAppleRecovery))
+	r.Get("/users/delete-account/preview", withActiveAuth(s.GetDeleteAccountPreview, s))
+	r.Post("/users/delete-account", withActiveAuth(s.DeleteAccount, s))
+	r.Post("/users/delete-account/cancel", withAuth(s.CancelDeleteAccount))
+	r.Get("/users/delete-account/status", withAuth(s.GetDeleteAccountStatus))
+	r.Get("/users/verified-emails", withActiveAuth(s.GetUserVerifiedEmails, s))
+	r.Post("/users/verified-emails", withActiveAuth(s.RequestUserEmailVerification, s))
+	r.Post("/users/verified-emails/{email_id}/resend", withActiveAuth(s.ResendUserEmailVerification, s))
 	r.Post("/users/verified-emails/verify", s.VerifyUserEmailToken)
 }
 
 func AddAdminRoutes(r *chi.Mux, s *handlers.AppService) {
-	r.Get("/admin/users", withAuth(s.GetUsers))
+	r.Get("/admin/users", withActiveAuth(s.GetUsers, s))
+	r.Post("/admin/users/delete-account/purge", withAdmin(s.PurgeDeletedAccountsManual, s))
 	r.Get("/admin/locations", withAdmin(s.GetAuthedLocations, s))
-	r.Put("/admin/users", withAuth(s.UpdateUserRole))
+	r.Put("/admin/users", withActiveAuth(s.UpdateUserRole, s))
 	r.Put("/admin/locations", withAdmin(s.UpdateLocationApproval, s))
 	r.Get("/admin/affiliates", withAdmin(s.GetAffiliates, s))
 	r.Put("/admin/affiliates", withAdmin(s.UpdateAffiliate, s))
 }
 
 func AddAffiliateRoutes(r *chi.Mux, s *handlers.BotService, a *handlers.AppService) {
-	r.Post("/affiliates/request", withAuth(a.RequestAffiliateStatus))
+	r.Post("/affiliates/request", withActiveAuth(a.RequestAffiliateStatus, a))
 	r.Put("/affiliates/logo", withAffiliate(a.UpdateAffiliateLogo, a))
 	r.Get("/affiliates/balance", withAffiliate(s.AffiliateBalance, a))
 	r.Post("/affiliates/events", withAffiliate(s.AffiliateNewEvent, a))
@@ -156,12 +166,12 @@ func AddAffiliateRoutes(r *chi.Mux, s *handlers.BotService, a *handlers.AppServi
 }
 
 func AddWorkflowRoutes(r *chi.Mux, s *handlers.BotService, a *handlers.AppService) {
-	r.Post("/proposers/request", withAuth(a.RequestProposerStatus))
-	r.Post("/improvers/request", withAuth(a.RequestImproverStatus))
-	r.Post("/issuers/request", withAuth(a.RequestIssuerStatus))
-	r.Post("/supervisors/request", withAuth(a.RequestSupervisorStatus))
-	r.Get("/supervisors/approved", withAuth(a.GetApprovedSupervisors))
-	r.Get("/credentials/types", withAuth(a.GetCredentialTypes))
+	r.Post("/proposers/request", withActiveAuth(a.RequestProposerStatus, a))
+	r.Post("/improvers/request", withActiveAuth(a.RequestImproverStatus, a))
+	r.Post("/issuers/request", withActiveAuth(a.RequestIssuerStatus, a))
+	r.Post("/supervisors/request", withActiveAuth(a.RequestSupervisorStatus, a))
+	r.Get("/supervisors/approved", withActiveAuth(a.GetApprovedSupervisors, a))
+	r.Get("/credentials/types", withActiveAuth(a.GetCredentialTypes, a))
 	r.Get("/issuers/users/by-address/{address}", withIssuer(a.GetUserByAddress, a))
 
 	r.Get("/proposers/workflow-templates", withProposer(a.GetProposerWorkflowTemplates, a))
@@ -223,10 +233,10 @@ func AddWorkflowRoutes(r *chi.Mux, s *handlers.BotService, a *handlers.AppServic
 	r.Get("/voters/workflow-edit-proposals", withVoter(a.GetVoterWorkflowEditProposals, a))
 	r.Get("/voters/workflow-deletion-proposals", withVoter(a.GetVoterWorkflowDeletionProposals, a))
 	r.Post("/voters/workflow-deletion-proposals", withVoter(a.ProposeWorkflowDeletion, a))
-	r.Get("/workflows/active", withAuth(a.GetActiveWorkflows))
-	r.Get("/workflows/{workflow_id}", withAuth(a.GetWorkflow))
+	r.Get("/workflows/active", withActiveAuth(a.GetActiveWorkflows, a))
+	r.Get("/workflows/{workflow_id}", withActiveAuth(a.GetWorkflow, a))
 	r.Get("/workflow-photos/public/{photo_id}", a.GetPublicWorkflowPhoto)
-	r.Get("/workflow-photos/{photo_id}", withAuth(a.GetWorkflowPhoto))
+	r.Get("/workflow-photos/{photo_id}", withActiveAuth(a.GetWorkflowPhoto, a))
 	r.Post("/workflows/{workflow_id}/votes", withVoter(a.VoteWorkflow, a))
 	r.Post("/workflow-edit-proposals/{proposal_id}/votes", withVoter(a.VoteWorkflowEditProposal, a))
 	r.Post("/workflow-deletion-proposals/{proposal_id}/votes", withVoter(a.VoteWorkflowDeletionProposal, a))
@@ -240,37 +250,40 @@ func AddWorkflowRoutes(r *chi.Mux, s *handlers.BotService, a *handlers.AppServic
 }
 
 func AddWalletRoutes(r *chi.Mux, s *handlers.AppService) {
-	r.Get("/wallets", withAuth(s.GetWalletsByUser))
-	r.Get("/wallets/lookup/{address}", withAuth(s.LookupWalletOwnerByAddress))
-	r.Post("/wallets", withAuth(s.AddWallet))
-	r.Put("/wallets", withAuth(s.UpdateWallet))
+	r.Get("/wallets", withActiveAuth(s.GetWalletsByUser, s))
+	r.Get("/wallets/lookup/{address}", withActiveAuth(s.LookupWalletOwnerByAddress, s))
+	r.Post("/wallets", withActiveAuth(s.AddWallet, s))
+	r.Put("/wallets", withActiveAuth(s.UpdateWallet, s))
 }
 
 func AddLocationRoutes(r *chi.Mux, s *handlers.AppService) {
-	r.Post("/locations", withAuth(s.AddLocation))
+	r.Post("/locations", withActiveAuth(s.AddLocation, s))
 	r.Get("/locations/{id}", s.GetLocation)
 	r.Get("/locations", s.GetLocations)
-	r.Get("/locations/user", withAuth(s.GetLocationsByUser))
-	r.Put("/locations", withAuth(s.UpdateLocation))
-	r.Put("/locations/{id}/wallet-settings", withAuth(s.UpdateLocationWalletSettings))
+	r.Get("/locations/user", withActiveAuth(s.GetLocationsByUser, s))
+	r.Put("/locations", withActiveAuth(s.UpdateLocation, s))
+	r.Put("/locations/{id}/wallet-settings", withActiveAuth(s.UpdateLocationWalletSettings, s))
 }
 
 func AddContactRoutes(r *chi.Mux, s *handlers.AppService) {
-	r.Post("/contacts", withAuth(s.NewContact))
-	r.Get("/contacts", withAuth(s.GetContacts))
-	r.Put("/contacts", withAuth(s.UpdateContact))
-	r.Delete("/contacts", withAuth(s.DeleteContact))
+	r.Post("/contacts", withActiveAuth(s.NewContact, s))
+	r.Get("/contacts", withActiveAuth(s.GetContacts, s))
+	r.Put("/contacts", withActiveAuth(s.UpdateContact, s))
+	r.Delete("/contacts", withActiveAuth(s.DeleteContact, s))
 }
 
 func AddPonderRoutes(r *chi.Mux, s *handlers.AppService, p *handlers.PonderService) {
-	r.Post("/ponder", withAuth(s.AddPonderMerchantSubscription))
-	r.Get("/ponder", withAuth(s.GetPonderSubscriptions))
-	r.Delete("/ponder", withAuth(s.DeletePonderMerchantSubscription))
+	r.Post("/ponder", withActiveAuth(s.AddPonderMerchantSubscription, s))
+	r.Get("/ponder", withActiveAuth(s.GetPonderSubscriptions, s))
+	r.Delete("/ponder", withActiveAuth(s.DeletePonderMerchantSubscription, s))
+	r.Get("/ponder/push", withActiveAuth(s.GetPonderPushSubscriptions, s))
+	r.Put("/ponder/push", withActiveAuth(s.SyncPonderPushSubscriptions, s))
+	r.Delete("/ponder/push", withActiveAuth(s.DeletePonderPushSubscription, s))
 	r.Get("/ponder/callback", s.PonderPingCallback)
 	r.Post("/ponder/callback", s.PonderHookHandler)
 	r.Get("/transactions", p.GetTransactionHistory)
-	r.Post("/transactions/memo", withAuth(p.UpsertTransactionMemo))
-	r.Get("/transactions/balance", withAuth(p.GetBalanceAtTimestamp))
+	r.Post("/transactions/memo", withActiveAuth(p.UpsertTransactionMemo, s))
+	r.Get("/transactions/balance", withActiveAuth(p.GetBalanceAtTimestamp, s))
 }
 
 func AddW9Routes(r *chi.Mux, s *handlers.AppService) {
@@ -283,15 +296,59 @@ func AddW9Routes(r *chi.Mux, s *handlers.AppService) {
 }
 
 func AddUnwrapRoutes(r *chi.Mux, s *handlers.AppService) {
-	r.Post("/unwrap/eligibility", withAuth(s.CheckUnwrapEligibility))
-	r.Post("/unwrap/record", withAuth(s.RecordUnwrap))
+	r.Post("/unwrap/eligibility", withActiveAuth(s.CheckUnwrapEligibility, s))
+	r.Post("/unwrap/record", withActiveAuth(s.RecordUnwrap, s))
 }
 
 func withAuth(handlerFunc http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		_, ok := r.Context().Value("userDid").(string)
-		if !ok {
+		if _, ok := r.Context().Value("userDid").(string); !ok {
 			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+
+		handlerFunc(w, r)
+	}
+}
+
+func userDidFromContext(r *http.Request) (string, bool) {
+	id, ok := r.Context().Value("userDid").(string)
+	if !ok {
+		return "", false
+	}
+
+	return id, true
+}
+
+func writePolicyRequired(w http.ResponseWriter) {
+	w.Header().Set("X-SFLUV-Auth-Reason", structs.AuthReasonPrivacyPolicyRequired)
+	w.WriteHeader(http.StatusForbidden)
+	_, _ = w.Write([]byte(structs.AuthReasonPrivacyPolicyRequired))
+}
+
+func requireAcceptedAuthedUser(w http.ResponseWriter, r *http.Request, s *handlers.AppService) (string, bool) {
+	id, ok := userDidFromContext(r)
+	if !ok {
+		w.WriteHeader(http.StatusForbidden)
+		return "", false
+	}
+
+	if !s.UserIsActive(r.Context(), id) {
+		w.WriteHeader(http.StatusForbidden)
+		return "", false
+	}
+
+	if !s.UserHasAcceptedPrivacyPolicy(r.Context(), id) {
+		writePolicyRequired(w)
+		return "", false
+	}
+
+	return id, true
+}
+
+func withActiveAuth(handlerFunc http.HandlerFunc, s *handlers.AppService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := requireAcceptedAuthedUser(w, r, s); !ok {
 			return
 		}
 
@@ -315,12 +372,10 @@ func withAdmin(handlerFunc http.HandlerFunc, s *handlers.AppService) http.Handle
 			return
 		}
 
-		id, ok := r.Context().Value("userDid").(string)
+		id, ok := requireAcceptedAuthedUser(w, r, s)
 		if !ok {
-			w.WriteHeader(http.StatusForbidden)
 			return
 		}
-
 		isAdmin := s.IsAdmin(r.Context(), id)
 		if !isAdmin {
 			w.WriteHeader(http.StatusForbidden)
@@ -333,12 +388,10 @@ func withAdmin(handlerFunc http.HandlerFunc, s *handlers.AppService) http.Handle
 
 func withAffiliate(handlerFunc http.HandlerFunc, s *handlers.AppService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id, ok := r.Context().Value("userDid").(string)
+		id, ok := requireAcceptedAuthedUser(w, r, s)
 		if !ok {
-			w.WriteHeader(http.StatusForbidden)
 			return
 		}
-
 		if s.IsAdmin(r.Context(), id) {
 			handlerFunc(w, r)
 			return
@@ -356,12 +409,10 @@ func withAffiliate(handlerFunc http.HandlerFunc, s *handlers.AppService) http.Ha
 
 func withProposer(handlerFunc http.HandlerFunc, s *handlers.AppService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id, ok := r.Context().Value("userDid").(string)
+		id, ok := requireAcceptedAuthedUser(w, r, s)
 		if !ok {
-			w.WriteHeader(http.StatusForbidden)
 			return
 		}
-
 		if s.IsAdmin(r.Context(), id) {
 			handlerFunc(w, r)
 			return
@@ -379,12 +430,10 @@ func withProposer(handlerFunc http.HandlerFunc, s *handlers.AppService) http.Han
 
 func withImprover(handlerFunc http.HandlerFunc, s *handlers.AppService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id, ok := r.Context().Value("userDid").(string)
+		id, ok := requireAcceptedAuthedUser(w, r, s)
 		if !ok {
-			w.WriteHeader(http.StatusForbidden)
 			return
 		}
-
 		if s.IsAdmin(r.Context(), id) {
 			handlerFunc(w, r)
 			return
@@ -402,12 +451,10 @@ func withImprover(handlerFunc http.HandlerFunc, s *handlers.AppService) http.Han
 
 func withVoter(handlerFunc http.HandlerFunc, s *handlers.AppService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id, ok := r.Context().Value("userDid").(string)
+		id, ok := requireAcceptedAuthedUser(w, r, s)
 		if !ok {
-			w.WriteHeader(http.StatusForbidden)
 			return
 		}
-
 		if s.IsAdmin(r.Context(), id) {
 			handlerFunc(w, r)
 			return
@@ -425,12 +472,10 @@ func withVoter(handlerFunc http.HandlerFunc, s *handlers.AppService) http.Handle
 
 func withIssuer(handlerFunc http.HandlerFunc, s *handlers.AppService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id, ok := r.Context().Value("userDid").(string)
+		id, ok := requireAcceptedAuthedUser(w, r, s)
 		if !ok {
-			w.WriteHeader(http.StatusForbidden)
 			return
 		}
-
 		if s.IsAdmin(r.Context(), id) {
 			handlerFunc(w, r)
 			return
@@ -448,12 +493,10 @@ func withIssuer(handlerFunc http.HandlerFunc, s *handlers.AppService) http.Handl
 
 func withSupervisor(handlerFunc http.HandlerFunc, s *handlers.AppService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id, ok := r.Context().Value("userDid").(string)
+		id, ok := requireAcceptedAuthedUser(w, r, s)
 		if !ok {
-			w.WriteHeader(http.StatusForbidden)
 			return
 		}
-
 		if s.IsAdmin(r.Context(), id) {
 			handlerFunc(w, r)
 			return

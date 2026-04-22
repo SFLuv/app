@@ -14,6 +14,14 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -44,6 +52,8 @@ import {
   AlertTriangle,
 } from "lucide-react";
 import {
+  AccountDeletionPreview,
+  AccountDeletionStatusResponse,
   UserResponse,
   VerifiedEmailResponse,
   WalletResponse,
@@ -51,6 +61,7 @@ import {
 import { AuthedLocation } from "@/types/location";
 import { GoogleSubLocation } from "@/types/location";
 import { ensureGooglePlacesScript, hasGoogleMapsPlaces } from "@/lib/google-places";
+import { sweepSFLUVBalancesToAdmin } from "@/lib/account-deletion";
 import { getAddress, isAddress } from "viem";
 
 type MerchantStatus = "approved" | "pending" | "rejected" | "none";
@@ -103,6 +114,71 @@ const getLocationApplicationStatus = (
   return "pending";
 };
 
+const formatDeletionDate = (value?: string | null): string | null => {
+  if (!value) {
+    return null;
+  }
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return null;
+  }
+
+  return new Intl.DateTimeFormat("en-US", {
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(parsed);
+};
+
+const getDeletionFallbackDate = () =>
+  formatDeletionDate(
+    new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+  ) || "30 days from now";
+const ACCOUNT_RECOVERY_SUPPORT_EMAIL = "techsupport@sfluv.org";
+
+function GoogleLogo({ className = "h-5 w-5" }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      className={className}
+    >
+      <path
+        d="M21.805 12.227c0-.817-.073-1.602-.209-2.355H12v4.454h5.489a4.695 4.695 0 0 1-2.036 3.081v2.556h3.296c1.929-1.776 3.056-4.396 3.056-7.736Z"
+        fill="#4285F4"
+      />
+      <path
+        d="M12 22.182c2.754 0 5.062-.913 6.749-2.473l-3.296-2.556c-.914.613-2.082.975-3.453.975-2.655 0-4.906-1.793-5.71-4.204H2.883v2.636A10.18 10.18 0 0 0 12 22.182Z"
+        fill="#34A853"
+      />
+      <path
+        d="M6.29 13.924A6.119 6.119 0 0 1 5.97 12c0-.668.115-1.315.32-1.924V7.439H2.883A10.18 10.18 0 0 0 1.818 12c0 1.629.39 3.171 1.065 4.561l3.407-2.637Z"
+        fill="#FBBC04"
+      />
+      <path
+        d="M12 5.872c1.497 0 2.841.515 3.899 1.526l2.923-2.923C17.056 2.839 14.748 1.818 12 1.818a10.18 10.18 0 0 0-9.117 5.621l3.407 2.637c.804-2.411 3.055-4.204 5.71-4.204Z"
+        fill="#EA4335"
+      />
+    </svg>
+  );
+}
+
+function AppleLogo({ className = "h-5 w-5" }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      className={className}
+      fill="currentColor"
+    >
+      <path d="M15.77 12.6c.03 3.02 2.65 4.03 2.68 4.05-.02.07-.41 1.42-1.35 2.81-.81 1.2-1.66 2.39-2.99 2.42-1.31.02-1.73-.78-3.23-.78s-1.97.76-3.2.8c-1.29.05-2.27-1.29-3.09-2.48-1.68-2.43-2.96-6.86-1.24-9.84.85-1.48 2.37-2.42 4.02-2.45 1.25-.03 2.44.84 3.2.84.76 0 2.18-1.03 3.67-.88.62.03 2.37.25 3.49 1.89-.09.06-2.08 1.21-2.06 3.62Zm-2.08-7.96c.68-.82 1.14-1.97 1.02-3.11-.98.04-2.16.65-2.86 1.47-.63.73-1.18 1.9-1.03 3.01 1.09.08 2.19-.56 2.87-1.37Z" />
+    </svg>
+  );
+}
+
 export default function SettingsPage() {
   const router = useRouter();
   const pathname = usePathname();
@@ -124,7 +200,24 @@ export default function SettingsPage() {
     setSupervisor,
     updateUser,
     authFetch,
+    wallets,
     refreshWallets,
+    logout,
+    googleLinked,
+    googleLinkedEmail,
+    googleActionBusy,
+    googleMessage,
+    canDisconnectGoogle,
+    googleDisconnectDisabledReason,
+    unlinkGoogle,
+    appleLinked,
+    appleLinkedEmail,
+    appleLinkBusy,
+    appleLinkMessage,
+    canDisconnectApple,
+    appleDisconnectDisabledReason,
+    linkApple,
+    unlinkApple,
   } = useApp();
   const userRole = useMemo(
     () => (user?.isAdmin ? "admin" : user?.isMerchant ? "merchant" : "user"),
@@ -280,6 +373,15 @@ export default function SettingsPage() {
   const [supervisorRewardsSaving, setSupervisorRewardsSaving] = useState(false);
   const [supervisorRewardsError, setSupervisorRewardsError] = useState("");
   const [supervisorRewardsSuccess, setSupervisorRewardsSuccess] = useState("");
+  const [deleteAccountDialogOpen, setDeleteAccountDialogOpen] = useState(false);
+  const [deleteAccountPreview, setDeleteAccountPreview] =
+    useState<AccountDeletionPreview | null>(null);
+  const [deleteAccountLoading, setDeleteAccountLoading] = useState(false);
+  const [deleteAccountSubmitting, setDeleteAccountSubmitting] = useState(false);
+  const [deleteAccountPhase, setDeleteAccountPhase] = useState<
+    "idle" | "sweeping" | "deleting"
+  >("idle");
+  const [deleteAccountError, setDeleteAccountError] = useState("");
   const noopGoogleSubLocationSetter: React.Dispatch<
     React.SetStateAction<GoogleSubLocation | null>
   > = () => undefined;
@@ -1719,6 +1821,69 @@ export default function SettingsPage() {
     }
   };
 
+  const openDeleteAccountDialog = async () => {
+    setDeleteAccountError("");
+    setDeleteAccountLoading(true);
+    try {
+      const res = await authFetch("/users/delete-account/preview");
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || "Unable to load the account deletion preview.");
+      }
+
+      const preview = (await res.json()) as AccountDeletionPreview;
+      setDeleteAccountPreview(preview);
+      setDeleteAccountDialogOpen(true);
+    } catch (err) {
+      setDeleteAccountError(
+        err instanceof Error
+          ? err.message
+          : "Unable to load the account deletion preview.",
+      );
+    } finally {
+      setDeleteAccountLoading(false);
+    }
+  };
+
+  const closeDeleteAccountDialog = () => {
+    if (deleteAccountSubmitting) {
+      return;
+    }
+    setDeleteAccountDialogOpen(false);
+    setDeleteAccountError("");
+  };
+
+  const handleDeleteAccount = async () => {
+    setDeleteAccountError("");
+    setDeleteAccountSubmitting(true);
+    setDeleteAccountPhase("sweeping");
+    try {
+      await sweepSFLUVBalancesToAdmin(wallets);
+      setDeleteAccountPhase("deleting");
+      const res = await authFetch("/users/delete-account", {
+        method: "POST",
+      });
+      if (res.status !== 202) {
+        const text = await res.text();
+        throw new Error(text || "Unable to schedule account deletion.");
+      }
+
+      await res.json();
+      setDeleteAccountDialogOpen(false);
+      await logout();
+      router.replace("/map");
+    } catch (err) {
+      setDeleteAccountError(
+        err instanceof Error
+          ? err.message
+          : "Unable to schedule account deletion.",
+      );
+    } finally {
+      setDeleteAccountSubmitting(false);
+      setDeleteAccountPhase("idle");
+    }
+  };
+
   // Show success message
   const showSuccessMessage = (message: string) => {
     setSuccessMessage(message);
@@ -2656,6 +2821,187 @@ export default function SettingsPage() {
               </CardContent>
             </Card>
           )} */}
+
+          <Card className="mt-6">
+            <CardHeader>
+              <CardTitle className="text-black dark:text-white">
+                Link Socials
+              </CardTitle>
+              <CardDescription>
+                Manage the Google and Apple sign-in methods attached to this
+                account.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-5">
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                <div className="space-y-2">
+                  <div className="flex items-center gap-3">
+                    <span className="flex h-10 w-10 items-center justify-center rounded-2xl border border-border/70 bg-background shadow-sm">
+                      <GoogleLogo />
+                    </span>
+                    <div>
+                      <p className="font-medium text-black dark:text-white">
+                        Google
+                      </p>
+                    </div>
+                  </div>
+                  <div>
+                    <p className="text-sm text-gray-600 dark:text-gray-400">
+                      {googleLinked
+                        ? "Google is linked to this account for future sign-ins."
+                        : "Google links when you sign in with Google on this account."}
+                    </p>
+                  </div>
+                  {googleLinkedEmail ? (
+                    <p className="text-sm text-gray-600 dark:text-gray-400">
+                      Google email: {googleLinkedEmail}
+                    </p>
+                  ) : null}
+                  {googleDisconnectDisabledReason ? (
+                    <p className="text-sm text-gray-600 dark:text-gray-400">
+                      {googleDisconnectDisabledReason}
+                    </p>
+                  ) : null}
+                  {googleMessage ? (
+                    <p className="text-sm text-gray-600 dark:text-gray-400">
+                      {googleMessage}
+                    </p>
+                  ) : null}
+                </div>
+                {googleLinked ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="w-full gap-2 sm:w-auto"
+                    disabled={googleActionBusy || !canDisconnectGoogle}
+                    onClick={() => {
+                      void unlinkGoogle();
+                    }}
+                  >
+                    <GoogleLogo className="h-4 w-4" />
+                    {canDisconnectGoogle
+                      ? googleActionBusy
+                        ? "Disconnecting Google..."
+                        : "Disconnect Google"
+                      : "Google linked"}
+                  </Button>
+                ) : (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="w-full gap-2 sm:w-auto"
+                    disabled
+                  >
+                    <GoogleLogo className="h-4 w-4" />
+                    Sign in with Google to link
+                  </Button>
+                )}
+              </div>
+
+              <Separator />
+
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                <div className="space-y-2">
+                  <div className="flex items-center gap-3">
+                    <span className="flex h-10 w-10 items-center justify-center rounded-2xl border border-border/70 bg-background text-black shadow-sm dark:text-white">
+                      <AppleLogo />
+                    </span>
+                    <div>
+                      <p className="font-medium text-black dark:text-white">
+                        Apple
+                      </p>
+                    </div>
+                  </div>
+                  <div>
+                    <p className="text-sm text-gray-600 dark:text-gray-400">
+                      {appleLinked
+                        ? "Apple is linked to this account for future sign-ins."
+                        : "Link Apple so future Apple sign-ins land on this account."}
+                    </p>
+                  </div>
+                  {appleLinkedEmail ? (
+                    <p className="text-sm text-gray-600 dark:text-gray-400">
+                      Apple email: {appleLinkedEmail}
+                    </p>
+                  ) : null}
+                  {appleDisconnectDisabledReason ? (
+                    <p className="text-sm text-gray-600 dark:text-gray-400">
+                      {appleDisconnectDisabledReason}
+                    </p>
+                  ) : null}
+                  {appleLinkMessage ? (
+                    <p className="text-sm text-gray-600 dark:text-gray-400">
+                      {appleLinkMessage}
+                    </p>
+                  ) : null}
+                </div>
+                <Button
+                  type="button"
+                  variant={appleLinked ? "outline" : "default"}
+                  className="w-full gap-2 sm:w-auto"
+                  disabled={
+                    appleLinkBusy || (appleLinked ? !canDisconnectApple : false)
+                  }
+                  onClick={() => {
+                    if (appleLinked) {
+                      void unlinkApple();
+                      return;
+                    }
+                    void linkApple();
+                  }}
+                >
+                  <AppleLogo className="h-4 w-4" />
+                  {appleLinked
+                    ? canDisconnectApple
+                      ? appleLinkBusy
+                        ? "Disconnecting Apple..."
+                        : "Disconnect Apple"
+                      : "Apple linked"
+                    : appleLinkBusy
+                      ? "Linking Apple..."
+                      : "Link Apple"}
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="mt-6 border-red-200/80 bg-red-50/70 dark:border-red-500/30 dark:bg-red-500/10">
+            <CardHeader>
+              <CardTitle className="text-black dark:text-white">
+                Delete Account
+              </CardTitle>
+              <CardDescription>
+                Delete your account and log out. Your account will be
+                recoverable for the next 30 days, but any SFLuv in your
+                accessible wallets will be transferred out of your account
+                before the deletion request is submitted.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {deleteAccountError ? (
+                <p className="text-sm text-red-600 dark:text-red-300">
+                  {deleteAccountError}
+                </p>
+              ) : null}
+              <Button
+                type="button"
+                variant="destructive"
+                disabled={deleteAccountLoading || deleteAccountSubmitting}
+                onClick={() => {
+                  void openDeleteAccountDialog();
+                }}
+              >
+                {deleteAccountLoading ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Loading deletion preview...
+                  </>
+                ) : (
+                  "Delete Account"
+                )}
+              </Button>
+            </CardContent>
+          </Card>
         </TabsContent>
 
         {merchantStatus !== "none" && (
@@ -3941,6 +4287,104 @@ export default function SettingsPage() {
           </Card>
         </TabsContent>
       </Tabs>
+
+      <Dialog
+        open={deleteAccountDialogOpen}
+        onOpenChange={(open) => {
+          if (deleteAccountSubmitting) {
+            return;
+          }
+          setDeleteAccountDialogOpen(open);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete your account?</DialogTitle>
+            <DialogDescription>
+              This does not erase your data immediately. Your account will be
+              marked inactive right away and scheduled for final deletion after
+              30 days.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 text-sm text-muted-foreground">
+            <div className="rounded-2xl border border-border bg-muted/40 p-4">
+              <p className="font-medium text-foreground">
+                Scheduled deletion date
+              </p>
+              <p className="mt-1">
+                {formatDeletionDate(deleteAccountPreview?.delete_date) ||
+                  getDeletionFallbackDate()}
+              </p>
+            </div>
+
+            <p>
+              Before the deletion request is submitted, any SFLuv in your
+              accessible wallets will be transferred out of your account.
+            </p>
+
+            <p>
+              If you change your mind later, sign in again and you&apos;ll be
+              able to reactivate the account during the grace period.
+            </p>
+
+            <p>
+              If you later reactivate during the grace period, contact{" "}
+              <a
+                className="font-semibold text-foreground underline underline-offset-4"
+                href={`mailto:${ACCOUNT_RECOVERY_SUPPORT_EMAIL}`}
+              >
+                {ACCOUNT_RECOVERY_SUPPORT_EMAIL}
+              </a>{" "}
+              to recover your funds.
+            </p>
+
+            {deleteAccountSubmitting ? (
+              <p className="rounded-xl border border-border bg-muted/40 px-3 py-2 text-foreground">
+                {deleteAccountPhase === "sweeping"
+                  ? "Transferring SFLuv out of your accessible wallets before submitting the deletion request."
+                  : "Submitting your deletion request now."}
+              </p>
+            ) : null}
+
+            {deleteAccountError ? (
+              <p className="rounded-xl border border-red-400/40 bg-red-100/70 px-3 py-2 text-red-700 dark:bg-red-500/10 dark:text-red-200">
+                {deleteAccountError}
+              </p>
+            ) : null}
+          </div>
+
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={deleteAccountSubmitting}
+              onClick={closeDeleteAccountDialog}
+            >
+              Keep account
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              disabled={deleteAccountSubmitting}
+              onClick={() => {
+                void handleDeleteAccount();
+              }}
+            >
+              {deleteAccountSubmitting ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  {deleteAccountPhase === "sweeping"
+                    ? "Transferring SFLuv..."
+                    : "Submitting deletion..."}
+                </>
+              ) : (
+                "Confirm delete"
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

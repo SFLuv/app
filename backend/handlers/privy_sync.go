@@ -20,6 +20,7 @@ var privyLinkedEmailAccountTypes = map[string]struct{}{
 	"email":        {},
 	"google_oauth": {},
 	"google":       {},
+	"apple_oauth":  {},
 }
 
 var privyManagementHTTPClient = &http.Client{
@@ -81,9 +82,15 @@ func extractEmailsFromPrivyUser(record *privyUserRecord) []string {
 		}
 
 		if value, ok := account["address"].(string); ok {
+			if accountType == appleLinkedAccountType && isApplePrivateRelayEmail(value) {
+				continue
+			}
 			addEmail(value)
 		}
 		if value, ok := account["email"].(string); ok {
+			if accountType == appleLinkedAccountType && isApplePrivateRelayEmail(value) {
+				continue
+			}
 			addEmail(value)
 		}
 	}

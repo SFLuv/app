@@ -146,6 +146,261 @@ var schemaMigrations = []SchemaMigration{
 			return nil
 		},
 	},
+	{
+		Version:     "1.4",
+		Description: "add soft-delete support, account deletion metadata, and merged wallet history",
+		Apply: func(ctx context.Context, pools *DBPools, appLogger *logger.LogCloser) error {
+			if _, err := pools.App.Exec(ctx, `
+				ALTER TABLE users
+				ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT true;
+				ALTER TABLE users
+				ADD COLUMN IF NOT EXISTS delete_date TIMESTAMPTZ;
+				ALTER TABLE users
+				ADD COLUMN IF NOT EXISTS delete_reason TEXT;
+				ALTER TABLE users
+				ADD COLUMN IF NOT EXISTS deletion_requested_at TIMESTAMPTZ;
+				ALTER TABLE users
+				ADD COLUMN IF NOT EXISTS deletion_canceled_at TIMESTAMPTZ;
+				ALTER TABLE users
+				ADD COLUMN IF NOT EXISTS deletion_completed_at TIMESTAMPTZ;
+
+				ALTER TABLE user_verified_emails
+				ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT true;
+				ALTER TABLE user_verified_emails
+				ADD COLUMN IF NOT EXISTS delete_date TIMESTAMPTZ;
+				ALTER TABLE user_verified_emails
+				ADD COLUMN IF NOT EXISTS delete_reason TEXT;
+				ALTER TABLE user_verified_emails
+				DROP CONSTRAINT IF EXISTS user_verified_emails_user_id_email_normalized_key;
+				DROP INDEX IF EXISTS user_verified_emails_user_email_unique_idx;
+				DROP INDEX IF EXISTS user_verified_emails_token_unique_idx;
+				CREATE UNIQUE INDEX IF NOT EXISTS user_verified_emails_user_email_active_idx
+					ON user_verified_emails(user_id, email_normalized)
+					WHERE active = TRUE;
+				CREATE UNIQUE INDEX IF NOT EXISTS user_verified_emails_token_active_idx
+					ON user_verified_emails(verification_token)
+					WHERE verification_token IS NOT NULL AND active = TRUE;
+
+				ALTER TABLE wallets
+				ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT true;
+				ALTER TABLE wallets
+				ADD COLUMN IF NOT EXISTS delete_date TIMESTAMPTZ;
+				ALTER TABLE wallets
+				ADD COLUMN IF NOT EXISTS delete_reason TEXT;
+				ALTER TABLE wallets
+				ADD COLUMN IF NOT EXISTS merged_wallets TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[];
+				ALTER TABLE wallets
+				DROP CONSTRAINT IF EXISTS wallets_owner_is_eoa_eoa_address_smart_index_key;
+				CREATE UNIQUE INDEX IF NOT EXISTS wallets_identity_active_idx
+					ON wallets(owner, is_eoa, eoa_address, smart_index)
+					WHERE active = TRUE;
+
+				ALTER TABLE memos
+				ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT true;
+				ALTER TABLE memos
+				ADD COLUMN IF NOT EXISTS delete_date TIMESTAMPTZ;
+				ALTER TABLE memos
+				ADD COLUMN IF NOT EXISTS delete_reason TEXT;
+
+				ALTER TABLE affiliates
+				ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT true;
+				ALTER TABLE affiliates
+				ADD COLUMN IF NOT EXISTS delete_date TIMESTAMPTZ;
+				ALTER TABLE affiliates
+				ADD COLUMN IF NOT EXISTS delete_reason TEXT;
+
+				ALTER TABLE proposers
+				ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT true;
+				ALTER TABLE proposers
+				ADD COLUMN IF NOT EXISTS delete_date TIMESTAMPTZ;
+				ALTER TABLE proposers
+				ADD COLUMN IF NOT EXISTS delete_reason TEXT;
+
+				ALTER TABLE improvers
+				ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT true;
+				ALTER TABLE improvers
+				ADD COLUMN IF NOT EXISTS delete_date TIMESTAMPTZ;
+				ALTER TABLE improvers
+				ADD COLUMN IF NOT EXISTS delete_reason TEXT;
+
+				ALTER TABLE supervisors
+				ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT true;
+				ALTER TABLE supervisors
+				ADD COLUMN IF NOT EXISTS delete_date TIMESTAMPTZ;
+				ALTER TABLE supervisors
+				ADD COLUMN IF NOT EXISTS delete_reason TEXT;
+
+				ALTER TABLE issuers
+				ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT true;
+				ALTER TABLE issuers
+				ADD COLUMN IF NOT EXISTS delete_date TIMESTAMPTZ;
+				ALTER TABLE issuers
+				ADD COLUMN IF NOT EXISTS delete_reason TEXT;
+
+				ALTER TABLE locations
+				ADD COLUMN IF NOT EXISTS tipping_wallet_address TEXT NOT NULL DEFAULT '';
+				ALTER TABLE locations
+				ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT true;
+				ALTER TABLE locations
+				ADD COLUMN IF NOT EXISTS delete_date TIMESTAMPTZ;
+				ALTER TABLE locations
+				ADD COLUMN IF NOT EXISTS delete_reason TEXT;
+				ALTER TABLE locations
+				DROP CONSTRAINT IF EXISTS locations_google_id_key;
+				CREATE UNIQUE INDEX IF NOT EXISTS locations_google_id_active_idx
+					ON locations(google_id)
+					WHERE active = TRUE AND google_id IS NOT NULL;
+
+				ALTER TABLE location_hours
+				ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT true;
+				ALTER TABLE location_hours
+				ADD COLUMN IF NOT EXISTS delete_date TIMESTAMPTZ;
+				ALTER TABLE location_hours
+				ADD COLUMN IF NOT EXISTS delete_reason TEXT;
+
+				CREATE TABLE IF NOT EXISTS location_payment_wallets(
+					id SERIAL PRIMARY KEY,
+					location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
+					wallet_address TEXT NOT NULL,
+					is_default BOOLEAN NOT NULL DEFAULT false
+				);
+				ALTER TABLE location_payment_wallets
+				ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT true;
+				ALTER TABLE location_payment_wallets
+				ADD COLUMN IF NOT EXISTS delete_date TIMESTAMPTZ;
+				ALTER TABLE location_payment_wallets
+				ADD COLUMN IF NOT EXISTS delete_reason TEXT;
+				ALTER TABLE location_payment_wallets
+				DROP CONSTRAINT IF EXISTS location_payment_wallets_location_id_wallet_address_key;
+				CREATE INDEX IF NOT EXISTS location_payment_wallets_location_idx
+					ON location_payment_wallets(location_id);
+				CREATE UNIQUE INDEX IF NOT EXISTS location_payment_wallets_location_wallet_active_idx
+					ON location_payment_wallets(location_id, wallet_address)
+					WHERE active = TRUE;
+				DROP INDEX IF EXISTS location_payment_wallets_default_idx;
+				CREATE UNIQUE INDEX IF NOT EXISTS location_payment_wallets_default_active_idx
+					ON location_payment_wallets(location_id)
+					WHERE active = TRUE AND is_default = TRUE;
+
+				ALTER TABLE contacts
+				ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT true;
+				ALTER TABLE contacts
+				ADD COLUMN IF NOT EXISTS delete_date TIMESTAMPTZ;
+				ALTER TABLE contacts
+				ADD COLUMN IF NOT EXISTS delete_reason TEXT;
+				ALTER TABLE contacts
+				DROP CONSTRAINT IF EXISTS contacts_owner_address_key;
+				ALTER TABLE contacts
+				DROP CONSTRAINT IF EXISTS contacts_owner_name_key;
+				CREATE UNIQUE INDEX IF NOT EXISTS contacts_owner_address_active_idx
+					ON contacts(owner, address)
+					WHERE active = TRUE;
+				CREATE UNIQUE INDEX IF NOT EXISTS contacts_owner_name_active_idx
+					ON contacts(owner, name)
+					WHERE active = TRUE;
+
+				ALTER TABLE ponder_subscriptions
+				ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT true;
+				ALTER TABLE ponder_subscriptions
+				ADD COLUMN IF NOT EXISTS delete_date TIMESTAMPTZ;
+				ALTER TABLE ponder_subscriptions
+				ADD COLUMN IF NOT EXISTS delete_reason TEXT;
+
+				CREATE INDEX IF NOT EXISTS users_active_delete_idx
+					ON users(active, delete_date);
+			`); err != nil {
+				return err
+			}
+
+			return nil
+		},
+	},
+	{
+		Version:     "1.5",
+		Description: "store revocable oauth credentials for account deletion and apple recovery",
+		Apply: func(ctx context.Context, pools *DBPools, appLogger *logger.LogCloser) error {
+			if _, err := pools.App.Exec(ctx, `
+				CREATE TABLE IF NOT EXISTS user_oauth_credentials(
+					user_id TEXT NOT NULL,
+					provider TEXT NOT NULL,
+					provider_subject TEXT NOT NULL DEFAULT '',
+					provider_email TEXT NOT NULL DEFAULT '',
+					is_private_relay BOOLEAN NOT NULL DEFAULT false,
+					access_token_encrypted TEXT NOT NULL DEFAULT '',
+					refresh_token_encrypted TEXT NOT NULL DEFAULT '',
+					access_token_expires_at TIMESTAMPTZ,
+					refresh_token_expires_at TIMESTAMPTZ,
+					scopes TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
+					created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+					updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+					revoked_at TIMESTAMPTZ,
+					PRIMARY KEY (user_id, provider)
+				);
+
+				CREATE INDEX IF NOT EXISTS user_oauth_credentials_provider_subject_idx
+					ON user_oauth_credentials(provider, provider_subject);
+			`); err != nil {
+				return err
+			}
+
+			return nil
+		},
+	},
+	{
+		Version:     "1.6",
+		Description: "store mobile push subscriptions for Expo push delivery",
+		Apply: func(ctx context.Context, pools *DBPools, appLogger *logger.LogCloser) error {
+			if _, err := pools.App.Exec(ctx, `
+				CREATE TABLE IF NOT EXISTS mobile_push_subscriptions(
+					id SERIAL PRIMARY KEY,
+					owner TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+					token TEXT NOT NULL,
+					address TEXT NOT NULL,
+					created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+					active BOOLEAN NOT NULL DEFAULT true,
+					delete_date TIMESTAMPTZ,
+					delete_reason TEXT
+				);
+
+				CREATE INDEX IF NOT EXISTS mobile_push_subscriptions_owner_idx
+					ON mobile_push_subscriptions(owner);
+				CREATE INDEX IF NOT EXISTS mobile_push_subscriptions_address_idx
+					ON mobile_push_subscriptions(address);
+				CREATE INDEX IF NOT EXISTS mobile_push_subscriptions_token_idx
+					ON mobile_push_subscriptions(token);
+				CREATE UNIQUE INDEX IF NOT EXISTS mobile_push_subscriptions_token_address_idx
+					ON mobile_push_subscriptions(token, address);
+			`); err != nil {
+				return err
+			}
+
+			return nil
+		},
+	},
+	{
+		Version:     "1.7",
+		Description: "require privacy-policy acceptance and record mailing-list opt-in preferences",
+		Apply: func(ctx context.Context, pools *DBPools, appLogger *logger.LogCloser) error {
+			if _, err := pools.App.Exec(ctx, `
+				ALTER TABLE users
+				ADD COLUMN IF NOT EXISTS accepted_privacy_policy BOOLEAN NOT NULL DEFAULT false;
+				ALTER TABLE users
+				ADD COLUMN IF NOT EXISTS accepted_privacy_policy_at TIMESTAMPTZ;
+				ALTER TABLE users
+				ADD COLUMN IF NOT EXISTS privacy_policy_version TEXT NOT NULL DEFAULT '';
+				ALTER TABLE users
+				ADD COLUMN IF NOT EXISTS mailing_list_opt_in BOOLEAN NOT NULL DEFAULT false;
+				ALTER TABLE users
+				ADD COLUMN IF NOT EXISTS mailing_list_opt_in_at TIMESTAMPTZ;
+				ALTER TABLE users
+				ADD COLUMN IF NOT EXISTS mailing_list_policy_version TEXT NOT NULL DEFAULT '';
+			`); err != nil {
+				return err
+			}
+
+			return nil
+		},
+	},
 }
 
 type versionTarget struct {

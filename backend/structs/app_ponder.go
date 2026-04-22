@@ -4,11 +4,17 @@ type SubscriptionType string
 
 const (
 	MerchantSubscription SubscriptionType = "merchant"
+	PushSubscription     SubscriptionType = "push"
 )
 
 type PonderSubscriptionRequest struct {
 	Address string `json:"address"`
 	Email   string `json:"email"`
+}
+
+type PushSubscriptionSyncRequest struct {
+	Token     string   `json:"token"`
+	Addresses []string `json:"addresses"`
 }
 
 type PonderSubscription struct {

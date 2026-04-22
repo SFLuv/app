@@ -3,17 +3,18 @@ package structs
 import "time"
 
 type Wallet struct {
-	Id           *int       `json:"id"`
-	Owner        string     `json:"owner"`
-	Name         string     `json:"name"`
-	IsEoa        bool       `json:"is_eoa"`
-	IsHidden     bool       `json:"is_hidden"`
-	IsRedeemer   bool       `json:"is_redeemer"`
-	IsMinter     bool       `json:"is_minter"`
-	EoaAddress   string     `json:"eoa_address"`
-	SmartAddress *string    `json:"smart_address"`
-	SmartIndex   *int       `json:"smart_index"`
-	LastUnwrapAt *time.Time `json:"last_unwrap_at,omitempty"`
+	Id            *int       `json:"id"`
+	Owner         string     `json:"owner"`
+	Name          string     `json:"name"`
+	IsEoa         bool       `json:"is_eoa"`
+	IsHidden      bool       `json:"is_hidden"`
+	IsRedeemer    bool       `json:"is_redeemer"`
+	IsMinter      bool       `json:"is_minter"`
+	EoaAddress    string     `json:"eoa_address"`
+	SmartAddress  *string    `json:"smart_address"`
+	SmartIndex    *int       `json:"smart_index"`
+	MergedWallets []string   `json:"merged_wallets,omitempty"`
+	LastUnwrapAt  *time.Time `json:"last_unwrap_at,omitempty"`
 }
 
 type WalletAddressOwnerLookup struct {

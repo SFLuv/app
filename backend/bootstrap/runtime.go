@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
+	"time"
 
 	"github.com/SFLuv/app/backend/bot"
 	"github.com/SFLuv/app/backend/db"
@@ -13,6 +15,16 @@ import (
 	"github.com/SFLuv/app/backend/router"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
+)
+
+const deletedAccountPurgeRunTimeout = 30 * time.Minute
+
+const (
+	defaultBotDBName    = "bot"
+	defaultAppDBName    = "app"
+	botDBNameEnvKey     = "BOT_DB_NAME"
+	appDBNameEnvKey     = "APP_DB_NAME"
+	defaultPonderDBName = "ponder"
 )
 
 type DBPools struct {
@@ -31,22 +43,23 @@ func LoadEnv() {
 
 func OpenDBPools(includePonder bool) (*DBPools, error) {
 	pools := &DBPools{}
+	botDBName, appDBName := resolveDBPoolNames()
 
 	var err error
-	pools.Bot, err = db.PgxDB("bot")
+	pools.Bot, err = db.PgxDB(botDBName)
 	if err != nil {
 		pools.Close()
 		return nil, fmt.Errorf("error initializing bot db: %w", err)
 	}
 
-	pools.App, err = db.PgxDB("app")
+	pools.App, err = db.PgxDB(appDBName)
 	if err != nil {
 		pools.Close()
 		return nil, fmt.Errorf("error initializing app db: %w", err)
 	}
 
 	if includePonder {
-		pools.Ponder, err = db.PgxDB("ponder")
+		pools.Ponder, err = db.PgxDB(defaultPonderDBName)
 		if err != nil {
 			pools.Close()
 			return nil, fmt.Errorf("error initializing ponder db: %w", err)
@@ -73,6 +86,18 @@ func (p *DBPools) Close() {
 
 func NewAppLogger() (*logger.LogCloser, error) {
 	return logger.New("./logs/prod/app.log", "APP: ")
+}
+
+func resolveDBPoolNames() (string, string) {
+	return envOrDefault(botDBNameEnvKey, defaultBotDBName), envOrDefault(appDBNameEnvKey, defaultAppDBName)
+}
+
+func envOrDefault(key, defaultValue string) string {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return defaultValue
+	}
+	return value
 }
 
 func InitializeDatabases(ctx context.Context, pools *DBPools, appLogger *logger.LogCloser) error {
@@ -129,6 +154,63 @@ func RunInitializationSyncs(ctx context.Context, pools *DBPools, appLogger *logg
 	return nil
 }
 
+func StartDeletedAccountPurgeLoop(ctx context.Context, appService *handlers.AppService, appLogger *logger.LogCloser) {
+	if ctx == nil || appService == nil || appLogger == nil {
+		return
+	}
+
+	go func() {
+		runDeletedAccountPurge(ctx, appService, appLogger, "startup")
+		if ctx.Err() != nil {
+			return
+		}
+		appLogger.Logf("deleted account purge loop started; next run scheduled for %s", nextDeletedAccountPurgeRun(time.Now().UTC()).Format(time.RFC3339))
+
+		for {
+			nextRun := nextDeletedAccountPurgeRun(time.Now().UTC())
+			timer := time.NewTimer(time.Until(nextRun))
+
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+				runDeletedAccountPurge(ctx, appService, appLogger, "daily")
+			}
+		}
+	}()
+}
+
+func runDeletedAccountPurge(ctx context.Context, appService *handlers.AppService, appLogger *logger.LogCloser, runType string) {
+	if ctx == nil || appService == nil || appLogger == nil || ctx.Err() != nil {
+		return
+	}
+
+	runCtx, cancel := context.WithTimeout(ctx, deletedAccountPurgeRunTimeout)
+	defer cancel()
+
+	purged, err := appService.PurgeDeletedAccounts(runCtx, time.Now().UTC())
+	if err != nil {
+		if ctx.Err() == nil {
+			appLogger.Logf("error running deleted account purge during %s pass: %s", runType, err)
+		}
+		return
+	}
+
+	if purged > 0 {
+		appLogger.Logf("purged %d deleted accounts during %s pass", purged, runType)
+	}
+}
+
+func nextDeletedAccountPurgeRun(now time.Time) time.Time {
+	now = now.UTC()
+	nextMidnightUTC := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC).Add(24 * time.Hour)
+	if !nextMidnightUTC.After(now) {
+		return nextMidnightUTC.Add(24 * time.Hour)
+	}
+	return nextMidnightUTC
+}
+
 func NewServerHandler(ctx context.Context, pools *DBPools, appLogger *logger.LogCloser) (http.Handler, error) {
 	if pools == nil || pools.Bot == nil || pools.App == nil || pools.Ponder == nil {
 		return nil, fmt.Errorf("bot, app, and ponder db pools are required")
@@ -168,6 +250,7 @@ func NewServerHandler(ctx context.Context, pools *DBPools, appLogger *logger.Log
 	a.SetBotService(s)
 	a.SetRedeemerService(redeemer)
 	a.SetMinterService(minter)
+	StartDeletedAccountPurgeLoop(ctx, a, appLogger)
 
 	p := handlers.NewPonderService(ponderDb, appDb, appLogger)
 	return router.New(s, a, p), nil

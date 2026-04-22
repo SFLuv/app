@@ -14,7 +14,7 @@ const Providers = ({ children }: { children: ReactNode }) => {
   const customOAuthRedirectUrl =
     process.env.NEXT_PUBLIC_PRIVY_CUSTOM_OAUTH_REDIRECT_URL?.trim() || undefined
   const loginMethods = useMemo(() => {
-    const methods = ["email", "google"] as Array<"email" | "google" | "passkey">
+    const methods = ["email", "google", "apple"] as Array<"email" | "google" | "apple" | "passkey">
     if (process.env.NEXT_PUBLIC_PRIVY_ENABLE_PASSKEY_LOGIN?.trim().toLowerCase() === "true") {
       methods.push("passkey")
     }
@@ -25,7 +25,7 @@ const Providers = ({ children }: { children: ReactNode }) => {
     loginMethods,
     appearance: {
       theme: resolvedTheme as any || "light",
-      accentColor: "#eb6c6c",
+      accentColor: "#eb6c6c" as `#${string}`,
       logo: "/icon.png",
       loginMessage: "Connect to the SFLuv Dashboard!"
     },
@@ -36,12 +36,12 @@ const Providers = ({ children }: { children: ReactNode }) => {
     customOAuthRedirectUrl,
     externalWallets: {
       coinbaseWallet: {
-        connectionOptions: "eoaOnly"
+        connectionOptions: "eoaOnly" as const
       }
     },
     embeddedWallets: {
       ethereum: {
-          createOnLogin: 'users-without-wallets',
+          createOnLogin: 'users-without-wallets' as const,
       },
       showWalletUIs: false
     },
