@@ -139,6 +139,46 @@ const getDeletionFallbackDate = () =>
   ) || "30 days from now";
 const ACCOUNT_RECOVERY_SUPPORT_EMAIL = "techsupport@sfluv.org";
 
+function GoogleLogo({ className = "h-5 w-5" }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      className={className}
+    >
+      <path
+        d="M21.805 12.227c0-.817-.073-1.602-.209-2.355H12v4.454h5.489a4.695 4.695 0 0 1-2.036 3.081v2.556h3.296c1.929-1.776 3.056-4.396 3.056-7.736Z"
+        fill="#4285F4"
+      />
+      <path
+        d="M12 22.182c2.754 0 5.062-.913 6.749-2.473l-3.296-2.556c-.914.613-2.082.975-3.453.975-2.655 0-4.906-1.793-5.71-4.204H2.883v2.636A10.18 10.18 0 0 0 12 22.182Z"
+        fill="#34A853"
+      />
+      <path
+        d="M6.29 13.924A6.119 6.119 0 0 1 5.97 12c0-.668.115-1.315.32-1.924V7.439H2.883A10.18 10.18 0 0 0 1.818 12c0 1.629.39 3.171 1.065 4.561l3.407-2.637Z"
+        fill="#FBBC04"
+      />
+      <path
+        d="M12 5.872c1.497 0 2.841.515 3.899 1.526l2.923-2.923C17.056 2.839 14.748 1.818 12 1.818a10.18 10.18 0 0 0-9.117 5.621l3.407 2.637c.804-2.411 3.055-4.204 5.71-4.204Z"
+        fill="#EA4335"
+      />
+    </svg>
+  );
+}
+
+function AppleLogo({ className = "h-5 w-5" }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      className={className}
+      fill="currentColor"
+    >
+      <path d="M15.77 12.6c.03 3.02 2.65 4.03 2.68 4.05-.02.07-.41 1.42-1.35 2.81-.81 1.2-1.66 2.39-2.99 2.42-1.31.02-1.73-.78-3.23-.78s-1.97.76-3.2.8c-1.29.05-2.27-1.29-3.09-2.48-1.68-2.43-2.96-6.86-1.24-9.84.85-1.48 2.37-2.42 4.02-2.45 1.25-.03 2.44.84 3.2.84.76 0 2.18-1.03 3.67-.88.62.03 2.37.25 3.49 1.89-.09.06-2.08 1.21-2.06 3.62Zm-2.08-7.96c.68-.82 1.14-1.97 1.02-3.11-.98.04-2.16.65-2.86 1.47-.63.73-1.18 1.9-1.03 3.01 1.09.08 2.19-.56 2.87-1.37Z" />
+    </svg>
+  );
+}
+
 export default function SettingsPage() {
   const router = useRouter();
   const pathname = usePathname();
@@ -1828,13 +1868,8 @@ export default function SettingsPage() {
         throw new Error(text || "Unable to schedule account deletion.");
       }
 
-      const statusBody = (await res.json()) as AccountDeletionStatusResponse;
-      const deleteDateLabel =
-        formatDeletionDate(statusBody.delete_date) || getDeletionFallbackDate();
+      await res.json();
       setDeleteAccountDialogOpen(false);
-      window.alert(
-        `Your account is scheduled for deletion on ${deleteDateLabel}. Sign in again before then if you want to reactivate it. If you later reactivate during the grace period, contact ${ACCOUNT_RECOVERY_SUPPORT_EMAIL} to recover any SFLuv transferred out during the deletion request.`,
-      );
       await logout();
       router.replace("/map");
     } catch (err) {
@@ -2787,107 +2822,146 @@ export default function SettingsPage() {
             </Card>
           )} */}
 
-          {googleLinked ? (
-            <Card className="mt-6">
-              <CardHeader>
-                <CardTitle className="text-black dark:text-white">
-                  Google Sign-In
-                </CardTitle>
-                <CardDescription>
-                  Google is linked to this account for future sign-ins.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                {googleLinkedEmail ? (
-                  <p className="text-sm text-gray-600 dark:text-gray-400">
-                    Google email: {googleLinkedEmail}
-                  </p>
-                ) : null}
-                {googleDisconnectDisabledReason ? (
-                  <p className="text-sm text-gray-600 dark:text-gray-400">
-                    {googleDisconnectDisabledReason}
-                  </p>
-                ) : null}
-                {googleMessage ? (
-                  <p className="text-sm text-gray-600 dark:text-gray-400">
-                    {googleMessage}
-                  </p>
-                ) : null}
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="border-border text-foreground"
-                  disabled={googleActionBusy || !canDisconnectGoogle}
-                  onClick={() => {
-                    void unlinkGoogle();
-                  }}
-                >
-                  {canDisconnectGoogle
-                    ? googleActionBusy
-                      ? "Disconnecting Google..."
-                      : "Disconnect Google"
-                    : "Google linked"}
-                </Button>
-              </CardContent>
-            </Card>
-          ) : null}
-
           <Card className="mt-6">
             <CardHeader>
               <CardTitle className="text-black dark:text-white">
-                Apple Sign-In
+                Link Socials
               </CardTitle>
               <CardDescription>
-                {appleLinked
-                  ? "Apple is linked to this account for future sign-ins."
-                  : "Link Apple so future Apple sign-ins land on this account."}
+                Manage the Google and Apple sign-in methods attached to this
+                account.
               </CardDescription>
             </CardHeader>
-            <CardContent className="space-y-4">
-              {appleLinkedEmail ? (
-                <p className="text-sm text-gray-600 dark:text-gray-400">
-                  Apple email: {appleLinkedEmail}
-                </p>
-              ) : null}
-              {appleDisconnectDisabledReason ? (
-                <p className="text-sm text-gray-600 dark:text-gray-400">
-                  {appleDisconnectDisabledReason}
-                </p>
-              ) : null}
-              {appleLinkMessage ? (
-                <p className="text-sm text-gray-600 dark:text-gray-400">
-                  {appleLinkMessage}
-                </p>
-              ) : null}
-              <Button
-                type="button"
-                variant={appleLinked ? "outline" : "default"}
-                className={
-                  appleLinked
-                    ? "border-border text-foreground"
-                    : "bg-[#eb6c6c] hover:bg-[#d55c5c]"
-                }
-                disabled={
-                  appleLinkBusy || (appleLinked ? !canDisconnectApple : false)
-                }
-                onClick={() => {
-                  if (appleLinked) {
-                    void unlinkApple();
-                    return;
+            <CardContent className="space-y-5">
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                <div className="space-y-2">
+                  <div className="flex items-center gap-3">
+                    <span className="flex h-10 w-10 items-center justify-center rounded-2xl border border-border/70 bg-background shadow-sm">
+                      <GoogleLogo />
+                    </span>
+                    <div>
+                      <p className="font-medium text-black dark:text-white">
+                        Google
+                      </p>
+                    </div>
+                  </div>
+                  <div>
+                    <p className="text-sm text-gray-600 dark:text-gray-400">
+                      {googleLinked
+                        ? "Google is linked to this account for future sign-ins."
+                        : "Google links when you sign in with Google on this account."}
+                    </p>
+                  </div>
+                  {googleLinkedEmail ? (
+                    <p className="text-sm text-gray-600 dark:text-gray-400">
+                      Google email: {googleLinkedEmail}
+                    </p>
+                  ) : null}
+                  {googleDisconnectDisabledReason ? (
+                    <p className="text-sm text-gray-600 dark:text-gray-400">
+                      {googleDisconnectDisabledReason}
+                    </p>
+                  ) : null}
+                  {googleMessage ? (
+                    <p className="text-sm text-gray-600 dark:text-gray-400">
+                      {googleMessage}
+                    </p>
+                  ) : null}
+                </div>
+                {googleLinked ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="w-full gap-2 sm:w-auto"
+                    disabled={googleActionBusy || !canDisconnectGoogle}
+                    onClick={() => {
+                      void unlinkGoogle();
+                    }}
+                  >
+                    <GoogleLogo className="h-4 w-4" />
+                    {canDisconnectGoogle
+                      ? googleActionBusy
+                        ? "Disconnecting Google..."
+                        : "Disconnect Google"
+                      : "Google linked"}
+                  </Button>
+                ) : (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="w-full gap-2 sm:w-auto"
+                    disabled
+                  >
+                    <GoogleLogo className="h-4 w-4" />
+                    Sign in with Google to link
+                  </Button>
+                )}
+              </div>
+
+              <Separator />
+
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                <div className="space-y-2">
+                  <div className="flex items-center gap-3">
+                    <span className="flex h-10 w-10 items-center justify-center rounded-2xl border border-border/70 bg-background text-black shadow-sm dark:text-white">
+                      <AppleLogo />
+                    </span>
+                    <div>
+                      <p className="font-medium text-black dark:text-white">
+                        Apple
+                      </p>
+                    </div>
+                  </div>
+                  <div>
+                    <p className="text-sm text-gray-600 dark:text-gray-400">
+                      {appleLinked
+                        ? "Apple is linked to this account for future sign-ins."
+                        : "Link Apple so future Apple sign-ins land on this account."}
+                    </p>
+                  </div>
+                  {appleLinkedEmail ? (
+                    <p className="text-sm text-gray-600 dark:text-gray-400">
+                      Apple email: {appleLinkedEmail}
+                    </p>
+                  ) : null}
+                  {appleDisconnectDisabledReason ? (
+                    <p className="text-sm text-gray-600 dark:text-gray-400">
+                      {appleDisconnectDisabledReason}
+                    </p>
+                  ) : null}
+                  {appleLinkMessage ? (
+                    <p className="text-sm text-gray-600 dark:text-gray-400">
+                      {appleLinkMessage}
+                    </p>
+                  ) : null}
+                </div>
+                <Button
+                  type="button"
+                  variant={appleLinked ? "outline" : "default"}
+                  className="w-full gap-2 sm:w-auto"
+                  disabled={
+                    appleLinkBusy || (appleLinked ? !canDisconnectApple : false)
                   }
-                  void linkApple();
-                }}
-              >
-                {appleLinked
-                  ? canDisconnectApple
-                    ? appleLinkBusy
-                      ? "Disconnecting Apple..."
-                      : "Disconnect Apple"
-                    : "Apple linked"
-                  : appleLinkBusy
-                    ? "Linking Apple..."
-                    : "Link Apple"}
-              </Button>
+                  onClick={() => {
+                    if (appleLinked) {
+                      void unlinkApple();
+                      return;
+                    }
+                    void linkApple();
+                  }}
+                >
+                  <AppleLogo className="h-4 w-4" />
+                  {appleLinked
+                    ? canDisconnectApple
+                      ? appleLinkBusy
+                        ? "Disconnecting Apple..."
+                        : "Disconnect Apple"
+                      : "Apple linked"
+                    : appleLinkBusy
+                      ? "Linking Apple..."
+                      : "Link Apple"}
+                </Button>
+              </div>
             </CardContent>
           </Card>
 

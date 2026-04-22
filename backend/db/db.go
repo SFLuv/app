@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -23,18 +24,32 @@ func PgxDB(name string) (*pgxpool.Pool, error) {
 }
 
 func MakeDbConnString(name string) string {
-	dbUser := os.Getenv("DB_USER")
+	dbUser := envOrDefault("DB_USER", "postgres")
 	dbPassword := os.Getenv("DB_PASSWORD")
-	dbPath := os.Getenv("DB_URL")
-
+	dbPath := firstNonEmptyEnv("DB_BASE_URL", "DB_URL")
 	if dbPath == "" {
 		dbPath = "localhost:5432"
 	}
-	if dbUser == "" {
-		dbUser = "postgres"
-	}
 
 	return fmt.Sprintf("postgres://%s:%s@%s/%s", dbUser, dbPassword, dbPath, name)
+}
+
+func firstNonEmptyEnv(keys ...string) string {
+	for _, key := range keys {
+		value := strings.TrimSpace(os.Getenv(key))
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func envOrDefault(key, defaultValue string) string {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return defaultValue
+	}
+	return value
 }
 
 func getProjectRoot() (string, error) {

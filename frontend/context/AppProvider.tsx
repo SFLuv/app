@@ -91,9 +91,12 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Button } from "@/components/ui/button";
 import { PonderSubscription, PonderSubscriptionRequest } from "@/types/ponder";
 import { base64 } from "@scure/base";
 import {
+  buildPolicyPageHref,
+  buildPolicyReturnTo,
   EMAIL_OPT_IN_POLICY_PATH,
   PRIVACY_POLICY_PATH,
 } from "@/lib/policies";
@@ -579,6 +582,9 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     throttle: 500,
     startManually: true,
   });
+  const allowPolicyRoute =
+    pathname.startsWith(PRIVACY_POLICY_PATH) ||
+    pathname.startsWith(EMAIL_OPT_IN_POLICY_PATH);
 
   const clearAuthenticatedState = (options?: {
     clearDeletedAccount?: boolean;
@@ -2012,7 +2018,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
           ) : (
             <>
               {children}
-              {policyStatus && privyAuthenticated ? (
+              {policyStatus && privyAuthenticated && !allowPolicyRoute ? (
                 <PolicyAcceptanceOverlay
                   key={policyStatus.user_id}
                   action={policyAction}
@@ -2056,9 +2062,17 @@ function PolicyAcceptanceOverlay({
   onAccept: (mailingListOptIn: boolean) => void;
   onReturnToLogin: () => void;
 }) {
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
   const [acceptedPrivacyPolicy, setAcceptedPrivacyPolicy] = useState(false);
   const [mailingListOptIn, setMailingListOptIn] = useState(true);
   const busy = action !== "idle";
+  const returnTo = buildPolicyReturnTo(pathname, searchParams);
+  const privacyPolicyHref = buildPolicyPageHref(PRIVACY_POLICY_PATH, returnTo);
+  const emailOptInPolicyHref = buildPolicyPageHref(
+    EMAIL_OPT_IN_POLICY_PATH,
+    returnTo,
+  );
 
   return (
     <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/55 px-4 py-6 backdrop-blur-[2px]">
@@ -2073,7 +2087,7 @@ function PolicyAcceptanceOverlay({
           <p className="text-sm leading-6 text-muted-foreground sm:text-base">
             To use the app, You need to review and accept the{" "}
             <Link
-              href={PRIVACY_POLICY_PATH}
+              href={privacyPolicyHref}
               target="_blank"
               rel="noreferrer"
               className="font-semibold text-foreground underline underline-offset-4"
@@ -2083,7 +2097,7 @@ function PolicyAcceptanceOverlay({
             . You can also choose whether to opt in to SFLuv email updates under
             the{" "}
             <Link
-              href={EMAIL_OPT_IN_POLICY_PATH}
+              href={emailOptInPolicyHref}
               target="_blank"
               rel="noreferrer"
               className="font-semibold text-foreground underline underline-offset-4"
@@ -2105,7 +2119,7 @@ function PolicyAcceptanceOverlay({
               <span className="text-sm leading-6 text-foreground">
                 I have read and accept the{" "}
                 <Link
-                  href={PRIVACY_POLICY_PATH}
+                  href={privacyPolicyHref}
                   target="_blank"
                   rel="noreferrer"
                   className="font-semibold underline underline-offset-4"
@@ -2127,7 +2141,7 @@ function PolicyAcceptanceOverlay({
               <span className="text-sm leading-6 text-foreground">
                 I want to receive SFLuv emails in line with the{" "}
                 <Link
-                  href={EMAIL_OPT_IN_POLICY_PATH}
+                  href={emailOptInPolicyHref}
                   target="_blank"
                   rel="noreferrer"
                   className="font-semibold underline underline-offset-4"
@@ -2152,22 +2166,25 @@ function PolicyAcceptanceOverlay({
         </div>
 
         <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:justify-end">
-          <button
+          <Button
             type="button"
-            className="inline-flex min-h-14 w-full items-center justify-center rounded-xl border border-border bg-background px-6 text-base font-semibold whitespace-nowrap text-foreground transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto sm:min-w-[190px]"
+            variant="outline"
+            size="lg"
+            className="w-full sm:w-auto sm:min-w-[190px]"
             disabled={busy}
             onClick={onReturnToLogin}
           >
             {action === "returning" ? "Logging out..." : "Log out"}
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
-            className="inline-flex min-h-14 w-full items-center justify-center rounded-xl bg-[#eb6c6c] px-6 text-base font-semibold whitespace-nowrap text-white transition hover:bg-[#d55c5c] disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto sm:min-w-[220px]"
+            size="lg"
+            className="w-full sm:w-auto sm:min-w-[220px]"
             disabled={busy || !acceptedPrivacyPolicy}
             onClick={() => onAccept(mailingListOptIn)}
           >
             {action === "submitting" ? "Saving..." : "Continue"}
-          </button>
+          </Button>
         </div>
       </div>
     </div>
@@ -2227,24 +2244,27 @@ function DeletedAccountGate({
           </div>
 
           <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:justify-end">
-            <button
+            <Button
               type="button"
-              className="inline-flex min-h-14 w-full items-center justify-center rounded-xl border border-border bg-background px-6 text-base font-semibold whitespace-nowrap text-foreground transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto sm:min-w-[190px]"
+              variant="outline"
+              size="lg"
+              className="w-full sm:w-auto sm:min-w-[190px]"
               disabled={busy}
               onClick={onReturnToLogin}
             >
               {action === "returning" ? "Returning..." : "No, take me back"}
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
-              className="inline-flex min-h-14 w-full items-center justify-center rounded-xl bg-[#eb6c6c] px-6 text-base font-semibold whitespace-nowrap text-white transition hover:bg-[#d55c5c] disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto sm:min-w-[190px]"
+              size="lg"
+              className="w-full sm:w-auto sm:min-w-[190px]"
               disabled={busy}
               onClick={onReactivate}
             >
               {action === "reactivating"
                 ? "Re-activating..."
                 : "Yes, re-activate it"}
-            </button>
+            </Button>
           </div>
         </div>
       </div>
@@ -2297,24 +2317,27 @@ function AppleRecoveryGate({
           </div>
 
           <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:justify-end">
-            <button
+            <Button
               type="button"
-              className="inline-flex min-h-14 w-full items-center justify-center rounded-xl border border-border bg-background px-6 text-base font-semibold whitespace-nowrap text-foreground transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto sm:min-w-[220px]"
+              variant="outline"
+              size="lg"
+              className="w-full sm:w-auto sm:min-w-[220px]"
               disabled={busy}
               onClick={onUseExistingAccount}
             >
               {action === "returning" ? "Returning..." : prompt.primaryLabel}
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
-              className="inline-flex min-h-14 w-full items-center justify-center rounded-xl bg-[#eb6c6c] px-6 text-base font-semibold whitespace-nowrap text-white transition hover:bg-[#d55c5c] disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto sm:min-w-[220px]"
+              size="lg"
+              className="w-full sm:w-auto sm:min-w-[220px]"
               disabled={busy}
               onClick={onContinueWithApple}
             >
               {action === "continuing"
                 ? "Continuing..."
                 : prompt.secondaryLabel}
-            </button>
+            </Button>
           </div>
         </div>
       </div>
@@ -2363,13 +2386,12 @@ function RecoveryFundsNoticeDialog({
           </p>
         </div>
         <div className="flex justify-end">
-          <button
+          <Button
             type="button"
-            className="inline-flex min-h-11 items-center justify-center rounded-xl bg-[#eb6c6c] px-5 text-sm font-semibold text-white transition hover:bg-[#d55c5c]"
             onClick={onClose}
           >
             Understood
-          </button>
+          </Button>
         </div>
       </DialogContent>
     </Dialog>

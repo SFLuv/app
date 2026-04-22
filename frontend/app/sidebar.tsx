@@ -12,6 +12,7 @@ import { SidebarProvider, SidebarInset, SidebarTrigger } from "@/components/ui/s
 import { Button } from "@/components/ui/button"
 import { useEffect, useState } from "react"
 import { usePathname, useSearchParams } from "next/navigation"
+import { EMAIL_OPT_IN_POLICY_PATH, PRIVACY_POLICY_PATH } from "@/lib/policies"
 
 
 export default function Sidebar({
@@ -24,7 +25,12 @@ export default function Sidebar({
   const [open, setOpen] = useState(false);
   const pathname = usePathname()
   const search = useSearchParams()
-  const shouldHideSidebar = pathname == "/faucet/redeem" || pathname.startsWith("/photos/") || search.get("sidebar") === "false"
+  const shouldHideSidebar =
+    pathname == "/faucet/redeem" ||
+    pathname.startsWith("/photos/") ||
+    pathname.startsWith(PRIVACY_POLICY_PATH) ||
+    pathname.startsWith(EMAIL_OPT_IN_POLICY_PATH) ||
+    search.get("sidebar") === "false"
 
   useEffect(() => {
     if(status == "authenticated") setOpen(true)
