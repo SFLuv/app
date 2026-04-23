@@ -116,30 +116,6 @@ export interface AccountDeletionStatusResponse {
   purge_enabled_by?: string;
 }
 
-export type AppleRecoveryResolution =
-  | "current_account_exists"
-  | "recovery_suggested"
-  | "no_match"
-  | "ambiguous_match"
-  | "no_apple_account";
-
-export interface AppleRecoverySuggestedAccount {
-  user_id: string;
-  contact_name?: string;
-  verified_email?: string;
-  primary_wallet_address?: string;
-}
-
-export interface AppleRecoveryResponse {
-  current_user_id: string;
-  current_user_exists: boolean;
-  apple_linked: boolean;
-  apple_email?: string;
-  is_private_relay: boolean;
-  resolution: AppleRecoveryResolution;
-  suggested_existing_account?: AppleRecoverySuggestedAccount;
-}
-
 export type VerifiedEmailStatus = "verified" | "pending" | "expired";
 
 export interface VerifiedEmailResponse {
