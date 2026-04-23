@@ -343,7 +343,7 @@ export default function PrivacyPolicyPage() {
         </ul>
         <p>
           To exercise any of these rights, and if You are a California resident, You can contact
-          Us by email at admin@sfluv.org or by visiting www.sfluv.org.
+          Us by email at admin@sfluv.org or by visiting www.sfluv.org/contact.
         </p>
       </Section>
 
@@ -425,7 +425,7 @@ export default function PrivacyPolicyPage() {
         <p>If you have any questions about this Privacy Policy, You can contact us:</p>
         <ul className="list-disc space-y-2 pl-6 text-muted-foreground">
           <li>By email: admin@sfluv.org</li>
-          <li>By visiting this page on our website: www.sfluv.org</li>
+          <li>By visiting this page on our website: www.sfluv.org/contact</li>
         </ul>
       </Section>
     </PolicyPageShell>
