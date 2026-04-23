@@ -70,7 +70,6 @@ import { Improver } from "@/types/improver";
 import { IssuerRecord } from "@/types/issuer";
 import { Supervisor } from "@/types/supervisor";
 import {
-  AppleRecoveryResponse,
   AccountDeletionStatusResponse,
   GetUserResponse,
   UserPolicyStatusResponse,
@@ -335,53 +334,6 @@ function isApplePrivateRelayEmail(email?: string | null): boolean {
   return (email || "").trim().toLowerCase().endsWith("@privaterelay.appleid.com");
 }
 
-function describeAppleRecoveryPrompt(
-  recovery: AppleRecoveryResponse,
-): {
-  title: string;
-  body: string;
-  primaryLabel: string;
-  secondaryLabel: string;
-} {
-  if (recovery.resolution === "recovery_suggested") {
-    const existingAccountLabel =
-      recovery.suggested_existing_account?.contact_name?.trim() ||
-      recovery.suggested_existing_account?.verified_email?.trim() ||
-      "your existing SFLUV account";
-    return {
-      title: "We found an existing account",
-      body: `Apple signed you into a new Privy identity, but ${existingAccountLabel} already exists in SFLUV. Go back and sign in with Google or email first, then link Apple in Settings. If you continue here and Apple does not share your real email with us, we will not be able to link the accounts together and you will end up with two separate SFLUV accounts.`,
-      primaryLabel: "Use my existing account",
-      secondaryLabel: "Continue with Apple anyway",
-    };
-  }
-
-  if (recovery.is_private_relay || !recovery.apple_email) {
-    return {
-      title: "Continue with Apple?",
-      body: "Apple may have hidden your real email. If you create an Apple account without sharing your real email with us, we will not be able to link it to an existing SFLUV account and you will end up with two separate accounts. Go back and sign in with Google or email first if you already have an account.",
-      primaryLabel: "I already have an account",
-      secondaryLabel: "Continue with Apple anyway",
-    };
-  }
-
-  if (recovery.resolution === "ambiguous_match") {
-    return {
-      title: "Multiple accounts found",
-      body: `Apple shared ${recovery.apple_email}, but more than one active SFLUV account is associated with that address. Go back and sign in with the account you want to keep, then link Apple in Settings. If you continue here, you may create a separate Apple account.`,
-      primaryLabel: "Go back to sign in",
-      secondaryLabel: "Continue with Apple anyway",
-    };
-  }
-
-  return {
-    title: "Continue with Apple?",
-    body: "If you already have an SFLUV account, go back and sign in with Google or email first, then link Apple in Settings. Otherwise continue to create a new Apple account here.",
-    primaryLabel: "I already have an account",
-    secondaryLabel: "Continue with Apple",
-  };
-}
-
 export default function AppProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [affiliate, setAffiliate] = useState<Affiliate | null>(null);
@@ -402,13 +354,6 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     "idle" | "reactivating" | "returning"
   >("idle");
   const [deletedAccountError, setDeletedAccountError] = useState("");
-  const [appleRecovery, setAppleRecovery] =
-    useState<AppleRecoveryResponse | null>(null);
-  const [appleRecoveryAction, setAppleRecoveryAction] = useState<
-    "idle" | "continuing" | "returning"
-  >("idle");
-  const [appleRecoveryError, setAppleRecoveryError] = useState("");
-  const [appleRecoveryBypassed, setAppleRecoveryBypassed] = useState(false);
   const [pendingAppleTokens, setPendingAppleTokens] = useState<{
     accessToken: string;
     refreshToken?: string;
@@ -621,10 +566,6 @@ export default function AppProvider({ children }: { children: ReactNode }) {
       setDeletedAccountAction("idle");
       setDeletedAccountError("");
     }
-    setAppleRecovery(null);
-    setAppleRecoveryAction("idle");
-    setAppleRecoveryError("");
-    setAppleRecoveryBypassed(false);
     setPendingAppleTokens(null);
     setAppleLinkBusy(false);
     setAppleLinkMessage("");
@@ -669,17 +610,12 @@ export default function AppProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    if (appleRecovery) {
-      return;
-    }
-
     if (policyStatus) {
       return;
     }
 
     _userLogin();
   }, [
-    appleRecovery,
     deletedAccountStatus,
     pathname,
     policyStatus,
@@ -792,41 +728,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     try {
       nextPolicyStatus = await _getUserPolicyStatusRaw();
       if (nextPolicyStatus === null) {
-        if (appleLinked && !appleRecoveryBypassed) {
-          try {
-            const recovery = await _resolveAppleRecovery({
-              providerSubject: linkedAppleAccount?.subject,
-              providerEmail: linkedAppleAccount?.email || undefined,
-              isPrivateRelay: isApplePrivateRelayEmail(linkedAppleAccount?.email),
-            });
-
-            if (
-              recovery.resolution !== "current_account_exists" &&
-              recovery.resolution !== "no_apple_account"
-            ) {
-              setAppleRecovery(recovery);
-              setStatus("unauthenticated");
-              return;
-            }
-          } catch (error) {
-            console.error("error resolving apple recovery", error);
-            setAppleRecovery({
-              current_user_id: privyUser?.id || "",
-              current_user_exists: false,
-              apple_linked: true,
-              apple_email: linkedAppleAccount?.email || undefined,
-              is_private_relay: isApplePrivateRelayEmail(
-                linkedAppleAccount?.email,
-              ),
-              resolution: "no_match",
-            });
-            setStatus("unauthenticated");
-            return;
-          }
-        }
-
         await _postUser();
-        setAppleRecoveryBypassed(false);
         nextPolicyStatus = await _getUserPolicyStatusRaw();
       }
       if (nextPolicyStatus === null) {
@@ -846,8 +748,6 @@ export default function AppProvider({ children }: { children: ReactNode }) {
         return;
       }
 
-      setAppleRecovery(null);
-      setAppleRecoveryBypassed(false);
       setPolicyStatus(null);
 
       userResponse = await _getUser();
@@ -992,28 +892,6 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     if (!res.ok) {
       throw new Error("Unable to store Apple OAuth credentials.");
     }
-  };
-
-  const _resolveAppleRecovery = async (input?: {
-    providerSubject?: string;
-    providerEmail?: string;
-    isPrivateRelay?: boolean;
-  }): Promise<AppleRecoveryResponse> => {
-    const res = await authFetch("/users/apple/recovery", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        provider_subject: input?.providerSubject ?? "",
-        provider_email: input?.providerEmail ?? "",
-        is_private_relay: input?.isPrivateRelay === true,
-      }),
-    });
-
-    if (!res.ok) {
-      throw new Error("Unable to resolve Apple account recovery status.");
-    }
-
-    return (await res.json()) as AppleRecoveryResponse;
   };
 
   const _postUser = async () => {
@@ -1638,10 +1516,6 @@ export default function AppProvider({ children }: { children: ReactNode }) {
 
     if (!privyAuthenticated) {
       try {
-        setAppleRecovery(null);
-        setAppleRecoveryAction("idle");
-        setAppleRecoveryError("");
-        setAppleRecoveryBypassed(false);
         setPolicyStatus(null);
         setPolicyAction("idle");
         setPolicyError("");
@@ -1716,33 +1590,6 @@ export default function AppProvider({ children }: { children: ReactNode }) {
       await logout();
     } finally {
       setDeletedAccountAction("idle");
-    }
-  };
-
-  const continueWithAppleAccount = async () => {
-    setAppleRecoveryAction("continuing");
-    setAppleRecoveryError("");
-    setAppleRecoveryBypassed(true);
-    setAppleRecovery(null);
-    setStatus("unauthenticated");
-    setAppleRecoveryAction("idle");
-  };
-
-  const returnAppleRecoveryToLogin = async () => {
-    setAppleRecoveryAction("returning");
-    setAppleRecoveryError("");
-    try {
-      window.alert(
-        "Sign in with Google or email first, then link Apple from Settings.",
-      );
-      await logout();
-    } catch (error) {
-      setAppleRecoveryError(
-        (error as Error)?.message?.trim() ||
-          "Unable to return to the login screen right now.",
-      );
-    } finally {
-      setAppleRecoveryAction("idle");
     }
   };
 
@@ -2003,18 +1850,6 @@ export default function AppProvider({ children }: { children: ReactNode }) {
                 void returnDeletedAccountToLogin();
               }}
             />
-          ) : appleRecovery && privyAuthenticated ? (
-            <AppleRecoveryGate
-              recovery={appleRecovery}
-              action={appleRecoveryAction}
-              error={appleRecoveryError}
-              onUseExistingAccount={() => {
-                void returnAppleRecoveryToLogin();
-              }}
-              onContinueWithApple={() => {
-                void continueWithAppleAccount();
-              }}
-            />
           ) : (
             <>
               {children}
@@ -2264,79 +2099,6 @@ function DeletedAccountGate({
               {action === "reactivating"
                 ? "Re-activating..."
                 : "Yes, re-activate it"}
-            </Button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function AppleRecoveryGate({
-  recovery,
-  action,
-  error,
-  onUseExistingAccount,
-  onContinueWithApple,
-}: {
-  recovery: AppleRecoveryResponse;
-  action: "idle" | "continuing" | "returning";
-  error: string;
-  onUseExistingAccount: () => void;
-  onContinueWithApple: () => void;
-}) {
-  const prompt = describeAppleRecoveryPrompt(recovery);
-  const busy = action !== "idle";
-  const existingWallet =
-    recovery.suggested_existing_account?.primary_wallet_address?.trim() || "";
-
-  return (
-    <div className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(235,108,108,0.18),_transparent_45%),linear-gradient(180deg,_hsl(var(--background))_0%,_hsl(var(--background))_100%)] px-4 py-10 sm:px-6">
-      <div className="mx-auto flex min-h-[calc(100vh-5rem)] max-w-2xl items-center justify-center">
-        <div className="w-full rounded-3xl border border-border/70 bg-card/95 p-8 shadow-[0_1px_3px_hsl(var(--foreground)/0.08),0_24px_60px_hsl(var(--foreground)/0.16)] sm:p-10">
-          <div className="space-y-4">
-            <p className="text-sm font-semibold uppercase tracking-[0.24em] text-[#eb6c6c]">
-              Apple Sign-In
-            </p>
-            <h1 className="text-3xl font-semibold tracking-tight text-foreground">
-              {prompt.title}
-            </h1>
-            <p className="text-sm leading-6 text-muted-foreground sm:text-base">
-              {prompt.body}
-            </p>
-            {existingWallet ? (
-              <p className="rounded-2xl border border-border bg-muted/40 px-4 py-3 text-sm leading-6 text-foreground">
-                Existing wallet: {existingWallet}
-              </p>
-            ) : null}
-            {error ? (
-              <p className="rounded-2xl border border-red-400/40 bg-red-100/70 px-4 py-3 text-sm leading-6 text-red-900 dark:bg-red-500/10 dark:text-red-100">
-                {error}
-              </p>
-            ) : null}
-          </div>
-
-          <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:justify-end">
-            <Button
-              type="button"
-              variant="outline"
-              size="lg"
-              className="w-full sm:w-auto sm:min-w-[220px]"
-              disabled={busy}
-              onClick={onUseExistingAccount}
-            >
-              {action === "returning" ? "Returning..." : prompt.primaryLabel}
-            </Button>
-            <Button
-              type="button"
-              size="lg"
-              className="w-full sm:w-auto sm:min-w-[220px]"
-              disabled={busy}
-              onClick={onContinueWithApple}
-            >
-              {action === "continuing"
-                ? "Continuing..."
-                : prompt.secondaryLabel}
             </Button>
           </div>
         </div>

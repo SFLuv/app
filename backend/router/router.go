@@ -133,7 +133,6 @@ func AddUserRoutes(r *chi.Mux, s *handlers.AppService) {
 	r.Put("/users/primary-wallet", withActiveAuth(s.UpdateUserPrimaryWallet, s))
 	r.Put("/paypaleth", withActiveAuth(s.UpdateUserPayPalEth, s))
 	r.Post("/users/oauth/apple", withAuth(s.StoreAppleOAuthCredential))
-	r.Post("/users/apple/recovery", withAuth(s.ResolveAppleRecovery))
 	r.Get("/users/delete-account/preview", withActiveAuth(s.GetDeleteAccountPreview, s))
 	r.Post("/users/delete-account", withActiveAuth(s.DeleteAccount, s))
 	r.Post("/users/delete-account/cancel", withAuth(s.CancelDeleteAccount))

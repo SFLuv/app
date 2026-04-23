@@ -122,7 +122,7 @@ export default function EmailOptInPolicyPage() {
       <Section title="Contact Us">
         <ul className="list-disc space-y-2 pl-6 text-muted-foreground">
           <li>By email: admin@sfluv.org</li>
-          <li>By visiting this page on our website: www.sfluv.org</li>
+          <li>By visiting this page on our website: www.sfluv.org/contact</li>
         </ul>
       </Section>
     </PolicyPageShell>
