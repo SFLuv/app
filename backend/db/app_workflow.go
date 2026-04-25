@@ -5149,8 +5149,8 @@ func (a *AppDB) GetImproverWorkflows(ctx context.Context, improverId string, act
 		decorated AS (
 			SELECT
 				c.*,
-				(c.manager_improver_id = $1) AS is_manager,
-				(
+				COALESCE(c.manager_improver_id = $1, FALSE) AS is_manager,
+				COALESCE((
 					c.manager_required
 					AND c.manager_improver_id IS NULL
 					AND c.manager_role_id IS NOT NULL
@@ -5163,8 +5163,8 @@ func (a *AppDB) GetImproverWorkflows(ctx context.Context, improverId string, act
 							wrc.role_id = c.manager_role_id
 						AND
 							NOT (wrc.credential_type = ANY($2::text[]))
-					)
-				) AS is_manager_eligible,
+						)
+				), FALSE) AS is_manager_eligible,
 				EXISTS (
 					SELECT
 						1
@@ -5187,8 +5187,8 @@ func (a *AppDB) GetImproverWorkflows(ctx context.Context, improverId string, act
 					AND
 						ws.status IN ('available', 'in_progress')
 				) AS has_active_claimed_step
-			FROM
-				candidate c
+				FROM
+					candidate c
 		)
 	`
 
