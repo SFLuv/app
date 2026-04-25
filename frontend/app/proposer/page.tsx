@@ -107,6 +107,14 @@ type DraftReorderDropIndicator =
 
 const draftReorderMimeType = "text/plain"
 
+const keepJsonStable = <T,>(current: T, next: T): T => {
+  try {
+    return JSON.stringify(current) === JSON.stringify(next) ? current : next
+  } catch {
+    return next
+  }
+}
+
 const createDraftRole = (): DraftRole => ({
   client_id: crypto.randomUUID(),
   title: "",
@@ -488,6 +496,7 @@ export default function ProposerPage() {
       }
 
       const shouldSurfaceError = mode === "blocking" || !createDataLoadedRef.current
+      const preserveExistingData = mode === "background" && createDataLoadedRef.current
       const request = (async () => {
         try {
           const [templatesRes, credentialTypesRes, supervisorsRes] = await Promise.all([
@@ -497,24 +506,27 @@ export default function ProposerPage() {
           ])
 
           if (templatesRes.ok) {
-            const templatesJson = await templatesRes.json()
-            setTemplates(templatesJson || [])
-          } else {
-            setTemplates([])
+            const templatesJson = (await templatesRes.json()) as WorkflowTemplate[] | null
+            const nextTemplates = templatesJson || []
+            setTemplates((prev) => keepJsonStable(prev, nextTemplates))
+          } else if (!preserveExistingData) {
+            setTemplates((prev) => keepJsonStable(prev, [] as WorkflowTemplate[]))
           }
 
           if (credentialTypesRes.ok) {
-            const credentialTypesJson = await credentialTypesRes.json()
-            setCredentialTypes(credentialTypesJson || [])
-          } else {
-            setCredentialTypes([])
+            const credentialTypesJson = (await credentialTypesRes.json()) as GlobalCredentialType[] | null
+            const nextCredentialTypes = credentialTypesJson || []
+            setCredentialTypes((prev) => keepJsonStable(prev, nextCredentialTypes))
+          } else if (!preserveExistingData) {
+            setCredentialTypes((prev) => keepJsonStable(prev, [] as GlobalCredentialType[]))
           }
 
           if (supervisorsRes.ok) {
-            const supervisorsJson = await supervisorsRes.json()
-            setSupervisors(supervisorsJson || [])
-          } else {
-            setSupervisors([])
+            const supervisorsJson = (await supervisorsRes.json()) as Supervisor[] | null
+            const nextSupervisors = supervisorsJson || []
+            setSupervisors((prev) => keepJsonStable(prev, nextSupervisors))
+          } else if (!preserveExistingData) {
+            setSupervisors((prev) => keepJsonStable(prev, [] as Supervisor[]))
           }
 
           setError((prev) => (prev === "Unable to load proposer form data right now." ? "" : prev))
@@ -544,6 +556,7 @@ export default function ProposerPage() {
       }
 
       const shouldSurfaceError = mode === "blocking" || !workflowListLoadedRef.current
+      const preserveExistingData = mode === "background" && workflowListLoadedRef.current
       const requestId = workflowListRequestIdRef.current + 1
       workflowListRequestIdRef.current = requestId
 
@@ -588,29 +601,31 @@ export default function ProposerPage() {
             setWorkflowPage(maxPage)
             return
           }
-          setWorkflows(nextItems)
-          setWorkflowTotal(nextTotal)
-        } else {
-          setWorkflows([])
-          setWorkflowTotal(0)
+          setWorkflows((prev) => keepJsonStable(prev, nextItems))
+          setWorkflowTotal((prev) => (prev === nextTotal ? prev : nextTotal))
+        } else if (!preserveExistingData) {
+          setWorkflows((prev) => keepJsonStable(prev, [] as Workflow[]))
+          setWorkflowTotal((prev) => (prev === 0 ? prev : 0))
         }
 
         if (deletionProposalsRes.ok) {
-          const deletionProposalsJson = await deletionProposalsRes.json()
-          setDeletionProposals(deletionProposalsJson || [])
-        } else {
-          setDeletionProposals([])
+          const deletionProposalsJson = (await deletionProposalsRes.json()) as WorkflowDeletionProposal[] | null
+          const nextDeletionProposals = deletionProposalsJson || []
+          setDeletionProposals((prev) => keepJsonStable(prev, nextDeletionProposals))
+        } else if (!preserveExistingData) {
+          setDeletionProposals((prev) => keepJsonStable(prev, [] as WorkflowDeletionProposal[]))
         }
 
         if (isAdminUser) {
           if (proposersRes && proposersRes.ok) {
             const proposersJson = (await proposersRes.json()) as Proposer[]
-            setProposerOptions(proposersJson || [])
-          } else {
-            setProposerOptions([])
+            const nextProposerOptions = proposersJson || []
+            setProposerOptions((prev) => keepJsonStable(prev, nextProposerOptions))
+          } else if (!preserveExistingData) {
+            setProposerOptions((prev) => keepJsonStable(prev, [] as Proposer[]))
           }
         } else {
-          setProposerOptions([])
+          setProposerOptions((prev) => keepJsonStable(prev, [] as Proposer[]))
         }
 
         setError((prev) => (prev === "Unable to load your workflows right now." ? "" : prev))
@@ -1083,6 +1098,7 @@ export default function ProposerPage() {
                   photo_instructions: "",
                   notify_emails: [],
                   notify_email_input: "",
+                  notify_email_subject: "",
                   send_pictures_with_email: false,
                 },
               ],
@@ -1282,15 +1298,19 @@ export default function ProposerPage() {
           photo_aspect_ratio: photoAspectRatio,
           requires_written_response: item.requires_written_response,
           requires_dropdown: item.requires_dropdown,
-          dropdown_options: item.dropdown_options.map((option, optionIndex) => ({
-            label: option.label.trim(),
-            requires_written_response: option.requires_written_response,
-            requires_photo_attachment: Boolean(option.requires_photo_attachment),
-            camera_capture_only: Boolean(option.requires_photo_attachment) && Boolean(option.camera_capture_only),
-            photo_instructions: Boolean(option.requires_photo_attachment) ? (option.photo_instructions || "").trim() : "",
-            notify_emails: normalizeOptionNotificationEmails(stepIndex + 1, itemIndex + 1, optionIndex + 1, option),
-            send_pictures_with_email: Boolean(option.send_pictures_with_email),
-          })),
+          dropdown_options: item.dropdown_options.map((option, optionIndex) => {
+            const notifyEmails = normalizeOptionNotificationEmails(stepIndex + 1, itemIndex + 1, optionIndex + 1, option)
+            return {
+              label: option.label.trim(),
+              requires_written_response: option.requires_written_response,
+              requires_photo_attachment: Boolean(option.requires_photo_attachment),
+              camera_capture_only: Boolean(option.requires_photo_attachment) && Boolean(option.camera_capture_only),
+              photo_instructions: Boolean(option.requires_photo_attachment) ? (option.photo_instructions || "").trim() : "",
+              notify_emails: notifyEmails,
+              notify_email_subject: notifyEmails.length > 0 ? (option.notify_email_subject || "").trim() : "",
+              send_pictures_with_email: Boolean(option.send_pictures_with_email),
+            }
+          }),
         }
       }),
     }))
@@ -1452,6 +1472,7 @@ export default function ProposerPage() {
           photo_instructions: option.photo_instructions || "",
           notify_emails: option.notify_emails || [],
           notify_email_count: option.notify_emails?.length || 0,
+          notify_email_subject: option.notify_email_subject || "",
           send_pictures_with_email: Boolean(option.send_pictures_with_email),
         })),
         dropdown_requires_written_response: Object.fromEntries(
@@ -1617,6 +1638,7 @@ export default function ProposerPage() {
           photo_instructions: option.photo_instructions || "",
           notify_emails: option.notify_emails || [],
           notify_email_input: "",
+          notify_email_subject: option.notify_email_subject || "",
           send_pictures_with_email: Boolean(option.send_pictures_with_email),
         })),
       })),
@@ -1742,6 +1764,7 @@ export default function ProposerPage() {
               photo_instructions: option.photo_instructions || "",
               notify_emails: option.notify_emails || [],
               notify_email_input: "",
+              notify_email_subject: option.notify_email_subject || "",
               send_pictures_with_email: Boolean(option.send_pictures_with_email),
             })),
           })),
@@ -2190,6 +2213,7 @@ export default function ProposerPage() {
                 camera_capture_only: Boolean(option.requires_photo_attachment) && Boolean(option.camera_capture_only),
                 photo_instructions: option.photo_instructions || "",
                 notify_emails: option.notify_emails || [],
+                notify_email_subject: option.notify_email_subject || "",
                 send_pictures_with_email: Boolean(option.send_pictures_with_email),
               })),
             })),
@@ -3635,6 +3659,19 @@ export default function ProposerPage() {
                                       >
                                         Add Email
                                       </Button>
+                                    </div>
+                                    <div className="space-y-1">
+                                      <Label className="text-xs">Email Subject (Optional)</Label>
+                                      <Input
+                                        value={option.notify_email_subject || ""}
+                                        onChange={(e) =>
+                                          updateDropdownOption(step.id, item.id, optionIndex, {
+                                            notify_email_subject: e.target.value,
+                                          })
+                                        }
+                                        placeholder="Workflow Alert"
+                                        maxLength={160}
+                                      />
                                     </div>
                                     <label className="flex items-center gap-2 text-xs text-muted-foreground">
                                       <Checkbox

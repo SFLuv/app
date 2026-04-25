@@ -16,6 +16,24 @@ import (
 
 const defaultExpoPushAPIURL = "https://exp.host/--/api/v2/push/send"
 
+func shortenPonderAddress(address string) string {
+	address = strings.TrimSpace(address)
+	if len(address) <= 12 {
+		return address
+	}
+	return address[:6] + "..." + address[len(address)-4:]
+}
+
+func ponderPushAccountLabel(wallet *structs.Wallet, address string) string {
+	if wallet != nil {
+		name := strings.TrimSpace(wallet.Name)
+		if name != "" {
+			return name
+		}
+	}
+	return shortenPonderAddress(address)
+}
+
 func allowedWalletAddresses(wallets []*structs.Wallet) map[string]bool {
 	userWallets := make(map[string]bool, len(wallets))
 	for _, wallet := range wallets {
@@ -499,11 +517,9 @@ func (a *AppService) PonderHookHandler(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		title := "SFLuv Transaction Alert"
-		body := fmt.Sprintf("%s SFLuv received.", formattedAmount)
-		if wallet.Name != "" {
-			body = fmt.Sprintf("%s SFLuv received in %s.", formattedAmount, wallet.Name)
-		}
+		accountLabel := ponderPushAccountLabel(wallet, listener.Address)
+		title := fmt.Sprintf("SFLuv received to %s", accountLabel)
+		body := fmt.Sprintf("$%s SFLUV", formattedAmount)
 
 		if pushErr := sendExpoPushNotification(strings.TrimSpace(string(listener.Data)), title, body, map[string]string{
 			"hash":    tx.Hash,

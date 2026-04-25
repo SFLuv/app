@@ -1528,6 +1528,13 @@ func normalizeWorkflowTemplateData(req *structs.WorkflowTemplateCreateRequest, v
 					if notifyErr != nil {
 						return nil, notifyErr
 					}
+					notifyEmailSubject, subjectErr := normalizeWorkflowNotificationEmailSubject(option.NotifyEmailSubject)
+					if subjectErr != nil {
+						return nil, subjectErr
+					}
+					if len(notifyEmails) == 0 {
+						notifyEmailSubject = ""
+					}
 
 					normalizedDropdownOptions = append(normalizedDropdownOptions, structs.WorkflowDropdownOptionCreateInput{
 						Label:                   label,
@@ -1546,6 +1553,7 @@ func normalizeWorkflowTemplateData(req *structs.WorkflowTemplateCreateRequest, v
 							return strings.TrimSpace(option.PhotoInstructions)
 						}(),
 						NotifyEmails:          notifyEmails,
+						NotifyEmailSubject:    notifyEmailSubject,
 						SendPicturesWithEmail: option.SendPicturesWithEmail,
 					})
 				}
@@ -2418,6 +2426,7 @@ func (a *AppDB) CreateWorkflow(
 					CameraCaptureOnly:       option.RequiresPhotoAttachment && option.CameraCaptureOnly,
 					PhotoInstructions:       strings.TrimSpace(option.PhotoInstructions),
 					NotifyEmails:            option.NotifyEmails,
+					NotifyEmailSubject:      strings.TrimSpace(option.NotifyEmailSubject),
 					SendPicturesWithEmail:   option.SendPicturesWithEmail,
 				})
 				dropdownRequiresWritten[value] = option.RequiresWrittenResponse
@@ -3160,6 +3169,11 @@ func (a *AppDB) getWorkflowSteps(ctx context.Context, workflowId string) ([]stru
 				item.DropdownOptions[idx].CameraCaptureOnly = false
 			}
 			item.DropdownOptions[idx].NotifyEmails = normalizeEmailList(item.DropdownOptions[idx].NotifyEmails)
+			notifyEmailSubject, subjectErr := normalizeWorkflowNotificationEmailSubject(item.DropdownOptions[idx].NotifyEmailSubject)
+			if subjectErr != nil || len(item.DropdownOptions[idx].NotifyEmails) == 0 {
+				notifyEmailSubject = ""
+			}
+			item.DropdownOptions[idx].NotifyEmailSubject = notifyEmailSubject
 		}
 
 		item.DropdownRequiresWrittenMap = map[string]bool{}
@@ -4159,6 +4173,7 @@ func ensureRecurringWorkflowSuccessorTx(
 					CameraCaptureOnly:       option.RequiresPhotoAttachment && option.CameraCaptureOnly,
 					PhotoInstructions:       strings.TrimSpace(option.PhotoInstructions),
 					NotifyEmails:            option.NotifyEmails,
+					NotifyEmailSubject:      strings.TrimSpace(option.NotifyEmailSubject),
 					SendPicturesWithEmail:   option.SendPicturesWithEmail,
 				})
 				dropdownRequiresWritten[value] = option.RequiresWrittenResponse
@@ -6871,6 +6886,19 @@ func normalizeValidatedWorkflowNotificationEmails(emails []string) ([]string, er
 	return normalized, nil
 }
 
+const maxWorkflowNotificationEmailSubjectRunes = 160
+
+func normalizeWorkflowNotificationEmailSubject(raw string) (string, error) {
+	subject := strings.Join(strings.Fields(raw), " ")
+	if subject == "" {
+		return "", nil
+	}
+	if len([]rune(subject)) > maxWorkflowNotificationEmailSubjectRunes {
+		return "", fmt.Errorf("notification email subject must be %d characters or fewer", maxWorkflowNotificationEmailSubjectRunes)
+	}
+	return subject, nil
+}
+
 const maxWorkflowPhotoUploadBytes = 2 * 1024 * 1024
 
 type parsedWorkflowPhotoUpload struct {
@@ -7593,6 +7621,11 @@ func (a *AppDB) CompleteWorkflowStep(
 					item.DropdownOptions[idx].CameraCaptureOnly = false
 				}
 				item.DropdownOptions[idx].NotifyEmails = normalizeEmailList(item.DropdownOptions[idx].NotifyEmails)
+				notifyEmailSubject, subjectErr := normalizeWorkflowNotificationEmailSubject(item.DropdownOptions[idx].NotifyEmailSubject)
+				if subjectErr != nil || len(item.DropdownOptions[idx].NotifyEmails) == 0 {
+					notifyEmailSubject = ""
+				}
+				item.DropdownOptions[idx].NotifyEmailSubject = notifyEmailSubject
 			}
 			item.DropdownRequiresWrittenMap = map[string]bool{}
 			if len(dropdownRequiresBytes) > 0 {
@@ -7785,6 +7818,7 @@ func (a *AppDB) CompleteWorkflowStep(
 							ItemTitle:             item.Title,
 							DropdownValue:         *response.DropdownValue,
 							Emails:                emails,
+							EmailSubject:          selectedOption.NotifyEmailSubject,
 							SendPicturesWithEmail: selectedOption.SendPicturesWithEmail,
 						})
 					}
@@ -11101,6 +11135,7 @@ func sanitizeWorkflowEditProposalPreviewSteps(steps []structs.WorkflowStepCreate
 						}
 						sanitizedOption.NotifyEmailCount = notifyEmailCount
 						sanitizedOption.NotifyEmails = nil
+						sanitizedOption.NotifyEmailSubject = ""
 						sanitizedItem.DropdownOptions[optionIdx] = sanitizedOption
 					}
 				} else {

@@ -311,6 +311,11 @@ export function WorkflowDetailsModal({
                                 Notify: {option.notify_emails.join(", ")}
                               </p>
                             )}
+                            {option.notify_email_subject && (
+                              <p className="text-muted-foreground">
+                                Subject: {option.notify_email_subject}
+                              </p>
+                            )}
                             {(!option.notify_emails || option.notify_emails.length === 0) &&
                               (option.notify_email_count ?? 0) > 0 && (
                                 <p className="text-muted-foreground">Notification email configured</p>

@@ -73,6 +73,7 @@ func redactWorkflowItemNotifyEmails(workflow *structs.Workflow) {
 				}
 				option.NotifyEmailCount = notifyEmailCount
 				option.NotifyEmails = nil
+				option.NotifyEmailSubject = ""
 			}
 		}
 	}
@@ -389,6 +390,7 @@ func sanitizeWorkflowEditProposalForVoteView(proposal *structs.WorkflowEditPropo
 				}
 				option.NotifyEmailCount = notifyEmailCount
 				option.NotifyEmails = nil
+				option.NotifyEmailSubject = ""
 			}
 		}
 	}
@@ -5614,7 +5616,7 @@ func buildWorkflowDropdownAlertPhotoLinksHTML(notification structs.WorkflowDropd
 		links = append(
 			links,
 			fmt.Sprintf(
-				`<a href="%s" style="color:#d55c5c; text-decoration:none; font-weight:600;">%s</a>`,
+				`<a href="%s" style="display:inline-block; margin:0 10px 10px 0; padding:8px 10px; border:1px solid #f0b1b1; border-radius:6px; color:#d55c5c; text-decoration:none; font-weight:600;">%s</a>`,
 				utils.EscapeEmailHTML(linkURL),
 				utils.EscapeEmailHTML(linkLabel),
 			),
@@ -5624,7 +5626,7 @@ func buildWorkflowDropdownAlertPhotoLinksHTML(notification structs.WorkflowDropd
 		return ""
 	}
 
-	return strings.Join(links, `<span style="color:#d1d5db; padding:0 6px;">•</span>`)
+	return strings.Join(links, "")
 }
 
 func (a *AppService) sendWorkflowDropdownAlertEmail(ctx context.Context, notification structs.WorkflowDropdownNotification) {
@@ -5647,7 +5649,10 @@ func (a *AppService) sendWorkflowDropdownAlertEmail(ctx context.Context, notific
   </tr>`, photoLinksHTML)
 	}
 
-	title := "Workflow Alert"
+	title := strings.Join(strings.Fields(notification.EmailSubject), " ")
+	if title == "" {
+		title = "Workflow Alert"
+	}
 	htmlContent := utils.BuildStyledEmail(
 		title,
 		"A watched dropdown response was submitted.",
