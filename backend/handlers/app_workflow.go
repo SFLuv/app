@@ -1211,7 +1211,6 @@ func (a *AppService) GetImproverWorkflows(w http.ResponseWriter, r *http.Request
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}
-	isAdmin := a.IsAdmin(r.Context(), *userDid)
 
 	refreshResult, err := a.db.RefreshWorkflowStartAvailability(r.Context())
 	if err != nil {
@@ -1230,86 +1229,27 @@ func (a *AppService) GetImproverWorkflows(w http.ResponseWriter, r *http.Request
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
-	activeSet := map[string]struct{}{}
-	for _, credential := range activeCredentials {
-		activeSet[credential] = struct{}{}
-	}
 
-	workflows, err := a.db.GetImproverWorkflows(r.Context(), *userDid)
+	page, count := parsePageAndCount(r.URL.Query(), 500, 500)
+	scope := strings.TrimSpace(r.URL.Query().Get("scope"))
+	workflows, total, err := a.db.GetImproverWorkflows(r.Context(), *userDid, activeCredentials, page, count, scope)
 	if err != nil {
+		if strings.Contains(err.Error(), "invalid improver workflow scope") {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(err.Error()))
+			return
+		}
 		a.logger.Logf("error loading improver workflows for %s: %s", *userDid, err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 
-	filtered := make([]*structs.Workflow, 0, len(workflows))
-	for _, workflow := range workflows {
-		roleById := map[string]structs.WorkflowRole{}
-		for _, role := range workflow.Roles {
-			roleById[role.Id] = role
-		}
-
-		isManager := workflow.ManagerImproverId != nil && *workflow.ManagerImproverId == *userDid
-		isRelevant := false
-		if isManager {
-			isRelevant = true
-		}
-		if workflow.ManagerRequired && workflow.ManagerImproverId == nil && workflow.ManagerRoleId != nil {
-			if managerRole, ok := roleById[*workflow.ManagerRoleId]; ok {
-				hasAllManagerCredentials := true
-				for _, required := range managerRole.RequiredCredentials {
-					if _, has := activeSet[required]; !has {
-						hasAllManagerCredentials = false
-						break
-					}
-				}
-				if hasAllManagerCredentials {
-					isRelevant = true
-				}
-			}
-		}
-		for _, step := range workflow.Steps {
-			if step.AssignedImproverId != nil && *step.AssignedImproverId == *userDid {
-				isRelevant = true
-				continue
-			}
-
-			if step.AssignedImproverId != nil {
-				continue
-			}
-			if step.Status != "available" && step.Status != "locked" {
-				continue
-			}
-			if step.RoleId == nil {
-				continue
-			}
-
-			role, ok := roleById[*step.RoleId]
-			if !ok {
-				continue
-			}
-
-			missingRequiredCredential := false
-			for _, required := range role.RequiredCredentials {
-				if _, has := activeSet[required]; !has {
-					missingRequiredCredential = true
-					break
-				}
-			}
-			if !missingRequiredCredential {
-				isRelevant = true
-			}
-		}
-
-		if isRelevant {
-			sanitizeWorkflowForUser(workflow, *userDid, isAdmin)
-			filtered = append(filtered, workflow)
-		}
-	}
-
 	feed := structs.ImproverWorkflowFeed{
 		ActiveCredentials: activeCredentials,
-		Workflows:         filtered,
+		Workflows:         workflows,
+		Total:             total,
+		Page:              page,
+		Count:             count,
 	}
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(feed)

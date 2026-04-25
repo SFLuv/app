@@ -180,6 +180,40 @@ export interface ActiveWorkflowListItem {
   approved_at?: number | null
 }
 
+export interface ImproverWorkflowStepSummary {
+  id: string
+  step_order: number
+  title: string
+  status: WorkflowStep["status"]
+}
+
+export interface ImproverWorkflowListItem {
+  id: string
+  series_id: string
+  workflow_state_id?: string | null
+  proposer_id: string
+  title: string
+  description: string
+  recurrence: WorkflowRecurrence
+  recurrence_end_at?: number | null
+  start_at: number
+  status: "approved" | "blocked" | "in_progress" | "completed" | "paid_out"
+  is_start_blocked: boolean
+  blocked_by_workflow_id?: string | null
+  total_bounty: number
+  weekly_bounty_requirement: number
+  created_at: number
+  updated_at: number
+  vote_decision?: "approve" | "deny" | "admin_approve" | null
+  approved_at?: number | null
+  is_manager: boolean
+  is_manager_eligible: boolean
+  has_claimed_step: boolean
+  has_active_claimed_step: boolean
+  assigned_steps: ImproverWorkflowStepSummary[]
+  claimable_step?: ImproverWorkflowStepSummary | null
+}
+
 export interface AdminWorkflowListItem {
   id: string
   series_id: string
@@ -370,7 +404,10 @@ export interface WorkflowTemplate {
 
 export interface ImproverWorkflowFeed {
   active_credentials: CredentialType[]
-  workflows: Workflow[]
+  workflows: ImproverWorkflowListItem[]
+  total: number
+  page: number
+  count: number
 }
 
 export interface ImproverAbsencePeriod {

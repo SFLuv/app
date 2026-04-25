@@ -302,6 +302,40 @@ type ActiveWorkflowListItem struct {
 	ApprovedAt              *int64  `json:"approved_at,omitempty"`
 }
 
+type ImproverWorkflowStepSummary struct {
+	Id        string `json:"id"`
+	StepOrder int    `json:"step_order"`
+	Title     string `json:"title"`
+	Status    string `json:"status"`
+}
+
+type ImproverWorkflowListItem struct {
+	Id                      string                        `json:"id"`
+	SeriesId                string                        `json:"series_id"`
+	WorkflowStateId         *string                       `json:"workflow_state_id,omitempty"`
+	ProposerId              string                        `json:"proposer_id"`
+	Title                   string                        `json:"title"`
+	Description             string                        `json:"description"`
+	Recurrence              string                        `json:"recurrence"`
+	RecurrenceEndAt         *int64                        `json:"recurrence_end_at,omitempty"`
+	StartAt                 int64                         `json:"start_at"`
+	Status                  string                        `json:"status"`
+	IsStartBlocked          bool                          `json:"is_start_blocked"`
+	BlockedByWorkflowId     *string                       `json:"blocked_by_workflow_id,omitempty"`
+	TotalBounty             uint64                        `json:"total_bounty"`
+	WeeklyBountyRequirement uint64                        `json:"weekly_bounty_requirement"`
+	CreatedAt               int64                         `json:"created_at"`
+	UpdatedAt               int64                         `json:"updated_at"`
+	VoteDecision            *string                       `json:"vote_decision,omitempty"`
+	ApprovedAt              *int64                        `json:"approved_at,omitempty"`
+	IsManager               bool                          `json:"is_manager"`
+	IsManagerEligible       bool                          `json:"is_manager_eligible"`
+	HasClaimedStep          bool                          `json:"has_claimed_step"`
+	HasActiveClaimedStep    bool                          `json:"has_active_claimed_step"`
+	AssignedSteps           []ImproverWorkflowStepSummary `json:"assigned_steps"`
+	ClaimableStep           *ImproverWorkflowStepSummary  `json:"claimable_step,omitempty"`
+}
+
 type AdminWorkflowListItem struct {
 	Id                     string   `json:"id"`
 	SeriesId               string   `json:"series_id"`
@@ -528,8 +562,11 @@ type WorkflowStatusUpdate struct {
 }
 
 type ImproverWorkflowFeed struct {
-	ActiveCredentials []string    `json:"active_credentials"`
-	Workflows         []*Workflow `json:"workflows"`
+	ActiveCredentials []string                    `json:"active_credentials"`
+	Workflows         []*ImproverWorkflowListItem `json:"workflows"`
+	Total             int                         `json:"total"`
+	Page              int                         `json:"page"`
+	Count             int                         `json:"count"`
 }
 
 type WorkflowStepClaimRequest struct {
