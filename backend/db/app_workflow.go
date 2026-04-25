@@ -4932,55 +4932,502 @@ func (a *AppDB) RefreshWorkflowStartAvailability(ctx context.Context) (*structs.
 	return result, nil
 }
 
-func (a *AppDB) GetImproverWorkflows(ctx context.Context, improverId string) ([]*structs.Workflow, error) {
-	rows, err := a.db.Query(ctx, `
-		SELECT
-			w.id
-		FROM
-			workflows w
-		WHERE
-			w.status IN ('approved', 'in_progress', 'completed', 'paid_out', 'blocked')
-		ORDER BY
-			CASE
-				WHEN EXISTS (
+func (a *AppDB) GetImproverWorkflows(ctx context.Context, improverId string, activeCredentials []string, page, count int, scope string) ([]*structs.ImproverWorkflowListItem, int, error) {
+	if activeCredentials == nil {
+		activeCredentials = []string{}
+	}
+	if page < 0 {
+		page = 0
+	}
+	if count <= 0 {
+		count = 500
+	}
+	if count > 500 {
+		count = 500
+	}
+	offset := page * count
+	scope = strings.TrimSpace(strings.ToLower(scope))
+	if scope == "" {
+		scope = "all"
+	}
+
+	var candidateSources []string
+	switch scope {
+	case "all":
+		candidateSources = []string{
+			"SELECT id FROM assigned_workflow_ids",
+			"SELECT id FROM claimable_workflow_ids",
+			"SELECT id FROM manager_workflow_ids",
+			"SELECT id FROM manager_eligible_workflow_ids",
+		}
+	case "assigned", "claimed", "mine":
+		candidateSources = []string{
+			"SELECT id FROM assigned_workflow_ids",
+		}
+	case "board", "claimable":
+		candidateSources = []string{
+			"SELECT id FROM claimable_workflow_ids",
+		}
+	default:
+		return nil, 0, fmt.Errorf("invalid improver workflow scope")
+	}
+
+	candidateWorkflowIDsCTE := `
+		candidate_workflow_ids AS (
+			` + strings.Join(candidateSources, "\n\t\t\tUNION\n\t\t\t") + `
+		),
+	`
+
+	baseCTE := `
+		WITH assigned_workflow_ids AS (
+			SELECT DISTINCT
+				ws.workflow_id AS id
+			FROM
+				workflow_steps ws
+			WHERE
+				ws.assigned_improver_id = $1
+		),
+		claimable_workflow_ids AS (
+			SELECT DISTINCT
+				ws.workflow_id AS id
+			FROM
+				workflow_steps ws
+			INNER JOIN
+				workflows w
+			ON
+				w.id = ws.workflow_id
+			LEFT JOIN
+				workflow_states st
+			ON
+				st.id = w.workflow_state_id
+			LEFT JOIN
+				workflow_series s
+			ON
+				s.id = w.series_id
+			WHERE
+				w.status IN ('approved', 'in_progress', 'completed', 'paid_out', 'blocked')
+			AND
+				ws.assigned_improver_id IS NULL
+			AND
+				ws.status IN ('available', 'locked')
+			AND
+				ws.role_id IS NOT NULL
+			AND
+				NOT EXISTS (
+					SELECT
+						1
+					FROM
+						workflow_steps my_claim
+					WHERE
+						my_claim.workflow_id = ws.workflow_id
+					AND
+						my_claim.assigned_improver_id = $1
+				)
+			AND
+				NOT EXISTS (
+					SELECT
+						1
+					FROM
+						workflow_steps claimed_role
+					WHERE
+						claimed_role.workflow_id = ws.workflow_id
+					AND
+						claimed_role.role_id = ws.role_id
+					AND
+						claimed_role.assigned_improver_id IS NOT NULL
+					AND
+						claimed_role.assigned_improver_id <> $1
+				)
+			AND
+				NOT EXISTS (
+					SELECT
+						1
+					FROM
+						workflow_role_credentials wrc
+					WHERE
+						wrc.role_id = ws.role_id
+					AND
+						NOT (wrc.credential_type = ANY($2::text[]))
+				)
+			AND
+				(
+					COALESCE(NULLIF(TRIM(st.recurrence), ''), COALESCE(NULLIF(TRIM(s.recurrence), ''), 'one_time')) = 'one_time'
+					OR NOT EXISTS (
+						SELECT
+							1
+						FROM
+							workflow_improver_absences abs
+						WHERE
+							abs.improver_id = $1
+						AND
+							abs.series_id = w.series_id
+						AND
+							abs.step_order = ws.step_order
+						AND
+							w.start_at >= abs.absent_from
+						AND
+							w.start_at < abs.absent_until
+					)
+				)
+		),
+		manager_workflow_ids AS (
+			SELECT
+				w.id
+			FROM
+				workflows w
+			WHERE
+				w.status IN ('approved', 'in_progress', 'completed', 'paid_out', 'blocked')
+			AND
+				w.manager_improver_id = $1
+		),
+		manager_eligible_workflow_ids AS (
+			SELECT
+				w.id
+			FROM
+				workflows w
+			WHERE
+				w.status IN ('approved', 'in_progress', 'completed', 'paid_out', 'blocked')
+			AND
+				w.manager_required
+			AND
+				w.manager_improver_id IS NULL
+			AND
+				w.manager_role_id IS NOT NULL
+			AND
+				NOT EXISTS (
+					SELECT
+						1
+					FROM
+						workflow_role_credentials wrc
+					WHERE
+						wrc.role_id = w.manager_role_id
+					AND
+						NOT (wrc.credential_type = ANY($2::text[]))
+				)
+		),
+	` + candidateWorkflowIDsCTE + `
+		candidate AS (
+			SELECT
+				w.id,
+				w.series_id,
+				w.workflow_state_id,
+				w.proposer_id,
+				COALESCE(NULLIF(TRIM(st.title), ''), COALESCE(NULLIF(TRIM(s.title), ''), '')) AS title,
+				COALESCE(st.description, s.description, '') AS description,
+				COALESCE(NULLIF(TRIM(st.recurrence), ''), COALESCE(NULLIF(TRIM(s.recurrence), ''), 'one_time')) AS recurrence,
+				COALESCE(st.recurrence_end_at, s.recurrence_end_at) AS recurrence_end_at,
+				w.start_at,
+				w.status,
+				w.is_start_blocked,
+				w.blocked_by_workflow_id,
+				w.total_bounty,
+				w.weekly_bounty_requirement,
+				w.created_at,
+				w.updated_at,
+				w.vote_decision,
+				w.approved_at,
+				w.manager_required,
+				w.manager_role_id,
+				w.manager_improver_id
+			FROM
+				workflows w
+			INNER JOIN
+				candidate_workflow_ids cwi
+			ON
+				cwi.id = w.id
+			LEFT JOIN
+				workflow_states st
+			ON
+				st.id = w.workflow_state_id
+			LEFT JOIN
+				workflow_series s
+			ON
+				s.id = w.series_id
+			WHERE
+				w.status IN ('approved', 'in_progress', 'completed', 'paid_out', 'blocked')
+		),
+		decorated AS (
+			SELECT
+				c.*,
+				(c.manager_improver_id = $1) AS is_manager,
+				(
+					c.manager_required
+					AND c.manager_improver_id IS NULL
+					AND c.manager_role_id IS NOT NULL
+					AND NOT EXISTS (
+						SELECT
+							1
+						FROM
+							workflow_role_credentials wrc
+						WHERE
+							wrc.role_id = c.manager_role_id
+						AND
+							NOT (wrc.credential_type = ANY($2::text[]))
+					)
+				) AS is_manager_eligible,
+				EXISTS (
 					SELECT
 						1
 					FROM
 						workflow_steps ws
 					WHERE
-						ws.workflow_id = w.id
-						AND ws.assigned_improver_id = $1
-						AND ws.status IN ('available', 'in_progress')
-				) THEN 0
-				ELSE 1
+						ws.workflow_id = c.id
+					AND
+						ws.assigned_improver_id = $1
+				) AS has_claimed_step,
+				EXISTS (
+					SELECT
+						1
+					FROM
+						workflow_steps ws
+					WHERE
+						ws.workflow_id = c.id
+					AND
+						ws.assigned_improver_id = $1
+					AND
+						ws.status IN ('available', 'in_progress')
+				) AS has_active_claimed_step
+			FROM
+				candidate c
+		)
+	`
+
+	claimableLateral := `
+		LEFT JOIN LATERAL (
+			SELECT
+				ws.id,
+				ws.step_order,
+				ws.title,
+				ws.status
+			FROM
+				workflow_steps ws
+			WHERE
+				ws.workflow_id = d.id
+			AND
+				ws.assigned_improver_id IS NULL
+			AND
+				ws.status IN ('available', 'locked')
+			AND
+				ws.role_id IS NOT NULL
+			AND
+				NOT d.has_claimed_step
+			AND
+				NOT EXISTS (
+					SELECT
+						1
+					FROM
+						workflow_steps claimed_role
+					WHERE
+						claimed_role.workflow_id = d.id
+					AND
+						claimed_role.role_id = ws.role_id
+					AND
+						claimed_role.assigned_improver_id IS NOT NULL
+					AND
+						claimed_role.assigned_improver_id <> $1
+				)
+			AND
+				NOT EXISTS (
+					SELECT
+						1
+					FROM
+						workflow_role_credentials wrc
+					WHERE
+						wrc.role_id = ws.role_id
+					AND
+						NOT (wrc.credential_type = ANY($2::text[]))
+				)
+			AND
+				(
+					d.recurrence = 'one_time'
+					OR NOT EXISTS (
+						SELECT
+							1
+						FROM
+							workflow_improver_absences abs
+						WHERE
+							abs.improver_id = $1
+						AND
+							abs.series_id = d.series_id
+						AND
+							abs.step_order = ws.step_order
+						AND
+							d.start_at >= abs.absent_from
+						AND
+							d.start_at < abs.absent_until
+					)
+				)
+			ORDER BY
+				ws.step_order ASC
+			LIMIT 1
+		) claimable
+		ON
+			true
+	`
+
+	relevantWhere := `
+		WHERE
+			d.is_manager
+		OR
+			d.is_manager_eligible
+		OR
+			d.has_claimed_step
+		OR
+			claimable.id IS NOT NULL
+	`
+
+	countQuery := baseCTE + `
+		SELECT
+			COUNT(*)
+		FROM
+			decorated d
+	` + claimableLateral + relevantWhere + `;`
+
+	var total int
+	if err := a.db.QueryRow(ctx, countQuery, improverId, activeCredentials).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("error counting improver workflows: %s", err)
+	}
+
+	listQuery := baseCTE + `
+		SELECT
+			d.id,
+			d.series_id,
+			d.workflow_state_id,
+			d.proposer_id,
+			d.title,
+			d.description,
+			d.recurrence,
+			d.recurrence_end_at,
+			d.start_at,
+			d.status,
+			d.is_start_blocked,
+			d.blocked_by_workflow_id,
+			d.total_bounty,
+			d.weekly_bounty_requirement,
+			d.created_at,
+			d.updated_at,
+			d.vote_decision,
+			d.approved_at,
+			d.is_manager,
+			d.is_manager_eligible,
+			d.has_claimed_step,
+			d.has_active_claimed_step,
+			COALESCE(assigned.steps_json, '[]'::jsonb),
+			claimable.id,
+			claimable.step_order,
+			claimable.title,
+			claimable.status
+		FROM
+			decorated d
+		LEFT JOIN LATERAL (
+			SELECT
+				COALESCE(
+					jsonb_agg(
+						jsonb_build_object(
+							'id', ws.id,
+							'step_order', ws.step_order,
+							'title', ws.title,
+							'status', ws.status
+						)
+						ORDER BY ws.step_order ASC
+					),
+					'[]'::jsonb
+				) AS steps_json
+			FROM
+				workflow_steps ws
+			WHERE
+				ws.workflow_id = d.id
+			AND
+				ws.assigned_improver_id = $1
+		) assigned
+		ON
+			true
+	` + claimableLateral + relevantWhere + `
+		ORDER BY
+			CASE
+				WHEN d.has_active_claimed_step THEN 0
+				WHEN d.has_claimed_step THEN 1
+				WHEN claimable.id IS NOT NULL THEN 2
+				WHEN d.is_manager THEN 3
+				ELSE 4
 			END ASC,
-			w.start_at DESC,
-			w.created_at DESC
-		LIMIT 500;
-	`, improverId)
+			d.start_at DESC,
+			d.created_at DESC,
+			d.id DESC
+		LIMIT $3
+		OFFSET $4;
+	`
+
+	rows, err := a.db.Query(ctx, listQuery, improverId, activeCredentials, count, offset)
 	if err != nil {
-		return nil, fmt.Errorf("error querying improver workflows: %s", err)
+		return nil, 0, fmt.Errorf("error querying improver workflows: %s", err)
 	}
 	defer rows.Close()
 
-	workflowIDs := []string{}
+	workflows := make([]*structs.ImproverWorkflowListItem, 0, count)
 	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("error scanning improver workflow id: %s", err)
+		workflow := &structs.ImproverWorkflowListItem{
+			AssignedSteps: []structs.ImproverWorkflowStepSummary{},
 		}
-		workflowIDs = append(workflowIDs, id)
-	}
+		var assignedStepsBytes []byte
+		var claimableStepId *string
+		var claimableStepOrder *int
+		var claimableStepTitle *string
+		var claimableStepStatus *string
+		if err := rows.Scan(
+			&workflow.Id,
+			&workflow.SeriesId,
+			&workflow.WorkflowStateId,
+			&workflow.ProposerId,
+			&workflow.Title,
+			&workflow.Description,
+			&workflow.Recurrence,
+			&workflow.RecurrenceEndAt,
+			&workflow.StartAt,
+			&workflow.Status,
+			&workflow.IsStartBlocked,
+			&workflow.BlockedByWorkflowId,
+			&workflow.TotalBounty,
+			&workflow.WeeklyBountyRequirement,
+			&workflow.CreatedAt,
+			&workflow.UpdatedAt,
+			&workflow.VoteDecision,
+			&workflow.ApprovedAt,
+			&workflow.IsManager,
+			&workflow.IsManagerEligible,
+			&workflow.HasClaimedStep,
+			&workflow.HasActiveClaimedStep,
+			&assignedStepsBytes,
+			&claimableStepId,
+			&claimableStepOrder,
+			&claimableStepTitle,
+			&claimableStepStatus,
+		); err != nil {
+			return nil, 0, fmt.Errorf("error scanning improver workflow summary: %s", err)
+		}
 
-	workflows := make([]*structs.Workflow, 0, len(workflowIDs))
-	for _, workflowId := range workflowIDs {
-		workflow, err := a.GetWorkflowByID(ctx, workflowId)
-		if err != nil {
-			return nil, err
+		if len(assignedStepsBytes) > 0 {
+			if err := json.Unmarshal(assignedStepsBytes, &workflow.AssignedSteps); err != nil {
+				return nil, 0, fmt.Errorf("error unmarshalling improver workflow assigned steps: %s", err)
+			}
 		}
+		workflow.HasClaimedStep = workflow.HasClaimedStep || len(workflow.AssignedSteps) > 0
+		if claimableStepId != nil && claimableStepOrder != nil && claimableStepTitle != nil && claimableStepStatus != nil {
+			workflow.ClaimableStep = &structs.ImproverWorkflowStepSummary{
+				Id:        *claimableStepId,
+				StepOrder: *claimableStepOrder,
+				Title:     *claimableStepTitle,
+				Status:    *claimableStepStatus,
+			}
+		}
+
 		workflows = append(workflows, workflow)
 	}
-	return workflows, nil
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("error iterating improver workflow summaries: %s", err)
+	}
+
+	return workflows, total, nil
 }
 
 func (a *AppDB) GetManagedWorkflowsByImprover(ctx context.Context, improverId string) ([]*structs.Workflow, error) {

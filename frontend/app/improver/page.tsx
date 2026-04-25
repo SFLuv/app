@@ -36,6 +36,8 @@ import {
   ImproverAbsencePeriodCreateResult,
   ImproverAbsencePeriodDeleteResult,
   ImproverWorkflowFeed,
+  ImproverWorkflowListItem,
+  ImproverWorkflowStepSummary,
   ImproverWorkflowSeriesUnclaimResult,
   WorkflowPhotoAspectRatio,
   Workflow,
@@ -94,7 +96,7 @@ type WorkflowSeriesCardGroup = {
   seriesId: string
   primaryStepOrder: number | null
   primaryStepTitle: string | null
-  workflows: Workflow[]
+  workflows: ImproverWorkflowListItem[]
 }
 
 type WorkflowStepCompletionPayload = {
@@ -169,6 +171,23 @@ const createWorkflowPhotoUploadId = () => {
 const normalizeCredentialVisibility = (value?: string | null): CredentialVisibility => {
   if (value === "private" || value === "unlisted") return value
   return "public"
+}
+
+const getAssignedStepSummaries = (workflow: ImproverWorkflowListItem): ImproverWorkflowStepSummary[] => {
+  return [...(workflow.assigned_steps || [])].sort((a, b) => a.step_order - b.step_order)
+}
+
+const getPrimaryAssignedStepSummary = (workflow: ImproverWorkflowListItem): ImproverWorkflowStepSummary | null => {
+  return getAssignedStepSummaries(workflow)[0] || null
+}
+
+const getInitialStepIndexForWorkflowCard = (workflow: ImproverWorkflowListItem) => {
+  const assignedSteps = getAssignedStepSummaries(workflow)
+  const preferred =
+    assignedSteps.find((step) => step.status === "available" || step.status === "in_progress" || step.status === "locked") ||
+    assignedSteps[0]
+  if (!preferred) return 0
+  return Math.max(0, preferred.step_order - 1)
 }
 
 const workflowPhotoAspectRatios: Record<WorkflowPhotoAspectRatio, number> = {
@@ -488,7 +507,7 @@ export default function ImproverPage() {
   const pathname = usePathname()
   const tabFromQuery = searchParams.get("tab")
   const { authFetch, status, user } = useApp()
-  const [workflows, setWorkflows] = useState<Workflow[]>([])
+  const [workflows, setWorkflows] = useState<ImproverWorkflowListItem[]>([])
   const [unpaidWorkflows, setUnpaidWorkflows] = useState<Workflow[]>([])
   const [activeCredentials, setActiveCredentials] = useState<CredentialType[]>([])
   const [credentialTypes, setCredentialTypes] = useState<GlobalCredentialType[]>([])
@@ -585,7 +604,11 @@ export default function ImproverPage() {
             throw new Error(text || "Unable to load improver workflows.")
           }
           const data = (await feedRes.json()) as ImproverWorkflowFeed
-          setWorkflows(data.workflows || [])
+          setWorkflows((data.workflows || []).map((workflow) => ({
+            ...workflow,
+            assigned_steps: workflow.assigned_steps || [],
+            claimable_step: workflow.claimable_step || null,
+          })))
           setActiveCredentials((data.active_credentials || []) as CredentialType[])
           setError((prev) => (prev === "Unable to load improver workflows." ? "" : prev))
         } catch (err) {
@@ -923,8 +946,7 @@ export default function ImproverPage() {
     workflows.forEach((workflow) => {
       if (workflow.recurrence === "one_time") return
 
-      workflow.steps.forEach((step) => {
-        if (step.assigned_improver_id !== user.id) return
+      getAssignedStepSummaries(workflow).forEach((step) => {
         if (step.status === "paid_out") return
 
         const key = `${workflow.series_id}:${step.step_order}`
@@ -984,25 +1006,15 @@ export default function ImproverPage() {
     return workflow.steps.some((step) => step.assigned_improver_id === user?.id)
   }
 
-  const hasClaimedRoleInWorkflow = useCallback(
-    (workflow: Workflow) => {
-      if (!user?.id) return false
-      return workflow.steps.some((step) => step.assigned_improver_id === user.id)
-    },
-    [user?.id],
-  )
+  const hasClaimedRoleInWorkflow = useCallback((workflow: ImproverWorkflowListItem) => {
+    return workflow.has_claimed_step || (workflow.assigned_steps || []).length > 0
+  }, [])
 
-  const isWorkflowActiveForUser = useCallback(
-    (workflow: Workflow) => {
-      if (!user?.id) return false
-      return workflow.steps.some(
-        (step) =>
-          step.assigned_improver_id === user.id &&
-          (step.status === "available" || step.status === "in_progress"),
-      )
-    },
-    [user?.id],
-  )
+  const isWorkflowActiveForUser = useCallback((workflow: ImproverWorkflowListItem) => {
+    return workflow.has_active_claimed_step || (workflow.assigned_steps || []).some(
+      (step) => step.status === "available" || step.status === "in_progress",
+    )
+  }, [])
 
   const isStepCoveredByMyAbsence = (workflow: Workflow, step: WorkflowStep) => {
     if (!user?.id) return false
@@ -1991,11 +2003,6 @@ export default function ImproverPage() {
   }, [authFetch])
 
   const mergeWorkflowIntoFeed = useCallback((updatedWorkflow: Workflow) => {
-    setWorkflows((prev) => {
-      const exists = prev.some((workflow) => workflow.id === updatedWorkflow.id)
-      if (!exists) return prev
-      return prev.map((workflow) => (workflow.id === updatedWorkflow.id ? updatedWorkflow : workflow))
-    })
     setUnpaidWorkflows((prev) => {
       const exists = prev.some((workflow) => workflow.id === updatedWorkflow.id)
       if (!exists) return prev
@@ -2240,21 +2247,12 @@ export default function ImproverPage() {
     }
   }
 
-  const getFirstClaimableStep = (workflow: Workflow): WorkflowStep | null => {
-    for (const step of workflow.steps) {
-      if (canClaimStep(workflow, step)) {
-        return step
-      }
-    }
-    return null
-  }
-
   const workflowBoardWorkflows = useMemo(() => {
     return workflows.filter((workflow) => {
       if (hasClaimedRoleInWorkflow(workflow)) return false
-      return Boolean(getFirstClaimableStep(workflow))
+      return Boolean(workflow.claimable_step)
     })
-  }, [workflows, hasClaimedRoleInWorkflow, credentialSet, absencePeriods, user?.id])
+  }, [workflows, hasClaimedRoleInWorkflow])
 
   const myClaimedWorkflows = useMemo(() => {
     return workflows.filter((workflow) => hasClaimedRoleInWorkflow(workflow))
@@ -2265,9 +2263,7 @@ export default function ImproverPage() {
     const groupMap = new Map<string, WorkflowSeriesCardGroup>()
 
     myClaimedWorkflows.forEach((workflow) => {
-      const assignedStep = workflow.steps
-        .filter((step) => step.assigned_improver_id === user.id)
-        .sort((a, b) => a.step_order - b.step_order)[0]
+      const assignedStep = getPrimaryAssignedStepSummary(workflow)
       const key = workflow.series_id
       const existing = groupMap.get(key)
       if (!existing) {
@@ -2320,27 +2316,6 @@ export default function ImproverPage() {
       })
   }, [isWorkflowActiveForUser, myClaimedWorkflows, user?.id])
 
-  const getInitialStepIndexForMyWorkflow = useCallback(
-    (workflow: Workflow) => {
-      if (!user?.id) return 0
-      const sortedSteps = [...workflow.steps].sort((a, b) => a.step_order - b.step_order)
-      if (sortedSteps.length === 0) return 0
-
-      const preferredAssignedIndex = sortedSteps.findIndex(
-        (step) =>
-          step.assigned_improver_id === user.id &&
-          (step.status === "available" || step.status === "in_progress" || step.status === "locked"),
-      )
-      if (preferredAssignedIndex >= 0) {
-        return preferredAssignedIndex
-      }
-
-      const fallbackAssignedIndex = sortedSteps.findIndex((step) => step.assigned_improver_id === user.id)
-      return fallbackAssignedIndex >= 0 ? fallbackAssignedIndex : 0
-    },
-    [user?.id],
-  )
-
   const openWorkflowDetails = async (
     workflowId: string,
     workflow?: Workflow,
@@ -2370,7 +2345,7 @@ export default function ImproverPage() {
       return
     }
 
-    const existing = [...workflows, ...unpaidWorkflows].find((item) => item.id === workflowId)
+    const existing = unpaidWorkflows.find((item) => item.id === workflowId)
     if (existing) {
       setDetailWorkflow(existing)
       setDetailLoading(false)
@@ -2428,7 +2403,7 @@ export default function ImproverPage() {
     })
   }, [])
 
-  const formatImproverCardStatus = useCallback((workflow: Workflow) => {
+  const formatImproverCardStatus = useCallback((workflow: { status?: string | null; start_at?: number | null }) => {
     const label = formatWorkflowDisplayStatus(workflow)
     if (label.trim().toLowerCase() === "approved") {
       return "Available"
@@ -2440,11 +2415,9 @@ export default function ImproverPage() {
     if (group.workflows.length === 0) return
     const safeIndex = ((index % group.workflows.length) + group.workflows.length) % group.workflows.length
     const workflow = group.workflows[safeIndex]
-    const assignedStep = workflow.steps
-      .filter((step) => step.assigned_improver_id === user?.id)
-      .sort((a, b) => a.step_order - b.step_order)[0]
-    await openWorkflowDetails(workflow.id, workflow, {
-      initialStepIndex: getInitialStepIndexForMyWorkflow(workflow),
+    const assignedStep = getPrimaryAssignedStepSummary(workflow)
+    await openWorkflowDetails(workflow.id, undefined, {
+      initialStepIndex: getInitialStepIndexForWorkflowCard(workflow),
       seriesContext: {
         key: group.key,
         seriesId: group.seriesId,
@@ -2453,7 +2426,7 @@ export default function ImproverPage() {
         index: safeIndex,
       },
     })
-  }, [getInitialStepIndexForMyWorkflow, user?.id])
+  }, [openWorkflowDetails])
 
   const shiftDetailSeriesWorkflow = useCallback(async (direction: number) => {
     if (!detailSeriesContext || detailSeriesContext.workflowIds.length <= 1) return
@@ -2465,21 +2438,17 @@ export default function ImproverPage() {
     const nextIndex = currentIndex + direction
     if (nextIndex < 0 || nextIndex >= detailSeriesContext.workflowIds.length) return
     const nextWorkflowId = detailSeriesContext.workflowIds[nextIndex]
-    const nextWorkflow = workflows.find((item) => item.id === nextWorkflowId) || unpaidWorkflows.find((item) => item.id === nextWorkflowId)
-    const assignedStep = nextWorkflow
-      ? nextWorkflow.steps
-          .filter((step) => step.assigned_improver_id === user?.id)
-          .sort((a, b) => a.step_order - b.step_order)[0]
-      : null
-    await openWorkflowDetails(nextWorkflowId, nextWorkflow, {
-      initialStepIndex: nextWorkflow ? getInitialStepIndexForMyWorkflow(nextWorkflow) : 0,
+    const nextWorkflow = workflows.find((item) => item.id === nextWorkflowId)
+    const assignedStep = nextWorkflow ? getPrimaryAssignedStepSummary(nextWorkflow) : null
+    await openWorkflowDetails(nextWorkflowId, undefined, {
+      initialStepIndex: nextWorkflow ? getInitialStepIndexForWorkflowCard(nextWorkflow) : 0,
       seriesContext: {
         ...detailSeriesContext,
         stepOrder: assignedStep ? assignedStep.step_order : detailSeriesContext.stepOrder,
         index: nextIndex,
       },
     })
-  }, [detailSeriesContext, detailWorkflow, workflows, unpaidWorkflows, getInitialStepIndexForMyWorkflow, user?.id])
+  }, [detailSeriesContext, detailWorkflow, workflows, openWorkflowDetails])
 
   const parseAttachmentFilename = (value: string | null) => {
     if (!value) return ""
@@ -3349,11 +3318,11 @@ export default function ImproverPage() {
 	          ) : (
 	            filteredBoardWorkflows.map((workflow) => {
 	              return (
-                <Card
-                  key={workflow.id}
-                  className="cursor-pointer transition-colors hover:bg-muted/30"
-                  onClick={() => openWorkflowDetails(workflow.id, workflow)}
-                >
+	                <Card
+	                  key={workflow.id}
+	                  className="cursor-pointer transition-colors hover:bg-muted/30"
+	                  onClick={() => openWorkflowDetails(workflow.id)}
+	                >
                   <CardContent className="pt-4 space-y-3">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div>
@@ -3375,10 +3344,10 @@ export default function ImproverPage() {
                         className="w-full sm:w-auto"
                         size="sm"
                         variant="outline"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          void openWorkflowDetails(workflow.id, workflow)
-                        }}
+	                        onClick={(e) => {
+	                          e.stopPropagation()
+	                          void openWorkflowDetails(workflow.id)
+	                        }}
                       >
                         View Details
                       </Button>

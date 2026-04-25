@@ -751,14 +751,23 @@ func (s *AppDB) CreateTables() error {
 				CHECK (vote_decision IN ('approve', 'deny', 'admin_approve') OR vote_decision IS NULL)
 			);
 
-		CREATE INDEX IF NOT EXISTS workflows_series_idx ON workflows(series_id);
-		CREATE INDEX IF NOT EXISTS workflows_status_idx ON workflows(status);
-		CREATE INDEX IF NOT EXISTS workflows_proposer_idx ON workflows(proposer_id);
-		CREATE INDEX IF NOT EXISTS workflows_proposer_created_active_idx
-			ON workflows(proposer_id, created_at DESC)
-			WHERE status <> 'deleted';
-		CREATE INDEX IF NOT EXISTS workflows_start_idx ON workflows(start_at);
-	`)
+			CREATE INDEX IF NOT EXISTS workflows_series_idx ON workflows(series_id);
+			CREATE INDEX IF NOT EXISTS workflows_status_idx ON workflows(status);
+			CREATE INDEX IF NOT EXISTS workflows_proposer_idx ON workflows(proposer_id);
+			CREATE INDEX IF NOT EXISTS workflows_proposer_created_active_idx
+				ON workflows(proposer_id, created_at DESC)
+				WHERE status <> 'deleted';
+				CREATE INDEX IF NOT EXISTS workflows_start_idx ON workflows(start_at);
+				CREATE INDEX IF NOT EXISTS workflows_active_status_start_created_idx
+					ON workflows(status, start_at DESC, created_at DESC)
+					WHERE status IN ('approved', 'in_progress', 'completed', 'paid_out', 'blocked');
+				CREATE INDEX IF NOT EXISTS workflows_manager_improver_status_idx
+					ON workflows(manager_improver_id, status)
+					WHERE manager_improver_id IS NOT NULL;
+				CREATE INDEX IF NOT EXISTS workflows_open_manager_role_status_idx
+					ON workflows(manager_role_id, status)
+					WHERE manager_required AND manager_improver_id IS NULL AND manager_role_id IS NOT NULL;
+		`)
 	if err != nil {
 		return fmt.Errorf("error creating workflows table: %s", err)
 	}
@@ -911,13 +920,25 @@ func (s *AppDB) CreateTables() error {
 			retry_requested_at BIGINT,
 			retry_requested_by TEXT REFERENCES users(id),
 			created_at BIGINT NOT NULL DEFAULT unix_now(),
-			updated_at BIGINT NOT NULL DEFAULT unix_now(),
-			UNIQUE (workflow_id, step_order),
-			CHECK (status IN ('locked', 'available', 'in_progress', 'completed', 'paid_out'))
-		);
-		CREATE INDEX IF NOT EXISTS workflow_steps_workflow_idx ON workflow_steps(workflow_id);
+				updated_at BIGINT NOT NULL DEFAULT unix_now(),
+				UNIQUE (workflow_id, step_order),
+				CHECK (status IN ('locked', 'available', 'in_progress', 'completed', 'paid_out'))
+			);
+			CREATE INDEX IF NOT EXISTS workflow_steps_workflow_idx ON workflow_steps(workflow_id);
+			CREATE INDEX IF NOT EXISTS workflow_steps_assigned_improver_status_workflow_idx
+				ON workflow_steps(assigned_improver_id, status, workflow_id)
+				WHERE assigned_improver_id IS NOT NULL;
+			CREATE INDEX IF NOT EXISTS workflow_steps_assigned_improver_workflow_idx
+				ON workflow_steps(assigned_improver_id, workflow_id)
+				WHERE assigned_improver_id IS NOT NULL;
+			CREATE INDEX IF NOT EXISTS workflow_steps_claimable_workflow_status_role_idx
+				ON workflow_steps(workflow_id, status, role_id, step_order)
+				WHERE assigned_improver_id IS NULL AND role_id IS NOT NULL AND status IN ('available', 'locked');
+			CREATE INDEX IF NOT EXISTS workflow_steps_claimable_status_role_workflow_idx
+				ON workflow_steps(status, role_id, workflow_id, step_order)
+				WHERE assigned_improver_id IS NULL AND role_id IS NOT NULL AND status IN ('available', 'locked');
 
-		CREATE TABLE IF NOT EXISTS workflow_step_items(
+			CREATE TABLE IF NOT EXISTS workflow_step_items(
 			id TEXT PRIMARY KEY,
 			step_id TEXT NOT NULL REFERENCES workflow_steps(id) ON DELETE CASCADE,
 			item_order INTEGER NOT NULL,
@@ -1502,6 +1523,18 @@ func (s *AppDB) CreateTables() error {
 			CREATE INDEX IF NOT EXISTS workflow_steps_workflow_assigned_improver_idx
 				ON workflow_steps(workflow_id, assigned_improver_id)
 				WHERE assigned_improver_id IS NOT NULL;
+			CREATE INDEX IF NOT EXISTS workflow_steps_assigned_improver_status_workflow_idx
+				ON workflow_steps(assigned_improver_id, status, workflow_id)
+				WHERE assigned_improver_id IS NOT NULL;
+			CREATE INDEX IF NOT EXISTS workflow_steps_assigned_improver_workflow_idx
+				ON workflow_steps(assigned_improver_id, workflow_id)
+				WHERE assigned_improver_id IS NOT NULL;
+			CREATE INDEX IF NOT EXISTS workflow_steps_claimable_workflow_status_role_idx
+				ON workflow_steps(workflow_id, status, role_id, step_order)
+				WHERE assigned_improver_id IS NULL AND role_id IS NOT NULL AND status IN ('available', 'locked');
+			CREATE INDEX IF NOT EXISTS workflow_steps_claimable_status_role_workflow_idx
+				ON workflow_steps(status, role_id, workflow_id, step_order)
+				WHERE assigned_improver_id IS NULL AND role_id IS NOT NULL AND status IN ('available', 'locked');
 		`)
 	if err != nil {
 		return fmt.Errorf("error creating workflow_steps table: %s", err)
@@ -1784,11 +1817,13 @@ func (s *AppDB) CreateTables() error {
 			CHECK (absent_until > absent_from)
 		);
 
-		CREATE INDEX IF NOT EXISTS workflow_improver_absences_improver_idx
-			ON workflow_improver_absences(improver_id, absent_from DESC);
-		CREATE INDEX IF NOT EXISTS workflow_improver_absences_series_step_idx
-			ON workflow_improver_absences(series_id, step_order, absent_from, absent_until);
-	`)
+			CREATE INDEX IF NOT EXISTS workflow_improver_absences_improver_idx
+				ON workflow_improver_absences(improver_id, absent_from DESC);
+			CREATE INDEX IF NOT EXISTS workflow_improver_absences_series_step_idx
+				ON workflow_improver_absences(series_id, step_order, absent_from, absent_until);
+			CREATE INDEX IF NOT EXISTS workflow_improver_absences_improver_series_step_idx
+				ON workflow_improver_absences(improver_id, series_id, step_order, absent_from, absent_until);
+		`)
 	if err != nil {
 		return fmt.Errorf("error creating workflow_improver_absences table: %s", err)
 	}
