@@ -207,6 +207,7 @@ type WorkflowDropdownOptionCreateInput struct {
 	PhotoInstructions       string   `json:"photo_instructions,omitempty"`
 	NotifyEmails            []string `json:"notify_emails"`
 	NotifyEmailCount        int      `json:"notify_email_count,omitempty"`
+	NotifyEmailSubject      string   `json:"notify_email_subject,omitempty"`
 	SendPicturesWithEmail   bool     `json:"send_pictures_with_email,omitempty"`
 }
 
@@ -219,6 +220,7 @@ type WorkflowDropdownOption struct {
 	PhotoInstructions       string   `json:"photo_instructions,omitempty"`
 	NotifyEmails            []string `json:"notify_emails,omitempty"`
 	NotifyEmailCount        int      `json:"notify_email_count,omitempty"`
+	NotifyEmailSubject      string   `json:"notify_email_subject,omitempty"`
 	SendPicturesWithEmail   bool     `json:"send_pictures_with_email,omitempty"`
 }
 
@@ -688,6 +690,7 @@ type WorkflowDropdownNotification struct {
 	ItemTitle             string                                  `json:"item_title"`
 	DropdownValue         string                                  `json:"dropdown_value"`
 	Emails                []string                                `json:"emails"`
+	EmailSubject          string                                  `json:"email_subject,omitempty"`
 	SendPicturesWithEmail bool                                    `json:"send_pictures_with_email,omitempty"`
 	PhotoIDs              []string                                `json:"photo_ids,omitempty"`
 	PhotoLinks            []WorkflowDropdownNotificationPhotoLink `json:"photo_links,omitempty"`

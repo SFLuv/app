@@ -23,6 +23,7 @@ export interface WorkflowDropdownOption {
   photo_instructions?: string
   notify_emails?: string[]
   notify_email_count?: number
+  notify_email_subject?: string
   send_pictures_with_email?: boolean
 }
 
@@ -34,6 +35,7 @@ export interface WorkflowDropdownOptionCreateInput {
   photo_instructions?: string
   notify_emails: string[]
   notify_email_count?: number
+  notify_email_subject?: string
   send_pictures_with_email?: boolean
 }
 
