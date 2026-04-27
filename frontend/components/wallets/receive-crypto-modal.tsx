@@ -6,17 +6,14 @@ import { QRCode } from "react-qrcode-logo"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Textarea } from "@/components/ui/textarea"
 import { Card, CardContent } from "@/components/ui/card"
-import { Copy, CheckCircle, ChevronLeft, ChevronDown, ChevronRight, AlertTriangle } from "lucide-react"
+import { Copy, CheckCircle, ChevronDown, ChevronRight, AlertTriangle } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
-import type { ConnectedWallet } from "@/types/privy-wallet"
 import { AppWallet } from "@/lib/wallets/wallets"
-import { CHAIN, COMMUNITY, CW_APP_BASE_URL, SYMBOL } from "@/lib/constants"
+import { CHAIN, SYMBOL } from "@/lib/constants"
+import { buildMerchantSendQrValue } from "@/lib/redeem-link"
 import { TabsTrigger, Tabs, TabsList } from "../ui/tabs"
-import { Address } from "viem"
-import { generateReceiveLink } from "@citizenwallet/sdk"
-import config from "@/app.config"
+import { isAddress } from "viem"
 import { Collapsible, CollapsibleTrigger } from "../ui/collapsible"
 import { CollapsibleContent } from "@radix-ui/react-collapsible"
 import ContactOrAddressInput from "../contacts/contact-or-address-input"
@@ -28,9 +25,6 @@ interface ReceiveCryptoModalProps {
 }
 
 export function ReceiveCryptoModal({ open, onOpenChange, wallet }: ReceiveCryptoModalProps) {
-  const [amount, setAmount] = useState("")
-  const [memo, setMemo] = useState("")
-  const [error, setError] = useState("")
   const [copied, setCopied] = useState(false)
   const [activeTab, setActiveTab] = useState<string>("cw")
   const [tipAddress, setTipAddress] = useState<string>("")
@@ -39,8 +33,11 @@ export function ReceiveCryptoModal({ open, onOpenChange, wallet }: ReceiveCrypto
 
   const QRRef = useRef<QRCode>(null)
 
+  const trimmedTipAddress = tipAddress.trim()
+  const tipAddressError = trimmedTipAddress && !isAddress(trimmedTipAddress) ? "Please enter a valid tip address" : ""
+
   const handleDownload = () => {
-    const tipEnabled = tipAddress !== "" && tipAddress.startsWith("0x") && tipAddress.length === 42 && activeTab === "cw"
+    const tipEnabled = activeTab === "cw" && !tipAddressError && trimmedTipAddress !== ""
 
     const qrName = "SFLuv_"
       + wallet.name.replaceAll(" ", "_")
@@ -69,40 +66,12 @@ export function ReceiveCryptoModal({ open, onOpenChange, wallet }: ReceiveCrypto
   }
 
   const cwLinkValue = useMemo(() => {
-    const link = generateReceiveLink(
-      CW_APP_BASE_URL,
-      COMMUNITY,
-      wallet.address as Address,
-      undefined,
-      memo
-    )
-    if(tipAddress === "") {
-      setError("")
-      return link
-    }
-    if (!tipAddress.startsWith("0x") || tipAddress.length !== 42) {
-      setError("Please enter a valid tip address")
-      return link
-    }
-
-    return link + "&tipTo=" + tipAddress
-  }, [tipAddress])
-
-  const generatePaymentRequest = () => {
-    const params = new URLSearchParams()
-    if (amount) params.append("amount", amount)
-    if (memo) params.append("message", memo)
-
-    const currencySymbol = SYMBOL
-    const paymentUrl = `${currencySymbol.toLowerCase()}:${wallet.address}${params.toString() ? `?${params.toString()}` : ""}`
-
-    toast({
-      title: "Payment Request Generated",
-      description: "Share this address or QR code to receive payments",
+    if (!wallet.address) return "0x"
+    return buildMerchantSendQrValue({
+      to: wallet.address,
+      tipTo: tipAddressError ? null : trimmedTipAddress || null,
     })
-
-    return paymentUrl
-  }
+  }, [tipAddressError, trimmedTipAddress, wallet.address])
 
   const currencySymbol = SYMBOL
   const networkName = CHAIN.name
@@ -225,10 +194,10 @@ export function ReceiveCryptoModal({ open, onOpenChange, wallet }: ReceiveCrypto
                         id="tip-address"
                       />
                     </div>
-                    {error && (
+                    {tipAddressError && (
                       <div className="flex items-center gap-2 text-red-600 text-sm p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
                         <AlertTriangle className="h-4 w-4 flex-shrink-0" />
-                        <span>{error}</span>
+                        <span>{tipAddressError}</span>
                       </div>
                     )}
                   </>}

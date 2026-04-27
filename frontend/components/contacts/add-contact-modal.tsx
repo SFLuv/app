@@ -21,11 +21,11 @@ import { Contact } from "@/types/contact"
 interface AddContactModalProps {
   open: boolean
   onOpenChange: (open: boolean) => void
-  handleAddContact: (c: Contact) => Promise<void>
-  addContactError: unknown
+  handleAddContact: (c: Contact) => Promise<boolean>
+  initialAddress?: string
 }
 
-export function AddContactModal({ open, onOpenChange, handleAddContact, addContactError }: AddContactModalProps) {
+export function AddContactModal({ open, onOpenChange, handleAddContact, initialAddress }: AddContactModalProps) {
   const [name, setName] = useState<string>("")
   const [address, setAddress] = useState<string>("")
   const [addError, setAddError]= useState<string | null>()
@@ -34,9 +34,9 @@ export function AddContactModal({ open, onOpenChange, handleAddContact, addConta
   useEffect(() => {
     setAddError(null)
     setName("")
-    setAddress("")
+    setAddress(initialAddress?.trim() || "")
     setIsSubmitting(false)
-  }, [open])
+  }, [initialAddress, open])
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
@@ -52,20 +52,26 @@ export function AddContactModal({ open, onOpenChange, handleAddContact, addConta
     }
 
     setIsSubmitting(true)
-    await handleAddContact({
-      id: 0,
-      owner: "",
-      name,
-      address,
-      is_favorite: false
-    })
-    if(!addContactError) {
-      onOpenChange(open)
-    } else {
+    try {
+      const added = await handleAddContact({
+        id: 0,
+        owner: "",
+        name,
+        address,
+        is_favorite: false
+      })
+      if (added) {
+        onOpenChange(false)
+      } else {
+        setAddError("Encountered a server error while adding contact. Please try again later.")
+      }
+    }
+    catch {
       setAddError("Encountered a server error while adding contact. Please try again later.")
     }
-
-    setIsSubmitting(false)
+    finally {
+      setIsSubmitting(false)
+    }
   }
 
 

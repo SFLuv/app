@@ -7,7 +7,7 @@ export type ContactsStatus = "loading" | "available"
 interface ContactsContextType {
   contacts: Contact[]
   contactsStatus: ContactsStatus
-  addContact: (c: Contact) => Promise<void>
+  addContact: (c: Contact) => Promise<boolean>
   updateContact: (c: Contact) => Promise<void>
   getContacts: () => Promise<void>
   deleteContact: (id: number) => Promise<void>
@@ -77,16 +77,20 @@ export default function ContactsProvider ({ children }: { children: ReactNode })
   }
 
 
-    const addContact = async (c: Contact) => {
+    const addContact = async (c: Contact): Promise<boolean> => {
       setContactsStatus("loading")
       try {
-        const contact  = await _addContact(c)
-        setContacts([...contacts, contact])
+        const contact = await _addContact(c)
+        setContacts((currentContacts) => [...currentContacts, contact])
+        return true
       }
       catch(err) {
         setError(err)
+        return false
       }
-      setContactsStatus("available")
+      finally {
+        setContactsStatus("available")
+      }
     }
 
     const updateContact = async (c: Contact) => {
