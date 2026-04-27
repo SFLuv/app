@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { useRouter } from "next/navigation"
+import { usePathname, useRouter, useSearchParams } from "next/navigation"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -24,6 +24,9 @@ import { DeleteContactModal } from "@/components/contacts/delete-contact-modal"
 
 export default function ContactsPage() {
   const router = useRouter()
+  const pathname = usePathname()
+  const searchParams = useSearchParams()
+  const initialContactAddress = searchParams.get("addContact") || searchParams.get("address") || ""
   const [addContactModalOpen, setAddContactModalOpen] = useState(false)
   const [deleteContactModalOpen, setDeleteContactModalOpen] = useState(false)
   const [deleteContactModalContact, setDeleteContactModalContact] = useState<Contact>()
@@ -50,9 +53,26 @@ export default function ContactsPage() {
 
 
 
-  const toggleAddContactModal = () => {
+  useEffect(() => {
+    if (!initialContactAddress) return
     setError(null)
-    setAddContactModalOpen(!addContactModalOpen)
+    setAddContactModalOpen(true)
+  }, [initialContactAddress, setError])
+
+  const setAddContactModalState = (open: boolean) => {
+    setError(null)
+    setAddContactModalOpen(open)
+    if (!open && initialContactAddress) {
+      const nextParams = new URLSearchParams(searchParams.toString())
+      nextParams.delete("addContact")
+      nextParams.delete("address")
+      const nextQuery = nextParams.toString()
+      router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname, { scroll: false })
+    }
+  }
+
+  const toggleAddContactModal = () => {
+    setAddContactModalState(!addContactModalOpen)
   }
 
   const handleToggleIsFavorite = async (c: Contact) => {
@@ -86,7 +106,12 @@ export default function ContactsPage() {
         handleDeleteContact={handleDeleteContact}
         deleteContactError={error}
       />
-      <AddContactModal open={addContactModalOpen} onOpenChange={toggleAddContactModal} handleAddContact={addContact} addContactError={error} />
+      <AddContactModal
+        open={addContactModalOpen}
+        onOpenChange={setAddContactModalState}
+        handleAddContact={addContact}
+        initialAddress={initialContactAddress}
+      />
       <div>
         <h1 className="text-3xl font-bold text-black dark:text-white">Contacts</h1>
         <p className="text-gray-600 dark:text-gray-400 mt-1">Manage your contacts</p>

@@ -23,6 +23,7 @@ import { useTransactions } from "@/context/TransactionProvider"
 import { WalletTransaction } from "@/types/privy-wallet"
 import type { Transaction } from "@/types/transaction"
 import { useIsMobile } from "@/hooks/use-mobile"
+import { extractMerchantSendFromPayload } from "@/lib/qr/payload"
 
 type BalanceUpdateResult = "changed" | "unchanged" | "unknown"
 
@@ -87,9 +88,19 @@ export default function WalletDetailsPage() {
   const sendFlowDefault = !isAdminOrMerchant && isMobile ? "scan" : "manual"
   const showScanSendButton = !isAdminOrMerchant
   const fromWalletMenu = searchParams.get("fromWalletMenu") === "1"
-  const sendQueryFlag = searchParams.get("send") === "1"
-  const sendToQuery = searchParams.get("to") || ""
-  const sendTipToQuery = searchParams.get("tipTo") || ""
+  const merchantSendQuery = useMemo(
+    () => extractMerchantSendFromPayload(`?${searchParams.toString()}`),
+    [searchParams],
+  )
+  const hasSendtoQuery = Boolean(searchParams.get("sendto") || searchParams.get("sendTo"))
+  const hasMerchantSendQuery =
+    hasSendtoQuery ||
+    searchParams.get("p") === "r" ||
+    searchParams.get("m") === "s" ||
+    searchParams.get("mode") === "send"
+  const sendQueryFlag = searchParams.get("send") === "1" || (hasMerchantSendQuery && Boolean(merchantSendQuery))
+  const sendToQuery = merchantSendQuery?.to || searchParams.get("to") || ""
+  const sendTipToQuery = merchantSendQuery?.tipTo || searchParams.get("tipTo") || ""
   const [pendingSendRecipient, setPendingSendRecipient] = useState<string | undefined>(undefined)
   const [pendingSendTipTo, setPendingSendTipTo] = useState<string | undefined>(undefined)
 

@@ -23,7 +23,7 @@ export function GET() {
       ? [
           {
             appID: `${appleTeamId}.${iosBundleId}`,
-            paths: ["/", "/*"],
+            paths: ["/addcontact", "/addcontact/*", "/contacts", "/contacts/*", "/", "/*"],
           },
         ]
       : []
