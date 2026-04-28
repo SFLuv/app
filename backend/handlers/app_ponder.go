@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,12 +10,41 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/SFLuv/app/backend/structs"
 	"github.com/SFLuv/app/backend/utils"
 )
 
-const defaultExpoPushAPIURL = "https://exp.host/--/api/v2/push/send"
+const (
+	defaultExpoPushAPIURL        = "https://exp.host/--/api/v2/push/send"
+	defaultExpoPushReceiptAPIURL = "https://exp.host/--/api/v2/push/getReceipts"
+	expoDeviceNotRegistered      = "DeviceNotRegistered"
+	pushDeleteReasonDeadToken    = "push_device_not_registered"
+)
+
+type expoPushTicket struct {
+	Status  string         `json:"status"`
+	ID      string         `json:"id,omitempty"`
+	Message string         `json:"message,omitempty"`
+	Details map[string]any `json:"details,omitempty"`
+}
+
+type expoPushSendResponse struct {
+	Data   json.RawMessage  `json:"data"`
+	Errors []expoPushTicket `json:"errors,omitempty"`
+}
+
+type expoPushReceipt struct {
+	Status  string         `json:"status"`
+	Message string         `json:"message,omitempty"`
+	Details map[string]any `json:"details,omitempty"`
+}
+
+type expoPushReceiptResponse struct {
+	Data   map[string]expoPushReceipt `json:"data"`
+	Errors []expoPushTicket           `json:"errors,omitempty"`
+}
 
 func shortenPonderAddress(address string) string {
 	address = strings.TrimSpace(address)
@@ -44,6 +74,260 @@ func allowedWalletAddresses(wallets []*structs.Wallet) map[string]bool {
 		userWallets[strings.ToLower(strings.TrimSpace(wallet.EoaAddress))] = true
 	}
 	return userWallets
+}
+
+func ponderServerBaseURL() string {
+	return strings.TrimRight(strings.TrimSpace(os.Getenv("PONDER_SERVER_BASE_URL")), "/")
+}
+
+func (a *AppService) createPonderHook(ctx context.Context, address string) (*structs.PonderSubscriptionServerRequest, error) {
+	ponderUrl := ponderServerBaseURL()
+	if ponderUrl == "" {
+		return nil, fmt.Errorf("PONDER_SERVER_BASE_URL is required")
+	}
+
+	subscriptionBody := structs.PonderSubscriptionServerRequest{
+		Id:      0,
+		Address: address,
+		Url:     os.Getenv("PONDER_CALLBACK_URL"),
+	}
+
+	reqBody, err := json.Marshal(subscriptionBody)
+	if err != nil {
+		return nil, fmt.Errorf("error marshalling ponder subscription body: %w", err)
+	}
+
+	subscriptionReq, err := http.NewRequestWithContext(ctx, http.MethodPost, fmt.Sprintf("%s/hooks", ponderUrl), bytes.NewReader(reqBody))
+	if err != nil {
+		return nil, fmt.Errorf("error creating ponder subscription request: %w", err)
+	}
+	subscriptionReq.Header.Add("X-Admin-Key", os.Getenv("PONDER_KEY"))
+
+	res, err := http.DefaultClient.Do(subscriptionReq)
+	if err != nil {
+		return nil, fmt.Errorf("error sending ponder subscription request: %w", err)
+	}
+	defer res.Body.Close()
+
+	if res.StatusCode != http.StatusCreated {
+		resBody, _ := io.ReadAll(res.Body)
+		return nil, fmt.Errorf("ponder subscription not created: status %d: %s", res.StatusCode, strings.TrimSpace(string(resBody)))
+	}
+
+	resBody, err := io.ReadAll(res.Body)
+	if err != nil {
+		return nil, fmt.Errorf("error reading ponder subscription response body: %w", err)
+	}
+
+	var newSubscription structs.PonderSubscriptionServerRequest
+	if err := json.Unmarshal(resBody, &newSubscription); err != nil {
+		return nil, fmt.Errorf("error unmarshalling ponder subscription response: %w", err)
+	}
+
+	return &newSubscription, nil
+}
+
+func (a *AppService) deletePonderHook(ctx context.Context, hookID int) error {
+	ponderUrl := ponderServerBaseURL()
+	if ponderUrl == "" {
+		return fmt.Errorf("PONDER_SERVER_BASE_URL is required")
+	}
+
+	subscriptionReq, err := http.NewRequestWithContext(ctx, http.MethodDelete, fmt.Sprintf("%s/hooks?id=%d", ponderUrl, hookID), nil)
+	if err != nil {
+		return fmt.Errorf("error creating ponder delete subscription request: %w", err)
+	}
+	subscriptionReq.Header.Add("X-Admin-Key", os.Getenv("PONDER_KEY"))
+
+	res, err := http.DefaultClient.Do(subscriptionReq)
+	if err != nil {
+		return fmt.Errorf("error sending ponder delete subscription request: %w", err)
+	}
+	defer res.Body.Close()
+
+	if res.StatusCode != http.StatusOK {
+		resBody, _ := io.ReadAll(res.Body)
+		return fmt.Errorf("ponder subscription not deleted: status %d: %s", res.StatusCode, strings.TrimSpace(string(resBody)))
+	}
+
+	return nil
+}
+
+func (a *AppService) deletePonderHooksForAddressIfUnused(ctx context.Context, address string) error {
+	hasActiveDependency, err := a.db.HasActivePonderNotificationDependency(ctx, address)
+	if err != nil {
+		return err
+	}
+	if hasActiveDependency {
+		return nil
+	}
+
+	hookIDs, err := a.db.GetKnownPonderHookIDsForAddress(ctx, address)
+	if err != nil {
+		return err
+	}
+
+	for _, hookID := range hookIDs {
+		if err := a.deletePonderHook(ctx, hookID); err != nil {
+			return err
+		}
+		if err := a.db.ClearMobilePushSubscriptionPonderHook(ctx, hookID); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func expoPushReceiptURL() string {
+	receiptURL := strings.TrimSpace(os.Getenv("EXPO_PUSH_RECEIPT_API_URL"))
+	if receiptURL == "" {
+		receiptURL = defaultExpoPushReceiptAPIURL
+	}
+	return receiptURL
+}
+
+func expoPushReceiptDelay() time.Duration {
+	rawValue := strings.TrimSpace(os.Getenv("EXPO_PUSH_RECEIPT_DELAY_SECONDS"))
+	if rawValue == "" {
+		return 30 * time.Second
+	}
+	seconds, err := strconv.Atoi(rawValue)
+	if err != nil || seconds < 0 {
+		return 30 * time.Second
+	}
+	return time.Duration(seconds) * time.Second
+}
+
+func expoDetailsError(details map[string]any) string {
+	if len(details) == 0 {
+		return ""
+	}
+	if value, ok := details["error"].(string); ok {
+		return strings.TrimSpace(value)
+	}
+	return ""
+}
+
+func isExpoDeviceNotRegistered(details map[string]any) bool {
+	return expoDetailsError(details) == expoDeviceNotRegistered
+}
+
+func parseExpoPushTickets(raw json.RawMessage) ([]expoPushTicket, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return nil, nil
+	}
+	if trimmed[0] == '[' {
+		var tickets []expoPushTicket
+		if err := json.Unmarshal(trimmed, &tickets); err != nil {
+			return nil, err
+		}
+		return tickets, nil
+	}
+
+	var ticket expoPushTicket
+	if err := json.Unmarshal(trimmed, &ticket); err != nil {
+		return nil, err
+	}
+	return []expoPushTicket{ticket}, nil
+}
+
+func (a *AppService) deactivatePushTokenAndCleanup(ctx context.Context, token string, reason string) {
+	disabledAddresses, err := a.db.DeactivateMobilePushSubscriptionsByToken(ctx, token, reason)
+	if err != nil {
+		a.logger.Logf("error deactivating mobile push subscriptions for dead Expo token: %s", err)
+		return
+	}
+
+	for _, address := range disabledAddresses {
+		if err := a.deletePonderHooksForAddressIfUnused(ctx, address); err != nil {
+			a.logger.Logf("error cleaning up ponder hooks after deactivating dead Expo token for address %s: %s", address, err)
+		}
+	}
+}
+
+func (a *AppService) checkExpoPushReceiptAfterDelay(ticketID string, token string) {
+	delay := expoPushReceiptDelay()
+	if delay > 0 {
+		time.Sleep(delay)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	receipt, err := getExpoPushReceipt(ctx, ticketID)
+	if err != nil {
+		a.logger.Logf("error getting Expo push receipt %s: %s", ticketID, err)
+		return
+	}
+
+	errorCode := expoDetailsError(receipt.Details)
+	if err := a.db.MarkMobilePushNotificationTicketReceipt(ctx, ticketID, receipt.Status, receipt.Message, errorCode); err != nil {
+		a.logger.Logf("error marking Expo push receipt %s: %s", ticketID, err)
+	}
+
+	if receipt.Status == "error" && errorCode == expoDeviceNotRegistered {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cleanupCancel()
+		a.deactivatePushTokenAndCleanup(cleanupCtx, token, pushDeleteReasonDeadToken)
+	}
+}
+
+func (a *AppService) handleExpoPushTicket(ctx context.Context, listener *structs.MobilePushSubscription, token string, ticket *expoPushTicket) {
+	if listener == nil || ticket == nil {
+		return
+	}
+
+	if ticket.Status == "error" && isExpoDeviceNotRegistered(ticket.Details) {
+		a.deactivatePushTokenAndCleanup(ctx, token, pushDeleteReasonDeadToken)
+		return
+	}
+
+	if ticket.Status != "ok" || strings.TrimSpace(ticket.ID) == "" {
+		return
+	}
+
+	if err := a.db.AddMobilePushNotificationTicket(ctx, listener.Owner, token, listener.Address, ticket.ID); err != nil {
+		a.logger.Logf("error storing Expo push ticket %s for user %s address %s: %s", ticket.ID, listener.Owner, listener.Address, err)
+		return
+	}
+
+	go a.checkExpoPushReceiptAfterDelay(ticket.ID, token)
+}
+
+func resolvePushSyncState(req structs.PushSubscriptionSyncRequest) (*bool, *bool, bool) {
+	if req.PreferenceEnabled != nil || req.DeviceRegistered != nil {
+		return req.PreferenceEnabled, req.DeviceRegistered, req.PreferenceEnabled != nil
+	}
+	if req.Enabled != nil {
+		return req.Enabled, req.Enabled, true
+	}
+	if len(req.Addresses) > 0 {
+		enabled := true
+		return &enabled, &enabled, true
+	}
+	return nil, nil, false
+}
+
+func expectedPushState(
+	subscription *structs.MobilePushSubscription,
+	preferenceEnabled *bool,
+	deviceRegistered *bool,
+) (bool, bool, bool) {
+	preference := false
+	device := true
+	if subscription != nil {
+		preference = subscription.PreferenceEnabled
+		device = subscription.DeviceRegistered
+	}
+	if preferenceEnabled != nil {
+		preference = *preferenceEnabled
+	}
+	if deviceRegistered != nil {
+		device = *deviceRegistered
+	}
+	return preference, device, preference && device
 }
 
 func (a *AppService) AddPonderMerchantSubscription(w http.ResponseWriter, r *http.Request) {
@@ -112,59 +396,14 @@ func (a *AppService) AddPonderMerchantSubscription(w http.ResponseWriter, r *htt
 	userWallets := allowedWalletAddresses(wallets)
 
 	if !userWallets[strings.ToLower(strings.TrimSpace(req.Address))] {
-		fmt.Println("no address %s", req.Address)
+		a.logger.Logf("user %s attempted to add ponder subscription for unowned address %s", *userDid, req.Address)
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
 
-	ponderUrl := os.Getenv("PONDER_SERVER_BASE_URL")
-
-	subscriptionBody := structs.PonderSubscriptionServerRequest{
-		Id:      0,
-		Address: req.Address,
-		Url:     os.Getenv("PONDER_CALLBACK_URL"),
-	}
-
-	reqBody, err := json.Marshal(subscriptionBody)
+	newSubscription, err := a.createPonderHook(r.Context(), req.Address)
 	if err != nil {
-		a.logger.Logf("error marshalling ponder subscription body: %s", err)
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
-	subscriptionReq, err := http.NewRequest("POST", fmt.Sprintf("%s/hooks", ponderUrl), bytes.NewReader(reqBody))
-	if err != nil {
-		a.logger.Logf("error creating ponder subscription request: %s", err)
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
-	subscriptionReq.Header.Add("X-Admin-Key", os.Getenv("PONDER_KEY"))
-
-	res, err := http.DefaultClient.Do(subscriptionReq)
-	if err != nil {
-		a.logger.Logf("error sending ponder subscription request: %s", err)
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
-	if res.StatusCode != 201 {
-		a.logger.Logf("ponder subscription not created: check ponder logs")
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
-	resBody, err := io.ReadAll(res.Body)
-	if err != nil {
-		a.logger.Logf("error reading ponder subscription response body: %s", err)
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
-	var newSubscription structs.PonderSubscriptionServerRequest
-	err = json.Unmarshal(resBody, &newSubscription)
-	if err != nil {
-		a.logger.Logf("error unmarshalling ponder subscription request: %s", err)
+		a.logger.Logf("error creating ponder subscription: %s", err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
@@ -238,11 +477,109 @@ func (a *AppService) SyncPonderPushSubscriptions(w http.ResponseWriter, r *http.
 		seenAddresses[address] = struct{}{}
 		normalizedAddresses = append(normalizedAddresses, address)
 	}
+	preferenceEnabled, deviceRegistered, pruneMissing := resolvePushSyncState(req)
+	deviceOnlySync := preferenceEnabled == nil && deviceRegistered != nil
+	syncAddresses := normalizedAddresses
+	if deviceOnlySync {
+		syncAddresses = nil
+	}
 
-	if err := a.db.SyncMobilePushSubscriptions(r.Context(), *userDid, req.Token, normalizedAddresses); err != nil {
+	existingSubscriptions, err := a.db.GetMobilePushSubscriptionsByOwnerToken(r.Context(), *userDid, req.Token)
+	if err != nil {
+		a.logger.Logf("error getting existing push subscriptions for user %s: %s", *userDid, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	existingByAddress := make(map[string]*structs.MobilePushSubscription, len(existingSubscriptions))
+	for _, subscription := range existingSubscriptions {
+		if subscription == nil {
+			continue
+		}
+		existingByAddress[strings.ToLower(strings.TrimSpace(subscription.Address))] = subscription
+	}
+
+	hookCandidateAddresses := make([]string, 0, len(normalizedAddresses)+len(existingSubscriptions))
+	if len(normalizedAddresses) > 0 && !deviceOnlySync {
+		hookCandidateAddresses = append(hookCandidateAddresses, normalizedAddresses...)
+	} else if preferenceEnabled != nil || deviceRegistered != nil {
+		seenHookCandidates := make(map[string]struct{}, len(existingSubscriptions))
+		for _, subscription := range existingSubscriptions {
+			if subscription == nil {
+				continue
+			}
+			address := strings.ToLower(strings.TrimSpace(subscription.Address))
+			if address == "" {
+				continue
+			}
+			if _, seen := seenHookCandidates[address]; seen {
+				continue
+			}
+			seenHookCandidates[address] = struct{}{}
+			hookCandidateAddresses = append(hookCandidateAddresses, address)
+		}
+	}
+
+	createdHookIDsByAddress := make(map[string]int)
+	for _, address := range hookCandidateAddresses {
+		subscription := existingByAddress[address]
+		_, _, shouldBeActive := expectedPushState(subscription, preferenceEnabled, deviceRegistered)
+		if !shouldBeActive {
+			continue
+		}
+		if subscription != nil && subscription.PonderHookId != nil && *subscription.PonderHookId > 0 {
+			continue
+		}
+		newHook, err := a.createPonderHook(r.Context(), address)
+		if err != nil {
+			for _, hookID := range createdHookIDsByAddress {
+				if deleteErr := a.deletePonderHook(r.Context(), hookID); deleteErr != nil {
+					a.logger.Logf("error deleting orphaned ponder hook %d after failed push hook creation for user %s: %s", hookID, *userDid, deleteErr)
+				}
+			}
+			a.logger.Logf("error creating ponder hook for push subscription user %s address %s: %s", *userDid, address, err)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		createdHookIDsByAddress[address] = newHook.Id
+	}
+
+	disabledAddresses, err := a.db.SyncMobilePushSubscriptions(
+		r.Context(),
+		*userDid,
+		req.Token,
+		syncAddresses,
+		createdHookIDsByAddress,
+		preferenceEnabled,
+		deviceRegistered,
+		pruneMissing,
+	)
+	if err != nil {
+		for _, hookID := range createdHookIDsByAddress {
+			if deleteErr := a.deletePonderHook(r.Context(), hookID); deleteErr != nil {
+				a.logger.Logf("error deleting orphaned ponder hook %d after failed push sync for user %s: %s", hookID, *userDid, deleteErr)
+			}
+		}
 		a.logger.Logf("error syncing push subscriptions for user %s: %s", *userDid, err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
+	}
+
+	for address, hookID := range createdHookIDsByAddress {
+		if err := a.db.SetMobilePushSubscriptionPonderHook(r.Context(), *userDid, req.Token, address, hookID); err != nil {
+			if deleteErr := a.deletePonderHook(r.Context(), hookID); deleteErr != nil {
+				a.logger.Logf("error deleting orphaned ponder hook %d after failed hook-id sync for user %s: %s", hookID, *userDid, deleteErr)
+			}
+			a.logger.Logf("error recording ponder hook %d for push subscription user %s address %s: %s", hookID, *userDid, address, err)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+	}
+
+	for _, address := range disabledAddresses {
+		if err := a.deletePonderHooksForAddressIfUnused(r.Context(), address); err != nil {
+			a.logger.Logf("error cleaning up ponder hooks for disabled push address %s: %s", address, err)
+		}
 	}
 
 	w.WriteHeader(http.StatusNoContent)
@@ -255,7 +592,16 @@ func (a *AppService) GetPonderPushSubscriptions(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	subscriptions, err := a.db.GetMobilePushSubscriptionsByUser(r.Context(), *userDid)
+	token := strings.TrimSpace(r.URL.Query().Get("token"))
+	var (
+		subscriptions []*structs.MobilePushSubscription
+		err           error
+	)
+	if token != "" {
+		subscriptions, err = a.db.GetMobilePushSubscriptionsByOwnerToken(r.Context(), *userDid, token)
+	} else {
+		subscriptions, err = a.db.GetMobilePushSubscriptionsByUser(r.Context(), *userDid)
+	}
 	if err != nil {
 		a.logger.Logf("error getting mobile push subscriptions for user %s: %s", *userDid, err)
 		w.WriteHeader(http.StatusInternalServerError)
@@ -286,10 +632,25 @@ func (a *AppService) DeletePonderPushSubscription(w http.ResponseWriter, r *http
 		return
 	}
 
-	if err := a.db.DeleteMobilePushSubscription(r.Context(), subscriptionID, *userDid); err != nil {
+	subscription, err := a.db.GetMobilePushSubscription(r.Context(), subscriptionID, *userDid)
+	if err != nil {
+		a.logger.Logf("error getting mobile push subscription %d for user %s: %s", subscriptionID, *userDid, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	address, err := a.db.DeleteMobilePushSubscription(r.Context(), subscriptionID, *userDid)
+	if err != nil {
 		a.logger.Logf("error deleting mobile push subscription %d for user %s: %s", subscriptionID, *userDid, err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
+	}
+	if address == "" {
+		address = subscription.Address
+	}
+
+	if err := a.deletePonderHooksForAddressIfUnused(r.Context(), address); err != nil {
+		a.logger.Logf("error cleaning up ponder hooks after deleting push subscription %d for user %s: %s", subscriptionID, *userDid, err)
 	}
 
 	w.WriteHeader(http.StatusOK)
@@ -320,33 +681,14 @@ func (a *AppService) DeletePonderMerchantSubscription(w http.ResponseWriter, r *
 		return
 	}
 
-	ponderUrl := os.Getenv("PONDER_SERVER_BASE_URL")
-
-	subscriptionReq, err := http.NewRequest("DELETE", fmt.Sprintf("%s/hooks?id=%d", ponderUrl, hookId), nil)
-	if err != nil {
-		a.logger.Logf("error creating ponder delete subscription request: %s", err)
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-	subscriptionReq.Header.Add("X-Admin-Key", os.Getenv("PONDER_KEY"))
-
-	res, err := http.DefaultClient.Do(subscriptionReq)
-	if err != nil {
-		a.logger.Logf("error sending ponder delete subscription request: %s", err)
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
-	if res.StatusCode != 200 {
-		a.logger.Logf("ponder subscription not deleted: check ponder logs")
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
 	err = a.db.DeletePonderSubscription(r.Context(), hookId, *userDid)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		return
+	}
+
+	if err := a.deletePonderHooksForAddressIfUnused(r.Context(), subscription.Address); err != nil {
+		a.logger.Logf("error cleaning up ponder hooks after deleting subscription %d for user %s: %s", hookId, *userDid, err)
 	}
 
 	w.WriteHeader(http.StatusOK)
@@ -519,15 +861,18 @@ func (a *AppService) PonderHookHandler(w http.ResponseWriter, r *http.Request) {
 
 		accountLabel := ponderPushAccountLabel(wallet, listener.Address)
 		title := fmt.Sprintf("SFLuv received to %s", accountLabel)
-		body := fmt.Sprintf("$%s SFLUV", formattedAmount)
+		body := fmt.Sprintf("%s SFLUV", formattedAmount)
 
-		if pushErr := sendExpoPushNotification(strings.TrimSpace(string(listener.Data)), title, body, map[string]string{
+		token := strings.TrimSpace(string(listener.Data))
+		ticket, pushErr := sendExpoPushNotification(r.Context(), token, title, body, map[string]string{
 			"hash":    tx.Hash,
 			"to":      tx.To,
 			"from":    tx.From,
 			"amount":  formattedAmount,
 			"address": listener.Address,
-		}); pushErr != nil {
+		})
+		a.handleExpoPushTicket(r.Context(), listener, token, ticket)
+		if pushErr != nil {
 			a.logger.Logf("error sending Expo push notification for user %s, address %s: %s", listener.Owner, listener.Address, pushErr)
 		}
 	}
@@ -535,9 +880,9 @@ func (a *AppService) PonderHookHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-func sendExpoPushNotification(token string, title string, body string, data map[string]string) error {
+func sendExpoPushNotification(ctx context.Context, token string, title string, body string, data map[string]string) (*expoPushTicket, error) {
 	if strings.TrimSpace(token) == "" {
-		return fmt.Errorf("empty Expo push token")
+		return nil, fmt.Errorf("empty Expo push token")
 	}
 
 	pushURL := strings.TrimSpace(os.Getenv("EXPO_PUSH_API_URL"))
@@ -555,26 +900,110 @@ func sendExpoPushNotification(token string, title string, body string, data map[
 
 	reqBody, err := json.Marshal(payload)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	req, err := http.NewRequest(http.MethodPost, pushURL, bytes.NewReader(reqBody))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, pushURL, bytes.NewReader(reqBody))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer res.Body.Close()
 
-	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		bodyBytes, _ := io.ReadAll(res.Body)
-		return fmt.Errorf("expo push api returned %d: %s", res.StatusCode, strings.TrimSpace(string(bodyBytes)))
+	bodyBytes, readErr := io.ReadAll(res.Body)
+	if readErr != nil {
+		return nil, readErr
 	}
 
-	return nil
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return nil, fmt.Errorf("expo push api returned %d: %s", res.StatusCode, strings.TrimSpace(string(bodyBytes)))
+	}
+
+	var sendResponse expoPushSendResponse
+	if err := json.Unmarshal(bodyBytes, &sendResponse); err != nil {
+		return nil, fmt.Errorf("error parsing Expo push response: %w", err)
+	}
+
+	tickets, err := parseExpoPushTickets(sendResponse.Data)
+	if err != nil {
+		return nil, fmt.Errorf("error parsing Expo push ticket: %w", err)
+	}
+	if len(tickets) == 0 {
+		if len(sendResponse.Errors) > 0 {
+			ticket := sendResponse.Errors[0]
+			return &ticket, fmt.Errorf("expo push api returned error: %s", ticket.Message)
+		}
+		return nil, fmt.Errorf("expo push api returned no ticket")
+	}
+
+	ticket := tickets[0]
+	if ticket.Status == "error" {
+		message := strings.TrimSpace(ticket.Message)
+		if message == "" {
+			message = "unknown Expo push ticket error"
+		}
+		return &ticket, fmt.Errorf("%s", message)
+	}
+
+	return &ticket, nil
+}
+
+func getExpoPushReceipt(ctx context.Context, ticketID string) (*expoPushReceipt, error) {
+	ticketID = strings.TrimSpace(ticketID)
+	if ticketID == "" {
+		return nil, fmt.Errorf("empty Expo push ticket id")
+	}
+
+	payload := map[string]any{
+		"ids": []string{ticketID},
+	}
+
+	reqBody, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, expoPushReceiptURL(), bytes.NewReader(reqBody))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+
+	bodyBytes, readErr := io.ReadAll(res.Body)
+	if readErr != nil {
+		return nil, readErr
+	}
+
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return nil, fmt.Errorf("expo push receipt api returned %d: %s", res.StatusCode, strings.TrimSpace(string(bodyBytes)))
+	}
+
+	var receiptResponse expoPushReceiptResponse
+	if err := json.Unmarshal(bodyBytes, &receiptResponse); err != nil {
+		return nil, fmt.Errorf("error parsing Expo push receipt response: %w", err)
+	}
+	if len(receiptResponse.Errors) > 0 {
+		errTicket := receiptResponse.Errors[0]
+		return nil, fmt.Errorf("expo push receipt api returned error: %s", errTicket.Message)
+	}
+
+	receipt, ok := receiptResponse.Data[ticketID]
+	if !ok {
+		return nil, fmt.Errorf("Expo push receipt %s not found", ticketID)
+	}
+
+	return &receipt, nil
 }

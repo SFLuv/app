@@ -13,8 +13,11 @@ type PonderSubscriptionRequest struct {
 }
 
 type PushSubscriptionSyncRequest struct {
-	Token     string   `json:"token"`
-	Addresses []string `json:"addresses"`
+	Token             string   `json:"token"`
+	Addresses         []string `json:"addresses"`
+	Enabled           *bool    `json:"enabled,omitempty"`
+	PreferenceEnabled *bool    `json:"preference_enabled,omitempty"`
+	DeviceRegistered  *bool    `json:"device_registered,omitempty"`
 }
 
 type PonderSubscription struct {
@@ -23,6 +26,19 @@ type PonderSubscription struct {
 	Type    SubscriptionType `json:"type"`
 	Owner   string           `json:"owner"`
 	Data    []byte           `json:"data"`
+}
+
+type MobilePushSubscription struct {
+	Id                int              `json:"id"`
+	Owner             string           `json:"owner"`
+	Token             string           `json:"token"`
+	Address           string           `json:"address"`
+	Type              SubscriptionType `json:"type"`
+	Data              []byte           `json:"data,omitempty"`
+	Active            bool             `json:"active"`
+	PreferenceEnabled bool             `json:"preference_enabled"`
+	DeviceRegistered  bool             `json:"device_registered"`
+	PonderHookId      *int             `json:"ponder_hook_id,omitempty"`
 }
 
 type PonderSubscriptionServerRequest struct {
