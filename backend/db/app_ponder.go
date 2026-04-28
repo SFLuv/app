@@ -166,3 +166,73 @@ func (a *AppDB) DeletePonderSubscription(ctx context.Context, id int, owner stri
 
 	return err
 }
+
+func (a *AppDB) HasActivePonderNotificationDependency(ctx context.Context, address string) (bool, error) {
+	var exists bool
+	err := a.db.QueryRow(ctx, `
+		SELECT EXISTS(
+			SELECT
+				1
+			FROM
+				ponder_subscriptions
+			WHERE
+				address = LOWER($1)
+			AND
+				active = TRUE
+			UNION ALL
+			SELECT
+				1
+			FROM
+				mobile_push_subscriptions
+			WHERE
+				address = LOWER($1)
+			AND
+				active = TRUE
+		);
+	`, address).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("error checking active ponder notification dependencies for address %s: %s", address, err)
+	}
+
+	return exists, nil
+}
+
+func (a *AppDB) GetKnownPonderHookIDsForAddress(ctx context.Context, address string) ([]int, error) {
+	rows, err := a.db.Query(ctx, `
+		SELECT
+			id
+		FROM
+			ponder_subscriptions
+		WHERE
+			address = LOWER($1)
+		UNION
+		SELECT
+			ponder_hook_id
+		FROM
+			mobile_push_subscriptions
+		WHERE
+			address = LOWER($1)
+		AND
+			ponder_hook_id IS NOT NULL
+		ORDER BY
+			id ASC;
+	`, address)
+	if err != nil {
+		return nil, fmt.Errorf("error querying known ponder hook ids for address %s: %s", address, err)
+	}
+	defer rows.Close()
+
+	hookIDs := make([]int, 0)
+	for rows.Next() {
+		var hookID int
+		if err := rows.Scan(&hookID); err != nil {
+			return nil, fmt.Errorf("error scanning ponder hook id for address %s: %s", address, err)
+		}
+		hookIDs = append(hookIDs, hookID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error reading ponder hook ids for address %s: %s", address, err)
+	}
+
+	return hookIDs, nil
+}

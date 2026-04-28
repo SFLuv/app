@@ -2379,7 +2379,11 @@ func (s *AppDB) CreateTables() error {
 			owner TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
 			token TEXT NOT NULL,
 			address TEXT NOT NULL,
+			ponder_hook_id INTEGER,
+			preference_enabled BOOLEAN NOT NULL DEFAULT true,
+			device_registered BOOLEAN NOT NULL DEFAULT true,
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			active BOOLEAN NOT NULL DEFAULT true,
 			delete_date TIMESTAMPTZ,
 			delete_reason TEXT
@@ -2387,15 +2391,69 @@ func (s *AppDB) CreateTables() error {
 
 		CREATE INDEX IF NOT EXISTS mobile_push_subscriptions_owner_idx
 			ON mobile_push_subscriptions(owner);
+		CREATE INDEX IF NOT EXISTS mobile_push_subscriptions_owner_token_idx
+			ON mobile_push_subscriptions(owner, token);
 		CREATE INDEX IF NOT EXISTS mobile_push_subscriptions_address_idx
 			ON mobile_push_subscriptions(address);
 		CREATE INDEX IF NOT EXISTS mobile_push_subscriptions_token_idx
 			ON mobile_push_subscriptions(token);
+		CREATE INDEX IF NOT EXISTS mobile_push_subscriptions_ponder_hook_idx
+			ON mobile_push_subscriptions(ponder_hook_id)
+			WHERE ponder_hook_id IS NOT NULL;
 		CREATE UNIQUE INDEX IF NOT EXISTS mobile_push_subscriptions_token_address_idx
 			ON mobile_push_subscriptions(token, address);
 	`)
 	if err != nil {
 		return fmt.Errorf("error creating mobile push subscriptions table: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
+		ALTER TABLE mobile_push_subscriptions
+		ADD COLUMN IF NOT EXISTS ponder_hook_id INTEGER;
+
+		ALTER TABLE mobile_push_subscriptions
+		ADD COLUMN IF NOT EXISTS preference_enabled BOOLEAN NOT NULL DEFAULT true;
+
+		ALTER TABLE mobile_push_subscriptions
+		ADD COLUMN IF NOT EXISTS device_registered BOOLEAN NOT NULL DEFAULT true;
+
+		ALTER TABLE mobile_push_subscriptions
+		ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+
+		CREATE INDEX IF NOT EXISTS mobile_push_subscriptions_ponder_hook_idx
+			ON mobile_push_subscriptions(ponder_hook_id)
+			WHERE ponder_hook_id IS NOT NULL;
+		CREATE INDEX IF NOT EXISTS mobile_push_subscriptions_owner_token_idx
+			ON mobile_push_subscriptions(owner, token);
+	`)
+	if err != nil {
+		return fmt.Errorf("error altering mobile push subscription hook columns: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
+		CREATE TABLE IF NOT EXISTS mobile_push_notification_tickets(
+			id SERIAL PRIMARY KEY,
+			ticket_id TEXT NOT NULL UNIQUE,
+			owner TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			token TEXT NOT NULL,
+			address TEXT NOT NULL,
+			status TEXT NOT NULL DEFAULT 'pending',
+			receipt_status TEXT,
+			receipt_message TEXT,
+			receipt_error_code TEXT,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			checked_at TIMESTAMPTZ
+		);
+
+		CREATE INDEX IF NOT EXISTS mobile_push_notification_tickets_owner_idx
+			ON mobile_push_notification_tickets(owner, created_at DESC);
+		CREATE INDEX IF NOT EXISTS mobile_push_notification_tickets_token_idx
+			ON mobile_push_notification_tickets(token, created_at DESC);
+		CREATE INDEX IF NOT EXISTS mobile_push_notification_tickets_status_idx
+			ON mobile_push_notification_tickets(status, created_at DESC);
+	`)
+	if err != nil {
+		return fmt.Errorf("error creating mobile push notification tickets table: %s", err)
 	}
 
 	_, err = s.db.Exec(context.Background(), `
