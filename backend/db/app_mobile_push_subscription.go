@@ -152,8 +152,8 @@ func (a *AppDB) SyncMobilePushSubscriptions(
 		SET
 			active = FALSE,
 			device_registered = FALSE,
-			delete_date = $3,
-			delete_reason = $4
+			delete_date = $3::TIMESTAMPTZ,
+			delete_reason = $4::TEXT
 		WHERE
 			token = $1
 		AND
@@ -191,13 +191,13 @@ func (a *AppDB) SyncMobilePushSubscriptions(
 				active = COALESCE($3::BOOLEAN, mps.preference_enabled) AND COALESCE($4::BOOLEAN, mps.device_registered),
 				delete_date = CASE
 					WHEN COALESCE($3::BOOLEAN, mps.preference_enabled) AND COALESCE($4::BOOLEAN, mps.device_registered)
-						THEN NULL
-					ELSE $5
+						THEN NULL::TIMESTAMPTZ
+					ELSE $5::TIMESTAMPTZ
 				END,
 				delete_reason = CASE
 					WHEN COALESCE($3::BOOLEAN, mps.preference_enabled) AND COALESCE($4::BOOLEAN, mps.device_registered)
-						THEN NULL
-					ELSE $6
+						THEN NULL::TEXT
+					ELSE $6::TEXT
 				END,
 				updated_at = NOW()
 			FROM
@@ -242,8 +242,8 @@ func (a *AppDB) SyncMobilePushSubscriptions(
 			SET
 				preference_enabled = FALSE,
 				active = FALSE,
-				delete_date = $4,
-				delete_reason = $5,
+				delete_date = $4::TIMESTAMPTZ,
+				delete_reason = $5::TEXT,
 				updated_at = NOW()
 			FROM
 				candidates
@@ -286,13 +286,13 @@ func (a *AppDB) SyncMobilePushSubscriptions(
 				ponder_hook_id = COALESCE($6::INTEGER, mps.ponder_hook_id),
 				delete_date = CASE
 					WHEN COALESCE($4::BOOLEAN, mps.preference_enabled) AND COALESCE($5::BOOLEAN, mps.device_registered)
-						THEN NULL
-					ELSE $7
+						THEN NULL::TIMESTAMPTZ
+					ELSE $7::TIMESTAMPTZ
 				END,
 				delete_reason = CASE
 					WHEN COALESCE($4::BOOLEAN, mps.preference_enabled) AND COALESCE($5::BOOLEAN, mps.device_registered)
-						THEN NULL
-					ELSE $8
+						THEN NULL::TEXT
+					ELSE $8::TEXT
 				END,
 				updated_at = NOW()
 			FROM
@@ -571,8 +571,8 @@ func (a *AppDB) DeleteMobilePushSubscription(
 		SET
 			preference_enabled = FALSE,
 			active = FALSE,
-			delete_date = $3,
-			delete_reason = $4
+			delete_date = $3::TIMESTAMPTZ,
+			delete_reason = $4::TEXT
 		WHERE
 			id = $1
 		AND
@@ -601,8 +601,8 @@ func (a *AppDB) DeactivateMobilePushSubscriptionsByToken(
 		SET
 			device_registered = FALSE,
 			active = FALSE,
-			delete_date = $2,
-			delete_reason = $3
+			delete_date = $2::TIMESTAMPTZ,
+			delete_reason = $3::TEXT
 		WHERE
 			token = $1
 		AND
