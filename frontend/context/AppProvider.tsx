@@ -540,6 +540,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     const allowUnauthedRoute =
       pathname === "/map" ||
       pathname === "/redirect" ||
+      pathname === "/delete-account" ||
       pathname.startsWith("/faucet") ||
       pathname.startsWith("/improver/join") ||
       pathname.startsWith(PRIVACY_POLICY_PATH) ||
