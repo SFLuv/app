@@ -22,9 +22,10 @@ export const QRCodeCard = ({ code }: { code: string }) => {
         }}>Thank you from SFLuv!</h1>
         <h3 style={{margin: "10px"}}>To redeem your tokens:</h3>
         <ol style={{textAlign: "center", width: "70%", margin: "auto", fontSize: "12px"}}>
-          <li>1. Download or open the SFLUV app.</li>
-          <li>2. Scan this QR code in the app.</li>
-          <li>3. Receive your SFLuv in your wallet.</li>
+          <li>1. Scan the QR code</li>
+          <li>2. Download the SFLuv app</li>
+          <li>3. Scan again</li>
+          <li>4. Receive your SFLuv!</li>
         </ol>
       </div>
 
