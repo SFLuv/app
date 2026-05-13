@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { usePrivy } from "@privy-io/react-auth";
 import { BACKEND } from "@/lib/constants";
 import { normalizeRedeemCode } from "@/lib/redeem-link";
+import { SFLUV_GOOGLE_PLAY_URL, SFLUV_IOS_APP_STORE_URL } from "@/lib/app-download-links";
 import { useApp } from "@/context/AppProvider";
 import { GetUserResponse, WalletResponse } from "@/types/server";
 
@@ -45,7 +46,6 @@ const Page = () => {
   const directRedeemAttemptedRef = useRef<boolean>(false)
   const webWalletRedeemAttemptedRef = useRef<boolean>(false)
   const webWalletRedeemInFlightRef = useRef<boolean>(false)
-  const autoLoginAttemptedRef = useRef<boolean>(false)
   const redirectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const sigAuthAccount = searchParams.get("sigAuthAccount")
@@ -68,6 +68,7 @@ const Page = () => {
   )
   const shouldAutoRedirect = success || isFinalErrorState
   const markLoginRedirectPending = useCallback(() => {
+    setLoginRedirectPending(true)
     if (typeof window === "undefined") return
     try {
       window.sessionStorage.setItem(loginRedirectPendingKey, "1")
@@ -356,7 +357,6 @@ const Page = () => {
   useEffect(() => {
     directRedeemAttemptedRef.current = false
     webWalletRedeemAttemptedRef.current = false
-    autoLoginAttemptedRef.current = false
     setContinueWithWebWalletRequested(false)
     setContinuingWithWebWallet(false)
     setSuccessRedirectTo(null)
@@ -410,28 +410,6 @@ const Page = () => {
   }, [continueWithWebWalletRequested, isWebWalletSessionReady, redeemWithWebWallet])
 
   useEffect(() => {
-    if (!shouldUseWebWalletFlow) return
-    if (!code) return
-    if (hasSigAuth) return
-    if (!privyReady) return
-    if (authenticated) return
-    if (continuingWithWebWallet || loginRedirectPending) return
-    if (autoLoginAttemptedRef.current) return
-
-    autoLoginAttemptedRef.current = true
-    void continueWithWebWallet()
-  }, [
-    authenticated,
-    code,
-    continueWithWebWallet,
-    continuingWithWebWallet,
-    hasSigAuth,
-    loginRedirectPending,
-    privyReady,
-    shouldUseWebWalletFlow,
-  ])
-
-  useEffect(() => {
     if (!loginRedirectPending) return
     const timeoutId = setTimeout(() => {
       clearLoginRedirectPending()
@@ -449,7 +427,13 @@ const Page = () => {
     }
   }, [clearLoginRedirectPending, isFinalErrorState, isWebWalletSessionReady, loginRedirectPending, shouldUseWebWalletFlow, success])
 
-  const showLoginRetry = shouldUseWebWalletFlow && privyReady && !authenticated && Boolean(webWalletError)
+  const showAppDownloadPrompt =
+    shouldUseWebWalletFlow &&
+    Boolean(code) &&
+    !authenticated &&
+    !success &&
+    error !== "W9 Required" &&
+    error !== "W9 Pending"
 
   useEffect(() => {
     if (!shouldAutoRedirect) {
@@ -490,18 +474,66 @@ const Page = () => {
             Code redeemed!
           </h2>
         </div>
-        : showLoginRetry ?
-        <div className="mx-auto w-full max-w-lg px-4 text-center">
-          <div className="mx-auto mt-4 w-full max-w-md space-y-4 rounded-2xl border bg-card/95 p-4 shadow-sm">
-            <p className="text-sm text-muted-foreground">
-              {webWalletError}
+        : showAppDownloadPrompt ?
+        <div className="mx-auto w-full max-w-md px-4 text-center">
+          <div className="rounded-lg border bg-card/95 p-6 shadow-sm">
+            <img
+              src="/icon.png"
+              alt="SFLUV"
+              className="mx-auto h-16 w-16 object-contain"
+            />
+            <h2 className="mt-4 text-2xl font-bold text-black dark:text-white">
+              Redeem in the SFLUV app
+            </h2>
+            <p className="mt-2 text-sm text-muted-foreground">
+              Download the app, then open its scanner to redeem this QR code into your SFLUV wallet.
             </p>
+            <div className="mt-5 grid gap-3 sm:grid-cols-2">
+              <a
+                href={SFLUV_IOS_APP_STORE_URL}
+                target="_blank"
+                rel="noreferrer"
+                className="flex min-h-14 items-center gap-3 rounded-lg border border-border bg-white px-3 py-2 text-left shadow-sm transition hover:border-[#eb6c6c]/50 hover:bg-[#fff7f7] dark:bg-black"
+              >
+                <img
+                  src="/appstore.svg"
+                  alt=""
+                  className="h-9 w-9 shrink-0 object-contain"
+                />
+                <span>
+                  <span className="block text-xs text-muted-foreground">Download on</span>
+                  <span className="block text-sm font-semibold text-foreground">App Store</span>
+                </span>
+              </a>
+              <a
+                href={SFLUV_GOOGLE_PLAY_URL}
+                target="_blank"
+                rel="noreferrer"
+                className="flex min-h-14 items-center gap-3 rounded-lg border border-border bg-white px-3 py-2 text-left shadow-sm transition hover:border-[#eb6c6c]/50 hover:bg-[#fff7f7] dark:bg-black"
+              >
+                <img
+                  src="/googleplaystore.svg"
+                  alt=""
+                  className="h-9 w-9 shrink-0 object-contain"
+                />
+                <span>
+                  <span className="block text-xs text-muted-foreground">Get it on</span>
+                  <span className="block text-sm font-semibold text-foreground">Google Play</span>
+                </span>
+              </a>
+            </div>
+            {webWalletError && (
+              <p className="mt-4 text-sm text-[#b42318] dark:text-[#ffb4a8]">
+                {webWalletError}
+              </p>
+            )}
             <Button
               onClick={continueWithWebWallet}
-              disabled={continuingWithWebWallet}
-              className="w-full bg-[#eb6c6c] hover:bg-[#d55c5c]"
+              disabled={!privyReady || continuingWithWebWallet || loginRedirectPending}
+              variant="outline"
+              className="mt-5 w-full"
             >
-              {continuingWithWebWallet ? "Continuing..." : "Try Logging In Again"}
+              {continuingWithWebWallet || loginRedirectPending ? "Continuing..." : "Continue with web app"}
             </Button>
           </div>
         </div>
