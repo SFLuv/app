@@ -90,7 +90,7 @@ func New(s *handlers.BotService, a *handlers.AppService, p *handlers.PonderServi
 	r.Use(middleware.Logger)
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   allowedOrigins(),
-		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token", "Access-Token", "X-Admin-Key"},
 		ExposedHeaders:   []string{"Link", "X-SFLUV-Auth-Reason"},
 		AllowCredentials: false,
@@ -106,6 +106,7 @@ func New(s *handlers.BotService, a *handlers.AppService, p *handlers.PonderServi
 	AddWalletRoutes(r, a)
 	AddLocationRoutes(r, a)
 	AddContactRoutes(r, a)
+	AddMerchantModeRoutes(r, a)
 	AddPonderRoutes(r, a, p)
 	AddW9Routes(r, a)
 	AddUnwrapRoutes(r, a)
@@ -269,6 +270,15 @@ func AddContactRoutes(r *chi.Mux, s *handlers.AppService) {
 	r.Get("/contacts", withActiveAuth(s.GetContacts, s))
 	r.Put("/contacts", withActiveAuth(s.UpdateContact, s))
 	r.Delete("/contacts", withActiveAuth(s.DeleteContact, s))
+}
+
+func AddMerchantModeRoutes(r *chi.Mux, s *handlers.AppService) {
+	r.Get("/merchant-mode/status", withActiveAuth(s.GetMerchantModeStatus, s))
+	r.Get("/merchant-mode/devices", withActiveAuth(s.ListMerchantModeDevices, s))
+	r.Patch("/merchant-mode/devices/{device_id}", withActiveAuth(s.UpdateMerchantModeDevice, s))
+	r.Post("/merchant-mode/pin", withActiveAuth(s.SetMerchantModePIN, s))
+	r.Post("/merchant-mode/enable", withActiveAuth(s.EnableMerchantMode, s))
+	r.Post("/merchant-mode/disable", withActiveAuth(s.DisableMerchantMode, s))
 }
 
 func AddPonderRoutes(r *chi.Mux, s *handlers.AppService, p *handlers.PonderService) {
