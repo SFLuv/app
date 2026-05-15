@@ -91,7 +91,7 @@ func New(s *handlers.BotService, a *handlers.AppService, p *handlers.PonderServi
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   allowedOrigins(),
 		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
-		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token", "Access-Token", "X-Admin-Key"},
+		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token", "Access-Token", "X-Admin-Key", "X-SFLUV-Client-Platform", "X-SFLUV-Client-Version", "X-SFLUV-Client-Build"},
 		ExposedHeaders:   []string{"Link", "X-SFLUV-Auth-Reason"},
 		AllowCredentials: false,
 		MaxAge:           300,
@@ -99,6 +99,7 @@ func New(s *handlers.BotService, a *handlers.AppService, p *handlers.PonderServi
 	r.Use(m.AuthMiddleware)
 
 	AddBotRoutes(r, s, a)
+	AddClientConfigRoutes(r, a)
 	AddUserRoutes(r, a)
 	AddAdminRoutes(r, a)
 	AddAffiliateRoutes(r, s, a)
@@ -112,6 +113,11 @@ func New(s *handlers.BotService, a *handlers.AppService, p *handlers.PonderServi
 	AddUnwrapRoutes(r, a)
 
 	return r
+}
+
+func AddClientConfigRoutes(r *chi.Mux, s *handlers.AppService) {
+	r.Get("/config", s.GetClientConfig)
+	r.Get("/client-version", s.GetClientVersion)
 }
 
 func AddBotRoutes(r *chi.Mux, s *handlers.BotService, a *handlers.AppService) {
