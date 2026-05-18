@@ -283,6 +283,7 @@ func AddMerchantModeRoutes(r *chi.Mux, s *handlers.AppService) {
 	r.Get("/merchant-mode/devices", withActiveAuth(s.ListMerchantModeDevices, s))
 	r.Patch("/merchant-mode/devices/{device_id}", withActiveAuth(s.UpdateMerchantModeDevice, s))
 	r.Post("/merchant-mode/pin", withActiveAuth(s.SetMerchantModePIN, s))
+	r.Post("/merchant-mode/pin/help", withActiveAuth(s.RequestMerchantModePINHelp, s))
 	r.Post("/merchant-mode/enable", withActiveAuth(s.EnableMerchantMode, s))
 	r.Post("/merchant-mode/disable", withActiveAuth(s.DisableMerchantMode, s))
 }

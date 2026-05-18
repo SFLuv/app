@@ -2,7 +2,7 @@
 
 import type React from "react";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useApp } from "@/context/AppProvider";
 import PlaceAutocomplete from "@/components/merchant/google_place_finder";
@@ -48,6 +48,8 @@ import {
   Upload,
   User,
   Clock,
+  Eye,
+  EyeOff,
   XCircle,
   AlertTriangle,
 } from "lucide-react";
@@ -414,10 +416,36 @@ export default function SettingsPage() {
     useState(false);
   const [merchantModeCurrentPin, setMerchantModeCurrentPin] = useState("");
   const [merchantModeNewPin, setMerchantModeNewPin] = useState("");
-  const [merchantModeConfirmPin, setMerchantModeConfirmPin] = useState("");
+  const [merchantModeCurrentPinVisible, setMerchantModeCurrentPinVisible] =
+    useState(false);
+  const [merchantModeNewPinVisible, setMerchantModeNewPinVisible] =
+    useState(false);
   const [merchantModePinSaving, setMerchantModePinSaving] = useState(false);
   const [merchantModePinError, setMerchantModePinError] = useState("");
   const [merchantModePinSuccess, setMerchantModePinSuccess] = useState("");
+  const [merchantModeForgotPinOpen, setMerchantModeForgotPinOpen] =
+    useState(false);
+  const [merchantModeForgotPinSubmitting, setMerchantModeForgotPinSubmitting] =
+    useState(false);
+  const [merchantModeForgotPinMessage, setMerchantModeForgotPinMessage] =
+    useState("");
+  const [merchantModeForgotPinError, setMerchantModeForgotPinError] =
+    useState("");
+  const authFetchRef = useRef(authFetch);
+  const merchantModeDevicesCountRef = useRef(merchantModeDevices.length);
+  const merchantModePasscodeSetRef = useRef(merchantModePasscodeSet);
+
+  useEffect(() => {
+    authFetchRef.current = authFetch;
+  }, [authFetch]);
+
+  useEffect(() => {
+    merchantModeDevicesCountRef.current = merchantModeDevices.length;
+  }, [merchantModeDevices.length]);
+
+  useEffect(() => {
+    merchantModePasscodeSetRef.current = merchantModePasscodeSet;
+  }, [merchantModePasscodeSet]);
 
   const [improverRewardsSelection, setImproverRewardsSelection] = useState("");
   const [improverCustomRewardsAccount, setImproverCustomRewardsAccount] =
@@ -860,10 +888,12 @@ export default function SettingsPage() {
       return;
     }
 
-    setMerchantModeDevicesLoading(true);
     setMerchantModeDevicesError("");
     try {
-      const res = await authFetch("/merchant-mode/devices");
+      setMerchantModeDevicesLoading(
+        (current) => current || merchantModeDevicesCountRef.current === 0,
+      );
+      const res = await authFetchRef.current("/merchant-mode/devices");
       if (!res.ok) {
         const text = await res.text();
         throw new Error(text || "Unable to load merchant mode devices.");
@@ -880,7 +910,7 @@ export default function SettingsPage() {
     } finally {
       setMerchantModeDevicesLoading(false);
     }
-  }, [authFetch, status, user?.isMerchant]);
+  }, [status, user?.isMerchant]);
 
   const loadMerchantModeStatus = useCallback(async () => {
     if (status !== "authenticated" || !user?.isMerchant) {
@@ -888,10 +918,12 @@ export default function SettingsPage() {
       return;
     }
 
-    setMerchantModeStatusLoading(true);
     setMerchantModePinError("");
     try {
-      const res = await authFetch("/merchant-mode/status");
+      setMerchantModeStatusLoading(
+        (current) => current || !merchantModePasscodeSetRef.current,
+      );
+      const res = await authFetchRef.current("/merchant-mode/status");
       if (!res.ok) {
         const text = await res.text();
         throw new Error(text || "Unable to load merchant mode PIN status.");
@@ -908,7 +940,7 @@ export default function SettingsPage() {
     } finally {
       setMerchantModeStatusLoading(false);
     }
-  }, [authFetch, status, user?.isMerchant]);
+  }, [status, user?.isMerchant]);
 
   useEffect(() => {
     if (status === "authenticated") {
@@ -1488,7 +1520,6 @@ export default function SettingsPage() {
 
   const handleSaveMerchantModePin = async () => {
     const newPin = merchantModeNewPin.trim();
-    const confirmPin = merchantModeConfirmPin.trim();
     const currentPin = merchantModeCurrentPin.trim();
 
     setMerchantModePinError("");
@@ -1496,10 +1527,6 @@ export default function SettingsPage() {
 
     if (!/^\d{6}$/.test(newPin)) {
       setMerchantModePinError("Enter a new 6 digit PIN.");
-      return;
-    }
-    if (newPin !== confirmPin) {
-      setMerchantModePinError("PINs do not match.");
       return;
     }
     if (merchantModePasscodeSet && !/^\d{6}$/.test(currentPin)) {
@@ -1527,7 +1554,6 @@ export default function SettingsPage() {
       setMerchantModePasscodeSet(data.passcode_set === true);
       setMerchantModeCurrentPin("");
       setMerchantModeNewPin("");
-      setMerchantModeConfirmPin("");
       setMerchantModePinSuccess(
         merchantModePasscodeSet
           ? "Merchant Mode PIN reset."
@@ -1539,6 +1565,31 @@ export default function SettingsPage() {
       );
     } finally {
       setMerchantModePinSaving(false);
+    }
+  };
+
+  const handleRequestMerchantModePinHelp = async () => {
+    setMerchantModeForgotPinSubmitting(true);
+    setMerchantModeForgotPinError("");
+    setMerchantModeForgotPinMessage("");
+    try {
+      const res = await authFetch("/merchant-mode/pin/help", {
+        method: "POST",
+        body: JSON.stringify({
+          contact_email: user?.contact_email || "",
+        }),
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || "Unable to notify Tech Support.");
+      }
+      setMerchantModeForgotPinMessage("Tech Support has been notified.");
+    } catch (err) {
+      setMerchantModeForgotPinError(
+        err instanceof Error ? err.message : "Unable to notify Tech Support.",
+      );
+    } finally {
+      setMerchantModeForgotPinSubmitting(false);
     }
   };
 
@@ -3243,8 +3294,8 @@ export default function SettingsPage() {
                 <div
                   className={`grid gap-4 ${
                     merchantModePasscodeSet
-                      ? "md:grid-cols-3"
-                      : "md:grid-cols-2"
+                      ? "md:grid-cols-2"
+                      : "md:grid-cols-1"
                   }`}
                 >
                   {merchantModePasscodeSet ? (
@@ -3255,23 +3306,43 @@ export default function SettingsPage() {
                       >
                         Current PIN
                       </Label>
-                      <Input
-                        id="merchant-mode-current-pin"
-                        type="password"
-                        inputMode="numeric"
-                        autoComplete="off"
-                        maxLength={6}
-                        value={merchantModeCurrentPin}
-                        onChange={(event) => {
-                          setMerchantModeCurrentPin(
-                            event.target.value.replace(/\D/g, "").slice(0, 6),
-                          );
-                          setMerchantModePinError("");
-                          setMerchantModePinSuccess("");
-                        }}
-                        className="text-black dark:text-white bg-secondary"
-                        placeholder="Current PIN"
-                      />
+                      <div className="relative">
+                        <Input
+                          id="merchant-mode-current-pin"
+                          type={merchantModeCurrentPinVisible ? "text" : "password"}
+                          inputMode="numeric"
+                          autoComplete="off"
+                          maxLength={6}
+                          value={merchantModeCurrentPin}
+                          onChange={(event) => {
+                            setMerchantModeCurrentPin(
+                              event.target.value.replace(/\D/g, "").slice(0, 6),
+                            );
+                            setMerchantModePinError("");
+                            setMerchantModePinSuccess("");
+                          }}
+                          className="bg-secondary pr-10 text-black dark:text-white"
+                          placeholder="Current PIN"
+                        />
+                        <button
+                          type="button"
+                          className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground hover:text-[#eb6c6c]"
+                          onClick={() =>
+                            setMerchantModeCurrentPinVisible((current) => !current)
+                          }
+                          aria-label={
+                            merchantModeCurrentPinVisible
+                              ? "Hide current PIN"
+                              : "Show current PIN"
+                          }
+                        >
+                          {merchantModeCurrentPinVisible ? (
+                            <EyeOff className="h-4 w-4" />
+                          ) : (
+                            <Eye className="h-4 w-4" />
+                          )}
+                        </button>
+                      </div>
                     </div>
                   ) : null}
 
@@ -3282,49 +3353,41 @@ export default function SettingsPage() {
                     >
                       New PIN
                     </Label>
-                    <Input
-                      id="merchant-mode-new-pin"
-                      type="password"
-                      inputMode="numeric"
-                      autoComplete="off"
-                      maxLength={6}
-                      value={merchantModeNewPin}
-                      onChange={(event) => {
-                        setMerchantModeNewPin(
-                          event.target.value.replace(/\D/g, "").slice(0, 6),
-                        );
-                        setMerchantModePinError("");
-                        setMerchantModePinSuccess("");
-                      }}
-                      className="text-black dark:text-white bg-secondary"
-                      placeholder="6 digit PIN"
-                    />
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label
-                      htmlFor="merchant-mode-confirm-pin"
-                      className="text-black dark:text-white"
-                    >
-                      Confirm PIN
-                    </Label>
-                    <Input
-                      id="merchant-mode-confirm-pin"
-                      type="password"
-                      inputMode="numeric"
-                      autoComplete="off"
-                      maxLength={6}
-                      value={merchantModeConfirmPin}
-                      onChange={(event) => {
-                        setMerchantModeConfirmPin(
-                          event.target.value.replace(/\D/g, "").slice(0, 6),
-                        );
-                        setMerchantModePinError("");
-                        setMerchantModePinSuccess("");
-                      }}
-                      className="text-black dark:text-white bg-secondary"
-                      placeholder="Confirm PIN"
-                    />
+                    <div className="relative">
+                      <Input
+                        id="merchant-mode-new-pin"
+                        type={merchantModeNewPinVisible ? "text" : "password"}
+                        inputMode="numeric"
+                        autoComplete="off"
+                        maxLength={6}
+                        value={merchantModeNewPin}
+                        onChange={(event) => {
+                          setMerchantModeNewPin(
+                            event.target.value.replace(/\D/g, "").slice(0, 6),
+                          );
+                          setMerchantModePinError("");
+                          setMerchantModePinSuccess("");
+                        }}
+                        className="bg-secondary pr-10 text-black dark:text-white"
+                        placeholder="6 digit PIN"
+                      />
+                      <button
+                        type="button"
+                        className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground hover:text-[#eb6c6c]"
+                        onClick={() =>
+                          setMerchantModeNewPinVisible((current) => !current)
+                        }
+                        aria-label={
+                          merchantModeNewPinVisible ? "Hide new PIN" : "Show new PIN"
+                        }
+                      >
+                        {merchantModeNewPinVisible ? (
+                          <EyeOff className="h-4 w-4" />
+                        ) : (
+                          <Eye className="h-4 w-4" />
+                        )}
+                      </button>
+                    </div>
                   </div>
                 </div>
 
@@ -3362,6 +3425,17 @@ export default function SettingsPage() {
                     mode on any registered device.
                   </p>
                 </div>
+                <button
+                  type="button"
+                  className="text-left text-sm font-medium text-[#eb6c6c] underline-offset-4 hover:underline"
+                  onClick={() => {
+                    setMerchantModeForgotPinOpen(true);
+                    setMerchantModeForgotPinMessage("");
+                    setMerchantModeForgotPinError("");
+                  }}
+                >
+                  Forgot Your Pin?
+                </button>
               </CardContent>
             </Card>
 
@@ -3394,11 +3468,6 @@ export default function SettingsPage() {
                     walletDraft.paymentWalletAddresses.length === 0
                       ? "Primary wallet fallback"
                       : `${walletDraft.paymentWalletAddresses.length} payment wallet${walletDraft.paymentWalletAddresses.length === 1 ? "" : "s"}`;
-                  const profileStatusLabel = profileDraft.saving
-                    ? "Saving profile"
-                    : profileDraft.success
-                      ? "Profile saved"
-                      : "Profile";
                   const routingStatusLabel = walletDraft.saving
                     ? "Saving routing"
                     : walletDraft.success
@@ -3444,9 +3513,6 @@ export default function SettingsPage() {
                               </div>
                               <div className="flex flex-wrap gap-2">
                                 <span className="rounded-full border px-3 py-1 text-xs text-muted-foreground">
-                                  {profileStatusLabel}
-                                </span>
-                                <span className="rounded-full border px-3 py-1 text-xs text-muted-foreground">
                                   {routingStatusLabel}
                                 </span>
                                 <span className="rounded-full border px-3 py-1 text-xs text-muted-foreground">
@@ -3462,7 +3528,8 @@ export default function SettingsPage() {
 
                         <CollapsibleContent>
                           <CardContent className="space-y-6 pt-0">
-                            <div className="grid gap-6 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
+                            <div className="space-y-4">
+                              {false ? (
                               <div className="space-y-4 rounded-xl border bg-background/70 p-4">
                                 <div className="space-y-1">
                                   <h3 className="text-sm font-semibold text-black dark:text-white">
@@ -3705,6 +3772,7 @@ export default function SettingsPage() {
                                   )}
                                 </Button>
                               </div>
+                              ) : null}
 
                               <div className="space-y-4">
                                 <div className="grid gap-3 sm:grid-cols-2">
@@ -4894,6 +4962,64 @@ export default function SettingsPage() {
                 </>
               ) : (
                 "Confirm delete"
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={merchantModeForgotPinOpen}
+        onOpenChange={(open) => {
+          if (merchantModeForgotPinSubmitting) {
+            return;
+          }
+          setMerchantModeForgotPinOpen(open);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Forgot your PIN?</DialogTitle>
+            <DialogDescription>
+              Click here to inform Tech Support, and we will be back to you shortly.
+            </DialogDescription>
+          </DialogHeader>
+
+          {merchantModeForgotPinError ? (
+            <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300">
+              {merchantModeForgotPinError}
+            </p>
+          ) : null}
+          {merchantModeForgotPinMessage ? (
+            <p className="rounded-lg border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-700 dark:border-green-900/60 dark:bg-green-950/30 dark:text-green-300">
+              {merchantModeForgotPinMessage}
+            </p>
+          ) : null}
+
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={merchantModeForgotPinSubmitting}
+              onClick={() => setMerchantModeForgotPinOpen(false)}
+            >
+              Close
+            </Button>
+            <Button
+              type="button"
+              className="bg-[#eb6c6c] hover:bg-[#d55c5c]"
+              disabled={merchantModeForgotPinSubmitting}
+              onClick={() => {
+                void handleRequestMerchantModePinHelp();
+              }}
+            >
+              {merchantModeForgotPinSubmitting ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Informing Tech Support...
+                </>
+              ) : (
+                "Inform Tech Support"
               )}
             </Button>
           </DialogFooter>

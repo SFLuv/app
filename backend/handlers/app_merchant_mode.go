@@ -3,8 +3,10 @@ package handlers
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/SFLuv/app/backend/db"
 	"github.com/SFLuv/app/backend/structs"
@@ -96,6 +98,62 @@ func (a *AppService) SetMerchantModePIN(w http.ResponseWriter, r *http.Request) 
 	}
 	w.WriteHeader(http.StatusOK)
 	w.Write(jsonBytes)
+}
+
+func (a *AppService) RequestMerchantModePINHelp(w http.ResponseWriter, r *http.Request) {
+	userDid := utils.GetDid(r)
+	if userDid == nil {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	defer r.Body.Close()
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		a.logger.Logf("error reading merchant mode PIN help body for user %s: %s", *userDid, err.Error())
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	var request structs.MerchantModeForgotPINRequest
+	if len(body) > 0 {
+		if err := json.Unmarshal(body, &request); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+	}
+
+	emailSender := utils.NewEmailSender()
+	if emailSender == nil {
+		a.logger.Logf("merchant mode PIN help requested by %s, but email sender is not configured", *userDid)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	contactEmail := strings.TrimSpace(request.ContactEmail)
+	details := fmt.Sprintf(`<table role="presentation" width="100%%" cellpadding="0" cellspacing="0">
+  <tr>
+    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280;">User ID</td>
+    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827; text-align:right;">%s</td>
+  </tr>
+  <tr>
+    <td style="padding:12px 0; font-size:13px; color:#6b7280;">Contact Email</td>
+    <td style="padding:12px 0; font-size:13px; color:#111827; text-align:right;">%s</td>
+  </tr>
+</table>`, utils.EscapeEmailHTML(*userDid), utils.EscapeEmailHTML(contactEmail))
+	htmlContent := utils.BuildStyledEmail(
+		"Merchant Mode PIN help requested",
+		"A merchant needs help resetting their Merchant Mode PIN.",
+		details,
+	)
+
+	if err := emailSender.SendEmail("techsupport@sfluv.org", "Tech Support", "Merchant Mode PIN help requested", htmlContent, utils.NotificationFromEmail(), "SFLuv Support"); err != nil {
+		a.logger.Logf("error sending merchant mode PIN help email for user %s: %s", *userDid, err.Error())
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (a *AppService) ListMerchantModeDevices(w http.ResponseWriter, r *http.Request) {

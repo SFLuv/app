@@ -26,6 +26,10 @@ type MerchantModeStatusResponse struct {
 	Device      *MerchantModeDevice `json:"device,omitempty"`
 }
 
+type MerchantModeForgotPINRequest struct {
+	ContactEmail string `json:"contact_email,omitempty"`
+}
+
 type MerchantModeDevicesResponse struct {
 	Devices []*MerchantModeDevice `json:"devices"`
 }
