@@ -50,6 +50,40 @@ func envInt(key string, fallback int) int {
 	return parsed
 }
 
+func platformEnvSuffix(platform string) string {
+	switch platform {
+	case "ios":
+		return "IOS"
+	case "android":
+		return "ANDROID"
+	case "web":
+		return "WEB"
+	default:
+		return ""
+	}
+}
+
+func envStringForPlatform(baseKey string, platform string, fallback string) string {
+	if suffix := platformEnvSuffix(platform); suffix != "" {
+		if value := strings.TrimSpace(os.Getenv(baseKey + "_" + suffix)); value != "" {
+			return value
+		}
+	}
+	return envString(baseKey, fallback)
+}
+
+func envIntForPlatform(baseKey string, platform string, fallback int) int {
+	if suffix := platformEnvSuffix(platform); suffix != "" {
+		if value := strings.TrimSpace(os.Getenv(baseKey + "_" + suffix)); value != "" {
+			parsed, err := strconv.Atoi(value)
+			if err == nil {
+				return parsed
+			}
+		}
+	}
+	return envInt(baseKey, fallback)
+}
+
 func activeChainID() int {
 	return envInt("CHAIN_ID", defaultBerachainID)
 }
@@ -221,16 +255,16 @@ func (a *AppService) GetClientVersion(w http.ResponseWriter, r *http.Request) {
 	}
 
 	minimum := structs.ClientVersionInfo{
-		Version: envString("CLIENT_MIN_VERSION", "1.0.0"),
-		Build:   envInt("CLIENT_MIN_BUILD", 1),
+		Version: envStringForPlatform("CLIENT_MIN_VERSION", platform, "1.0.0"),
+		Build:   envIntForPlatform("CLIENT_MIN_BUILD", platform, 1),
 	}
 	recommended := structs.ClientVersionInfo{
-		Version: envString("CLIENT_RECOMMENDED_VERSION", minimum.Version),
-		Build:   envInt("CLIENT_RECOMMENDED_BUILD", minimum.Build),
+		Version: envStringForPlatform("CLIENT_RECOMMENDED_VERSION", platform, minimum.Version),
+		Build:   envIntForPlatform("CLIENT_RECOMMENDED_BUILD", platform, minimum.Build),
 	}
 	current := structs.ClientVersionInfo{
-		Version: envString("CLIENT_CURRENT_VERSION", recommended.Version),
-		Build:   envInt("CLIENT_CURRENT_BUILD", recommended.Build),
+		Version: envStringForPlatform("CLIENT_CURRENT_VERSION", platform, recommended.Version),
+		Build:   envIntForPlatform("CLIENT_CURRENT_BUILD", platform, recommended.Build),
 	}
 
 	status := "ok"
