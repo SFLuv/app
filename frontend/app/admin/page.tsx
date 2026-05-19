@@ -88,6 +88,7 @@ import { DrainFaucetModal } from "@/components/events/drain-faucet-modal"
 import { WorkflowDetailsModal } from "@/components/workflows/workflow-details-modal"
 import EventCard from "@/components/events/event-card"
 import type { W9Submission } from "@/types/w9"
+import type { UserResponse } from "@/types/server"
 
 // Mock PayPal accounts
 const mockPaypalAccounts = [
@@ -124,6 +125,48 @@ const statusToApproval = (status: ApprovalStatus): boolean | null => {
 type AdminWorkflowSeriesGroup = {
   seriesId: string
   workflows: AdminWorkflowListItem[]
+}
+
+type AdminUsersResponse = {
+  users: UserResponse[]
+  total: number
+  page: number
+  count: number
+}
+
+type AdminUserRoleFlag =
+  | "is_admin"
+  | "is_merchant"
+  | "is_organizer"
+  | "is_improver"
+  | "is_proposer"
+  | "is_voter"
+  | "is_issuer"
+  | "is_supervisor"
+  | "is_affiliate"
+
+const adminUserRoleFields: Array<{ flag: AdminUserRoleFlag; label: string }> = [
+  { flag: "is_admin", label: "Admin" },
+  { flag: "is_merchant", label: "Merchant" },
+  { flag: "is_organizer", label: "Organizer" },
+  { flag: "is_improver", label: "Improver" },
+  { flag: "is_proposer", label: "Proposer" },
+  { flag: "is_voter", label: "Voter" },
+  { flag: "is_issuer", label: "Issuer" },
+  { flag: "is_supervisor", label: "Supervisor" },
+  { flag: "is_affiliate", label: "Affiliate" },
+]
+
+const getAdminUserRoleLabels = (adminUser: UserResponse): string[] =>
+  adminUserRoleFields
+    .filter(({ flag }) => Boolean(adminUser[flag]))
+    .map(({ label }) => label)
+
+const formatAdminUserDateTime = (value?: string | null): string => {
+  if (!value) return "Not set"
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return "Not set"
+  return date.toLocaleString()
 }
 
 const maxCredentialBadgeUploadBytes = 2 * 1024 * 1024
@@ -203,6 +246,7 @@ export default function AdminPage() {
     if (!value) return false
     return [
       "events",
+      "users",
       "w9",
       "merchants",
       "affiliates",
@@ -270,6 +314,15 @@ export default function AdminPage() {
   const [faucetBalance, setFaucetBalance] = useState<string | bigint>("-")
   const [unallocatedBalance, setUnallocatedBalance] = useState<number | undefined>(undefined)
   const [activeTab, setActiveTab] = useState<string>(isValidAdminTab(tabFromQuery) ? (tabFromQuery as string) : "merchants")
+
+  // Users
+  const [adminUsers, setAdminUsers] = useState<UserResponse[]>([])
+  const [adminUsersTotal, setAdminUsersTotal] = useState<number>(0)
+  const [adminUsersPage, setAdminUsersPage] = useState<number>(readQueryNumber("users_page", 0))
+  const [adminUsersCount] = useState<number>(20)
+  const [adminUsersLoading, setAdminUsersLoading] = useState<boolean>(false)
+  const [adminUsersError, setAdminUsersError] = useState<string>("")
+  const [adminEmailExporting, setAdminEmailExporting] = useState<boolean>(false)
 
   // Events
   const [events, setEvents] = useState<Event[]>([])
@@ -574,6 +627,8 @@ export default function AdminPage() {
   const canLoadNextEventsPage = events.length >= eventsCount
   const canLoadPreviousAffiliatePage = affiliatePage > 0
   const canLoadNextAffiliatePage = affiliates.length >= 20
+  const canLoadPreviousAdminUsersPage = adminUsersPage > 0
+  const canLoadNextAdminUsersPage = (adminUsersPage + 1) * adminUsersCount < adminUsersTotal
 
   const filteredProposers = useMemo(() => {
     if (proposerStatusFilter === "all") return proposers
@@ -656,6 +711,63 @@ export default function AdminPage() {
         return bStart - aStart
       })
   }, [adminWorkflows])
+
+  const getAdminUsers = async (page = adminUsersPage) => {
+    setAdminUsersLoading(true)
+    try {
+      const params = new URLSearchParams({
+        page: String(page),
+        count: String(adminUsersCount),
+      })
+      const res = await authFetch(`/admin/users?${params}`)
+      if (!res.ok) throw new Error()
+      const data = await res.json()
+      if (Array.isArray(data)) {
+        setAdminUsers(data)
+        setAdminUsersTotal(page * adminUsersCount + data.length)
+      } else {
+        const response = data as AdminUsersResponse
+        setAdminUsers(response.users || [])
+        setAdminUsersTotal(response.total || 0)
+      }
+      setAdminUsersError("")
+    } catch {
+      setAdminUsersError("Error fetching users. Please try again later.")
+    } finally {
+      setAdminUsersLoading(false)
+    }
+  }
+
+  const exportAdminEmailList = async () => {
+    setAdminEmailExporting(true)
+    try {
+      const res = await authFetch("/admin/users/email-list.csv")
+      if (!res.ok) throw new Error()
+
+      const blob = await res.blob()
+      const url = window.URL.createObjectURL(blob)
+      const link = document.createElement("a")
+      link.href = url
+      link.download = `sfluv-email-list-${new Date().toISOString().slice(0, 10)}.csv`
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      window.URL.revokeObjectURL(url)
+
+      toast({
+        title: "Email list exported",
+        description: "The opted-in email list CSV is downloading.",
+      })
+    } catch {
+      toast({
+        title: "Export failed",
+        description: "Unable to export the email list right now.",
+        variant: "destructive",
+      })
+    } finally {
+      setAdminEmailExporting(false)
+    }
+  }
 
   const getAffiliates = async (search = affiliateSearch, page = affiliatePage) => {
     try {
@@ -1415,6 +1527,9 @@ export default function AdminPage() {
       setActiveTab(nextTab)
     }
 
+    const nextAdminUsersPage = readQueryNumber("users_page", 0)
+    if (nextAdminUsersPage !== adminUsersPage) setAdminUsersPage(nextAdminUsersPage)
+
     const nextMerchantSearch = readQueryText("merchant_search", "")
     if (nextMerchantSearch !== merchantSearch) setMerchantSearch(nextMerchantSearch)
     const nextMerchantStatus = readQueryText("merchant_status", "all")
@@ -1478,6 +1593,9 @@ export default function AdminPage() {
     const params = new URLSearchParams(searchParams.toString())
 
     params.set("tab", activeTab)
+
+    if (adminUsersPage > 0) params.set("users_page", String(adminUsersPage))
+    else params.delete("users_page")
 
     if (merchantSearch) params.set("merchant_search", merchantSearch)
     else params.delete("merchant_search")
@@ -1543,6 +1661,7 @@ export default function AdminPage() {
     }
   }, [
     activeTab,
+    adminUsersPage,
     merchantSearch,
     merchantStatusFilter,
     eventsSearch,
@@ -1604,6 +1723,9 @@ export default function AdminPage() {
       case "merchants":
         void getAuthedMapLocations()
         break
+      case "users":
+        void getAdminUsers(adminUsersPage)
+        break
       case "events":
         void getUnallocatedBalance()
         break
@@ -1638,6 +1760,7 @@ export default function AdminPage() {
   }, [
     activeTab,
     status,
+    adminUsersPage,
     affiliateSearch,
     affiliatePage,
     proposerSearch,
@@ -2289,6 +2412,9 @@ export default function AdminPage() {
             <TabsTrigger value="events" className="w-full justify-between px-3 py-2">
               <span>Events</span>
             </TabsTrigger>
+            <TabsTrigger value="users" className="w-full justify-between px-3 py-2">
+              <span>Users</span>
+            </TabsTrigger>
             <TabsTrigger value="w9" className="w-full justify-between px-3 py-2">
               <span>W9 Approvals</span>
               {pendingW9Submissions.length > 0 && (
@@ -2742,6 +2868,149 @@ export default function AdminPage() {
               </CardContent>
             </Card>
           </div>
+        </TabsContent>
+
+        <TabsContent value="users" className="space-y-6">
+          {adminUsersError && (
+            <div className="flex items-center gap-2 text-red-600 text-sm p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
+              <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+              <span>{adminUsersError}</span>
+            </div>
+          )}
+
+          <Card>
+            <CardHeader className="pb-4">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <CardTitle className="flex items-center gap-2 text-xl">
+                    <Users className="h-5 w-5" />
+                    Users
+                  </CardTitle>
+                  <CardDescription>View accounts created in SFLUV and export opted-in email contacts.</CardDescription>
+                </div>
+                <Button
+                  variant="outline"
+                  className="w-full sm:w-auto"
+                  onClick={() => void exportAdminEmailList()}
+                  disabled={adminEmailExporting}
+                >
+                  {adminEmailExporting ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Download className="h-4 w-4" />
+                  )}
+                  Export email list
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="text-sm text-muted-foreground">
+                Showing{" "}
+                {adminUsersTotal === 0
+                  ? "0"
+                  : `${adminUsersPage * adminUsersCount + 1}-${Math.min((adminUsersPage + 1) * adminUsersCount, adminUsersTotal)}`}{" "}
+                of {adminUsersTotal} users
+              </div>
+
+              {adminUsersLoading ? (
+                <div className="flex items-center justify-center gap-2 py-10 text-sm text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Loading users...
+                </div>
+              ) : adminUsers.length === 0 ? (
+                <div className="text-center py-8">
+                  <Users className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+                  <h3 className="text-lg font-medium">No Users Found</h3>
+                  <p className="text-muted-foreground">No accounts are available on this page.</p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto rounded-lg border">
+                  <table className="w-full min-w-[920px] text-sm">
+                    <thead className="bg-muted/60 text-left text-xs uppercase text-muted-foreground">
+                      <tr>
+                        <th className="px-4 py-3 font-medium">User</th>
+                        <th className="px-4 py-3 font-medium">Contact</th>
+                        <th className="px-4 py-3 font-medium">Roles</th>
+                        <th className="px-4 py-3 font-medium">Email opt-in</th>
+                        <th className="px-4 py-3 font-medium">Primary wallet</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y">
+                      {adminUsers.map((adminUser) => {
+                        const roleLabels = getAdminUserRoleLabels(adminUser)
+                        return (
+                          <tr key={adminUser.id} className="align-top">
+                            <td className="px-4 py-3">
+                              <p className="font-medium text-black dark:text-white">
+                                {adminUser.contact_name || "Unnamed user"}
+                              </p>
+                              <p className="break-all font-mono text-xs text-muted-foreground">{adminUser.id}</p>
+                            </td>
+                            <td className="px-4 py-3">
+                              <p className="break-all">{adminUser.contact_email || "No email on profile"}</p>
+                              {adminUser.contact_phone && (
+                                <p className="mt-1 text-xs text-muted-foreground">{adminUser.contact_phone}</p>
+                              )}
+                            </td>
+                            <td className="px-4 py-3">
+                              {roleLabels.length === 0 ? (
+                                <Badge variant="outline">User</Badge>
+                              ) : (
+                                <div className="flex max-w-[260px] flex-wrap gap-1">
+                                  {roleLabels.map((role) => (
+                                    <Badge key={`${adminUser.id}-${role}`} variant={role === "Admin" ? "default" : "secondary"}>
+                                      {role}
+                                    </Badge>
+                                  ))}
+                                </div>
+                              )}
+                            </td>
+                            <td className="px-4 py-3">
+                              <Badge variant={adminUser.mailing_list_opt_in ? "default" : "outline"}>
+                                {adminUser.mailing_list_opt_in ? "Opted in" : "Not opted in"}
+                              </Badge>
+                              {adminUser.mailing_list_opt_in && (
+                                <p className="mt-1 text-xs text-muted-foreground">
+                                  {formatAdminUserDateTime(adminUser.mailing_list_opt_in_at)}
+                                </p>
+                              )}
+                            </td>
+                            <td className="px-4 py-3">
+                              <p className="max-w-[260px] break-all font-mono text-xs text-muted-foreground">
+                                {adminUser.primary_wallet_address || "No primary wallet"}
+                              </p>
+                            </td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              <div className="flex items-center justify-between pt-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setAdminUsersPage((page) => Math.max(0, page - 1))}
+                  disabled={!canLoadPreviousAdminUsersPage || adminUsersLoading}
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                  Previous
+                </Button>
+                <span className="text-sm text-muted-foreground">Page {adminUsersPage + 1}</span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setAdminUsersPage((page) => page + 1)}
+                  disabled={!canLoadNextAdminUsersPage || adminUsersLoading}
+                >
+                  Next
+                  <ChevronRight className="h-4 w-4" />
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
         </TabsContent>
 
         <TabsContent value="merchants" className="space-y-6">

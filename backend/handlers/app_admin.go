@@ -1,11 +1,14 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
+	"encoding/csv"
 	"encoding/json"
 	"io"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/SFLuv/app/backend/structs"
 	"github.com/SFLuv/app/backend/utils"
@@ -40,8 +43,75 @@ func (a *AppService) GetUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	total, err := a.db.CountUsers(r.Context())
+	if err != nil {
+		a.logger.Logf("error counting users: %s", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	response := struct {
+		Users []*structs.User `json:"users"`
+		Total int             `json:"total"`
+		Page  int             `json:"page"`
+		Count int             `json:"count"`
+	}{
+		Users: users,
+		Total: total,
+		Page:  page,
+		Count: count,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(users)
+	_ = json.NewEncoder(w).Encode(response)
+}
+
+func (a *AppService) ExportUserEmailList(w http.ResponseWriter, r *http.Request) {
+	userDid := utils.GetDid(r)
+	if userDid == nil {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	if !a.IsAdmin(r.Context(), *userDid) {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	emails, err := a.db.GetMailingListEmails(r.Context())
+	if err != nil {
+		a.logger.Logf("error exporting mailing list emails: %s", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	var buf bytes.Buffer
+	writer := csv.NewWriter(&buf)
+	if err := writer.Write([]string{"email"}); err != nil {
+		a.logger.Logf("error writing mailing list csv header: %s", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	for _, email := range emails {
+		if err := writer.Write([]string{email}); err != nil {
+			a.logger.Logf("error writing mailing list csv row: %s", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+	}
+	writer.Flush()
+	if err := writer.Error(); err != nil {
+		a.logger.Logf("error flushing mailing list csv: %s", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	filename := "sfluv-email-list-" + time.Now().UTC().Format("2006-01-02") + ".csv"
+	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+	w.Header().Set("Content-Disposition", `attachment; filename="`+filename+`"`)
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(buf.Bytes())
 }
 
 func (a *AppService) UpdateUserRole(w http.ResponseWriter, r *http.Request) {

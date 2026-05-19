@@ -1,4 +1,3 @@
-const DEFAULT_CW_BASE_URL = "https://app.citizenwallet.xyz"
 const DEFAULT_CW_ALIAS = "wallet.berachain.sfluv.org"
 const DEFAULT_APP_ORIGIN = "https://app.sfluv.org"
 
@@ -8,7 +7,6 @@ const UUID_IN_TEXT_PATTERN = /[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-
 type LegacyRedeemConfig = {
   appOrigin: string
   cwAlias: string
-  cwBaseUrl: string
 }
 
 const parseLegacyRedeemConfig = (pre: string | undefined): LegacyRedeemConfig | null => {
@@ -33,7 +31,6 @@ const parseLegacyRedeemConfig = (pre: string | undefined): LegacyRedeemConfig | 
     return {
       appOrigin: pluginUrl.origin,
       cwAlias: hashParams.get("alias") || DEFAULT_CW_ALIAS,
-      cwBaseUrl: `${deepLinkUrl.origin}${deepLinkUrl.pathname}`.replace(/\/+$/, ""),
     }
   } catch {
     return null
@@ -78,16 +75,13 @@ export const buildEventRedeemQrValue = (code: string): string => {
   const legacyConfig = parseLegacyRedeemConfig(legacyPre)
 
   const appOrigin = legacyConfig?.appOrigin || DEFAULT_APP_ORIGIN
-  const cwAlias = legacyConfig?.cwAlias || DEFAULT_CW_ALIAS
-  const cwBaseUrl = legacyConfig?.cwBaseUrl || DEFAULT_CW_BASE_URL
 
-  // Keep the base app endpoint flow; middleware uses page=redeem for redirect.
+  // Keep the QR on the SFLUV app endpoint. Logged-out web sessions prompt for
+  // the native app, while existing app/authenticated sessions can redeem.
   const redeemQuery = new URLSearchParams()
   redeemQuery.set("code", trimmedCode)
   redeemQuery.set("page", "redeem")
-  const redeemTarget = `${appOrigin}?${redeemQuery.toString()}`
-
-  return `${cwBaseUrl}/#/?dl=plugin&alias=${encodeURIComponent(cwAlias)}&plugin=${encodeURIComponent(redeemTarget)}`
+  return `${appOrigin}?${redeemQuery.toString()}`
 }
 
 export interface MerchantSendQrParams {

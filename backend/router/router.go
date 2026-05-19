@@ -151,7 +151,8 @@ func AddUserRoutes(r *chi.Mux, s *handlers.AppService) {
 }
 
 func AddAdminRoutes(r *chi.Mux, s *handlers.AppService) {
-	r.Get("/admin/users", withActiveAuth(s.GetUsers, s))
+	r.Get("/admin/users", withAdmin(s.GetUsers, s))
+	r.Get("/admin/users/email-list.csv", withAdmin(s.ExportUserEmailList, s))
 	r.Post("/admin/users/delete-account/purge", withAdmin(s.PurgeDeletedAccountsManual, s))
 	r.Get("/admin/locations", withAdmin(s.GetAuthedLocations, s))
 	r.Put("/admin/users", withActiveAuth(s.UpdateUserRole, s))

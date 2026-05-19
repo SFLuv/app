@@ -221,6 +221,79 @@ func (a *AppDB) GetUsers(ctx context.Context, page int, count int) ([]*structs.U
 	return users, nil
 }
 
+func (a *AppDB) CountUsers(ctx context.Context) (int, error) {
+	var total int
+	err := a.db.QueryRow(ctx, `
+		SELECT
+			COUNT(*)
+		FROM
+			users
+		WHERE
+			active = TRUE;
+	`).Scan(&total)
+	if err != nil {
+		return 0, fmt.Errorf("error counting users: %s", err)
+	}
+
+	return total, nil
+}
+
+func (a *AppDB) GetMailingListEmails(ctx context.Context) ([]string, error) {
+	rows, err := a.db.Query(ctx, `
+		WITH candidate_emails AS (
+			SELECT
+				TRIM(contact_email) AS email
+			FROM
+				users
+			WHERE
+				active = TRUE
+				AND mailing_list_opt_in = TRUE
+				AND TRIM(COALESCE(contact_email, '')) <> ''
+
+			UNION ALL
+
+			SELECT
+				TRIM(ve.email) AS email
+			FROM
+				users u
+			INNER JOIN
+				user_verified_emails ve
+			ON
+				ve.user_id = u.id
+			WHERE
+				u.active = TRUE
+				AND u.mailing_list_opt_in = TRUE
+				AND ve.verified_at IS NOT NULL
+				AND TRIM(COALESCE(ve.email, '')) <> ''
+		)
+		SELECT DISTINCT ON (LOWER(email))
+			email
+		FROM
+			candidate_emails
+		ORDER BY
+			LOWER(email),
+			email;
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("error querying mailing list emails: %s", err)
+	}
+	defer rows.Close()
+
+	emails := []string{}
+	for rows.Next() {
+		var email string
+		if err := rows.Scan(&email); err != nil {
+			return nil, fmt.Errorf("error scanning mailing list email: %s", err)
+		}
+		emails = append(emails, email)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error reading mailing list emails: %s", err)
+	}
+
+	return emails, nil
+}
+
 func (a *AppDB) GetUserById(ctx context.Context, userId string) (*structs.User, error) {
 	return a.getUserById(ctx, userId, false)
 }
