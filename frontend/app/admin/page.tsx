@@ -61,6 +61,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Copy,
+  BarChart3,
 } from "lucide-react"
 import { useLocation } from "@/context/LocationProvider"
 import { AuthedLocation, UpdateLocationApprovalRequest } from "@/types/location"
@@ -86,6 +87,7 @@ import { AddEventModal } from "@/components/events/add-event-modal"
 import { EventModal } from "@/components/events/event-modal"
 import { DrainFaucetModal } from "@/components/events/drain-faucet-modal"
 import { WorkflowDetailsModal } from "@/components/workflows/workflow-details-modal"
+import { AdminAnalyticsPanel } from "@/components/admin/admin-analytics-panel"
 import EventCard from "@/components/events/event-card"
 import type { W9Submission } from "@/types/w9"
 import type { UserResponse } from "@/types/server"
@@ -247,6 +249,7 @@ export default function AdminPage() {
     return [
       "events",
       "users",
+      "analytics",
       "w9",
       "merchants",
       "affiliates",
@@ -2415,6 +2418,10 @@ export default function AdminPage() {
             <TabsTrigger value="users" className="w-full justify-between px-3 py-2">
               <span>Users</span>
             </TabsTrigger>
+            <TabsTrigger value="analytics" className="w-full justify-between px-3 py-2">
+              <span>Analytics</span>
+              <BarChart3 className="h-4 w-4 text-muted-foreground" />
+            </TabsTrigger>
             <TabsTrigger value="w9" className="w-full justify-between px-3 py-2">
               <span>W9 Approvals</span>
               {pendingW9Submissions.length > 0 && (
@@ -2480,6 +2487,10 @@ export default function AdminPage() {
           </TabsList>
 
           <div className="min-w-0">
+
+        <TabsContent value="analytics" className="space-y-6">
+          <AdminAnalyticsPanel />
+        </TabsContent>
 
         <TabsContent value="tokens" className="space-y-6">
           {/* Global Wallet Selection */}

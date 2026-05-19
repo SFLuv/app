@@ -2,7 +2,7 @@
 
 import type React from "react";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useApp } from "@/context/AppProvider";
 import PlaceAutocomplete from "@/components/merchant/google_place_finder";
@@ -48,6 +48,8 @@ import {
   Upload,
   User,
   Clock,
+  Eye,
+  EyeOff,
   XCircle,
   AlertTriangle,
 } from "lucide-react";
@@ -106,6 +108,37 @@ type MerchantLocationProfileDraft = {
   success: string;
 };
 
+type MerchantModeDevice = {
+  id: string;
+  user_id: string;
+  location_id: number;
+  location_name: string;
+  wallet_address: string;
+  display_name: string;
+  platform: string;
+  app_version: string;
+  merchant_mode_enabled: boolean;
+  enabled_at?: string | null;
+  disabled_at?: string | null;
+  last_seen_at: string;
+  created_at: string;
+  updated_at: string;
+};
+
+type MerchantModeDevicesResponse = {
+  devices: MerchantModeDevice[];
+};
+
+type MerchantModeDeviceUpdateResponse = {
+  device: MerchantModeDevice;
+};
+
+type MerchantModeStatusResponse = {
+  user_id: string;
+  is_merchant: boolean;
+  passcode_set: boolean;
+};
+
 const getLocationApplicationStatus = (
   approval?: boolean | null,
 ): LocationApplicationStatus => {
@@ -138,6 +171,18 @@ const getDeletionFallbackDate = () =>
     new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
   ) || "30 days from now";
 const ACCOUNT_RECOVERY_SUPPORT_EMAIL = "techsupport@sfluv.org";
+
+const formatMerchantModeDate = (value?: string | null) => {
+  if (!value) return "Never";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "Unknown";
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(parsed);
+};
 
 function GoogleLogo({ className = "h-5 w-5" }: { className?: string }) {
   return (
@@ -358,6 +403,49 @@ export default function SettingsPage() {
   >({});
   const [merchantPlacesReady, setMerchantPlacesReady] = useState(false);
   const [merchantPlacesLoadError, setMerchantPlacesLoadError] = useState("");
+  const [merchantModeDevices, setMerchantModeDevices] = useState<
+    MerchantModeDevice[]
+  >([]);
+  const [merchantModeDevicesLoading, setMerchantModeDevicesLoading] =
+    useState(false);
+  const [merchantModeDevicesError, setMerchantModeDevicesError] = useState("");
+  const [merchantModeDeviceActionId, setMerchantModeDeviceActionId] =
+    useState<string | null>(null);
+  const [merchantModePasscodeSet, setMerchantModePasscodeSet] = useState(false);
+  const [merchantModeStatusLoading, setMerchantModeStatusLoading] =
+    useState(false);
+  const [merchantModeCurrentPin, setMerchantModeCurrentPin] = useState("");
+  const [merchantModeNewPin, setMerchantModeNewPin] = useState("");
+  const [merchantModeCurrentPinVisible, setMerchantModeCurrentPinVisible] =
+    useState(false);
+  const [merchantModeNewPinVisible, setMerchantModeNewPinVisible] =
+    useState(false);
+  const [merchantModePinSaving, setMerchantModePinSaving] = useState(false);
+  const [merchantModePinError, setMerchantModePinError] = useState("");
+  const [merchantModePinSuccess, setMerchantModePinSuccess] = useState("");
+  const [merchantModeForgotPinOpen, setMerchantModeForgotPinOpen] =
+    useState(false);
+  const [merchantModeForgotPinSubmitting, setMerchantModeForgotPinSubmitting] =
+    useState(false);
+  const [merchantModeForgotPinMessage, setMerchantModeForgotPinMessage] =
+    useState("");
+  const [merchantModeForgotPinError, setMerchantModeForgotPinError] =
+    useState("");
+  const authFetchRef = useRef(authFetch);
+  const merchantModeDevicesCountRef = useRef(merchantModeDevices.length);
+  const merchantModePasscodeSetRef = useRef(merchantModePasscodeSet);
+
+  useEffect(() => {
+    authFetchRef.current = authFetch;
+  }, [authFetch]);
+
+  useEffect(() => {
+    merchantModeDevicesCountRef.current = merchantModeDevices.length;
+  }, [merchantModeDevices.length]);
+
+  useEffect(() => {
+    merchantModePasscodeSetRef.current = merchantModePasscodeSet;
+  }, [merchantModePasscodeSet]);
 
   const [improverRewardsSelection, setImproverRewardsSelection] = useState("");
   const [improverCustomRewardsAccount, setImproverCustomRewardsAccount] =
@@ -794,6 +882,66 @@ export default function SettingsPage() {
     }
   };
 
+  const loadMerchantModeDevices = useCallback(async () => {
+    if (status !== "authenticated" || !user?.isMerchant) {
+      setMerchantModeDevices([]);
+      return;
+    }
+
+    setMerchantModeDevicesError("");
+    try {
+      setMerchantModeDevicesLoading(
+        (current) => current || merchantModeDevicesCountRef.current === 0,
+      );
+      const res = await authFetchRef.current("/merchant-mode/devices");
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || "Unable to load merchant mode devices.");
+      }
+
+      const data = (await res.json()) as MerchantModeDevicesResponse;
+      setMerchantModeDevices(data.devices || []);
+    } catch (err) {
+      setMerchantModeDevicesError(
+        err instanceof Error
+          ? err.message
+          : "Unable to load merchant mode devices.",
+      );
+    } finally {
+      setMerchantModeDevicesLoading(false);
+    }
+  }, [status, user?.isMerchant]);
+
+  const loadMerchantModeStatus = useCallback(async () => {
+    if (status !== "authenticated" || !user?.isMerchant) {
+      setMerchantModePasscodeSet(false);
+      return;
+    }
+
+    setMerchantModePinError("");
+    try {
+      setMerchantModeStatusLoading(
+        (current) => current || !merchantModePasscodeSetRef.current,
+      );
+      const res = await authFetchRef.current("/merchant-mode/status");
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || "Unable to load merchant mode PIN status.");
+      }
+
+      const data = (await res.json()) as MerchantModeStatusResponse;
+      setMerchantModePasscodeSet(data.passcode_set === true);
+    } catch (err) {
+      setMerchantModePinError(
+        err instanceof Error
+          ? err.message
+          : "Unable to load merchant mode PIN status.",
+      );
+    } finally {
+      setMerchantModeStatusLoading(false);
+    }
+  }, [status, user?.isMerchant]);
+
   useEffect(() => {
     if (status === "authenticated") {
       void loadVerifiedEmails();
@@ -887,6 +1035,12 @@ export default function SettingsPage() {
       return nextState;
     });
   }, [approvedMerchantLocations]);
+
+  useEffect(() => {
+    if (activeTab !== "merchant") return;
+    void loadMerchantModeDevices();
+    void loadMerchantModeStatus();
+  }, [activeTab, loadMerchantModeDevices, loadMerchantModeStatus]);
 
   useEffect(() => {
     if (activeTab !== "merchant" || approvedMerchantLocations.length === 0) {
@@ -1325,6 +1479,118 @@ export default function SettingsPage() {
         [locationId]: updater(existingDraft),
       };
     });
+  };
+
+  const handleSetMerchantModeDeviceEnabled = async (
+    device: MerchantModeDevice,
+    enabled: boolean,
+  ) => {
+    if (merchantModeDeviceActionId) return;
+
+    setMerchantModeDeviceActionId(device.id);
+    setMerchantModeDevicesError("");
+
+    try {
+      const res = await authFetch(`/merchant-mode/devices/${device.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          merchant_mode_enabled: enabled,
+        }),
+      });
+
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || "Unable to update merchant mode device.");
+      }
+
+      const data = (await res.json()) as MerchantModeDeviceUpdateResponse;
+      setMerchantModeDevices((current) =>
+        current.map((entry) => (entry.id === data.device.id ? data.device : entry)),
+      );
+    } catch (err) {
+      setMerchantModeDevicesError(
+        err instanceof Error
+          ? err.message
+          : "Unable to update merchant mode device.",
+      );
+    } finally {
+      setMerchantModeDeviceActionId(null);
+    }
+  };
+
+  const handleSaveMerchantModePin = async () => {
+    const newPin = merchantModeNewPin.trim();
+    const currentPin = merchantModeCurrentPin.trim();
+
+    setMerchantModePinError("");
+    setMerchantModePinSuccess("");
+
+    if (!/^\d{6}$/.test(newPin)) {
+      setMerchantModePinError("Enter a new 6 digit PIN.");
+      return;
+    }
+    if (merchantModePasscodeSet && !/^\d{6}$/.test(currentPin)) {
+      setMerchantModePinError("Enter the current 6 digit PIN before resetting it.");
+      return;
+    }
+
+    setMerchantModePinSaving(true);
+    try {
+      const res = await authFetch("/merchant-mode/pin", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          pin: newPin,
+          current_pin: merchantModePasscodeSet ? currentPin : "",
+        }),
+      });
+
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || "Unable to save Merchant Mode PIN.");
+      }
+
+      const data = (await res.json()) as MerchantModeStatusResponse;
+      setMerchantModePasscodeSet(data.passcode_set === true);
+      setMerchantModeCurrentPin("");
+      setMerchantModeNewPin("");
+      setMerchantModePinSuccess(
+        merchantModePasscodeSet
+          ? "Merchant Mode PIN reset."
+          : "Merchant Mode PIN saved.",
+      );
+    } catch (err) {
+      setMerchantModePinError(
+        err instanceof Error ? err.message : "Unable to save Merchant Mode PIN.",
+      );
+    } finally {
+      setMerchantModePinSaving(false);
+    }
+  };
+
+  const handleRequestMerchantModePinHelp = async () => {
+    setMerchantModeForgotPinSubmitting(true);
+    setMerchantModeForgotPinError("");
+    setMerchantModeForgotPinMessage("");
+    try {
+      const res = await authFetch("/merchant-mode/pin/help", {
+        method: "POST",
+        body: JSON.stringify({
+          contact_email: user?.contact_email || "",
+        }),
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || "Unable to notify Tech Support.");
+      }
+      setMerchantModeForgotPinMessage("Tech Support has been notified.");
+    } catch (err) {
+      setMerchantModeForgotPinError(
+        err instanceof Error ? err.message : "Unable to notify Tech Support.",
+      );
+    } finally {
+      setMerchantModeForgotPinSubmitting(false);
+    }
   };
 
   const handleSaveLocationProfile = async (locationId: number) => {
@@ -3006,6 +3272,173 @@ export default function SettingsPage() {
 
         {merchantStatus !== "none" && (
           <TabsContent value="merchant" className="space-y-6">
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-black dark:text-white">
+                  Merchant Mode PIN
+                </CardTitle>
+                <CardDescription>
+                  {merchantModePasscodeSet
+                    ? "Resetting the 6 digit exit PIN requires the current PIN."
+                    : "Create a 6 digit exit PIN before enabling merchant mode on store devices."}
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {merchantModeStatusLoading ? (
+                  <div className="flex items-center gap-2 rounded-lg border px-3 py-2 text-sm text-muted-foreground">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Checking PIN status...
+                  </div>
+                ) : null}
+
+                <div
+                  className={`grid gap-4 ${
+                    merchantModePasscodeSet
+                      ? "md:grid-cols-2"
+                      : "md:grid-cols-1"
+                  }`}
+                >
+                  {merchantModePasscodeSet ? (
+                    <div className="space-y-2">
+                      <Label
+                        htmlFor="merchant-mode-current-pin"
+                        className="text-black dark:text-white"
+                      >
+                        Current PIN
+                      </Label>
+                      <div className="relative">
+                        <Input
+                          id="merchant-mode-current-pin"
+                          type={merchantModeCurrentPinVisible ? "text" : "password"}
+                          inputMode="numeric"
+                          autoComplete="off"
+                          maxLength={6}
+                          value={merchantModeCurrentPin}
+                          onChange={(event) => {
+                            setMerchantModeCurrentPin(
+                              event.target.value.replace(/\D/g, "").slice(0, 6),
+                            );
+                            setMerchantModePinError("");
+                            setMerchantModePinSuccess("");
+                          }}
+                          className="bg-secondary pr-10 text-black dark:text-white"
+                          placeholder="Current PIN"
+                        />
+                        <button
+                          type="button"
+                          className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground hover:text-[#eb6c6c]"
+                          onClick={() =>
+                            setMerchantModeCurrentPinVisible((current) => !current)
+                          }
+                          aria-label={
+                            merchantModeCurrentPinVisible
+                              ? "Hide current PIN"
+                              : "Show current PIN"
+                          }
+                        >
+                          {merchantModeCurrentPinVisible ? (
+                            <EyeOff className="h-4 w-4" />
+                          ) : (
+                            <Eye className="h-4 w-4" />
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  <div className="space-y-2">
+                    <Label
+                      htmlFor="merchant-mode-new-pin"
+                      className="text-black dark:text-white"
+                    >
+                      New PIN
+                    </Label>
+                    <div className="relative">
+                      <Input
+                        id="merchant-mode-new-pin"
+                        type={merchantModeNewPinVisible ? "text" : "password"}
+                        inputMode="numeric"
+                        autoComplete="off"
+                        maxLength={6}
+                        value={merchantModeNewPin}
+                        onChange={(event) => {
+                          setMerchantModeNewPin(
+                            event.target.value.replace(/\D/g, "").slice(0, 6),
+                          );
+                          setMerchantModePinError("");
+                          setMerchantModePinSuccess("");
+                        }}
+                        className="bg-secondary pr-10 text-black dark:text-white"
+                        placeholder="6 digit PIN"
+                      />
+                      <button
+                        type="button"
+                        className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground hover:text-[#eb6c6c]"
+                        onClick={() =>
+                          setMerchantModeNewPinVisible((current) => !current)
+                        }
+                        aria-label={
+                          merchantModeNewPinVisible ? "Hide new PIN" : "Show new PIN"
+                        }
+                      >
+                        {merchantModeNewPinVisible ? (
+                          <EyeOff className="h-4 w-4" />
+                        ) : (
+                          <Eye className="h-4 w-4" />
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {merchantModePinError ? (
+                  <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300">
+                    {merchantModePinError}
+                  </p>
+                ) : null}
+                {merchantModePinSuccess ? (
+                  <p className="rounded-lg border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-700 dark:border-green-900/60 dark:bg-green-950/30 dark:text-green-300">
+                    {merchantModePinSuccess}
+                  </p>
+                ) : null}
+
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                  <Button
+                    type="button"
+                    className="bg-[#eb6c6c] hover:bg-[#d55c5c]"
+                    disabled={merchantModePinSaving || merchantModeStatusLoading}
+                    onClick={() => void handleSaveMerchantModePin()}
+                  >
+                    {merchantModePinSaving ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Saving...
+                      </>
+                    ) : merchantModePasscodeSet ? (
+                      "Reset PIN"
+                    ) : (
+                      "Save PIN"
+                    )}
+                  </Button>
+                  <p className="text-xs text-muted-foreground">
+                    This PIN is account scoped and is required to exit merchant
+                    mode on any registered device.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="text-left text-sm font-medium text-[#eb6c6c] underline-offset-4 hover:underline"
+                  onClick={() => {
+                    setMerchantModeForgotPinOpen(true);
+                    setMerchantModeForgotPinMessage("");
+                    setMerchantModeForgotPinError("");
+                  }}
+                >
+                  Forgot Your Pin?
+                </button>
+              </CardContent>
+            </Card>
+
             {approvedMerchantLocations.length > 0 && (
               <div className="space-y-4">
                 {approvedMerchantLocations.map((loc) => {
@@ -3035,16 +3468,14 @@ export default function SettingsPage() {
                     walletDraft.paymentWalletAddresses.length === 0
                       ? "Primary wallet fallback"
                       : `${walletDraft.paymentWalletAddresses.length} payment wallet${walletDraft.paymentWalletAddresses.length === 1 ? "" : "s"}`;
-                  const profileStatusLabel = profileDraft.saving
-                    ? "Saving profile"
-                    : profileDraft.success
-                      ? "Profile saved"
-                      : "Profile";
                   const routingStatusLabel = walletDraft.saving
                     ? "Saving routing"
                     : walletDraft.success
                       ? "Routing saved"
                       : "Routing";
+                  const locationMerchantModeDevices = merchantModeDevices.filter(
+                    (device) => Number(device.location_id) === Number(loc.id),
+                  );
 
                   return (
                     <Collapsible
@@ -3082,9 +3513,6 @@ export default function SettingsPage() {
                               </div>
                               <div className="flex flex-wrap gap-2">
                                 <span className="rounded-full border px-3 py-1 text-xs text-muted-foreground">
-                                  {profileStatusLabel}
-                                </span>
-                                <span className="rounded-full border px-3 py-1 text-xs text-muted-foreground">
                                   {routingStatusLabel}
                                 </span>
                                 <span className="rounded-full border px-3 py-1 text-xs text-muted-foreground">
@@ -3100,7 +3528,8 @@ export default function SettingsPage() {
 
                         <CollapsibleContent>
                           <CardContent className="space-y-6 pt-0">
-                            <div className="grid gap-6 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
+                            <div className="space-y-4">
+                              {false ? (
                               <div className="space-y-4 rounded-xl border bg-background/70 p-4">
                                 <div className="space-y-1">
                                   <h3 className="text-sm font-semibold text-black dark:text-white">
@@ -3173,7 +3602,10 @@ export default function SettingsPage() {
                                         setBusinessPhone={(value) =>
                                           updateLocationProfileDraft(loc.id, (current) => ({
                                             ...current,
-                                            phone: value,
+                                            phone:
+                                              typeof value === "function"
+                                                ? value(current.phone)
+                                                : value,
                                             dirty: true,
                                             error: "",
                                             success: "",
@@ -3182,7 +3614,10 @@ export default function SettingsPage() {
                                         setStreet={(value) =>
                                           updateLocationProfileDraft(loc.id, (current) => ({
                                             ...current,
-                                            street: value,
+                                            street:
+                                              typeof value === "function"
+                                                ? value(current.street)
+                                                : value,
                                             dirty: true,
                                             error: "",
                                             success: "",
@@ -3337,6 +3772,7 @@ export default function SettingsPage() {
                                   )}
                                 </Button>
                               </div>
+                              ) : null}
 
                               <div className="space-y-4">
                                 <div className="grid gap-3 sm:grid-cols-2">
@@ -3368,6 +3804,152 @@ export default function SettingsPage() {
                                       <p className="mt-1 break-all font-mono text-[11px] text-muted-foreground">
                                         {formatManagedAddress(effectiveTippingWallet)}
                                       </p>
+                                    )}
+                                  </div>
+                                </div>
+
+                                <div className="rounded-xl border bg-background/70 p-4">
+                                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                                    <div className="space-y-1">
+                                      <h3 className="text-sm font-semibold text-black dark:text-white">
+                                        Merchant mode devices
+                                      </h3>
+                                      <p className="text-xs text-muted-foreground">
+                                        Control whether registered store devices are locked to
+                                        receive-only merchant mode. Turning a device on requires
+                                        a Merchant Mode PIN to be saved first.
+                                      </p>
+                                    </div>
+                                    <Button
+                                      type="button"
+                                      size="sm"
+                                      variant="outline"
+                                      onClick={() => void loadMerchantModeDevices()}
+                                      disabled={merchantModeDevicesLoading}
+                                    >
+                                      {merchantModeDevicesLoading ? (
+                                        <>
+                                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                          Refreshing
+                                        </>
+                                      ) : (
+                                        "Refresh"
+                                      )}
+                                    </Button>
+                                  </div>
+
+                                  {merchantModeDevicesError ? (
+                                    <p className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300">
+                                      {merchantModeDevicesError}
+                                    </p>
+                                  ) : null}
+
+                                  <div className="mt-4 space-y-3">
+                                    {merchantModeDevicesLoading &&
+                                    locationMerchantModeDevices.length === 0 ? (
+                                      <div className="flex items-center gap-2 rounded-lg border px-3 py-4 text-sm text-muted-foreground">
+                                        <Loader2 className="h-4 w-4 animate-spin" />
+                                        Loading devices...
+                                      </div>
+                                    ) : locationMerchantModeDevices.length === 0 ? (
+                                      <p className="rounded-lg border border-dashed px-3 py-4 text-sm text-muted-foreground">
+                                        No registered devices for this location yet. Open the
+                                        mobile app on a store device and enable merchant mode once
+                                        to register it here.
+                                      </p>
+                                    ) : (
+                                      locationMerchantModeDevices.map((device) => {
+                                        const deviceActionBusy =
+                                          merchantModeDeviceActionId === device.id;
+                                        const deviceLabel =
+                                          device.display_name ||
+                                          device.platform ||
+                                          "Store device";
+                                        const deviceMeta = [
+                                          device.platform,
+                                          device.app_version
+                                            ? `v${device.app_version}`
+                                            : "",
+                                        ]
+                                          .filter(Boolean)
+                                          .join(" · ");
+                                        return (
+                                          <div
+                                            key={device.id}
+                                            className="rounded-xl border bg-secondary/20 p-3"
+                                          >
+                                            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                                              <div className="min-w-0">
+                                                <div className="flex flex-wrap items-center gap-2">
+                                                  <p className="truncate font-medium text-black dark:text-white">
+                                                    {deviceLabel}
+                                                  </p>
+                                                  <span
+                                                    className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
+                                                      device.merchant_mode_enabled
+                                                        ? "bg-green-500/10 text-green-700 dark:text-green-300"
+                                                        : "bg-muted text-muted-foreground"
+                                                    }`}
+                                                  >
+                                                    {device.merchant_mode_enabled
+                                                      ? "Merchant mode on"
+                                                      : "Merchant mode off"}
+                                                  </span>
+                                                </div>
+                                                {deviceMeta ? (
+                                                  <p className="mt-1 text-xs text-muted-foreground">
+                                                    {deviceMeta}
+                                                  </p>
+                                                ) : null}
+                                                <p className="mt-1 text-xs text-muted-foreground">
+                                                  Last seen{" "}
+                                                  {formatMerchantModeDate(device.last_seen_at)}
+                                                </p>
+                                                {device.wallet_address ? (
+                                                  <p className="mt-1 break-all font-mono text-[11px] text-muted-foreground">
+                                                    Wallet{" "}
+                                                    {formatManagedAddress(
+                                                      device.wallet_address,
+                                                    )}
+                                                  </p>
+                                                ) : null}
+                                              </div>
+                                              <Button
+                                                type="button"
+                                                size="sm"
+                                                variant={
+                                                  device.merchant_mode_enabled
+                                                    ? "outline"
+                                                    : "default"
+                                                }
+                                                className={
+                                                  device.merchant_mode_enabled
+                                                    ? ""
+                                                    : "bg-[#eb6c6c] hover:bg-[#d55c5c]"
+                                                }
+                                                disabled={deviceActionBusy}
+                                                onClick={() =>
+                                                  void handleSetMerchantModeDeviceEnabled(
+                                                    device,
+                                                    !device.merchant_mode_enabled,
+                                                  )
+                                                }
+                                              >
+                                                {deviceActionBusy ? (
+                                                  <>
+                                                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                                    Updating
+                                                  </>
+                                                ) : device.merchant_mode_enabled ? (
+                                                  "Turn off"
+                                                ) : (
+                                                  "Turn on"
+                                                )}
+                                              </Button>
+                                            </div>
+                                          </div>
+                                        );
+                                      })
                                     )}
                                   </div>
                                 </div>
@@ -4380,6 +4962,64 @@ export default function SettingsPage() {
                 </>
               ) : (
                 "Confirm delete"
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={merchantModeForgotPinOpen}
+        onOpenChange={(open) => {
+          if (merchantModeForgotPinSubmitting) {
+            return;
+          }
+          setMerchantModeForgotPinOpen(open);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Forgot your PIN?</DialogTitle>
+            <DialogDescription>
+              Click here to inform Tech Support, and we will be back to you shortly.
+            </DialogDescription>
+          </DialogHeader>
+
+          {merchantModeForgotPinError ? (
+            <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300">
+              {merchantModeForgotPinError}
+            </p>
+          ) : null}
+          {merchantModeForgotPinMessage ? (
+            <p className="rounded-lg border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-700 dark:border-green-900/60 dark:bg-green-950/30 dark:text-green-300">
+              {merchantModeForgotPinMessage}
+            </p>
+          ) : null}
+
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={merchantModeForgotPinSubmitting}
+              onClick={() => setMerchantModeForgotPinOpen(false)}
+            >
+              Close
+            </Button>
+            <Button
+              type="button"
+              className="bg-[#eb6c6c] hover:bg-[#d55c5c]"
+              disabled={merchantModeForgotPinSubmitting}
+              onClick={() => {
+                void handleRequestMerchantModePinHelp();
+              }}
+            >
+              {merchantModeForgotPinSubmitting ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Informing Tech Support...
+                </>
+              ) : (
+                "Inform Tech Support"
               )}
             </Button>
           </DialogFooter>
