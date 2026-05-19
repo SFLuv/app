@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"math/big"
 	"net/http"
 	"os"
 	"strconv"
@@ -53,6 +54,41 @@ func activeChainID() int {
 	return envInt("CHAIN_ID", defaultBerachainID)
 }
 
+func tokenDecimalPlaces() int {
+	raw := strings.TrimSpace(os.Getenv("TOKEN_DECIMALS"))
+	if raw == "" {
+		return 18
+	}
+
+	if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 && parsed <= 36 {
+		return parsed
+	}
+
+	multiplier, ok := new(big.Int).SetString(raw, 10)
+	if !ok || multiplier.Sign() <= 0 {
+		return 18
+	}
+
+	ten := big.NewInt(10)
+	zero := big.NewInt(0)
+	one := big.NewInt(1)
+	places := 0
+	for multiplier.Cmp(one) > 0 && places <= 36 {
+		quotient := new(big.Int)
+		remainder := new(big.Int)
+		quotient.QuoRem(multiplier, ten, remainder)
+		if remainder.Cmp(zero) != 0 {
+			return 18
+		}
+		multiplier = quotient
+		places++
+	}
+	if multiplier.Cmp(one) != 0 {
+		return 18
+	}
+	return places
+}
+
 func configVersion() string {
 	return envString("CLIENT_CONFIG_VERSION", time.Now().UTC().Format("2006-01-02"))
 }
@@ -73,7 +109,7 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 func (a *AppService) GetClientConfig(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().UTC()
 	chainID := activeChainID()
-	tokenDecimals := envInt("TOKEN_DECIMALS", 18)
+	tokenDecimals := tokenDecimalPlaces()
 
 	chainName := envString("CHAIN_NAME", "Berachain")
 	nativeName := envString("NATIVE_CURRENCY_NAME", "BERA")
