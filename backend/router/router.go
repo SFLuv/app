@@ -301,6 +301,7 @@ func AddPonderRoutes(r *chi.Mux, s *handlers.AppService, p *handlers.PonderServi
 	r.Get("/transactions", p.GetTransactionHistory)
 	r.Post("/transactions/memo", withActiveAuth(p.UpsertTransactionMemo, s))
 	r.Get("/transactions/balance", withActiveAuth(p.GetBalanceAtTimestamp, s))
+	r.Get("/admin/analytics/dashboard", withAdmin(p.GetAdminAnalyticsDashboard, s))
 }
 
 func AddW9Routes(r *chi.Mux, s *handlers.AppService) {

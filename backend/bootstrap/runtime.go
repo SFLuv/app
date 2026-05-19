@@ -252,6 +252,6 @@ func NewServerHandler(ctx context.Context, pools *DBPools, appLogger *logger.Log
 	a.SetMinterService(minter)
 	StartDeletedAccountPurgeLoop(ctx, a, appLogger)
 
-	p := handlers.NewPonderService(ponderDb, appDb, appLogger)
+	p := handlers.NewPonderService(ponderDb, appDb, botDb, appLogger)
 	return router.New(s, a, p), nil
 }

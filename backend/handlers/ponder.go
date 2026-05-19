@@ -8,13 +8,15 @@ import (
 type PonderService struct {
 	db     *db.PonderDB
 	appDB  *db.AppDB
+	botDB  *db.BotDB
 	logger *logger.LogCloser
 }
 
-func NewPonderService(db *db.PonderDB, appDB *db.AppDB, logger *logger.LogCloser) *PonderService {
+func NewPonderService(db *db.PonderDB, appDB *db.AppDB, botDB *db.BotDB, logger *logger.LogCloser) *PonderService {
 	return &PonderService{
 		db:     db,
 		appDB:  appDB,
+		botDB:  botDB,
 		logger: logger,
 	}
 }
