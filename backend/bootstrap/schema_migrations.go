@@ -497,6 +497,59 @@ var schemaMigrations = []SchemaMigration{
 			return nil
 		},
 	},
+	{
+		Version:     "1.12",
+		Description: "add merchant mode settings and device registrations",
+		Apply: func(ctx context.Context, pools *DBPools, appLogger *logger.LogCloser) error {
+			if _, err := pools.App.Exec(ctx, `
+				CREATE TABLE IF NOT EXISTS merchant_mode_settings (
+					owner_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+					pin_hash TEXT NOT NULL DEFAULT '',
+					pin_hash_version TEXT NOT NULL DEFAULT 'bcrypt:v1',
+					failed_attempt_count INTEGER NOT NULL DEFAULT 0,
+					locked_until TIMESTAMPTZ,
+					created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+					updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+				);
+
+				CREATE TABLE IF NOT EXISTS merchant_mode_devices (
+					id TEXT PRIMARY KEY,
+					owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+					location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
+					installation_id_hash TEXT NOT NULL,
+					display_name TEXT NOT NULL DEFAULT '',
+					platform TEXT NOT NULL DEFAULT '',
+					app_version TEXT NOT NULL DEFAULT '',
+					wallet_address TEXT NOT NULL DEFAULT '',
+					merchant_mode_enabled BOOLEAN NOT NULL DEFAULT false,
+					enabled_at TIMESTAMPTZ,
+					enabled_by TEXT NOT NULL DEFAULT '',
+					disabled_at TIMESTAMPTZ,
+					disabled_by TEXT NOT NULL DEFAULT '',
+					last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+					created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+					updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+					active BOOLEAN NOT NULL DEFAULT true
+				);
+
+				CREATE INDEX IF NOT EXISTS merchant_mode_devices_owner_location_idx
+					ON merchant_mode_devices(owner_id, location_id)
+					WHERE active = TRUE;
+
+				CREATE UNIQUE INDEX IF NOT EXISTS merchant_mode_devices_owner_installation_active_idx
+					ON merchant_mode_devices(owner_id, installation_id_hash)
+					WHERE active = TRUE;
+
+				CREATE INDEX IF NOT EXISTS merchant_mode_devices_location_enabled_idx
+					ON merchant_mode_devices(location_id, merchant_mode_enabled)
+					WHERE active = TRUE;
+			`); err != nil {
+				return err
+			}
+
+			return nil
+		},
+	},
 }
 
 type versionTarget struct {
