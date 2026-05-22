@@ -3,7 +3,8 @@
 import { useEffect, useMemo, useState } from "react"
 import {
   Activity,
-  ArrowDownToLine,
+  BarChart3,
+  Clipboard,
   Clock3,
   Coins,
   Download,
@@ -11,19 +12,58 @@ import {
   Repeat2,
   Store,
   Users,
+  Wallet,
   type LucideIcon,
 } from "lucide-react"
 
-import { useApp } from "@/context/AppProvider"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Badge } from "@/components/ui/badge"
+import { useApp } from "@/context/AppProvider"
 import { SFLUV_DECIMALS } from "@/lib/constants"
-import type { AdminAnalyticsResponse } from "@/types/admin-analytics"
+import type {
+  AdminAnalyticsDefinition,
+  AdminAnalyticsMetricValue,
+  AdminAnalyticsPeriod,
+  AdminAnalyticsResponse,
+  AdminAnalyticsTrendPoint,
+} from "@/types/admin-analytics"
 
 const tokenFormatter = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 })
 const decimalFormatter = new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 })
 const countFormatter = new Intl.NumberFormat("en-US")
+
+const metricIcons: Record<string, LucideIcon> = {
+  active_users: Users,
+  active_wallets: Wallet,
+  transactions: Activity,
+  transaction_volume: BarChart3,
+  rewards: Coins,
+  total_payments: Store,
+  total_sfluv_distributed: Coins,
+  usage_percentage: BarChart3,
+  unique_volunteers: Users,
+  volunteer_frequency: Repeat2,
+  repeat_business: Store,
+  value_weighted_average_time_to_spend: Clock3,
+  event_frequency: Activity,
+}
+
+const orderedMetricKeys = [
+  "active_users",
+  "active_wallets",
+  "transactions",
+  "transaction_volume",
+  "rewards",
+  "total_payments",
+  "total_sfluv_distributed",
+  "usage_percentage",
+  "unique_volunteers",
+  "volunteer_frequency",
+  "repeat_business",
+  "value_weighted_average_time_to_spend",
+  "event_frequency",
+]
 
 const weiToNumber = (value?: string): number => {
   try {
@@ -40,15 +80,32 @@ const weiToNumber = (value?: string): number => {
 const formatToken = (value?: string): string => `${tokenFormatter.format(weiToNumber(value))} SFLuv`
 const formatCount = (value?: number): string => countFormatter.format(value || 0)
 const formatPercent = (value?: number): string => `${decimalFormatter.format(value || 0)}%`
+const formatDecimal = (value?: number): string => decimalFormatter.format(value || 0)
 
 const formatDuration = (seconds?: number): string => {
   const value = seconds || 0
-  if (value <= 0) return "No usage yet"
+  if (value <= 0) return "No spend yet"
   const days = value / 86400
   if (days >= 1) return `${decimalFormatter.format(days)} days`
   const hours = value / 3600
   if (hours >= 1) return `${decimalFormatter.format(hours)} hours`
   return `${Math.max(1, Math.round(value / 60))} min`
+}
+
+const formatMetricValue = (metric?: AdminAnalyticsMetricValue): string => {
+  if (!metric) return "0"
+  if (metric.kind === "wei") return formatToken(metric.wei)
+  if (metric.kind === "count") return formatCount(metric.count)
+  if (metric.kind === "percent") return formatPercent(metric.percent)
+  if (metric.kind === "seconds") return formatDuration(metric.seconds)
+  return formatDecimal(metric.decimal)
+}
+
+const periodRange = (period: AdminAnalyticsPeriod | AdminAnalyticsTrendPoint): string => {
+  if (period.key === "all_time") return "All indexed time"
+  const start = new Date(period.start_at * 1000)
+  const end = new Date(period.end_at * 1000)
+  return `${start.toLocaleDateString()} - ${end.toLocaleDateString()}`
 }
 
 const csvEscape = (value: unknown): string => {
@@ -69,71 +126,138 @@ const downloadTextFile = (filename: string, content: string) => {
   URL.revokeObjectURL(url)
 }
 
+const metricCsvValue = (metric: AdminAnalyticsMetricValue): string | number => {
+  if (metric.kind === "wei") return weiToNumber(metric.wei)
+  if (metric.kind === "count") return metric.count || 0
+  if (metric.kind === "percent") return metric.percent || 0
+  if (metric.kind === "seconds") return metric.seconds || 0
+  return metric.decimal || 0
+}
+
 const buildAnalyticsCsv = (analytics: AdminAnalyticsResponse): string => {
   const rows: unknown[][] = [
-    ["section", "key", "label", "value", "notes"],
-    ["summary", "generated_at", "Generated At", new Date(analytics.generated_at * 1000).toISOString(), ""],
-    ["summary", "configured_paid_addresses", "Configured Paid Addresses", analytics.configured_paid_addresses.join(" "), ""],
-    ["summary", "total_active_users", "Total Active Users", analytics.summary.total_active_users, ""],
-    ["summary", "daily_active_users", "Daily Active Users", analytics.summary.daily_active_users, ""],
-    ["summary", "monthly_active_users", "Monthly Active Users", analytics.summary.monthly_active_users, ""],
-    ["summary", "monthly_transaction_volume_sfluv", "Monthly Transaction Volume", weiToNumber(analytics.summary.monthly_transaction_volume_wei), "SFLuv"],
-    ["summary", "total_distributed_sfluv", "Total Distributed", weiToNumber(analytics.summary.total_distributed_wei), "SFLuv"],
-    ["summary", "distributed_spent_at_merchants_sfluv", "Distributed Spent At Merchants", weiToNumber(analytics.summary.distributed_spent_at_merchants_wei), "SFLuv"],
-    ["summary", "token_redeemed_percent", "Redeemed Token Percent", analytics.summary.token_redeemed_percent, "%"],
-    ["summary", "average_project_cost_sfluv", "Average Community Project Cost", weiToNumber(analytics.summary.average_community_project_cost_wei), "SFLuv"],
-    ["summary", "merchant_repeat_customer_percent", "Merchant Repeat Customer Percent", analytics.summary.merchant_repeat_customer_percent, "%"],
-    ["summary", "average_seconds_to_use_distribution", "Average Seconds To Use Distribution", analytics.summary.average_seconds_to_use_distribution, ""],
-    ["summary", "volunteer_events", "Volunteer Events", analytics.summary.volunteer_events, ""],
-    ["summary", "volunteer_unique_earners", "Volunteer Unique Earners", analytics.summary.volunteer_unique_earners, ""],
-    ["summary", "volunteer_repeat_participation_rate", "Volunteer Repeat Participation Rate", analytics.summary.volunteer_repeat_participation_rate, "%"],
+    ["section", "period_key", "period_label", "metric_key", "metric_label", "value", "unit", "notes"],
+    ["summary", "", "Current", "current_circulating_sfluv", "Current Circulating SFLUV", weiToNumber(analytics.summary.current_circulating_sfluv_wei), "SFLuv", "All-time rewards minus redemptions"],
+    ["summary", "", "Generated", "generated_at", "Generated At", new Date(analytics.generated_at * 1000).toISOString(), "", ""],
+    ["summary", "", "Chain", "chain_id", "Chain ID", analytics.chain_id, "", ""],
+    ...analytics.periods.flatMap((period) =>
+      period.metrics.map((metric) => [
+        "period",
+        period.key,
+        period.label,
+        metric.metric_key,
+        metric.label,
+        metricCsvValue(metric),
+        metric.kind === "wei" ? "SFLuv" : metric.kind,
+        periodRange(period),
+      ]),
+    ),
+    ...analytics.monthly_trend.flatMap((period) =>
+      period.metrics.map((metric) => [
+        "monthly_trend",
+        period.key,
+        period.label,
+        metric.metric_key,
+        metric.label,
+        metricCsvValue(metric),
+        metric.kind === "wei" ? "SFLuv" : metric.kind,
+        periodRange(period),
+      ]),
+    ),
     [],
-    ["monthly", "key", "label", "active_users", "transaction_volume_sfluv", "distributed_sfluv", "merchant_spend_sfluv", "merchant_customer_wallets", "merchant_repeat_customer_wallets", "volunteer_events", "unique_earners", "average_project_cost_sfluv"],
-    ...analytics.monthly.map((point) => [
-      "monthly",
-      point.key,
-      point.label,
-      point.active_users,
-      weiToNumber(point.transaction_volume_wei),
-      weiToNumber(point.distributed_wei),
-      weiToNumber(point.merchant_spend_wei),
-      point.merchant_customer_wallets,
-      point.merchant_repeat_customer_wallets,
-      point.volunteer_events,
-      point.unique_earners,
-      weiToNumber(point.average_project_cost_wei),
-    ]),
+    ["definition", "", "", "key", "label", "definition", "", ""],
+    ...analytics.metric_definitions.map((definition) => ["definition", "", "", definition.key, definition.label, definition.definition, "", ""]),
     [],
-    ["daily", "key", "label", "active_users"],
-    ...analytics.daily.map((point) => ["daily", point.key, point.label, point.active_users]),
-    [],
-    ["definition", "key", "label", "definition"],
-    ...analytics.metric_definitions.map((definition) => ["definition", definition.key, definition.label, definition.definition]),
+    ["glossary", "", "", "key", "label", "definition", "", ""],
+    ...analytics.glossary.map((definition) => ["glossary", "", "", definition.key, definition.label, definition.definition, "", ""]),
   ]
 
   return rows.map((row) => row.map(csvEscape).join(",")).join("\n")
 }
 
-function MetricCard({
-  title,
-  value,
-  detail,
-  icon: Icon,
+const escapeSvg = (value: string): string =>
+  value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;")
+
+const copyMetricImage = async (title: string, value: string, detail: string) => {
+  const width = 880
+  const height = 420
+  const svg = `
+    <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
+      <rect width="100%" height="100%" rx="24" fill="#fffafa"/>
+      <rect x="24" y="24" width="${width - 48}" height="${height - 48}" rx="20" fill="#ffffff" stroke="#f1d9d6" stroke-width="3"/>
+      <text x="72" y="112" font-family="Inter, Arial, sans-serif" font-size="38" font-weight="700" fill="#252936">${escapeSvg(title)}</text>
+      <text x="72" y="230" font-family="Inter, Arial, sans-serif" font-size="72" font-weight="800" fill="#252936">${escapeSvg(value)}</text>
+      <text x="72" y="304" font-family="Inter, Arial, sans-serif" font-size="30" fill="#667085">${escapeSvg(detail)}</text>
+      <text x="72" y="358" font-family="Inter, Arial, sans-serif" font-size="22" fill="#eb6c6c">SFLuv analytics</text>
+    </svg>`
+  const image = new Image()
+  const blob = new Blob([svg], { type: "image/svg+xml;charset=utf-8" })
+  const url = URL.createObjectURL(blob)
+  image.src = url
+  await new Promise<void>((resolve, reject) => {
+    image.onload = () => resolve()
+    image.onerror = () => reject(new Error("Unable to render metric image."))
+  })
+  const canvas = document.createElement("canvas")
+  canvas.width = width
+  canvas.height = height
+  const ctx = canvas.getContext("2d")
+  if (!ctx) throw new Error("Unable to render metric image.")
+  ctx.drawImage(image, 0, 0)
+  URL.revokeObjectURL(url)
+  const png = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"))
+  if (!navigator.clipboard) {
+    return
+  }
+  if (!png || !("ClipboardItem" in window)) {
+    await navigator.clipboard.writeText(`${title}: ${value} (${detail})`)
+    return
+  }
+  await navigator.clipboard.write([new ClipboardItem({ "image/png": png })])
+}
+
+const definitionFor = (definitions: AdminAnalyticsDefinition[], key: string): string =>
+  definitions.find((definition) => definition.key === key)?.definition || ""
+
+function MetricTile({
+  metric,
+  definition,
+  periodLabel,
 }: {
-  title: string
-  value: string
-  detail: string
-  icon: LucideIcon
+  metric: AdminAnalyticsMetricValue
+  definition: string
+  periodLabel: string
 }) {
+  const Icon = metricIcons[metric.metric_key] || Activity
+  const [copied, setCopied] = useState(false)
+  const value = formatMetricValue(metric)
+  const copy = async () => {
+    try {
+      await copyMetricImage(metric.label, value, periodLabel)
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 1500)
+    } catch {
+      setCopied(false)
+    }
+  }
+
   return (
     <Card>
-      <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-        <CardTitle className="text-sm font-medium">{title}</CardTitle>
-        <Icon className="h-4 w-4 text-[#eb6c6c]" />
+      <CardHeader className="flex flex-row items-start justify-between gap-3 space-y-0 pb-3">
+        <div className="min-w-0">
+          <CardTitle className="text-sm font-medium">{metric.label}</CardTitle>
+          <CardDescription className="mt-1 line-clamp-2 text-xs">{definition}</CardDescription>
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
+          <Icon className="h-4 w-4 text-[#eb6c6c]" />
+          <Button type="button" size="icon" variant="ghost" className="h-8 w-8" onClick={copy} title="Copy metric image">
+            <Clipboard className="h-4 w-4" />
+          </Button>
+        </div>
       </CardHeader>
       <CardContent>
-        <div className="text-2xl font-semibold">{value}</div>
-        <p className="mt-1 text-xs text-muted-foreground">{detail}</p>
+        <div className="text-2xl font-semibold leading-tight">{value}</div>
+        <p className="mt-2 min-h-5 text-xs text-muted-foreground">{copied ? "Copied image to clipboard" : periodLabel}</p>
       </CardContent>
     </Card>
   )
@@ -142,6 +266,7 @@ function MetricCard({
 export function AdminAnalyticsPanel() {
   const { authFetch, status, user } = useApp()
   const [analytics, setAnalytics] = useState<AdminAnalyticsResponse | null>(null)
+  const [selectedPeriodKey, setSelectedPeriodKey] = useState("current_month")
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState("")
 
@@ -170,12 +295,13 @@ export function AdminAnalyticsPanel() {
     }
   }, [authFetch, status, user?.isAdmin])
 
-  const maxMonthlyVolume = useMemo(() => {
-    return Math.max(...(analytics?.monthly || []).map((point) => weiToNumber(point.transaction_volume_wei)), 1)
-  }, [analytics])
+  const selectedPeriod = useMemo(() => {
+    if (!analytics) return null
+    return analytics.periods.find((period) => period.key === selectedPeriodKey) || analytics.periods[0] || null
+  }, [analytics, selectedPeriodKey])
 
-  const maxDailyActive = useMemo(() => {
-    return Math.max(...(analytics?.daily || []).map((point) => point.active_users), 1)
+  const maxMonthlyVolume = useMemo(() => {
+    return Math.max(...(analytics?.monthly_trend || []).map((point) => weiToNumber(point.metrics.find((metric) => metric.metric_key === "transaction_volume")?.wei)), 1)
   }, [analytics])
 
   const exportCsv = () => {
@@ -204,12 +330,11 @@ export function AdminAnalyticsPanel() {
     )
   }
 
-  if (!analytics) return null
+  if (!analytics || !selectedPeriod) return null
 
-  const summary = analytics.summary
-  const paidAddressStatus = analytics.configured_paid_addresses.length > 0
-    ? `${analytics.configured_paid_addresses.length} paid source address${analytics.configured_paid_addresses.length === 1 ? "" : "es"} configured`
-    : "No paid source addresses configured"
+  const sortedMetrics = orderedMetricKeys
+    .map((key) => selectedPeriod.metrics.find((metric) => metric.metric_key === key))
+    .filter((metric): metric is AdminAnalyticsMetricValue => Boolean(metric))
 
   return (
     <div className="space-y-6">
@@ -220,163 +345,123 @@ export function AdminAnalyticsPanel() {
               <Activity className="h-5 w-5 text-[#eb6c6c]" />
               Analytics
             </CardTitle>
-            <CardDescription>
-              Internal reporting for financials, grant narratives, merchant activity, and volunteer participation.
-            </CardDescription>
+            <CardDescription>Glossary-based internal reporting for SFLuv circulation, rewards, payments, redemptions, and volunteering.</CardDescription>
           </div>
           <div className="flex flex-col gap-2 sm:items-end">
             <Button onClick={exportCsv}>
               <Download className="mr-2 h-4 w-4" />
               Export CSV
             </Button>
-            <Badge variant={analytics.configured_paid_addresses.length > 0 ? "secondary" : "destructive"}>
-              {paidAddressStatus}
-            </Badge>
+            <Badge variant="secondary">Chain {analytics.chain_id}</Badge>
           </div>
         </CardHeader>
       </Card>
 
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <MetricCard
-          title="Active Users"
-          value={formatCount(summary.monthly_active_users)}
-          detail={`${formatCount(summary.daily_active_users)} today, ${formatPercent(summary.monthly_active_user_change_percent)} vs prior month`}
-          icon={Users}
-        />
-        <MetricCard
-          title="Monthly Volume"
-          value={formatToken(summary.monthly_transaction_volume_wei)}
-          detail="Gross indexed SFLuv transfer volume this month"
-          icon={Coins}
-        />
-        <MetricCard
-          title="Redeemed Tokens"
-          value={formatPercent(summary.token_redeemed_percent)}
-          detail={`${formatToken(summary.token_redeemed_wei)} used, ${formatToken(summary.token_unused_wei)} still held`}
-          icon={ArrowDownToLine}
-        />
-        <MetricCard
-          title="Avg Project Cost"
-          value={formatToken(summary.average_community_project_cost_wei)}
-          detail="Completed and paid-out workflow bounty average"
-          icon={Activity}
-        />
-        <MetricCard
-          title="Merchant Customers"
-          value={formatCount(summary.merchant_customer_wallets)}
-          detail={`${formatCount(summary.merchant_repeat_customer_wallets)} repeat wallets (${formatPercent(summary.merchant_repeat_customer_percent)})`}
-          icon={Store}
-        />
-        <MetricCard
-          title="Total Distributed"
-          value={formatToken(summary.total_distributed_wei)}
-          detail={`${formatToken(summary.distributed_spent_at_merchants_wei)} spent at merchants`}
-          icon={Coins}
-        />
-        <MetricCard
-          title="Time To Use"
-          value={formatDuration(summary.average_seconds_to_use_distribution)}
-          detail="Average first outgoing transfer after distribution"
-          icon={Clock3}
-        />
-        <MetricCard
-          title="Volunteer Frequency"
-          value={formatCount(summary.volunteer_participation_count)}
-          detail={`${formatCount(summary.volunteer_repeat_earners)} repeat earners (${formatPercent(summary.volunteer_repeat_participation_rate)})`}
-          icon={Repeat2}
-        />
-      </div>
+      <Card>
+        <CardHeader className="gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <CardTitle>Current Circulating SFLUV</CardTitle>
+            <CardDescription>All-time total SFLUV distributed through rewards minus all-time redemptions.</CardDescription>
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => copyMetricImage("Current Circulating SFLUV", formatToken(analytics.summary.current_circulating_sfluv_wei), "All-time rewards minus redemptions")}
+          >
+            <Clipboard className="mr-2 h-4 w-4" />
+            Copy Image
+          </Button>
+        </CardHeader>
+        <CardContent>
+          <div className="text-4xl font-semibold tracking-normal">{formatToken(analytics.summary.current_circulating_sfluv_wei)}</div>
+        </CardContent>
+      </Card>
 
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,1.35fr)_minmax(320px,0.65fr)]">
-        <Card>
-          <CardHeader>
-            <CardTitle>Monthly Reporting Trend</CardTitle>
-            <CardDescription>Volume, merchant spend, active users, volunteer events, and unique earners.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {analytics.monthly.map((point) => {
-              const volume = weiToNumber(point.transaction_volume_wei)
-              const width = Math.max(3, Math.round((volume / maxMonthlyVolume) * 100))
-              return (
-                <div key={point.key} className="grid gap-2 md:grid-cols-[92px_minmax(0,1fr)_220px] md:items-center">
-                  <div className="text-sm font-medium">{point.label}</div>
-                  <div className="h-3 overflow-hidden rounded-full bg-secondary">
-                    <div className="h-full rounded-full bg-[#eb6c6c]" style={{ width: `${width}%` }} />
-                  </div>
-                  <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs text-muted-foreground">
-                    <span>{formatToken(point.transaction_volume_wei)}</span>
-                    <span>{formatCount(point.active_users)} active</span>
-                    <span>{formatToken(point.merchant_spend_wei)} merchants</span>
-                    <span>{formatCount(point.unique_earners)} earners</span>
-                  </div>
+      <Card>
+        <CardHeader>
+          <CardTitle>Period Metrics</CardTitle>
+          <CardDescription>Weeks run Sunday through Saturday; months and years use calendar boundaries.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-5">
+          <div className="flex flex-wrap gap-2">
+            {analytics.periods.map((period) => (
+              <Button
+                key={period.key}
+                type="button"
+                size="sm"
+                variant={period.key === selectedPeriod.key ? "default" : "outline"}
+                onClick={() => setSelectedPeriodKey(period.key)}
+              >
+                {period.label}
+              </Button>
+            ))}
+          </div>
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            {sortedMetrics.map((metric) => (
+              <MetricTile
+                key={metric.metric_key}
+                metric={metric}
+                definition={definitionFor(analytics.metric_definitions, metric.metric_key)}
+                periodLabel={periodRange(selectedPeriod)}
+              />
+            ))}
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Monthly Trend</CardTitle>
+          <CardDescription>Last 12 calendar months using the same glossary calculations.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {analytics.monthly_trend.map((point) => {
+            const transactionVolumeMetric = point.metrics.find((metric) => metric.metric_key === "transaction_volume")
+            const volume = weiToNumber(transactionVolumeMetric?.wei)
+            const rewards = formatMetricValue(point.metrics.find((metric) => metric.metric_key === "rewards"))
+            const payments = formatMetricValue(point.metrics.find((metric) => metric.metric_key === "total_payments"))
+            const volunteers = formatMetricValue(point.metrics.find((metric) => metric.metric_key === "unique_volunteers"))
+            const width = Math.max(3, Math.round((volume / maxMonthlyVolume) * 100))
+            return (
+              <div key={point.key} className="grid gap-2 md:grid-cols-[92px_minmax(0,1fr)_280px] md:items-center">
+                <div className="text-sm font-medium">{point.label}</div>
+                <div className="h-3 overflow-hidden rounded-full bg-secondary">
+                  <div className="h-full rounded-full bg-[#eb6c6c]" style={{ width: `${width}%` }} />
                 </div>
-              )
-            })}
-          </CardContent>
-        </Card>
+                <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                  <span>{formatMetricValue(transactionVolumeMetric)}</span>
+                  <span>{volunteers} volunteers</span>
+                  <span>{rewards} rewards</span>
+                  <span>{payments} payments</span>
+                </div>
+              </div>
+            )
+          })}
+        </CardContent>
+      </Card>
 
-        <Card>
-          <CardHeader>
-            <CardTitle>Daily Active Users</CardTitle>
-            <CardDescription>Last 30 days from indexed transfer activity.</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="flex h-56 items-end gap-1">
-              {analytics.daily.map((point) => {
-                const height = Math.max(4, Math.round((point.active_users / maxDailyActive) * 100))
-                return (
-                  <div key={point.key} className="flex min-w-0 flex-1 flex-col items-center gap-2">
-                    <div className="w-full rounded-t bg-[#eb6c6c]" style={{ height: `${height}%` }} title={`${point.label}: ${point.active_users}`} />
-                    <span className="hidden text-[10px] text-muted-foreground sm:block">{point.label.split(" ")[1]}</span>
-                  </div>
-                )
-              })}
-            </div>
-          </CardContent>
-        </Card>
+      <div className="grid gap-6 xl:grid-cols-2">
+        <DefinitionList title="Metric Definitions" items={analytics.metric_definitions} />
+        <DefinitionList title="Glossary" items={analytics.glossary} />
       </div>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Volunteer And Earner Averages</CardTitle>
-          <CardDescription>Event averages use bot event timing; unique earners use redemption addresses.</CardDescription>
-        </CardHeader>
-        <CardContent className="grid gap-4 md:grid-cols-3">
-          <div className="rounded-md border p-4">
-            <div className="text-sm text-muted-foreground">Events</div>
-            <div className="mt-2 text-xl font-semibold">{decimalFormatter.format(summary.average_volunteer_events_per_week)} / week</div>
-            <div className="text-sm text-muted-foreground">{decimalFormatter.format(summary.average_volunteer_events_per_month)} / month</div>
-            <div className="text-sm text-muted-foreground">{decimalFormatter.format(summary.average_volunteer_events_per_year)} / year</div>
-          </div>
-          <div className="rounded-md border p-4">
-            <div className="text-sm text-muted-foreground">Unique Earners</div>
-            <div className="mt-2 text-xl font-semibold">{decimalFormatter.format(summary.average_unique_earners_per_week)} / week</div>
-            <div className="text-sm text-muted-foreground">{decimalFormatter.format(summary.average_unique_earners_per_month)} / month</div>
-            <div className="text-sm text-muted-foreground">{decimalFormatter.format(summary.average_unique_earners_per_year)} / year</div>
-          </div>
-          <div className="rounded-md border p-4">
-            <div className="text-sm text-muted-foreground">Code Redemption</div>
-            <div className="mt-2 text-xl font-semibold">{formatPercent(summary.event_code_redemption_percent)}</div>
-            <div className="text-sm text-muted-foreground">{formatCount(summary.volunteer_events)} total events</div>
-            <div className="text-sm text-muted-foreground">{formatCount(summary.volunteer_unique_earners)} total unique earners</div>
-          </div>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Metric Definitions</CardTitle>
-          <CardDescription>Export includes these definitions so finance and grant work keeps the same assumptions.</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {analytics.metric_definitions.map((definition) => (
-            <div key={definition.key} className="rounded-md border p-3">
-              <div className="font-medium">{definition.label}</div>
-              <p className="mt-1 text-sm text-muted-foreground">{definition.definition}</p>
-            </div>
-          ))}
-        </CardContent>
-      </Card>
     </div>
+  )
+}
+
+function DefinitionList({ title, items }: { title: string; items: AdminAnalyticsDefinition[] }) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>{title}</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {items.map((definition) => (
+          <div key={definition.key} className="rounded-md border p-3">
+            <div className="font-medium">{definition.label}</div>
+            <p className="mt-1 text-sm text-muted-foreground">{definition.definition}</p>
+          </div>
+        ))}
+      </CardContent>
+    </Card>
   )
 }

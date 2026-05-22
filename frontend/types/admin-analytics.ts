@@ -1,52 +1,33 @@
 export interface AdminAnalyticsSummary {
-  total_active_users: number
-  daily_active_users: number
-  monthly_active_users: number
-  previous_monthly_active_users: number
-  monthly_active_user_change_percent: number
-  monthly_transaction_volume_wei: string
-  total_distributed_wei: string
-  distributed_spent_at_merchants_wei: string
-  token_redeemed_wei: string
-  token_unused_wei: string
-  token_redeemed_percent: number
-  average_community_project_cost_wei: string
-  merchant_customer_wallets: number
-  merchant_repeat_customer_wallets: number
-  merchant_repeat_customer_percent: number
-  average_seconds_to_use_distribution: number
-  average_volunteer_events_per_week: number
-  average_volunteer_events_per_month: number
-  average_volunteer_events_per_year: number
-  average_unique_earners_per_week: number
-  average_unique_earners_per_month: number
-  average_unique_earners_per_year: number
-  volunteer_participation_count: number
-  volunteer_unique_earners: number
-  volunteer_repeat_earners: number
-  volunteer_repeat_participation_rate: number
-  volunteer_events: number
-  event_code_redemption_percent: number
+  current_circulating_sfluv_wei: string
 }
 
-export interface AdminAnalyticsMonthlyPoint {
-  key: string
+export interface AdminAnalyticsMetricValue {
+  metric_key: string
   label: string
-  active_users: number
-  transaction_volume_wei: string
-  distributed_wei: string
-  merchant_spend_wei: string
-  merchant_customer_wallets: number
-  merchant_repeat_customer_wallets: number
-  volunteer_events: number
-  unique_earners: number
-  average_project_cost_wei: string
+  kind: "wei" | "count" | "seconds" | "percent" | "decimal"
+  wei?: string
+  count?: number
+  seconds?: number
+  percent?: number
+  decimal?: number
 }
 
-export interface AdminAnalyticsDailyPoint {
+export interface AdminAnalyticsPeriod {
   key: string
   label: string
-  active_users: number
+  unit: string
+  start_at: number
+  end_at: number
+  metrics: AdminAnalyticsMetricValue[]
+}
+
+export interface AdminAnalyticsTrendPoint {
+  key: string
+  label: string
+  start_at: number
+  end_at: number
+  metrics: AdminAnalyticsMetricValue[]
 }
 
 export interface AdminAnalyticsDefinition {
@@ -57,9 +38,10 @@ export interface AdminAnalyticsDefinition {
 
 export interface AdminAnalyticsResponse {
   generated_at: number
-  configured_paid_addresses: string[]
+  chain_id: number
   summary: AdminAnalyticsSummary
-  monthly: AdminAnalyticsMonthlyPoint[]
-  daily: AdminAnalyticsDailyPoint[]
+  periods: AdminAnalyticsPeriod[]
+  monthly_trend: AdminAnalyticsTrendPoint[]
   metric_definitions: AdminAnalyticsDefinition[]
+  glossary: AdminAnalyticsDefinition[]
 }

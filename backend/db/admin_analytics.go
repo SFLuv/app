@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/SFLuv/app/backend/structs"
 )
@@ -239,4 +240,227 @@ func (a *AppDB) GetAnalyticsWorkflowCosts(ctx context.Context) ([]*structs.Analy
 	}
 
 	return costs, nil
+}
+
+type AnalyticsWalletRoleCandidate struct {
+	Address    string
+	Role       string
+	ChainID    int64
+	UserID     string
+	LocationID int
+	Source     string
+}
+
+func (a *AppDB) SyncAnalyticsWalletRoleHistory(ctx context.Context, chainID int64, candidates []AnalyticsWalletRoleCandidate) error {
+	normalized := make([]AnalyticsWalletRoleCandidate, 0, len(candidates))
+	seen := make(map[string]struct{})
+	for _, candidate := range candidates {
+		address := strings.TrimSpace(strings.ToLower(candidate.Address))
+		role := strings.TrimSpace(strings.ToLower(candidate.Role))
+		if address == "" || role == "" || chainID == 0 {
+			continue
+		}
+		source := strings.TrimSpace(candidate.Source)
+		key := fmt.Sprintf("%s|%s|%d|%s|%d|%s", address, role, chainID, candidate.UserID, candidate.LocationID, source)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		candidate.Address = address
+		candidate.Role = role
+		candidate.ChainID = chainID
+		candidate.Source = source
+		normalized = append(normalized, candidate)
+	}
+
+	tx, err := a.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("error beginning analytics wallet role sync: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `
+		CREATE TEMP TABLE tmp_analytics_wallet_roles(
+			address TEXT NOT NULL,
+			role TEXT NOT NULL,
+			chain_id BIGINT NOT NULL,
+			user_id TEXT NOT NULL DEFAULT '',
+			location_id INTEGER NOT NULL DEFAULT 0,
+			source TEXT NOT NULL DEFAULT ''
+		) ON COMMIT DROP;
+	`); err != nil {
+		return fmt.Errorf("error creating analytics wallet role sync temp table: %w", err)
+	}
+
+	for _, candidate := range normalized {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO tmp_analytics_wallet_roles(address, role, chain_id, user_id, location_id, source)
+			VALUES($1, $2, $3, $4, $5, $6);
+		`, candidate.Address, candidate.Role, candidate.ChainID, candidate.UserID, candidate.LocationID, candidate.Source); err != nil {
+			return fmt.Errorf("error staging analytics wallet role %s %s: %w", candidate.Role, candidate.Address, err)
+		}
+	}
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE analytics_wallet_role_history h
+		SET
+			ended_at = NOW(),
+			updated_at = NOW()
+		WHERE
+			h.ended_at IS NULL
+		AND
+			(
+				h.chain_id <> $1
+				OR NOT EXISTS (
+					SELECT 1
+					FROM tmp_analytics_wallet_roles t
+					WHERE LOWER(h.address) = t.address
+					AND h.role = t.role
+					AND h.chain_id = t.chain_id
+					AND COALESCE(h.user_id, '') = t.user_id
+					AND COALESCE(h.location_id, 0) = t.location_id
+					AND h.source = t.source
+				)
+			);
+	`, chainID); err != nil {
+		return fmt.Errorf("error closing inactive analytics wallet role records: %w", err)
+	}
+
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO analytics_wallet_role_history(address, role, chain_id, user_id, location_id, source, started_at)
+		SELECT
+			t.address,
+			t.role,
+			t.chain_id,
+			NULLIF(t.user_id, ''),
+			NULLIF(t.location_id, 0),
+			t.source,
+			CASE
+				WHEN EXISTS (
+					SELECT 1
+					FROM analytics_wallet_role_history existing
+					WHERE LOWER(existing.address) = t.address
+					AND existing.role = t.role
+					AND existing.chain_id = t.chain_id
+					AND COALESCE(existing.user_id, '') = t.user_id
+					AND COALESCE(existing.location_id, 0) = t.location_id
+					AND existing.source = t.source
+				) THEN NOW()
+				ELSE TO_TIMESTAMP(0)
+			END
+		FROM
+			tmp_analytics_wallet_roles t
+		WHERE NOT EXISTS (
+			SELECT 1
+			FROM analytics_wallet_role_history h
+			WHERE h.ended_at IS NULL
+			AND LOWER(h.address) = t.address
+			AND h.role = t.role
+			AND h.chain_id = t.chain_id
+			AND COALESCE(h.user_id, '') = t.user_id
+			AND COALESCE(h.location_id, 0) = t.location_id
+			AND h.source = t.source
+		);
+	`); err != nil {
+		return fmt.Errorf("error inserting active analytics wallet role records: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("error committing analytics wallet role sync: %w", err)
+	}
+	return nil
+}
+
+func (a *AppDB) GetAnalyticsWalletRoleHistory(ctx context.Context) ([]*structs.AnalyticsWalletRoleRecord, error) {
+	rows, err := a.db.Query(ctx, `
+		SELECT
+			LOWER(address),
+			role,
+			chain_id,
+			COALESCE(user_id, ''),
+			COALESCE(location_id, 0),
+			EXTRACT(EPOCH FROM started_at)::bigint,
+			COALESCE(EXTRACT(EPOCH FROM ended_at)::bigint, 0)
+		FROM
+			analytics_wallet_role_history
+		ORDER BY
+			started_at ASC,
+			id ASC;
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("error querying analytics wallet role history: %w", err)
+	}
+	defer rows.Close()
+
+	records := make([]*structs.AnalyticsWalletRoleRecord, 0)
+	for rows.Next() {
+		var record structs.AnalyticsWalletRoleRecord
+		if err := rows.Scan(&record.Address, &record.Role, &record.ChainID, &record.UserID, &record.LocationID, &record.StartedAt, &record.EndedAt); err != nil {
+			return nil, fmt.Errorf("error scanning analytics wallet role history: %w", err)
+		}
+		records = append(records, &record)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating analytics wallet role history: %w", err)
+	}
+	return records, nil
+}
+
+func (a *AppDB) RecordAnalyticsUserActivity(ctx context.Context, userID string, platform string, observedAt time.Time) error {
+	userID = strings.TrimSpace(userID)
+	platform = strings.TrimSpace(strings.ToLower(platform))
+	if userID == "" {
+		return nil
+	}
+	if platform == "" {
+		platform = "web"
+	}
+	if observedAt.IsZero() {
+		observedAt = time.Now().UTC()
+	}
+
+	_, err := a.db.Exec(ctx, `
+		INSERT INTO analytics_user_activity(user_id, activity_date, platform, first_seen_at, last_seen_at)
+		VALUES($1, $2, $3, $4, $4)
+		ON CONFLICT(user_id, activity_date, platform)
+		DO UPDATE SET
+			last_seen_at = GREATEST(analytics_user_activity.last_seen_at, EXCLUDED.last_seen_at);
+	`, userID, observedAt.UTC().Format("2006-01-02"), platform, observedAt.UTC())
+	if err != nil {
+		return fmt.Errorf("error recording analytics user activity: %w", err)
+	}
+	return nil
+}
+
+func (a *AppDB) GetAnalyticsUserActivity(ctx context.Context, start time.Time) (map[int64]map[string]struct{}, error) {
+	rows, err := a.db.Query(ctx, `
+		SELECT
+			EXTRACT(EPOCH FROM activity_date::timestamp)::bigint AS activity_day,
+			user_id
+		FROM
+			analytics_user_activity
+		WHERE
+			activity_date >= $1::date;
+	`, start.UTC().Format("2006-01-02"))
+	if err != nil {
+		return nil, fmt.Errorf("error querying analytics user activity: %w", err)
+	}
+	defer rows.Close()
+
+	result := make(map[int64]map[string]struct{})
+	for rows.Next() {
+		var day int64
+		var userID string
+		if err := rows.Scan(&day, &userID); err != nil {
+			return nil, fmt.Errorf("error scanning analytics user activity: %w", err)
+		}
+		if result[day] == nil {
+			result[day] = make(map[string]struct{})
+		}
+		result[day][userID] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating analytics user activity: %w", err)
+	}
+	return result, nil
 }

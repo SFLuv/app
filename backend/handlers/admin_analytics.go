@@ -1,92 +1,78 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"math"
 	"math/big"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	appdb "github.com/SFLuv/app/backend/db"
 	"github.com/SFLuv/app/backend/structs"
 	"github.com/SFLuv/app/backend/utils"
 )
 
-type adminAnalyticsOwnerMeta struct {
-	UserID     string
-	IsAdmin    bool
-	IsMerchant bool
+const analyticsZeroAddress = "0x0000000000000000000000000000000000000000"
+
+type analyticsRoleSet map[string]struct{}
+
+type analyticsRoleIndex map[string][]*structs.AnalyticsWalletRoleRecord
+
+type analyticsPeriodBucket struct {
+	Key                string
+	Label              string
+	Unit               string
+	Start              time.Time
+	End                time.Time
+	AllTime            bool
+	ActiveUsers        map[string]struct{}
+	ActiveWallets      map[string]struct{}
+	Transactions       int
+	TransactionVolume  *big.Int
+	Rewards            *big.Int
+	RewardCount        int
+	Payments           *big.Int
+	PaymentPairs       map[string]map[string]int
+	Redemptions        *big.Int
+	UniqueVolunteers   map[string]struct{}
+	WeightedSpendSecs  *big.Int
+	WeightedSpendValue *big.Int
+	Events             int
 }
 
-type adminAnalyticsMonthBucket struct {
-	Key               string
-	Label             string
-	Start             time.Time
-	ActiveUsers       map[string]struct{}
-	TransactionVolume *big.Int
-	Distributed       *big.Int
-	MerchantSpend     *big.Int
-	MerchantCustomers map[string]int
-	VolunteerEvents   int
-	UniqueEarners     map[string]struct{}
-	ProjectCost       *big.Int
-	ProjectCount      int
+type analyticsPayment struct {
+	From      string
+	Timestamp uint64
 }
 
-type adminAnalyticsDayBucket struct {
-	Key         string
-	Label       string
-	ActiveUsers map[string]struct{}
+type analyticsReward struct {
+	To        string
+	Amount    *big.Int
+	Timestamp uint64
 }
 
 func (p *PonderService) GetAdminAnalyticsDashboard(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().UTC()
-	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
-	dayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	chainID := analyticsChainID()
 
-	walletOwners, err := p.appDB.GetAnalyticsWalletOwners(r.Context())
-	if err != nil {
-		p.logger.Logf("error loading analytics wallet owners: %s", err)
+	if err := p.SyncAnalyticsWalletRoleHistory(r.Context(), chainID); err != nil {
+		p.logger.Logf("error syncing analytics wallet role history: %s", err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 
-	merchantWallets, err := p.appDB.GetAnalyticsMerchantWallets(r.Context())
+	roleHistory, err := p.appDB.GetAnalyticsWalletRoleHistory(r.Context())
 	if err != nil {
-		p.logger.Logf("error loading analytics merchant wallets: %s", err)
+		p.logger.Logf("error loading analytics wallet role history: %s", err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
-
-	totalActiveUsers, err := p.appDB.GetAnalyticsActiveUserCount(r.Context())
-	if err != nil {
-		p.logger.Logf("error loading analytics active user count: %s", err)
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
-	workflowCosts, err := p.appDB.GetAnalyticsWorkflowCosts(r.Context())
-	if err != nil {
-		p.logger.Logf("error loading analytics workflow costs: %s", err)
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
-	volunteerEvents, err := p.botDB.GetAnalyticsVolunteerEvents(r.Context())
-	if err != nil {
-		p.logger.Logf("error loading analytics volunteer events: %s", err)
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
-	volunteerParticipation, err := p.botDB.GetAnalyticsVolunteerParticipationCounts(r.Context())
-	if err != nil {
-		p.logger.Logf("error loading analytics volunteer participation: %s", err)
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
+	roles := buildAnalyticsRoleIndex(roleHistory, chainID)
 
 	transfers, err := p.db.GetAnalyticsTransfersSince(r.Context(), 0)
 	if err != nil {
@@ -95,105 +81,33 @@ func (p *PonderService) GetAdminAnalyticsDashboard(w http.ResponseWriter, r *htt
 		return
 	}
 
-	ownerByAddress := make(map[string]adminAnalyticsOwnerMeta, len(walletOwners))
-	registeredNonAdminAddresses := make([]string, 0, len(walletOwners))
-	for _, row := range walletOwners {
-		if row == nil {
-			continue
-		}
-		address := normalizeAnalyticsAddress(row.Address)
-		if address == "" {
-			continue
-		}
-		meta := adminAnalyticsOwnerMeta{
-			UserID:     row.UserID,
-			IsAdmin:    row.IsAdmin,
-			IsMerchant: row.IsMerchant,
-		}
-		ownerByAddress[address] = meta
-		if !row.IsAdmin {
-			registeredNonAdminAddresses = append(registeredNonAdminAddresses, address)
-		}
-	}
-
-	merchantByAddress := make(map[string]*structs.AnalyticsMerchantWallet, len(merchantWallets))
-	for _, wallet := range merchantWallets {
-		if wallet == nil {
-			continue
-		}
-		address := normalizeAnalyticsAddress(wallet.Address)
-		if address != "" {
-			merchantByAddress[address] = wallet
-		}
-	}
-
-	paidAddresses := utils.MergeAddressLists(
-		utils.ParseAddressList(os.Getenv("PAID_ADMIN_ADDRESSES")),
-		os.Getenv("ADMIN_ADDRESS"),
-		os.Getenv("BOT_ADDRESS"),
-		os.Getenv("NEXT_PUBLIC_FAUCET_ADDRESS"),
-	)
-	paidAddressSet := analyticsSetFromList(paidAddresses)
-
-	balances, err := p.db.GetAnalyticsAddressBalances(r.Context(), registeredNonAdminAddresses)
+	events, err := p.botDB.GetAnalyticsVolunteerEvents(r.Context())
 	if err != nil {
-		p.logger.Logf("error loading analytics balances: %s", err)
+		p.logger.Logf("error loading analytics bot events: %s", err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 
-	registeredNonAdminBalance := big.NewInt(0)
-	for _, balance := range balances {
-		if balance == nil {
-			continue
-		}
-		amount := parseAnalyticsBigInt(balance.Balance)
-		if amount.Sign() > 0 {
-			registeredNonAdminBalance.Add(registeredNonAdminBalance, amount)
+	periods := analyticsReportingPeriods(now)
+	activity, err := p.appDB.GetAnalyticsUserActivity(r.Context(), time.Unix(0, 0).UTC())
+	if err != nil {
+		p.logger.Logf("error loading analytics user activity: %s", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	for day, users := range activity {
+		activityTime := time.Unix(day, 0).UTC()
+		for _, bucket := range periods {
+			if bucket.contains(activityTime) {
+				for userID := range users {
+					bucket.ActiveUsers[userID] = struct{}{}
+				}
+			}
 		}
 	}
 
-	monthlyOrder := make([]string, 0, 12)
-	monthly := make(map[string]*adminAnalyticsMonthBucket, 12)
-	for i := 11; i >= 0; i-- {
-		start := monthStart.AddDate(0, -i, 0)
-		key := start.Format("2006-01")
-		monthlyOrder = append(monthlyOrder, key)
-		monthly[key] = &adminAnalyticsMonthBucket{
-			Key:               key,
-			Label:             start.Format("Jan 2006"),
-			Start:             start,
-			ActiveUsers:       make(map[string]struct{}),
-			TransactionVolume: big.NewInt(0),
-			Distributed:       big.NewInt(0),
-			MerchantSpend:     big.NewInt(0),
-			MerchantCustomers: make(map[string]int),
-			UniqueEarners:     make(map[string]struct{}),
-			ProjectCost:       big.NewInt(0),
-		}
-	}
-
-	dailyOrder := make([]string, 0, 30)
-	daily := make(map[string]*adminAnalyticsDayBucket, 30)
-	for i := 29; i >= 0; i-- {
-		start := dayStart.AddDate(0, 0, -i)
-		key := start.Format("2006-01-02")
-		dailyOrder = append(dailyOrder, key)
-		daily[key] = &adminAnalyticsDayBucket{
-			Key:         key,
-			Label:       start.Format("Jan 2"),
-			ActiveUsers: make(map[string]struct{}),
-		}
-	}
-
-	totalDistributed := big.NewInt(0)
-	distributedSpentAtMerchants := big.NewInt(0)
-	merchantCustomers := make(map[string]int)
-	monthlyActiveNow := make(map[string]struct{})
-	monthlyActivePrevious := make(map[string]struct{})
-	dailyActiveNow := make(map[string]struct{})
-	outgoingByAddress := make(map[string][]*structs.AnalyticsTransfer)
-
+	paymentsBySender := make(map[string][]analyticsPayment)
+	rewards := make([]analyticsReward, 0)
 	for _, tx := range transfers {
 		if tx == nil {
 			continue
@@ -201,243 +115,333 @@ func (p *PonderService) GetAdminAnalyticsDashboard(w http.ResponseWriter, r *htt
 		from := normalizeAnalyticsAddress(tx.From)
 		to := normalizeAnalyticsAddress(tx.To)
 		amount := parseAnalyticsBigInt(tx.Amount)
-		if from == "" || to == "" || amount.Sign() <= 0 {
+		if from == "" || to == "" || amount.Sign() <= 0 || from == analyticsZeroAddress || to == analyticsZeroAddress {
 			continue
 		}
-
-		outgoingByAddress[from] = append(outgoingByAddress[from], tx)
 		txTime := time.Unix(int64(tx.Timestamp), 0).UTC()
+		fromRoles := roles.rolesAt(from, txTime)
+		toRoles := roles.rolesAt(to, txTime)
+		isReward := (fromRoles.has("admin") || fromRoles.has("faucet")) && toRoles.isUserWallet()
+		isPayment := fromRoles.isUserWallet() && toRoles.has("merchant")
+		isRedemption := fromRoles.has("merchant") && (toRoles.has("admin") || toRoles.has("zapper"))
 
-		monthKey := txTime.Format("2006-01")
-		month := monthly[monthKey]
-		if month != nil {
-			month.TransactionVolume.Add(month.TransactionVolume, amount)
+		if isPayment {
+			paymentsBySender[from] = append(paymentsBySender[from], analyticsPayment{From: from, Timestamp: tx.Timestamp})
+		}
+		if isReward {
+			rewards = append(rewards, analyticsReward{To: to, Amount: new(big.Int).Set(amount), Timestamp: tx.Timestamp})
 		}
 
-		addActiveAnalyticsUser(ownerByAddress, from, txTime, month, daily, monthlyActiveNow, monthlyActivePrevious, dailyActiveNow, monthStart, dayStart)
-		addActiveAnalyticsUser(ownerByAddress, to, txTime, month, daily, monthlyActiveNow, monthlyActivePrevious, dailyActiveNow, monthStart, dayStart)
-
-		if _, ok := paidAddressSet[from]; ok {
-			totalDistributed.Add(totalDistributed, amount)
-			if month != nil {
-				month.Distributed.Add(month.Distributed, amount)
-			}
-		}
-
-		merchantWallet := merchantByAddress[to]
-		if merchantWallet != nil {
-			fromMeta, fromKnown := ownerByAddress[from]
-			if fromKnown && fromMeta.UserID == merchantWallet.OwnerID {
+		for _, bucket := range periods {
+			if !bucket.contains(txTime) {
 				continue
 			}
-			if _, paid := paidAddressSet[from]; paid {
-				continue
+			bucket.Transactions++
+			bucket.TransactionVolume.Add(bucket.TransactionVolume, amount)
+			bucket.ActiveWallets[from] = struct{}{}
+			bucket.ActiveWallets[to] = struct{}{}
+			if isReward {
+				bucket.Rewards.Add(bucket.Rewards, amount)
+				bucket.RewardCount++
+				bucket.UniqueVolunteers[to] = struct{}{}
 			}
-			customerKey := from
-			if fromKnown && fromMeta.UserID != "" {
-				customerKey = fromMeta.UserID
+			if isPayment {
+				bucket.Payments.Add(bucket.Payments, amount)
+				if bucket.PaymentPairs[from] == nil {
+					bucket.PaymentPairs[from] = make(map[string]int)
+				}
+				bucket.PaymentPairs[from][to]++
 			}
-			merchantCustomers[customerKey]++
-			distributedSpentAtMerchants.Add(distributedSpentAtMerchants, amount)
-			if month != nil {
-				month.MerchantSpend.Add(month.MerchantSpend, amount)
-				month.MerchantCustomers[customerKey]++
+			if isRedemption {
+				bucket.Redemptions.Add(bucket.Redemptions, amount)
 			}
 		}
 	}
 
-	latencyTotal := int64(0)
-	latencyCount := int64(0)
-	for _, tx := range transfers {
-		if tx == nil {
-			continue
-		}
-		from := normalizeAnalyticsAddress(tx.From)
-		to := normalizeAnalyticsAddress(tx.To)
-		if _, ok := paidAddressSet[from]; !ok {
-			continue
-		}
-		for _, outgoing := range outgoingByAddress[to] {
-			if outgoing == nil || outgoing.Timestamp <= tx.Timestamp {
-				continue
-			}
-			outgoingTo := normalizeAnalyticsAddress(outgoing.To)
-			if outgoingTo == to {
-				continue
-			}
-			latencyTotal += int64(outgoing.Timestamp - tx.Timestamp)
-			latencyCount++
-			break
-		}
+	for _, list := range paymentsBySender {
+		sort.Slice(list, func(i, j int) bool { return list[i].Timestamp < list[j].Timestamp })
 	}
-
-	tokenUnused := minAnalyticsBigInt(registeredNonAdminBalance, totalDistributed)
-	tokenRedeemed := new(big.Int).Sub(new(big.Int).Set(totalDistributed), tokenUnused)
-	if tokenRedeemed.Sign() < 0 {
-		tokenRedeemed = big.NewInt(0)
-	}
-
-	totalProjectCost := big.NewInt(0)
-	projectCount := 0
-	for _, workflow := range workflowCosts {
-		if workflow == nil {
+	for _, reward := range rewards {
+		payment, ok := nextAnalyticsPayment(paymentsBySender[reward.To], reward.Timestamp)
+		if !ok {
 			continue
 		}
-		cost := parseAnalyticsBigInt(workflow.CostWei)
-		if cost.Sign() <= 0 {
+		seconds := int64(payment.Timestamp - reward.Timestamp)
+		if seconds <= 0 {
 			continue
 		}
-		totalProjectCost.Add(totalProjectCost, cost)
-		projectCount++
-		if workflow.CompletedAt > 0 {
-			completedAt := time.Unix(workflow.CompletedAt, 0).UTC()
-			if month := monthly[completedAt.Format("2006-01")]; month != nil {
-				month.ProjectCost.Add(month.ProjectCost, cost)
-				month.ProjectCount++
+		rewardTime := time.Unix(int64(reward.Timestamp), 0).UTC()
+		for _, bucket := range periods {
+			if bucket.contains(rewardTime) {
+				bucket.WeightedSpendSecs.Add(bucket.WeightedSpendSecs, new(big.Int).Mul(big.NewInt(seconds), reward.Amount))
+				bucket.WeightedSpendValue.Add(bucket.WeightedSpendValue, reward.Amount)
 			}
 		}
 	}
 
-	totalEventCodes := 0
-	totalRedeemedCodes := 0
-	eventPeriodStart := time.Time{}
-	eventPeriodEnd := time.Time{}
-	weeklyEarners := map[string]map[string]struct{}{}
-	monthlyEarners := map[string]map[string]struct{}{}
-	yearlyEarners := map[string]map[string]struct{}{}
-	for _, event := range volunteerEvents {
-		if event == nil {
-			continue
-		}
+	for _, event := range events {
 		eventTime := analyticsEventTime(event)
-		if !eventTime.IsZero() {
-			if eventPeriodStart.IsZero() || eventTime.Before(eventPeriodStart) {
-				eventPeriodStart = eventTime
-			}
-			if eventPeriodEnd.IsZero() || eventTime.After(eventPeriodEnd) {
-				eventPeriodEnd = eventTime
-			}
-			weekKey := analyticsWeekKey(eventTime)
-			monthKey := eventTime.Format("2006-01")
-			yearKey := eventTime.Format("2006")
-			if month := monthly[monthKey]; month != nil {
-				month.VolunteerEvents++
-			}
-			for _, earner := range event.EarnerAddresses {
-				address := normalizeAnalyticsAddress(earner)
-				if address == "" {
-					continue
-				}
-				analyticsAddNestedSet(weeklyEarners, weekKey, address)
-				analyticsAddNestedSet(monthlyEarners, monthKey, address)
-				analyticsAddNestedSet(yearlyEarners, yearKey, address)
-				if month := monthly[monthKey]; month != nil {
-					month.UniqueEarners[address] = struct{}{}
-				}
-			}
-		}
-		totalEventCodes += event.CodeCount
-		totalRedeemedCodes += event.RedeemedCount
-	}
-
-	repeatVolunteerEarners := 0
-	participationCount := 0
-	for _, count := range volunteerParticipation {
-		participationCount += count
-		if count > 1 {
-			repeatVolunteerEarners++
-		}
-	}
-
-	monthlyRows := make([]*structs.AdminAnalyticsMonthlyPoint, 0, len(monthlyOrder))
-	for _, key := range monthlyOrder {
-		bucket := monthly[key]
-		if bucket == nil {
+		if eventTime.IsZero() {
 			continue
 		}
-		monthlyRows = append(monthlyRows, &structs.AdminAnalyticsMonthlyPoint{
-			Key:                           bucket.Key,
-			Label:                         bucket.Label,
-			ActiveUsers:                   len(bucket.ActiveUsers),
-			TransactionVolumeWei:          analyticsBigIntString(bucket.TransactionVolume),
-			DistributedWei:                analyticsBigIntString(bucket.Distributed),
-			MerchantSpendWei:              analyticsBigIntString(bucket.MerchantSpend),
-			MerchantCustomerWallets:       len(bucket.MerchantCustomers),
-			MerchantRepeatCustomerWallets: analyticsRepeatCount(bucket.MerchantCustomers),
-			VolunteerEvents:               bucket.VolunteerEvents,
-			UniqueEarners:                 len(bucket.UniqueEarners),
-			AverageProjectCostWei:         analyticsAverage(bucket.ProjectCost, bucket.ProjectCount),
-		})
+		for _, bucket := range periods {
+			if bucket.contains(eventTime) {
+				bucket.Events++
+			}
+		}
 	}
 
-	dailyRows := make([]*structs.AdminAnalyticsDailyPoint, 0, len(dailyOrder))
-	for _, key := range dailyOrder {
-		bucket := daily[key]
-		if bucket == nil {
-			continue
-		}
-		dailyRows = append(dailyRows, &structs.AdminAnalyticsDailyPoint{
-			Key:         bucket.Key,
-			Label:       bucket.Label,
-			ActiveUsers: len(bucket.ActiveUsers),
-		})
+	periodRows := make([]*structs.AdminAnalyticsPeriod, 0, 7)
+	for _, bucket := range periods[:7] {
+		periodRows = append(periodRows, bucket.toPeriod())
+	}
+	trendRows := make([]*structs.AdminAnalyticsTrendPoint, 0, len(periods)-7)
+	for _, bucket := range periods[7:] {
+		trendRows = append(trendRows, bucket.toTrendPoint())
+	}
+
+	allTime := periods[6]
+	circulating := new(big.Int).Sub(new(big.Int).Set(allTime.Rewards), allTime.Redemptions)
+	if circulating.Sign() < 0 {
+		circulating = big.NewInt(0)
 	}
 
 	response := structs.AdminAnalyticsResponse{
-		GeneratedAt:             now.Unix(),
-		ConfiguredPaidAddresses: paidAddresses,
+		GeneratedAt: now.Unix(),
+		ChainID:     chainID,
 		Summary: structs.AdminAnalyticsSummary{
-			TotalActiveUsers:                 totalActiveUsers,
-			DailyActiveUsers:                 len(dailyActiveNow),
-			MonthlyActiveUsers:               len(monthlyActiveNow),
-			PreviousMonthlyActiveUsers:       len(monthlyActivePrevious),
-			MonthlyActiveUserChangePercent:   analyticsChangePercent(len(monthlyActiveNow), len(monthlyActivePrevious)),
-			MonthlyTransactionVolumeWei:      analyticsBigIntString(monthly[monthStart.Format("2006-01")].TransactionVolume),
-			TotalDistributedWei:              analyticsBigIntString(totalDistributed),
-			DistributedSpentAtMerchantsWei:   analyticsBigIntString(distributedSpentAtMerchants),
-			TokenRedeemedWei:                 analyticsBigIntString(tokenRedeemed),
-			TokenUnusedWei:                   analyticsBigIntString(tokenUnused),
-			TokenRedeemedPercent:             analyticsPercentage(tokenRedeemed, totalDistributed),
-			AverageCommunityProjectCostWei:   analyticsAverage(totalProjectCost, projectCount),
-			MerchantCustomerWallets:          len(merchantCustomers),
-			MerchantRepeatCustomerWallets:    analyticsRepeatCount(merchantCustomers),
-			MerchantRepeatCustomerPercent:    analyticsRatioPercent(analyticsRepeatCount(merchantCustomers), len(merchantCustomers)),
-			AverageSecondsToUseDistribution:  analyticsAverageInt64(latencyTotal, latencyCount),
-			AverageVolunteerEventsPerWeek:    analyticsAverageEvents(len(volunteerEvents), analyticsPeriodCount(eventPeriodStart, eventPeriodEnd, "week")),
-			AverageVolunteerEventsPerMonth:   analyticsAverageEvents(len(volunteerEvents), analyticsPeriodCount(eventPeriodStart, eventPeriodEnd, "month")),
-			AverageVolunteerEventsPerYear:    analyticsAverageEvents(len(volunteerEvents), analyticsPeriodCount(eventPeriodStart, eventPeriodEnd, "year")),
-			AverageUniqueEarnersPerWeek:      analyticsAverageNestedSet(weeklyEarners),
-			AverageUniqueEarnersPerMonth:     analyticsAverageNestedSet(monthlyEarners),
-			AverageUniqueEarnersPerYear:      analyticsAverageNestedSet(yearlyEarners),
-			VolunteerParticipationCount:      participationCount,
-			VolunteerUniqueEarners:           len(volunteerParticipation),
-			VolunteerRepeatEarners:           repeatVolunteerEarners,
-			VolunteerRepeatParticipationRate: analyticsRatioPercent(repeatVolunteerEarners, len(volunteerParticipation)),
-			VolunteerEvents:                  len(volunteerEvents),
-			EventCodeRedemptionPercent:       analyticsRatioPercent(totalRedeemedCodes, totalEventCodes),
+			CurrentCirculatingSFLUVWei: analyticsBigIntString(circulating),
 		},
-		Monthly:           monthlyRows,
-		Daily:             dailyRows,
-		MetricDefinitions: adminAnalyticsDefinitions(),
+		Periods:           periodRows,
+		MonthlyTrend:      trendRows,
+		MetricDefinitions: adminAnalyticsMetricDefinitions(),
+		Glossary:          adminAnalyticsGlossary(),
 	}
 
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(response)
 }
 
-func normalizeAnalyticsAddress(address string) string {
-	return strings.ToLower(strings.TrimSpace(address))
+func (p *PonderService) SyncAnalyticsWalletRoleHistory(ctx context.Context, chainID int64) error {
+	walletOwners, err := p.appDB.GetAnalyticsWalletOwners(ctx)
+	if err != nil {
+		return err
+	}
+	merchantWallets, err := p.appDB.GetAnalyticsMerchantWallets(ctx)
+	if err != nil {
+		return err
+	}
+	return p.appDB.SyncAnalyticsWalletRoleHistory(ctx, chainID, buildAnalyticsWalletRoleCandidates(chainID, walletOwners, merchantWallets))
 }
 
-func analyticsSetFromList(values []string) map[string]struct{} {
-	set := make(map[string]struct{}, len(values))
-	for _, value := range values {
-		normalized := normalizeAnalyticsAddress(value)
-		if normalized != "" {
-			set[normalized] = struct{}{}
+func (p *PonderService) SyncCurrentAnalyticsWalletRoleHistory(ctx context.Context) error {
+	return p.SyncAnalyticsWalletRoleHistory(ctx, analyticsChainID())
+}
+
+func buildAnalyticsWalletRoleCandidates(chainID int64, owners []*structs.AnalyticsWalletOwner, merchants []*structs.AnalyticsMerchantWallet) []appdb.AnalyticsWalletRoleCandidate {
+	candidates := make([]appdb.AnalyticsWalletRoleCandidate, 0)
+	appendCandidate := func(address string, role string, userID string, locationID int, source string) {
+		address = normalizeAnalyticsAddress(address)
+		if address == "" || address == analyticsZeroAddress {
+			return
+		}
+		candidates = append(candidates, appdb.AnalyticsWalletRoleCandidate{Address: address, Role: role, ChainID: chainID, UserID: userID, LocationID: locationID, Source: source})
+	}
+	for _, owner := range owners {
+		if owner == nil {
+			continue
+		}
+		if owner.IsAdmin {
+			appendCandidate(owner.Address, "admin", owner.UserID, 0, "users.is_admin")
+		}
+		if owner.IsMerchant {
+			appendCandidate(owner.Address, "merchant", owner.UserID, 0, "users.is_merchant")
 		}
 	}
-	return set
+	for _, merchant := range merchants {
+		if merchant == nil {
+			continue
+		}
+		appendCandidate(merchant.Address, "merchant", merchant.OwnerID, merchant.LocationID, "merchant_location")
+	}
+	for _, address := range utils.MergeAddressLists(utils.ParseAddressList(os.Getenv("PAID_ADMIN_ADDRESSES")), os.Getenv("ADMIN_ADDRESS")) {
+		appendCandidate(address, "admin", "", 0, "env.admin")
+	}
+	for _, address := range utils.MergeAddressLists(utils.ParseAddressList(os.Getenv("BOT_ADDRESS")), os.Getenv("FAUCET_ADDRESS"), os.Getenv("NEXT_PUBLIC_FAUCET_ADDRESS")) {
+		appendCandidate(address, "faucet", "", 0, "env.faucet")
+	}
+	for _, address := range utils.MergeAddressLists(utils.ParseAddressList(os.Getenv("ZAPPER_ADDRESS")), os.Getenv("NEXT_PUBLIC_ZAPPER_ADDRESS")) {
+		appendCandidate(address, "zapper", "", 0, "env.zapper")
+	}
+	return candidates
+}
+
+func analyticsChainID() int64 {
+	for _, key := range []string{"CHAIN_ID", "NEXT_PUBLIC_CHAIN_ID"} {
+		if value, err := strconv.ParseInt(strings.TrimSpace(os.Getenv(key)), 10, 64); err == nil && value > 0 {
+			return value
+		}
+	}
+	return 80094
+}
+
+func buildAnalyticsRoleIndex(records []*structs.AnalyticsWalletRoleRecord, chainID int64) analyticsRoleIndex {
+	index := make(analyticsRoleIndex)
+	for _, record := range records {
+		if record == nil || record.ChainID != chainID {
+			continue
+		}
+		address := normalizeAnalyticsAddress(record.Address)
+		if address == "" {
+			continue
+		}
+		index[address] = append(index[address], record)
+	}
+	return index
+}
+
+func (index analyticsRoleIndex) rolesAt(address string, at time.Time) analyticsRoleSet {
+	roles := make(analyticsRoleSet)
+	unix := at.Unix()
+	for _, record := range index[normalizeAnalyticsAddress(address)] {
+		if record == nil || record.StartedAt > unix {
+			continue
+		}
+		if record.EndedAt > 0 && record.EndedAt <= unix {
+			continue
+		}
+		roles[record.Role] = struct{}{}
+	}
+	return roles
+}
+
+func (roles analyticsRoleSet) has(role string) bool {
+	_, ok := roles[role]
+	return ok
+}
+
+func (roles analyticsRoleSet) isUserWallet() bool {
+	return !roles.has("admin") && !roles.has("merchant") && !roles.has("faucet") && !roles.has("zapper")
+}
+
+func newAnalyticsPeriod(key string, label string, unit string, start time.Time, end time.Time, allTime bool) *analyticsPeriodBucket {
+	return &analyticsPeriodBucket{
+		Key:                key,
+		Label:              label,
+		Unit:               unit,
+		Start:              start,
+		End:                end,
+		AllTime:            allTime,
+		ActiveUsers:        make(map[string]struct{}),
+		ActiveWallets:      make(map[string]struct{}),
+		TransactionVolume:  big.NewInt(0),
+		Rewards:            big.NewInt(0),
+		Payments:           big.NewInt(0),
+		PaymentPairs:       make(map[string]map[string]int),
+		Redemptions:        big.NewInt(0),
+		UniqueVolunteers:   make(map[string]struct{}),
+		WeightedSpendSecs:  big.NewInt(0),
+		WeightedSpendValue: big.NewInt(0),
+	}
+}
+
+func analyticsReportingPeriods(now time.Time) []*analyticsPeriodBucket {
+	now = now.UTC()
+	weekStart := startOfAnalyticsWeek(now)
+	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+	yearStart := time.Date(now.Year(), 1, 1, 0, 0, 0, 0, time.UTC)
+	periods := []*analyticsPeriodBucket{
+		newAnalyticsPeriod("current_week", "Current Week", "week", weekStart, weekStart.AddDate(0, 0, 7), false),
+		newAnalyticsPeriod("previous_week", "Previous Week", "week", weekStart.AddDate(0, 0, -7), weekStart, false),
+		newAnalyticsPeriod("current_month", "Current Month", "month", monthStart, monthStart.AddDate(0, 1, 0), false),
+		newAnalyticsPeriod("previous_month", "Previous Month", "month", monthStart.AddDate(0, -1, 0), monthStart, false),
+		newAnalyticsPeriod("current_year", "Current Year", "year", yearStart, yearStart.AddDate(1, 0, 0), false),
+		newAnalyticsPeriod("previous_year", "Previous Year", "year", yearStart.AddDate(-1, 0, 0), yearStart, false),
+		newAnalyticsPeriod("all_time", "All Time", "all_time", time.Unix(0, 0).UTC(), now.Add(time.Second), true),
+	}
+	for i := 11; i >= 0; i-- {
+		start := monthStart.AddDate(0, -i, 0)
+		periods = append(periods, newAnalyticsPeriod(start.Format("2006-01"), start.Format("Jan 2006"), "month", start, start.AddDate(0, 1, 0), false))
+	}
+	return periods
+}
+
+func startOfAnalyticsWeek(value time.Time) time.Time {
+	date := time.Date(value.Year(), value.Month(), value.Day(), 0, 0, 0, 0, time.UTC)
+	return date.AddDate(0, 0, -int(date.Weekday()))
+}
+
+func (bucket *analyticsPeriodBucket) contains(value time.Time) bool {
+	if bucket == nil {
+		return false
+	}
+	value = value.UTC()
+	return !value.Before(bucket.Start) && value.Before(bucket.End)
+}
+
+func (bucket *analyticsPeriodBucket) toPeriod() *structs.AdminAnalyticsPeriod {
+	return &structs.AdminAnalyticsPeriod{Key: bucket.Key, Label: bucket.Label, Unit: bucket.Unit, StartAt: bucket.Start.Unix(), EndAt: bucket.End.Unix() - 1, Metrics: bucket.metrics()}
+}
+
+func (bucket *analyticsPeriodBucket) toTrendPoint() *structs.AdminAnalyticsTrendPoint {
+	return &structs.AdminAnalyticsTrendPoint{Key: bucket.Key, Label: bucket.Label, StartAt: bucket.Start.Unix(), EndAt: bucket.End.Unix() - 1, Metrics: bucket.metrics()}
+}
+
+func (bucket *analyticsPeriodBucket) metrics() []*structs.AdminAnalyticsMetricValue {
+	return []*structs.AdminAnalyticsMetricValue{
+		{MetricKey: "active_users", Label: "Active Users", Kind: "count", Count: len(bucket.ActiveUsers)},
+		{MetricKey: "active_wallets", Label: "Active Wallets", Kind: "count", Count: len(bucket.ActiveWallets)},
+		{MetricKey: "transactions", Label: "Transactions", Kind: "count", Count: bucket.Transactions},
+		{MetricKey: "transaction_volume", Label: "Transaction Volume", Kind: "wei", Wei: analyticsBigIntString(bucket.TransactionVolume)},
+		{MetricKey: "rewards", Label: "Rewards", Kind: "wei", Wei: analyticsBigIntString(bucket.Rewards)},
+		{MetricKey: "total_payments", Label: "Total Payments", Kind: "wei", Wei: analyticsBigIntString(bucket.Payments)},
+		{MetricKey: "total_sfluv_distributed", Label: "Total SFLUV Distributed", Kind: "wei", Wei: analyticsBigIntString(bucket.Rewards)},
+		{MetricKey: "usage_percentage", Label: "Usage Percentage", Kind: "percent", Percent: analyticsRatioPercentBig(bucket.Payments, bucket.Rewards)},
+		{MetricKey: "unique_volunteers", Label: "Unique Volunteers", Kind: "count", Count: len(bucket.UniqueVolunteers)},
+		{MetricKey: "volunteer_frequency", Label: "Volunteer Frequency", Kind: "decimal", Decimal: analyticsAverageFloat(bucket.RewardCount, len(bucket.UniqueVolunteers))},
+		{MetricKey: "repeat_business", Label: "Repeat Business", Kind: "count", Count: analyticsRepeatBusiness(bucket.PaymentPairs)},
+		{MetricKey: "value_weighted_average_time_to_spend", Label: "Value-Weighted Average Time to Spend", Kind: "seconds", Seconds: analyticsWeightedAverageSeconds(bucket.WeightedSpendSecs, bucket.WeightedSpendValue)},
+		{MetricKey: "event_frequency", Label: "Event Frequency", Kind: "decimal", Decimal: float64(bucket.Events)},
+	}
+}
+
+func analyticsRepeatBusiness(pairs map[string]map[string]int) int {
+	repeat := make(map[string]struct{})
+	for userWallet, merchantCounts := range pairs {
+		for _, count := range merchantCounts {
+			if count >= 2 {
+				repeat[userWallet] = struct{}{}
+			}
+		}
+	}
+	return len(repeat)
+}
+
+func analyticsWeightedAverageSeconds(total *big.Int, value *big.Int) int64 {
+	if total == nil || value == nil || value.Sign() <= 0 {
+		return 0
+	}
+	return new(big.Int).Div(new(big.Int).Set(total), value).Int64()
+}
+
+func analyticsAverageFloat(total int, count int) float64 {
+	if total <= 0 || count <= 0 {
+		return 0
+	}
+	return math.Round((float64(total)/float64(count))*10) / 10
+}
+
+func nextAnalyticsPayment(payments []analyticsPayment, after uint64) (analyticsPayment, bool) {
+	for _, payment := range payments {
+		if payment.Timestamp > after {
+			return payment, true
+		}
+	}
+	return analyticsPayment{}, false
+}
+
+func normalizeAnalyticsAddress(address string) string {
+	return strings.ToLower(strings.TrimSpace(address))
 }
 
 func parseAnalyticsBigInt(value string) *big.Int {
@@ -455,22 +459,8 @@ func analyticsBigIntString(value *big.Int) string {
 	return value.String()
 }
 
-func analyticsAverage(total *big.Int, count int) string {
-	if total == nil || total.Sign() <= 0 || count <= 0 {
-		return "0"
-	}
-	return new(big.Int).Div(new(big.Int).Set(total), big.NewInt(int64(count))).String()
-}
-
-func analyticsPercentage(part *big.Int, total *big.Int) float64 {
-	if part == nil || total == nil || total.Sign() <= 0 {
-		return 0
-	}
-	return analyticsRatioPercentBig(part, total)
-}
-
 func analyticsRatioPercentBig(part *big.Int, total *big.Int) float64 {
-	if total == nil || total.Sign() <= 0 {
+	if part == nil || total == nil || total.Sign() <= 0 {
 		return 0
 	}
 	partFloat, _ := new(big.Float).SetInt(part).Float64()
@@ -479,86 +469,6 @@ func analyticsRatioPercentBig(part *big.Int, total *big.Int) float64 {
 		return 0
 	}
 	return math.Round((partFloat/totalFloat)*1000) / 10
-}
-
-func analyticsRatioPercent(part int, total int) float64 {
-	if part <= 0 || total <= 0 {
-		return 0
-	}
-	return math.Round((float64(part)/float64(total))*1000) / 10
-}
-
-func analyticsChangePercent(current int, previous int) float64 {
-	if previous <= 0 {
-		if current > 0 {
-			return 100
-		}
-		return 0
-	}
-	return math.Round(((float64(current-previous)/float64(previous))*100)*10) / 10
-}
-
-func analyticsAverageInt64(total int64, count int64) int64 {
-	if total <= 0 || count <= 0 {
-		return 0
-	}
-	return total / count
-}
-
-func minAnalyticsBigInt(a *big.Int, b *big.Int) *big.Int {
-	if a == nil {
-		return big.NewInt(0)
-	}
-	if b == nil {
-		return new(big.Int).Set(a)
-	}
-	if a.Cmp(b) <= 0 {
-		return new(big.Int).Set(a)
-	}
-	return new(big.Int).Set(b)
-}
-
-func addActiveAnalyticsUser(
-	ownerByAddress map[string]adminAnalyticsOwnerMeta,
-	address string,
-	txTime time.Time,
-	month *adminAnalyticsMonthBucket,
-	daily map[string]*adminAnalyticsDayBucket,
-	monthlyActiveNow map[string]struct{},
-	monthlyActivePrevious map[string]struct{},
-	dailyActiveNow map[string]struct{},
-	monthStart time.Time,
-	dayStart time.Time,
-) {
-	meta, ok := ownerByAddress[address]
-	if !ok || meta.IsAdmin || meta.UserID == "" {
-		return
-	}
-	if month != nil {
-		month.ActiveUsers[meta.UserID] = struct{}{}
-	}
-	if day := daily[txTime.Format("2006-01-02")]; day != nil {
-		day.ActiveUsers[meta.UserID] = struct{}{}
-	}
-	if !txTime.Before(monthStart) {
-		monthlyActiveNow[meta.UserID] = struct{}{}
-	}
-	if !txTime.Before(monthStart.AddDate(0, -1, 0)) && txTime.Before(monthStart) {
-		monthlyActivePrevious[meta.UserID] = struct{}{}
-	}
-	if !txTime.Before(dayStart) {
-		dailyActiveNow[meta.UserID] = struct{}{}
-	}
-}
-
-func analyticsRepeatCount(counts map[string]int) int {
-	repeat := 0
-	for _, count := range counts {
-		if count > 1 {
-			repeat++
-		}
-	}
-	return repeat
 }
 
 func analyticsEventTime(event *structs.AnalyticsVolunteerEvent) time.Time {
@@ -574,74 +484,36 @@ func analyticsEventTime(event *structs.AnalyticsVolunteerEvent) time.Time {
 	return time.Time{}
 }
 
-func analyticsWeekKey(value time.Time) string {
-	year, week := value.ISOWeek()
-	return strconv.Itoa(year) + "-W" + fmtAnalyticsTwoDigit(week)
-}
-
-func fmtAnalyticsTwoDigit(value int) string {
-	if value < 10 {
-		return "0" + strconv.Itoa(value)
-	}
-	return strconv.Itoa(value)
-}
-
-func analyticsAddNestedSet(target map[string]map[string]struct{}, key string, value string) {
-	if key == "" || value == "" {
-		return
-	}
-	set := target[key]
-	if set == nil {
-		set = make(map[string]struct{})
-		target[key] = set
-	}
-	set[value] = struct{}{}
-}
-
-func analyticsAverageNestedSet(target map[string]map[string]struct{}) float64 {
-	if len(target) == 0 {
-		return 0
-	}
-	total := 0
-	for _, set := range target {
-		total += len(set)
-	}
-	return math.Round((float64(total)/float64(len(target)))*10) / 10
-}
-
-func analyticsAverageEvents(count int, periods int) float64 {
-	if count <= 0 || periods <= 0 {
-		return 0
-	}
-	return math.Round((float64(count)/float64(periods))*10) / 10
-}
-
-func analyticsPeriodCount(start time.Time, end time.Time, unit string) int {
-	if start.IsZero() || end.IsZero() || end.Before(start) {
-		return 0
-	}
-	switch unit {
-	case "week":
-		days := end.Sub(start).Hours() / 24
-		return int(math.Floor(days/7)) + 1
-	case "month":
-		return (end.Year()-start.Year())*12 + int(end.Month()-start.Month()) + 1
-	case "year":
-		return end.Year() - start.Year() + 1
-	default:
-		return 0
-	}
-}
-
-func adminAnalyticsDefinitions() []structs.AdminAnalyticsDefinition {
+func adminAnalyticsMetricDefinitions() []structs.AdminAnalyticsDefinition {
 	return []structs.AdminAnalyticsDefinition{
-		{Key: "active_users", Label: "Active users", Definition: "Registered non-admin users with at least one indexed SFLuv transfer in the daily or monthly window."},
-		{Key: "transaction_volume", Label: "Monthly transaction volume", Definition: "Gross SFLuv transfer volume from the indexed ERC20 transfer table for the month."},
-		{Key: "redeemed_vs_unused", Label: "Redeemed vs unused", Definition: "Total distributed SFLuv from configured paid admin/faucet addresses, minus current positive registered non-admin wallet balances, capped at distributed amount."},
-		{Key: "project_cost", Label: "Community project cost", Definition: "Average bounty cost of completed or paid-out workflows using workflow total bounty, falling back to summed step bounties plus manager bounty."},
-		{Key: "merchant_traffic", Label: "Merchant traffic and repeat business", Definition: "Wallet-based proxy: unique non-admin customer wallets sending SFLuv to approved merchant wallets, plus wallets with more than one merchant payment."},
-		{Key: "distributed_spent", Label: "Distributed spent at merchants", Definition: "SFLuv sent to approved merchant wallets by non-admin wallets, excluding self-payments and direct paid-admin distributions."},
-		{Key: "time_to_use", Label: "Time to use after distribution", Definition: "Average time between a paid-admin/faucet distribution and the recipient wallet's next outgoing SFLuv transfer."},
-		{Key: "volunteer_events", Label: "Volunteer events and earners", Definition: "Bot event and redemption-code data, grouped by event start time when present, otherwise expiration time."},
+		{Key: "current_circulating_sfluv", Label: "Current Circulating SFLUV", Definition: "All-time total SFLUV distributed through rewards minus all-time redemptions."},
+		{Key: "active_users", Label: "Active Users", Definition: "Users with an observed authenticated web or mobile session in the period."},
+		{Key: "active_wallets", Label: "Active Wallets", Definition: "Wallet addresses with at least one confirmed SFLUV transfer in the period."},
+		{Key: "transactions", Label: "Transactions", Definition: "Confirmed SFLUV blockchain transfers in the period."},
+		{Key: "transaction_volume", Label: "Transaction Volume", Definition: "Aggregate SFLUV value transferred in confirmed SFLUV transfers in the period."},
+		{Key: "rewards", Label: "Rewards", Definition: "Aggregate SFLUV value sent from admin or faucet wallets to user wallets in the period."},
+		{Key: "total_payments", Label: "Total Payments", Definition: "Aggregate SFLUV value sent from user wallets to merchant wallets in the period."},
+		{Key: "total_sfluv_distributed", Label: "Total SFLUV Distributed", Definition: "Same calculation as rewards: aggregate admin/faucet to user-wallet transfers in the period."},
+		{Key: "usage_percentage", Label: "Usage Percentage", Definition: "Payments divided by rewards for the period."},
+		{Key: "unique_volunteers", Label: "Unique Volunteers", Definition: "Unique user wallets that received at least one reward in the period."},
+		{Key: "volunteer_frequency", Label: "Volunteer Frequency", Definition: "Reward count divided by unique volunteer wallets in the period."},
+		{Key: "repeat_business", Label: "Repeat Business", Definition: "User wallets that made at least two payments to the same merchant wallet in the period."},
+		{Key: "value_weighted_average_time_to_spend", Label: "Value-Weighted Average Time to Spend", Definition: "Sum of reward time to next payment multiplied by reward value, divided by aggregate reward value."},
+		{Key: "event_frequency", Label: "Event Frequency", Definition: "Bot DB events occurring in the period."},
+	}
+}
+
+func adminAnalyticsGlossary() []structs.AdminAnalyticsDefinition {
+	return []structs.AdminAnalyticsDefinition{
+		{Key: "users", Label: "Users", Definition: "An entry in the users table with one or more attached wallets. Users are platform specific."},
+		{Key: "wallets", Label: "Wallets", Definition: "Any address that has engaged with SFLUV by sending or receiving a transfer."},
+		{Key: "admin_wallet", Label: "Admin Wallet", Definition: "A wallet associated with an admin user, with historical wallet role records respected by timestamp and chain."},
+		{Key: "merchant_wallet", Label: "Merchant Wallet", Definition: "A wallet associated with a merchant user or merchant location, with historical wallet role records respected by timestamp and chain."},
+		{Key: "faucet_wallet", Label: "Faucet Wallet", Definition: "A backend-controlled payout wallet, with historical wallet role records respected by timestamp and chain."},
+		{Key: "zapper_wallet", Label: "Zapper Wallet", Definition: "The configured zapper wallet, with historical wallet role records respected by timestamp and chain."},
+		{Key: "user_wallet", Label: "User Wallet", Definition: "Any wallet not classified as admin, merchant, faucet, or zapper at the transfer timestamp."},
+		{Key: "payment", Label: "Payment", Definition: "A transfer from a user wallet to a merchant wallet."},
+		{Key: "reward", Label: "Reward", Definition: "A transfer from an admin or faucet wallet to a user wallet."},
+		{Key: "redemption", Label: "Redemption", Definition: "A transfer from a merchant wallet to an admin or zapper wallet."},
 	}
 }

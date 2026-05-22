@@ -1,6 +1,11 @@
 package handlers
 
 import (
+	"context"
+	"net/http"
+	"strings"
+	"time"
+
 	"github.com/SFLuv/app/backend/db"
 	"github.com/SFLuv/app/backend/logger"
 )
@@ -28,4 +33,21 @@ func (a *AppService) SetBotService(bot *BotService) {
 
 func (a *AppService) SetMinterService(minter *MinterService) {
 	a.minter = minter
+}
+
+func (a *AppService) RecordAnalyticsUserActivity(ctx context.Context, userID string, r *http.Request) {
+	if a == nil || a.db == nil {
+		return
+	}
+	platform := "web"
+	if r != nil {
+		if header := strings.TrimSpace(r.Header.Get("X-SFLUV-Client-Platform")); header != "" {
+			platform = header
+		} else if strings.Contains(strings.ToLower(r.UserAgent()), "mobile") {
+			platform = "mobile"
+		}
+	}
+	if err := a.db.RecordAnalyticsUserActivity(ctx, userID, platform, time.Now().UTC()); err != nil && a.logger != nil {
+		a.logger.Logf("error recording analytics user activity for %s: %s", userID, err)
+	}
 }
