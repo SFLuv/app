@@ -366,9 +366,11 @@ func requireAcceptedAuthedUser(w http.ResponseWriter, r *http.Request, s *handle
 
 func withActiveAuth(handlerFunc http.HandlerFunc, s *handlers.AppService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if _, ok := requireAcceptedAuthedUser(w, r, s); !ok {
+		id, ok := requireAcceptedAuthedUser(w, r, s)
+		if !ok {
 			return
 		}
+		s.RecordAnalyticsUserActivity(r.Context(), id, r)
 
 		handlerFunc(w, r)
 	}
@@ -399,6 +401,7 @@ func withAdmin(handlerFunc http.HandlerFunc, s *handlers.AppService) http.Handle
 			w.WriteHeader(http.StatusForbidden)
 			return
 		}
+		s.RecordAnalyticsUserActivity(r.Context(), id, r)
 
 		handlerFunc(w, r)
 	}

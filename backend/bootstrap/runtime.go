@@ -253,5 +253,8 @@ func NewServerHandler(ctx context.Context, pools *DBPools, appLogger *logger.Log
 	StartDeletedAccountPurgeLoop(ctx, a, appLogger)
 
 	p := handlers.NewPonderService(ponderDb, appDb, botDb, appLogger)
+	if err := p.SyncCurrentAnalyticsWalletRoleHistory(ctx); err != nil {
+		appLogger.Logf("error syncing analytics wallet role history during startup: %s", err)
+	}
 	return router.New(s, a, p), nil
 }

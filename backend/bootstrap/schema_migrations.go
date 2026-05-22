@@ -550,6 +550,50 @@ var schemaMigrations = []SchemaMigration{
 			return nil
 		},
 	},
+	{
+		Version:     "1.13",
+		Description: "add analytics wallet role history and user activity snapshots",
+		Apply: func(ctx context.Context, pools *DBPools, appLogger *logger.LogCloser) error {
+			if _, err := pools.App.Exec(ctx, `
+				CREATE TABLE IF NOT EXISTS analytics_wallet_role_history(
+					id BIGSERIAL PRIMARY KEY,
+					address TEXT NOT NULL,
+					role TEXT NOT NULL CHECK (role IN ('admin', 'merchant', 'faucet', 'zapper')),
+					chain_id BIGINT NOT NULL,
+					user_id TEXT,
+					location_id INTEGER,
+					source TEXT NOT NULL DEFAULT '',
+					started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+					ended_at TIMESTAMPTZ,
+					created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+					updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+				);
+
+				CREATE INDEX IF NOT EXISTS analytics_wallet_role_history_lookup_idx
+					ON analytics_wallet_role_history(LOWER(address), role, chain_id, started_at, ended_at);
+				CREATE UNIQUE INDEX IF NOT EXISTS analytics_wallet_role_history_active_idx
+					ON analytics_wallet_role_history(LOWER(address), role, chain_id, COALESCE(user_id, ''), COALESCE(location_id, 0), source)
+					WHERE ended_at IS NULL;
+
+				CREATE TABLE IF NOT EXISTS analytics_user_activity(
+					id BIGSERIAL PRIMARY KEY,
+					user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+					activity_date DATE NOT NULL,
+					platform TEXT NOT NULL DEFAULT 'web',
+					first_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+					last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+					UNIQUE(user_id, activity_date, platform)
+				);
+
+				CREATE INDEX IF NOT EXISTS analytics_user_activity_date_idx
+					ON analytics_user_activity(activity_date, user_id);
+			`); err != nil {
+				return err
+			}
+
+			return nil
+		},
+	},
 }
 
 type versionTarget struct {
