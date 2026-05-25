@@ -2,11 +2,11 @@ import { ConnectedWallet, EIP1193Provider } from "@privy-io/react-auth";
 import { BrowserProvider, JsonRpcSigner, Signer } from "ethers";
 import { toSimpleSmartAccount, ToSimpleSmartAccountReturnType } from "permissionless/accounts";
 import { Address, createPublicClient, createWalletClient, custom, encodeFunctionData, formatUnits, Hex, hexToBytes, parseUnits, PublicClient } from "viem";
-import { CHAIN, BYUSD_DECIMALS, HONEY_DECIMALS, SFLUV_DECIMALS, FACTORY, SFLUV_TOKEN, BYUSD_TOKEN, HONEY_TOKEN, ZAPPER_CONTRACT_ADDRESS } from "../constants";
 import { entryPoint07Address } from "viem/account-abstraction";
 import { Hash } from "viem";
-import { cw_bundler } from "../paymaster/client";
 import { allowance, approve, balanceOf, depositFor, hasRole, minterRole, redeemerRole, transfer, unwrapSwapAndBridge, zapIn } from "../abi";
+import type { ResolvedCommunityConfig } from "@/lib/community-config";
+import { BundlerService } from "@citizenwallet/sdk";
 
 export type WalletType = "smartwallet" | "eoa"
 
@@ -28,6 +28,12 @@ const MAX_UINT256 = (1n << 256n) - 1n
 const SMART_WALLET_DEPLOYMENT_TIMEOUT_MS = 90_000
 const SMART_WALLET_DEPLOYMENT_POLL_INTERVAL_MS = 1_500
 
+function requireConfiguredAddress(address: Address | undefined, label: string): Address {
+  if (!address) {
+    throw new Error(`${label} is not configured for this community`)
+  }
+  return address
+}
 
 export class AppWallet {
 
@@ -52,9 +58,13 @@ export class AppWallet {
   private ethersProvider?: BrowserProvider;
   private ethersSigner?: JsonRpcSigner;
   private publicClient?: PublicClient;
+  private chainConfig: ResolvedCommunityConfig;
+  private cwBundler: BundlerService;
 
-  constructor(owner: ConnectedWallet, name: string, options?: AppWalletOptions) {
+  constructor(owner: ConnectedWallet, name: string, chainConfig: ResolvedCommunityConfig, options?: AppWalletOptions) {
     this.owner = owner
+    this.chainConfig = chainConfig
+    this.cwBundler = new BundlerService(chainConfig.community)
     this.index = options?.index
     this.id = options?.id
     this.isHidden = options?.isHidden === true
@@ -65,19 +75,29 @@ export class AppWallet {
     this.initialized = false
   }
 
+  private get CHAIN() { return this.chainConfig.chain }
+  private get SFLUV_TOKEN() { return this.chainConfig.tokenAddress }
+  private get SFLUV_DECIMALS() { return this.chainConfig.tokenDecimals }
+  private get FACTORY() { return this.chainConfig.factoryAddress }
+  private get BYUSD_TOKEN() { return requireConfiguredAddress(this.chainConfig.byusdTokenAddress, "BYUSD token") }
+  private get BYUSD_DECIMALS() { return this.chainConfig.byusdDecimals ?? 6 }
+  private get HONEY_TOKEN() { return requireConfiguredAddress(this.chainConfig.honeyTokenAddress, "HONEY token") }
+  private get HONEY_DECIMALS() { return this.chainConfig.honeyDecimals ?? this.chainConfig.tokenDecimals }
+  private get ZAPPER_CONTRACT_ADDRESS() { return requireConfiguredAddress(this.chainConfig.zapperContractAddress, "Zapper contract") }
+
   async init(): Promise<boolean> {
     this.viemProvider = await this.owner.getEthereumProvider()
     this.ethersProvider = new BrowserProvider(this.viemProvider)
     this.ethersSigner = await this.ethersProvider.getSigner()
     this.publicClient = createPublicClient({
-      chain: CHAIN,
+      chain: this.CHAIN,
       transport: custom(this.viemProvider)
     })
 
     if(this.index !== undefined) {
       const client = createWalletClient({
         account: this.owner.address as Hex,
-        chain: CHAIN,
+        chain: this.CHAIN,
         transport: custom(this.viemProvider)
       })
 
@@ -89,7 +109,7 @@ export class AppWallet {
           version: "0.7"
         },
         index: this.index,
-        factoryAddress: FACTORY
+        factoryAddress: this.FACTORY
       })
 
 
@@ -153,7 +173,7 @@ export class AppWallet {
       return true
     }
 
-    const deploymentReceipt = await this._setTokenAllowance(SFLUV_TOKEN, this.address, 0n)
+    const deploymentReceipt = await this._setTokenAllowance(this.SFLUV_TOKEN, this.address, 0n)
     if (deploymentReceipt.error || !deploymentReceipt.hash) {
       console.error("error submitting smart wallet deployment user operation", deploymentReceipt.error)
       return false
@@ -224,9 +244,9 @@ export class AppWallet {
 
     try {
       const hash = await this._withTimeout(
-        cw_bundler.call(
+        this.cwBundler.call(
           signer,
-          contract || SFLUV_TOKEN,
+          contract || this.SFLUV_TOKEN,
           account.address,
           data,
           undefined,
@@ -248,7 +268,7 @@ export class AppWallet {
     return receipt
   }
 
-  private _getAllowance = async (owner: Address, spender: Address, token: Address = SFLUV_TOKEN): Promise<bigint | null> => {
+  private _getAllowance = async (owner: Address, spender: Address, token: Address = this.SFLUV_TOKEN): Promise<bigint | null> => {
     if (!this.publicClient) return null
 
     try {
@@ -265,7 +285,7 @@ export class AppWallet {
     }
   }
 
-  private _waitForAllowance = async (owner: Address, spender: Address, minAllowance: bigint, token: Address = SFLUV_TOKEN): Promise<boolean> => {
+  private _waitForAllowance = async (owner: Address, spender: Address, minAllowance: bigint, token: Address = this.SFLUV_TOKEN): Promise<boolean> => {
     const timeoutMs = 90_000
     const intervalMs = 1_500
     const start = Date.now()
@@ -281,7 +301,7 @@ export class AppWallet {
     return false
   }
 
-  private _waitForAllowanceEquals = async (owner: Address, spender: Address, expectedAllowance: bigint, token: Address = SFLUV_TOKEN): Promise<boolean> => {
+  private _waitForAllowanceEquals = async (owner: Address, spender: Address, expectedAllowance: bigint, token: Address = this.SFLUV_TOKEN): Promise<boolean> => {
     const timeoutMs = 90_000
     const intervalMs = 1_500
     const start = Date.now()
@@ -375,7 +395,7 @@ export class AppWallet {
     try {
       await this.publicClient.call({
         account: from,
-        to: ZAPPER_CONTRACT_ADDRESS,
+        to: this.ZAPPER_CONTRACT_ADDRESS,
         data
       })
       return null
@@ -411,13 +431,13 @@ export class AppWallet {
 
     try {
       const role = await this.publicClient.readContract({
-        address: SFLUV_TOKEN,
+        address: this.SFLUV_TOKEN,
         abi: [redeemerRole],
         functionName: "REDEEMER_ROLE"
       }) as Hash
 
       const walletHasRole = await this.publicClient.readContract({
-        address: SFLUV_TOKEN,
+        address: this.SFLUV_TOKEN,
         abi: [hasRole],
         functionName: "hasRole",
         args: [role, account]
@@ -436,13 +456,13 @@ export class AppWallet {
 
     try {
       const role = await this.publicClient.readContract({
-        address: SFLUV_TOKEN,
+        address: this.SFLUV_TOKEN,
         abi: [minterRole],
         functionName: "MINTER_ROLE"
       }) as Hash
 
       const walletHasRole = await this.publicClient.readContract({
-        address: SFLUV_TOKEN,
+        address: this.SFLUV_TOKEN,
         abi: [hasRole],
         functionName: "hasRole",
         args: [role, account]
@@ -476,7 +496,7 @@ export class AppWallet {
           return receipt
         }
         const hash = await this._withTimeout(
-          cw_bundler.call(
+          this.cwBundler.call(
             t.signer,
             contract,
             t.wallet.address,
@@ -583,7 +603,7 @@ export class AppWallet {
     try {
       await this.publicClient.call({
         account: from,
-        to: ZAPPER_CONTRACT_ADDRESS,
+        to: this.ZAPPER_CONTRACT_ADDRESS,
         data
       })
       return null
@@ -598,10 +618,10 @@ export class AppWallet {
     const approveCallData = encodeFunctionData({
       abi: [approve],
       functionName: "approve",
-      args: [ZAPPER_CONTRACT_ADDRESS, value]
+      args: [this.ZAPPER_CONTRACT_ADDRESS, value]
     })
 
-    return this._execTx(account, signer, approveCallData, SFLUV_TOKEN)
+    return this._execTx(account, signer, approveCallData, this.SFLUV_TOKEN)
   }
 
   private _clearZapperAllowance = async (account: ToSimpleSmartAccountReturnType<"0.7">, signer: Signer): Promise<string | null> => {
@@ -610,7 +630,7 @@ export class AppWallet {
       return "failed to submit allowance reset transaction"
     }
 
-    const allowanceCleared = await this._waitForAllowanceEquals(account.address, ZAPPER_CONTRACT_ADDRESS, 0n)
+    const allowanceCleared = await this._waitForAllowanceEquals(account.address, this.ZAPPER_CONTRACT_ADDRESS, 0n)
     if (!allowanceCleared) {
       return "allowance reset is still pending"
     }
@@ -671,7 +691,7 @@ export class AppWallet {
 
     let sendAmount: bigint
     try {
-      sendAmount = parseUnits(amount, BYUSD_DECIMALS)
+      sendAmount = parseUnits(amount, this.BYUSD_DECIMALS)
     }
     catch {
       return {
@@ -704,7 +724,7 @@ export class AppWallet {
       }
     }
 
-    const currentBalance = await this.getBalance(BYUSD_TOKEN)
+    const currentBalance = await this.getBalance(this.BYUSD_TOKEN)
     if (currentBalance === null) {
       return {
         sending: false,
@@ -720,7 +740,7 @@ export class AppWallet {
       }
     }
 
-    const currentAllowance = await this._getAllowance(this.address, ZAPPER_CONTRACT_ADDRESS, BYUSD_TOKEN)
+    const currentAllowance = await this._getAllowance(this.address, this.ZAPPER_CONTRACT_ADDRESS, this.BYUSD_TOKEN)
     if (currentAllowance === null) {
       return {
         sending: false,
@@ -730,7 +750,7 @@ export class AppWallet {
     }
 
     if (currentAllowance > 0n) {
-      const clearError = await this._clearTokenAllowance(BYUSD_TOKEN, this.address, ZAPPER_CONTRACT_ADDRESS)
+      const clearError = await this._clearTokenAllowance(this.BYUSD_TOKEN, this.address, this.ZAPPER_CONTRACT_ADDRESS)
       if (clearError) {
         return {
           sending: false,
@@ -740,7 +760,7 @@ export class AppWallet {
       }
     }
 
-    const approveReceipt = await this._setTokenAllowance(BYUSD_TOKEN, ZAPPER_CONTRACT_ADDRESS, MAX_UINT256)
+    const approveReceipt = await this._setTokenAllowance(this.BYUSD_TOKEN, this.ZAPPER_CONTRACT_ADDRESS, MAX_UINT256)
     if (approveReceipt.error || !approveReceipt.hash) {
       return {
         sending: false,
@@ -749,7 +769,7 @@ export class AppWallet {
       }
     }
 
-    const allowanceUpdated = await this._waitForAllowance(this.address, ZAPPER_CONTRACT_ADDRESS, MAX_UINT256, BYUSD_TOKEN)
+    const allowanceUpdated = await this._waitForAllowance(this.address, this.ZAPPER_CONTRACT_ADDRESS, MAX_UINT256, this.BYUSD_TOKEN)
     if (!allowanceUpdated) {
       return {
         sending: false,
@@ -760,7 +780,7 @@ export class AppWallet {
 
     const preflightError = await this._simulateZapIn(this.address, sendAmount)
     if (preflightError) {
-      const cleanupError = await this._clearTokenAllowance(BYUSD_TOKEN, this.address, ZAPPER_CONTRACT_ADDRESS)
+      const cleanupError = await this._clearTokenAllowance(this.BYUSD_TOKEN, this.address, this.ZAPPER_CONTRACT_ADDRESS)
       return {
         sending: false,
         error: cleanupError
@@ -776,16 +796,16 @@ export class AppWallet {
       args: [sendAmount]
     })
 
-    const mintReceipt = await this._submitContractCall(ZAPPER_CONTRACT_ADDRESS, mintCallData)
+    const mintReceipt = await this._submitContractCall(this.ZAPPER_CONTRACT_ADDRESS, mintCallData)
     if (mintReceipt.error || !mintReceipt.hash) {
-      const cleanupError = await this._clearTokenAllowance(BYUSD_TOKEN, this.address, ZAPPER_CONTRACT_ADDRESS)
+      const cleanupError = await this._clearTokenAllowance(this.BYUSD_TOKEN, this.address, this.ZAPPER_CONTRACT_ADDRESS)
       if (cleanupError) {
         mintReceipt.error = `${mintReceipt.error ?? "mint failed"}. Also unable to reset approval: ${cleanupError}`
       }
       return mintReceipt
     }
 
-    const cleanupError = await this._clearTokenAllowance(BYUSD_TOKEN, this.address, ZAPPER_CONTRACT_ADDRESS)
+    const cleanupError = await this._clearTokenAllowance(this.BYUSD_TOKEN, this.address, this.ZAPPER_CONTRACT_ADDRESS)
     if (cleanupError) {
       mintReceipt.error = `Mint submitted, but failed to clear leftover approval: ${cleanupError}`
     }
@@ -804,7 +824,7 @@ export class AppWallet {
 
     let sendAmount: bigint
     try {
-      sendAmount = parseUnits(amount, HONEY_DECIMALS)
+      sendAmount = parseUnits(amount, this.HONEY_DECIMALS)
     }
     catch {
       return {
@@ -837,7 +857,7 @@ export class AppWallet {
       }
     }
 
-    const currentBalance = await this.getBalance(HONEY_TOKEN)
+    const currentBalance = await this.getBalance(this.HONEY_TOKEN)
     if (currentBalance === null) {
       return {
         sending: false,
@@ -853,7 +873,7 @@ export class AppWallet {
       }
     }
 
-    const currentAllowance = await this._getAllowance(this.address, SFLUV_TOKEN, HONEY_TOKEN)
+    const currentAllowance = await this._getAllowance(this.address, this.SFLUV_TOKEN, this.HONEY_TOKEN)
     if (currentAllowance === null) {
       return {
         sending: false,
@@ -862,7 +882,7 @@ export class AppWallet {
       }
     }
     if (currentAllowance > 0n) {
-      const clearError = await this._clearTokenAllowance(HONEY_TOKEN, this.address, SFLUV_TOKEN)
+      const clearError = await this._clearTokenAllowance(this.HONEY_TOKEN, this.address, this.SFLUV_TOKEN)
       if (clearError) {
         return {
           sending: false,
@@ -872,7 +892,7 @@ export class AppWallet {
       }
     }
 
-    const approveReceipt = await this._setTokenAllowance(HONEY_TOKEN, SFLUV_TOKEN, MAX_UINT256)
+    const approveReceipt = await this._setTokenAllowance(this.HONEY_TOKEN, this.SFLUV_TOKEN, MAX_UINT256)
     if (approveReceipt.error || !approveReceipt.hash) {
       return {
         sending: false,
@@ -881,7 +901,7 @@ export class AppWallet {
       }
     }
 
-    const allowanceUpdated = await this._waitForAllowance(this.address, SFLUV_TOKEN, MAX_UINT256, HONEY_TOKEN)
+    const allowanceUpdated = await this._waitForAllowance(this.address, this.SFLUV_TOKEN, MAX_UINT256, this.HONEY_TOKEN)
     if (!allowanceUpdated) {
       return {
         sending: false,
@@ -895,16 +915,16 @@ export class AppWallet {
       functionName: "depositFor",
       args: [this.address, sendAmount]
     })
-    const mintReceipt = await this._submitContractCall(SFLUV_TOKEN, mintCallData)
+    const mintReceipt = await this._submitContractCall(this.SFLUV_TOKEN, mintCallData)
     if (mintReceipt.error || !mintReceipt.hash) {
-      const cleanupError = await this._clearTokenAllowance(HONEY_TOKEN, this.address, SFLUV_TOKEN)
+      const cleanupError = await this._clearTokenAllowance(this.HONEY_TOKEN, this.address, this.SFLUV_TOKEN)
       if (cleanupError) {
         mintReceipt.error = `${mintReceipt.error ?? "mint failed"}. Also unable to reset approval: ${cleanupError}`
       }
       return mintReceipt
     }
 
-    const cleanupError = await this._clearTokenAllowance(HONEY_TOKEN, this.address, SFLUV_TOKEN)
+    const cleanupError = await this._clearTokenAllowance(this.HONEY_TOKEN, this.address, this.SFLUV_TOKEN)
     if (cleanupError) {
       mintReceipt.error = `Mint submitted, but failed to clear leftover approval: ${cleanupError}`
     }
@@ -916,8 +936,8 @@ export class AppWallet {
      const t = this._beforeTx()
     if(!t) return null
 
-    const sourceAmount = String(amount * (10 ** BYUSD_DECIMALS))
-    const destAmountMin = String((amount * (10 ** BYUSD_DECIMALS) * .95))
+    const sourceAmount = String(amount * (10 ** this.BYUSD_DECIMALS))
+    const destAmountMin = String((amount * (10 ** this.BYUSD_DECIMALS) * .95))
 
     const params = new URLSearchParams({
       srcToken: "0x688e72142674041f8f6Af4c808a4045cA1D6aC82",
@@ -967,7 +987,7 @@ export class AppWallet {
     const data = hexToBytes(bridgeTransactionData)
 
     try {
-      const hash = await cw_bundler.call(t.signer, BYUSD_TOKEN, t.wallet.address, data, bridgeTransactionValue, undefined, undefined, { smartAccountIndex: this.index ? Number(this.index) : undefined })
+      const hash = await this.cwBundler.call(t.signer, this.BYUSD_TOKEN, t.wallet.address, data, bridgeTransactionValue, undefined, undefined, { smartAccountIndex: this.index ? Number(this.index) : undefined })
       receipt.hash = hash
     }
     catch(error) {
@@ -985,7 +1005,7 @@ export class AppWallet {
 
     let sendAmount: bigint
     try {
-      sendAmount = parseUnits(amount, SFLUV_DECIMALS)
+      sendAmount = parseUnits(amount, this.SFLUV_DECIMALS)
     }
     catch {
       return {
@@ -1028,7 +1048,7 @@ export class AppWallet {
       }
     }
 
-    const currentBalance = await this.getBalance(SFLUV_TOKEN)
+    const currentBalance = await this.getBalance(this.SFLUV_TOKEN)
     if (currentBalance === null) {
       return {
         sending: false,
@@ -1045,7 +1065,7 @@ export class AppWallet {
       }
     }
 
-    const currentAllowance = await this._getAllowance(t.wallet.address, ZAPPER_CONTRACT_ADDRESS)
+    const currentAllowance = await this._getAllowance(t.wallet.address, this.ZAPPER_CONTRACT_ADDRESS)
     if (currentAllowance === null) {
       return {
         sending: false,
@@ -1074,7 +1094,7 @@ export class AppWallet {
       }
     }
 
-    const allowanceUpdated = await this._waitForAllowance(t.wallet.address, ZAPPER_CONTRACT_ADDRESS, sendAmount)
+    const allowanceUpdated = await this._waitForAllowance(t.wallet.address, this.ZAPPER_CONTRACT_ADDRESS, sendAmount)
     if (!allowanceUpdated) {
       return {
         sending: false,
@@ -1083,7 +1103,7 @@ export class AppWallet {
       }
     }
 
-    const allowanceAfterApprove = await this._getAllowance(t.wallet.address, ZAPPER_CONTRACT_ADDRESS)
+    const allowanceAfterApprove = await this._getAllowance(t.wallet.address, this.ZAPPER_CONTRACT_ADDRESS)
     if (allowanceAfterApprove === null || allowanceAfterApprove < sendAmount) {
       return {
         sending: false,
@@ -1122,9 +1142,9 @@ export class AppWallet {
     console.log("Index: " + this.index)
     try {
       const hash = await this._withTimeout(
-        cw_bundler.call(
+        this.cwBundler.call(
           t.signer,
-          ZAPPER_CONTRACT_ADDRESS,
+          this.ZAPPER_CONTRACT_ADDRESS,
           t.wallet.address,
           callDataBytes,
           undefined,
@@ -1138,7 +1158,7 @@ export class AppWallet {
       receipt.hash = hash
 
       const expectedMaxBalance = currentBalance - sendAmount
-      const debited = await this._waitForTokenBalanceAtMost(SFLUV_TOKEN, t.wallet.address, expectedMaxBalance)
+      const debited = await this._waitForTokenBalanceAtMost(this.SFLUV_TOKEN, t.wallet.address, expectedMaxBalance)
       if (!debited) {
         receipt.error = `Transaction reverted at hash: ${hash}`
         console.error("unwrap transaction not confirmed by balance check", hash)
@@ -1157,9 +1177,9 @@ export class AppWallet {
       return receipt
     }
 
-    const allowanceConsumed = await this._waitForAllowanceEquals(t.wallet.address, ZAPPER_CONTRACT_ADDRESS, 0n)
+    const allowanceConsumed = await this._waitForAllowanceEquals(t.wallet.address, this.ZAPPER_CONTRACT_ADDRESS, 0n)
     if (!allowanceConsumed) {
-      const remainingAllowance = await this._getAllowance(t.wallet.address, ZAPPER_CONTRACT_ADDRESS)
+      const remainingAllowance = await this._getAllowance(t.wallet.address, this.ZAPPER_CONTRACT_ADDRESS)
       if (remainingAllowance === null) {
         console.warn("unwrap submitted, but allowance reset could not be verified yet")
       } else if (remainingAllowance > 0n) {
@@ -1187,10 +1207,10 @@ export class AppWallet {
     })
 
     if (this.type === "eoa") {
-      return this._submitEOATransaction(SFLUV_TOKEN, callData)
+      return this._submitEOATransaction(this.SFLUV_TOKEN, callData)
     }
 
-    return this._submitContractCall(SFLUV_TOKEN, callData)
+    return this._submitContractCall(this.SFLUV_TOKEN, callData)
   }
 
   sendBYUSD = async (amount: bigint, to: Address): Promise<TxState | null> => {
@@ -1203,10 +1223,10 @@ export class AppWallet {
     })
 
     if (this.type === "eoa") {
-      return this._submitEOATransaction(BYUSD_TOKEN, callData)
+      return this._submitEOATransaction(this.BYUSD_TOKEN, callData)
     }
 
-    return this._submitContractCall(BYUSD_TOKEN, callData)
+    return this._submitContractCall(this.BYUSD_TOKEN, callData)
   }
 
   getBalance = async (token: Address): Promise<bigint | null> => {
@@ -1272,37 +1292,37 @@ export class AppWallet {
     const b = await this.getGasTokenBalance()
     if(b === null) return null
 
-    const formatted = Number(formatUnits(b, CHAIN.nativeCurrency.decimals))
+    const formatted = Number(formatUnits(b, this.CHAIN.nativeCurrency.decimals))
     if (!Number.isFinite(formatted)) return null
     return formatted
   }
 
   getSFLUVBalanceFormatted = async (): Promise<number | null> => {
-    const b = await this.getBalance(SFLUV_TOKEN)
+    const b = await this.getBalance(this.SFLUV_TOKEN)
     if(b === null) return null
 
-    const d = BigInt(10 ** SFLUV_DECIMALS)
+    const d = BigInt(10 ** this.SFLUV_DECIMALS)
     const q = Number(b * 100n / (d)) / 100
 
     return q
   }
 
   getBYUSDBalanceFormatted = async (): Promise<number | null> => {
-    const b = await this.getBalance(BYUSD_TOKEN)
+    const b = await this.getBalance(this.BYUSD_TOKEN)
     if(b === null) return null
 
-    const d = 10n ** BigInt(BYUSD_DECIMALS)
+    const d = 10n ** BigInt(this.BYUSD_DECIMALS)
     const q = Number(b * 100n / (d)) / 100
 
     return q
   }
 
   getHoneyBalanceFormatted = async (): Promise<number | null> => {
-    if (!HONEY_TOKEN || HONEY_TOKEN.length !== 42) return null
-    const b = await this.getBalance(HONEY_TOKEN)
+    if (!this.HONEY_TOKEN || this.HONEY_TOKEN.length !== 42) return null
+    const b = await this.getBalance(this.HONEY_TOKEN)
     if(b === null) return null
 
-    const d = 10n ** BigInt(HONEY_DECIMALS)
+    const d = 10n ** BigInt(this.HONEY_DECIMALS)
     const q = Number(b * 100n / (d)) / 100
 
     return q

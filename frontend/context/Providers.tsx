@@ -3,14 +3,24 @@
 import { ReactNode, Suspense, useMemo } from "react"
 import AppProvider from "./AppProvider"
 import { PrivyProvider } from "@privy-io/react-auth"
-import { CHAIN, PRIVY_CLIENT_ID, PRIVY_ID } from "@/lib/constants"
+import { PRIVY_CLIENT_ID, PRIVY_ID } from "@/lib/constants"
 import { useTheme } from "next-themes"
 import LocationProvider from "./LocationProvider"
 import ContactsProvider from "./ContactsProvider"
 import TransactionProvider from "./TransactionProvider"
+import { ChainConfigProvider, useChainConfig } from "./ChainConfigProvider"
 
 const Providers = ({ children }: { children: ReactNode }) => {
+  return (
+    <ChainConfigProvider>
+      <PrivyShell>{children}</PrivyShell>
+    </ChainConfigProvider>
+  )
+}
+
+const PrivyShell = ({ children }: { children: ReactNode }) => {
   const { resolvedTheme } = useTheme()
+  const chainConfig = useChainConfig()
   const customOAuthRedirectUrl =
     process.env.NEXT_PUBLIC_PRIVY_CUSTOM_OAUTH_REDIRECT_URL?.trim() || undefined
   const loginMethods = useMemo(() => {
@@ -45,9 +55,9 @@ const Providers = ({ children }: { children: ReactNode }) => {
       },
       showWalletUIs: false
     },
-    defaultChain: CHAIN,
-    supportedChains: [CHAIN]
-  }), [customOAuthRedirectUrl, loginMethods, resolvedTheme])
+    defaultChain: chainConfig.chain,
+    supportedChains: [chainConfig.chain]
+  }), [chainConfig.chain, customOAuthRedirectUrl, loginMethods, resolvedTheme])
 
   return (
     <PrivyProvider

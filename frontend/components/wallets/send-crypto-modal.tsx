@@ -31,7 +31,6 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { useApp } from "@/context/AppProvider";
 import { AppWallet } from "@/lib/wallets/wallets";
-import { SFLUV_DECIMALS, SYMBOL } from "@/lib/constants";
 import { Address, Hash } from "viem";
 import { useContacts } from "@/context/ContactsProvider";
 import ContactOrAddressInput from "../contacts/contact-or-address-input";
@@ -43,6 +42,7 @@ import {
   extractRedeemParamsFromPayload,
 } from "@/lib/qr/payload";
 import jsQR from "jsqr";
+import { useChainConfig } from "@/context/ChainConfigProvider";
 
 type SendFlowMode = "manual" | "scan";
 type SendStep =
@@ -146,12 +146,15 @@ export function SendCryptoModal({
   const { toast } = useToast();
   const { contacts } = useContacts();
   const { user, authFetch } = useApp();
+  const chainConfig = useChainConfig();
+  const tokenDecimals = chainConfig.tokenDecimals;
+  const tokenSymbol = chainConfig.tokenSymbol;
 
   const isValidEmail = (email: string) =>
     /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 
   const toAmountWei = (amountValue: string) =>
-    BigInt(Number(amountValue) * 10 ** SFLUV_DECIMALS);
+    BigInt(Number(amountValue) * 10 ** tokenDecimals);
 
   const resolveTipPrompt = (): TipPromptState | null => {
     const normalizedRecipient = normalizedRecipientAddress(formData.recipient);
@@ -200,6 +203,7 @@ export function SendCryptoModal({
         method: "POST",
         body: JSON.stringify({
           tx_hash: txHash,
+          chain_id: chainConfig.chainId,
           memo,
         }),
       });
@@ -546,7 +550,7 @@ export function SendCryptoModal({
       setHash(receipt.hash as Hash);
       toast({
         title: "Transaction Sent",
-        description: `Successfully sent a ${currentTipPrompt.amount} ${SYMBOL} tip to ${currentTipPrompt.merchantName}.`,
+        description: `Successfully sent a ${currentTipPrompt.amount} ${tokenSymbol} tip to ${currentTipPrompt.merchantName}.`,
       });
       setTipPrompt((existing) =>
         existing
@@ -682,7 +686,7 @@ export function SendCryptoModal({
         recipient: formData.recipient,
         amount: formData.amount,
         memo: formData.memo,
-        successToast: `Successfully sent ${formData.amount} ${SYMBOL} to ${formData.recipient.slice(0, 6)}...${formData.recipient.slice(-4)}`,
+        successToast: `Successfully sent ${formData.amount} ${tokenSymbol} to ${formData.recipient.slice(0, 6)}...${formData.recipient.slice(-4)}`,
         onSuccess: async () => {
           await finalizePrimarySend();
         },
@@ -969,7 +973,7 @@ export function SendCryptoModal({
       recipient: normalizedRecipient,
       amount: formData.amount,
       memo: formData.memo,
-      successToast: `Successfully sent ${formData.amount} ${SYMBOL} to ${normalizedRecipient.slice(0, 6)}...${normalizedRecipient.slice(-4)}`,
+      successToast: `Successfully sent ${formData.amount} ${tokenSymbol} to ${normalizedRecipient.slice(0, 6)}...${normalizedRecipient.slice(-4)}`,
       onSuccess: async () => {
         await finalizePrimarySend();
       },
@@ -1106,11 +1110,11 @@ export function SendCryptoModal({
                         className="h-11 pr-16"
                       />
                       <div className="absolute right-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground font-medium">
-                        {SYMBOL}
+                        {tokenSymbol}
                       </div>
                     </div>
                     <p className="text-xs text-muted-foreground">
-                      Available: {balance} {SYMBOL}
+                      Available: {balance} {tokenSymbol}
                     </p>
                   </div>
                 </>
@@ -1289,10 +1293,10 @@ export function SendCryptoModal({
                       />
                     </div>
                     <p className="mt-1 text-center text-xs text-muted-foreground">
-                      {SYMBOL}
+                      {tokenSymbol}
                     </p>
                     <p className="mt-2 text-center text-xs text-muted-foreground">
-                      Available: {balance} {SYMBOL}
+                      Available: {balance} {tokenSymbol}
                     </p>
                   </div>
 
@@ -1351,7 +1355,7 @@ export function SendCryptoModal({
                       Amount
                     </p>
                     <p className="mt-1 text-lg font-semibold sm:text-xl">
-                      {formData.amount} {SYMBOL}
+                      {formData.amount} {tokenSymbol}
                     </p>
                   </div>
 
@@ -1515,7 +1519,7 @@ export function SendCryptoModal({
                     className="h-10 pr-16"
                   />
                   <div className="absolute right-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground font-medium">
-                    {SYMBOL}
+                    {tokenSymbol}
                   </div>
                 </div>
                 {error && (
@@ -1615,7 +1619,7 @@ export function SendCryptoModal({
                 <h3 className="text-lg font-semibold">W9 Approval Required</h3>
                 <p className="text-sm text-muted-foreground break-all">
                   <span className="font-mono">{formData.recipient}</span> needs
-                  to have an approved W9 form in order to receive more {SYMBOL}.
+                  to have an approved W9 form in order to receive more {tokenSymbol}.
                 </p>
                 <p className="text-sm text-muted-foreground">
                   To pre-approve this user&apos;s W9 form, click approve below.
@@ -1730,7 +1734,7 @@ export function SendCryptoModal({
             Send Cryptocurrency
           </DialogTitle>
           <DialogDescription className="text-sm">
-            Send {SYMBOL} from your {wallet.name.toUpperCase()} wallet
+            Send {tokenSymbol} from your {wallet.name.toUpperCase()} wallet
           </DialogDescription>
         </DialogHeader>
         {renderContent()}

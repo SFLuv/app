@@ -94,12 +94,13 @@ func (s *BotDB) CreateTables(defaultOwner string) error {
 
 	// Redemptions Table (accounts - events join table)
 	_, err = s.db.Exec(context.Background(), `
-			CREATE TABLE IF NOT EXISTS redemptions(
-				id SERIAL PRIMARY KEY,
-				address TEXT,
-				code TEXT,
-				FOREIGN KEY (code) REFERENCES codes(id)
-			);
+				CREATE TABLE IF NOT EXISTS redemptions(
+					id SERIAL PRIMARY KEY,
+					address TEXT,
+					code TEXT,
+					chain_id BIGINT,
+					FOREIGN KEY (code) REFERENCES codes(id)
+				);
 
 			CREATE INDEX IF NOT EXISTS redemption_address ON redemptions(address);
 		`)
@@ -109,10 +110,13 @@ func (s *BotDB) CreateTables(defaultOwner string) error {
 	}
 
 	_, err = s.db.Exec(context.Background(), `
-		ALTER TABLE redemptions
-		ADD COLUMN IF NOT EXISTS event TEXT;
+			ALTER TABLE redemptions
+			ADD COLUMN IF NOT EXISTS event TEXT;
 
-		UPDATE redemptions r
+			ALTER TABLE redemptions
+			ADD COLUMN IF NOT EXISTS chain_id BIGINT;
+
+			UPDATE redemptions r
 		SET event = c.event
 		FROM codes c
 		WHERE r.code = c.id
@@ -150,8 +154,9 @@ func (s *BotDB) CreateTables(defaultOwner string) error {
 		ALTER TABLE redemptions
 		ALTER COLUMN event SET NOT NULL;
 
-		CREATE INDEX IF NOT EXISTS redemption_event_idx ON redemptions(event);
-		CREATE INDEX IF NOT EXISTS redemption_address_event_idx ON redemptions(address, event);
+			CREATE INDEX IF NOT EXISTS redemption_event_idx ON redemptions(event);
+			CREATE INDEX IF NOT EXISTS redemptions_chain_idx ON redemptions(chain_id);
+			CREATE INDEX IF NOT EXISTS redemption_address_event_idx ON redemptions(address, event);
 		CREATE UNIQUE INDEX IF NOT EXISTS redemptions_code_unique_idx ON redemptions(code);
 		CREATE UNIQUE INDEX IF NOT EXISTS redemptions_address_event_unique_idx ON redemptions(address, event);
 	`)
@@ -638,7 +643,7 @@ func (s *BotDB) NewCodes(ctx context.Context, r *structs.NewCodesRequest) ([]*st
 	return results, nil
 }
 
-func (s *BotDB) Redeem(ctx context.Context, id string, account string) (uint64, error) {
+func (s *BotDB) Redeem(ctx context.Context, id string, account string, chainID int64) (uint64, error) {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		err = fmt.Errorf("error creating db tx: %s", err)
@@ -702,9 +707,9 @@ func (s *BotDB) Redeem(ctx context.Context, id string, account string) (uint64, 
 	}
 
 	_, err = tx.Exec(ctx, `
-		INSERT INTO redemptions(address, code, event)
-		VALUES ($1, $2, $3);
-	`, account, id, eventID)
+			INSERT INTO redemptions(address, code, event, chain_id)
+			VALUES ($1, $2, $3, $4);
+		`, account, id, eventID, chainID)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -749,7 +754,7 @@ func (s *BotDB) GetCodeAmount(ctx context.Context, id string) (uint64, error) {
 	return amount, nil
 }
 
-func (s *BotDB) UndoRedeem(ctx context.Context, id string, account string) error {
+func (s *BotDB) UndoRedeem(ctx context.Context, id string, account string, chainID int64) error {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("error creating db tx for redeem undo: %w", err)
@@ -780,11 +785,13 @@ func (s *BotDB) UndoRedeem(ctx context.Context, id string, account string) error
 	tag, err := tx.Exec(ctx, `
 		DELETE FROM
 			redemptions
-		WHERE
-			code = $1
-		AND
-			address = $2;
-	`, id, account)
+			WHERE
+				code = $1
+			AND
+				address = $2
+			AND
+				(chain_id = $3 OR chain_id IS NULL);
+		`, id, account, chainID)
 	if err != nil {
 		return fmt.Errorf("error deleting redemption during undo: %w", err)
 	}

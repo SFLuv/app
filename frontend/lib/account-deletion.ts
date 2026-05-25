@@ -1,5 +1,5 @@
 import { getAddress, isAddress, type Address } from "viem";
-import { ADMIN_ADDRESS, SFLUV_TOKEN } from "./constants";
+import { ADMIN_ADDRESS } from "./constants";
 import { AppWallet } from "./wallets/wallets";
 
 const SWEEP_TIMEOUT_MS = 120_000;
@@ -7,12 +7,13 @@ const SWEEP_POLL_INTERVAL_MS = 2_000;
 
 async function waitForWalletBalanceAtMost(
   wallet: AppWallet,
+  tokenAddress: Address,
   maxBalance: bigint = 0n,
 ): Promise<boolean> {
   const startedAt = Date.now();
 
   while (Date.now() - startedAt < SWEEP_TIMEOUT_MS) {
-    const balance = await wallet.getBalance(SFLUV_TOKEN);
+    const balance = await wallet.getBalance(tokenAddress);
     if (balance !== null && balance <= maxBalance) {
       return true;
     }
@@ -32,6 +33,7 @@ export function resolveAccountDeletionAdminAddress(): Address {
 
 export async function sweepSFLUVBalancesToAdmin(
   wallets: AppWallet[],
+  tokenAddress: Address,
 ): Promise<{ checkedWallets: number; transferredWallets: number }> {
   const adminAddress = resolveAccountDeletionAdminAddress();
   const uniqueWallets = new Map<string, AppWallet>();
@@ -53,7 +55,7 @@ export async function sweepSFLUVBalancesToAdmin(
 
     checkedWallets += 1;
 
-    const balance = await wallet.getBalance(SFLUV_TOKEN);
+    const balance = await wallet.getBalance(tokenAddress);
     if (balance === null) {
       throw new Error(`Unable to read the SFLUV balance for ${wallet.name}.`);
     }
@@ -76,7 +78,7 @@ export async function sweepSFLUVBalancesToAdmin(
       throw new Error(receipt.error || `Unable to transfer SFLUV from ${wallet.name}.`);
     }
 
-    const cleared = await waitForWalletBalanceAtMost(wallet);
+    const cleared = await waitForWalletBalanceAtMost(wallet, tokenAddress);
     if (!cleared) {
       throw new Error(`The transfer from ${wallet.name} is still pending.`);
     }

@@ -20,7 +20,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { useApp } from "@/context/AppProvider"
-import { SFLUV_DECIMALS } from "@/lib/constants"
+import { useChainConfig } from "@/context/ChainConfigProvider"
 import type {
   AdminAnalyticsDefinition,
   AdminAnalyticsMetricValue,
@@ -65,10 +65,10 @@ const orderedMetricKeys = [
   "event_frequency",
 ]
 
-const weiToNumber = (value?: string): number => {
+const weiToNumber = (value: string | undefined, decimals: number): number => {
   try {
     const wei = BigInt(value || "0")
-    const scale = BigInt(10) ** BigInt(SFLUV_DECIMALS)
+    const scale = BigInt(10) ** BigInt(decimals)
     const whole = wei / scale
     const fractional = wei % scale
     return Number(whole) + Number(fractional) / Number(scale)
@@ -77,7 +77,7 @@ const weiToNumber = (value?: string): number => {
   }
 }
 
-const formatToken = (value?: string): string => `${tokenFormatter.format(weiToNumber(value))} SFLuv`
+const formatToken = (value: string | undefined, decimals: number, symbol: string): string => `${tokenFormatter.format(weiToNumber(value, decimals))} ${symbol}`
 const formatCount = (value?: number): string => countFormatter.format(value || 0)
 const formatPercent = (value?: number): string => `${decimalFormatter.format(value || 0)}%`
 const formatDecimal = (value?: number): string => decimalFormatter.format(value || 0)
@@ -92,9 +92,9 @@ const formatDuration = (seconds?: number): string => {
   return `${Math.max(1, Math.round(value / 60))} min`
 }
 
-const formatMetricValue = (metric?: AdminAnalyticsMetricValue): string => {
+const formatMetricValue = (metric: AdminAnalyticsMetricValue | undefined, decimals: number, symbol: string): string => {
   if (!metric) return "0"
-  if (metric.kind === "wei") return formatToken(metric.wei)
+  if (metric.kind === "wei") return formatToken(metric.wei, decimals, symbol)
   if (metric.kind === "count") return formatCount(metric.count)
   if (metric.kind === "percent") return formatPercent(metric.percent)
   if (metric.kind === "seconds") return formatDuration(metric.seconds)
@@ -126,18 +126,18 @@ const downloadTextFile = (filename: string, content: string) => {
   URL.revokeObjectURL(url)
 }
 
-const metricCsvValue = (metric: AdminAnalyticsMetricValue): string | number => {
-  if (metric.kind === "wei") return weiToNumber(metric.wei)
+const metricCsvValue = (metric: AdminAnalyticsMetricValue, decimals: number): string | number => {
+  if (metric.kind === "wei") return weiToNumber(metric.wei, decimals)
   if (metric.kind === "count") return metric.count || 0
   if (metric.kind === "percent") return metric.percent || 0
   if (metric.kind === "seconds") return metric.seconds || 0
   return metric.decimal || 0
 }
 
-const buildAnalyticsCsv = (analytics: AdminAnalyticsResponse): string => {
+const buildAnalyticsCsv = (analytics: AdminAnalyticsResponse, decimals: number, symbol: string): string => {
   const rows: unknown[][] = [
     ["section", "period_key", "period_label", "metric_key", "metric_label", "value", "unit", "notes"],
-    ["summary", "", "Current", "current_circulating_sfluv", "Current Circulating SFLUV", weiToNumber(analytics.summary.current_circulating_sfluv_wei), "SFLuv", "All-time rewards minus redemptions"],
+    ["summary", "", "Current", "current_circulating_sfluv", `Current Circulating ${symbol}`, weiToNumber(analytics.summary.current_circulating_sfluv_wei, decimals), symbol, "All-time rewards minus redemptions"],
     ["summary", "", "Generated", "generated_at", "Generated At", new Date(analytics.generated_at * 1000).toISOString(), "", ""],
     ["summary", "", "Chain", "chain_id", "Chain ID", analytics.chain_id, "", ""],
     ...analytics.periods.flatMap((period) =>
@@ -147,8 +147,8 @@ const buildAnalyticsCsv = (analytics: AdminAnalyticsResponse): string => {
         period.label,
         metric.metric_key,
         metric.label,
-        metricCsvValue(metric),
-        metric.kind === "wei" ? "SFLuv" : metric.kind,
+        metricCsvValue(metric, decimals),
+        metric.kind === "wei" ? symbol : metric.kind,
         periodRange(period),
       ]),
     ),
@@ -159,8 +159,8 @@ const buildAnalyticsCsv = (analytics: AdminAnalyticsResponse): string => {
         period.label,
         metric.metric_key,
         metric.label,
-        metricCsvValue(metric),
-        metric.kind === "wei" ? "SFLuv" : metric.kind,
+        metricCsvValue(metric, decimals),
+        metric.kind === "wei" ? symbol : metric.kind,
         periodRange(period),
       ]),
     ),
@@ -223,14 +223,18 @@ function MetricTile({
   metric,
   definition,
   periodLabel,
+  tokenDecimals,
+  tokenSymbol,
 }: {
   metric: AdminAnalyticsMetricValue
   definition: string
   periodLabel: string
+  tokenDecimals: number
+  tokenSymbol: string
 }) {
   const Icon = metricIcons[metric.metric_key] || Activity
   const [copied, setCopied] = useState(false)
-  const value = formatMetricValue(metric)
+  const value = formatMetricValue(metric, tokenDecimals, tokenSymbol)
   const copy = async () => {
     try {
       await copyMetricImage(metric.label, value, periodLabel)
@@ -265,6 +269,7 @@ function MetricTile({
 
 export function AdminAnalyticsPanel() {
   const { authFetch, status, user } = useApp()
+  const chainConfig = useChainConfig()
   const [analytics, setAnalytics] = useState<AdminAnalyticsResponse | null>(null)
   const [selectedPeriodKey, setSelectedPeriodKey] = useState("current_month")
   const [loading, setLoading] = useState(false)
@@ -301,12 +306,12 @@ export function AdminAnalyticsPanel() {
   }, [analytics, selectedPeriodKey])
 
   const maxMonthlyVolume = useMemo(() => {
-    return Math.max(...(analytics?.monthly_trend || []).map((point) => weiToNumber(point.metrics.find((metric) => metric.metric_key === "transaction_volume")?.wei)), 1)
-  }, [analytics])
+    return Math.max(...(analytics?.monthly_trend || []).map((point) => weiToNumber(point.metrics.find((metric) => metric.metric_key === "transaction_volume")?.wei, chainConfig.tokenDecimals)), 1)
+  }, [analytics, chainConfig.tokenDecimals])
 
   const exportCsv = () => {
     if (!analytics) return
-    downloadTextFile(`sfluv-admin-analytics-${new Date().toISOString().slice(0, 10)}.csv`, buildAnalyticsCsv(analytics))
+    downloadTextFile(`sfluv-admin-analytics-${new Date().toISOString().slice(0, 10)}.csv`, buildAnalyticsCsv(analytics, chainConfig.tokenDecimals, chainConfig.tokenSymbol))
   }
 
   if (loading && !analytics) {
@@ -360,20 +365,20 @@ export function AdminAnalyticsPanel() {
       <Card>
         <CardHeader className="gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <CardTitle>Current Circulating SFLUV</CardTitle>
-            <CardDescription>All-time total SFLUV distributed through rewards minus all-time redemptions.</CardDescription>
+            <CardTitle>Current Circulating {chainConfig.tokenSymbol}</CardTitle>
+            <CardDescription>All-time total {chainConfig.tokenSymbol} distributed through rewards minus all-time redemptions.</CardDescription>
           </div>
           <Button
             type="button"
             variant="outline"
-            onClick={() => copyMetricImage("Current Circulating SFLUV", formatToken(analytics.summary.current_circulating_sfluv_wei), "All-time rewards minus redemptions")}
+            onClick={() => copyMetricImage(`Current Circulating ${chainConfig.tokenSymbol}`, formatToken(analytics.summary.current_circulating_sfluv_wei, chainConfig.tokenDecimals, chainConfig.tokenSymbol), "All-time rewards minus redemptions")}
           >
             <Clipboard className="mr-2 h-4 w-4" />
             Copy Image
           </Button>
         </CardHeader>
         <CardContent>
-          <div className="text-4xl font-semibold tracking-normal">{formatToken(analytics.summary.current_circulating_sfluv_wei)}</div>
+          <div className="text-4xl font-semibold tracking-normal">{formatToken(analytics.summary.current_circulating_sfluv_wei, chainConfig.tokenDecimals, chainConfig.tokenSymbol)}</div>
         </CardContent>
       </Card>
 
@@ -403,6 +408,8 @@ export function AdminAnalyticsPanel() {
                 metric={metric}
                 definition={definitionFor(analytics.metric_definitions, metric.metric_key)}
                 periodLabel={periodRange(selectedPeriod)}
+                tokenDecimals={chainConfig.tokenDecimals}
+                tokenSymbol={chainConfig.tokenSymbol}
               />
             ))}
           </div>
@@ -417,10 +424,10 @@ export function AdminAnalyticsPanel() {
         <CardContent className="space-y-4">
           {analytics.monthly_trend.map((point) => {
             const transactionVolumeMetric = point.metrics.find((metric) => metric.metric_key === "transaction_volume")
-            const volume = weiToNumber(transactionVolumeMetric?.wei)
-            const rewards = formatMetricValue(point.metrics.find((metric) => metric.metric_key === "rewards"))
-            const payments = formatMetricValue(point.metrics.find((metric) => metric.metric_key === "total_payments"))
-            const volunteers = formatMetricValue(point.metrics.find((metric) => metric.metric_key === "unique_volunteers"))
+            const volume = weiToNumber(transactionVolumeMetric?.wei, chainConfig.tokenDecimals)
+            const rewards = formatMetricValue(point.metrics.find((metric) => metric.metric_key === "rewards"), chainConfig.tokenDecimals, chainConfig.tokenSymbol)
+            const payments = formatMetricValue(point.metrics.find((metric) => metric.metric_key === "total_payments"), chainConfig.tokenDecimals, chainConfig.tokenSymbol)
+            const volunteers = formatMetricValue(point.metrics.find((metric) => metric.metric_key === "unique_volunteers"), chainConfig.tokenDecimals, chainConfig.tokenSymbol)
             const width = Math.max(3, Math.round((volume / maxMonthlyVolume) * 100))
             return (
               <div key={point.key} className="grid gap-2 md:grid-cols-[92px_minmax(0,1fr)_280px] md:items-center">
@@ -429,7 +436,7 @@ export function AdminAnalyticsPanel() {
                   <div className="h-full rounded-full bg-[#eb6c6c]" style={{ width: `${width}%` }} />
                 </div>
                 <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs text-muted-foreground">
-                  <span>{formatMetricValue(transactionVolumeMetric)}</span>
+                  <span>{formatMetricValue(transactionVolumeMetric, chainConfig.tokenDecimals, chainConfig.tokenSymbol)}</span>
                   <span>{volunteers} volunteers</span>
                   <span>{rewards} rewards</span>
                   <span>{payments} payments</span>

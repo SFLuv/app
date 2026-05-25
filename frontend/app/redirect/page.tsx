@@ -5,11 +5,11 @@ import { useRouter, useSearchParams } from "next/navigation"
 import { isAddress } from "viem"
 import { useApp } from "@/context/AppProvider"
 import { useLocation } from "@/context/LocationProvider"
-import { COMMUNITY } from "@/lib/constants"
 import { Button } from "@/components/ui/button"
 import { AlertTriangle, Loader2 } from "lucide-react"
 import { decodeBase64UrlAddress } from "@/lib/redeem-link"
 import { GetUserResponse } from "@/types/server"
+import { useChainConfig } from "@/context/ChainConfigProvider"
 
 type RedirectStage =
   | "checking"
@@ -21,8 +21,7 @@ type RedirectStage =
 // Build the query-string body shared by Citizen Wallet handoff URLs. CW's
 // router accepts `sendto`, `tipTo`, and `alias` at the top-level path;
 // Flutter's `parseSendtoUrl` lifts these straight into the native send screen.
-const buildCwSendQuery = (to: string, tipTo: string): string => {
-  const alias = COMMUNITY.community.alias
+const buildCwSendQuery = (to: string, tipTo: string, alias: string): string => {
   const params = new URLSearchParams()
   params.set("alias", alias)
   params.set("sendto", `${to}@${alias}`)
@@ -32,10 +31,11 @@ const buildCwSendQuery = (to: string, tipTo: string): string => {
   return params.toString()
 }
 
-const buildCwUniversalLink = (to: string, tipTo: string): string =>
-  `https://app.citizenwallet.xyz/?${buildCwSendQuery(to, tipTo)}`
+const buildCwUniversalLink = (to: string, tipTo: string, alias: string): string =>
+  `https://app.citizenwallet.xyz/?${buildCwSendQuery(to, tipTo, alias)}`
 
 export default function RedirectPage() {
+  const chainConfig = useChainConfig()
   const router = useRouter()
   const searchParams = useSearchParams()
   const { status, login, user, wallets, walletsStatus, ensurePrimarySmartWallet, refreshWallets, authFetch } = useApp()
@@ -248,7 +248,7 @@ export default function RedirectPage() {
     // bounce them back into CW directly via the universal link — they're
     // already in the CW context, so no choice screen is needed.
     if (sigAuthAccount) {
-      window.location.replace(buildCwUniversalLink(to, tipTo))
+      window.location.replace(buildCwUniversalLink(to, tipTo, chainConfig.alias))
       return
     }
 

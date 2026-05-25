@@ -46,20 +46,11 @@ import {
   UserOperation,
 } from "viem/account-abstraction";
 import { depositFor, execute, transfer, withdrawTo } from "@/lib/abi";
-import { client } from "@/lib/paymaster";
 import {
   BACKEND,
-  CHAIN,
-  CHAIN_ID,
-  COMMUNITY,
-  COMMUNITY_ACCOUNT,
-  FACTORY,
   IDLE_TIMER_PROMPT_SECONDS,
   IDLE_TIMER_SECONDS,
-  PAYMASTER,
 } from "@/lib/constants";
-import { bundler, cw_bundler } from "@/lib/paymaster/client";
-import config from "@/app.config";
 import { UserOp } from "@citizenwallet/sdk";
 import { JsonRpcSigner, Signer } from "ethers";
 import { BrowserProvider } from "ethers";
@@ -99,6 +90,7 @@ import {
   EMAIL_OPT_IN_POLICY_PATH,
   PRIVACY_POLICY_PATH,
 } from "@/lib/policies";
+import { useChainConfig } from "@/context/ChainConfigProvider";
 
 // const mockUser: User = { id: "user3", name: "Bob Johnson", email: "bob@example.com", isMerchant: true, isAdmin: false, isOrganizer: false }
 export type UserStatus = "loading" | "authenticated" | "unauthenticated";
@@ -335,6 +327,7 @@ function isApplePrivateRelayEmail(email?: string | null): boolean {
 }
 
 export default function AppProvider({ children }: { children: ReactNode }) {
+  const chainConfig = useChainConfig();
   const [user, setUser] = useState<User | null>(null);
   const [affiliate, setAffiliate] = useState<Affiliate | null>(null);
   const [proposer, setProposer] = useState<Proposer | null>(null);
@@ -1159,7 +1152,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
       for (let i = 0; i < managedPrivyWallets.length; i++) {
         const privyWallet = managedPrivyWallets[i];
 
-        cResults.push(privyWallet.switchChain(CHAIN_ID));
+        cResults.push(privyWallet.switchChain(chainConfig.chainId));
 
         let extWallet = extWallets.find(
           (w) => w.eoa_address == privyWallet.address && w.is_eoa === true,
@@ -1245,7 +1238,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
 
     const resolvedWallet = wallet;
     const eoaName = resolvedWallet.name;
-    const w = new AppWallet(privyWallet, eoaName, {
+    const w = new AppWallet(privyWallet, eoaName, chainConfig, {
       id: resolvedWallet.id || undefined,
       isHidden: resolvedWallet.is_hidden,
       isRedeemer: resolvedWallet.is_redeemer,
@@ -1276,7 +1269,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
       wallet.name = generatedSmartWalletName;
     }
 
-    const w = new AppWallet(privyWallet, smartWalletName, {
+    const w = new AppWallet(privyWallet, smartWalletName, chainConfig, {
       index,
       id: wallet.id || undefined,
       isHidden: wallet.is_hidden,
@@ -1452,7 +1445,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     }
 
     try {
-      await primaryPrivyWallet.switchChain(CHAIN_ID);
+      await primaryPrivyWallet.switchChain(chainConfig.chainId);
     } catch (error) {
       console.error(
         "error switching chain while ensuring primary smart wallet",

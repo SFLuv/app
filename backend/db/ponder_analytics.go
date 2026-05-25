@@ -8,22 +8,25 @@ import (
 	"github.com/SFLuv/app/backend/structs"
 )
 
-func (p *PonderDB) GetAnalyticsTransfersSince(ctx context.Context, startTimestamp int64) ([]*structs.AnalyticsTransfer, error) {
+func (p *PonderDB) GetAnalyticsTransfersSince(ctx context.Context, chainID int64, startTimestamp int64) ([]*structs.AnalyticsTransfer, error) {
 	rows, err := p.db.Query(ctx, `
-		SELECT
-			hash,
-			amount::text,
-			timestamp,
-			LOWER("from"),
+			SELECT
+				hash,
+				chain_id,
+				amount::text,
+				timestamp,
+				LOWER("from"),
 			LOWER("to")
-		FROM
-			transfer_event
-		WHERE
-			timestamp >= $1
-		ORDER BY
-			timestamp ASC,
-			id ASC;
-	`, startTimestamp)
+			FROM
+				transfer_event
+			WHERE
+				chain_id = $1
+			AND
+				timestamp >= $2
+			ORDER BY
+				timestamp ASC,
+				id ASC;
+		`, chainID, startTimestamp)
 	if err != nil {
 		return nil, fmt.Errorf("error querying analytics transfers: %w", err)
 	}
@@ -32,7 +35,7 @@ func (p *PonderDB) GetAnalyticsTransfersSince(ctx context.Context, startTimestam
 	transfers := make([]*structs.AnalyticsTransfer, 0)
 	for rows.Next() {
 		var tx structs.AnalyticsTransfer
-		if err := rows.Scan(&tx.Hash, &tx.Amount, &tx.Timestamp, &tx.From, &tx.To); err != nil {
+		if err := rows.Scan(&tx.Hash, &tx.ChainID, &tx.Amount, &tx.Timestamp, &tx.From, &tx.To); err != nil {
 			return nil, fmt.Errorf("error scanning analytics transfer: %w", err)
 		}
 		transfers = append(transfers, &tx)
@@ -44,7 +47,7 @@ func (p *PonderDB) GetAnalyticsTransfersSince(ctx context.Context, startTimestam
 	return transfers, nil
 }
 
-func (p *PonderDB) GetAnalyticsAddressBalances(ctx context.Context, addresses []string) ([]*structs.AnalyticsAddressBalance, error) {
+func (p *PonderDB) GetAnalyticsAddressBalances(ctx context.Context, addresses []string, chainID int64) ([]*structs.AnalyticsAddressBalance, error) {
 	normalized := make([]string, 0, len(addresses))
 	seen := make(map[string]struct{})
 	for _, address := range addresses {
@@ -66,11 +69,13 @@ func (p *PonderDB) GetAnalyticsAddressBalances(ctx context.Context, addresses []
 		SELECT
 			LOWER(address),
 			balance::text
-		FROM
-			transfer_account
-		WHERE
-			LOWER(address) = ANY($1::text[]);
-	`, normalized)
+			FROM
+				transfer_account
+			WHERE
+				chain_id = $2
+			AND
+				LOWER(address) = ANY($1::text[]);
+		`, normalized, chainID)
 	if err != nil {
 		return nil, fmt.Errorf("error querying analytics address balances: %w", err)
 	}

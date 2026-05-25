@@ -3,10 +3,10 @@ package handlers
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/SFLuv/app/backend/abi"
+	"github.com/SFLuv/app/backend/clientconfig"
 	"github.com/SFLuv/app/backend/db"
 	"github.com/SFLuv/app/backend/logger"
 	"github.com/SFLuv/app/backend/structs"
@@ -26,20 +26,30 @@ type MinterService struct {
 	minterRole [32]byte
 }
 
-func NewMinterService(appDb *db.AppDB, log *logger.LogCloser) *MinterService {
+func NewMinterService(appDb *db.AppDB, log *logger.LogCloser, config *clientconfig.Config) *MinterService {
 	service := &MinterService{
 		appDb: appDb,
 		log:   log,
 	}
 
-	rpcURL := strings.TrimSpace(os.Getenv("RPC_URL"))
-	tokenID := strings.TrimSpace(os.Getenv("TOKEN_ID"))
+	if config == nil {
+		service.logf("minter sync disabled: client config is not loaded")
+		return service
+	}
+	primaryToken, err := config.PrimaryToken()
+	if err != nil {
+		service.logf("minter sync disabled: invalid client config: %s", err)
+		return service
+	}
+
+	rpcURL := strings.TrimSpace(config.PrimaryRPCURL())
+	tokenID := strings.TrimSpace(primaryToken.Address)
 	if rpcURL == "" || tokenID == "" {
-		service.logf("minter sync disabled: missing RPC_URL or TOKEN_ID")
+		service.logf("minter sync disabled: missing primary RPC URL or token address in client config")
 		return service
 	}
 	if !common.IsHexAddress(tokenID) {
-		service.logf("minter sync disabled: invalid TOKEN_ID address %q", tokenID)
+		service.logf("minter sync disabled: invalid configured token address %q", tokenID)
 		return service
 	}
 

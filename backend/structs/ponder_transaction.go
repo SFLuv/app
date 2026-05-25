@@ -2,6 +2,7 @@ package structs
 
 type PonderTransaction struct {
 	Id        string `json:"id"`
+	ChainID   int64  `json:"chain_id"`
 	Hash      string `json:"hash"`
 	Amount    string `json:"amount"`
 	Timestamp uint64 `json:"timestamp"`
@@ -16,7 +17,8 @@ type PonderTransactionsPage struct {
 }
 
 type PonderTransactionParties struct {
-	Hash string `json:"hash"`
-	From string `json:"from"`
-	To   string `json:"to"`
+	ChainID int64  `json:"chain_id"`
+	Hash    string `json:"hash"`
+	From    string `json:"from"`
+	To      string `json:"to"`
 }

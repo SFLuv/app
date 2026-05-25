@@ -6,6 +6,7 @@ export type TransactionStatus = "completed" | "pending" | "failed"
 
 export interface ServerTransaction {
   id: string;
+  chain_id: number;
   hash: string;
   amount: string;
   timestamp: number;
@@ -16,6 +17,7 @@ export interface ServerTransaction {
 
 export interface Transaction {
   id: string
+  chainId?: number
   type: TransactionType
   amount: number
   timestamp: string

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/SFLuv/app/backend/abi"
+	"github.com/SFLuv/app/backend/clientconfig"
 	"github.com/SFLuv/app/backend/db"
 	"github.com/SFLuv/app/backend/logger"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
@@ -34,7 +35,7 @@ type RedeemerService struct {
 	redeemerRole [32]byte
 }
 
-func NewRedeemerService(appDb *db.AppDB, log *logger.LogCloser) *RedeemerService {
+func NewRedeemerService(appDb *db.AppDB, log *logger.LogCloser, config *clientconfig.Config) *RedeemerService {
 	service := &RedeemerService{
 		appDb: appDb,
 		log:   log,
@@ -55,18 +56,28 @@ func NewRedeemerService(appDb *db.AppDB, log *logger.LogCloser) *RedeemerService
 		return service
 	}
 
-	rpcURL := strings.TrimSpace(os.Getenv("RPC_URL"))
-	tokenID := strings.TrimSpace(os.Getenv("TOKEN_ID"))
+	if config == nil {
+		service.logf("redeemer auto-grant disabled: client config is not loaded")
+		return service
+	}
+	primaryToken, err := config.PrimaryToken()
+	if err != nil {
+		service.logf("redeemer auto-grant disabled: invalid client config: %s", err)
+		return service
+	}
+
+	rpcURL := strings.TrimSpace(config.PrimaryRPCURL())
+	tokenID := strings.TrimSpace(primaryToken.Address)
 	redeemerAdminKey := strings.TrimPrefix(strings.TrimSpace(os.Getenv("REDEEMER_ADMIN_KEY")), "0x")
 	redeemerAdminAddress := strings.TrimSpace(os.Getenv("REDEEMER_ADMIN_ADDRESS"))
 
 	if rpcURL == "" || tokenID == "" || redeemerAdminKey == "" || redeemerAdminAddress == "" {
-		service.logf("redeemer auto-grant disabled: missing one or more required env vars (RPC_URL, TOKEN_ID, REDEEMER_ADMIN_KEY, REDEEMER_ADMIN_ADDRESS)")
+		service.logf("redeemer auto-grant disabled: missing primary RPC/token config or one of REDEEMER_ADMIN_KEY, REDEEMER_ADMIN_ADDRESS")
 		return service
 	}
 
 	if !common.IsHexAddress(tokenID) {
-		service.logf("redeemer auto-grant disabled: invalid TOKEN_ID address %q", tokenID)
+		service.logf("redeemer auto-grant disabled: invalid configured token address %q", tokenID)
 		return service
 	}
 	if !common.IsHexAddress(redeemerAdminAddress) {

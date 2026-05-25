@@ -10,13 +10,13 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Copy, CheckCircle, ChevronDown, ChevronRight, AlertTriangle } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { AppWallet } from "@/lib/wallets/wallets"
-import { CHAIN, SYMBOL } from "@/lib/constants"
 import { buildMerchantSendQrValue } from "@/lib/redeem-link"
 import { TabsTrigger, Tabs, TabsList } from "../ui/tabs"
 import { isAddress } from "viem"
 import { Collapsible, CollapsibleTrigger } from "../ui/collapsible"
 import { CollapsibleContent } from "@radix-ui/react-collapsible"
 import ContactOrAddressInput from "../contacts/contact-or-address-input"
+import { useChainConfig } from "@/context/ChainConfigProvider"
 
 interface ReceiveCryptoModalProps {
   open: boolean
@@ -25,6 +25,7 @@ interface ReceiveCryptoModalProps {
 }
 
 export function ReceiveCryptoModal({ open, onOpenChange, wallet }: ReceiveCryptoModalProps) {
+  const chainConfig = useChainConfig()
   const [copied, setCopied] = useState(false)
   const [activeTab, setActiveTab] = useState<string>("cw")
   const [tipAddress, setTipAddress] = useState<string>("")
@@ -70,11 +71,13 @@ export function ReceiveCryptoModal({ open, onOpenChange, wallet }: ReceiveCrypto
     return buildMerchantSendQrValue({
       to: wallet.address,
       tipTo: tipAddressError ? null : trimmedTipAddress || null,
+      appOrigin: chainConfig.appOrigin,
+      cwAlias: chainConfig.alias,
     })
-  }, [tipAddressError, trimmedTipAddress, wallet.address])
+  }, [chainConfig.alias, chainConfig.appOrigin, tipAddressError, trimmedTipAddress, wallet.address])
 
-  const currencySymbol = SYMBOL
-  const networkName = CHAIN.name
+  const currencySymbol = chainConfig.tokenSymbol
+  const networkName = chainConfig.chain.name
 
   return (
     <Dialog open={open} onOpenChange={(open) => {

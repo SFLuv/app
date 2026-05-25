@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"os"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -58,7 +57,7 @@ type analyticsReward struct {
 
 func (p *PonderService) GetAdminAnalyticsDashboard(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().UTC()
-	chainID := analyticsChainID()
+	chainID := p.requestChainID(r)
 
 	if err := p.SyncAnalyticsWalletRoleHistory(r.Context(), chainID); err != nil {
 		p.logger.Logf("error syncing analytics wallet role history: %s", err)
@@ -74,7 +73,7 @@ func (p *PonderService) GetAdminAnalyticsDashboard(w http.ResponseWriter, r *htt
 	}
 	roles := buildAnalyticsRoleIndex(roleHistory, chainID)
 
-	transfers, err := p.db.GetAnalyticsTransfersSince(r.Context(), 0)
+	transfers, err := p.db.GetAnalyticsTransfersSince(r.Context(), chainID, 0)
 	if err != nil {
 		p.logger.Logf("error loading analytics transfers: %s", err)
 		w.WriteHeader(http.StatusInternalServerError)
@@ -235,7 +234,7 @@ func (p *PonderService) SyncAnalyticsWalletRoleHistory(ctx context.Context, chai
 }
 
 func (p *PonderService) SyncCurrentAnalyticsWalletRoleHistory(ctx context.Context) error {
-	return p.SyncAnalyticsWalletRoleHistory(ctx, analyticsChainID())
+	return p.SyncAnalyticsWalletRoleHistory(ctx, p.requestChainID(nil))
 }
 
 func buildAnalyticsWalletRoleCandidates(chainID int64, owners []*structs.AnalyticsWalletOwner, merchants []*structs.AnalyticsMerchantWallet) []appdb.AnalyticsWalletRoleCandidate {
@@ -274,15 +273,6 @@ func buildAnalyticsWalletRoleCandidates(chainID int64, owners []*structs.Analyti
 		appendCandidate(address, "zapper", "", 0, "env.zapper")
 	}
 	return candidates
-}
-
-func analyticsChainID() int64 {
-	for _, key := range []string{"CHAIN_ID", "NEXT_PUBLIC_CHAIN_ID"} {
-		if value, err := strconv.ParseInt(strings.TrimSpace(os.Getenv(key)), 10, 64); err == nil && value > 0 {
-			return value
-		}
-	}
-	return 80094
 }
 
 func buildAnalyticsRoleIndex(records []*structs.AnalyticsWalletRoleRecord, chainID int64) analyticsRoleIndex {

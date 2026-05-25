@@ -290,7 +290,7 @@ func (a *AppService) waitForWorkflowPayoutTransferConfirmation(ctx context.Conte
 }
 
 func (a *AppService) reconcileWorkflowStepPayoutByHash(ctx context.Context, workflowID string, stepID string, improverID string) (bool, bool, error) {
-	bounty, txHash, err := a.db.GetWorkflowStepRecordedPayoutTxHash(ctx, workflowID, stepID, improverID)
+	bounty, txHash, chainID, err := a.db.GetWorkflowStepRecordedPayoutTxHash(ctx, workflowID, stepID, improverID)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return false, false, nil
@@ -299,6 +299,9 @@ func (a *AppService) reconcileWorkflowStepPayoutByHash(ctx context.Context, work
 	}
 	if txHash == "" {
 		return false, false, nil
+	}
+	if chainID > 0 && chainID != a.activeChainID() {
+		return false, true, nil
 	}
 
 	walletAddress, err := a.db.GetPreferredWorkflowPayoutAddressForUser(ctx, improverID, false)
@@ -329,7 +332,7 @@ func (a *AppService) reconcileWorkflowStepPayoutByHash(ctx context.Context, work
 }
 
 func (a *AppService) reconcileWorkflowManagerPayoutByHash(ctx context.Context, workflowID string, improverID string) (bool, bool, error) {
-	bounty, txHash, err := a.db.GetWorkflowManagerRecordedPayoutTxHash(ctx, workflowID, improverID)
+	bounty, txHash, chainID, err := a.db.GetWorkflowManagerRecordedPayoutTxHash(ctx, workflowID, improverID)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return false, false, nil
@@ -338,6 +341,9 @@ func (a *AppService) reconcileWorkflowManagerPayoutByHash(ctx context.Context, w
 	}
 	if txHash == "" {
 		return false, false, nil
+	}
+	if chainID > 0 && chainID != a.activeChainID() {
+		return false, true, nil
 	}
 
 	walletAddress, err := a.db.GetPreferredWorkflowPayoutAddressForUser(ctx, improverID, true)
@@ -5118,7 +5124,7 @@ func (a *AppService) processWorkflowSeriesPayouts(ctx context.Context, triggerWo
 
 				currentBalance, neededBalance, insufficient, txHash, transferErr := a.attemptWorkflowPayoutTransfer(ctx, target.Amount, walletAddress)
 				if strings.TrimSpace(txHash) != "" {
-					if dbErr := a.db.RecordWorkflowStepPayoutTxHash(ctx, target.WorkflowId, target.StepId, txHash); dbErr != nil {
+					if dbErr := a.db.RecordWorkflowStepPayoutTxHash(ctx, target.WorkflowId, target.StepId, txHash, a.activeChainID()); dbErr != nil {
 						a.logger.Logf("error recording step payout tx hash for workflow %s step %s: %s", target.WorkflowId, target.StepId, dbErr)
 						return
 					}
@@ -5221,12 +5227,12 @@ func (a *AppService) processWorkflowSeriesPayouts(ctx context.Context, triggerWo
 				currentBalance, neededBalance, insufficient, txHash, transferErr := a.attemptWorkflowPayoutTransfer(ctx, target.Amount, walletAddress)
 				if strings.TrimSpace(txHash) != "" {
 					if target.IsManager {
-						if dbErr := a.db.RecordWorkflowManagerPayoutTxHash(ctx, target.WorkflowId, txHash); dbErr != nil {
+						if dbErr := a.db.RecordWorkflowManagerPayoutTxHash(ctx, target.WorkflowId, txHash, a.activeChainID()); dbErr != nil {
 							a.logger.Logf("error recording manager payout tx hash for workflow %s: %s", target.WorkflowId, dbErr)
 							return
 						}
 					} else {
-						if dbErr := a.db.RecordWorkflowStepPayoutTxHash(ctx, target.WorkflowId, target.StepId, txHash); dbErr != nil {
+						if dbErr := a.db.RecordWorkflowStepPayoutTxHash(ctx, target.WorkflowId, target.StepId, txHash, a.activeChainID()); dbErr != nil {
 							a.logger.Logf("error recording step payout tx hash for workflow %s step %s: %s", target.WorkflowId, target.StepId, dbErr)
 							return
 						}

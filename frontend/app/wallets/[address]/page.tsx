@@ -13,7 +13,6 @@ import { TransactionModal } from "@/components/transactions/transaction-modal"
 import { useToast } from "@/hooks/use-toast"
 import { useParams, useRouter, useSearchParams } from "next/navigation"
 import { useApp } from "@/context/AppProvider"
-import { CHAIN, HONEY_TOKEN } from "@/lib/constants"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
@@ -24,10 +23,16 @@ import { WalletTransaction } from "@/types/privy-wallet"
 import type { Transaction } from "@/types/transaction"
 import { useIsMobile } from "@/hooks/use-mobile"
 import { extractMerchantSendFromPayload } from "@/lib/qr/payload"
+import { useChainConfig } from "@/context/ChainConfigProvider"
 
 type BalanceUpdateResult = "changed" | "unchanged" | "unknown"
 
 export default function WalletDetailsPage() {
+  const chainConfig = useChainConfig()
+  const tokenSymbol = chainConfig.tokenSymbol
+  const canUseZapper = Boolean(chainConfig.zapperContractAddress)
+  const hasByusdToken = Boolean(chainConfig.byusdTokenAddress)
+  const hasHoneyToken = Boolean(chainConfig.honeyTokenAddress)
   const [showSendModal, setShowSendModal] = useState(false)
   const [showCashoutModal, setShowCashoutModal] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -139,7 +144,7 @@ export default function WalletDetailsPage() {
     let cancelled = false
 
     const resolveUnwrapEligibility = async () => {
-      if (!wallet || wallet.type !== "smartwallet") {
+      if (!wallet || wallet.type !== "smartwallet" || !canUseZapper) {
         if (!cancelled) setWalletCanUnwrap(false)
         return
       }
@@ -155,7 +160,7 @@ export default function WalletDetailsPage() {
     return () => {
       cancelled = true
     }
-  }, [wallet])
+  }, [canUseZapper, wallet])
 
   useEffect(() => {
     if (!wallet) {
@@ -163,8 +168,8 @@ export default function WalletDetailsPage() {
       return
     }
 
-    setWalletCanMint(wallet.isMinter === true)
-  }, [wallet])
+    setWalletCanMint(wallet.isMinter === true && canUseZapper && (hasByusdToken || hasHoneyToken))
+  }, [canUseZapper, hasByusdToken, hasHoneyToken, wallet])
 
   useEffect(() => {
     getTransactionsPageRef.current = getTransactionsPage
@@ -275,8 +280,8 @@ export default function WalletDetailsPage() {
     setBackingBalancesLoading(true)
     try {
       const [byusd, honey] = await Promise.all([
-        wallet.getBYUSDBalanceFormatted(),
-        wallet.getHoneyBalanceFormatted()
+        hasByusdToken ? wallet.getBYUSDBalanceFormatted() : Promise.resolve(null),
+        hasHoneyToken ? wallet.getHoneyBalanceFormatted() : Promise.resolve(null)
       ])
       setByusdBalance(byusd)
       setHoneyBalance(honey)
@@ -288,7 +293,7 @@ export default function WalletDetailsPage() {
     } finally {
       setBackingBalancesLoading(false)
     }
-  }, [wallet, walletCanMint])
+  }, [hasByusdToken, hasHoneyToken, wallet, walletCanMint])
 
   const updateGasBalance = useCallback(async () => {
     if (!wallet || wallet.type !== "eoa") {
@@ -422,6 +427,10 @@ export default function WalletDetailsPage() {
 
   const handleMint = async () => {
     if (!wallet) return
+    if ((mintAsset === "BYUSD" && !hasByusdToken) || (mintAsset === "HONEY" && !hasHoneyToken)) {
+      setMintError(`${mintAsset} is not configured for this community.`)
+      return
+    }
     if (!mintAmount || Number(mintAmount) <= 0) {
       setMintError("Enter an amount greater than 0.")
       return
@@ -692,7 +701,7 @@ export default function WalletDetailsPage() {
                 {wallet.type === "eoa" && (
                   <div className="mt-1">
                     <Badge variant="warning" className="text-[10px] sm:text-xs">
-                      Gas: {formatGasBalance(gasTokenBalance)} {CHAIN.nativeCurrency.symbol}
+                      Gas: {formatGasBalance(gasTokenBalance)} {chainConfig.chain.nativeCurrency.symbol}
                     </Badge>
                   </div>
                 )}
@@ -760,7 +769,7 @@ export default function WalletDetailsPage() {
                     className="h-14 sm:h-16 flex-col gap-1.5 sm:gap-2 text-sm hover:bg-primary/65"
                   >
                     <Banknote className="h-4 w-4 sm:h-5 sm:w-5" />
-                    <span>Unwrap SFLUV</span>
+                    <span>Unwrap {tokenSymbol}</span>
                   </Button>
                 )}
               </div>
@@ -772,10 +781,11 @@ export default function WalletDetailsPage() {
               <CardHeader className="pb-2 sm:pb-3">
                 <CardTitle className="text-base sm:text-lg">Minter Backing Assets</CardTitle>
                 <CardDescription className="text-xs sm:text-sm">
-                  Use backing assets to mint new SFLUV to this wallet.
+                  Use backing assets to mint new {tokenSymbol} to this wallet.
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-3 sm:space-y-4">
+                {hasByusdToken && (
                 <div className="rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50/60 dark:bg-blue-900/15 p-3 sm:p-4">
                   <div className="flex items-start justify-between gap-3">
                     <div className="space-y-1">
@@ -788,11 +798,13 @@ export default function WalletDetailsPage() {
                       onClick={() => openMintModal("BYUSD")}
                       className="bg-[#eb6c6c] hover:bg-[#d55c5c] text-white"
                     >
-                      Mint SFLUV
+                      Mint {tokenSymbol}
                     </Button>
                   </div>
                 </div>
+                )}
 
+                {hasHoneyToken && (
                 <div className="rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50/60 dark:bg-amber-900/15 p-3 sm:p-4">
                   <div className="flex items-start justify-between gap-3">
                     <div className="space-y-1">
@@ -805,13 +817,14 @@ export default function WalletDetailsPage() {
                       onClick={() => openMintModal("HONEY")}
                       className="bg-[#eb6c6c] hover:bg-[#d55c5c] text-white"
                     >
-                      Mint SFLUV
+                      Mint {tokenSymbol}
                     </Button>
                   </div>
                 </div>
-                {!backingBalancesLoading && (!HONEY_TOKEN || HONEY_TOKEN.length !== 42) && (
+                )}
+                {!backingBalancesLoading && (!hasByusdToken && !hasHoneyToken) && (
                   <p className="text-xs text-amber-700 dark:text-amber-300">
-                    Honey balance unavailable: set `NEXT_PUBLIC_HONEY_ADDRESS` in frontend env.
+                    Backing assets are not configured for this community.
                   </p>
                 )}
               </CardContent>
@@ -921,9 +934,9 @@ export default function WalletDetailsPage() {
       <Dialog open={showMintModal} onOpenChange={setShowMintModal}>
         <DialogContent className="sm:max-w-[520px]">
           <DialogHeader>
-            <DialogTitle>Mint SFLUV from {mintAsset}</DialogTitle>
+            <DialogTitle>Mint {tokenSymbol} from {mintAsset}</DialogTitle>
             <DialogDescription>
-              Enter how much {mintAsset} to convert into SFLUV.
+              Enter how much {mintAsset} to convert into {tokenSymbol}.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
@@ -956,7 +969,7 @@ export default function WalletDetailsPage() {
               disabled={isMinting}
               className="bg-[#eb6c6c] hover:bg-[#d55c5c]"
             >
-              {isMinting ? "Minting..." : "Mint SFLUV"}
+              {isMinting ? "Minting..." : `Mint ${tokenSymbol}`}
             </Button>
           </DialogFooter>
         </DialogContent>

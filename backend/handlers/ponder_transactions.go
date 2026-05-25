@@ -9,6 +9,14 @@ import (
 	"github.com/SFLuv/app/backend/utils"
 )
 
+func parsePositiveInt64(value string) int64 {
+	parsed, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+	if err != nil || parsed <= 0 {
+		return 0
+	}
+	return parsed
+}
+
 func (p *PonderService) GetTransactionHistory(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
 
@@ -32,6 +40,7 @@ func (p *PonderService) GetTransactionHistory(w http.ResponseWriter, r *http.Req
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
+	chainID := p.requestChainID(r)
 
 	iPage, err := strconv.Atoi(page)
 	if err != nil {
@@ -45,7 +54,7 @@ func (p *PonderService) GetTransactionHistory(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	txs, err := p.db.GetTransactionsPaginated(r.Context(), address, iPage, iCount, descending)
+	txs, err := p.db.GetTransactionsPaginated(r.Context(), address, chainID, iPage, iCount, descending)
 	if err != nil {
 		p.logger.Logf("error getting paginated transactions: %s", err)
 		w.WriteHeader(http.StatusInternalServerError)
@@ -79,7 +88,7 @@ func (p *PonderService) GetTransactionHistory(w http.ResponseWriter, r *http.Req
 				authorizedHashes = append(authorizedHashes, normalizedHash)
 			}
 
-			memosByHash, memoErr := p.appDB.GetTransactionMemosByHashes(r.Context(), authorizedHashes)
+			memosByHash, memoErr := p.appDB.GetTransactionMemosByHashes(r.Context(), authorizedHashes, chainID)
 			if memoErr != nil {
 				p.logger.Logf("error loading authorized memos for user %s address %s: %s", *userDid, address, memoErr)
 			} else {
@@ -108,8 +117,9 @@ func (p *PonderService) GetTransactionHistory(w http.ResponseWriter, r *http.Req
 }
 
 type upsertTransactionMemoRequest struct {
-	TxHash string `json:"tx_hash"`
-	Memo   string `json:"memo"`
+	TxHash  string `json:"tx_hash"`
+	ChainID int64  `json:"chain_id"`
+	Memo    string `json:"memo"`
 }
 
 func (p *PonderService) UpsertTransactionMemo(w http.ResponseWriter, r *http.Request) {
@@ -135,8 +145,12 @@ func (p *PonderService) UpsertTransactionMemo(w http.ResponseWriter, r *http.Req
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
+	chainID := req.ChainID
+	if chainID <= 0 {
+		chainID = p.requestChainID(r)
+	}
 
-	txParties, txErr := p.db.GetTransactionPartiesByHash(r.Context(), txHash)
+	txParties, txErr := p.db.GetTransactionPartiesByHash(r.Context(), txHash, chainID)
 	if txErr != nil {
 		p.logger.Logf("error looking up transaction %s for memo authorization: %s", txHash, txErr)
 		w.WriteHeader(http.StatusInternalServerError)
@@ -158,16 +172,17 @@ func (p *PonderService) UpsertTransactionMemo(w http.ResponseWriter, r *http.Req
 		}
 	}
 
-	err := p.appDB.UpsertTransactionMemo(r.Context(), txHash, memo, *userDid)
+	err := p.appDB.UpsertTransactionMemo(r.Context(), txHash, chainID, memo, *userDid)
 	if err != nil {
 		p.logger.Logf("error upserting transaction memo for tx %s user %s: %s", txHash, *userDid, err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 
-	resp := map[string]string{
-		"tx_hash": strings.ToLower(txHash),
-		"memo":    memo,
+	resp := map[string]any{
+		"tx_hash":  strings.ToLower(txHash),
+		"chain_id": chainID,
+		"memo":     memo,
 	}
 	w.WriteHeader(http.StatusCreated)
 	_ = json.NewEncoder(w).Encode(resp)
@@ -181,6 +196,7 @@ func (p *PonderService) GetBalanceAtTimestamp(w http.ResponseWriter, r *http.Req
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
+	chainID := p.requestChainID(r)
 
 	parsedTimestamp, err := strconv.ParseInt(timestamp, 10, 64)
 	if err != nil {
@@ -188,7 +204,7 @@ func (p *PonderService) GetBalanceAtTimestamp(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	balance, err := p.db.GetBalanceAtTimestamp(r.Context(), address, parsedTimestamp)
+	balance, err := p.db.GetBalanceAtTimestamp(r.Context(), address, chainID, parsedTimestamp)
 	if err != nil {
 		p.logger.Logf("error getting balance at timestamp: %s", err)
 		w.WriteHeader(http.StatusInternalServerError)
@@ -197,6 +213,7 @@ func (p *PonderService) GetBalanceAtTimestamp(w http.ResponseWriter, r *http.Req
 
 	resp := map[string]any{
 		"address":   address,
+		"chain_id":  chainID,
 		"timestamp": parsedTimestamp,
 		"balance":   balance,
 	}

@@ -65,6 +65,7 @@ import { GoogleSubLocation } from "@/types/location";
 import { ensureGooglePlacesScript, hasGoogleMapsPlaces } from "@/lib/google-places";
 import { sweepSFLUVBalancesToAdmin } from "@/lib/account-deletion";
 import { getAddress, isAddress } from "viem";
+import { useChainConfig } from "@/context/ChainConfigProvider";
 
 type MerchantStatus = "approved" | "pending" | "rejected" | "none";
 type LocationApplicationStatus = "approved" | "pending" | "rejected";
@@ -225,6 +226,7 @@ function AppleLogo({ className = "h-5 w-5" }: { className?: string }) {
 }
 
 export default function SettingsPage() {
+  const chainConfig = useChainConfig();
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -2124,7 +2126,7 @@ export default function SettingsPage() {
     setDeleteAccountSubmitting(true);
     setDeleteAccountPhase("sweeping");
     try {
-      await sweepSFLUVBalancesToAdmin(wallets);
+      await sweepSFLUVBalancesToAdmin(wallets, chainConfig.tokenAddress);
       setDeleteAccountPhase("deleting");
       const res = await authFetch("/users/delete-account", {
         method: "POST",
