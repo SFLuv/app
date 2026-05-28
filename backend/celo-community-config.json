@@ -1,0 +1,79 @@
+{
+  "community": {
+    "name": "SFLUV Community",
+    "description": "A community currency for the city of San Francisco.",
+    "url": "https://sfluv.org",
+    "alias": "wallet.celo.sfluv.org",
+    "custom_domain": "wallet.sfluv.org",
+    "logo": "https://assets.citizenwallet.xyz/wallet-config/_images/sfluv.svg",
+    "theme": {
+      "primary": "#eb6c6c"
+    },
+    "profile": {
+      "address": "0x05e2Fb34b4548990F96B3ba422eA3EF49D5dAa99",
+      "chain_id": 42220
+    },
+    "primary_token": {
+      "address": "0xBe146Ca5945ABf36e12f89fB8DA99da2c848D552",
+      "chain_id": 42220
+    },
+    "primary_account_factory": {
+      "address": "0x7cC54D54bBFc65d1f0af7ACee5e4042654AF8185",
+      "chain_id": 42220
+    }
+  },
+  "tokens": {
+    "42220:0xBe146Ca5945ABf36e12f89fB8DA99da2c848D552": {
+      "standard": "erc20",
+      "name": "SFLUV V3",
+      "address": "0xBe146Ca5945ABf36e12f89fB8DA99da2c848D552",
+      "symbol": "SFLUV",
+      "decimals": 6,
+      "chain_id": 42220
+    }
+  },
+  "scan": {
+    "url": "https://celoscan.io",
+    "name": "Celo Explorer"
+  },
+  "accounts": {
+    "42220:0x7cC54D54bBFc65d1f0af7ACee5e4042654AF8185": {
+      "chain_id": 42220,
+      "entrypoint_address": "0x7079253c0358eF9Fd87E16488299Ef6e06F403B6",
+      "paymaster_address": "0x644d264387331Bbafbad813f24bfa345E197ECd3",
+      "account_factory_address": "0x7cC54D54bBFc65d1f0af7ACee5e4042654AF8185",
+      "paymaster_type": "cw-safe"
+    }
+  },
+  "chains": {
+    "42220": {
+      "id": 42220,
+      "node": {
+        "url": "https://42220.engine.citizenwallet.xyz",
+        "ws_url": "wss://42220.engine.citizenwallet.xyz"
+      }
+    }
+  },
+  "ipfs": {
+    "url": "https://ipfs.internal.citizenwallet.xyz"
+  },
+  "plugins": [
+    {
+      "name": "Map",
+      "icon": "https://assets.citizenwallet.xyz/wallet-config/_images/sfluv.svg",
+      "url": "https://app.sfluv.org/map",
+      "launch_mode": "webview",
+      "featured": true,
+      "signature": true
+    },
+    {
+      "name": "About",
+      "icon": "https://assets.citizenwallet.xyz/wallet-config/_images/sfluv.svg",
+      "url": "https://app.sfluv.org",
+      "launch_mode": "webview",
+      "signature": true,
+      "hidden": true
+    }
+  ],
+  "version": 4
+}
