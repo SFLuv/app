@@ -31,8 +31,8 @@ import (
 	_ "image/png"
 )
 
-const maxWorkflowStepCompletionRequestBytes int64 = 16 * 1024 * 1024
-const maxWorkflowStepPhotoUploadRequestBytes int64 = 4 * 1024 * 1024
+const maxWorkflowStepCompletionRequestBytes int64 = 32 * 1024 * 1024
+const maxWorkflowStepPhotoUploadRequestBytes int64 = 8 * 1024 * 1024
 const workflowPayoutProcessingTimeout = 15 * time.Minute
 const workflowPayoutStaleLockTimeout = 5 * time.Minute
 
@@ -3061,7 +3061,7 @@ func (a *AppService) UploadWorkflowStepPhoto(w http.ResponseWriter, r *http.Requ
 		var maxBytesErr *http.MaxBytesError
 		if errors.As(err, &maxBytesErr) {
 			w.WriteHeader(http.StatusRequestEntityTooLarge)
-			w.Write([]byte("workflow photo upload is too large; each photo must be 2MB or less"))
+			w.Write([]byte("workflow photo upload is too large; each photo must be 4MB or less"))
 			return
 		}
 		w.WriteHeader(http.StatusBadRequest)
