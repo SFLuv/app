@@ -10,63 +10,32 @@ func (a *AppDB) BackfillTransactionChainIDs(ctx context.Context, chainID int64) 
 		return fmt.Errorf("chain id must be positive")
 	}
 
-	_, err := a.db.Exec(ctx, `
-		ALTER TABLE memos
-		ADD COLUMN IF NOT EXISTS chain_id BIGINT;
+	stmts := []struct {
+		sql  string
+		args []any
+	}{
+		{`ALTER TABLE memos ADD COLUMN IF NOT EXISTS chain_id BIGINT`, nil},
+		{`ALTER TABLE memos DROP CONSTRAINT IF EXISTS memos_pkey`, nil},
+		{`CREATE UNIQUE INDEX IF NOT EXISTS memos_chain_tx_hash_unique_idx ON memos(chain_id, tx_hash)`, nil},
+		{`CREATE INDEX IF NOT EXISTS memos_chain_tx_hash_idx ON memos(chain_id, LOWER(tx_hash))`, nil},
+		{`UPDATE memos SET chain_id = $1 WHERE chain_id IS NULL`, []any{chainID}},
+		{`ALTER TABLE workflows ADD COLUMN IF NOT EXISTS manager_payout_chain_id BIGINT`, nil},
+		{`UPDATE workflows SET manager_payout_chain_id = $1 WHERE manager_payout_chain_id IS NULL AND COALESCE(NULLIF(TRIM(manager_payout_tx_hash), ''), '') <> ''`, []any{chainID}},
+		{`ALTER TABLE workflow_steps ADD COLUMN IF NOT EXISTS payout_chain_id BIGINT`, nil},
+		{`UPDATE workflow_steps SET payout_chain_id = $1 WHERE payout_chain_id IS NULL AND COALESCE(NULLIF(TRIM(payout_tx_hash), ''), '') <> ''`, []any{chainID}},
+		{`ALTER TABLE w9_wallet_earnings ADD COLUMN IF NOT EXISTS chain_id BIGINT`, nil},
+		{`ALTER TABLE w9_wallet_earnings ADD COLUMN IF NOT EXISTS last_tx_chain_id BIGINT`, nil},
+		{`ALTER TABLE w9_wallet_earnings DROP CONSTRAINT IF EXISTS w9_wallet_earnings_pkey`, nil},
+		{`CREATE UNIQUE INDEX IF NOT EXISTS w9_wallet_earnings_chain_wallet_year_unique_idx ON w9_wallet_earnings(wallet_address, year, chain_id)`, nil},
+		{`CREATE INDEX IF NOT EXISTS w9_wallet_earnings_chain_idx ON w9_wallet_earnings(chain_id, year)`, nil},
+		{`UPDATE w9_wallet_earnings SET chain_id = $1 WHERE chain_id IS NULL`, []any{chainID}},
+		{`UPDATE w9_wallet_earnings SET last_tx_chain_id = $1 WHERE last_tx_chain_id IS NULL AND COALESCE(NULLIF(TRIM(last_tx_hash), ''), '') <> ''`, []any{chainID}},
+	}
 
-		ALTER TABLE memos
-		DROP CONSTRAINT IF EXISTS memos_pkey;
-
-		CREATE UNIQUE INDEX IF NOT EXISTS memos_chain_tx_hash_unique_idx
-			ON memos(chain_id, tx_hash);
-		CREATE INDEX IF NOT EXISTS memos_chain_tx_hash_idx
-			ON memos(chain_id, LOWER(tx_hash));
-
-		UPDATE memos
-		SET chain_id = $1
-		WHERE chain_id IS NULL;
-
-		ALTER TABLE workflows
-		ADD COLUMN IF NOT EXISTS manager_payout_chain_id BIGINT;
-
-		UPDATE workflows
-		SET manager_payout_chain_id = $1
-		WHERE manager_payout_chain_id IS NULL
-		AND COALESCE(NULLIF(TRIM(manager_payout_tx_hash), ''), '') <> '';
-
-		ALTER TABLE workflow_steps
-		ADD COLUMN IF NOT EXISTS payout_chain_id BIGINT;
-
-		UPDATE workflow_steps
-		SET payout_chain_id = $1
-		WHERE payout_chain_id IS NULL
-		AND COALESCE(NULLIF(TRIM(payout_tx_hash), ''), '') <> '';
-
-		ALTER TABLE w9_wallet_earnings
-		ADD COLUMN IF NOT EXISTS chain_id BIGINT;
-
-		ALTER TABLE w9_wallet_earnings
-		ADD COLUMN IF NOT EXISTS last_tx_chain_id BIGINT;
-
-		ALTER TABLE w9_wallet_earnings
-		DROP CONSTRAINT IF EXISTS w9_wallet_earnings_pkey;
-
-		CREATE UNIQUE INDEX IF NOT EXISTS w9_wallet_earnings_chain_wallet_year_unique_idx
-			ON w9_wallet_earnings(wallet_address, year, chain_id);
-		CREATE INDEX IF NOT EXISTS w9_wallet_earnings_chain_idx
-			ON w9_wallet_earnings(chain_id, year);
-
-		UPDATE w9_wallet_earnings
-		SET chain_id = $1
-		WHERE chain_id IS NULL;
-
-		UPDATE w9_wallet_earnings
-		SET last_tx_chain_id = $1
-		WHERE last_tx_chain_id IS NULL
-		AND COALESCE(NULLIF(TRIM(last_tx_hash), ''), '') <> '';
-	`, chainID)
-	if err != nil {
-		return fmt.Errorf("error backfilling app transaction chain ids: %w", err)
+	for _, s := range stmts {
+		if _, err := a.db.Exec(ctx, s.sql, s.args...); err != nil {
+			return fmt.Errorf("error backfilling app transaction chain ids (%s): %w", s.sql[:40], err)
+		}
 	}
 
 	return nil
@@ -77,19 +46,19 @@ func (b *BotDB) BackfillTransactionChainIDs(ctx context.Context, chainID int64) 
 		return fmt.Errorf("chain id must be positive")
 	}
 
-	_, err := b.db.Exec(ctx, `
-		ALTER TABLE redemptions
-		ADD COLUMN IF NOT EXISTS chain_id BIGINT;
+	stmts := []struct {
+		sql  string
+		args []any
+	}{
+		{`ALTER TABLE redemptions ADD COLUMN IF NOT EXISTS chain_id BIGINT`, nil},
+		{`CREATE INDEX IF NOT EXISTS redemptions_chain_idx ON redemptions(chain_id)`, nil},
+		{`UPDATE redemptions SET chain_id = $1 WHERE chain_id IS NULL`, []any{chainID}},
+	}
 
-		CREATE INDEX IF NOT EXISTS redemptions_chain_idx
-			ON redemptions(chain_id);
-
-		UPDATE redemptions
-		SET chain_id = $1
-		WHERE chain_id IS NULL;
-	`, chainID)
-	if err != nil {
-		return fmt.Errorf("error backfilling bot transaction chain ids: %w", err)
+	for _, s := range stmts {
+		if _, err := b.db.Exec(ctx, s.sql, s.args...); err != nil {
+			return fmt.Errorf("error backfilling bot transaction chain ids (%s): %w", s.sql[:40], err)
+		}
 	}
 
 	return nil
@@ -143,15 +112,11 @@ func (p *PonderDB) BackfillTransactionChainIDs(ctx context.Context, chainID int6
 			continue
 		}
 
-		if _, err := p.db.Exec(ctx, fmt.Sprintf(`
-			ALTER TABLE %s
-			ADD COLUMN IF NOT EXISTS chain_id BIGINT;
-
-			UPDATE %s
-			SET chain_id = $1
-			WHERE chain_id IS NULL;
-		`, table.name, table.name), chainID); err != nil {
-			return fmt.Errorf("error backfilling ponder table %s chain ids: %w", table.name, err)
+		if _, err := p.db.Exec(ctx, fmt.Sprintf(`ALTER TABLE %s ADD COLUMN IF NOT EXISTS chain_id BIGINT`, table.name)); err != nil {
+			return fmt.Errorf("error backfilling ponder table %s chain ids (alter): %w", table.name, err)
+		}
+		if _, err := p.db.Exec(ctx, fmt.Sprintf(`UPDATE %s SET chain_id = $1 WHERE chain_id IS NULL`, table.name), chainID); err != nil {
+			return fmt.Errorf("error backfilling ponder table %s chain ids (update): %w", table.name, err)
 		}
 
 		for _, indexQuery := range table.indexes {

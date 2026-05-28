@@ -263,7 +263,7 @@ func NewServerHandler(ctx context.Context, pools *DBPools, appLogger *logger.Log
 		return nil, err
 	}
 	if err := ponderDb.BackfillTransactionChainIDs(ctx, activeChainID); err != nil {
-		return nil, err
+		appLogger.Logf("warning: ponder backfill failed (non-fatal): %v", err)
 	}
 
 	botClient, err := bot.Init(clientConfig)
