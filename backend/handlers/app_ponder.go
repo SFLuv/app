@@ -888,6 +888,12 @@ func sendExpoPushNotification(ctx context.Context, token string, title string, b
 	if strings.TrimSpace(token) == "" {
 		return nil, fmt.Errorf("empty Expo push token")
 	}
+	if utils.NotificationTestModeEnabled() {
+		if _, err := utils.WriteTestPushNotification(token, title, body, data); err != nil {
+			return nil, err
+		}
+		return &expoPushTicket{Status: "ok"}, nil
+	}
 
 	pushURL := strings.TrimSpace(os.Getenv("EXPO_PUSH_API_URL"))
 	if pushURL == "" {

@@ -1,7 +1,10 @@
 package clientconfig
 
 import (
+	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -156,6 +159,30 @@ func TestParseOmitsTokenExtrasWhenCitizenWalletTokensExist(t *testing.T) {
 	}
 	if _, ok := response.Extras["byusd_token_address"]; ok {
 		t.Fatalf("byusd_token_address should not be in response extras: %#v", response.Extras)
+	}
+}
+
+func TestLoadLocalOnlyUsesFallbackFile(t *testing.T) {
+	clearExtrasEnv(t)
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "community-config.json")
+	if err := os.WriteFile(configPath, []byte(testConfigJSON), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	t.Setenv("CLIENT_CONFIG_LOCAL_ONLY", "true")
+	t.Setenv("CLIENT_CONFIG_FALLBACK_PATH", configPath)
+	t.Setenv("CITIZEN_WALLET_CONFIG_URL", "http://127.0.0.1:1/should-not-be-requested.json")
+
+	cfg, err := Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Source() != "file:"+configPath {
+		t.Fatalf("Source() = %q, want file:%s", cfg.Source(), configPath)
+	}
+	if cfg.PrimaryRPCURL() != "https://80094.engine.citizenwallet.xyz" {
+		t.Fatalf("PrimaryRPCURL() = %q", cfg.PrimaryRPCURL())
 	}
 }
 

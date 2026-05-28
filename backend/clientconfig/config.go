@@ -88,6 +88,14 @@ type Config struct {
 }
 
 func Load(ctx context.Context) (*Config, error) {
+	if clientConfigLocalOnly() {
+		cfg, err := loadFallback()
+		if err != nil {
+			return nil, fmt.Errorf("unable to load local client config: %w", err)
+		}
+		return cfg, nil
+	}
+
 	if cfg, err := loadRemote(ctx); err == nil {
 		return cfg, nil
 	} else if fallback, fallbackErr := loadFallback(); fallbackErr == nil {
@@ -233,6 +241,18 @@ func remoteConfigURL() (string, error) {
 		base = defaultConfigBaseURL
 	}
 	return base + "/" + url.PathEscape(alias) + ".json", nil
+}
+
+func clientConfigLocalOnly() bool {
+	if truthyConfigEnv("CLIENT_CONFIG_LOCAL_ONLY") || truthyConfigEnv("CITIZEN_WALLET_CONFIG_LOCAL_ONLY") {
+		return true
+	}
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("CLIENT_CONFIG_MODE"))) {
+	case "file", "local", "local-only":
+		return true
+	default:
+		return false
+	}
 }
 
 func parse(body []byte, source string) (*Config, error) {
@@ -569,6 +589,15 @@ func firstEnv(names ...string) (string, string) {
 		}
 	}
 	return "", ""
+}
+
+func truthyConfigEnv(key string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
+	case "1", "t", "true", "y", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 func isHexAddress(value string) bool {
