@@ -7346,7 +7346,7 @@ func normalizeWorkflowNotificationEmailSubject(raw string) (string, error) {
 	return subject, nil
 }
 
-const maxWorkflowPhotoUploadBytes = 2 * 1024 * 1024
+const maxWorkflowPhotoUploadBytes = 4 * 1024 * 1024
 
 type parsedWorkflowPhotoUpload struct {
 	FileName    string
@@ -7359,7 +7359,7 @@ func normalizeWorkflowPhotoUploadData(fileNameInput, contentTypeInput string, da
 		return nil, fmt.Errorf("photo upload payload is empty")
 	}
 	if len(data) > maxWorkflowPhotoUploadBytes {
-		return nil, fmt.Errorf("photo upload exceeds maximum size of 2MB")
+		return nil, fmt.Errorf("photo upload exceeds maximum size of 4MB")
 	}
 
 	contentType := strings.ToLower(strings.TrimSpace(contentTypeInput))
