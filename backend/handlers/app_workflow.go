@@ -1201,7 +1201,7 @@ func (a *AppService) GetWorkflow(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
-	allowSupervisorData := includeSupervisorData && canUserViewWorkflowSupervisorData(workflow, *userDid)
+	allowSupervisorData := includeSupervisorData && (isAdmin || canUserViewWorkflowSupervisorData(workflow, *userDid))
 	sanitizeWorkflowForUserWithOptions(workflow, *userDid, isAdmin, allowSupervisorData, includeNotifyEmails)
 
 	w.WriteHeader(http.StatusOK)
@@ -1303,11 +1303,16 @@ func (a *AppService) GetSupervisorWorkflows(w http.ResponseWriter, r *http.Reque
 
 	search := r.URL.Query().Get("search")
 	statusFilter := r.URL.Query().Get("status")
+	supervisorFilter := r.URL.Query().Get("supervisor_id")
 	sortBy := r.URL.Query().Get("sort_by")
 	sortDirection := r.URL.Query().Get("sort_direction")
 	dateField := r.URL.Query().Get("date_field")
 	page, _ := strconv.Atoi(strings.TrimSpace(r.URL.Query().Get("page")))
 	count, _ := strconv.Atoi(strings.TrimSpace(r.URL.Query().Get("count")))
+	isAdmin := a.IsAdmin(r.Context(), *userDid)
+	if !isAdmin {
+		supervisorFilter = ""
+	}
 
 	dateFrom, err := parseSupervisorDateQueryValue(r.URL.Query().Get("date_from"))
 	if err != nil {
@@ -1325,13 +1330,16 @@ func (a *AppService) GetSupervisorWorkflows(w http.ResponseWriter, r *http.Reque
 	response, err := a.db.GetSupervisorWorkflows(
 		r.Context(),
 		*userDid,
+		isAdmin,
 		search,
 		statusFilter,
+		supervisorFilter,
 		sortBy,
 		sortDirection,
 		dateField,
 		dateFrom,
 		dateTo,
+		nil,
 		page,
 		count,
 	)
@@ -1837,27 +1845,25 @@ func uniqueSupervisorCSVHeader(base string, seen map[string]int) string {
 func (a *AppService) collectSupervisorWorkflowIDsForExport(
 	ctx context.Context,
 	supervisorID string,
+	isAdmin bool,
 	req *structs.SupervisorWorkflowExportRequest,
 ) ([]string, error) {
 	if req == nil {
 		return nil, fmt.Errorf("request is required")
 	}
 
-	seen := map[string]struct{}{}
-	ids := []string{}
+	seenRequested := map[string]struct{}{}
+	requestedIDs := []string{}
 	for _, workflowID := range req.WorkflowIds {
 		workflowID = strings.TrimSpace(workflowID)
 		if workflowID == "" {
 			continue
 		}
-		if _, exists := seen[workflowID]; exists {
+		if _, exists := seenRequested[workflowID]; exists {
 			continue
 		}
-		seen[workflowID] = struct{}{}
-		ids = append(ids, workflowID)
-	}
-	if len(ids) > 0 {
-		return ids, nil
+		seenRequested[workflowID] = struct{}{}
+		requestedIDs = append(requestedIDs, workflowID)
 	}
 
 	dateFrom, err := parseSupervisorDateQueryValue(req.DateFrom)
@@ -1869,6 +1875,13 @@ func (a *AppService) collectSupervisorWorkflowIDsForExport(
 		return nil, fmt.Errorf("invalid date_to")
 	}
 
+	supervisorFilter := ""
+	if isAdmin {
+		supervisorFilter = req.SupervisorUserId
+	}
+
+	seen := map[string]struct{}{}
+	ids := []string{}
 	page := 0
 	pageSize := 200
 	total := -1
@@ -1876,13 +1889,16 @@ func (a *AppService) collectSupervisorWorkflowIDsForExport(
 		result, err := a.db.GetSupervisorWorkflows(
 			ctx,
 			supervisorID,
-			"",
-			"",
+			isAdmin,
+			req.Search,
+			req.Status,
+			supervisorFilter,
 			"created_at",
 			"desc",
 			req.DateField,
 			dateFrom,
 			dateTo,
+			requestedIDs,
 			page,
 			pageSize,
 		)
@@ -2180,6 +2196,7 @@ func (a *AppService) ExportSupervisorWorkflowData(w http.ResponseWriter, r *http
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}
+	isAdmin := a.IsAdmin(r.Context(), *userDid)
 
 	defer r.Body.Close()
 	body, err := io.ReadAll(r.Body)
@@ -2197,7 +2214,7 @@ func (a *AppService) ExportSupervisorWorkflowData(w http.ResponseWriter, r *http
 		}
 	}
 
-	workflowIDs, err := a.collectSupervisorWorkflowIDsForExport(r.Context(), *userDid, &req)
+	workflowIDs, err := a.collectSupervisorWorkflowIDsForExport(r.Context(), *userDid, isAdmin, &req)
 	if err != nil {
 		errMsg := err.Error()
 		if strings.Contains(errMsg, "required") || strings.Contains(errMsg, "invalid") {
@@ -2228,7 +2245,7 @@ func (a *AppService) ExportSupervisorWorkflowData(w http.ResponseWriter, r *http
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
-		if workflow.SupervisorUserId == nil || strings.TrimSpace(*workflow.SupervisorUserId) != *userDid {
+		if !isAdmin && (workflow.SupervisorUserId == nil || strings.TrimSpace(*workflow.SupervisorUserId) != *userDid) {
 			w.WriteHeader(http.StatusForbidden)
 			return
 		}
