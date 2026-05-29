@@ -71,7 +71,7 @@ func (p *PonderService) GetAdminAnalyticsDashboard(w http.ResponseWriter, r *htt
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
-	roles := buildAnalyticsRoleIndex(roleHistory, chainID)
+	roles := buildAnalyticsRoleIndex(roleHistory)
 
 	transfers, err := p.db.GetAnalyticsTransfersSince(r.Context(), chainID, 0)
 	if err != nil {
@@ -275,10 +275,10 @@ func buildAnalyticsWalletRoleCandidates(chainID int64, owners []*structs.Analyti
 	return candidates
 }
 
-func buildAnalyticsRoleIndex(records []*structs.AnalyticsWalletRoleRecord, chainID int64) analyticsRoleIndex {
+func buildAnalyticsRoleIndex(records []*structs.AnalyticsWalletRoleRecord) analyticsRoleIndex {
 	index := make(analyticsRoleIndex)
 	for _, record := range records {
-		if record == nil || record.ChainID != chainID {
+		if record == nil {
 			continue
 		}
 		address := normalizeAnalyticsAddress(record.Address)

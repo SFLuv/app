@@ -62,7 +62,7 @@ func (w *W9Service) CheckCompliance(ctx context.Context, fromAddress string, toA
 
 	year, _, _ := utils.CurrentYearBounds()
 	chainID := w.chainIDOrActive(0)
-	totalStr, err := w.ponderDb.GetPaidTotalForWalletYear(ctx, toAddress, chainID, year, adminAddresses)
+	totalStr, err := w.ponderDb.GetPaidTotalForWalletYear(ctx, toAddress, year, adminAddresses)
 	if err != nil {
 		return nil, err
 	}
@@ -189,7 +189,7 @@ func (w *W9Service) ProcessPaidTransfer(ctx context.Context, fromAddress string,
 	}
 
 	chainID = w.chainIDOrActive(chainID)
-	totalStr, err := w.ponderDb.GetPaidTotalForWalletYear(ctx, toAddress, chainID, year, adminAddresses)
+	totalStr, err := w.ponderDb.GetPaidTotalForWalletYear(ctx, toAddress, year, adminAddresses)
 	if err != nil {
 		return nil, err
 	}

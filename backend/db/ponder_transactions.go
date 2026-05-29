@@ -9,7 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-func (p *PonderDB) GetTransactionsPaginated(ctx context.Context, address string, chainID int64, page int, count int, descending bool) (*structs.PonderTransactionsPage, error) {
+func (p *PonderDB) GetTransactionsPaginated(ctx context.Context, address string, page int, count int, descending bool) (*structs.PonderTransactionsPage, error) {
 	offset := page * count
 
 	row := p.db.QueryRow(ctx, `
@@ -18,23 +18,19 @@ func (p *PonderDB) GetTransactionsPaginated(ctx context.Context, address string,
 			FROM
 				transfer_event t
 			WHERE
-				t.chain_id = $3
-			AND
-				(
-					t.from = LOWER($1)
-				OR
-					t.to = LOWER($2)
-				);
-		`, address, address, chainID)
+				t.from = LOWER($1)
+			OR
+				t.to = LOWER($2);
+		`, address, address)
 	var total uint64
 	err := row.Scan(&total)
 	if err != nil {
-		return nil, fmt.Errorf("error getting total transaction count for address %s chain %d: %s", address, chainID, err)
+		return nil, fmt.Errorf("error getting total transaction count for address %s: %s", address, err)
 	}
 
-	desc := ""
+	direction := "ASC"
 	if descending {
-		desc = "DESC"
+		direction = "DESC"
 	}
 
 	rows, err := p.db.Query(ctx, fmt.Sprintf(`
@@ -49,21 +45,18 @@ func (p *PonderDB) GetTransactionsPaginated(ctx context.Context, address string,
 			FROM
 				transfer_event t
 			WHERE
-				t.chain_id = $5
-			AND
-				(
-					t.from = LOWER($1)
-				OR
-					t.to = LOWER($2)
-				)
+				t.from = LOWER($1)
+			OR
+				t.to = LOWER($2)
 			ORDER BY
-				t.timestamp
-			%s
+				t.timestamp %s,
+				t.chain_id %s,
+				t.id %s
 			LIMIT $3
 			OFFSET $4;
-		`, desc), address, address, count, offset, chainID)
+		`, direction, direction, direction), address, address, count, offset)
 	if err != nil {
-		return nil, fmt.Errorf("error querying for transaction history for address %s chain %d: %s", address, chainID, err)
+		return nil, fmt.Errorf("error querying for transaction history for address %s: %s", address, err)
 	}
 	defer rows.Close()
 
@@ -80,13 +73,13 @@ func (p *PonderDB) GetTransactionsPaginated(ctx context.Context, address string,
 			&t.To,
 		)
 		if err != nil {
-			return nil, fmt.Errorf("error scanning transaction history row for address %s chain %d: %s", address, chainID, err)
+			return nil, fmt.Errorf("error scanning transaction history row for address %s: %s", address, err)
 		}
 
 		transactions = append(transactions, &t)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating transaction history rows for address %s chain %d: %s", address, chainID, err)
+		return nil, fmt.Errorf("error iterating transaction history rows for address %s: %s", address, err)
 	}
 
 	transactionsPage := structs.PonderTransactionsPage{
@@ -97,7 +90,7 @@ func (p *PonderDB) GetTransactionsPaginated(ctx context.Context, address string,
 	return &transactionsPage, nil
 }
 
-func (p *PonderDB) GetBalanceAtTimestamp(ctx context.Context, address string, chainID int64, timestamp int64) (string, error) {
+func (p *PonderDB) GetBalanceAtTimestamp(ctx context.Context, address string, timestamp int64) (string, error) {
 	row := p.db.QueryRow(ctx, `
 		SELECT
 			COALESCE(
@@ -109,20 +102,18 @@ func (p *PonderDB) GetBalanceAtTimestamp(ctx context.Context, address string, ch
 			FROM
 				transfer_event t
 			WHERE
-				t.chain_id = $3
-			AND
 				t.timestamp <= $2
 			AND (
 				t.from = LOWER($1)
 				OR
 				t.to = LOWER($1)
 			);
-		`, address, timestamp, chainID)
+		`, address, timestamp)
 
 	var balance string
 	err := row.Scan(&balance)
 	if err != nil {
-		return "", fmt.Errorf("error getting balance at timestamp for address %s chain %d: %s", address, chainID, err)
+		return "", fmt.Errorf("error getting balance at timestamp for address %s: %s", address, err)
 	}
 
 	return balance, nil
@@ -143,9 +134,12 @@ func (p *PonderDB) GetTransactionPartiesByHash(ctx context.Context, txHash strin
 			FROM
 				transfer_event t
 			WHERE
-				t.chain_id = $2
-			AND
 				t.hash = LOWER($1)
+			AND
+				($2::BIGINT <= 0 OR t.chain_id = $2)
+			ORDER BY
+				t.timestamp DESC,
+				t.id DESC
 			LIMIT 1;
 		`, normalizedHash, chainID)
 
@@ -160,7 +154,7 @@ func (p *PonderDB) GetTransactionPartiesByHash(ctx context.Context, txHash strin
 		return nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("error querying transaction by hash %s chain %d: %w", normalizedHash, chainID, err)
+		return nil, fmt.Errorf("error querying transaction by hash %s: %w", normalizedHash, err)
 	}
 
 	return &tx, nil

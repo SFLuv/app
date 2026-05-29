@@ -1,11 +1,13 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strconv"
 	"strings"
 
+	"github.com/SFLuv/app/backend/structs"
 	"github.com/SFLuv/app/backend/utils"
 )
 
@@ -15,6 +17,60 @@ func parsePositiveInt64(value string) int64 {
 		return 0
 	}
 	return parsed
+}
+
+func transactionMemoKey(chainID int64, txHash string) string {
+	return strconv.FormatInt(chainID, 10) + ":" + strings.ToLower(strings.TrimSpace(txHash))
+}
+
+func (p *PonderService) transactionMemosByChainHash(ctx context.Context, authorizedHashes []string, txs []*structs.PonderTransaction) (map[string]string, error) {
+	authorized := make(map[string]struct{}, len(authorizedHashes))
+	for _, hash := range authorizedHashes {
+		hash = strings.ToLower(strings.TrimSpace(hash))
+		if hash != "" {
+			authorized[hash] = struct{}{}
+		}
+	}
+	if len(authorized) == 0 {
+		return map[string]string{}, nil
+	}
+
+	hashesByChain := make(map[int64][]string)
+	seenByChainHash := make(map[string]struct{})
+	for _, tx := range txs {
+		if tx == nil || tx.ChainID <= 0 {
+			continue
+		}
+		hash := strings.ToLower(strings.TrimSpace(tx.Hash))
+		if hash == "" {
+			continue
+		}
+		if _, ok := authorized[hash]; !ok {
+			continue
+		}
+		key := transactionMemoKey(tx.ChainID, hash)
+		if _, ok := seenByChainHash[key]; ok {
+			continue
+		}
+		seenByChainHash[key] = struct{}{}
+		hashesByChain[tx.ChainID] = append(hashesByChain[tx.ChainID], hash)
+	}
+	if len(hashesByChain) == 0 {
+		return map[string]string{}, nil
+	}
+
+	memosByTx := make(map[string]string)
+	for chainID, hashes := range hashesByChain {
+		memosByHash, err := p.appDB.GetTransactionMemosByHashes(ctx, hashes, chainID)
+		if err != nil {
+			return nil, err
+		}
+		for hash, memo := range memosByHash {
+			memosByTx[transactionMemoKey(chainID, hash)] = memo
+		}
+	}
+
+	return memosByTx, nil
 }
 
 func (p *PonderService) GetTransactionHistory(w http.ResponseWriter, r *http.Request) {
@@ -40,7 +96,6 @@ func (p *PonderService) GetTransactionHistory(w http.ResponseWriter, r *http.Req
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
-	chainID := p.requestChainID(r)
 
 	iPage, err := strconv.Atoi(page)
 	if err != nil {
@@ -54,7 +109,7 @@ func (p *PonderService) GetTransactionHistory(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	txs, err := p.db.GetTransactionsPaginated(r.Context(), address, chainID, iPage, iCount, descending)
+	txs, err := p.db.GetTransactionsPaginated(r.Context(), address, iPage, iCount, descending)
 	if err != nil {
 		p.logger.Logf("error getting paginated transactions: %s", err)
 		w.WriteHeader(http.StatusInternalServerError)
@@ -88,7 +143,7 @@ func (p *PonderService) GetTransactionHistory(w http.ResponseWriter, r *http.Req
 				authorizedHashes = append(authorizedHashes, normalizedHash)
 			}
 
-			memosByHash, memoErr := p.appDB.GetTransactionMemosByHashes(r.Context(), authorizedHashes, chainID)
+			memosByTx, memoErr := p.transactionMemosByChainHash(r.Context(), authorizedHashes, txs.Transactions)
 			if memoErr != nil {
 				p.logger.Logf("error loading authorized memos for user %s address %s: %s", *userDid, address, memoErr)
 			} else {
@@ -96,7 +151,7 @@ func (p *PonderService) GetTransactionHistory(w http.ResponseWriter, r *http.Req
 					if tx == nil {
 						continue
 					}
-					memo, ok := memosByHash[strings.ToLower(strings.TrimSpace(tx.Hash))]
+					memo, ok := memosByTx[transactionMemoKey(tx.ChainID, tx.Hash)]
 					if ok && strings.TrimSpace(memo) != "" {
 						tx.Memo = memo
 					}
@@ -146,9 +201,6 @@ func (p *PonderService) UpsertTransactionMemo(w http.ResponseWriter, r *http.Req
 		return
 	}
 	chainID := req.ChainID
-	if chainID <= 0 {
-		chainID = p.requestChainID(r)
-	}
 
 	txParties, txErr := p.db.GetTransactionPartiesByHash(r.Context(), txHash, chainID)
 	if txErr != nil {
@@ -170,6 +222,12 @@ func (p *PonderService) UpsertTransactionMemo(w http.ResponseWriter, r *http.Req
 			w.WriteHeader(http.StatusForbidden)
 			return
 		}
+		if chainID <= 0 {
+			chainID = txParties.ChainID
+		}
+	}
+	if chainID <= 0 {
+		chainID = p.requestChainID(r)
 	}
 
 	err := p.appDB.UpsertTransactionMemo(r.Context(), txHash, chainID, memo, *userDid)
@@ -204,7 +262,7 @@ func (p *PonderService) GetBalanceAtTimestamp(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	balance, err := p.db.GetBalanceAtTimestamp(r.Context(), address, chainID, parsedTimestamp)
+	balance, err := p.db.GetBalanceAtTimestamp(r.Context(), address, parsedTimestamp)
 	if err != nil {
 		p.logger.Logf("error getting balance at timestamp: %s", err)
 		w.WriteHeader(http.StatusInternalServerError)

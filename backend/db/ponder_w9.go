@@ -8,7 +8,7 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-func (p *PonderDB) GetPaidTotalForWalletYear(ctx context.Context, wallet string, chainID int64, year int, adminAddresses []string) (string, error) {
+func (p *PonderDB) GetPaidTotalForWalletYear(ctx context.Context, wallet string, year int, adminAddresses []string) (string, error) {
 	if len(adminAddresses) == 0 {
 		return "0", nil
 	}
@@ -22,8 +22,6 @@ func (p *PonderDB) GetPaidTotalForWalletYear(ctx context.Context, wallet string,
 			FROM
 				transfer_event t
 			WHERE
-				t.chain_id = $5
-			AND
 				t.to = LOWER($1)
 			AND
 				LOWER(t.from) = ANY($2)
@@ -31,7 +29,7 @@ func (p *PonderDB) GetPaidTotalForWalletYear(ctx context.Context, wallet string,
 			t.timestamp >= $3
 		AND
 			t.timestamp < $4;
-		`, wallet, adminAddresses, start, end, chainID)
+		`, wallet, adminAddresses, start, end)
 
 	var total string
 	err := row.Scan(&total)
@@ -39,7 +37,7 @@ func (p *PonderDB) GetPaidTotalForWalletYear(ctx context.Context, wallet string,
 		return "0", nil
 	}
 	if err != nil {
-		return "", fmt.Errorf("error getting ponder total for wallet %s chain %d: %s", wallet, chainID, err)
+		return "", fmt.Errorf("error getting ponder total for wallet %s: %s", wallet, err)
 	}
 
 	return total, nil

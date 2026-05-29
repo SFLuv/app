@@ -8,7 +8,7 @@ import (
 	"github.com/SFLuv/app/backend/structs"
 )
 
-func (p *PonderDB) GetAnalyticsTransfersSince(ctx context.Context, chainID int64, startTimestamp int64) ([]*structs.AnalyticsTransfer, error) {
+func (p *PonderDB) GetAnalyticsTransfersSince(ctx context.Context, _ int64, startTimestamp int64) ([]*structs.AnalyticsTransfer, error) {
 	rows, err := p.db.Query(ctx, `
 			SELECT
 				hash,
@@ -20,13 +20,12 @@ func (p *PonderDB) GetAnalyticsTransfersSince(ctx context.Context, chainID int64
 			FROM
 				transfer_event
 			WHERE
-				chain_id = $1
-			AND
-				timestamp >= $2
+				timestamp >= $1
 			ORDER BY
 				timestamp ASC,
+				chain_id ASC,
 				id ASC;
-		`, chainID, startTimestamp)
+		`, startTimestamp)
 	if err != nil {
 		return nil, fmt.Errorf("error querying analytics transfers: %w", err)
 	}
@@ -47,7 +46,7 @@ func (p *PonderDB) GetAnalyticsTransfersSince(ctx context.Context, chainID int64
 	return transfers, nil
 }
 
-func (p *PonderDB) GetAnalyticsAddressBalances(ctx context.Context, addresses []string, chainID int64) ([]*structs.AnalyticsAddressBalance, error) {
+func (p *PonderDB) GetAnalyticsAddressBalances(ctx context.Context, addresses []string, _ int64) ([]*structs.AnalyticsAddressBalance, error) {
 	normalized := make([]string, 0, len(addresses))
 	seen := make(map[string]struct{})
 	for _, address := range addresses {
@@ -68,14 +67,14 @@ func (p *PonderDB) GetAnalyticsAddressBalances(ctx context.Context, addresses []
 	rows, err := p.db.Query(ctx, `
 		SELECT
 			LOWER(address),
-			balance::text
+			SUM(balance)::text
 			FROM
 				transfer_account
 			WHERE
-				chain_id = $2
-			AND
-				LOWER(address) = ANY($1::text[]);
-		`, normalized, chainID)
+				LOWER(address) = ANY($1::text[])
+			GROUP BY
+				LOWER(address);
+		`, normalized)
 	if err != nil {
 		return nil, fmt.Errorf("error querying analytics address balances: %w", err)
 	}
