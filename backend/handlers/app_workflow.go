@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/SFLuv/app/backend/db"
 	"github.com/SFLuv/app/backend/structs"
 	"github.com/SFLuv/app/backend/utils"
 	"github.com/jackc/pgx/v5"
@@ -31,10 +32,12 @@ import (
 	_ "image/png"
 )
 
-const maxWorkflowStepCompletionRequestBytes int64 = 16 * 1024 * 1024
-const maxWorkflowStepPhotoUploadRequestBytes int64 = 4 * 1024 * 1024
 const workflowPayoutProcessingTimeout = 15 * time.Minute
 const workflowPayoutStaleLockTimeout = 5 * time.Minute
+
+func maxWorkflowStepPhotoUploadRequestBytes() int64 {
+	return 2 * int64(db.MaxWorkflowPhotoUploadBytes())
+}
 
 func userCanViewWorkflowNotifyEmails(workflow *structs.Workflow, userID string) bool {
 	if workflow == nil || userID == "" {
@@ -2982,26 +2985,10 @@ func (a *AppService) CompleteWorkflowStep(w http.ResponseWriter, r *http.Request
 	}
 
 	defer r.Body.Close()
-	r.Body = http.MaxBytesReader(w, r.Body, maxWorkflowStepCompletionRequestBytes)
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		var maxBytesErr *http.MaxBytesError
-		if errors.As(err, &maxBytesErr) {
-			w.WriteHeader(http.StatusRequestEntityTooLarge)
-			w.Write([]byte("workflow step submission is too large; reduce the number or size of uploaded photos"))
-			return
-		}
-		a.logger.Logf("error reading workflow step completion body: %s", err)
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
 	req := structs.WorkflowStepCompleteRequest{}
-	if len(strings.TrimSpace(string(body))) > 0 {
-		if err := json.Unmarshal(body, &req); err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err != io.EOF {
+		w.WriteHeader(http.StatusBadRequest)
+		return
 	}
 
 	result, err := a.db.CompleteWorkflowStep(r.Context(), workflowId, stepId, *userDid, req.StepNotPossible, req.StepNotPossibleDetails, req.Items)
@@ -3062,12 +3049,13 @@ func (a *AppService) UploadWorkflowStepPhoto(w http.ResponseWriter, r *http.Requ
 	}
 
 	defer r.Body.Close()
-	r.Body = http.MaxBytesReader(w, r.Body, maxWorkflowStepPhotoUploadRequestBytes)
-	if err := r.ParseMultipartForm(maxWorkflowStepPhotoUploadRequestBytes); err != nil {
+	uploadRequestLimit := maxWorkflowStepPhotoUploadRequestBytes()
+	r.Body = http.MaxBytesReader(w, r.Body, uploadRequestLimit)
+	if err := r.ParseMultipartForm(uploadRequestLimit); err != nil {
 		var maxBytesErr *http.MaxBytesError
 		if errors.As(err, &maxBytesErr) {
 			w.WriteHeader(http.StatusRequestEntityTooLarge)
-			w.Write([]byte("workflow photo upload is too large; each photo must be 2MB or less"))
+			w.Write([]byte(fmt.Sprintf("workflow photo upload is too large; each photo must be %s or less", db.MaxWorkflowPhotoUploadLabel())))
 			return
 		}
 		w.WriteHeader(http.StatusBadRequest)

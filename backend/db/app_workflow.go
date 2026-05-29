@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/mail"
+	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -7346,7 +7347,39 @@ func normalizeWorkflowNotificationEmailSubject(raw string) (string, error) {
 	return subject, nil
 }
 
-const maxWorkflowPhotoUploadBytes = 2 * 1024 * 1024
+const (
+	DefaultMaxWorkflowPhotoUploadBytes = 4 * 1024 * 1024
+	workflowPhotoUploadMaxBytesEnv     = "WORKFLOW_PHOTO_UPLOAD_MAX_BYTES"
+)
+
+func MaxWorkflowPhotoUploadBytes() int {
+	raw := strings.TrimSpace(os.Getenv(workflowPhotoUploadMaxBytesEnv))
+	if raw == "" {
+		return DefaultMaxWorkflowPhotoUploadBytes
+	}
+	parsed, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || parsed <= 0 {
+		return DefaultMaxWorkflowPhotoUploadBytes
+	}
+	maxInt := int64(^uint(0) >> 1)
+	if parsed > maxInt {
+		return int(maxInt)
+	}
+	return int(parsed)
+}
+
+func MaxWorkflowPhotoUploadLabel() string {
+	limit := MaxWorkflowPhotoUploadBytes()
+	const mb = 1024 * 1024
+	const kb = 1024
+	if limit%mb == 0 {
+		return fmt.Sprintf("%dMB", limit/mb)
+	}
+	if limit%kb == 0 {
+		return fmt.Sprintf("%dKB", limit/kb)
+	}
+	return fmt.Sprintf("%d bytes", limit)
+}
 
 type parsedWorkflowPhotoUpload struct {
 	FileName    string
@@ -7358,8 +7391,8 @@ func normalizeWorkflowPhotoUploadData(fileNameInput, contentTypeInput string, da
 	if len(data) == 0 {
 		return nil, fmt.Errorf("photo upload payload is empty")
 	}
-	if len(data) > maxWorkflowPhotoUploadBytes {
-		return nil, fmt.Errorf("photo upload exceeds maximum size of 2MB")
+	if len(data) > MaxWorkflowPhotoUploadBytes() {
+		return nil, fmt.Errorf("photo upload exceeds maximum size of %s", MaxWorkflowPhotoUploadLabel())
 	}
 
 	contentType := strings.ToLower(strings.TrimSpace(contentTypeInput))

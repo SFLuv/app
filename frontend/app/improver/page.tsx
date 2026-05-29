@@ -144,8 +144,8 @@ const defaultStepNotPossibleFormState: StepNotPossibleFormState = {
   details: "",
 }
 
-const maxWorkflowPhotoUploadBytes = 2 * 1024 * 1024
-const maxWorkflowPhotoUploadLabel = "2MB"
+const maxWorkflowPhotoUploadBytes = 4 * 1024 * 1024
+const maxWorkflowPhotoUploadLabel = "4MB"
 const workflowStepPhotoChunkUploadBytes = 256 * 1024
 const workflowStepPhotoChunkThresholdBytes = 512 * 1024
 const minWorkflowPhotoResizeDimension = 640
