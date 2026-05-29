@@ -797,16 +797,19 @@ type CredentialRequestIssuerRecipient struct {
 }
 
 type SupervisorWorkflowListItem struct {
-	Id               string `json:"id"`
-	SeriesId         string `json:"series_id"`
-	Title            string `json:"title"`
-	Status           string `json:"status"`
-	Recurrence       string `json:"recurrence"`
-	StartAt          int64  `json:"start_at"`
-	CreatedAt        int64  `json:"created_at"`
-	CompletedAt      *int64 `json:"completed_at,omitempty"`
-	TotalBounty      uint64 `json:"total_bounty"`
-	SupervisorBounty uint64 `json:"supervisor_bounty"`
+	Id                     string  `json:"id"`
+	SeriesId               string  `json:"series_id"`
+	Title                  string  `json:"title"`
+	Status                 string  `json:"status"`
+	Recurrence             string  `json:"recurrence"`
+	StartAt                int64   `json:"start_at"`
+	CreatedAt              int64   `json:"created_at"`
+	CompletedAt            *int64  `json:"completed_at,omitempty"`
+	TotalBounty            uint64  `json:"total_bounty"`
+	SupervisorBounty       uint64  `json:"supervisor_bounty"`
+	SupervisorUserId       *string `json:"supervisor_user_id,omitempty"`
+	SupervisorTitle        *string `json:"supervisor_title,omitempty"`
+	SupervisorOrganization *string `json:"supervisor_organization,omitempty"`
 }
 
 type SupervisorWorkflowListResponse struct {
@@ -817,11 +820,14 @@ type SupervisorWorkflowListResponse struct {
 }
 
 type SupervisorWorkflowExportRequest struct {
-	WorkflowIds []string `json:"workflow_ids"`
-	DateField   string   `json:"date_field"`
-	DateFrom    string   `json:"date_from"`
-	DateTo      string   `json:"date_to"`
-	Timezone    string   `json:"timezone,omitempty"`
+	WorkflowIds      []string `json:"workflow_ids"`
+	Search           string   `json:"search,omitempty"`
+	Status           string   `json:"status,omitempty"`
+	SupervisorUserId string   `json:"supervisor_user_id,omitempty"`
+	DateField        string   `json:"date_field"`
+	DateFrom         string   `json:"date_from"`
+	DateTo           string   `json:"date_to"`
+	Timezone         string   `json:"timezone,omitempty"`
 }
 
 type UserCredential struct {
