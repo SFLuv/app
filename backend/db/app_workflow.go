@@ -5560,18 +5560,21 @@ func normalizeSupervisorDateField(dateField string) string {
 func (a *AppDB) GetSupervisorWorkflows(
 	ctx context.Context,
 	supervisorID string,
+	includeAll bool,
 	search string,
 	statusFilter string,
+	supervisorFilter string,
 	sortBy string,
 	sortDirection string,
 	dateField string,
 	dateFrom *time.Time,
 	dateTo *time.Time,
+	workflowIDs []string,
 	page int,
 	count int,
 ) (*structs.SupervisorWorkflowListResponse, error) {
 	supervisorID = strings.TrimSpace(supervisorID)
-	if supervisorID == "" {
+	if !includeAll && supervisorID == "" {
 		return nil, fmt.Errorf("supervisor_id is required")
 	}
 	if page < 0 {
@@ -5607,6 +5610,53 @@ func (a *AppDB) GetSupervisorWorkflows(
 	orderBy := normalizeSupervisorSort(sortBy)
 	orderDir := normalizeSupervisorSortDirection(sortDirection)
 	normalizedDateField := normalizeSupervisorDateField(dateField)
+	normalizedSupervisorFilter := strings.TrimSpace(supervisorFilter)
+
+	filterWorkflowIDs := []string{}
+	seenWorkflowIDs := map[string]struct{}{}
+	for _, workflowID := range workflowIDs {
+		workflowID = strings.TrimSpace(workflowID)
+		if workflowID == "" {
+			continue
+		}
+		if _, exists := seenWorkflowIDs[workflowID]; exists {
+			continue
+		}
+		seenWorkflowIDs[workflowID] = struct{}{}
+		filterWorkflowIDs = append(filterWorkflowIDs, workflowID)
+	}
+
+	baseConditions := []string{}
+	args := []any{}
+	argIndex := 1
+	if !includeAll {
+		baseConditions = append(baseConditions, fmt.Sprintf("w.manager_improver_id = $%d", argIndex))
+		args = append(args, supervisorID)
+		argIndex++
+	}
+	if includeAll && normalizedSupervisorFilter != "" && normalizedSupervisorFilter != "all" {
+		if normalizedSupervisorFilter == "__unassigned" {
+			baseConditions = append(baseConditions, "w.manager_improver_id IS NULL")
+		} else {
+			baseConditions = append(baseConditions, fmt.Sprintf("w.manager_improver_id = $%d", argIndex))
+			args = append(args, normalizedSupervisorFilter)
+			argIndex++
+		}
+	}
+	if normalizedStatus != "" && normalizedStatus != "all" {
+		baseConditions = append(baseConditions, fmt.Sprintf("w.status = $%d", argIndex))
+		args = append(args, normalizedStatus)
+		argIndex++
+	}
+	if len(filterWorkflowIDs) > 0 {
+		baseConditions = append(baseConditions, fmt.Sprintf("w.id = ANY($%d::text[])", argIndex))
+		args = append(args, filterWorkflowIDs)
+		argIndex++
+	}
+	baseWhereClause := ""
+	if len(baseConditions) > 0 {
+		baseWhereClause = "WHERE " + strings.Join(baseConditions, " AND ")
+	}
 
 	baseCTE := `
 				WITH bw AS (
@@ -5619,15 +5669,18 @@ func (a *AppDB) GetSupervisorWorkflows(
 						w.start_at,
 						w.created_at,
 						w.total_bounty,
-					w.manager_bounty,
-				(
-					SELECT
-						MAX(ws.completed_at)
-					FROM
-						workflow_steps ws
-					WHERE
-						ws.workflow_id = w.id
-				) AS completed_at
+						w.manager_bounty,
+						w.manager_improver_id AS supervisor_user_id,
+						NULLIF(TRIM(COALESCE(sv.nickname, sv.organization, su.contact_name, '')), '') AS supervisor_title,
+						NULLIF(TRIM(COALESCE(sv.organization, '')), '') AS supervisor_organization,
+						(
+							SELECT
+								MAX(ws.completed_at)
+							FROM
+								workflow_steps ws
+							WHERE
+								ws.workflow_id = w.id
+						) AS completed_at
 					FROM
 						workflows w
 					LEFT JOIN
@@ -5636,27 +5689,26 @@ func (a *AppDB) GetSupervisorWorkflows(
 						st.id = w.workflow_state_id
 					LEFT JOIN
 						workflow_series s
-				ON
-					s.id = w.series_id
-				WHERE
-					w.manager_improver_id = $1
+					ON
+						s.id = w.series_id
+					LEFT JOIN
+						users su
+					ON
+						su.id = w.manager_improver_id
+					LEFT JOIN
+						supervisors sv
+					ON
+						sv.user_id = su.id
+					` + baseWhereClause + `
 			)
 	`
 
 	conditions := []string{"1=1"}
-	args := []any{supervisorID}
-	argIndex := 2
 
 	trimmedSearch := strings.TrimSpace(search)
 	if trimmedSearch != "" {
 		conditions = append(conditions, fmt.Sprintf("bw.title ILIKE $%d", argIndex))
 		args = append(args, "%"+trimmedSearch+"%")
-		argIndex++
-	}
-
-	if normalizedStatus != "" && normalizedStatus != "all" {
-		conditions = append(conditions, fmt.Sprintf("bw.status = $%d", argIndex))
-		args = append(args, normalizedStatus)
 		argIndex++
 	}
 
@@ -5715,7 +5767,10 @@ func (a *AppDB) GetSupervisorWorkflows(
 			bw.created_at,
 			bw.completed_at,
 			bw.total_bounty,
-			bw.manager_bounty
+			bw.manager_bounty,
+			bw.supervisor_user_id,
+			bw.supervisor_title,
+			bw.supervisor_organization
 		FROM
 			bw
 		WHERE
@@ -5749,6 +5804,9 @@ func (a *AppDB) GetSupervisorWorkflows(
 			&item.CompletedAt,
 			&item.TotalBounty,
 			&item.SupervisorBounty,
+			&item.SupervisorUserId,
+			&item.SupervisorTitle,
+			&item.SupervisorOrganization,
 		); err != nil {
 			return nil, fmt.Errorf("error scanning supervisor workflow list item: %s", err)
 		}

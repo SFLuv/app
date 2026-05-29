@@ -497,6 +497,9 @@ export interface SupervisorWorkflowListItem {
   completed_at?: number | null
   total_bounty: number
   supervisor_bounty: number
+  supervisor_user_id?: string | null
+  supervisor_title?: string | null
+  supervisor_organization?: string | null
 }
 
 export interface SupervisorWorkflowListResponse {
@@ -508,6 +511,9 @@ export interface SupervisorWorkflowListResponse {
 
 export interface SupervisorWorkflowExportRequest {
   workflow_ids: string[]
+  search?: string
+  status?: string
+  supervisor_user_id?: string
   date_field: "created_at" | "completed_at" | "start_at" | ""
   date_from: string
   date_to: string

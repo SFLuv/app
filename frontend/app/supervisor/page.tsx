@@ -13,10 +13,13 @@ import { WorkflowDetailsModal } from "@/components/workflows/workflow-details-mo
 import { usePathname, useRouter, useSearchParams } from "next/navigation"
 import { formatWorkflowDisplayStatus } from "@/lib/workflow-status"
 import { cn } from "@/lib/utils"
+import { Supervisor } from "@/types/supervisor"
 import { SupervisorWorkflowExportRequest, SupervisorWorkflowListItem, SupervisorWorkflowListResponse, Workflow } from "@/types/workflow"
 import { ChevronLeft, ChevronRight, Download, Loader2, Search } from "lucide-react"
 
 type DateField = "created_at" | "completed_at" | "start_at"
+const SUPERVISOR_FILTER_ALL = "all"
+const SUPERVISOR_FILTER_UNASSIGNED = "__unassigned"
 const SUPERVISOR_STATUS_FILTERS = new Set([
   "all",
   "pending",
@@ -50,6 +53,24 @@ const toMMDDYYYY = (unixSeconds: number): string => {
   return `${month}/${day}/${year}`
 }
 
+const formatSupervisorLabel = (supervisor: Supervisor): string => {
+  const title = (supervisor.nickname || supervisor.organization || supervisor.email || supervisor.user_id).trim()
+  const organization = (supervisor.organization || "").trim()
+  if (title && organization && title !== organization) {
+    return `${title} (${organization})`
+  }
+  return title || supervisor.user_id
+}
+
+const formatWorkflowSupervisorLabel = (item: SupervisorWorkflowListItem): string => {
+  const title = (item.supervisor_title || "").trim()
+  const organization = (item.supervisor_organization || "").trim()
+  if (title && organization && title !== organization) {
+    return `${title} (${organization})`
+  }
+  return title || organization || item.supervisor_user_id || "Unassigned"
+}
+
 export default function SupervisorPage() {
   const { authFetch, status, user } = useApp()
   const router = useRouter()
@@ -59,6 +80,7 @@ export default function SupervisorPage() {
   const countFromQuery = Number(searchParams.get("count") || "20")
   const searchFromQuery = searchParams.get("search") || ""
   const statusFromQuery = searchParams.get("status") || "all"
+  const supervisorFromQuery = searchParams.get("supervisor_id") || SUPERVISOR_FILTER_ALL
   const sortByFromQuery = searchParams.get("sort_by")
   const sortDirectionFromQuery = searchParams.get("sort_direction")
   const dateFieldFromQuery = searchParams.get("date_field")
@@ -71,6 +93,7 @@ export default function SupervisorPage() {
   const [count, setCount] = useState<number>(countFromQuery === 10 || countFromQuery === 20 || countFromQuery === 50 ? countFromQuery : 20)
   const [search, setSearch] = useState<string>(searchFromQuery)
   const [statusFilter, setStatusFilter] = useState<string>(SUPERVISOR_STATUS_FILTERS.has(statusFromQuery) ? statusFromQuery : "all")
+  const [supervisorFilter, setSupervisorFilter] = useState<string>(supervisorFromQuery.trim() || SUPERVISOR_FILTER_ALL)
   const [sortBy, setSortBy] = useState<DateField>(
     sortByFromQuery === "created_at" || sortByFromQuery === "completed_at" || sortByFromQuery === "start_at"
       ? sortByFromQuery
@@ -90,12 +113,14 @@ export default function SupervisorPage() {
   const [error, setError] = useState<string>("")
   const [notice, setNotice] = useState<string>("")
   const [exporting, setExporting] = useState<boolean>(false)
+  const [supervisors, setSupervisors] = useState<Supervisor[]>([])
 
   const [detailOpen, setDetailOpen] = useState<boolean>(false)
   const [detailWorkflow, setDetailWorkflow] = useState<Workflow | null>(null)
   const [detailLoading, setDetailLoading] = useState<boolean>(false)
 
-  const canUsePanel = Boolean(user?.isSupervisor || user?.isAdmin)
+  const isAdmin = Boolean(user?.isAdmin)
+  const canUsePanel = Boolean(user?.isSupervisor || isAdmin)
 
   const loadData = useCallback(async () => {
     if (!canUsePanel) {
@@ -115,6 +140,9 @@ export default function SupervisorPage() {
         sort_direction: sortDirection,
         date_field: dateField,
       })
+      if (isAdmin && supervisorFilter !== SUPERVISOR_FILTER_ALL) {
+        params.set("supervisor_id", supervisorFilter)
+      }
       const queryDateFrom = toLocalDateBoundaryISO(dateFrom, "start")
       const queryDateTo = toLocalDateBoundaryISO(dateTo, "end")
       if (queryDateFrom) params.set("date_from", queryDateFrom)
@@ -135,7 +163,7 @@ export default function SupervisorPage() {
     } finally {
       setLoading(false)
     }
-  }, [authFetch, canUsePanel, count, dateField, dateFrom, dateTo, page, search, sortBy, sortDirection, statusFilter])
+  }, [authFetch, canUsePanel, count, dateField, dateFrom, dateTo, isAdmin, page, search, sortBy, sortDirection, statusFilter, supervisorFilter])
 
   useEffect(() => {
     if (status !== "authenticated") return
@@ -143,10 +171,39 @@ export default function SupervisorPage() {
   }, [status, loadData])
 
   useEffect(() => {
+    if (status !== "authenticated" || !isAdmin) {
+      setSupervisors([])
+      return
+    }
+
+    let cancelled = false
+    const loadSupervisors = async () => {
+      try {
+        const res = await authFetch("/supervisors/approved")
+        if (!res.ok) return
+        const data = (await res.json()) as Supervisor[] | null
+        if (!cancelled) {
+          setSupervisors(data || [])
+        }
+      } catch {
+        if (!cancelled) {
+          setSupervisors([])
+        }
+      }
+    }
+
+    void loadSupervisors()
+    return () => {
+      cancelled = true
+    }
+  }, [authFetch, isAdmin, status])
+
+  useEffect(() => {
     const nextPage = Number(searchParams.get("page") || "0")
     const nextCount = Number(searchParams.get("count") || "20")
     const nextSearch = searchParams.get("search") || ""
     const nextStatus = searchParams.get("status") || "all"
+    const nextSupervisor = searchParams.get("supervisor_id") || SUPERVISOR_FILTER_ALL
     const nextSortBy = searchParams.get("sort_by")
     const nextSortDirection = searchParams.get("sort_direction")
     const nextDateField = searchParams.get("date_field")
@@ -168,6 +225,8 @@ export default function SupervisorPage() {
     setSearch((prev) => (nextSearch === prev ? prev : nextSearch))
     const normalizedStatus = SUPERVISOR_STATUS_FILTERS.has(nextStatus) ? nextStatus : "all"
     setStatusFilter((prev) => (normalizedStatus === prev ? prev : normalizedStatus))
+    const normalizedSupervisor = nextSupervisor.trim() || SUPERVISOR_FILTER_ALL
+    setSupervisorFilter((prev) => (normalizedSupervisor === prev ? prev : normalizedSupervisor))
     setSortBy((prev) => (normalizedSortBy === prev ? prev : normalizedSortBy))
     setSortDirection((prev) => (normalizedSortDirection === prev ? prev : normalizedSortDirection))
     setDateField((prev) => (normalizedDateField === prev ? prev : normalizedDateField))
@@ -176,6 +235,8 @@ export default function SupervisorPage() {
   }, [searchParams])
 
   useEffect(() => {
+    if (status !== "authenticated") return
+
     const params = new URLSearchParams(searchParams.toString())
     if (page > 0) params.set("page", String(page))
     else params.delete("page")
@@ -185,6 +246,8 @@ export default function SupervisorPage() {
     else params.delete("search")
     if (statusFilter !== "all") params.set("status", statusFilter)
     else params.delete("status")
+    if (isAdmin && supervisorFilter !== SUPERVISOR_FILTER_ALL) params.set("supervisor_id", supervisorFilter)
+    else params.delete("supervisor_id")
     if (sortBy !== "created_at") params.set("sort_by", sortBy)
     else params.delete("sort_by")
     if (sortDirection !== "desc") params.set("sort_direction", sortDirection)
@@ -200,7 +263,7 @@ export default function SupervisorPage() {
     if (nextQuery !== searchParams.toString()) {
       router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname, { scroll: false })
     }
-  }, [count, dateField, dateFrom, dateTo, page, pathname, router, search, searchParams, sortBy, sortDirection, statusFilter])
+  }, [count, dateField, dateFrom, dateTo, isAdmin, page, pathname, router, search, searchParams, sortBy, sortDirection, status, statusFilter, supervisorFilter])
 
   const totalPages = useMemo(() => {
     if (count <= 0) return 1
@@ -274,9 +337,12 @@ export default function SupervisorPage() {
       const exportTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"
       const payload: SupervisorWorkflowExportRequest = {
         workflow_ids: Array.from(selectedIDs),
-        date_field: selectedIDs.size > 0 ? "" : dateField,
-        date_from: selectedIDs.size > 0 ? "" : toLocalDateBoundaryISO(dateFrom, "start"),
-        date_to: selectedIDs.size > 0 ? "" : toLocalDateBoundaryISO(dateTo, "end"),
+        search: search.trim(),
+        status: statusFilter,
+        supervisor_user_id: isAdmin && supervisorFilter !== SUPERVISOR_FILTER_ALL ? supervisorFilter : "",
+        date_field: dateField,
+        date_from: toLocalDateBoundaryISO(dateFrom, "start"),
+        date_to: toLocalDateBoundaryISO(dateTo, "end"),
         timezone: exportTimezone,
       }
       const res = await authFetch("/supervisors/workflows/export", {
@@ -331,11 +397,11 @@ export default function SupervisorPage() {
         <CardHeader>
           <CardTitle>Supervisor Panel</CardTitle>
           <CardDescription>
-            Review assigned workflow submissions, filter by timeframe, and export CSV + photos.
+            Review workflow submissions, filter by timeframe, and export CSV + photos.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
             <div className="space-y-1">
               <Label>Search Title</Label>
               <div className="relative">
@@ -363,6 +429,23 @@ export default function SupervisorPage() {
                 </SelectContent>
               </Select>
             </div>
+            {isAdmin ? (
+              <div className="space-y-1">
+                <Label>Supervisor</Label>
+                <Select value={supervisorFilter} onValueChange={setSupervisorFilter}>
+                  <SelectTrigger><SelectValue placeholder="All supervisors" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={SUPERVISOR_FILTER_ALL}>All</SelectItem>
+                    <SelectItem value={SUPERVISOR_FILTER_UNASSIGNED}>Unassigned</SelectItem>
+                    {supervisors.map((supervisor) => (
+                      <SelectItem key={supervisor.user_id} value={supervisor.user_id}>
+                        {formatSupervisorLabel(supervisor)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            ) : null}
             <div className="space-y-1">
               <Label>Sort By</Label>
               <Select value={sortBy} onValueChange={(value) => setSortBy(value as DateField)}>
@@ -438,7 +521,7 @@ export default function SupervisorPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Assigned Workflows</CardTitle>
+          <CardTitle className="text-base">{isAdmin ? "Workflows" : "Assigned Workflows"}</CardTitle>
           <CardDescription>
             Showing {items.length} of {total}
           </CardDescription>
@@ -466,6 +549,7 @@ export default function SupervisorPage() {
                       </p>
                       <div className="text-xs text-muted-foreground space-y-1">
                         <p>Status: {formatWorkflowDisplayStatus(item)}</p>
+                        {isAdmin ? <p>Supervisor: {formatWorkflowSupervisorLabel(item)}</p> : null}
                         <p>Start: {new Date(item.start_at * 1000).toLocaleString()}</p>
                         <p>Created: {new Date(item.created_at * 1000).toLocaleString()}</p>
                         {item.completed_at ? <p>Completed: {new Date(item.completed_at * 1000).toLocaleString()}</p> : null}
