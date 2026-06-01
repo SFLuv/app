@@ -26,6 +26,7 @@ const (
 	botDBNameEnvKey     = "BOT_DB_NAME"
 	appDBNameEnvKey     = "APP_DB_NAME"
 	defaultPonderDBName = "ponder"
+	ponderDBNameEnvKey  = "PONDER_DB_NAME"
 )
 
 type DBPools struct {
@@ -60,7 +61,7 @@ func OpenDBPools(includePonder bool) (*DBPools, error) {
 	}
 
 	if includePonder {
-		pools.Ponder, err = db.PgxDB(defaultPonderDBName)
+		pools.Ponder, err = db.PgxDB(resolvePonderDBPoolName())
 		if err != nil {
 			pools.Close()
 			return nil, fmt.Errorf("error initializing ponder db: %w", err)
@@ -91,6 +92,10 @@ func NewAppLogger() (*logger.LogCloser, error) {
 
 func resolveDBPoolNames() (string, string) {
 	return envOrDefault(botDBNameEnvKey, defaultBotDBName), envOrDefault(appDBNameEnvKey, defaultAppDBName)
+}
+
+func resolvePonderDBPoolName() string {
+	return envOrDefault(ponderDBNameEnvKey, defaultPonderDBName)
 }
 
 func envOrDefault(key, defaultValue string) string {
