@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/SFLuv/app/backend/db"
 	"github.com/SFLuv/app/backend/structs"
 	"github.com/SFLuv/app/backend/utils"
 )
@@ -729,6 +730,14 @@ func (a *AppService) PonderPingCallback(w http.ResponseWriter, r *http.Request) 
 	w.WriteHeader(http.StatusOK)
 }
 
+func ponderTxHashPrefix(txHash string) string {
+	txHash = strings.TrimSpace(txHash)
+	if len(txHash) <= 6 {
+		return txHash
+	}
+	return txHash[:6]
+}
+
 func (a *AppService) PonderHookHandler(w http.ResponseWriter, r *http.Request) {
 	key := os.Getenv("PONDER_KEY")
 	if key != r.Header.Get("X-Admin-Key") {
@@ -747,6 +756,13 @@ func (a *AppService) PonderHookHandler(w http.ResponseWriter, r *http.Request) {
 	err = json.Unmarshal(body, &tx)
 	if err != nil {
 		a.logger.Logf("error unmarshalling ponder txs into hook data: %s", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	hookTriggerID, err := a.db.RecordPonderHookTrigger(r.Context(), tx)
+	if err != nil {
+		a.logger.Logf("error recording ponder hook trigger for tx %s: %s", tx.Hash, err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
@@ -773,18 +789,23 @@ func (a *AppService) PonderHookHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	for _, l := range listeners {
-		w, err := a.db.GetWalletByUserAndAddress(r.Context(), l.Owner, l.Address)
+		emailDestination := strings.TrimSpace(string(l.Data))
+		if emailDestination == "" {
+			continue
+		}
+
+		wallet, err := a.db.GetWalletByUserAndAddress(r.Context(), l.Owner, l.Address)
 		if err != nil {
 			a.logger.Logf("error getting wallet for user %s, address %s while sending tx receipt email: %s", l.Owner, l.Address, err)
 			continue
 		}
 
-		subjectTail := fmt.Sprintf("- %s", tx.Hash[:6])
+		subjectTail := fmt.Sprintf("- %s", ponderTxHashPrefix(tx.Hash))
 		toLine := tx.To
 
-		if w.Name != "" {
-			subjectTail = fmt.Sprintf("to %s %s", w.Name, subjectTail)
-			toLine = fmt.Sprintf("%s (%s)", w.Name, tx.To)
+		if wallet.Name != "" {
+			subjectTail = fmt.Sprintf("to %s %s", wallet.Name, subjectTail)
+			toLine = fmt.Sprintf("%s (%s)", wallet.Name, tx.To)
 		}
 
 		subject := fmt.Sprintf("%s $SFLuv Incoming %s", formattedAmount, subjectTail)
@@ -832,17 +853,44 @@ func (a *AppService) PonderHookHandler(w http.ResponseWriter, r *http.Request) {
 			"SFLuv · Transaction Notifications",
 		)
 
-		err = sender.SendEmail(
-			strings.TrimSpace(string(l.Data)),
+		deliveryID, claimed, err := a.db.ClaimPonderHookNotificationDelivery(
+			r.Context(),
+			hookTriggerID,
+			tx.Hash,
+			db.PonderNotificationChannelEmail,
+			emailDestination,
+			l.Owner,
+			string(l.Type),
+			l.Id,
+			l.Address,
+		)
+		if err != nil {
+			a.logger.Logf("error claiming ponder email delivery for tx %s to %s: %s", tx.Hash, emailDestination, err)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		if !claimed {
+			continue
+		}
+
+		sendErr := sender.SendEmail(
+			emailDestination,
 			"Merchant",
 			subject,
 			htmlContent,
 			utils.NotificationFromEmail(),
 			"SFLuv Transactions",
 		)
-	}
-	if err != nil {
-		a.logger.Logf("error sending transaction receipt email: %s", err.Error())
+		if sendErr != nil {
+			if markErr := a.db.MarkPonderHookNotificationDeliveryFailed(r.Context(), deliveryID, sendErr.Error()); markErr != nil {
+				a.logger.Logf("error marking ponder email delivery %d failed: %s", deliveryID, markErr)
+			}
+			a.logger.Logf("error sending transaction receipt email: %s", sendErr.Error())
+			continue
+		}
+		if err := a.db.MarkPonderHookNotificationDeliverySent(r.Context(), deliveryID, ""); err != nil {
+			a.logger.Logf("error marking ponder email delivery %d sent: %s", deliveryID, err)
+		}
 	}
 
 	pushListeners, err := a.db.GetMobilePushSubscriptionsByAddress(r.Context(), tx.To)
@@ -864,6 +912,30 @@ func (a *AppService) PonderHookHandler(w http.ResponseWriter, r *http.Request) {
 		body := fmt.Sprintf("%s SFLUV", formattedAmount)
 
 		token := strings.TrimSpace(string(listener.Data))
+		if token == "" {
+			continue
+		}
+
+		deliveryID, claimed, err := a.db.ClaimPonderHookNotificationDelivery(
+			r.Context(),
+			hookTriggerID,
+			tx.Hash,
+			db.PonderNotificationChannelPush,
+			token,
+			listener.Owner,
+			string(listener.Type),
+			listener.Id,
+			listener.Address,
+		)
+		if err != nil {
+			a.logger.Logf("error claiming ponder push delivery for tx %s to user %s address %s: %s", tx.Hash, listener.Owner, listener.Address, err)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		if !claimed {
+			continue
+		}
+
 		ticket, pushErr := sendExpoPushNotification(r.Context(), token, title, body, map[string]string{
 			"hash":    tx.Hash,
 			"to":      tx.To,
@@ -873,7 +945,19 @@ func (a *AppService) PonderHookHandler(w http.ResponseWriter, r *http.Request) {
 		})
 		a.handleExpoPushTicket(r.Context(), listener, token, ticket)
 		if pushErr != nil {
+			if markErr := a.db.MarkPonderHookNotificationDeliveryFailed(r.Context(), deliveryID, pushErr.Error()); markErr != nil {
+				a.logger.Logf("error marking ponder push delivery %d failed: %s", deliveryID, markErr)
+			}
 			a.logger.Logf("error sending Expo push notification for user %s, address %s: %s", listener.Owner, listener.Address, pushErr)
+			continue
+		}
+
+		providerReference := ""
+		if ticket != nil {
+			providerReference = ticket.ID
+		}
+		if err := a.db.MarkPonderHookNotificationDeliverySent(r.Context(), deliveryID, providerReference); err != nil {
+			a.logger.Logf("error marking ponder push delivery %d sent: %s", deliveryID, err)
 		}
 	}
 

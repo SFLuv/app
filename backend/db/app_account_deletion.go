@@ -411,6 +411,7 @@ func (a *AppDB) PurgeDeletedUser(ctx context.Context, userID string, now time.Ti
 		`DELETE FROM locations WHERE owner_id = $1;`,
 		`DELETE FROM contacts WHERE owner = $1;`,
 		`DELETE FROM ponder_subscriptions WHERE owner = $1;`,
+		`DELETE FROM ponder_hook_notification_deliveries WHERE owner = $1;`,
 		`DELETE FROM mobile_push_notification_tickets WHERE owner = $1;`,
 		`DELETE FROM mobile_push_subscriptions WHERE owner = $1;`,
 		`DELETE FROM memos WHERE owner = $1;`,

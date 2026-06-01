@@ -594,6 +594,65 @@ var schemaMigrations = []SchemaMigration{
 			return nil
 		},
 	},
+	{
+		Version:     "1.14",
+		Description: "record ponder hook triggers and notification deliveries",
+		Apply: func(ctx context.Context, pools *DBPools, appLogger *logger.LogCloser) error {
+			if _, err := pools.App.Exec(ctx, `
+				CREATE TABLE IF NOT EXISTS ponder_hook_triggers(
+					id BIGSERIAL PRIMARY KEY,
+					tx_hash TEXT NOT NULL,
+					from_address TEXT NOT NULL,
+					to_address TEXT NOT NULL,
+					amount TEXT NOT NULL,
+					first_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+					last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+					trigger_count INTEGER NOT NULL DEFAULT 1
+				);
+
+				CREATE UNIQUE INDEX IF NOT EXISTS ponder_hook_triggers_unique_idx
+					ON ponder_hook_triggers(tx_hash, from_address, to_address, amount);
+				CREATE INDEX IF NOT EXISTS ponder_hook_triggers_tx_hash_idx
+					ON ponder_hook_triggers(tx_hash);
+				CREATE INDEX IF NOT EXISTS ponder_hook_triggers_to_address_idx
+					ON ponder_hook_triggers(to_address, last_seen_at DESC);
+
+				CREATE TABLE IF NOT EXISTS ponder_hook_notification_deliveries(
+					id BIGSERIAL PRIMARY KEY,
+					hook_trigger_id BIGINT NOT NULL REFERENCES ponder_hook_triggers(id) ON DELETE CASCADE,
+					tx_hash TEXT NOT NULL,
+					channel TEXT NOT NULL CHECK (channel IN ('email', 'push')),
+					destination TEXT NOT NULL,
+					owner TEXT NOT NULL DEFAULT '',
+					subscription_type TEXT NOT NULL DEFAULT '',
+					subscription_id INTEGER,
+					address TEXT NOT NULL DEFAULT '',
+					status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'sent', 'failed')),
+					provider_reference TEXT NOT NULL DEFAULT '',
+					error_message TEXT NOT NULL DEFAULT '',
+					created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+					updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+					sent_at TIMESTAMPTZ,
+					failed_at TIMESTAMPTZ
+				);
+
+				CREATE UNIQUE INDEX IF NOT EXISTS ponder_hook_notification_deliveries_unique_idx
+					ON ponder_hook_notification_deliveries(tx_hash, channel, destination);
+				CREATE INDEX IF NOT EXISTS ponder_hook_notification_deliveries_trigger_idx
+					ON ponder_hook_notification_deliveries(hook_trigger_id);
+				CREATE INDEX IF NOT EXISTS ponder_hook_notification_deliveries_tx_hash_idx
+					ON ponder_hook_notification_deliveries(tx_hash);
+				CREATE INDEX IF NOT EXISTS ponder_hook_notification_deliveries_destination_idx
+					ON ponder_hook_notification_deliveries(channel, destination, created_at DESC);
+				CREATE INDEX IF NOT EXISTS ponder_hook_notification_deliveries_status_idx
+					ON ponder_hook_notification_deliveries(status, created_at DESC);
+			`); err != nil {
+				return err
+			}
+
+			return nil
+		},
+	},
 }
 
 type versionTarget struct {
