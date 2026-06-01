@@ -302,6 +302,42 @@ const formatStepBountyIndicator = (value: string) => {
   return `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(normalized)} SFLuv`
 }
 
+const parseWholeSfluvBounty = (value: string, label: string) => {
+  const trimmed = value.trim()
+  const parsed = trimmed === "" ? 0 : Number(trimmed)
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new Error(`${label} must be zero or greater.`)
+  }
+  if (!Number.isInteger(parsed)) {
+    throw new Error(`${label} must be a whole-number SFLuv amount. Fractional workflow bounties are not currently supported.`)
+  }
+  return parsed
+}
+
+type WorkflowCreateErrorResponse = {
+  error?: unknown
+  source?: unknown
+  detail?: unknown
+}
+
+const readWorkflowCreateError = async (res: Response, fallback: string) => {
+  const text = await res.text()
+  if (!text.trim()) {
+    return fallback
+  }
+
+  try {
+    const payload = JSON.parse(text) as WorkflowCreateErrorResponse
+    const message = typeof payload.error === "string" && payload.error.trim() ? payload.error.trim() : fallback
+    const source = typeof payload.source === "string" && payload.source.trim() ? payload.source.trim() : ""
+    const detail = typeof payload.detail === "string" && payload.detail.trim() ? payload.detail.trim() : ""
+    const diagnostic = [source ? `Source: ${source}` : "", detail ? `Detail: ${detail}` : ""].filter(Boolean).join(" | ")
+    return diagnostic ? `${message} ${diagnostic}` : message
+  } catch {
+    return text.trim() || fallback
+  }
+}
+
 const sectionCardOpenByDefault = (state: Record<string, boolean>, key: string) => state[key] === true
 const nestedCardOpenByDefault = (state: Record<string, boolean>, key: string) => state[key] !== false
 
@@ -1274,7 +1310,7 @@ export default function ProposerPage() {
     const normalizedSteps = steps.map((step, stepIndex) => ({
       title: step.title.trim(),
       description: step.description.trim(),
-      bounty: Number(step.bounty),
+      bounty: parseWholeSfluvBounty(step.bounty, `Step ${stepIndex + 1} bounty`),
       role_client_id: step.role_client_id,
       allow_step_not_possible: step.allow_step_not_possible,
       work_items: step.work_items.map((item, itemIndex) => {
@@ -1315,7 +1351,7 @@ export default function ProposerPage() {
       }),
     }))
 
-    if (normalizedSteps.some((step) => !step.title || Number.isNaN(step.bounty) || step.bounty < 0 || !step.role_client_id)) {
+    if (normalizedSteps.some((step) => !step.title || step.bounty < 0 || !step.role_client_id)) {
       throw new Error("Every step needs a title, role assignment, and bounty zero or greater.")
     }
 
@@ -1346,10 +1382,7 @@ export default function ProposerPage() {
       if (!supervisorUserID) {
         throw new Error("Select a workflow supervisor.")
       }
-      const supervisorBounty = workflowSupervisor.bounty.trim() === "" ? 0 : Number(workflowSupervisor.bounty)
-      if (Number.isNaN(supervisorBounty) || supervisorBounty < 0) {
-        throw new Error("Workflow supervisor bounty must be zero or greater.")
-      }
+      const supervisorBounty = parseWholeSfluvBounty(workflowSupervisor.bounty, "Workflow supervisor bounty")
       normalizedSupervisor = {
         user_id: supervisorUserID,
         bounty: supervisorBounty,
@@ -1844,8 +1877,7 @@ export default function ProposerPage() {
       })
 
       if (!res.ok) {
-        const text = await res.text()
-        throw new Error(text || "Unable to create workflow right now.")
+        throw new Error(await readWorkflowCreateError(res, "Unable to create workflow right now."))
       }
 
       const created = (await res.json()) as Workflow
@@ -2745,6 +2777,7 @@ export default function ProposerPage() {
 	                        <Input
 	                          type="number"
 	                          min="0"
+	                          step="1"
 	                          value={workflowSupervisor.bounty}
                               onWheel={preventNumberInputScrollChange}
 	                          onChange={(e) =>
@@ -3158,6 +3191,7 @@ export default function ProposerPage() {
                       <Input
                         type="number"
                         min="0"
+                        step="1"
                         value={step.bounty}
                         onWheel={preventNumberInputScrollChange}
                         onChange={(e) => updateStep(step.id, { bounty: e.target.value })}
