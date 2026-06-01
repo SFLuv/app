@@ -53,6 +53,20 @@ type SendStep =
   | "tip_sending"
   | "tip_success"
   | "error";
+type SendErrorSource =
+  | "w9_preflight"
+  | "w9_approval"
+  | "wallet_submission"
+  | "tip_submission"
+  | null;
+
+const SEND_ERROR_SOURCE_LABELS: Record<Exclude<SendErrorSource, null>, string> =
+  {
+    w9_preflight: "W9 compliance preflight (/w9/check)",
+    w9_approval: "W9 approval flow (/w9/submit -> /admin/w9/approve)",
+    wallet_submission: "Wallet transaction submission (wallet.send)",
+    tip_submission: "Tip transaction submission (wallet.send)",
+  };
 
 type WalletLookupResponse = {
   found?: boolean;
@@ -103,6 +117,7 @@ export function SendCryptoModal({
   const [w9Year, setW9Year] = useState<number | null>(null);
   const [w9EmailInput, setW9EmailInput] = useState<string>("");
   const [w9Submitting, setW9Submitting] = useState<boolean>(false);
+  const [errorSource, setErrorSource] = useState<SendErrorSource>(null);
   const [formData, setFormData] = useState({
     recipient: defaultRecipient ?? "",
     amount: "",
@@ -149,6 +164,22 @@ export function SendCryptoModal({
 
   const isValidEmail = (email: string) =>
     /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+
+  const clearError = () => {
+    setError("");
+    setErrorSource(null);
+  };
+
+  const setErrorFromSource = (source: SendErrorSource, message: string) => {
+    setErrorSource(source);
+    setError(message);
+  };
+
+  const getUnknownErrorMessage = (err: unknown) => {
+    if (err instanceof Error && err.message.trim()) return err.message.trim();
+    if (typeof err === "string" && err.trim()) return err.trim();
+    return "Unknown error.";
+  };
 
   const toAmountWei = (amountValue: string) =>
     BigInt(Number(amountValue) * 10 ** SFLUV_DECIMALS);
@@ -240,7 +271,7 @@ export function SendCryptoModal({
     scanLockedRef.current = true;
     setProcessingDetectedQr(true);
     setScanError("");
-    setError("");
+    clearError();
 
     try {
       const redeemParams = extractRedeemParamsFromPayload(value);
@@ -416,7 +447,7 @@ export function SendCryptoModal({
   const switchFlow = (nextFlow: SendFlowMode) => {
     if (nextFlow === flowMode) return;
     setFlowMode(nextFlow);
-    setError("");
+    clearError();
     setScanError("");
     setProcessingDetectedQr(false);
     setShowScanMoreOptions(false);
@@ -465,7 +496,10 @@ export function SendCryptoModal({
 
       if (!receipt) {
         setStep("error");
-        setError("Error creating transaction. Please try again.");
+        setErrorFromSource(
+          "wallet_submission",
+          "wallet.send returned null before submitting a transaction. The wallet may not be initialized or ready.",
+        );
         return;
       }
 
@@ -483,10 +517,18 @@ export function SendCryptoModal({
       }
 
       setStep("error");
-      setError(failureMessage);
-    } catch {
+      setErrorFromSource(
+        "wallet_submission",
+        receipt.error
+          ? `wallet.send returned an error: ${receipt.error}`
+          : `wallet.send returned without a transaction hash. ${failureMessage}`,
+      );
+    } catch (err) {
       setStep("error");
-      setError(failureMessage);
+      setErrorFromSource(
+        "wallet_submission",
+        `wallet.send threw before returning a receipt: ${getUnknownErrorMessage(err)}`,
+      );
     }
   };
 
@@ -499,15 +541,15 @@ export function SendCryptoModal({
     const tipAmountNumber = Number.parseFloat(tipAmount);
     const baseAmountNumber = Number.parseFloat(formData.amount);
     if (!Number.isFinite(tipAmountNumber) || tipAmountNumber <= 0) {
-      setError("Tip amount must be greater than 0.");
+      setErrorFromSource(null, "Tip amount must be greater than 0.");
       return null;
     }
     if (!Number.isFinite(baseAmountNumber) || baseAmountNumber <= 0) {
-      setError("Amount must be greater than 0.");
+      setErrorFromSource(null, "Amount must be greater than 0.");
       return null;
     }
     if (tipAmountNumber > Math.max(balance - baseAmountNumber, 0)) {
-      setError("Insufficient balance for this tip.");
+      setErrorFromSource(null, "Insufficient balance for this tip.");
       return null;
     }
 
@@ -522,10 +564,10 @@ export function SendCryptoModal({
   };
 
   const handleSendTip = async () => {
-    setError("");
+    clearError();
     const currentTipPrompt = getConfiguredTipPrompt();
     if (!currentTipPrompt) {
-      setError("Enter a tip amount or tap Done.");
+      setErrorFromSource(null, "Enter a tip amount or tap Done.");
       return;
     }
 
@@ -538,7 +580,12 @@ export function SendCryptoModal({
       );
 
       if (!receipt?.hash) {
-        setError("Main payment sent, but the tip failed. Please try again.");
+        setErrorFromSource(
+          "tip_submission",
+          receipt?.error
+            ? `Main payment sent, but tip wallet.send returned an error: ${receipt.error}`
+            : "Main payment sent, but tip wallet.send returned without a transaction hash.",
+        );
         setStep("success");
         return;
       }
@@ -554,8 +601,11 @@ export function SendCryptoModal({
           : currentTipPrompt,
       );
       setStep("tip_success");
-    } catch {
-      setError("Main payment sent, but the tip failed. Please try again.");
+    } catch (err) {
+      setErrorFromSource(
+        "tip_submission",
+        `Main payment sent, but tip wallet.send threw before returning a receipt: ${getUnknownErrorMessage(err)}`,
+      );
       setStep("success");
     }
   };
@@ -587,19 +637,23 @@ export function SendCryptoModal({
 
   const handleApproveAndSend = async () => {
     if (!user?.isAdmin) {
-      setError("Only admins can approve W9 submissions.");
+      setErrorFromSource(
+        "w9_approval",
+        "Only admins can approve W9 submissions.",
+      );
       return;
     }
 
     const email = w9EmailInput.trim();
     if (!email) {
-      setError(
+      setErrorFromSource(
+        "w9_approval",
         "Recipient email is required to approve W9. Enter an email to continue.",
       );
       return;
     }
     if (!isValidEmail(email)) {
-      setError("Please enter a valid recipient email.");
+      setErrorFromSource("w9_approval", "Please enter a valid recipient email.");
       return;
     }
 
@@ -676,7 +730,7 @@ export function SendCryptoModal({
       setW9Reason(null);
       setW9Year(null);
       setW9Email(email);
-      setError("");
+      clearError();
       setStep("sending");
       await executeSend({
         recipient: formData.recipient,
@@ -689,7 +743,8 @@ export function SendCryptoModal({
       });
     } catch (err) {
       setStep("error");
-      setError(
+      setErrorFromSource(
+        "w9_approval",
         err instanceof Error
           ? err.message
           : "Failed to approve W9. Please try again.",
@@ -863,27 +918,27 @@ export function SendCryptoModal({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    setError("");
+    clearError();
 
     // Basic validation
     if (!formData.recipient || !formData.amount) {
-      setError("Please fill in all required fields");
+      setErrorFromSource(null, "Please fill in all required fields");
       return;
     }
 
     if (Number.parseFloat(formData.amount) <= 0) {
-      setError("Amount must be greater than 0");
+      setErrorFromSource(null, "Amount must be greater than 0");
       return;
     }
 
     if (Number.parseFloat(formData.amount) > balance) {
-      setError("Insufficient balance");
+      setErrorFromSource(null, "Insufficient balance");
       return;
     }
 
     const normalizedRecipient = normalizedRecipientAddress(formData.recipient);
     if (!normalizedRecipient) {
-      setError("Please enter or scan a valid Ethereum address");
+      setErrorFromSource(null, "Please enter or scan a valid Ethereum address");
       return;
     }
 
@@ -897,18 +952,18 @@ export function SendCryptoModal({
   const handleConfirm = async () => {
     const normalizedRecipient = normalizedRecipientAddress(formData.recipient);
     if (!normalizedRecipient) {
-      setError("Please enter or scan a valid Ethereum address");
+      setErrorFromSource(null, "Please enter or scan a valid Ethereum address");
       return;
     }
 
     const amountNumber = Number.parseFloat(formData.amount);
     if (!Number.isFinite(amountNumber) || amountNumber <= 0) {
-      setError("Amount must be greater than 0");
+      setErrorFromSource(null, "Amount must be greater than 0");
       return;
     }
 
     if (amountNumber > balance) {
-      setError("Insufficient balance");
+      setErrorFromSource(null, "Insufficient balance");
       return;
     }
 
@@ -916,7 +971,7 @@ export function SendCryptoModal({
     setW9Year(null);
     setW9Email(null);
     setW9EmailInput("");
-    setError("");
+    clearError();
     setStep("sending");
 
     if (user?.isAdmin) {
@@ -944,7 +999,8 @@ export function SendCryptoModal({
           setW9Year(typeof data?.year === "number" ? data.year : null);
           setW9Email(email);
           setW9EmailInput(email || "");
-          setError(
+          setErrorFromSource(
+            "w9_preflight",
             reason === "w9_pending"
               ? "W9 submission is pending approval. Transfers are blocked until approved."
               : "W9 required before sending to this wallet.",
@@ -954,12 +1010,18 @@ export function SendCryptoModal({
         }
 
         if (res.status !== 200) {
-          setError("Unable to validate W9 compliance. Please try again.");
+          setErrorFromSource(
+            "w9_preflight",
+            `Unable to validate W9 compliance. /w9/check returned HTTP ${res.status}.`,
+          );
           setStep("error");
           return;
         }
-      } catch {
-        setError("Unable to validate W9 compliance. Please try again.");
+      } catch (err) {
+        setErrorFromSource(
+          "w9_preflight",
+          `Unable to validate W9 compliance. /w9/check failed before a response was handled: ${getUnknownErrorMessage(err)}`,
+        );
         setStep("error");
         return;
       }
@@ -982,7 +1044,7 @@ export function SendCryptoModal({
     setStep("form");
     setFlowMode(defaultFlow);
     setFormData({ recipient: "", amount: "", memo: "" });
-    setError("");
+    clearError();
     setScanError("");
     setScanInstruction("Point your camera at a QR code.");
     setProcessingDetectedQr(false);
@@ -1004,7 +1066,7 @@ export function SendCryptoModal({
   };
 
   const handleBackFromConfirm = () => {
-    setError("");
+    clearError();
     if (flowMode === "scan") {
       setFormData((prev) => ({ ...prev, recipient: "", amount: "" }));
       setScanError("");
@@ -1519,9 +1581,16 @@ export function SendCryptoModal({
                   </div>
                 </div>
                 {error && (
-                  <div className="flex items-center gap-2 rounded-lg bg-red-50 p-3 text-sm text-red-600 dark:bg-red-900/20">
-                    <AlertTriangle className="h-4 w-4 flex-shrink-0" />
-                    <span>{error}</span>
+                  <div className="flex gap-2 rounded-lg bg-red-50 p-3 text-sm text-red-600 dark:bg-red-900/20">
+                    <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
+                    <div className="space-y-1">
+                      <p>{error}</p>
+                      {errorSource && (
+                        <p className="text-xs text-red-500/80 dark:text-red-300/80">
+                          Source: {SEND_ERROR_SOURCE_LABELS[errorSource]}
+                        </p>
+                      )}
+                    </div>
                   </div>
                 )}
                 <div className="grid grid-cols-2 gap-2">
@@ -1636,15 +1705,22 @@ export function SendCryptoModal({
                 />
                 <p className="text-xs text-muted-foreground">
                   {w9Email
-                    ? "Prefilled from existing records. You can edit it before approving."
-                    : "No email found in W9 records. Enter recipient email to continue."}
+                    ? "Email returned by the W9 preflight. You can edit it before approving."
+                    : "No email returned by the W9 preflight. Saved contacts are not checked for email."}
                 </p>
               </div>
 
               {error && (
-                <div className="flex items-center gap-2 text-red-600 text-sm p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
-                  <AlertTriangle className="h-4 w-4 flex-shrink-0" />
-                  <span>{error}</span>
+                <div className="flex gap-2 text-red-600 text-sm p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
+                  <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
+                  <div className="space-y-1">
+                    <p>{error}</p>
+                    {errorSource && (
+                      <p className="text-xs text-red-500/80 dark:text-red-300/80">
+                        Source: {SEND_ERROR_SOURCE_LABELS[errorSource]}
+                      </p>
+                    )}
+                  </div>
                 </div>
               )}
 
@@ -1660,7 +1736,7 @@ export function SendCryptoModal({
                   variant="outline"
                   onClick={() => {
                     setStep("form");
-                    setError("");
+                    clearError();
                     setW9Reason(null);
                     setW9Year(null);
                     setW9EmailInput("");
@@ -1683,21 +1759,30 @@ export function SendCryptoModal({
             <div>
               <h3 className="text-lg font-semibold mb-2">Transaction Failed</h3>
               <p className="text-muted-foreground text-sm">{error}</p>
-              {w9Email ? (
-                <p className="text-sm mt-2">
-                  Recipient email on file:{" "}
-                  <span className="font-medium">{w9Email}</span>
+              {errorSource && (
+                <p className="mt-2 text-xs text-muted-foreground">
+                  Source: {SEND_ERROR_SOURCE_LABELS[errorSource]}
                 </p>
-              ) : (
-                <p className="text-sm mt-2 text-muted-foreground">
-                  No recipient email on file.
-                </p>
+              )}
+              {(errorSource === "w9_preflight" ||
+                errorSource === "w9_approval") && (
+                w9Email ? (
+                  <p className="text-sm mt-2">
+                    Recipient email returned by W9 flow:{" "}
+                    <span className="font-medium">{w9Email}</span>
+                  </p>
+                ) : (
+                  <p className="text-sm mt-2 text-muted-foreground">
+                    No email was returned by the W9 flow.
+                  </p>
+                )
               )}
             </div>
             <div className="flex flex-col gap-3">
               <Button
                 onClick={() => {
                   setStep("form");
+                  clearError();
                   setW9Reason(null);
                   setW9Year(null);
                   setW9EmailInput("");
