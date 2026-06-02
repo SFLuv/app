@@ -35,6 +35,33 @@ import (
 const workflowPayoutProcessingTimeout = 15 * time.Minute
 const workflowPayoutStaleLockTimeout = 5 * time.Minute
 
+type workflowCreateErrorResponse struct {
+	Error  string `json:"error"`
+	Source string `json:"source"`
+	Detail string `json:"detail,omitempty"`
+}
+
+func writeWorkflowCreateError(w http.ResponseWriter, status int, source string, message string, detail string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(workflowCreateErrorResponse{
+		Error:  message,
+		Source: source,
+		Detail: strings.TrimSpace(detail),
+	})
+}
+
+func workflowCreateDecodeErrorMessage(err error) string {
+	if err == nil {
+		return "Workflow request could not be decoded."
+	}
+	errMsg := err.Error()
+	if strings.Contains(errMsg, "bounty") && strings.Contains(errMsg, "uint64") {
+		return "Workflow bounties must be whole-number SFLuv amounts. Fractional workflow bounties are not currently supported."
+	}
+	return "Workflow request could not be decoded."
+}
+
 func maxWorkflowStepPhotoUploadRequestBytes() int64 {
 	return 2 * int64(db.MaxWorkflowPhotoUploadBytes())
 }
@@ -956,7 +983,7 @@ func (a *AppService) CreateDefaultWorkflowTemplate(w http.ResponseWriter, r *htt
 func (a *AppService) CreateWorkflow(w http.ResponseWriter, r *http.Request) {
 	userDid := utils.GetDid(r)
 	if userDid == nil {
-		w.WriteHeader(http.StatusForbidden)
+		writeWorkflowCreateError(w, http.StatusForbidden, "proposer_workflow_api.auth", "Proposer authentication is required.", "")
 		return
 	}
 
@@ -964,18 +991,18 @@ func (a *AppService) CreateWorkflow(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		a.logger.Logf("error reading workflow request body for user %s: %s", *userDid, err.Error())
-		w.WriteHeader(http.StatusInternalServerError)
+		writeWorkflowCreateError(w, http.StatusInternalServerError, "proposer_workflow_api.read_body", "Unable to read workflow request body.", "")
 		return
 	}
 
 	var req structs.WorkflowCreateRequest
 	if err := json.Unmarshal(body, &req); err != nil {
-		w.WriteHeader(http.StatusBadRequest)
+		writeWorkflowCreateError(w, http.StatusBadRequest, "proposer_workflow_api.decode", workflowCreateDecodeErrorMessage(err), err.Error())
 		return
 	}
 
 	if strings.TrimSpace(req.Title) == "" {
-		w.WriteHeader(http.StatusBadRequest)
+		writeWorkflowCreateError(w, http.StatusBadRequest, "proposer_workflow_api.validation", "Workflow title is required.", "")
 		return
 	}
 
@@ -983,30 +1010,27 @@ func (a *AppService) CreateWorkflow(w http.ResponseWriter, r *http.Request) {
 	switch recurrence {
 	case "one_time", "daily", "weekly", "monthly":
 	default:
-		w.WriteHeader(http.StatusBadRequest)
+		writeWorkflowCreateError(w, http.StatusBadRequest, "proposer_workflow_api.validation", "Workflow recurrence is invalid.", "")
 		return
 	}
 	req.Recurrence = recurrence
 
 	startAt, err := parseWorkflowStartAt(req.StartAt)
 	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
+		writeWorkflowCreateError(w, http.StatusBadRequest, "proposer_workflow_api.validation", "Workflow start date/time is invalid.", err.Error())
 		return
 	}
 	recurrenceEndAt, err := parseOptionalWorkflowDatetime(req.RecurrenceEndAt, "recurrence_end_at")
 	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte(err.Error()))
+		writeWorkflowCreateError(w, http.StatusBadRequest, "proposer_workflow_api.validation", err.Error(), "")
 		return
 	}
 	if req.Recurrence == "one_time" && recurrenceEndAt != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte("recurrence_end_at is only valid for recurring workflows"))
+		writeWorkflowCreateError(w, http.StatusBadRequest, "proposer_workflow_api.validation", "recurrence_end_at is only valid for recurring workflows", "")
 		return
 	}
 	if req.Recurrence != "one_time" && recurrenceEndAt != nil && recurrenceEndAt.UTC().Unix() < startAt.UTC().Unix() {
-		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte("recurrence_end_at must be on or after start_at"))
+		writeWorkflowCreateError(w, http.StatusBadRequest, "proposer_workflow_api.validation", "recurrence_end_at must be on or after start_at", "")
 		return
 	}
 
@@ -1014,16 +1038,15 @@ func (a *AppService) CreateWorkflow(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		errMsg := err.Error()
 		if strings.Contains(errMsg, "not approved") {
-			w.WriteHeader(http.StatusForbidden)
+			writeWorkflowCreateError(w, http.StatusForbidden, "proposer_workflow_db.proposer_status", errMsg, "")
 			return
 		}
 		if strings.Contains(errMsg, "required") || strings.Contains(errMsg, "invalid") || strings.Contains(errMsg, "duplicate") || strings.Contains(errMsg, "unknown") {
-			w.WriteHeader(http.StatusBadRequest)
-			w.Write([]byte(errMsg))
+			writeWorkflowCreateError(w, http.StatusBadRequest, "proposer_workflow_db.validation", errMsg, "")
 			return
 		}
 		a.logger.Logf("error creating workflow for proposer %s: %s", *userDid, errMsg)
-		w.WriteHeader(http.StatusInternalServerError)
+		writeWorkflowCreateError(w, http.StatusInternalServerError, "proposer_workflow_db.internal", "Unable to create workflow because an internal workflow database operation failed.", "")
 		return
 	}
 	if workflow.Status == "approved" {
