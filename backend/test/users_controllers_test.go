@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/SFLuv/app/backend/structs"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -101,6 +102,74 @@ func ModuleGetUsersController(t *testing.T) {
 		if *user.Email != *TEST_USERS[n].Email {
 			t.Fatalf("email %s does not match expected %s", *user.Email, *TEST_USERS[n].Email)
 		}
+	}
+
+	older := time.Now().UTC().Add(-2 * time.Hour)
+	if err := AppDb.RecordClientVersionObservation(ctx, structs.ClientVersionObservation{
+		UserId:         TEST_USER_1.Id,
+		ClientKey:      "test:user-1:platform:mobile",
+		Platform:       "mobile",
+		Version:        "1.0.0",
+		Build:          "1",
+		BuildNumber:    1,
+		LegacyInferred: true,
+		SeenAt:         older,
+	}); err != nil {
+		t.Fatalf("error recording older user 1 client version: %s", err)
+	}
+	if err := AppDb.RecordClientVersionObservation(ctx, structs.ClientVersionObservation{
+		UserId:      TEST_USER_1.Id,
+		ClientKey:   "test:user-1:platform:ios",
+		Platform:    "ios",
+		Version:     "2.0.0",
+		Build:       "7",
+		BuildNumber: 7,
+		SeenAt:      older.Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("error recording latest user 1 client version: %s", err)
+	}
+	if err := AppDb.RecordClientVersionObservation(ctx, structs.ClientVersionObservation{
+		UserId:         TEST_USER_2.Id,
+		ClientKey:      "test:user-2:platform:mobile",
+		Platform:       "mobile",
+		Version:        "1.0.0",
+		Build:          "1",
+		BuildNumber:    1,
+		LegacyInferred: true,
+		SeenAt:         older.Add(30 * time.Minute),
+	}); err != nil {
+		t.Fatalf("error recording user 2 client version: %s", err)
+	}
+
+	oldVersionUsers, err := AppDb.GetUsers(ctx, 0, 10, "", []string{"1.0.0 (1)"})
+	if err != nil {
+		t.Fatalf("error filtering users by old client version: %s", err)
+	}
+	if len(oldVersionUsers) != 1 || oldVersionUsers[0].Id != TEST_USER_2.Id {
+		t.Fatalf("expected old-version filter to include only %s, got %#v", TEST_USER_2.Id, oldVersionUsers)
+	}
+
+	newVersionUsers, err := AppDb.GetUsers(ctx, 0, 10, "", []string{"2.0.0 (7)"})
+	if err != nil {
+		t.Fatalf("error filtering users by new client version: %s", err)
+	}
+	if len(newVersionUsers) != 1 || newVersionUsers[0].Id != TEST_USER_1.Id {
+		t.Fatalf("expected new-version filter to include only %s, got %#v", TEST_USER_1.Id, newVersionUsers)
+	}
+
+	counts, err := AppDb.GetClientVersionUserCounts(ctx)
+	if err != nil {
+		t.Fatalf("error getting client version user counts: %s", err)
+	}
+	countByLabel := map[string]int{}
+	for _, count := range counts {
+		countByLabel[count.VersionLabel] = count.UserCount
+	}
+	if countByLabel["1.0.0 (1)"] != 1 {
+		t.Fatalf("expected one current old-version user, got %d", countByLabel["1.0.0 (1)"])
+	}
+	if countByLabel["2.0.0 (7)"] != 1 {
+		t.Fatalf("expected one current new-version user, got %d", countByLabel["2.0.0 (7)"])
 	}
 }
 

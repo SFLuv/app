@@ -349,6 +349,8 @@ export default function AdminPage() {
   const [adminUsersCount] = useState<number>(20)
   const [adminUsersSearch, setAdminUsersSearch] = useState<string>(readQueryText("users_search", ""))
   const [adminUsersVersionFilter, setAdminUsersVersionFilter] = useState<string>(readQueryText("users_versions", ""))
+  const [debouncedAdminUsersSearch, setDebouncedAdminUsersSearch] = useState<string>(adminUsersSearch)
+  const [debouncedAdminUsersVersionFilter, setDebouncedAdminUsersVersionFilter] = useState<string>(adminUsersVersionFilter)
   const [adminUsersVersionOptions, setAdminUsersVersionOptions] = useState<string[]>([])
   const [adminUsersVersionCounts, setAdminUsersVersionCounts] = useState<ClientVersionUserCountResponse[]>([])
   const [adminUsersLoading, setAdminUsersLoading] = useState<boolean>(false)
@@ -1787,6 +1789,15 @@ export default function AdminPage() {
   useEffect(() => { getAdminWorkflows(adminWorkflowsSearch, adminWorkflowsPage, adminWorkflowsIncludeArchived) }, [adminWorkflowsSearch, adminWorkflowsPage, adminWorkflowsIncludeArchived])
 
   useEffect(() => {
+    const timeout = window.setTimeout(() => {
+      setDebouncedAdminUsersSearch(adminUsersSearch)
+      setDebouncedAdminUsersVersionFilter(adminUsersVersionFilter)
+    }, 300)
+
+    return () => window.clearTimeout(timeout)
+  }, [adminUsersSearch, adminUsersVersionFilter])
+
+  useEffect(() => {
     if (status !== "authenticated") return
 
     switch (activeTab) {
@@ -1794,7 +1805,7 @@ export default function AdminPage() {
         void getAuthedMapLocations()
         break
       case "users":
-        void getAdminUsers(adminUsersPage)
+        void getAdminUsers(adminUsersPage, debouncedAdminUsersSearch, debouncedAdminUsersVersionFilter)
         break
       case "events":
         void getUnallocatedBalance()
@@ -1831,8 +1842,8 @@ export default function AdminPage() {
     activeTab,
     status,
     adminUsersPage,
-    adminUsersSearch,
-    adminUsersVersionFilter,
+    debouncedAdminUsersSearch,
+    debouncedAdminUsersVersionFilter,
     affiliateSearch,
     affiliatePage,
     proposerSearch,

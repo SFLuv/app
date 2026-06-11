@@ -173,6 +173,25 @@ func (a *AppDB) AttachClientVersionDevices(ctx context.Context, users []*structs
 
 func (a *AppDB) GetClientVersionFilterOptions(ctx context.Context) ([]string, error) {
 	rows, err := a.db.Query(ctx, `
+		WITH latest_versions AS (
+			SELECT DISTINCT ON (ucv.user_id)
+				ucv.user_id,
+				TRIM(ucv.version) AS version,
+				TRIM(ucv.build) AS build,
+				ucv.last_seen_at
+			FROM
+				user_client_versions ucv
+			INNER JOIN
+				users u
+			ON
+				u.id = ucv.user_id
+			WHERE
+				u.active = TRUE
+			ORDER BY
+				ucv.user_id,
+				ucv.last_seen_at DESC,
+				ucv.id DESC
+		)
 		SELECT
 			CASE
 				WHEN TRIM(version) = '' THEN 'unknown'
@@ -180,9 +199,7 @@ func (a *AppDB) GetClientVersionFilterOptions(ctx context.Context) ([]string, er
 				ELSE TRIM(version)
 			END AS version_label
 		FROM
-			user_client_versions
-		WHERE
-			user_id IS NOT NULL
+			latest_versions
 		GROUP BY
 			1
 		ORDER BY

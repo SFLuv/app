@@ -16,9 +16,10 @@ const (
 	clientVersionHeader  = "X-SFLUV-Client-Version"
 	clientBuildHeader    = "X-SFLUV-Client-Build"
 
-	legacyMobileClientVersion = "1.0.0"
-	legacyMobileClientBuild   = "1"
-	outdatedMobileClientBody  = "Client version out of date, please update your SFLuv app."
+	legacyMobileClientBlockEnvKey = "CLIENT_VERSION_LEGACY_BLOCK_ENABLED"
+	legacyMobileClientVersion     = "1.0.0"
+	legacyMobileClientBuild       = "1"
+	outdatedMobileClientBody      = "Client version out of date, please update your SFLuv app."
 )
 
 func parseClientBuildNumber(build string) int {
@@ -102,6 +103,10 @@ func isLikelyLegacyMobileClient(r *http.Request) bool {
 	}
 
 	return false
+}
+
+func legacyMobileClientBlockEnabled() bool {
+	return envBool(legacyMobileClientBlockEnvKey, true)
 }
 
 func (a *AppService) recordClientVersionObservation(ctx context.Context, userID string, source string, r *http.Request) {

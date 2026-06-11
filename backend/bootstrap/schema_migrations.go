@@ -629,7 +629,7 @@ var schemaMigrations = []SchemaMigration{
 			if _, err := pools.App.Exec(ctx, `
 				CREATE TABLE IF NOT EXISTS user_client_versions(
 					id BIGSERIAL PRIMARY KEY,
-					user_id TEXT REFERENCES users(id) ON DELETE CASCADE,
+					user_id TEXT,
 					client_key TEXT NOT NULL,
 					platform TEXT NOT NULL DEFAULT '',
 					version TEXT NOT NULL DEFAULT '',

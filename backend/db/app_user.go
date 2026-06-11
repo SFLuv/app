@@ -190,6 +190,19 @@ func appendUserListFilters(where []string, args []any, search string, versionFil
 				user_client_versions ucv
 			WHERE
 				ucv.user_id = users.id
+			AND
+				ucv.id = (
+					SELECT
+						latest_ucv.id
+					FROM
+						user_client_versions latest_ucv
+					WHERE
+						latest_ucv.user_id = users.id
+					ORDER BY
+						latest_ucv.last_seen_at DESC,
+						latest_ucv.id DESC
+					LIMIT 1
+				)
 			AND (
 				LOWER(TRIM(ucv.version)) = ANY($%d)
 				OR LOWER(

@@ -57,7 +57,7 @@ func (a *AppService) GetUserAuthed(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if isLikelyLegacyMobileClient(r) {
+	if legacyMobileClientBlockEnabled() && isLikelyLegacyMobileClient(r) {
 		a.recordLegacyMobileClientObservation(r.Context(), *userDid, "legacy_users_get_block", r)
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusUpgradeRequired)
