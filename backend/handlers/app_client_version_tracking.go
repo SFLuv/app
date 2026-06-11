@@ -84,6 +84,12 @@ func isLikelyLegacyMobileClient(r *http.Request) bool {
 	if ua == "" {
 		return false
 	}
+	// Browsers (and WebViews) always identify as Mozilla; the released native
+	// app uses CFNetwork/Darwin (iOS) or okhttp (Android) user agents, so any
+	// Mozilla UA is web traffic even when Origin/Referer/Sec-Fetch are absent.
+	if strings.Contains(ua, "mozilla") {
+		return false
+	}
 	mobileMarkers := []string{
 		"android",
 		"cfnetwork",
