@@ -78,7 +78,7 @@ func ModuleGetUsersController(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	users, err := AppDb.GetUsers(ctx, 0, 2)
+	users, err := AppDb.GetUsers(ctx, 0, 2, "", nil)
 	if err != nil {
 		t.Fatal(err.Error())
 	}

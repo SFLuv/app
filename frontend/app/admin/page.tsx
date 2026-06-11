@@ -90,7 +90,7 @@ import { WorkflowDetailsModal } from "@/components/workflows/workflow-details-mo
 import { AdminAnalyticsPanel } from "@/components/admin/admin-analytics-panel"
 import EventCard from "@/components/events/event-card"
 import type { W9Submission } from "@/types/w9"
-import type { UserResponse } from "@/types/server"
+import type { ClientVersionUserCountResponse, UserResponse } from "@/types/server"
 
 // Mock PayPal accounts
 const mockPaypalAccounts = [
@@ -134,6 +134,8 @@ type AdminUsersResponse = {
   total: number
   page: number
   count: number
+  client_version_options?: string[]
+  client_version_counts?: ClientVersionUserCountResponse[]
 }
 
 type AdminUserRoleFlag =
@@ -170,6 +172,28 @@ const formatAdminUserDateTime = (value?: string | null): string => {
   if (Number.isNaN(date.getTime())) return "Not set"
   return date.toLocaleString()
 }
+
+const splitAdminUserVersionFilter = (value: string): string[] =>
+  value
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+
+const getAdminUserLatestClientDevice = (adminUser: UserResponse) =>
+  [...(adminUser.client_devices || [])].sort((a, b) => {
+    const aTime = new Date(a.last_seen_at).getTime()
+    const bTime = new Date(b.last_seen_at).getTime()
+    return (Number.isFinite(bTime) ? bTime : 0) - (Number.isFinite(aTime) ? aTime : 0)
+  })[0]
+
+const getAdminUserClientVersionSummary = (adminUser: UserResponse): string => {
+  const latest = getAdminUserLatestClientDevice(adminUser)
+  if (!latest) return "Unknown"
+  return latest.version_label || latest.version || "Unknown"
+}
+
+const getAdminUsersVersionFilterValue = (count: ClientVersionUserCountResponse): string =>
+  count.unknown ? "" : count.version_label || count.version || ""
 
 const maxCredentialBadgeUploadBytes = 2 * 1024 * 1024
 const maxCredentialBadgeUploadLabel = "2MB"
@@ -323,9 +347,15 @@ export default function AdminPage() {
   const [adminUsersTotal, setAdminUsersTotal] = useState<number>(0)
   const [adminUsersPage, setAdminUsersPage] = useState<number>(readQueryNumber("users_page", 0))
   const [adminUsersCount] = useState<number>(20)
+  const [adminUsersSearch, setAdminUsersSearch] = useState<string>(readQueryText("users_search", ""))
+  const [adminUsersVersionFilter, setAdminUsersVersionFilter] = useState<string>(readQueryText("users_versions", ""))
+  const [adminUsersVersionOptions, setAdminUsersVersionOptions] = useState<string[]>([])
+  const [adminUsersVersionCounts, setAdminUsersVersionCounts] = useState<ClientVersionUserCountResponse[]>([])
   const [adminUsersLoading, setAdminUsersLoading] = useState<boolean>(false)
   const [adminUsersError, setAdminUsersError] = useState<string>("")
   const [adminEmailExporting, setAdminEmailExporting] = useState<boolean>(false)
+  const [selectedAdminUser, setSelectedAdminUser] = useState<UserResponse | null>(null)
+  const [adminUserModalOpen, setAdminUserModalOpen] = useState<boolean>(false)
 
   // Events
   const [events, setEvents] = useState<Event[]>([])
@@ -632,6 +662,11 @@ export default function AdminPage() {
   const canLoadNextAffiliatePage = affiliates.length >= 20
   const canLoadPreviousAdminUsersPage = adminUsersPage > 0
   const canLoadNextAdminUsersPage = (adminUsersPage + 1) * adminUsersCount < adminUsersTotal
+  const selectedAdminUserVersions = splitAdminUserVersionFilter(adminUsersVersionFilter)
+  const adminUsersVersionCountsTotal = adminUsersVersionCounts.reduce(
+    (sum, count) => sum + (Number.isFinite(count.user_count) ? count.user_count : 0),
+    0,
+  )
 
   const filteredProposers = useMemo(() => {
     if (proposerStatusFilter === "all") return proposers
@@ -715,23 +750,33 @@ export default function AdminPage() {
       })
   }, [adminWorkflows])
 
-  const getAdminUsers = async (page = adminUsersPage) => {
+  const getAdminUsers = async (
+    page = adminUsersPage,
+    search = adminUsersSearch,
+    versionFilter = adminUsersVersionFilter,
+  ) => {
     setAdminUsersLoading(true)
     try {
       const params = new URLSearchParams({
         page: String(page),
         count: String(adminUsersCount),
       })
+      if (search.trim()) params.set("search", search.trim())
+      splitAdminUserVersionFilter(versionFilter).forEach((version) => params.append("version", version))
       const res = await authFetch(`/admin/users?${params}`)
       if (!res.ok) throw new Error()
       const data = await res.json()
       if (Array.isArray(data)) {
         setAdminUsers(data)
         setAdminUsersTotal(page * adminUsersCount + data.length)
+        setAdminUsersVersionOptions([])
+        setAdminUsersVersionCounts([])
       } else {
         const response = data as AdminUsersResponse
         setAdminUsers(response.users || [])
         setAdminUsersTotal(response.total || 0)
+        setAdminUsersVersionOptions(response.client_version_options || [])
+        setAdminUsersVersionCounts(response.client_version_counts || [])
       }
       setAdminUsersError("")
     } catch {
@@ -739,6 +784,18 @@ export default function AdminPage() {
     } finally {
       setAdminUsersLoading(false)
     }
+  }
+
+  const toggleAdminUsersVersionFilter = (version: string) => {
+    const normalized = version.trim()
+    if (!normalized) return
+    const current = splitAdminUserVersionFilter(adminUsersVersionFilter)
+    const exists = current.some((entry) => entry.toLowerCase() === normalized.toLowerCase())
+    const next = exists
+      ? current.filter((entry) => entry.toLowerCase() !== normalized.toLowerCase())
+      : [...current, normalized]
+    setAdminUsersPage(0)
+    setAdminUsersVersionFilter(next.join(", "))
   }
 
   const exportAdminEmailList = async () => {
@@ -1532,6 +1589,10 @@ export default function AdminPage() {
 
     const nextAdminUsersPage = readQueryNumber("users_page", 0)
     if (nextAdminUsersPage !== adminUsersPage) setAdminUsersPage(nextAdminUsersPage)
+    const nextAdminUsersSearch = readQueryText("users_search", "")
+    if (nextAdminUsersSearch !== adminUsersSearch) setAdminUsersSearch(nextAdminUsersSearch)
+    const nextAdminUsersVersions = readQueryText("users_versions", "")
+    if (nextAdminUsersVersions !== adminUsersVersionFilter) setAdminUsersVersionFilter(nextAdminUsersVersions)
 
     const nextMerchantSearch = readQueryText("merchant_search", "")
     if (nextMerchantSearch !== merchantSearch) setMerchantSearch(nextMerchantSearch)
@@ -1599,6 +1660,10 @@ export default function AdminPage() {
 
     if (adminUsersPage > 0) params.set("users_page", String(adminUsersPage))
     else params.delete("users_page")
+    if (adminUsersSearch) params.set("users_search", adminUsersSearch)
+    else params.delete("users_search")
+    if (adminUsersVersionFilter) params.set("users_versions", adminUsersVersionFilter)
+    else params.delete("users_versions")
 
     if (merchantSearch) params.set("merchant_search", merchantSearch)
     else params.delete("merchant_search")
@@ -1665,6 +1730,8 @@ export default function AdminPage() {
   }, [
     activeTab,
     adminUsersPage,
+    adminUsersSearch,
+    adminUsersVersionFilter,
     merchantSearch,
     merchantStatusFilter,
     eventsSearch,
@@ -1764,6 +1831,8 @@ export default function AdminPage() {
     activeTab,
     status,
     adminUsersPage,
+    adminUsersSearch,
+    adminUsersVersionFilter,
     affiliateSearch,
     affiliatePage,
     proposerSearch,
@@ -2889,6 +2958,111 @@ export default function AdminPage() {
             </div>
           )}
 
+          <Dialog
+            open={adminUserModalOpen}
+            onOpenChange={(open) => {
+              setAdminUserModalOpen(open)
+              if (!open) setSelectedAdminUser(null)
+            }}
+          >
+            <DialogContent className="w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] max-h-[90vh] overflow-y-auto sm:max-w-3xl">
+              <DialogHeader>
+                <DialogTitle>{selectedAdminUser?.contact_name || "User"}</DialogTitle>
+                <DialogDescription className="break-all font-mono text-xs">
+                  {selectedAdminUser?.id}
+                </DialogDescription>
+              </DialogHeader>
+              {selectedAdminUser && (
+                <div className="space-y-5">
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <div className="space-y-1">
+                      <p className="text-xs font-medium uppercase text-muted-foreground">Contact</p>
+                      <p className="break-all text-sm">{selectedAdminUser.contact_email || "No email on profile"}</p>
+                      <p className="text-sm text-muted-foreground">{selectedAdminUser.contact_phone || "No phone on profile"}</p>
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-xs font-medium uppercase text-muted-foreground">Primary wallet</p>
+                      <p className="break-all font-mono text-xs text-muted-foreground">
+                        {selectedAdminUser.primary_wallet_address || "No primary wallet"}
+                      </p>
+                    </div>
+                    <div className="space-y-2">
+                      <p className="text-xs font-medium uppercase text-muted-foreground">Roles</p>
+                      <div className="flex flex-wrap gap-1">
+                        {getAdminUserRoleLabels(selectedAdminUser).length === 0 ? (
+                          <Badge variant="outline">User</Badge>
+                        ) : (
+                          getAdminUserRoleLabels(selectedAdminUser).map((role) => (
+                            <Badge key={`modal-${selectedAdminUser.id}-${role}`} variant={role === "Admin" ? "default" : "secondary"}>
+                              {role}
+                            </Badge>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-xs font-medium uppercase text-muted-foreground">Email opt-in</p>
+                      <Badge variant={selectedAdminUser.mailing_list_opt_in ? "default" : "outline"}>
+                        {selectedAdminUser.mailing_list_opt_in ? "Opted in" : "Not opted in"}
+                      </Badge>
+                      <p className="text-xs text-muted-foreground">
+                        {formatAdminUserDateTime(selectedAdminUser.mailing_list_opt_in_at)}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <h4 className="text-sm font-semibold">Client versions</h4>
+                      <Badge variant="outline">{selectedAdminUser.client_devices?.length || 0}</Badge>
+                    </div>
+                    {(selectedAdminUser.client_devices || []).length === 0 ? (
+                      <p className="rounded-md border px-3 py-6 text-center text-sm text-muted-foreground">
+                        No client version observations recorded.
+                      </p>
+                    ) : (
+                      <div className="overflow-x-auto rounded-md border">
+                        <table className="w-full min-w-[680px] text-sm">
+                          <thead className="bg-muted/60 text-left text-xs uppercase text-muted-foreground">
+                            <tr>
+                              <th className="px-3 py-2 font-medium">Platform</th>
+                              <th className="px-3 py-2 font-medium">Version</th>
+                              <th className="px-3 py-2 font-medium">Source</th>
+                              <th className="px-3 py-2 font-medium">First seen</th>
+                              <th className="px-3 py-2 font-medium">Last seen</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y">
+                            {(selectedAdminUser.client_devices || []).map((device) => (
+                              <tr key={device.id}>
+                                <td className="px-3 py-2 capitalize">{device.platform || "unknown"}</td>
+                                <td className="px-3 py-2">
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <Badge variant={device.legacy_inferred ? "destructive" : "secondary"}>
+                                      {device.version_label || "Unknown"}
+                                    </Badge>
+                                    {device.legacy_inferred && <span className="text-xs text-muted-foreground">inferred</span>}
+                                  </div>
+                                </td>
+                                <td className="px-3 py-2 text-xs text-muted-foreground">{device.source || "unknown"}</td>
+                                <td className="px-3 py-2 text-xs text-muted-foreground">
+                                  {formatAdminUserDateTime(device.first_seen_at)}
+                                </td>
+                                <td className="px-3 py-2 text-xs text-muted-foreground">
+                                  {formatAdminUserDateTime(device.last_seen_at)}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </DialogContent>
+          </Dialog>
+
           <Card>
             <CardHeader className="pb-4">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -2915,6 +3089,115 @@ export default function AdminPage() {
               </div>
             </CardHeader>
             <CardContent className="space-y-4">
+              <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(280px,360px)]">
+                <div className="space-y-2">
+                  <Label htmlFor="admin-users-search">Search users</Label>
+                  <div className="relative">
+                    <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                    <Input
+                      id="admin-users-search"
+                      value={adminUsersSearch}
+                      onChange={(event) => {
+                        setAdminUsersPage(0)
+                        setAdminUsersSearch(event.target.value)
+                      }}
+                      className="pl-9"
+                      placeholder="Name, email, phone, wallet, DID"
+                    />
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="admin-users-version-filter">App versions</Label>
+                  <Input
+                    id="admin-users-version-filter"
+                    value={adminUsersVersionFilter}
+                    onChange={(event) => {
+                      setAdminUsersPage(0)
+                      setAdminUsersVersionFilter(event.target.value)
+                    }}
+                    placeholder="Version or build"
+                  />
+                </div>
+              </div>
+
+              {adminUsersVersionCounts.length > 0 && (
+                <div className="rounded-lg border bg-muted/20 p-4">
+                  <div className="mb-3 flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <h4 className="text-sm font-semibold">App version breakdown</h4>
+                      <p className="text-xs text-muted-foreground">
+                        Latest recorded app version across {adminUsersVersionCountsTotal} active users
+                      </p>
+                    </div>
+                    <Badge variant="outline">{adminUsersVersionCounts.length} buckets</Badge>
+                  </div>
+                  <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                    {adminUsersVersionCounts.map((count) => {
+                      const filterValue = getAdminUsersVersionFilterValue(count)
+                      const selected = filterValue
+                        ? selectedAdminUserVersions.some((entry) => entry.toLowerCase() === filterValue.toLowerCase())
+                        : false
+                      return (
+                        <button
+                          key={`${count.version_label}-${count.unknown ? "unknown" : "known"}-${count.legacy_inferred ? "legacy" : "current"}`}
+                          type="button"
+                          disabled={!filterValue}
+                          onClick={() => filterValue && toggleAdminUsersVersionFilter(filterValue)}
+                          className={cn(
+                            "flex min-h-[72px] items-center justify-between gap-3 rounded-md border bg-background px-3 py-2 text-left transition-colors",
+                            filterValue ? "hover:bg-muted/60" : "cursor-default opacity-80",
+                            selected && "border-primary bg-primary/5",
+                          )}
+                        >
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-medium">
+                              {count.version_label || "Unknown / no version"}
+                            </p>
+                            <div className="mt-1 flex flex-wrap items-center gap-1">
+                              {count.legacy_inferred && <Badge variant="destructive">Inferred legacy</Badge>}
+                              {count.unknown && <Badge variant="outline">No backend version</Badge>}
+                            </div>
+                          </div>
+                          <span className="text-2xl font-semibold tabular-nums">{count.user_count}</span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
+
+              <div className="flex flex-wrap items-center gap-2">
+                {adminUsersVersionOptions.map((version) => {
+                  const selected = selectedAdminUserVersions.some((entry) => entry.toLowerCase() === version.toLowerCase())
+                  return (
+                    <Button
+                      key={version}
+                      type="button"
+                      variant={selected ? "default" : "outline"}
+                      size="sm"
+                      onClick={() => toggleAdminUsersVersionFilter(version)}
+                    >
+                      {version}
+                    </Button>
+                  )
+                })}
+                {(adminUsersSearch || adminUsersVersionFilter) && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      setAdminUsersPage(0)
+                      setAdminUsersSearch("")
+                      setAdminUsersVersionFilter("")
+                    }}
+                  >
+                    <X className="h-4 w-4" />
+                    Clear
+                  </Button>
+                )}
+              </div>
+
               <div className="text-sm text-muted-foreground">
                 Showing{" "}
                 {adminUsersTotal === 0
@@ -2936,19 +3219,22 @@ export default function AdminPage() {
                 </div>
               ) : (
                 <div className="overflow-x-auto rounded-lg border">
-                  <table className="w-full min-w-[920px] text-sm">
+                  <table className="w-full min-w-[1100px] text-sm">
                     <thead className="bg-muted/60 text-left text-xs uppercase text-muted-foreground">
                       <tr>
                         <th className="px-4 py-3 font-medium">User</th>
                         <th className="px-4 py-3 font-medium">Contact</th>
                         <th className="px-4 py-3 font-medium">Roles</th>
+                        <th className="px-4 py-3 font-medium">App version</th>
                         <th className="px-4 py-3 font-medium">Email opt-in</th>
                         <th className="px-4 py-3 font-medium">Primary wallet</th>
+                        <th className="px-4 py-3 font-medium">Actions</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y">
                       {adminUsers.map((adminUser) => {
                         const roleLabels = getAdminUserRoleLabels(adminUser)
+                        const latestDevice = getAdminUserLatestClientDevice(adminUser)
                         return (
                           <tr key={adminUser.id} className="align-top">
                             <td className="px-4 py-3">
@@ -2977,6 +3263,16 @@ export default function AdminPage() {
                               )}
                             </td>
                             <td className="px-4 py-3">
+                              <Badge variant={latestDevice?.legacy_inferred ? "destructive" : latestDevice ? "secondary" : "outline"}>
+                                {getAdminUserClientVersionSummary(adminUser)}
+                              </Badge>
+                              {latestDevice && (
+                                <p className="mt-1 text-xs text-muted-foreground">
+                                  {latestDevice.platform || "unknown"} · {formatAdminUserDateTime(latestDevice.last_seen_at)}
+                                </p>
+                              )}
+                            </td>
+                            <td className="px-4 py-3">
                               <Badge variant={adminUser.mailing_list_opt_in ? "default" : "outline"}>
                                 {adminUser.mailing_list_opt_in ? "Opted in" : "Not opted in"}
                               </Badge>
@@ -2990,6 +3286,20 @@ export default function AdminPage() {
                               <p className="max-w-[260px] break-all font-mono text-xs text-muted-foreground">
                                 {adminUser.primary_wallet_address || "No primary wallet"}
                               </p>
+                            </td>
+                            <td className="px-4 py-3">
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                onClick={() => {
+                                  setSelectedAdminUser(adminUser)
+                                  setAdminUserModalOpen(true)
+                                }}
+                              >
+                                <Eye className="h-4 w-4" />
+                                View
+                              </Button>
                             </td>
                           </tr>
                         )

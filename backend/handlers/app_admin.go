@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/SFLuv/app/backend/structs"
@@ -35,31 +36,56 @@ func (a *AppService) GetUsers(w http.ResponseWriter, r *http.Request) {
 	if err != nil || count <= 0 || count > 500 {
 		count = 100
 	}
+	search := strings.TrimSpace(params.Get("search"))
+	versionFilters := append([]string{}, params["version"]...)
+	versionFilters = append(versionFilters, params["versions"]...)
 
-	users, err := a.db.GetUsers(r.Context(), page, count)
+	users, err := a.db.GetUsers(r.Context(), page, count, search, versionFilters)
 	if err != nil {
 		a.logger.Logf("error getting users: %s", err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 
-	total, err := a.db.CountUsers(r.Context())
+	if err := a.db.AttachClientVersionDevices(r.Context(), users); err != nil {
+		a.logger.Logf("error attaching client version devices to users: %s", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	total, err := a.db.CountUsers(r.Context(), search, versionFilters)
 	if err != nil {
 		a.logger.Logf("error counting users: %s", err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 
+	versionOptions, err := a.db.GetClientVersionFilterOptions(r.Context())
+	if err != nil {
+		a.logger.Logf("error getting client version filter options: %s", err)
+		versionOptions = []string{}
+	}
+
+	versionCounts, err := a.db.GetClientVersionUserCounts(r.Context())
+	if err != nil {
+		a.logger.Logf("error getting client version user counts: %s", err)
+		versionCounts = []*structs.ClientVersionUserCount{}
+	}
+
 	response := struct {
-		Users []*structs.User `json:"users"`
-		Total int             `json:"total"`
-		Page  int             `json:"page"`
-		Count int             `json:"count"`
+		Users                []*structs.User                   `json:"users"`
+		Total                int                               `json:"total"`
+		Page                 int                               `json:"page"`
+		Count                int                               `json:"count"`
+		ClientVersionOptions []string                          `json:"client_version_options"`
+		ClientVersionCounts  []*structs.ClientVersionUserCount `json:"client_version_counts"`
 	}{
-		Users: users,
-		Total: total,
-		Page:  page,
-		Count: count,
+		Users:                users,
+		Total:                total,
+		Page:                 page,
+		Count:                count,
+		ClientVersionOptions: versionOptions,
+		ClientVersionCounts:  versionCounts,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
