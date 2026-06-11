@@ -6,6 +6,28 @@ import { Improver } from "./improver";
 import { IssuerRecord } from "./issuer";
 import { Supervisor } from "./supervisor";
 
+export interface ClientVersionDeviceResponse {
+  id: number;
+  user_id?: string;
+  platform: string;
+  version: string;
+  build: string;
+  version_label: string;
+  source: string;
+  legacy_inferred: boolean;
+  first_seen_at: string;
+  last_seen_at: string;
+}
+
+export interface ClientVersionUserCountResponse {
+  version_label: string;
+  version: string;
+  build: string;
+  user_count: number;
+  legacy_inferred: boolean;
+  unknown: boolean;
+}
+
 export interface UserResponse {
   id: string;
   is_admin: boolean;
@@ -29,6 +51,7 @@ export interface UserResponse {
   mailing_list_opt_in: boolean;
   mailing_list_opt_in_at?: string | null;
   mailing_list_policy_version: string;
+  client_devices?: ClientVersionDeviceResponse[];
 }
 
 export interface UserPolicyStatusResponse {

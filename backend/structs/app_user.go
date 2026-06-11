@@ -3,29 +3,65 @@ package structs
 import "time"
 
 type User struct {
-	Id                       string     `json:"id"`
-	Exists                   bool       `json:"exists"`
-	IsAdmin                  bool       `json:"is_admin"`
-	IsMerchant               bool       `json:"is_merchant"`
-	IsOrganizer              bool       `json:"is_organizer"`
-	IsImprover               bool       `json:"is_improver"`
-	IsProposer               bool       `json:"is_proposer"`
-	IsVoter                  bool       `json:"is_voter"`
-	IsIssuer                 bool       `json:"is_issuer"`
-	IsSupervisor             bool       `json:"is_supervisor"`
-	IsAffiliate              bool       `json:"is_affiliate"`
-	Email                    *string    `json:"contact_email"`
-	Phone                    *string    `json:"contact_phone"`
-	Name                     *string    `json:"contact_name"`
-	PrimaryWalletAddress     string     `json:"primary_wallet_address"`
-	PayPalEth                string     `json:"paypal_eth"`
-	LastRedemption           int        `json:"last_redemption"`
-	AcceptedPrivacyPolicy    bool       `json:"accepted_privacy_policy"`
-	AcceptedPrivacyPolicyAt  *time.Time `json:"accepted_privacy_policy_at,omitempty"`
-	PrivacyPolicyVersion     string     `json:"privacy_policy_version"`
-	MailingListOptIn         bool       `json:"mailing_list_opt_in"`
-	MailingListOptInAt       *time.Time `json:"mailing_list_opt_in_at,omitempty"`
-	MailingListPolicyVersion string     `json:"mailing_list_policy_version"`
+	Id                       string                 `json:"id"`
+	Exists                   bool                   `json:"exists"`
+	IsAdmin                  bool                   `json:"is_admin"`
+	IsMerchant               bool                   `json:"is_merchant"`
+	IsOrganizer              bool                   `json:"is_organizer"`
+	IsImprover               bool                   `json:"is_improver"`
+	IsProposer               bool                   `json:"is_proposer"`
+	IsVoter                  bool                   `json:"is_voter"`
+	IsIssuer                 bool                   `json:"is_issuer"`
+	IsSupervisor             bool                   `json:"is_supervisor"`
+	IsAffiliate              bool                   `json:"is_affiliate"`
+	Email                    *string                `json:"contact_email"`
+	Phone                    *string                `json:"contact_phone"`
+	Name                     *string                `json:"contact_name"`
+	PrimaryWalletAddress     string                 `json:"primary_wallet_address"`
+	PayPalEth                string                 `json:"paypal_eth"`
+	LastRedemption           int                    `json:"last_redemption"`
+	AcceptedPrivacyPolicy    bool                   `json:"accepted_privacy_policy"`
+	AcceptedPrivacyPolicyAt  *time.Time             `json:"accepted_privacy_policy_at,omitempty"`
+	PrivacyPolicyVersion     string                 `json:"privacy_policy_version"`
+	MailingListOptIn         bool                   `json:"mailing_list_opt_in"`
+	MailingListOptInAt       *time.Time             `json:"mailing_list_opt_in_at,omitempty"`
+	MailingListPolicyVersion string                 `json:"mailing_list_policy_version"`
+	ClientDevices            []*ClientVersionDevice `json:"client_devices,omitempty"`
+}
+
+type ClientVersionDevice struct {
+	Id             int64     `json:"id"`
+	UserId         string    `json:"user_id,omitempty"`
+	Platform       string    `json:"platform"`
+	Version        string    `json:"version"`
+	Build          string    `json:"build"`
+	VersionLabel   string    `json:"version_label"`
+	Source         string    `json:"source"`
+	LegacyInferred bool      `json:"legacy_inferred"`
+	FirstSeenAt    time.Time `json:"first_seen_at"`
+	LastSeenAt     time.Time `json:"last_seen_at"`
+}
+
+type ClientVersionUserCount struct {
+	VersionLabel   string `json:"version_label"`
+	Version        string `json:"version"`
+	Build          string `json:"build"`
+	UserCount      int    `json:"user_count"`
+	LegacyInferred bool   `json:"legacy_inferred"`
+	Unknown        bool   `json:"unknown"`
+}
+
+type ClientVersionObservation struct {
+	UserId         string
+	ClientKey      string
+	Platform       string
+	Version        string
+	Build          string
+	BuildNumber    int
+	UserAgent      string
+	Source         string
+	LegacyInferred bool
+	SeenAt         time.Time
 }
 
 const (

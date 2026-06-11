@@ -2732,5 +2732,33 @@ func (s *AppDB) CreateTables() error {
 		return fmt.Errorf("error creating w9 submissions table: %s", err)
 	}
 
+	_, err = s.db.Exec(context.Background(), `
+		CREATE TABLE IF NOT EXISTS user_client_versions(
+			id BIGSERIAL PRIMARY KEY,
+			user_id TEXT,
+			client_key TEXT NOT NULL,
+			platform TEXT NOT NULL DEFAULT '',
+			version TEXT NOT NULL DEFAULT '',
+			build TEXT NOT NULL DEFAULT '',
+			build_number INTEGER NOT NULL DEFAULT 0,
+			user_agent TEXT NOT NULL DEFAULT '',
+			source TEXT NOT NULL DEFAULT '',
+			legacy_inferred BOOLEAN NOT NULL DEFAULT FALSE,
+			first_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		);
+
+		CREATE UNIQUE INDEX IF NOT EXISTS user_client_versions_client_key_idx
+			ON user_client_versions(client_key);
+		CREATE INDEX IF NOT EXISTS user_client_versions_user_last_seen_idx
+			ON user_client_versions(user_id, last_seen_at DESC)
+			WHERE user_id IS NOT NULL;
+		CREATE INDEX IF NOT EXISTS user_client_versions_version_build_idx
+			ON user_client_versions(LOWER(version), LOWER(build));
+	`)
+	if err != nil {
+		return fmt.Errorf("error creating user client versions table: %s", err)
+	}
+
 	return nil
 }

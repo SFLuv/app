@@ -41,6 +41,8 @@ func (a *AppService) GetUserPolicyStatus(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	a.recordClientVersionObservation(r.Context(), *userDid, "user_policy_status", r)
+
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(status)
 }
@@ -86,6 +88,8 @@ func (a *AppService) AcceptUserPolicies(w http.ResponseWriter, r *http.Request) 
 		_, _ = w.Write([]byte("inactive users must reactivate before accepting policies"))
 		return
 	}
+
+	a.recordClientVersionObservation(r.Context(), *userDid, "user_policy_accept", r)
 
 	status, err := a.db.AcceptUserPolicies(r.Context(), *userDid, req.MailingListOptIn, time.Now().UTC())
 	if err != nil {
