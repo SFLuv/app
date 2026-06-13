@@ -30,8 +30,12 @@ const fallbackChainId =
     : 80094;
 
 const activeChainId = (context: unknown) => {
-  const contextChainId = (context as { network?: { chainId?: number | string } })
-    .network?.chainId;
+  // Ponder >=0.11 exposes context.chain.id; older versions used
+  // context.network.chainId. Check both before falling back to env, because
+  // a wrong fallback here tags every indexed row with the wrong chain_id.
+  const contextChainId =
+    (context as { chain?: { id?: number | string } }).chain?.id ??
+    (context as { network?: { chainId?: number | string } }).network?.chainId;
   const parsed = Number(contextChainId);
   if (Number.isFinite(parsed) && parsed > 0) {
     return parsed;
