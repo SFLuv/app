@@ -34,6 +34,8 @@ func (a *AppService) AddUser(w http.ResponseWriter, r *http.Request) {
 		a.logger.Logf("error syncing Privy linked emails for new user %s: %s", *userDid, err)
 	}
 
+	a.recordClientVersionObservation(r.Context(), *userDid, "user_create", r)
+
 	w.WriteHeader(http.StatusCreated)
 }
 
@@ -52,6 +54,14 @@ func (a *AppService) GetUserAuthed(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		a.logger.Logf("error getting user by id %s: %s", *userDid, err.Error())
 		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	if legacyMobileClientBlockEnabled() && isLikelyLegacyMobileClient(r) {
+		a.recordLegacyMobileClientObservation(r.Context(), *userDid, "legacy_users_get_block", r)
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusUpgradeRequired)
+		_, _ = w.Write([]byte(outdatedMobileClientBody))
 		return
 	}
 
@@ -197,7 +207,7 @@ func (a *AppService) UpdateUserPayPalEth(w http.ResponseWriter, r *http.Request)
 
 	err = a.db.UpdateUserPayPalEth(r.Context(), *userDid, body)
 	if err != nil {
-		a.logger.Logf("error updating user paypal address for user: " + *userDid)
+		a.logger.Logf("error updating user paypal address for user: %s", *userDid)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}

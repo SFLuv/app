@@ -596,50 +596,60 @@ var schemaMigrations = []SchemaMigration{
 	},
 	{
 		Version:     "1.14",
-		Description: "tag transaction-bearing records with chain ids",
+		Description: "seed historical analytics faucet wallet for fiscal-year backfill",
 		Apply: func(ctx context.Context, pools *DBPools, appLogger *logger.LogCloser) error {
 			if _, err := pools.App.Exec(ctx, `
-					ALTER TABLE memos
-					ADD COLUMN IF NOT EXISTS chain_id BIGINT;
-
-					ALTER TABLE memos
-					DROP CONSTRAINT IF EXISTS memos_pkey;
-
-					CREATE UNIQUE INDEX IF NOT EXISTS memos_chain_tx_hash_unique_idx
-						ON memos(chain_id, tx_hash);
-					CREATE INDEX IF NOT EXISTS memos_chain_tx_hash_idx
-						ON memos(chain_id, LOWER(tx_hash));
-
-					ALTER TABLE workflows
-					ADD COLUMN IF NOT EXISTS manager_payout_chain_id BIGINT;
-
-					ALTER TABLE workflow_steps
-					ADD COLUMN IF NOT EXISTS payout_chain_id BIGINT;
-
-					ALTER TABLE w9_wallet_earnings
-					ADD COLUMN IF NOT EXISTS chain_id BIGINT;
-
-					ALTER TABLE w9_wallet_earnings
-					ADD COLUMN IF NOT EXISTS last_tx_chain_id BIGINT;
-
-					ALTER TABLE w9_wallet_earnings
-					DROP CONSTRAINT IF EXISTS w9_wallet_earnings_pkey;
-
-					CREATE UNIQUE INDEX IF NOT EXISTS w9_wallet_earnings_chain_wallet_year_unique_idx
-						ON w9_wallet_earnings(wallet_address, year, chain_id);
-					CREATE INDEX IF NOT EXISTS w9_wallet_earnings_chain_idx
-						ON w9_wallet_earnings(chain_id, year);
+					INSERT INTO analytics_wallet_role_history(address, role, chain_id, source, started_at, ended_at)
+					SELECT
+						'0x6c28631f17f2b6b6e9349ec8e7eba3827318bce3',
+						'faucet',
+						80094,
+						'historical.manual.old_faucet_2025_08',
+						TIMESTAMPTZ '2025-07-01 00:00:00+00',
+						TIMESTAMPTZ '2026-02-01 00:00:00+00'
+					WHERE NOT EXISTS (
+						SELECT 1
+						FROM analytics_wallet_role_history
+						WHERE LOWER(address) = '0x6c28631f17f2b6b6e9349ec8e7eba3827318bce3'
+						AND role = 'faucet'
+						AND chain_id = 80094
+						AND source = 'historical.manual.old_faucet_2025_08'
+					);
 				`); err != nil {
 				return err
 			}
 
-			if _, err := pools.Bot.Exec(ctx, `
-					ALTER TABLE redemptions
-					ADD COLUMN IF NOT EXISTS chain_id BIGINT;
+			return nil
+		},
+	},
+	{
+		Version:     "1.15",
+		Description: "track mobile client versions for migration readiness",
+		Apply: func(ctx context.Context, pools *DBPools, appLogger *logger.LogCloser) error {
+			if _, err := pools.App.Exec(ctx, `
+				CREATE TABLE IF NOT EXISTS user_client_versions(
+					id BIGSERIAL PRIMARY KEY,
+					user_id TEXT,
+					client_key TEXT NOT NULL,
+					platform TEXT NOT NULL DEFAULT '',
+					version TEXT NOT NULL DEFAULT '',
+					build TEXT NOT NULL DEFAULT '',
+					build_number INTEGER NOT NULL DEFAULT 0,
+					user_agent TEXT NOT NULL DEFAULT '',
+					source TEXT NOT NULL DEFAULT '',
+					legacy_inferred BOOLEAN NOT NULL DEFAULT FALSE,
+					first_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+					last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+				);
 
-					CREATE INDEX IF NOT EXISTS redemptions_chain_idx
-						ON redemptions(chain_id);
-				`); err != nil {
+				CREATE UNIQUE INDEX IF NOT EXISTS user_client_versions_client_key_idx
+					ON user_client_versions(client_key);
+				CREATE INDEX IF NOT EXISTS user_client_versions_user_last_seen_idx
+					ON user_client_versions(user_id, last_seen_at DESC)
+					WHERE user_id IS NOT NULL;
+				CREATE INDEX IF NOT EXISTS user_client_versions_version_build_idx
+					ON user_client_versions(LOWER(version), LOWER(build));
+			`); err != nil {
 				return err
 			}
 

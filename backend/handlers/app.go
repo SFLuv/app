@@ -61,4 +61,5 @@ func (a *AppService) RecordAnalyticsUserActivity(ctx context.Context, userID str
 	if err := a.db.RecordAnalyticsUserActivity(ctx, userID, platform, time.Now().UTC()); err != nil && a.logger != nil {
 		a.logger.Logf("error recording analytics user activity for %s: %s", userID, err)
 	}
+	a.recordClientVersionObservation(ctx, userID, "authenticated_request", r)
 }

@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/SFLuv/app/backend/structs"
@@ -146,11 +147,90 @@ func (a *AppDB) UpdateUserRole(ctx context.Context, userId string, role string, 
 	return nil
 }
 
-func (a *AppDB) GetUsers(ctx context.Context, page int, count int) ([]*structs.User, error) {
+func normalizeUserVersionFilters(versionFilters []string) []string {
+	normalized := []string{}
+	seen := map[string]struct{}{}
+	for _, raw := range versionFilters {
+		for _, value := range strings.Split(raw, ",") {
+			trimmed := strings.ToLower(strings.TrimSpace(value))
+			if trimmed == "" {
+				continue
+			}
+			if _, exists := seen[trimmed]; exists {
+				continue
+			}
+			seen[trimmed] = struct{}{}
+			normalized = append(normalized, trimmed)
+		}
+	}
+	return normalized
+}
+
+func appendUserListFilters(where []string, args []any, search string, versionFilters []string) ([]string, []any) {
+	if trimmed := strings.TrimSpace(search); trimmed != "" {
+		args = append(args, "%"+strings.ToLower(trimmed)+"%")
+		param := len(args)
+		where = append(where, fmt.Sprintf(`(
+			LOWER(id) LIKE $%d
+			OR LOWER(COALESCE(contact_email, '')) LIKE $%d
+			OR LOWER(COALESCE(contact_phone, '')) LIKE $%d
+			OR LOWER(COALESCE(contact_name, '')) LIKE $%d
+			OR LOWER(primary_wallet_address) LIKE $%d
+		)`, param, param, param, param, param))
+	}
+
+	versions := normalizeUserVersionFilters(versionFilters)
+	if len(versions) > 0 {
+		args = append(args, versions)
+		param := len(args)
+		where = append(where, fmt.Sprintf(`EXISTS (
+			SELECT
+				1
+			FROM
+				user_client_versions ucv
+			WHERE
+				ucv.user_id = users.id
+			AND
+				ucv.id = (
+					SELECT
+						latest_ucv.id
+					FROM
+						user_client_versions latest_ucv
+					WHERE
+						latest_ucv.user_id = users.id
+					ORDER BY
+						latest_ucv.last_seen_at DESC,
+						latest_ucv.id DESC
+					LIMIT 1
+				)
+			AND (
+				LOWER(TRIM(ucv.version)) = ANY($%d)
+				OR LOWER(
+					CASE
+						WHEN TRIM(ucv.version) = '' THEN 'unknown'
+						WHEN TRIM(ucv.build) <> '' THEN TRIM(ucv.version) || ' (' || TRIM(ucv.build) || ')'
+						ELSE TRIM(ucv.version)
+					END
+				) = ANY($%d)
+				OR LOWER(TRIM(ucv.version) || ':' || TRIM(ucv.build)) = ANY($%d)
+			)
+		)`, param, param, param))
+	}
+
+	return where, args
+}
+
+func (a *AppDB) GetUsers(ctx context.Context, page int, count int, search string, versionFilters []string) ([]*structs.User, error) {
 	var users []*structs.User
 	offset := page * count
+	where := []string{"active = TRUE"}
+	args := []any{}
+	where, args = appendUserListFilters(where, args, search, versionFilters)
+	args = append(args, count, offset)
+	limitParam := len(args) - 1
+	offsetParam := len(args)
 
-	rows, err := a.db.Query(ctx, `
+	rows, err := a.db.Query(ctx, fmt.Sprintf(`
 		SELECT
 			id,
 			is_admin,
@@ -167,6 +247,7 @@ func (a *AppDB) GetUsers(ctx context.Context, page int, count int) ([]*structs.U
 			contact_name,
 			primary_wallet_address,
 			paypal_eth,
+			last_redemption,
 			accepted_privacy_policy,
 			accepted_privacy_policy_at,
 			privacy_policy_version,
@@ -176,10 +257,10 @@ func (a *AppDB) GetUsers(ctx context.Context, page int, count int) ([]*structs.U
 		FROM
 			users
 		WHERE
-			active = TRUE
-		LIMIT $1
-		OFFSET $2;
-	`, count, offset)
+			%s
+		LIMIT $%d
+		OFFSET $%d;
+	`, strings.Join(where, "\n\t\tAND "), limitParam, offsetParam), args...)
 	if err != nil {
 		return nil, fmt.Errorf("error getting users: %s", err)
 	}
@@ -204,6 +285,7 @@ func (a *AppDB) GetUsers(ctx context.Context, page int, count int) ([]*structs.U
 			&user.Name,
 			&user.PrimaryWalletAddress,
 			&user.PayPalEth,
+			&user.LastRedemption,
 			&user.AcceptedPrivacyPolicy,
 			&user.AcceptedPrivacyPolicyAt,
 			&user.PrivacyPolicyVersion,
@@ -221,16 +303,20 @@ func (a *AppDB) GetUsers(ctx context.Context, page int, count int) ([]*structs.U
 	return users, nil
 }
 
-func (a *AppDB) CountUsers(ctx context.Context) (int, error) {
+func (a *AppDB) CountUsers(ctx context.Context, search string, versionFilters []string) (int, error) {
 	var total int
-	err := a.db.QueryRow(ctx, `
+	where := []string{"active = TRUE"}
+	args := []any{}
+	where, args = appendUserListFilters(where, args, search, versionFilters)
+
+	err := a.db.QueryRow(ctx, fmt.Sprintf(`
 		SELECT
 			COUNT(*)
 		FROM
 			users
 		WHERE
-			active = TRUE;
-	`).Scan(&total)
+			%s;
+	`, strings.Join(where, "\n\t\tAND ")), args...).Scan(&total)
 	if err != nil {
 		return 0, fmt.Errorf("error counting users: %s", err)
 	}
