@@ -40,7 +40,7 @@
     "42220:0x7cC54D54bBFc65d1f0af7ACee5e4042654AF8185": {
       "chain_id": 42220,
       "entrypoint_address": "0x7079253c0358eF9Fd87E16488299Ef6e06F403B6",
-      "paymaster_address": "0x644d264387331Bbafbad813f24bfa345E197ECd3",
+      "paymaster_address": "0x825b77eE3e3AB05c3a342EEE37223494b6c97a55",
       "account_factory_address": "0x7cC54D54bBFc65d1f0af7ACee5e4042654AF8185",
       "paymaster_type": "cw-safe"
     }
