@@ -8,10 +8,16 @@ import (
 	"strings"
 	"time"
 
+	"github.com/SFLuv/app/backend/db"
 	"github.com/SFLuv/app/backend/logger"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// legacyBerachainChainID is the chain id assigned to Ponder rows that predate
+// chain tagging. Before the Celo cutover, Berachain (80094) is the only indexed
+// chain, so all untagged Ponder transaction rows belong to it.
+const legacyBerachainChainID = 80094
 
 const baselineDBVersion = "1.0"
 
@@ -733,6 +739,24 @@ var schemaMigrations = []SchemaMigration{
 				return err
 			}
 
+			return nil
+		},
+	},
+	{
+		Version:     "1.18",
+		Description: "backfill legacy Berachain chain ids on Ponder transaction tables",
+		Apply: func(ctx context.Context, pools *DBPools, appLogger *logger.LogCloser) error {
+			if pools == nil || pools.Ponder == nil {
+				return fmt.Errorf("ponder db pool is required for the ponder chain-id backfill migration")
+			}
+			// transfer_event/transfer_account/allowance/approval_event rows with
+			// a NULL chain_id (added by the boot backfill but never populated)
+			// 500 the chain-aware transaction reads. Tag them with the Berachain
+			// id; idempotent (WHERE chain_id IS NULL), runs once.
+			ponderDb := db.Ponder(pools.Ponder, appLogger)
+			if err := ponderDb.BackfillTransactionChainIDs(ctx, legacyBerachainChainID); err != nil {
+				return fmt.Errorf("backfilling ponder transaction chain ids: %w", err)
+			}
 			return nil
 		},
 	},
