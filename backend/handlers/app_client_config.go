@@ -14,6 +14,7 @@ func (a *AppService) GetClientConfig(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "client config is not loaded", http.StatusServiceUnavailable)
 		return
 	}
+	a.recordClientPhoneHome(r.Context(), "config", r)
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "public, max-age=30")
 	w.WriteHeader(http.StatusOK)
@@ -21,6 +22,7 @@ func (a *AppService) GetClientConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *AppService) GetClientVersion(w http.ResponseWriter, r *http.Request) {
+	a.recordClientPhoneHome(r.Context(), "client-version", r)
 	now := time.Now().UTC()
 	platform := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("platform")))
 	if platform == "" {

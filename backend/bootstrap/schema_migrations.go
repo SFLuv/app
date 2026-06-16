@@ -656,6 +656,86 @@ var schemaMigrations = []SchemaMigration{
 			return nil
 		},
 	},
+	{
+		Version:     "1.16",
+		Description: "tag transaction-bearing records with chain ids",
+		Apply: func(ctx context.Context, pools *DBPools, appLogger *logger.LogCloser) error {
+			if _, err := pools.App.Exec(ctx, `
+					ALTER TABLE memos
+					ADD COLUMN IF NOT EXISTS chain_id BIGINT;
+
+					ALTER TABLE memos
+					DROP CONSTRAINT IF EXISTS memos_pkey;
+
+					CREATE UNIQUE INDEX IF NOT EXISTS memos_chain_tx_hash_unique_idx
+						ON memos(chain_id, tx_hash);
+					CREATE INDEX IF NOT EXISTS memos_chain_tx_hash_idx
+						ON memos(chain_id, LOWER(tx_hash));
+
+					ALTER TABLE workflows
+					ADD COLUMN IF NOT EXISTS manager_payout_chain_id BIGINT;
+
+					ALTER TABLE workflow_steps
+					ADD COLUMN IF NOT EXISTS payout_chain_id BIGINT;
+
+					ALTER TABLE w9_wallet_earnings
+					ADD COLUMN IF NOT EXISTS chain_id BIGINT;
+
+					ALTER TABLE w9_wallet_earnings
+					ADD COLUMN IF NOT EXISTS last_tx_chain_id BIGINT;
+
+					ALTER TABLE w9_wallet_earnings
+					DROP CONSTRAINT IF EXISTS w9_wallet_earnings_pkey;
+
+					CREATE UNIQUE INDEX IF NOT EXISTS w9_wallet_earnings_chain_wallet_year_unique_idx
+						ON w9_wallet_earnings(wallet_address, year, chain_id);
+					CREATE INDEX IF NOT EXISTS w9_wallet_earnings_chain_idx
+						ON w9_wallet_earnings(chain_id, year);
+				`); err != nil {
+				return err
+			}
+
+			if _, err := pools.Bot.Exec(ctx, `
+					ALTER TABLE redemptions
+					ADD COLUMN IF NOT EXISTS chain_id BIGINT;
+
+					CREATE INDEX IF NOT EXISTS redemptions_chain_idx
+						ON redemptions(chain_id);
+				`); err != nil {
+				return err
+			}
+
+			return nil
+		},
+	},
+	{
+		Version:     "1.17",
+		Description: "track anonymous client phone-home hits for app usage metrics",
+		Apply: func(ctx context.Context, pools *DBPools, appLogger *logger.LogCloser) error {
+			if _, err := pools.App.Exec(ctx, `
+					CREATE TABLE IF NOT EXISTS client_phone_home_metrics(
+						day DATE NOT NULL,
+						endpoint TEXT NOT NULL,
+						platform TEXT NOT NULL DEFAULT '',
+						version TEXT NOT NULL DEFAULT '',
+						build TEXT NOT NULL DEFAULT '',
+						hits BIGINT NOT NULL DEFAULT 0,
+						first_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+						last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+						PRIMARY KEY (day, endpoint, platform, version, build)
+					);
+
+					CREATE INDEX IF NOT EXISTS client_phone_home_metrics_day_idx
+						ON client_phone_home_metrics(day DESC);
+					CREATE INDEX IF NOT EXISTS client_phone_home_metrics_platform_day_idx
+						ON client_phone_home_metrics(platform, day DESC);
+				`); err != nil {
+				return err
+			}
+
+			return nil
+		},
+	},
 }
 
 type versionTarget struct {

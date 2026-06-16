@@ -64,6 +64,17 @@ type ClientVersionObservation struct {
 	SeenAt         time.Time
 }
 
+// ClientPhoneHome is an anonymous, aggregate record of an app "phone home"
+// (an unauthenticated /config or /client-version fetch). It carries no user
+// identity and is rolled up per UTC day + platform/version/build so it can be
+// used as a real-app-usage metric independent of authenticated traffic.
+type ClientPhoneHome struct {
+	Endpoint string
+	Platform string
+	Version  string
+	Build    string
+}
+
 const (
 	CurrentPrivacyPolicyVersion     = "2026-04-15"
 	CurrentMailingListPolicyVersion = "2026-04-15"
