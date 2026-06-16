@@ -132,13 +132,19 @@ export function resolveCommunityConfig(payload: CommunityConfigPayload): Resolve
   const token = findToken(payload, primaryTokenRef)
   const account = findAccount(payload, primaryFactoryRef)
   const chainConfig = payload.chains?.[String(primaryTokenRef.chain_id)]
-  const rpcUrl = chainConfig?.node?.url
-  if (!rpcUrl) {
+  const nodeUrl = chainConfig?.node?.url
+  if (!nodeUrl) {
     throw new Error(`Config is missing chains.${primaryTokenRef.chain_id}.node.url`)
   }
   if (typeof token.decimals !== "number" || !Number.isFinite(token.decimals)) {
     throw new Error(`Config token ${primaryTokenRef.chain_id}:${primaryTokenRef.address} is missing decimals`)
   }
+
+  const community = new CommunityConfig(payload as any)
+  // The Citizen Wallet engine serves JSON-RPC (and AA methods) at
+  // `${node.url}/v1/rpc/${paymaster}`, not at the bare node.url. Posting to the
+  // root returns 401, so use the SDK's canonical RPC URL for all transports.
+  const rpcUrl = community.primaryRPCUrl
 
   const baseChain = knownChains[primaryTokenRef.chain_id] ?? {
     id: primaryTokenRef.chain_id,
@@ -158,7 +164,6 @@ export function resolveCommunityConfig(payload: CommunityConfigPayload): Resolve
     },
     blockExplorers: explorer,
   } as Chain
-  const community = new CommunityConfig(payload as any)
   const byusd = findTokenBySymbol(payload, "BYUSD")
   const honey = findTokenBySymbol(payload, "HONEY")
   const extras = payload.extras
