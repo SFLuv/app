@@ -3,3 +3,7 @@
 .test.env
 logs/*
 test/logs/*
+test-notifications/
+.migration-local/
+.gocache/
+.gomodcache/

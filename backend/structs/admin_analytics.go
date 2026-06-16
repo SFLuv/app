@@ -26,6 +26,7 @@ type AnalyticsMerchantWallet struct {
 
 type AnalyticsTransfer struct {
 	Hash      string `json:"hash"`
+	ChainID   int64  `json:"chain_id"`
 	Amount    string `json:"amount"`
 	Timestamp uint64 `json:"timestamp"`
 	From      string `json:"from"`

@@ -6,21 +6,23 @@ import (
 	"strings"
 )
 
-func (a *AppDB) UpsertTransactionMemo(ctx context.Context, txHash string, memo string, owner string) error {
+func (a *AppDB) UpsertTransactionMemo(ctx context.Context, txHash string, chainID int64, memo string, owner string) error {
 	normalizedHash := strings.ToLower(strings.TrimSpace(txHash))
 	trimmedMemo := strings.TrimSpace(memo)
 
 	_, err := a.db.Exec(ctx, `
 		INSERT INTO memos (
 			tx_hash,
+			chain_id,
 			memo,
 			owner
 		) VALUES (
 			$1,
 			$2,
-			$3
+			$3,
+			$4
 		)
-		ON CONFLICT (tx_hash)
+		ON CONFLICT (chain_id, tx_hash)
 		DO UPDATE SET
 			memo = EXCLUDED.memo,
 			owner = EXCLUDED.owner,
@@ -28,15 +30,15 @@ func (a *AppDB) UpsertTransactionMemo(ctx context.Context, txHash string, memo s
 			delete_date = NULL,
 			delete_reason = NULL,
 			updated_at = NOW();
-	`, normalizedHash, trimmedMemo, owner)
+	`, normalizedHash, chainID, trimmedMemo, owner)
 	if err != nil {
-		return fmt.Errorf("error upserting transaction memo for tx %s: %w", normalizedHash, err)
+		return fmt.Errorf("error upserting transaction memo for tx %s chain %d: %w", normalizedHash, chainID, err)
 	}
 
 	return nil
 }
 
-func (a *AppDB) GetTransactionMemosByHashes(ctx context.Context, hashes []string) (map[string]string, error) {
+func (a *AppDB) GetTransactionMemosByHashes(ctx context.Context, hashes []string, chainID int64) (map[string]string, error) {
 	normalizedHashes := make([]string, 0, len(hashes))
 	seen := map[string]struct{}{}
 	for _, hash := range hashes {
@@ -59,15 +61,17 @@ func (a *AppDB) GetTransactionMemosByHashes(ctx context.Context, hashes []string
 		SELECT
 			tx_hash,
 			memo
-		FROM
-			memos
-		WHERE
-			tx_hash = ANY($1)
-		AND
-			active = TRUE;
-	`, normalizedHashes)
+			FROM
+				memos
+			WHERE
+				chain_id = $2
+			AND
+				tx_hash = ANY($1)
+			AND
+				active = TRUE;
+	`, normalizedHashes, chainID)
 	if err != nil {
-		return nil, fmt.Errorf("error querying transaction memos: %w", err)
+		return nil, fmt.Errorf("error querying transaction memos for chain %d: %w", chainID, err)
 	}
 	defer rows.Close()
 

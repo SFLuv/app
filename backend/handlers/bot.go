@@ -29,18 +29,27 @@ type BotService struct {
 	bot                bot.IBot
 	w9                 *W9Service
 	affiliateScheduler *AffiliateScheduler
+	activeChainID      int64
 }
 
 var redeemCodeUUIDPattern = regexp.MustCompile(`(?i)[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}`)
 
-func NewBotService(db *db.BotDB, appDb *db.AppDB, bot bot.IBot, w9 *W9Service, affiliateScheduler *AffiliateScheduler) *BotService {
+func NewBotService(db *db.BotDB, appDb *db.AppDB, bot bot.IBot, w9 *W9Service, affiliateScheduler *AffiliateScheduler, activeChainID int64) *BotService {
 	return &BotService{
 		db:                 db,
 		appDb:              appDb,
 		bot:                bot,
 		w9:                 w9,
 		affiliateScheduler: affiliateScheduler,
+		activeChainID:      activeChainID,
 	}
+}
+
+func (s *BotService) chainID() int64 {
+	if s != nil && s.activeChainID > 0 {
+		return s.activeChainID
+	}
+	return 80094
 }
 
 func EnsureLogin(w http.ResponseWriter, r *http.Request) bool {
@@ -838,7 +847,7 @@ func (s *BotService) Redeem(w http.ResponseWriter, r *http.Request) {
 	redeemCtx, redeemCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer redeemCancel()
 
-	amount, err := s.db.Redeem(redeemCtx, request.Code, request.Address)
+	amount, err := s.db.Redeem(redeemCtx, request.Code, request.Address, s.chainID())
 	if err != nil {
 		switch err.Error() {
 		case "code not started":
@@ -864,7 +873,7 @@ func (s *BotService) Redeem(w http.ResponseWriter, r *http.Request) {
 		fmt.Printf("error sending redeem payout for code %s address %s: %s\n", request.Code, request.Address, err)
 		if bot.ShouldRevertRedemption(err) {
 			undoCtx, undoCancel := context.WithTimeout(context.Background(), 10*time.Second)
-			if undoErr := s.db.UndoRedeem(undoCtx, request.Code, request.Address); undoErr != nil {
+			if undoErr := s.db.UndoRedeem(undoCtx, request.Code, request.Address, s.chainID()); undoErr != nil {
 				fmt.Printf("error undoing redemption for code %s address %s after payout failure: %s\n", request.Code, request.Address, undoErr)
 			}
 			undoCancel()

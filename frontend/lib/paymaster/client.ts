@@ -1,22 +1,24 @@
 import { BundlerService } from "@citizenwallet/sdk";
-import config from "@/app.config";
-import { COMMUNITY } from "@/lib/constants";
-import { CHAIN } from "@/lib/constants";
 import { createPublicClient, http } from "viem";
 import { createBundlerClient } from "viem/account-abstraction";
+import type { ResolvedCommunityConfig } from "@/lib/community-config";
 
-export const bundler = createBundlerClient({
-  chain: CHAIN,
-  transport: http(COMMUNITY.primaryRPCUrl, {
-    methods: {
-      include: ["pm_sponsorUserOperation", "eth_sendUserOperation"]
-    }
+export function createViemClients(config: ResolvedCommunityConfig) {
+  const bundler = createBundlerClient({
+    chain: config.chain,
+    transport: http(config.rpcUrl, {
+      methods: {
+        include: ["pm_sponsorUserOperation", "eth_sendUserOperation"]
+      }
+    })
   })
-})
 
-export const cw_bundler = new BundlerService(COMMUNITY)
+  const cw_bundler = new BundlerService(config.community)
 
-export const client = createPublicClient({
-  chain: CHAIN,
-  transport: http(COMMUNITY.primaryRPCUrl)
-})
+  const client = createPublicClient({
+    chain: config.chain,
+    transport: http(config.rpcUrl)
+  })
+
+  return { bundler, cw_bundler, client }
+}

@@ -398,31 +398,50 @@ func (s *AppDB) CreateTables() error {
 	}
 
 	_, err = s.db.Exec(context.Background(), `
-		CREATE TABLE IF NOT EXISTS memos(
-			tx_hash TEXT PRIMARY KEY,
-			memo TEXT NOT NULL,
-			owner TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-			created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			CREATE TABLE IF NOT EXISTS memos(
+				tx_hash TEXT NOT NULL,
+				chain_id BIGINT,
+				memo TEXT NOT NULL,
+				owner TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+				created_at TIMESTAMP NOT NULL DEFAULT NOW(),
 			updated_at TIMESTAMP NOT NULL DEFAULT NOW()
-		);
+			);
 
-		CREATE INDEX IF NOT EXISTS memos_tx_hash_idx
-			ON memos (LOWER(tx_hash));
-	`)
+			CREATE INDEX IF NOT EXISTS memos_tx_hash_idx
+				ON memos (LOWER(tx_hash));
+
+			ALTER TABLE memos
+			ADD COLUMN IF NOT EXISTS chain_id BIGINT;
+
+			ALTER TABLE memos
+			DROP CONSTRAINT IF EXISTS memos_pkey;
+
+			CREATE UNIQUE INDEX IF NOT EXISTS memos_chain_tx_hash_unique_idx
+				ON memos (chain_id, tx_hash);
+		`)
 	if err != nil {
 		return fmt.Errorf("error creating memos table: %s", err)
 	}
 
 	_, err = s.db.Exec(context.Background(), `
-		ALTER TABLE memos
-		ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT true;
+			ALTER TABLE memos
+			ADD COLUMN IF NOT EXISTS chain_id BIGINT;
+
+			ALTER TABLE memos
+			ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT true;
 
 		ALTER TABLE memos
 		ADD COLUMN IF NOT EXISTS delete_date TIMESTAMPTZ;
 
-		ALTER TABLE memos
-		ADD COLUMN IF NOT EXISTS delete_reason TEXT;
-	`)
+			ALTER TABLE memos
+			ADD COLUMN IF NOT EXISTS delete_reason TEXT;
+
+			ALTER TABLE memos
+			DROP CONSTRAINT IF EXISTS memos_pkey;
+
+			CREATE UNIQUE INDEX IF NOT EXISTS memos_chain_tx_hash_unique_idx
+				ON memos (chain_id, tx_hash);
+		`)
 	if err != nil {
 		return fmt.Errorf("error altering memos soft-delete columns: %s", err)
 	}
@@ -739,6 +758,7 @@ func (s *AppDB) CreateTables() error {
 				manager_paid_out_at BIGINT,
 				manager_payout_error TEXT,
 				manager_payout_tx_hash TEXT,
+				manager_payout_chain_id BIGINT,
 				manager_payout_last_try_at BIGINT,
 				manager_payout_in_progress BOOLEAN NOT NULL DEFAULT false,
 				manager_retry_requested_at BIGINT,
@@ -1402,6 +1422,9 @@ func (s *AppDB) CreateTables() error {
 			ADD COLUMN IF NOT EXISTS manager_payout_tx_hash TEXT;
 
 			ALTER TABLE workflows
+			ADD COLUMN IF NOT EXISTS manager_payout_chain_id BIGINT;
+
+			ALTER TABLE workflows
 			ADD COLUMN IF NOT EXISTS manager_payout_last_try_at BIGINT;
 
 			ALTER TABLE workflows
@@ -1509,6 +1532,7 @@ func (s *AppDB) CreateTables() error {
 			completed_at BIGINT,
 			payout_error TEXT,
 			payout_tx_hash TEXT,
+			payout_chain_id BIGINT,
 			payout_last_try_at BIGINT,
 			payout_in_progress BOOLEAN NOT NULL DEFAULT false,
 			retry_requested_at BIGINT,
@@ -1555,6 +1579,9 @@ func (s *AppDB) CreateTables() error {
 
 		ALTER TABLE workflow_steps
 		ADD COLUMN IF NOT EXISTS payout_tx_hash TEXT;
+
+		ALTER TABLE workflow_steps
+		ADD COLUMN IF NOT EXISTS payout_chain_id BIGINT;
 
 		ALTER TABLE workflow_steps
 		ADD COLUMN IF NOT EXISTS payout_last_try_at BIGINT;
@@ -2682,24 +2709,37 @@ func (s *AppDB) CreateTables() error {
 	}
 
 	_, err = s.db.Exec(context.Background(), `
-			CREATE TABLE IF NOT EXISTS w9_wallet_earnings(
-				wallet_address TEXT NOT NULL,
-				year INTEGER NOT NULL,
-				amount_received NUMERIC(78, 0) NOT NULL DEFAULT 0,
-				user_id TEXT,
-				w9_required BOOLEAN NOT NULL DEFAULT false,
-				w9_required_at TIMESTAMP,
-				last_tx_hash TEXT,
-				last_tx_timestamp INTEGER,
-				created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-				updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
-				PRIMARY KEY (wallet_address, year)
-			);
+				CREATE TABLE IF NOT EXISTS w9_wallet_earnings(
+					wallet_address TEXT NOT NULL,
+					chain_id BIGINT,
+					year INTEGER NOT NULL,
+					amount_received NUMERIC(78, 0) NOT NULL DEFAULT 0,
+					user_id TEXT,
+					w9_required BOOLEAN NOT NULL DEFAULT false,
+					w9_required_at TIMESTAMP,
+					last_tx_hash TEXT,
+					last_tx_chain_id BIGINT,
+					last_tx_timestamp INTEGER,
+					created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+					updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+				);
 
-			CREATE INDEX IF NOT EXISTS w9_wallet_earnings_user_id_idx ON w9_wallet_earnings(user_id);
-			CREATE INDEX IF NOT EXISTS w9_wallet_earnings_year_idx ON w9_wallet_earnings(year);
-			CREATE INDEX IF NOT EXISTS w9_wallet_earnings_required_idx ON w9_wallet_earnings(w9_required);
-		`)
+				ALTER TABLE w9_wallet_earnings
+				ADD COLUMN IF NOT EXISTS chain_id BIGINT;
+
+				ALTER TABLE w9_wallet_earnings
+				ADD COLUMN IF NOT EXISTS last_tx_chain_id BIGINT;
+
+				ALTER TABLE w9_wallet_earnings
+				DROP CONSTRAINT IF EXISTS w9_wallet_earnings_pkey;
+
+				CREATE UNIQUE INDEX IF NOT EXISTS w9_wallet_earnings_chain_wallet_year_unique_idx
+					ON w9_wallet_earnings(wallet_address, year, chain_id);
+				CREATE INDEX IF NOT EXISTS w9_wallet_earnings_user_id_idx ON w9_wallet_earnings(user_id);
+				CREATE INDEX IF NOT EXISTS w9_wallet_earnings_year_idx ON w9_wallet_earnings(year);
+				CREATE INDEX IF NOT EXISTS w9_wallet_earnings_required_idx ON w9_wallet_earnings(w9_required);
+				CREATE INDEX IF NOT EXISTS w9_wallet_earnings_chain_idx ON w9_wallet_earnings(chain_id, year);
+			`)
 	if err != nil {
 		return fmt.Errorf("error creating w9 wallet earnings table: %s", err)
 	}

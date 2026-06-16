@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/SFLuv/app/backend/abi"
+	"github.com/SFLuv/app/backend/clientconfig"
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
@@ -29,9 +30,10 @@ type IBot interface {
 }
 
 type Bot struct {
-	pKey    string
-	tokenId string
-	client  *ethclient.Client
+	pKey          string
+	tokenId       string
+	tokenDecimals int
+	client        *ethclient.Client
 }
 
 type SendError struct {
@@ -71,10 +73,21 @@ func ShouldRevertRedemption(err error) bool {
 	return true
 }
 
-func Init() (*Bot, error) {
+func Init(config *clientconfig.Config) (*Bot, error) {
+	if config == nil {
+		return nil, fmt.Errorf("client config is required")
+	}
+	token, err := config.PrimaryToken()
+	if err != nil {
+		return nil, err
+	}
+
 	pkey := os.Getenv("BOT_KEY")
-	tokenId := os.Getenv("TOKEN_ID")
-	rpcUrl := os.Getenv("RPC_URL")
+	tokenId := token.Address
+	rpcUrl := config.PrimaryRPCURL()
+	if strings.TrimSpace(rpcUrl) == "" {
+		return nil, fmt.Errorf("primary RPC URL is missing from client config")
+	}
 
 	client, err := ethclient.Dial(rpcUrl)
 	if err != nil {
@@ -82,7 +95,7 @@ func Init() (*Bot, error) {
 		return nil, err
 	}
 
-	return &Bot{pkey, tokenId, client}, nil
+	return &Bot{pKey: pkey, tokenId: tokenId, tokenDecimals: token.Decimals, client: client}, nil
 }
 
 func (b *Bot) Key() string {
@@ -90,13 +103,12 @@ func (b *Bot) Key() string {
 	return ""
 }
 
-func tokenAmountFromWholeUnits(amount uint64) (*big.Int, error) {
-	decimalString := os.Getenv("TOKEN_DECIMALS")
-	decimals, ok := new(big.Int).SetString(decimalString, 10)
-	if !ok {
-		return nil, fmt.Errorf("invalid TOKEN_DECIMALS value %s", decimalString)
+func (b *Bot) tokenAmountFromWholeUnits(amount uint64) (*big.Int, error) {
+	if b == nil || b.tokenDecimals < 0 {
+		return nil, fmt.Errorf("invalid token decimals")
 	}
-	return new(big.Int).Mul(decimals, big.NewInt(int64(amount))), nil
+	scale := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(b.tokenDecimals)), nil)
+	return new(big.Int).Mul(scale, big.NewInt(int64(amount))), nil
 }
 
 func (b *Bot) deriveFromAddress() (common.Address, error) {
@@ -117,7 +129,7 @@ func (b *Bot) submitTransferTx(amount uint64, address string) (*types.Transactio
 		return nil, fmt.Errorf("invalid recipient address: %s", address)
 	}
 
-	tokenAmount, err := tokenAmountFromWholeUnits(amount)
+	tokenAmount, err := b.tokenAmountFromWholeUnits(amount)
 	if err != nil {
 		return nil, err
 	}
@@ -239,7 +251,7 @@ func (b *Bot) VerifyTransfer(ctx context.Context, txHash string, address string,
 		return result, nil
 	}
 
-	tokenAmount, err := tokenAmountFromWholeUnits(amount)
+	tokenAmount, err := b.tokenAmountFromWholeUnits(amount)
 	if err != nil {
 		return nil, err
 	}

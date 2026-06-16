@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/SFLuv/app/backend/bot"
+	"github.com/SFLuv/app/backend/clientconfig"
 	"github.com/SFLuv/app/backend/db"
 	"github.com/SFLuv/app/backend/handlers"
 	"github.com/SFLuv/app/backend/logger"
@@ -25,6 +26,7 @@ const (
 	botDBNameEnvKey     = "BOT_DB_NAME"
 	appDBNameEnvKey     = "APP_DB_NAME"
 	defaultPonderDBName = "ponder"
+	ponderDBNameEnvKey  = "PONDER_DB_NAME"
 )
 
 type DBPools struct {
@@ -59,7 +61,7 @@ func OpenDBPools(includePonder bool) (*DBPools, error) {
 	}
 
 	if includePonder {
-		pools.Ponder, err = db.PgxDB(defaultPonderDBName)
+		pools.Ponder, err = db.PgxDB(resolvePonderDBPoolName())
 		if err != nil {
 			pools.Close()
 			return nil, fmt.Errorf("error initializing ponder db: %w", err)
@@ -90,6 +92,10 @@ func NewAppLogger() (*logger.LogCloser, error) {
 
 func resolveDBPoolNames() (string, string) {
 	return envOrDefault(botDBNameEnvKey, defaultBotDBName), envOrDefault(appDBNameEnvKey, defaultAppDBName)
+}
+
+func resolvePonderDBPoolName() string {
+	return envOrDefault(ponderDBNameEnvKey, defaultPonderDBName)
 }
 
 func envOrDefault(key, defaultValue string) string {
@@ -133,7 +139,23 @@ func RunInitializationSyncs(ctx context.Context, pools *DBPools, appLogger *logg
 
 	appDb := db.App(pools.App, appLogger)
 
-	redeemer := handlers.NewRedeemerService(appDb, appLogger)
+	clientConfig, err := clientconfig.Load(ctx)
+	if err != nil {
+		return fmt.Errorf("error loading client config during init syncs: %w", err)
+	}
+	activeChainID := int64(clientConfig.ActiveChainID())
+
+	if err := appDb.BackfillTransactionChainIDs(ctx, activeChainID); err != nil {
+		return err
+	}
+	if pools.Bot != nil {
+		botDb := db.Bot(pools.Bot)
+		if err := botDb.BackfillTransactionChainIDs(ctx, activeChainID); err != nil {
+			return err
+		}
+	}
+
+	redeemer := handlers.NewRedeemerService(appDb, appLogger, clientConfig)
 	if err := redeemer.SyncApprovedMerchants(ctx); err != nil {
 		appLogger.Logf("error syncing redeemer roles during init: %s", err)
 	}
@@ -141,12 +163,12 @@ func RunInitializationSyncs(ctx context.Context, pools *DBPools, appLogger *logg
 		appLogger.Logf("error syncing admin redeemer roles during init: %s", err)
 	}
 
-	minter := handlers.NewMinterService(appDb, appLogger)
+	minter := handlers.NewMinterService(appDb, appLogger, clientConfig)
 	if err := minter.SyncWalletMinterStatuses(ctx); err != nil {
 		appLogger.Logf("error syncing minter roles during init: %s", err)
 	}
 
-	appService := handlers.NewAppService(appDb, appLogger, nil)
+	appService := handlers.NewAppService(appDb, appLogger, nil, clientConfig)
 	if err := appService.SyncPrivyLinkedEmailsForAllUsers(ctx); err != nil {
 		appLogger.Logf("error syncing Privy linked emails during init: %s", err)
 	}
@@ -233,26 +255,42 @@ func NewServerHandler(ctx context.Context, pools *DBPools, appLogger *logger.Log
 		return nil, err
 	}
 
-	botClient, err := bot.Init()
+	clientConfig, err := clientconfig.Load(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("error loading client config: %w", err)
+	}
+	appLogger.Logf("loaded client config from %s for alias %s on chain %d", clientConfig.Source(), clientConfig.Community.Alias, clientConfig.ActiveChainID())
+	activeChainID := int64(clientConfig.ActiveChainID())
+	if err := appDb.BackfillTransactionChainIDs(ctx, activeChainID); err != nil {
+		return nil, err
+	}
+	if err := botDb.BackfillTransactionChainIDs(ctx, activeChainID); err != nil {
+		return nil, err
+	}
+	if err := ponderDb.BackfillTransactionChainIDs(ctx, activeChainID); err != nil {
+		appLogger.Logf("warning: ponder backfill failed (non-fatal): %v", err)
+	}
+
+	botClient, err := bot.Init(clientConfig)
 	if err != nil {
 		return nil, fmt.Errorf("error initializing bot service: %w", err)
 	}
 
-	w9 := handlers.NewW9Service(appDb, ponderDb, appLogger)
+	w9 := handlers.NewW9Service(appDb, ponderDb, appLogger, activeChainID)
 	affiliateScheduler := handlers.NewAffiliateScheduler(appDb, botDb, appLogger)
 	affiliateScheduler.Start(ctx)
 
-	redeemer := handlers.NewRedeemerService(appDb, appLogger)
-	minter := handlers.NewMinterService(appDb, appLogger)
+	redeemer := handlers.NewRedeemerService(appDb, appLogger, clientConfig)
+	minter := handlers.NewMinterService(appDb, appLogger, clientConfig)
 
-	s := handlers.NewBotService(botDb, appDb, botClient, w9, affiliateScheduler)
-	a := handlers.NewAppService(appDb, appLogger, w9)
+	s := handlers.NewBotService(botDb, appDb, botClient, w9, affiliateScheduler, activeChainID)
+	a := handlers.NewAppService(appDb, appLogger, w9, clientConfig)
 	a.SetBotService(s)
 	a.SetRedeemerService(redeemer)
 	a.SetMinterService(minter)
 	StartDeletedAccountPurgeLoop(ctx, a, appLogger)
 
-	p := handlers.NewPonderService(ponderDb, appDb, botDb, appLogger)
+	p := handlers.NewPonderService(ponderDb, appDb, botDb, appLogger, activeChainID)
 	if err := p.SyncCurrentAnalyticsWalletRoleHistory(ctx); err != nil {
 		appLogger.Logf("error syncing analytics wallet role history during startup: %s", err)
 	}

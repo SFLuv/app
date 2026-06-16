@@ -48,8 +48,9 @@ type PonderSubscriptionServerRequest struct {
 }
 
 type PonderHookData struct {
-	To     string `json:"to"`
-	From   string `json:"from"`
-	Hash   string `json:"hash"`
-	Amount string `json:"amount"`
+	ChainID int64  `json:"chain_id"`
+	To      string `json:"to"`
+	From    string `json:"from"`
+	Hash    string `json:"hash"`
+	Amount  string `json:"amount"`
 }

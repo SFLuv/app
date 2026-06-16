@@ -21,10 +21,34 @@ const parseAdminAddresses = () => {
 const adminAddresses = parseAdminAddresses();
 const w9TransactionUrl = process.env.W9_TRANSACTION_URL;
 
+const configuredFallbackChainId = Number(
+  process.env.PONDER_CHAIN_ID || process.env.CHAIN_ID || "80094",
+);
+const fallbackChainId =
+  Number.isFinite(configuredFallbackChainId) && configuredFallbackChainId > 0
+    ? configuredFallbackChainId
+    : 80094;
+
+const activeChainId = (context: unknown) => {
+  // Ponder >=0.11 exposes context.chain.id; older versions used
+  // context.network.chainId. Check both before falling back to env, because
+  // a wrong fallback here tags every indexed row with the wrong chain_id.
+  const contextChainId =
+    (context as { chain?: { id?: number | string } }).chain?.id ??
+    (context as { network?: { chainId?: number | string } }).network?.chainId;
+  const parsed = Number(contextChainId);
+  if (Number.isFinite(parsed) && parsed > 0) {
+    return parsed;
+  }
+  return fallbackChainId;
+};
+
 ponder.on("ERC20:Transfer", async ({ event, context }) => {
+  const chainId = activeChainId(context);
+
   await context.db
     .insert(transferAccount)
-    .values({ address: event.args.from, balance: 0n, isOwner: false })
+    .values({ chainId, address: event.args.from, balance: 0n, isOwner: false })
     .onConflictDoUpdate((row) => ({
       balance: row.balance - event.args.amount,
     }));
@@ -32,6 +56,7 @@ ponder.on("ERC20:Transfer", async ({ event, context }) => {
   await context.db
     .insert(transferAccount)
     .values({
+      chainId,
       address: event.args.to,
       balance: event.args.amount,
       isOwner: false,
@@ -43,6 +68,7 @@ ponder.on("ERC20:Transfer", async ({ event, context }) => {
   // add row to "transfer_event".
   await context.db.insert(transferEvent).values({
     id: event.id,
+    chainId,
     hash: event.transaction.hash,
     amount: event.args.amount,
     timestamp: Number(event.block.timestamp),
@@ -54,20 +80,20 @@ ponder.on("ERC20:Transfer", async ({ event, context }) => {
     let deduped: Record<string, boolean> = {};
     (await Promise.all([
       getHooks(event.args.from),
-      event.args.to === event.args.from ? undefined : getHooks(event.args.to)
-    ]))
-    .map((set: PonderHook[] | undefined) => {
-      if(!set) return
+      event.args.to === event.args.from ? undefined : getHooks(event.args.to),
+    ])).map((set: PonderHook[] | undefined) => {
+      if (!set) return
       set.forEach(async (hook) => {
         try {
           const hookBody = {
+            chain_id: chainId,
             to: event.args.to,
             from: event.args.from,
             hash: event.transaction.hash,
             amount: event.args.amount.toString()
           }
 
-          if(deduped[hook.url]) return
+          if (deduped[hook.url]) return
           deduped[hook.url] = true
           await fetch(hook.url, {
             method: "POST",
@@ -96,6 +122,7 @@ ponder.on("ERC20:Transfer", async ({ event, context }) => {
           from_address: event.args.from,
           to_address: event.args.to,
           hash: event.transaction.hash,
+          chain_id: chainId,
           amount: event.args.amount.toString(),
           timestamp: Number(event.block.timestamp),
         }),
@@ -111,10 +138,13 @@ ponder.on("ERC20:Transfer", async ({ event, context }) => {
 });
 
 ponder.on("ERC20:Approval", async ({ event, context }) => {
+  const chainId = activeChainId(context);
+
   // upsert "allowance".
   await context.db
     .insert(allowance)
     .values({
+      chainId,
       spender: event.args.spender,
       owner: event.args.owner,
       amount: event.args.amount,
@@ -124,6 +154,7 @@ ponder.on("ERC20:Approval", async ({ event, context }) => {
   // add row to "approval_event".
   await context.db.insert(approvalEvent).values({
     id: event.id,
+    chainId,
     amount: event.args.amount,
     timestamp: Number(event.block.timestamp),
     owner: event.args.owner,

@@ -343,7 +343,7 @@ func GroupHandlers(t *testing.T) {
 	}
 
 	testRouter := chi.NewRouter()
-	appService := handlers.NewAppService(appHandlersDb, appLogger, nil)
+	appService := handlers.NewAppService(appHandlersDb, appLogger, nil, nil)
 	Spoofer = NewContextSpoofer("userDid", TEST_USER_1.Id)
 
 	testRouter.Use(middleware.AuthMiddleware)

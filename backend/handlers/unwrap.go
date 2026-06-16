@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"math/big"
 	"net/http"
@@ -12,10 +13,15 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-var minimumFollowupUnwrapAmountWei = func() *big.Int {
-	value, _ := new(big.Int).SetString("100000000000000000000", 10)
-	return value
-}()
+const minimumFollowupUnwrapAmountSFLUV int64 = 100
+
+func minimumFollowupUnwrapAmountWei() (*big.Int, error) {
+	multiplier, err := getTokenMultiplier()
+	if err != nil {
+		return nil, fmt.Errorf("error reading token multiplier for unwrap threshold: %w", err)
+	}
+	return new(big.Int).Mul(multiplier, big.NewInt(minimumFollowupUnwrapAmountSFLUV)), nil
+}
 
 func isSameUTCMonth(t1 time.Time, t2 time.Time) bool {
 	a := t1.UTC()
@@ -52,6 +58,12 @@ func (a *AppService) CheckUnwrapEligibility(w http.ResponseWriter, r *http.Reque
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
+	minimumFollowupAmountWei, err := minimumFollowupUnwrapAmountWei()
+	if err != nil {
+		a.logger.Logf("error loading unwrap threshold: %s", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
 
 	wallet, err := a.db.GetWalletByUserAndAddress(r.Context(), *userDid, req.WalletAddress)
 	if err != nil {
@@ -68,7 +80,7 @@ func (a *AppService) CheckUnwrapEligibility(w http.ResponseWriter, r *http.Reque
 			Allowed:                  false,
 			Reason:                   "Wallet is not unwrap-enabled",
 			LastUnwrapAt:             wallet.LastUnwrapAt,
-			MinimumFollowupAmountWei: minimumFollowupUnwrapAmountWei.String(),
+			MinimumFollowupAmountWei: minimumFollowupAmountWei.String(),
 		}
 		bytes, err := json.Marshal(resp)
 		if err != nil {
@@ -83,7 +95,7 @@ func (a *AppService) CheckUnwrapEligibility(w http.ResponseWriter, r *http.Reque
 	now := time.Now().UTC()
 	allowed := true
 	reason := ""
-	if wallet.LastUnwrapAt != nil && isSameUTCMonth(*wallet.LastUnwrapAt, now) && amountWei.Cmp(minimumFollowupUnwrapAmountWei) < 0 {
+	if wallet.LastUnwrapAt != nil && isSameUTCMonth(*wallet.LastUnwrapAt, now) && amountWei.Cmp(minimumFollowupAmountWei) < 0 {
 		allowed = false
 		reason = "You already unwrapped this month. Additional unwraps this month must be at least $100."
 	}
@@ -92,7 +104,7 @@ func (a *AppService) CheckUnwrapEligibility(w http.ResponseWriter, r *http.Reque
 		Allowed:                  allowed,
 		Reason:                   reason,
 		LastUnwrapAt:             wallet.LastUnwrapAt,
-		MinimumFollowupAmountWei: minimumFollowupUnwrapAmountWei.String(),
+		MinimumFollowupAmountWei: minimumFollowupAmountWei.String(),
 	}
 	bytes, err := json.Marshal(resp)
 	if err != nil {

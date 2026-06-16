@@ -13,12 +13,13 @@ import { useTransactions } from "@/context/TransactionProvider"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { SFLUV_DECIMALS, SYMBOL } from "@/lib/constants"
+import { useChainConfig } from "@/context/ChainConfigProvider"
 
 const ITEMS_PER_PAGE = 10
 type BalanceUpdateResult = "changed" | "unchanged" | "unknown"
 
 export default function TransactionsPage() {
+  const chainConfig = useChainConfig()
   const router = useRouter()
   const pathname = usePathname()
   const searchParams = useSearchParams()
@@ -253,7 +254,7 @@ export default function TransactionsPage() {
       const value = BigInt(wei)
       const negative = value < 0n
       const abs = negative ? -value : value
-      const scale = BigInt(10) ** BigInt(SFLUV_DECIMALS)
+      const scale = BigInt(10) ** BigInt(chainConfig.tokenDecimals)
       const cents = (abs * 100n) / scale
       const whole = cents / 100n
       const fraction = cents % 100n
@@ -306,7 +307,7 @@ export default function TransactionsPage() {
     setHistoricalBalanceLoading(true)
     setHistoricalBalanceError(null)
     try {
-      const res = await authFetch(`/transactions/balance?address=${encodeURIComponent(targetAddress)}&timestamp=${timestamp}`)
+      const res = await authFetch(`/transactions/balance?address=${encodeURIComponent(targetAddress)}&chain_id=${chainConfig.chainId}&timestamp=${timestamp}`)
       if (!res.ok) {
         throw new Error("Failed to fetch balance at time.")
       }
@@ -442,7 +443,7 @@ export default function TransactionsPage() {
                   As of {formatTimestamp(historicalBalanceTimestamp)}
                 </p>
                 <p className="text-lg font-semibold">
-                  {formatWeiToTwoDecimals(historicalBalanceWei)} {SYMBOL}
+                  {formatWeiToTwoDecimals(historicalBalanceWei)} {chainConfig.tokenSymbol}
                 </p>
                 {BigInt(historicalBalanceWei) < 0n && (
                   <p className="text-xs text-amber-600">

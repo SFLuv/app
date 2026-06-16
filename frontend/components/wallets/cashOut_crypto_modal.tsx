@@ -16,7 +16,7 @@ import { CheckCircle } from "lucide-react"
 import type { AppWallet } from "@/lib/wallets/wallets"
 import { useApp } from "@/context/AppProvider"
 import { parseUnits } from "viem"
-import { SFLUV_DECIMALS } from "@/lib/constants"
+import { useChainConfig } from "@/context/ChainConfigProvider"
 
 interface CashoutCryptoModalProps {
   open: boolean
@@ -41,6 +41,8 @@ export function CashOutCryptoModal({
   const [isSavingPayPalAddress, setIsSavingPayPalAddress] = useState(false)
   const [postSuccessWarning, setPostSuccessWarning] = useState<string | null>(null)
   const { user, updatePayPalAddress, authFetch } = useApp()
+  const chainConfig = useChainConfig()
+  const tokenSymbol = chainConfig.tokenSymbol
 
   useEffect(() => {
     if(!open) return
@@ -207,7 +209,7 @@ export function CashOutCryptoModal({
 
       let amountWei: bigint
       try {
-        amountWei = parseUnits(cashOutValue, SFLUV_DECIMALS)
+        amountWei = parseUnits(cashOutValue, chainConfig.tokenDecimals)
       } catch {
         setCashOutError("Invalid cash out amount.")
         return
@@ -264,10 +266,10 @@ export function CashOutCryptoModal({
       <DialogContent className="w-[95vw] max-w-md mx-auto rounded-lg">
         <DialogHeader className="space-y-2 pb-2">
           <DialogTitle className="text-lg sm:text-xl">
-            Unwrap SFLUV
+            Unwrap {tokenSymbol}
           </DialogTitle>
           <DialogDescription className="text-sm">
-            Convert your SFLUV into USD and send it to PayPal
+            Convert your {tokenSymbol} into USD and send it to PayPal
           </DialogDescription>
         </DialogHeader>
 
@@ -322,7 +324,7 @@ export function CashOutCryptoModal({
                       className="h-12 text-lg"
                     />
                     <p className="text-xs text-muted-foreground">
-                      Available balance: {walletSFLUV}
+                      Available balance: {walletSFLUV} {tokenSymbol}
                     </p>
                   </CardContent>
                 </Card>
@@ -333,7 +335,7 @@ export function CashOutCryptoModal({
                   disabled={Number(cashOutValue) <= 0 || isProcessing}
                   onClick={handleCashOut}
                 >
-                  {isProcessing ? "Processing..." : "Unwrap SFLUV"}
+                  {isProcessing ? "Processing..." : `Unwrap ${tokenSymbol}`}
                 </Button>
               </>
             )}

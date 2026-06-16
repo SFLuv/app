@@ -11,3 +11,4 @@ pnpm-lock.yaml
 ponder/generated
 backend/backend
 backend/builds-old
+.idea

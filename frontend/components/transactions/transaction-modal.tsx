@@ -14,7 +14,7 @@ import { Badge } from "@/components/ui/badge"
 import { Copy, ExternalLink, CheckCircle, AlertCircle, Clock } from "lucide-react"
 import type { Transaction } from "@/types/transaction"
 import { transactionTypeLabels } from "@/types/transaction"
-import { SYMBOL } from "@/lib/constants"
+import { useChainConfig } from "@/context/ChainConfigProvider"
 
 interface TransactionModalProps {
   transaction: Transaction | null
@@ -25,6 +25,7 @@ interface TransactionModalProps {
 
 export function TransactionModal({ transaction, wallet, isOpen, onClose }: TransactionModalProps) {
   const [copied, setCopied] = useState<string | null>(null)
+  const chainConfig = useChainConfig()
 
   const received = useMemo(() => {
     return transaction?.toAddress.toLowerCase() === wallet.toLowerCase()
@@ -81,7 +82,7 @@ export function TransactionModal({ transaction, wallet, isOpen, onClose }: Trans
   }
 
   const formatAmount = (amount: number) => {
-    return `${received ? "+" : "-"}${amount} ${SYMBOL}`
+    return `${received ? "+" : "-"}${amount} ${chainConfig.tokenSymbol}`
   }
 
   const displayNameOrAddress = (name: string | undefined, address: string) => {
@@ -228,7 +229,7 @@ export function TransactionModal({ transaction, wallet, isOpen, onClose }: Trans
           </Button>
           <Button
             className="w-full bg-[#eb6c6c] hover:bg-[#d55c5c] sm:w-auto"
-            onClick={() => window.open(`https://berascan.com/tx/${transaction.transactionId}`, "_blank")}
+            onClick={() => window.open(`${chainConfig.chain.blockExplorers?.default?.url || ""}/tx/${transaction.transactionId}`, "_blank")}
           >
             <ExternalLink className="h-4 w-4 mr-2" />
             View on Explorer

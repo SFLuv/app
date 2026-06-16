@@ -2,7 +2,7 @@
 
 import { useMemo } from "react"
 import { Card, CardContent } from "@/components/ui/card"
-import { SYMBOL } from "@/lib/constants"
+import { useChainConfig } from "@/context/ChainConfigProvider"
 
 interface WalletBalanceCardProps {
   balance: number | null
@@ -10,6 +10,7 @@ interface WalletBalanceCardProps {
 }
 
 export function WalletBalanceCard({ balance, showBalance }: WalletBalanceCardProps) {
+  const chainConfig = useChainConfig()
   const formattedBalance = useMemo(() => {
     if (!showBalance || balance === null) return "••••"
     return balance.toLocaleString("en-US", {
@@ -29,7 +30,7 @@ export function WalletBalanceCard({ balance, showBalance }: WalletBalanceCardPro
             {formattedBalance}
           </p>
           <span className="pb-0.5 text-sm sm:text-base font-medium text-muted-foreground">
-            {SYMBOL}
+            {chainConfig.tokenSymbol}
           </span>
         </div>
         <div className="h-1.5 w-28 rounded-full bg-gradient-to-r from-[#eb6c6c] to-[#f29b9b]" />

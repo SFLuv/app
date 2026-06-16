@@ -20,13 +20,24 @@ import (
 )
 
 type W9Service struct {
-	appDb    *db.AppDB
-	ponderDb *db.PonderDB
-	logger   *logger.LogCloser
+	appDb         *db.AppDB
+	ponderDb      *db.PonderDB
+	logger        *logger.LogCloser
+	activeChainID int64
 }
 
-func NewW9Service(appDb *db.AppDB, ponderDb *db.PonderDB, logger *logger.LogCloser) *W9Service {
-	return &W9Service{appDb: appDb, ponderDb: ponderDb, logger: logger}
+func NewW9Service(appDb *db.AppDB, ponderDb *db.PonderDB, logger *logger.LogCloser, activeChainID int64) *W9Service {
+	return &W9Service{appDb: appDb, ponderDb: ponderDb, logger: logger, activeChainID: activeChainID}
+}
+
+func (w *W9Service) chainIDOrActive(chainID int64) int64 {
+	if chainID > 0 {
+		return chainID
+	}
+	if w != nil && w.activeChainID > 0 {
+		return w.activeChainID
+	}
+	return 80094
 }
 
 func (w *W9Service) adminAddresses() []string {
@@ -50,6 +61,7 @@ func (w *W9Service) CheckCompliance(ctx context.Context, fromAddress string, toA
 	}
 
 	year, _, _ := utils.CurrentYearBounds()
+	chainID := w.chainIDOrActive(0)
 	totalStr, err := w.ponderDb.GetPaidTotalForWalletYear(ctx, toAddress, year, adminAddresses)
 	if err != nil {
 		return nil, err
@@ -77,7 +89,7 @@ func (w *W9Service) CheckCompliance(ctx context.Context, fromAddress string, toA
 		return nil, err
 	}
 
-	existing, err := w.appDb.GetW9WalletEarning(ctx, toAddress, year)
+	existing, err := w.appDb.GetW9WalletEarning(ctx, toAddress, chainID, year)
 	if err != nil {
 		return nil, err
 	}
@@ -107,6 +119,7 @@ func (w *W9Service) CheckCompliance(ctx context.Context, fromAddress string, toA
 
 	earning := &structs.W9WalletEarning{
 		WalletAddress:  utils.NormalizeAddress(toAddress),
+		ChainID:        chainID,
 		Year:           year,
 		AmountReceived: total.String(),
 		UserId:         userId,
@@ -160,7 +173,7 @@ func (w *W9Service) CheckCompliance(ctx context.Context, fromAddress string, toA
 	return resp, nil
 }
 
-func (w *W9Service) ProcessPaidTransfer(ctx context.Context, fromAddress string, toAddress string, amount string, hash string, timestamp int64) (*structs.W9WalletEarning, error) {
+func (w *W9Service) ProcessPaidTransfer(ctx context.Context, fromAddress string, toAddress string, amount string, hash string, chainID int64, timestamp int64) (*structs.W9WalletEarning, error) {
 	if w.appDb == nil || w.ponderDb == nil {
 		return nil, fmt.Errorf("w9 service not configured")
 	}
@@ -175,6 +188,7 @@ func (w *W9Service) ProcessPaidTransfer(ctx context.Context, fromAddress string,
 		year = time.Now().UTC().Year()
 	}
 
+	chainID = w.chainIDOrActive(chainID)
 	totalStr, err := w.ponderDb.GetPaidTotalForWalletYear(ctx, toAddress, year, adminAddresses)
 	if err != nil {
 		return nil, err
@@ -196,7 +210,7 @@ func (w *W9Service) ProcessPaidTransfer(ctx context.Context, fromAddress string,
 		return nil, err
 	}
 
-	existing, err := w.appDb.GetW9WalletEarning(ctx, toAddress, year)
+	existing, err := w.appDb.GetW9WalletEarning(ctx, toAddress, chainID, year)
 	if err != nil {
 		return nil, err
 	}
@@ -220,9 +234,11 @@ func (w *W9Service) ProcessPaidTransfer(ctx context.Context, fromAddress string,
 	}
 
 	var lastHash *string
+	var lastChainID *int64
 	if hash != "" {
 		h := hash
 		lastHash = &h
+		lastChainID = &chainID
 	}
 
 	var lastTimestamp *int
@@ -233,12 +249,14 @@ func (w *W9Service) ProcessPaidTransfer(ctx context.Context, fromAddress string,
 
 	earning := &structs.W9WalletEarning{
 		WalletAddress:   utils.NormalizeAddress(toAddress),
+		ChainID:         chainID,
 		Year:            year,
 		AmountReceived:  total.String(),
 		UserId:          userId,
 		W9Required:      w9Required,
 		W9RequiredAt:    w9RequiredAt,
 		LastTxHash:      lastHash,
+		LastTxChainID:   lastChainID,
 		LastTxTimestamp: lastTimestamp,
 	}
 
@@ -685,7 +703,7 @@ func (a *AppService) RecordW9Transaction(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	_, err = a.w9.ProcessPaidTransfer(r.Context(), req.FromAddress, req.ToAddress, req.Amount, req.Hash, req.Timestamp)
+	_, err = a.w9.ProcessPaidTransfer(r.Context(), req.FromAddress, req.ToAddress, req.Amount, req.Hash, req.ChainID, req.Timestamp)
 	if err != nil {
 		a.logger.Logf("error processing w9 transaction: %s", err)
 		w.WriteHeader(http.StatusInternalServerError)

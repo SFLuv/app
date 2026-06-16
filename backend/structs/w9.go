@@ -4,12 +4,14 @@ import "time"
 
 type W9WalletEarning struct {
 	WalletAddress   string     `json:"wallet_address"`
+	ChainID         int64      `json:"chain_id"`
 	Year            int        `json:"year"`
 	AmountReceived  string     `json:"amount_received"`
 	UserId          *string    `json:"user_id,omitempty"`
 	W9Required      bool       `json:"w9_required"`
 	W9RequiredAt    *time.Time `json:"w9_required_at,omitempty"`
 	LastTxHash      *string    `json:"last_tx_hash,omitempty"`
+	LastTxChainID   *int64     `json:"last_tx_chain_id,omitempty"`
 	LastTxTimestamp *int       `json:"last_tx_timestamp,omitempty"`
 }
 
@@ -70,5 +72,6 @@ type W9TransactionRequest struct {
 	ToAddress   string `json:"to_address"`
 	Amount      string `json:"amount"`
 	Hash        string `json:"hash"`
+	ChainID     int64  `json:"chain_id"`
 	Timestamp   int64  `json:"timestamp"`
 }

@@ -19,17 +19,17 @@ func (p *PonderDB) GetPaidTotalForWalletYear(ctx context.Context, wallet string,
 	row := p.db.QueryRow(ctx, `
 		SELECT
 			COALESCE(SUM(t.amount), 0)::text
-		FROM
-			transfer_event t
-		WHERE
-			t.to = LOWER($1)
-		AND
-			LOWER(t.from) = ANY($2)
+			FROM
+				transfer_event t
+			WHERE
+				t.to = LOWER($1)
+			AND
+				LOWER(t.from) = ANY($2)
 		AND
 			t.timestamp >= $3
 		AND
 			t.timestamp < $4;
-	`, wallet, adminAddresses, start, end)
+		`, wallet, adminAddresses, start, end)
 
 	var total string
 	err := row.Scan(&total)

@@ -66,7 +66,7 @@ import {
 import { useLocation } from "@/context/LocationProvider"
 import { AuthedLocation, UpdateLocationApprovalRequest } from "@/types/location"
 import { AppWallet } from "@/lib/wallets/wallets"
-import { FAUCET_ADDRESS, SFLUV_DECIMALS, SFLUV_TOKEN } from "@/lib/constants"
+import { useChainConfig } from "@/context/ChainConfigProvider"
 import { Affiliate } from "@/types/affiliate"
 import { Proposer } from "@/types/proposer"
 import { Improver } from "@/types/improver"
@@ -242,6 +242,10 @@ const getCredentialVisibilityBadgeClassName = (value?: string | null): string =>
 export default function AdminPage() {
   const { user, wallets, authFetch, status } = useApp()
   const { getAuthedMapLocations, authedMapLocations} = useLocation()
+  const chainConfig = useChainConfig()
+  const tokenSymbol = chainConfig.tokenSymbol
+  const hasByusdToken = Boolean(chainConfig.byusdTokenAddress)
+  const canUseZapper = Boolean(chainConfig.zapperContractAddress)
   const { toast } = useToast()
   const pathname = usePathname()
   const router = useRouter()
@@ -572,8 +576,13 @@ export default function AdminPage() {
   }
 
   const getFaucetBalance = async () => {
-    const decimals = 10 ** SFLUV_DECIMALS
-    const bal = await wallets[0]?.getBalanceOf(SFLUV_TOKEN, FAUCET_ADDRESS)
+    if (!chainConfig.faucetAddress) {
+      setFaucetBalance("-")
+      getUnallocatedBalance()
+      return
+    }
+    const decimals = 10 ** chainConfig.tokenDecimals
+    const bal = await wallets[0]?.getBalanceOf(chainConfig.tokenAddress, chainConfig.faucetAddress)
 
     setFaucetBalance(bal ? bal / BigInt(decimals) : "-")
     getUnallocatedBalance()
@@ -604,7 +613,7 @@ export default function AdminPage() {
     try {
       const res = await authFetch("/balance")
       const bal = await res.json()
-      const decimals = 10 ** SFLUV_DECIMALS
+      const decimals = 10 ** chainConfig.tokenDecimals
       setUnallocatedBalance(Number((BigInt(bal) / BigInt(decimals))))
     }
     catch {
@@ -1940,24 +1949,26 @@ export default function AdminPage() {
 
   useEffect(() => {
     setSelectedWalletBalances()
-  }, [selectedWallet])
+  }, [hasByusdToken, selectedWallet])
 
 
 
 
   async function setSelectedWalletBalances() {
     if (selectedWallet !== null) {
-    const SFLuvPromise = selectedWallet.getSFLUVBalanceFormatted()
-    const BYUSDPromise = selectedWallet.getBYUSDBalanceFormatted()
+      const SFLuvPromise = selectedWallet.getSFLUVBalanceFormatted()
+      const BYUSDPromise = hasByusdToken ? selectedWallet.getBYUSDBalanceFormatted() : Promise.resolve(null)
 
-    const SFLuvBalance = await SFLuvPromise
-    if (SFLuvBalance != null) {
-      setSelectedWalletSFLUVBalance(SFLuvBalance)
+      const SFLuvBalance = await SFLuvPromise
+      if (SFLuvBalance != null) {
+        setSelectedWalletSFLUVBalance(SFLuvBalance)
       }
 
-    const BYUSDBalance = await BYUSDPromise
-    if (BYUSDBalance != null) {
-      setSelectedWalletBYUSDBalance(BYUSDBalance)
+      const BYUSDBalance = await BYUSDPromise
+      if (BYUSDBalance != null) {
+        setSelectedWalletBYUSDBalance(BYUSDBalance)
+      } else {
+        setSelectedWalletBYUSDBalance(0)
       }
     }
   }
@@ -2036,6 +2047,15 @@ export default function AdminPage() {
       return
     }
 
+    if (!canUseZapper || (conversionType === "wrap" && !hasByusdToken)) {
+      toast({
+        title: "Conversion Unavailable",
+        description: "Conversion contracts are not configured for this community.",
+        variant: "destructive",
+      })
+      return
+    }
+
     if (conversionType === "wrap" && convertAmount > selectedWalletBYUSDBalance) {
       toast({
         title: "Insufficient Balance",
@@ -2048,7 +2068,7 @@ export default function AdminPage() {
     if (conversionType === "unwrap" && convertAmount > selectedWalletSFLUVBalance) {
       toast({
         title: "Insufficient Balance",
-        description: "You don't have enough SFLUV in this wallet to unwrap this amount.",
+        description: `You don't have enough ${tokenSymbol} in this wallet to unwrap this amount.`,
         variant: "destructive",
       })
       return
@@ -2103,6 +2123,15 @@ export default function AdminPage() {
       toast({
         title: "Wallet Not Found",
         description: "Selected wallet could not be found.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    if (!canUseZapper || !hasByusdToken) {
+      toast({
+        title: "Conversion Unavailable",
+        description: "Cash conversion contracts are not configured for this community.",
         variant: "destructive",
       })
       return
@@ -2281,6 +2310,8 @@ export default function AdminPage() {
       to: payTo,
       tipTo: tipTo || null,
       locationId: location.id,
+      appOrigin: chainConfig.appOrigin,
+      cwAlias: chainConfig.alias,
     })
   }
 
@@ -2388,7 +2419,7 @@ export default function AdminPage() {
 
     // Create CSV content
     const csvContent = [
-      "Code Number,SFLUV Amount,QR Data,Start Date,End Date,Start Time,End Time",
+      `Code Number,${tokenSymbol} Amount,QR Data,Start Date,End Date,Start Time,End Time`,
       ...generatedCodes.map(
         (code) =>
           `${code.codeNumber},${code.sfluvAmount},"${code.qrData}","${code.startDate.toLocaleDateString()}","${code.endDate.toLocaleDateString()}","${code.startTime}","${code.endTime}"`,
@@ -2419,7 +2450,7 @@ export default function AdminPage() {
     if (conversionType === "wrap") {
       return `$${selectedWalletBYUSDBalance.toLocaleString()} BYUSD`
     } else {
-      return `${selectedWalletSFLUVBalance.toLocaleString()} SFLUV`
+      return `${selectedWalletSFLUVBalance.toLocaleString()} ${tokenSymbol}`
     }
   }
 
@@ -2631,13 +2662,13 @@ export default function AdminPage() {
             <Card>
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                 <CardTitle className="text-sm font-medium">
-                  {selectedWallet ? `${selectedWallet.name} SFLUV Balance` : "SFLUV Balance"}
+                  {selectedWallet ? `${selectedWallet.name} ${tokenSymbol} Balance` : `${tokenSymbol} Balance`}
                 </CardTitle>
                 <Coins className="h-4 w-4 text-green-600" />
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-bold">
-                  {selectedWallet ? selectedWalletSFLUVBalance.toLocaleString() + " SFLUV": "0"}
+                  {selectedWallet ? `${selectedWalletSFLUVBalance.toLocaleString()} ${tokenSymbol}` : "0"}
                 </div>
                 <p className="text-xs text-muted-foreground">
                   {selectedWallet ? "Available in selected wallet" : "Select a wallet to view balance"}
@@ -2654,7 +2685,7 @@ export default function AdminPage() {
                   <ArrowUpDown className="h-5 w-5 text-green-600" />
                   Token Conversion
                 </CardTitle>
-                <CardDescription>Convert between BYUSD stablecoins and SFLUV tokens</CardDescription>
+                <CardDescription>Convert between BYUSD stablecoins and {tokenSymbol} tokens</CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="space-y-2">
@@ -2685,7 +2716,7 @@ export default function AdminPage() {
                   <Input
                     id="conversion-amount"
                     type="text"
-                    placeholder={`Enter ${conversionType === "wrap" ? "BYUSD" : "SFLUV"} amount`}
+                    placeholder={`Enter ${conversionType === "wrap" ? "BYUSD" : tokenSymbol} amount`}
                     value={amount}
                     onChange={(e) => handleAmountChange(e.target.value)}
                     disabled={isProcessing}
@@ -2710,7 +2741,7 @@ export default function AdminPage() {
                       ) : (
                         <ArrowDown className="mr-2 h-4 w-4" />
                       )}
-                      {conversionType === "wrap" ? "Wrap to SFLUV" : "Unwrap to BYUSD"}
+                      {conversionType === "wrap" ? `Wrap to ${tokenSymbol}` : "Unwrap to BYUSD"}
                     </>
                   )}
                 </Button>
@@ -5462,7 +5493,7 @@ export default function AdminPage() {
                                       />
                                     </div>
                                     <p className="text-sm text-muted-foreground">
-                                      Scan this QR code to send SFLUV to {location.name}
+                                      Scan this QR code to send {tokenSymbol} to {location.name}
                                       {hasTip ? " (with tipping enabled)" : ""}.
                                     </p>
                                     <div className="pt-2 text-center">

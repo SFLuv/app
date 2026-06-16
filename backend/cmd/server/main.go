@@ -58,8 +58,16 @@ func main() {
 		}()
 	}
 
+	srv := &http.Server{Addr: fmt.Sprintf(":%s", port), Handler: handler}
+
+	go func() {
+		<-ctx.Done()
+		fmt.Println("\nshutting down...")
+		srv.Shutdown(context.Background())
+	}()
+
 	fmt.Printf("now listening on port %s\n", port)
-	if err := http.ListenAndServe(fmt.Sprintf(":%s", port), handler); err != nil {
+	if err := srv.ListenAndServe(); err != http.ErrServerClosed {
 		fmt.Println(err)
 	}
 }

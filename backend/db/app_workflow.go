@@ -8558,6 +8558,7 @@ func (a *AppDB) CompleteWorkflowStep(
 				bounty = 0,
 				payout_error = NULL,
 				payout_tx_hash = NULL,
+				payout_chain_id = NULL,
 				payout_last_try_at = NULL,
 				payout_in_progress = false,
 				retry_requested_at = NULL,
@@ -8581,6 +8582,7 @@ func (a *AppDB) CompleteWorkflowStep(
 				manager_paid_out_at = NULL,
 				manager_payout_error = NULL,
 				manager_payout_tx_hash = NULL,
+				manager_payout_chain_id = NULL,
 				manager_payout_last_try_at = NULL,
 				manager_payout_in_progress = false,
 				manager_retry_requested_at = NULL,
@@ -9323,7 +9325,7 @@ func (a *AppDB) ClaimWorkflowManagerPayoutAttempt(ctx context.Context, workflowI
 	return cmd.RowsAffected() > 0, nil
 }
 
-func (a *AppDB) RecordWorkflowStepPayoutTxHash(ctx context.Context, workflowId string, stepId string, txHash string) error {
+func (a *AppDB) RecordWorkflowStepPayoutTxHash(ctx context.Context, workflowId string, stepId string, txHash string, chainID int64) error {
 	txHash = strings.TrimSpace(txHash)
 	if txHash == "" {
 		return nil
@@ -9333,6 +9335,7 @@ func (a *AppDB) RecordWorkflowStepPayoutTxHash(ctx context.Context, workflowId s
 			workflow_steps
 		SET
 			payout_tx_hash = $3,
+			payout_chain_id = $4,
 			updated_at = unix_now()
 		WHERE
 			id = $1
@@ -9340,7 +9343,7 @@ func (a *AppDB) RecordWorkflowStepPayoutTxHash(ctx context.Context, workflowId s
 			workflow_id = $2
 		AND
 			status = 'completed';
-	`, stepId, workflowId, txHash)
+	`, stepId, workflowId, txHash, chainID)
 	if err != nil {
 		return fmt.Errorf("error recording workflow step payout tx hash: %s", err)
 	}
@@ -9350,7 +9353,7 @@ func (a *AppDB) RecordWorkflowStepPayoutTxHash(ctx context.Context, workflowId s
 	return nil
 }
 
-func (a *AppDB) RecordWorkflowManagerPayoutTxHash(ctx context.Context, workflowId string, txHash string) error {
+func (a *AppDB) RecordWorkflowManagerPayoutTxHash(ctx context.Context, workflowId string, txHash string, chainID int64) error {
 	txHash = strings.TrimSpace(txHash)
 	if txHash == "" {
 		return nil
@@ -9360,6 +9363,7 @@ func (a *AppDB) RecordWorkflowManagerPayoutTxHash(ctx context.Context, workflowI
 			workflows
 		SET
 			manager_payout_tx_hash = $2,
+			manager_payout_chain_id = $3,
 			updated_at = unix_now()
 		WHERE
 			id = $1
@@ -9371,7 +9375,7 @@ func (a *AppDB) RecordWorkflowManagerPayoutTxHash(ctx context.Context, workflowI
 			manager_improver_id IS NOT NULL
 		AND
 			manager_paid_out_at IS NULL;
-	`, workflowId, txHash)
+	`, workflowId, txHash, chainID)
 	if err != nil {
 		return fmt.Errorf("error recording workflow manager payout tx hash: %s", err)
 	}
@@ -9655,13 +9659,15 @@ func (a *AppDB) RequestWorkflowStepPayoutRetry(ctx context.Context, workflowId s
 	return nil
 }
 
-func (a *AppDB) GetWorkflowStepRecordedPayoutTxHash(ctx context.Context, workflowId string, stepId string, improverId string) (uint64, string, error) {
+func (a *AppDB) GetWorkflowStepRecordedPayoutTxHash(ctx context.Context, workflowId string, stepId string, improverId string) (uint64, string, int64, error) {
 	var bounty uint64
 	var txHash string
+	var chainID int64
 	err := a.db.QueryRow(ctx, `
 		SELECT
 			bounty,
-			COALESCE(payout_tx_hash, '')
+			COALESCE(payout_tx_hash, ''),
+			COALESCE(payout_chain_id, 0)
 		FROM
 			workflow_steps
 		WHERE
@@ -9674,11 +9680,11 @@ func (a *AppDB) GetWorkflowStepRecordedPayoutTxHash(ctx context.Context, workflo
 			status = 'completed'
 		AND
 			bounty > 0;
-	`, stepId, workflowId, improverId).Scan(&bounty, &txHash)
+	`, stepId, workflowId, improverId).Scan(&bounty, &txHash, &chainID)
 	if err != nil {
-		return 0, "", err
+		return 0, "", 0, err
 	}
-	return bounty, strings.TrimSpace(txHash), nil
+	return bounty, strings.TrimSpace(txHash), chainID, nil
 }
 
 func (a *AppDB) RequestWorkflowManagerPayoutRetry(ctx context.Context, workflowId string, improverId string) error {
@@ -9713,13 +9719,15 @@ func (a *AppDB) RequestWorkflowManagerPayoutRetry(ctx context.Context, workflowI
 	return nil
 }
 
-func (a *AppDB) GetWorkflowManagerRecordedPayoutTxHash(ctx context.Context, workflowId string, improverId string) (uint64, string, error) {
+func (a *AppDB) GetWorkflowManagerRecordedPayoutTxHash(ctx context.Context, workflowId string, improverId string) (uint64, string, int64, error) {
 	var bounty uint64
 	var txHash string
+	var chainID int64
 	err := a.db.QueryRow(ctx, `
 		SELECT
 			manager_bounty,
-			COALESCE(manager_payout_tx_hash, '')
+			COALESCE(manager_payout_tx_hash, ''),
+			COALESCE(manager_payout_chain_id, 0)
 		FROM
 			workflows
 		WHERE
@@ -9732,11 +9740,11 @@ func (a *AppDB) GetWorkflowManagerRecordedPayoutTxHash(ctx context.Context, work
 			manager_bounty > 0
 		AND
 			manager_paid_out_at IS NULL;
-	`, workflowId, improverId).Scan(&bounty, &txHash)
+	`, workflowId, improverId).Scan(&bounty, &txHash, &chainID)
 	if err != nil {
-		return 0, "", err
+		return 0, "", 0, err
 	}
-	return bounty, strings.TrimSpace(txHash), nil
+	return bounty, strings.TrimSpace(txHash), chainID, nil
 }
 
 func (a *AppDB) RecoverStaleWorkflowPayoutLocksForImprover(ctx context.Context, improverId string, staleBefore int64, errorMessage string) (int64, int64, error) {

@@ -9,7 +9,7 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Search, Filter, ArrowUpRight, ArrowDownLeft, CheckCircle, AlertCircle, Clock } from "lucide-react"
 import type { Transaction } from "@/types/transaction"
 import { transactionTypeLabels } from "@/types/transaction"
-import { SYMBOL } from "@/lib/constants"
+import { useChainConfig } from "@/context/ChainConfigProvider"
 
 interface TransactionListProps {
   transactions: Transaction[]
@@ -20,6 +20,7 @@ interface TransactionListProps {
 export function TransactionList({ transactions, onSelectTransaction, wallet }: TransactionListProps) {
   const [searchQuery, setSearchQuery] = useState("")
   const [typeFilter, setTypeFilter] = useState<string>("all")
+  const chainConfig = useChainConfig()
 
   // Get available transaction types based on user role
   const getTransactionTypes = () => {
@@ -164,7 +165,7 @@ export function TransactionList({ transactions, onSelectTransaction, wallet }: T
                     <div className="text-right flex-shrink-0">
                       <span className={`font-bold text-sm sm:text-base ${received ? "text-green-600" : "text-red-600"}`}>
                         {received ? "+" : "-"}
-                        {transaction.amount} {SYMBOL}
+                        {transaction.amount} {chainConfig.tokenSymbol}
                       </span>
                       <div className="mt-1 flex items-center justify-end gap-1">
                         {getStatusIcon(transaction.status)}

@@ -88,6 +88,8 @@ export interface MerchantSendQrParams {
   to: string
   tipTo?: string | null
   locationId?: string | number | null
+  appOrigin?: string
+  cwAlias?: string
 }
 
 const HEX_ADDRESS_PATTERN = /^0x[0-9a-fA-F]{40}$/
@@ -153,7 +155,7 @@ export const decodeBase64UrlAddress = (encoded: string): string | null => {
   }
 }
 
-export const buildMerchantSendQrValue = ({ to, tipTo, locationId }: MerchantSendQrParams): string => {
+export const buildMerchantSendQrValue = ({ to, tipTo, locationId, appOrigin: configuredAppOrigin, cwAlias: configuredCwAlias }: MerchantSendQrParams): string => {
   const trimmedTo = to.trim()
   const trimmedTipTo = (tipTo || "").trim()
   const trimmedLocationId =
@@ -162,8 +164,8 @@ export const buildMerchantSendQrValue = ({ to, tipTo, locationId }: MerchantSend
     process.env.NEXT_PUBLIC_APP_REDEEM_URL_PRE?.trim(),
   )
 
-  const appOrigin = legacyConfig?.appOrigin || DEFAULT_APP_ORIGIN
-  const cwAlias = legacyConfig?.cwAlias || DEFAULT_CW_ALIAS
+  const appOrigin = configuredAppOrigin || legacyConfig?.appOrigin || DEFAULT_APP_ORIGIN
+  const cwAlias = configuredCwAlias || legacyConfig?.cwAlias || DEFAULT_CW_ALIAS
 
   // Produce a native sendtoUrl-format URL on our own domain. Citizen Wallet's
   // Dart QR scanner (`parseQRFormat` in lib/utils/qr.dart) classifies ANY

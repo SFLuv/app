@@ -115,6 +115,54 @@ func legacyMobileClientBlockEnabled() bool {
 	return envBool(legacyMobileClientBlockEnvKey, true)
 }
 
+// phoneHomeFieldMaxLen bounds client-supplied metric fields so a misbehaving
+// client cannot bloat the aggregate table's cardinality with long strings.
+const phoneHomeFieldMaxLen = 64
+
+func truncateMetricField(value string, max int) string {
+	runes := []rune(value)
+	if len(runes) > max {
+		return string(runes[:max])
+	}
+	return value
+}
+
+// recordClientPhoneHome records an anonymous, aggregate hit for an
+// unauthenticated /config or /client-version fetch. These calls carry no user
+// (the app fetches them before auth), so they are tracked separately from the
+// per-user version observations and used purely as an app-usage metric.
+func (a *AppService) recordClientPhoneHome(ctx context.Context, endpoint string, r *http.Request) {
+	if a == nil || a.db == nil || r == nil {
+		return
+	}
+
+	platform := strings.ToLower(strings.TrimSpace(r.Header.Get(clientPlatformHeader)))
+	version := strings.TrimSpace(r.Header.Get(clientVersionHeader))
+	build := strings.TrimSpace(r.Header.Get(clientBuildHeader))
+
+	// /client-version also carries these as query params; fall back to them so
+	// the metric is populated even if a client omits the headers.
+	if platform == "" {
+		platform = strings.ToLower(strings.TrimSpace(r.URL.Query().Get("platform")))
+	}
+	if version == "" {
+		version = strings.TrimSpace(r.URL.Query().Get("version"))
+	}
+	if build == "" {
+		build = strings.TrimSpace(r.URL.Query().Get("build"))
+	}
+
+	metric := structs.ClientPhoneHome{
+		Endpoint: endpoint,
+		Platform: truncateMetricField(platform, phoneHomeFieldMaxLen),
+		Version:  truncateMetricField(version, phoneHomeFieldMaxLen),
+		Build:    truncateMetricField(build, phoneHomeFieldMaxLen),
+	}
+	if err := a.db.RecordClientPhoneHome(ctx, metric); err != nil && a.logger != nil {
+		a.logger.Logf("error recording client phone home for %s: %s", endpoint, err)
+	}
+}
+
 func (a *AppService) recordClientVersionObservation(ctx context.Context, userID string, source string, r *http.Request) {
 	if a == nil || a.db == nil || r == nil {
 		return

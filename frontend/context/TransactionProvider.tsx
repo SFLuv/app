@@ -4,8 +4,8 @@ import { ServerTransaction, Transaction, TransactionStatus, TransactionType } fr
 import { Options } from "react-to-pdf";
 import { useContacts } from "./ContactsProvider";
 import { Server } from "http";
-import { FAUCET_ADDRESS, HONEY_TOKEN, SFLUV_DECIMALS } from "@/lib/constants";
 import { WalletTransaction } from "@/types/privy-wallet";
+import { useChainConfig } from "@/context/ChainConfigProvider";
 
 interface TransactionContext {
   transactionsStatus: TransactionsStatus
@@ -52,6 +52,7 @@ const TransactionContext = createContext<TransactionContext | null>(null);
 export default function TransactionProvider({ children }: { children: ReactNode }) {
   const { status, authFetch } = useApp()
   const { contacts, contactsStatus } = useContacts()
+  const chainConfig = useChainConfig()
   const [transactions, setTransactions] = useState<Record<string, WalletTransactions>>({})
   const [transactionsError, setTransactionsError] = useState<string | null>(null)
   const [transactionsStatus, setTransactionsStatus] = useState<TransactionsStatus>("ready")
@@ -73,13 +74,15 @@ export default function TransactionProvider({ children }: { children: ReactNode 
   }, [transactionsError])
 
   const getTransactionsPage = async (address: string, page: number, options: TransactionOptions): Promise<WalletPage> => {
-    const paginationString = "&count=" + (options.paginationDetails.count || 10)+ "&desc=" + (options.paginationDetails.desc ?? true)
+    const chainString = "&chain_id=" + chainConfig.chainId
+    const paginationString = chainString + "&count=" + (options.paginationDetails.count || 10)+ "&desc=" + (options.paginationDetails.desc ?? true)
+    const pageName = address + paginationString
 
     try {
       let txPage: WalletPage = {
-        txs: transactions[paginationString]?.pages[page],
+        txs: transactions[pageName]?.pages[page],
         page,
-        total: transactions[paginationString]?.total
+        total: transactions[pageName]?.total
       }
       if(!txPage?.txs?.length) {
         txPage = await _fillTransactionsPage(address, page, options.paginationDetails)
@@ -109,7 +112,7 @@ export default function TransactionProvider({ children }: { children: ReactNode 
     const id = tx.id
     const type = owner.toLowerCase() === tx.fromAddress.toLowerCase() ? "send" : "receive"
     const amount = tx.amount
-    const currency = "SFLUV"
+    const currency = chainConfig.tokenSymbol
     const fromAddress = tx.fromAddress
     const toAddress = tx.toAddress
     const status = "confirmed"
@@ -132,7 +135,8 @@ export default function TransactionProvider({ children }: { children: ReactNode 
   }
 
   const _fillTransactionsPage = async (address: string, page: number, paginationDetails: PaginationDetails): Promise<WalletPage>  => {
-    const paginationString = "&count=" + (paginationDetails.count || 10)+ "&desc=" + (paginationDetails.desc ?? true)
+    const chainString = "&chain_id=" + chainConfig.chainId
+    const paginationString = chainString + "&count=" + (paginationDetails.count || 10)+ "&desc=" + (paginationDetails.desc ?? true)
     const pageName = address + paginationString
     setTransactionsStatus("loading")
     if(transactions[pageName]?.total < page * paginationDetails.count - 1) {
@@ -255,8 +259,9 @@ export default function TransactionProvider({ children }: { children: ReactNode 
 
   const _txResponseToAppTx = (tx: ServerTransaction): Transaction => {
     const id = tx.id
+    const chainId = tx.chain_id
     const type = _getTxType(tx)
-    const amount = Number(BigInt(tx.amount) / BigInt(10 ** (SFLUV_DECIMALS - 2))) / 100
+    const amount = Number(BigInt(tx.amount) / BigInt(10 ** (chainConfig.tokenDecimals - 2))) / 100
     const timestamp = String(tx.timestamp)
     const status = "completed"
     const fromName = resolveAddressLabel(tx.from)
@@ -268,6 +273,7 @@ export default function TransactionProvider({ children }: { children: ReactNode 
 
     return {
       id,
+      chainId,
       type,
       amount,
       timestamp,
@@ -288,7 +294,7 @@ export default function TransactionProvider({ children }: { children: ReactNode 
     if(to === "0x0000000000000000000000000000000000000000") {
       return "currency_unwrap"
     }
-    if(FAUCET_ADDRESS && from === FAUCET_ADDRESS.toLowerCase()) {
+    if(chainConfig.faucetAddress && from === chainConfig.faucetAddress.toLowerCase()) {
       return "volunteer_reward"
     }
 

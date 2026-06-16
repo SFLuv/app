@@ -750,6 +750,9 @@ func (a *AppService) PonderHookHandler(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
+	if tx.ChainID <= 0 {
+		tx.ChainID = a.activeChainID()
+	}
 
 	sender := utils.NewEmailSender()
 	if sender == nil {
@@ -865,11 +868,12 @@ func (a *AppService) PonderHookHandler(w http.ResponseWriter, r *http.Request) {
 
 		token := strings.TrimSpace(string(listener.Data))
 		ticket, pushErr := sendExpoPushNotification(r.Context(), token, title, body, map[string]string{
-			"hash":    tx.Hash,
-			"to":      tx.To,
-			"from":    tx.From,
-			"amount":  formattedAmount,
-			"address": listener.Address,
+			"hash":     tx.Hash,
+			"chain_id": strconv.FormatInt(tx.ChainID, 10),
+			"to":       tx.To,
+			"from":     tx.From,
+			"amount":   formattedAmount,
+			"address":  listener.Address,
 		})
 		a.handleExpoPushTicket(r.Context(), listener, token, ticket)
 		if pushErr != nil {
@@ -883,6 +887,12 @@ func (a *AppService) PonderHookHandler(w http.ResponseWriter, r *http.Request) {
 func sendExpoPushNotification(ctx context.Context, token string, title string, body string, data map[string]string) (*expoPushTicket, error) {
 	if strings.TrimSpace(token) == "" {
 		return nil, fmt.Errorf("empty Expo push token")
+	}
+	if utils.NotificationTestModeEnabled() {
+		if _, err := utils.WriteTestPushNotification(token, title, body, data); err != nil {
+			return nil, err
+		}
+		return &expoPushTicket{Status: "ok"}, nil
 	}
 
 	pushURL := strings.TrimSpace(os.Getenv("EXPO_PUSH_API_URL"))

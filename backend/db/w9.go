@@ -57,39 +57,46 @@ func (a *AppDB) GetUserContactEmail(ctx context.Context, userId string) (*string
 	return nil, nil
 }
 
-func (a *AppDB) GetW9WalletEarning(ctx context.Context, wallet string, year int) (*structs.W9WalletEarning, error) {
+func (a *AppDB) GetW9WalletEarning(ctx context.Context, wallet string, chainID int64, year int) (*structs.W9WalletEarning, error) {
 	row := a.db.QueryRow(ctx, `
-			SELECT
-				wallet_address,
-				year,
-				amount_received::text,
-				user_id,
-				w9_required,
-				w9_required_at,
-				last_tx_hash,
-				last_tx_timestamp
-			FROM
-				w9_wallet_earnings
-		WHERE
-			wallet_address = LOWER($1)
-		AND
-			year = $2;
-	`, wallet, year)
+				SELECT
+					wallet_address,
+					chain_id,
+					year,
+					amount_received::text,
+					user_id,
+					w9_required,
+					w9_required_at,
+					last_tx_hash,
+					last_tx_chain_id,
+					last_tx_timestamp
+				FROM
+					w9_wallet_earnings
+			WHERE
+				wallet_address = LOWER($1)
+			AND
+				chain_id = $2
+			AND
+				year = $3;
+		`, wallet, chainID, year)
 
 	var earning structs.W9WalletEarning
 	var userId sql.NullString
 	var requiredAt sql.NullTime
 	var lastTxHash sql.NullString
+	var lastTxChainID sql.NullInt64
 	var lastTxTimestamp sql.NullInt64
 
 	err := row.Scan(
 		&earning.WalletAddress,
+		&earning.ChainID,
 		&earning.Year,
 		&earning.AmountReceived,
 		&userId,
 		&earning.W9Required,
 		&requiredAt,
 		&lastTxHash,
+		&lastTxChainID,
 		&lastTxTimestamp,
 	)
 	if err == pgx.ErrNoRows {
@@ -109,6 +116,10 @@ func (a *AppDB) GetW9WalletEarning(ctx context.Context, wallet string, year int)
 	if lastTxHash.Valid {
 		earning.LastTxHash = &lastTxHash.String
 	}
+	if lastTxChainID.Valid {
+		chainID := lastTxChainID.Int64
+		earning.LastTxChainID = &chainID
+	}
 	if lastTxTimestamp.Valid {
 		ts := int(lastTxTimestamp.Int64)
 		earning.LastTxTimestamp = &ts
@@ -119,37 +130,42 @@ func (a *AppDB) GetW9WalletEarning(ctx context.Context, wallet string, year int)
 
 func (a *AppDB) UpsertW9WalletEarning(ctx context.Context, earning *structs.W9WalletEarning) error {
 	_, err := a.db.Exec(ctx, `
-		INSERT INTO w9_wallet_earnings (
-			wallet_address,
-			year,
-			amount_received,
-			user_id,
-			w9_required,
-			w9_required_at,
-			last_tx_hash,
-			last_tx_timestamp,
-			updated_at
-		) VALUES (
-			LOWER($1),
-			$2,
-			$3,
-			$4,
-			$5,
-			$6,
-			$7,
-			$8,
-			NOW()
-		)
-		ON CONFLICT (wallet_address, year)
-		DO UPDATE SET
-			amount_received = EXCLUDED.amount_received,
-			user_id = COALESCE(EXCLUDED.user_id, w9_wallet_earnings.user_id),
-			w9_required = w9_wallet_earnings.w9_required OR EXCLUDED.w9_required,
-			w9_required_at = COALESCE(w9_wallet_earnings.w9_required_at, EXCLUDED.w9_required_at),
-			last_tx_hash = COALESCE(EXCLUDED.last_tx_hash, w9_wallet_earnings.last_tx_hash),
-			last_tx_timestamp = COALESCE(EXCLUDED.last_tx_timestamp, w9_wallet_earnings.last_tx_timestamp),
-			updated_at = NOW();
-	`, earning.WalletAddress, earning.Year, earning.AmountReceived, earning.UserId, earning.W9Required, earning.W9RequiredAt, earning.LastTxHash, earning.LastTxTimestamp)
+			INSERT INTO w9_wallet_earnings (
+				wallet_address,
+				chain_id,
+				year,
+				amount_received,
+				user_id,
+				w9_required,
+				w9_required_at,
+				last_tx_hash,
+				last_tx_chain_id,
+				last_tx_timestamp,
+				updated_at
+			) VALUES (
+				LOWER($1),
+				$2,
+				$3,
+				$4,
+				$5,
+				$6,
+				$7,
+				$8,
+				$9,
+				$10,
+				NOW()
+			)
+			ON CONFLICT (wallet_address, year, chain_id)
+			DO UPDATE SET
+				amount_received = EXCLUDED.amount_received,
+				user_id = COALESCE(EXCLUDED.user_id, w9_wallet_earnings.user_id),
+				w9_required = w9_wallet_earnings.w9_required OR EXCLUDED.w9_required,
+				w9_required_at = COALESCE(w9_wallet_earnings.w9_required_at, EXCLUDED.w9_required_at),
+				last_tx_hash = COALESCE(EXCLUDED.last_tx_hash, w9_wallet_earnings.last_tx_hash),
+				last_tx_chain_id = COALESCE(EXCLUDED.last_tx_chain_id, w9_wallet_earnings.last_tx_chain_id),
+				last_tx_timestamp = COALESCE(EXCLUDED.last_tx_timestamp, w9_wallet_earnings.last_tx_timestamp),
+				updated_at = NOW();
+		`, earning.WalletAddress, earning.ChainID, earning.Year, earning.AmountReceived, earning.UserId, earning.W9Required, earning.W9RequiredAt, earning.LastTxHash, earning.LastTxChainID, earning.LastTxTimestamp)
 	if err != nil {
 		return fmt.Errorf("error upserting w9 wallet earnings: %s", err)
 	}

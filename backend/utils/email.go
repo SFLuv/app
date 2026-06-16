@@ -29,6 +29,10 @@ func NotificationFromEmail() string {
 }
 
 func NewEmailSender() *EmailSender {
+	if NotificationTestModeEnabled() {
+		return &EmailSender{}
+	}
+
 	domain := os.Getenv("MAILGUN_DOMAIN")
 	apiKey := os.Getenv("MAILGUN_API_KEY")
 	if domain == "" || apiKey == "" {
@@ -40,6 +44,14 @@ func NewEmailSender() *EmailSender {
 }
 
 func (es *EmailSender) SendEmail(toEmail, toName, subject, htmlContent string, fromEmail, fromName string) error {
+	if NotificationTestModeEnabled() {
+		_, err := WriteTestEmailNotification(toEmail, toName, subject, htmlContent, fromEmail, fromName, nil)
+		return err
+	}
+	if es == nil || es.mg == nil {
+		return fmt.Errorf("email sender is not configured")
+	}
+
 	m := mailgun.NewMessage(
 		fmt.Sprintf("%s <%s>", fromName, fromEmail),
 		subject,
@@ -64,6 +76,14 @@ func (es *EmailSender) SendEmailWithAttachments(
 	fromName string,
 	attachments []EmailAttachment,
 ) error {
+	if NotificationTestModeEnabled() {
+		_, err := WriteTestEmailNotification(toEmail, toName, subject, htmlContent, fromEmail, fromName, attachments)
+		return err
+	}
+	if es == nil || es.mg == nil {
+		return fmt.Errorf("email sender is not configured")
+	}
+
 	m := mailgun.NewMessage(
 		fmt.Sprintf("%s <%s>", fromName, fromEmail),
 		subject,

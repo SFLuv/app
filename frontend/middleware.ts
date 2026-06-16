@@ -40,7 +40,6 @@ const getBackendOrigins = () => {
 
 const getRpcOrigins = () => {
   const configuredOrigins = [
-    process.env.NEXT_PUBLIC_CHAIN_RPC_URL,
     process.env.NEXT_PUBLIC_ENGINE_URL,
     process.env.NEXT_PUBLIC_ALCHEMY_TRANSFERS_BASE_URL,
   ]
@@ -50,6 +49,8 @@ const getRpcOrigins = () => {
 
   const defaults = [
     "https://rpc.berachain.com",
+    "https://*.engine.citizenwallet.xyz",
+    "wss://*.engine.citizenwallet.xyz",
     "https://*.g.alchemy.com",
   ]
 
