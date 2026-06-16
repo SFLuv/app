@@ -95,6 +95,7 @@ export type ResolvedCommunityConfig = {
   chain: Chain
   chainId: number
   rpcUrl: string
+  bundlerRpcUrl: string
   engineWsUrl?: string
   tokenAddress: Address
   tokenDecimals: number
@@ -141,10 +142,13 @@ export function resolveCommunityConfig(payload: CommunityConfigPayload): Resolve
   }
 
   const community = new CommunityConfig(payload as any)
-  // The Citizen Wallet engine serves JSON-RPC (and AA methods) at
-  // `${node.url}/v1/rpc/${paymaster}`, not at the bare node.url. Posting to the
-  // root returns 401, so use the SDK's canonical RPC URL for all transports.
-  const rpcUrl = community.primaryRPCUrl
+  // The CW engine serves the AA bundler/paymaster methods at
+  // `${node.url}/v1/rpc/${paymaster}` — used for sponsorship + sending only.
+  const bundlerRpcUrl = community.primaryRPCUrl
+  // Reads (eth_getCode/eth_getBalance/eth_getStorageAt) must use a full node
+  // RPC: the engine 404s those methods. Prefer the backend-provided rpc_url
+  // (RPC_URL env), falling back to the engine only if none is configured.
+  const rpcUrl = findExtraString(payload.extras, "rpc_url", "rpcUrl") || bundlerRpcUrl
 
   const baseChain = knownChains[primaryTokenRef.chain_id] ?? {
     id: primaryTokenRef.chain_id,
@@ -184,6 +188,7 @@ export function resolveCommunityConfig(payload: CommunityConfigPayload): Resolve
     chain,
     chainId: primaryTokenRef.chain_id,
     rpcUrl,
+    bundlerRpcUrl,
     engineWsUrl: chainConfig?.node?.ws_url,
     tokenAddress: token.address as Address,
     tokenDecimals: token.decimals,
@@ -265,6 +270,17 @@ function findExtraAddress(
   for (const key of keys) {
     const address = readAddressish(extras?.[key])
     if (address) return address
+  }
+  return undefined
+}
+
+function findExtraString(
+  extras: CommunityConfigPayload["extras"] | undefined,
+  ...keys: string[]
+): string | undefined {
+  for (const key of keys) {
+    const value = extras?.[key]
+    if (typeof value === "string" && value.trim() !== "") return value.trim()
   }
   return undefined
 }

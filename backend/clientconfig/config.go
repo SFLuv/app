@@ -72,6 +72,12 @@ type Extras struct {
 	ZapperAddress     string   `json:"zapper_address,omitempty"`
 	FaucetAddress     string   `json:"faucet_address,omitempty"`
 	BackingAssets     []string `json:"backing_assets,omitempty"`
+	// ReadRPCURL is a full JSON-RPC node URL for general reads (eth_getCode,
+	// eth_getBalance, eth_getStorageAt, ...). The Citizen Wallet engine at
+	// chains[].node.url is a curated RPC that 404s those methods, so clients
+	// must use this for reads and reserve the engine for the AA bundler. Sourced
+	// from the backend RPC_URL env, taking precedence over the engine URL.
+	ReadRPCURL string `json:"rpc_url,omitempty"`
 }
 
 type Config struct {
@@ -461,6 +467,9 @@ func loadEnvironmentExtras() (Extras, error) {
 	if extras.BackingAssets, err = envAddressList("BACKING_ASSETS", "NEXT_PUBLIC_BACKING_ASSETS"); err != nil {
 		return Extras{}, err
 	}
+	if extras.ReadRPCURL, err = envURL("CLIENT_READ_RPC_URL", "RPC_URL", "NEXT_PUBLIC_RPC_URL"); err != nil {
+		return Extras{}, err
+	}
 
 	return extras, nil
 }
@@ -486,6 +495,9 @@ func mergeExtras(base, override Extras) Extras {
 	}
 	if len(override.BackingAssets) > 0 {
 		base.BackingAssets = override.BackingAssets
+	}
+	if override.ReadRPCURL != "" {
+		base.ReadRPCURL = override.ReadRPCURL
 	}
 	return base
 }
@@ -519,7 +531,8 @@ func (e Extras) isZero() bool {
 		e.ByusdDecimals == nil &&
 		e.ZapperAddress == "" &&
 		e.FaucetAddress == "" &&
-		len(e.BackingAssets) == 0
+		len(e.BackingAssets) == 0 &&
+		e.ReadRPCURL == ""
 }
 
 func responseJSON(body []byte, extras Extras) ([]byte, error) {
@@ -545,6 +558,7 @@ func responseJSON(body []byte, extras Extras) ([]byte, error) {
 	writeIntExtra(extrasDoc, "byusd_decimals", extras.ByusdDecimals)
 	writeStringExtra(extrasDoc, "zapper_address", extras.ZapperAddress)
 	writeStringExtra(extrasDoc, "faucet_address", extras.FaucetAddress)
+	writeStringExtra(extrasDoc, "rpc_url", extras.ReadRPCURL)
 	writeStringSliceExtra(extrasDoc, "backing_assets", extras.BackingAssets)
 
 	if len(extrasDoc) == 0 {
@@ -581,6 +595,8 @@ func deleteKnownExtraFields(doc map[string]json.RawMessage) {
 		"faucetAddress",
 		"backing_assets",
 		"backingAssets",
+		"rpc_url",
+		"rpcUrl",
 	} {
 		delete(doc, key)
 	}
@@ -608,6 +624,17 @@ func writeStringSliceExtra(doc map[string]json.RawMessage, key string, value []s
 	}
 	raw, _ := json.Marshal(value)
 	doc[key] = raw
+}
+
+func envURL(names ...string) (string, error) {
+	name, value := firstEnv(names...)
+	if value == "" {
+		return "", nil
+	}
+	if _, err := url.ParseRequestURI(value); err != nil {
+		return "", fmt.Errorf("%s must be a valid URL: %w", name, err)
+	}
+	return value, nil
 }
 
 func envAddress(names ...string) (string, error) {
