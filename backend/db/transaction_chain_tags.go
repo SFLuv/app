@@ -115,8 +115,19 @@ func (p *PonderDB) BackfillTransactionChainIDs(ctx context.Context, chainID int6
 		if _, err := p.db.Exec(ctx, fmt.Sprintf(`ALTER TABLE %s ADD COLUMN IF NOT EXISTS chain_id BIGINT`, table.name)); err != nil {
 			return fmt.Errorf("error backfilling ponder table %s chain ids (alter): %w", table.name, err)
 		}
+		// Set the default first so every row the indexer inserts from here on is
+		// tagged (the current single-chain indexer does not write chain_id), which
+		// also prevents a new NULL from racing the SET NOT NULL below. chainID is a
+		// trusted int64, so inlining it in the DDL is safe. The default is changed
+		// in a later migration at the Celo cutover.
+		if _, err := p.db.Exec(ctx, fmt.Sprintf(`ALTER TABLE %s ALTER COLUMN chain_id SET DEFAULT %d`, table.name, chainID)); err != nil {
+			return fmt.Errorf("error backfilling ponder table %s chain ids (set default): %w", table.name, err)
+		}
 		if _, err := p.db.Exec(ctx, fmt.Sprintf(`UPDATE %s SET chain_id = $1 WHERE chain_id IS NULL`, table.name), chainID); err != nil {
 			return fmt.Errorf("error backfilling ponder table %s chain ids (update): %w", table.name, err)
+		}
+		if _, err := p.db.Exec(ctx, fmt.Sprintf(`ALTER TABLE %s ALTER COLUMN chain_id SET NOT NULL`, table.name)); err != nil {
+			return fmt.Errorf("error backfilling ponder table %s chain ids (set not null): %w", table.name, err)
 		}
 
 		for _, indexQuery := range table.indexes {
