@@ -149,11 +149,42 @@ func (c *Config) PrimaryRPCURL() string {
 }
 
 func loadRemote(ctx context.Context) (*Config, error) {
-	remoteURL, err := remoteConfigURL()
+	// An explicit single-community config URL wins when set. Otherwise fetch the
+	// published communities list and select our community by alias: the
+	// per-community files on the default Citizen Wallet host are access
+	// restricted (HTTP 403), while communities.json is served publicly.
+	explicit, err := explicitConfigURL()
 	if err != nil {
 		return nil, err
 	}
+	if explicit != "" {
+		body, err := fetchRemote(ctx, explicit)
+		if err != nil {
+			return nil, err
+		}
+		return parse(body, "citizenwallet:"+explicit)
+	}
 
+	alias, err := communityAlias()
+	if err != nil {
+		return nil, err
+	}
+	listURL, err := communitiesListURL()
+	if err != nil {
+		return nil, err
+	}
+	body, err := fetchRemote(ctx, listURL)
+	if err != nil {
+		return nil, err
+	}
+	entry, err := selectCommunityEntry(body, alias)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", listURL, err)
+	}
+	return parse(entry, fmt.Sprintf("citizenwallet:%s#%s", listURL, alias))
+}
+
+func fetchRemote(ctx context.Context, remoteURL string) ([]byte, error) {
 	requestCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
@@ -173,15 +204,11 @@ func loadRemote(ctx context.Context) (*Config, error) {
 		return nil, fmt.Errorf("GET %s returned %d", remoteURL, res.StatusCode)
 	}
 
-	body, err := io.ReadAll(io.LimitReader(res.Body, 4<<20))
+	body, err := io.ReadAll(io.LimitReader(res.Body, 8<<20))
 	if err != nil {
 		return nil, err
 	}
-	cfg, err := parse(body, "citizenwallet:"+remoteURL)
-	if err != nil {
-		return nil, err
-	}
-	return cfg, nil
+	return body, nil
 }
 
 func loadFallback() (*Config, error) {
@@ -220,14 +247,18 @@ func fallbackCandidates(path string) []string {
 	return candidates
 }
 
-func remoteConfigURL() (string, error) {
-	if configured := strings.TrimSpace(os.Getenv("CITIZEN_WALLET_CONFIG_URL")); configured != "" {
-		if _, err := url.ParseRequestURI(configured); err != nil {
-			return "", fmt.Errorf("invalid CITIZEN_WALLET_CONFIG_URL %q: %w", configured, err)
-		}
-		return configured, nil
+func explicitConfigURL() (string, error) {
+	configured := strings.TrimSpace(os.Getenv("CITIZEN_WALLET_CONFIG_URL"))
+	if configured == "" {
+		return "", nil
 	}
+	if _, err := url.ParseRequestURI(configured); err != nil {
+		return "", fmt.Errorf("invalid CITIZEN_WALLET_CONFIG_URL %q: %w", configured, err)
+	}
+	return configured, nil
+}
 
+func communityAlias() (string, error) {
 	alias := strings.TrimSpace(os.Getenv("CITIZEN_WALLET_COMMUNITY_ALIAS"))
 	if alias == "" {
 		alias = strings.TrimSpace(os.Getenv("CLIENT_COMMUNITY_ALIAS"))
@@ -235,12 +266,55 @@ func remoteConfigURL() (string, error) {
 	if alias == "" {
 		return "", fmt.Errorf("CITIZEN_WALLET_COMMUNITY_ALIAS is not set")
 	}
+	return alias, nil
+}
+
+func communitiesListURL() (string, error) {
+	if configured := strings.TrimSpace(os.Getenv("CITIZEN_WALLET_COMMUNITIES_URL")); configured != "" {
+		if _, err := url.ParseRequestURI(configured); err != nil {
+			return "", fmt.Errorf("invalid CITIZEN_WALLET_COMMUNITIES_URL %q: %w", configured, err)
+		}
+		return configured, nil
+	}
 
 	base := strings.TrimRight(strings.TrimSpace(os.Getenv("CITIZEN_WALLET_CONFIG_BASE_URL")), "/")
 	if base == "" {
 		base = defaultConfigBaseURL
 	}
-	return base + "/" + url.PathEscape(alias) + ".json", nil
+	return base + "/communities.json", nil
+}
+
+// selectCommunityEntry returns the raw JSON of the community whose
+// community.alias matches alias (case-insensitive). communities.json is an
+// array of full per-community config objects, so the matched entry is returned
+// verbatim, preserving fields (scan, plugins, ...) the client response needs.
+func selectCommunityEntry(body []byte, alias string) ([]byte, error) {
+	var entries []json.RawMessage
+	if err := json.Unmarshal(bytes.TrimSpace(body), &entries); err != nil {
+		return nil, fmt.Errorf("communities list is not a JSON array: %w", err)
+	}
+
+	wanted := strings.TrimSpace(alias)
+	available := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		var meta struct {
+			Community struct {
+				Alias string `json:"alias"`
+			} `json:"community"`
+		}
+		if err := json.Unmarshal(entry, &meta); err != nil {
+			continue
+		}
+		entryAlias := strings.TrimSpace(meta.Community.Alias)
+		if entryAlias == "" {
+			continue
+		}
+		available = append(available, entryAlias)
+		if strings.EqualFold(entryAlias, wanted) {
+			return append([]byte(nil), entry...), nil
+		}
+	}
+	return nil, fmt.Errorf("community alias %q not found in communities list (available aliases: %s)", alias, strings.Join(available, ", "))
 }
 
 func clientConfigLocalOnly() bool {

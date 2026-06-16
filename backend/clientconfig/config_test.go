@@ -186,6 +186,44 @@ func TestLoadLocalOnlyUsesFallbackFile(t *testing.T) {
 	}
 }
 
+func TestSelectCommunityEntryMatchesAlias(t *testing.T) {
+	// A communities list with an unrelated community before ours.
+	list := []byte("[" + `{"community":{"alias":"other.wallet"}},` + testConfigJSON + "]")
+
+	entry, err := selectCommunityEntry(list, "test.wallet")
+	if err != nil {
+		t.Fatalf("selectCommunityEntry error = %v", err)
+	}
+	cfg, err := parse(entry, "test")
+	if err != nil {
+		t.Fatalf("parse(selected) error = %v", err)
+	}
+	if cfg.Community.Alias != "test.wallet" {
+		t.Fatalf("selected alias = %q, want test.wallet", cfg.Community.Alias)
+	}
+	if cfg.PrimaryRPCURL() != "https://80094.engine.citizenwallet.xyz" {
+		t.Fatalf("PrimaryRPCURL() = %q", cfg.PrimaryRPCURL())
+	}
+}
+
+func TestSelectCommunityEntryCaseInsensitive(t *testing.T) {
+	list := []byte("[" + testConfigJSON + "]")
+	if _, err := selectCommunityEntry(list, "TEST.WALLET"); err != nil {
+		t.Fatalf("selectCommunityEntry case-insensitive error = %v", err)
+	}
+}
+
+func TestSelectCommunityEntryNotFoundListsAliases(t *testing.T) {
+	list := []byte("[" + testConfigJSON + "]")
+	_, err := selectCommunityEntry(list, "missing.wallet")
+	if err == nil {
+		t.Fatalf("expected error for missing alias")
+	}
+	if !strings.Contains(err.Error(), "test.wallet") {
+		t.Fatalf("error should list available aliases, got: %v", err)
+	}
+}
+
 func clearExtrasEnv(t *testing.T) {
 	t.Helper()
 	for _, key := range []string{
