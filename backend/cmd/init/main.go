@@ -12,7 +12,10 @@ func main() {
 	bootstrap.LoadEnv()
 	ctx := context.Background()
 
-	pools, err := bootstrap.OpenDBPools(false)
+	// Include the Ponder pool so migrations that backfill Ponder tables (e.g.
+	// the chain-id backfill) have it available; without it those migrations
+	// would be marked complete here without running.
+	pools, err := bootstrap.OpenDBPools(true)
 	if err != nil {
 		log.Fatal(err)
 	}
