@@ -36,7 +36,7 @@ func (p *PonderDB) GetTransactionsPaginated(ctx context.Context, address string,
 	rows, err := p.db.Query(ctx, fmt.Sprintf(`
 			SELECT
 				t.id,
-				t.chain_id,
+				COALESCE(t.chain_id, 80094) AS chain_id,
 				t.hash,
 				t.amount,
 				t.timestamp,
@@ -127,7 +127,7 @@ func (p *PonderDB) GetTransactionPartiesByHash(ctx context.Context, txHash strin
 
 	row := p.db.QueryRow(ctx, `
 			SELECT
-				t.chain_id,
+				COALESCE(t.chain_id, 80094) AS chain_id,
 				t.hash,
 				t.from,
 				t.to
@@ -136,7 +136,7 @@ func (p *PonderDB) GetTransactionPartiesByHash(ctx context.Context, txHash strin
 			WHERE
 				t.hash = LOWER($1)
 			AND
-				($2::BIGINT <= 0 OR t.chain_id = $2)
+				($2::BIGINT <= 0 OR COALESCE(t.chain_id, 80094) = $2)
 			ORDER BY
 				t.timestamp DESC,
 				t.id DESC
