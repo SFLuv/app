@@ -103,6 +103,25 @@ func (p *PonderDB) BackfillTransactionChainIDs(ctx context.Context, chainID int6
 		},
 	}
 
+	// Run on a single dedicated connection with bounded lock/statement timeouts.
+	// The live indexer continuously writes these tables, so an ALTER (ACCESS
+	// EXCLUSIVE) or bulk UPDATE that can't get its lock must fail fast rather
+	// than block — otherwise it hangs the boot path before the HTTP server
+	// starts listening, the platform's health check kills the unready process,
+	// and the backend crash-loops with no logged error. Callers treat failures
+	// as non-fatal and retry on the next boot.
+	conn, err := p.db.Acquire(ctx)
+	if err != nil {
+		return fmt.Errorf("acquiring ponder connection for chain-id backfill: %w", err)
+	}
+	defer conn.Release()
+	if _, err := conn.Exec(ctx, `SET lock_timeout = '3s'`); err != nil {
+		return fmt.Errorf("setting lock_timeout: %w", err)
+	}
+	if _, err := conn.Exec(ctx, `SET statement_timeout = '120s'`); err != nil {
+		return fmt.Errorf("setting statement_timeout: %w", err)
+	}
+
 	for _, table := range tables {
 		exists, err := p.tableExists(ctx, table.name)
 		if err != nil {
@@ -112,26 +131,38 @@ func (p *PonderDB) BackfillTransactionChainIDs(ctx context.Context, chainID int6
 			continue
 		}
 
-		if _, err := p.db.Exec(ctx, fmt.Sprintf(`ALTER TABLE %s ADD COLUMN IF NOT EXISTS chain_id BIGINT`, table.name)); err != nil {
+		if _, err := conn.Exec(ctx, fmt.Sprintf(`ALTER TABLE %s ADD COLUMN IF NOT EXISTS chain_id BIGINT`, table.name)); err != nil {
 			return fmt.Errorf("error backfilling ponder table %s chain ids (alter): %w", table.name, err)
 		}
-		// Set the default first so every row the indexer inserts from here on is
-		// tagged (the current single-chain indexer does not write chain_id), which
-		// also prevents a new NULL from racing the SET NOT NULL below. chainID is a
-		// trusted int64, so inlining it in the DDL is safe. The default is changed
-		// in a later migration at the Celo cutover.
-		if _, err := p.db.Exec(ctx, fmt.Sprintf(`ALTER TABLE %s ALTER COLUMN chain_id SET DEFAULT %d`, table.name, chainID)); err != nil {
+		// Set the default (instant, metadata-only) so every row the indexer
+		// inserts from here on is tagged — the current single-chain indexer does
+		// not write chain_id. chainID is a trusted int64, safe to inline in DDL.
+		// The default is changed by a later migration at the Celo cutover.
+		//
+		// NOT NULL is intentionally NOT enforced: SET NOT NULL requires a full
+		// validate scan + ACCESS EXCLUSIVE lock that, on a large actively-written
+		// table, blocks indefinitely. Reads tolerate a NULL chain_id (treated as
+		// the active chain), so the default + best-effort backfill are enough.
+		if _, err := conn.Exec(ctx, fmt.Sprintf(`ALTER TABLE %s ALTER COLUMN chain_id SET DEFAULT %d`, table.name, chainID)); err != nil {
 			return fmt.Errorf("error backfilling ponder table %s chain ids (set default): %w", table.name, err)
 		}
-		if _, err := p.db.Exec(ctx, fmt.Sprintf(`UPDATE %s SET chain_id = $1 WHERE chain_id IS NULL`, table.name), chainID); err != nil {
-			return fmt.Errorf("error backfilling ponder table %s chain ids (update): %w", table.name, err)
-		}
-		if _, err := p.db.Exec(ctx, fmt.Sprintf(`ALTER TABLE %s ALTER COLUMN chain_id SET NOT NULL`, table.name)); err != nil {
-			return fmt.Errorf("error backfilling ponder table %s chain ids (set not null): %w", table.name, err)
+		// Backfill existing NULLs in bounded batches: a single UPDATE over a large
+		// live table takes a long lock and can hit statement_timeout. The default
+		// above stops new NULLs, so this converges.
+		for {
+			tag, err := conn.Exec(ctx, fmt.Sprintf(
+				`UPDATE %s SET chain_id = $1 WHERE ctid IN (SELECT ctid FROM %s WHERE chain_id IS NULL LIMIT 5000)`,
+				table.name, table.name), chainID)
+			if err != nil {
+				return fmt.Errorf("error backfilling ponder table %s chain ids (update): %w", table.name, err)
+			}
+			if tag.RowsAffected() == 0 {
+				break
+			}
 		}
 
 		for _, indexQuery := range table.indexes {
-			if _, err := p.db.Exec(ctx, indexQuery); err != nil {
+			if _, err := conn.Exec(ctx, indexQuery); err != nil {
 				return fmt.Errorf("error creating chain index for ponder table %s: %w", table.name, err)
 			}
 		}

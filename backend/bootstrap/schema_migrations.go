@@ -747,15 +747,18 @@ var schemaMigrations = []SchemaMigration{
 		Description: "backfill legacy Berachain chain ids on Ponder transaction tables",
 		Apply: func(ctx context.Context, pools *DBPools, appLogger *logger.LogCloser) error {
 			if pools == nil || pools.Ponder == nil {
-				return fmt.Errorf("ponder db pool is required for the ponder chain-id backfill migration")
+				if appLogger != nil {
+					appLogger.Logf("migration 1.18: ponder pool unavailable, skipping chain-id backfill (runs on server boot)")
+				}
+				return nil
 			}
-			// transfer_event/transfer_account/allowance/approval_event rows with
-			// a NULL chain_id (added by the boot backfill but never populated)
-			// 500 the chain-aware transaction reads. Tag them with the Berachain
-			// id; idempotent (WHERE chain_id IS NULL), runs once.
+			// Non-fatal: a Ponder backfill failure (e.g. lock contention with the
+			// live indexer) must never crash the API boot and take /config down.
+			// The boot-time backfill retries idempotently and reads tolerate a
+			// NULL chain_id, so it is safe to continue.
 			ponderDb := db.Ponder(pools.Ponder, appLogger)
-			if err := ponderDb.BackfillTransactionChainIDs(ctx, legacyBerachainChainID); err != nil {
-				return fmt.Errorf("backfilling ponder transaction chain ids: %w", err)
+			if err := ponderDb.BackfillTransactionChainIDs(ctx, legacyBerachainChainID); err != nil && appLogger != nil {
+				appLogger.Logf("migration 1.18: ponder chain-id backfill failed (non-fatal): %v", err)
 			}
 			return nil
 		},
