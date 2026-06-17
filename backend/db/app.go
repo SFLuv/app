@@ -2407,6 +2407,7 @@ func (s *AppDB) CreateTables() error {
 			token TEXT NOT NULL,
 			address TEXT NOT NULL,
 			ponder_hook_id INTEGER,
+			installation_id_hash TEXT NOT NULL DEFAULT '',
 			preference_enabled BOOLEAN NOT NULL DEFAULT true,
 			device_registered BOOLEAN NOT NULL DEFAULT true,
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -2420,6 +2421,9 @@ func (s *AppDB) CreateTables() error {
 			ON mobile_push_subscriptions(owner);
 		CREATE INDEX IF NOT EXISTS mobile_push_subscriptions_owner_token_idx
 			ON mobile_push_subscriptions(owner, token);
+		CREATE INDEX IF NOT EXISTS mobile_push_subscriptions_owner_installation_idx
+			ON mobile_push_subscriptions(owner, installation_id_hash)
+			WHERE installation_id_hash <> '';
 		CREATE INDEX IF NOT EXISTS mobile_push_subscriptions_address_idx
 			ON mobile_push_subscriptions(address);
 		CREATE INDEX IF NOT EXISTS mobile_push_subscriptions_token_idx
@@ -2445,6 +2449,9 @@ func (s *AppDB) CreateTables() error {
 		ADD COLUMN IF NOT EXISTS device_registered BOOLEAN NOT NULL DEFAULT true;
 
 		ALTER TABLE mobile_push_subscriptions
+		ADD COLUMN IF NOT EXISTS installation_id_hash TEXT NOT NULL DEFAULT '';
+
+		ALTER TABLE mobile_push_subscriptions
 		ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
 
 		CREATE INDEX IF NOT EXISTS mobile_push_subscriptions_ponder_hook_idx
@@ -2452,6 +2459,9 @@ func (s *AppDB) CreateTables() error {
 			WHERE ponder_hook_id IS NOT NULL;
 		CREATE INDEX IF NOT EXISTS mobile_push_subscriptions_owner_token_idx
 			ON mobile_push_subscriptions(owner, token);
+		CREATE INDEX IF NOT EXISTS mobile_push_subscriptions_owner_installation_idx
+			ON mobile_push_subscriptions(owner, installation_id_hash)
+			WHERE installation_id_hash <> '';
 	`)
 	if err != nil {
 		return fmt.Errorf("error altering mobile push subscription hook columns: %s", err)

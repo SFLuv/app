@@ -104,6 +104,13 @@ func pushInactiveReason(preferenceEnabled *bool, deviceRegistered *bool, fallbac
 	return deleteReasonPonderDelete
 }
 
+func hashMobilePushInstallationID(rawInstallationID string) (string, error) {
+	if strings.TrimSpace(rawInstallationID) == "" {
+		return "", nil
+	}
+	return hashMerchantModeInstallationID(rawInstallationID)
+}
+
 func collectDisabledPushAddresses(rows pgx.Rows, addresses map[string]struct{}) error {
 	defer rows.Close()
 
@@ -129,6 +136,7 @@ func (a *AppDB) SyncMobilePushSubscriptions(
 	owner string,
 	token string,
 	addresses []string,
+	installationID string,
 	ponderHookIDsByAddress map[string]int,
 	preferenceEnabled *bool,
 	deviceRegistered *bool,
@@ -136,6 +144,10 @@ func (a *AppDB) SyncMobilePushSubscriptions(
 ) ([]string, error) {
 	normalizedToken := normalizePushToken(token)
 	normalizedAddresses := normalizePushAddresses(addresses)
+	installationIDHash, err := hashMobilePushInstallationID(installationID)
+	if err != nil {
+		return nil, err
+	}
 	disabledAddresses := make(map[string]struct{})
 	preferenceEnabledArg := nullableBool(preferenceEnabled)
 	deviceRegisteredArg := nullableBool(deviceRegistered)
@@ -170,6 +182,34 @@ func (a *AppDB) SyncMobilePushSubscriptions(
 		return nil, fmt.Errorf("error reading cleared push subscriptions for other owners: %w", err)
 	}
 
+	if installationIDHash != "" {
+		rows, err := tx.Query(ctx, `
+			UPDATE mobile_push_subscriptions
+			SET
+				active = FALSE,
+				device_registered = FALSE,
+				delete_date = $4::TIMESTAMPTZ,
+				delete_reason = $5::TEXT,
+				updated_at = NOW()
+			WHERE
+				owner = $1
+			AND
+				installation_id_hash = $2
+			AND
+				token <> $3
+			AND
+				active = TRUE
+			RETURNING
+				address;
+		`, owner, installationIDHash, normalizedToken, time.Now().UTC().Add(accountDeletionGracePeriod), deleteReasonPushDeviceUnregistered)
+		if err != nil {
+			return nil, fmt.Errorf("error clearing stale push tokens for installation: %w", err)
+		}
+		if err := collectPushAddresses(rows, disabledAddresses); err != nil {
+			return nil, fmt.Errorf("error reading stale push tokens for installation: %w", err)
+		}
+	}
+
 	if len(normalizedAddresses) == 0 && (preferenceEnabled != nil || deviceRegistered != nil) {
 		rows, err := tx.Query(ctx, `
 			WITH candidates AS (
@@ -189,15 +229,16 @@ func (a *AppDB) SyncMobilePushSubscriptions(
 				preference_enabled = COALESCE($3::BOOLEAN, mps.preference_enabled),
 				device_registered = COALESCE($4::BOOLEAN, mps.device_registered),
 				active = COALESCE($3::BOOLEAN, mps.preference_enabled) AND COALESCE($4::BOOLEAN, mps.device_registered),
+				installation_id_hash = COALESCE(NULLIF($5::TEXT, ''), mps.installation_id_hash),
 				delete_date = CASE
 					WHEN COALESCE($3::BOOLEAN, mps.preference_enabled) AND COALESCE($4::BOOLEAN, mps.device_registered)
 						THEN NULL::TIMESTAMPTZ
-					ELSE $5::TIMESTAMPTZ
+					ELSE $6::TIMESTAMPTZ
 				END,
 				delete_reason = CASE
 					WHEN COALESCE($3::BOOLEAN, mps.preference_enabled) AND COALESCE($4::BOOLEAN, mps.device_registered)
 						THEN NULL::TEXT
-					ELSE $6::TEXT
+					ELSE $7::TEXT
 				END,
 				updated_at = NOW()
 			FROM
@@ -208,7 +249,7 @@ func (a *AppDB) SyncMobilePushSubscriptions(
 				mps.address,
 				candidates.was_active,
 				mps.active;
-		`, owner, normalizedToken, preferenceEnabledArg, deviceRegisteredArg, time.Now().UTC().Add(accountDeletionGracePeriod), inactiveReason)
+		`, owner, normalizedToken, preferenceEnabledArg, deviceRegisteredArg, installationIDHash, time.Now().UTC().Add(accountDeletionGracePeriod), inactiveReason)
 		if err != nil {
 			return nil, fmt.Errorf("error updating mobile push registration state: %w", err)
 		}
@@ -283,16 +324,17 @@ func (a *AppDB) SyncMobilePushSubscriptions(
 				preference_enabled = COALESCE($4::BOOLEAN, mps.preference_enabled),
 				device_registered = COALESCE($5::BOOLEAN, mps.device_registered),
 				active = COALESCE($4::BOOLEAN, mps.preference_enabled) AND COALESCE($5::BOOLEAN, mps.device_registered),
-				ponder_hook_id = COALESCE($6::INTEGER, mps.ponder_hook_id),
+				installation_id_hash = COALESCE(NULLIF($6::TEXT, ''), mps.installation_id_hash),
+				ponder_hook_id = COALESCE($7::INTEGER, mps.ponder_hook_id),
 				delete_date = CASE
 					WHEN COALESCE($4::BOOLEAN, mps.preference_enabled) AND COALESCE($5::BOOLEAN, mps.device_registered)
 						THEN NULL::TIMESTAMPTZ
-					ELSE $7::TIMESTAMPTZ
+					ELSE $8::TIMESTAMPTZ
 				END,
 				delete_reason = CASE
 					WHEN COALESCE($4::BOOLEAN, mps.preference_enabled) AND COALESCE($5::BOOLEAN, mps.device_registered)
 						THEN NULL::TEXT
-					ELSE $8::TEXT
+					ELSE $9::TEXT
 				END,
 				updated_at = NOW()
 			FROM
@@ -303,7 +345,7 @@ func (a *AppDB) SyncMobilePushSubscriptions(
 				mps.address,
 				candidates.was_active,
 				mps.active;
-		`, owner, normalizedToken, normalizedAddresses, preferenceEnabledArg, deviceRegisteredArg, nil, time.Now().UTC().Add(accountDeletionGracePeriod), inactiveReason)
+		`, owner, normalizedToken, normalizedAddresses, preferenceEnabledArg, deviceRegisteredArg, installationIDHash, nil, time.Now().UTC().Add(accountDeletionGracePeriod), inactiveReason)
 		if err != nil {
 			return nil, fmt.Errorf("error updating mobile push subscriptions: %w", err)
 		}
@@ -334,6 +376,7 @@ func (a *AppDB) SyncMobilePushSubscriptions(
 				token,
 				address,
 				ponder_hook_id,
+				installation_id_hash,
 				preference_enabled,
 				device_registered,
 				active
@@ -342,13 +385,15 @@ func (a *AppDB) SyncMobilePushSubscriptions(
 				$2,
 				$3,
 				$4,
-				TRUE,
 				$5,
-				$5
+				TRUE,
+				$6,
+				$6
 			)
 			ON CONFLICT (token, address) DO UPDATE
 			SET
 				owner = EXCLUDED.owner,
+				installation_id_hash = COALESCE(NULLIF(EXCLUDED.installation_id_hash, ''), mobile_push_subscriptions.installation_id_hash),
 				preference_enabled = TRUE,
 				device_registered = EXCLUDED.device_registered,
 				active = EXCLUDED.device_registered,
@@ -356,7 +401,7 @@ func (a *AppDB) SyncMobilePushSubscriptions(
 				delete_date = NULL,
 				delete_reason = NULL,
 				updated_at = NOW();
-		`, owner, normalizedToken, address, ponderHookID, nextDeviceRegistered); err != nil {
+		`, owner, normalizedToken, address, ponderHookID, installationIDHash, nextDeviceRegistered); err != nil {
 			return nil, fmt.Errorf("error upserting mobile push subscription for %s: %w", address, err)
 		}
 	}
@@ -386,6 +431,7 @@ func scanMobilePushSubscriptions(
 			&subscription.Active,
 			&subscription.PreferenceEnabled,
 			&subscription.DeviceRegistered,
+			&subscription.InstallationIDHash,
 			&ponderHookID,
 		); err != nil {
 			return nil, err
@@ -416,6 +462,7 @@ func scanMobilePushSubscriptionRecord(row pgx.Row) (*structs.MobilePushSubscript
 		&subscription.Active,
 		&subscription.PreferenceEnabled,
 		&subscription.DeviceRegistered,
+		&subscription.InstallationIDHash,
 		&ponderHookID,
 	)
 	if err != nil {
@@ -446,6 +493,7 @@ func (a *AppDB) GetMobilePushSubscriptionsByOwnerToken(
 			active,
 			preference_enabled,
 			device_registered,
+			installation_id_hash,
 			ponder_hook_id
 		FROM
 			mobile_push_subscriptions
@@ -490,6 +538,7 @@ func (a *AppDB) GetMobilePushSubscription(
 			active,
 			preference_enabled,
 			device_registered,
+			installation_id_hash,
 			ponder_hook_id
 		FROM
 			mobile_push_subscriptions
@@ -515,6 +564,7 @@ func (a *AppDB) GetMobilePushSubscriptionsByUser(
 			active,
 			preference_enabled,
 			device_registered,
+			installation_id_hash,
 			ponder_hook_id
 		FROM
 			mobile_push_subscriptions
@@ -543,6 +593,7 @@ func (a *AppDB) GetMobilePushSubscriptionsByAddress(
 			active,
 			preference_enabled,
 			device_registered,
+			installation_id_hash,
 			ponder_hook_id
 		FROM
 			mobile_push_subscriptions
