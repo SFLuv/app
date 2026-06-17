@@ -42,7 +42,7 @@ func NewMinterService(appDb *db.AppDB, log *logger.LogCloser, config *clientconf
 		return service
 	}
 
-	rpcURL := strings.TrimSpace(config.PrimaryRPCURL())
+	rpcURL := strings.TrimSpace(config.ReadRPCURL())
 	tokenID := strings.TrimSpace(primaryToken.Address)
 	if rpcURL == "" || tokenID == "" {
 		service.logf("minter sync disabled: missing primary RPC URL or token address in client config")

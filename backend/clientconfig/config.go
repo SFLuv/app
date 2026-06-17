@@ -154,6 +154,22 @@ func (c *Config) PrimaryRPCURL() string {
 	return strings.TrimSpace(chain.Node.URL)
 }
 
+// ReadRPCURL is the JSON-RPC endpoint to use for general read calls
+// (eth_call, eth_chainId, eth_getCode, ...). The Citizen Wallet engine at
+// PrimaryRPCURL() is a curated RPC reserved for the AA bundler and rejects
+// those methods, so a full node RPC (sourced from the RPC_URL env into
+// extras.rpc_url) takes precedence when present, falling back to the engine
+// URL only if no read RPC is configured.
+func (c *Config) ReadRPCURL() string {
+	if c == nil {
+		return ""
+	}
+	if url := strings.TrimSpace(c.Extras.ReadRPCURL); url != "" {
+		return url
+	}
+	return c.PrimaryRPCURL()
+}
+
 func loadRemote(ctx context.Context) (*Config, error) {
 	// An explicit single-community config URL wins when set. Otherwise fetch the
 	// published communities list and select our community by alias: the

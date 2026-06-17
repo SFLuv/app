@@ -66,7 +66,7 @@ func NewRedeemerService(appDb *db.AppDB, log *logger.LogCloser, config *clientco
 		return service
 	}
 
-	rpcURL := strings.TrimSpace(config.PrimaryRPCURL())
+	rpcURL := strings.TrimSpace(config.ReadRPCURL())
 	tokenID := strings.TrimSpace(primaryToken.Address)
 	redeemerAdminKey := strings.TrimPrefix(strings.TrimSpace(os.Getenv("REDEEMER_ADMIN_KEY")), "0x")
 	redeemerAdminAddress := strings.TrimSpace(os.Getenv("REDEEMER_ADMIN_ADDRESS"))

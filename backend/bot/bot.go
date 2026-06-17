@@ -84,9 +84,9 @@ func Init(config *clientconfig.Config) (*Bot, error) {
 
 	pkey := os.Getenv("BOT_KEY")
 	tokenId := token.Address
-	rpcUrl := config.PrimaryRPCURL()
+	rpcUrl := config.ReadRPCURL()
 	if strings.TrimSpace(rpcUrl) == "" {
-		return nil, fmt.Errorf("primary RPC URL is missing from client config")
+		return nil, fmt.Errorf("read RPC URL is missing from client config")
 	}
 
 	client, err := ethclient.Dial(rpcUrl)
