@@ -549,6 +549,7 @@ func (a *AppService) SyncPonderPushSubscriptions(w http.ResponseWriter, r *http.
 		*userDid,
 		req.Token,
 		syncAddresses,
+		req.InstallationID,
 		createdHookIDsByAddress,
 		preferenceEnabled,
 		deviceRegistered,

@@ -363,6 +363,7 @@ var schemaMigrations = []SchemaMigration{
 					token TEXT NOT NULL,
 					address TEXT NOT NULL,
 					ponder_hook_id INTEGER,
+					installation_id_hash TEXT NOT NULL DEFAULT '',
 					preference_enabled BOOLEAN NOT NULL DEFAULT true,
 					device_registered BOOLEAN NOT NULL DEFAULT true,
 					created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -376,6 +377,9 @@ var schemaMigrations = []SchemaMigration{
 					ON mobile_push_subscriptions(owner);
 				CREATE INDEX IF NOT EXISTS mobile_push_subscriptions_owner_token_idx
 					ON mobile_push_subscriptions(owner, token);
+				CREATE INDEX IF NOT EXISTS mobile_push_subscriptions_owner_installation_idx
+					ON mobile_push_subscriptions(owner, installation_id_hash)
+					WHERE installation_id_hash <> '';
 				CREATE INDEX IF NOT EXISTS mobile_push_subscriptions_address_idx
 					ON mobile_push_subscriptions(address);
 				CREATE INDEX IF NOT EXISTS mobile_push_subscriptions_token_idx
@@ -760,6 +764,24 @@ var schemaMigrations = []SchemaMigration{
 			if err := ponderDb.BackfillTransactionChainIDs(ctx, legacyBerachainChainID); err != nil && appLogger != nil {
 				appLogger.Logf("migration 1.18: ponder chain-id backfill failed (non-fatal): %v", err)
 			}
+			return nil
+		},
+	},
+	{
+		Version:     "1.19",
+		Description: "scope mobile push subscriptions by app installation",
+		Apply: func(ctx context.Context, pools *DBPools, appLogger *logger.LogCloser) error {
+			if _, err := pools.App.Exec(ctx, `
+				ALTER TABLE mobile_push_subscriptions
+				ADD COLUMN IF NOT EXISTS installation_id_hash TEXT NOT NULL DEFAULT '';
+
+				CREATE INDEX IF NOT EXISTS mobile_push_subscriptions_owner_installation_idx
+					ON mobile_push_subscriptions(owner, installation_id_hash)
+					WHERE installation_id_hash <> '';
+			`); err != nil {
+				return err
+			}
+
 			return nil
 		},
 	},
