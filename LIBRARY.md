@@ -38,12 +38,34 @@ Use the agent-work-coordinator skill or `scripts/coordinator.py` to edit this fi
             "backend/db/app.go"
           ],
           "note": "checkout requested"
+        },
+        {
+          "at": "2026-06-17T13:44:39Z",
+          "bumped": [],
+          "checked_out": [
+            "AGENTS.md",
+            "backend/structs/app_ponder.go",
+            "backend/handlers/app_ponder.go",
+            "backend/db/app_mobile_push_subscription.go",
+            "backend/bootstrap/schema_migrations.go",
+            "backend/db/app.go"
+          ],
+          "files": [
+            "backend/structs/app_ponder.go",
+            "backend/handlers/app_ponder.go",
+            "backend/db/app_mobile_push_subscription.go",
+            "backend/bootstrap/schema_migrations.go",
+            "backend/db/app.go"
+          ],
+          "note": "implementation drafted; formatting and tests next",
+          "queued": [],
+          "remote_state": "up-to-date"
         }
       ],
       "completed_files": [],
       "goal": "Add backend installation ID scoping for mobile push subscriptions",
       "id": "push-installation-id-backend",
-      "last_checkin_at": "2026-06-17T13:41:56Z",
+      "last_checkin_at": "2026-06-17T13:44:39Z",
       "planned_files": [
         "AGENTS.md",
         "backend/structs/app_ponder.go",
@@ -52,13 +74,14 @@ Use the agent-work-coordinator skill or `scripts/coordinator.py` to edit this fi
         "backend/bootstrap/schema_migrations.go",
         "backend/db/app.go"
       ],
-      "progress_note": "checkout requested",
+      "progress_note": "implementation drafted; formatting and tests next",
       "queued": [],
-      "started_at": "2026-06-17T13:41:56Z"
+      "started_at": "2026-06-17T13:41:56Z",
+      "updated_at": "2026-06-17T13:44:39Z"
     }
   },
   "queues": {},
-  "updated_at": "2026-06-17T13:41:56Z",
+  "updated_at": "2026-06-17T13:44:39Z",
   "version": 1
 }
 agent-work-coordinator-state -->
@@ -69,9 +92,9 @@ agent-work-coordinator-state -->
 
 - Agent: codex [36f065ea-f4c0-4c98-897f-2c1705c87822]
 - Started: 2026-06-17T13:41:56Z
-- Last check-in: 2026-06-17T13:41:56Z
+- Last check-in: 2026-06-17T13:44:39Z
 - Goal: Add backend installation ID scoping for mobile push subscriptions
-- Progress: checkout requested
+- Progress: implementation drafted; formatting and tests next
 - Planned paths:
   - `AGENTS.md`
   - `backend/structs/app_ponder.go`
@@ -94,6 +117,7 @@ _None._
 _None._
 - Recent check-ins:
   - 2026-06-17T13:41:56Z: checkout requested (`AGENTS.md, backend/structs/app_ponder.go, backend/handlers/app_ponder.go, backend/db/app_mobile_push_subscription.go, backend/bootstrap/schema_migrations.go, backend/db/app.go`)
+  - 2026-06-17T13:44:39Z: implementation drafted; formatting and tests next (`backend/structs/app_ponder.go, backend/handlers/app_ponder.go, backend/db/app_mobile_push_subscription.go, backend/bootstrap/schema_migrations.go, backend/db/app.go`)
 
 ## File Checkouts
 
