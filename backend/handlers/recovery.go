@@ -26,67 +26,57 @@ func (s *BotService) recoveryClaimExpiry() time.Duration {
 	return time.Duration(mins) * time.Minute
 }
 
-// StartRecoveryReconciler runs a background loop that periodically reconciles
-// recovery payouts: claims whose stored tx hash never confirmed (past the expiry
-// window) are freed back to unclaimed so the holder can claim again.
-func (s *BotService) StartRecoveryReconciler(ctx context.Context) {
-	if s == nil {
-		return
+// reconcileRecoveryBalance lazily reconciles a single recovery record at read
+// time: if it was marked claimed but the payout tx never confirmed within the
+// expiry window, the balance is freed back to unclaimed so the holder can claim
+// again. Only a transaction that is definitively NOT on-chain triggers a reset,
+// so a payout that actually landed is never re-sent. Returns the (possibly
+// refreshed) record. Verification/transient errors leave the claim untouched
+// rather than blocking the request.
+func (s *BotService) reconcileRecoveryBalance(ctx context.Context, rb *structs.RecoveryBalance) *structs.RecoveryBalance {
+	if rb == nil || s.bot == nil {
+		return rb
 	}
-	go func() {
-		ticker := time.NewTicker(10 * time.Minute)
-		defer ticker.Stop()
-		for {
-			runCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
-			if err := s.ReconcileRecoveryClaims(runCtx); err != nil {
-				fmt.Printf("error reconciling recovery claims: %s\n", err)
-			}
-			cancel()
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-			}
-		}
-	}()
-}
+	if rb.ClaimStatus != structs.RecoveryStatusClaimed ||
+		strings.TrimSpace(rb.ClaimTxHash) == "" ||
+		rb.ClaimedAt == nil {
+		return rb
+	}
+	// Still inside the confirmation window — give the tx time to land.
+	if time.Since(*rb.ClaimedAt) < s.recoveryClaimExpiry() {
+		return rb
+	}
 
-// ReconcileRecoveryClaims re-checks claimed payouts past the expiry window. Only
-// claims whose transaction is definitively NOT on-chain are reset (to avoid ever
-// double-sending a payout that actually landed).
-func (s *BotService) ReconcileRecoveryClaims(ctx context.Context) error {
-	if s == nil || s.db == nil || s.bot == nil {
-		return nil
+	amount, ok := new(big.Int).SetString(strings.TrimSpace(rb.Amount), 10)
+	if !ok {
+		return rb
 	}
-	before := time.Now().Add(-s.recoveryClaimExpiry())
-	claims, err := s.db.RecoveryClaimsToReconcile(ctx, before)
+	res, err := s.bot.VerifyTransferBaseUnits(ctx, rb.ClaimTxHash, rb.ClaimedBy, amount)
 	if err != nil {
-		return err
+		fmt.Printf("recovery reconcile: error verifying tx %s for %s: %s\n", rb.ClaimTxHash, rb.Address, err)
+		return rb
 	}
-	for _, c := range claims {
-		amount, ok := new(big.Int).SetString(strings.TrimSpace(c.Amount), 10)
-		if !ok {
-			continue
-		}
-		res, err := s.bot.VerifyTransferBaseUnits(ctx, c.ClaimTxHash, c.ClaimedBy, amount)
-		if err != nil {
-			fmt.Printf("recovery reconcile: error verifying tx %s for %s: %s\n", c.ClaimTxHash, c.Address, err)
-			continue
-		}
-		if res != nil && res.Found {
-			// Transaction is on-chain (confirmed or pending); leave the claim.
-			continue
-		}
-		reset, err := s.db.ResetRecoveryClaim(ctx, c.Address, c.ClaimTxHash)
-		if err != nil {
-			fmt.Printf("recovery reconcile: error resetting %s: %s\n", c.Address, err)
-			continue
-		}
-		if reset {
-			fmt.Printf("recovery reconcile: reset %s to unclaimed (tx %s never confirmed)\n", c.Address, c.ClaimTxHash)
-		}
+	if res != nil && res.Found {
+		// Transaction is on-chain (confirmed or pending); keep the claim.
+		return rb
 	}
-	return nil
+
+	reset, err := s.db.ResetRecoveryClaim(ctx, rb.Address, rb.ClaimTxHash)
+	if err != nil {
+		fmt.Printf("recovery reconcile: error resetting %s: %s\n", rb.Address, err)
+		return rb
+	}
+	if !reset {
+		// A concurrent claim moved the row; keep what we have.
+		return rb
+	}
+	fmt.Printf("recovery reconcile: reset %s to unclaimed (tx %s never confirmed)\n", rb.Address, rb.ClaimTxHash)
+
+	fresh, err := s.db.GetRecoveryBalance(ctx, rb.Address)
+	if err != nil || fresh == nil {
+		return rb
+	}
+	return fresh
 }
 
 // RecoveryPreview returns the claimable balance for a sigAuth-verified account
@@ -134,6 +124,13 @@ func (s *BotService) RecoveryPreview(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, structs.RecoveryPreviewResponse{Account: account, Amount: "0", Message: "no recovery balance for this account"})
 		return
 	}
+
+	// Reconcile a stale claim (tx that never confirmed) so the preview reflects
+	// a balance the holder can actually claim again.
+	reconcileCtx, cancelReconcile := context.WithTimeout(r.Context(), 20*time.Second)
+	rb = s.reconcileRecoveryBalance(reconcileCtx, rb)
+	cancelReconcile()
+
 	writeJSON(w, http.StatusOK, structs.RecoveryPreviewResponse{
 		Account: account,
 		Amount:  rb.Amount,
@@ -211,6 +208,14 @@ func (s *BotService) RecoveryClaim(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, structs.RecoveryClaimResponse{Message: "no recovery balance for this account"})
 		return
 	}
+
+	// Reconcile a stale claim (a payout tx that never confirmed past the expiry
+	// window) before deciding whether this claim can proceed, so a holder isn't
+	// permanently blocked by a dropped transaction.
+	reconcileCtx, cancelReconcile := context.WithTimeout(r.Context(), 20*time.Second)
+	rb = s.reconcileRecoveryBalance(reconcileCtx, rb)
+	cancelReconcile()
+
 	if rb.ClaimStatus == structs.RecoveryStatusClaimed {
 		writeJSON(w, http.StatusConflict, structs.RecoveryClaimResponse{
 			Claimed: true, Amount: rb.Amount, TxHash: rb.ClaimTxHash, Message: "balance already claimed",

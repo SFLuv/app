@@ -284,7 +284,6 @@ func NewServerHandler(ctx context.Context, pools *DBPools, appLogger *logger.Log
 	minter := handlers.NewMinterService(appDb, appLogger, clientConfig)
 
 	s := handlers.NewBotService(botDb, appDb, botClient, w9, affiliateScheduler, activeChainID, clientConfig.ReadRPCURL())
-	s.StartRecoveryReconciler(ctx)
 	a := handlers.NewAppService(appDb, appLogger, w9, clientConfig)
 	a.SetBotService(s)
 	a.SetRedeemerService(redeemer)

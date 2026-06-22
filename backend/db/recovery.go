@@ -137,47 +137,6 @@ func (s *BotDB) recoveryAllocatedWholeUnits(ctx context.Context) (uint64, error)
 	return whole.Uint64(), nil
 }
 
-// RecoveryClaimsToReconcile returns claimed balances whose payout tx was
-// recorded before `before` (i.e. past the expiry window), so the reconciler can
-// re-check whether the transaction ever confirmed.
-func (s *BotDB) RecoveryClaimsToReconcile(ctx context.Context, before time.Time) ([]*structs.RecoveryBalance, error) {
-	exists, err := s.tableExists(ctx, "recovery_balances")
-	if err != nil || !exists {
-		return nil, err
-	}
-
-	rows, err := s.db.Query(ctx, `
-		SELECT address, chain_id, amount::text, claim_status,
-		       COALESCE(claimed_by, ''), COALESCE(claim_tx_hash, ''), claimed_at
-		FROM recovery_balances
-		WHERE claim_status = 'claimed'
-		  AND COALESCE(claim_tx_hash, '') <> ''
-		  AND claimed_at IS NOT NULL
-		  AND claimed_at < $1
-		ORDER BY claimed_at ASC
-		LIMIT 200;
-	`, before)
-	if err != nil {
-		return nil, fmt.Errorf("error querying recovery claims to reconcile: %w", err)
-	}
-	defer rows.Close()
-
-	claims := make([]*structs.RecoveryBalance, 0)
-	for rows.Next() {
-		rb := &structs.RecoveryBalance{}
-		var claimedAt *time.Time
-		if err := rows.Scan(&rb.Address, &rb.ChainID, &rb.Amount, &rb.ClaimStatus, &rb.ClaimedBy, &rb.ClaimTxHash, &claimedAt); err != nil {
-			return nil, fmt.Errorf("error scanning recovery claim to reconcile: %w", err)
-		}
-		rb.ClaimedAt = claimedAt
-		claims = append(claims, rb)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error reading recovery claims to reconcile: %w", err)
-	}
-	return claims, nil
-}
-
 // ResetRecoveryClaim frees a claimed balance back to unclaimed so it can be
 // re-claimed, but only if it is still claimed with the same tx hash that was
 // verified as never-confirmed (guards against racing a concurrent re-claim).
