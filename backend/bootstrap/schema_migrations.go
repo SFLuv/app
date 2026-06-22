@@ -785,6 +785,33 @@ var schemaMigrations = []SchemaMigration{
 			return nil
 		},
 	},
+	{
+		Version:     "1.20",
+		Description: "record non-migrated holder balances for post-migration recovery claims",
+		Apply: func(ctx context.Context, pools *DBPools, appLogger *logger.LogCloser) error {
+			if _, err := pools.Bot.Exec(ctx, `
+				CREATE TABLE IF NOT EXISTS recovery_balances(
+					address TEXT PRIMARY KEY,
+					chain_id BIGINT NOT NULL,
+					amount NUMERIC(78, 0) NOT NULL,
+					claim_status TEXT NOT NULL DEFAULT 'unclaimed',
+					claimed_by TEXT,
+					claimed_by_user_id TEXT,
+					claim_tx_hash TEXT,
+					claim_tx_chain_id BIGINT,
+					claimed_at TIMESTAMPTZ,
+					created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+					updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+				);
+				CREATE INDEX IF NOT EXISTS recovery_balances_status_idx
+					ON recovery_balances(claim_status);
+			`); err != nil {
+				return err
+			}
+
+			return nil
+		},
+	},
 }
 
 type versionTarget struct {

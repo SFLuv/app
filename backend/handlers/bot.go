@@ -30,11 +30,12 @@ type BotService struct {
 	w9                 *W9Service
 	affiliateScheduler *AffiliateScheduler
 	activeChainID      int64
+	readRPCURL         string
 }
 
 var redeemCodeUUIDPattern = regexp.MustCompile(`(?i)[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}`)
 
-func NewBotService(db *db.BotDB, appDb *db.AppDB, bot bot.IBot, w9 *W9Service, affiliateScheduler *AffiliateScheduler, activeChainID int64) *BotService {
+func NewBotService(db *db.BotDB, appDb *db.AppDB, bot bot.IBot, w9 *W9Service, affiliateScheduler *AffiliateScheduler, activeChainID int64, readRPCURL string) *BotService {
 	return &BotService{
 		db:                 db,
 		appDb:              appDb,
@@ -42,6 +43,7 @@ func NewBotService(db *db.BotDB, appDb *db.AppDB, bot bot.IBot, w9 *W9Service, a
 		w9:                 w9,
 		affiliateScheduler: affiliateScheduler,
 		activeChainID:      activeChainID,
+		readRPCURL:         readRPCURL,
 	}
 }
 

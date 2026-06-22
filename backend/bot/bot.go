@@ -24,7 +24,9 @@ type IBot interface {
 	Key() string
 	Send(amount uint64, address string) error
 	SubmitTransfer(amount uint64, address string) (string, error)
+	SubmitTransferBaseUnits(amount *big.Int, address string) (string, error)
 	VerifyTransfer(ctx context.Context, txHash string, address string, amount uint64) (*TransferVerificationResult, error)
+	VerifyTransferBaseUnits(ctx context.Context, txHash string, address string, amount *big.Int) (*TransferVerificationResult, error)
 	Drain(address common.Address) error
 	Balance() (*big.Int, error)
 }
@@ -125,13 +127,22 @@ func (b *Bot) deriveFromAddress() (common.Address, error) {
 }
 
 func (b *Bot) submitTransferTx(amount uint64, address string) (*types.Transaction, error) {
-	if !common.IsHexAddress(address) {
-		return nil, fmt.Errorf("invalid recipient address: %s", address)
-	}
-
 	tokenAmount, err := b.tokenAmountFromWholeUnits(amount)
 	if err != nil {
 		return nil, err
+	}
+	return b.submitTransferTxBaseUnits(tokenAmount, address)
+}
+
+// submitTransferTxBaseUnits transfers an exact base-unit token amount without
+// whole-unit scaling. Used for migration recovery payouts, which must pay a
+// holder's stored fractional balance precisely.
+func (b *Bot) submitTransferTxBaseUnits(tokenAmount *big.Int, address string) (*types.Transaction, error) {
+	if tokenAmount == nil || tokenAmount.Sign() <= 0 {
+		return nil, fmt.Errorf("transfer amount must be positive")
+	}
+	if !common.IsHexAddress(address) {
+		return nil, fmt.Errorf("invalid recipient address: %s", address)
 	}
 	toAddress := common.HexToAddress(address)
 	tokenAddress := common.HexToAddress(b.tokenId)
@@ -215,7 +226,34 @@ func (b *Bot) SubmitTransfer(amount uint64, address string) (string, error) {
 	return tx.Hash().Hex(), nil
 }
 
+// SubmitTransferBaseUnits sends an exact base-unit amount and returns the tx
+// hash. Used by the migration recovery flow to pay precise stored balances.
+func (b *Bot) SubmitTransferBaseUnits(amount *big.Int, address string) (string, error) {
+	tx, err := b.submitTransferTxBaseUnits(amount, address)
+	if err != nil {
+		return "", err
+	}
+	return tx.Hash().Hex(), nil
+}
+
 func (b *Bot) VerifyTransfer(ctx context.Context, txHash string, address string, amount uint64) (*TransferVerificationResult, error) {
+	tokenAmount, err := b.tokenAmountFromWholeUnits(amount)
+	if err != nil {
+		return nil, err
+	}
+	return b.verifyTransferReceipt(ctx, txHash, address, tokenAmount)
+}
+
+// VerifyTransferBaseUnits verifies a transfer of an exact base-unit amount. Used
+// by recovery reconciliation, whose payouts are not whole-token amounts.
+func (b *Bot) VerifyTransferBaseUnits(ctx context.Context, txHash string, address string, amount *big.Int) (*TransferVerificationResult, error) {
+	if amount == nil {
+		return nil, fmt.Errorf("amount is required")
+	}
+	return b.verifyTransferReceipt(ctx, txHash, address, amount)
+}
+
+func (b *Bot) verifyTransferReceipt(ctx context.Context, txHash string, address string, tokenAmount *big.Int) (*TransferVerificationResult, error) {
 	result := &TransferVerificationResult{}
 	txHash = strings.TrimSpace(txHash)
 	if txHash == "" {
@@ -251,10 +289,6 @@ func (b *Bot) VerifyTransfer(ctx context.Context, txHash string, address string,
 		return result, nil
 	}
 
-	tokenAmount, err := b.tokenAmountFromWholeUnits(amount)
-	if err != nil {
-		return nil, err
-	}
 	fromAddress, err := b.deriveFromAddress()
 	if err != nil {
 		return nil, err
