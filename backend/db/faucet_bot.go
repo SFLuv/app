@@ -870,7 +870,14 @@ func (s *BotDB) AllocatedBalance(ctx context.Context) (uint64, error) {
 		return 0, err
 	}
 
-	return allocated, nil
+	// Unclaimed migration recovery balances are reserved against the faucet so
+	// workflow payouts cannot spend tokens earmarked for recovery claims.
+	recovery, err := s.recoveryAllocatedWholeUnits(ctx)
+	if err != nil {
+		return 0, err
+	}
+
+	return allocated + recovery, nil
 }
 
 func (s *BotDB) AllocatedBalanceByOwner(ctx context.Context, owner string) (uint64, error) {
