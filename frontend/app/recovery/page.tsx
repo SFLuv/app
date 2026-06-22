@@ -184,6 +184,12 @@ const Page = () => {
     </div>
   )
 
+  const ReturnToMap = () => (
+    <Button variant="outline" className="mt-5 w-full" onClick={() => router.push("/map")}>
+      Return to map
+    </Button>
+  )
+
   return (
     <div className="min-h-screen flex items-center justify-center">
       {previewState === "loading" ? (
@@ -198,6 +204,7 @@ const Page = () => {
             This recovery link is missing or its signature could not be verified. Please reopen it from your Citizen
             Wallet app.
           </p>
+          <ReturnToMap />
         </Card>
       ) : previewState === "none" ? (
         <Card>
@@ -206,6 +213,7 @@ const Page = () => {
           <p className="mt-2 text-sm text-muted-foreground">
             This account has no recoverable SFLuv balance from the migration.
           </p>
+          <ReturnToMap />
         </Card>
       ) : previewState === "claimed" && !claimed ? (
         <Card>
@@ -214,6 +222,7 @@ const Page = () => {
           <p className="mt-2 text-sm text-muted-foreground">
             This balance has already been recovered.
           </p>
+          <ReturnToMap />
         </Card>
       ) : claimed ? (
         <Card>
