@@ -91,7 +91,6 @@ type ClientConfigResponse struct {
 
 type ClientVersionInfo struct {
 	Version string `json:"version"`
-	Build   int    `json:"build"`
 }
 
 type ClientVersionFeatures struct {
@@ -106,8 +105,6 @@ type ClientVersionResponse struct {
 	Platform      string                `json:"platform"`
 	Status        string                `json:"status"`
 	Minimum       ClientVersionInfo     `json:"minimum"`
-	Recommended   ClientVersionInfo     `json:"recommended"`
-	Current       ClientVersionInfo     `json:"current"`
 	ForceUpdate   bool                  `json:"force_update"`
 	Maintenance   bool                  `json:"maintenance"`
 	UpdateURL     string                `json:"update_url"`

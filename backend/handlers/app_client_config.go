@@ -9,6 +9,52 @@ import (
 	"github.com/SFLuv/app/backend/structs"
 )
 
+func parseClientSemver(version string) ([3]int, bool) {
+	var parsed [3]int
+	parts := strings.Split(strings.TrimSpace(version), ".")
+	if len(parts) != 3 {
+		return parsed, false
+	}
+	for index, part := range parts {
+		if part == "" {
+			return parsed, false
+		}
+		value, err := strconv.Atoi(part)
+		if err != nil || value < 0 {
+			return parsed, false
+		}
+		parsed[index] = value
+	}
+	return parsed, true
+}
+
+func normalizeMinimumClientVersion(version string) string {
+	if _, ok := parseClientSemver(version); ok {
+		return strings.TrimSpace(version)
+	}
+	return "1.0.0"
+}
+
+func clientVersionRequiresUpdate(version string, minimum string) bool {
+	client, ok := parseClientSemver(version)
+	if !ok {
+		return true
+	}
+	required, ok := parseClientSemver(minimum)
+	if !ok {
+		return false
+	}
+	for index := range client {
+		if client[index] < required[index] {
+			return true
+		}
+		if client[index] > required[index] {
+			return false
+		}
+	}
+	return false
+}
+
 func (a *AppService) GetClientConfig(w http.ResponseWriter, r *http.Request) {
 	if a == nil || a.clientConfig == nil {
 		http.Error(w, "client config is not loaded", http.StatusServiceUnavailable)
@@ -29,49 +75,24 @@ func (a *AppService) GetClientVersion(w http.ResponseWriter, r *http.Request) {
 		platform = "unknown"
 	}
 
-	build := envInt("CLIENT_DEFAULT_BUILD", 0)
-	if requestedBuild := strings.TrimSpace(r.URL.Query().Get("build")); requestedBuild != "" {
-		if parsed, err := strconv.Atoi(requestedBuild); err == nil {
-			build = parsed
-		}
-	}
 	version := strings.TrimSpace(r.URL.Query().Get("version"))
-	if version == "" {
-		version = envString("CLIENT_DEFAULT_VERSION", "0.0.0")
-	}
 
 	minimum := structs.ClientVersionInfo{
-		Version: envStringForPlatform("CLIENT_MIN_VERSION", platform, "1.0.0"),
-		Build:   envIntForPlatform("CLIENT_MIN_BUILD", platform, 1),
-	}
-	recommended := structs.ClientVersionInfo{
-		Version: envStringForPlatform("CLIENT_RECOMMENDED_VERSION", platform, minimum.Version),
-		Build:   envIntForPlatform("CLIENT_RECOMMENDED_BUILD", platform, minimum.Build),
-	}
-	current := structs.ClientVersionInfo{
-		Version: envStringForPlatform("CLIENT_CURRENT_VERSION", platform, recommended.Version),
-		Build:   envIntForPlatform("CLIENT_CURRENT_BUILD", platform, recommended.Build),
+		Version: normalizeMinimumClientVersion(envString("CLIENT_MIN_VERSION", "1.0.0")),
 	}
 
 	status := "ok"
 	forceUpdate := false
 	maintenance := envBool("CLIENT_MAINTENANCE", false)
-	message := envString("CLIENT_VERSION_MESSAGE", "")
+	message := ""
 
 	if maintenance {
 		status = "maintenance"
 		message = envString("CLIENT_MAINTENANCE_MESSAGE", "SFLUV is temporarily unavailable while maintenance is in progress.")
-	} else if platform != "ios" && platform != "android" && platform != "web" {
-		status = "unsupported_platform"
-		forceUpdate = true
-		message = envString("CLIENT_UNSUPPORTED_PLATFORM_MESSAGE", "This app version is not supported.")
-	} else if build < minimum.Build {
+	} else if clientVersionRequiresUpdate(version, minimum.Version) {
 		status = "update_required"
 		forceUpdate = true
 		message = envString("CLIENT_UPDATE_REQUIRED_MESSAGE", "An SFLUV Wallet update is required.")
-	} else if build < recommended.Build {
-		status = "update_recommended"
-		message = envString("CLIENT_UPDATE_RECOMMENDED_MESSAGE", "A newer SFLUV Wallet update is available.")
 	}
 
 	activeChainID := 0
@@ -88,11 +109,9 @@ func (a *AppService) GetClientVersion(w http.ResponseWriter, r *http.Request) {
 		Platform:      platform,
 		Status:        status,
 		Minimum:       minimum,
-		Recommended:   recommended,
-		Current:       current,
 		ForceUpdate:   forceUpdate,
 		Maintenance:   maintenance,
-		UpdateURL:     envString("CLIENT_UPDATE_URL_"+strings.ToUpper(platform), envString("CLIENT_UPDATE_URL", "")),
+		UpdateURL:     envString("CLIENT_UPDATE_URL", ""),
 		Message:       message,
 		Features: structs.ClientVersionFeatures{
 			DynamicConfigRequired: envBool("CLIENT_DYNAMIC_CONFIG_REQUIRED", true),
@@ -100,6 +119,5 @@ func (a *AppService) GetClientVersion(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 
-	_ = version
 	writeJSON(w, http.StatusOK, response)
 }
