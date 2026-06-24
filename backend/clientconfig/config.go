@@ -16,8 +16,10 @@ import (
 )
 
 const (
-	defaultConfigBaseURL = "https://config.internal.citizenwallet.xyz/v4"
-	defaultFallbackFile  = "community-config.json"
+	// defaultCommunityAPIURL is the Citizen Wallet communities API base. The
+	// whole community config is fetched from {base}/{alias}.
+	defaultCommunityAPIURL = "https://my.citizenwallet.xyz/api/communities"
+	defaultFallbackFile    = "community-config.json"
 )
 
 type AddressRef struct {
@@ -171,10 +173,7 @@ func (c *Config) ReadRPCURL() string {
 }
 
 func loadRemote(ctx context.Context) (*Config, error) {
-	// An explicit single-community config URL wins when set. Otherwise fetch the
-	// published communities list and select our community by alias: the
-	// per-community files on the default Citizen Wallet host are access
-	// restricted (HTTP 403), while communities.json is served publicly.
+	// An explicit single-community config URL wins when set (a raw config object).
 	explicit, err := explicitConfigURL()
 	if err != nil {
 		return nil, err
@@ -187,23 +186,26 @@ func loadRemote(ctx context.Context) (*Config, error) {
 		return parse(body, "citizenwallet:"+explicit)
 	}
 
+	// Otherwise fetch the whole community config from the Citizen Wallet
+	// communities API by alias. The endpoint returns an envelope whose "json"
+	// field holds the full config (community, tokens, accounts, chains, ...).
 	alias, err := communityAlias()
 	if err != nil {
 		return nil, err
 	}
-	listURL, err := communitiesListURL()
+	communityURL, err := communityConfigURL(alias)
 	if err != nil {
 		return nil, err
 	}
-	body, err := fetchRemote(ctx, listURL)
+	body, err := fetchRemote(ctx, communityURL)
 	if err != nil {
 		return nil, err
 	}
-	entry, err := selectCommunityEntry(body, alias)
+	inner, err := extractCommunityConfig(body)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", listURL, err)
+		return nil, fmt.Errorf("%s: %w", communityURL, err)
 	}
-	return parse(entry, fmt.Sprintf("citizenwallet:%s#%s", listURL, alias))
+	return parse(inner, "citizenwallet:"+communityURL)
 }
 
 func fetchRemote(ctx context.Context, remoteURL string) ([]byte, error) {
@@ -291,52 +293,38 @@ func communityAlias() (string, error) {
 	return alias, nil
 }
 
-func communitiesListURL() (string, error) {
-	if configured := strings.TrimSpace(os.Getenv("CITIZEN_WALLET_COMMUNITIES_URL")); configured != "" {
-		if _, err := url.ParseRequestURI(configured); err != nil {
-			return "", fmt.Errorf("invalid CITIZEN_WALLET_COMMUNITIES_URL %q: %w", configured, err)
-		}
-		return configured, nil
-	}
-
-	base := strings.TrimRight(strings.TrimSpace(os.Getenv("CITIZEN_WALLET_CONFIG_BASE_URL")), "/")
+// communityConfigURL builds the Citizen Wallet communities API URL for an
+// alias: {base}/{alias}. The base defaults to the public communities API and is
+// overridable with CITIZEN_WALLET_COMMUNITY_API_URL.
+func communityConfigURL(alias string) (string, error) {
+	base := strings.TrimRight(strings.TrimSpace(os.Getenv("CITIZEN_WALLET_COMMUNITY_API_URL")), "/")
 	if base == "" {
-		base = defaultConfigBaseURL
+		base = defaultCommunityAPIURL
 	}
-	return base + "/communities.json", nil
+	full := base + "/" + url.PathEscape(strings.TrimSpace(alias))
+	if _, err := url.ParseRequestURI(full); err != nil {
+		return "", fmt.Errorf("invalid community config URL %q: %w", full, err)
+	}
+	return full, nil
 }
 
-// selectCommunityEntry returns the raw JSON of the community whose
-// community.alias matches alias (case-insensitive). communities.json is an
-// array of full per-community config objects, so the matched entry is returned
-// verbatim, preserving fields (scan, plugins, ...) the client response needs.
-func selectCommunityEntry(body []byte, alias string) ([]byte, error) {
-	var entries []json.RawMessage
-	if err := json.Unmarshal(bytes.TrimSpace(body), &entries); err != nil {
-		return nil, fmt.Errorf("communities list is not a JSON array: %w", err)
+// extractCommunityConfig pulls the embedded config object out of the communities
+// API response. The endpoint returns an envelope
+// {alias, chain_id, json: {..config..}, active, ...}; the full community config
+// (community, tokens, accounts, chains, plugins, ...) lives under "json". An
+// unknown alias yields a bare null (or a null json field), reported as not found.
+func extractCommunityConfig(body []byte) ([]byte, error) {
+	var envelope struct {
+		JSON json.RawMessage `json:"json"`
 	}
-
-	wanted := strings.TrimSpace(alias)
-	available := make([]string, 0, len(entries))
-	for _, entry := range entries {
-		var meta struct {
-			Community struct {
-				Alias string `json:"alias"`
-			} `json:"community"`
-		}
-		if err := json.Unmarshal(entry, &meta); err != nil {
-			continue
-		}
-		entryAlias := strings.TrimSpace(meta.Community.Alias)
-		if entryAlias == "" {
-			continue
-		}
-		available = append(available, entryAlias)
-		if strings.EqualFold(entryAlias, wanted) {
-			return append([]byte(nil), entry...), nil
-		}
+	if err := json.Unmarshal(bytes.TrimSpace(body), &envelope); err != nil {
+		return nil, fmt.Errorf("community response is not a JSON object: %w", err)
 	}
-	return nil, fmt.Errorf("community alias %q not found in communities list (available aliases: %s)", alias, strings.Join(available, ", "))
+	inner := bytes.TrimSpace(envelope.JSON)
+	if len(inner) == 0 || bytes.Equal(inner, []byte("null")) {
+		return nil, fmt.Errorf("community config not found (unknown alias or empty 'json' field)")
+	}
+	return inner, nil
 }
 
 func clientConfigLocalOnly() bool {

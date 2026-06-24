@@ -186,41 +186,38 @@ func TestLoadLocalOnlyUsesFallbackFile(t *testing.T) {
 	}
 }
 
-func TestSelectCommunityEntryMatchesAlias(t *testing.T) {
-	// A communities list with an unrelated community before ours.
-	list := []byte("[" + `{"community":{"alias":"other.wallet"}},` + testConfigJSON + "]")
+func TestExtractCommunityConfigReadsJSONField(t *testing.T) {
+	// The communities API wraps the full config in a "json" envelope field.
+	body := []byte(`{"alias":"test.wallet","chain_id":80094,"json":` + testConfigJSON + `,"active":true}`)
 
-	entry, err := selectCommunityEntry(list, "test.wallet")
+	inner, err := extractCommunityConfig(body)
 	if err != nil {
-		t.Fatalf("selectCommunityEntry error = %v", err)
+		t.Fatalf("extractCommunityConfig error = %v", err)
 	}
-	cfg, err := parse(entry, "test")
+	cfg, err := parse(inner, "test")
 	if err != nil {
-		t.Fatalf("parse(selected) error = %v", err)
+		t.Fatalf("parse(inner) error = %v", err)
 	}
 	if cfg.Community.Alias != "test.wallet" {
-		t.Fatalf("selected alias = %q, want test.wallet", cfg.Community.Alias)
+		t.Fatalf("alias = %q, want test.wallet", cfg.Community.Alias)
 	}
 	if cfg.PrimaryRPCURL() != "https://80094.engine.citizenwallet.xyz" {
 		t.Fatalf("PrimaryRPCURL() = %q", cfg.PrimaryRPCURL())
 	}
 }
 
-func TestSelectCommunityEntryCaseInsensitive(t *testing.T) {
-	list := []byte("[" + testConfigJSON + "]")
-	if _, err := selectCommunityEntry(list, "TEST.WALLET"); err != nil {
-		t.Fatalf("selectCommunityEntry case-insensitive error = %v", err)
+func TestExtractCommunityConfigUnknownAlias(t *testing.T) {
+	// Unknown alias: the API returns a bare null body.
+	if _, err := extractCommunityConfig([]byte("null")); err == nil {
+		t.Fatalf("expected error for null community response")
 	}
-}
-
-func TestSelectCommunityEntryNotFoundListsAliases(t *testing.T) {
-	list := []byte("[" + testConfigJSON + "]")
-	_, err := selectCommunityEntry(list, "missing.wallet")
+	// Or an envelope whose json field is null.
+	_, err := extractCommunityConfig([]byte(`{"alias":"x","json":null}`))
 	if err == nil {
-		t.Fatalf("expected error for missing alias")
+		t.Fatalf("expected error for null json field")
 	}
-	if !strings.Contains(err.Error(), "test.wallet") {
-		t.Fatalf("error should list available aliases, got: %v", err)
+	if !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("error should mention not found, got: %v", err)
 	}
 }
 
