@@ -12,7 +12,7 @@ func (p *PonderDB) GetAnalyticsTransfersSince(ctx context.Context, _ int64, star
 	rows, err := p.db.Query(ctx, `
 			SELECT
 				hash,
-				COALESCE(chain_id, 80094) AS chain_id,
+				80094 AS chain_id,
 				amount::text,
 				timestamp,
 				LOWER("from"),
@@ -23,7 +23,6 @@ func (p *PonderDB) GetAnalyticsTransfersSince(ctx context.Context, _ int64, star
 				timestamp >= $1
 			ORDER BY
 				timestamp ASC,
-				chain_id ASC,
 				id ASC;
 		`, startTimestamp)
 	if err != nil {

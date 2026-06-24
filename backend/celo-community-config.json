@@ -13,8 +13,8 @@
       "42220": {
         "id": 42220,
         "node": {
-          "url": "https://42220.engine.citizenwallet.xyz",
-          "ws_url": "wss://42220.engine.citizenwallet.xyz"
+          "url": "http://localhost:8546",
+          "ws_url": "wss://localhost:8546"
         }
       }
     },

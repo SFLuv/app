@@ -267,9 +267,12 @@ func NewServerHandler(ctx context.Context, pools *DBPools, appLogger *logger.Log
 	if err := botDb.BackfillTransactionChainIDs(ctx, activeChainID); err != nil {
 		return nil, err
 	}
-	if err := ponderDb.BackfillTransactionChainIDs(ctx, activeChainID); err != nil {
-		appLogger.Logf("warning: ponder backfill failed (non-fatal): %v", err)
-	}
+	// NOTE: the Ponder database is owned by the Ponder indexer and must not be
+	// altered or written to from the backend — doing so (ALTER ADD chain_id,
+	// SET DEFAULT, indexes, UPDATE) changes Ponder's schema out from under the
+	// running indexer and trips its live-query triggers ("live_query_tables does
+	// not exist"), which halts indexing. Ponder tags chain ids itself via its
+	// schema; the cross-chain migration handles legacy rows on a clone only.
 
 	botClient, err := bot.Init(clientConfig)
 	if err != nil {

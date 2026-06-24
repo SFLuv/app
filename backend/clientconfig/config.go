@@ -308,23 +308,55 @@ func communityConfigURL(alias string) (string, error) {
 	return full, nil
 }
 
-// extractCommunityConfig pulls the embedded config object out of the communities
-// API response. The endpoint returns an envelope
-// {alias, chain_id, json: {..config..}, active, ...}; the full community config
-// (community, tokens, accounts, chains, plugins, ...) lives under "json". An
-// unknown alias yields a bare null (or a null json field), reported as not found.
+// extractCommunityConfig returns the community config from a communities-API
+// response. The endpoint returns an envelope {alias, chain_id, json: {..config..},
+// active, ...}; the config (community, tokens, accounts, chains, plugins, ...)
+// lives under "json". A bare config object is also accepted. An unknown alias
+// yields a bare null (or a null json field), reported as not found.
 func extractCommunityConfig(body []byte) ([]byte, error) {
-	var envelope struct {
-		JSON json.RawMessage `json:"json"`
-	}
-	if err := json.Unmarshal(bytes.TrimSpace(body), &envelope); err != nil {
-		return nil, fmt.Errorf("community response is not a JSON object: %w", err)
-	}
-	inner := bytes.TrimSpace(envelope.JSON)
-	if len(inner) == 0 || bytes.Equal(inner, []byte("null")) {
+	body = bytes.TrimSpace(body)
+	inner := unwrapEnvelope(body)
+	// unwrapEnvelope returns body unchanged for a bare config (has "community"),
+	// for a null body, or for an envelope whose "json" is null. Only the bare
+	// config is usable; the null cases are an unknown/empty alias.
+	if bytes.Equal(inner, body) && !hasTopLevelCommunity(body) {
 		return nil, fmt.Errorf("community config not found (unknown alias or empty 'json' field)")
 	}
 	return inner, nil
+}
+
+func hasTopLevelCommunity(body []byte) bool {
+	var probe struct {
+		Community json.RawMessage `json:"community"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(body), &probe); err != nil {
+		return false
+	}
+	return len(bytes.TrimSpace(probe.Community)) > 0
+}
+
+// unwrapEnvelope returns the inner config when body is a communities-API envelope
+// ({alias, chain_id, json: {..config..}, ...}); otherwise it returns body
+// unchanged. This lets both the API response and a local config file use the
+// envelope shape. A bare config object (with a top-level "community") is passed
+// through untouched.
+func unwrapEnvelope(body []byte) []byte {
+	var probe struct {
+		Community json.RawMessage `json:"community"`
+		JSON      json.RawMessage `json:"json"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(body), &probe); err != nil {
+		return body
+	}
+	// A direct config has a top-level "community"; an envelope has "json" and none.
+	if len(bytes.TrimSpace(probe.Community)) > 0 {
+		return body
+	}
+	inner := bytes.TrimSpace(probe.JSON)
+	if len(inner) > 0 && !bytes.Equal(inner, []byte("null")) {
+		return inner
+	}
+	return body
 }
 
 func clientConfigLocalOnly() bool {
@@ -344,6 +376,9 @@ func parse(body []byte, source string) (*Config, error) {
 	if !json.Valid(body) {
 		return nil, fmt.Errorf("%s is not valid JSON", source)
 	}
+	// Accept both the communities-API envelope ({alias, json: {..config..}, ...})
+	// and a bare config object, so a saved API response works as a local file too.
+	body = unwrapEnvelope(body)
 
 	var cfg Config
 	if err := json.Unmarshal(body, &cfg); err != nil {
