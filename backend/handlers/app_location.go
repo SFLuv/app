@@ -145,8 +145,8 @@ func (a *AppService) AddLocation(w http.ResponseWriter, r *http.Request) {
 	location.OwnerID = *userDid
 	err = a.db.AddLocation(r.Context(), location)
 	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
 		a.logger.Logf("invalid location body: %s", err.Error())
+		http.Error(w, "Unable to submit merchant application.", http.StatusBadRequest)
 		return
 	}
 
