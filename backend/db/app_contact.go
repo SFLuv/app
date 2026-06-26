@@ -43,10 +43,12 @@ func (a *AppDB) UpdateContact(ctx context.Context, c *structs.Contact, userId st
 			name = $1,
 			address = $2,
 			is_favorite = $3
-		FROM
-			contacts c INNER JOIN users u ON c.owner = u.id
 		WHERE
-			(contacts.id = $4 AND u.id = $5 AND contacts.active = TRUE AND u.active = TRUE);
+			contacts.id = $4
+		AND
+			contacts.owner = $5
+		AND
+			contacts.active = TRUE;
 	`, c.Name, c.Address, c.IsFavorite, c.Id, userId)
 
 	return err
