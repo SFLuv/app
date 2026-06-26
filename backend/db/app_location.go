@@ -583,7 +583,7 @@ func (a *AppDB) AddLocation(ctx context.Context, location *structs.Location) err
 				$19, $20, $21, $22, $23, $24, $25, $26,
 				$27, $28, $29, $30, $31, $32
 			)
-			ON CONFLICT (google_id) WHERE active = TRUE
+			ON CONFLICT (google_id) WHERE active = TRUE AND google_id IS NOT NULL
 			DO UPDATE SET
 				owner_id = EXCLUDED.owner_id,
 				name = EXCLUDED.name,

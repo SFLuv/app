@@ -190,15 +190,22 @@ export function MerchantApprovalForm() {
       service_stations: Number(serviceStations),
       tablet_model: tabletModel  === "Other" ? tabletModelOther : tabletModel,
       messaging_service: messagingService === "Other" ? messagingServiceOther : messagingService,
+      payment_wallets: [],
       reference: reference,
     }
 
     setIsSubmitting(true)
-    await addLocation(newLocation)
-    setSearchKey(prev => prev + 1)
-    setIsSubmitting(false);
-    resetForm()
-    router.replace("/map")
+    setError(null)
+    try {
+      await addLocation(newLocation)
+      setSearchKey(prev => prev + 1)
+      resetForm()
+      router.replace("/map")
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "Unable to submit merchant application.")
+    } finally {
+      setIsSubmitting(false)
+    }
   }
 
   return (

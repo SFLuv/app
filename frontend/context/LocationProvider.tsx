@@ -132,14 +132,16 @@ export default function LocationProvider({ children }: { children: ReactNode }) 
                 body: JSON.stringify(location)
             })
             if(res.status != 201) {
-                throw new Error("error adding new location, from controller")
+                const message = (await res.text()).trim()
+                throw new Error(message || "Unable to submit merchant application.")
             }
             setUserLocationsRef.current((currentLocations) => [...currentLocations, location])
             setMapLocationsStatus("available")
         }
-        catch {
+        catch (error) {
             setMapLocationsStatus("unavailable")
-            console.error("error adding new location")
+            console.error("error adding new location", error)
+            throw error
         }
       }, [])
 
