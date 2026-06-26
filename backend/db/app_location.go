@@ -540,86 +540,7 @@ func (s *AppDB) GetAuthedLocations(ctx context.Context, r *structs.LocationsPage
 }
 
 func (a *AppDB) AddLocation(ctx context.Context, location *structs.Location) error {
-	_, err := a.db.Exec(ctx, `
-			INSERT INTO locations (
-				google_id,
-				owner_id,
-				name,
-				description,
-				type,
-				approval,
-				approved_at,
-				street,
-				city,
-				state,
-			zip,
-			lat,
-			lng,
-			phone,
-			email,
-			admin_phone,
-			admin_email,
-			website,
-			image_url,
-			rating,
-			maps_page,
-			contact_firstname,
-			contact_lastname,
-			contact_phone,
-			pos_system,
-			sole_proprietorship,
-			tipping_policy,
-			tipping_division,
-			table_coverage,
-			service_stations,
-			tablet_model,
-			messaging_service,
-				reference
-			) VALUES (
-				$1, $2, $3, $4, $5, $6,
-				CASE WHEN $6 IS TRUE THEN NOW() ELSE NULL END,
-				$7, $8, $9, $10,
-				$11, $12, $13, $14, $15, $16, $17, $18,
-				$19, $20, $21, $22, $23, $24, $25, $26,
-				$27, $28, $29, $30, $31, $32
-			)
-			ON CONFLICT (google_id) WHERE active = TRUE
-			DO UPDATE SET
-				owner_id = EXCLUDED.owner_id,
-				name = EXCLUDED.name,
-				description = EXCLUDED.description,
-				type = EXCLUDED.type,
-				approval = EXCLUDED.approval,
-				approved_at = EXCLUDED.approved_at,
-				street = EXCLUDED.street,
-				city = EXCLUDED.city,
-				state = EXCLUDED.state,
-				zip = EXCLUDED.zip,
-				lat = EXCLUDED.lat,
-				lng = EXCLUDED.lng,
-				phone = EXCLUDED.phone,
-				email = EXCLUDED.email,
-				admin_phone = EXCLUDED.admin_phone,
-				admin_email = EXCLUDED.admin_email,
-				website = EXCLUDED.website,
-				image_url = EXCLUDED.image_url,
-				rating = EXCLUDED.rating,
-				maps_page = EXCLUDED.maps_page,
-				contact_firstname = EXCLUDED.contact_firstname,
-				contact_lastname = EXCLUDED.contact_lastname,
-				contact_phone = EXCLUDED.contact_phone,
-				pos_system = EXCLUDED.pos_system,
-				sole_proprietorship = EXCLUDED.sole_proprietorship,
-				tipping_policy = EXCLUDED.tipping_policy,
-				tipping_division = EXCLUDED.tipping_division,
-				table_coverage = EXCLUDED.table_coverage,
-				service_stations = EXCLUDED.service_stations,
-				tablet_model = EXCLUDED.tablet_model,
-				messaging_service = EXCLUDED.messaging_service,
-				reference = EXCLUDED.reference,
-				active = TRUE,
-				delete_date = NULL,
-				delete_reason = NULL;`,
+	args := []any{
 		&location.GoogleID,
 		&location.OwnerID,
 		&location.Name,
@@ -652,7 +573,104 @@ func (a *AppDB) AddLocation(ctx context.Context, location *structs.Location) err
 		&location.TabletModel,
 		&location.MessagingService,
 		&location.Reference,
-	)
+	}
+
+	result, err := a.db.Exec(ctx, `
+		UPDATE locations
+		SET
+			owner_id = $2,
+			name = $3,
+			description = $4,
+			type = $5,
+			approval = $6,
+			approved_at = CASE WHEN $6 IS TRUE THEN NOW() ELSE NULL END,
+			street = $7,
+			city = $8,
+			state = $9,
+			zip = $10,
+			lat = $11,
+			lng = $12,
+			phone = $13,
+			email = $14,
+			admin_phone = $15,
+			admin_email = $16,
+			website = $17,
+			image_url = $18,
+			rating = $19,
+			maps_page = $20,
+			contact_firstname = $21,
+			contact_lastname = $22,
+			contact_phone = $23,
+			pos_system = $24,
+			sole_proprietorship = $25,
+			tipping_policy = $26,
+			tipping_division = $27,
+			table_coverage = $28,
+			service_stations = $29,
+			tablet_model = $30,
+			messaging_service = $31,
+			reference = $32,
+			active = TRUE,
+			delete_date = NULL,
+			delete_reason = NULL
+		WHERE id = (
+			SELECT id
+			FROM locations
+			WHERE google_id = $1
+			ORDER BY CASE WHEN active = TRUE THEN 0 ELSE 1 END, id DESC
+			LIMIT 1
+		);
+	`, args...)
+	if err != nil {
+		return fmt.Errorf("error updating existing location: %s", err)
+	}
+
+	if result.RowsAffected() == 0 {
+		_, err = a.db.Exec(ctx, `
+			INSERT INTO locations (
+				google_id,
+				owner_id,
+				name,
+				description,
+				type,
+				approval,
+				approved_at,
+				street,
+				city,
+				state,
+				zip,
+				lat,
+				lng,
+				phone,
+				email,
+				admin_phone,
+				admin_email,
+				website,
+				image_url,
+				rating,
+				maps_page,
+				contact_firstname,
+				contact_lastname,
+				contact_phone,
+				pos_system,
+				sole_proprietorship,
+				tipping_policy,
+				tipping_division,
+				table_coverage,
+				service_stations,
+				tablet_model,
+				messaging_service,
+				reference
+			) VALUES (
+				$1, $2, $3, $4, $5, $6,
+				CASE WHEN $6 IS TRUE THEN NOW() ELSE NULL END,
+				$7, $8, $9, $10,
+				$11, $12, $13, $14, $15, $16, $17, $18,
+				$19, $20, $21, $22, $23, $24, $25, $26,
+				$27, $28, $29, $30, $31, $32
+			);
+		`, args...)
+	}
 
 	if err != nil {
 		return fmt.Errorf("error adding location to locations table: %s", err)
