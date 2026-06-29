@@ -411,9 +411,21 @@ func (o *oauthServer) emailAllowed(ctx context.Context, email string) (bool, err
 	var allowed bool
 	err := o.appDB.QueryRow(ctx, `
 		SELECT EXISTS (
-			SELECT 1 FROM admin_mcp_allowed_emails
-			WHERE email = $1
-			AND revoked_at IS NULL
+			SELECT 1
+			FROM users u
+			WHERE u.active = TRUE
+			AND u.is_admin = TRUE
+			AND (
+				LOWER(TRIM(COALESCE(u.contact_email, ''))) = $1
+				OR EXISTS (
+					SELECT 1
+					FROM user_verified_emails uve
+					WHERE uve.user_id = u.id
+					AND uve.active = TRUE
+					AND uve.verified_at IS NOT NULL
+					AND uve.email_normalized = $1
+				)
+			)
 		);
 	`, normalizeEmail(email)).Scan(&allowed)
 	return allowed, err

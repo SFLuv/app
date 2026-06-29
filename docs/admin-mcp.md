@@ -12,12 +12,12 @@ The MCP client then starts a browser OAuth flow:
 2. The client sends the user to `/oauth/authorize` with PKCE.
 3. SFLUV redirects the user to Google.
 4. Google redirects back to `/oauth/google/callback`.
-5. SFLUV accepts the Google email only if it is on the admin MCP allowlist.
+5. SFLUV accepts the Google email only if it belongs to an active SFLUV admin.
 6. SFLUV issues its own short-lived bearer token for `/mcp`.
 
-The first allowed email is seeded by migration as `admin@sflove.org`. Admins can add or revoke allowed Google emails from the web admin panel under **MCP Access**.
+MCP access is managed through existing admin infrastructure. For the first admin, use `admin@sfluv.org`; for future access, make the corresponding SFLUV user an admin and ensure their Google email matches their profile email or a verified email row.
 
-Revoking an email takes effect on the next MCP request because every bearer token is checked against the live allowlist.
+Removing admin status takes effect on the next MCP request because every bearer token is checked against the live SFLUV admin state.
 
 ## Run Remotely With OAuth
 
@@ -29,7 +29,7 @@ From the repo root:
 cd backend
 ADMIN_MCP_TRANSPORT=http \
 MCP_HTTP_ADDR=:8090 \
-MCP_PUBLIC_BASE_URL=https://mcp.sflove.org \
+MCP_PUBLIC_BASE_URL=https://mcp.sfluv.org \
 GOOGLE_OAUTH_CLIENT_ID=... \
 GOOGLE_OAUTH_CLIENT_SECRET=... \
 go run ./cmd/admin-mcp
@@ -37,7 +37,7 @@ go run ./cmd/admin-mcp
 
 Google OAuth setup:
 
-- Authorized redirect URI: `https://mcp.sflove.org/oauth/google/callback`
+- Authorized redirect URI: `https://mcp.sfluv.org/oauth/google/callback`
 - Scopes requested from Google: `openid email profile`
 
 Use HTTPS in production. Loopback `http://localhost` redirect URIs are accepted for local MCP clients.
@@ -66,7 +66,7 @@ env_vars = ["DB_USER", "DB_PASSWORD", "DB_URL", "DB_BASE_URL", "APP_DB_NAME", "B
 For the remote OAuth server, use a dedicated Postgres role with:
 
 - `SELECT` on approved reporting tables/views in `app`, `bot`, and `ponder`
-- `SELECT` on `admin_mcp_allowed_emails`
+- `SELECT` on `users` and `user_verified_emails`
 - `INSERT`, `UPDATE`, and `DELETE` on `admin_mcp_oauth_clients`, `admin_mcp_oauth_login_states`, `admin_mcp_oauth_auth_codes`, and `admin_mcp_oauth_tokens`
 - A low statement timeout
 
@@ -81,7 +81,7 @@ ALTER ROLE sfluv_mcp_ro SET statement_timeout = '20s';
 
 Every report tool call is wrapped in a read-only transaction. The remote role should still avoid write grants on all normal business tables.
 
-OAuth state, auth codes, access token hashes, and the Google email allowlist live in the `app` database because they are part of web-admin configuration.
+OAuth state, auth codes, and access token hashes live in the `app` database. MCP authorization itself uses existing SFLUV admin users.
 
 ## Tools
 

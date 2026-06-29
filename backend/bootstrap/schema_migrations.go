@@ -808,21 +808,9 @@ var schemaMigrations = []SchemaMigration{
 	},
 	{
 		Version:     "1.21",
-		Description: "add OAuth access controls for admin MCP server",
+		Description: "add OAuth state for admin MCP server",
 		Apply: func(ctx context.Context, pools *DBPools, appLogger *logger.LogCloser) error {
 			if _, err := pools.App.Exec(ctx, `
-				CREATE TABLE IF NOT EXISTS admin_mcp_allowed_emails(
-					email TEXT PRIMARY KEY,
-					created_by_user_id TEXT NOT NULL DEFAULT '',
-					created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-					revoked_by_user_id TEXT NOT NULL DEFAULT '',
-					revoked_at TIMESTAMPTZ
-				);
-
-				INSERT INTO admin_mcp_allowed_emails(email, created_by_user_id)
-				VALUES('admin@sflove.org', 'migration:1.21')
-				ON CONFLICT (email) DO NOTHING;
-
 				CREATE TABLE IF NOT EXISTS admin_mcp_oauth_clients(
 					client_id TEXT PRIMARY KEY,
 					client_name TEXT NOT NULL DEFAULT '',
