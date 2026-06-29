@@ -2,6 +2,10 @@
 
 This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
 
+## Collaborative Agent Work
+
+Agents working concurrently in this repository should download and use the `agent-work-coordinator` skill before implementation work. Use it to reserve files in `LIBRARY.md`, queue behind active checkouts, and archive completed work in `ARCHIVE.md`.
+
 ## Project Overview
 
 SFLUV is a local currency platform using a wrapped HONEY token on Berachain. This repo (`app`) is the main touchpoint for merchants, improvers (paid in the currency to do community projects), proposers (who suggest projects), voters, and issuers. It is a multi-role governance + workflow + commerce platform.
