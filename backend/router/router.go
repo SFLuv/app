@@ -161,6 +161,9 @@ func AddAdminRoutes(r *chi.Mux, s *handlers.AppService) {
 	r.Put("/admin/locations", withAdmin(s.UpdateLocationApproval, s))
 	r.Get("/admin/affiliates", withAdmin(s.GetAffiliates, s))
 	r.Put("/admin/affiliates", withAdmin(s.UpdateAffiliate, s))
+	r.Get("/admin/mcp/oauth/emails", withAdmin(s.GetAdminMCPAllowedEmails, s))
+	r.Post("/admin/mcp/oauth/emails", withAdmin(s.AddAdminMCPAllowedEmail, s))
+	r.Delete("/admin/mcp/oauth/emails/{email}", withAdmin(s.RevokeAdminMCPAllowedEmail, s))
 }
 
 func AddAffiliateRoutes(r *chi.Mux, s *handlers.BotService, a *handlers.AppService) {

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"math/big"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
@@ -49,9 +50,25 @@ func main() {
 		chainID:  envInt64(defaultChainID, "SFLUV_CHAIN_ID", "ACTIVE_CHAIN_ID", "CHAIN_ID", "NEXT_PUBLIC_CHAIN_ID"),
 	}
 
-	if err := server.ServeStdio(admin.newServer()); err != nil {
+	mcpServer := admin.newServer()
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("ADMIN_MCP_TRANSPORT")), "http") || strings.TrimSpace(os.Getenv("MCP_HTTP_ADDR")) != "" {
+		if err := serveHTTP(admin, mcpServer); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
+
+	if err := server.ServeStdio(mcpServer); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func serveHTTP(admin *adminMCP, mcpServer *server.MCPServer) error {
+	addr := envOrDefault("MCP_HTTP_ADDR", ":8090")
+	mux := http.NewServeMux()
+	streamable := server.NewStreamableHTTPServer(mcpServer)
+	newOAuthServer(admin.appDB).register(mux, streamable)
+	return http.ListenAndServe(addr, mux)
 }
 
 func (a *adminMCP) newServer() *server.MCPServer {

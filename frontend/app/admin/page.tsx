@@ -62,6 +62,7 @@ import {
   ChevronRight,
   Copy,
   BarChart3,
+  ShieldCheck,
 } from "lucide-react"
 import { useLocation } from "@/context/LocationProvider"
 import { AuthedLocation, UpdateLocationApprovalRequest } from "@/types/location"
@@ -136,6 +137,15 @@ type AdminUsersResponse = {
   count: number
   client_version_options?: string[]
   client_version_counts?: ClientVersionUserCountResponse[]
+}
+
+type AdminMCPAllowedEmail = {
+  email: string
+  created_by_user_id?: string
+  created_at: string
+  revoked_by_user_id?: string
+  revoked_at?: string | null
+  active: boolean
 }
 
 type AdminUserRoleFlag =
@@ -278,6 +288,7 @@ export default function AdminPage() {
       "events",
       "users",
       "analytics",
+      "mcp-access",
       "w9",
       "merchants",
       "affiliates",
@@ -362,6 +373,13 @@ export default function AdminPage() {
   const [adminEmailExporting, setAdminEmailExporting] = useState<boolean>(false)
   const [selectedAdminUser, setSelectedAdminUser] = useState<UserResponse | null>(null)
   const [adminUserModalOpen, setAdminUserModalOpen] = useState<boolean>(false)
+
+  // Admin MCP OAuth access
+  const [adminMCPEmails, setAdminMCPEmails] = useState<AdminMCPAllowedEmail[]>([])
+  const [adminMCPEmailInput, setAdminMCPEmailInput] = useState<string>("")
+  const [adminMCPEmailLoading, setAdminMCPEmailLoading] = useState<boolean>(false)
+  const [adminMCPEmailSaving, setAdminMCPEmailSaving] = useState<boolean>(false)
+  const [adminMCPEmailError, setAdminMCPEmailError] = useState<string>("")
 
   // Events
   const [events, setEvents] = useState<Event[]>([])
@@ -837,6 +855,80 @@ export default function AdminPage() {
       })
     } finally {
       setAdminEmailExporting(false)
+    }
+  }
+
+  const getAdminMCPAllowedEmails = async () => {
+    setAdminMCPEmailLoading(true)
+    try {
+      const res = await authFetch("/admin/mcp/oauth/emails")
+      if (!res.ok) throw new Error()
+      const data = await res.json()
+      setAdminMCPEmails(Array.isArray(data) ? data : [])
+      setAdminMCPEmailError("")
+    } catch {
+      setAdminMCPEmailError("Unable to load MCP access emails.")
+    } finally {
+      setAdminMCPEmailLoading(false)
+    }
+  }
+
+  const addAdminMCPAllowedEmail = async () => {
+    const email = adminMCPEmailInput.trim().toLowerCase()
+    if (!email || !email.includes("@")) {
+      setAdminMCPEmailError("Enter a valid email address.")
+      return
+    }
+
+    setAdminMCPEmailSaving(true)
+    setAdminMCPEmailError("")
+    try {
+      const res = await authFetch("/admin/mcp/oauth/emails", {
+        method: "POST",
+        body: JSON.stringify({ email }),
+      })
+      if (!res.ok) {
+        const text = await res.text()
+        throw new Error(text || "Unable to add MCP access email.")
+      }
+      const created = await res.json() as AdminMCPAllowedEmail
+      setAdminMCPEmails((prev) => [
+        created,
+        ...prev.filter((item) => item.email.toLowerCase() !== created.email.toLowerCase()),
+      ].sort((a, b) => Number(!a.active) - Number(!b.active) || a.email.localeCompare(b.email)))
+      setAdminMCPEmailInput("")
+      toast({
+        title: "MCP access updated",
+        description: `${created.email} can sign in with Google.`,
+      })
+    } catch (err) {
+      setAdminMCPEmailError(err instanceof Error ? err.message : "Unable to add MCP access email.")
+    } finally {
+      setAdminMCPEmailSaving(false)
+    }
+  }
+
+  const revokeAdminMCPAllowedEmail = async (email: string) => {
+    if (!window.confirm(`Remove MCP access for ${email}?`)) return
+    setAdminMCPEmailError("")
+    try {
+      const res = await authFetch(`/admin/mcp/oauth/emails/${encodeURIComponent(email)}`, { method: "DELETE" })
+      if (!res.ok) {
+        const text = await res.text()
+        throw new Error(text || "Unable to remove MCP access email.")
+      }
+      const revokedAt = new Date().toISOString()
+      setAdminMCPEmails((prev) => prev.map((item) => (
+        item.email.toLowerCase() === email.toLowerCase()
+          ? { ...item, active: false, revoked_at: revokedAt }
+          : item
+      )))
+      toast({
+        title: "MCP access removed",
+        description: `${email} can no longer connect.`,
+      })
+    } catch (err) {
+      setAdminMCPEmailError(err instanceof Error ? err.message : "Unable to remove MCP access email.")
     }
   }
 
@@ -1816,6 +1908,9 @@ export default function AdminPage() {
       case "users":
         void getAdminUsers(adminUsersPage, debouncedAdminUsersSearch, debouncedAdminUsersVersionFilter)
         break
+      case "mcp-access":
+        void getAdminMCPAllowedEmails()
+        break
       case "events":
         void getUnallocatedBalance()
         break
@@ -2533,6 +2628,10 @@ export default function AdminPage() {
               <span>Analytics</span>
               <BarChart3 className="h-4 w-4 text-muted-foreground" />
             </TabsTrigger>
+            <TabsTrigger value="mcp-access" className="w-full justify-between px-3 py-2">
+              <span>MCP Access</span>
+              <ShieldCheck className="h-4 w-4 text-muted-foreground" />
+            </TabsTrigger>
             <TabsTrigger value="w9" className="w-full justify-between px-3 py-2">
               <span>W9 Approvals</span>
               {pendingW9Submissions.length > 0 && (
@@ -2601,6 +2700,126 @@ export default function AdminPage() {
 
         <TabsContent value="analytics" className="space-y-6">
           <AdminAnalyticsPanel />
+        </TabsContent>
+
+        <TabsContent value="mcp-access" className="space-y-6">
+          <Card>
+            <CardHeader className="pb-4">
+              <CardTitle className="flex items-center gap-2 text-xl">
+                <ShieldCheck className="h-5 w-5" />
+                MCP OAuth Access
+              </CardTitle>
+              <CardDescription>Google emails allowed to connect to the admin MCP server.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {adminMCPEmailError && (
+                <div className="flex items-center gap-2 rounded-lg bg-red-50 p-3 text-sm text-red-600 dark:bg-red-900/20">
+                  <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+                  <span>{adminMCPEmailError}</span>
+                </div>
+              )}
+
+              <form
+                className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto]"
+                onSubmit={(event) => {
+                  event.preventDefault()
+                  void addAdminMCPAllowedEmail()
+                }}
+              >
+                <div className="space-y-2">
+                  <Label htmlFor="admin-mcp-email">Email address</Label>
+                  <Input
+                    id="admin-mcp-email"
+                    type="email"
+                    value={adminMCPEmailInput}
+                    onChange={(event) => setAdminMCPEmailInput(event.target.value)}
+                    placeholder="admin@sflove.org"
+                    disabled={adminMCPEmailSaving}
+                  />
+                </div>
+                <Button
+                  type="submit"
+                  className="self-end"
+                  disabled={adminMCPEmailSaving || !adminMCPEmailInput.trim()}
+                >
+                  {adminMCPEmailSaving ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Plus className="h-4 w-4" />
+                  )}
+                  Add
+                </Button>
+              </form>
+
+              <div className="overflow-x-auto rounded-lg border">
+                <table className="w-full min-w-[680px] text-sm">
+                  <thead className="bg-muted/60 text-left text-xs uppercase text-muted-foreground">
+                    <tr>
+                      <th className="px-4 py-3 font-medium">Email</th>
+                      <th className="px-4 py-3 font-medium">Status</th>
+                      <th className="px-4 py-3 font-medium">Added</th>
+                      <th className="px-4 py-3 font-medium">Revoked</th>
+                      <th className="px-4 py-3 font-medium">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y">
+                    {adminMCPEmailLoading ? (
+                      <tr>
+                        <td colSpan={5} className="px-4 py-10 text-center text-muted-foreground">
+                          <span className="inline-flex items-center gap-2">
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                            Loading emails...
+                          </span>
+                        </td>
+                      </tr>
+                    ) : adminMCPEmails.length === 0 ? (
+                      <tr>
+                        <td colSpan={5} className="px-4 py-10 text-center text-muted-foreground">
+                          No MCP access emails found.
+                        </td>
+                      </tr>
+                    ) : (
+                      adminMCPEmails.map((entry) => (
+                        <tr key={entry.email} className="align-top">
+                          <td className="px-4 py-3">
+                            <p className="break-all font-medium">{entry.email}</p>
+                            {entry.created_by_user_id && (
+                              <p className="mt-1 break-all font-mono text-xs text-muted-foreground">
+                                {entry.created_by_user_id}
+                              </p>
+                            )}
+                          </td>
+                          <td className="px-4 py-3">
+                            <Badge variant={entry.active ? "default" : "outline"}>
+                              {entry.active ? "Active" : "Revoked"}
+                            </Badge>
+                          </td>
+                          <td className="px-4 py-3 text-xs text-muted-foreground">
+                            {formatAdminUserDateTime(entry.created_at)}
+                          </td>
+                          <td className="px-4 py-3 text-xs text-muted-foreground">
+                            {formatAdminUserDateTime(entry.revoked_at)}
+                          </td>
+                          <td className="px-4 py-3">
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              disabled={!entry.active}
+                              onClick={() => void revokeAdminMCPAllowedEmail(entry.email)}
+                            >
+                              <X className="h-4 w-4" />
+                              Revoke
+                            </Button>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </CardContent>
+          </Card>
         </TabsContent>
 
         <TabsContent value="tokens" className="space-y-6">
