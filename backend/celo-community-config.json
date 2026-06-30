@@ -1,79 +1,101 @@
 {
-  "community": {
-    "name": "SFLUV Community",
-    "description": "A community currency for the city of San Francisco.",
-    "url": "https://sfluv.org",
-    "alias": "wallet.celo.sfluv.org",
-    "custom_domain": "wallet.sfluv.org",
-    "logo": "https://assets.citizenwallet.xyz/wallet-config/_images/sfluv.svg",
-    "theme": {
-      "primary": "#eb6c6c"
+  "alias": "wallet.celo.sfluv.org",
+  "chain_id": 42220,
+  "json": {
+    "ipfs": {
+      "url": "https://ipfs.internal.citizenwallet.xyz"
     },
-    "profile": {
-      "address": "0x05e2Fb34b4548990F96B3ba422eA3EF49D5dAa99",
-      "chain_id": 42220
+    "scan": {
+      "url": "https://celoscan.io",
+      "name": "Celo Explorer"
     },
-    "primary_token": {
-      "address": "0xBe146Ca5945ABf36e12f89fB8DA99da2c848D552",
-      "chain_id": 42220
-    },
-    "primary_account_factory": {
-      "address": "0x7cC54D54bBFc65d1f0af7ACee5e4042654AF8185",
-      "chain_id": 42220
-    }
-  },
-  "tokens": {
-    "42220:0xBe146Ca5945ABf36e12f89fB8DA99da2c848D552": {
-      "standard": "erc20",
-      "name": "SFLUV V3",
-      "address": "0xBe146Ca5945ABf36e12f89fB8DA99da2c848D552",
-      "symbol": "SFLUV",
-      "decimals": 6,
-      "chain_id": 42220
-    }
-  },
-  "scan": {
-    "url": "https://celoscan.io",
-    "name": "Celo Explorer"
-  },
-  "accounts": {
-    "42220:0x7cC54D54bBFc65d1f0af7ACee5e4042654AF8185": {
-      "chain_id": 42220,
-      "entrypoint_address": "0x7079253c0358eF9Fd87E16488299Ef6e06F403B6",
-      "paymaster_address": "0x825b77eE3e3AB05c3a342EEE37223494b6c97a55",
-      "account_factory_address": "0x7cC54D54bBFc65d1f0af7ACee5e4042654AF8185",
-      "paymaster_type": "cw-safe"
-    }
-  },
-  "chains": {
-    "42220": {
-      "id": 42220,
-      "node": {
-        "url": "https://42220.engine.citizenwallet.xyz",
-        "ws_url": "wss://42220.engine.citizenwallet.xyz"
+    "chains": {
+      "42220": {
+        "id": 42220,
+        "node": {
+          "url": "http://localhost:8546",
+          "ws_url": "wss://localhost:8546"
+        }
       }
-    }
-  },
-  "ipfs": {
-    "url": "https://ipfs.internal.citizenwallet.xyz"
-  },
-  "plugins": [
-    {
-      "name": "Map",
-      "icon": "https://assets.citizenwallet.xyz/wallet-config/_images/sfluv.svg",
-      "url": "https://app.sfluv.org/map",
-      "launch_mode": "webview",
-      "featured": true,
-      "signature": true
     },
-    {
-      "name": "About",
-      "icon": "https://assets.citizenwallet.xyz/wallet-config/_images/sfluv.svg",
-      "url": "https://app.sfluv.org",
-      "launch_mode": "webview",
-      "signature": true,
-      "hidden": true
-    }
-  ],
-  "version": 4
+    "tokens": {
+      "42220:0x881cAd4f885c6701D8481c0eD347f6d35444eA7e": {
+        "name": "SFLUV V1.1",
+        "symbol": "SFLUV",
+        "address": "0x881cAd4f885c6701D8481c0eD347f6d35444eA7e",
+        "chain_id": 42220,
+        "decimals": 6,
+        "standard": "erc20"
+      }
+    },
+    "plugins": [
+      {
+        "url": "https://app.sfluv.org",
+        "icon": "https://assets.citizenwallet.xyz/wallet-config/_images/sfluv.svg",
+        "name": "About",
+        "hidden": true,
+        "signature": true,
+        "launch_mode": "webview"
+      },
+      {
+        "url": "https://app.sfluv.org/map",
+        "icon": "https://assets.citizenwallet.xyz/wallet-config/_images/sfluv.svg",
+        "name": "Map",
+        "featured": true,
+        "signature": true,
+        "launch_mode": "webview"
+      }
+    ],
+    "version": 5,
+    "accounts": {
+      "42220:0x7cC54D54bBFc65d1f0af7ACee5e4042654AF8185": {
+        "chain_id": 42220,
+        "paymaster_type": "cw-safe",
+        "paymaster_address": "0x825b77eE3e3AB05c3a342EEE37223494b6c97a55",
+        "entrypoint_address": "0x7079253c0358eF9Fd87E16488299Ef6e06F403B6",
+        "account_factory_address": "0x7cC54D54bBFc65d1f0af7ACee5e4042654AF8185"
+      }
+    },
+    "sessions": {
+      "42220:0xE2F3DC3E638113b9496060349e5332963d9C1152": {
+        "chain_id": 80094,
+        "module_address": "0xE2F3DC3E638113b9496060349e5332963d9C1152",
+        "factory_address": "0xEd0cD3886b84369A0e29Db9a4480ADF5051c76C9",
+        "provider_address": "0xF3004A1690f97Cf5d307eDc5958a7F76b62f9FC9"
+      }
+    },
+    "community": {
+      "url": "https://sfluv.org",
+      "logo": "https://assets.citizenwallet.xyz/wallet-config/_images/sfluv.svg",
+      "name": "SFLUV Community",
+      "alias": "wallet.celo.sfluv.org",
+      "theme": {
+        "primary": "#eb6c6c"
+      },
+      "profile": {
+        "address": "0x4cB296BEc9FAd0B5e1E4FF1A2F307B425724AC82",
+        "chain_id": 42220
+      },
+      "description": "A community currency for the city of San Francisco.",
+      "custom_domain": "wallet.sfluv.org",
+      "primary_token": {
+        "address": "0x881cAd4f885c6701D8481c0eD347f6d35444eA7e",
+        "chain_id": 42220
+      },
+      "primary_account_factory": {
+        "address": "0x7cC54D54bBFc65d1f0af7ACee5e4042654AF8185",
+        "chain_id": 42220
+      },
+      "primary_session_manager": {
+        "address": "0xE2F3DC3E638113b9496060349e5332963d9C1152",
+        "chain_id": 42220
+      }
+    },
+    "config_location": "https://my.citizenwallet.xyz/api/communities/wallet.celo.sfluv.org"
+  },
+  "created_at": "2026-06-12T05:57:44.980163+00:00",
+  "updated_at": "2026-06-12T05:57:44.980163+00:00",
+  "active": true,
+  "public_view": false,
+  "external_url": null
 }

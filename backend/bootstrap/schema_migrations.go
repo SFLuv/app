@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/SFLuv/app/backend/db"
 	"github.com/SFLuv/app/backend/logger"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -748,21 +747,16 @@ var schemaMigrations = []SchemaMigration{
 	},
 	{
 		Version:     "1.18",
-		Description: "backfill legacy Berachain chain ids on Ponder transaction tables",
+		Description: "backfill legacy Berachain chain ids on Ponder transaction tables (DISABLED)",
 		Apply: func(ctx context.Context, pools *DBPools, appLogger *logger.LogCloser) error {
-			if pools == nil || pools.Ponder == nil {
-				if appLogger != nil {
-					appLogger.Logf("migration 1.18: ponder pool unavailable, skipping chain-id backfill (runs on server boot)")
-				}
-				return nil
-			}
-			// Non-fatal: a Ponder backfill failure (e.g. lock contention with the
-			// live indexer) must never crash the API boot and take /config down.
-			// The boot-time backfill retries idempotently and reads tolerate a
-			// NULL chain_id, so it is safe to continue.
-			ponderDb := db.Ponder(pools.Ponder, appLogger)
-			if err := ponderDb.BackfillTransactionChainIDs(ctx, legacyBerachainChainID); err != nil && appLogger != nil {
-				appLogger.Logf("migration 1.18: ponder chain-id backfill failed (non-fatal): %v", err)
+			// Disabled: the Ponder database is owned by the Ponder indexer and must
+			// not be altered or written to from the backend. Doing so (ALTER ADD
+			// chain_id / SET DEFAULT / indexes / UPDATE) changed Ponder's schema out
+			// from under the running indexer and tripped its live-query triggers,
+			// which halted indexing in production. Legacy chain-id tagging is handled
+			// by the cross-chain migration on a clone only — never the live Ponder DB.
+			if appLogger != nil {
+				appLogger.Logf("migration 1.18: ponder chain-id backfill is disabled (Ponder DB must not be modified by the backend)")
 			}
 			return nil
 		},
