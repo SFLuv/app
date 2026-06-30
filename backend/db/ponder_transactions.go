@@ -36,7 +36,6 @@ func (p *PonderDB) GetTransactionsPaginated(ctx context.Context, address string,
 	rows, err := p.db.Query(ctx, fmt.Sprintf(`
 			SELECT
 				t.id,
-				80094 AS chain_id,
 				t.hash,
 				t.amount,
 				t.timestamp,
@@ -64,7 +63,6 @@ func (p *PonderDB) GetTransactionsPaginated(ctx context.Context, address string,
 		var t structs.PonderTransaction
 		err = rows.Scan(
 			&t.Id,
-			&t.ChainID,
 			&t.Hash,
 			&t.Amount,
 			&t.Timestamp,
@@ -126,7 +124,6 @@ func (p *PonderDB) GetTransactionPartiesByHash(ctx context.Context, txHash strin
 
 	row := p.db.QueryRow(ctx, `
 			SELECT
-				80094 AS chain_id,
 				t.hash,
 				t.from,
 				t.to
@@ -142,7 +139,6 @@ func (p *PonderDB) GetTransactionPartiesByHash(ctx context.Context, txHash strin
 
 	var tx structs.PonderTransactionParties
 	err := row.Scan(
-		&tx.ChainID,
 		&tx.Hash,
 		&tx.From,
 		&tx.To,
@@ -154,5 +150,8 @@ func (p *PonderDB) GetTransactionPartiesByHash(ctx context.Context, txHash strin
 		return nil, fmt.Errorf("error querying transaction by hash %s: %w", normalizedHash, err)
 	}
 
+	// The Ponder DB is single-chain; report the active chain id supplied by the
+	// caller rather than reading a (removed) chain_id column.
+	tx.ChainID = chainID
 	return &tx, nil
 }
