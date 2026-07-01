@@ -8,11 +8,10 @@ import (
 	"github.com/SFLuv/app/backend/structs"
 )
 
-func (p *PonderDB) GetAnalyticsTransfersSince(ctx context.Context, _ int64, startTimestamp int64) ([]*structs.AnalyticsTransfer, error) {
+func (p *PonderDB) GetAnalyticsTransfersSince(ctx context.Context, chainID int64, startTimestamp int64) ([]*structs.AnalyticsTransfer, error) {
 	rows, err := p.db.Query(ctx, `
 			SELECT
 				hash,
-				80094 AS chain_id,
 				amount::text,
 				timestamp,
 				LOWER("from"),
@@ -33,9 +32,10 @@ func (p *PonderDB) GetAnalyticsTransfersSince(ctx context.Context, _ int64, star
 	transfers := make([]*structs.AnalyticsTransfer, 0)
 	for rows.Next() {
 		var tx structs.AnalyticsTransfer
-		if err := rows.Scan(&tx.Hash, &tx.ChainID, &tx.Amount, &tx.Timestamp, &tx.From, &tx.To); err != nil {
+		if err := rows.Scan(&tx.Hash, &tx.Amount, &tx.Timestamp, &tx.From, &tx.To); err != nil {
 			return nil, fmt.Errorf("error scanning analytics transfer: %w", err)
 		}
+		tx.ChainID = chainID
 		transfers = append(transfers, &tx)
 	}
 	if err := rows.Err(); err != nil {

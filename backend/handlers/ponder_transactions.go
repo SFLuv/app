@@ -116,6 +116,17 @@ func (p *PonderService) GetTransactionHistory(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	// The Ponder DB is single-chain; tag rows with the active chain id from config
+	// (used for memo keying and the response) rather than a removed chain_id column.
+	chainID := p.requestChainID(r)
+	if txs != nil {
+		for _, tx := range txs.Transactions {
+			if tx != nil {
+				tx.ChainID = chainID
+			}
+		}
+	}
+
 	userDid := utils.GetDid(r)
 	if txs != nil && len(txs.Transactions) > 0 && userDid != nil {
 		ownedAddresses, addressErr := p.appDB.GetOwnedWalletAddressSet(r.Context(), *userDid)
