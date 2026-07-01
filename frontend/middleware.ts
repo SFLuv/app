@@ -40,6 +40,9 @@ const getBackendOrigins = () => {
 
 const getRpcOrigins = () => {
   const configuredOrigins = [
+    // The chain read-RPC (eth_getCode/getBalance/etc.). Must match the backend
+    // RPC_URL the served /config advertises, e.g. https://forno.celo.org on Celo.
+    process.env.NEXT_PUBLIC_CHAIN_RPC_URL,
     process.env.NEXT_PUBLIC_ENGINE_URL,
     process.env.NEXT_PUBLIC_ALCHEMY_TRANSFERS_BASE_URL,
   ]
@@ -47,8 +50,10 @@ const getRpcOrigins = () => {
     .filter((value) => value.length > 0)
     .map(normalizeOrigin)
 
+  // Chain-agnostic infra only. The chain node RPC is never hardcoded here — it
+  // comes from NEXT_PUBLIC_CHAIN_RPC_URL above so the CSP tracks whatever chain
+  // the deployment is configured for.
   const defaults = [
-    "https://rpc.berachain.com",
     "https://*.engine.citizenwallet.xyz",
     "wss://*.engine.citizenwallet.xyz",
     "https://*.g.alchemy.com",
