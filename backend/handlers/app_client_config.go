@@ -111,7 +111,7 @@ func (a *AppService) GetClientVersion(w http.ResponseWriter, r *http.Request) {
 		Minimum:       minimum,
 		ForceUpdate:   forceUpdate,
 		Maintenance:   maintenance,
-		UpdateURL:     envString("CLIENT_UPDATE_URL", ""),
+		UpdateURL:     envString("CLIENT_UPDATE_URL_"+strings.ToUpper(platform), envString("CLIENT_UPDATE_URL", "")),
 		Message:       message,
 		Features: structs.ClientVersionFeatures{
 			DynamicConfigRequired: envBool("CLIENT_DYNAMIC_CONFIG_REQUIRED", true),

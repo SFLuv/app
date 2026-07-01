@@ -532,6 +532,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     const redirectToMap = options?.redirectToMap ?? true;
     const allowUnauthedRoute =
       pathname === "/map" ||
+      pathname === "/update" ||
       pathname === "/redirect" ||
       pathname === "/delete-account" ||
       pathname === "/recovery" ||
