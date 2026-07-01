@@ -1210,7 +1210,10 @@ export default function AppProvider({ children }: { children: ReactNode }) {
       setWalletsStatus("available");
     } catch (error) {
       setWalletsStatus("unavailable");
-      throw new Error("error initializing wallets");
+      console.error("error initializing wallets:", error);
+      throw new Error(
+        `error initializing wallets: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
   };
 
