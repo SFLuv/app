@@ -82,3 +82,42 @@ func TestGetClientVersionIgnoresBuildForEnforcement(t *testing.T) {
 		t.Fatalf("status = %v; want ok", body["status"])
 	}
 }
+
+func TestGetClientVersionUsesPerPlatformUpdateURL(t *testing.T) {
+	t.Setenv("CLIENT_UPDATE_URL", "https://app.sfluv.org/update")
+	t.Setenv("CLIENT_UPDATE_URL_IOS", "https://apps.apple.com/us/app/sfluv/id6762672190")
+	t.Setenv("CLIENT_UPDATE_URL_ANDROID", "https://play.google.com/store/apps/details?id=org.sfluv.wallet")
+
+	cases := []struct {
+		name     string
+		platform string
+		want     string
+	}{
+		{name: "ios uses ios link", platform: "ios", want: "https://apps.apple.com/us/app/sfluv/id6762672190"},
+		{name: "android uses android link", platform: "android", want: "https://play.google.com/store/apps/details?id=org.sfluv.wallet"},
+		{name: "web falls back to generic", platform: "web", want: "https://app.sfluv.org/update"},
+		{name: "missing platform falls back to generic", platform: "", want: "https://app.sfluv.org/update"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			service := &AppService{}
+			req := httptest.NewRequest(http.MethodGet, "/client-version?version=1.0.1&platform="+tc.platform, nil)
+			rec := httptest.NewRecorder()
+
+			service.GetClientVersion(rec, req)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d; want %d", rec.Code, http.StatusOK)
+			}
+
+			var body map[string]any
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("error decoding response: %s", err)
+			}
+			if body["update_url"] != tc.want {
+				t.Fatalf("update_url = %v; want %v", body["update_url"], tc.want)
+			}
+		})
+	}
+}
