@@ -51,8 +51,14 @@ export function LocationModal({ location, isOpen, onClose, isPayEnabled, onPayLo
             {location.type.charAt(0).toUpperCase() + location.type.slice(1)}
             </Badge>
             <div className="flex items-center ml-2">
-              {renderStars(location.rating)}
-              <span className="ml-1 text-sm text-gray-600 dark:text-gray-400">{location.rating.toFixed(1)}</span>
+              {location.rating > 0 ? (
+                <>
+                  {renderStars(location.rating)}
+                  <span className="ml-1 text-sm text-gray-600 dark:text-gray-400">{location.rating.toFixed(1)}</span>
+                </>
+              ) : (
+                <span className="text-sm text-gray-600 dark:text-gray-400">No Reviews</span>
+              )}
             </div>
         </DialogHeader>
 
