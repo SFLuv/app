@@ -9,6 +9,10 @@ const config = {
     "./src/**/*.{ts,tsx}",
     "*.{js,ts,jsx,tsx,mdx}",
   ],
+  // `dark` is applied at runtime by next-themes, so Tailwind's content scan
+  // never sees it. Without this, JIT purges the `@layer base .dark { ... }`
+  // theme-variable block and dark mode renders with light CSS variables.
+  safelist: ["dark"],
   prefix: "",
   theme: {
     container: {

@@ -162,8 +162,14 @@ export function ListView({
                               {location.type.charAt(0).toUpperCase() + location.type.slice(1)}
                             </Badge>
                             <div className="flex items-center">
-                              {renderStars(location.rating)}
-                              <span className="ml-1 text-xs text-muted-foreground">{location.rating.toFixed(1)}</span>
+                              {location.rating > 0 ? (
+                                <>
+                                  {renderStars(location.rating)}
+                                  <span className="ml-1 text-xs text-muted-foreground">{location.rating.toFixed(1)}</span>
+                                </>
+                              ) : (
+                                <span className="text-xs text-muted-foreground">No Reviews</span>
+                              )}
                             </div>
                           </div>
                         </div>
