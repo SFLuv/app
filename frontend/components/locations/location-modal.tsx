@@ -23,6 +23,7 @@ export function LocationModal({ location, isOpen, onClose, isPayEnabled, onPayLo
 
   if (!location) return null
 
+  const openingHours = location.opening_hours ?? []
   const canPay = isPayEnabled && isAddress((location.pay_to_address || "").trim())
 
   const renderStars = (rating: number) => {
@@ -66,9 +67,9 @@ export function LocationModal({ location, isOpen, onClose, isPayEnabled, onPayLo
         </div> */}
 
         <Tabs defaultValue="info" value={activeTab} onValueChange={setActiveTab}>
-          <TabsList className={`grid ${!!location.opening_hours.length ? "grid-cols-3" : "grid-cols-2"} mb-4`}>
+          <TabsList className={`grid ${openingHours.length ? "grid-cols-3" : "grid-cols-2"} mb-4`}>
             <TabsTrigger value="info">Information</TabsTrigger>
-            {!!location.opening_hours.length && <TabsTrigger value="hours">Hours</TabsTrigger>}
+            {!!openingHours.length && <TabsTrigger value="hours">Hours</TabsTrigger>}
             <TabsTrigger value="contact">Contact</TabsTrigger>
           </TabsList>
 
@@ -101,7 +102,7 @@ export function LocationModal({ location, isOpen, onClose, isPayEnabled, onPayLo
             <h3 className="font-medium text-black dark:text-white">Hours of Operation</h3>
             <div className="space-y-2">
                 <ul>
-                  {location.opening_hours.map((hours) => (
+                  {openingHours.map((hours) => (
                     <li key={hours}>{hours}</li>
                   ))}
                 </ul>
