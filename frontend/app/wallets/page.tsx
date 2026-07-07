@@ -5,14 +5,13 @@ import { useRouter } from "next/navigation"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { Plus, Wallet, ArrowRight, CheckCircle2, RefreshCw } from "lucide-react"
+import { Plus, Wallet, ArrowRight, RefreshCw } from "lucide-react"
 import { useApp } from "@/context/AppProvider"
 import { AppWallet } from "@/lib/wallets/wallets"
 import { ConnectWalletModal, } from "@/components/wallets/connect-wallet-modal"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Label } from "@/components/ui/label"
 import { NewWalletModal } from "@/components/wallets/new-wallet-modal"
-import { UpdatePayPalAccountModal } from "@/components/wallets/add-paypal-account-modal"
 import { getAddress, isAddress } from "viem"
 
 export default function WalletsPage() {
@@ -27,24 +26,13 @@ export default function WalletsPage() {
     walletsStatus,
     importWallet,
     addWallet,
-    refreshWallets,
-    updatePayPalAddress
+    refreshWallets
   } = useApp()
 
   const [showEoas, setShowEoas] = useState<boolean>(false)
   const [addWalletModalOpen, setAddWalletModalOpen] = useState<boolean>(false)
   const [connectWalletModalOpen, setConnectWalletModalOpen] = useState(false)
-  const [addPayPalModalOpen, setAddPayPalModalOpen] = useState<boolean>(false)
-  const [unwrapEnabledByAddress, setUnwrapEnabledByAddress] = useState<Record<string, boolean>>({})
 
-  const hasRedeemerWallet = useMemo(
-    () =>
-      wallets.some((wallet) => {
-        if (!wallet.address) return false
-        return unwrapEnabledByAddress[wallet.address.toLowerCase()] === true
-      }),
-    [wallets, unwrapEnabledByAddress]
-  )
   const walletsErrorMessage = useMemo(() => {
     if (typeof error === "string" && error.trim() !== "") {
       return error
@@ -77,39 +65,6 @@ export default function WalletsPage() {
       refreshWallets()
     }
   }, [])
-
-  useEffect(() => {
-    let cancelled = false
-
-    const syncUnwrapStatuses = async () => {
-      const results = await Promise.all(
-        wallets.map(async (wallet) => {
-          if (!wallet.address) return { address: "", enabled: false }
-          const enabled = await wallet.hasRedeemerRole()
-          return { address: wallet.address.toLowerCase(), enabled }
-        })
-      )
-
-      if (cancelled) return
-
-      const nextMap: Record<string, boolean> = {}
-      for (const result of results) {
-        if (!result.address) continue
-        nextMap[result.address] = result.enabled
-      }
-      setUnwrapEnabledByAddress(nextMap)
-    }
-
-    syncUnwrapStatuses()
-
-    return () => {
-      cancelled = true
-    }
-  }, [wallets])
-
-  const toggleAddPayPalModal = () => {
-    setAddPayPalModalOpen(!addPayPalModalOpen)
-  }
 
   const toggleAddWalletModal = () => {
     setAddWalletModalOpen(!addWalletModalOpen)
@@ -167,12 +122,6 @@ export default function WalletsPage() {
         addWalletFunction={addWallet}
       />
 
-      <UpdatePayPalAccountModal
-        open={addPayPalModalOpen}
-        onOpenChange={toggleAddPayPalModal}
-        updatePayPalAddressFunction={updatePayPalAddress}
-      />
-
 
       {/* Header */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -185,16 +134,6 @@ export default function WalletsPage() {
           </p>
         </div>
 
-        {(user?.isMerchant === true || user?.isAdmin === true) && hasRedeemerWallet && (
-          <Button
-            variant="outline"
-            onClick={toggleAddPayPalModal}
-            className="h-10 w-full whitespace-nowrap sm:w-auto"
-          >
-            <Wallet className="h-4 w-4" />
-            Connect PayPal Account
-          </Button>
-        )}
       </div>
 
       <div className="flex items-center space-x-2 rounded-lg border bg-muted/25 px-3 py-2">
@@ -254,9 +193,6 @@ export default function WalletsPage() {
           </Card>
         ) : (
           visibleWallets.map((wallet) => {
-            const walletUnwrapEnabled = wallet.address
-              ? unwrapEnabledByAddress[wallet.address.toLowerCase()] === true
-              : false
             const isPrimaryWallet = wallet.address
               ? wallet.address.toLowerCase() === normalizedPrimaryWalletAddress
               : false
@@ -286,14 +222,6 @@ export default function WalletsPage() {
                           <p className="mt-1 inline-flex rounded-md bg-muted/50 px-2 py-0.5 font-mono text-xs text-gray-600 dark:text-gray-400">
                             {formatAddress(wallet.address)}
                           </p>
-                        )}
-                        {walletUnwrapEnabled && (
-                          <div className="mt-2">
-                            <Badge variant="success" className="gap-1 text-[10px] sm:text-xs">
-                              <CheckCircle2 className="h-3.5 w-3.5 mr-1" />
-                              Unwrap Enabled
-                            </Badge>
-                          </div>
                         )}
                       </div>
                     </div>

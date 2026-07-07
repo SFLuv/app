@@ -3,7 +3,7 @@
 import { useState } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { DollarSign, BarChart3, TrendingUp, ArrowDownToLine } from "lucide-react"
+import { DollarSign, BarChart3, TrendingUp } from "lucide-react"
 import type { TransactionAnalytics } from "@/types/transaction"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 
@@ -53,12 +53,9 @@ export function TransactionAnalytics({ analytics }: TransactionAnalyticsProps) {
     return date
   }
 
-  // Mock total unwrapped amount
-  const totalUnwrapped = 3250
-
   return (
     <div className="space-y-6">
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between pb-2">
             <CardTitle className="text-sm font-medium text-black dark:text-white">Total Income</CardTitle>
@@ -91,16 +88,6 @@ export function TransactionAnalytics({ analytics }: TransactionAnalyticsProps) {
               {formatCurrency(analytics.averageTransaction)} SFLuv
             </div>
             <p className="text-xs text-gray-500 dark:text-gray-400">Per transaction</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium text-black dark:text-white">Total Unwrapped</CardTitle>
-            <ArrowDownToLine className="h-4 w-4 text-orange-500" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-black dark:text-white">{formatCurrency(totalUnwrapped)} SFLuv</div>
-            <p className="text-xs text-gray-500 dark:text-gray-400">Converted to USD</p>
           </CardContent>
         </Card>
       </div>
