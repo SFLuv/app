@@ -304,5 +304,5 @@ func NewServerHandler(ctx context.Context, pools *DBPools, appLogger *logger.Log
 	// read-only transactions inside the mcp package.
 	mcpService := mcp.New(pools.App, pools.Bot, pools.Ponder, a, activeChainID)
 
-	return router.New(s, a, p, mcpService.Handler()), nil
+	return router.New(s, a, p, mcpService.RegisterRoutes), nil
 }

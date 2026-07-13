@@ -2,6 +2,8 @@ package mcp
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -15,38 +17,24 @@ type stubAuthority struct {
 }
 
 func (s stubAuthority) UserIsActive(context.Context, string) bool { return s.active }
-func (s stubAuthority) IsAdmin(context.Context, string) bool       { return s.admin }
-
-func gateWith(authority adminAuthority, validate func(string) (string, error)) *authGate {
-	return &authGate{authority: authority, validate: validate}
-}
-
-func okValidate(did string) func(string) (string, error) {
-	return func(string) (string, error) { return did, nil }
-}
+func (s stubAuthority) IsAdmin(context.Context, string) bool      { return s.admin }
 
 func TestBearerToken(t *testing.T) {
 	cases := []struct {
 		name       string
 		authHeader string
-		accessTok  string
 		want       string
 	}{
-		{"authorization bearer", "Bearer abc.def.ghi", "", "abc.def.ghi"},
-		{"case-insensitive scheme", "bearer tok", "", "tok"},
-		{"access-token fallback", "", "legacy-tok", "legacy-tok"},
-		{"authorization wins", "Bearer primary", "secondary", "primary"},
-		{"no token", "", "", ""},
-		{"non-bearer scheme ignored", "Basic Zm9v", "", ""},
+		{"authorization bearer", "Bearer abc.def.ghi", "abc.def.ghi"},
+		{"case-insensitive scheme", "bearer tok", "tok"},
+		{"no header", "", ""},
+		{"non-bearer scheme ignored", "Basic Zm9v", ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			r := httptest.NewRequest(http.MethodPost, "/mcp", nil)
 			if tc.authHeader != "" {
 				r.Header.Set("Authorization", tc.authHeader)
-			}
-			if tc.accessTok != "" {
-				r.Header.Set("Access-Token", tc.accessTok)
 			}
 			if got := bearerToken(r); got != tc.want {
 				t.Fatalf("bearerToken = %q; want %q", got, tc.want)
@@ -55,24 +43,72 @@ func TestBearerToken(t *testing.T) {
 	}
 }
 
-// TestMiddlewareRejectsUnlessActiveAdmin is the core security check: the wrapped
-// handler must only be reached by a validated, active SFLUV admin.
-func TestMiddlewareRejectsUnlessActiveAdmin(t *testing.T) {
-	badToken := func(string) (string, error) { return "", errors.New("invalid token") }
+func TestVerifyPKCE(t *testing.T) {
+	verifier := "the-quick-brown-fox-jumps-over-the-lazy-dog-1234567890"
+	sum := sha256.Sum256([]byte(verifier))
+	challenge := base64.RawURLEncoding.EncodeToString(sum[:])
+
+	if !verifyPKCE(verifier, challenge) {
+		t.Fatal("valid S256 verifier should match its challenge")
+	}
+	if verifyPKCE("wrong-verifier", challenge) {
+		t.Fatal("mismatched verifier must not verify")
+	}
+	if verifyPKCE("", challenge) || verifyPKCE(verifier, "") {
+		t.Fatal("empty verifier/challenge must not verify")
+	}
+}
+
+func TestValidRedirectURI(t *testing.T) {
+	cases := []struct {
+		uri  string
+		want bool
+	}{
+		{"https://claude.ai/api/mcp/auth_callback", true},
+		{"http://localhost:6274/callback", true},
+		{"http://127.0.0.1:8080/cb", true},
+		{"http://evil.example.com/cb", false}, // plain http non-loopback
+		{"ftp://host/cb", false},
+		{"javascript:alert(1)", false},
+		{"", false},
+		{"not a url", false},
+	}
+	for _, tc := range cases {
+		if got := validRedirectURI(tc.uri); got != tc.want {
+			t.Fatalf("validRedirectURI(%q) = %v; want %v", tc.uri, got, tc.want)
+		}
+	}
+}
+
+func TestScopeAllowed(t *testing.T) {
+	if !scopeAllowed("") || !scopeAllowed(oauthScope) {
+		t.Fatal("empty scope and the read scope must be allowed")
+	}
+	if scopeAllowed("sfluv.admin.write") || scopeAllowed(oauthScope+" something.else") {
+		t.Fatal("unknown scopes must be rejected")
+	}
+}
+
+// TestRequireBearer is the core resource-server security check: the MCP tool
+// handler must only be reached with a valid AS token whose owner is STILL a live
+// admin.
+func TestRequireBearer(t *testing.T) {
+	badLookup := func(context.Context, string) (string, error) { return "", errors.New("no such token") }
+	okLookup := func(context.Context, string) (string, error) { return "did:privy:1", nil }
 
 	cases := []struct {
 		name       string
 		token      string
-		validate   func(string) (string, error)
+		lookup     func(context.Context, string) (string, error)
 		authority  adminAuthority
 		wantStatus int
 		wantNext   bool
 	}{
-		{"missing token", "", okValidate("did:1"), stubAuthority{true, true}, http.StatusUnauthorized, false},
-		{"invalid token", "x", badToken, stubAuthority{true, true}, http.StatusUnauthorized, false},
-		{"valid but not active", "x", okValidate("did:1"), stubAuthority{active: false, admin: true}, http.StatusUnauthorized, false},
-		{"valid but not admin", "x", okValidate("did:1"), stubAuthority{active: true, admin: false}, http.StatusUnauthorized, false},
-		{"active admin passes", "x", okValidate("did:1"), stubAuthority{active: true, admin: true}, http.StatusOK, true},
+		{"missing token", "", okLookup, stubAuthority{true, true}, http.StatusUnauthorized, false},
+		{"unknown/expired token", "x", badLookup, stubAuthority{true, true}, http.StatusUnauthorized, false},
+		{"valid token but not active", "x", okLookup, stubAuthority{active: false, admin: true}, http.StatusUnauthorized, false},
+		{"valid token but not admin", "x", okLookup, stubAuthority{active: true, admin: false}, http.StatusUnauthorized, false},
+		{"active admin passes", "x", okLookup, stubAuthority{active: true, admin: true}, http.StatusOK, true},
 	}
 
 	for _, tc := range cases {
@@ -83,14 +119,14 @@ func TestMiddlewareRejectsUnlessActiveAdmin(t *testing.T) {
 				w.WriteHeader(http.StatusOK)
 			})
 
-			gate := gateWith(tc.authority, tc.validate)
+			o := &oauthServer{authority: tc.authority, lookupToken: tc.lookup, baseURL: "https://api.example.com"}
 			r := httptest.NewRequest(http.MethodPost, "/mcp", nil)
 			if tc.token != "" {
 				r.Header.Set("Authorization", "Bearer "+tc.token)
 			}
 			rec := httptest.NewRecorder()
 
-			gate.middleware(next).ServeHTTP(rec, r)
+			o.requireBearer(next).ServeHTTP(rec, r)
 
 			if rec.Code != tc.wantStatus {
 				t.Fatalf("status = %d; want %d", rec.Code, tc.wantStatus)
@@ -98,10 +134,8 @@ func TestMiddlewareRejectsUnlessActiveAdmin(t *testing.T) {
 			if nextCalled != tc.wantNext {
 				t.Fatalf("next called = %v; want %v", nextCalled, tc.wantNext)
 			}
-			if !tc.wantNext {
-				if got := rec.Header().Get("WWW-Authenticate"); got == "" {
-					t.Fatal("expected WWW-Authenticate header on rejection")
-				}
+			if !tc.wantNext && rec.Header().Get("WWW-Authenticate") == "" {
+				t.Fatal("expected WWW-Authenticate header on rejection")
 			}
 		})
 	}

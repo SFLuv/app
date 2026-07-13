@@ -84,7 +84,7 @@ func allowedOrigins() []string {
 	return origins
 }
 
-func New(s *handlers.BotService, a *handlers.AppService, p *handlers.PonderService, mcpHandler http.Handler) *chi.Mux {
+func New(s *handlers.BotService, a *handlers.AppService, p *handlers.PonderService, mcpRegister func(chi.Router)) *chi.Mux {
 	r := chi.NewRouter()
 
 	r.Use(middleware.Logger)
@@ -98,12 +98,12 @@ func New(s *handlers.BotService, a *handlers.AppService, p *handlers.PonderServi
 	}))
 	r.Use(m.AuthMiddleware)
 
-	// Admin MCP endpoint. It authenticates itself (Privy JWT bearer + live admin
-	// check) inside mcpHandler, independent of the header-based AuthMiddleware
-	// above, so unauthenticated/non-admin callers never reach a tool.
-	if mcpHandler != nil {
-		r.Handle("/mcp", mcpHandler)
-		r.Handle("/mcp/*", mcpHandler)
+	// Admin MCP endpoint + its OAuth authorization server. It authenticates
+	// itself (OAuth access token bound to a SFLUV user DID + live admin check)
+	// independently of the header-based AuthMiddleware above, so
+	// unauthenticated/non-admin callers never reach a tool.
+	if mcpRegister != nil {
+		mcpRegister(r)
 	}
 
 	AddBotRoutes(r, s, a)

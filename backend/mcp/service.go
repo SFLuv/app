@@ -3,36 +3,35 @@
 // separate server.
 //
 // Security model (the whole point of this package):
-//   - Access is gated by the EXISTING Privy JWT + SFLUV admin check. The MCP
-//     bearer token is a Privy access token; this package issues no tokens of its
-//     own and stores no credentials. See auth.go.
-//   - Every tool is READ ONLY: named reports only (never raw SQL), and every
-//     query runs inside a read-only Postgres transaction with a statement
-//     timeout (see withReadOnlyTx in reports.go).
-//   - No secrets are ever returned: this package only selects curated,
-//     non-sensitive columns. It never touches api keys, private keys, encrypted
-//     OAuth credentials, push tokens, W9 document URLs, or PIN hashes.
+//   - Access is gated by an OAuth 2.1 flow whose identity step is SFLUV's own
+//     Privy login (bridged through the frontend authorize page). Every issued
+//     token is bound to a SFLUV user DID, and admin status is re-checked live on
+//     every /mcp request, so revoking admin takes effect immediately. See
+//     oauth.go / oauth_store.go.
+//   - Every tool is READ ONLY: named reports only (never raw SQL), each query in
+//     a read-only Postgres transaction with a statement timeout (reports.go).
+//   - No secrets are ever returned: only curated, non-sensitive columns. Never
+//     api keys, private keys, encrypted OAuth credentials, push tokens, W9
+//     document URLs, or PIN hashes.
 package mcp
 
 import (
-	"net/http"
-
 	"github.com/SFLuv/app/backend/handlers"
+	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/mark3labs/mcp-go/server"
 )
 
-// Service is the bolt-on MCP endpoint. Construct it with New and mount its
-// Handler on the main router at /mcp.
+// Service is the bolt-on MCP endpoint plus its OAuth authorization server.
+// Construct it with New and mount it with RegisterRoutes on the main router.
 type Service struct {
-	core *reportCore
-	gate *authGate
+	core  *reportCore
+	oauth *oauthServer
 }
 
 // New builds the MCP service from the running server's existing DB pools and
-// AppService. It reuses the same pools the rest of the backend uses; the
-// read-only guarantee comes from wrapping every query in a read-only
-// transaction, not from a separate connection.
+// AppService. The report tools reuse these pools read-only; the OAuth store uses
+// the app pool for its (write) bookkeeping tables.
 func New(appDB, botDB, ponderDB *pgxpool.Pool, app *handlers.AppService, chainID int64) *Service {
 	return &Service{
 		core: &reportCore{
@@ -41,16 +40,17 @@ func New(appDB, botDB, ponderDB *pgxpool.Pool, app *handlers.AppService, chainID
 			ponderDB: ponderDB,
 			chainID:  chainID,
 		},
-		gate: newAuthGate(app),
+		oauth: newOAuthServer(appDB, app),
 	}
 }
 
-// Handler returns the auth-gated MCP HTTP handler to mount at /mcp. The auth
-// middleware runs before any MCP tool is reachable, so an unauthenticated or
-// non-admin request never touches the database.
-func (s *Service) Handler() http.Handler {
+// RegisterRoutes mounts the OAuth/discovery endpoints and the bearer-gated
+// /mcp handler onto the router. The MCP tool handler is only reachable through
+// oauthServer.requireBearer (valid AS token + live admin), so an unauthenticated
+// or non-admin request never touches the database.
+func (s *Service) RegisterRoutes(r chi.Router) {
 	mcpServer := s.core.newServer()
 	s.core.registerExtraTools(mcpServer)
 	streamable := server.NewStreamableHTTPServer(mcpServer)
-	return s.gate.middleware(streamable)
+	s.oauth.registerRoutes(r, streamable)
 }
