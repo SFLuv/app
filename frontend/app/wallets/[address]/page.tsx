@@ -4,9 +4,14 @@ import { useState, useEffect, useMemo, useRef, useCallback } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { Send, QrCode, Eye, EyeOff, RefreshCw, ArrowLeft, ArrowDownLeft, Wallet, Pencil, Check, X, BellOff, Bell, Copy } from "lucide-react"
+import { Send, QrCode, Eye, EyeOff, RefreshCw, ArrowLeft, ArrowDownLeft, Wallet, Pencil, Check, X, BellOff, Bell, Copy, ArrowLeftRight } from "lucide-react"
+import { USDC } from "@/components/wallets/usdc-theme"
 import { SendCryptoModal } from "@/components/wallets/send-crypto-modal"
 import { ReceiveCryptoModal } from "@/components/wallets/receive-crypto-modal"
+import { UsdcBalanceCard } from "@/components/wallets/usdc-balance-card"
+import { SendUsdcModal } from "@/components/wallets/send-usdc-modal"
+import { ReceiveUsdcModal } from "@/components/wallets/receive-usdc-modal"
+import { WrapUsdcModal } from "@/components/wallets/wrap-usdc-modal"
 import { TransactionHistoryList } from "@/components/wallets/transaction-history-list"
 import { WalletBalanceCard } from "@/components/wallets/wallet-balance-card"
 import { TransactionModal } from "@/components/transactions/transaction-modal"
@@ -43,6 +48,13 @@ export default function WalletDetailsPage() {
   const [transactionModalOpen, setTransactionModalOpen] = useState(false)
   const [gasTokenBalance, setGasTokenBalance] = useState<number | null>(null)
   const [addressCopied, setAddressCopied] = useState(false)
+  // Admin-only USDC (underlying) widgets: view/send/receive USDC and wrap into SFLUV.
+  const [usdcBalance, setUsdcBalance] = useState<number | null>(null)
+  const [usdcDecimals, setUsdcDecimals] = useState<number>(6)
+  const [usdcLoading, setUsdcLoading] = useState<boolean>(false)
+  const [showUsdcSendModal, setShowUsdcSendModal] = useState(false)
+  const [showUsdcReceiveModal, setShowUsdcReceiveModal] = useState(false)
+  const [showWrapModal, setShowWrapModal] = useState(false)
   const nameInputRef = useRef<HTMLInputElement>(null)
   const latestTxMarkerRef = useRef<string | null>(null)
   const txPollingInFlightRef = useRef(false)
@@ -237,8 +249,33 @@ export default function WalletDetailsPage() {
     }
   }, [wallet])
 
+  const showUsdcWidgets = user?.isAdmin === true && wallet?.type === "smartwallet"
+
+  const updateUsdcBalance = useCallback(async () => {
+    if (!wallet || wallet.type !== "smartwallet" || user?.isAdmin !== true) {
+      setUsdcBalance(null)
+      setUsdcLoading(false)
+      return
+    }
+    setUsdcLoading(true)
+    try {
+      const [bal, dec] = await Promise.all([
+        wallet.getUSDCBalanceFormatted(),
+        wallet.getUnderlyingDecimals(),
+      ])
+      setUsdcBalance(bal)
+      setUsdcDecimals(dec)
+    } catch (error) {
+      console.error(error)
+      setUsdcBalance(null)
+    } finally {
+      setUsdcLoading(false)
+    }
+  }, [wallet, user?.isAdmin])
+
   const updateBalanceWithRetryRef = useRef(updateBalanceWithRetry)
   const updateGasBalanceRef = useRef(updateGasBalance)
+  const updateUsdcBalanceRef = useRef(updateUsdcBalance)
 
   useEffect(() => {
     updateBalanceWithRetryRef.current = updateBalanceWithRetry
@@ -249,11 +286,16 @@ export default function WalletDetailsPage() {
   }, [updateGasBalance])
 
   useEffect(() => {
+    updateUsdcBalanceRef.current = updateUsdcBalance
+  }, [updateUsdcBalance])
+
+  useEffect(() => {
     if(!showReceiveModal && !showSendModal) {
       void updateBalance()
       void updateGasBalance()
+      void updateUsdcBalance()
     }
-  }, [showReceiveModal, showSendModal, updateBalance, updateGasBalance])
+  }, [showReceiveModal, showSendModal, updateBalance, updateGasBalance, updateUsdcBalance])
 
   const toggleNotificationModal = () => {
     setNotificationModalOpen(!notificationModalOpen)
@@ -370,6 +412,7 @@ export default function WalletDetailsPage() {
         if (nextMarker && nextMarker !== previousMarker) {
           await updateBalanceWithRetryRef.current()
           await updateGasBalanceRef.current()
+          await updateUsdcBalanceRef.current()
         }
       } catch (pollError) {
         console.error(pollError)
@@ -613,6 +656,42 @@ export default function WalletDetailsPage() {
             </CardContent>
           </Card>
 
+          {/* Admin USDC (underlying) — view/send/receive USDC and wrap into SFLUV */}
+          {showUsdcWidgets && (
+            <div className="space-y-3">
+              <UsdcBalanceCard balance={usdcBalance} showBalance={showBalance} loading={usdcLoading} />
+              <Card className={`border ${USDC.cardBorder}`}>
+                <CardContent className="p-3 sm:p-4">
+                  <div className="grid gap-3 grid-cols-3">
+                    <Button
+                      variant="outline"
+                      onClick={() => setShowUsdcSendModal(true)}
+                      className={`h-14 sm:h-16 flex-col gap-1.5 sm:gap-2 text-sm ${USDC.buttonOutline}`}
+                    >
+                      <Send className="h-4 w-4 sm:h-5 sm:w-5" />
+                      <span>Send</span>
+                    </Button>
+                    <Button
+                      variant="outline"
+                      onClick={() => setShowUsdcReceiveModal(true)}
+                      className={`h-14 sm:h-16 flex-col gap-1.5 sm:gap-2 text-sm ${USDC.buttonOutline}`}
+                    >
+                      <ArrowDownLeft className="h-4 w-4 sm:h-5 sm:w-5" />
+                      <span>Receive</span>
+                    </Button>
+                    <Button
+                      onClick={() => setShowWrapModal(true)}
+                      className={`h-14 sm:h-16 flex-col gap-1.5 sm:gap-2 text-sm ${USDC.button}`}
+                    >
+                      <ArrowLeftRight className="h-4 w-4 sm:h-5 sm:w-5" />
+                      <span>Wrap</span>
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+          )}
+
           {/* Quick Stats */}
           {/* <div className="grid grid-cols-2 gap-3 sm:gap-4">
             <Card>
@@ -698,6 +777,29 @@ export default function WalletDetailsPage() {
         defaultTipTo={pendingSendTipTo}
       />
       <ReceiveCryptoModal open={showReceiveModal} onOpenChange={setShowReceiveModal} wallet={wallet} />
+      {showUsdcWidgets && (
+        <>
+          <SendUsdcModal
+            open={showUsdcSendModal}
+            onOpenChange={setShowUsdcSendModal}
+            wallet={wallet}
+            balance={usdcBalance}
+            decimals={usdcDecimals}
+            onSuccess={updateUsdcBalance}
+          />
+          <ReceiveUsdcModal open={showUsdcReceiveModal} onOpenChange={setShowUsdcReceiveModal} wallet={wallet} />
+          <WrapUsdcModal
+            open={showWrapModal}
+            onOpenChange={setShowWrapModal}
+            wallet={wallet}
+            balance={usdcBalance}
+            decimals={usdcDecimals}
+            onSuccess={async () => {
+              await Promise.all([updateUsdcBalance(), updateBalance()])
+            }}
+          />
+        </>
+      )}
       <NotificationModal
         open={notificationModalOpen}
         onOpenChange={setNotificationModalOpen}
