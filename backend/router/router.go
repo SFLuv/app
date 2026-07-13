@@ -84,7 +84,7 @@ func allowedOrigins() []string {
 	return origins
 }
 
-func New(s *handlers.BotService, a *handlers.AppService, p *handlers.PonderService) *chi.Mux {
+func New(s *handlers.BotService, a *handlers.AppService, p *handlers.PonderService, mcpHandler http.Handler) *chi.Mux {
 	r := chi.NewRouter()
 
 	r.Use(middleware.Logger)
@@ -97,6 +97,14 @@ func New(s *handlers.BotService, a *handlers.AppService, p *handlers.PonderServi
 		MaxAge:           300,
 	}))
 	r.Use(m.AuthMiddleware)
+
+	// Admin MCP endpoint. It authenticates itself (Privy JWT bearer + live admin
+	// check) inside mcpHandler, independent of the header-based AuthMiddleware
+	// above, so unauthenticated/non-admin callers never reach a tool.
+	if mcpHandler != nil {
+		r.Handle("/mcp", mcpHandler)
+		r.Handle("/mcp/*", mcpHandler)
+	}
 
 	AddBotRoutes(r, s, a)
 	AddClientConfigRoutes(r, a)

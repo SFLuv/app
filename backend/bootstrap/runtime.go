@@ -13,6 +13,7 @@ import (
 	"github.com/SFLuv/app/backend/db"
 	"github.com/SFLuv/app/backend/handlers"
 	"github.com/SFLuv/app/backend/logger"
+	"github.com/SFLuv/app/backend/mcp"
 	"github.com/SFLuv/app/backend/router"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
@@ -297,5 +298,11 @@ func NewServerHandler(ctx context.Context, pools *DBPools, appLogger *logger.Log
 	if err := p.SyncCurrentAnalyticsWalletRoleHistory(ctx); err != nil {
 		appLogger.Logf("error syncing analytics wallet role history during startup: %s", err)
 	}
-	return router.New(s, a, p), nil
+
+	// Read-only admin MCP endpoint, gated by the existing Privy JWT + admin check.
+	// It reuses the running pools; the read-only guarantee comes from per-query
+	// read-only transactions inside the mcp package.
+	mcpService := mcp.New(pools.App, pools.Bot, pools.Ponder, a, activeChainID)
+
+	return router.New(s, a, p, mcpService.Handler()), nil
 }
