@@ -806,6 +806,84 @@ var schemaMigrations = []SchemaMigration{
 			return nil
 		},
 	},
+	{
+		Version:     "1.21",
+		Description: "add OAuth state for the read-only admin MCP endpoint (identity = SFLUV user DID)",
+		Apply: func(ctx context.Context, pools *DBPools, appLogger *logger.LogCloser) error {
+			if _, err := pools.App.Exec(ctx, `
+				CREATE TABLE IF NOT EXISTS admin_mcp_oauth_clients(
+					client_id TEXT PRIMARY KEY,
+					client_name TEXT NOT NULL DEFAULT '',
+					redirect_uris TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
+					created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+				);
+
+				CREATE TABLE IF NOT EXISTS admin_mcp_oauth_login_states(
+					state_hash TEXT PRIMARY KEY,
+					client_id TEXT NOT NULL REFERENCES admin_mcp_oauth_clients(client_id) ON DELETE CASCADE,
+					redirect_uri TEXT NOT NULL,
+					client_state TEXT NOT NULL DEFAULT '',
+					code_challenge TEXT NOT NULL,
+					code_challenge_method TEXT NOT NULL DEFAULT 'S256',
+					scope TEXT NOT NULL DEFAULT '',
+					resource TEXT NOT NULL DEFAULT '',
+					expires_at TIMESTAMPTZ NOT NULL,
+					created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+				);
+
+				CREATE TABLE IF NOT EXISTS admin_mcp_oauth_auth_codes(
+					code_hash TEXT PRIMARY KEY,
+					client_id TEXT NOT NULL REFERENCES admin_mcp_oauth_clients(client_id) ON DELETE CASCADE,
+					user_did TEXT NOT NULL,
+					redirect_uri TEXT NOT NULL,
+					code_challenge TEXT NOT NULL,
+					code_challenge_method TEXT NOT NULL DEFAULT 'S256',
+					scope TEXT NOT NULL DEFAULT '',
+					resource TEXT NOT NULL DEFAULT '',
+					expires_at TIMESTAMPTZ NOT NULL,
+					used_at TIMESTAMPTZ,
+					created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+				);
+
+				CREATE TABLE IF NOT EXISTS admin_mcp_oauth_tokens(
+					token_hash TEXT PRIMARY KEY,
+					client_id TEXT NOT NULL REFERENCES admin_mcp_oauth_clients(client_id) ON DELETE CASCADE,
+					user_did TEXT NOT NULL,
+					refresh_token_hash TEXT,
+					scope TEXT NOT NULL DEFAULT '',
+					resource TEXT NOT NULL DEFAULT '',
+					issued_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+					expires_at TIMESTAMPTZ NOT NULL,
+					last_used_at TIMESTAMPTZ,
+					revoked_at TIMESTAMPTZ
+				);
+
+				CREATE INDEX IF NOT EXISTS admin_mcp_oauth_tokens_did_idx
+					ON admin_mcp_oauth_tokens(user_did, expires_at DESC);
+				CREATE INDEX IF NOT EXISTS admin_mcp_oauth_tokens_client_idx
+					ON admin_mcp_oauth_tokens(client_id, expires_at DESC);
+
+				CREATE TABLE IF NOT EXISTS admin_mcp_oauth_refresh_tokens(
+					token_hash TEXT PRIMARY KEY,
+					client_id TEXT NOT NULL REFERENCES admin_mcp_oauth_clients(client_id) ON DELETE CASCADE,
+					user_did TEXT NOT NULL,
+					scope TEXT NOT NULL DEFAULT '',
+					resource TEXT NOT NULL DEFAULT '',
+					issued_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+					expires_at TIMESTAMPTZ NOT NULL,
+					last_used_at TIMESTAMPTZ,
+					revoked_at TIMESTAMPTZ
+				);
+
+				CREATE INDEX IF NOT EXISTS admin_mcp_oauth_refresh_tokens_did_idx
+					ON admin_mcp_oauth_refresh_tokens(user_did, expires_at DESC);
+			`); err != nil {
+				return err
+			}
+
+			return nil
+		},
+	},
 }
 
 type versionTarget struct {

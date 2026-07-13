@@ -533,6 +533,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     const allowUnauthedRoute =
       pathname === "/map" ||
       pathname === "/update" ||
+      pathname === "/mcp/authorize" ||
       pathname === "/redirect" ||
       pathname === "/delete-account" ||
       pathname === "/recovery" ||

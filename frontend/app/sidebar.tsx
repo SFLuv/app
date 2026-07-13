@@ -28,6 +28,7 @@ export default function Sidebar({
   const shouldHideSidebar =
     pathname == "/faucet/redeem" ||
     pathname == "/update" ||
+    pathname == "/mcp/authorize" ||
     pathname == "/delete-account" ||
     pathname == "/recovery" ||
     pathname.startsWith("/photos/") ||

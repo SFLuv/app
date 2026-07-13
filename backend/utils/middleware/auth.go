@@ -15,19 +15,7 @@ func AuthMiddleware(next http.Handler) http.Handler {
 	return (http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 
 		accessToken := r.Header.Get("Access-Token")
-		token, err := jwt.ParseWithClaims(accessToken, &jwt.MapClaims{}, keyFunc)
-		if err != nil {
-			next.ServeHTTP(w, r)
-			return
-		}
-
-		err = Valid(token.Claims)
-		if err != nil {
-			next.ServeHTTP(w, r)
-			return
-		}
-
-		userDid, err := token.Claims.GetSubject()
+		userDid, err := ValidatePrivyToken(accessToken)
 		if err != nil {
 			next.ServeHTTP(w, r)
 			return
@@ -38,6 +26,38 @@ func AuthMiddleware(next http.Handler) http.Handler {
 
 		next.ServeHTTP(w, r)
 	}))
+}
+
+// ValidatePrivyToken parses and validates a Privy access token (ES256) using the
+// same verification key, audience, issuer, and expiry checks the app uses for
+// its normal auth, and returns the authenticated user's DID (the JWT subject).
+//
+// It is the single source of truth for Privy token validation so that any new
+// surface (e.g. the admin MCP endpoint) authenticates identically to the rest
+// of the backend rather than re-implementing token checks.
+func ValidatePrivyToken(accessToken string) (string, error) {
+	if accessToken == "" {
+		return "", errors.New("missing access token")
+	}
+
+	token, err := jwt.ParseWithClaims(accessToken, &jwt.MapClaims{}, keyFunc)
+	if err != nil {
+		return "", err
+	}
+
+	if err := Valid(token.Claims); err != nil {
+		return "", err
+	}
+
+	userDid, err := token.Claims.GetSubject()
+	if err != nil {
+		return "", err
+	}
+	if userDid == "" {
+		return "", errors.New("token subject is empty")
+	}
+
+	return userDid, nil
 }
 
 func Valid(c jwt.Claims) error {
