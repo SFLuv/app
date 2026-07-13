@@ -4,7 +4,7 @@ import { toSimpleSmartAccount, ToSimpleSmartAccountReturnType } from "permission
 import { Address, createPublicClient, createWalletClient, custom, encodeFunctionData, formatUnits, Hex, hexToBytes, parseUnits, PublicClient } from "viem";
 import { entryPoint07Address } from "viem/account-abstraction";
 import { Hash } from "viem";
-import { allowance, approve, balanceOf, depositFor, hasRole, minterRole, redeemerRole, transfer, unwrapSwapAndBridge, zapIn } from "../abi";
+import { allowance, approve, balanceOf, decimals, depositFor, hasRole, minterRole, redeemerRole, transfer, underlying, unwrapSwapAndBridge, zapIn } from "../abi";
 import type { ResolvedCommunityConfig } from "@/lib/community-config";
 import { BundlerService } from "@citizenwallet/sdk";
 
@@ -667,14 +667,122 @@ export class AppWallet {
     this.isHidden = isHidden
   }
 
-  wrap = async (amount: bigint): Promise<TxState | null>  => {
+  // --- USDC (the SFLUV wrapper's underlying token on Celo) -------------------
+
+  private _underlyingToken: Address | null = null
+  private _underlyingDecimals: number | null = null
+
+  // getUnderlyingToken reads (and caches) the SFLUV wrapper's underlying token
+  // address (USDC on Celo) straight from the on-chain contract, so it stays
+  // correct without any extra config.
+  getUnderlyingToken = async (): Promise<Address | null> => {
+    if (this._underlyingToken) return this._underlyingToken
+    if (!this.publicClient) return null
+    try {
+      const address = await this.publicClient.readContract({
+        address: this.SFLUV_TOKEN,
+        abi: [underlying],
+        functionName: "underlying",
+      }) as Address
+      this._underlyingToken = address
+      return address
+    } catch (error) {
+      console.error("error reading underlying token", error)
+      return null
+    }
+  }
+
+  getUnderlyingDecimals = async (): Promise<number> => {
+    if (this._underlyingDecimals !== null) return this._underlyingDecimals
+    const token = await this.getUnderlyingToken()
+    if (!token || !this.publicClient) return 6
+    try {
+      const d = await this.publicClient.readContract({
+        address: token,
+        abi: [decimals],
+        functionName: "decimals",
+      }) as number | bigint
+      this._underlyingDecimals = Number(d)
+      return this._underlyingDecimals
+    } catch (error) {
+      console.error("error reading underlying decimals", error)
+      return 6
+    }
+  }
+
+  getUSDCBalanceFormatted = async (): Promise<number | null> => {
+    const token = await this.getUnderlyingToken()
+    if (!token) return null
+    const b = await this.getBalance(token)
+    if (b === null) return null
+
+    const dec = await this.getUnderlyingDecimals()
+    const d = 10n ** BigInt(dec)
+    return Number(b * 100n / d) / 100
+  }
+
+  // sendUSDC transfers the underlying USDC to another address, mirroring send().
+  sendUSDC = async (amount: bigint, to: Address): Promise<TxState | null> => {
+    if (!this._beforeTx({ allowEOA: true })) return null
+
+    const token = await this.getUnderlyingToken()
+    if (!token) {
+      return { sending: false, error: "Unable to resolve the underlying USDC token", hash: null }
+    }
+
+    const callData = encodeFunctionData({
+      abi: [transfer],
+      functionName: "transfer",
+      args: [to, amount],
+    })
+
+    if (this.type === "eoa") {
+      return this._submitEOATransaction(token, callData)
+    }
+    return this._submitContractCall(token, callData)
+  }
+
+  // wrap deposits `amount` of the underlying USDC and mints SFLUV 1:1 to this
+  // wallet (depositFor). It first ensures the SFLUV token is approved to pull the
+  // USDC, following the existing allowance pattern. Smart wallets only.
+  wrap = async (amount: bigint): Promise<TxState | null> => {
     const t = this._beforeTx()
-    if(!t) return null
+    if (!t) return null
+
+    if (amount <= 0n) {
+      return { sending: false, error: "Enter a wrap amount greater than 0", hash: null }
+    }
+
+    const token = await this.getUnderlyingToken()
+    if (!token) {
+      return { sending: false, error: "Unable to resolve the underlying USDC token", hash: null }
+    }
+
+    const balance = await this.getBalance(token)
+    if (balance !== null && balance < amount) {
+      return { sending: false, error: "Insufficient USDC balance to wrap this amount", hash: null }
+    }
+
+    // Ensure the SFLUV token can pull `amount` of USDC from this wallet.
+    const current = await this._getAllowance(t.wallet.address, this.SFLUV_TOKEN, token)
+    if (current === null) {
+      return { sending: false, error: "Unable to read USDC allowance", hash: null }
+    }
+    if (current < amount) {
+      const approveReceipt = await this._setTokenAllowance(token, this.SFLUV_TOKEN, amount)
+      if (approveReceipt.error || !approveReceipt.hash) {
+        return { sending: false, error: approveReceipt.error ?? "Failed to approve USDC spend", hash: approveReceipt.hash }
+      }
+      const allowanceUpdated = await this._waitForAllowance(t.wallet.address, this.SFLUV_TOKEN, amount, token)
+      if (!allowanceUpdated) {
+        return { sending: false, error: "USDC approval is still pending, please try again", hash: approveReceipt.hash }
+      }
+    }
 
     const callData = encodeFunctionData({
       abi: [depositFor],
       functionName: "depositFor",
-      args: [t.wallet.address, amount]
+      args: [t.wallet.address, amount],
     })
 
     return this._execTx(t.wallet, t.signer, callData)
