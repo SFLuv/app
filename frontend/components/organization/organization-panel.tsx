@@ -18,6 +18,7 @@ const roleLabels: Record<OrgRoleType, string> = {
   affiliate: "Affiliate",
   proposer: "Proposer",
   supervisor: "Supervisor",
+  issuer: "Issuer",
 }
 
 const cycleLabels: Record<string, string> = {
@@ -172,8 +173,8 @@ export function OrganizationPanel({ onOpenRoleSettings }: OrganizationPanelProps
         <CardHeader>
           <CardTitle className="text-black dark:text-white">No organization yet</CardTitle>
           <CardDescription>
-            Request an affiliate, proposer, or supervisor role to create your organization — or accept an email invite from an
-            existing one.
+            Request an affiliate, proposer, supervisor, or issuer role to create your organization — or accept an email invite
+            from an existing one.
           </CardDescription>
         </CardHeader>
       </Card>
@@ -304,7 +305,7 @@ export function OrganizationPanel({ onOpenRoleSettings }: OrganizationPanelProps
                 </SelectContent>
               </Select>
             </div>
-            {(requestRole === "proposer" || requestRole === "supervisor") && (
+            {(requestRole === "proposer" || requestRole === "supervisor" || requestRole === "issuer") && (
               <div className="space-y-1">
                 <Label className="text-xs">Notification email</Label>
                 <Input className="w-56" type="email" placeholder="you@example.org" value={requestEmail} onChange={(e) => setRequestEmail(e.target.value)} />
@@ -312,7 +313,7 @@ export function OrganizationPanel({ onOpenRoleSettings }: OrganizationPanelProps
             )}
             <Button
               className="bg-[#eb6c6c] hover:bg-[#d55c5c]"
-              disabled={busy || !requestRole || ((requestRole === "proposer" || requestRole === "supervisor") && !requestEmail.trim())}
+              disabled={busy || !requestRole || ((requestRole === "proposer" || requestRole === "supervisor" || requestRole === "issuer") && !requestEmail.trim())}
               onClick={submitRoleRequest}
             >
               Submit request

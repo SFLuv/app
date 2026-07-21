@@ -5817,6 +5817,21 @@ func (a *AppService) RequestIssuerStatus(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// Organization-first flow: attach the request to the caller's org, creating
+	// it (caller = superadmin) when they have none.
+	if _, orgErrMsg := a.ensureOrgForRoleRequest(r, *userDid, req.Organization, &structs.OrganizationRoleRequest{
+		RoleType: structs.OrgRoleTypeIssuer,
+		Email:    req.Email,
+	}); orgErrMsg != "" {
+		if orgErrMsg == "internal error" {
+			w.WriteHeader(http.StatusInternalServerError)
+		} else {
+			w.WriteHeader(http.StatusConflict)
+			w.Write([]byte(orgErrMsg))
+		}
+		return
+	}
+
 	issuer, err := a.db.UpsertIssuerRequest(r.Context(), *userDid, req.Organization, req.Email)
 	if err != nil {
 		if err.Error() == "issuer already approved" {

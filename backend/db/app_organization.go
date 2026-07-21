@@ -55,6 +55,10 @@ func syncMemberRoleFlagsTx(ctx context.Context, tx pgx.Tx, orgId int64, extraUse
 			is_supervisor = CASE
 				WHEN om.user_id IS NOT NULL THEN EXISTS (SELECT 1 FROM org_roles WHERE role_type = 'supervisor')
 				ELSE FALSE
+			END,
+			is_issuer = CASE
+				WHEN om.user_id IS NOT NULL THEN EXISTS (SELECT 1 FROM org_roles WHERE role_type = 'issuer')
+				ELSE FALSE
 			END
 		FROM affected a
 		LEFT JOIN organization_members om
@@ -504,7 +508,7 @@ func (a *AppDB) AcceptOrganizationInvite(ctx context.Context, tokenHash string, 
 // Approved roles are never downgraded by a re-request.
 func (a *AppDB) UpsertOrganizationRoleRequest(ctx context.Context, orgId int64, req *structs.OrganizationRoleRequest, requestedBy string) error {
 	switch req.RoleType {
-	case structs.OrgRoleTypeAffiliate, structs.OrgRoleTypeProposer, structs.OrgRoleTypeSupervisor:
+	case structs.OrgRoleTypeAffiliate, structs.OrgRoleTypeProposer, structs.OrgRoleTypeSupervisor, structs.OrgRoleTypeIssuer:
 	default:
 		return fmt.Errorf("invalid role type %q", req.RoleType)
 	}

@@ -14,6 +14,7 @@ const (
 	OrgRoleTypeAffiliate  = "affiliate"
 	OrgRoleTypeProposer   = "proposer"
 	OrgRoleTypeSupervisor = "supervisor"
+	OrgRoleTypeIssuer     = "issuer"
 )
 
 // Allocation cycles.

@@ -1,5 +1,5 @@
 export type OrgMemberRole = "member" | "admin" | "superadmin"
-export type OrgRoleType = "affiliate" | "proposer" | "supervisor"
+export type OrgRoleType = "affiliate" | "proposer" | "supervisor" | "issuer"
 export type AllocationCycle = "daily" | "weekly" | "monthly" | "one_time"
 
 export interface Organization {

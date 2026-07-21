@@ -14,7 +14,7 @@ import { useApp } from "@/context/AppProvider"
 import type { AllocationCycle, OrganizationView, OrgRoleType } from "@/types/organization"
 
 const cycles: AllocationCycle[] = ["daily", "weekly", "monthly", "one_time"]
-const roleTypes: OrgRoleType[] = ["affiliate", "proposer", "supervisor"]
+const roleTypes: OrgRoleType[] = ["affiliate", "proposer", "supervisor", "issuer"]
 
 // Platform-admin organization management: superadmin reassignment by email,
 // per-cycle allocations, and org role approval.

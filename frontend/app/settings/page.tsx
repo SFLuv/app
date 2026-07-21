@@ -2222,14 +2222,6 @@ export default function SettingsPage() {
               Improver
             </TabsTrigger>
           )}
-          {(issuerStatus === "pending" || issuerStatus === "approved") && (
-            <TabsTrigger
-              value="issuer"
-              className="text-black dark:text-white flex-1"
-            >
-              Issuer
-            </TabsTrigger>
-          )}
         </TabsList>
 
         <TabsContent value="organization">

@@ -59,7 +59,9 @@ func (a *AppDB) IsVoter(ctx context.Context, id string) (bool, error) {
 }
 
 func (a *AppDB) IsIssuer(ctx context.Context, id string) (bool, error) {
-	return a.getBoolUserRole(ctx, id, "is_issuer")
+	// Authoritative org-scoped check; see IsProposer.
+	ok, _, err := a.UserOrgHasApprovedRole(ctx, id, structs.OrgRoleTypeIssuer)
+	return ok, err
 }
 
 func (a *AppDB) IsSupervisor(ctx context.Context, id string) (bool, error) {

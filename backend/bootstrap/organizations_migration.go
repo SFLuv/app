@@ -40,7 +40,7 @@ func migrateOrganizations(ctx context.Context, pools *DBPools) error {
 
 		CREATE TABLE IF NOT EXISTS organization_roles(
 			organization_id BIGINT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
-			role_type TEXT NOT NULL CHECK (role_type IN ('affiliate', 'proposer', 'supervisor')),
+			role_type TEXT NOT NULL CHECK (role_type IN ('affiliate', 'proposer', 'supervisor', 'issuer')),
 			status TEXT NOT NULL DEFAULT 'pending',
 			email TEXT NOT NULL DEFAULT '',
 			primary_rewards_account TEXT NOT NULL DEFAULT '',
@@ -75,6 +75,7 @@ func migrateOrganizations(ctx context.Context, pools *DBPools) error {
 		ALTER TABLE affiliates ADD COLUMN IF NOT EXISTS organization_id BIGINT;
 		ALTER TABLE proposers ADD COLUMN IF NOT EXISTS organization_id BIGINT;
 		ALTER TABLE supervisors ADD COLUMN IF NOT EXISTS organization_id BIGINT;
+		ALTER TABLE issuers ADD COLUMN IF NOT EXISTS organization_id BIGINT;
 	`); err != nil {
 		return fmt.Errorf("error creating organization tables: %w", err)
 	}
@@ -135,6 +136,13 @@ func migrateOrganizations(ctx context.Context, pools *DBPools) error {
 		FROM supervisors s JOIN users u ON u.id = s.user_id;
 	`, "supervisor"); err != nil {
 		return fmt.Errorf("error collecting supervisors: %w", err)
+	}
+	if err := collect(`
+		SELECT i.user_id, i.organization, i.status, COALESCE(i.email, ''), '',
+			0, 0, 0, i.created_at, COALESCE(u.is_admin, FALSE), COALESCE(i.active, TRUE)
+		FROM issuers i JOIN users u ON u.id = i.user_id;
+	`, "issuer"); err != nil {
+		return fmt.Errorf("error collecting issuers: %w", err)
 	}
 
 	normalize := func(name string) string {
@@ -318,7 +326,7 @@ func migrateOrganizations(ctx context.Context, pools *DBPools) error {
 
 		// Point legacy role rows at their merged organization and canonical name so
 		// no references to pre-merge org spellings survive.
-		for _, table := range []string{"affiliates", "proposers", "supervisors"} {
+		for _, table := range []string{"affiliates", "proposers", "supervisors", "issuers"} {
 			if _, err := tx.Exec(ctx, fmt.Sprintf(`
 				UPDATE %s t
 				SET organization_id = o.id, organization = o.name
@@ -350,9 +358,15 @@ func migrateOrganizations(ctx context.Context, pools *DBPools) error {
 					JOIN organization_roles r ON r.organization_id = om.organization_id
 						AND r.role_type = 'supervisor' AND r.status = 'approved'
 					WHERE om.user_id = u.id
+				),
+				is_issuer = EXISTS (
+					SELECT 1 FROM organization_members om
+					JOIN organization_roles r ON r.organization_id = om.organization_id
+						AND r.role_type = 'issuer' AND r.status = 'approved'
+					WHERE om.user_id = u.id
 				)
 			WHERE EXISTS (SELECT 1 FROM organization_members om WHERE om.user_id = u.id)
-			OR u.is_affiliate = TRUE OR u.is_proposer = TRUE OR u.is_supervisor = TRUE;
+			OR u.is_affiliate = TRUE OR u.is_proposer = TRUE OR u.is_supervisor = TRUE OR u.is_issuer = TRUE;
 		`); err != nil {
 			return fmt.Errorf("error syncing user role flags: %w", err)
 		}
