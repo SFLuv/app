@@ -166,6 +166,7 @@ func AddBotRoutes(r *chi.Mux, s *handlers.BotService, a *handlers.AppService) {
 
 func AddUserRoutes(r *chi.Mux, s *handlers.AppService) {
 	r.Post("/users", withAuth(s.AddUser))
+	r.Get("/users/bootstrap", withAuth(s.GetUserBootstrap))
 	r.Get("/users/policy-status", withAuth(s.GetUserPolicyStatus))
 	r.Post("/users/policies/accept", withAuth(s.AcceptUserPolicies))
 	r.Get("/users", withActiveAuth(s.GetUserAuthed, s))
