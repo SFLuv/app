@@ -25,7 +25,11 @@ import (
 )
 
 func (a *AppDB) IsProposer(ctx context.Context, id string) (bool, error) {
-	return a.getBoolUserRole(ctx, id, "is_proposer")
+	// Authoritative org-scoped check: the user's organization must hold an
+	// approved proposer role. users.is_proposer is kept in sync for display,
+	// but access control reads the org tables directly.
+	ok, _, err := a.UserOrgHasApprovedRole(ctx, id, structs.OrgRoleTypeProposer)
+	return ok, err
 }
 
 func (a *AppDB) IsImprover(ctx context.Context, id string) (bool, error) {
@@ -59,7 +63,9 @@ func (a *AppDB) IsIssuer(ctx context.Context, id string) (bool, error) {
 }
 
 func (a *AppDB) IsSupervisor(ctx context.Context, id string) (bool, error) {
-	return a.getBoolUserRole(ctx, id, "is_supervisor")
+	// Authoritative org-scoped check; see IsProposer.
+	ok, _, err := a.UserOrgHasApprovedRole(ctx, id, structs.OrgRoleTypeSupervisor)
+	return ok, err
 }
 
 func (a *AppDB) getBoolUserRole(ctx context.Context, id string, column string) (bool, error) {
@@ -5630,8 +5636,16 @@ func (a *AppDB) GetSupervisorWorkflows(
 	args := []any{}
 	argIndex := 1
 	if !includeAll {
-		baseConditions = append(baseConditions, fmt.Sprintf("w.manager_improver_id = $%d", argIndex))
-		args = append(args, supervisorID)
+		// Organization scope: a supervisor sees workflows supervised by ANY
+		// member of their organization, not just themselves.
+		supervisorIDs := []string{supervisorID}
+		if memberOrg, _, orgErr := a.GetOrganizationByUser(ctx, supervisorID); orgErr == nil && memberOrg != nil {
+			if memberIDs, memberErr := a.GetOrganizationMemberIDs(ctx, memberOrg.Id); memberErr == nil && len(memberIDs) > 0 {
+				supervisorIDs = memberIDs
+			}
+		}
+		baseConditions = append(baseConditions, fmt.Sprintf("w.manager_improver_id = ANY($%d::text[])", argIndex))
+		args = append(args, supervisorIDs)
 		argIndex++
 	}
 	if includeAll && normalizedSupervisorFilter != "" && normalizedSupervisorFilter != "all" {

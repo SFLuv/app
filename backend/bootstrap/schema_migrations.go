@@ -884,6 +884,13 @@ var schemaMigrations = []SchemaMigration{
 			return nil
 		},
 	},
+	{
+		Version:     "1.22",
+		Description: "introduce organizations: merge duplicate role orgs, org membership/roles, invites, and cycle-based allocations",
+		Apply: func(ctx context.Context, pools *DBPools, appLogger *logger.LogCloser) error {
+			return migrateOrganizations(ctx, pools)
+		},
+	},
 }
 
 type versionTarget struct {

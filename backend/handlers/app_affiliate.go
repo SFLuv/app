@@ -34,6 +34,20 @@ func (a *AppService) RequestAffiliateStatus(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	// Organization-first flow: attach the request to the caller's org, creating
+	// it (caller = superadmin) when they have none.
+	if _, orgErrMsg := a.ensureOrgForRoleRequest(r, *userDid, req.Organization, &structs.OrganizationRoleRequest{
+		RoleType: structs.OrgRoleTypeAffiliate,
+	}); orgErrMsg != "" {
+		if orgErrMsg == "internal error" {
+			w.WriteHeader(http.StatusInternalServerError)
+		} else {
+			w.WriteHeader(http.StatusConflict)
+			w.Write([]byte(orgErrMsg))
+		}
+		return
+	}
+
 	affiliate, err := a.db.UpsertAffiliateRequest(r.Context(), *userDid, req.Organization)
 	if err != nil {
 		if err.Error() == "affiliate already approved" {

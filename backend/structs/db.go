@@ -9,6 +9,9 @@ type Event struct {
 	StartAt     uint64 `json:"start_at"`
 	Expiration  uint64 `json:"expiration"`
 	Owner       string `json:"owner"`
+	// OrganizationId scopes the event to the creating user's organization so any
+	// member of that org can manage it.
+	OrganizationId int64 `json:"organization_id,omitempty"`
 }
 
 type EventsRequest struct {

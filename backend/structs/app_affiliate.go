@@ -43,4 +43,7 @@ type AffiliateBalance struct {
 	WeeklyBalance    uint64 `json:"weekly_balance"`
 	OneTimeBalance   uint64 `json:"one_time_balance"`
 	Reserved         uint64 `json:"reserved"`
+	// Allocations carries the full per-cycle breakdown (daily/weekly/monthly/
+	// one_time) for org-based clients; legacy fields above are kept in sync.
+	Allocations []OrganizationAllocation `json:"allocations,omitempty"`
 }

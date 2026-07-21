@@ -107,6 +107,7 @@ func New(s *handlers.BotService, a *handlers.AppService, p *handlers.PonderServi
 	}
 
 	AddBotRoutes(r, s, a)
+	AddOrganizationRoutes(r, a)
 	AddClientConfigRoutes(r, a)
 	AddUserRoutes(r, a)
 	AddAdminRoutes(r, a)
@@ -121,6 +122,28 @@ func New(s *handlers.BotService, a *handlers.AppService, p *handlers.PonderServi
 	AddUnwrapRoutes(r, a)
 
 	return r
+}
+
+func AddOrganizationRoutes(r *chi.Mux, a *handlers.AppService) {
+	// Membership-scoped org management. Fine-grained authorization (member vs
+	// admin vs superadmin) is enforced inside each handler via requireOrgRole,
+	// always resolved live from organization_members.
+	r.Get("/organizations/mine", withActiveAuth(a.GetMyOrganization, a))
+	r.Put("/organizations/mine/name", withActiveAuth(a.UpdateMyOrganizationName, a))
+	r.Put("/organizations/mine/logo", withActiveAuth(a.UpdateMyOrganizationLogo, a))
+	r.Post("/organizations/mine/invites", withActiveAuth(a.InviteOrganizationMember, a))
+	r.Delete("/organizations/mine/members/{user_id}", withActiveAuth(a.RemoveOrganizationMember, a))
+	r.Put("/organizations/mine/members/role", withActiveAuth(a.SetOrganizationMemberRole, a))
+	r.Post("/organizations/mine/transfer-superadmin", withActiveAuth(a.TransferOrganizationSuperadmin, a))
+	r.Post("/organizations/mine/leave", withActiveAuth(a.LeaveOrganization, a))
+	r.Post("/organizations/mine/roles/request", withActiveAuth(a.RequestOrganizationRole, a))
+	r.Post("/organizations/join", withActiveAuth(a.JoinOrganization, a))
+
+	// Platform-admin org controls.
+	r.Get("/admin/organizations", withAdmin(a.AdminListOrganizations, a))
+	r.Put("/admin/organizations/superadmin", withAdmin(a.AdminSetOrganizationSuperadmin, a))
+	r.Put("/admin/organizations/allocations", withAdmin(a.AdminSetOrganizationAllocation, a))
+	r.Put("/admin/organizations/roles", withAdmin(a.AdminSetOrganizationRoleStatus, a))
 }
 
 func AddClientConfigRoutes(r *chi.Mux, s *handlers.AppService) {

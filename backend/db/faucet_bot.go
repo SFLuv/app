@@ -199,10 +199,10 @@ func (s *BotDB) NewEvent(ctx context.Context, e *structs.Event) (string, error) 
 
 	_, err = tx.Exec(ctx, `
 		INSERT INTO events
-			(id, title, description, amount, start_at, expiration, owner)
+			(id, title, description, amount, start_at, expiration, owner, organization_id)
 		VALUES
-		 ($1, $2, $3, $4, $5, $6, $7);
-	`, id, e.Title, e.Description, e.Amount, e.StartAt, e.Expiration, e.Owner)
+		 ($1, $2, $3, $4, $5, $6, $7, NULLIF($8, 0));
+	`, id, e.Title, e.Description, e.Amount, e.StartAt, e.Expiration, e.Owner, e.OrganizationId)
 	if err != nil {
 		tx.Rollback(ctx)
 		err = fmt.Errorf("error inserting event object: %s", err)
@@ -389,6 +389,101 @@ func (s *BotDB) GetEventsByOwner(ctx context.Context, e *structs.EventsRequest, 
 	}
 
 	return events, nil
+}
+
+// GetEventsByOrganization mirrors GetEventsByOwner but scopes to the caller's
+// organization so every member sees/manages the org's events.
+func (s *BotDB) GetEventsByOrganization(ctx context.Context, e *structs.EventsRequest, orgId int64) ([]*structs.Event, error) {
+	if e.Count <= 0 {
+		e.Count = 10
+	}
+	if e.Count > 100 {
+		e.Count = 100
+	}
+	if e.Page < 0 {
+		e.Page = 0
+	}
+	offset := e.Page * e.Count
+	likeSearch := "%" + strings.TrimSpace(e.Search) + "%"
+
+	rows, err := s.db.Query(ctx, `
+		SELECT
+			e.id,
+			e.title,
+			e.description,
+			e.amount,
+			e.start_at,
+			e.expiration,
+			e.owner,
+			COALESCE(e.organization_id, 0),
+			COUNT(c.id)
+		FROM
+			events e
+		LEFT JOIN
+			codes c
+		ON
+			e.id = c.event
+		WHERE
+			e.organization_id = $1
+		AND
+			CASE
+				WHEN ($2 AND e.expiration != 0) THEN e.expiration > EXTRACT(EPOCH from NOW())
+				ELSE TRUE
+			END
+		AND
+			(
+				COALESCE(e.title, '') ILIKE $3
+				OR
+				COALESCE(e.description, '') ILIKE $3
+			)
+		GROUP BY
+			e.id,
+			e.owner
+		ORDER BY
+			e.expiration ASC,
+			e.id ASC
+		LIMIT $4
+		OFFSET $5;
+	`, orgId, !e.Expired, likeSearch, e.Count, offset)
+	if err != nil {
+		return nil, fmt.Errorf("error querying for organization events: %s", err)
+	}
+	defer rows.Close()
+
+	events := []*structs.Event{}
+	for rows.Next() {
+		event := structs.Event{}
+		err = rows.Scan(
+			&event.Id,
+			&event.Title,
+			&event.Description,
+			&event.Amount,
+			&event.StartAt,
+			&event.Expiration,
+			&event.Owner,
+			&event.OrganizationId,
+			&event.Codes,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("error scanning organization event row: %s", err)
+		}
+
+		events = append(events, &event)
+	}
+
+	return events, nil
+}
+
+// GetEventOrganization returns the org id an event belongs to (0 when untagged).
+func (s *BotDB) GetEventOrganization(ctx context.Context, id string) (int64, error) {
+	var orgId int64
+	err := s.db.QueryRow(ctx, `
+		SELECT COALESCE(organization_id, 0) FROM events WHERE id = $1;
+	`, id).Scan(&orgId)
+	if err != nil {
+		return 0, err
+	}
+	return orgId, nil
 }
 
 func (s *BotDB) GetActiveEvents(ctx context.Context) ([]*structs.Event, error) {
@@ -919,6 +1014,56 @@ func (s *BotDB) AllocatedBalanceByOwner(ctx context.Context, owner string) (uint
 		AND
 			e.owner = $1;
 	`, owner)
+	var allocated uint64
+	err := row.Scan(&allocated)
+	if err != nil {
+		return 0, err
+	}
+
+	return allocated, nil
+}
+
+// AllocatedBalanceByOrganization sums the unredeemed value of the org's active
+// events — the amount of org balance currently reserved by outstanding codes.
+func (s *BotDB) AllocatedBalanceByOrganization(ctx context.Context, orgId int64) (uint64, error) {
+	row := s.db.QueryRow(ctx, `
+		SELECT COALESCE(SUM(
+			(
+				(
+					SELECT
+						COUNT(id)
+					FROM
+						codes
+					WHERE
+						event = e.id
+				) - (
+					SELECT
+						COUNT(r.id)
+					FROM
+						redemptions r
+					JOIN
+						codes c
+					ON
+						r.code = c.id
+					WHERE
+						c.event = e.id
+					)
+				) * (
+			SELECT
+				amount
+			FROM
+				events
+			WHERE
+				id = e.id
+			)
+		), 0)
+		FROM
+			events e
+		WHERE
+			e.expiration > EXTRACT(EPOCH from NOW())
+		AND
+			e.organization_id = $1;
+	`, orgId)
 	var allocated uint64
 	err := row.Scan(&allocated)
 	if err != nil {
