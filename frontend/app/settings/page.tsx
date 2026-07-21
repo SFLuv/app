@@ -5,6 +5,7 @@ import type React from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useApp } from "@/context/AppProvider";
+import { OrganizationPanel } from "@/components/organization/organization-panel";
 import PlaceAutocomplete from "@/components/merchant/google_place_finder";
 import {
   Card,
@@ -501,7 +502,7 @@ export default function SettingsPage() {
   );
 
   const availableTabs = useMemo(() => {
-    const tabs = ["account"];
+    const tabs = ["account", "organization"];
     if (merchantStatus !== "none") tabs.push("merchant");
     if (affiliateStatus === "pending" || affiliateStatus === "approved")
       tabs.push("affiliate");
@@ -2207,23 +2208,12 @@ export default function SettingsPage() {
               Merchant
             </TabsTrigger>
           )}
-          {(affiliateStatus === "pending" ||
-            affiliateStatus === "approved") && (
-            <TabsTrigger
-              value="affiliate"
-              className="text-black dark:text-white flex-1"
-            >
-              Affiliate
-            </TabsTrigger>
-          )}
-          {(proposerStatus === "pending" || proposerStatus === "approved") && (
-            <TabsTrigger
-              value="proposer"
-              className="text-black dark:text-white flex-1"
-            >
-              Proposer
-            </TabsTrigger>
-          )}
+          <TabsTrigger
+            value="organization"
+            className="text-black dark:text-white flex-1"
+          >
+            Organization
+          </TabsTrigger>
           {(improverStatus === "pending" || improverStatus === "approved") && (
             <TabsTrigger
               value="improver"
@@ -2240,16 +2230,11 @@ export default function SettingsPage() {
               Issuer
             </TabsTrigger>
           )}
-          {(supervisorStatus === "pending" ||
-            supervisorStatus === "approved") && (
-            <TabsTrigger
-              value="supervisor"
-              className="text-black dark:text-white flex-1"
-            >
-              Supervisor
-            </TabsTrigger>
-          )}
         </TabsList>
+
+        <TabsContent value="organization">
+          <OrganizationPanel onOpenRoleSettings={(tab) => setActiveTab(tab)} />
+        </TabsContent>
 
         <TabsContent value="account">
           {/* <div className="grid gap-6 md:grid-cols-2">

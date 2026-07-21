@@ -534,6 +534,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
       pathname === "/map" ||
       pathname === "/update" ||
       pathname === "/mcp/authorize" ||
+      pathname === "/organization/join" ||
       pathname === "/redirect" ||
       pathname === "/delete-account" ||
       pathname === "/recovery" ||
