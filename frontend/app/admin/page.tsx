@@ -86,6 +86,7 @@ import { Event, EventsStatus } from "@/types/event"
 import { AddEventModal } from "@/components/events/add-event-modal"
 import { EventModal } from "@/components/events/event-modal"
 import { DrainFaucetModal } from "@/components/events/drain-faucet-modal"
+import { OrganizationManagement } from "@/components/admin/organization-management"
 import { WorkflowDetailsModal } from "@/components/workflows/workflow-details-modal"
 import { AdminAnalyticsPanel } from "@/components/admin/admin-analytics-panel"
 import EventCard from "@/components/events/event-card"
@@ -2549,6 +2550,9 @@ export default function AdminPage() {
                 </Badge>
               )}
             </TabsTrigger>
+            <TabsTrigger value="organizations" className="w-full justify-between px-3 py-2">
+              <span>Organizations</span>
+            </TabsTrigger>
             <TabsTrigger value="affiliates" className="w-full justify-between px-3 py-2">
               <span>Affiliates</span>
               {affiliates.filter((affiliate) => affiliate.status === "pending").length > 0 && (
@@ -3563,6 +3567,10 @@ export default function AdminPage() {
               )}
             </CardContent>
           </Card>
+        </TabsContent>
+
+        <TabsContent value="organizations" className="space-y-6">
+          <OrganizationManagement />
         </TabsContent>
 
         <TabsContent value="affiliates" className="space-y-6">
