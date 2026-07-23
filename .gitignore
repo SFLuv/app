@@ -12,3 +12,5 @@ ponder/generated
 backend/backend
 backend/builds-old
 .idea
+tmp/
+.dev.env
