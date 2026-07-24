@@ -16,12 +16,14 @@
 #               interactive, foreground last)
 #
 # Usage:
-#   ./dev-up.sh                  # boot everything (Expo in foreground)
-#   ./dev-up.sh --no-mobile      # skip Expo (tails service logs instead)
-#   ./dev-up.sh --no-frontend    # skip the web app
-#   ./dev-up.sh --no-backend     # skip the backend API
-#   ./dev-up.sh --no-ponder      # skip the indexer
-#   ./dev-up.sh --skip-db-clone  # reuse previously cloned local databases
+#   ./dev-up.sh                       # boot everything (Expo in foreground)
+#   ./dev-up.sh --no-mobile           # skip Expo (tails service logs instead)
+#   ./dev-up.sh --no-frontend         # skip the web app
+#   ./dev-up.sh --no-backend          # skip the backend API
+#   ./dev-up.sh --no-ponder           # skip the indexer
+#   ./dev-up.sh --skip-db-clone       # reuse previously cloned local databases
+#   ./dev-up.sh --mobile-branch <b>   # pull the mobile app from branch <b>
+#                                     # (overrides MOBILE_APP_BRANCH in .dev.env)
 #
 # Configuration comes from ./.dev.env (auto-created from .dev.env.example).
 # Logs live in tmp/logs/. Ctrl-C stops everything.
@@ -35,17 +37,28 @@ LOG_DIR="$TMP_DIR/logs"
 DUMP_DIR="$TMP_DIR/dumps"
 mkdir -p "$TMP_DIR" "$LOG_DIR" "$DUMP_DIR"
 
+# Flags are parsed BEFORE .dev.env is sourced, so flag values are captured in
+# override variables and applied after the source (otherwise the env file's
+# values would silently clobber them).
 RUN_BACKEND=1 RUN_PONDER=1 RUN_FRONTEND=1 RUN_MOBILE=1
-for arg in "$@"; do
-  case "$arg" in
+SKIP_DB_CLONE_FLAG=""
+MOBILE_BRANCH_OVERRIDE=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
     --no-mobile)    RUN_MOBILE=0 ;;
     --no-frontend)  RUN_FRONTEND=0 ;;
     --no-backend)   RUN_BACKEND=0 ;;
     --no-ponder)    RUN_PONDER=0 ;;
-    --skip-db-clone) SKIP_DB_CLONE=1 ;;
-    -h|--help)      sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
-    *) echo "unknown arg: $arg (try --help)"; exit 1 ;;
+    --skip-db-clone) SKIP_DB_CLONE_FLAG=1 ;;
+    --mobile-branch)
+      [[ $# -ge 2 && -n "$2" ]] || { echo "--mobile-branch requires a branch name"; exit 1; }
+      MOBILE_BRANCH_OVERRIDE="$2"
+      shift ;;
+    --mobile-branch=*) MOBILE_BRANCH_OVERRIDE="${1#--mobile-branch=}" ;;
+    -h|--help)      sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) echo "unknown arg: $1 (try --help)"; exit 1 ;;
   esac
+  shift
 done
 
 c_blue()  { printf "\033[1;34m%s\033[0m\n" "$1"; }
@@ -185,6 +198,10 @@ set -a
 # shellcheck disable=SC1091
 source "$ROOT/.dev.env"
 set +a
+
+# CLI flags outrank .dev.env.
+[[ -n "$SKIP_DB_CLONE_FLAG" ]] && SKIP_DB_CLONE=1
+[[ -n "$MOBILE_BRANCH_OVERRIDE" ]] && MOBILE_APP_BRANCH="$MOBILE_BRANCH_OVERRIDE"
 
 LOCAL_DB_USER="${LOCAL_DB_USER:-postgres}"
 LOCAL_DB_HOST_PORT="${LOCAL_DB_HOST_PORT:-localhost:5432}"
