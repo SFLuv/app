@@ -172,6 +172,32 @@ func (a *AppService) RecordUnwrap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Persist an audit ledger entry when the client reports the cash-out
+	// details. Older clients that only stamp last_unwrap_at stay supported.
+	if req.AmountWei != "" && req.TxHash != "" {
+		amountWei := new(big.Int)
+		if _, ok := amountWei.SetString(req.AmountWei, 10); !ok || amountWei.Sign() <= 0 {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		entry := structs.UnwrapLedgerEntry{
+			UserID:             *userDid,
+			WalletID:           *wallet.Id,
+			WalletAddress:      req.WalletAddress,
+			LocationID:         req.LocationID,
+			DestinationAddress: req.DestinationAddress,
+			AmountWei:          amountWei.String(),
+			TxHash:             req.TxHash,
+			Status:             "submitted",
+		}
+		if _, err := a.db.InsertUnwrap(r.Context(), &entry); err != nil {
+			a.logger.Logf("error inserting unwrap ledger entry wallet_id=%d user=%s tx=%s: %s", *wallet.Id, *userDid, req.TxHash, err)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+	}
+
 	resp := structs.UnwrapRecordResponse{
 		Recorded:   true,
 		RecordedAt: recordedAt,
@@ -184,4 +210,23 @@ func (a *AppService) RecordUnwrap(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusOK)
 	w.Write(bytes)
+}
+
+// GetUnwrapHistory returns the authed user's cash-out ledger, newest first.
+func (a *AppService) GetUnwrapHistory(w http.ResponseWriter, r *http.Request) {
+	userDid := utils.GetDid(r)
+	if userDid == nil {
+		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+
+	entries, err := a.db.GetUnwrapsByUser(r.Context(), *userDid, 100)
+	if err != nil {
+		a.logger.Logf("error loading unwrap history for user %s: %s", *userDid, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(entries)
 }

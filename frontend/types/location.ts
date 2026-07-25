@@ -64,6 +64,7 @@ export interface AuthedLocation {
   messaging_service: string;
   pay_to_address?: string;
   tip_to_address?: string;
+  liquidation_address?: string;
   payment_wallets: LocationPaymentWallet[];
   reference: string;
 }

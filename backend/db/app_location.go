@@ -409,6 +409,10 @@ func (s *AppDB) GetAuthedLocations(ctx context.Context, r *structs.LocationsPage
 				NULLIF(TRIM(l.tipping_wallet_address), ''),
 				''
 			) AS tip_to_address,
+			COALESCE(
+				NULLIF(TRIM(l.liquidation_address), ''),
+				''
+			) AS liquidation_address,
 			l.reference
 		FROM locations l
 		LEFT JOIN users u
@@ -507,6 +511,7 @@ func (s *AppDB) GetAuthedLocations(ctx context.Context, r *structs.LocationsPage
 			&location.MessagingService,
 			&payToAddress,
 			&tipToAddress,
+			&location.LiquidationAddress,
 			&location.Reference,
 		)
 
@@ -803,6 +808,10 @@ func (a *AppDB) GetLocationsByUser(ctx context.Context, userId string) ([]*struc
 			NULLIF(TRIM(l.tipping_wallet_address), ''),
 			''
 		) AS tip_to_address,
+		COALESCE(
+			NULLIF(TRIM(l.liquidation_address), ''),
+			''
+		) AS liquidation_address,
 		l.reference
     FROM locations l
 	LEFT JOIN users u
@@ -901,6 +910,7 @@ func (a *AppDB) GetLocationsByUser(ctx context.Context, userId string) ([]*struc
 			&location.MessagingService,
 			&payToAddress,
 			&tipToAddress,
+			&location.LiquidationAddress,
 			&location.Reference,
 		)
 		if err != nil {

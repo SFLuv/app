@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useApp } from "@/context/AppProvider";
 import PlaceAutocomplete from "@/components/merchant/google_place_finder";
+import { BridgeKybCard } from "@/components/settings/bridge-kyb-card";
 import {
   Card,
   CardContent,
@@ -3274,6 +3275,7 @@ export default function SettingsPage() {
 
         {merchantStatus !== "none" && (
           <TabsContent value="merchant" className="space-y-6">
+            <BridgeKybCard />
             <Card>
               <CardHeader>
                 <CardTitle className="text-black dark:text-white">

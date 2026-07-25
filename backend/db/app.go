@@ -2267,6 +2267,35 @@ func (s *AppDB) CreateTables() error {
 	}
 
 	_, err = s.db.Exec(context.Background(), `
+		ALTER TABLE locations
+		ADD COLUMN IF NOT EXISTS liquidation_address TEXT NOT NULL DEFAULT '';
+	`)
+	if err != nil {
+		return fmt.Errorf("error adding liquidation_address column to locations table: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
+		CREATE TABLE IF NOT EXISTS unwraps(
+			id SERIAL PRIMARY KEY,
+			user_id TEXT NOT NULL,
+			wallet_id INTEGER NOT NULL REFERENCES wallets(id),
+			wallet_address TEXT NOT NULL,
+			location_id INTEGER REFERENCES locations(id),
+			destination_address TEXT NOT NULL,
+			amount_wei TEXT NOT NULL,
+			tx_hash TEXT NOT NULL,
+			status TEXT NOT NULL DEFAULT 'submitted',
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		);
+
+		CREATE INDEX IF NOT EXISTS unwraps_user_id_idx ON unwraps(user_id);
+		CREATE INDEX IF NOT EXISTS unwraps_created_at_idx ON unwraps(created_at);
+	`)
+	if err != nil {
+		return fmt.Errorf("error creating unwraps table: %s", err)
+	}
+
+	_, err = s.db.Exec(context.Background(), `
 		CREATE TABLE IF NOT EXISTS location_hours(
 			location_id INTEGER REFERENCES locations(id),
 			weekday INTEGER NOT NULL,

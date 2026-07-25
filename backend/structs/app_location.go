@@ -61,6 +61,7 @@ type Location struct {
 	MessagingService   string                  `json:"messaging_service"`
 	PayToAddress       string                  `json:"pay_to_address"`
 	TipToAddress       string                  `json:"tip_to_address"`
+	LiquidationAddress string                  `json:"liquidation_address"`
 	PaymentWallets     []LocationPaymentWallet `json:"payment_wallets"`
 	Reference          string                  `json:"reference"`
 }
@@ -76,6 +77,17 @@ type LocationWalletSettingsUpdateRequest struct {
 	PaymentWalletAddresses      []string `json:"payment_wallet_addresses"`
 	DefaultPaymentWalletAddress string   `json:"default_payment_wallet_address"`
 	TippingWalletAddress        string   `json:"tipping_wallet_address"`
+}
+
+// LocationLiquidationAddressUpdateRequest sets the Bridge liquidation address
+// used to cash out unwrapped USDC for a location. An empty address clears it.
+type LocationLiquidationAddressUpdateRequest struct {
+	LiquidationAddress string `json:"liquidation_address"`
+}
+
+type LocationLiquidationAddressResponse struct {
+	LocationID         uint64 `json:"location_id"`
+	LiquidationAddress string `json:"liquidation_address"`
 }
 
 type PublicLocation struct {

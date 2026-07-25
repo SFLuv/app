@@ -272,3 +272,49 @@ func (a *AppDB) UpdateLocationWalletSettings(ctx context.Context, userID string,
 
 	return nil, pgx.ErrNoRows
 }
+
+// UpdateLocationLiquidationAddress sets (or clears, with an empty address) the
+// Bridge liquidation address for a location. Owners may update their own
+// locations; admins may update any location.
+func (a *AppDB) UpdateLocationLiquidationAddress(ctx context.Context, userID string, isAdmin bool, locationID uint64, liquidationAddress string) (string, error) {
+	if !isAdmin {
+		user, err := a.GetUserById(ctx, userID)
+		if err != nil {
+			return "", err
+		}
+		if !user.IsMerchant {
+			return "", fmt.Errorf("only merchants can update the liquidation address")
+		}
+	}
+
+	normalizedAddress := strings.TrimSpace(liquidationAddress)
+	if normalizedAddress != "" {
+		var err error
+		normalizedAddress, err = normalizeEthereumAddressForField(normalizedAddress, "liquidation address")
+		if err != nil {
+			return "", err
+		}
+	}
+
+	query := `
+		UPDATE locations
+		SET liquidation_address = $1
+		WHERE id = $2
+		AND active = TRUE
+	`
+	args := []any{normalizedAddress, locationID}
+	if !isAdmin {
+		query += ` AND owner_id = $3`
+		args = append(args, userID)
+	}
+
+	tag, err := a.db.Exec(ctx, query, args...)
+	if err != nil {
+		return "", fmt.Errorf("error updating location liquidation address: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return "", pgx.ErrNoRows
+	}
+
+	return normalizedAddress, nil
+}

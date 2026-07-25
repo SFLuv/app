@@ -289,6 +289,65 @@ func (a *AppService) UpdateLocationWalletSettings(w http.ResponseWriter, r *http
 	_ = json.NewEncoder(w).Encode(location)
 }
 
+// UpdateLocationLiquidationAddress stores the Bridge liquidation address a
+// location cashes out USDC to. Owners update their own locations; admins may
+// update any location.
+func (a *AppService) UpdateLocationLiquidationAddress(w http.ResponseWriter, r *http.Request) {
+	userDid := utils.GetDid(r)
+	if userDid == nil {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	locationIDValue := chi.URLParam(r, "id")
+	locationID, err := strconv.ParseUint(locationIDValue, 10, 64)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	defer r.Body.Close()
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		a.logger.Logf("error reading location liquidation address body for user %s: %s", *userDid, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	var request structs.LocationLiquidationAddressUpdateRequest
+	if err := json.Unmarshal(body, &request); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	isAdmin := a.IsAdmin(r.Context(), *userDid)
+	normalizedAddress, err := a.db.UpdateLocationLiquidationAddress(r.Context(), *userDid, isAdmin, locationID, request.LiquidationAddress)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+
+		errMsg := err.Error()
+		if errMsg == "only merchants can update the liquidation address" ||
+			errMsg == "liquidation address must be a valid ethereum address" {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(errMsg))
+			return
+		}
+
+		a.logger.Logf("error updating location liquidation address for user %s and location %d: %s", *userDid, locationID, errMsg)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(structs.LocationLiquidationAddressResponse{
+		LocationID:         locationID,
+		LiquidationAddress: normalizedAddress,
+	})
+}
+
 func containsLocationWalletValidationError(errMsg string) bool {
 	switch errMsg {
 	case

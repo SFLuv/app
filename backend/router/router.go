@@ -280,6 +280,7 @@ func AddLocationRoutes(r *chi.Mux, s *handlers.AppService) {
 	r.Get("/locations/user", withActiveAuth(s.GetLocationsByUser, s))
 	r.Put("/locations", withActiveAuth(s.UpdateLocation, s))
 	r.Put("/locations/{id}/wallet-settings", withActiveAuth(s.UpdateLocationWalletSettings, s))
+	r.Put("/locations/{id}/liquidation-address", withActiveAuth(s.UpdateLocationLiquidationAddress, s))
 }
 
 func AddContactRoutes(r *chi.Mux, s *handlers.AppService) {
@@ -326,6 +327,7 @@ func AddW9Routes(r *chi.Mux, s *handlers.AppService) {
 func AddUnwrapRoutes(r *chi.Mux, s *handlers.AppService) {
 	r.Post("/unwrap/eligibility", withActiveAuth(s.CheckUnwrapEligibility, s))
 	r.Post("/unwrap/record", withActiveAuth(s.RecordUnwrap, s))
+	r.Get("/unwrap/history", withActiveAuth(s.GetUnwrapHistory, s))
 }
 
 func withAuth(handlerFunc http.HandlerFunc) http.HandlerFunc {
