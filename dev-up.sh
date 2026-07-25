@@ -398,7 +398,7 @@ else
   PROD_HOST="${PROD_DB_HOST_PORT%%:*}"
   PROD_PORT="${PROD_DB_HOST_PORT##*:}"
   for dbname in ${PROD_DB_NAMES:-app bot ponder}; do
-    c_yellow "  cloning $dbname…"
+    c_yellow "  cloning ${dbname}…"
     PGPASSWORD="${PROD_DB_PASSWORD:-}" pg_dump -h "$PROD_HOST" -p "$PROD_PORT" -U "$PROD_DB_USER" \
       -d "$dbname" -Fc --no-owner --no-acl -f "$DUMP_DIR/$dbname.dump" \
       || die "  pg_dump of $dbname failed"
