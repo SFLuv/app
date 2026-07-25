@@ -301,12 +301,18 @@ ENGINE_DB_SECRET="$(tr -d '[:space:]' < "$ENGINE_SECRET_FILE")"
 # the caller's shell would silently redirect it to the wrong database. So the
 # config is passed as explicit process env (which always wins); the file is kept
 # as a reference and for running engine-bin by hand.
+# DB_PASSWORD must be NON-EMPTY: the engine builds a keyword/value DSN
+# ("user=... password= dbname=...") and an empty password= derails the
+# dbname token, silently landing the connection in the default `postgres`
+# database (verified empirically). Trust-auth local postgres ignores the
+# password value, so a placeholder is fine; set LOCAL_DB_PASSWORD in
+# .dev.env if your postgres actually requires one.
 ENGINE_ENV=(
   "CHAIN_NAME=celo"
   "RPC_URL=$ANVIL_RPC"
   "RPC_WS_URL=ws://127.0.0.1:$ANVIL_PORT"
   "DB_USER=$LOCAL_DB_USER"
-  "DB_PASSWORD="
+  "DB_PASSWORD=${LOCAL_DB_PASSWORD:-devpassword}"
   "DB_NAME=$ENGINE_DB_NAME"
   "DB_HOST=$LOCAL_DB_HOST"
   "DB_READER_HOST=$LOCAL_DB_HOST"
