@@ -318,7 +318,7 @@ func migrateOrganizations(ctx context.Context, pools *DBPools) error {
 					INSERT INTO organization_allocations(organization_id, cycle, allocation, balance)
 					VALUES ($1, 'one_time', $2, $2)
 					ON CONFLICT (organization_id, cycle) DO NOTHING;
-				`, orgID, oneTime, oneTime); err != nil {
+				`, orgID, oneTime); err != nil {
 					return fmt.Errorf("error creating one-time allocation for org %d: %w", orgID, err)
 				}
 			}
