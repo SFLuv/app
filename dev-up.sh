@@ -212,6 +212,16 @@ PSQL=(psql -h "$LOCAL_DB_HOST" -p "$LOCAL_DB_PORT" -U "$LOCAL_DB_USER" -v ON_ERR
 "${PSQL[@]}" -d postgres -c "SELECT 1" >/dev/null 2>&1 \
   || die "cannot reach local postgres at $LOCAL_DB_HOST_PORT as $LOCAL_DB_USER"
 
+# All three Privy app ids must refer to the SAME Privy app: the backend
+# rejects any token whose aud differs from PRIVY_APP_ID, so a mismatched
+# mobile/web id means every authed request 403s.
+for pair in "NEXT_PUBLIC_PRIVY_APP_ID:${NEXT_PUBLIC_PRIVY_APP_ID:-}" "EXPO_PUBLIC_PRIVY_APP_ID:${EXPO_PUBLIC_PRIVY_APP_ID:-}"; do
+  pname="${pair%%:*}"; pval="${pair#*:}"
+  if [[ -n "$pval" && -n "${PRIVY_APP_ID:-}" && "$pval" != "$PRIVY_APP_ID" ]]; then
+    c_red "WARNING: $pname ($pval) != PRIVY_APP_ID (${PRIVY_APP_ID:-}) — that client's logins will 403 against this backend. Use ONE Privy app across .dev.env."
+  fi
+done
+
 STARTED=1
 
 # ----------------------------------------------------------------------------
