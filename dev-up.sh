@@ -507,6 +507,24 @@ if [[ "$RUN_FRONTEND" -eq 1 ]]; then
   start_bg frontend "$ROOT/frontend" "$LOG_DIR/frontend.log" env "${FRONTEND_ENV[@]}" npm run dev
   wait_for "https://localhost:$FRONTEND_PORT" "frontend" 90 "${PIDS[${#PIDS[@]}-1]}" "$LOG_DIR/frontend.log" \
     || c_yellow "  frontend still starting — check tmp/logs/frontend.log"
+
+  # Warm-build every route in the background so the dev compiler does its work
+  # now instead of on your first click (a cold /map compile takes 2+ minutes).
+  # Runs concurrently with the rest of the boot; progress in frontend-warm.log.
+  FRONTEND_ROUTES=(
+    / /map /settings /wallets /admin /contacts /calendar /voter /proposer
+    /improver /issuer /supervisor /affiliates /opportunities /your-opportunities
+    /role-management /merchant-status /update /verify /addcontact
+  )
+  (
+    for route in "${FRONTEND_ROUTES[@]}"; do
+      printf '%s ' "$route"
+      curl -sk -o /dev/null -m 300 "https://localhost:$FRONTEND_PORT$route" && printf 'ok\n' || printf 'failed\n'
+    done
+    echo "route warm-up complete"
+  ) >"$LOG_DIR/frontend-warm.log" 2>&1 &
+  PIDS+=($!)
+  c_yellow "  warming all routes in the background (tmp/logs/frontend-warm.log)"
 else
   c_blue "[8/9] Frontend (skipped)"
 fi
@@ -557,7 +575,17 @@ EOF
     c_yellow "  installing mobile deps…"
     ( cd "$MOBILE_DIR/mobile" && npm install --no-audit --no-fund >"$LOG_DIR/mobile-install.log" 2>&1 )
   fi
-  ( cd "$MOBILE_DIR/mobile" && npm run start )
+  # Simulators can't reliably open the LAN URL (exp://<lan-ip>:8081 times out,
+  # typically because the macOS firewall blocks Metro on the LAN interface), so
+  # default to localhost mode. Setting DEV_LAN_IP in .dev.env switches to LAN
+  # mode for testing on a physical device.
+  if [[ -n "${DEV_LAN_IP:-}" ]]; then
+    c_yellow "  DEV_LAN_IP set — Expo in LAN mode (exp://$DEV_LAN_IP:8081; allow node through the macOS firewall if devices time out)"
+    ( cd "$MOBILE_DIR/mobile" && npm run start )
+  else
+    c_yellow "  Expo in localhost mode for simulators (set DEV_LAN_IP in .dev.env for physical devices)"
+    ( cd "$MOBILE_DIR/mobile" && npm run start -- --host localhost )
+  fi
 else
   c_blue "[9/9] Running (no mobile). Press Ctrl-C to stop."
   TAIL_LOGS=()
