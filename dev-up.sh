@@ -13,11 +13,14 @@
 #   - backend:  Go API on :8080 (local community config, no external sends)
 #   - frontend: Next.js on :3000
 #   - mobile:   Expo (pulled into ./tmp, branch via MOBILE_APP_BRANCH,
-#               interactive, foreground last)
+#               background — use the post-boot menu to open the iOS simulator)
+#
+# After boot, an interactive menu takes the foreground: open the iOS simulator,
+# set admin by email, set/clear user pranks, tail logs, quit.
 #
 # Usage:
-#   ./dev-up.sh                       # boot everything (Expo in foreground)
-#   ./dev-up.sh --no-mobile           # skip Expo (tails service logs instead)
+#   ./dev-up.sh                       # boot everything, then the post-boot menu
+#   ./dev-up.sh --no-mobile           # skip Expo (menu still runs, minus simulator)
 #   ./dev-up.sh --no-frontend         # skip the web app
 #   ./dev-up.sh --no-backend          # skip the backend API
 #   ./dev-up.sh --no-ponder           # skip the indexer
@@ -59,7 +62,7 @@ while [[ $# -gt 0 ]]; do
       MOBILE_BRANCH_OVERRIDE="$2"
       shift ;;
     --mobile-branch=*) MOBILE_BRANCH_OVERRIDE="${1#--mobile-branch=}" ;;
-    -h|--help)      sed -n '2,31p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help)      awk 'NR > 1 && !/^#/ { exit } NR > 1 { sub(/^# ?/, ""); print }' "$0"; exit 0 ;;
     *) echo "unknown arg: $1 (try --help)"; exit 1 ;;
   esac
   shift
@@ -364,7 +367,9 @@ start_bg() { # start_bg <name> <workdir> <logfile> <cmd...> — tracked backgrou
   local name="$1" workdir="$2" logfile="$3"
   shift 3
   [[ -d "$workdir" ]] || die "  cannot start $name: missing directory $workdir"
-  ( cd "$workdir" && "$@" >"$logfile" 2>&1 ) &
+  # </dev/null so no background service ever competes with the post-boot menu
+  # for the terminal's stdin (Expo especially would otherwise grab keystrokes).
+  ( cd "$workdir" && "$@" >"$logfile" 2>&1 </dev/null ) &
   PIDS+=($!)
   c_yellow "  $name logs: ${logfile#"$ROOT"/}"
 }
@@ -764,12 +769,14 @@ echo
 # ----------------------------------------------------------------------------
 # 9. Mobile (interactive) — foreground so Expo's menu/QR shows.
 # ----------------------------------------------------------------------------
+EXPO_URL="exp://${DEV_LAN_IP:-127.0.0.1}:8081"
+
 if [[ "$RUN_MOBILE" -eq 1 ]]; then
   MOBILE_APP_REPO="${MOBILE_APP_REPO:-https://github.com/SFLuv/mobile-app.git}"
   MOBILE_APP_BRANCH="${MOBILE_APP_BRANCH:-main}"
   MOBILE_DIR="$TMP_DIR/mobile-app"
 
-  c_blue "[9/9] Mobile (Expo @ $MOBILE_APP_BRANCH) — press q to quit Expo, then Ctrl-C to stop the rest"
+  c_blue "[9/9] Mobile (Expo @ $MOBILE_APP_BRANCH, background)"
   if [[ -d "$MOBILE_DIR/.git" ]]; then
     ( git -C "$MOBILE_DIR" fetch origin "$MOBILE_APP_BRANCH" \
         && git -C "$MOBILE_DIR" checkout "$MOBILE_APP_BRANCH" \
@@ -800,18 +807,96 @@ EOF
   # default to localhost mode. Setting DEV_LAN_IP in .dev.env switches to LAN
   # mode for testing on a physical device.
   if [[ -n "${DEV_LAN_IP:-}" ]]; then
-    c_yellow "  DEV_LAN_IP set — Expo in LAN mode (exp://$DEV_LAN_IP:8081; allow node through the macOS firewall if devices time out)"
-    ( cd "$MOBILE_DIR/mobile" && npm run start )
+    c_yellow "  DEV_LAN_IP set — Expo in LAN mode ($EXPO_URL; allow node through the macOS firewall if devices time out)"
+    start_bg mobile "$MOBILE_DIR/mobile" "$LOG_DIR/expo.log" npm run start
   else
     c_yellow "  Expo in localhost mode for simulators (set DEV_LAN_IP in .dev.env for physical devices)"
-    ( cd "$MOBILE_DIR/mobile" && npm run start -- --host localhost )
+    start_bg mobile "$MOBILE_DIR/mobile" "$LOG_DIR/expo.log" npm run start -- --host localhost
   fi
 else
-  c_blue "[9/9] Running (no mobile). Press Ctrl-C to stop."
-  TAIL_LOGS=()
-  [[ "$RUN_BACKEND" -eq 1 ]]  && TAIL_LOGS+=("$LOG_DIR/backend.log")
-  [[ "$RUN_PONDER" -eq 1 ]]   && TAIL_LOGS+=("$LOG_DIR/ponder.log")
-  [[ "$RUN_FRONTEND" -eq 1 ]] && TAIL_LOGS+=("$LOG_DIR/frontend.log")
-  TAIL_LOGS+=("$LOG_DIR/engine.log")
-  tail -f ${TAIL_LOGS[@]+"${TAIL_LOGS[@]}"}
+  c_blue "[9/9] Running (no mobile)."
 fi
+
+TAIL_LOGS=()
+[[ "$RUN_BACKEND" -eq 1 ]]  && TAIL_LOGS+=("$LOG_DIR/backend.log")
+[[ "$RUN_PONDER" -eq 1 ]]   && TAIL_LOGS+=("$LOG_DIR/ponder.log")
+[[ "$RUN_FRONTEND" -eq 1 ]] && TAIL_LOGS+=("$LOG_DIR/frontend.log")
+[[ "$RUN_MOBILE" -eq 1 ]]   && TAIL_LOGS+=("$LOG_DIR/expo.log")
+TAIL_LOGS+=("$LOG_DIR/engine.log")
+
+# open_ios_simulator: what Expo's interactive "i" key does, without needing
+# Expo to own the terminal — boot a simulator, ensure Expo Go is installed
+# (Expo caches the .app under ~/.expo), then deep-link the dev-server URL.
+open_ios_simulator() {
+  command -v xcrun >/dev/null || { c_red "  xcrun not found — install Xcode"; return; }
+  open -a Simulator 2>/dev/null
+  local waited=0
+  until xcrun simctl list devices booted 2>/dev/null | grep -q "(Booted)"; do
+    waited=$((waited + 1))
+    [[ "$waited" -gt 60 ]] && { c_red "  no simulator booted after 60s — boot one in Simulator.app and retry"; return; }
+    sleep 1
+  done
+  if ! xcrun simctl listapps booted 2>/dev/null | grep -q "host.exp.Exponent"; then
+    local cached
+    cached="$(ls -td "$HOME/.expo/ios-simulator-app-cache/"*.app 2>/dev/null | head -1)"
+    if [[ -n "$cached" ]]; then
+      c_yellow "  installing Expo Go from cache…"
+      xcrun simctl install booted "$cached" >/dev/null 2>&1 || true
+    else
+      c_red "  Expo Go is not installed on this simulator and no cached copy exists."
+      c_red "  One-time setup: cd tmp/mobile-app/mobile && npx expo start --ios (then re-run ./dev-up.sh)"
+      return
+    fi
+  fi
+  # Simulators always reach the host via loopback regardless of Expo's host mode.
+  local url="exp://127.0.0.1:8081"
+  if xcrun simctl openurl booted "$url" 2>/dev/null; then
+    c_green "  opened $url in the iOS simulator"
+  else
+    c_red "  failed to open $url — is the simulator finished booting? (retry in a few seconds)"
+  fi
+}
+
+# Post-boot menu — the resident foreground. Ctrl-C anywhere still tears the
+# whole stack down via the trap; "tail logs" shields itself so Ctrl-C there
+# returns to the menu instead.
+APP_DB="app"
+c_green "All services up."
+while true; do
+  echo
+  c_blue "SFLUV dev — running (Ctrl-C or q shuts everything down)"
+  [[ "$RUN_FRONTEND" -eq 1 ]] && echo "  web    https://localhost:$FRONTEND_PORT"
+  [[ "$RUN_BACKEND" -eq 1 ]]  && echo "  api    http://localhost:$BACKEND_PORT"
+  [[ "$RUN_MOBILE" -eq 1 ]]   && echo "  expo   $EXPO_URL   (QR + logs: tmp/logs/expo.log)"
+  echo
+  [[ "$RUN_MOBILE" -eq 1 ]] && echo "  i) Open iOS simulator"
+  echo "  a) Set admin by email"
+  echo "  p) Set user prank"
+  if pranks_active; then
+    echo "  c) Clear pranks"
+  fi
+  echo "  l) Tail service logs (Ctrl-C returns here)"
+  echo "  q) Quit (shut everything down)"
+  printf "select: "
+  MENU_SEL=""
+  read -r MENU_SEL || MENU_SEL="q"
+  case "$MENU_SEL" in
+    i|I) if [[ "$RUN_MOBILE" -eq 1 ]]; then open_ios_simulator; else c_yellow "  mobile not running (--no-mobile)"; fi ;;
+    a|A) menu_set_admin ;;
+    p|P) menu_set_prank ;;
+    c|C) if pranks_active; then menu_clear_pranks; else c_yellow "  no active pranks."; fi ;;
+    l|L)
+      c_yellow "  tailing ${#TAIL_LOGS[@]} logs — Ctrl-C to return to the menu"
+      # A no-op INT *handler* (not '' ignore — ignores are inherited by
+      # children, handlers are not): Ctrl-C hits the whole foreground process
+      # group, killing tail (default disposition) while the script just runs
+      # the no-op and returns to the menu.
+      trap ':' INT
+      tail -f ${TAIL_LOGS[@]+"${TAIL_LOGS[@]}"} || true
+      trap cleanup INT
+      ;;
+    q|Q) exit 0 ;;
+    "") ;;
+    *) c_yellow "  unknown selection" ;;
+  esac
+done
