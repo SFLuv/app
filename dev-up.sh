@@ -371,22 +371,35 @@ start_bg() { # start_bg <name> <workdir> <logfile> <cmd...> — tracked backgrou
 
 export FOUNDRY_DISABLE_NIGHTLY_WARNING=1
 
-for tool in git go node npm psql createdb dropdb pg_dump pg_restore anvil cast python3 curl lsof pgrep; do
-  command -v "$tool" >/dev/null || die "missing required tool: $tool"
-done
+# The menu subcommand only touches local psql, so it needs far less than a full
+# boot: just psql (proven by the reachability probe below). A full boot needs
+# the whole toolchain. Gating this here — before the .dev.env requirement — lets
+# `./dev-up.sh menu` run on a machine without foundry/go/node and without the
+# hand-set PROD_DB_*/Privy config it never reads.
+if [[ "$MENU_MODE" -eq 1 ]]; then
+  command -v psql >/dev/null || die "missing required tool: psql"
+else
+  for tool in git go node npm psql createdb dropdb pg_dump pg_restore anvil cast python3 curl lsof pgrep; do
+    command -v "$tool" >/dev/null || die "missing required tool: $tool"
+  done
+fi
 
 # ----------------------------------------------------------------------------
 # 0. Boot config (.dev.env — auto-created; prod DB creds + Privy are hand-set)
 # ----------------------------------------------------------------------------
-if [[ ! -f "$ROOT/.dev.env" ]]; then
+# The menu reads only LOCAL_DB_* (all defaulted below), so a missing .dev.env is
+# fine there; a full boot needs the hand-set PROD_DB_*/Privy values, so it stops
+# to have them filled in first.
+if [[ -f "$ROOT/.dev.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "$ROOT/.dev.env"
+  set +a
+elif [[ "$MENU_MODE" -ne 1 ]]; then
   cp "$ROOT/.dev.env.example" "$ROOT/.dev.env"
   c_yellow "created .dev.env from .dev.env.example — fill in PROD_DB_* and Privy values, then re-run"
   exit 1
 fi
-set -a
-# shellcheck disable=SC1091
-source "$ROOT/.dev.env"
-set +a
 
 # CLI flags outrank .dev.env.
 [[ -n "$SKIP_DB_CLONE_FLAG" ]] && SKIP_DB_CLONE=1
