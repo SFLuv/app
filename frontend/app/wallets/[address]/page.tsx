@@ -13,6 +13,7 @@ import { SendUsdcModal } from "@/components/wallets/send-usdc-modal"
 import { ReceiveUsdcModal } from "@/components/wallets/receive-usdc-modal"
 import { WrapUsdcModal } from "@/components/wallets/wrap-usdc-modal"
 import { CashOutCard } from "@/components/wallets/cash-out-card"
+import { AdminCashOutCard } from "@/components/admin/admin-cash-out-card"
 import { TransactionHistoryList } from "@/components/wallets/transaction-history-list"
 import { WalletBalanceCard } from "@/components/wallets/wallet-balance-card"
 import { TransactionModal } from "@/components/transactions/transaction-modal"
@@ -694,8 +695,13 @@ export default function WalletDetailsPage() {
           )}
 
           {/* Merchant cash out — unwrap SFLUV to USDC at the location's Bridge liquidation address */}
-          {wallet.type === "smartwallet" && (user?.isMerchant === true || user?.isAdmin === true) && (
+          {wallet.type === "smartwallet" && user?.isMerchant === true && (
             <CashOutCard wallet={wallet} onBalanceChanged={() => void updateBalanceWithRetry()} />
+          )}
+
+          {/* Admin cash out — same flow, but against the admin account's own liquidation address */}
+          {wallet.type === "smartwallet" && user?.isAdmin === true && (
+            <AdminCashOutCard wallet={wallet} onBalanceChanged={() => void updateBalanceWithRetry()} />
           )}
 
           {/* Quick Stats */}

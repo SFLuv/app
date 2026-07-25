@@ -104,6 +104,9 @@ func (s *AppDB) CreateTables() error {
 
 		ALTER TABLE users
 		ADD COLUMN IF NOT EXISTS paypal_eth TEXT NOT NULL DEFAULT '';
+
+		ALTER TABLE users
+		ADD COLUMN IF NOT EXISTS liquidation_address TEXT NOT NULL DEFAULT '';
 	`)
 	if err != nil {
 		return fmt.Errorf("error altering user wallet/payment columns: %s", err)

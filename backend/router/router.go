@@ -167,6 +167,8 @@ func AddAdminRoutes(r *chi.Mux, s *handlers.AppService) {
 	r.Get("/admin/locations", withAdmin(s.GetAuthedLocations, s))
 	r.Put("/admin/users", withActiveAuth(s.UpdateUserRole, s))
 	r.Put("/admin/locations", withAdmin(s.UpdateLocationApproval, s))
+	r.Get("/admin/liquidation-address", withAdmin(s.GetAdminLiquidationAddress, s))
+	r.Put("/admin/liquidation-address", withAdmin(s.UpdateAdminLiquidationAddress, s))
 	r.Get("/admin/affiliates", withAdmin(s.GetAffiliates, s))
 	r.Put("/admin/affiliates", withAdmin(s.UpdateAffiliate, s))
 }

@@ -90,6 +90,16 @@ type LocationLiquidationAddressResponse struct {
 	LiquidationAddress string `json:"liquidation_address"`
 }
 
+// Admin cash-out destination, stored on the admin's user row rather than a
+// location. Separate from the merchant per-location types above.
+type AdminLiquidationAddressUpdateRequest struct {
+	LiquidationAddress string `json:"liquidation_address"`
+}
+
+type AdminLiquidationAddressResponse struct {
+	LiquidationAddress string `json:"liquidation_address"`
+}
+
 type PublicLocation struct {
 	ID           uint     `json:"id"`
 	GoogleID     string   `json:"google_id"`

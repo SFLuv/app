@@ -1,20 +1,18 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useState } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { ArrowDownToLine, CheckCircle, Landmark, Loader2, Save } from "lucide-react"
+import { ArrowDownToLine, CheckCircle, Landmark, Loader2, Save, ShieldCheck } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { useApp } from "@/context/AppProvider"
 import { useChainConfig } from "@/context/ChainConfigProvider"
 import { AppWallet } from "@/lib/wallets/wallets"
-import type { AuthedLocation } from "@/types/location"
 import { Address, parseUnits } from "viem"
 
-interface CashOutCardProps {
+interface AdminCashOutCardProps {
   wallet: AppWallet
   onBalanceChanged?: () => void
 }
@@ -23,55 +21,57 @@ function isEthereumAddress(value: string): boolean {
   return /^0x[0-9a-fA-F]{40}$/.test(value.trim())
 }
 
-// CashOutCard lets a merchant (or admin) store a Bridge liquidation address per
-// location and cash out SFLUV: withdrawTo burns the SFLUV and sends the
-// underlying USDC to the liquidation address, which settles to their bank.
-// Replaces the old PayPal cash-out route.
-export function CashOutCard({ wallet, onBalanceChanged }: CashOutCardProps) {
-  const { user, userLocations, setUserLocations, authFetch } = useApp()
+// AdminCashOutCard is the admin-account equivalent of the merchant CashOutCard.
+// Admins hold no locations, so their liquidation address lives on their user row
+// and is read/written through the dedicated /admin/liquidation-address routes
+// rather than the per-location merchant endpoints.
+export function AdminCashOutCard({ wallet, onBalanceChanged }: AdminCashOutCardProps) {
+  const { user, authFetch } = useApp()
   const chainConfig = useChainConfig()
   const { toast } = useToast()
 
-  const [selectedLocationId, setSelectedLocationId] = useState<string>("")
+  const [savedAddress, setSavedAddress] = useState("")
   const [addressInput, setAddressInput] = useState("")
+  const [loadingAddress, setLoadingAddress] = useState(true)
   const [savingAddress, setSavingAddress] = useState(false)
   const [amountInput, setAmountInput] = useState("")
   const [confirming, setConfirming] = useState(false)
   const [cashingOut, setCashingOut] = useState(false)
   const [lastTxHash, setLastTxHash] = useState<string | null>(null)
 
-  const locations = useMemo(
-    () => userLocations.filter((location) => location.approval === true),
-    [userLocations],
-  )
-
-  const selectedLocation = useMemo(
-    () => locations.find((location) => String(location.id) === selectedLocationId) ?? null,
-    [locations, selectedLocationId],
-  )
+  const isAdmin = user?.isAdmin === true
 
   useEffect(() => {
-    if (!selectedLocationId && locations.length > 0) {
-      setSelectedLocationId(String(locations[0].id))
+    if (!isAdmin) return
+    let cancelled = false
+
+    const loadAddress = async () => {
+      try {
+        const res = await authFetch("/admin/liquidation-address")
+        if (!res.ok) return
+        const body = (await res.json()) as { liquidation_address: string }
+        if (cancelled) return
+        setSavedAddress(body.liquidation_address ?? "")
+        setAddressInput(body.liquidation_address ?? "")
+      } catch (error) {
+        console.error("error loading admin liquidation address", error)
+      } finally {
+        if (!cancelled) setLoadingAddress(false)
+      }
     }
-  }, [locations, selectedLocationId])
 
-  useEffect(() => {
-    setAddressInput(selectedLocation?.liquidation_address ?? "")
-    setConfirming(false)
-  }, [selectedLocation])
+    void loadAddress()
+    return () => {
+      cancelled = true
+    }
+  }, [isAdmin, authFetch])
 
-  // Merchants only — admins cash out through AdminCashOutCard, which uses their
-  // own per-account liquidation address instead of a location's.
-  if (user?.isMerchant !== true) return null
+  if (!isAdmin) return null
   if (wallet.type !== "smartwallet") return null
-  if (locations.length === 0) return null
 
-  const savedAddress = selectedLocation?.liquidation_address ?? ""
   const addressDirty = addressInput.trim() !== savedAddress
 
   const saveAddress = async () => {
-    if (!selectedLocation) return
     const trimmed = addressInput.trim()
     if (trimmed !== "" && !isEthereumAddress(trimmed)) {
       toast({
@@ -84,7 +84,7 @@ export function CashOutCard({ wallet, onBalanceChanged }: CashOutCardProps) {
 
     setSavingAddress(true)
     try {
-      const res = await authFetch(`/locations/${selectedLocation.id}/liquidation-address`, {
+      const res = await authFetch("/admin/liquidation-address", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ liquidation_address: trimmed }),
@@ -94,20 +94,15 @@ export function CashOutCard({ wallet, onBalanceChanged }: CashOutCardProps) {
         throw new Error(message || `Request failed with status ${res.status}`)
       }
       const body = (await res.json()) as { liquidation_address: string }
-      const applyAddress = (location: AuthedLocation) =>
-        location.id === selectedLocation.id
-          ? { ...location, liquidation_address: body.liquidation_address }
-          : location
-      setUserLocations((current) => current.map(applyAddress))
+      setSavedAddress(body.liquidation_address)
       setAddressInput(body.liquidation_address)
       toast({
-        title: body.liquidation_address ? "Liquidation address saved" : "Liquidation address cleared",
-        description: body.liquidation_address
-          ? "Cash outs from this location will send USDC to this address."
-          : undefined,
+        title: body.liquidation_address
+          ? "Admin liquidation address saved"
+          : "Admin liquidation address cleared",
       })
     } catch (error) {
-      console.error("error saving liquidation address", error)
+      console.error("error saving admin liquidation address", error)
       toast({
         title: "Unable to save liquidation address",
         description: error instanceof Error ? error.message : "Please try again.",
@@ -154,7 +149,7 @@ export function CashOutCard({ wallet, onBalanceChanged }: CashOutCardProps) {
   }
 
   const executeCashOut = async () => {
-    if (!wallet.address || !selectedLocation || !savedAddress) return
+    if (!wallet.address || !savedAddress) return
 
     let amountWei: bigint
     try {
@@ -206,11 +201,10 @@ export function CashOutCard({ wallet, onBalanceChanged }: CashOutCardProps) {
           tx_hash: receipt.hash,
           amount_wei: amountWei.toString(),
           destination_address: savedAddress,
-          location_id: selectedLocation.id,
         }),
       })
       if (!recordRes.ok) {
-        console.error("error recording unwrap", recordRes.status)
+        console.error("error recording admin unwrap", recordRes.status)
       }
 
       toast({
@@ -236,41 +230,24 @@ export function CashOutCard({ wallet, onBalanceChanged }: CashOutCardProps) {
     <Card>
       <CardHeader className="pb-3">
         <CardTitle className="flex items-center gap-2 text-base">
-          <Landmark className="h-4 w-4" />
-          Cash Out to Bank
+          <ShieldCheck className="h-4 w-4" />
+          Admin Cash Out to Bank
         </CardTitle>
         <CardDescription>
-          Unwraps SFLUV to USDC and sends it to your Bridge liquidation address, which settles to
-          your bank account.
+          Unwraps SFLUV to USDC and sends it to this admin account&apos;s Bridge liquidation address,
+          which settles to the linked bank account.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
-        {locations.length > 1 && (
-          <div className="space-y-1.5">
-            <Label htmlFor="cash-out-location">Location</Label>
-            <Select value={selectedLocationId} onValueChange={setSelectedLocationId}>
-              <SelectTrigger id="cash-out-location">
-                <SelectValue placeholder="Select a location" />
-              </SelectTrigger>
-              <SelectContent>
-                {locations.map((location) => (
-                  <SelectItem key={location.id} value={String(location.id)}>
-                    {location.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        )}
-
         <div className="space-y-1.5">
-          <Label htmlFor="liquidation-address">Liquidation address</Label>
+          <Label htmlFor="admin-liquidation-address">Admin liquidation address</Label>
           <div className="flex gap-2">
             <Input
-              id="liquidation-address"
-              placeholder="0x…"
+              id="admin-liquidation-address"
+              placeholder={loadingAddress ? "Loading…" : "0x…"}
               value={addressInput}
               onChange={(event) => setAddressInput(event.target.value)}
+              disabled={loadingAddress}
               spellCheck={false}
               autoComplete="off"
             />
@@ -278,22 +255,26 @@ export function CashOutCard({ wallet, onBalanceChanged }: CashOutCardProps) {
               variant="outline"
               size="icon"
               onClick={saveAddress}
-              disabled={savingAddress || !addressDirty}
-              aria-label="Save liquidation address"
+              disabled={savingAddress || loadingAddress || !addressDirty}
+              aria-label="Save admin liquidation address"
             >
-              {savingAddress ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+              {savingAddress ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Save className="h-4 w-4" />
+              )}
             </Button>
           </div>
           <p className="text-xs text-muted-foreground">
-            Get this address from your Bridge account after completing business verification in
-            Settings. Double-check it — funds sent to a wrong address cannot be recovered.
+            Applies to this admin account only, separate from any merchant location. Double-check it
+            — funds sent to a wrong address cannot be recovered.
           </p>
         </div>
 
         <div className="space-y-1.5">
-          <Label htmlFor="cash-out-amount">Amount ({chainConfig.tokenSymbol})</Label>
+          <Label htmlFor="admin-cash-out-amount">Amount ({chainConfig.tokenSymbol})</Label>
           <Input
-            id="cash-out-amount"
+            id="admin-cash-out-amount"
             type="number"
             inputMode="decimal"
             min="0"
@@ -306,8 +287,11 @@ export function CashOutCard({ wallet, onBalanceChanged }: CashOutCardProps) {
         {confirming ? (
           <div className="space-y-2 rounded-md border p-3">
             <p className="text-sm">
-              Send <span className="font-semibold">{amountInput} {chainConfig.tokenSymbol}</span> as
-              USDC to
+              Send{" "}
+              <span className="font-semibold">
+                {amountInput} {chainConfig.tokenSymbol}
+              </span>{" "}
+              as USDC to
             </p>
             <p className="break-all font-mono text-xs">{savedAddress}</p>
             <div className="flex gap-2 pt-1">
@@ -325,8 +309,9 @@ export function CashOutCard({ wallet, onBalanceChanged }: CashOutCardProps) {
             </div>
           </div>
         ) : (
-          <Button onClick={startCashOut} className="w-full" disabled={cashingOut}>
+          <Button onClick={startCashOut} className="w-full" disabled={cashingOut || loadingAddress}>
             <ArrowDownToLine className="mr-2 h-4 w-4" />
+            <Landmark className="mr-2 h-4 w-4" />
             Cash Out
           </Button>
         )}
