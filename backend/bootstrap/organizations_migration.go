@@ -19,7 +19,7 @@ import (
 //  4. converts affiliate weekly/one-time allocations to org allocations,
 //  5. tags legacy role rows and bot events with the new organization_id so no
 //     references to pre-merge organizations remain.
-func migrateOrganizations(ctx context.Context, pools *DBPools) error {
+func migrateOrganizations(ctx context.Context, pools *MigrationPools) error {
 	if _, err := pools.App.Exec(ctx, `
 		CREATE TABLE IF NOT EXISTS organizations(
 			id BIGSERIAL PRIMARY KEY,
