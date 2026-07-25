@@ -24,6 +24,8 @@
 #   ./dev-up.sh --skip-db-clone       # reuse previously cloned local databases
 #   ./dev-up.sh --mobile-branch <b>   # pull the mobile app from branch <b>
 #                                     # (overrides MOBILE_APP_BRANCH in .dev.env)
+#   ./dev-up.sh menu                  # dev utilities (set admin, set/clear user
+#                                     # pranks) against the local db; boots nothing
 #
 # Configuration comes from ./.dev.env (auto-created from .dev.env.example).
 # Logs live in tmp/logs/. Ctrl-C stops everything.
@@ -43,8 +45,10 @@ mkdir -p "$TMP_DIR" "$LOG_DIR" "$DUMP_DIR"
 RUN_BACKEND=1 RUN_PONDER=1 RUN_FRONTEND=1 RUN_MOBILE=1
 SKIP_DB_CLONE_FLAG=""
 MOBILE_BRANCH_OVERRIDE=""
+MENU_MODE=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    menu|--menu)    MENU_MODE=1 ;;
     --no-mobile)    RUN_MOBILE=0 ;;
     --no-frontend)  RUN_FRONTEND=0 ;;
     --no-backend)   RUN_BACKEND=0 ;;
@@ -55,7 +59,7 @@ while [[ $# -gt 0 ]]; do
       MOBILE_BRANCH_OVERRIDE="$2"
       shift ;;
     --mobile-branch=*) MOBILE_BRANCH_OVERRIDE="${1#--mobile-branch=}" ;;
-    -h|--help)      sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help)      sed -n '2,31p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown arg: $1 (try --help)"; exit 1 ;;
   esac
   shift
@@ -66,6 +70,191 @@ c_green() { printf "\033[1;32m%s\033[0m\n" "$1"; }
 c_yellow(){ printf "\033[1;33m%s\033[0m\n" "$1"; }
 c_red()   { printf "\033[1;31m%s\033[0m\n" "$1"; }
 die()     { c_red "$1"; exit 1; }
+
+# ----------------------------------------------------------------------------
+# Dev utilities menu (./dev-up.sh menu) — does not boot any services. Operates
+# on the local (cloned) app database only. All writes are gated behind explicit
+# confirmation. The "prank" feature works with the backend's prank-forwarding
+# middleware, which is compiled in only when IN_PRODUCTION!=true.
+# ----------------------------------------------------------------------------
+
+# pranks_active: succeeds when the pranks table exists AND holds at least one
+# row. Existence is checked first so we never query a non-existent table.
+pranks_active() {
+  local exists count
+  exists="$("${PSQL[@]}" -d "$APP_DB" -tAc "SELECT to_regclass('public.pranks') IS NOT NULL;" 2>/dev/null)"
+  [[ "$exists" == "t" ]] || return 1
+  count="$("${PSQL[@]}" -d "$APP_DB" -tAc "SELECT count(*) FROM pranks;" 2>/dev/null)"
+  [[ "${count:-0}" =~ ^[0-9]+$ && "${count:-0}" -gt 0 ]]
+}
+
+# pick_user: searchable user chooser. $1 = label, $2 = initial search term.
+# Emails can collide, so every row shows the user id; the caller selects the
+# exact account. Result lands in PICKED_USER_ID / PICKED_USER_EMAIL.
+PICKED_USER_ID=""
+PICKED_USER_EMAIL=""
+pick_user() {
+  local label="$1" term="${2:-}"
+  PICKED_USER_ID="" PICKED_USER_EMAIL=""
+  while true; do
+    if [[ -z "$term" ]]; then
+      printf "  %s — search by email or user id (blank to cancel): " "$label"
+      read -r term
+      [[ -z "$term" ]] && return 1
+    fi
+    # Fed via stdin (not -c) so psql interpolates the :'q' variable; -v quoting
+    # keeps the user-supplied search term injection-safe.
+    local rows
+    rows="$("${PSQL[@]}" -d "$APP_DB" -F $'\t' -v q="$term" <<'SQL' 2>/dev/null
+SELECT id, COALESCE(NULLIF(TRIM(contact_email), ''), '(no email)')
+  FROM users
+ WHERE contact_email ILIKE '%' || :'q' || '%' OR id = :'q'
+ ORDER BY LOWER(COALESCE(contact_email, '')), id
+ LIMIT 50;
+SQL
+)"
+    local ids=() emails=() id email
+    while IFS=$'\t' read -r id email; do
+      [[ -z "$id" ]] && continue
+      ids+=("$id"); emails+=("$email")
+    done <<< "$rows"
+    if [[ ${#ids[@]} -eq 0 ]]; then
+      c_yellow "    no users match \"$term\" — try again"
+      term=""; continue
+    fi
+    echo
+    local i
+    for i in "${!ids[@]}"; do
+      printf "    [%2d] %-32s %s\n" "$((i + 1))" "${emails[$i]}" "${ids[$i]}"
+    done
+    printf "  select 1-%d, 's' to search again (blank to cancel): " "${#ids[@]}"
+    local choice; read -r choice
+    [[ -z "$choice" ]] && return 1
+    [[ "$choice" == "s" ]] && { term=""; continue; }
+    if [[ "$choice" =~ ^[0-9]+$ && "$choice" -ge 1 && "$choice" -le ${#ids[@]} ]]; then
+      PICKED_USER_ID="${ids[$((choice - 1))]}"
+      PICKED_USER_EMAIL="${emails[$((choice - 1))]}"
+      return 0
+    fi
+    c_yellow "    invalid selection"
+  done
+}
+
+menu_set_admin() {
+  local email
+  printf "  email to grant admin: "; read -r email
+  email="$(printf '%s' "$email" | tr -d '[:space:]')"
+  [[ -z "$email" ]] && { c_yellow "  cancelled"; return; }
+
+  local matches
+  matches="$("${PSQL[@]}" -d "$APP_DB" -F $'\t' -v e="$email" <<'SQL' 2>/dev/null
+SELECT id, COALESCE(NULLIF(TRIM(contact_email), ''), '(no email)'), is_admin
+  FROM users
+ WHERE LOWER(TRIM(COALESCE(contact_email, ''))) = LOWER(:'e')
+    OR id IN (SELECT user_id FROM user_verified_emails
+               WHERE LOWER(TRIM(email_normalized)) = LOWER(:'e') AND active = TRUE)
+ ORDER BY id;
+SQL
+)"
+  if [[ -z "$matches" ]]; then c_yellow "  no accounts with email $email"; return; fi
+  echo "  accounts matching $email:"
+  while IFS=$'\t' read -r id em adm; do
+    [[ -z "$id" ]] && continue
+    printf "    %-32s %s   admin=%s\n" "$em" "$id" "$adm"
+  done <<< "$matches"
+  printf "  set ALL of the above to admin? [y/N]: "; local ok; read -r ok
+  [[ "$ok" =~ ^[Yy]$ ]] || { c_yellow "  cancelled"; return; }
+
+  local updated
+  updated="$("${PSQL[@]}" -d "$APP_DB" -v e="$email" <<'SQL' 2>/dev/null
+WITH upd AS (
+  UPDATE users SET is_admin = true
+   WHERE (LOWER(TRIM(COALESCE(contact_email, ''))) = LOWER(:'e')
+      OR id IN (SELECT user_id FROM user_verified_emails
+                 WHERE LOWER(TRIM(email_normalized)) = LOWER(:'e') AND active = TRUE))
+     AND is_admin = false
+   RETURNING id
+)
+SELECT count(*) FROM upd;
+SQL
+)"
+  c_green "  granted admin to ${updated:-0} account(s) (already-admin accounts left unchanged)."
+}
+
+menu_set_prank() {
+  echo "  PRANKER — the logged-in developer account whose requests get forwarded:"
+  local pranker_email
+  printf "  pranker email: "; read -r pranker_email
+  pranker_email="$(printf '%s' "$pranker_email" | tr -d '[:space:]')"
+  [[ -z "$pranker_email" ]] && { c_yellow "  cancelled"; return; }
+  pick_user "pranker" "$pranker_email" || { c_yellow "  cancelled"; return; }
+  local pranker_id="$PICKED_USER_ID" pranker_disp="$PICKED_USER_EMAIL"
+
+  echo "  PRANKEE — the account to impersonate (see exactly what they see):"
+  pick_user "prankee" "" || { c_yellow "  cancelled"; return; }
+  local prankee_id="$PICKED_USER_ID" prankee_disp="$PICKED_USER_EMAIL"
+
+  if [[ "$pranker_id" == "$prankee_id" ]]; then
+    c_yellow "  pranker and prankee are the same user — nothing to do."; return
+  fi
+
+  if "${PSQL[@]}" -d "$APP_DB" -v pr="$pranker_id" -v pe="$prankee_id" >/dev/null 2>&1 <<'SQL'
+CREATE TABLE IF NOT EXISTS pranks(
+  pranker_user_id TEXT PRIMARY KEY,
+  prankee_user_id TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+INSERT INTO pranks(pranker_user_id, prankee_user_id)
+VALUES (:'pr', :'pe')
+ON CONFLICT (pranker_user_id)
+DO UPDATE SET prankee_user_id = EXCLUDED.prankee_user_id, created_at = NOW();
+SQL
+  then
+    c_green "  prank set: $pranker_disp  →  $prankee_disp"
+    echo "    ($pranker_id  →  $prankee_id)"
+    c_yellow "  the running backend picks this up on the next request — no restart needed."
+  else
+    c_red "  failed to set prank"
+  fi
+}
+
+menu_clear_pranks() {
+  pranks_active || { c_yellow "  no active pranks to clear."; return; }
+  echo "  current pranks:"
+  "${PSQL[@]}" -d "$APP_DB" -tAc \
+    "SELECT '    ' || pranker_user_id || '  ->  ' || prankee_user_id FROM pranks;" 2>/dev/null
+  printf "  drop the pranks table and clear ALL pranks? [y/N]: "; local ok; read -r ok
+  [[ "$ok" =~ ^[Yy]$ ]] || { c_yellow "  cancelled"; return; }
+  if "${PSQL[@]}" -d "$APP_DB" -c "DROP TABLE IF EXISTS pranks;" >/dev/null 2>&1; then
+    c_green "  pranks cleared."
+  else
+    c_red "  failed to drop pranks table."
+  fi
+}
+
+run_menu() {
+  APP_DB="${APP_DB_NAME:-app}"
+  "${PSQL[@]}" -d "$APP_DB" -c "SELECT 1" >/dev/null 2>&1 \
+    || die "local app database '$APP_DB' not reachable — run ./dev-up.sh first to clone it"
+  while true; do
+    echo
+    c_blue "SFLUV dev utilities"
+    echo "  1) Set admin by email"
+    echo "  2) Set user prank"
+    if pranks_active; then
+      echo "  3) Clear pranks"
+    fi
+    echo "  q) Quit"
+    printf "select: "; local sel; read -r sel
+    case "$sel" in
+      1) menu_set_admin ;;
+      2) menu_set_prank ;;
+      3) if pranks_active; then menu_clear_pranks; else c_yellow "  no active pranks."; fi ;;
+      q|Q|"") break ;;
+      *) c_yellow "  unknown selection" ;;
+    esac
+  done
+}
 
 ANVIL_PORT=8545
 ANVIL_RPC="http://127.0.0.1:$ANVIL_PORT"
@@ -211,6 +400,14 @@ PSQL=(psql -h "$LOCAL_DB_HOST" -p "$LOCAL_DB_PORT" -U "$LOCAL_DB_USER" -v ON_ERR
 
 "${PSQL[@]}" -d postgres -c "SELECT 1" >/dev/null 2>&1 \
   || die "cannot reach local postgres at $LOCAL_DB_HOST_PORT as $LOCAL_DB_USER"
+
+# Dev utilities menu: operates on the already-cloned local database only. It
+# boots nothing and never installs the shutdown trap, so it returns cleanly
+# without tearing down a running stack.
+if [[ "$MENU_MODE" -eq 1 ]]; then
+  run_menu
+  exit 0
+fi
 
 # All three Privy app ids must refer to the SAME Privy app: the backend
 # rejects any token whose aud differs from PRIVY_APP_ID, so a mismatched

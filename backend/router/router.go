@@ -20,6 +20,40 @@ func isProduction() bool {
 	return strings.EqualFold(strings.TrimSpace(os.Getenv("IN_PRODUCTION")), "true")
 }
 
+// prankForwardingMiddleware swaps the authenticated user id in the request
+// context for a "prankee" user id when a local-dev prank has been set for the
+// caller, so the rest of the stack — role guards, data lookups, everything —
+// treats the request as if the prankee made it. This is what lets a developer
+// see exactly what another user sees.
+//
+// Safety: this is only mounted when !isProduction() (see New). As a second,
+// independent guard it re-checks IN_PRODUCTION on every request and no-ops in
+// production regardless of how it was wired, and it only forwards when the
+// pranks table exists AND holds a matching row — a table created solely by the
+// local dev CLI. It never fails a request: a missing table or any db error is
+// treated as "no prank" (handled in ResolvePrankTarget).
+func prankForwardingMiddleware(a *handlers.AppService) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if isProduction() {
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			prankerUserID, ok := r.Context().Value("userDid").(string)
+			if !ok || prankerUserID == "" {
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			if prankeeUserID, forwarded := a.ResolvePrankTarget(r.Context(), prankerUserID); forwarded {
+				r = r.WithContext(context.WithValue(r.Context(), "userDid", prankeeUserID))
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
 func parseOrigins(value string) []string {
 	entries := strings.Split(value, ",")
 	origins := make([]string, 0, len(entries))
@@ -97,6 +131,17 @@ func New(s *handlers.BotService, a *handlers.AppService, p *handlers.PonderServi
 		MaxAge:           300,
 	}))
 	r.Use(m.AuthMiddleware)
+
+	// Local-dev "prank" forwarding: lets a developer act as another user to see
+	// exactly what that user sees. It is wired ONLY when not in production, and
+	// even then only takes effect when a pranks table has been hand-populated by
+	// the local dev CLI (./dev-up.sh menu) — the middleware itself creates
+	// nothing. Two independent gates (this !isProduction() check AND the manual
+	// db write) must both be true for any forwarding to happen, so an accidental
+	// production build cannot be exploited without direct database access.
+	if !isProduction() {
+		r.Use(prankForwardingMiddleware(a))
+	}
 
 	// Admin MCP endpoint + its OAuth authorization server. It authenticates
 	// itself (OAuth access token bound to a SFLUV user DID + live admin check)
