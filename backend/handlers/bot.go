@@ -598,6 +598,42 @@ func (s *BotService) AffiliateNewEvent(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(id))
 }
 
+// AdminGetOrganizationEvents lists a specific organization's events for the
+// admin panel (org details modal), reusing the same org-scoped query the
+// affiliate event list uses.
+func (s *BotService) AdminGetOrganizationEvents(w http.ResponseWriter, r *http.Request) {
+	orgId, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || orgId <= 0 {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	params := r.URL.Query()
+	page, count := parsePageAndCount(params, 10, 100)
+
+	events, err := s.db.GetEventsByOrganization(r.Context(), &structs.EventsRequest{
+		Page:    page,
+		Count:   count,
+		Search:  params.Get("search"),
+		Expired: params.Get("expired") == "true",
+	}, orgId)
+	if err != nil {
+		fmt.Printf("error getting organization events for org %d: %s\n", orgId, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	bytes, err := json.Marshal(events)
+	if err != nil {
+		fmt.Printf("error marshalling organization events: %s\n", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	w.Write(bytes)
+}
+
 func (s *BotService) AffiliateGetEvents(w http.ResponseWriter, r *http.Request) {
 	params := r.URL.Query()
 	page, count := parsePageAndCount(params, 10, 100)

@@ -567,25 +567,56 @@ func (a *AppDB) ListOrganizationAllocations(ctx context.Context, orgId int64) ([
 	return allocations, rows.Err()
 }
 
-// SetOrganizationAllocation upserts a cycle's allocation. Balance is clamped to
-// the new allocation for recurring cycles; one_time sets balance directly.
-func (a *AppDB) SetOrganizationAllocation(ctx context.Context, orgId int64, cycle string, allocation uint64) error {
-	switch cycle {
-	case structs.AllocationCycleDaily, structs.AllocationCycleWeekly, structs.AllocationCycleMonthly, structs.AllocationCycleOneTime:
-	default:
-		return fmt.Errorf("invalid allocation cycle %q", cycle)
+// ReplaceOrganizationAllocations makes the given list the organization's FULL
+// allocation set in one transaction: listed cycles are upserted, unlisted
+// cycles are deleted. For upserts, balance is clamped to the new allocation for
+// recurring cycles; one_time sets balance directly.
+func (a *AppDB) ReplaceOrganizationAllocations(ctx context.Context, orgId int64, items []structs.AdminOrganizationAllocationItem) error {
+	cycles := make([]string, 0, len(items))
+	seen := map[string]bool{}
+	for _, item := range items {
+		switch item.Cycle {
+		case structs.AllocationCycleDaily, structs.AllocationCycleWeekly, structs.AllocationCycleMonthly, structs.AllocationCycleOneTime:
+		default:
+			return fmt.Errorf("invalid allocation cycle %q", item.Cycle)
+		}
+		if seen[item.Cycle] {
+			return fmt.Errorf("duplicate allocation cycle %q", item.Cycle)
+		}
+		seen[item.Cycle] = true
+		cycles = append(cycles, item.Cycle)
 	}
-	_, err := a.db.Exec(ctx, `
-		INSERT INTO organization_allocations(organization_id, cycle, allocation, balance, last_reset_at)
-		VALUES ($1, $2, $3, $3, NOW())
-		ON CONFLICT (organization_id, cycle) DO UPDATE SET
-			allocation = EXCLUDED.allocation,
-			balance = CASE
-				WHEN organization_allocations.cycle = 'one_time' THEN EXCLUDED.allocation
-				ELSE LEAST(organization_allocations.balance, EXCLUDED.allocation)
-			END;
-	`, orgId, cycle, allocation)
-	return err
+
+	return pgx.BeginFunc(ctx, a.db, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `
+			DELETE FROM organization_allocations
+			WHERE organization_id = $1 AND cycle != ALL($2::text[]);
+		`, orgId, cycles); err != nil {
+			return fmt.Errorf("error removing unlisted allocations: %w", err)
+		}
+		for _, item := range items {
+			// one_time balance only resets when its allocation actually CHANGES:
+			// replace-all saves re-submit untouched rows, and an unconditional
+			// reset would silently re-credit already-spent one_time funds every
+			// time an unrelated cycle is edited. Unchanged rows (and recurring
+			// cycles) just clamp balance to the allocation.
+			if _, err := tx.Exec(ctx, `
+				INSERT INTO organization_allocations(organization_id, cycle, allocation, balance, last_reset_at)
+				VALUES ($1, $2, $3, $3, NOW())
+				ON CONFLICT (organization_id, cycle) DO UPDATE SET
+					allocation = EXCLUDED.allocation,
+					balance = CASE
+						WHEN organization_allocations.cycle = 'one_time'
+							AND organization_allocations.allocation IS DISTINCT FROM EXCLUDED.allocation
+							THEN EXCLUDED.allocation
+						ELSE LEAST(organization_allocations.balance, EXCLUDED.allocation)
+					END;
+			`, orgId, item.Cycle, item.Allocation); err != nil {
+				return fmt.Errorf("error upserting %s allocation: %w", item.Cycle, err)
+			}
+		}
+		return nil
+	})
 }
 
 // ReserveOrganizationBalance debits `total` from the org's balances, spending

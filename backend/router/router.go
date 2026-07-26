@@ -152,7 +152,7 @@ func New(s *handlers.BotService, a *handlers.AppService, p *handlers.PonderServi
 	}
 
 	AddBotRoutes(r, s, a)
-	AddOrganizationRoutes(r, a)
+	AddOrganizationRoutes(r, a, s)
 	AddClientConfigRoutes(r, a)
 	AddUserRoutes(r, a)
 	AddAdminRoutes(r, a)
@@ -169,7 +169,7 @@ func New(s *handlers.BotService, a *handlers.AppService, p *handlers.PonderServi
 	return r
 }
 
-func AddOrganizationRoutes(r *chi.Mux, a *handlers.AppService) {
+func AddOrganizationRoutes(r *chi.Mux, a *handlers.AppService, s *handlers.BotService) {
 	// Membership-scoped org management. Fine-grained authorization (member vs
 	// admin vs superadmin) is enforced inside each handler via requireOrgRole,
 	// always resolved live from organization_members.
@@ -187,8 +187,9 @@ func AddOrganizationRoutes(r *chi.Mux, a *handlers.AppService) {
 	// Platform-admin org controls.
 	r.Get("/admin/organizations", withAdmin(a.AdminListOrganizations, a))
 	r.Put("/admin/organizations/superadmin", withAdmin(a.AdminSetOrganizationSuperadmin, a))
-	r.Put("/admin/organizations/allocations", withAdmin(a.AdminSetOrganizationAllocation, a))
+	r.Put("/admin/organizations/allocations", withAdmin(a.AdminSetOrganizationAllocations, a))
 	r.Put("/admin/organizations/roles", withAdmin(a.AdminSetOrganizationRoleStatus, a))
+	r.Get("/admin/organizations/{id}/events", withAdmin(s.AdminGetOrganizationEvents, a))
 }
 
 func AddClientConfigRoutes(r *chi.Mux, s *handlers.AppService) {

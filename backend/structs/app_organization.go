@@ -119,8 +119,14 @@ type AdminOrganizationSuperadminRequest struct {
 	Email          string `json:"email"`
 }
 
-type AdminOrganizationAllocationRequest struct {
-	OrganizationId int64  `json:"organization_id"`
-	Cycle          string `json:"cycle"`
-	Allocation     uint64 `json:"allocation"`
+type AdminOrganizationAllocationItem struct {
+	Cycle      string `json:"cycle"`
+	Allocation uint64 `json:"allocation"`
+}
+
+// AdminOrganizationAllocationsRequest replaces an organization's full
+// allocation list: cycles present are upserted, cycles absent are removed.
+type AdminOrganizationAllocationsRequest struct {
+	OrganizationId int64                             `json:"organization_id"`
+	Allocations    []AdminOrganizationAllocationItem `json:"allocations"`
 }
