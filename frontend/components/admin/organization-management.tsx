@@ -22,6 +22,7 @@ import {
   Users,
   X,
 } from "lucide-react"
+import { EventModal } from "@/components/events/event-modal"
 import { useToast } from "@/hooks/use-toast"
 import { useApp } from "@/context/AppProvider"
 import type { Event } from "@/types/event"
@@ -90,6 +91,9 @@ export function OrganizationManagement() {
   const [orgEventsPage, setOrgEventsPage] = useState(0)
   const [orgEventsSearch, setOrgEventsSearch] = useState("")
   const [orgEventsActiveOnly, setOrgEventsActiveOnly] = useState(true)
+  const [orgEventsRefresh, setOrgEventsRefresh] = useState(0)
+  const [orgEventDetail, setOrgEventDetail] = useState<Event | null>(null)
+  const [deleteOrgEventError, setDeleteOrgEventError] = useState<string | null>(null)
 
   // Background-refresh friendly: the "Loading…" placeholder only ever shows
   // before the FIRST load. Every later load() (refresh button, post-action
@@ -194,6 +198,8 @@ export function OrganizationManagement() {
     setOrgEventsPage(0)
     setOrgEventsSearch("")
     setOrgEventsActiveOnly(true)
+    setOrgEventDetail(null)
+    setDeleteOrgEventError(null)
   }
 
   const closeOrg = () => setSelectedOrgId(null)
@@ -271,6 +277,18 @@ export function OrganizationManagement() {
     if (!ok) return
   }
 
+  const handleDeleteOrgEvent = async (id: string) => {
+    try {
+      const res = await authFetch(`/events/${id}`, { method: "DELETE" })
+      if (res.status !== 200) throw new Error()
+      setOrgEventDetail(null)
+      setOrgEventsRefresh((n) => n + 1)
+      toast({ title: "Event deleted" })
+    } catch {
+      setDeleteOrgEventError("Unable to delete this event. Please try again later.")
+    }
+  }
+
   // Rebase the allocation drafts on fresh server data after a save.
   useEffect(() => {
     if (selected && !allocDirty) resetAllocDrafts(selected)
@@ -312,7 +330,7 @@ export function OrganizationManagement() {
       clearTimeout(timer)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedOrgId, detailTab, orgEventsPage, orgEventsSearch, orgEventsActiveOnly])
+  }, [selectedOrgId, detailTab, orgEventsPage, orgEventsSearch, orgEventsActiveOnly, orgEventsRefresh])
 
   // If a background refresh revokes affiliate approval while the admin is on a
   // now-hidden tab, snap back to Approvals instead of showing a blank body.
@@ -463,7 +481,7 @@ export function OrganizationManagement() {
 
       {/* ── Organization details modal ─────────────────────────────────────── */}
       <Dialog open={selected != null} onOpenChange={(open) => !open && closeOrg()}>
-        <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-2xl">
+        <DialogContent className="flex h-[min(44rem,85vh)] flex-col overflow-hidden sm:max-w-3xl">
           {selected && (
             <>
               <DialogHeader>
@@ -498,8 +516,8 @@ export function OrganizationManagement() {
                 )}
               </DialogHeader>
 
-              <Tabs value={detailTab} onValueChange={setDetailTab}>
-                <TabsList className={`grid h-auto w-full grid-cols-2 ${detailTabCount === 4 ? "sm:grid-cols-4" : ""}`}>
+              <Tabs value={detailTab} onValueChange={setDetailTab} className="flex min-h-0 flex-1 flex-col">
+                <TabsList className={`grid h-auto w-full shrink-0 grid-cols-2 ${detailTabCount === 4 ? "sm:grid-cols-4" : ""}`}>
                   <TabsTrigger value="approvals">Approvals</TabsTrigger>
                   <TabsTrigger value="members">Members</TabsTrigger>
                   {selectedAffiliateApproved && <TabsTrigger value="allocations">Allocations</TabsTrigger>}
@@ -507,7 +525,7 @@ export function OrganizationManagement() {
                 </TabsList>
 
                 {/* Approvals */}
-                <TabsContent value="approvals" className="space-y-2 pt-3">
+                <TabsContent value="approvals" className="min-h-0 flex-1 space-y-2 overflow-y-auto pt-3">
                   {roleTypes.map((rt) => {
                     const existing = selected.roles.find((r) => r.role_type === rt)
                     if (!existing) return null
@@ -542,7 +560,7 @@ export function OrganizationManagement() {
                 </TabsContent>
 
                 {/* Members */}
-                <TabsContent value="members" className="space-y-3 pt-3">
+                <TabsContent value="members" className="min-h-0 flex-1 space-y-3 overflow-y-auto pt-3">
                   <div className="space-y-2">
                     {selected.members.map((m) => (
                       <div key={m.user_id} className="flex items-center justify-between gap-3 rounded-lg border p-3">
@@ -593,7 +611,16 @@ export function OrganizationManagement() {
 
                 {/* Allocations (approved affiliates only) */}
                 {selectedAffiliateApproved && (
-                  <TabsContent value="allocations" className="space-y-3 pt-3">
+                  <TabsContent value="allocations" className="min-h-0 flex-1 space-y-3 overflow-y-auto pt-3">
+                    <div className="flex items-center justify-between rounded-lg border bg-secondary/40 px-3 py-2 text-sm">
+                      <span className="text-muted-foreground">Total current allocation</span>
+                      <span className="font-medium">
+                        {selected.allocations.reduce((sum, al) => sum + al.allocation, 0).toLocaleString()}{" "}
+                        <span className="text-xs font-normal text-muted-foreground">
+                          ({selected.allocations.reduce((sum, al) => sum + al.balance, 0).toLocaleString()} remaining)
+                        </span>
+                      </span>
+                    </div>
                     <div className="space-y-2">
                       {allocDrafts.map((row) => {
                         const server = selected.allocations.find((al) => al.cycle === row.cycle)
@@ -619,22 +646,20 @@ export function OrganizationManagement() {
                                 ))}
                               </SelectContent>
                             </Select>
-                            <div className="min-w-0 flex-1">
-                              <Input
-                                className="h-9"
-                                type="number"
-                                min="0"
-                                placeholder="Amount"
-                                value={row.amount}
-                                onChange={(e) => updateAllocRow(row.key, { amount: e.target.value })}
-                                disabled={busy}
-                              />
-                              {server && (
-                                <p className="mt-1 text-xs text-muted-foreground">
-                                  Balance: {server.balance.toLocaleString()} / {server.allocation.toLocaleString()}
-                                </p>
-                              )}
-                            </div>
+                            <Input
+                              className="h-9 min-w-0 flex-1"
+                              type="number"
+                              min="0"
+                              placeholder="Amount"
+                              value={row.amount}
+                              onChange={(e) => updateAllocRow(row.key, { amount: e.target.value })}
+                              disabled={busy}
+                            />
+                            {server && (
+                              <span className="shrink-0 whitespace-nowrap text-xs text-muted-foreground">
+                                {server.balance.toLocaleString()} / {server.allocation.toLocaleString()} left
+                              </span>
+                            )}
                             <Button
                               variant="ghost"
                               size="icon"
@@ -671,7 +696,7 @@ export function OrganizationManagement() {
 
                 {/* Events (approved affiliates only) */}
                 {selectedAffiliateApproved && (
-                  <TabsContent value="events" className="space-y-3 pt-3">
+                  <TabsContent value="events" className="min-h-0 flex-1 space-y-3 overflow-y-auto pt-3">
                     <div className="flex flex-col gap-2 sm:flex-row">
                       <div className="relative flex-1">
                         <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -708,7 +733,23 @@ export function OrganizationManagement() {
                         {orgEvents.map((event) => {
                           const expired = event.expiration > 0 && event.expiration * 1000 < Date.now()
                           return (
-                            <div key={event.id} className="flex items-center justify-between gap-3 rounded-lg border p-3">
+                            <div
+                              key={event.id}
+                              className="flex cursor-pointer items-center justify-between gap-3 rounded-lg border p-3 transition-colors hover:bg-secondary/50"
+                              onClick={() => {
+                                setDeleteOrgEventError(null)
+                                setOrgEventDetail(event)
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter" || e.key === " ") {
+                                  e.preventDefault()
+                                  setDeleteOrgEventError(null)
+                                  setOrgEventDetail(event)
+                                }
+                              }}
+                              role="button"
+                              tabIndex={0}
+                            >
                               <div className="min-w-0">
                                 <p className="truncate text-sm font-medium">{event.title}</p>
                                 <p className="flex items-center gap-1 text-xs text-muted-foreground">
@@ -765,6 +806,16 @@ export function OrganizationManagement() {
           )}
         </DialogContent>
       </Dialog>
+
+      {/* Event details + QR code downloads (reuses the admin events modal). */}
+      <EventModal
+        open={orgEventDetail != null}
+        onOpenChange={() => setOrgEventDetail(null)}
+        event={orgEventDetail || undefined}
+        handleDeleteEvent={handleDeleteOrgEvent}
+        deleteEventError={deleteOrgEventError}
+        ownerLabel={selected ? selected.organization.name : undefined}
+      />
     </Card>
   )
 }

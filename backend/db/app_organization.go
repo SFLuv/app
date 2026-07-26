@@ -619,15 +619,16 @@ func (a *AppDB) ReplaceOrganizationAllocations(ctx context.Context, orgId int64,
 	})
 }
 
-// ReserveOrganizationBalance debits `total` from the org's balances, spending
-// the shortest cycle first (daily -> weekly -> monthly -> one_time) so that
-// use-it-or-lose-it funds are consumed before durable ones.
+// ReserveOrganizationBalance debits `total` from the org's balances in fixed
+// deduction order: one_time -> daily -> weekly -> monthly. One-time funds are
+// consumed first (they never refresh, so they should be drawn down before any
+// recurring budget), then recurring cycles shortest-first.
 func (a *AppDB) ReserveOrganizationBalance(ctx context.Context, orgId int64, total uint64) error {
 	return pgx.BeginFunc(ctx, a.db, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `
 			SELECT id, balance FROM organization_allocations
 			WHERE organization_id = $1
-			ORDER BY CASE cycle WHEN 'daily' THEN 0 WHEN 'weekly' THEN 1 WHEN 'monthly' THEN 2 ELSE 3 END
+			ORDER BY CASE cycle WHEN 'one_time' THEN 0 WHEN 'daily' THEN 1 WHEN 'weekly' THEN 2 ELSE 3 END
 			FOR UPDATE;
 		`, orgId)
 		if err != nil {
