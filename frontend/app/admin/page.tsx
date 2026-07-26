@@ -417,6 +417,8 @@ export default function AdminPage() {
   const [improverStatusDraft, setImproverStatusDraft] = useState<Improver["status"]>("pending")
   const [improverModalUpdating, setImproverModalUpdating] = useState<boolean>(false)
   const [improverModalError, setImproverModalError] = useState<string>("")
+  const [improverCredentialDraft, setImproverCredentialDraft] = useState<string>("")
+  const [credentialActionBusy, setCredentialActionBusy] = useState<string | null>(null)
   const [improverSearch, setImproverSearch] = useState<string>(readQueryText("improver_search", ""))
   const [improverPage, setImproverPage] = useState<number>(readQueryNumber("improver_page", 0))
 
@@ -1020,6 +1022,43 @@ export default function AdminPage() {
     if (!selectedImprover) return
     const ok = await updateImproverStatus(selectedImprover.user_id, improverStatusDraft)
     if (ok) setImproverModalOpen(false)
+  }
+
+  // Admins can grant/revoke credentials directly (no improver request needed).
+  // The /issuers/credentials endpoints admit admins and bypass issuer scopes.
+  const setImproverCredential = async (credentialType: string, grant: boolean) => {
+    if (!selectedImprover) return
+    const userId = selectedImprover.user_id
+    setCredentialActionBusy(credentialType)
+    setImproverModalError("")
+    try {
+      const res = await authFetch("/issuers/credentials", {
+        method: grant ? "POST" : "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ user_id: userId, credential_type: credentialType }),
+      })
+      if (!res.ok) throw new Error((await res.text()) || "Credential update failed")
+      // Optimistically reflect the change, then refresh the list in the
+      // background so the improver row stays in sync.
+      setSelectedImprover((prev) =>
+        prev && prev.user_id === userId
+          ? {
+              ...prev,
+              active_credentials: grant
+                ? Array.from(new Set([...prev.active_credentials, credentialType]))
+                : prev.active_credentials.filter((c) => c !== credentialType),
+            }
+          : prev,
+      )
+      if (grant) setImproverCredentialDraft("")
+      void getImprovers(improverSearch, improverPage)
+    } catch (err) {
+      setImproverModalError(
+        err instanceof Error && err.message ? err.message : "Unable to update credential right now.",
+      )
+    } finally {
+      setCredentialActionBusy(null)
+    }
   }
 
   const getSupervisors = async (search = supervisorSearch, page = supervisorPage) => {
@@ -3951,12 +3990,67 @@ export default function AdminPage() {
                     ) : (
                       <div className="flex flex-wrap gap-2">
                         {selectedImprover.active_credentials.map((credential) => (
-                          <Badge key={credential} variant="outline">
+                          <Badge key={credential} variant="outline" className="gap-1 pr-1">
                             {formatCredentialLabel(credential, credentialLabelMap)}
+                            <button
+                              type="button"
+                              aria-label={`Revoke ${formatCredentialLabel(credential, credentialLabelMap)}`}
+                              className="rounded-full p-0.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"
+                              disabled={credentialActionBusy !== null}
+                              onClick={() => void setImproverCredential(credential, false)}
+                            >
+                              {credentialActionBusy === credential ? (
+                                <Loader2 className="h-3 w-3 animate-spin" />
+                              ) : (
+                                <X className="h-3 w-3" />
+                              )}
+                            </button>
                           </Badge>
                         ))}
                       </div>
                     )}
+                    {/* Grant a credential directly — no improver request required. */}
+                    {(() => {
+                      const grantable = credentialTypes.filter(
+                        (ct) => !selectedImprover.active_credentials.includes(ct.value),
+                      )
+                      return (
+                        <div className="flex flex-col gap-2 pt-1 sm:flex-row">
+                          <Select
+                            value={improverCredentialDraft || undefined}
+                            onValueChange={setImproverCredentialDraft}
+                            disabled={credentialActionBusy !== null || grantable.length === 0}
+                          >
+                            <SelectTrigger className="flex-1">
+                              <SelectValue
+                                placeholder={grantable.length === 0 ? "All credentials granted" : "Grant a credential…"}
+                              />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {grantable.map((ct) => (
+                                <SelectItem key={ct.value} value={ct.value}>
+                                  {formatCredentialLabel(ct.value, credentialLabelMap)}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            className="shrink-0"
+                            disabled={!improverCredentialDraft || credentialActionBusy !== null}
+                            onClick={() => void setImproverCredential(improverCredentialDraft, true)}
+                          >
+                            {credentialActionBusy === improverCredentialDraft ? (
+                              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                            ) : (
+                              <Plus className="mr-2 h-4 w-4" />
+                            )}
+                            Grant
+                          </Button>
+                        </div>
+                      )
+                    })()}
                   </div>
                   <div className="space-y-1">
                     <Label>Change Approval Status</Label>
