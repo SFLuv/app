@@ -441,6 +441,37 @@ func (a *AppService) AdminSetOrganizationAllocations(w http.ResponseWriter, r *h
 	w.WriteHeader(http.StatusOK)
 }
 
+// AdminSetOrganizationIssuerScopes replaces the organization's issuance
+// settings (credential types its members may issue) and syncs them to members.
+func (a *AppService) AdminSetOrganizationIssuerScopes(w http.ResponseWriter, r *http.Request) {
+	adminId := utils.GetDid(r)
+	if adminId == nil {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+	var req structs.AdminOrganizationIssuerScopesRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<10)).Decode(&req); err != nil || req.OrganizationId == 0 {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	// Like allocations: a missing field must fail loudly rather than wipe all
+	// scopes; an explicit empty array is the intentional clear-everything.
+	if req.CredentialTypes == nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	if err := a.db.SetOrganizationIssuerScopes(r.Context(), req.OrganizationId, req.CredentialTypes, *adminId); err != nil {
+		a.logger.Logf("error setting organization issuer scopes: %s", err)
+		if strings.Contains(err.Error(), "invalid credential type") {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
 // AdminSetOrganizationRoleStatus approves/rejects an organization role.
 func (a *AppService) AdminSetOrganizationRoleStatus(w http.ResponseWriter, r *http.Request) {
 	var req struct {

@@ -65,7 +65,58 @@ func syncMemberRoleFlagsTx(ctx context.Context, tx pgx.Tx, orgId int64, extraUse
 			ON om.user_id = a.user_id AND om.organization_id = $1
 		WHERE u.id = a.user_id;
 	`, orgId, extraUsers)
-	return err
+	if err != nil {
+		return err
+	}
+	return syncMemberIssuerScopesTx(ctx, tx, orgId, extraUsers...)
+}
+
+// syncMemberIssuerScopesTx makes org-derived per-user issuer scope rows
+// (organization_id set) mirror the org's issuance settings for its current
+// members, but only while the org's issuer role is approved. Personally
+// granted rows (organization_id NULL) are never touched, so a user keeps
+// individually granted scopes even if the org's change. Runs from
+// syncMemberRoleFlagsTx so every membership/role transition keeps scopes true.
+func syncMemberIssuerScopesTx(ctx context.Context, tx pgx.Tx, orgId int64, extraUsers ...string) error {
+	if _, err := tx.Exec(ctx, `
+		WITH affected AS (
+			SELECT user_id FROM organization_members WHERE organization_id = $1
+			UNION
+			SELECT UNNEST($2::TEXT[])
+		),
+		entitled AS (
+			SELECT om.user_id, ois.credential_type
+			FROM organization_members om
+			JOIN organization_issuer_scopes ois ON ois.organization_id = om.organization_id
+			JOIN organization_roles orr
+				ON orr.organization_id = om.organization_id
+				AND orr.role_type = 'issuer' AND orr.status = 'approved'
+			WHERE om.organization_id = $1
+		)
+		DELETE FROM issuer_credential_scopes ics
+		WHERE ics.organization_id = $1
+		AND ics.issuer_id IN (SELECT user_id FROM affected)
+		AND NOT EXISTS (
+			SELECT 1 FROM entitled e
+			WHERE e.user_id = ics.issuer_id AND e.credential_type = ics.credential_type
+		);
+	`, orgId, extraUsers); err != nil {
+		return fmt.Errorf("error pruning org-derived issuer scopes: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO issuer_credential_scopes(issuer_id, credential_type, organization_id)
+		SELECT om.user_id, ois.credential_type, $1
+		FROM organization_members om
+		JOIN organization_issuer_scopes ois ON ois.organization_id = om.organization_id
+		JOIN organization_roles orr
+			ON orr.organization_id = om.organization_id
+			AND orr.role_type = 'issuer' AND orr.status = 'approved'
+		WHERE om.organization_id = $1
+		ON CONFLICT (issuer_id, credential_type) DO NOTHING;
+	`, orgId); err != nil {
+		return fmt.Errorf("error granting org-derived issuer scopes: %w", err)
+	}
+	return nil
 }
 
 // GetOrganizationByUser returns the caller's organization and membership role,
@@ -191,6 +242,12 @@ func (a *AppDB) GetOrganizationView(ctx context.Context, userId string) (*struct
 		return nil, err
 	}
 	view.Allocations = allocations
+
+	scopes, err := a.ListOrganizationIssuerScopes(ctx, org.Id)
+	if err != nil {
+		return nil, err
+	}
+	view.IssuerScopes = scopes
 
 	if myRole == structs.OrgRoleAdmin || myRole == structs.OrgRoleSuperadmin {
 		inviteRows, err := a.db.Query(ctx, `
@@ -853,8 +910,81 @@ func (a *AppDB) ListOrganizations(ctx context.Context) ([]*structs.OrganizationV
 			return nil, err
 		}
 		view.Allocations = allocations
+
+		scopes, err := a.ListOrganizationIssuerScopes(ctx, view.Organization.Id)
+		if err != nil {
+			return nil, err
+		}
+		view.IssuerScopes = scopes
 	}
 	return views, nil
+}
+
+// ListOrganizationIssuerScopes returns the credential types the organization's
+// members may issue (effective only while the org's issuer role is approved).
+func (a *AppDB) ListOrganizationIssuerScopes(ctx context.Context, orgId int64) ([]string, error) {
+	rows, err := a.db.Query(ctx, `
+		SELECT credential_type FROM organization_issuer_scopes
+		WHERE organization_id = $1 ORDER BY credential_type ASC;
+	`, orgId)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	scopes := []string{}
+	for rows.Next() {
+		var scope string
+		if err := rows.Scan(&scope); err != nil {
+			return nil, err
+		}
+		scopes = append(scopes, scope)
+	}
+	return scopes, rows.Err()
+}
+
+// SetOrganizationIssuerScopes replaces the organization's issuance settings and
+// re-syncs the org-derived per-user scope rows for every member, so the change
+// takes effect immediately across all issuer runtime checks.
+func (a *AppDB) SetOrganizationIssuerScopes(ctx context.Context, orgId int64, credentialTypes []string, adminId string) error {
+	normalized := make([]string, 0, len(credentialTypes))
+	seen := map[string]struct{}{}
+	for _, credential := range credentialTypes {
+		credential = strings.ToLower(strings.TrimSpace(credential))
+		if credential == "" {
+			continue
+		}
+		valid, err := a.IsGlobalCredentialType(ctx, credential)
+		if err != nil {
+			return fmt.Errorf("error validating credential type: %w", err)
+		}
+		if !valid {
+			return fmt.Errorf("invalid credential type: %s", credential)
+		}
+		if _, exists := seen[credential]; exists {
+			continue
+		}
+		seen[credential] = struct{}{}
+		normalized = append(normalized, credential)
+	}
+
+	return pgx.BeginFunc(ctx, a.db, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `
+			DELETE FROM organization_issuer_scopes
+			WHERE organization_id = $1 AND credential_type != ALL($2::text[]);
+		`, orgId, normalized); err != nil {
+			return fmt.Errorf("error removing unlisted issuer scopes: %w", err)
+		}
+		for _, credential := range normalized {
+			if _, err := tx.Exec(ctx, `
+				INSERT INTO organization_issuer_scopes(organization_id, credential_type, created_by)
+				VALUES ($1, $2, $3)
+				ON CONFLICT (organization_id, credential_type) DO NOTHING;
+			`, orgId, credential, adminId); err != nil {
+				return fmt.Errorf("error adding issuer scope %s: %w", credential, err)
+			}
+		}
+		return syncMemberIssuerScopesTx(ctx, tx, orgId)
+	})
 }
 
 // AdminSetOrganizationSuperadminByEmail lets a platform admin reassign the

@@ -281,12 +281,9 @@ export default function AdminPage() {
       "analytics",
       "w9",
       "merchants",
-      "affiliates",
-      "proposers",
+      "organizations",
       "improvers",
-      "supervisors",
       "workflows",
-      "issuers",
       "credential-types",
     ].includes(value)
   }
@@ -383,6 +380,9 @@ export default function AdminPage() {
   const [affiliates, setAffiliates] = useState<Affiliate[]>([])
   const [affiliatesError, setAffiliatesError] = useState<string>("")
   const [affiliateModalOpen, setAffiliateModalOpen] = useState<boolean>(false)
+  // Sidebar badge: organizations with any pending role approval. Loaded once
+  // for the badge count; the Organizations tab component owns the full list.
+  const [orgPendingCount, setOrgPendingCount] = useState<number>(0)
   const [selectedAffiliate, setSelectedAffiliate] = useState<Affiliate | null>(null)
   const [affiliateNickname, setAffiliateNickname] = useState<string>("")
   const [affiliateWeeklyBalance, setAffiliateWeeklyBalance] = useState<string>("")
@@ -1792,6 +1792,27 @@ export default function AdminPage() {
   }, [status, eventsSearch, eventsPage, eventsCount, eventsExpired])
 
   useEffect(() => { getAffiliates(affiliateSearch, affiliatePage) }, [affiliateSearch, affiliatePage])
+
+  // Organizations sidebar badge: count orgs with a pending role approval.
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      try {
+        const res = await authFetch("/admin/organizations")
+        if (!res.ok) return
+        const views = (await res.json()) as Array<{ roles?: Array<{ status: string }> }>
+        if (cancelled) return
+        setOrgPendingCount(
+          (views || []).filter((v) => (v.roles || []).some((r) => r.status === "pending")).length,
+        )
+      } catch {
+        // Non-fatal: badge just stays at 0.
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [authFetch])
   useEffect(() => { getProposers(proposerSearch, proposerPage) }, [proposerSearch, proposerPage])
   useEffect(() => { getImprovers(improverSearch, improverPage) }, [improverSearch, improverPage])
   useEffect(() => { getSupervisors(supervisorSearch, supervisorPage) }, [supervisorSearch, supervisorPage])
@@ -2550,22 +2571,15 @@ export default function AdminPage() {
                 </Badge>
               )}
             </TabsTrigger>
+            {/* Affiliates, Proposers, Supervisors, and Issuers are owned by
+                organizations now — their legacy tabs are hidden and their
+                functionality lives in the Organizations tab (role approvals,
+                allocations, events, issuer settings). */}
             <TabsTrigger value="organizations" className="w-full justify-between px-3 py-2">
               <span>Organizations</span>
-            </TabsTrigger>
-            <TabsTrigger value="affiliates" className="w-full justify-between px-3 py-2">
-              <span>Affiliates</span>
-              {affiliates.filter((affiliate) => affiliate.status === "pending").length > 0 && (
+              {orgPendingCount > 0 && (
                 <Badge variant="destructive" className="h-5 min-w-5 rounded-full px-1.5 text-xs">
-                  {affiliates.filter((affiliate) => affiliate.status === "pending").length}
-                </Badge>
-              )}
-            </TabsTrigger>
-            <TabsTrigger value="proposers" className="w-full justify-between px-3 py-2">
-              <span>Proposers</span>
-              {proposers.filter((proposer) => proposer.status === "pending").length > 0 && (
-                <Badge variant="destructive" className="h-5 min-w-5 rounded-full px-1.5 text-xs">
-                  {proposers.filter((proposer) => proposer.status === "pending").length}
+                  {orgPendingCount}
                 </Badge>
               )}
             </TabsTrigger>
@@ -2577,24 +2591,8 @@ export default function AdminPage() {
                 </Badge>
               )}
             </TabsTrigger>
-            <TabsTrigger value="supervisors" className="w-full justify-between px-3 py-2">
-              <span>Supervisors</span>
-              {supervisors.filter((supervisor) => supervisor.status === "pending").length > 0 && (
-                <Badge variant="destructive" className="h-5 min-w-5 rounded-full px-1.5 text-xs">
-                  {supervisors.filter((supervisor) => supervisor.status === "pending").length}
-                </Badge>
-              )}
-            </TabsTrigger>
             <TabsTrigger value="workflows" className="w-full justify-between px-3 py-2">
               <span>Workflows</span>
-            </TabsTrigger>
-            <TabsTrigger value="issuers" className="w-full justify-between px-3 py-2">
-              <span>Issuers</span>
-              {issuerRequests.filter((r) => r.status === "pending").length > 0 && (
-                <Badge variant="destructive" className="h-5 min-w-5 rounded-full px-1.5 text-xs">
-                  {issuerRequests.filter((r) => r.status === "pending").length}
-                </Badge>
-              )}
             </TabsTrigger>
             <TabsTrigger value="credential-types" className="w-full justify-between px-3 py-2">
               <span>Credential Types</span>

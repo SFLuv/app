@@ -1,6 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useRef, useState } from "react"
+import { useRouter } from "next/navigation"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -8,10 +9,13 @@ import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
-import { Crown, LogOut, Mail, Pencil, Shield, Trash2, Upload, Users } from "lucide-react"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { ArrowUpRight, Award, Crown, LogOut, Mail, Pencil, Shield, Trash2, Upload, Users } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { useApp } from "@/context/AppProvider"
 import { LogoCropModal } from "./logo-crop-modal"
+import { SupervisorRewardsCard } from "./supervisor-rewards-card"
+import { formatCredentialLabel } from "@/lib/credential-labels"
 import type { OrganizationView, OrgRoleType } from "@/types/organization"
 
 const roleLabels: Record<OrgRoleType, string> = {
@@ -28,14 +32,17 @@ const cycleLabels: Record<string, string> = {
   one_time: "One-time",
 }
 
-interface OrganizationPanelProps {
-  /** Navigate to an approved role's existing controls (settings sub-tabs). */
-  onOpenRoleSettings?: (tab: string) => void
+// Roles whose "settings" are just a link to their working area.
+const roleLinks: Partial<Record<OrgRoleType, { href: string; label: string }>> = {
+  affiliate: { href: "/affiliates", label: "Open affiliate dashboard" },
+  proposer: { href: "/proposer", label: "Open proposer panel" },
+  issuer: { href: "/issuer", label: "Open issuer panel" },
 }
 
-export function OrganizationPanel({ onOpenRoleSettings }: OrganizationPanelProps) {
+export function OrganizationPanel() {
   const { authFetch, user } = useApp()
   const { toast } = useToast()
+  const router = useRouter()
   const [view, setView] = useState<OrganizationView | null>(null)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
@@ -47,15 +54,24 @@ export function OrganizationPanel({ onOpenRoleSettings }: OrganizationPanelProps
   const [requestEmail, setRequestEmail] = useState("")
   const [cropOpen, setCropOpen] = useState(false)
   const [cropSrc, setCropSrc] = useState<string | null>(null)
+  const [leaveOpen, setLeaveOpen] = useState(false)
+  const [transferTarget, setTransferTarget] = useState<{ user_id: string; name: string } | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const isAdmin = view?.my_role === "admin" || view?.my_role === "superadmin"
   const isSuperadmin = view?.my_role === "superadmin"
 
+  // The loading placeholder is first-load-only; later loads (after any action,
+  // or a background refresh) swap data in place so the panel never flashes or
+  // resets scroll — hasLoaded gates the placeholder, not each fetch.
+  const [hasLoaded, setHasLoaded] = useState(false)
   const load = useCallback(async () => {
-    setLoading(true)
     try {
       const res = await authFetch("/organizations/mine")
+      // Only a definitive 404 means "no organization" — clear the view. A
+      // transient error must NOT blank an already-loaded panel to the empty
+      // state (that would flash "No organization yet" on a background reload
+      // after any member action), so keep the prior view on failure.
       if (res.status === 404) {
         setView(null)
         return
@@ -63,8 +79,9 @@ export function OrganizationPanel({ onOpenRoleSettings }: OrganizationPanelProps
       if (!res.ok) throw new Error()
       setView((await res.json()) as OrganizationView)
     } catch {
-      setView(null)
+      // keep prior view; transient failure shouldn't drop the org
     } finally {
+      setHasLoaded(true)
       setLoading(false)
     }
   }, [authFetch])
@@ -120,16 +137,18 @@ export function OrganizationPanel({ onOpenRoleSettings }: OrganizationPanelProps
       "Member role updated",
     )
 
-  const transferSuperadmin = (userId: string) => {
-    if (!window.confirm("Transfer the superadmin role? You will become an admin.")) return
+  const confirmTransferSuperadmin = () => {
+    const userId = transferTarget?.user_id
+    setTransferTarget(null)
+    if (!userId) return
     void act(
       () => authFetch("/organizations/mine/transfer-superadmin", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ user_id: userId }) }),
       "Superadmin transferred",
     )
   }
 
-  const leaveOrg = () => {
-    if (!window.confirm("Leave this organization? You will lose its roles and access.")) return
+  const confirmLeaveOrg = () => {
+    setLeaveOpen(false)
     void act(() => authFetch("/organizations/mine/leave", { method: "POST" }), "You left the organization")
   }
 
@@ -163,7 +182,7 @@ export function OrganizationPanel({ onOpenRoleSettings }: OrganizationPanelProps
     reader.readAsDataURL(file)
   }
 
-  if (loading) {
+  if (loading && !hasLoaded) {
     return <p className="py-8 text-center text-sm text-muted-foreground">Loading organization…</p>
   }
 
@@ -198,7 +217,7 @@ export function OrganizationPanel({ onOpenRoleSettings }: OrganizationPanelProps
               <div className="relative">
                 <Avatar className="h-16 w-16 rounded-lg">
                   <AvatarImage src={org.logo || undefined} alt={org.name} className="object-cover" />
-                  <AvatarFallback className="rounded-lg bg-[#eb6c6c] text-xl text-white">
+                  <AvatarFallback className="rounded-lg bg-primary text-xl text-primary-foreground">
                     {org.name.split(" ").filter(Boolean).slice(0, 2).map((n) => n[0]).join("")}
                   </AvatarFallback>
                 </Avatar>
@@ -217,7 +236,7 @@ export function OrganizationPanel({ onOpenRoleSettings }: OrganizationPanelProps
                 {editingName ? (
                   <div className="flex items-center gap-2">
                     <Input value={nameDraft} onChange={(e) => setNameDraft(e.target.value)} className="h-9 w-56" />
-                    <Button size="sm" className="bg-[#eb6c6c] hover:bg-[#d55c5c]" onClick={() => void saveName()} disabled={busy}>
+                    <Button size="sm" className="bg-primary hover:bg-primary/90" onClick={() => void saveName()} disabled={busy}>
                       Save
                     </Button>
                     <Button size="sm" variant="outline" onClick={() => setEditingName(false)}>Cancel</Button>
@@ -232,7 +251,7 @@ export function OrganizationPanel({ onOpenRoleSettings }: OrganizationPanelProps
                     )}
                   </div>
                 )}
-                <CardDescription className="mt-1 flex flex-wrap items-center gap-2">
+                <div className="mt-1 flex flex-wrap items-center gap-2">
                   <Badge variant="outline" className="capitalize">{view.my_role}</Badge>
                   {approvedRoles.map((r) => (
                     <Badge key={r.role_type} className="bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-200">
@@ -244,25 +263,58 @@ export function OrganizationPanel({ onOpenRoleSettings }: OrganizationPanelProps
                       {roleLabels[r.role_type]} pending
                     </Badge>
                   ))}
-                </CardDescription>
+                </div>
               </div>
             </div>
-            <Button variant="outline" className="text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30" onClick={leaveOrg} disabled={busy}>
+            <Button variant="outline" className="text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30" onClick={() => setLeaveOpen(true)} disabled={busy}>
               <LogOut className="mr-2 h-4 w-4" />
               Leave organization
             </Button>
           </div>
         </CardHeader>
-        {approvedRoles.length > 0 && onOpenRoleSettings && (
-          <CardContent className="flex flex-wrap gap-2 border-t pt-4">
-            {approvedRoles.map((r) => (
-              <Button key={r.role_type} variant="outline" size="sm" onClick={() => onOpenRoleSettings(r.role_type)}>
-                {roleLabels[r.role_type]} settings
-              </Button>
-            ))}
-          </CardContent>
-        )}
       </Card>
+
+      {/* Role tools & settings — shown inline per approved role instead of
+          linking out to separate settings tabs. */}
+      {approvedRoles.length > 0 && (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base text-black dark:text-white">Role tools</CardTitle>
+            <CardDescription>Settings and shortcuts for this organization's approved roles.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {approvedRoles.map((r) => {
+              const link = roleLinks[r.role_type]
+              return (
+                <div key={r.role_type} className="space-y-3 rounded-lg border p-4">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-sm font-semibold">{roleLabels[r.role_type]}</p>
+                    {link && (
+                      <Button variant="outline" size="sm" onClick={() => router.push(link.href)}>
+                        {link.label}
+                        <ArrowUpRight className="ml-1 h-3.5 w-3.5" />
+                      </Button>
+                    )}
+                  </div>
+                  {r.role_type === "supervisor" && <SupervisorRewardsCard />}
+                  {r.role_type === "issuer" && (view.issuer_scopes?.length ?? 0) > 0 && (
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                        <Award className="h-3.5 w-3.5" /> Issuable:
+                      </span>
+                      {view.issuer_scopes!.map((scope) => (
+                        <Badge key={scope} variant="secondary">
+                          {formatCredentialLabel(scope)}
+                        </Badge>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </CardContent>
+        </Card>
+      )}
 
       {/* Allocations (visible to all members) */}
       {view.allocations.length > 0 && (
@@ -312,7 +364,7 @@ export function OrganizationPanel({ onOpenRoleSettings }: OrganizationPanelProps
               </div>
             )}
             <Button
-              className="bg-[#eb6c6c] hover:bg-[#d55c5c]"
+              className="bg-primary hover:bg-primary/90"
               disabled={busy || !requestRole || ((requestRole === "proposer" || requestRole === "supervisor" || requestRole === "issuer") && !requestEmail.trim())}
               onClick={submitRoleRequest}
             >
@@ -340,7 +392,7 @@ export function OrganizationPanel({ onOpenRoleSettings }: OrganizationPanelProps
                 <Label className="text-xs">Invite by email</Label>
                 <Input type="email" placeholder="teammate@example.org" value={inviteEmail} onChange={(e) => setInviteEmail(e.target.value)} />
               </div>
-              <Button className="bg-[#eb6c6c] hover:bg-[#d55c5c]" disabled={busy || !inviteEmail.trim()} onClick={() => void sendInvite()}>
+              <Button className="bg-primary hover:bg-primary/90" disabled={busy || !inviteEmail.trim()} onClick={() => void sendInvite()}>
                 <Mail className="mr-2 h-4 w-4" /> Invite
               </Button>
             </div>
@@ -350,12 +402,12 @@ export function OrganizationPanel({ onOpenRoleSettings }: OrganizationPanelProps
             {view.members.map((m) => (
               <div key={m.user_id} className="flex flex-wrap items-center justify-between gap-2 p-3">
                 <div className="min-w-0">
-                  <p className="flex items-center gap-2 text-sm font-medium">
+                  <div className="flex items-center gap-2 text-sm font-medium">
                     {m.contact_name || m.contact_email || m.user_id.slice(0, 18) + "…"}
                     {m.role === "superadmin" && <Crown className="h-3.5 w-3.5 text-amber-500" />}
-                    {m.role === "admin" && <Shield className="h-3.5 w-3.5 text-[#eb6c6c]" />}
+                    {m.role === "admin" && <Shield className="h-3.5 w-3.5 text-primary" />}
                     {m.user_id === user?.id && <Badge variant="outline" className="text-[10px]">you</Badge>}
-                  </p>
+                  </div>
                   <p className="text-xs text-muted-foreground">{m.contact_email}</p>
                 </div>
                 <div className="flex items-center gap-2">
@@ -365,7 +417,7 @@ export function OrganizationPanel({ onOpenRoleSettings }: OrganizationPanelProps
                       <Button size="sm" variant="outline" disabled={busy} onClick={() => void setMemberRole(m.user_id, m.role === "admin" ? "member" : "admin")}>
                         {m.role === "admin" ? "Demote" : "Make admin"}
                       </Button>
-                      <Button size="sm" variant="outline" disabled={busy} onClick={() => transferSuperadmin(m.user_id)}>
+                      <Button size="sm" variant="outline" disabled={busy} onClick={() => setTransferTarget({ user_id: m.user_id, name: m.contact_name || m.contact_email || m.user_id })}>
                         Make superadmin
                       </Button>
                     </>
@@ -397,6 +449,51 @@ export function OrganizationPanel({ onOpenRoleSettings }: OrganizationPanelProps
       </Card>
 
       <LogoCropModal open={cropOpen} onOpenChange={setCropOpen} src={cropSrc} onCropped={(dataUrl) => void saveLogo(dataUrl)} />
+
+      <Dialog open={leaveOpen} onOpenChange={setLeaveOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Leave {org.name}?</DialogTitle>
+            <DialogDescription>
+              You will lose access to this organization's roles and tools. An admin will need to re-invite you to rejoin.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2 sm:gap-2">
+            <Button variant="outline" onClick={() => setLeaveOpen(false)} disabled={busy}>
+              Cancel
+            </Button>
+            <Button
+              className="bg-red-600 text-white hover:bg-red-700"
+              onClick={confirmLeaveOrg}
+              disabled={busy}
+            >
+              <LogOut className="mr-2 h-4 w-4" />
+              Leave organization
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={transferTarget != null} onOpenChange={(open) => !open && setTransferTarget(null)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Transfer superadmin?</DialogTitle>
+            <DialogDescription>
+              {transferTarget?.name} will become the organization's superadmin, and you will be demoted to admin. This
+              cannot be undone without the new superadmin transferring it back.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2 sm:gap-2">
+            <Button variant="outline" onClick={() => setTransferTarget(null)} disabled={busy}>
+              Cancel
+            </Button>
+            <Button onClick={confirmTransferSuperadmin} disabled={busy}>
+              <Crown className="mr-2 h-4 w-4" />
+              Transfer superadmin
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

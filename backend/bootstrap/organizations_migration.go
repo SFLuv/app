@@ -415,3 +415,97 @@ func migrateOrganizations(ctx context.Context, pools *MigrationPools) error {
 
 	return nil
 }
+
+// migrateOrganizationIssuerScopes is the 1.23 migration body. It:
+//  1. creates organization_issuer_scopes — the org-level issuance settings —
+//     and adds issuer_credential_scopes.organization_id so org-derived per-user
+//     scope rows are distinguishable from personally granted ones,
+//  2. seeds each organization's issuance settings with EVERY credential type
+//     any of its members could already issue, so no issuance ability is lost
+//     when the per-user admin tab is retired,
+//  3. syncs org scopes down to all members of organizations whose issuer role
+//     is approved (org roles are org-wide, matching users.is_issuer),
+//  4. inherits role information into org settings: organizations without a
+//     logo adopt their members' affiliate logo (earliest affiliate first).
+func migrateOrganizationIssuerScopes(ctx context.Context, pools *MigrationPools) error {
+	if _, err := pools.App.Exec(ctx, `
+		CREATE TABLE IF NOT EXISTS organization_issuer_scopes(
+			organization_id BIGINT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+			credential_type TEXT NOT NULL,
+			created_by TEXT,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			PRIMARY KEY (organization_id, credential_type)
+		);
+
+		ALTER TABLE issuer_credential_scopes
+		ADD COLUMN IF NOT EXISTS organization_id BIGINT;
+	`); err != nil {
+		return fmt.Errorf("error creating organization issuer scope schema: %w", err)
+	}
+
+	// Union of every member's personally granted scopes becomes the org's
+	// issuance settings, regardless of current issuer-role status — settings
+	// are only EFFECTIVE once the org's issuer role is approved.
+	if _, err := pools.App.Exec(ctx, `
+		INSERT INTO organization_issuer_scopes(organization_id, credential_type)
+		SELECT DISTINCT om.organization_id, ics.credential_type
+		FROM issuer_credential_scopes ics
+		JOIN organization_members om ON om.user_id = ics.issuer_id
+		ON CONFLICT (organization_id, credential_type) DO NOTHING;
+	`); err != nil {
+		return fmt.Errorf("error seeding organization issuer scopes: %w", err)
+	}
+
+	// Hand org members' scopes over to org ownership. issuer_credential_scopes'
+	// PK is (issuer_id, credential_type), so a personal row (organization_id
+	// NULL) and an org-derived row cannot coexist for the same pair. Deleting
+	// the members' personal rows — now that their credentials are captured in
+	// organization_issuer_scopes above — lets the down-sync re-create them as
+	// org-derived, so the org's Issuer settings actually govern them. Members of
+	// not-yet-approved-issuer orgs simply have no live rows (they cannot issue
+	// until approval anyway); their settings are retained and re-granted then.
+	if _, err := pools.App.Exec(ctx, `
+		DELETE FROM issuer_credential_scopes ics
+		USING organization_members om
+		WHERE om.user_id = ics.issuer_id AND ics.organization_id IS NULL;
+	`); err != nil {
+		return fmt.Errorf("error converting personal issuer scopes to org-owned: %w", err)
+	}
+
+	// Down-sync: members of approved-issuer orgs receive org-derived scope rows
+	// (organization_id set), covering every org credential — matching is_issuer
+	// being org-wide (any member of an approved issuer org can issue).
+	if _, err := pools.App.Exec(ctx, `
+		INSERT INTO issuer_credential_scopes(issuer_id, credential_type, organization_id)
+		SELECT om.user_id, ois.credential_type, om.organization_id
+		FROM organization_members om
+		JOIN organization_issuer_scopes ois ON ois.organization_id = om.organization_id
+		JOIN organization_roles orr
+			ON orr.organization_id = om.organization_id
+			AND orr.role_type = 'issuer' AND orr.status = 'approved'
+		ON CONFLICT (issuer_id, credential_type) DO NOTHING;
+	`); err != nil {
+		return fmt.Errorf("error syncing member issuer scopes: %w", err)
+	}
+
+	// Inherit role information into org settings: an org without a logo adopts
+	// its members' affiliate logo, earliest affiliate row first.
+	if _, err := pools.App.Exec(ctx, `
+		UPDATE organizations o
+		SET logo = inherited.affiliate_logo, updated_at = NOW()
+		FROM (
+			SELECT DISTINCT ON (om.organization_id)
+				om.organization_id, a.affiliate_logo
+			FROM affiliates a
+			JOIN organization_members om ON om.user_id = a.user_id
+			WHERE COALESCE(TRIM(a.affiliate_logo), '') <> ''
+			ORDER BY om.organization_id, a.created_at ASC
+		) inherited
+		WHERE o.id = inherited.organization_id
+		AND COALESCE(TRIM(o.logo), '') = '';
+	`); err != nil {
+		return fmt.Errorf("error inheriting affiliate logos: %w", err)
+	}
+
+	return nil
+}

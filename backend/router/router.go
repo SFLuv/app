@@ -189,6 +189,7 @@ func AddOrganizationRoutes(r *chi.Mux, a *handlers.AppService, s *handlers.BotSe
 	r.Put("/admin/organizations/superadmin", withAdmin(a.AdminSetOrganizationSuperadmin, a))
 	r.Put("/admin/organizations/allocations", withAdmin(a.AdminSetOrganizationAllocations, a))
 	r.Put("/admin/organizations/roles", withAdmin(a.AdminSetOrganizationRoleStatus, a))
+	r.Put("/admin/organizations/issuer-scopes", withAdmin(a.AdminSetOrganizationIssuerScopes, a))
 	r.Get("/admin/organizations/{id}/events", withAdmin(s.AdminGetOrganizationEvents, a))
 }
 
@@ -299,7 +300,11 @@ func AddWorkflowRoutes(r *chi.Mux, s *handlers.BotService, a *handlers.AppServic
 	r.Get("/admin/supervisors", withAdmin(a.GetSupervisors, a))
 	r.Put("/admin/supervisors", withAdmin(a.UpdateSupervisor, a))
 	r.Get("/admin/issuers", withAdmin(a.GetIssuers, a))
-	r.Put("/admin/issuers", withAdmin(a.UpdateIssuerScopes, a))
+	// Per-user issuer credential scopes are owned by organizations now
+	// (organization_issuer_scopes + syncMemberIssuerScopesTx). The legacy
+	// full-replace writer (SetIssuerScopes) blind-deletes by issuer_id, which
+	// would wipe org-derived rows, so its route is retired — issuance settings
+	// are managed via PUT /admin/organizations/issuer-scopes.
 	r.Get("/admin/issuer-requests", withAdmin(a.GetIssuerRequests, a))
 	r.Put("/admin/issuer-requests", withAdmin(a.UpdateIssuerRequest, a))
 	r.Get("/admin/credential-types", withAdmin(a.GetAdminCredentialTypes, a))

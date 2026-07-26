@@ -22,11 +22,14 @@ import {
   Users,
   X,
 } from "lucide-react"
+import { Checkbox } from "@/components/ui/checkbox"
 import { EventModal } from "@/components/events/event-modal"
+import { formatCredentialLabel } from "@/lib/credential-labels"
 import { useToast } from "@/hooks/use-toast"
 import { useApp } from "@/context/AppProvider"
 import type { Event } from "@/types/event"
 import type { AllocationCycle, OrganizationView, OrgRoleType } from "@/types/organization"
+import type { GlobalCredentialType } from "@/types/workflow"
 
 const roleTypes: OrgRoleType[] = ["affiliate", "proposer", "supervisor", "issuer"]
 const cycleOrder: AllocationCycle[] = ["one_time", "daily", "weekly", "monthly"]
@@ -95,6 +98,10 @@ export function OrganizationManagement() {
   const [orgEventDetail, setOrgEventDetail] = useState<Event | null>(null)
   const [deleteOrgEventError, setDeleteOrgEventError] = useState<string | null>(null)
 
+  const [credentialTypes, setCredentialTypes] = useState<GlobalCredentialType[]>([])
+  const [credentialTypesError, setCredentialTypesError] = useState(false)
+  const [scopeDraft, setScopeDraft] = useState<string[]>([])
+
   // Background-refresh friendly: the "Loading…" placeholder only ever shows
   // before the FIRST load. Every later load() (refresh button, post-action
   // reloads) swaps data in place with no visual reset — the open modal included,
@@ -116,6 +123,23 @@ export function OrganizationManagement() {
   useEffect(() => {
     void load()
   }, [load])
+
+  // Global credential-type catalog for the Issuer tab's scope checkboxes.
+  useEffect(() => {
+    void (async () => {
+      try {
+        const res = await authFetch("/admin/credential-types")
+        if (!res.ok) throw new Error()
+        setCredentialTypes(((await res.json()) as GlobalCredentialType[]) || [])
+        setCredentialTypesError(false)
+      } catch {
+        // Distinguish a failed fetch from a genuinely empty catalog so the
+        // Issuer tab doesn't claim "none exist" when it just couldn't load.
+        setCredentialTypesError(true)
+      }
+    })()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const act = async (fn: () => Promise<Response>, okMessage: string) => {
     setBusy(true)
@@ -139,6 +163,8 @@ export function OrganizationManagement() {
   const superadminOf = (view: OrganizationView) => view.members.find((m) => m.role === "superadmin")
   const isAffiliateApproved = (view: OrganizationView) =>
     view.roles.some((r) => r.role_type === "affiliate" && r.status === "approved")
+  const isIssuerApproved = (view: OrganizationView) =>
+    view.roles.some((r) => r.role_type === "issuer" && r.status === "approved")
   const hasPendingRole = (view: OrganizationView) => view.roles.some((r) => r.status === "pending")
 
   // ── List: search / filter / sort / paginate (client-side over the full list) ─
@@ -193,6 +219,7 @@ export function OrganizationManagement() {
     setDetailTab("approvals")
     setSuperadminDraft("")
     resetAllocDrafts(view)
+    setScopeDraft([...(view.issuer_scopes || [])])
     setOrgEvents([])
     setOrgEventsLoaded(false)
     setOrgEventsPage(0)
@@ -277,6 +304,32 @@ export function OrganizationManagement() {
     if (!ok) return
   }
 
+  const scopeDirty = useMemo(() => {
+    if (!selected) return false
+    const server = [...(selected.issuer_scopes || [])].sort()
+    const draft = [...scopeDraft].sort()
+    return server.length !== draft.length || server.some((v, i) => v !== draft[i])
+  }, [selected, scopeDraft])
+
+  const saveIssuerScopes = async () => {
+    if (!selected) return
+    await act(
+      () =>
+        authFetch("/admin/organizations/issuer-scopes", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ organization_id: selected.organization.id, credential_types: scopeDraft }),
+        }),
+      "Issuer settings saved",
+    )
+  }
+
+  // Rebase the scope draft on fresh server data after a save.
+  useEffect(() => {
+    if (selected && !scopeDirty) setScopeDraft([...(selected.issuer_scopes || [])])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orgs])
+
   const handleDeleteOrgEvent = async (id: string) => {
     try {
       const res = await authFetch(`/events/${id}`, { method: "DELETE" })
@@ -339,6 +392,9 @@ export function OrganizationManagement() {
     if ((detailTab === "allocations" || detailTab === "events") && !isAffiliateApproved(selected)) {
       setDetailTab("approvals")
     }
+    if (detailTab === "issuer" && !isIssuerApproved(selected)) {
+      setDetailTab("approvals")
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [orgs, detailTab, selectedOrgId])
 
@@ -349,7 +405,8 @@ export function OrganizationManagement() {
 
   const selectedSuperadmin = selected ? superadminOf(selected) : undefined
   const selectedAffiliateApproved = selected ? isAffiliateApproved(selected) : false
-  const detailTabCount = selectedAffiliateApproved ? 4 : 2
+  const selectedIssuerApproved = selected ? isIssuerApproved(selected) : false
+  const detailTabCount = 2 + (selectedAffiliateApproved ? 2 : 0) + (selectedIssuerApproved ? 1 : 0)
 
   return (
     <Card>
@@ -517,11 +574,16 @@ export function OrganizationManagement() {
               </DialogHeader>
 
               <Tabs value={detailTab} onValueChange={setDetailTab} className="flex min-h-0 flex-1 flex-col">
-                <TabsList className={`grid h-auto w-full shrink-0 grid-cols-2 ${detailTabCount === 4 ? "sm:grid-cols-4" : ""}`}>
+                <TabsList
+                  className={`grid h-auto w-full shrink-0 grid-cols-2 ${
+                    detailTabCount === 3 ? "sm:grid-cols-3" : detailTabCount === 4 ? "sm:grid-cols-4" : detailTabCount === 5 ? "sm:grid-cols-5" : ""
+                  }`}
+                >
                   <TabsTrigger value="approvals">Approvals</TabsTrigger>
                   <TabsTrigger value="members">Members</TabsTrigger>
                   {selectedAffiliateApproved && <TabsTrigger value="allocations">Allocations</TabsTrigger>}
                   {selectedAffiliateApproved && <TabsTrigger value="events">Events</TabsTrigger>}
+                  {selectedIssuerApproved && <TabsTrigger value="issuer">Issuer</TabsTrigger>}
                 </TabsList>
 
                 {/* Approvals */}
@@ -535,6 +597,16 @@ export function OrganizationManagement() {
                           <p className="text-sm font-medium capitalize">{rt}</p>
                           {existing.email && (
                             <p className="truncate text-xs text-muted-foreground">{existing.email}</p>
+                          )}
+                          {existing.primary_rewards_account && (
+                            <p className="truncate font-mono text-xs text-muted-foreground">
+                              Rewards: {existing.primary_rewards_account}
+                            </p>
+                          )}
+                          {existing.requested_by && (
+                            <p className="truncate text-xs text-muted-foreground">
+                              Requested by {existing.requested_by}
+                            </p>
                           )}
                         </div>
                         <Select
@@ -688,6 +760,49 @@ export function OrganizationManagement() {
                         onClick={() => void saveAllocations()}
                         disabled={busy || !allocDirty || !allocRowsValid}
                       >
+                        Save
+                      </Button>
+                    </div>
+                  </TabsContent>
+                )}
+
+                {/* Issuer settings (approved issuers only) */}
+                {selectedIssuerApproved && (
+                  <TabsContent value="issuer" className="min-h-0 flex-1 space-y-3 overflow-y-auto pt-3">
+                    <p className="text-sm text-muted-foreground">
+                      Credentials members of this organization can issue.
+                    </p>
+                    <div className="space-y-2">
+                      {credentialTypes.map((ct) => {
+                        const checked = scopeDraft.includes(ct.value)
+                        return (
+                          <label
+                            key={ct.value}
+                            className="flex cursor-pointer items-center gap-3 rounded-lg border p-3 transition-colors hover:bg-secondary/50"
+                          >
+                            <Checkbox
+                              checked={checked}
+                              onCheckedChange={(next) =>
+                                setScopeDraft((draft) =>
+                                  next ? [...draft, ct.value] : draft.filter((v) => v !== ct.value),
+                                )
+                              }
+                              disabled={busy}
+                            />
+                            <span className="text-sm font-medium">{formatCredentialLabel(ct.value, { [ct.value]: ct.label })}</span>
+                          </label>
+                        )
+                      })}
+                      {credentialTypes.length === 0 && (
+                        <p className="py-6 text-center text-sm text-muted-foreground">
+                          {credentialTypesError
+                            ? "Couldn't load credential types — try refreshing."
+                            : "No credential types exist yet — create them in the Credential Types tab."}
+                        </p>
+                      )}
+                    </div>
+                    <div className="flex justify-end">
+                      <Button size="sm" onClick={() => void saveIssuerScopes()} disabled={busy || !scopeDirty}>
                         Save
                       </Button>
                     </div>

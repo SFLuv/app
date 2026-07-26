@@ -80,6 +80,7 @@ type OrganizationView struct {
 	Members      []OrganizationMember     `json:"members"`
 	Roles        []OrganizationRole       `json:"roles"`
 	Allocations  []OrganizationAllocation `json:"allocations"`
+	IssuerScopes []string                 `json:"issuer_scopes"`
 	Invites      []OrganizationInvite     `json:"invites,omitempty"` // admins only
 }
 
@@ -122,6 +123,14 @@ type AdminOrganizationSuperadminRequest struct {
 type AdminOrganizationAllocationItem struct {
 	Cycle      string `json:"cycle"`
 	Allocation uint64 `json:"allocation"`
+}
+
+// AdminOrganizationIssuerScopesRequest replaces an organization's issuance
+// settings: the set of credential types its members may issue while the org's
+// issuer role is approved.
+type AdminOrganizationIssuerScopesRequest struct {
+	OrganizationId  int64    `json:"organization_id"`
+	CredentialTypes []string `json:"credential_types"`
 }
 
 // AdminOrganizationAllocationsRequest replaces an organization's full

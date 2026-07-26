@@ -911,6 +911,13 @@ var schemaMigrations = []SchemaMigration{
 			return migrateOrganizations(ctx, pools)
 		},
 	},
+	{
+		Version:     "1.23",
+		Description: "org-level issuer scopes seeded from member credentials, synced to members, and inherited org settings (affiliate logo)",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			return migrateOrganizationIssuerScopes(ctx, pools)
+		},
+	},
 }
 
 type versionTarget struct {

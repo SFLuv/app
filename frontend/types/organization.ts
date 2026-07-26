@@ -55,5 +55,6 @@ export interface OrganizationView {
   members: OrganizationMember[]
   roles: OrganizationRole[]
   allocations: OrganizationAllocation[]
+  issuer_scopes?: string[]
   invites?: OrganizationInvite[]
 }
