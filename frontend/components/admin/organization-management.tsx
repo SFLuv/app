@@ -308,9 +308,9 @@ export function OrganizationManagement() {
         try {
           const params = new URLSearchParams({ page: String(orgEventsPage), count: String(EVENTS_PAGE_SIZE) })
           if (orgEventsSearch.trim()) params.set("search", orgEventsSearch.trim())
-          // Backend semantics: expired=true HIDES expired events (active-only);
-          // omitting it returns everything.
-          if (orgEventsActiveOnly) params.set("expired", "true")
+          // Backend semantics (the query receives !Expired): the expired param
+          // means "INCLUDE expired events" — omitting it returns active only.
+          if (!orgEventsActiveOnly) params.set("expired", "true")
           const res = await authFetch(`/admin/organizations/${orgId}/events?${params.toString()}`)
           if (!res.ok) throw new Error()
           const data = ((await res.json()) as Event[]) || []

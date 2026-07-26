@@ -253,7 +253,7 @@ function MetricTile({
           <CardDescription className="mt-1 line-clamp-2 text-xs">{definition}</CardDescription>
         </div>
         <div className="flex shrink-0 items-center gap-1">
-          <Icon className="h-4 w-4 text-[#eb6c6c]" />
+          <Icon className="h-4 w-4 text-primary" />
           <Button type="button" size="icon" variant="ghost" className="h-8 w-8" onClick={copy} title="Copy metric image">
             <Clipboard className="h-4 w-4" />
           </Button>
@@ -318,7 +318,7 @@ export function AdminAnalyticsPanel() {
     return (
       <Card>
         <CardContent className="flex min-h-[280px] items-center justify-center">
-          <Loader2 className="h-8 w-8 animate-spin text-[#eb6c6c]" />
+          <Loader2 className="h-8 w-8 animate-spin text-primary" />
         </CardContent>
       </Card>
     )
@@ -343,11 +343,11 @@ export function AdminAnalyticsPanel() {
 
   return (
     <div className="space-y-6">
-      <Card className="border-[#eb6c6c]/20 bg-[#fff7f7]">
+      <Card className="border-primary/20 bg-primary/5">
         <CardHeader className="gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <CardTitle className="flex items-center gap-2">
-              <Activity className="h-5 w-5 text-[#eb6c6c]" />
+              <Activity className="h-5 w-5 text-primary" />
               Analytics
             </CardTitle>
             <CardDescription>Glossary-based internal reporting for SFLuv circulation, rewards, payments, redemptions, and volunteering.</CardDescription>
@@ -433,7 +433,7 @@ export function AdminAnalyticsPanel() {
               <div key={point.key} className="grid gap-2 md:grid-cols-[92px_minmax(0,1fr)_280px] md:items-center">
                 <div className="text-sm font-medium">{point.label}</div>
                 <div className="h-3 overflow-hidden rounded-full bg-secondary">
-                  <div className="h-full rounded-full bg-[#eb6c6c]" style={{ width: `${width}%` }} />
+                  <div className="h-full rounded-full bg-primary" style={{ width: `${width}%` }} />
                 </div>
                 <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs text-muted-foreground">
                   <span>{formatMetricValue(transactionVolumeMetric, chainConfig.tokenDecimals, chainConfig.tokenSymbol)}</span>
