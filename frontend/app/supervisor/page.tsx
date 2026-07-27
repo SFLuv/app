@@ -1,7 +1,8 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useApp } from "@/context/AppProvider"
+import { keepStable } from "@/lib/keep-stable"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -109,7 +110,13 @@ export default function SupervisorPage() {
   const [dateTo, setDateTo] = useState<string>(dateToQuery)
   const [selectMode, setSelectMode] = useState<boolean>(false)
   const [selectedIDs, setSelectedIDs] = useState<Set<string>>(new Set())
-  const [loading, setLoading] = useState<boolean>(true)
+  // First-load-only spinner: background refreshes (the 15s/focus/visibility
+  // user-record refresh re-creates authFetch and re-runs loadData) must not
+  // blank the list. hasLoadedRef gates the placeholder; refreshing drives only
+  // the manual Refresh button.
+  const [initialLoading, setInitialLoading] = useState<boolean>(true)
+  const [refreshing, setRefreshing] = useState<boolean>(false)
+  const hasLoadedRef = useRef<boolean>(false)
   const [error, setError] = useState<string>("")
   const [notice, setNotice] = useState<string>("")
   const [exporting, setExporting] = useState<boolean>(false)
@@ -124,11 +131,11 @@ export default function SupervisorPage() {
 
   const loadData = useCallback(async () => {
     if (!canUsePanel) {
-      setLoading(false)
+      setInitialLoading(false)
+      hasLoadedRef.current = true
       return
     }
 
-    setLoading(true)
     setError("")
     try {
       const params = new URLSearchParams({
@@ -154,14 +161,19 @@ export default function SupervisorPage() {
         throw new Error(text || "Unable to load supervisor workflows.")
       }
       const data = (await res.json()) as SupervisorWorkflowListResponse
-      setItems(data.items || [])
+      // Reference-stable swaps: identical background-refresh data => no re-render.
+      setItems((prev) => keepStable(prev, data.items || []))
       setTotal(data.total || 0)
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to load supervisor workflows.")
-      setItems([])
-      setTotal(0)
+      // Don't wipe already-shown data on a background-refresh error.
+      if (!hasLoadedRef.current) {
+        setItems([])
+        setTotal(0)
+      }
     } finally {
-      setLoading(false)
+      setInitialLoading(false)
+      hasLoadedRef.current = true
     }
   }, [authFetch, canUsePanel, count, dateField, dateFrom, dateTo, isAdmin, page, search, sortBy, sortDirection, statusFilter, supervisorFilter])
 
@@ -492,8 +504,15 @@ export default function SupervisorPage() {
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            <Button onClick={() => { setPage(0); void loadData() }} disabled={loading}>
-              {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+            <Button
+              onClick={() => {
+                setPage(0)
+                setRefreshing(true)
+                void loadData().finally(() => setRefreshing(false))
+              }}
+              disabled={refreshing || initialLoading}
+            >
+              {refreshing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
               Refresh
             </Button>
             <Button
@@ -527,7 +546,7 @@ export default function SupervisorPage() {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
-          {loading ? (
+          {initialLoading ? (
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin" />
               Loading workflows...
