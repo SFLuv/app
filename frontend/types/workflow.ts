@@ -301,7 +301,8 @@ export interface WorkflowStepCreateInput {
 
 export interface WorkflowSupervisorCreateInput {
   user_id: string
-  bounty: number
+  // Supervisors are assigned for oversight only; bounty is always 0 (no payout).
+  bounty?: number
 }
 
 export interface WorkflowSupervisorDataField {

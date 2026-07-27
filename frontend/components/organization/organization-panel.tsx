@@ -14,7 +14,6 @@ import { ArrowUpRight, Award, Crown, LogOut, Mail, Pencil, Shield, Trash2, Uploa
 import { useToast } from "@/hooks/use-toast"
 import { useApp } from "@/context/AppProvider"
 import { LogoCropModal } from "./logo-crop-modal"
-import { SupervisorRewardsCard } from "./supervisor-rewards-card"
 import { formatCredentialLabel } from "@/lib/credential-labels"
 import type { OrganizationView, OrgRoleType } from "@/types/organization"
 
@@ -296,7 +295,6 @@ export function OrganizationPanel() {
                       </Button>
                     )}
                   </div>
-                  {r.role_type === "supervisor" && <SupervisorRewardsCard />}
                   {r.role_type === "issuer" && (view.issuer_scopes?.length ?? 0) > 0 && (
                     <div className="flex flex-wrap items-center gap-1.5">
                       <span className="flex items-center gap-1 text-xs text-muted-foreground">

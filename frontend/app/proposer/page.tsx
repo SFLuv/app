@@ -75,7 +75,6 @@ interface DraftStep {
 interface DraftWorkflowSupervisor {
   enabled: boolean
   user_id: string
-  bounty: string
 }
 
 interface DraftSupervisorDataField extends WorkflowSupervisorDataField {
@@ -149,7 +148,6 @@ const createDraftStep = (): DraftStep => ({
 const createDraftWorkflowSupervisor = (): DraftWorkflowSupervisor => ({
   enabled: false,
   user_id: "",
-  bounty: "",
 })
 
 const createDraftSupervisorDataField = (): DraftSupervisorDataField => ({
@@ -449,10 +447,10 @@ export default function ProposerPage() {
   } | null>(null)
 
   const totalDraftBounty = useMemo(() => {
-    const stepTotal = steps.reduce((sum, step) => sum + (Number(step.bounty) || 0), 0)
-    const supervisorBounty = workflowSupervisor.enabled ? Number(workflowSupervisor.bounty) || 0 : 0
-    return stepTotal + supervisorBounty
-  }, [steps, workflowSupervisor.bounty, workflowSupervisor.enabled])
+    // Supervisors are assigned for oversight only — no bounty is paid — so the
+    // workflow total is just the sum of step bounties.
+    return steps.reduce((sum, step) => sum + (Number(step.bounty) || 0), 0)
+  }, [steps])
 
   useEffect(() => {
     authFetchRef.current = authFetch
@@ -1382,10 +1380,10 @@ export default function ProposerPage() {
       if (!supervisorUserID) {
         throw new Error("Select a workflow supervisor.")
       }
-      const supervisorBounty = parseWholeSfluvBounty(workflowSupervisor.bounty, "Workflow supervisor bounty")
+      // Supervisors are assigned for oversight only; no bounty is paid.
       normalizedSupervisor = {
         user_id: supervisorUserID,
-        bounty: supervisorBounty,
+        bounty: 0,
       }
 
       const seenSupervisorFieldKeys = new Set<string>()
@@ -1686,16 +1684,10 @@ export default function ProposerPage() {
       }))
       .filter((field) => field.key || field.value)
     const templateHasSupervisor =
-      templateSupervisorUserId.length > 0 ||
-      (template.supervisor_bounty !== undefined && template.supervisor_bounty !== null) ||
-      templateSupervisorDataFields.length > 0
+      templateSupervisorUserId.length > 0 || templateSupervisorDataFields.length > 0
     setWorkflowSupervisor({
       enabled: templateHasSupervisor,
       user_id: templateSupervisorUserId,
-      bounty:
-        template.supervisor_bounty !== undefined && template.supervisor_bounty !== null
-          ? String(template.supervisor_bounty)
-          : "",
     })
     setWorkflowSupervisorDataFields(templateSupervisorDataFields)
     const nextStartAtValue = applyTemplateStartTimeToDatetimeLocal(startAt, template.start_at)
@@ -1811,10 +1803,7 @@ export default function ProposerPage() {
         value: (field.value || "").trim(),
       }))
       .filter((field) => field.key || field.value)
-    const hasSupervisor =
-      supervisorUserId.length > 0 ||
-      (sourceWorkflow.supervisor_bounty !== undefined && sourceWorkflow.supervisor_bounty !== null) ||
-      supervisorDataFields.length > 0
+    const hasSupervisor = supervisorUserId.length > 0 || supervisorDataFields.length > 0
 
     const recurrenceEndAtValue = toDatetimeLocalValueFromUnix(sourceWorkflow.recurrence_end_at)
 
@@ -1827,10 +1816,6 @@ export default function ProposerPage() {
     setWorkflowSupervisor({
       enabled: hasSupervisor,
       user_id: supervisorUserId,
-      bounty:
-        sourceWorkflow.supervisor_bounty !== undefined && sourceWorkflow.supervisor_bounty !== null
-          ? String(sourceWorkflow.supervisor_bounty)
-          : "",
     })
     setWorkflowSupervisorDataFields(supervisorDataFields)
     setRoles(mappedRoles.length ? mappedRoles : [createDraftRole()])
@@ -2713,7 +2698,7 @@ export default function ProposerPage() {
 	                  <div>
 	                    <CardTitle className="text-base">Workflow Supervisor (Optional)</CardTitle>
 	                    <CardDescription>
-	                      Assign an approved supervisor to this workflow and optionally reserve a supervisor completion payout.
+	                      Assign an approved supervisor to oversee this workflow and review its reported data.
 	                    </CardDescription>
 	                  </div>
 	                  <div className="flex items-center gap-2">
@@ -2772,24 +2757,6 @@ export default function ProposerPage() {
 	                          </Select>
 	                        )}
 	                      </div>
-	                      <div className="space-y-2">
-	                        <Label>Supervisor Completion Payout (Optional)</Label>
-	                        <Input
-	                          type="number"
-	                          min="0"
-	                          step="1"
-	                          value={workflowSupervisor.bounty}
-                              onWheel={preventNumberInputScrollChange}
-	                          onChange={(e) =>
-	                            setWorkflowSupervisor((prev) => ({
-	                              ...prev,
-	                              bounty: e.target.value,
-	                            }))
-	                          }
-	                          placeholder="0"
-	                        />
-	                      </div>
-
 	                      <div className="space-y-3">
 	                        <div className="flex items-center justify-between gap-2">
 	                          <div>
