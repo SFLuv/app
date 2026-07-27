@@ -39,11 +39,11 @@ Read-only SFLUV admin data access. Use named report tools only; do not ask for r
 
 AMOUNT UNITS — read carefully. Every monetary amount is denominated in $SFLUV (the platform token). It is NEVER wei. Amounts appear in one of two forms, and each field name tells you which:
 
-1. Whole $SFLUV (human token counts like 1, 10, 15). These are already in $SFLUV — do not divide. Used by: event 'amount' (the $SFLUV granted per redemption code) and the derived per-event redemption totals in events_report. Fields carry the '_sfluv' suffix (e.g. amount_sfluv, redeemed_amount_sfluv).
+1. Whole $SFLUV (human token counts like 1, 10, 15) — values stored in the app database. Already in $SFLUV, so do not divide. Used by: event amounts and per-event redemption totals (events_report); workflow bounties and workflow-cost totals (workflow_report, workflow_detail, financial_summary.workflow_costs); event planned-reward totals (financial_summary.volunteer_events); and organization/affiliate/proposer allocations and balances. Fields carry the '_sfluv' suffix (e.g. amount_sfluv, total_bounty_sfluv, cost_sfluv).
 
-2. $SFLUV base units (the token's smallest on-chain unit). The SFLUV token has 6 decimals, so 1 $SFLUV = 1,000,000 base units (e.g. 1000000 = 1 $SFLUV, 10000000 = 10 $SFLUV). Divide by 1,000,000 to get whole $SFLUV. Used by: transactions, financial_summary totals, workflow bounties, and wallet balances. Fields carry the '_sfluv_base' suffix (e.g. amount_sfluv_base, total_bounty_sfluv_base, balance_sfluv_base).
+2. $SFLUV base units (the token's smallest on-chain unit) — values that come from the blockchain (the Ponder index). The SFLUV token has 6 decimals, so 1 $SFLUV = 1,000,000 base units (e.g. 1000000 = 1 $SFLUV, 10000000 = 10 $SFLUV). Divide by 1,000,000 to get whole $SFLUV. Used by: transactions (transfer amounts), wallet balances, and financial_summary.transfers totals (transaction_volume, rewards, merchant_payments, redemptions, circulating). Fields carry the '_sfluv_base' suffix (e.g. amount_sfluv_base, balance_sfluv_base).
 
-These base-unit values are $SFLUV base units, NOT wei — wei implies 18 decimals; $SFLUV uses 6. Do not call them wei and do not apply an 18-decimal conversion.
+These base-unit values are $SFLUV base units, NOT wei — wei implies 18 decimals; $SFLUV uses 6. Do not call them wei and do not apply an 18-decimal conversion. Rule of thumb: '_sfluv' = already whole $SFLUV; '_sfluv_base' = divide by 1,000,000.
 `)),
 		server.WithToolCapabilities(false),
 	)
@@ -106,7 +106,7 @@ These base-unit values are $SFLUV base units, NOT wei — wei implies 18 decimal
 	), a.merchantReport)
 
 	a.addTool(s, mcp.NewTool("workflow_report",
-		mcp.WithDescription("List workflows with title, description, recurrence, proposer/manager attribution, step/submission counts, bounty totals ($SFLUV base units), and payout status. Searchable by title/description. Use workflow_detail for per-step reported submission data."),
+		mcp.WithDescription("List workflows with title, description, recurrence, proposer/manager attribution, step/submission counts, bounty totals (whole $SFLUV), and payout status. Searchable by title/description. Use workflow_detail for per-step reported submission data."),
 		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithString("status", mcp.Description("Optional workflow status filter.")),
 		mcp.WithString("search", mcp.Description("Optional case-insensitive search over workflow title and description.")),
@@ -117,7 +117,7 @@ These base-unit values are $SFLUV base units, NOT wei — wei implies 18 decimal
 	), a.workflowReport)
 
 	a.addTool(s, mcp.NewTool("workflow_detail",
-		mcp.WithDescription("Full detail for one workflow: header (title, description, recurrence, bounties in $SFLUV base units), every step with its role and assigned improver, and the reported submission data improvers filed for each step — written responses, dropdown selections and other item responses, step-not-possible reports, and photo metadata (file name, content type, size only; never the image bytes)."),
+		mcp.WithDescription("Full detail for one workflow: header (title, description, recurrence, bounties in whole $SFLUV), every step with its role and assigned improver, and the reported submission data improvers filed for each step — written responses, dropdown selections and other item responses, step-not-possible reports, and photo metadata (file name, content type, size only; never the image bytes)."),
 		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithString("workflow_id", mcp.Description("The workflow id to fetch (from workflow_report)."), mcp.Required()),
 	), a.workflowDetail)
@@ -152,9 +152,14 @@ func (a *reportCore) reportCatalog(ctx context.Context, _ mcp.CallToolRequest) (
 			{"name": "workflow_detail", "use": "one workflow's steps + reported submission data (responses, step-not-possible, photo metadata)"},
 			{"name": "events_report", "use": "redemption/faucet events with creator + per-event code counts and $SFLUV redemption amounts"},
 			{"name": "affiliate_report", "use": "affiliate organizations, status, allocations, balances, owner contact"},
+			{"name": "organizations_report", "use": "orgs with members, role approvals (affiliate/proposer/supervisor/issuer), allocations, issuer scopes"},
+			{"name": "improvers_report", "use": "improver volunteers with status, contact, rewards account, and credentials held"},
+			{"name": "role_holders_report", "use": "per-user proposer/supervisor/issuer role rows"},
+			{"name": "credentials_report", "use": "credential type catalog, who holds credentials, issuer scopes, credential requests"},
+			{"name": "workflow_votes", "use": "per-voter approve/deny decisions + tallies + finalization for a workflow"},
 			{"name": "app_structure", "use": "where features/admin controls live and which tool exposes which data"},
 		},
-		"amount_units": "Amounts are $SFLUV, never wei. Whole-$SFLUV fields end in _sfluv (e.g. event amount_sfluv). Base-unit fields end in _sfluv_base and use 6 decimals (1 $SFLUV = 1,000,000 base units).",
+		"amount_units": "Amounts are $SFLUV, never wei. Fields ending in _sfluv are already whole $SFLUV (app-DB values: event amounts, workflow bounties/costs, allocations). Fields ending in _sfluv_base are on-chain base units — divide by 1,000,000 (6 decimals): transaction amounts, wallet balances, financial_summary.transfers totals.",
 	}, nil
 }
 
@@ -534,19 +539,19 @@ type financialTransferSummary struct {
 	MerchantPaymentsSfluvBase  string `json:"merchant_payments_sfluv_base"`
 	RedemptionCount            int    `json:"redemption_count"`
 	RedemptionsSfluvBase       string `json:"redemptions_sfluv_base"`
-	CirculatingSfluvBase       string `json:"circulating_sfluv_sfluv_base"`
+	CirculatingSfluvBase       string `json:"circulating_sfluv_base"`
 }
 
 type workflowCostSummary struct {
 	WorkflowCount int    `json:"workflow_count"`
-	CostSfluvBase string `json:"cost_sfluv_base"`
+	CostSfluv     string `json:"cost_sfluv"`
 }
 
 type volunteerEventSummary struct {
-	EventCount             int    `json:"event_count"`
-	CodeCount              int    `json:"code_count"`
-	RedeemedCount          int    `json:"redeemed_count"`
-	PlannedRewardSfluvBase string `json:"planned_reward_sfluv_base"`
+	EventCount         int    `json:"event_count"`
+	CodeCount          int    `json:"code_count"`
+	RedeemedCount      int    `json:"redeemed_count"`
+	PlannedRewardSfluv string `json:"planned_reward_sfluv"`
 }
 
 func (a *reportCore) financialSummary(ctx context.Context, request mcp.CallToolRequest) (any, error) {
@@ -579,7 +584,7 @@ func (a *reportCore) financialSummary(ctx context.Context, request mcp.CallToolR
 							ELSE COALESCE(SUM(ws.bounty), 0)
 						END
 						+ COALESCE(w.manager_bounty, 0)
-					)::numeric AS cost_sfluv_base
+					)::numeric AS cost_sfluv
 				FROM workflows w
 				LEFT JOIN workflow_steps ws ON ws.workflow_id = w.id
 				WHERE w.status IN ('completed', 'paid_out')
@@ -587,11 +592,11 @@ func (a *reportCore) financialSummary(ctx context.Context, request mcp.CallToolR
 			)
 			SELECT
 				COUNT(*)::int,
-				COALESCE(SUM(cost_sfluv_base), 0)::text
+				COALESCE(SUM(cost_sfluv), 0)::text
 			FROM workflow_costs
 			WHERE completed_at >= $1
 			AND completed_at < $2;
-		`, start, end).Scan(&workflowCosts.WorkflowCount, &workflowCosts.CostSfluvBase)
+		`, start, end).Scan(&workflowCosts.WorkflowCount, &workflowCosts.CostSfluv)
 	}); err != nil {
 		return nil, fmt.Errorf("workflow cost summary: %w", err)
 	}
@@ -617,7 +622,7 @@ func (a *reportCore) financialSummary(ctx context.Context, request mcp.CallToolR
 				COALESCE(SUM(redeemed_count), 0)::int,
 				COALESCE(SUM(amount), 0)::text
 			FROM event_rows;
-		`, start, end).Scan(&events.EventCount, &events.CodeCount, &events.RedeemedCount, &events.PlannedRewardSfluvBase)
+		`, start, end).Scan(&events.EventCount, &events.CodeCount, &events.RedeemedCount, &events.PlannedRewardSfluv)
 	}); err != nil {
 		return nil, fmt.Errorf("volunteer event summary: %w", err)
 	}
@@ -1038,27 +1043,27 @@ func (a *reportCore) merchantReport(ctx context.Context, request mcp.CallToolReq
 }
 
 type workflowRow struct {
-	ID                     string `json:"id"`
-	SeriesID               string `json:"series_id"`
-	Title                  string `json:"title,omitempty"`
-	Description            string `json:"description,omitempty"`
-	Recurrence             string `json:"recurrence,omitempty"`
-	Status                 string `json:"status"`
-	ProposerID             string `json:"proposer_id"`
-	ProposerEmail          string `json:"proposer_email,omitempty"`
-	StartAt                int64  `json:"start_at"`
-	CreatedAt              int64  `json:"created_at"`
-	ApprovedAt             int64  `json:"approved_at,omitempty"`
-	ManagerImproverID      string `json:"manager_improver_id,omitempty"`
-	ManagerBountySfluvBase string `json:"manager_bounty_sfluv_base"`
-	TotalBountySfluvBase   string `json:"total_bounty_sfluv_base"`
-	StepBountySfluvBase    string `json:"step_bounty_sfluv_base"`
-	StepCount              int    `json:"step_count"`
-	CompletedStepCount     int    `json:"completed_step_count"`
-	PaidOutStepCount       int    `json:"paid_out_step_count"`
-	SubmissionCount        int    `json:"submission_count"`
-	ManagerPaidOutAt       int64  `json:"manager_paid_out_at,omitempty"`
-	ManagerPayoutTxHash    string `json:"manager_payout_tx_hash,omitempty"`
+	ID                  string `json:"id"`
+	SeriesID            string `json:"series_id"`
+	Title               string `json:"title,omitempty"`
+	Description         string `json:"description,omitempty"`
+	Recurrence          string `json:"recurrence,omitempty"`
+	Status              string `json:"status"`
+	ProposerID          string `json:"proposer_id"`
+	ProposerEmail       string `json:"proposer_email,omitempty"`
+	StartAt             int64  `json:"start_at"`
+	CreatedAt           int64  `json:"created_at"`
+	ApprovedAt          int64  `json:"approved_at,omitempty"`
+	ManagerImproverID   string `json:"manager_improver_id,omitempty"`
+	ManagerBountySfluv  string `json:"manager_bounty_sfluv"`
+	TotalBountySfluv    string `json:"total_bounty_sfluv"`
+	StepBountySfluv     string `json:"step_bounty_sfluv"`
+	StepCount           int    `json:"step_count"`
+	CompletedStepCount  int    `json:"completed_step_count"`
+	PaidOutStepCount    int    `json:"paid_out_step_count"`
+	SubmissionCount     int    `json:"submission_count"`
+	ManagerPaidOutAt    int64  `json:"manager_paid_out_at,omitempty"`
+	ManagerPayoutTxHash string `json:"manager_payout_tx_hash,omitempty"`
 }
 
 func (a *reportCore) workflowReport(ctx context.Context, request mcp.CallToolRequest) (any, error) {
@@ -1135,9 +1140,9 @@ func (a *reportCore) workflowReport(ctx context.Context, request mcp.CallToolReq
 				&row.CreatedAt,
 				&row.ApprovedAt,
 				&row.ManagerImproverID,
-				&row.ManagerBountySfluvBase,
-				&row.TotalBountySfluvBase,
-				&row.StepBountySfluvBase,
+				&row.ManagerBountySfluv,
+				&row.TotalBountySfluv,
+				&row.StepBountySfluv,
 				&row.StepCount,
 				&row.CompletedStepCount,
 				&row.PaidOutStepCount,
@@ -1161,7 +1166,7 @@ func (a *reportCore) workflowReport(ctx context.Context, request mcp.CallToolReq
 		"count":           limit,
 		"start_timestamp": start,
 		"end_timestamp":   end,
-		"note":            "Bounty amounts are $SFLUV base units (divide by 1,000,000). Use workflow_detail with a workflow id for per-step reported submission data.",
+		"note":            "Bounty amounts are WHOLE $SFLUV (not base units). Use workflow_detail with a workflow id for per-step reported submission data.",
 		"workflows":       workflows,
 	}, nil
 }
@@ -1171,7 +1176,7 @@ type workflowStepDetail struct {
 	StepOrder           int              `json:"step_order"`
 	Title               string           `json:"title"`
 	Description         string           `json:"description"`
-	BountySfluvBase     string           `json:"bounty_sfluv_base"`
+	BountySfluv         string           `json:"bounty_sfluv"`
 	Status              string           `json:"status"`
 	RoleTitle           string           `json:"role_title,omitempty"`
 	AssignedImproverID  string           `json:"assigned_improver_id,omitempty"`
@@ -1251,20 +1256,20 @@ func (a *reportCore) workflowDetail(ctx context.Context, request mcp.CallToolReq
 			return fmt.Errorf("query workflow header: %w", err)
 		}
 		header = map[string]any{
-			"id":                        workflowID,
-			"series_id":                 seriesID,
-			"title":                     title,
-			"description":               description,
-			"recurrence":                recurrence,
-			"status":                    wfStatus,
-			"proposer_id":               proposerID,
-			"proposer_email":            proposerEmail,
-			"start_at":                  startAt,
-			"created_at":                createdAt,
-			"approved_at":               approvedAt,
-			"manager_improver_id":       managerImprover,
-			"manager_bounty_sfluv_base": managerBounty,
-			"total_bounty_sfluv_base":   totalBounty,
+			"id":                   workflowID,
+			"series_id":            seriesID,
+			"title":                title,
+			"description":          description,
+			"recurrence":           recurrence,
+			"status":               wfStatus,
+			"proposer_id":          proposerID,
+			"proposer_email":       proposerEmail,
+			"start_at":             startAt,
+			"created_at":           createdAt,
+			"approved_at":          approvedAt,
+			"manager_improver_id":  managerImprover,
+			"manager_bounty_sfluv": managerBounty,
+			"total_bounty_sfluv":   totalBounty,
 		}
 
 		rows, err := tx.Query(ctx, `
@@ -1311,7 +1316,7 @@ func (a *reportCore) workflowDetail(ctx context.Context, request mcp.CallToolReq
 				itemResponses                                      []byte
 			)
 			if err := rows.Scan(
-				&step.StepID, &step.StepOrder, &step.Title, &step.Description, &step.BountySfluvBase,
+				&step.StepID, &step.StepOrder, &step.Title, &step.Description, &step.BountySfluv,
 				&step.Status, &step.RoleTitle, &step.AssignedImproverID, &step.AssignedImproverEml,
 				&step.StartedAt, &step.CompletedAt, &step.PayoutTxHash,
 				&subID, &subImprover, &subImproverEmail, &subSubmittedAt, &subNotPossible, &notPossNotes, &itemResponses,
@@ -1373,7 +1378,7 @@ func (a *reportCore) workflowDetail(ctx context.Context, request mcp.CallToolReq
 
 	return map[string]any{
 		"generated_at": time.Now().UTC().Format(time.RFC3339),
-		"note":         "Bounties are $SFLUV base units (divide by 1,000,000). item_responses holds the improver's reported answers (written/dropdown/etc). Photo bytes are never returned — only metadata.",
+		"note":         "Bounties are WHOLE $SFLUV (not base units). item_responses holds the improver's reported answers (written/dropdown/etc). Photo bytes are never returned — only metadata.",
 		"workflow":     header,
 		"steps":        steps,
 	}, nil
