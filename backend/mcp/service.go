@@ -51,6 +51,7 @@ func New(appDB, botDB, ponderDB *pgxpool.Pool, app *handlers.AppService, chainID
 func (s *Service) RegisterRoutes(r chi.Router) {
 	mcpServer := s.core.newServer()
 	s.core.registerExtraTools(mcpServer)
+	s.core.registerAdminDataTools(mcpServer)
 	streamable := server.NewStreamableHTTPServer(mcpServer)
 	s.oauth.registerRoutes(r, streamable)
 }
