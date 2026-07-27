@@ -410,15 +410,19 @@ func (a *AppDB) UpdateAffiliate(ctx context.Context, req *structs.AffiliateUpdat
 }
 
 func (a *AppDB) IsAffiliate(ctx context.Context, id string) (bool, error) {
+	// Authoritative org-scoped check: the user's active account must belong to
+	// an organization holding an approved affiliate role.
 	row := a.db.QueryRow(ctx, `
-		SELECT
-			is_affiliate
-		FROM
-			users
-		WHERE
-			id = $1
-		AND
-			active = TRUE;
+		SELECT EXISTS (
+			SELECT 1
+			FROM users u
+			JOIN organization_members om ON om.user_id = u.id
+			JOIN organization_roles r
+				ON r.organization_id = om.organization_id
+				AND r.role_type = 'affiliate'
+				AND r.status = 'approved'
+			WHERE u.id = $1 AND u.active = TRUE
+		);
 	`, id)
 	var isAffiliate bool
 	err := row.Scan(&isAffiliate)

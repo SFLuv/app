@@ -10,6 +10,7 @@ import (
 
 	"github.com/SFLuv/app/backend/logger"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -20,10 +21,29 @@ const legacyBerachainChainID = 80094
 
 const baselineDBVersion = "1.0"
 
+// MigrationDB is the database surface migrations run against. It is satisfied
+// by both *pgxpool.Pool and pgx.Tx; RunPendingMigrations passes per-database
+// TRANSACTIONS, so every statement in a migration either commits together with
+// the version bump or rolls back together — a failed migration can never leave
+// a half-applied schema behind.
+type MigrationDB interface {
+	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	Begin(ctx context.Context) (pgx.Tx, error)
+}
+
+// MigrationPools carries the per-migration transaction handles for the app and
+// bot databases (field names mirror DBPools so migration bodies read the same).
+type MigrationPools struct {
+	App MigrationDB
+	Bot MigrationDB
+}
+
 type SchemaMigration struct {
 	Version     string
 	Description string
-	Apply       func(context.Context, *DBPools, *logger.LogCloser) error
+	Apply       func(context.Context, *MigrationPools, *logger.LogCloser) error
 }
 
 // Everything currently in CreateTables() is treated as baseline schema v1.0.
@@ -32,7 +52,7 @@ var schemaMigrations = []SchemaMigration{
 	{
 		Version:     "1.1",
 		Description: "add support indexes for list, location, wallet, and event queries",
-		Apply: func(ctx context.Context, pools *DBPools, appLogger *logger.LogCloser) error {
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
 			if _, err := pools.App.Exec(ctx, `
 				CREATE INDEX IF NOT EXISTS affiliates_created_idx
 					ON affiliates(created_at DESC);
@@ -84,7 +104,7 @@ var schemaMigrations = []SchemaMigration{
 	{
 		Version:     "1.2",
 		Description: "add location-owned payment wallets and tipping wallets for merchant payouts",
-		Apply: func(ctx context.Context, pools *DBPools, appLogger *logger.LogCloser) error {
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
 			if _, err := pools.App.Exec(ctx, `
 				ALTER TABLE locations
 				ADD COLUMN IF NOT EXISTS tipping_wallet_address TEXT NOT NULL DEFAULT '';
@@ -137,7 +157,7 @@ var schemaMigrations = []SchemaMigration{
 	{
 		Version:     "1.3",
 		Description: "track workflow payout transaction hashes for payout reconciliation",
-		Apply: func(ctx context.Context, pools *DBPools, appLogger *logger.LogCloser) error {
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
 			if _, err := pools.App.Exec(ctx, `
 				ALTER TABLE workflows
 				ADD COLUMN IF NOT EXISTS manager_payout_tx_hash TEXT;
@@ -154,7 +174,7 @@ var schemaMigrations = []SchemaMigration{
 	{
 		Version:     "1.4",
 		Description: "add soft-delete support, account deletion metadata, and merged wallet history",
-		Apply: func(ctx context.Context, pools *DBPools, appLogger *logger.LogCloser) error {
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
 			if _, err := pools.App.Exec(ctx, `
 				ALTER TABLE users
 				ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT true;
@@ -323,7 +343,7 @@ var schemaMigrations = []SchemaMigration{
 	{
 		Version:     "1.5",
 		Description: "store revocable oauth credentials for account deletion and apple recovery",
-		Apply: func(ctx context.Context, pools *DBPools, appLogger *logger.LogCloser) error {
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
 			if _, err := pools.App.Exec(ctx, `
 				CREATE TABLE IF NOT EXISTS user_oauth_credentials(
 					user_id TEXT NOT NULL,
@@ -354,7 +374,7 @@ var schemaMigrations = []SchemaMigration{
 	{
 		Version:     "1.6",
 		Description: "store mobile push subscriptions for Expo push delivery",
-		Apply: func(ctx context.Context, pools *DBPools, appLogger *logger.LogCloser) error {
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
 			if _, err := pools.App.Exec(ctx, `
 				CREATE TABLE IF NOT EXISTS mobile_push_subscriptions(
 					id SERIAL PRIMARY KEY,
@@ -398,7 +418,7 @@ var schemaMigrations = []SchemaMigration{
 	{
 		Version:     "1.7",
 		Description: "require privacy-policy acceptance and record mailing-list opt-in preferences",
-		Apply: func(ctx context.Context, pools *DBPools, appLogger *logger.LogCloser) error {
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
 			if _, err := pools.App.Exec(ctx, `
 				ALTER TABLE users
 				ADD COLUMN IF NOT EXISTS accepted_privacy_policy BOOLEAN NOT NULL DEFAULT false;
@@ -422,7 +442,7 @@ var schemaMigrations = []SchemaMigration{
 	{
 		Version:     "1.8",
 		Description: "track ponder hook ids for mobile push subscriptions",
-		Apply: func(ctx context.Context, pools *DBPools, appLogger *logger.LogCloser) error {
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
 			if _, err := pools.App.Exec(ctx, `
 				ALTER TABLE mobile_push_subscriptions
 				ADD COLUMN IF NOT EXISTS ponder_hook_id INTEGER;
@@ -440,7 +460,7 @@ var schemaMigrations = []SchemaMigration{
 	{
 		Version:     "1.9",
 		Description: "store Expo push tickets and receipt outcomes",
-		Apply: func(ctx context.Context, pools *DBPools, appLogger *logger.LogCloser) error {
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
 			if _, err := pools.App.Exec(ctx, `
 				CREATE TABLE IF NOT EXISTS mobile_push_notification_tickets(
 					id SERIAL PRIMARY KEY,
@@ -472,7 +492,7 @@ var schemaMigrations = []SchemaMigration{
 	{
 		Version:     "1.10",
 		Description: "separate mobile push preference and device registration state",
-		Apply: func(ctx context.Context, pools *DBPools, appLogger *logger.LogCloser) error {
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
 			if _, err := pools.App.Exec(ctx, `
 				ALTER TABLE mobile_push_subscriptions
 				ADD COLUMN IF NOT EXISTS preference_enabled BOOLEAN NOT NULL DEFAULT true;
@@ -495,7 +515,7 @@ var schemaMigrations = []SchemaMigration{
 	{
 		Version:     "1.11",
 		Description: "index mobile push subscriptions by owner and token",
-		Apply: func(ctx context.Context, pools *DBPools, appLogger *logger.LogCloser) error {
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
 			if _, err := pools.App.Exec(ctx, `
 				CREATE INDEX IF NOT EXISTS mobile_push_subscriptions_owner_token_idx
 					ON mobile_push_subscriptions(owner, token);
@@ -509,7 +529,7 @@ var schemaMigrations = []SchemaMigration{
 	{
 		Version:     "1.12",
 		Description: "add merchant mode settings and device registrations",
-		Apply: func(ctx context.Context, pools *DBPools, appLogger *logger.LogCloser) error {
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
 			if _, err := pools.App.Exec(ctx, `
 				CREATE TABLE IF NOT EXISTS merchant_mode_settings (
 					owner_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
@@ -562,7 +582,7 @@ var schemaMigrations = []SchemaMigration{
 	{
 		Version:     "1.13",
 		Description: "add analytics wallet role history and user activity snapshots",
-		Apply: func(ctx context.Context, pools *DBPools, appLogger *logger.LogCloser) error {
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
 			if _, err := pools.App.Exec(ctx, `
 				CREATE TABLE IF NOT EXISTS analytics_wallet_role_history(
 					id BIGSERIAL PRIMARY KEY,
@@ -606,7 +626,7 @@ var schemaMigrations = []SchemaMigration{
 	{
 		Version:     "1.14",
 		Description: "seed historical analytics faucet wallet for fiscal-year backfill",
-		Apply: func(ctx context.Context, pools *DBPools, appLogger *logger.LogCloser) error {
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
 			if _, err := pools.App.Exec(ctx, `
 					INSERT INTO analytics_wallet_role_history(address, role, chain_id, source, started_at, ended_at)
 					SELECT
@@ -634,7 +654,7 @@ var schemaMigrations = []SchemaMigration{
 	{
 		Version:     "1.15",
 		Description: "track mobile client versions for migration readiness",
-		Apply: func(ctx context.Context, pools *DBPools, appLogger *logger.LogCloser) error {
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
 			if _, err := pools.App.Exec(ctx, `
 				CREATE TABLE IF NOT EXISTS user_client_versions(
 					id BIGSERIAL PRIMARY KEY,
@@ -668,7 +688,7 @@ var schemaMigrations = []SchemaMigration{
 	{
 		Version:     "1.16",
 		Description: "tag transaction-bearing records with chain ids",
-		Apply: func(ctx context.Context, pools *DBPools, appLogger *logger.LogCloser) error {
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
 			if _, err := pools.App.Exec(ctx, `
 					ALTER TABLE memos
 					ADD COLUMN IF NOT EXISTS chain_id BIGINT;
@@ -720,7 +740,7 @@ var schemaMigrations = []SchemaMigration{
 	{
 		Version:     "1.17",
 		Description: "track anonymous client phone-home hits for app usage metrics",
-		Apply: func(ctx context.Context, pools *DBPools, appLogger *logger.LogCloser) error {
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
 			if _, err := pools.App.Exec(ctx, `
 					CREATE TABLE IF NOT EXISTS client_phone_home_metrics(
 						day DATE NOT NULL,
@@ -748,7 +768,7 @@ var schemaMigrations = []SchemaMigration{
 	{
 		Version:     "1.18",
 		Description: "backfill legacy Berachain chain ids on Ponder transaction tables (DISABLED)",
-		Apply: func(ctx context.Context, pools *DBPools, appLogger *logger.LogCloser) error {
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
 			// Disabled: the Ponder database is owned by the Ponder indexer and must
 			// not be altered or written to from the backend. Doing so (ALTER ADD
 			// chain_id / SET DEFAULT / indexes / UPDATE) changed Ponder's schema out
@@ -764,7 +784,7 @@ var schemaMigrations = []SchemaMigration{
 	{
 		Version:     "1.19",
 		Description: "scope mobile push subscriptions by app installation",
-		Apply: func(ctx context.Context, pools *DBPools, appLogger *logger.LogCloser) error {
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
 			if _, err := pools.App.Exec(ctx, `
 				ALTER TABLE mobile_push_subscriptions
 				ADD COLUMN IF NOT EXISTS installation_id_hash TEXT NOT NULL DEFAULT '';
@@ -782,7 +802,7 @@ var schemaMigrations = []SchemaMigration{
 	{
 		Version:     "1.20",
 		Description: "record non-migrated holder balances for post-migration recovery claims",
-		Apply: func(ctx context.Context, pools *DBPools, appLogger *logger.LogCloser) error {
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
 			if _, err := pools.Bot.Exec(ctx, `
 				CREATE TABLE IF NOT EXISTS recovery_balances(
 					address TEXT PRIMARY KEY,
@@ -809,7 +829,7 @@ var schemaMigrations = []SchemaMigration{
 	{
 		Version:     "1.21",
 		Description: "add OAuth state for the read-only admin MCP endpoint (identity = SFLUV user DID)",
-		Apply: func(ctx context.Context, pools *DBPools, appLogger *logger.LogCloser) error {
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
 			if _, err := pools.App.Exec(ctx, `
 				CREATE TABLE IF NOT EXISTS admin_mcp_oauth_clients(
 					client_id TEXT PRIMARY KEY,
@@ -884,6 +904,20 @@ var schemaMigrations = []SchemaMigration{
 			return nil
 		},
 	},
+	{
+		Version:     "1.22",
+		Description: "introduce organizations: merge duplicate role orgs, org membership/roles, invites, and cycle-based allocations",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			return migrateOrganizations(ctx, pools)
+		},
+	},
+	{
+		Version:     "1.23",
+		Description: "org-level issuer scopes seeded from member credentials, synced to members, and inherited org settings (affiliate logo)",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			return migrateOrganizationIssuerScopes(ctx, pools)
+		},
+	},
 }
 
 type versionTarget struct {
@@ -949,11 +983,43 @@ func RunPendingMigrations(ctx context.Context, pools *DBPools, appLogger *logger
 		if appLogger != nil {
 			appLogger.Logf("applying schema migration %s: %s", migration.Version, migration.Description)
 		}
-		if err := migration.Apply(ctx, pools, appLogger); err != nil {
-			return fmt.Errorf("error applying schema migration %s (%s): %w", migration.Version, migration.Description, err)
+
+		// Each migration runs inside one transaction per database, and the
+		// version bump is written INSIDE those same transactions: the schema
+		// change and the recorded version commit atomically, so a failure at
+		// any point rolls the whole migration back and a re-run starts clean.
+		appTx, err := pools.App.Begin(ctx)
+		if err != nil {
+			return fmt.Errorf("error beginning app transaction for migration %s: %w", migration.Version, err)
 		}
-		if err := setVersionForTargets(ctx, targets, migration.Version); err != nil {
-			return fmt.Errorf("error updating database version to %s: %w", migration.Version, err)
+		botTx, err := pools.Bot.Begin(ctx)
+		if err != nil {
+			_ = appTx.Rollback(ctx)
+			return fmt.Errorf("error beginning bot transaction for migration %s: %w", migration.Version, err)
+		}
+
+		applyErr := migration.Apply(ctx, &MigrationPools{App: appTx, Bot: botTx}, appLogger)
+		if applyErr == nil {
+			applyErr = setCurrentVersion(ctx, appTx, migration.Version)
+		}
+		if applyErr == nil {
+			applyErr = setCurrentVersion(ctx, botTx, migration.Version)
+		}
+		if applyErr != nil {
+			_ = botTx.Rollback(ctx)
+			_ = appTx.Rollback(ctx)
+			return fmt.Errorf("error applying schema migration %s (%s): %w", migration.Version, migration.Description, applyErr)
+		}
+
+		if err := appTx.Commit(ctx); err != nil {
+			_ = botTx.Rollback(ctx)
+			return fmt.Errorf("error committing app transaction for migration %s: %w", migration.Version, err)
+		}
+		if err := botTx.Commit(ctx); err != nil {
+			// The app db committed but the bot db did not: the version rows now
+			// disagree, which ensureConsistentDBVersion reports loudly on the
+			// next start instead of silently proceeding half-migrated.
+			return fmt.Errorf("error committing bot transaction for migration %s (app db already committed; version mismatch will be reported on next start): %w", migration.Version, err)
 		}
 		currentVersion = migration.Version
 	}
@@ -1105,8 +1171,8 @@ func getCurrentVersion(ctx context.Context, pool *pgxpool.Pool) (string, bool, e
 	return version, true, nil
 }
 
-func setCurrentVersion(ctx context.Context, pool *pgxpool.Pool, version string) error {
-	_, err := pool.Exec(ctx, `
+func setCurrentVersion(ctx context.Context, db MigrationDB, version string) error {
+	_, err := db.Exec(ctx, `
 		INSERT INTO db_version(id, version, updated_at)
 		VALUES (1, $1, $2)
 		ON CONFLICT (id)

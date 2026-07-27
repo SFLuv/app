@@ -86,6 +86,7 @@ import { Event, EventsStatus } from "@/types/event"
 import { AddEventModal } from "@/components/events/add-event-modal"
 import { EventModal } from "@/components/events/event-modal"
 import { DrainFaucetModal } from "@/components/events/drain-faucet-modal"
+import { OrganizationManagement } from "@/components/admin/organization-management"
 import { WorkflowDetailsModal } from "@/components/workflows/workflow-details-modal"
 import { AdminAnalyticsPanel } from "@/components/admin/admin-analytics-panel"
 import EventCard from "@/components/events/event-card"
@@ -280,12 +281,9 @@ export default function AdminPage() {
       "analytics",
       "w9",
       "merchants",
-      "affiliates",
-      "proposers",
+      "organizations",
       "improvers",
-      "supervisors",
       "workflows",
-      "issuers",
       "credential-types",
     ].includes(value)
   }
@@ -382,6 +380,9 @@ export default function AdminPage() {
   const [affiliates, setAffiliates] = useState<Affiliate[]>([])
   const [affiliatesError, setAffiliatesError] = useState<string>("")
   const [affiliateModalOpen, setAffiliateModalOpen] = useState<boolean>(false)
+  // Sidebar badge: organizations with any pending role approval. Loaded once
+  // for the badge count; the Organizations tab component owns the full list.
+  const [orgPendingCount, setOrgPendingCount] = useState<number>(0)
   const [selectedAffiliate, setSelectedAffiliate] = useState<Affiliate | null>(null)
   const [affiliateNickname, setAffiliateNickname] = useState<string>("")
   const [affiliateWeeklyBalance, setAffiliateWeeklyBalance] = useState<string>("")
@@ -416,6 +417,8 @@ export default function AdminPage() {
   const [improverStatusDraft, setImproverStatusDraft] = useState<Improver["status"]>("pending")
   const [improverModalUpdating, setImproverModalUpdating] = useState<boolean>(false)
   const [improverModalError, setImproverModalError] = useState<string>("")
+  const [improverCredentialDraft, setImproverCredentialDraft] = useState<string>("")
+  const [credentialActionBusy, setCredentialActionBusy] = useState<string | null>(null)
   const [improverSearch, setImproverSearch] = useState<string>(readQueryText("improver_search", ""))
   const [improverPage, setImproverPage] = useState<number>(readQueryNumber("improver_page", 0))
 
@@ -1019,6 +1022,43 @@ export default function AdminPage() {
     if (!selectedImprover) return
     const ok = await updateImproverStatus(selectedImprover.user_id, improverStatusDraft)
     if (ok) setImproverModalOpen(false)
+  }
+
+  // Admins can grant/revoke credentials directly (no improver request needed).
+  // The /issuers/credentials endpoints admit admins and bypass issuer scopes.
+  const setImproverCredential = async (credentialType: string, grant: boolean) => {
+    if (!selectedImprover) return
+    const userId = selectedImprover.user_id
+    setCredentialActionBusy(credentialType)
+    setImproverModalError("")
+    try {
+      const res = await authFetch("/issuers/credentials", {
+        method: grant ? "POST" : "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ user_id: userId, credential_type: credentialType }),
+      })
+      if (!res.ok) throw new Error((await res.text()) || "Credential update failed")
+      // Optimistically reflect the change, then refresh the list in the
+      // background so the improver row stays in sync.
+      setSelectedImprover((prev) =>
+        prev && prev.user_id === userId
+          ? {
+              ...prev,
+              active_credentials: grant
+                ? Array.from(new Set([...prev.active_credentials, credentialType]))
+                : prev.active_credentials.filter((c) => c !== credentialType),
+            }
+          : prev,
+      )
+      if (grant) setImproverCredentialDraft("")
+      void getImprovers(improverSearch, improverPage)
+    } catch (err) {
+      setImproverModalError(
+        err instanceof Error && err.message ? err.message : "Unable to update credential right now.",
+      )
+    } finally {
+      setCredentialActionBusy(null)
+    }
   }
 
   const getSupervisors = async (search = supervisorSearch, page = supervisorPage) => {
@@ -1791,6 +1831,27 @@ export default function AdminPage() {
   }, [status, eventsSearch, eventsPage, eventsCount, eventsExpired])
 
   useEffect(() => { getAffiliates(affiliateSearch, affiliatePage) }, [affiliateSearch, affiliatePage])
+
+  // Organizations sidebar badge: count orgs with a pending role approval.
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      try {
+        const res = await authFetch("/admin/organizations")
+        if (!res.ok) return
+        const views = (await res.json()) as Array<{ roles?: Array<{ status: string }> }>
+        if (cancelled) return
+        setOrgPendingCount(
+          (views || []).filter((v) => (v.roles || []).some((r) => r.status === "pending")).length,
+        )
+      } catch {
+        // Non-fatal: badge just stays at 0.
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [authFetch])
   useEffect(() => { getProposers(proposerSearch, proposerPage) }, [proposerSearch, proposerPage])
   useEffect(() => { getImprovers(improverSearch, improverPage) }, [improverSearch, improverPage])
   useEffect(() => { getSupervisors(supervisorSearch, supervisorPage) }, [supervisorSearch, supervisorPage])
@@ -2549,19 +2610,15 @@ export default function AdminPage() {
                 </Badge>
               )}
             </TabsTrigger>
-            <TabsTrigger value="affiliates" className="w-full justify-between px-3 py-2">
-              <span>Affiliates</span>
-              {affiliates.filter((affiliate) => affiliate.status === "pending").length > 0 && (
+            {/* Affiliates, Proposers, Supervisors, and Issuers are owned by
+                organizations now — their legacy tabs are hidden and their
+                functionality lives in the Organizations tab (role approvals,
+                allocations, events, issuer settings). */}
+            <TabsTrigger value="organizations" className="w-full justify-between px-3 py-2">
+              <span>Organizations</span>
+              {orgPendingCount > 0 && (
                 <Badge variant="destructive" className="h-5 min-w-5 rounded-full px-1.5 text-xs">
-                  {affiliates.filter((affiliate) => affiliate.status === "pending").length}
-                </Badge>
-              )}
-            </TabsTrigger>
-            <TabsTrigger value="proposers" className="w-full justify-between px-3 py-2">
-              <span>Proposers</span>
-              {proposers.filter((proposer) => proposer.status === "pending").length > 0 && (
-                <Badge variant="destructive" className="h-5 min-w-5 rounded-full px-1.5 text-xs">
-                  {proposers.filter((proposer) => proposer.status === "pending").length}
+                  {orgPendingCount}
                 </Badge>
               )}
             </TabsTrigger>
@@ -2573,24 +2630,8 @@ export default function AdminPage() {
                 </Badge>
               )}
             </TabsTrigger>
-            <TabsTrigger value="supervisors" className="w-full justify-between px-3 py-2">
-              <span>Supervisors</span>
-              {supervisors.filter((supervisor) => supervisor.status === "pending").length > 0 && (
-                <Badge variant="destructive" className="h-5 min-w-5 rounded-full px-1.5 text-xs">
-                  {supervisors.filter((supervisor) => supervisor.status === "pending").length}
-                </Badge>
-              )}
-            </TabsTrigger>
             <TabsTrigger value="workflows" className="w-full justify-between px-3 py-2">
               <span>Workflows</span>
-            </TabsTrigger>
-            <TabsTrigger value="issuers" className="w-full justify-between px-3 py-2">
-              <span>Issuers</span>
-              {issuerRequests.filter((r) => r.status === "pending").length > 0 && (
-                <Badge variant="destructive" className="h-5 min-w-5 rounded-full px-1.5 text-xs">
-                  {issuerRequests.filter((r) => r.status === "pending").length}
-                </Badge>
-              )}
             </TabsTrigger>
             <TabsTrigger value="credential-types" className="w-full justify-between px-3 py-2">
               <span>Credential Types</span>
@@ -3565,6 +3606,10 @@ export default function AdminPage() {
           </Card>
         </TabsContent>
 
+        <TabsContent value="organizations" className="space-y-6">
+          <OrganizationManagement />
+        </TabsContent>
+
         <TabsContent value="affiliates" className="space-y-6">
           {affiliatesError && (
             <div className="flex items-center gap-2 text-red-600 text-sm p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
@@ -3945,12 +3990,67 @@ export default function AdminPage() {
                     ) : (
                       <div className="flex flex-wrap gap-2">
                         {selectedImprover.active_credentials.map((credential) => (
-                          <Badge key={credential} variant="outline">
+                          <Badge key={credential} variant="outline" className="gap-1 pr-1">
                             {formatCredentialLabel(credential, credentialLabelMap)}
+                            <button
+                              type="button"
+                              aria-label={`Revoke ${formatCredentialLabel(credential, credentialLabelMap)}`}
+                              className="rounded-full p-0.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"
+                              disabled={credentialActionBusy !== null}
+                              onClick={() => void setImproverCredential(credential, false)}
+                            >
+                              {credentialActionBusy === credential ? (
+                                <Loader2 className="h-3 w-3 animate-spin" />
+                              ) : (
+                                <X className="h-3 w-3" />
+                              )}
+                            </button>
                           </Badge>
                         ))}
                       </div>
                     )}
+                    {/* Grant a credential directly — no improver request required. */}
+                    {(() => {
+                      const grantable = credentialTypes.filter(
+                        (ct) => !selectedImprover.active_credentials.includes(ct.value),
+                      )
+                      return (
+                        <div className="flex flex-col gap-2 pt-1 sm:flex-row">
+                          <Select
+                            value={improverCredentialDraft || undefined}
+                            onValueChange={setImproverCredentialDraft}
+                            disabled={credentialActionBusy !== null || grantable.length === 0}
+                          >
+                            <SelectTrigger className="flex-1">
+                              <SelectValue
+                                placeholder={grantable.length === 0 ? "All credentials granted" : "Grant a credential…"}
+                              />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {grantable.map((ct) => (
+                                <SelectItem key={ct.value} value={ct.value}>
+                                  {formatCredentialLabel(ct.value, credentialLabelMap)}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            className="shrink-0"
+                            disabled={!improverCredentialDraft || credentialActionBusy !== null}
+                            onClick={() => void setImproverCredential(improverCredentialDraft, true)}
+                          >
+                            {credentialActionBusy === improverCredentialDraft ? (
+                              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                            ) : (
+                              <Plus className="mr-2 h-4 w-4" />
+                            )}
+                            Grant
+                          </Button>
+                        </div>
+                      )
+                    })()}
                   </div>
                   <div className="space-y-1">
                     <Label>Change Approval Status</Label>

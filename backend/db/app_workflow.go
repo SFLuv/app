@@ -25,7 +25,11 @@ import (
 )
 
 func (a *AppDB) IsProposer(ctx context.Context, id string) (bool, error) {
-	return a.getBoolUserRole(ctx, id, "is_proposer")
+	// Authoritative org-scoped check: the user's organization must hold an
+	// approved proposer role. users.is_proposer is kept in sync for display,
+	// but access control reads the org tables directly.
+	ok, _, err := a.UserOrgHasApprovedRole(ctx, id, structs.OrgRoleTypeProposer)
+	return ok, err
 }
 
 func (a *AppDB) IsImprover(ctx context.Context, id string) (bool, error) {
@@ -55,11 +59,15 @@ func (a *AppDB) IsVoter(ctx context.Context, id string) (bool, error) {
 }
 
 func (a *AppDB) IsIssuer(ctx context.Context, id string) (bool, error) {
-	return a.getBoolUserRole(ctx, id, "is_issuer")
+	// Authoritative org-scoped check; see IsProposer.
+	ok, _, err := a.UserOrgHasApprovedRole(ctx, id, structs.OrgRoleTypeIssuer)
+	return ok, err
 }
 
 func (a *AppDB) IsSupervisor(ctx context.Context, id string) (bool, error) {
-	return a.getBoolUserRole(ctx, id, "is_supervisor")
+	// Authoritative org-scoped check; see IsProposer.
+	ok, _, err := a.UserOrgHasApprovedRole(ctx, id, structs.OrgRoleTypeSupervisor)
+	return ok, err
 }
 
 func (a *AppDB) getBoolUserRole(ctx context.Context, id string, column string) (bool, error) {
@@ -5630,8 +5638,16 @@ func (a *AppDB) GetSupervisorWorkflows(
 	args := []any{}
 	argIndex := 1
 	if !includeAll {
-		baseConditions = append(baseConditions, fmt.Sprintf("w.manager_improver_id = $%d", argIndex))
-		args = append(args, supervisorID)
+		// Organization scope: a supervisor sees workflows supervised by ANY
+		// member of their organization, not just themselves.
+		supervisorIDs := []string{supervisorID}
+		if memberOrg, _, orgErr := a.GetOrganizationByUser(ctx, supervisorID); orgErr == nil && memberOrg != nil {
+			if memberIDs, memberErr := a.GetOrganizationMemberIDs(ctx, memberOrg.Id); memberErr == nil && len(memberIDs) > 0 {
+				supervisorIDs = memberIDs
+			}
+		}
+		baseConditions = append(baseConditions, fmt.Sprintf("w.manager_improver_id = ANY($%d::text[])", argIndex))
+		args = append(args, supervisorIDs)
 		argIndex++
 	}
 	if includeAll && normalizedSupervisorFilter != "" && normalizedSupervisorFilter != "all" {
@@ -8294,11 +8310,17 @@ func (a *AppDB) CompleteWorkflowStep(
 			photoUploads := photoUploadsByItem[item.Id]
 			uploadedPhotoIDs := uploadedPhotoIDsByItem[item.Id]
 			totalPhotoCount := len(photoUploads) + len(uploadedPhotoIDs)
-			hasAnyResponse := totalPhotoCount > 0 || response.WrittenResponse != nil || response.DropdownValue != nil
+			// A written response only counts when it has actual content — a
+			// present-but-empty string must not satisfy a written requirement.
+			hasWrittenResponse := response.WrittenResponse != nil && strings.TrimSpace(*response.WrittenResponse) != ""
+			hasAnyResponse := totalPhotoCount > 0 || hasWrittenResponse || response.DropdownValue != nil
 			if item.Optional && !hasAnyResponse {
 				continue
 			}
 
+			// When an item requires multiple submission types (e.g. written
+			// response AND photo), every required type must be present —
+			// submitting only one is rejected.
 			if item.RequiresPhoto {
 				if item.PhotoAllowAnyCount {
 					if totalPhotoCount == 0 {
@@ -8308,7 +8330,7 @@ func (a *AppDB) CompleteWorkflowStep(
 					return nil, fmt.Errorf("step item requires exactly %d photo(s): %s", item.PhotoRequiredCount, item.Title)
 				}
 			}
-			if item.RequiresWrittenResponse && response.WrittenResponse == nil {
+			if item.RequiresWrittenResponse && !hasWrittenResponse {
 				return nil, fmt.Errorf("step item requires written response: %s", item.Title)
 			}
 			if item.RequiresDropdown {
@@ -8329,7 +8351,7 @@ func (a *AppDB) CompleteWorkflowStep(
 					return nil, fmt.Errorf("invalid dropdown value for step item: %s", item.Title)
 				}
 
-				if requiredWritten, ok := item.DropdownRequiresWrittenMap[*response.DropdownValue]; ok && requiredWritten && response.WrittenResponse == nil {
+				if requiredWritten, ok := item.DropdownRequiresWrittenMap[*response.DropdownValue]; ok && requiredWritten && !hasWrittenResponse {
 					return nil, fmt.Errorf("dropdown selection requires written response for step item: %s", item.Title)
 				}
 

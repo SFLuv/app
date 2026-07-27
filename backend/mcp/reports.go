@@ -30,12 +30,21 @@ type reportCore struct {
 	chainID  int64
 }
 
-
 func (a *reportCore) newServer() *server.MCPServer {
 	s := server.NewMCPServer(
 		"sfluv-admin-readonly",
 		"0.1.0",
-		server.WithInstructions("Read-only SFLUV admin data access. Use named report tools only. Do not ask for raw SQL. Every response includes generated_at when useful; financial data is denominated in wei unless labeled otherwise."),
+		server.WithInstructions(strings.TrimSpace(`
+Read-only SFLUV admin data access. Use named report tools only; do not ask for raw SQL. Responses include generated_at when useful.
+
+AMOUNT UNITS — read carefully. Every monetary amount is denominated in $SFLUV (the platform token). It is NEVER wei. Amounts appear in one of two forms, and each field name tells you which:
+
+1. Whole $SFLUV (human token counts like 1, 10, 15). These are already in $SFLUV — do not divide. Used by: event 'amount' (the $SFLUV granted per redemption code) and the derived per-event redemption totals in events_report. Fields carry the '_sfluv' suffix (e.g. amount_sfluv, redeemed_amount_sfluv).
+
+2. $SFLUV base units (the token's smallest on-chain unit). The SFLUV token has 6 decimals, so 1 $SFLUV = 1,000,000 base units (e.g. 1000000 = 1 $SFLUV, 10000000 = 10 $SFLUV). Divide by 1,000,000 to get whole $SFLUV. Used by: transactions, financial_summary totals, workflow bounties, and wallet balances. Fields carry the '_sfluv_base' suffix (e.g. amount_sfluv_base, total_bounty_sfluv_base, balance_sfluv_base).
+
+These base-unit values are $SFLUV base units, NOT wei — wei implies 18 decimals; $SFLUV uses 6. Do not call them wei and do not apply an 18-decimal conversion.
+`)),
 		server.WithToolCapabilities(false),
 	)
 
@@ -97,14 +106,21 @@ func (a *reportCore) newServer() *server.MCPServer {
 	), a.merchantReport)
 
 	a.addTool(s, mcp.NewTool("workflow_report",
-		mcp.WithDescription("List workflow financial and lifecycle rows, including proposer/improver attribution and payout status."),
+		mcp.WithDescription("List workflows with title, description, recurrence, proposer/manager attribution, step/submission counts, bounty totals ($SFLUV base units), and payout status. Searchable by title/description. Use workflow_detail for per-step reported submission data."),
 		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithString("status", mcp.Description("Optional workflow status filter.")),
+		mcp.WithString("search", mcp.Description("Optional case-insensitive search over workflow title and description.")),
 		mcp.WithNumber("start_timestamp", mcp.Description("Inclusive created_at Unix timestamp. Defaults to 0.")),
 		mcp.WithNumber("end_timestamp", mcp.Description("Exclusive created_at Unix timestamp. Defaults to now.")),
 		mcp.WithNumber("page", mcp.Description("Zero-based page number.")),
 		mcp.WithNumber("count", mcp.Description("Rows per page, capped at 500.")),
 	), a.workflowReport)
+
+	a.addTool(s, mcp.NewTool("workflow_detail",
+		mcp.WithDescription("Full detail for one workflow: header (title, description, recurrence, bounties in $SFLUV base units), every step with its role and assigned improver, and the reported submission data improvers filed for each step — written responses, dropdown selections and other item responses, step-not-possible reports, and photo metadata (file name, content type, size only; never the image bytes)."),
+		mcp.WithReadOnlyHintAnnotation(true),
+		mcp.WithString("workflow_id", mcp.Description("The workflow id to fetch (from workflow_report)."), mcp.Required()),
+	), a.workflowDetail)
 
 	return s
 }
@@ -132,11 +148,13 @@ func (a *reportCore) reportCatalog(ctx context.Context, _ mcp.CallToolRequest) (
 			{"name": "transactions", "use": "indexed transfer rows by address, hash, or date range"},
 			{"name": "w9_report", "use": "wallet earnings and W9 submission state without W9 document URLs"},
 			{"name": "merchant_report", "use": "merchant locations and payment wallets"},
-			{"name": "workflow_report", "use": "workflow lifecycle and payout reporting"},
-			{"name": "events_report", "use": "redemption/faucet events with creator (admin or affiliate)"},
+			{"name": "workflow_report", "use": "workflow list with title/recurrence/counts/bounties; searchable by title/description"},
+			{"name": "workflow_detail", "use": "one workflow's steps + reported submission data (responses, step-not-possible, photo metadata)"},
+			{"name": "events_report", "use": "redemption/faucet events with creator + per-event code counts and $SFLUV redemption amounts"},
 			{"name": "affiliate_report", "use": "affiliate organizations, status, allocations, balances, owner contact"},
 			{"name": "app_structure", "use": "where features/admin controls live and which tool exposes which data"},
 		},
+		"amount_units": "Amounts are $SFLUV, never wei. Whole-$SFLUV fields end in _sfluv (e.g. event amount_sfluv). Base-unit fields end in _sfluv_base and use 6 decimals (1 $SFLUV = 1,000,000 base units).",
 	}, nil
 }
 
@@ -340,8 +358,8 @@ type walletLookupMatch struct {
 }
 
 type walletBalance struct {
-	Address    string `json:"address"`
-	BalanceWei string `json:"balance_wei"`
+	Address          string `json:"address"`
+	BalanceSfluvBase string `json:"balance_sfluv_base"`
 }
 
 type w9Status struct {
@@ -480,7 +498,7 @@ func (a *reportCore) lookupWallet(ctx context.Context, request mcp.CallToolReque
 			FROM transfer_account
 			WHERE LOWER(address) = $1
 			GROUP BY LOWER(address);
-		`, address).Scan(&b.Address, &b.BalanceWei)
+		`, address).Scan(&b.Address, &b.BalanceSfluvBase)
 		if err == pgx.ErrNoRows {
 			return nil
 		}
@@ -508,27 +526,27 @@ func (a *reportCore) lookupWallet(ctx context.Context, request mcp.CallToolReque
 }
 
 type financialTransferSummary struct {
-	TransactionCount     int    `json:"transaction_count"`
-	TransactionVolumeWei string `json:"transaction_volume_wei"`
-	RewardCount          int    `json:"reward_count"`
-	RewardsWei           string `json:"rewards_wei"`
-	MerchantPaymentCount int    `json:"merchant_payment_count"`
-	MerchantPaymentsWei  string `json:"merchant_payments_wei"`
-	RedemptionCount      int    `json:"redemption_count"`
-	RedemptionsWei       string `json:"redemptions_wei"`
-	CirculatingSFLUVWei  string `json:"circulating_sfluv_wei"`
+	TransactionCount           int    `json:"transaction_count"`
+	TransactionVolumeSfluvBase string `json:"transaction_volume_sfluv_base"`
+	RewardCount                int    `json:"reward_count"`
+	RewardsSfluvBase           string `json:"rewards_sfluv_base"`
+	MerchantPaymentCount       int    `json:"merchant_payment_count"`
+	MerchantPaymentsSfluvBase  string `json:"merchant_payments_sfluv_base"`
+	RedemptionCount            int    `json:"redemption_count"`
+	RedemptionsSfluvBase       string `json:"redemptions_sfluv_base"`
+	CirculatingSfluvBase       string `json:"circulating_sfluv_sfluv_base"`
 }
 
 type workflowCostSummary struct {
 	WorkflowCount int    `json:"workflow_count"`
-	CostWei       string `json:"cost_wei"`
+	CostSfluvBase string `json:"cost_sfluv_base"`
 }
 
 type volunteerEventSummary struct {
-	EventCount       int    `json:"event_count"`
-	CodeCount        int    `json:"code_count"`
-	RedeemedCount    int    `json:"redeemed_count"`
-	PlannedRewardWei string `json:"planned_reward_wei"`
+	EventCount             int    `json:"event_count"`
+	CodeCount              int    `json:"code_count"`
+	RedeemedCount          int    `json:"redeemed_count"`
+	PlannedRewardSfluvBase string `json:"planned_reward_sfluv_base"`
 }
 
 func (a *reportCore) financialSummary(ctx context.Context, request mcp.CallToolRequest) (any, error) {
@@ -561,7 +579,7 @@ func (a *reportCore) financialSummary(ctx context.Context, request mcp.CallToolR
 							ELSE COALESCE(SUM(ws.bounty), 0)
 						END
 						+ COALESCE(w.manager_bounty, 0)
-					)::numeric AS cost_wei
+					)::numeric AS cost_sfluv_base
 				FROM workflows w
 				LEFT JOIN workflow_steps ws ON ws.workflow_id = w.id
 				WHERE w.status IN ('completed', 'paid_out')
@@ -569,11 +587,11 @@ func (a *reportCore) financialSummary(ctx context.Context, request mcp.CallToolR
 			)
 			SELECT
 				COUNT(*)::int,
-				COALESCE(SUM(cost_wei), 0)::text
+				COALESCE(SUM(cost_sfluv_base), 0)::text
 			FROM workflow_costs
 			WHERE completed_at >= $1
 			AND completed_at < $2;
-		`, start, end).Scan(&workflowCosts.WorkflowCount, &workflowCosts.CostWei)
+		`, start, end).Scan(&workflowCosts.WorkflowCount, &workflowCosts.CostSfluvBase)
 	}); err != nil {
 		return nil, fmt.Errorf("workflow cost summary: %w", err)
 	}
@@ -599,7 +617,7 @@ func (a *reportCore) financialSummary(ctx context.Context, request mcp.CallToolR
 				COALESCE(SUM(redeemed_count), 0)::int,
 				COALESCE(SUM(amount), 0)::text
 			FROM event_rows;
-		`, start, end).Scan(&events.EventCount, &events.CodeCount, &events.RedeemedCount, &events.PlannedRewardWei)
+		`, start, end).Scan(&events.EventCount, &events.CodeCount, &events.RedeemedCount, &events.PlannedRewardSfluvBase)
 	}); err != nil {
 		return nil, fmt.Errorf("volunteer event summary: %w", err)
 	}
@@ -612,7 +630,7 @@ func (a *reportCore) financialSummary(ctx context.Context, request mcp.CallToolR
 		"transfers":        transfers,
 		"workflow_costs":   workflowCosts,
 		"volunteer_events": events,
-		"notes":            []string{"circulating_sfluv_wei is rewards minus redemptions inside the requested range, floored at zero"},
+		"notes":            []string{"circulating_sfluv_base is rewards minus redemptions inside the requested range, floored at zero"},
 	}, nil
 }
 
@@ -723,11 +741,11 @@ func (a *reportCore) summarizeTransfers(ctx context.Context, roles roleIndex, st
 	if circulating.Sign() < 0 {
 		circulating.SetInt64(0)
 	}
-	summary.TransactionVolumeWei = totalVolume.String()
-	summary.RewardsWei = rewards.String()
-	summary.MerchantPaymentsWei = payments.String()
-	summary.RedemptionsWei = redemptions.String()
-	summary.CirculatingSFLUVWei = circulating.String()
+	summary.TransactionVolumeSfluvBase = totalVolume.String()
+	summary.RewardsSfluvBase = rewards.String()
+	summary.MerchantPaymentsSfluvBase = payments.String()
+	summary.RedemptionsSfluvBase = redemptions.String()
+	summary.CirculatingSfluvBase = circulating.String()
 	return summary, nil
 }
 
@@ -757,13 +775,13 @@ func (roles roleSet) isUserWallet() bool {
 }
 
 type transactionRow struct {
-	ID        string `json:"id"`
-	ChainID   int64  `json:"chain_id"`
-	Hash      string `json:"hash"`
-	AmountWei string `json:"amount_wei"`
-	Timestamp int64  `json:"timestamp"`
-	From      string `json:"from"`
-	To        string `json:"to"`
+	ID              string `json:"id"`
+	ChainID         int64  `json:"chain_id"`
+	Hash            string `json:"hash"`
+	AmountSfluvBase string `json:"amount_sfluv_base"`
+	Timestamp       int64  `json:"timestamp"`
+	From            string `json:"from"`
+	To              string `json:"to"`
 }
 
 func (a *reportCore) transactions(ctx context.Context, request mcp.CallToolRequest) (any, error) {
@@ -800,7 +818,7 @@ func (a *reportCore) transactions(ctx context.Context, request mcp.CallToolReque
 		defer rows.Close()
 		for rows.Next() {
 			var row transactionRow
-			if err := rows.Scan(&row.ID, &row.ChainID, &row.Hash, &row.AmountWei, &row.Timestamp, &row.From, &row.To); err != nil {
+			if err := rows.Scan(&row.ID, &row.ChainID, &row.Hash, &row.AmountSfluvBase, &row.Timestamp, &row.From, &row.To); err != nil {
 				return fmt.Errorf("scan transaction: %w", err)
 			}
 			items = append(items, row)
@@ -1020,38 +1038,53 @@ func (a *reportCore) merchantReport(ctx context.Context, request mcp.CallToolReq
 }
 
 type workflowRow struct {
-	ID                  string `json:"id"`
-	SeriesID            string `json:"series_id"`
-	Status              string `json:"status"`
-	ProposerID          string `json:"proposer_id"`
-	ProposerEmail       string `json:"proposer_email,omitempty"`
-	StartAt             int64  `json:"start_at"`
-	CreatedAt           int64  `json:"created_at"`
-	ApprovedAt          int64  `json:"approved_at,omitempty"`
-	ManagerImproverID   string `json:"manager_improver_id,omitempty"`
-	ManagerBountyWei    string `json:"manager_bounty_wei"`
-	TotalBountyWei      string `json:"total_bounty_wei"`
-	StepBountyWei       string `json:"step_bounty_wei"`
-	StepCount           int    `json:"step_count"`
-	CompletedStepCount  int    `json:"completed_step_count"`
-	PaidOutStepCount    int    `json:"paid_out_step_count"`
-	ManagerPaidOutAt    int64  `json:"manager_paid_out_at,omitempty"`
-	ManagerPayoutTxHash string `json:"manager_payout_tx_hash,omitempty"`
+	ID                     string `json:"id"`
+	SeriesID               string `json:"series_id"`
+	Title                  string `json:"title,omitempty"`
+	Description            string `json:"description,omitempty"`
+	Recurrence             string `json:"recurrence,omitempty"`
+	Status                 string `json:"status"`
+	ProposerID             string `json:"proposer_id"`
+	ProposerEmail          string `json:"proposer_email,omitempty"`
+	StartAt                int64  `json:"start_at"`
+	CreatedAt              int64  `json:"created_at"`
+	ApprovedAt             int64  `json:"approved_at,omitempty"`
+	ManagerImproverID      string `json:"manager_improver_id,omitempty"`
+	ManagerBountySfluvBase string `json:"manager_bounty_sfluv_base"`
+	TotalBountySfluvBase   string `json:"total_bounty_sfluv_base"`
+	StepBountySfluvBase    string `json:"step_bounty_sfluv_base"`
+	StepCount              int    `json:"step_count"`
+	CompletedStepCount     int    `json:"completed_step_count"`
+	PaidOutStepCount       int    `json:"paid_out_step_count"`
+	SubmissionCount        int    `json:"submission_count"`
+	ManagerPaidOutAt       int64  `json:"manager_paid_out_at,omitempty"`
+	ManagerPayoutTxHash    string `json:"manager_payout_tx_hash,omitempty"`
 }
 
 func (a *reportCore) workflowReport(ctx context.Context, request mcp.CallToolRequest) (any, error) {
 	status := strings.TrimSpace(request.GetString("status", ""))
+	search := strings.TrimSpace(request.GetString("search", ""))
 	start, end := unixRangeFromRequest(request)
 	page := max(0, request.GetInt("page", 0))
 	limit := safeLimit(request.GetInt("count", defaultLimit))
 	offset := page * limit
 	workflows := []workflowRow{}
 
+	searchPattern := ""
+	if search != "" {
+		searchPattern = "%" + search + "%"
+	}
+
 	err := withReadOnlyTx(ctx, a.appDB, func(tx pgx.Tx) error {
+		// Workflows have no title of their own; it (and description/recurrence)
+		// lives on the linked workflow_state, falling back to the series.
 		rows, err := tx.Query(ctx, `
 			SELECT
 				w.id,
 				w.series_id,
+				COALESCE(NULLIF(TRIM(st.title), ''), NULLIF(TRIM(s.title), ''), ''),
+				COALESCE(NULLIF(TRIM(st.description), ''), NULLIF(TRIM(s.description), ''), ''),
+				COALESCE(NULLIF(TRIM(st.recurrence), ''), NULLIF(TRIM(s.recurrence), ''), ''),
 				w.status,
 				w.proposer_id,
 				COALESCE(u.contact_email, ''),
@@ -1062,22 +1095,27 @@ func (a *reportCore) workflowReport(ctx context.Context, request mcp.CallToolReq
 				COALESCE(w.manager_bounty, 0)::text,
 				COALESCE(w.total_bounty, 0)::text,
 				COALESCE(SUM(ws.bounty), 0)::text,
-				COUNT(ws.id)::int,
-				COUNT(ws.id) FILTER (WHERE ws.status IN ('completed', 'paid_out'))::int,
-				COUNT(ws.id) FILTER (WHERE ws.status = 'paid_out')::int,
+				COUNT(DISTINCT ws.id)::int,
+				COUNT(DISTINCT ws.id) FILTER (WHERE ws.status IN ('completed', 'paid_out'))::int,
+				COUNT(DISTINCT ws.id) FILTER (WHERE ws.status = 'paid_out')::int,
+				COUNT(DISTINCT sub.id)::int,
 				COALESCE(w.manager_paid_out_at, 0),
 				COALESCE(w.manager_payout_tx_hash, '')
 			FROM workflows w
 			LEFT JOIN users u ON u.id = w.proposer_id
+			LEFT JOIN workflow_states st ON st.id = w.workflow_state_id
+			LEFT JOIN workflow_series s ON s.id = w.series_id
 			LEFT JOIN workflow_steps ws ON ws.workflow_id = w.id
+			LEFT JOIN workflow_step_submissions sub ON sub.workflow_id = w.id
 			WHERE w.created_at >= $1
 			AND w.created_at < $2
 			AND ($3 = '' OR w.status = $3)
-			GROUP BY w.id, u.contact_email
+			AND ($4 = '' OR COALESCE(st.title, s.title, '') ILIKE $4 OR COALESCE(st.description, s.description, '') ILIKE $4)
+			GROUP BY w.id, u.contact_email, st.title, s.title, st.description, s.description, st.recurrence, s.recurrence
 			ORDER BY w.created_at DESC, w.id DESC
-			LIMIT $4
-			OFFSET $5;
-		`, start, end, status, limit, offset)
+			LIMIT $5
+			OFFSET $6;
+		`, start, end, status, searchPattern, limit, offset)
 		if err != nil {
 			return fmt.Errorf("query workflow report: %w", err)
 		}
@@ -1087,6 +1125,9 @@ func (a *reportCore) workflowReport(ctx context.Context, request mcp.CallToolReq
 			if err := rows.Scan(
 				&row.ID,
 				&row.SeriesID,
+				&row.Title,
+				&row.Description,
+				&row.Recurrence,
 				&row.Status,
 				&row.ProposerID,
 				&row.ProposerEmail,
@@ -1094,12 +1135,13 @@ func (a *reportCore) workflowReport(ctx context.Context, request mcp.CallToolReq
 				&row.CreatedAt,
 				&row.ApprovedAt,
 				&row.ManagerImproverID,
-				&row.ManagerBountyWei,
-				&row.TotalBountyWei,
-				&row.StepBountyWei,
+				&row.ManagerBountySfluvBase,
+				&row.TotalBountySfluvBase,
+				&row.StepBountySfluvBase,
 				&row.StepCount,
 				&row.CompletedStepCount,
 				&row.PaidOutStepCount,
+				&row.SubmissionCount,
 				&row.ManagerPaidOutAt,
 				&row.ManagerPayoutTxHash,
 			); err != nil {
@@ -1119,7 +1161,221 @@ func (a *reportCore) workflowReport(ctx context.Context, request mcp.CallToolReq
 		"count":           limit,
 		"start_timestamp": start,
 		"end_timestamp":   end,
+		"note":            "Bounty amounts are $SFLUV base units (divide by 1,000,000). Use workflow_detail with a workflow id for per-step reported submission data.",
 		"workflows":       workflows,
+	}, nil
+}
+
+type workflowStepDetail struct {
+	StepID              string           `json:"step_id"`
+	StepOrder           int              `json:"step_order"`
+	Title               string           `json:"title"`
+	Description         string           `json:"description"`
+	BountySfluvBase     string           `json:"bounty_sfluv_base"`
+	Status              string           `json:"status"`
+	RoleTitle           string           `json:"role_title,omitempty"`
+	AssignedImproverID  string           `json:"assigned_improver_id,omitempty"`
+	AssignedImproverEml string           `json:"assigned_improver_email,omitempty"`
+	StartedAt           int64            `json:"started_at,omitempty"`
+	CompletedAt         int64            `json:"completed_at,omitempty"`
+	PayoutTxHash        string           `json:"payout_tx_hash,omitempty"`
+	Submission          *workflowStepSub `json:"submission,omitempty"`
+}
+
+type workflowStepSub struct {
+	SubmissionID         string          `json:"submission_id"`
+	ImproverID           string          `json:"improver_id"`
+	ImproverEmail        string          `json:"improver_email,omitempty"`
+	SubmittedAt          int64           `json:"submitted_at"`
+	StepNotPossible      bool            `json:"step_not_possible"`
+	StepNotPossibleNotes string          `json:"step_not_possible_details,omitempty"`
+	ItemResponses        json.RawMessage `json:"item_responses,omitempty"`
+	Photos               []workflowPhoto `json:"photos,omitempty"`
+}
+
+type workflowPhoto struct {
+	ID          string `json:"id"`
+	ItemID      string `json:"item_id"`
+	FileName    string `json:"file_name,omitempty"`
+	ContentType string `json:"content_type,omitempty"`
+	SizeBytes   int    `json:"size_bytes"`
+}
+
+// workflowDetail returns one workflow's header plus every step and the reported
+// submission data improvers filed. Photo BYTEA is never selected — only its
+// metadata — keeping the response light and secret-free.
+func (a *reportCore) workflowDetail(ctx context.Context, request mcp.CallToolRequest) (any, error) {
+	workflowID := strings.TrimSpace(request.GetString("workflow_id", ""))
+	if workflowID == "" {
+		return nil, fmt.Errorf("workflow_id is required")
+	}
+
+	var header map[string]any
+	steps := []workflowStepDetail{}
+
+	err := withReadOnlyTx(ctx, a.appDB, func(tx pgx.Tx) error {
+		var (
+			seriesID, wfStatus, proposerID, proposerEmail   string
+			title, description, recurrence, managerImprover string
+			startAt, createdAt, approvedAt                  int64
+			managerBounty, totalBounty                      string
+		)
+		err := tx.QueryRow(ctx, `
+			SELECT
+				w.series_id,
+				COALESCE(NULLIF(TRIM(st.title), ''), NULLIF(TRIM(s.title), ''), ''),
+				COALESCE(NULLIF(TRIM(st.description), ''), NULLIF(TRIM(s.description), ''), ''),
+				COALESCE(NULLIF(TRIM(st.recurrence), ''), NULLIF(TRIM(s.recurrence), ''), ''),
+				w.status,
+				w.proposer_id,
+				COALESCE(u.contact_email, ''),
+				w.start_at,
+				w.created_at,
+				COALESCE(w.approved_at, 0),
+				COALESCE(w.manager_improver_id, ''),
+				COALESCE(w.manager_bounty, 0)::text,
+				COALESCE(w.total_bounty, 0)::text
+			FROM workflows w
+			LEFT JOIN users u ON u.id = w.proposer_id
+			LEFT JOIN workflow_states st ON st.id = w.workflow_state_id
+			LEFT JOIN workflow_series s ON s.id = w.series_id
+			WHERE w.id = $1;
+		`, workflowID).Scan(
+			&seriesID, &title, &description, &recurrence, &wfStatus, &proposerID, &proposerEmail,
+			&startAt, &createdAt, &approvedAt, &managerImprover, &managerBounty, &totalBounty,
+		)
+		if err == pgx.ErrNoRows {
+			return fmt.Errorf("workflow %q not found", workflowID)
+		}
+		if err != nil {
+			return fmt.Errorf("query workflow header: %w", err)
+		}
+		header = map[string]any{
+			"id":                        workflowID,
+			"series_id":                 seriesID,
+			"title":                     title,
+			"description":               description,
+			"recurrence":                recurrence,
+			"status":                    wfStatus,
+			"proposer_id":               proposerID,
+			"proposer_email":            proposerEmail,
+			"start_at":                  startAt,
+			"created_at":                createdAt,
+			"approved_at":               approvedAt,
+			"manager_improver_id":       managerImprover,
+			"manager_bounty_sfluv_base": managerBounty,
+			"total_bounty_sfluv_base":   totalBounty,
+		}
+
+		rows, err := tx.Query(ctx, `
+			SELECT
+				ws.id,
+				ws.step_order,
+				ws.title,
+				ws.description,
+				COALESCE(ws.bounty, 0)::text,
+				ws.status,
+				COALESCE(r.title, ''),
+				COALESCE(ws.assigned_improver_id, ''),
+				COALESCE(iu.contact_email, ''),
+				COALESCE(ws.started_at, 0),
+				COALESCE(ws.completed_at, 0),
+				COALESCE(ws.payout_tx_hash, ''),
+				sub.id,
+				COALESCE(sub.improver_id, ''),
+				COALESCE(su.contact_email, ''),
+				COALESCE(sub.submitted_at, 0),
+				COALESCE(sub.step_not_possible, FALSE),
+				COALESCE(sub.step_not_possible_details, ''),
+				sub.item_responses
+			FROM workflow_steps ws
+			LEFT JOIN workflow_roles r ON r.id = ws.role_id
+			LEFT JOIN users iu ON iu.id = ws.assigned_improver_id
+			LEFT JOIN workflow_step_submissions sub ON sub.step_id = ws.id
+			LEFT JOIN users su ON su.id = sub.improver_id
+			WHERE ws.workflow_id = $1
+			ORDER BY ws.step_order ASC;
+		`, workflowID)
+		if err != nil {
+			return fmt.Errorf("query workflow steps: %w", err)
+		}
+		defer rows.Close()
+
+		subByID := map[string]*workflowStepSub{}
+		for rows.Next() {
+			var (
+				step                                               workflowStepDetail
+				subID, subImprover, subImproverEmail, notPossNotes sql.NullString
+				subSubmittedAt                                     sql.NullInt64
+				subNotPossible                                     sql.NullBool
+				itemResponses                                      []byte
+			)
+			if err := rows.Scan(
+				&step.StepID, &step.StepOrder, &step.Title, &step.Description, &step.BountySfluvBase,
+				&step.Status, &step.RoleTitle, &step.AssignedImproverID, &step.AssignedImproverEml,
+				&step.StartedAt, &step.CompletedAt, &step.PayoutTxHash,
+				&subID, &subImprover, &subImproverEmail, &subSubmittedAt, &subNotPossible, &notPossNotes, &itemResponses,
+			); err != nil {
+				return fmt.Errorf("scan workflow step: %w", err)
+			}
+			if subID.Valid && subID.String != "" {
+				sub := &workflowStepSub{
+					SubmissionID:         subID.String,
+					ImproverID:           subImprover.String,
+					ImproverEmail:        subImproverEmail.String,
+					SubmittedAt:          subSubmittedAt.Int64,
+					StepNotPossible:      subNotPossible.Bool,
+					StepNotPossibleNotes: notPossNotes.String,
+				}
+				if len(itemResponses) > 0 {
+					sub.ItemResponses = json.RawMessage(itemResponses)
+				}
+				step.Submission = sub
+				subByID[subID.String] = sub
+			}
+			steps = append(steps, step)
+		}
+		if err := rows.Err(); err != nil {
+			return err
+		}
+
+		// Attach photo metadata (never the bytes) to each submission.
+		if len(subByID) > 0 {
+			photoRows, err := tx.Query(ctx, `
+				SELECT submission_id, id, item_id, file_name, content_type, size_bytes
+				FROM workflow_submission_photos
+				WHERE workflow_id = $1
+				ORDER BY created_at ASC;
+			`, workflowID)
+			if err != nil {
+				return fmt.Errorf("query submission photos: %w", err)
+			}
+			defer photoRows.Close()
+			for photoRows.Next() {
+				var submissionID string
+				var photo workflowPhoto
+				if err := photoRows.Scan(&submissionID, &photo.ID, &photo.ItemID, &photo.FileName, &photo.ContentType, &photo.SizeBytes); err != nil {
+					return fmt.Errorf("scan submission photo: %w", err)
+				}
+				if sub := subByID[submissionID]; sub != nil {
+					sub.Photos = append(sub.Photos, photo)
+				}
+			}
+			if err := photoRows.Err(); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return map[string]any{
+		"generated_at": time.Now().UTC().Format(time.RFC3339),
+		"note":         "Bounties are $SFLUV base units (divide by 1,000,000). item_responses holds the improver's reported answers (written/dropdown/etc). Photo bytes are never returned — only metadata.",
+		"workflow":     header,
+		"steps":        steps,
 	}, nil
 }
 
@@ -1179,7 +1435,6 @@ func safeLimit(value int) int {
 func normalizeAddress(address string) string {
 	return strings.ToLower(strings.TrimSpace(address))
 }
-
 
 func formatNullTime(value sql.NullTime) string {
 	if !value.Valid {

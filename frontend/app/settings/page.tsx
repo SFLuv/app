@@ -5,6 +5,7 @@ import type React from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useApp } from "@/context/AppProvider";
+import { OrganizationPanel } from "@/components/organization/organization-panel";
 import PlaceAutocomplete from "@/components/merchant/google_place_finder";
 import {
   Card,
@@ -501,27 +502,16 @@ export default function SettingsPage() {
   );
 
   const availableTabs = useMemo(() => {
-    const tabs = ["account"];
+    // Affiliate, proposer, supervisor, and issuer are managed through the
+    // Organization tab now (role tools, rewards account, issuer scopes), so
+    // their standalone settings tabs are retired. Improver stays — it is not
+    // owned by an organization.
+    const tabs = ["account", "organization"];
     if (merchantStatus !== "none") tabs.push("merchant");
-    if (affiliateStatus === "pending" || affiliateStatus === "approved")
-      tabs.push("affiliate");
-    if (proposerStatus === "pending" || proposerStatus === "approved")
-      tabs.push("proposer");
     if (improverStatus === "pending" || improverStatus === "approved")
       tabs.push("improver");
-    if (issuerStatus === "pending" || issuerStatus === "approved")
-      tabs.push("issuer");
-    if (supervisorStatus === "pending" || supervisorStatus === "approved")
-      tabs.push("supervisor");
     return tabs;
-  }, [
-    affiliateStatus,
-    improverStatus,
-    issuerStatus,
-    merchantStatus,
-    proposerStatus,
-    supervisorStatus,
-  ]);
+  }, [improverStatus, merchantStatus]);
 
   useEffect(() => {
     const tab = searchParams.get("tab");
@@ -2207,23 +2197,12 @@ export default function SettingsPage() {
               Merchant
             </TabsTrigger>
           )}
-          {(affiliateStatus === "pending" ||
-            affiliateStatus === "approved") && (
-            <TabsTrigger
-              value="affiliate"
-              className="text-black dark:text-white flex-1"
-            >
-              Affiliate
-            </TabsTrigger>
-          )}
-          {(proposerStatus === "pending" || proposerStatus === "approved") && (
-            <TabsTrigger
-              value="proposer"
-              className="text-black dark:text-white flex-1"
-            >
-              Proposer
-            </TabsTrigger>
-          )}
+          <TabsTrigger
+            value="organization"
+            className="text-black dark:text-white flex-1"
+          >
+            Organization
+          </TabsTrigger>
           {(improverStatus === "pending" || improverStatus === "approved") && (
             <TabsTrigger
               value="improver"
@@ -2232,24 +2211,11 @@ export default function SettingsPage() {
               Improver
             </TabsTrigger>
           )}
-          {(issuerStatus === "pending" || issuerStatus === "approved") && (
-            <TabsTrigger
-              value="issuer"
-              className="text-black dark:text-white flex-1"
-            >
-              Issuer
-            </TabsTrigger>
-          )}
-          {(supervisorStatus === "pending" ||
-            supervisorStatus === "approved") && (
-            <TabsTrigger
-              value="supervisor"
-              className="text-black dark:text-white flex-1"
-            >
-              Supervisor
-            </TabsTrigger>
-          )}
         </TabsList>
+
+        <TabsContent value="organization">
+          <OrganizationPanel />
+        </TabsContent>
 
         <TabsContent value="account">
           {/* <div className="grid gap-6 md:grid-cols-2">
@@ -4305,154 +4271,7 @@ export default function SettingsPage() {
           </TabsContent>
         )}
 
-        {(affiliateStatus === "pending" || affiliateStatus === "approved") && (
-          <TabsContent value="affiliate">
-            <Card
-              className={
-                affiliateStatus === "approved"
-                  ? "border-green-300 dark:border-green-700"
-                  : "border-yellow-300 dark:border-yellow-700"
-              }
-            >
-              <CardHeader
-                className={`rounded-t-lg ${affiliateStatus === "approved" ? "bg-green-50 dark:bg-green-900/20" : "bg-yellow-50 dark:bg-yellow-900/20"}`}
-              >
-                <CardTitle className="text-black dark:text-white flex items-center">
-                  {affiliateStatus === "approved" ? (
-                    <Check className="h-5 w-5 text-green-500 mr-2" />
-                  ) : (
-                    <Clock className="h-5 w-5 text-yellow-500 mr-2" />
-                  )}
-                  Affiliate{" "}
-                  {affiliateStatus === "approved"
-                    ? "Status Approved"
-                    : "Request Pending"}
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="pt-4">
-                {affiliateStatus === "pending" && (
-                  <p className="text-gray-600 dark:text-gray-400">
-                    Your affiliate request for{" "}
-                    {affiliate?.organization || "your organization"} is under
-                    review.
-                  </p>
-                )}
-                {affiliateStatus === "approved" && (
-                  <div className="space-y-4">
-                    <p className="text-gray-600 dark:text-gray-400">
-                      You are approved to create affiliate events for{" "}
-                      {affiliate?.organization || "your organization"}.
-                    </p>
-                    <div className="space-y-3">
-                      <Label className="text-black dark:text-white">
-                        Affiliate Logo
-                      </Label>
-                      <div className="flex items-center gap-4">
-                        <div className="h-16 w-16 rounded-xl bg-secondary border border-muted flex items-center justify-center overflow-hidden">
-                          {affiliateLogoPreview ? (
-                            <img
-                              src={affiliateLogoPreview}
-                              alt="Affiliate logo"
-                              className="h-full w-full object-contain"
-                            />
-                          ) : (
-                            <span className="text-xs text-muted-foreground">
-                              No logo
-                            </span>
-                          )}
-                        </div>
-                        <div className="space-y-2">
-                          <Input
-                            type="file"
-                            accept="image/*"
-                            onChange={handleAffiliateLogoChange}
-                            className="text-black dark:text-white bg-secondary"
-                          />
-                          <Button
-                            type="button"
-                            variant="outline"
-                            className="bg-secondary text-[#eb6c6c] border-[#eb6c6c] hover:bg-[#eb6c6c] hover:text-white"
-                            disabled={
-                              !affiliateLogoPreview || affiliateLogoSaving
-                            }
-                            onClick={handleAffiliateLogoSave}
-                          >
-                            {affiliateLogoSaving ? (
-                              <>
-                                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                                Saving...
-                              </>
-                            ) : (
-                              "Save Logo"
-                            )}
-                          </Button>
-                        </div>
-                      </div>
-                      {affiliateLogoError && (
-                        <div className="flex items-center gap-2 text-red-600 text-sm p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
-                          <AlertTriangle className="h-4 w-4 flex-shrink-0" />
-                          <span>{affiliateLogoError}</span>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          </TabsContent>
-        )}
 
-        {(proposerStatus === "pending" || proposerStatus === "approved") && (
-          <TabsContent value="proposer">
-            <Card
-              className={
-                proposerStatus === "approved"
-                  ? "border-green-300 dark:border-green-700"
-                  : "border-yellow-300 dark:border-yellow-700"
-              }
-            >
-              <CardHeader
-                className={`rounded-t-lg ${proposerStatus === "approved" ? "bg-green-50 dark:bg-green-900/20" : "bg-yellow-50 dark:bg-yellow-900/20"}`}
-              >
-                <CardTitle className="text-black dark:text-white flex items-center">
-                  {proposerStatus === "approved" ? (
-                    <Check className="h-5 w-5 text-green-500 mr-2" />
-                  ) : (
-                    <Clock className="h-5 w-5 text-yellow-500 mr-2" />
-                  )}
-                  Proposer{" "}
-                  {proposerStatus === "approved"
-                    ? "Status Approved"
-                    : "Request Pending"}
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="pt-4">
-                {proposerStatus === "pending" && (
-                  <p className="text-gray-600 dark:text-gray-400">
-                    Your proposer request for{" "}
-                    {proposer?.organization || "your organization"} is under
-                    review.
-                  </p>
-                )}
-                {proposerStatus === "approved" && (
-                  <>
-                    <p className="text-gray-600 dark:text-gray-400 mb-4">
-                      You are approved to create workflows for{" "}
-                      {proposer?.organization || "your organization"}.
-                    </p>
-                    <Button
-                      variant="outline"
-                      className="bg-secondary text-[#eb6c6c] border-[#eb6c6c] hover:bg-[#eb6c6c] hover:text-white"
-                      onClick={() => router.push("/proposer")}
-                    >
-                      Open Proposer Panel
-                    </Button>
-                  </>
-                )}
-              </CardContent>
-            </Card>
-          </TabsContent>
-        )}
 
         {(improverStatus === "pending" || improverStatus === "approved") && (
           <TabsContent value="improver">
@@ -4589,195 +4408,6 @@ export default function SettingsPage() {
                       onClick={() => router.push("/improver")}
                     >
                       Open Improver Panel
-                    </Button>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          </TabsContent>
-        )}
-
-        {(issuerStatus === "pending" || issuerStatus === "approved") && (
-          <TabsContent value="issuer">
-            <Card
-              className={
-                issuerStatus === "approved"
-                  ? "border-green-300 dark:border-green-700"
-                  : "border-yellow-300 dark:border-yellow-700"
-              }
-            >
-              <CardHeader
-                className={`rounded-t-lg ${issuerStatus === "approved" ? "bg-green-50 dark:bg-green-900/20" : "bg-yellow-50 dark:bg-yellow-900/20"}`}
-              >
-                <CardTitle className="text-black dark:text-white flex items-center">
-                  {issuerStatus === "approved" ? (
-                    <Check className="h-5 w-5 text-green-500 mr-2" />
-                  ) : (
-                    <Clock className="h-5 w-5 text-yellow-500 mr-2" />
-                  )}
-                  Issuer{" "}
-                  {issuerStatus === "approved"
-                    ? "Status Approved"
-                    : "Request Pending"}
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="pt-4">
-                {issuerStatus === "pending" && (
-                  <p className="text-gray-600 dark:text-gray-400">
-                    Your issuer request for{" "}
-                    {issuer?.organization || "your organization"} is under
-                    review.
-                  </p>
-                )}
-                {issuerStatus === "approved" && (
-                  <p className="text-gray-600 dark:text-gray-400">
-                    You are approved to issue credentials on behalf of{" "}
-                    {issuer?.organization || "your organization"}.
-                  </p>
-                )}
-              </CardContent>
-            </Card>
-          </TabsContent>
-        )}
-
-        {(supervisorStatus === "pending" ||
-          supervisorStatus === "approved") && (
-          <TabsContent value="supervisor">
-            <Card
-              className={
-                supervisorStatus === "approved"
-                  ? "border-green-300 dark:border-green-700"
-                  : "border-yellow-300 dark:border-yellow-700"
-              }
-            >
-              <CardHeader
-                className={`rounded-t-lg ${supervisorStatus === "approved" ? "bg-green-50 dark:bg-green-900/20" : "bg-yellow-50 dark:bg-yellow-900/20"}`}
-              >
-                <CardTitle className="text-black dark:text-white flex items-center">
-                  {supervisorStatus === "approved" ? (
-                    <Check className="h-5 w-5 text-green-500 mr-2" />
-                  ) : (
-                    <Clock className="h-5 w-5 text-yellow-500 mr-2" />
-                  )}
-                  Supervisor{" "}
-                  {supervisorStatus === "approved"
-                    ? "Status Approved"
-                    : "Request Pending"}
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="pt-4">
-                {supervisorStatus === "pending" && (
-                  <p className="text-gray-600 dark:text-gray-400">
-                    Your supervisor request for{" "}
-                    {supervisor?.organization || "your organization"} is under
-                    review.
-                  </p>
-                )}
-                {supervisorStatus === "approved" && (
-                  <div className="space-y-4">
-                    <p className="text-gray-600 dark:text-gray-400">
-                      You are approved to supervise assigned workflows for{" "}
-                      {supervisor?.organization || "your organization"}.
-                    </p>
-                    <div className="space-y-3 rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-900/30">
-                      <div className="space-y-1">
-                        <Label
-                          htmlFor="supervisor-primary-rewards-account"
-                          className="text-black dark:text-white"
-                        >
-                          Primary Rewards Account
-                        </Label>
-                        <p className="text-xs text-gray-500 dark:text-gray-400">
-                          Supervisor workflow rewards are paid to this account.
-                          Your primary wallet is used by default until you
-                          choose a different rewards account here.
-                        </p>
-                      </div>
-                      <Select
-                        value={
-                          supervisorRewardsSelection ||
-                          CUSTOM_REWARDS_ACCOUNT_VALUE
-                        }
-                        onValueChange={(value) => {
-                          setSupervisorRewardsSelection(value);
-                          setSupervisorRewardsError("");
-                          setSupervisorRewardsSuccess("");
-                        }}
-                      >
-                        <SelectTrigger
-                          id="supervisor-primary-rewards-account"
-                          className="text-black dark:text-white bg-secondary"
-                        >
-                          <SelectValue
-                            placeholder={
-                              rewardsWalletsLoading
-                                ? "Loading accounts..."
-                                : "Select an account"
-                            }
-                          />
-                        </SelectTrigger>
-                        <SelectContent className="bg-secondary text-black dark:text-white">
-                          {rewardsAccountOptions.map((option) => (
-                            <SelectItem key={option.value} value={option.value}>
-                              {option.label}
-                            </SelectItem>
-                          ))}
-                          <SelectItem value={CUSTOM_REWARDS_ACCOUNT_VALUE}>
-                            Other
-                          </SelectItem>
-                        </SelectContent>
-                      </Select>
-                      {supervisorRewardsSelection ===
-                        CUSTOM_REWARDS_ACCOUNT_VALUE && (
-                        <Input
-                          value={supervisorCustomRewardsAccount}
-                          onChange={(e) => {
-                            setSupervisorCustomRewardsAccount(e.target.value);
-                            setSupervisorRewardsError("");
-                            setSupervisorRewardsSuccess("");
-                          }}
-                          placeholder="0x..."
-                          className="text-black dark:text-white bg-secondary"
-                        />
-                      )}
-                      {rewardsWalletsError && (
-                        <p className="text-sm text-red-600 dark:text-red-400">
-                          {rewardsWalletsError}
-                        </p>
-                      )}
-                      {supervisorRewardsError && (
-                        <p className="text-sm text-red-600 dark:text-red-400">
-                          {supervisorRewardsError}
-                        </p>
-                      )}
-                      {supervisorRewardsSuccess && (
-                        <p className="text-sm text-green-600 dark:text-green-400">
-                          {supervisorRewardsSuccess}
-                        </p>
-                      )}
-                      <Button
-                        type="button"
-                        variant="outline"
-                        className="bg-secondary text-[#eb6c6c] border-[#eb6c6c] hover:bg-[#eb6c6c] hover:text-white"
-                        onClick={handleSaveSupervisorRewardsAccount}
-                        disabled={supervisorRewardsSaving}
-                      >
-                        {supervisorRewardsSaving ? (
-                          <>
-                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                            Saving...
-                          </>
-                        ) : (
-                          "Save Rewards Account"
-                        )}
-                      </Button>
-                    </div>
-                    <Button
-                      variant="outline"
-                      className="bg-secondary text-[#eb6c6c] border-[#eb6c6c] hover:bg-[#eb6c6c] hover:text-white"
-                      onClick={() => router.push("/supervisor")}
-                    >
-                      Open Supervisor Panel
                     </Button>
                   </div>
                 )}

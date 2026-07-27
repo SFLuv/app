@@ -20,6 +20,40 @@ func isProduction() bool {
 	return strings.EqualFold(strings.TrimSpace(os.Getenv("IN_PRODUCTION")), "true")
 }
 
+// prankForwardingMiddleware swaps the authenticated user id in the request
+// context for a "prankee" user id when a local-dev prank has been set for the
+// caller, so the rest of the stack — role guards, data lookups, everything —
+// treats the request as if the prankee made it. This is what lets a developer
+// see exactly what another user sees.
+//
+// Safety: this is only mounted when !isProduction() (see New). As a second,
+// independent guard it re-checks IN_PRODUCTION on every request and no-ops in
+// production regardless of how it was wired, and it only forwards when the
+// pranks table exists AND holds a matching row — a table created solely by the
+// local dev CLI. It never fails a request: a missing table or any db error is
+// treated as "no prank" (handled in ResolvePrankTarget).
+func prankForwardingMiddleware(a *handlers.AppService) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if isProduction() {
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			prankerUserID, ok := r.Context().Value("userDid").(string)
+			if !ok || prankerUserID == "" {
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			if prankeeUserID, forwarded := a.ResolvePrankTarget(r.Context(), prankerUserID); forwarded {
+				r = r.WithContext(context.WithValue(r.Context(), "userDid", prankeeUserID))
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
 func parseOrigins(value string) []string {
 	entries := strings.Split(value, ",")
 	origins := make([]string, 0, len(entries))
@@ -98,6 +132,17 @@ func New(s *handlers.BotService, a *handlers.AppService, p *handlers.PonderServi
 	}))
 	r.Use(m.AuthMiddleware)
 
+	// Local-dev "prank" forwarding: lets a developer act as another user to see
+	// exactly what that user sees. It is wired ONLY when not in production, and
+	// even then only takes effect when a pranks table has been hand-populated by
+	// the local dev CLI (./dev-up.sh menu) — the middleware itself creates
+	// nothing. Two independent gates (this !isProduction() check AND the manual
+	// db write) must both be true for any forwarding to happen, so an accidental
+	// production build cannot be exploited without direct database access.
+	if !isProduction() {
+		r.Use(prankForwardingMiddleware(a))
+	}
+
 	// Admin MCP endpoint + its OAuth authorization server. It authenticates
 	// itself (OAuth access token bound to a SFLUV user DID + live admin check)
 	// independently of the header-based AuthMiddleware above, so
@@ -107,6 +152,7 @@ func New(s *handlers.BotService, a *handlers.AppService, p *handlers.PonderServi
 	}
 
 	AddBotRoutes(r, s, a)
+	AddOrganizationRoutes(r, a, s)
 	AddClientConfigRoutes(r, a)
 	AddUserRoutes(r, a)
 	AddAdminRoutes(r, a)
@@ -121,6 +167,30 @@ func New(s *handlers.BotService, a *handlers.AppService, p *handlers.PonderServi
 	AddUnwrapRoutes(r, a)
 
 	return r
+}
+
+func AddOrganizationRoutes(r *chi.Mux, a *handlers.AppService, s *handlers.BotService) {
+	// Membership-scoped org management. Fine-grained authorization (member vs
+	// admin vs superadmin) is enforced inside each handler via requireOrgRole,
+	// always resolved live from organization_members.
+	r.Get("/organizations/mine", withActiveAuth(a.GetMyOrganization, a))
+	r.Put("/organizations/mine/name", withActiveAuth(a.UpdateMyOrganizationName, a))
+	r.Put("/organizations/mine/logo", withActiveAuth(a.UpdateMyOrganizationLogo, a))
+	r.Post("/organizations/mine/invites", withActiveAuth(a.InviteOrganizationMember, a))
+	r.Delete("/organizations/mine/members/{user_id}", withActiveAuth(a.RemoveOrganizationMember, a))
+	r.Put("/organizations/mine/members/role", withActiveAuth(a.SetOrganizationMemberRole, a))
+	r.Post("/organizations/mine/transfer-superadmin", withActiveAuth(a.TransferOrganizationSuperadmin, a))
+	r.Post("/organizations/mine/leave", withActiveAuth(a.LeaveOrganization, a))
+	r.Post("/organizations/mine/roles/request", withActiveAuth(a.RequestOrganizationRole, a))
+	r.Post("/organizations/join", withActiveAuth(a.JoinOrganization, a))
+
+	// Platform-admin org controls.
+	r.Get("/admin/organizations", withAdmin(a.AdminListOrganizations, a))
+	r.Put("/admin/organizations/superadmin", withAdmin(a.AdminSetOrganizationSuperadmin, a))
+	r.Put("/admin/organizations/allocations", withAdmin(a.AdminSetOrganizationAllocations, a))
+	r.Put("/admin/organizations/roles", withAdmin(a.AdminSetOrganizationRoleStatus, a))
+	r.Put("/admin/organizations/issuer-scopes", withAdmin(a.AdminSetOrganizationIssuerScopes, a))
+	r.Get("/admin/organizations/{id}/events", withAdmin(s.AdminGetOrganizationEvents, a))
 }
 
 func AddClientConfigRoutes(r *chi.Mux, s *handlers.AppService) {
@@ -143,6 +213,7 @@ func AddBotRoutes(r *chi.Mux, s *handlers.BotService, a *handlers.AppService) {
 
 func AddUserRoutes(r *chi.Mux, s *handlers.AppService) {
 	r.Post("/users", withAuth(s.AddUser))
+	r.Get("/users/bootstrap", withAuth(s.GetUserBootstrap))
 	r.Get("/users/policy-status", withAuth(s.GetUserPolicyStatus))
 	r.Post("/users/policies/accept", withAuth(s.AcceptUserPolicies))
 	r.Get("/users", withActiveAuth(s.GetUserAuthed, s))
@@ -229,7 +300,11 @@ func AddWorkflowRoutes(r *chi.Mux, s *handlers.BotService, a *handlers.AppServic
 	r.Get("/admin/supervisors", withAdmin(a.GetSupervisors, a))
 	r.Put("/admin/supervisors", withAdmin(a.UpdateSupervisor, a))
 	r.Get("/admin/issuers", withAdmin(a.GetIssuers, a))
-	r.Put("/admin/issuers", withAdmin(a.UpdateIssuerScopes, a))
+	// Per-user issuer credential scopes are owned by organizations now
+	// (organization_issuer_scopes + syncMemberIssuerScopesTx). The legacy
+	// full-replace writer (SetIssuerScopes) blind-deletes by issuer_id, which
+	// would wipe org-derived rows, so its route is retired — issuance settings
+	// are managed via PUT /admin/organizations/issuer-scopes.
 	r.Get("/admin/issuer-requests", withAdmin(a.GetIssuerRequests, a))
 	r.Put("/admin/issuer-requests", withAdmin(a.UpdateIssuerRequest, a))
 	r.Get("/admin/credential-types", withAdmin(a.GetAdminCredentialTypes, a))
