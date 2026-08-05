@@ -1,11 +1,18 @@
 "use client"
 
-import { useCallback, useEffect, useState } from "react"
-import { AlertTriangle, CheckCircle2, Clock, Download, Loader2, Megaphone, QrCode, XCircle } from "lucide-react"
+import { useCallback, useEffect, useRef, useState } from "react"
+import { AlertTriangle, CheckCircle2, Clock, Download, Leaf, Loader2, Megaphone, Pencil, QrCode, XCircle } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useApp } from "@/context/AppProvider"
@@ -23,7 +30,9 @@ export interface ManagedVolunteerEvent {
   status: string
   review_status?: string
   funding_status?: string
-  organizer: { type: string; name: string }
+  organizer: { type: string; name: string; logo_url?: string | null }
+  cover_photos?: { id: string; url: string; position: number }[]
+  description?: string
   recurrence: { summary: string } | null
   qr?: { live: boolean; live_at: string | null; codes_generated: boolean }
 }
@@ -35,14 +44,18 @@ interface VolunteerEventsManagerProps {
   canReview: boolean
   title?: string
   description?: string
+  /** Called when a card is opened, so the parent can offer an edit form. */
+  onOpenEvent?: (event: ManagedVolunteerEvent) => void
+  /** Shown in the detail panel when the caller supports editing. */
+  onEditEvent?: (event: ManagedVolunteerEvent) => void
 }
 
 const REVIEW_FILTERS = [
+  { value: "all", label: "All events" },
   { value: "pending", label: "Awaiting approval" },
   { value: "approved", label: "Approved" },
   { value: "rejected", label: "Rejected" },
   { value: "cancelled", label: "Cancelled" },
-  { value: "all", label: "All" },
 ]
 
 function formatEventWhen(event: ManagedVolunteerEvent): string {
@@ -115,18 +128,28 @@ export function VolunteerEventsManager({
   canReview,
   title = "Volunteer Events",
   description = "Approve requests, download QR codes, and manage published events.",
+  onOpenEvent,
+  onEditEvent,
 }: VolunteerEventsManagerProps) {
   const { authFetch } = useApp()
   const { toast } = useToast()
   const [events, setEvents] = useState<ManagedVolunteerEvent[]>([])
-  const [reviewFilter, setReviewFilter] = useState(canReview ? "pending" : "all")
+  const [reviewFilter, setReviewFilter] = useState("all")
   const [search, setSearch] = useState("")
-  const [loading, setLoading] = useState(false)
   const [busyId, setBusyId] = useState("")
+  const [openEvent, setOpenEvent] = useState<ManagedVolunteerEvent | null>(null)
   const [error, setError] = useState("")
+  // First-load-only spinner. The poll below must never blank a list the user is
+  // reading, so the placeholder is gated on whether we have ever loaded rather
+  // than on whether a request is in flight.
+  const [initialLoading, setInitialLoading] = useState(true)
+  const hasLoadedRef = useRef(false)
+  // Signature of the last rendered payload. State is only replaced when this
+  // changes, so a poll that finds nothing new causes no re-render at all — no
+  // flash, no scroll jump, no dropdown closing under the user.
+  const signatureRef = useRef("")
 
   const loadEvents = useCallback(async () => {
-    setLoading(true)
     setError("")
     try {
       const params = new URLSearchParams({ count: "50" })
@@ -136,17 +159,51 @@ export function VolunteerEventsManager({
       const res = await authFetch(`${basePath}?${params.toString()}`)
       if (!res.ok) throw new Error("Unable to load volunteer events.")
       const data = await res.json()
-      setEvents(data.events || [])
+      const next: ManagedVolunteerEvent[] = data.events || []
+
+      const signature = JSON.stringify(
+        next.map((event) => [
+          event.id,
+          event.review_status,
+          event.status,
+          event.funding_status,
+          event.signup_count,
+          event.qr?.codes_generated,
+          event.qr?.live,
+        ]),
+      )
+      if (signature !== signatureRef.current) {
+        signatureRef.current = signature
+        setEvents(next)
+        // Keep an open detail panel in step with the poll instead of showing a
+        // snapshot from whenever it was opened.
+        setOpenEvent((current) => (current ? next.find((event) => event.id === current.id) ?? null : null))
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to load volunteer events.")
     } finally {
-      setLoading(false)
+      hasLoadedRef.current = true
+      setInitialLoading(false)
     }
   }, [authFetch, basePath, reviewFilter, search])
 
   useEffect(() => {
+    // A filter or search change is a different query, so the cached signature
+    // no longer describes what should be on screen.
+    signatureRef.current = ""
     void loadEvents()
   }, [loadEvents])
+
+  // Approval state advances server-side — the maintenance sweep generates
+  // recurring occurrences, mints codes after a faucet top-up, and flips QR
+  // codes live. Poll for those rather than making the admin reload, and rely on
+  // the signature check to stay silent when nothing has moved.
+  useEffect(() => {
+    const timer = setInterval(() => {
+      if (busyId === "") void loadEvents()
+    }, 30_000)
+    return () => clearInterval(timer)
+  }, [loadEvents, busyId])
 
   const review = async (event: ManagedVolunteerEvent, action: "approve" | "reject" | "cancel") => {
     let reason = ""
@@ -259,8 +316,8 @@ export function VolunteerEventsManager({
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
           {title}
-          {canReview && pendingCount > 0 && reviewFilter === "pending" && (
-            <Badge className="bg-amber-500">{pendingCount} awaiting</Badge>
+          {canReview && pendingCount > 0 && (
+            <Badge className="bg-amber-500">{pendingCount} awaiting approval</Badge>
           )}
         </CardTitle>
         <CardDescription>{description}</CardDescription>
@@ -283,99 +340,156 @@ export function VolunteerEventsManager({
           </Select>
         </div>
 
-        {loading && (
+        {initialLoading && (
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <Loader2 className="h-4 w-4 animate-spin" /> Loading…
           </div>
         )}
         {error !== "" && <p className="text-sm text-destructive">{error}</p>}
-        {!loading && error === "" && events.length === 0 && (
+        {!initialLoading && error === "" && events.length === 0 && (
           <p className="text-sm text-muted-foreground">
             {reviewFilter === "pending" ? "No events are awaiting approval." : "No events here yet."}
           </p>
         )}
 
-        <div className="space-y-3">
-          {events.map((event) => (
-            <div key={event.id} className="rounded-lg border p-4">
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                <div className="min-w-0 space-y-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="font-medium">{event.title}</span>
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+          {events.map((event) => {
+            const cover = [...(event.cover_photos || [])].sort((a, b) => a.position - b.position)[0]
+            return (
+              <button
+                key={event.id}
+                type="button"
+                onClick={() => {
+                  setOpenEvent(event)
+                  onOpenEvent?.(event)
+                }}
+                // Uniform height regardless of title length or whether an image
+                // exists, so a grid of cards never looks ragged.
+                className="flex h-full flex-col overflow-hidden rounded-xl border text-left transition-shadow hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+              >
+                <div className="relative h-32 w-full shrink-0 overflow-hidden bg-muted">
+                  {cover ? (
+                    // eslint-disable-next-line @next/next/no-img-element -- API host at arbitrary aspect ratios
+                    <img src={cover.url} alt="" className="h-full w-full object-cover" />
+                  ) : (
+                    // Styled filler at exactly the image's size, so a card
+                    // without a photo occupies the same space as one with.
+                    <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-[#ff8a8a] via-[#eb6c6c] to-[#d55c5c]">
+                      <Leaf className="h-8 w-8 text-white/70" />
+                    </div>
+                  )}
+                  <div className="absolute left-2 top-2 flex flex-wrap gap-1">
                     <ReviewBadge event={event} />
-                    <QrBadge event={event} />
-                  </div>
-                  <div className="text-sm text-muted-foreground">
-                    {formatEventWhen(event)} · {event.organizer.name}
-                    {event.recurrence?.summary ? ` · ${event.recurrence.summary}` : ""}
-                  </div>
-                  <div className="text-sm text-muted-foreground">
-                    {event.signup_count ?? 0}/{event.max_participants} signed up ·{" "}
-                    {event.reward_amount_sfluv} SFLUV each ·{" "}
-                    reserves {event.reward_amount_sfluv * event.max_participants} SFLUV
                   </div>
                 </div>
 
-                <div className="flex flex-wrap items-center gap-2">
-                  {event.qr?.codes_generated && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={busyId === event.id}
-                      onClick={() => downloadCodes(event)}
-                    >
+                <div className="flex min-h-0 flex-1 flex-col gap-2 p-4">
+                  <div className="line-clamp-2 font-medium leading-snug">{event.title}</div>
+                  <div className="text-xs text-muted-foreground">
+                    {formatEventWhen(event)} · {event.organizer.name}
+                  </div>
+                  {event.recurrence?.summary && (
+                    <div className="text-xs text-muted-foreground">{event.recurrence.summary}</div>
+                  )}
+                  <div className="mt-auto flex flex-wrap items-center gap-2 pt-2 text-xs text-muted-foreground">
+                    <QrBadge event={event} />
+                    <span>
+                      {event.signup_count ?? 0}/{event.max_participants} · {event.reward_amount_sfluv} SFLUV each
+                    </span>
+                  </div>
+                </div>
+              </button>
+            )
+          })}
+        </div>
+      </CardContent>
+
+      <Dialog open={openEvent !== null} onOpenChange={(next) => !next && setOpenEvent(null)}>
+        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
+          {openEvent && (
+            <>
+              <DialogHeader>
+                <DialogTitle>{openEvent.title}</DialogTitle>
+                <DialogDescription>
+                  {formatEventWhen(openEvent)} · {openEvent.organizer.name}
+                </DialogDescription>
+              </DialogHeader>
+
+              <div className="space-y-4">
+                <div className="flex flex-wrap gap-2">
+                  <ReviewBadge event={openEvent} />
+                  <QrBadge event={openEvent} />
+                </div>
+
+                {openEvent.description && (
+                  <p className="whitespace-pre-line text-sm text-muted-foreground">{openEvent.description}</p>
+                )}
+
+                <div className="grid grid-cols-2 gap-3 text-sm">
+                  <div>
+                    <div className="text-xs text-muted-foreground">Signed up</div>
+                    <div>{openEvent.signup_count ?? 0} / {openEvent.max_participants}</div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-muted-foreground">Reward each</div>
+                    <div>{openEvent.reward_amount_sfluv} SFLUV</div>
+                  </div>
+                  {openEvent.recurrence?.summary && (
+                    <div className="col-span-2">
+                      <div className="text-xs text-muted-foreground">Repeats</div>
+                      <div>{openEvent.recurrence.summary}</div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex flex-wrap gap-2 border-t pt-4">
+                  {onEditEvent && openEvent.status !== "ended" && (
+                    <Button variant="outline" size="sm" onClick={() => onEditEvent(openEvent)}>
+                      <Pencil className="mr-2 h-3.5 w-3.5" />
+                      Edit
+                    </Button>
+                  )}
+                  {openEvent.qr?.codes_generated && (
+                    <Button variant="outline" size="sm" disabled={busyId === openEvent.id} onClick={() => downloadCodes(openEvent)}>
                       <Download className="mr-2 h-3.5 w-3.5" />
                       QR codes
                     </Button>
                   )}
-
-                  {event.review_status === "approved" && (event.signup_count ?? 0) > 0 && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={busyId === event.id}
-                      onClick={() => sendBlast(event)}
-                    >
+                  {openEvent.review_status === "approved" && (openEvent.signup_count ?? 0) > 0 && (
+                    <Button variant="outline" size="sm" disabled={busyId === openEvent.id} onClick={() => sendBlast(openEvent)}>
                       <Megaphone className="mr-2 h-3.5 w-3.5" />
                       Message volunteers
                     </Button>
                   )}
-
-                  {canReview && event.review_status === "pending" && (
+                  {canReview && openEvent.review_status === "pending" && (
                     <>
-                      <Button size="sm" disabled={busyId === event.id} onClick={() => review(event, "approve")}>
+                      <Button size="sm" disabled={busyId === openEvent.id} onClick={() => review(openEvent, "approve")}>
                         <CheckCircle2 className="mr-2 h-3.5 w-3.5" />
                         Approve
                       </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        disabled={busyId === event.id}
-                        onClick={() => review(event, "reject")}
-                      >
+                      <Button variant="outline" size="sm" disabled={busyId === openEvent.id} onClick={() => review(openEvent, "reject")}>
                         <XCircle className="mr-2 h-3.5 w-3.5" />
                         Reject
                       </Button>
                     </>
                   )}
-
-                  {canReview && event.review_status === "approved" && event.status !== "cancelled" && (
+                  {canReview && openEvent.review_status === "approved" && openEvent.status !== "cancelled" && (
                     <Button
                       variant="ghost"
                       size="sm"
                       className="text-destructive"
-                      disabled={busyId === event.id}
-                      onClick={() => review(event, "cancel")}
+                      disabled={busyId === openEvent.id}
+                      onClick={() => review(openEvent, "cancel")}
                     >
                       Cancel event
                     </Button>
                   )}
                 </div>
               </div>
-            </div>
-          ))}
-        </div>
-      </CardContent>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
     </Card>
   )
 }

@@ -579,6 +579,18 @@ func (s *BotDB) EventUnredeemedValue(ctx context.Context, id string) (uint64, er
 	return value, nil
 }
 
+// ErrEventHasRedemptions is returned when an event cannot be deleted because
+// volunteers have already redeemed codes against it.
+var ErrEventHasRedemptions = errors.New("event has redemptions")
+
+// DeleteEvent removes an event and its unredeemed codes.
+//
+// Deletion is REFUSED once any code has been redeemed. redemptions.code is a
+// foreign key onto codes with no ON DELETE action, so the delete would fail on
+// the constraint regardless — but more importantly those rows are the record of
+// who was actually paid, and the unique (address, event) index built on them is
+// what stops the same wallet redeeming twice. Destroying that to tidy up an
+// event is not a trade worth making; cancel the event instead.
 func (s *BotDB) DeleteEvent(ctx context.Context, id string) error {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
@@ -586,7 +598,20 @@ func (s *BotDB) DeleteEvent(ctx context.Context, id string) error {
 	}
 	defer tx.Rollback(ctx)
 
-	fmt.Println(id)
+	// Checked inside the transaction so a redemption landing concurrently
+	// cannot slip in between the check and the delete.
+	var redemptionCount int
+	if err := tx.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM redemptions r
+		JOIN codes c ON c.id = r.code
+		WHERE c.event = $1;
+	`, id).Scan(&redemptionCount); err != nil {
+		return fmt.Errorf("error counting redemptions for event %s: %s", id, err)
+	}
+	if redemptionCount > 0 {
+		return ErrEventHasRedemptions
+	}
 
 	_, err = tx.Exec(ctx, `
 		DELETE FROM
@@ -746,7 +771,10 @@ func (s *BotDB) Redeem(ctx context.Context, id string, account string, chainID i
 	}
 	defer tx.Rollback(context.Background())
 
-	// Redemption opens at qr_live_at when set, else at start_at. Volunteer
+	// Redemption opens at qr_live_at when set, else at start_at, and closes at
+	// qr_expires_at when set, else at the event end. Volunteer events default the
+	// cutoff to 24h after the end so someone still in the queue when it wraps up
+	// can still redeem; legacy events leave both NULL and behave as before. Volunteer
 	// events set qr_live_at to start_at - 24h so their codes can be printed and
 	// distributed ahead of time but only become spendable the day before the
 	// event; legacy faucet events leave it NULL and keep gating on start_at
@@ -757,7 +785,7 @@ func (s *BotDB) Redeem(ctx context.Context, id string, account string, chainID i
 			c.redeemed,
 			e.amount,
 			COALESCE(e.qr_live_at, e.start_at),
-			e.expiration
+			COALESCE(e.qr_expires_at, e.expiration)
 		FROM
 			codes c
 		JOIN
@@ -1076,4 +1104,20 @@ func (s *BotDB) AllocatedBalanceByOrganization(ctx context.Context, orgId int64)
 	}
 
 	return allocated, nil
+}
+
+// IsVolunteerEvent reports whether an event belongs to the volunteer portal.
+//
+// Volunteer events reserve faucet funds through event_allocations rather than
+// the legacy per-cycle organization balance, so the legacy delete/refund path
+// must not touch them — refunding one there would credit a ledger it never
+// debited.
+func (s *BotDB) IsVolunteerEvent(ctx context.Context, id string) (bool, error) {
+	var isVolunteer bool
+	if err := s.db.QueryRow(ctx, `
+		SELECT COALESCE(is_volunteer, FALSE) FROM events WHERE id = $1;
+	`, id).Scan(&isVolunteer); err != nil {
+		return false, err
+	}
+	return isVolunteer, nil
 }

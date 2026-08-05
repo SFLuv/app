@@ -1060,6 +1060,63 @@ var schemaMigrations = []SchemaMigration{
 			return nil
 		},
 	},
+	{
+		Version:     "1.30",
+		Description: "explicit QR redemption cutoff for volunteer events",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			// Codes previously expired the moment the event ended, which left no
+			// room for someone still in the queue. The redemption window now runs
+			// to a separate cutoff, defaulting to 24h after the end. NULL means
+			// "fall back to the event end", so legacy events are unchanged.
+			if _, err := pools.Bot.Exec(ctx, `
+				ALTER TABLE events
+					ADD COLUMN IF NOT EXISTS qr_expires_at BIGINT;
+
+				UPDATE events
+				SET qr_expires_at = expiration + 86400
+				WHERE is_volunteer = TRUE AND qr_expires_at IS NULL AND expiration > 0;
+			`); err != nil {
+				return err
+			}
+
+			return nil
+		},
+	},
+	{
+		Version:     "1.31",
+		Description: "affiliate event edit requests awaiting admin approval",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			// An affiliate editing a LIVE event cannot apply it directly: the
+			// change may raise the reward cost, and committing faucet funds is an
+			// admin decision. The proposed payload is parked here and applied on
+			// approval, so the published event is never disturbed by a request
+			// that may be refused.
+			if _, err := pools.Bot.Exec(ctx, `
+				CREATE TABLE IF NOT EXISTS event_edit_requests(
+					id TEXT PRIMARY KEY,
+					event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+					requested_by TEXT NOT NULL DEFAULT '',
+					payload TEXT NOT NULL,
+					status TEXT NOT NULL DEFAULT 'pending',
+					reject_reason TEXT NOT NULL DEFAULT '',
+					created_at BIGINT NOT NULL DEFAULT EXTRACT(EPOCH FROM NOW())::BIGINT,
+					decided_at BIGINT,
+					decided_by TEXT NOT NULL DEFAULT ''
+				);
+
+				CREATE INDEX IF NOT EXISTS event_edit_requests_event_idx
+					ON event_edit_requests(event_id, created_at DESC);
+				-- At most one open request per event, so approving one cannot be
+				-- racing another written against different values.
+				CREATE UNIQUE INDEX IF NOT EXISTS event_edit_requests_open_idx
+					ON event_edit_requests(event_id) WHERE status = 'pending';
+			`); err != nil {
+				return err
+			}
+
+			return nil
+		},
+	},
 }
 
 // migrateLocationHoursUniqueness enforces at most one hours row per weekday per

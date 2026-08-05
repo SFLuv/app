@@ -24,13 +24,12 @@ import (
 )
 
 type BotService struct {
-	db                 *db.BotDB
-	appDb              *db.AppDB
-	bot                bot.IBot
-	w9                 *W9Service
-	affiliateScheduler *AffiliateScheduler
-	activeChainID      int64
-	readRPCURL         string
+	db            *db.BotDB
+	appDb         *db.AppDB
+	bot           bot.IBot
+	w9            *W9Service
+	activeChainID int64
+	readRPCURL    string
 	// app is a back-reference used for shared concerns that live on AppService
 	// (styled email, logging). Set after construction because the two services
 	// reference each other.
@@ -46,15 +45,14 @@ func (s *BotService) SetAppService(a *AppService) {
 
 var redeemCodeUUIDPattern = regexp.MustCompile(`(?i)[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}`)
 
-func NewBotService(db *db.BotDB, appDb *db.AppDB, bot bot.IBot, w9 *W9Service, affiliateScheduler *AffiliateScheduler, activeChainID int64, readRPCURL string) *BotService {
+func NewBotService(db *db.BotDB, appDb *db.AppDB, bot bot.IBot, w9 *W9Service, activeChainID int64, readRPCURL string) *BotService {
 	return &BotService{
-		db:                 db,
-		appDb:              appDb,
-		bot:                bot,
-		w9:                 w9,
-		affiliateScheduler: affiliateScheduler,
-		activeChainID:      activeChainID,
-		readRPCURL:         readRPCURL,
+		db:            db,
+		appDb:         appDb,
+		bot:           bot,
+		w9:            w9,
+		activeChainID: activeChainID,
+		readRPCURL:    readRPCURL,
 	}
 }
 
@@ -407,6 +405,12 @@ func (s *BotService) GetCodesRequest(w http.ResponseWriter, r *http.Request) {
 	w.Write(bytes)
 }
 
+// DeleteEvent removes an event and its unredeemed codes.
+//
+// There is no refund step any more: standing per-cycle organization balances
+// were retired along with self-serve event creation. Faucet capacity is now
+// measured directly from outstanding codes, so deleting an event releases its
+// committed value simply by removing those codes — nothing to credit back.
 func (s *BotService) DeleteEvent(w http.ResponseWriter, r *http.Request) {
 	event := r.PathValue("event")
 	if event == "" {
@@ -414,23 +418,12 @@ func (s *BotService) DeleteEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// If the event belongs to an organization, refund its unredeemed value to
-	// that org's allocation balances before deleting.
-	if s.appDb != nil {
-		if eventOrg, err := s.db.GetEventOrganization(r.Context(), event); err == nil && eventOrg != 0 {
-			freed, err := s.db.EventUnredeemedValue(r.Context(), event)
-			if err == nil && freed > 0 {
-				if err := s.appDb.RefundOrganizationBalance(r.Context(), eventOrg, freed); err != nil {
-					fmt.Printf("error refunding organization balance for event %s: %s\n", event, err)
-				}
-			} else if err != nil {
-				fmt.Printf("error getting event unredeemed value for event %s refund: %s\n", event, err)
-			}
+	if err := s.db.DeleteEvent(r.Context(), event); err != nil {
+		if errors.Is(err, db.ErrEventHasRedemptions) {
+			w.WriteHeader(http.StatusConflict)
+			w.Write([]byte("this event has redemptions and cannot be deleted; cancel it instead so the payout record is kept"))
+			return
 		}
-	}
-
-	err := s.db.DeleteEvent(r.Context(), event)
-	if err != nil {
 		fmt.Printf("error deleting event %s: %s\n", event, err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
@@ -453,160 +446,6 @@ func (s *BotService) requireOrg(ctx context.Context, userDid string) (int64, err
 		return 0, pgx.ErrNoRows
 	}
 	return org.Id, nil
-}
-
-func (s *BotService) AffiliateNewEvent(w http.ResponseWriter, r *http.Request) {
-	body := EnsureBody(w, r)
-	if body == nil {
-		return
-	}
-
-	userDid := utils.GetDid(r)
-	if userDid == nil {
-		w.WriteHeader(http.StatusForbidden)
-		return
-	}
-
-	orgId, err := s.requireOrg(r.Context(), *userDid)
-	if err != nil {
-		w.WriteHeader(http.StatusForbidden)
-		return
-	}
-
-	var event *structs.Event
-	if !EnsureUnmarshal(w, &event, body) {
-		return
-	}
-	event.Owner = *userDid
-	event.OrganizationId = orgId
-	if err := validateEventTiming(event); err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		switch err.Error() {
-		case "start_at_required":
-			w.Write([]byte("start_at is required"))
-		case "expiration_required":
-			w.Write([]byte("expiration is required"))
-		case "start_at_elapsed":
-			w.Write([]byte("start_at must not be in the past"))
-		case "expiration_elapsed":
-			w.Write([]byte("expiration must not be in the past"))
-		case "expiration_before_start_at":
-			w.Write([]byte("expiration must be after start_at"))
-		default:
-			w.Write([]byte("invalid event timing"))
-		}
-		return
-	}
-
-	eventTotal := uint64(event.Amount) * uint64(event.Codes)
-	err = s.appDb.ReserveOrganizationBalance(r.Context(), orgId, eventTotal)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			w.WriteHeader(http.StatusForbidden)
-			return
-		}
-		if errors.Is(err, db.ErrOrgInsufficientFunds) {
-			w.WriteHeader(http.StatusBadRequest)
-			w.Write([]byte("insufficient affiliate balance"))
-			return
-		}
-		fmt.Printf("error reserving organization balance: %s\n", err)
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
-	refund := func() {
-		if err := s.appDb.RefundOrganizationBalance(r.Context(), orgId, eventTotal); err != nil {
-			fmt.Printf("error refunding organization balance: %s\n", err)
-		}
-	}
-
-	decimals, err := strconv.Atoi(os.Getenv("TOKEN_DECIMALS"))
-	if err != nil {
-		fmt.Println("invalid token decimals in .env")
-		refund()
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
-	eventTotalBig := new(big.Int).SetUint64(eventTotal)
-	eventTotalBig.Mul(eventTotalBig, big.NewInt(int64(decimals)))
-
-	faucetBalance, err := s.bot.Balance()
-	if err != nil {
-		fmt.Printf("error getting current bot balance: %s\n", err)
-		refund()
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
-	allocatedBalance, err := s.totalAllocatedBalance(r.Context())
-	if err != nil {
-		fmt.Printf("error getting allocated balance for faucet: %s", err)
-		refund()
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
-	bigAllocated := big.NewInt(int64(allocatedBalance))
-	bigAllocated.Mul(bigAllocated, big.NewInt(int64(decimals)))
-
-	unallocated := bigAllocated.Sub(faucetBalance, bigAllocated)
-
-	if eventTotalBig.Cmp(unallocated) > 0 {
-		fmt.Println("total event rewards should not exceed unallocated balance")
-		adminEmail := os.Getenv("AFFILIATE_ADMIN_EMAIL")
-		emailSender := utils.NewEmailSender()
-		if adminEmail != "" && emailSender != nil {
-			availableTokens := new(big.Int).Div(unallocated, big.NewInt(int64(decimals)))
-			subject := "Failed Affiliate Event Creation (Faucet Balance)"
-			details := fmt.Sprintf(`
-<table role="presentation" width="100%%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
-  <tr>
-    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280; width:180px;">Affiliate</td>
-    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827; word-break:break-all;">%s</td>
-  </tr>
-  <tr>
-    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280;">Required Balance</td>
-    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827;">%d SFLuv</td>
-  </tr>
-  <tr>
-    <td style="padding:12px 0; font-size:13px; color:#6b7280;">Available Faucet Balance</td>
-    <td style="padding:12px 0; font-size:13px; color:#111827;">%s SFLuv</td>
-  </tr>
-</table>`, utils.EscapeEmailHTML(*userDid), eventTotal, utils.EscapeEmailHTML(availableTokens.String()))
-
-			htmlContent := utils.BuildStyledEmail(
-				"Failed Affiliate Event Creation",
-				"Affiliate event creation failed due to faucet balance.",
-				details,
-			)
-
-			err = emailSender.SendEmail(adminEmail, "Admin", subject, htmlContent, utils.NotificationFromEmail(), "SFLuv Affiliates")
-			if err != nil {
-				fmt.Printf("error sending affiliate faucet balance email: %s\n", err)
-			}
-		}
-		refund()
-		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte("Not enough balance in faucet. Please try again later, or contact us at admin@sfluv.org."))
-		return
-	}
-
-	id, err := s.db.NewEvent(r.Context(), event)
-	if err != nil {
-		fmt.Println(err)
-		refund()
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
-	if s.affiliateScheduler != nil {
-		s.affiliateScheduler.ScheduleEventExpiration(id, *userDid, event.Expiration)
-	}
-
-	w.WriteHeader(http.StatusCreated)
-	w.Write([]byte(id))
 }
 
 // AdminGetOrganizationEvents lists a specific organization's events for the
@@ -643,217 +482,6 @@ func (s *BotService) AdminGetOrganizationEvents(w http.ResponseWriter, r *http.R
 
 	w.WriteHeader(http.StatusOK)
 	w.Write(bytes)
-}
-
-func (s *BotService) AffiliateGetEvents(w http.ResponseWriter, r *http.Request) {
-	params := r.URL.Query()
-	page, count := parsePageAndCount(params, 10, 100)
-	search := params.Get("search")
-	expired := params.Get("expired") == "true"
-
-	userDid := utils.GetDid(r)
-	if userDid == nil {
-		w.WriteHeader(http.StatusForbidden)
-		return
-	}
-
-	orgId, err := s.requireOrg(r.Context(), *userDid)
-	if err != nil {
-		w.WriteHeader(http.StatusForbidden)
-		return
-	}
-
-	events, err := s.db.GetEventsByOrganization(r.Context(), &structs.EventsRequest{
-		Page:    page,
-		Count:   count,
-		Search:  search,
-		Expired: expired,
-	}, orgId)
-	if err != nil {
-		fmt.Printf("error getting affiliate events: page %d, count %d, search %s, expired %t\n: %s", page, count, search, expired, err)
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
-	bytes, err := json.Marshal(events)
-	if err != nil {
-		fmt.Printf("error marshalling events bytes: %s\n", err)
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
-	w.WriteHeader(http.StatusOK)
-	w.Write(bytes)
-}
-
-func (s *BotService) AffiliateGetCodes(w http.ResponseWriter, r *http.Request) {
-	params := r.URL.Query()
-
-	event := r.PathValue("event")
-	if event == "" {
-		w.WriteHeader(http.StatusBadRequest)
-		return
-	}
-	page, count := parsePageAndCount(params, 100, 200)
-
-	userDid := utils.GetDid(r)
-	if userDid == nil {
-		w.WriteHeader(http.StatusForbidden)
-		return
-	}
-
-	orgId, err := s.requireOrg(r.Context(), *userDid)
-	if err != nil {
-		w.WriteHeader(http.StatusForbidden)
-		return
-	}
-	eventOrg, err := s.db.GetEventOrganization(r.Context(), event)
-	if err != nil {
-		w.WriteHeader(http.StatusNotFound)
-		return
-	}
-	if eventOrg == 0 || eventOrg != orgId {
-		w.WriteHeader(http.StatusForbidden)
-		return
-	}
-
-	codes, err := s.GetCodes(event, count, page)
-	if err != nil {
-		fmt.Println(err)
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-	if len(codes) == 0 {
-		w.WriteHeader(http.StatusNotFound)
-		return
-	}
-
-	bytes, err := json.Marshal(codes)
-	if err != nil {
-		fmt.Println(err)
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
-	w.WriteHeader(http.StatusOK)
-	w.Write(bytes)
-}
-
-func (s *BotService) AffiliateDeleteEvent(w http.ResponseWriter, r *http.Request) {
-	event := r.PathValue("event")
-	if event == "" {
-		w.WriteHeader(http.StatusBadRequest)
-		return
-	}
-
-	userDid := utils.GetDid(r)
-	if userDid == nil {
-		w.WriteHeader(http.StatusForbidden)
-		return
-	}
-
-	orgId, err := s.requireOrg(r.Context(), *userDid)
-	if err != nil {
-		w.WriteHeader(http.StatusForbidden)
-		return
-	}
-	eventOrg, err := s.db.GetEventOrganization(r.Context(), event)
-	if err != nil {
-		w.WriteHeader(http.StatusNotFound)
-		return
-	}
-	if eventOrg == 0 || eventOrg != orgId {
-		w.WriteHeader(http.StatusForbidden)
-		return
-	}
-
-	freed, err := s.db.EventUnredeemedValue(r.Context(), event)
-	if err == nil && freed > 0 {
-		fmt.Printf("freed organization balance %d for event %s\n", freed, event)
-		if s.appDb != nil {
-			if err := s.appDb.RefundOrganizationBalance(r.Context(), orgId, freed); err != nil {
-				fmt.Printf("error refunding organization balance for event %s: %s\n", event, err)
-			}
-		}
-	}
-
-	err = s.db.DeleteEvent(r.Context(), event)
-	if err != nil {
-		fmt.Printf("error deleting event %s: %s\n", event, err)
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
-	w.WriteHeader(http.StatusOK)
-}
-
-func (s *BotService) AffiliateBalance(w http.ResponseWriter, r *http.Request) {
-	userDid := utils.GetDid(r)
-	if userDid == nil {
-		w.WriteHeader(http.StatusForbidden)
-		return
-	}
-
-	balance, err := s.getAffiliateBalance(r.Context(), *userDid)
-	if err != nil {
-		if err == pgx.ErrNoRows {
-			w.WriteHeader(http.StatusNotFound)
-			return
-		}
-		fmt.Printf("error getting affiliate balance: %s\n", err)
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
-	bytes, err := json.Marshal(balance)
-	if err != nil {
-		fmt.Printf("error marshalling affiliate balance: %s\n", err)
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
-	w.WriteHeader(http.StatusOK)
-	w.Write(bytes)
-}
-
-// getAffiliateBalance reports the caller's ORGANIZATION balances, mapped into
-// the legacy AffiliateBalance shape (weekly/one_time fields) plus the full
-// per-cycle allocation list for newer clients.
-func (s *BotService) getAffiliateBalance(ctx context.Context, owner string) (*structs.AffiliateBalance, error) {
-	if s.appDb == nil {
-		return nil, fmt.Errorf("affiliate database unavailable")
-	}
-
-	org, _, err := s.appDb.GetOrganizationByUser(ctx, owner)
-	if err != nil {
-		return nil, err
-	}
-	if org == nil {
-		return nil, pgx.ErrNoRows
-	}
-
-	allocations, err := s.appDb.ListOrganizationAllocations(ctx, org.Id)
-	if err != nil {
-		return nil, err
-	}
-
-	reserved, err := s.db.AllocatedBalanceByOrganization(ctx, org.Id)
-	if err != nil {
-		return nil, err
-	}
-
-	balance := &structs.AffiliateBalance{Reserved: reserved, Allocations: allocations}
-	for _, al := range allocations {
-		balance.Available += al.Balance
-		switch al.Cycle {
-		case structs.AllocationCycleWeekly:
-			balance.WeeklyAllocation = al.Allocation
-			balance.WeeklyBalance = al.Balance
-		case structs.AllocationCycleOneTime:
-			balance.OneTimeBalance = al.Balance
-		}
-	}
-	return balance, nil
 }
 
 func (s *BotService) GetCodes(event string, count, page int) ([]*structs.Code, error) {

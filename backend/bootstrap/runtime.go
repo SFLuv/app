@@ -317,13 +317,11 @@ func NewServerHandler(ctx context.Context, pools *DBPools, appLogger *logger.Log
 	}
 
 	w9 := handlers.NewW9Service(appDb, ponderDb, appLogger, activeChainID)
-	affiliateScheduler := handlers.NewAffiliateScheduler(appDb, botDb, appLogger)
-	affiliateScheduler.Start(ctx)
 
 	redeemer := handlers.NewRedeemerService(appDb, appLogger, clientConfig)
 	minter := handlers.NewMinterService(appDb, appLogger, clientConfig)
 
-	s := handlers.NewBotService(botDb, appDb, botClient, w9, affiliateScheduler, activeChainID, clientConfig.ReadRPCURL())
+	s := handlers.NewBotService(botDb, appDb, botClient, w9, activeChainID, clientConfig.ReadRPCURL())
 	a := handlers.NewAppService(appDb, appLogger, w9, clientConfig)
 	a.SetBotService(s)
 	s.SetAppService(a)

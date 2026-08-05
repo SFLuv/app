@@ -12,10 +12,16 @@
 #   - ponder:   indexes the local fork into the cloned ponder db
 #   - backend:  Go API on :8080 (local community config, no external sends)
 #   - frontend: Next.js on :3000
-#   - webpage:  public marketing site from ../webpage, on the first free port
-#               from :3002 up, pointed at the local backend
-#   - mobile:   Expo (pulled into ./tmp, branch via MOBILE_APP_BRANCH,
-#               background — use the post-boot menu to open the iOS simulator)
+#   - webpage:  public marketing site (pulled into ./tmp from git, or a local
+#               checkout via WEBPAGE_DIR), on the first free port from :3002 up,
+#               pointed at the local backend
+#   - mobile:   Expo (pulled into ./tmp, branch via MOBILE_APP_BRANCH, or a
+#               local checkout via MOBILE_APP_DIR; background — use the
+#               post-boot menu to open the iOS simulator)
+#
+# The webpage and mobile app are pulled from git by default so a fresh machine
+# needs no manual checkouts. Setting WEBPAGE_DIR / MOBILE_APP_DIR switches that
+# project to a local path, which wins whenever both are configured.
 #
 # After boot, an interactive menu takes the foreground: open the iOS simulator,
 # set admin by email, set/clear user pranks, tail logs, quit.
@@ -275,7 +281,12 @@ FRONTEND_PORT=3000
 # the frontend (:3000) and the engine (:3001).
 WEBPAGE_PORT_BASE="${WEBPAGE_PORT_BASE:-3002}"
 WEBPAGE_PORT=""
-WEBPAGE_DIR="${WEBPAGE_DIR:-$(cd "$ROOT/.." && pwd)/webpage}"
+# Pulled from git by default so a fresh machine needs no manual checkout. Set
+# WEBPAGE_DIR to develop against a local copy instead; it wins when both are set.
+WEBPAGE_REPO="${WEBPAGE_REPO:-https://github.com/SFLuv/webpage.git}"
+WEBPAGE_BRANCH="${WEBPAGE_BRANCH:-main}"
+WEBPAGE_DIR="${WEBPAGE_DIR:-}"
+WEBPAGE_CHECKOUT="$TMP_DIR/webpage"
 CELO_CHAIN_ID=42220
 
 # From backend/celo-community-config.json (accounts["42220:..."]).
@@ -387,6 +398,41 @@ pick_free_port() { # pick_free_port <start> [max_tries] — echo the first unuse
     port=$((port + 1))
   done
   return 1
+}
+
+# resolve_repo_dir <label> <local_dir> <repo_url> <branch> <checkout_dir>
+#
+# Resolves a sibling project to a working directory, echoing the path.
+#
+# Git is the default source so a fresh machine needs no manual checkouts. A
+# local path is opt-in and WINS when set, which is what makes it possible to
+# develop against uncommitted changes in a sibling repo. A local path that is
+# set but missing falls back to git with a warning rather than silently
+# skipping — a typo in a path should not look like "feature disabled".
+resolve_repo_dir() {
+  local label="$1" local_dir="$2" repo_url="$3" branch="$4" checkout_dir="$5"
+
+  if [[ -n "$local_dir" ]]; then
+    if [[ -d "$local_dir" ]]; then
+      c_yellow "  $label: using local path $local_dir" >&2
+      printf '%s\n' "$local_dir"
+      return 0
+    fi
+    c_yellow "  $label: ${local_dir} not found — falling back to git" >&2
+  fi
+
+  if [[ -d "$checkout_dir/.git" ]]; then
+    ( git -C "$checkout_dir" fetch origin "$branch" \
+        && git -C "$checkout_dir" checkout "$branch" \
+        && git -C "$checkout_dir" reset --hard "origin/$branch" ) >/dev/null 2>&1 \
+      || { c_red "  $label: failed to update checkout in ${checkout_dir#"$ROOT"/}" >&2; return 1; }
+  else
+    git clone --branch "$branch" "$repo_url" "$checkout_dir" >/dev/null 2>&1 \
+      || { c_red "  $label: failed to clone $repo_url" >&2; return 1; }
+  fi
+
+  printf '%s\n' "$checkout_dir"
+  return 0
 }
 
 start_bg() { # start_bg <name> <workdir> <logfile> <cmd...> — tracked background service.
@@ -734,6 +780,81 @@ done
 c_green "  engine sponsor row seeded ($SPONSOR_TABLE)"
 
 # ----------------------------------------------------------------------------
+# 4b. Faucet (local bot key: generate, fund with gas, clone production balance)
+# ----------------------------------------------------------------------------
+# The backend's faucet ("bot") signs every reward payout and its balance gates
+# event creation and workflow approval. Without BOT_KEY/BOT_ADDRESS the balance
+# reads as the zero address and every value check fails — which surfaced as
+# "Error getting unallocated faucet balance" and blocked event creation
+# entirely. Production keys must never come near a dev boot, so we generate a
+# throwaway faucet and clone the production BALANCE onto it from the fork.
+c_blue "[4b/10] Faucet (local bot key + cloned balance)"
+
+FAUCET_KEY_FILE="$TMP_DIR/faucet.key"
+if [[ ! -f "$FAUCET_KEY_FILE" ]]; then
+  OUT="$(cast wallet new)"
+  FAUCET_ADDRESS_LOCAL="$(printf '%s' "$OUT" | grep -oE '0x[a-fA-F0-9]{40}' | head -1)"
+  FAUCET_PK="$(printf '%s' "$OUT" | grep -oE '0x[a-fA-F0-9]{64}' | head -1)"
+  printf '%s\n%s\n' "$FAUCET_ADDRESS_LOCAL" "$FAUCET_PK" > "$FAUCET_KEY_FILE"
+fi
+FAUCET_ADDRESS_LOCAL="$(sed -n 1p "$FAUCET_KEY_FILE")"
+FAUCET_PK="$(sed -n 2p "$FAUCET_KEY_FILE")"
+[[ "$FAUCET_ADDRESS_LOCAL" =~ ^0x[a-fA-F0-9]{40}$ ]] || die "  could not derive faucet address (see tmp/faucet.key)"
+
+# Gas for payouts.
+cast rpc anvil_setBalance "$FAUCET_ADDRESS_LOCAL" "$FUND_WEI" --rpc-url "$ANVIL_RPC" >/dev/null \
+  || die "  failed to fund faucet with gas"
+
+# Token multiplier the backend applies to whole-SFLUV amounts. Derived from the
+# community config rather than hard-coded: the token has 6 decimals, and the
+# stale 1e18 in .env.example would inflate every amount by a factor of a
+# trillion.
+TOKEN_ADDRESS="$(python3 -c "
+import json
+d = json.load(open('$LOCAL_CONFIG_FILE'))['json']
+print(d['community']['primary_token']['address'])
+" 2>/dev/null || true)"
+TOKEN_DECIMAL_PLACES="$(python3 -c "
+import json
+d = json.load(open('$LOCAL_CONFIG_FILE'))['json']
+addr = d['community']['primary_token']['address']
+chain = d['community']['primary_token']['chain_id']
+print(d['tokens'][f'{chain}:{addr}']['decimals'])
+" 2>/dev/null || echo 6)"
+TOKEN_MULTIPLIER="1$(printf '0%.0s' $(seq 1 "$TOKEN_DECIMAL_PLACES"))"
+
+# Clone the production faucet's token balance onto the local one. anvil forks
+# mainnet, so the fork already holds production state — impersonating the real
+# faucet and transferring costs nothing and touches no live system.
+PROD_FAUCET_ADDRESS="${PROD_FAUCET_ADDRESS:-}"
+if [[ -z "$PROD_FAUCET_ADDRESS" && -f "$ROOT/backend/.env" ]]; then
+  PROD_FAUCET_ADDRESS="$(grep -E '^BOT_ADDRESS=' "$ROOT/backend/.env" | head -1 | cut -d= -f2- | tr -d '"' | tr -d "'" | tr -d '[:space:]')"
+fi
+
+FAUCET_TOKENS="0"
+if [[ "$PROD_FAUCET_ADDRESS" =~ ^0x[a-fA-F0-9]{40}$ && -n "$TOKEN_ADDRESS" ]]; then
+  PROD_BAL="$(cast call "$TOKEN_ADDRESS" 'balanceOf(address)(uint256)' "$PROD_FAUCET_ADDRESS" --rpc-url "$ANVIL_RPC" 2>/dev/null | awk '{print $1}')"
+  if [[ "$PROD_BAL" =~ ^[0-9]+$ && "$PROD_BAL" != "0" ]]; then
+    cast rpc anvil_impersonateAccount "$PROD_FAUCET_ADDRESS" --rpc-url "$ANVIL_RPC" >/dev/null
+    cast rpc anvil_setBalance "$PROD_FAUCET_ADDRESS" "$FUND_WEI" --rpc-url "$ANVIL_RPC" >/dev/null
+    if cast send "$TOKEN_ADDRESS" 'transfer(address,uint256)' "$FAUCET_ADDRESS_LOCAL" "$PROD_BAL" \
+        --from "$PROD_FAUCET_ADDRESS" --unlocked --rpc-url "$ANVIL_RPC" >/dev/null 2>&1; then
+      FAUCET_TOKENS="$((PROD_BAL / TOKEN_MULTIPLIER))"
+      c_green "  cloned production faucet balance: $FAUCET_TOKENS SFLUV"
+    else
+      c_yellow "  could not transfer the cloned balance; faucet starts empty"
+    fi
+    cast rpc anvil_stopImpersonatingAccount "$PROD_FAUCET_ADDRESS" --rpc-url "$ANVIL_RPC" >/dev/null 2>&1 || true
+  else
+    c_yellow "  production faucet $PROD_FAUCET_ADDRESS holds no $TOKEN_ADDRESS balance on the fork"
+  fi
+else
+  c_yellow "  PROD_FAUCET_ADDRESS not set and none found in backend/.env — faucet starts empty"
+  c_yellow "  set PROD_FAUCET_ADDRESS in .dev.env to clone a starting balance"
+fi
+c_green "  faucet $FAUCET_ADDRESS_LOCAL ready (gas funded, ${TOKEN_DECIMAL_PLACES}-decimal token)"
+
+# ----------------------------------------------------------------------------
 # 5. Databases (clone production — READ-ONLY against prod)
 # ----------------------------------------------------------------------------
 if [[ "${SKIP_DB_CLONE:-0}" == "1" ]]; then
@@ -817,12 +938,18 @@ else
   c_blue "[6/10] Ponder (skipped)"
 fi
 
-# Resolve the webpage's port BEFORE the backend starts: the backend needs the
-# portal URL to build signup-confirmation links, and the webpage itself does not
-# boot until step 9.
-if [[ "$RUN_WEBPAGE" -eq 1 && -d "$WEBPAGE_DIR" ]]; then
-  WEBPAGE_PORT="$(pick_free_port "$WEBPAGE_PORT_BASE")" \
-    || { c_yellow "  no free port found from $WEBPAGE_PORT_BASE up — skipping webpage"; RUN_WEBPAGE=0; }
+# Resolve the webpage source and port BEFORE the backend starts: the backend
+# needs the portal URL to build signup-confirmation links, and the webpage
+# itself does not boot until step 9.
+if [[ "$RUN_WEBPAGE" -eq 1 ]]; then
+  if WEBPAGE_RESOLVED="$(resolve_repo_dir webpage "$WEBPAGE_DIR" "$WEBPAGE_REPO" "$WEBPAGE_BRANCH" "$WEBPAGE_CHECKOUT")"; then
+    WEBPAGE_DIR="$WEBPAGE_RESOLVED"
+    WEBPAGE_PORT="$(pick_free_port "$WEBPAGE_PORT_BASE")" \
+      || { c_yellow "  no free port found from $WEBPAGE_PORT_BASE up — skipping webpage"; RUN_WEBPAGE=0; }
+  else
+    c_yellow "  webpage source unavailable — skipping"
+    RUN_WEBPAGE=0
+  fi
 fi
 
 # ----------------------------------------------------------------------------
@@ -861,6 +988,14 @@ if [[ "$RUN_BACKEND" -eq 1 ]]; then
     "PONDER_KEY=${DEV_PONDER_KEY:-local-dev-ponder-key}"
     "PONDER_CALLBACK_URL=http://localhost:$BACKEND_PORT/ponder/callback"
     "NOTIFICATION_TEST_MODE=true"
+    # Faucet identity. Without these the bot reads the zero address and every
+    # balance-gated action (event creation, workflow approval) fails.
+    "BOT_KEY=$FAUCET_PK"
+    "BOT_ADDRESS=$FAUCET_ADDRESS_LOCAL"
+    "FAUCET_ADDRESS=$FAUCET_ADDRESS_LOCAL"
+    # Multiplier from whole SFLUV to base units, derived from the token's real
+    # decimals rather than hard-coded.
+    "TOKEN_DECIMALS=$TOKEN_MULTIPLIER"
     # Externally reachable origin of this backend. Without it, volunteer event
     # photo and organizer logo URLs come back root-relative, which renders blank
     # in React Native and 404s against sfluv.org in a browser.
@@ -900,6 +1035,7 @@ if [[ "$RUN_FRONTEND" -eq 1 ]]; then
     "NEXT_PUBLIC_BACKEND_URL=http://localhost:$BACKEND_PORT"
     "NEXT_PUBLIC_FRONTEND_URL=http://localhost:$FRONTEND_PORT"
     "NEXT_PUBLIC_CHAIN_RPC_URL=$ANVIL_RPC"
+    "NEXT_PUBLIC_FAUCET_ADDRESS=$FAUCET_ADDRESS_LOCAL"
     "NEXT_PUBLIC_ENGINE_URL=$ENGINE_URL"
     "NEXT_PUBLIC_PRIVY_APP_ID=${NEXT_PUBLIC_PRIVY_APP_ID:-}"
     "NEXT_PUBLIC_GOOGLE_MAPS_API_KEY=${NEXT_PUBLIC_GOOGLE_MAPS_API_KEY:-}"
@@ -956,6 +1092,10 @@ if [[ "$RUN_WEBPAGE" -eq 1 && -n "$WEBPAGE_PORT" ]]; then
   # it is omitted entirely when unset so the backend takes its "no key ⇒ never
   # trust the forwarded IP" path rather than comparing against an empty string.
   [[ -n "${VOLUNTEER_PROXY_KEY:-}" ]] && WEBPAGE_ENV+=("SFLUV_VOLUNTEER_PROXY_KEY=$VOLUNTEER_PROXY_KEY")
+  # Explicit fixture opt-in. The webpage deliberately no longer falls back to
+  # sample data implicitly, because an unconfigured deploy would then serve fake
+  # events as real; set this to exercise them on purpose.
+  [[ -n "${SFLUV_USE_FIXTURES:-}" ]] && WEBPAGE_ENV+=("SFLUV_USE_FIXTURES=$SFLUV_USE_FIXTURES")
 
   if [[ "$RUN_BACKEND" -ne 1 ]]; then
     c_yellow "  backend is not running — the webpage will show fixture data for volunteer events"
@@ -965,10 +1105,6 @@ if [[ "$RUN_WEBPAGE" -eq 1 && -n "$WEBPAGE_PORT" ]]; then
     env "${WEBPAGE_ENV[@]}" npm run dev -- --port "$WEBPAGE_PORT"
   wait_for "http://localhost:$WEBPAGE_PORT" "webpage" 90 "${PIDS[${#PIDS[@]}-1]}" "$LOG_DIR/webpage.log" \
     || c_yellow "  webpage still starting — check tmp/logs/webpage.log"
-elif [[ "$RUN_WEBPAGE" -eq 1 ]]; then
-  c_blue "[9/10] Webpage (skipped — no repo at ${WEBPAGE_DIR})"
-  c_yellow "  clone it beside this repo, or set WEBPAGE_DIR in .dev.env"
-  RUN_WEBPAGE=0
 else
   c_blue "[9/10] Webpage (skipped)"
 fi
@@ -994,20 +1130,22 @@ EXPO_URL="exp://${DEV_LAN_IP:-127.0.0.1}:8081"
 if [[ "$RUN_MOBILE" -eq 1 ]]; then
   MOBILE_APP_REPO="${MOBILE_APP_REPO:-https://github.com/SFLuv/mobile-app.git}"
   MOBILE_APP_BRANCH="${MOBILE_APP_BRANCH:-main}"
-  MOBILE_DIR="$TMP_DIR/mobile-app"
+  # Same rule as the webpage: git by default, MOBILE_APP_DIR opts into a local
+  # checkout and wins when both are set.
+  MOBILE_APP_DIR="${MOBILE_APP_DIR:-}"
 
   c_blue "[10/10] Mobile (Expo @ $MOBILE_APP_BRANCH, background)"
-  if [[ -d "$MOBILE_DIR/.git" ]]; then
-    ( git -C "$MOBILE_DIR" fetch origin "$MOBILE_APP_BRANCH" \
-        && git -C "$MOBILE_DIR" checkout "$MOBILE_APP_BRANCH" \
-        && git -C "$MOBILE_DIR" reset --hard "origin/$MOBILE_APP_BRANCH" ) >/dev/null 2>&1 \
-      || die "  failed to update mobile checkout in tmp/mobile-app"
-  else
-    git clone --branch "$MOBILE_APP_BRANCH" "$MOBILE_APP_REPO" "$MOBILE_DIR" >/dev/null 2>&1 \
-      || die "  failed to clone $MOBILE_APP_REPO"
-  fi
+  MOBILE_DIR="$(resolve_repo_dir mobile "$MOBILE_APP_DIR" "$MOBILE_APP_REPO" "$MOBILE_APP_BRANCH" "$TMP_DIR/mobile-app")" \
+    || die "  mobile app source unavailable"
 
   MOBILE_BACKEND_HOST="${DEV_LAN_IP:-localhost}"
+  # This overwrites mobile/.env. Harmless for the tmp/ checkout, but when
+  # MOBILE_APP_DIR points at a developer's own repo it would silently clobber
+  # their file, so keep a one-time backup they can restore from.
+  if [[ -n "$MOBILE_APP_DIR" && -f "$MOBILE_DIR/mobile/.env" && ! -f "$MOBILE_DIR/mobile/.env.dev-up-backup" ]]; then
+    cp "$MOBILE_DIR/mobile/.env" "$MOBILE_DIR/mobile/.env.dev-up-backup"
+    c_yellow "  saved your existing mobile/.env to mobile/.env.dev-up-backup"
+  fi
   cat > "$MOBILE_DIR/mobile/.env" <<EOF
 # Generated by dev-up.sh — local dev only.
 EXPO_PUBLIC_APP_BACKEND_URL=http://$MOBILE_BACKEND_HOST:$BACKEND_PORT

@@ -79,12 +79,19 @@ func TestParseLocalWallClockRejectsOffsets(t *testing.T) {
 	}
 }
 
+// futureLocal renders a wall-clock string offset from now in the event's zone,
+// so fixtures do not go stale — the validator rejects past start times.
+func futureLocal(offset time.Duration) string {
+	location, _ := time.LoadLocation("America/Los_Angeles")
+	return time.Now().In(location).Add(72*time.Hour + offset).Format("2006-01-02T15:04:05")
+}
+
 func TestValidateVolunteerEventRequest(t *testing.T) {
 	base := func() *structs.VolunteerEventCreateRequest {
 		return &structs.VolunteerEventCreateRequest{
 			Title:             "Ocean Beach Cleanup",
-			StartAtLocal:      "2026-08-06T09:00:00",
-			EndAtLocal:        "2026-08-06T12:00:00",
+			StartAtLocal:      futureLocal(0),
+			EndAtLocal:        futureLocal(3 * time.Hour),
 			Timezone:          "America/Los_Angeles",
 			MaxParticipants:   40,
 			RewardAmountSfluv: 15,
@@ -93,15 +100,15 @@ func TestValidateVolunteerEventRequest(t *testing.T) {
 	}
 
 	t.Run("valid request passes", func(t *testing.T) {
-		if _, _, _, errMsg := validateVolunteerEventRequest(base()); errMsg != "" {
+		if _, _, _, _, errMsg := validateVolunteerEventRequest(base()); errMsg != "" {
 			t.Fatalf("unexpected rejection: %s", errMsg)
 		}
 	})
 
 	t.Run("end must be after start", func(t *testing.T) {
 		req := base()
-		req.EndAtLocal = "2026-08-06T08:00:00"
-		if _, _, _, errMsg := validateVolunteerEventRequest(req); errMsg == "" {
+		req.EndAtLocal = futureLocal(-1 * time.Hour)
+		if _, _, _, _, errMsg := validateVolunteerEventRequest(req); errMsg == "" {
 			t.Fatal("expected an end-before-start rejection")
 		}
 	})
@@ -111,11 +118,11 @@ func TestValidateVolunteerEventRequest(t *testing.T) {
 	t.Run("participants must be bounded", func(t *testing.T) {
 		req := base()
 		req.MaxParticipants = 0
-		if _, _, _, errMsg := validateVolunteerEventRequest(req); errMsg == "" {
+		if _, _, _, _, errMsg := validateVolunteerEventRequest(req); errMsg == "" {
 			t.Error("expected zero participants to be rejected")
 		}
 		req.MaxParticipants = 999999
-		if _, _, _, errMsg := validateVolunteerEventRequest(req); errMsg == "" {
+		if _, _, _, _, errMsg := validateVolunteerEventRequest(req); errMsg == "" {
 			t.Error("expected an absurd participant count to be rejected")
 		}
 	})
@@ -123,17 +130,17 @@ func TestValidateVolunteerEventRequest(t *testing.T) {
 	t.Run("external signup requires a safe link", func(t *testing.T) {
 		req := base()
 		req.SignupMode = structs.SignupModeExternal
-		if _, _, _, errMsg := validateVolunteerEventRequest(req); errMsg == "" {
+		if _, _, _, _, errMsg := validateVolunteerEventRequest(req); errMsg == "" {
 			t.Error("expected a missing external link to be rejected")
 		}
 
 		req.SignupURL = "javascript:alert(1)"
-		if _, _, _, errMsg := validateVolunteerEventRequest(req); errMsg == "" {
+		if _, _, _, _, errMsg := validateVolunteerEventRequest(req); errMsg == "" {
 			t.Error("expected a javascript: signup link to be rejected")
 		}
 
 		req.SignupURL = "https://partner.org/signup"
-		if _, _, _, errMsg := validateVolunteerEventRequest(req); errMsg != "" {
+		if _, _, _, _, errMsg := validateVolunteerEventRequest(req); errMsg != "" {
 			t.Errorf("expected a valid external link to pass, got %s", errMsg)
 		}
 	})
@@ -143,7 +150,7 @@ func TestValidateVolunteerEventRequest(t *testing.T) {
 	t.Run("signup url cleared for non-external modes", func(t *testing.T) {
 		req := base()
 		req.SignupURL = "https://partner.org/signup"
-		if _, _, _, errMsg := validateVolunteerEventRequest(req); errMsg != "" {
+		if _, _, _, _, errMsg := validateVolunteerEventRequest(req); errMsg != "" {
 			t.Fatalf("unexpected rejection: %s", errMsg)
 		}
 		if req.SignupURL != "" {
@@ -154,7 +161,7 @@ func TestValidateVolunteerEventRequest(t *testing.T) {
 	t.Run("unknown signup mode rejected", func(t *testing.T) {
 		req := base()
 		req.SignupMode = "carrier-pigeon"
-		if _, _, _, errMsg := validateVolunteerEventRequest(req); errMsg == "" {
+		if _, _, _, _, errMsg := validateVolunteerEventRequest(req); errMsg == "" {
 			t.Error("expected an unknown signup mode to be rejected")
 		}
 	})
@@ -162,7 +169,7 @@ func TestValidateVolunteerEventRequest(t *testing.T) {
 	t.Run("recurrence none is normalized away", func(t *testing.T) {
 		req := base()
 		req.Recurrence = &structs.VolunteerEventRecurrenceInput{Frequency: structs.RecurrenceNone}
-		if _, _, _, errMsg := validateVolunteerEventRequest(req); errMsg != "" {
+		if _, _, _, _, errMsg := validateVolunteerEventRequest(req); errMsg != "" {
 			t.Fatalf("unexpected rejection: %s", errMsg)
 		}
 		if req.Recurrence != nil {
@@ -172,12 +179,12 @@ func TestValidateVolunteerEventRequest(t *testing.T) {
 
 	t.Run("repeat-until must follow the first event", func(t *testing.T) {
 		req := base()
-		earlier := "2026-08-01T09:00:00"
+		earlier := futureLocal(-24 * time.Hour)
 		req.Recurrence = &structs.VolunteerEventRecurrenceInput{
 			Frequency:  structs.RecurrenceWeekly,
 			UntilLocal: &earlier,
 		}
-		if _, _, _, errMsg := validateVolunteerEventRequest(req); errMsg == "" {
+		if _, _, _, _, errMsg := validateVolunteerEventRequest(req); errMsg == "" {
 			t.Error("expected a repeat-until before the start to be rejected")
 		}
 	})
@@ -185,7 +192,7 @@ func TestValidateVolunteerEventRequest(t *testing.T) {
 	t.Run("monthly defaults to day_of_month", func(t *testing.T) {
 		req := base()
 		req.Recurrence = &structs.VolunteerEventRecurrenceInput{Frequency: structs.RecurrenceMonthly}
-		if _, _, _, errMsg := validateVolunteerEventRequest(req); errMsg != "" {
+		if _, _, _, _, errMsg := validateVolunteerEventRequest(req); errMsg != "" {
 			t.Fatalf("unexpected rejection: %s", errMsg)
 		}
 		if req.Recurrence.MonthlyMode != structs.MonthlyModeDayOfMonth {
@@ -316,5 +323,90 @@ func TestNextVolunteerOccurrenceIgnoresNonRecurring(t *testing.T) {
 	row := &db.VolunteerEventRow{Timezone: "UTC", RecurrenceFrequency: structs.RecurrenceNone}
 	if _, _, ok := nextVolunteerOccurrence(row); ok {
 		t.Fatal("a non-recurring event must not generate a successor")
+	}
+}
+
+// An event in the past cannot be attended and its codes would already be live.
+// A small grace window absorbs clock skew and the seconds between filling in the
+// form and submitting it.
+func TestValidateRejectsPastStartTimes(t *testing.T) {
+	location, _ := time.LoadLocation("America/Los_Angeles")
+	past := time.Now().In(location).Add(-48 * time.Hour)
+
+	req := &structs.VolunteerEventCreateRequest{
+		Title:             "Backdated Cleanup",
+		StartAtLocal:      past.Format("2006-01-02T15:04:05"),
+		EndAtLocal:        past.Add(2 * time.Hour).Format("2006-01-02T15:04:05"),
+		Timezone:          "America/Los_Angeles",
+		MaxParticipants:   10,
+		RewardAmountSfluv: 5,
+		SignupMode:        structs.SignupModeInternal,
+	}
+
+	if _, _, _, _, errMsg := validateVolunteerEventRequest(req); errMsg == "" {
+		t.Fatal("expected a past start time to be rejected")
+	}
+
+	// A start a couple of minutes ago must still pass — a form filled in just
+	// before submitting should not be refused.
+	justNow := time.Now().In(location).Add(-2 * time.Minute)
+	req.StartAtLocal = justNow.Format("2006-01-02T15:04:05")
+	req.EndAtLocal = justNow.Add(2 * time.Hour).Format("2006-01-02T15:04:05")
+	if _, _, _, _, errMsg := validateVolunteerEventRequest(req); errMsg != "" {
+		t.Fatalf("a start moments ago should be accepted, got %q", errMsg)
+	}
+}
+
+// Redemption stays open past the end by default so someone still in the queue
+// when an event wraps up does not lose their reward to the clock.
+func TestQRCutoffDefaultsToGracePeriodAfterEnd(t *testing.T) {
+	req := &structs.VolunteerEventCreateRequest{
+		Title:             "Ocean Beach Cleanup",
+		StartAtLocal:      futureLocal(0),
+		EndAtLocal:        futureLocal(3 * time.Hour),
+		Timezone:          "America/Los_Angeles",
+		MaxParticipants:   10,
+		RewardAmountSfluv: 5,
+		SignupMode:        structs.SignupModeInternal,
+	}
+
+	_, endAt, _, cutoff, errMsg := validateVolunteerEventRequest(req)
+	if errMsg != "" {
+		t.Fatalf("unexpected rejection: %s", errMsg)
+	}
+	if cutoff != endAt+int64(defaultQRGracePeriod.Seconds()) {
+		t.Fatalf("cutoff = %d, want end + 24h (%d)", cutoff, endAt+int64(defaultQRGracePeriod.Seconds()))
+	}
+}
+
+func TestQRCutoffAcceptsExplicitValueButNotBeforeTheEnd(t *testing.T) {
+	base := func() *structs.VolunteerEventCreateRequest {
+		return &structs.VolunteerEventCreateRequest{
+			Title:             "Ocean Beach Cleanup",
+			StartAtLocal:      futureLocal(0),
+			EndAtLocal:        futureLocal(3 * time.Hour),
+			Timezone:          "America/Los_Angeles",
+			MaxParticipants:   10,
+			RewardAmountSfluv: 5,
+			SignupMode:        structs.SignupModeInternal,
+		}
+	}
+
+	req := base()
+	req.QRCutoffLocal = futureLocal(10 * time.Hour)
+	_, endAt, _, cutoff, errMsg := validateVolunteerEventRequest(req)
+	if errMsg != "" {
+		t.Fatalf("unexpected rejection: %s", errMsg)
+	}
+	if cutoff <= endAt {
+		t.Error("an explicit cutoff after the end should be honoured")
+	}
+
+	// A cutoff before the end would close redemption while the event is still
+	// running, which is never what the admin meant.
+	req = base()
+	req.QRCutoffLocal = futureLocal(1 * time.Hour)
+	if _, _, _, _, errMsg := validateVolunteerEventRequest(req); errMsg == "" {
+		t.Error("expected a cutoff before the event end to be rejected")
 	}
 }

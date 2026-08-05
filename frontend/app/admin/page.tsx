@@ -85,13 +85,11 @@ import {
 import { Event, EventsStatus } from "@/types/event"
 import { AddVolunteerEventModal, type VolunteerEventDraft } from "@/components/events/add-volunteer-event-modal"
 import { VolunteerEventsManager } from "@/components/events/volunteer-events-manager"
-import { EventModal } from "@/components/events/event-modal"
 import { DrainFaucetModal } from "@/components/events/drain-faucet-modal"
 import { OrganizationManagement } from "@/components/admin/organization-management"
 import { WorkflowDetailsModal } from "@/components/workflows/workflow-details-modal"
 import { AdminAnalyticsPanel } from "@/components/admin/admin-analytics-panel"
 import { PartnersPanel } from "@/components/admin/partners-panel"
-import EventCard from "@/components/events/event-card"
 import type { W9Submission } from "@/types/w9"
 import type { ClientVersionUserCountResponse, UserResponse } from "@/types/server"
 
@@ -5105,14 +5103,6 @@ export default function AdminPage() {
             uploadPhoto={handleUploadVolunteerEventPhoto}
             unallocatedBalance={unallocatedBalance !== undefined ? Number(unallocatedBalance) : 0}
           />
-          <EventModal
-            event={eventDetailsEvent}
-            open={eventDetailModalOpen}
-            onOpenChange={toggleEventDetailModal}
-            handleDeleteEvent={handleDeleteEvent}
-            deleteEventError={deleteEventError}
-            ownerLabel={eventDetailsEvent ? getOwnerLabel(eventDetailsEvent.owner) : undefined}
-          />
           <DrainFaucetModal
             open={drainFaucetModalOpen}
             onOpenChange={toggleDrainFaucetModal}
@@ -5124,32 +5114,18 @@ export default function AdminPage() {
               <div>
                 <CardTitle className="flex items-center gap-2 text-xl">
                   <CalendarIcon className="h-6 w-6" />
-                  Volunteer Events
+                  Faucet
                 </CardTitle>
-                <CardDescription className="text-base mt-2">Create and Manage Volunteer Events</CardDescription>
+                <CardDescription className="text-base mt-2">
+                  Rewards for every volunteer event are reserved from here at approval.
+                </CardDescription>
                 <div className="flex flex-wrap items-center gap-2 mt-3">
                   <Badge className="text-xs sm:text-sm px-3 py-1 cursor-pointer" onClick={toggleDrainFaucetModal}>
                     {unallocatedBalance !== undefined
                       ? `${unallocatedBalance} / ${faucetBalance} SFLuv Available`
                       : `${faucetBalance} SFLuv`}
                   </Badge>
-                  <span className="text-xs sm:text-sm text-muted-foreground">in faucet</span>
-                </div>
-                <div className="flex flex-col gap-2 mt-4 sm:flex-row sm:flex-wrap sm:items-center">
-                  <Label className="text-xs text-muted-foreground">Filter by owner</Label>
-                  <Select value={eventsOwnerFilter} onValueChange={setEventsOwnerFilter}>
-                    <SelectTrigger className="w-full sm:w-[220px]">
-                      <SelectValue placeholder="All owners" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">All owners</SelectItem>
-                      {ownerOptions.map((option) => (
-                        <SelectItem key={option.value} value={option.value}>
-                          {option.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <span className="text-xs sm:text-sm text-muted-foreground">unallocated in faucet</span>
                 </div>
               </div>
               <div className="text-left md:text-right">
@@ -5158,46 +5134,6 @@ export default function AdminPage() {
                 </Button>
               </div>
             </CardHeader>
-            <CardContent>
-              {filteredEvents.length === 0 ? (
-                <div className="text-center py-8">
-                  <Leaf className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-                  <h3 className="text-lg font-medium">No {eventsExpired ? "" : "Active"} Events</h3>
-                  <p className="text-muted-foreground">Create a new event to see it here.</p>
-                </div>
-              ) : (
-                <div className="space-y-4">
-                  {filteredEvents.map((event: Event) => (
-                    <EventCard
-                      key={event.id}
-                      event={event}
-                      toggleEventModal={toggleEventDetailModal}
-                      setEventModalEvent={setEventDetailsEvent}
-                      ownerLabel={getOwnerLabel(event.owner)}
-                    />
-                  ))}
-                </div>
-              )}
-              <div className="flex items-center justify-between pt-4">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setEventsPage((p) => Math.max(0, p - 1))}
-                  disabled={!canLoadPreviousEventsPage}
-                >
-                  <ChevronLeft className="h-4 w-4" />Previous
-                </Button>
-                <span className="text-sm text-muted-foreground">Page {eventsPage + 1}</span>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setEventsPage((p) => p + 1)}
-                  disabled={!canLoadNextEventsPage}
-                >
-                  Next<ChevronRight className="h-4 w-4" />
-                </Button>
-              </div>
-            </CardContent>
           </Card>
         </TabsContent>
 

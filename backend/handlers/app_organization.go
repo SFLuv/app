@@ -417,30 +417,6 @@ func (a *AppService) AdminSetOrganizationSuperadmin(w http.ResponseWriter, r *ht
 	w.WriteHeader(http.StatusOK)
 }
 
-// AdminSetOrganizationAllocations replaces an organization's full allocation
-// list: cycles present in the request are upserted, absent cycles are removed.
-func (a *AppService) AdminSetOrganizationAllocations(w http.ResponseWriter, r *http.Request) {
-	var req structs.AdminOrganizationAllocationsRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<10)).Decode(&req); err != nil || req.OrganizationId == 0 {
-		w.WriteHeader(http.StatusBadRequest)
-		return
-	}
-	// A missing allocations field must fail loudly, not delete-all: a caller
-	// using the old single-cycle body shape (or a typoed field) would otherwise
-	// decode cleanly to nil and silently wipe the org's entire allocation set.
-	// An explicit empty array remains the intentional way to remove everything.
-	if req.Allocations == nil {
-		w.WriteHeader(http.StatusBadRequest)
-		return
-	}
-	if err := a.db.ReplaceOrganizationAllocations(r.Context(), req.OrganizationId, req.Allocations); err != nil {
-		a.logger.Logf("error replacing organization allocations: %s", err)
-		w.WriteHeader(http.StatusBadRequest)
-		return
-	}
-	w.WriteHeader(http.StatusOK)
-}
-
 // AdminSetOrganizationIssuerScopes replaces the organization's issuance
 // settings (credential types its members may issue) and syncs them to members.
 func (a *AppService) AdminSetOrganizationIssuerScopes(w http.ResponseWriter, r *http.Request) {

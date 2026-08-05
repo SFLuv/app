@@ -222,4 +222,8 @@ type VolunteerEventCreateRequest struct {
 	LocationId *int64 `json:"location_id,omitempty"`
 
 	Recurrence *VolunteerEventRecurrenceInput `json:"recurrence,omitempty"`
+
+	// QRCutoffLocal is an explicit redemption deadline as wall clock in the
+	// event's timezone. Empty means the default: 24 hours after the event ends.
+	QRCutoffLocal string `json:"qr_cutoff_local,omitempty"`
 }

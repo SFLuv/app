@@ -12,6 +12,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -38,6 +39,7 @@ export interface VolunteerEventDraft {
   reward_amount_sfluv: number
   signup_mode: "none" | "external" | "internal"
   signup_url?: string
+  qr_cutoff_local?: string
   recurrence?: {
     frequency: "daily" | "weekly" | "monthly"
     monthly_mode?: "day_of_month" | "day_of_week"
@@ -54,6 +56,8 @@ interface AddVolunteerEventModalProps {
   /** Attaches one cover photo to an already-created event. */
   uploadPhoto: (eventId: string, file: File) => Promise<boolean>
   unallocatedBalance: number
+  /** "Create event" for admins; affiliates submit a request for approval. */
+  submitLabel?: string
 }
 
 /**
@@ -72,6 +76,7 @@ export function AddVolunteerEventModal({
   createEvent,
   uploadPhoto,
   unallocatedBalance,
+  submitLabel = "Create event",
 }: AddVolunteerEventModalProps) {
   const [title, setTitle] = useState("")
   const [description, setDescription] = useState("")
@@ -86,6 +91,8 @@ export function AddVolunteerEventModal({
   const [monthlyMode, setMonthlyMode] = useState<"day_of_month" | "day_of_week">("day_of_month")
   const [weekOfMonth, setWeekOfMonth] = useState(1)
   const [untilLocal, setUntilLocal] = useState("")
+  const [useCustomCutoff, setUseCustomCutoff] = useState(false)
+  const [qrCutoffLocal, setQrCutoffLocal] = useState("")
   const [photos, setPhotos] = useState<File[]>([])
   const [error, setError] = useState("")
   const [submitting, setSubmitting] = useState(false)
@@ -106,6 +113,8 @@ export function AddVolunteerEventModal({
     setMonthlyMode("day_of_month")
     setWeekOfMonth(1)
     setUntilLocal("")
+    setUseCustomCutoff(false)
+    setQrCutoffLocal("")
     setPhotos([])
     setError("")
   }, [open])
@@ -114,7 +123,10 @@ export function AddVolunteerEventModal({
     () => Math.max(0, maxParticipants) * Math.max(0, rewardAmount),
     [maxParticipants, rewardAmount],
   )
-  const overBudget = totalCost > unallocatedBalance
+  // Requesters (affiliates) do not spend against a balance, so the budget line
+  // would be noise; approval is where the faucet is actually verified.
+  const showsBudget = unallocatedBalance < Number.MAX_SAFE_INTEGER
+  const overBudget = showsBudget && totalCost > unallocatedBalance
 
   const addPhotos = (files: FileList | null) => {
     if (!files) return
@@ -133,6 +145,17 @@ export function AddVolunteerEventModal({
     if (title.trim() === "") return setError("Give the event a title.")
     if (startAtLocal === "" || endAtLocal === "") return setError("Set a start and end time.")
     if (endAtLocal <= startAtLocal) return setError("The end time must be after the start time.")
+    // Mirrors the server rule; catching it here avoids a round trip for
+    // something the admin can see in the field they just filled in.
+    if (new Date(startAtLocal).getTime() < Date.now() - 5 * 60 * 1000) {
+      return setError("The start time must be in the future.")
+    }
+    if (useCustomCutoff && qrCutoffLocal === "") {
+      return setError("Set a QR redemption cutoff, or untick the box to use the default.")
+    }
+    if (useCustomCutoff && qrCutoffLocal < endAtLocal) {
+      return setError("The QR cutoff must not be before the event ends.")
+    }
     if (maxParticipants < 1) return setError("Max participants must be at least 1.")
     if (signupMode === "external" && signupUrl.trim() === "") {
       return setError("An external signup needs a signup link.")
@@ -153,6 +176,7 @@ export function AddVolunteerEventModal({
       reward_amount_sfluv: rewardAmount,
       signup_mode: signupMode,
       ...(signupMode === "external" ? { signup_url: signupUrl.trim() } : {}),
+      ...(useCustomCutoff && qrCutoffLocal !== "" ? { qr_cutoff_local: qrCutoffLocal } : {}),
       ...(frequency !== "none"
         ? {
             recurrence: {
@@ -335,6 +359,32 @@ export function AddVolunteerEventModal({
             )}
           </div>
 
+          <div className="space-y-2">
+            <div className="flex items-center gap-2">
+              <Checkbox
+                id="ve-custom-cutoff"
+                checked={useCustomCutoff}
+                onCheckedChange={(checked) => setUseCustomCutoff(checked === true)}
+              />
+              <Label htmlFor="ve-custom-cutoff" className="cursor-pointer font-normal">
+                Set an exact QR redemption cutoff
+              </Label>
+            </div>
+            {useCustomCutoff ? (
+              <Input
+                type="datetime-local"
+                value={qrCutoffLocal}
+                onChange={(event) => setQrCutoffLocal(event.target.value)}
+                aria-label="QR redemption cutoff"
+              />
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                QR codes stay redeemable until 24 hours after the event ends, so anyone still in the queue
+                when it wraps up can claim their reward.
+              </p>
+            )}
+          </div>
+
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="space-y-1">
               <Label htmlFor="ve-max">Max participants *</Label>
@@ -359,9 +409,18 @@ export function AddVolunteerEventModal({
           </div>
 
           <div className={`rounded-md border p-3 text-sm ${overBudget ? "border-destructive text-destructive" : "text-muted-foreground"}`}>
-            Reserves <strong>{totalCost} SFLUV</strong> from the faucet ({maxParticipants} × {rewardAmount}).
-            {" "}Unallocated available: {unallocatedBalance}.
-            {overBudget && <div className="mt-1 font-medium">Not enough unallocated balance for this event.</div>}
+            {showsBudget ? (
+              <>
+                Reserves <strong>{totalCost} SFLUV</strong> from the faucet ({maxParticipants} × {rewardAmount}).
+                {" "}Unallocated available: {unallocatedBalance}.
+                {overBudget && <div className="mt-1 font-medium">Not enough unallocated balance for this event.</div>}
+              </>
+            ) : (
+              <>
+                Requests <strong>{totalCost} SFLUV</strong> ({maxParticipants} × {rewardAmount}). The faucet is
+                checked by an admin at approval.
+              </>
+            )}
           </div>
 
           <div className="space-y-2">
@@ -392,7 +451,7 @@ export function AddVolunteerEventModal({
           </Button>
           <Button onClick={handleSubmit} disabled={submitting || overBudget}>
             {submitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-            Create event
+            {submitLabel}
           </Button>
         </DialogFooter>
       </DialogContent>

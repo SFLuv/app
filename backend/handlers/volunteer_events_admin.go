@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -63,7 +64,12 @@ func parseLocalWallClock(value string, timezone string) (int64, error) {
 
 // validateVolunteerEventRequest normalizes and checks a create request,
 // returning a message safe to show the admin.
-func validateVolunteerEventRequest(req *structs.VolunteerEventCreateRequest) (startAt int64, endAt int64, until *int64, errMsg string) {
+// defaultQRGracePeriod is how long after an event ends its codes stay
+// redeemable when no explicit cutoff is given. Someone still in the queue when
+// an event wraps up should not lose their reward to the clock.
+const defaultQRGracePeriod = 24 * time.Hour
+
+func validateVolunteerEventRequest(req *structs.VolunteerEventCreateRequest) (startAt int64, endAt int64, until *int64, qrCutoff int64, errMsg string) {
 	req.Title = strings.TrimSpace(req.Title)
 	req.Description = strings.TrimSpace(req.Description)
 	req.Timezone = strings.TrimSpace(req.Timezone)
@@ -71,7 +77,7 @@ func validateVolunteerEventRequest(req *structs.VolunteerEventCreateRequest) (st
 	req.SignupURL = strings.TrimSpace(req.SignupURL)
 
 	if req.Title == "" {
-		return 0, 0, nil, "title is required"
+		return 0, 0, nil, 0, "title is required"
 	}
 	if req.Timezone == "" {
 		req.Timezone = "America/Los_Angeles"
@@ -79,14 +85,35 @@ func validateVolunteerEventRequest(req *structs.VolunteerEventCreateRequest) (st
 
 	startAt, err := parseLocalWallClock(req.StartAtLocal, req.Timezone)
 	if err != nil {
-		return 0, 0, nil, "start: " + err.Error()
+		return 0, 0, nil, 0, "start: " + err.Error()
 	}
 	endAt, err = parseLocalWallClock(req.EndAtLocal, req.Timezone)
 	if err != nil {
-		return 0, 0, nil, "end: " + err.Error()
+		return 0, 0, nil, 0, "end: " + err.Error()
 	}
 	if endAt <= startAt {
-		return 0, 0, nil, "end must be after start"
+		return 0, 0, nil, 0, "end must be after start"
+	}
+
+	// An event in the past cannot be attended, and its codes would already be
+	// live — a small grace window absorbs clock skew and the seconds between
+	// filling the form and submitting it.
+	if startAt < time.Now().Add(-5*time.Minute).Unix() {
+		return 0, 0, nil, 0, "start must be in the future"
+	}
+
+	// Redemption stays open for a grace period after the end unless an explicit
+	// cutoff is given.
+	qrCutoff = endAt + int64(defaultQRGracePeriod.Seconds())
+	if strings.TrimSpace(req.QRCutoffLocal) != "" {
+		explicit, err := parseLocalWallClock(req.QRCutoffLocal, req.Timezone)
+		if err != nil {
+			return 0, 0, nil, 0, "QR cutoff: " + err.Error()
+		}
+		if explicit < endAt {
+			return 0, 0, nil, 0, "the QR cutoff must not be before the event ends"
+		}
+		qrCutoff = explicit
 	}
 
 	switch req.SignupMode {
@@ -94,22 +121,22 @@ func validateVolunteerEventRequest(req *structs.VolunteerEventCreateRequest) (st
 		req.SignupURL = ""
 	case structs.SignupModeExternal:
 		if req.SignupURL == "" {
-			return 0, 0, nil, "an external signup needs a signup link"
+			return 0, 0, nil, 0, "an external signup needs a signup link"
 		}
 		if !isSafePartnerLink(req.SignupURL) {
-			return 0, 0, nil, "signup link must be a full http(s) URL"
+			return 0, 0, nil, 0, "signup link must be a full http(s) URL"
 		}
 	default:
-		return 0, 0, nil, "signup mode must be none, external, or internal"
+		return 0, 0, nil, 0, "signup mode must be none, external, or internal"
 	}
 
 	// max_participants is the number of QR codes minted, so it bounds the
 	// faucet exposure of the event and cannot be open-ended.
 	if req.MaxParticipants <= 0 {
-		return 0, 0, nil, "max participants must be at least 1"
+		return 0, 0, nil, 0, "max participants must be at least 1"
 	}
 	if req.MaxParticipants > 10000 {
-		return 0, 0, nil, "max participants must be 10000 or fewer"
+		return 0, 0, nil, 0, "max participants must be 10000 or fewer"
 	}
 
 	if req.Recurrence != nil {
@@ -123,25 +150,25 @@ func validateVolunteerEventRequest(req *structs.VolunteerEventCreateRequest) (st
 			case "":
 				req.Recurrence.MonthlyMode = structs.MonthlyModeDayOfMonth
 			default:
-				return 0, 0, nil, "monthly mode must be day_of_month or day_of_week"
+				return 0, 0, nil, 0, "monthly mode must be day_of_month or day_of_week"
 			}
 		default:
-			return 0, 0, nil, "recurrence must be none, daily, weekly, or monthly"
+			return 0, 0, nil, 0, "recurrence must be none, daily, weekly, or monthly"
 		}
 	}
 
 	if req.Recurrence != nil && req.Recurrence.UntilLocal != nil && strings.TrimSpace(*req.Recurrence.UntilLocal) != "" {
 		untilUnix, err := parseLocalWallClock(*req.Recurrence.UntilLocal, req.Timezone)
 		if err != nil {
-			return 0, 0, nil, "repeat-until: " + err.Error()
+			return 0, 0, nil, 0, "repeat-until: " + err.Error()
 		}
 		if untilUnix < startAt {
-			return 0, 0, nil, "repeat-until must be after the first event"
+			return 0, 0, nil, 0, "repeat-until must be after the first event"
 		}
 		until = &untilUnix
 	}
 
-	return startAt, endAt, until, ""
+	return startAt, endAt, until, qrCutoff, ""
 }
 
 // AdminCreateVolunteerEvent creates an event that is approved on creation:
@@ -172,7 +199,7 @@ func (a *AppService) AdminCreateVolunteerEvent(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	startAt, endAt, until, errMsg := validateVolunteerEventRequest(&req)
+	startAt, endAt, until, qrCutoff, errMsg := validateVolunteerEventRequest(&req)
 	if errMsg != "" {
 		w.WriteHeader(http.StatusBadRequest)
 		w.Write([]byte(errMsg))
@@ -207,6 +234,7 @@ func (a *AppService) AdminCreateVolunteerEvent(w http.ResponseWriter, r *http.Re
 		Timezone:            req.Timezone,
 		StartAt:             startAt,
 		EndAt:               endAt,
+		QRExpiresAt:         qrCutoff,
 		MaxParticipants:     req.MaxParticipants,
 		RewardAmount:        req.RewardAmountSfluv,
 		SignupMode:          req.SignupMode,
@@ -684,4 +712,192 @@ func (a *AppService) sendVolunteerFundingShortfallEmail(title string, required i
 	if err := sender.SendEmail(adminEmail, "Admin", "Volunteer event needs funding", html, utils.NotificationFromEmail(), "SFLuv Volunteering"); err != nil {
 		a.logger.Logf("error sending volunteer funding shortfall email: %s", err)
 	}
+}
+
+// applyVolunteerEventEdit validates a proposed edit and applies it.
+//
+// The faucet is checked on the DELTA rather than the whole cost: the event's
+// existing reservation is already committed, so an edit only needs to cover
+// what it adds. Charging the full amount again would refuse edits that free
+// funds up.
+func (a *AppService) applyVolunteerEventEdit(
+	ctx context.Context, eventId string, req *structs.VolunteerEventCreateRequest,
+) (int, string) {
+	startAt, endAt, until, qrCutoff, errMsg := validateVolunteerEventRequest(req)
+	if errMsg != "" {
+		return http.StatusBadRequest, errMsg
+	}
+
+	current, err := a.bot.db.GetVolunteerEventForManagement(ctx, eventId)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return http.StatusNotFound, "event not found"
+		}
+		a.logger.Logf("error loading event %s for edit: %s", eventId, err)
+		return http.StatusInternalServerError, "could not load the event"
+	}
+
+	previousCost := int64(current.Amount) * int64(current.MaxParticipants)
+	newCost := int64(req.RewardAmountSfluv) * int64(req.MaxParticipants)
+	if delta := newCost - previousCost; delta > 0 && !a.volunteerFaucetCanCover(ctx, delta) {
+		return http.StatusBadRequest, fmt.Sprintf(
+			"not enough unallocated faucet balance: this edit needs %d more SFLUV", delta,
+		)
+	}
+
+	params := &db.CreateVolunteerEventParams{
+		Title:               req.Title,
+		Description:         req.Description,
+		Slug:                slugifyTitle(req.Title),
+		Timezone:            req.Timezone,
+		StartAt:             startAt,
+		EndAt:               endAt,
+		QRExpiresAt:         qrCutoff,
+		MaxParticipants:     req.MaxParticipants,
+		RewardAmount:        req.RewardAmountSfluv,
+		SignupMode:          req.SignupMode,
+		SignupURL:           req.SignupURL,
+		LocationId:          req.LocationId,
+		RecurrenceFrequency: structs.RecurrenceNone,
+	}
+	if req.Recurrence != nil {
+		params.RecurrenceFrequency = req.Recurrence.Frequency
+		params.RecurrenceMonthlyMode = req.Recurrence.MonthlyMode
+		params.RecurrenceDayOfMonth = req.Recurrence.DayOfMonth
+		params.RecurrenceWeekOfMonth = req.Recurrence.WeekOfMonth
+		params.RecurrenceUntil = until
+
+		location, err := time.LoadLocation(req.Timezone)
+		if err != nil {
+			location = time.UTC
+		}
+		weekday := int(time.Unix(startAt, 0).In(location).Weekday())
+		params.RecurrenceWeekday = &weekday
+	}
+
+	if err := a.bot.db.UpdateVolunteerEvent(ctx, eventId, params); err != nil {
+		switch {
+		case errors.Is(err, db.ErrEventElapsed):
+			return http.StatusConflict, "this occurrence has already ended; past events keep the details they ran with"
+		case errors.Is(err, db.ErrEventNotFound):
+			return http.StatusNotFound, "event not found"
+		}
+		a.logger.Logf("error applying edit to event %s: %s", eventId, err)
+		return http.StatusInternalServerError, "could not apply the edit"
+	}
+
+	return http.StatusOK, ""
+}
+
+// AdminUpdateVolunteerEvent applies an edit immediately — admins do not queue
+// for their own approval — subject to the same faucet rule as creation.
+func (a *AppService) AdminUpdateVolunteerEvent(w http.ResponseWriter, r *http.Request) {
+	if a.bot == nil || a.bot.db == nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		return
+	}
+
+	eventId := strings.TrimSpace(r.PathValue("id"))
+	if eventId == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	req, ok := decodeVolunteerEventRequest(w, r)
+	if !ok {
+		return
+	}
+
+	if status, message := a.applyVolunteerEventEdit(r.Context(), eventId, req); status != http.StatusOK {
+		w.WriteHeader(status)
+		w.Write([]byte(message))
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// AdminApproveVolunteerEventEdit applies an affiliate's parked edit. Approval is
+// where the faucet is checked, exactly as it is for a new event.
+func (a *AppService) AdminApproveVolunteerEventEdit(w http.ResponseWriter, r *http.Request) {
+	userDid := utils.GetDid(r)
+	if userDid == nil || a.bot == nil || a.bot.db == nil {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	eventId := strings.TrimSpace(r.PathValue("id"))
+	pending, err := a.bot.db.GetPendingEventEditRequest(r.Context(), eventId)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			w.WriteHeader(http.StatusNotFound)
+			w.Write([]byte("no edit is awaiting approval for this event"))
+			return
+		}
+		a.logger.Logf("error loading edit request for %s: %s", eventId, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	var req structs.VolunteerEventCreateRequest
+	if err := json.Unmarshal([]byte(pending.Payload), &req); err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte("the stored edit could not be read"))
+		return
+	}
+
+	if status, message := a.applyVolunteerEventEdit(r.Context(), eventId, &req); status != http.StatusOK {
+		w.WriteHeader(status)
+		w.Write([]byte(message))
+		return
+	}
+
+	if err := a.bot.db.ResolveEventEditRequest(r.Context(), eventId, *userDid, true, ""); err != nil {
+		a.logger.Logf("error marking edit request approved for %s: %s", eventId, err)
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *AppService) AdminRejectVolunteerEventEdit(w http.ResponseWriter, r *http.Request) {
+	userDid := utils.GetDid(r)
+	if userDid == nil || a.bot == nil || a.bot.db == nil {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	eventId := strings.TrimSpace(r.PathValue("id"))
+
+	defer r.Body.Close()
+	body, _ := io.ReadAll(r.Body)
+	var decision volunteerEventReviewRequest
+	if len(body) > 0 {
+		_ = json.Unmarshal(body, &decision)
+	}
+
+	if err := a.bot.db.ResolveEventEditRequest(r.Context(), eventId, *userDid, false, decision.Reason); err != nil {
+		a.logger.Logf("error rejecting edit request for %s: %s", eventId, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// decodeVolunteerEventRequest reads a create/edit payload.
+func decodeVolunteerEventRequest(w http.ResponseWriter, r *http.Request) (*structs.VolunteerEventCreateRequest, bool) {
+	defer r.Body.Close()
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return nil, false
+	}
+
+	var req structs.VolunteerEventCreateRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte("could not read event"))
+		return nil, false
+	}
+	return &req, true
 }

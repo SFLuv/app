@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -430,6 +431,8 @@ type CreateVolunteerEventParams struct {
 
 	StartAt int64
 	EndAt   int64
+	// QRExpiresAt closes the redemption window; defaults to 24h after EndAt.
+	QRExpiresAt int64
 
 	MaxParticipants int
 	RewardAmount    uint64
@@ -487,14 +490,14 @@ func (s *BotDB) CreateVolunteerEvent(ctx context.Context, p *CreateVolunteerEven
 		INSERT INTO events (
 			id, title, description, amount, start_at, expiration, owner, organization_id,
 			is_volunteer, slug, timezone, max_participants, signup_mode, signup_url,
-			review_status, qr_live_at, codes_generated, funding_status, location_id,
+			review_status, qr_live_at, qr_expires_at, codes_generated, funding_status, location_id,
 			recurrence_frequency, recurrence_interval, recurrence_monthly_mode,
 			recurrence_day_of_month, recurrence_week_of_month, recurrence_weekday,
 			recurrence_until, series_id, series_index, requested_by, approved_by, approved_at
 		) VALUES (
 			$1, $2, $3, $4, $5, $6, $7, $8,
 			TRUE, $9, $10, $11, $12, $13,
-			$14, $15, $16, $17, $18,
+			$14, $15, $28, $16, $17, $18,
 			$19, 1, $20,
 			$21, $22, $23,
 			$24, $25, 0, $7, $26, $27
@@ -508,6 +511,7 @@ func (s *BotDB) CreateVolunteerEvent(ctx context.Context, p *CreateVolunteerEven
 		p.RecurrenceUntil, seriesId,
 		approvedByOrNil(p),
 		approvedAtOrNil(p),
+		nullableUnix(p.QRExpiresAt),
 	)
 	if err != nil {
 		return "", fmt.Errorf("error inserting volunteer event: %s", err)
@@ -539,6 +543,15 @@ func (s *BotDB) CreateVolunteerEvent(ctx context.Context, p *CreateVolunteerEven
 	return id, nil
 }
 
+// nullableUnix keeps a zero timestamp as SQL NULL, so "unset" stays
+// distinguishable from "the epoch".
+func nullableUnix(value int64) any {
+	if value <= 0 {
+		return nil
+	}
+	return value
+}
+
 func approvedByOrNil(p *CreateVolunteerEventParams) any {
 	if p.ReviewStatus == structs.EventReviewApproved {
 		return p.Owner
@@ -567,6 +580,22 @@ func allocationCycleForRecurrence(frequency string) string {
 	}
 	return structs.AllocationCycleOneTime
 }
+
+// managementReviewOrder sorts a management list by how much attention a row
+// needs: anything awaiting approval first, then live events, with rejected and
+// cancelled events last. Applied in SQL rather than in the client because these
+// lists are paginated — sorting a page after it arrives would only order the
+// rows that happened to land on it.
+const managementReviewOrder = `
+		CASE e.review_status
+			WHEN 'pending' THEN 0
+			WHEN 'rejected' THEN 2
+			WHEN 'cancelled' THEN 2
+			ELSE 1
+		END ASC,
+		e.start_at DESC,
+		e.id ASC
+`
 
 // GetAdminVolunteerEvents lists volunteer events for the admin panel across all
 // review states, unlike the public list which is approved-only.
@@ -602,9 +631,9 @@ func (s *BotDB) GetAdminVolunteerEvents(ctx context.Context, f *structs.Voluntee
 		SELECT %s, COUNT(*) OVER()
 		FROM events e
 		WHERE %s
-		ORDER BY e.start_at DESC, e.id ASC
+		ORDER BY %s
 		LIMIT $%d OFFSET $%d;
-	`, volunteerEventColumns, strings.Join(where, " AND "), len(args)-1, len(args))
+	`, volunteerEventColumns, strings.Join(where, " AND "), managementReviewOrder, len(args)-1, len(args))
 
 	rows, err := s.db.Query(ctx, query, args...)
 	if err != nil {
@@ -864,8 +893,19 @@ func (s *BotDB) RecordSignupAttempt(ctx context.Context, ip string, email string
 // CancelVolunteerEvent marks an event cancelled and returns the emails of
 // everyone holding a spot, so they can be told rather than finding out by
 // revisiting the page.
+//
+// The status change and the allocation release are ONE transaction: both live
+// in this database, so there is no reason to leave a window where an event is
+// cancelled but its faucet allocation is still reserved. The RowsAffected guard
+// also makes it idempotent — a second cancel is a no-op, not a second release.
 func (s *BotDB) CancelVolunteerEvent(ctx context.Context, eventId string) ([]string, error) {
-	tag, err := s.db.Exec(ctx, `
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(context.Background())
+
+	tag, err := tx.Exec(ctx, `
 		UPDATE events
 		SET review_status = 'cancelled',
 			cancelled_at = EXTRACT(EPOCH FROM NOW())::BIGINT,
@@ -880,7 +920,7 @@ func (s *BotDB) CancelVolunteerEvent(ctx context.Context, eventId string) ([]str
 	}
 
 	// Release the faucet allocation: a cancelled event will not pay out.
-	if _, err := s.db.Exec(ctx, `
+	if _, err := tx.Exec(ctx, `
 		UPDATE event_allocations
 		SET active = FALSE, released_at = EXTRACT(EPOCH FROM NOW())::BIGINT
 		WHERE event_id = $1 AND active = TRUE;
@@ -888,23 +928,32 @@ func (s *BotDB) CancelVolunteerEvent(ctx context.Context, eventId string) ([]str
 		return nil, fmt.Errorf("error releasing event allocation: %s", err)
 	}
 
-	rows, err := s.db.Query(ctx, `
+	rows, err := tx.Query(ctx, `
 		SELECT email FROM event_signups WHERE event_id = $1 AND cancelled_at IS NULL;
 	`, eventId)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
 	emails := []string{}
 	for rows.Next() {
 		var email string
 		if err := rows.Scan(&email); err != nil {
+			rows.Close()
 			return nil, err
 		}
 		emails = append(emails, email)
 	}
-	return emails, rows.Err()
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("error committing event cancellation: %s", err)
+	}
+
+	return emails, nil
 }
 
 // GetElapsedRecurringEventsNeedingSuccessor finds recurring events whose end
@@ -978,7 +1027,7 @@ func (s *BotDB) CreateRecurringSuccessor(ctx context.Context, previous *Voluntee
 		INSERT INTO events (
 			id, title, description, amount, start_at, expiration, owner, organization_id,
 			is_volunteer, slug, timezone, max_participants, signup_mode, signup_url,
-			review_status, qr_live_at, codes_generated, funding_status, location_id,
+			review_status, qr_live_at, qr_expires_at, codes_generated, funding_status, location_id,
 			recurrence_frequency, recurrence_interval, recurrence_monthly_mode,
 			recurrence_day_of_month, recurrence_week_of_month, recurrence_weekday,
 			recurrence_until, series_id, series_index
@@ -1002,6 +1051,16 @@ func (s *BotDB) CreateRecurringSuccessor(ctx context.Context, previous *Voluntee
 				return "", fmt.Errorf("error minting successor codes: %s", err)
 			}
 		}
+	}
+
+	// Cover photos are per-occurrence rows, so without this every generated
+	// instance after the first would publish with no images at all.
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO event_photos (id, event_id, position, file_name, content_type, photo_data, size_bytes, width, height)
+		SELECT gen_random_uuid()::text, $1, position, file_name, content_type, photo_data, size_bytes, width, height
+		FROM event_photos WHERE event_id = $2;
+	`, id, previous.Id); err != nil {
+		return "", fmt.Errorf("error cloning successor cover photos: %s", err)
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -1180,9 +1239,9 @@ func (s *BotDB) GetOrganizationVolunteerEvents(ctx context.Context, organization
 		SELECT %s, COUNT(*) OVER()
 		FROM events e
 		WHERE e.is_volunteer = TRUE AND e.organization_id = $1
-		ORDER BY e.start_at DESC, e.id ASC
+		ORDER BY %s
 		LIMIT $2 OFFSET $3;
-	`, volunteerEventColumns)
+	`, volunteerEventColumns, managementReviewOrder)
 
 	rows, err := s.db.Query(ctx, query, organizationId, f.Count, f.Page*f.Count)
 	if err != nil {
@@ -1380,6 +1439,150 @@ func (s *BotDB) RecordEventBlast(ctx context.Context, eventId string, sentBy str
 	`, uuid.NewString(), eventId, sentBy, subject, message, pushCount, emailCount)
 	if err != nil {
 		return fmt.Errorf("error recording event blast: %s", err)
+	}
+	return nil
+}
+
+// ErrEventElapsed is returned when an edit targets an occurrence that has
+// already finished.
+var ErrEventElapsed = errors.New("event has already ended")
+
+// UpdateVolunteerEvent applies an edit to a single occurrence.
+//
+// Recurrence semantics: this only ever touches the row it is given, and edits
+// are refused once an occurrence has ended. Past instances therefore keep the
+// title, description, reward and photos they actually ran with — their QR codes
+// and redemptions describe that version of the event, so rewriting them would
+// falsify history. Future occurrences pick the change up automatically because
+// each successor is cloned from the one before it.
+func (s *BotDB) UpdateVolunteerEvent(ctx context.Context, eventId string, p *CreateVolunteerEventParams) error {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(context.Background())
+
+	var expiration int64
+	var maxParticipants int
+	var codesGenerated bool
+	if err := tx.QueryRow(ctx, `
+		SELECT expiration, max_participants, codes_generated
+		FROM events WHERE id = $1 AND is_volunteer = TRUE
+		FOR UPDATE;
+	`, eventId).Scan(&expiration, &maxParticipants, &codesGenerated); err != nil {
+		if err == pgx.ErrNoRows {
+			return ErrEventNotFound
+		}
+		return err
+	}
+	if expiration > 0 && expiration < time.Now().Unix() {
+		return ErrEventElapsed
+	}
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE events SET
+			title = $2,
+			description = $3,
+			slug = $4,
+			amount = $5,
+			start_at = $6,
+			expiration = $7,
+			qr_live_at = $6 - 86400,
+			qr_expires_at = $8,
+			timezone = $9,
+			max_participants = $10,
+			signup_mode = $11,
+			signup_url = $12,
+			location_id = $13,
+			recurrence_frequency = $14,
+			recurrence_monthly_mode = $15,
+			recurrence_day_of_month = $16,
+			recurrence_week_of_month = $17,
+			recurrence_weekday = $18,
+			recurrence_until = $19,
+			updated_at = EXTRACT(EPOCH FROM NOW())::BIGINT
+		WHERE id = $1;
+	`, eventId, p.Title, p.Description, p.Slug, p.RewardAmount, p.StartAt, p.EndAt,
+		nullableUnix(p.QRExpiresAt), p.Timezone, p.MaxParticipants, p.SignupMode, p.SignupURL,
+		p.LocationId, p.RecurrenceFrequency, p.RecurrenceMonthlyMode,
+		p.RecurrenceDayOfMonth, p.RecurrenceWeekOfMonth, p.RecurrenceWeekday, p.RecurrenceUntil,
+	); err != nil {
+		return fmt.Errorf("error updating volunteer event: %s", err)
+	}
+
+	// Raising the participant cap needs more codes. Lowering it deliberately
+	// does NOT destroy codes: one may already be printed or in someone's hand,
+	// and invalidating it would strand a volunteer at the event.
+	if codesGenerated && p.MaxParticipants > maxParticipants {
+		for range p.MaxParticipants - maxParticipants {
+			if _, err := tx.Exec(ctx, `INSERT INTO codes (id, event) VALUES ($1, $2);`, uuid.NewString(), eventId); err != nil {
+				return fmt.Errorf("error minting additional codes: %s", err)
+			}
+		}
+	}
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE event_allocations
+		SET amount = $2
+		WHERE event_id = $1 AND active = TRUE;
+	`, eventId, int64(p.RewardAmount)*int64(p.MaxParticipants)); err != nil {
+		return fmt.Errorf("error updating event allocation: %s", err)
+	}
+
+	return tx.Commit(ctx)
+}
+
+// CreateEventEditRequest parks an affiliate's proposed changes for review.
+func (s *BotDB) CreateEventEditRequest(ctx context.Context, eventId string, requestedBy string, payload string) (string, error) {
+	id := uuid.NewString()
+	_, err := s.db.Exec(ctx, `
+		INSERT INTO event_edit_requests (id, event_id, requested_by, payload)
+		VALUES ($1, $2, $3, $4)
+		ON CONFLICT (event_id) WHERE status = 'pending'
+		DO UPDATE SET payload = EXCLUDED.payload,
+			requested_by = EXCLUDED.requested_by,
+			created_at = EXTRACT(EPOCH FROM NOW())::BIGINT;
+	`, id, eventId, requestedBy, payload)
+	if err != nil {
+		return "", fmt.Errorf("error recording edit request: %s", err)
+	}
+	return id, nil
+}
+
+type EventEditRequest struct {
+	Id          string
+	EventId     string
+	RequestedBy string
+	Payload     string
+	CreatedAt   int64
+}
+
+func (s *BotDB) GetPendingEventEditRequest(ctx context.Context, eventId string) (*EventEditRequest, error) {
+	request := &EventEditRequest{}
+	err := s.db.QueryRow(ctx, `
+		SELECT id, event_id, requested_by, payload, created_at
+		FROM event_edit_requests
+		WHERE event_id = $1 AND status = 'pending';
+	`, eventId).Scan(&request.Id, &request.EventId, &request.RequestedBy, &request.Payload, &request.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return request, nil
+}
+
+func (s *BotDB) ResolveEventEditRequest(ctx context.Context, eventId string, decidedBy string, approved bool, reason string) error {
+	status := "rejected"
+	if approved {
+		status = "approved"
+	}
+	_, err := s.db.Exec(ctx, `
+		UPDATE event_edit_requests
+		SET status = $2, decided_by = $3, reject_reason = $4,
+			decided_at = EXTRACT(EPOCH FROM NOW())::BIGINT
+		WHERE event_id = $1 AND status = 'pending';
+	`, eventId, status, decidedBy, strings.TrimSpace(reason))
+	if err != nil {
+		return fmt.Errorf("error resolving edit request: %s", err)
 	}
 	return nil
 }

@@ -190,7 +190,6 @@ func AddOrganizationRoutes(r *chi.Mux, a *handlers.AppService, s *handlers.BotSe
 	// Platform-admin org controls.
 	r.Get("/admin/organizations", withAdmin(a.AdminListOrganizations, a))
 	r.Put("/admin/organizations/superadmin", withAdmin(a.AdminSetOrganizationSuperadmin, a))
-	r.Put("/admin/organizations/allocations", withAdmin(a.AdminSetOrganizationAllocations, a))
 	r.Put("/admin/organizations/roles", withAdmin(a.AdminSetOrganizationRoleStatus, a))
 	r.Put("/admin/organizations/issuer-scopes", withAdmin(a.AdminSetOrganizationIssuerScopes, a))
 	r.Get("/admin/organizations/{id}/events", withAdmin(s.AdminGetOrganizationEvents, a))
@@ -293,7 +292,10 @@ func AddAdminRoutes(r *chi.Mux, s *handlers.AppService) {
 	// so these mint codes and reserve the faucet allocation immediately.
 	r.Get("/admin/volunteer-events", withAdmin(s.AdminListVolunteerEvents, s))
 	r.Post("/admin/volunteer-events", withAdmin(s.AdminCreateVolunteerEvent, s))
+	r.Put("/admin/volunteer-events/{id}", withAdmin(s.AdminUpdateVolunteerEvent, s))
 	r.Post("/admin/volunteer-events/{id}/approve", withAdmin(s.AdminApproveVolunteerEvent, s))
+	r.Post("/admin/volunteer-events/{id}/edit/approve", withAdmin(s.AdminApproveVolunteerEventEdit, s))
+	r.Post("/admin/volunteer-events/{id}/edit/reject", withAdmin(s.AdminRejectVolunteerEventEdit, s))
 	r.Post("/admin/volunteer-events/{id}/reject", withAdmin(s.AdminRejectVolunteerEvent, s))
 	r.Get("/admin/volunteer-events/{id}/codes.csv", withAdmin(s.AdminDownloadVolunteerEventCodes, s))
 	r.Post("/admin/volunteer-events/{id}/cancel", withAdmin(s.AdminCancelVolunteerEvent, s))
@@ -321,11 +323,6 @@ func AddPartnerRoutes(r *chi.Mux, s *handlers.AppService) {
 func AddAffiliateRoutes(r *chi.Mux, s *handlers.BotService, a *handlers.AppService) {
 	r.Post("/affiliates/request", withActiveAuth(a.RequestAffiliateStatus, a))
 	r.Put("/affiliates/logo", withAffiliate(a.UpdateAffiliateLogo, a))
-	r.Get("/affiliates/balance", withAffiliate(s.AffiliateBalance, a))
-	r.Post("/affiliates/events", withAffiliate(s.AffiliateNewEvent, a))
-	r.Get("/affiliates/events", withAffiliate(s.AffiliateGetEvents, a))
-	r.Get("/affiliates/events/{event}", withAffiliate(s.AffiliateGetCodes, a))
-	r.Delete("/affiliates/events/{event}", withAffiliate(s.AffiliateDeleteEvent, a))
 	// Volunteer events are request-only for affiliates: approval is what commits
 	// faucet funds, so an affiliate can never mint codes on their own.
 	r.Post("/affiliates/volunteer-events", withAffiliate(a.AffiliateRequestVolunteerEvent, a))
@@ -334,6 +331,7 @@ func AddAffiliateRoutes(r *chi.Mux, s *handlers.BotService, a *handlers.AppServi
 	// create events unilaterally. Scoped to their own organization inside the
 	// handler — these codes are bearer tokens for faucet funds.
 	r.Get("/affiliates/volunteer-events/{id}/codes.csv", withAffiliate(a.AffiliateDownloadVolunteerEventCodes, a))
+	r.Put("/affiliates/volunteer-events/{id}", withAffiliate(a.AffiliateUpdateVolunteerEvent, a))
 	r.Post("/affiliates/volunteer-events/{id}/blast", withAffiliate(a.AffiliateSendEventBlast, a))
 
 	r.Get("/affiliates/{user_id}", withAffiliate(a.GetAffiliate, a))

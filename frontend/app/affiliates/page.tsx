@@ -1,95 +1,67 @@
 "use client"
 
-import { useEffect, useState } from "react"
-import { useApp } from "@/context/AppProvider"
-import { AddEventModal } from "@/components/events/add-event-modal"
+import { useState } from "react"
+import { Leaf } from "lucide-react"
+
+import { AddVolunteerEventModal, type VolunteerEventDraft } from "@/components/events/add-volunteer-event-modal"
 import { VolunteerEventsManager } from "@/components/events/volunteer-events-manager"
-import { EventModal } from "@/components/events/event-modal"
-import EventCard from "@/components/events/event-card"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { AffiliateBalance } from "@/types/affiliate"
-import { Event } from "@/types/event"
-import { AlertTriangle, CalendarIcon, Leaf } from "lucide-react"
+import { useApp } from "@/context/AppProvider"
+import { useToast } from "@/hooks/use-toast"
 
+/**
+ * Affiliate volunteer events.
+ *
+ * There is no separate "affiliate event" concept any more: an organization's
+ * events ARE volunteer events, and they are created by request rather than
+ * directly. Approval is what commits faucet funds, which is why organizations
+ * no longer hold a spendable balance — the old standing-allocation model let an
+ * affiliate mint codes the faucet might not be able to honour.
+ */
 export default function AffiliatesPage() {
   const { authFetch, status, user } = useApp()
+  const { toast } = useToast()
+  const [requestModalOpen, setRequestModalOpen] = useState(false)
+  const [reloadKey, setReloadKey] = useState(0)
 
-  const [events, setEvents] = useState<Event[]>([])
-  const [eventsError, setEventsError] = useState<string>("")
-  const [eventsModalOpen, setEventsModalOpen] = useState<boolean>(false)
-  const [eventDetailModalOpen, setEventDetailModalOpen] = useState<boolean>(false)
-  const [eventDetailsEvent, setEventDetailsEvent] = useState<Event | undefined>(undefined)
-  const [deleteEventError] = useState<string | undefined>(undefined)
-  const [balance, setBalance] = useState<AffiliateBalance | null>(null)
-
-  const toggleNewEventModal = () => setEventsModalOpen(!eventsModalOpen)
-  const toggleEventDetailModal = () => setEventDetailModalOpen(!eventDetailModalOpen)
-
-  const getEvents = async () => {
+  const requestEvent = async (draft: VolunteerEventDraft): Promise<string | null> => {
     try {
-      const res = await authFetch("/affiliates/events")
-      const data = await res.json()
-      setEvents(data || [])
-    } catch {
-      setEventsError("Error fetching events. Please try again later.")
-    }
-  }
-
-  const getBalance = async () => {
-    try {
-      const res = await authFetch("/affiliates/balance")
-      const data = await res.json()
-      setBalance(data)
-    } catch {
-      setEventsError("Error fetching affiliate balance.")
-    }
-  }
-
-  const handleAddEvent = async (ev: Event): Promise<boolean> => {
-    const url = "/affiliates/events"
-    try {
-      const res = await authFetch(url, {
+      const res = await authFetch("/affiliates/volunteer-events", {
         method: "POST",
-        body: JSON.stringify(ev),
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(draft),
       })
       if (!res.ok) {
-        const message = await res.text()
-        throw new Error(message || "Error adding event. Please try again later.")
+        throw new Error((await res.text()).trim() || "Unable to submit the request.")
       }
-      setEventsError("")
-      await getEvents()
-      await getBalance()
-      return true
+      const created = await res.json()
+      toast({
+        title: "Request submitted",
+        description: "An SFLuv admin will review it. You'll be emailed either way.",
+      })
+      setReloadKey((key) => key + 1)
+      return created?.id ?? null
     } catch (error) {
-      const message = error instanceof Error ? error.message : null
-      setEventsError(message || "Error adding event. Please try again later.")
+      toast({
+        title: "Could not submit request",
+        description: error instanceof Error ? error.message : "Unexpected error.",
+        variant: "destructive",
+      })
+      return null
+    }
+  }
+
+  const uploadPhoto = async (eventId: string, file: File): Promise<boolean> => {
+    try {
+      const form = new FormData()
+      form.append("photo", file)
+      const res = await authFetch(`/admin/volunteer-events/${eventId}/photos`, { method: "POST", body: form })
+      return res.ok
+    } catch {
       return false
     }
   }
-
-  const handleDeleteEvent = async (id: string) => {
-    const url = "/affiliates/events/" + id
-    try {
-      const res = await authFetch(url, {
-        method: "DELETE",
-      })
-      if (!res.ok) throw new Error()
-    } catch {
-      setEventsError("Error deleting event. Please try again later.")
-    }
-
-    await getEvents()
-    await getBalance()
-    toggleEventDetailModal()
-  }
-
-  useEffect(() => {
-    if (status !== "authenticated") return
-    getEvents()
-    getBalance()
-  }, [status])
 
   if (status === "loading") {
     return (
@@ -106,7 +78,7 @@ export default function AffiliatesPage() {
           <CardHeader>
             <CardTitle>Affiliate Access Required</CardTitle>
             <CardDescription>
-              Your account is not yet approved for affiliate events. Submit a request in settings.
+              Your account is not yet approved for volunteer events. Submit a request in settings.
             </CardDescription>
           </CardHeader>
         </Card>
@@ -116,90 +88,47 @@ export default function AffiliatesPage() {
 
   return (
     <div className="container mx-auto p-4 space-y-6">
-      <div>
-        <h1 className="text-3xl font-bold">Affiliates Panel</h1>
-        <p className="text-muted-foreground">Create and manage affiliate-funded events</p>
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h1 className="text-3xl font-bold">Volunteer Events</h1>
+          <p className="text-muted-foreground">
+            Request events for your organization and manage the ones that have been approved.
+          </p>
+        </div>
+        <Button onClick={() => setRequestModalOpen(true)} className="w-full sm:w-auto">
+          + Request Event
+        </Button>
       </div>
 
-      {eventsError && (
-        <div className="flex items-center gap-2 text-red-600 text-sm p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
-          <AlertTriangle className="h-4 w-4 flex-shrink-0" />
-          <span>{eventsError}</span>
-        </div>
-      )}
-
-      {/*
-        Volunteer events are request-and-approve for affiliates, but QR codes for
-        approved events stay downloadable here — organizers still have to print
-        them.
-      */}
-      <VolunteerEventsManager
-        basePath="/affiliates/volunteer-events"
-        canReview={false}
-        title="Volunteer Events"
-        description="Your organization's volunteer events. Requests are reviewed by an SFLuv admin; once approved you can download the QR codes to print."
-      />
-
-      <AddEventModal
-        open={eventsModalOpen}
-        onOpenChange={toggleNewEventModal}
-        handleAddEvent={handleAddEvent}
-        addEventError={eventsError}
-        currentBalance={balance?.available || 0}
-      />
-      <EventModal
-        event={eventDetailsEvent}
-        open={eventDetailModalOpen}
-        onOpenChange={toggleEventDetailModal}
-        handleDeleteEvent={handleDeleteEvent}
-        deleteEventError={deleteEventError}
-        eventsBasePath="/affiliates/events"
-      />
-
       <Card>
-        <CardHeader className="pb-6 flex flex-col gap-4 md:grid md:grid-cols-[2fr,1fr]">
-          <div>
-            <CardTitle className="flex items-center gap-2 text-xl">
-              <CalendarIcon className="h-6 w-6" />
-              Affiliate Events
-            </CardTitle>
-            <CardDescription className="text-base mt-2">Allocate your affiliate balance to new events</CardDescription>
-            <div className="flex flex-wrap items-center gap-2 mt-3">
-              <Badge className="text-xs sm:text-sm px-3 py-1">
-                {balance
-                  ? `${balance.available}/${balance.weekly_allocation} SFLuv`
-                  : "Balance loading"}
-              </Badge>
-              <span className="text-xs sm:text-sm text-muted-foreground">remaining / weekly allocation</span>
-            </div>
-          </div>
-          <div className="text-left md:text-right">
-            <Button onClick={toggleNewEventModal} className="w-full md:w-auto">
-              + New Event
-            </Button>
-          </div>
-        </CardHeader>
-        <CardContent>
-          {events.length === 0 ? (
-            <div className="text-center py-8">
-              <Leaf className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-              <h3 className="text-lg font-medium">No Active Events</h3>
-              <p className="text-muted-foreground">Create a new event to see it here.</p>
-            </div>
-          ) : (
-            <div className="space-y-4">
-              {events.map((event: Event) => (
-                <EventCard
-                  key={event.id}
-                  event={event}
-                  toggleEventModal={toggleEventDetailModal}
-                  setEventModalEvent={setEventDetailsEvent}
-                />
-              ))}
-            </div>
-          )}
+        <CardContent className="flex items-start gap-3 pt-6 text-sm text-muted-foreground">
+          <Leaf className="mt-0.5 h-4 w-4 flex-shrink-0" />
+          <p>
+            Requests are reviewed by an SFLuv admin. Approving an event is what reserves its rewards from the
+            faucet and generates its QR codes — once approved, the codes are downloadable here straight away and
+            become redeemable 24 hours before the event starts.
+          </p>
         </CardContent>
       </Card>
+
+      <AddVolunteerEventModal
+        open={requestModalOpen}
+        onOpenChange={setRequestModalOpen}
+        createEvent={requestEvent}
+        uploadPhoto={uploadPhoto}
+        // Affiliates request rather than spend, so there is no balance to check
+        // against here; the faucet is verified by the admin at approval.
+        unallocatedBalance={Number.MAX_SAFE_INTEGER}
+        submitLabel="Submit request"
+      />
+
+      <VolunteerEventsManager
+        key={reloadKey}
+        basePath="/affiliates/volunteer-events"
+        canReview={false}
+        title="Your Organization's Events"
+        description="Requests awaiting review, plus approved events with their QR codes."
+      />
     </div>
   )
 }

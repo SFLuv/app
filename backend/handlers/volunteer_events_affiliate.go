@@ -54,7 +54,7 @@ func (a *AppService) AffiliateRequestVolunteerEvent(w http.ResponseWriter, r *ht
 		return
 	}
 
-	startAt, endAt, until, errMsg := validateVolunteerEventRequest(&req)
+	startAt, endAt, until, qrCutoff, errMsg := validateVolunteerEventRequest(&req)
 	if errMsg != "" {
 		w.WriteHeader(http.StatusBadRequest)
 		w.Write([]byte(errMsg))
@@ -68,6 +68,7 @@ func (a *AppService) AffiliateRequestVolunteerEvent(w http.ResponseWriter, r *ht
 		Timezone:            req.Timezone,
 		StartAt:             startAt,
 		EndAt:               endAt,
+		QRExpiresAt:         qrCutoff,
 		MaxParticipants:     req.MaxParticipants,
 		RewardAmount:        req.RewardAmountSfluv,
 		SignupMode:          req.SignupMode,
@@ -425,4 +426,99 @@ func (a *AppService) sendVolunteerEventDecisionEmail(ownerId string, title strin
 	if err := sender.SendEmail(*user.Email, "Organizer", subject, html, utils.NotificationFromEmail(), "SFLuv Volunteering"); err != nil {
 		a.logger.Logf("error sending volunteer event decision email: %s", err)
 	}
+}
+
+// AffiliateUpdateVolunteerEvent edits one of the caller's organization's events.
+//
+// A request that has not been approved yet is still theirs to change, so it
+// applies directly. Once an event is live the edit is parked for admin review
+// instead: the change may raise the reward cost, and committing faucet funds is
+// an admin decision — the same rule that governs creation.
+func (a *AppService) AffiliateUpdateVolunteerEvent(w http.ResponseWriter, r *http.Request) {
+	userDid := utils.GetDid(r)
+	if userDid == nil || a.bot == nil || a.bot.db == nil {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	org, _, err := a.db.GetOrganizationByUser(r.Context(), *userDid)
+	if err != nil || org == nil {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	eventId := strings.TrimSpace(r.PathValue("id"))
+	if eventId == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	row, err := a.bot.db.GetVolunteerEventForManagement(r.Context(), eventId)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		a.logger.Logf("error loading event %s for affiliate edit: %s", eventId, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	// 404 rather than 403 so an id cannot be used to probe other organizations.
+	if row.OrganizationId == nil || *row.OrganizationId != org.Id {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+
+	defer r.Body.Close()
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	var req structs.VolunteerEventCreateRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte("could not read event"))
+		return
+	}
+
+	if row.ReviewStatus == structs.EventReviewPending {
+		if status, message := a.applyVolunteerEventEdit(r.Context(), eventId, &req); status != http.StatusOK {
+			w.WriteHeader(status)
+			w.Write([]byte(message))
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	// Validate before parking it, so an admin is never asked to approve
+	// something that cannot be applied.
+	if _, _, _, _, errMsg := validateVolunteerEventRequest(&req); errMsg != "" {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(errMsg))
+		return
+	}
+
+	normalized, err := json.Marshal(req)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	if _, err := a.bot.db.CreateEventEditRequest(r.Context(), eventId, *userDid, string(normalized)); err != nil {
+		a.logger.Logf("error recording edit request for %s: %s", eventId, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	go a.sendVolunteerEventRequestEmail(org.Name, "Edit to "+row.Title, int64(req.RewardAmountSfluv)*int64(req.MaxParticipants))
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"status":  "pending_approval",
+		"message": "Your changes were submitted for admin approval. The published event is unchanged until then.",
+	})
 }
