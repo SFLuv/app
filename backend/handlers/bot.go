@@ -31,6 +31,17 @@ type BotService struct {
 	affiliateScheduler *AffiliateScheduler
 	activeChainID      int64
 	readRPCURL         string
+	// app is a back-reference used for shared concerns that live on AppService
+	// (styled email, logging). Set after construction because the two services
+	// reference each other.
+	app *AppService
+}
+
+// SetAppService completes the mutual wiring between the bot and app services.
+func (s *BotService) SetAppService(a *AppService) {
+	if s != nil {
+		s.app = a
+	}
 }
 
 var redeemCodeUUIDPattern = regexp.MustCompile(`(?i)[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}`)

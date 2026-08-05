@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react"
 import { useApp } from "@/context/AppProvider"
 import { AddEventModal } from "@/components/events/add-event-modal"
+import { VolunteerEventsManager } from "@/components/events/volunteer-events-manager"
 import { EventModal } from "@/components/events/event-modal"
 import EventCard from "@/components/events/event-card"
 import { Badge } from "@/components/ui/badge"
@@ -126,6 +127,18 @@ export default function AffiliatesPage() {
           <span>{eventsError}</span>
         </div>
       )}
+
+      {/*
+        Volunteer events are request-and-approve for affiliates, but QR codes for
+        approved events stay downloadable here — organizers still have to print
+        them.
+      */}
+      <VolunteerEventsManager
+        basePath="/affiliates/volunteer-events"
+        canReview={false}
+        title="Volunteer Events"
+        description="Your organization's volunteer events. Requests are reviewed by an SFLuv admin; once approved you can download the QR codes to print."
+      />
 
       <AddEventModal
         open={eventsModalOpen}

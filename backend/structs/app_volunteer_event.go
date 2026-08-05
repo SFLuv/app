@@ -186,3 +186,40 @@ type VolunteerEventsFilter struct {
 	Page           int
 	Count          int
 }
+
+// VolunteerEventRecurrenceInput is the recurrence rule as an admin specifies it.
+type VolunteerEventRecurrenceInput struct {
+	Frequency   string  `json:"frequency"`
+	MonthlyMode string  `json:"monthly_mode,omitempty"`
+	DayOfMonth  *int    `json:"day_of_month,omitempty"`
+	WeekOfMonth *int    `json:"week_of_month,omitempty"`
+	UntilLocal  *string `json:"until_local,omitempty"`
+}
+
+// VolunteerEventCreateRequest creates a volunteer event.
+//
+// Times arrive as WALL CLOCK in the event's own timezone ("2026-08-06T13:00:00",
+// no offset, no Z) and the server converts them to the stored UTC instant.
+// Clients never do the conversion: doing it here means one implementation with
+// tests instead of every client re-deriving it, and it is what makes recurring
+// events re-anchor correctly across DST — a series regenerates at the same
+// local wall-clock time, which cannot be recovered if the wrong instant was
+// captured at ingestion.
+type VolunteerEventCreateRequest struct {
+	Title       string `json:"title"`
+	Description string `json:"description"`
+
+	StartAtLocal string `json:"start_at_local"`
+	EndAtLocal   string `json:"end_at_local"`
+	Timezone     string `json:"timezone"`
+
+	MaxParticipants   int    `json:"max_participants"`
+	RewardAmountSfluv uint64 `json:"reward_amount_sfluv"`
+
+	SignupMode string `json:"signup_mode"`
+	SignupURL  string `json:"signup_url,omitempty"`
+
+	LocationId *int64 `json:"location_id,omitempty"`
+
+	Recurrence *VolunteerEventRecurrenceInput `json:"recurrence,omitempty"`
+}

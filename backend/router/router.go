@@ -153,6 +153,7 @@ func New(s *handlers.BotService, a *handlers.AppService, p *handlers.PonderServi
 
 	AddBotRoutes(r, s, a)
 	AddVolunteerEventRoutes(r, s)
+	AddVolunteerListRoutes(r, a)
 	AddPartnerRoutes(r, a)
 	AddOrganizationRoutes(r, a, s)
 	AddClientConfigRoutes(r, a)
@@ -215,6 +216,34 @@ func AddVolunteerEventRoutes(r *chi.Mux, s *handlers.BotService) {
 	r.Get("/volunteer-events/photos/{photo_id}", s.GetVolunteerEventPhoto)
 	r.Get("/volunteer-events/{id}", s.GetVolunteerEvent)
 	r.Get("/organizers/{id}/logo", s.GetOrganizerLogo)
+
+	// One signup path for both clients: auth is optional. Authenticated callers
+	// get their identity from their profile; anonymous callers supply it.
+	r.Post("/volunteer-events/{id}/signup", s.SignUpForVolunteerEvent)
+	r.Delete("/volunteer-events/{id}/signup", withAuth(s.CancelVolunteerEventSignup))
+	r.Get("/volunteer-events/mine", withAuth(s.GetMyVolunteerEvents))
+}
+
+// AddVolunteerListRoutes mounts the volunteer email list token flows and the
+// per-user reminder preferences.
+//
+// The token GETs are deliberately read-only and the mutations are POST: mail
+// clients and corporate link scanners prefetch URLs in email, so a GET that
+// mutated would unsubscribe — or silently complete a double opt-in for —
+// people who never clicked.
+func AddVolunteerListRoutes(r *chi.Mux, a *handlers.AppService) {
+	// Signup confirmation for portal (anonymous) signups. Read-only GET, mutating
+	// POST — same prefetch-safety rule as the email-list tokens.
+	r.Get("/volunteer-events/signup/confirm", a.GetVolunteerSignupConfirmState)
+	r.Post("/volunteer-events/signup/confirm", a.PostVolunteerSignupConfirm)
+
+	r.Get("/volunteer-email-list/confirm", a.GetVolunteerListTokenState)
+	r.Post("/volunteer-email-list/confirm", a.PostVolunteerListTokenAction)
+	r.Get("/volunteer-email-list/unsubscribe", a.GetVolunteerListTokenState)
+	r.Post("/volunteer-email-list/unsubscribe", a.PostVolunteerListTokenAction)
+
+	r.Get("/volunteer-events/reminder-preferences", withAuth(a.GetVolunteerReminderPreferences))
+	r.Put("/volunteer-events/reminder-preferences", withAuth(a.SetVolunteerReminderPreferences))
 }
 
 func AddBotRoutes(r *chi.Mux, s *handlers.BotService, a *handlers.AppService) {
@@ -260,6 +289,18 @@ func AddAdminRoutes(r *chi.Mux, s *handlers.AppService) {
 	r.Get("/admin/affiliates", withAdmin(s.GetAffiliates, s))
 	r.Put("/admin/affiliates", withAdmin(s.UpdateAffiliate, s))
 
+	// Volunteer event management. Admin-created events are approved on creation,
+	// so these mint codes and reserve the faucet allocation immediately.
+	r.Get("/admin/volunteer-events", withAdmin(s.AdminListVolunteerEvents, s))
+	r.Post("/admin/volunteer-events", withAdmin(s.AdminCreateVolunteerEvent, s))
+	r.Post("/admin/volunteer-events/{id}/approve", withAdmin(s.AdminApproveVolunteerEvent, s))
+	r.Post("/admin/volunteer-events/{id}/reject", withAdmin(s.AdminRejectVolunteerEvent, s))
+	r.Get("/admin/volunteer-events/{id}/codes.csv", withAdmin(s.AdminDownloadVolunteerEventCodes, s))
+	r.Post("/admin/volunteer-events/{id}/cancel", withAdmin(s.AdminCancelVolunteerEvent, s))
+	r.Post("/admin/volunteer-events/{id}/blast", withAdmin(s.AdminSendEventBlast, s))
+	r.Post("/admin/volunteer-events/{id}/photos", withAdmin(s.AdminUploadVolunteerEventPhoto, s))
+	r.Delete("/admin/volunteer-events/photos/{photo_id}", withAdmin(s.AdminDeleteVolunteerEventPhoto, s))
+
 	// Partner carousel shown on the public marketing site.
 	r.Get("/admin/partners", withAdmin(s.AdminGetPartners, s))
 	r.Post("/admin/partners", withAdmin(s.AdminCreatePartner, s))
@@ -285,6 +326,16 @@ func AddAffiliateRoutes(r *chi.Mux, s *handlers.BotService, a *handlers.AppServi
 	r.Get("/affiliates/events", withAffiliate(s.AffiliateGetEvents, a))
 	r.Get("/affiliates/events/{event}", withAffiliate(s.AffiliateGetCodes, a))
 	r.Delete("/affiliates/events/{event}", withAffiliate(s.AffiliateDeleteEvent, a))
+	// Volunteer events are request-only for affiliates: approval is what commits
+	// faucet funds, so an affiliate can never mint codes on their own.
+	r.Post("/affiliates/volunteer-events", withAffiliate(a.AffiliateRequestVolunteerEvent, a))
+	r.Get("/affiliates/volunteer-events", withAffiliate(a.AffiliateListVolunteerEvents, a))
+	// Organizers still need their codes to print, even though they can no longer
+	// create events unilaterally. Scoped to their own organization inside the
+	// handler — these codes are bearer tokens for faucet funds.
+	r.Get("/affiliates/volunteer-events/{id}/codes.csv", withAffiliate(a.AffiliateDownloadVolunteerEventCodes, a))
+	r.Post("/affiliates/volunteer-events/{id}/blast", withAffiliate(a.AffiliateSendEventBlast, a))
+
 	r.Get("/affiliates/{user_id}", withAffiliate(a.GetAffiliate, a))
 }
 

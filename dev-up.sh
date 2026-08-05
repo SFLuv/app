@@ -436,10 +436,33 @@ fi
 [[ -n "$SKIP_DB_CLONE_FLAG" ]] && SKIP_DB_CLONE=1
 [[ -n "$MOBILE_BRANCH_OVERRIDE" ]] && MOBILE_APP_BRANCH="$MOBILE_BRANCH_OVERRIDE"
 
-LOCAL_DB_USER="${LOCAL_DB_USER:-postgres}"
 LOCAL_DB_HOST_PORT="${LOCAL_DB_HOST_PORT:-localhost:5432}"
 LOCAL_DB_HOST="${LOCAL_DB_HOST_PORT%%:*}"
 LOCAL_DB_PORT="${LOCAL_DB_HOST_PORT##*:}"
+
+# Pick the local superuser role.
+#
+# The conventional default is "postgres", but Homebrew's postgresql formula
+# creates a superuser named after the OS user and no "postgres" role at all.
+# On such a machine `psql postgres` succeeds — it connects over a Unix socket
+# as the OS user to the DATABASE named postgres — while `-U postgres` fails
+# with `role "postgres" does not exist`, which reads like a connectivity
+# problem and is not. So when LOCAL_DB_USER is not set explicitly, probe for a
+# role that actually works instead of assuming one. An explicit setting in
+# .dev.env is always respected.
+if [[ -z "${LOCAL_DB_USER:-}" ]]; then
+  for _db_user_candidate in postgres "$(whoami)"; do
+    if PGPASSWORD="${LOCAL_DB_PASSWORD:-}" psql -h "$LOCAL_DB_HOST" -p "$LOCAL_DB_PORT" \
+        -U "$_db_user_candidate" -d postgres -qAt -c "SELECT 1" >/dev/null 2>&1; then
+      LOCAL_DB_USER="$_db_user_candidate"
+      break
+    fi
+  done
+  # Nothing worked: keep the conventional default so the probe below reports
+  # the real psql error rather than a confusing fallback.
+  LOCAL_DB_USER="${LOCAL_DB_USER:-postgres}"
+fi
+
 PSQL=(psql -h "$LOCAL_DB_HOST" -p "$LOCAL_DB_PORT" -U "$LOCAL_DB_USER" -v ON_ERROR_STOP=1 -qAt)
 
 # Local database names, taken straight from PROD_DB_NAMES so that list is the
@@ -501,8 +524,22 @@ resolve_pg_client() {
 PG_DUMP_BIN="$(resolve_pg_client pg_dump "${PG_DUMP_BIN:-}")"
 PG_RESTORE_BIN="$(resolve_pg_client pg_restore "${PG_RESTORE_BIN:-}")"
 
-"${PSQL[@]}" -d postgres -c "SELECT 1" >/dev/null 2>&1 \
-  || die "cannot reach local postgres at $LOCAL_DB_HOST_PORT as $LOCAL_DB_USER"
+# Surface psql's own error. "cannot reach" alone sends people to check whether
+# postgres is running, when the usual cause on a fresh Mac is a missing role,
+# not a missing server.
+if ! PSQL_PROBE_ERR="$("${PSQL[@]}" -d postgres -c "SELECT 1" 2>&1 >/dev/null)"; then
+  c_red "cannot connect to local postgres at $LOCAL_DB_HOST_PORT as user '$LOCAL_DB_USER'"
+  [[ -n "$PSQL_PROBE_ERR" ]] && printf '  psql: %s\n' "$(printf '%s' "$PSQL_PROBE_ERR" | head -n 3)"
+  if printf '%s' "$PSQL_PROBE_ERR" | grep -qi 'role .* does not exist'; then
+    c_yellow "  Homebrew's postgres creates a superuser named after your OS user, not 'postgres'."
+    c_yellow "  Note that \`psql postgres\` connecting is not evidence this will: that opens the"
+    c_yellow "  DATABASE named postgres over a socket as '$(whoami)', not the ROLE '$LOCAL_DB_USER' over TCP."
+    c_yellow "  Fix with either:"
+    c_yellow "    echo 'LOCAL_DB_USER=$(whoami)' >> .dev.env"
+    c_yellow "    createuser -s postgres"
+  fi
+  exit 1
+fi
 
 # Dev utilities menu: operates on the already-cloned local database only. It
 # boots nothing and never installs the shutdown trap, so it returns cleanly
@@ -780,6 +817,14 @@ else
   c_blue "[6/10] Ponder (skipped)"
 fi
 
+# Resolve the webpage's port BEFORE the backend starts: the backend needs the
+# portal URL to build signup-confirmation links, and the webpage itself does not
+# boot until step 9.
+if [[ "$RUN_WEBPAGE" -eq 1 && -d "$WEBPAGE_DIR" ]]; then
+  WEBPAGE_PORT="$(pick_free_port "$WEBPAGE_PORT_BASE")" \
+    || { c_yellow "  no free port found from $WEBPAGE_PORT_BASE up — skipping webpage"; RUN_WEBPAGE=0; }
+fi
+
 # ----------------------------------------------------------------------------
 # 7. Backend (local community config; no external sends)
 # ----------------------------------------------------------------------------
@@ -816,6 +861,21 @@ if [[ "$RUN_BACKEND" -eq 1 ]]; then
     "PONDER_KEY=${DEV_PONDER_KEY:-local-dev-ponder-key}"
     "PONDER_CALLBACK_URL=http://localhost:$BACKEND_PORT/ponder/callback"
     "NOTIFICATION_TEST_MODE=true"
+    # Externally reachable origin of this backend. Without it, volunteer event
+    # photo and organizer logo URLs come back root-relative, which renders blank
+    # in React Native and 404s against sfluv.org in a browser.
+    "PUBLIC_BACKEND_URL=http://localhost:$BACKEND_PORT"
+    # Volunteer portal is on in local dev so the mobile tab and the marketing
+    # site's /volunteers page are exercisable without extra setup.
+    "VOLUNTEER_EVENTS_ENABLED=${VOLUNTEER_EVENTS_ENABLED:-true}"
+    # Shared secret with the webpage signup proxy; empty locally means forwarded
+    # client IPs are ignored and signups share one rate-limit bucket, which is
+    # the intended fallback.
+    "VOLUNTEER_PROXY_KEY=${VOLUNTEER_PROXY_KEY:-}"
+    # Where signup-confirmation emails point. The webpage may be skipped, so
+    # fall back to the port the search would have started from.
+    "VOLUNTEER_PORTAL_BASE_URL=http://localhost:${WEBPAGE_PORT:-$WEBPAGE_PORT_BASE}"
+    "WORKFLOW_MAINTENANCE_INTERVAL=${WORKFLOW_MAINTENANCE_INTERVAL:-}"
     "ENV_FILE=/dev/null"
   )
   printf '%s\n' "${BACKEND_ENV[@]}" > "$TMP_DIR/backend.dev.env"
@@ -873,14 +933,6 @@ fi
 # ----------------------------------------------------------------------------
 # 9. Webpage (public marketing site, ../webpage)
 # ----------------------------------------------------------------------------
-if [[ "$RUN_WEBPAGE" -eq 1 && -d "$WEBPAGE_DIR" ]]; then
-  # Takes the first free port rather than claiming a fixed one — nothing points
-  # at the webpage by hard-coded URL, so there is no reason to evict whatever a
-  # developer already has running.
-  WEBPAGE_PORT="$(pick_free_port "$WEBPAGE_PORT_BASE")" \
-    || { c_yellow "  no free port found from $WEBPAGE_PORT_BASE up — skipping webpage"; RUN_WEBPAGE=0; }
-fi
-
 if [[ "$RUN_WEBPAGE" -eq 1 && -n "$WEBPAGE_PORT" ]]; then
   c_blue "[9/10] Webpage (:$WEBPAGE_PORT)"
   if [[ ! -d "$WEBPAGE_DIR/node_modules" ]]; then
@@ -889,7 +941,7 @@ if [[ "$RUN_WEBPAGE" -eq 1 && -n "$WEBPAGE_PORT" ]]; then
       || c_yellow "  webpage dep install failed — see tmp/logs/webpage-install.log"
   fi
 
-  # SFLUV_API_BASE_URL is the only variable the webpage reads. Unset, it falls
+  # SFLUV_API_BASE_URL is the variable the webpage reads for the API. Unset, it falls
   # back to built-in fixtures; pointed at the local backend it renders live
   # volunteer events. Set it here so a dev boot always exercises the real API.
   WEBPAGE_ENV=(
@@ -900,7 +952,10 @@ if [[ "$RUN_WEBPAGE" -eq 1 && -n "$WEBPAGE_PORT" ]]; then
   # Forwarded only when configured, so the signup proxy can present the shared
   # secret exactly as it will in production (see VOLUNTEER_PROXY_KEY in the
   # backend env). Harmless to omit.
-  [[ -n "${VOLUNTEER_PROXY_KEY:-}" ]] && WEBPAGE_ENV+=("SFLUV_PROXY_KEY=$VOLUNTEER_PROXY_KEY")
+  # Name must match what the webpage actually reads (SFLUV_VOLUNTEER_PROXY_KEY);
+  # it is omitted entirely when unset so the backend takes its "no key ⇒ never
+  # trust the forwarded IP" path rather than comparing against an empty string.
+  [[ -n "${VOLUNTEER_PROXY_KEY:-}" ]] && WEBPAGE_ENV+=("SFLUV_VOLUNTEER_PROXY_KEY=$VOLUNTEER_PROXY_KEY")
 
   if [[ "$RUN_BACKEND" -ne 1 ]]; then
     c_yellow "  backend is not running — the webpage will show fixture data for volunteer events"

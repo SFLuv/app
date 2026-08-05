@@ -991,6 +991,75 @@ var schemaMigrations = []SchemaMigration{
 			return nil
 		},
 	},
+	{
+		Version:     "1.28",
+		Description: "volunteer event reminder preferences and sent-reminder ledger",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			// Preferences are server-side, not device-local: the backend sends
+			// the push at a time the phone may not be running, so it needs the
+			// value. A missing row means the defaults (on, 24h), so a user who
+			// never touches the setting still gets reminders.
+			if _, err := pools.App.Exec(ctx, `
+				CREATE TABLE IF NOT EXISTS volunteer_reminder_preferences(
+					user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+					enabled BOOLEAN NOT NULL DEFAULT TRUE,
+					hours_before INTEGER NOT NULL DEFAULT 24,
+					updated_at BIGINT NOT NULL DEFAULT unix_now()
+				);
+
+				-- One reminder per (user, event) ever, which is what makes the
+				-- sender idempotent: several matching emails, a retry, or a
+				-- second pass cannot produce a second buzz.
+				CREATE TABLE IF NOT EXISTS volunteer_reminder_sends(
+					user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+					event_id TEXT NOT NULL,
+					sent_at BIGINT NOT NULL DEFAULT unix_now(),
+					PRIMARY KEY (user_id, event_id)
+				);
+			`); err != nil {
+				return err
+			}
+
+			return nil
+		},
+	},
+	{
+		Version:     "1.29",
+		Description: "confirmed-by-email volunteer signups and the organizer event blast log",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			// Portal (anonymous) signups must confirm by email before they count.
+			// Existing rows are backfilled as confirmed: they were made under the
+			// old rules and retroactively invalidating someone's spot would be
+			// worse than the inconsistency.
+			if _, err := pools.Bot.Exec(ctx, `
+				ALTER TABLE event_signups
+					ADD COLUMN IF NOT EXISTS confirm_token TEXT NOT NULL DEFAULT '',
+					ADD COLUMN IF NOT EXISTS confirmed_at BIGINT;
+
+				UPDATE event_signups SET confirmed_at = created_at WHERE confirmed_at IS NULL;
+
+				CREATE UNIQUE INDEX IF NOT EXISTS event_signups_confirm_token_idx
+					ON event_signups(confirm_token) WHERE confirm_token <> '';
+
+				CREATE TABLE IF NOT EXISTS event_blasts(
+					id TEXT PRIMARY KEY,
+					event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+					sent_by TEXT NOT NULL DEFAULT '',
+					subject TEXT NOT NULL DEFAULT '',
+					message TEXT NOT NULL DEFAULT '',
+					push_count INTEGER NOT NULL DEFAULT 0,
+					email_count INTEGER NOT NULL DEFAULT 0,
+					created_at BIGINT NOT NULL DEFAULT EXTRACT(EPOCH FROM NOW())::BIGINT
+				);
+
+				CREATE INDEX IF NOT EXISTS event_blasts_event_idx ON event_blasts(event_id, created_at DESC);
+			`); err != nil {
+				return err
+			}
+
+			return nil
+		},
+	},
 }
 
 // migrateLocationHoursUniqueness enforces at most one hours row per weekday per

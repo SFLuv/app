@@ -84,6 +84,20 @@ func (s *WorkflowMaintenanceScheduler) RunOnce(ctx context.Context) {
 	s.reconcileUnsettledPayouts(ctx)
 	s.finalizeSettledWorkflows(ctx)
 	s.pruneResolvedNotificationReads(ctx)
+	s.runVolunteerMaintenance(ctx)
+}
+
+// runVolunteerMaintenance advances volunteer series whose latest occurrence has
+// ended, mints codes for any created underfunded once the faucet can cover
+// them, sends due event reminders, and releases spots held by portal signups
+// that were never confirmed.
+func (s *WorkflowMaintenanceScheduler) runVolunteerMaintenance(parent context.Context) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), workflowReconcileSweepTimeout)
+	defer cancel()
+
+	s.app.GenerateRecurringVolunteerEvents(ctx)
+	s.app.SendDueVolunteerReminders(ctx)
+	s.app.ExpireUnconfirmedSignups(ctx)
 }
 
 // pruneResolvedNotificationReads drops seen-markers whose notification has been

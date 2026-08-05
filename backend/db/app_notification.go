@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	"github.com/SFLuv/app/backend/structs"
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 // GetImproverNotifications builds the improver notification feed from live
@@ -211,4 +213,240 @@ func (a *AppDB) PruneResolvedImproverNotificationReads(ctx context.Context) (int
 	}
 
 	return tag.RowsAffected(), nil
+}
+
+// Volunteer email list subscription states.
+const (
+	VolunteerListPending      = "pending"
+	VolunteerListActive       = "active"
+	VolunteerListUnsubscribed = "unsubscribed"
+)
+
+// UpsertVolunteerListSubscription records an opt-in.
+//
+// active=true writes the row straight to 'active' (PJ's ruling: an
+// authenticated user is auto-confirmed, since a logged-in account with a known
+// address is not the spam vector an anonymous form is). active=false leaves it
+// 'pending' until the double opt-in link is followed. An existing 'active' row
+// is never downgraded by a later pending opt-in.
+func (a *AppDB) UpsertVolunteerListSubscription(
+	ctx context.Context, email string, firstName string, lastName string, sourceEventId string, active bool,
+) (string, string, error) {
+	email = strings.TrimSpace(email)
+	if email == "" {
+		return "", "", fmt.Errorf("email is required")
+	}
+
+	status := VolunteerListPending
+	if active {
+		status = VolunteerListActive
+	}
+
+	id := uuid.NewString()
+	confirmToken := uuid.NewString()
+	unsubscribeToken := uuid.NewString()
+
+	var resultStatus, resultConfirmToken string
+	err := a.db.QueryRow(ctx, `
+		INSERT INTO volunteer_email_list
+			(id, email, first_name, last_name, status, confirm_token, unsubscribe_token, source_event_id, confirmed_at)
+		VALUES
+			($1, $2, $3, $4, $5, $6, $7, $8, CASE WHEN $5 = 'active' THEN unix_now() ELSE NULL END)
+		ON CONFLICT (LOWER(email)) DO UPDATE SET
+			first_name = COALESCE(NULLIF(EXCLUDED.first_name, ''), volunteer_email_list.first_name),
+			last_name = COALESCE(NULLIF(EXCLUDED.last_name, ''), volunteer_email_list.last_name),
+			-- Never downgrade an existing active subscription, and treat a fresh
+			-- opt-in as re-subscribing if they had previously unsubscribed.
+			status = CASE
+				WHEN volunteer_email_list.status = 'active' THEN 'active'
+				ELSE EXCLUDED.status
+			END,
+			confirmed_at = CASE
+				WHEN volunteer_email_list.status = 'active' THEN volunteer_email_list.confirmed_at
+				WHEN EXCLUDED.status = 'active' THEN unix_now()
+				ELSE volunteer_email_list.confirmed_at
+			END,
+			unsubscribed_at = NULL
+		RETURNING status, confirm_token;
+	`, id, email, firstName, lastName, status, confirmToken, unsubscribeToken, sourceEventId).Scan(&resultStatus, &resultConfirmToken)
+	if err != nil {
+		return "", "", fmt.Errorf("error recording volunteer list opt-in: %s", err)
+	}
+
+	return resultStatus, resultConfirmToken, nil
+}
+
+// GetVolunteerListSubscriptionByEmail reports the caller's current membership so
+// a client can render an opt-in toggle that reflects reality rather than always
+// defaulting to on.
+func (a *AppDB) GetVolunteerListSubscriptionByEmail(ctx context.Context, email string) (string, error) {
+	var status string
+	err := a.db.QueryRow(ctx, `
+		SELECT status FROM volunteer_email_list WHERE LOWER(email) = LOWER($1);
+	`, strings.TrimSpace(email)).Scan(&status)
+	if err != nil {
+		return "", err
+	}
+	return status, nil
+}
+
+// SetVolunteerListStateByToken confirms or unsubscribes via a single-use token.
+// Both are POST-only at the handler layer: mail scanners prefetch links, and a
+// GET that mutates would confirm or unsubscribe people who never clicked.
+func (a *AppDB) SetVolunteerListStateByToken(ctx context.Context, token string, confirm bool) (string, string, error) {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return "", "", fmt.Errorf("token is required")
+	}
+
+	var email, status string
+	var err error
+	if confirm {
+		err = a.db.QueryRow(ctx, `
+			UPDATE volunteer_email_list
+			SET status = 'active', confirmed_at = unix_now(), confirm_token = ''
+			WHERE confirm_token = $1 AND confirm_token <> ''
+			RETURNING email, status;
+		`, token).Scan(&email, &status)
+	} else {
+		err = a.db.QueryRow(ctx, `
+			UPDATE volunteer_email_list
+			SET status = 'unsubscribed', unsubscribed_at = unix_now()
+			WHERE unsubscribe_token = $1 AND unsubscribe_token <> ''
+			RETURNING email, status;
+		`, token).Scan(&email, &status)
+	}
+	if err != nil {
+		return "", "", err
+	}
+	return email, status, nil
+}
+
+// PeekVolunteerListByToken is the read half of the token flow: it renders the
+// landing page without mutating anything, so a prefetching mail scanner cannot
+// complete the action on the user's behalf.
+func (a *AppDB) PeekVolunteerListByToken(ctx context.Context, token string, confirm bool) (string, string, error) {
+	column := "unsubscribe_token"
+	if confirm {
+		column = "confirm_token"
+	}
+
+	var email, status string
+	err := a.db.QueryRow(ctx, fmt.Sprintf(`
+		SELECT email, status FROM volunteer_email_list WHERE %s = $1 AND %s <> '';
+	`, column, column), strings.TrimSpace(token)).Scan(&email, &status)
+	if err != nil {
+		return "", "", err
+	}
+	return email, status, nil
+}
+
+// Reminder preference bounds. Validated server-side rather than trusting a
+// client, since these drive scheduled sends.
+const (
+	VolunteerReminderMinHours     = 1
+	VolunteerReminderMaxHours     = 168
+	VolunteerReminderDefaultHours = 24
+)
+
+// GetVolunteerReminderPreference returns the caller's preference, defaulting to
+// enabled at 24 hours when they have never set one. Defaulting here rather than
+// in a client means the value the client shows is the value the sender uses.
+func (a *AppDB) GetVolunteerReminderPreference(ctx context.Context, userId string) (bool, int, error) {
+	enabled := true
+	hoursBefore := VolunteerReminderDefaultHours
+
+	err := a.db.QueryRow(ctx, `
+		SELECT enabled, hours_before FROM volunteer_reminder_preferences WHERE user_id = $1;
+	`, userId).Scan(&enabled, &hoursBefore)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return true, VolunteerReminderDefaultHours, nil
+		}
+		return true, VolunteerReminderDefaultHours, fmt.Errorf("error loading reminder preference: %s", err)
+	}
+
+	return enabled, hoursBefore, nil
+}
+
+func (a *AppDB) SetVolunteerReminderPreference(ctx context.Context, userId string, enabled bool, hoursBefore int) error {
+	if hoursBefore < VolunteerReminderMinHours {
+		hoursBefore = VolunteerReminderMinHours
+	}
+	if hoursBefore > VolunteerReminderMaxHours {
+		hoursBefore = VolunteerReminderMaxHours
+	}
+
+	_, err := a.db.Exec(ctx, `
+		INSERT INTO volunteer_reminder_preferences (user_id, enabled, hours_before)
+		VALUES ($1, $2, $3)
+		ON CONFLICT (user_id) DO UPDATE SET
+			enabled = EXCLUDED.enabled,
+			hours_before = EXCLUDED.hours_before,
+			updated_at = unix_now();
+	`, userId, enabled, hoursBefore)
+	if err != nil {
+		return fmt.Errorf("error saving reminder preference: %s", err)
+	}
+	return nil
+}
+
+// VolunteerReminderTarget is one owed reminder.
+type VolunteerReminderTarget struct {
+	UserId  string
+	EventId string
+}
+
+// GetUsersMatchingSignupEmails resolves signups to accounts for reminders.
+//
+// Matching is on user_id (an in-app signup) or a VERIFIED email — deliberately
+// not the account's unverified contact email. @WEB caught that matching an
+// unverified address would let anyone type a stranger's email into a public
+// form and make that stranger's phone buzz with a genuine-looking SFLuv push;
+// @MOBILE withdrew their own broader proposal in favour of this. The cost is
+// that users who never verified an email get no reminder, which is both fixable
+// in-app and a far better failure mode.
+func (a *AppDB) GetUsersMatchingSignupEmails(ctx context.Context, emails []string, userIds []string) (map[string][]string, error) {
+	result := map[string][]string{}
+	if len(emails) == 0 && len(userIds) == 0 {
+		return result, nil
+	}
+
+	rows, err := a.db.Query(ctx, `
+		SELECT LOWER(TRIM(ve.email_normalized)), ve.user_id
+		FROM user_verified_emails ve
+		JOIN users u ON u.id = ve.user_id
+		WHERE ve.active = TRUE
+			AND u.active = TRUE
+			AND LOWER(TRIM(ve.email_normalized)) = ANY($1);
+	`, emails)
+	if err != nil {
+		return nil, fmt.Errorf("error matching signup emails to accounts: %s", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var email, userId string
+		if err := rows.Scan(&email, &userId); err != nil {
+			return nil, err
+		}
+		result[email] = append(result[email], userId)
+	}
+
+	return result, rows.Err()
+}
+
+// ClaimVolunteerReminderSend records that a reminder was sent, returning false
+// when one already existed. The primary key makes this the dedup point: the
+// sender can run repeatedly and a user still gets at most one push per event.
+func (a *AppDB) ClaimVolunteerReminderSend(ctx context.Context, userId string, eventId string) (bool, error) {
+	tag, err := a.db.Exec(ctx, `
+		INSERT INTO volunteer_reminder_sends (user_id, event_id)
+		VALUES ($1, $2)
+		ON CONFLICT (user_id, event_id) DO NOTHING;
+	`, userId, eventId)
+	if err != nil {
+		return false, fmt.Errorf("error claiming reminder send: %s", err)
+	}
+	return tag.RowsAffected() > 0, nil
 }

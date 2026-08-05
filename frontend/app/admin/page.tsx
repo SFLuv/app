@@ -83,7 +83,8 @@ import {
   WorkflowSeriesClaimRevokeResult,
 } from "@/types/workflow"
 import { Event, EventsStatus } from "@/types/event"
-import { AddEventModal } from "@/components/events/add-event-modal"
+import { AddVolunteerEventModal, type VolunteerEventDraft } from "@/components/events/add-volunteer-event-modal"
+import { VolunteerEventsManager } from "@/components/events/volunteer-events-manager"
 import { EventModal } from "@/components/events/event-modal"
 import { DrainFaucetModal } from "@/components/events/drain-faucet-modal"
 import { OrganizationManagement } from "@/components/admin/organization-management"
@@ -556,26 +557,41 @@ export default function AdminPage() {
     getUnallocatedBalance()
   }
 
-  const handleAddEvent = async (ev: Event): Promise<boolean> => {
-    const url = "/events"
+  // Volunteer event creation. Times are submitted as wall clock plus the
+  // event's timezone; the backend owns the conversion to an instant so the
+  // three clients cannot each derive it differently.
+  const handleCreateVolunteerEvent = async (draft: VolunteerEventDraft): Promise<string | null> => {
     try {
-      const res = await authFetch(url, {
+      const res = await authFetch("/admin/volunteer-events", {
         method: "POST",
-        body: JSON.stringify(ev)
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(draft),
       })
       if (!res.ok) {
         const message = (await res.text()).trim()
-        throw new Error(message || "Error adding event. Please try again later.")
+        throw new Error(message || "Error creating event. Please try again later.")
       }
+      const created = await res.json()
       setEventsError("")
       await getEvents()
       getUnallocatedBalance()
-      return true
-    }
-    catch (error) {
-      const message = error instanceof Error ? error.message : "Error adding event. Please try again later."
+      return created?.id ?? null
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Error creating event. Please try again later."
       setEventsStatus("error")
       setEventsError(message)
+      return null
+    }
+  }
+
+  const handleUploadVolunteerEventPhoto = async (eventId: string, file: File): Promise<boolean> => {
+    try {
+      const form = new FormData()
+      form.append("photo", file)
+      // No Content-Type: the browser sets the multipart boundary.
+      const res = await authFetch(`/admin/volunteer-events/${eventId}/photos`, { method: "POST", body: form })
+      return res.ok
+    } catch {
       return false
     }
   }
@@ -5071,18 +5087,23 @@ export default function AdminPage() {
         </TabsContent>
 
         <TabsContent value="events" className="space-y-6">
+          <VolunteerEventsManager
+            basePath="/admin/volunteer-events"
+            canReview
+            description="Approve affiliate requests, download QR codes, and cancel published events."
+          />
           {eventsError != "" && (
             <div className="flex items-center gap-2 text-red-600 text-sm p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
               <AlertTriangle className="h-4 w-4 flex-shrink-0" />
               <span>{eventsError}</span>
             </div>
           )}
-          <AddEventModal
+          <AddVolunteerEventModal
             open={eventsModalOpen}
             onOpenChange={toggleNewEventModal}
-            handleAddEvent={handleAddEvent}
-            addEventError={eventsError}
-            currentBalance={faucetBalance == "-" ? 0 : Number(faucetBalance)}
+            createEvent={handleCreateVolunteerEvent}
+            uploadPhoto={handleUploadVolunteerEventPhoto}
+            unallocatedBalance={unallocatedBalance !== undefined ? Number(unallocatedBalance) : 0}
           />
           <EventModal
             event={eventDetailsEvent}

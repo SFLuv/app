@@ -326,6 +326,7 @@ func NewServerHandler(ctx context.Context, pools *DBPools, appLogger *logger.Log
 	s := handlers.NewBotService(botDb, appDb, botClient, w9, affiliateScheduler, activeChainID, clientConfig.ReadRPCURL())
 	a := handlers.NewAppService(appDb, appLogger, w9, clientConfig)
 	a.SetBotService(s)
+	s.SetAppService(a)
 	a.SetRedeemerService(redeemer)
 	a.SetMinterService(minter)
 	StartDeletedAccountPurgeLoop(ctx, a, appLogger)
