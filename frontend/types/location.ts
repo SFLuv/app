@@ -84,6 +84,10 @@ export interface GoogleSubLocation {
   rating: number;
   maps_page: string;
   opening_hours: string[];
+  /** Raw Places types, used to reject results that are postal addresses rather than businesses. */
+  types?: string[];
+  /** Google's own one-line address, shown back to the merchant for confirmation. */
+  formatted_address?: string;
 }
 
 export interface UpdateLocationApprovalRequest {

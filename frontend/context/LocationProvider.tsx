@@ -34,6 +34,20 @@ const getLocationTypes = (locations: Location[]): string[] => {
     return [...uniqueTypes, "All Locations"]
 }
 
+// readErrorMessage pulls the backend's {"error": "..."} message off a failed
+// response, falling back to a generic message for non-JSON bodies.
+const readErrorMessage = async (res: Response): Promise<string> => {
+    try {
+        const body = await res.clone().json()
+        if (body && typeof body.error === "string" && body.error.trim()) {
+            return body.error.trim()
+        }
+    } catch {
+        // not a JSON body
+    }
+    return "Something went wrong submitting your application. Please try again."
+}
+
 const fetchMapLocations = async (): Promise<LocationResponse> => {
     const controller = new AbortController()
     const timeoutId = setTimeout(() => controller.abort(), 10000)
@@ -121,6 +135,9 @@ export default function LocationProvider({ children }: { children: ReactNode }) 
         }
     }, [])
 
+    // Surfaces the backend's message so submission failures (duplicate business,
+    // rejected place, validation) reach the merchant instead of being swallowed
+    // while the form navigates away as if it had succeeded.
     const addLocation = useCallback(async (location: AuthedLocation) => {
         setMapLocationsStatus("loading")
         try {
@@ -132,14 +149,18 @@ export default function LocationProvider({ children }: { children: ReactNode }) 
                 body: JSON.stringify(location)
             })
             if(res.status != 201) {
-                throw new Error("error adding new location, from controller")
+                const message = await readErrorMessage(res)
+                throw new Error(message)
             }
             setUserLocationsRef.current((currentLocations) => [...currentLocations, location])
             setMapLocationsStatus("available")
         }
-        catch {
+        catch (error) {
             setMapLocationsStatus("unavailable")
-            console.error("error adding new location")
+            console.error("error adding new location", error)
+            throw error instanceof Error
+                ? error
+                : new Error("Something went wrong submitting your application. Please try again.")
         }
       }, [])
 

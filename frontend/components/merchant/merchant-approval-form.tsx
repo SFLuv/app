@@ -1,9 +1,9 @@
 "use client"
 
 import type React from "react"
-import { useEffect, useState } from "react"
+import { useCallback, useState } from "react"
 import { useRouter } from "next/navigation"
-import { useApp } from "@/context/AppProvider"
+import { z } from "zod"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -12,21 +12,8 @@ import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { AlertTriangle, Loader2 } from "lucide-react"
 import PlaceAutocomplete from "./google_place_finder"
-import { Location, GoogleSubLocation, AuthedLocation } from "@/types/location"
+import { AuthedLocation, GoogleSubLocation } from "@/types/location"
 import { useLocation } from "@/context/LocationProvider"
-
-
-const businessTypes = [
-  "restaurant",
-  "cafe",
-  "retail",
-  "grocery",
-  "service",
-  "entertainment",
-  "health",
-  "beauty",
-  "other",
-]
 
 const posOptions = ["Square", "Shopify", "Toast", "Other"]
 
@@ -52,12 +39,10 @@ const tabletOptions = ["iPad", "Android tablet", "We do not have a tablet access
 const tippingDivisionOptions = [
   "Each member receives their own tips",
   "All tips are pooled and divided between the team",
-  "Other"
+  "Other",
 ]
 
-const serviceStationOptions = [
-  "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10"
-]
+const serviceStationOptions = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10"]
 
 const messagingServiceOptions = [
   "Zapier",
@@ -67,138 +52,288 @@ const messagingServiceOptions = [
   "Other",
 ]
 
+const OTHER = "Other"
+
+type MerchantFormValues = {
+  description: string
+  businessPhone: string
+  businessEmail: string
+  contactFirstName: string
+  contactLastName: string
+  contactPhone: string
+  contactEmail: string
+  posSystem: string
+  posSystemOther: string
+  soleProprietorship: string
+  tippingPolicy: string
+  tippingPolicyOther: string
+  tippingDivision: string
+  tippingDivisionOther: string
+  tableCoverage: string
+  tableCoverageOther: string
+  serviceStations: string
+  tabletModel: string
+  tabletModelOther: string
+  messagingService: string
+  messagingServiceOther: string
+  reference: string
+}
+
+const emptyForm: MerchantFormValues = {
+  description: "",
+  businessPhone: "",
+  businessEmail: "",
+  contactFirstName: "",
+  contactLastName: "",
+  contactPhone: "",
+  contactEmail: "",
+  posSystem: "",
+  posSystemOther: "",
+  soleProprietorship: "",
+  tippingPolicy: "",
+  tippingPolicyOther: "",
+  tippingDivision: "",
+  tippingDivisionOther: "",
+  tableCoverage: "",
+  tableCoverageOther: "",
+  serviceStations: "",
+  tabletModel: "",
+  tabletModelOther: "",
+  messagingService: "",
+  messagingServiceOther: "",
+  reference: "",
+}
+
+const requiredText = (label: string, max = 4000) =>
+  z.string().trim().min(1, `${label} is required.`).max(max, `${label} must be ${max} characters or fewer.`)
+
+const optionalEmail = z
+  .string()
+  .trim()
+  .refine((value) => value === "" || z.string().email().safeParse(value).success, "Enter a valid business email.")
+
+// Radix Select is not a native <select>, so the `required` attribute has no
+// effect on it — every dropdown on this form was silently optional. This schema
+// is the only thing enforcing them.
+const merchantFormSchema = z
+  .object({
+    description: requiredText("Business description"),
+    businessPhone: z.string().trim().max(64, "Business phone is too long."),
+    businessEmail: optionalEmail,
+    contactFirstName: requiredText("First name", 128),
+    contactLastName: requiredText("Last name", 128),
+    contactPhone: requiredText("Phone number", 64),
+    contactEmail: requiredText("Email", 320).email("Enter a valid email address."),
+    posSystem: requiredText("Point of Sale system"),
+    posSystemOther: z.string().trim(),
+    soleProprietorship: requiredText("Sole proprietorship answer"),
+    tippingPolicy: requiredText("Tipping policy"),
+    tippingPolicyOther: z.string().trim(),
+    tippingDivision: requiredText("Tip division style"),
+    tippingDivisionOther: z.string().trim(),
+    tableCoverage: requiredText("Table coverage method"),
+    tableCoverageOther: z.string().trim(),
+    serviceStations: requiredText("Number of tables or service stations"),
+    tabletModel: requiredText("Tablet model"),
+    tabletModelOther: z.string().trim(),
+    messagingService: requiredText("Messaging service"),
+    messagingServiceOther: z.string().trim(),
+    reference: requiredText("How you heard about SFLuv"),
+  })
+  .superRefine((values, ctx) => {
+    const otherPairs: [keyof MerchantFormValues, keyof MerchantFormValues, string][] = [
+      ["posSystem", "posSystemOther", "Specify your Point of Sale system."],
+      ["tippingPolicy", "tippingPolicyOther", "Specify your tipping policy."],
+      ["tippingDivision", "tippingDivisionOther", "Specify your tip division style."],
+      ["tableCoverage", "tableCoverageOther", "Specify your table coverage method."],
+      ["tabletModel", "tabletModelOther", "Specify your tablet model."],
+      ["messagingService", "messagingServiceOther", "Specify your messaging service."],
+    ]
+
+    for (const [selectField, otherField, message] of otherPairs) {
+      if (values[selectField] === OTHER && !values[otherField]) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: [otherField], message })
+      }
+    }
+  })
+
+type FieldErrors = Partial<Record<keyof MerchantFormValues, string>>
+
+const resolveOther = (value: string, otherValue: string) => (value === OTHER ? otherValue.trim() : value)
+
+function FieldError({ message }: { message?: string }) {
+  if (!message) return null
+  return <p className="text-xs text-red-600 dark:text-red-300">{message}</p>
+}
+
+// A select-plus-"Other" pair appears six times on this form; rendering it from
+// one place keeps the option list, the conditional input and its error message
+// in sync. Defined at module scope so its identity is stable across renders —
+// a component built inside the form would remount on every keystroke and drop
+// focus out of the "Other" input.
+function SelectWithOther({
+  id,
+  label,
+  placeholder,
+  options,
+  field,
+  otherField,
+  otherLabel,
+  otherPlaceholder,
+  values,
+  fieldErrors,
+  setField,
+}: {
+  id: string
+  label: string
+  placeholder: string
+  options: string[]
+  field: keyof MerchantFormValues
+  otherField?: keyof MerchantFormValues
+  otherLabel?: string
+  otherPlaceholder?: string
+  values: MerchantFormValues
+  fieldErrors: FieldErrors
+  setField: <K extends keyof MerchantFormValues>(field: K, value: MerchantFormValues[K]) => void
+}) {
+  return (
+    <div className="space-y-2">
+      <Label htmlFor={id} className="text-black dark:text-white">
+        {label}
+      </Label>
+      <Select value={values[field]} onValueChange={(value) => setField(field, value)}>
+        <SelectTrigger id={id} className="text-black dark:text-white bg-secondary">
+          <SelectValue placeholder={placeholder} />
+        </SelectTrigger>
+        <SelectContent>
+          {options.map((option) => (
+            <SelectItem key={option} value={option}>
+              {option}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      <FieldError message={fieldErrors[field]} />
+      {otherField && values[field] === OTHER && (
+        <div className="space-y-2 mt-2">
+          <Label htmlFor={`${id}-other`} className="text-black dark:text-white">
+            {otherLabel}
+          </Label>
+          <Input
+            id={`${id}-other`}
+            value={values[otherField]}
+            onChange={(event) => setField(otherField, event.target.value)}
+            className="text-black dark:text-white bg-secondary"
+            placeholder={otherPlaceholder}
+          />
+          <FieldError message={fieldErrors[otherField]} />
+        </div>
+      )}
+    </div>
+  )
+}
 
 export function MerchantApprovalForm() {
-  const { addLocation } = useLocation();
+  const { addLocation } = useLocation()
   const router = useRouter()
-  // Internal Form State
+
   const [isSubmitting, setIsSubmitting] = useState(false)
-  const [error, setError] = useState<string | null>(null);
+  const [formError, setFormError] = useState<string | null>(null)
+  const [fieldErrors, setFieldErrors] = useState<FieldErrors>({})
+  const [googlePlace, setGooglePlace] = useState<GoogleSubLocation | null>(null)
+  const [values, setValues] = useState<MerchantFormValues>(emptyForm)
 
-  // User-inputted state
-  const [description, setDescription] = useState("")
-  const [primaryContactEmail, setPrimaryContactEmail] = useState("")
-  const [primaryContactFirstName, setPrimaryContactFirstName] = useState("")
-  const [primaryContactLastName, setPrimaryContactLastName] = useState("")
-  const [primaryContactPhone, setPrimaryContactPhone] = useState("")
-  const [posSystem, setPosSystem] = useState("")
-  const [posSystemOther, setPosSystemOther] = useState("")
-  const [soleProprietorship, setSoleProprietorship] = useState("")
-  const [tippingPolicy, setTippingPolicy] = useState("")
-  const [tippingPolicyOther, setTippingPolicyOther] = useState("")
-  const [tippingDivision, setTippingDivision] = useState("")
-  const [tippingDivisionOther, setTippingDivisionOther] = useState("")
-  const [tableCoverage, setTableCoverage] = useState("")
-  const [tableCoverageOther, setTableCoverageOther] = useState("")
-  const [serviceStations, setServiceStations] = useState("")
-  const [tabletModel, setTabletModel] = useState("")
-  const [tabletModelOther, setTabletModelOther] = useState("")
-  const [messagingService, setMessagingService] = useState("")
-  const [messagingServiceOther, setMessagingServiceOther] = useState("")
-  const [googleSubLocation, setGoogleSubLocation] = useState<GoogleSubLocation | null>(null);
-  const [reference, setReference] = useState("")
-  const [searchKey, setSearchKey] = useState(0);
-
-
-  // State pulled from Google
-  const [googleID, setGoogleID] = useState("")
-  const [businessName, setBusinessName] = useState("")
-  const [businessType, setBusinessType] = useState("")
-  const [street, setStreet] = useState("")
-  const [city, setCity] = useState("")
-  const [state, setState] = useState("")
-  const [lat, setLat] = useState(0)
-  const [lng, setLng] = useState(0)
-  const [zip, setZip] = useState("")
-  const [businessPhone, setBusinessPhone] = useState("")
-  const [businessEmail, setBusinessEmail] = useState("")
-  const [imageURL, setImageURL] = useState("")
-  const [rating, setRating] = useState(0)
-  const [googleMapsURL, setGoogleMapsURL] = useState("")
-  const [openingHours, setOpeningHours] = useState([])
-
-  useEffect(() => {
-    if(googleSubLocation) setError(null)
-  }, [googleSubLocation])
+  const setField = useCallback(<K extends keyof MerchantFormValues>(field: K, value: MerchantFormValues[K]) => {
+    setValues((current) => ({ ...current, [field]: value }))
+    setFieldErrors((current) => {
+      if (!current[field]) return current
+      const next = { ...current }
+      delete next[field]
+      return next
+    })
+  }, [])
 
   const resetForm = () => {
-    setError(null);
-    setDescription("");
-    setStreet("");
-    setPrimaryContactEmail("");
-    setPrimaryContactFirstName("");
-    setPrimaryContactLastName("");
-    setPrimaryContactPhone("");
-    setBusinessEmail("")
-    setBusinessPhone("")
-    setPosSystem("");
-    setPosSystemOther("");
-    setSoleProprietorship("");
-    setTippingPolicy("");
-    setTippingPolicyOther("");
-    setTippingDivision("");
-    setTippingDivisionOther("");
-    setTableCoverage("");
-    setTableCoverageOther("");
-    setServiceStations("");
-    setTabletModel("");
-    setTabletModelOther("");
-    setMessagingService("");
-    setMessagingServiceOther("");
-    setReference("")
-    setGoogleSubLocation(null)
-  };
+    setValues(emptyForm)
+    setFieldErrors({})
+    setFormError(null)
+    setGooglePlace(null)
+  }
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if(!googleSubLocation) {
-      setError('"Search for your business" field must be filled.')
+  const handleSubmit = async (event: React.FormEvent) => {
+    event.preventDefault()
+    setFormError(null)
+
+    if (!googlePlace) {
+      setFormError('Search for your business and confirm the match before submitting.')
       return
     }
 
-    // Create merchant profile with all fields
+    const parsed = merchantFormSchema.safeParse(values)
+    if (!parsed.success) {
+      const errors: FieldErrors = {}
+      for (const issue of parsed.error.issues) {
+        const field = issue.path[0] as keyof MerchantFormValues | undefined
+        if (field && !errors[field]) errors[field] = issue.message
+      }
+      setFieldErrors(errors)
+      setFormError("Please fix the highlighted fields before submitting.")
+      return
+    }
+
+    const form = parsed.data
+
+    // Google-derived fields come from the confirmed place, merchant-authored
+    // fields from the form. Nothing is sourced from both, and the backend
+    // re-fetches the Google half from the place id before storing it.
     const newLocation: AuthedLocation = {
       id: 0,
-      google_id: googleSubLocation.google_id,
+      google_id: googlePlace.google_id,
       owner_id: "",
-      name: googleSubLocation.name,
-      description: description,
-      type: googleSubLocation.type,
-      street: street,
-      city: googleSubLocation.city,
-      state: googleSubLocation.state,
-      zip: googleSubLocation.zip,
-      lat: googleSubLocation.lat,
-      lng: googleSubLocation.lng,
-      phone:businessPhone,
-      email: businessEmail,
-      admin_phone: primaryContactPhone,
-      admin_email: primaryContactEmail,
-      website: googleSubLocation.website,
-      image_url: googleSubLocation.image_url,
-      rating: googleSubLocation.rating,
-      maps_page: googleSubLocation.maps_page,
-      opening_hours: googleSubLocation.opening_hours,
-      contact_firstname: primaryContactFirstName,
-      contact_lastname: primaryContactLastName,
-      contact_phone: primaryContactPhone,
-      pos_system: posSystem === "Other" ? posSystemOther : posSystem,
-      sole_proprietorship: soleProprietorship,
-      tipping_policy: tippingPolicy === "Other" ? tippingPolicyOther : tippingPolicy,
-      tipping_division: tippingDivision  === "Other" ? tippingDivisionOther: tippingDivision,
-      table_coverage: tableCoverage  === "Other" ? tableCoverageOther : tableCoverage,
-      service_stations: Number(serviceStations),
-      tablet_model: tabletModel  === "Other" ? tabletModelOther : tabletModel,
-      messaging_service: messagingService === "Other" ? messagingServiceOther : messagingService,
-      reference: reference,
+      name: googlePlace.name,
+      type: googlePlace.type,
+      street: googlePlace.street,
+      city: googlePlace.city,
+      state: googlePlace.state,
+      zip: googlePlace.zip,
+      lat: googlePlace.lat,
+      lng: googlePlace.lng,
+      website: googlePlace.website,
+      image_url: googlePlace.image_url,
+      rating: googlePlace.rating,
+      maps_page: googlePlace.maps_page,
+      opening_hours: googlePlace.opening_hours,
+      description: form.description,
+      phone: form.businessPhone || googlePlace.phone || "",
+      email: form.businessEmail,
+      admin_phone: form.contactPhone,
+      admin_email: form.contactEmail,
+      contact_firstname: form.contactFirstName,
+      contact_lastname: form.contactLastName,
+      contact_phone: form.contactPhone,
+      pos_system: resolveOther(form.posSystem, form.posSystemOther),
+      sole_proprietorship: form.soleProprietorship,
+      tipping_policy: resolveOther(form.tippingPolicy, form.tippingPolicyOther),
+      tipping_division: resolveOther(form.tippingDivision, form.tippingDivisionOther),
+      table_coverage: resolveOther(form.tableCoverage, form.tableCoverageOther),
+      service_stations: Number(form.serviceStations),
+      tablet_model: resolveOther(form.tabletModel, form.tabletModelOther),
+      messaging_service: resolveOther(form.messagingService, form.messagingServiceOther),
+      payment_wallets: [],
+      reference: form.reference,
     }
 
     setIsSubmitting(true)
-    await addLocation(newLocation)
-    setSearchKey(prev => prev + 1)
-    setIsSubmitting(false);
-    resetForm()
-    router.replace("/map")
+    try {
+      await addLocation(newLocation)
+      resetForm()
+      router.replace("/map")
+    } catch (error) {
+      // Navigating on failure used to make a rejected application look accepted.
+      setFormError(error instanceof Error ? error.message : "Something went wrong. Please try again.")
+    } finally {
+      setIsSubmitting(false)
+    }
   }
 
   return (
@@ -208,20 +343,30 @@ export function MerchantApprovalForm() {
         <CardDescription>Please provide your business details to apply for merchant status</CardDescription>
       </CardHeader>
       <CardContent>
-        <form onSubmit={handleSubmit} className="space-y-6">
+        <form onSubmit={handleSubmit} className="space-y-6" noValidate>
           <div className="space-y-4">
-            {/* Existing Business Information */}
-
-             <div className="space-y-2">
+            <div className="space-y-2">
               <Label htmlFor="business-name" className="text-black dark:text-white">
                 Search for Your Location Name
               </Label>
-              <PlaceAutocomplete
-              key={searchKey}
-              setGoogleSubLocation={setGoogleSubLocation}
-              setBusinessPhone={setBusinessPhone}
-              setStreet={setStreet}/>
+              <PlaceAutocomplete value={googlePlace} onSelect={setGooglePlace} />
             </div>
+
+            {googlePlace && (
+              <div className="space-y-2">
+                <Label className="text-black dark:text-white">Street Address</Label>
+                <Input
+                  value={googlePlace.street}
+                  className="text-black dark:text-white bg-secondary"
+                  readOnly
+                  disabled
+                />
+                <p className="text-xs text-gray-500 dark:text-gray-400">
+                  Address, business name and map position come from your Google listing. Update them in Google Business
+                  Profile and they will follow here.
+                </p>
+              </div>
+            )}
 
             <div className="space-y-2">
               <Label htmlFor="description" className="text-black dark:text-white">
@@ -229,16 +374,18 @@ export function MerchantApprovalForm() {
               </Label>
               <Textarea
                 id="description"
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
+                value={values.description}
+                onChange={(event) => setField("description", event.target.value)}
                 className="text-black dark:text-white bg-secondary min-h-[100px]"
-                required
               />
+              <FieldError message={fieldErrors.description} />
             </div>
 
             {/* Business Contact Information */}
             <div>
-              <h3 className="text-lg font-medium text-black dark:text-white mb-4">Business Contact Information (Publicly Available to Customers)</h3>
+              <h3 className="text-lg font-medium text-black dark:text-white mb-4">
+                Business Contact Information (Publicly Available to Customers)
+              </h3>
               <div className="grid gap-4 md:grid-cols-2">
                 <div className="space-y-2">
                   <Label htmlFor="business-phone" className="text-black dark:text-white">
@@ -246,10 +393,12 @@ export function MerchantApprovalForm() {
                   </Label>
                   <Input
                     id="business-phone"
-                    value={businessPhone}
-                    onChange={(e) => setBusinessPhone(e.target.value)}
+                    value={values.businessPhone}
+                    onChange={(event) => setField("businessPhone", event.target.value)}
                     className="text-black dark:text-white bg-secondary"
+                    placeholder={googlePlace?.phone || ""}
                   />
+                  <FieldError message={fieldErrors.businessPhone} />
                 </div>
 
                 <div className="space-y-2">
@@ -258,30 +407,21 @@ export function MerchantApprovalForm() {
                   </Label>
                   <Input
                     id="business-email"
-                    value={businessEmail}
-                    onChange={(e) => setBusinessEmail(e.target.value)}
+                    type="email"
+                    value={values.businessEmail}
+                    onChange={(event) => setField("businessEmail", event.target.value)}
                     className="text-black dark:text-white bg-secondary"
                   />
+                  <FieldError message={fieldErrors.businessEmail} />
                 </div>
               </div>
             </div>
 
-            <div className="space-y-2">
-              <Label htmlFor="street" className="text-black dark:text-white">
-                Street Address
-              </Label>
-              <Input
-                id="street"
-                value={street}
-                onChange={(e) => setDescription(e.target.value)}
-                className="text-black dark:text-white bg-secondary"
-                required
-              />
-            </div>
-
             {/* Primary Contact Information */}
             <div>
-              <h3 className="text-lg font-medium text-black dark:text-white mb-4">Primary Administrative Contact for Business (Only Visible to SFLuv Admin Team)</h3>
+              <h3 className="text-lg font-medium text-black dark:text-white mb-4">
+                Primary Administrative Contact for Business (Only Visible to SFLuv Admin Team)
+              </h3>
               <div className="grid gap-4 md:grid-cols-2">
                 <div className="space-y-2">
                   <Label htmlFor="primary-contact-first-name" className="text-black dark:text-white">
@@ -289,11 +429,11 @@ export function MerchantApprovalForm() {
                   </Label>
                   <Input
                     id="primary-contact-first-name"
-                    value={primaryContactFirstName}
-                    onChange={(e) => setPrimaryContactFirstName(e.target.value)}
+                    value={values.contactFirstName}
+                    onChange={(event) => setField("contactFirstName", event.target.value)}
                     className="text-black dark:text-white bg-secondary"
-                    required
                   />
+                  <FieldError message={fieldErrors.contactFirstName} />
                 </div>
 
                 <div className="space-y-2">
@@ -302,11 +442,11 @@ export function MerchantApprovalForm() {
                   </Label>
                   <Input
                     id="primary-contact-last-name"
-                    value={primaryContactLastName}
-                    onChange={(e) => setPrimaryContactLastName(e.target.value)}
+                    value={values.contactLastName}
+                    onChange={(event) => setField("contactLastName", event.target.value)}
                     className="text-black dark:text-white bg-secondary"
-                    required
                   />
+                  <FieldError message={fieldErrors.contactLastName} />
                 </div>
 
                 <div className="space-y-2">
@@ -315,11 +455,11 @@ export function MerchantApprovalForm() {
                   </Label>
                   <Input
                     id="primary-contact-phone"
-                    value={primaryContactPhone}
-                    onChange={(e) => setPrimaryContactPhone(e.target.value)}
+                    value={values.contactPhone}
+                    onChange={(event) => setField("contactPhone", event.target.value)}
                     className="text-black dark:text-white bg-secondary"
-                    required
                   />
+                  <FieldError message={fieldErrors.contactPhone} />
                 </div>
 
                 <div className="space-y-2">
@@ -328,250 +468,121 @@ export function MerchantApprovalForm() {
                   </Label>
                   <Input
                     id="primary-contact-email"
-                    value={primaryContactEmail}
-                    onChange={(e) => setPrimaryContactEmail(e.target.value)}
+                    type="email"
+                    value={values.contactEmail}
+                    onChange={(event) => setField("contactEmail", event.target.value)}
                     className="text-black dark:text-white bg-secondary"
-                    required
                   />
+                  <FieldError message={fieldErrors.contactEmail} />
                 </div>
               </div>
             </div>
 
-            {/* Point of Sale System */}
-            <div className="space-y-2">
-              <Label htmlFor="pos-system" className="text-black dark:text-white">
-                What Point of Sale System do you use?
-              </Label>
-              <Select value={posSystem} onValueChange={setPosSystem} required>
-                <SelectTrigger className="text-black dark:text-white bg-secondary">
-                  <SelectValue placeholder="Select POS system" />
-                </SelectTrigger>
-                <SelectContent>
-                  {posOptions.map((option) => (
-                    <SelectItem key={option} value={option}>
-                      {option}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              {posSystem === "Other" && (
-                <div className="space-y-2 mt-2">
-                  <Label htmlFor="pos-system-other" className="text-black dark:text-white">
-                    Point of Sale System
-                  </Label>
-                  <Input
-                    id="pos-system-other"
-                    value={posSystemOther}
-                    onChange={(e) => setPosSystemOther(e.target.value)}
-                    className="text-black dark:text-white bg-secondary"
-                    placeholder="Specify your POS system"
-                  />
-                </div>
-              )}
-            </div>
+            <SelectWithOther
+              id="pos-system"
+              label="What Point of Sale System do you use?"
+              placeholder="Select POS system"
+              options={posOptions}
+              field="posSystem"
+              otherField="posSystemOther"
+              otherLabel="Point of Sale System"
+              otherPlaceholder="Specify your POS system"
+              values={values}
+              fieldErrors={fieldErrors}
+              setField={setField}
+            />
 
-            {/* Sole Proprietorship */}
-            <div className="space-y-2">
-              <Label htmlFor="sole-proprietorship" className="text-black dark:text-white">
-                Is your business a sole proprietorship?
-              </Label>
-              <Select value={soleProprietorship} onValueChange={setSoleProprietorship} required>
-                <SelectTrigger className="text-black dark:text-white bg-secondary">
-                  <SelectValue placeholder="Select option" />
-                </SelectTrigger>
-                <SelectContent>
-                  {soleProprietorshipOptions.map((option) => (
-                    <SelectItem key={option} value={option}>
-                      {option}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
+            <SelectWithOther
+              id="sole-proprietorship"
+              label="Is your business a sole proprietorship?"
+              placeholder="Select option"
+              options={soleProprietorshipOptions}
+              field="soleProprietorship"
+              values={values}
+              fieldErrors={fieldErrors}
+              setField={setField}
+            />
 
-            {/* Tipping Policy */}
-            <div className="space-y-2">
-              <Label htmlFor="tipping-policy" className="text-black dark:text-white">
-                Do you add tips to the bill automatically, or do customers tip at their discretion?
-              </Label>
-              <Select value={tippingPolicy} onValueChange={setTippingPolicy} required>
-                <SelectTrigger className="text-black dark:text-white bg-secondary">
-                  <SelectValue placeholder="Select tipping policy" />
-                </SelectTrigger>
-                <SelectContent>
-                  {tippingOptions.map((option) => (
-                    <SelectItem key={option} value={option}>
-                      {option}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              {tippingPolicy === "Other" && (
-                <div className="space-y-2 mt-2">
-                  <Label htmlFor="tipping-policy-other" className="text-black dark:text-white">
-                    Tipping Policy
-                  </Label>
-                  <Input
-                    id="tipping-policy-other"
-                    value={tippingPolicyOther}
-                    onChange={(e) => setTippingPolicyOther(e.target.value)}
-                    className="text-black dark:text-white bg-secondary"
-                    placeholder="Specify your tipping policy"
-                  />
-                </div>
-              )}
-            </div>
+            <SelectWithOther
+              id="tipping-policy"
+              label="Do you add tips to the bill automatically, or do customers tip at their discretion?"
+              placeholder="Select tipping policy"
+              options={tippingOptions}
+              field="tippingPolicy"
+              otherField="tippingPolicyOther"
+              otherLabel="Tipping Policy"
+              otherPlaceholder="Specify your tipping policy"
+              values={values}
+              fieldErrors={fieldErrors}
+              setField={setField}
+            />
 
-            <div className="space-y-2">
-              <Label htmlFor="tablet-model" className="text-black dark:text-white">
-                How are tips divided amongst staff members?
-              </Label>
-              <Select value={tippingDivision} onValueChange={setTippingDivision} required>
-                <SelectTrigger className="text-black dark:text-white bg-secondary">
-                  <SelectValue placeholder="Select tip divison style" />
-                </SelectTrigger>
-                <SelectContent>
-                  {tippingDivisionOptions.map((option) => (
-                    <SelectItem key={option} value={option}>
-                      {option}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              {tippingDivision === "Other" && (
-                <div className="space-y-2 mt-2">
-                  <Label htmlFor="tipping-division-other" className="text-black dark:text-white">
-                    Division of Tips
-                  </Label>
-                  <Input
-                    id="tipping-division-other"
-                    value={tippingDivisionOther}
-                    onChange={(e) => setTippingDivisionOther(e.target.value)}
-                    className="text-black dark:text-white bg-secondary"
-                    placeholder="Specify your tip divison style"
-                  />
-                </div>
-              )}
-            </div>
+            <SelectWithOther
+              id="tipping-division"
+              label="How are tips divided amongst staff members?"
+              placeholder="Select tip division style"
+              options={tippingDivisionOptions}
+              field="tippingDivision"
+              otherField="tippingDivisionOther"
+              otherLabel="Division of Tips"
+              otherPlaceholder="Specify your tip division style"
+              values={values}
+              fieldErrors={fieldErrors}
+              setField={setField}
+            />
 
-            {/* Table Coverage */}
-            <div className="space-y-2">
-              <Label htmlFor="table-coverage" className="text-black dark:text-white">
-                Are servers assigned to specific sections, or is table coverage managed differently?
-              </Label>
-              <Select value={tableCoverage} onValueChange={setTableCoverage} required>
-                <SelectTrigger className="text-black dark:text-white bg-secondary">
-                  <SelectValue placeholder="Select table coverage method" />
-                </SelectTrigger>
-                <SelectContent>
-                  {tableCoverageOptions.map((option) => (
-                    <SelectItem key={option} value={option}>
-                      {option}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              {tableCoverage === "Other" && (
-                <div className="space-y-2 mt-2">
-                  <Label htmlFor="table-coverage-other" className="text-black dark:text-white">
-                    Table Coverage Method
-                  </Label>
-                  <Input
-                    id="table-coverage-other"
-                    value={tableCoverageOther}
-                    onChange={(e) => setTableCoverageOther(e.target.value)}
-                    className="text-black dark:text-white bg-secondary"
-                    placeholder="Specify your table coverage method"
-                  />
-                </div>
-              )}
-            </div>
+            <SelectWithOther
+              id="table-coverage"
+              label="Are servers assigned to specific sections, or is table coverage managed differently?"
+              placeholder="Select table coverage method"
+              options={tableCoverageOptions}
+              field="tableCoverage"
+              otherField="tableCoverageOther"
+              otherLabel="Table Coverage Method"
+              otherPlaceholder="Specify your table coverage method"
+              values={values}
+              fieldErrors={fieldErrors}
+              setField={setField}
+            />
 
-            {/* Tables or Service Stations */}
-            <div className="space-y-2">
-              <Label htmlFor="tables-or-stations" className="text-black dark:text-white">
-                How many tables or service stations do you have?
-              </Label>
-              <Select value={serviceStations} onValueChange={setServiceStations} required>
-                <SelectTrigger className="text-black dark:text-white bg-secondary">
-                  <SelectValue placeholder="Select # of service stations" />
-                </SelectTrigger>
-                <SelectContent>
-                  {serviceStationOptions.map((option) => (
-                    <SelectItem key={option} value={option}>
-                      {option}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
+            <SelectWithOther
+              id="tables-or-stations"
+              label="How many tables or service stations do you have?"
+              placeholder="Select # of service stations"
+              options={serviceStationOptions}
+              field="serviceStations"
+              values={values}
+              fieldErrors={fieldErrors}
+              setField={setField}
+            />
 
-            {/* Tablet Model */}
-            <div className="space-y-2">
-              <Label htmlFor="tablet-model" className="text-black dark:text-white">
-                If you currently have a tablet or similar device available for servers near the register, please specify
-                which model they use:
-              </Label>
-              <Select value={tabletModel} onValueChange={setTabletModel} required>
-                <SelectTrigger className="text-black dark:text-white bg-secondary">
-                  <SelectValue placeholder="Select tablet model" />
-                </SelectTrigger>
-                <SelectContent>
-                  {tabletOptions.map((option) => (
-                    <SelectItem key={option} value={option}>
-                      {option}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              {tabletModel === "Other" && (
-                <div className="space-y-2 mt-2">
-                  <Label htmlFor="tablet-model-other" className="text-black dark:text-white">
-                    Tablet Model
-                  </Label>
-                  <Input
-                    id="tablet-model-other"
-                    value={tabletModelOther}
-                    onChange={(e) => setTabletModelOther(e.target.value)}
-                    className="text-black dark:text-white bg-secondary"
-                    placeholder="Specify your tablet model"
-                  />
-                </div>
-              )}
-            </div>
+            <SelectWithOther
+              id="tablet-model"
+              label="If you currently have a tablet or similar device available for servers near the register, please specify which model they use:"
+              placeholder="Select tablet model"
+              options={tabletOptions}
+              field="tabletModel"
+              otherField="tabletModelOther"
+              otherLabel="Tablet Model"
+              otherPlaceholder="Specify your tablet model"
+              values={values}
+              fieldErrors={fieldErrors}
+              setField={setField}
+            />
 
-            {/* Messaging Service */}
-            <div className="space-y-2">
-              <Label htmlFor="messaging-service" className="text-black dark:text-white">
-                If your business regularly receives notifications from a system like Zapier, what service do you use:
-              </Label>
-              <Select value={messagingService} onValueChange={setMessagingService} required>
-                <SelectTrigger className="text-black dark:text-white bg-secondary">
-                  <SelectValue placeholder="Select messaging service" />
-                </SelectTrigger>
-                <SelectContent>
-                  {messagingServiceOptions.map((option) => (
-                    <SelectItem key={option} value={option}>
-                      {option}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              {messagingService === "Other" && (
-                <div className="space-y-2 mt-2">
-                  <Label htmlFor="messaging-service-other" className="text-black dark:text-white">
-                    Messaging Service
-                  </Label>
-                  <Input
-                    id="messaging-service-other"
-                    value={messagingServiceOther}
-                    onChange={(e) => setMessagingServiceOther(e.target.value)}
-                    className="text-black dark:text-white bg-secondary"
-                    placeholder="Specify your messaging service"
-                  />
-                </div>
-              )}
-            </div>
+            <SelectWithOther
+              id="messaging-service"
+              label="If your business regularly receives notifications from a system like Zapier, what service do you use:"
+              placeholder="Select messaging service"
+              options={messagingServiceOptions}
+              field="messagingService"
+              otherField="messagingServiceOther"
+              otherLabel="Messaging Service"
+              otherPlaceholder="Specify your messaging service"
+              values={values}
+              fieldErrors={fieldErrors}
+              setField={setField}
+            />
 
             <div className="space-y-2">
               <Label htmlFor="reference" className="text-black dark:text-white">
@@ -579,27 +590,23 @@ export function MerchantApprovalForm() {
               </Label>
               <Textarea
                 id="reference"
-                value={reference}
-                onChange={(e) => setReference(e.target.value)}
+                value={values.reference}
+                onChange={(event) => setField("reference", event.target.value)}
                 className="text-black dark:text-white bg-secondary min-h-[100px]"
-                required
               />
+              <FieldError message={fieldErrors.reference} />
             </div>
           </div>
-          {error &&
+
+          {formError && (
             <div className="flex items-center gap-2 text-red-600 text-sm p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
               <AlertTriangle className="h-4 w-4 flex-shrink-0" />
-              <span>{error}</span>
+              <span>{formError}</span>
             </div>
-          }
+          )}
+
           <Button type="submit" className="w-full bg-[#eb6c6c] hover:bg-[#d55c5c]" disabled={isSubmitting}>
-            {isSubmitting ? (
-              <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              </>
-            ) : (
-              "Submit Merchant Application"
-            )}
+            {isSubmitting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : "Submit Merchant Application"}
           </Button>
         </form>
       </CardContent>

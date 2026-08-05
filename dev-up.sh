@@ -280,7 +280,6 @@ CELO_CHAIN_ID=42220
 
 # From backend/celo-community-config.json (accounts["42220:..."]).
 PAYMASTER_ADDRESS="0x825b77eE3e3AB05c3a342EEE37223494b6c97a55"
-ENGINE_DB_NAME="cw_engine"
 LOCAL_CONFIG_FILE="$TMP_DIR/local-community-config.json"
 
 PIDS=()
@@ -442,6 +441,65 @@ LOCAL_DB_HOST_PORT="${LOCAL_DB_HOST_PORT:-localhost:5432}"
 LOCAL_DB_HOST="${LOCAL_DB_HOST_PORT%%:*}"
 LOCAL_DB_PORT="${LOCAL_DB_HOST_PORT##*:}"
 PSQL=(psql -h "$LOCAL_DB_HOST" -p "$LOCAL_DB_PORT" -U "$LOCAL_DB_USER" -v ON_ERROR_STOP=1 -qAt)
+
+# Local database names, taken straight from PROD_DB_NAMES so that list is the
+# single place a database is named. Entries are positional — app, bot, ponder —
+# matching the default "app bot ponder", so renaming one on prod (e.g. the Celo
+# indexer living in migration_celo_ponder) needs no second variable.
+read -r _prod_app _prod_bot _prod_ponder _ <<< "${PROD_DB_NAMES:-app bot ponder}"
+APP_DB_NAME="${APP_DB_NAME:-${_prod_app:-app}}"
+BOT_DB_NAME="${BOT_DB_NAME:-${_prod_bot:-bot}}"
+PONDER_DB_NAME="${PONDER_DB_NAME:-${_prod_ponder:-ponder}}"
+ENGINE_DB_NAME="${ENGINE_DB_NAME:-cw_engine}"
+unset _prod_app _prod_bot _prod_ponder
+
+# pg_dump refuses to dump from a server newer than itself, and Homebrew's
+# postgresql@15 shadows any newer client on PATH. Prefer an explicit override,
+# then the highest-versioned client Homebrew has, then whatever is on PATH.
+# Major version of a postgres client binary, or 0 if it cannot be determined.
+# Output varies by build — "pg_dump (PostgreSQL) 17.5" but also
+# "pg_dump (PostgreSQL) 15.13 (Homebrew)" — so take the first field that is
+# version-shaped rather than the last field, and never emit a non-number (an
+# arithmetic comparison against one aborts the caller under `set -u`).
+pg_client_major() {
+  local raw
+  raw="$("$1" --version 2>/dev/null |
+    awk '{ for (i = 1; i <= NF; i++) if ($i ~ /^[0-9]+(\.[0-9]+)*$/) { print $i; exit } }' |
+    cut -d. -f1)"
+  case "$raw" in
+    ''|*[!0-9]*) printf '0\n' ;;
+    *)           printf '%s\n' "$raw" ;;
+  esac
+}
+
+resolve_pg_client() {
+  local binary="$1" override="$2" candidate best best_version version
+  if [[ -n "$override" ]]; then
+    printf '%s\n' "$override"
+    return
+  fi
+  best="$(command -v "$binary" 2>/dev/null || true)"
+  if [[ -n "$best" ]]; then
+    best_version="$(pg_client_major "$best")"
+  else
+    best_version=0
+  fi
+  for candidate in /opt/homebrew/opt/libpq*/bin/"$binary" \
+                   /opt/homebrew/opt/postgresql@*/bin/"$binary" \
+                   /usr/local/opt/libpq*/bin/"$binary" \
+                   /usr/local/opt/postgresql@*/bin/"$binary"; do
+    [[ -x "$candidate" ]] || continue
+    version="$(pg_client_major "$candidate")"
+    if [[ "$version" -gt "$best_version" ]]; then
+      best="$candidate"
+      best_version="$version"
+    fi
+  done
+  printf '%s\n' "${best:-$binary}"
+}
+
+PG_DUMP_BIN="$(resolve_pg_client pg_dump "${PG_DUMP_BIN:-}")"
+PG_RESTORE_BIN="$(resolve_pg_client pg_restore "${PG_RESTORE_BIN:-}")"
 
 "${PSQL[@]}" -d postgres -c "SELECT 1" >/dev/null 2>&1 \
   || die "cannot reach local postgres at $LOCAL_DB_HOST_PORT as $LOCAL_DB_USER"
@@ -649,24 +707,39 @@ else
     || die "  PROD_DB_HOST_PORT / PROD_DB_USER must be set in .dev.env (or use --skip-db-clone)"
   PROD_HOST="${PROD_DB_HOST_PORT%%:*}"
   PROD_PORT="${PROD_DB_HOST_PORT##*:}"
-  for dbname in ${PROD_DB_NAMES:-app bot ponder}; do
-    c_yellow "  cloning ${dbname}…"
-    PGPASSWORD="${PROD_DB_PASSWORD:-}" pg_dump -h "$PROD_HOST" -p "$PROD_PORT" -U "$PROD_DB_USER" \
-      -d "$dbname" -Fc --no-owner --no-acl -f "$DUMP_DIR/$dbname.dump" \
-      || die "  pg_dump of $dbname failed"
-    dropdb  -h "$LOCAL_DB_HOST" -p "$LOCAL_DB_PORT" -U "$LOCAL_DB_USER" --if-exists "$dbname"
-    createdb -h "$LOCAL_DB_HOST" -p "$LOCAL_DB_PORT" -U "$LOCAL_DB_USER" "$dbname"
-    pg_restore -h "$LOCAL_DB_HOST" -p "$LOCAL_DB_PORT" -U "$LOCAL_DB_USER" \
-      -d "$dbname" --no-owner --no-acl "$DUMP_DIR/$dbname.dump" 2>/dev/null \
-      || c_yellow "  pg_restore for $dbname reported errors (often ignorable ownership noise)"
-    c_green "  $dbname cloned"
+  # Entries are "prod_name" or "prod_name:local_name". The mapping form exists
+  # because the prod database is not always named what the services read: e.g.
+  # PROD_DB_NAMES="app bot migration_celo_ponder:ponder" clones the Celo ponder
+  # database and restores it locally as `ponder`. Without the mapping the clone
+  # lands in a database nothing is configured to read, and the stale local
+  # `ponder` silently stays in use.
+  for db_entry in ${PROD_DB_NAMES:-app bot ponder}; do
+    prod_db="${db_entry%%:*}"
+    local_db="${db_entry#*:}"
+    [[ "$local_db" == "$db_entry" ]] && local_db="$prod_db"
+
+    if [[ "$prod_db" == "$local_db" ]]; then
+      c_yellow "  cloning ${prod_db}…"
+    else
+      c_yellow "  cloning ${prod_db} → local ${local_db}…"
+    fi
+
+    PGPASSWORD="${PROD_DB_PASSWORD:-}" "$PG_DUMP_BIN" -h "$PROD_HOST" -p "$PROD_PORT" -U "$PROD_DB_USER" \
+      -d "$prod_db" -Fc --no-owner --no-acl -f "$DUMP_DIR/$local_db.dump" \
+      || die "  pg_dump of $prod_db failed"
+    dropdb  -h "$LOCAL_DB_HOST" -p "$LOCAL_DB_PORT" -U "$LOCAL_DB_USER" --if-exists "$local_db"
+    createdb -h "$LOCAL_DB_HOST" -p "$LOCAL_DB_PORT" -U "$LOCAL_DB_USER" "$local_db"
+    "$PG_RESTORE_BIN" -h "$LOCAL_DB_HOST" -p "$LOCAL_DB_PORT" -U "$LOCAL_DB_USER" \
+      -d "$local_db" --no-owner --no-acl "$DUMP_DIR/$local_db.dump" 2>/dev/null \
+      || c_yellow "  pg_restore for $local_db reported errors (often ignorable ownership noise)"
+    c_green "  $local_db cloned"
   done
 fi
 
 # Sanitize cloned data that references production: the ponder_hooks table holds
 # production callback URLs which local ponder would POST to during backfill.
-if "${PSQL[@]}" -d ponder -c "SELECT 1 FROM pg_tables WHERE tablename = 'ponder_hooks'" 2>/dev/null | grep -q 1; then
-  "${PSQL[@]}" -d ponder -c "UPDATE ponder_hooks SET url = 'http://localhost:$BACKEND_PORT/ponder/callback'" >/dev/null
+if "${PSQL[@]}" -d "$PONDER_DB_NAME" -c "SELECT 1 FROM pg_tables WHERE tablename = 'ponder_hooks'" 2>/dev/null | grep -q 1; then
+  "${PSQL[@]}" -d "$PONDER_DB_NAME" -c "UPDATE ponder_hooks SET url = 'http://localhost:$BACKEND_PORT/ponder/callback'" >/dev/null
   c_green "  ponder_hooks repointed at the local backend (no prod callbacks)"
 fi
 
@@ -681,16 +754,28 @@ if [[ "$RUN_PONDER" -eq 1 ]]; then
     ( cd "$ROOT/ponder" && npm install --no-audit --no-fund >"$LOG_DIR/ponder-install.log" 2>&1 )
   fi
   PONDER_ENV=(
-    "DATABASE_URL=postgresql://$LOCAL_DB_USER:@$LOCAL_DB_HOST_PORT/ponder"
+    "DATABASE_URL=postgresql://$LOCAL_DB_USER:@$LOCAL_DB_HOST_PORT/$PONDER_DB_NAME"
     "PONDER_RPC_URL_1=$ANVIL_RPC"
     "ADMIN_KEY=${DEV_PONDER_KEY:-local-dev-ponder-key}"
+    # `ponder dev` defaults this to "public"; `ponder start` requires it stated.
+    "DATABASE_SCHEMA=${PONDER_DATABASE_SCHEMA:-public}"
   )
   [[ -n "${PONDER_START_BLOCK:-}" ]] && PONDER_ENV+=("PONDER_START_BLOCK=$PONDER_START_BLOCK")
   # npx ponder directly, NOT `npm run dev`: the npm script shell-sources
   # ./ponder/.env, which would override the explicit local env above (ponder's
   # own dotenv loading respects process-env precedence, so this stays local).
-  start_bg ponder "$ROOT/ponder" "$LOG_DIR/ponder.log" env "${PONDER_ENV[@]}" npx ponder dev
-  c_yellow "  note: ponder's chain id is hardcoded to $CELO_CHAIN_ID (anvil matches); if it re-syncs, it reindexes from the configured start block — expected on a fresh fork"
+  #
+  # `start`, not `dev`. The local ponder database is a clone of production, and
+  # its tables hold Berachain history that was backfilled rather than indexed —
+  # nothing can regenerate those rows. Ponder refuses to reuse a populated
+  # schema when the command is `dev`, unconditionally, because dev mode drops
+  # and recreates tables on every reload; that would destroy the backfill.
+  # `start` instead compares build ids, and the build id is a hash of
+  # {ordering, contracts, accounts, blocks} — `chains` is excluded, so pointing
+  # ponder at the anvil fork does not change it. A matching build id lets ponder
+  # attach to the existing tables and append.
+  start_bg ponder "$ROOT/ponder" "$LOG_DIR/ponder.log" env "${PONDER_ENV[@]}" npx ponder start
+  c_yellow "  note: ponder's chain id is hardcoded to $CELO_CHAIN_ID (anvil matches); it attaches to the cloned schema and indexes forward from the configured start block"
 else
   c_blue "[6/10] Ponder (skipped)"
 fi
@@ -712,9 +797,9 @@ if [[ "$RUN_BACKEND" -eq 1 ]]; then
     "DB_PASSWORD="
     "DB_BASE_URL=$LOCAL_DB_HOST_PORT"
     "DB_URL=$LOCAL_DB_HOST_PORT"
-    "APP_DB_NAME=app"
-    "BOT_DB_NAME=bot"
-    "PONDER_DB_NAME=ponder"
+    "APP_DB_NAME=$APP_DB_NAME"
+    "BOT_DB_NAME=$BOT_DB_NAME"
+    "PONDER_DB_NAME=$PONDER_DB_NAME"
     "CLIENT_CONFIG_LOCAL_ONLY=true"
     "CLIENT_CONFIG_FALLBACK_PATH=$LOCAL_CONFIG_FILE"
     "RPC_URL=$ANVIL_RPC"
@@ -722,6 +807,10 @@ if [[ "$RUN_BACKEND" -eq 1 ]]; then
     "ENGINE_WS_URL=ws://localhost:$ENGINE_PORT"
     "PRIVY_APP_ID=${PRIVY_APP_ID:-}"
     "PRIVY_VKEY=${PRIVY_VKEY:-}"
+    # Server-side Google Places verification for merchant locations. Falls back
+    # to the browser key, which works as long as it is not referrer-restricted.
+    # Empty is safe: verification is skipped and local validation still applies.
+    "GOOGLE_MAPS_SERVER_API_KEY=${GOOGLE_MAPS_SERVER_API_KEY:-${NEXT_PUBLIC_GOOGLE_MAPS_API_KEY:-}}"
     "ADMIN_KEY=${DEV_ADMIN_KEY:-local-dev-admin-key}"
     "PONDER_SERVER_BASE_URL=http://localhost:$PONDER_PORT"
     "PONDER_KEY=${DEV_PONDER_KEY:-local-dev-ponder-key}"
@@ -937,7 +1026,7 @@ open_ios_simulator() {
 # Post-boot menu — the resident foreground. Ctrl-C anywhere still tears the
 # whole stack down via the trap; "tail logs" shields itself so Ctrl-C there
 # returns to the menu instead.
-APP_DB="app"
+APP_DB="$APP_DB_NAME"
 c_green "All services up."
 while true; do
   echo
