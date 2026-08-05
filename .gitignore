@@ -1,6 +1,11 @@
 */.env
 */.env.test
 */.env.local
+# Hand-made backups of env files hold the same secrets as the originals.
+.env.bak
+*/.env.bak
+**/*.env.bak
+**/.env.*.bak
 */go.sum
 */package-lock.json
 **.db
