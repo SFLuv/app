@@ -918,6 +918,72 @@ var schemaMigrations = []SchemaMigration{
 			return migrateOrganizationIssuerScopes(ctx, pools)
 		},
 	},
+	{
+		Version:     "1.24",
+		Description: "volunteer events: upgrade events with volunteer/recurrence/signup fields, cover photos, signups, per-event faucet allocations, and the volunteer email list",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			return migrateVolunteerEvents(ctx, pools)
+		},
+	},
+	{
+		Version:     "1.25",
+		Description: "improver notification read markers for the workflow notifications feed",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			// Notifications themselves are derived from live workflow state
+			// rather than materialized, so a notification cannot drift out of
+			// sync with the thing it describes. Only the per-user "I have seen
+			// this" marker needs storing.
+			if _, err := pools.App.Exec(ctx, `
+				CREATE TABLE IF NOT EXISTS improver_notification_reads(
+					user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+					notification_key TEXT NOT NULL,
+					seen_at BIGINT NOT NULL DEFAULT unix_now(),
+					PRIMARY KEY (user_id, notification_key)
+				);
+
+				CREATE INDEX IF NOT EXISTS improver_notification_reads_user_idx
+					ON improver_notification_reads(user_id);
+			`); err != nil {
+				return err
+			}
+
+			return nil
+		},
+	},
+	{
+		Version:     "1.26",
+		Description: "partner organizations shown in the public site's partner carousel",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			// Logos are stored as bytes and served over a public URL, the same
+			// pattern as workflow photos and volunteer event covers, so the
+			// public site consumes a plain URL rather than inline base64.
+			// Dimensions are captured at upload because the carousel needs them
+			// to reserve layout space before the image loads.
+			if _, err := pools.App.Exec(ctx, `
+				CREATE TABLE IF NOT EXISTS partners(
+					id TEXT PRIMARY KEY,
+					name TEXT NOT NULL,
+					link_url TEXT NOT NULL DEFAULT '',
+					logo_data BYTEA,
+					logo_content_type TEXT NOT NULL DEFAULT '',
+					logo_width INTEGER NOT NULL DEFAULT 0,
+					logo_height INTEGER NOT NULL DEFAULT 0,
+					logo_updated_at BIGINT,
+					position INTEGER NOT NULL DEFAULT 0,
+					active BOOLEAN NOT NULL DEFAULT TRUE,
+					created_at BIGINT NOT NULL DEFAULT unix_now(),
+					updated_at BIGINT NOT NULL DEFAULT unix_now()
+				);
+
+				CREATE INDEX IF NOT EXISTS partners_active_position_idx
+					ON partners(active, position, created_at);
+			`); err != nil {
+				return err
+			}
+
+			return nil
+		},
+	},
 }
 
 type versionTarget struct {

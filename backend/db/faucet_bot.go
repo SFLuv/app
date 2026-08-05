@@ -746,12 +746,17 @@ func (s *BotDB) Redeem(ctx context.Context, id string, account string, chainID i
 	}
 	defer tx.Rollback(context.Background())
 
+	// Redemption opens at qr_live_at when set, else at start_at. Volunteer
+	// events set qr_live_at to start_at - 24h so their codes can be printed and
+	// distributed ahead of time but only become spendable the day before the
+	// event; legacy faucet events leave it NULL and keep gating on start_at
+	// exactly as before.
 	row := tx.QueryRow(ctx, `
 		SELECT
 			c.event,
 			c.redeemed,
 			e.amount,
-			e.start_at,
+			COALESCE(e.qr_live_at, e.start_at),
 			e.expiration
 		FROM
 			codes c
@@ -767,9 +772,9 @@ func (s *BotDB) Redeem(ctx context.Context, id string, account string, chainID i
 	var eventID string
 	var codeRedeemed bool
 	var amount uint64
-	var startAt int64
+	var redeemableAt int64
 	var expiration int64
-	err = row.Scan(&eventID, &codeRedeemed, &amount, &startAt, &expiration)
+	err = row.Scan(&eventID, &codeRedeemed, &amount, &redeemableAt, &expiration)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return 0, fmt.Errorf("code redeemed")
@@ -781,7 +786,7 @@ func (s *BotDB) Redeem(ctx context.Context, id string, account string, chainID i
 	}
 
 	currentTime := time.Now().Unix()
-	if startAt > currentTime && startAt != 0 {
+	if redeemableAt > currentTime && redeemableAt != 0 {
 		return 0, fmt.Errorf("code not started")
 	}
 	if expiration < currentTime && expiration != 0 {

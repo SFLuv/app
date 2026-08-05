@@ -12,6 +12,8 @@
 #   - ponder:   indexes the local fork into the cloned ponder db
 #   - backend:  Go API on :8080 (local community config, no external sends)
 #   - frontend: Next.js on :3000
+#   - webpage:  public marketing site from ../webpage, on the first free port
+#               from :3002 up, pointed at the local backend
 #   - mobile:   Expo (pulled into ./tmp, branch via MOBILE_APP_BRANCH,
 #               background — use the post-boot menu to open the iOS simulator)
 #
@@ -22,6 +24,7 @@
 #   ./dev-up.sh                       # boot everything, then the post-boot menu
 #   ./dev-up.sh --no-mobile           # skip Expo (menu still runs, minus simulator)
 #   ./dev-up.sh --no-frontend         # skip the web app
+#   ./dev-up.sh --no-webpage          # skip the public marketing site
 #   ./dev-up.sh --no-backend          # skip the backend API
 #   ./dev-up.sh --no-ponder           # skip the indexer
 #   ./dev-up.sh --skip-db-clone       # reuse previously cloned local databases
@@ -45,7 +48,7 @@ mkdir -p "$TMP_DIR" "$LOG_DIR" "$DUMP_DIR"
 # Flags are parsed BEFORE .dev.env is sourced, so flag values are captured in
 # override variables and applied after the source (otherwise the env file's
 # values would silently clobber them).
-RUN_BACKEND=1 RUN_PONDER=1 RUN_FRONTEND=1 RUN_MOBILE=1
+RUN_BACKEND=1 RUN_PONDER=1 RUN_FRONTEND=1 RUN_MOBILE=1 RUN_WEBPAGE=1
 SKIP_DB_CLONE_FLAG=""
 MOBILE_BRANCH_OVERRIDE=""
 MENU_MODE=0
@@ -54,6 +57,7 @@ while [[ $# -gt 0 ]]; do
     menu|--menu)    MENU_MODE=1 ;;
     --no-mobile)    RUN_MOBILE=0 ;;
     --no-frontend)  RUN_FRONTEND=0 ;;
+    --no-webpage)   RUN_WEBPAGE=0 ;;
     --no-backend)   RUN_BACKEND=0 ;;
     --no-ponder)    RUN_PONDER=0 ;;
     --skip-db-clone) SKIP_DB_CLONE_FLAG=1 ;;
@@ -266,6 +270,12 @@ ENGINE_URL="http://localhost:$ENGINE_PORT"
 BACKEND_PORT=8080
 PONDER_PORT=42069
 FRONTEND_PORT=3000
+# The webpage has no fixed-port requirement, so this is only where the search
+# starts — the actual port is resolved at boot by pick_free_port. Starts above
+# the frontend (:3000) and the engine (:3001).
+WEBPAGE_PORT_BASE="${WEBPAGE_PORT_BASE:-3002}"
+WEBPAGE_PORT=""
+WEBPAGE_DIR="${WEBPAGE_DIR:-$(cd "$ROOT/.." && pwd)/webpage}"
 CELO_CHAIN_ID=42220
 
 # From backend/celo-community-config.json (accounts["42220:..."]).
@@ -314,7 +324,7 @@ cleanup() {
     kill_tree KILL "$pid"
   done
   local p pids
-  for p in "$ANVIL_PORT" "$ENGINE_PORT" "$PONDER_PORT" "$BACKEND_PORT" "$FRONTEND_PORT" 8081; do
+  for p in "$ANVIL_PORT" "$ENGINE_PORT" "$PONDER_PORT" "$BACKEND_PORT" "$FRONTEND_PORT" ${WEBPAGE_PORT:+"$WEBPAGE_PORT"} 8081; do
     pids=$(lsof -ti tcp:"$p" 2>/dev/null || true)
     [[ -n "$pids" ]] && kill -9 $pids 2>/dev/null || true
   done
@@ -361,6 +371,23 @@ free_port() { # free_port <port> <name> — force-free a port, then WAIT until i
   pids=$(lsof -ti tcp:"$port" 2>/dev/null || true)
   [[ -n "$pids" ]] && c_red "  could not free port $port (still held by: $pids)"
   return 0
+}
+
+pick_free_port() { # pick_free_port <start> [max_tries] — echo the first unused port.
+  # Deliberately different from free_port(): that one CLAIMS a fixed port by
+  # killing whoever holds it, which is right for services with a well-known
+  # port (the frontend on :3000 is baked into Privy redirect URLs). The webpage
+  # has no such constraint, so it takes whatever is free instead of killing a
+  # process a developer may be relying on.
+  local port="$1" tries="${2:-40}" i
+  for ((i = 0; i < tries; i++)); do
+    if [[ -z "$(lsof -ti tcp:"$port" 2>/dev/null || true)" ]]; then
+      echo "$port"
+      return 0
+    fi
+    port=$((port + 1))
+  done
+  return 1
 }
 
 start_bg() { # start_bg <name> <workdir> <logfile> <cmd...> — tracked background service.
@@ -446,7 +473,7 @@ ENGINE_REPO="${ENGINE_REPO:-https://github.com/citizenwallet/engine.git}"
 ENGINE_BRANCH="${ENGINE_BRANCH:-main}"
 ENGINE_DIR="$TMP_DIR/engine"
 
-c_blue "[1/9] Citizen Wallet engine source ($ENGINE_BRANCH)"
+c_blue "[1/10] Citizen Wallet engine source ($ENGINE_BRANCH)"
 if [[ -d "$ENGINE_DIR/.git" ]]; then
   ( git -C "$ENGINE_DIR" fetch origin "$ENGINE_BRANCH" \
       && git -C "$ENGINE_DIR" checkout "$ENGINE_BRANCH" \
@@ -462,7 +489,7 @@ fi
 # ----------------------------------------------------------------------------
 # 2. Chain (anvil fork of Celo, chain id preserved)
 # ----------------------------------------------------------------------------
-c_blue "[2/9] Chain (anvil fork of Celo, :$ANVIL_PORT)"
+c_blue "[2/10] Chain (anvil fork of Celo, :$ANVIL_PORT)"
 free_port "$ANVIL_PORT" anvil
 ANVIL_ARGS=(--fork-url "${CELO_FORK_RPC_URL:-https://forno.celo.org}" --chain-id "$CELO_CHAIN_ID" --host 127.0.0.1 --port "$ANVIL_PORT")
 [[ -n "${ANVIL_FORK_BLOCK:-}" ]] && ANVIL_ARGS+=(--fork-block-number "$ANVIL_FORK_BLOCK")
@@ -479,7 +506,7 @@ c_green "  chain is up ($ANVIL_RPC, chain id $CELO_CHAIN_ID, forked from Celo)"
 # ----------------------------------------------------------------------------
 # 3. Community config + engine service
 # ----------------------------------------------------------------------------
-c_blue "[3/9] Community config + engine (:$ENGINE_PORT)"
+c_blue "[3/10] Community config + engine (:$ENGINE_PORT)"
 ENGINE_URL_LOCAL="$ENGINE_URL" ENGINE_WS_LOCAL="ws://localhost:$ENGINE_PORT" ANVIL_RPC_LOCAL="$ANVIL_RPC" \
 python3 - "$ROOT/backend/celo-community-config.json" "$LOCAL_CONFIG_FILE" <<'PYEOF' || die "  failed to localize community config"
 import json, os, sys
@@ -557,7 +584,7 @@ wait_for "$ENGINE_URL/v1/rpc" "engine" 30 "${PIDS[${#PIDS[@]}-1]}" "$LOG_DIR/eng
 # ----------------------------------------------------------------------------
 # 4. Paymaster sponsor (local payer key: fund, whitelist, seed)
 # ----------------------------------------------------------------------------
-c_blue "[4/9] Paymaster sponsor (prank + whitelist)"
+c_blue "[4/10] Paymaster sponsor (prank + whitelist)"
 
 # Persist the payer key across reruns.
 PAYER_KEY_FILE="$TMP_DIR/payer.key"
@@ -615,9 +642,9 @@ c_green "  engine sponsor row seeded ($SPONSOR_TABLE)"
 # 5. Databases (clone production — READ-ONLY against prod)
 # ----------------------------------------------------------------------------
 if [[ "${SKIP_DB_CLONE:-0}" == "1" ]]; then
-  c_blue "[5/9] Databases (skipped — reusing existing local clones)"
+  c_blue "[5/10] Databases (skipped — reusing existing local clones)"
 else
-  c_blue "[5/9] Databases (cloning production: ${PROD_DB_NAMES:-app bot ponder})"
+  c_blue "[5/10] Databases (cloning production: ${PROD_DB_NAMES:-app bot ponder})"
   [[ -n "${PROD_DB_HOST_PORT:-}" && -n "${PROD_DB_USER:-}" ]] \
     || die "  PROD_DB_HOST_PORT / PROD_DB_USER must be set in .dev.env (or use --skip-db-clone)"
   PROD_HOST="${PROD_DB_HOST_PORT%%:*}"
@@ -647,7 +674,7 @@ fi
 # 6. Ponder (indexes the fork into the cloned db)
 # ----------------------------------------------------------------------------
 if [[ "$RUN_PONDER" -eq 1 ]]; then
-  c_blue "[6/9] Ponder (:$PONDER_PORT)"
+  c_blue "[6/10] Ponder (:$PONDER_PORT)"
   free_port "$PONDER_PORT" ponder
   if [[ ! -d "$ROOT/ponder/node_modules" ]]; then
     c_yellow "  installing ponder deps…"
@@ -665,14 +692,14 @@ if [[ "$RUN_PONDER" -eq 1 ]]; then
   start_bg ponder "$ROOT/ponder" "$LOG_DIR/ponder.log" env "${PONDER_ENV[@]}" npx ponder dev
   c_yellow "  note: ponder's chain id is hardcoded to $CELO_CHAIN_ID (anvil matches); if it re-syncs, it reindexes from the configured start block — expected on a fresh fork"
 else
-  c_blue "[6/9] Ponder (skipped)"
+  c_blue "[6/10] Ponder (skipped)"
 fi
 
 # ----------------------------------------------------------------------------
 # 7. Backend (local community config; no external sends)
 # ----------------------------------------------------------------------------
 if [[ "$RUN_BACKEND" -eq 1 ]]; then
-  c_blue "[7/9] Backend (:$BACKEND_PORT)"
+  c_blue "[7/10] Backend (:$BACKEND_PORT)"
   free_port "$BACKEND_PORT" backend
   # Passed as explicit process env (wins over any dotenv file); ENV_FILE points
   # at /dev/null so godotenv can never fall back to backend/.env, which may
@@ -706,14 +733,14 @@ if [[ "$RUN_BACKEND" -eq 1 ]]; then
   start_bg backend "$ROOT/backend" "$LOG_DIR/backend.log" env "${BACKEND_ENV[@]}" go run ./cmd/server
   wait_for "http://localhost:$BACKEND_PORT/config" "backend" 180 "${PIDS[${#PIDS[@]}-1]}" "$LOG_DIR/backend.log" || exit 1
 else
-  c_blue "[7/9] Backend (skipped)"
+  c_blue "[7/10] Backend (skipped)"
 fi
 
 # ----------------------------------------------------------------------------
 # 8. Frontend
 # ----------------------------------------------------------------------------
 if [[ "$RUN_FRONTEND" -eq 1 ]]; then
-  c_blue "[8/9] Frontend (:$FRONTEND_PORT)"
+  c_blue "[8/10] Frontend (:$FRONTEND_PORT)"
   free_port "$FRONTEND_PORT" frontend
   if [[ ! -d "$ROOT/frontend/node_modules" ]]; then
     c_yellow "  installing frontend deps…"
@@ -751,7 +778,55 @@ if [[ "$RUN_FRONTEND" -eq 1 ]]; then
   PIDS+=($!)
   c_yellow "  warming all routes in the background (tmp/logs/frontend-warm.log)"
 else
-  c_blue "[8/9] Frontend (skipped)"
+  c_blue "[8/10] Frontend (skipped)"
+fi
+
+# ----------------------------------------------------------------------------
+# 9. Webpage (public marketing site, ../webpage)
+# ----------------------------------------------------------------------------
+if [[ "$RUN_WEBPAGE" -eq 1 && -d "$WEBPAGE_DIR" ]]; then
+  # Takes the first free port rather than claiming a fixed one — nothing points
+  # at the webpage by hard-coded URL, so there is no reason to evict whatever a
+  # developer already has running.
+  WEBPAGE_PORT="$(pick_free_port "$WEBPAGE_PORT_BASE")" \
+    || { c_yellow "  no free port found from $WEBPAGE_PORT_BASE up — skipping webpage"; RUN_WEBPAGE=0; }
+fi
+
+if [[ "$RUN_WEBPAGE" -eq 1 && -n "$WEBPAGE_PORT" ]]; then
+  c_blue "[9/10] Webpage (:$WEBPAGE_PORT)"
+  if [[ ! -d "$WEBPAGE_DIR/node_modules" ]]; then
+    c_yellow "  installing webpage deps…"
+    ( cd "$WEBPAGE_DIR" && npm install --no-audit --no-fund >"$LOG_DIR/webpage-install.log" 2>&1 ) \
+      || c_yellow "  webpage dep install failed — see tmp/logs/webpage-install.log"
+  fi
+
+  # SFLUV_API_BASE_URL is the only variable the webpage reads. Unset, it falls
+  # back to built-in fixtures; pointed at the local backend it renders live
+  # volunteer events. Set it here so a dev boot always exercises the real API.
+  WEBPAGE_ENV=(
+    "NODE_ENV=development"
+    "PORT=$WEBPAGE_PORT"
+    "SFLUV_API_BASE_URL=http://localhost:$BACKEND_PORT"
+  )
+  # Forwarded only when configured, so the signup proxy can present the shared
+  # secret exactly as it will in production (see VOLUNTEER_PROXY_KEY in the
+  # backend env). Harmless to omit.
+  [[ -n "${VOLUNTEER_PROXY_KEY:-}" ]] && WEBPAGE_ENV+=("SFLUV_PROXY_KEY=$VOLUNTEER_PROXY_KEY")
+
+  if [[ "$RUN_BACKEND" -ne 1 ]]; then
+    c_yellow "  backend is not running — the webpage will show fixture data for volunteer events"
+  fi
+
+  start_bg webpage "$WEBPAGE_DIR" "$LOG_DIR/webpage.log" \
+    env "${WEBPAGE_ENV[@]}" npm run dev -- --port "$WEBPAGE_PORT"
+  wait_for "http://localhost:$WEBPAGE_PORT" "webpage" 90 "${PIDS[${#PIDS[@]}-1]}" "$LOG_DIR/webpage.log" \
+    || c_yellow "  webpage still starting — check tmp/logs/webpage.log"
+elif [[ "$RUN_WEBPAGE" -eq 1 ]]; then
+  c_blue "[9/10] Webpage (skipped — no repo at ${WEBPAGE_DIR})"
+  c_yellow "  clone it beside this repo, or set WEBPAGE_DIR in .dev.env"
+  RUN_WEBPAGE=0
+else
+  c_blue "[9/10] Webpage (skipped)"
 fi
 
 echo
@@ -762,6 +837,7 @@ echo "  Paymaster  $PAYMASTER_ADDRESS (sponsor: $PAYER_ADDRESS)"
 [[ "$RUN_PONDER" -eq 1 ]]   && echo "  Ponder     http://localhost:$PONDER_PORT"
 [[ "$RUN_BACKEND" -eq 1 ]]  && echo "  Backend    http://localhost:$BACKEND_PORT"
 [[ "$RUN_FRONTEND" -eq 1 ]] && echo "  Frontend   https://localhost:$FRONTEND_PORT"
+[[ "$RUN_WEBPAGE" -eq 1 ]]  && echo "  Webpage    http://localhost:$WEBPAGE_PORT  (volunteers: /volunteers)"
 echo "  Config     tmp/local-community-config.json"
 echo "  Logs       tmp/logs/"
 echo
@@ -776,7 +852,7 @@ if [[ "$RUN_MOBILE" -eq 1 ]]; then
   MOBILE_APP_BRANCH="${MOBILE_APP_BRANCH:-main}"
   MOBILE_DIR="$TMP_DIR/mobile-app"
 
-  c_blue "[9/9] Mobile (Expo @ $MOBILE_APP_BRANCH, background)"
+  c_blue "[10/10] Mobile (Expo @ $MOBILE_APP_BRANCH, background)"
   if [[ -d "$MOBILE_DIR/.git" ]]; then
     ( git -C "$MOBILE_DIR" fetch origin "$MOBILE_APP_BRANCH" \
         && git -C "$MOBILE_DIR" checkout "$MOBILE_APP_BRANCH" \
@@ -814,13 +890,14 @@ EOF
     start_bg mobile "$MOBILE_DIR/mobile" "$LOG_DIR/expo.log" npm run start -- --host localhost
   fi
 else
-  c_blue "[9/9] Running (no mobile)."
+  c_blue "[10/10] Running (no mobile)."
 fi
 
 TAIL_LOGS=()
 [[ "$RUN_BACKEND" -eq 1 ]]  && TAIL_LOGS+=("$LOG_DIR/backend.log")
 [[ "$RUN_PONDER" -eq 1 ]]   && TAIL_LOGS+=("$LOG_DIR/ponder.log")
 [[ "$RUN_FRONTEND" -eq 1 ]] && TAIL_LOGS+=("$LOG_DIR/frontend.log")
+[[ "$RUN_WEBPAGE" -eq 1 ]]  && TAIL_LOGS+=("$LOG_DIR/webpage.log")
 [[ "$RUN_MOBILE" -eq 1 ]]   && TAIL_LOGS+=("$LOG_DIR/expo.log")
 TAIL_LOGS+=("$LOG_DIR/engine.log")
 

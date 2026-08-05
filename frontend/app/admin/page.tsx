@@ -89,6 +89,7 @@ import { DrainFaucetModal } from "@/components/events/drain-faucet-modal"
 import { OrganizationManagement } from "@/components/admin/organization-management"
 import { WorkflowDetailsModal } from "@/components/workflows/workflow-details-modal"
 import { AdminAnalyticsPanel } from "@/components/admin/admin-analytics-panel"
+import { PartnersPanel } from "@/components/admin/partners-panel"
 import EventCard from "@/components/events/event-card"
 import type { W9Submission } from "@/types/w9"
 import type { ClientVersionUserCountResponse, UserResponse } from "@/types/server"
@@ -285,6 +286,7 @@ export default function AdminPage() {
       "improvers",
       "workflows",
       "credential-types",
+      "partners",
     ].includes(value)
   }
 
@@ -2636,12 +2638,19 @@ export default function AdminPage() {
             <TabsTrigger value="credential-types" className="w-full justify-between px-3 py-2">
               <span>Credential Types</span>
             </TabsTrigger>
+            <TabsTrigger value="partners" className="w-full justify-between px-3 py-2">
+              <span>Partners</span>
+            </TabsTrigger>
           </TabsList>
 
           <div className="min-w-0">
 
         <TabsContent value="analytics" className="space-y-6">
           <AdminAnalyticsPanel />
+        </TabsContent>
+
+        <TabsContent value="partners" className="space-y-6">
+          <PartnersPanel />
         </TabsContent>
 
         <TabsContent value="tokens" className="space-y-6">

@@ -107,6 +107,42 @@ func envOrDefault(key, defaultValue string) string {
 	return value
 }
 
+// workflowMaintenanceInterval controls how often the workflow maintenance
+// sweep runs. Configurable so it can be tightened in production or slowed in
+// development; defaults to the scheduler's own default when unset or invalid.
+func workflowMaintenanceInterval() time.Duration {
+	raw := strings.TrimSpace(os.Getenv("WORKFLOW_MAINTENANCE_INTERVAL"))
+	if raw == "" {
+		return 0
+	}
+
+	parsed, err := time.ParseDuration(raw)
+	if err != nil || parsed <= 0 {
+		return 0
+	}
+	return parsed
+}
+
+// WarnOnMissingPublicConfig surfaces environment gaps that fail silently at
+// runtime rather than at boot. PUBLIC_BACKEND_URL is the notable one: without
+// it, volunteer event image URLs are emitted root-relative, which resolves fine
+// for same-origin callers but 404s on the marketing site — a broken image on a
+// public page with nothing in the logs to explain it.
+func WarnOnMissingPublicConfig(appLogger *logger.LogCloser) {
+	if appLogger == nil {
+		return
+	}
+
+	if strings.TrimSpace(os.Getenv("PUBLIC_BACKEND_URL")) == "" &&
+		strings.TrimSpace(os.Getenv("NEXT_PUBLIC_BACKEND_URL")) == "" {
+		appLogger.Logf("warning: PUBLIC_BACKEND_URL is unset; volunteer event photo and organizer logo URLs will be root-relative and will not resolve for external clients")
+	}
+
+	if strings.TrimSpace(os.Getenv("VOLUNTEER_PROXY_KEY")) == "" {
+		appLogger.Logf("warning: VOLUNTEER_PROXY_KEY is unset; forwarded client IPs will be ignored and proxied volunteer signups will share one rate-limit bucket")
+	}
+}
+
 func InitializeDatabases(ctx context.Context, pools *DBPools, appLogger *logger.LogCloser) error {
 	if pools == nil || pools.App == nil || pools.Bot == nil {
 		return fmt.Errorf("app and bot db pools are required")
@@ -293,6 +329,12 @@ func NewServerHandler(ctx context.Context, pools *DBPools, appLogger *logger.Log
 	a.SetRedeemerService(redeemer)
 	a.SetMinterService(minter)
 	StartDeletedAccountPurgeLoop(ctx, a, appLogger)
+
+	// Workflow upkeep (recurrence catch-up, payout reconciliation, paid_out
+	// finalization) previously ran only as a side effect of user requests, so it
+	// stalled whenever nobody hit the right endpoint. Running it on a timer makes
+	// it independent of traffic.
+	handlers.NewWorkflowMaintenanceScheduler(a, workflowMaintenanceInterval()).Start(ctx)
 
 	p := handlers.NewPonderService(ponderDb, appDb, botDb, appLogger, activeChainID)
 	if err := p.SyncCurrentAnalyticsWalletRoleHistory(ctx); err != nil {

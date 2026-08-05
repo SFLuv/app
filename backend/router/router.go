@@ -152,6 +152,8 @@ func New(s *handlers.BotService, a *handlers.AppService, p *handlers.PonderServi
 	}
 
 	AddBotRoutes(r, s, a)
+	AddVolunteerEventRoutes(r, s)
+	AddPartnerRoutes(r, a)
 	AddOrganizationRoutes(r, a, s)
 	AddClientConfigRoutes(r, a)
 	AddUserRoutes(r, a)
@@ -198,6 +200,23 @@ func AddClientConfigRoutes(r *chi.Mux, s *handlers.AppService) {
 	r.Get("/client-version", s.GetClientVersion)
 }
 
+// AddVolunteerEventRoutes mounts the public volunteer portal API consumed by
+// the mobile app and the marketing site.
+//
+// These routes are deliberately NOT under the /events prefix: that whole tree
+// is admin-guarded, and hanging public reads inside it would put the
+// public/private boundary one refactor away from flipping in either direction.
+// Auth here is optional — the auth middleware passes through when no valid
+// token is present, and handlers enrich the response (the viewer block) only
+// when a caller is identified.
+func AddVolunteerEventRoutes(r *chi.Mux, s *handlers.BotService) {
+	r.Get("/volunteer-events", s.GetVolunteerEvents)
+	r.Get("/volunteer-events/organizers", s.GetVolunteerEventOrganizers)
+	r.Get("/volunteer-events/photos/{photo_id}", s.GetVolunteerEventPhoto)
+	r.Get("/volunteer-events/{id}", s.GetVolunteerEvent)
+	r.Get("/organizers/{id}/logo", s.GetOrganizerLogo)
+}
+
 func AddBotRoutes(r *chi.Mux, s *handlers.BotService, a *handlers.AppService) {
 	r.Post("/events", withAdmin(s.NewEvent, a))
 	r.Post("/events/{event_id}/codes", withAdmin(s.NewCodesRequest, a))
@@ -240,6 +259,22 @@ func AddAdminRoutes(r *chi.Mux, s *handlers.AppService) {
 	r.Put("/admin/locations", withAdmin(s.UpdateLocationApproval, s))
 	r.Get("/admin/affiliates", withAdmin(s.GetAffiliates, s))
 	r.Put("/admin/affiliates", withAdmin(s.UpdateAffiliate, s))
+
+	// Partner carousel shown on the public marketing site.
+	r.Get("/admin/partners", withAdmin(s.AdminGetPartners, s))
+	r.Post("/admin/partners", withAdmin(s.AdminCreatePartner, s))
+	r.Put("/admin/partners/order", withAdmin(s.AdminReorderPartners, s))
+	r.Put("/admin/partners/{id}", withAdmin(s.AdminUpdatePartner, s))
+	r.Delete("/admin/partners/{id}", withAdmin(s.AdminDeletePartner, s))
+	r.Post("/admin/partners/{id}/logo", withAdmin(s.AdminUploadPartnerLogo, s))
+}
+
+// AddPartnerRoutes exposes the partner carousel publicly. Same data every
+// visitor already sees rendered on sfluv.org, so it needs no auth — and the
+// marketing site fetches it server-side at build/ISR time.
+func AddPartnerRoutes(r *chi.Mux, s *handlers.AppService) {
+	r.Get("/partners", s.GetPublicPartners)
+	r.Get("/partners/{id}/logo", s.GetPartnerLogo)
 }
 
 func AddAffiliateRoutes(r *chi.Mux, s *handlers.BotService, a *handlers.AppService) {
@@ -275,6 +310,8 @@ func AddWorkflowRoutes(r *chi.Mux, s *handlers.BotService, a *handlers.AppServic
 
 	r.Get("/improvers/workflows", withImprover(a.GetImproverWorkflows, a))
 	r.Get("/improvers/unpaid-workflows", withImprover(a.GetImproverUnpaidWorkflows, a))
+	r.Get("/improvers/notifications", withImprover(a.GetImproverNotifications, a))
+	r.Post("/improvers/notifications/seen", withImprover(a.MarkImproverNotificationsSeen, a))
 	r.Put("/improvers/primary-rewards-account", withImprover(a.UpdateImproverPrimaryRewardsAccount, a))
 	r.Get("/improvers/credential-requests", withImprover(a.GetImproverCredentialRequests, a))
 	r.Post("/improvers/credential-requests", withImprover(a.CreateImproverCredentialRequest, a))

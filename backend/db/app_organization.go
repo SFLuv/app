@@ -1031,3 +1031,46 @@ func (a *AppDB) AdminSetOrganizationSuperadminByEmail(ctx context.Context, orgId
 		return err
 	})
 }
+
+// GetOrganizationsByIds batch-loads organizations for cross-database stitching
+// (bot-database events carry an organization_id but cannot join to it).
+func (a *AppDB) GetOrganizationsByIds(ctx context.Context, ids []int64) (map[int64]*structs.Organization, error) {
+	result := map[int64]*structs.Organization{}
+	if len(ids) == 0 {
+		return result, nil
+	}
+
+	rows, err := a.db.Query(ctx, `
+		SELECT id, name, logo, created_at, updated_at
+		FROM organizations
+		WHERE id = ANY($1);
+	`, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		org := &structs.Organization{}
+		if err := rows.Scan(&org.Id, &org.Name, &org.Logo, &org.CreatedAt, &org.UpdatedAt); err != nil {
+			return nil, err
+		}
+		result[org.Id] = org
+	}
+
+	return result, rows.Err()
+}
+
+// GetOrganizationLogo returns just an organization's stored logo, used by the
+// public logo endpoint so clients consume a URL instead of an inline data URI.
+func (a *AppDB) GetOrganizationLogo(ctx context.Context, orgId int64) (string, error) {
+	var logo *string
+	err := a.db.QueryRow(ctx, `SELECT logo FROM organizations WHERE id = $1;`, orgId).Scan(&logo)
+	if err != nil {
+		return "", err
+	}
+	if logo == nil {
+		return "", nil
+	}
+	return *logo, nil
+}

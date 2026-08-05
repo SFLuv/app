@@ -34,6 +34,21 @@ import (
 
 const workflowPayoutProcessingTimeout = 15 * time.Minute
 const workflowPayoutStaleLockTimeout = 5 * time.Minute
+const workflowMaintenanceTimeout = 2 * time.Minute
+
+// workflowMaintenanceContext returns a context for shared workflow maintenance
+// (recurrence catch-up, availability refresh, stale payout lock recovery).
+//
+// This work mutates state for every user, not just the caller, but it is
+// triggered opportunistically from user-facing handlers. Running it on the
+// request context means a client that navigates away, backgrounds the app, or
+// times out cancels maintenance mid-flight — which showed up in production as a
+// stream of "context canceled" errors and, worse, as recurring series that
+// never advanced because the catch-up transaction was rolled back every time.
+// Detaching it means the work completes regardless of what the caller does.
+func workflowMaintenanceContext() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), workflowMaintenanceTimeout)
+}
 
 type workflowCreateErrorResponse struct {
 	Error  string `json:"error"`
@@ -442,6 +457,46 @@ func (a *AppService) refreshWorkflowStartAvailabilityAndNotify(ctx context.Conte
 	}
 	a.sendWorkflowSeriesFundingShortfallEmails(ctx, refreshResult.SeriesFundingChecks)
 	return nil
+}
+
+// isClientGone reports whether an error is just the caller's request context
+// being cancelled — the client navigated away, backgrounded the app, or timed
+// out. It is not a server fault, nobody is left to receive a response, and
+// logging it as an error buries real failures in noise.
+func isClientGone(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+}
+
+// staleWorkflowPayoutLockCutoff is the timestamp before which an in-progress
+// payout lock is considered abandoned by a crashed or timed-out attempt.
+func staleWorkflowPayoutLockCutoff() int64 {
+	return time.Now().UTC().Add(-workflowPayoutStaleLockTimeout).Unix()
+}
+
+// recoverStalePayoutLocksForImprover releases payout locks left behind by an
+// interrupted payout attempt. Detached from the request for the same reason as
+// the availability refresh: it unblocks payouts for everyone.
+func (a *AppService) recoverStalePayoutLocksForImprover(improverId string, staleBefore int64) {
+	ctx, cancel := workflowMaintenanceContext()
+	defer cancel()
+
+	if _, _, err := a.db.RecoverStaleWorkflowPayoutLocksForImprover(ctx, improverId, staleBefore, workflowPayoutErrorTimedOut); err != nil {
+		a.logger.Logf("error recovering stale payout locks for improver %s: %s", improverId, err)
+	}
+}
+
+// runWorkflowAvailabilityMaintenance runs the shared availability/recurrence
+// refresh on a context detached from any request, so a disconnecting client
+// cannot abort work that belongs to everyone. Failures are logged and swallowed
+// deliberately: shared maintenance breaking must not turn a user's read into a
+// 500 for something that has nothing to do with their request.
+func (a *AppService) runWorkflowAvailabilityMaintenance(reason string) {
+	ctx, cancel := workflowMaintenanceContext()
+	defer cancel()
+
+	if err := a.refreshWorkflowStartAvailabilityAndNotify(ctx); err != nil {
+		a.logger.Logf("error refreshing workflow availability during %s: %s", reason, err)
+	}
 }
 
 func (a *AppService) RequestProposerStatus(w http.ResponseWriter, r *http.Request) {
@@ -1148,11 +1203,7 @@ func (a *AppService) GetProposerWorkflow(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if err := a.refreshWorkflowStartAvailabilityAndNotify(r.Context()); err != nil {
-		a.logger.Logf("error refreshing workflow availability before proposer workflow detail %s for user %s: %s", workflowId, *userDid, err)
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
+	a.runWorkflowAvailabilityMaintenance(fmt.Sprintf("proposer workflow detail %s for user %s", workflowId, *userDid))
 
 	var workflow *structs.Workflow
 	var err error
@@ -1244,11 +1295,7 @@ func (a *AppService) GetWorkflow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := a.refreshWorkflowStartAvailabilityAndNotify(r.Context()); err != nil {
-		a.logger.Logf("error refreshing workflow availability before workflow detail %s for user %s: %s", workflowId, *userDid, err)
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
+	a.runWorkflowAvailabilityMaintenance(fmt.Sprintf("workflow detail %s for user %s", workflowId, *userDid))
 
 	workflow, err := a.db.GetWorkflowByID(r.Context(), workflowId)
 	if err != nil {
@@ -1274,16 +1321,7 @@ func (a *AppService) GetImproverWorkflows(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	refreshResult, err := a.db.RefreshWorkflowStartAvailability(r.Context())
-	if err != nil {
-		a.logger.Logf("error refreshing workflow availability for improver %s: %s", *userDid, err)
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-	for _, notification := range refreshResult.AvailabilityNotifications {
-		a.sendWorkflowStepAvailableEmail(notification)
-	}
-	a.sendWorkflowSeriesFundingShortfallEmails(r.Context(), refreshResult.SeriesFundingChecks)
+	a.runWorkflowAvailabilityMaintenance(fmt.Sprintf("improver workflow list for %s", *userDid))
 
 	activeCredentials, err := a.db.GetActiveCredentialTypesForUser(r.Context(), *userDid)
 	if err != nil {
@@ -1427,9 +1465,9 @@ func (a *AppService) GetImproverUnpaidWorkflows(w http.ResponseWriter, r *http.R
 	isAdmin := a.IsAdmin(r.Context(), *userDid)
 	staleBefore := time.Now().UTC().Add(-workflowPayoutStaleLockTimeout).Unix()
 
-	if _, _, err := a.db.RecoverStaleWorkflowPayoutLocksForImprover(r.Context(), *userDid, staleBefore, workflowPayoutErrorTimedOut); err != nil {
-		a.logger.Logf("error recovering stale payout locks for improver %s: %s", *userDid, err)
-	}
+	// Detached: recovering stale payout locks unblocks payouts for everyone, so
+	// it must not be abandoned because this particular client disconnected.
+	a.recoverStalePayoutLocksForImprover(*userDid, staleBefore)
 
 	workflows, err := a.db.GetImproverUnpaidWorkflows(r.Context(), *userDid)
 	if err != nil {
@@ -1444,7 +1482,9 @@ func (a *AppService) GetImproverUnpaidWorkflows(w http.ResponseWriter, r *http.R
 
 	refreshed, err := a.db.GetImproverUnpaidWorkflows(r.Context(), *userDid)
 	if err != nil {
-		a.logger.Logf("error refreshing unpaid workflows for improver %s: %s", *userDid, err)
+		if !isClientGone(err) {
+			a.logger.Logf("error refreshing unpaid workflows for improver %s: %s", *userDid, err)
+		}
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
@@ -2918,14 +2958,7 @@ func (a *AppService) ClaimWorkflowStep(w http.ResponseWriter, r *http.Request) {
 	}
 	isAdmin := a.IsAdmin(r.Context(), *userDid)
 
-	if refreshResult, err := a.db.RefreshWorkflowStartAvailability(r.Context()); err == nil {
-		for _, notification := range refreshResult.AvailabilityNotifications {
-			a.sendWorkflowStepAvailableEmail(notification)
-		}
-		a.sendWorkflowSeriesFundingShortfallEmails(r.Context(), refreshResult.SeriesFundingChecks)
-	} else {
-		a.logger.Logf("error refreshing workflow start availability before claim for improver %s: %s", *userDid, err)
-	}
+	a.runWorkflowAvailabilityMaintenance(fmt.Sprintf("step claim for improver %s", *userDid))
 
 	workflowId := strings.TrimSpace(r.PathValue("workflow_id"))
 	stepId := strings.TrimSpace(r.PathValue("step_id"))
@@ -2987,14 +3020,7 @@ func (a *AppService) StartWorkflowStep(w http.ResponseWriter, r *http.Request) {
 	}
 	isAdmin := a.IsAdmin(r.Context(), *userDid)
 
-	if refreshResult, err := a.db.RefreshWorkflowStartAvailability(r.Context()); err == nil {
-		for _, notification := range refreshResult.AvailabilityNotifications {
-			a.sendWorkflowStepAvailableEmail(notification)
-		}
-		a.sendWorkflowSeriesFundingShortfallEmails(r.Context(), refreshResult.SeriesFundingChecks)
-	} else {
-		a.logger.Logf("error refreshing workflow start availability before start for improver %s: %s", *userDid, err)
-	}
+	a.runWorkflowAvailabilityMaintenance(fmt.Sprintf("step start for improver %s", *userDid))
 
 	workflowId := strings.TrimSpace(r.PathValue("workflow_id"))
 	stepId := strings.TrimSpace(r.PathValue("step_id"))
@@ -3038,14 +3064,7 @@ func (a *AppService) CompleteWorkflowStep(w http.ResponseWriter, r *http.Request
 	}
 	isAdmin := a.IsAdmin(r.Context(), *userDid)
 
-	if refreshResult, err := a.db.RefreshWorkflowStartAvailability(r.Context()); err == nil {
-		for _, notification := range refreshResult.AvailabilityNotifications {
-			a.sendWorkflowStepAvailableEmail(notification)
-		}
-		a.sendWorkflowSeriesFundingShortfallEmails(r.Context(), refreshResult.SeriesFundingChecks)
-	} else {
-		a.logger.Logf("error refreshing workflow start availability before complete for improver %s: %s", *userDid, err)
-	}
+	a.runWorkflowAvailabilityMaintenance(fmt.Sprintf("step complete for improver %s", *userDid))
 
 	workflowId := strings.TrimSpace(r.PathValue("workflow_id"))
 	stepId := strings.TrimSpace(r.PathValue("step_id"))
@@ -3094,7 +3113,9 @@ func (a *AppService) CompleteWorkflowStep(w http.ResponseWriter, r *http.Request
 
 	workflow, err := a.db.GetWorkflowByID(r.Context(), workflowId)
 	if err != nil {
-		a.logger.Logf("error loading workflow %s after step completion: %s", workflowId, err)
+		if !isClientGone(err) {
+			a.logger.Logf("error loading workflow %s after step completion: %s", workflowId, err)
+		}
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
@@ -3329,11 +3350,7 @@ func (a *AppService) GetVoterWorkflow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := a.refreshWorkflowStartAvailabilityAndNotify(r.Context()); err != nil {
-		a.logger.Logf("error refreshing workflow availability before voter workflow detail %s for user %s: %s", workflowId, *userDid, err)
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
+	a.runWorkflowAvailabilityMaintenance(fmt.Sprintf("voter workflow detail %s for user %s", workflowId, *userDid))
 
 	workflow, err := a.db.GetWorkflowByID(r.Context(), workflowId)
 	if err != nil {

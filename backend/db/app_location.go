@@ -151,7 +151,8 @@ func (a *AppDB) GetLocation(ctx context.Context, id uint64) (*structs.PublicLoca
 		) legacy_wallet
 			ON TRUE
 		WHERE l.id = $1
-		AND l.active = TRUE;
+		AND l.active = TRUE
+		AND l.location_kind = 'merchant';
 	`, id)
 
 	location := structs.PublicLocation{}
@@ -297,6 +298,7 @@ func (s *AppDB) GetLocations(ctx context.Context, r *structs.LocationsPageReques
 			ON TRUE
 		WHERE l.approval = TRUE
 		AND l.active = TRUE
+		AND l.location_kind = 'merchant'
 		ORDER BY l.id
 		LIMIT $1
 		OFFSET $2;
@@ -455,6 +457,7 @@ func (s *AppDB) GetAuthedLocations(ctx context.Context, r *structs.LocationsPage
 		) legacy_wallet
 			ON TRUE
 		WHERE l.active = TRUE
+		AND l.location_kind = 'merchant'
 		ORDER BY l.id
 		LIMIT $1
 		OFFSET $2;
@@ -850,6 +853,7 @@ func (a *AppDB) GetLocationsByUser(ctx context.Context, userId string) ([]*struc
 			ON TRUE
     WHERE l.owner_id = $1
 	AND l.active = TRUE
+	AND l.location_kind = 'merchant'
 	ORDER BY l.id DESC
 	LIMIT 500;
 `, userId)
@@ -930,4 +934,55 @@ func (a *AppDB) GetLocationsByUser(ctx context.Context, userId string) ([]*struc
 	}
 
 	return locations, nil
+}
+
+// GetVolunteerLocationsByIds resolves volunteer event locations in one round
+// trip. Events live in the bot database and locations in the app database, so
+// this cannot be a SQL join — the handler batches ids and stitches the result.
+// It deliberately reads only location_kind = 'volunteer' rows, so an event can
+// never surface a merchant's private address by pointing at the wrong id.
+func (s *AppDB) GetVolunteerLocationsByIds(ctx context.Context, ids []int64) (map[int64]*structs.VolunteerEventLocation, error) {
+	result := map[int64]*structs.VolunteerEventLocation{}
+	if len(ids) == 0 {
+		return result, nil
+	}
+
+	rows, err := s.db.Query(ctx, `
+		SELECT
+			id,
+			COALESCE(name, ''),
+			COALESCE(street, ''),
+			COALESCE(city, ''),
+			COALESCE(state, ''),
+			COALESCE(zip, ''),
+			lat,
+			lng
+		FROM locations
+		WHERE id = ANY($1)
+			AND active = TRUE
+			AND location_kind = 'volunteer';
+	`, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		location := &structs.VolunteerEventLocation{}
+		if err := rows.Scan(
+			&location.Id,
+			&location.Name,
+			&location.Street,
+			&location.City,
+			&location.State,
+			&location.Zip,
+			&location.Lat,
+			&location.Lng,
+		); err != nil {
+			return nil, err
+		}
+		result[location.Id] = location
+	}
+
+	return result, rows.Err()
 }
