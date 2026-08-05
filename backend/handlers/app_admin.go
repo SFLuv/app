@@ -240,6 +240,12 @@ func (a *AppService) UpdateLocationApproval(w http.ResponseWriter, r *http.Reque
 		}
 	}
 
+	// Only on the transition into approved, so re-saving an already-approved
+	// location does not re-notify the merchant.
+	if isApproving && !wasApproved {
+		a.sendLocationApprovedEmail(r.Context(), u.Id)
+	}
+
 	w.WriteHeader(http.StatusCreated)
 }
 

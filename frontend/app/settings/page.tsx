@@ -104,6 +104,13 @@ type MerchantLocationProfileDraft = {
   rating: number;
   mapsPage: string;
   openingHours: string[];
+  /**
+   * A Google place the merchant picked but has not saved yet. Google-derived
+   * columns are written only from a server-verified place lookup, so this is
+   * sent to /locations/{id}/google-place on save rather than through the
+   * profile update.
+   */
+  pendingGooglePlace: GoogleSubLocation | null;
   dirty: boolean;
   saving: boolean;
   error: string;
@@ -473,10 +480,6 @@ export default function SettingsPage() {
     "idle" | "sweeping" | "deleting"
   >("idle");
   const [deleteAccountError, setDeleteAccountError] = useState("");
-  const noopGoogleSubLocationSetter: React.Dispatch<
-    React.SetStateAction<GoogleSubLocation | null>
-  > = () => undefined;
-
   // Account form
   const [name, setName] = useState(user?.name || "");
 
@@ -805,6 +808,7 @@ export default function SettingsPage() {
     rating: location.rating ?? 0,
     mapsPage: location.maps_page || "",
     openingHours: location.opening_hours || [],
+    pendingGooglePlace: null,
     dirty: false,
     saving: false,
     error: "",
@@ -1590,24 +1594,13 @@ export default function SettingsPage() {
     const location = approvedMerchantLocations.find((entry) => entry.id === locationId);
     if (!draft || !location || draft.saving) return;
 
-    const nextLocation: AuthedLocation = {
+    let nextLocation: AuthedLocation = {
       ...location,
-      google_id: draft.googleId.trim(),
       name: draft.name.trim(),
       description: draft.description.trim(),
-      type: draft.type.trim(),
       street: draft.street.trim(),
-      city: draft.city.trim(),
-      state: draft.state.trim(),
-      zip: draft.zip.trim(),
-      lat: draft.lat,
-      lng: draft.lng,
       phone: draft.phone.trim(),
       website: draft.website.trim(),
-      image_url: draft.imageUrl.trim(),
-      rating: draft.rating,
-      maps_page: draft.mapsPage.trim(),
-      opening_hours: draft.openingHours,
     };
 
     updateLocationProfileDraft(locationId, () => ({
@@ -1618,6 +1611,43 @@ export default function SettingsPage() {
     }));
 
     try {
+      // Place identity and map position are written only by the verified
+      // endpoint; the profile update carries the display fields the merchant
+      // edits. Google runs first so whatever is on screen at save time wins.
+      if (draft.pendingGooglePlace) {
+        const placeRes = await authFetch(`/locations/${locationId}/google-place`, {
+          method: "PUT",
+          body: JSON.stringify({ google_id: draft.pendingGooglePlace.google_id }),
+        });
+
+        if (!placeRes.ok) {
+          const text = await placeRes.text();
+          let message = "Unable to refresh this location from Google.";
+          try {
+            const parsed = JSON.parse(text);
+            if (parsed?.error) message = parsed.error;
+          } catch {
+            if (text) message = text;
+          }
+          throw new Error(message);
+        }
+
+        const verified = (await placeRes.json()) as GoogleSubLocation;
+        nextLocation = {
+          ...nextLocation,
+          google_id: verified.google_id,
+          type: verified.type,
+          city: verified.city,
+          state: verified.state,
+          zip: verified.zip,
+          lat: verified.lat,
+          lng: verified.lng,
+          rating: verified.rating,
+          maps_page: verified.maps_page,
+          opening_hours: verified.opening_hours || [],
+        };
+      }
+
       const res = await authFetch("/locations", {
         method: "PUT",
         body: JSON.stringify(nextLocation),
@@ -1649,31 +1679,41 @@ export default function SettingsPage() {
     }
   };
 
+  // Previews the picked place in the draft and stashes it for the save step.
+  // The preview is optimistic — the values actually stored come back from the
+  // server after it re-verifies the place id with Google.
   const applyGoogleLocationSelection = (
     locationId: number,
-    selection: GoogleSubLocation,
+    selection: GoogleSubLocation | null,
   ) => {
-    updateLocationProfileDraft(locationId, (current) => ({
-      ...current,
-      googleId: selection.google_id || current.googleId,
-      name: selection.name || current.name,
-      type: selection.type || current.type,
-      street: selection.street || current.street,
-      city: selection.city || current.city,
-      state: selection.state || current.state,
-      zip: selection.zip || current.zip,
-      lat: selection.lat ?? current.lat,
-      lng: selection.lng ?? current.lng,
-      phone: selection.phone || current.phone,
-      website: selection.website || current.website,
-      imageUrl: selection.image_url || current.imageUrl,
-      rating: selection.rating ?? current.rating,
-      mapsPage: selection.maps_page || current.mapsPage,
-      openingHours: selection.opening_hours || current.openingHours,
-      dirty: true,
-      error: "",
-      success: "",
-    }));
+    updateLocationProfileDraft(locationId, (current) => {
+      if (!selection) {
+        return { ...current, pendingGooglePlace: null, error: "", success: "" };
+      }
+
+      return {
+        ...current,
+        googleId: selection.google_id || current.googleId,
+        name: selection.name || current.name,
+        type: selection.type || current.type,
+        street: selection.street || current.street,
+        city: selection.city || current.city,
+        state: selection.state || current.state,
+        zip: selection.zip || current.zip,
+        lat: selection.lat ?? current.lat,
+        lng: selection.lng ?? current.lng,
+        phone: selection.phone || current.phone,
+        website: selection.website || current.website,
+        imageUrl: selection.image_url || current.imageUrl,
+        rating: selection.rating ?? current.rating,
+        mapsPage: selection.maps_page || current.mapsPage,
+        openingHours: selection.opening_hours || current.openingHours,
+        pendingGooglePlace: selection,
+        dirty: true,
+        error: "",
+        success: "",
+      };
+    });
   };
 
   const resolveDraftAddress = (
@@ -3566,31 +3606,7 @@ export default function SettingsPage() {
                                     ) : merchantPlacesReady ? (
                                       <PlaceAutocomplete
                                         key={`merchant-location-place-${loc.id}`}
-                                        setGoogleSubLocation={noopGoogleSubLocationSetter}
-                                        setBusinessPhone={(value) =>
-                                          updateLocationProfileDraft(loc.id, (current) => ({
-                                            ...current,
-                                            phone:
-                                              typeof value === "function"
-                                                ? value(current.phone)
-                                                : value,
-                                            dirty: true,
-                                            error: "",
-                                            success: "",
-                                          }))
-                                        }
-                                        setStreet={(value) =>
-                                          updateLocationProfileDraft(loc.id, (current) => ({
-                                            ...current,
-                                            street:
-                                              typeof value === "function"
-                                                ? value(current.street)
-                                                : value,
-                                            dirty: true,
-                                            error: "",
-                                            success: "",
-                                          }))
-                                        }
+                                        value={profileDraft.pendingGooglePlace}
                                         onSelect={(selection) =>
                                           applyGoogleLocationSelection(loc.id, selection)
                                         }

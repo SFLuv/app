@@ -1,5 +1,54 @@
 package structs
 
+// VerifiedGooglePlace is the Google-derived subset of a location as returned by
+// the Places API and re-fetched server-side. Everything in here is authoritative
+// and overwrites whatever the client submitted for the same fields.
+type VerifiedGooglePlace struct {
+	GoogleID     string   `json:"google_id"`
+	Name         string   `json:"name"`
+	Type         string   `json:"type"`
+	Street       string   `json:"street"`
+	City         string   `json:"city"`
+	State        string   `json:"state"`
+	ZIP          string   `json:"zip"`
+	Lat          float64  `json:"lat"`
+	Lng          float64  `json:"lng"`
+	Phone        string   `json:"phone"`
+	Website      string   `json:"website"`
+	Rating       float64  `json:"rating"`
+	MapsPage     string   `json:"maps_page"`
+	OpeningHours []string `json:"opening_hours"`
+}
+
+// ApplyTo overwrites the Google-derived fields of a location with the verified
+// values. Merchant-authored fields (description, contact details, POS answers)
+// are left untouched.
+func (v *VerifiedGooglePlace) ApplyTo(location *Location) {
+	if v == nil || location == nil {
+		return
+	}
+
+	location.GoogleID = v.GoogleID
+	location.Name = v.Name
+	location.Type = v.Type
+	location.Street = v.Street
+	location.City = v.City
+	location.State = v.State
+	location.ZIP = v.ZIP
+	location.Lat = v.Lat
+	location.Lng = v.Lng
+	location.Website = v.Website
+	location.Rating = v.Rating
+	location.MapsPage = v.MapsPage
+	location.OpeningHours = v.OpeningHours
+
+	// The merchant may publish a different customer-facing number than the one
+	// on the Google listing, so Google's phone is only a fallback.
+	if location.Phone == "" {
+		location.Phone = v.Phone
+	}
+}
+
 // TODO SANCHEZ: Define the Location struct with appropriate fields, this is the serializer
 
 /*type Location struct {

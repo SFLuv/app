@@ -1,12 +1,15 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strconv"
 
+	"github.com/SFLuv/app/backend/db"
 	"github.com/SFLuv/app/backend/structs"
 	"github.com/SFLuv/app/backend/utils"
 	"github.com/go-chi/chi/v5"
@@ -142,11 +145,52 @@ func (a *AppService) AddLocation(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
+	if location == nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
 	location.OwnerID = *userDid
+	// A submission never carries its own approval state; new locations always
+	// start pending and are published only through the admin approval route.
+	location.Approval = nil
+	location.NormalizeForSubmission()
+
+	// Re-fetch the place from Google server-side so the stored name, address and
+	// coordinates are Google's, not the browser's. This is what stops a place
+	// that is really a street address from landing on the map as a business.
+	if GooglePlacesVerificationEnabled() {
+		verified, err := VerifyGooglePlace(r.Context(), location.GoogleID)
+		if err != nil {
+			if IsPlaceVerificationError(err) {
+				a.logger.Logf("rejected location submission from %s: %s", *userDid, err.Error())
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+				return
+			}
+			// A Places outage should not block onboarding; fall through and let
+			// local validation decide on the client-supplied values.
+			a.logger.Logf("google place verification unavailable for %s: %s", location.GoogleID, err.Error())
+		} else {
+			verified.ApplyTo(location)
+		}
+	}
+
+	if err := location.ValidateForSubmission(); err != nil {
+		a.logger.Logf("invalid location submission from %s: %s", *userDid, err.Error())
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
 	err = a.db.AddLocation(r.Context(), location)
 	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		a.logger.Logf("invalid location body: %s", err.Error())
+		if errors.Is(err, db.ErrDuplicateGoogleLocation) {
+			writeJSON(w, http.StatusConflict, map[string]string{
+				"error": "This business is already registered with SFLuv.",
+			})
+			return
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+		a.logger.Logf("error adding location for %s: %s", *userDid, err.Error())
 		return
 	}
 
@@ -188,29 +232,135 @@ func (a *AppService) UpdateLocation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The client historically sent {"location": {...}}; accept both that and a
+	// bare location object so neither shape silently unmarshals to a zero value.
+	var wrapper struct {
+		Location *structs.Location `json:"location"`
+	}
 	var location structs.Location
-	err = json.Unmarshal(body, &location)
-	if err != nil {
+	if err := json.Unmarshal(body, &wrapper); err == nil && wrapper.Location != nil {
+		location = *wrapper.Location
+	} else if err := json.Unmarshal(body, &location); err != nil {
 		a.logger.Logf("error unmarshalling update location body: %s", err)
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
 
+	if location.ID == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "A location id is required."})
+		return
+	}
+
 	location.OwnerID = *userDid
+	// Approval is admin-only and is never read from this route; see
+	// db.UpdateLocation for the full list of columns this route cannot write.
+	location.Approval = nil
+	location.NormalizeForSubmission()
+
+	if err := location.ValidateForUpdate(); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
 
 	err = a.db.UpdateLocation(r.Context(), &location)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
 		a.logger.Logf("failed to update location %s", err.Error())
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusCreated)
+}
+
+// UpdateLocationGooglePlace re-points an owned location at a Google place. The
+// place is re-fetched server-side, so the stored name, address, coordinates and
+// hours are always Google's own values rather than anything the client sent.
+func (a *AppService) UpdateLocationGooglePlace(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+
+	userDid := utils.GetDid(r)
+	if userDid == nil {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	locationID, err := strconv.ParseUint(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
 
-	// TODO: how do we make sure this is the first time a location is approved?
-	if *location.Approval {
-		// send confirmation email to contact associated with location
-		sender := utils.NewEmailSender()
-		if sender != nil {
-			details := fmt.Sprintf(`
+	var request struct {
+		GoogleID string `json:"google_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	if !GooglePlacesVerificationEnabled() {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+			"error": "Google verification is not configured, so location details cannot be refreshed right now.",
+		})
+		return
+	}
+
+	verified, err := VerifyGooglePlace(r.Context(), request.GoogleID)
+	if err != nil {
+		if IsPlaceVerificationError(err) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		a.logger.Logf("google place verification failed for %s: %s", request.GoogleID, err.Error())
+		writeJSON(w, http.StatusBadGateway, map[string]string{
+			"error": "Could not reach Google to verify this location. Please try again.",
+		})
+		return
+	}
+
+	err = a.db.UpdateLocationGooglePlace(r.Context(), *userDid, uint(locationID), verified)
+	if err != nil {
+		if errors.Is(err, db.ErrDuplicateGoogleLocation) {
+			writeJSON(w, http.StatusConflict, map[string]string{
+				"error": "Another SFLuv location is already using this Google listing.",
+			})
+			return
+		}
+		if errors.Is(err, pgx.ErrNoRows) {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		a.logger.Logf("error updating google place for location %d: %s", locationID, err.Error())
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, verified)
+}
+
+// sendLocationApprovedEmail notifies the merchant contact that their location is
+// live. It runs from the admin approval route, which is the only path that can
+// actually flip approval.
+func (a *AppService) sendLocationApprovedEmail(ctx context.Context, locationID uint) {
+	contact, err := a.db.GetLocationApprovalContact(ctx, locationID)
+	if err != nil {
+		a.logger.Logf("error loading approval contact for location %d: %s", locationID, err.Error())
+		return
+	}
+	if contact.AdminEmail == "" {
+		return
+	}
+
+	sender := utils.NewEmailSender()
+	if sender == nil {
+		return
+	}
+
+	details := fmt.Sprintf(`
 <table role="presentation" width="100%%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
   <tr>
     <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280; width:160px;">Location</td>
@@ -220,22 +370,25 @@ func (a *AppService) UpdateLocation(w http.ResponseWriter, r *http.Request) {
     <td style="padding:12px 0; font-size:13px; color:#6b7280;">Status</td>
     <td style="padding:12px 0; font-size:13px; color:#111827;">Approved</td>
   </tr>
-</table>`, utils.EscapeEmailHTML(location.Name))
+</table>`, utils.EscapeEmailHTML(contact.Name))
 
-			htmlContent := utils.BuildStyledEmail(
-				"Location Approved",
-				"Your location has been approved.",
-				details,
-			)
+	htmlContent := utils.BuildStyledEmail(
+		"Location Approved",
+		"Your location has been approved.",
+		details,
+	)
 
-			err = sender.SendEmail(location.AdminEmail, fmt.Sprintf("%s %s", location.ContactFirstName, location.ContactLastName), "Location Approved", htmlContent, utils.NotificationFromEmail(), "SFLuv Admin")
-			if err != nil {
-				a.logger.Logf("error sending confirmation email: %s", err.Error())
-			}
-		}
+	err = sender.SendEmail(
+		contact.AdminEmail,
+		fmt.Sprintf("%s %s", contact.ContactFirstName, contact.ContactLastName),
+		"Location Approved",
+		htmlContent,
+		utils.NotificationFromEmail(),
+		"SFLuv Admin",
+	)
+	if err != nil {
+		a.logger.Logf("error sending location approval email: %s", err.Error())
 	}
-
-	w.WriteHeader(http.StatusCreated)
 }
 
 func (a *AppService) UpdateLocationWalletSettings(w http.ResponseWriter, r *http.Request) {

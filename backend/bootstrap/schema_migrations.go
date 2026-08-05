@@ -918,6 +918,59 @@ var schemaMigrations = []SchemaMigration{
 			return migrateOrganizationIssuerScopes(ctx, pools)
 		},
 	},
+	{
+		Version:     "1.24",
+		Description: "one location_hours row per weekday",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			return migrateLocationHoursUniqueness(ctx, pools, appLogger)
+		},
+	},
+}
+
+// migrateLocationHoursUniqueness enforces at most one hours row per weekday per
+// location. Before this, an hours "update" that matched only on location_id
+// could leave a location with several rows claiming the same weekday.
+//
+// Uniqueness on locations.google_id is not handled here: CreateTables already
+// maintains locations_google_id_active_idx for that.
+//
+// The index is created only when the existing rows already satisfy it. A
+// duplicate is real data, and silently deleting merchant rows during a
+// migration is worse than shipping without the constraint —
+// db.replaceLocationHours enforces the same rule for every new write either
+// way. When duplicates are present the migration logs what to clean up and
+// moves on.
+func migrateLocationHoursUniqueness(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+	var duplicateWeekdays int
+	if err := pools.App.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM (
+			SELECT location_id, weekday
+			FROM location_hours
+			GROUP BY location_id, weekday
+			HAVING COUNT(*) > 1
+		) duplicates;
+	`).Scan(&duplicateWeekdays); err != nil {
+		return fmt.Errorf("error checking for duplicate location hours: %w", err)
+	}
+
+	if duplicateWeekdays > 0 {
+		appLogger.Logf(
+			"skipping location_hours_location_weekday_key: %d (location, weekday) pairs have more than one row; "+
+				"resolve the duplicates and re-run this migration to add the constraint",
+			duplicateWeekdays,
+		)
+		return nil
+	}
+
+	if _, err := pools.App.Exec(ctx, `
+		CREATE UNIQUE INDEX IF NOT EXISTS location_hours_location_weekday_key
+			ON location_hours(location_id, weekday);
+	`); err != nil {
+		return fmt.Errorf("error creating unique location hours index: %w", err)
+	}
+
+	return nil
 }
 
 type versionTarget struct {

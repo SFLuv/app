@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 
 	"github.com/SFLuv/app/backend/structs"
@@ -539,8 +540,100 @@ func (s *AppDB) GetAuthedLocations(ctx context.Context, r *structs.LocationsPage
 	return authedLocations, nil
 }
 
+// ErrDuplicateGoogleLocation is returned when a Google place is already
+// registered as an active location. Callers surface it as a 409.
+var ErrDuplicateGoogleLocation = errors.New("a location for this google place already exists")
+
+// LocationApprovalContact is the merchant-side addressee for approval mail.
+type LocationApprovalContact struct {
+	Name             string
+	AdminEmail       string
+	ContactFirstName string
+	ContactLastName  string
+}
+
+// GetLocationApprovalContact loads who to notify when a location is approved.
+func (a *AppDB) GetLocationApprovalContact(ctx context.Context, id uint) (*LocationApprovalContact, error) {
+	contact := &LocationApprovalContact{}
+	err := a.db.QueryRow(ctx, `
+		SELECT
+			COALESCE(name, ''),
+			COALESCE(admin_email, ''),
+			COALESCE(contact_firstname, ''),
+			COALESCE(contact_lastname, '')
+		FROM locations
+		WHERE id = $1;
+	`, id).Scan(
+		&contact.Name,
+		&contact.AdminEmail,
+		&contact.ContactFirstName,
+		&contact.ContactLastName,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("error loading approval contact for location %d: %w", id, err)
+	}
+
+	return contact, nil
+}
+
+// replaceLocationHours rewrites the weekday rows for a location. Hours arrive as
+// an ordered slice of Google weekday descriptions, so the existing rows are
+// dropped and reinserted rather than updated in place — updating in place
+// requires matching on weekday, and getting that wrong overwrites every row
+// with the last weekday's hours.
+func replaceLocationHours(ctx context.Context, tx pgx.Tx, locationID uint, hours []string) error {
+	_, err := tx.Exec(ctx, `
+		DELETE FROM location_hours
+		WHERE location_id = $1;
+	`, locationID)
+	if err != nil {
+		return fmt.Errorf("error clearing location hours: %w", err)
+	}
+
+	for weekday, entry := range hours {
+		_, err := tx.Exec(ctx, `
+			INSERT INTO location_hours (
+				location_id,
+				weekday,
+				hours
+			) VALUES ($1, $2, $3);
+		`, locationID, weekday, entry)
+		if err != nil {
+			return fmt.Errorf("error adding location hours to hour table: %w", err)
+		}
+	}
+
+	return nil
+}
+
 func (a *AppDB) AddLocation(ctx context.Context, location *structs.Location) error {
-	_, err := a.db.Exec(ctx, `
+	tx, err := a.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("error opening transaction for new location: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	// Checked inside the transaction so two concurrent submissions of the same
+	// business cannot both pass. The partial unique index added in schema 1.24
+	// is the backstop when it exists.
+	var duplicateExists bool
+	err = tx.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM locations
+			WHERE google_id = $1
+			AND active = TRUE
+		);
+	`, location.GoogleID).Scan(&duplicateExists)
+	if err != nil {
+		return fmt.Errorf("error checking for duplicate location: %w", err)
+	}
+	if duplicateExists {
+		return ErrDuplicateGoogleLocation
+	}
+
+	var locationID uint
+	err = tx.QueryRow(ctx, `
 			INSERT INTO locations (
 				google_id,
 				owner_id,
@@ -552,28 +645,28 @@ func (a *AppDB) AddLocation(ctx context.Context, location *structs.Location) err
 				street,
 				city,
 				state,
-			zip,
-			lat,
-			lng,
-			phone,
-			email,
-			admin_phone,
-			admin_email,
-			website,
-			image_url,
-			rating,
-			maps_page,
-			contact_firstname,
-			contact_lastname,
-			contact_phone,
-			pos_system,
-			sole_proprietorship,
-			tipping_policy,
-			tipping_division,
-			table_coverage,
-			service_stations,
-			tablet_model,
-			messaging_service,
+				zip,
+				lat,
+				lng,
+				phone,
+				email,
+				admin_phone,
+				admin_email,
+				website,
+				image_url,
+				rating,
+				maps_page,
+				contact_firstname,
+				contact_lastname,
+				contact_phone,
+				pos_system,
+				sole_proprietorship,
+				tipping_policy,
+				tipping_division,
+				table_coverage,
+				service_stations,
+				tablet_model,
+				messaging_service,
 				reference
 			) VALUES (
 				$1, $2, $3, $4, $5, $6,
@@ -582,119 +675,8 @@ func (a *AppDB) AddLocation(ctx context.Context, location *structs.Location) err
 				$11, $12, $13, $14, $15, $16, $17, $18,
 				$19, $20, $21, $22, $23, $24, $25, $26,
 				$27, $28, $29, $30, $31, $32
-			);`,
-		&location.GoogleID,
-		&location.OwnerID,
-		&location.Name,
-		&location.Description,
-		&location.Type,
-		&location.Approval,
-		&location.Street,
-		&location.City,
-		&location.State,
-		&location.ZIP,
-		&location.Lat,
-		&location.Lng,
-		&location.Phone,
-		&location.Email,
-		&location.AdminPhone,
-		&location.AdminEmail,
-		&location.Website,
-		&location.ImageURL,
-		&location.Rating,
-		&location.MapsPage,
-		&location.ContactFirstName,
-		&location.ContactLastName,
-		&location.ContactPhone,
-		&location.PosSystem,
-		&location.SoleProprietorship,
-		&location.TippingPolicy,
-		&location.TippingDivision,
-		&location.TableCoverage,
-		&location.ServiceStations,
-		&location.TabletModel,
-		&location.MessagingService,
-		&location.Reference,
-	)
-
-	if err != nil {
-		return fmt.Errorf("error adding location to locations table: %s", err)
-	}
-
-	row := a.db.QueryRow(ctx, `
-		SELECT
-			id
-		FROM locations
-		WHERE google_id = $1
-		AND active = TRUE;
-	`, location.GoogleID,
-	)
-
-	id := 0
-	err = row.Scan(&id)
-
-	for i := 0; i < len(location.OpeningHours); i++ {
-		hours := location.OpeningHours[i]
-		_, err := a.db.Exec(ctx, `
-		INSERT INTO location_hours (
-			location_id,
-			weekday,
-			hours
-		) VALUES ($1, $2, $3);
-		`,
-			id,
-			i,
-			hours,
-		)
-		if err != nil {
-			return fmt.Errorf("error adding location hours to hour table: %s", err)
-		}
-	}
-	return err
-}
-
-func (a *AppDB) UpdateLocation(ctx context.Context, location *structs.Location) error {
-	result, err := a.db.Exec(ctx, `
-	    UPDATE locations
-	    SET
-        google_id = $1,
-        owner_id = $2,
-        name = $3,
-        description = $4,
-	        type = $5,
-	        approval = $6,
-	        approved_at = CASE
-	        	WHEN $6 IS TRUE THEN COALESCE(approved_at, NOW())
-	        	ELSE NULL
-	        END,
-	        street = $7,
-        city = $8,
-        state = $9,
-        zip = $10,
-        lat = $11,
-        lng = $12,
-        phone = $13,
-        email = $14,
-        website = $15,
-        admin_phone = $16,
-        admin_email = $17,
-        image_url = $18,
-        rating = $19,
-        maps_page = $20,
-        contact_firstname = $21,
-        contact_lastname = $22,
-        contact_phone = $23,
-        pos_system = $24,
-        sole_proprietorship = $25,
-        tipping_policy = $26,
-        tipping_division = $27,
-        table_coverage = $28,
-        service_stations = $29,
-        tablet_model = $30,
-        messaging_service = $31,
-        reference = $32
-    WHERE (id = $33 AND owner_id = $34 AND active = TRUE);
-	`,
+			)
+			RETURNING id;`,
 		location.GoogleID,
 		location.OwnerID,
 		location.Name,
@@ -727,35 +709,179 @@ func (a *AppDB) UpdateLocation(ctx context.Context, location *structs.Location) 
 		location.TabletModel,
 		location.MessagingService,
 		location.Reference,
+	).Scan(&locationID)
+	if err != nil {
+		return fmt.Errorf("error adding location to locations table: %w", err)
+	}
+
+	if err := replaceLocationHours(ctx, tx, locationID, location.OpeningHours); err != nil {
+		return err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("error committing new location: %w", err)
+	}
+
+	location.ID = locationID
+	return nil
+}
+
+// UpdateLocation writes the merchant-authored fields of a location the caller
+// owns: the display fields a merchant legitimately controls, plus their contact
+// details and onboarding answers.
+//
+// Deliberately excluded from the SET list:
+//   - approval / approved_at — this route is owner-scoped, not admin-scoped, so
+//     including them let a merchant publish themselves to the public map.
+//     Approval changes only through UpdateLocationApproval.
+//   - owner_id — a request cannot hand a location to a different account.
+//   - google_id, type, city, state, zip, lat, lng, rating, maps_page and the
+//     opening hours — these identify and place the listing, and are written only
+//     from a server-verified Places lookup (UpdateLocationGooglePlace), so a
+//     client cannot swap the underlying place or move the map pin by hand.
+//
+// The parameter order below is checked against the SET list on every edit: an
+// off-by-one here previously wrote admin_phone into the public website column.
+func (a *AppDB) UpdateLocation(ctx context.Context, location *structs.Location) error {
+	result, err := a.db.Exec(ctx, `
+	    UPDATE locations
+	    SET
+	        name = $1,
+	        description = $2,
+	        street = $3,
+	        phone = $4,
+	        email = $5,
+	        website = $6,
+	        admin_phone = $7,
+	        admin_email = $8,
+	        contact_firstname = $9,
+	        contact_lastname = $10,
+	        contact_phone = $11,
+	        pos_system = $12,
+	        sole_proprietorship = $13,
+	        tipping_policy = $14,
+	        tipping_division = $15,
+	        table_coverage = $16,
+	        service_stations = $17,
+	        tablet_model = $18,
+	        messaging_service = $19,
+	        reference = $20
+	    WHERE (id = $21 AND owner_id = $22 AND active = TRUE);
+	`,
+		location.Name,
+		location.Description,
+		location.Street,
+		location.Phone,
+		location.Email,
+		location.Website,
+		location.AdminPhone,
+		location.AdminEmail,
+		location.ContactFirstName,
+		location.ContactLastName,
+		location.ContactPhone,
+		location.PosSystem,
+		location.SoleProprietorship,
+		location.TippingPolicy,
+		location.TippingDivision,
+		location.TableCoverage,
+		location.ServiceStations,
+		location.TabletModel,
+		location.MessagingService,
+		location.Reference,
 		location.ID,
 		location.OwnerID,
 	)
 	if err != nil {
-		return fmt.Errorf("error updating locations table: %s", err)
+		return fmt.Errorf("error updating locations table: %w", err)
 	}
 	if result.RowsAffected() == 0 {
 		return pgx.ErrNoRows
 	}
 
-	for i := 0; i < len(location.OpeningHours); i++ {
-		hours := location.OpeningHours[i]
-		_, err := a.db.Exec(ctx, `
-		UPDATE location_hours
-		SET
-			weekday = $1,
-			hours = $2
-		WHERE location_id = $3
-		AND active = TRUE;
-		`,
-			i,
-			hours,
-			location.ID,
-		)
-		if err != nil {
-			return fmt.Errorf("error updating location hours table: %s", err)
-		}
+	return nil
+}
+
+// UpdateLocationGooglePlace rewrites the Google-derived half of a location the
+// caller owns, from an already-verified Places lookup. This is the only write
+// path for those columns, so a client can never set them directly.
+func (a *AppDB) UpdateLocationGooglePlace(ctx context.Context, ownerID string, locationID uint, place *structs.VerifiedGooglePlace) error {
+	if place == nil {
+		return fmt.Errorf("a verified google place is required")
 	}
-	return err
+
+	tx, err := a.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("error opening transaction for google place update: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	// Another active location already claiming this place would break the
+	// one-active-location-per-place rule the add path enforces.
+	var takenElsewhere bool
+	err = tx.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM locations
+			WHERE google_id = $1
+			AND id <> $2
+			AND active = TRUE
+		);
+	`, place.GoogleID, locationID).Scan(&takenElsewhere)
+	if err != nil {
+		return fmt.Errorf("error checking for duplicate location: %w", err)
+	}
+	if takenElsewhere {
+		return ErrDuplicateGoogleLocation
+	}
+
+	result, err := tx.Exec(ctx, `
+		UPDATE locations
+		SET
+			google_id = $1,
+			name = $2,
+			type = $3,
+			street = $4,
+			city = $5,
+			state = $6,
+			zip = $7,
+			lat = $8,
+			lng = $9,
+			website = $10,
+			rating = $11,
+			maps_page = $12
+		WHERE (id = $13 AND owner_id = $14 AND active = TRUE);
+	`,
+		place.GoogleID,
+		place.Name,
+		place.Type,
+		place.Street,
+		place.City,
+		place.State,
+		place.ZIP,
+		place.Lat,
+		place.Lng,
+		place.Website,
+		place.Rating,
+		place.MapsPage,
+		locationID,
+		ownerID,
+	)
+	if err != nil {
+		return fmt.Errorf("error updating location google data: %w", err)
+	}
+	if result.RowsAffected() == 0 {
+		return pgx.ErrNoRows
+	}
+
+	if err := replaceLocationHours(ctx, tx, locationID, place.OpeningHours); err != nil {
+		return err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("error committing google place update: %w", err)
+	}
+
+	return nil
 }
 
 func (a *AppDB) GetLocationsByUser(ctx context.Context, userId string) ([]*structs.Location, error) {
