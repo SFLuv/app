@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -25,8 +26,9 @@ const (
 )
 
 type eventBlastRequest struct {
-	Subject string `json:"subject"`
-	Message string `json:"message"`
+	Subject  string   `json:"subject"`
+	Message  string   `json:"message"`
+	ImageIds []string `json:"image_ids,omitempty"`
 }
 
 type eventBlastResponse struct {
@@ -131,7 +133,7 @@ func (a *AppService) sendEventBlast(w http.ResponseWriter, r *http.Request, requ
 		return
 	}
 
-	pushed, emailed := a.deliverEventBlast(r.Context(), eventId, row.Title, req.Subject, req.Message, recipients)
+	pushed, emailed := a.deliverEventBlast(r.Context(), eventId, row.Title, req.Subject, req.Message, blastImageURLs(req.ImageIds), recipients)
 
 	if err := a.bot.db.RecordEventBlast(r.Context(), eventId, *userDid, req.Subject, req.Message, pushed, emailed); err != nil {
 		a.logger.Logf("error recording event blast for %s: %s", eventId, err)
@@ -145,7 +147,8 @@ func (a *AppService) sendEventBlast(w http.ResponseWriter, r *http.Request, requ
 }
 
 func (a *AppService) deliverEventBlast(
-	ctx context.Context, eventId string, eventTitle string, subject string, message string, recipients []db.EventBlastRecipient,
+	ctx context.Context, eventId string, eventTitle string, subject string, message string,
+	imageURLs []string, recipients []db.EventBlastRecipient,
 ) (int, int) {
 	sender := utils.NewEmailSender()
 	pushed, emailed := 0, 0
@@ -181,7 +184,7 @@ func (a *AppService) deliverEventBlast(
 			recipient.Email,
 			firstNameOrFallback(recipient.FirstName),
 			subject,
-			buildEventBlastEmail(eventTitle, subject, message),
+			buildEventBlastEmail(eventTitle, subject, message, imageURLs),
 			utils.NotificationFromEmail(),
 			"SFLuv Volunteering",
 		); err != nil {
@@ -237,22 +240,76 @@ func (a *AppService) pushEventBlast(ctx context.Context, userId string, eventId 
 	return delivered
 }
 
-// buildEventBlastEmail renders the organizer's message inside the standard
-// SFLuv email shell. The subject, message, and event title are all
-// organizer-supplied, so every one is HTML-escaped; newlines are converted to
-// <br> AFTER escaping so formatting survives without allowing markup.
-func buildEventBlastEmail(eventTitle string, subject string, message string) string {
-	escapedMessage := strings.ReplaceAll(utils.EscapeEmailHTML(message), "\n", "<br />")
+var (
+	blastBoldPattern   = regexp.MustCompile(`\*\*([^*\n]+)\*\*`)
+	blastItalicPattern = regexp.MustCompile(`_([^_\n]+)_`)
+	blastLinkPattern   = regexp.MustCompile(`\[([^\]\n]+)\]\(([^)\s]+)\)`)
+)
 
+// renderBlastBody turns an organizer's message into safe email HTML.
+//
+// The client never sends HTML. Everything is escaped FIRST, then a small,
+// closed set of markers is turned into tags — so an organizer typing "<b>" gets
+// the literal text, while "**bold**" gets emphasis. Link targets are re-checked
+// against the same http(s) allowlist used for partner links, because an
+// organizer-supplied "javascript:" href would otherwise ship inside an email
+// under our brand.
+func renderBlastBody(message string) string {
+	escaped := utils.EscapeEmailHTML(message)
+
+	escaped = blastLinkPattern.ReplaceAllStringFunc(escaped, func(match string) string {
+		parts := blastLinkPattern.FindStringSubmatch(match)
+		label, target := parts[1], parts[2]
+		// The URL was escaped along with everything else; undo the entity for
+		// "&" so query strings survive, then validate the result.
+		target = strings.ReplaceAll(target, "&amp;", "&")
+		if !isSafePartnerLink(target) {
+			return label
+		}
+		return fmt.Sprintf(
+			`<a href="%s" style="color:#eb6c6c; text-decoration:underline;">%s</a>`,
+			utils.EscapeEmailHTML(target), label,
+		)
+	})
+
+	escaped = blastBoldPattern.ReplaceAllString(escaped, "<strong>$1</strong>")
+	escaped = blastItalicPattern.ReplaceAllString(escaped, "<em>$1</em>")
+
+	// Paragraph breaks on blank lines, single newlines as line breaks.
+	paragraphs := strings.Split(escaped, "\n\n")
+	rendered := make([]string, 0, len(paragraphs))
+	for _, paragraph := range paragraphs {
+		paragraph = strings.TrimSpace(paragraph)
+		if paragraph == "" {
+			continue
+		}
+		rendered = append(rendered, fmt.Sprintf(
+			`<p style="font-size:14px; color:#111827; line-height:1.6; margin:0 0 16px;">%s</p>`,
+			strings.ReplaceAll(paragraph, "\n", "<br />"),
+		))
+	}
+
+	return strings.Join(rendered, "")
+}
+
+// buildEventBlastEmail renders the organizer's message inside the standard
+// SFLuv email shell. Used for both the preview and the send, so what an
+// organizer approves is byte-for-byte what goes out.
+func buildEventBlastEmail(eventTitle string, subject string, message string, imageURLs []string) string {
 	details := fmt.Sprintf(`
 <p style="font-size:13px; color:#6b7280; margin:0 0 4px;">About your volunteer event</p>
 <p style="font-size:16px; font-weight:600; color:#111827; margin:0 0 16px;">%s</p>
-<p style="font-size:14px; color:#111827; line-height:1.6; margin:0;">%s</p>`,
-		utils.EscapeEmailHTML(eventTitle), escapedMessage)
+%s`, utils.EscapeEmailHTML(eventTitle), renderBlastBody(message))
+
+	for _, url := range imageURLs {
+		details += fmt.Sprintf(
+			`<img src="%s" alt="" style="display:block; width:100%%; max-width:504px; height:auto; border-radius:12px; margin:16px 0;" />`,
+			utils.EscapeEmailHTML(url),
+		)
+	}
 
 	// BuildStyledEmail escapes the title and subtitle itself; escaping here too
-	// would double-encode and render literal "&lt;" in the header. Only the
-	// section HTML we assemble by hand needs escaping, which is done above.
+	// would double-encode and render a literal "&lt;" in the header.
 	return utils.BuildStyledEmail(subject, "A message from your event organizer", details)
 }
 
@@ -375,4 +432,149 @@ func (a *AppService) ExpireUnconfirmedSignups(ctx context.Context) {
 	if expired > 0 {
 		a.logger.Logf("released %d unconfirmed volunteer signup spot(s)", expired)
 	}
+}
+
+// blastImageURLs maps uploaded image ids to their public URLs. Email clients
+// cannot present credentials, so these must be reachable unauthenticated.
+func blastImageURLs(ids []string) []string {
+	urls := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if trimmed := strings.TrimSpace(id); trimmed != "" {
+			urls = append(urls, publicURL("/volunteer-events/blast-images/"+trimmed))
+		}
+	}
+	return urls
+}
+
+// PreviewEventBlast renders exactly what would be sent, without sending it.
+//
+// Rendered on the server rather than re-implemented in the client on purpose: a
+// client-side preview can drift from the real template, and the whole point of
+// a preview is that it is truthful.
+func (a *AppService) PreviewEventBlast(w http.ResponseWriter, r *http.Request) {
+	if a.bot == nil || a.bot.db == nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		return
+	}
+
+	eventId := strings.TrimSpace(r.PathValue("id"))
+	defer r.Body.Close()
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	var req eventBlastRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	title := "your volunteer event"
+	if row, err := a.bot.db.GetVolunteerEventForManagement(r.Context(), eventId); err == nil && row != nil {
+		title = row.Title
+	}
+
+	recipients, err := a.bot.db.GetEventBlastRecipients(r.Context(), eventId)
+	if err != nil {
+		a.logger.Logf("error counting blast recipients for preview %s: %s", eventId, err)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"html":       buildEventBlastEmail(title, strings.TrimSpace(req.Subject), strings.TrimSpace(req.Message), blastImageURLs(req.ImageIds)),
+		"subject":    strings.TrimSpace(req.Subject),
+		"recipients": len(recipients),
+	})
+}
+
+// UploadEventBlastImage accepts an inline image for a message. Bytes are
+// sniffed rather than trusted, since the result is served publicly so email
+// clients can fetch it.
+func (a *AppService) UploadEventBlastImage(w http.ResponseWriter, r *http.Request) {
+	if a.bot == nil || a.bot.db == nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		return
+	}
+
+	eventId := strings.TrimSpace(r.PathValue("id"))
+	if eventId == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	if err := r.ParseMultipartForm(maxEventPhotoBytes); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte("could not read upload"))
+		return
+	}
+	defer r.MultipartForm.RemoveAll()
+
+	file, header, err := r.FormFile("image")
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte("image file is required"))
+		return
+	}
+	defer file.Close()
+
+	data, err := io.ReadAll(io.LimitReader(file, maxEventPhotoBytes+1))
+	if err != nil || len(data) == 0 {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte("image file is empty"))
+		return
+	}
+	if len(data) > maxEventPhotoBytes {
+		w.WriteHeader(http.StatusRequestEntityTooLarge)
+		w.Write([]byte(fmt.Sprintf("image must be %d MB or smaller", maxEventPhotoBytes>>20)))
+		return
+	}
+
+	contentType := resolvePartnerLogoContentType(data, header.Filename)
+	if contentType == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte("attachments must be a PNG, JPEG, GIF, WebP, or SVG image"))
+		return
+	}
+
+	imageId, err := a.bot.db.AddEventBlastImage(r.Context(), eventId, data, contentType)
+	if err != nil {
+		a.logger.Logf("error storing blast image for %s: %s", eventId, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"id":  imageId,
+		"url": publicURL("/volunteer-events/blast-images/" + imageId),
+	})
+}
+
+// GetEventBlastImage serves an inline image. Public by necessity: an email
+// client fetching it cannot present credentials. Ids are unguessable UUIDs.
+func (a *AppService) GetEventBlastImage(w http.ResponseWriter, r *http.Request) {
+	if a.bot == nil || a.bot.db == nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		return
+	}
+
+	image, err := a.bot.db.GetEventBlastImage(r.Context(), strings.TrimSpace(r.PathValue("image_id")))
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		a.logger.Logf("error loading blast image: %s", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", image.ContentType)
+	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(image.Data)
 }

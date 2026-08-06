@@ -1,7 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useRef, useState } from "react"
-import { AlertTriangle, CheckCircle2, Clock, Download, Leaf, Loader2, Megaphone, Pencil, QrCode, XCircle } from "lucide-react"
+import { AlertTriangle, CheckCircle2, Clock, Download, Leaf, Loader2, Megaphone, Pencil, QrCode, XCircle, ChevronRight } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { EventBlastModal } from "@/components/events/event-blast-modal"
 import { useApp } from "@/context/AppProvider"
 import { useToast } from "@/hooks/use-toast"
 
@@ -138,6 +139,7 @@ export function VolunteerEventsManager({
   const [search, setSearch] = useState("")
   const [busyId, setBusyId] = useState("")
   const [openEvent, setOpenEvent] = useState<ManagedVolunteerEvent | null>(null)
+  const [blastEvent, setBlastEvent] = useState<ManagedVolunteerEvent | null>(null)
   const [error, setError] = useState("")
   // First-load-only spinner. The poll below must never blank a list the user is
   // reading, so the placeholder is gated on whether we have ever loaded rather
@@ -272,43 +274,6 @@ export function VolunteerEventsManager({
     }
   }
 
-  // Blast: organizers message everyone holding a confirmed spot. Delivered as a
-  // push to volunteers with the app, email to everyone else.
-  const sendBlast = async (event: ManagedVolunteerEvent) => {
-    // Only confirmed signups receive a blast, so the recipient count can be
-    // lower than the signup count — say so up front rather than letting the
-    // result look like a bug.
-    const subject = window.prompt(
-      `Message volunteers at "${event.title}".\n\nOnly volunteers who have confirmed their email will receive it, so this may reach fewer people than the signup count.\n\nSubject:`,
-    )
-    if (subject === null || subject.trim() === "") return
-    const message = window.prompt("Message:")
-    if (message === null || message.trim() === "") return
-
-    setBusyId(event.id)
-    try {
-      const res = await authFetch(`${basePath}/${event.id}/blast`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ subject: subject.trim(), message: message.trim() }),
-      })
-      if (!res.ok) throw new Error((await res.text()).trim() || "Unable to send the message.")
-      const result = await res.json()
-      toast({
-        title: "Message sent",
-        description: `${result.pushed} push notification(s), ${result.emailed} email(s).`,
-      })
-    } catch (err) {
-      toast({
-        title: "Could not send message",
-        description: err instanceof Error ? err.message : "Unexpected error.",
-        variant: "destructive",
-      })
-    } finally {
-      setBusyId("")
-    }
-  }
-
   const pendingCount = events.filter((event) => event.review_status === "pending").length
 
   return (
@@ -352,7 +317,7 @@ export function VolunteerEventsManager({
           </p>
         )}
 
-        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+        <div className="divide-y rounded-lg border">
           {events.map((event) => {
             const cover = [...(event.cover_photos || [])].sort((a, b) => a.position - b.position)[0]
             return (
@@ -363,41 +328,40 @@ export function VolunteerEventsManager({
                   setOpenEvent(event)
                   onOpenEvent?.(event)
                 }}
-                // Uniform height regardless of title length or whether an image
-                // exists, so a grid of cards never looks ragged.
-                className="flex h-full flex-col overflow-hidden rounded-xl border text-left transition-shadow hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+                className="flex w-full items-center gap-4 p-3 text-left transition-colors first:rounded-t-lg last:rounded-b-lg hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/40"
               >
-                <div className="relative h-32 w-full shrink-0 overflow-hidden bg-muted">
+                {/* Fixed thumbnail box so every row is the same height whether
+                    or not the event has a photo. */}
+                <div className="h-14 w-20 shrink-0 overflow-hidden rounded-md bg-muted">
                   {cover ? (
-                    // eslint-disable-next-line @next/next/no-img-element -- API host at arbitrary aspect ratios
+                    // eslint-disable-next-line @next/next/no-img-element -- API host, arbitrary ratios
                     <img src={cover.url} alt="" className="h-full w-full object-cover" />
                   ) : (
-                    // Styled filler at exactly the image's size, so a card
-                    // without a photo occupies the same space as one with.
                     <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-[#ff8a8a] via-[#eb6c6c] to-[#d55c5c]">
-                      <Leaf className="h-8 w-8 text-white/70" />
+                      <Leaf className="h-5 w-5 text-white/70" />
                     </div>
                   )}
-                  <div className="absolute left-2 top-2 flex flex-wrap gap-1">
+                </div>
+
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="truncate font-medium">{event.title}</span>
                     <ReviewBadge event={event} />
+                  </div>
+                  <div className="mt-0.5 truncate text-sm text-muted-foreground">
+                    {formatEventWhen(event)} · {event.organizer.name}
+                    {event.recurrence?.summary ? ` · ${event.recurrence.summary}` : ""}
                   </div>
                 </div>
 
-                <div className="flex min-h-0 flex-1 flex-col gap-2 p-4">
-                  <div className="line-clamp-2 font-medium leading-snug">{event.title}</div>
-                  <div className="text-xs text-muted-foreground">
-                    {formatEventWhen(event)} · {event.organizer.name}
-                  </div>
-                  {event.recurrence?.summary && (
-                    <div className="text-xs text-muted-foreground">{event.recurrence.summary}</div>
-                  )}
-                  <div className="mt-auto flex flex-wrap items-center gap-2 pt-2 text-xs text-muted-foreground">
-                    <QrBadge event={event} />
-                    <span>
-                      {event.signup_count ?? 0}/{event.max_participants} · {event.reward_amount_sfluv} SFLUV each
-                    </span>
-                  </div>
+                <div className="hidden shrink-0 flex-col items-end gap-1 sm:flex">
+                  <QrBadge event={event} />
+                  <span className="text-xs text-muted-foreground">
+                    {event.signup_count ?? 0}/{event.max_participants} · {event.reward_amount_sfluv} SFLUV
+                  </span>
                 </div>
+
+                <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
               </button>
             )
           })}
@@ -456,7 +420,7 @@ export function VolunteerEventsManager({
                     </Button>
                   )}
                   {openEvent.review_status === "approved" && (openEvent.signup_count ?? 0) > 0 && (
-                    <Button variant="outline" size="sm" disabled={busyId === openEvent.id} onClick={() => sendBlast(openEvent)}>
+                    <Button variant="outline" size="sm" disabled={busyId === openEvent.id} onClick={() => setBlastEvent(openEvent)}>
                       <Megaphone className="mr-2 h-3.5 w-3.5" />
                       Message volunteers
                     </Button>
@@ -490,6 +454,17 @@ export function VolunteerEventsManager({
           )}
         </DialogContent>
       </Dialog>
+
+      {blastEvent && (
+        <EventBlastModal
+          open
+          onOpenChange={(next) => !next && setBlastEvent(null)}
+          basePath={basePath}
+          eventId={blastEvent.id}
+          eventTitle={blastEvent.title}
+          signupCount={blastEvent.signup_count ?? 0}
+        />
+      )}
     </Card>
   )
 }

@@ -1117,6 +1117,31 @@ var schemaMigrations = []SchemaMigration{
 			return nil
 		},
 	},
+	{
+		Version:     "1.32",
+		Description: "inline images for organizer event blasts",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			// Email clients cannot read an authenticated URL, so blast images are
+			// served from a public, unguessable id — the same pattern as event
+			// cover photos.
+			if _, err := pools.Bot.Exec(ctx, `
+				CREATE TABLE IF NOT EXISTS event_blast_images(
+					id TEXT PRIMARY KEY,
+					event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+					content_type TEXT NOT NULL DEFAULT 'application/octet-stream',
+					image_data BYTEA NOT NULL,
+					size_bytes INTEGER NOT NULL DEFAULT 0,
+					created_at BIGINT NOT NULL DEFAULT EXTRACT(EPOCH FROM NOW())::BIGINT
+				);
+
+				CREATE INDEX IF NOT EXISTS event_blast_images_event_idx ON event_blast_images(event_id);
+			`); err != nil {
+				return err
+			}
+
+			return nil
+		},
+	},
 }
 
 // migrateLocationHoursUniqueness enforces at most one hours row per weekday per

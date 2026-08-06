@@ -231,6 +231,10 @@ func AddVolunteerEventRoutes(r *chi.Mux, s *handlers.BotService) {
 // mutated would unsubscribe — or silently complete a double opt-in for —
 // people who never clicked.
 func AddVolunteerListRoutes(r *chi.Mux, a *handlers.AppService) {
+	// Inline blast images must be fetchable by an email client, which cannot
+	// present credentials. Ids are unguessable UUIDs.
+	r.Get("/volunteer-events/blast-images/{image_id}", a.GetEventBlastImage)
+
 	// Signup confirmation for portal (anonymous) signups. Read-only GET, mutating
 	// POST — same prefetch-safety rule as the email-list tokens.
 	r.Get("/volunteer-events/signup/confirm", a.GetVolunteerSignupConfirmState)
@@ -300,6 +304,8 @@ func AddAdminRoutes(r *chi.Mux, s *handlers.AppService) {
 	r.Get("/admin/volunteer-events/{id}/codes.csv", withAdmin(s.AdminDownloadVolunteerEventCodes, s))
 	r.Post("/admin/volunteer-events/{id}/cancel", withAdmin(s.AdminCancelVolunteerEvent, s))
 	r.Post("/admin/volunteer-events/{id}/blast", withAdmin(s.AdminSendEventBlast, s))
+	r.Post("/admin/volunteer-events/{id}/blast/preview", withAdmin(s.PreviewEventBlast, s))
+	r.Post("/admin/volunteer-events/{id}/blast/images", withAdmin(s.UploadEventBlastImage, s))
 	r.Post("/admin/volunteer-events/{id}/photos", withAdmin(s.AdminUploadVolunteerEventPhoto, s))
 	r.Delete("/admin/volunteer-events/photos/{photo_id}", withAdmin(s.AdminDeleteVolunteerEventPhoto, s))
 
@@ -333,6 +339,8 @@ func AddAffiliateRoutes(r *chi.Mux, s *handlers.BotService, a *handlers.AppServi
 	r.Get("/affiliates/volunteer-events/{id}/codes.csv", withAffiliate(a.AffiliateDownloadVolunteerEventCodes, a))
 	r.Put("/affiliates/volunteer-events/{id}", withAffiliate(a.AffiliateUpdateVolunteerEvent, a))
 	r.Post("/affiliates/volunteer-events/{id}/blast", withAffiliate(a.AffiliateSendEventBlast, a))
+	r.Post("/affiliates/volunteer-events/{id}/blast/preview", withAffiliate(a.PreviewEventBlast, a))
+	r.Post("/affiliates/volunteer-events/{id}/blast/images", withAffiliate(a.UploadEventBlastImage, a))
 
 	r.Get("/affiliates/{user_id}", withAffiliate(a.GetAffiliate, a))
 }

@@ -1586,3 +1586,25 @@ func (s *BotDB) ResolveEventEditRequest(ctx context.Context, eventId string, dec
 	}
 	return nil
 }
+
+// AddEventBlastImage stores an inline image for an organizer's message.
+func (s *BotDB) AddEventBlastImage(ctx context.Context, eventId string, data []byte, contentType string) (string, error) {
+	id := uuid.NewString()
+	if _, err := s.db.Exec(ctx, `
+		INSERT INTO event_blast_images (id, event_id, content_type, image_data, size_bytes)
+		VALUES ($1, $2, $3, $4, $5);
+	`, id, eventId, contentType, data, len(data)); err != nil {
+		return "", fmt.Errorf("error storing blast image: %s", err)
+	}
+	return id, nil
+}
+
+func (s *BotDB) GetEventBlastImage(ctx context.Context, imageId string) (*StoredPhoto, error) {
+	image := &StoredPhoto{}
+	if err := s.db.QueryRow(ctx, `
+		SELECT image_data, content_type FROM event_blast_images WHERE id = $1;
+	`, imageId).Scan(&image.Data, &image.ContentType); err != nil {
+		return nil, err
+	}
+	return image, nil
+}
