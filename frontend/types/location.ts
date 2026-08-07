@@ -28,9 +28,18 @@ export interface Location {
   opening_hours: string[];
 }
 
+/**
+ * Which onboarding path produced a location. `google_place` is the primary
+ * route and the only one whose name and address Google vouches for;
+ * `manual` exists for businesses with no Google Business Profile, where the
+ * merchant types the name themselves and only the address is autocompleted.
+ */
+export type ListingSource = "google_place" | "manual";
+
 export interface AuthedLocation {
   id: number;
   google_id: string;
+  listing_source?: ListingSource;
   owner_id: string;
   name: string;
   description: string;
@@ -89,6 +98,26 @@ export interface GoogleSubLocation {
   /** Google's own one-line address, shown back to the merchant for confirmation. */
   formatted_address?: string;
 }
+
+/**
+ * An address picked from Google's geocode autocomplete when the business has no
+ * Google listing of its own. Deliberately has no `name`: the whole failure mode
+ * this path guards against is a merchant ending up named after their street, so
+ * the name has to be typed separately rather than inherited from the address.
+ */
+export interface ManualAddressDraft {
+  street: string;
+  city: string;
+  state: string;
+  zip: string;
+  lat: number;
+  lng: number;
+  formatted_address?: string;
+}
+
+export type PlaceSelection =
+  | { source: "google_place"; place: GoogleSubLocation }
+  | { source: "manual"; address: ManualAddressDraft };
 
 export interface UpdateLocationApprovalRequest {
   id: number;

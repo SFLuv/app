@@ -299,3 +299,112 @@ func TestApplyToFillsPhoneWhenMerchantLeftItBlank(t *testing.T) {
 		t.Fatalf("Phone = %q; want Google's number as the fallback", location.Phone)
 	}
 }
+
+// manualLocation is the same submission arriving through the manual path: the
+// address came from geocode autocomplete, everything identifying it was typed.
+func manualLocation() *Location {
+	location := validLocation()
+	location.ListingSource = ListingSourceManual
+	location.GoogleID = ""
+	return location
+}
+
+// The point of the whole feature: a business with no Google Business Profile
+// has no place id to offer, and that must not stop it onboarding.
+func TestValidateForSubmissionAcceptsManualListingWithoutGoogleID(t *testing.T) {
+	if err := manualLocation().ValidateForSubmission(); err != nil {
+		t.Fatalf("ValidateForSubmission() error = %v; want nil", err)
+	}
+}
+
+// Nothing upstream vouches for a manual name, so the address check has to hold
+// here. This is the failure the merchant hit twice: address typed into the name.
+func TestValidateForSubmissionRejectsManualNameEqualToStreet(t *testing.T) {
+	location := manualLocation()
+	location.Name = "517 Balboa Street"
+
+	err := location.ValidateForSubmission()
+	if err == nil {
+		t.Fatal("ValidateForSubmission() error = nil; want a rejection")
+	}
+	if !strings.Contains(err.Error(), "business name") {
+		t.Errorf("error = %q; want it to ask for the business name", err.Error())
+	}
+}
+
+// Pasting the whole autocomplete suggestion is the same mistake wearing a hat,
+// and the bare street comparison alone does not catch it.
+func TestValidateForSubmissionRejectsManualNameEqualToFormattedAddress(t *testing.T) {
+	location := manualLocation()
+	location.Name = "517 Balboa Street, San Francisco, California 94118"
+
+	if err := location.ValidateForSubmission(); err == nil {
+		t.Fatal("ValidateForSubmission() error = nil; want a rejection")
+	}
+}
+
+// A manual submission carrying a place id is ambiguous about which half of the
+// record Google actually verified, so it is refused outright.
+func TestValidateForSubmissionRejectsManualListingWithGoogleID(t *testing.T) {
+	location := manualLocation()
+	location.GoogleID = "ChIJshiba"
+
+	err := location.ValidateForSubmission()
+	if err == nil {
+		t.Fatal("ValidateForSubmission() error = nil; want a rejection")
+	}
+	if !strings.Contains(err.Error(), "Google place id") {
+		t.Errorf("error = %q; want it to mention the Google place id", err.Error())
+	}
+}
+
+// The security property behind defaulting an absent source to the Google path:
+// omitting listing_source must not be a way to skip place verification.
+func TestValidateForSubmissionTreatsMissingListingSourceAsGoogle(t *testing.T) {
+	location := validLocation()
+	location.ListingSource = ""
+	location.GoogleID = ""
+
+	err := location.ValidateForSubmission()
+	if err == nil {
+		t.Fatal("ValidateForSubmission() error = nil; want the Google place to be required")
+	}
+	if !strings.Contains(err.Error(), "Google place") {
+		t.Errorf("error = %q; want it to require the Google place", err.Error())
+	}
+}
+
+func TestValidateForSubmissionRejectsUnknownListingSource(t *testing.T) {
+	location := validLocation()
+	location.ListingSource = "carrier_pigeon"
+
+	if err := location.ValidateForSubmission(); err == nil {
+		t.Fatal("ValidateForSubmission() error = nil; want a rejection")
+	}
+}
+
+// NormalizeForSubmission is what a handler relies on to make the two fields
+// consistent before anything else looks at them.
+func TestNormalizeForSubmissionClearsGoogleIDOnManualListings(t *testing.T) {
+	location := validLocation()
+	location.ListingSource = "  manual  "
+	location.GoogleID = "ChIJshiba"
+	location.NormalizeForSubmission()
+
+	if location.ListingSource != ListingSourceManual {
+		t.Errorf("ListingSource = %q; want %q", location.ListingSource, ListingSourceManual)
+	}
+	if location.GoogleID != "" {
+		t.Errorf("GoogleID = %q; want it cleared on a manual listing", location.GoogleID)
+	}
+}
+
+func TestNormalizeForSubmissionDefaultsListingSourceToGoogle(t *testing.T) {
+	location := validLocation()
+	location.ListingSource = ""
+	location.NormalizeForSubmission()
+
+	if location.ListingSource != ListingSourceGooglePlace {
+		t.Errorf("ListingSource = %q; want %q", location.ListingSource, ListingSourceGooglePlace)
+	}
+}

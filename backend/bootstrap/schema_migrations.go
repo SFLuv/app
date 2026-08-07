@@ -1142,6 +1142,37 @@ var schemaMigrations = []SchemaMigration{
 			return nil
 		},
 	},
+	{
+		Version:     "1.33",
+		Description: "manual merchant listings for businesses with no Google place",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			// Not every merchant has a Google Business Profile, and requiring one
+			// blocked onboarding outright. listing_source records which path a
+			// location came in through so an admin reviewing the queue knows
+			// whether the name and address were verified against Google or typed
+			// by hand. Existing rows all came from a place id, hence the default.
+			//
+			// google_id also stops being an empty string for manual rows: the
+			// partial unique index covers google_id IS NOT NULL, so a second
+			// manual listing would otherwise collide with the first on ''.
+			if _, err := pools.App.Exec(ctx, `
+				ALTER TABLE locations
+				ADD COLUMN IF NOT EXISTS listing_source TEXT NOT NULL DEFAULT 'google_place';
+
+				UPDATE locations
+				SET google_id = NULL
+				WHERE google_id IS NOT NULL AND TRIM(google_id) = '';
+
+				UPDATE locations
+				SET listing_source = 'manual'
+				WHERE google_id IS NULL AND listing_source = 'google_place';
+			`); err != nil {
+				return err
+			}
+
+			return nil
+		},
+	},
 }
 
 // migrateLocationHoursUniqueness enforces at most one hours row per weekday per

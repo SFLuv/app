@@ -2,13 +2,20 @@
 
 import { useEffect, useRef, useState } from "react";
 import { LAT_DIF, LNG_DIF, MAP_CENTER } from "@/lib/constants";
-import { GoogleSubLocation } from "@/types/location";
+import { GoogleSubLocation, ManualAddressDraft, PlaceSelection } from "@/types/location";
 import { Check, MapPin, Search } from "lucide-react";
 
 interface PlaceAutocompleteProps {
-  value: GoogleSubLocation | null;
-  onSelect: (place: GoogleSubLocation | null) => void;
+  value: PlaceSelection | null;
+  onSelect: (selection: PlaceSelection | null) => void;
 }
+
+type Mode = "business" | "address";
+
+// Address-mode fields. No displayName: a geocode result's display name IS the
+// street address, and inheriting it is precisely the bug this mode exists to
+// avoid. The merchant types their business name into the form instead.
+const ADDRESS_FIELDS = ["id", "addressComponents", "formattedAddress", "location"];
 
 // Places types that describe a postal address rather than a business. Google
 // returns the street address itself as `displayName` for these, so accepting one
@@ -95,14 +102,38 @@ const toGoogleSubLocation = (rawGoogleData: any): GoogleSubLocation | null => {
   };
 };
 
-const formatAddress = (place: GoogleSubLocation): string => {
+const formatAddress = (place: GoogleSubLocation | ManualAddressDraft): string => {
   if (place.formatted_address) return place.formatted_address;
   const cityLine = [place.city, place.state].filter(Boolean).join(", ");
   return [place.street, cityLine, place.zip].filter(Boolean).join(" · ");
 };
 
+// toManualAddress keeps only the postal half of a geocode result. Returns null
+// when Google gave us nothing usable to place a pin with.
+const toManualAddress = (rawGoogleData: any): ManualAddressDraft | null => {
+  const lat = rawGoogleData.location?.lat ?? rawGoogleData.location?.latitude;
+  const lng = rawGoogleData.location?.lng ?? rawGoogleData.location?.longitude;
+  if (typeof lat !== "number" || typeof lng !== "number") return null;
+
+  const street = [addressPart(rawGoogleData, "street_number"), addressPart(rawGoogleData, "route")]
+    .filter(Boolean)
+    .join(" ");
+  if (!street) return null;
+
+  return {
+    street,
+    city: addressPart(rawGoogleData, "locality"),
+    state: addressPart(rawGoogleData, "administrative_area_level_1"),
+    zip: addressPart(rawGoogleData, "postal_code"),
+    lat,
+    lng,
+    formatted_address: rawGoogleData.formattedAddress || "",
+  };
+};
+
 export default function PlaceAutocomplete({ value, onSelect }: PlaceAutocompleteProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const [mode, setMode] = useState<Mode>("business");
   const [textSearch, setTextSearch] = useState("");
   const [textSearchBusy, setTextSearchBusy] = useState(false);
   const [textSearchError, setTextSearchError] = useState("");
@@ -122,13 +153,30 @@ export default function PlaceAutocomplete({ value, onSelect }: PlaceAutocomplete
     }
     if (!isBusinessPlace(place.types)) {
       setTextSearchError(
-        "That result is a street address, not a business listing. Search for your business by name — for example \"Shiba SF\" instead of the street address.",
+        "That result is a street address, not a business listing. Search for your business by name — for example \"Shiba SF\" instead of the street address. If your business has no Google listing at all, use \"Enter your address manually\" below.",
       );
       return;
     }
     setTextSearchError("");
     setCandidates([]);
-    onSelect(place);
+    onSelect({ source: "google_place", place });
+  };
+
+  const selectAddress = (address: ManualAddressDraft | null) => {
+    if (!address) {
+      setTextSearchError("Google returned no street address or coordinates for that result. Try a more specific address.");
+      return;
+    }
+    setTextSearchError("");
+    setCandidates([]);
+    onSelect({ source: "manual", address });
+  };
+
+  const switchMode = (next: Mode) => {
+    setMode(next);
+    setTextSearch("");
+    setTextSearchError("");
+    setCandidates([]);
   };
 
   const searchByText = async () => {
@@ -173,17 +221,26 @@ export default function PlaceAutocomplete({ value, onSelect }: PlaceAutocomplete
     let cancelled = false;
     const container = containerRef.current;
 
+    // Rebuilt whenever the mode changes: the element's type restriction is fixed
+    // at construction, so business and address modes need separate elements.
+    container.replaceChildren();
+
     const init = async () => {
       await google.maps.importLibrary("places") as google.maps.PlacesLibrary;
       if (cancelled || container.querySelector("gmp-place-autocomplete")) return;
 
       // `includedPrimaryTypes` is not in the published typings yet, so the
-      // options are built untyped. Establishments only: without this Google
+      // options are built untyped.
+      //
+      // Business mode is establishments only: without that restriction Google
       // mixes address (geocode) predictions into the list, and picking one
       // yields a place whose display name is the street address.
+      //
+      // Address mode is the deliberate inverse — it asks for addresses, and the
+      // caller uses only the postal fields, never a name.
       const autocompleteOptions: any = {
         locationRestriction,
-        includedPrimaryTypes: ["establishment"],
+        includedPrimaryTypes: mode === "business" ? ["establishment"] : ["street_address", "premise", "subpremise"],
       };
 
       //@ts-ignore - PlaceAutocompleteElement is not in the published typings yet
@@ -192,8 +249,13 @@ export default function PlaceAutocomplete({ value, onSelect }: PlaceAutocomplete
       //@ts-ignore
       placeAutocomplete.addEventListener("gmp-select", async ({ placePrediction }) => {
         const place = placePrediction.toPlace();
-        await place.fetchFields({ fields: PLACE_FIELDS });
-        selectPlace(toGoogleSubLocation(place.toJSON()));
+        if (mode === "business") {
+          await place.fetchFields({ fields: PLACE_FIELDS });
+          selectPlace(toGoogleSubLocation(place.toJSON()));
+          return;
+        }
+        await place.fetchFields({ fields: ADDRESS_FIELDS });
+        selectAddress(toManualAddress(place.toJSON()));
       });
       placeAutocomplete.className = "text-black dark:text-white border rounded-md bg-secondary px-3 py-2";
 
@@ -205,7 +267,7 @@ export default function PlaceAutocomplete({ value, onSelect }: PlaceAutocomplete
     return () => {
       cancelled = true;
     };
-  }, [value]);
+  }, [value, mode]);
 
   const clearSelection = () => {
     setTextSearch("");
@@ -214,26 +276,54 @@ export default function PlaceAutocomplete({ value, onSelect }: PlaceAutocomplete
     onSelect(null);
   };
 
-  // Confirmation view — the merchant sees exactly what Google resolved to
-  // before any of it is submitted.
-  if (value) {
+  // Confirmation view — the merchant sees exactly what was resolved before any
+  // of it is submitted. The manual variant deliberately shows no business name:
+  // there isn't one yet, and saying so here is what sends them to the name field.
+  if (value?.source === "manual") {
+    const address = value.address;
+    return (
+      <div className="rounded-md border border-amber-600/40 bg-amber-50 p-4 dark:bg-amber-900/20">
+        <div className="flex items-start gap-3">
+          <MapPin className="mt-0.5 h-5 w-5 flex-shrink-0 text-amber-600" />
+          <div className="min-w-0 flex-1 space-y-1">
+            <p className="font-semibold text-black dark:text-white">Address confirmed</p>
+            <p className="text-sm text-gray-600 dark:text-gray-300">{formatAddress(address)}</p>
+            <p className="text-xs text-gray-600 dark:text-gray-400">
+              This address has no Google business listing, so enter your business name and category below. They will
+              appear on the SFLuv map exactly as you type them.
+            </p>
+          </div>
+        </div>
+        <button
+          className="mt-3 rounded-md border px-3 py-1.5 text-sm text-black dark:text-white"
+          onClick={clearSelection}
+          type="button"
+        >
+          Wrong address? Search again
+        </button>
+      </div>
+    );
+  }
+
+  if (value?.source === "google_place") {
+    const place = value.place;
     return (
       <div className="rounded-md border border-green-600/40 bg-green-50 p-4 dark:bg-green-900/20">
         <div className="flex items-start gap-3">
           <Check className="mt-0.5 h-5 w-5 flex-shrink-0 text-green-600" />
           <div className="min-w-0 flex-1 space-y-1">
-            <p className="font-semibold text-black dark:text-white">{value.name}</p>
-            <p className="text-sm text-gray-600 dark:text-gray-300">{formatAddress(value)}</p>
-            {value.type ? (
-              <p className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">{value.type}</p>
+            <p className="font-semibold text-black dark:text-white">{place.name}</p>
+            <p className="text-sm text-gray-600 dark:text-gray-300">{formatAddress(place)}</p>
+            {place.type ? (
+              <p className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">{place.type}</p>
             ) : null}
-            {value.phone ? (
-              <p className="text-sm text-gray-600 dark:text-gray-300">{value.phone}</p>
+            {place.phone ? (
+              <p className="text-sm text-gray-600 dark:text-gray-300">{place.phone}</p>
             ) : null}
-            {value.maps_page ? (
+            {place.maps_page ? (
               <a
                 className="inline-block text-sm text-[#eb6c6c] underline"
-                href={value.maps_page}
+                href={place.maps_page}
                 rel="noreferrer"
                 target="_blank"
               >
@@ -255,30 +345,42 @@ export default function PlaceAutocomplete({ value, onSelect }: PlaceAutocomplete
 
   return (
     <div className="space-y-2">
+      <p className="text-xs text-gray-600 dark:text-gray-400">
+        {mode === "business"
+          ? "Start typing your business name and pick it from the list."
+          : "Start typing your street address and pick it from the list. You will enter the business name yourself on the next step."}
+      </p>
+
       <div ref={containerRef} />
-      <div className="flex gap-2">
-        <input
-          className="min-w-0 flex-1 rounded-md border bg-secondary px-3 py-2 text-sm text-black dark:text-white"
-          placeholder="Business name (add the city if the list is empty)"
-          value={textSearch}
-          onChange={(event) => setTextSearch(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") {
-              event.preventDefault();
-              void searchByText();
-            }
-          }}
-        />
-        <button
-          className="flex items-center gap-1.5 rounded-md border px-3 py-2 text-sm text-black disabled:opacity-50 dark:text-white"
-          disabled={textSearchBusy}
-          onClick={() => void searchByText()}
-          type="button"
-        >
-          <Search className="h-4 w-4" />
-          {textSearchBusy ? "Searching..." : "Search"}
-        </button>
-      </div>
+
+      {/* Business-name text search is a fallback for when the autocomplete
+          dropdown comes up empty; it has no equivalent in address mode, where
+          the autocomplete is the only sensible input. */}
+      {mode === "business" && (
+        <div className="flex gap-2">
+          <input
+            className="min-w-0 flex-1 rounded-md border bg-secondary px-3 py-2 text-sm text-black dark:text-white"
+            placeholder="Business name (add the city if the list is empty)"
+            value={textSearch}
+            onChange={(event) => setTextSearch(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                void searchByText();
+              }
+            }}
+          />
+          <button
+            className="flex items-center gap-1.5 rounded-md border px-3 py-2 text-sm text-black disabled:opacity-50 dark:text-white"
+            disabled={textSearchBusy}
+            onClick={() => void searchByText()}
+            type="button"
+          >
+            <Search className="h-4 w-4" />
+            {textSearchBusy ? "Searching..." : "Search"}
+          </button>
+        </div>
+      )}
 
       {candidates.length > 0 && (
         <ul className="divide-y rounded-md border">
@@ -303,6 +405,16 @@ export default function PlaceAutocomplete({ value, onSelect }: PlaceAutocomplete
       {textSearchError ? (
         <p className="text-xs text-red-600 dark:text-red-300">{textSearchError}</p>
       ) : null}
+
+      <button
+        className="text-xs text-[#eb6c6c] underline"
+        onClick={() => switchMode(mode === "business" ? "address" : "business")}
+        type="button"
+      >
+        {mode === "business"
+          ? "My business isn't on Google Maps — enter your address manually"
+          : "Back to searching for a Google business listing"}
+      </button>
     </div>
   );
 }

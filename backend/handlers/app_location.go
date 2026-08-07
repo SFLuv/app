@@ -159,7 +159,11 @@ func (a *AppService) AddLocation(w http.ResponseWriter, r *http.Request) {
 	// Re-fetch the place from Google server-side so the stored name, address and
 	// coordinates are Google's, not the browser's. This is what stops a place
 	// that is really a street address from landing on the map as a business.
-	if GooglePlacesVerificationEnabled() {
+	//
+	// Manual listings have no place id to re-fetch — that is the whole point of
+	// the path — so they skip straight to local validation, which is stricter
+	// about the merchant-authored name for exactly that reason.
+	if location.EffectiveListingSource() == structs.ListingSourceGooglePlace && GooglePlacesVerificationEnabled() {
 		verified, err := VerifyGooglePlace(r.Context(), location.GoogleID)
 		if err != nil {
 			if IsPlaceVerificationError(err) {
