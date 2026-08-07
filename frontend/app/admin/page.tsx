@@ -1,7 +1,7 @@
 "use client"
 
 import React, { useEffect, useMemo, useRef, useState } from "react"
-import { QRCode } from "react-qrcode-logo"
+import { SfluvQRCode, type SfluvQRCodeHandle } from "@/components/ui/sfluv-qr-code"
 import { buildMerchantSendQrValue } from "@/lib/redeem-link"
 import { usePathname, useRouter, useSearchParams } from "next/navigation"
 import { useApp } from "@/context/AppProvider"
@@ -328,7 +328,7 @@ export default function AdminPage() {
   const [merchantStatusDraft, setMerchantStatusDraft] = useState<ApprovalStatus>("pending")
   const [merchantModalSaving, setMerchantModalSaving] = useState<boolean>(false)
   const [merchantModalError, setMerchantModalError] = useState<string>("")
-  const merchantQrRefs = useRef<Map<number, QRCode | null>>(new Map())
+  const merchantQrRefs = useRef<Map<number, SfluvQRCodeHandle | null>>(new Map())
   const [openMerchantQrCardIds, setOpenMerchantQrCardIds] = useState<Set<number>>(new Set())
 
   // QR code generation state
@@ -2406,7 +2406,7 @@ export default function AdminPage() {
     const dd = String(now.getDate()).padStart(2, "0")
     const yyyy = String(now.getFullYear())
     const qrName = `${snakeName}_${mm}_${dd}_${yyyy}`
-    ref.download("png", qrName)
+    void ref.download("png", qrName)
   }
 
   const toggleMerchantQrCard = (locationId: number, open: boolean) => {
@@ -5108,6 +5108,7 @@ export default function AdminPage() {
             onOpenChange={toggleDrainFaucetModal}
             handleDrainFaucet={handleDrainFaucet}
             drainFaucetError={drainFaucetError}
+            faucetBalance={faucetBalance === "-" ? undefined : String(faucetBalance)}
           />
           <Card>
             <CardHeader className="pb-6 flex flex-col gap-4 md:grid md:grid-cols-[2fr,1fr]">
@@ -5530,36 +5531,17 @@ export default function AdminPage() {
                               <CollapsibleContent>
                                 <CardContent className="border-t bg-gradient-to-b from-primary/5 via-background to-background p-4 sm:p-6">
                                   <div className="text-center space-y-3 sm:space-y-4">
-                                    <div className="mx-auto my-2 w-full max-w-[280px] rounded-2xl border border-border/70 bg-white p-3 shadow-sm sm:my-3 sm:p-4">
-                                      <QRCode
-                                        ref={(node) => {
-                                          if (node) {
-                                            merchantQrRefs.current.set(location.id, node)
-                                          } else {
-                                            merchantQrRefs.current.delete(location.id)
-                                          }
-                                        }}
-                                        value={qrValue}
-                                        style={{
-                                          display: "block",
-                                          width: "100%",
-                                          height: "100%",
-                                          aspectRatio: "1 / 1",
-                                          borderRadius: "12px",
-                                        }}
-                                        size={600}
-                                        logoImage={"/icon.png"}
-                                        removeQrCodeBehindLogo={true}
-                                        logoPadding={2}
-                                        logoPaddingStyle="circle"
-                                        logoWidth={150}
-                                        qrStyle="dots"
-                                        eyeRadius={20}
-                                        eyeColor={"#eb6c6c"}
-                                        ecLevel="M"
-                                        quietZone={20}
-                                      />
-                                    </div>
+                                    <SfluvQRCode
+                                      ref={(node) => {
+                                        if (node) {
+                                          merchantQrRefs.current.set(location.id, node)
+                                        } else {
+                                          merchantQrRefs.current.delete(location.id)
+                                        }
+                                      }}
+                                      value={qrValue}
+                                      className="mx-auto my-2 w-full max-w-[280px] sm:my-3"
+                                    />
                                     <p className="text-sm text-muted-foreground">
                                       Scan this QR code to send {tokenSymbol} to {location.name}
                                       {hasTip ? " (with tipping enabled)" : ""}.

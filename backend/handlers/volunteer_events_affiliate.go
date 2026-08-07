@@ -55,6 +55,9 @@ func (a *AppService) AffiliateRequestVolunteerEvent(w http.ResponseWriter, r *ht
 	}
 
 	startAt, endAt, until, qrCutoff, errMsg := validateVolunteerEventRequest(&req)
+	if errMsg == "" {
+		errMsg = a.validateVolunteerLocation(r.Context(), req.LocationId)
+	}
 	if errMsg != "" {
 		w.WriteHeader(http.StatusBadRequest)
 		w.Write([]byte(errMsg))
@@ -139,10 +142,12 @@ func (a *AppService) AffiliateListVolunteerEvents(w http.ResponseWriter, r *http
 	}
 
 	eventCtx := a.bot.buildVolunteerEventContext(r, rows)
+	creators := a.resolveEventCreators(r.Context(), rows)
 	events := make([]*structs.VolunteerEvent, 0, len(rows))
 	for _, row := range rows {
 		event := a.bot.mapVolunteerEvent(row, eventCtx)
 		decorateManagementFields(event, row)
+		event.Creator = creators[row.Id]
 		events = append(events, event)
 	}
 
@@ -337,7 +342,7 @@ func (a *AppService) writeVolunteerEventCodesCSV(w http.ResponseWriter, r *http.
 		}
 	}
 
-	codes, err := a.bot.db.GetVolunteerEventCodes(r.Context(), eventId)
+	codes, err := a.bot.db.GetVolunteerEventCodesWithNumbers(r.Context(), eventId)
 	if err != nil {
 		a.logger.Logf("error loading codes for event %s: %s", eventId, err)
 		w.WriteHeader(http.StatusInternalServerError)
@@ -353,7 +358,7 @@ func (a *AppService) writeVolunteerEventCodesCSV(w http.ResponseWriter, r *http.
 	writer := csv.NewWriter(w)
 	defer writer.Flush()
 
-	_ = writer.Write([]string{"code", "redeem_url", "event", "amount_sfluv", "live_at"})
+	_ = writer.Write([]string{"label", "code", "redeem_url", "event", "amount_sfluv", "live_at"})
 
 	liveAt := ""
 	if row.QRLiveAt != nil {
@@ -362,8 +367,11 @@ func (a *AppService) writeVolunteerEventCodesCSV(w http.ResponseWriter, r *http.
 	for _, code := range codes {
 		// Same redeem link format the mobile scanner and deep links already
 		// parse — no second redemption path.
-		redeemURL := fmt.Sprintf("%s/faucet/redeem?code=%s", appBase, code)
-		_ = writer.Write([]string{code, redeemURL, row.Title, fmt.Sprintf("%d", row.Amount), liveAt})
+		redeemURL := fmt.Sprintf("%s/faucet/redeem?code=%s", appBase, code.Id)
+		// Matches the label printed on the QR sheet — number first — so a
+		// returned or damaged card can be traced back to its row here.
+		label := fmt.Sprintf("#%d %s", code.Number, row.Title)
+		_ = writer.Write([]string{label, code.Id, redeemURL, row.Title, fmt.Sprintf("%d", row.Amount), liveAt})
 	}
 }
 
@@ -495,7 +503,11 @@ func (a *AppService) AffiliateUpdateVolunteerEvent(w http.ResponseWriter, r *htt
 
 	// Validate before parking it, so an admin is never asked to approve
 	// something that cannot be applied.
-	if _, _, _, _, errMsg := validateVolunteerEventRequest(&req); errMsg != "" {
+	_, _, _, _, errMsg := validateVolunteerEventRequest(&req)
+	if errMsg == "" {
+		errMsg = a.validateVolunteerLocation(r.Context(), req.LocationId)
+	}
+	if errMsg != "" {
 		w.WriteHeader(http.StatusBadRequest)
 		w.Write([]byte(errMsg))
 		return

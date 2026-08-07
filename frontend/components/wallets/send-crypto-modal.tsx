@@ -232,6 +232,9 @@ export function SendCryptoModal({
     try {
       const res = await authFetch("/transactions/memo", {
         method: "POST",
+        // Mobile sends this; authFetch does not add it. The Go handler decodes
+        // either way, but the two clients should post identically.
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           tx_hash: txHash,
           chain_id: chainConfig.chainId,

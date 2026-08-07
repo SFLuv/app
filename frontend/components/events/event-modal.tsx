@@ -38,11 +38,11 @@ export function EventModal({
   const [deleteError, setDeleteError]= useState<string | null>()
   const [deleteModalOpen, setDeleteModalOpen] = useState<boolean>(false)
 
-  const [codes, setCodes] = useState<string[]>([])
+  const [codes, setCodes] = useState<{ id: string; number: number }[]>([])
   const [codesError, setCodesError] = useState<string | undefined>()
   const [affiliateLogo, setAffiliateLogo] = useState<string | null>(null)
   const [affiliateOrganization, setAffiliateOrganization] = useState<string | null>(null)
-  const [exportCodes, setExportCodes] = useState<string[]>([])
+  const [exportCodes, setExportCodes] = useState<{ id: string; number: number }[]>([])
   const [downloadingPdf, setDownloadingPdf] = useState<boolean>(false)
 
   const maxCodesPerPdf = 30
@@ -55,7 +55,7 @@ export function EventModal({
       .replace(/^-+|-+$/g, "") || "event"
   ), [event.title])
   const codeBatches = useMemo(() => {
-    const batches: string[][] = []
+    const batches: { id: string; number: number }[][] = []
     for (let index = 0; index < codes.length; index += maxCodesPerPdf) {
       batches.push(codes.slice(index, index + maxCodesPerPdf))
     }
@@ -66,7 +66,7 @@ export function EventModal({
 
   const getCodes = async () => {
     try {
-      const loadedCodes: string[] = []
+      const loadedCodes: { id: string; number: number }[] = []
       for (let page = 0; ; page += 1) {
         const url = `${eventsBasePath}/${event.id}?page=${page}&count=${eventCodesPageSize}`
         const res = await authFetch(url)
@@ -77,8 +77,8 @@ export function EventModal({
           throw new Error("error fetching event codes")
         }
 
-        const pageCodes = await res.json() as Array<{ id: string }>
-        loadedCodes.push(...pageCodes.map(({ id }) => id))
+        const pageCodes = await res.json() as Array<{ id: string; number?: number }>
+        loadedCodes.push(...pageCodes.map(({ id, number }, index) => ({ id, number: number ?? index + 1 })))
 
         if (pageCodes.length < eventCodesPageSize) {
           break
@@ -151,13 +151,38 @@ export function EventModal({
     }
   }
 
-  const waitForExportRender = async () => {
-    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
-    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
-    await new Promise<void>((resolve) => setTimeout(() => resolve(), 50))
+  /**
+   * Warm the images the cards draw, so the capture cannot beat them.
+   *
+   * The card QR composites its centre mark as an image over the SVG, and the
+   * rasteriser captures whatever has loaded by then — an uncached mark means a
+   * batch of printed codes with a blank middle, which is not recoverable once
+   * they are handed out. Decoding first makes the paint that follows
+   * effectively immediate. Failures are ignored: a missing affiliate logo
+   * should not block the download.
+   */
+  const preloadCardImages = async () => {
+    const sources = ["/icon.png", ...(affiliateLogo ? [affiliateLogo] : [])]
+    await Promise.all(sources.map(async (src) => {
+      try {
+        const image = new Image()
+        image.crossOrigin = "anonymous"
+        image.src = src
+        await image.decode()
+      } catch {
+        // Fall through to the settle delay below.
+      }
+    }))
   }
 
-  const downloadCodeBatch = async (batchCodes: string[], batchIndex?: number) => {
+  const waitForExportRender = async () => {
+    await preloadCardImages()
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+    await new Promise<void>((resolve) => setTimeout(() => resolve(), 150))
+  }
+
+  const downloadCodeBatch = async (batchCodes: { id: string; number: number }[], batchIndex?: number) => {
     setExportCodes(batchCodes)
     await waitForExportRender()
     await generatePDF(() => exportTargetRef.current, {
@@ -278,12 +303,21 @@ export function EventModal({
                   {exportCodes.map((code) => (
                     affiliateLogo
                       ? <AffiliateQRCodeCard
-                          key={code}
-                          code={code}
+                          key={code.id}
+                          code={code.id}
                           logoUrl={affiliateLogo}
                           organization={affiliateOrganization || "our partner"}
+                          eventTitle={event.title}
+                          codeNumber={code.number}
+                          eventStartAt={event.start_at}
                         />
-                      : <QRCodeCard key={code} code={code} />
+                      : <QRCodeCard
+                          key={code.id}
+                          code={code.id}
+                          eventTitle={event.title}
+                          codeNumber={code.number}
+                          eventStartAt={event.start_at}
+                        />
                   ))}
                 </div>
               </div>

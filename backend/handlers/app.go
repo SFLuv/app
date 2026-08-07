@@ -19,10 +19,19 @@ type AppService struct {
 	minter       *MinterService
 	logger       *logger.LogCloser
 	clientConfig *clientconfig.Config
+	// Read-only. Used to compare our webhook bookkeeping against what the
+	// indexer actually holds; the Ponder database is never written to here.
+	ponderDb *db.PonderDB
 }
 
 func NewAppService(db *db.AppDB, logger *logger.LogCloser, w9 *W9Service, clientConfig *clientconfig.Config) *AppService {
 	return &AppService{db: db, logger: logger, w9: w9, clientConfig: clientConfig}
+}
+
+// SetPonderDB gives the service read access to the indexer's database, which
+// is what makes the boot-time hook reconciliation possible.
+func (a *AppService) SetPonderDB(ponderDb *db.PonderDB) {
+	a.ponderDb = ponderDb
 }
 
 func (a *AppService) activeChainID() int64 {

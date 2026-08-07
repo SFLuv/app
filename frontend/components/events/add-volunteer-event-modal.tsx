@@ -17,6 +17,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
+import { useApp } from "@/context/AppProvider"
 
 const MAX_PHOTOS = 6
 const MAX_PHOTO_BYTES = 8 * 1024 * 1024
@@ -78,6 +79,11 @@ export function AddVolunteerEventModal({
   unallocatedBalance,
   submitLabel = "Create event",
 }: AddVolunteerEventModalProps) {
+  const { user } = useApp()
+  // Shown read-only so the organizer can see their identity is recorded
+  // alongside the event, without implying it is theirs to change.
+  const createdBy = [user?.name, user?.contact_email].filter(Boolean).join(" · ")
+
   const [title, setTitle] = useState("")
   const [description, setDescription] = useState("")
   const [startAtLocal, setStartAtLocal] = useState("")
@@ -227,6 +233,16 @@ export function AddVolunteerEventModal({
         </DialogHeader>
 
         <div className="space-y-5">
+          {createdBy !== "" && (
+            <div className="space-y-1">
+              <Label htmlFor="ve-created-by">Created by</Label>
+              <Input id="ve-created-by" value={createdBy} disabled readOnly />
+              <p className="text-xs text-muted-foreground">
+                Recorded with the event and shown to admins. Not visible to volunteers.
+              </p>
+            </div>
+          )}
+
           <div className="space-y-1">
             <Label htmlFor="ve-title">Title *</Label>
             <Input id="ve-title" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Ocean Beach Cleanup" />

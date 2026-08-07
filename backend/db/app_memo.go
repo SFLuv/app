@@ -57,18 +57,31 @@ func (a *AppDB) GetTransactionMemosByHashes(ctx context.Context, hashes []string
 		return map[string]string{}, nil
 	}
 
+	// Matched on hash first, chain second.
+	//
+	// Filtering on chain_id made a memo visible only to a client that asked for
+	// the exact chain it was written under, so the platform's move from 80094 to
+	// 42220 orphaned every memo written before it, and any client whose config
+	// reported a different chain saw none at all — which is why memos set on one
+	// surface did not appear on another.
+	//
+	// A transaction hash is a 256-bit digest and identifies the transaction on
+	// its own; the chain only breaks ties. Verified against production data:
+	// no tx_hash appears under more than one chain_id.
 	rows, err := a.db.Query(ctx, `
-		SELECT
+		SELECT DISTINCT ON (tx_hash)
 			tx_hash,
 			memo
 			FROM
 				memos
 			WHERE
-				chain_id = $2
-			AND
 				tx_hash = ANY($1)
 			AND
-				active = TRUE;
+				active = TRUE
+			ORDER BY
+				tx_hash,
+				(chain_id IS NOT DISTINCT FROM $2) DESC,
+				updated_at DESC NULLS LAST;
 	`, normalizedHashes, chainID)
 	if err != nil {
 		return nil, fmt.Errorf("error querying transaction memos for chain %d: %w", chainID, err)

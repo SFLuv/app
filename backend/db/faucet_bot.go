@@ -214,9 +214,9 @@ func (s *BotDB) NewEvent(ctx context.Context, e *structs.Event) (string, error) 
 
 		_, err = tx.Exec(ctx, `
 				INSERT INTO codes
-					(id, event)
+					(id, event, code_number)
 				VALUES
-					($1, $2);
+					($1, $2, (SELECT COALESCE(MAX(code_number), 0) + 1 FROM codes WHERE event = $2));
 			`, codeId, id)
 		if err != nil {
 			err = fmt.Errorf("error inserting event codes: %s", err)
@@ -655,9 +655,9 @@ func (s *BotDB) NewCode(ctx context.Context, code *structs.Code) (string, error)
 
 	_, err = tx.Exec(ctx, `
 		INSERT INTO codes
-			(id, redeemed, event)
+			(id, redeemed, event, code_number)
 		VALUES
-		 ($1, $2, $3);
+		 ($1, $2, $3, (SELECT COALESCE(MAX(code_number), 0) + 1 FROM codes WHERE event = $3));
 	`, id, code.Redeemed, code.Event)
 	if err != nil {
 		tx.Rollback(ctx)
@@ -693,10 +693,13 @@ func (s *BotDB) GetCodes(ctx context.Context, r *structs.CodesPageRequest) ([]*s
 					WHEN LOWER(redeemed::text) IN ('t', 'true', 'y', 'yes', 'on') THEN true
 					ELSE false
 				END AS redeemed,
-				event
+				event,
+				COALESCE(code_number, 0)
 		FROM codes
 		WHERE event = $1
-		ORDER BY id ASC
+		-- Printed order follows the stable label, so a reprint lays the sheet
+		-- out exactly as the original batch.
+		ORDER BY code_number ASC NULLS LAST, id ASC
 		LIMIT $2
 		OFFSET $3;
 	`, r.Event, r.Count, offset)
@@ -711,7 +714,7 @@ func (s *BotDB) GetCodes(ctx context.Context, r *structs.CodesPageRequest) ([]*s
 	for rows.Next() {
 		code := structs.Code{}
 
-		err = rows.Scan(&code.Id, &code.Redeemed, &code.Event)
+		err = rows.Scan(&code.Id, &code.Redeemed, &code.Event, &code.Number)
 		if err != nil {
 			err = fmt.Errorf("error unpacking event codes: %s", err)
 			return nil, err
@@ -736,9 +739,9 @@ func (s *BotDB) NewCodes(ctx context.Context, r *structs.NewCodesRequest) ([]*st
 
 		_, err = tx.Exec(context.Background(), `
 			INSERT INTO codes
-				(id, event)
+				(id, event, code_number)
 			VALUES
-				($1, $2);
+				($1, $2, (SELECT COALESCE(MAX(code_number), 0) + 1 FROM codes WHERE event = $2));
 		`, codeId, r.Event)
 		if err != nil {
 			err = fmt.Errorf("error inserting event codes: %s", err)

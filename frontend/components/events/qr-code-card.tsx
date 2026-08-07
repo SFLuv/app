@@ -1,48 +1,42 @@
-import QRCode from "react-qr-code";
 import { buildEventRedeemQrValue } from "@/lib/redeem-link";
+import { CardQRCode } from "./card-qr";
+import {
+  CardFooter,
+  CardHeader,
+  CardInstructions,
+  CardQRFrame,
+  CardHeading,
+  Gap,
+  cardBodyStyle,
+  cardShellStyle,
+  rigid,
+} from "./card-chrome";
 
-export const QRCodeCard = ({ code }: { code: string }) => {
+export const QRCodeCard = ({ code, eventTitle, codeNumber, eventStartAt }: { code: string; eventTitle: string; codeNumber: number; eventStartAt?: number }) => {
   const url = buildEventRedeemQrValue(code)
 
   return (
-    <div style={{textAlign: "center", justifyContent: "center", color: "black", height: "550px", width: "425px", margin: "auto", overflowY: "hidden", paddingTop: "10px"}}>
-      <img src="../icon.png" style={{
-        height: "auto",
-        width: "30%",
-        marginBottom: "0",
-        marginTop: "40px",
-        padding: "0",
-        margin: "auto"
-      }}/>
-      <div style={{textAlign: "center"}}>
-        <h1 style={{
-          margin: 0,
-          fontWeight: "bold",
-          fontSize: "18px"
-        }}>Thank you from SFLuv!</h1>
-        <h3 style={{margin: "10px"}}>To redeem your tokens:</h3>
-        <ol style={{textAlign: "center", width: "70%", margin: "auto", fontSize: "12px"}}>
-          <li>1. Scan the QR code</li>
-          <li>2. Download the SFLuv app</li>
-          <li>3. Scan again</li>
-          <li>4. Receive your SFLuv!</li>
-        </ol>
+    <div style={cardShellStyle}>
+      <CardHeader codeNumber={codeNumber} eventTitle={eventTitle} eventStartAt={eventStartAt} />
+
+      <div style={cardBodyStyle}>
+        <Gap size={4} grow={1} />
+        {/* Absolute path, not "../icon.png": the export renders from whatever
+            route the modal was opened on, and a relative path resolves against
+            that route rather than the public root. */}
+        <img src="/icon.png" alt="SFLuv logo" style={{ ...rigid, height: "auto", width: "136px" }} />
+        <Gap size={10} />
+        <CardHeading fitKey="sfluv">Thank you from SFLuv!</CardHeading>
+        <Gap size={10} />
+        <CardInstructions />
+        <Gap size={10} />
+        <CardQRFrame>
+          <CardQRCode value={url} />
+        </CardQRFrame>
+        <Gap size={10} />
       </div>
 
-      <div style={{margin: "auto", marginTop: "20px", marginBottom: "15px", height: "auto", width: "40%", textAlign: "center"}}>
-        <QRCode
-          size={256}
-          style={{ height: "auto", maxWidth: "100%", width: "100%" }}
-          value={url}
-          viewBox={`0 0 256 256`}
-        />
-      </div>
-      <div style={{textAlign: "center", fontSize: "10px"}}>
-        <p>Interested in more SFLuv supported events?<br/>
-          Visit <a>www.sfluv.org/volunteers</a>
-        </p>
-      </div>
+      <CardFooter />
     </div>
-
   )
 }

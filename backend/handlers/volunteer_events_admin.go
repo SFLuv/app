@@ -171,6 +171,25 @@ func validateVolunteerEventRequest(req *structs.VolunteerEventCreateRequest) (st
 	return startAt, endAt, until, qrCutoff, ""
 }
 
+// validateVolunteerLocation rejects a location_id that does not refer to a real
+// volunteer location. The read path already filters to volunteer-kind rows, so
+// a bad id could not leak a merchant's address — but storing an unvalidated
+// foreign reference relies on that downstream filter staying correct forever.
+func (a *AppService) validateVolunteerLocation(ctx context.Context, locationId *int64) string {
+	if locationId == nil {
+		return ""
+	}
+	exists, err := a.db.VolunteerLocationExists(ctx, *locationId)
+	if err != nil {
+		a.logger.Logf("error validating volunteer location %d: %s", *locationId, err)
+		return "could not verify the selected location"
+	}
+	if !exists {
+		return "the selected location does not exist"
+	}
+	return ""
+}
+
 // AdminCreateVolunteerEvent creates an event that is approved on creation:
 // admins can generate any event they want, so there is nobody to approve it.
 // Codes are minted and the faucet allocation reserved in the same transaction.
@@ -200,6 +219,9 @@ func (a *AppService) AdminCreateVolunteerEvent(w http.ResponseWriter, r *http.Re
 	}
 
 	startAt, endAt, until, qrCutoff, errMsg := validateVolunteerEventRequest(&req)
+	if errMsg == "" {
+		errMsg = a.validateVolunteerLocation(r.Context(), req.LocationId)
+	}
 	if errMsg != "" {
 		w.WriteHeader(http.StatusBadRequest)
 		w.Write([]byte(errMsg))
@@ -287,6 +309,7 @@ func (a *AppService) AdminCreateVolunteerEvent(w http.ResponseWriter, r *http.Re
 	eventCtx := a.bot.buildVolunteerEventContext(r, []*db.VolunteerEventRow{row})
 	event := a.bot.mapVolunteerEvent(row, eventCtx)
 	decorateManagementFields(event, row)
+	event.Creator = a.resolveEventCreators(r.Context(), []*db.VolunteerEventRow{row})[row.Id]
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
@@ -325,10 +348,12 @@ func (a *AppService) AdminListVolunteerEvents(w http.ResponseWriter, r *http.Req
 	}
 
 	eventCtx := a.bot.buildVolunteerEventContext(r, rows)
+	creators := a.resolveEventCreators(r.Context(), rows)
 	events := make([]*structs.VolunteerEvent, 0, len(rows))
 	for _, row := range rows {
 		event := a.bot.mapVolunteerEvent(row, eventCtx)
 		decorateManagementFields(event, row)
+		event.Creator = creators[row.Id]
 		events = append(events, event)
 	}
 
@@ -724,6 +749,9 @@ func (a *AppService) applyVolunteerEventEdit(
 	ctx context.Context, eventId string, req *structs.VolunteerEventCreateRequest,
 ) (int, string) {
 	startAt, endAt, until, qrCutoff, errMsg := validateVolunteerEventRequest(req)
+	if errMsg == "" {
+		errMsg = a.validateVolunteerLocation(ctx, req.LocationId)
+	}
 	if errMsg != "" {
 		return http.StatusBadRequest, errMsg
 	}
@@ -900,4 +928,111 @@ func decodeVolunteerEventRequest(w http.ResponseWriter, r *http.Request) (*struc
 		return nil, false
 	}
 	return &req, true
+}
+
+// shortCreatorName renders "Ada L." from a stored contact name.
+func shortCreatorName(fullName string) string {
+	parts := strings.Fields(strings.TrimSpace(fullName))
+	switch len(parts) {
+	case 0:
+		return ""
+	case 1:
+		return parts[0]
+	default:
+		last := parts[len(parts)-1]
+		return fmt.Sprintf("%s %s.", parts[0], strings.ToUpper(last[:1]))
+	}
+}
+
+// resolveEventCreators maps each event to its creator's display form.
+//
+// The email is attached only when the short name is ambiguous within that
+// event's organization — two "Ada L."s on the same roster. Ambiguity is
+// computed against the whole membership rather than just the people who have
+// created events, because a second Ada L. makes the short form ambiguous
+// whether or not she has ever made one.
+func (a *AppService) resolveEventCreators(ctx context.Context, rows []*db.VolunteerEventRow) map[string]*structs.VolunteerEventCreator {
+	creators := map[string]*structs.VolunteerEventCreator{}
+	if len(rows) == 0 {
+		return creators
+	}
+
+	orgIds := []int64{}
+	orglessOwners := []string{}
+	seenOrg := map[int64]struct{}{}
+	for _, row := range rows {
+		if row.OrganizationId != nil {
+			if _, ok := seenOrg[*row.OrganizationId]; !ok {
+				seenOrg[*row.OrganizationId] = struct{}{}
+				orgIds = append(orgIds, *row.OrganizationId)
+			}
+			continue
+		}
+		if strings.TrimSpace(row.Owner) != "" {
+			orglessOwners = append(orglessOwners, row.Owner)
+		}
+	}
+
+	// Per-org rosters, plus which short names collide inside each org.
+	byOrgUser := map[int64]map[string]db.OrganizationMemberIdentity{}
+	ambiguous := map[int64]map[string]bool{}
+	if members, err := a.db.GetOrganizationMemberIdentities(ctx, orgIds); err != nil {
+		a.logger.Logf("error loading organization members for event creators: %s", err)
+	} else {
+		counts := map[int64]map[string]int{}
+		for _, member := range members {
+			if byOrgUser[member.OrganizationId] == nil {
+				byOrgUser[member.OrganizationId] = map[string]db.OrganizationMemberIdentity{}
+				counts[member.OrganizationId] = map[string]int{}
+				ambiguous[member.OrganizationId] = map[string]bool{}
+			}
+			byOrgUser[member.OrganizationId][member.UserId] = member
+			if short := shortCreatorName(member.Name); short != "" {
+				counts[member.OrganizationId][short]++
+			}
+		}
+		for orgId, byName := range counts {
+			for name, count := range byName {
+				if count > 1 {
+					ambiguous[orgId][name] = true
+				}
+			}
+		}
+	}
+
+	orgless, err := a.db.GetUserIdentities(ctx, orglessOwners)
+	if err != nil {
+		a.logger.Logf("error loading user identities for event creators: %s", err)
+	}
+
+	for _, row := range rows {
+		var identity db.OrganizationMemberIdentity
+		var found bool
+
+		if row.OrganizationId != nil {
+			identity, found = byOrgUser[*row.OrganizationId][row.Owner]
+		} else {
+			identity, found = orgless[row.Owner]
+		}
+		if !found {
+			continue
+		}
+
+		name := shortCreatorName(identity.Name)
+		if name == "" {
+			// No stored name to shorten; the address is all we have.
+			name = identity.Email
+		}
+		if name == "" {
+			continue
+		}
+
+		creator := &structs.VolunteerEventCreator{Name: name}
+		if row.OrganizationId != nil && ambiguous[*row.OrganizationId][name] {
+			creator.Email = identity.Email
+		}
+		creators[row.Id] = creator
+	}
+
+	return creators
 }
