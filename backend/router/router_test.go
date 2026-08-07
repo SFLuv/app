@@ -104,3 +104,94 @@ func TestVolunteerReadsAreNotCredentialGated(t *testing.T) {
 		})
 	}
 }
+
+// Every volunteer management route must reject an unauthenticated caller.
+//
+// These guards were previously verified only by reading the route table, which
+// is exactly the kind of thing a refactor silently changes. An unauthenticated
+// request is rejected before any handler or service is touched, which is why
+// this passes with nil services.
+func TestVolunteerManagementRoutesRejectUnauthenticated(t *testing.T) {
+	router := newTestRouter(t)
+
+	cases := []struct{ method, target string }{
+		{http.MethodGet, "/admin/volunteer-events"},
+		{http.MethodPost, "/admin/volunteer-events"},
+		{http.MethodPut, "/admin/volunteer-events/evt"},
+		{http.MethodPost, "/admin/volunteer-events/evt/approve"},
+		{http.MethodPost, "/admin/volunteer-events/evt/reject"},
+		{http.MethodPost, "/admin/volunteer-events/evt/cancel"},
+		{http.MethodPost, "/admin/volunteer-events/evt/blast"},
+		{http.MethodPost, "/admin/volunteer-events/evt/blast/preview"},
+		{http.MethodPost, "/admin/volunteer-events/evt/blast/images"},
+		{http.MethodPost, "/admin/volunteer-events/evt/photos"},
+		{http.MethodGet, "/admin/volunteer-events/evt/codes.csv"},
+		{http.MethodDelete, "/admin/volunteer-events/photos/pic"},
+		{http.MethodPost, "/admin/volunteer-events/evt/edit/approve"},
+		{http.MethodPost, "/admin/volunteer-events/evt/edit/reject"},
+
+		{http.MethodGet, "/affiliates/volunteer-events"},
+		{http.MethodPost, "/affiliates/volunteer-events"},
+		{http.MethodPut, "/affiliates/volunteer-events/evt"},
+		{http.MethodGet, "/affiliates/volunteer-events/evt/codes.csv"},
+		{http.MethodPost, "/affiliates/volunteer-events/evt/blast"},
+
+		{http.MethodGet, "/admin/partners"},
+		{http.MethodPost, "/admin/partners"},
+		{http.MethodPut, "/admin/partners/1"},
+		{http.MethodDelete, "/admin/partners/1"},
+		{http.MethodPost, "/admin/partners/1/logo"},
+
+		// Per-user surfaces: someone else's data must not be reachable anonymously.
+		{http.MethodGet, "/volunteer-events/mine"},
+		{http.MethodDelete, "/volunteer-events/evt/signup"},
+		{http.MethodGet, "/volunteer-events/reminder-preferences"},
+		{http.MethodPut, "/volunteer-events/reminder-preferences"},
+		{http.MethodGet, "/improvers/notifications"},
+		{http.MethodPost, "/improvers/notifications/seen"},
+	}
+
+	for _, testCase := range cases {
+		request := httptest.NewRequest(testCase.method, testCase.target, nil)
+		recorder := httptest.NewRecorder()
+
+		router.ServeHTTP(recorder, request)
+
+		if recorder.Code != http.StatusForbidden {
+			t.Errorf("%s %s without credentials = %d, want %d",
+				testCase.method, testCase.target, recorder.Code, http.StatusForbidden)
+		}
+	}
+}
+
+// The public reads stay public. Asserted alongside the guarded routes so a
+// change that over-corrects — locking down the portal itself — fails too.
+func TestPublicVolunteerReadsStayAnonymous(t *testing.T) {
+	router := newTestRouter(t)
+
+	for _, target := range []string{
+		"/volunteer-events",
+		"/volunteer-events/organizers",
+		"/volunteer-events/evt",
+		"/partners",
+	} {
+		request := httptest.NewRequest(http.MethodGet, target, nil)
+		recorder := httptest.NewRecorder()
+
+		reached := false
+		func() {
+			defer func() {
+				// Reaching the handler means no guard blocked the anonymous
+				// request; it panics only because the service is nil here.
+				if recover() != nil {
+					reached = true
+				}
+			}()
+			router.ServeHTTP(recorder, request)
+		}()
+
+		if !reached && recorder.Code == http.StatusForbidden {
+			t.Errorf("GET %s is credential-gated; it must stay public", target)
+		}
+	}
+}

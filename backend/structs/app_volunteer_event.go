@@ -145,6 +145,10 @@ type VolunteerEvent struct {
 	Location          *VolunteerEventLocation  `json:"location"`
 	Viewer            *VolunteerEventViewer    `json:"viewer"`
 
+	// Creator is who made the event. Management-only: the public portal shows
+	// the organization, never the individual.
+	Creator *VolunteerEventCreator `json:"creator,omitempty"`
+
 	// Management-only fields. Omitted entirely from public responses.
 	ReviewStatus  string            `json:"review_status,omitempty"`
 	QR            *VolunteerEventQR `json:"qr,omitempty"`
@@ -152,6 +156,15 @@ type VolunteerEvent struct {
 
 	CreatedAt string `json:"created_at"`
 	UpdatedAt string `json:"updated_at"`
+}
+
+// VolunteerEventCreator identifies who created an event, as "first name, last
+// initial". Email is populated ONLY when that short form is ambiguous within
+// the same organization — showing it always would expose addresses with no
+// benefit.
+type VolunteerEventCreator struct {
+	Name  string `json:"name"`
+	Email string `json:"email,omitempty"`
 }
 
 type VolunteerEventsResponse struct {

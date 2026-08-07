@@ -327,6 +327,15 @@ func NewServerHandler(ctx context.Context, pools *DBPools, appLogger *logger.Log
 	s.SetAppService(a)
 	a.SetRedeemerService(redeemer)
 	a.SetMinterService(minter)
+	a.SetPonderDB(ponderDb)
+
+	// Compare our webhook bookkeeping against the indexer's before serving.
+	// The two drift silently and always toward the same failure — notifications
+	// stop with nothing logged — so the check runs where someone will see it.
+	// Recreating hooks reaches out to Ponder, so it is opt-in; the check itself
+	// only ever reads Ponder and writes to our own database.
+	a.LogPonderHookReconciliation(ctx, strings.TrimSpace(os.Getenv("PONDER_HOOK_AUTO_REPAIR")) == "true")
+
 	StartDeletedAccountPurgeLoop(ctx, a, appLogger)
 
 	// Workflow upkeep (recurrence catch-up, payout reconciliation, paid_out

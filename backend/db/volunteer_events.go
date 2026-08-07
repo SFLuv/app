@@ -305,12 +305,23 @@ type StoredPhoto struct {
 	ContentType string
 }
 
+// GetVolunteerEventPhotoData serves a cover photo, but ONLY for an event the
+// public list would show.
+//
+// Selecting on the photo id alone made a photo attached to a pending or
+// rejected event publicly fetchable by anyone holding the id — an
+// unauthenticated read of content that has not been published. The id is an
+// unguessable UUID, so this was low severity, but the join costs nothing and
+// removes the class entirely.
 func (s *BotDB) GetVolunteerEventPhotoData(ctx context.Context, photoId string) (*StoredPhoto, error) {
 	photo := &StoredPhoto{}
 	err := s.db.QueryRow(ctx, `
-		SELECT photo_data, content_type
-		FROM event_photos
-		WHERE id = $1;
+		SELECT p.photo_data, p.content_type
+		FROM event_photos p
+		JOIN events e ON e.id = p.event_id
+		WHERE p.id = $1
+			AND e.is_volunteer = TRUE
+			AND e.review_status IN ('approved', 'cancelled');
 	`, photoId).Scan(&photo.Data, &photo.ContentType)
 	if err != nil {
 		return nil, err
@@ -520,7 +531,8 @@ func (s *BotDB) CreateVolunteerEvent(ctx context.Context, p *CreateVolunteerEven
 	if p.MintCodes {
 		for range p.MaxParticipants {
 			if _, err := tx.Exec(ctx, `
-				INSERT INTO codes (id, event) VALUES ($1, $2);
+				INSERT INTO codes (id, event, code_number)
+				VALUES ($1, $2, (SELECT COALESCE(MAX(code_number), 0) + 1 FROM codes WHERE event = $2));
 			`, uuid.NewString(), id); err != nil {
 				return "", fmt.Errorf("error minting volunteer event codes: %s", err)
 			}
@@ -1047,7 +1059,7 @@ func (s *BotDB) CreateRecurringSuccessor(ctx context.Context, previous *Voluntee
 
 	if funded {
 		for range previous.MaxParticipants {
-			if _, err := tx.Exec(ctx, `INSERT INTO codes (id, event) VALUES ($1, $2);`, uuid.NewString(), id); err != nil {
+			if _, err := tx.Exec(ctx, `INSERT INTO codes (id, event, code_number) VALUES ($1, $2, (SELECT COALESCE(MAX(code_number), 0) + 1 FROM codes WHERE event = $2));`, uuid.NewString(), id); err != nil {
 				return "", fmt.Errorf("error minting successor codes: %s", err)
 			}
 		}
@@ -1089,7 +1101,7 @@ func (s *BotDB) MintCodesForEvent(ctx context.Context, eventId string, count int
 	}
 
 	for range count {
-		if _, err := tx.Exec(ctx, `INSERT INTO codes (id, event) VALUES ($1, $2);`, uuid.NewString(), eventId); err != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO codes (id, event, code_number) VALUES ($1, $2, (SELECT COALESCE(MAX(code_number), 0) + 1 FROM codes WHERE event = $2));`, uuid.NewString(), eventId); err != nil {
 			return fmt.Errorf("error minting codes: %s", err)
 		}
 	}
@@ -1190,7 +1202,7 @@ func (s *BotDB) ApproveVolunteerEvent(ctx context.Context, eventId string, appro
 
 	if funded {
 		for range maxParticipants {
-			if _, err := tx.Exec(ctx, `INSERT INTO codes (id, event) VALUES ($1, $2);`, uuid.NewString(), eventId); err != nil {
+			if _, err := tx.Exec(ctx, `INSERT INTO codes (id, event, code_number) VALUES ($1, $2, (SELECT COALESCE(MAX(code_number), 0) + 1 FROM codes WHERE event = $2));`, uuid.NewString(), eventId); err != nil {
 				return fmt.Errorf("error minting codes on approval: %s", err)
 			}
 		}
@@ -1515,7 +1527,7 @@ func (s *BotDB) UpdateVolunteerEvent(ctx context.Context, eventId string, p *Cre
 	// and invalidating it would strand a volunteer at the event.
 	if codesGenerated && p.MaxParticipants > maxParticipants {
 		for range p.MaxParticipants - maxParticipants {
-			if _, err := tx.Exec(ctx, `INSERT INTO codes (id, event) VALUES ($1, $2);`, uuid.NewString(), eventId); err != nil {
+			if _, err := tx.Exec(ctx, `INSERT INTO codes (id, event, code_number) VALUES ($1, $2, (SELECT COALESCE(MAX(code_number), 0) + 1 FROM codes WHERE event = $2));`, uuid.NewString(), eventId); err != nil {
 				return fmt.Errorf("error minting additional codes: %s", err)
 			}
 		}
@@ -1607,4 +1619,70 @@ func (s *BotDB) GetEventBlastImage(ctx context.Context, imageId string) (*Stored
 		return nil, err
 	}
 	return image, nil
+}
+
+// OrganizationHasPublishedEvents reports whether an organization has any event
+// the public portal would show. Used to scope the public organizer-logo
+// endpoint, so an org that has never had an event approved is not discoverable.
+func (s *BotDB) OrganizationHasPublishedEvents(ctx context.Context, organizationId int64) (bool, error) {
+	var exists bool
+	if err := s.db.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM events
+			WHERE organization_id = $1
+				AND is_volunteer = TRUE
+				AND review_status IN ('approved', 'cancelled')
+		);
+	`, organizationId).Scan(&exists); err != nil {
+		return false, fmt.Errorf("error checking published events for organization: %s", err)
+	}
+	return exists, nil
+}
+
+// VolunteerLocationExists reports whether an id refers to a real, active
+// volunteer location. Create/edit payloads carry a client-supplied location_id,
+// and an unvalidated foreign reference should not be stored just because the
+// read path happens to filter it out later.
+func (a *AppDB) VolunteerLocationExists(ctx context.Context, locationId int64) (bool, error) {
+	var exists bool
+	if err := a.db.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM locations
+			WHERE id = $1 AND active = TRUE AND location_kind = 'volunteer'
+		);
+	`, locationId).Scan(&exists); err != nil {
+		return false, fmt.Errorf("error validating volunteer location: %s", err)
+	}
+	return exists, nil
+}
+
+// NumberedCode is a redemption code with the stable label printed on its QR
+// sheet.
+type NumberedCode struct {
+	Id     string
+	Number int
+}
+
+// GetVolunteerEventCodesWithNumbers returns codes in printed order.
+func (s *BotDB) GetVolunteerEventCodesWithNumbers(ctx context.Context, eventId string) ([]NumberedCode, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT id, COALESCE(code_number, 0)
+		FROM codes
+		WHERE event = $1
+		ORDER BY code_number ASC NULLS LAST, id ASC;
+	`, eventId)
+	if err != nil {
+		return nil, fmt.Errorf("error loading numbered event codes: %s", err)
+	}
+	defer rows.Close()
+
+	codes := []NumberedCode{}
+	for rows.Next() {
+		code := NumberedCode{}
+		if err := rows.Scan(&code.Id, &code.Number); err != nil {
+			return nil, err
+		}
+		codes = append(codes, code)
+	}
+	return codes, rows.Err()
 }

@@ -2,7 +2,7 @@
 
 import { useMemo, useRef, useState } from "react"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
-import { QRCode } from "react-qrcode-logo"
+import { SfluvQRCode, type SfluvQRCodeHandle } from "@/components/ui/sfluv-qr-code"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -32,7 +32,7 @@ export function ReceiveCryptoModal({ open, onOpenChange, wallet }: ReceiveCrypto
   const [moreOptions, setMoreOptions] = useState<boolean>(false)
   const { toast } = useToast()
 
-  const QRRef = useRef<QRCode>(null)
+  const QRRef = useRef<SfluvQRCodeHandle>(null)
 
   const trimmedTipAddress = tipAddress.trim()
   const tipAddressError = trimmedTipAddress && !isAddress(trimmedTipAddress) ? "Please enter a valid tip address" : ""
@@ -45,7 +45,7 @@ export function ReceiveCryptoModal({ open, onOpenChange, wallet }: ReceiveCrypto
       + (tipEnabled ? "_TIP_TO_" + tipAddress + "_" : "")
       + "_QR"
 
-    QRRef.current?.download("png", qrName)
+    void QRRef.current?.download("png", qrName)
   }
 
   const copyReceive = async () => {
@@ -97,30 +97,11 @@ export function ReceiveCryptoModal({ open, onOpenChange, wallet }: ReceiveCrypto
           <Card className="overflow-hidden border-primary/20 bg-gradient-to-b from-primary/5 via-background to-background">
             <CardContent className="p-4 sm:p-6">
               <div className="text-center space-y-3 sm:space-y-4">
-                <div className="mx-auto my-2 w-full max-w-[280px] rounded-2xl border border-border/70 bg-white p-3 shadow-sm sm:my-3 sm:p-4">
-                  <QRCode
+                <SfluvQRCode
                     ref={QRRef}
                     value={activeTab === "cw" ? cwLinkValue : wallet.address}
-                    style={{
-                      display: "block",
-                      width: "100%",
-                      height: "100%",
-                      aspectRatio: "1 / 1",
-                      borderRadius: "12px",
-                    }}
-                    size={600}
-                    logoImage={"/icon.png"}
-                    removeQrCodeBehindLogo={true}
-                    logoPadding={2}
-                    logoPaddingStyle="circle"
-                    logoWidth={150}
-                    qrStyle="dots"
-                    eyeRadius={20}
-                    eyeColor={"#eb6c6c"}
-                    ecLevel="M"
-                    quietZone={15}
+                    className="mx-auto my-2 w-full max-w-[280px] sm:my-3"
                   />
-                </div>
                 <p className="text-sm text-muted-foreground">
                   Scan this QR code to send {currencySymbol} to this wallet
                 </p>

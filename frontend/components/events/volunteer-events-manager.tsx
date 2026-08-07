@@ -36,6 +36,9 @@ export interface ManagedVolunteerEvent {
   description?: string
   recurrence: { summary: string } | null
   qr?: { live: boolean; live_at: string | null; codes_generated: boolean }
+  /** Management-only: who made the event. Email is present only when the
+      short name is ambiguous within the organization. */
+  creator?: { name: string; email?: string } | null
 }
 
 interface VolunteerEventsManagerProps {
@@ -172,6 +175,7 @@ export function VolunteerEventsManager({
           event.signup_count,
           event.qr?.codes_generated,
           event.qr?.live,
+          event.creator?.name,
         ]),
       )
       if (signature !== signatureRef.current) {
@@ -374,8 +378,18 @@ export function VolunteerEventsManager({
             <>
               <DialogHeader>
                 <DialogTitle>{openEvent.title}</DialogTitle>
-                <DialogDescription>
-                  {formatEventWhen(openEvent)} · {openEvent.organizer.name}
+                <DialogDescription className="space-y-1">
+                  <span className="block">
+                    {formatEventWhen(openEvent)} · {openEvent.organizer.name}
+                  </span>
+                  {openEvent.creator && (
+                    <span className="block text-xs">
+                      Created by: {openEvent.creator.name}
+                      {openEvent.creator.email && (
+                        <span className="text-muted-foreground"> ({openEvent.creator.email})</span>
+                      )}
+                    </span>
+                  )}
                 </DialogDescription>
               </DialogHeader>
 

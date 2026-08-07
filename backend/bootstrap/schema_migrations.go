@@ -1144,6 +1144,40 @@ var schemaMigrations = []SchemaMigration{
 	},
 	{
 		Version:     "1.33",
+		Description: "stable per-event code numbers for printed QR labels",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			// Printed QR sheets are labelled "{title} #{n}". The number must be
+			// STABLE: reprinting a batch has to put the same number on the same
+			// QR, or a reprint cannot be reconciled against the originals.
+			//
+			// Deriving it at print time from row order would not survive minting
+			// extra codes — a new UUID sorts into the middle and renumbers
+			// everything after it. So the number is assigned once and stored.
+			if _, err := pools.Bot.Exec(ctx, `
+				ALTER TABLE codes ADD COLUMN IF NOT EXISTS code_number INTEGER;
+
+				-- Backfill deterministically by id, so existing sheets keep a
+				-- consistent ordering rather than an arbitrary one.
+				WITH numbered AS (
+					SELECT id, ROW_NUMBER() OVER (PARTITION BY event ORDER BY id) AS n
+					FROM codes
+					WHERE code_number IS NULL AND event IS NOT NULL
+				)
+				UPDATE codes c
+				SET code_number = numbered.n
+				FROM numbered
+				WHERE c.id = numbered.id;
+
+				CREATE INDEX IF NOT EXISTS codes_event_number_idx ON codes(event, code_number);
+			`); err != nil {
+				return err
+			}
+
+			return nil
+		},
+	},
+	{
+		Version:     "1.34",
 		Description: "manual merchant listings for businesses with no Google place",
 		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
 			// Not every merchant has a Google Business Profile, and requiring one

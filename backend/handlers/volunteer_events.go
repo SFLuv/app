@@ -33,6 +33,18 @@ func publicURL(path string) string {
 	return publicBackendBase() + path
 }
 
+// sfluvOrganizerLogoURL is the mark shown for SFLuv-run events, which have no
+// organization of their own. It is the same asset the app serves as its site
+// icon and every transactional email already embeds, so the brand is identical
+// across surfaces. Derived from APP_BASE_URL so a dev boot points at itself.
+func sfluvOrganizerLogoURL() string {
+	base := strings.TrimRight(strings.TrimSpace(os.Getenv("APP_BASE_URL")), "/")
+	if base == "" {
+		base = "https://app.sfluv.org"
+	}
+	return base + "/icon.png"
+}
+
 // icalWeekdays maps Go's Sunday=0 weekday numbering to the two-letter codes the
 // contract uses.
 var icalWeekdays = [...]string{"SU", "MO", "TU", "WE", "TH", "FR", "SA"}
@@ -277,13 +289,21 @@ func (s *BotService) mapVolunteerEvent(row *db.VolunteerEventRow, ctx *volunteer
 		event.SpotsRemaining = &remaining
 	}
 
+	sfluvLogo := sfluvOrganizerLogoURL()
 	event.Organizer = structs.VolunteerEventOrganizer{
-		Type: structs.OrganizerTypeSFLuv,
-		Name: "SFLuv",
+		Type:    structs.OrganizerTypeSFLuv,
+		Name:    "SFLuv",
+		LogoURL: &sfluvLogo,
 	}
 	if row.OrganizationId != nil {
 		event.Organizer.Type = structs.OrganizerTypeAffiliate
 		event.Organizer.OrganizationId = row.OrganizationId
+		// The SFLuv logo is the intended fallback for a partner that has not
+		// uploaded one, but the SFLuv *name* is not: this event is theirs, not
+		// ours. The organization can be missing here when its row is gone or
+		// when the batch load failed, and leaving the seeded name in place
+		// credited every one of a partner's events to SFLuv.
+		event.Organizer.Name = "Partner organization"
 		if org, ok := ctx.organizations[*row.OrganizationId]; ok && org != nil {
 			event.Organizer.Name = org.Name
 			if org.Logo != nil && strings.TrimSpace(*org.Logo) != "" {
@@ -554,9 +574,11 @@ func (s *BotService) GetVolunteerEventOrganizers(w http.ResponseWriter, r *http.
 
 	facets := make([]structs.VolunteerEventOrganizerFacet, 0, len(facetRows))
 	for _, row := range facetRows {
+		sfluvLogo := sfluvOrganizerLogoURL()
 		facet := structs.VolunteerEventOrganizerFacet{
 			Type:       structs.OrganizerTypeSFLuv,
 			Name:       "SFLuv",
+			LogoURL:    &sfluvLogo,
 			EventCount: row.EventCount,
 		}
 		if row.OrganizationId != nil {
@@ -623,6 +645,14 @@ func (s *BotService) GetOrganizerLogo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.appDb == nil {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+
+	// Only organizations with a published event are part of the public portal.
+	// Serving any org's logo by id leaked the existence and branding of orgs
+	// that have never had an event approved.
+	if published, err := s.db.OrganizationHasPublishedEvents(r.Context(), orgId); err != nil || !published {
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
