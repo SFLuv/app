@@ -16,16 +16,7 @@ import {
   toSimpleSmartAccount,
   ToSimpleSmartAccountReturnType,
 } from "permissionless/accounts";
-import {
-  createContext,
-  Dispatch,
-  ReactNode,
-  SetStateAction,
-  useContext,
-  useEffect,
-  useMemo,
-  useState,
-} from "react";
+import { createContext, Dispatch, ReactNode, SetStateAction, useContext, useEffect, useMemo, useState, useRef, useCallback } from "react";
 import {
   Address,
   createWalletClient,
@@ -146,6 +137,9 @@ interface AppContextType {
   supervisor: Supervisor | null;
   setSupervisor: Dispatch<SetStateAction<Supervisor | null>>;
   userLocations: AuthedLocation[];
+  /** Pulls the authenticated user record — including locations — right now,
+   *  using the same routine the background poll runs. */
+  refreshUserRecord: () => Promise<void>;
   setUserLocations: Dispatch<SetStateAction<AuthedLocation[]>>;
   login: () => Promise<void>;
   logout: () => Promise<void>;
@@ -338,6 +332,12 @@ export default function AppProvider({ children }: { children: ReactNode }) {
   const [walletsStatus, setWalletsStatus] = useState<WalletsStatus>("loading");
   const [mapLocations, setMapLocations] = useState<Location[]>([]);
   const [userLocations, setUserLocations] = useState<AuthedLocation[]>([]);
+  // Set by the background refresher below. A ref rather than state so wiring it
+  // up cannot itself trigger a render loop.
+  const refreshUserRecordRef = useRef<(() => Promise<void>) | null>(null);
+  const refreshUserRecord = useCallback(async () => {
+    await refreshUserRecordRef.current?.();
+  }, []);
   const [status, setStatus] = useState<UserStatus>("loading");
   const [tx, setTx] = useState<TxState>(defaultTxState);
   const [error, setError] = useState<string | unknown | null>(null);
@@ -1030,6 +1030,10 @@ export default function AppProvider({ children }: { children: ReactNode }) {
         inFlight = false;
       }
     };
+
+    // Expose the same routine the poll uses, so an explicit refetch after a
+    // save and the background update cannot drift apart.
+    refreshUserRecordRef.current = refreshAuthenticatedUserRecord;
 
     const handleWindowFocus = () => {
       void refreshAuthenticatedUserRecord();
@@ -1791,6 +1795,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
           wallets,
           walletsStatus,
           userLocations,
+          refreshUserRecord,
           setUserLocations,
           tx,
           addWallet,

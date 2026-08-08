@@ -7,6 +7,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useApp } from "@/context/AppProvider";
 import { OrganizationPanel } from "@/components/organization/organization-panel";
 import PlaceAutocomplete from "@/components/merchant/google_place_finder";
+import { MerchantHoursCard } from "@/components/locations/merchant-hours-card";
 import {
   Card,
   CardContent,
@@ -3622,6 +3623,13 @@ export default function SettingsPage() {
                                       the Google Maps address, coordinates, and related map
                                       details.
                                     </p>
+                                  </div>
+
+                                  <div className="space-y-2 rounded-lg border p-3">
+                                    <Label className="text-black dark:text-white">
+                                      Opening hours
+                                    </Label>
+                                    <MerchantHoursCard location={loc} />
                                   </div>
 
                                   <div className="space-y-2">

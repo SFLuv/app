@@ -2,6 +2,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react"
 import { SfluvQRCode, type SfluvQRCodeHandle } from "@/components/ui/sfluv-qr-code"
+import { EditMerchantLocationModal } from "@/components/admin/edit-merchant-location-modal"
 import { buildMerchantSendQrValue } from "@/lib/redeem-link"
 import { usePathname, useRouter, useSearchParams } from "next/navigation"
 import { useApp } from "@/context/AppProvider"
@@ -2330,6 +2331,26 @@ export default function AdminPage() {
     merchantQrRefs.current = new Map()
     setisLocationReviewModalOpen(true)
   }
+
+  const [editMerchantModalOpen, setEditMerchantModalOpen] = useState(false)
+
+  // Merchant listings change under the panel — the nightly hours sync, another
+  // admin, a merchant editing their own record. Poll while the tab is visible so
+  // the list does not go stale, and skip it while a modal is open so the data
+  // being edited cannot shift underneath.
+  useEffect(() => {
+    const busy = () => isLocationReviewModalOpen || editMerchantModalOpen
+    const tick = () => {
+      if (document.visibilityState !== "visible" || busy()) return
+      void getAuthedMapLocations()
+    }
+    const interval = window.setInterval(tick, 60000)
+    document.addEventListener("visibilitychange", tick)
+    return () => {
+      window.clearInterval(interval)
+      document.removeEventListener("visibilitychange", tick)
+    }
+  }, [isLocationReviewModalOpen, editMerchantModalOpen, getAuthedMapLocations])
 
   const saveMerchantModal = async () => {
     if (!selectedLocationForReview) return
@@ -5368,6 +5389,14 @@ export default function AdminPage() {
         </div>
       </Tabs>
 
+      <EditMerchantLocationModal
+        open={editMerchantModalOpen}
+        onOpenChange={setEditMerchantModalOpen}
+        location={selectedLocationForReview as AuthedLocation | null}
+        knownTypes={authedMapLocations.map((entry: AuthedLocation) => entry.type)}
+        onSaved={getAuthedMapLocations}
+      />
+
       {/* Location Review Modal */}
       <Dialog open={isLocationReviewModalOpen} onOpenChange={setisLocationReviewModalOpen}>
         <DialogContent className="w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] max-h-[90vh] overflow-y-auto p-4 sm:max-w-[900px] sm:p-6">
@@ -5380,6 +5409,20 @@ export default function AdminPage() {
 
           {selectedLocationForReview && (
             <div className="space-y-6 py-4">
+              <div className="flex flex-col gap-2 rounded-lg border p-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="text-sm">
+                  <p className="font-medium">Listing details</p>
+                  <p className="text-muted-foreground">Name, type, address, hours and contact details.</p>
+                </div>
+                <Button
+                  variant="outline"
+                  className="w-full sm:w-auto"
+                  onClick={() => setEditMerchantModalOpen(true)}
+                >
+                  Edit details
+                </Button>
+              </div>
+
               <div className="space-y-2">
                 <Label>Change Approval Status</Label>
                 <Select

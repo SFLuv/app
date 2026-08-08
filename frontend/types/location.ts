@@ -1,3 +1,15 @@
+export interface LocationHoursInterval {
+  open_minute: number;
+  close_minute: number;
+}
+
+export interface LocationDayHours {
+  weekday: number;
+  is_closed: boolean;
+  /** A day can open more than once — lunch and dinner is the ordinary case. */
+  intervals: LocationHoursInterval[];
+}
+
 export interface LocationPaymentWallet {
   id: number;
   location_id: number;
@@ -26,6 +38,9 @@ export interface Location {
   rating: number;
   maps_page: string;
   opening_hours: string[];
+  hours?: LocationDayHours[];
+  hours_manual?: boolean;
+  hours_synced_at?: string | null;
 }
 
 export interface AuthedLocation {
@@ -51,6 +66,9 @@ export interface AuthedLocation {
   rating: number;
   maps_page: string;
   opening_hours: string[];
+  hours?: LocationDayHours[];
+  hours_manual?: boolean;
+  hours_synced_at?: string | null;
   contact_firstname: string;
   contact_lastname: string;
   contact_phone: string;
@@ -84,6 +102,9 @@ export interface GoogleSubLocation {
   rating: number;
   maps_page: string;
   opening_hours: string[];
+  hours?: LocationDayHours[];
+  hours_manual?: boolean;
+  hours_synced_at?: string | null;
   /** Raw Places types, used to reject results that are postal addresses rather than businesses. */
   types?: string[];
   /** Google's own one-line address, shown back to the merchant for confirmation. */

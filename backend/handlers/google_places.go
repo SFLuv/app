@@ -74,8 +74,86 @@ type googlePlacesLatLng struct {
 	Longitude float64 `json:"longitude"`
 }
 
+type googlePlacesTimePoint struct {
+	// Google numbers days from Sunday; our storage starts on Monday.
+	Day    int `json:"day"`
+	Hour   int `json:"hour"`
+	Minute int `json:"minute"`
+}
+
+type googlePlacesPeriod struct {
+	Open  *googlePlacesTimePoint `json:"open"`
+	Close *googlePlacesTimePoint `json:"close"`
+}
+
 type googlePlacesOpeningHours struct {
-	WeekdayDescriptions []string `json:"weekdayDescriptions"`
+	WeekdayDescriptions []string             `json:"weekdayDescriptions"`
+	Periods             []googlePlacesPeriod `json:"periods"`
+}
+
+// googleDayToWeekday converts Google's Sunday-first numbering to our
+// Monday-first storage order.
+func googleDayToWeekday(day int) int {
+	return ((day+6)%7 + 7) % 7
+}
+
+// structuredHoursFromPeriods turns Google's periods into our per-day model.
+//
+// Every period is kept, so a kitchen that shuts between lunch and dinner keeps
+// both stretches rather than being flattened into one span that claims it is
+// open through the gap.
+func structuredHoursFromPeriods(periods []googlePlacesPeriod) ([]structs.LocationDayHours, bool) {
+	byWeekday := map[int][]structs.LocationHoursInterval{}
+	alwaysOpen := map[int]bool{}
+	for _, period := range periods {
+		if period.Open == nil {
+			continue
+		}
+		weekday := googleDayToWeekday(period.Open.Day)
+		if weekday < 0 || weekday >= len(structs.WeekdayNames) {
+			continue
+		}
+		openMinute := period.Open.Hour*60 + period.Open.Minute
+		if period.Close == nil {
+			// Google signals "open 24 hours" with an open and no close. That is
+			// not a stretch we can bound, so the day is left without times.
+			alwaysOpen[weekday] = true
+			continue
+		}
+		closeMinute := period.Close.Hour*60 + period.Close.Minute
+		if openMinute == closeMinute {
+			alwaysOpen[weekday] = true
+			continue
+		}
+		byWeekday[weekday] = append(byWeekday[weekday], structs.LocationHoursInterval{
+			OpenMinute:  openMinute,
+			CloseMinute: closeMinute,
+		})
+	}
+
+	if len(byWeekday) == 0 && len(alwaysOpen) == 0 {
+		return nil, false
+	}
+
+	days := make([]structs.LocationDayHours, len(structs.WeekdayNames))
+	for weekday := range days {
+		day := structs.LocationDayHours{Weekday: weekday}
+		intervals, hasIntervals := byWeekday[weekday]
+		switch {
+		case hasIntervals:
+			day.Intervals = intervals
+			day.SortIntervals()
+		case alwaysOpen[weekday]:
+			// Known to be open, but not as a bounded stretch: no times rather
+			// than a closure.
+		default:
+			// Google lists no period for the day, which means shut.
+			day.IsClosed = true
+		}
+		days[weekday] = day
+	}
+
+	return days, true
 }
 
 type googlePlacesDetails struct {
@@ -251,6 +329,9 @@ func VerifyGooglePlace(ctx context.Context, placeID string) (*structs.VerifiedGo
 	}
 	if details.RegularOpeningHours != nil {
 		verified.OpeningHours = details.RegularOpeningHours.WeekdayDescriptions
+		if structured, ok := structuredHoursFromPeriods(details.RegularOpeningHours.Periods); ok {
+			verified.StructuredHours = structured
+		}
 	}
 
 	return verified, nil

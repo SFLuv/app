@@ -195,3 +195,24 @@ func TestPublicVolunteerReadsStayAnonymous(t *testing.T) {
 		}
 	}
 }
+
+// Editing a merchant listing reaches fields the owner-facing route cannot —
+// type, hours, and the city/state/zip half of the address — so an unauthenticated
+// caller must never reach these handlers.
+func TestAdminLocationEditRoutesRejectUnauthenticated(t *testing.T) {
+	router := newTestRouter(t)
+
+	for _, target := range []string{
+		"/admin/locations/1",
+		"/admin/locations/1/google-place",
+	} {
+		request := httptest.NewRequest(http.MethodPut, target, strings.NewReader(`{}`))
+		recorder := httptest.NewRecorder()
+
+		router.ServeHTTP(recorder, request)
+
+		if recorder.Code != http.StatusForbidden {
+			t.Errorf("PUT %s without credentials = %d, want %d", target, recorder.Code, http.StatusForbidden)
+		}
+	}
+}

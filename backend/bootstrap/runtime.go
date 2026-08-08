@@ -336,6 +336,11 @@ func NewServerHandler(ctx context.Context, pools *DBPools, appLogger *logger.Log
 	// only ever reads Ponder and writes to our own database.
 	a.LogPonderHookReconciliation(ctx, strings.TrimSpace(os.Getenv("PONDER_HOOK_AUTO_REPAIR")) == "true")
 
+	// Merchant opening hours are refreshed from Google nightly. Listings switched
+	// to manual are excluded, and a poll that returns nothing usable leaves the
+	// existing hours alone rather than clearing them.
+	handlers.NewLocationHoursScheduler(a).Start(ctx)
+
 	StartDeletedAccountPurgeLoop(ctx, a, appLogger)
 
 	// Workflow upkeep (recurrence catch-up, payout reconciliation, paid_out
