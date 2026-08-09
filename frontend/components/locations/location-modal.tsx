@@ -8,6 +8,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Badge } from "@/components/ui/badge"
 import { Star, MapPin, Phone, Mail, Globe, ExternalLink, Wallet } from "lucide-react"
 import { Location } from "@/types/location"
+import { currentWeekdayIndex, isTodayHoursLine } from "@/lib/opening-hours"
 import { isAddress } from "viem"
 
 interface LocationModalProps {
@@ -24,6 +25,9 @@ export function LocationModal({ location, isOpen, onClose, isPayEnabled, onPayLo
   if (!location) return null
 
   const openingHours = location.opening_hours ?? []
+  // Computed once per render rather than per row, so every line is judged
+  // against the same day even if the render straddles midnight.
+  const today = currentWeekdayIndex()
   const canPay = isPayEnabled && isAddress((location.pay_to_address || "").trim())
 
   const renderStars = (rating: number) => {
@@ -108,8 +112,13 @@ export function LocationModal({ location, isOpen, onClose, isPayEnabled, onPayLo
             <h3 className="font-medium text-black dark:text-white">Hours of Operation</h3>
             <div className="space-y-2">
                 <ul>
-                  {openingHours.map((hours) => (
-                    <li key={hours}>{hours}</li>
+                  {openingHours.map((hours, index) => (
+                    <li
+                      key={hours}
+                      className={isTodayHoursLine(hours, index, today) ? "font-semibold text-foreground" : undefined}
+                    >
+                      {hours}
+                    </li>
                   ))}
                 </ul>
             </div>
