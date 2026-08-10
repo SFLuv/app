@@ -5,10 +5,11 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Button } from "@/components/ui/button"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Badge } from "@/components/ui/badge"
-import { Star, MapPin, Phone, Mail, Globe, Navigation, Wallet } from "lucide-react"
+import { MapPin, Phone, Mail, Globe, Navigation, Wallet } from "lucide-react"
 import { Location } from "@/types/location"
 import { currentWeekdayIndex, isTodayHoursLine } from "@/lib/opening-hours"
 import { MerchantIcon, OpenStatusBadge } from "@/components/locations/merchant-pin"
+import { RatingStars } from "@/components/ui/rating-stars"
 import { useOpenState } from "@/hooks/use-open-state"
 import { isAddress } from "viem"
 
@@ -45,17 +46,6 @@ export function LocationModal({ location: selected, isOpen, onClose, isPayEnable
   const today = currentWeekdayIndex()
   const canPay = isPayEnabled && isAddress((location.pay_to_address || "").trim())
 
-  const renderStars = (rating: number) => {
-    return Array(5)
-      .fill(0)
-      .map((_, i) => (
-        <Star
-          key={i}
-          className={`h-4 w-4 ${i < Math.floor(rating) ? "text-yellow-400 fill-yellow-400" : "text-gray-300"}`}
-        />
-      ))
-  }
-
   const getGoogleMapsUrl = (googleId: string) => {
     return `https://www.google.com/maps/place/?q=place_id:${googleId}`
   }
@@ -80,7 +70,7 @@ export function LocationModal({ location: selected, isOpen, onClose, isPayEnable
             <div className="flex items-center ml-2">
               {location.rating > 0 ? (
                 <>
-                  {renderStars(location.rating)}
+                  <RatingStars rating={location.rating} />
                   <span className="ml-1 text-sm text-gray-600 dark:text-gray-400">{location.rating.toFixed(1)}</span>
                 </>
               ) : (
