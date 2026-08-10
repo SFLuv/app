@@ -435,6 +435,29 @@ resolve_repo_dir() {
   return 0
 }
 
+deps_stale() { # deps_stale <dir> — true when node_modules is missing or out of date.
+  local dir="$1" manifest
+
+  [[ -d "$dir/node_modules" ]] || return 0
+
+  # A boot that only checked for the directory would silently run yesterday's
+  # dependencies: every service here is pulled or pinned from git, so a commit
+  # that adds a package leaves an existing node_modules in place and the build
+  # fails on an unresolvable import. Comparing against the manifests catches
+  # that, and costs one stat per file.
+  for manifest in package.json package-lock.json pnpm-lock.yaml; do
+    [[ -f "$dir/$manifest" && "$dir/$manifest" -nt "$dir/node_modules" ]] && return 0
+  done
+
+  return 1
+}
+
+stamp_deps() { # stamp_deps <dir> — mark node_modules as current for deps_stale.
+  # npm leaves node_modules' mtime alone when an install changes nothing, so
+  # without this a manifest newer than the tree would reinstall on every boot.
+  [[ -d "$1/node_modules" ]] && touch "$1/node_modules"
+}
+
 start_bg() { # start_bg <name> <workdir> <logfile> <cmd...> — tracked background service.
   local name="$1" workdir="$2" logfile="$3"
   shift 3
@@ -934,9 +957,10 @@ if [[ "$RUN_PONDER" -eq 1 ]]; then
       c_yellow "  ponder will refuse to start — re-clone (drop --skip-db-clone), or set ANVIL_FORK_BLOCK=$IDX_HEAD"
     fi
   fi
-  if [[ ! -d "$ROOT/ponder/node_modules" ]]; then
+  if deps_stale "$ROOT/ponder"; then
     c_yellow "  installing ponder deps…"
-    ( cd "$ROOT/ponder" && npm install --no-audit --no-fund >"$LOG_DIR/ponder-install.log" 2>&1 )
+    ( cd "$ROOT/ponder" && npm install --no-audit --no-fund >"$LOG_DIR/ponder-install.log" 2>&1 ) \
+      && stamp_deps "$ROOT/ponder"
   fi
   PONDER_ENV=(
     "DATABASE_URL=postgresql://$LOCAL_DB_USER:@$LOCAL_DB_HOST_PORT/$PONDER_DB_NAME"
@@ -1053,9 +1077,10 @@ fi
 if [[ "$RUN_FRONTEND" -eq 1 ]]; then
   c_blue "[8/10] Frontend (:$FRONTEND_PORT)"
   free_port "$FRONTEND_PORT" frontend
-  if [[ ! -d "$ROOT/frontend/node_modules" ]]; then
+  if deps_stale "$ROOT/frontend"; then
     c_yellow "  installing frontend deps…"
-    ( cd "$ROOT/frontend" && npm install --no-audit --no-fund >"$LOG_DIR/frontend-install.log" 2>&1 )
+    ( cd "$ROOT/frontend" && npm install --no-audit --no-fund >"$LOG_DIR/frontend-install.log" 2>&1 ) \
+      && stamp_deps "$ROOT/frontend"
   fi
   FRONTEND_ENV=(
     "IN_PRODUCTION=false"
@@ -1098,10 +1123,13 @@ fi
 # ----------------------------------------------------------------------------
 if [[ "$RUN_WEBPAGE" -eq 1 && -n "$WEBPAGE_PORT" ]]; then
   c_blue "[9/10] Webpage (:$WEBPAGE_PORT)"
-  if [[ ! -d "$WEBPAGE_DIR/node_modules" ]]; then
+  if deps_stale "$WEBPAGE_DIR"; then
     c_yellow "  installing webpage deps…"
-    ( cd "$WEBPAGE_DIR" && npm install --no-audit --no-fund >"$LOG_DIR/webpage-install.log" 2>&1 ) \
-      || c_yellow "  webpage dep install failed — see tmp/logs/webpage-install.log"
+    if ( cd "$WEBPAGE_DIR" && npm install --no-audit --no-fund >"$LOG_DIR/webpage-install.log" 2>&1 ); then
+      stamp_deps "$WEBPAGE_DIR"
+    else
+      c_yellow "  webpage dep install failed — see tmp/logs/webpage-install.log"
+    fi
   fi
 
   # SFLUV_API_BASE_URL is the variable the webpage reads for the API. Unset, it falls
@@ -1111,6 +1139,11 @@ if [[ "$RUN_WEBPAGE" -eq 1 && -n "$WEBPAGE_PORT" ]]; then
     "NODE_ENV=development"
     "PORT=$WEBPAGE_PORT"
     "SFLUV_API_BASE_URL=http://localhost:$BACKEND_PORT"
+    # The merchant map. Same two variables the frontend reads, so one pair of
+    # values in .dev.env configures every surface that draws a map. Unset, the
+    # map section renders nothing and the rest of the page is unaffected.
+    "NEXT_PUBLIC_GOOGLE_MAPS_API_KEY=${NEXT_PUBLIC_GOOGLE_MAPS_API_KEY:-}"
+    "NEXT_PUBLIC_MAP_ID=${NEXT_PUBLIC_MAP_ID:-}"
   )
   # Forwarded only when configured, so the signup proxy can present the shared
   # secret exactly as it will in production (see VOLUNTEER_PROXY_KEY in the
@@ -1183,9 +1216,10 @@ EXPO_PUBLIC_GOOGLE_MAPS_API_KEY=${EXPO_PUBLIC_GOOGLE_MAPS_API_KEY:-}
 EXPO_PUBLIC_MAP_ID=${EXPO_PUBLIC_MAP_ID:-}
 EXPO_PUBLIC_EAS_PROJECT_ID=${EXPO_PUBLIC_EAS_PROJECT_ID:-}
 EOF
-  if [[ ! -d "$MOBILE_DIR/mobile/node_modules" ]]; then
+  if deps_stale "$MOBILE_DIR/mobile"; then
     c_yellow "  installing mobile deps…"
-    ( cd "$MOBILE_DIR/mobile" && npm install --no-audit --no-fund >"$LOG_DIR/mobile-install.log" 2>&1 )
+    ( cd "$MOBILE_DIR/mobile" && npm install --no-audit --no-fund >"$LOG_DIR/mobile-install.log" 2>&1 ) \
+      && stamp_deps "$MOBILE_DIR/mobile"
   fi
   # Simulators can't reliably open the LAN URL (exp://<lan-ip>:8081 times out,
   # typically because the macOS firewall blocks Metro on the LAN interface), so

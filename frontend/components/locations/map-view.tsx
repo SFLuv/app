@@ -1,15 +1,19 @@
 "use client"
 
-import { memo, useCallback, useMemo } from "react"
+import { memo, useCallback, useEffect, useMemo, useState } from "react"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { SlidersHorizontal } from "lucide-react"
 import type { UserLocation } from "@/types/merchant"
-import { AdvancedMarker, APIProvider, Map, Pin } from "@vis.gl/react-google-maps"
+import { AdvancedMarker, APIProvider, Map, useMap } from "@vis.gl/react-google-maps"
 import { useLocation } from "@/context/LocationProvider"
 import { Location } from "@/types/location"
 import { GOOGLE_MAPS_API_KEY, MAP_CENTER, MAP_ID } from "@/lib/constants"
+import { MerchantMapPin } from "@/components/locations/merchant-pin"
+import { MapMerchantPanel } from "@/components/locations/map-merchant-panel"
+import { useMinuteTick } from "@/hooks/use-open-state"
+import { getOpenState } from "@/lib/opening-hours"
 
 /**
  * Map pins.
@@ -20,14 +24,16 @@ import { GOOGLE_MAPS_API_KEY, MAP_CENTER, MAP_ID } from "@/lib/constants"
  * anything above re-rendered, including the background user-record poll.
  *
  * memo keeps it still even when the parent re-renders for unrelated reasons;
- * both props are referentially stable at the call site.
+ * all three props are referentially stable at the call site.
  */
 const PoiMarkers = memo(function PoiMarkers({
   locations,
   onSelectLocation,
+  now,
 }: {
   locations: Location[]
   onSelectLocation: (location: Location) => void
+  now: Date | null
 }) {
   return (
     <>
@@ -37,12 +43,37 @@ const PoiMarkers = memo(function PoiMarkers({
           position={{ lat: currentLocation.lat, lng: currentLocation.lng }}
           clickable={true}
           onClick={() => onSelectLocation(currentLocation)}
+          title={currentLocation.name}
         >
-          <Pin background="#eb6c6c" glyphColor="#111111" borderColor="#111111" />
+          <MerchantMapPin
+            name={currentLocation.name}
+            iconUrl={currentLocation.icon_url}
+            state={now === null ? "unknown" : getOpenState(currentLocation.hours, now)}
+          />
         </AdvancedMarker>
       ))}
     </>
   )
+})
+
+/**
+ * Pans the map to whichever merchant the list is pointing at.
+ *
+ * A child of Map rather than a hook in MapView, because useMap only resolves
+ * inside the map's own context. Renders nothing.
+ */
+const MapFocus = memo(function MapFocus({ target }: { target: Location | null }) {
+  const map = useMap()
+
+  useEffect(() => {
+    if (!map || !target) return
+    map.panTo({ lat: target.lat, lng: target.lng })
+    // Only zoom in on someone already zoomed out; yanking the zoom back on
+    // every hover would fight a user who deliberately zoomed in.
+    if ((map.getZoom() ?? 0) < 15) map.setZoom(15)
+  }, [map, target])
+
+  return null
 })
 
 interface MapViewProps {
@@ -64,6 +95,11 @@ export function MapView({
 }: MapViewProps) {
   const { mapLocationsStatus, locationTypes } = useLocation()
   const mapHeightClass = "h-[calc(100svh-320px)] sm:h-[calc(100svh-300px)]"
+  // One clock for every pin and every row. Ticking it re-renders them once a
+  // minute, which is what recolours a merchant the moment they shut.
+  const now = useMinuteTick()
+  const [panelCollapsed, setPanelCollapsed] = useState(false)
+  const [focused, setFocused] = useState<Location | null>(null)
 
   const filteredLocations = useMemo(() => {
     return (locations ?? []).filter((location) => {
@@ -78,6 +114,8 @@ export function MapView({
     (location: Location) => onSelectLocation(location),
     [onSelectLocation],
   )
+
+  const handleFocusLocation = useCallback((location: Location) => setFocused(location), [])
 
   if (mapLocationsStatus === "loading") {
     return (
@@ -119,19 +157,37 @@ export function MapView({
 
       <Card className="mt-2 overflow-hidden rounded-2xl border shadow-sm">
         <CardContent className="overflow-hidden rounded-2xl p-2 sm:p-2.5">
-          <div className={`${mapHeightClass} max-h-[500px] min-h-[250px] w-full overflow-hidden rounded-xl bg-muted/30 sm:min-h-[310px]`}>
-            <div className="h-full w-full overflow-hidden rounded-xl">
-              <APIProvider apiKey={GOOGLE_MAPS_API_KEY}>
-                <Map
-                  defaultZoom={12}
-                  defaultCenter={MAP_CENTER}
-                  mapId={MAP_ID}
-                  gestureHandling="greedy"
-                  className="h-full w-full"
-                />
-                <PoiMarkers locations={filteredLocations} onSelectLocation={handleSelectLocation} />
-              </APIProvider>
+          {/*
+            Desktop splits the card: the map takes roughly two thirds and the
+            merchant list the rest. Below md the list would leave the map too
+            narrow to be a map, so it drops away and the map takes the width.
+          */}
+          <div className={`${mapHeightClass} flex max-h-[560px] min-h-[280px] w-full gap-2.5 sm:min-h-[340px]`}>
+            <div className="h-full min-w-0 flex-1 overflow-hidden rounded-xl bg-muted/30">
+              <div className="h-full w-full overflow-hidden rounded-xl">
+                <APIProvider apiKey={GOOGLE_MAPS_API_KEY}>
+                  <Map
+                    defaultZoom={12}
+                    defaultCenter={MAP_CENTER}
+                    mapId={MAP_ID}
+                    gestureHandling="greedy"
+                    className="h-full w-full"
+                  >
+                    <MapFocus target={focused} />
+                  </Map>
+                  <PoiMarkers locations={filteredLocations} onSelectLocation={handleSelectLocation} now={now} />
+                </APIProvider>
+              </div>
             </div>
+
+            <MapMerchantPanel
+              locations={filteredLocations}
+              now={now}
+              onSelectLocation={handleSelectLocation}
+              onFocusLocation={handleFocusLocation}
+              collapsed={panelCollapsed}
+              onCollapsedChange={setPanelCollapsed}
+            />
           </div>
         </CardContent>
       </Card>

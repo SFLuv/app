@@ -8,6 +8,7 @@ import { useApp } from "@/context/AppProvider";
 import { OrganizationPanel } from "@/components/organization/organization-panel";
 import PlaceAutocomplete from "@/components/merchant/google_place_finder";
 import { MerchantHoursCard } from "@/components/locations/merchant-hours-card";
+import { MerchantIconCard } from "@/components/locations/merchant-icon-card";
 import {
   Card,
   CardContent,
@@ -63,7 +64,7 @@ import {
   WalletResponse,
 } from "@/types/server";
 import { AuthedLocation } from "@/types/location";
-import { GoogleSubLocation } from "@/types/location";
+import { GoogleSubLocation, PlaceSelection } from "@/types/location";
 import { ensureGooglePlacesScript, hasGoogleMapsPlaces } from "@/lib/google-places";
 import { sweepSFLUVBalancesToAdmin } from "@/lib/account-deletion";
 import { getAddress, isAddress } from "viem";
@@ -1683,10 +1684,22 @@ export default function SettingsPage() {
   // Previews the picked place in the draft and stashes it for the save step.
   // The preview is optimistic — the values actually stored come back from the
   // server after it re-verifies the place id with Google.
+  // The picker speaks PlaceSelection (Google place or hand-typed address); the
+  // drafts here predate that and still hold a plain Google place.
+  const asPlaceSelection = (
+    place: GoogleSubLocation | null,
+  ): PlaceSelection | null => (place ? { source: "google_place", place } : null);
+
   const applyGoogleLocationSelection = (
     locationId: number,
-    selection: GoogleSubLocation | null,
+    placeSelection: PlaceSelection | null,
   ) => {
+    // This control refreshes an existing listing's Google details, so only the
+    // Google branch means anything here. The manual-address path belongs to
+    // onboarding, where there is no listing to refresh from.
+    const selection =
+      placeSelection?.source === "google_place" ? placeSelection.place : null;
+
     updateLocationProfileDraft(locationId, (current) => {
       if (!selection) {
         return { ...current, pendingGooglePlace: null, error: "", success: "" };
@@ -3607,7 +3620,7 @@ export default function SettingsPage() {
                                     ) : merchantPlacesReady ? (
                                       <PlaceAutocomplete
                                         key={`merchant-location-place-${loc.id}`}
-                                        value={profileDraft.pendingGooglePlace}
+                                        value={asPlaceSelection(profileDraft.pendingGooglePlace)}
                                         onSelect={(selection) =>
                                           applyGoogleLocationSelection(loc.id, selection)
                                         }
@@ -3623,6 +3636,13 @@ export default function SettingsPage() {
                                       the Google Maps address, coordinates, and related map
                                       details.
                                     </p>
+                                  </div>
+
+                                  <div className="space-y-2 rounded-lg border p-3">
+                                    <Label className="text-black dark:text-white">
+                                      Map icon
+                                    </Label>
+                                    <MerchantIconCard location={loc} />
                                   </div>
 
                                   <div className="space-y-2 rounded-lg border p-3">

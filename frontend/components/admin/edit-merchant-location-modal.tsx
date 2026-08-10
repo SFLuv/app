@@ -284,7 +284,15 @@ export function EditMerchantLocationModal({
               <strong>overwrites the fields above</strong>, including anything typed here. Use it when the
               merchant has moved or was matched to the wrong listing.
             </p>
-            <PlaceAutocomplete value={googlePlace} onSelect={setGooglePlace} />
+            {/* Re-pointing is Google-only by definition: it exists to replace
+                this listing's place id. A manual address has none, so that
+                branch of the picker is ignored here. */}
+            <PlaceAutocomplete
+              value={googlePlace ? { source: "google_place", place: googlePlace } : null}
+              onSelect={(selection) =>
+                setGooglePlace(selection?.source === "google_place" ? selection.place : null)
+              }
+            />
             <Button
               type="button"
               variant="outline"

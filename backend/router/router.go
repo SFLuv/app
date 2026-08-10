@@ -453,6 +453,13 @@ func AddLocationRoutes(r *chi.Mux, s *handlers.AppService) {
 	r.Put("/locations/{id}/wallet-settings", withActiveAuth(s.UpdateLocationWalletSettings, s))
 	r.Put("/locations/{id}/google-place", withActiveAuth(s.UpdateLocationGooglePlace, s))
 	r.Put("/locations/{id}/hours", withActiveAuth(s.UpdateLocationHours, s))
+
+	// The map is public on the app, the mobile client and the marketing site,
+	// so the icon it draws has to be fetchable without a token. Writes stay
+	// behind ownership (or admin) checks in the handler.
+	r.Get("/locations/{id}/icon", s.GetLocationIcon)
+	r.Post("/locations/{id}/icon", withActiveAuth(s.UploadLocationIcon, s))
+	r.Delete("/locations/{id}/icon", withActiveAuth(s.DeleteLocationIcon, s))
 }
 
 func AddContactRoutes(r *chi.Mux, s *handlers.AppService) {

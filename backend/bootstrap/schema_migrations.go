@@ -1358,6 +1358,36 @@ var schemaMigrations = []SchemaMigration{
 			return nil
 		},
 	},
+	{
+		Version:     "1.37",
+		Description: "merchant map icons",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			// Bytes live in their own table because every map read selects the
+			// whole listing row and none of them want the image.
+			//
+			// icon_updated_at mirrors the upload time onto `locations` so a
+			// listing can advertise "there is an icon, at this version" without
+			// joining the blob. The version is what lets the image itself be
+			// served with a long cache lifetime and still change when a
+			// merchant replaces it.
+			if _, err := pools.App.Exec(ctx, `
+				ALTER TABLE locations
+				ADD COLUMN IF NOT EXISTS icon_updated_at TIMESTAMPTZ;
+
+				CREATE TABLE IF NOT EXISTS location_icons(
+					location_id INTEGER PRIMARY KEY REFERENCES locations(id) ON DELETE CASCADE,
+					content_type TEXT NOT NULL,
+					image_data BYTEA NOT NULL,
+					size_bytes INTEGER NOT NULL,
+					updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+				);
+			`); err != nil {
+				return err
+			}
+
+			return nil
+		},
+	},
 }
 
 // migrateLocationHoursUniqueness enforces at most one hours row per weekday per

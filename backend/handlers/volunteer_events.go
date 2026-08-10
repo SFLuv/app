@@ -16,21 +16,12 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// publicBackendBase is the externally reachable origin of this backend. Image
-// fields are emitted as absolute URLs (both clients asked for URLs rather than
-// inline base64), falling back to root-relative paths when the origin is not
+// publicURL turns a root-relative API path into an absolute URL. Image fields
+// are emitted as absolute URLs (both clients asked for URLs rather than inline
+// base64), falling back to root-relative paths when the origin is not
 // configured — a relative URL still resolves for same-origin callers.
-func publicBackendBase() string {
-	for _, key := range []string{"PUBLIC_BACKEND_URL", "NEXT_PUBLIC_BACKEND_URL", "MCP_PUBLIC_BASE_URL"} {
-		if value := strings.TrimRight(strings.TrimSpace(os.Getenv(key)), "/"); value != "" {
-			return value
-		}
-	}
-	return ""
-}
-
 func publicURL(path string) string {
-	return publicBackendBase() + path
+	return utils.PublicBackendURL(path)
 }
 
 // sfluvOrganizerLogoURL is the mark shown for SFLuv-run events, which have no

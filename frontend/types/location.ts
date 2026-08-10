@@ -35,6 +35,8 @@ export interface Location {
   email: string;
   website: string;
   image_url: string;
+  /** Uploaded map-pin mark. Empty when the merchant has not set one. */
+  icon_url?: string;
   rating: number;
   maps_page: string;
   opening_hours: string[];
@@ -72,6 +74,8 @@ export interface AuthedLocation {
   admin_email: string;
   website: string;
   image_url: string;
+  /** Uploaded map-pin mark. Empty when the merchant has not set one. */
+  icon_url?: string;
   rating: number;
   maps_page: string;
   opening_hours: string[];
