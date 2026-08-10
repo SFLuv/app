@@ -239,4 +239,9 @@ type VolunteerEventCreateRequest struct {
 	// QRCutoffLocal is an explicit redemption deadline as wall clock in the
 	// event's timezone. Empty means the default: 24 hours after the event ends.
 	QRCutoffLocal string `json:"qr_cutoff_local,omitempty"`
+
+	// PhotoIds are cover photos already staged by the caller. They are attached
+	// inside the creation transaction, so an event is never created without the
+	// photos it was submitted with.
+	PhotoIds []string `json:"photo_ids,omitempty"`
 }

@@ -228,6 +228,13 @@ func (a *AppService) AdminCreateVolunteerEvent(w http.ResponseWriter, r *http.Re
 		return
 	}
 
+	photoIds, errMsg := validateStagedPhotoIds(req.PhotoIds)
+	if errMsg != "" {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(errMsg))
+		return
+	}
+
 	// Approval is gated on the faucet being able to cover one occurrence:
 	// reward x participants. Without this an event could mint codes the faucet
 	// cannot honour, which surfaces as a failed redemption at the event itself.
@@ -266,6 +273,7 @@ func (a *AppService) AdminCreateVolunteerEvent(w http.ResponseWriter, r *http.Re
 		ReviewStatus:        structs.EventReviewApproved,
 		MintCodes:           true,
 		RecurrenceFrequency: structs.RecurrenceNone,
+		StagedPhotoIds:      photoIds,
 	}
 
 	if req.Recurrence != nil {

@@ -245,6 +245,13 @@ func AddVolunteerListRoutes(r *chi.Mux, a *handlers.AppService) {
 	r.Get("/volunteer-email-list/unsubscribe", a.GetVolunteerListTokenState)
 	r.Post("/volunteer-email-list/unsubscribe", a.PostVolunteerListTokenAction)
 
+	// Cover photos staged before their event exists. Any signed-in user may
+	// stage one — it is parked under their own name and invisible until an
+	// event they are entitled to create claims it, so the authorisation that
+	// matters stays on event creation.
+	r.Post("/volunteer-events/staged-photos", withAuth(a.StageVolunteerEventPhoto))
+	r.Delete("/volunteer-events/staged-photos/{photo_id}", withAuth(a.DeleteStagedVolunteerEventPhoto))
+
 	r.Get("/volunteer-events/reminder-preferences", withAuth(a.GetVolunteerReminderPreferences))
 	r.Put("/volunteer-events/reminder-preferences", withAuth(a.SetVolunteerReminderPreferences))
 }

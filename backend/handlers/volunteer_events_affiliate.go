@@ -71,6 +71,13 @@ func (a *AppService) AffiliateRequestVolunteerEvent(w http.ResponseWriter, r *ht
 		return
 	}
 
+	photoIds, errMsg := validateStagedPhotoIds(req.PhotoIds)
+	if errMsg != "" {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(errMsg))
+		return
+	}
+
 	params := &db.CreateVolunteerEventParams{
 		Title:               req.Title,
 		Description:         req.Description,
@@ -89,6 +96,7 @@ func (a *AppService) AffiliateRequestVolunteerEvent(w http.ResponseWriter, r *ht
 		ReviewStatus:        structs.EventReviewPending,
 		MintCodes:           false,
 		RecurrenceFrequency: structs.RecurrenceNone,
+		StagedPhotoIds:      photoIds,
 	}
 
 	if req.Recurrence != nil {

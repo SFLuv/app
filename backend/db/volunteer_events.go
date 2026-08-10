@@ -467,6 +467,11 @@ type CreateVolunteerEventParams struct {
 	// Admin-created events are approved on creation so this is true; an
 	// affiliate request stays pending and mints nothing until approval.
 	MintCodes bool
+
+	// StagedPhotoIds are cover photos already uploaded by Owner and waiting for
+	// an event. They are attached inside the creation transaction, so an event
+	// is never published missing the artwork it was created with.
+	StagedPhotoIds []string
 }
 
 // CreateVolunteerEvent inserts the event and, when approved, mints one QR code
@@ -528,6 +533,13 @@ func (s *BotDB) CreateVolunteerEvent(ctx context.Context, p *CreateVolunteerEven
 		return "", fmt.Errorf("error inserting volunteer event: %s", err)
 	}
 
+	// Inside the transaction: a photo that cannot be claimed rolls the event
+	// back with it, so creation is all-or-nothing rather than leaving a
+	// published event with artwork missing.
+	if err := attachStagedPhotos(ctx, tx, id, p.Owner, p.StagedPhotoIds); err != nil {
+		return "", err
+	}
+
 	if p.MintCodes {
 		for range p.MaxParticipants {
 			if _, err := tx.Exec(ctx, `
@@ -567,7 +579,7 @@ func nullableUnix(value int64) any {
 // approvedBy is the approver to record at insert time.
 //
 // Empty rather than NULL for anything not already approved. events.approved_by
-// is TEXT NOT NULL DEFAULT '' — the same "unset means empty string" convention
+// is TEXT NOT NULL DEFAULT ” — the same "unset means empty string" convention
 // as requested_by beside it — and a column default only applies when the column
 // is left out of the INSERT. This one is always listed, so passing NULL here
 // violated the constraint outright and every affiliate request (which is
@@ -699,6 +711,80 @@ func (s *BotDB) AddVolunteerEventPhoto(ctx context.Context, eventId string, data
 	}
 
 	return id, nil
+}
+
+// StageVolunteerEventPhoto stores a cover photo that has no event yet.
+//
+// Uploading only becomes possible once an event exists is what forced the old
+// create-then-attach dance; a staged photo can be uploaded the moment it is
+// chosen and claimed later. `staged_by` is who may claim it.
+func (s *BotDB) StageVolunteerEventPhoto(ctx context.Context, stagedBy string, data []byte, contentType string, fileName string, width int, height int) (string, error) {
+	id := uuid.NewString()
+
+	if _, err := s.db.Exec(ctx, `
+		INSERT INTO event_photos (id, event_id, staged_by, position, file_name, content_type, photo_data, size_bytes, width, height)
+		VALUES ($1, NULL, $2, 0, $3, $4, $5, $6, $7, $8);
+	`, id, stagedBy, fileName, contentType, data, len(data), width, height); err != nil {
+		return "", fmt.Errorf("error staging event photo: %s", err)
+	}
+
+	return id, nil
+}
+
+// attachStagedPhotos claims staged photos for a freshly created event.
+//
+// Runs inside the creation transaction and is strict on purpose: an id that is
+// missing, already attached, or staged by somebody else fails the whole
+// creation. Quietly dropping one would publish an event missing a photo its
+// author believed they had added, which is precisely the outcome the staging
+// flow exists to prevent. Order is preserved so the first photo chosen stays
+// the cover.
+func attachStagedPhotos(ctx context.Context, tx pgx.Tx, eventId string, owner string, photoIds []string) error {
+	for position, photoId := range photoIds {
+		trimmed := strings.TrimSpace(photoId)
+		if trimmed == "" {
+			return fmt.Errorf("error attaching event photo: empty photo id")
+		}
+
+		tag, err := tx.Exec(ctx, `
+			UPDATE event_photos
+			SET event_id = $1, position = $2, staged_by = ''
+			WHERE id = $3 AND event_id IS NULL AND staged_by = $4;
+		`, eventId, position, trimmed, owner)
+		if err != nil {
+			return fmt.Errorf("error attaching event photo %s: %s", trimmed, err)
+		}
+		if tag.RowsAffected() == 0 {
+			return fmt.Errorf("error attaching event photo %s: it is no longer available", trimmed)
+		}
+	}
+
+	return nil
+}
+
+// DeleteStagedVolunteerEventPhoto discards a staged photo, for a client that
+// removes one before submitting. Scoped to the uploader so an id cannot be used
+// to delete somebody else's.
+func (s *BotDB) DeleteStagedVolunteerEventPhoto(ctx context.Context, photoId string, stagedBy string) error {
+	if _, err := s.db.Exec(ctx, `
+		DELETE FROM event_photos WHERE id = $1 AND event_id IS NULL AND staged_by = $2;
+	`, photoId, stagedBy); err != nil {
+		return fmt.Errorf("error deleting staged event photo: %s", err)
+	}
+	return nil
+}
+
+// ExpireStagedVolunteerEventPhotos clears staged photos nobody ever attached —
+// a form opened, files chosen, and the tab closed. Without this they would
+// accumulate as bytes in Postgres that no event will ever reference.
+func (s *BotDB) ExpireStagedVolunteerEventPhotos(ctx context.Context, olderThanUnix int64) (int64, error) {
+	tag, err := s.db.Exec(ctx, `
+		DELETE FROM event_photos WHERE event_id IS NULL AND created_at < $1;
+	`, olderThanUnix)
+	if err != nil {
+		return 0, fmt.Errorf("error expiring staged event photos: %s", err)
+	}
+	return tag.RowsAffected(), nil
 }
 
 func (s *BotDB) DeleteVolunteerEventPhoto(ctx context.Context, photoId string) error {

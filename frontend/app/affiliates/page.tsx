@@ -64,16 +64,34 @@ export default function AffiliatesPage() {
     }
   }
 
-  const uploadPhoto = async (eventId: string, file: File): Promise<boolean> => {
-    try {
-      const form = new FormData()
-      form.append("photo", file)
-      const res = await authFetch(`/admin/volunteer-events/${eventId}/photos`, { method: "POST", body: form })
-      return res.ok
-    } catch {
-      return false
+  /**
+   * Uploads a cover photo before its event exists and returns the staged id.
+   *
+   * Throws rather than returning a flag: the message is shown against the
+   * specific thumbnail that failed, and a silent false would leave the author
+   * guessing which file the modal was unhappy about.
+   */
+  const stagePhoto = async (file: File): Promise<string> => {
+    const form = new FormData()
+    form.append("photo", file)
+    const res = await authFetch("/volunteer-events/staged-photos", { method: "POST", body: form })
+    if (!res.ok) {
+      throw new Error((await res.text()).trim() || "Could not upload that photo.")
     }
+    const staged = await res.json().catch(() => null)
+    const id = typeof staged?.id === "string" ? staged.id.trim() : ""
+    if (id === "") {
+      throw new Error("Could not upload that photo.")
+    }
+    return id
   }
+
+  /** Drops a staged photo the author removed. Failure is not worth surfacing:
+   *  the server sweeps anything never attached. */
+  const discardPhoto = async (photoId: string): Promise<void> => {
+    await authFetch(`/volunteer-events/staged-photos/${photoId}`, { method: "DELETE" }).catch(() => undefined)
+  }
+
 
   if (status === "loading") {
     return (
@@ -142,7 +160,8 @@ export default function AffiliatesPage() {
         open={requestModalOpen}
         onOpenChange={setRequestModalOpen}
         createEvent={requestEvent}
-        uploadPhoto={uploadPhoto}
+        stagePhoto={stagePhoto}
+        discardPhoto={discardPhoto}
         // Affiliates request rather than spend, so there is no balance to check
         // against here; the faucet is verified by the admin at approval.
         unallocatedBalance={Number.MAX_SAFE_INTEGER}
