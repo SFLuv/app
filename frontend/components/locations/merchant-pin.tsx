@@ -4,6 +4,7 @@ import { memo } from "react"
 
 import {
   ICON_TEXT_COLOR,
+  ICON_TEXT_NUDGE_EM,
   PIN_EDGE_COLOR,
   PIN_GLYPH_RADIUS,
   PIN_RING_RADIUS,
@@ -78,7 +79,7 @@ export const MerchantIcon = memo(function MerchantIcon({
         letterSpacing: "-0.01em",
       }}
     >
-      {initials}
+      <span style={{ transform: `translateY(${ICON_TEXT_NUDGE_EM}em)` }}>{initials}</span>
     </div>
   )
 })

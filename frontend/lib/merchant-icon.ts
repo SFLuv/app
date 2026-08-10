@@ -49,17 +49,28 @@ export const PIN_HEAD_CENTRE = { x: 13, y: 13 }
 /**
  * Radius of the state-coloured circle, in viewBox units.
  *
- * Well inside the head's own radius of 13, so the white body reads as a
- * generous border around the colour rather than a hairline.
+ * Inside the head's own radius of 13, leaving the white body as a thin rim
+ * around the colour. Filling the head edge to edge was tried and lost the
+ * outline that separates a pin from whatever it happens to sit on.
  */
-export const PIN_RING_RADIUS = 9.6
+export const PIN_RING_RADIUS = 10.4
 /**
  * Radius of the merchant's artwork, in viewBox units.
  *
  * Smaller than the coloured circle by design: the difference is what turns the
  * colour into a visible ring around the mark instead of a disc behind it.
  */
-export const PIN_GLYPH_RADIUS = 7.1
+export const PIN_GLYPH_RADIUS = 7.4
+/**
+ * Downward nudge for generated initials, as a fraction of their font size.
+ *
+ * Centring a line box is not the same as centring what is drawn in it: with a
+ * line height of 1, the box reserves room below the baseline for descenders
+ * that capital letters never use, so "MC" sits visibly above the middle of its
+ * circle. This pushes the glyphs back onto the optical centre.
+ */
+export const ICON_TEXT_NUDGE_EM = 0.06
+
 /** A hairline so a white pin still has an edge on a pale map. */
 export const PIN_EDGE_COLOR = "rgba(11, 48, 59, 0.18)"
 
