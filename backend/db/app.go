@@ -2236,6 +2236,9 @@ func (s *AppDB) CreateTables() error {
 
 	_, err = s.db.Exec(context.Background(), `
 			ALTER TABLE locations
+			ADD COLUMN IF NOT EXISTS listing_source TEXT NOT NULL DEFAULT 'google_place';
+
+			ALTER TABLE locations
 			ADD COLUMN IF NOT EXISTS approved_at TIMESTAMP;
 
 			ALTER TABLE locations

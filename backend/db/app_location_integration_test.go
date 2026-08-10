@@ -26,6 +26,7 @@ DROP TABLE IF EXISTS locations;
 CREATE TABLE locations (
 	id SERIAL PRIMARY KEY,
 	google_id TEXT,
+	listing_source TEXT NOT NULL DEFAULT 'google_place',
 	owner_id TEXT,
 	name TEXT,
 	description TEXT,
@@ -441,5 +442,63 @@ func TestIntegrationGooglePlaceUpdateIsOwnerScopedAndRejectsTakenPlaces(t *testi
 
 	if got := readLocation(t, a, first.ID); got.GoogleID != "ChIJfirst" {
 		t.Fatalf("google_id = %q; want the original", got.GoogleID)
+	}
+}
+
+// Manual listings carry no place id. Stored as ” they would all collide on
+// locations_google_id_active_idx, which covers google_id IS NOT NULL — so the
+// second shop with no Google presence could never onboard. NULL is what makes
+// the partial index ignore them.
+func TestIntegrationAddLocationAllowsManyManualListings(t *testing.T) {
+	a := newLocationTestDB(t)
+	ctx := context.Background()
+
+	first := newTestLocation("", "did:privy:owner1")
+	first.ListingSource = structs.ListingSourceManual
+	first.Name = "Corner Bodega"
+	if err := a.AddLocation(ctx, first); err != nil {
+		t.Fatalf("first manual AddLocation() error = %v", err)
+	}
+
+	second := newTestLocation("", "did:privy:owner2")
+	second.ListingSource = structs.ListingSourceManual
+	second.Name = "Second Street Barbers"
+	if err := a.AddLocation(ctx, second); err != nil {
+		t.Fatalf("second manual AddLocation() error = %v; want manual listings not to collide", err)
+	}
+
+	var googleID *string
+	var listingSource string
+	err := a.db.QueryRow(ctx,
+		`SELECT google_id, listing_source FROM locations WHERE id = $1;`, first.ID,
+	).Scan(&googleID, &listingSource)
+	if err != nil {
+		t.Fatalf("reading stored manual location: %v", err)
+	}
+	if googleID != nil {
+		t.Errorf("google_id = %q; want NULL so the partial unique index skips the row", *googleID)
+	}
+	if listingSource != structs.ListingSourceManual {
+		t.Errorf("listing_source = %q; want %q", listingSource, structs.ListingSourceManual)
+	}
+}
+
+// A Google listing must still be deduplicated — the manual path widens who can
+// onboard, not how many times the same Google business can.
+func TestIntegrationAddLocationStillRejectsDuplicateGooglePlaceAlongsideManual(t *testing.T) {
+	a := newLocationTestDB(t)
+	ctx := context.Background()
+
+	manual := newTestLocation("", "did:privy:owner1")
+	manual.ListingSource = structs.ListingSourceManual
+	if err := a.AddLocation(ctx, manual); err != nil {
+		t.Fatalf("manual AddLocation() error = %v", err)
+	}
+
+	if err := a.AddLocation(ctx, newTestLocation("ChIJshiba", "did:privy:owner2")); err != nil {
+		t.Fatalf("google AddLocation() error = %v", err)
+	}
+	if err := a.AddLocation(ctx, newTestLocation("ChIJshiba", "did:privy:owner3")); err != ErrDuplicateGoogleLocation {
+		t.Fatalf("duplicate google AddLocation() error = %v; want ErrDuplicateGoogleLocation", err)
 	}
 }

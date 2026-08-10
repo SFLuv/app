@@ -77,9 +77,35 @@ func (v *VerifiedGooglePlace) ApplyTo(location *Location) {
 	OpeningHours [][2]float64 `json:"opening_hours"`
 }*/
 
+// How a merchant location entered the system. Google is still the primary and
+// preferred path; manual exists because a business without a Google Business
+// Profile has no place id to select and was previously unable to onboard at all.
+const (
+	ListingSourceGooglePlace = "google_place"
+	ListingSourceManual      = "manual"
+)
+
+// EffectiveListingSource resolves an unset source to the Google path. Validation
+// must not depend on NormalizeForSubmission having run first, and defaulting the
+// other way would mean an omitted field silently opts a submission out of
+// server-side place verification.
+func (l *Location) EffectiveListingSource() string {
+	if l == nil || l.ListingSource == "" {
+		return ListingSourceGooglePlace
+	}
+	return l.ListingSource
+}
+
 type Location struct {
-	ID                 uint                    `json:"id"`
-	GoogleID           string                  `json:"google_id"`
+	ID uint `json:"id"`
+	// GoogleID is empty for manual listings. It is written to the database as
+	// NULL in that case so the partial unique index on google_id does not treat
+	// every manual row as a duplicate of the last.
+	GoogleID string `json:"google_id"`
+	// ListingSource defaults to google_place when a client omits it, so an older
+	// client cannot silently downgrade into the manual path and skip the
+	// server-side Places verification that google_place submissions get.
+	ListingSource      string                  `json:"listing_source"`
 	OwnerID            string                  `json:"owner_id"`
 	Name               string                  `json:"name"`
 	Description        string                  `json:"description"`

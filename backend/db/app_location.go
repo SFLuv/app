@@ -93,7 +93,7 @@ func (a *AppDB) GetLocation(ctx context.Context, id uint64) (*structs.PublicLoca
 	row := a.db.QueryRow(ctx, `
 		SELECT
 			l.id,
-			l.google_id,
+			COALESCE(l.google_id, ''),
 			l.name,
 			l.approval,
 			COALESCE(
@@ -240,7 +240,7 @@ func (s *AppDB) GetLocations(ctx context.Context, r *structs.LocationsPageReques
 	rows, err := s.db.Query(ctx, `
 		SELECT
 			l.id,
-			l.google_id,
+			COALESCE(l.google_id, ''),
 			l.name,
 			COALESCE(
 				NULLIF(TRIM(default_payment_wallet.wallet_address), ''),
@@ -385,7 +385,8 @@ func (s *AppDB) GetAuthedLocations(ctx context.Context, r *structs.LocationsPage
 	rows, err := s.db.Query(ctx, `
 		SELECT
 			l.id,
-			l.google_id,
+			COALESCE(l.google_id, ''),
+			COALESCE(l.listing_source, 'google_place'),
 			l.owner_id,
 			l.name,
 			l.description,
@@ -494,6 +495,7 @@ func (s *AppDB) GetAuthedLocations(ctx context.Context, r *structs.LocationsPage
 		err = rows.Scan(
 			&location.ID,
 			&location.GoogleID,
+			&location.ListingSource,
 			&location.OwnerID,
 			&location.Name,
 			&location.Description,
@@ -675,20 +677,27 @@ func (a *AppDB) AddLocation(ctx context.Context, location *structs.Location) err
 	// Checked inside the transaction so two concurrent submissions of the same
 	// business cannot both pass. The partial unique index added in schema 1.24
 	// is the backstop when it exists.
-	var duplicateExists bool
-	err = tx.QueryRow(ctx, `
-		SELECT EXISTS (
-			SELECT 1
-			FROM locations
-			WHERE google_id = $1
-			AND active = TRUE
-		);
-	`, location.GoogleID).Scan(&duplicateExists)
-	if err != nil {
-		return fmt.Errorf("error checking for duplicate location: %w", err)
-	}
-	if duplicateExists {
-		return ErrDuplicateGoogleLocation
+	//
+	// Skipped for manual listings: they have no place id, so there is nothing to
+	// deduplicate on. Two manual submissions for the same shop are caught by the
+	// admin reviewing the queue, not here — which is why listing_source is stored
+	// and surfaced to that review.
+	if location.GoogleID != "" {
+		var duplicateExists bool
+		err = tx.QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1
+				FROM locations
+				WHERE google_id = $1
+				AND active = TRUE
+			);
+		`, location.GoogleID).Scan(&duplicateExists)
+		if err != nil {
+			return fmt.Errorf("error checking for duplicate location: %w", err)
+		}
+		if duplicateExists {
+			return ErrDuplicateGoogleLocation
+		}
 	}
 
 	var locationID uint
@@ -726,14 +735,18 @@ func (a *AppDB) AddLocation(ctx context.Context, location *structs.Location) err
 				service_stations,
 				tablet_model,
 				messaging_service,
-				reference
+				reference,
+				listing_source
 			) VALUES (
-				$1, $2, $3, $4, $5, $6,
+				-- NULL, not '': the partial unique index covers google_id IS NOT
+				-- NULL, so an empty string would make every manual listing a
+				-- duplicate of the previous one.
+				NULLIF($1, ''), $2, $3, $4, $5, $6,
 				CASE WHEN $6 IS TRUE THEN NOW() ELSE NULL END,
 				$7, $8, $9, $10,
 				$11, $12, $13, $14, $15, $16, $17, $18,
 				$19, $20, $21, $22, $23, $24, $25, $26,
-				$27, $28, $29, $30, $31, $32
+				$27, $28, $29, $30, $31, $32, $33
 			)
 			RETURNING id;`,
 		location.GoogleID,
@@ -768,6 +781,7 @@ func (a *AppDB) AddLocation(ctx context.Context, location *structs.Location) err
 		location.TabletModel,
 		location.MessagingService,
 		location.Reference,
+		location.ListingSource,
 	).Scan(&locationID)
 	if err != nil {
 		return fmt.Errorf("error adding location to locations table: %w", err)
@@ -962,7 +976,8 @@ func (a *AppDB) GetLocationsByUser(ctx context.Context, userId string) ([]*struc
 	rows, err := a.db.Query(ctx, `
     SELECT
         l.id,
-		l.google_id,
+		COALESCE(l.google_id, ''),
+		COALESCE(l.listing_source, 'google_place'),
 		l.owner_id,
 		l.name,
 		l.description,
@@ -1071,6 +1086,7 @@ func (a *AppDB) GetLocationsByUser(ctx context.Context, userId string) ([]*struc
 		err := rows.Scan(
 			&location.ID,
 			&location.GoogleID,
+			&location.ListingSource,
 			&location.OwnerID,
 			&location.Name,
 			&location.Description,

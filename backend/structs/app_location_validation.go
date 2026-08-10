@@ -84,6 +84,16 @@ func (l *Location) NormalizeForSubmission() {
 	}
 
 	trim(&l.GoogleID)
+	trim(&l.ListingSource)
+	// Absent means the Google path. Defaulting the other way would let any
+	// client skip place verification simply by omitting the field.
+	if l.ListingSource == "" {
+		l.ListingSource = ListingSourceGooglePlace
+	}
+	if l.ListingSource == ListingSourceManual {
+		l.GoogleID = ""
+	}
+
 	trim(&l.Name)
 	trim(&l.Description)
 	trim(&l.Type)
@@ -117,6 +127,34 @@ func (l *Location) NormalizeForSubmission() {
 	l.OpeningHours = hours
 }
 
+// formattedStreetLine rebuilds the comma-joined address the way Google and the
+// browser autocomplete render it ("1234 Main St, San Francisco, CA 94110").
+// Comparing the business name against this as well as the bare street catches
+// the merchant who pastes the whole suggestion into the name field, which the
+// street-only comparison misses.
+func (l *Location) formattedStreetLine() string {
+	if l == nil {
+		return ""
+	}
+
+	cityState := strings.TrimSpace(strings.Join(filterEmpty(l.City, l.State), ", "))
+	if l.ZIP != "" {
+		cityState = strings.TrimSpace(cityState + " " + l.ZIP)
+	}
+
+	return strings.Join(filterEmpty(l.Street, cityState), ", ")
+}
+
+func filterEmpty(values ...string) []string {
+	kept := make([]string, 0, len(values))
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			kept = append(kept, trimmed)
+		}
+	}
+	return kept
+}
+
 // ValidateForSubmission checks the invariants the map depends on. It runs after
 // Google verification has overwritten the Google-derived fields, so a failure
 // here means the merchant-authored part of the form is unusable.
@@ -125,12 +163,18 @@ func (l *Location) ValidateForSubmission() error {
 		return newLocationValidationError("location", "location is required")
 	}
 
+	listingSource := l.EffectiveListingSource()
+	switch listingSource {
+	case ListingSourceGooglePlace, ListingSourceManual:
+	default:
+		return newLocationValidationError("listing_source", "Unknown listing source.")
+	}
+
 	required := []struct {
 		field string
 		label string
 		value string
 	}{
-		{"google_id", "Google place", l.GoogleID},
 		{"name", "Business name", l.Name},
 		{"street", "Street address", l.Street},
 		{"city", "City", l.City},
@@ -139,6 +183,18 @@ func (l *Location) ValidateForSubmission() error {
 		{"contact_lastname", "Contact last name", l.ContactLastName},
 		{"admin_email", "Contact email", l.AdminEmail},
 		{"admin_phone", "Contact phone", l.AdminPhone},
+	}
+	// A Google listing must carry the place id it was verified against. A manual
+	// listing must not carry one at all — accepting both would leave it ambiguous
+	// which half of the record Google actually vouched for.
+	if listingSource == ListingSourceGooglePlace {
+		required = append(required, struct {
+			field string
+			label string
+			value string
+		}{"google_id", "Google place", l.GoogleID})
+	} else if l.GoogleID != "" {
+		return newLocationValidationError("google_id", "A manually entered listing cannot carry a Google place id.")
 	}
 	for _, entry := range required {
 		if entry.value == "" {
@@ -163,11 +219,18 @@ func (l *Location) ValidateForSubmission() error {
 		}
 	}
 
-	// The Shiba failure mode: a place that is really a postal address comes back
-	// with its street address as the display name, so the merchant lands on the
-	// map named "1234 Main St". Google verification catches this upstream; this
-	// is the backstop for deployments with no server-side Places key.
-	if strings.EqualFold(l.Name, l.Street) {
+	// The Shiba failure mode: a merchant ends up on the map named "1234 Main St".
+	// It arrives two ways. On the Google path a place that is really a postal
+	// address returns its street address as the display name — Places
+	// verification catches that upstream and this is the backstop for
+	// deployments with no server-side key. On the manual path there is no
+	// upstream check at all: the merchant filled the address in via autocomplete
+	// and left the name field holding the same text, which is exactly what this
+	// whole flow exists to catch.
+	if strings.EqualFold(l.Name, l.Street) || strings.EqualFold(l.Name, l.formattedStreetLine()) {
+		if listingSource == ListingSourceManual {
+			return newLocationValidationError("name", "Enter your business name — that looks like the street address, not a name.")
+		}
 		return newLocationValidationError("name", "The selected result looks like a street address rather than a business. Search for your business by name.")
 	}
 

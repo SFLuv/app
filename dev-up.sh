@@ -628,9 +628,62 @@ else
 fi
 
 # ----------------------------------------------------------------------------
-# 2. Chain (anvil fork of Celo, chain id preserved)
+# 2. Databases (clone production — READ-ONLY against prod)
+#
+# Cloned BEFORE the chain is forked, deliberately. The dump can run for twenty
+# minutes; if anvil forked first, Celo would advance past the fork while the
+# dump ran and the cloned ponder index would claim coverage of blocks the fork
+# has never seen (ponder_sync.intervals), which makes ponder abort on startup.
+# Cloning first means the fork's "latest" is always at or past the index head.
 # ----------------------------------------------------------------------------
-c_blue "[2/10] Chain (anvil fork of Celo, :$ANVIL_PORT)"
+if [[ "${SKIP_DB_CLONE:-0}" == "1" ]]; then
+  c_blue "[2/10] Databases (skipped — reusing existing local clones)"
+else
+  c_blue "[2/10] Databases (cloning production: ${PROD_DB_NAMES:-app bot ponder})"
+  [[ -n "${PROD_DB_HOST_PORT:-}" && -n "${PROD_DB_USER:-}" ]] \
+    || die "  PROD_DB_HOST_PORT / PROD_DB_USER must be set in .dev.env (or use --skip-db-clone)"
+  PROD_HOST="${PROD_DB_HOST_PORT%%:*}"
+  PROD_PORT="${PROD_DB_HOST_PORT##*:}"
+  # Entries are "prod_name" or "prod_name:local_name". The mapping form exists
+  # because the prod database is not always named what the services read: e.g.
+  # PROD_DB_NAMES="app bot migration_celo_ponder:ponder" clones the Celo ponder
+  # database and restores it locally as `ponder`. Without the mapping the clone
+  # lands in a database nothing is configured to read, and the stale local
+  # `ponder` silently stays in use.
+  for db_entry in ${PROD_DB_NAMES:-app bot ponder}; do
+    prod_db="${db_entry%%:*}"
+    local_db="${db_entry#*:}"
+    [[ "$local_db" == "$db_entry" ]] && local_db="$prod_db"
+
+    if [[ "$prod_db" == "$local_db" ]]; then
+      c_yellow "  cloning ${prod_db}…"
+    else
+      c_yellow "  cloning ${prod_db} → local ${local_db}…"
+    fi
+
+    PGPASSWORD="${PROD_DB_PASSWORD:-}" "$PG_DUMP_BIN" -h "$PROD_HOST" -p "$PROD_PORT" -U "$PROD_DB_USER" \
+      -d "$prod_db" -Fc --no-owner --no-acl -f "$DUMP_DIR/$local_db.dump" \
+      || die "  pg_dump of $prod_db failed"
+    dropdb  -h "$LOCAL_DB_HOST" -p "$LOCAL_DB_PORT" -U "$LOCAL_DB_USER" --if-exists "$local_db"
+    createdb -h "$LOCAL_DB_HOST" -p "$LOCAL_DB_PORT" -U "$LOCAL_DB_USER" "$local_db"
+    "$PG_RESTORE_BIN" -h "$LOCAL_DB_HOST" -p "$LOCAL_DB_PORT" -U "$LOCAL_DB_USER" \
+      -d "$local_db" --no-owner --no-acl "$DUMP_DIR/$local_db.dump" 2>/dev/null \
+      || c_yellow "  pg_restore for $local_db reported errors (often ignorable ownership noise)"
+    c_green "  $local_db cloned"
+  done
+fi
+
+# Sanitize cloned data that references production: the ponder_hooks table holds
+# production callback URLs which local ponder would POST to during backfill.
+if "${PSQL[@]}" -d "$PONDER_DB_NAME" -c "SELECT 1 FROM pg_tables WHERE tablename = 'ponder_hooks'" 2>/dev/null | grep -q 1; then
+  "${PSQL[@]}" -d "$PONDER_DB_NAME" -c "UPDATE ponder_hooks SET url = 'http://localhost:$BACKEND_PORT/ponder/callback'" >/dev/null
+  c_green "  ponder_hooks repointed at the local backend (no prod callbacks)"
+fi
+
+# ----------------------------------------------------------------------------
+# 3. Chain (anvil fork of Celo, chain id preserved)
+# ----------------------------------------------------------------------------
+c_blue "[3/10] Chain (anvil fork of Celo, :$ANVIL_PORT)"
 free_port "$ANVIL_PORT" anvil
 ANVIL_ARGS=(--fork-url "${CELO_FORK_RPC_URL:-https://forno.celo.org}" --chain-id "$CELO_CHAIN_ID" --host 127.0.0.1 --port "$ANVIL_PORT")
 [[ -n "${ANVIL_FORK_BLOCK:-}" ]] && ANVIL_ARGS+=(--fork-block-number "$ANVIL_FORK_BLOCK")
@@ -645,9 +698,9 @@ done
 c_green "  chain is up ($ANVIL_RPC, chain id $CELO_CHAIN_ID, forked from Celo)"
 
 # ----------------------------------------------------------------------------
-# 3. Community config + engine service
+# 4. Community config + engine service
 # ----------------------------------------------------------------------------
-c_blue "[3/10] Community config + engine (:$ENGINE_PORT)"
+c_blue "[4/10] Community config + engine (:$ENGINE_PORT)"
 ENGINE_URL_LOCAL="$ENGINE_URL" ENGINE_WS_LOCAL="ws://localhost:$ENGINE_PORT" ANVIL_RPC_LOCAL="$ANVIL_RPC" \
 python3 - "$ROOT/backend/celo-community-config.json" "$LOCAL_CONFIG_FILE" <<'PYEOF' || die "  failed to localize community config"
 import json, os, sys
@@ -723,9 +776,9 @@ start_bg engine "$ENGINE_DIR" "$LOG_DIR/engine.log" env "${ENGINE_ENV[@]}" "$TMP
 wait_for "$ENGINE_URL/v1/rpc" "engine" 30 "${PIDS[${#PIDS[@]}-1]}" "$LOG_DIR/engine.log" || exit 1
 
 # ----------------------------------------------------------------------------
-# 4. Paymaster sponsor (local payer key: fund, whitelist, seed)
+# 5. Paymaster sponsor (local payer key: fund, whitelist, seed)
 # ----------------------------------------------------------------------------
-c_blue "[4/10] Paymaster sponsor (prank + whitelist)"
+c_blue "[5/10] Paymaster sponsor (prank + whitelist)"
 
 # Persist the payer key across reruns.
 PAYER_KEY_FILE="$TMP_DIR/payer.key"
@@ -780,7 +833,7 @@ done
 c_green "  engine sponsor row seeded ($SPONSOR_TABLE)"
 
 # ----------------------------------------------------------------------------
-# 4b. Faucet (local bot key: generate, fund with gas, clone production balance)
+# 5b. Faucet (local bot key: generate, fund with gas, clone production balance)
 # ----------------------------------------------------------------------------
 # The backend's faucet ("bot") signs every reward payout and its balance gates
 # event creation and workflow approval. Without BOT_KEY/BOT_ADDRESS the balance
@@ -788,7 +841,7 @@ c_green "  engine sponsor row seeded ($SPONSOR_TABLE)"
 # "Error getting unallocated faucet balance" and blocked event creation
 # entirely. Production keys must never come near a dev boot, so we generate a
 # throwaway faucet and clone the production BALANCE onto it from the fork.
-c_blue "[4b/10] Faucet (local bot key + cloned balance)"
+c_blue "[5b/10] Faucet (local bot key + cloned balance)"
 
 FAUCET_KEY_FILE="$TMP_DIR/faucet.key"
 if [[ ! -f "$FAUCET_KEY_FILE" ]]; then
@@ -855,58 +908,32 @@ fi
 c_green "  faucet $FAUCET_ADDRESS_LOCAL ready (gas funded, ${TOKEN_DECIMAL_PLACES}-decimal token)"
 
 # ----------------------------------------------------------------------------
-# 5. Databases (clone production — READ-ONLY against prod)
-# ----------------------------------------------------------------------------
-if [[ "${SKIP_DB_CLONE:-0}" == "1" ]]; then
-  c_blue "[5/10] Databases (skipped — reusing existing local clones)"
-else
-  c_blue "[5/10] Databases (cloning production: ${PROD_DB_NAMES:-app bot ponder})"
-  [[ -n "${PROD_DB_HOST_PORT:-}" && -n "${PROD_DB_USER:-}" ]] \
-    || die "  PROD_DB_HOST_PORT / PROD_DB_USER must be set in .dev.env (or use --skip-db-clone)"
-  PROD_HOST="${PROD_DB_HOST_PORT%%:*}"
-  PROD_PORT="${PROD_DB_HOST_PORT##*:}"
-  # Entries are "prod_name" or "prod_name:local_name". The mapping form exists
-  # because the prod database is not always named what the services read: e.g.
-  # PROD_DB_NAMES="app bot migration_celo_ponder:ponder" clones the Celo ponder
-  # database and restores it locally as `ponder`. Without the mapping the clone
-  # lands in a database nothing is configured to read, and the stale local
-  # `ponder` silently stays in use.
-  for db_entry in ${PROD_DB_NAMES:-app bot ponder}; do
-    prod_db="${db_entry%%:*}"
-    local_db="${db_entry#*:}"
-    [[ "$local_db" == "$db_entry" ]] && local_db="$prod_db"
-
-    if [[ "$prod_db" == "$local_db" ]]; then
-      c_yellow "  cloning ${prod_db}…"
-    else
-      c_yellow "  cloning ${prod_db} → local ${local_db}…"
-    fi
-
-    PGPASSWORD="${PROD_DB_PASSWORD:-}" "$PG_DUMP_BIN" -h "$PROD_HOST" -p "$PROD_PORT" -U "$PROD_DB_USER" \
-      -d "$prod_db" -Fc --no-owner --no-acl -f "$DUMP_DIR/$local_db.dump" \
-      || die "  pg_dump of $prod_db failed"
-    dropdb  -h "$LOCAL_DB_HOST" -p "$LOCAL_DB_PORT" -U "$LOCAL_DB_USER" --if-exists "$local_db"
-    createdb -h "$LOCAL_DB_HOST" -p "$LOCAL_DB_PORT" -U "$LOCAL_DB_USER" "$local_db"
-    "$PG_RESTORE_BIN" -h "$LOCAL_DB_HOST" -p "$LOCAL_DB_PORT" -U "$LOCAL_DB_USER" \
-      -d "$local_db" --no-owner --no-acl "$DUMP_DIR/$local_db.dump" 2>/dev/null \
-      || c_yellow "  pg_restore for $local_db reported errors (often ignorable ownership noise)"
-    c_green "  $local_db cloned"
-  done
-fi
-
-# Sanitize cloned data that references production: the ponder_hooks table holds
-# production callback URLs which local ponder would POST to during backfill.
-if "${PSQL[@]}" -d "$PONDER_DB_NAME" -c "SELECT 1 FROM pg_tables WHERE tablename = 'ponder_hooks'" 2>/dev/null | grep -q 1; then
-  "${PSQL[@]}" -d "$PONDER_DB_NAME" -c "UPDATE ponder_hooks SET url = 'http://localhost:$BACKEND_PORT/ponder/callback'" >/dev/null
-  c_green "  ponder_hooks repointed at the local backend (no prod callbacks)"
-fi
-
-# ----------------------------------------------------------------------------
 # 6. Ponder (indexes the fork into the cloned db)
 # ----------------------------------------------------------------------------
 if [[ "$RUN_PONDER" -eq 1 ]]; then
   c_blue "[6/10] Ponder (:$PONDER_PORT)"
   free_port "$PONDER_PORT" ponder
+
+  # A cloned ponder index that reaches past the block the fork is pinned to
+  # makes ponder abort with "Finalized block for chain <id> cannot move
+  # backwards". Cloning before the fork (step 2) makes that impossible, but
+  # --skip-db-clone can pair a fresh fork with a clone from an earlier session.
+  #
+  # Warn rather than repair. Rewinding the watermark looks like the fix and is
+  # not: ponder_sync.intervals still claims the higher range, so ponder
+  # re-indexes blocks whose rows already exist and dies on primary-key conflicts
+  # instead ("Failed to write cached database rows"). The real remedies are
+  # re-cloning or pinning ANVIL_FORK_BLOCK, both of which are the operator's call.
+  if "${PSQL[@]}" -d "$PONDER_DB_NAME" -tAc \
+      "SELECT to_regclass('ponder_sync.intervals') IS NOT NULL;" 2>/dev/null | grep -q '^t$'; then
+    IDX_HEAD="$("${PSQL[@]}" -d "$PONDER_DB_NAME" -tAc \
+      "SELECT COALESCE(MAX(UPPER(r)), 0) FROM ponder_sync.intervals i, UNNEST(i.blocks) r WHERE i.chain_id = $CELO_CHAIN_ID;" 2>/dev/null | tr -d '[:space:]')"
+    FORK_HEAD="$(cast block-number --rpc-url "$ANVIL_RPC" 2>/dev/null || true)"
+    if [[ "${IDX_HEAD:-0}" =~ ^[0-9]+$ && "${FORK_HEAD:-}" =~ ^[0-9]+$ && "$IDX_HEAD" -gt "$FORK_HEAD" ]]; then
+      c_yellow "  cloned ponder index reaches block $IDX_HEAD but the fork is pinned at $FORK_HEAD"
+      c_yellow "  ponder will refuse to start — re-clone (drop --skip-db-clone), or set ANVIL_FORK_BLOCK=$IDX_HEAD"
+    fi
+  fi
   if [[ ! -d "$ROOT/ponder/node_modules" ]]; then
     c_yellow "  installing ponder deps…"
     ( cd "$ROOT/ponder" && npm install --no-audit --no-fund >"$LOG_DIR/ponder-install.log" 2>&1 )

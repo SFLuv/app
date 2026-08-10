@@ -12,7 +12,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { AlertTriangle, Loader2 } from "lucide-react"
 import PlaceAutocomplete from "./google_place_finder"
-import { AuthedLocation, GoogleSubLocation } from "@/types/location"
+import { AuthedLocation, PlaceSelection } from "@/types/location"
 import { useLocation } from "@/context/LocationProvider"
 
 const posOptions = ["Square", "Shopify", "Toast", "Other"]
@@ -58,6 +58,8 @@ type MerchantFormValues = {
   description: string
   businessPhone: string
   businessEmail: string
+  manualBusinessName: string
+  manualBusinessType: string
   contactFirstName: string
   contactLastName: string
   contactPhone: string
@@ -83,6 +85,8 @@ const emptyForm: MerchantFormValues = {
   description: "",
   businessPhone: "",
   businessEmail: "",
+  manualBusinessName: "",
+  manualBusinessType: "",
   contactFirstName: "",
   contactLastName: "",
   contactPhone: "",
@@ -120,6 +124,10 @@ const merchantFormSchema = z
     description: requiredText("Business description"),
     businessPhone: z.string().trim().max(64, "Business phone is too long."),
     businessEmail: optionalEmail,
+    // Required only on the manual path; enforced in handleSubmit, which is the
+    // only place that knows which path the merchant took.
+    manualBusinessName: z.string().trim().max(512, "Business name must be 512 characters or fewer."),
+    manualBusinessType: z.string().trim().max(512, "Business category must be 512 characters or fewer."),
     contactFirstName: requiredText("First name", 128),
     contactLastName: requiredText("Last name", 128),
     contactPhone: requiredText("Phone number", 64),
@@ -240,7 +248,7 @@ export function MerchantApprovalForm() {
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({})
-  const [googlePlace, setGooglePlace] = useState<GoogleSubLocation | null>(null)
+  const [placeSelection, setPlaceSelection] = useState<PlaceSelection | null>(null)
   const [values, setValues] = useState<MerchantFormValues>(emptyForm)
 
   const setField = useCallback(<K extends keyof MerchantFormValues>(field: K, value: MerchantFormValues[K]) => {
@@ -257,15 +265,15 @@ export function MerchantApprovalForm() {
     setValues(emptyForm)
     setFieldErrors({})
     setFormError(null)
-    setGooglePlace(null)
+    setPlaceSelection(null)
   }
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault()
     setFormError(null)
 
-    if (!googlePlace) {
-      setFormError('Search for your business and confirm the match before submitting.')
+    if (!placeSelection) {
+      setFormError('Find your business or address and confirm the match before submitting.')
       return
     }
 
@@ -283,28 +291,84 @@ export function MerchantApprovalForm() {
 
     const form = parsed.data
 
+    // On the manual path nothing vouches for the business name but the merchant,
+    // so it is required here and must not simply echo the address they just
+    // picked — that is the exact mistake this path is built to prevent, and the
+    // backend rejects it too.
+    if (placeSelection.source === "manual") {
+      const address = placeSelection.address
+      const typedName = form.manualBusinessName.trim()
+      const addressLine = [address.street, [address.city, address.state].filter(Boolean).join(", ")]
+        .filter(Boolean)
+        .join(", ")
+
+      const nameError = !typedName
+        ? "Enter your business name."
+        : [address.street, addressLine, address.formatted_address].some(
+              (candidate) => candidate && candidate.toLowerCase() === typedName.toLowerCase(),
+            )
+          ? "That is your street address. Enter the name your customers know you by."
+          : null
+
+      if (nameError) {
+        setFieldErrors((current) => ({ ...current, manualBusinessName: nameError }))
+        setFormError("Please fix the highlighted fields before submitting.")
+        return
+      }
+    }
+
     // Google-derived fields come from the confirmed place, merchant-authored
     // fields from the form. Nothing is sourced from both, and the backend
     // re-fetches the Google half from the place id before storing it.
+    //
+    // A manual listing has no place id and no Google-owned half at all: its
+    // address comes from the geocode autocomplete and everything else is typed.
+    const placeFields = placeSelection.source === "google_place"
+      ? {
+          google_id: placeSelection.place.google_id,
+          listing_source: "google_place" as const,
+          name: placeSelection.place.name,
+          type: placeSelection.place.type,
+          street: placeSelection.place.street,
+          city: placeSelection.place.city,
+          state: placeSelection.place.state,
+          zip: placeSelection.place.zip,
+          lat: placeSelection.place.lat,
+          lng: placeSelection.place.lng,
+          website: placeSelection.place.website,
+          image_url: placeSelection.place.image_url,
+          rating: placeSelection.place.rating,
+          maps_page: placeSelection.place.maps_page,
+          opening_hours: placeSelection.place.opening_hours,
+          googlePhone: placeSelection.place.phone,
+        }
+      : {
+          google_id: "",
+          listing_source: "manual" as const,
+          name: form.manualBusinessName,
+          type: form.manualBusinessType,
+          street: placeSelection.address.street,
+          city: placeSelection.address.city,
+          state: placeSelection.address.state,
+          zip: placeSelection.address.zip,
+          lat: placeSelection.address.lat,
+          lng: placeSelection.address.lng,
+          website: "",
+          image_url: "",
+          rating: 0,
+          maps_page: "",
+          opening_hours: [] as string[],
+          googlePhone: "",
+        }
+
+    const { googlePhone, ...locationPlaceFields } = placeFields
+
     const newLocation: AuthedLocation = {
       id: 0,
-      google_id: googlePlace.google_id,
       owner_id: "",
-      name: googlePlace.name,
-      type: googlePlace.type,
-      street: googlePlace.street,
-      city: googlePlace.city,
-      state: googlePlace.state,
-      zip: googlePlace.zip,
-      lat: googlePlace.lat,
-      lng: googlePlace.lng,
-      website: googlePlace.website,
-      image_url: googlePlace.image_url,
-      rating: googlePlace.rating,
-      maps_page: googlePlace.maps_page,
-      opening_hours: googlePlace.opening_hours,
+      ...locationPlaceFields,
       description: form.description,
-      phone: form.businessPhone || googlePlace.phone || "",
+      phone: form.businessPhone || googlePhone || "",
       email: form.businessEmail,
       admin_phone: form.contactPhone,
       admin_email: form.contactEmail,
@@ -349,14 +413,14 @@ export function MerchantApprovalForm() {
               <Label htmlFor="business-name" className="text-black dark:text-white">
                 Search for Your Location Name
               </Label>
-              <PlaceAutocomplete value={googlePlace} onSelect={setGooglePlace} />
+              <PlaceAutocomplete value={placeSelection} onSelect={setPlaceSelection} />
             </div>
 
-            {googlePlace && (
+            {placeSelection?.source === "google_place" && (
               <div className="space-y-2">
                 <Label className="text-black dark:text-white">Street Address</Label>
                 <Input
-                  value={googlePlace.street}
+                  value={placeSelection.place.street}
                   className="text-black dark:text-white bg-secondary"
                   readOnly
                   disabled
@@ -366,6 +430,53 @@ export function MerchantApprovalForm() {
                   Profile and they will follow here.
                 </p>
               </div>
+            )}
+
+            {/* Manual path: the address came from Google but the identity did
+                not, so these two are the only place a name and category exist. */}
+            {placeSelection?.source === "manual" && (
+              <>
+                <div className="space-y-2">
+                  <Label htmlFor="manual-business-name" className="text-black dark:text-white">
+                    Business Name
+                  </Label>
+                  <Input
+                    id="manual-business-name"
+                    value={values.manualBusinessName}
+                    onChange={(event) => setField("manualBusinessName", event.target.value)}
+                    className="text-black dark:text-white bg-secondary"
+                    placeholder="The name your customers know you by"
+                  />
+                  <p className="text-xs text-gray-500 dark:text-gray-400">
+                    This is what appears on the SFLuv map. Do not enter your street address here.
+                  </p>
+                  <FieldError message={fieldErrors.manualBusinessName} />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="manual-business-type" className="text-black dark:text-white">
+                    Business Category
+                  </Label>
+                  <Input
+                    id="manual-business-type"
+                    value={values.manualBusinessType}
+                    onChange={(event) => setField("manualBusinessType", event.target.value)}
+                    className="text-black dark:text-white bg-secondary"
+                    placeholder="Cafe, barber shop, bookstore…"
+                  />
+                  <FieldError message={fieldErrors.manualBusinessType} />
+                </div>
+
+                <div className="space-y-2">
+                  <Label className="text-black dark:text-white">Street Address</Label>
+                  <Input
+                    value={placeSelection.address.street}
+                    className="text-black dark:text-white bg-secondary"
+                    readOnly
+                    disabled
+                  />
+                </div>
+              </>
             )}
 
             <div className="space-y-2">
@@ -396,7 +507,7 @@ export function MerchantApprovalForm() {
                     value={values.businessPhone}
                     onChange={(event) => setField("businessPhone", event.target.value)}
                     className="text-black dark:text-white bg-secondary"
-                    placeholder={googlePlace?.phone || ""}
+                    placeholder={placeSelection?.source === "google_place" ? placeSelection.place.phone : ""}
                   />
                   <FieldError message={fieldErrors.businessPhone} />
                 </div>
