@@ -520,7 +520,7 @@ func (s *BotDB) CreateVolunteerEvent(ctx context.Context, p *CreateVolunteerEven
 		p.RecurrenceFrequency, p.RecurrenceMonthlyMode,
 		p.RecurrenceDayOfMonth, p.RecurrenceWeekOfMonth, p.RecurrenceWeekday,
 		p.RecurrenceUntil, seriesId,
-		approvedByOrNil(p),
+		approvedBy(p),
 		approvedAtOrNil(p),
 		nullableUnix(p.QRExpiresAt),
 	)
@@ -564,13 +564,25 @@ func nullableUnix(value int64) any {
 	return value
 }
 
-func approvedByOrNil(p *CreateVolunteerEventParams) any {
+// approvedBy is the approver to record at insert time.
+//
+// Empty rather than NULL for anything not already approved. events.approved_by
+// is TEXT NOT NULL DEFAULT '' — the same "unset means empty string" convention
+// as requested_by beside it — and a column default only applies when the column
+// is left out of the INSERT. This one is always listed, so passing NULL here
+// violated the constraint outright and every affiliate request (which is
+// created pending, by definition unapproved) failed with SQLSTATE 23502.
+// Admin-created events set a real approver, which is why the bug only ever
+// showed on the affiliate path.
+func approvedBy(p *CreateVolunteerEventParams) string {
 	if p.ReviewStatus == structs.EventReviewApproved {
 		return p.Owner
 	}
-	return nil
+	return ""
 }
 
+// approvedAtOrNil, unlike approvedBy, really does write NULL: approved_at is a
+// nullable BIGINT, and "not approved yet" has no timestamp to invent.
 func approvedAtOrNil(p *CreateVolunteerEventParams) any {
 	if p.ReviewStatus == structs.EventReviewApproved {
 		return time.Now().UTC().Unix()
