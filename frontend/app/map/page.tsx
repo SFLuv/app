@@ -1,6 +1,6 @@
 "use client"
 
-import { memo, useEffect, useRef, useState } from "react"
+import { memo, useCallback, useEffect, useRef, useState } from "react"
 import { Tabs, TabsContent } from "@/components/ui/tabs"
 import { MapView } from "@/components/locations/map-view"
 import { ListView } from "@/components/locations/list-view"
@@ -63,10 +63,12 @@ const LocationMapPageContent = memo(function LocationMapPageContent() {
     }
   }
 
-  const handleSelectLocation = (location: Location) => {
+  // Stable so the memoised map pins are not invalidated on every render of this
+  // page — an unstable callback here would undo the flicker fix in MapView.
+  const handleSelectLocation = useCallback((location: Location) => {
     setSelectedLocation(location)
     setIsModalOpen(true)
-  }
+  }, [])
 
   const handlePayLocation = (location: Location) => {
     if (!isPayEnabled) return

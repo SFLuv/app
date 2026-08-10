@@ -18,6 +18,9 @@ type VerifiedGooglePlace struct {
 	Rating       float64  `json:"rating"`
 	MapsPage     string   `json:"maps_page"`
 	OpeningHours []string `json:"opening_hours"`
+	// Parsed from Google's periods. Empty when Google published none we can
+	// use, which is what lets a nightly sync skip rather than wipe.
+	StructuredHours []LocationDayHours `json:"structured_hours"`
 }
 
 // ApplyTo overwrites the Google-derived fields of a location with the verified
@@ -138,6 +141,11 @@ type Location struct {
 	TipToAddress       string                  `json:"tip_to_address"`
 	PaymentWallets     []LocationPaymentWallet `json:"payment_wallets"`
 	Reference          string                  `json:"reference"`
+	// Structured week, Monday first. Backs the time pickers; OpeningHours is
+	// its rendering and stays for existing readers.
+	Hours []LocationDayHours `json:"hours"`
+	// When true the nightly Google sync leaves this listing's hours alone.
+	HoursManual bool `json:"hours_manual"`
 }
 
 type LocationPaymentWallet struct {
@@ -154,27 +162,28 @@ type LocationWalletSettingsUpdateRequest struct {
 }
 
 type PublicLocation struct {
-	ID           uint     `json:"id"`
-	GoogleID     string   `json:"google_id"`
-	Name         string   `json:"name"`
-	Approval     bool     `json:"approval"`
-	PayToAddress string   `json:"pay_to_address"`
-	TipToAddress string   `json:"tip_to_address"`
-	Description  string   `json:"description"`
-	Type         string   `json:"type"`
-	Street       string   `json:"street"`
-	City         string   `json:"city"`
-	State        string   `json:"state"`
-	ZIP          string   `json:"zip"`
-	Lat          float64  `json:"lat"`
-	Lng          float64  `json:"lng"`
-	Phone        string   `json:"phone"`
-	Email        string   `json:"email"`
-	Website      string   `json:"website"`
-	ImageURL     string   `json:"image_url"`
-	Rating       float64  `json:"rating"`
-	MapsPage     string   `json:"maps_page"`
-	OpeningHours []string `json:"opening_hours"`
+	ID           uint               `json:"id"`
+	GoogleID     string             `json:"google_id"`
+	Name         string             `json:"name"`
+	Approval     bool               `json:"approval"`
+	PayToAddress string             `json:"pay_to_address"`
+	TipToAddress string             `json:"tip_to_address"`
+	Description  string             `json:"description"`
+	Type         string             `json:"type"`
+	Street       string             `json:"street"`
+	City         string             `json:"city"`
+	State        string             `json:"state"`
+	ZIP          string             `json:"zip"`
+	Lat          float64            `json:"lat"`
+	Lng          float64            `json:"lng"`
+	Phone        string             `json:"phone"`
+	Email        string             `json:"email"`
+	Website      string             `json:"website"`
+	ImageURL     string             `json:"image_url"`
+	Rating       float64            `json:"rating"`
+	MapsPage     string             `json:"maps_page"`
+	OpeningHours []string           `json:"opening_hours"`
+	Hours        []LocationDayHours `json:"hours"`
 }
 
 type LocationsPageRequest struct {

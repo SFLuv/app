@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -26,9 +27,9 @@ func normalizeLocationPageRequest(r *structs.LocationsPageRequest) (uint, uint) 
 	return r.Page, count
 }
 
-func (a *AppDB) getLocationHoursByIDs(ctx context.Context, ids []uint64) (map[uint64][]string, error) {
+func (a *AppDB) getLocationHoursByIDs(ctx context.Context, ids []uint64) (map[uint64][]string, map[uint64][]structs.LocationDayHours, error) {
 	if len(ids) == 0 {
-		return map[uint64][]string{}, nil
+		return map[uint64][]string{}, map[uint64][]structs.LocationDayHours{}, nil
 	}
 
 	idParams := make([]int32, 0, len(ids))
@@ -44,7 +45,10 @@ func (a *AppDB) getLocationHoursByIDs(ctx context.Context, ids []uint64) (map[ui
 	rows, err := a.db.Query(ctx, `
 		SELECT
 			location_id,
-			hours
+			hours,
+			weekday,
+			is_closed,
+			intervals
 		FROM
 			location_hours
 		WHERE
@@ -56,24 +60,33 @@ func (a *AppDB) getLocationHoursByIDs(ctx context.Context, ids []uint64) (map[ui
 			weekday ASC;
 	`, idParams)
 	if err != nil {
-		return nil, fmt.Errorf("error querying location hours: %w", err)
+		return nil, nil, fmt.Errorf("error querying location hours: %w", err)
 	}
 	defer rows.Close()
 
 	hoursByLocation := make(map[uint64][]string, len(idParams))
+	daysByLocation := make(map[uint64][]structs.LocationDayHours, len(idParams))
 	for rows.Next() {
 		var locationID int32
 		var hours string
-		if err := rows.Scan(&locationID, &hours); err != nil {
-			return nil, fmt.Errorf("error scanning location hours: %w", err)
+		var day structs.LocationDayHours
+		var intervals []byte
+		if err := rows.Scan(&locationID, &hours, &day.Weekday, &day.IsClosed, &intervals); err != nil {
+			return nil, nil, fmt.Errorf("error scanning location hours: %w", err)
+		}
+		if len(intervals) > 0 {
+			if err := json.Unmarshal(intervals, &day.Intervals); err != nil {
+				return nil, nil, fmt.Errorf("error decoding location hour intervals: %w", err)
+			}
 		}
 		hoursByLocation[uint64(locationID)] = append(hoursByLocation[uint64(locationID)], hours)
+		daysByLocation[uint64(locationID)] = append(daysByLocation[uint64(locationID)], day)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating location hours: %w", err)
+		return nil, nil, fmt.Errorf("error iterating location hours: %w", err)
 	}
 
-	return hoursByLocation, nil
+	return hoursByLocation, daysByLocation, nil
 }
 
 func (a *AppDB) GetLocation(ctx context.Context, id uint64) (*structs.PublicLocation, error) {
@@ -352,13 +365,14 @@ func (s *AppDB) GetLocations(ctx context.Context, r *structs.LocationsPageReques
 		locationIDs = append(locationIDs, uint64(location.ID))
 	}
 
-	hoursByLocation, err := s.getLocationHoursByIDs(ctx, locationIDs)
+	hoursByLocation, daysByLocation, err := s.getLocationHoursByIDs(ctx, locationIDs)
 	if err != nil {
 		return nil, err
 	}
 
 	for _, loc := range locations {
 		loc.OpeningHours = hoursByLocation[uint64(loc.ID)]
+		loc.Hours = daysByLocation[uint64(loc.ID)]
 	}
 
 	return locations, nil
@@ -413,7 +427,8 @@ func (s *AppDB) GetAuthedLocations(ctx context.Context, r *structs.LocationsPage
 				NULLIF(TRIM(l.tipping_wallet_address), ''),
 				''
 			) AS tip_to_address,
-			l.reference
+			l.reference,
+			l.hours_manual
 		FROM locations l
 		LEFT JOIN users u
 			ON u.id = l.owner_id
@@ -514,6 +529,7 @@ func (s *AppDB) GetAuthedLocations(ctx context.Context, r *structs.LocationsPage
 			&payToAddress,
 			&tipToAddress,
 			&location.Reference,
+			&location.HoursManual,
 		)
 
 		if err != nil {
@@ -529,13 +545,14 @@ func (s *AppDB) GetAuthedLocations(ctx context.Context, r *structs.LocationsPage
 		locationIDs = append(locationIDs, uint64(location.ID))
 	}
 
-	hoursByLocation, err := s.getLocationHoursByIDs(ctx, locationIDs)
+	hoursByLocation, daysByLocation, err := s.getLocationHoursByIDs(ctx, locationIDs)
 	if err != nil {
 		return nil, err
 	}
 
 	for _, loc := range authedLocations {
 		loc.OpeningHours = hoursByLocation[uint64(loc.ID)]
+		loc.Hours = daysByLocation[uint64(loc.ID)]
 	}
 
 	if err := s.attachLocationPaymentWallets(ctx, authedLocations); err != nil {
@@ -586,6 +603,45 @@ func (a *AppDB) GetLocationApprovalContact(ctx context.Context, id uint) (*Locat
 // dropped and reinserted rather than updated in place — updating in place
 // requires matching on weekday, and getting that wrong overwrites every row
 // with the last weekday's hours.
+// replaceLocationDayHours writes structured hours and derives the display text
+// from them, so the text column can never disagree with the times a picker
+// shows. It is the only place that decides what the text says.
+func replaceLocationDayHours(ctx context.Context, tx pgx.Tx, locationID uint, days []structs.LocationDayHours) error {
+	if _, err := tx.Exec(ctx, `DELETE FROM location_hours WHERE location_id = $1;`, locationID); err != nil {
+		return fmt.Errorf("error clearing location hours: %w", err)
+	}
+
+	for _, day := range days {
+		day.SortIntervals()
+		encoded, err := json.Marshal(day.Intervals)
+		if err != nil {
+			return fmt.Errorf("error encoding location hour intervals: %w", err)
+		}
+		// open_minute/close_minute mirror the first stretch so anything still
+		// reading the flat columns sees a sane value rather than nothing.
+		var firstOpen, firstClose *int
+		if len(day.Intervals) > 0 {
+			firstOpen = &day.Intervals[0].OpenMinute
+			firstClose = &day.Intervals[0].CloseMinute
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO location_hours (
+				location_id,
+				weekday,
+				hours,
+				open_minute,
+				close_minute,
+				is_closed,
+				intervals
+			) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb);
+		`, locationID, day.Weekday, day.Display(), firstOpen, firstClose, day.IsClosed, encoded); err != nil {
+			return fmt.Errorf("error adding location hours to hour table: %w", err)
+		}
+	}
+
+	return nil
+}
+
 func replaceLocationHours(ctx context.Context, tx pgx.Tx, locationID uint, hours []string) error {
 	_, err := tx.Exec(ctx, `
 		DELETE FROM location_hours
@@ -822,6 +878,14 @@ func (a *AppDB) UpdateLocation(ctx context.Context, location *structs.Location) 
 // caller owns, from an already-verified Places lookup. This is the only write
 // path for those columns, so a client can never set them directly.
 func (a *AppDB) UpdateLocationGooglePlace(ctx context.Context, ownerID string, locationID uint, place *structs.VerifiedGooglePlace) error {
+	return a.updateLocationGooglePlace(ctx, ownerID, locationID, place)
+}
+
+// updateLocationGooglePlace is the shared implementation. An empty ownerID
+// means "any owner" and is only reachable from the admin path; the duplicate
+// check and the column list are identical either way, so the two callers cannot
+// drift apart in what a re-point actually writes.
+func (a *AppDB) updateLocationGooglePlace(ctx context.Context, ownerID string, locationID uint, place *structs.VerifiedGooglePlace) error {
 	if place == nil {
 		return fmt.Errorf("a verified google place is required")
 	}
@@ -866,7 +930,7 @@ func (a *AppDB) UpdateLocationGooglePlace(ctx context.Context, ownerID string, l
 			website = $10,
 			rating = $11,
 			maps_page = $12
-		WHERE (id = $13 AND owner_id = $14 AND active = TRUE);
+		WHERE (id = $13 AND ($14 = '' OR owner_id = $14) AND active = TRUE);
 	`,
 		place.GoogleID,
 		place.Name,
@@ -890,7 +954,14 @@ func (a *AppDB) UpdateLocationGooglePlace(ctx context.Context, ownerID string, l
 		return pgx.ErrNoRows
 	}
 
-	if err := replaceLocationHours(ctx, tx, locationID, place.OpeningHours); err != nil {
+	// Structured times when Google gave us usable ones, text otherwise. A place
+	// with no readable periods still keeps its display strings rather than
+	// losing its hours entirely.
+	if len(place.StructuredHours) == len(structs.WeekdayNames) {
+		if err := replaceLocationDayHours(ctx, tx, locationID, place.StructuredHours); err != nil {
+			return err
+		}
+	} else if err := replaceLocationHours(ctx, tx, locationID, place.OpeningHours); err != nil {
 		return err
 	}
 
@@ -947,7 +1018,8 @@ func (a *AppDB) GetLocationsByUser(ctx context.Context, userId string) ([]*struc
 			NULLIF(TRIM(l.tipping_wallet_address), ''),
 			''
 		) AS tip_to_address,
-		l.reference
+		l.reference,
+		l.hours_manual
     FROM locations l
 	LEFT JOIN users u
 		ON u.id = l.owner_id
@@ -1048,6 +1120,7 @@ func (a *AppDB) GetLocationsByUser(ctx context.Context, userId string) ([]*struc
 			&payToAddress,
 			&tipToAddress,
 			&location.Reference,
+			&location.HoursManual,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("error scanning location data: %s", err)
@@ -1062,13 +1135,14 @@ func (a *AppDB) GetLocationsByUser(ctx context.Context, userId string) ([]*struc
 		locationIDs = append(locationIDs, uint64(location.ID))
 	}
 
-	hoursByLocation, err := a.getLocationHoursByIDs(ctx, locationIDs)
+	hoursByLocation, daysByLocation, err := a.getLocationHoursByIDs(ctx, locationIDs)
 	if err != nil {
 		return nil, err
 	}
 
 	for _, loc := range locations {
 		loc.OpeningHours = hoursByLocation[uint64(loc.ID)]
+		loc.Hours = daysByLocation[uint64(loc.ID)]
 	}
 
 	if err := a.attachLocationPaymentWallets(ctx, locations); err != nil {

@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/SFLuv/app/backend/logger"
+	"github.com/SFLuv/app/backend/structs"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -1178,6 +1180,155 @@ var schemaMigrations = []SchemaMigration{
 	},
 	{
 		Version:     "1.34",
+		Description: "structured location hours and per-location manual hours mode",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			// Hours were stored only as Google's display text ("Monday: 7:00 AM
+			// – 8:00 PM"). That cannot back a time picker, cannot be compared,
+			// and cannot distinguish "closed" from "we never learned this day".
+			// The text column stays as the rendered form so every existing
+			// reader keeps working; these columns become the source of truth.
+			if _, err := pools.App.Exec(ctx, `
+				ALTER TABLE location_hours ADD COLUMN IF NOT EXISTS open_minute INTEGER;
+				ALTER TABLE location_hours ADD COLUMN IF NOT EXISTS close_minute INTEGER;
+				ALTER TABLE location_hours ADD COLUMN IF NOT EXISTS is_closed BOOLEAN NOT NULL DEFAULT FALSE;
+
+				-- Manual mode opts a listing out of the nightly Google sync, so a
+				-- hand-corrected set of hours is never silently overwritten.
+				ALTER TABLE locations ADD COLUMN IF NOT EXISTS hours_manual BOOLEAN NOT NULL DEFAULT FALSE;
+				ALTER TABLE locations ADD COLUMN IF NOT EXISTS hours_synced_at TIMESTAMPTZ;
+			`); err != nil {
+				return err
+			}
+
+			// Backfill through the same parser the app uses, so historical rows
+			// and new ones agree on what the text meant. Anything unparseable is
+			// left as NULL rather than guessed: a wrong opening time published to
+			// customers is worse than a missing one.
+			rows, err := pools.App.Query(ctx, `
+				SELECT location_id, weekday, COALESCE(hours, '')
+				FROM location_hours
+				WHERE open_minute IS NULL AND close_minute IS NULL AND is_closed = FALSE;
+			`)
+			if err != nil {
+				return err
+			}
+			type parsedRow struct {
+				locationID int
+				day        structs.LocationDayHours
+			}
+			parsed := []parsedRow{}
+			for rows.Next() {
+				var locationID, weekday int
+				var text string
+				if err := rows.Scan(&locationID, &weekday, &text); err != nil {
+					rows.Close()
+					return err
+				}
+				day := structs.ParseDisplayHours(weekday, text)
+				if day.IsClosed || day.HasTimes() {
+					parsed = append(parsed, parsedRow{locationID: locationID, day: day})
+				}
+			}
+			rows.Close()
+			if err := rows.Err(); err != nil {
+				return err
+			}
+
+			for _, entry := range parsed {
+				if _, err := pools.App.Exec(ctx, `
+					UPDATE location_hours
+					SET open_minute = $1, close_minute = $2, is_closed = $3
+					WHERE location_id = $4 AND weekday = $5;
+				`, firstMinutes(entry.day, true), firstMinutes(entry.day, false), entry.day.IsClosed, entry.locationID, entry.day.Weekday); err != nil {
+					return err
+				}
+			}
+			appLogger.Logf("migration 1.34: lifted %d location hour rows into structured times", len(parsed))
+
+			return nil
+		},
+	},
+	{
+		Version:     "1.35",
+		Description: "split opening hours per day",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			// A single open/close pair cannot describe a kitchen that shuts
+			// between lunch and dinner, and flattening one into 11:00–21:00 tells
+			// customers a shop is open while it is shut.
+			//
+			// Stored as JSON on the existing row rather than as extra rows: every
+			// reader of location_hours assumes one row per weekday and seven
+			// strings per location, and adding rows would silently break all of
+			// them. open_minute/close_minute stay populated with the first stretch
+			// so anything still reading those keeps working.
+			if _, err := pools.App.Exec(ctx, `
+				ALTER TABLE location_hours
+				ADD COLUMN IF NOT EXISTS intervals JSONB NOT NULL DEFAULT '[]'::jsonb;
+
+				UPDATE location_hours
+				SET intervals = jsonb_build_array(
+					jsonb_build_object('open_minute', open_minute, 'close_minute', close_minute)
+				)
+				WHERE open_minute IS NOT NULL
+				AND close_minute IS NOT NULL
+				AND intervals = '[]'::jsonb;
+			`); err != nil {
+				return err
+			}
+
+			// Days whose text held a split that 1.34 could not represent are now
+			// readable, so lift them rather than leaving them blank.
+			rows, err := pools.App.Query(ctx, `
+				SELECT location_id, weekday, COALESCE(hours, '')
+				FROM location_hours
+				WHERE intervals = '[]'::jsonb AND is_closed = FALSE;
+			`)
+			if err != nil {
+				return err
+			}
+			type parsedRow struct {
+				locationID int
+				day        structs.LocationDayHours
+			}
+			parsed := []parsedRow{}
+			for rows.Next() {
+				var locationID, weekday int
+				var text string
+				if err := rows.Scan(&locationID, &weekday, &text); err != nil {
+					rows.Close()
+					return err
+				}
+				day := structs.ParseDisplayHours(weekday, text)
+				if len(day.Intervals) > 0 {
+					parsed = append(parsed, parsedRow{locationID: locationID, day: day})
+				}
+			}
+			rows.Close()
+			if err := rows.Err(); err != nil {
+				return err
+			}
+
+			for _, entry := range parsed {
+				encoded, err := json.Marshal(entry.day.Intervals)
+				if err != nil {
+					return err
+				}
+				if _, err := pools.App.Exec(ctx, `
+					UPDATE location_hours
+					SET intervals = $1::jsonb, open_minute = $2, close_minute = $3
+					WHERE location_id = $4 AND weekday = $5;
+				`, encoded, entry.day.Intervals[0].OpenMinute, entry.day.Intervals[0].CloseMinute,
+					entry.locationID, entry.day.Weekday); err != nil {
+					return err
+				}
+			}
+			appLogger.Logf("migration 1.35: recovered %d split-hour location days", len(parsed))
+
+			return nil
+		},
+	},
+	{
+		Version:     "1.36",
 		Description: "manual merchant listings for businesses with no Google place",
 		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
 			// Not every merchant has a Google Business Profile, and requiring one
@@ -1604,4 +1755,17 @@ func parseVersion(version string) ([]int, error) {
 		values = append(values, value)
 	}
 	return values, nil
+}
+
+// firstMinutes returns the opening (or closing) minute of a day's first stretch,
+// or nil when it has none. Migration 1.34 predates split hours and only has the
+// flat columns to write; 1.35 backfills the full set.
+func firstMinutes(day structs.LocationDayHours, open bool) *int {
+	if len(day.Intervals) == 0 {
+		return nil
+	}
+	if open {
+		return &day.Intervals[0].OpenMinute
+	}
+	return &day.Intervals[0].CloseMinute
 }

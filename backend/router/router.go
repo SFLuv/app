@@ -289,6 +289,8 @@ func AddAdminRoutes(r *chi.Mux, s *handlers.AppService) {
 	r.Get("/admin/locations", withAdmin(s.GetAuthedLocations, s))
 	r.Put("/admin/users", withActiveAuth(s.UpdateUserRole, s))
 	r.Put("/admin/locations", withAdmin(s.UpdateLocationApproval, s))
+	r.Put("/admin/locations/{id}", withAdmin(s.AdminUpdateLocation, s))
+	r.Put("/admin/locations/{id}/google-place", withAdmin(s.AdminUpdateLocationGooglePlace, s))
 	r.Get("/admin/affiliates", withAdmin(s.GetAffiliates, s))
 	r.Put("/admin/affiliates", withAdmin(s.UpdateAffiliate, s))
 
@@ -450,6 +452,7 @@ func AddLocationRoutes(r *chi.Mux, s *handlers.AppService) {
 	r.Put("/locations", withActiveAuth(s.UpdateLocation, s))
 	r.Put("/locations/{id}/wallet-settings", withActiveAuth(s.UpdateLocationWalletSettings, s))
 	r.Put("/locations/{id}/google-place", withActiveAuth(s.UpdateLocationGooglePlace, s))
+	r.Put("/locations/{id}/hours", withActiveAuth(s.UpdateLocationHours, s))
 }
 
 func AddContactRoutes(r *chi.Mux, s *handlers.AppService) {

@@ -1,16 +1,49 @@
 "use client"
 
-import { useMemo, useState } from "react"
+import { memo, useCallback, useMemo } from "react"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { SlidersHorizontal } from "lucide-react"
 import type { UserLocation } from "@/types/merchant"
 import { AdvancedMarker, APIProvider, Map, Pin } from "@vis.gl/react-google-maps"
-import type { Marker } from "@googlemaps/markerclusterer"
 import { useLocation } from "@/context/LocationProvider"
 import { Location } from "@/types/location"
 import { GOOGLE_MAPS_API_KEY, MAP_CENTER, MAP_ID } from "@/lib/constants"
+
+/**
+ * Map pins.
+ *
+ * Declared at module scope, NOT inside MapView. A component defined in a render
+ * body is a new component type on every render, so React unmounts and remounts
+ * the entire pin tree each time — which is what made the icons flicker whenever
+ * anything above re-rendered, including the background user-record poll.
+ *
+ * memo keeps it still even when the parent re-renders for unrelated reasons;
+ * both props are referentially stable at the call site.
+ */
+const PoiMarkers = memo(function PoiMarkers({
+  locations,
+  onSelectLocation,
+}: {
+  locations: Location[]
+  onSelectLocation: (location: Location) => void
+}) {
+  return (
+    <>
+      {locations.map((currentLocation) => (
+        <AdvancedMarker
+          key={currentLocation.id}
+          position={{ lat: currentLocation.lat, lng: currentLocation.lng }}
+          clickable={true}
+          onClick={() => onSelectLocation(currentLocation)}
+        >
+          <Pin background="#eb6c6c" glyphColor="#111111" borderColor="#111111" />
+        </AdvancedMarker>
+      ))}
+    </>
+  )
+})
 
 interface MapViewProps {
   locations: Location[]
@@ -32,52 +65,19 @@ export function MapView({
   const { mapLocationsStatus, locationTypes } = useLocation()
   const mapHeightClass = "h-[calc(100svh-320px)] sm:h-[calc(100svh-300px)]"
 
-  const PoiMarkers = (props: { locations: Location[] }) => {
-    const [markers, setMarkers] = useState<{ [key: number]: Marker }>({})
-
-    const setMarkerRef = (marker: Marker | null, key: number) => {
-      if (marker && markers[key]) return
-      if (!marker && !markers[key]) return
-
-      setMarkers(prev => {
-        if (marker) {
-          return { ...prev, [key]: marker }
-        } else {
-          const nextMarkers = { ...prev }
-          delete nextMarkers[key]
-          return nextMarkers
-        }
-      })
-    }
-
-    return (
-      <>
-        {props.locations.map(currentLocation => (
-          <AdvancedMarker
-            key={currentLocation.id}
-            position={
-              {
-                lat: currentLocation.lat,
-                lng: currentLocation.lng,
-              }
-            }
-            ref={(marker: Marker | null) => setMarkerRef(marker, currentLocation.id)}
-            clickable={true}
-            onClick={() => onSelectLocation(currentLocation)}
-          >
-            <Pin background="#eb6c6c" glyphColor="#111111" borderColor="#111111" />
-          </AdvancedMarker>
-        ))}
-      </>
-    )
-  }
-
   const filteredLocations = useMemo(() => {
-    return locations?.filter(location => {
+    return (locations ?? []).filter((location) => {
       const locationType = (location.type || "").trim()
       return selectedLocationType === "All Locations" || locationType === selectedLocationType
     })
   }, [locations, selectedLocationType])
+
+  // Stable identity so the memoised pins are not invalidated by a new closure
+  // on every render of this component.
+  const handleSelectLocation = useCallback(
+    (location: Location) => onSelectLocation(location),
+    [onSelectLocation],
+  )
 
   if (mapLocationsStatus === "loading") {
     return (
@@ -129,7 +129,7 @@ export function MapView({
                   gestureHandling="greedy"
                   className="h-full w-full"
                 />
-                <PoiMarkers locations={filteredLocations ?? []} />
+                <PoiMarkers locations={filteredLocations} onSelectLocation={handleSelectLocation} />
               </APIProvider>
             </div>
           </div>
