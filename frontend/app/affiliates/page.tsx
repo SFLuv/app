@@ -1,12 +1,13 @@
 "use client"
 
 import { useState } from "react"
-import { Leaf } from "lucide-react"
+import { Info } from "lucide-react"
 
 import { AddVolunteerEventModal, type VolunteerEventDraft } from "@/components/events/add-volunteer-event-modal"
 import { VolunteerEventsManager } from "@/components/events/volunteer-events-manager"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { useApp } from "@/context/AppProvider"
 import { useToast } from "@/hooks/use-toast"
 
@@ -35,20 +36,31 @@ export default function AffiliatesPage() {
       if (!res.ok) {
         throw new Error((await res.text()).trim() || "Unable to submit the request.")
       }
-      const created = await res.json()
+      const created = await res.json().catch(() => null)
+      const id = typeof created?.id === "string" ? created.id.trim() : ""
+      if (id === "") {
+        // A 2xx with no id means the request went through but we cannot attach
+        // photos to it. Saying "failed" would be a lie, and staying silent
+        // would leave the affiliate submitting it a second time.
+        setReloadKey((key) => key + 1)
+        throw new Error(
+          "The request was submitted, but the server did not return its id, so photos could not be attached. Close this and check the list below.",
+        )
+      }
       toast({
         title: "Request submitted",
         description: "An SFLuv admin will review it. You'll be emailed either way.",
       })
       setReloadKey((key) => key + 1)
-      return created?.id ?? null
+      return id
     } catch (error) {
-      toast({
-        title: "Could not submit request",
-        description: error instanceof Error ? error.message : "Unexpected error.",
-        variant: "destructive",
-      })
-      return null
+      /*
+       * Rethrown rather than swallowed into a toast. The modal is open and
+       * covering the page, so a toast behind it is the one place the person
+       * who just pressed Submit is not looking — the modal shows this message
+       * under the form instead.
+       */
+      throw error instanceof Error ? error : new Error("Unable to submit the request.")
     }
   }
 
@@ -90,7 +102,33 @@ export default function AffiliatesPage() {
     <div className="container mx-auto p-4 space-y-6">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <h1 className="text-3xl font-bold">Volunteer Events</h1>
+          <div className="flex items-center gap-2">
+            <h1 className="text-3xl font-bold">Volunteer Events</h1>
+            {/*
+              The approval rules used to sit in a card of their own under the
+              header. They are worth reading once and never again, so they now
+              live behind the heading rather than taking a block of the page
+              every visit.
+            */}
+            <TooltipProvider delayDuration={150}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    aria-label="How event requests are reviewed"
+                    className="inline-flex h-6 w-6 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    <Info className="h-4 w-4" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" align="start" className="max-w-xs text-left">
+                  Requests are reviewed by an SFLuv admin. Approving an event is what reserves its rewards
+                  from the faucet and generates its QR codes — once approved, the codes are downloadable here
+                  straight away and become redeemable 24 hours before the event starts.
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          </div>
           <p className="text-muted-foreground">
             Request events for your organization and manage the ones that have been approved.
           </p>
@@ -99,17 +137,6 @@ export default function AffiliatesPage() {
           + Request Event
         </Button>
       </div>
-
-      <Card>
-        <CardContent className="flex items-start gap-3 pt-6 text-sm text-muted-foreground">
-          <Leaf className="mt-0.5 h-4 w-4 flex-shrink-0" />
-          <p>
-            Requests are reviewed by an SFLuv admin. Approving an event is what reserves its rewards from the
-            faucet and generates its QR codes — once approved, the codes are downloadable here straight away and
-            become redeemable 24 hours before the event starts.
-          </p>
-        </CardContent>
-      </Card>
 
       <AddVolunteerEventModal
         open={requestModalOpen}

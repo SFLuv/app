@@ -570,16 +570,27 @@ export default function AdminPage() {
         const message = (await res.text()).trim()
         throw new Error(message || "Error creating event. Please try again later.")
       }
-      const created = await res.json()
+      const created = await res.json().catch(() => null)
+      const id = typeof created?.id === "string" ? created.id.trim() : ""
       setEventsError("")
       await getEvents()
       getUnallocatedBalance()
-      return created?.id ?? null
+      if (id === "") {
+        // A 2xx with no id means the event exists but photos cannot be
+        // attached to it. Reporting a plain failure would be wrong.
+        throw new Error(
+          "The event was created, but the server did not return its id, so photos could not be attached. Close this and open the event to add them.",
+        )
+      }
+      return id
     } catch (error) {
       const message = error instanceof Error ? error.message : "Error creating event. Please try again later."
       setEventsStatus("error")
       setEventsError(message)
-      return null
+      // Rethrown so the modal can show it too: eventsError renders on the page
+      // behind the dialog, where the person who just pressed Create cannot see
+      // it until they close the very form they are waiting on.
+      throw error instanceof Error ? error : new Error(message)
     }
   }
 

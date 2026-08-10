@@ -1,6 +1,6 @@
 "use client"
 
-import { memo, useCallback, useEffect, useMemo, useState } from "react"
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Card, CardContent } from "@/components/ui/card"
 import { List, Map as MapIcon } from "lucide-react"
 import type { UserLocation } from "@/types/merchant"
@@ -53,6 +53,44 @@ const PoiMarkers = memo(function PoiMarkers({
       ))}
     </>
   )
+})
+
+/**
+ * Frames every merchant inside the middle of the map on first load.
+ *
+ * A fixed centre and zoom spent most of the frame on ocean and the avenues,
+ * leaving the pins bunched in one corner. Fitting the real bounds with a
+ * quarter of the frame as padding lands them in the middle half.
+ *
+ * Runs once. Re-fitting on every change would fight anyone who has panned away.
+ */
+const FitToMerchants = memo(function FitToMerchants({ locations }: { locations: Location[] }) {
+  const map = useMap()
+  const fitted = useRef(false)
+
+  useEffect(() => {
+    if (!map || fitted.current || locations.length === 0) return
+
+    const bounds = new google.maps.LatLngBounds()
+    for (const location of locations) {
+      bounds.extend({ lat: location.lat, lng: location.lng })
+    }
+
+    if (locations.length === 1) {
+      map.setCenter(bounds.getCenter())
+      map.setZoom(15)
+      fitted.current = true
+      return
+    }
+
+    const element = map.getDiv()
+    const horizontal = Math.round(element.clientWidth * 0.25)
+    const vertical = Math.round(element.clientHeight * 0.25)
+    map.fitBounds(bounds, { top: vertical, bottom: vertical, left: horizontal, right: horizontal })
+    fitted.current = true
+  }, [locations, map])
+
+  return null
 })
 
 /**
@@ -188,6 +226,7 @@ export function MapView({
                     gestureHandling="greedy"
                     className="h-full w-full"
                   >
+                    <FitToMerchants locations={filteredLocations} />
                     <MapFocus target={focused} />
                   </Map>
                   <PoiMarkers locations={filteredLocations} onSelectLocation={handleSelectLocation} now={now} />

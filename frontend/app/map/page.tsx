@@ -20,28 +20,10 @@ const LocationMapPageContent = memo(function LocationMapPageContent() {
   const [selectedLocationType, setSelectedLocationType] = useState("All Locations")
   const [selectedLocation, setSelectedLocation] = useState<Location | null>(null)
   const [isModalOpen, setIsModalOpen] = useState(false)
-  // Starts at the city centre and upgrades to the real position if the browser
-  // will give one. The merchant list sorts by distance from here, so an unknown
-  // position sorts from downtown rather than refusing to sort at all.
+  // The city centre, and it stays there: the map does not ask for a position.
+  // The merchant list still needs somewhere to measure distance from, and
+  // downtown is a defensible answer for a San Francisco currency.
   const [userLocation, setUserLocation] = useState<UserLocation>(defaultLocation)
-
-  useEffect(() => {
-    if (typeof navigator === "undefined" || !navigator.geolocation) return
-    let cancelled = false
-    navigator.geolocation.getCurrentPosition(
-      (position) => {
-        if (cancelled) return
-        setUserLocation({ lat: position.coords.latitude, lng: position.coords.longitude })
-      },
-      // Denied or unavailable is not an error worth surfacing: the default
-      // stands and the list is still ordered sensibly.
-      () => undefined,
-      { maximumAge: 300_000, timeout: 10_000 },
-    )
-    return () => {
-      cancelled = true
-    }
-  }, [])
   const [isInitialLoading, setIsInitialLoading] = useState(true)
   const { mapLocations, getMapLocations, locationTypes } = useLocation()
   const { status } = useApp()

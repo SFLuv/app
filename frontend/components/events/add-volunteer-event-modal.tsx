@@ -201,8 +201,30 @@ export function AddVolunteerEventModal({
 
     setSubmitting(true)
     try {
-      const eventId = await createEvent(draft)
-      if (!eventId) return
+      /*
+       * Every failure has to land in the error line below.
+       *
+       * createEvent may reject with the server's own message, or resolve falsy
+       * when a caller has already handled the failure its own way. The second
+       * case used to `return` silently: the dialog simply sat there after a
+       * press, which reads as the button being broken rather than the request
+       * being refused.
+       */
+      let eventId: string | null
+      try {
+        eventId = await createEvent(draft)
+      } catch (createError) {
+        setError(
+          createError instanceof Error && createError.message
+            ? createError.message
+            : "Could not submit the event. Please try again.",
+        )
+        return
+      }
+      if (!eventId) {
+        setError("Could not submit the event. Please try again.")
+        return
+      }
 
       // Photos attach to an existing event, so they upload after creation. A
       // failed photo does not undo the event — the admin can retry the upload.

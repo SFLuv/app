@@ -28,8 +28,13 @@ func (a *AppService) AffiliateRequestVolunteerEvent(w http.ResponseWriter, r *ht
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}
+	// Every failure below answers with a reason, not a bare status. The client
+	// renders whatever body it gets under the submit button, so a silent status
+	// leaves the affiliate looking at a form that refused them without saying
+	// why — and pressing submit again.
 	if a.bot == nil || a.bot.db == nil {
 		w.WriteHeader(http.StatusServiceUnavailable)
+		w.Write([]byte("the events service is unavailable right now, please try again shortly"))
 		return
 	}
 
@@ -43,7 +48,9 @@ func (a *AppService) AffiliateRequestVolunteerEvent(w http.ResponseWriter, r *ht
 	defer r.Body.Close()
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
+		a.logger.Logf("error reading affiliate volunteer event request body: %s", err)
 		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte("could not read the request, please try again"))
 		return
 	}
 
@@ -103,9 +110,22 @@ func (a *AppService) AffiliateRequestVolunteerEvent(w http.ResponseWriter, r *ht
 	if err != nil {
 		a.logger.Logf("error creating affiliate volunteer event request: %s", err)
 		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte("could not save the request, please try again"))
+		return
+	}
+	if strings.TrimSpace(id) == "" {
+		// Belt and braces: a created event with no id cannot be photographed,
+		// reviewed or linked to, so reporting it as a success would hand the
+		// client a reference it can do nothing with.
+		a.logger.Logf("affiliate volunteer event created with an empty id for org %d", org.Id)
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte("the request was saved but could not be identified, please check your events list before retrying"))
 		return
 	}
 
+	// Deliberately after the response is decided: the request has succeeded
+	// whether or not the notification email does, and a failed email must not
+	// turn a saved request into an error.
 	go a.sendVolunteerEventRequestEmail(org.Name, req.Title, int64(req.RewardAmountSfluv)*int64(req.MaxParticipants))
 
 	w.Header().Set("Content-Type", "application/json")
