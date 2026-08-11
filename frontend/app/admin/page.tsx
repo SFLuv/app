@@ -3605,7 +3605,15 @@ export default function AdminPage() {
                         <div className="flex flex-col items-start gap-4 sm:flex-row sm:justify-between">
                           <div className="flex min-w-0 flex-1 items-start gap-4">
                             <Avatar className="h-12 w-12">
-                              <AvatarImage src={location.image_url || "/placeholder.svg"} alt={location.name} />
+                              {/* The merchant's own uploads, in the order that
+                                  identifies a listing at avatar size: the icon
+                                  is a mark chosen to be legible this small, the
+                                  photo is the fallback. image_url is not used —
+                                  it holds a Google Maps *page* link captured at
+                                  creation, so it never resolves to an image and
+                                  this avatar has always fallen through to the
+                                  placeholder. */}
+                              <AvatarImage src={location.icon_url || location.photo_url || "/placeholder.svg"} alt={location.name} />
                               <AvatarFallback>
                                 {location.name
                                   .split(" ")

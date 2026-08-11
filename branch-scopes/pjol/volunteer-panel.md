@@ -1,13 +1,15 @@
 # Branch scope — `pjol/volunteer-panel`
 
-Aug 5–10 2026 · app + mobile-app + webpage · **~32.5h active**
+Aug 5–10 2026 · app + mobile-app + webpage · **~33.1h active**
 
 Hours are active working time inferred from commit clustering.
 
 - **Round 1 (Aug 5–8) — 22.0h.** ~16h measured, adjusted upward for two large batch commits
   (`dd007b9` +3,098, `6dbf50c` +2,522) whose work landed with no intermediate commits.
-- **Round 2 (Aug 9–10) — 10.5h.** Measured: 1.4h on the 9th (17:44–19:08) and 8.2h on the 10th
-  (10:48–19:05), plus ~0.8h of work before the first commit of each day. An earlier revision of this
+- **Round 2 (Aug 9–10) — 11.1h.** Measured: 1.4h on the 9th (17:44–19:08) and 8.7h on the 10th
+  (10:48–19:05 and 20:25–20:54), plus ~0.8h of work before the first commit of each day. The 10th has
+  a ~1.4h gap between those two stretches spent hand-verifying the QR export rather than writing
+  anything, so the elapsed span of the day is wider than the hours itemised against it. An earlier revision of this
   file estimated the round at 10.5h while its last stretch was uncommitted; measuring it brought the
   figure down to 9.8h, and the QR export rewrite that closed the round then added 0.7h, landing back
   on 10.5h by coincidence rather than by the estimate having been right.
@@ -175,7 +177,23 @@ Hours are active working time inferred from commit clustering.
   was to slice — the same silent loss the rewrite was for. Line height is untouched, so the card's
   vertical budget is unaffected
 
-**Subtotal 6.7h**
+### Merchant location photos — 0.5h · app
+- Migration 1.39 and a `location_photos` table: bytes keyed by location, replaced in place, with the
+  version stamp mirrored onto `locations` inside the same transaction so a listing can never advertise
+  a revision that is not yet fetchable — the same shape as the map icon from 1.37
+- Public GET, owner-or-admin writes sharing one permission check with the icon rather than a second
+  copy of it, raster-only sniffing, 8 MiB cap
+- Merchant uploader in settings: 16:9 crop enforced with drag and zoom, re-encoded to a 1280x720 JPEG,
+  shown on the listing's detail card
+- Deliberately not built on `locations.image_url`. That column is written once at creation from the
+  Google place and holds a link to a Maps *page*, not to an image — which is why the admin panel's
+  location avatar has always fallen through to its placeholder. It now shows the merchant's own icon
+  or photo instead
+- Kept separate from the icon rather than one image serving both jobs: a logo letterboxed across a
+  banner and a shopfront squeezed into a map pin are both bad, and they have different size limits,
+  aspect handling and call sites
+
+**Subtotal 7.2h**
 
 ---
 
@@ -184,6 +202,7 @@ Hours are active working time inferred from commit clustering.
 | Item | Repo | Hours |
 |---|---|---|
 | Affiliate event creation unblocked — `approved_by` NOT NULL, photo upload 403, pending-event image links | app | 0.5 |
+| Merchant icon and photo uploads made reachable — both sat inside a location-profile block switched off since May, so they shipped invisible to merchants | app | 0.1 |
 | Card vertical budget made unfalsifiable — logo contained rather than width-scaled, and the squeeze taken from the logo before the QR floor | app | 0.1 |
 | Webpage layout & polish — desktop gutters, equal card widths, carousel hover, dropdown spacing, mobile menu, flywheel corners | web | 0.5 |
 | QR logo interior clearing (filled silhouette, size-independent) | app + mobile | 0.4 |
@@ -197,7 +216,7 @@ Hours are active working time inferred from commit clustering.
 | Partial star ratings wherever a rating is shown | app | 0.2 |
 | CSP: backend origins allowed as image sources | app | 0.2 |
 
-**Subtotal 3.8h**
+**Subtotal 3.9h**
 
 Two overflow paths were still live after the QR export rewrite, and were found by evaluating the layout maths
 across its worst cases rather than by looking at a card. A three-line title above a three-line heading
@@ -214,9 +233,9 @@ does, and when space is tight the logo gives way first — a smaller mark costs 
 
 | | Round 1 | Round 2 | Total |
 |---|---|---|---|
-| Large features | 16.6 | 6.7 | 23.3 |
-| Tweaks & fixes | 5.4 | 3.8 | 9.2 |
-| **Total** | **22.0** | **10.5** | **32.5** |
+| Large features | 16.6 | 7.2 | 23.8 |
+| Tweaks & fixes | 5.4 | 3.9 | 9.3 |
+| **Total** | **22.0** | **11.1** | **33.1** |
 
 Volume — Round 1: 151 files, ~27.3k insertions / ~3.8k deletions · 12 DB migrations · 52 new routes · 122 new Go tests.
-Volume — Round 2: 82 files, ~7.8k insertions / ~0.9k deletions · 2 DB migrations (1.37, 1.38) · 7 new routes · 1 new dependency (`jspdf`), replacing the export's use of `html2canvas`.
+Volume — Round 2: 87 files, ~8.4k insertions / ~0.9k deletions · 3 DB migrations (1.37, 1.38, 1.39) · 10 new routes · 1 new dependency (`jspdf`), replacing the export's use of `html2canvas`.

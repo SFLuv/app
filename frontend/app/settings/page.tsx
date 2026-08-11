@@ -3641,20 +3641,6 @@ export default function SettingsPage() {
 
                                   <div className="space-y-2 rounded-lg border p-3">
                                     <Label className="text-black dark:text-white">
-                                      Map icon
-                                    </Label>
-                                    <MerchantIconCard location={loc} />
-                                  </div>
-
-                                  <div className="space-y-2 rounded-lg border p-3">
-                                    <Label className="text-black dark:text-white">
-                                      Location photo
-                                    </Label>
-                                    <MerchantPhotoCard location={loc} />
-                                  </div>
-
-                                  <div className="space-y-2 rounded-lg border p-3">
-                                    <Label className="text-black dark:text-white">
                                       Opening hours
                                     </Label>
                                     <MerchantHoursCard location={loc} />
@@ -3793,6 +3779,35 @@ export default function SettingsPage() {
                                 </Button>
                               </div>
                               ) : null}
+
+                              {/* Outside the block above, which is switched off
+                                  (`{false ? ...}`, since 5d47f39) — merchant
+                                  self-service editing of the business details
+                                  was withdrawn, and these two were added inside
+                                  it afterwards, so they shipped unreachable.
+                                  They are the merchant's own artwork rather
+                                  than listing data, and nothing about them
+                                  depends on that editor being back. */}
+                              <div className="space-y-4 rounded-xl border bg-background/70 p-4">
+                                <div className="space-y-1">
+                                  <h3 className="text-sm font-semibold text-black dark:text-white">
+                                    Listing images
+                                  </h3>
+                                  <p className="text-xs text-muted-foreground">
+                                    How this location appears on the merchant map and on its listing.
+                                  </p>
+                                </div>
+
+                                <div className="space-y-2 rounded-lg border p-3">
+                                  <Label className="text-black dark:text-white">Map icon</Label>
+                                  <MerchantIconCard location={loc} />
+                                </div>
+
+                                <div className="space-y-2 rounded-lg border p-3">
+                                  <Label className="text-black dark:text-white">Location photo</Label>
+                                  <MerchantPhotoCard location={loc} />
+                                </div>
+                              </div>
 
                               <div className="space-y-4">
                                 <div className="grid gap-3 sm:grid-cols-2">
