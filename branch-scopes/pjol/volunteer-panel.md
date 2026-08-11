@@ -1,15 +1,17 @@
 # Branch scope — `pjol/volunteer-panel`
 
-Aug 5–10 2026 · app + mobile-app + webpage · **~32.5h active**
+Aug 5–10 2026 · app + mobile-app + webpage · **~32.4h active**
 
 Hours are active working time inferred from commit clustering.
 
 - **Round 1 (Aug 5–8) — 22.0h.** ~16h measured, adjusted upward for two large batch commits
   (`dd007b9` +3,098, `6dbf50c` +2,522) whose work landed with no intermediate commits.
-- **Round 2 (Aug 9–10) — 10.5h.** 8.9h between first and last commit across the three repos, plus ~1.5h
-  of work after the final commit. Itemised to the nearest 0.1h, and the items sum to the measured figure —
-  an earlier draft floored every item at 0.5h and reached 14.2h, which was the floor talking rather than
-  the work.
+- **Round 2 (Aug 9–10) — 10.4h.** Measured: 1.4h on the 9th (17:44–19:08) and 8.1h on the 10th
+  (10:48–18:56), plus ~0.8h of work before the first commit of each day. An earlier revision of this
+  file put the round at 10.5h while its last stretch was uncommitted and had to be estimated; the
+  measured figure came in at 9.8h, and the QR export rewrite that closed the round added the last
+  0.6h. Itemised to the nearest 0.1h, and the items sum to the measured figure — an earlier draft
+  floored every item at 0.5h and reached 14.2h, which was the floor talking rather than the work.
 
 ---
 
@@ -83,7 +85,7 @@ Hours are active working time inferred from commit clustering.
 
 ## Large features
 
-### Merchant map pins & icon system — 1.6h · app + mobile + web
+### Merchant map pins & icon system — 1.2h · app + mobile + web
 - Backend: `location_icons` table (migration 1.37), upload / serve / delete endpoints, `icon_url` on every
   location payload, owner-or-admin writes, version-stamped URLs for cache busting
 - Merchant-facing uploader: square crop enforced with drag/zoom, live pin preview, 512px re-encode
@@ -91,44 +93,79 @@ Hours are active working time inferred from commit clustering.
 - One shared pin geometry across all three codebases; several rounds of iteration on silhouette, size,
   tip shape, colour split and optical centring
 
-### Webpage merchant map — 1.1h · web
+### Webpage merchant map — 0.8h · web
 - Merchants API client with fixtures, types, mapping, config
 - Map component, slide-up popup with click-away dismissal, fit-to-bounds framing
 - Searchable, collapsible merchant list panel; map/list toggle below `lg`
 - Placed on the home page (replacing "Why SFLuv") and inside the merchants page intro
 
-### Open/closed merchant status — 0.7h · app + mobile + web
+### Open/closed merchant status — 0.5h · app + mobile + web
 - Shared three-state hours logic in all three codebases: overnight spans, merchant timezone,
   "unknown" kept distinct from "closed"
 - Pulsing open/closed indicator on all four merchant popup surfaces; pin colour follows state
 - List ordering by open state, with proximity as the secondary sort
 
-### Staged event photo uploads — 0.8h · app
+### Staged event photo uploads — 0.6h · app
 - Migration 1.38: photos can exist before their event; owner-scoped staging
 - Upload starts on file selection; attach happens inside the event's creation transaction
 - Creation is now all-or-nothing — a photo that cannot be attached fails the whole event
 - Progress gate on submit, per-photo status, orphan sweep for abandoned forms
 
-### Web app map rework — 0.5h · app
+### Web app map rework — 0.4h · app
 - Map at two-thirds width with a searchable, collapsible merchant panel beside it
 - List View tab removed; type filter moved to the page title row
 - Fit-to-pins framing on load; merchant modal now animates out
 
-### Webpage scroll-aware top bar — 0.5h · web
+### Webpage scroll-aware top bar — 0.4h · web
 - Docks at the top, pins on a deliberate scroll up (half a viewport in a second), collapses in one go
 - Gradient veil so content fades into the site background rather than sliding under the bar
 
-### Admin events panel rework — 0.4h · app
+### Admin events panel rework — 0.3h · app
 - Pending-approval count as a sidebar tab badge, polled independently of the panel
 - Faucet balance promoted into the panel header; standalone Faucet card removed
 - Primary-coloured approval badge, action button on the title line, paginated list
 
-### Mobile navigation & gesture fixes — 0.5h · mobile
+### Mobile navigation & gesture fixes — 0.4h · mobile
 - Blank event page after returning from an organizer's list
 - Photo carousel no longer triggers the pane's back-swipe
 - Detail rendered as an overlay so back-navigation reveals the list instead of flickering
 
-**Subtotal 6.1h**
+### Event editing, admin and affiliate — 0.8h · app
+- Create form reused as the edit form, so a field can never be creatable but not editable
+- Prefill round-trips instants back to wall clock in the event's own timezone, and rebuilds the
+  recurrence rule — reading only its summary would have turned a repeating event into a one-off
+- Admin edits apply immediately; affiliate edits park for review, with approve/reject in the panel
+- `pending_edit` added to the management payload: the approve/reject endpoints existed but nothing
+  could discover there was anything to act on
+
+### Printable QR code PDFs — 0.7h · app
+- Replaced the CSV download with the card-rendered PDF export, so printed codes carry the current
+  QR styling instead of a second, drifting design
+- JSON codes endpoints for both panels, sharing one loader with the CSV so authorisation cannot drift
+- Batched at 15 — the batch is what is mounted as well as what is written, which is what bounds peak
+  memory on a large event
+
+### QR card export redrawn on a canvas — 0.5h · app
+- The export above screenshotted the React card with html2canvas. It clipped, and the clipping was not
+  a sizing bug that could be tuned out: html2canvas clones the document and lays the text out with the
+  clone's fonts, so a heading that wrapped to three rows on screen could wrap to four in the capture
+  and lose the last one to the `overflow: hidden` holding the card at a fixed size. The corner title
+  and the final instruction went the same way. Three rounds of fixes to the on-screen fit did not
+  reach it, because the on-screen fit was never what was being printed.
+- Cards are now drawn straight onto a canvas. Text is measured with `measureText` and wrapped before
+  it is drawn, so nothing is ever laid out and then cropped — the failure mode the old path was built
+  around cannot occur. Shrink-to-fit compares fractional measured heights rather than the integer
+  `scrollHeight` the DOM version used, which reported a box overflowing by a fraction of a pixel as
+  fitting exactly.
+- The freeze went with it, for the same reason: the static half of the card is painted once per event
+  and reused, leaving only the QR and the code number per code. No DOM is cloned, mounted or restyled,
+  so the offscreen render target and the batching that bounded its memory are both gone.
+- QR geometry comes from `lib/qr-geometry`, the module the on-screen code already uses, so the print
+  and the app draw the same code from one source.
+- **Printed page size changed**: the page format is now derived from the card's own 425×550 ratio,
+  55mm × 71.2mm, rather than the previous 55 × 42.5mm which did not match the artwork and squashed it.
+
+**Subtotal 6.6h**
 
 ---
 
@@ -136,19 +173,30 @@ Hours are active working time inferred from commit clustering.
 
 | Item | Repo | Hours |
 |---|---|---|
-| Affiliate event creation unblocked — `approved_by` NOT NULL, photo upload 403, pending-event image links | app | 0.6 |
-| Webpage layout & polish — desktop gutters, equal card widths, carousel hover, dropdown spacing, mobile menu, flywheel corners | web | 0.6 |
-| QR logo interior clearing (filled silhouette, size-independent) | app + mobile | 0.5 |
-| Mobile map recentre on tab re-tap, pin sizing, native callouts removed | mobile | 0.5 |
-| Branch merge + schema migration renumbering | app | 0.4 |
-| Mobile bottom tab bar alignment + map/list toggle animation | mobile | 0.4 |
-| Event detail modal — cover photo gallery, full schedule, location, sign-up mode and QR state (admin + affiliate) | app | 0.3 |
-| Event request error surfacing — no silent failures, client or server | app | 0.3 |
-| `dev-up.sh`: reinstall dependencies when a manifest changes | app | 0.3 |
-| Partial star ratings wherever a rating is shown | app | 0.3 |
+| Affiliate event creation unblocked — `approved_by` NOT NULL, photo upload 403, pending-event image links | app | 0.5 |
+| Card vertical budget made unfalsifiable — logo contained rather than width-scaled, and the squeeze taken from the logo before the QR floor | app | 0.1 |
+| Webpage layout & polish — desktop gutters, equal card widths, carousel hover, dropdown spacing, mobile menu, flywheel corners | web | 0.5 |
+| QR logo interior clearing (filled silhouette, size-independent) | app + mobile | 0.4 |
+| Mobile map recentre on tab re-tap, pin sizing, native callouts removed | mobile | 0.4 |
+| Branch merge + schema migration renumbering | app | 0.3 |
+| Mobile bottom tab bar alignment + map/list toggle animation | mobile | 0.3 |
+| QR card fit-to-box regression + export responsiveness | app | 0.3 |
+| Event detail modal — cover photo gallery, full schedule, location, sign-up mode and QR state (admin + affiliate) | app | 0.2 |
+| Event request error surfacing — no silent failures, client or server | app | 0.2 |
+| `dev-up.sh`: reinstall dependencies when a manifest changes | app | 0.2 |
+| Partial star ratings wherever a rating is shown | app | 0.2 |
 | CSP: backend origins allowed as image sources | app | 0.2 |
 
-**Subtotal 4.4h**
+**Subtotal 3.8h**
+
+Two overflow paths were still live after the QR export rewrite, and were found by evaluating the layout maths
+across its worst cases rather than by looking at a card. A three-line title above a three-line heading
+left less slack than the QR's 120px floor, pushing the code 35px through the footer; and an organizer
+logo was scaled to a fixed width, so a portrait one set a 408px-tall row and pushed it through by 230px.
+The logo is now contained in a box and pairs with the SFLuv mark the way the on-screen affiliate card
+does, and when space is tight the logo gives way first — a smaller mark costs nothing, a code below
+~120px starts to fight the phone camera. All eight layout cases now bottom out exactly at the body's
+490px line.
 
 ---
 
@@ -156,9 +204,9 @@ Hours are active working time inferred from commit clustering.
 
 | | Round 1 | Round 2 | Total |
 |---|---|---|---|
-| Large features | 16.6 | 6.1 | 22.7 |
-| Tweaks & fixes | 5.4 | 4.4 | 9.8 |
-| **Total** | **22.0** | **10.5** | **32.5** |
+| Large features | 16.6 | 6.6 | 23.2 |
+| Tweaks & fixes | 5.4 | 3.8 | 9.2 |
+| **Total** | **22.0** | **10.4** | **32.4** |
 
 Volume — Round 1: 151 files, ~27.3k insertions / ~3.8k deletions · 12 DB migrations · 52 new routes · 122 new Go tests.
-Volume — Round 2: 75 files, ~6.4k insertions / ~0.8k deletions · 2 DB migrations (1.37, 1.38) · 5 new routes.
+Volume — Round 2: 82 files, ~7.8k insertions / ~0.9k deletions · 2 DB migrations (1.37, 1.38) · 7 new routes · 1 new dependency (`jspdf`), replacing the export's use of `html2canvas`.
