@@ -93,11 +93,13 @@ const PAGE_SIZE = 8
 /**
  * Cards per PDF, and per render pass.
  *
- * Each card is rasterised to its own full-page canvas, so this bounds both the
- * size of a single download and the peak memory a large event can reach. 30 is
- * what the original event export settled on.
+ * The whole batch is rasterised in one synchronous pass, so this is also how
+ * long the page freezes at a time: it bounds the file size, the peak memory,
+ * and the longest single block. 15 keeps each pause short enough to read as
+ * progress rather than a hang, at the cost of more files for a large event —
+ * which the batch-numbered filenames already account for.
  */
-const CODES_PER_PDF = 30
+const CODES_PER_PDF = 15
 
 const REVIEW_FILTERS = [
   { value: "all", label: "All events" },
@@ -464,11 +466,23 @@ export function VolunteerEventsManager({
     )
   }
 
-  const waitForExportRender = async (logoUrl?: string | null) => {
-    await preloadCardImages(logoUrl)
+  /**
+   * Let the browser paint before a long synchronous stretch.
+   *
+   * Rasterising is main-thread work with no yield points, so without this the
+   * progress label never reaches the screen — the whole export looks like one
+   * long freeze rather than a series of batches. A timeout, not just a frame:
+   * after a heavy block the browser needs a real task boundary to lay out and
+   * paint.
+   */
+  const yieldToBrowser = () =>
+    new Promise<void>((resolve) => {
+      requestAnimationFrame(() => setTimeout(resolve, 0))
+    })
+
+  const waitForExportRender = async () => {
+    await yieldToBrowser()
     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
-    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
-    await new Promise<void>((resolve) => setTimeout(() => resolve(), 150))
   }
 
   /**
@@ -505,10 +519,17 @@ export function VolunteerEventsManager({
 
       const { default: generatePDF, Margin, Resolution } = await import("react-to-pdf")
 
+      // Once, not per batch: the mark and the logo are the same on every card,
+      // and re-decoding them each pass was pure latency.
+      await preloadCardImages(event.organizer.logo_url)
+
       for (let batchIndex = 0; batchIndex < batches.length; batchIndex += 1) {
-        setExportCodes(batches[batchIndex])
         setExportProgress({ done: batchIndex, total: batches.length })
-        await waitForExportRender(event.organizer.logo_url)
+        setExportCodes(batches[batchIndex])
+        // Two frames plus a task: the cards must be laid out AND the fit-to-box
+        // pass settled before the rasteriser reads them, or a title prints at
+        // its unfitted size.
+        await waitForExportRender()
 
         await generatePDF(() => exportTargetRef.current, {
           method: "save",
@@ -522,7 +543,7 @@ export function VolunteerEventsManager({
         // Drop the batch before building the next one, so the canvases it
         // created can be collected rather than accumulating across batches.
         setExportCodes([])
-        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+        await yieldToBrowser()
       }
 
       if (batches.length > 1) {

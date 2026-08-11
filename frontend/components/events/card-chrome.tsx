@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useLayoutEffect, useRef } from "react"
+import { useEffect, useLayoutEffect, useRef, useState } from "react"
 import type { CSSProperties, ReactNode } from "react"
 
 /**
@@ -101,7 +101,20 @@ function useFitToBox(
   box: number,
   base: number,
   min: number,
-) {
+): number {
+  /*
+   * The fitted size is STATE, not just an inline style written by the effect.
+   *
+   * Writing only to node.style meant any later re-render re-applied the style
+   * prop's base size and silently undid the fit, while this effect — keyed on
+   * content — had no reason to run again. The card then rasterised at full size
+   * inside a capped box, which is how a long title lost its bottom half and a
+   * three-line message lost its third line instead of shrinking. The export
+   * re-renders repeatedly (batch swaps, progress, the panel's background poll),
+   * so this was reliably hit there and almost never on screen.
+   */
+  const [size, setSize] = useState(base)
+
   useIsomorphicLayoutEffect(() => {
     const node = ref.current
     if (!node) return
@@ -111,13 +124,14 @@ function useFitToBox(
       // scrollHeight reports a clipped box.
       const cap = node.style.maxHeight
       node.style.maxHeight = "none"
-      let size = base
-      node.style.fontSize = `${size}px`
-      while (node.scrollHeight > box && size > min) {
-        size -= 0.25
-        node.style.fontSize = `${size}px`
+      let fitted = base
+      node.style.fontSize = `${fitted}px`
+      while (node.scrollHeight > box && fitted > min) {
+        fitted -= 0.25
+        node.style.fontSize = `${fitted}px`
       }
       node.style.maxHeight = cap
+      setSize(fitted)
     }
 
     fit()
@@ -134,6 +148,8 @@ function useFitToBox(
       cancelled = true
     }
   }, [ref, key, box, base, min])
+
+  return size
 }
 
 /**
@@ -146,9 +162,9 @@ function useFitToBox(
  */
 export const CardHeading = ({ fitKey, children }: { fitKey: string; children: ReactNode }) => {
   const ref = useRef<HTMLHeadingElement | null>(null)
-  useFitToBox(ref, fitKey, HEADING_BOX_HEIGHT, HEADING_BASE_FONT, HEADING_MIN_FONT)
+  const fontSize = useFitToBox(ref, fitKey, HEADING_BOX_HEIGHT, HEADING_BASE_FONT, HEADING_MIN_FONT)
   return (
-    <h1 ref={ref} data-fitted style={headingStyle}>
+    <h1 ref={ref} data-fitted style={{ ...headingStyle, fontSize: `${fontSize}px` }}>
       {children}
     </h1>
   )
@@ -156,7 +172,7 @@ export const CardHeading = ({ fitKey, children }: { fitKey: string; children: Re
 
 const FittedTitle = ({ text }: { text: string }) => {
   const ref = useRef<HTMLSpanElement | null>(null)
-  useFitToBox(ref, text, TITLE_BOX_HEIGHT, TITLE_BASE_FONT, TITLE_MIN_FONT)
+  const fontSize = useFitToBox(ref, text, TITLE_BOX_HEIGHT, TITLE_BASE_FONT, TITLE_MIN_FONT)
 
   return (
     <span
@@ -164,7 +180,7 @@ const FittedTitle = ({ text }: { text: string }) => {
       data-fitted
       style={{
         display: "block",
-        fontSize: `${TITLE_BASE_FONT}px`,
+        fontSize: `${fontSize}px`,
         color: "#6b7f87",
         lineHeight: TITLE_LINE_HEIGHT,
         textAlign: "right",
