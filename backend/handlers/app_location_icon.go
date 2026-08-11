@@ -36,10 +36,13 @@ func locationIconContentType(data []byte) string {
 	return ""
 }
 
-// canEditLocationIcon reports whether the caller may change this listing's
-// icon. Admins can, because they field the support requests when a merchant
+// canEditLocationImage reports whether the caller may change this listing's
+// pictures. Admins can, because they field the support requests when a merchant
 // uploads something wrong and cannot fix it themselves.
-func (a *AppService) canEditLocationIcon(r *http.Request, locationID uint) (bool, error) {
+//
+// Shared by the icon and the photo: they are the same permission on the same
+// listing, and two copies of it would be two places for it to drift.
+func (a *AppService) canEditLocationImage(r *http.Request, locationID uint) (bool, error) {
 	userDid := utils.GetDid(r)
 	if userDid == nil {
 		return false, nil
@@ -78,7 +81,7 @@ func (a *AppService) UploadLocationIcon(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	allowed, err := a.canEditLocationIcon(r, locationID)
+	allowed, err := a.canEditLocationImage(r, locationID)
 	if err != nil {
 		a.logger.Logf("error checking icon permission for location %d: %s", locationID, err)
 		w.WriteHeader(http.StatusInternalServerError)
@@ -143,7 +146,7 @@ func (a *AppService) DeleteLocationIcon(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	allowed, err := a.canEditLocationIcon(r, locationID)
+	allowed, err := a.canEditLocationImage(r, locationID)
 	if err != nil {
 		a.logger.Logf("error checking icon permission for location %d: %s", locationID, err)
 		w.WriteHeader(http.StatusInternalServerError)

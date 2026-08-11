@@ -37,6 +37,12 @@ export interface Location {
   image_url: string;
   /** Uploaded map-pin mark. Empty when the merchant has not set one. */
   icon_url?: string;
+  /**
+   * Uploaded storefront photo. Empty when the merchant has not set one. Not to
+   * be confused with image_url, which holds a Google Maps *page* link captured
+   * when the listing was created and is not an image address.
+   */
+  photo_url?: string;
   rating: number;
   maps_page: string;
   opening_hours: string[];
@@ -76,6 +82,12 @@ export interface AuthedLocation {
   image_url: string;
   /** Uploaded map-pin mark. Empty when the merchant has not set one. */
   icon_url?: string;
+  /**
+   * Uploaded storefront photo. Empty when the merchant has not set one. Not to
+   * be confused with image_url, which holds a Google Maps *page* link captured
+   * when the listing was created and is not an image address.
+   */
+  photo_url?: string;
   rating: number;
   maps_page: string;
   opening_hours: string[];

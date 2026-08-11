@@ -126,7 +126,11 @@ type Location struct {
 	// IconURL is the merchant's uploaded map icon, empty when they have not
 	// uploaded one. Version-stamped so a replacement is picked up despite the
 	// long cache lifetime the bytes themselves are served with.
-	IconURL            string                  `json:"icon_url"`
+	IconURL string `json:"icon_url"`
+	// PhotoURL is the merchant's uploaded storefront photo, empty when they have
+	// not uploaded one. Distinct from ImageURL, which is a link to a Google Maps
+	// page captured at creation and is not an image address at all.
+	PhotoURL           string                  `json:"photo_url"`
 	Rating             float64                 `json:"rating"`
 	MapsPage           string                  `json:"maps_page"`
 	OpeningHours       []string                `json:"opening_hours"`
@@ -185,6 +189,7 @@ type PublicLocation struct {
 	Website      string             `json:"website"`
 	ImageURL     string             `json:"image_url"`
 	IconURL      string             `json:"icon_url"`
+	PhotoURL     string             `json:"photo_url"`
 	Rating       float64            `json:"rating"`
 	MapsPage     string             `json:"maps_page"`
 	OpeningHours []string           `json:"opening_hours"`

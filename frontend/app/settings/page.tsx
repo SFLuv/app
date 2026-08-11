@@ -9,6 +9,7 @@ import { OrganizationPanel } from "@/components/organization/organization-panel"
 import PlaceAutocomplete from "@/components/merchant/google_place_finder";
 import { MerchantHoursCard } from "@/components/locations/merchant-hours-card";
 import { MerchantIconCard } from "@/components/locations/merchant-icon-card";
+import { MerchantPhotoCard } from "@/components/locations/merchant-photo-card";
 import {
   Card,
   CardContent,
@@ -3643,6 +3644,13 @@ export default function SettingsPage() {
                                       Map icon
                                     </Label>
                                     <MerchantIconCard location={loc} />
+                                  </div>
+
+                                  <div className="space-y-2 rounded-lg border p-3">
+                                    <Label className="text-black dark:text-white">
+                                      Location photo
+                                    </Label>
+                                    <MerchantPhotoCard location={loc} />
                                   </div>
 
                                   <div className="space-y-2 rounded-lg border p-3">

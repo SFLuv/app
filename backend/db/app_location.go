@@ -119,6 +119,7 @@ func (a *AppDB) GetLocation(ctx context.Context, id uint64) (*structs.PublicLoca
 			l.website,
 			l.image_url,
 			l.icon_updated_at,
+			l.photo_updated_at,
 			l.rating,
 			l.maps_page
 		FROM locations l
@@ -174,6 +175,7 @@ func (a *AppDB) GetLocation(ctx context.Context, id uint64) (*structs.PublicLoca
 	var payToAddress sql.NullString
 	var tipToAddress sql.NullString
 	var iconUpdatedAt sql.NullTime
+	var photoUpdatedAt sql.NullTime
 	err := row.Scan(
 		&location.ID,
 		&location.GoogleID,
@@ -194,6 +196,7 @@ func (a *AppDB) GetLocation(ctx context.Context, id uint64) (*structs.PublicLoca
 		&location.Website,
 		&location.ImageURL,
 		&iconUpdatedAt,
+		&photoUpdatedAt,
 		&location.Rating,
 		&location.MapsPage,
 	)
@@ -208,6 +211,9 @@ func (a *AppDB) GetLocation(ctx context.Context, id uint64) (*structs.PublicLoca
 	}
 	if iconUpdatedAt.Valid {
 		location.IconURL = LocationIconURL(location.ID, iconUpdatedAt.Time)
+	}
+	if photoUpdatedAt.Valid {
+		location.PhotoURL = LocationPhotoURL(location.ID, photoUpdatedAt.Time)
 	}
 
 	rows, err := a.db.Query(ctx, `
@@ -271,6 +277,7 @@ func (s *AppDB) GetLocations(ctx context.Context, r *structs.LocationsPageReques
 			l.website,
 			l.image_url,
 			l.icon_updated_at,
+			l.photo_updated_at,
 			l.rating,
 			l.maps_page
 		FROM locations l
@@ -337,6 +344,7 @@ func (s *AppDB) GetLocations(ctx context.Context, r *structs.LocationsPageReques
 		var payToAddress sql.NullString
 		var tipToAddress sql.NullString
 		var iconUpdatedAt sql.NullTime
+		var photoUpdatedAt sql.NullTime
 
 		err = rows.Scan(
 			&location.ID,
@@ -357,6 +365,7 @@ func (s *AppDB) GetLocations(ctx context.Context, r *structs.LocationsPageReques
 			&location.Website,
 			&location.ImageURL,
 			&iconUpdatedAt,
+			&photoUpdatedAt,
 			&location.Rating,
 			&location.MapsPage,
 		)
@@ -372,6 +381,9 @@ func (s *AppDB) GetLocations(ctx context.Context, r *structs.LocationsPageReques
 		}
 		if iconUpdatedAt.Valid {
 			location.IconURL = LocationIconURL(location.ID, iconUpdatedAt.Time)
+		}
+		if photoUpdatedAt.Valid {
+			location.PhotoURL = LocationPhotoURL(location.ID, photoUpdatedAt.Time)
 		}
 		locations = append(locations, &location)
 		locationIDs = append(locationIDs, uint64(location.ID))
@@ -417,6 +429,7 @@ func (s *AppDB) GetAuthedLocations(ctx context.Context, r *structs.LocationsPage
 			l.website,
 			l.image_url,
 			l.icon_updated_at,
+			l.photo_updated_at,
 			l.rating,
 			l.maps_page,
 			l.contact_firstname,
@@ -505,6 +518,7 @@ func (s *AppDB) GetAuthedLocations(ctx context.Context, r *structs.LocationsPage
 		var payToAddress sql.NullString
 		var tipToAddress sql.NullString
 		var iconUpdatedAt sql.NullTime
+		var photoUpdatedAt sql.NullTime
 
 		err = rows.Scan(
 			&location.ID,
@@ -528,6 +542,7 @@ func (s *AppDB) GetAuthedLocations(ctx context.Context, r *structs.LocationsPage
 			&location.Website,
 			&location.ImageURL,
 			&iconUpdatedAt,
+			&photoUpdatedAt,
 			&location.Rating,
 			&location.MapsPage,
 			&location.ContactFirstName,
@@ -558,6 +573,9 @@ func (s *AppDB) GetAuthedLocations(ctx context.Context, r *structs.LocationsPage
 		}
 		if iconUpdatedAt.Valid {
 			location.IconURL = LocationIconURL(location.ID, iconUpdatedAt.Time)
+		}
+		if photoUpdatedAt.Valid {
+			location.PhotoURL = LocationPhotoURL(location.ID, photoUpdatedAt.Time)
 		}
 		authedLocations = append(authedLocations, &location)
 		locationIDs = append(locationIDs, uint64(location.ID))
@@ -1014,6 +1032,7 @@ func (a *AppDB) GetLocationsByUser(ctx context.Context, userId string) ([]*struc
 		l.website,
 		l.image_url,
 		l.icon_updated_at,
+		l.photo_updated_at,
 		l.rating,
 		l.maps_page,
 		l.contact_firstname,
@@ -1103,6 +1122,7 @@ func (a *AppDB) GetLocationsByUser(ctx context.Context, userId string) ([]*struc
 		var payToAddress sql.NullString
 		var tipToAddress sql.NullString
 		var iconUpdatedAt sql.NullTime
+		var photoUpdatedAt sql.NullTime
 		err := rows.Scan(
 			&location.ID,
 			&location.GoogleID,
@@ -1125,6 +1145,7 @@ func (a *AppDB) GetLocationsByUser(ctx context.Context, userId string) ([]*struc
 			&location.Website,
 			&location.ImageURL,
 			&iconUpdatedAt,
+			&photoUpdatedAt,
 			&location.Rating,
 			&location.MapsPage,
 			&location.ContactFirstName,
@@ -1154,6 +1175,9 @@ func (a *AppDB) GetLocationsByUser(ctx context.Context, userId string) ([]*struc
 		}
 		if iconUpdatedAt.Valid {
 			location.IconURL = LocationIconURL(location.ID, iconUpdatedAt.Time)
+		}
+		if photoUpdatedAt.Valid {
+			location.PhotoURL = LocationPhotoURL(location.ID, photoUpdatedAt.Time)
 		}
 		locations = append(locations, &location)
 		locationIDs = append(locationIDs, uint64(location.ID))

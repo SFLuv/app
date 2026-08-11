@@ -1419,6 +1419,38 @@ var schemaMigrations = []SchemaMigration{
 			return nil
 		},
 	},
+	{
+		Version:     "1.39",
+		Description: "merchant location photos",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			// A picture of the place itself, distinct from the map icon added in
+			// 1.37: the icon is a mark drawn a few pixels wide inside a pin, this
+			// is a photograph shown at card width on the listing.
+			//
+			// `locations.image_url` was not reused for this. It is written once at
+			// creation from the Google place and holds a link to a Maps *page*
+			// rather than to an image, so anything rendering it as a picture gets
+			// a broken one. Storing bytes here keeps a merchant's own photo out of
+			// that ambiguity, and out of the third-party lifetime that comes with
+			// hotlinking Google's.
+			if _, err := pools.App.Exec(ctx, `
+				ALTER TABLE locations
+				ADD COLUMN IF NOT EXISTS photo_updated_at TIMESTAMPTZ;
+
+				CREATE TABLE IF NOT EXISTS location_photos(
+					location_id INTEGER PRIMARY KEY REFERENCES locations(id) ON DELETE CASCADE,
+					content_type TEXT NOT NULL,
+					image_data BYTEA NOT NULL,
+					size_bytes INTEGER NOT NULL,
+					updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+				);
+			`); err != nil {
+				return err
+			}
+
+			return nil
+		},
+	},
 }
 
 // migrateLocationHoursUniqueness enforces at most one hours row per weekday per

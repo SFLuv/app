@@ -471,6 +471,12 @@ func AddLocationRoutes(r *chi.Mux, s *handlers.AppService) {
 	r.Get("/locations/{id}/icon", s.GetLocationIcon)
 	r.Post("/locations/{id}/icon", withActiveAuth(s.UploadLocationIcon, s))
 	r.Delete("/locations/{id}/icon", withActiveAuth(s.DeleteLocationIcon, s))
+
+	// The storefront photo is public on the same three surfaces, under the same
+	// ownership rules for writes.
+	r.Get("/locations/{id}/photo", s.GetLocationPhoto)
+	r.Post("/locations/{id}/photo", withActiveAuth(s.UploadLocationPhoto, s))
+	r.Delete("/locations/{id}/photo", withActiveAuth(s.DeleteLocationPhoto, s))
 }
 
 func AddContactRoutes(r *chi.Mux, s *handlers.AppService) {

@@ -87,6 +87,21 @@ export function LocationModal({ location: selected, isOpen, onClose, isPayEnable
           </TabsList>
 
           <TabsContent value="info" className="space-y-4">
+            {/* Only when the merchant uploaded one. There is no placeholder:
+                an empty grey box on every listing without a photo reads as
+                something failing to load rather than as nothing to show. */}
+            {location.photo_url ? (
+              <div className="overflow-hidden rounded-xl border border-border/60">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={location.photo_url}
+                  alt={`${location.name}`}
+                  className="aspect-video w-full object-cover"
+                  loading="lazy"
+                />
+              </div>
+            ) : null}
+
             <p className="text-gray-700 dark:text-gray-300">{location.description}</p>
 
             <div className="flex items-start gap-2">
