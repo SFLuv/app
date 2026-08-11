@@ -4,7 +4,7 @@ import { useState } from "react"
 import { Info } from "lucide-react"
 
 import { AddVolunteerEventModal, type VolunteerEventDraft } from "@/components/events/add-volunteer-event-modal"
-import { VolunteerEventsManager } from "@/components/events/volunteer-events-manager"
+import { VolunteerEventsManager, type ManagedVolunteerEvent } from "@/components/events/volunteer-events-manager"
 import { Button } from "@/components/ui/button"
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
@@ -24,6 +24,7 @@ export default function AffiliatesPage() {
   const { authFetch, status, user } = useApp()
   const { toast } = useToast()
   const [requestModalOpen, setRequestModalOpen] = useState(false)
+  const [editingEvent, setEditingEvent] = useState<ManagedVolunteerEvent | null>(null)
   const [reloadKey, setReloadKey] = useState(0)
 
   const requestEvent = async (draft: VolunteerEventDraft): Promise<string | null> => {
@@ -62,6 +63,29 @@ export default function AffiliatesPage() {
        */
       throw error instanceof Error ? error : new Error("Unable to submit the request.")
     }
+  }
+
+  /**
+   * Save an edit to an existing event.
+   *
+   * Same form, same shape as creation — the server decides what happens next:
+   * an admin's edit applies immediately, an affiliate's is parked for approval.
+   */
+  const saveEventEdit = async (eventId: string, draft: VolunteerEventDraft): Promise<string | null> => {
+    const res = await authFetch(`/affiliates/volunteer-events/${eventId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(draft),
+    })
+    if (!res.ok) {
+      throw new Error((await res.text()).trim() || "Unable to save the changes.")
+    }
+    toast({
+      title: "Changes submitted",
+      description: "An SFLuv admin will review them before they go live.",
+    })
+    setReloadKey((key) => key + 1)
+    return eventId
   }
 
   /**
@@ -156,6 +180,20 @@ export default function AffiliatesPage() {
         </Button>
       </div>
 
+      {/* Editing reuses the request form. A separate edit form is how a field
+          ends up creatable but not editable. */}
+      <AddVolunteerEventModal
+        key={editingEvent?.id ?? "new"}
+        open={editingEvent !== null}
+        onOpenChange={(next) => !next && setEditingEvent(null)}
+        editEvent={editingEvent}
+        createEvent={(draft) => saveEventEdit(editingEvent?.id ?? "", draft)}
+        stagePhoto={stagePhoto}
+        discardPhoto={discardPhoto}
+        unallocatedBalance={Number.MAX_SAFE_INTEGER}
+        submitLabel="Submit changes"
+      />
+
       <AddVolunteerEventModal
         open={requestModalOpen}
         onOpenChange={setRequestModalOpen}
@@ -174,6 +212,7 @@ export default function AffiliatesPage() {
         canReview={false}
         title="Your Organization's Events"
         description="Requests awaiting review, plus approved events with their QR codes."
+        onEditEvent={(event) => setEditingEvent(event)}
       />
     </div>
   )

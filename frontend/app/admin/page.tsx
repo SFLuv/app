@@ -85,7 +85,7 @@ import {
 } from "@/types/workflow"
 import { Event, EventsStatus } from "@/types/event"
 import { AddVolunteerEventModal, type VolunteerEventDraft } from "@/components/events/add-volunteer-event-modal"
-import { VolunteerEventsManager } from "@/components/events/volunteer-events-manager"
+import { VolunteerEventsManager, type ManagedVolunteerEvent } from "@/components/events/volunteer-events-manager"
 import { DrainFaucetModal } from "@/components/events/drain-faucet-modal"
 import { OrganizationManagement } from "@/components/admin/organization-management"
 import { WorkflowDetailsModal } from "@/components/workflows/workflow-details-modal"
@@ -371,6 +371,7 @@ export default function AdminPage() {
   const [eventsPage, setEventsPage] = useState<number>(readQueryNumber("events_page", 0))
   const [eventsCount, setEventsCount] = useState<number>(readQueryNumber("events_count", 10))
   const [eventsExpired, setEventsExpired] = useState<boolean>(readQueryBoolean("events_expired", false))
+  const [editingVolunteerEvent, setEditingVolunteerEvent] = useState<ManagedVolunteerEvent | null>(null)
   const [eventsModalOpen, setEventsModalOpen] = useState<boolean>(false)
   const [eventDetailModalOpen, setEventDetailModalOpen] = useState<boolean>(false)
   const [deleteEventError, setDeleteEventError] = useState<string | undefined>(undefined)
@@ -602,6 +603,24 @@ export default function AdminPage() {
    * specific thumbnail that failed, and a silent false would leave the author
    * guessing which file the modal was unhappy about.
    */
+  /**
+   * Save an edit. Admins do not queue for their own approval, so this applies
+   * immediately — the server still enforces the faucet rule on any increase.
+   */
+  const saveVolunteerEventEdit = async (eventId: string, draft: VolunteerEventDraft): Promise<string | null> => {
+    const res = await authFetch(`/admin/volunteer-events/${eventId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(draft),
+    })
+    if (!res.ok) {
+      throw new Error((await res.text()).trim() || "Unable to save the changes.")
+    }
+    await getEvents()
+    getUnallocatedBalance()
+    return eventId
+  }
+
   const stageVolunteerEventPhoto = async (file: File): Promise<string> => {
     const form = new FormData()
     form.append("photo", file)
@@ -5177,6 +5196,7 @@ export default function AdminPage() {
             basePath="/admin/volunteer-events"
             canReview
             pendingCount={pendingEventCount}
+            onEditEvent={(event) => setEditingVolunteerEvent(event)}
             /*
              * The faucet figure takes the subtitle's place. Rewards are
              * reserved from it at approval, so it is the number an admin needs
@@ -5205,6 +5225,19 @@ export default function AdminPage() {
               <span>{eventsError}</span>
             </div>
           )}
+          {/* Editing reuses the create form, so the two can never diverge. */}
+          <AddVolunteerEventModal
+            key={editingVolunteerEvent?.id ?? "new"}
+            open={editingVolunteerEvent !== null}
+            onOpenChange={(next) => !next && setEditingVolunteerEvent(null)}
+            editEvent={editingVolunteerEvent}
+            createEvent={(draft) => saveVolunteerEventEdit(editingVolunteerEvent?.id ?? "", draft)}
+            stagePhoto={stageVolunteerEventPhoto}
+            discardPhoto={discardVolunteerEventPhoto}
+            unallocatedBalance={unallocatedBalance !== undefined ? Number(unallocatedBalance) : 0}
+            submitLabel="Save changes"
+          />
+
           <AddVolunteerEventModal
             open={eventsModalOpen}
             onOpenChange={toggleNewEventModal}

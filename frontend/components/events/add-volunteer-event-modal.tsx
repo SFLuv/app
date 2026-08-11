@@ -67,6 +67,13 @@ interface AddVolunteerEventModalProps {
   unallocatedBalance: number
   /** "Create event" for admins; affiliates submit a request for approval. */
   submitLabel?: string
+  /**
+   * The event being edited, or undefined to create a new one.
+   *
+   * Editing reuses this form rather than a second one: a divergent edit form is
+   * how a field ends up creatable but not editable.
+   */
+  editEvent?: EditableVolunteerEvent | null
 }
 
 /**
@@ -79,6 +86,64 @@ interface AddVolunteerEventModalProps {
  * one timezone scheduling an event in another must get the event's local time,
  * and a recurring series has to re-anchor to local time across DST.
  */
+/** The subset of a managed event this form can round-trip. */
+export interface EditableVolunteerEvent {
+  id: string
+  title: string
+  description?: string
+  start_at: string
+  end_at: string
+  timezone: string
+  max_participants: number
+  reward_amount_sfluv: number
+  signup?: { mode: string; url?: string | null }
+  /**
+   * The machine-readable rule, not just its summary.
+   *
+   * The form rebuilds the recurrence from these on save, and a draft with no
+   * recurrence block means "one-off" — so reading only the summary would
+   * quietly turn a repeating event into a single occurrence on the first edit.
+   */
+  recurrence?: {
+    frequency?: string
+    monthly_mode?: string
+    week_of_month?: number | null
+    until?: string | null
+    summary?: string
+  } | null
+}
+
+/**
+ * An instant rendered as a `datetime-local` value in a named timezone.
+ *
+ * The payload carries instants, the inputs carry wall clock in the event's own
+ * zone, and the two are only the same for someone sitting in that zone.
+ * Formatting through Intl is what keeps an editor in another city from shifting
+ * every event they open.
+ */
+function toLocalInputValue(instant: string, timezone: string): string {
+  const date = new Date(instant)
+  if (Number.isNaN(date.getTime())) return ""
+
+  try {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: timezone || undefined,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }).formatToParts(date)
+    const get = (type: string) => parts.find((part) => part.type === type)?.value ?? ""
+    const hour = get("hour") === "24" ? "00" : get("hour")
+    return `${get("year")}-${get("month")}-${get("day")}T${hour}:${get("minute")}`
+  } catch {
+    // An unknown zone should not blank the form; fall back to the viewer's.
+    return ""
+  }
+}
+
 /** One chosen cover photo and how far its upload has got. */
 interface StagedPhoto {
   /** Stable across re-renders; the object URL doubles as the React key. */
@@ -98,6 +163,7 @@ export function AddVolunteerEventModal({
   discardPhoto,
   unallocatedBalance,
   submitLabel = "Create event",
+  editEvent,
 }: AddVolunteerEventModalProps) {
   const { user } = useApp()
   // Shown read-only so the organizer can see their identity is recorded
@@ -129,6 +195,49 @@ export function AddVolunteerEventModal({
   const [error, setError] = useState("")
   const [submitting, setSubmitting] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
+
+  /*
+   * Prefill from the event being edited, once per opening.
+   *
+   * Keyed on the event id rather than the object: the panel behind this modal
+   * polls every 30s, and re-seeding on a new object identity would overwrite
+   * whatever the editor had typed.
+   */
+  const editEventId = editEvent?.id ?? null
+  useEffect(() => {
+    if (!open || !editEvent) return
+
+    const zone = editEvent.timezone || TIMEZONES[0]
+    setTitle(editEvent.title)
+    setDescription(editEvent.description ?? "")
+    setTimezone(zone)
+    setStartAtLocal(toLocalInputValue(editEvent.start_at, zone))
+    setEndAtLocal(toLocalInputValue(editEvent.end_at, zone))
+    setMaxParticipants(editEvent.max_participants)
+    setRewardAmount(editEvent.reward_amount_sfluv)
+
+    const mode = editEvent.signup?.mode
+    setSignupMode(mode === "none" || mode === "external" ? mode : "internal")
+    setSignupUrl(editEvent.signup?.url ?? "")
+
+    const rule = editEvent.recurrence
+    const ruleFrequency = rule?.frequency
+    if (ruleFrequency === "daily" || ruleFrequency === "weekly" || ruleFrequency === "monthly") {
+      setFrequency(ruleFrequency)
+      setMonthlyMode(rule?.monthly_mode === "day_of_week" ? "day_of_week" : "day_of_month")
+      setWeekOfMonth(rule?.week_of_month ?? 1)
+      setUntilLocal(rule?.until ? toLocalInputValue(rule.until, zone) : "")
+    } else {
+      setFrequency("none")
+      setMonthlyMode("day_of_month")
+      setWeekOfMonth(1)
+      setUntilLocal("")
+    }
+
+    setError("")
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the id so
+    // a background poll cannot reset a half-typed form.
+  }, [open, editEventId])
 
   useEffect(() => {
     if (open) return
@@ -164,7 +273,13 @@ export function AddVolunteerEventModal({
   )
   // Requesters (affiliates) do not spend against a balance, so the budget line
   // would be noise; approval is where the faucet is actually verified.
-  const showsBudget = unallocatedBalance < Number.MAX_SAFE_INTEGER
+  const showsBudget = unallocatedBalance < Number.MAX_SAFE_INTEGER && !editEvent
+  /*
+   * Only creation is checked against the whole cost here. An edit's cost is
+   * already reserved, so the server checks the DELTA — blocking an edit whose
+   * total exceeds the free balance would refuse harmless changes to an event
+   * that is already funded.
+   */
   const overBudget = showsBudget && totalCost > unallocatedBalance
 
   const addPhotos = (files: FileList | null) => {

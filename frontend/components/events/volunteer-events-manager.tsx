@@ -37,7 +37,13 @@ export interface ManagedVolunteerEvent {
   organizer: { type: string; name: string; logo_url?: string | null }
   cover_photos?: { id: string; url: string; position: number }[]
   description?: string
-  recurrence: { summary: string } | null
+  recurrence: {
+    frequency?: string
+    monthly_mode?: string
+    week_of_month?: number | null
+    until?: string | null
+    summary?: string
+  } | null
   /** Present whenever the event was given one. */
   location?: {
     id: number
@@ -52,6 +58,8 @@ export interface ManagedVolunteerEvent {
   /** Management-only: who made the event. Email is present only when the
       short name is ambiguous within the organization. */
   creator?: { name: string; email?: string } | null
+  /** Set when an affiliate has proposed changes awaiting an admin decision. */
+  pending_edit?: { requested_at: string; title?: string } | null
 }
 
 interface VolunteerEventsManagerProps {
@@ -402,6 +410,44 @@ export function VolunteerEventsManager({
    * they have been handed out. Failures are ignored: a missing organizer logo
    * must not block the download.
    */
+  /**
+   * Decide a parked edit.
+   *
+   * Approval is where the server re-checks the faucet, exactly as it does when
+   * approving a new event — so a refusal here can legitimately be "not enough
+   * unallocated balance", and that message has to reach the admin rather than
+   * being flattened into a generic failure.
+   */
+  const reviewEdit = async (event: ManagedVolunteerEvent, action: "approve" | "reject") => {
+    let reason = ""
+    if (action === "reject") {
+      reason = window.prompt(`Why is the edit to "${event.title}" being rejected? (optional)`) ?? ""
+    }
+
+    setBusyId(event.id)
+    try {
+      const res = await authFetch(`${basePath}/${event.id}/edit/${action}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(action === "reject" ? { reason } : {}),
+      })
+      if (!res.ok) {
+        throw new Error((await res.text()).trim() || `Unable to ${action} the edit.`)
+      }
+      toast({ title: action === "approve" ? "Edit applied" : "Edit rejected" })
+      setOpenEvent(null)
+      await loadEvents()
+    } catch (err) {
+      toast({
+        title: `Could not ${action} the edit`,
+        description: err instanceof Error ? err.message : "Unexpected error.",
+        variant: "destructive",
+      })
+    } finally {
+      setBusyId("")
+    }
+  }
+
   const preloadCardImages = async (logoUrl?: string | null) => {
     const sources = ["/icon.png", ...(logoUrl ? [logoUrl] : [])]
     await Promise.all(
@@ -501,6 +547,9 @@ export function VolunteerEventsManager({
 
   const pendingCount =
     pendingCountOverride ?? events.filter((event) => event.review_status === "pending").length
+  // Only what is on screen: unlike the approval queue there is no server-side
+  // total for parked edits, and claiming one would be worse than scoping it.
+  const pendingEditCount = events.filter((event) => event.pending_edit).length
   const totalPages = Math.max(1, Math.ceil(totalEvents / PAGE_SIZE))
 
   return (
@@ -510,6 +559,11 @@ export function VolunteerEventsManager({
           <div className="min-w-0">
             <CardTitle className="flex flex-wrap items-center gap-2">
               {title}
+              {canReview && pendingEditCount > 0 && (
+                <Badge variant="outline" className="border-amber-500 text-amber-600">
+                  {pendingEditCount} edit{pendingEditCount === 1 ? "" : "s"} to review
+                </Badge>
+              )}
               {canReview && pendingCount > 0 && (
                 <Badge className="border-primary bg-primary text-white hover:bg-primary/90">
                   {pendingCount} awaiting approval
@@ -646,6 +700,41 @@ export function VolunteerEventsManager({
                   <ReviewBadge event={openEvent} />
                   <QrBadge event={openEvent} />
                 </div>
+
+                {openEvent.pending_edit && (
+                  <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
+                    <p className="font-medium">Edit awaiting approval</p>
+                    <p className="mt-1 text-muted-foreground">
+                      {openEvent.pending_edit.title && openEvent.pending_edit.title !== openEvent.title
+                        ? `Proposed title: "${openEvent.pending_edit.title}". `
+                        : ""}
+                      Requested {new Date(openEvent.pending_edit.requested_at).toLocaleString(undefined, {
+                        month: "short",
+                        day: "numeric",
+                        hour: "numeric",
+                        minute: "2-digit",
+                      })}
+                      . The details below are the published ones until it is approved.
+                    </p>
+                    {canReview && (
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <Button size="sm" disabled={busyId === openEvent.id} onClick={() => reviewEdit(openEvent, "approve")}>
+                          <CheckCircle2 className="mr-2 h-3.5 w-3.5" />
+                          Approve edit
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={busyId === openEvent.id}
+                          onClick={() => reviewEdit(openEvent, "reject")}
+                        >
+                          <XCircle className="mr-2 h-3.5 w-3.5" />
+                          Reject edit
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {/*
                   The covers, at a size worth reviewing. An admin approving an
