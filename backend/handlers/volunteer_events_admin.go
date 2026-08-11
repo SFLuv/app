@@ -326,6 +326,36 @@ func (a *AppService) AdminCreateVolunteerEvent(w http.ResponseWriter, r *http.Re
 
 // decorateManagementFields adds the admin/affiliate-only fields that are
 // deliberately withheld from public responses.
+// decoratePendingEdits marks the events in a management list that have an edit
+// awaiting approval. Non-fatal: a lookup failure costs the badge, not the list.
+func (a *AppService) decoratePendingEdits(ctx context.Context, events []*structs.VolunteerEvent, rows []*db.VolunteerEventRow) {
+	if len(events) == 0 {
+		return
+	}
+	ids := make([]string, 0, len(rows))
+	for _, row := range rows {
+		ids = append(ids, row.Id)
+	}
+
+	pending, err := a.bot.db.GetPendingEventEditRequests(ctx, ids)
+	if err != nil {
+		a.logger.Logf("error loading pending edit requests: %s", err)
+		return
+	}
+	for _, event := range events {
+		if request, ok := pending[event.Id]; ok {
+			summary := &structs.VolunteerEventPendingEdit{RequestedAt: rfc3339(request.CreatedAt)}
+			// The proposed title is the one field worth showing without opening
+			// the event — a rename is the edit most likely to matter at a glance.
+			var proposed structs.VolunteerEventCreateRequest
+			if json.Unmarshal([]byte(request.Payload), &proposed) == nil {
+				summary.Title = proposed.Title
+			}
+			event.PendingEdit = summary
+		}
+	}
+}
+
 func decorateManagementFields(event *structs.VolunteerEvent, row *db.VolunteerEventRow) {
 	event.ReviewStatus = row.ReviewStatus
 	event.FundingStatus = row.FundingStatus
@@ -364,6 +394,7 @@ func (a *AppService) AdminListVolunteerEvents(w http.ResponseWriter, r *http.Req
 		event.Creator = creators[row.Id]
 		events = append(events, event)
 	}
+	a.decoratePendingEdits(r.Context(), events, rows)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)

@@ -1687,6 +1687,36 @@ func (s *BotDB) GetPendingEventEditRequest(ctx context.Context, eventId string) 
 	return request, nil
 }
 
+// GetPendingEventEditRequests reports which of the given events have an edit
+// parked for review. Set-based so a management list page costs one query rather
+// than one per row.
+func (s *BotDB) GetPendingEventEditRequests(ctx context.Context, eventIds []string) (map[string]*EventEditRequest, error) {
+	result := map[string]*EventEditRequest{}
+	if len(eventIds) == 0 {
+		return result, nil
+	}
+
+	rows, err := s.db.Query(ctx, `
+		SELECT id, event_id, requested_by, payload, created_at
+		FROM event_edit_requests
+		WHERE status = 'pending' AND event_id = ANY($1);
+	`, eventIds)
+	if err != nil {
+		return nil, fmt.Errorf("error loading pending edit requests: %s", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		request := &EventEditRequest{}
+		if err := rows.Scan(&request.Id, &request.EventId, &request.RequestedBy, &request.Payload, &request.CreatedAt); err != nil {
+			return nil, fmt.Errorf("error scanning pending edit request: %s", err)
+		}
+		result[request.EventId] = request
+	}
+
+	return result, rows.Err()
+}
+
 func (s *BotDB) ResolveEventEditRequest(ctx context.Context, eventId string, decidedBy string, approved bool, reason string) error {
 	status := "rejected"
 	if approved {

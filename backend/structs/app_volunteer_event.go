@@ -154,6 +154,11 @@ type VolunteerEvent struct {
 	QR            *VolunteerEventQR `json:"qr,omitempty"`
 	FundingStatus string            `json:"funding_status,omitempty"`
 
+	// PendingEdit is set when an affiliate has proposed changes that an admin
+	// has not yet approved. Without it the approve/reject endpoints exist but
+	// nothing can discover that there is anything to act on.
+	PendingEdit *VolunteerEventPendingEdit `json:"pending_edit,omitempty"`
+
 	CreatedAt string `json:"created_at"`
 	UpdatedAt string `json:"updated_at"`
 }
@@ -165,6 +170,14 @@ type VolunteerEvent struct {
 type VolunteerEventCreator struct {
 	Name  string `json:"name"`
 	Email string `json:"email,omitempty"`
+}
+
+// VolunteerEventPendingEdit summarises a parked edit. The proposed values
+// themselves are deliberately not inlined into every list row — an admin opens
+// the event to review them.
+type VolunteerEventPendingEdit struct {
+	RequestedAt string `json:"requested_at"`
+	Title       string `json:"title"`
 }
 
 type VolunteerEventsResponse struct {

@@ -178,6 +178,7 @@ func (a *AppService) AffiliateListVolunteerEvents(w http.ResponseWriter, r *http
 		event.Creator = creators[row.Id]
 		events = append(events, event)
 	}
+	a.decoratePendingEdits(r.Context(), events, rows)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -339,34 +340,44 @@ func (a *AppService) AffiliateDownloadVolunteerEventCodes(w http.ResponseWriter,
 // they are spendable — organizers print ahead of the event, and the 24h
 // redemption gate is what prevents early use. When requiredOrgId is non-nil the
 // event must belong to that organization.
-func (a *AppService) writeVolunteerEventCodesCSV(w http.ResponseWriter, r *http.Request, requiredOrgId *int64) {
+// loadVolunteerEventCodes resolves an event and its codes for a download,
+// enforcing organization scope. It writes the failure response itself and
+// returns ok=false when the caller should stop.
+//
+// Shared by the CSV and JSON downloads so the authorization can never drift
+// between the two: these codes are bearer tokens for faucet funds.
+func (a *AppService) loadVolunteerEventCodes(
+	w http.ResponseWriter,
+	r *http.Request,
+	requiredOrgId *int64,
+) (*db.VolunteerEventRow, []db.NumberedCode, bool) {
 	if a.bot == nil || a.bot.db == nil {
 		w.WriteHeader(http.StatusServiceUnavailable)
-		return
+		return nil, nil, false
 	}
 
 	eventId := strings.TrimSpace(r.PathValue("id"))
 	if eventId == "" {
 		w.WriteHeader(http.StatusBadRequest)
-		return
+		return nil, nil, false
 	}
 
 	row, err := a.bot.db.GetVolunteerEventForManagement(r.Context(), eventId)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			w.WriteHeader(http.StatusNotFound)
-			return
+			return nil, nil, false
 		}
 		a.logger.Logf("error loading event %s for code download: %s", eventId, err)
 		w.WriteHeader(http.StatusInternalServerError)
-		return
+		return nil, nil, false
 	}
 
 	if requiredOrgId != nil {
 		// 404 rather than 403: a wrong-org id should not confirm the event exists.
 		if row.OrganizationId == nil || *row.OrganizationId != *requiredOrgId {
 			w.WriteHeader(http.StatusNotFound)
-			return
+			return nil, nil, false
 		}
 	}
 
@@ -374,6 +385,60 @@ func (a *AppService) writeVolunteerEventCodesCSV(w http.ResponseWriter, r *http.
 	if err != nil {
 		a.logger.Logf("error loading codes for event %s: %s", eventId, err)
 		w.WriteHeader(http.StatusInternalServerError)
+		return nil, nil, false
+	}
+
+	return row, codes, true
+}
+
+// AdminGetVolunteerEventCodes / AffiliateGetVolunteerEventCodes serve the same
+// codes as JSON, for the client that renders them onto printable cards.
+//
+// The printed sheet is a PDF built in the browser from the card components, so
+// it cannot be produced from a CSV — it needs the ids and their numbers as
+// data. Same shape as the legacy /events/{id} codes endpoint the original card
+// export already consumed.
+func (a *AppService) AdminGetVolunteerEventCodes(w http.ResponseWriter, r *http.Request) {
+	a.writeVolunteerEventCodesJSON(w, r, nil)
+}
+
+func (a *AppService) AffiliateGetVolunteerEventCodes(w http.ResponseWriter, r *http.Request) {
+	userDid := utils.GetDid(r)
+	if userDid == nil {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	org, _, err := a.db.GetOrganizationByUser(r.Context(), *userDid)
+	if err != nil || org == nil {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	a.writeVolunteerEventCodesJSON(w, r, &org.Id)
+}
+
+func (a *AppService) writeVolunteerEventCodesJSON(w http.ResponseWriter, r *http.Request, requiredOrgId *int64) {
+	_, codes, ok := a.loadVolunteerEventCodes(w, r, requiredOrgId)
+	if !ok {
+		return
+	}
+
+	type codeEntry struct {
+		Id     string `json:"id"`
+		Number int    `json:"number"`
+	}
+	entries := make([]codeEntry, 0, len(codes))
+	for _, code := range codes {
+		entries = append(entries, codeEntry{Id: code.Id, Number: code.Number})
+	}
+
+	writeJSON(w, http.StatusOK, entries)
+}
+
+func (a *AppService) writeVolunteerEventCodesCSV(w http.ResponseWriter, r *http.Request, requiredOrgId *int64) {
+	row, codes, ok := a.loadVolunteerEventCodes(w, r, requiredOrgId)
+	if !ok {
 		return
 	}
 

@@ -311,6 +311,9 @@ func AddAdminRoutes(r *chi.Mux, s *handlers.AppService) {
 	r.Post("/admin/volunteer-events/{id}/edit/reject", withAdmin(s.AdminRejectVolunteerEventEdit, s))
 	r.Post("/admin/volunteer-events/{id}/reject", withAdmin(s.AdminRejectVolunteerEvent, s))
 	r.Get("/admin/volunteer-events/{id}/codes.csv", withAdmin(s.AdminDownloadVolunteerEventCodes, s))
+	// JSON for the printable-card export, CSV for a spreadsheet. Same codes,
+	// same organization scoping — see loadVolunteerEventCodes.
+	r.Get("/admin/volunteer-events/{id}/codes", withAdmin(s.AdminGetVolunteerEventCodes, s))
 	r.Post("/admin/volunteer-events/{id}/cancel", withAdmin(s.AdminCancelVolunteerEvent, s))
 	r.Post("/admin/volunteer-events/{id}/blast", withAdmin(s.AdminSendEventBlast, s))
 	r.Post("/admin/volunteer-events/{id}/blast/preview", withAdmin(s.PreviewEventBlast, s))
@@ -346,6 +349,7 @@ func AddAffiliateRoutes(r *chi.Mux, s *handlers.BotService, a *handlers.AppServi
 	// create events unilaterally. Scoped to their own organization inside the
 	// handler — these codes are bearer tokens for faucet funds.
 	r.Get("/affiliates/volunteer-events/{id}/codes.csv", withAffiliate(a.AffiliateDownloadVolunteerEventCodes, a))
+	r.Get("/affiliates/volunteer-events/{id}/codes", withAffiliate(a.AffiliateGetVolunteerEventCodes, a))
 	r.Put("/affiliates/volunteer-events/{id}", withAffiliate(a.AffiliateUpdateVolunteerEvent, a))
 	r.Post("/affiliates/volunteer-events/{id}/blast", withAffiliate(a.AffiliateSendEventBlast, a))
 	r.Post("/affiliates/volunteer-events/{id}/blast/preview", withAffiliate(a.PreviewEventBlast, a))

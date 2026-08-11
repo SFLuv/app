@@ -16,6 +16,8 @@ import {
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { EventBlastModal } from "@/components/events/event-blast-modal"
+import { QRCodeCard } from "@/components/events/qr-code-card"
+import { AffiliateQRCodeCard } from "@/components/events/affiliate-qr-code-card"
 import { Pagination } from "@/components/opportunities/pagination"
 import { useApp } from "@/context/AppProvider"
 import { useToast } from "@/hooks/use-toast"
@@ -79,6 +81,15 @@ interface VolunteerEventsManagerProps {
 
 /** Rows per page. Small enough that the panel never becomes the whole screen. */
 const PAGE_SIZE = 8
+
+/**
+ * Cards per PDF, and per render pass.
+ *
+ * Each card is rasterised to its own full-page canvas, so this bounds both the
+ * size of a single download and the peak memory a large event can reach. 30 is
+ * what the original event export settled on.
+ */
+const CODES_PER_PDF = 30
 
 const REVIEW_FILTERS = [
   { value: "all", label: "All events" },
@@ -258,6 +269,12 @@ export function VolunteerEventsManager({
   const [reviewFilter, setReviewFilter] = useState("all")
   const [search, setSearch] = useState("")
   const [busyId, setBusyId] = useState("")
+  // The batch currently mounted off-screen for rasterising, and which event it
+  // belongs to. Empty except while a download is running.
+  const [exportCodes, setExportCodes] = useState<Array<{ id: string; number: number }>>([])
+  const [exportEvent, setExportEvent] = useState<ManagedVolunteerEvent | null>(null)
+  const [exportProgress, setExportProgress] = useState<{ done: number; total: number } | null>(null)
+  const exportTargetRef = useRef<HTMLDivElement | null>(null)
   const [openEvent, setOpenEvent] = useState<ManagedVolunteerEvent | null>(null)
   const [blastEvent, setBlastEvent] = useState<ManagedVolunteerEvent | null>(null)
   const [error, setError] = useState("")
@@ -376,22 +393,98 @@ export function VolunteerEventsManager({
     }
   }
 
-  // The CSV endpoint is auth-guarded, so a plain link would 403. Fetch it with
-  // credentials and hand the browser a blob instead.
+  /**
+   * Warm the images the cards draw before the rasteriser looks at them.
+   *
+   * The card composites its centre mark as an image over the QR SVG, and the
+   * capture takes whatever has loaded by that moment — an uncached mark means a
+   * batch of printed codes with a blank middle, which is not recoverable once
+   * they have been handed out. Failures are ignored: a missing organizer logo
+   * must not block the download.
+   */
+  const preloadCardImages = async (logoUrl?: string | null) => {
+    const sources = ["/icon.png", ...(logoUrl ? [logoUrl] : [])]
+    await Promise.all(
+      sources.map(async (src) => {
+        try {
+          const image = new window.Image()
+          image.crossOrigin = "anonymous"
+          image.src = src
+          await image.decode()
+        } catch {
+          // Fall through to the settle delay below.
+        }
+      }),
+    )
+  }
+
+  const waitForExportRender = async (logoUrl?: string | null) => {
+    await preloadCardImages(logoUrl)
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+    await new Promise<void>((resolve) => setTimeout(() => resolve(), 150))
+  }
+
+  /**
+   * Printable QR cards as PDFs, rendered in the browser from the same card
+   * components the rest of the product uses — so the printed code carries the
+   * current styling rather than a second, drifting design.
+   *
+   * Batched, and the batch is what is MOUNTED as well as what is written. Each
+   * card rasterises to a full-page canvas, so a 300-code event rendered in one
+   * pass builds 300 of them before anything is written and reliably dies on
+   * memory. Rendering CODES_PER_PDF at a time keeps the live DOM and the peak
+   * canvas count bounded no matter how large the event is.
+   */
   const downloadCodes = async (event: ManagedVolunteerEvent) => {
     setBusyId(event.id)
+    setExportEvent(event)
     try {
-      const res = await authFetch(`${basePath}/${event.id}/codes.csv`)
-      if (!res.ok) throw new Error("Unable to download QR codes.")
-      const blob = await res.blob()
-      const url = URL.createObjectURL(blob)
-      const link = document.createElement("a")
-      link.href = url
-      link.download = `${event.title.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}-qr-codes.csv`
-      document.body.appendChild(link)
-      link.click()
-      link.remove()
-      URL.revokeObjectURL(url)
+      const res = await authFetch(`${basePath}/${event.id}/codes`)
+      if (!res.ok) throw new Error((await res.text()).trim() || "Unable to load QR codes.")
+
+      const loaded = (await res.json()) as Array<{ id: string; number?: number }>
+      const codes = (loaded || []).map((code, index) => ({ id: code.id, number: code.number ?? index + 1 }))
+      if (codes.length === 0) {
+        throw new Error("This event has no QR codes yet.")
+      }
+
+      const batches: Array<Array<{ id: string; number: number }>> = []
+      for (let index = 0; index < codes.length; index += CODES_PER_PDF) {
+        batches.push(codes.slice(index, index + CODES_PER_PDF))
+      }
+
+      const fileBase =
+        event.title.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "event"
+
+      const { default: generatePDF, Margin, Resolution } = await import("react-to-pdf")
+
+      for (let batchIndex = 0; batchIndex < batches.length; batchIndex += 1) {
+        setExportCodes(batches[batchIndex])
+        setExportProgress({ done: batchIndex, total: batches.length })
+        await waitForExportRender(event.organizer.logo_url)
+
+        await generatePDF(() => exportTargetRef.current, {
+          method: "save",
+          filename: batches.length === 1 ? `${fileBase}.pdf` : `${fileBase}-batch-${batchIndex + 1}.pdf`,
+          resolution: Resolution.NORMAL,
+          // One card per page, at the printed card's real size in millimetres.
+          page: { margin: Margin.NONE, format: [55, 42.5] },
+          canvas: { mimeType: "image/jpeg", qualityRatio: 0.95, useCORS: true },
+        })
+
+        // Drop the batch before building the next one, so the canvases it
+        // created can be collected rather than accumulating across batches.
+        setExportCodes([])
+        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+      }
+
+      if (batches.length > 1) {
+        toast({
+          title: `Downloaded ${batches.length} PDFs`,
+          description: `${codes.length} codes, split into batches of ${CODES_PER_PDF}.`,
+        })
+      }
     } catch (err) {
       toast({
         title: "Could not download QR codes",
@@ -399,6 +492,9 @@ export function VolunteerEventsManager({
         variant: "destructive",
       })
     } finally {
+      setExportCodes([])
+      setExportEvent(null)
+      setExportProgress(null)
       setBusyId("")
     }
   }
@@ -640,8 +736,21 @@ export function VolunteerEventsManager({
                   )}
                   {openEvent.qr?.codes_generated && (
                     <Button variant="outline" size="sm" disabled={busyId === openEvent.id} onClick={() => downloadCodes(openEvent)}>
-                      <Download className="mr-2 h-3.5 w-3.5" />
-                      QR codes
+                      {busyId === openEvent.id ? (
+                        <>
+                          <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+                          {/* A big event takes a while and saves one file per
+                              batch; without the count it reads as a hang. */}
+                          {exportProgress && exportProgress.total > 1
+                            ? `Preparing PDF ${exportProgress.done + 1} of ${exportProgress.total}`
+                            : "Preparing PDF"}
+                        </>
+                      ) : (
+                        <>
+                          <Download className="mr-2 h-3.5 w-3.5" />
+                          QR code PDFs
+                        </>
+                      )}
                     </Button>
                   )}
                   {openEvent.review_status === "approved" && (openEvent.signup_count ?? 0) > 0 && (
@@ -679,6 +788,41 @@ export function VolunteerEventsManager({
           )}
         </DialogContent>
       </Dialog>
+
+      {/*
+        The rasteriser reads real laid-out DOM, so the cards have to be in the
+        document — parked off-screen rather than hidden, because `display: none`
+        has no layout to capture. Only the current batch is mounted.
+      */}
+      {exportEvent && exportCodes.length > 0 && (
+        <div aria-hidden className="pointer-events-none fixed left-[-10000px] top-0 z-[-1] opacity-0">
+          <div ref={exportTargetRef} style={{ width: "425px", padding: 0 }}>
+            {exportCodes.map((code) => {
+              const startAt = Math.floor(new Date(exportEvent.start_at).getTime() / 1000)
+              const eventStartAt = Number.isFinite(startAt) ? startAt : undefined
+              return exportEvent.organizer.logo_url ? (
+                <AffiliateQRCodeCard
+                  key={code.id}
+                  code={code.id}
+                  logoUrl={exportEvent.organizer.logo_url}
+                  organization={exportEvent.organizer.name || "our partner"}
+                  eventTitle={exportEvent.title}
+                  codeNumber={code.number}
+                  eventStartAt={eventStartAt}
+                />
+              ) : (
+                <QRCodeCard
+                  key={code.id}
+                  code={code.id}
+                  eventTitle={exportEvent.title}
+                  codeNumber={code.number}
+                  eventStartAt={eventStartAt}
+                />
+              )
+            })}
+          </div>
+        </div>
+      )}
 
       {blastEvent && (
         <EventBlastModal
