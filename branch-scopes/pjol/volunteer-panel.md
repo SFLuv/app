@@ -1,16 +1,17 @@
 # Branch scope — `pjol/volunteer-panel`
 
-Aug 5–10 2026 · app + mobile-app + webpage · **~32.4h active**
+Aug 5–10 2026 · app + mobile-app + webpage · **~32.5h active**
 
 Hours are active working time inferred from commit clustering.
 
 - **Round 1 (Aug 5–8) — 22.0h.** ~16h measured, adjusted upward for two large batch commits
   (`dd007b9` +3,098, `6dbf50c` +2,522) whose work landed with no intermediate commits.
-- **Round 2 (Aug 9–10) — 10.4h.** Measured: 1.4h on the 9th (17:44–19:08) and 8.1h on the 10th
-  (10:48–18:56), plus ~0.8h of work before the first commit of each day. An earlier revision of this
-  file put the round at 10.5h while its last stretch was uncommitted and had to be estimated; the
-  measured figure came in at 9.8h, and the QR export rewrite that closed the round added the last
-  0.6h. Itemised to the nearest 0.1h, and the items sum to the measured figure — an earlier draft
+- **Round 2 (Aug 9–10) — 10.5h.** Measured: 1.4h on the 9th (17:44–19:08) and 8.2h on the 10th
+  (10:48–19:05), plus ~0.8h of work before the first commit of each day. An earlier revision of this
+  file estimated the round at 10.5h while its last stretch was uncommitted; measuring it brought the
+  figure down to 9.8h, and the QR export rewrite that closed the round then added 0.7h, landing back
+  on 10.5h by coincidence rather than by the estimate having been right.
+  Itemised to the nearest 0.1h, and the items sum to the measured figure — an earlier draft
   floored every item at 0.5h and reached 14.2h, which was the floor talking rather than the work.
 
 ---
@@ -145,7 +146,7 @@ Hours are active working time inferred from commit clustering.
 - Batched at 15 — the batch is what is mounted as well as what is written, which is what bounds peak
   memory on a large event
 
-### QR card export redrawn on a canvas — 0.5h · app
+### QR card export redrawn on a canvas — 0.6h · app
 - The export above screenshotted the React card with html2canvas. It clipped, and the clipping was not
   a sizing bug that could be tuned out: html2canvas clones the document and lays the text out with the
   clone's fonts, so a heading that wrapped to three rows on screen could wrap to four in the capture
@@ -164,8 +165,17 @@ Hours are active working time inferred from commit clustering.
   and the app draw the same code from one source.
 - **Printed page size changed**: the page format is now derived from the card's own 425×550 ratio,
   55mm × 71.2mm, rather than the previous 55 × 42.5mm which did not match the artwork and squashed it.
+- Redrawing the card by hand dropped a detail the React version carried: the affiliate heading reads
+  "Thank you from SFLuv and {organizer}!", crediting both parties whose marks appear above it, not the
+  organizer alone. Restored, along with the "our partner" fallback for an organizer with a logo but no
+  name — a logo is what selects the paired card, so that combination has to read as something
+- Shrink-to-fit now keeps going past the design's 15px floor to 10px before it will drop a word. The
+  row limit on the heading is set by width, not height, so smaller type buys whole lines back; the
+  longer affiliate wording pushed long organizer names toward that floor, where the previous behaviour
+  was to slice — the same silent loss the rewrite was for. Line height is untouched, so the card's
+  vertical budget is unaffected
 
-**Subtotal 6.6h**
+**Subtotal 6.7h**
 
 ---
 
@@ -204,9 +214,9 @@ does, and when space is tight the logo gives way first — a smaller mark costs 
 
 | | Round 1 | Round 2 | Total |
 |---|---|---|---|
-| Large features | 16.6 | 6.6 | 23.2 |
+| Large features | 16.6 | 6.7 | 23.3 |
 | Tweaks & fixes | 5.4 | 3.8 | 9.2 |
-| **Total** | **22.0** | **10.4** | **32.4** |
+| **Total** | **22.0** | **10.5** | **32.5** |
 
 Volume — Round 1: 151 files, ~27.3k insertions / ~3.8k deletions · 12 DB migrations · 52 new routes · 122 new Go tests.
 Volume — Round 2: 82 files, ~7.8k insertions / ~0.9k deletions · 2 DB migrations (1.37, 1.38) · 7 new routes · 1 new dependency (`jspdf`), replacing the export's use of `html2canvas`.

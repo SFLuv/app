@@ -148,6 +148,11 @@ export function wrapText(
 }
 
 /**
+ * Below any caller's floor, but above illegible. See fitText.
+ */
+const EMERGENCY_MIN_FONT = 10
+
+/**
  * The largest size at which the text fits the given box, and its lines there.
  *
  * Steps down rather than clamping, because a printed card that has quietly lost
@@ -155,6 +160,13 @@ export function wrapText(
  * is on fractional measured heights — the old DOM version compared integer
  * `scrollHeight` values, which reports a box overflowing by a fraction of a
  * pixel as fitting exactly, and that fraction is a clipped row of descenders.
+ *
+ * `minFont` is the size the design would rather not go below, not a hard stop.
+ * Once it is reached the search keeps going to EMERGENCY_MIN_FONT, because the
+ * alternative at that point is dropping words: the row limit here is set by how
+ * wide the text is, not how tall, so smaller type buys whole lines back. Only a
+ * name too long to fit even there loses anything. The line height is unchanged
+ * either way, so the card's vertical budget is never affected by this.
  */
 export function fitText(
   ctx: CanvasRenderingContext2D,
@@ -171,9 +183,11 @@ export function fitText(
 ): { size: number; lines: string[] } {
   const { maxWidth, maxHeight, maxLines, baseFont, minFont, lineHeight, weight = 400 } = options
 
+  const floor = Math.min(minFont, EMERGENCY_MIN_FONT)
+
   let size = baseFont
   let lines: string[] = []
-  while (size >= minFont) {
+  while (size >= floor) {
     ctx.font = font(size, weight)
     lines = wrapText(ctx, text, maxWidth)
     if (lines.length <= maxLines && lines.length * size * lineHeight <= maxHeight) {
@@ -183,9 +197,9 @@ export function fitText(
   }
 
   // At the floor, keep what fits rather than drawing past the box.
-  ctx.font = font(minFont, weight)
+  ctx.font = font(floor, weight)
   lines = wrapText(ctx, text, maxWidth).slice(0, maxLines)
-  return { size: minFont, lines }
+  return { size: floor, lines }
 }
 
 function drawLines(
@@ -391,7 +405,11 @@ export async function buildCardTemplate(content: CardContent): Promise<CardTempl
   const bodyTop = headerBottom + 10
   const bodyBottom = CARD_HEIGHT - EDGE_BOTTOM - footerHeight - 8
 
-  const heading = content.organization ? `Thank you from ${content.organization}!` : "Thank you from SFLuv!"
+  // Wording matches the cards on screen: the affiliate variant credits both
+  // parties, since the organizer's logo sits beside the SFLuv mark above it.
+  const heading = content.organization
+    ? `Thank you from SFLuv and ${content.organization}!`
+    : "Thank you from SFLuv!"
   ctx.textAlign = "center"
   const headingFit = fitText(ctx, heading, {
     maxWidth: contentWidth - 48,

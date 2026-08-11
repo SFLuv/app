@@ -456,7 +456,9 @@ export function VolunteerEventsManager({
         eventTitle: event.title,
         eventDate: Number.isFinite(startAt) ? cardCanvas.formatCardDate(startAt) : undefined,
         logoUrl: event.organizer.logo_url,
-        organization: event.organizer.logo_url ? event.organizer.name : undefined,
+        // A logo is what selects the paired card, so a nameless organizer still
+        // needs something to be thanked as — same fallback the modal uses.
+        organization: event.organizer.logo_url ? event.organizer.name || "our partner" : undefined,
       }
 
       // Once per event: the only things that differ per card are the QR and the
