@@ -4,7 +4,7 @@ import type React from "react"
 import { useCallback, useState } from "react"
 import { useRouter } from "next/navigation"
 import { z } from "zod"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -402,9 +402,10 @@ export function MerchantApprovalForm() {
 
   return (
     <Card>
-      <CardHeader>
+      {/* pb trimmed: with the description gone the header's own padding plus
+          the content's left a large empty band under the title. */}
+      <CardHeader className="pb-2">
         <CardTitle className="text-black dark:text-white">Merchant Application</CardTitle>
-        <CardDescription>Please provide your business details to apply for merchant status</CardDescription>
       </CardHeader>
       <CardContent>
         <form onSubmit={handleSubmit} className="space-y-6" noValidate>

@@ -84,6 +84,37 @@ c_yellow(){ printf "\033[1;33m%s\033[0m\n" "$1"; }
 c_red()   { printf "\033[1;31m%s\033[0m\n" "$1"; }
 die()     { c_red "$1"; exit 1; }
 
+# Install node dependencies when they are missing OR stale. Testing only for a
+# missing node_modules meant a pull that added a package left the old tree in
+# place, and the service came up and then failed at request time with
+# "Module not found: Can't resolve '<pkg>'" — which reads as a broken build
+# rather than a stale checkout. Comparing against package.json catches that.
+#
+# The manager is chosen by the lockfile actually in the project, not by hand: a
+# pnpm-lock.yaml resolves differently under npm, so npm both ignores the pinned
+# tree and — on frontend/, which has no package-lock.json at all — fails outright
+# with "Cannot read properties of null (reading 'edgesOut')". Neither symptom
+# points at the lockfile, so detecting it here is what keeps the two in step.
+ensure_deps() {
+  local dir="$1" label="$2" logfile="$3"
+  [[ -f "$dir/package.json" ]] || return 0
+
+  if [[ -d "$dir/node_modules" && ! "$dir/package.json" -nt "$dir/node_modules" ]]; then
+    return 0
+  fi
+
+  c_yellow "  installing $label deps…"
+  if [[ -f "$dir/pnpm-lock.yaml" ]] && command -v pnpm >/dev/null 2>&1; then
+    ( cd "$dir" && pnpm install --prefer-offline >"$logfile" 2>&1 )
+  else
+    ( cd "$dir" && npm install --no-audit --no-fund >"$logfile" 2>&1 )
+  fi || { c_yellow "  $label dep install failed — see $logfile"; return 1; }
+
+  # Mark the tree as current, so the next boot does not reinstall on every run.
+  touch "$dir/node_modules"
+  return 0
+}
+
 # ----------------------------------------------------------------------------
 # Dev utilities menu (./dev-up.sh menu) — does not boot any services. Operates
 # on the local (cloned) app database only. All writes are gated behind explicit
@@ -685,6 +716,34 @@ fi
 # ----------------------------------------------------------------------------
 c_blue "[3/10] Chain (anvil fork of Celo, :$ANVIL_PORT)"
 free_port "$ANVIL_PORT" anvil
+
+# Left to itself anvil forks at whatever "latest" returns the instant it starts,
+# and that block is too new to be safe: forno is load balanced, and the backend
+# that answers the next call may not have it yet. The fork then dies on its
+# first state read with
+#   -32019 "block is out of range"
+# which surfaces two steps later as "failed to fund payer" — the chain is up and
+# healthy-looking, so it reads as a paymaster problem rather than a fork one.
+#
+# Backing off a small number of blocks puts the fork on something every backend
+# has already seen. Still far ahead of the cloned ponder index, so the guard in
+# the ponder step is unaffected. Set ANVIL_FORK_BLOCK to pin a specific block
+# instead; set ANVIL_FORK_LAG to change the back-off.
+if [[ -z "${ANVIL_FORK_BLOCK:-}" ]]; then
+  _fork_lag="${ANVIL_FORK_LAG:-100}"
+  _fork_head="$(curl -s -m 15 -X POST "${CELO_FORK_RPC_URL:-https://forno.celo.org}" \
+    -H 'content-type: application/json' \
+    -d '{"jsonrpc":"2.0","id":1,"method":"eth_blockNumber","params":[]}' 2>/dev/null \
+    | python3 -c 'import sys,json; print(int(json.load(sys.stdin)["result"], 16))' 2>/dev/null || true)"
+  if [[ "${_fork_head:-}" =~ ^[0-9]+$ && "$_fork_head" -gt "$_fork_lag" ]]; then
+    ANVIL_FORK_BLOCK=$((_fork_head - _fork_lag))
+    c_yellow "  forking at $ANVIL_FORK_BLOCK ($_fork_lag behind head $_fork_head, so every backend has it)"
+  else
+    c_yellow "  could not read the fork head — letting anvil pick, which may fail on its first state read"
+  fi
+  unset _fork_lag _fork_head
+fi
+
 ANVIL_ARGS=(--fork-url "${CELO_FORK_RPC_URL:-https://forno.celo.org}" --chain-id "$CELO_CHAIN_ID" --host 127.0.0.1 --port "$ANVIL_PORT")
 [[ -n "${ANVIL_FORK_BLOCK:-}" ]] && ANVIL_ARGS+=(--fork-block-number "$ANVIL_FORK_BLOCK")
 anvil "${ANVIL_ARGS[@]}" >"$LOG_DIR/anvil.log" 2>&1 &
@@ -696,6 +755,22 @@ for ((i = 0; i < 120; i++)); do
   sleep 1
 done
 c_green "  chain is up ($ANVIL_RPC, chain id $CELO_CHAIN_ID, forked from Celo)"
+
+# The fork inherits the forked block's timestamp, so the chain starts however
+# far back the fork does — and then stays there, because anvil only advances
+# time when it mines. Account abstraction is what notices: the paymaster signs
+# a user operation whose validity window is real wall-clock time, the chain
+# evaluates it in the past, and the bundler rejects it as
+#   AA32 expired or not due
+# The visible symptom is nothing to do with clocks — a smart wallet that never
+# finishes deploying and a wallets page stuck loading. Sync once here, and mine
+# a block so the new time is what the next validation actually sees.
+if cast rpc anvil_setTime "$(date +%s)" --rpc-url "$ANVIL_RPC" >/dev/null 2>&1; then
+  cast rpc anvil_mine --rpc-url "$ANVIL_RPC" >/dev/null 2>&1 || true
+  c_green "  chain clock synced to wall time (account abstraction rejects a stale one)"
+else
+  c_yellow "  could not sync the chain clock — smart wallet deployment may fail with AA32"
+fi
 
 # ----------------------------------------------------------------------------
 # 4. Community config + engine service
@@ -934,10 +1009,7 @@ if [[ "$RUN_PONDER" -eq 1 ]]; then
       c_yellow "  ponder will refuse to start — re-clone (drop --skip-db-clone), or set ANVIL_FORK_BLOCK=$IDX_HEAD"
     fi
   fi
-  if [[ ! -d "$ROOT/ponder/node_modules" ]]; then
-    c_yellow "  installing ponder deps…"
-    ( cd "$ROOT/ponder" && npm install --no-audit --no-fund >"$LOG_DIR/ponder-install.log" 2>&1 )
-  fi
+  ensure_deps "$ROOT/ponder" ponder "$LOG_DIR/ponder-install.log"
   PONDER_ENV=(
     "DATABASE_URL=postgresql://$LOCAL_DB_USER:@$LOCAL_DB_HOST_PORT/$PONDER_DB_NAME"
     "PONDER_RPC_URL_1=$ANVIL_RPC"
@@ -991,7 +1063,12 @@ if [[ "$RUN_BACKEND" -eq 1 ]]; then
   BACKEND_ENV=(
     "PORT=$BACKEND_PORT"
     "IN_PRODUCTION=false"
-    "APP_BASE_URL=http://localhost:$FRONTEND_PORT"
+    # https, not http: the dev frontend is served over TLS, so http://…:3000
+    # refuses the connection outright. The backend builds outbound links from
+    # this — email CTAs, and the SFLuv organiser avatar the marketing site shows
+    # on every event card — so getting the scheme wrong renders as a broken
+    # image and dead links rather than anything that names the cause.
+    "APP_BASE_URL=https://localhost:$FRONTEND_PORT"
     "DB_USER=$LOCAL_DB_USER"
     "DB_PASSWORD="
     "DB_BASE_URL=$LOCAL_DB_HOST_PORT"
@@ -1053,20 +1130,24 @@ fi
 if [[ "$RUN_FRONTEND" -eq 1 ]]; then
   c_blue "[8/10] Frontend (:$FRONTEND_PORT)"
   free_port "$FRONTEND_PORT" frontend
-  if [[ ! -d "$ROOT/frontend/node_modules" ]]; then
-    c_yellow "  installing frontend deps…"
-    ( cd "$ROOT/frontend" && npm install --no-audit --no-fund >"$LOG_DIR/frontend-install.log" 2>&1 )
-  fi
+  ensure_deps "$ROOT/frontend" frontend "$LOG_DIR/frontend-install.log"
   FRONTEND_ENV=(
     "IN_PRODUCTION=false"
     "NEXT_PUBLIC_BACKEND_URL=http://localhost:$BACKEND_PORT"
-    "NEXT_PUBLIC_FRONTEND_URL=http://localhost:$FRONTEND_PORT"
+    "NEXT_PUBLIC_FRONTEND_URL=https://localhost:$FRONTEND_PORT"
     "NEXT_PUBLIC_CHAIN_RPC_URL=$ANVIL_RPC"
     "NEXT_PUBLIC_FAUCET_ADDRESS=$FAUCET_ADDRESS_LOCAL"
     "NEXT_PUBLIC_ENGINE_URL=$ENGINE_URL"
     "NEXT_PUBLIC_PRIVY_APP_ID=${NEXT_PUBLIC_PRIVY_APP_ID:-}"
     "NEXT_PUBLIC_GOOGLE_MAPS_API_KEY=${NEXT_PUBLIC_GOOGLE_MAPS_API_KEY:-}"
     "NEXT_PUBLIC_MAP_ID=${NEXT_PUBLIC_MAP_ID:-}"
+    # Event photos are served by the backend over http, while the dev frontend
+    # runs over https. The CSP allows img-src 'self' blob: data: https: — so in
+    # production, where both are https, the photo loads; locally it is blocked
+    # and the thumbnail renders as a broken image with no clue why. This is the
+    # escape hatch middleware.ts already provides, pointed at the local backend
+    # only. Production sets nothing here and keeps the stricter policy.
+    "NEXT_PUBLIC_CSP_EXTRA_IMG_SRC=http://localhost:$BACKEND_PORT"
   )
   start_bg frontend "$ROOT/frontend" "$LOG_DIR/frontend.log" env "${FRONTEND_ENV[@]}" npm run dev
   wait_for "https://localhost:$FRONTEND_PORT" "frontend" 90 "${PIDS[${#PIDS[@]}-1]}" "$LOG_DIR/frontend.log" \
@@ -1098,11 +1179,7 @@ fi
 # ----------------------------------------------------------------------------
 if [[ "$RUN_WEBPAGE" -eq 1 && -n "$WEBPAGE_PORT" ]]; then
   c_blue "[9/10] Webpage (:$WEBPAGE_PORT)"
-  if [[ ! -d "$WEBPAGE_DIR/node_modules" ]]; then
-    c_yellow "  installing webpage deps…"
-    ( cd "$WEBPAGE_DIR" && npm install --no-audit --no-fund >"$LOG_DIR/webpage-install.log" 2>&1 ) \
-      || c_yellow "  webpage dep install failed — see tmp/logs/webpage-install.log"
-  fi
+  ensure_deps "$WEBPAGE_DIR" webpage "$LOG_DIR/webpage-install.log"
 
   # SFLUV_API_BASE_URL is the variable the webpage reads for the API. Unset, it falls
   # back to built-in fixtures; pointed at the local backend it renders live
@@ -1111,6 +1188,12 @@ if [[ "$RUN_WEBPAGE" -eq 1 && -n "$WEBPAGE_PORT" ]]; then
     "NODE_ENV=development"
     "PORT=$WEBPAGE_PORT"
     "SFLUV_API_BASE_URL=http://localhost:$BACKEND_PORT"
+    # The merchant map needs the same Google credentials the web app already
+    # uses; without them the map renders blank. The webpage spells the map id
+    # out in full, so it is taken from the shorter name the rest of the stack
+    # already sets rather than asking for the same value under a second key.
+    "NEXT_PUBLIC_GOOGLE_MAPS_API_KEY=${NEXT_PUBLIC_GOOGLE_MAPS_API_KEY:-}"
+    "NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID=${NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID:-${NEXT_PUBLIC_MAP_ID:-}}"
   )
   # Forwarded only when configured, so the signup proxy can present the shared
   # secret exactly as it will in production (see VOLUNTEER_PROXY_KEY in the
@@ -1183,10 +1266,7 @@ EXPO_PUBLIC_GOOGLE_MAPS_API_KEY=${EXPO_PUBLIC_GOOGLE_MAPS_API_KEY:-}
 EXPO_PUBLIC_MAP_ID=${EXPO_PUBLIC_MAP_ID:-}
 EXPO_PUBLIC_EAS_PROJECT_ID=${EXPO_PUBLIC_EAS_PROJECT_ID:-}
 EOF
-  if [[ ! -d "$MOBILE_DIR/mobile/node_modules" ]]; then
-    c_yellow "  installing mobile deps…"
-    ( cd "$MOBILE_DIR/mobile" && npm install --no-audit --no-fund >"$LOG_DIR/mobile-install.log" 2>&1 )
-  fi
+  ensure_deps "$MOBILE_DIR/mobile" mobile "$LOG_DIR/mobile-install.log"
   # Simulators can't reliably open the LAN URL (exp://<lan-ip>:8081 times out,
   # typically because the macOS firewall blocks Metro on the LAN interface), so
   # default to localhost mode. Setting DEV_LAN_IP in .dev.env switches to LAN

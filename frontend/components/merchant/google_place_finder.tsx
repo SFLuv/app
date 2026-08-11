@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { LAT_DIF, LNG_DIF, MAP_CENTER } from "@/lib/constants";
 import { GoogleSubLocation, ManualAddressDraft, PlaceSelection } from "@/types/location";
-import { Check, MapPin, Search } from "lucide-react";
+import { Check, MapPin } from "lucide-react";
 
 interface PlaceAutocompleteProps {
   value: PlaceSelection | null;
@@ -134,12 +134,15 @@ const toManualAddress = (rawGoogleData: any): ManualAddressDraft | null => {
 export default function PlaceAutocomplete({ value, onSelect }: PlaceAutocompleteProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [mode, setMode] = useState<Mode>("business");
-  const [textSearch, setTextSearch] = useState("");
-  const [textSearchBusy, setTextSearchBusy] = useState(false);
-  const [textSearchError, setTextSearchError] = useState("");
-  const [candidates, setCandidates] = useState<GoogleSubLocation[]>([]);
+  const [searchError, setSearchError] = useState("");
 
-  const locationRestriction = {
+  // A BIAS, not a restriction. As a restriction this box was a hard filter:
+  // a business a few streets outside it simply never appeared, the merchant
+  // concluded they were not on Google Maps, and typed their address into the
+  // name field instead — the failure this whole component exists to prevent.
+  // Biasing ranks nearby results first while still finding everything, and the
+  // service-area check at submit is what actually enforces where we operate.
+  const locationBias = {
     south: MAP_CENTER.lat - LAT_DIF,
     west: MAP_CENTER.lng - LNG_DIF,
     north: MAP_CENTER.lat + LAT_DIF,
@@ -148,70 +151,31 @@ export default function PlaceAutocomplete({ value, onSelect }: PlaceAutocomplete
 
   const selectPlace = (place: GoogleSubLocation | null) => {
     if (!place) {
-      setTextSearchError("Google returned this place without a name, place ID, or coordinates. Try another search.");
+      setSearchError("Google returned this place without a name, place ID, or coordinates. Try another search.");
       return;
     }
     if (!isBusinessPlace(place.types)) {
-      setTextSearchError(
-        "That result is a street address, not a business listing. Search for your business by name — for example \"Shiba SF\" instead of the street address. If your business has no Google listing at all, use \"Enter your address manually\" below.",
+      setSearchError(
+        "That result is a street address, not a business listing. Pick your business by name, or use \"My business isn't on Google Maps\" below.",
       );
       return;
     }
-    setTextSearchError("");
-    setCandidates([]);
+    setSearchError("");
     onSelect({ source: "google_place", place });
   };
 
   const selectAddress = (address: ManualAddressDraft | null) => {
     if (!address) {
-      setTextSearchError("Google returned no street address or coordinates for that result. Try a more specific address.");
+      setSearchError("Google returned no street address or coordinates for that result. Try a more specific address.");
       return;
     }
-    setTextSearchError("");
-    setCandidates([]);
+    setSearchError("");
     onSelect({ source: "manual", address });
   };
 
   const switchMode = (next: Mode) => {
     setMode(next);
-    setTextSearch("");
-    setTextSearchError("");
-    setCandidates([]);
-  };
-
-  const searchByText = async () => {
-    const query = textSearch.trim();
-    if (!query) return;
-
-    setTextSearchBusy(true);
-    setTextSearchError("");
-    setCandidates([]);
-    try {
-      const { Place } = await google.maps.importLibrary("places") as google.maps.PlacesLibrary;
-      const { places } = await Place.searchByText({
-        textQuery: query,
-        fields: PLACE_FIELDS,
-        locationRestriction,
-        maxResultCount: 5,
-      } as any);
-
-      // Never auto-apply the top hit. Blindly taking places[0] is how a search
-      // that resolves to an address became a merchant name.
-      const usable = (places ?? [])
-        .map((place) => toGoogleSubLocation(place.toJSON()))
-        .filter((place): place is GoogleSubLocation => place !== null && isBusinessPlace(place.types));
-
-      if (!usable.length) {
-        setTextSearchError("No matching business found. Try the business name plus the city.");
-        return;
-      }
-      setCandidates(usable);
-    } catch (error) {
-      console.error(error);
-      setTextSearchError("Unable to search Google Places right now.");
-    } finally {
-      setTextSearchBusy(false);
-    }
+    setSearchError("");
   };
 
   useEffect(() => {
@@ -239,7 +203,7 @@ export default function PlaceAutocomplete({ value, onSelect }: PlaceAutocomplete
       // Address mode is the deliberate inverse — it asks for addresses, and the
       // caller uses only the postal fields, never a name.
       const autocompleteOptions: any = {
-        locationRestriction,
+        locationBias,
         includedPrimaryTypes: mode === "business" ? ["establishment"] : ["street_address", "premise", "subpremise"],
       };
 
@@ -270,9 +234,7 @@ export default function PlaceAutocomplete({ value, onSelect }: PlaceAutocomplete
   }, [value, mode]);
 
   const clearSelection = () => {
-    setTextSearch("");
-    setTextSearchError("");
-    setCandidates([]);
+    setSearchError("");
     onSelect(null);
   };
 
@@ -345,65 +307,20 @@ export default function PlaceAutocomplete({ value, onSelect }: PlaceAutocomplete
 
   return (
     <div className="space-y-2">
-      <p className="text-xs text-gray-600 dark:text-gray-400">
-        {mode === "business"
-          ? "Start typing your business name and pick it from the list."
-          : "Start typing your street address and pick it from the list. You will enter the business name yourself on the next step."}
-      </p>
+      {/* Business mode needs no instruction — the field is self-evident. Address
+          mode keeps one, because "you name the business yourself next" is the
+          part of that flow nobody would guess. */}
+      {mode === "address" ? (
+        <p className="text-xs text-gray-600 dark:text-gray-400">
+          Start typing your street address and pick it from the list. You will enter the business name yourself on the
+          next step.
+        </p>
+      ) : null}
 
       <div ref={containerRef} />
 
-      {/* Business-name text search is a fallback for when the autocomplete
-          dropdown comes up empty; it has no equivalent in address mode, where
-          the autocomplete is the only sensible input. */}
-      {mode === "business" && (
-        <div className="flex gap-2">
-          <input
-            className="min-w-0 flex-1 rounded-md border bg-secondary px-3 py-2 text-sm text-black dark:text-white"
-            placeholder="Business name (add the city if the list is empty)"
-            value={textSearch}
-            onChange={(event) => setTextSearch(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") {
-                event.preventDefault();
-                void searchByText();
-              }
-            }}
-          />
-          <button
-            className="flex items-center gap-1.5 rounded-md border px-3 py-2 text-sm text-black disabled:opacity-50 dark:text-white"
-            disabled={textSearchBusy}
-            onClick={() => void searchByText()}
-            type="button"
-          >
-            <Search className="h-4 w-4" />
-            {textSearchBusy ? "Searching..." : "Search"}
-          </button>
-        </div>
-      )}
-
-      {candidates.length > 0 && (
-        <ul className="divide-y rounded-md border">
-          {candidates.map((candidate) => (
-            <li key={candidate.google_id}>
-              <button
-                className="flex w-full items-start gap-2 px-3 py-2 text-left hover:bg-secondary"
-                onClick={() => selectPlace(candidate)}
-                type="button"
-              >
-                <MapPin className="mt-0.5 h-4 w-4 flex-shrink-0 text-gray-500" />
-                <span className="min-w-0">
-                  <span className="block text-sm font-medium text-black dark:text-white">{candidate.name}</span>
-                  <span className="block text-xs text-gray-600 dark:text-gray-400">{formatAddress(candidate)}</span>
-                </span>
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-
-      {textSearchError ? (
-        <p className="text-xs text-red-600 dark:text-red-300">{textSearchError}</p>
+      {searchError ? (
+        <p className="text-xs text-red-600 dark:text-red-300">{searchError}</p>
       ) : null}
 
       <button
