@@ -109,6 +109,19 @@ const buildContentSecurityPolicy = (nonce: string, requestOrigin: string) => {
     "data:",
     "https:",
   ]
+  /*
+   * The backend serves real image bytes — merchant map icons, event cover
+   * photos, organizer logos — so it belongs here as well as in connect-src.
+   *
+   * `https:` above already covers a deployed API on its own domain, which is
+   * why this only ever broke locally: a dev backend is http://localhost:8080,
+   * and plain HTTP matches none of the entries above. Mobile has no CSP and
+   * the marketing site loads its images from a different origin list, so the
+   * web app was the only surface that showed it.
+   */
+  if (backendOrigins.length > 0) {
+    appendUnique(imgSrc, backendOrigins)
+  }
   appendUnique(imgSrc, parseEnvList(process.env.NEXT_PUBLIC_CSP_EXTRA_IMG_SRC))
 
   const connectSrc = [
