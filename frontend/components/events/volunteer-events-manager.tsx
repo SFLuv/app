@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import { AlertTriangle, CheckCircle2, Clock, Download, Leaf, Loader2, Megaphone, Pencil, QrCode, XCircle, ChevronRight } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
@@ -16,6 +16,7 @@ import {
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { EventBlastModal } from "@/components/events/event-blast-modal"
+import { Pagination } from "@/components/opportunities/pagination"
 import { useApp } from "@/context/AppProvider"
 import { useToast } from "@/hooks/use-toast"
 
@@ -47,12 +48,27 @@ interface VolunteerEventsManagerProps {
   /** Admins get approve / reject / cancel; affiliates get a read-only view plus QR download. */
   canReview: boolean
   title?: string
-  description?: string
+  /** Sits under the title. A node, so a caller can put live figures there. */
+  description?: ReactNode
+  /**
+   * Total awaiting approval across every page.
+   *
+   * Counting the rows on screen would undercount the moment the list is
+   * paginated or filtered, and this badge is a summary of the queue rather
+   * than of the current view. Falls back to the visible rows when a caller has
+   * no better figure.
+   */
+  pendingCount?: number
   /** Called when a card is opened, so the parent can offer an edit form. */
   onOpenEvent?: (event: ManagedVolunteerEvent) => void
   /** Shown in the detail panel when the caller supports editing. */
   onEditEvent?: (event: ManagedVolunteerEvent) => void
+  /** Rendered on the title line, for the panel's primary action. */
+  action?: ReactNode
 }
+
+/** Rows per page. Small enough that the panel never becomes the whole screen. */
+const PAGE_SIZE = 8
 
 const REVIEW_FILTERS = [
   { value: "all", label: "All events" },
@@ -134,10 +150,14 @@ export function VolunteerEventsManager({
   description = "Approve requests, download QR codes, and manage published events.",
   onOpenEvent,
   onEditEvent,
+  action,
+  pendingCount: pendingCountOverride,
 }: VolunteerEventsManagerProps) {
   const { authFetch } = useApp()
   const { toast } = useToast()
   const [events, setEvents] = useState<ManagedVolunteerEvent[]>([])
+  const [page, setPage] = useState(0)
+  const [totalEvents, setTotalEvents] = useState(0)
   const [reviewFilter, setReviewFilter] = useState("all")
   const [search, setSearch] = useState("")
   const [busyId, setBusyId] = useState("")
@@ -157,7 +177,7 @@ export function VolunteerEventsManager({
   const loadEvents = useCallback(async () => {
     setError("")
     try {
-      const params = new URLSearchParams({ count: "50" })
+      const params = new URLSearchParams({ count: String(PAGE_SIZE), page: String(page) })
       if (reviewFilter !== "all") params.set("review_status", reviewFilter)
       if (search.trim() !== "") params.set("search", search.trim())
 
@@ -165,6 +185,7 @@ export function VolunteerEventsManager({
       if (!res.ok) throw new Error("Unable to load volunteer events.")
       const data = await res.json()
       const next: ManagedVolunteerEvent[] = data.events || []
+      setTotalEvents(typeof data.total === "number" ? data.total : next.length)
 
       const signature = JSON.stringify(
         next.map((event) => [
@@ -191,11 +212,18 @@ export function VolunteerEventsManager({
       hasLoadedRef.current = true
       setInitialLoading(false)
     }
-  }, [authFetch, basePath, reviewFilter, search])
+  }, [authFetch, basePath, page, reviewFilter, search])
+
+  // Filtering or searching is a different result set, so any page number from
+  // the previous one is meaningless — and page 3 of a set that now has one page
+  // renders as an empty panel.
+  useEffect(() => {
+    setPage(0)
+  }, [reviewFilter, search])
 
   useEffect(() => {
-    // A filter or search change is a different query, so the cached signature
-    // no longer describes what should be on screen.
+    // A filter, search or page change is a different query, so the cached
+    // signature no longer describes what should be on screen.
     signatureRef.current = ""
     void loadEvents()
   }, [loadEvents])
@@ -278,18 +306,29 @@ export function VolunteerEventsManager({
     }
   }
 
-  const pendingCount = events.filter((event) => event.review_status === "pending").length
+  const pendingCount =
+    pendingCountOverride ?? events.filter((event) => event.review_status === "pending").length
+  const totalPages = Math.max(1, Math.ceil(totalEvents / PAGE_SIZE))
 
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          {title}
-          {canReview && pendingCount > 0 && (
-            <Badge className="bg-amber-500">{pendingCount} awaiting approval</Badge>
-          )}
-        </CardTitle>
-        <CardDescription>{description}</CardDescription>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0">
+            <CardTitle className="flex flex-wrap items-center gap-2">
+              {title}
+              {canReview && pendingCount > 0 && (
+                <Badge className="border-primary bg-primary text-white hover:bg-primary/90">
+                  {pendingCount} awaiting approval
+                </Badge>
+              )}
+            </CardTitle>
+            {description ? <CardDescription className="mt-1.5">{description}</CardDescription> : null}
+          </div>
+          {/* The panel's primary action sits on the title line rather than in a
+              card of its own further down the page. */}
+          {action ? <div className="shrink-0">{action}</div> : null}
+        </div>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="flex flex-col gap-2 sm:flex-row">
@@ -370,6 +409,22 @@ export function VolunteerEventsManager({
             )
           })}
         </div>
+
+        {/* Only when there is more than one page: a lone page of results does
+            not need a control that cannot go anywhere. */}
+        {totalPages > 1 && (
+          <Pagination
+            currentPage={page + 1}
+            totalPages={totalPages}
+            onPageChange={(next) => setPage(Math.max(0, next - 1))}
+          />
+        )}
+
+        {totalEvents > 0 && (
+          <p className="text-xs text-muted-foreground">
+            Showing {events.length} of {totalEvents} event{totalEvents === 1 ? "" : "s"}
+          </p>
+        )}
       </CardContent>
 
       <Dialog open={openEvent !== null} onOpenChange={(next) => !next && setOpenEvent(null)}>

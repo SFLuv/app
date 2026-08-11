@@ -385,6 +385,7 @@ export default function AdminPage() {
   // Sidebar badge: organizations with any pending role approval. Loaded once
   // for the badge count; the Organizations tab component owns the full list.
   const [orgPendingCount, setOrgPendingCount] = useState<number>(0)
+  const [pendingEventCount, setPendingEventCount] = useState<number>(0)
   const [selectedAffiliate, setSelectedAffiliate] = useState<Affiliate | null>(null)
   const [affiliateNickname, setAffiliateNickname] = useState<string>("")
   const [affiliateWeeklyBalance, setAffiliateWeeklyBalance] = useState<string>("")
@@ -1896,6 +1897,40 @@ export default function AdminPage() {
       cancelled = true
     }
   }, [authFetch])
+  /*
+   * Events sidebar badge: volunteer events waiting on approval.
+   *
+   * Its own request rather than a count lifted from the events panel, because
+   * that panel only exists while its tab is open — a badge that appears only
+   * once you have already navigated to the thing it is pointing at is no use.
+   * count=1 keeps it to a header read; the total is what is wanted.
+   */
+  useEffect(() => {
+    if (status !== "authenticated") return
+    let cancelled = false
+
+    const loadPendingEvents = async () => {
+      try {
+        const res = await authFetch("/admin/volunteer-events?review_status=pending&count=1")
+        if (!res.ok) return
+        const data = (await res.json()) as { total?: number }
+        if (cancelled) return
+        setPendingEventCount(typeof data.total === "number" ? data.total : 0)
+      } catch {
+        // Non-fatal: the badge just stays where it is.
+      }
+    }
+
+    void loadPendingEvents()
+    // Matches the events panel's own poll, so the badge and the list never
+    // disagree for longer than one interval.
+    const timer = setInterval(loadPendingEvents, 30_000)
+    return () => {
+      cancelled = true
+      clearInterval(timer)
+    }
+  }, [authFetch, status])
+
   useEffect(() => { getProposers(proposerSearch, proposerPage) }, [proposerSearch, proposerPage])
   useEffect(() => { getImprovers(improverSearch, improverPage) }, [improverSearch, improverPage])
   useEffect(() => { getSupervisors(supervisorSearch, supervisorPage) }, [supervisorSearch, supervisorPage])
@@ -2650,6 +2685,11 @@ export default function AdminPage() {
           <TabsList className="h-fit w-full flex-col items-stretch gap-2 rounded-xl bg-secondary p-3 lg:sticky lg:top-4 lg:min-w-[280px]">
             <TabsTrigger value="events" className="w-full justify-between px-3 py-2">
               <span>Events</span>
+              {pendingEventCount > 0 && (
+                <Badge variant="destructive" className="h-5 min-w-5 rounded-full px-1.5 text-xs">
+                  {pendingEventCount}
+                </Badge>
+              )}
             </TabsTrigger>
             <TabsTrigger value="users" className="w-full justify-between px-3 py-2">
               <span>Users</span>
@@ -5136,7 +5176,28 @@ export default function AdminPage() {
           <VolunteerEventsManager
             basePath="/admin/volunteer-events"
             canReview
-            description="Approve affiliate requests, download QR codes, and cancel published events."
+            pendingCount={pendingEventCount}
+            /*
+             * The faucet figure takes the subtitle's place. Rewards are
+             * reserved from it at approval, so it is the number an admin needs
+             * while they are looking at this queue — it used to sit in a card
+             * of its own below the list, which is the last place anyone
+             * deciding whether to approve an event would look.
+             */
+            description={
+              <span className="flex flex-wrap items-center gap-2">
+                <Badge
+                  className="cursor-pointer text-xs sm:text-sm px-3 py-1"
+                  onClick={toggleDrainFaucetModal}
+                >
+                  {unallocatedBalance !== undefined
+                    ? `${unallocatedBalance} / ${faucetBalance} SFLuv Available`
+                    : `${faucetBalance} SFLuv`}
+                </Badge>
+                <span className="text-xs sm:text-sm text-muted-foreground">unallocated in faucet</span>
+              </span>
+            }
+            action={<Button onClick={toggleNewEventModal}>+ New Event</Button>}
           />
           {eventsError != "" && (
             <div className="flex items-center gap-2 text-red-600 text-sm p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
@@ -5159,32 +5220,6 @@ export default function AdminPage() {
             drainFaucetError={drainFaucetError}
             faucetBalance={faucetBalance === "-" ? undefined : String(faucetBalance)}
           />
-          <Card>
-            <CardHeader className="pb-6 flex flex-col gap-4 md:grid md:grid-cols-[2fr,1fr]">
-              <div>
-                <CardTitle className="flex items-center gap-2 text-xl">
-                  <CalendarIcon className="h-6 w-6" />
-                  Faucet
-                </CardTitle>
-                <CardDescription className="text-base mt-2">
-                  Rewards for every volunteer event are reserved from here at approval.
-                </CardDescription>
-                <div className="flex flex-wrap items-center gap-2 mt-3">
-                  <Badge className="text-xs sm:text-sm px-3 py-1 cursor-pointer" onClick={toggleDrainFaucetModal}>
-                    {unallocatedBalance !== undefined
-                      ? `${unallocatedBalance} / ${faucetBalance} SFLuv Available`
-                      : `${faucetBalance} SFLuv`}
-                  </Badge>
-                  <span className="text-xs sm:text-sm text-muted-foreground">unallocated in faucet</span>
-                </div>
-              </div>
-              <div className="text-left md:text-right">
-                <Button onClick={toggleNewEventModal} className="w-full md:w-auto">
-                  + New Event
-                </Button>
-              </div>
-            </CardHeader>
-          </Card>
         </TabsContent>
 
         <TabsContent value="qrcodes" className="space-y-6">

@@ -305,14 +305,21 @@ type StoredPhoto struct {
 	ContentType string
 }
 
-// GetVolunteerEventPhotoData serves a cover photo, but ONLY for an event the
-// public list would show.
+// GetVolunteerEventPhotoData serves a cover photo for an event that still
+// exists in a reviewable state.
 //
-// Selecting on the photo id alone made a photo attached to a pending or
-// rejected event publicly fetchable by anyone holding the id — an
-// unauthenticated read of content that has not been published. The id is an
-// unguessable UUID, so this was low severity, but the join costs nothing and
-// removes the class entirely.
+// Selecting on the photo id alone would serve the cover of a REJECTED event,
+// which is dead content nobody should be able to pull back up, and of a photo
+// staged but never attached to anything. The join rules both out.
+//
+// Pending is allowed, unlike rejected. An affiliate's own request and the admin
+// queue reviewing it both display these covers, and both do it with plain
+// <img> tags that cannot carry a token — so an authenticated variant would not
+// actually be reachable by the surfaces that need it. Pending covers were
+// excluded before, which is why an affiliate's freshly submitted request showed
+// broken images. The ids are unguessable UUIDs and the content is artwork the
+// organization uploaded itself and is waiting to publish, so the exposure is a
+// photo you would have to already know the id of.
 func (s *BotDB) GetVolunteerEventPhotoData(ctx context.Context, photoId string) (*StoredPhoto, error) {
 	photo := &StoredPhoto{}
 	err := s.db.QueryRow(ctx, `
@@ -321,7 +328,7 @@ func (s *BotDB) GetVolunteerEventPhotoData(ctx context.Context, photoId string) 
 		JOIN events e ON e.id = p.event_id
 		WHERE p.id = $1
 			AND e.is_volunteer = TRUE
-			AND e.review_status IN ('approved', 'cancelled');
+			AND e.review_status IN ('pending', 'approved', 'cancelled');
 	`, photoId).Scan(&photo.Data, &photo.ContentType)
 	if err != nil {
 		return nil, err
