@@ -305,14 +305,21 @@ type StoredPhoto struct {
 	ContentType string
 }
 
-// GetVolunteerEventPhotoData serves a cover photo, but ONLY for an event the
-// public list would show.
+// GetVolunteerEventPhotoData serves a cover photo for an event that still
+// exists in a reviewable state.
 //
-// Selecting on the photo id alone made a photo attached to a pending or
-// rejected event publicly fetchable by anyone holding the id — an
-// unauthenticated read of content that has not been published. The id is an
-// unguessable UUID, so this was low severity, but the join costs nothing and
-// removes the class entirely.
+// Selecting on the photo id alone would serve the cover of a REJECTED event,
+// which is dead content nobody should be able to pull back up, and of a photo
+// staged but never attached to anything. The join rules both out.
+//
+// Pending is allowed, unlike rejected. An affiliate's own request and the admin
+// queue reviewing it both display these covers, and both do it with plain
+// <img> tags that cannot carry a token — so an authenticated variant would not
+// actually be reachable by the surfaces that need it. Pending covers were
+// excluded before, which is why an affiliate's freshly submitted request showed
+// broken images. The ids are unguessable UUIDs and the content is artwork the
+// organization uploaded itself and is waiting to publish, so the exposure is a
+// photo you would have to already know the id of.
 func (s *BotDB) GetVolunteerEventPhotoData(ctx context.Context, photoId string) (*StoredPhoto, error) {
 	photo := &StoredPhoto{}
 	err := s.db.QueryRow(ctx, `
@@ -321,7 +328,7 @@ func (s *BotDB) GetVolunteerEventPhotoData(ctx context.Context, photoId string) 
 		JOIN events e ON e.id = p.event_id
 		WHERE p.id = $1
 			AND e.is_volunteer = TRUE
-			AND e.review_status IN ('approved', 'cancelled');
+			AND e.review_status IN ('pending', 'approved', 'cancelled');
 	`, photoId).Scan(&photo.Data, &photo.ContentType)
 	if err != nil {
 		return nil, err
@@ -467,6 +474,11 @@ type CreateVolunteerEventParams struct {
 	// Admin-created events are approved on creation so this is true; an
 	// affiliate request stays pending and mints nothing until approval.
 	MintCodes bool
+
+	// StagedPhotoIds are cover photos already uploaded by Owner and waiting for
+	// an event. They are attached inside the creation transaction, so an event
+	// is never published missing the artwork it was created with.
+	StagedPhotoIds []string
 }
 
 // CreateVolunteerEvent inserts the event and, when approved, mints one QR code
@@ -520,12 +532,19 @@ func (s *BotDB) CreateVolunteerEvent(ctx context.Context, p *CreateVolunteerEven
 		p.RecurrenceFrequency, p.RecurrenceMonthlyMode,
 		p.RecurrenceDayOfMonth, p.RecurrenceWeekOfMonth, p.RecurrenceWeekday,
 		p.RecurrenceUntil, seriesId,
-		approvedByOrNil(p),
+		approvedBy(p),
 		approvedAtOrNil(p),
 		nullableUnix(p.QRExpiresAt),
 	)
 	if err != nil {
 		return "", fmt.Errorf("error inserting volunteer event: %s", err)
+	}
+
+	// Inside the transaction: a photo that cannot be claimed rolls the event
+	// back with it, so creation is all-or-nothing rather than leaving a
+	// published event with artwork missing.
+	if err := attachStagedPhotos(ctx, tx, id, p.Owner, p.StagedPhotoIds); err != nil {
+		return "", err
 	}
 
 	if p.MintCodes {
@@ -564,13 +583,25 @@ func nullableUnix(value int64) any {
 	return value
 }
 
-func approvedByOrNil(p *CreateVolunteerEventParams) any {
+// approvedBy is the approver to record at insert time.
+//
+// Empty rather than NULL for anything not already approved. events.approved_by
+// is TEXT NOT NULL DEFAULT ” — the same "unset means empty string" convention
+// as requested_by beside it — and a column default only applies when the column
+// is left out of the INSERT. This one is always listed, so passing NULL here
+// violated the constraint outright and every affiliate request (which is
+// created pending, by definition unapproved) failed with SQLSTATE 23502.
+// Admin-created events set a real approver, which is why the bug only ever
+// showed on the affiliate path.
+func approvedBy(p *CreateVolunteerEventParams) string {
 	if p.ReviewStatus == structs.EventReviewApproved {
 		return p.Owner
 	}
-	return nil
+	return ""
 }
 
+// approvedAtOrNil, unlike approvedBy, really does write NULL: approved_at is a
+// nullable BIGINT, and "not approved yet" has no timestamp to invent.
 func approvedAtOrNil(p *CreateVolunteerEventParams) any {
 	if p.ReviewStatus == structs.EventReviewApproved {
 		return time.Now().UTC().Unix()
@@ -687,6 +718,80 @@ func (s *BotDB) AddVolunteerEventPhoto(ctx context.Context, eventId string, data
 	}
 
 	return id, nil
+}
+
+// StageVolunteerEventPhoto stores a cover photo that has no event yet.
+//
+// Uploading only becomes possible once an event exists is what forced the old
+// create-then-attach dance; a staged photo can be uploaded the moment it is
+// chosen and claimed later. `staged_by` is who may claim it.
+func (s *BotDB) StageVolunteerEventPhoto(ctx context.Context, stagedBy string, data []byte, contentType string, fileName string, width int, height int) (string, error) {
+	id := uuid.NewString()
+
+	if _, err := s.db.Exec(ctx, `
+		INSERT INTO event_photos (id, event_id, staged_by, position, file_name, content_type, photo_data, size_bytes, width, height)
+		VALUES ($1, NULL, $2, 0, $3, $4, $5, $6, $7, $8);
+	`, id, stagedBy, fileName, contentType, data, len(data), width, height); err != nil {
+		return "", fmt.Errorf("error staging event photo: %s", err)
+	}
+
+	return id, nil
+}
+
+// attachStagedPhotos claims staged photos for a freshly created event.
+//
+// Runs inside the creation transaction and is strict on purpose: an id that is
+// missing, already attached, or staged by somebody else fails the whole
+// creation. Quietly dropping one would publish an event missing a photo its
+// author believed they had added, which is precisely the outcome the staging
+// flow exists to prevent. Order is preserved so the first photo chosen stays
+// the cover.
+func attachStagedPhotos(ctx context.Context, tx pgx.Tx, eventId string, owner string, photoIds []string) error {
+	for position, photoId := range photoIds {
+		trimmed := strings.TrimSpace(photoId)
+		if trimmed == "" {
+			return fmt.Errorf("error attaching event photo: empty photo id")
+		}
+
+		tag, err := tx.Exec(ctx, `
+			UPDATE event_photos
+			SET event_id = $1, position = $2, staged_by = ''
+			WHERE id = $3 AND event_id IS NULL AND staged_by = $4;
+		`, eventId, position, trimmed, owner)
+		if err != nil {
+			return fmt.Errorf("error attaching event photo %s: %s", trimmed, err)
+		}
+		if tag.RowsAffected() == 0 {
+			return fmt.Errorf("error attaching event photo %s: it is no longer available", trimmed)
+		}
+	}
+
+	return nil
+}
+
+// DeleteStagedVolunteerEventPhoto discards a staged photo, for a client that
+// removes one before submitting. Scoped to the uploader so an id cannot be used
+// to delete somebody else's.
+func (s *BotDB) DeleteStagedVolunteerEventPhoto(ctx context.Context, photoId string, stagedBy string) error {
+	if _, err := s.db.Exec(ctx, `
+		DELETE FROM event_photos WHERE id = $1 AND event_id IS NULL AND staged_by = $2;
+	`, photoId, stagedBy); err != nil {
+		return fmt.Errorf("error deleting staged event photo: %s", err)
+	}
+	return nil
+}
+
+// ExpireStagedVolunteerEventPhotos clears staged photos nobody ever attached —
+// a form opened, files chosen, and the tab closed. Without this they would
+// accumulate as bytes in Postgres that no event will ever reference.
+func (s *BotDB) ExpireStagedVolunteerEventPhotos(ctx context.Context, olderThanUnix int64) (int64, error) {
+	tag, err := s.db.Exec(ctx, `
+		DELETE FROM event_photos WHERE event_id IS NULL AND created_at < $1;
+	`, olderThanUnix)
+	if err != nil {
+		return 0, fmt.Errorf("error expiring staged event photos: %s", err)
+	}
+	return tag.RowsAffected(), nil
 }
 
 func (s *BotDB) DeleteVolunteerEventPhoto(ctx context.Context, photoId string) error {
@@ -1580,6 +1685,36 @@ func (s *BotDB) GetPendingEventEditRequest(ctx context.Context, eventId string) 
 		return nil, err
 	}
 	return request, nil
+}
+
+// GetPendingEventEditRequests reports which of the given events have an edit
+// parked for review. Set-based so a management list page costs one query rather
+// than one per row.
+func (s *BotDB) GetPendingEventEditRequests(ctx context.Context, eventIds []string) (map[string]*EventEditRequest, error) {
+	result := map[string]*EventEditRequest{}
+	if len(eventIds) == 0 {
+		return result, nil
+	}
+
+	rows, err := s.db.Query(ctx, `
+		SELECT id, event_id, requested_by, payload, created_at
+		FROM event_edit_requests
+		WHERE status = 'pending' AND event_id = ANY($1);
+	`, eventIds)
+	if err != nil {
+		return nil, fmt.Errorf("error loading pending edit requests: %s", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		request := &EventEditRequest{}
+		if err := rows.Scan(&request.Id, &request.EventId, &request.RequestedBy, &request.Payload, &request.CreatedAt); err != nil {
+			return nil, fmt.Errorf("error scanning pending edit request: %s", err)
+		}
+		result[request.EventId] = request
+	}
+
+	return result, rows.Err()
 }
 
 func (s *BotDB) ResolveEventEditRequest(ctx context.Context, eventId string, decidedBy string, approved bool, reason string) error {

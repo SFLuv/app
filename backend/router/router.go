@@ -245,6 +245,13 @@ func AddVolunteerListRoutes(r *chi.Mux, a *handlers.AppService) {
 	r.Get("/volunteer-email-list/unsubscribe", a.GetVolunteerListTokenState)
 	r.Post("/volunteer-email-list/unsubscribe", a.PostVolunteerListTokenAction)
 
+	// Cover photos staged before their event exists. Any signed-in user may
+	// stage one — it is parked under their own name and invisible until an
+	// event they are entitled to create claims it, so the authorisation that
+	// matters stays on event creation.
+	r.Post("/volunteer-events/staged-photos", withAuth(a.StageVolunteerEventPhoto))
+	r.Delete("/volunteer-events/staged-photos/{photo_id}", withAuth(a.DeleteStagedVolunteerEventPhoto))
+
 	r.Get("/volunteer-events/reminder-preferences", withAuth(a.GetVolunteerReminderPreferences))
 	r.Put("/volunteer-events/reminder-preferences", withAuth(a.SetVolunteerReminderPreferences))
 }
@@ -304,6 +311,9 @@ func AddAdminRoutes(r *chi.Mux, s *handlers.AppService) {
 	r.Post("/admin/volunteer-events/{id}/edit/reject", withAdmin(s.AdminRejectVolunteerEventEdit, s))
 	r.Post("/admin/volunteer-events/{id}/reject", withAdmin(s.AdminRejectVolunteerEvent, s))
 	r.Get("/admin/volunteer-events/{id}/codes.csv", withAdmin(s.AdminDownloadVolunteerEventCodes, s))
+	// JSON for the printable-card export, CSV for a spreadsheet. Same codes,
+	// same organization scoping — see loadVolunteerEventCodes.
+	r.Get("/admin/volunteer-events/{id}/codes", withAdmin(s.AdminGetVolunteerEventCodes, s))
 	r.Post("/admin/volunteer-events/{id}/cancel", withAdmin(s.AdminCancelVolunteerEvent, s))
 	r.Post("/admin/volunteer-events/{id}/blast", withAdmin(s.AdminSendEventBlast, s))
 	r.Post("/admin/volunteer-events/{id}/blast/preview", withAdmin(s.PreviewEventBlast, s))
@@ -339,6 +349,7 @@ func AddAffiliateRoutes(r *chi.Mux, s *handlers.BotService, a *handlers.AppServi
 	// create events unilaterally. Scoped to their own organization inside the
 	// handler — these codes are bearer tokens for faucet funds.
 	r.Get("/affiliates/volunteer-events/{id}/codes.csv", withAffiliate(a.AffiliateDownloadVolunteerEventCodes, a))
+	r.Get("/affiliates/volunteer-events/{id}/codes", withAffiliate(a.AffiliateGetVolunteerEventCodes, a))
 	r.Put("/affiliates/volunteer-events/{id}", withAffiliate(a.AffiliateUpdateVolunteerEvent, a))
 	r.Post("/affiliates/volunteer-events/{id}/blast", withAffiliate(a.AffiliateSendEventBlast, a))
 	r.Post("/affiliates/volunteer-events/{id}/blast/preview", withAffiliate(a.PreviewEventBlast, a))
@@ -453,6 +464,19 @@ func AddLocationRoutes(r *chi.Mux, s *handlers.AppService) {
 	r.Put("/locations/{id}/wallet-settings", withActiveAuth(s.UpdateLocationWalletSettings, s))
 	r.Put("/locations/{id}/google-place", withActiveAuth(s.UpdateLocationGooglePlace, s))
 	r.Put("/locations/{id}/hours", withActiveAuth(s.UpdateLocationHours, s))
+
+	// The map is public on the app, the mobile client and the marketing site,
+	// so the icon it draws has to be fetchable without a token. Writes stay
+	// behind ownership (or admin) checks in the handler.
+	r.Get("/locations/{id}/icon", s.GetLocationIcon)
+	r.Post("/locations/{id}/icon", withActiveAuth(s.UploadLocationIcon, s))
+	r.Delete("/locations/{id}/icon", withActiveAuth(s.DeleteLocationIcon, s))
+
+	// The storefront photo is public on the same three surfaces, under the same
+	// ownership rules for writes.
+	r.Get("/locations/{id}/photo", s.GetLocationPhoto)
+	r.Post("/locations/{id}/photo", withActiveAuth(s.UploadLocationPhoto, s))
+	r.Delete("/locations/{id}/photo", withActiveAuth(s.DeleteLocationPhoto, s))
 }
 
 func AddContactRoutes(r *chi.Mux, s *handlers.AppService) {

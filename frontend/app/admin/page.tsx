@@ -85,7 +85,7 @@ import {
 } from "@/types/workflow"
 import { Event, EventsStatus } from "@/types/event"
 import { AddVolunteerEventModal, type VolunteerEventDraft } from "@/components/events/add-volunteer-event-modal"
-import { VolunteerEventsManager } from "@/components/events/volunteer-events-manager"
+import { VolunteerEventsManager, type ManagedVolunteerEvent } from "@/components/events/volunteer-events-manager"
 import { DrainFaucetModal } from "@/components/events/drain-faucet-modal"
 import { OrganizationManagement } from "@/components/admin/organization-management"
 import { WorkflowDetailsModal } from "@/components/workflows/workflow-details-modal"
@@ -371,6 +371,7 @@ export default function AdminPage() {
   const [eventsPage, setEventsPage] = useState<number>(readQueryNumber("events_page", 0))
   const [eventsCount, setEventsCount] = useState<number>(readQueryNumber("events_count", 10))
   const [eventsExpired, setEventsExpired] = useState<boolean>(readQueryBoolean("events_expired", false))
+  const [editingVolunteerEvent, setEditingVolunteerEvent] = useState<ManagedVolunteerEvent | null>(null)
   const [eventsModalOpen, setEventsModalOpen] = useState<boolean>(false)
   const [eventDetailModalOpen, setEventDetailModalOpen] = useState<boolean>(false)
   const [deleteEventError, setDeleteEventError] = useState<string | undefined>(undefined)
@@ -385,6 +386,7 @@ export default function AdminPage() {
   // Sidebar badge: organizations with any pending role approval. Loaded once
   // for the badge count; the Organizations tab component owns the full list.
   const [orgPendingCount, setOrgPendingCount] = useState<number>(0)
+  const [pendingEventCount, setPendingEventCount] = useState<number>(0)
   const [selectedAffiliate, setSelectedAffiliate] = useState<Affiliate | null>(null)
   const [affiliateNickname, setAffiliateNickname] = useState<string>("")
   const [affiliateWeeklyBalance, setAffiliateWeeklyBalance] = useState<string>("")
@@ -570,29 +572,74 @@ export default function AdminPage() {
         const message = (await res.text()).trim()
         throw new Error(message || "Error creating event. Please try again later.")
       }
-      const created = await res.json()
+      const created = await res.json().catch(() => null)
+      const id = typeof created?.id === "string" ? created.id.trim() : ""
       setEventsError("")
       await getEvents()
       getUnallocatedBalance()
-      return created?.id ?? null
+      if (id === "") {
+        // A 2xx with no id means the event exists but photos cannot be
+        // attached to it. Reporting a plain failure would be wrong.
+        throw new Error(
+          "The event was created, but the server did not return its id, so photos could not be attached. Close this and open the event to add them.",
+        )
+      }
+      return id
     } catch (error) {
       const message = error instanceof Error ? error.message : "Error creating event. Please try again later."
       setEventsStatus("error")
       setEventsError(message)
-      return null
+      // Rethrown so the modal can show it too: eventsError renders on the page
+      // behind the dialog, where the person who just pressed Create cannot see
+      // it until they close the very form they are waiting on.
+      throw error instanceof Error ? error : new Error(message)
     }
   }
 
-  const handleUploadVolunteerEventPhoto = async (eventId: string, file: File): Promise<boolean> => {
-    try {
-      const form = new FormData()
-      form.append("photo", file)
-      // No Content-Type: the browser sets the multipart boundary.
-      const res = await authFetch(`/admin/volunteer-events/${eventId}/photos`, { method: "POST", body: form })
-      return res.ok
-    } catch {
-      return false
+  /**
+   * Uploads a cover photo before its event exists and returns the staged id.
+   *
+   * Throws rather than returning a flag: the message is shown against the
+   * specific thumbnail that failed, and a silent false would leave the author
+   * guessing which file the modal was unhappy about.
+   */
+  /**
+   * Save an edit. Admins do not queue for their own approval, so this applies
+   * immediately — the server still enforces the faucet rule on any increase.
+   */
+  const saveVolunteerEventEdit = async (eventId: string, draft: VolunteerEventDraft): Promise<string | null> => {
+    const res = await authFetch(`/admin/volunteer-events/${eventId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(draft),
+    })
+    if (!res.ok) {
+      throw new Error((await res.text()).trim() || "Unable to save the changes.")
     }
+    await getEvents()
+    getUnallocatedBalance()
+    return eventId
+  }
+
+  const stageVolunteerEventPhoto = async (file: File): Promise<string> => {
+    const form = new FormData()
+    form.append("photo", file)
+    const res = await authFetch("/volunteer-events/staged-photos", { method: "POST", body: form })
+    if (!res.ok) {
+      throw new Error((await res.text()).trim() || "Could not upload that photo.")
+    }
+    const staged = await res.json().catch(() => null)
+    const id = typeof staged?.id === "string" ? staged.id.trim() : ""
+    if (id === "") {
+      throw new Error("Could not upload that photo.")
+    }
+    return id
+  }
+
+  /** Drops a staged photo the author removed. Failure is not worth surfacing:
+   *  the server sweeps anything never attached. */
+  const discardVolunteerEventPhoto = async (photoId: string): Promise<void> => {
+    await authFetch(`/volunteer-events/staged-photos/${photoId}`, { method: "DELETE" }).catch(() => undefined)
   }
 
   const getFaucetBalance = async () => {
@@ -1869,6 +1916,40 @@ export default function AdminPage() {
       cancelled = true
     }
   }, [authFetch])
+  /*
+   * Events sidebar badge: volunteer events waiting on approval.
+   *
+   * Its own request rather than a count lifted from the events panel, because
+   * that panel only exists while its tab is open — a badge that appears only
+   * once you have already navigated to the thing it is pointing at is no use.
+   * count=1 keeps it to a header read; the total is what is wanted.
+   */
+  useEffect(() => {
+    if (status !== "authenticated") return
+    let cancelled = false
+
+    const loadPendingEvents = async () => {
+      try {
+        const res = await authFetch("/admin/volunteer-events?review_status=pending&count=1")
+        if (!res.ok) return
+        const data = (await res.json()) as { total?: number }
+        if (cancelled) return
+        setPendingEventCount(typeof data.total === "number" ? data.total : 0)
+      } catch {
+        // Non-fatal: the badge just stays where it is.
+      }
+    }
+
+    void loadPendingEvents()
+    // Matches the events panel's own poll, so the badge and the list never
+    // disagree for longer than one interval.
+    const timer = setInterval(loadPendingEvents, 30_000)
+    return () => {
+      cancelled = true
+      clearInterval(timer)
+    }
+  }, [authFetch, status])
+
   useEffect(() => { getProposers(proposerSearch, proposerPage) }, [proposerSearch, proposerPage])
   useEffect(() => { getImprovers(improverSearch, improverPage) }, [improverSearch, improverPage])
   useEffect(() => { getSupervisors(supervisorSearch, supervisorPage) }, [supervisorSearch, supervisorPage])
@@ -2623,6 +2704,11 @@ export default function AdminPage() {
           <TabsList className="h-fit w-full flex-col items-stretch gap-2 rounded-xl bg-secondary p-3 lg:sticky lg:top-4 lg:min-w-[280px]">
             <TabsTrigger value="events" className="w-full justify-between px-3 py-2">
               <span>Events</span>
+              {pendingEventCount > 0 && (
+                <Badge variant="destructive" className="h-5 min-w-5 rounded-full px-1.5 text-xs">
+                  {pendingEventCount}
+                </Badge>
+              )}
             </TabsTrigger>
             <TabsTrigger value="users" className="w-full justify-between px-3 py-2">
               <span>Users</span>
@@ -3519,7 +3605,15 @@ export default function AdminPage() {
                         <div className="flex flex-col items-start gap-4 sm:flex-row sm:justify-between">
                           <div className="flex min-w-0 flex-1 items-start gap-4">
                             <Avatar className="h-12 w-12">
-                              <AvatarImage src={location.image_url || "/placeholder.svg"} alt={location.name} />
+                              {/* The merchant's own uploads, in the order that
+                                  identifies a listing at avatar size: the icon
+                                  is a mark chosen to be legible this small, the
+                                  photo is the fallback. image_url is not used —
+                                  it holds a Google Maps *page* link captured at
+                                  creation, so it never resolves to an image and
+                                  this avatar has always fallen through to the
+                                  placeholder. */}
+                              <AvatarImage src={location.icon_url || location.photo_url || "/placeholder.svg"} alt={location.name} />
                               <AvatarFallback>
                                 {location.name
                                   .split(" ")
@@ -5109,7 +5203,29 @@ export default function AdminPage() {
           <VolunteerEventsManager
             basePath="/admin/volunteer-events"
             canReview
-            description="Approve affiliate requests, download QR codes, and cancel published events."
+            pendingCount={pendingEventCount}
+            onEditEvent={(event) => setEditingVolunteerEvent(event)}
+            /*
+             * The faucet figure takes the subtitle's place. Rewards are
+             * reserved from it at approval, so it is the number an admin needs
+             * while they are looking at this queue — it used to sit in a card
+             * of its own below the list, which is the last place anyone
+             * deciding whether to approve an event would look.
+             */
+            description={
+              <span className="flex flex-wrap items-center gap-2">
+                <Badge
+                  className="cursor-pointer text-xs sm:text-sm px-3 py-1"
+                  onClick={toggleDrainFaucetModal}
+                >
+                  {unallocatedBalance !== undefined
+                    ? `${unallocatedBalance} / ${faucetBalance} SFLuv Available`
+                    : `${faucetBalance} SFLuv`}
+                </Badge>
+                <span className="text-xs sm:text-sm text-muted-foreground">unallocated in faucet</span>
+              </span>
+            }
+            action={<Button onClick={toggleNewEventModal}>+ New Event</Button>}
           />
           {eventsError != "" && (
             <div className="flex items-center gap-2 text-red-600 text-sm p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
@@ -5117,11 +5233,25 @@ export default function AdminPage() {
               <span>{eventsError}</span>
             </div>
           )}
+          {/* Editing reuses the create form, so the two can never diverge. */}
+          <AddVolunteerEventModal
+            key={editingVolunteerEvent?.id ?? "new"}
+            open={editingVolunteerEvent !== null}
+            onOpenChange={(next) => !next && setEditingVolunteerEvent(null)}
+            editEvent={editingVolunteerEvent}
+            createEvent={(draft) => saveVolunteerEventEdit(editingVolunteerEvent?.id ?? "", draft)}
+            stagePhoto={stageVolunteerEventPhoto}
+            discardPhoto={discardVolunteerEventPhoto}
+            unallocatedBalance={unallocatedBalance !== undefined ? Number(unallocatedBalance) : 0}
+            submitLabel="Save changes"
+          />
+
           <AddVolunteerEventModal
             open={eventsModalOpen}
             onOpenChange={toggleNewEventModal}
             createEvent={handleCreateVolunteerEvent}
-            uploadPhoto={handleUploadVolunteerEventPhoto}
+            stagePhoto={stageVolunteerEventPhoto}
+            discardPhoto={discardVolunteerEventPhoto}
             unallocatedBalance={unallocatedBalance !== undefined ? Number(unallocatedBalance) : 0}
           />
           <DrainFaucetModal
@@ -5131,32 +5261,6 @@ export default function AdminPage() {
             drainFaucetError={drainFaucetError}
             faucetBalance={faucetBalance === "-" ? undefined : String(faucetBalance)}
           />
-          <Card>
-            <CardHeader className="pb-6 flex flex-col gap-4 md:grid md:grid-cols-[2fr,1fr]">
-              <div>
-                <CardTitle className="flex items-center gap-2 text-xl">
-                  <CalendarIcon className="h-6 w-6" />
-                  Faucet
-                </CardTitle>
-                <CardDescription className="text-base mt-2">
-                  Rewards for every volunteer event are reserved from here at approval.
-                </CardDescription>
-                <div className="flex flex-wrap items-center gap-2 mt-3">
-                  <Badge className="text-xs sm:text-sm px-3 py-1 cursor-pointer" onClick={toggleDrainFaucetModal}>
-                    {unallocatedBalance !== undefined
-                      ? `${unallocatedBalance} / ${faucetBalance} SFLuv Available`
-                      : `${faucetBalance} SFLuv`}
-                  </Badge>
-                  <span className="text-xs sm:text-sm text-muted-foreground">unallocated in faucet</span>
-                </div>
-              </div>
-              <div className="text-left md:text-right">
-                <Button onClick={toggleNewEventModal} className="w-full md:w-auto">
-                  + New Event
-                </Button>
-              </div>
-            </CardHeader>
-          </Card>
         </TabsContent>
 
         <TabsContent value="qrcodes" className="space-y-6">

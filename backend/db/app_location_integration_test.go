@@ -45,6 +45,7 @@ CREATE TABLE locations (
 	admin_email TEXT,
 	website TEXT,
 	image_url TEXT,
+	icon_updated_at TIMESTAMPTZ,
 	rating NUMERIC,
 	maps_page TEXT,
 	contact_firstname TEXT,

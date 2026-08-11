@@ -105,24 +105,32 @@ type Location struct {
 	// ListingSource defaults to google_place when a client omits it, so an older
 	// client cannot silently downgrade into the manual path and skip the
 	// server-side Places verification that google_place submissions get.
-	ListingSource      string                  `json:"listing_source"`
-	OwnerID            string                  `json:"owner_id"`
-	Name               string                  `json:"name"`
-	Description        string                  `json:"description"`
-	Type               string                  `json:"type"`
-	Approval           *bool                   `json:"approval"`
-	Street             string                  `json:"street"`
-	City               string                  `json:"city"`
-	State              string                  `json:"state"`
-	ZIP                string                  `json:"zip"`
-	Lat                float64                 `json:"lat"`
-	Lng                float64                 `json:"lng"`
-	Phone              string                  `json:"phone"`
-	Email              string                  `json:"email"`
-	AdminPhone         string                  `json:"admin_phone"`
-	AdminEmail         string                  `json:"admin_email"`
-	Website            string                  `json:"website"`
-	ImageURL           string                  `json:"image_url"`
+	ListingSource string  `json:"listing_source"`
+	OwnerID       string  `json:"owner_id"`
+	Name          string  `json:"name"`
+	Description   string  `json:"description"`
+	Type          string  `json:"type"`
+	Approval      *bool   `json:"approval"`
+	Street        string  `json:"street"`
+	City          string  `json:"city"`
+	State         string  `json:"state"`
+	ZIP           string  `json:"zip"`
+	Lat           float64 `json:"lat"`
+	Lng           float64 `json:"lng"`
+	Phone         string  `json:"phone"`
+	Email         string  `json:"email"`
+	AdminPhone    string  `json:"admin_phone"`
+	AdminEmail    string  `json:"admin_email"`
+	Website       string  `json:"website"`
+	ImageURL      string  `json:"image_url"`
+	// IconURL is the merchant's uploaded map icon, empty when they have not
+	// uploaded one. Version-stamped so a replacement is picked up despite the
+	// long cache lifetime the bytes themselves are served with.
+	IconURL string `json:"icon_url"`
+	// PhotoURL is the merchant's uploaded storefront photo, empty when they have
+	// not uploaded one. Distinct from ImageURL, which is a link to a Google Maps
+	// page captured at creation and is not an image address at all.
+	PhotoURL           string                  `json:"photo_url"`
 	Rating             float64                 `json:"rating"`
 	MapsPage           string                  `json:"maps_page"`
 	OpeningHours       []string                `json:"opening_hours"`
@@ -180,6 +188,8 @@ type PublicLocation struct {
 	Email        string             `json:"email"`
 	Website      string             `json:"website"`
 	ImageURL     string             `json:"image_url"`
+	IconURL      string             `json:"icon_url"`
+	PhotoURL     string             `json:"photo_url"`
 	Rating       float64            `json:"rating"`
 	MapsPage     string             `json:"maps_page"`
 	OpeningHours []string           `json:"opening_hours"`

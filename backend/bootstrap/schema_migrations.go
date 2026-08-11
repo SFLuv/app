@@ -1358,6 +1358,99 @@ var schemaMigrations = []SchemaMigration{
 			return nil
 		},
 	},
+	{
+		Version:     "1.37",
+		Description: "merchant map icons",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			// Bytes live in their own table because every map read selects the
+			// whole listing row and none of them want the image.
+			//
+			// icon_updated_at mirrors the upload time onto `locations` so a
+			// listing can advertise "there is an icon, at this version" without
+			// joining the blob. The version is what lets the image itself be
+			// served with a long cache lifetime and still change when a
+			// merchant replaces it.
+			if _, err := pools.App.Exec(ctx, `
+				ALTER TABLE locations
+				ADD COLUMN IF NOT EXISTS icon_updated_at TIMESTAMPTZ;
+
+				CREATE TABLE IF NOT EXISTS location_icons(
+					location_id INTEGER PRIMARY KEY REFERENCES locations(id) ON DELETE CASCADE,
+					content_type TEXT NOT NULL,
+					image_data BYTEA NOT NULL,
+					size_bytes INTEGER NOT NULL,
+					updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+				);
+			`); err != nil {
+				return err
+			}
+
+			return nil
+		},
+	},
+	{
+		Version:     "1.38",
+		Description: "staged event cover photos, uploaded before their event exists",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			// Cover photos used to be uploadable only after their event had been
+			// created, which forced the client to create the event first and
+			// then attach — so a failed photo left a published event with
+			// missing artwork and no way to undo it.
+			//
+			// A staged photo is one with no event yet: uploaded the moment it is
+			// chosen, owned by whoever uploaded it, and attached inside the same
+			// transaction that creates the event. Either the event exists with
+			// all of its photos or it does not exist at all.
+			if _, err := pools.Bot.Exec(ctx, `
+				ALTER TABLE event_photos ALTER COLUMN event_id DROP NOT NULL;
+
+				ALTER TABLE event_photos
+				ADD COLUMN IF NOT EXISTS staged_by TEXT NOT NULL DEFAULT '';
+
+				-- Only staged rows are ever looked up this way, so the index
+				-- carries none of the attached ones.
+				CREATE INDEX IF NOT EXISTS event_photos_staged_idx
+					ON event_photos(staged_by, created_at)
+					WHERE event_id IS NULL;
+			`); err != nil {
+				return err
+			}
+
+			return nil
+		},
+	},
+	{
+		Version:     "1.39",
+		Description: "merchant location photos",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			// A picture of the place itself, distinct from the map icon added in
+			// 1.37: the icon is a mark drawn a few pixels wide inside a pin, this
+			// is a photograph shown at card width on the listing.
+			//
+			// `locations.image_url` was not reused for this. It is written once at
+			// creation from the Google place and holds a link to a Maps *page*
+			// rather than to an image, so anything rendering it as a picture gets
+			// a broken one. Storing bytes here keeps a merchant's own photo out of
+			// that ambiguity, and out of the third-party lifetime that comes with
+			// hotlinking Google's.
+			if _, err := pools.App.Exec(ctx, `
+				ALTER TABLE locations
+				ADD COLUMN IF NOT EXISTS photo_updated_at TIMESTAMPTZ;
+
+				CREATE TABLE IF NOT EXISTS location_photos(
+					location_id INTEGER PRIMARY KEY REFERENCES locations(id) ON DELETE CASCADE,
+					content_type TEXT NOT NULL,
+					image_data BYTEA NOT NULL,
+					size_bytes INTEGER NOT NULL,
+					updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+				);
+			`); err != nil {
+				return err
+			}
+
+			return nil
+		},
+	},
 }
 
 // migrateLocationHoursUniqueness enforces at most one hours row per weekday per

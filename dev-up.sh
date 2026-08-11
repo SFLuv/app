@@ -99,9 +99,12 @@ ensure_deps() {
   local dir="$1" label="$2" logfile="$3"
   [[ -f "$dir/package.json" ]] || return 0
 
-  if [[ -d "$dir/node_modules" && ! "$dir/package.json" -nt "$dir/node_modules" ]]; then
-    return 0
-  fi
+  # Staleness detection lives in deps_stale/stamp_deps, further down; this adds
+  # the choice of package manager. It is not cosmetic: frontend/ ships only a
+  # pnpm-lock.yaml, and npm there does not merely ignore the lockfile, it fails
+  # outright with "Cannot read properties of null (reading 'edgesOut')" — which
+  # surfaces much later as a missing module rather than a failed install.
+  deps_stale "$dir" || return 0
 
   c_yellow "  installing $label deps…"
   if [[ -f "$dir/pnpm-lock.yaml" ]] && command -v pnpm >/dev/null 2>&1; then
@@ -110,8 +113,7 @@ ensure_deps() {
     ( cd "$dir" && npm install --no-audit --no-fund >"$logfile" 2>&1 )
   fi || { c_yellow "  $label dep install failed — see $logfile"; return 1; }
 
-  # Mark the tree as current, so the next boot does not reinstall on every run.
-  touch "$dir/node_modules"
+  stamp_deps "$dir"
   return 0
 }
 
@@ -464,6 +466,29 @@ resolve_repo_dir() {
 
   printf '%s\n' "$checkout_dir"
   return 0
+}
+
+deps_stale() { # deps_stale <dir> — true when node_modules is missing or out of date.
+  local dir="$1" manifest
+
+  [[ -d "$dir/node_modules" ]] || return 0
+
+  # A boot that only checked for the directory would silently run yesterday's
+  # dependencies: every service here is pulled or pinned from git, so a commit
+  # that adds a package leaves an existing node_modules in place and the build
+  # fails on an unresolvable import. Comparing against the manifests catches
+  # that, and costs one stat per file.
+  for manifest in package.json package-lock.json pnpm-lock.yaml; do
+    [[ -f "$dir/$manifest" && "$dir/$manifest" -nt "$dir/node_modules" ]] && return 0
+  done
+
+  return 1
+}
+
+stamp_deps() { # stamp_deps <dir> — mark node_modules as current for deps_stale.
+  # npm leaves node_modules' mtime alone when an install changes nothing, so
+  # without this a manifest newer than the tree would reinstall on every boot.
+  [[ -d "$1/node_modules" ]] && touch "$1/node_modules"
 }
 
 start_bg() { # start_bg <name> <workdir> <logfile> <cmd...> — tracked background service.
@@ -1188,12 +1213,11 @@ if [[ "$RUN_WEBPAGE" -eq 1 && -n "$WEBPAGE_PORT" ]]; then
     "NODE_ENV=development"
     "PORT=$WEBPAGE_PORT"
     "SFLUV_API_BASE_URL=http://localhost:$BACKEND_PORT"
-    # The merchant map needs the same Google credentials the web app already
-    # uses; without them the map renders blank. The webpage spells the map id
-    # out in full, so it is taken from the shorter name the rest of the stack
-    # already sets rather than asking for the same value under a second key.
+    # The merchant map. Same two variables the frontend reads, so one pair of
+    # values in .dev.env configures every surface that draws a map. Unset, the
+    # map section renders nothing and the rest of the page is unaffected.
     "NEXT_PUBLIC_GOOGLE_MAPS_API_KEY=${NEXT_PUBLIC_GOOGLE_MAPS_API_KEY:-}"
-    "NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID=${NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID:-${NEXT_PUBLIC_MAP_ID:-}}"
+    "NEXT_PUBLIC_MAP_ID=${NEXT_PUBLIC_MAP_ID:-}"
   )
   # Forwarded only when configured, so the signup proxy can present the shared
   # secret exactly as it will in production (see VOLUNTEER_PROXY_KEY in the

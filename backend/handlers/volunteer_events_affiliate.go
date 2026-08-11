@@ -28,8 +28,13 @@ func (a *AppService) AffiliateRequestVolunteerEvent(w http.ResponseWriter, r *ht
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}
+	// Every failure below answers with a reason, not a bare status. The client
+	// renders whatever body it gets under the submit button, so a silent status
+	// leaves the affiliate looking at a form that refused them without saying
+	// why — and pressing submit again.
 	if a.bot == nil || a.bot.db == nil {
 		w.WriteHeader(http.StatusServiceUnavailable)
+		w.Write([]byte("the events service is unavailable right now, please try again shortly"))
 		return
 	}
 
@@ -43,7 +48,9 @@ func (a *AppService) AffiliateRequestVolunteerEvent(w http.ResponseWriter, r *ht
 	defer r.Body.Close()
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
+		a.logger.Logf("error reading affiliate volunteer event request body: %s", err)
 		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte("could not read the request, please try again"))
 		return
 	}
 
@@ -58,6 +65,13 @@ func (a *AppService) AffiliateRequestVolunteerEvent(w http.ResponseWriter, r *ht
 	if errMsg == "" {
 		errMsg = a.validateVolunteerLocation(r.Context(), req.LocationId)
 	}
+	if errMsg != "" {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(errMsg))
+		return
+	}
+
+	photoIds, errMsg := validateStagedPhotoIds(req.PhotoIds)
 	if errMsg != "" {
 		w.WriteHeader(http.StatusBadRequest)
 		w.Write([]byte(errMsg))
@@ -82,6 +96,7 @@ func (a *AppService) AffiliateRequestVolunteerEvent(w http.ResponseWriter, r *ht
 		ReviewStatus:        structs.EventReviewPending,
 		MintCodes:           false,
 		RecurrenceFrequency: structs.RecurrenceNone,
+		StagedPhotoIds:      photoIds,
 	}
 
 	if req.Recurrence != nil {
@@ -103,9 +118,22 @@ func (a *AppService) AffiliateRequestVolunteerEvent(w http.ResponseWriter, r *ht
 	if err != nil {
 		a.logger.Logf("error creating affiliate volunteer event request: %s", err)
 		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte("could not save the request, please try again"))
+		return
+	}
+	if strings.TrimSpace(id) == "" {
+		// Belt and braces: a created event with no id cannot be photographed,
+		// reviewed or linked to, so reporting it as a success would hand the
+		// client a reference it can do nothing with.
+		a.logger.Logf("affiliate volunteer event created with an empty id for org %d", org.Id)
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte("the request was saved but could not be identified, please check your events list before retrying"))
 		return
 	}
 
+	// Deliberately after the response is decided: the request has succeeded
+	// whether or not the notification email does, and a failed email must not
+	// turn a saved request into an error.
 	go a.sendVolunteerEventRequestEmail(org.Name, req.Title, int64(req.RewardAmountSfluv)*int64(req.MaxParticipants))
 
 	w.Header().Set("Content-Type", "application/json")
@@ -150,6 +178,7 @@ func (a *AppService) AffiliateListVolunteerEvents(w http.ResponseWriter, r *http
 		event.Creator = creators[row.Id]
 		events = append(events, event)
 	}
+	a.decoratePendingEdits(r.Context(), events, rows)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -311,34 +340,44 @@ func (a *AppService) AffiliateDownloadVolunteerEventCodes(w http.ResponseWriter,
 // they are spendable — organizers print ahead of the event, and the 24h
 // redemption gate is what prevents early use. When requiredOrgId is non-nil the
 // event must belong to that organization.
-func (a *AppService) writeVolunteerEventCodesCSV(w http.ResponseWriter, r *http.Request, requiredOrgId *int64) {
+// loadVolunteerEventCodes resolves an event and its codes for a download,
+// enforcing organization scope. It writes the failure response itself and
+// returns ok=false when the caller should stop.
+//
+// Shared by the CSV and JSON downloads so the authorization can never drift
+// between the two: these codes are bearer tokens for faucet funds.
+func (a *AppService) loadVolunteerEventCodes(
+	w http.ResponseWriter,
+	r *http.Request,
+	requiredOrgId *int64,
+) (*db.VolunteerEventRow, []db.NumberedCode, bool) {
 	if a.bot == nil || a.bot.db == nil {
 		w.WriteHeader(http.StatusServiceUnavailable)
-		return
+		return nil, nil, false
 	}
 
 	eventId := strings.TrimSpace(r.PathValue("id"))
 	if eventId == "" {
 		w.WriteHeader(http.StatusBadRequest)
-		return
+		return nil, nil, false
 	}
 
 	row, err := a.bot.db.GetVolunteerEventForManagement(r.Context(), eventId)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			w.WriteHeader(http.StatusNotFound)
-			return
+			return nil, nil, false
 		}
 		a.logger.Logf("error loading event %s for code download: %s", eventId, err)
 		w.WriteHeader(http.StatusInternalServerError)
-		return
+		return nil, nil, false
 	}
 
 	if requiredOrgId != nil {
 		// 404 rather than 403: a wrong-org id should not confirm the event exists.
 		if row.OrganizationId == nil || *row.OrganizationId != *requiredOrgId {
 			w.WriteHeader(http.StatusNotFound)
-			return
+			return nil, nil, false
 		}
 	}
 
@@ -346,6 +385,60 @@ func (a *AppService) writeVolunteerEventCodesCSV(w http.ResponseWriter, r *http.
 	if err != nil {
 		a.logger.Logf("error loading codes for event %s: %s", eventId, err)
 		w.WriteHeader(http.StatusInternalServerError)
+		return nil, nil, false
+	}
+
+	return row, codes, true
+}
+
+// AdminGetVolunteerEventCodes / AffiliateGetVolunteerEventCodes serve the same
+// codes as JSON, for the client that renders them onto printable cards.
+//
+// The printed sheet is a PDF built in the browser from the card components, so
+// it cannot be produced from a CSV — it needs the ids and their numbers as
+// data. Same shape as the legacy /events/{id} codes endpoint the original card
+// export already consumed.
+func (a *AppService) AdminGetVolunteerEventCodes(w http.ResponseWriter, r *http.Request) {
+	a.writeVolunteerEventCodesJSON(w, r, nil)
+}
+
+func (a *AppService) AffiliateGetVolunteerEventCodes(w http.ResponseWriter, r *http.Request) {
+	userDid := utils.GetDid(r)
+	if userDid == nil {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	org, _, err := a.db.GetOrganizationByUser(r.Context(), *userDid)
+	if err != nil || org == nil {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	a.writeVolunteerEventCodesJSON(w, r, &org.Id)
+}
+
+func (a *AppService) writeVolunteerEventCodesJSON(w http.ResponseWriter, r *http.Request, requiredOrgId *int64) {
+	_, codes, ok := a.loadVolunteerEventCodes(w, r, requiredOrgId)
+	if !ok {
+		return
+	}
+
+	type codeEntry struct {
+		Id     string `json:"id"`
+		Number int    `json:"number"`
+	}
+	entries := make([]codeEntry, 0, len(codes))
+	for _, code := range codes {
+		entries = append(entries, codeEntry{Id: code.Id, Number: code.Number})
+	}
+
+	writeJSON(w, http.StatusOK, entries)
+}
+
+func (a *AppService) writeVolunteerEventCodesCSV(w http.ResponseWriter, r *http.Request, requiredOrgId *int64) {
+	row, codes, ok := a.loadVolunteerEventCodes(w, r, requiredOrgId)
+	if !ok {
 		return
 	}
 

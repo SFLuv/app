@@ -140,6 +140,9 @@ importers:
       input-otp:
         specifier: 1.4.1
         version: 1.4.1(react-dom@19.2.1(react@19.2.1))(react@19.2.1)
+      jspdf:
+        specifier: 3.0.4
+        version: 3.0.4
       jsqr:
         specifier: ^1.4.0
         version: 1.4.0

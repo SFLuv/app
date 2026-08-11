@@ -8,6 +8,8 @@ import { useApp } from "@/context/AppProvider";
 import { OrganizationPanel } from "@/components/organization/organization-panel";
 import PlaceAutocomplete from "@/components/merchant/google_place_finder";
 import { MerchantHoursCard } from "@/components/locations/merchant-hours-card";
+import { MerchantIconCard } from "@/components/locations/merchant-icon-card";
+import { MerchantPhotoCard } from "@/components/locations/merchant-photo-card";
 import {
   Card,
   CardContent,
@@ -63,7 +65,7 @@ import {
   WalletResponse,
 } from "@/types/server";
 import { AuthedLocation } from "@/types/location";
-import { GoogleSubLocation } from "@/types/location";
+import { GoogleSubLocation, PlaceSelection } from "@/types/location";
 import { ensureGooglePlacesScript, hasGoogleMapsPlaces } from "@/lib/google-places";
 import { sweepSFLUVBalancesToAdmin } from "@/lib/account-deletion";
 import { getAddress, isAddress } from "viem";
@@ -1683,10 +1685,22 @@ export default function SettingsPage() {
   // Previews the picked place in the draft and stashes it for the save step.
   // The preview is optimistic — the values actually stored come back from the
   // server after it re-verifies the place id with Google.
+  // The picker speaks PlaceSelection (Google place or hand-typed address); the
+  // drafts here predate that and still hold a plain Google place.
+  const asPlaceSelection = (
+    place: GoogleSubLocation | null,
+  ): PlaceSelection | null => (place ? { source: "google_place", place } : null);
+
   const applyGoogleLocationSelection = (
     locationId: number,
-    selection: GoogleSubLocation | null,
+    placeSelection: PlaceSelection | null,
   ) => {
+    // This control refreshes an existing listing's Google details, so only the
+    // Google branch means anything here. The manual-address path belongs to
+    // onboarding, where there is no listing to refresh from.
+    const selection =
+      placeSelection?.source === "google_place" ? placeSelection.place : null;
+
     updateLocationProfileDraft(locationId, (current) => {
       if (!selection) {
         return { ...current, pendingGooglePlace: null, error: "", success: "" };
@@ -3607,7 +3621,7 @@ export default function SettingsPage() {
                                     ) : merchantPlacesReady ? (
                                       <PlaceAutocomplete
                                         key={`merchant-location-place-${loc.id}`}
-                                        value={profileDraft.pendingGooglePlace}
+                                        value={asPlaceSelection(profileDraft.pendingGooglePlace)}
                                         onSelect={(selection) =>
                                           applyGoogleLocationSelection(loc.id, selection)
                                         }
@@ -3765,6 +3779,35 @@ export default function SettingsPage() {
                                 </Button>
                               </div>
                               ) : null}
+
+                              {/* Outside the block above, which is switched off
+                                  (`{false ? ...}`, since 5d47f39) — merchant
+                                  self-service editing of the business details
+                                  was withdrawn, and these two were added inside
+                                  it afterwards, so they shipped unreachable.
+                                  They are the merchant's own artwork rather
+                                  than listing data, and nothing about them
+                                  depends on that editor being back. */}
+                              <div className="space-y-4 rounded-xl border bg-background/70 p-4">
+                                <div className="space-y-1">
+                                  <h3 className="text-sm font-semibold text-black dark:text-white">
+                                    Listing images
+                                  </h3>
+                                  <p className="text-xs text-muted-foreground">
+                                    How this location appears on the merchant map and on its listing.
+                                  </p>
+                                </div>
+
+                                <div className="space-y-2 rounded-lg border p-3">
+                                  <Label className="text-black dark:text-white">Map icon</Label>
+                                  <MerchantIconCard location={loc} />
+                                </div>
+
+                                <div className="space-y-2 rounded-lg border p-3">
+                                  <Label className="text-black dark:text-white">Location photo</Label>
+                                  <MerchantPhotoCard location={loc} />
+                                </div>
+                              </div>
 
                               <div className="space-y-4">
                                 <div className="grid gap-3 sm:grid-cols-2">

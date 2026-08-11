@@ -1,35 +1,32 @@
 "use client"
 
-import { memo, useCallback, useEffect, useRef, useState } from "react"
-import { Tabs, TabsContent } from "@/components/ui/tabs"
+import { memo, useCallback, useEffect, useState } from "react"
 import { MapView } from "@/components/locations/map-view"
-import { ListView } from "@/components/locations/list-view"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { SlidersHorizontal } from "lucide-react"
 import { LocationModal } from "@/components/locations/location-modal"
 import { defaultLocation } from "@/data/mock-merchants"
 import type { UserLocation } from "@/types/merchant"
 import { useLocation } from "@/context/LocationProvider"
 import { useApp } from "@/context/AppProvider"
 import { Location } from "@/types/location"
-import { usePathname, useRouter, useSearchParams } from "next/navigation"
-import { List, Map as MapIcon } from "lucide-react"
-import { cn } from "@/lib/utils"
+import { useRouter, useSearchParams } from "next/navigation"
 import { buildMerchantRedirectPath } from "@/lib/redeem-link"
 import { isAddress } from "viem"
 
 const LocationMapPageContent = memo(function LocationMapPageContent() {
   const search = useSearchParams()
-  const pathname = usePathname()
   const router = useRouter()
-  const tabFromQuery = search.get("tab")
-  const activeTab = tabFromQuery === "list" ? "list" : "map"
   const [selectedLocationType, setSelectedLocationType] = useState("All Locations")
   const [selectedLocation, setSelectedLocation] = useState<Location | null>(null)
   const [isModalOpen, setIsModalOpen] = useState(false)
+  // The city centre, and it stays there: the map does not ask for a position.
+  // The merchant list still needs somewhere to measure distance from, and
+  // downtown is a defensible answer for a San Francisco currency.
   const [userLocation, setUserLocation] = useState<UserLocation>(defaultLocation)
   const [isInitialLoading, setIsInitialLoading] = useState(true)
-  const { mapLocations, getMapLocations } = useLocation()
+  const { mapLocations, getMapLocations, locationTypes } = useLocation()
   const { status } = useApp()
-  const previousTabRef = useRef(activeTab)
   const isPayEnabled = status === "authenticated"
 
   useEffect(() => {
@@ -45,30 +42,17 @@ const LocationMapPageContent = memo(function LocationMapPageContent() {
     }
   }, [getMapLocations])
 
-  useEffect(() => {
-    if (previousTabRef.current !== activeTab) {
-      previousTabRef.current = activeTab
-      void getMapLocations()
-    }
-  }, [activeTab, getMapLocations])
-
-  const handleTabChange = (value: string) => {
-    if (value !== "map" && value !== "list") return
-    if (value === activeTab) return
-    const params = new URLSearchParams(search.toString())
-    params.set("tab", value)
-    const nextQuery = params.toString()
-    if (nextQuery !== search.toString()) {
-      router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname, { scroll: false })
-    }
-  }
-
   // Stable so the memoised map pins are not invalidated on every render of this
   // page — an unstable callback here would undo the flicker fix in MapView.
   const handleSelectLocation = useCallback((location: Location) => {
     setSelectedLocation(location)
     setIsModalOpen(true)
   }, [])
+
+  const handleCloseModal = () => {
+    setIsModalOpen(false)
+    setSelectedLocation(null)
+  }
 
   const handlePayLocation = (location: Location) => {
     if (!isPayEnabled) return
@@ -83,11 +67,6 @@ const LocationMapPageContent = memo(function LocationMapPageContent() {
     }))
   }
 
-  const handleCloseModal = () => {
-    setIsModalOpen(false)
-    setSelectedLocation(null)
-  }
-
   if (isInitialLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -96,74 +75,47 @@ const LocationMapPageContent = memo(function LocationMapPageContent() {
     )
   }
 
-
   return (
     <div className={`mx-auto w-full max-w-6xl space-y-3 pt-4 sm:space-y-4 sm:pt-5 ${search.get("sidebar") === "false" ? "p-4 sm:p-6" : ""}`}>
-      <section className="px-1">
-        <h1 className="text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">Merchant Map</h1>
-        <p className="mt-1 text-sm text-muted-foreground sm:text-base">Places that accept SFLuv.</p>
+      {/*
+        The type filter sits on the title line rather than over the map: it
+        acts on the whole page, and the running count it used to sit beside is
+        now the "n of n shown" line in the map's own merchant list.
+      */}
+      <section className="flex flex-wrap items-start justify-between gap-3 px-1">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">Merchant Map</h1>
+          <p className="mt-1 text-sm text-muted-foreground sm:text-base">Places that accept SFLuv.</p>
+        </div>
+
+        <Select value={selectedLocationType} onValueChange={setSelectedLocationType}>
+          <SelectTrigger className="h-9 w-[180px] rounded-lg border-border/60 bg-background sm:w-[210px]">
+            <div className="flex items-center gap-2">
+              <SlidersHorizontal className="h-4 w-4 text-muted-foreground" />
+              <SelectValue placeholder="Filter by type" />
+            </div>
+          </SelectTrigger>
+          <SelectContent align="end">
+            {locationTypes.map((type) => (
+              <SelectItem key={type} value={type}>
+                {type}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </section>
 
-      <div className="w-full px-1 sm:w-[340px]">
-        <div className="relative grid grid-cols-2 rounded-lg bg-secondary p-1">
-          <div
-            className={cn(
-              "absolute inset-y-1 left-1 w-[calc(50%-0.25rem)] rounded-md bg-[#eb6c6c] shadow-sm transition-transform duration-300 ease-out",
-              activeTab === "map" ? "translate-x-0" : "translate-x-full",
-            )}
-          />
-          <button
-            type="button"
-            className={cn(
-              "relative z-10 inline-flex h-9 items-center justify-center gap-2 rounded-md px-3 text-sm font-medium transition-colors",
-              activeTab === "map" ? "text-white" : "text-foreground/80 hover:text-foreground",
-            )}
-            onClick={() => handleTabChange("map")}
-          >
-            <MapIcon className="h-4 w-4" />
-            Map View
-          </button>
-          <button
-            type="button"
-            className={cn(
-              "relative z-10 inline-flex h-9 items-center justify-center gap-2 rounded-md px-3 text-sm font-medium transition-colors",
-              activeTab === "list" ? "text-white" : "text-foreground/80 hover:text-foreground",
-            )}
-            onClick={() => handleTabChange("list")}
-          >
-            <List className="h-4 w-4" />
-            List View
-          </button>
-        </div>
-      </div>
-
-      <Tabs value={activeTab} onValueChange={handleTabChange} className="w-full">
-        <TabsContent value="map" className="mt-2">
-          <MapView
-            locations={mapLocations}
-            selectedLocationType={selectedLocationType}
-            setSelectedLocationType={setSelectedLocationType}
-            onSelectLocation={handleSelectLocation}
-            userLocation={userLocation}
-            setUserLocation={setUserLocation}
-          />
-        </TabsContent>
-
-        <TabsContent value="list" className="mt-2">
-          <div className="rounded-2xl border bg-card/90 p-3 shadow-sm sm:p-4">
-            <ListView
-              locations={mapLocations}
-              selectedLocationType={selectedLocationType}
-              setSelectedLocationType={setSelectedLocationType}
-              onSelectLocation={handleSelectLocation}
-              isPayEnabled={isPayEnabled}
-              onPayLocation={handlePayLocation}
-              userLocation={userLocation}
-              setUserLocation={setUserLocation}
-            />
-          </div>
-        </TabsContent>
-      </Tabs>
+      {/*
+        No view switcher: the map carries its own searchable merchant list
+        beside it, which is what the List View tab existed to provide.
+      */}
+      <MapView
+        locations={mapLocations}
+        selectedLocationType={selectedLocationType}
+        onSelectLocation={handleSelectLocation}
+        userLocation={userLocation}
+        setUserLocation={setUserLocation}
+      />
 
       <LocationModal
         location={selectedLocation}

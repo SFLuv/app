@@ -2269,6 +2269,47 @@ func (s *AppDB) CreateTables() error {
 		return fmt.Errorf("error ensuring locations.approved_at column: %s", err)
 	}
 
+	// Merchant map icons. Bytes live in their own table so the wide `locations`
+	// row stays cheap to select — every map read pulls the whole listing and
+	// none of them want the image. The timestamp is mirrored onto `locations`
+	// so a listing can advertise "I have an icon, fetched at this version"
+	// without joining the blob.
+	_, err = s.db.Exec(context.Background(), `
+		ALTER TABLE locations
+		ADD COLUMN IF NOT EXISTS icon_updated_at TIMESTAMPTZ;
+
+		CREATE TABLE IF NOT EXISTS location_icons(
+			location_id INTEGER PRIMARY KEY REFERENCES locations(id) ON DELETE CASCADE,
+			content_type TEXT NOT NULL,
+			image_data BYTEA NOT NULL,
+			size_bytes INTEGER NOT NULL,
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		);
+	`)
+	if err != nil {
+		return fmt.Errorf("error creating location_icons table: %s", err)
+	}
+
+	// Storefront photos, stored the same way and for the same reasons. Separate
+	// from the icon rather than one table with a kind: they have different size
+	// limits, different aspect handling and different call sites, and every read
+	// path wants one specific picture, never "whichever images this listing has".
+	_, err = s.db.Exec(context.Background(), `
+		ALTER TABLE locations
+		ADD COLUMN IF NOT EXISTS photo_updated_at TIMESTAMPTZ;
+
+		CREATE TABLE IF NOT EXISTS location_photos(
+			location_id INTEGER PRIMARY KEY REFERENCES locations(id) ON DELETE CASCADE,
+			content_type TEXT NOT NULL,
+			image_data BYTEA NOT NULL,
+			size_bytes INTEGER NOT NULL,
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		);
+	`)
+	if err != nil {
+		return fmt.Errorf("error creating location_photos table: %s", err)
+	}
+
 	_, err = s.db.Exec(context.Background(), `
 		CREATE TABLE IF NOT EXISTS location_hours(
 			location_id INTEGER REFERENCES locations(id),
