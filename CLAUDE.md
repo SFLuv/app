@@ -128,6 +128,28 @@ Workflows with recurrence (`daily`/`weekly`/`monthly`) share a `series_id`. A ne
 ### Email Notifications
 Mailgun is used for all transactional email. Styled HTML templates are constructed in Go handlers. Follow existing patterns in `backend/handlers/app.go` and `backend/handlers/app_workflow.go` for email template style.
 
+### Branch Scope Documents
+Every branch records its own work in `branch-scopes/<branch-name>.md`, and that file must be up to date
+**before the branch is merged**. `branch-scopes/pjol/volunteer-panel.md` is the worked example.
+
+What it is for: the branch is the unit of work people ask about later — what shipped in it, why a decision
+was made, and how long it took. Commit messages scatter that across dozens of entries and a PR description
+disappears once it is merged, so it lives in the repo alongside the code it describes.
+
+Each file carries:
+- A header with the date range, the repos touched, and total active hours
+- How those hours were arrived at (commit clustering, and any adjustment made to it, stated plainly)
+- Features grouped large-to-small, each with its own hours (**to the nearest 0.1h**) and repo
+- A table of smaller fixes, same rule
+- A totals table and a volume line (files, insertions/deletions, migrations, new routes)
+
+Itemised hours should add up to the measured figure. Rounding every item up to a common floor inflates the
+total — the first draft of round 2 in the example file floored at 0.5h and came out 35% over what the
+commit history showed.
+
+Work spanning more than one sitting is appended as a new `# Round N` section rather than folded into the
+existing numbers, so an earlier estimate is never silently restated.
+
 ## Additional Systems
 
 ### Affiliate System

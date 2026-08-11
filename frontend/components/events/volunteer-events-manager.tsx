@@ -36,6 +36,16 @@ export interface ManagedVolunteerEvent {
   cover_photos?: { id: string; url: string; position: number }[]
   description?: string
   recurrence: { summary: string } | null
+  /** Present whenever the event was given one. */
+  location?: {
+    id: number
+    name: string
+    street: string
+    city: string
+    state: string
+    zip: string
+  } | null
+  signup?: { mode: string; url?: string | null; open: boolean; closed_reason?: string | null }
   qr?: { live: boolean; live_at: string | null; codes_generated: boolean }
   /** Management-only: who made the event. Email is present only when the
       short name is ambiguous within the organization. */
@@ -90,6 +100,93 @@ function formatEventWhen(event: ManagedVolunteerEvent): string {
     hour: "numeric",
     minute: "2-digit",
   })
+}
+
+/**
+ * The full window, not just the opening moment.
+ *
+ * Collapses to one date when an event starts and ends on the same day, which
+ * is nearly all of them — repeating the date twice reads as a mistake.
+ */
+function formatEventRange(event: ManagedVolunteerEvent): string {
+  const start = new Date(event.start_at)
+  const end = new Date(event.end_at)
+  if (Number.isNaN(start.getTime())) return ""
+
+  const startLabel = start.toLocaleString(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  })
+  if (Number.isNaN(end.getTime())) return startLabel
+
+  const sameDay = start.toDateString() === end.toDateString()
+  const endLabel = end.toLocaleString(
+    undefined,
+    sameDay
+      ? { hour: "numeric", minute: "2-digit" }
+      : { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" },
+  )
+  return `${startLabel} – ${endLabel}`
+}
+
+function formatAddress(location: NonNullable<ManagedVolunteerEvent["location"]>): string {
+  return [location.street, location.city, location.state, location.zip].map((part) => part?.trim()).filter(Boolean).join(", ")
+}
+
+/**
+ * Every cover photo an event has, at a reviewable size.
+ *
+ * One large lead image with the rest beneath it: the first photo is the cover
+ * everywhere else in the product, so it earns the space, and the others still
+ * need to be checkable. Each opens full size in a new tab, because a cover
+ * cropped into a card is not enough to spot a photo that is wrong.
+ */
+function EventCoverGallery({ event }: { event: ManagedVolunteerEvent }) {
+  const photos = [...(event.cover_photos || [])].sort((a, b) => a.position - b.position)
+  if (photos.length === 0) {
+    return (
+      <div className="rounded-lg border border-dashed p-4 text-center text-xs text-muted-foreground">
+        No cover photos on this event.
+      </div>
+    )
+  }
+
+  const [lead, ...rest] = photos
+
+  return (
+    <div className="space-y-2">
+      <a href={lead.url} target="_blank" rel="noopener noreferrer" className="block">
+        {/* eslint-disable-next-line @next/next/no-img-element -- API-hosted upload */}
+        <img
+          src={lead.url}
+          alt={`${event.title} cover`}
+          className="h-48 w-full rounded-lg border object-cover transition-opacity hover:opacity-90"
+        />
+      </a>
+
+      {rest.length > 0 && (
+        <div className="flex flex-wrap gap-2">
+          {rest.map((photo, index) => (
+            <a key={photo.id} href={photo.url} target="_blank" rel="noopener noreferrer">
+              {/* eslint-disable-next-line @next/next/no-img-element -- API-hosted upload */}
+              <img
+                src={photo.url}
+                alt={`${event.title} photo ${index + 2}`}
+                className="h-16 w-24 rounded-md border object-cover transition-opacity hover:opacity-90"
+              />
+            </a>
+          ))}
+        </div>
+      )}
+
+      <p className="text-xs text-muted-foreground">
+        {photos.length} photo{photos.length === 1 ? "" : "s"} · click to open full size
+      </p>
+    </div>
+  )
 }
 
 function ReviewBadge({ event }: { event: ManagedVolunteerEvent }) {
@@ -454,11 +551,35 @@ export function VolunteerEventsManager({
                   <QrBadge event={openEvent} />
                 </div>
 
+                {/*
+                  The covers, at a size worth reviewing. An admin approving an
+                  event is approving its artwork too, and the row thumbnail
+                  shows only the first one at 80px — too small to judge and
+                  silent about the rest.
+                */}
+                <EventCoverGallery event={openEvent} />
+
                 {openEvent.description && (
                   <p className="whitespace-pre-line text-sm text-muted-foreground">{openEvent.description}</p>
                 )}
 
                 <div className="grid grid-cols-2 gap-3 text-sm">
+                  <div className="col-span-2">
+                    <div className="text-xs text-muted-foreground">When</div>
+                    <div>{formatEventRange(openEvent)}</div>
+                    {openEvent.timezone && (
+                      <div className="text-xs text-muted-foreground">Event timezone: {openEvent.timezone}</div>
+                    )}
+                  </div>
+                  {openEvent.location && (
+                    <div className="col-span-2">
+                      <div className="text-xs text-muted-foreground">Where</div>
+                      <div>{openEvent.location.name}</div>
+                      {formatAddress(openEvent.location) !== "" && (
+                        <div className="text-xs text-muted-foreground">{formatAddress(openEvent.location)}</div>
+                      )}
+                    </div>
+                  )}
                   <div>
                     <div className="text-xs text-muted-foreground">Signed up</div>
                     <div>{openEvent.signup_count ?? 0} / {openEvent.max_participants}</div>
@@ -467,12 +588,47 @@ export function VolunteerEventsManager({
                     <div className="text-xs text-muted-foreground">Reward each</div>
                     <div>{openEvent.reward_amount_sfluv} SFLUV</div>
                   </div>
+                  {openEvent.signup?.mode && (
+                    <div className="col-span-2">
+                      <div className="text-xs text-muted-foreground">Sign up</div>
+                      <div className="capitalize">
+                        {openEvent.signup.mode === "none" ? "No sign up required" : openEvent.signup.mode}
+                      </div>
+                      {openEvent.signup.mode === "external" && openEvent.signup.url && (
+                        <a
+                          href={openEvent.signup.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="break-all text-xs text-[#eb6c6c] hover:underline"
+                        >
+                          {openEvent.signup.url}
+                        </a>
+                      )}
+                    </div>
+                  )}
                   {openEvent.recurrence?.summary && (
                     <div className="col-span-2">
                       <div className="text-xs text-muted-foreground">Repeats</div>
                       <div>{openEvent.recurrence.summary}</div>
                     </div>
                   )}
+                  <div className="col-span-2">
+                    <div className="text-xs text-muted-foreground">QR codes</div>
+                    <div className="text-sm">
+                      {openEvent.qr?.codes_generated
+                        ? openEvent.qr.live
+                          ? "Live and redeemable now"
+                          : openEvent.qr.live_at
+                            ? `Redeemable from ${new Date(openEvent.qr.live_at).toLocaleString(undefined, {
+                                month: "short",
+                                day: "numeric",
+                                hour: "numeric",
+                                minute: "2-digit",
+                              })}`
+                            : "Not live yet"
+                        : "Not generated — minted when the event is approved"}
+                    </div>
+                  </div>
                 </div>
 
                 <div className="flex flex-wrap gap-2 border-t pt-4">
