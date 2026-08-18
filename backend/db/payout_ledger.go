@@ -53,6 +53,10 @@ const TaxSchemaDDL = `
 			requested_at           TIMESTAMPTZ,
 			completed_at           TIMESTAMPTZ,
 			tin_type               TEXT NOT NULL DEFAULT '',
+			-- The TIN match is asynchronous and independent of signing, so it is
+			-- recorded separately. Release happens on the signature.
+			tin_match              TEXT NOT NULL DEFAULT '',
+			tin_match_at           TIMESTAMPTZ,
 			cleared_by_user_id     TEXT NOT NULL DEFAULT '',
 			clear_reason           TEXT NOT NULL DEFAULT '',
 			last_provider_status   TEXT NOT NULL DEFAULT '',
@@ -115,8 +119,14 @@ const TaxSchemaDDL = `
 
 		CREATE UNIQUE INDEX IF NOT EXISTS payout_ledger_idempotency_idx
 			ON payout_ledger (idempotency_key);
+		-- One payout per source record — but only among rows that still stand.
+		-- A failed attempt must not hold the slot forever: the faucet being
+		-- misconfigured for one call would otherwise make that redemption code
+		-- permanently unredeemable, with no way back short of hand-editing the
+		-- ledger.
 		CREATE UNIQUE INDEX IF NOT EXISTS payout_ledger_source_ref_idx
-			ON payout_ledger (source, source_ref) WHERE source_ref <> '';
+			ON payout_ledger (source, source_ref)
+			WHERE source_ref <> '' AND state NOT IN ('failed', 'cancelled');
 		CREATE INDEX IF NOT EXISTS payout_ledger_user_year_idx
 			ON payout_ledger (user_id, tax_year) WHERE counts_toward_threshold;
 		CREATE INDEX IF NOT EXISTS payout_ledger_open_state_idx
@@ -778,7 +788,6 @@ func (a *AppDB) ListW9AdminRows(ctx context.Context, taxYear int) ([]structs.W9A
 	return out, rows.Err()
 }
 
-
 // MarkPayoutFailed takes a payout out of the running total.
 //
 // A pending row counts toward the threshold so that a concurrent payout cannot
@@ -804,4 +813,85 @@ func (a *AppDB) Exec(ctx context.Context, sql string, args ...any) (int64, error
 		return 0, err
 	}
 	return tag.RowsAffected(), nil
+}
+
+// List1099Candidates is the year-end answer to "who do we owe a 1099-NEC".
+//
+// Summed on paid_tax_year, not tax_year. A 1099-NEC is cash-basis: it reports
+// what was actually paid during the year, so a reward escrowed in December and
+// released in February belongs to the later year. Gating uses the earned year;
+// reporting uses this one. Conflating them is how a first filing season goes
+// wrong.
+//
+// Only 'paid' rows count. Escrowed, expired and awaiting-back-pay money has not
+// reached anybody, so it is not yet reportable income — it will be, in whatever
+// year it lands.
+//
+// Everyone at or over the threshold is returned, including those we cannot file
+// for. A payee who is over the line with no TIN on file is the single most
+// important row in this report: it is the one that needs a human before January.
+func (a *AppDB) List1099Candidates(ctx context.Context, taxYear int, thresholdBase *big.Int) ([]structs.Form1099Row, error) {
+	if thresholdBase == nil || thresholdBase.Sign() <= 0 {
+		thresholdBase = big.NewInt(600_000_000)
+	}
+
+	rows, err := a.db.Query(ctx, `
+		SELECT
+			p.user_id,
+			COALESCE(NULLIF(TRIM(u.contact_name), ''), ''),
+			COALESCE(NULLIF(TRIM(u.contact_email), ''), ''),
+			COALESCE(SUM(p.amount_base), 0)::text,
+			COUNT(*),
+			COALESCE(f.status, 'not_started'),
+			COALESCE(f.tin_type, '')
+		FROM payout_ledger p
+		LEFT JOIN users u ON u.id = p.user_id
+		LEFT JOIN w9_filings f ON f.user_id = p.user_id AND f.tax_year = $1
+		WHERE p.user_id IS NOT NULL
+		AND p.state = 'paid'
+		AND p.paid_tax_year = $1
+		AND p.counts_toward_threshold = TRUE
+		GROUP BY p.user_id, u.contact_name, u.contact_email, f.status, f.tin_type
+		ORDER BY SUM(p.amount_base) DESC;
+	`, taxYear)
+	if err != nil {
+		return nil, fmt.Errorf("error listing 1099 candidates for %d: %w", taxYear, err)
+	}
+	defer rows.Close()
+
+	out := []structs.Form1099Row{}
+	for rows.Next() {
+		var row structs.Form1099Row
+		var paidBase string
+		if err := rows.Scan(&row.UserID, &row.ContactName, &row.ContactEmail,
+			&paidBase, &row.PayoutCount, &row.FilingStatus, &row.TINType); err != nil {
+			return nil, fmt.Errorf("error scanning 1099 candidate: %w", err)
+		}
+		row.TaxYear = taxYear
+		row.PaidSfluv = paidBase
+
+		paid, ok := new(big.Int).SetString(paidBase, 10)
+		if !ok {
+			paid = big.NewInt(0)
+		}
+		row.Reportable = paid.Cmp(thresholdBase) >= 0
+
+		// A form needs a tax identification number behind it. A completed filing
+		// has one at the vendor; a legacy approval does not — those people were
+		// cleared to be paid by the old system, which never collected a TIN.
+		switch {
+		case !row.Reportable:
+			row.Fileable = false
+		case row.FilingStatus == W9StatusCompleted:
+			row.Fileable = true
+		case row.FilingStatus == W9StatusLegacyApproved:
+			row.BlockedReason = "cleared under the old system, which never collected a tax ID — needs a W-9 before filing"
+		case row.FilingStatus == W9StatusManuallyCleared:
+			row.BlockedReason = "cleared manually by an admin, so no tax ID is on file"
+		default:
+			row.BlockedReason = "no completed W-9 on file"
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
 }

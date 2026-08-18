@@ -1,9 +1,7 @@
 package handlers
 
 import (
-	"context"
 	"encoding/json"
-	"io"
 	"math/big"
 	"net/http"
 	"strconv"
@@ -13,7 +11,6 @@ import (
 	"github.com/SFLuv/app/backend/db"
 	"github.com/SFLuv/app/backend/structs"
 	"github.com/SFLuv/app/backend/utils"
-	"github.com/SFLuv/app/backend/w9provider"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -162,108 +159,13 @@ func (a *AppService) StartW9(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// W9ProviderWebhook receives completion events from the tax vendor.
+// The webhook receiver that used to live here is gone.
 //
-// Unauthenticated by necessity — the vendor calls it — so the signature is the
-// only thing standing between a stranger and everybody's held money. It is
-// verified before the body is trusted for anything.
-//
-// The handler records the event and returns immediately. Releasing escrow means
-// on-chain transfers, which must never happen inside a webhook: a vendor that
-// times out and retries would otherwise start a second release.
-func (a *AppService) W9ProviderWebhook(w http.ResponseWriter, r *http.Request) {
-	if a.w9Provider == nil {
-		w.WriteHeader(http.StatusServiceUnavailable)
-		return
-	}
-
-	defer r.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
-	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		return
-	}
-
-	event, err := a.w9Provider.VerifyWebhook(r.Header, body)
-	if err != nil {
-		a.logger.Logf("rejected a w9 webhook: %s", err)
-		w.WriteHeader(http.StatusUnauthorized)
-		return
-	}
-
-	fresh, err := a.db.RecordProviderEvent(r.Context(), a.w9Provider.Name(), event.EventID, event.Type, event.ProviderRequestID, body)
-	if err != nil {
-		a.logger.Logf("error recording w9 webhook %s: %s", event.EventID, err)
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
-	// Acknowledged either way. A duplicate is not an error, and telling the
-	// vendor otherwise only invites more retries.
-	w.WriteHeader(http.StatusOK)
-	if !fresh {
-		return
-	}
-
-	go a.processW9ProviderEvent(event)
-}
-
-// processW9ProviderEvent turns a verified webhook into released money.
-//
-// Runs detached from the request so a slow chain cannot make the vendor time
-// out and redeliver. Its own idempotency comes from two places: the event was
-// already claimed by the unique index before we got here, and
-// MarkW9FilingCompleted reports whether it actually changed anything — a filing
-// that was already cleared releases nothing a second time.
-func (a *AppService) processW9ProviderEvent(event w9provider.WebhookEvent) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
-
-	processErr := ""
-	defer func() {
-		if err := a.db.MarkProviderEventProcessed(ctx, a.w9Provider.Name(), event.EventID, processErr); err != nil {
-			a.logger.Logf("error marking w9 event %s processed: %s", event.EventID, err)
-		}
-	}()
-
-	if event.Status != w9provider.StatusCompleted {
-		return
-	}
-
-	userID, taxYear, err := a.db.GetUserIDByProviderRequest(ctx, event.ProviderRequestID)
-	if err != nil {
-		processErr = err.Error()
-		return
-	}
-	if userID == "" {
-		// A completion we cannot attribute. Recorded rather than dropped so it
-		// can be looked at, because somebody has filed a form and is waiting.
-		processErr = "no filing matches provider request " + event.ProviderRequestID
-		a.logger.Logf("w9: %s", processErr)
-		return
-	}
-
-	changed, err := a.db.MarkW9FilingCompleted(ctx, userID, taxYear, "", event.Status)
-	if err != nil {
-		processErr = err.Error()
-		return
-	}
-	if !changed {
-		return
-	}
-
-	if a.payouts == nil {
-		processErr = "no payout service is available to release escrow"
-		return
-	}
-	released, backPay, err := a.payouts.ReleaseEscrowForUserYear(ctx, userID, taxYear)
-	if err != nil {
-		processErr = err.Error()
-		a.logger.Logf("w9: filing completed for %s but escrow did not release: %s", userID, err)
-		return
-	}
-	a.logger.Logf("w9: %s filed for %d — released %d payouts, %d queued for back pay", userID, taxYear, released, backPay)
-}
+// The vendor publishes no webhook, callback or notification — verified against
+// its docs and every changelog entry from 0.1.0 to 0.7.0 — so nothing would
+// ever have called it. It also invented a signature header and an HMAC scheme
+// to validate deliveries that cannot arrive. Completion is discovered by the
+// sweeper polling GetW9Status; see PayoutService.pollProviderFilings.
 
 // AttributeUnlinkedPayoutsForUser claims past payouts made to an address before
 // it was linked to an account.

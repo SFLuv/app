@@ -15,7 +15,7 @@ const w9FilingColumns = `
 	id, user_id, tax_year, status, provider, provider_request_id, form_url,
 	form_url_expires_at, threshold_crossed_at, requested_at, completed_at,
 	tin_type, cleared_by_user_id, clear_reason, last_provider_status,
-	last_provider_event_at
+	last_provider_event_at, COALESCE(tin_match, '')
 `
 
 func scanW9Filing(row interface{ Scan(...any) error }) (*structs.W9Filing, error) {
@@ -25,7 +25,7 @@ func scanW9Filing(row interface{ Scan(...any) error }) (*structs.W9Filing, error
 		&out.ID, &out.UserID, &out.TaxYear, &out.Status, &out.Provider,
 		&out.ProviderRequestID, &out.FormURL, &formExpires, &crossed, &requested,
 		&completed, &out.TINType, &out.ClearedByUserID, &out.ClearReason,
-		&out.LastProviderStatus, &lastEvent,
+		&out.LastProviderStatus, &lastEvent, &out.TINMatch,
 	); err != nil {
 		return nil, err
 	}
@@ -182,10 +182,18 @@ func (a *AppDB) ListW9FilingsAwaitingProvider(ctx context.Context, limit int) ([
 	if limit <= 0 {
 		limit = 100
 	}
+	// Completed filings stay in the poll set until their TIN match resolves.
+	// Release happens on the signature, but a rejected match still has to be
+	// recorded — and it only ever arrives on a later poll, so stopping at
+	// 'completed' would mean never hearing about it.
 	rows, err := a.db.Query(ctx,
 		`SELECT `+w9FilingColumns+`
 		 FROM w9_filings
-		 WHERE status IN ('requested','in_progress') AND provider_request_id <> ''
+		 WHERE provider_request_id <> ''
+		 AND (
+		   status IN ('requested','in_progress')
+		   OR (status = 'completed' AND COALESCE(tin_match,'') IN ('', 'pending'))
+		 )
 		 ORDER BY COALESCE(last_provider_event_at, requested_at) ASC NULLS FIRST
 		 LIMIT $1;`, limit)
 	if err != nil {
@@ -266,6 +274,34 @@ func (a *AppDB) ShouldSendEscrowReminder(ctx context.Context, userID string, tax
 	`, userID, taxYear, seq)
 	if err != nil {
 		return false, fmt.Errorf("error claiming escrow reminder for %s: %w", userID, err)
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
+// RecordTINMatch stores the outcome of the vendor's asynchronous check.
+//
+// A rejected match does not undo a released payout — that money is already with
+// the person, and taking it back because a background check disagreed a day
+// later would be indefensible. Instead the filing is marked invalid, which stops
+// it clearing the NEXT payout, and the person is asked for a corrected W-9.
+func (a *AppDB) RecordTINMatch(ctx context.Context, userID string, taxYear int, match string) (bool, error) {
+	if strings.TrimSpace(match) == "" {
+		return false, nil
+	}
+
+	tag, err := a.db.Exec(ctx, `
+		UPDATE w9_filings
+		SET tin_match = $3,
+			tin_match_at = NOW(),
+			-- Only a rejection changes the filing's standing, and only forward:
+			-- it stops clearing future payouts. Nothing already paid is touched.
+			status = CASE WHEN $3 = 'rejected' THEN 'invalid' ELSE status END,
+			updated_at = NOW()
+		WHERE user_id = $1 AND tax_year = $2
+		AND COALESCE(tin_match, '') IS DISTINCT FROM $3;
+	`, userID, taxYear, match)
+	if err != nil {
+		return false, fmt.Errorf("error recording the tin match for %s: %w", userID, err)
 	}
 	return tag.RowsAffected() > 0, nil
 }

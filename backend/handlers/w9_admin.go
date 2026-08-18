@@ -302,3 +302,62 @@ func (a *AppService) PrecheckW9ForRecipient(w http.ResponseWriter, r *http.Reque
 	w.WriteHeader(http.StatusForbidden)
 	_ = json.NewEncoder(w).Encode(response)
 }
+
+// Get1099Report is the year-end view of who we owe a 1099-NEC.
+//
+// Exposed now so the data is reachable before it is needed. The intent is that
+// this becomes an MCP report later; until then it is one admin call, and the
+// underlying query is the same either way.
+//
+// The number to look at is BlockedCount: payees who were paid past the filing
+// threshold but have no tax ID on file. Every one of those needs a person to
+// chase a W-9, and January is the wrong month to discover them.
+func (a *AppService) Get1099Report(w http.ResponseWriter, r *http.Request) {
+	taxYear := w9AdminTaxYear(r)
+	threshold := w9ThresholdBase()
+
+	rows, err := a.db.List1099Candidates(r.Context(), taxYear, threshold)
+	if err != nil {
+		a.logger.Logf("error building the 1099 report for %d: %s", taxYear, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	report := structs.Form1099Report{
+		TaxYear:        taxYear,
+		ThresholdSfluv: formatSfluvBase(threshold),
+		Rows:           []structs.Form1099Row{},
+	}
+
+	total := big.NewInt(0)
+	for _, row := range rows {
+		if paid, ok := new(big.Int).SetString(row.PaidSfluv, 10); ok {
+			total.Add(total, paid)
+		}
+		// Amounts are rendered for reading only at the edge; the sum above uses
+		// base units so nothing rounds on the way through.
+		row.PaidSfluv = formatSfluvBase(mustBase(row.PaidSfluv))
+		if row.Reportable {
+			report.ReportableCount++
+			if row.Fileable {
+				report.FileableCount++
+			} else {
+				report.BlockedCount++
+			}
+		}
+		report.Rows = append(report.Rows, row)
+	}
+	report.TotalPaidSfluv = formatSfluvBase(total)
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(report)
+}
+
+func mustBase(raw string) *big.Int {
+	parsed, ok := new(big.Int).SetString(raw, 10)
+	if !ok {
+		return big.NewInt(0)
+	}
+	return parsed
+}

@@ -253,15 +253,36 @@ func (p *PayoutService) pollProviderFilings(ctx context.Context) {
 		if err != nil {
 			continue
 		}
-		if status.Status != w9provider.StatusCompleted {
-			continue
+
+		// Completion is the signature, and nothing else. The TIN match resolves
+		// separately and can take a day; waiting on it would hold somebody's
+		// money long after they had done everything asked of them.
+		if status.Status == w9provider.StatusCompleted {
+			changed, err := p.appDb.MarkW9FilingCompleted(ctx, filing.UserID, filing.TaxYear, status.TINType, status.Status)
+			if err == nil && changed {
+				if _, _, relErr := p.ReleaseEscrowForUserYear(ctx, filing.UserID, filing.TaxYear); relErr != nil && p.logger != nil {
+					p.logger.Logf("w9: could not release escrow for %s after polling: %s", filing.UserID, relErr)
+				}
+			}
 		}
-		changed, err := p.appDb.MarkW9FilingCompleted(ctx, filing.UserID, filing.TaxYear, status.TINType, status.Status)
-		if err != nil || !changed {
-			continue
-		}
-		if _, _, err := p.ReleaseEscrowForUserYear(ctx, filing.UserID, filing.TaxYear); err != nil && p.logger != nil {
-			p.logger.Logf("w9: could not release escrow for %s after polling: %s", filing.UserID, err)
+
+		// Recorded whenever it lands, including long after release — which is
+		// why completed filings stay in the poll set until it resolves. A
+		// rejection marks the filing invalid so it stops clearing the NEXT
+		// payout; it never reaches back for money already sent.
+		if status.TINMatch != "" && status.TINMatch != w9provider.TINMatchPending {
+			recorded, err := p.appDb.RecordTINMatch(ctx, filing.UserID, filing.TaxYear, status.TINMatch)
+			if err != nil && p.logger != nil {
+				p.logger.Logf("w9: could not record the tin match for %s: %s", filing.UserID, err)
+			}
+			if recorded && status.TINMatch == w9provider.TINMatchRejected && p.notify != nil {
+				// They need to file again, and they need to know before the next
+				// reward is held rather than after.
+				p.notify.pushW9Notice(ctx, filing.UserID, "w9_required",
+					"We need a corrected W-9",
+					"The tax details on your W-9 could not be verified. Please complete a new one so your next rewards aren't held.",
+				)
+			}
 		}
 	}
 }

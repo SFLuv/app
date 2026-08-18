@@ -12,10 +12,18 @@ package w9provider
 
 import (
 	"context"
-	"encoding/json"
-	"net/http"
 	"time"
 )
+
+// How completion is discovered.
+//
+// It is polled, not pushed. The vendor we integrate with publishes no webhook,
+// callback or notification of any kind — verified against its docs and every
+// changelog entry from 0.1.0 to 0.7.0 — so GetW9Status is not a backstop for
+// dropped deliveries, it is the only path. An earlier version of this package
+// carried a webhook receiver with an invented signature header; nothing would
+// ever have called it, and code that looks live but is unreachable is worse
+// than code that is absent.
 
 // Filing states, normalised across vendors. A vendor's own vocabulary stays in
 // its adapter.
@@ -25,6 +33,14 @@ const (
 	StatusOpened     = "opened"
 	StatusCompleted  = "completed"
 	StatusInvalid    = "invalid"
+)
+
+// TIN match outcomes. Asynchronous and independent of whether the form is
+// signed: a match can still be pending a day after completion.
+const (
+	TINMatchPending  = "pending"
+	TINMatchMatched  = "matched"
+	TINMatchRejected = "rejected"
 )
 
 // PayeeInput is what a vendor needs to open a payee record. Deliberately thin:
@@ -71,14 +87,6 @@ type W9Status struct {
 	TINMatch string
 }
 
-type WebhookEvent struct {
-	EventID           string
-	Type              string
-	ProviderRequestID string
-	Status            string
-	Raw               json.RawMessage
-}
-
 // Provider is the whole surface. Adapters must be safe for concurrent use.
 type Provider interface {
 	Name() string
@@ -94,21 +102,22 @@ type Provider interface {
 	// when someone opens the form rather than being read from a stored column.
 	HostedFormURL(ctx context.Context, providerRequestID string, returnURL string) (W9Request, error)
 
-	// GetW9Status is the guarantee. Webhooks make completion feel instant, but a
-	// dropped delivery must never leave money held forever, so a sweeper polls
-	// this for every outstanding filing.
+	// GetW9Status is the only way completion is ever learned. The sweeper polls
+	// it for every outstanding filing, and keeps polling past completion until
+	// the TIN match resolves — that check is asynchronous and can land a day
+	// after the form is signed.
 	GetW9Status(ctx context.Context, providerRequestID string) (W9Status, error)
-
-	VerifyWebhook(h http.Header, rawBody []byte) (WebhookEvent, error)
 }
 
 // Config is read once at startup.
 type Config struct {
-	Provider      string
-	APIKey        string
-	BaseURL       string
-	WebhookSecret string
-	Environment   string
+	Provider string
+	APIKey   string
+	BaseURL  string
+	// TeamAPIID scopes every path: /api/v1/{team_api_id}/…. Without it every
+	// real call 404s, so it is not optional for a live vendor.
+	TeamAPIID   string
+	Environment string
 }
 
 // New picks an adapter. An unconfigured or unknown provider yields a disabled

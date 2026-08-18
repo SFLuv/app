@@ -32,18 +32,21 @@ type PayoutLedgerRow struct {
 
 // W9Filing is one person's tax form state for one year.
 type W9Filing struct {
-	ID                  int64      `json:"id"`
-	UserID              string     `json:"user_id"`
-	TaxYear             int        `json:"tax_year"`
-	Status              string     `json:"status"`
-	Provider            string     `json:"provider,omitempty"`
-	ProviderRequestID   string     `json:"-"`
-	FormURL             string     `json:"form_url,omitempty"`
-	FormURLExpiresAt    *time.Time `json:"form_url_expires_at,omitempty"`
-	ThresholdCrossedAt  *time.Time `json:"threshold_crossed_at,omitempty"`
-	RequestedAt         *time.Time `json:"requested_at,omitempty"`
-	CompletedAt         *time.Time `json:"completed_at,omitempty"`
-	TINType             string     `json:"tin_type,omitempty"`
+	ID                 int64      `json:"id"`
+	UserID             string     `json:"user_id"`
+	TaxYear            int        `json:"tax_year"`
+	Status             string     `json:"status"`
+	Provider           string     `json:"provider,omitempty"`
+	ProviderRequestID  string     `json:"-"`
+	FormURL            string     `json:"form_url,omitempty"`
+	FormURLExpiresAt   *time.Time `json:"form_url_expires_at,omitempty"`
+	ThresholdCrossedAt *time.Time `json:"threshold_crossed_at,omitempty"`
+	RequestedAt        *time.Time `json:"requested_at,omitempty"`
+	CompletedAt        *time.Time `json:"completed_at,omitempty"`
+	TINType            string     `json:"tin_type,omitempty"`
+	// TINMatch is the vendor's asynchronous verification: pending, matched or
+	// rejected. Independent of whether the form is signed.
+	TINMatch            string     `json:"tin_match,omitempty"`
 	ClearedByUserID     string     `json:"cleared_by_user_id,omitempty"`
 	ClearReason         string     `json:"clear_reason,omitempty"`
 	LastProviderStatus  string     `json:"last_provider_status,omitempty"`
@@ -131,4 +134,47 @@ type RedeemEscrowedResponse struct {
 	AmountSfluv string `json:"amount_sfluv"`
 	TaxYear     int    `json:"tax_year"`
 	Message     string `json:"message"`
+}
+
+// Form1099Row is one payee's position for a tax year: what we actually paid
+// them, and whether we can file for them.
+//
+// The figure that matters is what was PAID in the year, not what was earned in
+// it. A 1099-NEC is cash-basis, so a reward escrowed in December and released in
+// February belongs to the later year. That is why the ledger keeps tax_year and
+// paid_tax_year apart, and why this reads the latter.
+type Form1099Row struct {
+	UserID       string `json:"user_id"`
+	ContactName  string `json:"contact_name,omitempty"`
+	ContactEmail string `json:"contact_email,omitempty"`
+	TaxYear      int    `json:"tax_year"`
+
+	// PaidSfluv is box 1, nonemployee compensation: the sum of everything that
+	// actually reached them during the year.
+	PaidSfluv   string `json:"paid_sfluv"`
+	PayoutCount int    `json:"payout_count"`
+
+	// Reportable is true once the year's payments reach the filing threshold.
+	Reportable bool `json:"reportable"`
+
+	// FilingStatus and TINType describe whether a form can be produced at all.
+	// A legacy_approved filing clears someone to be paid but has no TIN behind
+	// it, so it cannot support a 1099 — that person has to be asked for one.
+	FilingStatus string `json:"filing_status"`
+	TINType      string `json:"tin_type,omitempty"`
+	Fileable     bool   `json:"fileable"`
+	// BlockedReason says why a reportable payee cannot yet be filed for.
+	BlockedReason string `json:"blocked_reason,omitempty"`
+}
+
+// Form1099Report is the year-end view: everyone at or over the threshold, plus
+// the ones we cannot file for yet.
+type Form1099Report struct {
+	TaxYear         int           `json:"tax_year"`
+	ThresholdSfluv  string        `json:"threshold_sfluv"`
+	ReportableCount int           `json:"reportable_count"`
+	FileableCount   int           `json:"fileable_count"`
+	BlockedCount    int           `json:"blocked_count"`
+	TotalPaidSfluv  string        `json:"total_paid_sfluv"`
+	Rows            []Form1099Row `json:"rows"`
 }

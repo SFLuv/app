@@ -2,111 +2,143 @@ package w9provider
 
 import (
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"fmt"
-	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
 
-// Fake is an in-process stand-in for a real tax vendor.
+// Fake is an in-process stand-in shaped to the documented vendor contract.
 //
-// It exists so the whole loop — request a form, open it, submit it, receive the
-// webhook, release the escrow, watch the money land on the local chain — can be
-// exercised on a laptop without a vendor account. That loop is the part most
-// likely to be wrong, and it is exactly the part a unit test cannot reach.
-//
-// The signature scheme is the same HMAC shape a real vendor uses, so
-// VerifyWebhook is genuinely tested rather than stubbed out.
+// The vendor publishes no sandbox, so this is the only way the loop can be
+// exercised at all — which makes its fidelity load-bearing. An earlier version
+// mirrored a guessed API, so a green suite proved only that we were internally
+// consistent with a fiction. This one follows what the docs actually describe:
+// form requests keyed by a reference id we choose, a signed link that expires
+// after an hour, completion signalled by signed_at, an asynchronous TIN match,
+// and no webhook of any kind.
 type Fake struct {
-	secret  []byte
 	baseURL string
 
 	mu       sync.Mutex
 	requests map[string]*fakeRequest
-	seq      int
+	// runID scopes generated identifiers to this process, so a restart cannot
+	// reissue an id an earlier run already used.
+	runID string
+	seq   int
+
+	// tinMatchAfter is how many status reads it takes for the asynchronous TIN
+	// match to resolve. Real life is about 24 hours; a couple of polls is the
+	// same shape at a testable speed.
+	tinMatchAfter int
+	// tinMatchResult lets a test drive the rejected branch, which is the one
+	// with real consequences.
+	tinMatchResult string
 }
 
 type fakeRequest struct {
-	ID          string
+	ReferenceID string
 	UserID      string
 	TaxYear     int
-	Status      string
-	CompletedAt *time.Time
+	SignedAt    *time.Time
 	TINType     string
+	statusReads int
 }
 
 func NewFake(cfg Config) *Fake {
-	secret := cfg.WebhookSecret
-	if secret == "" {
-		secret = "fake-w9-secret"
-	}
 	base := strings.TrimSuffix(cfg.BaseURL, "/")
 	if base == "" {
 		base = "http://localhost:8080"
 	}
 	return &Fake{
-		secret:   []byte(secret),
-		baseURL:  base,
-		requests: map[string]*fakeRequest{},
+		baseURL:        base,
+		requests:       map[string]*fakeRequest{},
+		runID:          strconv.FormatInt(time.Now().UnixNano(), 36),
+		tinMatchAfter:  2,
+		tinMatchResult: TINMatchMatched,
 	}
+}
+
+// SetTINMatchOutcome drives the asynchronous match, so the rejected path can be
+// tested. Rejection must never claw back money already released; it only
+// affects the next payout.
+func (f *Fake) SetTINMatchOutcome(result string, afterReads int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.tinMatchResult = result
+	f.tinMatchAfter = afterReads
 }
 
 func (f *Fake) Name() string { return "fake" }
 
-// EnsurePayee mirrors the real contract: idempotent on our user id, so a retry
-// cannot create a second payee.
+// EnsurePayee mirrors the real adapter: a local no-op. There is no payee
+// resource to create; identity rides on the reference id.
 func (f *Fake) EnsurePayee(_ context.Context, in PayeeInput) (PayeeResult, error) {
 	if strings.TrimSpace(in.UserID) == "" {
-		return PayeeResult{}, fmt.Errorf("user id is required to create a payee")
+		return PayeeResult{}, fmt.Errorf("user id is required to identify a payee")
 	}
-	return PayeeResult{ProviderPayeeID: "fake-payee-" + in.UserID}, nil
+	return PayeeResult{ProviderPayeeID: in.UserID}, nil
 }
 
 func (f *Fake) CreateW9Request(_ context.Context, in W9RequestInput) (W9Request, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	f.seq++
-	id := fmt.Sprintf("fake-req-%d", f.seq)
-	f.requests[id] = &fakeRequest{ID: id, UserID: in.UserID, TaxYear: in.TaxYear, Status: StatusSent}
+	ref := referenceID(in.UserID, in.TaxYear)
+	if ref == "sfluv::0" {
+		f.seq++
+		ref = fmt.Sprintf("sfluv:anon:%s:%d", f.runID, f.seq)
+	}
+	// Reusing a reference id surfaces the prior submission rather than creating
+	// a second one — the vendor's stated idempotency behaviour.
+	if existing, ok := f.requests[ref]; ok {
+		return f.requestFor(existing), nil
+	}
 
-	return W9Request{
-		ProviderRequestID: id,
-		FormURL:           f.formURL(id, in.ReturnURL),
-		FormURLExpiresAt:  time.Now().Add(24 * time.Hour),
-	}, nil
+	f.requests[ref] = &fakeRequest{ReferenceID: ref, UserID: in.UserID, TaxYear: in.TaxYear}
+	return f.requestFor(f.requests[ref]), nil
 }
 
-func (f *Fake) HostedFormURL(_ context.Context, providerRequestID string, returnURL string) (W9Request, error) {
+func (f *Fake) HostedFormURL(_ context.Context, providerRequestID string, _ string) (W9Request, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
 	req, ok := f.requests[providerRequestID]
 	if !ok {
-		return W9Request{}, fmt.Errorf("unknown w9 request %q", providerRequestID)
+		return W9Request{}, fmt.Errorf("unknown form request %q", providerRequestID)
 	}
-	if req.Status == StatusSent {
-		req.Status = StatusOpened
-	}
-
-	return W9Request{
-		ProviderRequestID: providerRequestID,
-		FormURL:           f.formURL(providerRequestID, returnURL),
-		FormURLExpiresAt:  time.Now().Add(24 * time.Hour),
-	}, nil
+	return f.requestFor(req), nil
 }
 
-func (f *Fake) formURL(id string, returnURL string) string {
-	url := fmt.Sprintf("%s/w9/fake/form/%s", f.baseURL, id)
-	if strings.TrimSpace(returnURL) != "" {
-		url += "?return_url=" + returnURL
+func (f *Fake) requestFor(r *fakeRequest) W9Request {
+	return W9Request{
+		ProviderRequestID: r.ReferenceID,
+		FormURL:           fmt.Sprintf("%s/w9/fake/form/%s", f.baseURL, r.ReferenceID),
+		// An hour, as the vendor states for signed_pdf. Short on purpose: a link
+		// stored at escrow time is dead by the time anybody taps it.
+		FormURLExpiresAt: time.Now().Add(time.Hour),
 	}
-	return url
+}
+
+// Sign is what the stub form's submit button calls. It records signed_at, which
+// is the only thing that means "completed". Nothing is pushed anywhere — the
+// backend finds out by polling, exactly as it will in production.
+func (f *Fake) Sign(providerRequestID string, tinType string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	req, ok := f.requests[providerRequestID]
+	if !ok {
+		return fmt.Errorf("unknown form request %q", providerRequestID)
+	}
+	now := time.Now().UTC()
+	req.SignedAt = &now
+	if tinType == "" {
+		tinType = "ssn"
+	}
+	req.TINType = tinType
+	return nil
 }
 
 func (f *Fake) GetW9Status(_ context.Context, providerRequestID string) (W9Status, error) {
@@ -117,86 +149,21 @@ func (f *Fake) GetW9Status(_ context.Context, providerRequestID string) (W9Statu
 	if !ok {
 		return W9Status{Status: StatusNotStarted}, nil
 	}
-	return W9Status{Status: req.Status, CompletedAt: req.CompletedAt, TINType: req.TINType}, nil
-}
 
-// Complete is what the stub form's submit button calls. It marks the request
-// done and returns a correctly signed webhook body, which the caller posts back
-// to the real webhook route — so the production code path is what runs, not a
-// shortcut around it.
-func (f *Fake) Complete(providerRequestID string, tinType string) ([]byte, http.Header, error) {
-	f.mu.Lock()
-	req, ok := f.requests[providerRequestID]
-	if !ok {
-		f.mu.Unlock()
-		return nil, nil, fmt.Errorf("unknown w9 request %q", providerRequestID)
-	}
-	now := time.Now().UTC()
-	req.Status = StatusCompleted
-	req.CompletedAt = &now
-	if tinType == "" {
-		tinType = "ssn"
-	}
-	req.TINType = tinType
-	userID := req.UserID
-	f.mu.Unlock()
-
-	body, err := json.Marshal(map[string]any{
-		"event_id":   "fake-evt-" + providerRequestID + "-completed",
-		"type":       "w9.completed",
-		"request_id": providerRequestID,
-		"status":     StatusCompleted,
-		"user_id":    userID,
-		"tin_type":   tinType,
-		"created_at": now.Format(time.RFC3339),
-	})
-	if err != nil {
-		return nil, nil, err
+	status := W9Status{Status: StatusSent, TINType: req.TINType}
+	if req.SignedAt == nil {
+		return status, nil
 	}
 
-	header := http.Header{}
-	header.Set("Content-Type", "application/json")
-	header.Set(fakeSignatureHeader, f.sign(body))
-	return body, header, nil
-}
+	status.Status = StatusCompleted
+	status.CompletedAt = req.SignedAt
 
-const fakeSignatureHeader = "X-W9-Signature"
-
-func (f *Fake) sign(body []byte) string {
-	mac := hmac.New(sha256.New, f.secret)
-	mac.Write(body)
-	return hex.EncodeToString(mac.Sum(nil))
-}
-
-func (f *Fake) VerifyWebhook(h http.Header, rawBody []byte) (WebhookEvent, error) {
-	got := h.Get(fakeSignatureHeader)
-	if got == "" {
-		return WebhookEvent{}, fmt.Errorf("missing %s header", fakeSignatureHeader)
+	// The match resolves in the background, some time after signing.
+	req.statusReads++
+	if req.statusReads >= f.tinMatchAfter {
+		status.TINMatch = f.tinMatchResult
+	} else {
+		status.TINMatch = TINMatchPending
 	}
-	// Constant time, because a signature check that leaks timing is not a
-	// signature check.
-	if !hmac.Equal([]byte(got), []byte(f.sign(rawBody))) {
-		return WebhookEvent{}, fmt.Errorf("invalid webhook signature")
-	}
-
-	var payload struct {
-		EventID   string `json:"event_id"`
-		Type      string `json:"type"`
-		RequestID string `json:"request_id"`
-		Status    string `json:"status"`
-	}
-	if err := json.Unmarshal(rawBody, &payload); err != nil {
-		return WebhookEvent{}, fmt.Errorf("unreadable webhook body: %w", err)
-	}
-	if payload.EventID == "" {
-		return WebhookEvent{}, fmt.Errorf("webhook body has no event id")
-	}
-
-	return WebhookEvent{
-		EventID:           payload.EventID,
-		Type:              payload.Type,
-		ProviderRequestID: payload.RequestID,
-		Status:            payload.Status,
-		Raw:               rawBody,
-	}, nil
+	return status, nil
 }

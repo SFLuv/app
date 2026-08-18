@@ -3,7 +3,6 @@ package w9provider
 import (
 	"context"
 	"errors"
-	"net/http"
 )
 
 // ErrProviderDisabled is returned by every call when no vendor is configured.
@@ -32,8 +31,4 @@ func (disabled) HostedFormURL(context.Context, string, string) (W9Request, error
 
 func (disabled) GetW9Status(context.Context, string) (W9Status, error) {
 	return W9Status{}, ErrProviderDisabled
-}
-
-func (disabled) VerifyWebhook(http.Header, []byte) (WebhookEvent, error) {
-	return WebhookEvent{}, ErrProviderDisabled
 }

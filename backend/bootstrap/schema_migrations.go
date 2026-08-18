@@ -1554,6 +1554,51 @@ var schemaMigrations = []SchemaMigration{
 		Description: "w9 rebuild: tax payees, filings, payout ledger, escrow",
 		Apply:       migrateW9Rebuild,
 	},
+	{
+		Version:     "1.42",
+		Description: "payout ledger: a failed payout must not block its source forever",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			// The uniqueness rule is "one payout per source record", which is
+			// right — a redemption code must never pay out twice. But as first
+			// written it counted failed rows too, so a single failed attempt
+			// held that code's slot permanently and made it unredeemable with
+			// no route back short of editing the ledger by hand.
+			if _, err := pools.App.Exec(ctx, `
+				DROP INDEX IF EXISTS payout_ledger_source_ref_idx;
+				CREATE UNIQUE INDEX IF NOT EXISTS payout_ledger_source_ref_idx
+					ON payout_ledger (source, source_ref)
+					WHERE source_ref <> '' AND state NOT IN ('failed', 'cancelled');
+			`); err != nil {
+				return fmt.Errorf("error rebuilding the payout ledger source index: %w", err)
+			}
+			return nil
+		},
+	},
+	{
+		Version:     "1.43",
+		Description: "w9 filings: record the asynchronous TIN match separately from signing",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			// Signing and TIN matching are two events, not one. The vendor's
+			// match is asynchronous and can resolve about a day after the form
+			// is signed, so escrow releases on the signature alone — holding
+			// somebody's money for a day after they did everything asked of
+			// them would be the wrong trade.
+			//
+			// The match still has to be recorded when it lands, so the sweeper
+			// keeps polling past release and needs somewhere to put the answer.
+			// A rejected match never claws back a released payout; it blocks the
+			// next one.
+			if _, err := pools.App.Exec(ctx, `
+				ALTER TABLE w9_filings ADD COLUMN IF NOT EXISTS tin_match TEXT NOT NULL DEFAULT '';
+				ALTER TABLE w9_filings ADD COLUMN IF NOT EXISTS tin_match_at TIMESTAMPTZ;
+				CREATE INDEX IF NOT EXISTS w9_filings_unresolved_match_idx
+					ON w9_filings (status) WHERE tin_match IN ('', 'pending');
+			`); err != nil {
+				return fmt.Errorf("error adding tin match columns: %w", err)
+			}
+			return nil
+		},
+	},
 }
 
 // migrateW9Rebuild replaces a W9 system that never held a W9.

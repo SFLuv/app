@@ -1122,15 +1122,15 @@ if [[ "$RUN_BACKEND" -eq 1 ]]; then
     "NOTIFICATION_TEST_MODE=true"
     # W-9 collection and payout escrow.
     #
-    # The fake provider serves a stub tax form from the backend whose submit
-    # posts a correctly signed webhook back to /w9/provider/webhook, so the
-    # whole loop — request, open, submit, release, transfer — runs the real
-    # code path without a vendor account. It never asks for a tax
-    # identification number, and must not: keeping an SSN out of our systems is
-    # the entire reason for using a vendor.
+    # The fake provider serves a stub tax form from the backend. Submitting it
+    # records signed_at and nothing else; the backend finds out on its next
+    # maintenance sweep, which is exactly how production works — this vendor
+    # publishes no webhooks, so polling is the only completion path. The stub
+    # never asks for a tax identification number, and must not: keeping an SSN
+    # out of our systems is the entire reason for using a vendor.
     "W9_PROVIDER=${W9_PROVIDER:-fake}"
     "W9_PROVIDER_BASE_URL=${W9_PROVIDER_BASE_URL:-http://localhost:$BACKEND_PORT}"
-    "W9_PROVIDER_WEBHOOK_SECRET=${W9_PROVIDER_WEBHOOK_SECRET:-local-dev-w9-secret}"
+    "W9_PROVIDER_TEAM_ID=${W9_PROVIDER_TEAM_ID:-}"
     # enforce locally so held rewards and the tax card are actually visible.
     # Production defaults to shadow, where the decision is computed and logged
     # but everything is still paid.

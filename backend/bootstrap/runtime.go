@@ -324,7 +324,8 @@ func NewServerHandler(ctx context.Context, pools *DBPools, appLogger *logger.Log
 		Provider:      strings.TrimSpace(os.Getenv("W9_PROVIDER")),
 		APIKey:        strings.TrimSpace(os.Getenv("W9_PROVIDER_API_KEY")),
 		BaseURL:       strings.TrimSpace(os.Getenv("W9_PROVIDER_BASE_URL")),
-		WebhookSecret: strings.TrimSpace(os.Getenv("W9_PROVIDER_WEBHOOK_SECRET")),
+		// Every Track1099 path is scoped by this; without it each call 404s.
+		TeamAPIID:     strings.TrimSpace(os.Getenv("W9_PROVIDER_TEAM_ID")),
 		Environment:   strings.TrimSpace(os.Getenv("W9_PROVIDER_ENV")),
 	})
 

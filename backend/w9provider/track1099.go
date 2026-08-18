@@ -3,71 +3,87 @@ package w9provider
 import (
 	"bytes"
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
 
-// Track1099 talks to Track1099 (Avalara).
+// Track1099 talks to Track1099 (Avalara 1099 & W-9).
 //
-// It was chosen because the same payee record that collects a W9 can later be
-// used to e-file a 1099-NEC, so turning filing on at year end is configuration
-// rather than a second integration.
+// Shaped against the vendor's published docs — see TRACK1099-API-NOTES.md in
+// this directory, which records what was verified and what is still unknown.
+// An earlier version of this file was written against a guessed API: it
+// compiled, its tests passed, and essentially none of its endpoints existed.
+// Prefer leaving a gap here over inventing a plausible one.
 //
-// Everything here is deliberately shallow. The vendor holds the TIN; we hold a
-// request id and a status. If a future field looks like it might carry a tax
-// identification number, it does not belong in this file.
+// Three things about this vendor drive the design:
+//
+//   - Every path is scoped by a Team API ID: /api/v1/{team_api_id}/…
+//   - W-9 collection is the Form Requests API. Payers are "issuers"; there is
+//     no JSON recipients resource, and reference_id — which we choose — is both
+//     the join key and the idempotency mechanism.
+//   - There are no webhooks and no sandbox. Completion is discovered by polling.
 type Track1099 struct {
-	apiKey        string
-	baseURL       string
-	webhookSecret string
-	environment   string
-	client        *http.Client
+	apiKey      string
+	baseURL     string
+	teamAPIID   string
+	environment string
+	client      *http.Client
 }
 
 func NewTrack1099(cfg Config) *Track1099 {
 	base := strings.TrimSuffix(cfg.BaseURL, "/")
 	if base == "" {
-		base = "https://www.track1099.com/api"
+		base = "https://www.track1099.com"
 	}
 	return &Track1099{
-		apiKey:        cfg.APIKey,
-		baseURL:       base,
-		webhookSecret: cfg.WebhookSecret,
-		environment:   cfg.Environment,
+		apiKey:    cfg.APIKey,
+		baseURL:   base,
+		teamAPIID: strings.TrimSpace(cfg.TeamAPIID),
 		// A tax vendor being slow must not hold a database transaction open, so
-		// every call is bounded. Callers do their provider work outside their
-		// transactions for the same reason.
-		client: &http.Client{Timeout: 20 * time.Second},
+		// every call is bounded and callers do provider work outside their
+		// transactions.
+		environment: cfg.Environment,
+		client:      &http.Client{Timeout: 20 * time.Second},
 	}
 }
 
 func (t *Track1099) Name() string { return "track1099" }
 
-func (t *Track1099) do(ctx context.Context, method string, path string, body any, out any) error {
+// path builds a team-scoped URL. Every documented endpoint sits under
+// /api/v1/{team_api_id}, and omitting either segment 404s.
+func (t *Track1099) path(suffix string) string {
+	return fmt.Sprintf("%s/api/v1/%s%s", t.baseURL, url.PathEscape(t.teamAPIID), suffix)
+}
+
+func (t *Track1099) do(ctx context.Context, method string, suffix string, body any, out any) error {
 	if strings.TrimSpace(t.apiKey) == "" {
 		return ErrProviderDisabled
+	}
+	if t.teamAPIID == "" {
+		return fmt.Errorf("W9_PROVIDER_TEAM_ID is not set; every Track1099 path is scoped by a team id")
 	}
 
 	var reader io.Reader
 	if body != nil {
 		encoded, err := json.Marshal(body)
 		if err != nil {
-			return fmt.Errorf("error encoding %s %s: %w", method, path, err)
+			return fmt.Errorf("error encoding %s %s: %w", method, suffix, err)
 		}
 		reader = bytes.NewReader(encoded)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, method, t.baseURL+path, reader)
+	req, err := http.NewRequestWithContext(ctx, method, t.path(suffix), reader)
 	if err != nil {
-		return fmt.Errorf("error building %s %s: %w", method, path, err)
+		return fmt.Errorf("error building %s %s: %w", method, suffix, err)
 	}
+	// The docs describe an API token entered through the Swagger "Authorize"
+	// button but never state the header name. Bearer is the assumption; this is
+	// one of the open questions in the notes and needs a real account to settle.
 	req.Header.Set("Authorization", "Bearer "+t.apiKey)
 	req.Header.Set("Accept", "application/json")
 	if body != nil {
@@ -76,150 +92,146 @@ func (t *Track1099) do(ctx context.Context, method string, path string, body any
 
 	resp, err := t.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("error calling %s %s: %w", method, path, err)
+		return fmt.Errorf("error calling %s %s: %w", method, suffix, err)
 	}
 	defer resp.Body.Close()
 
 	payload, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return fmt.Errorf("error reading %s %s: %w", method, path, err)
+		return fmt.Errorf("error reading %s %s: %w", method, suffix, err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		// Truncated: a vendor error body can be large, and it may echo back
-		// whatever was submitted — which on this vendor can include a TIN.
+		// Truncated: an error body can be large and may echo back what was
+		// submitted, which on this vendor can include a tax identification
+		// number.
 		snippet := string(payload)
 		if len(snippet) > 300 {
 			snippet = snippet[:300]
 		}
-		return fmt.Errorf("%s %s returned %d: %s", method, path, resp.StatusCode, snippet)
+		return fmt.Errorf("%s %s returned %d: %s", method, suffix, resp.StatusCode, snippet)
 	}
 	if out == nil {
 		return nil
 	}
 	if err := json.Unmarshal(payload, out); err != nil {
-		return fmt.Errorf("error decoding %s %s: %w", method, path, err)
+		return fmt.Errorf("error decoding %s %s: %w", method, suffix, err)
 	}
 	return nil
 }
 
-// EnsurePayee keys the vendor record on our user id. That is what makes this
-// idempotent, and what lets a 1099 be filed later against the same record.
-func (t *Track1099) EnsurePayee(ctx context.Context, in PayeeInput) (PayeeResult, error) {
+// EnsurePayee is a local no-op for this vendor.
+//
+// There is no recipients resource in the W-9 flow to create anything against.
+// Identity is carried by reference_id on the form request itself, so the payee
+// id we hand back is just our own user id. The method stays on the interface
+// because it is the right shape for vendors that do keep a payee record, and
+// the idempotency contract still holds — reusing a reference_id surfaces the
+// prior submission rather than creating a second one.
+func (t *Track1099) EnsurePayee(_ context.Context, in PayeeInput) (PayeeResult, error) {
 	if strings.TrimSpace(in.UserID) == "" {
-		return PayeeResult{}, fmt.Errorf("user id is required to create a payee")
+		return PayeeResult{}, fmt.Errorf("user id is required to identify a payee")
 	}
+	return PayeeResult{ProviderPayeeID: in.UserID}, nil
+}
 
-	var existing struct {
-		Recipients []struct {
-			ID string `json:"id"`
-		} `json:"recipients"`
-	}
-	if err := t.do(ctx, http.MethodGet, "/recipients?reference="+in.UserID, nil, &existing); err == nil {
-		if len(existing.Recipients) > 0 && existing.Recipients[0].ID != "" {
-			return PayeeResult{ProviderPayeeID: existing.Recipients[0].ID}, nil
-		}
-	}
+// referenceID is the join key and the idempotency mechanism, chosen by us.
+// Scoping it to the tax year keeps a fresh W-9 per year without colliding.
+func referenceID(userID string, taxYear int) string {
+	return fmt.Sprintf("sfluv:%s:%d", userID, taxYear)
+}
 
-	var created struct {
-		ID string `json:"id"`
-	}
-	if err := t.do(ctx, http.MethodPost, "/recipients", map[string]any{
-		"reference": in.UserID,
-		"email":     in.Email,
-		"name":      in.Name,
-	}, &created); err != nil {
-		return PayeeResult{}, err
-	}
-	if created.ID == "" {
-		return PayeeResult{}, fmt.Errorf("provider returned no payee id")
-	}
-	return PayeeResult{ProviderPayeeID: created.ID}, nil
+type formRequestResponse struct {
+	ReferenceID    string `json:"reference_id"`
+	SignedPDF      string `json:"signed_pdf"`
+	SignedAt       string `json:"signed_at"`
+	TINMatchStatus string `json:"tin_match_status"`
+	TINType        string `json:"tin_type"`
+	FormURL        string `json:"form_url"`
 }
 
 func (t *Track1099) CreateW9Request(ctx context.Context, in W9RequestInput) (W9Request, error) {
-	var created struct {
-		ID        string `json:"id"`
-		URL       string `json:"url"`
-		ExpiresAt string `json:"expires_at"`
-	}
-	if err := t.do(ctx, http.MethodPost, "/w9_requests", map[string]any{
-		"recipient_id": in.ProviderPayeeID,
-		"reference":    fmt.Sprintf("%s:%d", in.UserID, in.TaxYear),
+	var created formRequestResponse
+	if err := t.do(ctx, http.MethodPost, "/form_requests", map[string]any{
+		"reference_id": referenceID(in.UserID, in.TaxYear),
 		"email":        in.Email,
-		"tax_year":     in.TaxYear,
-		"return_url":   in.ReturnURL,
+		"form_type":    "W-9",
 	}, &created); err != nil {
 		return W9Request{}, err
 	}
-	if created.ID == "" {
-		return W9Request{}, fmt.Errorf("provider returned no w9 request id")
-	}
-	return W9Request{
-		ProviderRequestID: created.ID,
-		FormURL:           created.URL,
-		FormURLExpiresAt:  parseProviderTime(created.ExpiresAt),
-	}, nil
+	return t.toRequest(created, referenceID(in.UserID, in.TaxYear)), nil
 }
 
-// HostedFormURL asks for a fresh link every time rather than replaying a stored
-// one. These links expire, and a person who taps "complete your tax form" three
-// days later must not land on a dead page.
-func (t *Track1099) HostedFormURL(ctx context.Context, providerRequestID string, returnURL string) (W9Request, error) {
-	var link struct {
-		URL       string `json:"url"`
-		ExpiresAt string `json:"expires_at"`
-	}
-	path := "/w9_requests/" + providerRequestID + "/link"
-	if strings.TrimSpace(returnURL) != "" {
-		path += "?return_url=" + returnURL
-	}
-	if err := t.do(ctx, http.MethodPost, path, nil, &link); err != nil {
+// HostedFormURL re-reads the form request to get a fresh link.
+//
+// signed_pdf expires after an hour, so a stored URL is dead by the time someone
+// taps "complete your tax form" the next day. Whether the collection step is a
+// redirect at all is unsettled — the docs pair the Form Requests API with an
+// embedded JavaScript widget, which would mean handing the browser a token
+// rather than a URL. That decision changes the client flow, so it is flagged in
+// the notes rather than guessed at here.
+func (t *Track1099) HostedFormURL(ctx context.Context, providerRequestID string, _ string) (W9Request, error) {
+	var current formRequestResponse
+	if err := t.do(ctx, http.MethodGet, "/form_requests/"+url.PathEscape(providerRequestID), nil, &current); err != nil {
 		return W9Request{}, err
 	}
-	return W9Request{
-		ProviderRequestID: providerRequestID,
-		FormURL:           link.URL,
-		FormURLExpiresAt:  parseProviderTime(link.ExpiresAt),
-	}, nil
+	return t.toRequest(current, providerRequestID), nil
 }
 
-func (t *Track1099) GetW9Status(ctx context.Context, providerRequestID string) (W9Status, error) {
-	var status struct {
-		Status      string `json:"status"`
-		CompletedAt string `json:"completed_at"`
-		TINType     string `json:"tin_type"`
-		TINMatch    string `json:"tin_match_status"`
+func (t *Track1099) toRequest(r formRequestResponse, fallbackRef string) W9Request {
+	ref := r.ReferenceID
+	if ref == "" {
+		ref = fallbackRef
 	}
-	if err := t.do(ctx, http.MethodGet, "/w9_requests/"+providerRequestID, nil, &status); err != nil {
+	link := r.FormURL
+	if link == "" {
+		link = r.SignedPDF
+	}
+	return W9Request{
+		ProviderRequestID: ref,
+		FormURL:           link,
+		// Stated by the vendor as 3600s. Held as an absolute time so a caller
+		// can tell a stale link from a live one.
+		FormURLExpiresAt: time.Now().Add(time.Hour),
+	}
+}
+
+// GetW9Status reports whether the form is signed, and separately how the TIN
+// match is going.
+//
+// Completion is signed_at alone. The TIN match resolves asynchronously — up to
+// about a day — and gating on it would hold somebody's money long after they
+// did everything asked of them. A rejected match is handled afterwards, as a
+// re-collection task, not by clawing anything back.
+func (t *Track1099) GetW9Status(ctx context.Context, providerRequestID string) (W9Status, error) {
+	var current formRequestResponse
+	if err := t.do(ctx, http.MethodGet, "/form_requests/"+url.PathEscape(providerRequestID), nil, &current); err != nil {
 		return W9Status{}, err
 	}
 
 	result := W9Status{
-		Status:   normaliseTrack1099Status(status.Status),
-		TINType:  status.TINType,
-		TINMatch: status.TINMatch,
+		Status:   StatusSent,
+		TINType:  current.TINType,
+		TINMatch: normaliseTINMatch(current.TINMatchStatus),
 	}
-	if completed := parseProviderTime(status.CompletedAt); !completed.IsZero() {
-		result.CompletedAt = &completed
+	if signed := parseProviderTime(current.SignedAt); !signed.IsZero() {
+		result.Status = StatusCompleted
+		result.CompletedAt = &signed
 	}
 	return result, nil
 }
 
-// normaliseTrack1099Status maps the vendor's vocabulary onto ours. Keeping this
-// mapping inside the adapter is the reason the rest of the system never learns
-// a vendor-specific word.
-func normaliseTrack1099Status(raw string) string {
+// normaliseTINMatch maps the vendor's vocabulary onto ours, so nothing above
+// this package learns a vendor-specific word.
+func normaliseTINMatch(raw string) string {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "completed", "complete", "signed", "submitted":
-		return StatusCompleted
-	case "opened", "viewed":
-		return StatusOpened
-	case "sent", "requested", "pending":
-		return StatusSent
-	case "invalid", "rejected", "failed":
-		return StatusInvalid
+	case "matched", "match", "valid":
+		return TINMatchMatched
+	case "rejected", "mismatch", "invalid", "failed":
+		return TINMatchRejected
+	case "pending", "processing", "in_progress":
+		return TINMatchPending
 	default:
-		return StatusNotStarted
+		return ""
 	}
 }
 
@@ -233,47 +245,4 @@ func parseProviderTime(raw string) time.Time {
 		}
 	}
 	return time.Time{}
-}
-
-const track1099SignatureHeader = "X-Track1099-Signature"
-
-func (t *Track1099) VerifyWebhook(h http.Header, rawBody []byte) (WebhookEvent, error) {
-	if strings.TrimSpace(t.webhookSecret) == "" {
-		// Refusing unsigned webhooks is the point. Without a secret anyone who
-		// finds the URL can mark a filing complete and release held money.
-		return WebhookEvent{}, fmt.Errorf("no webhook secret is configured")
-	}
-
-	provided := h.Get(track1099SignatureHeader)
-	if provided == "" {
-		return WebhookEvent{}, fmt.Errorf("missing %s header", track1099SignatureHeader)
-	}
-
-	mac := hmac.New(sha256.New, []byte(t.webhookSecret))
-	mac.Write(rawBody)
-	expected := hex.EncodeToString(mac.Sum(nil))
-	if !hmac.Equal([]byte(provided), []byte(expected)) {
-		return WebhookEvent{}, fmt.Errorf("invalid webhook signature")
-	}
-
-	var payload struct {
-		EventID   string `json:"event_id"`
-		Type      string `json:"type"`
-		RequestID string `json:"w9_request_id"`
-		Status    string `json:"status"`
-	}
-	if err := json.Unmarshal(rawBody, &payload); err != nil {
-		return WebhookEvent{}, fmt.Errorf("unreadable webhook body: %w", err)
-	}
-	if payload.EventID == "" {
-		return WebhookEvent{}, fmt.Errorf("webhook body has no event id")
-	}
-
-	return WebhookEvent{
-		EventID:           payload.EventID,
-		Type:              payload.Type,
-		ProviderRequestID: payload.RequestID,
-		Status:            normaliseTrack1099Status(payload.Status),
-		Raw:               rawBody,
-	}, nil
 }

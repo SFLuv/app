@@ -536,9 +536,8 @@ func AddW9Routes(r *chi.Mux, s *handlers.AppService) {
 	r.Get("/w9/status", withActiveAuth(s.GetW9Status, s))
 	r.Post("/w9/start", withActiveAuth(s.StartW9, s))
 
-	// Called by the tax vendor, so it cannot carry a session. The signature is
-	// what authenticates it.
-	r.Post("/w9/provider/webhook", s.W9ProviderWebhook)
+	// There is no webhook route. The vendor does not publish webhooks, so
+	// completion is discovered by the maintenance sweep polling for it.
 
 	// The local stand-in for the vendor's hosted form, mounted only when the
 	// fake provider is selected. It is what makes an end-to-end run possible on
@@ -550,6 +549,8 @@ func AddW9Routes(r *chi.Mux, s *handlers.AppService) {
 
 	r.Post("/admin/w9/precheck", withAdmin(s.PrecheckW9ForRecipient, s))
 	r.Get("/admin/w9/overview", withAdmin(s.GetW9AdminOverview, s))
+	// Year-end 1099-NEC data. Reachable now so it is not discovered in January.
+	r.Get("/admin/w9/1099", withAdmin(s.Get1099Report, s))
 	r.Post("/admin/w9/{user_id}/back-pay", withAdmin(s.ApproveW9BackPay, s))
 	r.Post("/admin/w9/{user_id}/clear", withAdmin(s.ClearW9Filing, s))
 	r.Post("/admin/w9/{user_id}/resend", withAdmin(s.ResendW9Request, s))

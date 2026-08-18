@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"bytes"
 	"fmt"
 	"net/http"
 	"os"
@@ -44,30 +43,15 @@ func (a *AppService) ServeFakeW9Form(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		body, header, err := fake.Complete(requestID, "ssn")
-		if err != nil {
+		// Signing only records signed_at. Nothing is pushed anywhere: the
+		// backend learns about it when the maintenance sweep next polls, which
+		// is exactly how it will work in production, because this vendor has no
+		// webhook to push with.
+		if err := fake.Sign(requestID, "ssn"); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
 			w.Write([]byte(err.Error()))
 			return
 		}
-
-		// Posted to our own webhook route so the signature check, the event
-		// inbox and the release path all run exactly as they would in
-		// production.
-		webhookReq, err := http.NewRequestWithContext(r.Context(), http.MethodPost,
-			fakeWebhookURL(), bytes.NewReader(body))
-		if err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			return
-		}
-		webhookReq.Header = header
-		resp, err := http.DefaultClient.Do(webhookReq)
-		if err != nil {
-			w.WriteHeader(http.StatusBadGateway)
-			w.Write([]byte(err.Error()))
-			return
-		}
-		resp.Body.Close()
 
 		if returnURL != "" {
 			http.Redirect(w, r, returnURL, http.StatusFound)
@@ -75,8 +59,10 @@ func (a *AppService) ServeFakeW9Form(w http.ResponseWriter, r *http.Request) {
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Write([]byte(`<html><body style="font-family:system-ui;padding:2rem">
-			<h2>Tax form submitted</h2>
-			<p>This is the local stand-in for the tax vendor. Your held rewards should now be on their way.</p>
+			<h2>Tax form signed</h2>
+			<p>This is the local stand-in for the tax vendor. Your held rewards go out
+			on the next maintenance sweep, which is how completion is detected in
+			production too — this vendor publishes no webhooks.</p>
 			</body></html>`))
 		return
 	}
@@ -91,12 +77,4 @@ func (a *AppService) ServeFakeW9Form(w http.ResponseWriter, r *http.Request) {
 		</form>
 		<p style="color:#666;font-size:.85rem">Request %s</p>
 		</body></html>`, requestID)
-}
-
-func fakeWebhookURL() string {
-	base := strings.TrimSuffix(strings.TrimSpace(os.Getenv("W9_PROVIDER_BASE_URL")), "/")
-	if base == "" {
-		base = "http://localhost:8080"
-	}
-	return base + "/w9/provider/webhook"
 }
