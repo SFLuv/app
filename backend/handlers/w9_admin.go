@@ -31,16 +31,8 @@ func (a *AppService) GetW9AdminOverview(w http.ResponseWriter, r *http.Request) 
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
-	backPay, err := a.db.OutstandingBackPayTotalBase(ctx)
-	if err != nil {
-		a.logger.Logf("error totalling back pay: %s", err)
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
 	overview := structs.W9AdminOverview{
 		EscrowedSfluv: formatSfluvBase(escrowed),
-		BackPaySfluv:  formatSfluvBase(backPay),
 		Rows:          []structs.W9AdminRow{},
 	}
 
@@ -72,14 +64,6 @@ func (a *AppService) GetW9AdminOverview(w http.ResponseWriter, r *http.Request) 
 	}
 	overview.AvailableSfluv = formatSfluvBase(available)
 
-	shortBy := new(big.Int).Sub(backPay, available)
-	overview.BackPayCovered = shortBy.Sign() <= 0
-	if overview.BackPayCovered {
-		overview.BackPayShortBy = "0"
-	} else {
-		overview.BackPayShortBy = formatSfluvBase(shortBy)
-	}
-
 	rows, err := a.db.ListW9AdminRows(ctx, w9AdminTaxYear(r))
 	if err != nil {
 		a.logger.Logf("error listing w9 admin rows: %s", err)
@@ -101,35 +85,6 @@ func (a *AppService) GetW9AdminOverview(w http.ResponseWriter, r *http.Request) 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(overview)
-}
-
-// ApproveW9BackPay sends money whose escrow window lapsed.
-//
-// Kept manual on purpose: by this point the funds are no longer reserved, so
-// the faucet may need topping up first. The coverage figures on the overview
-// are what that decision is made from.
-func (a *AppService) ApproveW9BackPay(w http.ResponseWriter, r *http.Request) {
-	if a.payouts == nil {
-		w.WriteHeader(http.StatusServiceUnavailable)
-		return
-	}
-	userID := chiParam(r, "user_id")
-	if userID == "" {
-		w.WriteHeader(http.StatusBadRequest)
-		return
-	}
-
-	paid, err := a.payouts.ApproveBackPay(r.Context(), userID, w9AdminTaxYear(r))
-	if err != nil {
-		a.logger.Logf("error approving back pay for %s: %s", userID, err)
-		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte(err.Error()))
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(map[string]any{"paid": paid})
 }
 
 // ClearW9Filing is the override for cases the vendor cannot resolve. A reason
@@ -272,8 +227,10 @@ func (a *AppService) PrecheckW9ForRecipient(w http.ResponseWriter, r *http.Reque
 		amount = big.NewInt(0)
 	}
 
-	decision := decideEscrow(earned, amount, w9ThresholdBase(), false, status)
-	if !decision.Escrow {
+	// hasOpenEscrow is deliberately false here: an admin send is refused either
+	// way, and passing the real value would only change which reason is quoted.
+	decision := decidePayout(earned, amount, w9Thresholds(), false, status)
+	if decision.Action == payoutActionPay {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(response)
 		return

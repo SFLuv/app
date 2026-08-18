@@ -111,9 +111,11 @@ const TaxSchemaDDL = `
 			shadow_decision         TEXT NOT NULL DEFAULT '',
 			created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			-- No 'expired' and no 'back_pay_requested'. Escrow holds exactly one
+			-- payment — the next is refused, not held — so nothing accumulates
+			-- and nothing has to lapse into an owed-money queue.
 			CONSTRAINT payout_ledger_state_check CHECK (state IN (
-				'pending','escrowed','expired','back_pay_requested',
-				'releasing','paid','failed','cancelled'
+				'pending','escrowed','releasing','paid','failed','cancelled'
 			))
 		);
 
@@ -131,7 +133,7 @@ const TaxSchemaDDL = `
 			ON payout_ledger (user_id, tax_year) WHERE counts_toward_threshold;
 		CREATE INDEX IF NOT EXISTS payout_ledger_open_state_idx
 			ON payout_ledger (state)
-			WHERE state IN ('escrowed','expired','back_pay_requested','releasing','pending');
+			WHERE state IN ('escrowed','releasing','pending');
 		CREATE INDEX IF NOT EXISTS payout_ledger_escrowed_at_idx
 			ON payout_ledger (state, escrowed_at);
 		CREATE INDEX IF NOT EXISTS payout_ledger_recipient_year_idx
@@ -139,9 +141,8 @@ const TaxSchemaDDL = `
 		CREATE INDEX IF NOT EXISTS payout_ledger_tx_hash_idx
 			ON payout_ledger (tx_hash) WHERE tx_hash <> '';
 
-		-- Escrow that is still reserved. Reserved escrow is subtracted from the
-		-- faucet's spendable balance; expired escrow is not, which is the whole
-		-- point of letting it expire.
+		-- Escrow that is still reserved, and subtracted from the faucet's
+		-- spendable balance. It is money already owed to somebody.
 		CREATE OR REPLACE VIEW escrowed_payouts AS
 			SELECT * FROM payout_ledger WHERE state = 'escrowed';
 
@@ -163,6 +164,25 @@ const TaxSchemaDDL = `
 			ON w9_provider_events (provider, event_id);
 		CREATE INDEX IF NOT EXISTS w9_provider_events_unprocessed_idx
 			ON w9_provider_events (received_at) WHERE processed_at IS NULL;
+
+		-- Which warning tiers a person has reached, and whether they have seen
+		-- each one.
+		--
+		-- The escalation is the point: a polite notice at the first line, a
+		-- firmer one at the second, and only then does money stop. Nobody's
+		-- first indication that a tax form exists should be their reward going
+		-- missing.
+		CREATE TABLE IF NOT EXISTS w9_tier_notices (
+			user_id         TEXT NOT NULL,
+			tax_year        INTEGER NOT NULL,
+			tier            TEXT NOT NULL,
+			notified_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			acknowledged_at TIMESTAMPTZ,
+			PRIMARY KEY (user_id, tax_year, tier)
+		);
+
+		CREATE INDEX IF NOT EXISTS w9_tier_notices_outstanding_idx
+			ON w9_tier_notices (user_id, tax_year) WHERE acknowledged_at IS NULL;
 
 		-- Reminder dedup, same shape as volunteer_reminder_sends.
 		CREATE TABLE IF NOT EXISTS w9_escrow_reminders (
@@ -360,7 +380,7 @@ func (a *AppDB) SumCountedPayoutsForUserYear(ctx context.Context, tx pgx.Tx, use
 		-- not reached the chain yet; leaving it out lets a second payout land in
 		-- that window, read a stale total, and decide it is also below the line.
 		-- Rows that go on to fail are marked 'failed' and stop counting.
-		AND state IN ('pending','escrowed','expired','back_pay_requested','releasing','paid');
+		AND state IN ('pending','escrowed','releasing','paid');
 	`, userID, taxYear).Scan(&total); err != nil {
 		return nil, fmt.Errorf("error summing payouts for %s: %w", userID, err)
 	}
@@ -384,7 +404,7 @@ func (a *AppDB) HasOpenEscrow(ctx context.Context, tx pgx.Tx, userID string, tax
 		SELECT EXISTS(
 			SELECT 1 FROM payout_ledger
 			WHERE user_id = $1 AND tax_year = $2
-			AND state IN ('escrowed','expired','back_pay_requested')
+			AND state IN ('escrowed','releasing')
 		);
 	`, userID, taxYear).Scan(&exists); err != nil {
 		return false, fmt.Errorf("error checking open escrow for %s: %w", userID, err)
@@ -645,7 +665,7 @@ func (a *AppDB) ListUsersWithOpenEscrow(ctx context.Context) ([]EscrowHolder, er
 	rows, err := a.db.Query(ctx, `
 		SELECT user_id, tax_year, MIN(escrowed_at), COALESCE(SUM(amount_base),0)::text, COUNT(*)
 		FROM payout_ledger
-		WHERE user_id IS NOT NULL AND state IN ('escrowed','expired','back_pay_requested')
+		WHERE user_id IS NOT NULL AND state IN ('escrowed','releasing')
 		GROUP BY user_id, tax_year;
 	`)
 	if err != nil {
@@ -702,8 +722,8 @@ func (a *AppDB) SumUserEscrowAndBackPay(ctx context.Context, userID string, taxY
 		SELECT
 			COALESCE(SUM(amount_base) FILTER (WHERE state IN ('escrowed','releasing')), 0)::text,
 			COUNT(*) FILTER (WHERE state IN ('escrowed','releasing')),
-			COALESCE(SUM(amount_base) FILTER (WHERE state IN ('expired','back_pay_requested')), 0)::text,
-			COUNT(*) FILTER (WHERE state IN ('expired','back_pay_requested'))
+			'0'::text,
+			0
 		FROM payout_ledger WHERE user_id = $1 AND tax_year = $2;
 	`, userID, taxYear).Scan(&escrowedStr, &escrowedCount, &backPayStr, &backPayCount); err != nil {
 		return nil, 0, nil, 0, fmt.Errorf("error summing holds for %s: %w", userID, err)
@@ -728,7 +748,7 @@ func (a *AppDB) SumUserEarnedForYear(ctx context.Context, userID string, taxYear
 		SELECT COALESCE(SUM(amount_base), 0)::text
 		FROM payout_ledger
 		WHERE user_id = $1 AND tax_year = $2 AND counts_toward_threshold = TRUE
-		AND state IN ('escrowed','expired','back_pay_requested','releasing','paid');
+		AND state IN ('escrowed','releasing','paid');
 	`, userID, taxYear).Scan(&total); err != nil {
 		return nil, fmt.Errorf("error summing annual earnings for %s: %w", userID, err)
 	}
@@ -894,4 +914,21 @@ func (a *AppDB) List1099Candidates(ctx context.Context, taxYear int, thresholdBa
 		out = append(out, row)
 	}
 	return out, rows.Err()
+}
+
+// MarkPayoutCancelled records a payout that was refused before any money moved.
+//
+// Cancelled rows do not count toward the annual total, and that matters: a
+// refused payment is not income, and leaving it counted would push the person
+// further past a line they were already blocked at — so filing their W-9 would
+// release less than they had actually earned.
+func (a *AppDB) MarkPayoutCancelled(ctx context.Context, id int64, reason string) error {
+	if _, err := a.db.Exec(ctx, `
+		UPDATE payout_ledger
+		SET state = 'cancelled', last_error = $2, updated_at = NOW()
+		WHERE id = $1 AND state = 'pending';
+	`, id, reason); err != nil {
+		return fmt.Errorf("error cancelling payout %d: %w", id, err)
+	}
+	return nil
 }

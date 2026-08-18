@@ -178,7 +178,7 @@ func (a *AppDB) appendW9Notifications(ctx context.Context, userID string, feed *
 			p.tax_year,
 			COALESCE(SUM(p.amount_base) FILTER (WHERE p.state IN ('escrowed','releasing')), 0)::text,
 			COUNT(*) FILTER (WHERE p.state IN ('escrowed','releasing')),
-			COALESCE(SUM(p.amount_base) FILTER (WHERE p.state IN ('expired','back_pay_requested')), 0)::text,
+			'0'::text,
 			MIN(p.escrowed_at),
 			COALESCE(f.status, 'not_started'),
 			MAX(r.seen_at)
@@ -188,7 +188,7 @@ func (a *AppDB) appendW9Notifications(ctx context.Context, userID string, feed *
 			ON r.user_id = p.user_id
 			AND r.notification_key = 'w9_escrow_held:' || p.tax_year::text
 		WHERE p.user_id = $1
-		AND p.state IN ('escrowed','releasing','expired','back_pay_requested')
+		AND p.state IN ('escrowed','releasing')
 		GROUP BY p.tax_year, f.status;
 	`, userID)
 	if err != nil {
@@ -297,7 +297,7 @@ func (a *AppDB) PruneResolvedImproverNotificationReads(ctx context.Context) (int
 			SELECT 1
 			FROM payout_ledger p
 			WHERE p.user_id = r.user_id
-			AND p.state IN ('escrowed','releasing','expired','back_pay_requested')
+			AND p.state IN ('escrowed','releasing')
 			AND r.notification_key = 'w9_escrow_held:' || p.tax_year::text
 		);
 	`)

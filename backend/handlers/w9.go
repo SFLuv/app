@@ -63,6 +63,8 @@ func (a *AppService) buildW9Status(r *http.Request, userID string) (*structs.W9S
 		Cleared:        db.W9StatusClears(status),
 		ThresholdSfluv: formatSfluvBase(w9ThresholdBase()),
 		EarnedSfluv:    formatSfluvBase(earned),
+		ThresholdBase:  w9ThresholdBase().String(),
+		EarnedBase:     earned.String(),
 		EscrowedSfluv:  formatSfluvBase(escrowed),
 		EscrowedCount:  escrowedCount,
 		BackPaySfluv:   formatSfluvBase(backPay),
@@ -72,6 +74,17 @@ func (a *AppService) buildW9Status(r *http.Request, userID string) (*structs.W9S
 	// Required means "we are holding money on this", not merely "past the
 	// threshold" — that is the thing a person can act on.
 	response.Required = !response.Cleared && (escrowedCount > 0 || backPayCount > 0)
+
+	// The outstanding tier drives the modal. A cleared filing has none by
+	// definition — the notices are deleted when it clears — but the guard keeps
+	// a stale row from resurrecting a warning somebody has already answered.
+	if !response.Cleared {
+		if outstanding, err := a.db.GetOutstandingW9Tier(ctx, userID, taxYear); err == nil && outstanding != nil {
+			response.Tier = outstanding.Tier
+			response.TierAcknowledged = outstanding.AcknowledgedAt != nil
+			response.Blocked = outstanding.Tier == db.W9TierBlocked
+		}
+	}
 
 	if filing != nil && !response.Cleared {
 		response.FormURL = filing.FormURL
@@ -205,4 +218,32 @@ func w9AdminTaxYear(r *http.Request) int {
 
 func chiParam(r *http.Request, name string) string {
 	return strings.TrimSpace(chi.URLParam(r, name))
+}
+
+// AcknowledgeW9Tier records that someone dismissed a tier's modal.
+//
+// For the first three tiers that is the end of it. The blocked modal is
+// re-armed by the next refused payout, so dismissing it buys quiet rather than
+// silence — being unable to receive money is not a state somebody should be
+// able to put away and forget.
+func (a *AppService) AcknowledgeW9Tier(w http.ResponseWriter, r *http.Request) {
+	userDid := utils.GetDid(r)
+	if userDid == nil {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	tier := chiParam(r, "tier")
+	if db.W9TierSeverity(tier) == 0 {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte("unknown tier"))
+		return
+	}
+
+	if err := a.db.AcknowledgeW9Tier(r.Context(), *userDid, time.Now().UTC().Year(), tier); err != nil {
+		a.logger.Logf("error acknowledging w9 tier %s for %s: %s", tier, *userDid, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }

@@ -12,6 +12,60 @@ import (
 	"github.com/SFLuv/app/backend/w9provider"
 )
 
+// onTierReached records a warning tier and, the first time, tells the person.
+//
+// Deliberately outside the payout transaction, and deliberately unable to fail
+// the payout: a push that does not send is a worse notification, not a worse
+// payment. The recording is what matters — the modal is driven by stored state,
+// so someone who never receives the push still sees it when they next open the
+// app.
+func (p *PayoutService) onTierReached(ctx context.Context, userID string, taxYear int, tier string) {
+	if strings.TrimSpace(userID) == "" || tier == "" {
+		return
+	}
+
+	fresh, err := p.appDb.RecordW9TierReached(ctx, userID, taxYear, tier)
+	if err != nil {
+		if p.logger != nil {
+			p.logger.Logf("w9: could not record tier %s for %s: %s", tier, userID, err)
+		}
+		return
+	}
+
+	// A tier is news once. Crossing it again on the next reward is not.
+	if !fresh || p.notify == nil {
+		return
+	}
+
+	// The form has to exist before we point anyone at it.
+	if _, err := p.EnsureW9Request(ctx, userID, taxYear); err != nil && p.logger != nil {
+		p.logger.Logf("w9: could not prepare a form for %s at tier %s: %s", userID, tier, err)
+	}
+	p.notify.pushW9Tier(ctx, userID, taxYear, tier)
+}
+
+// onBlocked runs after a payout was refused.
+//
+// Re-arms the blocked modal every time, unlike the warning tiers which are shown
+// once. Being refused is not a state somebody should be able to dismiss and
+// forget: it is costing them money each time it happens, and the explanation
+// belongs with the failure.
+func (p *PayoutService) onBlocked(ctx context.Context, userID string, taxYear int) {
+	if strings.TrimSpace(userID) == "" {
+		return
+	}
+
+	if err := p.appDb.RearmW9BlockedTier(ctx, userID, taxYear); err != nil && p.logger != nil {
+		p.logger.Logf("w9: could not re-arm the blocked notice for %s: %s", userID, err)
+	}
+	if _, err := p.EnsureW9Request(ctx, userID, taxYear); err != nil && p.logger != nil {
+		p.logger.Logf("w9: could not prepare a form for blocked user %s: %s", userID, err)
+	}
+	if p.notify != nil {
+		p.notify.pushW9Tier(ctx, userID, taxYear, db.W9TierBlocked)
+	}
+}
+
 // onEscrowed runs after money has been held.
 //
 // Deliberately outside the payout transaction: asking a vendor for a form and
@@ -161,49 +215,16 @@ func (p *PayoutService) ReleaseEscrowForUserYear(ctx context.Context, userID str
 		released++
 	}
 
-	// Anything that sat past the automatic window becomes an admin claim. This
-	// happens on filing rather than on expiry so the queue only ever contains
-	// people who have actually done their part.
-	backPayRequested, err = p.appDb.RequestBackPayForUserYear(ctx, userID, taxYear)
-	if err != nil {
-		return released, 0, err
+	// The warnings existed to get the form filed. It is filed, so they go —
+	// leaving them would mean a modal asking for something already done.
+	if err := p.appDb.ClearW9TierNotices(ctx, userID, taxYear); err != nil && p.logger != nil {
+		p.logger.Logf("w9: released escrow for %s but could not clear their tier notices: %s", userID, err)
 	}
 
-	if p.notify != nil && (released > 0 || backPayRequested > 0) {
-		p.notify.pushW9EscrowReleased(ctx, userID, taxYear, releasedTotal, backPayRequested)
+	if p.notify != nil && released > 0 {
+		p.notify.pushW9EscrowReleased(ctx, userID, taxYear, releasedTotal, 0)
 	}
-	return released, backPayRequested, nil
-}
-
-// ApproveBackPay sends money that outlived its escrow window. Admin-initiated,
-// because by this point the funds are no longer reserved and the faucet may
-// need topping up first.
-func (p *PayoutService) ApproveBackPay(ctx context.Context, userID string, taxYear int) (int, error) {
-	claimed, err := p.appDb.ClaimEscrowedPayoutsForRelease(ctx, userID, taxYear,
-		[]string{db.PayoutStateBackPayRequested})
-	if err != nil {
-		return 0, err
-	}
-
-	paid := 0
-	for _, row := range claimed {
-		amount, ok := new(big.Int).SetString(row.AmountBase, 10)
-		if !ok || amount.Sign() <= 0 {
-			_ = p.appDb.ReturnPayoutToEscrow(ctx, row.ID, db.PayoutStateBackPayRequested, "unreadable amount")
-			continue
-		}
-		txHash, transferErr := p.transfer(ctx, row.ID, row.RecipientAddress, amount)
-		if transferErr != nil {
-			_ = p.appDb.ReturnPayoutToEscrow(ctx, row.ID, db.PayoutStateBackPayRequested, transferErr.Error())
-			return paid, fmt.Errorf("error paying back pay for %s: %w", userID, transferErr)
-		}
-		if err := p.appDb.MarkPayoutPaid(ctx, row.ID, txHash, time.Now().UTC().Year()); err != nil {
-			return paid, err
-		}
-		p.settleSource(ctx, row)
-		paid++
-	}
-	return paid, nil
+	return released, 0, nil
 }
 
 // settleSource closes the record the payout came from, now that the money has
@@ -231,7 +252,6 @@ func (p *PayoutService) settleSource(ctx context.Context, row *structs.PayoutLed
 // delivery would otherwise hold someone's money indefinitely.
 func (p *PayoutService) RunW9Maintenance(ctx context.Context) {
 	p.pollProviderFilings(ctx)
-	p.expireStaleEscrow(ctx)
 	p.repairCompletedFilings(ctx)
 	p.sendEscrowReminders(ctx)
 }
@@ -284,20 +304,6 @@ func (p *PayoutService) pollProviderFilings(ctx context.Context) {
 				)
 			}
 		}
-	}
-}
-
-func (p *PayoutService) expireStaleEscrow(ctx context.Context) {
-	cutoff := time.Now().UTC().Add(-escrowWindow())
-	expired, err := p.appDb.ExpireEscrowedPayouts(ctx, cutoff)
-	if err != nil {
-		if p.logger != nil {
-			p.logger.Logf("w9: could not expire stale escrow: %s", err)
-		}
-		return
-	}
-	if len(expired) > 0 && p.logger != nil {
-		p.logger.Logf("w9: %d escrowed payouts passed the automatic window and now need admin back pay", len(expired))
 	}
 }
 

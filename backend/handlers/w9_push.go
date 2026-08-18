@@ -6,6 +6,8 @@ import (
 	"math/big"
 	"strings"
 	"time"
+
+	"github.com/SFLuv/app/backend/db"
 )
 
 // pushW9Notice sends one W9 alert to every device a person has registered.
@@ -45,6 +47,47 @@ func (a *AppService) pushW9Notice(ctx context.Context, userID string, kind strin
 		delivered = true
 	}
 	return delivered
+}
+
+// pushW9Tier tells someone they have reached a warning tier.
+//
+// The escalation is the whole design, so the copy escalates with it. The first
+// two still-being-paid tiers stay light — nothing has gone wrong and nothing is
+// owed, they are simply on a path toward needing a form. The last two are plain
+// about money having stopped, because it has.
+//
+// The tax year's total is always named. "You've earned 430 SFLUV" is actionable
+// in a way that "you're approaching a threshold" is not.
+func (a *AppService) pushW9Tier(ctx context.Context, userID string, taxYear int, tier string) {
+	earned, err := a.db.SumUserEarnedForYear(ctx, userID, taxYear)
+	if err != nil {
+		return
+	}
+	amount := formatSfluvBase(earned)
+	limit := formatSfluvBase(w9ThresholdBase())
+
+	switch tier {
+	case db.W9TierNotice:
+		a.pushW9Notice(ctx, userID, "w9_required",
+			fmt.Sprintf("You've earned %s SFLUV this year", amount),
+			fmt.Sprintf("Once you reach %s we'll need a W-9 on file before sending more. It takes a couple of minutes — worth doing before it holds anything up.", limit),
+		)
+	case db.W9TierWarning:
+		a.pushW9Notice(ctx, userID, "w9_required",
+			fmt.Sprintf("%s SFLUV — you're close to the %s limit", amount, limit),
+			"Complete your W-9 now and your rewards will keep arriving without interruption.",
+		)
+	case db.W9TierEscrowed:
+		a.pushW9Notice(ctx, userID, "w9_escrow_held",
+			"Your reward is waiting on a W-9",
+			fmt.Sprintf("You've reached %s SFLUV for the year, so this reward is being held for you. Complete your W-9 and we'll send it straight over.", limit),
+		)
+	case db.W9TierBlocked:
+		a.pushW9Notice(ctx, userID, "w9_required",
+			"We couldn't send your reward",
+			fmt.Sprintf("You've already earned more than %s SFLUV this year. Complete your W-9 to start receiving rewards again — your QR code is still good.", limit),
+		)
+	}
 }
 
 // pushW9EscrowHeld tells someone their reward has arrived but is waiting on a

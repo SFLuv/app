@@ -62,6 +62,16 @@ type W9StatusResponse struct {
 	Cleared        bool   `json:"cleared"`
 	ThresholdSfluv string `json:"threshold_sfluv"`
 	EarnedSfluv    string `json:"earned_sfluv"`
+	// Raw base units for the progress bar, so a client never has to parse a
+	// formatted amount back into a number to draw it.
+	ThresholdBase string `json:"threshold_base"`
+	EarnedBase    string `json:"earned_base"`
+
+	// Tier is the warning the person has not yet dismissed, if any, and drives
+	// which modal shows. Blocked means a payout was actually refused.
+	Tier             string `json:"tier,omitempty"`
+	TierAcknowledged bool   `json:"tier_acknowledged"`
+	Blocked          bool   `json:"blocked"`
 
 	EscrowedSfluv string `json:"escrowed_sfluv"`
 	EscrowedCount int    `json:"escrowed_count"`

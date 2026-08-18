@@ -12,113 +12,176 @@ func sfluv(n int64) *big.Int { return big.NewInt(n * 1_000_000) }
 
 var threshold = sfluv(600)
 
-// The threshold rules, exhaustively. This is the whole gate, and every case
-// here is somebody's money.
-func TestDecideEscrow(t *testing.T) {
+// The gate, exhaustively. Every case here is somebody's money, and the
+// escalation is the point: two warnings while still being paid, then a hold,
+// then a refusal.
+func TestDecidePayout(t *testing.T) {
+	tiers := payoutThresholds{Notice: sfluv(400), Warning: sfluv(500), Limit: sfluv(600)}
+
 	for _, tc := range []struct {
 		name       string
 		prior      *big.Int
 		amount     *big.Int
 		hasOpen    bool
 		filing     string
-		wantEscrow bool
+		wantAction string
+		wantTier   string
 	}{
-		{name: "well below the line pays through",
-			prior: sfluv(100), amount: sfluv(50), filing: db.W9StatusNotStarted, wantEscrow: false},
+		{name: "well below anything", prior: sfluv(100), amount: sfluv(50),
+			filing: db.W9StatusNotStarted, wantAction: payoutActionPay, wantTier: ""},
 
-		// The comparison is >=, matching the behaviour that preceded this.
-		// Landing exactly on the threshold is reaching it, not approaching it.
-		{name: "landing exactly on the threshold is held",
-			prior: sfluv(550), amount: sfluv(50), filing: db.W9StatusNotStarted, wantEscrow: true},
-		{name: "one unit short still pays through",
-			prior: sfluv(550), amount: new(big.Int).Sub(sfluv(50), big.NewInt(1)),
-			filing: db.W9StatusNotStarted, wantEscrow: false},
+		// The first line is a courtesy: still paid, just told.
+		{name: "one unit short of the notice", prior: sfluv(350),
+			amount: new(big.Int).Sub(sfluv(50), big.NewInt(1)),
+			filing: db.W9StatusNotStarted, wantAction: payoutActionPay, wantTier: ""},
+		{name: "lands exactly on the notice", prior: sfluv(350), amount: sfluv(50),
+			filing: db.W9StatusNotStarted, wantAction: payoutActionPay, wantTier: db.W9TierNotice},
+		{name: "between notice and warning", prior: sfluv(430), amount: sfluv(20),
+			filing: db.W9StatusNotStarted, wantAction: payoutActionPay, wantTier: db.W9TierNotice},
 
-		// The payment that crosses is held in full. Splitting it would mean two
-		// transfers and a half-paid reward nobody can explain to a volunteer.
-		{name: "the crossing payment is held whole",
-			prior: sfluv(550), amount: sfluv(100), filing: db.W9StatusNotStarted, wantEscrow: true},
+		// The second is firmer, still paid.
+		{name: "lands exactly on the warning", prior: sfluv(450), amount: sfluv(50),
+			filing: db.W9StatusNotStarted, wantAction: payoutActionPay, wantTier: db.W9TierWarning},
+		{name: "one unit short of the limit", prior: sfluv(550),
+			amount: new(big.Int).Sub(sfluv(50), big.NewInt(1)),
+			filing: db.W9StatusNotStarted, wantAction: payoutActionPay, wantTier: db.W9TierWarning},
 
-		// Once anything is held, everything after is held. A payment slipping
-		// between two held ones would be incoherent, and would let someone
-		// wear the obligation down by earning in small pieces.
-		{name: "a tiny payment after a crossing is still held",
-			prior: sfluv(700), amount: big.NewInt(1), hasOpen: true,
-			filing: db.W9StatusNotStarted, wantEscrow: true},
-		{name: "open escrow holds even below the line",
-			prior: sfluv(10), amount: sfluv(1), hasOpen: true,
-			filing: db.W9StatusNotStarted, wantEscrow: true},
+		// The limit itself holds, in full — half a reward cannot be explained.
+		{name: "lands exactly on the limit", prior: sfluv(550), amount: sfluv(50),
+			filing: db.W9StatusNotStarted, wantAction: payoutActionEscrow, wantTier: db.W9TierEscrowed},
+		{name: "the crossing payment is held whole", prior: sfluv(550), amount: sfluv(100),
+			filing: db.W9StatusNotStarted, wantAction: payoutActionEscrow, wantTier: db.W9TierEscrowed},
+		{name: "a single payment past the limit from zero", prior: big.NewInt(0), amount: sfluv(900),
+			filing: db.W9StatusNotStarted, wantAction: payoutActionEscrow, wantTier: db.W9TierEscrowed},
 
-		// A cleared filing pays through regardless of amount or open holds.
-		{name: "a completed filing pays through",
-			prior: sfluv(5000), amount: sfluv(1000), filing: db.W9StatusCompleted, wantEscrow: false},
-		{name: "a legacy approval pays through",
-			prior: sfluv(5000), amount: sfluv(1000), filing: db.W9StatusLegacyApproved, wantEscrow: false},
-		{name: "a manual clear pays through",
-			prior: sfluv(5000), amount: sfluv(1000), filing: db.W9StatusManuallyCleared, wantEscrow: false},
-		{name: "a cleared filing beats open escrow",
-			prior: sfluv(5000), amount: sfluv(1), hasOpen: true,
-			filing: db.W9StatusCompleted, wantEscrow: false},
+		// And everything after is refused, not held again. This is what keeps
+		// escrow to one payment and removes any owed-money bookkeeping.
+		{name: "the payment after a hold is refused", prior: sfluv(620), amount: sfluv(30),
+			hasOpen: true, filing: db.W9StatusNotStarted,
+			wantAction: payoutActionBlock, wantTier: db.W9TierBlocked},
+		{name: "refused even for a tiny amount", prior: sfluv(620), amount: big.NewInt(1),
+			hasOpen: true, filing: db.W9StatusNotStarted,
+			wantAction: payoutActionBlock, wantTier: db.W9TierBlocked},
+		{name: "refused even while below the limit", prior: sfluv(10), amount: sfluv(1),
+			hasOpen: true, filing: db.W9StatusNotStarted,
+			wantAction: payoutActionBlock, wantTier: db.W9TierBlocked},
 
-		// A requested-but-unfinished filing is not a cleared one.
-		{name: "a requested filing does not clear",
-			prior: sfluv(590), amount: sfluv(20), filing: db.W9StatusRequested, wantEscrow: true},
-		{name: "an invalid filing does not clear",
-			prior: sfluv(590), amount: sfluv(20), filing: db.W9StatusInvalid, wantEscrow: true},
+		// A cleared filing pays through at any amount, and outranks a hold.
+		{name: "completed pays through", prior: sfluv(5000), amount: sfluv(1000),
+			filing: db.W9StatusCompleted, wantAction: payoutActionPay, wantTier: ""},
+		{name: "legacy approval pays through", prior: sfluv(5000), amount: sfluv(1000),
+			filing: db.W9StatusLegacyApproved, wantAction: payoutActionPay, wantTier: ""},
+		{name: "a cleared filing beats an open hold", prior: sfluv(5000), amount: sfluv(1),
+			hasOpen: true, filing: db.W9StatusCompleted, wantAction: payoutActionPay, wantTier: ""},
 
-		{name: "a fresh year starts from zero",
-			prior: big.NewInt(0), amount: sfluv(100), filing: db.W9StatusNotStarted, wantEscrow: false},
+		// Requested is not cleared. Neither is a rejected TIN match.
+		{name: "requested does not clear", prior: sfluv(590), amount: sfluv(20),
+			filing: db.W9StatusRequested, wantAction: payoutActionEscrow, wantTier: db.W9TierEscrowed},
+		{name: "invalid does not clear", prior: sfluv(590), amount: sfluv(20),
+			filing: db.W9StatusInvalid, wantAction: payoutActionEscrow, wantTier: db.W9TierEscrowed},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := decideEscrow(tc.prior, tc.amount, threshold, tc.hasOpen, tc.filing)
-			if got.Escrow != tc.wantEscrow {
-				t.Fatalf("escrow = %v (%s); want %v", got.Escrow, got.Reason, tc.wantEscrow)
+			got := decidePayout(tc.prior, tc.amount, tiers, tc.hasOpen, tc.filing)
+			if got.Action != tc.wantAction {
+				t.Fatalf("action = %q (%s); want %q", got.Action, got.Reason, tc.wantAction)
+			}
+			if got.Tier != tc.wantTier {
+				t.Fatalf("tier = %q; want %q", got.Tier, tc.wantTier)
 			}
 			if got.Reason == "" {
-				t.Error("every decision must carry a reason; it is logged and shown to admins")
+				t.Error("every decision carries a reason; it is logged and shown to admins")
 			}
 		})
 	}
 }
 
-// Degenerate inputs must not panic or silently hold everybody's money.
-func TestDecideEscrowHandlesMissingValues(t *testing.T) {
-	if got := decideEscrow(nil, nil, threshold, false, db.W9StatusNotStarted); got.Escrow {
-		t.Error("a nil prior total and amount should not trigger a hold")
+// Escrow must never grow beyond a single payment. That property is what removes
+// expiry, back pay and the admin queue that went with them.
+func TestEscrowCannotAccumulate(t *testing.T) {
+	tiers := payoutThresholds{Notice: sfluv(400), Warning: sfluv(500), Limit: sfluv(600)}
+
+	first := decidePayout(sfluv(590), sfluv(50), tiers, false, db.W9StatusNotStarted)
+	if first.Action != payoutActionEscrow {
+		t.Fatalf("the crossing payment should be held; got %q", first.Action)
 	}
-	// No threshold configured must fail open. Failing closed would hold every
-	// payout on the platform the moment an env var went missing.
-	if got := decideEscrow(sfluv(10000), sfluv(1), nil, false, db.W9StatusNotStarted); got.Escrow {
-		t.Error("an unset threshold should pay through, not hold everything")
-	}
-	if got := decideEscrow(sfluv(10000), sfluv(1), big.NewInt(0), false, db.W9StatusNotStarted); got.Escrow {
-		t.Error("a zero threshold should pay through, not hold everything")
+	// From here on, hasOpenEscrow is true for every subsequent payout.
+	for i, amount := range []*big.Int{sfluv(10), sfluv(500), big.NewInt(1)} {
+		got := decidePayout(sfluv(640), amount, tiers, true, db.W9StatusNotStarted)
+		if got.Action != payoutActionBlock {
+			t.Fatalf("payout %d after a hold: %q; a second hold would let escrow accumulate", i+2, got.Action)
+		}
 	}
 }
 
-// The sequence a volunteer actually experiences: several shifts, a crossing,
-// then filing.
-func TestRunningTotalCrossesOnceAndStaysHeld(t *testing.T) {
-	prior := big.NewInt(0)
-	amounts := []*big.Int{sfluv(200), sfluv(200), sfluv(150), sfluv(100), sfluv(50)}
-	wantEscrow := []bool{false, false, false, true, true}
+// Degenerate inputs must not panic or silently hold everybody's money.
+func TestDecidePayoutHandlesMissingValues(t *testing.T) {
+	tiers := payoutThresholds{Notice: sfluv(400), Warning: sfluv(500), Limit: sfluv(600)}
 
-	hasOpen := false
-	for i, amount := range amounts {
-		got := decideEscrow(prior, amount, threshold, hasOpen, db.W9StatusNotStarted)
-		if got.Escrow != wantEscrow[i] {
-			t.Fatalf("payment %d of %s: escrow = %v (%s); want %v",
-				i+1, amount, got.Escrow, got.Reason, wantEscrow[i])
+	if got := decidePayout(nil, nil, tiers, false, db.W9StatusNotStarted); got.Action != payoutActionPay {
+		t.Error("a nil prior total and amount should pay through")
+	}
+	// An unset limit must fail open. Failing closed would stop every payout on
+	// the platform the moment an env var went missing.
+	for _, name := range []string{"unset", "zero"} {
+		broken := payoutThresholds{Notice: sfluv(400), Warning: sfluv(500)}
+		if name == "zero" {
+			broken.Limit = big.NewInt(0)
 		}
-		if got.Escrow {
-			hasOpen = true
+		if got := decidePayout(sfluv(10000), sfluv(1), broken, false, db.W9StatusNotStarted); got.Action != payoutActionPay {
+			t.Errorf("a %s limit should pay through, not withhold everything", name)
 		}
-		prior = new(big.Int).Add(prior, amount)
+	}
+	// Disabling a warning tier must not disable the limit.
+	noWarnings := payoutThresholds{Limit: sfluv(600)}
+	if got := decidePayout(sfluv(590), sfluv(50), noWarnings, false, db.W9StatusNotStarted); got.Action != payoutActionEscrow {
+		t.Error("the limit must still hold when the warning tiers are turned off")
+	}
+	if got := decidePayout(sfluv(450), sfluv(10), noWarnings, false, db.W9StatusNotStarted); got.Tier != "" {
+		t.Error("a disabled warning tier must not fire")
+	}
+}
+
+// The sequence a volunteer actually lives through: a run of shifts, two
+// warnings while still being paid, a hold, a refusal, then filing.
+func TestTheWholeEscalation(t *testing.T) {
+	tiers := payoutThresholds{Notice: sfluv(400), Warning: sfluv(500), Limit: sfluv(600)}
+
+	steps := []struct {
+		amount     *big.Int
+		wantAction string
+		wantTier   string
+	}{
+		{sfluv(200), payoutActionPay, ""},                   // 200
+		{sfluv(200), payoutActionPay, db.W9TierNotice},      // 400 — polite
+		{sfluv(120), payoutActionPay, db.W9TierWarning},     // 520 — firmer
+		{sfluv(100), payoutActionEscrow, db.W9TierEscrowed}, // 620 — held
+		{sfluv(50), payoutActionBlock, db.W9TierBlocked},    // refused
+		{sfluv(50), payoutActionBlock, db.W9TierBlocked},    // still refused
 	}
 
-	// Filing releases the hold and later payments pay through again.
-	if got := decideEscrow(prior, sfluv(500), threshold, hasOpen, db.W9StatusCompleted); got.Escrow {
-		t.Fatalf("after filing, payments should go straight out; got %s", got.Reason)
+	prior := big.NewInt(0)
+	hasOpen := false
+	for i, step := range steps {
+		got := decidePayout(prior, step.amount, tiers, hasOpen, db.W9StatusNotStarted)
+		if got.Action != step.wantAction || got.Tier != step.wantTier {
+			t.Fatalf("step %d (%s on top of %s): %s/%s; want %s/%s",
+				i+1, step.amount, prior, got.Action, got.Tier, step.wantAction, step.wantTier)
+		}
+		switch got.Action {
+		case payoutActionEscrow:
+			hasOpen = true
+			// Held money still counts: it is theirs and it is reportable.
+			prior = new(big.Int).Add(prior, step.amount)
+		case payoutActionPay:
+			prior = new(big.Int).Add(prior, step.amount)
+		case payoutActionBlock:
+			// Refused money never moved, so it must not push the total up.
+		}
+	}
+
+	// Filing clears everything, and payments resume.
+	if got := decidePayout(prior, sfluv(500), tiers, hasOpen, db.W9StatusCompleted); got.Action != payoutActionPay {
+		t.Fatalf("after filing, payments should go straight out; got %q (%s)", got.Action, got.Reason)
 	}
 }
 

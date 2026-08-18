@@ -535,6 +535,7 @@ func AddW9Routes(r *chi.Mux, s *handlers.AppService) {
 	// added delay without adding assurance.
 	r.Get("/w9/status", withActiveAuth(s.GetW9Status, s))
 	r.Post("/w9/start", withActiveAuth(s.StartW9, s))
+	r.Post("/w9/tier/{tier}/ack", withActiveAuth(s.AcknowledgeW9Tier, s))
 
 	// There is no webhook route. The vendor does not publish webhooks, so
 	// completion is discovered by the maintenance sweep polling for it.
@@ -551,7 +552,6 @@ func AddW9Routes(r *chi.Mux, s *handlers.AppService) {
 	r.Get("/admin/w9/overview", withAdmin(s.GetW9AdminOverview, s))
 	// Year-end 1099-NEC data. Reachable now so it is not discovered in January.
 	r.Get("/admin/w9/1099", withAdmin(s.Get1099Report, s))
-	r.Post("/admin/w9/{user_id}/back-pay", withAdmin(s.ApproveW9BackPay, s))
 	r.Post("/admin/w9/{user_id}/clear", withAdmin(s.ClearW9Filing, s))
 	r.Post("/admin/w9/{user_id}/resend", withAdmin(s.ResendW9Request, s))
 }

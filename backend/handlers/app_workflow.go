@@ -4992,7 +4992,12 @@ func (a *AppService) attemptWorkflowPayoutTransfer(ctx context.Context, target w
 			errLower := strings.ToLower(payErr.Error())
 			return nil, neededTokens, strings.Contains(errLower, "insufficient"), "", false, payErr
 		}
-		if result != nil && result.Escrowed {
+		// Held or refused both mean the money did not move. A bounty has no QR to
+		// re-present, so a blocked one stays claimable exactly as a held one
+		// does: not paid out, not marked failed, and picked up by a later sweep
+		// once the filing clears. Marking it failed would stop the retry and
+		// tell the improver their bounty broke, which it has not.
+		if result != nil && (result.Escrowed || result.Blocked) {
 			return nil, neededTokens, false, "", true, nil
 		}
 		if result != nil {

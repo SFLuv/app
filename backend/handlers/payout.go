@@ -89,53 +89,114 @@ type PayoutRequest struct {
 }
 
 type PayoutResult struct {
-	LedgerID   int64
-	State      string
-	TxHash     string
-	TaxYear    int
-	Escrowed   bool
+	LedgerID int64
+	State    string
+	TxHash   string
+	TaxYear  int
+	Escrowed bool
+	// Blocked means the payout was refused outright. Distinct from Escrowed:
+	// escrowed money is the person's and waiting, refused money never moved and
+	// the source — a redemption code — stays claimable.
+	Blocked bool
+	// Tier is the warning level this payout put the person at, if any. Drives
+	// which modal they see.
+	Tier       string
 	AmountBase *big.Int
 }
 
-// escrowDecision is the whole gate, extracted as a pure function so the rules
+// What a payout decision can conclude.
+const (
+	payoutActionPay    = "pay"
+	payoutActionEscrow = "escrow"
+	payoutActionBlock  = "block"
+)
+
+// payoutDecision is the whole gate, extracted as a pure function so the rules
 // can be tested exhaustively without a database, a chain, or a clock.
-type escrowDecision struct {
-	Escrow bool
+type payoutDecision struct {
+	Action string
+	// Tier names how close this person now is to the reporting threshold, and
+	// drives which warning they see. Empty below the first tier.
+	Tier   string
 	Reason string
 }
 
-// decideEscrow answers: may we send this person this money right now?
+func (d payoutDecision) escrowed() bool { return d.Action == payoutActionEscrow }
+func (d payoutDecision) blocked() bool  { return d.Action == payoutActionBlock }
+
+// payoutThresholds are the three lines a person's annual total can cross.
+type payoutThresholds struct {
+	Notice  *big.Int // a polite heads-up; still paid
+	Warning *big.Int // a firmer one; still paid
+	Limit   *big.Int // the reporting threshold itself
+}
+
+// decidePayout answers: may we send this person this money right now, and what
+// should they be told?
+//
+// The escalation matters more than any single rule. Someone earning steadily
+// gets a friendly notice, then a firmer one, and only then does anything stop —
+// so by the time money is withheld they have been warned twice while still
+// being paid. Withholding is the third step, not the first.
 //
 //   - A cleared filing pays through, always.
-//   - Anyone already holding money keeps holding it. Letting a later payment
-//     slip past held ones would be incoherent, and would let someone drain the
-//     obligation by earning in small pieces.
-//   - Otherwise it is the annual total that decides, counting this payment. The
-//     payment that crosses the line is held in full rather than split: one
-//     reward is one thing, and half a reward is impossible to explain to a
-//     volunteer.
-func decideEscrow(priorTotal *big.Int, amount *big.Int, threshold *big.Int, hasOpenEscrow bool, filingStatus string) escrowDecision {
+//   - Someone already holding money is BLOCKED rather than held again. This is
+//     what bounds escrow to a single payment: nothing accumulates, so there is
+//     never a pile of held money to reconcile or an expiry to chase.
+//   - Otherwise the annual total decides, counting this payment. The payment
+//     that crosses the limit is held in full rather than split — one reward is
+//     one thing, and half a reward cannot be explained to a volunteer.
+func decidePayout(priorTotal *big.Int, amount *big.Int, thresholds payoutThresholds, hasOpenEscrow bool, filingStatus string) payoutDecision {
 	if db.W9StatusClears(filingStatus) {
-		return escrowDecision{Escrow: false, Reason: "w9 on file"}
+		return payoutDecision{Action: payoutActionPay, Reason: "w9 on file"}
 	}
+
+	// Already holding money and still no form. Paying now would put them past
+	// the limit; holding again would grow an obligation nobody is tracking.
 	if hasOpenEscrow {
-		return escrowDecision{Escrow: true, Reason: "already holding money for this person"}
+		return payoutDecision{
+			Action: payoutActionBlock,
+			Tier:   db.W9TierBlocked,
+			Reason: "already holding a payout for this person pending their w9",
+		}
 	}
+
 	if priorTotal == nil {
 		priorTotal = big.NewInt(0)
 	}
 	if amount == nil {
 		amount = big.NewInt(0)
 	}
-	if threshold == nil || threshold.Sign() <= 0 {
-		return escrowDecision{Escrow: false, Reason: "no threshold configured"}
+	// An unset limit must fail open. Failing closed would stop every payout on
+	// the platform the moment an env var went missing.
+	if thresholds.Limit == nil || thresholds.Limit.Sign() <= 0 {
+		return payoutDecision{Action: payoutActionPay, Reason: "no threshold configured"}
 	}
 
 	newTotal := new(big.Int).Add(priorTotal, amount)
-	if newTotal.Cmp(threshold) >= 0 {
-		return escrowDecision{Escrow: true, Reason: "annual total reaches the reporting threshold"}
+
+	if newTotal.Cmp(thresholds.Limit) >= 0 {
+		return payoutDecision{
+			Action: payoutActionEscrow,
+			Tier:   db.W9TierEscrowed,
+			Reason: "annual total reaches the reporting threshold",
+		}
 	}
-	return escrowDecision{Escrow: false, Reason: "below the reporting threshold"}
+	if thresholds.Warning != nil && thresholds.Warning.Sign() > 0 && newTotal.Cmp(thresholds.Warning) >= 0 {
+		return payoutDecision{
+			Action: payoutActionPay,
+			Tier:   db.W9TierWarning,
+			Reason: "approaching the reporting threshold",
+		}
+	}
+	if thresholds.Notice != nil && thresholds.Notice.Sign() > 0 && newTotal.Cmp(thresholds.Notice) >= 0 {
+		return payoutDecision{
+			Action: payoutActionPay,
+			Tier:   db.W9TierNotice,
+			Reason: "past the first warning threshold",
+		}
+	}
+	return payoutDecision{Action: payoutActionPay, Reason: "below the reporting threshold"}
 }
 
 // Pay sends money, or holds it and says why.
@@ -192,12 +253,33 @@ func (p *PayoutService) Pay(ctx context.Context, req PayoutRequest) (*PayoutResu
 		}, nil
 	}
 
-	if decision.Escrow {
+	// Refused. The ledger row is cancelled rather than left pending, so it stops
+	// counting toward the annual total — a payment that never happened is not
+	// income, and leaving it counted would push the person further past a line
+	// they were already blocked at.
+	if decision.blocked() {
+		if err := p.appDb.MarkPayoutCancelled(ctx, row.ID, decision.Reason); err != nil && p.logger != nil {
+			p.logger.Logf("w9: payout %d was refused but could not be cancelled: %s", row.ID, err)
+		}
+		p.onBlocked(ctx, userID, taxYear)
+		return &PayoutResult{
+			LedgerID: row.ID, State: db.PayoutStateCancelled, TaxYear: taxYear,
+			Blocked: true, Tier: decision.Tier, AmountBase: req.AmountBase,
+		}, nil
+	}
+
+	if decision.escrowed() {
 		p.onEscrowed(ctx, userID, taxYear, req.AmountBase)
 		return &PayoutResult{
 			LedgerID: row.ID, State: db.PayoutStateEscrowed, TaxYear: taxYear,
-			Escrowed: true, AmountBase: req.AmountBase,
+			Escrowed: true, Tier: decision.Tier, AmountBase: req.AmountBase,
 		}, nil
+	}
+
+	// A warning tier that still pays. Recorded before the transfer so the modal
+	// is waiting by the time they look at the reward that triggered it.
+	if decision.Tier != "" {
+		p.onTierReached(ctx, userID, taxYear, decision.Tier)
 	}
 
 	txHash, err := p.transfer(ctx, row.ID, recipient, req.AmountBase)
@@ -223,28 +305,28 @@ func (p *PayoutService) Pay(ctx context.Context, req PayoutRequest) (*PayoutResu
 
 // recordAndDecide writes the ledger row and settles the escrow question inside
 // one transaction, holding the per-person lock while it does.
-func (p *PayoutService) recordAndDecide(ctx context.Context, row *structs.PayoutLedgerRow, amount *big.Int, userID string, taxYear int) (escrowDecision, bool, error) {
+func (p *PayoutService) recordAndDecide(ctx context.Context, row *structs.PayoutLedgerRow, amount *big.Int, userID string, taxYear int) (payoutDecision, bool, error) {
 	tx, err := p.appDb.BeginTx(ctx)
 	if err != nil {
-		return escrowDecision{}, false, fmt.Errorf("error starting payout transaction: %w", err)
+		return payoutDecision{}, false, fmt.Errorf("error starting payout transaction: %w", err)
 	}
 	defer tx.Rollback(ctx)
 
 	created, err := p.appDb.InsertPayoutIntent(ctx, tx, row)
 	if err != nil {
-		return escrowDecision{}, false, err
+		return payoutDecision{}, false, err
 	}
 	if !created && row.State != db.PayoutStatePending {
-		return escrowDecision{}, false, tx.Commit(ctx)
+		return payoutDecision{}, false, tx.Commit(ctx)
 	}
 
 	if err := db.LockUserTaxYear(ctx, tx, userID, taxYear); err != nil {
-		return escrowDecision{}, created, err
+		return payoutDecision{}, created, err
 	}
 
 	priorTotal, err := p.appDb.SumCountedPayoutsForUserYear(ctx, tx, userID, taxYear)
 	if err != nil {
-		return escrowDecision{}, created, err
+		return payoutDecision{}, created, err
 	}
 	// This payout's own row is already counted by the sum once it exists, so
 	// remove it to get the true prior total.
@@ -255,47 +337,91 @@ func (p *PayoutService) recordAndDecide(ctx context.Context, row *structs.Payout
 
 	hasOpen, err := p.appDb.HasOpenEscrow(ctx, tx, userID, taxYear)
 	if err != nil {
-		return escrowDecision{}, created, err
+		return payoutDecision{}, created, err
 	}
 	filingStatus, err := p.appDb.GetW9FilingStatusTx(ctx, tx, userID, taxYear)
 	if err != nil {
-		return escrowDecision{}, created, err
+		return payoutDecision{}, created, err
 	}
 
-	decision := decideEscrow(priorTotal, amount, w9ThresholdBase(), hasOpen, filingStatus)
+	decision := decidePayout(priorTotal, amount, w9Thresholds(), hasOpen, filingStatus)
 
 	// An unidentified recipient cannot be asked for a form, so there is nothing
-	// to wait for and holding the money would strand it. It is paid and
+	// to wait for and withholding would only strand the money. It is paid and
 	// attributed later, when a wallet is linked.
-	if decision.Escrow && userID == "" {
-		decision = escrowDecision{Escrow: false, Reason: "recipient is not linked to an account"}
+	if userID == "" && decision.Action != payoutActionPay {
+		decision = payoutDecision{Action: payoutActionPay, Reason: "recipient is not linked to an account"}
 	}
 
+	// Shadow mode proves the gate against real traffic without withholding from
+	// anybody: the decision is computed and recorded, and the money still goes.
 	mode := payoutEnforcementMode()
-	if decision.Escrow && mode != enforcementEnforce {
-		if err := p.appDb.MarkPayoutShadowDecision(ctx, tx, row.ID, "would_escrow:"+decision.Reason); err != nil {
-			return escrowDecision{}, created, err
+	if decision.Action != payoutActionPay && mode != enforcementEnforce {
+		if err := p.appDb.MarkPayoutShadowDecision(ctx, tx, row.ID, "would_"+decision.Action+":"+decision.Reason); err != nil {
+			return payoutDecision{}, created, err
 		}
 		if p.logger != nil {
-			p.logger.Logf("w9 %s: would escrow %s for user %s (%s)", mode, row.AmountBase, userID, decision.Reason)
+			p.logger.Logf("w9 %s: would %s %s for user %s (%s)", mode, decision.Action, row.AmountBase, userID, decision.Reason)
 		}
-		decision.Escrow = false
+		decision.Action = payoutActionPay
 	}
 
-	if decision.Escrow {
+	if decision.escrowed() {
 		if err := p.appDb.MarkPayoutEscrowed(ctx, tx, row.ID); err != nil {
-			return escrowDecision{}, created, err
+			return payoutDecision{}, created, err
 		}
 		if err := p.appDb.EnsureW9FilingRequestedTx(ctx, tx, userID, taxYear); err != nil {
-			return escrowDecision{}, created, err
+			return payoutDecision{}, created, err
 		}
 		row.State = db.PayoutStateEscrowed
 	}
 
 	if err := tx.Commit(ctx); err != nil {
-		return escrowDecision{}, created, fmt.Errorf("error committing payout decision: %w", err)
+		return payoutDecision{}, created, fmt.Errorf("error committing payout decision: %w", err)
 	}
 	return decision, created, nil
+}
+
+// w9Thresholds reads the three lines from the environment so they can be moved
+// without a deploy.
+//
+// The two warning lines are courtesies and default off-limit-relative: 400 and
+// 500 against a 600 limit. A warning above the limit would never fire, so both
+// are clamped below it rather than trusted blindly.
+func w9Thresholds() payoutThresholds {
+	limit := w9ThresholdBase()
+	thresholds := payoutThresholds{
+		Limit:   limit,
+		Notice:  w9TierThresholdBase("W9_TIER_NOTICE_SFLUV", 400),
+		Warning: w9TierThresholdBase("W9_TIER_WARNING_SFLUV", 500),
+	}
+	if limit != nil && limit.Sign() > 0 {
+		if thresholds.Warning != nil && thresholds.Warning.Cmp(limit) >= 0 {
+			thresholds.Warning = nil
+		}
+		if thresholds.Notice != nil && thresholds.Notice.Cmp(limit) >= 0 {
+			thresholds.Notice = nil
+		}
+	}
+	return thresholds
+}
+
+func w9TierThresholdBase(envKey string, defaultSfluv int64) *big.Int {
+	sfluv := defaultSfluv
+	if raw := strings.TrimSpace(os.Getenv(envKey)); raw != "" {
+		parsed, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || parsed <= 0 {
+			// A zero or unreadable value disables that tier rather than
+			// defaulting it back on — turning a warning off should be possible.
+			return nil
+		}
+		sfluv = parsed
+	}
+	multiplier, err := getTokenMultiplier()
+	if err != nil || multiplier == nil || multiplier.Sign() <= 0 {
+		multiplier = big.NewInt(1_000_000)
+	}
+	return new(big.Int).Mul(big.NewInt(sfluv), multiplier)
 }
 
 // transfer moves the money and waits for confirmation.

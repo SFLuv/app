@@ -1599,6 +1599,63 @@ var schemaMigrations = []SchemaMigration{
 			return nil
 		},
 	},
+	{
+		Version:     "1.44",
+		Description: "w9: escalating warning tiers, and escrow that cannot accumulate",
+		Apply:       migrateW9WarningTiers,
+	},
+}
+
+// migrateW9WarningTiers replaces one hard gate with an escalating sequence.
+//
+// Before this, a volunteer's first indication that a tax form existed was their
+// reward not arriving. Now they get a polite notice partway to the limit, a
+// firmer one closer to it, and only then does anything stop — so by the time
+// money is withheld they have been warned twice while still being paid.
+//
+// The second change is quieter but removes more code than it adds. A person who
+// already has money held is now refused rather than held again, which bounds
+// escrow to exactly one payment. Nothing accumulates, so nothing has to expire,
+// so there is no owed-but-unreserved money and no admin queue to chase it. The
+// 'expired' and 'back_pay_requested' states go with it.
+func migrateW9WarningTiers(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+	if _, err := pools.App.Exec(ctx, db.TaxSchemaDDL); err != nil {
+		return fmt.Errorf("error creating the w9 tier tables: %w", err)
+	}
+
+	// Anything still sitting in a retired state has to land somewhere before the
+	// constraint stops describing it. Both meant "owed but not reserved", and
+	// the honest resting place is back in escrow — reserved again, and released
+	// the moment the filing clears.
+	tag, err := pools.App.Exec(ctx, `
+		UPDATE payout_ledger
+		SET state = 'escrowed',
+			escrowed_at = COALESCE(escrowed_at, NOW()),
+			expired_at = NULL,
+			back_pay_requested_at = NULL,
+			updated_at = NOW()
+		WHERE state IN ('expired', 'back_pay_requested');
+	`)
+	if err != nil {
+		return fmt.Errorf("error returning retired payout states to escrow: %w", err)
+	}
+	if appLogger != nil && tag.RowsAffected() > 0 {
+		appLogger.Logf(
+			"w9 tiers: returned %d payouts from expired/back-pay to escrow; they release when the filing clears",
+			tag.RowsAffected(),
+		)
+	}
+
+	if _, err := pools.App.Exec(ctx, `
+		ALTER TABLE payout_ledger DROP CONSTRAINT IF EXISTS payout_ledger_state_check;
+		ALTER TABLE payout_ledger ADD CONSTRAINT payout_ledger_state_check CHECK (state IN (
+			'pending','escrowed','releasing','paid','failed','cancelled'
+		));
+	`); err != nil {
+		return fmt.Errorf("error narrowing the payout state constraint: %w", err)
+	}
+
+	return nil
 }
 
 // migrateW9Rebuild replaces a W9 system that never held a W9.

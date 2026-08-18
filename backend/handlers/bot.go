@@ -595,6 +595,29 @@ func (s *BotService) Redeem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Refused. The code is handed back so the same QR still works once the form
+	// is in — nothing is owed, nothing is queued, and the volunteer keeps the
+	// only thing they need to claim it. Reuses the same undo the send-failure
+	// path uses rather than inventing a second refund route.
+	if result != nil && result.Blocked {
+		undoCtx, undoCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		if undoErr := s.db.UndoRedeem(undoCtx, request.Code, request.Address, s.chainID()); undoErr != nil {
+			fmt.Printf("error releasing code %s after a blocked payout: %s\n", request.Code, undoErr)
+		}
+		undoCancel()
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(w).Encode(structs.RedeemEscrowedResponse{
+			Status:      "blocked",
+			Reason:      "w9_required",
+			AmountSfluv: formatSfluvBase(amountBase),
+			TaxYear:     result.TaxYear,
+			Message:     "We couldn't send this reward yet. Complete your W-9 in the SFLuv app, then scan this code again.",
+		})
+		return
+	}
+
 	// Held money is reported as its own outcome rather than as a plain success,
 	// so the app can explain what happened instead of showing a reward that
 	// never arrives.
