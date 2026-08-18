@@ -936,11 +936,14 @@ c_green "  engine sponsor row seeded ($SPONSOR_TABLE)"
 # 5b. Faucet (local bot key: generate, fund with gas, clone production balance)
 # ----------------------------------------------------------------------------
 # The backend's faucet ("bot") signs every reward payout and its balance gates
-# event creation and workflow approval. Without BOT_KEY/BOT_ADDRESS the balance
-# reads as the zero address and every value check fails — which surfaced as
-# "Error getting unallocated faucet balance" and blocked event creation
-# entirely. Production keys must never come near a dev boot, so we generate a
-# throwaway faucet and clone the production BALANCE onto it from the fork.
+# event creation and workflow approval. Without a signer the balance reads as
+# the zero address and every value check fails — which surfaced as "Error
+# getting unallocated faucet balance" and blocked event creation entirely.
+#
+# Production keys must never come near a dev boot, so the signer here is always
+# generated locally with `cast wallet new`. The only thing taken from
+# backend/.env is BOT_ADDRESS, which is a public address used to find a starting
+# balance to clone off the fork — never a key.
 c_blue "[5b/10] Faucet (local bot key + cloned balance)"
 
 FAUCET_KEY_FILE="$TMP_DIR/faucet.key"
