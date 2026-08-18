@@ -1136,7 +1136,11 @@ if [[ "$RUN_BACKEND" -eq 1 ]]; then
     "W9_ESCROW_WINDOW_DAYS=${W9_ESCROW_WINDOW_DAYS:-7}"
     # Faucet identity. Without these the bot reads the zero address and every
     # balance-gated action (event creation, workflow approval) fails.
-    "BOT_KEY=$FAUCET_PK"
+    # Without the 0x. anvil prints keys prefixed and the key file stores them
+    # that way, but go-ethereum's crypto.HexToECDSA rejects the prefix — the
+    # faucet then fails to sign anything at all, and every payout dies with
+    # "invalid hex character 'x' in private key".
+    "BOT_KEY=${FAUCET_PK#0x}"
     "BOT_ADDRESS=$FAUCET_ADDRESS_LOCAL"
     "FAUCET_ADDRESS=$FAUCET_ADDRESS_LOCAL"
     # Multiplier from whole SFLUV to base units, derived from the token's real
