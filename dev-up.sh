@@ -1117,6 +1117,23 @@ if [[ "$RUN_BACKEND" -eq 1 ]]; then
     "PONDER_KEY=${DEV_PONDER_KEY:-local-dev-ponder-key}"
     "PONDER_CALLBACK_URL=http://localhost:$BACKEND_PORT/ponder/callback"
     "NOTIFICATION_TEST_MODE=true"
+    # W-9 collection and payout escrow.
+    #
+    # The fake provider serves a stub tax form from the backend whose submit
+    # posts a correctly signed webhook back to /w9/provider/webhook, so the
+    # whole loop — request, open, submit, release, transfer — runs the real
+    # code path without a vendor account. It never asks for a tax
+    # identification number, and must not: keeping an SSN out of our systems is
+    # the entire reason for using a vendor.
+    "W9_PROVIDER=${W9_PROVIDER:-fake}"
+    "W9_PROVIDER_BASE_URL=${W9_PROVIDER_BASE_URL:-http://localhost:$BACKEND_PORT}"
+    "W9_PROVIDER_WEBHOOK_SECRET=${W9_PROVIDER_WEBHOOK_SECRET:-local-dev-w9-secret}"
+    # enforce locally so held rewards and the tax card are actually visible.
+    # Production defaults to shadow, where the decision is computed and logged
+    # but everything is still paid.
+    "W9_ENFORCEMENT=${W9_ENFORCEMENT:-enforce}"
+    "W9_THRESHOLD_SFLUV=${W9_THRESHOLD_SFLUV:-600}"
+    "W9_ESCROW_WINDOW_DAYS=${W9_ESCROW_WINDOW_DAYS:-7}"
     # Faucet identity. Without these the bot reads the zero address and every
     # balance-gated action (event creation, workflow approval) fails.
     "BOT_KEY=$FAUCET_PK"
