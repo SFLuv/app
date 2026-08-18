@@ -19,3 +19,9 @@ backend/builds-old
 .idea
 tmp/
 .dev.env
+
+# Playwright end-to-end harness. Tracked separately; not part of the app.
+/e2e/
+
+# Ponder codegen output at the repo root.
+/generated/

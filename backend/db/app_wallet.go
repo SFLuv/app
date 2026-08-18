@@ -193,12 +193,7 @@ func (a *AppDB) getLocationAddressOwnerLookup(ctx context.Context, address strin
 			COALESCE(NULLIF(TRIM(matching_wallet.name), ''), '') AS wallet_name,
 			$1 AS matched_address,
 			TRUE AS matched_payment_wallet,
-			COALESCE(
-				NULLIF(TRIM(default_payment_wallet.wallet_address), ''),
-				NULLIF(TRIM(u.primary_wallet_address), ''),
-				NULLIF(TRIM(legacy_wallet.smart_address), ''),
-				''
-			) AS pay_to_address,
+			COALESCE(NULLIF(TRIM(default_payment_wallet.wallet_address), ''), '') AS pay_to_address,
 			COALESCE(
 				NULLIF(TRIM(l.tipping_wallet_address), ''),
 				''
@@ -231,28 +226,6 @@ func (a *AppDB) getLocationAddressOwnerLookup(ctx context.Context, address strin
 		ON TRUE
 		LEFT JOIN LATERAL (
 			SELECT
-				legacy_wallet.smart_address
-			FROM
-				wallets legacy_wallet
-			WHERE
-				legacy_wallet.owner = u.id
-			AND
-				legacy_wallet.active = TRUE
-			AND
-				legacy_wallet.is_eoa = FALSE
-			AND
-				legacy_wallet.smart_index = 0
-			AND
-				legacy_wallet.smart_address IS NOT NULL
-			AND
-				TRIM(legacy_wallet.smart_address) <> ''
-			ORDER BY
-				legacy_wallet.id ASC
-			LIMIT 1
-		) legacy_wallet
-		ON TRUE
-		LEFT JOIN LATERAL (
-			SELECT
 				w.name
 			FROM
 				wallets w
@@ -278,41 +251,14 @@ func (a *AppDB) getLocationAddressOwnerLookup(ctx context.Context, address strin
 			l.approval = TRUE
 		AND
 			l.active = TRUE
-		AND (
-			EXISTS (
-				SELECT 1
-				FROM location_payment_wallets lpw
-				WHERE lpw.location_id = l.id
-				AND lpw.active = TRUE
-				AND LOWER(lpw.wallet_address) = LOWER($1)
-			)
-			OR (
-				NOT EXISTS (
-					SELECT 1
-					FROM location_payment_wallets lpw
-					WHERE lpw.location_id = l.id
-					AND lpw.active = TRUE
-				)
-				AND LOWER($1) = LOWER(
-					COALESCE(
-						NULLIF(TRIM(u.primary_wallet_address), ''),
-						NULLIF(TRIM(legacy_wallet.smart_address), ''),
-						''
-					)
-				)
-			)
+		AND EXISTS (
+			SELECT 1
+			FROM location_payment_wallets lpw
+			WHERE lpw.location_id = l.id
+			AND lpw.active = TRUE
+			AND LOWER(lpw.wallet_address) = LOWER($1)
 		)
 		ORDER BY
-			CASE
-				WHEN EXISTS (
-					SELECT 1
-					FROM location_payment_wallets lpw
-				WHERE lpw.location_id = l.id
-				AND lpw.active = TRUE
-				AND LOWER(lpw.wallet_address) = LOWER($1)
-			) THEN 0
-				ELSE 1
-			END,
 			l.approved_at ASC NULLS LAST,
 			l.id ASC
 		LIMIT 1;

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/SFLuv/app/backend/db"
 	"github.com/SFLuv/app/backend/logger"
 	"github.com/SFLuv/app/backend/structs"
 	"github.com/jackc/pgx/v5"
@@ -1451,6 +1452,227 @@ var schemaMigrations = []SchemaMigration{
 			return nil
 		},
 	},
+	{
+		Version:     "1.40",
+		Description: "per-location payment wallets, so two shops can be told apart",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			// Until now location_payment_wallets was empty and every location fell
+			// back to its owner's users.primary_wallet_address. That works while a
+			// merchant has one shop and silently breaks the moment they have two:
+			// both resolve to the same address, and an incoming transfer carries
+			// nothing that says which shop it belongs to. Takings, tips and the
+			// merchant-mode day view all become unsplittable, and no later fix can
+			// separate history that was already commingled.
+			//
+			// So: write down what each location resolves to today. Behaviour is
+			// unchanged the moment this lands — the link merely stops being implied
+			// by a COALESCE and starts being a row someone can see and change.
+			tag, err := pools.App.Exec(ctx, `
+				INSERT INTO location_payment_wallets (location_id, wallet_address, is_default)
+				SELECT
+					l.id,
+					COALESCE(
+						NULLIF(TRIM(u.primary_wallet_address), ''),
+						NULLIF(TRIM(legacy.smart_address), '')
+					),
+					TRUE
+				FROM locations l
+				LEFT JOIN users u
+					ON u.id = l.owner_id
+					AND u.active = TRUE
+				LEFT JOIN LATERAL (
+					SELECT w.smart_address
+					FROM wallets w
+					WHERE w.owner = l.owner_id
+					AND w.active = TRUE
+					AND w.is_eoa = FALSE
+					AND NULLIF(TRIM(w.smart_address), '') IS NOT NULL
+					ORDER BY w.smart_index ASC NULLS LAST, w.id ASC
+					LIMIT 1
+				) legacy ON TRUE
+				WHERE l.active = TRUE
+				AND COALESCE(
+					NULLIF(TRIM(u.primary_wallet_address), ''),
+					NULLIF(TRIM(legacy.smart_address), '')
+				) IS NOT NULL
+				AND NOT EXISTS (
+					SELECT 1 FROM location_payment_wallets existing
+					WHERE existing.location_id = l.id
+					AND existing.active = TRUE
+				);
+			`)
+			if err != nil {
+				return err
+			}
+			if appLogger != nil {
+				appLogger.Logf("migration 1.40: recorded %d location payment wallets", tag.RowsAffected())
+			}
+
+			// A location left without a wallet would have no payable address at
+			// all once the fallback goes, so say so loudly rather than letting it
+			// surface later as a merchant who cannot be paid.
+			var unresolved int
+			if err := pools.App.QueryRow(ctx, `
+				SELECT COUNT(*)
+				FROM locations l
+				WHERE l.active = TRUE
+				AND NOT EXISTS (
+					SELECT 1 FROM location_payment_wallets p
+					WHERE p.location_id = l.id AND p.active = TRUE
+				);
+			`).Scan(&unresolved); err != nil {
+				return err
+			}
+			if unresolved > 0 && appLogger != nil {
+				appLogger.Logf("migration 1.40: WARNING %d active locations still have no payment wallet", unresolved)
+			}
+
+			// One address, one role, one location. Enforced in the database as well
+			// as the handler because the whole point is that two shops can never
+			// share a till — a bug in a write path should not be able to undo that.
+			//
+			// Global rather than per-owner: a wallet belongs to exactly one user, so
+			// two locations sharing one are necessarily the same merchant's anyway,
+			// and a global index is both simpler and stricter.
+			if _, err := pools.App.Exec(ctx, `
+				CREATE UNIQUE INDEX IF NOT EXISTS location_payment_wallets_address_unique_idx
+					ON location_payment_wallets (LOWER(TRIM(wallet_address)))
+					WHERE active = TRUE;
+
+				CREATE UNIQUE INDEX IF NOT EXISTS locations_tipping_wallet_unique_idx
+					ON locations (LOWER(TRIM(tipping_wallet_address)))
+					WHERE active = TRUE AND NULLIF(TRIM(tipping_wallet_address), '') IS NOT NULL;
+			`); err != nil {
+				return err
+			}
+
+			return nil
+		},
+	},
+	{
+		Version:     "1.41",
+		Description: "w9 rebuild: tax payees, filings, payout ledger, escrow",
+		Apply:       migrateW9Rebuild,
+	},
+}
+
+// migrateW9Rebuild replaces a W9 system that never held a W9.
+//
+// The old one recorded a wallet, an email and a year — no name, no TIN, no
+// signature, no document — and pointed people at a form on another website. It
+// gated exactly one payout path, and it measured the annual threshold per
+// wallet per chain, so a person with several wallets, or one wallet spanning
+// the Celo cutover, could earn well past the limit without anything noticing.
+//
+// What replaces it keys on the person, records every platform-originated payout
+// in one ledger, and holds money that cannot lawfully be paid yet instead of
+// refusing it.
+//
+// This migration is additive. Nothing is dropped: w9_submissions is renamed
+// rather than deleted so the backfill can be re-run, and w9_wallet_earnings is
+// left alone because backend/mcp/reports.go still reads it. A later migration
+// removes both, once the reports are repointed.
+func migrateW9Rebuild(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+	if _, err := pools.App.Exec(ctx, db.TaxSchemaDDL); err != nil {
+		return fmt.Errorf("error creating w9 rebuild tables: %w", err)
+	}
+
+	if err := migrateW9LegacyApprovals(ctx, pools, appLogger); err != nil {
+		return err
+	}
+
+	// Renamed, not dropped. A rename is reversible and keeps the source data
+	// available if the backfill above has to be re-run; a DROP is neither.
+	if _, err := pools.App.Exec(ctx, `
+		ALTER TABLE IF EXISTS w9_submissions RENAME TO w9_submissions_legacy_v1;
+	`); err != nil {
+		return fmt.Errorf("error retiring the legacy w9 submissions table: %w", err)
+	}
+
+	return nil
+}
+
+// migrateW9LegacyApprovals carries the old system's approvals forward.
+//
+// Those people completed what was asked of them at the time. Making them repeat
+// it because we changed our storage is the fastest way to lose them, so they
+// arrive as legacy_approved: unblocked, and never prompted again for that year.
+//
+// Approvals were keyed by wallet, and one person may hold several, so several
+// old rows can collapse into one filing. Rows whose wallet matches no account
+// are counted and logged rather than dropped silently — that number is the
+// measure of how much of the old data was unattributable.
+func migrateW9LegacyApprovals(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+	var exists bool
+	if err := pools.App.QueryRow(ctx, `
+		SELECT to_regclass('public.w9_submissions') IS NOT NULL;
+	`).Scan(&exists); err != nil {
+		return fmt.Errorf("error checking for the legacy w9 submissions table: %w", err)
+	}
+	if !exists {
+		return nil
+	}
+
+	tag, err := pools.App.Exec(ctx, `
+		INSERT INTO w9_filings (user_id, tax_year, status, completed_at, created_at, updated_at)
+		SELECT
+			owner.user_id,
+			s.year,
+			'legacy_approved',
+			MIN(s.approved_at),
+			NOW(),
+			NOW()
+		FROM w9_submissions s
+		JOIN LATERAL (
+			SELECT w.owner AS user_id
+			FROM wallets w
+			WHERE w.active = TRUE
+			AND (
+				LOWER(TRIM(COALESCE(w.smart_address, ''))) = LOWER(TRIM(s.wallet_address))
+				OR LOWER(TRIM(COALESCE(w.eoa_address, ''))) = LOWER(TRIM(s.wallet_address))
+			)
+			ORDER BY w.id ASC
+			LIMIT 1
+		) owner ON TRUE
+		WHERE s.approved_at IS NOT NULL
+		AND s.rejected_at IS NULL
+		GROUP BY owner.user_id, s.year
+		ON CONFLICT (user_id, tax_year) DO NOTHING;
+	`)
+	if err != nil {
+		return fmt.Errorf("error carrying legacy w9 approvals forward: %w", err)
+	}
+
+	var unresolved int
+	if err := pools.App.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM w9_submissions s
+		WHERE s.approved_at IS NOT NULL
+		AND s.rejected_at IS NULL
+		AND NOT EXISTS (
+			SELECT 1 FROM wallets w
+			WHERE w.active = TRUE
+			AND (
+				LOWER(TRIM(COALESCE(w.smart_address, ''))) = LOWER(TRIM(s.wallet_address))
+				OR LOWER(TRIM(COALESCE(w.eoa_address, ''))) = LOWER(TRIM(s.wallet_address))
+			)
+		);
+	`).Scan(&unresolved); err != nil {
+		return fmt.Errorf("error counting unresolved legacy w9 approvals: %w", err)
+	}
+
+	if appLogger != nil {
+		appLogger.Logf("w9 migration: carried %d approved submissions forward as legacy filings", tag.RowsAffected())
+		if unresolved > 0 {
+			appLogger.Logf(
+				"w9 migration: %d approved submissions could not be matched to an account and were not carried forward; "+
+					"those wallets will be asked to file if they earn past the threshold",
+				unresolved,
+			)
+		}
+	}
+
+	return nil
 }
 
 // migrateLocationHoursUniqueness enforces at most one hours row per weekday per

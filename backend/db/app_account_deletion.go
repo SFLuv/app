@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"strings"
@@ -405,6 +406,22 @@ func (a *AppDB) PurgeDeletedUser(ctx context.Context, userID string, now time.Ti
 		return ErrUserDeletionWindowExpired
 	}
 
+	// Tax records are exempt from the purge and are pseudonymised instead.
+	//
+	// Apple's account deletion rule carves out data "the developer isn't legally
+	// required to maintain", and the IRS expects a payer to be able to
+	// reconstruct 1099 data for three years — four where backup withholding
+	// applied. Deleting the ledger would destroy the record of money we actually
+	// paid somebody.
+	//
+	// What survives is a money trail, not a person: amounts, dates, source and
+	// tax year under an opaque key. The real identifier — the TIN — was never
+	// ours; it lives at the vendor, and the retention record is what remembers
+	// to have it deleted there when the period ends.
+	if err := pseudonymiseTaxRecords(ctx, tx, userID); err != nil {
+		return err
+	}
+
 	statements := []string{
 		`DELETE FROM location_payment_wallets lpw USING locations l WHERE lpw.location_id = l.id AND l.owner_id = $1;`,
 		`DELETE FROM location_hours lh USING locations l WHERE lh.location_id = l.id AND l.owner_id = $1;`,
@@ -432,4 +449,62 @@ func (a *AppDB) PurgeDeletedUser(ctx context.Context, userID string, now time.Ti
 	}
 
 	return tx.Commit(ctx)
+}
+
+// pseudonymiseTaxRecords severs a person from their financial history without
+// destroying it.
+//
+// Called during the purge, before the user row goes. The retention record it
+// leaves behind carries the vendor payee id so the TIN can be deleted at source
+// when the retention period expires — otherwise the one place real tax identity
+// exists would keep it forever.
+func pseudonymiseTaxRecords(ctx context.Context, tx pgx.Tx, userID string) error {
+	retentionKey := "deleted:" + fmt.Sprintf("%x", sha256.Sum256([]byte(userID)))
+
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO tax_retention_records (retention_key, tax_years, provider, provider_payee_id, purge_after)
+		SELECT
+			$2,
+			COALESCE(ARRAY(
+				SELECT DISTINCT tax_year FROM payout_ledger WHERE user_id = $1 ORDER BY 1
+			), '{}'),
+			COALESCE((SELECT provider FROM tax_payees WHERE user_id = $1), ''),
+			COALESCE((SELECT provider_payee_id FROM tax_payees WHERE user_id = $1), ''),
+			-- Four years past the latest year involved: the longer IRS window,
+			-- which applies wherever backup withholding did.
+			MAKE_DATE(COALESCE((SELECT MAX(tax_year) FROM payout_ledger WHERE user_id = $1), EXTRACT(YEAR FROM NOW())::int) + 4, 12, 31)
+		WHERE EXISTS (SELECT 1 FROM payout_ledger WHERE user_id = $1)
+		ON CONFLICT (retention_key) DO NOTHING;
+	`, userID, retentionKey); err != nil {
+		return fmt.Errorf("error recording tax retention for %s: %w", userID, err)
+	}
+
+	// The address is hashed rather than kept: it identifies a person on a public
+	// chain, and the amounts are what the record exists for.
+	if _, err := tx.Exec(ctx, `
+		UPDATE payout_ledger
+		SET user_id = $2,
+			recipient_address = 'redacted:' || ENCODE(SHA256(recipient_address::bytea), 'hex'),
+			updated_at = NOW()
+		WHERE user_id = $1;
+	`, userID, retentionKey); err != nil {
+		return fmt.Errorf("error pseudonymising the payout ledger for %s: %w", userID, err)
+	}
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE w9_filings
+		SET user_id = $2, form_url = '', provider_request_id = '', updated_at = NOW()
+		WHERE user_id = $1;
+	`, userID, retentionKey); err != nil {
+		return fmt.Errorf("error pseudonymising w9 filings for %s: %w", userID, err)
+	}
+
+	if _, err := tx.Exec(ctx, `DELETE FROM tax_payees WHERE user_id = $1;`, userID); err != nil {
+		return fmt.Errorf("error removing the tax payee pointer for %s: %w", userID, err)
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM w9_escrow_reminders WHERE user_id = $1;`, userID); err != nil {
+		return fmt.Errorf("error removing escrow reminders for %s: %w", userID, err)
+	}
+
+	return nil
 }

@@ -49,6 +49,57 @@ func hashMerchantModeInstallationID(rawInstallationID string) (string, error) {
 	return hex.EncodeToString(sum[:]), nil
 }
 
+// merchantModeDeviceSelect is the one description of a device row, shared by
+// every query that returns one.
+//
+// Two things it does deliberately. The wallet is resolved from the location's
+// current default payment wallet rather than read from mmd.wallet_address, so a
+// wallet swap reaches the till on its next poll instead of when someone
+// remembers to re-enrol the device. And the location join is unfiltered: a
+// device whose shop was deactivated or unapproved still comes back, carrying the
+// flags that say so, because a device that silently vanishes cannot be told the
+// difference from one that never existed.
+const merchantModeDeviceSelect = `
+	SELECT
+		mmd.id,
+		mmd.owner_id,
+		mmd.location_id,
+		COALESCE(NULLIF(TRIM(l.name), ''), 'Merchant location') AS location_name,
+		COALESCE(NULLIF(TRIM(current_payment_wallet.wallet_address), ''), '') AS wallet_address,
+		COALESCE(l.active, FALSE) AS location_active,
+		COALESCE(l.approval, FALSE) AS location_approved,
+		mmd.display_name,
+		mmd.platform,
+		mmd.app_version,
+		mmd.merchant_mode_enabled,
+		mmd.enabled_at,
+		mmd.disabled_at,
+		mmd.last_seen_at,
+		mmd.created_at,
+		mmd.updated_at
+	FROM
+		merchant_mode_devices mmd
+	JOIN
+		locations l
+	ON
+		l.id = mmd.location_id
+	LEFT JOIN LATERAL (
+		SELECT
+			lpw.wallet_address
+		FROM
+			location_payment_wallets lpw
+		WHERE
+			lpw.location_id = l.id
+		AND
+			lpw.active = TRUE
+		ORDER BY
+			CASE WHEN lpw.is_default = TRUE THEN 0 ELSE 1 END,
+			lpw.id ASC
+		LIMIT 1
+	) current_payment_wallet
+	ON TRUE
+`
+
 func scanMerchantModeDevice(row interface {
 	Scan(...any) error
 }) (*structs.MerchantModeDevice, error) {
@@ -62,6 +113,8 @@ func scanMerchantModeDevice(row interface {
 		&locationID,
 		&device.LocationName,
 		&device.WalletAddress,
+		&device.LocationActive,
+		&device.LocationApproved,
 		&device.DisplayName,
 		&device.Platform,
 		&device.AppVersion,
@@ -100,30 +153,7 @@ func (a *AppDB) merchantModePasscodeSet(ctx context.Context, userID string) (boo
 }
 
 func (a *AppDB) getMerchantModeDeviceByInstallationHash(ctx context.Context, userID string, installationHash string) (*structs.MerchantModeDevice, error) {
-	row := a.db.QueryRow(ctx, `
-		SELECT
-			mmd.id,
-			mmd.owner_id,
-			mmd.location_id,
-			COALESCE(NULLIF(TRIM(l.name), ''), 'Merchant location') AS location_name,
-			mmd.wallet_address,
-			mmd.display_name,
-			mmd.platform,
-			mmd.app_version,
-			mmd.merchant_mode_enabled,
-			mmd.enabled_at,
-			mmd.disabled_at,
-			mmd.last_seen_at,
-			mmd.created_at,
-			mmd.updated_at
-		FROM
-			merchant_mode_devices mmd
-		JOIN
-			locations l
-		ON
-			l.id = mmd.location_id
-		AND
-			l.active = TRUE
+	row := a.db.QueryRow(ctx, merchantModeDeviceSelect+`
 		WHERE
 			mmd.owner_id = $1
 		AND
@@ -140,30 +170,7 @@ func (a *AppDB) getMerchantModeDeviceByInstallationHash(ctx context.Context, use
 }
 
 func (a *AppDB) getMerchantModeDeviceByID(ctx context.Context, userID string, deviceID string) (*structs.MerchantModeDevice, error) {
-	row := a.db.QueryRow(ctx, `
-		SELECT
-			mmd.id,
-			mmd.owner_id,
-			mmd.location_id,
-			COALESCE(NULLIF(TRIM(l.name), ''), 'Merchant location') AS location_name,
-			mmd.wallet_address,
-			mmd.display_name,
-			mmd.platform,
-			mmd.app_version,
-			mmd.merchant_mode_enabled,
-			mmd.enabled_at,
-			mmd.disabled_at,
-			mmd.last_seen_at,
-			mmd.created_at,
-			mmd.updated_at
-		FROM
-			merchant_mode_devices mmd
-		JOIN
-			locations l
-		ON
-			l.id = mmd.location_id
-		AND
-			l.active = TRUE
+	row := a.db.QueryRow(ctx, merchantModeDeviceSelect+`
 		WHERE
 			mmd.owner_id = $1
 		AND
@@ -188,30 +195,7 @@ func (a *AppDB) ListMerchantModeDevices(ctx context.Context, userID string) (*st
 		return nil, ErrMerchantModeForbidden
 	}
 
-	rows, err := a.db.Query(ctx, `
-		SELECT
-			mmd.id,
-			mmd.owner_id,
-			mmd.location_id,
-			COALESCE(NULLIF(TRIM(l.name), ''), 'Merchant location') AS location_name,
-			mmd.wallet_address,
-			mmd.display_name,
-			mmd.platform,
-			mmd.app_version,
-			mmd.merchant_mode_enabled,
-			mmd.enabled_at,
-			mmd.disabled_at,
-			mmd.last_seen_at,
-			mmd.created_at,
-			mmd.updated_at
-		FROM
-			merchant_mode_devices mmd
-		JOIN
-			locations l
-		ON
-			l.id = mmd.location_id
-		AND
-			l.active = TRUE
+	rows, err := a.db.Query(ctx, merchantModeDeviceSelect+`
 		WHERE
 			mmd.owner_id = $1
 		AND
@@ -277,6 +261,20 @@ func (a *AppDB) GetMerchantModeStatus(ctx context.Context, userID string, instal
 	}
 	response.Device = device
 
+	// A till bound to a shop that is no longer trading must stop being a till.
+	// This is checked on every poll rather than at enable time, because approval
+	// can be pulled long after the device was set up, and the tablet on the
+	// counter has no other way to find out.
+	if device.MerchantModeEnabled {
+		if reason := merchantModeForcedExitReason(device); reason != "" {
+			if err := a.forceDisableMerchantModeDevice(ctx, device.ID); err != nil {
+				return nil, err
+			}
+			device.MerchantModeEnabled = false
+			response.ForcedExitReason = reason
+		}
+	}
+
 	if _, err := a.db.Exec(ctx, `
 		UPDATE merchant_mode_devices
 		SET last_seen_at = NOW(), updated_at = NOW()
@@ -286,6 +284,98 @@ func (a *AppDB) GetMerchantModeStatus(ctx context.Context, userID string, instal
 	}
 
 	return response, nil
+}
+
+// merchantModeForcedExitReason explains why this device may no longer act as a
+// till, or returns empty when it still may.
+func merchantModeForcedExitReason(device *structs.MerchantModeDevice) string {
+	switch {
+	case !device.LocationActive:
+		return "This location has been closed, so this device has left merchant mode."
+	case !device.LocationApproved:
+		return "This location is no longer approved, so this device has left merchant mode."
+	case strings.TrimSpace(device.WalletAddress) == "":
+		// The payment-wallet invariant should make this unreachable. If it ever
+		// happens, taking payments with nowhere to put them is the worse outcome.
+		return "This location has no payment wallet, so this device has left merchant mode."
+	default:
+		return ""
+	}
+}
+
+// forceDisableMerchantModeDevice records the exit, so the state survives a
+// restart rather than being recomputed on every poll.
+func (a *AppDB) forceDisableMerchantModeDevice(ctx context.Context, deviceID string) error {
+	if _, err := a.db.Exec(ctx, `
+		UPDATE merchant_mode_devices
+		SET merchant_mode_enabled = FALSE, disabled_at = NOW(), updated_at = NOW()
+		WHERE id = $1 AND merchant_mode_enabled = TRUE;
+	`, deviceID); err != nil {
+		return fmt.Errorf("error forcing merchant mode off for device %s: %w", deviceID, err)
+	}
+	return nil
+}
+
+// ListMerchantModeLocations returns the shops this merchant can put a device to
+// work at: trading, approved, and with somewhere for money to land.
+func (a *AppDB) ListMerchantModeLocations(ctx context.Context, userID string) (*structs.MerchantModeLocationsResponse, error) {
+	user, err := a.GetUserById(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	if !user.IsMerchant {
+		return nil, ErrMerchantModeForbidden
+	}
+
+	rows, err := a.db.Query(ctx, `
+		SELECT
+			l.id,
+			COALESCE(NULLIF(TRIM(l.name), ''), 'Merchant location'),
+			COALESCE(NULLIF(TRIM(l.street), ''), ''),
+			COALESCE(NULLIF(TRIM(l.city), ''), ''),
+			COALESCE(NULLIF(TRIM(current_payment_wallet.wallet_address), ''), ''),
+			COALESCE(NULLIF(TRIM(l.tipping_wallet_address), ''), '')
+		FROM locations l
+		LEFT JOIN LATERAL (
+			SELECT lpw.wallet_address
+			FROM location_payment_wallets lpw
+			WHERE lpw.location_id = l.id AND lpw.active = TRUE
+			ORDER BY CASE WHEN lpw.is_default = TRUE THEN 0 ELSE 1 END, lpw.id ASC
+			LIMIT 1
+		) current_payment_wallet ON TRUE
+		WHERE l.owner_id = $1
+		AND l.active = TRUE
+		AND COALESCE(l.approval, FALSE) = TRUE
+		AND NULLIF(TRIM(current_payment_wallet.wallet_address), '') IS NOT NULL
+		ORDER BY l.name ASC, l.id ASC;
+	`, userID)
+	if err != nil {
+		return nil, fmt.Errorf("error listing merchant mode locations: %w", err)
+	}
+	defer rows.Close()
+
+	locations := []structs.MerchantModeLocation{}
+	for rows.Next() {
+		var location structs.MerchantModeLocation
+		var id int64
+		if err := rows.Scan(
+			&id,
+			&location.Name,
+			&location.Street,
+			&location.City,
+			&location.WalletAddress,
+			&location.TippingWalletAddress,
+		); err != nil {
+			return nil, fmt.Errorf("error scanning merchant mode location: %w", err)
+		}
+		location.ID = uint(id)
+		locations = append(locations, location)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating merchant mode locations: %w", err)
+	}
+
+	return &structs.MerchantModeLocationsResponse{Locations: locations}, nil
 }
 
 func (a *AppDB) SetMerchantModePIN(ctx context.Context, userID string, pin string, currentPIN string) (*structs.MerchantModeStatusResponse, error) {
@@ -403,12 +493,7 @@ func (a *AppDB) resolveMerchantModeLocationAndWallet(ctx context.Context, userID
 	row := a.db.QueryRow(ctx, `
 		SELECT
 			COALESCE(NULLIF(TRIM(l.name), ''), 'Merchant location') AS location_name,
-			COALESCE(
-				NULLIF(TRIM(default_payment_wallet.wallet_address), ''),
-				NULLIF(TRIM(u.primary_wallet_address), ''),
-				NULLIF(TRIM(legacy_wallet.smart_address), ''),
-				''
-			) AS default_wallet_address
+			COALESCE(NULLIF(TRIM(default_payment_wallet.wallet_address), ''), '') AS default_wallet_address
 		FROM
 			locations l
 		JOIN
@@ -435,27 +520,6 @@ func (a *AppDB) resolveMerchantModeLocationAndWallet(ctx context.Context, userID
 			LIMIT 1
 		) default_payment_wallet
 			ON TRUE
-		LEFT JOIN LATERAL (
-			SELECT
-				w.smart_address
-			FROM
-				wallets w
-			WHERE
-				w.owner = l.owner_id
-			AND
-				w.active = TRUE
-			AND
-				w.is_eoa = FALSE
-			AND
-				w.smart_address IS NOT NULL
-			AND
-				TRIM(w.smart_address) <> ''
-			ORDER BY
-				w.smart_index ASC NULLS LAST,
-				w.id ASC
-			LIMIT 1
-		) legacy_wallet
-			ON TRUE
 		WHERE
 			l.id = $1
 		AND
@@ -472,36 +536,17 @@ func (a *AppDB) resolveMerchantModeLocationAndWallet(ctx context.Context, userID
 		return "", "", err
 	}
 
-	walletAddress := strings.TrimSpace(request.WalletAddress)
-	if walletAddress == "" {
-		walletAddress = defaultWalletAddress
-	}
-	if walletAddress == "" {
+	// The device does not get to choose. A till is paid into whatever wallet the
+	// shop is configured with, and any request field naming a different one is
+	// ignored: honouring it would pin an address that a later swap could not
+	// move, which is the staleness this design exists to remove.
+	if defaultWalletAddress == "" {
 		return "", "", fmt.Errorf("merchant mode requires a merchant payment wallet")
 	}
 
-	normalizedWalletAddress, err := normalizeEthereumAddressForField(walletAddress, "merchant mode wallet")
+	normalizedWalletAddress, err := normalizeEthereumAddressForField(defaultWalletAddress, "merchant mode wallet")
 	if err != nil {
 		return "", "", err
-	}
-
-	var walletOwned bool
-	if err := a.db.QueryRow(ctx, `
-		SELECT EXISTS(
-			SELECT 1
-			FROM wallets
-			WHERE owner = $1
-			AND active = TRUE
-			AND (
-				LOWER(COALESCE(smart_address, '')) = LOWER($2)
-				OR LOWER(COALESCE(eoa_address, '')) = LOWER($2)
-			)
-		);
-	`, userID, normalizedWalletAddress).Scan(&walletOwned); err != nil {
-		return "", "", fmt.Errorf("error verifying merchant mode wallet ownership: %w", err)
-	}
-	if !walletOwned {
-		return "", "", fmt.Errorf("merchant mode wallet must belong to the merchant account")
 	}
 
 	return locationName, normalizedWalletAddress, nil

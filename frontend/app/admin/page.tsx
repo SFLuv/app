@@ -91,7 +91,7 @@ import { OrganizationManagement } from "@/components/admin/organization-manageme
 import { WorkflowDetailsModal } from "@/components/workflows/workflow-details-modal"
 import { AdminAnalyticsPanel } from "@/components/admin/admin-analytics-panel"
 import { PartnersPanel } from "@/components/admin/partners-panel"
-import type { W9Submission } from "@/types/w9"
+import type { W9AdminOverview } from "@/types/w9"
 import type { ClientVersionUserCountResponse, UserResponse } from "@/types/server"
 
 // Mock PayPal accounts
@@ -295,7 +295,7 @@ export default function AdminPage() {
   const [selectedWalletBYUSDBalance, setSelectedWalletBYUSDBalance] = useState<number>(0)
   const [selectedWalletSFLUVBalance, setSelectedWalletSFLUVBalance] = useState<number>(0)
 
-  const [pendingW9Submissions, setPendingW9Submissions] = useState<W9Submission[]>([])
+  const [w9Overview, setW9Overview] = useState<W9AdminOverview | null>(null)
   const [w9Loading, setW9Loading] = useState<boolean>(false)
 
 
@@ -1979,7 +1979,7 @@ export default function AdminPage() {
         void getUnallocatedBalance()
         break
       case "w9":
-        void fetchPendingW9Submissions()
+        void fetchW9Overview()
         break
       case "affiliates":
         void getAffiliates(affiliateSearch, affiliatePage)
@@ -2027,20 +2027,26 @@ export default function AdminPage() {
     issuerRequestPage,
   ])
 
-  const fetchPendingW9Submissions = async () => {
+  // Tax & Escrow. No approve or reject any more: the vendor validates the form
+  // and holds the tax identification number, so an admin eyeballing a wallet
+  // address added delay without adding assurance.
+  //
+  // What an admin does now is the part only a human can — approve back pay for
+  // money whose escrow window lapsed, after topping the faucet up if it does
+  // not cover what is owed.
+  const fetchW9Overview = async () => {
     if (!user?.isAdmin) return
     setW9Loading(true)
     try {
-      const res = await authFetch("/admin/w9/pending")
+      const res = await authFetch("/admin/w9/overview")
       if (res.status !== 200) {
-        throw new Error("failed to fetch w9 submissions")
+        throw new Error("failed to fetch tax overview")
       }
-      const data = await res.json()
-      setPendingW9Submissions(data.submissions || [])
+      setW9Overview(await res.json())
     } catch {
       toast({
         title: "Error",
-        description: "Failed to load W9 submissions.",
+        description: "Failed to load the tax and escrow overview.",
         variant: "destructive",
       })
     } finally {
@@ -2050,53 +2056,32 @@ export default function AdminPage() {
 
   useEffect(() => {
     if (status === "authenticated" && user?.isAdmin) {
-      fetchPendingW9Submissions()
+      void fetchW9Overview()
     }
   }, [status, user?.isAdmin])
 
-  const handleApproveW9 = async (id: number) => {
+  const handleApproveBackPay = async (userId: string, taxYear: number) => {
     try {
-      const res = await authFetch("/admin/w9/approve", {
-        method: "PUT",
-        body: JSON.stringify({ id }),
-      })
+      const res = await authFetch(
+        `/admin/w9/${encodeURIComponent(userId)}/back-pay?year=${taxYear}`,
+        { method: "POST" },
+      )
       if (res.status !== 200) {
-        throw new Error("failed to approve w9")
+        throw new Error(await res.text())
       }
-      setPendingW9Submissions((prev) => prev.filter((submission) => submission.id !== id))
+      const data = await res.json()
       toast({
-        title: "W9 Approved",
-        description: "The W9 submission has been approved.",
+        title: "Back pay sent",
+        description: `${data.paid} payout${data.paid === 1 ? "" : "s"} sent.`,
       })
-    } catch {
+      await fetchW9Overview()
+    } catch (err) {
       toast({
-        title: "Approval Failed",
-        description: "Failed to approve W9 submission. Please try again.",
-        variant: "destructive",
-      })
-    }
-  }
-
-  const handleRejectW9 = async (id: number) => {
-    const confirmed = window.confirm("Reject this W9 submission? The user will need to resubmit.")
-    if (!confirmed) return
-    try {
-      const res = await authFetch("/admin/w9/reject", {
-        method: "PUT",
-        body: JSON.stringify({ id }),
-      })
-      if (res.status !== 200) {
-        throw new Error("failed to reject w9")
-      }
-      setPendingW9Submissions((prev) => prev.filter((submission) => submission.id !== id))
-      toast({
-        title: "W9 Rejected",
-        description: "The W9 submission has been rejected.",
-      })
-    } catch {
-      toast({
-        title: "Rejection Failed",
-        description: "Failed to reject W9 submission. Please try again.",
+        title: "Back pay failed",
+        description:
+          err instanceof Error && err.message
+            ? err.message
+            : "Could not send back pay. Check the faucet balance and try again.",
         variant: "destructive",
       })
     }
@@ -2718,10 +2703,10 @@ export default function AdminPage() {
               <BarChart3 className="h-4 w-4 text-muted-foreground" />
             </TabsTrigger>
             <TabsTrigger value="w9" className="w-full justify-between px-3 py-2">
-              <span>W9 Approvals</span>
-              {pendingW9Submissions.length > 0 && (
+              <span>Tax & Escrow</span>
+              {(w9Overview?.rows?.length ?? 0) > 0 && (
                 <Badge variant="destructive" className="h-5 min-w-5 rounded-full px-1.5 text-xs">
-                  {pendingW9Submissions.length}
+                  {w9Overview?.rows?.length ?? 0}
                 </Badge>
               )}
             </TabsTrigger>
@@ -3677,10 +3662,14 @@ export default function AdminPage() {
               </CardTitle>
               <CardDescription className="text-base mt-2">Review and approve W9 submissions</CardDescription>
               <div className="mt-3 flex flex-wrap items-center gap-2">
-                <Badge variant="destructive" className="text-sm px-3 py-1">
-                  {pendingW9Submissions.length} Pending
+                <Badge variant="secondary" className="text-sm px-3 py-1">
+                  {w9Overview?.people_with_holds ?? 0} with money held
                 </Badge>
-                <span className="text-sm text-muted-foreground">submissions awaiting review</span>
+                {(w9Overview?.rows?.some((row) => row.needs_back_pay_now) ?? false) && (
+                  <Badge variant="destructive" className="text-sm px-3 py-1">
+                    back pay waiting
+                  </Badge>
+                )}
               </div>
             </CardHeader>
             <CardContent>
@@ -3688,56 +3677,115 @@ export default function AdminPage() {
                 <div className="flex items-center justify-center py-8">
                   <Loader2 className="h-6 w-6 animate-spin" />
                 </div>
-              ) : pendingW9Submissions.length === 0 ? (
-                <div className="text-center py-8">
-                  <FileCheck className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-                  <h3 className="text-lg font-medium">No Pending W9 Submissions</h3>
-                  <p className="text-muted-foreground">All W9 submissions have been processed.</p>
-                </div>
               ) : (
-                <div className="space-y-4">
-                  {pendingW9Submissions.map((submission) => (
-                    <Card key={submission.id} className="border-l-4 border-l-yellow-500">
-                      <CardContent className="p-4">
-                        <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
-                          <div className="flex-1 space-y-2">
-                            <div>
-                              <h4 className="font-semibold">Wallet</h4>
-                              <p className="text-sm text-muted-foreground break-all">{submission.wallet_address}</p>
-                            </div>
-                            <div className="grid gap-1 text-sm">
-                              <div className="flex items-center gap-2">
-                                <Mail className="h-3 w-3" />
-                                <span className="break-all">{submission.email}</span>
+                <div className="space-y-6">
+                  {/* Faucet coverage first. Escrow is reserved and must not be
+                      allocated elsewhere; back pay is owed but not reserved, so
+                      the faucet may need topping up before it can be sent. This
+                      is the decision an admin is actually making. */}
+                  <div className="rounded-lg border p-4 font-mono text-sm space-y-1">
+                    <div className="flex justify-between">
+                      <span>Faucet on-chain</span>
+                      <span>{w9Overview?.faucet_sfluv ?? "0"} SFLUV</span>
+                    </div>
+                    <div className="flex justify-between text-muted-foreground">
+                      <span>&minus; allocated</span>
+                      <span>{w9Overview?.allocated_sfluv ?? "0"}</span>
+                    </div>
+                    <div className="flex justify-between text-muted-foreground">
+                      <span>&minus; escrowed (reserved)</span>
+                      <span>{w9Overview?.escrowed_sfluv ?? "0"}</span>
+                    </div>
+                    <div className="flex justify-between border-t pt-1 font-semibold">
+                      <span>Available to allocate</span>
+                      <span>{w9Overview?.available_sfluv ?? "0"} SFLUV</span>
+                    </div>
+                    <div className="flex justify-between pt-3">
+                      <span>Outstanding back pay</span>
+                      <span>
+                        {w9Overview?.back_pay_sfluv ?? "0"} SFLUV{" "}
+                        {w9Overview?.back_pay_covered ? (
+                          <span className="text-green-600">covered</span>
+                        ) : (
+                          <span className="text-red-600">
+                            short by {w9Overview?.back_pay_short_by ?? "0"}
+                          </span>
+                        )}
+                      </span>
+                    </div>
+                    {(w9Overview?.oldest_escrow_age_days ?? 0) > 0 && (
+                      <div className="flex justify-between text-muted-foreground">
+                        <span>Oldest hold</span>
+                        <span>{w9Overview?.oldest_escrow_age_days} days</span>
+                      </div>
+                    )}
+                  </div>
+
+                  {(w9Overview?.rows?.length ?? 0) === 0 ? (
+                    <div className="text-center py-8 text-muted-foreground">
+                      Nobody has money held right now.
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {w9Overview?.rows?.map((row) => (
+                        <Card key={`${row.user_id}-${row.tax_year}`}>
+                          <CardContent className="p-4 space-y-2">
+                            <div className="flex flex-wrap items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                <p className="font-medium truncate">
+                                  {row.contact_name || row.contact_email || row.user_id}
+                                </p>
+                                <p className="text-xs text-muted-foreground font-mono break-all">
+                                  {row.user_id}
+                                </p>
                               </div>
-                              {submission.user_contact_email && submission.user_contact_email !== submission.email && (
-                                <div className="flex items-center gap-2 text-yellow-700">
-                                  <AlertTriangle className="h-3 w-3" />
-                                  <span className="text-xs">
-                                    Email on user profile differs: {submission.user_contact_email}
-                                  </span>
-                                </div>
-                              )}
-                              <div className="flex items-center gap-2">
-                                <CalendarIcon className="h-3 w-3" />
-                                <span>Year {submission.year}</span>
+                              <Badge variant={row.filing_status === "completed" ? "secondary" : "outline"}>
+                                {row.filing_status.replace(/_/g, " ")}
+                              </Badge>
+                            </div>
+                            <div className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
+                              <div>
+                                <p className="text-xs text-muted-foreground">Earned {row.tax_year}</p>
+                                <p>{row.earned_sfluv}</p>
+                              </div>
+                              <div>
+                                <p className="text-xs text-muted-foreground">Held</p>
+                                <p>{row.escrowed_sfluv}</p>
+                              </div>
+                              <div>
+                                <p className="text-xs text-muted-foreground">Back pay</p>
+                                <p>{row.back_pay_sfluv}</p>
+                              </div>
+                              <div>
+                                <p className="text-xs text-muted-foreground">Oldest hold</p>
+                                <p>
+                                  {row.oldest_escrow_at
+                                    ? new Date(row.oldest_escrow_at).toLocaleDateString()
+                                    : "\u2014"}
+                                </p>
                               </div>
                             </div>
-                          </div>
-                          <div className="flex w-full flex-wrap gap-2 md:w-auto md:justify-end">
-                            <Button className="w-full sm:w-auto" size="sm" onClick={() => handleApproveW9(submission.id)}>
-                              <Check className="h-4 w-4" />
-                              Approve
-                            </Button>
-                            <Button className="w-full sm:w-auto" size="sm" variant="outline" onClick={() => handleRejectW9(submission.id)}>
-                              <X className="h-4 w-4" />
-                              Reject
-                            </Button>
-                          </div>
-                        </div>
-                      </CardContent>
-                    </Card>
-                  ))}
+                            {row.needs_back_pay_now && (
+                              <div className="pt-1">
+                                <Button
+                                  size="sm"
+                                  onClick={() => handleApproveBackPay(row.user_id, row.tax_year)}
+                                  disabled={!w9Overview?.back_pay_covered}
+                                >
+                                  Send {row.back_pay_sfluv} SFLUV back pay
+                                </Button>
+                                {!w9Overview?.back_pay_covered && (
+                                  <p className="text-xs text-red-600 mt-1">
+                                    Top the faucet up first — short by {w9Overview?.back_pay_short_by} SFLUV.
+                                  </p>
+                                )}
+                              </div>
+                            )}
+                          </CardContent>
+                        </Card>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
             </CardContent>

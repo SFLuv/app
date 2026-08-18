@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/csv"
 	"encoding/json"
+	"github.com/SFLuv/app/backend/db"
 	"io"
 	"net/http"
 	"strconv"
@@ -219,7 +220,49 @@ func (a *AppService) UpdateLocationApproval(w http.ResponseWriter, r *http.Reque
 		}
 	}
 
-	err = a.db.UpdateLocationApproval(r.Context(), u.Id, u.Approval)
+	// Work out what this location needs, and derive any new addresses, before the
+	// approval transaction opens. A second location must never be published
+	// sharing another shop's wallet, so if the chain cannot be reached to derive
+	// one the approval fails and the admin retries — usually a minute later.
+	provisioning, err := a.db.GetLocationProvisioningContext(r.Context(), u.Id)
+	if err != nil {
+		a.logger.Logf("error loading provisioning context for location %d: %s", u.Id, err.Error())
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	var derived *db.DerivedLocationWallets
+	if u.Approval != nil && *u.Approval && provisioning.NeedsDerivedWallets() {
+		paymentIndex := provisioning.NextSmartIndex
+		tippingIndex := paymentIndex + 1
+
+		paymentAddress, deriveErr := a.deriveSmartAccountAddress(r.Context(), provisioning.OwnerEOA, paymentIndex)
+		if deriveErr != nil {
+			a.logger.Logf("error deriving payment wallet for location %d: %s", u.Id, deriveErr.Error())
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+				"error": "Could not reach the chain to create this location's wallets. Try approving again in a moment.",
+			})
+			return
+		}
+		tippingAddress, deriveErr := a.deriveSmartAccountAddress(r.Context(), provisioning.OwnerEOA, tippingIndex)
+		if deriveErr != nil {
+			a.logger.Logf("error deriving tipping wallet for location %d: %s", u.Id, deriveErr.Error())
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+				"error": "Could not reach the chain to create this location's wallets. Try approving again in a moment.",
+			})
+			return
+		}
+
+		derived = &db.DerivedLocationWallets{
+			PaymentAddress: paymentAddress,
+			PaymentIndex:   paymentIndex,
+			TippingAddress: tippingAddress,
+			TippingIndex:   tippingIndex,
+			Street:         provisioning.Street,
+		}
+	}
+
+	err = a.db.UpdateLocationApproval(r.Context(), u.Id, u.Approval, provisioning, derived)
 	if err != nil {
 		status := "pending"
 		if u.Approval != nil {

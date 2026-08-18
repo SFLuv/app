@@ -34,7 +34,6 @@ import { AppWallet } from "@/lib/wallets/wallets";
 import { Address, Hash } from "viem";
 import { useContacts } from "@/context/ContactsProvider";
 import ContactOrAddressInput from "../contacts/contact-or-address-input";
-import type { W9Submission } from "@/types/w9";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   extractEthereumAddressFromPayload,
@@ -55,15 +54,13 @@ type SendStep =
   | "error";
 type SendErrorSource =
   | "w9_preflight"
-  | "w9_approval"
   | "wallet_submission"
   | "tip_submission"
   | null;
 
 const SEND_ERROR_SOURCE_LABELS: Record<Exclude<SendErrorSource, null>, string> =
   {
-    w9_preflight: "W9 compliance preflight (/w9/check)",
-    w9_approval: "W9 approval flow (/w9/submit -> /admin/w9/approve)",
+    w9_preflight: "W9 preflight (/admin/w9/precheck)",
     wallet_submission: "Wallet transaction submission (wallet.send)",
     tip_submission: "Tip transaction submission (wallet.send)",
   };
@@ -617,149 +614,16 @@ export function SendCryptoModal({
     }
   };
 
-  const findPendingSubmissionId = async (
-    walletAddress: string,
-    year: number,
-  ): Promise<number | null> => {
-    const res = await authFetch("/admin/w9/pending");
-    if (res.status !== 200) {
-      throw new Error("Unable to fetch pending W9 submissions.");
-    }
-    const data = await res.json();
-    const submissions: W9Submission[] = Array.isArray(data?.submissions)
-      ? data.submissions
-      : [];
-    const normalizedWallet = walletAddress.toLowerCase();
-    const matches = submissions.filter((submission) => {
-      return (
-        submission.pending_approval &&
-        submission.wallet_address.toLowerCase() === normalizedWallet &&
-        submission.year === year
-      );
-    });
-    if (matches.length === 0) return null;
-    matches.sort((a, b) => b.id - a.id);
-    return matches[0].id;
-  };
-
-  const handleApproveAndSend = async () => {
-    if (!user?.isAdmin) {
-      setErrorFromSource(
-        "w9_approval",
-        "Only admins can approve W9 submissions.",
-      );
-      return;
-    }
-
-    const email = w9EmailInput.trim();
-    if (!email) {
-      setErrorFromSource(
-        "w9_approval",
-        "Recipient email is required to approve W9. Enter an email to continue.",
-      );
-      return;
-    }
-    if (!isValidEmail(email)) {
-      setErrorFromSource("w9_approval", "Please enter a valid recipient email.");
-      return;
-    }
-
-    setW9Submitting(true);
-    try {
-      const year = w9Year ?? new Date().getUTCFullYear();
-      let submissionId: number | null = null;
-      let alreadyApproved = false;
-
-      const submitRes = await authFetch("/w9/submit", {
-        method: "POST",
-        body: JSON.stringify({
-          wallet_address: formData.recipient,
-          email,
-          year,
-        }),
-      });
-
-      if (submitRes.status === 201) {
-        const data = await submitRes.json();
-        submissionId = data?.submission?.id ?? null;
-      } else if (submitRes.status === 409) {
-        const data = await submitRes.json().catch(() => null);
-        const submitError = data?.error;
-        if (submitError === "w9_approved") {
-          alreadyApproved = true;
-        } else if (submitError === "w9_pending") {
-          submissionId = await findPendingSubmissionId(
-            formData.recipient,
-            year,
-          );
-          if (!submissionId) {
-            throw new Error("Pending W9 submission not found for this wallet.");
-          }
-        } else {
-          throw new Error("Unable to submit W9 for approval.");
-        }
-      } else {
-        throw new Error("Unable to submit W9 for approval.");
-      }
-
-      if (!alreadyApproved) {
-        if (!submissionId) {
-          submissionId = await findPendingSubmissionId(
-            formData.recipient,
-            year,
-          );
-        }
-        if (!submissionId) {
-          throw new Error(
-            "W9 submission could not be identified for approval.",
-          );
-        }
-
-        const approveRes = await authFetch("/admin/w9/approve", {
-          method: "PUT",
-          body: JSON.stringify({ id: submissionId }),
-        });
-        if (approveRes.status === 409) {
-          const approveData = await approveRes.json().catch(() => null);
-          if (approveData?.error !== "w9_not_pending") {
-            throw new Error("Unable to approve W9 submission.");
-          }
-        } else if (approveRes.status !== 200) {
-          throw new Error("Unable to approve W9 submission.");
-        }
-      }
-
-      toast({
-        title: "W9 Approved",
-        description: "Recipient W9 is approved. Continuing transfer.",
-      });
-
-      setW9Reason(null);
-      setW9Year(null);
-      setW9Email(email);
-      clearError();
-      setStep("sending");
-      await executeSend({
-        recipient: formData.recipient,
-        amount: formData.amount,
-        memo: formData.memo,
-        successToast: `Successfully sent ${formData.amount} ${tokenSymbol} to ${formData.recipient.slice(0, 6)}...${formData.recipient.slice(-4)}`,
-        onSuccess: async () => {
-          await finalizePrimarySend();
-        },
-      });
-    } catch (err) {
-      setStep("error");
-      setErrorFromSource(
-        "w9_approval",
-        err instanceof Error
-          ? err.message
-          : "Failed to approve W9. Please try again.",
-      );
-    } finally {
-      setW9Submitting(false);
-    }
-  };
+  // The inline "approve and send" flow that used to live here is gone.
+  //
+  // It called /w9/submit then /admin/w9/approve, which let an admin create and
+  // immediately approve a W-9 that nobody had filled in — the control signed
+  // off on itself, against an endpoint anyone on the internet could also call.
+  //
+  // Admin sends now preflight against /admin/w9/precheck. If the recipient owes
+  // a form the send is refused, they are asked for one, and the admin sends
+  // again once it is on file. There is no path from this modal to clearing
+  // somebody's tax obligation.
 
   const copyHash = async () => {
     try {
@@ -984,33 +848,27 @@ export function SendCryptoModal({
     if (user?.isAdmin) {
       try {
         const amountWei = toAmountWei(formData.amount);
-        const res = await authFetch("/w9/check", {
+        const res = await authFetch("/admin/w9/precheck", {
           method: "POST",
           body: JSON.stringify({
-            from_address: wallet.address,
-            to_address: normalizedRecipient,
-            amount: amountWei.toString(),
+            address: normalizedRecipient,
+            amount_base: amountWei.toString(),
           }),
         });
 
+        // Refused, not held: this transfer is signed in the browser from the
+        // admin's own wallet, so the backend never holds the money and cannot
+        // escrow it. The recipient has been asked for a form; the admin sends
+        // again once it is on file.
         if (res.status === 403) {
           const data = await res.json().catch(() => null);
-          const reason: "w9_required" | "w9_pending" =
-            data?.reason === "w9_pending" ? "w9_pending" : "w9_required";
-          const email =
-            typeof data?.email === "string" && data.email.trim()
-              ? data.email.trim()
-              : null;
-
-          setW9Reason(reason);
-          setW9Year(typeof data?.year === "number" ? data.year : null);
-          setW9Email(email);
-          setW9EmailInput(email || "");
+          setW9Reason("w9_required");
+          setW9Year(typeof data?.tax_year === "number" ? data.tax_year : null);
           setErrorFromSource(
             "w9_preflight",
-            reason === "w9_pending"
-              ? "W9 submission is pending approval. Transfers are blocked until approved."
-              : "W9 required before sending to this wallet.",
+            typeof data?.message === "string" && data.message.trim()
+              ? data.message.trim()
+              : "This person needs a W-9 on file before they can be paid.",
           );
           setStep("error");
           return;
@@ -1019,7 +877,7 @@ export function SendCryptoModal({
         if (res.status !== 200) {
           setErrorFromSource(
             "w9_preflight",
-            `Unable to validate W9 compliance. /w9/check returned HTTP ${res.status}.`,
+            `Unable to check the recipient's tax status. /admin/w9/precheck returned HTTP ${res.status}.`,
           );
           setStep("error");
           return;
@@ -1027,7 +885,7 @@ export function SendCryptoModal({
       } catch (err) {
         setErrorFromSource(
           "w9_preflight",
-          `Unable to validate W9 compliance. /w9/check failed before a response was handled: ${getUnknownErrorMessage(err)}`,
+          `Unable to check the recipient's tax status: ${getUnknownErrorMessage(err)}`,
         );
         setStep("error");
         return;
@@ -1688,72 +1546,31 @@ export function SendCryptoModal({
                 <AlertTriangle className="h-8 w-8 text-amber-600 dark:text-amber-400" />
               </div>
               <div className="text-center space-y-2">
-                <h3 className="text-lg font-semibold">W9 Approval Required</h3>
-                <p className="text-sm text-muted-foreground break-all">
-                  <span className="font-mono">{formData.recipient}</span> needs
-                  to have an approved W9 form in order to receive more {tokenSymbol}.
-                </p>
+                <h3 className="text-lg font-semibold">W-9 needed first</h3>
                 <p className="text-sm text-muted-foreground">
-                  To pre-approve this user&apos;s W9 form, click approve below.
+                  {error ||
+                    "This person needs a W-9 on file before they can be paid."}
                 </p>
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="w9-email" className="text-sm font-medium">
-                  Recipient Email
-                </Label>
-                <Input
-                  id="w9-email"
-                  type="email"
-                  value={w9EmailInput}
-                  onChange={(e) => setW9EmailInput(e.target.value)}
-                  placeholder="user@example.com"
-                  className="h-11"
-                />
                 <p className="text-xs text-muted-foreground">
-                  {w9Email
-                    ? "Email returned by the W9 preflight. You can edit it before approving."
-                    : "No email returned by the W9 preflight. Saved contacts are not checked for email."}
+                  {/* Says plainly that the admin has nothing to do here but wait,
+                      which is the point of removing the inline approve button. */}
+                  We&apos;ve asked them to complete it in the app. Send again once
+                  it&apos;s in — you&apos;ll be able to see their status in Tax &amp;
+                  Escrow.
                 </p>
               </div>
-
-              {error && (
-                <div className="flex gap-2 text-red-600 text-sm p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
-                  <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
-                  <div className="space-y-1">
-                    <p>{error}</p>
-                    {errorSource && (
-                      <p className="text-xs text-red-500/80 dark:text-red-300/80">
-                        Source: {SEND_ERROR_SOURCE_LABELS[errorSource]}
-                      </p>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              <div className="flex flex-col gap-3 pt-2">
-                <Button
-                  onClick={handleApproveAndSend}
-                  className="w-full h-11"
-                  disabled={w9Submitting}
-                >
-                  {w9Submitting ? "Approving..." : "Approve & Send"}
-                </Button>
-                <Button
-                  variant="outline"
-                  onClick={() => {
-                    setStep("form");
-                    clearError();
-                    setW9Reason(null);
-                    setW9Year(null);
-                    setW9EmailInput("");
-                  }}
-                  className="w-full h-11 bg-transparent"
-                  disabled={w9Submitting}
-                >
-                  Cancel
-                </Button>
-              </div>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setStep("form");
+                  clearError();
+                  setW9Reason(null);
+                  setW9Year(null);
+                }}
+                className="w-full h-11 bg-transparent"
+              >
+                Back
+              </Button>
             </div>
           );
         }
@@ -1770,19 +1587,6 @@ export function SendCryptoModal({
                 <p className="mt-2 text-xs text-muted-foreground">
                   Source: {SEND_ERROR_SOURCE_LABELS[errorSource]}
                 </p>
-              )}
-              {(errorSource === "w9_preflight" ||
-                errorSource === "w9_approval") && (
-                w9Email ? (
-                  <p className="text-sm mt-2">
-                    Recipient email returned by W9 flow:{" "}
-                    <span className="font-medium">{w9Email}</span>
-                  </p>
-                ) : (
-                  <p className="text-sm mt-2 text-muted-foreground">
-                    No email was returned by the W9 flow.
-                  </p>
-                )
               )}
             </div>
             <div className="flex flex-col gap-3">

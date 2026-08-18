@@ -9,11 +9,13 @@ import (
 	"github.com/SFLuv/app/backend/clientconfig"
 	"github.com/SFLuv/app/backend/db"
 	"github.com/SFLuv/app/backend/logger"
+	"github.com/SFLuv/app/backend/w9provider"
 )
 
 type AppService struct {
 	db           *db.AppDB
-	w9           *W9Service
+	payouts      *PayoutService
+	w9Provider   w9provider.Provider
 	bot          *BotService
 	redeemer     *RedeemerService
 	minter       *MinterService
@@ -24,8 +26,8 @@ type AppService struct {
 	ponderDb *db.PonderDB
 }
 
-func NewAppService(db *db.AppDB, logger *logger.LogCloser, w9 *W9Service, clientConfig *clientconfig.Config) *AppService {
-	return &AppService{db: db, logger: logger, w9: w9, clientConfig: clientConfig}
+func NewAppService(db *db.AppDB, logger *logger.LogCloser, payouts *PayoutService, w9Provider w9provider.Provider, clientConfig *clientconfig.Config) *AppService {
+	return &AppService{db: db, logger: logger, payouts: payouts, w9Provider: w9Provider, clientConfig: clientConfig}
 }
 
 // SetPonderDB gives the service read access to the indexer's database, which

@@ -85,6 +85,28 @@ func (s *WorkflowMaintenanceScheduler) RunOnce(ctx context.Context) {
 	s.finalizeSettledWorkflows(ctx)
 	s.pruneResolvedNotificationReads(ctx)
 	s.runVolunteerMaintenance(ctx)
+	s.runTaxMaintenance(ctx)
+}
+
+// runTaxMaintenance is the half of the W9 system that is driven by time rather
+// than by a request: it asks the vendor about outstanding filings, releases
+// anything completed, ends escrow windows that have run out, repairs holds that
+// should already have been released, and sends the reminders.
+//
+// It lives on this timer rather than its own because the semantics match — this
+// scheduler already exists to finish work that was interrupted, and it starts
+// shortly after boot for exactly that reason.
+//
+// Without it none of that happens at all: money would be held indefinitely with
+// no nudge, no expiry, and no recovery from a dropped webhook.
+func (s *WorkflowMaintenanceScheduler) runTaxMaintenance(parent context.Context) {
+	if s.app == nil || s.app.payouts == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), workflowReconcileSweepTimeout)
+	defer cancel()
+
+	s.app.payouts.RunW9Maintenance(ctx)
 }
 
 // runVolunteerMaintenance advances volunteer series whose latest occurrence has

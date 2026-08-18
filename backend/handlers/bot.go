@@ -27,7 +27,7 @@ type BotService struct {
 	db            *db.BotDB
 	appDb         *db.AppDB
 	bot           bot.IBot
-	w9            *W9Service
+	payouts       *PayoutService
 	activeChainID int64
 	readRPCURL    string
 	// app is a back-reference used for shared concerns that live on AppService
@@ -45,12 +45,12 @@ func (s *BotService) SetAppService(a *AppService) {
 
 var redeemCodeUUIDPattern = regexp.MustCompile(`(?i)[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}`)
 
-func NewBotService(db *db.BotDB, appDb *db.AppDB, bot bot.IBot, w9 *W9Service, activeChainID int64, readRPCURL string) *BotService {
+func NewBotService(db *db.BotDB, appDb *db.AppDB, bot bot.IBot, payouts *PayoutService, activeChainID int64, readRPCURL string) *BotService {
 	return &BotService{
 		db:            db,
 		appDb:         appDb,
 		bot:           bot,
-		w9:            w9,
+		payouts:       payouts,
 		activeChainID: activeChainID,
 		readRPCURL:    readRPCURL,
 	}
@@ -531,47 +531,11 @@ func (s *BotService) Redeem(w http.ResponseWriter, r *http.Request) {
 	request.Address = s.resolveRedeemPayoutAddress(resolveAddressCtx, request.Address)
 	resolveAddressCancel()
 
-	complianceCtx, complianceCancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer complianceCancel()
-
-	amount := uint64(0)
-	if s.w9 != nil {
-		decimalString := os.Getenv("TOKEN_DECIMALS")
-		decimals, ok := new(big.Int).SetString(decimalString, 10)
-		if !ok {
-			w.WriteHeader(http.StatusInternalServerError)
-			return
-		}
-
-		redeemInfoCtx, redeemInfoCancel := context.WithTimeout(context.Background(), 8*time.Second)
-		var amountErr error
-		amount, amountErr = s.db.GetCodeAmount(redeemInfoCtx, request.Code)
-		redeemInfoCancel()
-		if amountErr != nil {
-			if amountErr == pgx.ErrNoRows {
-				w.WriteHeader(http.StatusBadRequest)
-				w.Write([]byte("code redeemed"))
-				return
-			}
-			fmt.Printf("error loading redemption amount for code %s: %s\n", request.Code, amountErr)
-			w.WriteHeader(http.StatusInternalServerError)
-			return
-		}
-
-		amountWei := new(big.Int).Mul(decimals, big.NewInt(int64(amount)))
-		resp, err := s.w9.CheckCompliance(complianceCtx, os.Getenv("BOT_ADDRESS"), request.Address, amountWei)
-		if err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			return
-		}
-		if !resp.Allowed {
-			bytes, _ := json.Marshal(resp)
-			w.WriteHeader(http.StatusForbidden)
-			w.Write(bytes)
-			return
-		}
-	}
-
+	// The tax check no longer happens here. A volunteer who has earned past the
+	// reporting threshold used to be refused at this point, with the code left
+	// unredeemed and nothing to show for the shift they had just worked. Now the
+	// scan always succeeds: the code is consumed, and PayoutService decides
+	// whether the money goes out or is held pending a W-9.
 	redeemCtx, redeemCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer redeemCancel()
 
@@ -597,9 +561,30 @@ func (s *BotService) Redeem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.bot.Send(amount, request.Address); err != nil {
-		fmt.Printf("error sending redeem payout for code %s address %s: %s\n", request.Code, request.Address, err)
-		if bot.ShouldRevertRedemption(err) {
+	multiplier, multiplierErr := getTokenMultiplier()
+	if multiplierErr != nil {
+		fmt.Printf("error reading token decimals for code %s: %s\n", request.Code, multiplierErr)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	amountBase := new(big.Int).Mul(multiplier, new(big.Int).SetUint64(amount))
+
+	payoutCtx, payoutCancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer payoutCancel()
+
+	result, payoutErr := s.payouts.Pay(payoutCtx, PayoutRequest{
+		IdempotencyKey:   "redeem:" + request.Code + ":" + request.Address,
+		RecipientAddress: request.Address,
+		AmountBase:       amountBase,
+		Source:           db.PayoutSourceRedemptionCode,
+		SourceRef:        request.Code,
+	})
+	if payoutErr != nil {
+		fmt.Printf("error sending redeem payout for code %s address %s: %s\n", request.Code, request.Address, payoutErr)
+		// Only a genuine send failure releases the code. Escrow is a success —
+		// undoing the redemption there would let the same reward be claimed
+		// twice, once now and once after the W-9 lands.
+		if bot.ShouldRevertRedemption(payoutErr) {
 			undoCtx, undoCancel := context.WithTimeout(context.Background(), 10*time.Second)
 			if undoErr := s.db.UndoRedeem(undoCtx, request.Code, request.Address, s.chainID()); undoErr != nil {
 				fmt.Printf("error undoing redemption for code %s address %s after payout failure: %s\n", request.Code, request.Address, undoErr)
@@ -607,6 +592,22 @@ func (s *BotService) Redeem(w http.ResponseWriter, r *http.Request) {
 			undoCancel()
 		}
 		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	// Held money is reported as its own outcome rather than as a plain success,
+	// so the app can explain what happened instead of showing a reward that
+	// never arrives.
+	if result != nil && result.Escrowed {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_ = json.NewEncoder(w).Encode(structs.RedeemEscrowedResponse{
+			Status:      "escrowed",
+			Reason:      "w9_required",
+			AmountSfluv: formatSfluvBase(amountBase),
+			TaxYear:     result.TaxYear,
+			Message:     "Reward saved. Complete your W-9 in the SFLuv app and we'll send it over.",
+		})
 		return
 	}
 

@@ -2634,6 +2634,20 @@ func (s *AppDB) CreateTables() error {
 			candidate_emails
 		WHERE
 			TRIM(COALESCE(email, '')) <> ''
+		-- Rows written under an older id scheme carry an id that is not
+		-- MD5(user_id:email), so ON CONFLICT (id) below does not see them and
+		-- the insert then trips the (user_id, email_normalized) unique index
+		-- instead — which aborts CreateTables and, with it, every migration.
+		-- The address is already recorded for that user either way, so skipping
+		-- it loses nothing.
+		AND NOT EXISTS (
+			SELECT 1
+			FROM user_verified_emails existing
+			WHERE existing.active = TRUE
+			AND existing.user_id = candidate_emails.user_id
+			AND existing.email_normalized = LOWER(candidate_emails.email)
+			AND existing.id <> MD5(candidate_emails.user_id || ':' || LOWER(candidate_emails.email))
+		)
 		ON CONFLICT (id) DO UPDATE
 		SET
 			email = EXCLUDED.email,
@@ -2646,6 +2660,12 @@ func (s *AppDB) CreateTables() error {
 	`)
 	if err != nil {
 		return fmt.Errorf("error backfilling verified email rows: %s", err)
+	}
+
+	// Tax and payout tables. Shared with migration 1.41 so a fresh database and
+	// an upgraded one get identical schemas.
+	if _, err := s.db.Exec(context.Background(), TaxSchemaDDL); err != nil {
+		return fmt.Errorf("error creating tax and payout tables: %s", err)
 	}
 
 	_, err = s.db.Exec(context.Background(), `

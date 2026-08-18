@@ -96,12 +96,7 @@ func (a *AppDB) GetLocation(ctx context.Context, id uint64) (*structs.PublicLoca
 			COALESCE(l.google_id, ''),
 			l.name,
 			l.approval,
-			COALESCE(
-				NULLIF(TRIM(default_payment_wallet.wallet_address), ''),
-				NULLIF(TRIM(u.primary_wallet_address), ''),
-				NULLIF(TRIM(legacy_wallet.smart_address), ''),
-				''
-			) AS pay_to_address,
+			COALESCE(NULLIF(TRIM(default_payment_wallet.wallet_address), ''), '') AS pay_to_address,
 			COALESCE(
 				NULLIF(TRIM(l.tipping_wallet_address), ''),
 				''
@@ -143,28 +138,6 @@ func (a *AppDB) GetLocation(ctx context.Context, id uint64) (*structs.PublicLoca
 				lpw.id ASC
 			LIMIT 1
 		) default_payment_wallet
-			ON TRUE
-		LEFT JOIN LATERAL (
-			SELECT
-				w.smart_address
-			FROM
-				wallets w
-			WHERE
-				w.owner = l.owner_id
-			AND
-				w.active = TRUE
-			AND
-				w.is_eoa = FALSE
-			AND
-				w.smart_index = 0
-			AND
-				w.smart_address IS NOT NULL
-			AND
-				TRIM(w.smart_address) <> ''
-			ORDER BY
-				w.id ASC
-			LIMIT 1
-		) legacy_wallet
 			ON TRUE
 		WHERE l.id = $1
 		AND l.active = TRUE
@@ -254,12 +227,7 @@ func (s *AppDB) GetLocations(ctx context.Context, r *structs.LocationsPageReques
 			l.id,
 			COALESCE(l.google_id, ''),
 			l.name,
-			COALESCE(
-				NULLIF(TRIM(default_payment_wallet.wallet_address), ''),
-				NULLIF(TRIM(u.primary_wallet_address), ''),
-				NULLIF(TRIM(legacy_wallet.smart_address), ''),
-				''
-			) AS pay_to_address,
+			COALESCE(NULLIF(TRIM(default_payment_wallet.wallet_address), ''), '') AS pay_to_address,
 			COALESCE(
 				NULLIF(TRIM(l.tipping_wallet_address), ''),
 				''
@@ -301,28 +269,6 @@ func (s *AppDB) GetLocations(ctx context.Context, r *structs.LocationsPageReques
 				lpw.id ASC
 			LIMIT 1
 		) default_payment_wallet
-			ON TRUE
-		LEFT JOIN LATERAL (
-			SELECT
-				w.smart_address
-			FROM
-				wallets w
-			WHERE
-				w.owner = l.owner_id
-			AND
-				w.active = TRUE
-			AND
-				w.is_eoa = FALSE
-			AND
-				w.smart_index = 0
-			AND
-				w.smart_address IS NOT NULL
-			AND
-				TRIM(w.smart_address) <> ''
-			ORDER BY
-				w.id ASC
-			LIMIT 1
-		) legacy_wallet
 			ON TRUE
 		WHERE l.approval = TRUE
 		AND l.active = TRUE
@@ -443,12 +389,7 @@ func (s *AppDB) GetAuthedLocations(ctx context.Context, r *structs.LocationsPage
 			l.service_stations,
 			l.tablet_model,
 			l.messaging_service,
-			COALESCE(
-				NULLIF(TRIM(default_payment_wallet.wallet_address), ''),
-				NULLIF(TRIM(u.primary_wallet_address), ''),
-				NULLIF(TRIM(legacy_wallet.smart_address), ''),
-				''
-			) AS pay_to_address,
+			COALESCE(NULLIF(TRIM(default_payment_wallet.wallet_address), ''), '') AS pay_to_address,
 			COALESCE(
 				NULLIF(TRIM(l.tipping_wallet_address), ''),
 				''
@@ -476,28 +417,6 @@ func (s *AppDB) GetAuthedLocations(ctx context.Context, r *structs.LocationsPage
 				lpw.id ASC
 			LIMIT 1
 		) default_payment_wallet
-			ON TRUE
-		LEFT JOIN LATERAL (
-			SELECT
-				w.smart_address
-			FROM
-				wallets w
-			WHERE
-				w.owner = l.owner_id
-			AND
-				w.active = TRUE
-			AND
-				w.is_eoa = FALSE
-			AND
-				w.smart_index = 0
-			AND
-				w.smart_address IS NOT NULL
-			AND
-				TRIM(w.smart_address) <> ''
-			ORDER BY
-				w.id ASC
-			LIMIT 1
-		) legacy_wallet
 			ON TRUE
 		WHERE l.active = TRUE
 		AND l.location_kind = 'merchant'
@@ -1046,12 +965,7 @@ func (a *AppDB) GetLocationsByUser(ctx context.Context, userId string) ([]*struc
 		l.service_stations,
 		l.tablet_model,
 		l.messaging_service,
-		COALESCE(
-			NULLIF(TRIM(default_payment_wallet.wallet_address), ''),
-			NULLIF(TRIM(u.primary_wallet_address), ''),
-			NULLIF(TRIM(legacy_wallet.smart_address), ''),
-			''
-		) AS pay_to_address,
+		COALESCE(NULLIF(TRIM(default_payment_wallet.wallet_address), ''), '') AS pay_to_address,
 		COALESCE(
 			NULLIF(TRIM(l.tipping_wallet_address), ''),
 			''
@@ -1080,28 +994,6 @@ func (a *AppDB) GetLocationsByUser(ctx context.Context, userId string) ([]*struc
 		LIMIT 1
 	) default_payment_wallet
 		ON TRUE
-	LEFT JOIN LATERAL (
-		SELECT
-			w.smart_address
-		FROM
-			wallets w
-		WHERE
-			w.owner = l.owner_id
-		AND
-			w.active = TRUE
-		AND
-			w.is_eoa = FALSE
-		AND
-			w.smart_index = 0
-		AND
-			w.smart_address IS NOT NULL
-		AND
-			TRIM(w.smart_address) <> ''
-		ORDER BY
-			w.id ASC
-		LIMIT 1
-		) legacy_wallet
-			ON TRUE
     WHERE l.owner_id = $1
 	AND l.active = TRUE
 	AND l.location_kind = 'merchant'

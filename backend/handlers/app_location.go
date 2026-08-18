@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/SFLuv/app/backend/db"
 	"github.com/SFLuv/app/backend/structs"
@@ -446,10 +447,30 @@ func (a *AppService) UpdateLocationWalletSettings(w http.ResponseWriter, r *http
 	_ = json.NewEncoder(w).Encode(location)
 }
 
+// Messages that name the offending location or wallet cannot be matched
+// exactly, but they are still the merchant's mistake to fix rather than a
+// server fault — without this they would surface as a 500 and lose their text.
+var locationWalletValidationPrefixes = []string{
+	"that wallet is already in use by ",
+	"that wallet is already this location's ",
+	"that wallet does not belong to this account",
+	"that wallet is a signing key, not a smart account",
+	"a location must always have a payment wallet",
+	"this account has no signing wallet",
+	"unknown wallet role ",
+}
+
 func containsLocationWalletValidationError(errMsg string) bool {
+	for _, prefix := range locationWalletValidationPrefixes {
+		if strings.HasPrefix(errMsg, prefix) {
+			return true
+		}
+	}
+
 	switch errMsg {
 	case
 		"only merchants can update merchant wallet settings",
+		"only merchants can change location wallets",
 		"payment wallet is required",
 		"payment wallet must be a valid ethereum address",
 		"default payment wallet requires at least one payment wallet",

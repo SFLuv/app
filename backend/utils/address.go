@@ -1,9 +1,11 @@
 package utils
 
+// Address list helpers. These outlived the W9 code they were written for: the
+// threshold reader that used to live here is gone, replaced by one that reads
+// the token's real decimals instead of an env var whose name claimed eighteen
+// when the token has six.
+
 import (
-	"fmt"
-	"math/big"
-	"os"
 	"strings"
 	"time"
 )
@@ -63,35 +65,6 @@ func IsAddressInList(address string, list []string) bool {
 		}
 	}
 	return false
-}
-
-func W9Threshold() (*big.Int, error) {
-	if weiOverride := os.Getenv("W9_LIMIT_WEI"); weiOverride != "" {
-		override, ok := new(big.Int).SetString(weiOverride, 10)
-		if !ok {
-			return nil, fmt.Errorf("invalid W9_LIMIT_WEI value %s", weiOverride)
-		}
-		return override, nil
-	}
-
-	decimalString := os.Getenv("TOKEN_DECIMALS")
-	if decimalString == "" {
-		return nil, fmt.Errorf("TOKEN_DECIMALS not set")
-	}
-	decimals, ok := new(big.Int).SetString(decimalString, 10)
-	if !ok {
-		return nil, fmt.Errorf("invalid TOKEN_DECIMALS value %s", decimalString)
-	}
-
-	if sfluvOverride := os.Getenv("W9_LIMIT_SFLUV"); sfluvOverride != "" {
-		override, ok := new(big.Int).SetString(sfluvOverride, 10)
-		if !ok {
-			return nil, fmt.Errorf("invalid W9_LIMIT_SFLUV value %s", sfluvOverride)
-		}
-		return new(big.Int).Mul(decimals, override), nil
-	}
-
-	return new(big.Int).Mul(decimals, big.NewInt(600)), nil
 }
 
 func CurrentYearBounds() (int, int64, int64) {

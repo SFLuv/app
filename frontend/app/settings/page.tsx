@@ -88,6 +88,26 @@ type MerchantLocationWalletDraft = {
   saving: boolean;
   error: string;
   success: string;
+  /** Role currently being swapped, or "" when the picker is closed. */
+  replacingRole: LocationWalletRole | "";
+  replaceOptions: AssignableWallet[];
+  replaceLoading: boolean;
+  replaceSelection: string;
+};
+
+type LocationWalletRole = "payment" | "tipping";
+
+/**
+ * One of the merchant's wallets, as offered when swapping the wallet behind a
+ * location. Unavailable wallets are shown too — "in use by Shop B" explains far
+ * more than an address quietly missing from the list.
+ */
+type AssignableWallet = {
+  address: string;
+  name: string;
+  in_use_by: string;
+  is_current: boolean;
+  available: boolean;
 };
 
 type MerchantLocationProfileDraft = {
@@ -780,6 +800,10 @@ export default function SettingsPage() {
       saving: false,
       error: "",
       success: "",
+      replacingRole: "",
+      replaceOptions: [],
+      replaceLoading: false,
+      replaceSelection: "",
     };
   };
 
@@ -1920,6 +1944,118 @@ export default function SettingsPage() {
     );
   };
 
+  /**
+   * Opens the swap picker and loads which of the merchant's wallets are free.
+   *
+   * The list has to come from the server rather than from the wallets already on
+   * screen: whether an address is available depends on every other location the
+   * merchant owns, which this page does not otherwise know about.
+   */
+  const handleOpenWalletReplace = async (
+    locationId: number,
+    role: LocationWalletRole,
+  ) => {
+    updateLocationWalletDraft(locationId, (current) => ({
+      ...current,
+      replacingRole: role,
+      replaceLoading: true,
+      replaceOptions: [],
+      replaceSelection: "",
+      error: "",
+      success: "",
+    }));
+
+    try {
+      const res = await authFetch(
+        `/locations/${locationId}/assignable-wallets?role=${role}`,
+      );
+      if (!res.ok) {
+        throw new Error(await res.text());
+      }
+      const body = (await res.json()) as { wallets: AssignableWallet[] };
+      updateLocationWalletDraft(locationId, (current) => ({
+        ...current,
+        replaceOptions: body.wallets || [],
+        replaceLoading: false,
+      }));
+    } catch {
+      updateLocationWalletDraft(locationId, (current) => ({
+        ...current,
+        replaceLoading: false,
+        replacingRole: "",
+        error: "Could not load your wallets. Try again.",
+      }));
+    }
+  };
+
+  const handleCloseWalletReplace = (locationId: number) => {
+    updateLocationWalletDraft(locationId, (current) => ({
+      ...current,
+      replacingRole: "",
+      replaceOptions: [],
+      replaceSelection: "",
+    }));
+  };
+
+  /**
+   * Performs the swap. One call, so the location is never left without a wallet:
+   * the server retires the old address and attaches the new one in a single
+   * transaction, or does neither.
+   */
+  const handleReplaceLocationWallet = async (
+    locationId: number,
+    role: LocationWalletRole,
+    mode: "existing" | "new",
+    address?: string,
+  ) => {
+    const draft = locationWalletDrafts[locationId];
+    if (draft?.saving) return;
+
+    updateLocationWalletDraft(locationId, (current) => ({
+      ...current,
+      saving: true,
+      error: "",
+      success: "",
+    }));
+
+    try {
+      const res = await authFetch(`/locations/${locationId}/wallets/${role}`, {
+        method: "PUT",
+        body: JSON.stringify({ mode, address: address || "" }),
+      });
+      if (!res.ok) {
+        throw new Error(
+          (await res.text()) || "Could not change this location's wallet.",
+        );
+      }
+
+      const updatedLocation = (await res.json()) as AuthedLocation;
+      setUserLocations((current) =>
+        current.map((location) =>
+          location.id === updatedLocation.id ? updatedLocation : location,
+        ),
+      );
+      updateLocationWalletDraft(locationId, () => ({
+        ...buildLocationWalletDraft(updatedLocation),
+        saving: false,
+        error: "",
+        success:
+          mode === "new"
+            ? "New wallet created and attached."
+            : "Wallet replaced.",
+      }));
+    } catch (err) {
+      updateLocationWalletDraft(locationId, (current) => ({
+        ...current,
+        saving: false,
+        error:
+          err instanceof Error
+            ? err.message
+            : "Could not change this location's wallet.",
+      }));
+    }
+  };
+
   const handleRemoveLocationPaymentWallet = async (
     locationId: number,
     walletAddress: string,
@@ -1930,6 +2066,13 @@ export default function SettingsPage() {
     const nextPaymentWalletAddresses = draft.paymentWalletAddresses.filter(
       (address) => address.toLowerCase() !== walletAddress.toLowerCase(),
     );
+
+    // Removing the last wallet would leave the shop with nowhere for money to
+    // land. The button offers Replace instead; this is the backstop.
+    if (nextPaymentWalletAddresses.length === 0) {
+      void handleOpenWalletReplace(locationId, "payment");
+      return;
+    }
 
     const nextDraft: MerchantLocationWalletDraft = {
       ...draft,
@@ -4044,25 +4187,130 @@ export default function SettingsPage() {
                                                 Set default
                                               </Button>
                                             )}
-                                            <Button
-                                              type="button"
-                                              size="sm"
-                                              variant="outline"
-                                              onClick={() =>
-                                                void handleRemoveLocationPaymentWallet(
-                                                  loc.id,
-                                                  walletAddress,
-                                                )
-                                              }
-                                              disabled={walletDraft.saving}
-                                            >
-                                              Remove
-                                            </Button>
+                                            {walletDraft.paymentWalletAddresses.length === 1 ? (
+                                              // The only wallet: a shop must
+                                              // always have somewhere to be
+                                              // paid, so this swaps rather
+                                              // than detaches.
+                                              <Button
+                                                type="button"
+                                                size="sm"
+                                                variant="outline"
+                                                onClick={() =>
+                                                  void handleOpenWalletReplace(
+                                                    loc.id,
+                                                    "payment",
+                                                  )
+                                                }
+                                                disabled={walletDraft.saving}
+                                              >
+                                                Replace
+                                              </Button>
+                                            ) : (
+                                              <Button
+                                                type="button"
+                                                size="sm"
+                                                variant="outline"
+                                                onClick={() =>
+                                                  void handleRemoveLocationPaymentWallet(
+                                                    loc.id,
+                                                    walletAddress,
+                                                  )
+                                                }
+                                                disabled={walletDraft.saving}
+                                              >
+                                                Remove
+                                              </Button>
+                                            )}
                                           </div>
                                         </div>
                                       ))
                                     )}
                                   </div>
+
+                                  {walletDraft.replacingRole === "payment" && (
+                                    <div className="mt-4 rounded-lg border border-border bg-secondary/40 p-3">
+                                      <p className="text-sm font-medium text-black dark:text-white">
+                                        Choose a new payment wallet
+                                      </p>
+                                      <p className="mt-1 text-xs text-muted-foreground">
+                                        This location keeps taking payments the
+                                        whole time — the old wallet is swapped
+                                        out only once the new one is attached.
+                                      </p>
+
+                                      {walletDraft.replaceLoading ? (
+                                        <p className="mt-3 text-xs text-muted-foreground">
+                                          Loading your wallets...
+                                        </p>
+                                      ) : (
+                                        <div className="mt-3 space-y-2">
+                                          {walletDraft.replaceOptions
+                                            .filter((option) => !option.is_current)
+                                            .map((option) => (
+                                              <button
+                                                key={`${loc.id}-swap-${option.address}`}
+                                                type="button"
+                                                disabled={
+                                                  !option.available || walletDraft.saving
+                                                }
+                                                onClick={() =>
+                                                  void handleReplaceLocationWallet(
+                                                    loc.id,
+                                                    "payment",
+                                                    "existing",
+                                                    option.address,
+                                                  )
+                                                }
+                                                className="flex w-full items-center justify-between gap-3 rounded-md border border-border bg-background px-3 py-2 text-left transition hover:border-[#eb6c6c] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:border-border"
+                                              >
+                                                <span className="min-w-0">
+                                                  <span className="block truncate text-sm text-black dark:text-white">
+                                                    {option.name}
+                                                  </span>
+                                                  <span className="block break-all font-mono text-[11px] text-muted-foreground">
+                                                    {formatManagedAddress(option.address)}
+                                                  </span>
+                                                </span>
+                                                {option.in_use_by && (
+                                                  <span className="shrink-0 text-[11px] text-muted-foreground">
+                                                    In use by {option.in_use_by}
+                                                  </span>
+                                                )}
+                                              </button>
+                                            ))}
+
+                                          <div className="flex flex-wrap gap-2 pt-1">
+                                            <Button
+                                              type="button"
+                                              size="sm"
+                                              onClick={() =>
+                                                void handleReplaceLocationWallet(
+                                                  loc.id,
+                                                  "payment",
+                                                  "new",
+                                                )
+                                              }
+                                              disabled={walletDraft.saving}
+                                            >
+                                              Create a new wallet
+                                            </Button>
+                                            <Button
+                                              type="button"
+                                              size="sm"
+                                              variant="outline"
+                                              onClick={() =>
+                                                handleCloseWalletReplace(loc.id)
+                                              }
+                                              disabled={walletDraft.saving}
+                                            >
+                                              Cancel
+                                            </Button>
+                                          </div>
+                                        </div>
+                                      )}
+                                    </div>
+                                  )}
 
                                   <div className="mt-4 space-y-2">
                                     <Label

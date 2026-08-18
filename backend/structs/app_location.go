@@ -169,6 +169,36 @@ type LocationWalletSettingsUpdateRequest struct {
 	TippingWalletAddress        string   `json:"tipping_wallet_address"`
 }
 
+// AssignableWallet is one of the merchant's wallets, as offered when they swap
+// the address filling a role at a location. Unavailable wallets are listed too,
+// with the reason, because "in use by Shop B" explains far more than an address
+// quietly missing from the list.
+type AssignableWallet struct {
+	Address string `json:"address"`
+	Name    string `json:"name"`
+	// InUseBy names whatever already holds this address, or is empty when free.
+	InUseBy string `json:"in_use_by"`
+	// IsCurrent marks the address filling this role at this location right now.
+	IsCurrent bool `json:"is_current"`
+	// Available is true only when the wallet can be selected.
+	Available bool `json:"available"`
+}
+
+// LocationWalletReplaceRequest swaps the wallet filling one role at a location.
+//
+// There is no "detach" mode for payments on purpose: a location must always have
+// somewhere for money to land, so unhooking is always a replacement. Mode "new"
+// derives a fresh address from the account factory; mode "existing" points at a
+// wallet the merchant already owns and no other location is using.
+type LocationWalletReplaceRequest struct {
+	Mode    string `json:"mode"`
+	Address string `json:"address"`
+}
+
+type AssignableWalletsResponse struct {
+	Wallets []AssignableWallet `json:"wallets"`
+}
+
 type PublicLocation struct {
 	ID           uint               `json:"id"`
 	GoogleID     string             `json:"google_id"`

@@ -32,7 +32,6 @@ const Page = () => {
 
   const [error, setError] = useState<string | null>();
   const [success, setSuccess] = useState<boolean>(false);
-  const [w9Url, setW9Url] = useState<string | null>(null);
   const [w9Email, setW9Email] = useState<string | null>(null);
   const [redeemAccount, setRedeemAccount] = useState<string | null>(null)
   const [continueWithWebWalletRequested, setContinueWithWebWalletRequested] = useState<boolean>(false)
@@ -63,8 +62,7 @@ const Page = () => {
     Boolean(user)
   const isFinalErrorState = Boolean(
     error &&
-    error !== "W9 Required" &&
-    error !== "W9 Pending"
+    error !== "Reward Held"
   )
   const shouldAutoRedirect = success || isFinalErrorState
   const markLoginRedirectPending = useCallback(() => {
@@ -86,25 +84,6 @@ const Page = () => {
     }
     setLoginRedirectPending(false)
   }, [])
-  const buildW9Url = (baseUrl: string, walletAddress: string, email?: string | null) => {
-    if (!baseUrl) return baseUrl
-    if (!walletAddress) return baseUrl
-    try {
-      const url = new URL(baseUrl)
-      url.searchParams.set("wallet", walletAddress)
-      if (email) {
-        url.searchParams.set("email", email)
-      }
-      return url.toString()
-    } catch {
-      const encoded = encodeURIComponent(walletAddress)
-      const withWallet = baseUrl.includes("?") ? `${baseUrl}&wallet=${encoded}` : `${baseUrl}?wallet=${encoded}`
-      if (!email) return withWallet
-      const encodedEmail = encodeURIComponent(email)
-      return `${withWallet}&email=${encodedEmail}`
-    }
-  }
-
   const sendBotRequest = async (address: string, overrideReturnTo?: string) => {
     // let verified = verifyAccountOwnership()
     //implement real verification
@@ -127,25 +106,15 @@ const Page = () => {
         clearTimeout(timeoutId)
       }
 
+      // A held reward is a success with a condition, not a failure: the code
+      // was consumed and the money is the volunteer's, waiting on a W-9.
+      if (res.status === 202) {
+        setError("Reward Held")
+        return
+      }
+
       if (res.status != 200) {
         let text = await res.text()
-        try {
-          const data = JSON.parse(text)
-          if (data?.reason === "w9_required" || data?.error === "w9_required") {
-            setW9Url(data?.w9_url || null)
-            setW9Email(data?.email || null)
-            setError("W9 Required")
-            return
-          }
-          if (data?.reason === "w9_pending" || data?.error === "w9_pending") {
-            setW9Url(null)
-            setW9Email(data?.email || null)
-            setError("W9 Pending")
-            return
-          }
-        } catch {
-          // ignore json parse error
-        }
         switch (text) {
         case "code not started":
           setError("Code not active yet.")
@@ -432,8 +401,7 @@ const Page = () => {
     Boolean(code) &&
     !authenticated &&
     !success &&
-    error !== "W9 Required" &&
-    error !== "W9 Pending"
+    error !== "Reward Held"
 
   useEffect(() => {
     if (!shouldAutoRedirect) {
@@ -547,29 +515,14 @@ const Page = () => {
           <h2 className="text-3xl font-bold text-black dark:text-white">
             {error}
           </h2>
-          {error === "W9 Required" && (
+          {error === "Reward Held" && (
             <div className="mt-4 space-y-3 text-sm text-muted-foreground">
               <p>
-                You have reached the $600 annual SFLuv earnings threshold. We are required to collect a W9 before any
-                additional payouts can be issued.
+                Your reward has been saved — it is yours, and no one else can claim it. You have earned enough
+                this year that we need a W-9 on file before we can send it.
               </p>
-              {w9Url && (
-                <a
-                  href={buildW9Url(w9Url, redeemAccount || sigAuthAccount || "", w9Email)}
-                  className="inline-flex w-full items-center justify-center rounded-md bg-[#eb6c6c] px-16 py-10 text-2xl font-semibold text-white sm:w-auto sm:px-12 sm:py-8 sm:text-xl"
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  Submit W9
-                </a>
-              )}
-            </div>
-          )}
-          {error === "W9 Pending" && (
-            <div className="mt-4 space-y-3 text-sm text-muted-foreground">
               <p>
-                Your W9 form is being processed. Once approved by an admin, scan this QR code again to receive your
-                SFLuv.
+                Open the SFLuv app to complete the form. Your rewards go out as soon as it is in.
               </p>
             </div>
           )}

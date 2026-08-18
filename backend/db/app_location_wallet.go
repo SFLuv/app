@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -152,17 +153,20 @@ func (a *AppDB) UpdateLocationWalletSettings(ctx context.Context, userID string,
 		}
 	}
 
+	// A location must always have somewhere for money to land. This used to be
+	// tolerated because the read path fell back to the owner's primary wallet;
+	// now that it does not, an empty list is a shop that silently drops payments.
+	// Removing the last wallet is therefore not an edit — it is a replacement,
+	// and ReplaceLocationWallet is the only way to do it.
 	if len(normalizedPaymentWallets) == 0 {
-		if normalizedDefaultPaymentWallet != "" {
-			return nil, fmt.Errorf("default payment wallet requires at least one payment wallet")
-		}
-	} else {
-		if normalizedDefaultPaymentWallet == "" {
-			normalizedDefaultPaymentWallet = normalizedPaymentWallets[0]
-		}
-		if !containsAddress(normalizedPaymentWallets, normalizedDefaultPaymentWallet) {
-			return nil, fmt.Errorf("default payment wallet must be one of the payment wallets")
-		}
+		return nil, fmt.Errorf("payment wallet is required")
+	}
+
+	if normalizedDefaultPaymentWallet == "" {
+		normalizedDefaultPaymentWallet = normalizedPaymentWallets[0]
+	}
+	if !containsAddress(normalizedPaymentWallets, normalizedDefaultPaymentWallet) {
+		return nil, fmt.Errorf("default payment wallet must be one of the payment wallets")
 	}
 
 	normalizedTippingWallet := strings.TrimSpace(request.TippingWalletAddress)
@@ -176,6 +180,42 @@ func (a *AppDB) UpdateLocationWalletSettings(ctx context.Context, userID string,
 	for _, paymentWalletAddress := range normalizedPaymentWallets {
 		if normalizedTippingWallet != "" && strings.EqualFold(normalizedTippingWallet, paymentWalletAddress) {
 			return nil, fmt.Errorf("tipping wallet must be different from every payment wallet")
+		}
+	}
+
+	// One address, one role, across the whole estate. The database enforces that
+	// no two locations share a payment wallet, and none share a tipping wallet,
+	// but it cannot express the cross-role case — payment wallets live in
+	// location_payment_wallets and tipping wallets in a column on locations — so
+	// that half is checked here. Without it a merchant could point shop B's tips
+	// at shop A's till and quietly make both unreportable.
+	candidates := append([]string(nil), normalizedPaymentWallets...)
+	if normalizedTippingWallet != "" {
+		candidates = append(candidates, normalizedTippingWallet)
+	}
+	for _, candidate := range candidates {
+		var clashingLocation string
+		err := a.db.QueryRow(ctx, `
+			SELECT COALESCE(NULLIF(TRIM(l.name), ''), 'another location')
+			FROM locations l
+			WHERE l.active = TRUE
+			AND l.id <> $1
+			AND l.owner_id = $2
+			AND (
+				LOWER(TRIM(COALESCE(l.tipping_wallet_address, ''))) = LOWER($3)
+				OR EXISTS (
+					SELECT 1 FROM location_payment_wallets p
+					WHERE p.location_id = l.id AND p.active = TRUE
+					AND LOWER(TRIM(p.wallet_address)) = LOWER($3)
+				)
+			)
+			LIMIT 1;
+		`, locationID, userID, candidate).Scan(&clashingLocation)
+		if err == nil {
+			return nil, fmt.Errorf("that wallet is already in use by %s — each location needs its own payment and tipping wallets", clashingLocation)
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return nil, fmt.Errorf("error checking wallet uniqueness: %w", err)
 		}
 	}
 
@@ -200,16 +240,6 @@ func (a *AppDB) UpdateLocationWalletSettings(ctx context.Context, userID string,
 	}
 	if !locationExists {
 		return nil, pgx.ErrNoRows
-	}
-
-	if normalizedTippingWallet != "" && len(normalizedPaymentWallets) == 0 {
-		defaultPaymentWallet, err := getDefaultPrimaryRewardsAccountForUser(ctx, tx, userID)
-		if err != nil {
-			return nil, fmt.Errorf("error resolving default payment wallet: %w", err)
-		}
-		if defaultPaymentWallet != "" && strings.EqualFold(defaultPaymentWallet, normalizedTippingWallet) {
-			return nil, fmt.Errorf("tipping wallet must be different from the default payment wallet")
-		}
 	}
 
 	if _, err := tx.Exec(ctx, `

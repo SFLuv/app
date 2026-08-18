@@ -4950,44 +4950,60 @@ func collectWorkflowPayoutTargets(workflow *structs.Workflow) []workflowPayoutTa
 	return targets
 }
 
-func (a *AppService) attemptWorkflowPayoutTransfer(ctx context.Context, amount uint64, walletAddress string) (*big.Int, *big.Int, bool, string, error) {
-	neededTokens := new(big.Int).SetUint64(amount)
+// attemptWorkflowPayoutTransfer sends a bounty, or hands it to escrow.
+//
+// Workflow bounties used to bypass the tax gate entirely: the only check in the
+// system sat on the redemption path, so an improver could be paid well past the
+// annual reporting threshold and nothing would notice. They now go through the
+// same choke point as everything else.
+//
+// The escrowed return is not a failure. The step must not be marked paid out —
+// no money has moved — but nothing should be recorded as broken either. The
+// money is held, and settles when the W-9 lands.
+func (a *AppService) attemptWorkflowPayoutTransfer(ctx context.Context, target workflowPayoutTarget, walletAddress string) (currentTokens *big.Int, neededTokens *big.Int, insufficient bool, txHash string, escrowed bool, err error) {
+	amount := target.Amount
+	neededTokens = new(big.Int).SetUint64(amount)
 
 	if a.bot == nil || a.bot.bot == nil {
-		return nil, neededTokens, false, "", fmt.Errorf("bot service is not configured")
+		return nil, neededTokens, false, "", false, fmt.Errorf("bot service is not configured")
 	}
 
-	faucetBalanceWei, err := a.bot.bot.Balance()
-	if err != nil {
-		return nil, neededTokens, false, "", fmt.Errorf("error checking faucet balance: %s", err)
+	if a.payouts != nil {
+		multiplier, mErr := getTokenMultiplier()
+		if mErr != nil {
+			return nil, neededTokens, false, "", false, fmt.Errorf("error reading token decimals: %s", mErr)
+		}
+		sourceRef := target.WorkflowId
+		source := db.PayoutSourceWorkflowManager
+		if !target.IsManager {
+			source = db.PayoutSourceWorkflowStep
+			sourceRef = target.WorkflowId + ":" + target.StepId
+		}
+
+		result, payErr := a.payouts.Pay(ctx, PayoutRequest{
+			IdempotencyKey:   source + ":" + sourceRef,
+			UserID:           target.ImproverId,
+			RecipientAddress: walletAddress,
+			AmountBase:       new(big.Int).Mul(multiplier, neededTokens),
+			Source:           source,
+			SourceRef:        sourceRef,
+		})
+		if payErr != nil {
+			errLower := strings.ToLower(payErr.Error())
+			return nil, neededTokens, strings.Contains(errLower, "insufficient"), "", false, payErr
+		}
+		if result != nil && result.Escrowed {
+			return nil, neededTokens, false, "", true, nil
+		}
+		if result != nil {
+			return nil, neededTokens, false, result.TxHash, false, nil
+		}
 	}
 
-	multiplier, err := getTokenMultiplier()
-	if err != nil {
-		return nil, neededTokens, false, "", fmt.Errorf("error reading token decimals: %s", err)
-	}
-
-	currentTokens := new(big.Int).Div(faucetBalanceWei, multiplier)
-	if currentTokens.Cmp(neededTokens) < 0 {
-		return currentTokens, neededTokens, true, "", fmt.Errorf("insufficient faucet balance for workflow payout")
-	}
-
-	txHash, err := a.bot.bot.SubmitTransfer(amount, walletAddress)
-	if err != nil {
-		errLower := strings.ToLower(err.Error())
-		isInsufficient := strings.Contains(errLower, "insufficient")
-		return currentTokens, neededTokens, isInsufficient, txHash, err
-	}
-
-	waitCtx, waitCancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer waitCancel()
-	if err := a.waitForWorkflowPayoutTransferConfirmation(waitCtx, txHash, walletAddress, amount); err != nil {
-		errLower := strings.ToLower(err.Error())
-		isInsufficient := strings.Contains(errLower, "insufficient")
-		return currentTokens, neededTokens, isInsufficient, txHash, err
-	}
-
-	return currentTokens, neededTokens, false, txHash, nil
+	// No payout service means the payment could be neither recorded nor checked
+	// against the threshold. Sending anyway would be an untracked way past the
+	// gate, so this refuses instead — the sweeper retries once wiring is right.
+	return nil, neededTokens, false, "", false, fmt.Errorf("payout service is not configured")
 }
 
 func (a *AppService) sendWorkflowPayoutErrorEmail(
@@ -5197,12 +5213,19 @@ func (a *AppService) processWorkflowSeriesPayouts(ctx context.Context, triggerWo
 					continue
 				}
 
-				currentBalance, neededBalance, insufficient, txHash, transferErr := a.attemptWorkflowPayoutTransfer(ctx, target.Amount, walletAddress)
+				currentBalance, neededBalance, insufficient, txHash, escrowed, transferErr := a.attemptWorkflowPayoutTransfer(ctx, target, walletAddress)
 				if strings.TrimSpace(txHash) != "" {
 					if dbErr := a.db.RecordWorkflowStepPayoutTxHash(ctx, target.WorkflowId, target.StepId, txHash, a.activeChainID()); dbErr != nil {
 						a.logger.Logf("error recording step payout tx hash for workflow %s step %s: %s", target.WorkflowId, target.StepId, dbErr)
 						return
 					}
+				}
+				// Held pending a W-9: the money has not moved, so the step is not
+				// paid out — but nothing has gone wrong either, and marking it
+				// failed would stop the sweeper retrying and alarm the improver.
+				// It settles when the form lands.
+				if escrowed {
+					continue
 				}
 				if transferErr != nil {
 					errMsg := workflowPayoutErrorTransferFailed
@@ -5299,7 +5322,12 @@ func (a *AppService) processWorkflowSeriesPayouts(ctx context.Context, triggerWo
 					continue
 				}
 
-				currentBalance, neededBalance, insufficient, txHash, transferErr := a.attemptWorkflowPayoutTransfer(ctx, target.Amount, walletAddress)
+				currentBalance, neededBalance, insufficient, txHash, escrowed, transferErr := a.attemptWorkflowPayoutTransfer(ctx, target, walletAddress)
+				// Held pending a W-9. Neither paid nor failed; it settles when
+				// the form lands and the escrow releases.
+				if escrowed {
+					continue
+				}
 				if strings.TrimSpace(txHash) != "" {
 					if target.IsManager {
 						if dbErr := a.db.RecordWorkflowManagerPayoutTxHash(ctx, target.WorkflowId, txHash, a.activeChainID()); dbErr != nil {

@@ -5,6 +5,12 @@ package structs
 // using title/body and ignore the typed payload.
 const (
 	NotificationTypeWorkflowPayoutPending = "workflow_payout_pending"
+
+	// Tax types. Unlike the workflow types these are not role-scoped: anybody
+	// who earns past the reporting threshold owes a form, whether they are an
+	// improver, a volunteer, or neither.
+	NotificationTypeW9Required   = "w9_required"
+	NotificationTypeW9EscrowHeld = "w9_escrow_held"
 )
 
 // ImproverNotification is one entry in the improver notification feed.
@@ -33,6 +39,15 @@ type ImproverNotification struct {
 	IsManager     bool   `json:"is_manager,omitempty"`
 	AmountSfluv   uint64 `json:"amount_sfluv,omitempty"`
 	PayoutError   string `json:"payout_error,omitempty"`
+
+	// Tax context. TaxYear identifies which year's filing is outstanding;
+	// EscrowedCount and OldestEscrowedAt let a client show how much is waiting
+	// and how long it has been. Older clients ignore these and fall back to
+	// title and body, which is why the feed was built this way.
+	TaxYear          int    `json:"tax_year,omitempty"`
+	EscrowedCount    int    `json:"escrowed_count,omitempty"`
+	OldestEscrowedAt int64  `json:"oldest_escrowed_at,omitempty"`
+	BackPaySfluv     string `json:"back_pay_sfluv,omitempty"`
 }
 
 // ImproverNotificationFeed is the payload behind the notification bell.

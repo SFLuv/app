@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/SFLuv/app/backend/structs"
 	"github.com/google/uuid"
@@ -144,6 +145,15 @@ func (a *AppDB) GetImproverNotifications(ctx context.Context, improverId string)
 		return nil, err
 	}
 
+	// Tax items are appended last so they sit alongside workflow items in one
+	// feed. They are not role-scoped: owing a W-9 has nothing to do with being
+	// an improver.
+	if err := a.appendW9Notifications(ctx, improverId, feed); err != nil {
+		return nil, err
+	}
+
+	// Counted after every source has contributed, or the bell shows a stale
+	// number the moment a second kind of notification exists.
 	feed.Total = len(feed.Notifications)
 	feed.HasUnseen = feed.UnseenCount > 0
 
@@ -153,6 +163,77 @@ func (a *AppDB) GetImproverNotifications(ctx context.Context, improverId string)
 // MarkImproverNotificationsSeen records seen markers. Passing no keys marks
 // every currently-visible notification seen, which is what opening the bell
 // does. Markers are idempotent so a repeated call cannot double-count.
+// appendW9Notifications adds the tax items to a person's feed.
+//
+// Derived like everything else here: the item exists exactly while money is
+// being held or owed, and disappears when it is released. Nothing to store,
+// nothing to clean up, and no way for the feed to disagree with the ledger.
+//
+// There is deliberately no "released" notification. It has no live condition —
+// it would be true for an instant and then false forever — so it is a push and
+// an empty escrow panel instead of a feed entry that breaks the invariant.
+func (a *AppDB) appendW9Notifications(ctx context.Context, userID string, feed *structs.ImproverNotificationFeed) error {
+	rows, err := a.db.Query(ctx, `
+		SELECT
+			p.tax_year,
+			COALESCE(SUM(p.amount_base) FILTER (WHERE p.state IN ('escrowed','releasing')), 0)::text,
+			COUNT(*) FILTER (WHERE p.state IN ('escrowed','releasing')),
+			COALESCE(SUM(p.amount_base) FILTER (WHERE p.state IN ('expired','back_pay_requested')), 0)::text,
+			MIN(p.escrowed_at),
+			COALESCE(f.status, 'not_started'),
+			MAX(r.seen_at)
+		FROM payout_ledger p
+		LEFT JOIN w9_filings f ON f.user_id = p.user_id AND f.tax_year = p.tax_year
+		LEFT JOIN improver_notification_reads r
+			ON r.user_id = p.user_id
+			AND r.notification_key = 'w9_escrow_held:' || p.tax_year::text
+		WHERE p.user_id = $1
+		AND p.state IN ('escrowed','releasing','expired','back_pay_requested')
+		GROUP BY p.tax_year, f.status;
+	`, userID)
+	if err != nil {
+		return fmt.Errorf("error building w9 notifications for %s: %w", userID, err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var taxYear, escrowedCount int
+		var escrowedBase, backPayBase, status string
+		var oldest, seenAt *time.Time
+		if err := rows.Scan(&taxYear, &escrowedBase, &escrowedCount, &backPayBase, &oldest, &status, &seenAt); err != nil {
+			return fmt.Errorf("error scanning w9 notification: %w", err)
+		}
+		if W9StatusClears(status) {
+			continue
+		}
+
+		created := int64(0)
+		if oldest != nil {
+			created = oldest.Unix()
+		}
+		notification := structs.ImproverNotification{
+			Key:              fmt.Sprintf("%s:%d", structs.NotificationTypeW9EscrowHeld, taxYear),
+			Type:             structs.NotificationTypeW9EscrowHeld,
+			Title:            "Complete your W-9 to get paid",
+			Body:             "You have rewards waiting. We need a W-9 on file before we can send them.",
+			CreatedAt:        created,
+			TaxYear:          taxYear,
+			EscrowedCount:    escrowedCount,
+			BackPaySfluv:     backPayBase,
+			OldestEscrowedAt: created,
+		}
+		if seenAt != nil {
+			notification.Seen = true
+			seenUnix := seenAt.Unix()
+			notification.SeenAt = &seenUnix
+		} else {
+			feed.UnseenCount++
+		}
+		feed.Notifications = append(feed.Notifications, notification)
+	}
+	return rows.Err()
+}
+
 func (a *AppDB) MarkImproverNotificationsSeen(ctx context.Context, improverId string, keys []string) (int, error) {
 	if len(keys) == 0 {
 		return 0, nil
@@ -189,7 +270,8 @@ func (a *AppDB) MarkImproverNotificationsSeen(ctx context.Context, improverId st
 func (a *AppDB) PruneResolvedImproverNotificationReads(ctx context.Context) (int64, error) {
 	tag, err := a.db.Exec(ctx, `
 		DELETE FROM improver_notification_reads r
-		WHERE r.notification_key LIKE 'workflow_payout_pending:%'
+		WHERE (r.notification_key LIKE 'workflow_payout_pending:%'
+		    OR r.notification_key LIKE 'w9_escrow_held:%')
 		AND NOT EXISTS (
 			SELECT 1
 			FROM workflow_steps ws
@@ -206,6 +288,17 @@ func (a *AppDB) PruneResolvedImproverNotificationReads(ctx context.Context) (int
 			AND w.manager_bounty > 0
 			AND w.manager_paid_out_at IS NULL
 			AND r.notification_key = 'workflow_payout_pending:' || w.id || ':manager'
+		)
+		-- Tax markers need their own liveness check. Without it the two clauses
+		-- above are both trivially true for a w9 key — no workflow matches it —
+		-- and every prune would delete the marker for a notification that is
+		-- still on screen, making it pop back up as unread.
+		AND NOT EXISTS (
+			SELECT 1
+			FROM payout_ledger p
+			WHERE p.user_id = r.user_id
+			AND p.state IN ('escrowed','releasing','expired','back_pay_requested')
+			AND r.notification_key = 'w9_escrow_held:' || p.tax_year::text
 		);
 	`)
 	if err != nil {

@@ -380,8 +380,16 @@ func AddWorkflowRoutes(r *chi.Mux, s *handlers.BotService, a *handlers.AppServic
 
 	r.Get("/improvers/workflows", withImprover(a.GetImproverWorkflows, a))
 	r.Get("/improvers/unpaid-workflows", withImprover(a.GetImproverUnpaidWorkflows, a))
-	r.Get("/improvers/notifications", withImprover(a.GetImproverNotifications, a))
-	r.Post("/improvers/notifications/seen", withImprover(a.MarkImproverNotificationsSeen, a))
+	// The feed is no longer improver-only. It filters on assignment anyway
+	// (assigned_improver_id / manager_improver_id), so a non-improver simply
+	// gets no workflow rows — the role gate was access control, not
+	// correctness. Opening it is what lets a volunteer see that they owe a W-9.
+	//
+	// The old paths stay as aliases so no shipped client breaks.
+	r.Get("/notifications", withActiveAuth(a.GetImproverNotifications, a))
+	r.Post("/notifications/seen", withActiveAuth(a.MarkImproverNotificationsSeen, a))
+	r.Get("/improvers/notifications", withActiveAuth(a.GetImproverNotifications, a))
+	r.Post("/improvers/notifications/seen", withActiveAuth(a.MarkImproverNotificationsSeen, a))
 	r.Put("/improvers/primary-rewards-account", withImprover(a.UpdateImproverPrimaryRewardsAccount, a))
 	r.Get("/improvers/credential-requests", withImprover(a.GetImproverCredentialRequests, a))
 	r.Post("/improvers/credential-requests", withImprover(a.CreateImproverCredentialRequest, a))
@@ -462,6 +470,10 @@ func AddLocationRoutes(r *chi.Mux, s *handlers.AppService) {
 	r.Get("/locations/user", withActiveAuth(s.GetLocationsByUser, s))
 	r.Put("/locations", withActiveAuth(s.UpdateLocation, s))
 	r.Put("/locations/{id}/wallet-settings", withActiveAuth(s.UpdateLocationWalletSettings, s))
+	// Unhooking a wallet is always a swap: the picker needs to know which of the
+	// merchant's wallets are free, and the replacement is one atomic call.
+	r.Get("/locations/{id}/assignable-wallets", withActiveAuth(s.GetAssignableWallets, s))
+	r.Put("/locations/{id}/wallets/{role}", withActiveAuth(s.ReplaceLocationWallet, s))
 	r.Put("/locations/{id}/google-place", withActiveAuth(s.UpdateLocationGooglePlace, s))
 	r.Put("/locations/{id}/hours", withActiveAuth(s.UpdateLocationHours, s))
 
@@ -488,7 +500,11 @@ func AddContactRoutes(r *chi.Mux, s *handlers.AppService) {
 
 func AddMerchantModeRoutes(r *chi.Mux, s *handlers.AppService) {
 	r.Get("/merchant-mode/status", withActiveAuth(s.GetMerchantModeStatus, s))
+	r.Get("/merchant-mode/today", withActiveAuth(s.GetMerchantToday, s))
 	r.Get("/merchant-mode/devices", withActiveAuth(s.ListMerchantModeDevices, s))
+	// Shops this merchant can put a device to work at — backs the picker on
+	// enable and the location toggle on the till.
+	r.Get("/merchant-mode/locations", withActiveAuth(s.ListMerchantModeLocations, s))
 	r.Patch("/merchant-mode/devices/{device_id}", withActiveAuth(s.UpdateMerchantModeDevice, s))
 	r.Post("/merchant-mode/pin", withActiveAuth(s.SetMerchantModePIN, s))
 	r.Post("/merchant-mode/pin/help", withActiveAuth(s.RequestMerchantModePINHelp, s))
@@ -512,12 +528,31 @@ func AddPonderRoutes(r *chi.Mux, s *handlers.AppService, p *handlers.PonderServi
 }
 
 func AddW9Routes(r *chi.Mux, s *handlers.AppService) {
-	r.Post("/w9/submit", s.SubmitW9)
-	r.Post("/w9/transaction", withAdmin(s.RecordW9Transaction, s))
-	r.Post("/w9/check", withAdmin(s.CheckW9Compliance, s))
-	r.Get("/admin/w9/pending", withAdmin(s.GetPendingW9Submissions, s))
-	r.Put("/admin/w9/approve", withAdmin(s.ApproveW9Submission, s))
-	r.Put("/admin/w9/reject", withAdmin(s.RejectW9Submission, s))
+	// The old surface is gone. POST /w9/submit was unauthenticated, so anyone
+	// could file a submission for any wallet with any email — and that email
+	// then received the approval notice. There is no approve/reject here either:
+	// the vendor validates the form, so an admin eyeballing a wallet address
+	// added delay without adding assurance.
+	r.Get("/w9/status", withActiveAuth(s.GetW9Status, s))
+	r.Post("/w9/start", withActiveAuth(s.StartW9, s))
+
+	// Called by the tax vendor, so it cannot carry a session. The signature is
+	// what authenticates it.
+	r.Post("/w9/provider/webhook", s.W9ProviderWebhook)
+
+	// The local stand-in for the vendor's hosted form, mounted only when the
+	// fake provider is selected. It is what makes an end-to-end run possible on
+	// a laptop, deep link included.
+	if handlers.FakeW9FormEnabled() {
+		r.Get("/w9/fake/form/{request_id}", s.ServeFakeW9Form)
+		r.Post("/w9/fake/form/{request_id}", s.ServeFakeW9Form)
+	}
+
+	r.Post("/admin/w9/precheck", withAdmin(s.PrecheckW9ForRecipient, s))
+	r.Get("/admin/w9/overview", withAdmin(s.GetW9AdminOverview, s))
+	r.Post("/admin/w9/{user_id}/back-pay", withAdmin(s.ApproveW9BackPay, s))
+	r.Post("/admin/w9/{user_id}/clear", withAdmin(s.ClearW9Filing, s))
+	r.Post("/admin/w9/{user_id}/resend", withAdmin(s.ResendW9Request, s))
 }
 
 func AddUnwrapRoutes(r *chi.Mux, s *handlers.AppService) {

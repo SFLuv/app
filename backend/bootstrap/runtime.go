@@ -13,6 +13,7 @@ import (
 	"github.com/SFLuv/app/backend/db"
 	"github.com/SFLuv/app/backend/handlers"
 	"github.com/SFLuv/app/backend/logger"
+	"github.com/SFLuv/app/backend/w9provider"
 	"github.com/SFLuv/app/backend/mcp"
 	"github.com/SFLuv/app/backend/router"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -205,7 +206,7 @@ func RunInitializationSyncs(ctx context.Context, pools *DBPools, appLogger *logg
 		appLogger.Logf("error syncing minter roles during init: %s", err)
 	}
 
-	appService := handlers.NewAppService(appDb, appLogger, nil, clientConfig)
+	appService := handlers.NewAppService(appDb, appLogger, nil, nil, clientConfig)
 	if err := appService.SyncPrivyLinkedEmailsForAllUsers(ctx); err != nil {
 		appLogger.Logf("error syncing Privy linked emails during init: %s", err)
 	}
@@ -316,15 +317,29 @@ func NewServerHandler(ctx context.Context, pools *DBPools, appLogger *logger.Log
 		return nil, fmt.Errorf("error initializing bot service: %w", err)
 	}
 
-	w9 := handlers.NewW9Service(appDb, ponderDb, appLogger, activeChainID)
+	// The tax provider holds the TIN; nothing on our side ever sees one. An
+	// unconfigured provider yields a disabled adapter rather than a boot failure
+	// — money is still held correctly without it, only the route out is missing.
+	w9Provider := w9provider.New(w9provider.Config{
+		Provider:      strings.TrimSpace(os.Getenv("W9_PROVIDER")),
+		APIKey:        strings.TrimSpace(os.Getenv("W9_PROVIDER_API_KEY")),
+		BaseURL:       strings.TrimSpace(os.Getenv("W9_PROVIDER_BASE_URL")),
+		WebhookSecret: strings.TrimSpace(os.Getenv("W9_PROVIDER_WEBHOOK_SECRET")),
+		Environment:   strings.TrimSpace(os.Getenv("W9_PROVIDER_ENV")),
+	})
+
+	// Every payout in the system goes through this one service, which is what
+	// makes the tax gate impossible to bypass by adding another send path.
+	payouts := handlers.NewPayoutService(appDb, botClient, w9Provider, appLogger, activeChainID)
 
 	redeemer := handlers.NewRedeemerService(appDb, appLogger, clientConfig)
 	minter := handlers.NewMinterService(appDb, appLogger, clientConfig)
 
-	s := handlers.NewBotService(botDb, appDb, botClient, w9, activeChainID, clientConfig.ReadRPCURL())
-	a := handlers.NewAppService(appDb, appLogger, w9, clientConfig)
+	s := handlers.NewBotService(botDb, appDb, botClient, payouts, activeChainID, clientConfig.ReadRPCURL())
+	a := handlers.NewAppService(appDb, appLogger, payouts, w9Provider, clientConfig)
 	a.SetBotService(s)
 	s.SetAppService(a)
+	payouts.SetAppService(a)
 	a.SetRedeemerService(redeemer)
 	a.SetMinterService(minter)
 	a.SetPonderDB(ponderDb)

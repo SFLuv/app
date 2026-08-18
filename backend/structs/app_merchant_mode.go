@@ -3,11 +3,20 @@ package structs
 import "time"
 
 type MerchantModeDevice struct {
-	ID                  string     `json:"id"`
-	UserID              string     `json:"user_id"`
-	LocationID          uint       `json:"location_id"`
-	LocationName        string     `json:"location_name"`
-	WalletAddress       string     `json:"wallet_address"`
+	ID           string `json:"id"`
+	UserID       string `json:"user_id"`
+	LocationID   uint   `json:"location_id"`
+	LocationName string `json:"location_name"`
+	// WalletAddress is the location's payment wallet as it stands right now, not
+	// as it stood when this device was enrolled. A merchant who swaps the wallet
+	// behind a shop expects the till to follow on its next poll, without anyone
+	// walking over to re-enrol the tablet.
+	WalletAddress string `json:"wallet_address"`
+	// LocationActive and LocationApproved describe the shop this device is bound
+	// to. A device at a shop that has been deactivated or had its approval pulled
+	// must stop behaving like a till, so the app needs to see why.
+	LocationActive      bool       `json:"location_active"`
+	LocationApproved    bool       `json:"location_approved"`
 	DisplayName         string     `json:"display_name"`
 	Platform            string     `json:"platform"`
 	AppVersion          string     `json:"app_version"`
@@ -24,6 +33,28 @@ type MerchantModeStatusResponse struct {
 	IsMerchant  bool                `json:"is_merchant"`
 	PasscodeSet bool                `json:"passcode_set"`
 	Device      *MerchantModeDevice `json:"device,omitempty"`
+	// ForcedExitReason is set when the server has just turned merchant mode off
+	// for this device on its own. The app shows it once and returns to the normal
+	// wallet, rather than silently dropping out of till mode mid-shift.
+	ForcedExitReason string `json:"forced_exit_reason,omitempty"`
+}
+
+// MerchantModeLocation is one shop a device can be put to work at.
+type MerchantModeLocation struct {
+	ID   uint   `json:"id"`
+	Name string `json:"name"`
+	// Street disambiguates two branches sharing a name, which is the whole
+	// reason a picker exists.
+	Street string `json:"street"`
+	City   string `json:"city"`
+	// WalletAddress is where payments to this shop land today.
+	WalletAddress string `json:"wallet_address"`
+	// TippingWalletAddress is empty when the shop takes no tips.
+	TippingWalletAddress string `json:"tipping_wallet_address"`
+}
+
+type MerchantModeLocationsResponse struct {
+	Locations []MerchantModeLocation `json:"locations"`
 }
 
 type MerchantModeForgotPINRequest struct {
