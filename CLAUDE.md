@@ -106,7 +106,14 @@ Sequential steps, each assigned to one improver role. Status: `locked` → `avai
 - Admin force-approve bypasses vote (uses `admin_approve` decision)
 
 ### Credential System
-Two credential types: `dpw_certified`, `sfluv_verifier`. Issuers grant/revoke credentials. Workflow roles can require specific credentials — improvers must hold them to claim steps.
+Credential types are **data, not constants** — they live in the database and are
+added through the admin panel, so do not hardcode or assume them. Read the
+current set from `GET /credentials/types` (twelve at the time of writing:
+`sfluv_certified_volunteer`, `dpw_bufees_volunteer`, `sfluv_project_coordinator`,
+several translator credentials, and so on).
+
+Issuers grant and revoke them. A workflow role must require **at least one**, and
+an improver must hold it to claim that role's steps.
 
 ### Recurring Workflows (Series)
 Workflows with recurrence (`daily`/`weekly`/`monthly`) share a `series_id`. A new instance is blocked (`is_start_blocked = true`) until the prior one reaches `paid_out`.
