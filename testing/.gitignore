@@ -2,4 +2,5 @@
 # response dumps all land here and none of it belongs in the repository.
 artifacts/*
 !artifacts/TESTING-LOG.md
+!artifacts/TESTING-STATE.md
 !artifacts/.gitkeep
