@@ -8,6 +8,44 @@ out to be — the cause is the part worth writing down.
 
 ---
 
+## 2026-08-19 — paying a merchant and tipping, on chain
+
+**Result:** 11 browser specs green in ~41s, including a real payment and a real
+tip. Verified on chain: the payment lands in the merchant's till, the tip lands
+in their **separate tipping wallet**, and the till does not move when tipping.
+No product bug found — the flow works.
+
+Everything that went wrong was in the test, and two are worth remembering.
+
+**"Broadcast" is not "confirmed".** The success screen says the transfer has
+been *broadcast to the network*. Reading the chain at that moment finds the old
+balance, which looks precisely like the money went to the wrong address — and I
+briefly believed tips were landing in the till because of it. Poll for the
+balance; do not trust the UI's sense of time.
+
+**A synchronous poll deadlocks the browser.** The first `waitForBalance` slept
+with `spawnSync("sleep")`. `lib/test.ts` installs a `page.route()` handler that
+runs in the same node process, so blocking the event loop stalls the browser's
+network entirely — the transaction being waited for could not be submitted while
+the wait was running. It presented as "tips do not arrive".
+
+**Clock drift does not fail cleanly, it fails slowly.** With the fork ~130s
+behind, transfers still succeeded but retried, turning a 7-second spec into a
+4-minute timeout aimed at the wrong conclusion. Synced, the same spec passes in
+6.8s. anvil only advances time when blocks are mined, so an idle fork drifts on
+its own. `chainClockDriftSeconds()` now refuses to start the spec at >5 minutes
+out.
+
+**Assert positives, not absences.** The tip check was originally "the prompt is
+hidden" — which also passes when the whole dialog closes, so a tip that never
+sent would have read as success. It asserts "Tip Sent!" now.
+
+**Method note:** I guessed at selectors three times before dumping the rendered
+DOM, which answered it immediately. When a locator fails twice, read the DOM
+rather than more source.
+
+---
+
 ## 2026-08-19 — the smoke spec was wrong in three places, not the app
 
 **Result:** both smoke specs pass. Prank forwarding is now proven **through the
