@@ -2060,33 +2060,6 @@ export default function AdminPage() {
     }
   }, [status, user?.isAdmin])
 
-  const handleApproveBackPay = async (userId: string, taxYear: number) => {
-    try {
-      const res = await authFetch(
-        `/admin/w9/${encodeURIComponent(userId)}/back-pay?year=${taxYear}`,
-        { method: "POST" },
-      )
-      if (res.status !== 200) {
-        throw new Error(await res.text())
-      }
-      const data = await res.json()
-      toast({
-        title: "Back pay sent",
-        description: `${data.paid} payout${data.paid === 1 ? "" : "s"} sent.`,
-      })
-      await fetchW9Overview()
-    } catch (err) {
-      toast({
-        title: "Back pay failed",
-        description:
-          err instanceof Error && err.message
-            ? err.message
-            : "Could not send back pay. Check the faucet balance and try again.",
-        variant: "destructive",
-      })
-    }
-  }
-
   useEffect(() => {
       setPendingLocations(authedMapLocations.filter((location) => location.approval === null))
   }, [authedMapLocations])
@@ -3665,11 +3638,6 @@ export default function AdminPage() {
                 <Badge variant="secondary" className="text-sm px-3 py-1">
                   {w9Overview?.people_with_holds ?? 0} with money held
                 </Badge>
-                {(w9Overview?.rows?.some((row) => row.needs_back_pay_now) ?? false) && (
-                  <Badge variant="destructive" className="text-sm px-3 py-1">
-                    back pay waiting
-                  </Badge>
-                )}
               </div>
             </CardHeader>
             <CardContent>
@@ -3679,10 +3647,10 @@ export default function AdminPage() {
                 </div>
               ) : (
                 <div className="space-y-6">
-                  {/* Faucet coverage first. Escrow is reserved and must not be
-                      allocated elsewhere; back pay is owed but not reserved, so
-                      the faucet may need topping up before it can be sent. This
-                      is the decision an admin is actually making. */}
+                  {/* Escrow is reserved and must not be allocated elsewhere, so
+                      it is subtracted here. There is no coverage shortfall to
+                      report any more: a hold can never accumulate, because the
+                      payment after one is refused rather than held too. */}
                   <div className="rounded-lg border p-4 font-mono text-sm space-y-1">
                     <div className="flex justify-between">
                       <span>Faucet on-chain</span>
@@ -3699,19 +3667,6 @@ export default function AdminPage() {
                     <div className="flex justify-between border-t pt-1 font-semibold">
                       <span>Available to allocate</span>
                       <span>{w9Overview?.available_sfluv ?? "0"} SFLUV</span>
-                    </div>
-                    <div className="flex justify-between pt-3">
-                      <span>Outstanding back pay</span>
-                      <span>
-                        {w9Overview?.back_pay_sfluv ?? "0"} SFLUV{" "}
-                        {w9Overview?.back_pay_covered ? (
-                          <span className="text-green-600">covered</span>
-                        ) : (
-                          <span className="text-red-600">
-                            short by {w9Overview?.back_pay_short_by ?? "0"}
-                          </span>
-                        )}
-                      </span>
                     </div>
                     {(w9Overview?.oldest_escrow_age_days ?? 0) > 0 && (
                       <div className="flex justify-between text-muted-foreground">
@@ -3743,7 +3698,7 @@ export default function AdminPage() {
                                 {row.filing_status.replace(/_/g, " ")}
                               </Badge>
                             </div>
-                            <div className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
+                            <div className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-3">
                               <div>
                                 <p className="text-xs text-muted-foreground">Earned {row.tax_year}</p>
                                 <p>{row.earned_sfluv}</p>
@@ -3751,10 +3706,6 @@ export default function AdminPage() {
                               <div>
                                 <p className="text-xs text-muted-foreground">Held</p>
                                 <p>{row.escrowed_sfluv}</p>
-                              </div>
-                              <div>
-                                <p className="text-xs text-muted-foreground">Back pay</p>
-                                <p>{row.back_pay_sfluv}</p>
                               </div>
                               <div>
                                 <p className="text-xs text-muted-foreground">Oldest hold</p>
@@ -3765,22 +3716,6 @@ export default function AdminPage() {
                                 </p>
                               </div>
                             </div>
-                            {row.needs_back_pay_now && (
-                              <div className="pt-1">
-                                <Button
-                                  size="sm"
-                                  onClick={() => handleApproveBackPay(row.user_id, row.tax_year)}
-                                  disabled={!w9Overview?.back_pay_covered}
-                                >
-                                  Send {row.back_pay_sfluv} SFLUV back pay
-                                </Button>
-                                {!w9Overview?.back_pay_covered && (
-                                  <p className="text-xs text-red-600 mt-1">
-                                    Top the faucet up first — short by {w9Overview?.back_pay_short_by} SFLUV.
-                                  </p>
-                                )}
-                              </div>
-                            )}
                           </CardContent>
                         </Card>
                       ))}

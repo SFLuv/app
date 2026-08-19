@@ -128,7 +128,14 @@ func (p *PayoutService) EnsureW9Request(ctx context.Context, userID string, taxY
 	// than replayed. Somebody tapping "complete your tax form" three days later
 	// must not land on a dead page.
 	if filing != nil && filing.ProviderRequestID != "" {
-		refreshed, err := p.provider.HostedFormURL(ctx, filing.ProviderRequestID, w9ReturnURL())
+		refreshed, err := p.provider.HostedFormURL(ctx, filing.ProviderRequestID, w9provider.W9RequestInput{
+			UserID:          userID,
+			ProviderPayeeID: payeeID,
+			TaxYear:         taxYear,
+			Email:           contactEmail,
+			ReturnURL:       w9ReturnURL(),
+			ExistingFormURL: filing.FormURL,
+		})
 		if err != nil {
 			return filing, err
 		}

@@ -62,7 +62,8 @@ const Page = () => {
     Boolean(user)
   const isFinalErrorState = Boolean(
     error &&
-    error !== "Reward Held"
+    error !== "Reward Held" &&
+    error !== "Reward Not Sent"
   )
   const shouldAutoRedirect = success || isFinalErrorState
   const markLoginRedirectPending = useCallback(() => {
@@ -110,6 +111,15 @@ const Page = () => {
       // was consumed and the money is the volunteer's, waiting on a W-9.
       if (res.status === 202) {
         setError("Reward Held")
+        return
+      }
+
+      // Refused rather than held: past the limit with a hold already open, so
+      // nothing more can be sent until the form is in. The backend hands the
+      // code back, which is the part that has to be said out loud — otherwise
+      // this reads as the reward having been lost.
+      if (res.status === 409) {
+        setError("Reward Not Sent")
         return
       }
 
@@ -523,6 +533,18 @@ const Page = () => {
               </p>
               <p>
                 Open the SFLuv app to complete the form. Your rewards go out as soon as it is in.
+              </p>
+            </div>
+          )}
+          {error === "Reward Not Sent" && (
+            <div className="mt-4 space-y-3 text-sm text-muted-foreground">
+              <p>
+                You have already earned more than the yearly reporting limit, so we cannot send anything else
+                until a W-9 is on file.
+              </p>
+              <p>
+                <span className="font-semibold">This QR code has not been used up.</span> Complete the form in
+                the SFLuv app, then scan it again and the reward will go straight through.
               </p>
             </div>
           )}

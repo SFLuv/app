@@ -13,9 +13,9 @@ import (
 	"github.com/SFLuv/app/backend/db"
 	"github.com/SFLuv/app/backend/handlers"
 	"github.com/SFLuv/app/backend/logger"
-	"github.com/SFLuv/app/backend/w9provider"
 	"github.com/SFLuv/app/backend/mcp"
 	"github.com/SFLuv/app/backend/router"
+	"github.com/SFLuv/app/backend/w9provider"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
 )
@@ -321,13 +321,33 @@ func NewServerHandler(ctx context.Context, pools *DBPools, appLogger *logger.Log
 	// unconfigured provider yields a disabled adapter rather than a boot failure
 	// — money is still held correctly without it, only the route out is missing.
 	w9Provider := w9provider.New(w9provider.Config{
-		Provider:      strings.TrimSpace(os.Getenv("W9_PROVIDER")),
-		APIKey:        strings.TrimSpace(os.Getenv("W9_PROVIDER_API_KEY")),
-		BaseURL:       strings.TrimSpace(os.Getenv("W9_PROVIDER_BASE_URL")),
-		// Every Track1099 path is scoped by this; without it each call 404s.
-		TeamAPIID:     strings.TrimSpace(os.Getenv("W9_PROVIDER_TEAM_ID")),
-		Environment:   strings.TrimSpace(os.Getenv("W9_PROVIDER_ENV")),
+		Provider: strings.TrimSpace(os.Getenv("W9_PROVIDER")),
+		BaseURL:  strings.TrimSpace(os.Getenv("W9_PROVIDER_BASE_URL")),
+		// Sandbox unless this says otherwise. Defaulting the other way would
+		// mean a misconfigured deploy files real tax forms.
+		Environment: strings.TrimSpace(os.Getenv("W9_PROVIDER_ENV")),
+
+		// TaxBandits: a client credential triple, the payer GUID, and the API
+		// version as a path segment.
+		ClientID:     strings.TrimSpace(os.Getenv("W9_PROVIDER_CLIENT_ID")),
+		ClientSecret: strings.TrimSpace(os.Getenv("W9_PROVIDER_CLIENT_SECRET")),
+		UserToken:    strings.TrimSpace(os.Getenv("W9_PROVIDER_USER_TOKEN")),
+		BusinessID:   strings.TrimSpace(os.Getenv("W9_PROVIDER_BUSINESS_ID")),
+		APIVersion:   strings.TrimSpace(os.Getenv("W9_PROVIDER_API_VERSION")),
+		AuthURL:      strings.TrimSpace(os.Getenv("W9_PROVIDER_AUTH_URL")),
+
+		// Track1099, kept only as the fallback until TaxBandits goes live.
+		APIKey:    strings.TrimSpace(os.Getenv("W9_PROVIDER_API_KEY")),
+		TeamAPIID: strings.TrimSpace(os.Getenv("W9_PROVIDER_TEAM_ID")),
 	})
+
+	// The adapter complains out loud about anything it was not able to verify
+	// against a live call — an unrecognised status, an unparseable timestamp, a
+	// second submission where one was expected. Those messages are the whole
+	// early-warning system for this integration, so they must reach the log.
+	if tb, ok := w9Provider.(*w9provider.TaxBandits); ok {
+		tb.SetWarningLogger(func(message string) { appLogger.Logf("%s", message) })
+	}
 
 	// Every payout in the system goes through this one service, which is what
 	// makes the tax gate impossible to bypass by adding another send path.

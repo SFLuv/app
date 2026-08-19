@@ -16,22 +16,27 @@ export interface W9AdminRow {
   filing_status: string
   earned_sfluv: string
   escrowed_sfluv: string
-  back_pay_sfluv: string
-  back_pay_count: number
   oldest_escrow_at?: string | null
   completed_at?: string | null
-  /** True when money is queued and waiting on an admin to send it. */
+
+  /**
+   * Vestigial. Back pay was retired with the tier redesign — a hold can no
+   * longer accumulate, because the payment after one is refused rather than
+   * held, so no money can lapse into being owed-but-unreserved. The backend
+   * still returns these and they are now always zero/false. Kept only so the
+   * response continues to type-check; delete on both sides together.
+   */
+  back_pay_sfluv: string
+  back_pay_count: number
   needs_back_pay_now: boolean
 }
 
 /**
  * Faucet coverage plus the per-person table.
  *
- * escrowed_sfluv is reserved and must not be allocated to anything else.
- * back_pay_sfluv is owed but deliberately not reserved: it only exists after an
- * escrow window lapsed and the money returned to the spendable pool, so an
- * admin funds it on purpose. Both are shown because approving back pay without
- * seeing them is a guess.
+ * escrowed_sfluv is reserved and must not be allocated to anything else, which
+ * is why it is subtracted from what is available. The back_pay_* fields below
+ * are vestigial — see W9AdminRow.
  */
 export interface W9AdminOverview {
   faucet_sfluv: string

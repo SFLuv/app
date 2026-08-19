@@ -1130,6 +1130,22 @@ if [[ "$RUN_BACKEND" -eq 1 ]]; then
     # out of our systems is the entire reason for using a vendor.
     "W9_PROVIDER=${W9_PROVIDER:-fake}"
     "W9_PROVIDER_BASE_URL=${W9_PROVIDER_BASE_URL:-http://localhost:$BACKEND_PORT}"
+    # TaxBandits. Export these before running to point the local stack at the
+    # sandbox instead of the stub. W9_PROVIDER_BASE_URL must be cleared when you
+    # do — otherwise the adapter talks to this backend instead of the vendor.
+    # None of these are secrets in this file; they are read from the shell and
+    # left empty so nothing sensitive is ever written to disk here.
+    "W9_PROVIDER_CLIENT_ID=${W9_PROVIDER_CLIENT_ID:-}"
+    "W9_PROVIDER_CLIENT_SECRET=${W9_PROVIDER_CLIENT_SECRET:-}"
+    "W9_PROVIDER_USER_TOKEN=${W9_PROVIDER_USER_TOKEN:-}"
+    # The payer GUID from Business/Create. Nothing can be requested until it
+    # exists, and a missing value is a hard error rather than a silent disable.
+    "W9_PROVIDER_BUSINESS_ID=${W9_PROVIDER_BUSINESS_ID:-}"
+    "W9_PROVIDER_API_VERSION=${W9_PROVIDER_API_VERSION:-v1.7.3}"
+    # Sandbox unless explicitly told otherwise. Defaulting the other way would
+    # let a misconfigured run file real tax forms.
+    "W9_PROVIDER_ENV=${W9_PROVIDER_ENV:-sandbox}"
+    # Track1099, retained only as the fallback if TaxBandits Go Live stalls.
     "W9_PROVIDER_TEAM_ID=${W9_PROVIDER_TEAM_ID:-}"
     # enforce locally so held rewards and the tax card are actually visible.
     # Production defaults to shadow, where the decision is computed and logged

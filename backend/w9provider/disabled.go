@@ -25,7 +25,7 @@ func (disabled) CreateW9Request(context.Context, W9RequestInput) (W9Request, err
 	return W9Request{}, ErrProviderDisabled
 }
 
-func (disabled) HostedFormURL(context.Context, string, string) (W9Request, error) {
+func (disabled) HostedFormURL(context.Context, string, W9RequestInput) (W9Request, error) {
 	return W9Request{}, ErrProviderDisabled
 }
 

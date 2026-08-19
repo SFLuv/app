@@ -12,6 +12,7 @@ package w9provider
 
 import (
 	"context"
+	"strings"
 	"time"
 )
 
@@ -65,6 +66,17 @@ type W9RequestInput struct {
 	// ReturnURL is where the person lands once the form is submitted. On mobile
 	// this is an app scheme, which is what closes the loop back into the app.
 	ReturnURL string
+	// PreferredLanguage is a hint, not a guarantee — vendors support their own
+	// short list and fall back to English. Worth passing given who we serve.
+	PreferredLanguage string
+	// ExistingFormURL is the link we already hold for this filing, if any.
+	//
+	// It exists because vendors disagree about whether a hosted link is durable.
+	// One whose links expire in an hour must re-read on every tap; one whose
+	// links do not expire must NOT, because re-requesting is how you end up
+	// with a pile of duplicate submissions. The adapter decides; the caller
+	// just supplies what it has.
+	ExistingFormURL string
 }
 
 type W9Request struct {
@@ -98,9 +110,16 @@ type Provider interface {
 
 	CreateW9Request(ctx context.Context, in W9RequestInput) (W9Request, error)
 
-	// HostedFormURL returns a fresh link. Hosted links expire, so this is called
-	// when someone opens the form rather than being read from a stored column.
-	HostedFormURL(ctx context.Context, providerRequestID string, returnURL string) (W9Request, error)
+	// HostedFormURL returns a fresh link for a request that already exists.
+	// Hosted links expire, so this is called when someone opens the form rather
+	// than being read from a stored column.
+	//
+	// It takes the whole input rather than just a return URL because vendors
+	// differ in what re-minting needs: some read by their own request id, others
+	// re-issue against the payee reference and email we chose. Passing the same
+	// input CreateW9Request received covers both without the adapter having to
+	// smuggle identifiers through the request id string.
+	HostedFormURL(ctx context.Context, providerRequestID string, in W9RequestInput) (W9Request, error)
 
 	// GetW9Status is the only way completion is ever learned. The sweeper polls
 	// it for every outstanding filing, and keeps polling past completion until
@@ -110,13 +129,38 @@ type Provider interface {
 }
 
 // Config is read once at startup.
+//
+// It carries the union of what the adapters need. Track1099 uses APIKey and
+// TeamAPIID; TaxBandits uses the client credential triple plus BusinessID and
+// APIVersion. Environment selects the sandbox or production host pair for
+// whichever is selected, and is the only field both care about.
 type Config struct {
 	Provider string
-	APIKey   string
-	BaseURL  string
-	// TeamAPIID scopes every path: /api/v1/{team_api_id}/…. Without it every
-	// real call 404s, so it is not optional for a live vendor.
-	TeamAPIID   string
+
+	// Track1099.
+	APIKey string
+	// TeamAPIID scopes every Track1099 path: /api/v1/{team_api_id}/…. Without
+	// it every real call 404s, so it is not optional for that vendor.
+	TeamAPIID string
+
+	// TaxBandits. Auth is a JWS we sign with ClientSecret, naming ClientID as
+	// both issuer and subject and UserToken as the audience.
+	ClientID     string
+	ClientSecret string
+	UserToken    string
+	// BusinessID is the payer GUID from Business/Create. Nothing can be
+	// requested until the payer exists, so an empty value is a hard error
+	// rather than a silent disable.
+	BusinessID string
+	// APIVersion is a path segment, e.g. "v1.7.3". Pinned in config because the
+	// request shapes differ between major trees and mixing them silently
+	// produces 404s.
+	APIVersion string
+	// AuthURL is the token exchange endpoint, on a different domain from the
+	// API host. Empty selects the documented default for Environment.
+	AuthURL string
+
+	BaseURL     string
 	Environment string
 }
 
@@ -125,8 +169,13 @@ type Config struct {
 // is unreachable, and refusing to boot over a tax integration would take the
 // whole platform down with it.
 func New(cfg Config) Provider {
-	switch cfg.Provider {
+	switch strings.ToLower(strings.TrimSpace(cfg.Provider)) {
+	case "taxbandits":
+		return NewTaxBandits(cfg)
 	case "track1099":
+		// Kept as the fallback while TaxBandits Go Live approval is outstanding.
+		// It is known to be wrong in its details — see TRACK1099-API-NOTES.md —
+		// and should be deleted once TaxBandits is live.
 		return NewTrack1099(cfg)
 	case "fake":
 		return NewFake(cfg)

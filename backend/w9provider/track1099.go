@@ -169,7 +169,7 @@ func (t *Track1099) CreateW9Request(ctx context.Context, in W9RequestInput) (W9R
 // embedded JavaScript widget, which would mean handing the browser a token
 // rather than a URL. That decision changes the client flow, so it is flagged in
 // the notes rather than guessed at here.
-func (t *Track1099) HostedFormURL(ctx context.Context, providerRequestID string, _ string) (W9Request, error) {
+func (t *Track1099) HostedFormURL(ctx context.Context, providerRequestID string, _ W9RequestInput) (W9Request, error) {
 	var current formRequestResponse
 	if err := t.do(ctx, http.MethodGet, "/form_requests/"+url.PathEscape(providerRequestID), nil, &current); err != nil {
 		return W9Request{}, err

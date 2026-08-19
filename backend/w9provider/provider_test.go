@@ -71,13 +71,33 @@ func TestTINMatchResolvesOnALaterPoll(t *testing.T) {
 		t.Fatalf("first poll: %q; want pending", first.TINMatch)
 	}
 	second, _ := fake.GetW9Status(context.Background(), created.ProviderRequestID)
+
+	// THE load-bearing assertion. The caller only records a match when this is
+	// non-empty, so an empty value here means the rejection is dropped on the
+	// floor: the filing keeps clearing future payouts, nobody is asked for a
+	// corrected form, and the row polls forever.
+	//
+	// That is not hypothetical. The live vendor erases its TINMatching object
+	// on failure and signals only through the status, and an earlier version of
+	// this adapter faithfully reported the resulting emptiness — which silently
+	// disabled every rejection path in the system.
+	if second.TINMatch == "" {
+		t.Fatal("a resolved rejection reported as empty is silently ignored by the caller")
+	}
 	if second.TINMatch != TINMatchRejected {
 		t.Fatalf("second poll: %q; want rejected", second.TINMatch)
 	}
-	// A rejection does not un-complete the filing. It is handled forward, by
-	// asking for a corrected form, not by reversing what was already released.
-	if second.Status != StatusCompleted {
-		t.Fatalf("status = %q; a rejected match must not un-complete a signed form", second.Status)
+
+	// The filing DOES become invalid, and that is correct — it is how the next
+	// payout gets blocked. Verified against the vendor, which returns INVALID,
+	// and consistent with RecordTINMatch, which independently sets status
+	// 'invalid' on a rejection.
+	//
+	// What must never happen is money coming back. That is enforced in the
+	// payout layer, not here: nothing in the release path is reversible, and a
+	// rejection only ever changes what happens NEXT.
+	if second.Status != StatusInvalid {
+		t.Fatalf("status = %q; a rejected match must stop the filing clearing future payouts", second.Status)
 	}
 }
 
