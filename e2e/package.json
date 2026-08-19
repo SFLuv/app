@@ -1,0 +1,16 @@
+{
+  "name": "sfluv-e2e",
+  "private": true,
+  "description": "End-to-end suite for the SFLUV web app. Kept out of frontend/ deliberately — dev-up.sh's ensure_deps compares node_modules against package.json, so adding Playwright there would force a reinstall on every boot.",
+  "scripts": {
+    "auth": "playwright test --project=setup --headed",
+    "test": "playwright test --project=chromium",
+    "smoke": "playwright test --project=chromium tests/smoke.spec.ts",
+    "report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0",
+    "@types/node": "^22.10.0",
+    "typescript": "^5.9.3"
+  }
+}

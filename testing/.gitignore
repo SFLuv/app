@@ -1,0 +1,5 @@
+# Test output is evidence of a run, not source. Logs, traces, captured tokens and
+# response dumps all land here and none of it belongs in the repository.
+artifacts/*
+!artifacts/TESTING-LOG.md
+!artifacts/.gitkeep

@@ -1,0 +1,8 @@
+# The seeded Privy session. It is a live credential for a real dev account —
+# never commit it.
+.auth/
+
+node_modules/
+test-results/
+playwright-report/
+blob-report/
