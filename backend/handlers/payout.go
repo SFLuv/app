@@ -245,10 +245,19 @@ func (p *PayoutService) Pay(ctx context.Context, req PayoutRequest) (*PayoutResu
 
 	// An existing row that already settled is the retry case: report what
 	// happened the first time rather than paying again.
+	//
+	// Blocked must be carried through, not just Escrowed. A refused payout
+	// leaves a cancelled row and hands the redemption code back, so the same
+	// code WILL be presented again — that is the design. Omitting Blocked here
+	// made that second attempt look like a plain success: the caller answered
+	// HTTP 200 and sent nothing, telling a volunteer they had been paid when
+	// they had not. Found by the threshold-crossing test on 2026-08-19.
 	if !created && row.State != db.PayoutStatePending {
 		return &PayoutResult{
 			LedgerID: row.ID, State: row.State, TxHash: row.TxHash,
-			TaxYear: row.TaxYear, Escrowed: row.State == db.PayoutStateEscrowed,
+			TaxYear:    row.TaxYear,
+			Escrowed:   row.State == db.PayoutStateEscrowed,
+			Blocked:    row.State == db.PayoutStateCancelled,
 			AmountBase: req.AmountBase,
 		}, nil
 	}
