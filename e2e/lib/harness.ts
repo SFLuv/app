@@ -1,6 +1,6 @@
 import { spawnSync } from "child_process"
 import path from "path"
-import { APP_DB, DB_HOST, DB_PORT, DB_USER, REPO_ROOT } from "./env"
+import { ANVIL_RPC, APP_DB, BACKEND_URL, DB_HOST, DB_PORT, DB_USER, REPO_ROOT } from "./env"
 
 /**
  * Control over the local dev stack, driven entirely through what already
@@ -62,6 +62,109 @@ function runMenu(lines: string[], expectPattern: RegExp, action: string): string
     throw new Error(`${action} did not confirm. Menu output:\n${result.stdout}`)
   }
   return result.stdout
+}
+
+/**
+ * On-chain SFLUV balance, in base units.
+ *
+ * Exists so a spec that claims money moved can prove it rather than infer it
+ * from the UI. A success screen is what the app believes; the chain is what
+ * actually happened, and those are the two things a payment test exists to
+ * reconcile.
+ *
+ * Returns null when the chain or token cannot be reached, so a spec can skip
+ * rather than fail on an environment problem.
+ */
+let cachedToken: string | null | undefined
+
+/**
+ * The SFLUV contract address, read from the backend's own config rather than
+ * hardcoded — it differs per environment and the dev env file does not carry
+ * it. Resolved once per run.
+ */
+function tokenAddress(): string | null {
+  if (cachedToken !== undefined) return cachedToken
+  const result = spawnSync("curl", ["-s", "--max-time", "8", `${BACKEND_URL}/config`], {
+    encoding: "utf8",
+  })
+  cachedToken = null
+  if (result.status === 0 && result.stdout) {
+    const match = result.stdout.match(/"primary_token"\s*:\s*\{[^}]*"address"\s*:\s*"(0x[a-fA-F0-9]{40})"/)
+    if (match) cachedToken = match[1]
+  }
+  return cachedToken
+}
+
+export function tokenBalance(address: string): bigint | null {
+  const token = tokenAddress()
+  if (!token) return null
+  if (!/^0x[a-fA-F0-9]{40}$/.test(address)) return null
+
+  const result = spawnSync(
+    "cast",
+    ["call", token, "balanceOf(address)(uint256)", address, "--rpc-url", ANVIL_RPC],
+    { encoding: "utf8" },
+  )
+  if (result.status !== 0) return null
+  const raw = (result.stdout || "").trim().split(/\s+/)[0]
+  try {
+    return BigInt(raw)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Wait for an on-chain balance to reach an expected value.
+ *
+ * ASYNC on purpose, and it must stay that way. The UI reports a transfer as
+ * "broadcast to the network", not confirmed, so reading the chain the instant
+ * the success screen appears finds the old balance and looks exactly like the
+ * money went somewhere wrong.
+ *
+ * The first version of this polled with a synchronous sleep, which was much
+ * worse than merely inelegant: lib/test.ts installs a page.route() handler that
+ * runs in THIS node process, so blocking the event loop stalls the browser's
+ * network entirely. The transaction being waited for could not be submitted
+ * while the wait was in progress — a deadlock that presented as "tips do not
+ * arrive".
+ */
+export async function waitForBalance(
+  address: string,
+  expected: bigint,
+  timeoutMs = 90_000,
+): Promise<bigint | null> {
+  const deadline = Date.now() + timeoutMs
+  let last: bigint | null = null
+  while (Date.now() < deadline) {
+    last = tokenBalance(address)
+    if (last !== null && last === expected) return last
+    await new Promise((resolve) => setTimeout(resolve, 1000))
+  }
+  return last
+}
+
+/**
+ * How far the fork's clock is behind wall time, in seconds.
+ *
+ * Drift is the single most expensive thing to misdiagnose here. The paymaster
+ * signs each UserOperation with a real-time validity window that the chain
+ * judges against block.timestamp, so once they part company every operation
+ * fails with "AA32 expired or not due" — and anvil only advances time when
+ * blocks are mined, so an idle fork drifts on its own.
+ *
+ * Mild drift does not break transfers outright; it makes them retry, turning a
+ * seven-second spec into a four-minute timeout. Severe drift hangs the whole
+ * app on its loading spinner. Fix with testing/scripts/sync-chain-time.sh.
+ */
+export function chainClockDriftSeconds(): number | null {
+  const result = spawnSync("cast", ["block", "latest", "--rpc-url", ANVIL_RPC], {
+    encoding: "utf8",
+  })
+  if (result.status !== 0) return null
+  const match = (result.stdout || "").match(/^timestamp\s+(\d+)/m)
+  if (!match) return null
+  return Math.floor(Date.now() / 1000) - Number(match[1])
 }
 
 export function pranksActive(): boolean {
