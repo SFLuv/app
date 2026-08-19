@@ -3,30 +3,35 @@ package structs
 import "time"
 
 type User struct {
-	Id                       string                 `json:"id"`
-	Exists                   bool                   `json:"exists"`
-	IsAdmin                  bool                   `json:"is_admin"`
-	IsMerchant               bool                   `json:"is_merchant"`
-	IsOrganizer              bool                   `json:"is_organizer"`
-	IsImprover               bool                   `json:"is_improver"`
-	IsProposer               bool                   `json:"is_proposer"`
-	IsVoter                  bool                   `json:"is_voter"`
-	IsIssuer                 bool                   `json:"is_issuer"`
-	IsSupervisor             bool                   `json:"is_supervisor"`
-	IsAffiliate              bool                   `json:"is_affiliate"`
-	Email                    *string                `json:"contact_email"`
-	Phone                    *string                `json:"contact_phone"`
-	Name                     *string                `json:"contact_name"`
-	PrimaryWalletAddress     string                 `json:"primary_wallet_address"`
-	PayPalEth                string                 `json:"paypal_eth"`
-	LastRedemption           int                    `json:"last_redemption"`
-	AcceptedPrivacyPolicy    bool                   `json:"accepted_privacy_policy"`
-	AcceptedPrivacyPolicyAt  *time.Time             `json:"accepted_privacy_policy_at,omitempty"`
-	PrivacyPolicyVersion     string                 `json:"privacy_policy_version"`
-	MailingListOptIn         bool                   `json:"mailing_list_opt_in"`
-	MailingListOptInAt       *time.Time             `json:"mailing_list_opt_in_at,omitempty"`
-	MailingListPolicyVersion string                 `json:"mailing_list_policy_version"`
-	ClientDevices            []*ClientVersionDevice `json:"client_devices,omitempty"`
+	Id                       string     `json:"id"`
+	Exists                   bool       `json:"exists"`
+	IsAdmin                  bool       `json:"is_admin"`
+	IsMerchant               bool       `json:"is_merchant"`
+	IsOrganizer              bool       `json:"is_organizer"`
+	IsImprover               bool       `json:"is_improver"`
+	IsProposer               bool       `json:"is_proposer"`
+	IsVoter                  bool       `json:"is_voter"`
+	IsIssuer                 bool       `json:"is_issuer"`
+	IsSupervisor             bool       `json:"is_supervisor"`
+	IsAffiliate              bool       `json:"is_affiliate"`
+	Email                    *string    `json:"contact_email"`
+	Phone                    *string    `json:"contact_phone"`
+	Name                     *string    `json:"contact_name"`
+	PrimaryWalletAddress     string     `json:"primary_wallet_address"`
+	PayPalEth                string     `json:"paypal_eth"`
+	LastRedemption           int        `json:"last_redemption"`
+	AcceptedPrivacyPolicy    bool       `json:"accepted_privacy_policy"`
+	AcceptedPrivacyPolicyAt  *time.Time `json:"accepted_privacy_policy_at,omitempty"`
+	PrivacyPolicyVersion     string     `json:"privacy_policy_version"`
+	MailingListOptIn         bool       `json:"mailing_list_opt_in"`
+	MailingListOptInAt       *time.Time `json:"mailing_list_opt_in_at,omitempty"`
+	MailingListPolicyVersion string     `json:"mailing_list_policy_version"`
+	// AccountType is what the person chose at signup. IsMerchant is not a
+	// substitute: it is recomputed from approved listings, so it says a shop of
+	// theirs is live, not which app they thought they were signing up for.
+	AccountType                   string                 `json:"account_type"`
+	MerchantOnboardingCompletedAt *time.Time             `json:"merchant_onboarding_completed_at,omitempty"`
+	ClientDevices                 []*ClientVersionDevice `json:"client_devices,omitempty"`
 }
 
 type ClientVersionDevice struct {
@@ -80,6 +85,20 @@ const (
 	CurrentMailingListPolicyVersion = "2026-04-15"
 	AuthReasonPrivacyPolicyRequired = "privacy-policy-required"
 )
+
+// The account types a signup may choose between.
+const (
+	AccountTypeRegular  = "regular"
+	AccountTypeMerchant = "merchant"
+)
+
+// IsValidAccountType reports whether a client-supplied account type is one we
+// store. The empty string is not valid here and is handled by the caller: an
+// older client omits the field entirely, which means "leave it alone", not
+// "write an empty account type".
+func IsValidAccountType(accountType string) bool {
+	return accountType == AccountTypeRegular || accountType == AccountTypeMerchant
+}
 
 type AccountDeletionStatus string
 
@@ -177,9 +196,40 @@ type UserPolicyStatusResponse struct {
 	MailingListOptIn         bool       `json:"mailing_list_opt_in"`
 	MailingListOptInAt       *time.Time `json:"mailing_list_opt_in_at,omitempty"`
 	MailingListPolicyVersion string     `json:"mailing_list_policy_version"`
+	// Carried here rather than only on the profile because policy status is the
+	// first thing a client gets back at startup, and the profile is withheld
+	// until the policy is accepted. A client that has to know whether to send
+	// somebody into merchant onboarding would otherwise have nothing to go on.
+	AccountType                   string     `json:"account_type"`
+	MerchantOnboardingCompletedAt *time.Time `json:"merchant_onboarding_completed_at,omitempty"`
+}
+
+// AdminUpdateUserAccountTypeRequest is the support-side repair for an account
+// type that cannot be corrected any other way: the signup answer is written
+// once, so a wrong choice — or a client old enough that it never asked the
+// question — otherwise stands forever.
+type AdminUpdateUserAccountTypeRequest struct {
+	UserId string `json:"user_id"`
+	// Required here, unlike on the signup path, where an empty value means
+	// "leave it alone". Stating the type is the only reason to call this.
+	AccountType string `json:"account_type"`
+}
+
+// AdminUserAccountTypeResponse carries the previous type back so the caller can
+// see what the repair actually changed, and the onboarding stamp so an admin
+// can tell whether the person will now be sent through merchant onboarding.
+type AdminUserAccountTypeResponse struct {
+	UserId                        string     `json:"user_id"`
+	PreviousAccountType           string     `json:"previous_account_type"`
+	AccountType                   string     `json:"account_type"`
+	MerchantOnboardingCompletedAt *time.Time `json:"merchant_onboarding_completed_at,omitempty"`
 }
 
 type UserPolicyAcceptanceRequest struct {
 	AcceptedPrivacyPolicy bool `json:"accepted_privacy_policy"`
 	MailingListOptIn      bool `json:"mailing_list_opt_in"`
+	// AccountType is the signup choice, and is only honoured on a first
+	// acceptance. Omitted by clients that predate the question, and by every
+	// re-acceptance a policy version bump forces.
+	AccountType string `json:"account_type"`
 }

@@ -241,7 +241,11 @@ func markUserOwnedRowsInactive(ctx context.Context, tx pgx.Tx, userID string, de
 			return err
 		}
 	}
-	return nil
+
+	// Retiring the wallet rows is what makes the locations unpayable, and the
+	// address column has to say so too. A cancelled deletion restores both
+	// together below, so the round trip lands back where it started.
+	return syncOwnerLocationPaymentWalletAddresses(ctx, tx, userID)
 }
 
 func restoreUserOwnedRowsForAccountDeletionCancel(ctx context.Context, tx pgx.Tx, userID string) error {
@@ -267,7 +271,11 @@ func restoreUserOwnedRowsForAccountDeletionCancel(ctx context.Context, tx pgx.Tx
 			return err
 		}
 	}
-	return nil
+
+	// Only rows retired by the deletion come back, so recomputing rather than
+	// remembering the old value is what keeps a wallet the merchant removed on
+	// their own from being resurrected by an unrelated cancel.
+	return syncOwnerLocationPaymentWalletAddresses(ctx, tx, userID)
 }
 
 func (a *AppDB) ScheduleAccountDeletion(ctx context.Context, userID string, now time.Time) (*structs.AccountDeletionStatusResponse, error) {

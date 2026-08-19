@@ -14,6 +14,12 @@ import (
 // nested payload shapes are exactly what the standalone endpoints return and
 // stay in lockstep with them. The standalone endpoints are unchanged, so
 // existing clients are unaffected; this is purely an additive fast path.
+//
+// The policy status block is the only part a brand-new account gets: the
+// profile is withheld until the privacy policy is accepted. That is why
+// account_type and the merchant onboarding timestamp ride along in it — a
+// client deciding whether to send somebody into merchant onboarding has to be
+// able to answer that on this response alone.
 func (a *AppService) GetUserBootstrap(w http.ResponseWriter, r *http.Request) {
 	userDid := utils.GetDid(r)
 	if userDid == nil {

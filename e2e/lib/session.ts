@@ -89,6 +89,79 @@ export function findUserIdInStorageState(statePath: string): string | null {
   return null
 }
 
+/**
+ * The same question, asked from inside the browser: is a Privy session live in
+ * THIS page right now?
+ *
+ * findUserIdInStorageState reads a saved snapshot, which only exists once
+ * someone has decided the login is finished. Seeding needs to know when that
+ * moment arrives, and the honest signal is the token appearing in the page's
+ * own storage — see the note in tests/auth.setup.ts for why no screen can be
+ * used for that, and why storageState must not be polled to find out.
+ *
+ * Two constraints, both easy to break by accident:
+ *
+ *   - This runs in the browser. Playwright serializes it with toString(), so it
+ *     must reference nothing outside itself — no imports, no module-level
+ *     constants, no helpers from this file. It duplicates the decoding above
+ *     for that reason and no other.
+ *   - It must agree with findUserIdInStorageState about what an identity is: a
+ *     JWT issued by privy.io whose subject is a did. Anything else and the two
+ *     halves of seeding would be waiting for one thing and saving another.
+ *
+ * Only non-HttpOnly cookies are readable here, which is fine — Privy keeps the
+ * access token in localStorage under privy:token and mirrors it into a
+ * script-readable privy-token cookie.
+ */
+export function findPrivyUserIdInPage(): string | null {
+  const stored: string[] = []
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i)
+    const value = key === null ? null : localStorage.getItem(key)
+    if (value) stored.push(value)
+  }
+  for (const pair of document.cookie.split(";")) {
+    const value = pair.slice(pair.indexOf("=") + 1).trim()
+    if (!value) continue
+    stored.push(value)
+    try {
+      stored.push(decodeURIComponent(value))
+    } catch {
+      // Not percent-encoded. The raw value is already in the list.
+    }
+  }
+
+  for (const value of stored) {
+    const candidates = [value]
+    try {
+      const parsed = JSON.parse(value)
+      if (typeof parsed === "string") candidates.push(parsed)
+      else if (parsed && typeof parsed === "object") {
+        for (const nested of Object.values(parsed)) {
+          if (typeof nested === "string") candidates.push(nested)
+        }
+      }
+    } catch {
+      // Not JSON, which is the common case.
+    }
+
+    for (const candidate of candidates) {
+      const parts = candidate.split(".")
+      if (parts.length !== 3) continue
+      try {
+        const payload = JSON.parse(atob(parts[1].replace(/-/g, "+").replace(/_/g, "/")))
+        if (!payload || payload.iss !== "privy.io") continue
+        if (typeof payload.sub === "string" && payload.sub.startsWith("did:privy:")) {
+          return payload.sub as string
+        }
+      } catch {
+        // Not a readable JWT. Nothing to learn from it.
+      }
+    }
+  }
+  return null
+}
+
 export function writeSession(session: SeededSession): void {
   if (!existsSync(AUTH_DIR)) mkdirSync(AUTH_DIR, { recursive: true })
   writeFileSync(SESSION_FILE, JSON.stringify(session, null, 2) + "\n")

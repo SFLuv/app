@@ -216,3 +216,36 @@ func TestAdminLocationEditRoutesRejectUnauthenticated(t *testing.T) {
 		}
 	}
 }
+
+// The account-type repair is the only way a wrong signup answer is ever
+// corrected, and it decides whether somebody is treated as a merchant, so it
+// must stay admin-guarded. Its neighbour PUT /admin/users checks admin inside
+// the handler; this one is guarded at the router, and the assertion below is
+// what says so — an anonymous caller is turned away before any handler or
+// service is touched, which is why it passes with nil services.
+func TestAdminAccountTypeRepairIsRegisteredAndGuarded(t *testing.T) {
+	router := newTestRouter(t)
+
+	registered := false
+	err := chi.Walk(router, func(method string, route string, handler http.Handler, middlewares ...func(http.Handler) http.Handler) error {
+		if method == http.MethodPut && strings.TrimSuffix(route, "/") == "/admin/users/account-type" {
+			registered = true
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walking routes: %s", err)
+	}
+	if !registered {
+		t.Fatal("PUT /admin/users/account-type is not registered; a user with the wrong account type has no repair path")
+	}
+
+	request := httptest.NewRequest(http.MethodPut, "/admin/users/account-type", strings.NewReader(`{"user_id":"did:privy:someone","account_type":"merchant"}`))
+	recorder := httptest.NewRecorder()
+
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusForbidden {
+		t.Errorf("PUT /admin/users/account-type without credentials = %d, want %d", recorder.Code, http.StatusForbidden)
+	}
+}

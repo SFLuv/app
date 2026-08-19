@@ -746,6 +746,29 @@ func (a *AppDB) AddLocation(ctx context.Context, location *structs.Location) err
 		return err
 	}
 
+	// Listing the shop is the act that finishes merchant onboarding, so the
+	// timestamp the forced-onboarding gate keys off is stamped here, with the
+	// insert, rather than by a separate call that could fail on its own and
+	// strand somebody behind a gate they had in fact passed.
+	//
+	// Only while still NULL. A merchant opening a second location years later
+	// has not re-onboarded, and moving the stamp forward would restate when they
+	// first finished — the one thing the column exists to remember.
+	//
+	// Only for account_type = 'merchant'. The gate exists to walk a self-declared
+	// merchant through setup; a regular account that happens to submit a listing
+	// never saw that flow, and marking it complete would skip it for good if they
+	// later say they are a merchant.
+	if _, err := tx.Exec(ctx, `
+		UPDATE users
+		SET merchant_onboarding_completed_at = NOW()
+		WHERE id = $1
+		AND account_type = 'merchant'
+		AND merchant_onboarding_completed_at IS NULL;
+	`, location.OwnerID); err != nil {
+		return fmt.Errorf("error recording merchant onboarding completion for %s: %w", location.OwnerID, err)
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("error committing new location: %w", err)
 	}

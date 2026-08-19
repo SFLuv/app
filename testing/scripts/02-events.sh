@@ -122,47 +122,4 @@ fi
 
 info "event $event_id left live; its codes are in $RUN_DIR/codes.txt"
 
-summary "Events"; exit 1
-fi
-
-event_id="$(printf '%s' "$created" | jq -r '.id // .event_id // .ID // empty')"
-expect_nonempty "$event_id" "the new event has an id"
-[[ -n "$event_id" ]] || { summary "Events"; exit 1; }
-
-step "Public visibility — what a website visitor sees"
-listing="$(api GET /volunteer-events)"
-expect_status 200 "the public event list responds"
-if printf '%s' "$listing" | jq -e --arg id "$event_id" 'any(.[]?; (.id//.event_id|tostring) == $id)' >/dev/null 2>&1; then
-  pass "the new event appears in the public list"
-else
-  # Unapproved events are correctly hidden; that is a pass for the guard, and a
-  # note that the approval step is what publishes them.
-  skip "not in the public list yet — it likely needs approval first"
-fi
-
-detail="$(api GET "/volunteer-events/$event_id")"
-expect_status 200 "the event detail page has data to render"
-
-step "Redemption codes"
-codes="$(admin_api POST "/admin/volunteer-events/$event_id/codes" '{"count":3}')"
-if [[ "$(status)" =~ ^20 ]]; then
-  pass "codes generated"
-  printf '%s' "$codes" | jq '.' > "$RUN_DIR/event-codes.json" 2>/dev/null
-  printf '%s' "$codes" | jq -r '(.codes // .)[]? | (.code // .)' 2>/dev/null | head -5 > "$RUN_DIR/codes.txt"
-  info "codes saved to $RUN_DIR/codes.txt — used by 03-qr-payout.sh"
-else
-  fail "code generation returned $(status)"
-fi
-
-step "Deletion"
-# An event with redemptions must refuse deletion and ask to be cancelled
-# instead, so the payout record survives. Deleting before anyone redeems should
-# succeed.
-admin_api DELETE "/admin/volunteer-events/$event_id" >/dev/null
-case "$(status)" in
-  200|204) pass "an unredeemed event deletes cleanly" ;;
-  409)     pass "deletion refused with 409 — it has redemptions, cancel instead" ;;
-  *)       fail "deletion returned $(status)" ;;
-esac
-
 summary "Events"

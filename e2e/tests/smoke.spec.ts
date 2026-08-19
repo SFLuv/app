@@ -16,7 +16,17 @@ import { expect, test } from "../lib/test"
  * (dashboard/sidebar.tsx:280), so they carry the button role. Asking for a link
  * role here matches nothing.
  */
-/** Present for every authenticated user, absent otherwise (dashboard/sidebar.tsx:110). */
+/**
+ * Present for every authenticated user, absent otherwise (dashboard/sidebar.tsx:110).
+ *
+ * tests/auth.setup.ts deliberately does NOT wait on this, and the difference is
+ * worth keeping straight. Here it is an assertion: a regular authenticated user
+ * gets a sidebar, and if that stops being true this spec should go red and say
+ * so. There it was a dependency: it gated the credential the entire suite runs
+ * on, so an onboarding gate that hides the sidebar from one account type — a
+ * merchant mid-onboarding, say — would take the whole suite down with it rather
+ * than fail one assertion. Seeding waits on the Privy token instead.
+ */
 const AUTHED_NAV = "Contacts"
 
 /** Present only when user.isAdmin (dashboard/sidebar.tsx:192). */

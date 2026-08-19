@@ -14,6 +14,7 @@ import (
 
 	"github.com/SFLuv/app/backend/structs"
 	"github.com/SFLuv/app/backend/utils"
+	"github.com/jackc/pgx/v5"
 )
 
 func (a *AppService) GetUsers(w http.ResponseWriter, r *http.Request) {
@@ -183,6 +184,85 @@ func (a *AppService) UpdateUserRole(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusCreated)
+}
+
+// UpdateUserAccountType repairs an account type that the person it belongs to
+// cannot change themselves. The signup answer is honoured once and never
+// overwritten, so somebody who chose 'regular' by mistake — or who accepted the
+// policies on a client that predates the question and got the 'regular' default
+// — is locked out of merchant onboarding permanently. This is the only way back.
+//
+// Guarded by withAdmin in the router rather than by an in-handler IsAdmin check
+// like its neighbour UpdateUserRole. withAdmin is what every other /admin/users
+// route uses, it rejects before the body is read, and it honours X-Admin-Key,
+// which is how support fixes this for a merchant who cannot get far enough into
+// the app to be helped any other way.
+func (a *AppService) UpdateUserAccountType(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		a.logger.Logf("error reading update user account type body: %s", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	var req structs.AdminUpdateUserAccountTypeRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	userId := strings.TrimSpace(req.UserId)
+	if userId == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte("user_id is required"))
+		return
+	}
+
+	// A value the CHECK constraint would reject should come back as a 400
+	// naming the field, not a 500 out of the database. An empty string is not
+	// "unchanged" here the way it is on the signup path — this route exists to
+	// state a type.
+	accountType := strings.TrimSpace(req.AccountType)
+	if !structs.IsValidAccountType(accountType) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte("account_type must be 'regular' or 'merchant'"))
+		return
+	}
+
+	result, err := a.db.SetUserAccountType(r.Context(), userId, accountType)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		a.logger.Logf("error updating account type for user %s: %s", userId, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	// This changes what the person can do in the app — it is what puts a
+	// merchant into onboarding, or takes them out of it — so who did it, to
+	// whom, and from what to what has to survive the request. The onboarding
+	// stamp goes in the same line because it, not the type alone, decides
+	// whether they will actually be walked through setup.
+	onboarding := "not completed"
+	if result.MerchantOnboardingCompletedAt != nil {
+		onboarding = result.MerchantOnboardingCompletedAt.UTC().Format(time.RFC3339)
+	}
+	// X-Admin-Key callers have no user identity to borrow when the database has
+	// no admin, and the audit line still has to name somebody.
+	actor := "x-admin-key"
+	if userDid := utils.GetDid(r); userDid != nil {
+		actor = *userDid
+	}
+	a.logger.Logf(
+		"admin %s changed account type for user %s from %s to %s (merchant onboarding: %s)",
+		actor, result.UserId, result.PreviousAccountType, result.AccountType, onboarding,
+	)
+
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(result)
 }
 
 func (a *AppService) UpdateLocationApproval(w http.ResponseWriter, r *http.Request) {

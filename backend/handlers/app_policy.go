@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/SFLuv/app/backend/db"
@@ -73,6 +74,18 @@ func (a *AppService) AcceptUserPolicies(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// Empty is allowed and means "unchanged": clients that predate the signup
+	// question send nothing, and so does every re-acceptance forced by a policy
+	// version bump. Anything else must be one of the two we store — a value the
+	// CHECK constraint would reject should fail here, as a 400 naming the field,
+	// rather than as a 500 from the database.
+	accountType := strings.TrimSpace(req.AccountType)
+	if accountType != "" && !structs.IsValidAccountType(accountType) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte("account_type must be 'regular' or 'merchant'"))
+		return
+	}
+
 	currentStatus, err := a.db.GetUserPolicyStatus(r.Context(), *userDid)
 	if err != nil {
 		if err == pgx.ErrNoRows {
@@ -91,7 +104,7 @@ func (a *AppService) AcceptUserPolicies(w http.ResponseWriter, r *http.Request) 
 
 	a.recordClientVersionObservation(r.Context(), *userDid, "user_policy_accept", r)
 
-	status, err := a.db.AcceptUserPolicies(r.Context(), *userDid, req.MailingListOptIn, time.Now().UTC())
+	status, err := a.db.AcceptUserPolicies(r.Context(), *userDid, req.MailingListOptIn, accountType, time.Now().UTC())
 	if err != nil {
 		switch err {
 		case pgx.ErrNoRows:

@@ -295,6 +295,7 @@ func AddAdminRoutes(r *chi.Mux, s *handlers.AppService) {
 	r.Post("/admin/users/delete-account/purge", withAdmin(s.PurgeDeletedAccountsManual, s))
 	r.Get("/admin/locations", withAdmin(s.GetAuthedLocations, s))
 	r.Put("/admin/users", withActiveAuth(s.UpdateUserRole, s))
+	r.Put("/admin/users/account-type", withAdmin(s.UpdateUserAccountType, s))
 	r.Put("/admin/locations", withAdmin(s.UpdateLocationApproval, s))
 	r.Put("/admin/locations/{id}", withAdmin(s.AdminUpdateLocation, s))
 	r.Put("/admin/locations/{id}/google-place", withAdmin(s.AdminUpdateLocationGooglePlace, s))

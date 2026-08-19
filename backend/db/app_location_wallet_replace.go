@@ -345,6 +345,13 @@ func (a *AppDB) ReplaceLocationWallet(
 			return nil, fmt.Errorf("error attaching the new payment wallet: %w", err)
 		}
 
+		// The whole point of the swap is that the old address stops being paid.
+		// Retiring the row without moving the column would leave the location
+		// still advertising the wallet the merchant just walked away from.
+		if err := syncLocationPaymentWalletAddress(ctx, tx, locationID); err != nil {
+			return nil, err
+		}
+
 	case LocationWalletRoleTipping:
 		if _, err := tx.Exec(ctx, `
 			UPDATE locations SET tipping_wallet_address = $1

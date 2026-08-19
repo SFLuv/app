@@ -130,25 +130,31 @@ type Location struct {
 	// PhotoURL is the merchant's uploaded storefront photo, empty when they have
 	// not uploaded one. Distinct from ImageURL, which is a link to a Google Maps
 	// page captured at creation and is not an image address at all.
-	PhotoURL           string                  `json:"photo_url"`
-	Rating             float64                 `json:"rating"`
-	MapsPage           string                  `json:"maps_page"`
-	OpeningHours       []string                `json:"opening_hours"`
-	ContactFirstName   string                  `json:"contact_firstname"`
-	ContactLastName    string                  `json:"contact_lastname"`
-	ContactPhone       string                  `json:"contact_phone"`
-	PosSystem          string                  `json:"pos_system"`
-	SoleProprietorship string                  `json:"sole_proprietorship"`
-	TippingPolicy      string                  `json:"tipping_policy"`
-	TippingDivision    string                  `json:"tipping_division"`
-	TableCoverage      string                  `json:"table_coverage"`
-	ServiceStations    int                     `json:"service_stations"`
-	TabletModel        string                  `json:"tablet_model"`
-	MessagingService   string                  `json:"messaging_service"`
-	PayToAddress       string                  `json:"pay_to_address"`
-	TipToAddress       string                  `json:"tip_to_address"`
-	PaymentWallets     []LocationPaymentWallet `json:"payment_wallets"`
-	Reference          string                  `json:"reference"`
+	PhotoURL           string   `json:"photo_url"`
+	Rating             float64  `json:"rating"`
+	MapsPage           string   `json:"maps_page"`
+	OpeningHours       []string `json:"opening_hours"`
+	ContactFirstName   string   `json:"contact_firstname"`
+	ContactLastName    string   `json:"contact_lastname"`
+	ContactPhone       string   `json:"contact_phone"`
+	PosSystem          string   `json:"pos_system"`
+	SoleProprietorship string   `json:"sole_proprietorship"`
+	TippingPolicy      string   `json:"tipping_policy"`
+	TippingDivision    string   `json:"tipping_division"`
+	TableCoverage      string   `json:"table_coverage"`
+	ServiceStations    int      `json:"service_stations"`
+	TabletModel        string   `json:"tablet_model"`
+	MessagingService   string   `json:"messaging_service"`
+	// PayToAddress is the location's till, and is the Go side of
+	// locations.payment_wallet_address. It is still filled from the lateral
+	// join into location_payment_wallets, not from that column — the column was
+	// added inert so the two can be diffed on real data before any reader moves.
+	// The cutover is then a change of SQL expression under the same alias, and
+	// this field and its JSON name never move.
+	PayToAddress   string                  `json:"pay_to_address"`
+	TipToAddress   string                  `json:"tip_to_address"`
+	PaymentWallets []LocationPaymentWallet `json:"payment_wallets"`
+	Reference      string                  `json:"reference"`
 	// Structured week, Monday first. Backs the time pickers; OpeningHours is
 	// its rendering and stays for existing readers.
 	Hours []LocationDayHours `json:"hours"`
@@ -200,10 +206,12 @@ type AssignableWalletsResponse struct {
 }
 
 type PublicLocation struct {
-	ID           uint               `json:"id"`
-	GoogleID     string             `json:"google_id"`
-	Name         string             `json:"name"`
-	Approval     bool               `json:"approval"`
+	ID       uint   `json:"id"`
+	GoogleID string `json:"google_id"`
+	Name     string `json:"name"`
+	Approval bool   `json:"approval"`
+	// The public face of locations.payment_wallet_address; see Location.PayToAddress
+	// for why the value still comes from the join rather than the column.
 	PayToAddress string             `json:"pay_to_address"`
 	TipToAddress string             `json:"tip_to_address"`
 	Description  string             `json:"description"`

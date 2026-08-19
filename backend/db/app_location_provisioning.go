@@ -131,7 +131,10 @@ func (a *AppDB) provisionLocationWallets(
 	}
 
 	if provisioning.AlreadyAssigned == 0 {
-		return a.assignExistingWallet(ctx, tx, locationID, provisioning.PrimaryWallet)
+		if err := a.assignExistingWallet(ctx, tx, locationID, provisioning.PrimaryWallet); err != nil {
+			return err
+		}
+		return syncLocationPaymentWalletAddress(ctx, tx, uint64(locationID))
 	}
 
 	if derived == nil {
@@ -141,7 +144,14 @@ func (a *AppDB) provisionLocationWallets(
 		return fmt.Errorf("cannot approve a second location without deriving its wallets: address derivation unavailable")
 	}
 
-	return a.insertDerivedWallets(ctx, tx, locationID, provisioning, derived)
+	if err := a.insertDerivedWallets(ctx, tx, locationID, provisioning, derived); err != nil {
+		return err
+	}
+
+	// Approval is the moment the listing becomes payable, so the row has to
+	// carry the address by the time this transaction commits — there is no later
+	// write that would come back for it.
+	return syncLocationPaymentWalletAddress(ctx, tx, uint64(locationID))
 }
 
 func (a *AppDB) assignExistingWallet(ctx context.Context, tx pgx.Tx, locationID uint, address string) error {

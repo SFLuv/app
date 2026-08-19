@@ -20,7 +20,7 @@ import { mkdirSync } from "fs"
 import path from "path"
 import { AUTH_DIR, AUTH_STATE, SESSION_FILE } from "../lib/env"
 import { getUser } from "../lib/harness"
-import { findUserIdInStorageState, writeSession } from "../lib/session"
+import { findPrivyUserIdInPage, findUserIdInStorageState, writeSession } from "../lib/session"
 
 const LOGIN_WINDOW_MS = 10 * 60 * 1000
 
@@ -39,41 +39,60 @@ test("seed a Privy session", async ({ page }) => {
   )
 
   /**
-   * Wait on a POSITIVE UI landmark, and do not poll storageState.
+   * Wait for the token itself, and poll for it INSIDE the page.
    *
-   * An earlier version called context.storageState() once a second until a
-   * token appeared. Playwright reads localStorage by opening a transient page
-   * per origin, so that loop spawned and closed a tab every second — visible as
-   * the Privy window flickering open and shut, and very likely stealing focus
-   * from the login it was waiting for. Never poll storageState; snapshot it
-   * once, when the thing you were waiting for has happened.
+   * Two separate mistakes are being avoided here, and both of them cost a
+   * working suite.
    *
-   * "Contacts is visible" is the right signal because it is present only for an
-   * authenticated user (dashboard/sidebar.tsx:110). The tempting inverse —
-   * "Connect went away" — is wrong: while AppProvider resolves, the sidebar
-   * renders a spinner and no header at all (frontend/app/sidebar.tsx:44), so
-   * Connect is absent before login as well as after.
+   * Not a UI landmark. This used to wait on the sidebar's "Contacts" button.
+   * That is a fine assertion in a spec, but it is the wrong thing to seed on:
+   * the account someone logs in with owns approved locations, so it is
+   * merchant-typed, and a merchant part-way through onboarding can be shown a
+   * form with no sidebar at all. The landmark would then never appear, seeding
+   * would fail, and every spec in the suite fails with it — over a screen
+   * change that broke nothing. Seeding must depend only on what makes the
+   * session a session.
+   *
+   * Not context.storageState(). An earlier version called it once a second
+   * until a token appeared. Playwright reads localStorage by opening a
+   * transient page per origin, so that loop spawned and closed a tab every
+   * second — visible as the Privy window flickering open and shut, and very
+   * likely stealing focus from the login it was waiting for. Snapshot storage
+   * once, when the thing being waited for has already happened.
+   *
+   * waitForFunction polls in the page's own context, which costs nothing and
+   * disturbs nothing. findPrivyUserIdInPage is the same rule
+   * findUserIdInStorageState applies to the saved file, asked of the live page —
+   * a JWT issued by privy.io, whose subject is the claim the backend
+   * authenticates on (token.Claims.GetSubject() in
+   * backend/utils/middleware/auth.go).
    */
-  await expect(
-    page.getByRole("button", { name: "Contacts" }),
-    "no login completed within the login window",
-  ).toBeVisible({ timeout: LOGIN_WINDOW_MS })
+  const seenInPage = await page
+    .waitForFunction(
+      findPrivyUserIdInPage,
+      undefined,
+      // A second between attempts, rather than the default animation frame:
+      // the login window belongs to a human, and the page should stay smooth.
+      { timeout: LOGIN_WINDOW_MS, polling: 1000 },
+    )
+    .then((handle) => handle.jsonValue())
 
   /**
-   * Now snapshot. The token can land a moment after the UI does, so allow a few
-   * attempts — but seconds apart and only a handful, not once a second forever.
+   * Snapshot once, now that the token is known to be there.
+   *
+   * The identity that matters is the one in the SAVED state, because that file
+   * is what every other spec replays as storageState — so read it back rather
+   * than trusting what the page reported. If a token reached the page but not
+   * the file, the seed is worthless, and saying so here is far cheaper than a
+   * whole suite failing as "not logged in".
    */
-  let userId: string | null = null
-  for (let attempt = 0; attempt < 10; attempt++) {
-    await page.context().storageState({ path: AUTH_STATE })
-    userId = findUserIdInStorageState(AUTH_STATE)
-    if (userId) break
-    await page.waitForTimeout(2000)
-  }
+  await page.context().storageState({ path: AUTH_STATE })
+  const userId = findUserIdInStorageState(AUTH_STATE)
 
   expect(
     userId,
-    "logged in, but no privy.io JWT appeared in cookies or local storage",
+    `logged in as ${seenInPage}, but no privy.io JWT reached ` +
+      `${path.relative(process.cwd(), AUTH_STATE)} — the saved session would authenticate nobody`,
   ).toBeTruthy()
 
   const user = getUser(userId!)

@@ -41,7 +41,9 @@ func (s *AppDB) CreateTables() error {
 				privacy_policy_version TEXT NOT NULL DEFAULT '',
 				mailing_list_opt_in BOOLEAN NOT NULL DEFAULT false,
 				mailing_list_opt_in_at TIMESTAMPTZ,
-				mailing_list_policy_version TEXT NOT NULL DEFAULT ''
+				mailing_list_policy_version TEXT NOT NULL DEFAULT '',
+				account_type TEXT NOT NULL DEFAULT 'regular' CHECK (account_type IN ('regular', 'merchant')),
+				merchant_onboarding_completed_at TIMESTAMPTZ
 		);
 	`)
 	if err != nil {
@@ -133,6 +135,24 @@ func (s *AppDB) CreateTables() error {
 	`)
 	if err != nil {
 		return fmt.Errorf("error adding user policy columns: %s", err)
+	}
+
+	// What the person said they were signing up as. Deliberately not is_merchant:
+	// that flag is recomputed from approved listings and would overwrite the
+	// answer, so the two have to be different columns.
+	_, err = s.db.Exec(context.Background(), `
+		ALTER TABLE users
+		ADD COLUMN IF NOT EXISTS account_type TEXT NOT NULL DEFAULT 'regular';
+
+		ALTER TABLE users
+		ADD COLUMN IF NOT EXISTS merchant_onboarding_completed_at TIMESTAMPTZ;
+
+		ALTER TABLE users DROP CONSTRAINT IF EXISTS users_account_type_check;
+		ALTER TABLE users ADD CONSTRAINT users_account_type_check
+			CHECK (account_type IN ('regular', 'merchant'));
+	`)
+	if err != nil {
+		return fmt.Errorf("error adding user account type columns: %s", err)
 	}
 
 	_, err = s.db.Exec(context.Background(), `
@@ -2243,6 +2263,9 @@ func (s *AppDB) CreateTables() error {
 
 			ALTER TABLE locations
 			ADD COLUMN IF NOT EXISTS tipping_wallet_address TEXT NOT NULL DEFAULT '';
+
+			ALTER TABLE locations
+			ADD COLUMN IF NOT EXISTS payment_wallet_address TEXT NOT NULL DEFAULT '';
 
 			ALTER TABLE locations
 			ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT true;

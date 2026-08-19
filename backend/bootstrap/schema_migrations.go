@@ -1604,6 +1604,235 @@ var schemaMigrations = []SchemaMigration{
 		Description: "w9: escalating warning tiers, and escrow that cannot accumulate",
 		Apply:       migrateW9WarningTiers,
 	},
+	{
+		Version:     "1.45",
+		Description: "users: the account type picked at signup, separate from the derived merchant flag",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			// is_merchant cannot hold this. It is recomputed as EXISTS(approved
+			// location) every time an approval changes (see AppDB.UpdateLocationApproval),
+			// so a signup answer written there is overwritten by the next
+			// approval that touches the owner, with nothing left to say what
+			// the person originally chose.
+			//
+			// Nor is it backfilled from is_merchant: that flag records that a
+			// listing was approved, not what somebody signed up as, and a
+			// merchant who also spends in the app as a customer would be
+			// reclassified by the copy. Everyone existing becomes 'regular';
+			// the signup question is the only thing that ever sets this.
+			if _, err := pools.App.Exec(ctx, `
+				ALTER TABLE users
+				ADD COLUMN IF NOT EXISTS account_type TEXT NOT NULL DEFAULT 'regular';
+
+				ALTER TABLE users
+				ADD COLUMN IF NOT EXISTS merchant_onboarding_completed_at TIMESTAMPTZ;
+
+				ALTER TABLE users DROP CONSTRAINT IF EXISTS users_account_type_check;
+				ALTER TABLE users ADD CONSTRAINT users_account_type_check
+					CHECK (account_type IN ('regular', 'merchant'));
+			`); err != nil {
+				return fmt.Errorf("error adding user account type columns: %w", err)
+			}
+
+			return nil
+		},
+	},
+	{
+		Version:     "1.46",
+		Description: "locations: the payment wallet address, readable from the location row",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			// Every reader of a location's payable address currently rebuilds it
+			// with the same lateral join into location_payment_wallets. Writing
+			// it onto the row makes it one column instead of a join each caller
+			// has to remember to get right.
+			//
+			// Nothing reads it yet, on purpose. Representation lands first so
+			// the two can be diffed against each other on real data before any
+			// read path moves; a migration that also switched the readers could
+			// only be checked after the fact.
+			if _, err := pools.App.Exec(ctx, `
+				ALTER TABLE locations
+				ADD COLUMN IF NOT EXISTS payment_wallet_address TEXT NOT NULL DEFAULT '';
+			`); err != nil {
+				return fmt.Errorf("error adding the location payment wallet column: %w", err)
+			}
+
+			// location_payment_wallets is the only source. users.primary_wallet_address
+			// is not consulted: migration 1.40 already resolved that fallback
+			// with the owner's full wallet history to hand, and reading it again
+			// now would hand the same owner address to every shop they run —
+			// exactly the collision 1.40 existed to end.
+			//
+			// Volunteer event rows live in this table too and have no till, so
+			// only merchant listings are considered. Rows that already carry an
+			// address are left alone, which also makes a re-run a no-op.
+			tag, err := pools.App.Exec(ctx, `
+				UPDATE locations l
+				SET payment_wallet_address = COALESCE((
+					SELECT NULLIF(TRIM(w.wallet_address), '')
+					FROM location_payment_wallets w
+					WHERE w.location_id = l.id
+					AND w.active = TRUE
+					AND NULLIF(TRIM(w.wallet_address), '') IS NOT NULL
+					ORDER BY w.is_default DESC, w.id ASC
+					LIMIT 1
+				), '')
+				WHERE l.location_kind = 'merchant'
+				AND l.payment_wallet_address = '';
+			`)
+			if err != nil {
+				return fmt.Errorf("error backfilling location payment wallet addresses: %w", err)
+			}
+
+			// A merchant listing with no wallet row gets '' rather than failing
+			// the migration: an empty string is the honest answer for a location
+			// that genuinely has nowhere to be paid, and refusing to migrate over
+			// it would block a schema change on unrelated data. 1.40 warned in
+			// the same situation for the same reason.
+			var unresolved int
+			if err := pools.App.QueryRow(ctx, `
+				SELECT COUNT(*)
+				FROM locations l
+				WHERE l.location_kind = 'merchant'
+				AND l.active = TRUE
+				AND l.payment_wallet_address = '';
+			`).Scan(&unresolved); err != nil {
+				return fmt.Errorf("error counting locations without a payment wallet: %w", err)
+			}
+			if appLogger != nil {
+				appLogger.Logf("migration 1.46: wrote %d location payment wallet addresses", tag.RowsAffected())
+				if unresolved > 0 {
+					appLogger.Logf("migration 1.46: WARNING %d active merchant locations have no payment wallet and were left empty", unresolved)
+				}
+			}
+
+			// Same rule the tipping address already lives under, and for the same
+			// reason: one address serves one location, so a write path that
+			// duplicated one would be stopped by the database rather than
+			// discovered later as two shops sharing a till.
+			if _, err := pools.App.Exec(ctx, `
+				CREATE UNIQUE INDEX IF NOT EXISTS locations_payment_wallet_unique_idx
+					ON locations (LOWER(TRIM(payment_wallet_address)))
+					WHERE active = TRUE AND NULLIF(TRIM(payment_wallet_address), '') IS NOT NULL;
+			`); err != nil {
+				return fmt.Errorf("error creating the location payment wallet unique index: %w", err)
+			}
+
+			return nil
+		},
+	},
+	{
+		Version:     "1.47",
+		Description: "classify existing merchants, and re-derive the location payment address the way the readers do",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			// Existing merchants never pass through the new signup choice — they
+			// accepted the privacy policy long ago, and account_type is written
+			// once, at first acceptance. Left alone they would all read as
+			// 'regular' forever: the Locations tab would not appear, and the
+			// merchant surfaces would be unreachable for the only people who
+			// need them.
+			//
+			// Owning an approved location is the honest definition. It is also
+			// exactly the set is_merchant already tracks (10 of each on the
+			// development clone, with no user flagged as a merchant who owns no
+			// approved location), so this reclassifies nobody by surprise.
+			classified, err := pools.App.Exec(ctx, `
+				UPDATE users u
+				SET account_type = 'merchant'
+				WHERE u.account_type = 'regular'
+				AND EXISTS (
+					SELECT 1 FROM locations l
+					WHERE l.owner_id = u.id
+					AND l.approval = TRUE
+					AND l.location_kind = 'merchant'
+				);
+			`)
+			if err != nil {
+				return fmt.Errorf("error classifying existing merchants: %w", err)
+			}
+
+			// And stamp them as onboarded, in the same migration and for the same
+			// reason. The forced-onboarding gate refuses anyone who is
+			// merchant-typed with a NULL timestamp, and the stamp is only written
+			// when a location is created — which for these people already
+			// happened, months ago, under rules that did not record it.
+			//
+			// Classifying without stamping would lock every existing merchant out
+			// of the app behind a form asking them to do a thing they have
+			// already done. The two statements belong together and must never be
+			// split.
+			stamped, err := pools.App.Exec(ctx, `
+				UPDATE users u
+				SET merchant_onboarding_completed_at = COALESCE(
+					(
+						-- Their first approval is the truest record of when they
+						-- finished becoming a merchant. It is a naive timestamp,
+						-- so it is read as UTC rather than as the server's local
+						-- zone, which would shift every one of these by hours.
+						SELECT MIN(l.approved_at AT TIME ZONE 'UTC') FROM locations l
+						WHERE l.owner_id = u.id
+						AND l.approval = TRUE
+						AND l.location_kind = 'merchant'
+						AND l.approved_at IS NOT NULL
+					),
+					NOW()
+				)
+				WHERE u.account_type = 'merchant'
+				AND u.merchant_onboarding_completed_at IS NULL
+				AND EXISTS (
+					SELECT 1 FROM locations l
+					WHERE l.owner_id = u.id
+					AND l.approval = TRUE
+					AND l.location_kind = 'merchant'
+				);
+			`)
+			if err != nil {
+				return fmt.Errorf("error stamping merchant onboarding for existing merchants: %w", err)
+			}
+
+			// Migration 1.46 derived this column with a predicate the read paths
+			// do not have: it skipped a blank address and took the next row. So a
+			// location whose default wallet row holds a blank could end up named
+			// after a wallet the map never shows — and nothing repairs it, because
+			// the runtime sync only fires when a wallet is written.
+			//
+			// Re-derive every row with the expression the readers actually use.
+			// It is idempotent by construction: where 1.46 already agreed, this
+			// writes the same value.
+			resynced, err := pools.App.Exec(ctx, `
+				UPDATE locations l
+				SET payment_wallet_address = COALESCE((
+					SELECT NULLIF(TRIM(lpw.wallet_address), '')
+					FROM location_payment_wallets lpw
+					WHERE lpw.location_id = l.id
+					AND lpw.active = TRUE
+					ORDER BY
+						CASE WHEN lpw.is_default = TRUE THEN 0 ELSE 1 END,
+						lpw.id ASC
+					LIMIT 1
+				), '')
+				WHERE l.payment_wallet_address IS DISTINCT FROM COALESCE((
+					SELECT NULLIF(TRIM(lpw.wallet_address), '')
+					FROM location_payment_wallets lpw
+					WHERE lpw.location_id = l.id
+					AND lpw.active = TRUE
+					ORDER BY
+						CASE WHEN lpw.is_default = TRUE THEN 0 ELSE 1 END,
+						lpw.id ASC
+					LIMIT 1
+				), '');
+			`)
+			if err != nil {
+				return fmt.Errorf("error re-deriving location payment addresses: %w", err)
+			}
+
+			if appLogger != nil {
+				appLogger.Logf("migration 1.47: classified %d existing merchants, stamped %d as onboarded, re-derived %d location payment addresses",
+					classified.RowsAffected(), stamped.RowsAffected(), resynced.RowsAffected())
+			}
+
+			return nil
+		},
+	},
 }
 
 // migrateW9WarningTiers replaces one hard gate with an escalating sequence.

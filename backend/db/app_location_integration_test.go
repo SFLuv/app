@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/SFLuv/app/backend/structs"
 	"github.com/jackc/pgx/v5"
@@ -21,7 +22,15 @@ import (
 //	  go test -vet=off ./db -run Integration -v
 const locationTestSchema = `
 DROP TABLE IF EXISTS location_hours;
+DROP TABLE IF EXISTS location_payment_wallets;
 DROP TABLE IF EXISTS locations;
+DROP TABLE IF EXISTS users;
+
+CREATE TABLE users (
+	id TEXT PRIMARY KEY,
+	account_type TEXT NOT NULL DEFAULT 'regular',
+	merchant_onboarding_completed_at TIMESTAMPTZ
+);
 
 CREATE TABLE locations (
 	id SERIAL PRIMARY KEY,
@@ -61,6 +70,7 @@ CREATE TABLE locations (
 	messaging_service TEXT,
 	reference TEXT,
 	tipping_wallet_address TEXT NOT NULL DEFAULT '',
+	payment_wallet_address TEXT NOT NULL DEFAULT '',
 	active BOOLEAN NOT NULL DEFAULT true
 );
 
@@ -73,6 +83,16 @@ CREATE TABLE location_hours(
 	weekday INTEGER NOT NULL,
 	hours TEXT,
 	active BOOLEAN NOT NULL DEFAULT true
+);
+
+CREATE TABLE location_payment_wallets(
+	id SERIAL PRIMARY KEY,
+	location_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
+	wallet_address TEXT NOT NULL,
+	is_default BOOLEAN NOT NULL DEFAULT false,
+	active BOOLEAN NOT NULL DEFAULT true,
+	delete_date TIMESTAMPTZ,
+	delete_reason TEXT
 );
 `
 
@@ -501,5 +521,191 @@ func TestIntegrationAddLocationStillRejectsDuplicateGooglePlaceAlongsideManual(t
 	}
 	if err := a.AddLocation(ctx, newTestLocation("ChIJshiba", "did:privy:owner3")); err != ErrDuplicateGoogleLocation {
 		t.Fatalf("duplicate google AddLocation() error = %v; want ErrDuplicateGoogleLocation", err)
+	}
+}
+
+func seedUser(t *testing.T, a *AppDB, userID string, accountType string) {
+	t.Helper()
+
+	if _, err := a.db.Exec(context.Background(),
+		`INSERT INTO users (id, account_type) VALUES ($1, $2);`, userID, accountType,
+	); err != nil {
+		t.Fatalf("seeding %s user %s: %v", accountType, userID, err)
+	}
+}
+
+func readOnboardingStamp(t *testing.T, a *AppDB, userID string) *time.Time {
+	t.Helper()
+
+	var stamp *time.Time
+	if err := a.db.QueryRow(context.Background(),
+		`SELECT merchant_onboarding_completed_at FROM users WHERE id = $1;`, userID,
+	).Scan(&stamp); err != nil {
+		t.Fatalf("reading onboarding stamp for %s: %v", userID, err)
+	}
+	return stamp
+}
+
+// The forced-onboarding gate reads this column, so a merchant who has listed a
+// shop and still has NULL here is locked out of the app permanently.
+func TestIntegrationAddLocationStampsMerchantOnboardingOnce(t *testing.T) {
+	a := newLocationTestDB(t)
+	ctx := context.Background()
+	seedUser(t, a, "did:privy:owner1", "merchant")
+
+	if err := a.AddLocation(ctx, newTestLocation("ChIJshiba", "did:privy:owner1")); err != nil {
+		t.Fatalf("first AddLocation() error = %v", err)
+	}
+
+	first := readOnboardingStamp(t, a, "did:privy:owner1")
+	if first == nil {
+		t.Fatal("merchant_onboarding_completed_at = NULL after listing a shop; want it stamped")
+	}
+
+	second := newTestLocation("ChIJsecond", "did:privy:owner1")
+	second.Name = "Shiba Outer Sunset"
+	if err := a.AddLocation(ctx, second); err != nil {
+		t.Fatalf("second AddLocation() error = %v", err)
+	}
+
+	// A second shop years later is not a second onboarding; the column records
+	// when they first finished, and restating it would lose that.
+	if again := readOnboardingStamp(t, a, "did:privy:owner1"); again == nil || !again.Equal(*first) {
+		t.Fatalf("merchant_onboarding_completed_at = %v after a second location; want it left at %v", again, *first)
+	}
+}
+
+// A regular account that submits a listing has never seen merchant onboarding.
+// Stamping it here would skip that flow for good if they later say they are one.
+func TestIntegrationAddLocationLeavesRegularAccountsUnstamped(t *testing.T) {
+	a := newLocationTestDB(t)
+	ctx := context.Background()
+	seedUser(t, a, "did:privy:owner1", "regular")
+
+	if err := a.AddLocation(ctx, newTestLocation("ChIJshiba", "did:privy:owner1")); err != nil {
+		t.Fatalf("AddLocation() error = %v", err)
+	}
+
+	if stamp := readOnboardingStamp(t, a, "did:privy:owner1"); stamp != nil {
+		t.Fatalf("merchant_onboarding_completed_at = %v for a regular account; want NULL", *stamp)
+	}
+}
+
+func attachPaymentWallet(t *testing.T, a *AppDB, locationID uint, address string, isDefault bool, active bool) {
+	t.Helper()
+
+	if _, err := a.db.Exec(context.Background(), `
+		INSERT INTO location_payment_wallets (location_id, wallet_address, is_default, active)
+		VALUES ($1, $2, $3, $4);
+	`, locationID, address, isDefault, active); err != nil {
+		t.Fatalf("attaching wallet %s to location %d: %v", address, locationID, err)
+	}
+}
+
+func syncAndReadPaymentAddress(t *testing.T, a *AppDB, locationID uint) string {
+	t.Helper()
+	ctx := context.Background()
+
+	tx, err := a.db.Begin(ctx)
+	if err != nil {
+		t.Fatalf("beginning sync transaction: %v", err)
+	}
+	defer tx.Rollback(ctx)
+
+	if err := syncLocationPaymentWalletAddress(ctx, tx, uint64(locationID)); err != nil {
+		t.Fatalf("syncLocationPaymentWalletAddress() error = %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("committing sync transaction: %v", err)
+	}
+
+	var stored string
+	if err := a.db.QueryRow(ctx,
+		`SELECT payment_wallet_address FROM locations WHERE id = $1;`, locationID,
+	).Scan(&stored); err != nil {
+		t.Fatalf("reading payment_wallet_address for %d: %v", locationID, err)
+	}
+	return stored
+}
+
+// The column is what the Pay button will send to, so it has to resolve to the
+// same row the map's lateral join resolves to: active only, default first,
+// oldest next — and retired rows must not keep their claim on it.
+func TestIntegrationSyncLocationPaymentWalletAddressMatchesTheReaderTieBreak(t *testing.T) {
+	a := newLocationTestDB(t)
+	ctx := context.Background()
+
+	location := newTestLocation("ChIJshiba", "did:privy:owner1")
+	if err := a.AddLocation(ctx, location); err != nil {
+		t.Fatalf("AddLocation() error = %v", err)
+	}
+
+	if got := syncAndReadPaymentAddress(t, a, location.ID); got != "" {
+		t.Fatalf("payment_wallet_address = %q with no wallets; want empty", got)
+	}
+
+	attachPaymentWallet(t, a, location.ID, "0xaaaa", false, true)
+	if got := syncAndReadPaymentAddress(t, a, location.ID); got != "0xaaaa" {
+		t.Fatalf("payment_wallet_address = %q; want the only active wallet", got)
+	}
+
+	// A later row marked default outranks an older non-default one, exactly as
+	// the readers order them.
+	attachPaymentWallet(t, a, location.ID, "0xbbbb", true, true)
+	if got := syncAndReadPaymentAddress(t, a, location.ID); got != "0xbbbb" {
+		t.Fatalf("payment_wallet_address = %q; want the default wallet to win", got)
+	}
+
+	// This is the replacement case: retire the default and the column must move
+	// off it rather than keep advertising a wallet the merchant walked away from.
+	if _, err := a.db.Exec(ctx,
+		`UPDATE location_payment_wallets SET active = FALSE WHERE location_id = $1 AND wallet_address = '0xbbbb';`,
+		location.ID,
+	); err != nil {
+		t.Fatalf("retiring the default wallet: %v", err)
+	}
+	if got := syncAndReadPaymentAddress(t, a, location.ID); got != "0xaaaa" {
+		t.Fatalf("payment_wallet_address = %q after retiring the default; want the remaining active wallet", got)
+	}
+}
+
+// Migration 1.46 skipped blank addresses and fell through to the next row. The
+// readers do not: a blank default resolves to '' and the shop shows as having
+// nowhere to be paid. The column has to agree with what is on the map, or the
+// two cannot be swapped for each other later.
+func TestIntegrationSyncLocationPaymentWalletAddressDoesNotSkipBlankRows(t *testing.T) {
+	a := newLocationTestDB(t)
+	ctx := context.Background()
+
+	location := newTestLocation("ChIJshiba", "did:privy:owner1")
+	if err := a.AddLocation(ctx, location); err != nil {
+		t.Fatalf("AddLocation() error = %v", err)
+	}
+
+	attachPaymentWallet(t, a, location.ID, "   ", true, true)
+	attachPaymentWallet(t, a, location.ID, "0xaaaa", false, true)
+
+	got := syncAndReadPaymentAddress(t, a, location.ID)
+	if got != "" {
+		t.Fatalf("payment_wallet_address = %q; want '' to match the reader, which does not look past a blank default", got)
+	}
+
+	var readerAddress string
+	if err := a.db.QueryRow(ctx, `
+		SELECT COALESCE(NULLIF(TRIM(default_payment_wallet.wallet_address), ''), '')
+		FROM locations l
+		LEFT JOIN LATERAL (
+			SELECT lpw.wallet_address
+			FROM location_payment_wallets lpw
+			WHERE lpw.location_id = l.id AND lpw.active = TRUE
+			ORDER BY CASE WHEN lpw.is_default = TRUE THEN 0 ELSE 1 END, lpw.id ASC
+			LIMIT 1
+		) default_payment_wallet ON TRUE
+		WHERE l.id = $1;
+	`, location.ID).Scan(&readerAddress); err != nil {
+		t.Fatalf("running the reader's lateral join: %v", err)
+	}
+	if got != readerAddress {
+		t.Fatalf("column = %q but the reader returns %q; they must agree", got, readerAddress)
 	}
 }

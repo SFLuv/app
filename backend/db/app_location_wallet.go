@@ -285,6 +285,12 @@ func (a *AppDB) UpdateLocationWalletSettings(ctx context.Context, userID string,
 		return nil, fmt.Errorf("error updating location tipping wallet: %w", err)
 	}
 
+	// This edit can both retire the old default and promote a different wallet,
+	// so which row wins is only settled once every statement above has run.
+	if err := syncLocationPaymentWalletAddress(ctx, tx, locationID); err != nil {
+		return nil, err
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("error committing location wallet settings transaction: %w", err)
 	}
