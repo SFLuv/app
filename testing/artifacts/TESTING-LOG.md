@@ -383,3 +383,96 @@ against the fake.
 **Found:**   the failure, then the cause. The cause is the reusable part.
 **Not tested:**
 ```
+
+---
+
+## Round: mobile (Maestro), 2026-08-20
+
+First mobile coverage. Maestro 2.8.0, iPhone 17 Pro simulator, app built from
+`SFLUV_MobileApp/mobile@32c0747`. Suite lives in that repo at `.maestro/`.
+
+**Result: 2 of 3 flows pass. The third is blocked on a Privy dashboard setting,
+not on app code.**
+
+### The blocker
+
+`.dev.env` points backend, web and mobile at Privy app `cmnhyyeda00sv0cjmsrrcpuiv`,
+and correctly so — the backend rejects any token whose `aud` differs from its
+`PRIVY_APP_ID`, and dev-up.sh already warns when the three disagree. But that
+Privy app has **no iOS app identifier allowlisted**, so the mobile app cannot log
+in:
+
+```
+Native app ID org.sanchezoleary.sfluvwallet.dev has not been set as an
+allowed app identifier in the Privy dashboard.
+```
+
+The other Privy app in the repo — `cmlidct3t00pql50du730rr3o`, named in
+`eas.json`, `backend/.env` and `frontend/.env` — does allowlist that identifier.
+Verified by temporarily switching: login succeeded end to end (code delivered,
+session established, wallet shell rendered). But every backend call then 403s,
+because the running backend trusts the other app. Switching the backend to match
+did not help either, which suggests `backend/.env`'s `PRIVY_VKEY` does not pair
+with the app id sitting next to it — worth a look, but secondary.
+
+So: the app can log in, or it can reach the backend. Not both.
+
+**Fix is one dashboard change** — add `org.sanchezoleary.sfluvwallet.dev` to the
+allowed app identifiers of `cmnhyyeda00sv0cjmsrrcpuiv`. No repo change needed.
+Until then there is no authenticated mobile coverage, which means **merchant
+mode, the PIN, device setup and the W-9 tier modal are all still untested on
+device** — the whole point of the refactor.
+
+Both env files were restored to their original values afterwards.
+
+### Findings
+
+1. **Login buttons have no accessibility label or role.** `App.tsx:6405` and its
+   two siblings wrap an unlabelled icon slot, the text, and an empty spacer
+   `View` in a bare `Pressable`. iOS concatenates the children, so VoiceOver
+   announces `", Continue with Email"` — leading comma, and not identified as a
+   button. `W9TierModal.tsx` sets `accessibilityRole="button"` properly, so the
+   pattern exists; the login screen just missed it. Small fix, real for anyone
+   using VoiceOver, and it also makes every selector in the suite need a `.*`
+   prefix.
+
+2. **No testIDs anywhere in the app** — zero across every `.tsx`. Every selector
+   has to be user-visible copy, so a wording change breaks a flow and reports as
+   "element not found" rather than "copy changed". Worth adding to the merchant
+   surfaces before writing flows against them.
+
+3. **`expo run:ios` cannot build for the simulator on this machine.** Its device
+   detection fails (`Unexpected devicectl JSON version output from devicectl`),
+   so it takes the physical-device path and dies on "No code signing certificates
+   are available" — even when handed a simulator UDID via `--device`. Direct
+   `xcodebuild -sdk iphonesimulator` works. Recipe is in `.maestro/README.md`.
+
+4. **Building with `CODE_SIGNING_ALLOWED=NO` silently breaks the app.** The
+   result has no entitlements, iOS refuses every keychain call, and
+   expo-secure-store fails with `Calling the 'getValueWithKeyAsync' function has
+   failed`. Privy keeps its client ID there, so the app sits on "Initializing
+   Privy…" forever with nothing on screen explaining it. `CODE_SIGN_IDENTITY="-"`
+   fixes it. Cost about half an hour of chasing a hang that looked like a network
+   problem.
+
+5. **Mobile login has no captcha; web does.** `capture-token.sh` exists because a
+   script cannot get through the web login. The native path sent the code
+   straight away. So mobile auth is automatable in a way web auth is not — once
+   the allowlist is sorted, the only manual step left is reading the code.
+
+### Suite hygiene worth keeping
+
+Two false greens surfaced while writing these, both worth remembering:
+
+- Asserting `"SFLUV"` passed while the app was still behind Expo's developer
+  menu, because that menu is itself titled "SFLuv" and Maestro matches
+  case-insensitively as a substring. Flows now key on the tagline.
+- `inputText` after a missed tap types into nothing and the step still reports
+  COMPLETED; the only symptom was a validation error two steps later. Flows now
+  assert the typed value came back before submitting.
+
+And Maestro does not reset between flows: the email field kept its value across
+in-app navigation, so repeat runs appended into
+`"...oleary.comsanchezsanchez@oleary.com"`. `00-boot` now uses `clearState`.
+`eraseText` is not a substitute — it deletes from the cursor, which is not always
+at the end.
