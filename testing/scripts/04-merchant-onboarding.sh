@@ -113,7 +113,11 @@ if [[ "$(status)" =~ ^20 ]]; then
       # did not run — worth distinguishing from "derived the same one twice".
       fail "neither location has a pay_to_address — wallet derivation did not run at approval"
     else
-      skip "only one location has a wallet ($w1 / $w2)"
+      # Half-derived is a failure, not a curiosity. One shop with a till and one
+      # without means a merchant whose second location silently cannot be paid —
+      # and skipping here would retire the distinct-wallets assertion, which is
+      # the whole point of this scenario.
+      fail "only one location has a pay_to_address ($w1 / $w2) — the other cannot take payments"
     fi
   fi
 else

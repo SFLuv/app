@@ -11,6 +11,30 @@ step "Workflow lifecycle"
 
 as(){ [[ -n "${1:-}" ]] && prank_as "$1"; }
 
+# Discover the role holders rather than demanding they be exported.
+#
+# run-all.sh sets no per-role dids, so this scenario used to run as whoever the
+# captured token belongs to — who is not a proposer — and fail with a 500 whose
+# real cause ("proposer not found") was only in the app log. A scenario that
+# needs a role should go and find one, the way 07 does.
+find_role_holder(){
+  psql -h "${DB_HOST:-localhost}" -U "${DB_USER:-$(whoami)}" -d "${APP_DB:-app}" -tAc "$1" 2>/dev/null | head -1
+}
+
+if [[ -z "${SFLUV_PROPOSER_DID:-}" ]]; then
+  SFLUV_PROPOSER_DID="$(find_role_holder "SELECT user_id FROM proposers WHERE status='approved' ORDER BY user_id LIMIT 1;")"
+  [[ -n "$SFLUV_PROPOSER_DID" ]] && info "proposer: ${SFLUV_PROPOSER_DID#did:privy:}"
+fi
+if [[ -z "${SFLUV_IMPROVER_DID:-}" ]]; then
+  SFLUV_IMPROVER_DID="$(find_role_holder "SELECT user_id FROM improvers WHERE status='approved' ORDER BY user_id LIMIT 1;")"
+  [[ -n "$SFLUV_IMPROVER_DID" ]] && info "improver: ${SFLUV_IMPROVER_DID#did:privy:}"
+fi
+
+if [[ -z "${SFLUV_PROPOSER_DID:-}" ]]; then
+  fail "no approved proposer in the database — this scenario cannot run"
+  summary "Workflow"; exit 1
+fi
+
 step "Propose"
 as "${SFLUV_PROPOSER_DID:-}"
 # Shape from structs/app_workflow.go:130. Steps do NOT name a role directly —

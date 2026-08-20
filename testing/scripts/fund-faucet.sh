@@ -37,6 +37,34 @@ info "faucet $before · donor $donor_bal"
 
 AMOUNT="${1:-$donor_bal}"
 
+# ALL_DONORS drains every holder the discovery finds, not just the richest.
+#
+# A fresh fork gives the faucet whatever the chain says today, while the cloned
+# database still carries every outstanding code from production — 1384 of them,
+# committing far more than one donor holds. Event creation checks UNALLOCATED
+# balance, so a faucet that looks funded can still refuse with a negative
+# number. Draining everything is the only way a test run gets off the ground.
+if [[ "${ALL_DONORS:-}" == "1" ]]; then
+  for candidate in $(grep -ohE '0x[a-fA-F0-9]{40}' \
+        "$SFLUV_ROOT/backend/.env" "$SFLUV_ROOT/tmp/backend.dev.env" \
+        "$SFLUV_ROOT/backend/community-config.json" 2>/dev/null | sort -u); do
+    # macOS ships bash 3.2, which has no ${var,,} lowercase expansion.
+    [[ "$(printf '%s' "$candidate" | tr 'A-Z' 'a-z')" == "$(printf '%s' "$FAUCET" | tr 'A-Z' 'a-z')" ]] && continue
+    bal="$(token_balance "$candidate")"
+    [[ "${bal:-0}" =~ ^[0-9]+$ ]] && [[ "$bal" != "0" ]] || continue
+    cast rpc anvil_impersonateAccount "$candidate" --rpc-url "$RPC" >/dev/null 2>&1
+    cast rpc anvil_setBalance "$candidate" 0xDE0B6B3A7640000 --rpc-url "$RPC" >/dev/null 2>&1
+    if cast send "$TOKEN" 'transfer(address,uint256)' "$FAUCET" "$bal" \
+         --from "$candidate" --unlocked --rpc-url "$RPC" >/dev/null 2>&1; then
+      info "drained $bal from $candidate"
+    fi
+    cast rpc anvil_stopImpersonatingAccount "$candidate" --rpc-url "$RPC" >/dev/null 2>&1 || true
+  done
+  info "faucet after draining every donor: $(token_balance "$FAUCET")"
+  summary "Fund faucet"
+  exit 0
+fi
+
 cast rpc anvil_impersonateAccount "$DONOR" --rpc-url "$RPC" >/dev/null
 cast rpc anvil_setBalance "$DONOR" 0xDE0B6B3A7640000 --rpc-url "$RPC" >/dev/null   # 1 ether for gas
 if cast send "$TOKEN" 'transfer(address,uint256)' "$FAUCET" "$AMOUNT" \

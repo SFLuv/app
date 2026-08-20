@@ -22,8 +22,13 @@ fi
 ADDR="${SFLUV_TEST_ADDRESS:-}"
 
 if [[ -z "$CODE" || -z "$ADDR" ]]; then
-  skip "need a code and a wallet — run 02-events.sh first and export SFLUV_TEST_ADDRESS"
-  summary "QR payout"; exit 0
+  # Deliberately a failure, not a skip. This is the scenario that proves a
+  # volunteer actually gets paid; letting it pass with nothing redeemed means
+  # the suite reports green having tested the one thing that moves money not at
+  # all. run-all.sh always runs 02 first, so reaching here means something is
+  # genuinely wrong rather than merely unset.
+  fail "no code or recipient — run 02-events.sh first and export SFLUV_TEST_ADDRESS"
+  summary "QR payout"; exit 1
 fi
 
 snap="$(chain_snapshot)"
@@ -75,7 +80,18 @@ case "$status" in
     ;;
   400)
     body_text="$(printf '%s' "$payload" | tr -d '\n')"
-    skip "code not usable: $body_text (expired, already redeemed, or not started)"
+    # Only the reasons the backend actually names are tolerable here. The old
+    # version skipped on ANY 400 while asserting a cause it had not checked, so
+    # a new refusal — a merchant bar, a changed guard — read as "probably
+    # expired" and the suite stayed green having redeemed nothing.
+    case "$body_text" in
+      *"code expired"*|*"code redeemed"*|*"user redeemed"*|*"code not started"*)
+        skip "code not usable: $body_text — try ./refresh-qr-windows.sh"
+        ;;
+      *)
+        fail "redeem refused with an unrecognised 400: $body_text"
+        ;;
+    esac
     ;;
   *)
     fail "unexpected redeem status $status"

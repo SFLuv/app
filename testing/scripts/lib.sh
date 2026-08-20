@@ -159,6 +159,34 @@ admin_api(){
   printf '%s' "${raw%$'\n'*}"
 }
 
+# token_minutes_left prints how many minutes the captured token has left, or
+# nothing if there is no token or it cannot be read.
+#
+# Worth its own helper because an expired token does not announce itself: every
+# authenticated call just returns a bare 403, with no body and no reason header,
+# which reads exactly like a role guard refusing you. Half an hour once went
+# into chasing a "proposer guard" that was really a token that lapsed mid-run.
+token_minutes_left(){
+  [[ -f "$TOKEN_FILE" ]] || return 0
+  python3 -c "$(printf '%s\n' \
+    'import base64,json,sys,time' \
+    'try:' \
+    '    t=open(sys.argv[1]).read().strip().split(".")[1]' \
+    '    t+="="*(-len(t)%4)' \
+    '    print(int((json.loads(base64.urlsafe_b64decode(t))["exp"]-time.time())//60))' \
+    'except Exception:' \
+    '    pass')" "$TOKEN_FILE" 2>/dev/null
+}
+
+# expired_token_hint names the real cause when a refusal is really an expiry.
+expired_token_hint(){
+  local left; left="$(token_minutes_left)"
+  [[ -n "$left" ]] || return 0
+  if [[ "$left" -le 0 ]]; then
+    c '0;33' "  the token expired $(( -left ))m ago — a bare 403 is auth, not a role guard. Re-run ./capture-token.sh"
+  fi
+}
+
 # --------------------------------------------------------------------------
 # Assertions
 # --------------------------------------------------------------------------
@@ -169,6 +197,7 @@ expect_status(){
     pass "$label (HTTP $want)"
   else
     fail "$label — expected HTTP $want, got $(status)"
+    [[ "$(status)" == "403" ]] && expired_token_hint
   fi
 }
 
@@ -258,11 +287,18 @@ find_token_donor(){
     fi
   fi
 
+  # The faucet cannot donate to itself, and it is usually the richest address in
+  # the config — so without this the discovery "finds" it and the transfer is a
+  # no-op that reports success.
+  local faucet_lower=""
+  [[ -n "${SFLUV_FAUCET_ADDRESS:-}" ]] && faucet_lower="$(printf '%s' "$SFLUV_FAUCET_ADDRESS" | tr 'A-Z' 'a-z')"
+
   local best="" best_balance=0
   local candidate balance
   for candidate in $(grep -ohE '0x[a-fA-F0-9]{40}' \
         "$SFLUV_ROOT/backend/.env" "$SFLUV_ROOT/tmp/backend.dev.env" \
         "$SFLUV_ROOT/backend/community-config.json" 2>/dev/null | sort -u); do
+    [[ "$(printf '%s' "$candidate" | tr 'A-Z' 'a-z')" == "$faucet_lower" ]] && continue
     balance="$(token_balance "$candidate")"
     [[ "${balance:-0}" =~ ^[0-9]+$ ]] || continue
     if (( balance > best_balance )); then best_balance="$balance"; best="$candidate"; fi
