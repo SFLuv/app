@@ -145,12 +145,12 @@ type Location struct {
 	ServiceStations    int      `json:"service_stations"`
 	TabletModel        string   `json:"tablet_model"`
 	MessagingService   string   `json:"messaging_service"`
-	// PayToAddress is the location's till, and is the Go side of
-	// locations.payment_wallet_address. It is still filled from the lateral
-	// join into location_payment_wallets, not from that column — the column was
-	// added inert so the two can be diffed on real data before any reader moves.
-	// The cutover is then a change of SQL expression under the same alias, and
-	// this field and its JSON name never move.
+	// PayToAddress is the location's till, read straight from
+	// locations.payment_wallet_address. location_payment_wallets is still the
+	// write model and still holds the soft-delete history, but no reader
+	// re-derives the address from it: the column is the single answer, kept in
+	// step by syncLocationPaymentWalletAddress inside whichever transaction
+	// moved the wallets.
 	PayToAddress   string                  `json:"pay_to_address"`
 	TipToAddress   string                  `json:"tip_to_address"`
 	PaymentWallets []LocationPaymentWallet `json:"payment_wallets"`
@@ -210,8 +210,8 @@ type PublicLocation struct {
 	GoogleID string `json:"google_id"`
 	Name     string `json:"name"`
 	Approval bool   `json:"approval"`
-	// The public face of locations.payment_wallet_address; see Location.PayToAddress
-	// for why the value still comes from the join rather than the column.
+	// The public face of locations.payment_wallet_address, and the address the
+	// map's Pay button sends to; see Location.PayToAddress.
 	PayToAddress string             `json:"pay_to_address"`
 	TipToAddress string             `json:"tip_to_address"`
 	Description  string             `json:"description"`

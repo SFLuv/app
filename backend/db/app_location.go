@@ -96,7 +96,7 @@ func (a *AppDB) GetLocation(ctx context.Context, id uint64) (*structs.PublicLoca
 			COALESCE(l.google_id, ''),
 			l.name,
 			l.approval,
-			COALESCE(NULLIF(TRIM(default_payment_wallet.wallet_address), ''), '') AS pay_to_address,
+			`+locationPayToAddressExpr+` AS pay_to_address,
 			COALESCE(
 				NULLIF(TRIM(l.tipping_wallet_address), ''),
 				''
@@ -121,24 +121,6 @@ func (a *AppDB) GetLocation(ctx context.Context, id uint64) (*structs.PublicLoca
 		LEFT JOIN users u
 			ON u.id = l.owner_id
 			AND u.active = TRUE
-		LEFT JOIN LATERAL (
-			SELECT
-				lpw.wallet_address
-			FROM
-				location_payment_wallets lpw
-			WHERE
-				lpw.location_id = l.id
-			AND
-				lpw.active = TRUE
-			ORDER BY
-				CASE
-					WHEN lpw.is_default = TRUE THEN 0
-					ELSE 1
-				END,
-				lpw.id ASC
-			LIMIT 1
-		) default_payment_wallet
-			ON TRUE
 		WHERE l.id = $1
 		AND l.active = TRUE
 		AND l.location_kind = 'merchant';
@@ -227,7 +209,7 @@ func (s *AppDB) GetLocations(ctx context.Context, r *structs.LocationsPageReques
 			l.id,
 			COALESCE(l.google_id, ''),
 			l.name,
-			COALESCE(NULLIF(TRIM(default_payment_wallet.wallet_address), ''), '') AS pay_to_address,
+			`+locationPayToAddressExpr+` AS pay_to_address,
 			COALESCE(
 				NULLIF(TRIM(l.tipping_wallet_address), ''),
 				''
@@ -252,24 +234,6 @@ func (s *AppDB) GetLocations(ctx context.Context, r *structs.LocationsPageReques
 		LEFT JOIN users u
 			ON u.id = l.owner_id
 			AND u.active = TRUE
-		LEFT JOIN LATERAL (
-			SELECT
-				lpw.wallet_address
-			FROM
-				location_payment_wallets lpw
-			WHERE
-				lpw.location_id = l.id
-			AND
-				lpw.active = TRUE
-			ORDER BY
-				CASE
-					WHEN lpw.is_default = TRUE THEN 0
-					ELSE 1
-				END,
-				lpw.id ASC
-			LIMIT 1
-		) default_payment_wallet
-			ON TRUE
 		WHERE l.approval = TRUE
 		AND l.active = TRUE
 		AND l.location_kind = 'merchant'
@@ -389,7 +353,7 @@ func (s *AppDB) GetAuthedLocations(ctx context.Context, r *structs.LocationsPage
 			l.service_stations,
 			l.tablet_model,
 			l.messaging_service,
-			COALESCE(NULLIF(TRIM(default_payment_wallet.wallet_address), ''), '') AS pay_to_address,
+			`+locationPayToAddressExpr+` AS pay_to_address,
 			COALESCE(
 				NULLIF(TRIM(l.tipping_wallet_address), ''),
 				''
@@ -400,24 +364,6 @@ func (s *AppDB) GetAuthedLocations(ctx context.Context, r *structs.LocationsPage
 		LEFT JOIN users u
 			ON u.id = l.owner_id
 			AND u.active = TRUE
-		LEFT JOIN LATERAL (
-			SELECT
-				lpw.wallet_address
-			FROM
-				location_payment_wallets lpw
-			WHERE
-				lpw.location_id = l.id
-			AND
-				lpw.active = TRUE
-			ORDER BY
-				CASE
-					WHEN lpw.is_default = TRUE THEN 0
-					ELSE 1
-				END,
-				lpw.id ASC
-			LIMIT 1
-		) default_payment_wallet
-			ON TRUE
 		WHERE l.active = TRUE
 		AND l.location_kind = 'merchant'
 		ORDER BY l.id
@@ -988,7 +934,7 @@ func (a *AppDB) GetLocationsByUser(ctx context.Context, userId string) ([]*struc
 		l.service_stations,
 		l.tablet_model,
 		l.messaging_service,
-		COALESCE(NULLIF(TRIM(default_payment_wallet.wallet_address), ''), '') AS pay_to_address,
+		`+locationPayToAddressExpr+` AS pay_to_address,
 		COALESCE(
 			NULLIF(TRIM(l.tipping_wallet_address), ''),
 			''
@@ -999,24 +945,6 @@ func (a *AppDB) GetLocationsByUser(ctx context.Context, userId string) ([]*struc
 	LEFT JOIN users u
 		ON u.id = l.owner_id
 		AND u.active = TRUE
-	LEFT JOIN LATERAL (
-		SELECT
-			lpw.wallet_address
-		FROM
-			location_payment_wallets lpw
-		WHERE
-			lpw.location_id = l.id
-		AND
-			lpw.active = TRUE
-		ORDER BY
-			CASE
-				WHEN lpw.is_default = TRUE THEN 0
-				ELSE 1
-			END,
-			lpw.id ASC
-		LIMIT 1
-	) default_payment_wallet
-		ON TRUE
     WHERE l.owner_id = $1
 	AND l.active = TRUE
 	AND l.location_kind = 'merchant'

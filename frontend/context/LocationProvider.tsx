@@ -36,7 +36,10 @@ const getLocationTypes = (locations: Location[]): string[] => {
 
 // readErrorMessage pulls the backend's {"error": "..."} message off a failed
 // response, falling back to a generic message for non-JSON bodies.
-const readErrorMessage = async (res: Response): Promise<string> => {
+const readErrorMessage = async (
+    res: Response,
+    fallback = "Something went wrong submitting your application. Please try again.",
+): Promise<string> => {
     try {
         const body = await res.clone().json()
         if (body && typeof body.error === "string" && body.error.trim()) {
@@ -45,7 +48,7 @@ const readErrorMessage = async (res: Response): Promise<string> => {
     } catch {
         // not a JSON body
     }
-    return "Something went wrong submitting your application. Please try again."
+    return fallback
 }
 
 const fetchMapLocations = async (): Promise<LocationResponse> => {
@@ -164,6 +167,9 @@ export default function LocationProvider({ children }: { children: ReactNode }) 
         }
       }, [])
 
+    // Rethrows for the same reason addLocation does: a merchant correcting a
+    // rejected application has no other signal that the save failed, and a
+    // silent failure here reads exactly like a successful one.
     const updateLocation = useCallback(async (location: AuthedLocation) => {
         setMapLocationsStatus("loading")
         try {
@@ -175,16 +181,23 @@ export default function LocationProvider({ children }: { children: ReactNode }) 
                 body: JSON.stringify({location})
             })
             if(res.status != 201) {
-                throw new Error("error updating location")
+                const message = await readErrorMessage(
+                    res,
+                    "Something went wrong saving your changes. Please try again.",
+                )
+                throw new Error(message)
             }
             const updatedLocations = await getMapLocationsDeduped()
             setMapLocations(updatedLocations.locations)
             setLocationTypes(getLocationTypes(updatedLocations.locations))
             setMapLocationsStatus("available")
         }
-        catch {
+        catch (error) {
             setMapLocationsStatus("unavailable")
-            console.error("error updating locations")
+            console.error("error updating location", error)
+            throw error instanceof Error
+                ? error
+                : new Error("Something went wrong saving your changes. Please try again.")
         }
     }, [])
 

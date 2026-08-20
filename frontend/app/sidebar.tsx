@@ -12,7 +12,7 @@ import { SidebarProvider, SidebarInset, SidebarTrigger } from "@/components/ui/s
 import { Button } from "@/components/ui/button"
 import { useEffect, useState } from "react"
 import { usePathname, useSearchParams } from "next/navigation"
-import { EMAIL_OPT_IN_POLICY_PATH, PRIVACY_POLICY_PATH } from "@/lib/policies"
+import { isChromeFreeRoute } from "@/lib/app-chrome"
 
 
 export default function Sidebar({
@@ -25,16 +25,7 @@ export default function Sidebar({
   const [open, setOpen] = useState(false);
   const pathname = usePathname()
   const search = useSearchParams()
-  const shouldHideSidebar =
-    pathname == "/faucet/redeem" ||
-    pathname == "/update" ||
-    pathname == "/mcp/authorize" ||
-    pathname == "/delete-account" ||
-    pathname == "/recovery" ||
-    pathname.startsWith("/photos/") ||
-    pathname.startsWith(PRIVACY_POLICY_PATH) ||
-    pathname.startsWith(EMAIL_OPT_IN_POLICY_PATH) ||
-    search.get("sidebar") === "false"
+  const shouldHideSidebar = isChromeFreeRoute(pathname, search)
 
   useEffect(() => {
     if(status == "authenticated") setOpen(true)

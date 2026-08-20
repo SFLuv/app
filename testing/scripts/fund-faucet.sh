@@ -21,7 +21,14 @@ fi
 
 [[ "$TOKEN"  =~ ^0x[a-fA-F0-9]{40}$ ]] || die "set SFLUV_TOKEN_ADDRESS"
 [[ "$FAUCET" =~ ^0x[a-fA-F0-9]{40}$ ]] || die "set SFLUV_FAUCET_ADDRESS (the local faucet, from tmp/faucet.key)"
-[[ "$DONOR"  =~ ^0x[a-fA-F0-9]{40}$ ]] || die "set SFLUV_DONOR_ADDRESS, or BOT_ADDRESS in backend/.env"
+# The named donor is only a donor while the fork sits at a block where it held a
+# balance, and anvil re-forks at the tip on every boot. Fall back to whoever on
+# this fork actually has tokens.
+if ! [[ "$DONOR" =~ ^0x[a-fA-F0-9]{40}$ ]] || [[ "$(token_balance "$DONOR")" == "0" ]]; then
+  DONOR="$(find_token_donor || true)"
+  [[ -n "$DONOR" ]] && info "named donor is empty at this block; using $DONOR instead"
+fi
+[[ "$DONOR"  =~ ^0x[a-fA-F0-9]{40}$ ]] || die "no address in the env or community config holds SFLUV on this fork"
 
 before="$(token_balance "$FAUCET")"
 donor_bal="$(cast call "$TOKEN" 'balanceOf(address)(uint256)' "$DONOR" --rpc-url "$RPC" 2>/dev/null | awk '{print $1}')"

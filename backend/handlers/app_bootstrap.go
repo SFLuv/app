@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 
+	"github.com/SFLuv/app/backend/structs"
 	"github.com/SFLuv/app/backend/utils"
 )
 
@@ -56,6 +57,19 @@ func (a *AppService) GetUserBootstrap(w http.ResponseWriter, r *http.Request) {
 	response := map[string]any{
 		"policy_status_code": policyCode,
 		"delete_status_code": deleteCode,
+	}
+
+	// The router's read-only gate, answered before the client makes a request
+	// that trips it. Derived here rather than left to the client to work out
+	// from account_type and the onboarding stamp: those say what the account
+	// is, this says what the backend is currently doing about it, and the kill
+	// switch can make those two different.
+	merchantOnboardingRequired := a.MerchantOnboardingRequired(r.Context(), *userDid)
+	response["merchant_onboarding_required"] = merchantOnboardingRequired
+	if merchantOnboardingRequired {
+		// The same string the 403 carries in X-SFLUV-Auth-Reason, so first
+		// paint and a refused write are keyed off one value.
+		response["auth_gate_reason"] = structs.AuthReasonMerchantOnboardingRequired
 	}
 	if policyCode == http.StatusOK && policyBody != nil {
 		response["policy_status"] = policyBody

@@ -52,6 +52,7 @@ export type CommunityConfigPayload = {
     [key: string]: unknown
   }
   contracts?: Record<string, unknown>
+  features?: Record<string, unknown>
   extras?: {
     honey_token_address?: unknown
     honeyTokenAddress?: unknown
@@ -89,6 +90,15 @@ export type ResolvedCommunityConfigExtras = {
   backingAssets: Address[]
 }
 
+export type ResolvedFeatureFlags = {
+  // Whether an unwrap affordance (SFLUV → backing asset) may be shown at all.
+  // This is necessary but not sufficient: unwrapAndBridge bails out unless the
+  // wallet making the call holds REDEEMER_ROLE on the token, and that role is
+  // granted per wallet on chain, not by this flag. So an unwrap can still fail
+  // with the flag on — the flag only decides whether the button exists.
+  unwrapEnabled: boolean
+}
+
 export type ResolvedCommunityConfig = {
   raw: CommunityConfigPayload
   community: CommunityConfig
@@ -107,6 +117,7 @@ export type ResolvedCommunityConfig = {
   alias: string
   appOrigin: string
   extras: ResolvedCommunityConfigExtras
+  features: ResolvedFeatureFlags
   honeyTokenAddress?: Address
   honeyDecimals?: number
   byusdTokenAddress?: Address
@@ -208,6 +219,9 @@ export function resolveCommunityConfig(payload: CommunityConfigPayload): Resolve
       faucetAddress,
       backingAssets,
     },
+    features: {
+      unwrapEnabled: readFeatureFlag(payload, "unwrap_enabled"),
+    },
     byusdTokenAddress,
     byusdDecimals,
     honeyTokenAddress,
@@ -215,6 +229,16 @@ export function resolveCommunityConfig(payload: CommunityConfigPayload): Resolve
     zapperContractAddress: zapperAddress,
     faucetAddress,
   }
+}
+
+// The backend serves these as JSON booleans, but an older or hand-edited
+// upstream config can carry the string form. Only an explicit true counts: a
+// missing key means the backend has not turned the surface on, and guessing on
+// its behalf would light up a half-built feature.
+function readFeatureFlag(payload: CommunityConfigPayload, key: string): boolean {
+  const value = payload.features?.[key]
+  if (typeof value === "boolean") return value
+  return typeof value === "string" && value.trim().toLowerCase() === "true"
 }
 
 function findToken(payload: CommunityConfigPayload, ref: ConfigAddressRef) {

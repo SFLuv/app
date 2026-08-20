@@ -383,8 +383,9 @@ export default function SettingsPage() {
   const [isUpdating, setIsUpdating] = useState(false);
   const [isChangingPassword, setIsChangingPassword] = useState(false);
   const [successMessage, setSuccessMessage] = useState("");
+  // Merchant is absent on purpose: it is answered at signup, not requested from
+  // an account that already exists.
   type RoleRequestType =
-    | "merchant"
     | "affiliate"
     | "proposer"
     | "improver"
@@ -1241,11 +1242,6 @@ export default function SettingsPage() {
 
     if (!roleRequestType) {
       setRoleError("Please select a role type.");
-      return;
-    }
-
-    if (roleRequestType === "merchant") {
-      router.push("/settings/merchant-approval");
       return;
     }
 
@@ -2709,9 +2705,7 @@ export default function SettingsPage() {
             </CardContent>
           </Card>
 
-          {(merchantStatus === "none" ||
-            merchantStatus === "rejected" ||
-            affiliateStatus === "none" ||
+          {(affiliateStatus === "none" ||
             affiliateStatus === "rejected" ||
             proposerStatus === "none" ||
             proposerStatus === "rejected" ||
@@ -2727,8 +2721,8 @@ export default function SettingsPage() {
                   Request Role Access
                 </CardTitle>
                 <CardDescription>
-                  Apply for merchant, affiliate, proposer, improver, issuer, or
-                  supervisor status
+                  Apply for affiliate, proposer, improver, issuer, or supervisor
+                  status
                 </CardDescription>
               </CardHeader>
               <CardContent>
@@ -2749,12 +2743,6 @@ export default function SettingsPage() {
                         <SelectValue placeholder="Select a role to request..." />
                       </SelectTrigger>
                       <SelectContent>
-                        {(merchantStatus === "none" ||
-                          merchantStatus === "rejected") && (
-                          <SelectItem value="merchant">
-                            Merchant — accept SFLuv as payment at your business
-                          </SelectItem>
-                        )}
                         {(affiliateStatus === "none" ||
                           affiliateStatus === "rejected") && (
                           <SelectItem value="affiliate">
@@ -2948,8 +2936,6 @@ export default function SettingsPage() {
                           <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                           Submitting...
                         </>
-                      ) : roleRequestType === "merchant" ? (
-                        "Continue to Application"
                       ) : (
                         "Submit Request"
                       )}

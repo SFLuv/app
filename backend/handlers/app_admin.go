@@ -5,13 +5,14 @@ import (
 	"context"
 	"encoding/csv"
 	"encoding/json"
-	"github.com/SFLuv/app/backend/db"
+	"errors"
 	"io"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/SFLuv/app/backend/db"
 	"github.com/SFLuv/app/backend/structs"
 	"github.com/SFLuv/app/backend/utils"
 	"github.com/jackc/pgx/v5"
@@ -300,10 +301,13 @@ func (a *AppService) UpdateLocationApproval(w http.ResponseWriter, r *http.Reque
 		}
 	}
 
-	// Work out what this location needs, and derive any new addresses, before the
-	// approval transaction opens. A second location must never be published
-	// sharing another shop's wallet, so if the chain cannot be reached to derive
-	// one the approval fails and the admin retries — usually a minute later.
+	// Locations are given their wallets at creation now, so by the time one
+	// reaches approval it normally has them already and this does nothing. It
+	// stays as the backstop for the ones that do not: everything submitted before
+	// that shipped, and anything whose derivation failed against an unreachable
+	// chain. A location must not be published without a till of its own, so here
+	// — unlike at creation — a chain that cannot be reached fails the approval and
+	// the admin retries, usually a minute later.
 	provisioning, err := a.db.GetLocationProvisioningContext(r.Context(), u.Id)
 	if err != nil {
 		a.logger.Logf("error loading provisioning context for location %d: %s", u.Id, err.Error())
@@ -312,37 +316,28 @@ func (a *AppService) UpdateLocationApproval(w http.ResponseWriter, r *http.Reque
 	}
 
 	var derived *db.DerivedLocationWallets
-	if u.Approval != nil && *u.Approval && provisioning.NeedsDerivedWallets() {
-		paymentIndex := provisioning.NextSmartIndex
-		tippingIndex := paymentIndex + 1
-
-		paymentAddress, deriveErr := a.deriveSmartAccountAddress(r.Context(), provisioning.OwnerEOA, paymentIndex)
-		if deriveErr != nil {
-			a.logger.Logf("error deriving payment wallet for location %d: %s", u.Id, deriveErr.Error())
+	if isApproving {
+		derived, err = a.deriveLocationWallets(r.Context(), provisioning)
+		if err != nil {
+			a.logger.Logf("error deriving wallets for location %d: %s", u.Id, err.Error())
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{
 				"error": "Could not reach the chain to create this location's wallets. Try approving again in a moment.",
 			})
 			return
-		}
-		tippingAddress, deriveErr := a.deriveSmartAccountAddress(r.Context(), provisioning.OwnerEOA, tippingIndex)
-		if deriveErr != nil {
-			a.logger.Logf("error deriving tipping wallet for location %d: %s", u.Id, deriveErr.Error())
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{
-				"error": "Could not reach the chain to create this location's wallets. Try approving again in a moment.",
-			})
-			return
-		}
-
-		derived = &db.DerivedLocationWallets{
-			PaymentAddress: paymentAddress,
-			PaymentIndex:   paymentIndex,
-			TippingAddress: tippingAddress,
-			TippingIndex:   tippingIndex,
-			Street:         provisioning.Street,
 		}
 	}
 
 	err = a.db.UpdateLocationApproval(r.Context(), u.Id, u.Approval, provisioning, derived)
+	if errors.Is(err, db.ErrLocationWalletIndexMoved) {
+		// Another of this merchant's locations took the address between the
+		// derivation and the write. Nothing was committed; approving again derives
+		// against the new state.
+		a.logger.Logf("wallet index moved while approving location %d; asking the admin to retry", u.Id)
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+			"error": "Another of this merchant's locations claimed that wallet. Try approving again.",
+		})
+		return
+	}
 	if err != nil {
 		status := "pending"
 		if u.Approval != nil {

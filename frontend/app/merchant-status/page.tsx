@@ -3,24 +3,19 @@
 import { useApp } from "@/context/AppProvider"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { AlertCircle, CheckCircle, Clock, XCircle } from "lucide-react"
+import { AlertCircle } from "lucide-react"
 import { useRouter } from "next/navigation"
 import { useMemo } from "react"
-
-type LocationApplicationStatus = "approved" | "pending" | "rejected"
-
-const getLocationApplicationStatus = (approval?: boolean | null): LocationApplicationStatus => {
-  if (approval === true) return "approved"
-  if (approval === false) return "rejected"
-  return "pending"
-}
+import { LocationApplicationStatusCard } from "@/components/merchant/location-application-status"
+import { MERCHANT_ONBOARDING_PATH } from "@/lib/merchant-onboarding"
 
 export default function MerchantStatusPage() {
-  const { userLocations, status } = useApp()
+  const { user, userLocations, status } = useApp()
   const router = useRouter()
   const sortedUserLocations = useMemo(() => {
     return [...userLocations].sort((a, b) => b.id - a.id)
   }, [userLocations])
+  const isMerchantAccount = user?.accountType === "merchant"
 
   return (
     <div className="mx-auto w-full max-w-3xl space-y-5 px-3 pb-6 pt-2 sm:space-y-6 sm:px-0">
@@ -42,72 +37,37 @@ export default function MerchantStatusPage() {
             <CardDescription>Check the status of your merchant applications</CardDescription>
           </CardHeader>
           <CardContent className="px-4 pb-6 pt-2 sm:px-6">
+            {/* Merchant is chosen at signup now, so there is no application to
+                offer a regular account — only a merchant who has not listed a
+                shop yet has anywhere to be sent. */}
             <div className="rounded-lg border bg-muted/20 px-4 py-6 text-center sm:px-6">
               <AlertCircle className="mx-auto mb-3 h-12 w-12 text-gray-500" />
               <h2 className="mb-2 text-xl font-semibold text-black dark:text-white sm:text-2xl">No Application Found</h2>
-              <p className="mb-6 text-sm text-gray-600 dark:text-gray-400 sm:text-base">You haven't submitted a merchant application yet.</p>
-              <Button
-                className="bg-[#eb6c6c] hover:bg-[#d55c5c]"
-                onClick={() => router.push("/settings/merchant-approval")}
-              >
-                Apply to Become a Merchant
-              </Button>
+              <p className="mb-6 text-sm text-gray-600 dark:text-gray-400 sm:text-base">
+                {isMerchantAccount
+                  ? "You haven't listed a business yet."
+                  : "This is a personal account, so there are no business listings on it."}
+              </p>
+              {isMerchantAccount && (
+                <Button
+                  className="bg-[#eb6c6c] hover:bg-[#d55c5c]"
+                  onClick={() => router.push(MERCHANT_ONBOARDING_PATH)}
+                >
+                  Set up your merchant account
+                </Button>
+              )}
             </div>
           </CardContent>
         </Card>
       )}
 
+      {/* Applying for a further location belongs on Locations, next to the till
+          it will be paid into, rather than being a second door here. */}
       {status !== "loading" && sortedUserLocations.length > 0 && (
         <div className="space-y-4 sm:space-y-5">
-          {sortedUserLocations.map((location) => {
-            const applicationStatus = getLocationApplicationStatus(location.approval)
-            let borderClass = "border-yellow-300 dark:border-yellow-700"
-            let headerClass = "bg-yellow-50 dark:bg-yellow-900/20"
-            let title = "Location Application Pending"
-            let body = `Your application for ${location.name} is currently under review.`
-            let Icon = Clock
-            let iconClass = "h-5 w-5 text-yellow-500 mr-2"
-
-            if (applicationStatus === "approved") {
-              borderClass = "border-green-300 dark:border-green-700"
-              headerClass = "bg-green-50 dark:bg-green-900/20"
-              title = "Location Application Approved"
-              body = `Your application for ${location.name} has been approved!`
-              Icon = CheckCircle
-              iconClass = "h-5 w-5 text-green-500 mr-2"
-            } else if (applicationStatus === "rejected") {
-              borderClass = "border-red-300 dark:border-red-700"
-              headerClass = "bg-red-50 dark:bg-red-900/20"
-              title = "Location Application Not Approved"
-              body = `Your application for ${location.name} was not approved.`
-              Icon = XCircle
-              iconClass = "h-5 w-5 text-red-500 mr-2"
-            }
-
-            return (
-              <Card key={location.id} className={`overflow-hidden shadow-sm ${borderClass}`}>
-                <CardHeader className={`${headerClass} px-4 pb-3 pt-5 sm:px-6`}>
-                  <CardTitle className="text-black dark:text-white">Application Status</CardTitle>
-                  <CardDescription className="text-black dark:text-white/80">{location.name}</CardDescription>
-                </CardHeader>
-                <CardContent className="px-4 pb-5 pt-4 sm:px-6">
-                  <h2 className="mb-2 flex items-center text-lg font-semibold leading-tight text-black dark:text-white sm:text-xl">
-                    <Icon className={iconClass} />
-                    {title}
-                  </h2>
-                  <p className="text-sm leading-relaxed text-gray-600 dark:text-gray-400 sm:text-base">{body}</p>
-                </CardContent>
-              </Card>
-            )
-          })}
-
-          <Button
-            variant="outline"
-            className="bg-secondary text-[#eb6c6c] border-[#eb6c6c] hover:bg-[#eb6c6c] hover:text-white"
-            onClick={() => router.push("/settings/merchant-approval")}
-          >
-            Submit Another Application
-          </Button>
+          {sortedUserLocations.map((location) => (
+            <LocationApplicationStatusCard key={location.id} location={location} />
+          ))}
         </div>
       )}
     </div>

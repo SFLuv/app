@@ -232,6 +232,45 @@ chain_revert(){
   cast rpc evm_mine --rpc-url "$RPC" >/dev/null 2>&1
 }
 
+# find_token_donor prints an address on the fork that actually holds SFLUV.
+#
+# The obvious donor — the production faucet named in backend/.env — is only a
+# donor while the fork sits at a block where it happened to hold a balance.
+# anvil re-forks at the chain tip on every boot, so that stops being true
+# without warning, and the failure reads as "the token is broken" rather than
+# "ask someone else".
+#
+# So: try the named donor, then fall back to scanning the addresses that appear
+# in the env and community config and picking the richest. Everything here is a
+# local fork, so impersonating whoever that turns out to be costs nothing.
+find_token_donor(){
+  local token="${SFLUV_TOKEN_ADDRESS:-}"
+  [[ "$token" =~ ^0x ]] || return 1
+
+  local named="${SFLUV_DONOR_ADDRESS:-}"
+  if [[ -z "$named" && -f "$SFLUV_ROOT/backend/.env" ]]; then
+    named="$(grep -E '^BOT_ADDRESS=' "$SFLUV_ROOT/backend/.env" | head -1 | cut -d= -f2- | tr -d "\"' [:space:]")"
+  fi
+  if [[ "$named" =~ ^0x[a-fA-F0-9]{40}$ ]]; then
+    local balance; balance="$(token_balance "$named")"
+    if [[ "${balance:-0}" =~ ^[0-9]+$ && "$balance" != "0" ]]; then
+      printf '%s' "$named"; return 0
+    fi
+  fi
+
+  local best="" best_balance=0
+  local candidate balance
+  for candidate in $(grep -ohE '0x[a-fA-F0-9]{40}' \
+        "$SFLUV_ROOT/backend/.env" "$SFLUV_ROOT/tmp/backend.dev.env" \
+        "$SFLUV_ROOT/backend/community-config.json" 2>/dev/null | sort -u); do
+    balance="$(token_balance "$candidate")"
+    [[ "${balance:-0}" =~ ^[0-9]+$ ]] || continue
+    if (( balance > best_balance )); then best_balance="$balance"; best="$candidate"; fi
+  done
+  [[ -n "$best" ]] || return 1
+  printf '%s' "$best"
+}
+
 token_balance(){
   local addr="$1" token="${SFLUV_TOKEN_ADDRESS:-}"
   [[ -n "$token" ]] || { echo "0"; return; }

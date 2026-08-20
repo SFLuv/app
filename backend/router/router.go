@@ -2,6 +2,7 @@ package router
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/url"
 	"os"
@@ -142,6 +143,11 @@ func New(s *handlers.BotService, a *handlers.AppService, p *handlers.PonderServi
 	if !isProduction() {
 		r.Use(prankForwardingMiddleware(a))
 	}
+
+	// Read-only until a merchant has listed their shop. Mounted after prank
+	// forwarding so a developer pranking into a merchant sees the gate that
+	// merchant sees, which is the only way to look at it without an account.
+	r.Use(merchantOnboardingGate(a))
 
 	// Admin MCP endpoint + its OAuth authorization server. It authenticates
 	// itself (OAuth access token bound to a SFLUV user DID + live admin check)
@@ -586,6 +592,119 @@ func writePolicyRequired(w http.ResponseWriter) {
 	w.Header().Set("X-SFLUV-Auth-Reason", structs.AuthReasonPrivacyPolicyRequired)
 	w.WriteHeader(http.StatusForbidden)
 	_, _ = w.Write([]byte(structs.AuthReasonPrivacyPolicyRequired))
+}
+
+// merchantOnboardingChecker is the single question the read-only gate asks.
+//
+// It is an interface rather than *handlers.AppService because the gated state
+// cannot be produced from real data: every merchant account in production
+// finished onboarding before the gate existed, so the tests have to construct
+// somebody who is behind it.
+type merchantOnboardingChecker interface {
+	MerchantOnboardingRequired(ctx context.Context, userId string) bool
+}
+
+func writeMerchantOnboardingRequired(w http.ResponseWriter) {
+	w.Header().Set("X-SFLUV-Auth-Reason", structs.AuthReasonMerchantOnboardingRequired)
+	// JSON, unlike the privacy-policy refusal above it, because GetUserBootstrap
+	// re-dispatches handlers through an httptest recorder and drops any body
+	// that does not parse — a plain-text reason reaches that client as a bare
+	// status code with nothing to explain it.
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusForbidden)
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"reason": structs.AuthReasonMerchantOnboardingRequired,
+		"error":  "List your business to finish setting up your merchant account.",
+	})
+}
+
+// merchantOnboardingOpenRoutes are the writes a gated merchant must still be
+// able to make. Each one is either the act that clears the gate or the way out
+// of the app; anything else is a hole in it, so the list stays this short.
+//
+// POST /users and the policy acceptance are what write account_type in the
+// first place, and the delete-account pair is what stops the gate from being a
+// trap. Keyed by method as well as path because the difference between
+// POST /locations and PUT /locations is the difference between listing your
+// first shop and editing one — only the first belongs here.
+var merchantOnboardingOpenRoutes = map[string]struct{}{
+	"POST /locations":                   {},
+	"POST /users":                       {},
+	"POST /users/policies/accept":       {},
+	"POST /users/delete-account":        {},
+	"POST /users/delete-account/cancel": {},
+	// Sign-in mirrors the Apple credential the deletion path later needs to
+	// revoke with Apple. Refusing it would cost somebody a clean deletion for a
+	// write they never asked to make.
+	"POST /users/oauth/apple": {},
+	// Registering a wallet is part of arriving, not of trading.
+	//
+	// The web client registers its Privy wallet on EVERY sign-in — _initWallets
+	// posts any wallet the backend has no row for, and rethrows if that fails,
+	// which makes _userLogin log the person straight back out. Gating it made
+	// the gate unsatisfiable: a new merchant was signed out mid-signup, could
+	// never reach the onboarding form, and so could never clear the gate. They
+	// could not even delete the account, because that screen needs a session
+	// they never got.
+	//
+	// A wallet row is a record of an address the person already controls. It
+	// moves nothing, and a merchant needs one before a location can be paid
+	// into anyway.
+	"POST /wallets": {},
+}
+
+// merchantOnboardingGateAllows scopes the gate by method, not by a list of
+// endpoints. An allowlist of routes is a list somebody forgets to extend, and
+// the way that fails is a merchant quietly able to act.
+func merchantOnboardingGateAllows(method string, path string) bool {
+	switch method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions:
+		return true
+	}
+
+	trimmed := strings.TrimSuffix(path, "/")
+	if trimmed == "" {
+		trimmed = "/"
+	}
+	if _, open := merchantOnboardingOpenRoutes[method+" "+trimmed]; open {
+		return true
+	}
+
+	// A prefix rather than a path: the client reads its configuration before it
+	// knows anything at all, including whether it is gated.
+	return trimmed == "/config" || strings.HasPrefix(trimmed, "/config/")
+}
+
+// merchantOnboardingGate holds a merchant who has not listed a shop yet to
+// reads. They are meant to be able to open the app and look around — the map
+// is most of what SFLUV is — so this refuses actions rather than access.
+//
+// It is mounted on the mux rather than folded into requireAcceptedAuthedUser
+// because the withAuth-only routes mutate too, and the gate has to mean the
+// same thing everywhere. A request with no identified caller passes through
+// untouched: whatever authorizes those is not this.
+func merchantOnboardingGate(check merchantOnboardingChecker) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if check == nil || merchantOnboardingGateAllows(r.Method, r.URL.Path) {
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			id, ok := userDidFromContext(r)
+			if !ok {
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			if !check.MerchantOnboardingRequired(r.Context(), id) {
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			writeMerchantOnboardingRequired(w)
+		})
+	}
 }
 
 func requireAcceptedAuthedUser(w http.ResponseWriter, r *http.Request, s *handlers.AppService) (string, bool) {

@@ -66,6 +66,14 @@ func clientVersionRequiresUpdate(version string, minimum string) bool {
 func serverFeatureFlags() map[string]any {
 	return map[string]any{
 		"volunteer_events_enabled": strings.EqualFold(strings.TrimSpace(os.Getenv("VOLUNTEER_EVENTS_ENABLED")), "true"),
+		// unwrap_enabled gates the SFLUV → backing-asset unwrap affordance. It is
+		// necessary but not sufficient: unwrapAndBridge aborts unless the calling
+		// wallet itself holds REDEEMER_ROLE on the token, which today is held by
+		// the owner's smart wallet and is only being extended to location wallets
+		// separately. Turning the flag on where the role is missing surfaces a
+		// button that fails at the last step, so it stays off until the grant is
+		// confirmed on the chain the backend is pointed at.
+		"unwrap_enabled": strings.EqualFold(strings.TrimSpace(os.Getenv("UNWRAP_ENABLED")), "true"),
 	}
 }
 

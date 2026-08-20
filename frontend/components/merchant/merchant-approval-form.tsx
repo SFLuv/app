@@ -1,7 +1,7 @@
 "use client"
 
 import type React from "react"
-import { useCallback, useState } from "react"
+import { useCallback, useMemo, useState } from "react"
 import { useRouter } from "next/navigation"
 import { z } from "zod"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -108,6 +108,119 @@ const emptyForm: MerchantFormValues = {
   reference: "",
 }
 
+// A stored answer is the resolved string, not the option that produced it: an
+// "Other" answer was flattened into free text before it was saved. Anything the
+// list does not recognise is therefore an "Other" being read back, and has to be
+// put back in the free-text box or the merchant would silently lose it.
+const fromResolvedOption = (stored: string, options: string[]): [string, string] => {
+  const value = (stored || "").trim()
+  if (!value) return ["", ""]
+  if (value === OTHER) return [OTHER, ""]
+  return options.includes(value) ? [value, ""] : [OTHER, value]
+}
+
+// The two dropdowns with no free-text escape hatch. A stored value that is not
+// on the list — an option that has since been renamed, say — is dropped rather
+// than shown as a selection that does not exist, so the merchant re-picks it.
+const fromFixedOption = (stored: string, options: string[]): string => {
+  const value = (stored || "").trim()
+  return options.includes(value) ? value : ""
+}
+
+const toFormValues = (location: AuthedLocation): MerchantFormValues => {
+  const [posSystem, posSystemOther] = fromResolvedOption(location.pos_system, posOptions)
+  const [tippingPolicy, tippingPolicyOther] = fromResolvedOption(location.tipping_policy, tippingOptions)
+  const [tippingDivision, tippingDivisionOther] = fromResolvedOption(
+    location.tipping_division,
+    tippingDivisionOptions,
+  )
+  const [tableCoverage, tableCoverageOther] = fromResolvedOption(location.table_coverage, tableCoverageOptions)
+  const [tabletModel, tabletModelOther] = fromResolvedOption(location.tablet_model, tabletOptions)
+  const [messagingService, messagingServiceOther] = fromResolvedOption(
+    location.messaging_service,
+    messagingServiceOptions,
+  )
+
+  return {
+    description: location.description || "",
+    businessPhone: location.phone || "",
+    businessEmail: location.email || "",
+    manualBusinessName: location.name || "",
+    manualBusinessType: location.type || "",
+    contactFirstName: location.contact_firstname || "",
+    contactLastName: location.contact_lastname || "",
+    contactPhone: location.contact_phone || location.admin_phone || "",
+    contactEmail: location.admin_email || "",
+    posSystem,
+    posSystemOther,
+    soleProprietorship: fromFixedOption(location.sole_proprietorship, soleProprietorshipOptions),
+    tippingPolicy,
+    tippingPolicyOther,
+    tippingDivision,
+    tippingDivisionOther,
+    tableCoverage,
+    tableCoverageOther,
+    serviceStations: fromFixedOption(String(location.service_stations ?? ""), serviceStationOptions),
+    tabletModel,
+    tabletModelOther,
+    messagingService,
+    messagingServiceOther,
+    reference: location.reference || "",
+  }
+}
+
+/**
+ * What a second shop inherits from one the merchant already runs: who the
+ * business is and who we ring about it. Read out of the earlier listing through
+ * toFormValues, so an answer stored as free text under "Other" comes back in
+ * the same shape editing would give it.
+ *
+ * Everything left out describes the premises rather than the business — the
+ * address and the Google entry behind it, but equally the till, the tables and
+ * the staff covering them. Those answers are about a room nobody has stood in
+ * yet, and prefilled they reach an admin as a claim about it rather than a
+ * leftover from somewhere else.
+ *
+ * businessPhone is left out despite being contact detail: left empty it falls
+ * back to the phone on the new place's own Google listing (see the submit
+ * path), so carrying the other shop's number over would quietly beat the right
+ * answer with a worse one.
+ */
+const CARRIED_OVER_FIELDS: (keyof MerchantFormValues)[] = [
+  "description",
+  "businessEmail",
+  "contactFirstName",
+  "contactLastName",
+  "contactPhone",
+  "contactEmail",
+  "soleProprietorship",
+  "reference",
+]
+
+type CarriedOverPrefill = {
+  /** The listing the answers came from, named in the notice above the form. */
+  sourceName: string
+  values: MerchantFormValues
+  fields: Set<keyof MerchantFormValues>
+}
+
+// Only fields the earlier listing actually answered are carried, so the notice
+// on a field never appears over a box that is empty for both shops.
+const carryOver = (location: AuthedLocation): CarriedOverPrefill => {
+  const previous = toFormValues(location)
+  const values = { ...emptyForm }
+  const fields = new Set<keyof MerchantFormValues>()
+
+  for (const field of CARRIED_OVER_FIELDS) {
+    const answer = previous[field]
+    if (!answer) continue
+    values[field] = answer
+    fields.add(field)
+  }
+
+  return { sourceName: (location.name || "").trim(), values, fields }
+}
+
 const requiredText = (label: string, max = 4000) =>
   z.string().trim().min(1, `${label} is required.`).max(max, `${label} must be ${max} characters or fewer.`)
 
@@ -169,9 +282,37 @@ type FieldErrors = Partial<Record<keyof MerchantFormValues, string>>
 
 const resolveOther = (value: string, otherValue: string) => (value === OTHER ? otherValue.trim() : value)
 
+// On the manual path nothing vouches for the business name but the merchant, so
+// it must not simply echo the address — that is the exact mistake the path is
+// built to prevent, and the backend rejects it on submit and on update alike.
+// Checked here as well so the complaint lands on the field rather than arriving
+// as a whole-form error from the server.
+const manualNameError = (name: string, addressCandidates: (string | undefined)[]): string | null => {
+  const typedName = name.trim()
+  if (!typedName) return "Enter your business name."
+  return addressCandidates.some(
+    (candidate) => candidate && candidate.toLowerCase() === typedName.toLowerCase(),
+  )
+    ? "That is your street address. Enter the name your customers know you by."
+    : null
+}
+
 function FieldError({ message }: { message?: string }) {
   if (!message) return null
   return <p className="text-xs text-red-600 dark:text-red-300">{message}</p>
+}
+
+// A carried-over answer is right often enough to be worth filling in and stale
+// often enough that submitting it unread is the failure worth guarding against.
+// The mark stays until the merchant edits that field, so leaving one as it
+// stands is a decision rather than something nobody looked at.
+function CarriedOverAnswer({ show }: { show?: boolean }) {
+  if (!show) return null
+  return (
+    <p className="text-xs text-amber-700 dark:text-amber-400">
+      Carried over from your other location — check it before submitting.
+    </p>
+  )
 }
 
 // A select-plus-"Other" pair appears six times on this form; rendering it from
@@ -191,6 +332,7 @@ function SelectWithOther({
   values,
   fieldErrors,
   setField,
+  carriedOver,
 }: {
   id: string
   label: string
@@ -203,6 +345,7 @@ function SelectWithOther({
   values: MerchantFormValues
   fieldErrors: FieldErrors
   setField: <K extends keyof MerchantFormValues>(field: K, value: MerchantFormValues[K]) => void
+  carriedOver?: boolean
 }) {
   return (
     <div className="space-y-2">
@@ -222,6 +365,7 @@ function SelectWithOther({
         </SelectContent>
       </Select>
       <FieldError message={fieldErrors[field]} />
+      <CarriedOverAnswer show={carriedOver} />
       {otherField && values[field] === OTHER && (
         <div className="space-y-2 mt-2">
           <Label htmlFor={`${id}-other`} className="text-black dark:text-white">
@@ -241,18 +385,69 @@ function SelectWithOther({
   )
 }
 
-export function MerchantApprovalForm() {
-  const { addLocation } = useLocation()
+/**
+ * The same form in two modes. With `existingLocation` it edits an application
+ * already on file — the case a rejected merchant needs — and with it absent it
+ * takes a new one.
+ *
+ * Editing cannot change the place: PUT /locations does not accept a Google id,
+ * and re-picking one would only ever be a different business. So the picker is
+ * replaced with what was already matched, and only the answers the merchant
+ * wrote themselves stay editable.
+ */
+export function MerchantApprovalForm({
+  existingLocation,
+  prefillFrom,
+  onSaved,
+  redirectAfterCreate = "/map",
+}: {
+  existingLocation?: AuthedLocation
+  /**
+   * A listing the merchant already owns, whose business-level answers start the
+   * form off. Absent on a first application, and ignored while editing — there
+   * the record on file is the answer, and prefilling over it would overwrite
+   * what the merchant is trying to correct.
+   */
+  prefillFrom?: AuthedLocation
+  onSaved?: () => void
+  /**
+   * Where a newly created listing lands. The default suits a first shop — the
+   * merchant has nothing to manage yet and the map is what they came to join.
+   * A merchant adding a second one is already somewhere they meant to be, so
+   * that caller passes null and stays put.
+   */
+  redirectAfterCreate?: string | null
+} = {}) {
+  const { addLocation, updateLocation } = useLocation()
   const router = useRouter()
+  const isEditing = existingLocation !== undefined
 
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({})
   const [placeSelection, setPlaceSelection] = useState<PlaceSelection | null>(null)
-  const [values, setValues] = useState<MerchantFormValues>(emptyForm)
+  const carriedOver = useMemo<CarriedOverPrefill | null>(
+    () => (existingLocation === undefined && prefillFrom !== undefined ? carryOver(prefillFrom) : null),
+    [existingLocation, prefillFrom],
+  )
+  const [values, setValues] = useState<MerchantFormValues>(() =>
+    existingLocation ? toFormValues(existingLocation) : carriedOver?.values ?? emptyForm,
+  )
+  const [carriedOverFields, setCarriedOverFields] = useState<Set<keyof MerchantFormValues>>(
+    () => new Set(carriedOver?.fields),
+  )
 
   const setField = useCallback(<K extends keyof MerchantFormValues>(field: K, value: MerchantFormValues[K]) => {
     setValues((current) => ({ ...current, [field]: value }))
+    // Once it has been typed over it is this shop's answer, not the other
+    // shop's, and the warning would be telling the merchant to check their own
+    // work.
+    setCarriedOverFields((current) => {
+      if (!current.has(field)) return current
+      const next = new Set(current)
+      next.delete(field)
+      return next
+    })
     setFieldErrors((current) => {
       if (!current[field]) return current
       const next = { ...current }
@@ -261,18 +456,21 @@ export function MerchantApprovalForm() {
     })
   }, [])
 
+  // Back to how the form opened rather than blank: a merchant adding a third
+  // shop from the same screen gets the same head start the second one had.
   const resetForm = () => {
-    setValues(emptyForm)
+    setValues(carriedOver?.values ?? emptyForm)
     setFieldErrors({})
     setFormError(null)
     setPlaceSelection(null)
+    setCarriedOverFields(new Set(carriedOver?.fields))
   }
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault()
     setFormError(null)
 
-    if (!placeSelection) {
+    if (!isEditing && !placeSelection) {
       setFormError('Find your business or address and confirm the match before submitting.')
       return
     }
@@ -291,24 +489,78 @@ export function MerchantApprovalForm() {
 
     const form = parsed.data
 
-    // On the manual path nothing vouches for the business name but the merchant,
-    // so it is required here and must not simply echo the address they just
-    // picked — that is the exact mistake this path is built to prevent, and the
-    // backend rejects it too.
+    // Everything below writes the merchant-authored half. Which call carries it
+    // is the only difference between the two modes: an edit reuses the place
+    // already on the record, a submission carries the one just confirmed.
+    const merchantAuthoredFields = {
+      description: form.description,
+      email: form.businessEmail,
+      admin_phone: form.contactPhone,
+      admin_email: form.contactEmail,
+      contact_firstname: form.contactFirstName,
+      contact_lastname: form.contactLastName,
+      contact_phone: form.contactPhone,
+      pos_system: resolveOther(form.posSystem, form.posSystemOther),
+      sole_proprietorship: form.soleProprietorship,
+      tipping_policy: resolveOther(form.tippingPolicy, form.tippingPolicyOther),
+      tipping_division: resolveOther(form.tippingDivision, form.tippingDivisionOther),
+      table_coverage: resolveOther(form.tableCoverage, form.tableCoverageOther),
+      service_stations: Number(form.serviceStations),
+      tablet_model: resolveOther(form.tabletModel, form.tabletModelOther),
+      messaging_service: resolveOther(form.messagingService, form.messagingServiceOther),
+      reference: form.reference,
+    }
+
+    if (existingLocation) {
+      const isManualListing = existingLocation.listing_source === "manual"
+      if (isManualListing) {
+        const addressLine = [
+          existingLocation.street,
+          [existingLocation.city, existingLocation.state].filter(Boolean).join(", "),
+        ]
+          .filter(Boolean)
+          .join(", ")
+        const nameError = manualNameError(form.manualBusinessName, [existingLocation.street, addressLine])
+        if (nameError) {
+          setFieldErrors((current) => ({ ...current, manualBusinessName: nameError }))
+          setFormError("Please fix the highlighted fields before saving.")
+          return
+        }
+      }
+
+      setIsSubmitting(true)
+      try {
+        await updateLocation({
+          ...existingLocation,
+          ...merchantAuthoredFields,
+          // Google owns the name on a google_place listing; only a manual one
+          // has a name the merchant is allowed to restate.
+          name: isManualListing ? form.manualBusinessName.trim() : existingLocation.name,
+          phone: form.businessPhone || existingLocation.phone || "",
+        })
+        onSaved?.()
+      } catch (error) {
+        setFormError(error instanceof Error ? error.message : "Something went wrong. Please try again.")
+      } finally {
+        setIsSubmitting(false)
+      }
+      return
+    }
+
+    // Guarded before the schema ran; restated only to narrow the state value.
+    if (!placeSelection) return
+
     if (placeSelection.source === "manual") {
       const address = placeSelection.address
-      const typedName = form.manualBusinessName.trim()
       const addressLine = [address.street, [address.city, address.state].filter(Boolean).join(", ")]
         .filter(Boolean)
         .join(", ")
 
-      const nameError = !typedName
-        ? "Enter your business name."
-        : [address.street, addressLine, address.formatted_address].some(
-              (candidate) => candidate && candidate.toLowerCase() === typedName.toLowerCase(),
-            )
-          ? "That is your street address. Enter the name your customers know you by."
-          : null
+      const nameError = manualNameError(form.manualBusinessName, [
+        address.street,
+        addressLine,
+        address.formatted_address,
+      ])
 
       if (nameError) {
         setFieldErrors((current) => ({ ...current, manualBusinessName: nameError }))
@@ -367,31 +619,20 @@ export function MerchantApprovalForm() {
       id: 0,
       owner_id: "",
       ...locationPlaceFields,
-      description: form.description,
+      ...merchantAuthoredFields,
       phone: form.businessPhone || googlePhone || "",
-      email: form.businessEmail,
-      admin_phone: form.contactPhone,
-      admin_email: form.contactEmail,
-      contact_firstname: form.contactFirstName,
-      contact_lastname: form.contactLastName,
-      contact_phone: form.contactPhone,
-      pos_system: resolveOther(form.posSystem, form.posSystemOther),
-      sole_proprietorship: form.soleProprietorship,
-      tipping_policy: resolveOther(form.tippingPolicy, form.tippingPolicyOther),
-      tipping_division: resolveOther(form.tippingDivision, form.tippingDivisionOther),
-      table_coverage: resolveOther(form.tableCoverage, form.tableCoverageOther),
-      service_stations: Number(form.serviceStations),
-      tablet_model: resolveOther(form.tabletModel, form.tabletModelOther),
-      messaging_service: resolveOther(form.messagingService, form.messagingServiceOther),
       payment_wallets: [],
-      reference: form.reference,
     }
 
     setIsSubmitting(true)
     try {
       await addLocation(newLocation)
       resetForm()
-      router.replace("/map")
+      // Listing a shop is what lifts the merchant write gate, so the caller is
+      // told before we navigate — otherwise the app keeps telling them they
+      // still owe us a listing until the next background profile refresh.
+      onSaved?.()
+      if (redirectAfterCreate) router.replace(redirectAfterCreate)
     } catch (error) {
       // Navigating on failure used to make a rejected application look accepted.
       setFormError(error instanceof Error ? error.message : "Something went wrong. Please try again.")
@@ -405,17 +646,67 @@ export function MerchantApprovalForm() {
       {/* pb trimmed: with the description gone the header's own padding plus
           the content's left a large empty band under the title. */}
       <CardHeader className="pb-2">
-        <CardTitle className="text-black dark:text-white">Merchant Application</CardTitle>
+        <CardTitle className="text-black dark:text-white">
+          {isEditing ? "Edit Your Merchant Application" : "Merchant Application"}
+        </CardTitle>
       </CardHeader>
       <CardContent>
         <form onSubmit={handleSubmit} className="space-y-6" noValidate>
           <div className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="business-name" className="text-black dark:text-white">
-                Search for Your Location Name
-              </Label>
-              <PlaceAutocomplete value={placeSelection} onSelect={setPlaceSelection} />
-            </div>
+            {carriedOver && (
+              <div className="space-y-1 rounded-lg border border-amber-300/70 bg-amber-50 p-4 dark:border-amber-500/30 dark:bg-amber-500/10">
+                <p className="text-sm font-medium text-black dark:text-white">
+                  Some answers are carried over from {carriedOver.sourceName || "your first location"}
+                </p>
+                <p className="text-xs leading-relaxed text-gray-600 dark:text-gray-400">
+                  Your business and contact details are filled in and marked where they were. Read
+                  them before submitting — anything that has changed since you listed your first
+                  shop now stands as this shop&apos;s answer. Nothing about the premises is carried
+                  over: the address, the Google listing and the questions about your floor and your
+                  tills are all yours to answer afresh for this one.
+                </p>
+              </div>
+            )}
+
+            {existingLocation ? (
+              <div className="space-y-2 rounded-lg border bg-muted/20 p-4">
+                <p className="text-sm font-medium text-black dark:text-white">{existingLocation.name}</p>
+                <p className="text-sm text-gray-600 dark:text-gray-400">
+                  {[existingLocation.street, existingLocation.city, existingLocation.state]
+                    .filter(Boolean)
+                    .join(", ")}
+                </p>
+                <p className="text-xs text-gray-500 dark:text-gray-400">
+                  This is the business on file. To list a different one, submit a new application instead.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <Label htmlFor="business-name" className="text-black dark:text-white">
+                  Search for Your Location Name
+                </Label>
+                <PlaceAutocomplete value={placeSelection} onSelect={setPlaceSelection} />
+              </div>
+            )}
+
+            {/* A manual listing's name is the merchant's own, so an edit can
+                restate it. Its category cannot: PUT /locations does not write
+                that column, and offering the field would lose the change. */}
+            {existingLocation?.listing_source === "manual" && (
+              <div className="space-y-2">
+                <Label htmlFor="edit-business-name" className="text-black dark:text-white">
+                  Business Name
+                </Label>
+                <Input
+                  id="edit-business-name"
+                  value={values.manualBusinessName}
+                  onChange={(event) => setField("manualBusinessName", event.target.value)}
+                  className="text-black dark:text-white bg-secondary"
+                  placeholder="The name your customers know you by"
+                />
+                <FieldError message={fieldErrors.manualBusinessName} />
+              </div>
+            )}
 
             {placeSelection?.source === "google_place" && (
               <div className="space-y-2">
@@ -491,6 +782,7 @@ export function MerchantApprovalForm() {
                 className="text-black dark:text-white bg-secondary min-h-[100px]"
               />
               <FieldError message={fieldErrors.description} />
+              <CarriedOverAnswer show={carriedOverFields.has("description")} />
             </div>
 
             {/* Business Contact Information */}
@@ -525,6 +817,7 @@ export function MerchantApprovalForm() {
                     className="text-black dark:text-white bg-secondary"
                   />
                   <FieldError message={fieldErrors.businessEmail} />
+                  <CarriedOverAnswer show={carriedOverFields.has("businessEmail")} />
                 </div>
               </div>
             </div>
@@ -546,6 +839,7 @@ export function MerchantApprovalForm() {
                     className="text-black dark:text-white bg-secondary"
                   />
                   <FieldError message={fieldErrors.contactFirstName} />
+                  <CarriedOverAnswer show={carriedOverFields.has("contactFirstName")} />
                 </div>
 
                 <div className="space-y-2">
@@ -559,6 +853,7 @@ export function MerchantApprovalForm() {
                     className="text-black dark:text-white bg-secondary"
                   />
                   <FieldError message={fieldErrors.contactLastName} />
+                  <CarriedOverAnswer show={carriedOverFields.has("contactLastName")} />
                 </div>
 
                 <div className="space-y-2">
@@ -572,6 +867,7 @@ export function MerchantApprovalForm() {
                     className="text-black dark:text-white bg-secondary"
                   />
                   <FieldError message={fieldErrors.contactPhone} />
+                  <CarriedOverAnswer show={carriedOverFields.has("contactPhone")} />
                 </div>
 
                 <div className="space-y-2">
@@ -586,6 +882,7 @@ export function MerchantApprovalForm() {
                     className="text-black dark:text-white bg-secondary"
                   />
                   <FieldError message={fieldErrors.contactEmail} />
+                  <CarriedOverAnswer show={carriedOverFields.has("contactEmail")} />
                 </div>
               </div>
             </div>
@@ -610,6 +907,7 @@ export function MerchantApprovalForm() {
               placeholder="Select option"
               options={soleProprietorshipOptions}
               field="soleProprietorship"
+              carriedOver={carriedOverFields.has("soleProprietorship")}
               values={values}
               fieldErrors={fieldErrors}
               setField={setField}
@@ -707,6 +1005,7 @@ export function MerchantApprovalForm() {
                 className="text-black dark:text-white bg-secondary min-h-[100px]"
               />
               <FieldError message={fieldErrors.reference} />
+              <CarriedOverAnswer show={carriedOverFields.has("reference")} />
             </div>
           </div>
 
@@ -718,7 +1017,13 @@ export function MerchantApprovalForm() {
           )}
 
           <Button type="submit" className="w-full bg-[#eb6c6c] hover:bg-[#d55c5c]" disabled={isSubmitting}>
-            {isSubmitting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : "Submit Merchant Application"}
+            {isSubmitting ? (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            ) : isEditing ? (
+              "Save Your Corrections"
+            ) : (
+              "Submit Merchant Application"
+            )}
           </Button>
         </form>
       </CardContent>

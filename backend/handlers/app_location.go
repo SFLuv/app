@@ -199,6 +199,11 @@ func (a *AppService) AddLocation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Mint the till now rather than at approval, so the merchant's Locations tab
+	// has an address to show them while the listing sits in the review queue.
+	// This cannot fail the request: see provisionNewLocationWallets.
+	a.provisionNewLocationWallets(r.Context(), location.ID)
+
 	a.sendRoleRequestEmail(
 		"MERCHANT_ADMIN_EMAIL",
 		"New Location Added",

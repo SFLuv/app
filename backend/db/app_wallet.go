@@ -193,7 +193,7 @@ func (a *AppDB) getLocationAddressOwnerLookup(ctx context.Context, address strin
 			COALESCE(NULLIF(TRIM(matching_wallet.name), ''), '') AS wallet_name,
 			$1 AS matched_address,
 			TRUE AS matched_payment_wallet,
-			COALESCE(NULLIF(TRIM(default_payment_wallet.wallet_address), ''), '') AS pay_to_address,
+			`+locationPayToAddressExpr+` AS pay_to_address,
 			COALESCE(
 				NULLIF(TRIM(l.tipping_wallet_address), ''),
 				''
@@ -206,24 +206,6 @@ func (a *AppDB) getLocationAddressOwnerLookup(ctx context.Context, address strin
 			u.id = l.owner_id
 		AND
 			u.active = TRUE
-		LEFT JOIN LATERAL (
-			SELECT
-				lpw.wallet_address
-			FROM
-				location_payment_wallets lpw
-			WHERE
-				lpw.location_id = l.id
-			AND
-				lpw.active = TRUE
-			ORDER BY
-				CASE
-					WHEN lpw.is_default = TRUE THEN 0
-					ELSE 1
-				END,
-				lpw.id ASC
-			LIMIT 1
-		) default_payment_wallet
-		ON TRUE
 		LEFT JOIN LATERAL (
 			SELECT
 				w.name

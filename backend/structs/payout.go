@@ -146,6 +146,16 @@ type RedeemEscrowedResponse struct {
 	Message     string `json:"message"`
 }
 
+// RedeemRefusedResponse is returned when a scan is turned away before the code
+// is touched. It mirrors the escrow body's status/reason/message keys, because
+// mobile special-cases `reason` on /redeem, but carries no amount: nothing was
+// ever reserved, and the code is still there to be scanned again.
+type RedeemRefusedResponse struct {
+	Status  string `json:"status"`
+	Reason  string `json:"reason"`
+	Message string `json:"message"`
+}
+
 // Form1099Row is one payee's position for a tax year: what we actually paid
 // them, and whether we can file for them.
 //

@@ -118,51 +118,118 @@ func normalizeRedeemCode(raw string) string {
 	return strings.ToLower(code)
 }
 
-func (s *BotService) resolveRedeemPayoutAddress(ctx context.Context, requestedAddress string) string {
+// redeemPayoutTarget is one resolution of a scanned address: where the money
+// would land, and whose account it belongs to. The two have to come out of the
+// same pass. resolveRedeemPayoutAddress rewrites a location till to the owner's
+// personal wallet, so anything that re-reads the address afterwards is asking
+// about a different address than the one that was scanned and would never see
+// the shop behind it.
+type redeemPayoutTarget struct {
+	address     string
+	userID      string
+	accountType string
+	// ownerUnreadable means the address is owned but the account behind it could
+	// not be read, which is not the same answer as "nobody owns this". The
+	// merchant bar treats the two differently.
+	ownerUnreadable bool
+}
+
+func (s *BotService) resolveRedeemPayoutAddress(ctx context.Context, requestedAddress string) redeemPayoutTarget {
 	normalizedRequestedAddress := strings.ToLower(strings.TrimSpace(requestedAddress))
 	if !common.IsHexAddress(normalizedRequestedAddress) {
-		return normalizedRequestedAddress
+		return redeemPayoutTarget{address: normalizedRequestedAddress}
 	}
 	normalizedRequestedAddress = strings.ToLower(common.HexToAddress(normalizedRequestedAddress).Hex())
+	target := redeemPayoutTarget{address: normalizedRequestedAddress}
 
+	// A deployment with no app database has no users table, so it has no
+	// merchant accounts to bar either. Not a lookup failure.
 	if s.appDb == nil {
-		return normalizedRequestedAddress
+		return target
 	}
 
 	ownerLookup, err := s.appDb.GetWalletAddressOwnerLookup(ctx, normalizedRequestedAddress)
 	if err != nil {
 		fmt.Printf("error resolving wallet owner for redeem address %s: %s\n", normalizedRequestedAddress, err)
-		return normalizedRequestedAddress
+		target.ownerUnreadable = true
+		return target
 	}
 	if ownerLookup == nil || strings.TrimSpace(ownerLookup.UserID) == "" {
-		return normalizedRequestedAddress
+		return target
 	}
+	target.userID = ownerLookup.UserID
 
 	user, err := s.appDb.GetUserById(ctx, ownerLookup.UserID)
 	if err == nil {
+		target.accountType = user.AccountType
 		primaryWalletAddress := strings.TrimSpace(user.PrimaryWalletAddress)
 		if common.IsHexAddress(primaryWalletAddress) {
-			return strings.ToLower(common.HexToAddress(primaryWalletAddress).Hex())
+			target.address = strings.ToLower(common.HexToAddress(primaryWalletAddress).Hex())
+			return target
 		}
 	} else {
 		fmt.Printf("error loading user primary wallet for owner %s redeem address %s: %s\n", ownerLookup.UserID, normalizedRequestedAddress, err)
+		target.ownerUnreadable = true
 	}
 
 	primarySmartWallet, err := s.appDb.GetSmartWalletByOwnerIndex(ctx, ownerLookup.UserID, 0)
 	if err != nil {
 		fmt.Printf("error loading primary smart wallet for owner %s redeem address %s: %s\n", ownerLookup.UserID, normalizedRequestedAddress, err)
-		return normalizedRequestedAddress
+		return target
 	}
 	if primarySmartWallet == nil || primarySmartWallet.SmartAddress == nil {
-		return normalizedRequestedAddress
+		return target
 	}
 
 	smartWalletAddress := strings.TrimSpace(*primarySmartWallet.SmartAddress)
 	if !common.IsHexAddress(smartWalletAddress) {
-		return normalizedRequestedAddress
+		return target
 	}
 
-	return strings.ToLower(common.HexToAddress(smartWalletAddress).Hex())
+	target.address = strings.ToLower(common.HexToAddress(smartWalletAddress).Hex())
+	return target
+}
+
+const (
+	merchantFaucetBarEnvKey = "MERCHANT_FAUCET_BAR_ENABLED"
+
+	redeemRefusalMerchantAccount = "merchant_account"
+	redeemRefusalOwnerUnreadable = "account_lookup_failed"
+)
+
+// Merchants take payment, they do not draw from the faucet: a shop owner who
+// also wants to volunteer signs up a second, regular account. Behind a flag
+// because it decides who gets paid, and a wrong call has to be revocable
+// without a deploy.
+func merchantFaucetBarEnabled() bool {
+	return envBool(merchantFaucetBarEnvKey, true)
+}
+
+// merchantFaucetRefusal names why a resolved scan may not be paid from the
+// faucet, or returns "" if it may.
+//
+// It FAILS CLOSED. An owned address whose account could not be read is refused
+// rather than paid, because the two mistakes are not symmetric: a wrong refusal
+// costs a retry, since the caller runs this before the code is consumed and the
+// same QR still works a minute later, while tokens that leave the faucet cannot
+// be pulled back.
+//
+// An address that resolves to nobody is paid, and that is the hole in this.
+// POST /redeem is anonymous, so a merchant scanning with a fresh wallet that
+// has never been linked to their account is indistinguishable from a first-time
+// volunteer. Closing it would mean authenticating redemption, which would take
+// away the walk-up scan the events run on.
+func merchantFaucetRefusal(target redeemPayoutTarget) string {
+	if !merchantFaucetBarEnabled() {
+		return ""
+	}
+	if target.ownerUnreadable {
+		return redeemRefusalOwnerUnreadable
+	}
+	if target.accountType == structs.AccountTypeMerchant {
+		return redeemRefusalMerchantAccount
+	}
+	return ""
 }
 
 func validateEventTiming(event *structs.Event) error {
@@ -528,8 +595,33 @@ func (s *BotService) Redeem(w http.ResponseWriter, r *http.Request) {
 	request.Address = strings.ToLower(common.HexToAddress(request.Address).Hex())
 
 	resolveAddressCtx, resolveAddressCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	request.Address = s.resolveRedeemPayoutAddress(resolveAddressCtx, request.Address)
+	payoutTarget := s.resolveRedeemPayoutAddress(resolveAddressCtx, request.Address)
 	resolveAddressCancel()
+	request.Address = payoutTarget.address
+
+	// Before db.Redeem, and it has to stay there. A refusal raised after the code
+	// is consumed would depend on UndoRedeem to hand it back, and getting that
+	// wrong either burns a code nobody was paid for or lets one be claimed twice.
+	// Refusing first means the scan is simply never counted.
+	if refusal := merchantFaucetRefusal(payoutTarget); refusal != "" {
+		fmt.Printf("refusing redemption of code %s for address %s (owner %q): %s\n", request.Code, request.Address, payoutTarget.userID, refusal)
+
+		status := http.StatusConflict
+		message := "This is a merchant account. Volunteer rewards go to a personal SFLuv account — sign in with one and scan again."
+		if refusal == redeemRefusalOwnerUnreadable {
+			// Not the scanner's fault and not permanent, so it is answered as a
+			// server problem rather than as a rule they broke.
+			status = http.StatusServiceUnavailable
+			message = "We couldn't check this account just now. The code has not been used — try scanning it again in a moment."
+		}
+
+		writeJSON(w, status, structs.RedeemRefusedResponse{
+			Status:  "blocked",
+			Reason:  refusal,
+			Message: message,
+		})
+		return
+	}
 
 	// The tax check no longer happens here. A volunteer who has earned past the
 	// reporting threshold used to be refused at this point, with the code left

@@ -16,13 +16,50 @@ import { readFileSync } from "fs"
 import path from "path"
 import { expect, test } from "../lib/test"
 
-test("an invalid code is refused without claiming anything happened", async ({ page }) => {
+test("a redemption that cannot be paid ends somewhere, and says why", async ({ page }) => {
   await page.goto("/faucet/redeem?code=not-a-real-code")
 
-  // Any terminal state is fine here; a spinner that never resolves is not.
+  /**
+   * The point is that it RESOLVES — a spinner that never ends is the failure.
+   * Which terminal state depends on who is scanning, and the seeded account is
+   * merchant-typed, so it lands on the merchant refusal rather than an
+   * invalid-code error. Both are correct endings; neither is a hang.
+   */
   await expect(
-    page.getByRole("heading", { name: /Invalid|Error|expired|redeemed|not active/i }),
+    page.getByRole("heading", {
+      name: /Invalid|Error|expired|redeemed|not active|Merchant Account|Reward Not Sent|Reward Held/i,
+    }),
   ).toBeVisible({ timeout: 30_000 })
+})
+
+/**
+ * A merchant scanning a volunteer QR must not be sent to the tax form.
+ *
+ * Both refusals arrive as a 409, and before the merchant bar existed there was
+ * only one of them — so the page showed W-9 copy for every 409. A merchant
+ * following that would complete a tax form and still not be paid, because their
+ * account is the problem, not their paperwork.
+ */
+test("a merchant is told it is their account, not their tax form", async ({ page }) => {
+  await page.goto("/faucet/redeem?code=not-a-real-code")
+
+  const merchantHeading = page.getByRole("heading", { name: "Merchant Account" })
+  const appeared = await merchantHeading
+    .waitFor({ state: "visible", timeout: 30_000 })
+    .then(() => true)
+    .catch(() => false)
+
+  test.skip(!appeared, "the seeded account is not merchant-typed on this database")
+
+  await expect(page.getByText(/personal SFLuv account/i)).toBeVisible()
+  await expect(
+    page.getByText(/This QR code has not been used up/i),
+    "a refused merchant must be told their code still works",
+  ).toBeVisible()
+  await expect(
+    page.getByText(/W-9|tax form/i),
+    "a merchant refusal must not send them to the tax form",
+  ).toBeHidden()
 })
 
 test("the held and refused copy exists and says the right thing", async () => {

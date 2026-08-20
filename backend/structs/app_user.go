@@ -84,6 +84,11 @@ const (
 	CurrentPrivacyPolicyVersion     = "2026-04-15"
 	CurrentMailingListPolicyVersion = "2026-04-15"
 	AuthReasonPrivacyPolicyRequired = "privacy-policy-required"
+	// Sent on X-SFLUV-Auth-Reason when a self-declared merchant who has not
+	// listed a shop yet tries to write. It names the one screen that clears the
+	// refusal, so a client can route straight there instead of guessing which
+	// of its calls failed.
+	AuthReasonMerchantOnboardingRequired = "merchant-onboarding-required"
 )
 
 // The account types a signup may choose between.

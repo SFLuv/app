@@ -96,6 +96,14 @@ func (a *AppDB) UpdateLocationApproval(
 		return err
 	}
 
+	// Before the row is touched, not later where it is needed. Provisioning takes
+	// this same lock and then writes the location row; taking it here means both
+	// paths acquire in one order — lock, then rows — instead of an approval and a
+	// creation for one location each holding what the other is waiting on.
+	if err := lockOwnerWalletDerivation(ctx, tx, owner_id); err != nil {
+		return err
+	}
+
 	_, err = tx.Exec(ctx, `
 			UPDATE
 				locations

@@ -63,7 +63,8 @@ const Page = () => {
   const isFinalErrorState = Boolean(
     error &&
     error !== "Reward Held" &&
-    error !== "Reward Not Sent"
+    error !== "Reward Not Sent" &&
+    error !== "Merchant Account"
   )
   const shouldAutoRedirect = success || isFinalErrorState
   const markLoginRedirectPending = useCallback(() => {
@@ -119,7 +120,18 @@ const Page = () => {
       // code back, which is the part that has to be said out loud — otherwise
       // this reads as the reward having been lost.
       if (res.status === 409) {
-        setError("Reward Not Sent")
+        // A 409 now has two quite different causes, and telling them apart
+        // matters: a merchant sent down the W-9 path would fill in a tax form
+        // and still not get paid, because their account is the problem, not
+        // their paperwork.
+        let reason = ""
+        try {
+          reason = ((await res.clone().json()) as { reason?: string })?.reason ?? ""
+        } catch {
+          // An older backend answers 409 without a body. The W-9 hold was the
+          // only refusal then, so that is the safe reading.
+        }
+        setError(reason === "merchant_account" ? "Merchant Account" : "Reward Not Sent")
         return
       }
 
@@ -533,6 +545,18 @@ const Page = () => {
               </p>
               <p>
                 Open the SFLuv app to complete the form. Your rewards go out as soon as it is in.
+              </p>
+            </div>
+          )}
+          {error === "Merchant Account" && (
+            <div className="mt-4 space-y-3 text-sm text-muted-foreground">
+              <p>
+                Volunteer rewards go to a personal SFLuv account, so that a shop&apos;s takings and its
+                owner&apos;s rewards never end up in the same wallet.
+              </p>
+              <p>
+                <span className="font-semibold">This QR code has not been used up.</span> Sign in with a
+                personal account and scan it again.
               </p>
             </div>
           )}

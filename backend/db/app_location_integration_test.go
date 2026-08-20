@@ -24,13 +24,33 @@ const locationTestSchema = `
 DROP TABLE IF EXISTS location_hours;
 DROP TABLE IF EXISTS location_payment_wallets;
 DROP TABLE IF EXISTS locations;
+DROP TABLE IF EXISTS wallets;
 DROP TABLE IF EXISTS users;
 
 CREATE TABLE users (
 	id TEXT PRIMARY KEY,
 	account_type TEXT NOT NULL DEFAULT 'regular',
+	is_merchant BOOLEAN NOT NULL DEFAULT false,
+	primary_wallet_address TEXT,
 	merchant_onboarding_completed_at TIMESTAMPTZ
 );
+
+CREATE TABLE wallets (
+	id SERIAL PRIMARY KEY,
+	owner TEXT NOT NULL REFERENCES users(id),
+	name TEXT NOT NULL,
+	is_eoa BOOLEAN NOT NULL,
+	is_hidden BOOLEAN NOT NULL DEFAULT false,
+	is_redeemer BOOLEAN NOT NULL DEFAULT false,
+	eoa_address TEXT NOT NULL,
+	smart_address TEXT,
+	smart_index INTEGER,
+	active BOOLEAN NOT NULL DEFAULT true
+);
+
+CREATE UNIQUE INDEX wallets_identity_active_idx
+	ON wallets(owner, is_eoa, eoa_address, smart_index)
+	WHERE active = TRUE;
 
 CREATE TABLE locations (
 	id SERIAL PRIMARY KEY,
@@ -94,6 +114,16 @@ CREATE TABLE location_payment_wallets(
 	delete_date TIMESTAMPTZ,
 	delete_reason TEXT
 );
+
+-- Migration 1.40's indexes. Without them a test can write two shops onto one
+-- till and still pass, which is the one outcome these tests exist to rule out.
+CREATE UNIQUE INDEX location_payment_wallets_address_unique_idx
+	ON location_payment_wallets (LOWER(TRIM(wallet_address)))
+	WHERE active = TRUE;
+
+CREATE UNIQUE INDEX locations_tipping_wallet_unique_idx
+	ON locations (LOWER(TRIM(tipping_wallet_address)))
+	WHERE active = TRUE AND NULLIF(TRIM(tipping_wallet_address), '') IS NOT NULL;
 `
 
 func newLocationTestDB(t *testing.T) *AppDB {

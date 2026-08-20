@@ -7,18 +7,18 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// locationPaymentWalletExpr is the address a location is paid into, derived the
-// way every read path already derives it: the location's active wallet rows,
-// the default one first, oldest next.
+// locationPaymentWalletExpr derives the address a location is paid into from
+// its active wallet rows: the default one first, oldest next. It is the only
+// place that derivation still happens — read paths take the answer off the
+// locations row via locationPayToAddressExpr.
 //
-// It is copied from the lateral join in GetLocationById and its siblings,
-// including the part that is easy to think of as a bug. A row holding a blank
-// address still wins its position and resolves to '' — the readers do not look
-// past it, so neither does this. Migration 1.46 did skip blanks and fall through
-// to the next row, which means the column it backfilled could name a wallet the
-// map never shows. Agreeing with the readers is what makes the column safe to
-// swap in for the join later; agreeing with the migration would only preserve
-// the disagreement.
+// It is a copy of the lateral join those readers used before the cutover,
+// including the part that is easy to think of as a bug: a row holding a blank
+// address still wins its position and resolves to a blank till. The readers did
+// not look past it, so neither does this. Migration 1.46 did skip blanks and
+// fall through to the next row, which is why 1.47 re-derived every row — the
+// column had to reproduce what the map already showed, or the cutover would
+// have moved money on the strength of a diff nobody could reconcile.
 //
 // The statement embedding this must alias its target table l.
 const locationPaymentWalletExpr = `
@@ -38,6 +38,23 @@ const locationPaymentWalletExpr = `
 					lpw.id ASC
 				LIMIT 1
 			), '')`
+
+// locationPayToAddressExpr is how a read path asks for a location's till. It
+// reads the column syncLocationPaymentWalletAddress maintains instead of
+// re-deriving it, so a caller cannot get a subtly different answer by writing a
+// slightly different join.
+//
+// It stays a shared constant for the same reason the join was worth replacing:
+// this is the address a customer's Pay button sends to, and eight copies of a
+// derivation is eight chances for one of them to drift somewhere no test looks.
+// A wrong till does not crash anything — the money simply lands elsewhere.
+//
+// The NULLIF/TRIM wrapper is not defensive about the column, which is NOT NULL
+// and only ever written trimmed; it is there so this expression is textually
+// interchangeable with the join it replaces.
+//
+// The statement embedding this must alias its target table l.
+const locationPayToAddressExpr = `COALESCE(NULLIF(TRIM(l.payment_wallet_address), ''), '')`
 
 // syncLocationPaymentWalletAddress rewrites locations.payment_wallet_address
 // from the wallet rows as they now stand. It takes a tx because it is only

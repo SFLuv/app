@@ -65,7 +65,7 @@ const merchantModeDeviceSelect = `
 		mmd.owner_id,
 		mmd.location_id,
 		COALESCE(NULLIF(TRIM(l.name), ''), 'Merchant location') AS location_name,
-		COALESCE(NULLIF(TRIM(current_payment_wallet.wallet_address), ''), '') AS wallet_address,
+		` + locationPayToAddressExpr + ` AS wallet_address,
 		COALESCE(l.active, FALSE) AS location_active,
 		COALESCE(l.approval, FALSE) AS location_approved,
 		mmd.display_name,
@@ -83,21 +83,6 @@ const merchantModeDeviceSelect = `
 		locations l
 	ON
 		l.id = mmd.location_id
-	LEFT JOIN LATERAL (
-		SELECT
-			lpw.wallet_address
-		FROM
-			location_payment_wallets lpw
-		WHERE
-			lpw.location_id = l.id
-		AND
-			lpw.active = TRUE
-		ORDER BY
-			CASE WHEN lpw.is_default = TRUE THEN 0 ELSE 1 END,
-			lpw.id ASC
-		LIMIT 1
-	) current_payment_wallet
-	ON TRUE
 `
 
 func scanMerchantModeDevice(row interface {
@@ -333,20 +318,13 @@ func (a *AppDB) ListMerchantModeLocations(ctx context.Context, userID string) (*
 			COALESCE(NULLIF(TRIM(l.name), ''), 'Merchant location'),
 			COALESCE(NULLIF(TRIM(l.street), ''), ''),
 			COALESCE(NULLIF(TRIM(l.city), ''), ''),
-			COALESCE(NULLIF(TRIM(current_payment_wallet.wallet_address), ''), ''),
+			`+locationPayToAddressExpr+`,
 			COALESCE(NULLIF(TRIM(l.tipping_wallet_address), ''), '')
 		FROM locations l
-		LEFT JOIN LATERAL (
-			SELECT lpw.wallet_address
-			FROM location_payment_wallets lpw
-			WHERE lpw.location_id = l.id AND lpw.active = TRUE
-			ORDER BY CASE WHEN lpw.is_default = TRUE THEN 0 ELSE 1 END, lpw.id ASC
-			LIMIT 1
-		) current_payment_wallet ON TRUE
 		WHERE l.owner_id = $1
 		AND l.active = TRUE
 		AND COALESCE(l.approval, FALSE) = TRUE
-		AND NULLIF(TRIM(current_payment_wallet.wallet_address), '') IS NOT NULL
+		AND NULLIF(TRIM(l.payment_wallet_address), '') IS NOT NULL
 		ORDER BY l.name ASC, l.id ASC;
 	`, userID)
 	if err != nil {
@@ -493,7 +471,7 @@ func (a *AppDB) resolveMerchantModeLocationAndWallet(ctx context.Context, userID
 	row := a.db.QueryRow(ctx, `
 		SELECT
 			COALESCE(NULLIF(TRIM(l.name), ''), 'Merchant location') AS location_name,
-			COALESCE(NULLIF(TRIM(default_payment_wallet.wallet_address), ''), '') AS default_wallet_address
+			`+locationPayToAddressExpr+` AS default_wallet_address
 		FROM
 			locations l
 		JOIN
@@ -502,24 +480,6 @@ func (a *AppDB) resolveMerchantModeLocationAndWallet(ctx context.Context, userID
 			u.id = l.owner_id
 		AND
 			u.active = TRUE
-		LEFT JOIN LATERAL (
-			SELECT
-				lpw.wallet_address
-			FROM
-				location_payment_wallets lpw
-			WHERE
-				lpw.location_id = l.id
-			AND
-				lpw.active = TRUE
-			ORDER BY
-				CASE
-					WHEN lpw.is_default = TRUE THEN 0
-					ELSE 1
-				END,
-				lpw.id ASC
-			LIMIT 1
-		) default_payment_wallet
-			ON TRUE
 		WHERE
 			l.id = $1
 		AND

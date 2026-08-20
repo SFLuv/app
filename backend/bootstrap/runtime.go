@@ -241,6 +241,26 @@ func StartDeletedAccountPurgeLoop(ctx context.Context, appService *handlers.AppS
 	}()
 }
 
+// StartLocationRedeemerSync brings the REDEEMER_ROLE holders on chain back in
+// line with the addresses locations are actually paid into.
+//
+// In a goroutine, and never returning an error to the caller, because it talks
+// to the chain: a node that is slow, down or mid-reorg must cost the server a
+// log line, not a boot. It runs once per start rather than on a timer — the set
+// only changes when a location is created or its wallet swapped, and the next
+// restart is soon enough for a role nobody can use before they have takings.
+func StartLocationRedeemerSync(ctx context.Context, redeemer *handlers.RedeemerService, appLogger *logger.LogCloser) {
+	if ctx == nil || redeemer == nil || appLogger == nil || !redeemer.IsEnabled() {
+		return
+	}
+
+	go func() {
+		if _, err := redeemer.SyncLocationWallets(ctx); err != nil && ctx.Err() == nil {
+			appLogger.Logf("error syncing redeemer roles for location wallets during startup: %s", err)
+		}
+	}()
+}
+
 func runDeletedAccountPurge(ctx context.Context, appService *handlers.AppService, appLogger *logger.LogCloser, runType string) {
 	if ctx == nil || appService == nil || appLogger == nil || ctx.Err() != nil {
 		return
@@ -378,6 +398,11 @@ func NewServerHandler(ctx context.Context, pools *DBPools, appLogger *logger.Log
 	handlers.NewLocationHoursScheduler(a).Start(ctx)
 
 	StartDeletedAccountPurgeLoop(ctx, a, appLogger)
+
+	// Tills are derived per location, so the account-level grant a merchant got
+	// when their first shop was approved does not reach the address their second
+	// shop is paid into. This catches every one of them up.
+	StartLocationRedeemerSync(ctx, redeemer, appLogger)
 
 	// Workflow upkeep (recurrence catch-up, payout reconciliation, paid_out
 	// finalization) previously ran only as a side effect of user requests, so it

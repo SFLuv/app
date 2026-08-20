@@ -165,7 +165,8 @@ func (a *AppService) deriveWalletForLocation(r *http.Request, locationID uint64,
 		return nil, fmt.Errorf("this account has no signing wallet to derive a new address from")
 	}
 
-	address, err := a.deriveSmartAccountAddress(r.Context(), provisioning.OwnerEOA, provisioning.NextSmartIndex)
+	index := provisioning.DerivationStartIndex()
+	address, err := a.deriveSmartAccountAddress(r.Context(), provisioning.OwnerEOA, index)
 	if err != nil {
 		return nil, err
 	}
@@ -177,7 +178,7 @@ func (a *AppService) deriveWalletForLocation(r *http.Request, locationID uint64,
 
 	return &db.NewLocationWallet{
 		Address: address,
-		Index:   provisioning.NextSmartIndex,
+		Index:   index,
 		Name:    a.db.UniqueWalletName(r.Context(), provisioning.OwnerID, provisioning.Street+" - "+suffix),
 	}, nil
 }
