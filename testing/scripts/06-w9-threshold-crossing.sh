@@ -14,7 +14,39 @@ require_local_stack
 
 SUBJECT_DID="${SFLUV_SUBJECT_DID:-}"
 SUBJECT_ADDR="${SFLUV_SUBJECT_ADDRESS:-}"
-[[ -n "$SUBJECT_DID" && -n "$SUBJECT_ADDR" ]] || die "set SFLUV_SUBJECT_DID and SFLUV_SUBJECT_ADDRESS"
+
+# Find a subject rather than demanding one be exported.
+#
+# run-all sets neither variable, so this scenario used to die before printing a
+# single line — silent absence, which in a suite reads as "nothing to report"
+# rather than "the most important test did not run". It covers the whole reason
+# the W-9 system exists, so it should go and find somebody it can use.
+#
+# The subject must be a REGULAR account with a wallet and no cleared filing: a
+# merchant is now barred from redemption entirely, and a cleared filing
+# short-circuits the gate so nothing is proven.
+if [[ -z "$SUBJECT_DID" || -z "$SUBJECT_ADDR" ]]; then
+  row="$(psql -h "${DB_HOST:-localhost}" -U "${DB_USER:-$(whoami)}" -d "${APP_DB:-app}" -tAc "
+    SELECT u.id || '|' || u.primary_wallet_address
+    FROM users u
+    LEFT JOIN w9_filings f ON f.user_id = u.id AND f.tax_year = EXTRACT(YEAR FROM NOW())
+    WHERE u.account_type = 'regular'
+      AND u.active = TRUE
+      AND u.accepted_privacy_policy = TRUE
+      AND NULLIF(TRIM(u.primary_wallet_address), '') IS NOT NULL
+      AND (f.status IS NULL OR f.status NOT IN ('completed','legacy_approved','manually_cleared'))
+    ORDER BY u.id LIMIT 1;" 2>/dev/null | head -1)"
+  if [[ -n "$row" ]]; then
+    SUBJECT_DID="${row%%|*}"
+    SUBJECT_ADDR="${row##*|}"
+    info "subject (discovered): ${SUBJECT_DID#did:privy:} at $SUBJECT_ADDR"
+  fi
+fi
+
+if [[ -z "$SUBJECT_DID" || -z "$SUBJECT_ADDR" ]]; then
+  fail "no uncleared regular account with a wallet — this scenario cannot prove anything"
+  summary "W-9 crossing"; exit 1
+fi
 
 step "W-9 threshold crossing, as ${SUBJECT_DID#did:privy:}"
 prank_as "$SUBJECT_DID"

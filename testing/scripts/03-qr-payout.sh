@@ -19,7 +19,17 @@ if [[ -z "$CODE" ]]; then
   latest="$(ls -t "$ARTIFACTS_DIR"/run-*/codes.txt 2>/dev/null | head -1)"
   [[ -n "$latest" ]] && CODE="$(head -1 "$latest")"
 fi
+# A recipient nobody has to remember to export.
+#
+# run-all sets no address, so this scenario used to fail for want of a variable
+# rather than for anything about redemption. Any address works — the assertion
+# is that the balance MOVES, not whose it is — so derive a stable one from the
+# run id and let the chain create it on first receipt.
 ADDR="${SFLUV_TEST_ADDRESS:-}"
+if [[ -z "$ADDR" ]]; then
+  ADDR="0x$(printf '%s' "qr-payout-$RUN_ID" | shasum -a 256 | cut -c1-40)"
+  info "recipient (derived): $ADDR"
+fi
 
 if [[ -z "$CODE" || -z "$ADDR" ]]; then
   # Deliberately a failure, not a skip. This is the scenario that proves a

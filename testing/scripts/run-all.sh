@@ -17,7 +17,11 @@ if [[ ${PIPESTATUS[0]} -ne 0 ]]; then
   exit 1
 fi
 
-for s in 01-w9-round-trip.sh 02-events.sh 03-qr-payout.sh 04-merchant-onboarding.sh 05-workflow.sh; do
+# 06 and 07 were missing from this list, so the two scenarios that cover the
+# W-9 threshold crossing and the merchant faucet bar — both of which decide
+# whether somebody gets paid — were never part of a full run.
+for s in 01-w9-round-trip.sh 02-events.sh 03-qr-payout.sh 04-merchant-onboarding.sh \
+         05-workflow.sh 06-w9-threshold-crossing.sh 07-merchant-faucet-bar.sh; do
   [[ -x "./$s" ]] || continue
   printf '\n'
   c '1;35' "════════ $s ════════"

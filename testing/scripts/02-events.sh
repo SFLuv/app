@@ -69,7 +69,11 @@ else
 fi
 
 step "Public visibility — what a website visitor sees"
-listing="$(api GET /volunteer-events)"
+# Ask for a big page. The public list defaults to 20 rows, and this database has
+# more events than that — partly because these scenarios keep adding them — so
+# asserting against the default page proves only that the newest event is not in
+# the most recent twenty.
+listing="$(api GET "/volunteer-events?count=200")"
 expect_status 200 "the public event list responds"
 if printf '%s' "$listing" | jq -e --arg id "$event_id" \
      '[.. | objects | select(has("id")) | (.id|tostring)] | index($id)' >/dev/null 2>&1; then
