@@ -386,6 +386,11 @@ against the fake.
 
 ---
 
+## Round: mobile (Maestro), 2026-08-20 — SUPERSEDED, see the 08-21 round
+
+Kept for the findings, but its central claim was wrong: it reported mobile login
+as blocked on a Privy dashboard change. It is not. Correction below.
+
 ## Round: mobile (Maestro), 2026-08-20
 
 First mobile coverage. Maestro 2.8.0, iPhone 17 Pro simulator, app built from
@@ -476,3 +481,81 @@ in-app navigation, so repeat runs appended into
 `"...oleary.comsanchezsanchez@oleary.com"`. `00-boot` now uses `clearState`.
 `eraseText` is not a substitute — it deletes from the cursor, which is not always
 at the end.
+
+
+---
+
+## Round: mobile (Maestro), 2026-08-21
+
+**Result: 3 of 3 flows pass, ~38s, green on three consecutive runs.** Suite is in
+the mobile repo at `.maestro/`, commit 38f6cec. Covers launch, the signed-in
+wallet shell and tab navigation, against a real session and a real backend.
+
+### Correcting yesterday
+
+Two things reported yesterday were wrong, and both cost real time.
+
+**Privy was never the blocker.** The native app-identifier allowlist is per
+*client*, not per app — the app-level `allowed_native_app_ids` is empty on both
+apps, which is what I read and misinterpreted. Queried per client, Privy app
+`cmlidct3t00pql50du730rr3o` already registers `org.sanchezoleary.sfluvwallet.dev`
+AND `org.sfluv.wallet`, and its app-level `allowed_domains` already has
+`localhost:3000` and `127.0.0.1:3000`. It is configured for web and mobile
+together and its verification key pairs correctly. `cmnhyyeda00sv0cjmsrrcpuiv` is
+a scratch app ("test app") registering only Expo Go. The stack now points at
+`cmlidct3` for backend, web and mobile. **No dashboard change was needed.**
+
+The related claim that `backend/.env`'s `PRIVY_VKEY` did not pair with its app id
+was also wrong — checked against Privy's JWKS, both env files pair correctly. That
+403 was my own env-file surgery: `.dev.env` quotes the multi-line PEM and
+`tmp/backend.dev.env` does not, and copying between them without honouring each
+file's convention produced a key the parser rejected.
+
+**The "Unable to Start SFLUV / Aborted" cascade was a stale LAN IP** I introduced
+myself, not Metro, not the Expo dev client, not `clearState`. The address is
+DHCP-assigned and moved twice in one session (`.45` → `.25` → `.26`). When it goes
+stale the app's own startup gate cannot reach `/config`, sits on "Checking app
+compatibility…" and fails with "Unable to Start SFLUV / Aborted" — which reads
+like a bundler fault. I changed the Privy app and the backend URL in the same
+step and spent three wrong theories on the fallout. The mobile env now uses
+`localhost:8080`, which the simulator shares with the host and which cannot go
+stale.
+
+### Findings that still stand
+
+1. **Login buttons have no accessibility label or role.** `App.tsx:6405` and its
+   two siblings wrap an unlabelled icon slot, the text and an empty spacer `View`
+   in a bare `Pressable`. iOS concatenates the children, so VoiceOver announces
+   `", Continue with Email"` — leading comma, not identified as a button. The
+   same shape affects Send and Receive. `W9TierModal.tsx` sets
+   `accessibilityRole="button"` correctly, so the pattern exists; these screens
+   missed it. Unfixed.
+
+2. **No testIDs anywhere in the app** — zero across every `.tsx`.
+
+3. **Build Release, not Debug, for Maestro.** Maestro restarts the app to attach
+   and an Expo dev client cannot reattach to Metro, so it comes up "Aborted" and
+   eventually needs a reinstall. Release embeds the bundle and has no bundler
+   dependency.
+
+4. **`CODE_SIGNING_ALLOWED=NO` silently bricks the app** — no entitlements, so
+   every keychain call fails, expo-secure-store throws, and Privy hangs on
+   "Initializing Privy…" with nothing on screen. `CODE_SIGN_IDENTITY="-"` fixes it.
+
+5. **`expo run:ios` cannot build for the simulator here** — device detection fails
+   and it takes the physical-device path, dying on code signing even with a
+   simulator UDID. Direct `xcodebuild -sdk iphonesimulator` works.
+
+6. **Mobile login has no captcha; web does.** `capture-token.sh` exists because a
+   script cannot get through the web login. The native path sends the code
+   straight away, so mobile auth is automatable in a way web auth is not — the
+   only manual step is reading the code out of the inbox.
+
+### Still uncovered
+
+The signed-in account is a personal one, so the app renders the volunteer layout.
+**Merchant mode, the merchant PIN, device setup and the W-9 tier modal have no
+coverage** — the surfaces the refactor actually changed. They need a signed-in
+merchant account owning an approved location. `01-wallet-shell` asserts
+`Participate` is visible, which is the seam: a merchant is locked out of that
+tab, so running the same flow as a merchant should fail there.
