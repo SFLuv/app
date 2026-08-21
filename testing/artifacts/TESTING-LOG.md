@@ -559,3 +559,59 @@ coverage** — the surfaces the refactor actually changed. They need a signed-in
 merchant account owning an approved location. `01-wallet-shell` asserts
 `Participate` is visible, which is the seam: a merchant is locked out of that
 tab, so running the same flow as a merchant should fail there.
+
+### Merchant mode, same day
+
+Covered after all. The account you can sign into locally is not the merchant row
+in the database — the three rows sharing your email are one per Privy
+environment, and the merchant one (20 locations, admin) belongs to a different
+environment than the local stack's. Signing in against the local Privy app mints
+its own did, so it arrives as a fourth, plain account.
+
+Rather than move rows between environments, `testing/scripts/seed-merchant.sh`
+promotes whichever account is actually signed in, and `--revert` puts it back.
+
+Two flows added (mobile repo, e0a3ec9): a fresh till choosing its PIN and shop,
+and the till's resting state. The refactor works end to end — a merchant account
+never sees the volunteer app, lands on Merchant Setup, and after setup goes
+straight to a till showing one shop's day.
+
+**Bug found through the UI: one NULL column 500s the public merchant map.**
+
+`GET /locations` reads every row to draw the map. `locations.website` is nullable
+in the schema with no default, while the Go struct scans it into a plain
+`string`, so a single NULL row fails the query for everyone — not just that
+merchant. The seeded shop hit it immediately:
+
+```
+error scanning location row: can't scan into dest[15] (col: website):
+cannot scan NULL into *string
+```
+
+Fixing that one column surfaced the next (`table_coverage`), which is the real
+finding: **almost the whole `locations` table is nullable — `name`, `type`,
+`lat`, `lng` included — while the code assumes it is not.** No row in the local
+database has a NULL today, because the API insert path always writes a string,
+so this is latent rather than live. But the blast radius is the entire map, the
+trigger is one bad row from any path that does not go through that handler (a
+migration, an admin insert, a seed), and the integration test at
+`backend/db/app_location_integration_test.go:212` selects `COALESCE(website, '')`
+— so the test suite would stay green through it. Worth either adding NOT NULL
+DEFAULT '' to the text columns or COALESCE-ing them in the production queries.
+
+The seed script now fills every nullable scalar for exactly this reason.
+
+**Gap between copy and behaviour.** The merchant PIN screen says the PIN "is
+asked for again whenever this device moves to another location", but the only
+control in merchant mode is the header lock, and its sheet offers no way to move
+the device — just an explanation that it "stays a till", and Sign out. So a till
+can only be re-pointed by signing out and going through setup again. Either the
+copy is promising something that is not there, or the change-location affordance
+is missing. `04` asserts the current behaviour so it fails if that changes.
+
+**More accessibility, same root cause as the login buttons.** Composite views
+arrive as one accessibility element: a form row is `"Confirm PIN, Enter it
+again, "` and the entire merchant lock sheet is a single concatenated string.
+VoiceOver reads a whole card as one utterance and nothing inside is individually
+focusable. The merchant-mode header lock is worse — a bare icon with no label,
+and the only control on that screen.
