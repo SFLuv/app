@@ -1833,6 +1833,85 @@ var schemaMigrations = []SchemaMigration{
 			return nil
 		},
 	},
+	{
+		Version:     "1.48",
+		Description: "make the location text and number columns NOT NULL, because the readers already assume it",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			// Nearly every column on locations is nullable while the Go structs
+			// scan them into plain strings and numbers. A single NULL therefore
+			// fails the scan, and because GET /locations reads every row to draw
+			// the public merchant map, one bad row takes the map down for
+			// everyone rather than just for that shop:
+			//
+			//   can't scan into dest[15] (col: website): cannot scan NULL into *string
+			//
+			// Nothing in the API insert path writes NULL — it always sends a
+			// string — so this has stayed latent. But any path that does not go
+			// through that handler (a migration, an admin insert, a seed script)
+			// can introduce one, and the integration test selects
+			// COALESCE(website, ''), so the suite would stay green through it.
+			//
+			// COALESCE in the queries would work too, but it has to be repeated
+			// in every SELECT forever and is one omission away from the same
+			// outage. Making the invariant real in the schema is the version the
+			// code already believes.
+			//
+			// Deliberately NOT included:
+			//   google_id     - the partial unique index covers google_id IS NOT
+			//                   NULL, and rows created through the API leave it
+			//                   NULL; '' would collide on the second such row.
+			//   owner_id      - a FK where NULL means genuinely unowned.
+			//   delete_reason - NULL means "not deleted", which '' cannot say.
+			//   approval      - tri-state; NULL is "not yet decided" and the
+			//                   readers filter on it rather than scanning it.
+			//   timestamps    - already scanned through sql.NullTime.
+			textColumns := []string{
+				"admin_email", "admin_phone", "city", "contact_firstname",
+				"contact_lastname", "contact_phone", "description", "email",
+				"image_url", "maps_page", "messaging_service", "name", "phone",
+				"pos_system", "reference", "sole_proprietorship", "state",
+				"street", "table_coverage", "tablet_model", "tipping_division",
+				"tipping_policy", "type", "website", "zip",
+			}
+			numberColumns := []string{"lat", "lng", "rating", "service_stations"}
+
+			for _, column := range textColumns {
+				// Backfilled first so SET NOT NULL cannot fail on existing rows.
+				// The development clone has none, but production is not this
+				// clone and a migration that aborts halfway is worse than one
+				// that does redundant work.
+				if _, err := pools.App.Exec(ctx, fmt.Sprintf(
+					`UPDATE locations SET %s = '' WHERE %s IS NULL;`, column, column),
+				); err != nil {
+					return fmt.Errorf("error backfilling locations.%s: %w", column, err)
+				}
+				if _, err := pools.App.Exec(ctx, fmt.Sprintf(
+					`ALTER TABLE locations ALTER COLUMN %s SET DEFAULT '', ALTER COLUMN %s SET NOT NULL;`,
+					column, column),
+				); err != nil {
+					return fmt.Errorf("error constraining locations.%s: %w", column, err)
+				}
+			}
+
+			for _, column := range numberColumns {
+				if _, err := pools.App.Exec(ctx, fmt.Sprintf(
+					`UPDATE locations SET %s = 0 WHERE %s IS NULL;`, column, column),
+				); err != nil {
+					return fmt.Errorf("error backfilling locations.%s: %w", column, err)
+				}
+				if _, err := pools.App.Exec(ctx, fmt.Sprintf(
+					`ALTER TABLE locations ALTER COLUMN %s SET DEFAULT 0, ALTER COLUMN %s SET NOT NULL;`,
+					column, column),
+				); err != nil {
+					return fmt.Errorf("error constraining locations.%s: %w", column, err)
+				}
+			}
+
+			appLogger.Logf("migration 1.48: constrained %d text and %d number columns on locations",
+				len(textColumns), len(numberColumns))
+			return nil
+		},
+	},
 }
 
 // migrateW9WarningTiers replaces one hard gate with an escalating sequence.
