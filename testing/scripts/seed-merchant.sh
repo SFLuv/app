@@ -21,7 +21,11 @@
 # Pass --onboarding-pending to leave merchant_onboarding_completed_at NULL, which
 # is how you exercise the forced-onboarding gate instead of merchant mode.
 #
-# Pass --revert to put the account back to a plain one and drop the seeded shop.
+# Pass --second-shop to add a second approved location, which is what you need to
+# exercise switching a till between counters — the Switch location control only
+# appears when there is somewhere else to go.
+#
+# Pass --revert to put the account back to a plain one and drop the seeded shops.
 # The mobile suite is split by account state — the volunteer flows need a plain
 # account and the merchant flows need a seeded one — so switching between them
 # means running this either way round.
@@ -43,11 +47,14 @@ for k in ("DB_USER","DB_PASSWORD","DB_URL","APP_DB_NAME"):
 PY
 )"
 
-REVERT=0
-for arg in "$@"; do [[ "$arg" == "--revert" ]] && REVERT=1; done
+REVERT=0; SECOND=0
+for arg in "$@"; do
+  [[ "$arg" == "--revert" ]] && REVERT=1
+  [[ "$arg" == "--second-shop" ]] && SECOND=1
+done
 
 TARGET="${1:-}"
-[[ "$TARGET" == "--revert" ]] && TARGET="${2:-}"
+[[ "$TARGET" == "--revert" || "$TARGET" == "--second-shop" ]] && TARGET="${2:-}"
 ONBOARDING_DONE="now()"
 [[ "${2:-}" == "--onboarding-pending" || "${1:-}" == "--onboarding-pending" ]] && ONBOARDING_DONE="NULL"
 [[ "$TARGET" == "--onboarding-pending" ]] && TARGET=""
@@ -58,7 +65,7 @@ host="${DB_URL%%:*}"; port="${DB_URL##*:}"
 if [[ "$REVERT" == "1" ]]; then
   PGPASSWORD="$DB_PASSWORD" psql -h "$host" -p "$port" -U "$DB_USER" \
     -d "${APP_DB_NAME:-app}" -v ON_ERROR_STOP=1 <<REVERTSQL
-DELETE FROM locations WHERE reference = 'maestro-seed'
+DELETE FROM locations WHERE reference IN ('maestro-seed','maestro-seed-2')
   AND owner_id = (SELECT id FROM users
                   WHERE id = '$TARGET' OR primary_wallet_address ILIKE '$TARGET'
                   LIMIT 1);
@@ -87,6 +94,7 @@ DECLARE
   uid text;
   addr text;
   loc_id int;
+  loc2_id int;
   col record;
 BEGIN
   SELECT u.id, u.primary_wallet_address INTO uid, addr
@@ -163,6 +171,47 @@ BEGIN
       CASE WHEN col.data_type = 'text' THEN '''''' ELSE '0' END
     ) USING loc_id;
   END LOOP;
+
+  IF $SECOND = 1 THEN
+    SELECT id INTO loc2_id FROM locations
+     WHERE owner_id = uid AND reference = 'maestro-seed-2' LIMIT 1;
+    IF loc2_id IS NULL THEN
+      -- A second counter needs a DIFFERENT till wallet, or switching between the
+      -- two would not change where the money lands and the test would prove
+      -- nothing.
+      INSERT INTO locations
+        (owner_id, name, description, type, approval, approved_at, street, city,
+         state, zip, lat, lng, phone, email, admin_phone, admin_email,
+         contact_firstname, contact_lastname, contact_phone, pos_system,
+         sole_proprietorship, tipping_policy, tipping_division, location_kind,
+         listing_source, reference, active, payment_wallet_address,
+         website, image_url, maps_page, rating)
+      VALUES
+        (uid, 'Maestro Second Shop', 'Second counter for switch tests',
+         'restaurant', true, now(), '2 Test St', 'San Francisco', 'CA', '94110',
+         37.7620, -122.4180, '4155550101', 'test2@example.com', '4155550101',
+         'test2@example.com', 'Test', 'Merchant', '4155550101', 'other',
+         true, 'pooled', 'even', 'merchant', 'manual', 'maestro-seed-2', true,
+         '0x000000000000000000000000000000000000dEaD', '', '', '', 0)
+      RETURNING id INTO loc2_id;
+    END IF;
+
+    FOR col IN
+      SELECT column_name, data_type FROM information_schema.columns
+       WHERE table_name = 'locations' AND is_nullable = 'YES'
+         AND data_type IN ('text','numeric','integer')
+         -- google_id stays NULL. There is a unique index on (google_id, active),
+         -- and rows created through the API leave it NULL, so blanking it to ''
+         -- collides as soon as a second shop exists.
+         AND column_name <> 'google_id'
+    LOOP
+      EXECUTE format(
+        'UPDATE locations SET %I = COALESCE(%I, %s) WHERE id = \$1',
+        col.column_name, col.column_name,
+        CASE WHEN col.data_type = 'text' THEN '''''' ELSE '0' END
+      ) USING loc2_id;
+    END LOOP;
+  END IF;
 
   RAISE NOTICE 'account % is now a merchant (onboarding: %)', uid,
     CASE WHEN $ONBOARDING_DONE IS NULL THEN 'pending' ELSE 'complete' END;
