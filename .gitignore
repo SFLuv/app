@@ -19,6 +19,13 @@ backend/builds-old
 .idea
 tmp/
 .dev.env
+# Any sibling of .dev.env too — a backup of it holds every credential in the
+# stack, including the read-only production database password. Enumerated
+# suffixes are not enough: a file named .dev.env.bak-privy matched none of the
+# .env.bak patterns above and sat untracked in the worktree, one `git add -A`
+# away from being committed.
+.dev.env.*
+!.dev.env.example
 
 # Playwright end-to-end harness. Tracked separately; not part of the app.
 # The e2e suite is tracked — it is the most valuable test layer and being
