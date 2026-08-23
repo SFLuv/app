@@ -77,6 +77,15 @@ func (p *PayoutService) onEscrowed(ctx context.Context, userID string, taxYear i
 		return
 	}
 
+	// The crossing is a tier like the two warnings before it, and the modal
+	// explaining it reads stored state. Without this row GetOutstandingW9Tier
+	// keeps answering with the warning tier, so somebody whose money is
+	// actually being held is shown "you are approaching the limit" — the one
+	// tier whose whole point is that the money has already stopped.
+	if _, err := p.appDb.RecordW9TierReached(ctx, userID, taxYear, db.W9TierEscrowed); err != nil && p.logger != nil {
+		p.logger.Logf("w9: could not record the escrow tier for %s: %s", userID, err)
+	}
+
 	if _, err := p.EnsureW9Request(ctx, userID, taxYear); err != nil && p.logger != nil {
 		// Not fatal. The person can still start the form from the app, and the
 		// sweeper retries.
