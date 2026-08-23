@@ -15,7 +15,7 @@
 # cannot produce, and then the test is checking a fiction. An earlier version of
 # this script seeded 'blocked' at 701 SFLUV, which cannot happen — the payment
 # that crosses 600 is escrowed and every payment after it is refused, so a
-# blocked account sits at ~601 and stops. A real redemption cannot get that
+# blocked account sits at 600 and stops. A real redemption cannot get that
 # wrong, because the system decides the numbers.
 #
 # Note what --real does NOT undo: --revert deletes the ledger rows and notices,
@@ -94,11 +94,14 @@ if [[ "$REVERT" == "1" ]]; then
   exit 0
 fi
 
+# Exactly on each line, not one over. decidePayout compares with >=, so 400 is
+# already the notice and 600 is already the crossing; overshooting only made the
+# modal read "401 of 600" and invited the reader to doubt the boundary.
 case "$TIER" in
-  notice_400)  REACH=401 ;;
-  warning_500) REACH=501 ;;
-  escrow_600)  REACH=601 ;;
-  blocked)     REACH=601 ;;
+  notice_400)  REACH=400 ;;
+  warning_500) REACH=500 ;;
+  escrow_600)  REACH=600 ;;
+  blocked)     REACH=600 ;;
   *) echo "unknown tier: $TIER" >&2; exit 1 ;;
 esac
 
