@@ -77,6 +77,18 @@ discover_stack(){
       | head -1 | cut -d= -f2- | tr -d "\"' [:space:]")"
     export SFLUV_FAUCET_ADDRESS
   fi
+  # The admin key, for the same reason and from the same file.
+  #
+  # Without this ADMIN_KEY falls back to the literal "local-dev-admin-key",
+  # which stopped matching the moment dev-up regenerated the backend env. Every
+  # admin_api call then 403s and returns HTML, and the scenario dies on a jq
+  # parse error that says nothing about authentication.
+  if [[ -z "${DEV_ADMIN_KEY:-}" && -f "$SFLUV_ROOT/tmp/backend.dev.env" ]]; then
+    DEV_ADMIN_KEY="$(grep -E '^ADMIN_KEY=' "$SFLUV_ROOT/tmp/backend.dev.env" \
+      | head -1 | cut -d= -f2- | tr -d "\"' [:space:]")"
+    export DEV_ADMIN_KEY
+    ADMIN_KEY="$DEV_ADMIN_KEY"
+  fi
 }
 
 # --------------------------------------------------------------------------
