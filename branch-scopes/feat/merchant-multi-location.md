@@ -1,6 +1,6 @@
 # Branch scope — `feat/merchant-multi-location`
 
-Aug 5–12 2026 · app + mobile-app · **~18.5h active**
+Aug 5–21 2026 · app + mobile-app + webpage · **~32.2h active**
 
 Branched as `fix/merchant-approval-hardening`; renamed once the work outgrew the name. What began as
 hardening the merchant approval path turned into the groundwork for a merchant running more than one
@@ -14,12 +14,18 @@ than the first's:
   isolated points rather than clusters — each day holds one sitting that landed in a single commit —
   so the figure leans on the diffs, adjusted for `93ba07f` being a 12-file, +744 line batch that
   landed with nothing in between.
-- **Round 2 (Aug 11–12) — 14.3h. Provisional.** This round is **entirely uncommitted**, so there are
+- **Round 3 (Aug 18–21) — 13.7h.** Measured from commit clustering across 36 commits in both repos,
+  the strongest figure on this branch: the work and its commits are the same sittings.
+- **Round 2 (Aug 11–12) — 14.3h. Provisional, and still provisional.** This round is **entirely uncommitted**, so there are
   no timestamps to cluster and the convention's usual method does not apply. The figure is derived
   from volume and the shape of the work — five new backend modules, 2,600+ changed lines in `app`,
   700+ in `mobile-app`, ~25 tests, and repeated live verification against a cloned production
-  database — not from a clock. **It should be re-measured from commit timestamps once this round is
-  committed**, and this file updated rather than left as an estimate that was never checked.
+  database — not from a clock. It asked to be re-measured from commit timestamps once committed. It
+  has since been committed, on Aug 18, and re-measuring it that way does not work: those timestamps
+  record the landing, not the doing. The work sat uncommitted for six days, so clustering its commits
+  yields 2.9h — the length of the commit session — and that stretch also carried new work, which is
+  counted in Round 3. Restating 14.3h as 2.9h would be less true, not more, so the estimate stands
+  and stays labelled as one.
 
 Itemised to the nearest 0.1h; items sum to each round's figure.
 
@@ -142,3 +148,119 @@ insertions, ~19 deletions. 3 migrations (1.24, 1.33, 1.40). 5 new routes.
   export `WebpackError`. The misleading message is upstream and still present in 15.2.9; a retry
   passes. Unrelated to anything on this branch.
 - `merchant_mode_devices.wallet_address` is now vestigial — written at enrolment, never read.
+
+---
+
+# Round 3 — Aug 18–21
+
+**13.7h measured**, from commit clustering across 36 commits in `app` and `mobile-app`
+(90-minute gap threshold, 25 minutes of lead-in per stretch):
+
+| stretch | commits | hours |
+|---|---|---|
+| Aug 18 08:37–11:08 | 6 | 2.9 |
+| Aug 18 16:25 | 1 | 0.4 |
+| Aug 19 11:13–12:57 | 8 | 2.1 |
+| Aug 19 15:10 | 1 | 0.4 |
+| Aug 19 16:45 | 1 | 0.4 |
+| Aug 20 06:15–06:16 | 2 | 0.4 |
+| Aug 20 12:36–13:57 | 4 | 1.8 |
+| Aug 21 08:52–13:40 | 13 | 5.2 |
+
+**Round 2 could not be re-measured, and its 14.3h figure is left as it was.** The previous
+revision asked for that once the work was committed. It has been committed — inside the Aug 18
+commits — but those timestamps measure the *landing*, not the doing: the work happened around Aug
+11–12 and sat uncommitted for six days, so clustering them yields the length of the commit session
+(2.9h) and not the length of the work. Restating 14.3h as 2.9h would be worse than leaving it
+provisional, so it stays provisional. The Aug 18 stretch is counted here, in Round 3, because the
+same sitting also produced the escalating-tier rebuild, which was new.
+
+Round 3 is the second-largest round on the branch and the first with test coverage attached to it.
+
+## Large features
+
+### W-9 escalating warning tiers, and escrow that cannot accumulate — 2.6h · app + mobile
+- Four tiers replace one hard gate: notice at 400, firmer warning at 500, held at 600, refused after
+- `decideEscrow` became `decidePayout`, returning pay/escrow/block plus the tier
+- A blocked payout no longer consumes its redemption code — `UndoRedeem` and a 409 the app explains
+- Escrow bounded to a single payment, which deleted back pay entirely: the expiry sweeper, the admin
+  back-pay queue, `expired` and `back_pay_requested`, and the coverage arithmetic that supported them
+- `w9_tier_notices` table; `GET /w9/status` gained tier, raw base units and blocked
+- `W9TierModal` on mobile, one component with four presentations
+
+### Merchant account refactor — 2.5h · app + mobile
+- Account type chosen at signup, during the privacy-policy step; no "apply to be a merchant" button
+- Merchants forced through onboarding before anything else, and locked out of the volunteer surfaces
+- Wallets moved onto the locations table — a till's money belongs to the shop, not the owner
+- Merchant wallets barred from the faucet, checked by identity rather than address
+- `UNWRAP_ENABLED` gates the unwrap affordance, default off
+- Mobile always in merchant mode, with the PIN guarding which counter a device is on
+
+### Mobile test suite (Maestro) — 2.4h · mobile
+- Maestro installed and driven against an iOS simulator for the first time on this project
+- Six flows over three account states, tagged `volunteer` / `merchant` / `merchant-setup` / `w9`
+- Release-build recipe established after `expo run:ios` proved unusable here
+- Two seed scripts so the states are reproducible: merchant (with a second shop) and W-9 tiers
+- Wrote up the traps: composite accessibility labels, the PIN slider, per-branch geometry
+
+### W-9 provider swap to TaxBandits — 2.0h · app + mobile + webpage
+- New `w9provider` adapter: JWS→JWT auth, `FormW9/RequestByUrl`, `FormW9/Status`
+- All eleven vendor statuses mapped, including a failed match arriving as INVALID with TINMatching erased
+- `cmd/w9probe` sandbox probe, redacting TIN/SSN/EIN/AccessToken
+- Three clients realigned on the same copy
+
+### Browser and API test suites — 1.9h · app
+- Playwright specs including a real on-chain merchant payment and tip
+- Seven API scenarios, made runnable twice rather than once
+- Three skips that were hiding a real break, named and removed
+
+## Smaller fixes
+
+| fix | hours | repo |
+|---|---|---|
+| `locations` text/number columns NOT NULL — one NULL 500'd the public map for everyone (migration 1.48) | 0.6 | app |
+| Blocked W-9 tier stayed outstanding after acknowledgement; the modal could not re-arm | 0.5 | app |
+| Accessibility: modal backdrops and cards collapsed whole screens into one element; unlabelled controls | 0.5 | mobile |
+| Till sheet copy contradicted the Switch location button sitting under it | 0.2 | mobile |
+| dev-up faucet key handling, and saying plainly it is never a production signer | 0.2 | app |
+| `.gitignore` widened to `.dev.env.*` after a backup slipped past the enumerated suffixes | 0.1 | app |
+| Credential types documented as data rather than two hardcoded constants | 0.1 | app |
+| Corrected the testing log: Privy was never the blocker, a stale LAN IP was | 0.1 | app |
+
+## Totals
+
+| | hours |
+|---|---|
+| Large features | 11.4 |
+| Smaller fixes | 2.3 |
+| **Round 3** | **13.7** |
+
+**Volume.** 187 files changed, 24,005 insertions, 3,088 deletions (162/20,661/2,733 in `app`;
+25/3,344/355 in `mobile-app`). 9 migrations, 19 new backend routes, 6 Maestro flows, 3 seed scripts.
+
+## Worth knowing
+
+- **Three bugs in this round were found by UI testing and could not have been found any other way.**
+  The NULL-website map outage, the blocked modal that never came back, and the accessibility
+  collapse all present as working code under unit tests.
+- **Two diagnoses in this round were wrong before they were right**, and the corrections are recorded
+  in the testing log rather than quietly fixed: mobile login was blamed on a Privy allowlist when the
+  cause was a stale LAN IP, and the blocked modal was blamed on client-side ordering when the cause
+  was a server-side query filtering acknowledged rows.
+- **The suite cannot be run as one set.** It covers three mutually exclusive account states, so it
+  runs by tag with a seed script between. That is a property of the product, not of the harness.
+- **Still open at the end of the round**, restated after checking each rather than trusting the note
+  that first recorded them — two of the three were described wrongly:
+  - **The refused-payout trigger has no test.** It is not missing, as an earlier draft of this line
+    said: `App.tsx` already clears the tier dismissal and refreshes status when a redeem comes back
+    `blocked`, so the modal is meant to appear at the moment a scan fails. It could not have worked
+    before this round, because the server retired the tier on acknowledgement; that is fixed, so the
+    path should now work. Nothing exercises it — it needs a live refused redemption, not a seeded row.
+  - **`UpdateLocationGooglePlace` binds `google_id` raw** where the INSERT uses `NULLIF($1, '')`. In
+    practice unreachable: the handler 400s on a blank id, and the verifier falls back to the
+    requested place id if Google returns none, so an empty string cannot reach the UPDATE through any
+    caller that exists. It is an inconsistency between two writers of the same column with a partial
+    unique index on it, not a live defect — worth aligning before someone adds a third writer.
+  - **The two W-9 flows need a re-seed between runs**, and one of them always will: acknowledging a
+    tier is what retires tiers 1-3, so 05 changes the state it depends on by passing. 06 does not,
+    now that the blocked tier survives acknowledgement.
