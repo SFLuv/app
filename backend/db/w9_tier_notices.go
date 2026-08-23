@@ -70,7 +70,47 @@ func (a *AppDB) RecordW9TierReached(ctx context.Context, userID string, taxYear 
 	if err != nil {
 		return false, fmt.Errorf("error recording w9 tier %s for %s: %w", tier, userID, err)
 	}
-	return tag.RowsAffected() > 0, nil
+
+	fresh := tag.RowsAffected() > 0
+	if fresh {
+		if err := a.clearW9NotificationReads(ctx, userID, taxYear); err != nil {
+			return fresh, err
+		}
+	}
+	return fresh, nil
+}
+
+// clearW9NotificationReads un-dismisses this year's W-9 bell entry.
+//
+// There is deliberately one W-9 entry per year rather than one per tier —
+// stacking "you are approaching a form" under "your money is being held" is
+// noise, and the second makes the first untrue. But one entry means one key,
+// and dismissing it wrote a mark against that key that outlived the tier it
+// was about: somebody who dismissed the 400 notice then crossed 500 got the
+// modal with no bell entry behind it, so closing it left nothing to go back to.
+//
+// Reaching a new tier is a new thing to say, even under the same key, so the
+// mark is cleared and the entry returns. Both types are cleared because which
+// one is showing depends on whether money is held, and a person who has just
+// been refused should not be looking at a dismissal they made before that.
+func (a *AppDB) clearW9NotificationReads(ctx context.Context, userID string, taxYear int) error {
+	// Keys built here rather than concatenated in SQL. Written as
+	// `'w9_required:' || $2::text` the cast makes Postgres infer $2 as text,
+	// and pgx then refuses to encode an int for it: "unable to encode 2026 into
+	// text format for text (OID 25)". That error is returned all the way up and
+	// then dropped by callers that treat a notification failure as not worth
+	// failing a payout over — correctly, but it meant the bell entry stayed
+	// dismissed through every tier that followed and nothing anywhere said why.
+	if _, err := a.db.Exec(ctx, `
+		DELETE FROM improver_notification_reads
+		WHERE user_id = $1 AND notification_key = ANY($2);
+	`, userID, []string{
+		fmt.Sprintf("w9_required:%d", taxYear),
+		fmt.Sprintf("w9_escrow_held:%d", taxYear),
+	}); err != nil {
+		return fmt.Errorf("error clearing w9 notification reads for %s: %w", userID, err)
+	}
+	return nil
 }
 
 // GetOutstandingW9Tier returns the most serious tier this person has reached
@@ -145,7 +185,9 @@ func (a *AppDB) RearmW9BlockedTier(ctx context.Context, userID string, taxYear i
 	`, userID, taxYear, W9TierBlocked); err != nil {
 		return fmt.Errorf("error re-arming the blocked w9 notice for %s: %w", userID, err)
 	}
-	return nil
+	// A refusal is news every time, so the bell entry comes back with the modal
+	// rather than staying dismissed from some earlier round.
+	return a.clearW9NotificationReads(ctx, userID, taxYear)
 }
 
 // ClearW9TierNotices removes every tier notice for a person and year.
