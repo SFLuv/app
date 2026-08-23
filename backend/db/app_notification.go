@@ -107,7 +107,10 @@ func (a *AppDB) GetImproverNotifications(ctx context.Context, improverId string)
 	defer rows.Close()
 
 	for rows.Next() {
-		notification := structs.ImproverNotification{Type: structs.NotificationTypeWorkflowPayoutPending}
+		notification := structs.ImproverNotification{
+			Type:   structs.NotificationTypeWorkflowPayoutPending,
+			Action: &structs.NotificationAction{Kind: structs.NotificationActionImprover},
+		}
 		var seenAt *int64
 		if err := rows.Scan(
 			&notification.Key,
@@ -199,7 +202,12 @@ func (a *AppDB) appendW9Notifications(ctx context.Context, userID string, feed *
 	for rows.Next() {
 		var taxYear, escrowedCount int
 		var escrowedBase, backPayBase, status string
-		var oldest, seenAt *time.Time
+		var oldest *time.Time
+		// seen_at is a bigint unix stamp (see improver_notification_reads),
+		// unlike oldest, which really is a timestamptz. Scanning it as a
+		// time.Time fails only once a row exists, so the bug hides until
+		// somebody actually opens the bell.
+		var seenAt *int64
 		if err := rows.Scan(&taxYear, &escrowedBase, &escrowedCount, &backPayBase, &oldest, &status, &seenAt); err != nil {
 			return fmt.Errorf("error scanning w9 notification: %w", err)
 		}
@@ -214,6 +222,7 @@ func (a *AppDB) appendW9Notifications(ctx context.Context, userID string, feed *
 		notification := structs.ImproverNotification{
 			Key:              fmt.Sprintf("%s:%d", structs.NotificationTypeW9EscrowHeld, taxYear),
 			Type:             structs.NotificationTypeW9EscrowHeld,
+			Action:           &structs.NotificationAction{Kind: structs.NotificationActionTax},
 			Title:            "Complete your W-9 to get paid",
 			Body:             "You have rewards waiting. We need a W-9 on file before we can send them.",
 			CreatedAt:        created,
@@ -222,11 +231,97 @@ func (a *AppDB) appendW9Notifications(ctx context.Context, userID string, feed *
 			BackPaySfluv:     backPayBase,
 			OldestEscrowedAt: created,
 		}
-		if seenAt != nil {
-			notification.Seen = true
-			seenUnix := seenAt.Unix()
-			notification.SeenAt = &seenUnix
-		} else {
+		notification.Seen = seenAt != nil
+		notification.SeenAt = seenAt
+		if seenAt == nil {
+			feed.UnseenCount++
+		}
+		feed.Notifications = append(feed.Notifications, notification)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	return a.appendW9TierNotification(ctx, userID, feed)
+}
+
+// appendW9TierNotification is the lingering bell entry for the two tiers that
+// arrive while money is still being paid.
+//
+// The modal is answered once — dismissing 400 records an acknowledgement and it
+// does not come back that year — so without this a volunteer who taps "Later"
+// has nothing left telling them a form is coming. The escrow card does not help
+// either: nothing is held yet, by definition of these tiers.
+//
+// Deliberately suppressed once anything IS escrowed. From that point
+// appendW9Notifications says something stricter and more actionable ("You have
+// rewards waiting"), and two bell entries about the same tax year is noise
+// rather than emphasis.
+//
+// Derived from live state like every other notification here: it disappears
+// when the filing clears, so nothing has to be cleaned up.
+func (a *AppDB) appendW9TierNotification(ctx context.Context, userID string, feed *structs.ImproverNotificationFeed) error {
+	rows, err := a.db.Query(ctx, `
+		SELECT
+			n.tax_year,
+			n.tier,
+			n.notified_at,
+			COALESCE(f.status, 'not_started'),
+			r.seen_at
+		FROM w9_tier_notices n
+		LEFT JOIN w9_filings f ON f.user_id = n.user_id AND f.tax_year = n.tax_year
+		LEFT JOIN improver_notification_reads r
+			ON r.user_id = n.user_id
+			AND r.notification_key = 'w9_required:' || n.tax_year::text
+		WHERE n.user_id = $1
+		-- Only while nothing is held; the escrow notification takes over then.
+		AND NOT EXISTS (
+			SELECT 1 FROM payout_ledger p
+			WHERE p.user_id = n.user_id AND p.tax_year = n.tax_year
+			AND p.state IN ('escrowed','releasing')
+		)
+		ORDER BY n.tax_year, CASE n.tier
+			WHEN 'blocked' THEN 4 WHEN 'escrow_600' THEN 3
+			WHEN 'warning_500' THEN 2 WHEN 'notice_400' THEN 1 ELSE 0 END DESC;
+	`, userID)
+	if err != nil {
+		return fmt.Errorf("error building w9 tier notifications for %s: %w", userID, err)
+	}
+	defer rows.Close()
+
+	seenYears := map[int]bool{}
+	for rows.Next() {
+		var taxYear int
+		var tier, status string
+		var notifiedAt time.Time
+		var seenAt *int64
+		if err := rows.Scan(&taxYear, &tier, &notifiedAt, &status, &seenAt); err != nil {
+			return fmt.Errorf("error scanning w9 tier notification: %w", err)
+		}
+		// Highest tier first, one per year — a person who has crossed 500 does
+		// not also need the 400 notice sitting under it.
+		if seenYears[taxYear] || W9StatusClears(status) {
+			continue
+		}
+		seenYears[taxYear] = true
+
+		body := "You are approaching the amount that needs a W-9 on file. It takes a couple of minutes."
+		if tier == W9TierWarning {
+			body = "You are close to the limit that needs a W-9 on file. Complete it and your rewards keep arriving."
+		}
+
+		notification := structs.ImproverNotification{
+			Key:       fmt.Sprintf("%s:%d", structs.NotificationTypeW9Required, taxYear),
+			Type:      structs.NotificationTypeW9Required,
+			Action:    &structs.NotificationAction{Kind: structs.NotificationActionTax},
+			Title:     "A W-9 is coming up",
+			Body:      body,
+			CreatedAt: notifiedAt.Unix(),
+			TaxYear:   taxYear,
+		}
+		notification.Seen = seenAt != nil
+		notification.SeenAt = seenAt
+		if seenAt == nil {
 			feed.UnseenCount++
 		}
 		feed.Notifications = append(feed.Notifications, notification)
@@ -271,7 +366,8 @@ func (a *AppDB) PruneResolvedImproverNotificationReads(ctx context.Context) (int
 	tag, err := a.db.Exec(ctx, `
 		DELETE FROM improver_notification_reads r
 		WHERE (r.notification_key LIKE 'workflow_payout_pending:%'
-		    OR r.notification_key LIKE 'w9_escrow_held:%')
+		    OR r.notification_key LIKE 'w9_escrow_held:%'
+		    OR r.notification_key LIKE 'w9_required:%')
 		AND NOT EXISTS (
 			SELECT 1
 			FROM workflow_steps ws
@@ -299,6 +395,23 @@ func (a *AppDB) PruneResolvedImproverNotificationReads(ctx context.Context) (int
 			WHERE p.user_id = r.user_id
 			AND p.state IN ('escrowed','releasing')
 			AND r.notification_key = 'w9_escrow_held:' || p.tax_year::text
+		)
+		-- Same reasoning for the tier marker: it stays while an outstanding tier
+		-- is still on screen, which is while a tier notice exists, the filing has
+		-- not cleared, and nothing is escrowed yet (once it is, the escrow
+		-- notification replaces this one and this marker should go).
+		AND NOT EXISTS (
+			SELECT 1
+			FROM w9_tier_notices n
+			LEFT JOIN w9_filings f ON f.user_id = n.user_id AND f.tax_year = n.tax_year
+			WHERE n.user_id = r.user_id
+			AND r.notification_key = 'w9_required:' || n.tax_year::text
+			AND COALESCE(f.status, 'not_started') NOT IN ('completed','legacy_approved','manually_cleared')
+			AND NOT EXISTS (
+				SELECT 1 FROM payout_ledger p2
+				WHERE p2.user_id = n.user_id AND p2.tax_year = n.tax_year
+				AND p2.state IN ('escrowed','releasing')
+			)
 		);
 	`)
 	if err != nil {

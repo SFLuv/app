@@ -13,6 +13,34 @@ const (
 	NotificationTypeW9EscrowHeld = "w9_escrow_held"
 )
 
+// Action kinds understood by current clients. A client that does not
+// recognise a kind renders the notification as plain text rather than
+// guessing at a destination.
+const (
+	// NotificationActionTax opens whatever surface the client uses to file,
+	// which on mobile means re-arming the tier modal that carries the form
+	// link. Not role-scoped, for the same reason the tax types are not.
+	NotificationActionTax = "tax"
+	// NotificationActionImprover opens the improver panel, deep-linked to the
+	// workflow carried on the notification when there is one.
+	NotificationActionImprover = "improver"
+	// NotificationActionURL hands off to a link. This is the case no
+	// client-side mapping can cover — a partner's signup page, a form hosted
+	// somewhere we do not control — and it is the reason routing is sent by
+	// the server at all rather than derived from Type.
+	NotificationActionURL = "url"
+)
+
+// NotificationAction is where tapping a notification should take the user.
+//
+// Kind names a destination rather than a screen, so each client decides how to
+// reach it and an older build can ignore one it does not know. URL is only
+// meaningful for NotificationActionURL.
+type NotificationAction struct {
+	Kind string `json:"kind"`
+	URL  string `json:"url,omitempty"`
+}
+
 // ImproverNotification is one entry in the improver notification feed.
 //
 // Notifications are derived from live state rather than stored, so "resolved"
@@ -48,6 +76,11 @@ type ImproverNotification struct {
 	EscrowedCount    int    `json:"escrowed_count,omitempty"`
 	OldestEscrowedAt int64  `json:"oldest_escrowed_at,omitempty"`
 	BackPaySfluv     string `json:"back_pay_sfluv,omitempty"`
+
+	// Action is where tapping this notification goes. Optional: a nil action
+	// renders as plain text, which is what a client predating this field does
+	// with every notification anyway.
+	Action *NotificationAction `json:"action,omitempty"`
 }
 
 // ImproverNotificationFeed is the payload behind the notification bell.

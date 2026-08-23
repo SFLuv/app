@@ -90,20 +90,15 @@ func (a *AppDB) GetOutstandingW9Tier(ctx context.Context, userID string, taxYear
 		SELECT tier, notified_at, acknowledged_at
 		FROM w9_tier_notices
 		WHERE user_id = $1 AND tax_year = $2
-		-- Acknowledging retires a tier, EXCEPT the blocked one.
+		-- Returns the highest tier regardless of acknowledgement, and reports
+		-- acknowledged_at alongside it so the caller can decide what that means.
 		--
-		-- For the first three that is right: they are warnings that arrive while
-		-- money is still being paid, and answering one should end it for the year.
-		-- Blocked is not a warning — money is already held and no form is on file,
-		-- so the modal is the only thing telling somebody why their scans are
-		-- failing. Filtering it out here made "Not now" permanent: the status
-		-- response carried no tier at all, so every re-arm path on the client
-		-- (clearing the session dismissal on foreground, ignoring the stored
-		-- acknowledgement for this tier) had nothing to act on.
-		--
-		-- The acknowledgement is still recorded, and still means "seen"; for this
-		-- tier it just does not mean "settled".
-		AND (acknowledged_at IS NULL OR tier = $3)
+		-- Filtering acknowledged rows out here was the bug: the status response
+		-- then carried no tier at all, so every client path that wants to re-open
+		-- the modal -- the blocked re-arm, and tapping the W-9 notification -- had
+		-- nothing to act on, and "Not now" became permanent. Whether an
+		-- acknowledgement settles a tier is a policy question, and policy belongs
+		-- with the caller that knows why it is asking.
 		ORDER BY CASE tier
 			WHEN 'blocked' THEN 4
 			WHEN 'escrow_600' THEN 3
@@ -112,7 +107,7 @@ func (a *AppDB) GetOutstandingW9Tier(ctx context.Context, userID string, taxYear
 			ELSE 0
 		END DESC
 		LIMIT 1;
-	`, userID, taxYear, W9TierBlocked).Scan(&row.Tier, &row.NotifiedAt, &row.AcknowledgedAt)
+	`, userID, taxYear).Scan(&row.Tier, &row.NotifiedAt, &row.AcknowledgedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
