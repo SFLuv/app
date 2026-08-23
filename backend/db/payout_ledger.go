@@ -742,13 +742,22 @@ func (a *AppDB) SumUserEscrowAndBackPay(ctx context.Context, userID string, taxY
 // SumUserEarnedForYear is the annual total the threshold is measured against —
 // across every wallet the person holds and every chain, which is precisely what
 // the per-wallet, per-chain design that preceded this could not do.
+//
+// Counts 'pending', matching sumPayoutsForUserYear. A tier is recorded before
+// the transfer, deliberately, so the modal is waiting by the time somebody
+// looks at the reward that triggered it — which meant this sum was read during
+// the window where the row exists but has not reached the chain. The modal
+// opened reading "0 of 600", then corrected itself a second later once the row
+// turned 'paid'. A pending row is a committed intent to pay; rows that go on to
+// fail become 'failed' and stop counting here, so nothing is over-reported for
+// longer than the send takes.
 func (a *AppDB) SumUserEarnedForYear(ctx context.Context, userID string, taxYear int) (*big.Int, error) {
 	var total string
 	if err := a.db.QueryRow(ctx, `
 		SELECT COALESCE(SUM(amount_base), 0)::text
 		FROM payout_ledger
 		WHERE user_id = $1 AND tax_year = $2 AND counts_toward_threshold = TRUE
-		AND state IN ('escrowed','releasing','paid');
+		AND state IN ('pending','escrowed','releasing','paid');
 	`, userID, taxYear).Scan(&total); err != nil {
 		return nil, fmt.Errorf("error summing annual earnings for %s: %w", userID, err)
 	}
