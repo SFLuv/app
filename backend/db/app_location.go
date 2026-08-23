@@ -842,7 +842,13 @@ func (a *AppDB) updateLocationGooglePlace(ctx context.Context, ownerID string, l
 	result, err := tx.Exec(ctx, `
 		UPDATE locations
 		SET
-			google_id = $1,
+			-- NULL, not '', to match the INSERT. The partial unique index covers
+			-- google_id IS NOT NULL, so two rows storing '' would collide while
+			-- two storing NULL do not. No caller can reach this with an empty
+			-- value today — the handler rejects a blank id and the verifier falls
+			-- back to the requested place id — but the two writers of this column
+			-- disagreeing is how a third one gets written wrong.
+			google_id = NULLIF($1, ''),
 			name = $2,
 			type = $3,
 			street = $4,
