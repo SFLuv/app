@@ -15,13 +15,6 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-// fakeW9ReturnURL is where the stub sends somebody once they have signed.
-//
-// Must match the redirect the app hands to WebBrowser.openAuthSessionAsync, or
-// the sheet will sit there after submitting: that call watches for exactly this
-// URL and closes on seeing it.
-const fakeW9ReturnURL = "sfluv://w9/complete"
-
 // FakeW9FormEnabled reports whether the stub tax form should be mounted. It is
 // tied to the fake provider, so it can never appear against a real vendor.
 func FakeW9FormEnabled() bool {
@@ -168,30 +161,30 @@ func (a *AppService) ServeFakeW9Form(w http.ResponseWriter, r *http.Request) {
 		// in which case the receiver refuses it, which is also worth seeing.
 		a.postFakeW9Webhook(fake, requestID)
 
-		// Redirect back into the app, which is what closes the sheet.
+		// Deliberately does NOT redirect to the app's URL scheme.
 		//
-		// The form opens in an ASWebAuthenticationSession, and that dismisses
-		// itself the moment the page navigates to the scheme it was given —
-		// nothing else will close it. A "thanks, you may go now" page leaves
-		// somebody reading a dead end and tapping Done, which is a worse
-		// version of what the vendor does: theirs redirects to a return URL
-		// too.
+		// It used to, because an auth session closes itself on seeing its
+		// redirect. The app no longer uses one — iOS puts a "wants to sign in"
+		// consent sheet in front of those — so the redirect stopped being the
+		// thing that closed the browser and became a deep link instead: iOS
+		// switched to the app to handle sfluv://, which dismissed the sheet as
+		// a side effect and left the app processing a navigation intent in the
+		// middle of the filing flow.
 		//
-		// return_url=none opts out, for opening the form in a desktop browser
-		// where a custom scheme has nothing to hand off to.
-		if returnURL == "none" {
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			w.Write([]byte(`<html><body style="font-family:system-ui;padding:2rem">
-				<h2>Tax form signed</h2>
-				<p>Opened outside the app, so there is nowhere to return to. In the
-				app this redirects back and the sheet closes on its own.</p>
-				</body></html>`))
+		// The app closes the sheet itself now, when the backend confirms the
+		// filing actually cleared. So this only has to say the form went in,
+		// for the second or two before that happens.
+		//
+		// return_url is still honoured for anything that genuinely needs one.
+		if returnURL != "" && returnURL != "none" {
+			http.Redirect(w, r, returnURL, http.StatusFound)
 			return
 		}
-		if returnURL == "" {
-			returnURL = fakeW9ReturnURL
-		}
-		http.Redirect(w, r, returnURL, http.StatusFound)
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Write([]byte(`<html><body style="font-family:system-ui;padding:2rem;text-align:center">
+			<h2>Tax form signed</h2>
+			<p>Returning you to SFLuv…</p>
+			</body></html>`))
 		return
 	}
 
