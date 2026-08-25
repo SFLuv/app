@@ -15,6 +15,13 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
+// fakeW9ReturnURL is where the stub sends somebody once they have signed.
+//
+// Must match the redirect the app hands to WebBrowser.openAuthSessionAsync, or
+// the sheet will sit there after submitting: that call watches for exactly this
+// URL and closes on seeing it.
+const fakeW9ReturnURL = "sfluv://w9/complete"
+
 // FakeW9FormEnabled reports whether the stub tax form should be mounted. It is
 // tied to the fake provider, so it can never appear against a real vendor.
 func FakeW9FormEnabled() bool {
@@ -161,18 +168,30 @@ func (a *AppService) ServeFakeW9Form(w http.ResponseWriter, r *http.Request) {
 		// in which case the receiver refuses it, which is also worth seeing.
 		a.postFakeW9Webhook(fake, requestID)
 
-		if returnURL != "" {
-			http.Redirect(w, r, returnURL, http.StatusFound)
+		// Redirect back into the app, which is what closes the sheet.
+		//
+		// The form opens in an ASWebAuthenticationSession, and that dismisses
+		// itself the moment the page navigates to the scheme it was given —
+		// nothing else will close it. A "thanks, you may go now" page leaves
+		// somebody reading a dead end and tapping Done, which is a worse
+		// version of what the vendor does: theirs redirects to a return URL
+		// too.
+		//
+		// return_url=none opts out, for opening the form in a desktop browser
+		// where a custom scheme has nothing to hand off to.
+		if returnURL == "none" {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.Write([]byte(`<html><body style="font-family:system-ui;padding:2rem">
+				<h2>Tax form signed</h2>
+				<p>Opened outside the app, so there is nowhere to return to. In the
+				app this redirects back and the sheet closes on its own.</p>
+				</body></html>`))
 			return
 		}
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Write([]byte(`<html><body style="font-family:system-ui;padding:2rem">
-			<h2>Tax form signed</h2>
-			<p>This is the local stand-in for the tax vendor. Your held rewards go out
-			on the next maintenance sweep, which runs every five minutes. The real
-			vendor sends a signed callback instead, so this wait is an artefact of
-			the stand-in rather than something a person would experience.</p>
-			</body></html>`))
+		if returnURL == "" {
+			returnURL = fakeW9ReturnURL
+		}
+		http.Redirect(w, r, returnURL, http.StatusFound)
 		return
 	}
 
