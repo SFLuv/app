@@ -52,6 +52,19 @@ func (a *AppDB) GetW9Filing(ctx context.Context, userID string, taxYear int) (*s
 	return filing, nil
 }
 
+// MarkW9FilingPolled records that we asked, whatever the answer was.
+//
+// Separate from last_provider_event_at, which moves only when the answer
+// changes. Both are needed: one paces the sweep, the other says when the filing
+// last actually did something.
+func (a *AppDB) MarkW9FilingPolled(ctx context.Context, id int64) error {
+	if _, err := a.db.Exec(ctx,
+		`UPDATE w9_filings SET last_polled_at = NOW() WHERE id = $1;`, id); err != nil {
+		return fmt.Errorf("error stamping w9 filing %d as polled: %w", id, err)
+	}
+	return nil
+}
+
 // GetW9FilingByProviderRequestID finds a filing by the vendor's own handle.
 //
 // The webhook identifies its subject by SubmissionId and nothing else — it does
@@ -200,7 +213,7 @@ func (a *AppDB) GetUserIDByProviderRequest(ctx context.Context, providerRequestI
 
 // ListW9FilingsAwaitingProvider backs the poller. Polling is the guarantee that
 // a dropped webhook cannot hold someone's money indefinitely.
-func (a *AppDB) ListW9FilingsAwaitingProvider(ctx context.Context, limit int) ([]*structs.W9Filing, error) {
+func (a *AppDB) ListW9FilingsAwaitingProvider(ctx context.Context, limit int, notPolledSince *time.Time) ([]*structs.W9Filing, error) {
 	if limit <= 0 {
 		limit = 100
 	}
@@ -216,8 +229,11 @@ func (a *AppDB) ListW9FilingsAwaitingProvider(ctx context.Context, limit int) ([
 		   status IN ('requested','in_progress')
 		   OR (status = 'completed' AND COALESCE(tin_match,'') IN ('', 'pending'))
 		 )
-		 ORDER BY COALESCE(last_provider_event_at, requested_at) ASC NULLS FIRST
-		 LIMIT $1;`, limit)
+		 -- Skip anything asked about recently. A caller that wants every
+		 -- outstanding filing passes a zero cutoff.
+		 AND ($2::timestamptz IS NULL OR last_polled_at IS NULL OR last_polled_at < $2)
+		 ORDER BY COALESCE(last_polled_at, last_provider_event_at, requested_at) ASC NULLS FIRST
+		 LIMIT $1;`, limit, notPolledSince)
 	if err != nil {
 		return nil, fmt.Errorf("error listing w9 filings awaiting the provider: %w", err)
 	}

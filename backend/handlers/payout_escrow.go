@@ -276,7 +276,7 @@ func (p *PayoutService) pollProviderFilings(ctx context.Context) {
 	if p.provider == nil {
 		return
 	}
-	filings, err := p.appDb.ListW9FilingsAwaitingProvider(ctx, 100)
+	filings, err := p.appDb.ListW9FilingsAwaitingProvider(ctx, 100, p.pollCutoff())
 	if err != nil {
 		if p.logger != nil {
 			p.logger.Logf("w9: could not list filings awaiting the provider: %s", err)
@@ -288,7 +288,37 @@ func (p *PayoutService) pollProviderFilings(ctx context.Context) {
 		if err := p.SyncFilingFromProvider(ctx, filing); err != nil && p.logger != nil {
 			p.logger.Logf("w9: could not sync filing %s: %s", filing.ProviderRequestID, err)
 		}
+		// Stamped whether or not the read succeeded. A provider that is down
+		// should not have every filing pile onto the next sweep the moment it
+		// recovers; they will come round again on the normal cadence.
+		if err := p.appDb.MarkW9FilingPolled(ctx, filing.ID); err != nil && p.logger != nil {
+			p.logger.Logf("w9: could not stamp filing %d as polled: %s", filing.ID, err)
+		}
 	}
+}
+
+// webhookBackoff is how long a filing rests between sweeps once callbacks are
+// carrying the news.
+const webhookBackoff = time.Hour
+
+// pollCutoff decides how stale a filing must be before the sweep asks again.
+//
+// Nil — meaning ask about everything, every pass — when the provider does not
+// sign callbacks, because then polling is not a backstop, it is the only way we
+// will ever hear. Track1099 publishes no callbacks at all, and a provider with
+// no credentials configured cannot verify one, so both keep the old behaviour.
+//
+// Where callbacks do arrive, an outstanding filing is re-read hourly rather
+// than every five minutes. That is the difference between ~288 vendor calls a
+// day per unfilled form and ~24, and it costs nothing in latency: the callback
+// already released the money, and this only exists for a delivery lost past all
+// nine of their retries.
+func (p *PayoutService) pollCutoff() *time.Time {
+	if _, ok := p.provider.(w9provider.WebhookVerifier); !ok {
+		return nil
+	}
+	cutoff := time.Now().Add(-webhookBackoff)
+	return &cutoff
 }
 
 // SyncFilingFromProvider reads one filing's authoritative status and applies it.

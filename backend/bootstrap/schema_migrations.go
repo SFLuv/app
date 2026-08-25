@@ -1912,6 +1912,43 @@ var schemaMigrations = []SchemaMigration{
 			return nil
 		},
 	},
+	{
+		Version:     "1.49",
+		Description: "record when a w9 filing was last polled, so the sweep can back off",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			// The sweep re-read every outstanding filing every five minutes,
+			// forever. A form nobody fills is not a form that changes, so that
+			// is ~288 vendor calls a day per filing to learn nothing, and it
+			// never stops — a person who ignores the form for a month costs
+			// about 8,600 of them.
+			//
+			// It could not pace itself because nothing recorded when we last
+			// asked. last_provider_event_at is set on completion, so an
+			// unchanged filing looks exactly as stale on the thousandth read as
+			// on the first.
+			//
+			// Backdated to requested_at rather than left NULL, so the first
+			// sweep after deploy does not treat every existing filing as never
+			// polled and ask about all of them at once.
+			if _, err := pools.App.Exec(ctx, `
+				ALTER TABLE w9_filings ADD COLUMN IF NOT EXISTS last_polled_at TIMESTAMPTZ;
+			`); err != nil {
+				return fmt.Errorf("error adding w9_filings.last_polled_at: %w", err)
+			}
+
+			tag, err := pools.App.Exec(ctx, `
+				UPDATE w9_filings
+				SET last_polled_at = COALESCE(last_provider_event_at, requested_at, created_at)
+				WHERE last_polled_at IS NULL;
+			`)
+			if err != nil {
+				return fmt.Errorf("error backdating w9_filings.last_polled_at: %w", err)
+			}
+
+			appLogger.Logf("migration 1.49: backdated last_polled_at on %d w9 filings", tag.RowsAffected())
+			return nil
+		},
+	},
 }
 
 // migrateW9WarningTiers replaces one hard gate with an escalating sequence.

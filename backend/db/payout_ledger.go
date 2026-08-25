@@ -61,6 +61,11 @@ const TaxSchemaDDL = `
 			clear_reason           TEXT NOT NULL DEFAULT '',
 			last_provider_status   TEXT NOT NULL DEFAULT '',
 			last_provider_event_at TIMESTAMPTZ,
+			-- When we last ASKED, as opposed to when the answer last changed.
+			-- last_provider_event_at only moves on completion, so it cannot
+			-- pace the sweep: a filing that never changes looks equally stale
+			-- forever and gets re-read on every pass.
+			last_polled_at         TIMESTAMPTZ,
 			created_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			updated_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			CONSTRAINT w9_filings_status_check CHECK (status IN (
