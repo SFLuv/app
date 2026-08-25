@@ -32,6 +32,49 @@ func FakeW9FormEnabled() bool {
 // for using a vendor is that an SSN never reaches our systems, and a test
 // fixture that collected one would undo that on the first person who used it
 // with real data.
+// ForgetFakeW9 clears the stand-in's memory of one person's filing.
+//
+// Needed because the fake keeps its state in this process while reset-w9.sh
+// clears the database, so a reset used to leave a signed submission behind for
+// the same payee reference. The next crossing then released immediately and the
+// tiers cleared themselves — correct behaviour for a filed W-9, and completely
+// baffling when you did not file one.
+//
+// Mounted only alongside the stub form, so it cannot exist against a real
+// vendor. Admin-guarded even so: it is a write, and the fake form route beside
+// it is deliberately open because a person has to reach it from a browser.
+func (a *AppService) ForgetFakeW9(w http.ResponseWriter, r *http.Request) {
+	if !FakeW9FormEnabled() {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+	fake, ok := a.w9Provider.(*w9provider.Fake)
+	if !ok {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		return
+	}
+
+	userID := strings.TrimSpace(r.URL.Query().Get("user_id"))
+	if userID == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte("user_id is required"))
+		return
+	}
+
+	taxYear, err := strconv.Atoi(strings.TrimSpace(r.URL.Query().Get("tax_year")))
+	if err != nil || taxYear <= 0 {
+		taxYear = time.Now().UTC().Year()
+	}
+
+	removed := fake.Forget(userID, taxYear)
+	if a.logger != nil {
+		a.logger.Logf("w9 fake: forgot %d submission(s) for %s / %d", removed, userID, taxYear)
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]any{"forgotten": removed})
+}
+
 // postFakeW9Webhook delivers a signed Form W-9 Status Change callback to our
 // own receiver, in the background so the form's own response is not held up.
 func (a *AppService) postFakeW9Webhook(fake *w9provider.Fake, submissionID string) {

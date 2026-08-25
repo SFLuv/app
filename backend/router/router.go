@@ -562,6 +562,9 @@ func AddW9Routes(r *chi.Mux, s *handlers.AppService) {
 	if handlers.FakeW9FormEnabled() {
 		r.Get("/w9/fake/form/{request_id}", s.ServeFakeW9Form)
 		r.Post("/w9/fake/form/{request_id}", s.ServeFakeW9Form)
+		// Lets the reset script clear what the stand-in is holding in memory,
+		// which no amount of deleting database rows can reach.
+		r.Post("/w9/fake/forget", withAdmin(s.ForgetFakeW9, s))
 	}
 
 	r.Post("/admin/w9/precheck", withAdmin(s.PrecheckW9ForRecipient, s))

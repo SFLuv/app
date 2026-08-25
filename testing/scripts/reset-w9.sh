@@ -21,6 +21,7 @@
 #   ./testing/scripts/reset-w9.sh <wallet-address|did>
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+discover_stack   # needs the admin key to clear the stand-in's in-process state
 
 TARGET="${1:-}"
 if [[ ! "$TARGET" =~ ^0x[0-9a-fA-F]{40}$ && ! "$TARGET" =~ ^did:privy:[0-9a-z]+$ ]]; then
@@ -63,6 +64,18 @@ psql_app "DELETE FROM payout_ledger WHERE user_id='$UID_' AND tax_year=$YEAR;" >
 psql_app "DELETE FROM w9_tier_notices WHERE user_id='$UID_' AND tax_year=$YEAR;" >/dev/null
 psql_app "DELETE FROM w9_filings WHERE user_id='$UID_' AND tax_year=$YEAR;" >/dev/null
 psql_app "DELETE FROM improver_notification_reads WHERE user_id='$UID_' AND notification_key LIKE 'w9_%';" >/dev/null
+
+# The fake provider keeps its state in the backend process, not the database, and
+# it is idempotent on the payee reference — so without this a person who signed
+# the form before a reset gets the same signed submission handed back after one.
+# The next crossing then releases the moment it is escrowed and the tiers clear
+# themselves, which looks exactly like the tier logic breaking and is not.
+#
+# Quiet when the endpoint is absent: it only exists against the fake provider.
+forgotten="$(admin_api POST "/w9/fake/forget?user_id=$UID_&tax_year=$YEAR" 2>/dev/null | jq -r '.forgotten // empty' 2>/dev/null || true)"
+if [[ -n "$forgotten" ]]; then
+  echo "  cleared $forgotten stand-in submission(s) held in the backend's memory"
+fi
 
 echo "  cleared W-9 history for $UID_ (year $YEAR)"
 echo "  annual total was ${before} SFLUV, now 0 — on-chain balance is unchanged"

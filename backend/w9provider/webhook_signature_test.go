@@ -103,3 +103,73 @@ func TestFakeSignsWhatTheVerifierAccepts(t *testing.T) {
 		t.Fatal("an unconfigured fake accepted a delivery")
 	}
 }
+
+// A reset that leaves the stand-in remembering a signed form is not a reset.
+//
+// upsert is idempotent on the payee reference and the map lives in the process,
+// so without Forget a person who signed before a reset is handed the same
+// completed submission afterwards: the next crossing releases the moment it is
+// escrowed, the tiers clear themselves, and it reads as the tier logic failing.
+func TestFakeForgetsASignedSubmission(t *testing.T) {
+	f := NewFake(Config{})
+	const user = "did:privy:someone"
+	const year = 2026
+
+	first, err := f.CreateW9Request(t.Context(), W9RequestInput{UserID: user, TaxYear: year})
+	if err != nil {
+		t.Fatalf("creating the first request: %v", err)
+	}
+	if err := f.Sign(first.ProviderRequestID, "ssn"); err != nil {
+		t.Fatalf("signing: %v", err)
+	}
+
+	// Same person, same year: idempotent, so the signed one comes back.
+	again, err := f.CreateW9Request(t.Context(), W9RequestInput{UserID: user, TaxYear: year})
+	if err != nil {
+		t.Fatalf("re-requesting: %v", err)
+	}
+	if again.ProviderRequestID != first.ProviderRequestID {
+		t.Fatalf("expected the same submission back, got %q then %q",
+			first.ProviderRequestID, again.ProviderRequestID)
+	}
+	status, err := f.GetW9Status(t.Context(), again.ProviderRequestID)
+	if err != nil || status.Status != StatusCompleted {
+		t.Fatalf("expected the reused submission to be completed, got %q err=%v", status.Status, err)
+	}
+
+	if removed := f.Forget(user, year); removed != 1 {
+		t.Fatalf("Forget removed %d submissions, want 1", removed)
+	}
+
+	// Now the same person gets a fresh, unsigned submission.
+	fresh, err := f.CreateW9Request(t.Context(), W9RequestInput{UserID: user, TaxYear: year})
+	if err != nil {
+		t.Fatalf("creating after Forget: %v", err)
+	}
+	if fresh.ProviderRequestID == first.ProviderRequestID {
+		t.Fatal("Forget left the old submission reachable")
+	}
+	status, err = f.GetW9Status(t.Context(), fresh.ProviderRequestID)
+	if err != nil {
+		t.Fatalf("reading the fresh submission: %v", err)
+	}
+	if status.Status == StatusCompleted {
+		t.Fatal("a submission created after Forget was already completed")
+	}
+
+	// The old submission is gone, not merely unlinked. An unknown id reports
+	// not_started rather than erroring — deliberately, so a sweep does not fall
+	// over on an id it does not recognise — so that is what to check for.
+	forgotten, err := f.GetW9Status(t.Context(), first.ProviderRequestID)
+	if err != nil {
+		t.Fatalf("reading a forgotten submission should not error: %v", err)
+	}
+	if forgotten.Status != StatusNotStarted {
+		t.Fatalf("the forgotten submission still reports %q", forgotten.Status)
+	}
+
+	// Forgetting nothing is not an error.
+	if removed := f.Forget("did:privy:nobody", year); removed != 0 {
+		t.Fatalf("Forget on an unknown payee removed %d", removed)
+	}
+}

@@ -198,6 +198,42 @@ func (f *Fake) upsert(in W9RequestInput) *fakeRequest {
 	return req
 }
 
+// Forget drops everything this stand-in remembers about one person and year.
+//
+// Its state is in this process, not in the database, so clearing the w9 tables
+// does not clear it — and because upsert is idempotent on the payee reference,
+// a person whose form was signed before the reset gets that same signed
+// submission handed back afterwards. The next crossing then releases the
+// instant it is escrowed and the tiers clear themselves, which reads exactly
+// like a bug in the tier logic and is not one.
+//
+// Only ever called by the local reset script. Nothing in the real adapters has
+// or should have an equivalent: you cannot ask a vendor to forget a filing.
+func (f *Fake) Forget(userID string, taxYear int) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	ref := referenceID(userID, taxYear)
+	existing, ok := f.byPayeeRef[ref]
+	if !ok {
+		return 0
+	}
+	delete(f.byPayeeRef, ref)
+
+	// Drop every submission that shared the reference, not just the one it
+	// currently points at: with idempotency turned off there can be several,
+	// and a leftover would still answer a status poll.
+	removed := 0
+	for id, req := range f.bySubmission {
+		if req.PayeeRef == ref {
+			delete(f.bySubmission, id)
+			removed++
+		}
+	}
+	_ = existing
+	return removed
+}
+
 func (f *Fake) requestFor(r *fakeRequest) W9Request {
 	return W9Request{
 		ProviderRequestID: r.SubmissionID,
