@@ -285,11 +285,35 @@ func (p *PayoutService) pollProviderFilings(ctx context.Context) {
 	}
 
 	for _, filing := range filings {
-		status, err := p.provider.GetW9Status(ctx, filing.ProviderRequestID)
-		if err != nil {
-			continue
+		if err := p.SyncFilingFromProvider(ctx, filing); err != nil && p.logger != nil {
+			p.logger.Logf("w9: could not sync filing %s: %s", filing.ProviderRequestID, err)
 		}
+	}
+}
 
+// SyncFilingFromProvider reads one filing's authoritative status and applies it.
+//
+// The single place a provider status turns into money moving, shared by the
+// sweeper and the webhook receiver. The webhook could act on its own payload —
+// it is signed, so it is not a spoofing risk — but re-reading keeps exactly one
+// path that interprets a vendor status, rather than a second one that only runs
+// on callbacks and is therefore the one nobody tests.
+//
+// Idempotent, which is what makes it safe to call from a delivery that will be
+// retried up to nine times: MarkW9FilingCompleted and RecordTINMatch each
+// report whether they changed anything, and the work behind them only runs when
+// they did. A duplicate callback costs one API read.
+func (p *PayoutService) SyncFilingFromProvider(ctx context.Context, filing *structs.W9Filing) error {
+	if p.provider == nil || filing == nil {
+		return nil
+	}
+
+	status, err := p.provider.GetW9Status(ctx, filing.ProviderRequestID)
+	if err != nil {
+		return err
+	}
+
+	{
 		// Completion is the signature, and nothing else. The TIN match resolves
 		// separately and can take a day; waiting on it would hold somebody's
 		// money long after they had done everything asked of them.
@@ -321,6 +345,7 @@ func (p *PayoutService) pollProviderFilings(ctx context.Context) {
 			}
 		}
 	}
+	return nil
 }
 
 // repairCompletedFilings catches the case where a filing completed but its

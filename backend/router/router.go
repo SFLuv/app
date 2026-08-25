@@ -544,8 +544,17 @@ func AddW9Routes(r *chi.Mux, s *handlers.AppService) {
 	r.Post("/w9/start", withActiveAuth(s.StartW9, s))
 	r.Post("/w9/tier/{tier}/ack", withActiveAuth(s.AcknowledgeW9Tier, s))
 
-	// There is no webhook route. The vendor does not publish webhooks, so
-	// completion is discovered by the maintenance sweep polling for it.
+	// The vendor's Form W-9 Status Change callback.
+	//
+	// Outside withAuth because there is no session behind a machine-to-machine
+	// delivery, but not unauthenticated: the handler refuses anything whose
+	// HMAC does not verify before it reads a byte of the body. A provider that
+	// does not sign its callbacks makes this a 404.
+	//
+	// Completion is still discovered by the maintenance sweep as well. That is
+	// the backstop for a delivery lost past all nine of the vendor's retries,
+	// which nothing else would ever tell us about.
+	r.Post("/w9/webhook/taxbandits", s.ReceiveW9Webhook)
 
 	// The local stand-in for the vendor's hosted form, mounted only when the
 	// fake provider is selected. It is what makes an end-to-end run possible on

@@ -34,6 +34,11 @@ import (
 // only way to drive the rejected-match branch on demand.
 type Fake struct {
 	baseURL string
+	// Held so the stand-in can sign a callback the way the vendor does. Empty
+	// in most tests, which is itself worth exercising: an unconfigured secret
+	// must refuse every delivery rather than accept every one.
+	clientID     string
+	clientSecret string
 
 	mu sync.Mutex
 	// bySubmission is the poll path; byPayeeRef is the idempotency path.
@@ -79,6 +84,8 @@ func NewFake(cfg Config) *Fake {
 	}
 	return &Fake{
 		baseURL:              base,
+		clientID:             cfg.ClientID,
+		clientSecret:         cfg.ClientSecret,
 		bySubmission:         map[string]*fakeRequest{},
 		byPayeeRef:           map[string]*fakeRequest{},
 		runID:                strconv.FormatInt(time.Now().UnixNano(), 36),
@@ -109,6 +116,23 @@ func (f *Fake) SetIdempotentOnPayeeRef(idempotent bool) {
 }
 
 func (f *Fake) Name() string { return "fake" }
+
+// VerifyWebhookSignature mirrors the vendor's check against the same helper the
+// real adapter uses, so the stand-in exercises the real rejection branch.
+func (f *Fake) VerifyWebhookSignature(timestamp, signature string, now time.Time) bool {
+	return VerifyWebhook(f.clientID, f.clientSecret, timestamp, signature, now)
+}
+
+// SignWebhookAs produces a delivery signature for these credentials, so a local
+// callback can be posted exactly as the vendor would send it.
+func (f *Fake) SignWebhookAs(timestamp string) string {
+	return SignWebhook(f.clientID, f.clientSecret, timestamp)
+}
+
+// WebhookCredentialsConfigured reports whether this stand-in can sign at all.
+func (f *Fake) WebhookCredentialsConfigured() bool {
+	return f.clientID != "" && f.clientSecret != ""
+}
 
 // EnsurePayee mirrors the real adapter: a local no-op. There is no payee
 // resource at this vendor; identity rides on the PayeeRef we choose.

@@ -52,6 +52,28 @@ func (a *AppDB) GetW9Filing(ctx context.Context, userID string, taxYear int) (*s
 	return filing, nil
 }
 
+// GetW9FilingByProviderRequestID finds a filing by the vendor's own handle.
+//
+// The webhook identifies its subject by SubmissionId and nothing else — it does
+// not know our user or tax year — so this is the only way in from a callback.
+// Absent is not an error: a delivery for a submission we have no record of is
+// something to acknowledge and drop, not to fail on.
+func (a *AppDB) GetW9FilingByProviderRequestID(ctx context.Context, providerRequestID string) (*structs.W9Filing, error) {
+	if strings.TrimSpace(providerRequestID) == "" {
+		return nil, nil
+	}
+	filing, err := scanW9Filing(a.db.QueryRow(ctx,
+		`SELECT `+w9FilingColumns+` FROM w9_filings WHERE provider_request_id = $1 LIMIT 1;`,
+		providerRequestID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("error loading w9 filing for submission %s: %w", providerRequestID, err)
+	}
+	return filing, nil
+}
+
 // GetW9FilingStatusTx reads just the status inside a transaction, for the
 // payout gate. Absent means not_started.
 func (a *AppDB) GetW9FilingStatusTx(ctx context.Context, tx pgx.Tx, userID string, taxYear int) (string, error) {

@@ -118,6 +118,11 @@ func NewTaxBandits(cfg Config) *TaxBandits {
 
 func (t *TaxBandits) Name() string { return "taxbandits" }
 
+// VerifyWebhookSignature checks a callback against the client credentials.
+func (t *TaxBandits) VerifyWebhookSignature(timestamp, signature string, now time.Time) bool {
+	return VerifyWebhook(t.clientID, t.clientSecret, timestamp, signature, now)
+}
+
 // SetWarningLogger routes the loud-on-surprise messages somewhere visible.
 // Without it they are dropped, which is acceptable for tests and not for
 // production — bootstrap wires it to the app logger.
