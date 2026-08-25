@@ -15,7 +15,9 @@ Treat them as the definition of done, then the questionnaire is a formality:
 
 1. **Authentication** — generate a JWS, exchange it for a JWT access token.
 2. **Status Retrieval** — retrieve form status via **webhooks *or* the status
-   endpoint**. Note the "or": our polling sweeper alone satisfies this.
+   endpoint**. Note the "or": the polling sweeper alone satisfies the checklist,
+   so this is not a reason to defer the webhook — only a reason it does not
+   block go-live.
 3. **Error Handling** — handle validation and server errors.
 4. **Whitelisting** — enable and test IP/domain whitelisting.
 
@@ -73,7 +75,8 @@ type Config struct {
 }
 ```
 
-`WebhookSecret` goes away. There is no signature to verify (see §4).
+`WebhookSecret` is not needed — but see §4: that is because the signing key is
+the ClientSecret we already hold, not because deliveries are unsigned.
 
 ## 3. Creating a W-9 request
 
@@ -127,20 +130,39 @@ PayeeRef), `401` `AUTH-100025` for bad credentials.
 **`PrefLang` supports `es-ES`.** Given who we serve in the Tenderloin, wire this
 through from the user's language preference rather than hardcoding `en-US`.
 
-## 4. Webhooks — unsigned, so treat them as hints
+## 4. Webhooks — signed, and the primary path
 
-There is no signature, no HMAC, no shared secret. Confirmed absent from both the
-2.0 and 1.7.1 docs. Their security model is **IP whitelisting**, which is also
-item 4 on the go-live checklist.
+**Correction, 2026-08-24.** This section previously said there was no signature,
+no HMAC and no shared secret, and that the security model was IP whitelisting
+alone. That is wrong, and it was wrong in a way that shaped the design: it is
+why the sweeper became the source of truth and the webhook a mere hint.
 
-Because this webhook releases money, the rule is:
+TaxBandits signs every delivery. Verified against both the current docs and the
+1.7.1 versioned copy:
 
-> Acknowledge 200 immediately, ignore the payload's claimed status, and re-read
-> authoritative status from the API for that `SubmissionId` before acting.
+    Signature  — base64( HMAC-SHA256( ClientId + "\n" + TimeStamp, ClientSecret ) )
+    TimeStamp  — sent alongside it, and what makes replay detectable
 
-A spoofed webhook then costs us one wasted API call instead of a wrongful payout.
-This is nearly free because the sweeper already polls and is already the source
-of truth. The webhook is a latency optimisation, not a second authority.
+Recompute it, compare, and return **401 without processing** on a mismatch. The
+key is the ClientSecret we already hold, so nothing new has to be provisioned —
+`WebhookSecret` does not need to exist, but not for the reason §2 gave.
+
+Because the delivery is authenticated, it can be acted on directly. There is no
+need to re-read status on every callback to guard against spoofing; a request
+that fails the HMAC never gets that far. IP allowlisting stays as defence in
+depth and because it is item 4 on the go-live checklist, not as the only control.
+
+**What still has to poll, and why it is small.** Deliveries can be lost outright:
+nine retries over 24 hours is generous, but an endpoint down for a day exhausts
+them and the notification is gone for good. Nothing else would ever tell us, and
+the cost of not knowing is somebody's money held indefinitely with no way to
+recover it. So a slow backstop sweep stays — hours, not minutes, and skewed
+towards filings we have not heard about in a long time. It is a safety net for a
+dropped delivery, not the mechanism.
+
+The TIN match does not need its own polling either: where TIN matching was
+requested the callback carries `TINMatching` (`ORDER_CREATED` | `SUCCESS` |
+`FAILED`) alongside `W9Status`, and fires again when it resolves.
 
 Hard requirements from their side:
 - Callback URL must be **HTTPS with a valid certificate**, max 500 chars.

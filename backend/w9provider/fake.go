@@ -23,8 +23,11 @@ import (
 //   - COMPLETED_AND_TIN_MATCH_INPROGRESS is a real state: signed, released,
 //     match still running.
 //   - The TIN match is asynchronous and resolves on a later read.
-//   - There is no webhook. Completion is discovered by polling, exactly as in
-//     production.
+//   - Completion is discovered by polling. That is how this stand-in behaves,
+//     and it is NOT what the real vendor does: TaxBandits sends a signed Form
+//     W-9 Status Change callback. Reshaping this to deliver one is listed as
+//     step 7 of the build plan. Until then, a test passing here says nothing
+//     about the callback path.
 //
 // A sandbox does exist for the real vendor, so this is no longer the only way
 // to exercise the loop — but it is still the only way to do it offline, and the

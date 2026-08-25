@@ -61,8 +61,9 @@ func (a *AppService) ServeFakeW9Form(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`<html><body style="font-family:system-ui;padding:2rem">
 			<h2>Tax form signed</h2>
 			<p>This is the local stand-in for the tax vendor. Your held rewards go out
-			on the next maintenance sweep, which is how completion is detected in
-			production too — this vendor publishes no webhooks.</p>
+			on the next maintenance sweep, which runs every five minutes. The real
+			vendor sends a signed callback instead, so this wait is an artefact of
+			the stand-in rather than something a person would experience.</p>
 			</body></html>`))
 		return
 	}

@@ -174,11 +174,19 @@ func (a *AppService) StartW9(w http.ResponseWriter, r *http.Request) {
 
 // The webhook receiver that used to live here is gone.
 //
-// The vendor publishes no webhook, callback or notification — verified against
+// Track1099 publishes no webhook, callback or notification — verified against
 // its docs and every changelog entry from 0.1.0 to 0.7.0 — so nothing would
 // ever have called it. It also invented a signature header and an HMAC scheme
-// to validate deliveries that cannot arrive. Completion is discovered by the
-// sweeper polling GetW9Status; see PayoutService.pollProviderFilings.
+// to validate deliveries that cannot arrive.
+//
+// That is a fact about Track1099 and does not generalise. TaxBandits, which
+// this is moving to, does send a Form W-9 Status Change callback, and signs it:
+// base64(HMAC-SHA256(ClientId + "\n" + TimeStamp, ClientSecret)) in a
+// `Signature` header. A receiver belongs here again once that provider is live
+// — see TAXBANDITS-BUILD-PLAN.md §4.
+//
+// Until then completion is discovered by the sweeper polling GetW9Status; see
+// PayoutService.pollProviderFilings.
 
 // AttributeUnlinkedPayoutsForUser claims past payouts made to an address before
 // it was linked to an account.
