@@ -353,6 +353,7 @@ func NewServerHandler(ctx context.Context, pools *DBPools, appLogger *logger.Log
 		ClientSecret: strings.TrimSpace(os.Getenv("W9_PROVIDER_CLIENT_SECRET")),
 		UserToken:    strings.TrimSpace(os.Getenv("W9_PROVIDER_USER_TOKEN")),
 		BusinessID:   strings.TrimSpace(os.Getenv("W9_PROVIDER_BUSINESS_ID")),
+		WebhookRef:   strings.TrimSpace(os.Getenv("W9_PROVIDER_WEBHOOK_REF")),
 		APIVersion:   strings.TrimSpace(os.Getenv("W9_PROVIDER_API_VERSION")),
 		AuthURL:      strings.TrimSpace(os.Getenv("W9_PROVIDER_AUTH_URL")),
 

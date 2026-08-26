@@ -172,14 +172,34 @@ func (p *PayoutService) EnsureW9Request(ctx context.Context, userID string, taxY
 	return p.appDb.GetW9Filing(ctx, userID, taxYear)
 }
 
-// w9ReturnURL is where the vendor sends someone once they submit. The app
-// scheme is what closes the loop back into the app rather than leaving them on
-// a vendor confirmation page.
+// w9ReturnURL is where the vendor sends someone once they submit.
+//
+// Deliberately a web page and NOT the app's URL scheme, which is what this used
+// to be. A scheme here does not return somebody to the app so much as ambush
+// it: iOS switches over to handle sfluv://, which dismisses the browser as a
+// side effect — so it looks like it worked — and the app receives a navigation
+// intent in the middle of the filing flow, before the status it is waiting on
+// has arrived. That is what stopped the confirmation appearing, and the real
+// vendor would have reproduced it on day one.
+//
+// The app closes the sheet itself, when the backend confirms the filing
+// actually cleared. So this only has to be somewhere harmless to land for the
+// second or two in between.
 func w9ReturnURL() string {
 	if raw := strings.TrimSpace(envString("W9_RETURN_URL", "")); raw != "" {
 		return raw
 	}
-	return "sfluv://w9/complete"
+	base := strings.TrimSpace(envString("PUBLIC_BACKEND_URL", ""))
+	if base == "" {
+		base = strings.TrimSpace(envString("NEXT_PUBLIC_BACKEND_URL", ""))
+	}
+	if base == "" {
+		// Nowhere safe to send them. Empty means the vendor shows its own
+		// confirmation, which is a worse page but not a broken flow — and far
+		// better than a scheme that disrupts the app.
+		return ""
+	}
+	return strings.TrimSuffix(base, "/") + "/w9/complete"
 }
 
 func timePtr(t time.Time) *time.Time {

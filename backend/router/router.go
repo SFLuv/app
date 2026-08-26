@@ -556,6 +556,11 @@ func AddW9Routes(r *chi.Mux, s *handlers.AppService) {
 	// which nothing else would ever tell us about.
 	r.Post("/w9/webhook/taxbandits", s.ReceiveW9Webhook)
 
+	// Where the vendor drops somebody after they submit the form. Public and
+	// carries no identifiers: it is reached in whatever browser they had open,
+	// and the URL can end up in history or a referrer.
+	r.Get("/w9/complete", s.ServeW9CompletePage)
+
 	// The local stand-in for the vendor's hosted form, mounted only when the
 	// fake provider is selected. It is what makes an end-to-end run possible on
 	// a laptop, deep link included.

@@ -152,6 +152,15 @@ type Config struct {
 	// requested until the payer exists, so an empty value is a hard error
 	// rather than a silent disable.
 	BusinessID string
+	// WebhookRef routes this request's callbacks to one of the URLs registered
+	// in their console, of which there can be five. Optional: without it a
+	// status change is delivered to every registered URL.
+	//
+	// Worth setting as soon as more than one environment exists. Sandbox
+	// usually points at a tunnel on somebody's laptop, and a production
+	// callback arriving there — or a sandbox one arriving in production — is
+	// a delivery about somebody's money reaching the wrong system.
+	WebhookRef string
 	// APIVersion is a path segment, e.g. "v1.7.3". Pinned in config because the
 	// request shapes differ between major trees and mixing them silently
 	// produces 404s.

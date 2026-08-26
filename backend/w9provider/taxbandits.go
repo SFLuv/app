@@ -43,6 +43,7 @@ type TaxBandits struct {
 	clientSecret string
 	userToken    string
 	businessID   string
+	webhookRef   string
 	apiVersion   string
 	apiBase      string
 	authBase     string
@@ -106,6 +107,7 @@ func NewTaxBandits(cfg Config) *TaxBandits {
 		clientSecret: strings.TrimSpace(cfg.ClientSecret),
 		userToken:    strings.TrimSpace(cfg.UserToken),
 		businessID:   strings.TrimSpace(cfg.BusinessID),
+		webhookRef:   strings.TrimSpace(cfg.WebhookRef),
 		apiVersion:   version,
 		apiBase:      apiBase,
 		authBase:     authBase,
@@ -500,6 +502,12 @@ func (t *TaxBandits) requestByURL(ctx context.Context, in W9RequestInput) (tbReq
 			"IsTINMatching": true,
 		},
 		"PrefLang": tbPreferredLanguage(in.PreferredLanguage),
+	}
+	if t.webhookRef != "" {
+		// Sends this request's callbacks to one registered URL rather than all
+		// of them, which is how sandbox is kept off production's receiver and
+		// production off somebody's tunnel.
+		body["WebhookRef"] = t.webhookRef
 	}
 	if strings.TrimSpace(in.ReturnURL) != "" {
 		body["RedirectUrls"] = map[string]any{
