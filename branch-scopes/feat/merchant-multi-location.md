@@ -323,3 +323,17 @@ routes. `mobile-app`: 19 files, +731/−970.
   app, swallowing touches with `openBrowserAsync` unresolved. iOS allows one
   modal presentation at a time; the fix is a 400ms wait, and the evidence was
   Maestro's captured hierarchy listing Safari controls over a frozen screen.
+
+# Round 5 — Aug 26 (second sitting)
+
+**Repos:** `mobile-app` · **Total active hours: 0.3**
+
+One decision, taken and applied: W-9 tier acknowledgement is contingent on a
+completed filing. Closing the vendor sheet no longer acknowledges the tier, so
+backing out of the form unfiled brings the warning back after the close grace
+period instead of retiring it for the year. Explicit dismissal still
+acknowledges; a cleared filing removes the tier at the source.
+
+| Change | hours | repo |
+|---|---|---|
+| Back-out no longer acknowledges the tier (`e830544`) | 0.3 | mobile |
