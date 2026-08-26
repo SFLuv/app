@@ -26,6 +26,30 @@ func TestSignWebhookIsStable(t *testing.T) {
 	}
 }
 
+// The vendor's real timestamp format, captured from a live sandbox delivery.
+//
+// This is the case the unix-seconds assumption got wrong: the signature
+// verified and the age check then threw the delivery away, which the console
+// reports as an invalid URL.
+func TestVerifyWebhookAcceptsTheVendorsTimestampFormat(t *testing.T) {
+	const ts = "08/26/2026 05:12:04.029 PM"
+	sent := time.Date(2026, 8, 26, 17, 12, 4, 0, time.UTC)
+	sig := SignWebhook(testClientID, testSecret, ts)
+
+	if !VerifyWebhook(testClientID, testSecret, ts, sig, sent.Add(2*time.Second)) {
+		t.Fatal("a delivery in the vendor's own format was refused")
+	}
+	// Still aged, not merely parsed.
+	if VerifyWebhook(testClientID, testSecret, ts, sig, sent.Add(48*time.Hour)) {
+		t.Fatal("a two-day-old delivery was accepted")
+	}
+	// And read as UTC. If it were parsed as local time the offset would push
+	// this outside the window on any machine west of Greenwich.
+	if !VerifyWebhook(testClientID, testSecret, ts, sig, sent.Add(20*time.Hour)) {
+		t.Fatal("a retry inside the 24h window was refused")
+	}
+}
+
 func TestVerifyWebhook(t *testing.T) {
 	now := time.Unix(1787000000, 0)
 	ts := "1787000000"

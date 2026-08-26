@@ -42,6 +42,38 @@ func SignWebhook(clientID, clientSecret, timestamp string) string {
 // and a legitimate retry must still be accepted.
 const WebhookMaxSkew = 24 * time.Hour
 
+// webhookTimestampLayout is the format TaxBandits actually sends.
+//
+//	08/26/2026 05:12:04.029 PM
+//
+// Captured from a live sandbox delivery, not read off a page. This was written
+// as unix seconds first — a reasonable guess, and wrong — which meant a
+// correctly signed callback was refused on the age check it had already
+// passed the signature for. The console reports that as "invalid URL", which
+// says nothing about which half failed.
+//
+// Their clock is UTC: a delivery stamped 05:12 PM arrived at 10:12 Pacific.
+const webhookTimestampLayout = "01/02/2006 03:04:05.000 PM"
+
+// parseWebhookTimestamp reads a delivery's timestamp.
+//
+// Accepts unix seconds as well, because the signature covers whatever string
+// was sent — so anything producing these deliveries, including our own
+// stand-in, is free to use either and the HMAC still ties the two together.
+func parseWebhookTimestamp(raw string) (time.Time, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return time.Time{}, false
+	}
+	if t, err := time.ParseInLocation(webhookTimestampLayout, raw, time.UTC); err == nil {
+		return t, true
+	}
+	if secs, err := strconv.ParseInt(raw, 10, 64); err == nil {
+		return time.Unix(secs, 0), true
+	}
+	return time.Time{}, false
+}
+
 // VerifyWebhook reports whether a delivery is genuinely from the vendor.
 //
 // Compared with hmac.Equal rather than ==, so the comparison does not leak
@@ -59,13 +91,13 @@ func VerifyWebhook(clientID, clientSecret, timestamp, signature string, now time
 		return false
 	}
 
-	// Their timestamp is unix seconds. A value we cannot read is a delivery we
-	// cannot age-check, so it is refused rather than waved through.
-	secs, err := strconv.ParseInt(strings.TrimSpace(timestamp), 10, 64)
-	if err != nil {
+	sent, ok := parseWebhookTimestamp(timestamp)
+	if !ok {
+		// A value we cannot read is a delivery we cannot age-check, so it is
+		// refused rather than waved through.
 		return false
 	}
-	age := now.Sub(time.Unix(secs, 0))
+	age := now.Sub(sent)
 	if age < 0 {
 		age = -age
 	}

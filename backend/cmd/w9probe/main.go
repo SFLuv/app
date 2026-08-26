@@ -38,6 +38,19 @@ import (
 	"github.com/SFLuv/app/backend/w9provider"
 )
 
+// probeReturnURL mirrors the backend's default so the probe exercises what
+// production will actually send.
+func probeReturnURL() string {
+	if raw := strings.TrimSpace(os.Getenv("W9_RETURN_URL")); raw != "" {
+		return raw
+	}
+	base := strings.TrimSpace(os.Getenv("PUBLIC_BACKEND_URL"))
+	if base == "" {
+		base = "http://localhost:8080"
+	}
+	return strings.TrimSuffix(base, "/") + "/w9/complete"
+}
+
 func main() {
 	step := flag.String("step", "auth", "auth | servertime | business | business-create | request | status | adapter | idempotency")
 	email := flag.String("email", "", "recipient email for a form request")
@@ -256,7 +269,10 @@ func (c probeConfig) requestByURL(payeeRef, email string) {
 			"Email":         email,
 			"IsTINMatching": true,
 		},
-		"RedirectUrls": map[string]any{"ReturnUrl": "sfluv://w9/complete", "RedirectTime": 5},
+		// A page, not the app's URL scheme — see w9ReturnURL. A scheme here
+		// makes iOS switch to the app mid-flow, which dismisses the browser as
+		// a side effect and looks like success while breaking the wait.
+		"RedirectUrls": map[string]any{"ReturnUrl": probeReturnURL(), "RedirectTime": 5},
 		"PrefLang":     "en-US",
 	})
 }
