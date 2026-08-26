@@ -1129,10 +1129,16 @@ if [[ "$RUN_BACKEND" -eq 1 ]]; then
     # never asks for a tax identification number, and must not: keeping an SSN
     # out of our systems is the entire reason for using a vendor.
     "W9_PROVIDER=${W9_PROVIDER:-fake}"
-    "W9_PROVIDER_BASE_URL=${W9_PROVIDER_BASE_URL:-http://localhost:$BACKEND_PORT}"
+    # Only defaulted for the stub, which serves its form from this backend and
+    # so genuinely does live at localhost. For a real provider the same variable
+    # means the vendor's API root, and defaulting it here pointed the adapter at
+    # us: every form request came back 404 from our own router, which reads as
+    # the vendor rejecting it. That used to be a comment telling you to clear
+    # it; a comment is a poor substitute for not setting it.
+    "W9_PROVIDER_BASE_URL=${W9_PROVIDER_BASE_URL:-$([[ "${W9_PROVIDER:-fake}" == "fake" ]] && printf 'http://localhost:%s' "$BACKEND_PORT")}"
     # TaxBandits. Export these before running to point the local stack at the
-    # sandbox instead of the stub. W9_PROVIDER_BASE_URL must be cleared when you
-    # do — otherwise the adapter talks to this backend instead of the vendor.
+    # sandbox instead of the stub. Leaving the base URL unset lets the adapter
+    # pick its own sandbox or production host from W9_PROVIDER_ENV.
     # None of these are secrets in this file; they are read from the shell and
     # left empty so nothing sensitive is ever written to disk here.
     "W9_PROVIDER_CLIENT_ID=${W9_PROVIDER_CLIENT_ID:-}"
