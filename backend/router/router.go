@@ -136,7 +136,7 @@ func New(s *handlers.BotService, a *handlers.AppService, p *handlers.PonderServi
 	// Local-dev "prank" forwarding: lets a developer act as another user to see
 	// exactly what that user sees. It is wired ONLY when not in production, and
 	// even then only takes effect when a pranks table has been hand-populated by
-	// the local dev CLI (./dev-up.sh menu) — the middleware itself creates
+	// the local dev CLI (./scripts/dev-up/dev-up.sh menu) — the middleware itself creates
 	// nothing. Two independent gates (this !isProduction() check AND the manual
 	// db write) must both be true for any forwarding to happen, so an accidental
 	// production build cannot be exploited without direct database access.

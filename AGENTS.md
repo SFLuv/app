@@ -12,7 +12,6 @@ SFLUV is a local currency platform using a wrapped HONEY token on Berachain. Thi
 ```bash
 cd backend && go run ./cmd/init                     # Run DB init / migrations only
 cd backend && go run ./cmd/server                   # Run the backend server
-cd backend && go test -vet=off ./db ./handlers ./router ./structs # Run backend tests
 ```
 Backend env: `backend/.env` — requires `DB_USER`, `DB_PASSWORD`, `DB_URL` (for app, bot, and ponder DBs), `PRIVY_APP_ID`, `PRIVY_VKEY`, `RPC_URL`, `MAILGUN_API_KEY`, `MAILGUN_DOMAIN`, `PONDER_SERVER_BASE_URL`, `PONDER_KEY`.
 
@@ -184,13 +183,17 @@ commit history showed.
 Work spanning more than one sitting is appended as a new `# Round N` section rather than folded into the
 existing numbers, so an earlier estimate is never silently restated.
 
+## Testing
+
+Testing is **human-in-the-loop**: boot the stack with `./scripts/dev-up/dev-up.sh`, use the product, fix what the human reports. There is no automated test suite and none should be added — no unit-test scaffolding, no e2e harness. See `TESTING.md` for the process and `scripts/MAINTENANCE.md` for the convenience-script rules. A few pre-existing `go test` files remain in the backend; they are not part of the process and are not a gate.
+
 ## Additional Systems
 
 ### Affiliate System
 Affiliates (`isAffiliate`) have a separate event/payout flow. `AffiliatScheduler` in `backend/handlers/affiliate_scheduler.go` runs recurring payouts. Routes under `/affiliates/*` are affiliate-guarded.
 
 ### W9 / Compliance
-W9 submissions are created via `POST /w9/submit`. Eligibility and unwrap flows in `backend/handlers/w9.go` and `backend/handlers/unwrap.go`.
+Every payout runs through one choke point (`decidePayout` in `backend/handlers/payout.go`) that compares a person's annual earnings against escalating tiers (defaults 400/500/600 SFLUV): notice, warning, escrow of the crossing payment, then refusal of anything further until a W-9 clears. Filings go through a vendor adapter (`backend/w9provider/`, TaxBandits) — the app mints a hosted form URL, the vendor calls back on `POST /w9/webhook/taxbandits` (HMAC-verified), and a sweeper polls as a fallback. Escrowed money releases automatically when the filing clears. There is no `POST /w9/submit`; the old self-hosted form is gone.
 
 ### Account Abstraction
 Frontend uses Permissionless SDK (`frontend/lib/paymaster/`) for smart accounts and transaction batching via a bundler client.

@@ -27,15 +27,5 @@ tmp/
 .dev.env.*
 !.dev.env.example
 
-# Playwright end-to-end harness. Tracked separately; not part of the app.
-# The e2e suite is tracked — it is the most valuable test layer and being
-# gitignored made it invisible in git status, absent from a fresh clone, and
-# rebuilt from scratch twice by people who could not see it. Only the seeded
-# session is excluded: it is a live credential.
-/e2e/node_modules/
-/e2e/.auth/
-/e2e/test-results/
-/e2e/playwright-report/
-
 # Ponder codegen output at the repo root.
 /generated/

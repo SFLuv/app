@@ -264,3 +264,62 @@ Round 3 is the second-largest round on the branch and the first with test covera
   - **The two W-9 flows need a re-seed between runs**, and one of them always will: acknowledging a
     tier is what retires tiers 1-3, so 05 changes the state it depends on by passing. 06 does not,
     now that the blocked tier survives acknowledgement.
+
+# Round 4 — Aug 23–26
+
+**Repos:** `app`, `mobile-app` · **Total active hours: 14.0**
+
+How the hours were arrived at: commit clustering across both repos gives 8.2h
+(Aug 23 13:04–15:05, Aug 24 17:30–18:19, Aug 25 08:39–09:35 and 14:49–15:28,
+Aug 26 09:39–12:44 and 13:45–14:45). Three stated adjustments add 5.8h: +1.5h
+for the Aug 22–23 session whose work all landed in the 13:04 batch commit;
++1.0h for the Aug 24 vendor-doc and signature-probing session that preceded its
+first commit; +3.3h for the Aug 25–26 gaps that were live TaxBandits console
+walkthrough, webhook activation, and simulator-freeze diagnosis rather than
+idle time (recorded in the session, invisible to clustering).
+
+## Features
+
+| Feature | hours | repo |
+|---|---|---|
+| Live TaxBandits sandbox wired end to end — env swap, ngrok tunnel, console walkthrough, JWS auth, `RequestByUrl`, hosted return page, vendor-root and timestamp fixes | 3.0 | app |
+| W-9 confirmation modal and the three freeze fixes — confirm on intent, in-tree overlay, never dismiss a gone sheet, release the button before presenting, wait out the tier modal's dismissal | 3.2 | mobile |
+| Notification panel as the only inbox, rows as general-purpose links — server `Action` targets, badge counts outstanding, per-row dismiss, un-dismiss on new tier, two `seen_at` scan fixes | 2.5 | 1.7 mobile / 0.8 app |
+| TaxBandits webhook receiver — HMAC verification (their `MM/DD/YYYY … AM/PM` UTC timestamp, not unix), ack-then-work, sweep backoff via `last_polled_at` (migration 1.49), logger tee | 1.8 | app |
+| Unwinding automated testing into the human-in-the-loop `scripts/` folder | 1.5 | both |
+| Real-money W-9 ladder scripts (`w9-earn`, `reset-w9`, seeding rework to land on 400/500/600) | 1.0 | app |
+| W-9 tier correctness from live walkthroughs — escrow tier recorded at the crossing, `pending` counted in the shown total, blocked tier re-arms after acknowledgement | 1.0 | app |
+
+## Totals
+
+| | hours |
+|---|---|
+| Features | 14.0 |
+| **Round 4** | **14.0** |
+
+**Volume.** `app`: 33 files, +2,114/−151 across the feature commits, then 118
+files, +363/−11,344 in the unwind (81 deletions, 15 moves); 1 migration, 3 new
+routes. `mobile-app`: 19 files, +731/−970.
+
+## Worth knowing
+
+- **The automated-testing effort was unwound by decision, not neglect.** The
+  Playwright suite, the Go test files added on this branch, the Maestro flows,
+  the `testing/` harness and its repo skill are gone. What remains is
+  `scripts/` — one subfolder per human-testing shortcut, each with an accurate
+  markdown description, rules in `scripts/MAINTENANCE.md` — with `dev-up`
+  moved inside it. `TESTING.md`, `CLAUDE.md` and `AGENTS.md` now describe the
+  human-in-the-loop process.
+- **The backend `./test` package's W-9 group had never executed.** An earlier
+  group's `t.Fatal` (stale schema: `CreateTables` lacks migration-added
+  columns) stopped the run before `GroupW9Handlers` was reached — found while
+  auditing what the suite actually covered, and part of why it was cut.
+- **TaxBandits webhooks are signed**, contrary to the build plan's earlier
+  claim: `base64(HMAC-SHA256(ClientId + "\n" + Timestamp, ClientSecret))`,
+  retried 9× over 24h, 200 expected within 5s. Both real signatures reproduced
+  exactly before the receiver was trusted.
+- **All three simulator freezes were one bug**: presenting the Safari sheet
+  while the tier modal was still dismissing left an invisible sheet over the
+  app, swallowing touches with `openBrowserAsync` unresolved. iOS allows one
+  modal presentation at a time; the fix is a 400ms wait, and the evidence was
+  Maestro's captured hierarchy listing Safari controls over a frozen screen.
