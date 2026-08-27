@@ -174,6 +174,9 @@ export default function LocationsPage() {
   if (!selectedLocation) return null
 
   const applicationStatus = getLocationApplicationStatus(selectedLocation.approval)
+  const hasApprovedLocation = userLocations.some(
+    (location) => getLocationApplicationStatus(location.approval) === "approved",
+  )
   const addressSummary = [selectedLocation.street, selectedLocation.city, selectedLocation.state]
     .filter(Boolean)
     .join(", ")
@@ -245,14 +248,14 @@ export default function LocationsPage() {
             </Badge>
           </div>
 
-          {/* A pending till is real and can be funded, but nobody can pay into it
-              from the app until the listing is published. Left unsaid, a
-              merchant reads an empty balance as something being broken. */}
+          {/* While the listing is under review the wallet is deliberately not
+              mentioned at all — no address, no balance, no send surface. A
+              merchant mid-onboarding cannot use any of it yet, and showing it
+              only raises questions the approval email answers. */}
           {applicationStatus === "pending" && (
             <p className="text-sm leading-relaxed text-muted-foreground">
-              {paymentAddress === ""
-                ? "This location will not appear on the SFLuv map or take customer payments until our team approves the listing. We will email you when it has been reviewed."
-                : "This location has its wallet already, but it will not appear on the SFLuv map or take customer payments until our team approves the listing. We will email you when it has been reviewed."}
+              This location will not appear on the SFLuv map or take customer payments until our
+              team approves the listing. We will email you when it has been reviewed.
             </p>
           )}
           {applicationStatus === "rejected" && (
@@ -286,6 +289,7 @@ export default function LocationsPage() {
           )}
         </CardHeader>
 
+        {applicationStatus !== "pending" && (
         <CardContent className="space-y-4">
           {paymentAddress === "" ? (
             <div className="rounded-lg border bg-muted/25 px-4 py-5 text-sm text-muted-foreground">
@@ -353,6 +357,7 @@ export default function LocationsPage() {
             </>
           )}
         </CardContent>
+        )}
       </Card>
 
       <div className="flex flex-col gap-3 sm:flex-row">
@@ -362,10 +367,12 @@ export default function LocationsPage() {
             Add another location
           </Button>
         )}
-        <Button variant="outline" className="w-full sm:w-auto" onClick={() => router.push("/wallets")}>
-          <Wallet className="mr-2 h-4 w-4" />
-          Your personal wallets
-        </Button>
+        {hasApprovedLocation && (
+          <Button variant="outline" className="w-full sm:w-auto" onClick={() => router.push("/wallets")}>
+            <Wallet className="mr-2 h-4 w-4" />
+            Your personal wallets
+          </Button>
+        )}
       </div>
 
       {applying && (
