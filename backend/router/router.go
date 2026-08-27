@@ -668,6 +668,11 @@ var merchantOnboardingOpenRoutes = map[string]struct{}{
 	// moves nothing, and a merchant needs one before a location can be paid
 	// into anyway.
 	"POST /wallets": {},
+	// The companion write to POST /wallets, and gated it fails the same way:
+	// the client designates its primary wallet on every sign-in and throws the
+	// person out when the call refuses. Choosing which of your own registered
+	// wallets is primary moves nothing either — it is part of arriving.
+	"PUT /users/primary-wallet": {},
 }
 
 // merchantOnboardingGateAllows scopes the gate by method, not by a list of
