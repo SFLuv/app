@@ -30,6 +30,7 @@ export default function MerchantOnboardingPage() {
   const [googleReady, setGoogleReady] = useState(false)
   const [googleLoadError, setGoogleLoadError] = useState<string | null>(null)
   const [editingLocationId, setEditingLocationId] = useState<number | null>(null)
+  const [startingAnotherApplication, setStartingAnotherApplication] = useState(false)
 
   useEffect(() => {
     let mounted = true
@@ -111,7 +112,18 @@ export default function MerchantOnboardingPage() {
     )
   }
 
-  const showForm = editingLocation !== undefined || sortedUserLocations.length === 0
+  // The newest listing that was not rejected, else the newest of any kind:
+  // whichever best describes the business is what a second shop inherits.
+  const prefillSource = startingAnotherApplication
+    ? (sortedUserLocations.find(
+        (location) => getLocationApplicationStatus(location.approval) !== "rejected",
+      ) ?? sortedUserLocations[0])
+    : undefined
+
+  const showForm =
+    editingLocation !== undefined ||
+    sortedUserLocations.length === 0 ||
+    startingAnotherApplication
   // Only a new application needs the Places picker, so an edit does not wait on
   // a script it will never call.
   const needsPlacePicker = showForm && editingLocation === undefined
@@ -187,11 +199,21 @@ export default function MerchantOnboardingPage() {
               Cancel editing
             </Button>
           )}
+          {startingAnotherApplication && editingLocation === undefined && (
+            <Button variant="ghost" onClick={() => setStartingAnotherApplication(false)}>
+              Back to your applications
+            </Button>
+          )}
           <MerchantApprovalForm
-            key={editingLocation?.id ?? "new-application"}
+            key={
+              editingLocation?.id ??
+              (startingAnotherApplication ? "another-application" : "new-application")
+            }
             existingLocation={editingLocation}
+            prefillFrom={editingLocation === undefined ? prefillSource : undefined}
             onSaved={() => {
               setEditingLocationId(null)
+              setStartingAnotherApplication(false)
               void refreshUserRecord()
             }}
           />
@@ -202,6 +224,26 @@ export default function MerchantOnboardingPage() {
         <p className="text-sm text-muted-foreground">
           Your application is with the SFLuv team. We will email you when it has been reviewed.
         </p>
+      )}
+
+      {!showForm && (
+        <Card className="border-border/70">
+          <CardContent className="flex flex-col gap-3 p-5 sm:flex-row sm:items-center sm:justify-between">
+            <div className="space-y-1">
+              <p className="text-sm font-semibold text-foreground">Have another location?</p>
+              <p className="text-sm leading-6 text-muted-foreground">
+                Each location gets its own listing and till wallet. We will carry your business
+                details over so you only fill in what is different.
+              </p>
+            </div>
+            <Button
+              className="shrink-0 bg-[#eb6c6c] hover:bg-[#d55c5c]"
+              onClick={() => setStartingAnotherApplication(true)}
+            >
+              Start its application
+            </Button>
+          </CardContent>
+        </Card>
       )}
 
       {!showForm && !hasLiveApplication && rejectedLocations.length > 0 && (
