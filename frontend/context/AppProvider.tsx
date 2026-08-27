@@ -176,6 +176,13 @@ interface AppContextType {
   linkApple: () => Promise<void>;
   unlinkApple: () => Promise<void>;
   authFetch: (endpoint: string, options?: RequestInit) => Promise<Response>;
+  /**
+   * True while a merchant account with no listed shop must see the onboarding
+   * screen and nothing else. Consumed by MerchantOnboardingWall in Providers,
+   * which renders the onboarding page in place of the route — rendering, not
+   * navigating, because a redirect can lose a race and a render cannot.
+   */
+  merchantOnboardingWalled: boolean;
 
   // Web3 Functionality
   wallets: AppWallet[];
@@ -567,6 +574,16 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     allowPolicyRoute;
   const merchantGateBlocksView =
     merchantOnboardingIncomplete && !merchantGateAllowsPath;
+  // Temporary diagnostic for the blank-page hunt — remove once resolved.
+  // eslint-disable-next-line no-console
+  console.log("[gate]", {
+    status,
+    acct: user?.accountType,
+    completedAt: user?.merchantOnboardingCompletedAt ?? null,
+    pathname,
+    incomplete: merchantOnboardingIncomplete,
+    blocks: merchantGateBlocksView,
+  });
 
   const clearAuthenticatedState = (options?: {
     clearDeletedAccount?: boolean;
@@ -1903,6 +1920,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
           linkApple,
           unlinkApple,
           authFetch,
+          merchantOnboardingWalled: merchantGateBlocksView,
           mapLocations,
           updateUser,
           approveMerchantStatus,
@@ -1938,7 +1956,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
             />
           ) : (
             <>
-              {merchantGateBlocksView ? null : children}
+              {children}
               {policyStatus && privyAuthenticated && !allowPolicyRoute ? (
                 <PolicyAcceptanceOverlay
                   key={policyStatus.user_id}

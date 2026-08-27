@@ -9,6 +9,7 @@ import LocationProvider from "./LocationProvider"
 import ContactsProvider from "./ContactsProvider"
 import TransactionProvider from "./TransactionProvider"
 import { ChainConfigProvider, useChainConfig } from "./ChainConfigProvider"
+import { MerchantOnboardingWall } from "@/components/merchant/merchant-onboarding-wall"
 
 const Providers = ({ children }: { children: ReactNode }) => {
   return (
@@ -74,7 +75,7 @@ const PrivyShell = ({ children }: { children: ReactNode }) => {
             <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-[#eb6c6c]"></div>
           </div>
         }>
-        {children}
+        <MerchantOnboardingWall>{children}</MerchantOnboardingWall>
         </Suspense>
         </TransactionProvider>
         </LocationProvider>
