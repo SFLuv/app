@@ -673,8 +673,13 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     if (!merchantGateBlocksView) {
       return;
     }
+    // pathname is a dependency on purpose: other code also navigates — the
+    // OAuth landing runs clearAuthenticatedState, which replaces to /map — and
+    // when two replaces race, the last one wins. Re-asserting on every path
+    // change means losing a race once costs a frame, not the whole session
+    // stuck on a blanked page.
     replace(MERCHANT_ONBOARDING_PATH);
-  }, [merchantGateBlocksView, replace]);
+  }, [merchantGateBlocksView, pathname, replace]);
 
   useEffect(() => {
     if (error) console.error(error);
