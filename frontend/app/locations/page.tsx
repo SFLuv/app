@@ -424,7 +424,10 @@ export default function LocationsPage() {
                       onClick={() => setShowTipSendModal(true)}
                       className="h-12 flex-col gap-1 text-sm"
                     >
-                      <Send className="h-4 w-4" />
+                      {/* 1.5x and 2x by eye: the paper plane fills its box while
+                          the corner arrow floats in its own, so equal nominal
+                          sizes read as unequal icons. */}
+                      <Send className="h-6 w-6" />
                       <span>Send</span>
                     </Button>
                     <Button
@@ -432,7 +435,7 @@ export default function LocationsPage() {
                       onClick={() => setShowTipReceiveModal(true)}
                       className="h-12 flex-col gap-1 text-sm hover:bg-primary/65"
                     >
-                      <ArrowDownLeft className="h-4 w-4" />
+                      <ArrowDownLeft className="h-8 w-8" />
                       <span>Receive</span>
                     </Button>
                   </div>
