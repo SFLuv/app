@@ -88,7 +88,6 @@ import {
   hasOnlyRejectedApplications,
   MERCHANT_ONBOARDING_PATH,
 } from "@/lib/merchant-onboarding";
-import { MerchantOnboardingBanner } from "@/components/merchant/merchant-onboarding-banner";
 
 // const mockUser: User = { id: "user3", name: "Bob Johnson", email: "bob@example.com", isMerchant: true, isAdmin: false, isOrganizer: false }
 export type UserStatus = "loading" | "authenticated" | "unauthenticated";
@@ -556,10 +555,18 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     (status === "authenticated" &&
       user?.accountType === "merchant" &&
       hasOnlyRejectedApplications(userLocations));
-  // Sending them there is a one-time redirect per sign-in, deliberately. The
-  // product owner asked for onboarding first, not for the rest of the app to be
-  // walled off, so a merchant who navigates back to the map has to stay there.
-  const merchantOnboardingRoutedForRef = useRef<string | null>(null);
+  // A wall, not a nudge — the product owner's call, reversing the earlier
+  // one-redirect-per-sign-in design. A merchant who has not listed a shop sees
+  // the onboarding form and nothing else, on every sign-in, until a location
+  // exists. Only the onboarding screen itself, the chrome-free account exits,
+  // and the policy texts the form links to stay reachable. Derived from server
+  // state rather than remembered per session, so it survives logging out.
+  const merchantGateAllowsPath =
+    pathname.startsWith(MERCHANT_ONBOARDING_PATH) ||
+    isChromeFreeRoute(pathname) ||
+    allowPolicyRoute;
+  const merchantGateBlocksView =
+    merchantOnboardingIncomplete && !merchantGateAllowsPath;
 
   const clearAuthenticatedState = (options?: {
     clearDeletedAccount?: boolean;
@@ -609,7 +616,6 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     setPolicyError("");
     // Cleared so signing back in routes to onboarding again rather than
     // remembering that this account was already sent there once.
-    merchantOnboardingRoutedForRef.current = null;
   };
 
   const activateDeletedAccountGate = (
@@ -664,25 +670,11 @@ export default function AppProvider({ children }: { children: ReactNode }) {
   ]);
 
   useEffect(() => {
-    if (!merchantOnboardingIncomplete || !user?.id) {
+    if (!merchantGateBlocksView) {
       return;
     }
-    if (merchantOnboardingRoutedForRef.current === user.id) {
-      return;
-    }
-    // Not from the screens that drop the app chrome. The policy texts open in
-    // their own tab from the acceptance overlay, and the account exits are the
-    // last place to hijack; leaving the ref unset means they are still routed
-    // the moment they land somewhere ordinary.
-    if (isChromeFreeRoute(pathname)) {
-      return;
-    }
-
-    merchantOnboardingRoutedForRef.current = user.id;
-    if (!pathname.startsWith(MERCHANT_ONBOARDING_PATH)) {
-      replace(MERCHANT_ONBOARDING_PATH);
-    }
-  }, [merchantOnboardingIncomplete, pathname, replace, user?.id]);
+    replace(MERCHANT_ONBOARDING_PATH);
+  }, [merchantGateBlocksView, replace]);
 
   useEffect(() => {
     if (error) console.error(error);
@@ -1941,8 +1933,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
             />
           ) : (
             <>
-              {children}
-              {merchantOnboardingRequired ? <MerchantOnboardingBanner /> : null}
+              {merchantGateBlocksView ? null : children}
               {policyStatus && privyAuthenticated && !allowPolicyRoute ? (
                 <PolicyAcceptanceOverlay
                   key={policyStatus.user_id}
