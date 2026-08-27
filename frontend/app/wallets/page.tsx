@@ -60,6 +60,16 @@ export default function WalletsPage() {
   )
 
 
+
+  // Merchants have no personal-wallets surface: their money lives in each
+  // location's till, and the locations page is where all of it is managed.
+  // Landing here — an old bookmark, a stale link — just forwards them home.
+  useEffect(() => {
+    if (status !== "authenticated") return
+    if (user?.accountType === "merchant" || user?.isMerchant === true) {
+      router.replace("/locations")
+    }
+  }, [router, status, user?.accountType, user?.isMerchant])
   useEffect(() => {
     if (!wallets.length) {
       refreshWallets()

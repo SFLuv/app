@@ -116,8 +116,9 @@ export function DashboardSidebar() {
     const authedItems: NavItem[] = [
       // A merchant is paid into a location's till, not a wallet of their own, so
       // Locations takes the slot Connected Wallets holds for everyone else —
-      // same position, because it is the same errand. Their personal wallets are
-      // still reachable from that page.
+      // same position, because it is the same errand. There is no personal-
+      // wallets surface for merchants at all; the wallets page itself forwards
+      // them back to Locations.
       isMerchantAccount
         ? {
             title: "Locations",

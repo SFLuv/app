@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useRouter } from "next/navigation"
 import { ArrowDownLeft, ArrowLeftRight, Check, Copy, RefreshCw, Send, Store, Wallet } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
@@ -48,6 +48,9 @@ export default function LocationsPage() {
   const [showSendModal, setShowSendModal] = useState(false)
   const [showReceiveModal, setShowReceiveModal] = useState(false)
   const [showUnwrapModal, setShowUnwrapModal] = useState(false)
+  const [showTipSendModal, setShowTipSendModal] = useState(false)
+  const [showTipReceiveModal, setShowTipReceiveModal] = useState(false)
+  const [tipBalance, setTipBalance] = useState<number | null>(null)
   const [applying, setApplying] = useState(false)
   const [googleReady, setGoogleReady] = useState(false)
   const [googleLoadError, setGoogleLoadError] = useState<string | null>(null)
@@ -72,6 +75,56 @@ export default function LocationsPage() {
     if (paymentAddress === "") return undefined
     return wallets.find((wallet) => wallet.address?.toLowerCase() === paymentAddress.toLowerCase())
   }, [paymentAddress, wallets])
+
+  // The tipping account, when the location has one that is not just the till
+  // under another name.
+  const tipAddress = useMemo(() => {
+    const raw = (selectedLocation?.tip_to_address || "").trim()
+    if (raw === "" || raw.toLowerCase() === paymentAddress.toLowerCase()) return ""
+    return raw
+  }, [paymentAddress, selectedLocation])
+
+  const tipWallet = useMemo(() => {
+    if (tipAddress === "") return undefined
+    return wallets.find((wallet) => wallet.address?.toLowerCase() === tipAddress.toLowerCase())
+  }, [tipAddress, wallets])
+
+  // The session's wallet list is built at sign-in, so a till minted after that
+  // — a location approved mid-session, most commonly — is missing from it
+  // until something rebuilds the list. The personal-wallets page used to be
+  // that something, purely by accident of its own mount effect; this page has
+  // to be able to heal itself. Once per address, not in a loop: an address
+  // whose wallet cannot be built would otherwise refetch forever.
+  const walletsHealRequestedRef = useRef<Set<string>>(new Set())
+  useEffect(() => {
+    if (status !== "authenticated" || walletsStatus === "loading") return
+    const missing = [paymentAddress, tipAddress].filter(
+      (address) =>
+        address !== "" &&
+        !wallets.some((wallet) => wallet.address?.toLowerCase() === address.toLowerCase()),
+    )
+    const fresh = missing.filter((address) => !walletsHealRequestedRef.current.has(address))
+    if (fresh.length === 0) return
+    fresh.forEach((address) => walletsHealRequestedRef.current.add(address))
+    void refreshWallets()
+  }, [paymentAddress, refreshWallets, status, tipAddress, wallets, walletsStatus])
+
+  // Tip balance follows the tipping wallet the way the main balance follows
+  // the till: blanked on switch so one shop's tips never show under another.
+  useEffect(() => {
+    let cancelled = false
+    setTipBalance(null)
+    if (!tipWallet) return
+    tipWallet
+      .getSFLUVBalanceFormatted()
+      .then((value) => {
+        if (!cancelled) setTipBalance(value)
+      })
+      .catch(console.error)
+    return () => {
+      cancelled = true
+    }
+  }, [tipWallet])
 
   // Showing the shop they just applied for is the only acknowledgement the form
   // leaves behind — it closes itself on success, and the page would otherwise
@@ -174,9 +227,6 @@ export default function LocationsPage() {
   if (!selectedLocation) return null
 
   const applicationStatus = getLocationApplicationStatus(selectedLocation.approval)
-  const hasApprovedLocation = userLocations.some(
-    (location) => getLocationApplicationStatus(location.approval) === "approved",
-  )
   const addressSummary = [selectedLocation.street, selectedLocation.city, selectedLocation.state]
     .filter(Boolean)
     .join(", ")
@@ -194,9 +244,19 @@ export default function LocationsPage() {
             The wallet each of your shops is paid into
           </p>
         </div>
-        <Button variant="ghost" size="sm" onClick={handleRefresh} disabled={refreshing || !locationWallet}>
-          <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            className="bg-[#eb6c6c] hover:bg-[#d55c5c]"
+            onClick={() => setApplying(true)}
+            disabled={applying}
+          >
+            <Store className="mr-2 h-4 w-4" />
+            Add another location
+          </Button>
+          <Button variant="ghost" size="sm" onClick={handleRefresh} disabled={refreshing || !locationWallet}>
+            <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
+          </Button>
+        </div>
       </div>
 
       {/* One shop needs no chooser — the page is already about it. */}
@@ -354,26 +414,41 @@ export default function LocationsPage() {
                   </Button>
                 )}
               </div>
+
+              {tipWallet && (
+                <div className="space-y-3 rounded-lg border bg-muted/20 p-4">
+                  <p className="text-sm font-semibold text-foreground">Tipping account</p>
+                  <WalletBalanceCard balance={tipBalance || 0} showBalance />
+                  <div className="grid grid-cols-2 gap-3">
+                    <Button
+                      onClick={() => setShowTipSendModal(true)}
+                      className="h-12 flex-col gap-1 text-sm"
+                    >
+                      <Send className="h-4 w-4" />
+                      <span>Send</span>
+                    </Button>
+                    <Button
+                      variant="outline"
+                      onClick={() => setShowTipReceiveModal(true)}
+                      className="h-12 flex-col gap-1 text-sm hover:bg-primary/65"
+                    >
+                      <ArrowDownLeft className="h-4 w-4" />
+                      <span>Receive</span>
+                    </Button>
+                  </div>
+                </div>
+              )}
+              {tipAddress !== "" && !tipWallet && (
+                <p className="text-sm text-muted-foreground">
+                  This location's tipping account could not be opened in this session — reload the
+                  page if it does not appear in a moment.
+                </p>
+              )}
             </>
           )}
         </CardContent>
         )}
       </Card>
-
-      <div className="flex flex-col gap-3 sm:flex-row">
-        {!applying && (
-          <Button className="w-full bg-[#eb6c6c] hover:bg-[#d55c5c] sm:w-auto" onClick={() => setApplying(true)}>
-            <Store className="mr-2 h-4 w-4" />
-            Add another location
-          </Button>
-        )}
-        {hasApprovedLocation && (
-          <Button variant="outline" className="w-full sm:w-auto" onClick={() => router.push("/wallets")}>
-            <Wallet className="mr-2 h-4 w-4" />
-            Your personal wallets
-          </Button>
-        )}
-      </div>
 
       {applying && (
         <div className="space-y-3">
@@ -445,6 +520,22 @@ export default function LocationsPage() {
               onSuccess={updateBalance}
             />
           )}
+        </>
+      )}
+
+      {tipWallet && (
+        <>
+          <SendCryptoModal
+            open={showTipSendModal}
+            onOpenChange={setShowTipSendModal}
+            wallet={tipWallet}
+            balance={tipBalance || 0}
+          />
+          <ReceiveCryptoModal
+            open={showTipReceiveModal}
+            onOpenChange={setShowTipReceiveModal}
+            wallet={tipWallet}
+          />
         </>
       )}
     </div>
