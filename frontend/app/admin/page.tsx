@@ -2431,13 +2431,15 @@ export default function AdminPage() {
   // download a payment QR for every storefront the merchant operates.
   const merchantOwnerLocations: AuthedLocation[] = useMemo(() => {
     if (!selectedLocationForReview) return []
-    const ownerId = (selectedLocationForReview as AuthedLocation).owner_id
-    if (!ownerId) return [selectedLocationForReview as AuthedLocation]
-    const sameOwner = authedMapLocations.filter(
-      (location) => location.owner_id === ownerId,
-    )
-    return sameOwner.length > 0 ? sameOwner : [selectedLocationForReview as AuthedLocation]
-  }, [selectedLocationForReview, authedMapLocations])
+    // Only the location under review, and only once it is approved. A pending
+    // listing's wallet is not settled yet, so a QR for it is a promise nobody
+    // should print. And the owner-wide list this used to build matched rows by
+    // owner_id — a field these rows do not always carry — so undefined ===
+    // undefined swept every ownerless location in the city into one modal.
+    // One location, one wallet, one QR.
+    if ((selectedLocationForReview as AuthedLocation).approval !== true) return []
+    return [selectedLocationForReview as AuthedLocation]
+  }, [selectedLocationForReview])
 
   const buildMerchantQrForLocation = (location: AuthedLocation): string => {
     const payTo = (location.pay_to_address || "").trim()
