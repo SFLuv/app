@@ -337,3 +337,34 @@ acknowledges; a cleared filing removes the tier at the source.
 | Change | hours | repo |
 |---|---|---|
 | Back-out no longer acknowledges the tier (`e830544`) | 0.3 | mobile |
+
+# Round 6 — Aug 26 (evening) – Aug 27
+
+**Repos:** `app`, `mobile-app`, `website` · **Total active hours: 2.9**
+
+Commit clustering gives 2.2h (Aug 26 16:45–17:30, Aug 27 10:02–11:55); +0.7h
+stated adjustment for diagnosis that preceded commits — the simulator-freeze
+forensics behind the Safari decision, and the Debug-build/keychain hunt.
+
+## Features
+
+| Feature | hours | repo |
+|---|---|---|
+| The in-app browser sheet abandoned for the system Safari app, after a third distinct presentation failure; presentation had already moved to the modal's own dismissal callback, and the notification panel now navigates only after it has dismissed | 1.0 | mobile |
+| Privy storage fallback: unsigned local builds have no keychain entitlement, so SecureStore throws and Privy hung at init forever; keychain-first with a loud AsyncStorage fallback | 0.6 | mobile |
+| The W-9 received page hands people back to the app (auto-raised open prompt + button); env examples now document the whole W-9 block, and the stale old-system block is gone | 0.5 | app |
+| Volunteers pages show new events without a manual reload — re-render on tab focus and every 30s, shared cache 60s→10s | 0.4 | website |
+| Event-data cleanup for human testing (188 script-made events with children removed by exact signature; signups cleared) and refresh-qr-windows rewritten for the revamped epoch-second schema | 0.4 | app |
+
+## Worth knowing
+
+- **Only a properly signed build has a keychain.** xcodebuild with signing
+  disabled produces an app whose SecureStore always throws; expo run:ios is
+  currently unusable on this machine (its device probe misclassifies the
+  simulator and demands certificates), and prebuild regenerates the project
+  with the production bundle id unless IOS_BUNDLE_IDENTIFIER is exported.
+  The working local recipe: prebuild with the env var, xcodebuild Release
+  pinned to the dev bundle id, install by that id.
+- **The security pass before first push found no secrets** in any of the 115
+  outgoing commits across the three repos; the captured-token file never
+  entered git, and both real env files are ignored.
