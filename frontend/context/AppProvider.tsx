@@ -1990,8 +1990,7 @@ const ACCOUNT_TYPE_OPTIONS: {
   {
     value: "merchant",
     title: "Merchant account",
-    detail:
-      "For a business that accepts SFLuv. You list your shop next, and it gets its own till wallet.",
+    detail: "For businesses that want to accept SFLUV.",
   },
 ];
 
@@ -2091,11 +2090,6 @@ function PolicyAcceptanceOverlay({
                 );
               })}
             </div>
-            <p className="text-sm text-muted-foreground">
-              You answer this once. It is stored with your account and cannot be
-              changed from the app afterwards — SFLuv support has to correct it
-              for you.
-            </p>
           </div>
 
           <div className="space-y-3 rounded-2xl border border-border/70 bg-muted/30 p-4">
@@ -2146,7 +2140,7 @@ function PolicyAcceptanceOverlay({
 
           <p className="text-sm text-muted-foreground">
             The account type and the Privacy Policy checkbox are required. Email
-            opt-in is optional and You can unsubscribe later at any time.
+            opt-in is optional and you can unsubscribe later at any time.
           </p>
 
           {error ? (
