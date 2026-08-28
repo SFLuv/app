@@ -56,10 +56,15 @@ over out-of-band (1Password). This file is the map, not the treasure.
 - Rollback is env-only: `W9_ENFORCEMENT=shadow` keeps every payout flowing
   while leaving the decision log intact; `W9_PROVIDER=fake` exists for dev and
   must never be set in production.
-- **IP whitelisting is enabled on the live account** (chosen at go-live): the
-  live API accepts requests only from the production VM's static egress IP.
+- **IP whitelisting is enabled on the live account** (chosen at go-live), and
+  the whitelisted address is the **backend VM's egress IP: `35.226.192.201`**
+  (`sfluv-app-backend`, us-central1-c; verified with `curl ifconfig.me` from
+  the box). It is deliberately NOT `104.154.240.202` — that is the separate
+  `sfluv-app-load-balancer` VM that `api.sfluv.org` resolves to; inbound
+  traffic enters there, but outbound API calls leave the backend as itself.
   Two consequences: leaked live credentials are useless from any other
-  machine, and **if the server ever migrates or its IP changes, every API
-  call starts returning 401 until the whitelist is updated in the TaxBandits
-  console** — that outage looks like bad credentials, not a network change.
-  Webhooks are unaffected (inbound to us, authenticated by HMAC).
+  machine, and **if the backend VM migrates or its external IP changes, every
+  API call starts returning 401 until the whitelist is updated in the
+  TaxBandits console** — that outage looks like bad credentials, not a
+  network change. Webhooks are unaffected (they arrive inbound through the
+  load balancer and are authenticated by HMAC, not by any whitelist).
