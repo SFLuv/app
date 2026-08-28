@@ -68,3 +68,16 @@ over out-of-band (1Password). This file is the map, not the treasure.
   TaxBandits console** — that outage looks like bad credentials, not a
   network change. Webhooks are unaffected (they arrive inbound through the
   load balancer and are authenticated by HMAC, not by any whitelist).
+- **Before go-live, confirm `35.226.192.201` is a RESERVED STATIC address**
+  (VPC network → IP addresses → Type column). GCP external IPs are ephemeral
+  unless reserved, and an ephemeral one can change on a VM stop/start —
+  silently breaking every API call. Promote in place if needed.
+- **A migration off GCP (Railway is under consideration) must handle egress
+  first.** Railway's default egress is a shared dynamic pool, which IP
+  whitelisting cannot tolerate. Either enable Railway's static outbound IP
+  feature and add the new IPs to the TaxBandits whitelist BEFORE cutover
+  (the list holds 10, so both platforms can coexist during transition), or
+  switch the account to Domain whitelisting — which requires adding their
+  Reference-ID Referer header to every API call in the adapter. The webhook
+  registration survives migration untouched as long as api.sfluv.org moves
+  with the backend.
