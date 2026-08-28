@@ -56,3 +56,10 @@ over out-of-band (1Password). This file is the map, not the treasure.
 - Rollback is env-only: `W9_ENFORCEMENT=shadow` keeps every payout flowing
   while leaving the decision log intact; `W9_PROVIDER=fake` exists for dev and
   must never be set in production.
+- **IP whitelisting is enabled on the live account** (chosen at go-live): the
+  live API accepts requests only from the production VM's static egress IP.
+  Two consequences: leaked live credentials are useless from any other
+  machine, and **if the server ever migrates or its IP changes, every API
+  call starts returning 401 until the whitelist is updated in the TaxBandits
+  console** — that outage looks like bad credentials, not a network change.
+  Webhooks are unaffected (inbound to us, authenticated by HMAC).
