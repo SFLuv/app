@@ -424,10 +424,9 @@ export default function LocationsPage() {
                       onClick={() => setShowTipSendModal(true)}
                       className="h-12 flex-col gap-1 text-sm"
                     >
-                      {/* 1.5x and 2x by eye: the paper plane fills its box while
-                          the corner arrow floats in its own, so equal nominal
-                          sizes read as unequal icons. */}
-                      <Send className="h-6 w-6" style={{ width: 24, height: 24 }} />
+                      {/* The paper plane's glyph fills ~85% of its 24-unit
+                          canvas, so sizing the box sizes the icon. */}
+                      <Send style={{ width: 24, height: 24 }} />
                       <span>Send</span>
                     </Button>
                     <Button
@@ -435,7 +434,13 @@ export default function LocationsPage() {
                       onClick={() => setShowTipReceiveModal(true)}
                       className="h-12 flex-col gap-1 text-sm hover:bg-primary/65"
                     >
-                      <ArrowDownLeft className="h-8 w-8" style={{ width: 32, height: 32 }} />
+                      {/* The corner arrow's glyph spans only units 7–17 of
+                          its 24-unit canvas — 42% ink, the rest padding — so
+                          growing the box mostly grew invisible margin. Cropping
+                          the viewBox to the glyph makes the box we size the
+                          arrow we see, and 24px here paints about the same as
+                          the plane at 24px. */}
+                      <ArrowDownLeft viewBox="5 5 14 14" style={{ width: 24, height: 24 }} />
                       <span>Receive</span>
                     </Button>
                   </div>
