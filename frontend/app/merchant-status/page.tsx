@@ -7,6 +7,7 @@ import { AlertCircle } from "lucide-react"
 import { useRouter } from "next/navigation"
 import { useMemo } from "react"
 import { LocationApplicationStatusCard } from "@/components/merchant/location-application-status"
+import { CancelLocationApplication } from "@/components/merchant/cancel-location-application"
 import { MERCHANT_ONBOARDING_PATH } from "@/lib/merchant-onboarding"
 
 export default function MerchantStatusPage() {
@@ -66,7 +67,12 @@ export default function MerchantStatusPage() {
       {status !== "loading" && sortedUserLocations.length > 0 && (
         <div className="space-y-4 sm:space-y-5">
           {sortedUserLocations.map((location) => (
-            <LocationApplicationStatusCard key={location.id} location={location} />
+            <LocationApplicationStatusCard key={location.id} location={location}>
+              {/* Renders itself only while the application is still pending, so
+                  this screen — which is a read of where things stand — carries
+                  the one action that belongs to that state and nothing else. */}
+              <CancelLocationApplication location={location} />
+            </LocationApplicationStatusCard>
           ))}
         </div>
       )}

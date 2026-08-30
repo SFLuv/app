@@ -221,8 +221,50 @@ func (a *AppService) AddLocation(w http.ResponseWriter, r *http.Request) {
 </table>`, utils.EscapeEmailHTML(location.Name), utils.EscapeEmailHTML(location.OwnerID)),
 	)
 
-	w.WriteHeader(http.StatusCreated)
-	w.Write([]byte("success"))
+	// The id, not the old "success" text. The stepper needs it: opening hours
+	// are optional on the form but are written through their own endpoint, which
+	// is addressed by location id, and the confirmation screen links to the
+	// listing it has just created. Still a 201 with a body, so a client that
+	// only reads the status code is unaffected.
+	writeJSON(w, http.StatusCreated, map[string]any{"id": location.ID})
+}
+
+// CancelLocationApplication withdraws an application the caller owns while it
+// is still waiting to be reviewed.
+//
+// The merchant's own way out. Before this, an application submitted by mistake
+// — the wrong branch, a duplicate, a shop they decided against — sat in the
+// admin queue with nothing the merchant could do about it, and it also pinned
+// their account as a merchant account, because a pending listing is one of the
+// two things that stops a revert to personal.
+func (a *AppService) CancelLocationApplication(w http.ResponseWriter, r *http.Request) {
+	userDid := utils.GetDid(r)
+	if userDid == nil {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	locationID, err := strconv.ParseUint(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	err = a.db.CancelPendingLocation(r.Context(), *userDid, locationID)
+	if errors.Is(err, db.ErrLocationNotCancellable) {
+		writeJSON(w, http.StatusConflict, map[string]string{
+			"error": "This application has already been reviewed, so it can no longer be cancelled.",
+		})
+		return
+	}
+	if err != nil {
+		a.logger.Logf("error cancelling location %d for %s: %s", locationID, *userDid, err.Error())
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	a.logger.Logf("user %s cancelled their pending location application %d", *userDid, locationID)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (a *AppService) UpdateLocation(w http.ResponseWriter, r *http.Request) {
@@ -390,7 +432,7 @@ func (a *AppService) sendLocationApprovedEmail(ctx context.Context, locationID u
 
 	err = sender.SendEmail(
 		contact.AdminEmail,
-		fmt.Sprintf("%s %s", contact.ContactFirstName, contact.ContactLastName),
+		contact.ContactName,
 		"Location Approved",
 		htmlContent,
 		utils.NotificationFromEmail(),

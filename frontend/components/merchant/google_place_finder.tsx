@@ -323,15 +323,21 @@ export default function PlaceAutocomplete({ value, onSelect }: PlaceAutocomplete
         <p className="text-xs text-red-600 dark:text-red-300">{searchError}</p>
       ) : null}
 
-      <button
-        className="text-xs text-[#eb6c6c] underline"
-        onClick={() => switchMode(mode === "business" ? "address" : "business")}
-        type="button"
-      >
-        {mode === "business"
-          ? "My business isn't on Google Maps — enter your address manually"
-          : "Back to searching for a Google business listing"}
-      </button>
+      {/* A checkbox rather than a link, because it is a mode the merchant stays
+          in rather than a one-way jump: unticking it puts the business search
+          back, and the ticked state is what says why the name and category
+          fields below have appeared. */}
+      <label className="flex items-start gap-2 pt-1">
+        <input
+          type="checkbox"
+          className="mt-0.5 h-4 w-4 accent-[#eb6c6c]"
+          checked={mode === "address"}
+          onChange={(event) => switchMode(event.target.checked ? "address" : "business")}
+        />
+        <span className="text-xs text-gray-600 dark:text-gray-400">
+          Can&apos;t find my location — I&apos;ll enter the address and details myself
+        </span>
+      </label>
     </div>
   );
 }

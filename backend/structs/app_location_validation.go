@@ -108,9 +108,11 @@ func (l *Location) NormalizeForSubmission() {
 	trim(&l.Website)
 	trim(&l.ImageURL)
 	trim(&l.MapsPage)
+	trim(&l.ContactName)
 	trim(&l.ContactFirstName)
 	trim(&l.ContactLastName)
 	trim(&l.ContactPhone)
+	trim(&l.ReferralSource)
 	trim(&l.PosSystem)
 	trim(&l.SoleProprietorship)
 	trim(&l.TippingPolicy)
@@ -119,6 +121,22 @@ func (l *Location) NormalizeForSubmission() {
 	trim(&l.TabletModel)
 	trim(&l.MessagingService)
 	trim(&l.Reference)
+
+	// Contact phone lives in two columns — see Location.ContactPhone — and the
+	// form only ever fills one of them. Mirroring here rather than at each write
+	// site means the admin panel, the approval email and the merchant's own form
+	// cannot disagree about which number is the contact's.
+	if l.AdminPhone == "" {
+		l.AdminPhone = l.ContactPhone
+	}
+	if l.ContactPhone == "" {
+		l.ContactPhone = l.AdminPhone
+	}
+	// Likewise the name. A listing filled in under the single-sheet form carries
+	// the pair and no ContactName; one filled in now carries the reverse.
+	if l.ContactName == "" {
+		l.ContactName = strings.TrimSpace(strings.Join(filterEmpty(l.ContactFirstName, l.ContactLastName), " "))
+	}
 
 	hours := make([]string, 0, len(l.OpeningHours))
 	for _, entry := range l.OpeningHours {
@@ -179,10 +197,12 @@ func (l *Location) ValidateForSubmission() error {
 		{"street", "Street address", l.Street},
 		{"city", "City", l.City},
 		{"description", "Business description", l.Description},
-		{"contact_firstname", "Contact first name", l.ContactFirstName},
-		{"contact_lastname", "Contact last name", l.ContactLastName},
+		{"type", "Business type", l.Type},
+		{"contact_name", "Contact name", l.ContactName},
 		{"admin_email", "Contact email", l.AdminEmail},
 		{"admin_phone", "Contact phone", l.AdminPhone},
+		{"referral_source", "How you heard about SFLuv", l.ReferralSource},
+		{"pos_system", "POS type", l.PosSystem},
 	}
 	// A Google listing must carry the place id it was verified against. A manual
 	// listing must not carry one at all — accepting both would leave it ambiguous
@@ -202,6 +222,17 @@ func (l *Location) ValidateForSubmission() error {
 		}
 	}
 
+	// Every question on the Payment System step is required, and both of these
+	// are yes/no. Unset is a third state that only a client which skipped the
+	// step can produce, and accepts_tips decides whether the shop gets a tipping
+	// wallet at approval — guessing it would be a decision made for the merchant.
+	if l.AcceptsTips == nil {
+		return newLocationValidationError("accepts_tips", "Tell us whether this location accepts tips.")
+	}
+	if l.HasStaffTablet == nil {
+		return newLocationValidationError("has_staff_tablet", "Tell us whether staff have a tablet or phone available.")
+	}
+
 	lengths := []struct {
 		field string
 		label string
@@ -211,7 +242,9 @@ func (l *Location) ValidateForSubmission() error {
 		{"name", "Business name", l.Name, maxLocationTextLength},
 		{"description", "Business description", l.Description, maxLocationDescriptionLength},
 		{"street", "Street address", l.Street, maxLocationTextLength},
-		{"reference", "How you heard about SFLuv", l.Reference, maxLocationDescriptionLength},
+		{"contact_name", "Contact name", l.ContactName, maxLocationTextLength},
+		{"referral_source", "How you heard about SFLuv", l.ReferralSource, maxLocationDescriptionLength},
+		{"pos_system", "POS type", l.PosSystem, maxLocationTextLength},
 	}
 	for _, entry := range lengths {
 		if len(entry.value) > entry.max {
@@ -309,7 +342,9 @@ func (l *Location) ValidateForUpdate() error {
 		{"name", "Business name", l.Name, maxLocationTextLength},
 		{"street", "Street address", l.Street, maxLocationTextLength},
 		{"description", "Business description", l.Description, maxLocationDescriptionLength},
-		{"reference", "How you heard about SFLuv", l.Reference, maxLocationDescriptionLength},
+		{"contact_name", "Contact name", l.ContactName, maxLocationTextLength},
+		{"referral_source", "How you heard about SFLuv", l.ReferralSource, maxLocationDescriptionLength},
+		{"pos_system", "POS type", l.PosSystem, maxLocationTextLength},
 	}
 	for _, entry := range lengths {
 		if len(entry.value) > entry.max {

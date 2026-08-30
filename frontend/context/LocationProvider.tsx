@@ -18,7 +18,10 @@ interface LocationContextType {
     getAuthedMapLocations: () => Promise<void>
     updateLocation: (location: AuthedLocation) => Promise<void>
     updateLocationApproval: (req: UpdateLocationApprovalRequest) => Promise<void>
-    addLocation: (location: AuthedLocation) => Promise<void>
+    /** Resolves to the new listing's id, which the stepper needs to attach hours. */
+    addLocation: (location: AuthedLocation) => Promise<number>
+    /** Withdraws an application of the caller's that is still awaiting review. */
+    cancelLocationApplication: (locationId: number) => Promise<void>
 }
 
 const LocationContext = createContext<LocationContextType | null>(null)
@@ -155,8 +158,19 @@ export default function LocationProvider({ children }: { children: ReactNode }) 
                 const message = await readErrorMessage(res)
                 throw new Error(message)
             }
-            setUserLocationsRef.current((currentLocations) => [...currentLocations, location])
+            // The id the backend assigned. Older backends answered "success"
+            // here, so an unreadable body is not an error — it costs the caller
+            // the follow-up writes that need an id, not the submission itself.
+            let createdId = 0
+            try {
+                const body = await res.json()
+                if (body && typeof body.id === "number") createdId = body.id
+            } catch {
+                // not a JSON body
+            }
+            setUserLocationsRef.current((currentLocations) => [...currentLocations, { ...location, id: createdId }])
             setMapLocationsStatus("available")
+            return createdId
         }
         catch (error) {
             setMapLocationsStatus("unavailable")
@@ -199,6 +213,21 @@ export default function LocationProvider({ children }: { children: ReactNode }) 
                 ? error
                 : new Error("Something went wrong saving your changes. Please try again.")
         }
+    }, [])
+
+    // Dropped from the caller's own list immediately rather than after a refetch:
+    // the merchant just pressed cancel, and a card that lingers reads as a
+    // cancellation that did not take.
+    const cancelLocationApplication = useCallback(async (locationId: number) => {
+        const res = await authFetchRef.current(`/locations/${locationId}`, { method: "DELETE" })
+        if (res.status !== 204 && res.status !== 200) {
+            throw new Error(await readErrorMessage(
+                res,
+                "Something went wrong cancelling this application. Please try again.",
+            ))
+        }
+        setUserLocationsRef.current((currentLocations) =>
+            currentLocations.filter((location) => location.id !== locationId))
     }, [])
 
     const updateLocationApproval = useCallback(async (req: UpdateLocationApprovalRequest) => {
@@ -245,6 +274,7 @@ export default function LocationProvider({ children }: { children: ReactNode }) 
         updateLocation,
         updateLocationApproval,
         addLocation,
+        cancelLocationApplication,
     }), [
         mapLocations,
         authedMapLocations,
@@ -254,7 +284,8 @@ export default function LocationProvider({ children }: { children: ReactNode }) 
         getAuthedMapLocations,
         updateLocation,
         updateLocationApproval,
-        addLocation
+        addLocation,
+        cancelLocationApplication
     ])
 
     return (

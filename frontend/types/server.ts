@@ -60,6 +60,10 @@ export interface UserResponse {
   mailing_list_opt_in_at?: string | null;
   mailing_list_policy_version: string;
   account_type: AccountType;
+  /** Null when nobody ever put the question — which is what a mobile signup is. */
+  account_type_selected_at?: string | null;
+  /** Stamped once the web app has offered such an account the merchant option. */
+  web_merchant_prompt_seen_at?: string | null;
   /** Stamped when a merchant lists their first shop; null until then. */
   merchant_onboarding_completed_at?: string | null;
   client_devices?: ClientVersionDeviceResponse[];
@@ -79,6 +83,10 @@ export interface UserPolicyStatusResponse {
   // privacy policy is accepted, so it is the only place a client can learn it
   // has a merchant on its hands.
   account_type: AccountType;
+  /** Null when nobody ever put the question — which is what a mobile signup is. */
+  account_type_selected_at?: string | null;
+  /** Stamped once the web app has offered such an account the merchant option. */
+  web_merchant_prompt_seen_at?: string | null;
   merchant_onboarding_completed_at?: string | null;
 }
 

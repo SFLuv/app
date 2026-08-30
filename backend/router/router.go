@@ -283,6 +283,9 @@ func AddUserRoutes(r *chi.Mux, s *handlers.AppService) {
 	r.Get("/users", withActiveAuth(s.GetUserAuthed, s))
 	r.Put("/users", withActiveAuth(s.UpdateUserInfo, s))
 	r.Put("/users/primary-wallet", withActiveAuth(s.UpdateUserPrimaryWallet, s))
+	r.Get("/users/account-type/revert-eligibility", withActiveAuth(s.GetMerchantRevertEligibility, s))
+	r.Put("/users/account-type", withActiveAuth(s.UpdateOwnAccountType, s))
+	r.Post("/users/web-merchant-prompt-seen", withActiveAuth(s.MarkWebMerchantPromptSeen, s))
 	r.Put("/paypaleth", withActiveAuth(s.UpdateUserPayPalEth, s))
 	r.Post("/users/oauth/apple", withAuth(s.StoreAppleOAuthCredential))
 	r.Get("/users/delete-account/preview", withActiveAuth(s.GetDeleteAccountPreview, s))
@@ -476,6 +479,7 @@ func AddLocationRoutes(r *chi.Mux, s *handlers.AppService) {
 	r.Get("/locations", s.GetLocations)
 	r.Get("/locations/user", withActiveAuth(s.GetLocationsByUser, s))
 	r.Put("/locations", withActiveAuth(s.UpdateLocation, s))
+	r.Delete("/locations/{id}", withActiveAuth(s.CancelLocationApplication, s))
 	r.Put("/locations/{id}/wallet-settings", withActiveAuth(s.UpdateLocationWalletSettings, s))
 	// Unhooking a wallet is always a swap: the picker needs to know which of the
 	// merchant's wallets are free, and the replacement is one atomic call.
@@ -673,6 +677,11 @@ var merchantOnboardingOpenRoutes = map[string]struct{}{
 	// person out when the call refuses. Choosing which of your own registered
 	// wallets is primary moves nothing either — it is part of arriving.
 	"PUT /users/primary-wallet": {},
+	// Saying "actually, this is a personal account" is the other way out of the
+	// gate, and the one somebody who picked merchant by mistake needs. It is
+	// refused on its own terms when a listing exists, so opening it here cannot
+	// let anybody escape a gate they are genuinely behind.
+	"PUT /users/account-type": {},
 }
 
 // merchantOnboardingGateAllows scopes the gate by method, not by a list of

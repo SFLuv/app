@@ -1949,6 +1949,99 @@ var schemaMigrations = []SchemaMigration{
 			return nil
 		},
 	},
+	{
+		Version:     "1.50",
+		Description: "locations and users: the Location Approval Form's fields, and the account-type signals the web app needs",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			// The intake form is now three steps — Public Information, Contact,
+			// Payment System — and asks a different set of questions from the
+			// single sheet these columns were shaped for. The old answers are
+			// left in place rather than dropped: they are the only record of
+			// what the merchants already on the map told us, and nothing here
+			// needs the space back.
+			if _, err := pools.App.Exec(ctx, `
+				ALTER TABLE locations
+				ADD COLUMN IF NOT EXISTS contact_name TEXT NOT NULL DEFAULT '';
+
+				ALTER TABLE locations
+				ADD COLUMN IF NOT EXISTS referral_source TEXT NOT NULL DEFAULT '';
+
+				ALTER TABLE locations
+				ADD COLUMN IF NOT EXISTS accepts_tips BOOLEAN;
+
+				ALTER TABLE locations
+				ADD COLUMN IF NOT EXISTS has_staff_tablet BOOLEAN;
+			`); err != nil {
+				return fmt.Errorf("error adding location approval form columns: %w", err)
+			}
+
+			// Contact Name is one field now. Rebuilt from the two it replaces so
+			// an existing listing does not read back blank the first time its
+			// owner opens the form.
+			nameTag, err := pools.App.Exec(ctx, `
+				UPDATE locations
+				SET contact_name = TRIM(COALESCE(contact_firstname, '') || ' ' || COALESCE(contact_lastname, ''))
+				WHERE TRIM(contact_name) = ''
+				AND TRIM(COALESCE(contact_firstname, '') || ' ' || COALESCE(contact_lastname, '')) <> '';
+			`)
+			if err != nil {
+				return fmt.Errorf("error backfilling locations.contact_name: %w", err)
+			}
+
+			// "How did you hear about SFLuv" is a dropdown with a write-in now,
+			// but it is the same question `reference` has always held free text
+			// for, so the free text carries over as the write-in answer.
+			referralTag, err := pools.App.Exec(ctx, `
+				UPDATE locations
+				SET referral_source = reference
+				WHERE TRIM(referral_source) = ''
+				AND TRIM(COALESCE(reference, '')) <> '';
+			`)
+			if err != nil {
+				return fmt.Errorf("error backfilling locations.referral_source: %w", err)
+			}
+
+			// accepts_tips decides whether approval mints a tipping wallet, so
+			// a listing that already has one has plainly answered yes. Everything
+			// else stays NULL — unanswered, not "no" — because the old form never
+			// asked the question and guessing would switch tipping off for shops
+			// that take tips.
+			tipsTag, err := pools.App.Exec(ctx, `
+				UPDATE locations
+				SET accepts_tips = TRUE
+				WHERE accepts_tips IS NULL
+				AND TRIM(COALESCE(tipping_wallet_address, '')) <> '';
+			`)
+			if err != nil {
+				return fmt.Errorf("error backfilling locations.accepts_tips: %w", err)
+			}
+
+			// account_type_selected_at separates "chose regular" from "never
+			// asked". Only the web signup puts the question, so a NULL here is
+			// how the web app recognises somebody who signed up on mobile and
+			// has never been offered a merchant account.
+			//
+			// Not backfilled. Every account that exists today either predates
+			// the question or answered it before this column existed, and the
+			// only cost of treating them all as unasked is that a regular
+			// account is offered the merchant prompt once.
+			if _, err := pools.App.Exec(ctx, `
+				ALTER TABLE users
+				ADD COLUMN IF NOT EXISTS account_type_selected_at TIMESTAMPTZ;
+
+				ALTER TABLE users
+				ADD COLUMN IF NOT EXISTS web_merchant_prompt_seen_at TIMESTAMPTZ;
+			`); err != nil {
+				return fmt.Errorf("error adding user account type signal columns: %w", err)
+			}
+
+			appLogger.Logf(
+				"migration 1.50: backfilled contact_name on %d locations, referral_source on %d, accepts_tips on %d",
+				nameTag.RowsAffected(), referralTag.RowsAffected(), tipsTag.RowsAffected(),
+			)
+			return nil
+		},
+	},
 }
 
 // migrateW9WarningTiers replaces one hard gate with an escalating sequence.

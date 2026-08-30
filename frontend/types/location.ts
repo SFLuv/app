@@ -94,10 +94,30 @@ export interface AuthedLocation {
   hours?: LocationDayHours[];
   hours_manual?: boolean;
   hours_synced_at?: string | null;
+  /** The Location Approval Form's single Contact field. */
+  contact_name?: string;
+  /** Superseded by contact_name; still read so an older listing keeps its name. */
   contact_firstname: string;
   contact_lastname: string;
   contact_phone: string;
+  /**
+   * "How did you hear about SFLuv". An "Other" answer is flattened to its
+   * write-in text before it is sent, so anything not on the option list is one.
+   */
+  referral_source?: string;
+  /**
+   * Whether the location takes tips. Decides whether approval mints it a
+   * tipping wallet, and is null on every listing filled in before the form
+   * asked — null is "unanswered", not "no".
+   */
+  accepts_tips?: boolean | null;
+  /** Whether staff have a tablet or phone to hand. Null means unanswered. */
+  has_staff_tablet?: boolean | null;
   pos_system: string;
+  /**
+   * Retired with the single-sheet form. Still round-tripped on an edit so an
+   * existing listing's answers survive one, but never collected again.
+   */
   sole_proprietorship: string;
   tipping_policy: string;
   tipping_division: string;

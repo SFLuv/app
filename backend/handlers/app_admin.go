@@ -301,13 +301,22 @@ func (a *AppService) UpdateLocationApproval(w http.ResponseWriter, r *http.Reque
 		}
 	}
 
-	// Locations are given their wallets at creation now, so by the time one
-	// reaches approval it normally has them already and this does nothing. It
-	// stays as the backstop for the ones that do not: everything submitted before
-	// that shipped, and anything whose derivation failed against an unreachable
-	// chain. A location must not be published without a till of its own, so here
-	// — unlike at creation — a chain that cannot be reached fails the approval and
-	// the admin retries, usually a minute later.
+	// Approval is where a location gets its wallets. A merchant's first location
+	// inherits the primary wallet they already hold; every one after it is minted
+	// a till of its own, because two shops on one address cannot be told apart
+	// afterwards. A tipping wallet is minted alongside whenever the merchant
+	// answered yes to tips on the form, and never otherwise.
+	//
+	// The addresses are counterfactual — CREATE2 arithmetic off the account
+	// factory against the merchant's own signer — so nothing is deployed and no
+	// signature is needed from anyone to do this. The paymaster deploys each
+	// account on its first outgoing transaction; until then tokens sit at the
+	// address regardless, which is all a till needs.
+	//
+	// A location must not be published without a wallet, so a chain that cannot
+	// be reached fails the approval and the admin retries, usually a minute
+	// later. Creation is the opposite — see provisionNewLocationWallets, which is
+	// the optional early path and treats a failed derivation as "not yet".
 	provisioning, err := a.db.GetLocationProvisioningContext(r.Context(), u.Id)
 	if err != nil {
 		a.logger.Logf("error loading provisioning context for location %d: %s", u.Id, err.Error())

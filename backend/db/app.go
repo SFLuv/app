@@ -144,6 +144,14 @@ func (s *AppDB) CreateTables() error {
 		ALTER TABLE users
 		ADD COLUMN IF NOT EXISTS account_type TEXT NOT NULL DEFAULT 'regular';
 
+		-- NULL means nobody ever put the question, which is what a mobile signup
+		-- looks like: only the web signup asks. See migration 1.50.
+		ALTER TABLE users
+		ADD COLUMN IF NOT EXISTS account_type_selected_at TIMESTAMPTZ;
+
+		ALTER TABLE users
+		ADD COLUMN IF NOT EXISTS web_merchant_prompt_seen_at TIMESTAMPTZ;
+
 		ALTER TABLE users
 		ADD COLUMN IF NOT EXISTS merchant_onboarding_completed_at TIMESTAMPTZ;
 
@@ -2281,6 +2289,20 @@ func (s *AppDB) CreateTables() error {
 
 			ALTER TABLE locations
 			ADD COLUMN IF NOT EXISTS delete_reason TEXT;
+
+			-- The Location Approval Form's own columns. See migration 1.50 for
+			-- why the single-sheet form's columns are still here alongside them.
+			ALTER TABLE locations
+			ADD COLUMN IF NOT EXISTS contact_name TEXT NOT NULL DEFAULT '';
+
+			ALTER TABLE locations
+			ADD COLUMN IF NOT EXISTS referral_source TEXT NOT NULL DEFAULT '';
+
+			ALTER TABLE locations
+			ADD COLUMN IF NOT EXISTS accepts_tips BOOLEAN;
+
+			ALTER TABLE locations
+			ADD COLUMN IF NOT EXISTS has_staff_tablet BOOLEAN;
 
 			ALTER TABLE locations
 			DROP CONSTRAINT IF EXISTS locations_google_id_key;

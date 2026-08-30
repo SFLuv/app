@@ -33,7 +33,6 @@ func (v *VerifiedGooglePlace) ApplyTo(location *Location) {
 
 	location.GoogleID = v.GoogleID
 	location.Name = v.Name
-	location.Type = v.Type
 	location.Street = v.Street
 	location.City = v.City
 	location.State = v.State
@@ -49,6 +48,15 @@ func (v *VerifiedGooglePlace) ApplyTo(location *Location) {
 	// on the Google listing, so Google's phone is only a fallback.
 	if location.Phone == "" {
 		location.Phone = v.Phone
+	}
+
+	// Google's category only when Google has one. Not every place carries a
+	// primary type, and business type is required at submission — overwriting
+	// unconditionally meant a merchant whose listing has no category had their
+	// own answer wiped on the way in and the submission refused for a field
+	// they had in fact filled.
+	if v.Type != "" {
+		location.Type = v.Type
 	}
 }
 
@@ -130,21 +138,44 @@ type Location struct {
 	// PhotoURL is the merchant's uploaded storefront photo, empty when they have
 	// not uploaded one. Distinct from ImageURL, which is a link to a Google Maps
 	// page captured at creation and is not an image address at all.
-	PhotoURL           string   `json:"photo_url"`
-	Rating             float64  `json:"rating"`
-	MapsPage           string   `json:"maps_page"`
-	OpeningHours       []string `json:"opening_hours"`
-	ContactFirstName   string   `json:"contact_firstname"`
-	ContactLastName    string   `json:"contact_lastname"`
-	ContactPhone       string   `json:"contact_phone"`
-	PosSystem          string   `json:"pos_system"`
-	SoleProprietorship string   `json:"sole_proprietorship"`
-	TippingPolicy      string   `json:"tipping_policy"`
-	TippingDivision    string   `json:"tipping_division"`
-	TableCoverage      string   `json:"table_coverage"`
-	ServiceStations    int      `json:"service_stations"`
-	TabletModel        string   `json:"tablet_model"`
-	MessagingService   string   `json:"messaging_service"`
+	PhotoURL     string   `json:"photo_url"`
+	Rating       float64  `json:"rating"`
+	MapsPage     string   `json:"maps_page"`
+	OpeningHours []string `json:"opening_hours"`
+	// ContactName is the Location Approval Form's single Contact field, and
+	// supersedes the first/last pair below. Those are still read so a listing
+	// filled in under the old form does not lose the name it already holds.
+	ContactName      string `json:"contact_name"`
+	ContactFirstName string `json:"contact_firstname"`
+	ContactLastName  string `json:"contact_lastname"`
+	// ContactPhone and the Admin* pair below are the same two answers stored
+	// twice, a split the single-sheet form left behind. The form writes both,
+	// and Admin* stays the column every existing reader — the approval email,
+	// the MCP merchant report, the admin panel — already looks at.
+	ContactPhone string `json:"contact_phone"`
+	// ReferralSource answers "How did you hear about SFLuv". An "Other" answer
+	// is flattened to its write-in text before it is stored, the same way every
+	// other Other-bearing dropdown on the form is.
+	ReferralSource string `json:"referral_source"`
+	PosSystem      string `json:"pos_system"`
+	// AcceptsTips decides whether approval mints the location a tipping wallet,
+	// so it is a pointer: nil is "never asked" — every listing that predates the
+	// Location Approval Form — and must not be read as a no.
+	AcceptsTips *bool `json:"accepts_tips"`
+	// HasStaffTablet records whether staff have a tablet or phone to hand. It is
+	// collected for the admin walking the merchant through setup, and is a
+	// pointer for the same reason AcceptsTips is.
+	HasStaffTablet *bool `json:"has_staff_tablet"`
+	// Retired with the single-sheet form. Still read and written on the update
+	// path so an existing listing's answers survive an edit, but the Location
+	// Approval Form no longer asks any of them.
+	SoleProprietorship string `json:"sole_proprietorship"`
+	TippingPolicy      string `json:"tipping_policy"`
+	TippingDivision    string `json:"tipping_division"`
+	TableCoverage      string `json:"table_coverage"`
+	ServiceStations    int    `json:"service_stations"`
+	TabletModel        string `json:"tablet_model"`
+	MessagingService   string `json:"messaging_service"`
 	// PayToAddress is the location's till, read straight from
 	// locations.payment_wallet_address. location_payment_wallets is still the
 	// write model and still holds the soft-delete history, but no reader

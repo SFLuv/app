@@ -32,6 +32,14 @@ type LocationProvisioningContext struct {
 	// HasPaymentWallet is true when this location is already provisioned, either
 	// by an earlier approval or because the merchant chose one themselves.
 	HasPaymentWallet bool
+	// HasTippingWallet is true when the location already has somewhere for tips
+	// to land, which is what makes minting one idempotent across re-approvals.
+	HasTippingWallet bool
+	// AcceptsTips is the merchant's answer on the form's Payment System step,
+	// and the only thing that decides whether a tipping wallet is minted. An
+	// unanswered listing — everything submitted before the form asked — reads
+	// as false, so no shop silently acquires a till for money it never takes.
+	AcceptsTips bool
 	// PrimaryWallet is the owner's existing wallet, used for a first location.
 	PrimaryWallet string
 
@@ -50,10 +58,29 @@ type LocationProvisioningContext struct {
 	AlwaysDerive bool
 }
 
-// NeedsDerivedWallets reports whether this location must have new addresses
-// minted for it, rather than recording the owner's existing primary.
-func (c *LocationProvisioningContext) NeedsDerivedWallets() bool {
+// NeedsDerivedPaymentWallet reports whether this location must have a new
+// payment address minted for it, rather than recording the owner's existing
+// primary. A merchant's first shop inherits the primary wallet they have
+// already been paid into; every shop after it needs a till of its own, because
+// two shops on one address cannot be told apart afterwards.
+func (c *LocationProvisioningContext) NeedsDerivedPaymentWallet() bool {
 	return !c.HasPaymentWallet && (c.AlwaysDerive || c.AlreadyAssigned > 0)
+}
+
+// NeedsDerivedTippingWallet reports whether a tipping address must be minted.
+//
+// Independent of the payment side on purpose. A merchant's first shop keeps
+// their primary wallet for takings and still needs a separate wallet for tips —
+// tips are other people's money and must never land in the same place as the
+// shop's own — so "no payment wallet to derive" does not mean "nothing to mint".
+func (c *LocationProvisioningContext) NeedsDerivedTippingWallet() bool {
+	return c.AcceptsTips && !c.HasTippingWallet
+}
+
+// NeedsDerivedWallets reports whether anything at all has to be derived from
+// the account factory for this location.
+func (c *LocationProvisioningContext) NeedsDerivedWallets() bool {
+	return c.NeedsDerivedPaymentWallet() || c.NeedsDerivedTippingWallet()
 }
 
 // DerivationStartIndex is the first smart-account index a location's wallets may
@@ -102,6 +129,8 @@ func (a *AppDB) GetLocationProvisioningContext(ctx context.Context, locationID u
 				SELECT 1 FROM location_payment_wallets p
 				WHERE p.location_id = l.id AND p.active = TRUE
 			),
+			NULLIF(TRIM(COALESCE(l.tipping_wallet_address, '')), '') IS NOT NULL,
+			COALESCE(l.accepts_tips, FALSE),
 			COALESCE((
 				SELECT COALESCE(
 					NULLIF(TRIM(u.primary_wallet_address), ''),
@@ -121,7 +150,8 @@ func (a *AppDB) GetLocationProvisioningContext(ctx context.Context, locationID u
 	`, locationID).Scan(
 		&result.OwnerID, &result.Street, &result.OwnerEOA,
 		&result.NextSmartIndex, &result.AlreadyAssigned,
-		&result.HasPaymentWallet, &result.PrimaryWallet,
+		&result.HasPaymentWallet, &result.HasTippingWallet, &result.AcceptsTips,
+		&result.PrimaryWallet,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("error loading provisioning context for location %d: %w", locationID, err)
@@ -132,12 +162,30 @@ func (a *AppDB) GetLocationProvisioningContext(ctx context.Context, locationID u
 
 // DerivedLocationWallets are the addresses a location will be paid into,
 // already computed from the account factory.
+// Either half may be empty: a first location derives only a tipping address,
+// and a location whose merchant takes no tips derives only a payment address.
 type DerivedLocationWallets struct {
 	PaymentAddress string
 	PaymentIndex   int
 	TippingAddress string
 	TippingIndex   int
 	Street         string
+}
+
+// LowestIndex is the first smart-account index these addresses occupy, and the
+// one to compare against a re-read allocation state. Zero means nothing was
+// derived.
+func (d *DerivedLocationWallets) LowestIndex() int {
+	if d == nil {
+		return 0
+	}
+	if d.PaymentAddress != "" {
+		return d.PaymentIndex
+	}
+	if d.TippingAddress != "" {
+		return d.TippingIndex
+	}
+	return 0
 }
 
 // ProvisionLocationWallets gives a location its own addresses in a transaction
@@ -202,35 +250,57 @@ func (a *AppDB) provisionLocationWallets(
 	if err != nil {
 		return err
 	}
-	if state.HasPaymentWallet {
+	// The two halves are decided separately. A merchant's first shop keeps their
+	// primary wallet for takings and still has to be minted a tipping wallet, so
+	// "the payment side needs nothing" cannot stand in for "there is nothing to do".
+	needsPayment := !state.HasPaymentWallet &&
+		(provisioning.AlwaysDerive || state.AlreadyAssigned > 0)
+	inheritsPrimary := !state.HasPaymentWallet && !needsPayment
+	needsTipping := provisioning.AcceptsTips && !state.HasTippingWallet
+
+	if !needsPayment && !needsTipping && !inheritsPrimary {
 		return nil
 	}
 
-	if state.AlreadyAssigned == 0 && !provisioning.AlwaysDerive {
+	if needsPayment || needsTipping {
+		if derived == nil {
+			// The caller could not derive addresses — almost always the chain RPC
+			// being unreachable. Approval fails here so a location is never published
+			// without a wallet of its own; the admin retries. Creation never reaches
+			// this, because it treats a failed derivation as "no wallet yet" and
+			// leaves the location for the backstop rather than refusing the shop.
+			return fmt.Errorf("cannot provision location %d without deriving its wallets: address derivation unavailable", locationID)
+		}
+		// The caller derived against a context read before the lock, so it can
+		// have decided it needed neither half of what is wanted now: another of
+		// this merchant's locations taking a payment wallet in between turns a
+		// first shop into a second one, which needs a till of its own. Nothing
+		// has been written, and re-deriving against the state under the lock is
+		// exactly what the index-moved path already does, so it is reported the
+		// same way rather than as a failure the caller cannot act on.
+		if needsPayment && derived.PaymentAddress == "" {
+			return ErrLocationWalletIndexMoved
+		}
+		if needsTipping && derived.TippingAddress == "" {
+			return ErrLocationWalletIndexMoved
+		}
+
+		// Indexes only ever move forward, so an allocation that has overtaken ours
+		// means the addresses we hold are another location's now. Refusing is the
+		// whole point of the lock: writing them anyway is what used to put two shops
+		// on one till.
+		if lowest := derived.LowestIndex(); lowest > 0 && lowest < state.NextSmartIndex {
+			return ErrLocationWalletIndexMoved
+		}
+	}
+
+	if inheritsPrimary {
 		if err := a.assignExistingWallet(ctx, tx, locationID, provisioning.PrimaryWallet); err != nil {
 			return err
 		}
-		return syncLocationPaymentWalletAddress(ctx, tx, uint64(locationID))
 	}
 
-	if derived == nil {
-		// The caller could not derive addresses — almost always the chain RPC
-		// being unreachable. Approval fails here so a location is never published
-		// without a wallet of its own; the admin retries. Creation never reaches
-		// this, because it treats a failed derivation as "no wallet yet" and
-		// leaves the location for the backstop rather than refusing the shop.
-		return fmt.Errorf("cannot provision location %d without deriving its wallets: address derivation unavailable", locationID)
-	}
-
-	// Indexes only ever move forward, so an allocation that has overtaken ours
-	// means the addresses we hold are another location's now. Refusing is the
-	// whole point of the lock: writing them anyway is what used to put two shops
-	// on one till.
-	if derived.PaymentIndex < state.NextSmartIndex {
-		return ErrLocationWalletIndexMoved
-	}
-
-	if err := a.insertDerivedWallets(ctx, tx, locationID, provisioning, derived); err != nil {
+	if err := a.insertDerivedWallets(ctx, tx, locationID, provisioning, derived, needsPayment, needsTipping); err != nil {
 		return err
 	}
 
@@ -243,6 +313,7 @@ func (a *AppDB) provisionLocationWallets(
 // can move underneath us.
 type locationProvisioningState struct {
 	HasPaymentWallet bool
+	HasTippingWallet bool
 	AlreadyAssigned  int
 	NextSmartIndex   int
 }
@@ -255,6 +326,11 @@ func readLocationProvisioningState(ctx context.Context, tx pgx.Tx, locationID ui
 				SELECT 1 FROM location_payment_wallets p
 				WHERE p.location_id = $1 AND p.active = TRUE
 			),
+			EXISTS (
+				SELECT 1 FROM locations l
+				WHERE l.id = $1
+				AND NULLIF(TRIM(COALESCE(l.tipping_wallet_address, '')), '') IS NOT NULL
+			),
 			(
 				SELECT COUNT(*)
 				FROM location_payment_wallets p
@@ -266,7 +342,7 @@ func readLocationProvisioningState(ctx context.Context, tx pgx.Tx, locationID ui
 				FROM wallets w
 				WHERE w.owner = $2 AND w.is_eoa = FALSE
 			), 0);
-	`, locationID, ownerID).Scan(&state.HasPaymentWallet, &state.AlreadyAssigned, &state.NextSmartIndex); err != nil {
+	`, locationID, ownerID).Scan(&state.HasPaymentWallet, &state.HasTippingWallet, &state.AlreadyAssigned, &state.NextSmartIndex); err != nil {
 		return state, fmt.Errorf("error re-reading provisioning state for location %d: %w", locationID, err)
 	}
 	return state, nil
@@ -324,7 +400,13 @@ func (a *AppDB) insertDerivedWallets(
 	locationID uint,
 	provisioning *LocationProvisioningContext,
 	derived *DerivedLocationWallets,
+	writePayment bool,
+	writeTipping bool,
 ) error {
+	if derived == nil || (!writePayment && !writeTipping) {
+		return nil
+	}
+
 	// The smart accounts stay counterfactual until first use. That is fine for
 	// receiving — tokens sit at the address either way — and the paymaster
 	// deploys them on the merchant's first outgoing transaction.
@@ -333,14 +415,27 @@ func (a *AppDB) insertDerivedWallets(
 	// for an honest reason, and quietly dropping the row is precisely how the
 	// address got recorded with no wallet behind it. If one ever does collide the
 	// transaction should die where it happened.
-	for _, wallet := range []struct {
+	wanted := make([]struct {
 		name    string
 		address string
 		index   int
-	}{
-		{derived.Street + " - Payments", derived.PaymentAddress, derived.PaymentIndex},
-		{derived.Street + " - Tips", derived.TippingAddress, derived.TippingIndex},
-	} {
+	}, 0, 2)
+	if writePayment {
+		wanted = append(wanted, struct {
+			name    string
+			address string
+			index   int
+		}{derived.Street + " - Payments", derived.PaymentAddress, derived.PaymentIndex})
+	}
+	if writeTipping {
+		wanted = append(wanted, struct {
+			name    string
+			address string
+			index   int
+		}{derived.Street + " - Tips", derived.TippingAddress, derived.TippingIndex})
+	}
+
+	for _, wallet := range wanted {
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO wallets (owner, name, is_eoa, eoa_address, smart_address, smart_index, is_hidden, active)
 			VALUES ($1, $2, FALSE, $3, $4, $5, FALSE, TRUE);
@@ -349,17 +444,21 @@ func (a *AppDB) insertDerivedWallets(
 		}
 	}
 
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO location_payment_wallets (location_id, wallet_address, is_default)
-		VALUES ($1, $2, TRUE);
-	`, locationID, derived.PaymentAddress); err != nil {
-		return fmt.Errorf("error assigning derived payment wallet to location %d: %w", locationID, err)
+	if writePayment {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO location_payment_wallets (location_id, wallet_address, is_default)
+			VALUES ($1, $2, TRUE);
+		`, locationID, derived.PaymentAddress); err != nil {
+			return fmt.Errorf("error assigning derived payment wallet to location %d: %w", locationID, err)
+		}
 	}
 
-	if _, err := tx.Exec(ctx, `
-		UPDATE locations SET tipping_wallet_address = $1 WHERE id = $2;
-	`, derived.TippingAddress, locationID); err != nil {
-		return fmt.Errorf("error assigning derived tipping wallet to location %d: %w", locationID, err)
+	if writeTipping {
+		if _, err := tx.Exec(ctx, `
+			UPDATE locations SET tipping_wallet_address = $1 WHERE id = $2;
+		`, derived.TippingAddress, locationID); err != nil {
+			return fmt.Errorf("error assigning derived tipping wallet to location %d: %w", locationID, err)
+		}
 	}
 
 	return nil

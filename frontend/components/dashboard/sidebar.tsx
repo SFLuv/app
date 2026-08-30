@@ -30,6 +30,7 @@ import {
   SidebarMenuItem,
   useSidebar,
 } from "@/components/ui/sidebar"
+import { BecomeMerchantPrompt } from "@/components/merchant/become-merchant-prompt"
 import { ForwardRefExoticComponent } from "react"
 
 export function DashboardSidebar() {
@@ -316,6 +317,11 @@ export function DashboardSidebar() {
       <SidebarFooter className="border-t p-2 bg-secondary dark:bg-secondary">
         <SidebarMenu>
           {status === "authenticated" ? <>
+            {/* The only merchant entry point left in the navbar, and it is not
+                a standing button: it is the one-time offer to somebody who
+                signed up on the mobile app and has never been asked. Everyone
+                else finds it in Settings. */}
+            <BecomeMerchantPrompt />
             <SidebarMenuItem>
               <SidebarMenuButton asChild tooltip="Settings" isActive={isActive("/settings")}>
                 <Button

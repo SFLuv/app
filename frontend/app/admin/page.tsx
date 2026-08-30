@@ -5571,21 +5571,40 @@ export default function AdminPage() {
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
-                    <Label className="text-sm font-medium text-muted-foreground">Primary Contact Name</Label>
-                    <p className="text-sm text-foreground mt-1 p-2 bg-muted rounded">{selectedLocationForReview.contact_firstname + " " + selectedLocationForReview.contact_lastname}</p>
-                  </div>
-
-                  <div>
-                    <Label className="text-sm font-medium text-muted-foreground">Admin Email Address</Label>
+                    <Label className="text-sm font-medium text-muted-foreground">Contact Name</Label>
+                    {/* contact_name is the form's single field; the first/last
+                        pair is what a listing filled in before it carries. */}
                     <p className="text-sm text-foreground mt-1 p-2 bg-muted rounded">
-                      {selectedLocationForReview.admin_email}
+                      {selectedLocationForReview.contact_name ||
+                        [selectedLocationForReview.contact_firstname, selectedLocationForReview.contact_lastname]
+                          .filter(Boolean)
+                          .join(" ") ||
+                        "—"}
                     </p>
                   </div>
 
                   <div>
-                    <Label className="text-sm font-medium text-muted-foreground">Admin Phone Number</Label>
+                    <Label className="text-sm font-medium text-muted-foreground">Contact Email</Label>
                     <p className="text-sm text-foreground mt-1 p-2 bg-muted rounded">
-                      {selectedLocationForReview.admin_phone}
+                      {selectedLocationForReview.admin_email || "—"}
+                    </p>
+                  </div>
+
+                  <div>
+                    <Label className="text-sm font-medium text-muted-foreground">Contact Phone</Label>
+                    <p className="text-sm text-foreground mt-1 p-2 bg-muted rounded">
+                      {selectedLocationForReview.admin_phone ||
+                        selectedLocationForReview.contact_phone ||
+                        "—"}
+                    </p>
+                  </div>
+
+                  <div>
+                    <Label className="text-sm font-medium text-muted-foreground">Heard About SFLuv Via</Label>
+                    <p className="text-sm text-foreground mt-1 p-2 bg-muted rounded">
+                      {selectedLocationForReview.referral_source ||
+                        selectedLocationForReview.reference ||
+                        "—"}
                     </p>
                   </div>
 
@@ -5593,6 +5612,50 @@ export default function AdminPage() {
                     <Label className="text-sm font-medium text-muted-foreground">Website</Label>
                     <p className="text-sm text-foreground mt-1 p-2 bg-muted rounded">
                      {selectedLocationForReview.website}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Payment System Section — the third step of the Location
+                  Approval Form, and the reason it is collected: this is what an
+                  admin reads before walking the merchant through setup.
+
+                  "Accepts tips" is not only a note. It decides whether approving
+                  this location mints it a tipping wallet, so it is spelled out
+                  rather than shown as a bare yes/no. */}
+              <div className="space-y-4">
+                <h3 className="text-lg font-semibold text-foreground border-b pb-2">Payment System</h3>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <Label className="text-sm font-medium text-muted-foreground">POS Type</Label>
+                    <p className="text-sm text-foreground mt-1 p-2 bg-muted rounded">
+                      {selectedLocationForReview.pos_system || "Not answered"}
+                    </p>
+                  </div>
+
+                  <div>
+                    <Label className="text-sm font-medium text-muted-foreground">Accepts Tips</Label>
+                    <p className="text-sm text-foreground mt-1 p-2 bg-muted rounded">
+                      {selectedLocationForReview.accepts_tips === true
+                        ? "Yes — a tipping wallet is created on approval"
+                        : selectedLocationForReview.accepts_tips === false
+                          ? "No — no tipping wallet"
+                          : "Not answered (submitted before the form asked)"}
+                    </p>
+                  </div>
+
+                  <div>
+                    <Label className="text-sm font-medium text-muted-foreground">
+                      Tablet or Phone Available to Staff
+                    </Label>
+                    <p className="text-sm text-foreground mt-1 p-2 bg-muted rounded">
+                      {selectedLocationForReview.has_staff_tablet === true
+                        ? "Yes"
+                        : selectedLocationForReview.has_staff_tablet === false
+                          ? "No"
+                          : "Not answered (submitted before the form asked)"}
                     </p>
                   </div>
                 </div>

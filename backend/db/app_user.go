@@ -255,6 +255,8 @@ func (a *AppDB) GetUsers(ctx context.Context, page int, count int, search string
 			mailing_list_opt_in_at,
 			mailing_list_policy_version,
 			account_type,
+			account_type_selected_at,
+			web_merchant_prompt_seen_at,
 			merchant_onboarding_completed_at
 		FROM
 			users
@@ -295,6 +297,8 @@ func (a *AppDB) GetUsers(ctx context.Context, page int, count int, search string
 			&user.MailingListOptInAt,
 			&user.MailingListPolicyVersion,
 			&user.AccountType,
+			&user.AccountTypeSelectedAt,
+			&user.WebMerchantPromptSeenAt,
 			&user.MerchantOnboardingCompletedAt,
 		)
 		if err != nil {
@@ -419,6 +423,8 @@ func (a *AppDB) getUserById(ctx context.Context, userId string, includeInactive 
 			mailing_list_opt_in_at,
 			mailing_list_policy_version,
 			account_type,
+			account_type_selected_at,
+			web_merchant_prompt_seen_at,
 			merchant_onboarding_completed_at
 		FROM
 			users
@@ -455,6 +461,8 @@ func (a *AppDB) getUserById(ctx context.Context, userId string, includeInactive 
 		&user.MailingListOptInAt,
 		&user.MailingListPolicyVersion,
 		&user.AccountType,
+		&user.AccountTypeSelectedAt,
+		&user.WebMerchantPromptSeenAt,
 		&user.MerchantOnboardingCompletedAt,
 	)
 	if err != nil {
@@ -477,6 +485,8 @@ func (a *AppDB) GetUserPolicyStatus(ctx context.Context, userId string) (*struct
 			mailing_list_opt_in_at,
 			mailing_list_policy_version,
 			account_type,
+			account_type_selected_at,
+			web_merchant_prompt_seen_at,
 			merchant_onboarding_completed_at
 		FROM
 			users
@@ -493,6 +503,8 @@ func (a *AppDB) GetUserPolicyStatus(ctx context.Context, userId string) (*struct
 		&status.MailingListOptInAt,
 		&status.MailingListPolicyVersion,
 		&status.AccountType,
+		&status.AccountTypeSelectedAt,
+		&status.WebMerchantPromptSeenAt,
 		&status.MerchantOnboardingCompletedAt,
 	); err != nil {
 		return nil, err
@@ -559,6 +571,15 @@ func (a *AppDB) AcceptUserPolicies(
 			account_type = CASE
 				WHEN accepted_privacy_policy_at IS NULL AND $6 <> '' THEN $6
 				ELSE account_type
+			END,
+			-- Stamped whenever a client actually answers, even on a
+			-- re-acceptance whose answer is discarded above. The column says
+			-- "somebody put the question to this person", and only the web
+			-- signup does; a NULL is how the web app recognises an account that
+			-- was created on mobile and has never been offered the choice.
+			account_type_selected_at = CASE
+				WHEN $6 <> '' THEN COALESCE(account_type_selected_at, $2)
+				ELSE account_type_selected_at
 			END
 		WHERE
 			id = $1
@@ -574,6 +595,8 @@ func (a *AppDB) AcceptUserPolicies(
 			mailing_list_opt_in_at,
 			mailing_list_policy_version,
 			account_type,
+			account_type_selected_at,
+			web_merchant_prompt_seen_at,
 			merchant_onboarding_completed_at;
 	`, userId, now.UTC(), structs.CurrentPrivacyPolicyVersion, mailingListOptIn, structs.CurrentMailingListPolicyVersion, accountType)
 
@@ -588,6 +611,8 @@ func (a *AppDB) AcceptUserPolicies(
 		&status.MailingListOptInAt,
 		&status.MailingListPolicyVersion,
 		&status.AccountType,
+		&status.AccountTypeSelectedAt,
+		&status.WebMerchantPromptSeenAt,
 		&status.MerchantOnboardingCompletedAt,
 	); err != nil {
 		return nil, err

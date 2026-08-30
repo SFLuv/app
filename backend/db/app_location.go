@@ -342,9 +342,13 @@ func (s *AppDB) GetAuthedLocations(ctx context.Context, r *structs.LocationsPage
 			l.photo_updated_at,
 			l.rating,
 			l.maps_page,
+			l.contact_name,
 			l.contact_firstname,
 			l.contact_lastname,
 			l.contact_phone,
+			l.referral_source,
+			l.accepts_tips,
+			l.has_staff_tablet,
 			l.pos_system,
 			l.sole_proprietorship,
 			l.tipping_policy,
@@ -410,9 +414,13 @@ func (s *AppDB) GetAuthedLocations(ctx context.Context, r *structs.LocationsPage
 			&photoUpdatedAt,
 			&location.Rating,
 			&location.MapsPage,
+			&location.ContactName,
 			&location.ContactFirstName,
 			&location.ContactLastName,
 			&location.ContactPhone,
+			&location.ReferralSource,
+			&location.AcceptsTips,
+			&location.HasStaffTablet,
 			&location.PosSystem,
 			&location.SoleProprietorship,
 			&location.TippingPolicy,
@@ -469,10 +477,11 @@ var ErrDuplicateGoogleLocation = errors.New("a location for this google place al
 
 // LocationApprovalContact is the merchant-side addressee for approval mail.
 type LocationApprovalContact struct {
-	Name             string
-	AdminEmail       string
-	ContactFirstName string
-	ContactLastName  string
+	Name string
+	// AdminEmail is the contact email from the form's Contact step. The column
+	// name predates that step and is not an SFLuv admin's address.
+	AdminEmail  string
+	ContactName string
 }
 
 // GetLocationApprovalContact loads who to notify when a location is approved.
@@ -482,15 +491,18 @@ func (a *AppDB) GetLocationApprovalContact(ctx context.Context, id uint) (*Locat
 		SELECT
 			COALESCE(name, ''),
 			COALESCE(admin_email, ''),
-			COALESCE(contact_firstname, ''),
-			COALESCE(contact_lastname, '')
+			-- The single Contact Name field, falling back to the first/last pair
+			-- for a listing filled in before the form asked for one name.
+			COALESCE(
+				NULLIF(TRIM(contact_name), ''),
+				TRIM(COALESCE(contact_firstname, '') || ' ' || COALESCE(contact_lastname, ''))
+			)
 		FROM locations
 		WHERE id = $1;
 	`, id).Scan(
 		&contact.Name,
 		&contact.AdminEmail,
-		&contact.ContactFirstName,
-		&contact.ContactLastName,
+		&contact.ContactName,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("error loading approval contact for location %d: %w", id, err)
@@ -625,9 +637,13 @@ func (a *AppDB) AddLocation(ctx context.Context, location *structs.Location) err
 				image_url,
 				rating,
 				maps_page,
+				contact_name,
 				contact_firstname,
 				contact_lastname,
 				contact_phone,
+				referral_source,
+				accepts_tips,
+				has_staff_tablet,
 				pos_system,
 				sole_proprietorship,
 				tipping_policy,
@@ -647,7 +663,8 @@ func (a *AppDB) AddLocation(ctx context.Context, location *structs.Location) err
 				$7, $8, $9, $10,
 				$11, $12, $13, $14, $15, $16, $17, $18,
 				$19, $20, $21, $22, $23, $24, $25, $26,
-				$27, $28, $29, $30, $31, $32, $33
+				$27, $28, $29, $30, $31, $32, $33, $34,
+				$35, $36, $37, $38
 			)
 			RETURNING id;`,
 		location.GoogleID,
@@ -670,9 +687,13 @@ func (a *AppDB) AddLocation(ctx context.Context, location *structs.Location) err
 		location.ImageURL,
 		location.Rating,
 		location.MapsPage,
+		location.ContactName,
 		location.ContactFirstName,
 		location.ContactLastName,
 		location.ContactPhone,
+		location.ReferralSource,
+		location.AcceptsTips,
+		location.HasStaffTablet,
 		location.PosSystem,
 		location.SoleProprietorship,
 		location.TippingPolicy,
@@ -751,19 +772,29 @@ func (a *AppDB) UpdateLocation(ctx context.Context, location *structs.Location) 
 	        website = $6,
 	        admin_phone = $7,
 	        admin_email = $8,
-	        contact_firstname = $9,
-	        contact_lastname = $10,
-	        contact_phone = $11,
-	        pos_system = $12,
-	        sole_proprietorship = $13,
-	        tipping_policy = $14,
-	        tipping_division = $15,
-	        table_coverage = $16,
-	        service_stations = $17,
-	        tablet_model = $18,
-	        messaging_service = $19,
-	        reference = $20
-	    WHERE (id = $21 AND owner_id = $22 AND active = TRUE);
+	        -- COALESCE, not a plain assignment, for the four columns the older
+	        -- single-sheet form does not carry. That form is still the editor for
+	        -- a listing already on file, and an update that does not mention a
+	        -- field must not erase it — without this, correcting a rejected
+	        -- application blanked the tips answer, which is what decides whether
+	        -- approval mints the location a tipping wallet.
+	        contact_name = COALESCE(NULLIF($9, ''), contact_name),
+	        contact_firstname = $10,
+	        contact_lastname = $11,
+	        contact_phone = $12,
+	        referral_source = COALESCE(NULLIF($13, ''), referral_source),
+	        accepts_tips = COALESCE($14, accepts_tips),
+	        has_staff_tablet = COALESCE($15, has_staff_tablet),
+	        pos_system = $16,
+	        sole_proprietorship = $17,
+	        tipping_policy = $18,
+	        tipping_division = $19,
+	        table_coverage = $20,
+	        service_stations = $21,
+	        tablet_model = $22,
+	        messaging_service = $23,
+	        reference = $24
+	    WHERE (id = $25 AND owner_id = $26 AND active = TRUE);
 	`,
 		location.Name,
 		location.Description,
@@ -773,9 +804,13 @@ func (a *AppDB) UpdateLocation(ctx context.Context, location *structs.Location) 
 		location.Website,
 		location.AdminPhone,
 		location.AdminEmail,
+		location.ContactName,
 		location.ContactFirstName,
 		location.ContactLastName,
 		location.ContactPhone,
+		location.ReferralSource,
+		location.AcceptsTips,
+		location.HasStaffTablet,
 		location.PosSystem,
 		location.SoleProprietorship,
 		location.TippingPolicy,
@@ -929,9 +964,13 @@ func (a *AppDB) GetLocationsByUser(ctx context.Context, userId string) ([]*struc
 		l.photo_updated_at,
 		l.rating,
 		l.maps_page,
+		l.contact_name,
 		l.contact_firstname,
 		l.contact_lastname,
 		l.contact_phone,
+		l.referral_source,
+		l.accepts_tips,
+		l.has_staff_tablet,
 		l.pos_system,
 		l.sole_proprietorship,
 		l.tipping_policy,
@@ -997,9 +1036,13 @@ func (a *AppDB) GetLocationsByUser(ctx context.Context, userId string) ([]*struc
 			&photoUpdatedAt,
 			&location.Rating,
 			&location.MapsPage,
+			&location.ContactName,
 			&location.ContactFirstName,
 			&location.ContactLastName,
 			&location.ContactPhone,
+			&location.ReferralSource,
+			&location.AcceptsTips,
+			&location.HasStaffTablet,
 			&location.PosSystem,
 			&location.SoleProprietorship,
 			&location.TippingPolicy,

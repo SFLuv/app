@@ -94,6 +94,18 @@ export type UserStatus = "loading" | "authenticated" | "unauthenticated";
 export type WalletsStatus = "loading" | "available" | "unavailable";
 export type MerchantApprovalStatus = "pending" | "approved" | "rejected" | null;
 
+/**
+ * The backend's answer to "can this merchant account go back to being a
+ * personal one". Rejected applications are not counted — they leave nothing on
+ * the map and nothing in the queue.
+ */
+export interface MerchantRevertEligibility {
+  account_type: AccountType;
+  approved_locations: number;
+  pending_locations: number;
+  can_revert: boolean;
+}
+
 export interface User {
   id: string;
   name: string;
@@ -119,6 +131,14 @@ export interface User {
   mailingListPolicyVersion: string;
   /** The signup answer. isMerchant is a different question — see AccountType. */
   accountType: AccountType;
+  /**
+   * When the person was actually asked which kind of account this is. Null
+   * means nobody ever was: only the web signup puts the question, so a null
+   * here is how the web app recognises an account created on the mobile app.
+   */
+  accountTypeSelectedAt?: string | null;
+  /** Stamped once the web app has offered such an account the merchant option. */
+  webMerchantPromptSeenAt?: string | null;
   /** Stamped when a merchant lists their first shop; null while they still owe us one. */
   merchantOnboardingCompletedAt?: string | null;
 }
@@ -183,6 +203,22 @@ interface AppContextType {
    * navigating, because a redirect can lose a race and a render cannot.
    */
   merchantOnboardingWalled: boolean;
+  /**
+   * True when the web app should offer this account the merchant option once.
+   * It is the mobile-signup case only: somebody who was never asked at signup,
+   * is on a personal account, and has not been offered it here before.
+   */
+  showWebMerchantPrompt: boolean;
+  /** Records that the one-time offer has been made, so it is never made again. */
+  dismissWebMerchantPrompt: () => Promise<void>;
+  /**
+   * Switches this account between personal and merchant from the settings
+   * screen. Rejects with the backend's message when a merchant account still
+   * has locations, which is what makes the choice one-way.
+   */
+  setOwnAccountType: (accountType: AccountType) => Promise<void>;
+  /** What is standing between a merchant account and a personal one, if anything. */
+  getMerchantRevertEligibility: () => Promise<MerchantRevertEligibility>;
 
   // Web3 Functionality
   wallets: AppWallet[];
@@ -785,6 +821,8 @@ export default function AppProvider({ children }: { children: ReactNode }) {
       // account. A backend too old to send the field, or a field that arrives
       // malformed, must not be able to lock somebody into onboarding.
       accountType: r.user.account_type === "merchant" ? "merchant" : "regular",
+      accountTypeSelectedAt: r.user.account_type_selected_at ?? null,
+      webMerchantPromptSeenAt: r.user.web_merchant_prompt_seen_at ?? null,
       merchantOnboardingCompletedAt: r.user.merchant_onboarding_completed_at,
     };
     setUser(u);
@@ -1821,6 +1859,72 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  /**
+   * The one-time merchant offer for somebody who signed up on the mobile app.
+   *
+   * Three conditions, and all three matter. account_type_selected_at is null
+   * only for an account nobody ever asked — the web signup always asks — which
+   * is what makes this the mobile-signup case rather than "any personal
+   * account". The account must still be a personal one, and the offer must not
+   * have been made before. From then on the option lives in settings, where the
+   * person can go looking for it rather than being asked again.
+   */
+  const showWebMerchantPrompt =
+    status === "authenticated" &&
+    user?.accountType === "regular" &&
+    !user?.accountTypeSelectedAt &&
+    !user?.webMerchantPromptSeenAt;
+
+  const dismissWebMerchantPrompt = async () => {
+    // Optimistic, and deliberately so: the prompt closing is the whole point,
+    // and a failed stamp costs at most one more offer on the next sign-in.
+    setUser((current) =>
+      current
+        ? { ...current, webMerchantPromptSeenAt: new Date().toISOString() }
+        : current,
+    );
+    try {
+      await authFetch("/users/web-merchant-prompt-seen", { method: "POST" });
+    } catch (error) {
+      console.error("Unable to record the merchant prompt as seen", error);
+    }
+  };
+
+  const getMerchantRevertEligibility =
+    async (): Promise<MerchantRevertEligibility> => {
+      const res = await authFetch("/users/account-type/revert-eligibility");
+      if (!res.ok) throw new Error("Unable to check this account right now.");
+      return (await res.json()) as MerchantRevertEligibility;
+    };
+
+  const setOwnAccountType = async (accountType: AccountType) => {
+    const res = await authFetch("/users/account-type", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ account_type: accountType }),
+    });
+    if (!res.ok) {
+      // The 409 carries why — an approved listing, or applications still in the
+      // queue — and that is the only thing worth telling the person, so it is
+      // surfaced rather than replaced with a generic failure.
+      let message = "Unable to change this account type right now.";
+      try {
+        const body = await res.json();
+        if (body && typeof body.error === "string" && body.error.trim()) {
+          message = body.error.trim();
+        }
+      } catch {
+        // not a JSON body
+      }
+      throw new Error(message);
+    }
+
+    // Re-read rather than patching locally: the switch also stamps the two
+    // account-type signals, and the merchant wall keys off account_type, so the
+    // app must be looking at the server's version of all three at once.
+    await refreshUserRecord();
+  };
+
   const updatePayPalAddress = async (payPalAddress: string) => {
     if (!user) {
       throw new Error("no user logged in");
@@ -1921,6 +2025,10 @@ export default function AppProvider({ children }: { children: ReactNode }) {
           unlinkApple,
           authFetch,
           merchantOnboardingWalled: merchantGateBlocksView,
+          showWebMerchantPrompt,
+          dismissWebMerchantPrompt,
+          setOwnAccountType,
+          getMerchantRevertEligibility,
           mapLocations,
           updateUser,
           approveMerchantStatus,
@@ -2004,7 +2112,8 @@ const ACCOUNT_TYPE_OPTIONS: {
   {
     value: "merchant",
     title: "Merchant account",
-    detail: "For businesses that want to accept SFLUV.",
+    detail:
+      "For businesses that want to accept SFLuv. You list your locations, and once one is approved this stays a merchant account.",
   },
 ];
 
@@ -2024,10 +2133,16 @@ function PolicyAcceptanceOverlay({
   const [acceptedPrivacyPolicy, setAcceptedPrivacyPolicy] = useState(false);
   const [mailingListOptIn, setMailingListOptIn] = useState(true);
   // Starts unanswered rather than defaulting to "regular". The backend writes
-  // this once and will not take a correction, so somebody who skims past the
-  // question has to be stopped here — a pre-ticked answer would be a decision
-  // made on their behalf that only support can undo.
+  // this once and will not take a correction from this route, so somebody who
+  // skims past the question has to be stopped here — a pre-ticked answer would
+  // be a decision made on their behalf.
   const [accountType, setAccountType] = useState<AccountType | null>(null);
+  // Two views, one submission. The policies and the account-type question are
+  // different kinds of decision — one is a document to read and agree to, the
+  // other is a choice about what this account is for — and on a single screen
+  // the second was furniture around the first. Nothing is sent until both are
+  // answered, so stepping back costs nothing.
+  const [step, setStep] = useState<"policies" | "account-type">("policies");
   const busy = action !== "idle";
   const returnTo = buildPolicyReturnTo(pathname, searchParams);
   const privacyPolicyHref = buildPolicyPageHref(PRIVACY_POLICY_PATH, returnTo);
@@ -2036,132 +2151,159 @@ function PolicyAcceptanceOverlay({
     returnTo,
   );
 
+  const policiesStep = step === "policies";
+
   return (
     <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/55 px-4 py-6 backdrop-blur-[2px]">
       <div className="max-h-full w-full max-w-2xl overflow-y-auto rounded-3xl border border-border/70 bg-card/95 p-6 shadow-[0_1px_3px_hsl(var(--foreground)/0.08),0_24px_60px_hsl(var(--foreground)/0.16)] sm:p-8">
         <div className="space-y-4">
-          <p className="text-sm font-semibold uppercase tracking-[0.24em] text-[#eb6c6c]">
-            Privacy Policy
-          </p>
-          <h2 className="text-3xl font-semibold tracking-tight text-foreground">
-            Accept the Privacy Policy to keep using SFLuv
-          </h2>
-          <p className="text-sm leading-6 text-muted-foreground sm:text-base">
-            To use the app, You need to review and accept the{" "}
-            <Link
-              href={privacyPolicyHref}
-              target="_blank"
-              rel="noreferrer"
-              className="font-semibold text-foreground underline underline-offset-4"
-            >
-              Privacy Policy
-            </Link>
-            . You can also choose whether to opt in to SFLuv email updates under
-            the{" "}
-            <Link
-              href={emailOptInPolicyHref}
-              target="_blank"
-              rel="noreferrer"
-              className="font-semibold text-foreground underline underline-offset-4"
-            >
-              Email Opt-In Policy
-            </Link>
-            .
-          </p>
-
-          <div className="space-y-3">
-            <p className="text-sm font-semibold text-foreground">
-              What kind of account is this?
+          <div className="flex items-center justify-between gap-4">
+            <p className="text-sm font-semibold uppercase tracking-[0.24em] text-[#eb6c6c]">
+              {policiesStep ? "Privacy Policy" : "Account Type"}
             </p>
-            <div
-              role="radiogroup"
-              aria-label="Account type"
-              className="grid gap-3 sm:grid-cols-2"
-            >
-              {ACCOUNT_TYPE_OPTIONS.map((option) => {
-                const selected = accountType === option.value;
-                return (
-                  <button
-                    key={option.value}
-                    type="button"
-                    role="radio"
-                    aria-checked={selected}
-                    disabled={busy}
-                    onClick={() => setAccountType(option.value)}
-                    className={`rounded-2xl border p-4 text-left transition-colors disabled:opacity-60 ${
-                      selected
-                        ? "border-[#eb6c6c] bg-[#eb6c6c]/10"
-                        : "border-border/70 bg-muted/30 hover:border-[#eb6c6c]/60"
-                    }`}
-                  >
-                    <span className="block text-sm font-semibold text-foreground">
-                      {option.title}
-                    </span>
-                    <span className="mt-1 block text-sm leading-6 text-muted-foreground">
-                      {option.detail}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
+            <p className="text-xs font-medium text-muted-foreground">
+              Step {policiesStep ? 1 : 2} of 2
+            </p>
           </div>
 
-          <div className="space-y-3 rounded-2xl border border-border/70 bg-muted/30 p-4">
-            <label className="flex items-start gap-3">
-              <Checkbox
-                checked={acceptedPrivacyPolicy}
-                disabled={busy}
-                onCheckedChange={(checked) =>
-                  setAcceptedPrivacyPolicy(Boolean(checked))
-                }
-              />
-              <span className="text-sm leading-6 text-foreground">
-                I have read and accept the{" "}
+          {policiesStep ? (
+            <>
+              <h2 className="text-3xl font-semibold tracking-tight text-foreground">
+                Accept the Privacy Policy to keep using SFLuv
+              </h2>
+              <p className="text-sm leading-6 text-muted-foreground sm:text-base">
+                To use the app, you need to review and accept the{" "}
                 <Link
                   href={privacyPolicyHref}
                   target="_blank"
                   rel="noreferrer"
-                  className="font-semibold underline underline-offset-4"
+                  className="font-semibold text-foreground underline underline-offset-4"
                 >
                   Privacy Policy
                 </Link>
-                .
-              </span>
-            </label>
-
-            <label className="flex items-start gap-3">
-              <Checkbox
-                checked={mailingListOptIn}
-                disabled={busy}
-                onCheckedChange={(checked) =>
-                  setMailingListOptIn(Boolean(checked))
-                }
-              />
-              <span className="text-sm leading-6 text-foreground">
-                I want to receive SFLuv emails in line with the{" "}
+                . You can also choose whether to opt in to SFLuv email updates
+                under the{" "}
                 <Link
                   href={emailOptInPolicyHref}
                   target="_blank"
                   rel="noreferrer"
-                  className="font-semibold underline underline-offset-4"
+                  className="font-semibold text-foreground underline underline-offset-4"
                 >
                   Email Opt-In Policy
                 </Link>
                 .
-              </span>
-            </label>
-          </div>
+              </p>
 
-          <p className="text-sm text-muted-foreground">
-            The account type and the Privacy Policy checkbox are required. Email
-            opt-in is optional and you can unsubscribe later at any time.
-          </p>
+              <div className="space-y-3 rounded-2xl border border-border/70 bg-muted/30 p-4">
+                <label className="flex items-start gap-3">
+                  <Checkbox
+                    checked={acceptedPrivacyPolicy}
+                    disabled={busy}
+                    onCheckedChange={(checked) =>
+                      setAcceptedPrivacyPolicy(Boolean(checked))
+                    }
+                  />
+                  <span className="text-sm leading-6 text-foreground">
+                    I have read and accept the{" "}
+                    <Link
+                      href={privacyPolicyHref}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="font-semibold underline underline-offset-4"
+                    >
+                      Privacy Policy
+                    </Link>
+                    .
+                  </span>
+                </label>
 
-          {error ? (
-            <p className="rounded-2xl border border-red-400/40 bg-red-100/70 px-4 py-3 text-sm leading-6 text-red-900 dark:bg-red-500/10 dark:text-red-100">
-              {error}
-            </p>
-          ) : null}
+                <label className="flex items-start gap-3">
+                  <Checkbox
+                    checked={mailingListOptIn}
+                    disabled={busy}
+                    onCheckedChange={(checked) =>
+                      setMailingListOptIn(Boolean(checked))
+                    }
+                  />
+                  <span className="text-sm leading-6 text-foreground">
+                    I want to receive SFLuv emails in line with the{" "}
+                    <Link
+                      href={emailOptInPolicyHref}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="font-semibold underline underline-offset-4"
+                    >
+                      Email Opt-In Policy
+                    </Link>
+                    .
+                  </span>
+                </label>
+              </div>
+
+              <p className="text-sm text-muted-foreground">
+                The Privacy Policy checkbox is required. Email opt-in is optional
+                and you can unsubscribe later at any time.
+              </p>
+            </>
+          ) : (
+            <>
+              <h2 className="text-3xl font-semibold tracking-tight text-foreground">
+                What kind of account is this?
+              </h2>
+              <p className="text-sm leading-6 text-muted-foreground sm:text-base">
+                Pick the one that describes you. A merchant account is for a
+                business that wants to accept SFLuv: you will be asked to list
+                your first location next, and once a location of yours is
+                approved the account stays a merchant account for good.
+              </p>
+
+              <div
+                role="radiogroup"
+                aria-label="Account type"
+                className="grid gap-3 sm:grid-cols-2"
+              >
+                {ACCOUNT_TYPE_OPTIONS.map((option) => {
+                  const selected = accountType === option.value;
+                  return (
+                    <button
+                      key={option.value}
+                      type="button"
+                      role="radio"
+                      aria-checked={selected}
+                      disabled={busy}
+                      onClick={() => setAccountType(option.value)}
+                      className={`rounded-2xl border p-4 text-left transition-colors disabled:opacity-60 ${
+                        selected
+                          ? "border-[#eb6c6c] bg-[#eb6c6c]/10"
+                          : "border-border/70 bg-muted/30 hover:border-[#eb6c6c]/60"
+                      }`}
+                    >
+                      <span className="block text-sm font-semibold text-foreground">
+                        {option.title}
+                      </span>
+                      <span className="mt-1 block text-sm leading-6 text-muted-foreground">
+                        {option.detail}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              <p className="text-sm text-muted-foreground">
+                Not sure? Choose a personal account. You can turn it into a
+                merchant account later from Settings.
+              </p>
+
+              {/* A failure can only come back from the submission, which only
+                  this step can make — showing it on the first step would put an
+                  error over a form nobody had touched yet. */}
+              {error ? (
+                <p className="rounded-2xl border border-red-400/40 bg-red-100/70 px-4 py-3 text-sm leading-6 text-red-900 dark:bg-red-500/10 dark:text-red-100">
+                  {error}
+                </p>
+              ) : null}
+            </>
+          )}
         </div>
 
         <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:justify-end">
@@ -2171,21 +2313,42 @@ function PolicyAcceptanceOverlay({
             size="lg"
             className="w-full sm:w-auto sm:min-w-[190px]"
             disabled={busy}
-            onClick={onReturnToLogin}
+            onClick={() => {
+              if (policiesStep) {
+                onReturnToLogin();
+                return;
+              }
+              setStep("policies");
+            }}
           >
-            {action === "returning" ? "Logging out..." : "Log out"}
+            {policiesStep
+              ? action === "returning"
+                ? "Logging out..."
+                : "Log out"
+              : "Back"}
           </Button>
           <Button
             type="button"
             size="lg"
             className="w-full sm:w-auto sm:min-w-[220px]"
-            disabled={busy || !acceptedPrivacyPolicy || accountType === null}
+            disabled={
+              busy ||
+              (policiesStep ? !acceptedPrivacyPolicy : accountType === null)
+            }
             onClick={() => {
+              if (policiesStep) {
+                setStep("account-type");
+                return;
+              }
               if (accountType === null) return;
               onAccept(mailingListOptIn, accountType);
             }}
           >
-            {action === "submitting" ? "Saving..." : "Continue"}
+            {policiesStep
+              ? "Continue"
+              : action === "submitting"
+                ? "Saving..."
+                : "Finish"}
           </Button>
         </div>
       </div>

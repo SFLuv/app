@@ -7,6 +7,8 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useApp } from "@/context/AppProvider";
 import { OrganizationPanel } from "@/components/organization/organization-panel";
 import PlaceAutocomplete from "@/components/merchant/google_place_finder";
+import { AccountTypeCard } from "@/components/merchant/account-type-card";
+import { CancelLocationApplication } from "@/components/merchant/cancel-location-application";
 import { MerchantHoursCard } from "@/components/locations/merchant-hours-card";
 import { MerchantIconCard } from "@/components/locations/merchant-icon-card";
 import { MerchantPhotoCard } from "@/components/locations/merchant-photo-card";
@@ -2547,6 +2549,11 @@ export default function SettingsPage() {
             </Card>
           </div> */}
 
+          {/* Personal or merchant, and the way between them. It sits first in
+              the account tab because it is the answer that decides what the
+              rest of this screen even offers. */}
+          <AccountTypeCard />
+
           <Card className="mt-6">
             <CardHeader className="flex flex-row items-start justify-between gap-4">
               <div>
@@ -4560,9 +4567,13 @@ export default function SettingsPage() {
                           {statusTitle}
                         </CardTitle>
                       </CardHeader>
-                      <CardContent className="space-y-2 pt-4">
+                      <CardContent className="space-y-3 pt-4">
                         <p className="font-medium text-black dark:text-white">{loc.name}</p>
                         <p className="text-gray-600 dark:text-gray-400">{statusBody}</p>
+                        {/* Only renders while the application is still pending;
+                            the component decides that for itself so no caller
+                            can offer it over an approved location. */}
+                        <CancelLocationApplication location={loc} />
                       </CardContent>
                     </Card>
                   );

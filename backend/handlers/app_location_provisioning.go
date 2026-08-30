@@ -23,12 +23,20 @@ const locationProvisioningAttempts = 2
 
 // locationWalletMintOnCreateEnabled gates minting a till at creation.
 //
-// It changes which address a merchant's first location is paid into — their own
-// primary wallet before, a wallet of the shop's own now — so it has an off
-// switch that does not need a deploy. Turned off, creation leaves the location
-// unprovisioned and approval provisions it on the old rule, exactly as before.
+// Off by default. Wallets are minted during the approval itself, which is what
+// the Location Approval Form's flow assumes: an application is something a
+// merchant can still cancel while it is pending, and a cancelled application
+// should not have left a wallet and a smart-account index behind it. It also
+// puts the tipping decision where the answer is known to be final — the form's
+// "do you accept tips" is what decides whether a tipping wallet exists at all,
+// and a merchant can still edit that answer up until an admin acts on it.
+//
+// The switch stays because the trade-off it was added for is real: with minting
+// at creation the merchant's Locations tab has a till address to show them while
+// the listing sits in the queue. Turned on, creation provisions and approval is
+// the backstop, exactly as before.
 func locationWalletMintOnCreateEnabled() bool {
-	return envBool("LOCATION_WALLET_MINT_ON_CREATE", true)
+	return envBool("LOCATION_WALLET_MINT_ON_CREATE", false)
 }
 
 // deriveLocationWallets asks the account factory for the pair of addresses this
@@ -44,25 +52,33 @@ func (a *AppService) deriveLocationWallets(
 		return nil, nil
 	}
 
-	paymentIndex := provisioning.DerivationStartIndex()
-	tippingIndex := paymentIndex + 1
+	// Indexes are handed out in order from the first free one, and only for the
+	// halves that are actually wanted. A shop inheriting the merchant's primary
+	// wallet for takings but minting a tipping wallet takes one index, not two:
+	// burning the payment index anyway would leave a gap that nothing owns.
+	derived := &db.DerivedLocationWallets{Street: provisioning.Street}
+	index := provisioning.DerivationStartIndex()
 
-	paymentAddress, err := a.deriveSmartAccountAddress(ctx, provisioning.OwnerEOA, paymentIndex)
-	if err != nil {
-		return nil, err
-	}
-	tippingAddress, err := a.deriveSmartAccountAddress(ctx, provisioning.OwnerEOA, tippingIndex)
-	if err != nil {
-		return nil, err
+	if provisioning.NeedsDerivedPaymentWallet() {
+		address, err := a.deriveSmartAccountAddress(ctx, provisioning.OwnerEOA, index)
+		if err != nil {
+			return nil, err
+		}
+		derived.PaymentAddress = address
+		derived.PaymentIndex = index
+		index += 1
 	}
 
-	return &db.DerivedLocationWallets{
-		PaymentAddress: paymentAddress,
-		PaymentIndex:   paymentIndex,
-		TippingAddress: tippingAddress,
-		TippingIndex:   tippingIndex,
-		Street:         provisioning.Street,
-	}, nil
+	if provisioning.NeedsDerivedTippingWallet() {
+		address, err := a.deriveSmartAccountAddress(ctx, provisioning.OwnerEOA, index)
+		if err != nil {
+			return nil, err
+		}
+		derived.TippingAddress = address
+		derived.TippingIndex = index
+	}
+
+	return derived, nil
 }
 
 // provisionNewLocationWallets gives a just-created location its own payment and

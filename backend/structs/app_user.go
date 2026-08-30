@@ -29,7 +29,15 @@ type User struct {
 	// AccountType is what the person chose at signup. IsMerchant is not a
 	// substitute: it is recomputed from approved listings, so it says a shop of
 	// theirs is live, not which app they thought they were signing up for.
-	AccountType                   string                 `json:"account_type"`
+	AccountType string `json:"account_type"`
+	// AccountTypeSelectedAt is when somebody was actually asked which kind of
+	// account this is. NULL means nobody ever was — only the web signup puts the
+	// question, so it is how the web app recognises an account created on mobile.
+	AccountTypeSelectedAt *time.Time `json:"account_type_selected_at,omitempty"`
+	// WebMerchantPromptSeenAt is stamped the first time the web app offers such
+	// an account the merchant option. The offer is made once and then never
+	// again, so this is what stops it reappearing on every later sign-in.
+	WebMerchantPromptSeenAt       *time.Time             `json:"web_merchant_prompt_seen_at,omitempty"`
 	MerchantOnboardingCompletedAt *time.Time             `json:"merchant_onboarding_completed_at,omitempty"`
 	ClientDevices                 []*ClientVersionDevice `json:"client_devices,omitempty"`
 }
@@ -206,6 +214,8 @@ type UserPolicyStatusResponse struct {
 	// until the policy is accepted. A client that has to know whether to send
 	// somebody into merchant onboarding would otherwise have nothing to go on.
 	AccountType                   string     `json:"account_type"`
+	AccountTypeSelectedAt         *time.Time `json:"account_type_selected_at,omitempty"`
+	WebMerchantPromptSeenAt       *time.Time `json:"web_merchant_prompt_seen_at,omitempty"`
 	MerchantOnboardingCompletedAt *time.Time `json:"merchant_onboarding_completed_at,omitempty"`
 }
 

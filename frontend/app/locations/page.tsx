@@ -2,13 +2,14 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useRouter } from "next/navigation"
-import { ArrowDownLeft, ArrowLeftRight, Check, Copy, RefreshCw, Send, Store, Wallet } from "lucide-react"
+import { ArrowDownLeft, ArrowLeftRight, Check, CheckCircle2, Copy, RefreshCw, Send, Store, Wallet } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { MerchantApprovalForm } from "@/components/merchant/merchant-approval-form"
+import { LocationApprovalForm } from "@/components/merchant/location-approval-form"
+import { CancelLocationApplication } from "@/components/merchant/cancel-location-application"
 import { ReceiveCryptoModal } from "@/components/wallets/receive-crypto-modal"
 import { SendCryptoModal } from "@/components/wallets/send-crypto-modal"
 import { UnwrapModal } from "@/components/wallets/unwrap-modal"
@@ -52,6 +53,11 @@ export default function LocationsPage() {
   const [showTipReceiveModal, setShowTipReceiveModal] = useState(false)
   const [tipBalance, setTipBalance] = useState<number | null>(null)
   const [applying, setApplying] = useState(false)
+  // Set when the stepper accepts an application, and cleared by whichever button
+  // the merchant presses next. The page's own acknowledgement — it selects the
+  // new shop once the refetch lands — is about the chooser above; this is about
+  // the form they were just in, and the two answer different questions.
+  const [justSubmitted, setJustSubmitted] = useState(false)
   const [googleReady, setGoogleReady] = useState(false)
   const [googleLoadError, setGoogleLoadError] = useState<string | null>(null)
 
@@ -313,10 +319,17 @@ export default function LocationsPage() {
               merchant mid-onboarding cannot use any of it yet, and showing it
               only raises questions the approval email answers. */}
           {applicationStatus === "pending" && (
-            <p className="text-sm leading-relaxed text-muted-foreground">
-              This location will not appear on the SFLuv map or take customer payments until our
-              team approves the listing. We will email you when it has been reviewed.
-            </p>
+            <div className="space-y-3">
+              <p className="text-sm leading-relaxed text-muted-foreground">
+                This location will not appear on the SFLuv map or take customer payments until our
+                team approves the listing. We will email you when it has been reviewed.
+              </p>
+              {/* Withdrawing is only offered here, while the listing is still in
+                  the queue. It is also the one thing standing between this
+                  account and a personal one, if that is what the merchant is
+                  really after. */}
+              <CancelLocationApplication location={selectedLocation} />
+            </div>
           )}
           {applicationStatus === "rejected" && (
             <p className="text-sm leading-relaxed text-muted-foreground">
@@ -353,8 +366,8 @@ export default function LocationsPage() {
         <CardContent className="space-y-4">
           {paymentAddress === "" ? (
             <div className="rounded-lg border bg-muted/25 px-4 py-5 text-sm text-muted-foreground">
-              No wallet is attached to this location yet. One is normally minted with the listing,
-              and approval assigns one if that did not happen. Email {MERCHANT_SUPPORT_EMAIL} if it
+              No wallet is attached to this location yet. Wallets are created when a listing is
+              approved, so this should fill in shortly after. Email {MERCHANT_SUPPORT_EMAIL} if it
               stays this way.
             </div>
           ) : (
@@ -458,6 +471,41 @@ export default function LocationsPage() {
         )}
       </Card>
 
+      {justSubmitted && (
+        <Card className="border-green-300 dark:border-green-800">
+          <CardContent className="space-y-5 p-6 text-center">
+            <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-green-100 dark:bg-green-500/15">
+              <CheckCircle2 className="h-6 w-6 text-green-600 dark:text-green-400" />
+            </div>
+            <div className="space-y-2">
+              <p className="text-lg font-semibold text-black dark:text-white">
+                Your application has been submitted successfully
+              </p>
+              <p className="text-sm leading-relaxed text-muted-foreground">
+                The SFLuv team will review this location and email the contact you gave us. You can
+                cancel it from here while it is waiting to be reviewed.
+              </p>
+            </div>
+            <div className="flex flex-col gap-3 sm:flex-row sm:justify-center">
+              <Button
+                className="bg-[#eb6c6c] hover:bg-[#d55c5c]"
+                onClick={() => {
+                  setJustSubmitted(false)
+                  setApplying(true)
+                }}
+              >
+                Apply for another location
+              </Button>
+              {/* This page is the locations view, so the button closes the
+                  confirmation rather than navigating somewhere it already is. */}
+              <Button variant="outline" onClick={() => setJustSubmitted(false)}>
+                View my locations
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {applying && (
         <div className="space-y-3">
           <p className="text-sm text-muted-foreground">
@@ -478,7 +526,7 @@ export default function LocationsPage() {
               <Button variant="ghost" onClick={() => setApplying(false)}>
                 Cancel
               </Button>
-              <MerchantApprovalForm
+              <LocationApprovalForm
                 // Carried from the shop they started with rather than whichever
                 // one the chooser happens to be on: the business and the person
                 // we ring about it are the same across all of them, so a second
@@ -486,16 +534,17 @@ export default function LocationsPage() {
                 // on screen when it was opened.
                 prefillFrom={sortedLocations[0]}
                 // Staying here is the point: the merchant came to manage tills
-                // and the new one appears in the chooser as soon as it lands.
-                redirectAfterCreate={null}
-                onSaved={() => {
+                // and the new listing appears in the chooser as soon as it lands.
+                onSubmitted={() => {
                   setApplying(false)
+                  setJustSubmitted(true)
                   setLocationCountBeforeApply(sortedLocations.length)
                   void (async () => {
                     await refreshUserRecord()
-                    // The till is minted server-side as the listing is created,
-                    // so the wallet list has to be read again or the new shop
-                    // would show an address with nothing behind it.
+                    // Wallets are minted at approval, not now, so the new
+                    // listing has none yet. Refreshed anyway because the same
+                    // read is what picks up an approval that landed while this
+                    // form was open.
                     await refreshWallets()
                   })()
                 }}
