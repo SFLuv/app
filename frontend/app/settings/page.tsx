@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useApp } from "@/context/AppProvider";
 import { OrganizationPanel } from "@/components/organization/organization-panel";
+import { SignetCard } from "@/components/settings/signet-card";
 import PlaceAutocomplete from "@/components/merchant/google_place_finder";
 import { AccountTypeCard } from "@/components/merchant/account-type-card";
 import { CancelLocationApplication } from "@/components/merchant/cancel-location-application";
@@ -731,6 +732,22 @@ export default function SettingsPage() {
       getAddress(primaryWalletAddress).toLowerCase()
     );
   };
+
+  // The AppWallet the user treats as primary. Signet enrolment is scoped to one
+  // wallet because the on-chain binding is write-once per login.
+  const primaryAppWallet = useMemo(() => {
+    const primary = (user?.primaryWalletAddress || "").trim();
+    if (!primary || !isAddress(primary)) return null;
+    const target = getAddress(primary).toLowerCase();
+    return (
+      wallets.find(
+        (w) =>
+          w.type === "smartwallet" &&
+          !!w.address &&
+          getAddress(w.address).toLowerCase() === target,
+      ) ?? null
+    );
+  }, [wallets, user?.primaryWalletAddress]);
 
   const formatManagedAddress = (address: string) => {
     const trimmedAddress = address.trim();
@@ -3060,6 +3077,8 @@ export default function SettingsPage() {
               </Button>
             </CardContent>
           </Card>
+
+          <SignetCard wallet={primaryAppWallet} />
 
           <Card className="mt-6">
             <CardHeader>

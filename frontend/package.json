@@ -7,7 +7,8 @@
     "dev": "next dev --turbo --experimental-https",
     "dev-http": "next dev --turbo",
     "lint": "next lint",
-    "start": "next start"
+    "start": "next start",
+    "signet": "tsx --env-file-if-exists=.env.local --env-file-if-exists=.env scripts/signet/cli.ts"
   },
   "dependencies": {
     "@citizenwallet/sdk": "^2.0.115",
@@ -15,6 +16,7 @@
     "@hookform/resolvers": "^3.10.0",
     "@hpke/chacha20poly1305": "^1.7.0",
     "@hpke/core": "^1.7.3",
+    "@oleary-labs/signet-sdk": "link:../../../oleary-labs/signet-sdk",
     "@privy-io/react-auth": "^2.21.2",
     "@radix-ui/react-accordion": "1.2.2",
     "@radix-ui/react-alert-dialog": "1.1.4",
@@ -85,6 +87,7 @@
     "postcss": "^8.5.6",
     "tailwindcss": "^3.4.17",
     "ts-node": "^10.9.2",
+    "tsx": "^4.19.2",
     "typescript": "^5.9.2"
   }
 }
