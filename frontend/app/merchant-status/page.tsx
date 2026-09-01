@@ -1,7 +1,7 @@
 "use client"
 
 import { useApp } from "@/context/AppProvider"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { AlertCircle } from "lucide-react"
 import { useRouter } from "next/navigation"
@@ -22,7 +22,6 @@ export default function MerchantStatusPage() {
     <div className="mx-auto w-full max-w-3xl space-y-5 px-3 pb-6 pt-2 sm:space-y-6 sm:px-0">
       <div className="space-y-1">
         <h1 className="text-2xl font-bold text-black dark:text-white sm:text-3xl">Merchant Status</h1>
-        <p className="text-sm text-muted-foreground sm:text-base">Review your merchant application approvals.</p>
       </div>
 
       {status === "loading" && (
@@ -35,7 +34,6 @@ export default function MerchantStatusPage() {
         <Card className="overflow-hidden border-border/80 bg-card/85 shadow-sm">
           <CardHeader className="px-4 pb-3 pt-5 sm:px-6">
             <CardTitle className="text-black dark:text-white">Application Status</CardTitle>
-            <CardDescription>Check the status of your merchant applications</CardDescription>
           </CardHeader>
           <CardContent className="px-4 pb-6 pt-2 sm:px-6">
             {/* Merchant is chosen at signup now, so there is no application to
@@ -43,12 +41,9 @@ export default function MerchantStatusPage() {
                 shop yet has anywhere to be sent. */}
             <div className="rounded-lg border bg-muted/20 px-4 py-6 text-center sm:px-6">
               <AlertCircle className="mx-auto mb-3 h-12 w-12 text-gray-500" />
-              <h2 className="mb-2 text-xl font-semibold text-black dark:text-white sm:text-2xl">No Application Found</h2>
-              <p className="mb-6 text-sm text-gray-600 dark:text-gray-400 sm:text-base">
-                {isMerchantAccount
-                  ? "You haven't listed a business yet."
-                  : "This is a personal account, so there are no business listings on it."}
-              </p>
+              <h2 className="mb-6 text-xl font-semibold text-black dark:text-white sm:text-2xl">
+                {isMerchantAccount ? "No applications yet" : "Personal account"}
+              </h2>
               {isMerchantAccount && (
                 <Button
                   className="bg-[#eb6c6c] hover:bg-[#d55c5c]"

@@ -310,7 +310,7 @@ function CarriedOverAnswer({ show }: { show?: boolean }) {
   if (!show) return null
   return (
     <p className="text-xs text-amber-700 dark:text-amber-400">
-      Carried over from your other location — check it before submitting.
+      Carried over — check it.
     </p>
   )
 }
@@ -654,18 +654,10 @@ export function MerchantApprovalForm({
         <form onSubmit={handleSubmit} className="space-y-6" noValidate>
           <div className="space-y-4">
             {carriedOver && (
-              <div className="space-y-1 rounded-lg border border-amber-300/70 bg-amber-50 p-4 dark:border-amber-500/30 dark:bg-amber-500/10">
-                <p className="text-sm font-medium text-black dark:text-white">
-                  Some answers are carried over from {carriedOver.sourceName || "your first location"}
-                </p>
-                <p className="text-xs leading-relaxed text-gray-600 dark:text-gray-400">
-                  Your business and contact details are filled in and marked where they were. Read
-                  them before submitting — anything that has changed since you listed your first
-                  shop now stands as this shop&apos;s answer. Nothing about the premises is carried
-                  over: the address, the Google listing and the questions about your floor and your
-                  tills are all yours to answer afresh for this one.
-                </p>
-              </div>
+              <p className="rounded-lg border border-amber-300/70 bg-amber-50 p-3 text-sm text-black dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-white">
+                Some answers carried over from{" "}
+                {carriedOver.sourceName || "your first location"}. Check them before submitting.
+              </p>
             )}
 
             {existingLocation ? (
@@ -676,9 +668,7 @@ export function MerchantApprovalForm({
                     .filter(Boolean)
                     .join(", ")}
                 </p>
-                <p className="text-xs text-gray-500 dark:text-gray-400">
-                  This is the business on file. To list a different one, submit a new application instead.
-                </p>
+
               </div>
             ) : (
               <div className="space-y-2">

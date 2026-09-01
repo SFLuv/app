@@ -1,11 +1,17 @@
 "use client"
 
-import { Plus, X } from "lucide-react"
+import { Info, Plus, X } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import type { LocationDayHours, LocationHoursInterval } from "@/types/location"
 
 /** Storage order: index 0 is Monday, matching location_hours.weekday. */
@@ -99,6 +105,15 @@ interface OpeningHoursEditorProps {
   disabled?: boolean
   /** ISO timestamp of the last successful Google sync, if any. */
   lastSyncedAt?: string | null
+  /**
+   * Whether to render the nightly-sync switch above the week.
+   *
+   * On by default, because on an existing listing that switch is a real
+   * decision: Google keeps the hours current unless the merchant says
+   * otherwise. During a first application there is nothing to sync from and no
+   * listing to sync onto, so the caller hides it and passes manual itself.
+   */
+  showManualToggle?: boolean
 }
 
 /**
@@ -116,6 +131,7 @@ export function OpeningHoursEditor({
   onManualChange,
   disabled = false,
   lastSyncedAt = null,
+  showManualToggle = true,
 }: OpeningHoursEditorProps) {
   const updateDay = (weekday: number, patch: Partial<LocationDayHours>) => {
     onChange(week.map((day) => (day.weekday === weekday ? { ...day, ...patch } : day)))
@@ -123,30 +139,39 @@ export function OpeningHoursEditor({
 
   return (
     <div className="space-y-4">
-      <div className="flex items-start gap-3 rounded-lg border p-3">
-        <Checkbox
-          id="hours-manual"
-          checked={manual}
-          disabled={disabled}
-          onCheckedChange={(checked) => onManualChange(checked === true)}
-          className="mt-0.5"
-        />
-        <div className="space-y-1">
+      {showManualToggle && (
+        <div className="flex items-center gap-3 rounded-lg border p-3">
+          <Checkbox
+            id="hours-manual"
+            checked={manual}
+            disabled={disabled}
+            onCheckedChange={(checked) => onManualChange(checked === true)}
+          />
           <Label htmlFor="hours-manual" className="cursor-pointer font-medium">
             Set hours manually
           </Label>
-          <p className="text-xs text-muted-foreground">
-            {manual
-              ? "These hours stay exactly as entered. The nightly check against Google will not change them."
-              : "Hours refresh from Google each night. Anything entered here can be replaced by the next check."}
-          </p>
-          {!manual && lastSyncedAt && (
-            <p className="text-xs text-muted-foreground">
-              Last refreshed {new Date(lastSyncedAt).toLocaleString()}.
-            </p>
-          )}
+          <TooltipProvider delayDuration={200}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  aria-label="What setting hours manually does"
+                  className="text-muted-foreground transition-colors hover:text-foreground"
+                >
+                  <Info className="h-3.5 w-3.5" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent className="max-w-[16rem]">
+                {manual
+                  ? "Kept exactly as entered. The nightly Google check will not change them."
+                  : lastSyncedAt
+                    ? `Refreshed from Google nightly. Last refreshed ${new Date(lastSyncedAt).toLocaleString()}.`
+                    : "Refreshed from Google nightly. Anything entered here can be replaced."}
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         </div>
-      </div>
+      )}
 
       <div className="space-y-3">
         {week.map((day) => {
@@ -247,11 +272,6 @@ export function OpeningHoursEditor({
         })}
       </div>
 
-      <p className="text-xs text-muted-foreground">
-        A day with no stretches is shown as &ldquo;hours not available&rdquo;, which is different from being
-        closed. Add a second stretch for a split day, such as lunch and dinner. A closing time earlier than its
-        opening time means that stretch runs past midnight.
-      </p>
     </div>
   )
 }

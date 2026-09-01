@@ -552,7 +552,21 @@ func (a *AppDB) AcceptUserPolicies(
 	// accepted_privacy_policy_at IS NULL is what "first acceptance" means here.
 	// The column's own value cannot say, because every row already reads
 	// 'regular' from the default.
-	row := a.db.QueryRow(ctx, `
+	tx, err := a.db.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("error opening transaction to accept policies: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	// Read before the write, so the event below can say what it changed from.
+	var previousAccountType string
+	if err := tx.QueryRow(ctx, `
+		SELECT account_type FROM users WHERE id = $1 AND active = TRUE;
+	`, userId).Scan(&previousAccountType); err != nil {
+		return nil, err
+	}
+
+	row := tx.QueryRow(ctx, `
 		UPDATE
 			users
 		SET
@@ -618,6 +632,21 @@ func (a *AppDB) AcceptUserPolicies(
 		return nil, err
 	}
 
+	// Signing up as a merchant is where a merchant's clock starts, and it is the
+	// commonest way an account becomes one — recording only later conversions
+	// would leave every merchant who said so at signup with no date at all.
+	// A no-op is dropped inside the helper, so a policy re-acceptance that
+	// changes nothing writes nothing.
+	if err := recordAccountTypeChange(
+		ctx, tx, status.UserId, previousAccountType, status.AccountType, AccountTypeSourceSignup,
+	); err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("error committing policy acceptance: %w", err)
+	}
+
 	return status, nil
 }
 
@@ -652,7 +681,13 @@ func (a *AppDB) SetUserAccountType(ctx context.Context, userId string, accountTy
 		return nil, fmt.Errorf("invalid account type: %q", accountType)
 	}
 
-	row := a.db.QueryRow(ctx, `
+	tx, err := a.db.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("error opening transaction to set account type: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	row := tx.QueryRow(ctx, `
 		UPDATE
 			users AS u
 		SET
@@ -680,6 +715,19 @@ func (a *AppDB) SetUserAccountType(ctx context.Context, userId string, accountTy
 		&result.MerchantOnboardingCompletedAt,
 	); err != nil {
 		return nil, err
+	}
+
+	// A support repair is still a conversion, and a tax export reading the
+	// history has no way to tell — nor any reason to care — that this one came
+	// from an admin rather than the person.
+	if err := recordAccountTypeChange(
+		ctx, tx, result.UserId, result.PreviousAccountType, result.AccountType, AccountTypeSourceAdmin,
+	); err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("error committing account type change: %w", err)
 	}
 
 	return result, nil

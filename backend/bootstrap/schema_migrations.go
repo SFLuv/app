@@ -2042,6 +2042,115 @@ var schemaMigrations = []SchemaMigration{
 			return nil
 		},
 	},
+	{
+		Version:     "1.51",
+		Description: "record when an account became a merchant, and every account-type change since",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			// Money arriving before somebody was a merchant is not sales.
+			//
+			// A merchant's incoming transfers are read off the chain, which
+			// records an address and an amount and nothing about what the
+			// account was at the time. Without a date to split on, a tax export
+			// cannot tell a year of personal receipts from a year of takings —
+			// and the accounts that most need the split are exactly the ones
+			// that were personal first.
+			//
+			// merchant_since is the start of the CURRENT merchant stint, so it
+			// is cleared on a revert. The full history lives in the events table
+			// below, which is what any report covering a period with a flip in
+			// it has to read.
+			if _, err := pools.App.Exec(ctx, `
+				ALTER TABLE users
+				ADD COLUMN IF NOT EXISTS merchant_since TIMESTAMPTZ;
+
+				-- TRUE where the date was guessed by the backfill below rather
+				-- than observed as a change. It matters because an inferred date
+				-- is an UPPER bound — the account was a merchant by then, and
+				-- may well have been one long before — so a report that splits
+				-- income on it will file genuine merchant takings as personal.
+				-- A row flagged this way is a date to ask about, not to trust.
+				ALTER TABLE users
+				ADD COLUMN IF NOT EXISTS merchant_since_inferred BOOLEAN NOT NULL DEFAULT FALSE;
+			`); err != nil {
+				return fmt.Errorf("error adding users.merchant_since: %w", err)
+			}
+
+			// Append-only. Reverting is allowed while an account has nothing
+			// listed, so regular -> merchant -> regular -> merchant is a real
+			// sequence, and a single column on users cannot describe which
+			// intervals were which.
+			if _, err := pools.App.Exec(ctx, `
+				CREATE TABLE IF NOT EXISTS user_account_type_events (
+					id SERIAL PRIMARY KEY,
+					user_id TEXT NOT NULL REFERENCES users(id),
+					previous_account_type TEXT NOT NULL DEFAULT '',
+					account_type TEXT NOT NULL,
+					-- signup, self (settings), or admin. Says who decided, which
+					-- is the first question asked of any row that looks wrong.
+					source TEXT NOT NULL DEFAULT '',
+					changed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+				);
+
+				CREATE INDEX IF NOT EXISTS user_account_type_events_user_idx
+					ON user_account_type_events(user_id, changed_at);
+			`); err != nil {
+				return fmt.Errorf("error creating user_account_type_events: %w", err)
+			}
+
+			// Backfill for the merchants who already exist. Nobody recorded when
+			// they converted, so this takes the earliest date that is evidence
+			// they were already one: their first location, the stamp written
+			// when a merchant lists their first shop, or their first policy
+			// acceptance — which for an account that chose merchant at signup is
+			// the moment it did.
+			//
+			// LEAST rather than COALESCE over the three: they are independent
+			// pieces of evidence, not a preference order, and the earliest is
+			// the one that bounds the answer. LEAST ignores NULLs, so an account
+			// missing any of them still gets the best of the rest; NOW() catches
+			// an account with none at all.
+			//
+			// `users` has no created_at, which is what this migration first
+			// assumed and what made it fail.
+			//
+			// The result is an UPPER bound and is flagged as inferred. On live
+			// data the winning value for the oldest merchants is itself an
+			// artefact — seven of them share one merchant_onboarding_completed_at
+			// to the microsecond, stamped when migration 1.45 ran — so they were
+			// merchants well before the date recorded here. Splitting income on
+			// an inferred date files real takings as personal, which is why the
+			// flag exists and why a report must consult it.
+			//
+			// Deliberately not written as an event either: the events table
+			// holds changes actually seen, and a guess sitting among them would
+			// read as one.
+			tag, err := pools.App.Exec(ctx, `
+				UPDATE users u
+				SET merchant_since = COALESCE(
+					LEAST(
+						(
+							SELECT MIN(COALESCE(l.approved_at, l.delete_date))
+							FROM locations l
+							WHERE l.owner_id = u.id
+						),
+						u.merchant_onboarding_completed_at,
+						u.accepted_privacy_policy_at
+					),
+					NOW()
+				)
+				,
+					merchant_since_inferred = TRUE
+				WHERE u.account_type = 'merchant'
+				AND u.merchant_since IS NULL;
+			`)
+			if err != nil {
+				return fmt.Errorf("error backfilling users.merchant_since: %w", err)
+			}
+
+			appLogger.Logf("migration 1.51: backfilled merchant_since on %d accounts", tag.RowsAffected())
+			return nil
+		},
+	},
 }
 
 // migrateW9WarningTiers replaces one hard gate with an escalating sequence.

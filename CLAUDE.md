@@ -144,10 +144,38 @@ disappears once it is merged, so it lives in the repo alongside the code it desc
 
 Each file carries:
 - A header with the date range, the repos touched, and total active hours
-- How those hours were arrived at (commit clustering, and any adjustment made to it, stated plainly)
+- How those hours were measured, stated plainly, and any weakness in the measurement named
 - Features grouped large-to-small, each with its own hours (**to the nearest 0.1h**) and repo
 - A table of smaller fixes, same rule
 - A totals table and a volume line (files, insertions/deletions, migrations, new routes)
+
+**Hours are measured wall-clock time, not an estimate of how long the work would have taken by hand.**
+That distinction is the one this convention has got wrong most expensively — see the correction at the
+top of `branch-scopes/pjol/merchant-onboarding-revamp.md`, where work that measured 2.5h was written up
+as 11.5h, a 4.7x inflation, because the figures came from diff size and never from a clock.
+
+**Before writing any hours, pull and follow the `time-accounting` skill.** It lives in the public repo
+<https://github.com/pjol/SKILLS> (browsable at
+<https://github.com/pjol/SKILLS/tree/main/time-accounting>), so no checkout or credentials are needed:
+
+```sh
+BASE=https://raw.githubusercontent.com/pjol/SKILLS/main/time-accounting
+curl -fsSL $BASE/SKILL.md                                    # the method — read this first
+curl -fsSL $BASE/scripts/measure_sittings.py -o /tmp/ms.py
+python3 /tmp/ms.py --project .                               # the measurement
+```
+
+Or clone it whole with `git clone https://github.com/pjol/SKILLS.git`. The script clusters
+session-transcript timestamps into sittings on a 30-minute gap and prints the measured total; the skill
+carries the full method, including what to do when a figure has already been published wrong.
+
+Commit clustering is **not** the method — it measures when work landed, not when it was done, and a
+branch committed days after it was written clusters into the length of the commit session. If the clock
+was not consulted at all, report the volume and say the time was not measured rather than reporting hours.
+
+The measured figures live here, in `branch-scopes/<branch-name>.md`, in the shape described above — the
+skill supplies the number, this folder is where it is recorded. Nothing about time reporting is stored
+outside this folder.
 
 Itemised hours should add up to the measured figure. Rounding every item up to a common floor inflates the
 total — the first draft of round 2 in the example file floored at 0.5h and came out 35% over what the

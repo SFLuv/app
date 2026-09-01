@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { ImagePlus, Loader2, Trash2, ZoomIn, ZoomOut } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
@@ -19,13 +19,27 @@ import {
   PIN_VIEWBOX_WIDTH,
   PIN_OPEN_COLOR,
 } from "@/lib/merchant-icon"
+import {
+  clampLogoCrop,
+  cropLogoToPngBlob,
+  initialLogoCrop,
+  logoRenderedSize,
+  readLogoFile,
+  uploadLocationLogo,
+  zoomLogoCrop,
+  LOGO_FILE_INPUT_ACCEPT,
+  LOGO_VIEWPORT,
+  type LogoCrop,
+} from "@/lib/location-logo"
 import type { AuthedLocation } from "@/types/location"
 
-/** Edge length of the square the crop is saved at. */
-const OUTPUT_SIZE = 512
-/** Edge length of the on-screen crop window. */
-const VIEWPORT = 260
-const MAX_UPLOAD_BYTES = 2 * 1024 * 1024
+/**
+ * The crop maths lives in lib/location-logo, shared with the Location Approval
+ * Form's first step. Two implementations of it would mean a logo that framed
+ * one way when the location was applied for and another way when it was
+ * replaced here.
+ */
+const VIEWPORT = LOGO_VIEWPORT
 /**
  * Bigger than the map draws it. The map's pin is deliberately small; a preview
  * at that size would not show a merchant whether their logo survives the crop.
@@ -36,14 +50,6 @@ interface MerchantIconCardProps {
   location: AuthedLocation
   /** Called after a successful save or removal so the caller can refetch. */
   onSaved?: () => void | Promise<void>
-}
-
-interface CropState {
-  /** Multiplier on top of the scale that just covers the viewport. */
-  zoom: number
-  /** Top-left of the scaled image relative to the viewport, in CSS pixels. */
-  x: number
-  y: number
 }
 
 /**
@@ -61,7 +67,7 @@ export function MerchantIconCard({ location, onSaved }: MerchantIconCardProps) {
   const [editing, setEditing] = useState(false)
   const [image, setImage] = useState<HTMLImageElement | null>(null)
   const [objectUrl, setObjectUrl] = useState<string | null>(null)
-  const [crop, setCrop] = useState<CropState>({ zoom: 1, x: 0, y: 0 })
+  const [crop, setCrop] = useState<LogoCrop>({ zoom: 1, x: 0, y: 0 })
   const [saving, setSaving] = useState(false)
   const [removing, setRemoving] = useState(false)
   const [error, setError] = useState("")
@@ -86,27 +92,7 @@ export function MerchantIconCard({ location, onSaved }: MerchantIconCardProps) {
     }
   }, [objectUrl])
 
-  /** Scale at which the image exactly covers the crop window. */
-  const baseScale = useMemo(() => {
-    if (!image) return 1
-    return VIEWPORT / Math.min(image.naturalWidth, image.naturalHeight)
-  }, [image])
-
-  const clampOffset = useCallback(
-    (next: CropState): CropState => {
-      if (!image) return next
-      const width = image.naturalWidth * baseScale * next.zoom
-      const height = image.naturalHeight * baseScale * next.zoom
-      return {
-        zoom: next.zoom,
-        // The image must always cover the window — never let a gap open at an
-        // edge, or the saved crop would contain transparent bands.
-        x: Math.min(0, Math.max(VIEWPORT - width, next.x)),
-        y: Math.min(0, Math.max(VIEWPORT - height, next.y)),
-      }
-    },
-    [baseScale, image],
-  )
+  const clampOffset = useCallback((next: LogoCrop): LogoCrop => clampLogoCrop(image, next), [image])
 
   const openFilePicker = () => {
     setError("")
@@ -117,39 +103,18 @@ export function MerchantIconCard({ location, onSaved }: MerchantIconCardProps) {
     if (!file) return
     setError("")
 
-    if (!/^image\/(png|jpeg|webp|gif)$/.test(file.type)) {
-      setError("Choose a PNG, JPEG, or WebP image.")
-      return
-    }
-    if (file.size > MAX_UPLOAD_BYTES * 4) {
-      // Generous: the crop is re-encoded before upload, so a large original is
-      // fine — this only rejects files big enough to stall the browser.
-      setError("That image is too large. Try one under 8 MB.")
-      return
-    }
-
-    const url = URL.createObjectURL(file)
-    const element = new window.Image()
-    element.onload = () => {
+    try {
+      const element = await readLogoFile(file)
       setObjectUrl((previous) => {
         if (previous) URL.revokeObjectURL(previous)
-        return url
+        return element.src
       })
       setImage(element)
-      // Start centred at the cover scale, which is the crop most people want.
-      const scale = VIEWPORT / Math.min(element.naturalWidth, element.naturalHeight)
-      setCrop({
-        zoom: 1,
-        x: (VIEWPORT - element.naturalWidth * scale) / 2,
-        y: (VIEWPORT - element.naturalHeight * scale) / 2,
-      })
+      setCrop(initialLogoCrop(element))
       setEditing(true)
+    } catch (readError) {
+      setError(readError instanceof Error ? readError.message : "That image could not be read.")
     }
-    element.onerror = () => {
-      URL.revokeObjectURL(url)
-      setError("That image could not be read.")
-    }
-    element.src = url
   }
 
   const onPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
@@ -182,72 +147,20 @@ export function MerchantIconCard({ location, onSaved }: MerchantIconCardProps) {
     }
   }
 
-  /** Zoom about the centre of the window, so the subject does not drift away. */
   const setZoom = (zoom: number) => {
-    setCrop((current) => {
-      const ratio = zoom / current.zoom
-      const centre = VIEWPORT / 2
-      return clampOffset({
-        zoom,
-        x: centre - (centre - current.x) * ratio,
-        y: centre - (centre - current.y) * ratio,
-      })
-    })
+    setCrop((current) => zoomLogoCrop(image, current, zoom))
   }
 
-  const renderedWidth = image ? image.naturalWidth * baseScale * crop.zoom : 0
-  const renderedHeight = image ? image.naturalHeight * baseScale * crop.zoom : 0
-
-  const cropToBlob = async (): Promise<Blob | null> => {
-    if (!image) return null
-
-    const canvas = document.createElement("canvas")
-    canvas.width = OUTPUT_SIZE
-    canvas.height = OUTPUT_SIZE
-    const context = canvas.getContext("2d")
-    if (!context) return null
-
-    // Map the window back onto the source image: the visible square starts at
-    // the negated offset and is one window wide at the current scale.
-    const scale = baseScale * crop.zoom
-    const sourceSize = VIEWPORT / scale
-    context.imageSmoothingQuality = "high"
-    context.drawImage(
-      image,
-      -crop.x / scale,
-      -crop.y / scale,
-      sourceSize,
-      sourceSize,
-      0,
-      0,
-      OUTPUT_SIZE,
-      OUTPUT_SIZE,
-    )
-
-    return await new Promise((resolve) => canvas.toBlob(resolve, "image/png"))
-  }
+  const { width: renderedWidth, height: renderedHeight } = logoRenderedSize(image, crop)
 
   const save = async () => {
     setSaving(true)
     setError("")
     try {
-      const blob = await cropToBlob()
+      const blob = await cropLogoToPngBlob(image, crop)
       if (!blob) throw new Error("The crop could not be prepared.")
-      if (blob.size > MAX_UPLOAD_BYTES) {
-        throw new Error("That crop is too detailed to upload. Try a simpler image.")
-      }
 
-      const body = new FormData()
-      body.append("icon", blob, "icon.png")
-
-      const response = await authFetch(`/locations/${location.id}/icon`, { method: "POST", body })
-      if (!response.ok) {
-        const payload = await response.json().catch(() => null)
-        throw new Error(payload?.error || "Unable to save your icon.")
-      }
-      const payload = (await response.json()) as { icon_url?: string }
-
-      setLocalIconUrl(payload.icon_url ?? null)
+      setLocalIconUrl(await uploadLocationLogo(authFetch, location.id, blob))
       setEditing(false)
       setImage(null)
       toast({ title: "Icon saved", description: "Your map pin now shows your icon." })
@@ -318,7 +231,7 @@ export function MerchantIconCard({ location, onSaved }: MerchantIconCardProps) {
       <input
         ref={fileInputRef}
         type="file"
-        accept="image/png,image/jpeg,image/webp"
+        accept={LOGO_FILE_INPUT_ACCEPT}
         className="hidden"
         onChange={(event) => {
           void handleFile(event.target.files?.[0])
@@ -360,7 +273,9 @@ export function MerchantIconCard({ location, onSaved }: MerchantIconCardProps) {
                     src={objectUrl}
                     alt=""
                     draggable={false}
-                    className="pointer-events-none absolute select-none"
+                    // See location-logo-field: without max-w-none the preflight
+                    // img rule clamps the width and the preview stretches.
+                    className="pointer-events-none absolute max-w-none select-none"
                     style={{
                       width: renderedWidth,
                       height: renderedHeight,
@@ -446,7 +361,7 @@ function CropPreview({
   size,
 }: {
   objectUrl: string | null
-  crop: CropState
+  crop: LogoCrop
   width: number
   height: number
   size: number
@@ -463,7 +378,7 @@ function CropPreview({
         src={objectUrl}
         alt=""
         draggable={false}
-        className="absolute left-0 top-0 select-none"
+        className="absolute left-0 top-0 max-w-none select-none"
         style={{ width, height, transform: `translate(${crop.x}px, ${crop.y}px)` }}
       />
     </div>
@@ -478,7 +393,7 @@ function PinPreview({
   height
 }: {
   objectUrl: string | null
-  crop: CropState
+  crop: LogoCrop
   width: number
   height: number
 }) {

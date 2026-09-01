@@ -8,13 +8,18 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// ErrLocationNotCancellable says an application has already been reviewed. Only
-// a listing still waiting in the queue can be withdrawn: once an admin has
-// approved it the shop is on the map with a wallet behind it, and once they have
-// rejected it there is nothing left to withdraw.
-var ErrLocationNotCancellable = errors.New("only a location application still awaiting review can be cancelled")
+// ErrLocationNotCancellable says the listing is approved, or is not this
+// caller's to withdraw. Approval is the one state that cannot be undone here:
+// the shop is on the map with a wallet behind it and money may already have
+// arrived, which is a support conversation rather than a button.
+//
+// Pending and rejected can both be withdrawn. Rejected matters because it also
+// blocks reverting to a personal account, and a state that blocks with no way
+// out is a trap rather than a rule.
+var ErrLocationNotCancellable = errors.New("only a location application that has not been approved can be withdrawn")
 
-// CancelPendingLocation withdraws an application the caller owns.
+// CancelPendingLocation withdraws an application the caller owns and an admin
+// has not approved.
 //
 // Soft-deleted rather than removed, in step with every other retirement in this
 // schema. The row is the record that the application was made, and the partial
@@ -32,28 +37,31 @@ func (a *AppDB) CancelPendingLocation(ctx context.Context, ownerID string, locat
 	}
 	defer tx.Rollback(ctx)
 
-	// approval IS NULL is the whole guard, and it is in the UPDATE rather than a
+	// "not approved" is the whole guard, and it is in the UPDATE rather than a
 	// SELECT before it: an admin approving this listing in the same moment must
-	// win or lose the race outright, not have the cancellation applied on top of
-	// an approval it never saw.
+	// win or lose the race outright, not have the withdrawal applied on top of an
+	// approval it never saw.
 	tag, err := tx.Exec(ctx, `
 		UPDATE locations
 		SET
 			active = FALSE,
 			delete_date = NOW(),
-			delete_reason = 'cancelled by the merchant while pending review'
+			delete_reason = CASE
+				WHEN approval IS NULL THEN 'withdrawn by the merchant while pending review'
+				ELSE 'withdrawn by the merchant after being rejected'
+			END
 		WHERE id = $1
 		AND owner_id = $2
 		AND active = TRUE
-		AND approval IS NULL;
+		AND approval IS DISTINCT FROM TRUE;
 	`, locationID, ownerID)
 	if err != nil {
 		return fmt.Errorf("error cancelling location %d: %w", locationID, err)
 	}
 	if tag.RowsAffected() == 0 {
-		// Either it is not theirs, is already gone, or has been reviewed. The
-		// caller cannot act differently on any of those, and saying which would
-		// tell a stranger whether somebody else's location id exists.
+		// Either it is not theirs, is already gone, or is approved. The caller
+		// cannot act differently on any of those, and saying which would tell a
+		// stranger whether somebody else's location id exists.
 		return ErrLocationNotCancellable
 	}
 
@@ -93,7 +101,7 @@ func (a *AppDB) LocationIsCancellable(ctx context.Context, ownerID string, locat
 		WHERE id = $1
 		AND owner_id = $2
 		AND active = TRUE
-		AND approval IS NULL;
+		AND approval IS DISTINCT FROM TRUE;
 	`, locationID, ownerID).Scan(&cancellable)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {

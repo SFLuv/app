@@ -5,13 +5,7 @@ import { useRouter } from "next/navigation"
 import { Loader2, Store, User } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { MerchantAccountPermanenceNotice } from "@/components/merchant/merchant-account-permanence-notice"
 import { useApp, type MerchantRevertEligibility } from "@/context/AppProvider"
 import { MERCHANT_ONBOARDING_PATH } from "@/lib/merchant-onboarding"
@@ -103,61 +97,48 @@ export function AccountTypeCard() {
   return (
     <Card className="mt-6">
       <CardHeader>
+        {/* The account's own type is the card's answer, so it is the title
+            rather than a subtitle underneath one. */}
         <CardTitle className="flex items-center gap-2 text-black dark:text-white">
           {isMerchant ? <Store className="h-5 w-5" /> : <User className="h-5 w-5" />}
-          Account Type
+          {isMerchant ? "Merchant account" : "Personal account"}
         </CardTitle>
-        <CardDescription>
-          {isMerchant
-            ? "This is a merchant account. You can list locations on the SFLuv map."
-            : "This is a personal account. You spend and receive SFLuv in your own wallet."}
-        </CardDescription>
+
       </CardHeader>
 
       <CardContent className="space-y-4">
+        {/* The consequence is not stated here: pressing this opens the notice
+            that states it, and saying it twice makes the notice look like a
+            formality rather than the decision point it is. */}
         {!isMerchant && (
-          <>
-            <p className="text-sm leading-relaxed text-muted-foreground">
-              Run a business that wants to accept SFLuv? Switching to a merchant account lets you
-              apply to put your locations on the map. You can switch back while you have no
-              locations approved and nothing waiting to be reviewed — after that it is permanent.
-            </p>
-            <Button
-              className="bg-[#eb6c6c] hover:bg-[#d55c5c]"
-              disabled={busy}
-              onClick={() => setNoticeOpen(true)}
-            >
-              Become a merchant
-            </Button>
-          </>
+          <Button
+            className="bg-[#eb6c6c] hover:bg-[#d55c5c]"
+            disabled={busy}
+            onClick={() => setNoticeOpen(true)}
+          >
+            Become a merchant
+          </Button>
         )}
 
         {isMerchant && loading && (
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Loader2 className="h-4 w-4 animate-spin" />
-            Checking your locations...
-          </div>
+          <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
         )}
 
         {isMerchant && !loading && eligibility?.can_revert && (
-          <>
-            <p className="text-sm leading-relaxed text-muted-foreground">
-              You have no locations on the map and nothing waiting to be reviewed, so this account
-              can still go back to being a personal one. Once any location of yours is approved,
-              it stays a merchant account for good.
-            </p>
-            <Button variant="outline" disabled={busy} onClick={() => void revertToPersonal()}>
-              {busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Switch back to a personal account
-            </Button>
-          </>
+          <Button variant="outline" disabled={busy} onClick={() => void revertToPersonal()}>
+            {busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+            Switch to a personal account
+          </Button>
         )}
 
+        {/* Kept as text rather than moved to a tooltip: this is why an action
+            somebody came looking for is not on the screen, and an explanation
+            nobody can see until they hover is no explanation. */}
         {isMerchant && !loading && eligibility && !eligibility.can_revert && (
-          <p className="text-sm leading-relaxed text-muted-foreground">
+          <p className="text-sm text-muted-foreground">
             {eligibility.approved_locations > 0
-              ? "You have a location on the SFLuv map, so this stays a merchant account. An approved location is public and takes payments, which cannot be unwound into a personal account."
-              : "You have an application waiting to be reviewed. Cancel it from your locations if you want to go back to a personal account."}
+              ? "Locked to a merchant account: you have an approved location."
+              : "Withdraw your location applications to switch back to a personal account."}
           </p>
         )}
 

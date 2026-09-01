@@ -2,10 +2,9 @@
 
 import { useEffect, useMemo, useState } from "react"
 import { useRouter } from "next/navigation"
-import { CheckCircle2 } from "lucide-react"
 
 import { useApp } from "@/context/AppProvider"
-import { LocationApprovalForm } from "@/components/merchant/location-approval-form"
+import { LocationApprovalFlow } from "@/components/merchant/location-approval-flow"
 import { LocationApplicationStatusCard } from "@/components/merchant/location-application-status"
 import { CancelLocationApplication } from "@/components/merchant/cancel-location-application"
 import { MerchantApprovalForm } from "@/components/merchant/merchant-approval-form"
@@ -39,11 +38,6 @@ export default function MerchantOnboardingPage() {
   const [googleLoadError, setGoogleLoadError] = useState<string | null>(null)
   const [editingLocationId, setEditingLocationId] = useState<number | null>(null)
   const [startingAnotherApplication, setStartingAnotherApplication] = useState(false)
-  // Set the moment an application is accepted, and cleared by whichever button
-  // the merchant presses next. It is not derived from the location list: a
-  // second application looks exactly like the first one did from out here, and
-  // the confirmation has to be about the one they just filled in.
-  const [justSubmitted, setJustSubmitted] = useState(false)
 
   useEffect(() => {
     let mounted = true
@@ -83,20 +77,6 @@ export default function MerchantOnboardingPage() {
     () => [...userLocations].sort((a, b) => b.id - a.id),
     [userLocations],
   )
-  const rejectedLocations = useMemo(
-    () =>
-      sortedUserLocations.filter(
-        (location) => getLocationApplicationStatus(location.approval) === "rejected",
-      ),
-    [sortedUserLocations],
-  )
-  const hasLiveApplication = useMemo(
-    () =>
-      sortedUserLocations.some(
-        (location) => getLocationApplicationStatus(location.approval) !== "rejected",
-      ),
-    [sortedUserLocations],
-  )
   const editingLocation: AuthedLocation | undefined = useMemo(
     () => sortedUserLocations.find((location) => location.id === editingLocationId),
     [editingLocationId, sortedUserLocations],
@@ -125,47 +105,6 @@ export default function MerchantOnboardingPage() {
     )
   }
 
-  // The confirmation screen. It takes the whole page rather than sitting above
-  // the application list, because the two things a merchant might do next —
-  // file another one, or go and look at what they have — are the only things on
-  // it, and burying them under a list of cards is how they get missed.
-  if (justSubmitted) {
-    return (
-      <div className="mx-auto w-full max-w-2xl px-3 pb-6 pt-8 sm:px-0">
-        <Card className="border-green-300 dark:border-green-800">
-          <CardContent className="space-y-6 p-6 text-center sm:p-8">
-            <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-green-100 dark:bg-green-500/15">
-              <CheckCircle2 className="h-7 w-7 text-green-600 dark:text-green-400" />
-            </div>
-            <div className="space-y-2">
-              <h1 className="text-2xl font-bold text-black dark:text-white">
-                Your application has been submitted successfully
-              </h1>
-              <p className="text-sm leading-relaxed text-muted-foreground">
-                The SFLuv team will review this location and email the contact you gave us. You can
-                still cancel it from your locations while it is waiting to be reviewed.
-              </p>
-            </div>
-            <div className="flex flex-col gap-3 sm:flex-row sm:justify-center">
-              <Button
-                className="bg-[#eb6c6c] hover:bg-[#d55c5c]"
-                onClick={() => {
-                  setJustSubmitted(false)
-                  setStartingAnotherApplication(true)
-                }}
-              >
-                Apply for another location
-              </Button>
-              <Button variant="outline" onClick={() => router.push("/locations")}>
-                View my locations
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-    )
-  }
-
   // The newest listing that was not rejected, else the newest of any kind:
   // whichever best describes the business is what a second location inherits.
   const prefillSource =
@@ -173,13 +112,49 @@ export default function MerchantOnboardingPage() {
       (location) => getLocationApplicationStatus(location.approval) !== "rejected",
     ) ?? sortedUserLocations[0]
 
-  const showForm =
-    editingLocation !== undefined ||
-    sortedUserLocations.length === 0 ||
-    startingAnotherApplication
-  // Only a new application needs the Places picker, so an edit does not wait on
-  // a script it will never call.
-  const needsPlacePicker = showForm && editingLocation === undefined
+  // A new application takes the whole screen; editing an existing one stays in
+  // the app's ordinary layout, because it is a correction to a record rather
+  // than a flow with a beginning and an end.
+  const applying = editingLocation === undefined &&
+    (sortedUserLocations.length === 0 || startingAnotherApplication)
+  if (applying) {
+    if (googleLoadError) {
+      return (
+        <Card className="mx-auto mt-6 max-w-2xl border-[#eb6c6c]/40 bg-[#eb6c6c]/5">
+          <CardContent className="p-6 text-sm text-[#8f2e2e]">{googleLoadError}</CardContent>
+        </Card>
+      )
+    }
+    if (!googleReady) {
+      return (
+        <div className="flex min-h-[60vh] items-center justify-center">
+          <div className="h-12 w-12 animate-spin rounded-full border-b-2 border-t-2 border-[#eb6c6c]"></div>
+        </div>
+      )
+    }
+
+    return (
+      <LocationApprovalFlow
+        prefillFrom={prefillSource}
+        // Always offered, and it always goes somewhere real. Locations is the
+        // merchant hub: with shops listed it shows them, and with none it shows
+        // the setup view this form was reached from. There is no wall any more,
+        // so a navigation is a genuine exit rather than a round trip.
+        onCancel={
+          startingAnotherApplication
+            ? () => setStartingAnotherApplication(false)
+            : () => router.push("/locations")
+        }
+        onFinish={() => {
+          setStartingAnotherApplication(false)
+          // Same reasoning as the Cancel target above: a merchant who has just
+          // applied does have a location now, so /locations is reachable.
+          router.push("/locations")
+        }}
+        onSubmitted={() => void refreshUserRecord()}
+      />
+    )
+  }
 
   return (
     <div className="mx-auto w-full max-w-3xl space-y-5 px-3 pb-6 pt-2 sm:space-y-6 sm:px-0">
@@ -187,15 +162,16 @@ export default function MerchantOnboardingPage() {
         <h1 className="text-2xl font-bold text-black dark:text-white sm:text-3xl">
           Set up your merchant account
         </h1>
-        {/* The write gate lifts as soon as a listing exists, approved or not, so
-            a merchant reading a rejection is no longer held to reads — telling
-            them otherwise would be the app describing a restriction that is not
-            there. */}
-        <p className="text-sm text-muted-foreground sm:text-base">
-          {merchantOnboardingRequired
-            ? "List your business so SFLuv can give it a till wallet and put it on the map. Until then you can look around, but sending, receiving and everything else stays switched off."
-            : "Your business is not on the SFLuv map yet. Here is where your application stands."}
-        </p>
+        {/* Kept, and only in the gated case. It is not a subtitle describing
+            the page — it is the reason the rest of the app is switched off, and
+            somebody who does not read it has no way to find that out. The write
+            gate lifts as soon as a listing exists, approved or not, so it says
+            nothing to a merchant who has already applied. */}
+        {merchantOnboardingRequired && (
+          <p className="text-sm text-muted-foreground">
+            Sending and receiving stay switched off until you list a business.
+          </p>
+        )}
       </div>
 
       {sortedUserLocations.length > 0 && (
@@ -205,21 +181,25 @@ export default function MerchantOnboardingPage() {
 
             return (
               <LocationApplicationStatusCard key={location.id} location={location}>
-                {applicationStatus === "pending" && (
-                  <CancelLocationApplication location={location} />
-                )}
+                {/* No status gate here: the component shows itself for anything
+                    not yet approved, which now includes a rejected application
+                    — that blocks a revert to a personal account too, so it needs
+                    the same way out. */}
+                <CancelLocationApplication location={location} />
                 {applicationStatus === "rejected" && editingLocationId !== location.id && (
                   <div className="space-y-3">
-                    <p className="text-sm leading-relaxed text-gray-600 dark:text-gray-400">
-                      Correct your details and save them. Saving does not put the listing back in
-                      the review queue on its own — email{" "}
+                    {/* Not a tooltip: saving does not re-queue the listing, and
+                        a merchant who never hovers would sit waiting on a review
+                        nobody has been asked for. */}
+                    <p className="text-sm text-gray-600 dark:text-gray-400">
+                      Saving does not re-queue this listing. Email{" "}
                       <a
                         className="font-semibold text-foreground underline underline-offset-4"
                         href={`mailto:${MERCHANT_SUPPORT_EMAIL}`}
                       >
                         {MERCHANT_SUPPORT_EMAIL}
                       </a>{" "}
-                      once your corrections are saved and ask for another review.
+                      to ask for another review.
                     </p>
                     <Button
                       variant="outline"
@@ -236,96 +216,50 @@ export default function MerchantOnboardingPage() {
         </div>
       )}
 
-      {needsPlacePicker && googleLoadError && (
-        <Card className="border-[#eb6c6c]/40 bg-[#eb6c6c]/5">
-          <CardContent className="p-6 text-sm text-[#8f2e2e]">{googleLoadError}</CardContent>
-        </Card>
-      )}
-
-      {needsPlacePicker && !googleLoadError && !googleReady && (
-        <div className="flex min-h-[200px] items-center justify-center">
-          <div className="h-12 w-12 animate-spin rounded-full border-b-2 border-t-2 border-[#eb6c6c]"></div>
-        </div>
-      )}
-
-      {showForm && (!needsPlacePicker || (googleReady && !googleLoadError)) && (
+      {editingLocation !== undefined && (
         <div className="space-y-3">
-          {editingLocation !== undefined && (
-            <Button variant="ghost" onClick={() => setEditingLocationId(null)}>
-              Cancel editing
-            </Button>
-          )}
-          {startingAnotherApplication && editingLocation === undefined && (
-            <Button variant="ghost" onClick={() => setStartingAnotherApplication(false)}>
-              Back to your applications
-            </Button>
-          )}
+          <Button variant="ghost" onClick={() => setEditingLocationId(null)}>
+            Cancel editing
+          </Button>
 
           {/* Editing keeps the older single-sheet form. It edits a record that
               already exists — the place is fixed, PUT /locations does not accept
               a new one — so a stepper built around picking a location would be
               three screens of questions with the first one answered already. */}
-          {editingLocation !== undefined ? (
-            <MerchantApprovalForm
-              key={editingLocation.id}
-              existingLocation={editingLocation}
-              onSaved={() => {
-                setEditingLocationId(null)
-                void refreshUserRecord()
-              }}
-            />
-          ) : (
-            <LocationApprovalForm
-              key={startingAnotherApplication ? "another-application" : "new-application"}
-              prefillFrom={prefillSource}
-              onSubmitted={() => {
-                setStartingAnotherApplication(false)
-                setJustSubmitted(true)
-                void refreshUserRecord()
-              }}
-            />
-          )}
+          <MerchantApprovalForm
+            key={editingLocation.id}
+            existingLocation={editingLocation}
+            onSaved={() => {
+              setEditingLocationId(null)
+              void refreshUserRecord()
+            }}
+          />
         </div>
       )}
 
-      {!showForm && hasLiveApplication && (
-        <p className="text-sm text-muted-foreground">
-          Your application is with the SFLuv team. We will email you when it has been reviewed.
-        </p>
-      )}
-
-      {!showForm && (
+      {/* Also the landing state for a gated merchant who cancelled out of the
+          form: with nothing listed there is no "another" location, so the card
+          offers the first one instead of asking a question with no subject. */}
+      {editingLocation === undefined && (
         <Card className="border-border/70">
           <CardContent className="flex flex-col gap-3 p-5 sm:flex-row sm:items-center sm:justify-between">
-            <div className="space-y-1">
-              <p className="text-sm font-semibold text-foreground">Have another location?</p>
-              <p className="text-sm leading-6 text-muted-foreground">
-                Each location gets its own listing and till wallet. We will carry your contact and
-                payment details over so you only fill in what is different.
-              </p>
-            </div>
+            <p className="text-sm font-semibold text-foreground">
+              {sortedUserLocations.length === 0
+                ? "Ready to list your business?"
+                : "Have another location?"}
+            </p>
             <Button
               className="shrink-0 bg-[#eb6c6c] hover:bg-[#d55c5c]"
-              onClick={() => setStartingAnotherApplication(true)}
+              onClick={() => setStartingAnotherApplication(sortedUserLocations.length > 0)}
             >
-              Start its application
+              {sortedUserLocations.length === 0
+                ? "Start application"
+                : "Apply for another location"}
             </Button>
           </CardContent>
         </Card>
       )}
 
-      {!showForm && !hasLiveApplication && rejectedLocations.length > 0 && (
-        <p className="text-sm text-muted-foreground">
-          Pick an application above to correct it, or email{" "}
-          <a
-            className="font-semibold text-foreground underline underline-offset-4"
-            href={`mailto:${MERCHANT_SUPPORT_EMAIL}`}
-          >
-            {MERCHANT_SUPPORT_EMAIL}
-          </a>{" "}
-          if you need a hand.
-        </p>
-      )}
     </div>
   )
 }

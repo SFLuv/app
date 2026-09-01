@@ -152,6 +152,28 @@ func (s *AppDB) CreateTables() error {
 		ALTER TABLE users
 		ADD COLUMN IF NOT EXISTS web_merchant_prompt_seen_at TIMESTAMPTZ;
 
+		-- Start of the current merchant stint; cleared on a revert. See
+		-- migration 1.51 for why money arriving before it is not sales.
+		ALTER TABLE users
+		ADD COLUMN IF NOT EXISTS merchant_since TIMESTAMPTZ;
+
+		-- TRUE where migration 1.51 guessed the date rather than observing the
+		-- change. An inferred date is an upper bound; see that migration.
+		ALTER TABLE users
+		ADD COLUMN IF NOT EXISTS merchant_since_inferred BOOLEAN NOT NULL DEFAULT FALSE;
+
+		CREATE TABLE IF NOT EXISTS user_account_type_events (
+			id SERIAL PRIMARY KEY,
+			user_id TEXT NOT NULL REFERENCES users(id),
+			previous_account_type TEXT NOT NULL DEFAULT '',
+			account_type TEXT NOT NULL,
+			source TEXT NOT NULL DEFAULT '',
+			changed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		);
+
+		CREATE INDEX IF NOT EXISTS user_account_type_events_user_idx
+			ON user_account_type_events(user_id, changed_at);
+
 		ALTER TABLE users
 		ADD COLUMN IF NOT EXISTS merchant_onboarding_completed_at TIMESTAMPTZ;
 

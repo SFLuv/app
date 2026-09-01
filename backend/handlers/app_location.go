@@ -253,7 +253,7 @@ func (a *AppService) CancelLocationApplication(w http.ResponseWriter, r *http.Re
 	err = a.db.CancelPendingLocation(r.Context(), *userDid, locationID)
 	if errors.Is(err, db.ErrLocationNotCancellable) {
 		writeJSON(w, http.StatusConflict, map[string]string{
-			"error": "This application has already been reviewed, so it can no longer be cancelled.",
+			"error": "This location is approved, so it can no longer be withdrawn.",
 		})
 		return
 	}

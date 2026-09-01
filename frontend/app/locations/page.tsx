@@ -2,13 +2,13 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useRouter } from "next/navigation"
-import { ArrowDownLeft, ArrowLeftRight, Check, CheckCircle2, Copy, RefreshCw, Send, Store, Wallet } from "lucide-react"
+import { ArrowDownLeft, ArrowLeftRight, Check, Copy, RefreshCw, Send, Store, Wallet } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { LocationApprovalForm } from "@/components/merchant/location-approval-form"
+import { LocationApprovalFlow } from "@/components/merchant/location-approval-flow"
 import { CancelLocationApplication } from "@/components/merchant/cancel-location-application"
 import { ReceiveCryptoModal } from "@/components/wallets/receive-crypto-modal"
 import { SendCryptoModal } from "@/components/wallets/send-crypto-modal"
@@ -38,8 +38,16 @@ export default function LocationsPage() {
   const router = useRouter()
   const { toast } = useToast()
   const unwrapEnabled = useUnwrapEnabled()
-  const { user, userLocations, wallets, walletsStatus, status, refreshUserRecord, refreshWallets } =
-    useApp()
+  const {
+    user,
+    userLocations,
+    wallets,
+    walletsStatus,
+    status,
+    refreshUserRecord,
+    refreshWallets,
+    merchantOnboardingRequired,
+  } = useApp()
 
   const [selectedLocationId, setSelectedLocationId] = useState<number | null>(null)
   const [locationCountBeforeApply, setLocationCountBeforeApply] = useState<number | null>(null)
@@ -53,11 +61,6 @@ export default function LocationsPage() {
   const [showTipReceiveModal, setShowTipReceiveModal] = useState(false)
   const [tipBalance, setTipBalance] = useState<number | null>(null)
   const [applying, setApplying] = useState(false)
-  // Set when the stepper accepts an application, and cleared by whichever button
-  // the merchant presses next. The page's own acknowledgement — it selects the
-  // new shop once the refetch lands — is about the chooser above; this is about
-  // the form they were just in, and the two answer different questions.
-  const [justSubmitted, setJustSubmitted] = useState(false)
   const [googleReady, setGoogleReady] = useState(false)
   const [googleLoadError, setGoogleLoadError] = useState<string | null>(null)
 
@@ -145,16 +148,13 @@ export default function LocationsPage() {
     setLocationCountBeforeApply(null)
   }, [locationCountBeforeApply, sortedLocations])
 
-  // Regular accounts have no locations to manage, and a merchant with none has
-  // an onboarding form waiting rather than an empty page.
+  // Regular accounts have no locations to manage. A merchant with none stays
+  // here and is shown the setup view below — bouncing them to the form was what
+  // made "no locations yet" indistinguishable from "you must fill this in now".
   useEffect(() => {
     if (status !== "authenticated") return
-    if (!isMerchantAccount) {
-      router.replace("/wallets")
-      return
-    }
-    if (userLocations.length === 0) router.replace(MERCHANT_ONBOARDING_PATH)
-  }, [isMerchantAccount, router, status, userLocations.length])
+    if (!isMerchantAccount) router.replace("/wallets")
+  }, [isMerchantAccount, router, status])
 
   useEffect(() => {
     if (!applying || googleReady) return
@@ -230,6 +230,45 @@ export default function LocationsPage() {
     )
   }
 
+  // The merchant hub in its empty state: an account that has said it is a
+  // merchant but has nothing listed, either because it has never applied or
+  // because it withdrew the one application it had. This is where Cancel on the
+  // form lands, so it has to be a real screen rather than a redirect back into
+  // the form the merchant just left.
+  if (sortedLocations.length === 0) {
+    return (
+      <div className="mx-auto w-full max-w-2xl px-3 pb-6 pt-2 sm:px-6">
+        <h1 className="text-2xl font-bold text-black dark:text-white sm:text-3xl">Locations</h1>
+        <Card className="mt-6 border-border/70">
+          <CardContent className="space-y-5 p-6 text-center sm:p-8">
+            <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-[#eb6c6c]/10">
+              <Store className="h-6 w-6 text-[#eb6c6c]" />
+            </div>
+            <div className="space-y-2">
+              <h2 className="text-xl font-semibold text-black dark:text-white">
+                Set up your merchant account
+              </h2>
+              {/* Kept as text: it is the reason sending and receiving are
+                  refused, and somebody who never hovers has no way to find that
+                  out. It says nothing once a listing exists. */}
+              {merchantOnboardingRequired && (
+                <p className="text-sm text-muted-foreground">
+                  Sending and receiving stay switched off until you list a business.
+                </p>
+              )}
+            </div>
+            <Button
+              className="bg-[#eb6c6c] hover:bg-[#d55c5c]"
+              onClick={() => router.push(MERCHANT_ONBOARDING_PATH)}
+            >
+              Start application
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    )
+  }
+
   if (!selectedLocation) return null
 
   const applicationStatus = getLocationApplicationStatus(selectedLocation.approval)
@@ -241,14 +280,52 @@ export default function LocationsPage() {
       ? `${paymentAddress.slice(0, 6)}...${paymentAddress.slice(-4)}`
       : paymentAddress
 
+  // The stepper takes the whole screen, so it is returned instead of the page
+  // rather than rendered inside it.
+  if (applying) {
+    if (googleLoadError) {
+      return (
+        <Card className="mx-auto mt-6 max-w-2xl border-[#eb6c6c]/40 bg-[#eb6c6c]/5">
+          <CardContent className="p-6 text-sm text-[#8f2e2e]">{googleLoadError}</CardContent>
+        </Card>
+      )
+    }
+    if (!googleReady) {
+      return (
+        <div className="flex min-h-[60vh] items-center justify-center">
+          <div className="h-12 w-12 animate-spin rounded-full border-b-2 border-t-2 border-[#eb6c6c]" />
+        </div>
+      )
+    }
+
+    return (
+      <LocationApprovalFlow
+        // Carried from the shop they started with rather than whichever one the
+        // chooser happens to be on: the business and the person we ring about it
+        // are the same across all of them, so a second application should not
+        // read differently depending on what was on screen when it was opened.
+        prefillFrom={sortedLocations[0]}
+        onCancel={() => setApplying(false)}
+        onFinish={() => setApplying(false)}
+        onSubmitted={() => {
+          setLocationCountBeforeApply(sortedLocations.length)
+          void (async () => {
+            await refreshUserRecord()
+            // Wallets are minted at approval, not now, so the new listing has
+            // none yet. Refreshed anyway because the same read is what picks up
+            // an approval that landed while this form was open.
+            await refreshWallets()
+          })()
+        }}
+      />
+    )
+  }
+
   return (
     <div className="mx-auto w-full max-w-2xl space-y-4 px-3 pb-6 pt-2 sm:space-y-6 sm:px-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h1 className="text-2xl font-bold text-black dark:text-white sm:text-3xl">Locations</h1>
-          <p className="mt-1 text-sm text-gray-600 dark:text-gray-400 sm:text-base">
-            The wallet each of your shops is paid into
-          </p>
         </div>
         <div className="flex items-center gap-2">
           <Button
@@ -320,20 +397,21 @@ export default function LocationsPage() {
               only raises questions the approval email answers. */}
           {applicationStatus === "pending" && (
             <div className="space-y-3">
-              <p className="text-sm leading-relaxed text-muted-foreground">
-                This location will not appear on the SFLuv map or take customer payments until our
-                team approves the listing. We will email you when it has been reviewed.
+              {/* Kept as text: it says why the wallet and payment surfaces
+                  below are missing, and an explanation nobody can see until
+                  they hover is no explanation. */}
+              <p className="text-sm text-muted-foreground">
+                Not on the map or taking payments until this listing is approved.
               </p>
-              {/* Withdrawing is only offered here, while the listing is still in
-                  the queue. It is also the one thing standing between this
-                  account and a personal one, if that is what the merchant is
-                  really after. */}
+              {/* Also the one thing standing between this account and a personal
+                  one, if that is what the merchant is really after. */}
               <CancelLocationApplication location={selectedLocation} />
             </div>
           )}
           {applicationStatus === "rejected" && (
-            <p className="text-sm leading-relaxed text-muted-foreground">
-              This listing was not approved, so it takes no payments.{" "}
+            <div className="space-y-3">
+            <p className="text-sm text-muted-foreground">
+              Not approved, so it takes no payments.{" "}
               {/* The setup page turns a regular account away, so a merchant who
                   predates account types is sent to a human instead of a door
                   that closes on them. */}
@@ -359,6 +437,11 @@ export default function LocationsPage() {
               </a>{" "}
               to ask for another review.
             </p>
+            {/* A refused application still blocks a revert to a personal
+                account, so it needs a way out of its own rather than only a
+                route back into review. */}
+            <CancelLocationApplication location={selectedLocation} />
+            </div>
           )}
         </CardHeader>
 
@@ -366,9 +449,8 @@ export default function LocationsPage() {
         <CardContent className="space-y-4">
           {paymentAddress === "" ? (
             <div className="rounded-lg border bg-muted/25 px-4 py-5 text-sm text-muted-foreground">
-              No wallet is attached to this location yet. Wallets are created when a listing is
-              approved, so this should fill in shortly after. Email {MERCHANT_SUPPORT_EMAIL} if it
-              stays this way.
+              No wallet yet. Wallets are created at approval. Email {MERCHANT_SUPPORT_EMAIL} if
+              this stays.
             </div>
           ) : (
             <div className="flex flex-wrap items-center gap-2">
@@ -389,9 +471,8 @@ export default function LocationsPage() {
 
           {paymentAddress !== "" && !locationWallet && (
             <div className="rounded-lg border bg-muted/25 px-4 py-5 text-sm text-muted-foreground">
-              We could not open this location&apos;s wallet in this session, so sending from it is
-              unavailable here. Anything already at the address is untouched — reload the page, and
-              email {MERCHANT_SUPPORT_EMAIL} if it keeps happening.
+              This wallet could not be opened, so sending is unavailable. Your balance is
+              untouched. Reload the page, or email {MERCHANT_SUPPORT_EMAIL}.
             </div>
           )}
 
@@ -461,8 +542,7 @@ export default function LocationsPage() {
               )}
               {tipAddress !== "" && !tipWallet && (
                 <p className="text-sm text-muted-foreground">
-                  This location's tipping account could not be opened in this session — reload the
-                  page if it does not appear in a moment.
+                  This tipping account could not be opened. Reload the page.
                 </p>
               )}
             </>
@@ -470,89 +550,6 @@ export default function LocationsPage() {
         </CardContent>
         )}
       </Card>
-
-      {justSubmitted && (
-        <Card className="border-green-300 dark:border-green-800">
-          <CardContent className="space-y-5 p-6 text-center">
-            <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-green-100 dark:bg-green-500/15">
-              <CheckCircle2 className="h-6 w-6 text-green-600 dark:text-green-400" />
-            </div>
-            <div className="space-y-2">
-              <p className="text-lg font-semibold text-black dark:text-white">
-                Your application has been submitted successfully
-              </p>
-              <p className="text-sm leading-relaxed text-muted-foreground">
-                The SFLuv team will review this location and email the contact you gave us. You can
-                cancel it from here while it is waiting to be reviewed.
-              </p>
-            </div>
-            <div className="flex flex-col gap-3 sm:flex-row sm:justify-center">
-              <Button
-                className="bg-[#eb6c6c] hover:bg-[#d55c5c]"
-                onClick={() => {
-                  setJustSubmitted(false)
-                  setApplying(true)
-                }}
-              >
-                Apply for another location
-              </Button>
-              {/* This page is the locations view, so the button closes the
-                  confirmation rather than navigating somewhere it already is. */}
-              <Button variant="outline" onClick={() => setJustSubmitted(false)}>
-                View my locations
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {applying && (
-        <div className="space-y-3">
-          <p className="text-sm text-muted-foreground">
-            A second shop is a separate listing with its own wallet, and needs its own approval
-            before it goes on the map.
-          </p>
-
-          {googleLoadError ? (
-            <Card className="border-[#eb6c6c]/40 bg-[#eb6c6c]/5">
-              <CardContent className="p-6 text-sm text-[#8f2e2e]">{googleLoadError}</CardContent>
-            </Card>
-          ) : !googleReady ? (
-            <div className="flex min-h-[200px] items-center justify-center">
-              <div className="h-12 w-12 animate-spin rounded-full border-b-2 border-t-2 border-[#eb6c6c]" />
-            </div>
-          ) : (
-            <>
-              <Button variant="ghost" onClick={() => setApplying(false)}>
-                Cancel
-              </Button>
-              <LocationApprovalForm
-                // Carried from the shop they started with rather than whichever
-                // one the chooser happens to be on: the business and the person
-                // we ring about it are the same across all of them, so a second
-                // application should not read differently depending on what was
-                // on screen when it was opened.
-                prefillFrom={sortedLocations[0]}
-                // Staying here is the point: the merchant came to manage tills
-                // and the new listing appears in the chooser as soon as it lands.
-                onSubmitted={() => {
-                  setApplying(false)
-                  setJustSubmitted(true)
-                  setLocationCountBeforeApply(sortedLocations.length)
-                  void (async () => {
-                    await refreshUserRecord()
-                    // Wallets are minted at approval, not now, so the new
-                    // listing has none yet. Refreshed anyway because the same
-                    // read is what picks up an approval that landed while this
-                    // form was open.
-                    await refreshWallets()
-                  })()
-                }}
-              />
-            </>
-          )}
-        </div>
-      )}
 
       {locationWallet && (
         <>

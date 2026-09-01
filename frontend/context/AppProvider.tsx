@@ -65,6 +65,14 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Contact } from "@/types/contact";
 import { useIdleTimer } from "react-idle-timer";
 import { IdleModal } from "@/components/idle/idle-modal";
+import { Store, User as UserIcon } from "lucide-react";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import type { LucideIcon } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -84,10 +92,7 @@ import {
 } from "@/lib/policies";
 import { useChainConfig } from "@/context/ChainConfigProvider";
 import { isChromeFreeRoute } from "@/lib/app-chrome";
-import {
-  hasOnlyRejectedApplications,
-  MERCHANT_ONBOARDING_PATH,
-} from "@/lib/merchant-onboarding";
+import { MERCHANT_ONBOARDING_PATH } from "@/lib/merchant-onboarding";
 
 // const mockUser: User = { id: "user3", name: "Bob Johnson", email: "bob@example.com", isMerchant: true, isAdmin: false, isOrganizer: false }
 export type UserStatus = "loading" | "authenticated" | "unauthenticated";
@@ -96,13 +101,15 @@ export type MerchantApprovalStatus = "pending" | "approved" | "rejected" | null;
 
 /**
  * The backend's answer to "can this merchant account go back to being a
- * personal one". Rejected applications are not counted — they leave nothing on
- * the map and nothing in the queue.
+ * personal one". Any live listing blocks it, in any of the three states; an
+ * application that has not been approved can be withdrawn to clear the way.
  */
 export interface MerchantRevertEligibility {
   account_type: AccountType;
   approved_locations: number;
   pending_locations: number;
+  /** Refused applications block too, and are withdrawn the same way. */
+  rejected_locations: number;
   can_revert: boolean;
 }
 
@@ -196,13 +203,6 @@ interface AppContextType {
   linkApple: () => Promise<void>;
   unlinkApple: () => Promise<void>;
   authFetch: (endpoint: string, options?: RequestInit) => Promise<Response>;
-  /**
-   * True while a merchant account with no listed shop must see the onboarding
-   * screen and nothing else. Consumed by MerchantOnboardingWall in Providers,
-   * which renders the onboarding page in place of the route — rendering, not
-   * navigating, because a redirect can lose a race and a render cannot.
-   */
-  merchantOnboardingWalled: boolean;
   /**
    * True when the web app should offer this account the merchant option once.
    * It is the mobile-signup case only: somebody who was never asked at signup,
@@ -588,38 +588,67 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     status === "authenticated" &&
     user?.accountType === "merchant" &&
     !user?.merchantOnboardingCompletedAt;
-  // Two accounts belong on the onboarding screen. The first is the one above,
-  // held to reads until it lists a shop. The second has listed one and had it
-  // rejected: the gate lifted the moment the location existed, so the app would
-  // otherwise let them wander around with no hint that their shop is not on the
-  // map and no way to find out why.
-  const merchantOnboardingIncomplete =
-    merchantOnboardingRequired ||
-    (status === "authenticated" &&
-      user?.accountType === "merchant" &&
-      hasOnlyRejectedApplications(userLocations));
-  // A wall, not a nudge — the product owner's call, reversing the earlier
-  // one-redirect-per-sign-in design. A merchant who has not listed a shop sees
-  // the onboarding form and nothing else, on every sign-in, until a location
-  // exists. Only the onboarding screen itself, the chrome-free account exits,
-  // and the policy texts the form links to stay reachable. Derived from server
-  // state rather than remembered per session, so it survives logging out.
-  const merchantGateAllowsPath =
-    pathname.startsWith(MERCHANT_ONBOARDING_PATH) ||
-    isChromeFreeRoute(pathname) ||
-    allowPolicyRoute;
-  const merchantGateBlocksView =
-    merchantOnboardingIncomplete && !merchantGateAllowsPath;
-  // Temporary diagnostic for the blank-page hunt — remove once resolved.
-  // eslint-disable-next-line no-console
-  console.log("[gate]", {
-    status,
-    acct: user?.accountType,
-    completedAt: user?.merchantOnboardingCompletedAt ?? null,
-    pathname,
-    incomplete: merchantOnboardingIncomplete,
-    blocks: merchantGateBlocksView,
-  });
+  // Which account this session has already sent to the form, so it is sent once
+  // and not again. A ref rather than state: nothing renders from it, and it must
+  // not itself cause the render that would re-run the effect.
+  const merchantFormOfferedForRef = useRef<string | null>(null);
+
+  // There is no wall on the web app any more.
+  //
+  // A merchant who has not listed a shop can look around like anybody else, and
+  // is not thrown back to the form on every sign-in. The form is reached from
+  // Locations, which is where a merchant's shops live, and leaving it returns
+  // them there.
+  //
+  // The server-side gate is untouched and still refuses writes for such an
+  // account — merchantOnboardingRequired above is its mirror, and the screens
+  // that offer a write consult it. Reading was always allowed; walling the
+  // whole app was the client's own decision, and it made "look around" mean
+  // "look at this one form".
+  //
+  // Mobile is the opposite and deliberately so: a phone is a till, not a place
+  // to browse, so a merchant account there sees an onboarding flow or the till
+  // and nothing else.
+
+  /**
+   * Takes a merchant with nothing listed to the form, once per sign-in.
+   *
+   * A navigation, not the wall this replaced: they arrive on the form because
+   * it is what they signed up to do, and Cancel leaves for Locations and stays
+   * left. The wall re-asserted itself on every path change, which is what made
+   * "look around" mean "look at this one form".
+   *
+   * Fires after status is authenticated, which is set immediately after the
+   * locations land — so "has nothing listed" is never read off an empty list
+   * that simply has not loaded. It also covers the signup flow without a second
+   * mechanism: choosing merchant reloads the profile, and the account arrives
+   * here with no locations.
+   *
+   * Zero locations rather than the onboarding stamp, because a merchant who
+   * withdrew their only application has a stamp and nothing listed, and is in
+   * exactly the state this exists for.
+   */
+  useEffect(() => {
+    if (status !== "authenticated") return;
+    if (!user || user.accountType !== "merchant") return;
+    if (userLocations.length > 0) return;
+    if (merchantFormOfferedForRef.current === user.id) return;
+
+    // Already there, or somewhere they went deliberately — the account exits and
+    // the policy texts. Marked as offered either way, so leaving one of those
+    // pages later does not spring the redirect on them.
+    if (
+      pathname.startsWith(MERCHANT_ONBOARDING_PATH) ||
+      isChromeFreeRoute(pathname) ||
+      allowPolicyRoute
+    ) {
+      merchantFormOfferedForRef.current = user.id;
+      return;
+    }
+
+    merchantFormOfferedForRef.current = user.id;
+    replace(MERCHANT_ONBOARDING_PATH);
+  }, [allowPolicyRoute, pathname, replace, status, user, userLocations.length]);
 
   const clearAuthenticatedState = (options?: {
     clearDeletedAccount?: boolean;
@@ -721,18 +750,6 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     privyUser,
     walletsReady,
   ]);
-
-  useEffect(() => {
-    if (!merchantGateBlocksView) {
-      return;
-    }
-    // pathname is a dependency on purpose: other code also navigates — the
-    // OAuth landing runs clearAuthenticatedState, which replaces to /map — and
-    // when two replaces race, the last one wins. Re-asserting on every path
-    // change means losing a race once costs a frame, not the whole session
-    // stuck on a blanked page.
-    replace(MERCHANT_ONBOARDING_PATH);
-  }, [merchantGateBlocksView, pathname, replace]);
 
   useEffect(() => {
     if (error) console.error(error);
@@ -902,6 +919,7 @@ export default function AppProvider({ children }: { children: ReactNode }) {
   };
 
   const _resetAppState = async () => {
+    merchantFormOfferedForRef.current = null;
     clearAuthenticatedState({ clearDeletedAccount: true, redirectToMap: true });
   };
 
@@ -2024,7 +2042,6 @@ export default function AppProvider({ children }: { children: ReactNode }) {
           linkApple,
           unlinkApple,
           authFetch,
-          merchantOnboardingWalled: merchantGateBlocksView,
           showWebMerchantPrompt,
           dismissWebMerchantPrompt,
           setOwnAccountType,
@@ -2101,19 +2118,23 @@ export function useAppStatus() {
 const ACCOUNT_TYPE_OPTIONS: {
   value: AccountType;
   title: string;
-  detail: string;
+  icon: LucideIcon;
+  /** Terse, and shown on hover rather than under the title. */
+  hint: string;
 }[] = [
   {
     value: "regular",
-    title: "Personal account",
-    detail:
-      "Spend and receive SFLuv around San Francisco, and hold it in your own wallet.",
+    title: "Personal",
+    icon: UserIcon,
+    hint: "Spend and receive SFLuv in your own wallet.",
   },
   {
     value: "merchant",
-    title: "Merchant account",
-    detail:
-      "For businesses that want to accept SFLuv. You list your locations, and once one is approved this stays a merchant account.",
+    title: "Merchant",
+    icon: Store,
+    // The one consequence somebody cannot discover by clicking, so it is the
+    // one thing the hint spends its words on.
+    hint: "List your business. Permanent once a location is approved.",
   },
 ];
 
@@ -2171,28 +2192,6 @@ function PolicyAcceptanceOverlay({
               <h2 className="text-3xl font-semibold tracking-tight text-foreground">
                 Accept the Privacy Policy to keep using SFLuv
               </h2>
-              <p className="text-sm leading-6 text-muted-foreground sm:text-base">
-                To use the app, you need to review and accept the{" "}
-                <Link
-                  href={privacyPolicyHref}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="font-semibold text-foreground underline underline-offset-4"
-                >
-                  Privacy Policy
-                </Link>
-                . You can also choose whether to opt in to SFLuv email updates
-                under the{" "}
-                <Link
-                  href={emailOptInPolicyHref}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="font-semibold text-foreground underline underline-offset-4"
-                >
-                  Email Opt-In Policy
-                </Link>
-                .
-              </p>
 
               <div className="space-y-3 rounded-2xl border border-border/70 bg-muted/30 p-4">
                 <label className="flex items-start gap-3">
@@ -2240,59 +2239,59 @@ function PolicyAcceptanceOverlay({
                 </label>
               </div>
 
-              <p className="text-sm text-muted-foreground">
-                The Privacy Policy checkbox is required. Email opt-in is optional
-                and you can unsubscribe later at any time.
-              </p>
             </>
           ) : (
             <>
               <h2 className="text-3xl font-semibold tracking-tight text-foreground">
                 What kind of account is this?
               </h2>
-              <p className="text-sm leading-6 text-muted-foreground sm:text-base">
-                Pick the one that describes you. A merchant account is for a
-                business that wants to accept SFLuv: you will be asked to list
-                your first location next, and once a location of yours is
-                approved the account stays a merchant account for good.
-              </p>
 
-              <div
-                role="radiogroup"
-                aria-label="Account type"
-                className="grid gap-3 sm:grid-cols-2"
-              >
-                {ACCOUNT_TYPE_OPTIONS.map((option) => {
-                  const selected = accountType === option.value;
-                  return (
-                    <button
-                      key={option.value}
-                      type="button"
-                      role="radio"
-                      aria-checked={selected}
-                      disabled={busy}
-                      onClick={() => setAccountType(option.value)}
-                      className={`rounded-2xl border p-4 text-left transition-colors disabled:opacity-60 ${
-                        selected
-                          ? "border-[#eb6c6c] bg-[#eb6c6c]/10"
-                          : "border-border/70 bg-muted/30 hover:border-[#eb6c6c]/60"
-                      }`}
-                    >
-                      <span className="block text-sm font-semibold text-foreground">
-                        {option.title}
-                      </span>
-                      <span className="mt-1 block text-sm leading-6 text-muted-foreground">
-                        {option.detail}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-
-              <p className="text-sm text-muted-foreground">
-                Not sure? Choose a personal account. You can turn it into a
-                merchant account later from Settings.
-              </p>
+              {/* Icon, title, and nothing else on the face of the tile. What a
+                  merchant account costs you is real but is not something to
+                  read past on the way to a two-option choice, so it is on the
+                  hint rather than under the title. */}
+              <TooltipProvider delayDuration={200}>
+                <div
+                  role="radiogroup"
+                  aria-label="Account type"
+                  className="grid gap-3 sm:grid-cols-2"
+                >
+                  {ACCOUNT_TYPE_OPTIONS.map((option) => {
+                    const selected = accountType === option.value;
+                    const Icon = option.icon;
+                    return (
+                      <Tooltip key={option.value}>
+                        <TooltipTrigger asChild>
+                          <button
+                            type="button"
+                            role="radio"
+                            aria-checked={selected}
+                            aria-label={`${option.title} — ${option.hint}`}
+                            disabled={busy}
+                            onClick={() => setAccountType(option.value)}
+                            className={`flex flex-col items-center gap-3 rounded-2xl border p-6 transition-colors disabled:opacity-60 ${
+                              selected
+                                ? "border-[#eb6c6c] bg-[#eb6c6c]/10"
+                                : "border-border/70 bg-muted/30 hover:border-[#eb6c6c]/60"
+                            }`}
+                          >
+                            <Icon
+                              className={`h-8 w-8 ${selected ? "text-[#eb6c6c]" : "text-muted-foreground"}`}
+                              strokeWidth={1.5}
+                            />
+                            <span className="text-sm font-semibold text-foreground">
+                              {option.title}
+                            </span>
+                          </button>
+                        </TooltipTrigger>
+                        <TooltipContent className="max-w-[15rem]">
+                          {option.hint}
+                        </TooltipContent>
+                      </Tooltip>
+                    );
+                  })}
+                </div>
+              </TooltipProvider>
 
               {/* A failure can only come back from the submission, which only
                   this step can make — showing it on the first step would put an

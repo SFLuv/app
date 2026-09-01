@@ -39,7 +39,11 @@ export function CancelLocationApplication({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState("")
 
-  if (location.approval !== null && location.approval !== undefined) return null
+  // Anything not yet approved. Rejected included: it blocks a revert to a
+  // personal account the same way a pending one does, so it needs the same way
+  // out. An approved location is on the map with money behind it and is not
+  // something a button should be able to take away.
+  if (location.approval === true) return null
 
   const confirm = async () => {
     setBusy(true)
@@ -78,9 +82,7 @@ export function CancelLocationApplication({
           <DialogHeader>
             <DialogTitle>Cancel this application?</DialogTitle>
             <DialogDescription>
-              {location.name || "This location"} will be withdrawn from the review queue. This
-              cannot be undone — to apply again you would fill the Location Approval Form in
-              afresh.
+              {location.name || "This location"} will be withdrawn. This cannot be undone.
             </DialogDescription>
           </DialogHeader>
 
@@ -90,17 +92,22 @@ export function CancelLocationApplication({
             </p>
           )}
 
-          <DialogFooter className="gap-2 sm:gap-2">
-            <Button variant="outline" disabled={busy} onClick={() => setOpen(false)}>
+          <DialogFooter className="grid grid-cols-2 gap-2 sm:flex-row sm:justify-end sm:gap-2">
+            <Button
+              variant="outline"
+              className="w-full sm:w-40"
+              disabled={busy}
+              onClick={() => setOpen(false)}
+            >
               Keep it
             </Button>
             <Button
-              className="bg-red-600 text-white hover:bg-red-700"
+              className="w-full bg-red-600 text-white hover:bg-red-700 sm:w-40"
               disabled={busy}
               onClick={() => void confirm()}
             >
               {busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Cancel application
+              Cancel it
             </Button>
           </DialogFooter>
         </DialogContent>

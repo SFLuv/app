@@ -367,7 +367,7 @@ cleanup() {
     kill_tree KILL "$pid"
   done
   local p pids
-  for p in "$ANVIL_PORT" "$ENGINE_PORT" "$PONDER_PORT" "$BACKEND_PORT" "$FRONTEND_PORT" ${WEBPAGE_PORT:+"$WEBPAGE_PORT"} 8081; do
+  for p in "$ANVIL_PORT" "$ENGINE_PORT" "$PONDER_PORT" "$BACKEND_PORT" "$FRONTEND_PORT" ${FRONTEND_INTERNAL_PORT:+"$FRONTEND_INTERNAL_PORT"} ${WEBPAGE_PORT:+"$WEBPAGE_PORT"} 8081; do
     pids=$(lsof -ti tcp:"$p" 2>/dev/null || true)
     [[ -n "$pids" ]] && kill -9 $pids 2>/dev/null || true
   done
@@ -669,6 +669,28 @@ STARTED=1
 ENGINE_REPO="${ENGINE_REPO:-https://github.com/citizenwallet/engine.git}"
 ENGINE_BRANCH="${ENGINE_BRANCH:-main}"
 ENGINE_DIR="$TMP_DIR/engine"
+
+# ----------------------------------------------------------------------------
+# 0b. Frontend build, started first and left to run alongside everything else
+# ----------------------------------------------------------------------------
+# The frontend is served from a production build now, not `next dev`. A dev
+# server is quick to start and then pays for it on every first click — a cold
+# /map compile was over two minutes, which is why this script used to curl
+# twenty routes just to warm them. A production build front-loads all of that
+# into one compile.
+#
+# It is kicked off here, before the chain, the databases and the backend, so it
+# compiles while those boot. By the time step 8 is reached it is usually done
+# and the server starts immediately; if not, step 8 waits for it.
+FRONTEND_INTERNAL_PORT=3100
+FRONTEND_BUILD_PID=""
+if [[ "$RUN_FRONTEND" -eq 1 ]]; then
+  c_blue "[0b/10] Frontend build (background)"
+  ensure_deps "$ROOT/frontend" frontend "$LOG_DIR/frontend-install.log"
+  ( cd "$ROOT/frontend" && npm run build >"$LOG_DIR/frontend-build.log" 2>&1 </dev/null ) &
+  FRONTEND_BUILD_PID=$!
+  c_yellow "  building while the rest boots: ${LOG_DIR#"$ROOT"/}/frontend-build.log"
+fi
 
 c_blue "[1/10] Citizen Wallet engine source ($ENGINE_BRANCH)"
 if [[ -d "$ENGINE_DIR/.git" ]]; then
@@ -1201,7 +1223,8 @@ fi
 if [[ "$RUN_FRONTEND" -eq 1 ]]; then
   c_blue "[8/10] Frontend (:$FRONTEND_PORT)"
   free_port "$FRONTEND_PORT" frontend
-  ensure_deps "$ROOT/frontend" frontend "$LOG_DIR/frontend-install.log"
+  free_port "$FRONTEND_INTERNAL_PORT" "frontend (internal)"
+  # Dependencies were installed at step 0b, before the build.
   FRONTEND_ENV=(
     "IN_PRODUCTION=false"
     "NEXT_PUBLIC_BACKEND_URL=http://localhost:$BACKEND_PORT"
@@ -1220,27 +1243,113 @@ if [[ "$RUN_FRONTEND" -eq 1 ]]; then
     # only. Production sets nothing here and keeps the stricter policy.
     "NEXT_PUBLIC_CSP_EXTRA_IMG_SRC=http://localhost:$BACKEND_PORT"
   )
-  start_bg frontend "$ROOT/frontend" "$LOG_DIR/frontend.log" env "${FRONTEND_ENV[@]}" npm run dev
-  wait_for "https://localhost:$FRONTEND_PORT" "frontend" 90 "${PIDS[${#PIDS[@]}-1]}" "$LOG_DIR/frontend.log" \
-    || c_yellow "  frontend still starting — check tmp/logs/frontend.log"
+  # Collect the build started at step 0b. Usually finished by now; if not, this
+  # is the only place the boot waits on it.
+  if [[ -n "$FRONTEND_BUILD_PID" ]]; then
+    if kill -0 "$FRONTEND_BUILD_PID" 2>/dev/null; then
+      c_yellow "  waiting for the frontend build to finish..."
+    fi
+    if ! wait "$FRONTEND_BUILD_PID"; then
+      c_yellow "  frontend build FAILED — see tmp/logs/frontend-build.log"
+      c_yellow "  falling back to a dev server so the rest of the stack is still usable"
+      start_bg frontend "$ROOT/frontend" "$LOG_DIR/frontend.log" env "${FRONTEND_ENV[@]}" npm run dev
+      wait_for "https://localhost:$FRONTEND_PORT" "frontend" 90 "${PIDS[${#PIDS[@]}-1]}" "$LOG_DIR/frontend.log" \
+        || c_yellow "  frontend still starting — check tmp/logs/frontend.log"
+      FRONTEND_BUILD_PID=""
+    else
+      FRONTEND_BUILD_PID=""
+      # `next start` has no HTTPS option — that is a dev-only flag — so the
+      # production server listens on an internal http port and a tiny built-in
+      # TLS proxy publishes it on :3000. Everything downstream depends on that
+      # exact origin: Privy's registered redirect URLs, the backend's
+      # APP_BASE_URL, and every wait_for below. Serving plain http here would
+      # break sign-in with no obvious cause.
+      FRONTEND_CERT="$ROOT/frontend/certificates/localhost.pem"
+      FRONTEND_KEY="$ROOT/frontend/certificates/localhost-key.pem"
+      # Written out at boot rather than kept as a second file in this folder:
+      # scripts/MAINTENANCE.md holds each subfolder to one script and one
+      # markdown, and this is generated plumbing, not a script anyone runs.
+      FRONTEND_TLS_PROXY="$ROOT/tmp/frontend-tls-proxy.mjs"
+      cat >"$FRONTEND_TLS_PROXY" <<'TLSPROXY'
+// Terminates TLS in front of `next start`, which has no HTTPS option of its own
+// (--experimental-https is dev-only). Node built-ins only: the boot script must
+// not need an install step for its own plumbing.
+import { createServer } from "node:https"
+import { request } from "node:http"
+import { readFileSync } from "node:fs"
+import { connect } from "node:net"
 
-  # Warm-build every route in the background so the dev compiler does its work
-  # now instead of on your first click (a cold /map compile takes 2+ minutes).
-  # Runs concurrently with the rest of the boot; progress in frontend-warm.log.
-  FRONTEND_ROUTES=(
-    / /map /settings /wallets /admin /contacts /calendar /voter /proposer
-    /improver /issuer /supervisor /affiliates /opportunities /your-opportunities
-    /role-management /merchant-status /update /verify /addcontact
-  )
-  (
-    for route in "${FRONTEND_ROUTES[@]}"; do
-      printf '%s ' "$route"
-      curl -sk -o /dev/null -m 300 "https://localhost:$FRONTEND_PORT$route" && printf 'ok\n' || printf 'failed\n'
-    done
-    echo "route warm-up complete"
-  ) >"$LOG_DIR/frontend-warm.log" 2>&1 &
-  PIDS+=($!)
-  c_yellow "  warming all routes in the background (tmp/logs/frontend-warm.log)"
+const [, , certPath, keyPath, listenPort, targetPort] = process.argv
+const UPSTREAM = { host: "127.0.0.1", port: Number(targetPort) }
+
+const server = createServer(
+  { cert: readFileSync(certPath), key: readFileSync(keyPath) },
+  (req, res) => {
+    const upstream = request(
+      { ...UPSTREAM, path: req.url, method: req.method, headers: req.headers },
+      (upstreamRes) => {
+        res.writeHead(upstreamRes.statusCode ?? 502, upstreamRes.headers)
+        upstreamRes.pipe(res)
+      },
+    )
+    // A momentary refusal must not take the proxy down with it; the browser
+    // gets a 502 and a reload works.
+    upstream.on("error", () => {
+      if (!res.headersSent) res.writeHead(502, { "content-type": "text/plain" })
+      res.end("upstream unavailable")
+    })
+    req.pipe(upstream)
+  },
+)
+
+server.on("upgrade", (req, socket, head) => {
+  const upstream = connect(UPSTREAM.port, UPSTREAM.host, () => {
+    upstream.write(
+      `${req.method} ${req.url} HTTP/1.1\r\n` +
+        Object.entries(req.headers).map(([k, v]) => `${k}: ${v}\r\n`).join("") +
+        "\r\n",
+    )
+    if (head?.length) upstream.write(head)
+    upstream.pipe(socket)
+    socket.pipe(upstream)
+  })
+  upstream.on("error", () => socket.destroy())
+  socket.on("error", () => upstream.destroy())
+})
+
+server.listen(Number(listenPort), () => {
+  console.log(`tls proxy: https://localhost:${listenPort} -> http://127.0.0.1:${targetPort}`)
+})
+TLSPROXY
+      if [[ -f "$FRONTEND_CERT" && -f "$FRONTEND_KEY" ]]; then
+        start_bg frontend "$ROOT/frontend" "$LOG_DIR/frontend.log" \
+          env "${FRONTEND_ENV[@]}" npx next start -p "$FRONTEND_INTERNAL_PORT"
+        wait_for "http://localhost:$FRONTEND_INTERNAL_PORT" "frontend (internal)" 60 \
+          "${PIDS[${#PIDS[@]}-1]}" "$LOG_DIR/frontend.log" \
+          || c_yellow "  frontend still starting — check tmp/logs/frontend.log"
+        start_bg frontend-tls "$ROOT" "$LOG_DIR/frontend-tls.log" \
+          node "$FRONTEND_TLS_PROXY" \
+          "$FRONTEND_CERT" "$FRONTEND_KEY" "$FRONTEND_PORT" "$FRONTEND_INTERNAL_PORT"
+        wait_for "https://localhost:$FRONTEND_PORT" "frontend" 30 "${PIDS[${#PIDS[@]}-1]}" \
+          "$LOG_DIR/frontend-tls.log" \
+          || c_yellow "  frontend still starting — check tmp/logs/frontend-tls.log"
+      else
+        # The certificates are generated by `next dev --experimental-https` and
+        # are gitignored, so a fresh clone has none. Rather than silently move
+        # the app to http and break Privy, run the dev server once — which mints
+        # them — and the next boot serves the production build over TLS.
+        c_yellow "  no local TLS certificate yet (frontend/certificates/)"
+        c_yellow "  running the dev server this once to mint it; re-run for the built frontend"
+        start_bg frontend "$ROOT/frontend" "$LOG_DIR/frontend.log" env "${FRONTEND_ENV[@]}" npm run dev
+        wait_for "https://localhost:$FRONTEND_PORT" "frontend" 90 "${PIDS[${#PIDS[@]}-1]}" "$LOG_DIR/frontend.log" \
+          || c_yellow "  frontend still starting — check tmp/logs/frontend.log"
+      fi
+    fi
+  fi
+
+  # No route warm-up: a production build has already compiled every route, which
+  # is the whole reason for building. The twenty curls this replaced existed only
+  # to hide the dev compiler's cold start.
 else
   c_blue "[8/10] Frontend (skipped)"
 fi
