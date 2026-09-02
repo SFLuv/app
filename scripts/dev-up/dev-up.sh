@@ -1153,10 +1153,10 @@ if [[ "$RUN_BACKEND" -eq 1 ]]; then
     "W9_PROVIDER_ENV=${W9_PROVIDER_ENV:-sandbox}"
     # Track1099, retained only as the fallback if TaxBandits Go Live stalls.
     "W9_PROVIDER_TEAM_ID=${W9_PROVIDER_TEAM_ID:-}"
-    # enforce locally so held rewards and the tax card are actually visible.
-    # Production defaults to shadow, where the decision is computed and logged
-    # but everything is still paid.
-    "W9_ENFORCEMENT=${W9_ENFORCEMENT:-enforce}"
+    # true locally so held rewards and the tax card are actually visible.
+    # Leave it false in production until the vendor is live, so the decision is
+    # computed and logged but everything is still paid.
+    "W9_ENFORCEMENT=${W9_ENFORCEMENT:-true}"
     "W9_THRESHOLD_SFLUV=${W9_THRESHOLD_SFLUV:-600}"
     "W9_ESCROW_WINDOW_DAYS=${W9_ESCROW_WINDOW_DAYS:-7}"
     # Faucet identity. Without these the bot reads the zero address and every

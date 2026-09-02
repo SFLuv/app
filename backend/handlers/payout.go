@@ -45,25 +45,27 @@ func (p *PayoutService) SetAppService(a *AppService) { p.notify = a }
 
 // Enforcement modes.
 //
-// shadow computes the decision, records what it would have done, and pays
-// anyway. It is how the gate is proven against real traffic before it is
-// allowed to hold anyone's money — and the only reliable way to discover a
-// payout path that was missed.
+// W9_ENFORCEMENT is a plain on/off switch: true withholds at the tiers, false
+// computes the decision, records what it would have done, and pays anyway.
+// "shadow" is that recorded-but-paid state — how the gate is proven against
+// real traffic before it is allowed to hold anyone's money.
 const (
 	enforcementShadow  = "shadow"
 	enforcementEnforce = "enforce"
-	enforcementOff     = "off"
 )
 
+// payoutEnforcementMode reads W9_ENFORCEMENT as a boolean. The canonical values
+// are "true" (enforce) and "false" (do not withhold), but the older "enforce"
+// and "shadow"/"off" strings are kept working so an existing environment does
+// not silently flip when this parsing changed.
 func payoutEnforcementMode() string {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("W9_ENFORCEMENT"))) {
-	case enforcementEnforce:
+	case "true", "enforce", "1", "yes", "on":
 		return enforcementEnforce
-	case enforcementOff:
-		return enforcementOff
 	default:
-		// Shadow is the default so that deploying this code cannot, on its own,
-		// start withholding money from anybody.
+		// Anything else — false, shadow, off, empty, or unreadable — computes
+		// the decision but still pays. Defaulting to no-withholding means
+		// deploying this code cannot, on its own, start holding anyone's money.
 		return enforcementShadow
 	}
 }

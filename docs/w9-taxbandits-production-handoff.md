@@ -23,8 +23,8 @@ over out-of-band (1Password). This file is the map, not the treasure.
 | `W9_PROVIDER_API_VERSION` | Leave unset (defaults to `v1.7.3`) |
 | `W9_RETURN_URL` | Leave unset **if** `PUBLIC_BACKEND_URL` is correct — it defaults to `${PUBLIC_BACKEND_URL}/w9/complete`, a page the backend serves itself that hands people back to the app. |
 | `PUBLIC_BACKEND_URL` | The backend's public https origin (e.g. `https://api.sfluv.org`). The return page, photo URLs and callback registration all build from it. |
-| `W9_ENFORCEMENT` | `shadow` computes and logs every decision but still pays everything; `enforce` holds and refuses at the tiers. **Launching in `shadow` for a week and reading the logs is the cautious path; flipping to `enforce` is one env change + restart.** Team's call. |
-| `W9_TIER_NOTICE_SFLUV` / `W9_TIER_WARNING_SFLUV` / `W9_THRESHOLD_SFLUV` | Leave unset for the 400 / 500 / 600 defaults |
+| `W9_ENFORCEMENT` | `true` holds and refuses at the tiers; `false` computes and logs every decision but still pays everything. **Launching `false` for a week and reading the logs is the cautious path; flipping to `true` is one env change + restart.** (The old `enforce` / `shadow` strings still work as aliases.) Team's call. |
+| `W9_TIER_NOTICE_SFLUV` / `W9_TIER_WARNING_SFLUV` / `W9_THRESHOLD_SFLUV` | Leave unset for the 400 / 500 / 600 defaults. **To keep W-9 fully dormant** (ship before the vendor is live): set both tier vars to `0` and the threshold to a very high number — see \"Launching before the vendor is live\" below. |
 | `W9_ESCROW_WINDOW_DAYS` | Leave unset (7). Urgency copy only — escrow holds until the filing clears, it does not expire. |
 
 ## The order that works
@@ -45,6 +45,33 @@ over out-of-band (1Password). This file is the map, not the treasure.
    `completed`. The sweeper covers a missed callback at a slow cadence, so a
    quiet webhook shows up as filings clearing minutes late rather than never.
 
+## Launching before the vendor is live
+
+The whole system can ship before TaxBandits approval comes through, with W-9
+**fully dormant** — everyone is paid, nobody sees a W-9 prompt, and you collect
+W-9s manually in the meantime. Enforcement alone is not enough for this: the
+tier modals in the app are driven by `/w9/status`, which does not consult
+enforcement mode, so a volunteer who crosses 400 / 500 / 600 SFLUV would still
+see "Fill out my W-9" — pointing at a form that is not wired yet. Disable the
+tiers themselves:
+
+    W9_ENFORCEMENT=false            # nobody withheld
+    W9_TIER_NOTICE_SFLUV=0          # 0 disables this tier
+    W9_TIER_WARNING_SFLUV=0         # 0 disables this tier
+    W9_THRESHOLD_SFLUV=100000000    # so high nobody reaches the crossing
+    # W9_PROVIDER left unset -> the provider is "disabled": every form call
+    # returns ErrProviderDisabled, which is fine because no tier is ever
+    # reached to surface a form button in the first place.
+
+No W-9 UI appears anywhere, on mobile or web. When the vendor is live, flip to
+the real values in one restart: real thresholds (unset them for 400/500/600),
+`W9_ENFORCEMENT=true`, `W9_PROVIDER=taxbandits`, and the credential block above.
+
+`W9_PROVIDER` is a real switch, not decoration: `taxbandits` / `track1099` /
+`fake` select the adapter, and anything else (including unset) yields a disabled
+provider whose every call errors. `fake` additionally mounts a local stub form —
+never set it in production.
+
 ## Notes
 
 - The receiver answers 200 within its deadline and does the work after —
@@ -53,7 +80,7 @@ over out-of-band (1Password). This file is the map, not the treasure.
   implemented; the HMAC check is the authentication. If it is ever added, it
   must read `X-Forwarded-For` behind the proxy or it checks the proxy's own
   address.
-- Rollback is env-only: `W9_ENFORCEMENT=shadow` keeps every payout flowing
+- Rollback is env-only: `W9_ENFORCEMENT=false` keeps every payout flowing
   while leaving the decision log intact; `W9_PROVIDER=fake` exists for dev and
   must never be set in production.
 - **IP whitelisting is enabled on the live account** (chosen at go-live), and
