@@ -196,7 +196,10 @@ func (l *Location) ValidateForSubmission() error {
 		{"name", "Business name", l.Name},
 		{"street", "Street address", l.Street},
 		{"city", "City", l.City},
-		{"description", "Business description", l.Description},
+		// The description is deliberately absent. It is optional on the form —
+		// a shop with nothing to add still belongs on the map — and requiring
+		// it here refused a submission over a field the merchant was told they
+		// could leave blank. Its length is still bounded below.
 		{"type", "Business type", l.Type},
 		{"contact_name", "Contact name", l.ContactName},
 		{"admin_email", "Contact email", l.AdminEmail},
@@ -302,11 +305,12 @@ func (l *Location) ValidateForSubmission() error {
 // change. Google-derived fields are not writable on that route, so they are not
 // re-checked here.
 //
-// Only the description is required. The contact fields are required at
-// submission but not here: a record predating those columns can hold empty
-// contact details, and blocking such a merchant from editing their public
-// description over data they cannot reach from this screen is worse than
-// letting the empty value round-trip unchanged.
+// Almost nothing is required. The description is optional, as it is on the
+// submission form. The contact fields are required at submission but not here:
+// a record predating those columns can hold empty contact details, and blocking
+// such a merchant from editing their public description over data they cannot
+// reach from this screen is worse than letting the empty value round-trip
+// unchanged.
 func (l *Location) ValidateForUpdate() error {
 	if l == nil {
 		return newLocationValidationError("location", "location is required")
@@ -318,7 +322,6 @@ func (l *Location) ValidateForUpdate() error {
 		value string
 	}{
 		{"name", "Business name", l.Name},
-		{"description", "Business description", l.Description},
 		{"street", "Street address", l.Street},
 	}
 	for _, entry := range required {

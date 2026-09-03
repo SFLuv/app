@@ -1332,8 +1332,25 @@ export function LocationApprovalForm({
               Back
             </Button>
 
+            {/* The keys are load-bearing, not tidiness.
+
+                Without them React sees one <Button> in one slot across both
+                branches and reuses the same DOM node, mutating type="button"
+                into type="submit". Clicking Continue on the second step then
+                advanced to the third, React flushed the re-render before the
+                browser ran the click's default action, and the browser found
+                itself looking at a submit button — so a plain Continue
+                submitted the form, failed validation against a Payment System
+                step nobody had filled in yet, and left "Please fix the
+                highlighted fields" sitting over a step the merchant had only
+                just arrived at.
+
+                Distinct keys make it an unmount and a mount instead. The
+                clicked node leaves the document during dispatch, so it has no
+                form to submit by the time the default action runs. */}
             {stepIndex < LOCATION_FORM_STEPS.length - 1 ? (
               <Button
+                key="continue"
                 type="button"
                 className="bg-[#eb6c6c] hover:bg-[#d55c5c]"
                 onClick={goNext}
@@ -1343,6 +1360,7 @@ export function LocationApprovalForm({
               </Button>
             ) : (
               <Button
+                key="submit"
                 type="submit"
                 className="bg-[#eb6c6c] hover:bg-[#d55c5c]"
                 disabled={isSubmitting}
