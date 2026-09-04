@@ -176,7 +176,27 @@ func filterEmpty(values ...string) []string {
 // ValidateForSubmission checks the invariants the map depends on. It runs after
 // Google verification has overwritten the Google-derived fields, so a failure
 // here means the merchant-authored part of the form is unusable.
-func (l *Location) ValidateForSubmission() error {
+// LocationIntake says which intake form a submission came from.
+//
+// It exists so a client released before the three-step form can still list a
+// shop against a backend that has it. Those builds are in the app stores and
+// cannot be recalled, so for as long as they are out there the backend has to
+// accept what they were built to send.
+type LocationIntake int
+
+const (
+	// LocationIntakeCurrent is the three-step Location Approval Form: it asks
+	// every question below and its clients always send them.
+	LocationIntakeCurrent LocationIntake = iota
+	// LocationIntakeLegacy is the single-sheet form shipped before Jul 2026. It
+	// never asked how the merchant heard about SFLuv, whether the shop takes
+	// tips, or whether staff have a tablet, so those three are not required of
+	// it. They stay NULL, which is what they were for every listing made through
+	// that form, and an admin fills them in at approval exactly as before.
+	LocationIntakeLegacy
+)
+
+func (l *Location) ValidateForSubmission(intake LocationIntake) error {
 	if l == nil {
 		return newLocationValidationError("location", "location is required")
 	}
@@ -204,8 +224,16 @@ func (l *Location) ValidateForSubmission() error {
 		{"contact_name", "Contact name", l.ContactName},
 		{"admin_email", "Contact email", l.AdminEmail},
 		{"admin_phone", "Contact phone", l.AdminPhone},
-		{"referral_source", "How you heard about SFLuv", l.ReferralSource},
 		{"pos_system", "POS type", l.PosSystem},
+	}
+	// The single-sheet form never asked this one, so requiring it would refuse
+	// every submission from a client already in the app stores.
+	if intake == LocationIntakeCurrent {
+		required = append(required, struct {
+			field string
+			label string
+			value string
+		}{"referral_source", "How you heard about SFLuv", l.ReferralSource})
 	}
 	// A Google listing must carry the place id it was verified against. A manual
 	// listing must not carry one at all — accepting both would leave it ambiguous
@@ -229,11 +257,18 @@ func (l *Location) ValidateForSubmission() error {
 	// are yes/no. Unset is a third state that only a client which skipped the
 	// step can produce, and accepts_tips decides whether the shop gets a tipping
 	// wallet at approval — guessing it would be a decision made for the merchant.
-	if l.AcceptsTips == nil {
-		return newLocationValidationError("accepts_tips", "Tell us whether this location accepts tips.")
-	}
-	if l.HasStaffTablet == nil {
-		return newLocationValidationError("has_staff_tablet", "Tell us whether staff have a tablet or phone available.")
+	//
+	// A legacy client is the one case where unset is not a skipped step: that
+	// form never had the questions. Left NULL rather than guessed, which is what
+	// they were for every listing it ever made, and no tipping wallet is minted
+	// on an answer nobody gave.
+	if intake == LocationIntakeCurrent {
+		if l.AcceptsTips == nil {
+			return newLocationValidationError("accepts_tips", "Tell us whether this location accepts tips.")
+		}
+		if l.HasStaffTablet == nil {
+			return newLocationValidationError("has_staff_tablet", "Tell us whether staff have a tablet or phone available.")
+		}
 	}
 
 	lengths := []struct {

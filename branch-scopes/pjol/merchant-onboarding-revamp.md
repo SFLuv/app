@@ -1,6 +1,7 @@
 # Branch scope — `pjol/merchant-onboarding-revamp`
 
-Aug 28 – Sep 1 2026 · app + mobile-app · **4.8h active** (4.79h raw, across three sittings)
+Aug 28 – Sep 4 2026 · app + mobile-app · **16.4h active** — 7.4h measured across five sittings, plus
+9.0h of hands-on testing reported by PJ and **not** measured (see *Untracked testing time* at the foot)
 
 Merchant onboarding and the location request flow, rebuilt around a split between merchant accounts
 and personal ones. Some of that split already existed on `main` — `users.account_type`, the read-only
@@ -9,6 +10,10 @@ onboarding gate, the merchant wall — and this branch finished it and rebuilt t
 Hours are **measured from session-transcript timestamps**, clustered into sittings on a 30-minute
 gap, and corroborated against file mtimes. Method: the `time-accounting` skill at
 <https://github.com/pjol/SKILLS/tree/main/time-accounting> (local copy: `docs/TIME_ESTIMATION.md`).
+
+The one exception is the testing time in the last section, which no transcript records because no
+prompts were sent during it. It is reported, not measured, and is kept apart from the measured
+figures rather than folded into them.
 
 > **Correction.** Both rounds below were first written at 8.4h and 3.1h — 11.5h claimed for work that
 > measured 2.5h at the time, an inflation of about 4.7x. (The branch total above has since grown past
@@ -170,13 +175,14 @@ Split apportioned by file mtime; approximate below 0.1h.
   merchant account, and that saving a rejected listing does not re-queue it. An
   explanation nobody can see until they hover is no explanation.
 
-# Round 3 — Sep 1, 14:49 onwards
+# Round 3 — Sep 1, 14:49–15:54
 
-**Repos:** `app` · **Total active hours: 0.7 — measured, sitting still open**
+**Repos:** `app` · **Total active hours: 1.1 — measured**
 
 Measured from session-transcript timestamps: a third sitting on Sep 1 after a
-fifty-minute break, which is what separates it from Round 2. The figure is to
-the last message at the time of writing.
+fifty-minute break, which is what separates it from Round 2. Written while the
+sitting was still open and first recorded at 0.7; the sitting closed at 15:54,
+and the figure is now the whole of it.
 
 Closing the account-type round trip, and recording when it happens.
 
@@ -188,6 +194,7 @@ Closing the account-type round trip, and recording when it happens.
 | **Account-type history** — migration 1.51 adds `users.merchant_since`, `users.merchant_since_inferred` and an append-only `user_account_type_events`, written from all three conversion paths (signup, settings, admin repair) inside the same transaction as the change | 0.2 | app |
 | Migration 1.51 fixed after it failed on a `users.created_at` that does not exist, then verified by running it: 11 accounts backfilled, all flagged inferred, schema at 1.51 | 0.1 | app |
 | **Step one's remaining rough edges** — the suggestion dropdown was being clipped by `Expand`'s own `overflow-hidden`, which now releases once the opening animation finishes; the hours tick appears only where Google left a gap; the description starts as one line and grows to fit; the "can't find my location" control moved to a fixed slot so it holds still while the search box travels; and body scroll is locked behind the overlay, which was letting the page underneath scroll with nothing below it | 0.3 | app |
+| Security review launched and run — six parallel read-only reviews, their findings verified against the code rather than taken on report. The write-up lands in Round 4 | 0.4 | app + mobile-app |
 
 ## Totals
 
@@ -234,3 +241,136 @@ Closing the account-type round trip, and recording when it happens.
   location and falls back to when the account was created. It is deliberately
   *not* written as an event: the events table holds changes actually seen, and
   an inferred date sitting among them would read as one.
+
+---
+
+# Round 4 — Sep 2, 13:25–14:43
+
+**Repos:** `app` · `mobile-app` · **Total active hours: 1.3 — measured**
+
+Measured from session-transcript timestamps: one unbroken sitting, no gap over 30 minutes inside it.
+
+A security pass over the whole surface, then the three bugs that first real submission attempt found.
+
+## Features
+
+| Feature | hours | repo |
+|---|---|---|
+| **Security review written up** — the six reviews from Round 3 consolidated and ranked. One critical (anonymous redemption payouts redirectable to an attacker, composed from three individually modest defects), eleven high, the rest medium and below. Three systemic patterns rather than twenty-six accidents: secrets that fail open when empty, addresses accepted without proof of ownership, and ledger states that read as success. **No code was changed for it** — findings only, and the fixes below are the only ones since applied | 0.3 | app + mobile-app |
+| **Privy session tokens no longer fall back to plaintext** — the keychain fallback is scoped to dev builds and degrades to memory in release, every successful keychain access clears any plaintext copy, and a legacy entry left by an earlier version is migrated and deleted on the next read rather than logging anybody out. Committed as `2cbb76d` | 0.3 | mobile-app |
+| **Continue on step two was submitting the form** — both footer buttons rendered into one JSX slot, so React reused the DOM node and mutated `type="button"` into `type="submit"`. Advancing flushed the re-render before the browser ran the click's default action, and a plain Continue submitted, failed validation against a Payment System step nobody had reached, and left "Please fix the highlighted fields" over a step just arrived at. Distinct keys make it an unmount and a mount, so the clicked node leaves the document before the default action runs | 0.3 | app |
+| **The location description is optional again** — it sat in the required list of both `ValidateForSubmission` and `ValidateForUpdate` while the form marked it optional, so a submission was refused over a field the merchant was told they could leave blank | 0.1 | app |
+| **500 on every submission** — `INSERT has more expressions than target columns`: 38 columns, 39 value expressions, 37 arguments. A stray trailing `$38` with no column behind it and nothing to fill it, introduced in `e0774ed` when the four onboarding columns went in and five placeholders were added for four | 0.3 | app |
+
+## Totals
+
+| | |
+|---|---|
+| Files changed | 5 modified across two repos |
+| Migrations | 0 |
+| New routes | 0 |
+
+## Worth knowing
+
+- **The critical finding is a composition, and that is the point.** Registering
+  an arbitrary address as your own `smart_address` is modest. An owner-scoped
+  uniqueness index is modest. A lookup tie-break that ranks a `smart_address`
+  match above an `eoa_address` match is modest. Chained, they let an
+  unauthenticated attacker collect another person's volunteer reward while the
+  victim's code is consumed and not returned. None of the three would be caught
+  by reviewing its own file.
+- **The insert bug was mine, from Round 1.** Four columns were added and five
+  placeholders with them. It is the kind of error a count catches instantly and
+  a careful read does not, which is why the fix was verified by counting columns
+  and expressions programmatically rather than by eye.
+
+---
+
+# Round 5 — Sep 4, 12:41–13:39
+
+**Repos:** `app` · `mobile-app` · **Total active hours: 0.9 — measured**
+
+Measured from session-transcript timestamps; the sitting was still open when this was written, so the
+figure is to the last message at the time of writing.
+
+## Features
+
+| Feature | hours | repo |
+|---|---|---|
+| **Merchant setup no longer hangs on "Checking your locations…"** — the device installation id was read with raw `SecureStore`, which throws on any build without a keychain entitlement. The throw landed before `/merchant-mode/status` was ever requested, the caller logged it and moved on, and the readiness gate read the resulting null as "still loading" forever. Thirteen call sites shared the hazard. Given its own SecureStore-first, AsyncStorage-fallback pair rather than the Privy adapter, whose release fallback is memory — correct for a session token, and a new device identity on every launch for this | 0.2 | mobile-app |
+| **No map flicker between choosing a merchant account and the form** — the gap is two awaits wide, and the app is authenticated on a route that is still the map for the whole of it. An opaque cover, raised before the policy overlay closes and lowered when the form is actually on screen, with every non-navigating branch clearing it and an 8s expiry so it can never become a spinner of its own | 0.2 | app |
+| Branch scope remeasured and brought up to date — two unrecorded sittings written up, Round 3's total corrected from 0.7 to 1.1 after its sitting closed, and the header total corrected with them | 0.2 | app |
+| **The backend accepts submissions from the mobile build already in the app stores** — the three-step form added three required fields the pre-Jul-21 client never sends, which would have refused every location submission from it the moment the backend deployed. `ValidateForSubmission` now takes the intake form the submission came from and asks for those three only of the current one. Audited the rest of the old client's surface against the new backend at the same time: no route it calls was removed, no JSON key it reads was dropped | 0.3 | app |
+
+## Totals
+
+| | |
+|---|---|
+| Files changed | 5 modified across two repos |
+| Migrations | 0 |
+| New routes | 0 |
+
+## Worth knowing
+
+- **A client-version check cannot tell the two mobile builds apart.** It was the
+  obvious way to keep the old client working and it does not work: the build in
+  the app stores and the build waiting on review both report version `1.0.3`,
+  because the version string was never bumped. So the intake form is identified
+  by which keys the request actually carries — the five the three-step form
+  always sends and no older client sends any of. That asks what the request
+  contains rather than what the sender claims to be, which also means the web
+  client needs no special case despite sending no version headers at all.
+- **The 426 legacy-client block does not catch this client, and that was worth
+  checking.** `CLIENT_VERSION_LEGACY_BLOCK_ENABLED` defaults to on and answers
+  `GET /users` with 426 for anything that looks like a native client sending no
+  version headers. The pre-Jul-21 build sends them from its shared
+  `rawAuthFetch` — they were added in May — so it is not caught. The block
+  targets builds older than that.
+- **The right fix was not the obvious one.** An outside analysis proposed
+  routing the installation id through `resilientPrivyStorage`, which would have
+  been correct before Round 4 hardened that adapter. Its release fallback is now
+  memory, so on the unsigned release build in question the id would have been
+  minted afresh on every launch — no hang, so the reported symptom disappears,
+  but a PIN prompt every start and an orphan device binding per launch, with no
+  error anywhere to notice. A session token is worth losing rather than writing
+  to disk; a device identifier hashed server-side is the opposite trade. The two
+  do not share a store, and the code now says why.
+- **Still open:** `merchantSetupReady` hard-hangs whenever the status fetch
+  fails for any other reason — a dropped network gives the same infinite spinner
+  from a different cause. Not fixed, because what that screen should show
+  instead is a product decision.
+- **Two old-client behaviours are changed but not broken, and are left as
+  product calls.** A redemption that lands in W-9 escrow answers `202`, which
+  the old client reads as plain success and reports as paid; and a merchant
+  account created on the web that then signs in on the old build collects `403`
+  with an `X-SFLUV-Auth-Reason` header it does not read. Neither stops the app
+  working, and both disappear when the pending release lands.
+
+---
+
+# Untracked testing time
+
+**Repos:** `app` · `mobile-app` · **Total hours: 9.0 — reported, not measured**
+
+Three mornings of hands-on testing — Sep 2, Sep 3 and Sep 4, roughly 09:00 to 12:00 each — during
+which no prompts were sent and no files were changed, so no transcript records them.
+
+| Session | hours | basis |
+|---|---|---|
+| Wed Sep 2, ~09:00–12:00 | 3.0 | reported by PJ |
+| Thu Sep 3, ~09:00–12:00 | 3.0 | reported by PJ |
+| Fri Sep 4, ~09:00–12:00 | 3.0 | reported by PJ |
+
+**How this figure was arrived at, and what is wrong with it.** It was not measured. It is PJ's own
+account of time spent testing the branch by hand, recorded here because the work happened and the
+transcript cannot see it — the measurement method reads message timestamps, and silence looks
+identical to absence. The weaknesses are worth naming rather than burying:
+
+- The boundaries are approximate on both ends ("9ish to 12ish"), so each block is a round 3.0h rather
+  than a measurement, and the total inherits that.
+- Nothing corroborates the morning windows. File mtimes place activity on Sep 3 at 13:58 — the
+  afternoon, not the morning — which confirms the day was worked but says nothing about 09:00–12:00.
+  Sep 2 and Sep 4 have measured sittings that both start after 12:00, so the blocks at least do not
+  overlap anything already counted, and none of this time is double-counted.
+- Testing time is real work and belongs in the total. It is kept in its own section, and out of the
+  measured figure, so that a later reader can tell which number came from a clock.

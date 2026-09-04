@@ -122,6 +122,46 @@ func (a *AppService) GetLocationsByUser(w http.ResponseWriter, r *http.Request) 
 	w.Write(jsonBytes)
 }
 
+// currentIntakeMarkers are the fields only the three-step Location Approval
+// Form sends. Every client that has it sends all five on every submission; no
+// client released before it sends any.
+var currentIntakeMarkers = []string{
+	"listing_source",
+	"contact_name",
+	"referral_source",
+	"accepts_tips",
+	"has_staff_tablet",
+}
+
+// locationIntakeOf decides which form a submission came from, by looking at
+// which keys the client actually sent.
+//
+// Deliberately not a client-version check, which is the obvious approach and
+// does not work here: the build already in the app stores and the build waiting
+// on review both report version 1.0.3, so the header cannot separate them. Key
+// presence can, and it has the better failure mode besides — it asks what the
+// request contains rather than what the sender claims to be, so a web client
+// (which sends no version headers at all) needs no special case.
+//
+// Any one marker is enough to mean "current". A current client that omits one
+// of the answers is a client bug and still collects the validation error naming
+// the field; only a body carrying none of them is treated as the old form.
+func locationIntakeOf(body []byte) structs.LocationIntake {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(body, &fields); err != nil {
+		// Unreachable in practice: the caller has already unmarshalled this body
+		// into a Location. Current is the stricter of the two, so a body we
+		// cannot inspect is held to the full set rather than waved through.
+		return structs.LocationIntakeCurrent
+	}
+	for _, marker := range currentIntakeMarkers {
+		if _, sent := fields[marker]; sent {
+			return structs.LocationIntakeCurrent
+		}
+	}
+	return structs.LocationIntakeLegacy
+}
+
 func (a *AppService) AddLocation(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
@@ -180,7 +220,7 @@ func (a *AppService) AddLocation(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if err := location.ValidateForSubmission(); err != nil {
+	if err := location.ValidateForSubmission(locationIntakeOf(body)); err != nil {
 		a.logger.Logf("invalid location submission from %s: %s", *userDid, err.Error())
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return

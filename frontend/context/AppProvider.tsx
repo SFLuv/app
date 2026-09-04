@@ -65,7 +65,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Contact } from "@/types/contact";
 import { useIdleTimer } from "react-idle-timer";
 import { IdleModal } from "@/components/idle/idle-modal";
-import { Store, User as UserIcon } from "lucide-react";
+import { Loader2, Store, User as UserIcon } from "lucide-react";
 import {
   Tooltip,
   TooltipContent,
@@ -592,6 +592,19 @@ export default function AppProvider({ children }: { children: ReactNode }) {
   // and not again. A ref rather than state: nothing renders from it, and it must
   // not itself cause the render that would re-run the effect.
   const merchantFormOfferedForRef = useRef<string | null>(null);
+  /**
+   * Covers the gap between choosing a merchant account and landing on the form.
+   *
+   * Those are two separate awaits — the profile reloads, then an effect
+   * navigates — and in between the app is authenticated with a route that is
+   * still the map. Without this the merchant watches the map paint and vanish
+   * on their way to a form they already asked for.
+   *
+   * State rather than a derived value because it has to outlast the render that
+   * starts the navigation: by then the ref below is set and every derived
+   * condition has already gone false, while the route has not changed yet.
+   */
+  const [merchantRedirectPending, setMerchantRedirectPending] = useState(false);
 
   // There is no wall on the web app any more.
   //
@@ -630,9 +643,21 @@ export default function AppProvider({ children }: { children: ReactNode }) {
    */
   useEffect(() => {
     if (status !== "authenticated") return;
-    if (!user || user.accountType !== "merchant") return;
-    if (userLocations.length > 0) return;
-    if (merchantFormOfferedForRef.current === user.id) return;
+    // Every path from here that does not navigate has to lower the cover, or a
+    // merchant who turns out not to need the form waits on a spinner for a
+    // navigation that is never coming.
+    if (!user || user.accountType !== "merchant") {
+      setMerchantRedirectPending(false);
+      return;
+    }
+    if (userLocations.length > 0) {
+      setMerchantRedirectPending(false);
+      return;
+    }
+    if (merchantFormOfferedForRef.current === user.id) {
+      setMerchantRedirectPending(false);
+      return;
+    }
 
     // Already there, or somewhere they went deliberately — the account exits and
     // the policy texts. Marked as offered either way, so leaving one of those
@@ -643,12 +668,32 @@ export default function AppProvider({ children }: { children: ReactNode }) {
       allowPolicyRoute
     ) {
       merchantFormOfferedForRef.current = user.id;
+      setMerchantRedirectPending(false);
       return;
     }
 
     merchantFormOfferedForRef.current = user.id;
+    setMerchantRedirectPending(true);
     replace(MERCHANT_ONBOARDING_PATH);
   }, [allowPolicyRoute, pathname, replace, status, user, userLocations.length]);
+
+  // The cover comes down when the form is actually on screen, not when the
+  // navigation was requested.
+  useEffect(() => {
+    if (pathname.startsWith(MERCHANT_ONBOARDING_PATH)) {
+      setMerchantRedirectPending(false);
+    }
+  }, [pathname]);
+
+  // A cover that can outlive its navigation is the same infinite spinner as any
+  // other, so it expires on its own. Long enough that a slow route change is
+  // never cut short, short enough that a stuck one is a hesitation rather than
+  // a dead end.
+  useEffect(() => {
+    if (!merchantRedirectPending) return;
+    const timer = setTimeout(() => setMerchantRedirectPending(false), 8000);
+    return () => clearTimeout(timer);
+  }, [merchantRedirectPending]);
 
   const clearAuthenticatedState = (options?: {
     clearDeletedAccount?: boolean;
@@ -1690,6 +1735,12 @@ export default function AppProvider({ children }: { children: ReactNode }) {
     setPolicyError("");
     try {
       await _acceptUserPolicies(mailingListOptIn, accountType);
+      // Raised before the overlay closes, so there is no frame in which the
+      // page behind it is uncovered. The redirect effect lowers it — either by
+      // reaching the form, or by deciding this account does not need it.
+      if (accountType === "merchant") {
+        setMerchantRedirectPending(true);
+      }
       setPolicyStatus(null);
       setStatus("loading");
     } catch (error) {
@@ -2082,6 +2133,14 @@ export default function AppProvider({ children }: { children: ReactNode }) {
           ) : (
             <>
               {children}
+              {/* Opaque, not a scrim: the point is that the map behind it is
+                  not seen at all. Above the policy overlay's z-[80] so the
+                  handover between the two never shows a seam. */}
+              {merchantRedirectPending ? (
+                <div className="fixed inset-0 z-[90] flex items-center justify-center bg-background">
+                  <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                </div>
+              ) : null}
               {policyStatus && privyAuthenticated && !allowPolicyRoute ? (
                 <PolicyAcceptanceOverlay
                   key={policyStatus.user_id}
