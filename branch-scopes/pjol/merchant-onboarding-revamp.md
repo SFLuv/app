@@ -1,7 +1,7 @@
 # Branch scope — `pjol/merchant-onboarding-revamp`
 
-Aug 28 – Sep 4 2026 · app + mobile-app · **16.4h active** — 7.4h measured across five sittings, plus
-9.0h of hands-on testing reported by PJ and **not** measured (see *Untracked testing time* at the foot)
+Aug 28 – Sep 4 2026 · app + mobile-app · **20.1h active** — 8.1h measured across seven sittings, plus
+12.0h of hands-on testing reported by PJ and **not** measured (see *Untracked testing time* at the foot)
 
 Merchant onboarding and the location request flow, rebuilt around a split between merchant accounts
 and personal ones. Some of that split already existed on `main` — `users.account_type`, the read-only
@@ -350,16 +350,18 @@ figure is to the last message at the time of writing.
 
 # Untracked testing time
 
-**Repos:** `app` · `mobile-app` · **Total hours: 9.0 — reported, not measured**
+**Repos:** `app` · `mobile-app` · **Total hours: 12.0 — reported, not measured**
 
-Three mornings of hands-on testing — Sep 2, Sep 3 and Sep 4, roughly 09:00 to 12:00 each — during
-which no prompts were sent and no files were changed, so no transcript records them.
+Three mornings of hands-on testing — Sep 2, Sep 3 and Sep 4, roughly 09:00 to 12:00 each — plus the
+afternoon of Sep 4, during which no prompts were sent and no files were changed, so no transcript
+records them.
 
 | Session | hours | basis |
 |---|---|---|
 | Wed Sep 2, ~09:00–12:00 | 3.0 | reported by PJ |
 | Thu Sep 3, ~09:00–12:00 | 3.0 | reported by PJ |
 | Fri Sep 4, ~09:00–12:00 | 3.0 | reported by PJ |
+| Fri Sep 4, afternoon | 3.0 | reported by PJ |
 
 **How this figure was arrived at, and what is wrong with it.** It was not measured. It is PJ's own
 account of time spent testing the branch by hand, recorded here because the work happened and the
@@ -370,7 +372,79 @@ identical to absence. The weaknesses are worth naming rather than burying:
   than a measurement, and the total inherits that.
 - Nothing corroborates the morning windows. File mtimes place activity on Sep 3 at 13:58 — the
   afternoon, not the morning — which confirms the day was worked but says nothing about 09:00–12:00.
-  Sep 2 and Sep 4 have measured sittings that both start after 12:00, so the blocks at least do not
-  overlap anything already counted, and none of this time is double-counted.
+  Sep 2 and Sep 4 have measured sittings that all start after 12:00, so the morning blocks do not
+  overlap anything already counted. The Sep 4 afternoon block sits in the 6.2h gap between that
+  day's 13:38 and 19:52 sittings, so it does not overlap either. None of this time is
+  double-counted.
 - Testing time is real work and belongs in the total. It is kept in its own section, and out of the
   measured figure, so that a later reader can tell which number came from a clock.
+
+---
+
+# Round 6 — Sep 4, 19:52–20:16
+
+**Repos:** none — local toolchain · **Total active hours: 0.4 — measured**
+
+Measured from session-transcript timestamps. No code changed; recorded because the time was spent on
+this branch's testing and the conclusion is worth not rediscovering.
+
+## Features
+
+| Feature | hours | repo |
+|---|---|---|
+| iOS simulator diagnosed and unblocked — "the iOS-18-3 simulator runtime is not available" was a stale `CoreSimulatorService`, up 3 days 8 hours, not a missing runtime. `simctl list runtimes` reported it available the whole time while `simctl boot` refused with "runtime profile not found using System match policy"; restarting the service fixed it first try. Also found the disk at 100% (2.9 GB free), which `npm cache clean --force` relieved by ~15 GB | 0.4 | app |
+
+## Worth knowing
+
+- **The error named the wrong thing, twice.** It says to download a runtime
+  that is installed, mounted and `Ready`. The real fault was a long-lived
+  service holding a stale view, and the tell was its uptime rather than
+  anything in the runtime listing — which is why the first pass at this, six
+  hours earlier, checked the runtime, found it healthy, and moved on.
+- **A plausible second theory was wrong and cost a download.** Xcode 16.2 does
+  ship only the iOS 18.2 SDK against an installed 18.3 runtime, which is a real
+  mismatch — but it bites `xcodebuild`, and the boot script never compiles
+  anything: it installs cached Expo Go with `simctl` and deep-links the dev
+  URL. An 8 GB download for iOS 18.2 was started on that theory and stopped
+  once the script was actually read. Do not delete the 18.3 runtime.
+
+---
+
+# Round 7 — Sep 4, 22:12 onwards
+
+**Repos:** `mobile-app` · **Total active hours: 0.3 — measured, sitting still open**
+
+Measured from session-transcript timestamps; the figure is to the last message at the time of writing.
+
+Bringing the mobile location form up to the web one, and closing the last layout flash.
+
+## Features
+
+| Feature | hours | repo |
+|---|---|---|
+| **The mobile location box behaves like the web one** — predictions as you type on a 220ms debounce instead of a Search button, a clear control on the input, typing past a confirmed place clearing it, and the green "Location found" / amber "Address found" status with the "Can't find my location" way out. Adds the address-only path the mobile form never had: `listing_source` is now sent, so a merchant whose shop Google has no listing for can file one from a phone | 0.2 | mobile-app |
+| **`street_address` no longer arrives as a business type** — the details mapping took `types[0]`, which on an address result is the literal string `street_address`, and presented a Google taxonomy token to the merchant as their own answer. Category now comes from the first type that is not address-only, prettified, and is empty rather than wrong when Google has none | 0.05 | mobile-app |
+| **Merchant accounts no longer flash the consumer app while signing in** — the dock rendered until the profile and the merchant-mode calls answered, which is the one layout a merchant account is never given. A spinner covers the gap, the dock and notification bell are suppressed with it, and it expires after 10s so a failed merchant-mode call cannot hold the account behind it | 0.05 | mobile-app |
+
+## Totals
+
+| | |
+|---|---|
+| Files changed | 5 modified, 1 added |
+| Migrations | 0 |
+| New routes | 0 |
+
+## Worth knowing
+
+- **The description was required on mobile and optional on the web.** Same
+  endpoint, same backend rule since Round 4, two different answers to the
+  merchant. Now optional on both.
+- **Phone and email formatting was missing entirely on mobile.** The web helper
+  is ported verbatim rather than reimplemented, for the same reason: a number
+  accepted in a browser and refused on a phone is one merchant told two
+  different things about one answer.
+- **The two paths are decided by the result, not by a mode.** A business carries
+  its name, category, hours and phone; an address carries none of those, so its
+  name is dropped rather than inherited and the merchant types it. Ticking
+  "can't find my location" reorders the step so the address sits last; picking
+  an address from the search deliberately does not move anything.
