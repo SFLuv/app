@@ -1,6 +1,6 @@
 # Branch scope — `pjol/merchant-onboarding-revamp`
 
-Aug 28 – Sep 4 2026 · app + mobile-app · **20.1h active** — 8.1h measured across seven sittings, plus
+Aug 28 – Sep 5 2026 · app + mobile-app · **20.2h active** — 8.2h measured across eight sittings, plus
 12.0h of hands-on testing reported by PJ and **not** measured (see *Untracked testing time* at the foot)
 
 Merchant onboarding and the location request flow, rebuilt around a split between merchant accounts
@@ -448,3 +448,38 @@ Bringing the mobile location form up to the web one, and closing the last layout
   name is dropped rather than inherited and the merchant types it. Ticking
   "can't find my location" reorders the step so the address sits last; picking
   an address from the search deliberately does not move anything.
+
+---
+
+# Round 8 — Sep 5, 13:41 onwards
+
+**Repos:** `app` · `mobile-app` · **Total active hours: 0.1 — measured, sitting still open**
+
+Measured from session-transcript timestamps; the figure is to the last message at the time of writing
+and will understate the sitting until it closes, as Round 3's did.
+
+## Features
+
+| Feature | hours | repo |
+|---|---|---|
+| **Log out reachable from every screen of the mobile setup flow** — the top-right control becomes Log out for the whole of it: the routing spinner, the application form, the start and pending lock screens, and the PIN-and-location first run. It replaces a settings button that could not open settings from any of those screens, and fills the first-run gap where the chrome carried no button at all. Confirmed through the same Alert the till's sign-out uses, and every logout outside merchant mode now routes through it rather than firing on one tap | 0.05 | mobile-app |
+| **Pending applications sort to the top of the admin merchant tab** — the list was in whatever order the map returned, so an application waiting on review sat among every approved shop. Stable sort, so approved and rejected keep their order relative to each other | 0.05 | app |
+
+## Totals
+
+| | |
+|---|---|
+| Files changed | 2 modified across two repos |
+| Migrations | 0 |
+| New routes | 0 |
+
+## Worth knowing
+
+- **A live till is deliberately excluded from the new button.** Its lock button
+  opens the merchant-mode sheet, which already carries a sign out behind the
+  same confirmation — two logout controls on one screen would be one too many.
+- **One merchant state still lands on the ordinary dock, and that is correct.**
+  An account with an approved location but no merchant-mode location — no
+  payment wallet yet, say — is neither enrollable nor onboarding, so it gets the
+  normal app and the normal settings tab. Logout is reachable there as it always
+  was; the flow this covers is the one where it was not.

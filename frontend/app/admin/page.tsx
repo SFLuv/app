@@ -722,11 +722,22 @@ export default function AdminPage() {
 
   const filteredMerchants = useMemo(() => {
     const s = merchantSearch.trim().toLowerCase()
-    return authedMapLocations.filter((location) => {
-      const matchesStatus = merchantStatusFilter === "all" || approvalToStatus(location.approval) === merchantStatusFilter
-      const matchesSearch = !s || location.name.toLowerCase().includes(s) || (location.city || "").toLowerCase().includes(s)
-      return matchesStatus && matchesSearch
-    })
+    return authedMapLocations
+      .filter((location) => {
+        const matchesStatus = merchantStatusFilter === "all" || approvalToStatus(location.approval) === merchantStatusFilter
+        const matchesSearch = !s || location.name.toLowerCase().includes(s) || (location.city || "").toLowerCase().includes(s)
+        return matchesStatus && matchesSearch
+      })
+      // Pending first. This tab is a review queue as well as a directory, and
+      // an application waiting on an admin was previously wherever the map
+      // happened to return it — which on a list of every approved shop means
+      // out of sight. Approved and rejected keep their existing order relative
+      // to each other; the sort is stable, so nothing else moves.
+      .sort((a, b) => {
+        const aPending = approvalToStatus(a.approval) === "pending" ? 0 : 1
+        const bPending = approvalToStatus(b.approval) === "pending" ? 0 : 1
+        return aPending - bPending
+      })
   }, [authedMapLocations, merchantStatusFilter, merchantSearch])
 
   const filteredAffiliates = useMemo(() => {
