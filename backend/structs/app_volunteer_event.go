@@ -122,6 +122,27 @@ type VolunteerEventViewer struct {
 	Redeemed bool    `json:"redeemed"`
 }
 
+// Who can find an event.
+//
+// Separate from review_status, which is moderation, and from the occurrence
+// status, which is time. This one answers a different question: an approved
+// event is legitimate, but that does not always mean it belongs on the public
+// list. A shift for a named crew, a dry run, a partner's private day — all are
+// real events that should not be advertised.
+//
+// Unlisted is not private. The detail endpoint serves an event by id
+// regardless, which is what makes a share link work at all, so the id is the
+// capability. It keeps an event off the list, the sitemap and the search; it
+// is not an access control, and anyone holding the link can open it.
+const (
+	EventVisibilityPublic   = "public"
+	EventVisibilityUnlisted = "unlisted"
+)
+
+func IsValidEventVisibility(value string) bool {
+	return value == EventVisibilityPublic || value == EventVisibilityUnlisted
+}
+
 type VolunteerEvent struct {
 	Id          string                    `json:"id"`
 	SeriesId    *string                   `json:"series_id"`
@@ -144,6 +165,10 @@ type VolunteerEvent struct {
 	Status            string                   `json:"status"`
 	Location          *VolunteerEventLocation  `json:"location"`
 	Viewer            *VolunteerEventViewer    `json:"viewer"`
+
+	// Visibility is carried on every payload, public detail included: an event
+	// reached by its share link should be able to say it is not on the list.
+	Visibility string `json:"visibility"`
 
 	// Creator is who made the event. Management-only: the public portal shows
 	// the organization, never the individual.
@@ -244,6 +269,10 @@ type VolunteerEventCreateRequest struct {
 
 	SignupMode string `json:"signup_mode"`
 	SignupURL  string `json:"signup_url,omitempty"`
+
+	// Visibility is optional on the wire and defaults to public, so a client
+	// that predates it keeps creating listed events.
+	Visibility string `json:"visibility,omitempty"`
 
 	LocationId *int64 `json:"location_id,omitempty"`
 

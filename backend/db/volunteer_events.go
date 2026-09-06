@@ -31,6 +31,7 @@ type VolunteerEventRow struct {
 	MaxParticipants int
 	SignupMode      string
 	SignupURL       string
+	Visibility      string
 	ReviewStatus    string
 	CancelledAt     *int64
 	QRLiveAt        *int64
@@ -72,6 +73,7 @@ const volunteerEventColumns = `
 	e.max_participants,
 	e.signup_mode,
 	e.signup_url,
+	e.visibility,
 	e.review_status,
 	e.cancelled_at,
 	e.qr_live_at,
@@ -94,6 +96,15 @@ const volunteerEventColumns = `
 	e.updated_at
 `
 
+// visibilityOrDefault keeps a client that never sends the field creating listed
+// events, which is what every client did before the column existed.
+func visibilityOrDefault(value string) string {
+	if value == structs.EventVisibilityUnlisted {
+		return structs.EventVisibilityUnlisted
+	}
+	return structs.EventVisibilityPublic
+}
+
 func scanVolunteerEventRow(row pgx.Row, out *VolunteerEventRow, total *int) error {
 	targets := []any{
 		&out.Id,
@@ -109,6 +120,7 @@ func scanVolunteerEventRow(row pgx.Row, out *VolunteerEventRow, total *int) erro
 		&out.MaxParticipants,
 		&out.SignupMode,
 		&out.SignupURL,
+		&out.Visibility,
 		&out.ReviewStatus,
 		&out.CancelledAt,
 		&out.QRLiveAt,
@@ -152,6 +164,10 @@ func (s *BotDB) GetPublicVolunteerEvents(ctx context.Context, f *structs.Volunte
 	where := []string{
 		"e.is_volunteer = TRUE",
 		"e.review_status IN ('approved', 'cancelled')",
+		// Unlisted events are reachable by their share link and nowhere else.
+		// The detail query deliberately does not carry this clause — that is
+		// what makes the link work.
+		"e.visibility = 'public'",
 	}
 
 	add := func(clause string, value any) {
@@ -457,6 +473,7 @@ type CreateVolunteerEventParams struct {
 
 	SignupMode string
 	SignupURL  string
+	Visibility string
 	LocationId *int64
 
 	RecurrenceFrequency   string
@@ -512,14 +529,14 @@ func (s *BotDB) CreateVolunteerEvent(ctx context.Context, p *CreateVolunteerEven
 	_, err = tx.Exec(ctx, `
 		INSERT INTO events (
 			id, title, description, amount, start_at, expiration, owner, organization_id,
-			is_volunteer, slug, timezone, max_participants, signup_mode, signup_url,
+			is_volunteer, slug, timezone, max_participants, signup_mode, signup_url, visibility,
 			review_status, qr_live_at, qr_expires_at, codes_generated, funding_status, location_id,
 			recurrence_frequency, recurrence_interval, recurrence_monthly_mode,
 			recurrence_day_of_month, recurrence_week_of_month, recurrence_weekday,
 			recurrence_until, series_id, series_index, requested_by, approved_by, approved_at
 		) VALUES (
 			$1, $2, $3, $4, $5, $6, $7, $8,
-			TRUE, $9, $10, $11, $12, $13,
+			TRUE, $9, $10, $11, $12, $13, $29,
 			$14, $15, $28, $16, $17, $18,
 			$19, 1, $20,
 			$21, $22, $23,
@@ -535,6 +552,7 @@ func (s *BotDB) CreateVolunteerEvent(ctx context.Context, p *CreateVolunteerEven
 		approvedBy(p),
 		approvedAtOrNil(p),
 		nullableUnix(p.QRExpiresAt),
+		visibilityOrDefault(p.Visibility),
 	)
 	if err != nil {
 		return "", fmt.Errorf("error inserting volunteer event: %s", err)
@@ -1617,12 +1635,14 @@ func (s *BotDB) UpdateVolunteerEvent(ctx context.Context, eventId string, p *Cre
 			recurrence_week_of_month = $17,
 			recurrence_weekday = $18,
 			recurrence_until = $19,
+			visibility = $20,
 			updated_at = EXTRACT(EPOCH FROM NOW())::BIGINT
 		WHERE id = $1;
 	`, eventId, p.Title, p.Description, p.Slug, p.RewardAmount, p.StartAt, p.EndAt,
 		nullableUnix(p.QRExpiresAt), p.Timezone, p.MaxParticipants, p.SignupMode, p.SignupURL,
 		p.LocationId, p.RecurrenceFrequency, p.RecurrenceMonthlyMode,
 		p.RecurrenceDayOfMonth, p.RecurrenceWeekOfMonth, p.RecurrenceWeekday, p.RecurrenceUntil,
+		visibilityOrDefault(p.Visibility),
 	); err != nil {
 		return fmt.Errorf("error updating volunteer event: %s", err)
 	}

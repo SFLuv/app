@@ -116,6 +116,17 @@ func validateVolunteerEventRequest(req *structs.VolunteerEventCreateRequest) (st
 		qrCutoff = explicit
 	}
 
+	// Absent means public, so a client that predates the field keeps creating
+	// listed events. Anything else is rejected here rather than by the CHECK
+	// constraint, so it reads as a 400 naming the field.
+	req.Visibility = strings.TrimSpace(req.Visibility)
+	if req.Visibility == "" {
+		req.Visibility = structs.EventVisibilityPublic
+	}
+	if !structs.IsValidEventVisibility(req.Visibility) {
+		return 0, 0, nil, 0, "visibility must be public or unlisted"
+	}
+
 	switch req.SignupMode {
 	case structs.SignupModeNone, structs.SignupModeInternal:
 		req.SignupURL = ""
@@ -267,6 +278,7 @@ func (a *AppService) AdminCreateVolunteerEvent(w http.ResponseWriter, r *http.Re
 		MaxParticipants:     req.MaxParticipants,
 		RewardAmount:        req.RewardAmountSfluv,
 		SignupMode:          req.SignupMode,
+		Visibility:          req.Visibility,
 		SignupURL:           req.SignupURL,
 		LocationId:          req.LocationId,
 		Owner:               *userDid,
@@ -823,6 +835,7 @@ func (a *AppService) applyVolunteerEventEdit(
 		MaxParticipants:     req.MaxParticipants,
 		RewardAmount:        req.RewardAmountSfluv,
 		SignupMode:          req.SignupMode,
+		Visibility:          req.Visibility,
 		SignupURL:           req.SignupURL,
 		LocationId:          req.LocationId,
 		RecurrenceFrequency: structs.RecurrenceNone,

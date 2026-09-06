@@ -264,6 +264,7 @@ func (s *BotService) mapVolunteerEvent(row *db.VolunteerEventRow, ctx *volunteer
 		RewardAmountSfluv: row.Amount,
 		Signup:            buildSignupInfo(row, status),
 		Status:            status,
+		Visibility:        row.Visibility,
 		CreatedAt:         rfc3339(row.CreatedAt),
 		UpdatedAt:         rfc3339(row.UpdatedAt),
 	}

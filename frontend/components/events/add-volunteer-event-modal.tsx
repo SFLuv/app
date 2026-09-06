@@ -41,6 +41,7 @@ export interface VolunteerEventDraft {
   reward_amount_sfluv: number
   signup_mode: "none" | "external" | "internal"
   signup_url?: string
+  visibility: "public" | "unlisted"
   qr_cutoff_local?: string
   recurrence?: {
     frequency: "daily" | "weekly" | "monthly"
@@ -96,6 +97,8 @@ export interface EditableVolunteerEvent {
   timezone: string
   max_participants: number
   reward_amount_sfluv: number
+  /** Round-tripped so editing an unlisted event does not republish it. */
+  visibility?: string
   signup?: { mode: string; url?: string | null }
   /**
    * The machine-readable rule, not just its summary.
@@ -178,6 +181,7 @@ export function AddVolunteerEventModal({
   const [maxParticipants, setMaxParticipants] = useState(20)
   const [rewardAmount, setRewardAmount] = useState(10)
   const [signupMode, setSignupMode] = useState<"none" | "external" | "internal">("internal")
+  const [visibility, setVisibility] = useState<"public" | "unlisted">("public")
   const [signupUrl, setSignupUrl] = useState("")
   const [frequency, setFrequency] = useState<"none" | "daily" | "weekly" | "monthly">("none")
   const [monthlyMode, setMonthlyMode] = useState<"day_of_month" | "day_of_week">("day_of_month")
@@ -215,6 +219,10 @@ export function AddVolunteerEventModal({
     setEndAtLocal(toLocalInputValue(editEvent.end_at, zone))
     setMaxParticipants(editEvent.max_participants)
     setRewardAmount(editEvent.reward_amount_sfluv)
+    // Seeded rather than defaulted: the form is the whole payload on save, so
+    // an unseeded control would quietly put an unlisted event on the public
+    // list the first time anybody edited its title.
+    setVisibility(editEvent.visibility === "unlisted" ? "unlisted" : "public")
 
     const mode = editEvent.signup?.mode
     setSignupMode(mode === "none" || mode === "external" ? mode : "internal")
@@ -249,6 +257,7 @@ export function AddVolunteerEventModal({
     setMaxParticipants(20)
     setRewardAmount(10)
     setSignupMode("internal")
+    setVisibility("public")
     setSignupUrl("")
     setFrequency("none")
     setMonthlyMode("day_of_month")
@@ -401,6 +410,7 @@ export function AddVolunteerEventModal({
       max_participants: maxParticipants,
       reward_amount_sfluv: rewardAmount,
       signup_mode: signupMode,
+      visibility,
       ...(signupMode === "external" ? { signup_url: signupUrl.trim() } : {}),
       ...(useCustomCutoff && qrCutoffLocal !== "" ? { qr_cutoff_local: qrCutoffLocal } : {}),
       ...(frequency !== "none"
@@ -736,6 +746,23 @@ export function AddVolunteerEventModal({
                 Requests <strong>{totalCost} SFLUV</strong> ({maxParticipants} × {rewardAmount}). The faucet is
                 checked by an admin at approval.
               </>
+            )}
+          </div>
+
+          <div className="space-y-2">
+            <Label>Visibility</Label>
+            <Select value={visibility} onValueChange={(value) => setVisibility(value as typeof visibility)}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="public">Public (listed on sfluv.org)</SelectItem>
+                <SelectItem value="unlisted">Unlisted (reachable by link only)</SelectItem>
+              </SelectContent>
+            </Select>
+            {visibility === "unlisted" && (
+              <p className="text-xs text-muted-foreground">
+                Kept off the events list and out of search. Anyone with the link can still open it and
+                sign up, and its QR codes work exactly as they would otherwise.
+              </p>
             )}
           </div>
 

@@ -89,6 +89,7 @@ func (a *AppService) AffiliateRequestVolunteerEvent(w http.ResponseWriter, r *ht
 		MaxParticipants:     req.MaxParticipants,
 		RewardAmount:        req.RewardAmountSfluv,
 		SignupMode:          req.SignupMode,
+		Visibility:          req.Visibility,
 		SignupURL:           req.SignupURL,
 		LocationId:          req.LocationId,
 		Owner:               *userDid,

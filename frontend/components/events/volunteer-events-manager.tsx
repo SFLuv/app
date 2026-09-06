@@ -1,7 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
-import { AlertTriangle, CheckCircle2, Clock, Download, Leaf, Loader2, Megaphone, Pencil, QrCode, XCircle, ChevronRight } from "lucide-react"
+import { AlertTriangle, CheckCircle2, Clock, Download, Leaf, Link as LinkIcon, Loader2, Megaphone, Pencil, QrCode, XCircle, ChevronRight } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -31,6 +31,10 @@ export interface ManagedVolunteerEvent {
   reward_amount_sfluv: number
   status: string
   review_status?: string
+  /** "public" or "unlisted". Absent on a payload from an older backend. */
+  visibility?: string
+  /** Decorative half of the share URL; the trailing id is what resolves it. */
+  slug?: string
   funding_status?: string
   organizer: { type: string; name: string; logo_url?: string | null }
   cover_photos?: { id: string; url: string; position: number }[]
@@ -224,6 +228,30 @@ function ReviewBadge({ event }: { event: ManagedVolunteerEvent }) {
 }
 
 /** QR codes are downloadable immediately but only redeemable 24h before start. */
+/**
+ * The public site is where an event's own page lives, so a share link points
+ * there rather than at this dashboard.
+ *
+ * The slug is decorative — the public route resolves the trailing id — so a
+ * link built without one still works, and a renamed event never breaks a link
+ * already handed out.
+ */
+const PUBLIC_SITE_URL = (process.env.NEXT_PUBLIC_PUBLIC_SITE_URL || "https://sfluv.org").replace(/\/+$/, "")
+
+export function eventShareLink(event: Pick<ManagedVolunteerEvent, "id" | "slug">) {
+  const segment = event.slug ? `${event.slug}-${event.id}` : event.id
+  return `${PUBLIC_SITE_URL}/volunteers/${segment}`
+}
+
+function VisibilityBadge({ event }: { event: ManagedVolunteerEvent }) {
+  if (event.visibility !== "unlisted") return null
+  return (
+    <Badge variant="outline" className="border-slate-400 text-slate-600 dark:text-slate-300">
+      Unlisted
+    </Badge>
+  )
+}
+
 function QrBadge({ event }: { event: ManagedVolunteerEvent }) {
   if (!event.qr?.codes_generated) {
     return <Badge variant="outline" className="text-muted-foreground">QR codes not generated</Badge>
@@ -261,6 +289,25 @@ export function VolunteerEventsManager({
 }: VolunteerEventsManagerProps) {
   const { authFetch } = useApp()
   const { toast } = useToast()
+
+  // Anyone holding the link can open the event, so this says so rather than
+  // implying the link is a secret worth guarding.
+  const copyShareLink = async (event: ManagedVolunteerEvent) => {
+    const link = eventShareLink(event)
+    try {
+      await navigator.clipboard.writeText(link)
+      toast({ title: "Share link copied", description: "Anyone with this link can open the event." })
+    } catch {
+      // Clipboard access is refused on an insecure origin and in some embedded
+      // browsers. The link is on screen either way, so this says to copy it by
+      // hand rather than failing silently.
+      toast({
+        title: "Could not copy automatically",
+        description: "Select the link below and copy it.",
+        variant: "destructive",
+      })
+    }
+  }
   const [events, setEvents] = useState<ManagedVolunteerEvent[]>([])
   const [page, setPage] = useState(0)
   const [totalEvents, setTotalEvents] = useState(0)
@@ -603,6 +650,7 @@ export function VolunteerEventsManager({
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="truncate font-medium">{event.title}</span>
                     <ReviewBadge event={event} />
+                    <VisibilityBadge event={event} />
                   </div>
                   <div className="mt-0.5 truncate text-sm text-muted-foreground">
                     {formatEventWhen(event)} · {event.organizer.name}
@@ -664,8 +712,29 @@ export function VolunteerEventsManager({
               <div className="space-y-4">
                 <div className="flex flex-wrap gap-2">
                   <ReviewBadge event={openEvent} />
+                  <VisibilityBadge event={openEvent} />
                   <QrBadge event={openEvent} />
                 </div>
+
+                {/* An unlisted event is off the public list, so the link is the
+                    only way anybody reaches it — which makes copying it part of
+                    the feature rather than a convenience. Offered on approved
+                    events only: a link to something still in the review queue
+                    404s, and handing one out invites exactly that. */}
+                {openEvent.visibility === "unlisted" && openEvent.review_status === "approved" && (
+                  <div className="rounded-lg border border-border bg-muted/40 p-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className="text-sm font-medium">Share link</p>
+                      <Button size="sm" variant="outline" onClick={() => copyShareLink(openEvent)}>
+                        <LinkIcon className="mr-2 h-3.5 w-3.5" />
+                        Copy link
+                      </Button>
+                    </div>
+                    <p className="mt-2 break-all font-mono text-xs text-muted-foreground">
+                      {eventShareLink(openEvent)}
+                    </p>
+                  </div>
+                )}
 
                 {openEvent.pending_edit && (
                   <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm">

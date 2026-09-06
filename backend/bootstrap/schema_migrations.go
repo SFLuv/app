@@ -2151,6 +2151,62 @@ var schemaMigrations = []SchemaMigration{
 			return nil
 		},
 	},
+	{
+		Version:     "1.52",
+		Description: "volunteer events: public or unlisted",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			// An approved event was, until now, an advertised one. Approval is a
+			// judgement about legitimacy, and it was doing double duty as a
+			// judgement about promotion — so a shift for a named crew, a dry
+			// run, or a partner's private day had to be either on the public
+			// list or not approved at all.
+			//
+			// Unlisted is not access control and is not described as any. The
+			// detail endpoint serves an event by id whatever its visibility,
+			// which is exactly what makes a share link work; the id is the
+			// capability. What it removes is the list, the organizer filter and
+			// the sitemap.
+			//
+			// Defaulted to public so every existing event keeps the visibility
+			// it effectively had, and so a client that never sends the field —
+			// which is all of them until their next release — keeps creating
+			// listed events.
+			if _, err := pools.Bot.Exec(ctx, `
+				ALTER TABLE events
+					ADD COLUMN IF NOT EXISTS visibility TEXT NOT NULL DEFAULT 'public';
+			`); err != nil {
+				return fmt.Errorf("error adding the event visibility column: %w", err)
+			}
+
+			// Added separately and idempotently, matching the 1.24 constraints,
+			// so a re-run on a partially migrated database does not fail on an
+			// existing constraint.
+			if _, err := pools.Bot.Exec(ctx, `
+				DO $$
+				BEGIN
+					IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'events_visibility_check') THEN
+						ALTER TABLE events ADD CONSTRAINT events_visibility_check
+							CHECK (visibility IN ('public', 'unlisted'));
+					END IF;
+				END
+				$$;
+			`); err != nil {
+				return fmt.Errorf("error constraining event visibility: %w", err)
+			}
+
+			// The public list filters on this alongside review_status, so it
+			// belongs in the index that serves that query.
+			if _, err := pools.Bot.Exec(ctx, `
+				CREATE INDEX IF NOT EXISTS events_volunteer_visible_idx
+					ON events(is_volunteer, visibility, review_status, start_at)
+					WHERE is_volunteer = TRUE;
+			`); err != nil {
+				return fmt.Errorf("error indexing event visibility: %w", err)
+			}
+
+			return nil
+		},
+	},
 }
 
 // migrateW9WarningTiers replaces one hard gate with an escalating sequence.

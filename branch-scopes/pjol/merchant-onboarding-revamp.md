@@ -1,6 +1,6 @@
 # Branch scope — `pjol/merchant-onboarding-revamp`
 
-Aug 28 – Sep 5 2026 · app + mobile-app · **20.2h active** — 8.2h measured across eight sittings, plus
+Aug 28 – Sep 5 2026 · app + mobile-app · **20.9h active** — 8.9h measured across ten sittings, plus
 12.0h of hands-on testing reported by PJ and **not** measured (see *Untracked testing time* at the foot)
 
 Merchant onboarding and the location request flow, rebuilt around a split between merchant accounts
@@ -483,3 +483,51 @@ and will understate the sitting until it closes, as Round 3's did.
   payment wallet yet, say — is neither enrollable nor onboarding, so it gets the
   normal app and the normal settings tab. Logout is reachable there as it always
   was; the flow this covers is the one where it was not.
+
+---
+
+# Round 9 — Sep 5, 14:28–14:30 and 17:52 onwards
+
+**Repos:** `app` · **Total active hours: 0.7 — measured, second sitting still open**
+
+Measured from session-transcript timestamps across two sittings on Sep 5: a two-minute check that
+merchant mode can switch tills without a logout, and the visibility build. Separate sittings by the
+30-minute rule, recorded together because the first is too short to carry a section of its own.
+
+## Features
+
+| Feature | hours | repo |
+|---|---|---|
+| **Volunteer events are public or unlisted** — migration 1.52 adds `events.visibility` with a CHECK and an index, defaulted to public so all 131 existing events keep the visibility they effectively had. The public list filters on it; the detail endpoint deliberately does not, which is what makes a share link resolve. Wired through the row, the shared column list, the insert, the update, and both admin and affiliate create paths | 0.4 | app |
+| **Share link for unlisted events** — an Unlisted badge in the events manager, and on an approved unlisted event a copy control with the link shown in full beneath it. The link points at the public site's own event page (`sfluv.org/volunteers/<slug>-<id>`), not the dashboard | 0.2 | app |
+| Merchant-mode till switching verified end to end — PIN-gated, re-binds the same installation via an upsert on `(owner_id, installation_id_hash)`, and the shop list refreshes on every switch. No code changed | 0.1 | app |
+
+## Totals
+
+| | |
+|---|---|
+| Files changed | 6 modified |
+| Migrations | 1 (`1.52`), dry-run against the local clone and rolled back |
+| New routes | 0 |
+
+## Worth knowing
+
+- **Unlisted is not access control, and nothing in the UI implies it is.** The
+  detail endpoint serves an event by id whatever its visibility — that is the
+  mechanism the share link depends on — so the id is the capability. The copy
+  toast says "anyone with this link can open the event" rather than suggesting
+  the link is a secret.
+- **No mobile or marketing-site changes were needed, which was not obvious.**
+  The public consumer of `GET /volunteer-events` is the mobile app and the
+  `webpage` repo; both fetch a single event through the unfiltered detail route,
+  so an unlisted event already renders at its own URL. The frontend's
+  `/opportunities` page looks like the public portal and is not — it is still
+  wired to `mockOpportunities`.
+- **Editing had to seed the control, not default it.** The edit flow reuses the
+  create form and the form is the whole payload on save, so an unseeded
+  visibility control would have put an unlisted event back on the public list
+  the first time anyone edited its title.
+- **Hiding an event does not stop its QR codes.** Codes are bearer instruments
+  keyed to the event, and visibility does not touch them — the same gap as
+  FAU-01, where cancelling an event leaves its codes live. An unlisted event's
+  codes redeem exactly as a public one's do.
