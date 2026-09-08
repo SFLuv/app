@@ -96,6 +96,18 @@ export function EventModal({
 
   }
 
+  /**
+   * SFLuv's own organization is not a partner.
+   *
+   * Staff belong to an "SFLuv" organization so they can use the affiliate
+   * tools, so an event of ours resolves to an affiliate with that name — and
+   * the paired card then reads "Thank you from SFLuv and SFLuv!". Clearing the
+   * logo is what selects the solo card, matching the rule the backend applies
+   * to the volunteer event organizer.
+   */
+  const isHouseOrganization = (name?: string | null) =>
+    (name || "").trim().toLowerCase() === "sfluv"
+
   const getAffiliateLogo = async () => {
     if (!event?.owner) {
       setAffiliateLogo(null)
@@ -104,8 +116,9 @@ export function EventModal({
     }
 
     if (user?.id === event.owner) {
-      setAffiliateLogo(affiliate?.affiliate_logo || null)
-      setAffiliateOrganization(affiliate?.organization || null)
+      const house = isHouseOrganization(affiliate?.organization)
+      setAffiliateLogo(house ? null : affiliate?.affiliate_logo || null)
+      setAffiliateOrganization(house ? null : affiliate?.organization || null)
       return
     }
 
@@ -117,8 +130,9 @@ export function EventModal({
         return
       }
       const data = await res.json()
-      setAffiliateLogo(data?.affiliate_logo || null)
-      setAffiliateOrganization(data?.organization || null)
+      const house = isHouseOrganization(data?.organization)
+      setAffiliateLogo(house ? null : data?.affiliate_logo || null)
+      setAffiliateOrganization(house ? null : data?.organization || null)
     } catch {
       setAffiliateLogo(null)
       setAffiliateOrganization(null)

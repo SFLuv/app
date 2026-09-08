@@ -2207,6 +2207,33 @@ var schemaMigrations = []SchemaMigration{
 			return nil
 		},
 	},
+	{
+		Version:     "1.53",
+		Description: "volunteer events: QR window as offsets from the occurrence, not fixed instants",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			// A recurring series repeats a RULE, not a pair of timestamps.
+			//
+			// The QR window was stored only as two absolute instants derived at
+			// creation, so every occurrence after the first would have inherited
+			// the first one's window — codes live and expired against a date the
+			// event no longer happens on. Storing the offsets instead lets each
+			// occurrence compute its own window from its own start and end.
+			//
+			// NULL means the default, which is calendar-relative rather than a
+			// fixed number of hours — midnight local on the day the event
+			// starts, until midnight local on the day after it ends — and so
+			// cannot be expressed as an offset at all. Keeping NULL distinct
+			// from zero is what preserves that.
+			if _, err := pools.Bot.Exec(ctx, `
+				ALTER TABLE events
+					ADD COLUMN IF NOT EXISTS qr_live_offset_hours INTEGER,
+					ADD COLUMN IF NOT EXISTS qr_expiry_offset_hours INTEGER;
+			`); err != nil {
+				return fmt.Errorf("error adding the event QR offset columns: %w", err)
+			}
+			return nil
+		},
+	},
 }
 
 // migrateW9WarningTiers replaces one hard gate with an escalating sequence.

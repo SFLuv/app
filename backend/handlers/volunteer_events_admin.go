@@ -67,9 +67,12 @@ func parseLocalWallClock(value string, timezone string) (int64, error) {
 // defaultQRGracePeriod is how long after an event ends its codes stay
 // redeemable when no explicit cutoff is given. Someone still in the queue when
 // an event wraps up should not lose their reward to the clock.
-const defaultQRGracePeriod = 24 * time.Hour
+// A month either side. Wide enough for anything an event legitimately needs,
+// narrow enough that a typo in an hours field cannot mint codes redeemable for
+// a year.
+const maxQRWindowHours = 24 * 30
 
-func validateVolunteerEventRequest(req *structs.VolunteerEventCreateRequest) (startAt int64, endAt int64, until *int64, qrCutoff int64, errMsg string) {
+func validateVolunteerEventRequest(req *structs.VolunteerEventCreateRequest) (startAt int64, endAt int64, until *int64, qrWindow structs.QRWindowRule, errMsg string) {
 	req.Title = strings.TrimSpace(req.Title)
 	req.Description = strings.TrimSpace(req.Description)
 	req.Timezone = strings.TrimSpace(req.Timezone)
@@ -77,7 +80,7 @@ func validateVolunteerEventRequest(req *structs.VolunteerEventCreateRequest) (st
 	req.SignupURL = strings.TrimSpace(req.SignupURL)
 
 	if req.Title == "" {
-		return 0, 0, nil, 0, "title is required"
+		return 0, 0, nil, structs.QRWindowRule{}, "title is required"
 	}
 	if req.Timezone == "" {
 		req.Timezone = "America/Los_Angeles"
@@ -85,35 +88,46 @@ func validateVolunteerEventRequest(req *structs.VolunteerEventCreateRequest) (st
 
 	startAt, err := parseLocalWallClock(req.StartAtLocal, req.Timezone)
 	if err != nil {
-		return 0, 0, nil, 0, "start: " + err.Error()
+		return 0, 0, nil, structs.QRWindowRule{}, "start: " + err.Error()
 	}
 	endAt, err = parseLocalWallClock(req.EndAtLocal, req.Timezone)
 	if err != nil {
-		return 0, 0, nil, 0, "end: " + err.Error()
+		return 0, 0, nil, structs.QRWindowRule{}, "end: " + err.Error()
 	}
 	if endAt <= startAt {
-		return 0, 0, nil, 0, "end must be after start"
+		return 0, 0, nil, structs.QRWindowRule{}, "end must be after start"
 	}
 
 	// An event in the past cannot be attended, and its codes would already be
 	// live — a small grace window absorbs clock skew and the seconds between
 	// filling the form and submitting it.
 	if startAt < time.Now().Add(-5*time.Minute).Unix() {
-		return 0, 0, nil, 0, "start must be in the future"
+		return 0, 0, nil, structs.QRWindowRule{}, "start must be in the future"
 	}
 
-	// Redemption stays open for a grace period after the end unless an explicit
-	// cutoff is given.
-	qrCutoff = endAt + int64(defaultQRGracePeriod.Seconds())
-	if strings.TrimSpace(req.QRCutoffLocal) != "" {
-		explicit, err := parseLocalWallClock(req.QRCutoffLocal, req.Timezone)
-		if err != nil {
-			return 0, 0, nil, 0, "QR cutoff: " + err.Error()
+	// The redemption window, as offsets from this occurrence. Both absent is the
+	// default — midnight local on the day it starts, until midnight local on the
+	// day after it ends — which is resolved per occurrence rather than fixed
+	// here, so a recurring series repeats the rule instead of the first date.
+	if req.QRLiveOffsetHours != nil {
+		hours := *req.QRLiveOffsetHours
+		if hours < 0 {
+			return 0, 0, nil, structs.QRWindowRule{}, "codes cannot go live after the event starts"
 		}
-		if explicit < endAt {
-			return 0, 0, nil, 0, "the QR cutoff must not be before the event ends"
+		if hours > maxQRWindowHours {
+			return 0, 0, nil, structs.QRWindowRule{}, "codes cannot go live more than 30 days before the event"
 		}
-		qrCutoff = explicit
+		qrWindow.LiveOffsetHours = &hours
+	}
+	if req.QRExpiryOffsetHours != nil {
+		hours := *req.QRExpiryOffsetHours
+		if hours < 0 {
+			return 0, 0, nil, structs.QRWindowRule{}, "codes cannot expire before the event ends"
+		}
+		if hours > maxQRWindowHours {
+			return 0, 0, nil, structs.QRWindowRule{}, "codes cannot stay redeemable more than 30 days after the event"
+		}
+		qrWindow.ExpiryOffsetHours = &hours
 	}
 
 	// Absent means public, so a client that predates the field keeps creating
@@ -124,7 +138,7 @@ func validateVolunteerEventRequest(req *structs.VolunteerEventCreateRequest) (st
 		req.Visibility = structs.EventVisibilityPublic
 	}
 	if !structs.IsValidEventVisibility(req.Visibility) {
-		return 0, 0, nil, 0, "visibility must be public or unlisted"
+		return 0, 0, nil, structs.QRWindowRule{}, "visibility must be public or unlisted"
 	}
 
 	switch req.SignupMode {
@@ -132,22 +146,22 @@ func validateVolunteerEventRequest(req *structs.VolunteerEventCreateRequest) (st
 		req.SignupURL = ""
 	case structs.SignupModeExternal:
 		if req.SignupURL == "" {
-			return 0, 0, nil, 0, "an external signup needs a signup link"
+			return 0, 0, nil, structs.QRWindowRule{}, "an external signup needs a signup link"
 		}
 		if !isSafePartnerLink(req.SignupURL) {
-			return 0, 0, nil, 0, "signup link must be a full http(s) URL"
+			return 0, 0, nil, structs.QRWindowRule{}, "signup link must be a full http(s) URL"
 		}
 	default:
-		return 0, 0, nil, 0, "signup mode must be none, external, or internal"
+		return 0, 0, nil, structs.QRWindowRule{}, "signup mode must be none, external, or internal"
 	}
 
 	// max_participants is the number of QR codes minted, so it bounds the
 	// faucet exposure of the event and cannot be open-ended.
 	if req.MaxParticipants <= 0 {
-		return 0, 0, nil, 0, "max participants must be at least 1"
+		return 0, 0, nil, structs.QRWindowRule{}, "max participants must be at least 1"
 	}
 	if req.MaxParticipants > 10000 {
-		return 0, 0, nil, 0, "max participants must be 10000 or fewer"
+		return 0, 0, nil, structs.QRWindowRule{}, "max participants must be 10000 or fewer"
 	}
 
 	if req.Recurrence != nil {
@@ -161,25 +175,25 @@ func validateVolunteerEventRequest(req *structs.VolunteerEventCreateRequest) (st
 			case "":
 				req.Recurrence.MonthlyMode = structs.MonthlyModeDayOfMonth
 			default:
-				return 0, 0, nil, 0, "monthly mode must be day_of_month or day_of_week"
+				return 0, 0, nil, structs.QRWindowRule{}, "monthly mode must be day_of_month or day_of_week"
 			}
 		default:
-			return 0, 0, nil, 0, "recurrence must be none, daily, weekly, or monthly"
+			return 0, 0, nil, structs.QRWindowRule{}, "recurrence must be none, daily, weekly, or monthly"
 		}
 	}
 
 	if req.Recurrence != nil && req.Recurrence.UntilLocal != nil && strings.TrimSpace(*req.Recurrence.UntilLocal) != "" {
 		untilUnix, err := parseLocalWallClock(*req.Recurrence.UntilLocal, req.Timezone)
 		if err != nil {
-			return 0, 0, nil, 0, "repeat-until: " + err.Error()
+			return 0, 0, nil, structs.QRWindowRule{}, "repeat-until: " + err.Error()
 		}
 		if untilUnix < startAt {
-			return 0, 0, nil, 0, "repeat-until must be after the first event"
+			return 0, 0, nil, structs.QRWindowRule{}, "repeat-until must be after the first event"
 		}
 		until = &untilUnix
 	}
 
-	return startAt, endAt, until, qrCutoff, ""
+	return startAt, endAt, until, qrWindow, ""
 }
 
 // validateVolunteerLocation rejects a location_id that does not refer to a real
@@ -229,7 +243,7 @@ func (a *AppService) AdminCreateVolunteerEvent(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	startAt, endAt, until, qrCutoff, errMsg := validateVolunteerEventRequest(&req)
+	startAt, endAt, until, qrWindow, errMsg := validateVolunteerEventRequest(&req)
 	if errMsg == "" {
 		errMsg = a.validateVolunteerLocation(r.Context(), req.LocationId)
 	}
@@ -274,7 +288,7 @@ func (a *AppService) AdminCreateVolunteerEvent(w http.ResponseWriter, r *http.Re
 		Timezone:            req.Timezone,
 		StartAt:             startAt,
 		EndAt:               endAt,
-		QRExpiresAt:         qrCutoff,
+		QRWindow:            qrWindow,
 		MaxParticipants:     req.MaxParticipants,
 		RewardAmount:        req.RewardAmountSfluv,
 		SignupMode:          req.SignupMode,
@@ -372,7 +386,11 @@ func decorateManagementFields(event *structs.VolunteerEvent, row *db.VolunteerEv
 	event.ReviewStatus = row.ReviewStatus
 	event.FundingStatus = row.FundingStatus
 
-	qr := &structs.VolunteerEventQR{CodesGenerated: row.CodesGenerated}
+	qr := &structs.VolunteerEventQR{
+		CodesGenerated:    row.CodesGenerated,
+		LiveOffsetHours:   row.QRLiveOffsetHours,
+		ExpiryOffsetHours: row.QRExpiryOffsetHours,
+	}
 	if row.QRLiveAt != nil {
 		liveAt := rfc3339(*row.QRLiveAt)
 		qr.LiveAt = &liveAt
@@ -799,7 +817,7 @@ func (a *AppService) sendVolunteerFundingShortfallEmail(title string, required i
 func (a *AppService) applyVolunteerEventEdit(
 	ctx context.Context, eventId string, req *structs.VolunteerEventCreateRequest,
 ) (int, string) {
-	startAt, endAt, until, qrCutoff, errMsg := validateVolunteerEventRequest(req)
+	startAt, endAt, until, qrWindow, errMsg := validateVolunteerEventRequest(req)
 	if errMsg == "" {
 		errMsg = a.validateVolunteerLocation(ctx, req.LocationId)
 	}
@@ -831,7 +849,7 @@ func (a *AppService) applyVolunteerEventEdit(
 		Timezone:            req.Timezone,
 		StartAt:             startAt,
 		EndAt:               endAt,
-		QRExpiresAt:         qrCutoff,
+		QRWindow:            qrWindow,
 		MaxParticipants:     req.MaxParticipants,
 		RewardAmount:        req.RewardAmountSfluv,
 		SignupMode:          req.SignupMode,

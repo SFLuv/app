@@ -35,8 +35,12 @@ type VolunteerEventRow struct {
 	ReviewStatus    string
 	CancelledAt     *int64
 	QRLiveAt        *int64
-	CodesGenerated  bool
-	FundingStatus   string
+	// The stored rule, so a successor resolves its own window. Nil means the
+	// default: midnight local on the start day to midnight local after the end.
+	QRLiveOffsetHours   *int
+	QRExpiryOffsetHours *int
+	CodesGenerated      bool
+	FundingStatus       string
 
 	// LocationId is a soft reference into the app database's locations table —
 	// events live in the bot database, so this cannot be a foreign key and is
@@ -77,6 +81,8 @@ const volunteerEventColumns = `
 	e.review_status,
 	e.cancelled_at,
 	e.qr_live_at,
+	e.qr_live_offset_hours,
+	e.qr_expiry_offset_hours,
 	e.codes_generated,
 	e.funding_status,
 	e.location_id,
@@ -105,6 +111,17 @@ func visibilityOrDefault(value string) string {
 	return structs.EventVisibilityPublic
 }
 
+// QRWindow is the row's stored rule, in the form the resolver takes.
+func (r *VolunteerEventRow) QRWindow() structs.QRWindowRule {
+	if r == nil {
+		return structs.QRWindowRule{}
+	}
+	return structs.QRWindowRule{
+		LiveOffsetHours:   r.QRLiveOffsetHours,
+		ExpiryOffsetHours: r.QRExpiryOffsetHours,
+	}
+}
+
 func scanVolunteerEventRow(row pgx.Row, out *VolunteerEventRow, total *int) error {
 	targets := []any{
 		&out.Id,
@@ -124,6 +141,8 @@ func scanVolunteerEventRow(row pgx.Row, out *VolunteerEventRow, total *int) erro
 		&out.ReviewStatus,
 		&out.CancelledAt,
 		&out.QRLiveAt,
+		&out.QRLiveOffsetHours,
+		&out.QRExpiryOffsetHours,
 		&out.CodesGenerated,
 		&out.FundingStatus,
 		&out.LocationId,
@@ -465,8 +484,10 @@ type CreateVolunteerEventParams struct {
 
 	StartAt int64
 	EndAt   int64
-	// QRExpiresAt closes the redemption window; defaults to 24h after EndAt.
-	QRExpiresAt int64
+	// QRWindow is the redemption window as offsets from this occurrence, so a
+	// recurring successor can resolve its own instants rather than inheriting
+	// the first occurrence's. Both offsets nil is the default.
+	QRWindow structs.QRWindowRule
 
 	MaxParticipants int
 	RewardAmount    uint64
@@ -519,7 +540,9 @@ func (s *BotDB) CreateVolunteerEvent(ctx context.Context, p *CreateVolunteerEven
 
 	// QR codes are downloadable immediately but only spendable from 24h before
 	// the event starts; the redemption gate reads this column.
-	qrLiveAt := p.StartAt - 86400
+	// Resolved from this occurrence, and the rule itself is stored alongside so
+	// a successor can resolve its own rather than inheriting these instants.
+	qrLiveAt, qrExpiresAt := p.QRWindow.ResolveQRWindow(p.StartAt, p.EndAt, p.Timezone)
 
 	fundingStatus := structs.FundingStatusFunded
 	if !p.MintCodes {
@@ -530,14 +553,16 @@ func (s *BotDB) CreateVolunteerEvent(ctx context.Context, p *CreateVolunteerEven
 		INSERT INTO events (
 			id, title, description, amount, start_at, expiration, owner, organization_id,
 			is_volunteer, slug, timezone, max_participants, signup_mode, signup_url, visibility,
-			review_status, qr_live_at, qr_expires_at, codes_generated, funding_status, location_id,
+			review_status, qr_live_at, qr_expires_at, qr_live_offset_hours, qr_expiry_offset_hours,
+			codes_generated, funding_status, location_id,
 			recurrence_frequency, recurrence_interval, recurrence_monthly_mode,
 			recurrence_day_of_month, recurrence_week_of_month, recurrence_weekday,
 			recurrence_until, series_id, series_index, requested_by, approved_by, approved_at
 		) VALUES (
 			$1, $2, $3, $4, $5, $6, $7, $8,
 			TRUE, $9, $10, $11, $12, $13, $29,
-			$14, $15, $28, $16, $17, $18,
+			$14, $15, $28, $30, $31,
+			$16, $17, $18,
 			$19, 1, $20,
 			$21, $22, $23,
 			$24, $25, 0, $7, $26, $27
@@ -551,8 +576,10 @@ func (s *BotDB) CreateVolunteerEvent(ctx context.Context, p *CreateVolunteerEven
 		p.RecurrenceUntil, seriesId,
 		approvedBy(p),
 		approvedAtOrNil(p),
-		nullableUnix(p.QRExpiresAt),
+		nullableUnix(qrExpiresAt),
 		visibilityOrDefault(p.Visibility),
+		p.QRWindow.LiveOffsetHours,
+		p.QRWindow.ExpiryOffsetHours,
 	)
 	if err != nil {
 		return "", fmt.Errorf("error inserting volunteer event: %s", err)
@@ -1145,7 +1172,10 @@ func (s *BotDB) GetElapsedRecurringEventsNeedingSuccessor(ctx context.Context, l
 // an occurrence from a published series.
 func (s *BotDB) CreateRecurringSuccessor(ctx context.Context, previous *VolunteerEventRow, startAt int64, endAt int64, funded bool) (string, error) {
 	id := uuid.NewString()
-	qrLiveAt := startAt - 86400
+	// The whole point of storing the rule: this occurrence resolves its own
+	// window from its own dates. Cloning the previous row's instants would have
+	// left codes live and expired against a date this event does not happen on.
+	qrLiveAt, qrExpiresAt := previous.QRWindow().ResolveQRWindow(startAt, endAt, previous.Timezone)
 
 	fundingStatus := structs.FundingStatusFunded
 	if !funded {
@@ -1162,20 +1192,22 @@ func (s *BotDB) CreateRecurringSuccessor(ctx context.Context, previous *Voluntee
 		INSERT INTO events (
 			id, title, description, amount, start_at, expiration, owner, organization_id,
 			is_volunteer, slug, timezone, max_participants, signup_mode, signup_url,
-			review_status, qr_live_at, qr_expires_at, codes_generated, funding_status, location_id,
+			review_status, qr_live_at, qr_expires_at, qr_live_offset_hours, qr_expiry_offset_hours,
+			codes_generated, funding_status, location_id,
 			recurrence_frequency, recurrence_interval, recurrence_monthly_mode,
 			recurrence_day_of_month, recurrence_week_of_month, recurrence_weekday,
-			recurrence_until, series_id, series_index
+			recurrence_until, series_id, series_index, visibility
 		)
 		SELECT
 			$1, title, description, amount, $2, $3, owner, organization_id,
 			TRUE, slug, timezone, max_participants, signup_mode, signup_url,
-			'approved', $4, $5, $6, location_id,
+			'approved', $4, $5, qr_live_offset_hours, qr_expiry_offset_hours,
+			$6, $7, location_id,
 			recurrence_frequency, recurrence_interval, recurrence_monthly_mode,
 			recurrence_day_of_month, recurrence_week_of_month, recurrence_weekday,
-			recurrence_until, series_id, series_index + 1
-		FROM events WHERE id = $7;
-	`, id, startAt, endAt, qrLiveAt, funded, fundingStatus, previous.Id)
+			recurrence_until, series_id, series_index + 1, visibility
+		FROM events WHERE id = $8;
+	`, id, startAt, endAt, qrLiveAt, nullableUnix(qrExpiresAt), funded, fundingStatus, previous.Id)
 	if err != nil {
 		return "", fmt.Errorf("error creating recurring successor: %s", err)
 	}
@@ -1614,6 +1646,10 @@ func (s *BotDB) UpdateVolunteerEvent(ctx context.Context, eventId string, p *Cre
 		return ErrEventElapsed
 	}
 
+	// The edit may have moved the event, so both instants are recomputed from
+	// the (possibly new) rule against the (possibly new) times.
+	updatedQRLiveAt, updatedQRExpiresAt := p.QRWindow.ResolveQRWindow(p.StartAt, p.EndAt, p.Timezone)
+
 	if _, err := tx.Exec(ctx, `
 		UPDATE events SET
 			title = $2,
@@ -1622,7 +1658,6 @@ func (s *BotDB) UpdateVolunteerEvent(ctx context.Context, eventId string, p *Cre
 			amount = $5,
 			start_at = $6,
 			expiration = $7,
-			qr_live_at = $6 - 86400,
 			qr_expires_at = $8,
 			timezone = $9,
 			max_participants = $10,
@@ -1636,13 +1671,17 @@ func (s *BotDB) UpdateVolunteerEvent(ctx context.Context, eventId string, p *Cre
 			recurrence_weekday = $18,
 			recurrence_until = $19,
 			visibility = $20,
+			qr_live_offset_hours = $21,
+			qr_expiry_offset_hours = $22,
+			qr_live_at = $23,
 			updated_at = EXTRACT(EPOCH FROM NOW())::BIGINT
 		WHERE id = $1;
 	`, eventId, p.Title, p.Description, p.Slug, p.RewardAmount, p.StartAt, p.EndAt,
-		nullableUnix(p.QRExpiresAt), p.Timezone, p.MaxParticipants, p.SignupMode, p.SignupURL,
+		nullableUnix(updatedQRExpiresAt), p.Timezone, p.MaxParticipants, p.SignupMode, p.SignupURL,
 		p.LocationId, p.RecurrenceFrequency, p.RecurrenceMonthlyMode,
 		p.RecurrenceDayOfMonth, p.RecurrenceWeekOfMonth, p.RecurrenceWeekday, p.RecurrenceUntil,
 		visibilityOrDefault(p.Visibility),
+		p.QRWindow.LiveOffsetHours, p.QRWindow.ExpiryOffsetHours, updatedQRLiveAt,
 	); err != nil {
 		return fmt.Errorf("error updating volunteer event: %s", err)
 	}

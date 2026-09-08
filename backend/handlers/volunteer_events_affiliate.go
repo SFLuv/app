@@ -61,7 +61,7 @@ func (a *AppService) AffiliateRequestVolunteerEvent(w http.ResponseWriter, r *ht
 		return
 	}
 
-	startAt, endAt, until, qrCutoff, errMsg := validateVolunteerEventRequest(&req)
+	startAt, endAt, until, qrWindow, errMsg := validateVolunteerEventRequest(&req)
 	if errMsg == "" {
 		errMsg = a.validateVolunteerLocation(r.Context(), req.LocationId)
 	}
@@ -85,7 +85,7 @@ func (a *AppService) AffiliateRequestVolunteerEvent(w http.ResponseWriter, r *ht
 		Timezone:            req.Timezone,
 		StartAt:             startAt,
 		EndAt:               endAt,
-		QRExpiresAt:         qrCutoff,
+		QRWindow:            qrWindow,
 		MaxParticipants:     req.MaxParticipants,
 		RewardAmount:        req.RewardAmountSfluv,
 		SignupMode:          req.SignupMode,

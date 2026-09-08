@@ -42,7 +42,10 @@ export interface VolunteerEventDraft {
   signup_mode: "none" | "external" | "internal"
   signup_url?: string
   visibility: "public" | "unlisted"
-  qr_cutoff_local?: string
+  /** Hours BEFORE the start that codes go live. Omitted uses the default. */
+  qr_live_offset_hours?: number
+  /** Hours AFTER the end that codes stop working. Omitted uses the default. */
+  qr_expiry_offset_hours?: number
   recurrence?: {
     frequency: "daily" | "weekly" | "monthly"
     monthly_mode?: "day_of_month" | "day_of_week"
@@ -99,6 +102,8 @@ export interface EditableVolunteerEvent {
   reward_amount_sfluv: number
   /** Round-tripped so editing an unlisted event does not republish it. */
   visibility?: string
+  /** Round-tripped for the same reason: the form is the whole payload on save. */
+  qr?: { live_offset_hours?: number | null; expiry_offset_hours?: number | null }
   signup?: { mode: string; url?: string | null }
   /**
    * The machine-readable rule, not just its summary.
@@ -187,8 +192,11 @@ export function AddVolunteerEventModal({
   const [monthlyMode, setMonthlyMode] = useState<"day_of_month" | "day_of_week">("day_of_month")
   const [weekOfMonth, setWeekOfMonth] = useState(1)
   const [untilLocal, setUntilLocal] = useState("")
+  // Offsets in hours, not instants: a recurring series repeats the rule, so
+  // each occurrence resolves its own window from its own dates.
   const [useCustomCutoff, setUseCustomCutoff] = useState(false)
-  const [qrCutoffLocal, setQrCutoffLocal] = useState("")
+  const [qrLiveOffsetHours, setQrLiveOffsetHours] = useState("0")
+  const [qrExpiryOffsetHours, setQrExpiryOffsetHours] = useState("24")
   /*
    * Photos upload the moment they are chosen rather than after the event is
    * created, so by submit time they are almost always already on the server.
@@ -223,6 +231,16 @@ export function AddVolunteerEventModal({
     // an unseeded control would quietly put an unlisted event on the public
     // list the first time anybody edited its title.
     setVisibility(editEvent.visibility === "unlisted" ? "unlisted" : "public")
+    // Null offsets mean the default window, so the box stays unticked; a stored
+    // pair ticks it and seeds the fields it was saved with. Without this, an
+    // event with a custom window silently reverted to the default on any edit.
+    const liveOffset = editEvent.qr?.live_offset_hours
+    const expiryOffset = editEvent.qr?.expiry_offset_hours
+    const hasCustomWindow =
+      typeof liveOffset === "number" || typeof expiryOffset === "number"
+    setUseCustomCutoff(hasCustomWindow)
+    setQrLiveOffsetHours(typeof liveOffset === "number" ? String(liveOffset) : "0")
+    setQrExpiryOffsetHours(typeof expiryOffset === "number" ? String(expiryOffset) : "24")
 
     const mode = editEvent.signup?.mode
     setSignupMode(mode === "none" || mode === "external" ? mode : "internal")
@@ -264,7 +282,8 @@ export function AddVolunteerEventModal({
     setWeekOfMonth(1)
     setUntilLocal("")
     setUseCustomCutoff(false)
-    setQrCutoffLocal("")
+    setQrLiveOffsetHours("0")
+    setQrExpiryOffsetHours("24")
     // Discard anything staged but never submitted, so the bytes go now rather
     // than waiting on the server's orphan sweep. Best effort by design.
     for (const photo of photosRef.current) {
@@ -385,11 +404,18 @@ export function AddVolunteerEventModal({
     if (new Date(startAtLocal).getTime() < Date.now() - 5 * 60 * 1000) {
       return setError("The start time must be in the future.")
     }
-    if (useCustomCutoff && qrCutoffLocal === "") {
-      return setError("Set a QR redemption cutoff, or untick the box to use the default.")
-    }
-    if (useCustomCutoff && qrCutoffLocal < endAtLocal) {
-      return setError("The QR cutoff must not be before the event ends.")
+    if (useCustomCutoff) {
+      const live = Number(qrLiveOffsetHours)
+      const expiry = Number(qrExpiryOffsetHours)
+      if (!Number.isFinite(live) || !Number.isFinite(expiry) || qrLiveOffsetHours === "" || qrExpiryOffsetHours === "") {
+        return setError("Set both QR redemption hours, or untick the box to use the default.")
+      }
+      if (live < 0 || expiry < 0) {
+        return setError("QR redemption hours cannot be negative.")
+      }
+      if (live > 24 * 30 || expiry > 24 * 30) {
+        return setError("QR redemption hours cannot be more than 30 days.")
+      }
     }
     if (maxParticipants < 1) return setError("Max participants must be at least 1.")
     if (signupMode === "external" && signupUrl.trim() === "") {
@@ -412,7 +438,12 @@ export function AddVolunteerEventModal({
       signup_mode: signupMode,
       visibility,
       ...(signupMode === "external" ? { signup_url: signupUrl.trim() } : {}),
-      ...(useCustomCutoff && qrCutoffLocal !== "" ? { qr_cutoff_local: qrCutoffLocal } : {}),
+      ...(useCustomCutoff
+        ? {
+            qr_live_offset_hours: Number(qrLiveOffsetHours),
+            qr_expiry_offset_hours: Number(qrExpiryOffsetHours),
+          }
+        : {}),
       ...(frequency !== "none"
         ? {
             recurrence: {
@@ -693,20 +724,50 @@ export function AddVolunteerEventModal({
                 onCheckedChange={(checked) => setUseCustomCutoff(checked === true)}
               />
               <Label htmlFor="ve-custom-cutoff" className="cursor-pointer font-normal">
-                Set an exact QR redemption cutoff
+                Set the QR redemption window
               </Label>
             </div>
             {useCustomCutoff ? (
-              <Input
-                type="datetime-local"
-                value={qrCutoffLocal}
-                onChange={(event) => setQrCutoffLocal(event.target.value)}
-                aria-label="QR redemption cutoff"
-              />
+              <>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="space-y-1">
+                    <Label htmlFor="ve-qr-live" className="text-xs font-normal text-muted-foreground">
+                      Hours before start
+                    </Label>
+                    <Input
+                      id="ve-qr-live"
+                      type="number"
+                      min={0}
+                      max={24 * 30}
+                      value={qrLiveOffsetHours}
+                      onChange={(event) => setQrLiveOffsetHours(event.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label htmlFor="ve-qr-expiry" className="text-xs font-normal text-muted-foreground">
+                      Hours after end
+                    </Label>
+                    <Input
+                      id="ve-qr-expiry"
+                      type="number"
+                      min={0}
+                      max={24 * 30}
+                      value={qrExpiryOffsetHours}
+                      onChange={(event) => setQrExpiryOffsetHours(event.target.value)}
+                    />
+                  </div>
+                </div>
+                {/* Hours rather than dates, because a repeating event has no
+                    single date to set: each occurrence applies these to its own
+                    start and end. */}
+                <p className="text-xs text-muted-foreground">
+                  Applied to every occurrence of a repeating event, against that occurrence&apos;s own times.
+                </p>
+              </>
             ) : (
               <p className="text-xs text-muted-foreground">
-                QR codes stay redeemable until 24 hours after the event ends, so anyone still in the queue
-                when it wraps up can claim their reward.
+                QR codes go live at midnight on the day of the event and stay redeemable until midnight the
+                day after it ends.
               </p>
             )}
           </div>
