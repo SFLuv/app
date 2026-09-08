@@ -80,6 +80,17 @@ func (a *AppService) AddWallet(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	// Payouts made to this address before anyone claimed it now belong to
+	// somebody.
+	//
+	// Redemption is unauthenticated, so a reward QR can be scanned to an address
+	// with no account behind it. There is nobody to ask for a W-9 in that case,
+	// so the money goes out ungated. Attributing those payouts the moment the
+	// wallet is linked is what stops that being a permanent way around the
+	// annual threshold — redeem to a fresh address, link it afterwards, and
+	// otherwise none of it would ever count.
+	a.AttributeUnlinkedPayoutsForUser(r, *userDid)
+
 	res := strconv.Itoa(id)
 
 	w.WriteHeader(http.StatusCreated)

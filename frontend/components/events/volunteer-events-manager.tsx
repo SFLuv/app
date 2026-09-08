@@ -1,0 +1,928 @@
+"use client"
+
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
+import { AlertTriangle, CheckCircle2, Clock, Download, Leaf, Link as LinkIcon, Loader2, Megaphone, Pencil, QrCode, XCircle, ChevronRight } from "lucide-react"
+
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { Input } from "@/components/ui/input"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { EventBlastModal } from "@/components/events/event-blast-modal"
+import { Pagination } from "@/components/opportunities/pagination"
+import { useApp } from "@/context/AppProvider"
+import { useToast } from "@/hooks/use-toast"
+
+export interface ManagedVolunteerEvent {
+  id: string
+  title: string
+  start_at: string
+  end_at: string
+  timezone: string
+  max_participants: number
+  signup_count: number | null
+  reward_amount_sfluv: number
+  status: string
+  review_status?: string
+  /** "public" or "unlisted". Absent on a payload from an older backend. */
+  visibility?: string
+  /** Decorative half of the share URL; the trailing id is what resolves it. */
+  slug?: string
+  funding_status?: string
+  organizer: { type: string; name: string; logo_url?: string | null }
+  cover_photos?: { id: string; url: string; position: number }[]
+  description?: string
+  recurrence: {
+    frequency?: string
+    monthly_mode?: string
+    week_of_month?: number | null
+    until?: string | null
+    summary?: string
+  } | null
+  /** Present whenever the event was given one. */
+  location?: {
+    id: number
+    name: string
+    street: string
+    city: string
+    state: string
+    zip: string
+  } | null
+  signup?: { mode: string; url?: string | null; open: boolean; closed_reason?: string | null }
+  qr?: { live: boolean; live_at: string | null; codes_generated: boolean }
+  /** Management-only: who made the event. Email is present only when the
+      short name is ambiguous within the organization. */
+  creator?: { name: string; email?: string } | null
+  /** Set when an affiliate has proposed changes awaiting an admin decision. */
+  pending_edit?: { requested_at: string; title?: string } | null
+}
+
+interface VolunteerEventsManagerProps {
+  /** "/admin/volunteer-events" or "/affiliates/volunteer-events". */
+  basePath: string
+  /** Admins get approve / reject / cancel; affiliates get a read-only view plus QR download. */
+  canReview: boolean
+  title?: string
+  /** Sits under the title. A node, so a caller can put live figures there. */
+  description?: ReactNode
+  /**
+   * Total awaiting approval across every page.
+   *
+   * Counting the rows on screen would undercount the moment the list is
+   * paginated or filtered, and this badge is a summary of the queue rather
+   * than of the current view. Falls back to the visible rows when a caller has
+   * no better figure.
+   */
+  pendingCount?: number
+  /** Called when a card is opened, so the parent can offer an edit form. */
+  onOpenEvent?: (event: ManagedVolunteerEvent) => void
+  /** Shown in the detail panel when the caller supports editing. */
+  onEditEvent?: (event: ManagedVolunteerEvent) => void
+  /** Rendered on the title line, for the panel's primary action. */
+  action?: ReactNode
+}
+
+/** Rows per page. Small enough that the panel never becomes the whole screen. */
+const PAGE_SIZE = 8
+
+
+const REVIEW_FILTERS = [
+  { value: "all", label: "All events" },
+  { value: "pending", label: "Awaiting approval" },
+  { value: "approved", label: "Approved" },
+  { value: "rejected", label: "Rejected" },
+  { value: "cancelled", label: "Cancelled" },
+]
+
+function formatEventWhen(event: ManagedVolunteerEvent): string {
+  // Rendered in the viewer's local time, per PJ's Q-M4 ruling — the payload
+  // carries an instant, and every surface shows it in the reader's own zone.
+  const start = new Date(event.start_at)
+  if (Number.isNaN(start.getTime())) return ""
+  return start.toLocaleString(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  })
+}
+
+/**
+ * The full window, not just the opening moment.
+ *
+ * Collapses to one date when an event starts and ends on the same day, which
+ * is nearly all of them — repeating the date twice reads as a mistake.
+ */
+function formatEventRange(event: ManagedVolunteerEvent): string {
+  const start = new Date(event.start_at)
+  const end = new Date(event.end_at)
+  if (Number.isNaN(start.getTime())) return ""
+
+  const startLabel = start.toLocaleString(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  })
+  if (Number.isNaN(end.getTime())) return startLabel
+
+  const sameDay = start.toDateString() === end.toDateString()
+  const endLabel = end.toLocaleString(
+    undefined,
+    sameDay
+      ? { hour: "numeric", minute: "2-digit" }
+      : { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" },
+  )
+  return `${startLabel} – ${endLabel}`
+}
+
+function formatAddress(location: NonNullable<ManagedVolunteerEvent["location"]>): string {
+  return [location.street, location.city, location.state, location.zip].map((part) => part?.trim()).filter(Boolean).join(", ")
+}
+
+/**
+ * Every cover photo an event has, at a reviewable size.
+ *
+ * One large lead image with the rest beneath it: the first photo is the cover
+ * everywhere else in the product, so it earns the space, and the others still
+ * need to be checkable. Each opens full size in a new tab, because a cover
+ * cropped into a card is not enough to spot a photo that is wrong.
+ */
+function EventCoverGallery({ event }: { event: ManagedVolunteerEvent }) {
+  const photos = [...(event.cover_photos || [])].sort((a, b) => a.position - b.position)
+  if (photos.length === 0) {
+    return (
+      <div className="rounded-lg border border-dashed p-4 text-center text-xs text-muted-foreground">
+        No cover photos on this event.
+      </div>
+    )
+  }
+
+  const [lead, ...rest] = photos
+
+  return (
+    <div className="space-y-2">
+      <a href={lead.url} target="_blank" rel="noopener noreferrer" className="block">
+        {/* eslint-disable-next-line @next/next/no-img-element -- API-hosted upload */}
+        <img
+          src={lead.url}
+          alt={`${event.title} cover`}
+          className="h-48 w-full rounded-lg border object-cover transition-opacity hover:opacity-90"
+        />
+      </a>
+
+      {rest.length > 0 && (
+        <div className="flex flex-wrap gap-2">
+          {rest.map((photo, index) => (
+            <a key={photo.id} href={photo.url} target="_blank" rel="noopener noreferrer">
+              {/* eslint-disable-next-line @next/next/no-img-element -- API-hosted upload */}
+              <img
+                src={photo.url}
+                alt={`${event.title} photo ${index + 2}`}
+                className="h-16 w-24 rounded-md border object-cover transition-opacity hover:opacity-90"
+              />
+            </a>
+          ))}
+        </div>
+      )}
+
+      <p className="text-xs text-muted-foreground">
+        {photos.length} photo{photos.length === 1 ? "" : "s"} · click to open full size
+      </p>
+    </div>
+  )
+}
+
+function ReviewBadge({ event }: { event: ManagedVolunteerEvent }) {
+  const review = event.review_status
+  if (review === "pending") {
+    return (
+      <Badge variant="outline" className="border-amber-500 text-amber-600">
+        <Clock className="mr-1 h-3 w-3" /> Awaiting approval
+      </Badge>
+    )
+  }
+  if (review === "rejected") return <Badge variant="destructive">Rejected</Badge>
+  if (review === "cancelled" || event.status === "cancelled") return <Badge variant="destructive">Cancelled</Badge>
+  if (event.funding_status === "awaiting_funding") {
+    return (
+      <Badge variant="outline" className="border-destructive text-destructive">
+        <AlertTriangle className="mr-1 h-3 w-3" /> Needs faucet top-up
+      </Badge>
+    )
+  }
+  return (
+    <Badge variant="outline" className="border-emerald-500 text-emerald-600">
+      <CheckCircle2 className="mr-1 h-3 w-3" /> Approved
+    </Badge>
+  )
+}
+
+/** QR codes are downloadable immediately but only redeemable 24h before start. */
+/**
+ * The public site is where an event's own page lives, so a share link points
+ * there rather than at this dashboard.
+ *
+ * The slug is decorative — the public route resolves the trailing id — so a
+ * link built without one still works, and a renamed event never breaks a link
+ * already handed out.
+ */
+const PUBLIC_SITE_URL = (process.env.NEXT_PUBLIC_PUBLIC_SITE_URL || "https://sfluv.org").replace(/\/+$/, "")
+
+export function eventShareLink(event: Pick<ManagedVolunteerEvent, "id" | "slug">) {
+  const segment = event.slug ? `${event.slug}-${event.id}` : event.id
+  return `${PUBLIC_SITE_URL}/volunteers/${segment}`
+}
+
+function VisibilityBadge({ event }: { event: ManagedVolunteerEvent }) {
+  if (event.visibility !== "unlisted") return null
+  return (
+    <Badge variant="outline" className="border-slate-400 text-slate-600 dark:text-slate-300">
+      Unlisted
+    </Badge>
+  )
+}
+
+function QrBadge({ event }: { event: ManagedVolunteerEvent }) {
+  if (!event.qr?.codes_generated) {
+    return <Badge variant="outline" className="text-muted-foreground">QR codes not generated</Badge>
+  }
+  if (event.qr.live) {
+    return (
+      <Badge variant="outline" className="border-emerald-500 text-emerald-600">
+        <QrCode className="mr-1 h-3 w-3" /> QR live
+      </Badge>
+    )
+  }
+  const liveAt = event.qr.live_at ? new Date(event.qr.live_at) : null
+  const label = liveAt && !Number.isNaN(liveAt.getTime())
+    ? `QR live ${liveAt.toLocaleDateString(undefined, { month: "short", day: "numeric" })}`
+    : "QR not live yet"
+  return <Badge variant="outline" className="text-muted-foreground"><QrCode className="mr-1 h-3 w-3" />{label}</Badge>
+}
+
+/**
+ * Approval queue and QR management for volunteer events.
+ *
+ * Shared by the admin panel and the affiliate panel: affiliates can no longer
+ * create events unilaterally, but they still need to see their requests' status
+ * and download the QR codes for approved events to print.
+ */
+export function VolunteerEventsManager({
+  basePath,
+  canReview,
+  title = "Volunteer Events",
+  description = "Approve requests, download QR codes, and manage published events.",
+  onOpenEvent,
+  onEditEvent,
+  action,
+  pendingCount: pendingCountOverride,
+}: VolunteerEventsManagerProps) {
+  const { authFetch } = useApp()
+  const { toast } = useToast()
+
+  // Anyone holding the link can open the event, so this says so rather than
+  // implying the link is a secret worth guarding.
+  const copyShareLink = async (event: ManagedVolunteerEvent) => {
+    const link = eventShareLink(event)
+    try {
+      await navigator.clipboard.writeText(link)
+      toast({ title: "Share link copied", description: "Anyone with this link can open the event." })
+    } catch {
+      // Clipboard access is refused on an insecure origin and in some embedded
+      // browsers. The link is on screen either way, so this says to copy it by
+      // hand rather than failing silently.
+      toast({
+        title: "Could not copy automatically",
+        description: "Select the link below and copy it.",
+        variant: "destructive",
+      })
+    }
+  }
+  const [events, setEvents] = useState<ManagedVolunteerEvent[]>([])
+  const [page, setPage] = useState(0)
+  const [totalEvents, setTotalEvents] = useState(0)
+  const [reviewFilter, setReviewFilter] = useState("all")
+  const [search, setSearch] = useState("")
+  const [busyId, setBusyId] = useState("")
+  const [exportProgress, setExportProgress] = useState<{ done: number; total: number } | null>(null)
+  const [openEvent, setOpenEvent] = useState<ManagedVolunteerEvent | null>(null)
+  const [blastEvent, setBlastEvent] = useState<ManagedVolunteerEvent | null>(null)
+  const [error, setError] = useState("")
+  // First-load-only spinner. The poll below must never blank a list the user is
+  // reading, so the placeholder is gated on whether we have ever loaded rather
+  // than on whether a request is in flight.
+  const [initialLoading, setInitialLoading] = useState(true)
+  const hasLoadedRef = useRef(false)
+  // Signature of the last rendered payload. State is only replaced when this
+  // changes, so a poll that finds nothing new causes no re-render at all — no
+  // flash, no scroll jump, no dropdown closing under the user.
+  const signatureRef = useRef("")
+
+  const loadEvents = useCallback(async () => {
+    setError("")
+    try {
+      const params = new URLSearchParams({ count: String(PAGE_SIZE), page: String(page) })
+      if (reviewFilter !== "all") params.set("review_status", reviewFilter)
+      if (search.trim() !== "") params.set("search", search.trim())
+
+      const res = await authFetch(`${basePath}?${params.toString()}`)
+      if (!res.ok) throw new Error("Unable to load volunteer events.")
+      const data = await res.json()
+      const next: ManagedVolunteerEvent[] = data.events || []
+      setTotalEvents(typeof data.total === "number" ? data.total : next.length)
+
+      const signature = JSON.stringify(
+        next.map((event) => [
+          event.id,
+          event.review_status,
+          event.status,
+          event.funding_status,
+          event.signup_count,
+          event.qr?.codes_generated,
+          event.qr?.live,
+          event.creator?.name,
+        ]),
+      )
+      if (signature !== signatureRef.current) {
+        signatureRef.current = signature
+        setEvents(next)
+        // Keep an open detail panel in step with the poll instead of showing a
+        // snapshot from whenever it was opened.
+        setOpenEvent((current) => (current ? next.find((event) => event.id === current.id) ?? null : null))
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to load volunteer events.")
+    } finally {
+      hasLoadedRef.current = true
+      setInitialLoading(false)
+    }
+  }, [authFetch, basePath, page, reviewFilter, search])
+
+  // Filtering or searching is a different result set, so any page number from
+  // the previous one is meaningless — and page 3 of a set that now has one page
+  // renders as an empty panel.
+  useEffect(() => {
+    setPage(0)
+  }, [reviewFilter, search])
+
+  useEffect(() => {
+    // A filter, search or page change is a different query, so the cached
+    // signature no longer describes what should be on screen.
+    signatureRef.current = ""
+    void loadEvents()
+  }, [loadEvents])
+
+  // Approval state advances server-side — the maintenance sweep generates
+  // recurring occurrences, mints codes after a faucet top-up, and flips QR
+  // codes live. Poll for those rather than making the admin reload, and rely on
+  // the signature check to stay silent when nothing has moved.
+  useEffect(() => {
+    const timer = setInterval(() => {
+      if (busyId === "") void loadEvents()
+    }, 30_000)
+    return () => clearInterval(timer)
+  }, [loadEvents, busyId])
+
+  const review = async (event: ManagedVolunteerEvent, action: "approve" | "reject" | "cancel") => {
+    let reason = ""
+    if (action === "reject") {
+      reason = window.prompt(`Why is "${event.title}" being rejected? (optional)`) ?? ""
+    }
+    if (action === "cancel" && !window.confirm(`Cancel "${event.title}"? Everyone signed up will be emailed.`)) {
+      return
+    }
+
+    setBusyId(event.id)
+    try {
+      const res = await authFetch(`${basePath}/${event.id}/${action}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(action === "reject" ? { reason } : {}),
+      })
+      if (!res.ok) {
+        // The backend returns a specific reason (e.g. insufficient faucet
+        // balance) — surfacing it is the difference between a fixable message
+        // and a button that appears to do nothing.
+        throw new Error((await res.text()).trim() || `Unable to ${action} the event.`)
+      }
+      toast({
+        title:
+          action === "approve" ? "Event approved — QR codes generated"
+          : action === "reject" ? "Event rejected"
+          : "Event cancelled",
+      })
+      await loadEvents()
+    } catch (err) {
+      toast({
+        title: `Could not ${action} event`,
+        description: err instanceof Error ? err.message : "Unexpected error.",
+        variant: "destructive",
+      })
+    } finally {
+      setBusyId("")
+    }
+  }
+
+  /**
+   * Decide a parked edit.
+   *
+   * Approval is where the server re-checks the faucet, exactly as it does when
+   * approving a new event — so a refusal here can legitimately be "not enough
+   * unallocated balance", and that message has to reach the admin rather than
+   * being flattened into a generic failure.
+   */
+  const reviewEdit = async (event: ManagedVolunteerEvent, action: "approve" | "reject") => {
+    let reason = ""
+    if (action === "reject") {
+      reason = window.prompt(`Why is the edit to "${event.title}" being rejected? (optional)`) ?? ""
+    }
+
+    setBusyId(event.id)
+    try {
+      const res = await authFetch(`${basePath}/${event.id}/edit/${action}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(action === "reject" ? { reason } : {}),
+      })
+      if (!res.ok) {
+        throw new Error((await res.text()).trim() || `Unable to ${action} the edit.`)
+      }
+      toast({ title: action === "approve" ? "Edit applied" : "Edit rejected" })
+      setOpenEvent(null)
+      await loadEvents()
+    } catch (err) {
+      toast({
+        title: `Could not ${action} the edit`,
+        description: err instanceof Error ? err.message : "Unexpected error.",
+        variant: "destructive",
+      })
+    } finally {
+      setBusyId("")
+    }
+  }
+
+  /**
+   * Printable QR cards as PDFs.
+   *
+   * Drawn onto a canvas rather than screenshotted out of the DOM. The old path
+   * ran html2canvas once per card — cloning the document, reloading styles and
+   * re-laying out text every time — which is what froze the tab, and it laid
+   * that text out with whatever fonts the clone had, which is what clipped the
+   * title, the third line of the heading and the last instruction. Neither can
+   * happen here: the static half of the card is painted once per event, and
+   * every string is measured before it is drawn.
+   */
+  const downloadCodes = async (event: ManagedVolunteerEvent) => {
+    setBusyId(event.id)
+    try {
+      const res = await authFetch(`${basePath}/${event.id}/codes`)
+      if (!res.ok) throw new Error((await res.text()).trim() || "Unable to load QR codes.")
+
+      const loaded = (await res.json()) as Array<{ id: string; number?: number }>
+      const codes = (loaded || []).map((code, index) => ({ id: code.id, number: code.number ?? index + 1 }))
+      if (codes.length === 0) throw new Error("This event has no QR codes yet.")
+
+      const [{ jsPDF }, cardCanvas, { buildEventRedeemQrValue }] = await Promise.all([
+        import("jspdf"),
+        import("@/lib/qr-card-canvas"),
+        import("@/lib/redeem-link"),
+      ])
+
+      const startAt = Math.floor(new Date(event.start_at).getTime() / 1000)
+      const shared = {
+        eventTitle: event.title,
+        eventDate: Number.isFinite(startAt) ? cardCanvas.formatCardDate(startAt) : undefined,
+        logoUrl: event.organizer.logo_url,
+        // A logo is what selects the paired card, so a nameless organizer still
+        // needs something to be thanked as — same fallback the modal uses.
+        organization: event.organizer.logo_url ? event.organizer.name || "our partner" : undefined,
+      }
+
+      // Once per event: the only things that differ per card are the QR and the
+      // number, so everything else is painted a single time and copied.
+      const template = await cardCanvas.buildCardTemplate({ ...shared, codeValue: "", codeNumber: 0 })
+
+      const fileBase =
+        event.title.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "event"
+
+      /*
+       * Page size in millimetres, derived from the card rather than fixed.
+       *
+       * 55mm wide is the printed card width the old export used; the height now
+       * follows the card's own 425x550 proportion so the artwork fills the page
+       * without being squashed to fit a ratio it was never drawn for.
+       */
+      const pageWidthMm = 55
+      const pageHeightMm = (pageWidthMm * cardCanvas.CARD_HEIGHT) / cardCanvas.CARD_WIDTH
+      const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: [pageWidthMm, pageHeightMm] })
+      const pageWidth = doc.internal.pageSize.getWidth()
+      const pageHeight = doc.internal.pageSize.getHeight()
+
+      for (let index = 0; index < codes.length; index += 1) {
+        if (index > 0) doc.addPage()
+        const image = cardCanvas.renderCard(template, {
+          ...shared,
+          codeValue: buildEventRedeemQrValue(codes[index].id),
+          codeNumber: codes[index].number,
+        })
+        doc.addImage(image, "JPEG", 0, 0, pageWidth, pageHeight)
+
+        // Yield every few cards so the progress label paints and the tab stays
+        // responsive; drawing a card is fast, but a thousand in a row is not.
+        if (index % 10 === 9) {
+          setExportProgress({ done: index + 1, total: codes.length })
+          await new Promise<void>((resolve) => setTimeout(resolve, 0))
+        }
+      }
+
+      doc.save(`${fileBase}-qr-codes.pdf`)
+    } catch (err) {
+      toast({
+        title: "Could not download QR codes",
+        description: err instanceof Error ? err.message : "Unexpected error.",
+        variant: "destructive",
+      })
+    } finally {
+      setExportProgress(null)
+      setBusyId("")
+    }
+  }
+
+  const pendingCount =
+    pendingCountOverride ?? events.filter((event) => event.review_status === "pending").length
+  // Only what is on screen: unlike the approval queue there is no server-side
+  // total for parked edits, and claiming one would be worse than scoping it.
+  const pendingEditCount = events.filter((event) => event.pending_edit).length
+  const totalPages = Math.max(1, Math.ceil(totalEvents / PAGE_SIZE))
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0">
+            <CardTitle className="flex flex-wrap items-center gap-2">
+              {title}
+              {canReview && pendingEditCount > 0 && (
+                <Badge variant="outline" className="border-amber-500 text-amber-600">
+                  {pendingEditCount} edit{pendingEditCount === 1 ? "" : "s"} to review
+                </Badge>
+              )}
+              {canReview && pendingCount > 0 && (
+                <Badge className="border-primary bg-primary text-white hover:bg-primary/90">
+                  {pendingCount} awaiting approval
+                </Badge>
+              )}
+            </CardTitle>
+            {description ? <CardDescription className="mt-1.5">{description}</CardDescription> : null}
+          </div>
+          {/* The panel's primary action sits on the title line rather than in a
+              card of its own further down the page. */}
+          {action ? <div className="shrink-0">{action}</div> : null}
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="flex flex-col gap-2 sm:flex-row">
+          <Input
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="Search events…"
+            className="sm:max-w-xs"
+          />
+          <Select value={reviewFilter} onValueChange={setReviewFilter}>
+            <SelectTrigger className="sm:w-[200px]"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {REVIEW_FILTERS.map((option) => (
+                <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
+        {initialLoading && (
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" /> Loading…
+          </div>
+        )}
+        {error !== "" && <p className="text-sm text-destructive">{error}</p>}
+        {!initialLoading && error === "" && events.length === 0 && (
+          <p className="text-sm text-muted-foreground">
+            {reviewFilter === "pending" ? "No events are awaiting approval." : "No events here yet."}
+          </p>
+        )}
+
+        <div className="divide-y rounded-lg border">
+          {events.map((event) => {
+            const cover = [...(event.cover_photos || [])].sort((a, b) => a.position - b.position)[0]
+            return (
+              <button
+                key={event.id}
+                type="button"
+                onClick={() => {
+                  setOpenEvent(event)
+                  onOpenEvent?.(event)
+                }}
+                className="flex w-full items-center gap-4 p-3 text-left transition-colors first:rounded-t-lg last:rounded-b-lg hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/40"
+              >
+                {/* Fixed thumbnail box so every row is the same height whether
+                    or not the event has a photo. */}
+                <div className="h-14 w-20 shrink-0 overflow-hidden rounded-md bg-muted">
+                  {cover ? (
+                    // eslint-disable-next-line @next/next/no-img-element -- API host, arbitrary ratios
+                    <img src={cover.url} alt="" className="h-full w-full object-cover" />
+                  ) : (
+                    <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-[#ff8a8a] via-[#eb6c6c] to-[#d55c5c]">
+                      <Leaf className="h-5 w-5 text-white/70" />
+                    </div>
+                  )}
+                </div>
+
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="truncate font-medium">{event.title}</span>
+                    <ReviewBadge event={event} />
+                    <VisibilityBadge event={event} />
+                  </div>
+                  <div className="mt-0.5 truncate text-sm text-muted-foreground">
+                    {formatEventWhen(event)} · {event.organizer.name}
+                    {event.recurrence?.summary ? ` · ${event.recurrence.summary}` : ""}
+                  </div>
+                </div>
+
+                <div className="hidden shrink-0 flex-col items-end gap-1 sm:flex">
+                  <QrBadge event={event} />
+                  <span className="text-xs text-muted-foreground">
+                    {event.signup_count ?? 0}/{event.max_participants} · {event.reward_amount_sfluv} SFLUV
+                  </span>
+                </div>
+
+                <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+              </button>
+            )
+          })}
+        </div>
+
+        {/* Only when there is more than one page: a lone page of results does
+            not need a control that cannot go anywhere. */}
+        {totalPages > 1 && (
+          <Pagination
+            currentPage={page + 1}
+            totalPages={totalPages}
+            onPageChange={(next) => setPage(Math.max(0, next - 1))}
+          />
+        )}
+
+        {totalEvents > 0 && (
+          <p className="text-xs text-muted-foreground">
+            Showing {events.length} of {totalEvents} event{totalEvents === 1 ? "" : "s"}
+          </p>
+        )}
+      </CardContent>
+
+      <Dialog open={openEvent !== null} onOpenChange={(next) => !next && setOpenEvent(null)}>
+        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
+          {openEvent && (
+            <>
+              <DialogHeader>
+                <DialogTitle>{openEvent.title}</DialogTitle>
+                <DialogDescription className="space-y-1">
+                  <span className="block">
+                    {formatEventWhen(openEvent)} · {openEvent.organizer.name}
+                  </span>
+                  {openEvent.creator && (
+                    <span className="block text-xs">
+                      Created by: {openEvent.creator.name}
+                      {openEvent.creator.email && (
+                        <span className="text-muted-foreground"> ({openEvent.creator.email})</span>
+                      )}
+                    </span>
+                  )}
+                </DialogDescription>
+              </DialogHeader>
+
+              <div className="space-y-4">
+                <div className="flex flex-wrap gap-2">
+                  <ReviewBadge event={openEvent} />
+                  <VisibilityBadge event={openEvent} />
+                  <QrBadge event={openEvent} />
+                </div>
+
+                {/* An unlisted event is off the public list, so the link is the
+                    only way anybody reaches it — which makes copying it part of
+                    the feature rather than a convenience. Offered on approved
+                    events only: a link to something still in the review queue
+                    404s, and handing one out invites exactly that. */}
+                {openEvent.visibility === "unlisted" && openEvent.review_status === "approved" && (
+                  <div className="rounded-lg border border-border bg-muted/40 p-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className="text-sm font-medium">Share link</p>
+                      <Button size="sm" variant="outline" onClick={() => copyShareLink(openEvent)}>
+                        <LinkIcon className="mr-2 h-3.5 w-3.5" />
+                        Copy link
+                      </Button>
+                    </div>
+                    <p className="mt-2 break-all font-mono text-xs text-muted-foreground">
+                      {eventShareLink(openEvent)}
+                    </p>
+                  </div>
+                )}
+
+                {openEvent.pending_edit && (
+                  <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
+                    <p className="font-medium">Edit awaiting approval</p>
+                    <p className="mt-1 text-muted-foreground">
+                      {openEvent.pending_edit.title && openEvent.pending_edit.title !== openEvent.title
+                        ? `Proposed title: "${openEvent.pending_edit.title}". `
+                        : ""}
+                      Requested {new Date(openEvent.pending_edit.requested_at).toLocaleString(undefined, {
+                        month: "short",
+                        day: "numeric",
+                        hour: "numeric",
+                        minute: "2-digit",
+                      })}
+                      . The details below are the published ones until it is approved.
+                    </p>
+                    {canReview && (
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <Button size="sm" disabled={busyId === openEvent.id} onClick={() => reviewEdit(openEvent, "approve")}>
+                          <CheckCircle2 className="mr-2 h-3.5 w-3.5" />
+                          Approve edit
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={busyId === openEvent.id}
+                          onClick={() => reviewEdit(openEvent, "reject")}
+                        >
+                          <XCircle className="mr-2 h-3.5 w-3.5" />
+                          Reject edit
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/*
+                  The covers, at a size worth reviewing. An admin approving an
+                  event is approving its artwork too, and the row thumbnail
+                  shows only the first one at 80px — too small to judge and
+                  silent about the rest.
+                */}
+                <EventCoverGallery event={openEvent} />
+
+                {openEvent.description && (
+                  <p className="whitespace-pre-line text-sm text-muted-foreground">{openEvent.description}</p>
+                )}
+
+                <div className="grid grid-cols-2 gap-3 text-sm">
+                  <div className="col-span-2">
+                    <div className="text-xs text-muted-foreground">When</div>
+                    <div>{formatEventRange(openEvent)}</div>
+                    {openEvent.timezone && (
+                      <div className="text-xs text-muted-foreground">Event timezone: {openEvent.timezone}</div>
+                    )}
+                  </div>
+                  {openEvent.location && (
+                    <div className="col-span-2">
+                      <div className="text-xs text-muted-foreground">Where</div>
+                      <div>{openEvent.location.name}</div>
+                      {formatAddress(openEvent.location) !== "" && (
+                        <div className="text-xs text-muted-foreground">{formatAddress(openEvent.location)}</div>
+                      )}
+                    </div>
+                  )}
+                  <div>
+                    <div className="text-xs text-muted-foreground">Signed up</div>
+                    <div>{openEvent.signup_count ?? 0} / {openEvent.max_participants}</div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-muted-foreground">Reward each</div>
+                    <div>{openEvent.reward_amount_sfluv} SFLUV</div>
+                  </div>
+                  {openEvent.signup?.mode && (
+                    <div className="col-span-2">
+                      <div className="text-xs text-muted-foreground">Sign up</div>
+                      <div className="capitalize">
+                        {openEvent.signup.mode === "none" ? "No sign up required" : openEvent.signup.mode}
+                      </div>
+                      {openEvent.signup.mode === "external" && openEvent.signup.url && (
+                        <a
+                          href={openEvent.signup.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="break-all text-xs text-[#eb6c6c] hover:underline"
+                        >
+                          {openEvent.signup.url}
+                        </a>
+                      )}
+                    </div>
+                  )}
+                  {openEvent.recurrence?.summary && (
+                    <div className="col-span-2">
+                      <div className="text-xs text-muted-foreground">Repeats</div>
+                      <div>{openEvent.recurrence.summary}</div>
+                    </div>
+                  )}
+                  <div className="col-span-2">
+                    <div className="text-xs text-muted-foreground">QR codes</div>
+                    <div className="text-sm">
+                      {openEvent.qr?.codes_generated
+                        ? openEvent.qr.live
+                          ? "Live and redeemable now"
+                          : openEvent.qr.live_at
+                            ? `Redeemable from ${new Date(openEvent.qr.live_at).toLocaleString(undefined, {
+                                month: "short",
+                                day: "numeric",
+                                hour: "numeric",
+                                minute: "2-digit",
+                              })}`
+                            : "Not live yet"
+                        : "Not generated — minted when the event is approved"}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap gap-2 border-t pt-4">
+                  {onEditEvent && openEvent.status !== "ended" && (
+                    <Button variant="outline" size="sm" onClick={() => onEditEvent(openEvent)}>
+                      <Pencil className="mr-2 h-3.5 w-3.5" />
+                      Edit
+                    </Button>
+                  )}
+                  {openEvent.qr?.codes_generated && (
+                    <Button variant="outline" size="sm" disabled={busyId === openEvent.id} onClick={() => downloadCodes(openEvent)}>
+                      {busyId === openEvent.id ? (
+                        <>
+                          <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+                          {/* A big event takes a while and saves one file per
+                              batch; without the count it reads as a hang. */}
+                          {exportProgress
+                            ? `Drawing ${exportProgress.done} of ${exportProgress.total}`
+                            : "Preparing PDF"}
+                        </>
+                      ) : (
+                        <>
+                          <Download className="mr-2 h-3.5 w-3.5" />
+                          QR code PDFs
+                        </>
+                      )}
+                    </Button>
+                  )}
+                  {openEvent.review_status === "approved" && (openEvent.signup_count ?? 0) > 0 && (
+                    <Button variant="outline" size="sm" disabled={busyId === openEvent.id} onClick={() => setBlastEvent(openEvent)}>
+                      <Megaphone className="mr-2 h-3.5 w-3.5" />
+                      Message volunteers
+                    </Button>
+                  )}
+                  {canReview && openEvent.review_status === "pending" && (
+                    <>
+                      <Button size="sm" disabled={busyId === openEvent.id} onClick={() => review(openEvent, "approve")}>
+                        <CheckCircle2 className="mr-2 h-3.5 w-3.5" />
+                        Approve
+                      </Button>
+                      <Button variant="outline" size="sm" disabled={busyId === openEvent.id} onClick={() => review(openEvent, "reject")}>
+                        <XCircle className="mr-2 h-3.5 w-3.5" />
+                        Reject
+                      </Button>
+                    </>
+                  )}
+                  {canReview && openEvent.review_status === "approved" && openEvent.status !== "cancelled" && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="text-destructive"
+                      disabled={busyId === openEvent.id}
+                      onClick={() => review(openEvent, "cancel")}
+                    >
+                      Cancel event
+                    </Button>
+                  )}
+                </div>
+              </div>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {blastEvent && (
+        <EventBlastModal
+          open
+          onOpenChange={(next) => !next && setBlastEvent(null)}
+          basePath={basePath}
+          eventId={blastEvent.id}
+          eventTitle={blastEvent.title}
+          signupCount={blastEvent.signup_count ?? 0}
+        />
+      )}
+    </Card>
+  )
+}

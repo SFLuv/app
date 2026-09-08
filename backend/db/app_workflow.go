@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -4996,89 +4997,7 @@ func (a *AppDB) GetImproverWorkflows(ctx context.Context, improverId string, act
 			WHERE
 				ws.assigned_improver_id = $1
 		),
-		claimable_workflow_ids AS (
-			SELECT DISTINCT
-				ws.workflow_id AS id
-			FROM
-				workflow_steps ws
-			INNER JOIN
-				workflows w
-			ON
-				w.id = ws.workflow_id
-			LEFT JOIN
-				workflow_states st
-			ON
-				st.id = w.workflow_state_id
-			LEFT JOIN
-				workflow_series s
-			ON
-				s.id = w.series_id
-			WHERE
-				w.status IN ('approved', 'in_progress', 'completed', 'paid_out', 'blocked')
-			AND
-				ws.assigned_improver_id IS NULL
-			AND
-				ws.status IN ('available', 'locked')
-			AND
-				ws.role_id IS NOT NULL
-			AND
-				NOT EXISTS (
-					SELECT
-						1
-					FROM
-						workflow_steps my_claim
-					WHERE
-						my_claim.workflow_id = ws.workflow_id
-					AND
-						my_claim.assigned_improver_id = $1
-				)
-			AND
-				NOT EXISTS (
-					SELECT
-						1
-					FROM
-						workflow_steps claimed_role
-					WHERE
-						claimed_role.workflow_id = ws.workflow_id
-					AND
-						claimed_role.role_id = ws.role_id
-					AND
-						claimed_role.assigned_improver_id IS NOT NULL
-					AND
-						claimed_role.assigned_improver_id <> $1
-				)
-			AND
-				NOT EXISTS (
-					SELECT
-						1
-					FROM
-						workflow_role_credentials wrc
-					WHERE
-						wrc.role_id = ws.role_id
-					AND
-						NOT (wrc.credential_type = ANY($2::text[]))
-				)
-			AND
-				(
-					COALESCE(NULLIF(TRIM(st.recurrence), ''), COALESCE(NULLIF(TRIM(s.recurrence), ''), 'one_time')) = 'one_time'
-					OR NOT EXISTS (
-						SELECT
-							1
-						FROM
-							workflow_improver_absences abs
-						WHERE
-							abs.improver_id = $1
-						AND
-							abs.series_id = w.series_id
-						AND
-							abs.step_order = ws.step_order
-						AND
-							w.start_at >= abs.absent_from
-						AND
-							w.start_at < abs.absent_until
-					)
-				)
-		),
+		` + improverClaimableWorkflowIDsCTE() + `
 		manager_workflow_ids AS (
 			SELECT
 				w.id
@@ -5095,7 +5014,9 @@ func (a *AppDB) GetImproverWorkflows(ctx context.Context, improverId string, act
 			FROM
 				workflows w
 			WHERE
-				w.status IN ('approved', 'in_progress', 'completed', 'paid_out', 'blocked')
+				-- Mirrors ClaimWorkflowManager via the shared status set, which
+				-- unlike step claiming does allow 'blocked'.
+				w.status IN (` + sqlStatusList(workflowManagerClaimableStatuses) + `)
 			AND
 				w.manager_required
 			AND
@@ -5866,7 +5787,7 @@ func (a *AppDB) ClaimWorkflowManager(ctx context.Context, workflowId string, imp
 	if err != nil {
 		return nil, err
 	}
-	if workflowStatus != "approved" && workflowStatus != "in_progress" && workflowStatus != "blocked" {
+	if !isWorkflowManagerClaimableStatus(workflowStatus) {
 		return nil, fmt.Errorf("workflow is not available for manager claims")
 	}
 	if !managerRequired || managerRoleID == nil {
@@ -6867,7 +6788,7 @@ func (a *AppDB) ClaimWorkflowStep(
 	if err != nil {
 		return nil, nil, err
 	}
-	if workflowStatus != "approved" && workflowStatus != "in_progress" {
+	if !isWorkflowStepClaimableStatus(workflowStatus) {
 		return nil, nil, fmt.Errorf("workflow is not available for claiming")
 	}
 
@@ -14485,4 +14406,261 @@ func (a *AppDB) GetUserByAddress(ctx context.Context, address string) (*structs.
 		return nil, fmt.Errorf("error looking up user by address: %s", err)
 	}
 	return &u, nil
+}
+
+// WorkflowPayoutReconciliationTarget identifies a payout whose transfer was
+// submitted on-chain (a tx hash is recorded) but which never reached a settled
+// state. These are the rows that show up as "completed but not paid out": the
+// transfer very likely succeeded, but the confirmation wait timed out or the
+// process was interrupted before the state could be advanced.
+type WorkflowPayoutReconciliationTarget struct {
+	WorkflowId string
+	StepId     string
+	ImproverId string
+	IsManager  bool
+}
+
+// GetUnsettledWorkflowPayoutsWithTxHash returns payouts that have a recorded
+// transaction hash but are not settled, so a background sweep can verify them
+// on-chain and finalize them. Without this, such rows are only ever repaired
+// when a user happens to hit the manual retry endpoint.
+func (a *AppDB) GetUnsettledWorkflowPayoutsWithTxHash(ctx context.Context, limit int) ([]WorkflowPayoutReconciliationTarget, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 200
+	}
+
+	targets := []WorkflowPayoutReconciliationTarget{}
+
+	stepRows, err := a.db.Query(ctx, `
+		SELECT
+			ws.workflow_id,
+			ws.id,
+			ws.assigned_improver_id
+		FROM
+			workflow_steps ws
+		WHERE
+			ws.status = 'completed'
+		AND
+			ws.bounty > 0
+		AND
+			ws.assigned_improver_id IS NOT NULL
+		AND
+			COALESCE(NULLIF(TRIM(ws.payout_tx_hash), ''), '') <> ''
+		ORDER BY
+			ws.updated_at ASC
+		LIMIT $1;
+	`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("error querying unsettled step payouts: %s", err)
+	}
+	for stepRows.Next() {
+		target := WorkflowPayoutReconciliationTarget{}
+		if err := stepRows.Scan(&target.WorkflowId, &target.StepId, &target.ImproverId); err != nil {
+			stepRows.Close()
+			return nil, fmt.Errorf("error scanning unsettled step payout: %s", err)
+		}
+		targets = append(targets, target)
+	}
+	stepRows.Close()
+	if err := stepRows.Err(); err != nil {
+		return nil, err
+	}
+
+	managerRows, err := a.db.Query(ctx, `
+		SELECT
+			w.id,
+			w.manager_improver_id
+		FROM
+			workflows w
+		WHERE
+			w.status = 'completed'
+		AND
+			w.manager_bounty > 0
+		AND
+			w.manager_paid_out_at IS NULL
+		AND
+			w.manager_improver_id IS NOT NULL
+		AND
+			COALESCE(NULLIF(TRIM(w.manager_payout_tx_hash), ''), '') <> ''
+		ORDER BY
+			w.updated_at ASC
+		LIMIT $1;
+	`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("error querying unsettled manager payouts: %s", err)
+	}
+	defer managerRows.Close()
+	for managerRows.Next() {
+		target := WorkflowPayoutReconciliationTarget{IsManager: true}
+		if err := managerRows.Scan(&target.WorkflowId, &target.ImproverId); err != nil {
+			return nil, fmt.Errorf("error scanning unsettled manager payout: %s", err)
+		}
+		targets = append(targets, target)
+	}
+
+	return targets, managerRows.Err()
+}
+
+// GetWorkflowIDsAwaitingPayoutSettlement returns completed workflows that have
+// not yet been finalized to paid_out, so the background sweep can re-check
+// whether their payouts have all settled.
+func (a *AppDB) GetWorkflowIDsAwaitingPayoutSettlement(ctx context.Context, limit int) ([]string, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 200
+	}
+
+	rows, err := a.db.Query(ctx, `
+		SELECT
+			id
+		FROM
+			workflows
+		WHERE
+			status = 'completed'
+		ORDER BY
+			updated_at ASC
+		LIMIT $1;
+	`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("error querying workflows awaiting payout settlement: %s", err)
+	}
+	defer rows.Close()
+
+	ids := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+
+	return ids, rows.Err()
+}
+
+// Claimability status sets.
+//
+// These exist because the improver board and the claim endpoints previously
+// each hard-coded their own list, and they disagreed: the board advertised
+// steps from completed/paid_out/blocked workflows that ClaimWorkflowStep always
+// rejected, which improvers experienced as a claim button that did nothing.
+// Both the listing SQL and the claim validation now read from these, so the two
+// cannot drift apart again.
+var (
+	// A step can only be claimed while its workflow is live.
+	workflowStepClaimableStatuses = []string{"approved", "in_progress"}
+
+	// A manager may additionally be lined up on a 'blocked' series instance,
+	// which is waiting on its predecessor's payout rather than on work.
+	workflowManagerClaimableStatuses = []string{"approved", "in_progress", "blocked"}
+)
+
+// sqlStatusList renders a status set as a SQL IN-list literal. The values are
+// package-controlled constants, never user input.
+func sqlStatusList(statuses []string) string {
+	quoted := make([]string, 0, len(statuses))
+	for _, status := range statuses {
+		quoted = append(quoted, "'"+status+"'")
+	}
+	return strings.Join(quoted, ", ")
+}
+
+func isWorkflowStepClaimableStatus(status string) bool {
+	return slices.Contains(workflowStepClaimableStatuses, status)
+}
+
+func isWorkflowManagerClaimableStatus(status string) bool {
+	return slices.Contains(workflowManagerClaimableStatuses, status)
+}
+
+
+// improverClaimableWorkflowIDsCTE is the improver board's "what can I claim"
+// CTE. It is a named piece rather than inline SQL so its status filter can be
+// asserted in tests: this CTE once advertised steps the claim endpoint always
+// rejected, which improvers experienced as a dead claim button.
+func improverClaimableWorkflowIDsCTE() string {
+	return `		claimable_workflow_ids AS (
+			SELECT DISTINCT
+				ws.workflow_id AS id
+			FROM
+				workflow_steps ws
+			INNER JOIN
+				workflows w
+			ON
+				w.id = ws.workflow_id
+			LEFT JOIN
+				workflow_states st
+			ON
+				st.id = w.workflow_state_id
+			LEFT JOIN
+				workflow_series s
+			ON
+				s.id = w.series_id
+			WHERE
+				-- Mirrors ClaimWorkflowStep via the shared status set, so the board
+				-- can never advertise a step the claim endpoint would reject.
+				w.status IN (` + sqlStatusList(workflowStepClaimableStatuses) + `)
+			AND
+				ws.assigned_improver_id IS NULL
+			AND
+				ws.status IN ('available', 'locked')
+			AND
+				ws.role_id IS NOT NULL
+			AND
+				NOT EXISTS (
+					SELECT
+						1
+					FROM
+						workflow_steps my_claim
+					WHERE
+						my_claim.workflow_id = ws.workflow_id
+					AND
+						my_claim.assigned_improver_id = $1
+				)
+			AND
+				NOT EXISTS (
+					SELECT
+						1
+					FROM
+						workflow_steps claimed_role
+					WHERE
+						claimed_role.workflow_id = ws.workflow_id
+					AND
+						claimed_role.role_id = ws.role_id
+					AND
+						claimed_role.assigned_improver_id IS NOT NULL
+					AND
+						claimed_role.assigned_improver_id <> $1
+				)
+			AND
+				NOT EXISTS (
+					SELECT
+						1
+					FROM
+						workflow_role_credentials wrc
+					WHERE
+						wrc.role_id = ws.role_id
+					AND
+						NOT (wrc.credential_type = ANY($2::text[]))
+				)
+			AND
+				(
+					COALESCE(NULLIF(TRIM(st.recurrence), ''), COALESCE(NULLIF(TRIM(s.recurrence), ''), 'one_time')) = 'one_time'
+					OR NOT EXISTS (
+						SELECT
+							1
+						FROM
+							workflow_improver_absences abs
+						WHERE
+							abs.improver_id = $1
+						AND
+							abs.series_id = w.series_id
+						AND
+							abs.step_order = ws.step_order
+						AND
+							w.start_at >= abs.absent_from
+						AND
+							w.start_at < abs.absent_until
+					)
+				)
+		),`
 }

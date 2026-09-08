@@ -25,6 +25,10 @@ type Code struct {
 	Id       string `json:"id"`
 	Redeemed bool   `json:"redeemed"`
 	Event    string `json:"event"`
+	// Number is the stable per-event label printed on the QR sheet. Assigned at
+	// mint time and never reused, so a reprint puts the same number on the same
+	// QR.
+	Number int `json:"number"`
 }
 
 type CodesPageRequest struct {

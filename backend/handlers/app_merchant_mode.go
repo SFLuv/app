@@ -180,6 +180,32 @@ func (a *AppService) ListMerchantModeDevices(w http.ResponseWriter, r *http.Requ
 	w.Write(jsonBytes)
 }
 
+// ListMerchantModeLocations backs the picker shown when a device is put into
+// merchant mode, and the location toggle on the till.
+func (a *AppService) ListMerchantModeLocations(w http.ResponseWriter, r *http.Request) {
+	userDid := utils.GetDid(r)
+	if userDid == nil {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	response, err := a.db.ListMerchantModeLocations(r.Context(), *userDid)
+	if err != nil {
+		a.logger.Logf("error listing merchant mode locations for user %s: %s", *userDid, err.Error())
+		writeMerchantModeError(w, err)
+		return
+	}
+
+	jsonBytes, err := json.Marshal(response)
+	if err != nil {
+		a.logger.Logf("error marshalling merchant mode locations for user %s: %s", *userDid, err.Error())
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	w.Write(jsonBytes)
+}
+
 func (a *AppService) UpdateMerchantModeDevice(w http.ResponseWriter, r *http.Request) {
 	userDid := utils.GetDid(r)
 	if userDid == nil {

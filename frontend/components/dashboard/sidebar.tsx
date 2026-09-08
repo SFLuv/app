@@ -16,6 +16,7 @@ import {
   ClipboardCheck,
   Vote,
   ShieldCheck,
+  Store,
   Wrench,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -29,6 +30,7 @@ import {
   SidebarMenuItem,
   useSidebar,
 } from "@/components/ui/sidebar"
+import { BecomeMerchantPrompt } from "@/components/merchant/become-merchant-prompt"
 import { ForwardRefExoticComponent } from "react"
 
 export function DashboardSidebar() {
@@ -36,9 +38,14 @@ export function DashboardSidebar() {
   const pathname = usePathname()
   const isMobile = useIsMobile()
   const { setOpenMobile } = useSidebar()
-  const { user, logout, status, login, userLocations, wallets } = useApp()
+  const { user, logout, status, login, wallets } = useApp()
 
-  const isNonAdminNonMerchant = user?.isAdmin !== true && user?.isMerchant !== true
+  // The signup answer counts as much as the role here: isMerchant is recomputed
+  // from approved listings, so a merchant whose first shop is still in review
+  // would otherwise be shown a regular account's menu while their till sits
+  // behind the Locations tab they cannot see.
+  const isMerchantAccount = user?.accountType === "merchant" || user?.isMerchant === true
+  const isNonAdminNonMerchant = user?.isAdmin !== true && !isMerchantAccount
   const shouldShortcutToWallet = status === "authenticated" && isMobile && isNonAdminNonMerchant
   const normalizedPrimaryWalletAddress = (user?.primaryWalletAddress || "").trim().toLowerCase()
   const selectedPrimaryWallet =
@@ -108,11 +115,22 @@ export function DashboardSidebar() {
     ]
 
     const authedItems: NavItem[] = [
-      {
-        title: walletNavTitle,
-        icon: Wallet,
-        path: walletNavPath,
-      },
+      // A merchant is paid into a location's till, not a wallet of their own, so
+      // Locations takes the slot Connected Wallets holds for everyone else —
+      // same position, because it is the same errand. There is no personal-
+      // wallets surface for merchants at all; the wallets page itself forwards
+      // them back to Locations.
+      isMerchantAccount
+        ? {
+            title: "Locations",
+            icon: Store,
+            path: "/locations",
+          }
+        : {
+            title: walletNavTitle,
+            icon: Wallet,
+            path: walletNavPath,
+          },
       {
         title: "Contacts",
         icon: SquareUserIcon,
@@ -299,17 +317,11 @@ export function DashboardSidebar() {
       <SidebarFooter className="border-t p-2 bg-secondary dark:bg-secondary">
         <SidebarMenu>
           {status === "authenticated" ? <>
-          {!isActive("/settings") &&
-          <Button
-              variant="outline"
-              className="bg-secondary text-[#eb6c6c] border-[#eb6c6c] hover:bg-[#eb6c6c] hover:text-white"
-              onClick={() => navigateTo("/settings/merchant-approval")}>
-              {userLocations.length === 0 ?
-              "Apply to Become a Merchant" :
-              "Submit Another Application"
-              }
-          </Button>
-          }
+            {/* The only merchant entry point left in the navbar, and it is not
+                a standing button: it is the one-time offer to somebody who
+                signed up on the mobile app and has never been asked. Everyone
+                else finds it in Settings. */}
+            <BecomeMerchantPrompt />
             <SidebarMenuItem>
               <SidebarMenuButton asChild tooltip="Settings" isActive={isActive("/settings")}>
                 <Button

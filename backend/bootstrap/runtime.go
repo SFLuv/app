@@ -15,6 +15,7 @@ import (
 	"github.com/SFLuv/app/backend/logger"
 	"github.com/SFLuv/app/backend/mcp"
 	"github.com/SFLuv/app/backend/router"
+	"github.com/SFLuv/app/backend/w9provider"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
 )
@@ -107,6 +108,42 @@ func envOrDefault(key, defaultValue string) string {
 	return value
 }
 
+// workflowMaintenanceInterval controls how often the workflow maintenance
+// sweep runs. Configurable so it can be tightened in production or slowed in
+// development; defaults to the scheduler's own default when unset or invalid.
+func workflowMaintenanceInterval() time.Duration {
+	raw := strings.TrimSpace(os.Getenv("WORKFLOW_MAINTENANCE_INTERVAL"))
+	if raw == "" {
+		return 0
+	}
+
+	parsed, err := time.ParseDuration(raw)
+	if err != nil || parsed <= 0 {
+		return 0
+	}
+	return parsed
+}
+
+// WarnOnMissingPublicConfig surfaces environment gaps that fail silently at
+// runtime rather than at boot. PUBLIC_BACKEND_URL is the notable one: without
+// it, volunteer event image URLs are emitted root-relative, which resolves fine
+// for same-origin callers but 404s on the marketing site — a broken image on a
+// public page with nothing in the logs to explain it.
+func WarnOnMissingPublicConfig(appLogger *logger.LogCloser) {
+	if appLogger == nil {
+		return
+	}
+
+	if strings.TrimSpace(os.Getenv("PUBLIC_BACKEND_URL")) == "" &&
+		strings.TrimSpace(os.Getenv("NEXT_PUBLIC_BACKEND_URL")) == "" {
+		appLogger.Logf("warning: PUBLIC_BACKEND_URL is unset; volunteer event photo and organizer logo URLs will be root-relative and will not resolve for external clients")
+	}
+
+	if strings.TrimSpace(os.Getenv("VOLUNTEER_PROXY_KEY")) == "" {
+		appLogger.Logf("warning: VOLUNTEER_PROXY_KEY is unset; forwarded client IPs will be ignored and proxied volunteer signups will share one rate-limit bucket")
+	}
+}
+
 func InitializeDatabases(ctx context.Context, pools *DBPools, appLogger *logger.LogCloser) error {
 	if pools == nil || pools.App == nil || pools.Bot == nil {
 		return fmt.Errorf("app and bot db pools are required")
@@ -169,7 +206,7 @@ func RunInitializationSyncs(ctx context.Context, pools *DBPools, appLogger *logg
 		appLogger.Logf("error syncing minter roles during init: %s", err)
 	}
 
-	appService := handlers.NewAppService(appDb, appLogger, nil, clientConfig)
+	appService := handlers.NewAppService(appDb, appLogger, nil, nil, clientConfig)
 	if err := appService.SyncPrivyLinkedEmailsForAllUsers(ctx); err != nil {
 		appLogger.Logf("error syncing Privy linked emails during init: %s", err)
 	}
@@ -200,6 +237,26 @@ func StartDeletedAccountPurgeLoop(ctx context.Context, appService *handlers.AppS
 			case <-timer.C:
 				runDeletedAccountPurge(ctx, appService, appLogger, "daily")
 			}
+		}
+	}()
+}
+
+// StartLocationRedeemerSync brings the REDEEMER_ROLE holders on chain back in
+// line with the addresses locations are actually paid into.
+//
+// In a goroutine, and never returning an error to the caller, because it talks
+// to the chain: a node that is slow, down or mid-reorg must cost the server a
+// log line, not a boot. It runs once per start rather than on a timer — the set
+// only changes when a location is created or its wallet swapped, and the next
+// restart is soon enough for a role nobody can use before they have takings.
+func StartLocationRedeemerSync(ctx context.Context, redeemer *handlers.RedeemerService, appLogger *logger.LogCloser) {
+	if ctx == nil || redeemer == nil || appLogger == nil || !redeemer.IsEnabled() {
+		return
+	}
+
+	go func() {
+		if _, err := redeemer.SyncLocationWallets(ctx); err != nil && ctx.Err() == nil {
+			appLogger.Logf("error syncing redeemer roles for location wallets during startup: %s", err)
 		}
 	}()
 }
@@ -280,19 +337,79 @@ func NewServerHandler(ctx context.Context, pools *DBPools, appLogger *logger.Log
 		return nil, fmt.Errorf("error initializing bot service: %w", err)
 	}
 
-	w9 := handlers.NewW9Service(appDb, ponderDb, appLogger, activeChainID)
-	affiliateScheduler := handlers.NewAffiliateScheduler(appDb, botDb, appLogger)
-	affiliateScheduler.Start(ctx)
+	// The tax provider holds the TIN; nothing on our side ever sees one. An
+	// unconfigured provider yields a disabled adapter rather than a boot failure
+	// — money is still held correctly without it, only the route out is missing.
+	w9Provider := w9provider.New(w9provider.Config{
+		Provider: strings.TrimSpace(os.Getenv("W9_PROVIDER")),
+		BaseURL:  strings.TrimSpace(os.Getenv("W9_PROVIDER_BASE_URL")),
+		// Sandbox unless this says otherwise. Defaulting the other way would
+		// mean a misconfigured deploy files real tax forms.
+		Environment: strings.TrimSpace(os.Getenv("W9_PROVIDER_ENV")),
+
+		// TaxBandits: a client credential triple, the payer GUID, and the API
+		// version as a path segment.
+		ClientID:     strings.TrimSpace(os.Getenv("W9_PROVIDER_CLIENT_ID")),
+		ClientSecret: strings.TrimSpace(os.Getenv("W9_PROVIDER_CLIENT_SECRET")),
+		UserToken:    strings.TrimSpace(os.Getenv("W9_PROVIDER_USER_TOKEN")),
+		BusinessID:   strings.TrimSpace(os.Getenv("W9_PROVIDER_BUSINESS_ID")),
+		WebhookRef:   strings.TrimSpace(os.Getenv("W9_PROVIDER_WEBHOOK_REF")),
+		APIVersion:   strings.TrimSpace(os.Getenv("W9_PROVIDER_API_VERSION")),
+		AuthURL:      strings.TrimSpace(os.Getenv("W9_PROVIDER_AUTH_URL")),
+
+		// Track1099, kept only as the fallback until TaxBandits goes live.
+		APIKey:    strings.TrimSpace(os.Getenv("W9_PROVIDER_API_KEY")),
+		TeamAPIID: strings.TrimSpace(os.Getenv("W9_PROVIDER_TEAM_ID")),
+	})
+
+	// The adapter complains out loud about anything it was not able to verify
+	// against a live call — an unrecognised status, an unparseable timestamp, a
+	// second submission where one was expected. Those messages are the whole
+	// early-warning system for this integration, so they must reach the log.
+	if tb, ok := w9Provider.(*w9provider.TaxBandits); ok {
+		tb.SetWarningLogger(func(message string) { appLogger.Logf("%s", message) })
+	}
+
+	// Every payout in the system goes through this one service, which is what
+	// makes the tax gate impossible to bypass by adding another send path.
+	payouts := handlers.NewPayoutService(appDb, botClient, w9Provider, appLogger, activeChainID)
 
 	redeemer := handlers.NewRedeemerService(appDb, appLogger, clientConfig)
 	minter := handlers.NewMinterService(appDb, appLogger, clientConfig)
 
-	s := handlers.NewBotService(botDb, appDb, botClient, w9, affiliateScheduler, activeChainID, clientConfig.ReadRPCURL())
-	a := handlers.NewAppService(appDb, appLogger, w9, clientConfig)
+	s := handlers.NewBotService(botDb, appDb, botClient, payouts, activeChainID, clientConfig.ReadRPCURL())
+	a := handlers.NewAppService(appDb, appLogger, payouts, w9Provider, clientConfig)
 	a.SetBotService(s)
+	s.SetAppService(a)
+	payouts.SetAppService(a)
 	a.SetRedeemerService(redeemer)
 	a.SetMinterService(minter)
+	a.SetPonderDB(ponderDb)
+
+	// Compare our webhook bookkeeping against the indexer's before serving.
+	// The two drift silently and always toward the same failure — notifications
+	// stop with nothing logged — so the check runs where someone will see it.
+	// Recreating hooks reaches out to Ponder, so it is opt-in; the check itself
+	// only ever reads Ponder and writes to our own database.
+	a.LogPonderHookReconciliation(ctx, strings.TrimSpace(os.Getenv("PONDER_HOOK_AUTO_REPAIR")) == "true")
+
+	// Merchant opening hours are refreshed from Google nightly. Listings switched
+	// to manual are excluded, and a poll that returns nothing usable leaves the
+	// existing hours alone rather than clearing them.
+	handlers.NewLocationHoursScheduler(a).Start(ctx)
+
 	StartDeletedAccountPurgeLoop(ctx, a, appLogger)
+
+	// Tills are derived per location, so the account-level grant a merchant got
+	// when their first shop was approved does not reach the address their second
+	// shop is paid into. This catches every one of them up.
+	StartLocationRedeemerSync(ctx, redeemer, appLogger)
+
+	// Workflow upkeep (recurrence catch-up, payout reconciliation, paid_out
+	// finalization) previously ran only as a side effect of user requests, so it
+	// stalled whenever nobody hit the right endpoint. Running it on a timer makes
+	// it independent of traffic.
+	handlers.NewWorkflowMaintenanceScheduler(a, workflowMaintenanceInterval()).Start(ctx)
 
 	p := handlers.NewPonderService(ponderDb, appDb, botDb, appLogger, activeChainID)
 	if err := p.SyncCurrentAnalyticsWalletRoleHistory(ctx); err != nil {

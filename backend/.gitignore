@@ -7,3 +7,7 @@ test-notifications/
 .migration-local/
 .gocache/
 .gomodcache/
+
+# The compiled probe binary, not the cmd/w9probe source directory. The leading
+# slash anchors this to backend/ so it cannot swallow the package as well.
+/w9probe

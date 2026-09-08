@@ -3,11 +3,12 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "build": "next build --turbo",
+    "build": "next build",
     "dev": "next dev --turbo --experimental-https",
     "dev-http": "next dev --turbo",
     "lint": "next lint",
-    "start": "next start"
+    "start": "next start",
+    "signet": "tsx --env-file-if-exists=.env.local --env-file-if-exists=.env scripts/signet/cli.ts"
   },
   "dependencies": {
     "@citizenwallet/sdk": "^2.0.115",
@@ -15,6 +16,7 @@
     "@hookform/resolvers": "^3.10.0",
     "@hpke/chacha20poly1305": "^1.7.0",
     "@hpke/core": "^1.7.3",
+    "@oleary-labs/signet-sdk": "link:../../../oleary-labs/signet-sdk",
     "@privy-io/react-auth": "^2.21.2",
     "@radix-ui/react-accordion": "1.2.2",
     "@radix-ui/react-alert-dialog": "1.1.4",
@@ -54,18 +56,19 @@
     "embla-carousel-react": "8.5.1",
     "ethers": "^6.15.0",
     "input-otp": "1.4.1",
+    "jspdf": "3.0.4",
     "jsqr": "^1.4.0",
     "lucide-react": "^0.454.0",
     "next": "15.2.6",
     "next-themes": "^0.4.6",
     "permissionless": "^0.2.53",
+    "qrcode": "^1.5.4",
     "react": "^19.1.1",
     "react-day-picker": "latest",
     "react-dom": "^19.1.1",
     "react-hook-form": "^7.62.0",
     "react-idle-timer": "^5.7.2",
     "react-qr-code": "^2.0.18",
-    "react-qrcode-logo": "^3.0.0",
     "react-resizable-panels": "^2.1.9",
     "react-to-pdf": "^2.0.3",
     "recharts": "2.15.0",
@@ -84,6 +87,7 @@
     "postcss": "^8.5.6",
     "tailwindcss": "^3.4.17",
     "ts-node": "^10.9.2",
+    "tsx": "^4.19.2",
     "typescript": "^5.9.2"
   }
 }

@@ -2,13 +2,16 @@ package bootstrap
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/SFLuv/app/backend/db"
 	"github.com/SFLuv/app/backend/logger"
+	"github.com/SFLuv/app/backend/structs"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -918,6 +921,1509 @@ var schemaMigrations = []SchemaMigration{
 			return migrateOrganizationIssuerScopes(ctx, pools)
 		},
 	},
+	{
+		Version:     "1.24",
+		Description: "one location_hours row per weekday",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			return migrateLocationHoursUniqueness(ctx, pools, appLogger)
+		},
+	},
+	{
+		Version:     "1.25",
+		Description: "volunteer events: upgrade events with volunteer/recurrence/signup fields, cover photos, signups, per-event faucet allocations, and the volunteer email list",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			return migrateVolunteerEvents(ctx, pools)
+		},
+	},
+	{
+		Version:     "1.26",
+		Description: "improver notification read markers for the workflow notifications feed",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			// Notifications themselves are derived from live workflow state
+			// rather than materialized, so a notification cannot drift out of
+			// sync with the thing it describes. Only the per-user "I have seen
+			// this" marker needs storing.
+			if _, err := pools.App.Exec(ctx, `
+				CREATE TABLE IF NOT EXISTS improver_notification_reads(
+					user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+					notification_key TEXT NOT NULL,
+					seen_at BIGINT NOT NULL DEFAULT unix_now(),
+					PRIMARY KEY (user_id, notification_key)
+				);
+
+				CREATE INDEX IF NOT EXISTS improver_notification_reads_user_idx
+					ON improver_notification_reads(user_id);
+			`); err != nil {
+				return err
+			}
+
+			return nil
+		},
+	},
+	{
+		Version:     "1.27",
+		Description: "partner organizations shown in the public site's partner carousel",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			// Logos are stored as bytes and served over a public URL, the same
+			// pattern as workflow photos and volunteer event covers, so the
+			// public site consumes a plain URL rather than inline base64.
+			// Dimensions are captured at upload because the carousel needs them
+			// to reserve layout space before the image loads.
+			if _, err := pools.App.Exec(ctx, `
+				CREATE TABLE IF NOT EXISTS partners(
+					id TEXT PRIMARY KEY,
+					name TEXT NOT NULL,
+					link_url TEXT NOT NULL DEFAULT '',
+					logo_data BYTEA,
+					logo_content_type TEXT NOT NULL DEFAULT '',
+					logo_width INTEGER NOT NULL DEFAULT 0,
+					logo_height INTEGER NOT NULL DEFAULT 0,
+					logo_updated_at BIGINT,
+					position INTEGER NOT NULL DEFAULT 0,
+					active BOOLEAN NOT NULL DEFAULT TRUE,
+					created_at BIGINT NOT NULL DEFAULT unix_now(),
+					updated_at BIGINT NOT NULL DEFAULT unix_now()
+				);
+
+				CREATE INDEX IF NOT EXISTS partners_active_position_idx
+					ON partners(active, position, created_at);
+			`); err != nil {
+				return err
+			}
+
+			return nil
+		},
+	},
+	{
+		Version:     "1.28",
+		Description: "volunteer event reminder preferences and sent-reminder ledger",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			// Preferences are server-side, not device-local: the backend sends
+			// the push at a time the phone may not be running, so it needs the
+			// value. A missing row means the defaults (on, 24h), so a user who
+			// never touches the setting still gets reminders.
+			if _, err := pools.App.Exec(ctx, `
+				CREATE TABLE IF NOT EXISTS volunteer_reminder_preferences(
+					user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+					enabled BOOLEAN NOT NULL DEFAULT TRUE,
+					hours_before INTEGER NOT NULL DEFAULT 24,
+					updated_at BIGINT NOT NULL DEFAULT unix_now()
+				);
+
+				-- One reminder per (user, event) ever, which is what makes the
+				-- sender idempotent: several matching emails, a retry, or a
+				-- second pass cannot produce a second buzz.
+				CREATE TABLE IF NOT EXISTS volunteer_reminder_sends(
+					user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+					event_id TEXT NOT NULL,
+					sent_at BIGINT NOT NULL DEFAULT unix_now(),
+					PRIMARY KEY (user_id, event_id)
+				);
+			`); err != nil {
+				return err
+			}
+
+			return nil
+		},
+	},
+	{
+		Version:     "1.29",
+		Description: "confirmed-by-email volunteer signups and the organizer event blast log",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			// Portal (anonymous) signups must confirm by email before they count.
+			// Existing rows are backfilled as confirmed: they were made under the
+			// old rules and retroactively invalidating someone's spot would be
+			// worse than the inconsistency.
+			if _, err := pools.Bot.Exec(ctx, `
+				ALTER TABLE event_signups
+					ADD COLUMN IF NOT EXISTS confirm_token TEXT NOT NULL DEFAULT '',
+					ADD COLUMN IF NOT EXISTS confirmed_at BIGINT;
+
+				UPDATE event_signups SET confirmed_at = created_at WHERE confirmed_at IS NULL;
+
+				CREATE UNIQUE INDEX IF NOT EXISTS event_signups_confirm_token_idx
+					ON event_signups(confirm_token) WHERE confirm_token <> '';
+
+				CREATE TABLE IF NOT EXISTS event_blasts(
+					id TEXT PRIMARY KEY,
+					event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+					sent_by TEXT NOT NULL DEFAULT '',
+					subject TEXT NOT NULL DEFAULT '',
+					message TEXT NOT NULL DEFAULT '',
+					push_count INTEGER NOT NULL DEFAULT 0,
+					email_count INTEGER NOT NULL DEFAULT 0,
+					created_at BIGINT NOT NULL DEFAULT EXTRACT(EPOCH FROM NOW())::BIGINT
+				);
+
+				CREATE INDEX IF NOT EXISTS event_blasts_event_idx ON event_blasts(event_id, created_at DESC);
+			`); err != nil {
+				return err
+			}
+
+			return nil
+		},
+	},
+	{
+		Version:     "1.30",
+		Description: "explicit QR redemption cutoff for volunteer events",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			// Codes previously expired the moment the event ended, which left no
+			// room for someone still in the queue. The redemption window now runs
+			// to a separate cutoff, defaulting to 24h after the end. NULL means
+			// "fall back to the event end", so legacy events are unchanged.
+			if _, err := pools.Bot.Exec(ctx, `
+				ALTER TABLE events
+					ADD COLUMN IF NOT EXISTS qr_expires_at BIGINT;
+
+				UPDATE events
+				SET qr_expires_at = expiration + 86400
+				WHERE is_volunteer = TRUE AND qr_expires_at IS NULL AND expiration > 0;
+			`); err != nil {
+				return err
+			}
+
+			return nil
+		},
+	},
+	{
+		Version:     "1.31",
+		Description: "affiliate event edit requests awaiting admin approval",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			// An affiliate editing a LIVE event cannot apply it directly: the
+			// change may raise the reward cost, and committing faucet funds is an
+			// admin decision. The proposed payload is parked here and applied on
+			// approval, so the published event is never disturbed by a request
+			// that may be refused.
+			if _, err := pools.Bot.Exec(ctx, `
+				CREATE TABLE IF NOT EXISTS event_edit_requests(
+					id TEXT PRIMARY KEY,
+					event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+					requested_by TEXT NOT NULL DEFAULT '',
+					payload TEXT NOT NULL,
+					status TEXT NOT NULL DEFAULT 'pending',
+					reject_reason TEXT NOT NULL DEFAULT '',
+					created_at BIGINT NOT NULL DEFAULT EXTRACT(EPOCH FROM NOW())::BIGINT,
+					decided_at BIGINT,
+					decided_by TEXT NOT NULL DEFAULT ''
+				);
+
+				CREATE INDEX IF NOT EXISTS event_edit_requests_event_idx
+					ON event_edit_requests(event_id, created_at DESC);
+				-- At most one open request per event, so approving one cannot be
+				-- racing another written against different values.
+				CREATE UNIQUE INDEX IF NOT EXISTS event_edit_requests_open_idx
+					ON event_edit_requests(event_id) WHERE status = 'pending';
+			`); err != nil {
+				return err
+			}
+
+			return nil
+		},
+	},
+	{
+		Version:     "1.32",
+		Description: "inline images for organizer event blasts",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			// Email clients cannot read an authenticated URL, so blast images are
+			// served from a public, unguessable id — the same pattern as event
+			// cover photos.
+			if _, err := pools.Bot.Exec(ctx, `
+				CREATE TABLE IF NOT EXISTS event_blast_images(
+					id TEXT PRIMARY KEY,
+					event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+					content_type TEXT NOT NULL DEFAULT 'application/octet-stream',
+					image_data BYTEA NOT NULL,
+					size_bytes INTEGER NOT NULL DEFAULT 0,
+					created_at BIGINT NOT NULL DEFAULT EXTRACT(EPOCH FROM NOW())::BIGINT
+				);
+
+				CREATE INDEX IF NOT EXISTS event_blast_images_event_idx ON event_blast_images(event_id);
+			`); err != nil {
+				return err
+			}
+
+			return nil
+		},
+	},
+	{
+		Version:     "1.33",
+		Description: "stable per-event code numbers for printed QR labels",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			// Printed QR sheets are labelled "{title} #{n}". The number must be
+			// STABLE: reprinting a batch has to put the same number on the same
+			// QR, or a reprint cannot be reconciled against the originals.
+			//
+			// Deriving it at print time from row order would not survive minting
+			// extra codes — a new UUID sorts into the middle and renumbers
+			// everything after it. So the number is assigned once and stored.
+			if _, err := pools.Bot.Exec(ctx, `
+				ALTER TABLE codes ADD COLUMN IF NOT EXISTS code_number INTEGER;
+
+				-- Backfill deterministically by id, so existing sheets keep a
+				-- consistent ordering rather than an arbitrary one.
+				WITH numbered AS (
+					SELECT id, ROW_NUMBER() OVER (PARTITION BY event ORDER BY id) AS n
+					FROM codes
+					WHERE code_number IS NULL AND event IS NOT NULL
+				)
+				UPDATE codes c
+				SET code_number = numbered.n
+				FROM numbered
+				WHERE c.id = numbered.id;
+
+				CREATE INDEX IF NOT EXISTS codes_event_number_idx ON codes(event, code_number);
+			`); err != nil {
+				return err
+			}
+
+			return nil
+		},
+	},
+	{
+		Version:     "1.34",
+		Description: "structured location hours and per-location manual hours mode",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			// Hours were stored only as Google's display text ("Monday: 7:00 AM
+			// – 8:00 PM"). That cannot back a time picker, cannot be compared,
+			// and cannot distinguish "closed" from "we never learned this day".
+			// The text column stays as the rendered form so every existing
+			// reader keeps working; these columns become the source of truth.
+			if _, err := pools.App.Exec(ctx, `
+				ALTER TABLE location_hours ADD COLUMN IF NOT EXISTS open_minute INTEGER;
+				ALTER TABLE location_hours ADD COLUMN IF NOT EXISTS close_minute INTEGER;
+				ALTER TABLE location_hours ADD COLUMN IF NOT EXISTS is_closed BOOLEAN NOT NULL DEFAULT FALSE;
+
+				-- Manual mode opts a listing out of the nightly Google sync, so a
+				-- hand-corrected set of hours is never silently overwritten.
+				ALTER TABLE locations ADD COLUMN IF NOT EXISTS hours_manual BOOLEAN NOT NULL DEFAULT FALSE;
+				ALTER TABLE locations ADD COLUMN IF NOT EXISTS hours_synced_at TIMESTAMPTZ;
+			`); err != nil {
+				return err
+			}
+
+			// Backfill through the same parser the app uses, so historical rows
+			// and new ones agree on what the text meant. Anything unparseable is
+			// left as NULL rather than guessed: a wrong opening time published to
+			// customers is worse than a missing one.
+			rows, err := pools.App.Query(ctx, `
+				SELECT location_id, weekday, COALESCE(hours, '')
+				FROM location_hours
+				WHERE open_minute IS NULL AND close_minute IS NULL AND is_closed = FALSE;
+			`)
+			if err != nil {
+				return err
+			}
+			type parsedRow struct {
+				locationID int
+				day        structs.LocationDayHours
+			}
+			parsed := []parsedRow{}
+			for rows.Next() {
+				var locationID, weekday int
+				var text string
+				if err := rows.Scan(&locationID, &weekday, &text); err != nil {
+					rows.Close()
+					return err
+				}
+				day := structs.ParseDisplayHours(weekday, text)
+				if day.IsClosed || day.HasTimes() {
+					parsed = append(parsed, parsedRow{locationID: locationID, day: day})
+				}
+			}
+			rows.Close()
+			if err := rows.Err(); err != nil {
+				return err
+			}
+
+			for _, entry := range parsed {
+				if _, err := pools.App.Exec(ctx, `
+					UPDATE location_hours
+					SET open_minute = $1, close_minute = $2, is_closed = $3
+					WHERE location_id = $4 AND weekday = $5;
+				`, firstMinutes(entry.day, true), firstMinutes(entry.day, false), entry.day.IsClosed, entry.locationID, entry.day.Weekday); err != nil {
+					return err
+				}
+			}
+			appLogger.Logf("migration 1.34: lifted %d location hour rows into structured times", len(parsed))
+
+			return nil
+		},
+	},
+	{
+		Version:     "1.35",
+		Description: "split opening hours per day",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			// A single open/close pair cannot describe a kitchen that shuts
+			// between lunch and dinner, and flattening one into 11:00–21:00 tells
+			// customers a shop is open while it is shut.
+			//
+			// Stored as JSON on the existing row rather than as extra rows: every
+			// reader of location_hours assumes one row per weekday and seven
+			// strings per location, and adding rows would silently break all of
+			// them. open_minute/close_minute stay populated with the first stretch
+			// so anything still reading those keeps working.
+			if _, err := pools.App.Exec(ctx, `
+				ALTER TABLE location_hours
+				ADD COLUMN IF NOT EXISTS intervals JSONB NOT NULL DEFAULT '[]'::jsonb;
+
+				UPDATE location_hours
+				SET intervals = jsonb_build_array(
+					jsonb_build_object('open_minute', open_minute, 'close_minute', close_minute)
+				)
+				WHERE open_minute IS NOT NULL
+				AND close_minute IS NOT NULL
+				AND intervals = '[]'::jsonb;
+			`); err != nil {
+				return err
+			}
+
+			// Days whose text held a split that 1.34 could not represent are now
+			// readable, so lift them rather than leaving them blank.
+			rows, err := pools.App.Query(ctx, `
+				SELECT location_id, weekday, COALESCE(hours, '')
+				FROM location_hours
+				WHERE intervals = '[]'::jsonb AND is_closed = FALSE;
+			`)
+			if err != nil {
+				return err
+			}
+			type parsedRow struct {
+				locationID int
+				day        structs.LocationDayHours
+			}
+			parsed := []parsedRow{}
+			for rows.Next() {
+				var locationID, weekday int
+				var text string
+				if err := rows.Scan(&locationID, &weekday, &text); err != nil {
+					rows.Close()
+					return err
+				}
+				day := structs.ParseDisplayHours(weekday, text)
+				if len(day.Intervals) > 0 {
+					parsed = append(parsed, parsedRow{locationID: locationID, day: day})
+				}
+			}
+			rows.Close()
+			if err := rows.Err(); err != nil {
+				return err
+			}
+
+			for _, entry := range parsed {
+				encoded, err := json.Marshal(entry.day.Intervals)
+				if err != nil {
+					return err
+				}
+				if _, err := pools.App.Exec(ctx, `
+					UPDATE location_hours
+					SET intervals = $1::jsonb, open_minute = $2, close_minute = $3
+					WHERE location_id = $4 AND weekday = $5;
+				`, encoded, entry.day.Intervals[0].OpenMinute, entry.day.Intervals[0].CloseMinute,
+					entry.locationID, entry.day.Weekday); err != nil {
+					return err
+				}
+			}
+			appLogger.Logf("migration 1.35: recovered %d split-hour location days", len(parsed))
+
+			return nil
+		},
+	},
+	{
+		Version:     "1.36",
+		Description: "manual merchant listings for businesses with no Google place",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			// Not every merchant has a Google Business Profile, and requiring one
+			// blocked onboarding outright. listing_source records which path a
+			// location came in through so an admin reviewing the queue knows
+			// whether the name and address were verified against Google or typed
+			// by hand. Existing rows all came from a place id, hence the default.
+			//
+			// google_id also stops being an empty string for manual rows: the
+			// partial unique index covers google_id IS NOT NULL, so a second
+			// manual listing would otherwise collide with the first on ''.
+			if _, err := pools.App.Exec(ctx, `
+				ALTER TABLE locations
+				ADD COLUMN IF NOT EXISTS listing_source TEXT NOT NULL DEFAULT 'google_place';
+
+				UPDATE locations
+				SET google_id = NULL
+				WHERE google_id IS NOT NULL AND TRIM(google_id) = '';
+
+				UPDATE locations
+				SET listing_source = 'manual'
+				WHERE google_id IS NULL AND listing_source = 'google_place';
+			`); err != nil {
+				return err
+			}
+
+			return nil
+		},
+	},
+	{
+		Version:     "1.37",
+		Description: "merchant map icons",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			// Bytes live in their own table because every map read selects the
+			// whole listing row and none of them want the image.
+			//
+			// icon_updated_at mirrors the upload time onto `locations` so a
+			// listing can advertise "there is an icon, at this version" without
+			// joining the blob. The version is what lets the image itself be
+			// served with a long cache lifetime and still change when a
+			// merchant replaces it.
+			if _, err := pools.App.Exec(ctx, `
+				ALTER TABLE locations
+				ADD COLUMN IF NOT EXISTS icon_updated_at TIMESTAMPTZ;
+
+				CREATE TABLE IF NOT EXISTS location_icons(
+					location_id INTEGER PRIMARY KEY REFERENCES locations(id) ON DELETE CASCADE,
+					content_type TEXT NOT NULL,
+					image_data BYTEA NOT NULL,
+					size_bytes INTEGER NOT NULL,
+					updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+				);
+			`); err != nil {
+				return err
+			}
+
+			return nil
+		},
+	},
+	{
+		Version:     "1.38",
+		Description: "staged event cover photos, uploaded before their event exists",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			// Cover photos used to be uploadable only after their event had been
+			// created, which forced the client to create the event first and
+			// then attach — so a failed photo left a published event with
+			// missing artwork and no way to undo it.
+			//
+			// A staged photo is one with no event yet: uploaded the moment it is
+			// chosen, owned by whoever uploaded it, and attached inside the same
+			// transaction that creates the event. Either the event exists with
+			// all of its photos or it does not exist at all.
+			if _, err := pools.Bot.Exec(ctx, `
+				ALTER TABLE event_photos ALTER COLUMN event_id DROP NOT NULL;
+
+				ALTER TABLE event_photos
+				ADD COLUMN IF NOT EXISTS staged_by TEXT NOT NULL DEFAULT '';
+
+				-- Only staged rows are ever looked up this way, so the index
+				-- carries none of the attached ones.
+				CREATE INDEX IF NOT EXISTS event_photos_staged_idx
+					ON event_photos(staged_by, created_at)
+					WHERE event_id IS NULL;
+			`); err != nil {
+				return err
+			}
+
+			return nil
+		},
+	},
+	{
+		Version:     "1.39",
+		Description: "merchant location photos",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			// A picture of the place itself, distinct from the map icon added in
+			// 1.37: the icon is a mark drawn a few pixels wide inside a pin, this
+			// is a photograph shown at card width on the listing.
+			//
+			// `locations.image_url` was not reused for this. It is written once at
+			// creation from the Google place and holds a link to a Maps *page*
+			// rather than to an image, so anything rendering it as a picture gets
+			// a broken one. Storing bytes here keeps a merchant's own photo out of
+			// that ambiguity, and out of the third-party lifetime that comes with
+			// hotlinking Google's.
+			if _, err := pools.App.Exec(ctx, `
+				ALTER TABLE locations
+				ADD COLUMN IF NOT EXISTS photo_updated_at TIMESTAMPTZ;
+
+				CREATE TABLE IF NOT EXISTS location_photos(
+					location_id INTEGER PRIMARY KEY REFERENCES locations(id) ON DELETE CASCADE,
+					content_type TEXT NOT NULL,
+					image_data BYTEA NOT NULL,
+					size_bytes INTEGER NOT NULL,
+					updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+				);
+			`); err != nil {
+				return err
+			}
+
+			return nil
+		},
+	},
+	{
+		Version:     "1.40",
+		Description: "per-location payment wallets, so two shops can be told apart",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			// Until now location_payment_wallets was empty and every location fell
+			// back to its owner's users.primary_wallet_address. That works while a
+			// merchant has one shop and silently breaks the moment they have two:
+			// both resolve to the same address, and an incoming transfer carries
+			// nothing that says which shop it belongs to. Takings, tips and the
+			// merchant-mode day view all become unsplittable, and no later fix can
+			// separate history that was already commingled.
+			//
+			// So: write down what each location resolves to today. Behaviour is
+			// unchanged the moment this lands — the link merely stops being implied
+			// by a COALESCE and starts being a row someone can see and change.
+			tag, err := pools.App.Exec(ctx, `
+				INSERT INTO location_payment_wallets (location_id, wallet_address, is_default)
+				SELECT
+					l.id,
+					COALESCE(
+						NULLIF(TRIM(u.primary_wallet_address), ''),
+						NULLIF(TRIM(legacy.smart_address), '')
+					),
+					TRUE
+				FROM locations l
+				LEFT JOIN users u
+					ON u.id = l.owner_id
+					AND u.active = TRUE
+				LEFT JOIN LATERAL (
+					SELECT w.smart_address
+					FROM wallets w
+					WHERE w.owner = l.owner_id
+					AND w.active = TRUE
+					AND w.is_eoa = FALSE
+					AND NULLIF(TRIM(w.smart_address), '') IS NOT NULL
+					ORDER BY w.smart_index ASC NULLS LAST, w.id ASC
+					LIMIT 1
+				) legacy ON TRUE
+				WHERE l.active = TRUE
+				AND COALESCE(
+					NULLIF(TRIM(u.primary_wallet_address), ''),
+					NULLIF(TRIM(legacy.smart_address), '')
+				) IS NOT NULL
+				AND NOT EXISTS (
+					SELECT 1 FROM location_payment_wallets existing
+					WHERE existing.location_id = l.id
+					AND existing.active = TRUE
+				);
+			`)
+			if err != nil {
+				return err
+			}
+			if appLogger != nil {
+				appLogger.Logf("migration 1.40: recorded %d location payment wallets", tag.RowsAffected())
+			}
+
+			// A location left without a wallet would have no payable address at
+			// all once the fallback goes, so say so loudly rather than letting it
+			// surface later as a merchant who cannot be paid.
+			var unresolved int
+			if err := pools.App.QueryRow(ctx, `
+				SELECT COUNT(*)
+				FROM locations l
+				WHERE l.active = TRUE
+				AND NOT EXISTS (
+					SELECT 1 FROM location_payment_wallets p
+					WHERE p.location_id = l.id AND p.active = TRUE
+				);
+			`).Scan(&unresolved); err != nil {
+				return err
+			}
+			if unresolved > 0 && appLogger != nil {
+				appLogger.Logf("migration 1.40: WARNING %d active locations still have no payment wallet", unresolved)
+			}
+
+			// One address, one role, one location. Enforced in the database as well
+			// as the handler because the whole point is that two shops can never
+			// share a till — a bug in a write path should not be able to undo that.
+			//
+			// Global rather than per-owner: a wallet belongs to exactly one user, so
+			// two locations sharing one are necessarily the same merchant's anyway,
+			// and a global index is both simpler and stricter.
+			if _, err := pools.App.Exec(ctx, `
+				CREATE UNIQUE INDEX IF NOT EXISTS location_payment_wallets_address_unique_idx
+					ON location_payment_wallets (LOWER(TRIM(wallet_address)))
+					WHERE active = TRUE;
+
+				CREATE UNIQUE INDEX IF NOT EXISTS locations_tipping_wallet_unique_idx
+					ON locations (LOWER(TRIM(tipping_wallet_address)))
+					WHERE active = TRUE AND NULLIF(TRIM(tipping_wallet_address), '') IS NOT NULL;
+			`); err != nil {
+				return err
+			}
+
+			return nil
+		},
+	},
+	{
+		Version:     "1.41",
+		Description: "w9 rebuild: tax payees, filings, payout ledger, escrow",
+		Apply:       migrateW9Rebuild,
+	},
+	{
+		Version:     "1.42",
+		Description: "payout ledger: a failed payout must not block its source forever",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			// The uniqueness rule is "one payout per source record", which is
+			// right — a redemption code must never pay out twice. But as first
+			// written it counted failed rows too, so a single failed attempt
+			// held that code's slot permanently and made it unredeemable with
+			// no route back short of editing the ledger by hand.
+			if _, err := pools.App.Exec(ctx, `
+				DROP INDEX IF EXISTS payout_ledger_source_ref_idx;
+				CREATE UNIQUE INDEX IF NOT EXISTS payout_ledger_source_ref_idx
+					ON payout_ledger (source, source_ref)
+					WHERE source_ref <> '' AND state NOT IN ('failed', 'cancelled');
+			`); err != nil {
+				return fmt.Errorf("error rebuilding the payout ledger source index: %w", err)
+			}
+			return nil
+		},
+	},
+	{
+		Version:     "1.43",
+		Description: "w9 filings: record the asynchronous TIN match separately from signing",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			// Signing and TIN matching are two events, not one. The vendor's
+			// match is asynchronous and can resolve about a day after the form
+			// is signed, so escrow releases on the signature alone — holding
+			// somebody's money for a day after they did everything asked of
+			// them would be the wrong trade.
+			//
+			// The match still has to be recorded when it lands, so the sweeper
+			// keeps polling past release and needs somewhere to put the answer.
+			// A rejected match never claws back a released payout; it blocks the
+			// next one.
+			if _, err := pools.App.Exec(ctx, `
+				ALTER TABLE w9_filings ADD COLUMN IF NOT EXISTS tin_match TEXT NOT NULL DEFAULT '';
+				ALTER TABLE w9_filings ADD COLUMN IF NOT EXISTS tin_match_at TIMESTAMPTZ;
+				CREATE INDEX IF NOT EXISTS w9_filings_unresolved_match_idx
+					ON w9_filings (status) WHERE tin_match IN ('', 'pending');
+			`); err != nil {
+				return fmt.Errorf("error adding tin match columns: %w", err)
+			}
+			return nil
+		},
+	},
+	{
+		Version:     "1.44",
+		Description: "w9: escalating warning tiers, and escrow that cannot accumulate",
+		Apply:       migrateW9WarningTiers,
+	},
+	{
+		Version:     "1.45",
+		Description: "users: the account type picked at signup, separate from the derived merchant flag",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			// is_merchant cannot hold this. It is recomputed as EXISTS(approved
+			// location) every time an approval changes (see AppDB.UpdateLocationApproval),
+			// so a signup answer written there is overwritten by the next
+			// approval that touches the owner, with nothing left to say what
+			// the person originally chose.
+			//
+			// Nor is it backfilled from is_merchant: that flag records that a
+			// listing was approved, not what somebody signed up as, and a
+			// merchant who also spends in the app as a customer would be
+			// reclassified by the copy. Everyone existing becomes 'regular';
+			// the signup question is the only thing that ever sets this.
+			if _, err := pools.App.Exec(ctx, `
+				ALTER TABLE users
+				ADD COLUMN IF NOT EXISTS account_type TEXT NOT NULL DEFAULT 'regular';
+
+				ALTER TABLE users
+				ADD COLUMN IF NOT EXISTS merchant_onboarding_completed_at TIMESTAMPTZ;
+
+				ALTER TABLE users DROP CONSTRAINT IF EXISTS users_account_type_check;
+				ALTER TABLE users ADD CONSTRAINT users_account_type_check
+					CHECK (account_type IN ('regular', 'merchant'));
+			`); err != nil {
+				return fmt.Errorf("error adding user account type columns: %w", err)
+			}
+
+			return nil
+		},
+	},
+	{
+		Version:     "1.46",
+		Description: "locations: the payment wallet address, readable from the location row",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			// Every reader of a location's payable address currently rebuilds it
+			// with the same lateral join into location_payment_wallets. Writing
+			// it onto the row makes it one column instead of a join each caller
+			// has to remember to get right.
+			//
+			// Nothing reads it yet, on purpose. Representation lands first so
+			// the two can be diffed against each other on real data before any
+			// read path moves; a migration that also switched the readers could
+			// only be checked after the fact.
+			if _, err := pools.App.Exec(ctx, `
+				ALTER TABLE locations
+				ADD COLUMN IF NOT EXISTS payment_wallet_address TEXT NOT NULL DEFAULT '';
+			`); err != nil {
+				return fmt.Errorf("error adding the location payment wallet column: %w", err)
+			}
+
+			// location_payment_wallets is the only source. users.primary_wallet_address
+			// is not consulted: migration 1.40 already resolved that fallback
+			// with the owner's full wallet history to hand, and reading it again
+			// now would hand the same owner address to every shop they run —
+			// exactly the collision 1.40 existed to end.
+			//
+			// Volunteer event rows live in this table too and have no till, so
+			// only merchant listings are considered. Rows that already carry an
+			// address are left alone, which also makes a re-run a no-op.
+			tag, err := pools.App.Exec(ctx, `
+				UPDATE locations l
+				SET payment_wallet_address = COALESCE((
+					SELECT NULLIF(TRIM(w.wallet_address), '')
+					FROM location_payment_wallets w
+					WHERE w.location_id = l.id
+					AND w.active = TRUE
+					AND NULLIF(TRIM(w.wallet_address), '') IS NOT NULL
+					ORDER BY w.is_default DESC, w.id ASC
+					LIMIT 1
+				), '')
+				WHERE l.location_kind = 'merchant'
+				AND l.payment_wallet_address = '';
+			`)
+			if err != nil {
+				return fmt.Errorf("error backfilling location payment wallet addresses: %w", err)
+			}
+
+			// A merchant listing with no wallet row gets '' rather than failing
+			// the migration: an empty string is the honest answer for a location
+			// that genuinely has nowhere to be paid, and refusing to migrate over
+			// it would block a schema change on unrelated data. 1.40 warned in
+			// the same situation for the same reason.
+			var unresolved int
+			if err := pools.App.QueryRow(ctx, `
+				SELECT COUNT(*)
+				FROM locations l
+				WHERE l.location_kind = 'merchant'
+				AND l.active = TRUE
+				AND l.payment_wallet_address = '';
+			`).Scan(&unresolved); err != nil {
+				return fmt.Errorf("error counting locations without a payment wallet: %w", err)
+			}
+			if appLogger != nil {
+				appLogger.Logf("migration 1.46: wrote %d location payment wallet addresses", tag.RowsAffected())
+				if unresolved > 0 {
+					appLogger.Logf("migration 1.46: WARNING %d active merchant locations have no payment wallet and were left empty", unresolved)
+				}
+			}
+
+			// Same rule the tipping address already lives under, and for the same
+			// reason: one address serves one location, so a write path that
+			// duplicated one would be stopped by the database rather than
+			// discovered later as two shops sharing a till.
+			if _, err := pools.App.Exec(ctx, `
+				CREATE UNIQUE INDEX IF NOT EXISTS locations_payment_wallet_unique_idx
+					ON locations (LOWER(TRIM(payment_wallet_address)))
+					WHERE active = TRUE AND NULLIF(TRIM(payment_wallet_address), '') IS NOT NULL;
+			`); err != nil {
+				return fmt.Errorf("error creating the location payment wallet unique index: %w", err)
+			}
+
+			return nil
+		},
+	},
+	{
+		Version:     "1.47",
+		Description: "classify existing merchants, and re-derive the location payment address the way the readers do",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			// Existing merchants never pass through the new signup choice — they
+			// accepted the privacy policy long ago, and account_type is written
+			// once, at first acceptance. Left alone they would all read as
+			// 'regular' forever: the Locations tab would not appear, and the
+			// merchant surfaces would be unreachable for the only people who
+			// need them.
+			//
+			// Owning an approved location is the honest definition. It is also
+			// exactly the set is_merchant already tracks (10 of each on the
+			// development clone, with no user flagged as a merchant who owns no
+			// approved location), so this reclassifies nobody by surprise.
+			classified, err := pools.App.Exec(ctx, `
+				UPDATE users u
+				SET account_type = 'merchant'
+				WHERE u.account_type = 'regular'
+				AND EXISTS (
+					SELECT 1 FROM locations l
+					WHERE l.owner_id = u.id
+					AND l.approval = TRUE
+					AND l.location_kind = 'merchant'
+				);
+			`)
+			if err != nil {
+				return fmt.Errorf("error classifying existing merchants: %w", err)
+			}
+
+			// And stamp them as onboarded, in the same migration and for the same
+			// reason. The forced-onboarding gate refuses anyone who is
+			// merchant-typed with a NULL timestamp, and the stamp is only written
+			// when a location is created — which for these people already
+			// happened, months ago, under rules that did not record it.
+			//
+			// Classifying without stamping would lock every existing merchant out
+			// of the app behind a form asking them to do a thing they have
+			// already done. The two statements belong together and must never be
+			// split.
+			stamped, err := pools.App.Exec(ctx, `
+				UPDATE users u
+				SET merchant_onboarding_completed_at = COALESCE(
+					(
+						-- Their first approval is the truest record of when they
+						-- finished becoming a merchant. It is a naive timestamp,
+						-- so it is read as UTC rather than as the server's local
+						-- zone, which would shift every one of these by hours.
+						SELECT MIN(l.approved_at AT TIME ZONE 'UTC') FROM locations l
+						WHERE l.owner_id = u.id
+						AND l.approval = TRUE
+						AND l.location_kind = 'merchant'
+						AND l.approved_at IS NOT NULL
+					),
+					NOW()
+				)
+				WHERE u.account_type = 'merchant'
+				AND u.merchant_onboarding_completed_at IS NULL
+				AND EXISTS (
+					SELECT 1 FROM locations l
+					WHERE l.owner_id = u.id
+					AND l.approval = TRUE
+					AND l.location_kind = 'merchant'
+				);
+			`)
+			if err != nil {
+				return fmt.Errorf("error stamping merchant onboarding for existing merchants: %w", err)
+			}
+
+			// Migration 1.46 derived this column with a predicate the read paths
+			// do not have: it skipped a blank address and took the next row. So a
+			// location whose default wallet row holds a blank could end up named
+			// after a wallet the map never shows — and nothing repairs it, because
+			// the runtime sync only fires when a wallet is written.
+			//
+			// Re-derive every row with the expression the readers actually use.
+			// It is idempotent by construction: where 1.46 already agreed, this
+			// writes the same value.
+			resynced, err := pools.App.Exec(ctx, `
+				UPDATE locations l
+				SET payment_wallet_address = COALESCE((
+					SELECT NULLIF(TRIM(lpw.wallet_address), '')
+					FROM location_payment_wallets lpw
+					WHERE lpw.location_id = l.id
+					AND lpw.active = TRUE
+					ORDER BY
+						CASE WHEN lpw.is_default = TRUE THEN 0 ELSE 1 END,
+						lpw.id ASC
+					LIMIT 1
+				), '')
+				WHERE l.payment_wallet_address IS DISTINCT FROM COALESCE((
+					SELECT NULLIF(TRIM(lpw.wallet_address), '')
+					FROM location_payment_wallets lpw
+					WHERE lpw.location_id = l.id
+					AND lpw.active = TRUE
+					ORDER BY
+						CASE WHEN lpw.is_default = TRUE THEN 0 ELSE 1 END,
+						lpw.id ASC
+					LIMIT 1
+				), '');
+			`)
+			if err != nil {
+				return fmt.Errorf("error re-deriving location payment addresses: %w", err)
+			}
+
+			if appLogger != nil {
+				appLogger.Logf("migration 1.47: classified %d existing merchants, stamped %d as onboarded, re-derived %d location payment addresses",
+					classified.RowsAffected(), stamped.RowsAffected(), resynced.RowsAffected())
+			}
+
+			return nil
+		},
+	},
+	{
+		Version:     "1.48",
+		Description: "make the location text and number columns NOT NULL, because the readers already assume it",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			// Nearly every column on locations is nullable while the Go structs
+			// scan them into plain strings and numbers. A single NULL therefore
+			// fails the scan, and because GET /locations reads every row to draw
+			// the public merchant map, one bad row takes the map down for
+			// everyone rather than just for that shop:
+			//
+			//   can't scan into dest[15] (col: website): cannot scan NULL into *string
+			//
+			// Nothing in the API insert path writes NULL — it always sends a
+			// string — so this has stayed latent. But any path that does not go
+			// through that handler (a migration, an admin insert, a seed script)
+			// can introduce one, and the integration test selects
+			// COALESCE(website, ''), so the suite would stay green through it.
+			//
+			// COALESCE in the queries would work too, but it has to be repeated
+			// in every SELECT forever and is one omission away from the same
+			// outage. Making the invariant real in the schema is the version the
+			// code already believes.
+			//
+			// Deliberately NOT included:
+			//   google_id     - the partial unique index covers google_id IS NOT
+			//                   NULL, and rows created through the API leave it
+			//                   NULL; '' would collide on the second such row.
+			//   owner_id      - a FK where NULL means genuinely unowned.
+			//   delete_reason - NULL means "not deleted", which '' cannot say.
+			//   approval      - tri-state; NULL is "not yet decided" and the
+			//                   readers filter on it rather than scanning it.
+			//   timestamps    - already scanned through sql.NullTime.
+			textColumns := []string{
+				"admin_email", "admin_phone", "city", "contact_firstname",
+				"contact_lastname", "contact_phone", "description", "email",
+				"image_url", "maps_page", "messaging_service", "name", "phone",
+				"pos_system", "reference", "sole_proprietorship", "state",
+				"street", "table_coverage", "tablet_model", "tipping_division",
+				"tipping_policy", "type", "website", "zip",
+			}
+			numberColumns := []string{"lat", "lng", "rating", "service_stations"}
+
+			for _, column := range textColumns {
+				// Backfilled first so SET NOT NULL cannot fail on existing rows.
+				// The development clone has none, but production is not this
+				// clone and a migration that aborts halfway is worse than one
+				// that does redundant work.
+				if _, err := pools.App.Exec(ctx, fmt.Sprintf(
+					`UPDATE locations SET %s = '' WHERE %s IS NULL;`, column, column),
+				); err != nil {
+					return fmt.Errorf("error backfilling locations.%s: %w", column, err)
+				}
+				if _, err := pools.App.Exec(ctx, fmt.Sprintf(
+					`ALTER TABLE locations ALTER COLUMN %s SET DEFAULT '', ALTER COLUMN %s SET NOT NULL;`,
+					column, column),
+				); err != nil {
+					return fmt.Errorf("error constraining locations.%s: %w", column, err)
+				}
+			}
+
+			for _, column := range numberColumns {
+				if _, err := pools.App.Exec(ctx, fmt.Sprintf(
+					`UPDATE locations SET %s = 0 WHERE %s IS NULL;`, column, column),
+				); err != nil {
+					return fmt.Errorf("error backfilling locations.%s: %w", column, err)
+				}
+				if _, err := pools.App.Exec(ctx, fmt.Sprintf(
+					`ALTER TABLE locations ALTER COLUMN %s SET DEFAULT 0, ALTER COLUMN %s SET NOT NULL;`,
+					column, column),
+				); err != nil {
+					return fmt.Errorf("error constraining locations.%s: %w", column, err)
+				}
+			}
+
+			appLogger.Logf("migration 1.48: constrained %d text and %d number columns on locations",
+				len(textColumns), len(numberColumns))
+			return nil
+		},
+	},
+	{
+		Version:     "1.49",
+		Description: "record when a w9 filing was last polled, so the sweep can back off",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			// The sweep re-read every outstanding filing every five minutes,
+			// forever. A form nobody fills is not a form that changes, so that
+			// is ~288 vendor calls a day per filing to learn nothing, and it
+			// never stops — a person who ignores the form for a month costs
+			// about 8,600 of them.
+			//
+			// It could not pace itself because nothing recorded when we last
+			// asked. last_provider_event_at is set on completion, so an
+			// unchanged filing looks exactly as stale on the thousandth read as
+			// on the first.
+			//
+			// Backdated to requested_at rather than left NULL, so the first
+			// sweep after deploy does not treat every existing filing as never
+			// polled and ask about all of them at once.
+			if _, err := pools.App.Exec(ctx, `
+				ALTER TABLE w9_filings ADD COLUMN IF NOT EXISTS last_polled_at TIMESTAMPTZ;
+			`); err != nil {
+				return fmt.Errorf("error adding w9_filings.last_polled_at: %w", err)
+			}
+
+			tag, err := pools.App.Exec(ctx, `
+				UPDATE w9_filings
+				SET last_polled_at = COALESCE(last_provider_event_at, requested_at, created_at)
+				WHERE last_polled_at IS NULL;
+			`)
+			if err != nil {
+				return fmt.Errorf("error backdating w9_filings.last_polled_at: %w", err)
+			}
+
+			appLogger.Logf("migration 1.49: backdated last_polled_at on %d w9 filings", tag.RowsAffected())
+			return nil
+		},
+	},
+	{
+		Version:     "1.50",
+		Description: "locations and users: the Location Approval Form's fields, and the account-type signals the web app needs",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			// The intake form is now three steps — Public Information, Contact,
+			// Payment System — and asks a different set of questions from the
+			// single sheet these columns were shaped for. The old answers are
+			// left in place rather than dropped: they are the only record of
+			// what the merchants already on the map told us, and nothing here
+			// needs the space back.
+			if _, err := pools.App.Exec(ctx, `
+				ALTER TABLE locations
+				ADD COLUMN IF NOT EXISTS contact_name TEXT NOT NULL DEFAULT '';
+
+				ALTER TABLE locations
+				ADD COLUMN IF NOT EXISTS referral_source TEXT NOT NULL DEFAULT '';
+
+				ALTER TABLE locations
+				ADD COLUMN IF NOT EXISTS accepts_tips BOOLEAN;
+
+				ALTER TABLE locations
+				ADD COLUMN IF NOT EXISTS has_staff_tablet BOOLEAN;
+			`); err != nil {
+				return fmt.Errorf("error adding location approval form columns: %w", err)
+			}
+
+			// Contact Name is one field now. Rebuilt from the two it replaces so
+			// an existing listing does not read back blank the first time its
+			// owner opens the form.
+			nameTag, err := pools.App.Exec(ctx, `
+				UPDATE locations
+				SET contact_name = TRIM(COALESCE(contact_firstname, '') || ' ' || COALESCE(contact_lastname, ''))
+				WHERE TRIM(contact_name) = ''
+				AND TRIM(COALESCE(contact_firstname, '') || ' ' || COALESCE(contact_lastname, '')) <> '';
+			`)
+			if err != nil {
+				return fmt.Errorf("error backfilling locations.contact_name: %w", err)
+			}
+
+			// "How did you hear about SFLuv" is a dropdown with a write-in now,
+			// but it is the same question `reference` has always held free text
+			// for, so the free text carries over as the write-in answer.
+			referralTag, err := pools.App.Exec(ctx, `
+				UPDATE locations
+				SET referral_source = reference
+				WHERE TRIM(referral_source) = ''
+				AND TRIM(COALESCE(reference, '')) <> '';
+			`)
+			if err != nil {
+				return fmt.Errorf("error backfilling locations.referral_source: %w", err)
+			}
+
+			// accepts_tips decides whether approval mints a tipping wallet, so
+			// a listing that already has one has plainly answered yes. Everything
+			// else stays NULL — unanswered, not "no" — because the old form never
+			// asked the question and guessing would switch tipping off for shops
+			// that take tips.
+			tipsTag, err := pools.App.Exec(ctx, `
+				UPDATE locations
+				SET accepts_tips = TRUE
+				WHERE accepts_tips IS NULL
+				AND TRIM(COALESCE(tipping_wallet_address, '')) <> '';
+			`)
+			if err != nil {
+				return fmt.Errorf("error backfilling locations.accepts_tips: %w", err)
+			}
+
+			// account_type_selected_at separates "chose regular" from "never
+			// asked". Only the web signup puts the question, so a NULL here is
+			// how the web app recognises somebody who signed up on mobile and
+			// has never been offered a merchant account.
+			//
+			// Not backfilled. Every account that exists today either predates
+			// the question or answered it before this column existed, and the
+			// only cost of treating them all as unasked is that a regular
+			// account is offered the merchant prompt once.
+			if _, err := pools.App.Exec(ctx, `
+				ALTER TABLE users
+				ADD COLUMN IF NOT EXISTS account_type_selected_at TIMESTAMPTZ;
+
+				ALTER TABLE users
+				ADD COLUMN IF NOT EXISTS web_merchant_prompt_seen_at TIMESTAMPTZ;
+			`); err != nil {
+				return fmt.Errorf("error adding user account type signal columns: %w", err)
+			}
+
+			appLogger.Logf(
+				"migration 1.50: backfilled contact_name on %d locations, referral_source on %d, accepts_tips on %d",
+				nameTag.RowsAffected(), referralTag.RowsAffected(), tipsTag.RowsAffected(),
+			)
+			return nil
+		},
+	},
+	{
+		Version:     "1.51",
+		Description: "record when an account became a merchant, and every account-type change since",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			// Money arriving before somebody was a merchant is not sales.
+			//
+			// A merchant's incoming transfers are read off the chain, which
+			// records an address and an amount and nothing about what the
+			// account was at the time. Without a date to split on, a tax export
+			// cannot tell a year of personal receipts from a year of takings —
+			// and the accounts that most need the split are exactly the ones
+			// that were personal first.
+			//
+			// merchant_since is the start of the CURRENT merchant stint, so it
+			// is cleared on a revert. The full history lives in the events table
+			// below, which is what any report covering a period with a flip in
+			// it has to read.
+			if _, err := pools.App.Exec(ctx, `
+				ALTER TABLE users
+				ADD COLUMN IF NOT EXISTS merchant_since TIMESTAMPTZ;
+
+				-- TRUE where the date was guessed by the backfill below rather
+				-- than observed as a change. It matters because an inferred date
+				-- is an UPPER bound — the account was a merchant by then, and
+				-- may well have been one long before — so a report that splits
+				-- income on it will file genuine merchant takings as personal.
+				-- A row flagged this way is a date to ask about, not to trust.
+				ALTER TABLE users
+				ADD COLUMN IF NOT EXISTS merchant_since_inferred BOOLEAN NOT NULL DEFAULT FALSE;
+			`); err != nil {
+				return fmt.Errorf("error adding users.merchant_since: %w", err)
+			}
+
+			// Append-only. Reverting is allowed while an account has nothing
+			// listed, so regular -> merchant -> regular -> merchant is a real
+			// sequence, and a single column on users cannot describe which
+			// intervals were which.
+			if _, err := pools.App.Exec(ctx, `
+				CREATE TABLE IF NOT EXISTS user_account_type_events (
+					id SERIAL PRIMARY KEY,
+					user_id TEXT NOT NULL REFERENCES users(id),
+					previous_account_type TEXT NOT NULL DEFAULT '',
+					account_type TEXT NOT NULL,
+					-- signup, self (settings), or admin. Says who decided, which
+					-- is the first question asked of any row that looks wrong.
+					source TEXT NOT NULL DEFAULT '',
+					changed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+				);
+
+				CREATE INDEX IF NOT EXISTS user_account_type_events_user_idx
+					ON user_account_type_events(user_id, changed_at);
+			`); err != nil {
+				return fmt.Errorf("error creating user_account_type_events: %w", err)
+			}
+
+			// Backfill for the merchants who already exist. Nobody recorded when
+			// they converted, so this takes the earliest date that is evidence
+			// they were already one: their first location, the stamp written
+			// when a merchant lists their first shop, or their first policy
+			// acceptance — which for an account that chose merchant at signup is
+			// the moment it did.
+			//
+			// LEAST rather than COALESCE over the three: they are independent
+			// pieces of evidence, not a preference order, and the earliest is
+			// the one that bounds the answer. LEAST ignores NULLs, so an account
+			// missing any of them still gets the best of the rest; NOW() catches
+			// an account with none at all.
+			//
+			// `users` has no created_at, which is what this migration first
+			// assumed and what made it fail.
+			//
+			// The result is an UPPER bound and is flagged as inferred. On live
+			// data the winning value for the oldest merchants is itself an
+			// artefact — seven of them share one merchant_onboarding_completed_at
+			// to the microsecond, stamped when migration 1.45 ran — so they were
+			// merchants well before the date recorded here. Splitting income on
+			// an inferred date files real takings as personal, which is why the
+			// flag exists and why a report must consult it.
+			//
+			// Deliberately not written as an event either: the events table
+			// holds changes actually seen, and a guess sitting among them would
+			// read as one.
+			tag, err := pools.App.Exec(ctx, `
+				UPDATE users u
+				SET merchant_since = COALESCE(
+					LEAST(
+						(
+							SELECT MIN(COALESCE(l.approved_at, l.delete_date))
+							FROM locations l
+							WHERE l.owner_id = u.id
+						),
+						u.merchant_onboarding_completed_at,
+						u.accepted_privacy_policy_at
+					),
+					NOW()
+				)
+				,
+					merchant_since_inferred = TRUE
+				WHERE u.account_type = 'merchant'
+				AND u.merchant_since IS NULL;
+			`)
+			if err != nil {
+				return fmt.Errorf("error backfilling users.merchant_since: %w", err)
+			}
+
+			appLogger.Logf("migration 1.51: backfilled merchant_since on %d accounts", tag.RowsAffected())
+			return nil
+		},
+	},
+	{
+		Version:     "1.52",
+		Description: "volunteer events: public or unlisted",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			// An approved event was, until now, an advertised one. Approval is a
+			// judgement about legitimacy, and it was doing double duty as a
+			// judgement about promotion — so a shift for a named crew, a dry
+			// run, or a partner's private day had to be either on the public
+			// list or not approved at all.
+			//
+			// Unlisted is not access control and is not described as any. The
+			// detail endpoint serves an event by id whatever its visibility,
+			// which is exactly what makes a share link work; the id is the
+			// capability. What it removes is the list, the organizer filter and
+			// the sitemap.
+			//
+			// Defaulted to public so every existing event keeps the visibility
+			// it effectively had, and so a client that never sends the field —
+			// which is all of them until their next release — keeps creating
+			// listed events.
+			if _, err := pools.Bot.Exec(ctx, `
+				ALTER TABLE events
+					ADD COLUMN IF NOT EXISTS visibility TEXT NOT NULL DEFAULT 'public';
+			`); err != nil {
+				return fmt.Errorf("error adding the event visibility column: %w", err)
+			}
+
+			// Added separately and idempotently, matching the 1.24 constraints,
+			// so a re-run on a partially migrated database does not fail on an
+			// existing constraint.
+			if _, err := pools.Bot.Exec(ctx, `
+				DO $$
+				BEGIN
+					IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'events_visibility_check') THEN
+						ALTER TABLE events ADD CONSTRAINT events_visibility_check
+							CHECK (visibility IN ('public', 'unlisted'));
+					END IF;
+				END
+				$$;
+			`); err != nil {
+				return fmt.Errorf("error constraining event visibility: %w", err)
+			}
+
+			// The public list filters on this alongside review_status, so it
+			// belongs in the index that serves that query.
+			if _, err := pools.Bot.Exec(ctx, `
+				CREATE INDEX IF NOT EXISTS events_volunteer_visible_idx
+					ON events(is_volunteer, visibility, review_status, start_at)
+					WHERE is_volunteer = TRUE;
+			`); err != nil {
+				return fmt.Errorf("error indexing event visibility: %w", err)
+			}
+
+			return nil
+		},
+	},
+}
+
+// migrateW9WarningTiers replaces one hard gate with an escalating sequence.
+//
+// Before this, a volunteer's first indication that a tax form existed was their
+// reward not arriving. Now they get a polite notice partway to the limit, a
+// firmer one closer to it, and only then does anything stop — so by the time
+// money is withheld they have been warned twice while still being paid.
+//
+// The second change is quieter but removes more code than it adds. A person who
+// already has money held is now refused rather than held again, which bounds
+// escrow to exactly one payment. Nothing accumulates, so nothing has to expire,
+// so there is no owed-but-unreserved money and no admin queue to chase it. The
+// 'expired' and 'back_pay_requested' states go with it.
+func migrateW9WarningTiers(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+	if _, err := pools.App.Exec(ctx, db.TaxSchemaDDL); err != nil {
+		return fmt.Errorf("error creating the w9 tier tables: %w", err)
+	}
+
+	// Anything still sitting in a retired state has to land somewhere before the
+	// constraint stops describing it. Both meant "owed but not reserved", and
+	// the honest resting place is back in escrow — reserved again, and released
+	// the moment the filing clears.
+	tag, err := pools.App.Exec(ctx, `
+		UPDATE payout_ledger
+		SET state = 'escrowed',
+			escrowed_at = COALESCE(escrowed_at, NOW()),
+			expired_at = NULL,
+			back_pay_requested_at = NULL,
+			updated_at = NOW()
+		WHERE state IN ('expired', 'back_pay_requested');
+	`)
+	if err != nil {
+		return fmt.Errorf("error returning retired payout states to escrow: %w", err)
+	}
+	if appLogger != nil && tag.RowsAffected() > 0 {
+		appLogger.Logf(
+			"w9 tiers: returned %d payouts from expired/back-pay to escrow; they release when the filing clears",
+			tag.RowsAffected(),
+		)
+	}
+
+	if _, err := pools.App.Exec(ctx, `
+		ALTER TABLE payout_ledger DROP CONSTRAINT IF EXISTS payout_ledger_state_check;
+		ALTER TABLE payout_ledger ADD CONSTRAINT payout_ledger_state_check CHECK (state IN (
+			'pending','escrowed','releasing','paid','failed','cancelled'
+		));
+	`); err != nil {
+		return fmt.Errorf("error narrowing the payout state constraint: %w", err)
+	}
+
+	return nil
+}
+
+// migrateW9Rebuild replaces a W9 system that never held a W9.
+//
+// The old one recorded a wallet, an email and a year — no name, no TIN, no
+// signature, no document — and pointed people at a form on another website. It
+// gated exactly one payout path, and it measured the annual threshold per
+// wallet per chain, so a person with several wallets, or one wallet spanning
+// the Celo cutover, could earn well past the limit without anything noticing.
+//
+// What replaces it keys on the person, records every platform-originated payout
+// in one ledger, and holds money that cannot lawfully be paid yet instead of
+// refusing it.
+//
+// This migration is additive. Nothing is dropped: w9_submissions is renamed
+// rather than deleted so the backfill can be re-run, and w9_wallet_earnings is
+// left alone because backend/mcp/reports.go still reads it. A later migration
+// removes both, once the reports are repointed.
+func migrateW9Rebuild(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+	if _, err := pools.App.Exec(ctx, db.TaxSchemaDDL); err != nil {
+		return fmt.Errorf("error creating w9 rebuild tables: %w", err)
+	}
+
+	if err := migrateW9LegacyApprovals(ctx, pools, appLogger); err != nil {
+		return err
+	}
+
+	// Renamed, not dropped. A rename is reversible and keeps the source data
+	// available if the backfill above has to be re-run; a DROP is neither.
+	if _, err := pools.App.Exec(ctx, `
+		ALTER TABLE IF EXISTS w9_submissions RENAME TO w9_submissions_legacy_v1;
+	`); err != nil {
+		return fmt.Errorf("error retiring the legacy w9 submissions table: %w", err)
+	}
+
+	return nil
+}
+
+// migrateW9LegacyApprovals carries the old system's approvals forward.
+//
+// Those people completed what was asked of them at the time. Making them repeat
+// it because we changed our storage is the fastest way to lose them, so they
+// arrive as legacy_approved: unblocked, and never prompted again for that year.
+//
+// Approvals were keyed by wallet, and one person may hold several, so several
+// old rows can collapse into one filing. Rows whose wallet matches no account
+// are counted and logged rather than dropped silently — that number is the
+// measure of how much of the old data was unattributable.
+func migrateW9LegacyApprovals(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+	var exists bool
+	if err := pools.App.QueryRow(ctx, `
+		SELECT to_regclass('public.w9_submissions') IS NOT NULL;
+	`).Scan(&exists); err != nil {
+		return fmt.Errorf("error checking for the legacy w9 submissions table: %w", err)
+	}
+	if !exists {
+		return nil
+	}
+
+	tag, err := pools.App.Exec(ctx, `
+		INSERT INTO w9_filings (user_id, tax_year, status, completed_at, created_at, updated_at)
+		SELECT
+			owner.user_id,
+			s.year,
+			'legacy_approved',
+			MIN(s.approved_at),
+			NOW(),
+			NOW()
+		FROM w9_submissions s
+		JOIN LATERAL (
+			SELECT w.owner AS user_id
+			FROM wallets w
+			WHERE w.active = TRUE
+			AND (
+				LOWER(TRIM(COALESCE(w.smart_address, ''))) = LOWER(TRIM(s.wallet_address))
+				OR LOWER(TRIM(COALESCE(w.eoa_address, ''))) = LOWER(TRIM(s.wallet_address))
+			)
+			ORDER BY w.id ASC
+			LIMIT 1
+		) owner ON TRUE
+		WHERE s.approved_at IS NOT NULL
+		AND s.rejected_at IS NULL
+		GROUP BY owner.user_id, s.year
+		ON CONFLICT (user_id, tax_year) DO NOTHING;
+	`)
+	if err != nil {
+		return fmt.Errorf("error carrying legacy w9 approvals forward: %w", err)
+	}
+
+	var unresolved int
+	if err := pools.App.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM w9_submissions s
+		WHERE s.approved_at IS NOT NULL
+		AND s.rejected_at IS NULL
+		AND NOT EXISTS (
+			SELECT 1 FROM wallets w
+			WHERE w.active = TRUE
+			AND (
+				LOWER(TRIM(COALESCE(w.smart_address, ''))) = LOWER(TRIM(s.wallet_address))
+				OR LOWER(TRIM(COALESCE(w.eoa_address, ''))) = LOWER(TRIM(s.wallet_address))
+			)
+		);
+	`).Scan(&unresolved); err != nil {
+		return fmt.Errorf("error counting unresolved legacy w9 approvals: %w", err)
+	}
+
+	if appLogger != nil {
+		appLogger.Logf("w9 migration: carried %d approved submissions forward as legacy filings", tag.RowsAffected())
+		if unresolved > 0 {
+			appLogger.Logf(
+				"w9 migration: %d approved submissions could not be matched to an account and were not carried forward; "+
+					"those wallets will be asked to file if they earn past the threshold",
+				unresolved,
+			)
+		}
+	}
+
+	return nil
+}
+
+// migrateLocationHoursUniqueness enforces at most one hours row per weekday per
+// location. Before this, an hours "update" that matched only on location_id
+// could leave a location with several rows claiming the same weekday.
+//
+// Uniqueness on locations.google_id is not handled here: CreateTables already
+// maintains locations_google_id_active_idx for that.
+//
+// The index is created only when the existing rows already satisfy it. A
+// duplicate is real data, and silently deleting merchant rows during a
+// migration is worse than shipping without the constraint —
+// db.replaceLocationHours enforces the same rule for every new write either
+// way. When duplicates are present the migration logs what to clean up and
+// moves on.
+func migrateLocationHoursUniqueness(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+	var duplicateWeekdays int
+	if err := pools.App.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM (
+			SELECT location_id, weekday
+			FROM location_hours
+			GROUP BY location_id, weekday
+			HAVING COUNT(*) > 1
+		) duplicates;
+	`).Scan(&duplicateWeekdays); err != nil {
+		return fmt.Errorf("error checking for duplicate location hours: %w", err)
+	}
+
+	if duplicateWeekdays > 0 {
+		appLogger.Logf(
+			"skipping location_hours_location_weekday_key: %d (location, weekday) pairs have more than one row; "+
+				"resolve the duplicates and re-run this migration to add the constraint",
+			duplicateWeekdays,
+		)
+		return nil
+	}
+
+	if _, err := pools.App.Exec(ctx, `
+		CREATE UNIQUE INDEX IF NOT EXISTS location_hours_location_weekday_key
+			ON location_hours(location_id, weekday);
+	`); err != nil {
+		return fmt.Errorf("error creating unique location hours index: %w", err)
+	}
+
+	return nil
 }
 
 type versionTarget struct {
@@ -1269,4 +2775,17 @@ func parseVersion(version string) ([]int, error) {
 		values = append(values, value)
 	}
 	return values, nil
+}
+
+// firstMinutes returns the opening (or closing) minute of a day's first stretch,
+// or nil when it has none. Migration 1.34 predates split hours and only has the
+// flat columns to write; 1.35 backfills the full set.
+func firstMinutes(day structs.LocationDayHours, open bool) *int {
+	if len(day.Intervals) == 0 {
+		return nil
+	}
+	if open {
+		return &day.Intervals[0].OpenMinute
+	}
+	return &day.Intervals[0].CloseMinute
 }

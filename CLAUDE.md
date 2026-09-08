@@ -12,7 +12,6 @@ SFLUV is a local currency platform using a wrapped HONEY token on Berachain. Thi
 ```bash
 cd backend && go run ./cmd/init                     # Run DB init / migrations only
 cd backend && go run ./cmd/server                   # Run the backend server
-cd backend && go test -vet=off ./db ./handlers ./router ./structs # Run backend tests
 ```
 Backend env: `backend/.env` — requires `DB_USER`, `DB_PASSWORD`, `DB_URL` (for app, bot, and ponder DBs), `PRIVY_APP_ID`, `PRIVY_VKEY`, `RPC_URL`, `MAILGUN_API_KEY`, `MAILGUN_DOMAIN`, `PONDER_SERVER_BASE_URL`, `PONDER_KEY`.
 
@@ -106,7 +105,14 @@ Sequential steps, each assigned to one improver role. Status: `locked` → `avai
 - Admin force-approve bypasses vote (uses `admin_approve` decision)
 
 ### Credential System
-Two credential types: `dpw_certified`, `sfluv_verifier`. Issuers grant/revoke credentials. Workflow roles can require specific credentials — improvers must hold them to claim steps.
+Credential types are **data, not constants** — they live in the database and are
+added through the admin panel, so do not hardcode or assume them. Read the
+current set from `GET /credentials/types` (twelve at the time of writing:
+`sfluv_certified_volunteer`, `dpw_bufees_volunteer`, `sfluv_project_coordinator`,
+several translator credentials, and so on).
+
+Issuers grant and revoke them. A workflow role must require **at least one**, and
+an improver must hold it to claim that role's steps.
 
 ### Recurring Workflows (Series)
 Workflows with recurrence (`daily`/`weekly`/`monthly`) share a `series_id`. A new instance is blocked (`is_start_blocked = true`) until the prior one reaches `paid_out`.
@@ -128,13 +134,67 @@ Workflows with recurrence (`daily`/`weekly`/`monthly`) share a `series_id`. A ne
 ### Email Notifications
 Mailgun is used for all transactional email. Styled HTML templates are constructed in Go handlers. Follow existing patterns in `backend/handlers/app.go` and `backend/handlers/app_workflow.go` for email template style.
 
+### Branch Scope Documents
+Every branch records its own work in `branch-scopes/<branch-name>.md`, and that file must be up to date
+**before the branch is merged**. `branch-scopes/pjol/volunteer-panel.md` is the worked example.
+
+What it is for: the branch is the unit of work people ask about later — what shipped in it, why a decision
+was made, and how long it took. Commit messages scatter that across dozens of entries and a PR description
+disappears once it is merged, so it lives in the repo alongside the code it describes.
+
+Each file carries:
+- A header with the date range, the repos touched, and total active hours
+- How those hours were measured, stated plainly, and any weakness in the measurement named
+- Features grouped large-to-small, each with its own hours (**to the nearest 0.1h**) and repo
+- A table of smaller fixes, same rule
+- A totals table and a volume line (files, insertions/deletions, migrations, new routes)
+
+**Hours are measured wall-clock time, not an estimate of how long the work would have taken by hand.**
+That distinction is the one this convention has got wrong most expensively — see the correction at the
+top of `branch-scopes/pjol/merchant-onboarding-revamp.md`, where work that measured 2.5h was written up
+as 11.5h, a 4.7x inflation, because the figures came from diff size and never from a clock.
+
+**Before writing any hours, pull and follow the `time-accounting` skill.** It lives in the public repo
+<https://github.com/pjol/SKILLS> (browsable at
+<https://github.com/pjol/SKILLS/tree/main/time-accounting>), so no checkout or credentials are needed:
+
+```sh
+BASE=https://raw.githubusercontent.com/pjol/SKILLS/main/time-accounting
+curl -fsSL $BASE/SKILL.md                                    # the method — read this first
+curl -fsSL $BASE/scripts/measure_sittings.py -o /tmp/ms.py
+python3 /tmp/ms.py --project .                               # the measurement
+```
+
+Or clone it whole with `git clone https://github.com/pjol/SKILLS.git`. The script clusters
+session-transcript timestamps into sittings on a 30-minute gap and prints the measured total; the skill
+carries the full method, including what to do when a figure has already been published wrong.
+
+Commit clustering is **not** the method — it measures when work landed, not when it was done, and a
+branch committed days after it was written clusters into the length of the commit session. If the clock
+was not consulted at all, report the volume and say the time was not measured rather than reporting hours.
+
+The measured figures live here, in `branch-scopes/<branch-name>.md`, in the shape described above — the
+skill supplies the number, this folder is where it is recorded. Nothing about time reporting is stored
+outside this folder.
+
+Itemised hours should add up to the measured figure. Rounding every item up to a common floor inflates the
+total — the first draft of round 2 in the example file floored at 0.5h and came out 35% over what the
+commit history showed.
+
+Work spanning more than one sitting is appended as a new `# Round N` section rather than folded into the
+existing numbers, so an earlier estimate is never silently restated.
+
+## Testing
+
+Testing is **human-in-the-loop**: boot the stack with `./scripts/dev-up/dev-up.sh`, use the product, fix what the human reports. There is no automated test suite and none should be added — no unit-test scaffolding, no e2e harness. See `TESTING.md` for the process and `scripts/MAINTENANCE.md` for the convenience-script rules. A few pre-existing `go test` files remain in the backend; they are not part of the process and are not a gate.
+
 ## Additional Systems
 
 ### Affiliate System
 Affiliates (`isAffiliate`) have a separate event/payout flow. `AffiliatScheduler` in `backend/handlers/affiliate_scheduler.go` runs recurring payouts. Routes under `/affiliates/*` are affiliate-guarded.
 
 ### W9 / Compliance
-W9 submissions are created via `POST /w9/submit`. Eligibility and unwrap flows in `backend/handlers/w9.go` and `backend/handlers/unwrap.go`.
+Every payout runs through one choke point (`decidePayout` in `backend/handlers/payout.go`) that compares a person's annual earnings against escalating tiers (defaults 400/500/600 SFLUV): notice, warning, escrow of the crossing payment, then refusal of anything further until a W-9 clears. Filings go through a vendor adapter (`backend/w9provider/`, TaxBandits) — the app mints a hosted form URL, the vendor calls back on `POST /w9/webhook/taxbandits` (HMAC-verified), and a sweeper polls as a fallback. Escrowed money releases automatically when the filing clears. There is no `POST /w9/submit`; the old self-hosted form is gone.
 
 ### Account Abstraction
 Frontend uses Permissionless SDK (`frontend/lib/paymaster/`) for smart accounts and transaction batching via a bundler client.

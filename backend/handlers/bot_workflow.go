@@ -197,14 +197,32 @@ func (s *BotService) totalAllocatedBalance(ctx context.Context) (uint64, error) 
 	}
 
 	workflowAllocated := uint64(0)
+	escrowAllocated := uint64(0)
 	if s.appDb != nil {
 		workflowAllocated, err = s.appDb.AllocatedWorkflowBalance(ctx)
 		if err != nil {
 			return 0, err
 		}
+
+		// Escrowed money is already owed to somebody. It sits in the faucet but
+		// is not ours to commit, so it counts as allocated for every "can we
+		// afford this" decision — creating an event, approving a workflow.
+		//
+		// Only escrowed rows count. Once an escrow window lapses the money
+		// returns to the spendable pool by design, and the resulting back-pay
+		// obligation is funded deliberately by an admin instead.
+		escrowBase, escrowErr := s.appDb.EscrowedTotalBase(ctx)
+		if escrowErr != nil {
+			return 0, escrowErr
+		}
+		if escrowBase != nil && escrowBase.Sign() > 0 {
+			if multiplier, mErr := getTokenMultiplier(); mErr == nil && multiplier != nil && multiplier.Sign() > 0 {
+				escrowAllocated = new(big.Int).Div(escrowBase, multiplier).Uint64()
+			}
+		}
 	}
 
-	return eventAllocated + workflowAllocated, nil
+	return eventAllocated + workflowAllocated + escrowAllocated, nil
 }
 
 func getTokenMultiplier() (*big.Int, error) {

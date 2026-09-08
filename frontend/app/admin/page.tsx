@@ -1,7 +1,8 @@
 "use client"
 
 import React, { useEffect, useMemo, useRef, useState } from "react"
-import { QRCode } from "react-qrcode-logo"
+import { SfluvQRCode, type SfluvQRCodeHandle } from "@/components/ui/sfluv-qr-code"
+import { EditMerchantLocationModal } from "@/components/admin/edit-merchant-location-modal"
 import { buildMerchantSendQrValue } from "@/lib/redeem-link"
 import { usePathname, useRouter, useSearchParams } from "next/navigation"
 import { useApp } from "@/context/AppProvider"
@@ -83,14 +84,14 @@ import {
   WorkflowSeriesClaimRevokeResult,
 } from "@/types/workflow"
 import { Event, EventsStatus } from "@/types/event"
-import { AddEventModal } from "@/components/events/add-event-modal"
-import { EventModal } from "@/components/events/event-modal"
+import { AddVolunteerEventModal, type VolunteerEventDraft } from "@/components/events/add-volunteer-event-modal"
+import { VolunteerEventsManager, type ManagedVolunteerEvent } from "@/components/events/volunteer-events-manager"
 import { DrainFaucetModal } from "@/components/events/drain-faucet-modal"
 import { OrganizationManagement } from "@/components/admin/organization-management"
 import { WorkflowDetailsModal } from "@/components/workflows/workflow-details-modal"
 import { AdminAnalyticsPanel } from "@/components/admin/admin-analytics-panel"
-import EventCard from "@/components/events/event-card"
-import type { W9Submission } from "@/types/w9"
+import { PartnersPanel } from "@/components/admin/partners-panel"
+import type { W9AdminOverview } from "@/types/w9"
 import type { ClientVersionUserCountResponse, UserResponse } from "@/types/server"
 
 // Mock PayPal accounts
@@ -285,6 +286,7 @@ export default function AdminPage() {
       "improvers",
       "workflows",
       "credential-types",
+      "partners",
     ].includes(value)
   }
 
@@ -293,7 +295,7 @@ export default function AdminPage() {
   const [selectedWalletBYUSDBalance, setSelectedWalletBYUSDBalance] = useState<number>(0)
   const [selectedWalletSFLUVBalance, setSelectedWalletSFLUVBalance] = useState<number>(0)
 
-  const [pendingW9Submissions, setPendingW9Submissions] = useState<W9Submission[]>([])
+  const [w9Overview, setW9Overview] = useState<W9AdminOverview | null>(null)
   const [w9Loading, setW9Loading] = useState<boolean>(false)
 
 
@@ -327,7 +329,7 @@ export default function AdminPage() {
   const [merchantStatusDraft, setMerchantStatusDraft] = useState<ApprovalStatus>("pending")
   const [merchantModalSaving, setMerchantModalSaving] = useState<boolean>(false)
   const [merchantModalError, setMerchantModalError] = useState<string>("")
-  const merchantQrRefs = useRef<Map<number, QRCode | null>>(new Map())
+  const merchantQrRefs = useRef<Map<number, SfluvQRCodeHandle | null>>(new Map())
   const [openMerchantQrCardIds, setOpenMerchantQrCardIds] = useState<Set<number>>(new Set())
 
   // QR code generation state
@@ -369,6 +371,7 @@ export default function AdminPage() {
   const [eventsPage, setEventsPage] = useState<number>(readQueryNumber("events_page", 0))
   const [eventsCount, setEventsCount] = useState<number>(readQueryNumber("events_count", 10))
   const [eventsExpired, setEventsExpired] = useState<boolean>(readQueryBoolean("events_expired", false))
+  const [editingVolunteerEvent, setEditingVolunteerEvent] = useState<ManagedVolunteerEvent | null>(null)
   const [eventsModalOpen, setEventsModalOpen] = useState<boolean>(false)
   const [eventDetailModalOpen, setEventDetailModalOpen] = useState<boolean>(false)
   const [deleteEventError, setDeleteEventError] = useState<string | undefined>(undefined)
@@ -383,6 +386,7 @@ export default function AdminPage() {
   // Sidebar badge: organizations with any pending role approval. Loaded once
   // for the badge count; the Organizations tab component owns the full list.
   const [orgPendingCount, setOrgPendingCount] = useState<number>(0)
+  const [pendingEventCount, setPendingEventCount] = useState<number>(0)
   const [selectedAffiliate, setSelectedAffiliate] = useState<Affiliate | null>(null)
   const [affiliateNickname, setAffiliateNickname] = useState<string>("")
   const [affiliateWeeklyBalance, setAffiliateWeeklyBalance] = useState<string>("")
@@ -554,28 +558,88 @@ export default function AdminPage() {
     getUnallocatedBalance()
   }
 
-  const handleAddEvent = async (ev: Event): Promise<boolean> => {
-    const url = "/events"
+  // Volunteer event creation. Times are submitted as wall clock plus the
+  // event's timezone; the backend owns the conversion to an instant so the
+  // three clients cannot each derive it differently.
+  const handleCreateVolunteerEvent = async (draft: VolunteerEventDraft): Promise<string | null> => {
     try {
-      const res = await authFetch(url, {
+      const res = await authFetch("/admin/volunteer-events", {
         method: "POST",
-        body: JSON.stringify(ev)
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(draft),
       })
       if (!res.ok) {
         const message = (await res.text()).trim()
-        throw new Error(message || "Error adding event. Please try again later.")
+        throw new Error(message || "Error creating event. Please try again later.")
       }
+      const created = await res.json().catch(() => null)
+      const id = typeof created?.id === "string" ? created.id.trim() : ""
       setEventsError("")
       await getEvents()
       getUnallocatedBalance()
-      return true
-    }
-    catch (error) {
-      const message = error instanceof Error ? error.message : "Error adding event. Please try again later."
+      if (id === "") {
+        // A 2xx with no id means the event exists but photos cannot be
+        // attached to it. Reporting a plain failure would be wrong.
+        throw new Error(
+          "The event was created, but the server did not return its id, so photos could not be attached. Close this and open the event to add them.",
+        )
+      }
+      return id
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Error creating event. Please try again later."
       setEventsStatus("error")
       setEventsError(message)
-      return false
+      // Rethrown so the modal can show it too: eventsError renders on the page
+      // behind the dialog, where the person who just pressed Create cannot see
+      // it until they close the very form they are waiting on.
+      throw error instanceof Error ? error : new Error(message)
     }
+  }
+
+  /**
+   * Uploads a cover photo before its event exists and returns the staged id.
+   *
+   * Throws rather than returning a flag: the message is shown against the
+   * specific thumbnail that failed, and a silent false would leave the author
+   * guessing which file the modal was unhappy about.
+   */
+  /**
+   * Save an edit. Admins do not queue for their own approval, so this applies
+   * immediately — the server still enforces the faucet rule on any increase.
+   */
+  const saveVolunteerEventEdit = async (eventId: string, draft: VolunteerEventDraft): Promise<string | null> => {
+    const res = await authFetch(`/admin/volunteer-events/${eventId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(draft),
+    })
+    if (!res.ok) {
+      throw new Error((await res.text()).trim() || "Unable to save the changes.")
+    }
+    await getEvents()
+    getUnallocatedBalance()
+    return eventId
+  }
+
+  const stageVolunteerEventPhoto = async (file: File): Promise<string> => {
+    const form = new FormData()
+    form.append("photo", file)
+    const res = await authFetch("/volunteer-events/staged-photos", { method: "POST", body: form })
+    if (!res.ok) {
+      throw new Error((await res.text()).trim() || "Could not upload that photo.")
+    }
+    const staged = await res.json().catch(() => null)
+    const id = typeof staged?.id === "string" ? staged.id.trim() : ""
+    if (id === "") {
+      throw new Error("Could not upload that photo.")
+    }
+    return id
+  }
+
+  /** Drops a staged photo the author removed. Failure is not worth surfacing:
+   *  the server sweeps anything never attached. */
+  const discardVolunteerEventPhoto = async (photoId: string): Promise<void> => {
+    await authFetch(`/volunteer-events/staged-photos/${photoId}`, { method: "DELETE" }).catch(() => undefined)
   }
 
   const getFaucetBalance = async () => {
@@ -658,11 +722,22 @@ export default function AdminPage() {
 
   const filteredMerchants = useMemo(() => {
     const s = merchantSearch.trim().toLowerCase()
-    return authedMapLocations.filter((location) => {
-      const matchesStatus = merchantStatusFilter === "all" || approvalToStatus(location.approval) === merchantStatusFilter
-      const matchesSearch = !s || location.name.toLowerCase().includes(s) || (location.city || "").toLowerCase().includes(s)
-      return matchesStatus && matchesSearch
-    })
+    return authedMapLocations
+      .filter((location) => {
+        const matchesStatus = merchantStatusFilter === "all" || approvalToStatus(location.approval) === merchantStatusFilter
+        const matchesSearch = !s || location.name.toLowerCase().includes(s) || (location.city || "").toLowerCase().includes(s)
+        return matchesStatus && matchesSearch
+      })
+      // Pending first. This tab is a review queue as well as a directory, and
+      // an application waiting on an admin was previously wherever the map
+      // happened to return it — which on a list of every approved shop means
+      // out of sight. Approved and rejected keep their existing order relative
+      // to each other; the sort is stable, so nothing else moves.
+      .sort((a, b) => {
+        const aPending = approvalToStatus(a.approval) === "pending" ? 0 : 1
+        const bPending = approvalToStatus(b.approval) === "pending" ? 0 : 1
+        return aPending - bPending
+      })
   }, [authedMapLocations, merchantStatusFilter, merchantSearch])
 
   const filteredAffiliates = useMemo(() => {
@@ -1852,6 +1927,40 @@ export default function AdminPage() {
       cancelled = true
     }
   }, [authFetch])
+  /*
+   * Events sidebar badge: volunteer events waiting on approval.
+   *
+   * Its own request rather than a count lifted from the events panel, because
+   * that panel only exists while its tab is open — a badge that appears only
+   * once you have already navigated to the thing it is pointing at is no use.
+   * count=1 keeps it to a header read; the total is what is wanted.
+   */
+  useEffect(() => {
+    if (status !== "authenticated") return
+    let cancelled = false
+
+    const loadPendingEvents = async () => {
+      try {
+        const res = await authFetch("/admin/volunteer-events?review_status=pending&count=1")
+        if (!res.ok) return
+        const data = (await res.json()) as { total?: number }
+        if (cancelled) return
+        setPendingEventCount(typeof data.total === "number" ? data.total : 0)
+      } catch {
+        // Non-fatal: the badge just stays where it is.
+      }
+    }
+
+    void loadPendingEvents()
+    // Matches the events panel's own poll, so the badge and the list never
+    // disagree for longer than one interval.
+    const timer = setInterval(loadPendingEvents, 30_000)
+    return () => {
+      cancelled = true
+      clearInterval(timer)
+    }
+  }, [authFetch, status])
+
   useEffect(() => { getProposers(proposerSearch, proposerPage) }, [proposerSearch, proposerPage])
   useEffect(() => { getImprovers(improverSearch, improverPage) }, [improverSearch, improverPage])
   useEffect(() => { getSupervisors(supervisorSearch, supervisorPage) }, [supervisorSearch, supervisorPage])
@@ -1881,7 +1990,7 @@ export default function AdminPage() {
         void getUnallocatedBalance()
         break
       case "w9":
-        void fetchPendingW9Submissions()
+        void fetchW9Overview()
         break
       case "affiliates":
         void getAffiliates(affiliateSearch, affiliatePage)
@@ -1929,20 +2038,26 @@ export default function AdminPage() {
     issuerRequestPage,
   ])
 
-  const fetchPendingW9Submissions = async () => {
+  // Tax & Escrow. No approve or reject any more: the vendor validates the form
+  // and holds the tax identification number, so an admin eyeballing a wallet
+  // address added delay without adding assurance.
+  //
+  // What an admin does now is the part only a human can — approve back pay for
+  // money whose escrow window lapsed, after topping the faucet up if it does
+  // not cover what is owed.
+  const fetchW9Overview = async () => {
     if (!user?.isAdmin) return
     setW9Loading(true)
     try {
-      const res = await authFetch("/admin/w9/pending")
+      const res = await authFetch("/admin/w9/overview")
       if (res.status !== 200) {
-        throw new Error("failed to fetch w9 submissions")
+        throw new Error("failed to fetch tax overview")
       }
-      const data = await res.json()
-      setPendingW9Submissions(data.submissions || [])
+      setW9Overview(await res.json())
     } catch {
       toast({
         title: "Error",
-        description: "Failed to load W9 submissions.",
+        description: "Failed to load the tax and escrow overview.",
         variant: "destructive",
       })
     } finally {
@@ -1952,57 +2067,9 @@ export default function AdminPage() {
 
   useEffect(() => {
     if (status === "authenticated" && user?.isAdmin) {
-      fetchPendingW9Submissions()
+      void fetchW9Overview()
     }
   }, [status, user?.isAdmin])
-
-  const handleApproveW9 = async (id: number) => {
-    try {
-      const res = await authFetch("/admin/w9/approve", {
-        method: "PUT",
-        body: JSON.stringify({ id }),
-      })
-      if (res.status !== 200) {
-        throw new Error("failed to approve w9")
-      }
-      setPendingW9Submissions((prev) => prev.filter((submission) => submission.id !== id))
-      toast({
-        title: "W9 Approved",
-        description: "The W9 submission has been approved.",
-      })
-    } catch {
-      toast({
-        title: "Approval Failed",
-        description: "Failed to approve W9 submission. Please try again.",
-        variant: "destructive",
-      })
-    }
-  }
-
-  const handleRejectW9 = async (id: number) => {
-    const confirmed = window.confirm("Reject this W9 submission? The user will need to resubmit.")
-    if (!confirmed) return
-    try {
-      const res = await authFetch("/admin/w9/reject", {
-        method: "PUT",
-        body: JSON.stringify({ id }),
-      })
-      if (res.status !== 200) {
-        throw new Error("failed to reject w9")
-      }
-      setPendingW9Submissions((prev) => prev.filter((submission) => submission.id !== id))
-      toast({
-        title: "W9 Rejected",
-        description: "The W9 submission has been rejected.",
-      })
-    } catch {
-      toast({
-        title: "Rejection Failed",
-        description: "Failed to reject W9 submission. Please try again.",
-        variant: "destructive",
-      })
-    }
-  }
 
   useEffect(() => {
       setPendingLocations(authedMapLocations.filter((location) => location.approval === null))
@@ -2315,6 +2382,26 @@ export default function AdminPage() {
     setisLocationReviewModalOpen(true)
   }
 
+  const [editMerchantModalOpen, setEditMerchantModalOpen] = useState(false)
+
+  // Merchant listings change under the panel — the nightly hours sync, another
+  // admin, a merchant editing their own record. Poll while the tab is visible so
+  // the list does not go stale, and skip it while a modal is open so the data
+  // being edited cannot shift underneath.
+  useEffect(() => {
+    const busy = () => isLocationReviewModalOpen || editMerchantModalOpen
+    const tick = () => {
+      if (document.visibilityState !== "visible" || busy()) return
+      void getAuthedMapLocations()
+    }
+    const interval = window.setInterval(tick, 60000)
+    document.addEventListener("visibilitychange", tick)
+    return () => {
+      window.clearInterval(interval)
+      document.removeEventListener("visibilitychange", tick)
+    }
+  }, [isLocationReviewModalOpen, editMerchantModalOpen, getAuthedMapLocations])
+
   const saveMerchantModal = async () => {
     if (!selectedLocationForReview) return
 
@@ -2355,13 +2442,15 @@ export default function AdminPage() {
   // download a payment QR for every storefront the merchant operates.
   const merchantOwnerLocations: AuthedLocation[] = useMemo(() => {
     if (!selectedLocationForReview) return []
-    const ownerId = (selectedLocationForReview as AuthedLocation).owner_id
-    if (!ownerId) return [selectedLocationForReview as AuthedLocation]
-    const sameOwner = authedMapLocations.filter(
-      (location) => location.owner_id === ownerId,
-    )
-    return sameOwner.length > 0 ? sameOwner : [selectedLocationForReview as AuthedLocation]
-  }, [selectedLocationForReview, authedMapLocations])
+    // Only the location under review, and only once it is approved. A pending
+    // listing's wallet is not settled yet, so a QR for it is a promise nobody
+    // should print. And the owner-wide list this used to build matched rows by
+    // owner_id — a field these rows do not always carry — so undefined ===
+    // undefined swept every ownerless location in the city into one modal.
+    // One location, one wallet, one QR.
+    if ((selectedLocationForReview as AuthedLocation).approval !== true) return []
+    return [selectedLocationForReview as AuthedLocation]
+  }, [selectedLocationForReview])
 
   const buildMerchantQrForLocation = (location: AuthedLocation): string => {
     const payTo = (location.pay_to_address || "").trim()
@@ -2390,7 +2479,7 @@ export default function AdminPage() {
     const dd = String(now.getDate()).padStart(2, "0")
     const yyyy = String(now.getFullYear())
     const qrName = `${snakeName}_${mm}_${dd}_${yyyy}`
-    ref.download("png", qrName)
+    void ref.download("png", qrName)
   }
 
   const toggleMerchantQrCard = (locationId: number, open: boolean) => {
@@ -2586,6 +2675,11 @@ export default function AdminPage() {
           <TabsList className="h-fit w-full flex-col items-stretch gap-2 rounded-xl bg-secondary p-3 lg:sticky lg:top-4 lg:min-w-[280px]">
             <TabsTrigger value="events" className="w-full justify-between px-3 py-2">
               <span>Events</span>
+              {pendingEventCount > 0 && (
+                <Badge variant="destructive" className="h-5 min-w-5 rounded-full px-1.5 text-xs">
+                  {pendingEventCount}
+                </Badge>
+              )}
             </TabsTrigger>
             <TabsTrigger value="users" className="w-full justify-between px-3 py-2">
               <span>Users</span>
@@ -2595,10 +2689,10 @@ export default function AdminPage() {
               <BarChart3 className="h-4 w-4 text-muted-foreground" />
             </TabsTrigger>
             <TabsTrigger value="w9" className="w-full justify-between px-3 py-2">
-              <span>W9 Approvals</span>
-              {pendingW9Submissions.length > 0 && (
+              <span>Tax & Escrow</span>
+              {(w9Overview?.rows?.length ?? 0) > 0 && (
                 <Badge variant="destructive" className="h-5 min-w-5 rounded-full px-1.5 text-xs">
-                  {pendingW9Submissions.length}
+                  {w9Overview?.rows?.length ?? 0}
                 </Badge>
               )}
             </TabsTrigger>
@@ -2636,12 +2730,19 @@ export default function AdminPage() {
             <TabsTrigger value="credential-types" className="w-full justify-between px-3 py-2">
               <span>Credential Types</span>
             </TabsTrigger>
+            <TabsTrigger value="partners" className="w-full justify-between px-3 py-2">
+              <span>Partners</span>
+            </TabsTrigger>
           </TabsList>
 
           <div className="min-w-0">
 
         <TabsContent value="analytics" className="space-y-6">
           <AdminAnalyticsPanel />
+        </TabsContent>
+
+        <TabsContent value="partners" className="space-y-6">
+          <PartnersPanel />
         </TabsContent>
 
         <TabsContent value="tokens" className="space-y-6">
@@ -3475,7 +3576,15 @@ export default function AdminPage() {
                         <div className="flex flex-col items-start gap-4 sm:flex-row sm:justify-between">
                           <div className="flex min-w-0 flex-1 items-start gap-4">
                             <Avatar className="h-12 w-12">
-                              <AvatarImage src={location.image_url || "/placeholder.svg"} alt={location.name} />
+                              {/* The merchant's own uploads, in the order that
+                                  identifies a listing at avatar size: the icon
+                                  is a mark chosen to be legible this small, the
+                                  photo is the fallback. image_url is not used —
+                                  it holds a Google Maps *page* link captured at
+                                  creation, so it never resolves to an image and
+                                  this avatar has always fallen through to the
+                                  placeholder. */}
+                              <AvatarImage src={location.icon_url || location.photo_url || "/placeholder.svg"} alt={location.name} />
                               <AvatarFallback>
                                 {location.name
                                   .split(" ")
@@ -3539,10 +3648,9 @@ export default function AdminPage() {
               </CardTitle>
               <CardDescription className="text-base mt-2">Review and approve W9 submissions</CardDescription>
               <div className="mt-3 flex flex-wrap items-center gap-2">
-                <Badge variant="destructive" className="text-sm px-3 py-1">
-                  {pendingW9Submissions.length} Pending
+                <Badge variant="secondary" className="text-sm px-3 py-1">
+                  {w9Overview?.people_with_holds ?? 0} with money held
                 </Badge>
-                <span className="text-sm text-muted-foreground">submissions awaiting review</span>
               </div>
             </CardHeader>
             <CardContent>
@@ -3550,56 +3658,82 @@ export default function AdminPage() {
                 <div className="flex items-center justify-center py-8">
                   <Loader2 className="h-6 w-6 animate-spin" />
                 </div>
-              ) : pendingW9Submissions.length === 0 ? (
-                <div className="text-center py-8">
-                  <FileCheck className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-                  <h3 className="text-lg font-medium">No Pending W9 Submissions</h3>
-                  <p className="text-muted-foreground">All W9 submissions have been processed.</p>
-                </div>
               ) : (
-                <div className="space-y-4">
-                  {pendingW9Submissions.map((submission) => (
-                    <Card key={submission.id} className="border-l-4 border-l-yellow-500">
-                      <CardContent className="p-4">
-                        <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
-                          <div className="flex-1 space-y-2">
-                            <div>
-                              <h4 className="font-semibold">Wallet</h4>
-                              <p className="text-sm text-muted-foreground break-all">{submission.wallet_address}</p>
-                            </div>
-                            <div className="grid gap-1 text-sm">
-                              <div className="flex items-center gap-2">
-                                <Mail className="h-3 w-3" />
-                                <span className="break-all">{submission.email}</span>
+                <div className="space-y-6">
+                  {/* Escrow is reserved and must not be allocated elsewhere, so
+                      it is subtracted here. There is no coverage shortfall to
+                      report any more: a hold can never accumulate, because the
+                      payment after one is refused rather than held too. */}
+                  <div className="rounded-lg border p-4 font-mono text-sm space-y-1">
+                    <div className="flex justify-between">
+                      <span>Faucet on-chain</span>
+                      <span>{w9Overview?.faucet_sfluv ?? "0"} SFLUV</span>
+                    </div>
+                    <div className="flex justify-between text-muted-foreground">
+                      <span>&minus; allocated</span>
+                      <span>{w9Overview?.allocated_sfluv ?? "0"}</span>
+                    </div>
+                    <div className="flex justify-between text-muted-foreground">
+                      <span>&minus; escrowed (reserved)</span>
+                      <span>{w9Overview?.escrowed_sfluv ?? "0"}</span>
+                    </div>
+                    <div className="flex justify-between border-t pt-1 font-semibold">
+                      <span>Available to allocate</span>
+                      <span>{w9Overview?.available_sfluv ?? "0"} SFLUV</span>
+                    </div>
+                    {(w9Overview?.oldest_escrow_age_days ?? 0) > 0 && (
+                      <div className="flex justify-between text-muted-foreground">
+                        <span>Oldest hold</span>
+                        <span>{w9Overview?.oldest_escrow_age_days} days</span>
+                      </div>
+                    )}
+                  </div>
+
+                  {(w9Overview?.rows?.length ?? 0) === 0 ? (
+                    <div className="text-center py-8 text-muted-foreground">
+                      Nobody has money held right now.
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {w9Overview?.rows?.map((row) => (
+                        <Card key={`${row.user_id}-${row.tax_year}`}>
+                          <CardContent className="p-4 space-y-2">
+                            <div className="flex flex-wrap items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                <p className="font-medium truncate">
+                                  {row.contact_name || row.contact_email || row.user_id}
+                                </p>
+                                <p className="text-xs text-muted-foreground font-mono break-all">
+                                  {row.user_id}
+                                </p>
                               </div>
-                              {submission.user_contact_email && submission.user_contact_email !== submission.email && (
-                                <div className="flex items-center gap-2 text-yellow-700">
-                                  <AlertTriangle className="h-3 w-3" />
-                                  <span className="text-xs">
-                                    Email on user profile differs: {submission.user_contact_email}
-                                  </span>
-                                </div>
-                              )}
-                              <div className="flex items-center gap-2">
-                                <CalendarIcon className="h-3 w-3" />
-                                <span>Year {submission.year}</span>
+                              <Badge variant={row.filing_status === "completed" ? "secondary" : "outline"}>
+                                {row.filing_status.replace(/_/g, " ")}
+                              </Badge>
+                            </div>
+                            <div className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-3">
+                              <div>
+                                <p className="text-xs text-muted-foreground">Earned {row.tax_year}</p>
+                                <p>{row.earned_sfluv}</p>
+                              </div>
+                              <div>
+                                <p className="text-xs text-muted-foreground">Held</p>
+                                <p>{row.escrowed_sfluv}</p>
+                              </div>
+                              <div>
+                                <p className="text-xs text-muted-foreground">Oldest hold</p>
+                                <p>
+                                  {row.oldest_escrow_at
+                                    ? new Date(row.oldest_escrow_at).toLocaleDateString()
+                                    : "\u2014"}
+                                </p>
                               </div>
                             </div>
-                          </div>
-                          <div className="flex w-full flex-wrap gap-2 md:w-auto md:justify-end">
-                            <Button className="w-full sm:w-auto" size="sm" onClick={() => handleApproveW9(submission.id)}>
-                              <Check className="h-4 w-4" />
-                              Approve
-                            </Button>
-                            <Button className="w-full sm:w-auto" size="sm" variant="outline" onClick={() => handleRejectW9(submission.id)}>
-                              <X className="h-4 w-4" />
-                              Reject
-                            </Button>
-                          </div>
-                        </div>
-                      </CardContent>
-                    </Card>
-                  ))}
+                          </CardContent>
+                        </Card>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
             </CardContent>
@@ -5062,113 +5196,67 @@ export default function AdminPage() {
         </TabsContent>
 
         <TabsContent value="events" className="space-y-6">
+          <VolunteerEventsManager
+            basePath="/admin/volunteer-events"
+            canReview
+            pendingCount={pendingEventCount}
+            onEditEvent={(event) => setEditingVolunteerEvent(event)}
+            /*
+             * The faucet figure takes the subtitle's place. Rewards are
+             * reserved from it at approval, so it is the number an admin needs
+             * while they are looking at this queue — it used to sit in a card
+             * of its own below the list, which is the last place anyone
+             * deciding whether to approve an event would look.
+             */
+            description={
+              <span className="flex flex-wrap items-center gap-2">
+                <Badge
+                  className="cursor-pointer text-xs sm:text-sm px-3 py-1"
+                  onClick={toggleDrainFaucetModal}
+                >
+                  {unallocatedBalance !== undefined
+                    ? `${unallocatedBalance} / ${faucetBalance} SFLuv Available`
+                    : `${faucetBalance} SFLuv`}
+                </Badge>
+                <span className="text-xs sm:text-sm text-muted-foreground">unallocated in faucet</span>
+              </span>
+            }
+            action={<Button onClick={toggleNewEventModal}>+ New Event</Button>}
+          />
           {eventsError != "" && (
             <div className="flex items-center gap-2 text-red-600 text-sm p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
               <AlertTriangle className="h-4 w-4 flex-shrink-0" />
               <span>{eventsError}</span>
             </div>
           )}
-          <AddEventModal
+          {/* Editing reuses the create form, so the two can never diverge. */}
+          <AddVolunteerEventModal
+            key={editingVolunteerEvent?.id ?? "new"}
+            open={editingVolunteerEvent !== null}
+            onOpenChange={(next) => !next && setEditingVolunteerEvent(null)}
+            editEvent={editingVolunteerEvent}
+            createEvent={(draft) => saveVolunteerEventEdit(editingVolunteerEvent?.id ?? "", draft)}
+            stagePhoto={stageVolunteerEventPhoto}
+            discardPhoto={discardVolunteerEventPhoto}
+            unallocatedBalance={unallocatedBalance !== undefined ? Number(unallocatedBalance) : 0}
+            submitLabel="Save changes"
+          />
+
+          <AddVolunteerEventModal
             open={eventsModalOpen}
             onOpenChange={toggleNewEventModal}
-            handleAddEvent={handleAddEvent}
-            addEventError={eventsError}
-            currentBalance={faucetBalance == "-" ? 0 : Number(faucetBalance)}
-          />
-          <EventModal
-            event={eventDetailsEvent}
-            open={eventDetailModalOpen}
-            onOpenChange={toggleEventDetailModal}
-            handleDeleteEvent={handleDeleteEvent}
-            deleteEventError={deleteEventError}
-            ownerLabel={eventDetailsEvent ? getOwnerLabel(eventDetailsEvent.owner) : undefined}
+            createEvent={handleCreateVolunteerEvent}
+            stagePhoto={stageVolunteerEventPhoto}
+            discardPhoto={discardVolunteerEventPhoto}
+            unallocatedBalance={unallocatedBalance !== undefined ? Number(unallocatedBalance) : 0}
           />
           <DrainFaucetModal
             open={drainFaucetModalOpen}
             onOpenChange={toggleDrainFaucetModal}
             handleDrainFaucet={handleDrainFaucet}
             drainFaucetError={drainFaucetError}
+            faucetBalance={faucetBalance === "-" ? undefined : String(faucetBalance)}
           />
-          <Card>
-            <CardHeader className="pb-6 flex flex-col gap-4 md:grid md:grid-cols-[2fr,1fr]">
-              <div>
-                <CardTitle className="flex items-center gap-2 text-xl">
-                  <CalendarIcon className="h-6 w-6" />
-                  Volunteer Events
-                </CardTitle>
-                <CardDescription className="text-base mt-2">Create and Manage Volunteer Events</CardDescription>
-                <div className="flex flex-wrap items-center gap-2 mt-3">
-                  <Badge className="text-xs sm:text-sm px-3 py-1 cursor-pointer" onClick={toggleDrainFaucetModal}>
-                    {unallocatedBalance !== undefined
-                      ? `${unallocatedBalance} / ${faucetBalance} SFLuv Available`
-                      : `${faucetBalance} SFLuv`}
-                  </Badge>
-                  <span className="text-xs sm:text-sm text-muted-foreground">in faucet</span>
-                </div>
-                <div className="flex flex-col gap-2 mt-4 sm:flex-row sm:flex-wrap sm:items-center">
-                  <Label className="text-xs text-muted-foreground">Filter by owner</Label>
-                  <Select value={eventsOwnerFilter} onValueChange={setEventsOwnerFilter}>
-                    <SelectTrigger className="w-full sm:w-[220px]">
-                      <SelectValue placeholder="All owners" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">All owners</SelectItem>
-                      {ownerOptions.map((option) => (
-                        <SelectItem key={option.value} value={option.value}>
-                          {option.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-              <div className="text-left md:text-right">
-                <Button onClick={toggleNewEventModal} className="w-full md:w-auto">
-                  + New Event
-                </Button>
-              </div>
-            </CardHeader>
-            <CardContent>
-              {filteredEvents.length === 0 ? (
-                <div className="text-center py-8">
-                  <Leaf className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-                  <h3 className="text-lg font-medium">No {eventsExpired ? "" : "Active"} Events</h3>
-                  <p className="text-muted-foreground">Create a new event to see it here.</p>
-                </div>
-              ) : (
-                <div className="space-y-4">
-                  {filteredEvents.map((event: Event) => (
-                    <EventCard
-                      key={event.id}
-                      event={event}
-                      toggleEventModal={toggleEventDetailModal}
-                      setEventModalEvent={setEventDetailsEvent}
-                      ownerLabel={getOwnerLabel(event.owner)}
-                    />
-                  ))}
-                </div>
-              )}
-              <div className="flex items-center justify-between pt-4">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setEventsPage((p) => Math.max(0, p - 1))}
-                  disabled={!canLoadPreviousEventsPage}
-                >
-                  <ChevronLeft className="h-4 w-4" />Previous
-                </Button>
-                <span className="text-sm text-muted-foreground">Page {eventsPage + 1}</span>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setEventsPage((p) => p + 1)}
-                  disabled={!canLoadNextEventsPage}
-                >
-                  Next<ChevronRight className="h-4 w-4" />
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
         </TabsContent>
 
         <TabsContent value="qrcodes" className="space-y-6">
@@ -5401,6 +5489,14 @@ export default function AdminPage() {
         </div>
       </Tabs>
 
+      <EditMerchantLocationModal
+        open={editMerchantModalOpen}
+        onOpenChange={setEditMerchantModalOpen}
+        location={selectedLocationForReview as AuthedLocation | null}
+        knownTypes={authedMapLocations.map((entry: AuthedLocation) => entry.type)}
+        onSaved={getAuthedMapLocations}
+      />
+
       {/* Location Review Modal */}
       <Dialog open={isLocationReviewModalOpen} onOpenChange={setisLocationReviewModalOpen}>
         <DialogContent className="w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] max-h-[90vh] overflow-y-auto p-4 sm:max-w-[900px] sm:p-6">
@@ -5413,6 +5509,20 @@ export default function AdminPage() {
 
           {selectedLocationForReview && (
             <div className="space-y-6 py-4">
+              <div className="flex flex-col gap-2 rounded-lg border p-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="text-sm">
+                  <p className="font-medium">Listing details</p>
+                  <p className="text-muted-foreground">Name, type, address, hours and contact details.</p>
+                </div>
+                <Button
+                  variant="outline"
+                  className="w-full sm:w-auto"
+                  onClick={() => setEditMerchantModalOpen(true)}
+                >
+                  Edit details
+                </Button>
+              </div>
+
               <div className="space-y-2">
                 <Label>Change Approval Status</Label>
                 <Select
@@ -5472,21 +5582,40 @@ export default function AdminPage() {
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
-                    <Label className="text-sm font-medium text-muted-foreground">Primary Contact Name</Label>
-                    <p className="text-sm text-foreground mt-1 p-2 bg-muted rounded">{selectedLocationForReview.contact_firstname + " " + selectedLocationForReview.contact_lastname}</p>
-                  </div>
-
-                  <div>
-                    <Label className="text-sm font-medium text-muted-foreground">Admin Email Address</Label>
+                    <Label className="text-sm font-medium text-muted-foreground">Contact Name</Label>
+                    {/* contact_name is the form's single field; the first/last
+                        pair is what a listing filled in before it carries. */}
                     <p className="text-sm text-foreground mt-1 p-2 bg-muted rounded">
-                      {selectedLocationForReview.admin_email}
+                      {selectedLocationForReview.contact_name ||
+                        [selectedLocationForReview.contact_firstname, selectedLocationForReview.contact_lastname]
+                          .filter(Boolean)
+                          .join(" ") ||
+                        "—"}
                     </p>
                   </div>
 
                   <div>
-                    <Label className="text-sm font-medium text-muted-foreground">Admin Phone Number</Label>
+                    <Label className="text-sm font-medium text-muted-foreground">Contact Email</Label>
                     <p className="text-sm text-foreground mt-1 p-2 bg-muted rounded">
-                      {selectedLocationForReview.admin_phone}
+                      {selectedLocationForReview.admin_email || "—"}
+                    </p>
+                  </div>
+
+                  <div>
+                    <Label className="text-sm font-medium text-muted-foreground">Contact Phone</Label>
+                    <p className="text-sm text-foreground mt-1 p-2 bg-muted rounded">
+                      {selectedLocationForReview.admin_phone ||
+                        selectedLocationForReview.contact_phone ||
+                        "—"}
+                    </p>
+                  </div>
+
+                  <div>
+                    <Label className="text-sm font-medium text-muted-foreground">Heard About SFLuv Via</Label>
+                    <p className="text-sm text-foreground mt-1 p-2 bg-muted rounded">
+                      {selectedLocationForReview.referral_source ||
+                        selectedLocationForReview.reference ||
+                        "—"}
                     </p>
                   </div>
 
@@ -5494,6 +5623,50 @@ export default function AdminPage() {
                     <Label className="text-sm font-medium text-muted-foreground">Website</Label>
                     <p className="text-sm text-foreground mt-1 p-2 bg-muted rounded">
                      {selectedLocationForReview.website}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Payment System Section — the third step of the Location
+                  Approval Form, and the reason it is collected: this is what an
+                  admin reads before walking the merchant through setup.
+
+                  "Accepts tips" is not only a note. It decides whether approving
+                  this location mints it a tipping wallet, so it is spelled out
+                  rather than shown as a bare yes/no. */}
+              <div className="space-y-4">
+                <h3 className="text-lg font-semibold text-foreground border-b pb-2">Payment System</h3>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <Label className="text-sm font-medium text-muted-foreground">POS Type</Label>
+                    <p className="text-sm text-foreground mt-1 p-2 bg-muted rounded">
+                      {selectedLocationForReview.pos_system || "Not answered"}
+                    </p>
+                  </div>
+
+                  <div>
+                    <Label className="text-sm font-medium text-muted-foreground">Accepts Tips</Label>
+                    <p className="text-sm text-foreground mt-1 p-2 bg-muted rounded">
+                      {selectedLocationForReview.accepts_tips === true
+                        ? "Yes — a tipping wallet is created on approval"
+                        : selectedLocationForReview.accepts_tips === false
+                          ? "No — no tipping wallet"
+                          : "Not answered (submitted before the form asked)"}
+                    </p>
+                  </div>
+
+                  <div>
+                    <Label className="text-sm font-medium text-muted-foreground">
+                      Tablet or Phone Available to Staff
+                    </Label>
+                    <p className="text-sm text-foreground mt-1 p-2 bg-muted rounded">
+                      {selectedLocationForReview.has_staff_tablet === true
+                        ? "Yes"
+                        : selectedLocationForReview.has_staff_tablet === false
+                          ? "No"
+                          : "Not answered (submitted before the form asked)"}
                     </p>
                   </div>
                 </div>
@@ -5564,36 +5737,17 @@ export default function AdminPage() {
                               <CollapsibleContent>
                                 <CardContent className="border-t bg-gradient-to-b from-primary/5 via-background to-background p-4 sm:p-6">
                                   <div className="text-center space-y-3 sm:space-y-4">
-                                    <div className="mx-auto my-2 w-full max-w-[280px] rounded-2xl border border-border/70 bg-white p-3 shadow-sm sm:my-3 sm:p-4">
-                                      <QRCode
-                                        ref={(node) => {
-                                          if (node) {
-                                            merchantQrRefs.current.set(location.id, node)
-                                          } else {
-                                            merchantQrRefs.current.delete(location.id)
-                                          }
-                                        }}
-                                        value={qrValue}
-                                        style={{
-                                          display: "block",
-                                          width: "100%",
-                                          height: "100%",
-                                          aspectRatio: "1 / 1",
-                                          borderRadius: "12px",
-                                        }}
-                                        size={600}
-                                        logoImage={"/icon.png"}
-                                        removeQrCodeBehindLogo={true}
-                                        logoPadding={2}
-                                        logoPaddingStyle="circle"
-                                        logoWidth={150}
-                                        qrStyle="dots"
-                                        eyeRadius={20}
-                                        eyeColor={"#eb6c6c"}
-                                        ecLevel="M"
-                                        quietZone={20}
-                                      />
-                                    </div>
+                                    <SfluvQRCode
+                                      ref={(node) => {
+                                        if (node) {
+                                          merchantQrRefs.current.set(location.id, node)
+                                        } else {
+                                          merchantQrRefs.current.delete(location.id)
+                                        }
+                                      }}
+                                      value={qrValue}
+                                      className="mx-auto my-2 w-full max-w-[280px] sm:my-3"
+                                    />
                                     <p className="text-sm text-muted-foreground">
                                       Scan this QR code to send {tokenSymbol} to {location.name}
                                       {hasTip ? " (with tipping enabled)" : ""}.

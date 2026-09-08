@@ -28,6 +28,14 @@ export interface ClientVersionUserCountResponse {
   unknown: boolean;
 }
 
+/**
+ * What somebody said they were signing up as, answered once at the first
+ * privacy-policy acceptance and never again. Not the same question as
+ * `is_merchant`, which is recomputed from approved listings and so says a shop
+ * of theirs is live rather than which app they thought they were joining.
+ */
+export type AccountType = "regular" | "merchant";
+
 export interface UserResponse {
   id: string;
   is_admin: boolean;
@@ -51,6 +59,13 @@ export interface UserResponse {
   mailing_list_opt_in: boolean;
   mailing_list_opt_in_at?: string | null;
   mailing_list_policy_version: string;
+  account_type: AccountType;
+  /** Null when nobody ever put the question — which is what a mobile signup is. */
+  account_type_selected_at?: string | null;
+  /** Stamped once the web app has offered such an account the merchant option. */
+  web_merchant_prompt_seen_at?: string | null;
+  /** Stamped when a merchant lists their first shop; null until then. */
+  merchant_onboarding_completed_at?: string | null;
   client_devices?: ClientVersionDeviceResponse[];
 }
 
@@ -63,6 +78,16 @@ export interface UserPolicyStatusResponse {
   mailing_list_opt_in: boolean;
   mailing_list_opt_in_at?: string | null;
   mailing_list_policy_version: string;
+  // Carried on policy status as well as on the profile because this is the
+  // first thing a new account gets back — the profile is withheld until the
+  // privacy policy is accepted, so it is the only place a client can learn it
+  // has a merchant on its hands.
+  account_type: AccountType;
+  /** Null when nobody ever put the question — which is what a mobile signup is. */
+  account_type_selected_at?: string | null;
+  /** Stamped once the web app has offered such an account the merchant option. */
+  web_merchant_prompt_seen_at?: string | null;
+  merchant_onboarding_completed_at?: string | null;
 }
 
 export interface LocationResponse {

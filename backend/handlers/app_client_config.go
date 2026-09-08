@@ -1,7 +1,9 @@
 package handlers
 
 import (
+	"encoding/json"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -55,6 +57,52 @@ func clientVersionRequiresUpdate(version string, minimum string) bool {
 	return false
 }
 
+// serverFeatureFlags are feature toggles owned by this backend rather than by
+// the upstream community config. They are overlaid onto the served config so
+// clients can dark-launch a surface without shipping a new build.
+//
+// Absent env ⇒ false, which is the default both app clients rely on: an old
+// build or a not-yet-deployed backend must never light up a tab that would 404.
+func serverFeatureFlags() map[string]any {
+	return map[string]any{
+		"volunteer_events_enabled": strings.EqualFold(strings.TrimSpace(os.Getenv("VOLUNTEER_EVENTS_ENABLED")), "true"),
+		// unwrap_enabled gates the SFLUV → backing-asset unwrap affordance. It is
+		// necessary but not sufficient: unwrapAndBridge aborts unless the calling
+		// wallet itself holds REDEEMER_ROLE on the token, which today is held by
+		// the owner's smart wallet and is only being extended to location wallets
+		// separately. Turning the flag on where the role is missing surfaces a
+		// button that fails at the last step, so it stays off until the grant is
+		// confirmed on the chain the backend is pointed at.
+		"unwrap_enabled": strings.EqualFold(strings.TrimSpace(os.Getenv("UNWRAP_ENABLED")), "true"),
+	}
+}
+
+// withServerFeatureFlags merges serverFeatureFlags into the config's "features"
+// object, preserving everything the upstream config already provides. On any
+// decode problem it returns the raw config untouched — a malformed overlay must
+// never take down /config, which every client polls at startup.
+func withServerFeatureFlags(raw []byte) []byte {
+	var config map[string]any
+	if err := json.Unmarshal(raw, &config); err != nil {
+		return raw
+	}
+
+	features, ok := config["features"].(map[string]any)
+	if !ok || features == nil {
+		features = map[string]any{}
+	}
+	for key, value := range serverFeatureFlags() {
+		features[key] = value
+	}
+	config["features"] = features
+
+	merged, err := json.Marshal(config)
+	if err != nil {
+		return raw
+	}
+	return merged
+}
+
 func (a *AppService) GetClientConfig(w http.ResponseWriter, r *http.Request) {
 	if a == nil || a.clientConfig == nil {
 		http.Error(w, "client config is not loaded", http.StatusServiceUnavailable)
@@ -64,7 +112,7 @@ func (a *AppService) GetClientConfig(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "public, max-age=30")
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(a.clientConfig.RawJSON())
+	_, _ = w.Write(withServerFeatureFlags(a.clientConfig.RawJSON()))
 }
 
 func (a *AppService) GetClientVersion(w http.ResponseWriter, r *http.Request) {

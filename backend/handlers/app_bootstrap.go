@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 
+	"github.com/SFLuv/app/backend/structs"
 	"github.com/SFLuv/app/backend/utils"
 )
 
@@ -14,6 +15,12 @@ import (
 // nested payload shapes are exactly what the standalone endpoints return and
 // stay in lockstep with them. The standalone endpoints are unchanged, so
 // existing clients are unaffected; this is purely an additive fast path.
+//
+// The policy status block is the only part a brand-new account gets: the
+// profile is withheld until the privacy policy is accepted. That is why
+// account_type and the merchant onboarding timestamp ride along in it — a
+// client deciding whether to send somebody into merchant onboarding has to be
+// able to answer that on this response alone.
 func (a *AppService) GetUserBootstrap(w http.ResponseWriter, r *http.Request) {
 	userDid := utils.GetDid(r)
 	if userDid == nil {
@@ -50,6 +57,19 @@ func (a *AppService) GetUserBootstrap(w http.ResponseWriter, r *http.Request) {
 	response := map[string]any{
 		"policy_status_code": policyCode,
 		"delete_status_code": deleteCode,
+	}
+
+	// The router's read-only gate, answered before the client makes a request
+	// that trips it. Derived here rather than left to the client to work out
+	// from account_type and the onboarding stamp: those say what the account
+	// is, this says what the backend is currently doing about it, and the kill
+	// switch can make those two different.
+	merchantOnboardingRequired := a.MerchantOnboardingRequired(r.Context(), *userDid)
+	response["merchant_onboarding_required"] = merchantOnboardingRequired
+	if merchantOnboardingRequired {
+		// The same string the 403 carries in X-SFLUV-Auth-Reason, so first
+		// paint and a refused write are keyed off one value.
+		response["auth_gate_reason"] = structs.AuthReasonMerchantOnboardingRequired
 	}
 	if policyCode == http.StatusOK && policyBody != nil {
 		response["policy_status"] = policyBody

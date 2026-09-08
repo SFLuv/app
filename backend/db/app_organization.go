@@ -1031,3 +1031,119 @@ func (a *AppDB) AdminSetOrganizationSuperadminByEmail(ctx context.Context, orgId
 		return err
 	})
 }
+
+// GetOrganizationsByIds batch-loads organizations for cross-database stitching
+// (bot-database events carry an organization_id but cannot join to it).
+func (a *AppDB) GetOrganizationsByIds(ctx context.Context, ids []int64) (map[int64]*structs.Organization, error) {
+	result := map[int64]*structs.Organization{}
+	if len(ids) == 0 {
+		return result, nil
+	}
+
+	rows, err := a.db.Query(ctx, `
+		SELECT id, name, logo, created_at, updated_at
+		FROM organizations
+		WHERE id = ANY($1);
+	`, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		org := &structs.Organization{}
+		if err := rows.Scan(&org.Id, &org.Name, &org.Logo, &org.CreatedAt, &org.UpdatedAt); err != nil {
+			return nil, err
+		}
+		result[org.Id] = org
+	}
+
+	return result, rows.Err()
+}
+
+// GetOrganizationLogo returns just an organization's stored logo, used by the
+// public logo endpoint so clients consume a URL instead of an inline data URI.
+//
+// Callers on the public path must pass the set of organizations that actually
+// have published events (see GetPublicOrganizationLogo); this raw accessor is
+// for management surfaces.
+func (a *AppDB) GetOrganizationLogo(ctx context.Context, orgId int64) (string, error) {
+	var logo *string
+	err := a.db.QueryRow(ctx, `SELECT logo FROM organizations WHERE id = $1;`, orgId).Scan(&logo)
+	if err != nil {
+		return "", err
+	}
+	if logo == nil {
+		return "", nil
+	}
+	return *logo, nil
+}
+
+// OrganizationMemberIdentity is the minimum needed to render "who made this"
+// and to decide whether that rendering is ambiguous.
+type OrganizationMemberIdentity struct {
+	OrganizationId int64
+	UserId         string
+	Name           string
+	Email          string
+}
+
+// GetOrganizationMemberIdentities loads every member of the given organizations.
+//
+// Deliberately ALL members, not just the ones who created something: whether
+// "Ada L." is ambiguous depends on the org's roster, not on who happens to have
+// made an event. A second Ada L. who has never created one still makes the
+// short form ambiguous.
+func (a *AppDB) GetOrganizationMemberIdentities(ctx context.Context, orgIds []int64) ([]OrganizationMemberIdentity, error) {
+	if len(orgIds) == 0 {
+		return nil, nil
+	}
+
+	rows, err := a.db.Query(ctx, `
+		SELECT om.organization_id, u.id, COALESCE(u.contact_name, ''), COALESCE(u.contact_email, '')
+		FROM organization_members om
+		JOIN users u ON u.id = om.user_id
+		WHERE om.organization_id = ANY($1);
+	`, orgIds)
+	if err != nil {
+		return nil, fmt.Errorf("error loading organization member identities: %s", err)
+	}
+	defer rows.Close()
+
+	identities := []OrganizationMemberIdentity{}
+	for rows.Next() {
+		identity := OrganizationMemberIdentity{}
+		if err := rows.Scan(&identity.OrganizationId, &identity.UserId, &identity.Name, &identity.Email); err != nil {
+			return nil, err
+		}
+		identities = append(identities, identity)
+	}
+	return identities, rows.Err()
+}
+
+// GetUserIdentities resolves creators who belong to no organization (SFLuv-run
+// events), where there is no roster to disambiguate against.
+func (a *AppDB) GetUserIdentities(ctx context.Context, userIds []string) (map[string]OrganizationMemberIdentity, error) {
+	result := map[string]OrganizationMemberIdentity{}
+	if len(userIds) == 0 {
+		return result, nil
+	}
+
+	rows, err := a.db.Query(ctx, `
+		SELECT id, COALESCE(contact_name, ''), COALESCE(contact_email, '')
+		FROM users WHERE id = ANY($1);
+	`, userIds)
+	if err != nil {
+		return nil, fmt.Errorf("error loading user identities: %s", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		identity := OrganizationMemberIdentity{}
+		if err := rows.Scan(&identity.UserId, &identity.Name, &identity.Email); err != nil {
+			return nil, err
+		}
+		result[identity.UserId] = identity
+	}
+	return result, rows.Err()
+}

@@ -34,6 +34,21 @@ import (
 
 const workflowPayoutProcessingTimeout = 15 * time.Minute
 const workflowPayoutStaleLockTimeout = 5 * time.Minute
+const workflowMaintenanceTimeout = 2 * time.Minute
+
+// workflowMaintenanceContext returns a context for shared workflow maintenance
+// (recurrence catch-up, availability refresh, stale payout lock recovery).
+//
+// This work mutates state for every user, not just the caller, but it is
+// triggered opportunistically from user-facing handlers. Running it on the
+// request context means a client that navigates away, backgrounds the app, or
+// times out cancels maintenance mid-flight — which showed up in production as a
+// stream of "context canceled" errors and, worse, as recurring series that
+// never advanced because the catch-up transaction was rolled back every time.
+// Detaching it means the work completes regardless of what the caller does.
+func workflowMaintenanceContext() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), workflowMaintenanceTimeout)
+}
 
 type workflowCreateErrorResponse struct {
 	Error  string `json:"error"`
@@ -442,6 +457,46 @@ func (a *AppService) refreshWorkflowStartAvailabilityAndNotify(ctx context.Conte
 	}
 	a.sendWorkflowSeriesFundingShortfallEmails(ctx, refreshResult.SeriesFundingChecks)
 	return nil
+}
+
+// isClientGone reports whether an error is just the caller's request context
+// being cancelled — the client navigated away, backgrounded the app, or timed
+// out. It is not a server fault, nobody is left to receive a response, and
+// logging it as an error buries real failures in noise.
+func isClientGone(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+}
+
+// staleWorkflowPayoutLockCutoff is the timestamp before which an in-progress
+// payout lock is considered abandoned by a crashed or timed-out attempt.
+func staleWorkflowPayoutLockCutoff() int64 {
+	return time.Now().UTC().Add(-workflowPayoutStaleLockTimeout).Unix()
+}
+
+// recoverStalePayoutLocksForImprover releases payout locks left behind by an
+// interrupted payout attempt. Detached from the request for the same reason as
+// the availability refresh: it unblocks payouts for everyone.
+func (a *AppService) recoverStalePayoutLocksForImprover(improverId string, staleBefore int64) {
+	ctx, cancel := workflowMaintenanceContext()
+	defer cancel()
+
+	if _, _, err := a.db.RecoverStaleWorkflowPayoutLocksForImprover(ctx, improverId, staleBefore, workflowPayoutErrorTimedOut); err != nil {
+		a.logger.Logf("error recovering stale payout locks for improver %s: %s", improverId, err)
+	}
+}
+
+// runWorkflowAvailabilityMaintenance runs the shared availability/recurrence
+// refresh on a context detached from any request, so a disconnecting client
+// cannot abort work that belongs to everyone. Failures are logged and swallowed
+// deliberately: shared maintenance breaking must not turn a user's read into a
+// 500 for something that has nothing to do with their request.
+func (a *AppService) runWorkflowAvailabilityMaintenance(reason string) {
+	ctx, cancel := workflowMaintenanceContext()
+	defer cancel()
+
+	if err := a.refreshWorkflowStartAvailabilityAndNotify(ctx); err != nil {
+		a.logger.Logf("error refreshing workflow availability during %s: %s", reason, err)
+	}
 }
 
 func (a *AppService) RequestProposerStatus(w http.ResponseWriter, r *http.Request) {
@@ -1148,11 +1203,7 @@ func (a *AppService) GetProposerWorkflow(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if err := a.refreshWorkflowStartAvailabilityAndNotify(r.Context()); err != nil {
-		a.logger.Logf("error refreshing workflow availability before proposer workflow detail %s for user %s: %s", workflowId, *userDid, err)
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
+	a.runWorkflowAvailabilityMaintenance(fmt.Sprintf("proposer workflow detail %s for user %s", workflowId, *userDid))
 
 	var workflow *structs.Workflow
 	var err error
@@ -1244,11 +1295,7 @@ func (a *AppService) GetWorkflow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := a.refreshWorkflowStartAvailabilityAndNotify(r.Context()); err != nil {
-		a.logger.Logf("error refreshing workflow availability before workflow detail %s for user %s: %s", workflowId, *userDid, err)
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
+	a.runWorkflowAvailabilityMaintenance(fmt.Sprintf("workflow detail %s for user %s", workflowId, *userDid))
 
 	workflow, err := a.db.GetWorkflowByID(r.Context(), workflowId)
 	if err != nil {
@@ -1274,16 +1321,7 @@ func (a *AppService) GetImproverWorkflows(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	refreshResult, err := a.db.RefreshWorkflowStartAvailability(r.Context())
-	if err != nil {
-		a.logger.Logf("error refreshing workflow availability for improver %s: %s", *userDid, err)
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-	for _, notification := range refreshResult.AvailabilityNotifications {
-		a.sendWorkflowStepAvailableEmail(notification)
-	}
-	a.sendWorkflowSeriesFundingShortfallEmails(r.Context(), refreshResult.SeriesFundingChecks)
+	a.runWorkflowAvailabilityMaintenance(fmt.Sprintf("improver workflow list for %s", *userDid))
 
 	activeCredentials, err := a.db.GetActiveCredentialTypesForUser(r.Context(), *userDid)
 	if err != nil {
@@ -1427,9 +1465,9 @@ func (a *AppService) GetImproverUnpaidWorkflows(w http.ResponseWriter, r *http.R
 	isAdmin := a.IsAdmin(r.Context(), *userDid)
 	staleBefore := time.Now().UTC().Add(-workflowPayoutStaleLockTimeout).Unix()
 
-	if _, _, err := a.db.RecoverStaleWorkflowPayoutLocksForImprover(r.Context(), *userDid, staleBefore, workflowPayoutErrorTimedOut); err != nil {
-		a.logger.Logf("error recovering stale payout locks for improver %s: %s", *userDid, err)
-	}
+	// Detached: recovering stale payout locks unblocks payouts for everyone, so
+	// it must not be abandoned because this particular client disconnected.
+	a.recoverStalePayoutLocksForImprover(*userDid, staleBefore)
 
 	workflows, err := a.db.GetImproverUnpaidWorkflows(r.Context(), *userDid)
 	if err != nil {
@@ -1444,7 +1482,9 @@ func (a *AppService) GetImproverUnpaidWorkflows(w http.ResponseWriter, r *http.R
 
 	refreshed, err := a.db.GetImproverUnpaidWorkflows(r.Context(), *userDid)
 	if err != nil {
-		a.logger.Logf("error refreshing unpaid workflows for improver %s: %s", *userDid, err)
+		if !isClientGone(err) {
+			a.logger.Logf("error refreshing unpaid workflows for improver %s: %s", *userDid, err)
+		}
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
@@ -2918,14 +2958,7 @@ func (a *AppService) ClaimWorkflowStep(w http.ResponseWriter, r *http.Request) {
 	}
 	isAdmin := a.IsAdmin(r.Context(), *userDid)
 
-	if refreshResult, err := a.db.RefreshWorkflowStartAvailability(r.Context()); err == nil {
-		for _, notification := range refreshResult.AvailabilityNotifications {
-			a.sendWorkflowStepAvailableEmail(notification)
-		}
-		a.sendWorkflowSeriesFundingShortfallEmails(r.Context(), refreshResult.SeriesFundingChecks)
-	} else {
-		a.logger.Logf("error refreshing workflow start availability before claim for improver %s: %s", *userDid, err)
-	}
+	a.runWorkflowAvailabilityMaintenance(fmt.Sprintf("step claim for improver %s", *userDid))
 
 	workflowId := strings.TrimSpace(r.PathValue("workflow_id"))
 	stepId := strings.TrimSpace(r.PathValue("step_id"))
@@ -2987,14 +3020,7 @@ func (a *AppService) StartWorkflowStep(w http.ResponseWriter, r *http.Request) {
 	}
 	isAdmin := a.IsAdmin(r.Context(), *userDid)
 
-	if refreshResult, err := a.db.RefreshWorkflowStartAvailability(r.Context()); err == nil {
-		for _, notification := range refreshResult.AvailabilityNotifications {
-			a.sendWorkflowStepAvailableEmail(notification)
-		}
-		a.sendWorkflowSeriesFundingShortfallEmails(r.Context(), refreshResult.SeriesFundingChecks)
-	} else {
-		a.logger.Logf("error refreshing workflow start availability before start for improver %s: %s", *userDid, err)
-	}
+	a.runWorkflowAvailabilityMaintenance(fmt.Sprintf("step start for improver %s", *userDid))
 
 	workflowId := strings.TrimSpace(r.PathValue("workflow_id"))
 	stepId := strings.TrimSpace(r.PathValue("step_id"))
@@ -3038,14 +3064,7 @@ func (a *AppService) CompleteWorkflowStep(w http.ResponseWriter, r *http.Request
 	}
 	isAdmin := a.IsAdmin(r.Context(), *userDid)
 
-	if refreshResult, err := a.db.RefreshWorkflowStartAvailability(r.Context()); err == nil {
-		for _, notification := range refreshResult.AvailabilityNotifications {
-			a.sendWorkflowStepAvailableEmail(notification)
-		}
-		a.sendWorkflowSeriesFundingShortfallEmails(r.Context(), refreshResult.SeriesFundingChecks)
-	} else {
-		a.logger.Logf("error refreshing workflow start availability before complete for improver %s: %s", *userDid, err)
-	}
+	a.runWorkflowAvailabilityMaintenance(fmt.Sprintf("step complete for improver %s", *userDid))
 
 	workflowId := strings.TrimSpace(r.PathValue("workflow_id"))
 	stepId := strings.TrimSpace(r.PathValue("step_id"))
@@ -3094,7 +3113,9 @@ func (a *AppService) CompleteWorkflowStep(w http.ResponseWriter, r *http.Request
 
 	workflow, err := a.db.GetWorkflowByID(r.Context(), workflowId)
 	if err != nil {
-		a.logger.Logf("error loading workflow %s after step completion: %s", workflowId, err)
+		if !isClientGone(err) {
+			a.logger.Logf("error loading workflow %s after step completion: %s", workflowId, err)
+		}
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
@@ -3329,11 +3350,7 @@ func (a *AppService) GetVoterWorkflow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := a.refreshWorkflowStartAvailabilityAndNotify(r.Context()); err != nil {
-		a.logger.Logf("error refreshing workflow availability before voter workflow detail %s for user %s: %s", workflowId, *userDid, err)
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
+	a.runWorkflowAvailabilityMaintenance(fmt.Sprintf("voter workflow detail %s for user %s", workflowId, *userDid))
 
 	workflow, err := a.db.GetWorkflowByID(r.Context(), workflowId)
 	if err != nil {
@@ -4933,44 +4950,65 @@ func collectWorkflowPayoutTargets(workflow *structs.Workflow) []workflowPayoutTa
 	return targets
 }
 
-func (a *AppService) attemptWorkflowPayoutTransfer(ctx context.Context, amount uint64, walletAddress string) (*big.Int, *big.Int, bool, string, error) {
-	neededTokens := new(big.Int).SetUint64(amount)
+// attemptWorkflowPayoutTransfer sends a bounty, or hands it to escrow.
+//
+// Workflow bounties used to bypass the tax gate entirely: the only check in the
+// system sat on the redemption path, so an improver could be paid well past the
+// annual reporting threshold and nothing would notice. They now go through the
+// same choke point as everything else.
+//
+// The escrowed return is not a failure. The step must not be marked paid out —
+// no money has moved — but nothing should be recorded as broken either. The
+// money is held, and settles when the W-9 lands.
+func (a *AppService) attemptWorkflowPayoutTransfer(ctx context.Context, target workflowPayoutTarget, walletAddress string) (currentTokens *big.Int, neededTokens *big.Int, insufficient bool, txHash string, escrowed bool, err error) {
+	amount := target.Amount
+	neededTokens = new(big.Int).SetUint64(amount)
 
 	if a.bot == nil || a.bot.bot == nil {
-		return nil, neededTokens, false, "", fmt.Errorf("bot service is not configured")
+		return nil, neededTokens, false, "", false, fmt.Errorf("bot service is not configured")
 	}
 
-	faucetBalanceWei, err := a.bot.bot.Balance()
-	if err != nil {
-		return nil, neededTokens, false, "", fmt.Errorf("error checking faucet balance: %s", err)
+	if a.payouts != nil {
+		multiplier, mErr := getTokenMultiplier()
+		if mErr != nil {
+			return nil, neededTokens, false, "", false, fmt.Errorf("error reading token decimals: %s", mErr)
+		}
+		sourceRef := target.WorkflowId
+		source := db.PayoutSourceWorkflowManager
+		if !target.IsManager {
+			source = db.PayoutSourceWorkflowStep
+			sourceRef = target.WorkflowId + ":" + target.StepId
+		}
+
+		result, payErr := a.payouts.Pay(ctx, PayoutRequest{
+			IdempotencyKey:   source + ":" + sourceRef,
+			UserID:           target.ImproverId,
+			RecipientAddress: walletAddress,
+			AmountBase:       new(big.Int).Mul(multiplier, neededTokens),
+			Source:           source,
+			SourceRef:        sourceRef,
+		})
+		if payErr != nil {
+			errLower := strings.ToLower(payErr.Error())
+			return nil, neededTokens, strings.Contains(errLower, "insufficient"), "", false, payErr
+		}
+		// Held or refused both mean the money did not move. A bounty has no QR to
+		// re-present, so a blocked one stays claimable exactly as a held one
+		// does: not paid out, not marked failed, and picked up by a later sweep
+		// once the filing clears. Marking it failed would stop the retry and
+		// tell the improver their bounty broke, which it has not.
+		if result != nil && (result.Escrowed || result.Blocked) {
+			return nil, neededTokens, false, "", true, nil
+		}
+		if result != nil {
+			return nil, neededTokens, false, result.TxHash, false, nil
+		}
 	}
 
-	multiplier, err := getTokenMultiplier()
-	if err != nil {
-		return nil, neededTokens, false, "", fmt.Errorf("error reading token decimals: %s", err)
-	}
-
-	currentTokens := new(big.Int).Div(faucetBalanceWei, multiplier)
-	if currentTokens.Cmp(neededTokens) < 0 {
-		return currentTokens, neededTokens, true, "", fmt.Errorf("insufficient faucet balance for workflow payout")
-	}
-
-	txHash, err := a.bot.bot.SubmitTransfer(amount, walletAddress)
-	if err != nil {
-		errLower := strings.ToLower(err.Error())
-		isInsufficient := strings.Contains(errLower, "insufficient")
-		return currentTokens, neededTokens, isInsufficient, txHash, err
-	}
-
-	waitCtx, waitCancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer waitCancel()
-	if err := a.waitForWorkflowPayoutTransferConfirmation(waitCtx, txHash, walletAddress, amount); err != nil {
-		errLower := strings.ToLower(err.Error())
-		isInsufficient := strings.Contains(errLower, "insufficient")
-		return currentTokens, neededTokens, isInsufficient, txHash, err
-	}
-
-	return currentTokens, neededTokens, false, txHash, nil
+	// No payout service means the payment could be neither recorded nor checked
+	// against the threshold. Sending anyway would be an untracked way past the
+	// gate, so this refuses instead — the sweeper retries once wiring is right.
+	return nil, neededTokens, false, "", false, fmt.Errorf("payout service is not configured")
 }
 
 func (a *AppService) sendWorkflowPayoutErrorEmail(
@@ -5180,12 +5218,19 @@ func (a *AppService) processWorkflowSeriesPayouts(ctx context.Context, triggerWo
 					continue
 				}
 
-				currentBalance, neededBalance, insufficient, txHash, transferErr := a.attemptWorkflowPayoutTransfer(ctx, target.Amount, walletAddress)
+				currentBalance, neededBalance, insufficient, txHash, escrowed, transferErr := a.attemptWorkflowPayoutTransfer(ctx, target, walletAddress)
 				if strings.TrimSpace(txHash) != "" {
 					if dbErr := a.db.RecordWorkflowStepPayoutTxHash(ctx, target.WorkflowId, target.StepId, txHash, a.activeChainID()); dbErr != nil {
 						a.logger.Logf("error recording step payout tx hash for workflow %s step %s: %s", target.WorkflowId, target.StepId, dbErr)
 						return
 					}
+				}
+				// Held pending a W-9: the money has not moved, so the step is not
+				// paid out — but nothing has gone wrong either, and marking it
+				// failed would stop the sweeper retrying and alarm the improver.
+				// It settles when the form lands.
+				if escrowed {
+					continue
 				}
 				if transferErr != nil {
 					errMsg := workflowPayoutErrorTransferFailed
@@ -5282,7 +5327,12 @@ func (a *AppService) processWorkflowSeriesPayouts(ctx context.Context, triggerWo
 					continue
 				}
 
-				currentBalance, neededBalance, insufficient, txHash, transferErr := a.attemptWorkflowPayoutTransfer(ctx, target.Amount, walletAddress)
+				currentBalance, neededBalance, insufficient, txHash, escrowed, transferErr := a.attemptWorkflowPayoutTransfer(ctx, target, walletAddress)
+				// Held pending a W-9. Neither paid nor failed; it settles when
+				// the form lands and the escrow releases.
+				if escrowed {
+					continue
+				}
 				if strings.TrimSpace(txHash) != "" {
 					if target.IsManager {
 						if dbErr := a.db.RecordWorkflowManagerPayoutTxHash(ctx, target.WorkflowId, txHash, a.activeChainID()); dbErr != nil {

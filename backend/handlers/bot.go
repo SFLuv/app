@@ -24,26 +24,35 @@ import (
 )
 
 type BotService struct {
-	db                 *db.BotDB
-	appDb              *db.AppDB
-	bot                bot.IBot
-	w9                 *W9Service
-	affiliateScheduler *AffiliateScheduler
-	activeChainID      int64
-	readRPCURL         string
+	db            *db.BotDB
+	appDb         *db.AppDB
+	bot           bot.IBot
+	payouts       *PayoutService
+	activeChainID int64
+	readRPCURL    string
+	// app is a back-reference used for shared concerns that live on AppService
+	// (styled email, logging). Set after construction because the two services
+	// reference each other.
+	app *AppService
+}
+
+// SetAppService completes the mutual wiring between the bot and app services.
+func (s *BotService) SetAppService(a *AppService) {
+	if s != nil {
+		s.app = a
+	}
 }
 
 var redeemCodeUUIDPattern = regexp.MustCompile(`(?i)[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}`)
 
-func NewBotService(db *db.BotDB, appDb *db.AppDB, bot bot.IBot, w9 *W9Service, affiliateScheduler *AffiliateScheduler, activeChainID int64, readRPCURL string) *BotService {
+func NewBotService(db *db.BotDB, appDb *db.AppDB, bot bot.IBot, payouts *PayoutService, activeChainID int64, readRPCURL string) *BotService {
 	return &BotService{
-		db:                 db,
-		appDb:              appDb,
-		bot:                bot,
-		w9:                 w9,
-		affiliateScheduler: affiliateScheduler,
-		activeChainID:      activeChainID,
-		readRPCURL:         readRPCURL,
+		db:            db,
+		appDb:         appDb,
+		bot:           bot,
+		payouts:       payouts,
+		activeChainID: activeChainID,
+		readRPCURL:    readRPCURL,
 	}
 }
 
@@ -109,51 +118,118 @@ func normalizeRedeemCode(raw string) string {
 	return strings.ToLower(code)
 }
 
-func (s *BotService) resolveRedeemPayoutAddress(ctx context.Context, requestedAddress string) string {
+// redeemPayoutTarget is one resolution of a scanned address: where the money
+// would land, and whose account it belongs to. The two have to come out of the
+// same pass. resolveRedeemPayoutAddress rewrites a location till to the owner's
+// personal wallet, so anything that re-reads the address afterwards is asking
+// about a different address than the one that was scanned and would never see
+// the shop behind it.
+type redeemPayoutTarget struct {
+	address     string
+	userID      string
+	accountType string
+	// ownerUnreadable means the address is owned but the account behind it could
+	// not be read, which is not the same answer as "nobody owns this". The
+	// merchant bar treats the two differently.
+	ownerUnreadable bool
+}
+
+func (s *BotService) resolveRedeemPayoutAddress(ctx context.Context, requestedAddress string) redeemPayoutTarget {
 	normalizedRequestedAddress := strings.ToLower(strings.TrimSpace(requestedAddress))
 	if !common.IsHexAddress(normalizedRequestedAddress) {
-		return normalizedRequestedAddress
+		return redeemPayoutTarget{address: normalizedRequestedAddress}
 	}
 	normalizedRequestedAddress = strings.ToLower(common.HexToAddress(normalizedRequestedAddress).Hex())
+	target := redeemPayoutTarget{address: normalizedRequestedAddress}
 
+	// A deployment with no app database has no users table, so it has no
+	// merchant accounts to bar either. Not a lookup failure.
 	if s.appDb == nil {
-		return normalizedRequestedAddress
+		return target
 	}
 
 	ownerLookup, err := s.appDb.GetWalletAddressOwnerLookup(ctx, normalizedRequestedAddress)
 	if err != nil {
 		fmt.Printf("error resolving wallet owner for redeem address %s: %s\n", normalizedRequestedAddress, err)
-		return normalizedRequestedAddress
+		target.ownerUnreadable = true
+		return target
 	}
 	if ownerLookup == nil || strings.TrimSpace(ownerLookup.UserID) == "" {
-		return normalizedRequestedAddress
+		return target
 	}
+	target.userID = ownerLookup.UserID
 
 	user, err := s.appDb.GetUserById(ctx, ownerLookup.UserID)
 	if err == nil {
+		target.accountType = user.AccountType
 		primaryWalletAddress := strings.TrimSpace(user.PrimaryWalletAddress)
 		if common.IsHexAddress(primaryWalletAddress) {
-			return strings.ToLower(common.HexToAddress(primaryWalletAddress).Hex())
+			target.address = strings.ToLower(common.HexToAddress(primaryWalletAddress).Hex())
+			return target
 		}
 	} else {
 		fmt.Printf("error loading user primary wallet for owner %s redeem address %s: %s\n", ownerLookup.UserID, normalizedRequestedAddress, err)
+		target.ownerUnreadable = true
 	}
 
 	primarySmartWallet, err := s.appDb.GetSmartWalletByOwnerIndex(ctx, ownerLookup.UserID, 0)
 	if err != nil {
 		fmt.Printf("error loading primary smart wallet for owner %s redeem address %s: %s\n", ownerLookup.UserID, normalizedRequestedAddress, err)
-		return normalizedRequestedAddress
+		return target
 	}
 	if primarySmartWallet == nil || primarySmartWallet.SmartAddress == nil {
-		return normalizedRequestedAddress
+		return target
 	}
 
 	smartWalletAddress := strings.TrimSpace(*primarySmartWallet.SmartAddress)
 	if !common.IsHexAddress(smartWalletAddress) {
-		return normalizedRequestedAddress
+		return target
 	}
 
-	return strings.ToLower(common.HexToAddress(smartWalletAddress).Hex())
+	target.address = strings.ToLower(common.HexToAddress(smartWalletAddress).Hex())
+	return target
+}
+
+const (
+	merchantFaucetBarEnvKey = "MERCHANT_FAUCET_BAR_ENABLED"
+
+	redeemRefusalMerchantAccount = "merchant_account"
+	redeemRefusalOwnerUnreadable = "account_lookup_failed"
+)
+
+// Merchants take payment, they do not draw from the faucet: a shop owner who
+// also wants to volunteer signs up a second, regular account. Behind a flag
+// because it decides who gets paid, and a wrong call has to be revocable
+// without a deploy.
+func merchantFaucetBarEnabled() bool {
+	return envBool(merchantFaucetBarEnvKey, true)
+}
+
+// merchantFaucetRefusal names why a resolved scan may not be paid from the
+// faucet, or returns "" if it may.
+//
+// It FAILS CLOSED. An owned address whose account could not be read is refused
+// rather than paid, because the two mistakes are not symmetric: a wrong refusal
+// costs a retry, since the caller runs this before the code is consumed and the
+// same QR still works a minute later, while tokens that leave the faucet cannot
+// be pulled back.
+//
+// An address that resolves to nobody is paid, and that is the hole in this.
+// POST /redeem is anonymous, so a merchant scanning with a fresh wallet that
+// has never been linked to their account is indistinguishable from a first-time
+// volunteer. Closing it would mean authenticating redemption, which would take
+// away the walk-up scan the events run on.
+func merchantFaucetRefusal(target redeemPayoutTarget) string {
+	if !merchantFaucetBarEnabled() {
+		return ""
+	}
+	if target.ownerUnreadable {
+		return redeemRefusalOwnerUnreadable
+	}
+	if target.accountType == structs.AccountTypeMerchant {
+		return redeemRefusalMerchantAccount
+	}
+	return ""
 }
 
 func validateEventTiming(event *structs.Event) error {
@@ -396,6 +472,12 @@ func (s *BotService) GetCodesRequest(w http.ResponseWriter, r *http.Request) {
 	w.Write(bytes)
 }
 
+// DeleteEvent removes an event and its unredeemed codes.
+//
+// There is no refund step any more: standing per-cycle organization balances
+// were retired along with self-serve event creation. Faucet capacity is now
+// measured directly from outstanding codes, so deleting an event releases its
+// committed value simply by removing those codes — nothing to credit back.
 func (s *BotService) DeleteEvent(w http.ResponseWriter, r *http.Request) {
 	event := r.PathValue("event")
 	if event == "" {
@@ -403,23 +485,12 @@ func (s *BotService) DeleteEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// If the event belongs to an organization, refund its unredeemed value to
-	// that org's allocation balances before deleting.
-	if s.appDb != nil {
-		if eventOrg, err := s.db.GetEventOrganization(r.Context(), event); err == nil && eventOrg != 0 {
-			freed, err := s.db.EventUnredeemedValue(r.Context(), event)
-			if err == nil && freed > 0 {
-				if err := s.appDb.RefundOrganizationBalance(r.Context(), eventOrg, freed); err != nil {
-					fmt.Printf("error refunding organization balance for event %s: %s\n", event, err)
-				}
-			} else if err != nil {
-				fmt.Printf("error getting event unredeemed value for event %s refund: %s\n", event, err)
-			}
+	if err := s.db.DeleteEvent(r.Context(), event); err != nil {
+		if errors.Is(err, db.ErrEventHasRedemptions) {
+			w.WriteHeader(http.StatusConflict)
+			w.Write([]byte("this event has redemptions and cannot be deleted; cancel it instead so the payout record is kept"))
+			return
 		}
-	}
-
-	err := s.db.DeleteEvent(r.Context(), event)
-	if err != nil {
 		fmt.Printf("error deleting event %s: %s\n", event, err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
@@ -442,160 +513,6 @@ func (s *BotService) requireOrg(ctx context.Context, userDid string) (int64, err
 		return 0, pgx.ErrNoRows
 	}
 	return org.Id, nil
-}
-
-func (s *BotService) AffiliateNewEvent(w http.ResponseWriter, r *http.Request) {
-	body := EnsureBody(w, r)
-	if body == nil {
-		return
-	}
-
-	userDid := utils.GetDid(r)
-	if userDid == nil {
-		w.WriteHeader(http.StatusForbidden)
-		return
-	}
-
-	orgId, err := s.requireOrg(r.Context(), *userDid)
-	if err != nil {
-		w.WriteHeader(http.StatusForbidden)
-		return
-	}
-
-	var event *structs.Event
-	if !EnsureUnmarshal(w, &event, body) {
-		return
-	}
-	event.Owner = *userDid
-	event.OrganizationId = orgId
-	if err := validateEventTiming(event); err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		switch err.Error() {
-		case "start_at_required":
-			w.Write([]byte("start_at is required"))
-		case "expiration_required":
-			w.Write([]byte("expiration is required"))
-		case "start_at_elapsed":
-			w.Write([]byte("start_at must not be in the past"))
-		case "expiration_elapsed":
-			w.Write([]byte("expiration must not be in the past"))
-		case "expiration_before_start_at":
-			w.Write([]byte("expiration must be after start_at"))
-		default:
-			w.Write([]byte("invalid event timing"))
-		}
-		return
-	}
-
-	eventTotal := uint64(event.Amount) * uint64(event.Codes)
-	err = s.appDb.ReserveOrganizationBalance(r.Context(), orgId, eventTotal)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			w.WriteHeader(http.StatusForbidden)
-			return
-		}
-		if errors.Is(err, db.ErrOrgInsufficientFunds) {
-			w.WriteHeader(http.StatusBadRequest)
-			w.Write([]byte("insufficient affiliate balance"))
-			return
-		}
-		fmt.Printf("error reserving organization balance: %s\n", err)
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
-	refund := func() {
-		if err := s.appDb.RefundOrganizationBalance(r.Context(), orgId, eventTotal); err != nil {
-			fmt.Printf("error refunding organization balance: %s\n", err)
-		}
-	}
-
-	decimals, err := strconv.Atoi(os.Getenv("TOKEN_DECIMALS"))
-	if err != nil {
-		fmt.Println("invalid token decimals in .env")
-		refund()
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
-	eventTotalBig := new(big.Int).SetUint64(eventTotal)
-	eventTotalBig.Mul(eventTotalBig, big.NewInt(int64(decimals)))
-
-	faucetBalance, err := s.bot.Balance()
-	if err != nil {
-		fmt.Printf("error getting current bot balance: %s\n", err)
-		refund()
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
-	allocatedBalance, err := s.totalAllocatedBalance(r.Context())
-	if err != nil {
-		fmt.Printf("error getting allocated balance for faucet: %s", err)
-		refund()
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
-	bigAllocated := big.NewInt(int64(allocatedBalance))
-	bigAllocated.Mul(bigAllocated, big.NewInt(int64(decimals)))
-
-	unallocated := bigAllocated.Sub(faucetBalance, bigAllocated)
-
-	if eventTotalBig.Cmp(unallocated) > 0 {
-		fmt.Println("total event rewards should not exceed unallocated balance")
-		adminEmail := os.Getenv("AFFILIATE_ADMIN_EMAIL")
-		emailSender := utils.NewEmailSender()
-		if adminEmail != "" && emailSender != nil {
-			availableTokens := new(big.Int).Div(unallocated, big.NewInt(int64(decimals)))
-			subject := "Failed Affiliate Event Creation (Faucet Balance)"
-			details := fmt.Sprintf(`
-<table role="presentation" width="100%%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
-  <tr>
-    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280; width:180px;">Affiliate</td>
-    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827; word-break:break-all;">%s</td>
-  </tr>
-  <tr>
-    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280;">Required Balance</td>
-    <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827;">%d SFLuv</td>
-  </tr>
-  <tr>
-    <td style="padding:12px 0; font-size:13px; color:#6b7280;">Available Faucet Balance</td>
-    <td style="padding:12px 0; font-size:13px; color:#111827;">%s SFLuv</td>
-  </tr>
-</table>`, utils.EscapeEmailHTML(*userDid), eventTotal, utils.EscapeEmailHTML(availableTokens.String()))
-
-			htmlContent := utils.BuildStyledEmail(
-				"Failed Affiliate Event Creation",
-				"Affiliate event creation failed due to faucet balance.",
-				details,
-			)
-
-			err = emailSender.SendEmail(adminEmail, "Admin", subject, htmlContent, utils.NotificationFromEmail(), "SFLuv Affiliates")
-			if err != nil {
-				fmt.Printf("error sending affiliate faucet balance email: %s\n", err)
-			}
-		}
-		refund()
-		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte("Not enough balance in faucet. Please try again later, or contact us at admin@sfluv.org."))
-		return
-	}
-
-	id, err := s.db.NewEvent(r.Context(), event)
-	if err != nil {
-		fmt.Println(err)
-		refund()
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
-	if s.affiliateScheduler != nil {
-		s.affiliateScheduler.ScheduleEventExpiration(id, *userDid, event.Expiration)
-	}
-
-	w.WriteHeader(http.StatusCreated)
-	w.Write([]byte(id))
 }
 
 // AdminGetOrganizationEvents lists a specific organization's events for the
@@ -632,217 +549,6 @@ func (s *BotService) AdminGetOrganizationEvents(w http.ResponseWriter, r *http.R
 
 	w.WriteHeader(http.StatusOK)
 	w.Write(bytes)
-}
-
-func (s *BotService) AffiliateGetEvents(w http.ResponseWriter, r *http.Request) {
-	params := r.URL.Query()
-	page, count := parsePageAndCount(params, 10, 100)
-	search := params.Get("search")
-	expired := params.Get("expired") == "true"
-
-	userDid := utils.GetDid(r)
-	if userDid == nil {
-		w.WriteHeader(http.StatusForbidden)
-		return
-	}
-
-	orgId, err := s.requireOrg(r.Context(), *userDid)
-	if err != nil {
-		w.WriteHeader(http.StatusForbidden)
-		return
-	}
-
-	events, err := s.db.GetEventsByOrganization(r.Context(), &structs.EventsRequest{
-		Page:    page,
-		Count:   count,
-		Search:  search,
-		Expired: expired,
-	}, orgId)
-	if err != nil {
-		fmt.Printf("error getting affiliate events: page %d, count %d, search %s, expired %t\n: %s", page, count, search, expired, err)
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
-	bytes, err := json.Marshal(events)
-	if err != nil {
-		fmt.Printf("error marshalling events bytes: %s\n", err)
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
-	w.WriteHeader(http.StatusOK)
-	w.Write(bytes)
-}
-
-func (s *BotService) AffiliateGetCodes(w http.ResponseWriter, r *http.Request) {
-	params := r.URL.Query()
-
-	event := r.PathValue("event")
-	if event == "" {
-		w.WriteHeader(http.StatusBadRequest)
-		return
-	}
-	page, count := parsePageAndCount(params, 100, 200)
-
-	userDid := utils.GetDid(r)
-	if userDid == nil {
-		w.WriteHeader(http.StatusForbidden)
-		return
-	}
-
-	orgId, err := s.requireOrg(r.Context(), *userDid)
-	if err != nil {
-		w.WriteHeader(http.StatusForbidden)
-		return
-	}
-	eventOrg, err := s.db.GetEventOrganization(r.Context(), event)
-	if err != nil {
-		w.WriteHeader(http.StatusNotFound)
-		return
-	}
-	if eventOrg == 0 || eventOrg != orgId {
-		w.WriteHeader(http.StatusForbidden)
-		return
-	}
-
-	codes, err := s.GetCodes(event, count, page)
-	if err != nil {
-		fmt.Println(err)
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-	if len(codes) == 0 {
-		w.WriteHeader(http.StatusNotFound)
-		return
-	}
-
-	bytes, err := json.Marshal(codes)
-	if err != nil {
-		fmt.Println(err)
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
-	w.WriteHeader(http.StatusOK)
-	w.Write(bytes)
-}
-
-func (s *BotService) AffiliateDeleteEvent(w http.ResponseWriter, r *http.Request) {
-	event := r.PathValue("event")
-	if event == "" {
-		w.WriteHeader(http.StatusBadRequest)
-		return
-	}
-
-	userDid := utils.GetDid(r)
-	if userDid == nil {
-		w.WriteHeader(http.StatusForbidden)
-		return
-	}
-
-	orgId, err := s.requireOrg(r.Context(), *userDid)
-	if err != nil {
-		w.WriteHeader(http.StatusForbidden)
-		return
-	}
-	eventOrg, err := s.db.GetEventOrganization(r.Context(), event)
-	if err != nil {
-		w.WriteHeader(http.StatusNotFound)
-		return
-	}
-	if eventOrg == 0 || eventOrg != orgId {
-		w.WriteHeader(http.StatusForbidden)
-		return
-	}
-
-	freed, err := s.db.EventUnredeemedValue(r.Context(), event)
-	if err == nil && freed > 0 {
-		fmt.Printf("freed organization balance %d for event %s\n", freed, event)
-		if s.appDb != nil {
-			if err := s.appDb.RefundOrganizationBalance(r.Context(), orgId, freed); err != nil {
-				fmt.Printf("error refunding organization balance for event %s: %s\n", event, err)
-			}
-		}
-	}
-
-	err = s.db.DeleteEvent(r.Context(), event)
-	if err != nil {
-		fmt.Printf("error deleting event %s: %s\n", event, err)
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
-	w.WriteHeader(http.StatusOK)
-}
-
-func (s *BotService) AffiliateBalance(w http.ResponseWriter, r *http.Request) {
-	userDid := utils.GetDid(r)
-	if userDid == nil {
-		w.WriteHeader(http.StatusForbidden)
-		return
-	}
-
-	balance, err := s.getAffiliateBalance(r.Context(), *userDid)
-	if err != nil {
-		if err == pgx.ErrNoRows {
-			w.WriteHeader(http.StatusNotFound)
-			return
-		}
-		fmt.Printf("error getting affiliate balance: %s\n", err)
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
-	bytes, err := json.Marshal(balance)
-	if err != nil {
-		fmt.Printf("error marshalling affiliate balance: %s\n", err)
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
-	w.WriteHeader(http.StatusOK)
-	w.Write(bytes)
-}
-
-// getAffiliateBalance reports the caller's ORGANIZATION balances, mapped into
-// the legacy AffiliateBalance shape (weekly/one_time fields) plus the full
-// per-cycle allocation list for newer clients.
-func (s *BotService) getAffiliateBalance(ctx context.Context, owner string) (*structs.AffiliateBalance, error) {
-	if s.appDb == nil {
-		return nil, fmt.Errorf("affiliate database unavailable")
-	}
-
-	org, _, err := s.appDb.GetOrganizationByUser(ctx, owner)
-	if err != nil {
-		return nil, err
-	}
-	if org == nil {
-		return nil, pgx.ErrNoRows
-	}
-
-	allocations, err := s.appDb.ListOrganizationAllocations(ctx, org.Id)
-	if err != nil {
-		return nil, err
-	}
-
-	reserved, err := s.db.AllocatedBalanceByOrganization(ctx, org.Id)
-	if err != nil {
-		return nil, err
-	}
-
-	balance := &structs.AffiliateBalance{Reserved: reserved, Allocations: allocations}
-	for _, al := range allocations {
-		balance.Available += al.Balance
-		switch al.Cycle {
-		case structs.AllocationCycleWeekly:
-			balance.WeeklyAllocation = al.Allocation
-			balance.WeeklyBalance = al.Balance
-		case structs.AllocationCycleOneTime:
-			balance.OneTimeBalance = al.Balance
-		}
-	}
-	return balance, nil
 }
 
 func (s *BotService) GetCodes(event string, count, page int) ([]*structs.Code, error) {
@@ -889,50 +595,39 @@ func (s *BotService) Redeem(w http.ResponseWriter, r *http.Request) {
 	request.Address = strings.ToLower(common.HexToAddress(request.Address).Hex())
 
 	resolveAddressCtx, resolveAddressCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	request.Address = s.resolveRedeemPayoutAddress(resolveAddressCtx, request.Address)
+	payoutTarget := s.resolveRedeemPayoutAddress(resolveAddressCtx, request.Address)
 	resolveAddressCancel()
+	request.Address = payoutTarget.address
 
-	complianceCtx, complianceCancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer complianceCancel()
+	// Before db.Redeem, and it has to stay there. A refusal raised after the code
+	// is consumed would depend on UndoRedeem to hand it back, and getting that
+	// wrong either burns a code nobody was paid for or lets one be claimed twice.
+	// Refusing first means the scan is simply never counted.
+	if refusal := merchantFaucetRefusal(payoutTarget); refusal != "" {
+		fmt.Printf("refusing redemption of code %s for address %s (owner %q): %s\n", request.Code, request.Address, payoutTarget.userID, refusal)
 
-	amount := uint64(0)
-	if s.w9 != nil {
-		decimalString := os.Getenv("TOKEN_DECIMALS")
-		decimals, ok := new(big.Int).SetString(decimalString, 10)
-		if !ok {
-			w.WriteHeader(http.StatusInternalServerError)
-			return
+		status := http.StatusConflict
+		message := "This is a merchant account. Volunteer rewards go to a personal SFLuv account — sign in with one and scan again."
+		if refusal == redeemRefusalOwnerUnreadable {
+			// Not the scanner's fault and not permanent, so it is answered as a
+			// server problem rather than as a rule they broke.
+			status = http.StatusServiceUnavailable
+			message = "We couldn't check this account just now. The code has not been used — try scanning it again in a moment."
 		}
 
-		redeemInfoCtx, redeemInfoCancel := context.WithTimeout(context.Background(), 8*time.Second)
-		var amountErr error
-		amount, amountErr = s.db.GetCodeAmount(redeemInfoCtx, request.Code)
-		redeemInfoCancel()
-		if amountErr != nil {
-			if amountErr == pgx.ErrNoRows {
-				w.WriteHeader(http.StatusBadRequest)
-				w.Write([]byte("code redeemed"))
-				return
-			}
-			fmt.Printf("error loading redemption amount for code %s: %s\n", request.Code, amountErr)
-			w.WriteHeader(http.StatusInternalServerError)
-			return
-		}
-
-		amountWei := new(big.Int).Mul(decimals, big.NewInt(int64(amount)))
-		resp, err := s.w9.CheckCompliance(complianceCtx, os.Getenv("BOT_ADDRESS"), request.Address, amountWei)
-		if err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			return
-		}
-		if !resp.Allowed {
-			bytes, _ := json.Marshal(resp)
-			w.WriteHeader(http.StatusForbidden)
-			w.Write(bytes)
-			return
-		}
+		writeJSON(w, status, structs.RedeemRefusedResponse{
+			Status:  "blocked",
+			Reason:  refusal,
+			Message: message,
+		})
+		return
 	}
 
+	// The tax check no longer happens here. A volunteer who has earned past the
+	// reporting threshold used to be refused at this point, with the code left
+	// unredeemed and nothing to show for the shift they had just worked. Now the
+	// scan always succeeds: the code is consumed, and PayoutService decides
+	// whether the money goes out or is held pending a W-9.
 	redeemCtx, redeemCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer redeemCancel()
 
@@ -958,9 +653,30 @@ func (s *BotService) Redeem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.bot.Send(amount, request.Address); err != nil {
-		fmt.Printf("error sending redeem payout for code %s address %s: %s\n", request.Code, request.Address, err)
-		if bot.ShouldRevertRedemption(err) {
+	multiplier, multiplierErr := getTokenMultiplier()
+	if multiplierErr != nil {
+		fmt.Printf("error reading token decimals for code %s: %s\n", request.Code, multiplierErr)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	amountBase := new(big.Int).Mul(multiplier, new(big.Int).SetUint64(amount))
+
+	payoutCtx, payoutCancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer payoutCancel()
+
+	result, payoutErr := s.payouts.Pay(payoutCtx, PayoutRequest{
+		IdempotencyKey:   "redeem:" + request.Code + ":" + request.Address,
+		RecipientAddress: request.Address,
+		AmountBase:       amountBase,
+		Source:           db.PayoutSourceRedemptionCode,
+		SourceRef:        request.Code,
+	})
+	if payoutErr != nil {
+		fmt.Printf("error sending redeem payout for code %s address %s: %s\n", request.Code, request.Address, payoutErr)
+		// Only a genuine send failure releases the code. Escrow is a success —
+		// undoing the redemption there would let the same reward be claimed
+		// twice, once now and once after the W-9 lands.
+		if bot.ShouldRevertRedemption(payoutErr) {
 			undoCtx, undoCancel := context.WithTimeout(context.Background(), 10*time.Second)
 			if undoErr := s.db.UndoRedeem(undoCtx, request.Code, request.Address, s.chainID()); undoErr != nil {
 				fmt.Printf("error undoing redemption for code %s address %s after payout failure: %s\n", request.Code, request.Address, undoErr)
@@ -968,6 +684,45 @@ func (s *BotService) Redeem(w http.ResponseWriter, r *http.Request) {
 			undoCancel()
 		}
 		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	// Refused. The code is handed back so the same QR still works once the form
+	// is in — nothing is owed, nothing is queued, and the volunteer keeps the
+	// only thing they need to claim it. Reuses the same undo the send-failure
+	// path uses rather than inventing a second refund route.
+	if result != nil && result.Blocked {
+		undoCtx, undoCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		if undoErr := s.db.UndoRedeem(undoCtx, request.Code, request.Address, s.chainID()); undoErr != nil {
+			fmt.Printf("error releasing code %s after a blocked payout: %s\n", request.Code, undoErr)
+		}
+		undoCancel()
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(w).Encode(structs.RedeemEscrowedResponse{
+			Status:      "blocked",
+			Reason:      "w9_required",
+			AmountSfluv: formatSfluvBase(amountBase),
+			TaxYear:     result.TaxYear,
+			Message:     "We couldn't send this reward yet. Complete your W-9 in the SFLuv app, then scan this code again.",
+		})
+		return
+	}
+
+	// Held money is reported as its own outcome rather than as a plain success,
+	// so the app can explain what happened instead of showing a reward that
+	// never arrives.
+	if result != nil && result.Escrowed {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_ = json.NewEncoder(w).Encode(structs.RedeemEscrowedResponse{
+			Status:      "escrowed",
+			Reason:      "w9_required",
+			AmountSfluv: formatSfluvBase(amountBase),
+			TaxYear:     result.TaxYear,
+			Message:     "Reward saved. Complete your W-9 in the SFLuv app and we'll send it over.",
+		})
 		return
 	}
 

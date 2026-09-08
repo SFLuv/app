@@ -6,7 +6,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useApp } from "@/context/AppProvider";
 import { OrganizationPanel } from "@/components/organization/organization-panel";
+import { SignetCard } from "@/components/settings/signet-card";
 import PlaceAutocomplete from "@/components/merchant/google_place_finder";
+import { AccountTypeCard } from "@/components/merchant/account-type-card";
+import { CancelLocationApplication } from "@/components/merchant/cancel-location-application";
+import { MerchantHoursCard } from "@/components/locations/merchant-hours-card";
+import { MerchantIconCard } from "@/components/locations/merchant-icon-card";
+import { MerchantPhotoCard } from "@/components/locations/merchant-photo-card";
 import {
   Card,
   CardContent,
@@ -62,7 +68,7 @@ import {
   WalletResponse,
 } from "@/types/server";
 import { AuthedLocation } from "@/types/location";
-import { GoogleSubLocation } from "@/types/location";
+import { GoogleSubLocation, PlaceSelection } from "@/types/location";
 import { ensureGooglePlacesScript, hasGoogleMapsPlaces } from "@/lib/google-places";
 import { sweepSFLUVBalancesToAdmin } from "@/lib/account-deletion";
 import { getAddress, isAddress } from "viem";
@@ -85,6 +91,26 @@ type MerchantLocationWalletDraft = {
   saving: boolean;
   error: string;
   success: string;
+  /** Role currently being swapped, or "" when the picker is closed. */
+  replacingRole: LocationWalletRole | "";
+  replaceOptions: AssignableWallet[];
+  replaceLoading: boolean;
+  replaceSelection: string;
+};
+
+type LocationWalletRole = "payment" | "tipping";
+
+/**
+ * One of the merchant's wallets, as offered when swapping the wallet behind a
+ * location. Unavailable wallets are shown too — "in use by Shop B" explains far
+ * more than an address quietly missing from the list.
+ */
+type AssignableWallet = {
+  address: string;
+  name: string;
+  in_use_by: string;
+  is_current: boolean;
+  available: boolean;
 };
 
 type MerchantLocationProfileDraft = {
@@ -104,6 +130,13 @@ type MerchantLocationProfileDraft = {
   rating: number;
   mapsPage: string;
   openingHours: string[];
+  /**
+   * A Google place the merchant picked but has not saved yet. Google-derived
+   * columns are written only from a server-verified place lookup, so this is
+   * sent to /locations/{id}/google-place on save rather than through the
+   * profile update.
+   */
+  pendingGooglePlace: GoogleSubLocation | null;
   dirty: boolean;
   saving: boolean;
   error: string;
@@ -353,8 +386,9 @@ export default function SettingsPage() {
   const [isUpdating, setIsUpdating] = useState(false);
   const [isChangingPassword, setIsChangingPassword] = useState(false);
   const [successMessage, setSuccessMessage] = useState("");
+  // Merchant is absent on purpose: it is answered at signup, not requested from
+  // an account that already exists.
   type RoleRequestType =
-    | "merchant"
     | "affiliate"
     | "proposer"
     | "improver"
@@ -473,10 +507,6 @@ export default function SettingsPage() {
     "idle" | "sweeping" | "deleting"
   >("idle");
   const [deleteAccountError, setDeleteAccountError] = useState("");
-  const noopGoogleSubLocationSetter: React.Dispatch<
-    React.SetStateAction<GoogleSubLocation | null>
-  > = () => undefined;
-
   // Account form
   const [name, setName] = useState(user?.name || "");
 
@@ -703,6 +733,22 @@ export default function SettingsPage() {
     );
   };
 
+  // The AppWallet the user treats as primary. Signet enrolment is scoped to one
+  // wallet because the on-chain binding is write-once per login.
+  const primaryAppWallet = useMemo(() => {
+    const primary = (user?.primaryWalletAddress || "").trim();
+    if (!primary || !isAddress(primary)) return null;
+    const target = getAddress(primary).toLowerCase();
+    return (
+      wallets.find(
+        (w) =>
+          w.type === "smartwallet" &&
+          !!w.address &&
+          getAddress(w.address).toLowerCase() === target,
+      ) ?? null
+    );
+  }, [wallets, user?.primaryWalletAddress]);
+
   const formatManagedAddress = (address: string) => {
     const trimmedAddress = address.trim();
     if (!trimmedAddress) return "Not set";
@@ -774,6 +820,10 @@ export default function SettingsPage() {
       saving: false,
       error: "",
       success: "",
+      replacingRole: "",
+      replaceOptions: [],
+      replaceLoading: false,
+      replaceSelection: "",
     };
   };
 
@@ -805,6 +855,7 @@ export default function SettingsPage() {
     rating: location.rating ?? 0,
     mapsPage: location.maps_page || "",
     openingHours: location.opening_hours || [],
+    pendingGooglePlace: null,
     dirty: false,
     saving: false,
     error: "",
@@ -1213,11 +1264,6 @@ export default function SettingsPage() {
       return;
     }
 
-    if (roleRequestType === "merchant") {
-      router.push("/settings/merchant-approval");
-      return;
-    }
-
     if (
       roleRequestType === "affiliate" ||
       roleRequestType === "proposer" ||
@@ -1590,24 +1636,13 @@ export default function SettingsPage() {
     const location = approvedMerchantLocations.find((entry) => entry.id === locationId);
     if (!draft || !location || draft.saving) return;
 
-    const nextLocation: AuthedLocation = {
+    let nextLocation: AuthedLocation = {
       ...location,
-      google_id: draft.googleId.trim(),
       name: draft.name.trim(),
       description: draft.description.trim(),
-      type: draft.type.trim(),
       street: draft.street.trim(),
-      city: draft.city.trim(),
-      state: draft.state.trim(),
-      zip: draft.zip.trim(),
-      lat: draft.lat,
-      lng: draft.lng,
       phone: draft.phone.trim(),
       website: draft.website.trim(),
-      image_url: draft.imageUrl.trim(),
-      rating: draft.rating,
-      maps_page: draft.mapsPage.trim(),
-      opening_hours: draft.openingHours,
     };
 
     updateLocationProfileDraft(locationId, () => ({
@@ -1618,6 +1653,43 @@ export default function SettingsPage() {
     }));
 
     try {
+      // Place identity and map position are written only by the verified
+      // endpoint; the profile update carries the display fields the merchant
+      // edits. Google runs first so whatever is on screen at save time wins.
+      if (draft.pendingGooglePlace) {
+        const placeRes = await authFetch(`/locations/${locationId}/google-place`, {
+          method: "PUT",
+          body: JSON.stringify({ google_id: draft.pendingGooglePlace.google_id }),
+        });
+
+        if (!placeRes.ok) {
+          const text = await placeRes.text();
+          let message = "Unable to refresh this location from Google.";
+          try {
+            const parsed = JSON.parse(text);
+            if (parsed?.error) message = parsed.error;
+          } catch {
+            if (text) message = text;
+          }
+          throw new Error(message);
+        }
+
+        const verified = (await placeRes.json()) as GoogleSubLocation;
+        nextLocation = {
+          ...nextLocation,
+          google_id: verified.google_id,
+          type: verified.type,
+          city: verified.city,
+          state: verified.state,
+          zip: verified.zip,
+          lat: verified.lat,
+          lng: verified.lng,
+          rating: verified.rating,
+          maps_page: verified.maps_page,
+          opening_hours: verified.opening_hours || [],
+        };
+      }
+
       const res = await authFetch("/locations", {
         method: "PUT",
         body: JSON.stringify(nextLocation),
@@ -1649,31 +1721,53 @@ export default function SettingsPage() {
     }
   };
 
+  // Previews the picked place in the draft and stashes it for the save step.
+  // The preview is optimistic — the values actually stored come back from the
+  // server after it re-verifies the place id with Google.
+  // The picker speaks PlaceSelection (Google place or hand-typed address); the
+  // drafts here predate that and still hold a plain Google place.
+  const asPlaceSelection = (
+    place: GoogleSubLocation | null,
+  ): PlaceSelection | null => (place ? { source: "google_place", place } : null);
+
   const applyGoogleLocationSelection = (
     locationId: number,
-    selection: GoogleSubLocation,
+    placeSelection: PlaceSelection | null,
   ) => {
-    updateLocationProfileDraft(locationId, (current) => ({
-      ...current,
-      googleId: selection.google_id || current.googleId,
-      name: selection.name || current.name,
-      type: selection.type || current.type,
-      street: selection.street || current.street,
-      city: selection.city || current.city,
-      state: selection.state || current.state,
-      zip: selection.zip || current.zip,
-      lat: selection.lat ?? current.lat,
-      lng: selection.lng ?? current.lng,
-      phone: selection.phone || current.phone,
-      website: selection.website || current.website,
-      imageUrl: selection.image_url || current.imageUrl,
-      rating: selection.rating ?? current.rating,
-      mapsPage: selection.maps_page || current.mapsPage,
-      openingHours: selection.opening_hours || current.openingHours,
-      dirty: true,
-      error: "",
-      success: "",
-    }));
+    // This control refreshes an existing listing's Google details, so only the
+    // Google branch means anything here. The manual-address path belongs to
+    // onboarding, where there is no listing to refresh from.
+    const selection =
+      placeSelection?.source === "google_place" ? placeSelection.place : null;
+
+    updateLocationProfileDraft(locationId, (current) => {
+      if (!selection) {
+        return { ...current, pendingGooglePlace: null, error: "", success: "" };
+      }
+
+      return {
+        ...current,
+        googleId: selection.google_id || current.googleId,
+        name: selection.name || current.name,
+        type: selection.type || current.type,
+        street: selection.street || current.street,
+        city: selection.city || current.city,
+        state: selection.state || current.state,
+        zip: selection.zip || current.zip,
+        lat: selection.lat ?? current.lat,
+        lng: selection.lng ?? current.lng,
+        phone: selection.phone || current.phone,
+        website: selection.website || current.website,
+        imageUrl: selection.image_url || current.imageUrl,
+        rating: selection.rating ?? current.rating,
+        mapsPage: selection.maps_page || current.mapsPage,
+        openingHours: selection.opening_hours || current.openingHours,
+        pendingGooglePlace: selection,
+        dirty: true,
+        error: "",
+        success: "",
+      };
+    });
   };
 
   const resolveDraftAddress = (
@@ -1865,6 +1959,118 @@ export default function SettingsPage() {
     );
   };
 
+  /**
+   * Opens the swap picker and loads which of the merchant's wallets are free.
+   *
+   * The list has to come from the server rather than from the wallets already on
+   * screen: whether an address is available depends on every other location the
+   * merchant owns, which this page does not otherwise know about.
+   */
+  const handleOpenWalletReplace = async (
+    locationId: number,
+    role: LocationWalletRole,
+  ) => {
+    updateLocationWalletDraft(locationId, (current) => ({
+      ...current,
+      replacingRole: role,
+      replaceLoading: true,
+      replaceOptions: [],
+      replaceSelection: "",
+      error: "",
+      success: "",
+    }));
+
+    try {
+      const res = await authFetch(
+        `/locations/${locationId}/assignable-wallets?role=${role}`,
+      );
+      if (!res.ok) {
+        throw new Error(await res.text());
+      }
+      const body = (await res.json()) as { wallets: AssignableWallet[] };
+      updateLocationWalletDraft(locationId, (current) => ({
+        ...current,
+        replaceOptions: body.wallets || [],
+        replaceLoading: false,
+      }));
+    } catch {
+      updateLocationWalletDraft(locationId, (current) => ({
+        ...current,
+        replaceLoading: false,
+        replacingRole: "",
+        error: "Could not load your wallets. Try again.",
+      }));
+    }
+  };
+
+  const handleCloseWalletReplace = (locationId: number) => {
+    updateLocationWalletDraft(locationId, (current) => ({
+      ...current,
+      replacingRole: "",
+      replaceOptions: [],
+      replaceSelection: "",
+    }));
+  };
+
+  /**
+   * Performs the swap. One call, so the location is never left without a wallet:
+   * the server retires the old address and attaches the new one in a single
+   * transaction, or does neither.
+   */
+  const handleReplaceLocationWallet = async (
+    locationId: number,
+    role: LocationWalletRole,
+    mode: "existing" | "new",
+    address?: string,
+  ) => {
+    const draft = locationWalletDrafts[locationId];
+    if (draft?.saving) return;
+
+    updateLocationWalletDraft(locationId, (current) => ({
+      ...current,
+      saving: true,
+      error: "",
+      success: "",
+    }));
+
+    try {
+      const res = await authFetch(`/locations/${locationId}/wallets/${role}`, {
+        method: "PUT",
+        body: JSON.stringify({ mode, address: address || "" }),
+      });
+      if (!res.ok) {
+        throw new Error(
+          (await res.text()) || "Could not change this location's wallet.",
+        );
+      }
+
+      const updatedLocation = (await res.json()) as AuthedLocation;
+      setUserLocations((current) =>
+        current.map((location) =>
+          location.id === updatedLocation.id ? updatedLocation : location,
+        ),
+      );
+      updateLocationWalletDraft(locationId, () => ({
+        ...buildLocationWalletDraft(updatedLocation),
+        saving: false,
+        error: "",
+        success:
+          mode === "new"
+            ? "New wallet created and attached."
+            : "Wallet replaced.",
+      }));
+    } catch (err) {
+      updateLocationWalletDraft(locationId, (current) => ({
+        ...current,
+        saving: false,
+        error:
+          err instanceof Error
+            ? err.message
+            : "Could not change this location's wallet.",
+      }));
+    }
+  };
+
   const handleRemoveLocationPaymentWallet = async (
     locationId: number,
     walletAddress: string,
@@ -1875,6 +2081,13 @@ export default function SettingsPage() {
     const nextPaymentWalletAddresses = draft.paymentWalletAddresses.filter(
       (address) => address.toLowerCase() !== walletAddress.toLowerCase(),
     );
+
+    // Removing the last wallet would leave the shop with nowhere for money to
+    // land. The button offers Replace instead; this is the backstop.
+    if (nextPaymentWalletAddresses.length === 0) {
+      void handleOpenWalletReplace(locationId, "payment");
+      return;
+    }
 
     const nextDraft: MerchantLocationWalletDraft = {
       ...draft,
@@ -2353,6 +2566,11 @@ export default function SettingsPage() {
             </Card>
           </div> */}
 
+          {/* Personal or merchant, and the way between them. It sits first in
+              the account tab because it is the answer that decides what the
+              rest of this screen even offers. */}
+          <AccountTypeCard />
+
           <Card className="mt-6">
             <CardHeader className="flex flex-row items-start justify-between gap-4">
               <div>
@@ -2511,9 +2729,7 @@ export default function SettingsPage() {
             </CardContent>
           </Card>
 
-          {(merchantStatus === "none" ||
-            merchantStatus === "rejected" ||
-            affiliateStatus === "none" ||
+          {(affiliateStatus === "none" ||
             affiliateStatus === "rejected" ||
             proposerStatus === "none" ||
             proposerStatus === "rejected" ||
@@ -2529,8 +2745,8 @@ export default function SettingsPage() {
                   Request Role Access
                 </CardTitle>
                 <CardDescription>
-                  Apply for merchant, affiliate, proposer, improver, issuer, or
-                  supervisor status
+                  Apply for affiliate, proposer, improver, issuer, or supervisor
+                  status
                 </CardDescription>
               </CardHeader>
               <CardContent>
@@ -2551,12 +2767,6 @@ export default function SettingsPage() {
                         <SelectValue placeholder="Select a role to request..." />
                       </SelectTrigger>
                       <SelectContent>
-                        {(merchantStatus === "none" ||
-                          merchantStatus === "rejected") && (
-                          <SelectItem value="merchant">
-                            Merchant — accept SFLuv as payment at your business
-                          </SelectItem>
-                        )}
                         {(affiliateStatus === "none" ||
                           affiliateStatus === "rejected") && (
                           <SelectItem value="affiliate">
@@ -2750,8 +2960,6 @@ export default function SettingsPage() {
                           <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                           Submitting...
                         </>
-                      ) : roleRequestType === "merchant" ? (
-                        "Continue to Application"
                       ) : (
                         "Submit Request"
                       )}
@@ -2869,6 +3077,8 @@ export default function SettingsPage() {
               </Button>
             </CardContent>
           </Card>
+
+          <SignetCard wallet={primaryAppWallet} />
 
           <Card className="mt-6">
             <CardHeader>
@@ -3566,31 +3776,7 @@ export default function SettingsPage() {
                                     ) : merchantPlacesReady ? (
                                       <PlaceAutocomplete
                                         key={`merchant-location-place-${loc.id}`}
-                                        setGoogleSubLocation={noopGoogleSubLocationSetter}
-                                        setBusinessPhone={(value) =>
-                                          updateLocationProfileDraft(loc.id, (current) => ({
-                                            ...current,
-                                            phone:
-                                              typeof value === "function"
-                                                ? value(current.phone)
-                                                : value,
-                                            dirty: true,
-                                            error: "",
-                                            success: "",
-                                          }))
-                                        }
-                                        setStreet={(value) =>
-                                          updateLocationProfileDraft(loc.id, (current) => ({
-                                            ...current,
-                                            street:
-                                              typeof value === "function"
-                                                ? value(current.street)
-                                                : value,
-                                            dirty: true,
-                                            error: "",
-                                            success: "",
-                                          }))
-                                        }
+                                        value={asPlaceSelection(profileDraft.pendingGooglePlace)}
                                         onSelect={(selection) =>
                                           applyGoogleLocationSelection(loc.id, selection)
                                         }
@@ -3606,6 +3792,13 @@ export default function SettingsPage() {
                                       the Google Maps address, coordinates, and related map
                                       details.
                                     </p>
+                                  </div>
+
+                                  <div className="space-y-2 rounded-lg border p-3">
+                                    <Label className="text-black dark:text-white">
+                                      Opening hours
+                                    </Label>
+                                    <MerchantHoursCard location={loc} />
                                   </div>
 
                                   <div className="space-y-2">
@@ -3741,6 +3934,35 @@ export default function SettingsPage() {
                                 </Button>
                               </div>
                               ) : null}
+
+                              {/* Outside the block above, which is switched off
+                                  (`{false ? ...}`, since 5d47f39) — merchant
+                                  self-service editing of the business details
+                                  was withdrawn, and these two were added inside
+                                  it afterwards, so they shipped unreachable.
+                                  They are the merchant's own artwork rather
+                                  than listing data, and nothing about them
+                                  depends on that editor being back. */}
+                              <div className="space-y-4 rounded-xl border bg-background/70 p-4">
+                                <div className="space-y-1">
+                                  <h3 className="text-sm font-semibold text-black dark:text-white">
+                                    Listing images
+                                  </h3>
+                                  <p className="text-xs text-muted-foreground">
+                                    How this location appears on the merchant map and on its listing.
+                                  </p>
+                                </div>
+
+                                <div className="space-y-2 rounded-lg border p-3">
+                                  <Label className="text-black dark:text-white">Map icon</Label>
+                                  <MerchantIconCard location={loc} />
+                                </div>
+
+                                <div className="space-y-2 rounded-lg border p-3">
+                                  <Label className="text-black dark:text-white">Location photo</Label>
+                                  <MerchantPhotoCard location={loc} />
+                                </div>
+                              </div>
 
                               <div className="space-y-4">
                                 <div className="grid gap-3 sm:grid-cols-2">
@@ -3977,25 +4199,130 @@ export default function SettingsPage() {
                                                 Set default
                                               </Button>
                                             )}
-                                            <Button
-                                              type="button"
-                                              size="sm"
-                                              variant="outline"
-                                              onClick={() =>
-                                                void handleRemoveLocationPaymentWallet(
-                                                  loc.id,
-                                                  walletAddress,
-                                                )
-                                              }
-                                              disabled={walletDraft.saving}
-                                            >
-                                              Remove
-                                            </Button>
+                                            {walletDraft.paymentWalletAddresses.length === 1 ? (
+                                              // The only wallet: a shop must
+                                              // always have somewhere to be
+                                              // paid, so this swaps rather
+                                              // than detaches.
+                                              <Button
+                                                type="button"
+                                                size="sm"
+                                                variant="outline"
+                                                onClick={() =>
+                                                  void handleOpenWalletReplace(
+                                                    loc.id,
+                                                    "payment",
+                                                  )
+                                                }
+                                                disabled={walletDraft.saving}
+                                              >
+                                                Replace
+                                              </Button>
+                                            ) : (
+                                              <Button
+                                                type="button"
+                                                size="sm"
+                                                variant="outline"
+                                                onClick={() =>
+                                                  void handleRemoveLocationPaymentWallet(
+                                                    loc.id,
+                                                    walletAddress,
+                                                  )
+                                                }
+                                                disabled={walletDraft.saving}
+                                              >
+                                                Remove
+                                              </Button>
+                                            )}
                                           </div>
                                         </div>
                                       ))
                                     )}
                                   </div>
+
+                                  {walletDraft.replacingRole === "payment" && (
+                                    <div className="mt-4 rounded-lg border border-border bg-secondary/40 p-3">
+                                      <p className="text-sm font-medium text-black dark:text-white">
+                                        Choose a new payment wallet
+                                      </p>
+                                      <p className="mt-1 text-xs text-muted-foreground">
+                                        This location keeps taking payments the
+                                        whole time — the old wallet is swapped
+                                        out only once the new one is attached.
+                                      </p>
+
+                                      {walletDraft.replaceLoading ? (
+                                        <p className="mt-3 text-xs text-muted-foreground">
+                                          Loading your wallets...
+                                        </p>
+                                      ) : (
+                                        <div className="mt-3 space-y-2">
+                                          {walletDraft.replaceOptions
+                                            .filter((option) => !option.is_current)
+                                            .map((option) => (
+                                              <button
+                                                key={`${loc.id}-swap-${option.address}`}
+                                                type="button"
+                                                disabled={
+                                                  !option.available || walletDraft.saving
+                                                }
+                                                onClick={() =>
+                                                  void handleReplaceLocationWallet(
+                                                    loc.id,
+                                                    "payment",
+                                                    "existing",
+                                                    option.address,
+                                                  )
+                                                }
+                                                className="flex w-full items-center justify-between gap-3 rounded-md border border-border bg-background px-3 py-2 text-left transition hover:border-[#eb6c6c] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:border-border"
+                                              >
+                                                <span className="min-w-0">
+                                                  <span className="block truncate text-sm text-black dark:text-white">
+                                                    {option.name}
+                                                  </span>
+                                                  <span className="block break-all font-mono text-[11px] text-muted-foreground">
+                                                    {formatManagedAddress(option.address)}
+                                                  </span>
+                                                </span>
+                                                {option.in_use_by && (
+                                                  <span className="shrink-0 text-[11px] text-muted-foreground">
+                                                    In use by {option.in_use_by}
+                                                  </span>
+                                                )}
+                                              </button>
+                                            ))}
+
+                                          <div className="flex flex-wrap gap-2 pt-1">
+                                            <Button
+                                              type="button"
+                                              size="sm"
+                                              onClick={() =>
+                                                void handleReplaceLocationWallet(
+                                                  loc.id,
+                                                  "payment",
+                                                  "new",
+                                                )
+                                              }
+                                              disabled={walletDraft.saving}
+                                            >
+                                              Create a new wallet
+                                            </Button>
+                                            <Button
+                                              type="button"
+                                              size="sm"
+                                              variant="outline"
+                                              onClick={() =>
+                                                handleCloseWalletReplace(loc.id)
+                                              }
+                                              disabled={walletDraft.saving}
+                                            >
+                                              Cancel
+                                            </Button>
+                                          </div>
+                                        </div>
+                                      )}
+                                    </div>
+                                  )}
 
                                   <div className="mt-4 space-y-2">
                                     <Label
@@ -4259,9 +4586,13 @@ export default function SettingsPage() {
                           {statusTitle}
                         </CardTitle>
                       </CardHeader>
-                      <CardContent className="space-y-2 pt-4">
+                      <CardContent className="space-y-3 pt-4">
                         <p className="font-medium text-black dark:text-white">{loc.name}</p>
                         <p className="text-gray-600 dark:text-gray-400">{statusBody}</p>
+                        {/* Only renders while the application is still pending;
+                            the component decides that for itself so no caller
+                            can offer it over an approved location. */}
+                        <CancelLocationApplication location={loc} />
                       </CardContent>
                     </Card>
                   );

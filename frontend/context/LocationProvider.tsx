@@ -18,7 +18,10 @@ interface LocationContextType {
     getAuthedMapLocations: () => Promise<void>
     updateLocation: (location: AuthedLocation) => Promise<void>
     updateLocationApproval: (req: UpdateLocationApprovalRequest) => Promise<void>
-    addLocation: (location: AuthedLocation) => Promise<void>
+    /** Resolves to the new listing's id, which the stepper needs to attach hours. */
+    addLocation: (location: AuthedLocation) => Promise<number>
+    /** Withdraws an application of the caller's that is still awaiting review. */
+    cancelLocationApplication: (locationId: number) => Promise<void>
 }
 
 const LocationContext = createContext<LocationContextType | null>(null)
@@ -32,6 +35,23 @@ const getLocationTypes = (locations: Location[]): string[] => {
         uniqueTypes.add(normalizedType)
     }
     return [...uniqueTypes, "All Locations"]
+}
+
+// readErrorMessage pulls the backend's {"error": "..."} message off a failed
+// response, falling back to a generic message for non-JSON bodies.
+const readErrorMessage = async (
+    res: Response,
+    fallback = "Something went wrong submitting your application. Please try again.",
+): Promise<string> => {
+    try {
+        const body = await res.clone().json()
+        if (body && typeof body.error === "string" && body.error.trim()) {
+            return body.error.trim()
+        }
+    } catch {
+        // not a JSON body
+    }
+    return fallback
 }
 
 const fetchMapLocations = async (): Promise<LocationResponse> => {
@@ -121,6 +141,9 @@ export default function LocationProvider({ children }: { children: ReactNode }) 
         }
     }, [])
 
+    // Surfaces the backend's message so submission failures (duplicate business,
+    // rejected place, validation) reach the merchant instead of being swallowed
+    // while the form navigates away as if it had succeeded.
     const addLocation = useCallback(async (location: AuthedLocation) => {
         setMapLocationsStatus("loading")
         try {
@@ -132,17 +155,35 @@ export default function LocationProvider({ children }: { children: ReactNode }) 
                 body: JSON.stringify(location)
             })
             if(res.status != 201) {
-                throw new Error("error adding new location, from controller")
+                const message = await readErrorMessage(res)
+                throw new Error(message)
             }
-            setUserLocationsRef.current((currentLocations) => [...currentLocations, location])
+            // The id the backend assigned. Older backends answered "success"
+            // here, so an unreadable body is not an error — it costs the caller
+            // the follow-up writes that need an id, not the submission itself.
+            let createdId = 0
+            try {
+                const body = await res.json()
+                if (body && typeof body.id === "number") createdId = body.id
+            } catch {
+                // not a JSON body
+            }
+            setUserLocationsRef.current((currentLocations) => [...currentLocations, { ...location, id: createdId }])
             setMapLocationsStatus("available")
+            return createdId
         }
-        catch {
+        catch (error) {
             setMapLocationsStatus("unavailable")
-            console.error("error adding new location")
+            console.error("error adding new location", error)
+            throw error instanceof Error
+                ? error
+                : new Error("Something went wrong submitting your application. Please try again.")
         }
       }, [])
 
+    // Rethrows for the same reason addLocation does: a merchant correcting a
+    // rejected application has no other signal that the save failed, and a
+    // silent failure here reads exactly like a successful one.
     const updateLocation = useCallback(async (location: AuthedLocation) => {
         setMapLocationsStatus("loading")
         try {
@@ -154,17 +195,39 @@ export default function LocationProvider({ children }: { children: ReactNode }) 
                 body: JSON.stringify({location})
             })
             if(res.status != 201) {
-                throw new Error("error updating location")
+                const message = await readErrorMessage(
+                    res,
+                    "Something went wrong saving your changes. Please try again.",
+                )
+                throw new Error(message)
             }
             const updatedLocations = await getMapLocationsDeduped()
             setMapLocations(updatedLocations.locations)
             setLocationTypes(getLocationTypes(updatedLocations.locations))
             setMapLocationsStatus("available")
         }
-        catch {
+        catch (error) {
             setMapLocationsStatus("unavailable")
-            console.error("error updating locations")
+            console.error("error updating location", error)
+            throw error instanceof Error
+                ? error
+                : new Error("Something went wrong saving your changes. Please try again.")
         }
+    }, [])
+
+    // Dropped from the caller's own list immediately rather than after a refetch:
+    // the merchant just pressed cancel, and a card that lingers reads as a
+    // cancellation that did not take.
+    const cancelLocationApplication = useCallback(async (locationId: number) => {
+        const res = await authFetchRef.current(`/locations/${locationId}`, { method: "DELETE" })
+        if (res.status !== 204 && res.status !== 200) {
+            throw new Error(await readErrorMessage(
+                res,
+                "Something went wrong cancelling this application. Please try again.",
+            ))
+        }
+        setUserLocationsRef.current((currentLocations) =>
+            currentLocations.filter((location) => location.id !== locationId))
     }, [])
 
     const updateLocationApproval = useCallback(async (req: UpdateLocationApprovalRequest) => {
@@ -211,6 +274,7 @@ export default function LocationProvider({ children }: { children: ReactNode }) 
         updateLocation,
         updateLocationApproval,
         addLocation,
+        cancelLocationApplication,
     }), [
         mapLocations,
         authedMapLocations,
@@ -220,7 +284,8 @@ export default function LocationProvider({ children }: { children: ReactNode }) 
         getAuthedMapLocations,
         updateLocation,
         updateLocationApproval,
-        addLocation
+        addLocation,
+        cancelLocationApplication
     ])
 
     return (

@@ -253,7 +253,11 @@ func (a *AppDB) GetUsers(ctx context.Context, page int, count int, search string
 			privacy_policy_version,
 			mailing_list_opt_in,
 			mailing_list_opt_in_at,
-			mailing_list_policy_version
+			mailing_list_policy_version,
+			account_type,
+			account_type_selected_at,
+			web_merchant_prompt_seen_at,
+			merchant_onboarding_completed_at
 		FROM
 			users
 		WHERE
@@ -292,6 +296,10 @@ func (a *AppDB) GetUsers(ctx context.Context, page int, count int, search string
 			&user.MailingListOptIn,
 			&user.MailingListOptInAt,
 			&user.MailingListPolicyVersion,
+			&user.AccountType,
+			&user.AccountTypeSelectedAt,
+			&user.WebMerchantPromptSeenAt,
+			&user.MerchantOnboardingCompletedAt,
 		)
 		if err != nil {
 			continue
@@ -413,7 +421,11 @@ func (a *AppDB) getUserById(ctx context.Context, userId string, includeInactive 
 			privacy_policy_version,
 			mailing_list_opt_in,
 			mailing_list_opt_in_at,
-			mailing_list_policy_version
+			mailing_list_policy_version,
+			account_type,
+			account_type_selected_at,
+			web_merchant_prompt_seen_at,
+			merchant_onboarding_completed_at
 		FROM
 			users
 		WHERE
@@ -448,6 +460,10 @@ func (a *AppDB) getUserById(ctx context.Context, userId string, includeInactive 
 		&user.MailingListOptIn,
 		&user.MailingListOptInAt,
 		&user.MailingListPolicyVersion,
+		&user.AccountType,
+		&user.AccountTypeSelectedAt,
+		&user.WebMerchantPromptSeenAt,
+		&user.MerchantOnboardingCompletedAt,
 	)
 	if err != nil {
 		return nil, err
@@ -467,7 +483,11 @@ func (a *AppDB) GetUserPolicyStatus(ctx context.Context, userId string) (*struct
 			privacy_policy_version,
 			mailing_list_opt_in,
 			mailing_list_opt_in_at,
-			mailing_list_policy_version
+			mailing_list_policy_version,
+			account_type,
+			account_type_selected_at,
+			web_merchant_prompt_seen_at,
+			merchant_onboarding_completed_at
 		FROM
 			users
 		WHERE
@@ -482,6 +502,10 @@ func (a *AppDB) GetUserPolicyStatus(ctx context.Context, userId string) (*struct
 		&status.MailingListOptIn,
 		&status.MailingListOptInAt,
 		&status.MailingListPolicyVersion,
+		&status.AccountType,
+		&status.AccountTypeSelectedAt,
+		&status.WebMerchantPromptSeenAt,
+		&status.MerchantOnboardingCompletedAt,
 	); err != nil {
 		return nil, err
 	}
@@ -509,13 +533,40 @@ func (a *AppDB) UserHasAcceptedPrivacyPolicy(ctx context.Context, userId string)
 	return accepted, nil
 }
 
+// AcceptUserPolicies records an acceptance and, on the first one only, the
+// account type chosen at signup. An empty accountType leaves the stored value
+// alone, which is what a client too old to ask the question sends.
 func (a *AppDB) AcceptUserPolicies(
 	ctx context.Context,
 	userId string,
 	mailingListOptIn bool,
+	accountType string,
 	now time.Time,
 ) (*structs.UserPolicyStatusResponse, error) {
-	row := a.db.QueryRow(ctx, `
+	// account_type is guarded the same way accepted_privacy_policy_at is, and
+	// for the same reason: every existing user hits this endpoint again the
+	// moment CurrentPrivacyPolicyVersion is bumped. Unguarded, whatever the
+	// client happened to send on that second visit would replace the answer
+	// given at signup.
+	//
+	// accepted_privacy_policy_at IS NULL is what "first acceptance" means here.
+	// The column's own value cannot say, because every row already reads
+	// 'regular' from the default.
+	tx, err := a.db.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("error opening transaction to accept policies: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	// Read before the write, so the event below can say what it changed from.
+	var previousAccountType string
+	if err := tx.QueryRow(ctx, `
+		SELECT account_type FROM users WHERE id = $1 AND active = TRUE;
+	`, userId).Scan(&previousAccountType); err != nil {
+		return nil, err
+	}
+
+	row := tx.QueryRow(ctx, `
 		UPDATE
 			users
 		SET
@@ -530,6 +581,19 @@ func (a *AppDB) AcceptUserPolicies(
 			mailing_list_policy_version = CASE
 				WHEN $4 THEN $5
 				ELSE ''
+			END,
+			account_type = CASE
+				WHEN accepted_privacy_policy_at IS NULL AND $6 <> '' THEN $6
+				ELSE account_type
+			END,
+			-- Stamped whenever a client actually answers, even on a
+			-- re-acceptance whose answer is discarded above. The column says
+			-- "somebody put the question to this person", and only the web
+			-- signup does; a NULL is how the web app recognises an account that
+			-- was created on mobile and has never been offered the choice.
+			account_type_selected_at = CASE
+				WHEN $6 <> '' THEN COALESCE(account_type_selected_at, $2)
+				ELSE account_type_selected_at
 			END
 		WHERE
 			id = $1
@@ -543,8 +607,12 @@ func (a *AppDB) AcceptUserPolicies(
 			privacy_policy_version,
 			mailing_list_opt_in,
 			mailing_list_opt_in_at,
-			mailing_list_policy_version;
-	`, userId, now.UTC(), structs.CurrentPrivacyPolicyVersion, mailingListOptIn, structs.CurrentMailingListPolicyVersion)
+			mailing_list_policy_version,
+			account_type,
+			account_type_selected_at,
+			web_merchant_prompt_seen_at,
+			merchant_onboarding_completed_at;
+	`, userId, now.UTC(), structs.CurrentPrivacyPolicyVersion, mailingListOptIn, structs.CurrentMailingListPolicyVersion, accountType)
 
 	status := &structs.UserPolicyStatusResponse{}
 	if err := row.Scan(
@@ -556,11 +624,113 @@ func (a *AppDB) AcceptUserPolicies(
 		&status.MailingListOptIn,
 		&status.MailingListOptInAt,
 		&status.MailingListPolicyVersion,
+		&status.AccountType,
+		&status.AccountTypeSelectedAt,
+		&status.WebMerchantPromptSeenAt,
+		&status.MerchantOnboardingCompletedAt,
 	); err != nil {
 		return nil, err
 	}
 
+	// Signing up as a merchant is where a merchant's clock starts, and it is the
+	// commonest way an account becomes one — recording only later conversions
+	// would leave every merchant who said so at signup with no date at all.
+	// A no-op is dropped inside the helper, so a policy re-acceptance that
+	// changes nothing writes nothing.
+	if err := recordAccountTypeChange(
+		ctx, tx, status.UserId, previousAccountType, status.AccountType, AccountTypeSourceSignup,
+	); err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("error committing policy acceptance: %w", err)
+	}
+
 	return status, nil
+}
+
+// SetUserAccountType is the only way an account type changes after signup.
+// AcceptUserPolicies writes it once and then refuses to touch it again, which
+// is what keeps a policy-version re-acceptance from overwriting the signup
+// answer — but it also means somebody who picked wrong, or who signed up on a
+// client too old to ask, cannot get themselves out. For a merchant that is
+// permanent: the onboarding gate reads account_type, so they never reach it.
+//
+// merchant_onboarding_completed_at is deliberately not written here.
+//
+// Switching to 'merchant' therefore leaves it NULL and the person lands in
+// onboarding, which is the whole point of the repair. It stays set only for
+// someone who genuinely finished onboarding as a merchant before — a stamp
+// cannot otherwise exist on a 'regular' row, because AddLocation only stamps
+// merchants.
+//
+// Switching to 'regular' leaves it set for the same reason: it records that
+// onboarding happened, not that it is currently required, and nothing consults
+// it unless account_type is 'merchant'. Clearing it would erase a fact and
+// would push a shop owner with an approved listing back through onboarding the
+// next time somebody flipped them back.
+//
+// The self-join reads the pre-update row, so the old value comes back from the
+// same statement as the new one and the audit line cannot name a value that
+// some other write replaced in between.
+func (a *AppDB) SetUserAccountType(ctx context.Context, userId string, accountType string) (*structs.AdminUserAccountTypeResponse, error) {
+	// The CHECK constraint would catch this too, but as an opaque database
+	// error; refusing here keeps a caller that skips the handler honest.
+	if !structs.IsValidAccountType(accountType) {
+		return nil, fmt.Errorf("invalid account type: %q", accountType)
+	}
+
+	tx, err := a.db.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("error opening transaction to set account type: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	row := tx.QueryRow(ctx, `
+		UPDATE
+			users AS u
+		SET
+			account_type = $2
+		FROM
+			users AS prev
+		WHERE
+			u.id = prev.id
+		AND
+			u.id = $1
+		AND
+			u.active = TRUE
+		RETURNING
+			u.id,
+			prev.account_type,
+			u.account_type,
+			u.merchant_onboarding_completed_at;
+	`, userId, accountType)
+
+	result := &structs.AdminUserAccountTypeResponse{}
+	if err := row.Scan(
+		&result.UserId,
+		&result.PreviousAccountType,
+		&result.AccountType,
+		&result.MerchantOnboardingCompletedAt,
+	); err != nil {
+		return nil, err
+	}
+
+	// A support repair is still a conversion, and a tax export reading the
+	// history has no way to tell — nor any reason to care — that this one came
+	// from an admin rather than the person.
+	if err := recordAccountTypeChange(
+		ctx, tx, result.UserId, result.PreviousAccountType, result.AccountType, AccountTypeSourceAdmin,
+	); err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("error committing account type change: %w", err)
+	}
+
+	return result, nil
 }
 
 func (a *AppDB) GetAllUserIDs(ctx context.Context) ([]string, error) {

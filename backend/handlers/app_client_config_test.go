@@ -121,3 +121,59 @@ func TestGetClientVersionUsesPerPlatformUpdateURL(t *testing.T) {
 		})
 	}
 }
+
+// Only a clear "true" may enable unwrap. Everything else — unset, empty, "0",
+// "maybe" — has to read as off, because a flag that flips on by accident ships
+// a half-built money movement to every client that polls /config.
+func TestUnwrapEnabledOnlyOnExplicitTrue(t *testing.T) {
+	cases := []struct {
+		name  string
+		value string
+		want  bool
+	}{
+		{name: "unset", value: "", want: false},
+		{name: "false", value: "false", want: false},
+		{name: "zero", value: "0", want: false},
+		{name: "yes is not true", value: "yes", want: false},
+		{name: "garbage", value: "maybe", want: false},
+		{name: "true", value: "true", want: true},
+		{name: "true mixed case with padding", value: "  TRUE ", want: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("UNWRAP_ENABLED", tc.value)
+
+			var config map[string]any
+			if err := json.Unmarshal(withServerFeatureFlags([]byte(`{"features":{}}`)), &config); err != nil {
+				t.Fatalf("merged config is not valid json: %s", err)
+			}
+			features, ok := config["features"].(map[string]any)
+			if !ok {
+				t.Fatal("features block missing")
+			}
+			if features["unwrap_enabled"] != tc.want {
+				t.Fatalf("unwrap_enabled = %v; want %v", features["unwrap_enabled"], tc.want)
+			}
+		})
+	}
+}
+
+// The two server flags must not be wired to each other: the volunteer portal
+// being live says nothing about whether unwrap is ready.
+func TestUnwrapEnabledIsIndependentOfVolunteerFlag(t *testing.T) {
+	t.Setenv("VOLUNTEER_EVENTS_ENABLED", "true")
+	t.Setenv("UNWRAP_ENABLED", "")
+
+	var config map[string]any
+	if err := json.Unmarshal(withServerFeatureFlags([]byte(`{"features":{}}`)), &config); err != nil {
+		t.Fatalf("merged config is not valid json: %s", err)
+	}
+	features := config["features"].(map[string]any)
+	if features["volunteer_events_enabled"] != true {
+		t.Fatalf("volunteer_events_enabled = %v; want true", features["volunteer_events_enabled"])
+	}
+	if features["unwrap_enabled"] != false {
+		t.Fatalf("unwrap_enabled = %v; want false", features["unwrap_enabled"])
+	}
+}

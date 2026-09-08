@@ -33,6 +33,8 @@ func main() {
 		log.Fatal(err)
 	}
 
+	bootstrap.WarnOnMissingPublicConfig(appLogger)
+
 	handler, err := bootstrap.NewServerHandler(ctx, pools, appLogger)
 	if err != nil {
 		log.Fatal(err)

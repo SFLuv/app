@@ -1,12 +1,16 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 
+	"github.com/SFLuv/app/backend/db"
 	"github.com/SFLuv/app/backend/structs"
 	"github.com/SFLuv/app/backend/utils"
 	"github.com/go-chi/chi/v5"
@@ -118,6 +122,46 @@ func (a *AppService) GetLocationsByUser(w http.ResponseWriter, r *http.Request) 
 	w.Write(jsonBytes)
 }
 
+// currentIntakeMarkers are the fields only the three-step Location Approval
+// Form sends. Every client that has it sends all five on every submission; no
+// client released before it sends any.
+var currentIntakeMarkers = []string{
+	"listing_source",
+	"contact_name",
+	"referral_source",
+	"accepts_tips",
+	"has_staff_tablet",
+}
+
+// locationIntakeOf decides which form a submission came from, by looking at
+// which keys the client actually sent.
+//
+// Deliberately not a client-version check, which is the obvious approach and
+// does not work here: the build already in the app stores and the build waiting
+// on review both report version 1.0.3, so the header cannot separate them. Key
+// presence can, and it has the better failure mode besides — it asks what the
+// request contains rather than what the sender claims to be, so a web client
+// (which sends no version headers at all) needs no special case.
+//
+// Any one marker is enough to mean "current". A current client that omits one
+// of the answers is a client bug and still collects the validation error naming
+// the field; only a body carrying none of them is treated as the old form.
+func locationIntakeOf(body []byte) structs.LocationIntake {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(body, &fields); err != nil {
+		// Unreachable in practice: the caller has already unmarshalled this body
+		// into a Location. Current is the stricter of the two, so a body we
+		// cannot inspect is held to the full set rather than waved through.
+		return structs.LocationIntakeCurrent
+	}
+	for _, marker := range currentIntakeMarkers {
+		if _, sent := fields[marker]; sent {
+			return structs.LocationIntakeCurrent
+		}
+	}
+	return structs.LocationIntakeLegacy
+}
+
 func (a *AppService) AddLocation(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
@@ -142,13 +186,63 @@ func (a *AppService) AddLocation(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
-	location.OwnerID = *userDid
-	err = a.db.AddLocation(r.Context(), location)
-	if err != nil {
+	if location == nil {
 		w.WriteHeader(http.StatusBadRequest)
-		a.logger.Logf("invalid location body: %s", err.Error())
 		return
 	}
+
+	location.OwnerID = *userDid
+	// A submission never carries its own approval state; new locations always
+	// start pending and are published only through the admin approval route.
+	location.Approval = nil
+	location.NormalizeForSubmission()
+
+	// Re-fetch the place from Google server-side so the stored name, address and
+	// coordinates are Google's, not the browser's. This is what stops a place
+	// that is really a street address from landing on the map as a business.
+	//
+	// Manual listings have no place id to re-fetch — that is the whole point of
+	// the path — so they skip straight to local validation, which is stricter
+	// about the merchant-authored name for exactly that reason.
+	if location.EffectiveListingSource() == structs.ListingSourceGooglePlace && GooglePlacesVerificationEnabled() {
+		verified, err := VerifyGooglePlace(r.Context(), location.GoogleID)
+		if err != nil {
+			if IsPlaceVerificationError(err) {
+				a.logger.Logf("rejected location submission from %s: %s", *userDid, err.Error())
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+				return
+			}
+			// A Places outage should not block onboarding; fall through and let
+			// local validation decide on the client-supplied values.
+			a.logger.Logf("google place verification unavailable for %s: %s", location.GoogleID, err.Error())
+		} else {
+			verified.ApplyTo(location)
+		}
+	}
+
+	if err := location.ValidateForSubmission(locationIntakeOf(body)); err != nil {
+		a.logger.Logf("invalid location submission from %s: %s", *userDid, err.Error())
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	err = a.db.AddLocation(r.Context(), location)
+	if err != nil {
+		if errors.Is(err, db.ErrDuplicateGoogleLocation) {
+			writeJSON(w, http.StatusConflict, map[string]string{
+				"error": "This business is already registered with SFLuv.",
+			})
+			return
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+		a.logger.Logf("error adding location for %s: %s", *userDid, err.Error())
+		return
+	}
+
+	// Mint the till now rather than at approval, so the merchant's Locations tab
+	// has an address to show them while the listing sits in the review queue.
+	// This cannot fail the request: see provisionNewLocationWallets.
+	a.provisionNewLocationWallets(r.Context(), location.ID)
 
 	a.sendRoleRequestEmail(
 		"MERCHANT_ADMIN_EMAIL",
@@ -167,8 +261,50 @@ func (a *AppService) AddLocation(w http.ResponseWriter, r *http.Request) {
 </table>`, utils.EscapeEmailHTML(location.Name), utils.EscapeEmailHTML(location.OwnerID)),
 	)
 
-	w.WriteHeader(http.StatusCreated)
-	w.Write([]byte("success"))
+	// The id, not the old "success" text. The stepper needs it: opening hours
+	// are optional on the form but are written through their own endpoint, which
+	// is addressed by location id, and the confirmation screen links to the
+	// listing it has just created. Still a 201 with a body, so a client that
+	// only reads the status code is unaffected.
+	writeJSON(w, http.StatusCreated, map[string]any{"id": location.ID})
+}
+
+// CancelLocationApplication withdraws an application the caller owns while it
+// is still waiting to be reviewed.
+//
+// The merchant's own way out. Before this, an application submitted by mistake
+// — the wrong branch, a duplicate, a shop they decided against — sat in the
+// admin queue with nothing the merchant could do about it, and it also pinned
+// their account as a merchant account, because a pending listing is one of the
+// two things that stops a revert to personal.
+func (a *AppService) CancelLocationApplication(w http.ResponseWriter, r *http.Request) {
+	userDid := utils.GetDid(r)
+	if userDid == nil {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	locationID, err := strconv.ParseUint(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	err = a.db.CancelPendingLocation(r.Context(), *userDid, locationID)
+	if errors.Is(err, db.ErrLocationNotCancellable) {
+		writeJSON(w, http.StatusConflict, map[string]string{
+			"error": "This location is approved, so it can no longer be withdrawn.",
+		})
+		return
+	}
+	if err != nil {
+		a.logger.Logf("error cancelling location %d for %s: %s", locationID, *userDid, err.Error())
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	a.logger.Logf("user %s cancelled their pending location application %d", *userDid, locationID)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (a *AppService) UpdateLocation(w http.ResponseWriter, r *http.Request) {
@@ -188,29 +324,135 @@ func (a *AppService) UpdateLocation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The client historically sent {"location": {...}}; accept both that and a
+	// bare location object so neither shape silently unmarshals to a zero value.
+	var wrapper struct {
+		Location *structs.Location `json:"location"`
+	}
 	var location structs.Location
-	err = json.Unmarshal(body, &location)
-	if err != nil {
+	if err := json.Unmarshal(body, &wrapper); err == nil && wrapper.Location != nil {
+		location = *wrapper.Location
+	} else if err := json.Unmarshal(body, &location); err != nil {
 		a.logger.Logf("error unmarshalling update location body: %s", err)
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
 
+	if location.ID == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "A location id is required."})
+		return
+	}
+
 	location.OwnerID = *userDid
+	// Approval is admin-only and is never read from this route; see
+	// db.UpdateLocation for the full list of columns this route cannot write.
+	location.Approval = nil
+	location.NormalizeForSubmission()
+
+	if err := location.ValidateForUpdate(); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
 
 	err = a.db.UpdateLocation(r.Context(), &location)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
 		a.logger.Logf("failed to update location %s", err.Error())
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusCreated)
+}
+
+// UpdateLocationGooglePlace re-points an owned location at a Google place. The
+// place is re-fetched server-side, so the stored name, address, coordinates and
+// hours are always Google's own values rather than anything the client sent.
+func (a *AppService) UpdateLocationGooglePlace(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+
+	userDid := utils.GetDid(r)
+	if userDid == nil {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	locationID, err := strconv.ParseUint(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
 
-	// TODO: how do we make sure this is the first time a location is approved?
-	if *location.Approval {
-		// send confirmation email to contact associated with location
-		sender := utils.NewEmailSender()
-		if sender != nil {
-			details := fmt.Sprintf(`
+	var request struct {
+		GoogleID string `json:"google_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	if !GooglePlacesVerificationEnabled() {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+			"error": "Google verification is not configured, so location details cannot be refreshed right now.",
+		})
+		return
+	}
+
+	verified, err := VerifyGooglePlace(r.Context(), request.GoogleID)
+	if err != nil {
+		if IsPlaceVerificationError(err) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		a.logger.Logf("google place verification failed for %s: %s", request.GoogleID, err.Error())
+		writeJSON(w, http.StatusBadGateway, map[string]string{
+			"error": "Could not reach Google to verify this location. Please try again.",
+		})
+		return
+	}
+
+	err = a.db.UpdateLocationGooglePlace(r.Context(), *userDid, uint(locationID), verified)
+	if err != nil {
+		if errors.Is(err, db.ErrDuplicateGoogleLocation) {
+			writeJSON(w, http.StatusConflict, map[string]string{
+				"error": "Another SFLuv location is already using this Google listing.",
+			})
+			return
+		}
+		if errors.Is(err, pgx.ErrNoRows) {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		a.logger.Logf("error updating google place for location %d: %s", locationID, err.Error())
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, verified)
+}
+
+// sendLocationApprovedEmail notifies the merchant contact that their location is
+// live. It runs from the admin approval route, which is the only path that can
+// actually flip approval.
+func (a *AppService) sendLocationApprovedEmail(ctx context.Context, locationID uint) {
+	contact, err := a.db.GetLocationApprovalContact(ctx, locationID)
+	if err != nil {
+		a.logger.Logf("error loading approval contact for location %d: %s", locationID, err.Error())
+		return
+	}
+	if contact.AdminEmail == "" {
+		return
+	}
+
+	sender := utils.NewEmailSender()
+	if sender == nil {
+		return
+	}
+
+	details := fmt.Sprintf(`
 <table role="presentation" width="100%%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
   <tr>
     <td style="padding:12px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280; width:160px;">Location</td>
@@ -220,22 +462,25 @@ func (a *AppService) UpdateLocation(w http.ResponseWriter, r *http.Request) {
     <td style="padding:12px 0; font-size:13px; color:#6b7280;">Status</td>
     <td style="padding:12px 0; font-size:13px; color:#111827;">Approved</td>
   </tr>
-</table>`, utils.EscapeEmailHTML(location.Name))
+</table>`, utils.EscapeEmailHTML(contact.Name))
 
-			htmlContent := utils.BuildStyledEmail(
-				"Location Approved",
-				"Your location has been approved.",
-				details,
-			)
+	htmlContent := utils.BuildStyledEmail(
+		"Location Approved",
+		"Your location has been approved.",
+		details,
+	)
 
-			err = sender.SendEmail(location.AdminEmail, fmt.Sprintf("%s %s", location.ContactFirstName, location.ContactLastName), "Location Approved", htmlContent, utils.NotificationFromEmail(), "SFLuv Admin")
-			if err != nil {
-				a.logger.Logf("error sending confirmation email: %s", err.Error())
-			}
-		}
+	err = sender.SendEmail(
+		contact.AdminEmail,
+		contact.ContactName,
+		"Location Approved",
+		htmlContent,
+		utils.NotificationFromEmail(),
+		"SFLuv Admin",
+	)
+	if err != nil {
+		a.logger.Logf("error sending location approval email: %s", err.Error())
 	}
-
-	w.WriteHeader(http.StatusCreated)
 }
 
 func (a *AppService) UpdateLocationWalletSettings(w http.ResponseWriter, r *http.Request) {
@@ -289,10 +534,30 @@ func (a *AppService) UpdateLocationWalletSettings(w http.ResponseWriter, r *http
 	_ = json.NewEncoder(w).Encode(location)
 }
 
+// Messages that name the offending location or wallet cannot be matched
+// exactly, but they are still the merchant's mistake to fix rather than a
+// server fault — without this they would surface as a 500 and lose their text.
+var locationWalletValidationPrefixes = []string{
+	"that wallet is already in use by ",
+	"that wallet is already this location's ",
+	"that wallet does not belong to this account",
+	"that wallet is a signing key, not a smart account",
+	"a location must always have a payment wallet",
+	"this account has no signing wallet",
+	"unknown wallet role ",
+}
+
 func containsLocationWalletValidationError(errMsg string) bool {
+	for _, prefix := range locationWalletValidationPrefixes {
+		if strings.HasPrefix(errMsg, prefix) {
+			return true
+		}
+	}
+
 	switch errMsg {
 	case
 		"only merchants can update merchant wallet settings",
+		"only merchants can change location wallets",
 		"payment wallet is required",
 		"payment wallet must be a valid ethereum address",
 		"default payment wallet requires at least one payment wallet",

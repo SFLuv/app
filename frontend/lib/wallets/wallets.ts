@@ -1,5 +1,5 @@
 import { ConnectedWallet, EIP1193Provider } from "@privy-io/react-auth";
-import { BrowserProvider, JsonRpcSigner, Signer } from "ethers";
+import { BrowserProvider, JsonRpcSigner, Signer, TypedDataDomain, TypedDataField } from "ethers";
 import { toSimpleSmartAccount, ToSimpleSmartAccountReturnType } from "permissionless/accounts";
 import { Address, createPublicClient, createWalletClient, custom, encodeFunctionData, formatUnits, Hex, hexToBytes, parseUnits, PublicClient } from "viem";
 import { entryPoint07Address } from "viem/account-abstraction";
@@ -266,6 +266,51 @@ export class AppWallet {
     }
 
     return receipt
+  }
+
+  /**
+   * Sign EIP-712 typed data as the OWNER EOA, not as the Safe.
+   *
+   * Signet's registry accepts a binding only on the authority of the account it
+   * names, so this signature must come from the Privy key — the same key that
+   * is already a Safe owner. The Safe merely relays the result and pays for it.
+   */
+  signTypedData = async (
+    domain: TypedDataDomain,
+    types: Record<string, TypedDataField[]>,
+    value: Record<string, unknown>,
+  ): Promise<Hash> => {
+    if (!this.ethersSigner) throw new Error("signer not ready")
+    return (await this.ethersSigner.signTypedData(domain, types, value)) as Hash
+  }
+
+  /**
+   * Send an arbitrary sponsored call from this smart wallet.
+   *
+   * Exists for Signet enrolment, whose two writes must originate from the Safe
+   * itself: `SafeBindingRegistry.bind` accepts only `account` or `safe` as
+   * caller, and `addOwnerWithThreshold` is a Safe self-call. Neither has an
+   * admin path, and the Privy EOA has no gas, so the module is the only route.
+   *
+   * Deliberately a thin pass-through to `_execTx` rather than a new code path —
+   * it is the same bundler, paymaster and signer every transfer already uses.
+   * Smart wallets only: an EOA-type AppWallet has no Safe to speak for.
+   */
+  execSponsored = async (contract: Address, callData: Hash): Promise<TxState> => {
+    const receipt: TxState = { sending: false, error: null, hash: null }
+
+    if (this.type !== "smartwallet") {
+      receipt.error = "sponsored calls require a smart wallet"
+      return receipt
+    }
+
+    const t = this._beforeTx()
+    if (!t) {
+      receipt.error = "smart wallet not ready"
+      return receipt
+    }
+
+    return this._execTx(t.wallet, t.signer, callData, contract)
   }
 
   private _getAllowance = async (owner: Address, spender: Address, token: Address = this.SFLUV_TOKEN): Promise<bigint | null> => {

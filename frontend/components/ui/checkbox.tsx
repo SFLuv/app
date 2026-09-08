@@ -13,7 +13,12 @@ const Checkbox = React.forwardRef<
   <CheckboxPrimitive.Root
     ref={ref}
     className={cn(
-      "peer h-4 w-4 shrink-0 rounded-sm border border-input bg-card ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-50 data-[state=checked]:border-primary data-[state=checked]:bg-primary data-[state=checked]:text-primary-foreground",
+      // An explicit 4px, not rounded-sm. The theme's --radius is 0.75rem, so
+      // the scale's "sm" is calc(0.75rem - 4px) = 8px — exactly half of this
+      // 16px box, which renders the checkbox as a circle. The radius has to be
+      // stated in absolute terms because it is small relative to the control,
+      // not relative to the theme.
+      "peer h-4 w-4 shrink-0 rounded-[4px] border border-input bg-card ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-50 data-[state=checked]:border-primary data-[state=checked]:bg-primary data-[state=checked]:text-primary-foreground",
       className
     )}
     {...props}
@@ -21,7 +26,9 @@ const Checkbox = React.forwardRef<
     <CheckboxPrimitive.Indicator
       className={cn("flex items-center justify-center text-current")}
     >
-      <Check className="h-4 w-4" />
+      {/* Inset, so the tick sits inside the box rather than touching its
+          border on all four sides. */}
+      <Check className="h-3.5 w-3.5" strokeWidth={3} />
     </CheckboxPrimitive.Indicator>
   </CheckboxPrimitive.Root>
 ))

@@ -5,6 +5,7 @@ import { BACKEND } from "@/lib/constants"
 import {
   CommunityConfigPayload,
   ResolvedCommunityConfig,
+  ResolvedFeatureFlags,
   resolveCommunityConfig,
 } from "@/lib/community-config"
 
@@ -81,4 +82,20 @@ export function useChainConfig(): ResolvedCommunityConfig {
     throw new Error("useChainConfig must be used inside ChainConfigProvider")
   }
   return config
+}
+
+// Server-owned feature flags ride along on the same /config the chain settings
+// come from, so a surface can gate itself without a second fetch or a build-time
+// env var that would drift from what the backend actually serves.
+export function useFeatureFlags(): ResolvedFeatureFlags {
+  return useChainConfig().features
+}
+
+// The one question an unwrap affordance should ask before rendering itself.
+// A true here means unwrap is switched on for this deployment — it does NOT
+// mean the wallet in hand can complete one: unwrapAndBridge still refuses
+// unless that wallet holds REDEEMER_ROLE on the token, which is granted on
+// chain per wallet. Show the button on this, but keep handling the failure.
+export function useUnwrapEnabled(): boolean {
+  return useFeatureFlags().unwrapEnabled
 }

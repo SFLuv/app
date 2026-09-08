@@ -39,7 +39,7 @@ The seed script is guarded. It refuses to run unless you explicitly confirm, and
 cd /Users/sanchezoleary/Projects/SFLUV_MAIN
 CONFIRM_LOCAL_MERCHANT_MODE_SEED=YES \
 TEST_USER_EMAIL=sanchez@oleary.com \
-./scripts/seed_merchant_mode_local.sh
+./scripts/seed-merchant-mode-local/seed_merchant_mode_local.sh
 ```
 
 If the local user row does not have the email attached yet, pass the Privy DID directly:
@@ -48,7 +48,7 @@ If the local user row does not have the email attached yet, pass the Privy DID d
 CONFIRM_LOCAL_MERCHANT_MODE_SEED=YES \
 TEST_USER_ID=did:privy:YOUR_LOCAL_USER_ID \
 TEST_USER_EMAIL=sanchez@oleary.com \
-./scripts/seed_merchant_mode_local.sh
+./scripts/seed-merchant-mode-local/seed_merchant_mode_local.sh
 ```
 
 ## What The Seed Adds

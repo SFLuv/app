@@ -882,9 +882,21 @@ func (a *reportCore) loadW9(ctx context.Context, wallet string, userID string, y
 				s.approved_at,
 				s.rejected_at
 			FROM w9_wallet_earnings e
-			LEFT JOIN w9_submissions s
-				ON LOWER(s.wallet_address) = LOWER(e.wallet_address)
-				AND s.year = e.year
+			-- Filings are per person per year now, not per wallet: one W-9
+			-- covers every address someone holds. The old per-wallet
+			-- submissions table is retained only for retention and is not
+			-- read here, because it would report a stale answer.
+			LEFT JOIN LATERAL (
+				SELECT
+					'' AS email,
+					f.requested_at AS submitted_at,
+					(f.status IN ('requested','in_progress')) AS pending_approval,
+					f.completed_at AS approved_at,
+					NULL::timestamptz AS rejected_at
+				FROM w9_filings f
+				WHERE f.user_id = e.user_id AND f.tax_year = e.year
+				LIMIT 1
+			) s ON TRUE
 			WHERE ($1 = '' OR LOWER(e.wallet_address) = $1)
 			AND ($2 = '' OR e.user_id = $2)
 			AND ($3 = 0 OR e.year = $3)

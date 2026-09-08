@@ -10,7 +10,7 @@ import (
 // has a row in the pranks table, the prankee's user id is returned so the
 // caller can act as that user for the request.
 //
-// The pranks table is created ONLY by the local dev CLI (./dev-up.sh menu),
+// The pranks table is created ONLY by the local dev CLI (./scripts/dev-up/dev-up.sh menu),
 // never by a migration, so on any normal database — including production — the
 // table does not exist. This method checks for the table's existence FIRST and
 // returns (\"\", false, nil) when it is absent, so callers never fail a request

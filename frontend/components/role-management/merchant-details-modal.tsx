@@ -1,6 +1,7 @@
 "use client"
 
 import { useState } from "react"
+import { RatingStars } from "@/components/ui/rating-stars"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
@@ -60,7 +61,10 @@ export function MerchantDetailsModal({ merchant, isOpen, onClose, onUpdateStatus
 
             <div className="col-span-2">
               <Label className="text-sm font-medium">Rating</Label>
-              <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">{merchant.rating} / 5</p>
+              <div className="mt-1 flex items-center gap-1.5">
+                <RatingStars rating={merchant.rating} size={14} />
+                <span className="text-sm text-gray-600 dark:text-gray-400">{merchant.rating.toFixed(1)} / 5</span>
+              </div>
             </div>
 
             <div className="col-span-4">

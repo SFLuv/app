@@ -41,7 +41,9 @@ func (s *AppDB) CreateTables() error {
 				privacy_policy_version TEXT NOT NULL DEFAULT '',
 				mailing_list_opt_in BOOLEAN NOT NULL DEFAULT false,
 				mailing_list_opt_in_at TIMESTAMPTZ,
-				mailing_list_policy_version TEXT NOT NULL DEFAULT ''
+				mailing_list_policy_version TEXT NOT NULL DEFAULT '',
+				account_type TEXT NOT NULL DEFAULT 'regular' CHECK (account_type IN ('regular', 'merchant')),
+				merchant_onboarding_completed_at TIMESTAMPTZ
 		);
 	`)
 	if err != nil {
@@ -133,6 +135,54 @@ func (s *AppDB) CreateTables() error {
 	`)
 	if err != nil {
 		return fmt.Errorf("error adding user policy columns: %s", err)
+	}
+
+	// What the person said they were signing up as. Deliberately not is_merchant:
+	// that flag is recomputed from approved listings and would overwrite the
+	// answer, so the two have to be different columns.
+	_, err = s.db.Exec(context.Background(), `
+		ALTER TABLE users
+		ADD COLUMN IF NOT EXISTS account_type TEXT NOT NULL DEFAULT 'regular';
+
+		-- NULL means nobody ever put the question, which is what a mobile signup
+		-- looks like: only the web signup asks. See migration 1.50.
+		ALTER TABLE users
+		ADD COLUMN IF NOT EXISTS account_type_selected_at TIMESTAMPTZ;
+
+		ALTER TABLE users
+		ADD COLUMN IF NOT EXISTS web_merchant_prompt_seen_at TIMESTAMPTZ;
+
+		-- Start of the current merchant stint; cleared on a revert. See
+		-- migration 1.51 for why money arriving before it is not sales.
+		ALTER TABLE users
+		ADD COLUMN IF NOT EXISTS merchant_since TIMESTAMPTZ;
+
+		-- TRUE where migration 1.51 guessed the date rather than observing the
+		-- change. An inferred date is an upper bound; see that migration.
+		ALTER TABLE users
+		ADD COLUMN IF NOT EXISTS merchant_since_inferred BOOLEAN NOT NULL DEFAULT FALSE;
+
+		CREATE TABLE IF NOT EXISTS user_account_type_events (
+			id SERIAL PRIMARY KEY,
+			user_id TEXT NOT NULL REFERENCES users(id),
+			previous_account_type TEXT NOT NULL DEFAULT '',
+			account_type TEXT NOT NULL,
+			source TEXT NOT NULL DEFAULT '',
+			changed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		);
+
+		CREATE INDEX IF NOT EXISTS user_account_type_events_user_idx
+			ON user_account_type_events(user_id, changed_at);
+
+		ALTER TABLE users
+		ADD COLUMN IF NOT EXISTS merchant_onboarding_completed_at TIMESTAMPTZ;
+
+		ALTER TABLE users DROP CONSTRAINT IF EXISTS users_account_type_check;
+		ALTER TABLE users ADD CONSTRAINT users_account_type_check
+			CHECK (account_type IN ('regular', 'merchant'));
+	`)
+	if err != nil {
+		return fmt.Errorf("error adding user account type columns: %s", err)
 	}
 
 	_, err = s.db.Exec(context.Background(), `
@@ -2192,41 +2242,47 @@ func (s *AppDB) CreateTables() error {
 	}
 
 	_, err = s.db.Exec(context.Background(), `
+				-- The text and number columns are NOT NULL because every reader scans them
+				-- into plain strings and numbers. A single NULL fails the scan, and
+				-- GET /locations reads every row for the public merchant map, so one
+				-- bad row takes the map down for everyone. Kept in step with
+				-- migration 1.48; google_id, owner_id, delete_reason and approval are
+				-- deliberately still nullable — see the migration for why.
 				CREATE TABLE IF NOT EXISTS locations (
 					id SERIAL PRIMARY KEY,
 					google_id TEXT,
 					owner_id TEXT REFERENCES users(id),
-					name TEXT,
-					description TEXT,
-					type TEXT,
+					name TEXT NOT NULL DEFAULT '',
+					description TEXT NOT NULL DEFAULT '',
+					type TEXT NOT NULL DEFAULT '',
 					approval BOOLEAN,
 					approved_at TIMESTAMP,
-					street TEXT,
-					city TEXT,
-					state TEXT,
-				zip TEXT,
-				lat NUMERIC,
-				lng NUMERIC,
-				phone TEXT,
-				email TEXT,
-				admin_phone TEXT,
-				admin_email TEXT,
-				website TEXT,
-				image_url TEXT,
-				rating NUMERIC,
-				maps_page TEXT,
-				contact_firstname TEXT,
-				contact_lastname TEXT,
-				contact_phone TEXT,
-				pos_system TEXT,
-				sole_proprietorship TEXT,
-				tipping_policy TEXT,
-				tipping_division TEXT,
-				table_coverage TEXT,
-				service_stations INTEGER,
-				tablet_model TEXT,
-				messaging_service TEXT,
-				reference TEXT,
+					street TEXT NOT NULL DEFAULT '',
+					city TEXT NOT NULL DEFAULT '',
+					state TEXT NOT NULL DEFAULT '',
+				zip TEXT NOT NULL DEFAULT '',
+				lat NUMERIC NOT NULL DEFAULT 0,
+				lng NUMERIC NOT NULL DEFAULT 0,
+				phone TEXT NOT NULL DEFAULT '',
+				email TEXT NOT NULL DEFAULT '',
+				admin_phone TEXT NOT NULL DEFAULT '',
+				admin_email TEXT NOT NULL DEFAULT '',
+				website TEXT NOT NULL DEFAULT '',
+				image_url TEXT NOT NULL DEFAULT '',
+				rating NUMERIC NOT NULL DEFAULT 0,
+				maps_page TEXT NOT NULL DEFAULT '',
+				contact_firstname TEXT NOT NULL DEFAULT '',
+				contact_lastname TEXT NOT NULL DEFAULT '',
+				contact_phone TEXT NOT NULL DEFAULT '',
+				pos_system TEXT NOT NULL DEFAULT '',
+				sole_proprietorship TEXT NOT NULL DEFAULT '',
+				tipping_policy TEXT NOT NULL DEFAULT '',
+				tipping_division TEXT NOT NULL DEFAULT '',
+				table_coverage TEXT NOT NULL DEFAULT '',
+				service_stations INTEGER NOT NULL DEFAULT 0,
+				tablet_model TEXT NOT NULL DEFAULT '',
+				messaging_service TEXT NOT NULL DEFAULT '',
+				reference TEXT NOT NULL DEFAULT '',
 				UNIQUE (google_id)
 		);
 	`)
@@ -2236,10 +2292,16 @@ func (s *AppDB) CreateTables() error {
 
 	_, err = s.db.Exec(context.Background(), `
 			ALTER TABLE locations
+			ADD COLUMN IF NOT EXISTS listing_source TEXT NOT NULL DEFAULT 'google_place';
+
+			ALTER TABLE locations
 			ADD COLUMN IF NOT EXISTS approved_at TIMESTAMP;
 
 			ALTER TABLE locations
 			ADD COLUMN IF NOT EXISTS tipping_wallet_address TEXT NOT NULL DEFAULT '';
+
+			ALTER TABLE locations
+			ADD COLUMN IF NOT EXISTS payment_wallet_address TEXT NOT NULL DEFAULT '';
 
 			ALTER TABLE locations
 			ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT true;
@@ -2249,6 +2311,20 @@ func (s *AppDB) CreateTables() error {
 
 			ALTER TABLE locations
 			ADD COLUMN IF NOT EXISTS delete_reason TEXT;
+
+			-- The Location Approval Form's own columns. See migration 1.50 for
+			-- why the single-sheet form's columns are still here alongside them.
+			ALTER TABLE locations
+			ADD COLUMN IF NOT EXISTS contact_name TEXT NOT NULL DEFAULT '';
+
+			ALTER TABLE locations
+			ADD COLUMN IF NOT EXISTS referral_source TEXT NOT NULL DEFAULT '';
+
+			ALTER TABLE locations
+			ADD COLUMN IF NOT EXISTS accepts_tips BOOLEAN;
+
+			ALTER TABLE locations
+			ADD COLUMN IF NOT EXISTS has_staff_tablet BOOLEAN;
 
 			ALTER TABLE locations
 			DROP CONSTRAINT IF EXISTS locations_google_id_key;
@@ -2264,6 +2340,47 @@ func (s *AppDB) CreateTables() error {
 		`)
 	if err != nil {
 		return fmt.Errorf("error ensuring locations.approved_at column: %s", err)
+	}
+
+	// Merchant map icons. Bytes live in their own table so the wide `locations`
+	// row stays cheap to select — every map read pulls the whole listing and
+	// none of them want the image. The timestamp is mirrored onto `locations`
+	// so a listing can advertise "I have an icon, fetched at this version"
+	// without joining the blob.
+	_, err = s.db.Exec(context.Background(), `
+		ALTER TABLE locations
+		ADD COLUMN IF NOT EXISTS icon_updated_at TIMESTAMPTZ;
+
+		CREATE TABLE IF NOT EXISTS location_icons(
+			location_id INTEGER PRIMARY KEY REFERENCES locations(id) ON DELETE CASCADE,
+			content_type TEXT NOT NULL,
+			image_data BYTEA NOT NULL,
+			size_bytes INTEGER NOT NULL,
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		);
+	`)
+	if err != nil {
+		return fmt.Errorf("error creating location_icons table: %s", err)
+	}
+
+	// Storefront photos, stored the same way and for the same reasons. Separate
+	// from the icon rather than one table with a kind: they have different size
+	// limits, different aspect handling and different call sites, and every read
+	// path wants one specific picture, never "whichever images this listing has".
+	_, err = s.db.Exec(context.Background(), `
+		ALTER TABLE locations
+		ADD COLUMN IF NOT EXISTS photo_updated_at TIMESTAMPTZ;
+
+		CREATE TABLE IF NOT EXISTS location_photos(
+			location_id INTEGER PRIMARY KEY REFERENCES locations(id) ON DELETE CASCADE,
+			content_type TEXT NOT NULL,
+			image_data BYTEA NOT NULL,
+			size_bytes INTEGER NOT NULL,
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		);
+	`)
+	if err != nil {
+		return fmt.Errorf("error creating location_photos table: %s", err)
 	}
 
 	_, err = s.db.Exec(context.Background(), `
@@ -2590,6 +2707,20 @@ func (s *AppDB) CreateTables() error {
 			candidate_emails
 		WHERE
 			TRIM(COALESCE(email, '')) <> ''
+		-- Rows written under an older id scheme carry an id that is not
+		-- MD5(user_id:email), so ON CONFLICT (id) below does not see them and
+		-- the insert then trips the (user_id, email_normalized) unique index
+		-- instead — which aborts CreateTables and, with it, every migration.
+		-- The address is already recorded for that user either way, so skipping
+		-- it loses nothing.
+		AND NOT EXISTS (
+			SELECT 1
+			FROM user_verified_emails existing
+			WHERE existing.active = TRUE
+			AND existing.user_id = candidate_emails.user_id
+			AND existing.email_normalized = LOWER(candidate_emails.email)
+			AND existing.id <> MD5(candidate_emails.user_id || ':' || LOWER(candidate_emails.email))
+		)
 		ON CONFLICT (id) DO UPDATE
 		SET
 			email = EXCLUDED.email,
@@ -2602,6 +2733,12 @@ func (s *AppDB) CreateTables() error {
 	`)
 	if err != nil {
 		return fmt.Errorf("error backfilling verified email rows: %s", err)
+	}
+
+	// Tax and payout tables. Shared with migration 1.41 so a fresh database and
+	// an upgraded one get identical schemas.
+	if _, err := s.db.Exec(context.Background(), TaxSchemaDDL); err != nil {
+		return fmt.Errorf("error creating tax and payout tables: %s", err)
 	}
 
 	_, err = s.db.Exec(context.Background(), `
