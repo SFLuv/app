@@ -112,6 +112,10 @@ type VolunteerEventQR struct {
 	Live           bool    `json:"live"`
 	LiveAt         *string `json:"live_at"`
 	CodesGenerated bool    `json:"codes_generated"`
+	// The stored rule, so the edit form can seed the controls it was set with.
+	// Null means the default window, which is what an omitted pair submits.
+	LiveOffsetHours   *int `json:"live_offset_hours"`
+	ExpiryOffsetHours *int `json:"expiry_offset_hours"`
 }
 
 // VolunteerEventViewer is present whenever the request is authenticated,
@@ -278,9 +282,16 @@ type VolunteerEventCreateRequest struct {
 
 	Recurrence *VolunteerEventRecurrenceInput `json:"recurrence,omitempty"`
 
-	// QRCutoffLocal is an explicit redemption deadline as wall clock in the
-	// event's timezone. Empty means the default: 24 hours after the event ends.
-	QRCutoffLocal string `json:"qr_cutoff_local,omitempty"`
+	// The QR window, as hours relative to this occurrence rather than as fixed
+	// instants — see QRWindowRule. Both nil means the default: midnight local
+	// on the day the event starts, until midnight local on the day after it
+	// ends.
+	//
+	// Replaces qr_cutoff_local, which was an absolute wall-clock deadline and
+	// therefore could not be repeated: every occurrence of a series would have
+	// inherited the first one's date.
+	QRLiveOffsetHours   *int `json:"qr_live_offset_hours,omitempty"`
+	QRExpiryOffsetHours *int `json:"qr_expiry_offset_hours,omitempty"`
 
 	// PhotoIds are cover photos already staged by the caller. They are attached
 	// inside the creation transaction, so an event is never created without the

@@ -56,7 +56,13 @@ export interface ManagedVolunteerEvent {
     zip: string
   } | null
   signup?: { mode: string; url?: string | null; open: boolean; closed_reason?: string | null }
-  qr?: { live: boolean; live_at: string | null; codes_generated: boolean }
+  qr?: {
+    live: boolean
+    live_at: string | null
+    codes_generated: boolean
+    live_offset_hours?: number | null
+    expiry_offset_hours?: number | null
+  }
   /** Management-only: who made the event. Email is present only when the
       short name is ambiguous within the organization. */
   creator?: { name: string; email?: string } | null

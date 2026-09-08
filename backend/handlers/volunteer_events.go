@@ -28,6 +28,27 @@ func publicURL(path string) string {
 // organization of their own. It is the same asset the app serves as its site
 // icon and every transactional email already embeds, so the brand is identical
 // across surfaces. Derived from APP_BASE_URL so a dev boot points at itself.
+// isHouseOrganization reports whether an organization is SFLuv's own, rather
+// than a partner.
+//
+// Staff belong to an "SFLuv" organization so they can use the affiliate tools,
+// which means an event they file through the affiliate route carries an
+// organization_id like any other — and the paired branding then credits the
+// event to "SFLuv and SFLuv". The organization is real and the membership is
+// deliberate; what is wrong is treating it as a third party.
+//
+// Matched on the normalized name because there is no flag for it. That is the
+// weak part: renaming the organization would silently restore the doubled
+// branding. A boolean column on organizations would be the durable fix, and is
+// worth doing the next time that table is migrated.
+func isHouseOrganization(org *structs.Organization) bool {
+	if org == nil {
+		return false
+	}
+	name := strings.ToLower(strings.TrimSpace(org.Name))
+	return name == "sfluv"
+}
+
 func sfluvOrganizerLogoURL() string {
 	base := strings.TrimRight(strings.TrimSpace(os.Getenv("APP_BASE_URL")), "/")
 	if base == "" {
@@ -287,7 +308,10 @@ func (s *BotService) mapVolunteerEvent(row *db.VolunteerEventRow, ctx *volunteer
 		Name:    "SFLuv",
 		LogoURL: &sfluvLogo,
 	}
-	if row.OrganizationId != nil {
+	// The house organization keeps the plain SFLuv organizer seeded above: an
+	// event staff filed through the affiliate tools is still ours, and pairing
+	// the mark with itself reads as a mistake on a printed card.
+	if row.OrganizationId != nil && !isHouseOrganization(ctx.organizations[*row.OrganizationId]) {
 		event.Organizer.Type = structs.OrganizerTypeAffiliate
 		event.Organizer.OrganizationId = row.OrganizationId
 		// The SFLuv logo is the intended fallback for a partner that has not
@@ -565,6 +589,12 @@ func (s *BotService) GetVolunteerEventOrganizers(w http.ResponseWriter, r *http.
 	}
 
 	facets := make([]structs.VolunteerEventOrganizerFacet, 0, len(facetRows))
+	// Where the SFLuv facet sits in the slice, so house-organization rows fold
+	// into it instead of adding a second "SFLuv" entry to the filter list. The
+	// rows arrive grouped by organization_id, and events with no organization
+	// and events filed by staff through the affiliate tools are the same
+	// organizer as far as anybody reading the list is concerned.
+	sfluvFacet := -1
 	for _, row := range facetRows {
 		sfluvLogo := sfluvOrganizerLogoURL()
 		facet := structs.VolunteerEventOrganizerFacet{
@@ -578,13 +608,24 @@ func (s *BotService) GetVolunteerEventOrganizers(w http.ResponseWriter, r *http.
 			if !ok || org == nil {
 				continue
 			}
-			facet.Type = structs.OrganizerTypeAffiliate
-			facet.OrganizationId = row.OrganizationId
-			facet.Name = org.Name
-			if org.Logo != nil && strings.TrimSpace(*org.Logo) != "" {
-				logoURL := publicURL(fmt.Sprintf("/organizers/%d/logo", org.Id))
-				facet.LogoURL = &logoURL
+			// Same rule as the payload, so the filter list and the events it
+			// filters agree about who the organizer is.
+			if !isHouseOrganization(org) {
+				facet.Type = structs.OrganizerTypeAffiliate
+				facet.OrganizationId = row.OrganizationId
+				facet.Name = org.Name
+				if org.Logo != nil && strings.TrimSpace(*org.Logo) != "" {
+					logoURL := publicURL(fmt.Sprintf("/organizers/%d/logo", org.Id))
+					facet.LogoURL = &logoURL
+				}
 			}
+		}
+		if facet.Type == structs.OrganizerTypeSFLuv {
+			if sfluvFacet >= 0 {
+				facets[sfluvFacet].EventCount += facet.EventCount
+				continue
+			}
+			sfluvFacet = len(facets)
 		}
 		facets = append(facets, facet)
 	}
