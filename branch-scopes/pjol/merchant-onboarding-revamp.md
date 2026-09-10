@@ -1,7 +1,8 @@
 # Branch scope — `pjol/merchant-onboarding-revamp`
 
-Aug 28 – Sep 5 2026 · app + mobile-app · **20.9h active** — 8.9h measured across ten sittings, plus
-12.0h of hands-on testing reported by PJ and **not** measured (see *Untracked testing time* at the foot)
+Aug 28 – Sep 8 2026 · app + mobile-app · **22.1h active** — 9.1h measured across eleven sittings,
+plus 13.0h of hands-on testing and deployment reported by PJ and **not** measured (see *Untracked
+time* at the foot)
 
 Merchant onboarding and the location request flow, rebuilt around a split between merchant accounts
 and personal ones. Some of that split already existed on `main` — `users.account_type`, the read-only
@@ -10,6 +11,10 @@ onboarding gate, the merchant wall — and this branch finished it and rebuilt t
 Hours are **measured from session-transcript timestamps**, clustered into sittings on a 30-minute
 gap, and corroborated against file mtimes. Method: the `time-accounting` skill at
 <https://github.com/pjol/SKILLS/tree/main/time-accounting> (local copy: `docs/TIME_ESTIMATION.md`).
+
+Round 10 was done on `pjol/event-updates-cleanup`, a follow-on branch cut after this one merged. It
+is recorded here rather than in its own file because it finishes work this branch started, and
+splitting two rounds of the same thread across two documents helps nobody looking for it later.
 
 The one exception is the testing time in the last section, which no transcript records because no
 prompts were sent during it. It is reported, not measured, and is kept apart from the measured
@@ -348,13 +353,13 @@ figure is to the last message at the time of writing.
 
 ---
 
-# Untracked testing time
+# Untracked time
 
-**Repos:** `app` · `mobile-app` · **Total hours: 12.0 — reported, not measured**
+**Repos:** `app` · `mobile-app` · **Total hours: 13.0 — reported, not measured**
 
 Three mornings of hands-on testing — Sep 2, Sep 3 and Sep 4, roughly 09:00 to 12:00 each — plus the
-afternoon of Sep 4, during which no prompts were sent and no files were changed, so no transcript
-records them.
+afternoon of Sep 4 and the Monday evening deploy, during which no prompts were sent and no files were
+changed, so no transcript records them.
 
 | Session | hours | basis |
 |---|---|---|
@@ -362,6 +367,7 @@ records them.
 | Thu Sep 3, ~09:00–12:00 | 3.0 | reported by PJ |
 | Fri Sep 4, ~09:00–12:00 | 3.0 | reported by PJ |
 | Fri Sep 4, afternoon | 3.0 | reported by PJ |
+| Mon Sep 7, evening — deployment | 1.0 | reported by PJ |
 
 **How this figure was arrived at, and what is wrong with it.** It was not measured. It is PJ's own
 account of time spent testing the branch by hand, recorded here because the work happened and the
@@ -378,6 +384,9 @@ identical to absence. The weaknesses are worth naming rather than burying:
   double-counted.
 - Testing time is real work and belongs in the total. It is kept in its own section, and out of the
   measured figure, so that a later reader can tell which number came from a clock.
+- The Monday evening deploy is on the same footing: reported, rounded to the hour, and uncorroborated
+  by anything in this repo. It does not overlap the measured Sep 7 sittings, which end at 21:44 and
+  cover the environment-variable review and the webpage build fix rather than the deploy itself.
 
 ---
 
@@ -531,3 +540,49 @@ merchant mode can switch tills without a logout, and the visibility build. Separ
   keyed to the event, and visibility does not touch them — the same gap as
   FAU-01, where cancelling an event leaves its codes live. An unlisted event's
   codes redeem exactly as a public one's do.
+
+---
+
+# Round 10 — Sep 8, 14:24–14:37
+
+**Repos:** `app` · **Total active hours: 0.2 — measured**
+
+Done on `pjol/event-updates-cleanup`, cut after this branch merged. One sitting, 14:24 to 14:37. File
+mtimes agree — `schema_migrations.go` 14:30, `app_volunteer_event_qr.go` 14:31, `volunteer_events.go`
+14:33, `add-volunteer-event-modal.tsx` 14:36 — so the span is corroborated at both ends rather than
+resting on message stamps alone.
+
+Two cleanup notes on volunteer events: QR cards crediting SFLuv twice, and a redemption window that
+could not survive a repeat.
+
+## Features
+
+| Feature | hours | repo |
+|---|---|---|
+| **QR redemption window stored as a rule, not two instants** — migration 1.53 adds `qr_live_offset_hours` and `qr_expiry_offset_hours`, nullable, where NULL means the new default: live at midnight local on the day the event starts, expiring at midnight local the day after it ends. Each occurrence of a repeating event resolves its own window from its own dates, and the admin form takes hours rather than a datetime because a series has no single date to set. Verified across seven cases including a DST spring-forward day, where both ends still land exactly on midnight across a 23-hour day | 0.1 | app |
+| **House-organisation events stop being credited to a partner** — staff belong to an "SFLuv" organization so they can use the affiliate tools, so an event filed through the affiliate route printed "Thank you from SFLuv and SFLuv" on every QR card. Fixed at the organizer payload so every client agrees, with house-organisation facets folded into the SFLuv facet rather than adding a second "SFLuv" row to the filter list | 0.05 | app |
+| `CreateRecurringSuccessor` had 29 columns and 28 values, so `qr_expires_at` had no value and everything after it shifted — `funding_status` would have received `location_id`. Postgres rejects that outright, so the first occurrence of any recurring series would have failed to generate. Never fired: there are no recurring events in the database. Both inserts verified by executing their exact shapes against the real schema in a rolled-back transaction | 0.05 | app |
+
+## Totals
+
+| | |
+|---|---|
+| Files changed | 7 modified, 1 added |
+| Migrations | 1 (`1.53`), written and verified in a rolled-back transaction, not applied |
+| New routes | 0 |
+
+## Worth knowing
+
+- **The default window is deliberately not expressible as an offset.** How many hours midnight is
+  from an event depends on what time of day it runs and on whether a DST boundary falls inside the
+  window, so NULL has to stay distinct from zero: zero means "exactly at the start", NULL means "the
+  default", and only the second can be resolved per occurrence.
+- **The edit form seeds from the stored rule.** Without that, editing any event with a custom window
+  would silently revert it to the default — the same trap the visibility control hit in Round 9.
+- **`qr_cutoff_local` was removed rather than deprecated.** It was an absolute wall-clock deadline and
+  therefore could not be repeated: every occurrence of a series would have inherited the first one's
+  date. Only the admin and affiliate web forms sent it, both updated; nothing in the mobile app or on
+  the marketing site creates events.
+- **The house-organisation check matches on the normalized name, because there is no flag for it.**
+  Renaming that organization would silently restore the doubled branding. A boolean column on
+  `organizations` is the durable fix, and is worth doing the next time that table is migrated.
