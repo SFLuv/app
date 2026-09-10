@@ -227,13 +227,32 @@ func (s *BotDB) GetPublicVolunteerEvents(ctx context.Context, f *structs.Volunte
 	// "Has open spots" only means something for internal signups, where we hold
 	// the records. Cancelled events are never open.
 	if f.OpenSignups {
+		// "Open spots only" on the site, and the default state of the phone's
+		// "Show full" chip. Both mean the same thing: an event somebody can
+		// still join.
+		//
+		// This used to require signup_mode = 'internal', which answered a
+		// different question — whether WE host the signups — and so hid every
+		// externally-run event from the mobile feed by default. With one
+		// external event on the portal that read as the volunteer tab being
+		// broken.
+		//
+		// The clauses below mirror buildSignupInfo exactly, so that this filter
+		// returns precisely the events whose own payload reports
+		// signup.open == true. Two definitions of "open" that can disagree is
+		// how the list came to contradict the thing it was listing.
 		where = append(where,
-			"e.signup_mode = 'internal'",
+			// Mode 'none' has no signup to be open.
+			"e.signup_mode <> 'none'",
 			"e.review_status <> 'cancelled'",
-			`e.max_participants > (
+			"e.cancelled_at IS NULL",
+			// Ended events are closed, whatever their capacity.
+			"(e.expiration = 0 OR e.expiration > EXTRACT(EPOCH FROM NOW()))",
+			// Capacity is only ours to judge when the signups are ours to hold.
+			`(e.signup_mode <> 'internal' OR e.max_participants > (
 				SELECT COUNT(*) FROM event_signups s
 				WHERE s.event_id = e.id AND s.cancelled_at IS NULL
-			)`,
+			))`,
 		)
 	}
 
