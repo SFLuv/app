@@ -3,6 +3,7 @@ package router
 import (
 	"context"
 	"encoding/json"
+	stdlog "log"
 	"net/http"
 	"net/url"
 	"os"
@@ -163,6 +164,7 @@ func New(s *handlers.BotService, a *handlers.AppService, p *handlers.PonderServi
 	AddPartnerRoutes(r, a)
 	AddOrganizationRoutes(r, a, s)
 	AddClientConfigRoutes(r, a)
+	AddEngineProxyRoutes(r)
 	AddUserRoutes(r, a)
 	AddAdminRoutes(r, a)
 	AddAffiliateRoutes(r, s, a)
@@ -204,6 +206,32 @@ func AddOrganizationRoutes(r *chi.Mux, a *handlers.AppService, s *handlers.BotSe
 func AddClientConfigRoutes(r *chi.Mux, s *handlers.AppService) {
 	r.Get("/config", s.GetClientConfig)
 	r.Get("/client-version", s.GetClientVersion)
+}
+
+// AddEngineProxyRoutes mounts the temporary bridge around the Citizen Wallet
+// engine's expired TLS certificate. Off unless ENGINE_PROXY_ENABLED=true, and
+// intended to be deleted once the upstream renews — see handlers/engine_proxy.go.
+//
+// Unauthenticated on purpose: the engine is a public endpoint and the requests
+// carry their own signatures. Putting auth in front of it would break the
+// mobile app without adding a guarantee.
+func AddEngineProxyRoutes(r *chi.Mux) {
+	if !handlers.EngineProxyEnabled() {
+		return
+	}
+
+	proxy, err := handlers.NewEngineProxy()
+	if err != nil {
+		// Loud: a half-configured bridge that silently does nothing is worse
+		// than one that never started, because the config rewrite may still be
+		// pointing clients at a route that 404s.
+		stdlog.Printf("engine proxy enabled but not usable: %v", err)
+		return
+	}
+
+	stdlog.Printf("engine proxy mounted at /bundler — TEMPORARY, remove once the upstream certificate renews")
+	r.Handle("/bundler/*", proxy)
+	r.Handle("/bundler", proxy)
 }
 
 // AddVolunteerEventRoutes mounts the public volunteer portal API consumed by
@@ -703,7 +731,17 @@ func merchantOnboardingGateAllows(method string, path string) bool {
 
 	// A prefix rather than a path: the client reads its configuration before it
 	// knows anything at all, including whether it is gated.
-	return trimmed == "/config" || strings.HasPrefix(trimmed, "/config/")
+	if trimmed == "/config" || strings.HasPrefix(trimmed, "/config/") {
+		return true
+	}
+
+	// The temporary engine bridge. Exempt so that routing bundler traffic
+	// through this backend stays behaviour-neutral: before the bridge, clients
+	// posted user operations straight to the engine and this gate never saw
+	// them. A gated merchant is already refused at the routes that authorize
+	// the action; gating the transport as well would only turn a clear refusal
+	// into a confusing bundler failure. Remove with the proxy.
+	return trimmed == "/bundler" || strings.HasPrefix(trimmed, "/bundler/")
 }
 
 // merchantOnboardingGate holds a merchant who has not listed a shop yet to

@@ -112,7 +112,8 @@ func (a *AppService) GetClientConfig(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "public, max-age=30")
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(withServerFeatureFlags(a.clientConfig.RawJSON()))
+	// withEngineProxyURL is a no-op unless the engine bridge is switched on.
+	_, _ = w.Write(withEngineProxyURL(withServerFeatureFlags(a.clientConfig.RawJSON())))
 }
 
 func (a *AppService) GetClientVersion(w http.ResponseWriter, r *http.Request) {
