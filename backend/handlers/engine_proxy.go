@@ -123,6 +123,25 @@ func NewEngineProxy() (*EngineProxy, error) {
 			r.Header.Del("Authorization")
 			r.Header.Del("Access-Token")
 		},
+		// The engine sets its own CORS headers, and this backend's middleware
+		// sets ours. Passing both through produces a response carrying two
+		// Access-Control-Allow-Origin values, which every browser rejects —
+		// "contains multiple values, but only one is allowed" — while curl
+		// reports a perfectly healthy 200. Strip the upstream's and let ours be
+		// the only answer.
+		ModifyResponse: func(res *http.Response) error {
+			for _, header := range []string{
+				"Access-Control-Allow-Origin",
+				"Access-Control-Allow-Methods",
+				"Access-Control-Allow-Headers",
+				"Access-Control-Allow-Credentials",
+				"Access-Control-Expose-Headers",
+				"Access-Control-Max-Age",
+			} {
+				res.Header.Del(header)
+			}
+			return nil
+		},
 		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
 			// A pin mismatch reaches here. Say so plainly: it almost certainly
 			// means the upstream renewed and this bridge should be removed.
