@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	stdlog "log"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -37,24 +38,23 @@ import (
 // than revoking, or a domain changing hands since issuance. Waiving it costs us
 // exactly that, over a window that began hours ago.
 //
-// In exchange we pin the upstream's public key, which is STRICTER than ordinary
-// CA validation in one respect: normal validation accepts any certificate any
-// trusted CA vouches for, so a mis-issued but currently-valid certificate would
-// pass. The pin does not. We trade a weak general guarantee for a narrow strong
-// one — "the exact key that served this host while its certificate was valid".
+// Everything else is still enforced: the chain must build to a trusted root and
+// the leaf must cover this hostname, so a self-signed certificate or one from
+// an untrusted CA is refused exactly as it would be normally.
 //
-// This is a bridge, not a fix. DELETE IT once the upstream renews. The pin will
-// almost certainly fail at that moment, because Let's Encrypt issues a fresh
-// key pair on renewal — treat a pin mismatch as the signal to remove the proxy,
-// never as a prompt to quietly update the pin.
+// This is a bridge, not a fix. DELETE IT once the upstream renews — but it is
+// deliberately built so that not deleting it promptly is safe. A renewed
+// certificate passes this verifier for the ordinary reason, so renewal does not
+// interrupt traffic and removal is never itself an incident.
 
 const (
 	engineProxyPathPrefix = "/bundler"
 	engineProxyTimeout    = 30 * time.Second
 )
 
-// EngineProxy reverse-proxies the Citizen Wallet engine over a pinned TLS
-// transport. The zero value is unusable; build one with NewEngineProxy.
+// EngineProxy reverse-proxies the Citizen Wallet engine over a TLS transport
+// that waives only certificate expiry. The zero value is unusable; build one
+// with NewEngineProxy.
 type EngineProxy struct {
 	upstream  *url.URL
 	publicURL string
@@ -75,8 +75,8 @@ func EngineProxyPublicURL() string {
 	return strings.TrimRight(strings.TrimSpace(os.Getenv("ENGINE_PROXY_PUBLIC_URL")), "/")
 }
 
-// NewEngineProxy builds the bridge. It fails loudly rather than falling back to
-// unpinned TLS: a silent downgrade here would be worse than staying broken.
+// NewEngineProxy builds the bridge. Misconfiguration is refused at startup
+// rather than degrading into something that quietly trusts anything.
 func NewEngineProxy() (*EngineProxy, error) {
 	rawUpstream := strings.TrimSpace(os.Getenv("ENGINE_PROXY_UPSTREAM"))
 	if rawUpstream == "" {
@@ -90,18 +90,27 @@ func NewEngineProxy() (*EngineProxy, error) {
 		return nil, fmt.Errorf("ENGINE_PROXY_UPSTREAM must be an https URL with a host, got %q", rawUpstream)
 	}
 
-	pin := strings.TrimSpace(os.Getenv("ENGINE_PROXY_PIN_SPKI"))
-	if pin == "" {
-		return nil, errors.New("ENGINE_PROXY_PIN_SPKI is required: refusing to proxy over unverified TLS")
-	}
+	// Optional, and informational only: the key we expect while the upstream is
+	// still on its expired certificate. A change is the renewal signal, logged
+	// once. It is NOT a gate — see expiryTolerantVerifier for why.
+	observePin := enginePinObserver(strings.TrimSpace(os.Getenv("ENGINE_PROXY_PIN_SPKI")))
+	verify := expiryTolerantVerifier(upstream.Hostname())
 
 	transport := &http.Transport{
 		// Go's own verification is replaced, not removed — see VerifyPeerCertificate.
 		// Scoped to this transport and this upstream; never the process default.
 		TLSClientConfig: &tls.Config{
-			ServerName:            upstream.Hostname(),
-			InsecureSkipVerify:    true, //nolint:gosec // replaced by the SPKI pin below
-			VerifyPeerCertificate: pinnedVerifier(pin, upstream.Hostname()),
+			ServerName:         upstream.Hostname(),
+			InsecureSkipVerify: true, //nolint:gosec // replaced by expiryTolerantVerifier
+			VerifyPeerCertificate: func(rawCerts [][]byte, chains [][]*x509.Certificate) error {
+				if err := verify(rawCerts, chains); err != nil {
+					return err
+				}
+				if leaf, err := x509.ParseCertificate(rawCerts[0]); err == nil {
+					observePin(leaf)
+				}
+				return nil
+			},
 		},
 		ResponseHeaderTimeout: engineProxyTimeout,
 		MaxIdleConnsPerHost:   16,
@@ -143,8 +152,8 @@ func NewEngineProxy() (*EngineProxy, error) {
 			return nil
 		},
 		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
-			// A pin mismatch reaches here. Say so plainly: it almost certainly
-			// means the upstream renewed and this bridge should be removed.
+			// Certificate validation failures land here — which now means a
+			// genuinely untrusted chain or wrong hostname, not a routine renewal.
 			http.Error(w, fmt.Sprintf("engine proxy upstream error: %v", err), http.StatusBadGateway)
 		},
 	}
@@ -152,35 +161,92 @@ func NewEngineProxy() (*EngineProxy, error) {
 	return &EngineProxy{upstream: upstream, publicURL: EngineProxyPublicURL(), proxy: proxy}, nil
 }
 
-// pinnedVerifier accepts exactly one public key, ignoring notAfter and doing no
-// chain building. Everything this waives and everything it adds is set out in
-// the file comment above.
-func pinnedVerifier(pin string, host string) func([][]byte, [][]*x509.Certificate) error {
+// expiryTolerantVerifier performs ordinary certificate validation — chain built
+// to a system root, hostname checked — and waives exactly one thing: notAfter.
+//
+// A key pin was the obvious first answer here and it was the wrong one. Pinning
+// fails closed the moment the upstream renews with a fresh key, which is the
+// normal outcome of renewal, so the safety mechanism would itself have caused a
+// second payments outage that stayed down until somebody noticed and edited an
+// env var by hand. A bridge whose removal is an incident is a bad bridge.
+//
+// Waiving only expiry has no such cliff. A renewed certificate is simply a
+// valid certificate: it passes this verifier for the ordinary reason, traffic
+// keeps flowing, and the bridge becomes redundant rather than dangerous. It can
+// then be removed on a weekday afternoon instead of at 3am.
+//
+// What is still enforced: the chain must build to a trusted root, and the leaf
+// must cover this hostname. A self-signed certificate, or one from an untrusted
+// CA, or one for a different host, is refused exactly as it would be normally.
+//
+// What is given up: an attacker holding a previously-valid, now-expired
+// certificate for this exact hostname — plus network position on the hop
+// between this backend and the engine — would not be caught. In practice that
+// means the upstream operator or someone who has compromised their key, which
+// is the same trust we extend by using their service at all.
+func expiryTolerantVerifier(host string) func([][]byte, [][]*x509.Certificate) error {
 	return func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
 		if len(rawCerts) == 0 {
 			return errors.New("engine proxy: upstream presented no certificate")
 		}
-		leaf, err := x509.ParseCertificate(rawCerts[0])
-		if err != nil {
-			return fmt.Errorf("engine proxy: unparseable leaf certificate: %w", err)
+
+		certs := make([]*x509.Certificate, 0, len(rawCerts))
+		for _, raw := range rawCerts {
+			cert, err := x509.ParseCertificate(raw)
+			if err != nil {
+				return fmt.Errorf("engine proxy: unparseable certificate: %w", err)
+			}
+			certs = append(certs, cert)
 		}
 
-		sum := sha256.Sum256(leaf.RawSubjectPublicKeyInfo)
-		got := base64.StdEncoding.EncodeToString(sum[:])
-		if got != pin {
-			return fmt.Errorf(
-				"engine proxy: SPKI pin mismatch for %s (got %s, expected %s) — "+
-					"the upstream has almost certainly renewed; remove the proxy "+
-					"rather than updating the pin",
-				host, got, pin,
-			)
+		leaf := certs[0]
+		intermediates := x509.NewCertPool()
+		for _, cert := range certs[1:] {
+			intermediates.AddCert(cert)
 		}
 
-		// The hostname is still checked. Only expiry is deliberately skipped.
-		if err := leaf.VerifyHostname(host); err != nil {
-			return fmt.Errorf("engine proxy: certificate does not cover %s: %w", host, err)
+		// Normally "now". Only when the leaf has already expired do we evaluate
+		// the chain as of a moment inside its validity window — which is the
+		// single concession this bridge makes. Once the upstream renews, this
+		// is ordinary present-time validation and the branch never fires.
+		at := time.Now()
+		if at.After(leaf.NotAfter) {
+			at = leaf.NotAfter.Add(-time.Minute)
+		}
+
+		if _, err := leaf.Verify(x509.VerifyOptions{
+			DNSName:       host,
+			Intermediates: intermediates,
+			CurrentTime:   at,
+		}); err != nil {
+			return fmt.Errorf("engine proxy: certificate for %s failed validation: %w", host, err)
 		}
 		return nil
+	}
+}
+
+// enginePinObserver logs when the upstream's public key changes. This is the
+// renewal signal, kept deliberately as telemetry rather than as a gate: it tells
+// operations the bridge can come out, without being able to take traffic down
+// when it fires.
+func enginePinObserver(expected string) func(*x509.Certificate) {
+	if expected == "" {
+		return func(*x509.Certificate) {}
+	}
+	var reported bool
+	return func(leaf *x509.Certificate) {
+		if reported {
+			return
+		}
+		sum := sha256.Sum256(leaf.RawSubjectPublicKeyInfo)
+		if got := base64.StdEncoding.EncodeToString(sum[:]); got != expected {
+			reported = true
+			stdlog.Printf(
+				"engine proxy: upstream key changed (was %s, now %s, notAfter %s) — "+
+					"the certificate has been renewed and this bridge can be removed",
+				expected, got, leaf.NotAfter.Format(time.RFC3339),
+			)
+		}
 	}
 }
 
