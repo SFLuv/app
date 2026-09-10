@@ -508,10 +508,24 @@ export function VolunteerEventsManager({
       const shared = {
         eventTitle: event.title,
         eventDate: Number.isFinite(startAt) ? cardCanvas.formatCardDate(startAt) : undefined,
-        logoUrl: event.organizer.logo_url,
-        // A logo is what selects the paired card, so a nameless organizer still
-        // needs something to be thanked as — same fallback the modal uses.
-        organization: event.organizer.logo_url ? event.organizer.name || "our partner" : undefined,
+        // The organizer's TYPE selects the card, not whether a logo happens to
+        // be set. Keying on the logo made an SFLuv event print "Thank you from
+        // SFLuv and SFLuv!" beneath the SFLuv mark twice, because the SFLuv
+        // organizer always carries that mark — so the paired card was chosen
+        // for an event with no partner in it.
+        //
+        // Both fields are gated, not just the heading: planLogoRow draws the
+        // paired band whenever a second logo is present, so passing the logo
+        // through while withholding the name would print two identical marks
+        // either side of an X under a heading that thanks one party.
+        logoUrl: event.organizer.type === "affiliate" ? event.organizer.logo_url : undefined,
+        // Still guarded on the logo underneath: the paired card draws two marks
+        // side by side, so a partner with no logo of their own falls back to
+        // the solo card rather than an empty slot.
+        organization:
+          event.organizer.type === "affiliate" && event.organizer.logo_url
+            ? event.organizer.name || "our partner"
+            : undefined,
       }
 
       // Once per event: the only things that differ per card are the QR and the
