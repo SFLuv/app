@@ -24,6 +24,40 @@ const legacyBerachainChainID = 80094
 
 const baselineDBVersion = "1.0"
 
+// skippedBackfill reports that the notified-transfers seeding could not run,
+// WITHOUT failing the migration.
+//
+// The table is the essential half and is already created by the time anything
+// here can fire; the seeding is an optimisation that reads a different database
+// the backend does not own and may not be able to reach — Ponder lives on its
+// own instance, and that instance has already been lost once to a host error.
+//
+// A migration failure is not a degraded feature, it is an outage:
+// RunPendingMigrations is wired to log.Fatal in cmd/server, the version does not
+// advance, and every subsequent boot retries and dies the same way. Refusing to
+// serve the whole platform because an optional backfill could not read an
+// external database would be the wrong trade by a wide margin.
+//
+// The cost of skipping is stated plainly rather than buried, because an empty
+// table means the next Ponder re-index notifies users about historical
+// transfers — which is the thing this migration exists to prevent.
+func skippedBackfill(appLogger *logger.LogCloser, reason string, err error) error {
+	if appLogger == nil {
+		return nil
+	}
+	detail := ""
+	if err != nil {
+		detail = ": " + err.Error()
+	}
+	appLogger.Logf(
+		"warning: ponder hook dedup backfill SKIPPED (%s%s). The table exists but is EMPTY, "+
+			"so a ponder re-index before it fills will email users about historical transfers. "+
+			"Re-run the seed once the ponder database is reachable.",
+		reason, detail,
+	)
+	return nil
+}
+
 // MigrationDB is the database surface migrations run against. It is satisfied
 // by both *pgxpool.Pool and pgx.Tx; RunPendingMigrations passes per-database
 // TRANSACTIONS, so every statement in a migration either commits together with
@@ -2283,13 +2317,7 @@ var schemaMigrations = []SchemaMigration{
 			// failure this exists to prevent. Transfers indexed from here on
 			// find no row and notify normally.
 			if pools.Ponder == nil {
-				if appLogger != nil {
-					appLogger.Logf(
-						"warning: ponder database unavailable, so ponder_notified_transfers starts EMPTY; " +
-							"a re-index before it fills will notify users about historical transfers",
-					)
-				}
-				return nil
+				return skippedBackfill(appLogger, "the ponder database is not configured", nil)
 			}
 
 			// READ ONLY, enforced by Postgres rather than by intention.
@@ -2304,11 +2332,11 @@ var schemaMigrations = []SchemaMigration{
 			// read-only transaction" instead of quietly succeeding.
 			ponderTx, err := pools.Ponder.Begin(ctx)
 			if err != nil {
-				return fmt.Errorf("error opening a read transaction on the ponder database: %w", err)
+				return skippedBackfill(appLogger, "could not open a read transaction on the ponder database", err)
 			}
 			defer ponderTx.Rollback(context.Background())
 			if _, err := ponderTx.Exec(ctx, `SET TRANSACTION READ ONLY;`); err != nil {
-				return fmt.Errorf("error making the ponder read transaction read-only: %w", err)
+				return skippedBackfill(appLogger, "could not make the ponder read transaction read-only", err)
 			}
 
 			// Ponder stores addresses and hashes as bytea; the hook sends them
@@ -2323,7 +2351,7 @@ var schemaMigrations = []SchemaMigration{
 				FROM transfer_event;
 			`)
 			if err != nil {
-				return fmt.Errorf("error reading indexed transfers for the notified backfill: %w", err)
+				return skippedBackfill(appLogger, "could not read indexed transfers", err)
 			}
 			defer rows.Close()
 
@@ -2332,12 +2360,12 @@ var schemaMigrations = []SchemaMigration{
 			for rows.Next() {
 				var seed transfer
 				if err := rows.Scan(&seed.hash, &seed.to, &seed.from, &seed.amount); err != nil {
-					return fmt.Errorf("error scanning indexed transfer for the notified backfill: %w", err)
+					return skippedBackfill(appLogger, "could not scan an indexed transfer", err)
 				}
 				seeds = append(seeds, seed)
 			}
 			if err := rows.Err(); err != nil {
-				return fmt.Errorf("error iterating indexed transfers for the notified backfill: %w", err)
+				return skippedBackfill(appLogger, "could not iterate indexed transfers", err)
 			}
 
 			inserted := 0
@@ -2349,6 +2377,9 @@ var schemaMigrations = []SchemaMigration{
 					ON CONFLICT DO NOTHING;
 				`, seed.hash, seed.to, seed.from, seed.amount)
 				if err != nil {
+					// This one writes to the APP database, which is the
+					// migration's own transaction — a failure here is real and
+					// must not be swallowed.
 					return fmt.Errorf("error seeding notified transfer %s: %w", seed.hash, err)
 				}
 				inserted += int(tag.RowsAffected())
