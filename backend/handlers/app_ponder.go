@@ -755,6 +755,29 @@ func (a *AppService) PonderHookHandler(w http.ResponseWriter, r *http.Request) {
 		tx.ChainID = a.activeChainID()
 	}
 
+	// Claimed before anything is sent, and the claim is the insert itself.
+	//
+	// Ponder redelivers: a re-index replays the chain from its start block and
+	// calls this hook again for every transfer it has ever seen. Without this,
+	// the restart after the 2026-09-10 host error would have mailed every user
+	// about every payment they have ever received. Migration 1.54 seeded the
+	// table with everything indexed before it, so only genuinely new transfers
+	// arrive unclaimed.
+	//
+	// A claim failure is not a reason to stay silent — the database being down
+	// should not also mean a merchant misses a payment alert — so it is logged
+	// and the notification proceeds. The risk that trades against is a
+	// duplicate email, which is the lesser of the two.
+	claimed, claimErr := a.db.ClaimTransferNotification(r.Context(), tx.ChainID, tx.Hash, tx.To, tx.From, tx.Amount)
+	if claimErr != nil {
+		a.logger.Logf("error claiming transfer notification for %s, notifying anyway: %s", tx.Hash, claimErr)
+	} else if !claimed {
+		// Already notified. Answer 200 so Ponder does not treat it as a failed
+		// delivery and try again.
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
 	sender := utils.NewEmailSender()
 	if sender == nil {
 		a.logger.Logf("error initializing new email sender: %s", err)

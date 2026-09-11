@@ -41,6 +41,13 @@ type MigrationDB interface {
 type MigrationPools struct {
 	App MigrationDB
 	Bot MigrationDB
+	// Ponder is the indexer's database, and unlike the two above it is the raw
+	// POOL rather than a transaction: it is a different database, so it cannot
+	// join the app/bot transaction, and nothing here writes to it. Read-only,
+	// and nil whenever the indexer database is not configured — every use must
+	// check, because a migration that cannot reach Ponder has to decide for
+	// itself whether that is fatal or merely a skipped backfill.
+	Ponder MigrationDB
 }
 
 type SchemaMigration struct {
@@ -2234,6 +2241,128 @@ var schemaMigrations = []SchemaMigration{
 			return nil
 		},
 	},
+	{
+		Version:     "1.54",
+		Description: "ponder hooks: record which transfers have been notified, and treat every existing one as done",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			// The incoming-transfer hook had no memory. It emailed every
+			// subscriber for every callback, so anything that re-delivered a
+			// transfer re-notified for it — and a Ponder re-index, which
+			// replays the whole chain from its start block, would have mailed
+			// every user about every payment they have ever received.
+			//
+			// That came uncomfortably close on 2026-09-10, when a GCE host
+			// error killed the indexer and the restart risked a full re-index.
+			if _, err := pools.App.Exec(ctx, `
+				CREATE TABLE IF NOT EXISTS ponder_notified_transfers (
+					tx_hash      TEXT        NOT NULL,
+					to_address   TEXT        NOT NULL,
+					from_address TEXT        NOT NULL,
+					amount       TEXT        NOT NULL,
+					-- Informational only, and NULL for the rows seeded below:
+					-- Ponder's table predates chain tagging, so the chain these
+					-- were indexed on is not recorded anywhere to copy from.
+					-- Deliberately OUT of the key. The hook payload carries no
+					-- chain, so the handler substitutes the active one, and a
+					-- key that depended on it would need the same value derived
+					-- identically in a migration that has no client config to
+					-- derive it from. Transaction hashes do not collide across
+					-- chains, so the four columns below identify a transfer on
+					-- their own.
+					chain_id     BIGINT,
+					notified_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+					PRIMARY KEY (tx_hash, to_address, from_address, amount)
+				);
+			`); err != nil {
+				return fmt.Errorf("error creating the ponder notified-transfers table: %w", err)
+			}
+
+			// Everything already indexed counts as delivered, whether or not a
+			// mail ever went out. The alternative — an empty table — would mean
+			// the first re-index notifies the entire history, which is the
+			// failure this exists to prevent. Transfers indexed from here on
+			// find no row and notify normally.
+			if pools.Ponder == nil {
+				if appLogger != nil {
+					appLogger.Logf(
+						"warning: ponder database unavailable, so ponder_notified_transfers starts EMPTY; " +
+							"a re-index before it fills will notify users about historical transfers",
+					)
+				}
+				return nil
+			}
+
+			// READ ONLY, enforced by Postgres rather than by intention.
+			//
+			// Ponder owns its schema and checks it on every start: it stamps
+			// _ponder_meta with an app identity and refuses to run against a
+			// database another app has touched. A stray write here would not
+			// corrupt data so much as convince the indexer the schema is no
+			// longer its own, which takes indexing down until someone drops and
+			// rebuilds it. Declaring the transaction read-only means a future
+			// edit that adds an INSERT fails with "cannot execute INSERT in a
+			// read-only transaction" instead of quietly succeeding.
+			ponderTx, err := pools.Ponder.Begin(ctx)
+			if err != nil {
+				return fmt.Errorf("error opening a read transaction on the ponder database: %w", err)
+			}
+			defer ponderTx.Rollback(context.Background())
+			if _, err := ponderTx.Exec(ctx, `SET TRANSACTION READ ONLY;`); err != nil {
+				return fmt.Errorf("error making the ponder read transaction read-only: %w", err)
+			}
+
+			// Ponder stores addresses and hashes as bytea; the hook sends them
+			// as lowercase 0x strings, and the claim in the handler lowercases
+			// too, so both sides agree on one rendering.
+			rows, err := ponderTx.Query(ctx, `
+				SELECT
+					'0x' || encode(hash, 'hex'),
+					'0x' || encode("to", 'hex'),
+					'0x' || encode("from", 'hex'),
+					amount::text
+				FROM transfer_event;
+			`)
+			if err != nil {
+				return fmt.Errorf("error reading indexed transfers for the notified backfill: %w", err)
+			}
+			defer rows.Close()
+
+			type transfer struct{ hash, to, from, amount string }
+			seeds := []transfer{}
+			for rows.Next() {
+				var seed transfer
+				if err := rows.Scan(&seed.hash, &seed.to, &seed.from, &seed.amount); err != nil {
+					return fmt.Errorf("error scanning indexed transfer for the notified backfill: %w", err)
+				}
+				seeds = append(seeds, seed)
+			}
+			if err := rows.Err(); err != nil {
+				return fmt.Errorf("error iterating indexed transfers for the notified backfill: %w", err)
+			}
+
+			inserted := 0
+			for _, seed := range seeds {
+				tag, err := pools.App.Exec(ctx, `
+					INSERT INTO ponder_notified_transfers
+						(tx_hash, to_address, from_address, amount)
+					VALUES (LOWER($1), LOWER($2), LOWER($3), $4)
+					ON CONFLICT DO NOTHING;
+				`, seed.hash, seed.to, seed.from, seed.amount)
+				if err != nil {
+					return fmt.Errorf("error seeding notified transfer %s: %w", seed.hash, err)
+				}
+				inserted += int(tag.RowsAffected())
+			}
+
+			if appLogger != nil {
+				appLogger.Logf(
+					"ponder hook dedup: seeded %d of %d indexed transfers as already notified",
+					inserted, len(seeds),
+				)
+			}
+			return nil
+		},
+	},
 }
 
 // migrateW9WarningTiers replaces one hard gate with an escalating sequence.
@@ -2531,7 +2660,15 @@ func RunPendingMigrations(ctx context.Context, pools *DBPools, appLogger *logger
 			return fmt.Errorf("error beginning bot transaction for migration %s: %w", migration.Version, err)
 		}
 
-		applyErr := migration.Apply(ctx, &MigrationPools{App: appTx, Bot: botTx}, appLogger)
+		migrationPools := &MigrationPools{App: appTx, Bot: botTx}
+		// Guarded rather than assigned straight through: a nil *pgxpool.Pool
+		// placed in an interface field is not a nil interface, and would pass
+		// an `if pools.Ponder != nil` check before panicking on first use.
+		if pools.Ponder != nil {
+			migrationPools.Ponder = pools.Ponder
+		}
+
+		applyErr := migration.Apply(ctx, migrationPools, appLogger)
 		if applyErr == nil {
 			applyErr = setCurrentVersion(ctx, appTx, migration.Version)
 		}
