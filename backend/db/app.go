@@ -2498,6 +2498,26 @@ func (s *AppDB) CreateTables() error {
 		);
 
 		CREATE INDEX IF NOT EXISTS ponder_subscription_address ON ponder_subscriptions(address);
+
+		-- Which transfers the incoming-payment hook has already notified about.
+		-- Ponder redelivers — a re-index replays the chain from its start block
+		-- — and without this every user would be mailed about every payment
+		-- they have ever received. Mirrors migration 1.54; a fresh database
+		-- starts empty, which is correct because it has no history to re-notify.
+		--
+		-- chain_id is recorded but is NOT part of the key: the hook payload
+		-- carries no chain, so the handler substitutes the active one, and
+		-- matching on a value the sender never sent would make dedup depend on
+		-- a guess. Transaction hashes do not collide across chains.
+		CREATE TABLE IF NOT EXISTS ponder_notified_transfers(
+			tx_hash      TEXT        NOT NULL,
+			to_address   TEXT        NOT NULL,
+			from_address TEXT        NOT NULL,
+			amount       TEXT        NOT NULL,
+			chain_id     BIGINT,
+			notified_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			PRIMARY KEY (tx_hash, to_address, from_address, amount)
+		);
 	`)
 	if err != nil {
 		return fmt.Errorf("error creating ponder subscriptions table: %s", err)

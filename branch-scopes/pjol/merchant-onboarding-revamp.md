@@ -1,7 +1,7 @@
 # Branch scope — `pjol/merchant-onboarding-revamp`
 
-Aug 28 – Sep 8 2026 · app + mobile-app · **22.1h active** — 9.1h measured across eleven sittings,
-plus 13.0h of hands-on testing and deployment reported by PJ and **not** measured (see *Untracked
+Aug 28 – Sep 10 2026 · app + mobile-app · **24.1h active** — 10.1h measured across sixteen sittings,
+plus 14.0h of testing, deployment and meetings reported by PJ and **not** measured (see *Untracked
 time* at the foot)
 
 Merchant onboarding and the location request flow, rebuilt around a split between merchant accounts
@@ -355,7 +355,7 @@ figure is to the last message at the time of writing.
 
 # Untracked time
 
-**Repos:** `app` · `mobile-app` · **Total hours: 13.0 — reported, not measured**
+**Repos:** `app` · `mobile-app` · **Total hours: 14.0 — reported, not measured**
 
 Three mornings of hands-on testing — Sep 2, Sep 3 and Sep 4, roughly 09:00 to 12:00 each — plus the
 afternoon of Sep 4 and the Monday evening deploy, during which no prompts were sent and no files were
@@ -368,6 +368,8 @@ changed, so no transcript records them.
 | Fri Sep 4, ~09:00–12:00 | 3.0 | reported by PJ |
 | Fri Sep 4, afternoon | 3.0 | reported by PJ |
 | Mon Sep 7, evening — deployment | 1.0 | reported by PJ |
+| Thu Sep 10, 14:00–14:30 — affiliate meeting | 0.5 | reported by PJ |
+| Thu Sep 10, afternoon — proxy fixes | 0.5 | reported by PJ |
 
 **How this figure was arrived at, and what is wrong with it.** It was not measured. It is PJ's own
 account of time spent testing the branch by hand, recorded here because the work happened and the
@@ -387,6 +389,11 @@ identical to absence. The weaknesses are worth naming rather than burying:
 - The Monday evening deploy is on the same footing: reported, rounded to the hour, and uncorroborated
   by anything in this repo. It does not overlap the measured Sep 7 sittings, which end at 21:44 and
   cover the environment-variable review and the webpage build fix rather than the deploy itself.
+- The Sep 10 affiliate meeting sits in the gap between that day's measured sittings, which end at
+  13:07 and resume at 14:39, so it is not double-counted. The same afternoon's proxy fixes are
+  reported rather than measured; Sep 10's four measured sittings total 0.2h between them, so there is
+  ample unrecorded afternoon for that work to have happened in, but nothing here corroborates its
+  length.
 
 ---
 
@@ -586,3 +593,43 @@ could not survive a repeat.
 - **The house-organisation check matches on the normalized name, because there is no flag for it.**
   Renaming that organization would silently restore the doubled branding. A boolean column on
   `organizations` is the durable fix, and is worth doing the next time that table is migrated.
+
+---
+
+# Round 11 — Sep 9, 12:47–13:36 and Sep 10, 12:17–15:48
+
+**Repos:** `app` · `mobile-app` · **Total active hours: 1.0 — measured**
+
+Five sittings: one on Sep 9 and four short ones on Sep 10, which together measure 0.2h — the Sep 10
+work ran mostly between messages, so that day's figure is the weakest in this document.
+
+Three defects found in production and fixed, none of them in the branch's own feature work.
+
+## Features
+
+| Feature | hours | repo |
+|---|---|---|
+| **Every mobile send has reported failure since Sep 1 while succeeding on chain** — `assertUserOpSucceeded` required an EntryPoint `UserOperationEvent`, which this stack never emits: the engine sends the transaction itself, from a sponsor EOA, to a Citizen Wallet TokenEntryPoint driving a Safe module. Diagnosed from a real Celo receipt, whose three logs are two `ExecutionFromModuleSuccess` and the ERC-20 `Transfer` — no `0x49628fd1…` topic anywhere. A send now proves itself with the Transfer it must emit, and the reverted-payment guard the original check existed for is preserved. Senders had been retrying and paying twice | 0.6 | mobile-app |
+| **Volunteer events missing from the mobile tab** — the `open_signups` filter required `signup_mode = 'internal'`, which answers whether we host the signups rather than whether anyone can still join, so the one externally-run event was hidden by the tab's default. The clauses now mirror `buildSignupInfo`, so the filter returns exactly the events whose payload reports `signup.open == true`, and an ended internal event with spare capacity no longer leaks through | 0.2 | app |
+| **QR cards crediting "SFLuv and SFLuv"** — not the house-organisation case fixed in Round 10, and not a data problem: the PDF export chose the paired card on whether a logo was present, and the SFLuv organizer always carries the SFLuv mark. Both the logo and the name now gate on `organizer.type === "affiliate"`; gating only the name would have drawn the mark twice either side of an X beneath a heading thanking one party | 0.2 | app |
+
+## Totals
+
+| | |
+|---|---|
+| Files changed | 2 modified across two repos |
+| Migrations | 0 |
+| New routes | 0 |
+
+## Worth knowing
+
+- **The mobile fix was verified against a real receipt, not a fixture.** The old check throws on
+  `0xa77bed76…` and the new one passes; a reverted transfer and a wrong amount both still throw. The
+  duplicate charges are real: two distinct transactions, nine seconds apart, 9.01 SFLUV each.
+- **A server-only fix for the mobile bug was possible and rejected.** The engine is Citizen Wallet's
+  hosted infrastructure, so the only lever is repointing `chains.42220.node.url` — which we serve —
+  at a proxy of our own. That covers sponsor, send and receipt, so it would make our backend a hard
+  dependency for every mobile payment, trading a reporting bug for an availability one.
+- **The QR diagnosis was wrong twice before it was right.** First the house-organisation guard, which
+  addressed a real but different case; then a half-fix that corrected the heading and left the logos
+  paired. Production payloads settled it — the event reports `organizer.type: sfluv` and always did.
