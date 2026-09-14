@@ -5187,6 +5187,7 @@ func (a *AppDB) GetImproverWorkflows(ctx context.Context, improverId string, act
 							d.start_at < abs.absent_until
 					)
 				)
+			` + improverClaimableStepGuards() + `
 			ORDER BY
 				ws.step_order ASC
 			LIMIT 1
@@ -14572,11 +14573,112 @@ func isWorkflowManagerClaimableStatus(status string) bool {
 	return slices.Contains(workflowManagerClaimableStatuses, status)
 }
 
-
 // improverClaimableWorkflowIDsCTE is the improver board's "what can I claim"
 // CTE. It is a named piece rather than inline SQL so its status filter can be
 // asserted in tests: this CTE once advertised steps the claim endpoint always
 // rejected, which improvers experienced as a dead claim button.
+// improverClaimableStepGuards are the conditions ClaimWorkflowStep enforces that
+// the board's own SQL did not, written against the step alias `ws` and improver
+// `$1` so both the workflow-id CTE and the claimable-step lateral can share one
+// copy.
+//
+// They exist because "claimable" was implemented three times — this CTE, the
+// lateral below it, and ClaimWorkflowStep in Go — and the three disagreed. The
+// board advertised steps the claim endpoint refuses, so an improver saw a Claim
+// button that returned 400 or 409 every time they pressed it, permanently, with
+// no way to tell why. The CTE even carried a comment claiming it mirrored the
+// endpoint; it mirrored only the workflow-status set.
+//
+// Anything added to ClaimWorkflowStep's guards belongs here too. A guard in one
+// and not the other is exactly the bug this is fixing.
+func improverClaimableStepGuards() string {
+	return `
+			AND
+				-- A role with NO credential requirements is refused outright by
+				-- ClaimWorkflowStep ("workflow role has no credential
+				-- requirements"). The board's credential test is a NOT EXISTS
+				-- over unmet requirements, which passes trivially when there
+				-- are none at all — so a role that lost its credentials was
+				-- advertised to everyone and claimable by nobody.
+				EXISTS (
+					SELECT
+						1
+					FROM
+						workflow_role_credentials rc
+					WHERE
+						rc.role_id = ws.role_id
+				)
+			AND
+				-- ...and every requirement must still name a credential type
+				-- that exists.
+				NOT EXISTS (
+					SELECT
+						1
+					FROM
+						workflow_role_credentials rc
+					LEFT JOIN
+						credential_type_definitions ctd
+					ON
+						ctd.value = rc.credential_type
+					WHERE
+						rc.role_id = ws.role_id
+					AND
+						ctd.value IS NULL
+				)
+			AND
+				-- The workflow manager is already assigned to the workflow, and
+				-- the claim refuses a second assignment. manager_improver_id
+				-- lives on workflows rather than workflow_steps, which is why
+				-- the existing "already claimed something here" check walked
+				-- straight past it.
+				NOT EXISTS (
+					SELECT
+						1
+					FROM
+						workflows mw
+					WHERE
+						mw.id = ws.workflow_id
+					AND
+						mw.manager_improver_id = $1
+				)
+			AND
+				-- A locked step is only claimable once it could actually
+				-- unlock. Mirrors canStepTransitionToAvailableTx: step one
+				-- waits for the start time, later steps wait for the one
+				-- before them.
+				(
+					ws.status <> 'locked'
+					OR (
+						ws.step_order <= 1
+						AND EXISTS (
+							SELECT
+								1
+							FROM
+								workflows sw
+							WHERE
+								sw.id = ws.workflow_id
+							AND
+								sw.start_at <= EXTRACT(EPOCH FROM NOW())
+						)
+					)
+					OR (
+						ws.step_order > 1
+						AND EXISTS (
+							SELECT
+								1
+							FROM
+								workflow_steps prev
+							WHERE
+								prev.workflow_id = ws.workflow_id
+							AND
+								prev.step_order = ws.step_order - 1
+							AND
+								prev.status IN ('completed', 'paid_out')
+						)
+					)
+				)`
+}
+
 func improverClaimableWorkflowIDsCTE() string {
 	return `		claimable_workflow_ids AS (
 			SELECT DISTINCT
@@ -14661,6 +14763,6 @@ func improverClaimableWorkflowIDsCTE() string {
 						AND
 							w.start_at < abs.absent_until
 					)
-				)
+				)` + improverClaimableStepGuards() + `
 		),`
 }

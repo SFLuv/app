@@ -1058,6 +1058,9 @@ export default function ImproverPage() {
 
   const claimStep = async (workflowId: string, stepId: string) => {
     setSubmitting(`claim:${stepId}`)
+    // Cleared up front so a second attempt does not sit under the first
+    // attempt's reason.
+    setStepSubmitErrors((current) => ({ ...current, [stepId]: "" }))
     try {
       const res = await authFetch(`/improvers/workflows/${workflowId}/steps/${stepId}/claim`, {
         method: "POST",
@@ -1069,7 +1072,14 @@ export default function ImproverPage() {
       await loadFeed()
       await refreshDetailWorkflow(workflowId)
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to claim this step.")
+      const message = err instanceof Error ? err.message : "Unable to claim this step."
+      // Shown at the step as well as in the page banner. The banner sits above
+      // the tabs, so a refusal raised by a button partway down a feed appeared
+      // a screenful away from the thing that caused it — which is how a claim
+      // that was explaining itself every time reached us as "the button does
+      // nothing".
+      setStepSubmitErrors((current) => ({ ...current, [stepId]: message }))
+      setError(message)
     } finally {
       setSubmitting("")
     }
@@ -2798,14 +2808,28 @@ export default function ImproverPage() {
     return (
       <div className="space-y-4">
         {claimable && (
-          <Button
-            className="w-full sm:w-auto"
-            size="sm"
-            onClick={() => claimStep(workflow.id, step.id)}
-            disabled={Boolean(submitting)}
-          >
-            {submitting === `claim:${step.id}` ? "Claiming..." : `Claim Step ${step.step_order}`}
-          </Button>
+          <div className="space-y-2">
+            <Button
+              className="w-full sm:w-auto"
+              size="sm"
+              onClick={() => claimStep(workflow.id, step.id)}
+              disabled={Boolean(submitting)}
+            >
+              {submitting === `claim:${step.id}` ? "Claiming..." : `Claim Step ${step.step_order}`}
+            </Button>
+            {/* The refusal, next to the button that caused it. The existing
+                per-step error sits inside the mine-only submission block, so a
+                step that is merely claimable had nowhere to put one — and the
+                page banner is above the tabs, far from a button partway down
+                the feed. A claim that fails with nothing visible nearby is what
+                "the button does nothing" actually looked like. */}
+            {stepSubmitError && (
+              <div className="flex items-start gap-2 rounded border border-red-200 bg-red-50 p-2 text-xs text-red-700">
+                <AlertTriangle className="mt-px h-3.5 w-3.5 flex-shrink-0" />
+                <span>{stepSubmitError}</span>
+              </div>
+            )}
+          </div>
         )}
 
 	        {mine && step.status === "locked" && isStartEligible && (
