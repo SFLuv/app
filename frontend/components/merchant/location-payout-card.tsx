@@ -32,6 +32,8 @@ import {
 
 interface LocationPayoutCardProps {
   location: AuthedLocation
+  /** Called after an unwrap lands, so a host page can refresh balances it owns. */
+  onUnwrapped?: () => void | Promise<void>
 }
 
 // LocationPayoutCard is the "Bank & Unwrap" section of a location's settings.
@@ -42,7 +44,7 @@ interface LocationPayoutCardProps {
 // them to type and nothing to get wrong. Unwrapping is signed by the
 // location's own wallet; tips, if the location has a tipping wallet, can be
 // unwrapped in the same go as a second transaction from that wallet.
-export function LocationPayoutCard({ location }: LocationPayoutCardProps) {
+export function LocationPayoutCard({ location, onUnwrapped }: LocationPayoutCardProps) {
   const { user, wallets, authFetch } = useApp()
   const chainConfig = useChainConfig()
   const { toast } = useToast()
@@ -281,6 +283,7 @@ export function LocationPayoutCard({ location }: LocationPayoutCardProps) {
       setAmountInput("")
       setIncludeTips(false)
       await loadStatus()
+      await onUnwrapped?.()
     } catch (error) {
       toast({ title: "Unwrap failed", description: error instanceof Error ? error.message : undefined, variant: "destructive" })
     } finally {

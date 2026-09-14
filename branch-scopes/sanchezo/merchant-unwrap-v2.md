@@ -1,11 +1,13 @@
 # Branch scope — `sanchezo/merchant-unwrap-v2`
 
-Sep 14 2026 · app (backend + frontend) · **1.9h active**
+Sep 14 2026 · app (backend + frontend) · **2.9h active** (round 1: 1.9h, round 2: 1.0h)
 
 Hours are wall-clock time measured from the session transcript with the
 `time-accounting` skill (`measure_sittings.py`, 30-minute sitting gap). One
-sitting, 12:12–14:09 PDT, measured at 14:09; the branch was cut and every
-file written inside it. Itemised to the nearest 0.1h from the per-message
+sitting, 12:12–15:19 PDT, measured at 15:19 (3.1h); round 1 was cut at the
+first commit (14:08, 1.9h), round 2 is the rest less 0.1h of unrelated
+billing paperwork (14:53–15:00). The branch was cut and every file written
+inside the sitting. Itemised to the nearest 0.1h from the per-message
 `UserPromptSubmit` stamps in the same transcript, and the items sum to the
 measured figure. The earlier branch this replaces (`sanchezo/merchant-cashout-liquidation`,
 July) is not counted here; it was abandoned at 165 commits behind main.
@@ -36,9 +38,12 @@ Decisions, all Sanchez's, recorded so the shape is explicable later:
   Verified against a real SFLUV transfer (`celo/usdc → ach/usd`): 25.00 in,
   25.00 out, every fee field 0.
 - **Merchants never type a crypto address.** After a bank is linked through
-  Plaid, the backend provisions a Bridge liquidation address per location and
-  stores it. The manual override is admin-only and is refused unless the
-  address is one Bridge issued for that business.
+  Plaid, the backend provisions a Bridge liquidation address and binds it to
+  each location. Bridge allows exactly one address per (customer, bank, chain,
+  currency, rail) — found in round 2 — so locations paying into the same bank
+  share one address; a drain is matched to its location through our ledger by
+  tx hash, never by address. The manual override is admin-only and is refused
+  unless the address is one Bridge issued for that business.
 - Bank accounts belong to the **business** (Bridge customer, keyed by owner);
   each location's address binds to one of them, so a second location can pay a
   different account without a second onboarding.
@@ -108,7 +113,7 @@ Decisions, all Sanchez's, recorded so the shape is explicable later:
 |---|---|---|
 | — | | |
 
-## Totals
+## Round 1 totals
 
 | Area | Hours |
 |---|---|
@@ -120,14 +125,67 @@ Decisions, all Sanchez's, recorded so the shape is explicable later:
 
 Volume: 22 files, +3,326 / −352, 1 migration (1.55), 11 new routes.
 
+---
+
+# Round 2 — Sep 14 (sandbox verification, admin tooling) — 1.0h
+
+Sandbox keys are environment-bound (a live key cannot become or mint one;
+the dashboard's Sandbox toggle is the only source), and Bridge's sandbox
+cannot run Plaid, KYC links, or payment webhooks. So the sandbox was used
+for what it is good for — exercising the real handlers against real Bridge
+responses — and it found two things the docs do not say.
+
+### Sandbox research, key handling, round-1 wrap-up — 0.7h · app
+- Confirmed from Bridge docs and by probing: live key → sandbox host is 401;
+  the `sk-test_xxx` in `celo_onramp/.env.example` is a placeholder
+- Sandbox key received from Sanchez, verified (`/v0/api_keys/whoami`), wired
+  into the gitignored worktree `.env` only
+- Sandbox business customer created via API, KYB simulated, physical address
+  patched, dummy US bank attached (Bridge requires the address first)
+
+### Handler-level smoke, two Bridge constraints, admin Payouts tab — 0.3h · app
+- Throwaway harness drove the real handlers (attach, status, provision,
+  payout-bank, admin override ×2, record unwrap, history, sweep, webhook)
+  against sandbox; removed before commit per the no-test-scaffolding rule
+- **Found:** Bridge allows one liquidation address per (customer, bank,
+  chain, currency, rail). Provisioning rewritten so locations on the same
+  bank share it (`findLiquidationAddressForBank`, race-safe re-list on
+  "already exists"). All 16 test locations provision; re-provision skips all;
+  bogus override → 422; Bridge-issued override → 200 with `source=admin`
+- **Found:** Bridge rejects `Idempotency-Key` on PUT (422). Client now sends
+  it on POST only
+- `GET /admin/merchant-payouts` now returns `businesses[]` (profile, linked
+  banks, every approved location with its name and payout address) plus
+  `unwraps[]`
+- New admin **Payouts** tab (`components/admin/merchant-payouts-panel.tsx`):
+  attach a Bridge customer to an owner, per-business KYB/ToS badges, banks,
+  per-location address with source and an override box, recent unwraps with
+  Bridge state, trace number and Celoscan link
+- **Fixed a round-1 break:** the merchant wallet page's Unwrap button opened
+  the old typed-destination modal, which still called the deleted
+  `unwrapAndBridge` (Vercel build would have failed). The modal now hosts the
+  bank-backed `LocationPayoutCard` (new `onUnwrapped` callback refreshes the
+  page balance). `tsc` error count is back to main's 31, none in touched files
+- Verified: backend builds, local server boots with `bridge payouts enabled
+  (sandbox)`, payout routes 403 unauthenticated, webhook 401 unsigned;
+  `/locations`, `/settings`, `/admin?tab=payouts` compile with no console errors
+
+## Totals
+
+| Area | Hours |
+|---|---|
+| Round 1 (research, design, build) | 1.9 |
+| Round 2 — sandbox research + key handling | 0.7 |
+| Round 2 — smoke, fixes, admin tab | 0.3 |
+| **Total (measured)** | **2.9** |
+
 ## Not in this branch (needed before a merchant can use it)
 
-- A Bridge **sandbox** API key for the end-to-end run (the one in
-  `celo_onramp/.env.example` returns 401); `BRIDGE_*` env on the production VM
-  with a **fresh** key, never a laptop one
+- `BRIDGE_*` env on the production VM with a **fresh** key, never a laptop one
 - The Bridge webhook registered against `POST /bridge/webhook`, its public key
-  in `BRIDGE_WEBHOOK_PUBLIC_KEY`
-- Attach the already-verified first merchant with
-  `POST /admin/merchant-payouts/attach-customer` once their bank is linked
-- Unit tests were written for the client and verifier, run green, and removed
-  before commit to honour the repo's no-test-scaffolding rule
+  in `BRIDGE_WEBHOOK_PUBLIC_KEY` (Bridge returns a normal PEM; the verifier
+  also accepts the `\n`-flattened form)
+- Production dry run with SFLUV's own Bridge customer: connect a bank, provision,
+  one small unwrap — sandbox cannot do this
+- Attach the already-verified first merchant from the admin Payouts tab once
+  their bank is linked

@@ -148,11 +148,12 @@ func (c *Client) do(ctx context.Context, method, path string, body any, out any)
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	// Bridge requires an idempotency key on every write. A fresh UUID per call
-	// is the honest choice: our own idempotency is enforced by what we store
-	// (one profile per owner, one address per location), not by replaying a
-	// key, and reusing one across different bodies is rejected by them.
-	if method == http.MethodPost || method == http.MethodPut || method == http.MethodPatch {
+	// Bridge requires an idempotency key on every POST and rejects one on PUT
+	// (verified against sandbox: a PUT with the header is a 422). A fresh UUID
+	// per call is the honest choice: our own idempotency is enforced by what
+	// we store (one profile per owner, one address per location), not by
+	// replaying a key, and reusing one across different bodies is rejected.
+	if method == http.MethodPost {
 		req.Header.Set("Idempotency-Key", uuid.NewString())
 	}
 

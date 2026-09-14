@@ -137,3 +137,21 @@ export function kybStatusLabel(status: KYBStatus | undefined): { label: string; 
       return { label: String(status), done: false, failed: false }
   }
 }
+
+// Admin panel shapes (GET /admin/merchant-payouts).
+export interface AdminPayoutLocation {
+  location_id: number
+  name: string
+  liquidation_address: LocationLiquidationAddress | null
+}
+
+export interface AdminMerchantPayoutBusiness {
+  profile: MerchantPayoutProfile
+  bank_accounts: MerchantBankAccount[]
+  locations: AdminPayoutLocation[]
+}
+
+export interface AdminMerchantPayoutsResponse {
+  businesses: AdminMerchantPayoutBusiness[]
+  unwraps: Unwrap[]
+}

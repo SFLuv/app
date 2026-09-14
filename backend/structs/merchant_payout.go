@@ -114,7 +114,21 @@ type AdminAttachBridgeCustomerRequest struct {
 	BridgeCustomerID string `json:"bridge_customer_id"`
 }
 
+// AdminPayoutLocation is one approved location as the admin panel sees it:
+// where its unwraps go, or nil when nothing has been provisioned yet.
+type AdminPayoutLocation struct {
+	LocationID  uint64                      `json:"location_id"`
+	Name        string                      `json:"name"`
+	Liquidation *LocationLiquidationAddress `json:"liquidation_address"`
+}
+
+type AdminMerchantPayoutBusiness struct {
+	Profile      *MerchantPayoutProfile `json:"profile"`
+	BankAccounts []MerchantBankAccount  `json:"bank_accounts"`
+	Locations    []AdminPayoutLocation  `json:"locations"`
+}
+
 type AdminMerchantPayoutsResponse struct {
-	Profiles []*MerchantPayoutProfile `json:"profiles"`
-	Unwraps  []*Unwrap                `json:"unwraps"`
+	Businesses []AdminMerchantPayoutBusiness `json:"businesses"`
+	Unwraps    []*Unwrap                     `json:"unwraps"`
 }

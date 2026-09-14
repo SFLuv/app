@@ -237,6 +237,38 @@ func (a *AppService) provisionLiquidationAddresses(ctx context.Context, ownerID 
 		return resp, err
 	}
 
+	// Bridge allows exactly one liquidation address per (customer, bank,
+	// chain, currency, rail); a second create for the same bank is a 400
+	// (verified against sandbox). So every location paying into the same
+	// bank shares one address. That loses nothing: a drain is matched to a
+	// location through our ledger (deposit tx hash → unwrap row), never
+	// through the address itself.
+	shared := findLiquidationAddressForBank(existingOnBridge, targetBank)
+	if shared == nil {
+		created, err := a.bridge.CreateLiquidationAddress(ctx, bridge.CreateLiquidationAddressInput{
+			CustomerID:        profile.BridgeCustomerID,
+			ExternalAccountID: targetBank,
+			ACHReference:      "SFLUV",
+		})
+		if err != nil {
+			// Lost a race with another provisioning call: the address now
+			// exists, so read it back rather than fail the merchant.
+			if !strings.Contains(err.Error(), "already exists") {
+				return resp, err
+			}
+			existingOnBridge, err = a.bridge.ListLiquidationAddresses(ctx, profile.BridgeCustomerID)
+			if err != nil {
+				return resp, err
+			}
+			shared = findLiquidationAddressForBank(existingOnBridge, targetBank)
+			if shared == nil {
+				return resp, fmt.Errorf("bridge reports an address for this bank but does not list it")
+			}
+		} else {
+			shared = created
+		}
+	}
+
 	locationIDs, err := a.db.ListApprovedLocationIDsForOwner(ctx, ownerID)
 	if err != nil {
 		return resp, err
@@ -260,51 +292,16 @@ func (a *AppService) provisionLiquidationAddresses(ctx context.Context, ownerID 
 			}
 		}
 
-		var chosen *bridge.LiquidationAddress
-		// One Bridge address per (location, bank) would be ideal, but Bridge
-		// addresses carry no location tag. So an unused Bridge address bound
-		// to this bank is claimed first; only when every one is already
-		// assigned to a location is a new one minted.
-		assigned := map[string]bool{}
-		all, err := a.db.ListLocationLiquidationAddressesByOwner(ctx, ownerID)
-		if err != nil {
-			return resp, err
-		}
-		for _, l := range all {
-			if l.LocationID != locationID {
-				assigned[strings.ToLower(l.Address)] = true
-			}
-		}
-		for i := range existingOnBridge {
-			la := &existingOnBridge[i]
-			if la.ExternalAccountID == targetBank && strings.EqualFold(la.Chain, bridge.Chain) && strings.EqualFold(la.Currency, bridge.Currency) && !assigned[strings.ToLower(la.Address)] {
-				chosen = la
-				break
-			}
-		}
-		if chosen == nil {
-			created, err := a.bridge.CreateLiquidationAddress(ctx, bridge.CreateLiquidationAddressInput{
-				CustomerID:        profile.BridgeCustomerID,
-				ExternalAccountID: targetBank,
-				ACHReference:      "SFLUV",
-			})
-			if err != nil {
-				return resp, err
-			}
-			chosen = created
-			existingOnBridge = append(existingOnBridge, *created)
-		}
-
 		row := structs.LocationLiquidationAddress{
 			LocationID:                 locationID,
 			OwnerID:                    ownerID,
-			BridgeLiquidationAddressID: chosen.ID,
-			Address:                    chosen.Address,
-			Chain:                      chosen.Chain,
-			Currency:                   chosen.Currency,
-			DestinationPaymentRail:     chosen.DestinationPaymentRail,
-			DestinationCurrency:        chosen.DestinationCurrency,
-			BridgeExternalAccountID:    chosen.ExternalAccountID,
+			BridgeLiquidationAddressID: shared.ID,
+			Address:                    shared.Address,
+			Chain:                      shared.Chain,
+			Currency:                   shared.Currency,
+			DestinationPaymentRail:     shared.DestinationPaymentRail,
+			DestinationCurrency:        shared.DestinationCurrency,
+			BridgeExternalAccountID:    shared.ExternalAccountID,
 			Source:                     "bridge",
 		}
 		if err := a.db.UpsertLocationLiquidationAddress(ctx, &row); err != nil {
@@ -313,6 +310,21 @@ func (a *AppService) provisionLiquidationAddresses(ctx context.Context, ownerID 
 		resp.Provisioned = append(resp.Provisioned, row)
 	}
 	return resp, nil
+}
+
+// findLiquidationAddressForBank picks the Celo USDC → ACH address Bridge holds
+// for a given bank, or nil when none has been minted yet.
+func findLiquidationAddressForBank(all []bridge.LiquidationAddress, externalAccountID string) *bridge.LiquidationAddress {
+	for i := range all {
+		la := &all[i]
+		if la.ExternalAccountID == externalAccountID &&
+			strings.EqualFold(la.Chain, bridge.Chain) &&
+			strings.EqualFold(la.Currency, bridge.Currency) &&
+			strings.EqualFold(la.DestinationPaymentRail, bridge.DestinationRail) {
+			return la
+		}
+	}
+	return nil
 }
 
 // --- Merchant endpoints -----------------------------------------------------
@@ -757,10 +769,36 @@ func (a *AppService) AdminListMerchantPayouts(w http.ResponseWriter, r *http.Req
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
+	businesses := make([]structs.AdminMerchantPayoutBusiness, 0, len(profiles))
+	for _, p := range profiles {
+		b := structs.AdminMerchantPayoutBusiness{Profile: p, BankAccounts: []structs.MerchantBankAccount{}, Locations: []structs.AdminPayoutLocation{}}
+		if banks, err := a.db.ListMerchantBankAccounts(ctx, p.OwnerID); err == nil && banks != nil {
+			b.BankAccounts = banks
+		}
+		locationIDs, err := a.db.ListApprovedLocationIDsForOwner(ctx, p.OwnerID)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		for _, id := range locationIDs {
+			loc := structs.AdminPayoutLocation{LocationID: id}
+			if l, err := a.db.GetLocation(ctx, id); err == nil && l != nil {
+				loc.Name = l.Name
+			}
+			if la, err := a.db.GetLocationLiquidationAddress(ctx, id); err == nil {
+				loc.Liquidation = la
+			}
+			b.Locations = append(b.Locations, loc)
+		}
+		businesses = append(businesses, b)
+	}
 	unwraps, err := a.db.ListAllUnwraps(ctx, 200)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, http.StatusOK, structs.AdminMerchantPayoutsResponse{Profiles: profiles, Unwraps: unwraps})
+	if unwraps == nil {
+		unwraps = []*structs.Unwrap{}
+	}
+	writeJSON(w, http.StatusOK, structs.AdminMerchantPayoutsResponse{Businesses: businesses, Unwraps: unwraps})
 }
