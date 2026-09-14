@@ -8,6 +8,7 @@ import { useApp } from "@/context/AppProvider";
 import { OrganizationPanel } from "@/components/organization/organization-panel";
 import { SignetCard } from "@/components/settings/signet-card";
 import PlaceAutocomplete from "@/components/merchant/google_place_finder";
+import { LocationPayoutCard } from "@/components/merchant/location-payout-card";
 import { AccountTypeCard } from "@/components/merchant/account-type-card";
 import { CancelLocationApplication } from "@/components/merchant/cancel-location-application";
 import { MerchantHoursCard } from "@/components/locations/merchant-hours-card";
@@ -4533,6 +4534,8 @@ export default function SettingsPage() {
                                   </p>
                                 )}
                               </div>
+
+                              <LocationPayoutCard location={loc} />
                             </div>
                           </CardContent>
                         </CollapsibleContent>

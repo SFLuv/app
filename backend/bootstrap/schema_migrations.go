@@ -2394,6 +2394,21 @@ var schemaMigrations = []SchemaMigration{
 			return nil
 		},
 	},
+	{
+		Version:     "1.55",
+		Description: "merchant bank payouts: Bridge KYB profiles, mirrored bank accounts, per-location liquidation addresses, unwrap ledger",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			// Merchants unwrap SFLUV into USDC and send it to a Bridge
+			// liquidation address that drains to their bank. These tables hold
+			// the business's Bridge standing, a recognisable mirror of its bank
+			// accounts (never a number), one destination per location, and a
+			// ledger that follows each unwrap through to the bank. Additive only.
+			if _, err := pools.App.Exec(ctx, db.MerchantPayoutSchemaDDL); err != nil {
+				return fmt.Errorf("error creating merchant payout tables: %w", err)
+			}
+			return nil
+		},
+	},
 }
 
 // migrateW9WarningTiers replaces one hard gate with an escalating sequence.
