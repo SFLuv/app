@@ -13,6 +13,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { EventBlastModal } from "@/components/events/event-blast-modal"
@@ -59,6 +60,8 @@ export interface ManagedVolunteerEvent {
   qr?: {
     live: boolean
     live_at: string | null
+    expires_at?: string | null
+    expired?: boolean
     codes_generated: boolean
     live_offset_hours?: number | null
     expiry_offset_hours?: number | null
@@ -258,22 +261,47 @@ function VisibilityBadge({ event }: { event: ManagedVolunteerEvent }) {
   )
 }
 
+const shortDate = (value?: string | null) => {
+  if (!value) return null
+  const parsed = new Date(value)
+  return Number.isNaN(parsed.getTime())
+    ? null
+    : parsed.toLocaleDateString(undefined, { month: "short", day: "numeric" })
+}
+
 function QrBadge({ event }: { event: ManagedVolunteerEvent }) {
   if (!event.qr?.codes_generated) {
     return <Badge variant="outline" className="text-muted-foreground">QR codes not generated</Badge>
   }
-  if (event.qr.live) {
+  // Expired is checked before live. They are mutually exclusive server-side now,
+  // but the order states the intent: a window that has closed is never "live",
+  // and this view previously said "QR live" on every past event it listed
+  // because it only ever knew when the window opened.
+  if (event.qr.expired) {
+    const expiredOn = shortDate(event.qr.expires_at)
     return (
-      <Badge variant="outline" className="border-emerald-500 text-emerald-600">
-        <QrCode className="mr-1 h-3 w-3" /> QR live
+      <Badge variant="outline" className="border-muted-foreground/40 text-muted-foreground">
+        <QrCode className="mr-1 h-3 w-3" />
+        {expiredOn ? `QR expired ${expiredOn}` : "QR expired"}
       </Badge>
     )
   }
-  const liveAt = event.qr.live_at ? new Date(event.qr.live_at) : null
-  const label = liveAt && !Number.isNaN(liveAt.getTime())
-    ? `QR live ${liveAt.toLocaleDateString(undefined, { month: "short", day: "numeric" })}`
-    : "QR not live yet"
-  return <Badge variant="outline" className="text-muted-foreground"><QrCode className="mr-1 h-3 w-3" />{label}</Badge>
+  if (event.qr.live) {
+    const expiresOn = shortDate(event.qr.expires_at)
+    return (
+      <Badge variant="outline" className="border-emerald-500 text-emerald-600">
+        <QrCode className="mr-1 h-3 w-3" />
+        {expiresOn ? `QR live until ${expiresOn}` : "QR live"}
+      </Badge>
+    )
+  }
+  const liveOn = shortDate(event.qr.live_at)
+  return (
+    <Badge variant="outline" className="text-muted-foreground">
+      <QrCode className="mr-1 h-3 w-3" />
+      {liveOn ? `QR live ${liveOn}` : "QR not live yet"}
+    </Badge>
+  )
 }
 
 /**
@@ -318,6 +346,9 @@ export function VolunteerEventsManager({
   const [page, setPage] = useState(0)
   const [totalEvents, setTotalEvents] = useState(0)
   const [reviewFilter, setReviewFilter] = useState("all")
+  // Off by default: the list is a work queue, and an event that has finished is
+  // rarely the thing anyone came here to act on.
+  const [includePast, setIncludePast] = useState(false)
   const [search, setSearch] = useState("")
   const [busyId, setBusyId] = useState("")
   const [exportProgress, setExportProgress] = useState<{ done: number; total: number } | null>(null)
@@ -340,6 +371,8 @@ export function VolunteerEventsManager({
       const params = new URLSearchParams({ count: String(PAGE_SIZE), page: String(page) })
       if (reviewFilter !== "all") params.set("review_status", reviewFilter)
       if (search.trim() !== "") params.set("search", search.trim())
+      // Absent means the server's default, which is "not finished yet".
+      if (includePast) params.set("when", "all")
 
       const res = await authFetch(`${basePath}?${params.toString()}`)
       if (!res.ok) throw new Error("Unable to load volunteer events.")
@@ -372,14 +405,14 @@ export function VolunteerEventsManager({
       hasLoadedRef.current = true
       setInitialLoading(false)
     }
-  }, [authFetch, basePath, page, reviewFilter, search])
+  }, [authFetch, basePath, includePast, page, reviewFilter, search])
 
   // Filtering or searching is a different result set, so any page number from
   // the previous one is meaningless — and page 3 of a set that now has one page
   // renders as an empty panel.
   useEffect(() => {
     setPage(0)
-  }, [reviewFilter, search])
+  }, [includePast, reviewFilter, search])
 
   useEffect(() => {
     // A filter, search or page change is a different query, so the cached
@@ -626,6 +659,13 @@ export function VolunteerEventsManager({
               ))}
             </SelectContent>
           </Select>
+          <label className="flex cursor-pointer items-center gap-2 sm:ml-1">
+            <Checkbox
+              checked={includePast}
+              onCheckedChange={(checked) => setIncludePast(checked === true)}
+            />
+            <span className="whitespace-nowrap text-sm text-muted-foreground">Include past events</span>
+          </label>
         </div>
 
         {initialLoading && (
@@ -855,18 +895,38 @@ export function VolunteerEventsManager({
                   <div className="col-span-2">
                     <div className="text-xs text-muted-foreground">QR codes</div>
                     <div className="text-sm">
-                      {openEvent.qr?.codes_generated
-                        ? openEvent.qr.live
-                          ? "Live and redeemable now"
-                          : openEvent.qr.live_at
-                            ? `Redeemable from ${new Date(openEvent.qr.live_at).toLocaleString(undefined, {
-                                month: "short",
-                                day: "numeric",
-                                hour: "numeric",
-                                minute: "2-digit",
-                              })}`
-                            : "Not live yet"
-                        : "Not generated — minted when the event is approved"}
+                      {!openEvent.qr?.codes_generated
+                        ? "Not generated — minted when the event is approved"
+                        : openEvent.qr.expired
+                          ? `Expired${
+                              openEvent.qr.expires_at
+                                ? ` ${new Date(openEvent.qr.expires_at).toLocaleString(undefined, {
+                                    month: "short",
+                                    day: "numeric",
+                                    hour: "numeric",
+                                    minute: "2-digit",
+                                  })}`
+                                : ""
+                            } — these codes can no longer be redeemed`
+                          : openEvent.qr.live
+                            ? `Live and redeemable now${
+                                openEvent.qr.expires_at
+                                  ? ` until ${new Date(openEvent.qr.expires_at).toLocaleString(undefined, {
+                                      month: "short",
+                                      day: "numeric",
+                                      hour: "numeric",
+                                      minute: "2-digit",
+                                    })}`
+                                  : ""
+                              }`
+                            : openEvent.qr.live_at
+                              ? `Redeemable from ${new Date(openEvent.qr.live_at).toLocaleString(undefined, {
+                                  month: "short",
+                                  day: "numeric",
+                                  hour: "numeric",
+                                  minute: "2-digit",
+                                })}`
+                              : "Not live yet"}
                     </div>
                   </div>
                 </div>

@@ -1,15 +1,17 @@
 # Branch scope — `pjol/merchant-onboarding-revamp`
 
-Aug 28 – Sep 10 2026 · app + mobile-app · **24.1h active** — 10.1h measured across sixteen sittings,
-plus 14.0h of testing, deployment and meetings reported by PJ and **not** measured (see *Untracked
-time* at the foot)
+Aug 28 – Sep 15 2026 · app + mobile-app + webpage · **29.8h active** — 13.8h measured across
+twenty-four sittings, plus 16.0h of testing, deployment and meetings reported by PJ and **not**
+measured (see *Untracked time* at the foot)
 
 Merchant onboarding and the location request flow, rebuilt around a split between merchant accounts
 and personal ones. Some of that split already existed on `main` — `users.account_type`, the read-only
 onboarding gate, the merchant wall — and this branch finished it and rebuilt the intake form on top.
 
 Hours are **measured from session-transcript timestamps**, clustered into sittings on a 30-minute
-gap, and corroborated against file mtimes. Method: the `time-accounting` skill at
+gap, and corroborated against file mtimes. The rounds sum to 13.8h against a raw sitting total of
+14.07h; each round is rounded to 0.1h independently, and the 0.3h difference is that rounding
+accumulating downward. The rounds are the figure to quote — they are the ones tied to described work. Method: the `time-accounting` skill at
 <https://github.com/pjol/SKILLS/tree/main/time-accounting> (local copy: `docs/TIME_ESTIMATION.md`).
 
 Round 10 was done on `pjol/event-updates-cleanup`, a follow-on branch cut after this one merged. It
@@ -355,7 +357,7 @@ figure is to the last message at the time of writing.
 
 # Untracked time
 
-**Repos:** `app` · `mobile-app` · **Total hours: 14.0 — reported, not measured**
+**Repos:** `app` · `mobile-app` · **Total hours: 16.0 — reported, not measured**
 
 Three mornings of hands-on testing — Sep 2, Sep 3 and Sep 4, roughly 09:00 to 12:00 each — plus the
 afternoon of Sep 4 and the Monday evening deploy, during which no prompts were sent and no files were
@@ -368,6 +370,7 @@ changed, so no transcript records them.
 | Fri Sep 4, ~09:00–12:00 | 3.0 | reported by PJ |
 | Fri Sep 4, afternoon | 3.0 | reported by PJ |
 | Mon Sep 7, evening — deployment | 1.0 | reported by PJ |
+| Boundless grant brainstorming meetings | 2.0 | reported by PJ |
 | Thu Sep 10, 14:00–14:30 — affiliate meeting | 0.5 | reported by PJ |
 | Thu Sep 10, afternoon — proxy fixes | 0.5 | reported by PJ |
 
@@ -633,3 +636,128 @@ Three defects found in production and fixed, none of them in the branch's own fe
 - **The QR diagnosis was wrong twice before it was right.** First the house-organisation guard, which
   addressed a real but different case; then a half-fix that corrected the heading and left the logos
   paired. Production payloads settled it — the event reports `organizer.type: sfluv` and always did.
+
+---
+
+# Round 12 — Sep 7, 15:34 and 20:49–21:44
+
+**Repos:** `app` · `webpage` · **Total active hours: 0.4 — measured**
+
+Three short sittings either side of the evening deploy. The *Untracked time* section already
+referenced these when ruling out overlap with the deploy hour; they had never been written up.
+
+## Features
+
+| Feature | hours | repo |
+|---|---|---|
+| **Deployment environment audit** — every env key the code reads on this branch diffed against `main`, split into must-set, policy defaults and safe-to-omit, with the four keys the retired W-9 system no longer reads flagged for removal. Also caught that `TOKEN_DECIMALS` changed meaning (multiplier, not decimal count) so a stale value inflates every amount by 10¹² | 0.2 | app |
+| **Webpage build fixed** — `@types/google.maps` was only ever a transitive dependency of `@vis.gl/react-google-maps`, hoisted flat in the local tree but isolated under pnpm on Vercel, so `tsc` lost the `google` namespace. Declared explicitly and verified in a clean-room `--frozen-lockfile` install rather than against the local tree | 0.1 | webpage |
+| Volunteer event creation parameters enumerated: required, conditionally required, optional, and the fields set server-side that look like inputs but are not | 0.1 | app |
+
+## Totals
+
+| | |
+|---|---|
+| Files changed | 2 modified (`webpage`) |
+| Migrations | 0 |
+| New routes | 0 |
+
+---
+
+# Round 13 — Sep 11, 11:05–12:20
+
+**Repos:** `app` · **Total active hours: 1.2 — measured**
+
+Reported as "people aren't getting paid out" and "one user's transaction history is not updating".
+Both turned out to be one thing, and it was not the thing reported.
+
+## Features
+
+| Feature | hours | repo |
+|---|---|---|
+| **Ponder outage diagnosed** — indexing stopped dead at block 77,181,350, ~68,000 blocks behind. Not the RPC (forno answers fine), not a poison event (handler errors are swallowed), not the backend callback. A GCE **host error** terminated the `ponder2` instance at 23:34:44 UTC; the VM auto-restarted in about a second and Ponder never came back with it. The Shielded VM integrity ERROR alongside it is a stale late-boot baseline, not a compromise — early boot passed and only PCR_4 moved. Payouts were never broken: workflows reached `paid_out` throughout, including one 35 minutes before the check | 0.5 | app |
+| **Ponder hook deduplication** — migration 1.54 adds `ponder_notified_transfers`, seeded from every transfer already indexed, and the incoming-payment hook now claims before it sends. Without it the restart risked re-indexing the chain from its start block and emailing every user about every payment they have ever received, because the handler had no memory at all. The Ponder read is inside an explicit `SET TRANSACTION READ ONLY` so a future edit cannot touch a schema the indexer checks ownership of on every start | 0.4 | app |
+| **Boot-migration failure made non-fatal** — the backfill above reads a database on another machine, and `RunPendingMigrations` is wired to `log.Fatal`, so an unreachable Ponder took the whole API down in a boot loop behind nginx 502s. Every Ponder-side failure now logs and continues; only the app's own transaction can still fail the migration | 0.2 | app |
+| Twelve old workflows found stuck at `completed` with steps paid on chain — `MarkWorkflowStepPaidOut` returns `(rowsAffected > 0, error)` and both call sites discard the bool, so a 0-row update reads as success. Diagnosed, not yet fixed | 0.1 | app |
+
+## Totals
+
+| | |
+|---|---|
+| Files changed | 4 modified, 1 added |
+| Migrations | 1 (`1.54`) |
+| New routes | 0 |
+
+## Worth knowing
+
+- **The reported symptom pointed away from the cause.** "Not getting paid" sent the investigation
+  through workflows, the W-9 gate and the payout ledger before the indexer. Balances read
+  `balanceOf` straight from chain so they stayed correct, which made the mismatch more confusing
+  rather than less. A staleness alert on last-indexed-block would have named it in a minute.
+- **Nothing in the code caused the outage and nothing in the code could have prevented it.** What
+  was missing is that the workload did not survive its own machine coming back — Ponder had no
+  supervisor and no restart-on-boot.
+
+---
+
+# Round 14 — Sep 14, 10:24–11:27, 21:56 and 23:08–23:43
+
+**Repos:** `app` · **Total active hours: 1.7 — measured**
+
+## Features
+
+| Feature | hours | repo |
+|---|---|---|
+| **A workflow step that advertised itself and could not be claimed** — "claimable" was implemented three times (the board's workflow-id CTE, its claimable-step lateral, and `ClaimWorkflowStep` in Go) and the three had drifted, despite a comment claiming they were mirrored. Four guards the endpoint enforced and the board did not are now a single shared SQL fragment used by both query sites | 0.6 | app |
+| **Claim refusals made visible** — the backend returns a specific reason for every rejection and the improver page was already capturing it, but rendering it at the top of the page, above the tabs, a screenful from the button that caused it. The reason now renders beside the claim button. The first attempt put it in the existing per-step error slot, which sits inside a `mine`-only block and would never have shown for a step that is merely claimable | 0.3 | app |
+| **Supervisor/workflow-member mutual exclusion removed** — supervision is organization-scoped now, so being named supervisor no longer bars holding a step, in either direction. Removing only one direction would have made the same pair of roles legal or not depending on the order they were taken in. Also closes a pre-existing drift: `is_manager_eligible` never checked for an existing step, so the board has always offered this to people the endpoint refused | 0.3 | app |
+| Merchant wallet analysis for Azalina's: 134 transfers reconciling exactly to the on-chain balance, **no unwrap ever**, and two large senders (539.10 SFLUV, ~11% of takings) with W-9 obligations recorded against addresses that have no account behind them | 0.5 | app |
+
+## Totals
+
+| | |
+|---|---|
+| Files changed | 2 modified |
+| Migrations | 0 |
+| New routes | 0 |
+
+## Worth knowing
+
+- **Ponder's `chain_id` looks wrong for pre-cutover rows.** Event ids encode the chain, and every
+  Berachain-era row (80094 in the id, Berachain block heights) comes back tagged 42220. The
+  codebase's own `legacyBerachainChainID = 80094` says these should read 80094, so anything
+  reporting per-chain volume is attributing Berachain activity to Celo. Not yet investigated.
+- **Two payee wallets are over the W-9 threshold with no owner to ask.** This is FAU-03 from the
+  security review in live data: unauthenticated redemption pays an address with no account, the
+  gate overrides its own decision to `pay` because there is nobody to ask for a form, and the
+  earnings accrue against a bare address.
+
+---
+
+# Round 15 — Sep 15, 12:34–12:58
+
+**Repos:** `app` · **Total active hours: 0.4 — measured**
+
+## Features
+
+| Feature | hours | repo |
+|---|---|---|
+| **Expired QR codes now say so** — `qr.Live` was computed from the start of the window and never its end, so every past event in the admin and affiliate views reported "QR live" indefinitely. The row now carries `qr_expires_at`, the payload reports `expires_at` and a separate `expired` flag, and both the badge and the detail dialog distinguish "not yet" from "never again" | 0.2 | app |
+| **Include past events** — the management list had no time bound at all, so every event ever run stayed in it. It now defaults to what has not finished yet, with a checkbox to bring the rest back. Keyed off `expiration` rather than `start_at`, so an event running right now does not drop out of the default view the moment it begins | 0.2 | app |
+
+## Totals
+
+| | |
+|---|---|
+| Files changed | 4 modified |
+| Migrations | 0 |
+| New routes | 0 |
+
+## Worth knowing
+
+- **Single-instance edit does not exist, and the assumption ran the other way.** Cancel and edit
+  already operate on one occurrence (`WHERE id = $1`); there is no series-wide edit anywhere. And
+  because `CreateRecurringSuccessor` builds each occurrence by cloning the previous row, editing
+  today's occurrence *already* propagates to every future one. Supporting "this occurrence only"
+  means successors must stop inheriting from their predecessor — a series template, or an exception
+  flag — which is a schema decision and is parked pending a call on which.
