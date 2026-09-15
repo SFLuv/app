@@ -107,11 +107,20 @@ type VolunteerEventSignupInfo struct {
 }
 
 // VolunteerEventQR is admin/affiliate only. Codes are downloadable as soon as
-// the event exists but only spendable from LiveAt (start - 24h).
+// the event exists, and spendable only between LiveAt and ExpiresAt.
 type VolunteerEventQR struct {
-	Live           bool    `json:"live"`
-	LiveAt         *string `json:"live_at"`
-	CodesGenerated bool    `json:"codes_generated"`
+	// Live means redeemable RIGHT NOW — after the window opened and before it
+	// closed. It used to mean only "the window has opened", so an event whose
+	// codes died months ago still reported live, and the management views said
+	// so on every past event they listed.
+	Live      bool    `json:"live"`
+	LiveAt    *string `json:"live_at"`
+	ExpiresAt *string `json:"expires_at"`
+	// Expired is kept separate from !Live because the two reasons a code is not
+	// redeemable are not interchangeable: one is "not yet", the other is "never
+	// again", and only the second is worth a badge of its own.
+	Expired        bool `json:"expired"`
+	CodesGenerated bool `json:"codes_generated"`
 	// The stored rule, so the edit form can seed the controls it was set with.
 	// Null means the default window, which is what an omitted pair submits.
 	LiveOffsetHours   *int `json:"live_offset_hours"`

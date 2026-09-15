@@ -35,6 +35,9 @@ type VolunteerEventRow struct {
 	ReviewStatus    string
 	CancelledAt     *int64
 	QRLiveAt        *int64
+	// When the codes stop being redeemable. Carried so the management views can
+	// say "expired" rather than leaving a long-dead event reading as live.
+	QRExpiresAt *int64
 	// The stored rule, so a successor resolves its own window. Nil means the
 	// default: midnight local on the start day to midnight local after the end.
 	QRLiveOffsetHours   *int
@@ -81,6 +84,7 @@ const volunteerEventColumns = `
 	e.review_status,
 	e.cancelled_at,
 	e.qr_live_at,
+	e.qr_expires_at,
 	e.qr_live_offset_hours,
 	e.qr_expiry_offset_hours,
 	e.codes_generated,
@@ -141,6 +145,7 @@ func scanVolunteerEventRow(row pgx.Row, out *VolunteerEventRow, total *int) erro
 		&out.ReviewStatus,
 		&out.CancelledAt,
 		&out.QRLiveAt,
+		&out.QRExpiresAt,
 		&out.QRLiveOffsetHours,
 		&out.QRExpiryOffsetHours,
 		&out.CodesGenerated,
@@ -731,6 +736,22 @@ func (s *BotDB) GetAdminVolunteerEvents(ctx context.Context, f *structs.Voluntee
 	if f.OrganizationId != nil {
 		args = append(args, *f.OrganizationId)
 		where = append(where, fmt.Sprintf("e.organization_id = $%d", len(args)))
+	}
+
+	// The management list used to have no time bound at all, so every event ever
+	// run stayed in it and the useful ones sank. It now defaults to what has not
+	// finished yet, and "all" is what the include-past control asks for.
+	//
+	// Deliberately keyed off expiration rather than start_at: an event running
+	// right now has not finished, and dropping it out of the default view the
+	// moment it begins is the opposite of useful.
+	switch f.When {
+	case "all":
+		// no time bound
+	case "past":
+		where = append(where, "e.expiration < EXTRACT(EPOCH FROM NOW())")
+	default:
+		where = append(where, "e.expiration >= EXTRACT(EPOCH FROM NOW())")
 	}
 
 	args = append(args, f.Count, f.Page*f.Count)

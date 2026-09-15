@@ -5798,23 +5798,14 @@ func (a *AppDB) ClaimWorkflowManager(ctx context.Context, workflowId string, imp
 		return nil, fmt.Errorf("workflow manager is already claimed")
 	}
 
-	var claimedAssignments int
-	err = tx.QueryRow(ctx, `
-		SELECT
-			COUNT(*)
-		FROM
-			workflow_steps
-		WHERE
-			workflow_id = $1
-		AND
-			assigned_improver_id = $2;
-	`, workflowId, improverId).Scan(&claimedAssignments)
-	if err != nil {
-		return nil, fmt.Errorf("error checking existing workflow assignments: %s", err)
-	}
-	if claimedAssignments > 0 {
-		return nil, fmt.Errorf("improver already assigned within this workflow")
-	}
+	// The mirror of the rule dropped in ClaimWorkflowStep: holding a step no
+	// longer bars you from supervising the workflow. Removing only one
+	// direction would leave the same pair of roles allowed or refused depending
+	// on the order they were taken in.
+	//
+	// This also settles a disagreement that predates the change: the improver
+	// board's is_manager_eligible never checked for an existing step, so it has
+	// always offered this to people the endpoint then refused.
 
 	requiredRows, err := tx.Query(ctx, `
 		SELECT
@@ -6763,15 +6754,13 @@ func (a *AppDB) ClaimWorkflowStep(
 	var workflowTitle string
 	var workflowSeriesId string
 	var workflowRecurrence string
-	var managerImproverID *string
 	err = tx.QueryRow(ctx, `
 				SELECT
 					w.status,
 					w.start_at,
 					COALESCE(NULLIF(TRIM(st.title), ''), COALESCE(NULLIF(TRIM(s.title), ''), '')),
 					w.series_id,
-					COALESCE(NULLIF(TRIM(st.recurrence), ''), COALESCE(NULLIF(TRIM(s.recurrence), ''), 'one_time')),
-					w.manager_improver_id
+					COALESCE(NULLIF(TRIM(st.recurrence), ''), COALESCE(NULLIF(TRIM(s.recurrence), ''), 'one_time'))
 				FROM
 					workflows w
 				LEFT JOIN
@@ -6785,7 +6774,7 @@ func (a *AppDB) ClaimWorkflowStep(
 			WHERE
 				w.id = $1
 			FOR UPDATE OF w;
-	`, workflowId).Scan(&workflowStatus, &workflowStartAt, &workflowTitle, &workflowSeriesId, &workflowRecurrence, &managerImproverID)
+	`, workflowId).Scan(&workflowStatus, &workflowStartAt, &workflowTitle, &workflowSeriesId, &workflowRecurrence)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -6793,9 +6782,19 @@ func (a *AppDB) ClaimWorkflowStep(
 		return nil, nil, fmt.Errorf("workflow is not available for claiming")
 	}
 
-	if managerImproverID != nil && *managerImproverID == improverId {
-		return nil, nil, fmt.Errorf("improver already assigned within this workflow")
-	}
+	// The workflow's supervisor may also work in it.
+	//
+	// This used to refuse the claim outright: being named supervisor of a
+	// workflow barred you from holding a step in it. That made sense while a
+	// supervisor was an individual attached to one workflow and overseeing the
+	// people in it — supervising your own work is not oversight. Supervision is
+	// now scoped to the organization rather than to the person, so the conflict
+	// it guarded against is handled at that level and the individual bar is
+	// just an obstacle.
+	//
+	// The one-step-per-improver rule below is a different rule and still
+	// stands: it stops one person taking every step of a workflow, which has
+	// nothing to do with supervision.
 
 	var stepWorkflowId string
 	var stepStatus string
@@ -14624,22 +14623,6 @@ func improverClaimableStepGuards() string {
 						rc.role_id = ws.role_id
 					AND
 						ctd.value IS NULL
-				)
-			AND
-				-- The workflow manager is already assigned to the workflow, and
-				-- the claim refuses a second assignment. manager_improver_id
-				-- lives on workflows rather than workflow_steps, which is why
-				-- the existing "already claimed something here" check walked
-				-- straight past it.
-				NOT EXISTS (
-					SELECT
-						1
-					FROM
-						workflows mw
-					WHERE
-						mw.id = ws.workflow_id
-					AND
-						mw.manager_improver_id = $1
 				)
 			AND
 				-- A locked step is only claimable once it could actually
