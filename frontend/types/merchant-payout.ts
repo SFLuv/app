@@ -155,3 +155,11 @@ export interface AdminMerchantPayoutsResponse {
   businesses: AdminMerchantPayoutBusiness[]
   unwraps: Unwrap[]
 }
+
+// Returned (409) when an attach-by-email matches several accounts.
+export interface MerchantOwnerCandidate {
+  owner_id: string
+  contact_name: string
+  contact_email: string
+  location_names: string[]
+}

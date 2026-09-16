@@ -109,9 +109,24 @@ type AdminSetLiquidationAddressRequest struct {
 	Address string `json:"address"`
 }
 
+// AdminAttachBridgeCustomerRequest identifies the business either by the
+// owner's contact email (the normal case: an admin knows the merchant's
+// email, not their Privy id) or by owner id (the fallback, and how a
+// duplicate-email pick is resubmitted).
 type AdminAttachBridgeCustomerRequest struct {
 	OwnerID          string `json:"owner_id"`
+	OwnerEmail       string `json:"owner_email"`
 	BridgeCustomerID string `json:"bridge_customer_id"`
+}
+
+// MerchantOwnerCandidate is one account matching an email lookup, with
+// enough context (name, locations) for an admin to pick the right one when
+// an email is shared by several accounts.
+type MerchantOwnerCandidate struct {
+	OwnerID       string   `json:"owner_id"`
+	ContactName   string   `json:"contact_name"`
+	ContactEmail  string   `json:"contact_email"`
+	LocationNames []string `json:"location_names"`
 }
 
 // AdminPayoutLocation is one approved location as the admin panel sees it:

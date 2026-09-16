@@ -15,6 +15,7 @@ import {
   unwrapStatusLabel,
   type AdminMerchantPayoutBusiness,
   type AdminMerchantPayoutsResponse,
+  type MerchantOwnerCandidate,
   type Unwrap,
 } from "@/types/merchant-payout"
 
@@ -50,9 +51,14 @@ export function MerchantPayoutsPanel() {
   const [unwraps, setUnwraps] = useState<Unwrap[]>([])
   const [disabledReason, setDisabledReason] = useState<string | null>(null)
 
+  const [attachEmail, setAttachEmail] = useState("")
   const [attachOwner, setAttachOwner] = useState("")
+  const [showOwnerId, setShowOwnerId] = useState(false)
   const [attachCustomer, setAttachCustomer] = useState("")
   const [attaching, setAttaching] = useState(false)
+  // Set when an email matches several accounts; the admin picks one and we
+  // resubmit with the owner id instead of guessing.
+  const [candidates, setCandidates] = useState<MerchantOwnerCandidate[]>([])
 
   const [overrideDrafts, setOverrideDrafts] = useState<Record<number, string>>({})
   const [overriding, setOverriding] = useState<number | null>(null)
@@ -87,11 +93,12 @@ export function MerchantPayoutsPanel() {
     void load()
   }, [load])
 
-  const attach = async () => {
-    const owner = attachOwner.trim()
+  const attach = async (ownerOverride?: string) => {
+    const owner = (ownerOverride ?? attachOwner).trim()
+    const email = attachEmail.trim()
     const customer = attachCustomer.trim()
-    if (!owner || !customer) {
-      toast({ title: "Both fields are required", variant: "destructive" })
+    if ((!owner && !email) || !customer) {
+      toast({ title: "Enter the merchant's email and the Bridge customer id", variant: "destructive" })
       return
     }
     setAttaching(true)
@@ -99,8 +106,14 @@ export function MerchantPayoutsPanel() {
       const res = await authFetch("/admin/merchant-payouts/attach-customer", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ owner_id: owner, bridge_customer_id: customer }),
+        body: JSON.stringify(owner ? { owner_id: owner, bridge_customer_id: customer } : { owner_email: email, bridge_customer_id: customer }),
       })
+      if (res.status === 409) {
+        const body = await res.json()
+        setCandidates(body?.candidates || [])
+        toast({ title: "Several accounts use that email", description: "Pick the right one below." })
+        return
+      }
       if (!res.ok) {
         let message = "Unable to attach that customer."
         try {
@@ -120,8 +133,10 @@ export function MerchantPayoutsPanel() {
             ? `${provisioned} location${provisioned === 1 ? "" : "s"} now have a payout address.`
             : body?.provisioning?.message || "Attached. Provision once a bank is linked.",
       })
+      setAttachEmail("")
       setAttachOwner("")
       setAttachCustomer("")
+      setCandidates([])
       await load()
     } catch (err) {
       toast({
@@ -193,35 +208,87 @@ export function MerchantPayoutsPanel() {
         <CardHeader>
           <CardTitle className="text-base">Attach an existing Bridge customer</CardTitle>
           <CardDescription>
-            For a business that was verified outside the app. Links the Bridge customer to the owner account, pulls in
-            their linked banks, and provisions a payout address for every approved location.
+            For a business that was verified outside the app. Enter the merchant&apos;s email and the Bridge customer
+            id: this links the customer to their account, pulls in their linked banks, and provisions a payout address
+            for every approved location.
           </CardDescription>
         </CardHeader>
-        <CardContent className="grid gap-3 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
-          <div className="space-y-1">
-            <Label htmlFor="attach-owner">Owner user id (did:privy:…)</Label>
-            <Input
-              id="attach-owner"
-              value={attachOwner}
-              onChange={(e) => setAttachOwner(e.target.value)}
-              placeholder="did:privy:…"
-              autoComplete="off"
-            />
+        <CardContent className="space-y-3">
+          <div className="grid gap-3 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
+            <div className="space-y-1">
+              <Label htmlFor="attach-email">Merchant email</Label>
+              <Input
+                id="attach-email"
+                type="email"
+                value={attachEmail}
+                onChange={(e) => {
+                  setAttachEmail(e.target.value)
+                  setCandidates([])
+                }}
+                placeholder="owner@business.com"
+                autoComplete="off"
+                disabled={showOwnerId}
+              />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="attach-customer">Bridge customer id</Label>
+              <Input
+                id="attach-customer"
+                value={attachCustomer}
+                onChange={(e) => setAttachCustomer(e.target.value)}
+                placeholder="uuid from the Bridge dashboard"
+                autoComplete="off"
+              />
+            </div>
+            <Button onClick={() => void attach()} disabled={attaching || !!disabledReason}>
+              {attaching ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              Attach
+            </Button>
           </div>
-          <div className="space-y-1">
-            <Label htmlFor="attach-customer">Bridge customer id</Label>
-            <Input
-              id="attach-customer"
-              value={attachCustomer}
-              onChange={(e) => setAttachCustomer(e.target.value)}
-              placeholder="uuid from the Bridge dashboard"
-              autoComplete="off"
-            />
-          </div>
-          <Button onClick={() => void attach()} disabled={attaching || !!disabledReason}>
-            {attaching ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-            Attach
-          </Button>
+
+          {candidates.length > 0 ? (
+            <div className="rounded-md border p-3">
+              <div className="mb-2 text-sm font-medium">Which account?</div>
+              <ul className="space-y-2">
+                {candidates.map((c) => (
+                  <li key={c.owner_id} className="flex flex-wrap items-center justify-between gap-2 text-sm">
+                    <div>
+                      <div>{c.contact_name || "(no name)"}</div>
+                      <div className="text-xs text-muted-foreground">
+                        {c.location_names.length > 0 ? c.location_names.join(", ") : "no approved locations"}
+                        {" · "}
+                        <span className="font-mono">{shortDid(c.owner_id)}</span>
+                      </div>
+                    </div>
+                    <Button size="sm" variant="outline" disabled={attaching} onClick={() => void attach(c.owner_id)}>
+                      Use this one
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+
+          <button
+            type="button"
+            className="text-xs text-muted-foreground underline-offset-2 hover:underline"
+            onClick={() => setShowOwnerId((v) => !v)}
+          >
+            {showOwnerId ? "Use email instead" : "Attach by owner id instead"}
+          </button>
+          {showOwnerId ? (
+            <div className="space-y-1">
+              <Label htmlFor="attach-owner">Owner user id (did:privy:…)</Label>
+              <Input
+                id="attach-owner"
+                value={attachOwner}
+                onChange={(e) => setAttachOwner(e.target.value)}
+                placeholder="did:privy:…"
+                autoComplete="off"
+                className="font-mono text-xs"
+              />
+            </div>
+          ) : null}
         </CardContent>
       </Card>
 

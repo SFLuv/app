@@ -731,12 +731,41 @@ func (a *AppService) AdminAttachBridgeCustomer(w http.ResponseWriter, r *http.Re
 		return
 	}
 	var req structs.AdminAttachBridgeCustomerRequest
-	if err := json.Unmarshal(body, &req); err != nil || strings.TrimSpace(req.OwnerID) == "" || strings.TrimSpace(req.BridgeCustomerID) == "" {
+	if err := json.Unmarshal(body, &req); err != nil || strings.TrimSpace(req.BridgeCustomerID) == "" {
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), bridgeAPITimeout)
 	defer cancel()
+
+	// Admins know a merchant's email, not their Privy id. Resolve it here,
+	// and refuse to guess when several accounts share the address: the
+	// caller gets the candidates and resubmits with the owner id.
+	if strings.TrimSpace(req.OwnerID) == "" {
+		email := strings.TrimSpace(req.OwnerEmail)
+		if email == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Enter the merchant's email or owner id."})
+			return
+		}
+		candidates, err := a.db.FindMerchantOwnersByEmail(ctx, email)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		switch len(candidates) {
+		case 0:
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "No active account uses that email."})
+			return
+		case 1:
+			req.OwnerID = candidates[0].OwnerID
+		default:
+			writeJSON(w, http.StatusConflict, map[string]any{
+				"error":      "Several accounts use that email. Pick the right one.",
+				"candidates": candidates,
+			})
+			return
+		}
+	}
 
 	customer, err := client.GetCustomer(ctx, strings.TrimSpace(req.BridgeCustomerID))
 	if err != nil {

@@ -572,3 +572,30 @@ func UnwrapStatusFromDrainState(state string) string {
 }
 
 var _ = time.Now
+
+// FindMerchantOwnersByEmail returns every active account whose contact email
+// matches (case-insensitive, trimmed), with its approved location names, so a
+// caller can attach by email and still notice when the email is ambiguous.
+func (a *AppDB) FindMerchantOwnersByEmail(ctx context.Context, email string) ([]structs.MerchantOwnerCandidate, error) {
+	rows, err := a.db.Query(ctx, `
+		SELECT u.id, COALESCE(u.contact_name, ''), COALESCE(u.contact_email, ''),
+		       COALESCE(ARRAY_AGG(l.name ORDER BY l.id) FILTER (WHERE l.id IS NOT NULL), '{}')
+		FROM users u
+		LEFT JOIN locations l ON l.owner_id = u.id AND l.active = TRUE AND l.approval = TRUE
+		WHERE u.active = TRUE AND LOWER(TRIM(COALESCE(u.contact_email, ''))) = LOWER(TRIM($1))
+		GROUP BY u.id, u.contact_name, u.contact_email
+		ORDER BY COUNT(l.id) DESC, u.id`, email)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []structs.MerchantOwnerCandidate{}
+	for rows.Next() {
+		var c structs.MerchantOwnerCandidate
+		if err := rows.Scan(&c.OwnerID, &c.ContactName, &c.ContactEmail, &c.LocationNames); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
