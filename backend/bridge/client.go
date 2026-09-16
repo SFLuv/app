@@ -395,6 +395,11 @@ type Drain struct {
 	Amount        string `json:"amount"`
 	Currency      string `json:"currency"`
 	DepositTxHash string `json:"deposit_tx_hash"`
+	// DepositTxTimestamp is when the deposit landed on-chain (RFC 3339). It is
+	// the fallback key when the hash cannot be matched: the web app submits
+	// through an ERC-4337 bundler, so the hash it sees can be the user
+	// operation's, not the transaction's.
+	DepositTxTimestamp string `json:"deposit_tx_timestamp"`
 	// ACH trace number, the reference a merchant can quote to their bank.
 	TraceNumber string `json:"trace_number"`
 	CreatedAt   string `json:"created_at"`

@@ -536,14 +536,21 @@ func (a *AppDB) ListOpenUnwraps(ctx context.Context, limit int) ([]*structs.Unwr
 	return out, rows.Err()
 }
 
-func (a *AppDB) UpdateUnwrapFromDrain(ctx context.Context, txHash, status, drainID, bridgeState, bankReference string) error {
+// UpdateUnwrapFromDrain records a drain's state on a ledger row. When Bridge
+// reports a deposit hash that differs from the row's (the web app records the
+// ERC-4337 user-operation hash, not the bundle transaction), the row adopts
+// Bridge's hash so explorer links resolve — unless another row already owns it.
+func (a *AppDB) UpdateUnwrapFromDrain(ctx context.Context, id int64, depositTxHash, status, drainID, bridgeState, bankReference string) error {
 	_, err := a.db.Exec(ctx, `
 		UPDATE unwraps SET
 			status = $2, bridge_drain_id = $3, bridge_state = $4,
 			bank_reference = CASE WHEN $5 = '' THEN bank_reference ELSE $5 END,
+			tx_hash = CASE
+				WHEN $6 <> '' AND $6 <> tx_hash AND NOT EXISTS (SELECT 1 FROM unwraps x WHERE x.tx_hash = $6 AND x.id <> $1)
+				THEN $6 ELSE tx_hash END,
 			last_synced_at = NOW(), updated_at = NOW()
-		WHERE tx_hash = $1;
-	`, strings.ToLower(strings.TrimSpace(txHash)), status, drainID, bridgeState, bankReference)
+		WHERE id = $1;
+	`, id, status, drainID, bridgeState, bankReference, strings.ToLower(strings.TrimSpace(depositTxHash)))
 	if err != nil {
 		return fmt.Errorf("error updating unwrap from drain: %w", err)
 	}
@@ -598,4 +605,15 @@ func (a *AppDB) FindMerchantOwnersByEmail(ctx context.Context, email string) ([]
 		out = append(out, c)
 	}
 	return out, rows.Err()
+}
+
+// UnwrapExistsForDrain reports whether any ledger row already points at the
+// given Bridge drain, so a fallback match never claims a drain twice.
+func (a *AppDB) UnwrapExistsForDrain(ctx context.Context, drainID string) (bool, error) {
+	var exists bool
+	err := a.db.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM unwraps WHERE bridge_drain_id = $1)`, drainID).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("error checking drain claim: %w", err)
+	}
+	return exists, nil
 }

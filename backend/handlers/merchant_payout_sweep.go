@@ -3,6 +3,8 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"math/big"
 	"strings"
 	"time"
 
@@ -122,13 +124,36 @@ func (a *AppService) syncOpenUnwraps(ctx context.Context, limit int) {
 			continue
 		}
 		byHash := map[string]bridge.Drain{}
+		byID := map[string]bridge.Drain{}
 		for _, d := range drains {
 			if h := strings.ToLower(strings.TrimSpace(d.DepositTxHash)); h != "" {
 				byHash[h] = d
 			}
+			byID[d.ID] = d
 		}
 		for _, u := range rows {
-			d, ok := byHash[strings.ToLower(u.TxHash)]
+			// A row already linked to a drain keeps following that drain;
+			// hashes only matter for the first match.
+			var d bridge.Drain
+			ok := false
+			if u.BridgeDrainID != "" {
+				d, ok = byID[u.BridgeDrainID]
+			}
+			if !ok {
+				d, ok = byHash[strings.ToLower(u.TxHash)]
+			}
+			if !ok {
+				// The web app submits through an ERC-4337 bundler and records
+				// the hash it gets back, which can be the user operation's
+				// rather than the transaction's (verified on Celo: Bridge
+				// reports the bundle tx). So fall back to the deposit itself:
+				// same address, same amount, landed within minutes of the
+				// row, and not already claimed by another row. Exactly one
+				// candidate or nothing.
+				if fb, found := a.fallbackDrainForUnwrap(ctx, u, drains); found {
+					d, ok = fb, true
+				}
+			}
 			if !ok {
 				// Not seen by Bridge yet — a transaction still confirming, or
 				// one that never landed. Touch it so it is not retried before
@@ -137,9 +162,71 @@ func (a *AppService) syncOpenUnwraps(ctx context.Context, limit int) {
 				continue
 			}
 			status := db.UnwrapStatusFromDrainState(d.State)
-			if err := a.db.UpdateUnwrapFromDrain(ctx, u.TxHash, status, d.ID, d.State, d.TraceNumber); err != nil && a.logger != nil {
+			if err := a.db.UpdateUnwrapFromDrain(ctx, u.ID, d.DepositTxHash, status, d.ID, d.State, d.TraceNumber); err != nil && a.logger != nil {
 				a.logger.Logf("merchant payout sweep: updating unwrap %d failed: %s", u.ID, err)
 			}
 		}
 	}
+}
+
+// fallbackDrainMatchWindow bounds how far a drain's on-chain deposit time may
+// sit from the ledger row's creation for the two to be treated as the same
+// event. Rows are written right after the bundler accepts the operation.
+const fallbackDrainMatchWindow = 30 * time.Minute
+
+func (a *AppService) fallbackDrainForUnwrap(ctx context.Context, u *structs.Unwrap, drains []bridge.Drain) (bridge.Drain, bool) {
+	want, ok := new(big.Int).SetString(u.AmountWei, 10)
+	if !ok {
+		return bridge.Drain{}, false
+	}
+	var matches []bridge.Drain
+	for _, d := range drains {
+		amt, err := drainAmountBaseUnits(d.Amount)
+		if err != nil || amt.Cmp(want) != 0 {
+			continue
+		}
+		ts, err := time.Parse(time.RFC3339, d.DepositTxTimestamp)
+		if err != nil {
+			continue
+		}
+		if diff := ts.Sub(u.CreatedAt); diff < -fallbackDrainMatchWindow || diff > fallbackDrainMatchWindow {
+			continue
+		}
+		claimed, err := a.db.UnwrapExistsForDrain(ctx, d.ID)
+		if err != nil || claimed {
+			continue
+		}
+		matches = append(matches, d)
+	}
+	if len(matches) != 1 {
+		return bridge.Drain{}, false
+	}
+	if a.logger != nil {
+		a.logger.Logf("merchant payout sweep: unwrap %d matched drain %s by amount+time (ledger hash %s, bridge hash %s)", u.ID, matches[0].ID, u.TxHash, matches[0].DepositTxHash)
+	}
+	return matches[0], true
+}
+
+// drainAmountBaseUnits turns Bridge's decimal USDC amount ("5.0") into token
+// base units (6 decimals), the unit the ledger stores.
+func drainAmountBaseUnits(amount string) (*big.Int, error) {
+	amount = strings.TrimSpace(amount)
+	if amount == "" {
+		return nil, fmt.Errorf("empty amount")
+	}
+	whole, frac, _ := strings.Cut(amount, ".")
+	if len(frac) > 6 {
+		frac = frac[:6]
+	}
+	for len(frac) < 6 {
+		frac += "0"
+	}
+	if whole == "" {
+		whole = "0"
+	}
+	n, ok := new(big.Int).SetString(whole+frac, 10)
+	if !ok {
+		return nil, fmt.Errorf("bad amount %q", amount)
+	}
+	return n, nil
 }

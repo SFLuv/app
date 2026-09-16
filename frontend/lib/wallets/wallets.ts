@@ -1,7 +1,7 @@
 import { ConnectedWallet, EIP1193Provider } from "@privy-io/react-auth";
 import { BrowserProvider, JsonRpcSigner, Signer, TypedDataDomain, TypedDataField } from "ethers";
 import { toSimpleSmartAccount, ToSimpleSmartAccountReturnType } from "permissionless/accounts";
-import { Address, createPublicClient, createWalletClient, custom, encodeFunctionData, formatUnits, Hex, hexToBytes, parseUnits, PublicClient } from "viem";
+import { Address, createPublicClient, createWalletClient, custom, encodeFunctionData, formatUnits, Hex, hexToBytes, parseAbiItem, parseUnits, PublicClient, toEventSelector } from "viem";
 import { entryPoint07Address } from "viem/account-abstraction";
 import { Hash } from "viem";
 import { allowance, approve, balanceOf, decimals, depositFor, hasRole, minterRole, redeemerRole, transfer, underlying, withdrawTo, zapIn } from "../abi";
@@ -9,6 +9,9 @@ import type { ResolvedCommunityConfig } from "@/lib/community-config";
 import { BundlerService } from "@citizenwallet/sdk";
 
 export type WalletType = "smartwallet" | "eoa"
+
+// keccak256("Transfer(address,address,uint256)"), the ERC-20 Transfer topic.
+const transferTopic = toEventSelector("Transfer(address,address,uint256)")
 
 export interface TxState {
   sending: boolean;
@@ -797,6 +800,60 @@ export class AppWallet {
       args: [to, amount],
     })
     return this._execTx(t.wallet, t.signer, callData)
+  }
+
+  /**
+   * Resolve the on-chain transaction of an unwrap.
+   *
+   * `cashOut` returns whatever the bundler hands back, which on Citizen
+   * Wallet's engine is the user-operation hash — not a transaction, so it
+   * never shows on an explorer and Bridge reports a different hash for the
+   * same deposit. The engine does not answer eth_getUserOperationReceipt and
+   * its entrypoint emits no UserOperationEvent, so the reliable signal is the
+   * deposit itself: a USDC Transfer from the SFLUV wrapper to the payout
+   * address for exactly this amount, in a transaction that also burns SFLUV
+   * from this wallet. Polls briefly; null when nothing has landed yet.
+   */
+  findUnwrapTxHash = async (to: Address, amount: bigint, opts?: { attempts?: number; intervalMs?: number }): Promise<Hash | null> => {
+    if (!this.publicClient || !this.address) return null
+    const usdc = await this.getUnderlyingToken()
+    if (!usdc) return null
+    const attempts = opts?.attempts ?? 12
+    const intervalMs = opts?.intervalMs ?? 5_000
+    const transferEvent = parseAbiItem("event Transfer(address indexed from, address indexed to, uint256 value)")
+    const wallet = this.address.toLowerCase()
+    const zero = "0x0000000000000000000000000000000000000000"
+
+    for (let i = 0; i < attempts; i++) {
+      try {
+        const latest = await this.publicClient.getBlockNumber()
+        const fromBlock = latest > 400n ? latest - 400n : 0n
+        const logs = await this.publicClient.getLogs({
+          address: usdc,
+          event: transferEvent,
+          args: { from: this.SFLUV_TOKEN, to },
+          fromBlock,
+          toBlock: latest,
+        })
+        // Newest first: the unwrap just submitted is the last one to land.
+        for (const log of [...logs].reverse()) {
+          if (log.args.value !== amount || !log.transactionHash) continue
+          const receipt = await this.publicClient.getTransactionReceipt({ hash: log.transactionHash })
+          const burnedFromUs = receipt.logs.some(
+            (l) =>
+              l.address.toLowerCase() === this.SFLUV_TOKEN.toLowerCase() &&
+              l.topics[0] === transferTopic &&
+              l.topics[1]?.toLowerCase().endsWith(wallet.slice(2)) &&
+              l.topics[2]?.toLowerCase().endsWith(zero.slice(2)),
+          )
+          if (burnedFromUs) return log.transactionHash
+        }
+      } catch (error) {
+        console.warn("findUnwrapTxHash: lookup failed, retrying", error)
+      }
+      await new Promise((r) => setTimeout(r, intervalMs))
+    }
+    return null
   }
 
   mintSFLUVFromBYUSD = async (amount: string): Promise<TxState | null> => {

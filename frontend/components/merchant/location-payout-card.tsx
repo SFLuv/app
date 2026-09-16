@@ -239,12 +239,17 @@ export function LocationPayoutCard({ location, onUnwrapped }: LocationPayoutCard
 
   const record = async (wallet: AppWallet, role: "payment" | "tipping", amount: bigint, receipt: TxState) => {
     if (!receipt.hash || !wallet.address || !liquidation) return
+    // The bundler's hash is the user operation's, not the transaction's.
+    // Prefer the real one so the ledger and explorer links line up with
+    // what Bridge sees; the sweep can still reconcile by amount and time
+    // if this lookup comes back empty.
+    const txHash = (await wallet.findUnwrapTxHash(liquidation.address as Address, amount)) ?? receipt.hash
     await authFetch("/unwrap/record", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         wallet_address: wallet.address,
-        tx_hash: receipt.hash,
+        tx_hash: txHash,
         amount_wei: amount.toString(),
         destination_address: liquidation.address,
         location_id: location.id,
