@@ -391,11 +391,22 @@ func decorateManagementFields(event *structs.VolunteerEvent, row *db.VolunteerEv
 		LiveOffsetHours:   row.QRLiveOffsetHours,
 		ExpiryOffsetHours: row.QRExpiryOffsetHours,
 	}
+	now := time.Now().Unix()
+	opened := false
 	if row.QRLiveAt != nil {
 		liveAt := rfc3339(*row.QRLiveAt)
 		qr.LiveAt = &liveAt
-		qr.Live = time.Now().Unix() >= *row.QRLiveAt
+		opened = now >= *row.QRLiveAt
 	}
+	if row.QRExpiresAt != nil {
+		expiresAt := rfc3339(*row.QRExpiresAt)
+		qr.ExpiresAt = &expiresAt
+		qr.Expired = now >= *row.QRExpiresAt
+	}
+	// Live is the intersection, not just the opening. A window with no recorded
+	// expiry stays open, which is the pre-1.53 shape and the safe reading: it
+	// is the state the redemption path itself treats as unbounded.
+	qr.Live = opened && !qr.Expired
 	event.QR = qr
 }
 
