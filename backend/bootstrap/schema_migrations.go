@@ -24,40 +24,6 @@ const legacyBerachainChainID = 80094
 
 const baselineDBVersion = "1.0"
 
-// skippedBackfill reports that the notified-transfers seeding could not run,
-// WITHOUT failing the migration.
-//
-// The table is the essential half and is already created by the time anything
-// here can fire; the seeding is an optimisation that reads a different database
-// the backend does not own and may not be able to reach — Ponder lives on its
-// own instance, and that instance has already been lost once to a host error.
-//
-// A migration failure is not a degraded feature, it is an outage:
-// RunPendingMigrations is wired to log.Fatal in cmd/server, the version does not
-// advance, and every subsequent boot retries and dies the same way. Refusing to
-// serve the whole platform because an optional backfill could not read an
-// external database would be the wrong trade by a wide margin.
-//
-// The cost of skipping is stated plainly rather than buried, because an empty
-// table means the next Ponder re-index notifies users about historical
-// transfers — which is the thing this migration exists to prevent.
-func skippedBackfill(appLogger *logger.LogCloser, reason string, err error) error {
-	if appLogger == nil {
-		return nil
-	}
-	detail := ""
-	if err != nil {
-		detail = ": " + err.Error()
-	}
-	appLogger.Logf(
-		"warning: ponder hook dedup backfill SKIPPED (%s%s). The table exists but is EMPTY, "+
-			"so a ponder re-index before it fills will email users about historical transfers. "+
-			"Re-run the seed once the ponder database is reachable.",
-		reason, detail,
-	)
-	return nil
-}
-
 // MigrationDB is the database surface migrations run against. It is satisfied
 // by both *pgxpool.Pool and pgx.Tx; RunPendingMigrations passes per-database
 // TRANSACTIONS, so every statement in a migration either commits together with
@@ -72,16 +38,15 @@ type MigrationDB interface {
 
 // MigrationPools carries the per-migration transaction handles for the app and
 // bot databases (field names mirror DBPools so migration bodies read the same).
+//
+// There is deliberately no Ponder handle here. Ponder owns its schema and
+// refuses to start against a database another app has written, so migrations —
+// which run before the server listens and abort boot when they fail — have no
+// business reaching into it at all. Work that needs indexed data reads it after
+// boot, by reference, and never blocks startup on the indexer being up.
 type MigrationPools struct {
 	App MigrationDB
 	Bot MigrationDB
-	// Ponder is the indexer's database, and unlike the two above it is the raw
-	// POOL rather than a transaction: it is a different database, so it cannot
-	// join the app/bot transaction, and nothing here writes to it. Read-only,
-	// and nil whenever the indexer database is not configured — every use must
-	// check, because a migration that cannot reach Ponder has to decide for
-	// itself whether that is fatal or merely a skipped backfill.
-	Ponder MigrationDB
 }
 
 type SchemaMigration struct {
@@ -2311,86 +2276,12 @@ var schemaMigrations = []SchemaMigration{
 				return fmt.Errorf("error creating the ponder notified-transfers table: %w", err)
 			}
 
-			// Everything already indexed counts as delivered, whether or not a
-			// mail ever went out. The alternative — an empty table — would mean
-			// the first re-index notifies the entire history, which is the
-			// failure this exists to prevent. Transfers indexed from here on
-			// find no row and notify normally.
-			if pools.Ponder == nil {
-				return skippedBackfill(appLogger, "the ponder database is not configured", nil)
-			}
-
-			// READ ONLY, enforced by Postgres rather than by intention.
-			//
-			// Ponder owns its schema and checks it on every start: it stamps
-			// _ponder_meta with an app identity and refuses to run against a
-			// database another app has touched. A stray write here would not
-			// corrupt data so much as convince the indexer the schema is no
-			// longer its own, which takes indexing down until someone drops and
-			// rebuilds it. Declaring the transaction read-only means a future
-			// edit that adds an INSERT fails with "cannot execute INSERT in a
-			// read-only transaction" instead of quietly succeeding.
-			ponderTx, err := pools.Ponder.Begin(ctx)
-			if err != nil {
-				return skippedBackfill(appLogger, "could not open a read transaction on the ponder database", err)
-			}
-			defer ponderTx.Rollback(context.Background())
-			if _, err := ponderTx.Exec(ctx, `SET TRANSACTION READ ONLY;`); err != nil {
-				return skippedBackfill(appLogger, "could not make the ponder read transaction read-only", err)
-			}
-
-			// Ponder stores addresses and hashes as bytea; the hook sends them
-			// as lowercase 0x strings, and the claim in the handler lowercases
-			// too, so both sides agree on one rendering.
-			rows, err := ponderTx.Query(ctx, `
-				SELECT
-					'0x' || encode(hash, 'hex'),
-					'0x' || encode("to", 'hex'),
-					'0x' || encode("from", 'hex'),
-					amount::text
-				FROM transfer_event;
-			`)
-			if err != nil {
-				return skippedBackfill(appLogger, "could not read indexed transfers", err)
-			}
-			defer rows.Close()
-
-			type transfer struct{ hash, to, from, amount string }
-			seeds := []transfer{}
-			for rows.Next() {
-				var seed transfer
-				if err := rows.Scan(&seed.hash, &seed.to, &seed.from, &seed.amount); err != nil {
-					return skippedBackfill(appLogger, "could not scan an indexed transfer", err)
-				}
-				seeds = append(seeds, seed)
-			}
-			if err := rows.Err(); err != nil {
-				return skippedBackfill(appLogger, "could not iterate indexed transfers", err)
-			}
-
-			inserted := 0
-			for _, seed := range seeds {
-				tag, err := pools.App.Exec(ctx, `
-					INSERT INTO ponder_notified_transfers
-						(tx_hash, to_address, from_address, amount)
-					VALUES (LOWER($1), LOWER($2), LOWER($3), $4)
-					ON CONFLICT DO NOTHING;
-				`, seed.hash, seed.to, seed.from, seed.amount)
-				if err != nil {
-					// This one writes to the APP database, which is the
-					// migration's own transaction — a failure here is real and
-					// must not be swallowed.
-					return fmt.Errorf("error seeding notified transfer %s: %w", seed.hash, err)
-				}
-				inserted += int(tag.RowsAffected())
-			}
-
-			if appLogger != nil {
-				appLogger.Logf(
-					"ponder hook dedup: seeded %d of %d indexed transfers as already notified",
-					inserted, len(seeds),
-				)
-			}
+			// The table is created empty and stays that way for the length of
+			// this migration. Everything already indexed still has to be marked
+			// delivered — an empty table means the first re-index notifies the
+			// entire history — but that read belongs to ponder, and migrations
+			// do not touch the ponder database. SeedPonderNotifiedTransfers
+			// runs it after boot instead; see bootstrap/ponder_notified_seed.go.
 			return nil
 		},
 	},
@@ -2706,13 +2597,9 @@ func RunPendingMigrations(ctx context.Context, pools *DBPools, appLogger *logger
 			return fmt.Errorf("error beginning bot transaction for migration %s: %w", migration.Version, err)
 		}
 
+		// App and bot only. The ponder pool is intentionally not passed in, so
+		// no migration can read or write the indexer's database.
 		migrationPools := &MigrationPools{App: appTx, Bot: botTx}
-		// Guarded rather than assigned straight through: a nil *pgxpool.Pool
-		// placed in an interface field is not a nil interface, and would pass
-		// an `if pools.Ponder != nil` check before panicking on first use.
-		if pools.Ponder != nil {
-			migrationPools.Ponder = pools.Ponder
-		}
 
 		applyErr := migration.Apply(ctx, migrationPools, appLogger)
 		if applyErr == nil {

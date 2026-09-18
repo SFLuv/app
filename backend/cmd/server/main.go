@@ -40,6 +40,11 @@ func main() {
 		log.Fatal(err)
 	}
 
+	// Backfills that read the indexer run here, not in a migration: the server
+	// comes up whether or not ponder is reachable, and a slow or dead indexer
+	// can no longer keep the backend from listening.
+	bootstrap.SeedPonderNotifiedTransfersOnBoot(ctx, pools, appLogger)
+
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"

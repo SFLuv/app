@@ -172,7 +172,14 @@ export function LocationPayoutCard({ location, onUnwrapped }: LocationPayoutCard
   const finishSetup = async () => {
     setBusy("provision")
     try {
-      const res = await authFetch("/merchant/payout/provision", { method: "POST" })
+      // Scoped to THIS location. Setting up one shop no longer routes every
+      // other shop's takings to the same bank — a second location asks for its
+      // own bank even when it is the same account.
+      const res = await authFetch("/merchant/payout/provision", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ location_id: location.id }),
+      })
       const body = (await res.json().catch(() => ({}))) as ProvisionResponse & { error?: string }
       if (!res.ok) throw new Error(body.error || "Setup could not be completed")
       if (body.message) toast({ title: body.message })
@@ -390,7 +397,12 @@ export function LocationPayoutCard({ location, onUnwrapped }: LocationPayoutCard
       <div className="rounded-xl border bg-background/70 p-4">
         {header}
         <div className="mt-4 space-y-3">
-          <p className="text-sm text-muted-foreground">Your bank is connected. One more step to set up payouts for this location.</p>
+          {/* Deliberately its own step even when the business already banks
+              with us elsewhere. Payouts are attached per location, so a second
+              shop names its bank rather than inheriting the first one's. */}
+          <p className="text-sm text-muted-foreground">
+            Your bank is connected. Payouts are set up per location — connect this one to finish.
+          </p>
           <Button type="button" onClick={() => void finishSetup()} disabled={busy !== ""}>
             {busy === "provision" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle2 className="mr-2 h-4 w-4" />}
             Finish payout setup

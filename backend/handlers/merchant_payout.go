@@ -185,10 +185,20 @@ func (a *AppService) syncMerchantBankAccounts(ctx context.Context, profile *stru
 	return a.db.SyncMerchantBankAccounts(ctx, profile.OwnerID, mirror)
 }
 
-// provisionLiquidationAddresses gives every approved location of the business
-// a destination. Locations that already have one are left alone unless
-// preferredExternalAccountID names a bank and a single location is targeted
-// (the per-location override), in which case that location is re-pointed.
+// provisionLiquidationAddresses points ONE location at a bank, or refreshes the
+// locations that already have a destination. It never gives a destination to a
+// location that has not been explicitly attached.
+//
+// That last part is the rule. It used to fill in every approved location the
+// business had, so linking a bank for one shop silently routed every other
+// shop's takings to the same account — a decision the merchant never made,
+// about money, discovered after the fact. A second location now shows
+// "connect a bank" until somebody attaches one, even when the bank is the same.
+//
+// The Bridge ADDRESS is still shared, because Bridge allows exactly one per
+// (customer, bank, chain, currency, rail) and refuses a second. Sharing the
+// address is forced; inheriting the destination is not, and only the second one
+// was ever a choice.
 //
 // It is idempotent from the merchant's side: run it twice and nothing changes.
 // Bridge addresses are permanent, so an existing Bridge address bound to the
@@ -280,6 +290,13 @@ func (a *AppService) provisionLiquidationAddresses(ctx context.Context, ownerID 
 		current, err := a.db.GetLocationLiquidationAddress(ctx, locationID)
 		if err != nil {
 			return resp, err
+		}
+		// A location with no destination only gets one when it is the location
+		// somebody asked about. Sweeps, webhooks and "finish setup" pass no
+		// target, and for them an un-attached location stays un-attached.
+		if current == nil && onlyLocationID == 0 {
+			resp.Skipped = append(resp.Skipped, locationID)
+			continue
 		}
 		// Keep what exists unless this call is an explicit re-point of one
 		// location to a chosen bank. Admin overrides are never replaced by
@@ -555,6 +572,12 @@ func (a *AppService) CompleteMerchantPlaidLink(w http.ResponseWriter, r *http.Re
 
 // ProvisionMerchantLiquidationAddresses is the explicit "finish setup" call,
 // for the case where Plaid completed but provisioning did not.
+//
+// location_id is optional and names the ONE location being set up. Without it
+// the call refreshes locations that already have a destination and attaches
+// nothing new — attaching is a per-location decision, so the location has to be
+// named. The merchant panel always sends it, because the card that offers this
+// button belongs to a location.
 func (a *AppService) ProvisionMerchantLiquidationAddresses(w http.ResponseWriter, r *http.Request) {
 	userDid := utils.GetDid(r)
 	if userDid == nil {
@@ -564,12 +587,32 @@ func (a *AppService) ProvisionMerchantLiquidationAddresses(w http.ResponseWriter
 	if _, ok := a.bridgeReady(w); !ok {
 		return
 	}
+
+	// Body is optional: an older client sends none, and gets the refresh-only
+	// behaviour rather than an error.
+	var req struct {
+		LocationID uint64 `json:"location_id"`
+	}
+	if body, readErr := io.ReadAll(r.Body); readErr == nil && len(body) > 0 {
+		_ = json.Unmarshal(body, &req)
+	}
+	defer r.Body.Close()
+
 	ctx, cancel := context.WithTimeout(r.Context(), bridgeAPITimeout)
 	defer cancel()
+
+	if req.LocationID != 0 {
+		owned, err := a.db.LocationOwnedBy(ctx, req.LocationID, *userDid)
+		if err != nil || !owned {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+	}
+
 	if profile, err := a.db.GetMerchantPayoutProfile(ctx, *userDid); err == nil && profile != nil {
 		_ = a.syncMerchantBankAccounts(ctx, profile)
 	}
-	resp, err := a.provisionLiquidationAddresses(ctx, *userDid, "", 0)
+	resp, err := a.provisionLiquidationAddresses(ctx, *userDid, "", req.LocationID)
 	if err != nil {
 		a.logger.Logf("merchant payout: provisioning failed for %s: %s", *userDid, err)
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
