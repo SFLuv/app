@@ -63,10 +63,11 @@ var (
 // first that verifies wins; the cost of the extra attempts is three RSA
 // verifications on a bad delivery, which is nothing.
 func (c *Client) VerifyWebhookSignature(header string, body []byte, now time.Time) error {
-	if c == nil || c.webhookKey == "" {
+	key := c.WebhookPublicKey()
+	if key == "" {
 		return ErrWebhookNoKey
 	}
-	pub, err := parseRSAPublicKey(c.webhookKey)
+	pub, err := parseRSAPublicKey(key)
 	if err != nil {
 		return fmt.Errorf("bridge webhook: %w", err)
 	}

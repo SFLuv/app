@@ -2300,6 +2300,21 @@ var schemaMigrations = []SchemaMigration{
 			return nil
 		},
 	},
+	{
+		Version:     "1.56",
+		Description: "bridge webhooks: cache the per-endpoint signing key Bridge issues",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			// Bridge mints an RSA key per webhook endpoint and returns it from
+			// both the create and the list call, so the key no longer has to be
+			// copied out of the dashboard into an env var. This caches the
+			// resolved key so a restart while Bridge is unreachable still
+			// verifies deliveries instead of refusing all of them.
+			if _, err := pools.App.Exec(ctx, db.BridgeWebhookSchemaDDL); err != nil {
+				return fmt.Errorf("error creating the bridge webhook table: %w", err)
+			}
+			return nil
+		},
+	},
 }
 
 // migrateW9WarningTiers replaces one hard gate with an escalating sequence.

@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -66,7 +67,35 @@ type Client struct {
 	production bool
 	redirect   string
 	http       *http.Client
+
+	// webhookKey is the PEM the signature check verifies against. It is
+	// guarded because it is resolved from Bridge after the server is already
+	// serving: the request goroutine reads it while the resolver writes it.
+	webhookMu  sync.RWMutex
 	webhookKey string
+}
+
+// WebhookPublicKey is the PEM currently in force, or "" when none has been
+// resolved yet.
+func (c *Client) WebhookPublicKey() string {
+	if c == nil {
+		return ""
+	}
+	c.webhookMu.RLock()
+	defer c.webhookMu.RUnlock()
+	return c.webhookKey
+}
+
+// SetWebhookPublicKey installs a PEM resolved from Bridge (or from a cache).
+// An empty PEM is ignored so a failed lookup can never disarm verification.
+func (c *Client) SetWebhookPublicKey(pem string) {
+	pem = strings.TrimSpace(pem)
+	if c == nil || pem == "" {
+		return
+	}
+	c.webhookMu.Lock()
+	defer c.webhookMu.Unlock()
+	c.webhookKey = pem
 }
 
 func New(cfg Config) *Client {
@@ -438,4 +467,58 @@ func (c *Client) ListDrains(ctx context.Context, customerID, liquidationAddressI
 		return nil, err
 	}
 	return out.Data, nil
+}
+
+// ---------------------------------------------------------------------------
+// Webhook endpoints
+// ---------------------------------------------------------------------------
+
+// EventCategories are the deliveries this backend acts on. Anything outside
+// this list is signed, parsed and dropped, so subscribing to it only costs
+// work — see handleBridgeEvent, which branches on exactly these.
+var EventCategories = []string{
+	"customer",
+	"kyc_link",
+	"external_account",
+	"liquidation_address.drain",
+}
+
+// Webhook is one registered endpoint. public_key is the point of this type:
+// Bridge mints a per-endpoint RSA key and hands it back on create AND on list,
+// so the signing key never has to be copied out of the dashboard by hand.
+type Webhook struct {
+	ID              string   `json:"id"`
+	URL             string   `json:"url"`
+	Status          string   `json:"status"`
+	PublicKey       string   `json:"public_key"`
+	EventCategories []string `json:"event_categories"`
+}
+
+func (c *Client) ListWebhooks(ctx context.Context) ([]Webhook, error) {
+	var out struct {
+		Data []Webhook `json:"data"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/v0/webhooks", nil, &out); err != nil {
+		return nil, err
+	}
+	return out.Data, nil
+}
+
+// CreateWebhook registers an endpoint.
+//
+// event_epoch is pinned to "webhook_creation" deliberately. The other option,
+// "beginning_of_time", replays every event the account has ever produced — and
+// every drain delivery kicks off a sweep, so a replay would be a self-inflicted
+// stampede against both Bridge and our own database.
+func (c *Client) CreateWebhook(ctx context.Context, url string, categories []string) (*Webhook, error) {
+	body := map[string]any{
+		"url":              url,
+		"event_epoch":      "webhook_creation",
+		"event_categories": categories,
+	}
+	var out Webhook
+	if err := c.do(ctx, http.MethodPost, "/v0/webhooks", body, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }

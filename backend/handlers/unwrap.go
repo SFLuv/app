@@ -14,14 +14,22 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-const minimumFollowupUnwrapAmountSFLUV int64 = 100
+// smallRedemptionCeilingSFLUV is what counts as a "small" redemption. Each
+// location may make one of those per calendar month; past that, every further
+// redemption that month has to be at least this much.
+//
+// It is a FLOOR on repeat redemptions, not a ceiling on how much a merchant may
+// take out — a location can redeem its whole balance any day of the month. The
+// rule exists so a business cannot drip its takings out in small amounts, since
+// every redemption is a separate ACH item whether it is for $5 or $5,000.
+const smallRedemptionCeilingSFLUV int64 = 500
 
-func minimumFollowupUnwrapAmountWei() (*big.Int, error) {
+func smallRedemptionCeilingBaseUnits() (*big.Int, error) {
 	multiplier, err := getTokenMultiplier()
 	if err != nil {
 		return nil, fmt.Errorf("error reading token multiplier for unwrap threshold: %w", err)
 	}
-	return new(big.Int).Mul(multiplier, big.NewInt(minimumFollowupUnwrapAmountSFLUV)), nil
+	return new(big.Int).Mul(multiplier, big.NewInt(smallRedemptionCeilingSFLUV)), nil
 }
 
 func isSameUTCMonth(t1 time.Time, t2 time.Time) bool {
@@ -59,7 +67,7 @@ func (a *AppService) CheckUnwrapEligibility(w http.ResponseWriter, r *http.Reque
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
-	minimumFollowupAmountWei, err := minimumFollowupUnwrapAmountWei()
+	minimumFollowupAmountWei, err := smallRedemptionCeilingBaseUnits()
 	if err != nil {
 		a.logger.Logf("error loading unwrap threshold: %s", err)
 		w.WriteHeader(http.StatusInternalServerError)
@@ -93,18 +101,46 @@ func (a *AppService) CheckUnwrapEligibility(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	// Which redemption the allowance belongs to. A location is one shop, so its
+	// till and tipping wallets share a single monthly allowance; a client that
+	// names no location falls back to the wallet's own stamp, which is how this
+	// worked before the rule moved to locations.
+	lastRedemption := wallet.LastUnwrapAt
+	if req.LocationID != nil {
+		owned, err := a.db.LocationOwnedBy(r.Context(), *req.LocationID, *userDid)
+		if err != nil {
+			a.logger.Logf("error checking location ownership for unwrap eligibility user=%s location=%d: %s", *userDid, *req.LocationID, err)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		if !owned {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		at, err := a.db.LastLocationUnwrapAt(r.Context(), *req.LocationID)
+		if err != nil {
+			a.logger.Logf("error loading last redemption for location %d: %s", *req.LocationID, err)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		lastRedemption = at
+	}
+
 	now := time.Now().UTC()
 	allowed := true
 	reason := ""
-	if wallet.LastUnwrapAt != nil && isSameUTCMonth(*wallet.LastUnwrapAt, now) && amountWei.Cmp(minimumFollowupAmountWei) < 0 {
+	if lastRedemption != nil && isSameUTCMonth(*lastRedemption, now) && amountWei.Cmp(minimumFollowupAmountWei) < 0 {
 		allowed = false
-		reason = "You already unwrapped this month. Additional unwraps this month must be at least $100."
+		reason = fmt.Sprintf(
+			"This location has already redeemed this month. Further redemptions this month must be at least $%d.",
+			smallRedemptionCeilingSFLUV,
+		)
 	}
 
 	resp := structs.UnwrapEligibilityResponse{
 		Allowed:                  allowed,
 		Reason:                   reason,
-		LastUnwrapAt:             wallet.LastUnwrapAt,
+		LastUnwrapAt:             lastRedemption,
 		MinimumFollowupAmountWei: minimumFollowupAmountWei.String(),
 	}
 	bytes, err := json.Marshal(resp)
