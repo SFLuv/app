@@ -63,6 +63,28 @@ const getRpcOrigins = () => {
   return [...new Set(combined)]
 }
 
+/**
+ * Origins the Signet threshold signer talks to, derived from the same env the
+ * app reads rather than duplicated into NEXT_PUBLIC_CSP_EXTRA_CONNECT_SRC.
+ *
+ * Deliberately not a second variable to set. A deployment that configures a
+ * node fleet has, by that act, said the browser may reach it; making the CSP
+ * track that automatically removes a failure whose symptom — a blocked fetch
+ * with no useful error — looks exactly like the fleet being down.
+ *
+ * Empty when no fleet is configured, which is every deployment today.
+ */
+const getSignetOrigins = () => {
+  const configured = [
+    ...parseEnvList(process.env.NEXT_PUBLIC_SIGNET_NODE_URLS),
+    // Signet reads Celo through its own endpoint, which may differ from
+    // NEXT_PUBLIC_CHAIN_RPC_URL; when it does not, appendUnique drops it.
+    process.env.NEXT_PUBLIC_SIGNET_CELO_RPC_URL?.trim() || "",
+  ].filter((value) => value.length > 0)
+
+  return [...new Set(configured.map(normalizeOrigin))]
+}
+
 const appendUnique = (values: string[], additions: string[]) => {
   for (const entry of additions) {
     if (entry && !values.includes(entry)) {
@@ -75,6 +97,7 @@ const buildContentSecurityPolicy = (nonce: string, requestOrigin: string) => {
   const production = isProduction()
   const backendOrigins = getBackendOrigins()
   const rpcOrigins = getRpcOrigins()
+  const signetOrigins = getSignetOrigins()
 
   const scriptSrc = [
     "'self'",
@@ -153,6 +176,9 @@ const buildContentSecurityPolicy = (nonce: string, requestOrigin: string) => {
   }
   if (rpcOrigins.length > 0) {
     appendUnique(connectSrc, rpcOrigins)
+  }
+  if (signetOrigins.length > 0) {
+    appendUnique(connectSrc, signetOrigins)
   }
   if (!production) {
     appendUnique(connectSrc, [
