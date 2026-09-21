@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/SFLuv/app/backend/db"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
 )
@@ -63,6 +64,33 @@ func locationRedeemerSyncEnabled() bool {
 // to and the sweep moves on, because the alternative — a chain outage taking the
 // server down with it — costs far more than a merchant waiting a restart for a
 // role they cannot use until they have takings to redeem anyway.
+// SyncLocationWalletsForLocation grants REDEEMER_ROLE to one location's till and
+// tipping wallet, at the moment the location is approved.
+//
+// Approval is when a shop starts taking SFLUV, so it is also when its addresses
+// have to be able to give SFLUV back. Waiting for the next boot sync means a
+// merchant can accumulate takings they cannot redeem — which is exactly what
+// happened to the locations approved after the last manual grant: their tills
+// held money that withdrawTo reverted on.
+//
+// Failures are returned for logging, never fatal to the approval: a shop that
+// cannot redeem yet is a problem, a shop that could not be approved is worse,
+// and the boot sync is still there to catch up.
+func (r *RedeemerService) SyncLocationWalletsForLocation(ctx context.Context, locationID uint64) (LocationRedeemerSyncSummary, error) {
+	var summary LocationRedeemerSyncSummary
+	if !r.IsEnabled() {
+		return summary, nil
+	}
+	if r.appDb == nil {
+		return summary, fmt.Errorf("app db is not configured for location redeemer sync")
+	}
+	wallets, err := r.appDb.GetLocationWalletsForLocation(ctx, locationID)
+	if err != nil {
+		return summary, fmt.Errorf("error loading wallets for location %d: %w", locationID, err)
+	}
+	return r.grantToLocationWallets(ctx, wallets), nil
+}
+
 func (r *RedeemerService) SyncLocationWallets(ctx context.Context) (LocationRedeemerSyncSummary, error) {
 	var summary LocationRedeemerSyncSummary
 
@@ -84,6 +112,19 @@ func (r *RedeemerService) SyncLocationWallets(ctx context.Context) (LocationRede
 	if err != nil {
 		return summary, fmt.Errorf("error loading location wallets for redeemer sync: %w", err)
 	}
+
+	summary = r.grantToLocationWallets(ctx, wallets)
+	r.logf(
+		"location redeemer sync finished: %d wallets, %d already held, %d granted, %d failed, %d deferred",
+		summary.Wallets, summary.AlreadyHeld, summary.Granted, summary.Failed, summary.Deferred,
+	)
+	return summary, nil
+}
+
+// grantToLocationWallets is the shared loop: boot sync and approval-time grant
+// differ only in which wallets they are handed.
+func (r *RedeemerService) grantToLocationWallets(ctx context.Context, wallets []db.LocationWallet) LocationRedeemerSyncSummary {
+	var summary LocationRedeemerSyncSummary
 	summary.Wallets = len(wallets)
 
 	for index, wallet := range wallets {
@@ -140,12 +181,7 @@ func (r *RedeemerService) SyncLocationWallets(ctx context.Context) (LocationRede
 		}
 	}
 
-	r.logf(
-		"location redeemer sync finished: %d wallets, %d already held, %d granted, %d failed, %d deferred",
-		summary.Wallets, summary.AlreadyHeld, summary.Granted, summary.Failed, summary.Deferred,
-	)
-
-	return summary, nil
+	return summary
 }
 
 func (r *RedeemerService) sleep(ctx context.Context, d time.Duration) {
