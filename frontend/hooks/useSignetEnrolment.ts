@@ -29,6 +29,71 @@ import {
 } from "@/lib/signet/session"
 
 /**
+ * User-facing copy for a failed session or enrolment.
+ *
+ * The SDK classifies node refusals by matching on prose — "no auth resolver
+ * configured", "did not authorize" — but the fleet answers a plain 401 whose
+ * whole body is {"error":"unauthorized"}. That matches nothing, so it arrives
+ * as `unknown` with `isNodeMisconfiguration` false. The rich classification is
+ * therefore real but mostly unreachable, and the default branch has to carry
+ * the common case honestly: it names both plausible causes rather than
+ * asserting one we cannot distinguish.
+ *
+ * Never passes the node's own text through. `e.message` reads
+ * "https://oll1.nodes.oleary.com: unknown — {"error":"unauthorized"}" — JSON,
+ * wrapped around a host the user has no relationship with. That belongs in the
+ * console, where it is ours to act on.
+ */
+function describeSignetFailure(e: unknown): string {
+  if (!(e instanceof ResolverAuthError)) {
+    return e instanceof Error && e.message
+      ? e.message
+      : "Unable to set up Signet signing."
+  }
+  // Ordered by how much it narrows things: a node we never reached says
+  // nothing about authorization, so transport is checked before any verdict.
+  if (e.transport) {
+    return "Could not reach the signing service. Please try again."
+  }
+  if (e.isNodeMisconfiguration) {
+    return "The signing service is not ready yet — this is not a problem with your wallet."
+  }
+  switch (e.code) {
+    case "not_authorized":
+      return "This wallet is not authorized to use Signet yet."
+    case "siwe_verification_failed":
+      return "That signature could not be verified. Please try again."
+    case "block_pin_stale":
+    case "block_pin_ahead":
+    case "block_pin_hash_mismatch":
+      return "The network moved while we were setting up. Please try again."
+    case "chain_id_mismatch":
+    case "missing_session_resource":
+    case "missing_expiration":
+      // Malformed requests we built. Nothing the user can do, and nothing they
+      // should be invited to retry — it would fail identically.
+      return "Something went wrong preparing the request. Please report this."
+    default:
+      return "The signing service turned down the request. If you have just linked this wallet, wait a moment and try again."
+  }
+}
+
+/** Everything we want in the console when the above hides the detail. */
+function logSignetFailure(scope: string, e: unknown) {
+  if (e instanceof ResolverAuthError) {
+    console.error(`[signet] ${scope}`, {
+      code: e.code,
+      node: e.nodeUrl,
+      status: e.status,
+      transport: e.transport,
+      detail: e.detail,
+    })
+  } else {
+    console.error(`[signet] ${scope}`, e)
+  }
+}
+
+/**
  * Signet enrolment state for one smart wallet, plus the one irreversible action
  * that starts it.
  *
@@ -124,17 +189,8 @@ export function useSignetEnrolment(wallet: AppWallet | null | undefined) {
       setSession(fresh)
       return fresh
     } catch (e) {
-      // A fleet that is not configured yet is not the user's failure and not
-      // something they can act on, so it reads as "not available" rather than
-      // as a rejection. The distinction matters most for `no_resolver_bound`,
-      // which is indistinguishable from a refusal at the HTTP layer.
-      if (e instanceof ResolverAuthError && e.isNodeMisconfiguration) {
-        console.error("[signet] node misconfiguration", e.code, e.detail)
-        setError("Signing service is not available yet. Please try again later.")
-      } else {
-        console.error("[signet] session failed", e)
-        setError(e instanceof Error ? e.message : "Unable to authorize Signet.")
-      }
+      logSignetFailure("session failed", e)
+      setError(describeSignetFailure(e))
       return null
     } finally {
       setAuthenticating(false)
@@ -239,8 +295,8 @@ export function useSignetEnrolment(wallet: AppWallet | null | undefined) {
       await refresh()
       return result.finalState.signetIsOwner
     } catch (e) {
-      console.error("[signet] enrolment failed", e)
-      setError(e instanceof Error ? e.message : "Unable to finish enrolment.")
+      logSignetFailure("enrolment failed", e)
+      setError(describeSignetFailure(e))
       return false
     } finally {
       setEnrolling(false)
