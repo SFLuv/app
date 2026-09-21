@@ -49,7 +49,10 @@ export interface EnrolmentState {
   boundElsewhere: boolean
   /** Whether the wallet is deployed. Counterfactual wallets cannot be enrolled. */
   walletDeployed: boolean
-  /** Signet key address, once keygen has run. */
+  /**
+   * Signet key address: passed in by a caller that has it, or derived from the
+   * Safe's owner set when exactly one owner is not the Privy EOA.
+   */
   signetAddress: Address | null
   /** Whether `signetAddress` is an owner of the wallet. */
   signetIsOwner: boolean
@@ -75,9 +78,15 @@ export type ChainReader = ReturnType<typeof celoClient>
 /**
  * Read enrolment state for one (eoa, wallet) pair.
  *
- * `signetAddress` is not discoverable on-chain — it comes from keygen — so the
- * caller passes whatever it has stored. Without it we can still distinguish
- * eligible from bound, which is all the detection UI needs.
+ * `signetAddress` comes from keygen, so callers that have it pass it. Callers
+ * that do not — the settings card on a fresh page load — get it derived from
+ * the Safe's owner set instead: these wallets are created with exactly the
+ * Privy EOA as owner, so a single additional owner is the threshold key.
+ *
+ * Deliberately refuses to guess past that. Two or more extra owners is a wallet
+ * whose shape we do not recognise, and naming the wrong address as the Signet
+ * key would report an enrolment that never happened. Ambiguity reads as "not
+ * finished", which is recoverable; a false positive is not.
  */
 export async function readEnrolmentState(
   client: ChainReader,
@@ -101,10 +110,27 @@ export async function readEnrolmentState(
     boundSafe !== null && boundSafe.toLowerCase() !== wallet.toLowerCase()
 
   let signetIsOwner = false
-  if (signetAddress && walletDeployed) {
-    signetIsOwner = await client.readContract({
-      address: wallet, abi: safeAbi, functionName: "isOwner", args: [signetAddress],
-    })
+  let resolvedSignet: Address | null = signetAddress ?? null
+
+  // Gated on `allowed` as well as deployment: a user the gate does not admit
+  // never sees this card, so deriving their key would be a fourth eth_call on
+  // every settings page load to decide something nobody reads. Detection stays
+  // exactly as cheap as it was for everyone outside the trial.
+  if (walletDeployed && allowed) {
+    if (resolvedSignet) {
+      signetIsOwner = await client.readContract({
+        address: wallet, abi: safeAbi, functionName: "isOwner", args: [resolvedSignet],
+      })
+    } else {
+      const owners = (await client.readContract({
+        address: wallet, abi: safeAbi, functionName: "getOwners",
+      })) as readonly Address[]
+      const extra = owners.filter((o) => o.toLowerCase() !== eoa.toLowerCase())
+      if (extra.length === 1) {
+        resolvedSignet = extra[0]
+        signetIsOwner = true
+      }
+    }
   }
 
   let status: EnrolmentStatus = "not_eligible"
@@ -122,7 +148,7 @@ export async function readEnrolmentState(
     boundSafe,
     boundElsewhere,
     walletDeployed,
-    signetAddress: signetAddress ?? null,
+    signetAddress: resolvedSignet,
     signetIsOwner,
   }
 }

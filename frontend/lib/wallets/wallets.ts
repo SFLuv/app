@@ -288,6 +288,22 @@ export class AppWallet {
   }
 
   /**
+   * Personal-sign a message as the OWNER EOA, not as the Safe.
+   *
+   * Signet's SIWE auth recovers an address from this signature and hands THAT
+   * address to the resolver's `resolve()`, which is keyed on the account — so
+   * a Safe signature (ERC-1271) would recover to nothing and resolve to a zero
+   * subject. Same reasoning as `signTypedData` above, different primitive.
+   *
+   * Signs exactly one message per session: an ERC-4361 statement binding an
+   * ephemeral session public key. It authorizes the session, never a transfer.
+   */
+  signMessage = async (message: string): Promise<Hash> => {
+    if (!this.ethersSigner) throw new Error("signer not ready")
+    return (await this.ethersSigner.signMessage(message)) as Hash
+  }
+
+  /**
    * Send an arbitrary sponsored call from this smart wallet.
    *
    * Exists for Signet enrolment, whose two writes must originate from the Safe

@@ -16,7 +16,7 @@
     "@hookform/resolvers": "^3.10.0",
     "@hpke/chacha20poly1305": "^1.7.0",
     "@hpke/core": "^1.7.3",
-    "@oleary-labs/signet-sdk": "link:../../../oleary-labs/signet-sdk",
+    "@oleary-labs/signet-sdk": "^0.4.0",
     "@privy-io/react-auth": "^2.21.2",
     "@radix-ui/react-accordion": "1.2.2",
     "@radix-ui/react-alert-dialog": "1.1.4",

@@ -13,6 +13,7 @@ import {
 import { Switch } from "@/components/ui/switch"
 import { useSignetEnrolment } from "@/hooks/useSignetEnrolment"
 import type { AppWallet } from "@/lib/wallets/wallets"
+import { hasSignetNodes } from "@/lib/signet/config"
 
 /**
  * Signet signer enrolment, for the wallet the user treats as primary.
@@ -27,12 +28,25 @@ import type { AppWallet } from "@/lib/wallets/wallets"
  * warrant different controls even though binding is now rebindable.
  */
 export function SignetCard({ wallet }: { wallet: AppWallet | null | undefined }) {
-  const { state, loading, binding, error, bind, visible } = useSignetEnrolment(wallet)
+  const {
+    state, loading, binding, error, bind, visible,
+    authenticating, enrolling, progress, completeEnrolment,
+  } = useSignetEnrolment(wallet)
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [preferSignet, setPreferSignet] = useState(false)
 
   if (loading && !state) return null
   if (!visible || !state) return null
+
+  // Progress wins while a run is in flight; chain state is the truth once it
+  // settles. Keygen leaves no on-chain trace of its own — the key only becomes
+  // visible when it is added as an owner — so without the step log the middle
+  // row would jump straight from pending to done.
+  const busy = authenticating || enrolling
+  // A progress entry is only recorded once its step has finished, so presence
+  // is the signal; "skipped" counts, since it means the key already existed.
+  const keygenDone =
+    !!state.signetAddress || progress.some((p) => p.step === "keygen")
 
   const onConfirm = async () => {
     const ok = await bind()
@@ -93,13 +107,50 @@ export function SignetCard({ wallet }: { wallet: AppWallet | null | undefined })
             </Button>
           </>
         ) : state.status === "partly_enrolled" ? (
-          <div className="space-y-2">
-            <StepRow done label="Wallet linked" />
-            <StepRow done={state.signetIsOwner} label="Threshold key created" />
-            <p className="text-xs text-muted-foreground">
-              Setup will continue automatically once the signing service is
-              available. Your wallet keeps working normally in the meantime.
-            </p>
+          <div className="space-y-3">
+            <div className="space-y-2">
+              <StepRow done={!!state.boundSafe} label="Wallet linked" />
+              <StepRow
+                done={keygenDone}
+                active={busy && !keygenDone}
+                label="Threshold key created"
+              />
+              <StepRow
+                done={state.signetIsOwner}
+                active={busy && keygenDone && !state.signetIsOwner}
+                label="Key added as a signer on your wallet"
+              />
+            </div>
+
+            {hasSignetNodes() ? (
+              <>
+                <p className="text-xs text-muted-foreground">
+                  Finishing takes one signature to prove the wallet is yours.
+                  Your wallet keeps working normally throughout, and you can
+                  close this and pick it up later.
+                </p>
+                <Button
+                  onClick={() => void completeEnrolment()}
+                  disabled={busy}
+                  className="bg-[#eb6c6c] hover:bg-[#eb6c6c]/90"
+                >
+                  {busy ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      {authenticating ? "Waiting for signature…" : "Finishing…"}
+                    </>
+                  ) : (
+                    "Finish setup"
+                  )}
+                </Button>
+              </>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                The signing service is not configured in this environment, so
+                setup cannot be finished here. Your wallet keeps working
+                normally.
+              </p>
+            )}
           </div>
         ) : (
           <div className="flex items-center justify-between gap-3">
@@ -162,17 +213,31 @@ export function SignetCard({ wallet }: { wallet: AppWallet | null | undefined })
   )
 }
 
-function StepRow({ done, label }: { done?: boolean; label: string }) {
+function StepRow({
+  done,
+  active,
+  label,
+}: {
+  done?: boolean
+  active?: boolean
+  label: string
+}) {
   return (
     <div className="flex items-center gap-2 text-sm">
       <span
         className={
           done
             ? "h-2 w-2 rounded-full bg-emerald-500"
-            : "h-2 w-2 rounded-full bg-gray-300 dark:bg-gray-600"
+            : active
+              ? "h-2 w-2 animate-pulse rounded-full bg-[#eb6c6c]"
+              : "h-2 w-2 rounded-full bg-gray-300 dark:bg-gray-600"
         }
       />
-      <span className={done ? "text-black dark:text-white" : "text-muted-foreground"}>
+      <span
+        className={
+          done || active ? "text-black dark:text-white" : "text-muted-foreground"
+        }
+      >
         {label}
       </span>
     </div>
