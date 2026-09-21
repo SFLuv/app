@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/SFLuv/app/backend/bot"
+	"github.com/SFLuv/app/backend/bridge"
 	"github.com/SFLuv/app/backend/clientconfig"
 	"github.com/SFLuv/app/backend/db"
 	"github.com/SFLuv/app/backend/handlers"
@@ -384,6 +385,35 @@ func NewServerHandler(ctx context.Context, pools *DBPools, appLogger *logger.Log
 	payouts.SetAppService(a)
 	a.SetRedeemerService(redeemer)
 	a.SetMinterService(minter)
+
+	// Bridge is the off-ramp behind merchant bank payouts. Without a key the
+	// client is disabled and every payout route answers "not available yet";
+	// the rest of the server is unaffected. Sandbox unless told otherwise, for
+	// the same reason as the tax provider: a misconfigured deploy must not be
+	// able to mint real liquidation addresses.
+	bridgeRedirect := strings.TrimSpace(os.Getenv("BRIDGE_KYB_REDIRECT_URL"))
+	if bridgeRedirect == "" {
+		if base := strings.TrimRight(strings.TrimSpace(os.Getenv("APP_BASE_URL")), "/"); base != "" {
+			bridgeRedirect = base + "/settings?tab=merchant"
+		}
+	}
+	bridgeClient := bridge.New(bridge.Config{
+		Environment:         strings.TrimSpace(os.Getenv("BRIDGE_ENV")),
+		APIKey:              strings.TrimSpace(os.Getenv("BRIDGE_API_KEY")),
+		BaseURL:             strings.TrimSpace(os.Getenv("BRIDGE_BASE_URL")),
+		WebhookPublicKeyPEM: os.Getenv("BRIDGE_WEBHOOK_PUBLIC_KEY"),
+		RedirectURL:         bridgeRedirect,
+	})
+	a.SetBridgeClient(bridgeClient)
+	if bridgeClient.Enabled() {
+		env := "sandbox"
+		if bridgeClient.Production() {
+			env = "PRODUCTION"
+		}
+		appLogger.Logf("bridge payouts enabled (%s)", env)
+	} else {
+		appLogger.Logf("bridge payouts disabled: BRIDGE_API_KEY not set")
+	}
 	a.SetPonderDB(ponderDb)
 
 	// Compare our webhook bookkeeping against the indexer's before serving.
@@ -404,6 +434,7 @@ func NewServerHandler(ctx context.Context, pools *DBPools, appLogger *logger.Log
 	// when their first shop was approved does not reach the address their second
 	// shop is paid into. This catches every one of them up.
 	StartLocationRedeemerSync(ctx, redeemer, appLogger)
+	handlers.StartMerchantPayoutSweep(ctx, a, appLogger)
 
 	// Workflow upkeep (recurrence catch-up, payout reconciliation, paid_out
 	// finalization) previously ran only as a side effect of user requests, so it

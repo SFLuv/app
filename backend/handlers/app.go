@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"github.com/SFLuv/app/backend/bridge"
 	"net/http"
 	"strings"
 	"time"
@@ -16,6 +17,7 @@ type AppService struct {
 	db           *db.AppDB
 	payouts      *PayoutService
 	w9Provider   w9provider.Provider
+	bridge       *bridge.Client
 	bot          *BotService
 	redeemer     *RedeemerService
 	minter       *MinterService

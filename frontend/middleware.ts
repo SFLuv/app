@@ -83,6 +83,8 @@ const buildContentSecurityPolicy = (nonce: string, requestOrigin: string) => {
     "https://maps.googleapis.com",
     "https://vercel.live",
     "https://*.vercel.live",
+    // Plaid Link, for merchants connecting a payout bank.
+    "https://cdn.plaid.com",
   ]
   if (!production) {
     scriptSrc.push("'unsafe-eval'")
@@ -168,6 +170,9 @@ const buildContentSecurityPolicy = (nonce: string, requestOrigin: string) => {
     "https://verify.walletconnect.com",
     "https://verify.walletconnect.org",
     "https://challenges.cloudflare.com",
+    // Plaid Link renders inside its own iframe.
+    "https://cdn.plaid.com",
+    "https://*.plaid.com",
   ]
   appendUnique(frameSrc, parseEnvList(process.env.NEXT_PUBLIC_CSP_EXTRA_FRAME_SRC))
 

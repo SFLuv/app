@@ -437,7 +437,7 @@ func (a *AppService) UpdateLocationGooglePlace(w http.ResponseWriter, r *http.Re
 // sendLocationApprovedEmail notifies the merchant contact that their location is
 // live. It runs from the admin approval route, which is the only path that can
 // actually flip approval.
-func (a *AppService) sendLocationApprovedEmail(ctx context.Context, locationID uint) {
+func (a *AppService) sendLocationApprovedEmail(ctx context.Context, locationID uint, kybURL string) {
 	contact, err := a.db.GetLocationApprovalContact(ctx, locationID)
 	if err != nil {
 		a.logger.Logf("error loading approval contact for location %d: %s", locationID, err.Error())
@@ -463,6 +463,19 @@ func (a *AppService) sendLocationApprovedEmail(ctx context.Context, locationID u
     <td style="padding:12px 0; font-size:13px; color:#111827;">Approved</td>
   </tr>
 </table>`, utils.EscapeEmailHTML(contact.Name))
+
+	if kybURL != "" {
+		details += fmt.Sprintf(`
+<div style="margin-top:24px; padding:16px; border:1px solid #e5e7eb; border-radius:12px;">
+  <p style="margin:0 0 8px 0; font-size:14px; font-weight:600; color:#111827;">Enable bank payouts</p>
+  <p style="margin:0 0 12px 0; font-size:13px; color:#374151; line-height:1.5;">
+    To cash out SFLuv to your business bank account, complete a one-time verification with Bridge, our banking partner.
+    It takes a few minutes and asks for your business details and an ID for the owner. You can then connect your bank
+    from your location settings.
+  </p>
+  <a href="%s" style="display:inline-block; padding:10px 16px; background:#eb6c6c; color:#ffffff; text-decoration:none; border-radius:8px; font-size:13px; font-weight:600;">Verify your business</a>
+</div>`, kybURL)
+	}
 
 	htmlContent := utils.BuildStyledEmail(
 		"Location Approved",

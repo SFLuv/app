@@ -176,6 +176,7 @@ func New(s *handlers.BotService, a *handlers.AppService, p *handlers.PonderServi
 	AddPonderRoutes(r, a, p)
 	AddW9Routes(r, a)
 	AddUnwrapRoutes(r, a)
+	AddMerchantPayoutRoutes(r, a)
 
 	return r
 }
@@ -615,6 +616,26 @@ func AddW9Routes(r *chi.Mux, s *handlers.AppService) {
 func AddUnwrapRoutes(r *chi.Mux, s *handlers.AppService) {
 	r.Post("/unwrap/eligibility", withActiveAuth(s.CheckUnwrapEligibility, s))
 	r.Post("/unwrap/record", withActiveAuth(s.RecordUnwrap, s))
+	r.Get("/unwrap/history", withActiveAuth(s.GetUnwrapHistory, s))
+}
+
+// Merchant bank payouts. Merchants verify with Bridge, connect a bank through
+// Plaid, and get a liquidation address per location — all from settings. The
+// manual address override is admin-only; merchants never type a destination.
+func AddMerchantPayoutRoutes(r *chi.Mux, s *handlers.AppService) {
+	r.Get("/merchant/payout/status", withActiveAuth(s.GetMerchantPayoutStatus, s))
+	r.Post("/merchant/payout/kyb-link", withActiveAuth(s.RequestMerchantKYBLink, s))
+	r.Post("/merchant/payout/plaid/link-token", withActiveAuth(s.CreateMerchantPlaidLinkToken, s))
+	r.Post("/merchant/payout/plaid/exchange", withActiveAuth(s.CompleteMerchantPlaidLink, s))
+	r.Post("/merchant/payout/provision", withActiveAuth(s.ProvisionMerchantLiquidationAddresses, s))
+	r.Put("/locations/{id}/payout-bank", withActiveAuth(s.SetLocationPayoutBank, s))
+
+	r.Get("/admin/merchant-payouts", withAdmin(s.AdminListMerchantPayouts, s))
+	r.Post("/admin/merchant-payouts/attach-customer", withAdmin(s.AdminAttachBridgeCustomer, s))
+	r.Put("/admin/locations/{id}/liquidation-address", withAdmin(s.AdminSetLocationLiquidationAddress, s))
+
+	// Signed by Bridge per delivery; verified before the body is read.
+	r.Post("/bridge/webhook", s.ReceiveBridgeWebhook)
 }
 
 func withAuth(handlerFunc http.HandlerFunc) http.HandlerFunc {

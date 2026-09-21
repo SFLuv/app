@@ -6,6 +6,7 @@ import (
 	"io"
 	"math/big"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/SFLuv/app/backend/structs"
@@ -172,16 +173,75 @@ func (a *AppService) RecordUnwrap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp := structs.UnwrapRecordResponse{
-		Recorded:   true,
-		RecordedAt: recordedAt,
+	resp := structs.UnwrapRecordResponse{Recorded: true, RecordedAt: recordedAt}
+
+	// A ledger row needs the hash and the amount; a client that sends only
+	// the wallet (the pre-ledger shape) still gets its timestamp stamped.
+	if req.TxHash != "" && req.AmountWei != "" {
+		amountWei := new(big.Int)
+		if _, ok := amountWei.SetString(req.AmountWei, 10); !ok || amountWei.Sign() <= 0 {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		// The destination is trusted only from our own records. A location
+		// reports which till it unwrapped from; the address it should have
+		// gone to is what we provisioned, and a mismatch is logged loudly.
+		destination := strings.ToLower(strings.TrimSpace(req.DestinationAddress))
+		var locationID *int64
+		if req.LocationID != nil {
+			owned, err := a.db.LocationOwnedBy(r.Context(), *req.LocationID, *userDid)
+			if err != nil || !owned {
+				w.WriteHeader(http.StatusForbidden)
+				return
+			}
+			id := int64(*req.LocationID)
+			locationID = &id
+			if la, err := a.db.GetLocationLiquidationAddress(r.Context(), *req.LocationID); err == nil && la != nil {
+				if destination != "" && !strings.EqualFold(destination, la.Address) {
+					a.logger.Logf("unwrap record: wallet %s reported destination %s but location %d is provisioned to %s", req.WalletAddress, destination, *req.LocationID, la.Address)
+				}
+				destination = strings.ToLower(la.Address)
+			}
+		}
+		role := strings.ToLower(strings.TrimSpace(req.WalletRole))
+		if role != "tipping" {
+			role = "payment"
+		}
+		walletID := int64(*wallet.Id)
+		entry := structs.Unwrap{
+			OwnerID:            *userDid,
+			LocationID:         locationID,
+			WalletID:           &walletID,
+			WalletAddress:      req.WalletAddress,
+			WalletRole:         role,
+			DestinationAddress: destination,
+			AmountWei:          amountWei.String(),
+			TxHash:             req.TxHash,
+		}
+		id, err := a.db.InsertUnwrap(r.Context(), &entry)
+		if err != nil {
+			a.logger.Logf("error inserting unwrap ledger row wallet=%s tx=%s: %s", req.WalletAddress, req.TxHash, err)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		resp.UnwrapID = id
 	}
-	bytes, err := json.Marshal(resp)
+
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// GetUnwrapHistory is the merchant's own ledger, newest first.
+func (a *AppService) GetUnwrapHistory(w http.ResponseWriter, r *http.Request) {
+	userDid := utils.GetDid(r)
+	if userDid == nil {
+		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+	entries, err := a.db.ListUnwrapsByOwner(r.Context(), *userDid, 100)
 	if err != nil {
+		a.logger.Logf("error loading unwrap history for %s: %s", *userDid, err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
-
-	w.WriteHeader(http.StatusOK)
-	w.Write(bytes)
+	writeJSON(w, http.StatusOK, entries)
 }

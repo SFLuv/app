@@ -1,16 +1,19 @@
 import { ConnectedWallet, EIP1193Provider } from "@privy-io/react-auth";
 import { BrowserProvider, JsonRpcSigner, Signer, TypedDataDomain, TypedDataField } from "ethers";
 import { toSimpleSmartAccount, ToSimpleSmartAccountReturnType } from "permissionless/accounts";
-import { Address, createPublicClient, createWalletClient, custom, encodeFunctionData, formatUnits, Hex, hexToBytes, parseUnits, PublicClient } from "viem";
+import { Address, createPublicClient, createWalletClient, custom, encodeFunctionData, formatUnits, Hex, hexToBytes, parseAbiItem, parseUnits, PublicClient, toEventSelector } from "viem";
 import { entryPoint07Address } from "viem/account-abstraction";
 import { Hash } from "viem";
-import { allowance, approve, balanceOf, decimals, depositFor, hasRole, minterRole, redeemerRole, transfer, underlying, unwrapSwapAndBridge, zapIn } from "../abi";
+import { allowance, approve, balanceOf, decimals, depositFor, hasRole, minterRole, redeemerRole, transfer, underlying, withdrawTo, zapIn } from "../abi";
 import type { ResolvedCommunityConfig } from "@/lib/community-config";
 import { BundlerService } from "@citizenwallet/sdk";
 
 export type WalletType = "smartwallet" | "eoa"
 
-interface TxState {
+// keccak256("Transfer(address,address,uint256)"), the ERC-20 Transfer topic.
+const transferTopic = toEventSelector("Transfer(address,address,uint256)")
+
+export interface TxState {
   sending: boolean;
   error: string | null;
   hash: string | null;
@@ -376,80 +379,6 @@ export class AppWallet {
     }
 
     return false
-  }
-
-  private _extractRevertSelector = (error: unknown): string | null => {
-    const visit = (value: unknown): string | null => {
-      if (value === null || value === undefined) return null
-
-      if (typeof value === "string") {
-        const dataMatch = value.match(/0x[0-9a-fA-F]{8,}/)
-        return dataMatch ? dataMatch[0].slice(0, 10).toLowerCase() : null
-      }
-
-      if (Array.isArray(value)) {
-        for (const item of value) {
-          const found = visit(item)
-          if (found) return found
-        }
-        return null
-      }
-
-      if (typeof value === "object") {
-        const record = value as Record<string, unknown>
-        const data = record.data
-        if (typeof data === "string" && /^0x[0-9a-fA-F]{8,}$/.test(data)) {
-          return data.slice(0, 10).toLowerCase()
-        }
-
-        for (const nested of Object.values(record)) {
-          const found = visit(nested)
-          if (found) return found
-        }
-      }
-
-      return null
-    }
-
-    return visit(error)
-  }
-
-  private _mapUnwrapRevertReason = (selector: string | null): string => {
-    if (selector === "0x6ce14a8b") {
-      return "Unwrap is currently unavailable: Honey redemption returned UnexpectedBasketModeStatus."
-    }
-
-    if (selector) {
-      return `Unwrap preflight reverted (${selector}).`
-    }
-
-    return "Unwrap preflight reverted."
-  }
-
-  private _simulateUnwrap = async (from: Address, amount: bigint, to: Address): Promise<string | null> => {
-    if (!this.publicClient) {
-      return "Unable to simulate unwrap transaction."
-    }
-
-    const data = encodeFunctionData({
-      abi: [unwrapSwapAndBridge],
-      functionName: "unwrapSwapAndBridge",
-      args: [amount, to]
-    })
-
-    try {
-      await this.publicClient.call({
-        account: from,
-        to: this.ZAPPER_CONTRACT_ADDRESS,
-        data
-      })
-      return null
-    }
-    catch (error) {
-      const selector = this._extractRevertSelector(error)
-      console.error("unwrap preflight failed", error)
-      return this._mapUnwrapRevertReason(selector)
-    }
   }
 
   private _withTimeout = async <T>(promise: Promise<T>, timeoutMs: number, stage: string): Promise<T> => {
@@ -833,6 +762,100 @@ export class AppWallet {
     return this._execTx(t.wallet, t.signer, callData)
   }
 
+  // cashOut unwraps `amount` of SFLUV via withdrawTo: the SFLUV is burned and
+  // the backing USDC is sent 1:1 to `to`, a Bridge liquidation address that
+  // settles to the merchant's bank. Called from a location's own wallet, which
+  // holds REDEEMER_ROLE. Gas is sponsored by the paymaster like every other
+  // smart-wallet call; no fee is taken from the amount.
+  cashOut = async (amount: bigint, to: Address): Promise<TxState | null> => {
+    const t = this._beforeTx()
+    if (!t) return null
+
+    if (amount <= 0n) {
+      return { sending: false, error: "Enter an amount greater than zero", hash: null }
+    }
+    if (!/^0x[0-9a-fA-F]{40}$/.test(to)) {
+      return { sending: false, error: "Invalid payout address", hash: null }
+    }
+
+    const hasRole = await this._hasRedeemerRole(t.wallet.address)
+    if (hasRole === null) {
+      return { sending: false, error: "Unable to verify this wallet's unwrap permission", hash: null }
+    }
+    if (!hasRole) {
+      return { sending: false, error: "This wallet is not enabled to unwrap yet", hash: null }
+    }
+
+    const balance = await this.getBalance(this.SFLUV_TOKEN)
+    if (balance === null) {
+      return { sending: false, error: "Unable to read SFLUV balance", hash: null }
+    }
+    if (balance < amount) {
+      return { sending: false, error: "Insufficient SFLUV balance", hash: null }
+    }
+
+    const callData = encodeFunctionData({
+      abi: [withdrawTo],
+      functionName: "withdrawTo",
+      args: [to, amount],
+    })
+    return this._execTx(t.wallet, t.signer, callData)
+  }
+
+  /**
+   * Resolve the on-chain transaction of an unwrap.
+   *
+   * `cashOut` returns whatever the bundler hands back, which on Citizen
+   * Wallet's engine is the user-operation hash — not a transaction, so it
+   * never shows on an explorer and Bridge reports a different hash for the
+   * same deposit. The engine does not answer eth_getUserOperationReceipt and
+   * its entrypoint emits no UserOperationEvent, so the reliable signal is the
+   * deposit itself: a USDC Transfer from the SFLUV wrapper to the payout
+   * address for exactly this amount, in a transaction that also burns SFLUV
+   * from this wallet. Polls briefly; null when nothing has landed yet.
+   */
+  findUnwrapTxHash = async (to: Address, amount: bigint, opts?: { attempts?: number; intervalMs?: number }): Promise<Hash | null> => {
+    if (!this.publicClient || !this.address) return null
+    const usdc = await this.getUnderlyingToken()
+    if (!usdc) return null
+    const attempts = opts?.attempts ?? 12
+    const intervalMs = opts?.intervalMs ?? 5_000
+    const transferEvent = parseAbiItem("event Transfer(address indexed from, address indexed to, uint256 value)")
+    const wallet = this.address.toLowerCase()
+    const zero = "0x0000000000000000000000000000000000000000"
+
+    for (let i = 0; i < attempts; i++) {
+      try {
+        const latest = await this.publicClient.getBlockNumber()
+        const fromBlock = latest > 400n ? latest - 400n : 0n
+        const logs = await this.publicClient.getLogs({
+          address: usdc,
+          event: transferEvent,
+          args: { from: this.SFLUV_TOKEN, to },
+          fromBlock,
+          toBlock: latest,
+        })
+        // Newest first: the unwrap just submitted is the last one to land.
+        for (const log of [...logs].reverse()) {
+          if (log.args.value !== amount || !log.transactionHash) continue
+          const receipt = await this.publicClient.getTransactionReceipt({ hash: log.transactionHash })
+          const burnedFromUs = receipt.logs.some(
+            (l) =>
+              l.address.toLowerCase() === this.SFLUV_TOKEN.toLowerCase() &&
+              l.topics[0] === transferTopic &&
+              l.topics[1]?.toLowerCase().endsWith(wallet.slice(2)) &&
+              l.topics[2]?.toLowerCase().endsWith(zero.slice(2)),
+          )
+          if (burnedFromUs) return log.transactionHash
+        }
+      } catch (error) {
+        console.warn("findUnwrapTxHash: lookup failed, retrying", error)
+      }
+      await new Promise((r) => setTimeout(r, intervalMs))
+    }
+    return null
+  }
+
   mintSFLUVFromBYUSD = async (amount: string): Promise<TxState | null> => {
     if (!this.address) {
       return {
@@ -1084,271 +1107,6 @@ export class AppWallet {
 
     return mintReceipt
   }
-
-  bridge = async (amount: number, paypalEthAddress : string): Promise<TxState | null>  => {
-     const t = this._beforeTx()
-    if(!t) return null
-
-    const sourceAmount = String(amount * (10 ** this.BYUSD_DECIMALS))
-    const destAmountMin = String((amount * (10 ** this.BYUSD_DECIMALS) * .95))
-
-    const params = new URLSearchParams({
-      srcToken: "0x688e72142674041f8f6Af4c808a4045cA1D6aC82",
-      srcChainKey: "bera",
-      dstToken: "0x6c3ea9036406852006290770BEdFcAbA0e23A0e8",
-      dstChainKey: "ethereum",
-      srcAddress: t.wallet.address,
-      dstAddress: paypalEthAddress,
-      srcAmount: sourceAmount,
-      dstAmountMin: destAmountMin
-      });
-
-      console.log(t.wallet.address)
-      console.log("Signer: " + JSON.stringify(t.signer, null, 2))
-
-    const url = `https://stargate.finance/api/v1/quotes?${params.toString()}`;
-
-    const res = await fetch(url, {
-      method: "GET",
-      headers: {
-        "Accept": "application/json"
-      }
-    });
-
-    const response = await res.json();
-    // check if response got anything
-    if (!response.quotes || response.quotes.length === 0) {
-    console.error("No quotes returned from the API:", response);
-    return null;
-  }
-
-      // Access route data from API response
-    const route = response.quotes[0]; // First route (oft/v2)
-
-    // Access transaction steps
-    const bridgeStep = route.steps[0]; // First step (bridge)
-
-    const bridgeTransactionValue = BigInt(bridgeStep.transaction.value)
-    const bridgeTransactionData = bridgeStep.transaction.data
-
-    let receipt: TxState = {
-        sending: false,
-        error: null,
-        hash: null
-      }
-
-    const data = hexToBytes(bridgeTransactionData)
-
-    try {
-      const hash = await this.cwBundler.call(t.signer, this.BYUSD_TOKEN, t.wallet.address, data, bridgeTransactionValue, undefined, undefined, { smartAccountIndex: this.index ? Number(this.index) : undefined })
-      receipt.hash = hash
-    }
-    catch(error) {
-      receipt.error = "error sending transaction: check logs"
-      console.error(error)
-    }
-
-    console.log(receipt)
-    return receipt
-  }
-
-  unwrapAndBridge = async (amount: string, to: string): Promise<TxState | null> => {
-    const t = this._beforeTx()
-    if(!t) return null
-
-    let sendAmount: bigint
-    try {
-      sendAmount = parseUnits(amount, this.SFLUV_DECIMALS)
-    }
-    catch {
-      return {
-        sending: false,
-        error: "Invalid cash out amount",
-        hash: null
-      }
-    }
-
-    if (sendAmount <= 0n) {
-      return {
-        sending: false,
-        error: "Cash out amount must be greater than zero",
-        hash: null
-      }
-    }
-
-    if (!to.startsWith("0x") || to.length !== 42) {
-      return {
-        sending: false,
-        error: "Invalid PayPal ETH address",
-        hash: null
-      }
-    }
-
-    const walletHasRedeemerRole = await this._hasRedeemerRole(t.wallet.address)
-    if (walletHasRedeemerRole === null) {
-      return {
-        sending: false,
-        error: "Unable to verify REDEEMER_ROLE on SFLUV contract",
-        hash: null
-      }
-    }
-
-    if (!walletHasRedeemerRole) {
-      return {
-        sending: false,
-        error: "Wallet is missing REDEEMER_ROLE and cannot unwrap",
-        hash: null
-      }
-    }
-
-    const currentBalance = await this.getBalance(this.SFLUV_TOKEN)
-    if (currentBalance === null) {
-      return {
-        sending: false,
-        error: "Unable to read SFLUV balance",
-        hash: null
-      }
-    }
-
-    if (currentBalance < sendAmount) {
-      return {
-        sending: false,
-        error: "Insufficient SFLUV balance for unwrap",
-        hash: null
-      }
-    }
-
-    const currentAllowance = await this._getAllowance(t.wallet.address, this.ZAPPER_CONTRACT_ADDRESS)
-    if (currentAllowance === null) {
-      return {
-        sending: false,
-        error: "Unable to verify wallet approval status",
-        hash: null
-      }
-    }
-
-    if (currentAllowance > 0n) {
-      const clearError = await this._clearZapperAllowance(t.wallet, t.signer)
-      if (clearError) {
-        return {
-          sending: false,
-          error: `Unable to clear previous approval: ${clearError}`,
-          hash: null
-        }
-      }
-    }
-
-    const approveReceipt = await this._setZapperAllowance(t.wallet, t.signer, sendAmount)
-    if (approveReceipt.error || !approveReceipt.hash) {
-      return {
-        sending: false,
-        error: approveReceipt.error ?? "error approving SFLUV spend: check logs",
-        hash: approveReceipt.hash
-      }
-    }
-
-    const allowanceUpdated = await this._waitForAllowance(t.wallet.address, this.ZAPPER_CONTRACT_ADDRESS, sendAmount)
-    if (!allowanceUpdated) {
-      return {
-        sending: false,
-        error: "Approval sent, but confirmation is still pending. Please retry in a moment.",
-        hash: approveReceipt.hash
-      }
-    }
-
-    const allowanceAfterApprove = await this._getAllowance(t.wallet.address, this.ZAPPER_CONTRACT_ADDRESS)
-    if (allowanceAfterApprove === null || allowanceAfterApprove < sendAmount) {
-      return {
-        sending: false,
-        error: "Unable to verify exact SFLUV approval amount",
-        hash: approveReceipt.hash
-      }
-    }
-
-    const preflightError = await this._simulateUnwrap(t.wallet.address, sendAmount, to as Address)
-    if (preflightError) {
-      const cleanupError = await this._clearZapperAllowance(t.wallet, t.signer)
-      return {
-        sending: false,
-        error: cleanupError
-          ? `${preflightError} Also unable to reset approval: ${cleanupError}`
-          : preflightError,
-        hash: null
-      }
-    }
-
-    const callData = encodeFunctionData({
-      abi: [unwrapSwapAndBridge],
-      functionName: "unwrapSwapAndBridge",
-      args: [sendAmount, to]
-    })
-
-    const callDataBytes = hexToBytes(callData)
-
-    let receipt: TxState = {
-        sending: false,
-        error: null,
-        hash: null
-      }
-
-    console.log("Unwrapping and bridging " + sendAmount + " to: " + to)
-    console.log("Index: " + this.index)
-    try {
-      const hash = await this._withTimeout(
-        this.cwBundler.call(
-          t.signer,
-          this.ZAPPER_CONTRACT_ADDRESS,
-          t.wallet.address,
-          callDataBytes,
-          undefined,
-          undefined,
-          undefined,
-          { smartAccountIndex: this.index ? Number(this.index) : undefined }
-        ),
-        60_000,
-        "Unwrap transaction submission"
-      )
-      receipt.hash = hash
-
-      const expectedMaxBalance = currentBalance - sendAmount
-      const debited = await this._waitForTokenBalanceAtMost(this.SFLUV_TOKEN, t.wallet.address, expectedMaxBalance)
-      if (!debited) {
-        receipt.error = `Transaction reverted at hash: ${hash}`
-        console.error("unwrap transaction not confirmed by balance check", hash)
-        return receipt
-      }
-    }
-    catch(error) {
-      const cleanupError = await this._clearZapperAllowance(t.wallet, t.signer)
-      const message = error instanceof Error ? error.message : "unknown error"
-      receipt.error = `error sending transaction: ${message}`
-      if (cleanupError) {
-        receipt.error = `${receipt.error}. Also unable to reset approval: ${cleanupError}`
-      }
-      console.error(error)
-      console.error("unwrap failed after approval; attempted to clear allowance", cleanupError)
-      return receipt
-    }
-
-    const allowanceConsumed = await this._waitForAllowanceEquals(t.wallet.address, this.ZAPPER_CONTRACT_ADDRESS, 0n)
-    if (!allowanceConsumed) {
-      const remainingAllowance = await this._getAllowance(t.wallet.address, this.ZAPPER_CONTRACT_ADDRESS)
-      if (remainingAllowance === null) {
-        console.warn("unwrap submitted, but allowance reset could not be verified yet")
-      } else if (remainingAllowance > 0n) {
-        const cleanupError = await this._clearZapperAllowance(t.wallet, t.signer)
-        if (cleanupError) {
-          console.warn(
-            "unwrap submitted, but allowance cleanup is still pending",
-            cleanupError
-          )
-        }
-      }
-    }
-
-    console.log(receipt)
-    return receipt
-   }
 
   send = async (amount: bigint, to: Address): Promise<TxState | null> => {
     if(!this._beforeTx({ allowEOA: true })) return null

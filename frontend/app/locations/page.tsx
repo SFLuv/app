@@ -568,9 +568,7 @@ export default function LocationsPage() {
             <UnwrapModal
               open={showUnwrapModal}
               onOpenChange={setShowUnwrapModal}
-              wallet={locationWallet}
-              balance={balance}
-              defaultDestination={user?.paypalEthAddress}
+              location={selectedLocation}
               onSuccess={updateBalance}
             />
           )}

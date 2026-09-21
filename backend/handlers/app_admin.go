@@ -370,7 +370,11 @@ func (a *AppService) UpdateLocationApproval(w http.ResponseWriter, r *http.Reque
 	// Only on the transition into approved, so re-saving an already-approved
 	// location does not re-notify the merchant.
 	if isApproving && !wasApproved {
-		a.sendLocationApprovedEmail(r.Context(), u.Id)
+		// Approval is also the invitation to verify with Bridge, so bank
+		// payouts can be set up. The link rides in the approval email; a
+		// failure to get one is logged and the approval still goes out.
+		kybURL := a.startMerchantKYBForLocation(r.Context(), u.Id, ownerID)
+		a.sendLocationApprovedEmail(r.Context(), u.Id, kybURL)
 	}
 
 	w.WriteHeader(http.StatusCreated)
