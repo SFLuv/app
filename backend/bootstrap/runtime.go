@@ -436,6 +436,12 @@ func NewServerHandler(ctx context.Context, pools *DBPools, appLogger *logger.Log
 	StartLocationRedeemerSync(ctx, redeemer, appLogger)
 	handlers.StartMerchantPayoutSweep(ctx, a, appLogger)
 
+	// Find or register our Bridge webhook endpoint and adopt the signing key
+	// Bridge issues for it, so BRIDGE_WEBHOOK_PUBLIC_KEY does not have to be
+	// pasted in by hand. Runs in the background: a third party must never be
+	// able to hold up the server starting.
+	handlers.StartBridgeWebhookResolution(ctx, a, appLogger)
+
 	// Workflow upkeep (recurrence catch-up, payout reconciliation, paid_out
 	// finalization) previously ran only as a side effect of user requests, so it
 	// stalled whenever nobody hit the right endpoint. Running it on a timer makes

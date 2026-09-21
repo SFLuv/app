@@ -25,7 +25,7 @@ export function UnwrapModal({ open, onOpenChange, location, onSuccess }: UnwrapM
           <DialogTitle className="text-black dark:text-white">Unwrap to your bank</DialogTitle>
           <DialogDescription>
             Turns SFLUV from this location back into dollars in the business bank account. Your first unwrap each
-            month is free; further unwraps that month must be at least $100.
+            month is any amount; further unwraps that month must be at least $500.
           </DialogDescription>
         </DialogHeader>
         <LocationPayoutCard location={location} onUnwrapped={onSuccess} />

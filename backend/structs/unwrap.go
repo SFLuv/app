@@ -2,9 +2,18 @@ package structs
 
 import "time"
 
+// UnwrapEligibilityRequest asks whether a redemption may go ahead.
+//
+// AmountWei is the amount of the WHOLE redemption, not of one transaction: a
+// till swept together with its tipping wallet is one redemption against the
+// location's monthly allowance, so the client sends the combined figure and
+// submits the transactions afterwards.
 type UnwrapEligibilityRequest struct {
 	WalletAddress string `json:"wallet_address"`
 	AmountWei     string `json:"amount_wei"`
+	// LocationID names the shop the allowance belongs to. Optional only for
+	// older clients, which fall back to a per-wallet allowance.
+	LocationID *uint64 `json:"location_id,omitempty"`
 }
 
 type UnwrapEligibilityResponse struct {

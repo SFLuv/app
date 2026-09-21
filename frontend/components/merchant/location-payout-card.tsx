@@ -228,10 +228,20 @@ export function LocationPayoutCard({ location, onUnwrapped }: LocationPayoutCard
     }
     setBusy("unwrap")
     try {
+      // Sweeping the till and its tips is one redemption against the
+      // location's monthly allowance, so the check is on what leaves in
+      // total — not on the till alone, which would let a merchant pass a
+      // small till amount and then send the tips as a second redemption.
+      const sweepingTips = includeTips && tipBalance !== null && tipBalance > 0n
+      const redemptionTotal = parsedAmount + (sweepingTips ? (tipBalance as bigint) : 0n)
       const res = await authFetch("/unwrap/eligibility", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ wallet_address: tillWallet.address, amount_wei: parsedAmount.toString() }),
+        body: JSON.stringify({
+          wallet_address: tillWallet.address,
+          amount_wei: redemptionTotal.toString(),
+          location_id: location.id,
+        }),
       })
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { reason?: string }
@@ -476,7 +486,7 @@ export function LocationPayoutCard({ location, onUnwrapped }: LocationPayoutCard
             </Button>
           </div>
           <p className="text-xs text-muted-foreground">
-            Your first unwrap each month is any amount; additional unwraps in the same month must be at least $100. No fees are taken from your payout.
+            This location's first redemption each month can be any amount; further redemptions in the same month must be at least $500. Sweeping tips with the till counts as one redemption. No fees are taken from your payout.
           </p>
         </div>
 

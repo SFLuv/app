@@ -471,6 +471,25 @@ func scanUnwrap(row pgx.Row) (*structs.Unwrap, error) {
 	return &u, nil
 }
 
+// LastLocationUnwrapAt is when this location last redeemed, or nil if it never
+// has.
+//
+// The monthly small-redemption allowance is keyed on the LOCATION, not on the
+// wallet. A till and its tipping wallet are two addresses but one shop, and a
+// merchant with three shops gets three allowances rather than six. Keying it on
+// the wallet — which is how the old followup-minimum worked — meant the
+// allowance quietly multiplied with every wallet a business attached.
+func (a *AppDB) LastLocationUnwrapAt(ctx context.Context, locationID uint64) (*time.Time, error) {
+	var at *time.Time
+	err := a.db.QueryRow(ctx, `
+		SELECT MAX(created_at) FROM unwraps WHERE location_id = $1;
+	`, locationID).Scan(&at)
+	if err != nil {
+		return nil, fmt.Errorf("error loading last unwrap for location %d: %w", locationID, err)
+	}
+	return at, nil
+}
+
 func (a *AppDB) ListUnwrapsByOwner(ctx context.Context, ownerID string, limit int) ([]*structs.Unwrap, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 50

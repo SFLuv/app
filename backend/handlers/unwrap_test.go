@@ -2,7 +2,7 @@ package handlers
 
 import "testing"
 
-func TestMinimumFollowupUnwrapAmountWeiUsesTokenMultiplier(t *testing.T) {
+func TestSmallRedemptionCeilingUsesTokenMultiplier(t *testing.T) {
 	tests := []struct {
 		name       string
 		multiplier string
@@ -11,12 +11,12 @@ func TestMinimumFollowupUnwrapAmountWeiUsesTokenMultiplier(t *testing.T) {
 		{
 			name:       "six decimals",
 			multiplier: "1000000",
-			want:       "100000000",
+			want:       "500000000",
 		},
 		{
 			name:       "eighteen decimals",
 			multiplier: "1000000000000000000",
-			want:       "100000000000000000000",
+			want:       "500000000000000000000",
 		},
 	}
 
@@ -24,12 +24,12 @@ func TestMinimumFollowupUnwrapAmountWeiUsesTokenMultiplier(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Setenv("TOKEN_DECIMALS", tt.multiplier)
 
-			got, err := minimumFollowupUnwrapAmountWei()
+			got, err := smallRedemptionCeilingBaseUnits()
 			if err != nil {
-				t.Fatalf("minimumFollowupUnwrapAmountWei() error = %v", err)
+				t.Fatalf("smallRedemptionCeilingBaseUnits() error = %v", err)
 			}
 			if got.String() != tt.want {
-				t.Fatalf("minimumFollowupUnwrapAmountWei() = %s; want %s", got.String(), tt.want)
+				t.Fatalf("smallRedemptionCeilingBaseUnits() = %s; want %s", got.String(), tt.want)
 			}
 		})
 	}
