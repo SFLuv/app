@@ -126,6 +126,43 @@ func NewRedeemerService(appDb *db.AppDB, log *logger.LogCloser, config *clientco
 		return service
 	}
 
+	// Preflight: can this wallet actually do the job?
+	//
+	// Everything checked above proves the config parses, not that it works.
+	// Without this the service announced itself enabled while every grant
+	// reverted — which is how locations approved after the last manual grant
+	// ended up holding takings their tills could not redeem. A wrong-chain or
+	// wrong-key deploy now says so at boot instead of failing silently forever.
+	adminRole, err := contract.GetRoleAdmin(&bind.CallOpts{Context: context.Background()}, redeemerRole)
+	if err != nil {
+		service.logf("redeemer auto-grant disabled: failed to read the admin role for REDEEMER_ROLE: %s", err)
+		return service
+	}
+	holdsAdmin, err := contract.HasRole(&bind.CallOpts{Context: context.Background()}, adminRole, fromAddress)
+	if err != nil {
+		service.logf("redeemer auto-grant disabled: failed to check whether %s may grant REDEEMER_ROLE: %s", fromAddress.Hex(), err)
+		return service
+	}
+	if !holdsAdmin {
+		service.logf(
+			"redeemer auto-grant disabled: %s does NOT hold the admin role for REDEEMER_ROLE (role 0x%x) on token %s, chain %s. "+
+				"Every grant would revert with AccessControlUnauthorizedAccount. Point REDEEMER_ADMIN_KEY/REDEEMER_ADMIN_ADDRESS at a wallet that holds it.",
+			fromAddress.Hex(), adminRole, tokenID, chainID.String(),
+		)
+		return service
+	}
+
+	// Gas is a warning, not a gate: it can be topped up without a deploy, and
+	// the role checks above are reads that keep working either way.
+	if balance, err := client.BalanceAt(context.Background(), fromAddress, nil); err != nil {
+		service.logf("redeemer auto-grant: could not read the gas balance of %s: %s", fromAddress.Hex(), err)
+	} else if balance.Sign() == 0 {
+		service.logf(
+			"redeemer auto-grant WARNING: %s holds the right role but has NO gas on chain %s. Grants will fail until it is funded.",
+			fromAddress.Hex(), chainID.String(),
+		)
+	}
+
 	service.client = client
 	service.contract = contract
 	service.privateKey = privateKey
@@ -134,7 +171,7 @@ func NewRedeemerService(appDb *db.AppDB, log *logger.LogCloser, config *clientco
 	service.redeemerRole = redeemerRole
 	service.enabled = true
 
-	service.logf("redeemer auto-grant enabled with admin wallet %s", service.fromAddress.Hex())
+	service.logf("redeemer auto-grant enabled with admin wallet %s on token %s, chain %s", service.fromAddress.Hex(), tokenID, chainID.String())
 	return service
 }
 

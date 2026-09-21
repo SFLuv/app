@@ -37,6 +37,19 @@ type LocationWallet struct {
 // address, so two locations naming the same one are a single grant. Ordering is
 // by address so a run that is cut short resumes over the same list.
 func (a *AppDB) GetLocationWallets(ctx context.Context) ([]LocationWallet, error) {
+	return a.getLocationWallets(ctx, nil)
+}
+
+// GetLocationWalletsForLocation is the same list narrowed to one shop, for the
+// grant that runs when a location is approved. Approval cannot wait for the
+// next boot: until these addresses hold the role, the shop's till takes money
+// it cannot turn back into dollars.
+func (a *AppDB) GetLocationWalletsForLocation(ctx context.Context, locationID uint64) ([]LocationWallet, error) {
+	id := int64(locationID)
+	return a.getLocationWallets(ctx, &id)
+}
+
+func (a *AppDB) getLocationWallets(ctx context.Context, locationID *int64) ([]LocationWallet, error) {
 	rows, err := a.db.Query(ctx, `
 		WITH attached AS (
 			SELECT
@@ -49,6 +62,7 @@ func (a *AppDB) GetLocationWallets(ctx context.Context) ([]LocationWallet, error
 			WHERE p.active = TRUE
 			AND l.active = TRUE
 			AND NULLIF(TRIM(p.wallet_address), '') IS NOT NULL
+			AND ($3::bigint IS NULL OR l.id = $3)
 
 			UNION ALL
 
@@ -60,6 +74,7 @@ func (a *AppDB) GetLocationWallets(ctx context.Context) ([]LocationWallet, error
 			FROM locations l
 			WHERE l.active = TRUE
 			AND NULLIF(TRIM(l.tipping_wallet_address), '') IS NOT NULL
+			AND ($3::bigint IS NULL OR l.id = $3)
 		)
 		SELECT DISTINCT ON (LOWER(attached.address))
 			attached.location_id,
@@ -78,7 +93,7 @@ func (a *AppDB) GetLocationWallets(ctx context.Context) ([]LocationWallet, error
 			LIMIT 1
 		) known ON TRUE
 		ORDER BY LOWER(attached.address), attached.role, attached.location_id;
-	`, locationWalletRolePaymentLabel, locationWalletRoleTippingLabel)
+	`, locationWalletRolePaymentLabel, locationWalletRoleTippingLabel, locationID)
 	if err != nil {
 		return nil, fmt.Errorf("error loading location wallets: %w", err)
 	}

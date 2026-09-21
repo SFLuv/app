@@ -361,9 +361,29 @@ func (a *AppService) UpdateLocationApproval(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	if a.redeemer != nil && a.redeemer.IsEnabled() && isApproving && !wasApproved && !hadOtherApprovedLocations {
-		if err := a.redeemer.EnsureMerchantHasRedeemerWallet(r.Context(), ownerID); err != nil {
-			a.logger.Logf("error auto-granting redeemer role for user %s after location %d approval: %s", ownerID, u.Id, err)
+	if a.redeemer != nil && a.redeemer.IsEnabled() && isApproving && !wasApproved {
+		// The merchant's own wallet, once per business. Guarded on the first
+		// approved location because it is an account-level grant and re-running
+		// it for every shop would be a chain read per approval for nothing.
+		if !hadOtherApprovedLocations {
+			if err := a.redeemer.EnsureMerchantHasRedeemerWallet(r.Context(), ownerID); err != nil {
+				a.logger.Logf("error auto-granting redeemer role for user %s after location %d approval: %s", ownerID, u.Id, err)
+			}
+		}
+
+		// This shop's own till and tipping wallet, on EVERY approval. The
+		// account-level grant above does not reach them: tills are derived per
+		// location, so a merchant's second shop gets addresses that have never
+		// been granted anything. Skipping this is what left approved locations
+		// holding takings that withdrawTo reverted on.
+		summary, err := a.redeemer.SyncLocationWalletsForLocation(r.Context(), uint64(u.Id))
+		if err != nil {
+			a.logger.Logf("error granting redeemer role to wallets for location %d: %s", u.Id, err)
+		} else if summary.Granted > 0 || summary.Failed > 0 {
+			a.logger.Logf(
+				"location %d approval: redeemer role granted to %d wallet(s), %d already held, %d failed",
+				u.Id, summary.Granted, summary.AlreadyHeld, summary.Failed,
+			)
 		}
 	}
 
