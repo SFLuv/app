@@ -5,7 +5,16 @@ import { getAddress, type Address, type Hex } from "viem"
 
 import type { AppWallet } from "@/lib/wallets/wallets"
 import { hasSignetNodes, SIGNET_REGISTRY } from "@/lib/signet/config"
-import { buildBindAuthorization, encodeBindWithSignature } from "@/lib/signet/bind"
+import {
+  buildBindAuthorization,
+  encodeBindWithSignature,
+  type SignTypedData,
+} from "@/lib/signet/bind"
+import {
+  enrol,
+  type EnrolProgress,
+  type ExecuteFromSafe,
+} from "@/lib/signet/enrol"
 import {
   celoClient,
   getBlockPin,
@@ -42,6 +51,8 @@ export function useSignetEnrolment(wallet: AppWallet | null | undefined) {
    */
   const [session, setSession] = useState<SignetSession | null>(null)
   const [authenticating, setAuthenticating] = useState(false)
+  const [enrolling, setEnrolling] = useState(false)
+  const [progress, setProgress] = useState<EnrolProgress[]>([])
 
   const client = useMemo(() => celoClient(), [])
 
@@ -175,6 +186,67 @@ export function useSignetEnrolment(wallet: AppWallet | null | undefined) {
     }
   }, [wallet, eoa, safe, state, refresh, client])
 
+  /**
+   * Steps 4 and 5: keygen, then make the threshold key a Safe owner.
+   *
+   * Resumable by construction — `enrol` re-reads chain state rather than
+   * trusting a cursor, and keygen treats a 409 as success — so this is safe to
+   * call again after a closed tab, a declined signature or a failed relay.
+   */
+  const completeEnrolment = useCallback(async () => {
+    if (!wallet || !eoa || !safe) return false
+    if (state && !state.allowed) {
+      setError("This wallet is not part of the trial.")
+      return false
+    }
+    // Checked here so the failure names the missing step. Without a binding
+    // `resolve()` answers a zero subject, and the node turns that into a flat
+    // "unauthorized" that tells the user nothing about what to do next.
+    if (!state?.boundSafe) {
+      setError("Link this wallet to Signet first.")
+      return false
+    }
+
+    const active = await ensureSession()
+    if (!active) return false // ensureSession has already set a readable error
+
+    setEnrolling(true)
+    setProgress([])
+    try {
+      /** `enrol` wants a hash; `execSponsored` reports failure in-band. */
+      const execute: ExecuteFromSafe = async (to, data) => {
+        const receipt = await wallet.execSponsored(to, data)
+        if (receipt.error) throw new Error(receipt.error)
+        if (!receipt.hash) throw new Error("sponsored call returned no hash")
+        return receipt.hash
+      }
+      const signTypedData: SignTypedData = (auth) =>
+        wallet.signTypedData(
+          auth.domain,
+          auth.types as unknown as Record<string, { name: string; type: string }[]>,
+          auth.message as unknown as Record<string, unknown>,
+        ) as Promise<Hex>
+
+      const result = await enrol({
+        client,
+        session: active,
+        eoa,
+        safe,
+        execute,
+        signTypedData,
+        onProgress: (p) => setProgress((prev) => [...prev, p]),
+      })
+      await refresh()
+      return result.finalState.signetIsOwner
+    } catch (e) {
+      console.error("[signet] enrolment failed", e)
+      setError(e instanceof Error ? e.message : "Unable to finish enrolment.")
+      return false
+    } finally {
+      setEnrolling(false)
+    }
+  }, [wallet, eoa, safe, state, ensureSession, client, refresh])
+
   return {
     /** null while loading, or when this wallet cannot participate at all. */
     state,
@@ -187,6 +259,11 @@ export function useSignetEnrolment(wallet: AppWallet | null | undefined) {
     authenticating,
     session,
     ensureSession,
+    /** True while keygen / add-owner are running. */
+    enrolling,
+    /** Live step log from `enrol`, for driving the card's checklist. */
+    progress,
+    completeEnrolment,
     /** Hide the whole section unless the gate says this user is in the trial. */
     visible: !!state?.allowed,
   }
