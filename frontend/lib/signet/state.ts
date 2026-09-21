@@ -112,7 +112,11 @@ export async function readEnrolmentState(
   let signetIsOwner = false
   let resolvedSignet: Address | null = signetAddress ?? null
 
-  if (walletDeployed) {
+  // Gated on `allowed` as well as deployment: a user the gate does not admit
+  // never sees this card, so deriving their key would be a fourth eth_call on
+  // every settings page load to decide something nobody reads. Detection stays
+  // exactly as cheap as it was for everyone outside the trial.
+  if (walletDeployed && allowed) {
     if (resolvedSignet) {
       signetIsOwner = await client.readContract({
         address: wallet, abi: safeAbi, functionName: "isOwner", args: [resolvedSignet],
