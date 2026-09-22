@@ -78,13 +78,30 @@ export function LocationPayoutCard({ location, onUnwrapped }: LocationPayoutCard
     try {
       const res = await authFetch("/merchant/payout/status")
       if (!res.ok) throw new Error(`status ${res.status}`)
-      setStatus((await res.json()) as MerchantPayoutStatusResponse)
+      const body = (await res.json()) as MerchantPayoutStatusResponse
+      setStatus(body)
+      return body
     } catch (error) {
       console.error("merchant payout status", error)
+      return null
     } finally {
       setLoading(false)
     }
   }, [authFetch])
+
+  // Bridge creates the bank record a few seconds after the Plaid exchange, and
+  // the status endpoint re-reads it from Bridge on every call. Without this the
+  // card falls back to "Connect bank account" while the record is in flight,
+  // which reads as a failed connection and sends the merchant back through
+  // Plaid — creating a second bank record for the same account.
+  const waitForBank = useCallback(async () => {
+    for (let attempt = 0; attempt < 10; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 3000))
+      const body = await loadStatus()
+      if ((body?.bank_accounts?.length ?? 0) > 0) return true
+    }
+    return false
+  }, [loadStatus])
 
   useEffect(() => {
     void loadStatus()
@@ -151,16 +168,40 @@ export function LocationPayoutCard({ location, onUnwrapped }: LocationPayoutCard
       const exchangeRes = await authFetch("/merchant/payout/plaid/exchange", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ link_token: tokenBody.link_token, public_token: publicToken }),
+        body: JSON.stringify({
+          link_token: tokenBody.link_token,
+          public_token: publicToken,
+          // This card's location is the one connecting a bank. Without it the
+          // exchange links the bank to the business and attaches it to nothing,
+          // which reads as a failed connection.
+          location_id: location.id,
+        }),
       })
-      const exchangeBody = (await exchangeRes.json().catch(() => ({}))) as ProvisionResponse & { error?: string }
+      const exchangeBody = (await exchangeRes.json().catch(() => ({}))) as ProvisionResponse & {
+        error?: string
+        bank_connected?: boolean
+      }
       if (!exchangeRes.ok) throw new Error(exchangeBody.error || "The bank connection could not be completed")
 
+      // Bridge creates the bank record asynchronously, so a 200 is not proof it
+      // exists yet. Say which of the two happened instead of always claiming
+      // the payout address is ready.
       toast({
-        title: "Bank connected",
-        description: exchangeBody.message || "Your payout address is set up. You can unwrap now.",
+        title: exchangeBody.bank_connected ? "Bank connected" : "Bank submitted",
+        description: exchangeBody.message,
       })
       await loadStatus()
+      if (!exchangeBody.bank_connected) {
+        // Keep the spinner on while Bridge catches up, so the card does not
+        // offer "Connect bank account" again for an account already linked.
+        const appeared = await waitForBank()
+        if (!appeared) {
+          toast({
+            title: "Still waiting on your bank",
+            description: "Your bank was submitted but hasn't come back yet. Refresh in a minute — don't reconnect, it's already on its way.",
+          })
+        }
+      }
     } catch (error) {
       if (error instanceof PlaidExitError) return
       toast({ title: "Bank connection failed", description: error instanceof Error ? error.message : undefined, variant: "destructive" })
