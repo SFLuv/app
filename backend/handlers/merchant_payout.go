@@ -544,12 +544,17 @@ func (a *AppService) CompleteMerchantPlaidLink(w http.ResponseWriter, r *http.Re
 	// the common case finishes in this request and the merchant sees their
 	// bank appear, then provision in the same breath.
 	deadline := time.Now().Add(20 * time.Second)
+	bankConnected := false
 	for {
 		if err := a.syncMerchantBankAccounts(ctx, profile); err != nil {
 			a.logger.Logf("merchant payout: bank sync after plaid failed for %s: %s", *userDid, err)
 		}
 		banks, _ := a.db.ListMerchantBankAccounts(ctx, *userDid)
-		if len(banks) > 0 || time.Now().After(deadline) {
+		if len(banks) > 0 {
+			bankConnected = true
+			break
+		}
+		if time.Now().After(deadline) {
 			break
 		}
 		select {
@@ -560,12 +565,44 @@ func (a *AppService) CompleteMerchantPlaidLink(w http.ResponseWriter, r *http.Re
 		}
 	}
 
-	resp, err := a.provisionLiquidationAddresses(ctx, *userDid, "", 0)
+	// Attach the location the merchant started from. The flow is launched from
+	// one shop's card, so that shop is the one connecting a bank — finishing
+	// with nothing attached sends them back through Plaid to fix what looks
+	// like a failure. Other locations are untouched and still have to be
+	// attached deliberately, which is the point of attaching per location.
+	target := uint64(0)
+	if req.LocationID != nil {
+		owned, err := a.db.LocationOwnedBy(ctx, *req.LocationID, *userDid)
+		if err != nil || !owned {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		target = *req.LocationID
+	}
+
+	resp := structs.PlaidExchangeResponse{BankConnected: bankConnected}
+	provisioned, err := a.provisionLiquidationAddresses(ctx, *userDid, "", target)
 	if err != nil {
 		a.logger.Logf("merchant payout: provisioning after plaid failed for %s: %s", *userDid, err)
-		// The bank is linked; the address can be provisioned on the next
-		// status load. Say that rather than fail the whole flow.
-		resp.Message = "Bank connected. Payout addresses will finish setting up shortly."
+		// The bank is linked; the address can be provisioned from the location
+		// card. Say that rather than fail the whole flow.
+		provisioned.Message = "Bank connected. Finish setting up this location's payouts from its card."
+	}
+	resp.ProvisionLiquidationAddressesResponse = provisioned
+
+	// Say what happened. A 200 here only means the exchange was accepted; the
+	// bank record and the payout address are both things Bridge may not have
+	// caught up on yet, and telling a merchant they can unwrap when no address
+	// exists is what made this look broken.
+	if resp.Message == "" {
+		switch {
+		case !bankConnected:
+			resp.Message = "Bank submitted. It can take a minute to appear — this page will pick it up."
+		case len(resp.Provisioned) > 0:
+			resp.Message = "Bank connected and payouts are set up for this location."
+		default:
+			resp.Message = "Bank connected. Finish setting up this location's payouts from its card."
+		}
 	}
 	writeJSON(w, http.StatusOK, resp)
 }

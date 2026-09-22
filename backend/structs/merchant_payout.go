@@ -88,6 +88,21 @@ type PlaidLinkTokenResponse struct {
 type PlaidExchangeRequest struct {
 	LinkToken   string `json:"link_token"`
 	PublicToken string `json:"public_token"`
+	// LocationID is the shop whose card started the flow. Payouts attach per
+	// location, and this is the location the merchant was looking at, so it is
+	// the one the new bank connects. Other locations still have to be attached
+	// deliberately. Optional: an older client omits it and gets a bank with
+	// nothing attached, which is the pre-existing behaviour.
+	LocationID *uint64 `json:"location_id,omitempty"`
+}
+
+// PlaidExchangeResponse says what actually happened, which the provisioning
+// fields alone cannot: Bridge creates the bank record asynchronously, so the
+// exchange can succeed while the account is still seconds away from existing.
+// BankConnected is what the client should believe, not the 200.
+type PlaidExchangeResponse struct {
+	ProvisionLiquidationAddressesResponse
+	BankConnected bool `json:"bank_connected"`
 }
 
 type ProvisionLiquidationAddressesResponse struct {
