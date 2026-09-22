@@ -142,6 +142,9 @@ export function LocationPayoutCard({ location, onUnwrapped }: LocationPayoutCard
 
   const profile = status?.profile ?? null
   const kyb = kybStatusLabel(profile?.kyb_status)
+  // Bridge reports terms separately from verification, and a business can be
+  // approved with terms still outstanding — which blocks attaching a bank.
+  const termsPending = Boolean(profile?.bridge_customer_id) && (profile?.tos_status ?? "") !== "" && profile?.tos_status !== "approved"
   const banks: MerchantBankAccount[] = status?.bank_accounts ?? []
   const liquidation = status?.locations.find((l) => Number(l.location_id) === Number(location.id)) ?? null
   const currentBank = liquidation
@@ -188,6 +191,31 @@ export function LocationPayoutCard({ location, onUnwrapped }: LocationPayoutCard
     setTosUrl(body.tos_url)
     setTosOpen(true)
     throw new PendingTermsError()
+  }
+
+  // Terms are their own gate, separate from verification, so they get their own
+  // way in — a merchant should be able to clear them from the verification step
+  // rather than discovering them when a bank connection fails at the last step.
+  const openTermsModal = async () => {
+    setBusy("kyb")
+    try {
+      const res = await authFetch("/merchant/payout/tos-link", { method: "POST" })
+      const body = (await res.json().catch(() => ({}))) as { url?: string; tos_status?: string; error?: string }
+      if (!res.ok) throw new Error(body.error || "Could not open the terms")
+      if (!body.url) {
+        // Already accepted — say so and refresh, rather than showing a modal
+        // asking for something that is done.
+        toast({ title: "Terms already accepted", description: "You're all set — you can connect a bank account." })
+        await loadStatus()
+        return
+      }
+      setTosUrl(body.url)
+      setTosOpen(true)
+    } catch (error) {
+      toast({ title: "Couldn't open the terms", description: error instanceof Error ? error.message : undefined, variant: "destructive" })
+    } finally {
+      setBusy("")
+    }
   }
 
   const connectBank = async () => {
@@ -445,10 +473,23 @@ export function LocationPayoutCard({ location, onUnwrapped }: LocationPayoutCard
             A one-time verification with Bridge, our banking partner. It asks for your business details and an ID for the owner,
             and takes a few minutes. Approval usually comes within a business day.
           </p>
-          <Button type="button" onClick={() => void startKYB()} disabled={busy !== ""}>
-            {busy === "kyb" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ExternalLink className="mr-2 h-4 w-4" />}
-            {profile?.bridge_customer_id ? "Continue verification" : "Verify your business"}
-          </Button>
+          {termsPending && (
+            <div className="flex flex-wrap items-center gap-2 text-sm">
+              <span className="text-muted-foreground">Banking terms:</span>
+              <span className="rounded-full border px-2 py-0.5 text-xs">Not accepted</span>
+            </div>
+          )}
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" onClick={() => void startKYB()} disabled={busy !== ""}>
+              {busy === "kyb" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ExternalLink className="mr-2 h-4 w-4" />}
+              {profile?.bridge_customer_id ? "Continue verification" : "Verify your business"}
+            </Button>
+            {termsPending && (
+              <Button type="button" variant="outline" onClick={() => void openTermsModal()} disabled={busy !== ""}>
+                Accept banking terms
+              </Button>
+            )}
+          </div>
           {status.production === false && <p className="text-[11px] text-muted-foreground">Sandbox mode — no real bank activity.</p>}
         </div>
       </div>
@@ -472,9 +513,14 @@ export function LocationPayoutCard({ location, onUnwrapped }: LocationPayoutCard
             {busy === "plaid" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Landmark className="mr-2 h-4 w-4" />}
             Connect bank account
           </Button>
-          {tosUrl && (
-            <button type="button" className="text-xs underline text-muted-foreground" onClick={() => setTosOpen(true)}>
-              Terms of service still need accepting
+          {termsPending && (
+            <button
+              type="button"
+              className="text-xs underline text-muted-foreground"
+              onClick={() => void openTermsModal()}
+              disabled={busy !== ""}
+            >
+              Banking terms still need accepting
             </button>
           )}
         </div>
