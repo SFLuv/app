@@ -21,6 +21,24 @@ import type { Address } from "viem"
 export const SIGNET_CHAIN_ID = 42220
 
 /**
+ * The GROUP's home chain — Ethereum mainnet, where SignetGroup is deployed.
+ *
+ * This is what an ERC-4361 message must carry, NOT the resolver's chain. The
+ * node passes `HomeChainID()` into `verifySIWE` (node/resolver.go:102), and
+ * siwe.go documents why: ERC-4361's chainId is the ACCOUNT's context — where an
+ * ERC-1271 contract account would be resolved — not where the resolver lives.
+ *
+ * Signing with 42220 dies in `verifySIWE`, before `resolve()` is ever reached,
+ * and the 401 is sanitized so the client only ever sees "unauthorized".
+ *
+ * Two things say otherwise and are both wrong: the node's own error string
+ * ("siwe chain id %d != resolver chain id %d", which names the value it is
+ * comparing against incorrectly) and the SDK's `chain_id_mismatch` doc. The
+ * source of truth is what verifySIWE is handed.
+ */
+export const SIGNET_GROUP_CHAIN_ID = 1
+
+/**
  * Deployed 2026-08-30 on Celo.
  *
  * Registry and resolver were REDEPLOYED after the first registry was found to

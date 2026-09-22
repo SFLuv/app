@@ -150,6 +150,40 @@ export function useSignetEnrolment(wallet: AppWallet | null | undefined) {
     void refresh()
   }, [refresh])
 
+  /**
+   * Re-read chain state until it reflects a write we just made.
+   *
+   * `execSponsored` resolves when the bundler ACCEPTS the operation, which is
+   * before it is mined and well before a public RPC will serve the result. A
+   * single read at that moment returns the state we just changed, so the card
+   * sits unchanged and the write looks like it did nothing until the user
+   * reloads the page by hand.
+   *
+   * Gives up quietly after the window: the write has usually landed by then
+   * anyway, and a stuck spinner would be a worse lie than a stale card that
+   * the next refresh corrects.
+   */
+  const refreshUntil = useCallback(
+    async (
+      satisfied: (s: EnrolmentState) => boolean,
+      attempts = 10,
+      delayMs = 1500,
+    ) => {
+      if (!eoa || !safe) return
+      for (let i = 0; i < attempts; i++) {
+        try {
+          const next = await readEnrolmentState(client, eoa, safe)
+          setState(next)
+          if (satisfied(next)) return
+        } catch (e) {
+          console.error("[signet] refresh failed", e)
+        }
+        await new Promise((resolve) => setTimeout(resolve, delayMs))
+      }
+    },
+    [client, eoa, safe],
+  )
+
   // A session speaks for exactly one account. If the wallet changes under us,
   // the old one is not merely stale, it is the wrong identity.
   useEffect(() => {
@@ -232,7 +266,7 @@ export function useSignetEnrolment(wallet: AppWallet | null | undefined) {
         setError(receipt.error)
         return false
       }
-      await refresh()
+      await refreshUntil((next) => !!next.boundSafe && !next.boundElsewhere)
       return true
     } catch (e) {
       setError(e instanceof Error ? e.message : "Unable to enable Signet.")
@@ -240,7 +274,7 @@ export function useSignetEnrolment(wallet: AppWallet | null | undefined) {
     } finally {
       setBinding(false)
     }
-  }, [wallet, eoa, safe, state, refresh, client])
+  }, [wallet, eoa, safe, state, refresh, refreshUntil, client])
 
   /**
    * Steps 4 and 5: keygen, then make the threshold key a Safe owner.
@@ -292,7 +326,7 @@ export function useSignetEnrolment(wallet: AppWallet | null | undefined) {
         signTypedData,
         onProgress: (p) => setProgress((prev) => [...prev, p]),
       })
-      await refresh()
+      await refreshUntil((next) => next.signetIsOwner)
       return result.finalState.signetIsOwner
     } catch (e) {
       logSignetFailure("enrolment failed", e)
@@ -301,7 +335,7 @@ export function useSignetEnrolment(wallet: AppWallet | null | undefined) {
     } finally {
       setEnrolling(false)
     }
-  }, [wallet, eoa, safe, state, ensureSession, client, refresh])
+  }, [wallet, eoa, safe, state, ensureSession, client, refreshUntil])
 
   return {
     /** null while loading, or when this wallet cannot participate at all. */

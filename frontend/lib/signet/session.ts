@@ -19,7 +19,7 @@ import type { Address } from "viem"
 
 import {
   SESSION_TTL_SECONDS,
-  SIGNET_CHAIN_ID,
+  SIGNET_GROUP_CHAIN_ID,
   SIGNET_GROUP_ID,
   SIGNET_NODE_URLS,
   SIGNET_SIWE_DOMAIN,
@@ -67,9 +67,9 @@ export async function openSession(params: OpenSessionParams): Promise<SignetSess
       siwe: {
         domain: SIGNET_SIWE_DOMAIN,
         address: params.eoa,
-        // The RESOLVER's chain, not the app's. They coincide today; that is a
-        // coincidence, not an invariant.
-        chainId: SIGNET_CHAIN_ID,
+        // The GROUP's home chain, not the resolver's and not the app's. See
+        // SIGNET_GROUP_CHAIN_ID — the node compares this against HomeChainID().
+        chainId: SIGNET_GROUP_CHAIN_ID,
         statement:
           params.statement ??
           "Authorize SFLUV to sign your transactions with your Signet key.",
@@ -120,7 +120,7 @@ export async function preflightNodes(
       siwe: {
         domain: SIGNET_SIWE_DOMAIN,
         address: params.eoa,
-        chainId: SIGNET_CHAIN_ID,
+        chainId: SIGNET_GROUP_CHAIN_ID,
         statement: params.statement ?? "SFLUV Signet node preflight.",
         issuedAt,
         expirationTime: new Date(issuedAt.getTime() + ttl * 1000),
