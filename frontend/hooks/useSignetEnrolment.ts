@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { getAddress, type Address, type Hex } from "viem"
 
 import type { AppWallet } from "@/lib/wallets/wallets"
@@ -149,6 +149,15 @@ export function useSignetEnrolment(wallet: AppWallet | null | undefined) {
    * only thing enrolment needs a session for is keygen, which happens once.
    */
   const [session, setSession] = useState<SignetSession | null>(null)
+  /**
+   * The same session, reachable from closures that outlive this component.
+   *
+   * The installed signer is deliberately longer-lived than the card, so it
+   * cannot read session state through a captured render — it would keep seeing
+   * whatever was current when the card last rendered and re-authenticate on
+   * every signature.
+   */
+  const sessionRef = useRef<SignetSession | null>(null)
   const [authenticating, setAuthenticating] = useState(false)
   const [enrolling, setEnrolling] = useState(false)
   const [progress, setProgress] = useState<EnrolProgress[]>([])
@@ -223,6 +232,9 @@ export function useSignetEnrolment(wallet: AppWallet | null | undefined) {
   // A session speaks for exactly one account. If the wallet changes under us,
   // the old one is not merely stale, it is the wrong identity.
   useEffect(() => {
+    if (sessionRef.current && sessionRef.current.eoa !== eoa) {
+      sessionRef.current = null
+    }
     setSession((current) => (current && current.eoa !== eoa ? null : current))
   }, [eoa])
 
@@ -244,8 +256,9 @@ export function useSignetEnrolment(wallet: AppWallet | null | undefined) {
       setError("Signing service is not configured yet.")
       return null
     }
-    if (session && session.eoa === eoa && !isSessionExpired(session)) {
-      return session
+    const live = sessionRef.current
+    if (live && live.eoa === eoa && !isSessionExpired(live)) {
+      return live
     }
 
     setAuthenticating(true)
@@ -256,6 +269,7 @@ export function useSignetEnrolment(wallet: AppWallet | null | undefined) {
         signMessage: wallet.signMessage,
         getBlockPin: () => getBlockPin(client),
       })
+      sessionRef.current = fresh
       setSession(fresh)
       return fresh
     } catch (e) {
@@ -265,7 +279,7 @@ export function useSignetEnrolment(wallet: AppWallet | null | undefined) {
     } finally {
       setAuthenticating(false)
     }
-  }, [wallet, eoa, session, client])
+  }, [wallet, eoa, client])
 
   /**
    * Step 2. Two user-visible actions in one: the EOA signs an EIP-712
@@ -392,6 +406,11 @@ export function useSignetEnrolment(wallet: AppWallet | null | undefined) {
    * SIWE prompt arrives when the user actually sends something, which is a
    * moment they are already expecting to confirm.
    */
+  const ensureSessionRef = useRef(ensureSession)
+  useEffect(() => {
+    ensureSessionRef.current = ensureSession
+  }, [ensureSession])
+
   const buildLazySigner = useCallback(
     (signetAddress: Address, account: Address): UserOpSigner => {
       let signer: SignetSigner | null = null
@@ -399,11 +418,11 @@ export function useSignetEnrolment(wallet: AppWallet | null | undefined) {
         getAddress: async () => signetAddress,
         signMessage: async (message) => {
           if (!signer) {
-            const session = await ensureSession()
+            const session = await ensureSessionRef.current()
             if (!session) throw new Error("Signet session unavailable")
             signer = await SignetSigner.create(client, session, signetAddress, account, {
               reauthenticate: async () => {
-                const fresh = await ensureSession()
+                const fresh = await ensureSessionRef.current()
                 if (!fresh) throw new Error("Signet re-authentication failed")
                 return fresh
               },
@@ -413,7 +432,7 @@ export function useSignetEnrolment(wallet: AppWallet | null | undefined) {
         },
       }
     },
-    [client, ensureSession],
+    [client],
   )
 
   /**
@@ -431,9 +450,11 @@ export function useSignetEnrolment(wallet: AppWallet | null | undefined) {
     } else {
       wallet.setSignetSigner(null)
     }
-    return () => {
-      wallet.setSignetSigner(null)
-    }
+    // NO unmount cleanup. The signer belongs to the wallet, not to this card,
+    // and the card lives on /settings while transactions are sent from every
+    // other page. Clearing it here made the preference apply only where nobody
+    // spends anything: navigating away silently restored the Privy key, with no
+    // prompt and no error, and the transfer looked entirely normal.
   }, [wallet, preferSignet, state?.signetIsOwner, state?.signetAddress, safe, buildLazySigner])
 
   /** Persist and apply. Takes effect on the next transaction, not this one. */
