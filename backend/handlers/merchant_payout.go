@@ -427,6 +427,25 @@ func (a *AppService) GetMerchantPayoutStatus(w http.ResponseWriter, r *http.Requ
 				a.logger.Logf("merchant payout: bank sync failed for %s: %s", *userDid, err)
 			}
 		}
+		// Terms are tracked separately from verification: a business can be
+		// fully KYB-approved and still have terms outstanding, and that gap is
+		// invisible in kyb_status. Refreshed only while it is unresolved, so a
+		// settled business costs no extra call.
+		if profile.BridgeCustomerID != "" && !strings.EqualFold(profile.TOSStatus, bridge.KYCApproved) {
+			if customer, err := a.bridge.GetCustomer(ctx, profile.BridgeCustomerID); err == nil && customer != nil {
+				tos := "pending"
+				if customer.HasAcceptedTOS {
+					tos = bridge.KYCApproved
+				}
+				if !strings.EqualFold(tos, profile.TOSStatus) {
+					if err := a.db.SetMerchantKYBStatus(ctx, profile.OwnerID, profile.KYBStatus, tos); err == nil {
+						if refreshed, err := a.db.GetMerchantPayoutProfile(ctx, *userDid); err == nil && refreshed != nil {
+							profile = refreshed
+						}
+					}
+				}
+			}
+		}
 	}
 	resp.Profile = profile
 
@@ -1077,4 +1096,63 @@ func (a *AppService) AdminListMerchantPayouts(w http.ResponseWriter, r *http.Req
 		unwraps = []*structs.Unwrap{}
 	}
 	writeJSON(w, http.StatusOK, structs.AdminMerchantPayoutsResponse{Businesses: businesses, Unwraps: unwraps})
+}
+
+// RequestMerchantTOSLink hands back the hosted page where this business accepts
+// Bridge's terms, and the live acceptance state alongside it.
+//
+// Terms are their own gate. A business can be verified and still be unable to
+// attach a bank, and until this existed the only place that surfaced was a
+// failed Plaid exchange at the very end of the flow.
+func (a *AppService) RequestMerchantTOSLink(w http.ResponseWriter, r *http.Request) {
+	userDid := utils.GetDid(r)
+	if userDid == nil {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+	if _, ok := a.bridgeReady(w); !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), bridgeAPITimeout)
+	defer cancel()
+
+	profile, err := a.db.GetMerchantPayoutProfile(ctx, *userDid)
+	if err != nil || profile == nil || profile.BridgeCustomerID == "" {
+		writeJSON(w, http.StatusConflict, map[string]string{
+			"error": "Verify your business before accepting the banking terms.",
+		})
+		return
+	}
+
+	// Read acceptance from Bridge rather than our mirror: the merchant may have
+	// just signed in another tab, and telling them to sign again would be both
+	// wrong and the exact loop this is meant to end.
+	customer, err := a.bridge.GetCustomer(ctx, profile.BridgeCustomerID)
+	if err != nil || customer == nil {
+		a.logger.Logf("merchant payout: could not read customer %s for ToS state: %s", profile.BridgeCustomerID, err)
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "Could not reach our banking partner. Try again in a moment."})
+		return
+	}
+
+	tos := "pending"
+	if customer.HasAcceptedTOS {
+		tos = bridge.KYCApproved
+	}
+	if !strings.EqualFold(tos, profile.TOSStatus) {
+		if err := a.db.SetMerchantKYBStatus(ctx, profile.OwnerID, profile.KYBStatus, tos); err != nil {
+			a.logger.Logf("merchant payout: could not record ToS status for %s: %s", profile.OwnerID, err)
+		}
+	}
+	if customer.HasAcceptedTOS {
+		writeJSON(w, http.StatusOK, map[string]string{"tos_status": tos})
+		return
+	}
+
+	tosURL, err := a.bridge.TOSAcceptanceLink(ctx, profile.BridgeCustomerID)
+	if err != nil {
+		a.logger.Logf("merchant payout: could not get a ToS link for %s: %s", profile.BridgeCustomerID, err)
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "Could not open the terms right now. Try again in a moment."})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"tos_status": tos, "url": tosURL})
 }

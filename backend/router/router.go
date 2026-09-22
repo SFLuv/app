@@ -625,6 +625,7 @@ func AddUnwrapRoutes(r *chi.Mux, s *handlers.AppService) {
 func AddMerchantPayoutRoutes(r *chi.Mux, s *handlers.AppService) {
 	r.Get("/merchant/payout/status", withActiveAuth(s.GetMerchantPayoutStatus, s))
 	r.Post("/merchant/payout/kyb-link", withActiveAuth(s.RequestMerchantKYBLink, s))
+	r.Post("/merchant/payout/tos-link", withActiveAuth(s.RequestMerchantTOSLink, s))
 	r.Post("/merchant/payout/plaid/link-token", withActiveAuth(s.CreateMerchantPlaidLinkToken, s))
 	r.Post("/merchant/payout/plaid/exchange", withActiveAuth(s.CompleteMerchantPlaidLink, s))
 	r.Post("/merchant/payout/provision", withActiveAuth(s.ProvisionMerchantLiquidationAddresses, s))
