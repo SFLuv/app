@@ -7,6 +7,7 @@ import { Hash } from "viem";
 import { allowance, approve, balanceOf, decimals, depositFor, hasRole, minterRole, redeemerRole, transfer, underlying, withdrawTo, zapIn } from "../abi";
 import type { ResolvedCommunityConfig } from "@/lib/community-config";
 import { BundlerService } from "@citizenwallet/sdk";
+import type { UserOpSigner } from "@/lib/signet/signer";
 
 export type WalletType = "smartwallet" | "eoa"
 
@@ -224,11 +225,19 @@ export class AppWallet {
       }
 
       return {
-        wallet: this.wallet as ToSimpleSmartAccountReturnType<"0.7">, signer: this.ethersSigner
+        wallet: this.wallet as ToSimpleSmartAccountReturnType<"0.7">,
+        // Signet when the user has opted in, the Privy key otherwise. The
+        // bundler touches a signer exactly twice, getAddress() and
+        // signMessage(userOpHash), which is the whole of what SignetSigner
+        // implements — hence the cast rather than a fuller Signer.
+        signer: (this.signetSigner as unknown as Signer) ?? this.ethersSigner,
       }
     }
 
     if (options?.allowEOA) {
+      // Deliberately NOT Signet. The EOA path exists for calls that must come
+      // from the Privy key itself; swapping the signer there would change who
+      // is acting, not merely which key signs for the same account.
       return { signer: this.ethersSigner }
     }
 
@@ -285,6 +294,31 @@ export class AppWallet {
   ): Promise<Hash> => {
     if (!this.ethersSigner) throw new Error("signer not ready")
     return (await this.ethersSigner.signTypedData(domain, types, value)) as Hash
+  }
+
+  /**
+   * The Signet threshold signer, when the user has enabled it for this wallet.
+   *
+   * Installed from outside (the settings card) rather than constructed here:
+   * building one needs an authenticated Signet session, which needs a user
+   * signature, and AppWallet has no business prompting for that.
+   *
+   * Null means every transaction signs with the Privy key exactly as before.
+   * That is the default, the fallback, and the kill switch — clearing this is
+   * the whole of turning the feature off, and it takes effect on the next
+   * transaction with nothing to undo on chain.
+   */
+  private signetSigner: UserOpSigner | null = null
+
+  /**
+   * Install or clear the Signet signer. Pass null to go back to the Privy key.
+   *
+   * The signer supplied may authenticate lazily: the bundler calls getAddress()
+   * while building the operation and signMessage() only when it signs, so a
+   * session need not exist until the user actually sends something.
+   */
+  setSignetSigner = (signer: UserOpSigner | null) => {
+    this.signetSigner = signer
   }
 
   /**

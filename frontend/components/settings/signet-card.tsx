@@ -31,9 +31,9 @@ export function SignetCard({ wallet }: { wallet: AppWallet | null | undefined })
   const {
     state, loading, binding, error, bind, visible,
     authenticating, enrolling, progress, completeEnrolment,
+    preferSignet, setPreferSignet,
   } = useSignetEnrolment(wallet)
   const [confirmOpen, setConfirmOpen] = useState(false)
-  const [preferSignet, setPreferSignet] = useState(false)
 
   if (loading && !state) return null
   if (!visible || !state) return null
@@ -159,7 +159,9 @@ export function SignetCard({ wallet }: { wallet: AppWallet | null | undefined })
                 Use Signet to sign
               </p>
               <p className="text-xs text-muted-foreground">
-                Turn this off at any time to go back to signing in this browser.
+                {preferSignet
+                  ? "You will be asked to sign in once the next time you send something."
+                  : "Turn this off at any time to go back to signing in this browser."}
               </p>
             </div>
             <Switch checked={preferSignet} onCheckedChange={setPreferSignet} />

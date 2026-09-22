@@ -27,6 +27,40 @@ import {
   ResolverAuthError,
   type SignetSession,
 } from "@/lib/signet/session"
+import { SignetSigner, type UserOpSigner } from "@/lib/signet/signer"
+
+/**
+ * Where the "sign with Signet" preference lives.
+ *
+ * Per (account, wallet): one login has several smart wallets and only one is
+ * bound at a time, so a preference that outlived a wallet switch would silently
+ * apply to the wrong one.
+ *
+ * localStorage is right for this and only this: it is a per-browser convenience
+ * with no security weight. Turning it on grants nothing — the Signet key is
+ * already a Safe owner from enrolment — and turning it off revokes nothing.
+ * Every access is wrapped because private windows and blocked site data make
+ * these throw rather than return empty.
+ */
+const preferenceKey = (eoa: Address, safe: Address) =>
+  `signet:prefer:${eoa.toLowerCase()}:${safe.toLowerCase()}`
+
+function readPreference(eoa: Address, safe: Address): boolean {
+  try {
+    return window.localStorage.getItem(preferenceKey(eoa, safe)) === "1"
+  } catch {
+    return false
+  }
+}
+
+function writePreference(eoa: Address, safe: Address, on: boolean) {
+  try {
+    if (on) window.localStorage.setItem(preferenceKey(eoa, safe), "1")
+    else window.localStorage.removeItem(preferenceKey(eoa, safe))
+  } catch {
+    // A browser that will not store it still honours the toggle for this tab.
+  }
+}
 
 /**
  * User-facing copy for a failed session or enrolment.
@@ -118,6 +152,8 @@ export function useSignetEnrolment(wallet: AppWallet | null | undefined) {
   const [authenticating, setAuthenticating] = useState(false)
   const [enrolling, setEnrolling] = useState(false)
   const [progress, setProgress] = useState<EnrolProgress[]>([])
+  /** Whether this wallet signs with Signet. Restored from localStorage below. */
+  const [preferSignet, setPreferSignetState] = useState(false)
 
   const client = useMemo(() => celoClient(), [])
 
@@ -337,6 +373,78 @@ export function useSignetEnrolment(wallet: AppWallet | null | undefined) {
     }
   }, [wallet, eoa, safe, state, ensureSession, client, refreshUntil])
 
+  // Restore the stored preference whenever the wallet changes. Runs on mount,
+  // so a reload keeps signing with whatever the user last chose.
+  useEffect(() => {
+    if (!eoa || !safe) {
+      setPreferSignetState(false)
+      return
+    }
+    setPreferSignetState(readPreference(eoa, safe))
+  }, [eoa, safe])
+
+  /**
+   * A signer that authenticates on first use rather than at install time.
+   *
+   * The bundler calls getAddress() while building the operation and
+   * signMessage() only when it signs. Answering getAddress() from the enrolment
+   * state means restoring the preference on page load costs no signature — the
+   * SIWE prompt arrives when the user actually sends something, which is a
+   * moment they are already expecting to confirm.
+   */
+  const buildLazySigner = useCallback(
+    (signetAddress: Address, account: Address): UserOpSigner => {
+      let signer: SignetSigner | null = null
+      return {
+        getAddress: async () => signetAddress,
+        signMessage: async (message) => {
+          if (!signer) {
+            const session = await ensureSession()
+            if (!session) throw new Error("Signet session unavailable")
+            signer = await SignetSigner.create(client, session, signetAddress, account, {
+              reauthenticate: async () => {
+                const fresh = await ensureSession()
+                if (!fresh) throw new Error("Signet re-authentication failed")
+                return fresh
+              },
+            })
+          }
+          return signer.signMessage(message)
+        },
+      }
+    },
+    [client, ensureSession],
+  )
+
+  /**
+   * Install or clear the signer on the wallet itself.
+   *
+   * Conditioned on `signetIsOwner`, not on the preference alone: a key the Safe
+   * does not recognise would sign operations the module rejects on chain, so an
+   * un-enrolled wallet must keep using the Privy key whatever is stored.
+   */
+  useEffect(() => {
+    if (!wallet) return
+    const signetAddress = state?.signetAddress
+    if (preferSignet && state?.signetIsOwner && signetAddress && safe) {
+      wallet.setSignetSigner(buildLazySigner(signetAddress, safe))
+    } else {
+      wallet.setSignetSigner(null)
+    }
+    return () => {
+      wallet.setSignetSigner(null)
+    }
+  }, [wallet, preferSignet, state?.signetIsOwner, state?.signetAddress, safe, buildLazySigner])
+
+  /** Persist and apply. Takes effect on the next transaction, not this one. */
+  const setPreferSignet = useCallback(
+    (on: boolean) => {
+      setPreferSignetState(on)
+      if (eoa && safe) writePreference(eoa, safe, on)
+    },
+    [eoa, safe],
+  )
+
   return {
     /** null while loading, or when this wallet cannot participate at all. */
     state,
@@ -354,6 +462,9 @@ export function useSignetEnrolment(wallet: AppWallet | null | undefined) {
     /** Live step log from `enrol`, for driving the card's checklist. */
     progress,
     completeEnrolment,
+    /** Whether this wallet signs with Signet. Persisted per (account, wallet). */
+    preferSignet,
+    setPreferSignet,
     /** Hide the whole section unless the gate says this user is in the trial. */
     visible: !!state?.allowed,
   }
