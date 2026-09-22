@@ -167,6 +167,15 @@ func (a *AppService) syncMerchantKYB(ctx context.Context, profile *structs.Merch
 		} else {
 			kyb = customer.Status
 		}
+		// Read ToS from the customer too. It was only ever read off the KYC
+		// link, so a customer attached by an admin carried a blank ToS status
+		// forever — and a blank one reads as "fine" everywhere while Bridge is
+		// refusing to attach their bank because of it.
+		if customer.HasAcceptedTOS {
+			tos = bridge.KYCApproved
+		} else {
+			tos = "pending"
+		}
 	}
 	if kyb == "" {
 		return profile, nil
@@ -485,6 +494,48 @@ func (a *AppService) RequestMerchantKYBLink(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, http.StatusOK, structs.KYBLinkResponse{KYBStatus: status, URL: url})
 }
 
+// bridgeBlockerForBank asks Bridge what, if anything, stops this business
+// attaching a bank right now, and phrases it for the merchant. "" means nothing
+// known is in the way.
+//
+// It exists because the failure it catches is invisible from our side: a
+// customer can be active and KYB-approved while Bridge still refuses every
+// external account because the terms of service were never accepted. That path
+// produced a bare 502 and a "connection could not be completed" toast, which
+// tells the merchant to retry the one thing that cannot work.
+func (a *AppService) bridgeBlockerForBank(ctx context.Context, customerID string) (string, string) {
+	if a.bridge == nil || !a.bridge.Enabled() || strings.TrimSpace(customerID) == "" {
+		return "", ""
+	}
+	customer, err := a.bridge.GetCustomer(ctx, customerID)
+	if err != nil || customer == nil {
+		return "", ""
+	}
+	if !customer.HasAcceptedTOS {
+		// Hand back the page where they can fix it, rather than describing a
+		// dead end. Without the link this is a message the merchant cannot act
+		// on: the terms live with Bridge and we have no other way to reach them.
+		tosURL, linkErr := a.bridge.TOSAcceptanceLink(ctx, customerID)
+		if linkErr != nil {
+			a.logger.Logf("merchant payout: could not get a ToS link for customer %s: %s", customerID, linkErr)
+		}
+		return "Before connecting a bank, this business has to accept our banking partner's terms of service.", tosURL
+	}
+	if !strings.EqualFold(customer.Status, "active") {
+		switch strings.ToLower(customer.Status) {
+		case "under_review":
+			return "Your business verification is still under review with our banking partner. You can connect a bank once it clears.", ""
+		case "rejected", "offboarded":
+			return "Our banking partner cannot approve this business. Please contact support.", ""
+		case "":
+			return "", ""
+		default:
+			return "Your business verification is not complete with our banking partner yet (" + customer.Status + ").", ""
+		}
+	}
+	return "", ""
+}
+
 // CreateMerchantPlaidLinkToken opens the door to Plaid Link. Requires a
 // verified business: Bridge will not attach a bank to a customer it has not
 // cleared, and asking a merchant to connect a bank that then bounces is worse
@@ -518,6 +569,18 @@ func (a *AppService) CreateMerchantPlaidLinkToken(w http.ResponseWriter, r *http
 	}
 	if profile.KYBStatus != bridge.KYCApproved {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "Business verification is still in progress."})
+		return
+	}
+
+	// Cheaper to say this now than after they have logged into their bank, and
+	// the ToS link rides along so the client can put the terms in front of them
+	// instead of reporting a dead end.
+	if blocker, tosURL := a.bridgeBlockerForBank(ctx, profile.BridgeCustomerID); blocker != "" {
+		body := map[string]string{"error": blocker}
+		if tosURL != "" {
+			body["tos_url"] = tosURL
+		}
+		writeJSON(w, http.StatusConflict, body)
 		return
 	}
 
@@ -562,14 +625,75 @@ func (a *AppService) CompleteMerchantPlaidLink(w http.ResponseWriter, r *http.Re
 
 	profile, err := a.db.GetMerchantPayoutProfile(ctx, *userDid)
 	if err != nil || profile == nil || profile.BridgeCustomerID == "" {
-		w.WriteHeader(http.StatusConflict)
+		if err != nil {
+			a.logger.Logf("merchant payout: profile load failed before plaid exchange for %s: %s", *userDid, err)
+		}
+		writeJSON(w, http.StatusConflict, map[string]string{
+			"error": "This account is not set up with our banking partner yet. Verify your business first.",
+		})
 		return
 	}
 
+	// Ownership is checked BEFORE the exchange, because the exchange is not
+	// reversible: once Bridge has the public token the bank is linked, and
+	// refusing afterwards tells the merchant it failed while it actually
+	// succeeded — so they try again and link the same account twice.
+	target := uint64(0)
+	if req.LocationID != nil {
+		owned, ownErr := a.db.LocationOwnedBy(ctx, *req.LocationID, *userDid)
+		if ownErr != nil {
+			a.logger.Logf("merchant payout: location ownership check failed for %s location %d: %s", *userDid, *req.LocationID, ownErr)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{
+				"error": "Could not confirm which location this bank is for. Please try again.",
+			})
+			return
+		}
+		if !owned {
+			writeJSON(w, http.StatusForbidden, map[string]string{
+				"error": "That location does not belong to this account.",
+			})
+			return
+		}
+		target = *req.LocationID
+	}
+
+	// How many banks we had going in, so a failed-looking exchange can be told
+	// apart from one that actually landed.
+	banksBefore := 0
+	if existing, listErr := a.db.ListMerchantBankAccounts(ctx, *userDid); listErr == nil {
+		banksBefore = len(existing)
+	}
+
 	if err := client.ExchangePlaidPublicToken(ctx, strings.TrimSpace(req.LinkToken), strings.TrimSpace(req.PublicToken)); err != nil {
-		a.logger.Logf("merchant payout: plaid exchange failed for %s: %s", *userDid, err)
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "The bank connection could not be completed. Please try again."})
-		return
+		// The full Bridge status and body are in this line — the merchant-facing
+		// message stays generic, but nobody should have to guess what Bridge
+		// said.
+		a.logger.Logf("merchant payout: plaid exchange failed for %s (link_token=%s): %s", *userDid, strings.TrimSpace(req.LinkToken), err)
+
+		// A rejected exchange is not proof that nothing happened. A retried or
+		// already-exchanged token is refused by Bridge while the bank is linked
+		// perfectly well, and reporting failure there is what sends a merchant
+		// round the loop again to link the same account twice. So ask Bridge
+		// what it actually holds before believing the error.
+		recovered := false
+		if syncErr := a.syncMerchantBankAccounts(ctx, profile); syncErr == nil {
+			if after, listErr := a.db.ListMerchantBankAccounts(ctx, *userDid); listErr == nil && len(after) > banksBefore {
+				recovered = true
+				a.logger.Logf("merchant payout: plaid exchange reported an error for %s but a new bank account is present; continuing", *userDid)
+			}
+		}
+		if !recovered {
+			message, tosURL := a.bridgeBlockerForBank(ctx, profile.BridgeCustomerID)
+			if message == "" {
+				message = "Your bank could not be linked. If you just tried this, wait a moment and reload before trying again — the connection may still be on its way."
+			}
+			body := map[string]string{"error": message}
+			if tosURL != "" {
+				body["tos_url"] = tosURL
+			}
+			writeJSON(w, http.StatusBadGateway, body)
+			return
+		}
 	}
 
 	// Bridge says "a few minutes"; in practice it is seconds. Poll briefly so
@@ -591,27 +715,25 @@ func (a *AppService) CompleteMerchantPlaidLink(w http.ResponseWriter, r *http.Re
 		}
 		select {
 		case <-ctx.Done():
-			w.WriteHeader(http.StatusGatewayTimeout)
+			// The exchange already succeeded, so this is a slow confirmation,
+			// not a failed connection. Saying "failed" here would send the
+			// merchant back through Plaid to link the same account again.
+			writeJSON(w, http.StatusOK, structs.PlaidExchangeResponse{
+				ProvisionLiquidationAddressesResponse: structs.ProvisionLiquidationAddressesResponse{
+					Provisioned: []structs.LocationLiquidationAddress{},
+					Skipped:     []uint64{},
+					Message:     "Bank submitted. It can take a minute to appear — this page will pick it up.",
+				},
+				BankConnected: false,
+			})
 			return
 		case <-time.After(2 * time.Second):
 		}
 	}
 
-	// Attach the location the merchant started from. The flow is launched from
-	// one shop's card, so that shop is the one connecting a bank — finishing
-	// with nothing attached sends them back through Plaid to fix what looks
-	// like a failure. Other locations are untouched and still have to be
-	// attached deliberately, which is the point of attaching per location.
-	target := uint64(0)
-	if req.LocationID != nil {
-		owned, err := a.db.LocationOwnedBy(ctx, *req.LocationID, *userDid)
-		if err != nil || !owned {
-			w.WriteHeader(http.StatusForbidden)
-			return
-		}
-		target = *req.LocationID
-	}
-
+	// Attach the location the merchant started from (validated above). Other
+	// locations are untouched and still have to be attached deliberately, which
+	// is the point of attaching per location.
 	resp := structs.PlaidExchangeResponse{BankConnected: bankConnected}
 	provisioned, err := a.provisionLiquidationAddresses(ctx, *userDid, "", target)
 	if err != nil {

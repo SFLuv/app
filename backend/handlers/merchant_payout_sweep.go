@@ -52,6 +52,13 @@ func (a *AppService) RunMerchantPayoutSweep(parent context.Context) {
 	ctx, cancel := context.WithTimeout(parent, 4*time.Minute)
 	defer cancel()
 
+	// Before anything status-driven, repair profiles that carry a KYC link from
+	// a different Bridge customer. Those cannot be reached by the pending-KYB
+	// pass below, because the stale link can pin a profile at 'approved' (never
+	// listed) or at 'rejected' (excluded outright) — and in the rejected case
+	// nothing would ever look at it again.
+	a.reconcileMismatchedKYCLinks(ctx)
+
 	pending, err := a.db.ListMerchantPayoutProfilesPendingKYB(ctx, 100)
 	if err != nil && a.logger != nil {
 		a.logger.Logf("merchant payout sweep: listing pending KYB failed: %s", err)
@@ -229,4 +236,76 @@ func drainAmountBaseUnits(amount string) (*big.Int, error) {
 		return nil, fmt.Errorf("bad amount %q", amount)
 	}
 	return n, nil
+}
+
+// reconcileMismatchedKYCLinks drops KYC links that belong to a different Bridge
+// customer than the profile's own, then re-reads the real status from the
+// attached customer.
+//
+// This exists because an admin attaching a customer by hand used to leave the
+// previous link in place. Every sync afterwards read that link and overwrote a
+// verified merchant's status with an unrelated business's — which quietly
+// un-approved them, and un-approving them is what made payout provisioning
+// refuse to attach a bank they had just connected.
+//
+// Cheap by construction: it only touches profiles holding both a customer and a
+// link, and only calls Bridge for those.
+func (a *AppService) reconcileMismatchedKYCLinks(ctx context.Context) {
+	if a.bridge == nil || !a.bridge.Enabled() {
+		return
+	}
+	profiles, err := a.db.ListAllMerchantPayoutProfiles(ctx)
+	if err != nil {
+		if a.logger != nil {
+			a.logger.Logf("merchant payout sweep: listing profiles for KYC-link reconciliation failed: %s", err)
+		}
+		return
+	}
+	for _, p := range profiles {
+		if ctx.Err() != nil {
+			return
+		}
+		if p == nil || strings.TrimSpace(p.BridgeKYCLinkID) == "" || strings.TrimSpace(p.BridgeCustomerID) == "" {
+			continue
+		}
+		link, err := a.bridge.GetKYCLink(ctx, p.BridgeKYCLinkID)
+		if err != nil {
+			if !bridge.IsNotFound(err) {
+				continue
+			}
+			// The link no longer exists on Bridge; keeping the id only risks
+			// this same confusion later.
+			link = nil
+		}
+		if link != nil && (link.CustomerID == "" || strings.EqualFold(link.CustomerID, p.BridgeCustomerID)) {
+			continue
+		}
+
+		if err := a.db.ClearMerchantKYCLink(ctx, p.OwnerID); err != nil {
+			if a.logger != nil {
+				a.logger.Logf("merchant payout sweep: could not clear the mismatched KYC link for %s: %s", p.OwnerID, err)
+			}
+			continue
+		}
+		if a.logger != nil {
+			other := "(missing on bridge)"
+			if link != nil {
+				other = link.CustomerID
+			}
+			a.logger.Logf(
+				"merchant payout sweep: cleared KYC link %s from owner %s — it belonged to customer %s, not the attached %s",
+				p.BridgeKYCLinkID, p.OwnerID, other, p.BridgeCustomerID,
+			)
+		}
+
+		// Now that the wrong link is gone, the attached customer is the only
+		// source of truth left, so read the status straight from it.
+		refreshed, err := a.db.GetMerchantPayoutProfile(ctx, p.OwnerID)
+		if err != nil || refreshed == nil {
+			continue
+		}
+		if _, err := a.syncMerchantKYB(ctx, refreshed); err != nil && a.logger != nil {
+			a.logger.Logf("merchant payout sweep: KYB re-sync after clearing the link failed for %s: %s", p.OwnerID, err)
+		}
+	}
 }

@@ -281,6 +281,12 @@ type Customer struct {
 	// RequirementsDue names what Bridge is still waiting on — "external_account"
 	// is the one that matters here, meaning KYB passed but no bank is linked.
 	RequirementsDue []string `json:"requirements_due"`
+	// HasAcceptedTOS gates attaching a bank. Bridge refuses to create an
+	// external account for a customer that has not accepted its terms, and a
+	// customer onboarded on Bridge by hand has never been through our own ToS
+	// step — so this is the one thing an attached customer can silently be
+	// missing while looking perfectly verified.
+	HasAcceptedTOS bool `json:"has_accepted_terms_of_service"`
 }
 
 func (c *Client) GetCustomer(ctx context.Context, id string) (*Customer, error) {
@@ -320,6 +326,20 @@ type ExternalAccount struct {
 	AccountOwnerName string `json:"account_owner_name"`
 	Active           bool   `json:"active"`
 	AccountType      string `json:"account_type"`
+}
+
+// TOSAcceptanceLink is a hosted page where an existing customer accepts Bridge's
+// terms. Accepting is a precondition for attaching a bank, and a customer
+// onboarded on the Bridge dashboard by hand has never been through it.
+func (c *Client) TOSAcceptanceLink(ctx context.Context, customerID string) (string, error) {
+	var out struct {
+		URL string `json:"url"`
+	}
+	path := "/v0/customers/" + url.PathEscape(customerID) + "/tos_acceptance_link"
+	if err := c.do(ctx, http.MethodGet, path, nil, &out); err != nil {
+		return "", err
+	}
+	return out.URL, nil
 }
 
 func (c *Client) ListExternalAccounts(ctx context.Context, customerID string) ([]ExternalAccount, error) {

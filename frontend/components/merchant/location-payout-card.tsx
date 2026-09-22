@@ -44,6 +44,15 @@ interface LocationPayoutCardProps {
 // them to type and nothing to get wrong. Unwrapping is signed by the
 // location's own wallet; tips, if the location has a tipping wallet, can be
 // unwrapped in the same go as a second transaction from that wallet.
+// Thrown when the connection is waiting on the merchant to sign Bridge's terms.
+// Not a failure — like a Plaid exit, it means the flow paused on the person.
+class PendingTermsError extends Error {
+  constructor() {
+    super("Waiting on terms of service acceptance")
+    this.name = "PendingTermsError"
+  }
+}
+
 export function LocationPayoutCard({ location, onUnwrapped }: LocationPayoutCardProps) {
   const { user, wallets, authFetch } = useApp()
   const chainConfig = useChainConfig()
@@ -52,6 +61,10 @@ export function LocationPayoutCard({ location, onUnwrapped }: LocationPayoutCard
   const [status, setStatus] = useState<MerchantPayoutStatusResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState<"" | "kyb" | "plaid" | "provision" | "bank" | "unwrap">("")
+  // Set when Bridge says the terms are outstanding, so the card can offer them
+  // even if the browser refused to open the tab for us.
+  const [tosUrl, setTosUrl] = useState<string | null>(null)
+  const [tosOpen, setTosOpen] = useState(false)
 
   const [amountInput, setAmountInput] = useState("")
   const [includeTips, setIncludeTips] = useState(false)
@@ -156,12 +169,32 @@ export function LocationPayoutCard({ location, onUnwrapped }: LocationPayoutCard
     }
   }
 
+  // Ask for a link token, surfacing the terms of service when that is what is
+  // standing in the way.
+  //
+  // Bridge refuses to attach a bank to a business that has not accepted its
+  // terms, and it refuses at the very last step — after the merchant has already
+  // logged into their bank through Plaid. So the terms are put in front of them
+  // first, and the connection continues by itself once they are signed.
+  const requestLinkToken = async (): Promise<string> => {
+    const res = await authFetch("/merchant/payout/plaid/link-token", { method: "POST" })
+    const body = (await res.json().catch(() => ({}))) as { link_token?: string; error?: string; tos_url?: string }
+    if (res.ok && body.link_token) return body.link_token
+    if (!body.tos_url) throw new Error(body.error || "Could not start the bank connection")
+
+    // Ask in our own words, in a modal, with the terms one click away. Opening
+    // Bridge's page unannounced reads as the app throwing the merchant at a
+    // third party mid-flow, and a popup blocker turns that into nothing at all.
+    setTosUrl(body.tos_url)
+    setTosOpen(true)
+    throw new PendingTermsError()
+  }
+
   const connectBank = async () => {
     setBusy("plaid")
     try {
-      const tokenRes = await authFetch("/merchant/payout/plaid/link-token", { method: "POST" })
-      const tokenBody = (await tokenRes.json().catch(() => ({}))) as { link_token?: string; error?: string }
-      if (!tokenRes.ok || !tokenBody.link_token) throw new Error(tokenBody.error || "Could not start the bank connection")
+      const linkToken = await requestLinkToken()
+      const tokenBody = { link_token: linkToken }
 
       const { publicToken } = await openPlaidLink(tokenBody.link_token)
 
@@ -204,6 +237,8 @@ export function LocationPayoutCard({ location, onUnwrapped }: LocationPayoutCard
       }
     } catch (error) {
       if (error instanceof PlaidExitError) return
+      // Waiting on the terms is not a failure — the card shows the button.
+      if (error instanceof PendingTermsError) return
       toast({ title: "Bank connection failed", description: error instanceof Error ? error.message : undefined, variant: "destructive" })
     } finally {
       setBusy("")
@@ -437,6 +472,11 @@ export function LocationPayoutCard({ location, onUnwrapped }: LocationPayoutCard
             {busy === "plaid" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Landmark className="mr-2 h-4 w-4" />}
             Connect bank account
           </Button>
+          {tosUrl && (
+            <button type="button" className="text-xs underline text-muted-foreground" onClick={() => setTosOpen(true)}>
+              Terms of service still need accepting
+            </button>
+          )}
         </div>
       </div>
     )
@@ -572,6 +612,51 @@ export function LocationPayoutCard({ location, onUnwrapped }: LocationPayoutCard
           </ul>
         </div>
       )}
+
+      <Dialog open={tosOpen} onOpenChange={setTosOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Accept the banking terms</DialogTitle>
+            <DialogDescription>
+              Payouts run through Bridge, our banking partner. Before a bank account can be linked to{" "}
+              {location.name || "this location"}, your business has to accept their terms of service. It only has to be done once.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="text-sm">
+            {tosUrl && (
+              <a
+                href={tosUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-2 underline underline-offset-4"
+              >
+                <ExternalLink className="h-4 w-4" />
+                Read and accept the terms of service
+              </a>
+            )}
+            <p className="mt-3 text-xs text-muted-foreground">
+              Opens in a new tab. Come back here once you&apos;ve accepted and continue — we&apos;ll check with Bridge before
+              sending you to your bank.
+            </p>
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setTosOpen(false)} disabled={busy !== ""}>
+              Not now
+            </Button>
+            <Button
+              type="button"
+              onClick={() => {
+                setTosOpen(false)
+                void connectBank()
+              }}
+              disabled={busy !== ""}
+            >
+              {busy === "plaid" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              I&apos;ve accepted — continue
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
         <DialogContent>
