@@ -129,6 +129,23 @@ func (a *AppService) syncMerchantKYB(ctx context.Context, profile *structs.Merch
 		if err != nil && !bridge.IsNotFound(err) {
 			return profile, err
 		}
+		// A KYC link belongs to the customer that created it. When an admin
+		// attaches a different customer by hand, the link left on the profile is
+		// about a DIFFERENT business, and trusting it overwrites the attached
+		// customer's real status with a stranger's — which is how a verified
+		// merchant kept falling back to "verification in progress" and lost
+		// their payout provisioning every time the sweep ran.
+		//
+		// So the link is only believed when it is a link for this customer.
+		// Otherwise fall through to reading the customer itself, below.
+		if link != nil && profile.BridgeCustomerID != "" && link.CustomerID != "" &&
+			!strings.EqualFold(link.CustomerID, profile.BridgeCustomerID) {
+			a.logger.Logf(
+				"merchant payout: ignoring KYC link %s for owner %s — it belongs to customer %s, not the attached customer %s",
+				profile.BridgeKYCLinkID, profile.OwnerID, link.CustomerID, profile.BridgeCustomerID,
+			)
+			link = nil
+		}
 		if link != nil {
 			kyb, tos = link.KYCStatus, link.TOSStatus
 			if profile.BridgeCustomerID == "" && link.CustomerID != "" {
@@ -182,7 +199,22 @@ func (a *AppService) syncMerchantBankAccounts(ctx context.Context, profile *stru
 			Active:                  acct.Active,
 		})
 	}
-	return a.db.SyncMerchantBankAccounts(ctx, profile.OwnerID, mirror)
+	moved, err := a.db.SyncMerchantBankAccounts(ctx, profile.OwnerID, mirror)
+	if err != nil {
+		return err
+	}
+	// Loud on purpose. A bank account changing owners means two of our accounts
+	// were pointed at one Bridge customer, which is a data problem a person has
+	// to untangle — and until this sync learned to move the row, it was the
+	// reason a merchant's bank could never appear no matter how many times they
+	// reconnected.
+	for _, m := range moved {
+		a.logger.Logf(
+			"merchant payout: bank account %s moved from owner %s to %s — two accounts were attached to one Bridge customer; check which is correct",
+			m.BridgeExternalAccountID, m.PreviousOwnerID, m.NewOwnerID,
+		)
+	}
+	return nil
 }
 
 // provisionLiquidationAddresses points ONE location at a bank, or refreshes the
@@ -856,6 +888,19 @@ func (a *AppService) AdminAttachBridgeCustomer(w http.ResponseWriter, r *http.Re
 	if strings.EqualFold(status, "active") {
 		status = bridge.KYCApproved
 	}
+	// One Bridge customer, one owner. Two accounts sharing a customer id is how
+	// a merchant's bank ends up mirrored under the wrong owner and becomes
+	// invisible to them, so the collision is refused here rather than cleaned up
+	// afterwards. Re-attaching the same owner is fine — that is a resync.
+	if existing, err := a.db.GetMerchantPayoutProfileByCustomer(ctx, customer.ID); err == nil && existing != nil &&
+		existing.OwnerID != strings.TrimSpace(req.OwnerID) {
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error":          "That Bridge customer is already attached to a different account. Detach it there first, or attach the customer that belongs to this merchant.",
+			"attached_owner": existing.OwnerID,
+		})
+		return
+	}
+
 	if err := a.db.AttachBridgeCustomer(ctx, strings.TrimSpace(req.OwnerID), customer.ID, status); err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		return
