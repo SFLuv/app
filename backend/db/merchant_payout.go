@@ -191,6 +191,15 @@ func (a *AppDB) AttachBridgeCustomer(ctx context.Context, ownerID, customerID, k
 		ON CONFLICT (owner_id) DO UPDATE SET
 			bridge_customer_id = EXCLUDED.bridge_customer_id,
 			kyb_status         = EXCLUDED.kyb_status,
+			-- Pointing the profile at a different customer makes the KYC link
+			-- left here a link about somebody else's business. Keeping it means
+			-- the next sync reads that stranger's status and overwrites the one
+			-- just attached, so it is dropped along with the URL that opens it.
+			-- Re-attaching the SAME customer changes nothing and keeps the link.
+			bridge_kyc_link_id = CASE WHEN merchant_payout_profiles.bridge_customer_id = EXCLUDED.bridge_customer_id
+				THEN merchant_payout_profiles.bridge_kyc_link_id ELSE '' END,
+			kyb_link_url       = CASE WHEN merchant_payout_profiles.bridge_customer_id = EXCLUDED.bridge_customer_id
+				THEN merchant_payout_profiles.kyb_link_url ELSE '' END,
 			kyb_approved_at    = CASE WHEN EXCLUDED.kyb_status = 'approved' THEN COALESCE(merchant_payout_profiles.kyb_approved_at, NOW()) ELSE merchant_payout_profiles.kyb_approved_at END,
 			last_synced_at     = NOW(),
 			updated_at         = NOW();
@@ -270,33 +279,74 @@ func (a *AppDB) ListAllMerchantPayoutProfiles(ctx context.Context) ([]*structs.M
 // SyncMerchantBankAccounts replaces the owner's mirror with what Bridge
 // currently holds. Bridge is the source of truth for whether an account is
 // active; we never delete, we mark.
-func (a *AppDB) SyncMerchantBankAccounts(ctx context.Context, ownerID string, accounts []structs.MerchantBankAccount) error {
+// ReassignedBankAccount is a bank row that belonged to a different owner before
+// this sync. It means two of our accounts were pointed at one Bridge customer —
+// normally a manual attach that named the wrong owner — and it is worth a human
+// look, so the sync reports them rather than fixing them silently.
+type ReassignedBankAccount struct {
+	BridgeExternalAccountID string
+	PreviousOwnerID         string
+	NewOwnerID              string
+}
+
+func (a *AppDB) SyncMerchantBankAccounts(ctx context.Context, ownerID string, accounts []structs.MerchantBankAccount) ([]ReassignedBankAccount, error) {
 	tx, err := a.db.Begin(ctx)
 	if err != nil {
-		return fmt.Errorf("error starting bank account sync: %w", err)
+		return nil, fmt.Errorf("error starting bank account sync: %w", err)
 	}
 	defer tx.Rollback(ctx)
 
+	moved := []ReassignedBankAccount{}
 	seen := make([]string, 0, len(accounts))
 	for _, acct := range accounts {
 		seen = append(seen, acct.BridgeExternalAccountID)
-		if _, err := tx.Exec(ctx, `
+		// owner_id is in the DO UPDATE SET, and that is the fix for a bank that
+		// silently stopped existing.
+		//
+		// bridge_external_account_id is globally unique while every read filters
+		// by owner_id, so a row left on the wrong owner is invisible to the
+		// merchant who actually owns it: their Plaid connection succeeds, Bridge
+		// holds the account, this upsert quietly updates somebody else's row,
+		// and their card offers "connect a bank" forever. Reconnecting cannot
+		// help, because the conflict resolves to the same stranded row.
+		//
+		// Bridge is the source of truth and an external account belongs to
+		// exactly one customer, so the owner we just listed it for is the right
+		// one. The prior owner is captured only to report the collision.
+		var previousOwner *string
+		err := tx.QueryRow(ctx, `
+			WITH prior AS (
+				SELECT owner_id FROM merchant_bank_accounts WHERE bridge_external_account_id = $2
+			)
 			INSERT INTO merchant_bank_accounts (owner_id, bridge_external_account_id, bank_name, last_4, account_owner_name, currency, active)
 			VALUES ($1, $2, $3, $4, $5, $6, $7)
 			ON CONFLICT (bridge_external_account_id) DO UPDATE SET
+				owner_id = EXCLUDED.owner_id,
 				bank_name = EXCLUDED.bank_name, last_4 = EXCLUDED.last_4, account_owner_name = EXCLUDED.account_owner_name,
-				currency = EXCLUDED.currency, active = EXCLUDED.active, updated_at = NOW();
-		`, ownerID, acct.BridgeExternalAccountID, acct.BankName, acct.Last4, acct.AccountOwnerName, acct.Currency, acct.Active); err != nil {
-			return fmt.Errorf("error upserting bank account: %w", err)
+				currency = EXCLUDED.currency, active = EXCLUDED.active, updated_at = NOW()
+			RETURNING (SELECT owner_id FROM prior);
+		`, ownerID, acct.BridgeExternalAccountID, acct.BankName, acct.Last4, acct.AccountOwnerName, acct.Currency, acct.Active).Scan(&previousOwner)
+		if err != nil {
+			return nil, fmt.Errorf("error upserting bank account: %w", err)
+		}
+		if previousOwner != nil && *previousOwner != ownerID {
+			moved = append(moved, ReassignedBankAccount{
+				BridgeExternalAccountID: acct.BridgeExternalAccountID,
+				PreviousOwnerID:         *previousOwner,
+				NewOwnerID:              ownerID,
+			})
 		}
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE merchant_bank_accounts SET active = FALSE, updated_at = NOW()
 		WHERE owner_id = $1 AND active = TRUE AND NOT (bridge_external_account_id = ANY($2));
 	`, ownerID, seen); err != nil {
-		return fmt.Errorf("error retiring removed bank accounts: %w", err)
+		return nil, fmt.Errorf("error retiring removed bank accounts: %w", err)
 	}
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return moved, nil
 }
 
 func (a *AppDB) ListMerchantBankAccounts(ctx context.Context, ownerID string) ([]structs.MerchantBankAccount, error) {
@@ -635,4 +685,23 @@ func (a *AppDB) UnwrapExistsForDrain(ctx context.Context, drainID string) (bool,
 		return false, fmt.Errorf("error checking drain claim: %w", err)
 	}
 	return exists, nil
+}
+
+// ClearMerchantKYCLink drops a KYC link that belongs to a different Bridge
+// customer than the one attached to the profile.
+//
+// A profile can hold both when an admin attaches a customer by hand over an
+// earlier self-serve attempt. The link is then about somebody else's business,
+// and every status sync that reads it overwrites the attached customer's real
+// standing with a stranger's.
+func (a *AppDB) ClearMerchantKYCLink(ctx context.Context, ownerID string) error {
+	_, err := a.db.Exec(ctx, `
+		UPDATE merchant_payout_profiles
+		SET bridge_kyc_link_id = '', kyb_link_url = '', updated_at = NOW()
+		WHERE owner_id = $1;
+	`, ownerID)
+	if err != nil {
+		return fmt.Errorf("error clearing bridge kyc link for %s: %w", ownerID, err)
+	}
+	return nil
 }
