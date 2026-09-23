@@ -52,12 +52,15 @@ func (a *AppService) RunMerchantPayoutSweep(parent context.Context) {
 	ctx, cancel := context.WithTimeout(parent, 4*time.Minute)
 	defer cancel()
 
-	// Before anything status-driven, repair profiles that carry a KYC link from
-	// a different Bridge customer. Those cannot be reached by the pending-KYB
-	// pass below, because the stale link can pin a profile at 'approved' (never
-	// listed) or at 'rejected' (excluded outright) — and in the rejected case
-	// nothing would ever look at it again.
-	a.reconcileMismatchedKYCLinks(ctx)
+	// Before anything status-driven, repair profiles left describing more than
+	// one Bridge customer: a stale terms status, a KYC link from the previous
+	// customer, payout destinations the current one never issued.
+	//
+	// It runs first, and separately from the pending-KYB pass below, because
+	// that pass cannot reach these. Inherited state pins a profile at 'approved'
+	// (never listed as pending) or at 'rejected' (excluded outright), and in the
+	// rejected case nothing would ever look at it again.
+	a.reconcileBridgeProfiles(ctx)
 
 	pending, err := a.db.ListMerchantPayoutProfilesPendingKYB(ctx, 100)
 	if err != nil && a.logger != nil {
@@ -236,6 +239,149 @@ func drainAmountBaseUnits(amount string) (*big.Int, error) {
 		return nil, fmt.Errorf("bad amount %q", amount)
 	}
 	return n, nil
+}
+
+// reconcileBridgeProfiles repairs profiles that describe more than one Bridge
+// customer at once.
+//
+// Everything on a payout profile — the KYC link, the terms status, the payout
+// addresses — describes ONE Bridge customer. Replacing the customer id in the
+// admin panel used to replace only the id, so the rest carried over and quietly
+// described the previous business. Attaching now replaces them together; this
+// heals the profiles that were attached before it did, on the first sweep after
+// boot and every sweep after that.
+//
+// Bounded by merchant count, not by traffic: one customer read per attached
+// business, and address checks only where local state already looks wrong.
+func (a *AppService) reconcileBridgeProfiles(ctx context.Context) {
+	if a.bridge == nil || !a.bridge.Enabled() {
+		return
+	}
+	profiles, err := a.db.ListAllMerchantPayoutProfiles(ctx)
+	if err != nil {
+		if a.logger != nil {
+			a.logger.Logf("merchant payout sweep: listing profiles for reconciliation failed: %s", err)
+		}
+		return
+	}
+	for _, p := range profiles {
+		if ctx.Err() != nil {
+			return
+		}
+		if p == nil || strings.TrimSpace(p.BridgeCustomerID) == "" {
+			continue
+		}
+		a.reconcileProfileTOS(ctx, p)
+		a.reconcileProfileAddresses(ctx, p)
+	}
+	a.reconcileMismatchedKYCLinks(ctx)
+}
+
+// reconcileProfileTOS corrects a terms status inherited from a customer this
+// business is no longer attached to.
+//
+// The inherited value is only dangerous in one direction. A stale 'approved'
+// makes the merchant's card hide the terms step and makes the status endpoint
+// skip its own refresh — which is gated on the status not already being
+// approved — so nothing else in the system would ever notice.
+func (a *AppService) reconcileProfileTOS(ctx context.Context, p *structs.MerchantPayoutProfile) {
+	customer, err := a.bridge.GetCustomer(ctx, p.BridgeCustomerID)
+	if err != nil || customer == nil {
+		return
+	}
+	tos := "pending"
+	if customer.HasAcceptedTOS {
+		tos = bridge.KYCApproved
+	}
+	if strings.EqualFold(tos, p.TOSStatus) {
+		return
+	}
+	if err := a.db.SetMerchantKYBStatus(ctx, p.OwnerID, p.KYBStatus, tos); err != nil {
+		if a.logger != nil {
+			a.logger.Logf("merchant payout sweep: could not correct the terms status for %s: %s", p.OwnerID, err)
+		}
+		return
+	}
+	if a.logger != nil && strings.EqualFold(p.TOSStatus, bridge.KYCApproved) {
+		a.logger.Logf(
+			"merchant payout sweep: %s showed terms accepted but customer %s has not accepted them — corrected. "+
+				"Their card will now offer the terms before a bank can be connected.",
+			p.OwnerID, p.BridgeCustomerID,
+		)
+	}
+}
+
+// reconcileProfileAddresses removes payout destinations the current Bridge
+// customer did not issue.
+//
+// The local signal comes first: a destination whose bank is no longer one of
+// this business's active accounts is the shape a replaced customer leaves
+// behind. Only then is Bridge asked, so a settled estate costs nothing and a
+// destination is never removed on a guess.
+func (a *AppService) reconcileProfileAddresses(ctx context.Context, p *structs.MerchantPayoutProfile) {
+	locationIDs, err := a.db.ListApprovedLocationIDsForOwner(ctx, p.OwnerID)
+	if err != nil || len(locationIDs) == 0 {
+		return
+	}
+	banks, err := a.db.ListMerchantBankAccounts(ctx, p.OwnerID)
+	if err != nil {
+		return
+	}
+	activeBanks := make(map[string]bool, len(banks))
+	for _, b := range banks {
+		activeBanks[b.BridgeExternalAccountID] = true
+	}
+
+	suspect := map[uint64]*structs.LocationLiquidationAddress{}
+	for _, locationID := range locationIDs {
+		current, err := a.db.GetLocationLiquidationAddress(ctx, locationID)
+		if err != nil || current == nil {
+			continue
+		}
+		if current.BridgeExternalAccountID != "" && activeBanks[current.BridgeExternalAccountID] {
+			continue
+		}
+		suspect[locationID] = current
+	}
+	if len(suspect) == 0 {
+		return
+	}
+
+	issued, err := a.bridge.ListLiquidationAddresses(ctx, p.BridgeCustomerID)
+	if err != nil {
+		if a.logger != nil {
+			a.logger.Logf(
+				"merchant payout sweep: %d payout destination(s) for %s look stale but Bridge could not be read (%s); left untouched",
+				len(suspect), p.OwnerID, err,
+			)
+		}
+		return
+	}
+	valid := make(map[string]bool, len(issued))
+	for _, la := range issued {
+		valid[la.ID] = true
+	}
+
+	for locationID, current := range suspect {
+		// Bridge still issues it, so the local signal was only a retired bank
+		// mirror. Leave the money alone.
+		if current.BridgeLiquidationAddressID != "" && valid[current.BridgeLiquidationAddressID] {
+			continue
+		}
+		if err := a.db.DeleteLocationLiquidationAddress(ctx, locationID); err != nil {
+			if a.logger != nil {
+				a.logger.Logf("merchant payout sweep: could not clear the stale payout address on location %d: %s", locationID, err)
+			}
+			continue
+		}
+		if a.logger != nil {
+			a.logger.Logf(
+				"merchant payout sweep: cleared payout address %s from location %d — customer %s did not issue it. "+
+					"The location needs a bank attached again before it can unwrap.",
+				current.Address, locationID, p.BridgeCustomerID,
+			)
+		}
+	}
 }
 
 // reconcileMismatchedKYCLinks drops KYC links that belong to a different Bridge
