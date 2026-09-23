@@ -149,7 +149,8 @@ func (a *AppService) syncMerchantKYB(ctx context.Context, profile *structs.Merch
 		if link != nil {
 			kyb, tos = link.KYCStatus, link.TOSStatus
 			if profile.BridgeCustomerID == "" && link.CustomerID != "" {
-				if err := a.db.AttachBridgeCustomer(ctx, profile.OwnerID, link.CustomerID, kyb); err != nil {
+				// Same link, so its ToS status describes this customer.
+				if err := a.db.AttachBridgeCustomer(ctx, profile.OwnerID, link.CustomerID, kyb, tos); err != nil {
 					return profile, err
 				}
 			}
@@ -1042,9 +1043,23 @@ func (a *AppService) AdminAttachBridgeCustomer(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	if err := a.db.AttachBridgeCustomer(ctx, strings.TrimSpace(req.OwnerID), customer.ID, status); err != nil {
+	tosStatus := "pending"
+	if customer.HasAcceptedTOS {
+		tosStatus = bridge.KYCApproved
+	}
+	previousCustomerID := ""
+	if existing, err := a.db.GetMerchantPayoutProfile(ctx, strings.TrimSpace(req.OwnerID)); err == nil && existing != nil {
+		previousCustomerID = existing.BridgeCustomerID
+	}
+	if err := a.db.AttachBridgeCustomer(ctx, strings.TrimSpace(req.OwnerID), customer.ID, status, tosStatus); err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		return
+	}
+	// Replacing a customer orphans that customer's payout addresses. They are
+	// where merchant money lands, so they cannot be left pointing at a business
+	// we are no longer attached to.
+	if previousCustomerID != "" && !strings.EqualFold(previousCustomerID, customer.ID) {
+		a.dropForeignLiquidationAddresses(ctx, strings.TrimSpace(req.OwnerID), customer.ID, previousCustomerID)
 	}
 	profile, _ := a.db.GetMerchantPayoutProfile(ctx, strings.TrimSpace(req.OwnerID))
 	if profile != nil {
@@ -1155,4 +1170,60 @@ func (a *AppService) RequestMerchantTOSLink(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"tos_status": tos, "url": tosURL})
+}
+
+// dropForeignLiquidationAddresses removes payout destinations that the business's
+// current Bridge customer did not issue.
+//
+// Replacing a customer id in the admin panel used to leave every location still
+// pointing at addresses minted for the OLD customer. Nothing cleaned them up,
+// and two things then went wrong quietly: unwraps kept being sent to an address
+// belonging to a business we no longer represent, and the sweep that follows the
+// money asked the NEW customer about an address it has never heard of, so those
+// unwraps never reconciled.
+//
+// Only addresses Bridge does not list for the new customer are removed, so an
+// address that genuinely carries over is kept. Each location that loses one goes
+// back to "connect a bank", which is the point: a payout destination is the
+// merchant's decision, and this one is no longer theirs.
+func (a *AppService) dropForeignLiquidationAddresses(ctx context.Context, ownerID, newCustomerID, previousCustomerID string) {
+	issued, err := a.bridge.ListLiquidationAddresses(ctx, newCustomerID)
+	if err != nil {
+		// Refuse to guess. Removing destinations because Bridge was briefly
+		// unreachable would be worse than leaving them for the next attach.
+		a.logger.Logf(
+			"merchant payout: customer for %s changed %s -> %s but the new customer's addresses could not be listed (%s); "+
+				"payout destinations were LEFT AS THEY WERE and may still belong to the old customer",
+			ownerID, previousCustomerID, newCustomerID, err,
+		)
+		return
+	}
+	valid := make(map[string]bool, len(issued))
+	for _, la := range issued {
+		valid[la.ID] = true
+	}
+
+	locationIDs, err := a.db.ListApprovedLocationIDsForOwner(ctx, ownerID)
+	if err != nil {
+		a.logger.Logf("merchant payout: could not list locations for %s while clearing old payout addresses: %s", ownerID, err)
+		return
+	}
+	for _, locationID := range locationIDs {
+		current, err := a.db.GetLocationLiquidationAddress(ctx, locationID)
+		if err != nil || current == nil {
+			continue
+		}
+		if current.BridgeLiquidationAddressID != "" && valid[current.BridgeLiquidationAddressID] {
+			continue
+		}
+		if err := a.db.DeleteLocationLiquidationAddress(ctx, locationID); err != nil {
+			a.logger.Logf("merchant payout: could not clear the stale payout address on location %d: %s", locationID, err)
+			continue
+		}
+		a.logger.Logf(
+			"merchant payout: cleared payout address %s from location %d — it was issued by customer %s, replaced by %s. "+
+				"The location must have a bank attached again before it can unwrap.",
+			current.Address, locationID, previousCustomerID, newCustomerID,
+		)
+	}
 }
