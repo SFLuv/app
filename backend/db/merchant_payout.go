@@ -184,13 +184,25 @@ func (a *AppDB) StartMerchantKYB(ctx context.Context, ownerID, customerID, kycLi
 // AttachBridgeCustomer is for businesses that already exist on Bridge (the
 // first merchants were onboarded by hand). It records the customer without a
 // KYC link and with whatever status Bridge reports.
-func (a *AppDB) AttachBridgeCustomer(ctx context.Context, ownerID, customerID, kybStatus string) error {
+// AttachBridgeCustomer points a profile at a Bridge customer.
+//
+// tosStatus is passed in because terms belong to the CUSTOMER, not to us: every
+// field here describes one Bridge customer, so pointing the profile at a
+// different one has to replace them all together. Carrying any of them over is
+// how a profile ends up describing two businesses at once — an 'approved' terms
+// status inherited from the previous customer hides the one thing that actually
+// blocks attaching a bank, and hides it from the merchant's own card.
+func (a *AppDB) AttachBridgeCustomer(ctx context.Context, ownerID, customerID, kybStatus, tosStatus string) error {
+	if strings.TrimSpace(tosStatus) == "" {
+		tosStatus = "pending"
+	}
 	_, err := a.db.Exec(ctx, `
-		INSERT INTO merchant_payout_profiles (owner_id, bridge_customer_id, kyb_status, last_synced_at)
-		VALUES ($1, $2, $3, NOW())
+		INSERT INTO merchant_payout_profiles (owner_id, bridge_customer_id, kyb_status, tos_status, last_synced_at)
+		VALUES ($1, $2, $3, $4, NOW())
 		ON CONFLICT (owner_id) DO UPDATE SET
 			bridge_customer_id = EXCLUDED.bridge_customer_id,
 			kyb_status         = EXCLUDED.kyb_status,
+			tos_status         = EXCLUDED.tos_status,
 			-- Pointing the profile at a different customer makes the KYC link
 			-- left here a link about somebody else's business. Keeping it means
 			-- the next sync reads that stranger's status and overwrites the one
@@ -200,10 +212,18 @@ func (a *AppDB) AttachBridgeCustomer(ctx context.Context, ownerID, customerID, k
 				THEN merchant_payout_profiles.bridge_kyc_link_id ELSE '' END,
 			kyb_link_url       = CASE WHEN merchant_payout_profiles.bridge_customer_id = EXCLUDED.bridge_customer_id
 				THEN merchant_payout_profiles.kyb_link_url ELSE '' END,
-			kyb_approved_at    = CASE WHEN EXCLUDED.kyb_status = 'approved' THEN COALESCE(merchant_payout_profiles.kyb_approved_at, NOW()) ELSE merchant_payout_profiles.kyb_approved_at END,
+			-- Approval belongs to the customer that earned it. Keeping the old
+			-- date on a replacement would date this business's verification to
+			-- somebody else's.
+			kyb_approved_at    = CASE
+				WHEN merchant_payout_profiles.bridge_customer_id <> EXCLUDED.bridge_customer_id
+					THEN CASE WHEN EXCLUDED.kyb_status = 'approved' THEN NOW() ELSE NULL END
+				WHEN EXCLUDED.kyb_status = 'approved'
+					THEN COALESCE(merchant_payout_profiles.kyb_approved_at, NOW())
+				ELSE merchant_payout_profiles.kyb_approved_at END,
 			last_synced_at     = NOW(),
 			updated_at         = NOW();
-	`, ownerID, customerID, kybStatus)
+	`, ownerID, customerID, kybStatus, tosStatus)
 	if err != nil {
 		return fmt.Errorf("error attaching bridge customer: %w", err)
 	}
@@ -702,6 +722,22 @@ func (a *AppDB) ClearMerchantKYCLink(ctx context.Context, ownerID string) error 
 	`, ownerID)
 	if err != nil {
 		return fmt.Errorf("error clearing bridge kyc link for %s: %w", ownerID, err)
+	}
+	return nil
+}
+
+// DeleteLocationLiquidationAddress removes a location's payout destination.
+//
+// Used when the destination was issued by a Bridge customer the business is no
+// longer attached to. The row cannot simply be left: unwraps would keep being
+// sent to an address belonging to a different customer, and the drain lookup
+// that follows the money would query the new customer for an address it has
+// never heard of. Removing it puts the location back to "connect a bank", which
+// is the only honest state for a destination nobody has chosen.
+func (a *AppDB) DeleteLocationLiquidationAddress(ctx context.Context, locationID uint64) error {
+	_, err := a.db.Exec(ctx, `DELETE FROM location_liquidation_addresses WHERE location_id = $1;`, locationID)
+	if err != nil {
+		return fmt.Errorf("error removing liquidation address for location %d: %w", locationID, err)
 	}
 	return nil
 }
