@@ -631,6 +631,13 @@ func AddMerchantPayoutRoutes(r *chi.Mux, s *handlers.AppService) {
 	r.Post("/merchant/payout/provision", withActiveAuth(s.ProvisionMerchantLiquidationAddresses, s))
 	r.Put("/locations/{id}/payout-bank", withActiveAuth(s.SetLocationPayoutBank, s))
 
+	// A location's own transaction history, and the refunds taken against it.
+	// Guarded by location ownership inside each handler rather than by role: a
+	// merchant may read one shop's money, not every shop's.
+	r.Get("/locations/{id}/transactions", withActiveAuth(s.GetLocationTransactions, s))
+	r.Get("/locations/{id}/refundability", withActiveAuth(s.GetRefundability, s))
+	r.Post("/locations/{id}/refunds", withActiveAuth(s.RecordRefund, s))
+
 	r.Get("/admin/merchant-payouts", withAdmin(s.AdminListMerchantPayouts, s))
 	r.Post("/admin/merchant-payouts/attach-customer", withAdmin(s.AdminAttachBridgeCustomer, s))
 	r.Put("/admin/locations/{id}/liquidation-address", withAdmin(s.AdminSetLocationLiquidationAddress, s))

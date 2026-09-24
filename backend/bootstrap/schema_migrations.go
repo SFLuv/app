@@ -2363,6 +2363,20 @@ var schemaMigrations = []SchemaMigration{
 			return nil
 		},
 	},
+	{
+		Version:     "1.58",
+		Description: "merchant refunds: tie a refund transfer to the payment it undoes",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			// A refund is an ordinary transfer on chain, so nothing on chain says
+			// what it was for. This is the only record that a given transfer
+			// undid a given payment, which is what makes a partly refunded
+			// payment refundable again for the rest — and no further. Additive.
+			if _, err := pools.App.Exec(ctx, db.RefundSchemaDDL); err != nil {
+				return fmt.Errorf("error creating the refund ledger: %w", err)
+			}
+			return nil
+		},
+	},
 }
 
 // migrateW9WarningTiers replaces one hard gate with an escalating sequence.

@@ -155,3 +155,98 @@ func (p *PonderDB) GetTransactionPartiesByHash(ctx context.Context, txHash strin
 	tx.ChainID = chainID
 	return &tx, nil
 }
+
+// GetTransferByHash returns one indexed transfer with its amount.
+//
+// GetTransactionPartiesByHash answers "who sent what to whom"; a refund also has
+// to know HOW MUCH the original moved, because that is the ceiling on what may
+// be given back. Reading it from the chain index rather than trusting the client
+// is the whole point: the amount a refund is measured against must not be a
+// number the refunding party supplied.
+func (p *PonderDB) GetTransferByHash(ctx context.Context, txHash string) (*structs.PonderTransaction, error) {
+	normalizedHash := strings.ToLower(strings.TrimSpace(txHash))
+	if normalizedHash == "" {
+		return nil, nil
+	}
+
+	row := p.db.QueryRow(ctx, `
+			SELECT
+				t.id,
+				t.hash,
+				t.amount::text,
+				t.timestamp,
+				t.from,
+				t.to
+			FROM
+				transfer_event t
+			WHERE
+				t.hash = LOWER($1)
+			ORDER BY
+				t.timestamp DESC,
+				t.id DESC
+			LIMIT 1;
+		`, normalizedHash)
+
+	var t structs.PonderTransaction
+	if err := row.Scan(&t.Id, &t.Hash, &t.Amount, &t.Timestamp, &t.From, &t.To); err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("error loading transfer %s: %w", normalizedHash, err)
+	}
+	return &t, nil
+}
+
+// GetTransfersForAddresses pages a location's whole history: money into and out
+// of every wallet it takes payment through, newest first, in one ordering.
+//
+// Separate from GetTransactionsPaginated because a location is not one address —
+// a till and its tipping wallet are one shop, and paging them independently
+// would interleave wrong at every page boundary.
+func (p *PonderDB) GetTransfersForAddresses(ctx context.Context, addresses []string, page, count int) ([]structs.PonderTransaction, uint64, error) {
+	lowered := make([]string, 0, len(addresses))
+	for _, a := range addresses {
+		if trimmed := strings.ToLower(strings.TrimSpace(a)); trimmed != "" {
+			lowered = append(lowered, trimmed)
+		}
+	}
+	if len(lowered) == 0 {
+		return []structs.PonderTransaction{}, 0, nil
+	}
+	if count <= 0 || count > 200 {
+		count = 50
+	}
+	if page < 0 {
+		page = 0
+	}
+
+	var total uint64
+	if err := p.db.QueryRow(ctx, `
+		SELECT COUNT(t.id) FROM transfer_event t
+		WHERE t.from = ANY($1) OR t.to = ANY($1);
+	`, lowered).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("error counting location transfers: %w", err)
+	}
+
+	rows, err := p.db.Query(ctx, `
+		SELECT t.id, t.hash, t.amount::text, t.timestamp, t.from, t.to
+		FROM transfer_event t
+		WHERE t.from = ANY($1) OR t.to = ANY($1)
+		ORDER BY t.timestamp DESC, t.id DESC
+		LIMIT $2 OFFSET $3;
+	`, lowered, count, page*count)
+	if err != nil {
+		return nil, 0, fmt.Errorf("error querying location transfers: %w", err)
+	}
+	defer rows.Close()
+
+	out := []structs.PonderTransaction{}
+	for rows.Next() {
+		var t structs.PonderTransaction
+		if err := rows.Scan(&t.Id, &t.Hash, &t.Amount, &t.Timestamp, &t.From, &t.To); err != nil {
+			return nil, 0, fmt.Errorf("error scanning location transfer: %w", err)
+		}
+		out = append(out, t)
+	}
+	return out, total, rows.Err()
+}

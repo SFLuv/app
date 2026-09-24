@@ -14,6 +14,7 @@ import { ReceiveCryptoModal } from "@/components/wallets/receive-crypto-modal"
 import { SendCryptoModal } from "@/components/wallets/send-crypto-modal"
 import { UnwrapModal } from "@/components/wallets/unwrap-modal"
 import { WalletBalanceCard } from "@/components/wallets/wallet-balance-card"
+import { LocationTransactions } from "@/components/merchant/location-transactions"
 import { useApp } from "@/context/AppProvider"
 import { useUnwrapEnabled } from "@/context/ChainConfigProvider"
 import { useToast } from "@/hooks/use-toast"
@@ -550,6 +551,18 @@ export default function LocationsPage() {
         </CardContent>
         )}
       </Card>
+
+      {/* History sits under the wallet card because this page replaces /wallets
+          for merchants: the balance is the question, and what moved is the
+          answer. Approved locations only — an unapproved one has no till and
+          therefore nothing to show. */}
+      {applicationStatus === "approved" && (
+        <LocationTransactions
+          locationId={selectedLocation.id}
+          locationName={selectedLocation.name}
+          tillWallet={locationWallet ?? null}
+        />
+      )}
 
       {locationWallet && (
         <>
