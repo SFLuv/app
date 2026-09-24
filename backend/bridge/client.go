@@ -149,46 +149,127 @@ func (e *APIError) Error() string {
 }
 
 // IsNotFound is the one status handlers branch on by name.
+// ErrorSummary renders a Bridge failure in one short line fit to show a person:
+// the status code, and Bridge's own message when it sent one.
+//
+// Deliberately not the raw body. Bridge echoes request context in its errors,
+// and a merchant should not be shown another business's identifiers because a
+// call failed — but "something went wrong" with the reason only in a server log
+// is how a support thread turns into an afternoon.
+func ErrorSummary(err error) string {
+	if err == nil {
+		return ""
+	}
+	apiErr, ok := err.(*APIError)
+	if !ok {
+		return ""
+	}
+	message := ""
+	var probe struct {
+		Message string `json:"message"`
+		Error   string `json:"error"`
+		Code    string `json:"code"`
+	}
+	if jsonErr := json.Unmarshal([]byte(apiErr.Body), &probe); jsonErr == nil {
+		switch {
+		case probe.Message != "":
+			message = probe.Message
+		case probe.Error != "":
+			message = probe.Error
+		case probe.Code != "":
+			message = probe.Code
+		}
+	}
+	message = strings.TrimSpace(message)
+	if len(message) > 200 {
+		message = message[:200] + "…"
+	}
+	if message == "" {
+		return fmt.Sprintf("Our banking partner returned HTTP %d.", apiErr.Status)
+	}
+	return fmt.Sprintf("Our banking partner said: %s (HTTP %d)", message, apiErr.Status)
+}
+
 func IsNotFound(err error) bool {
 	var apiErr *APIError
 	return errors.As(err, &apiErr) && apiErr.Status == http.StatusNotFound
 }
 
 func (c *Client) do(ctx context.Context, method, path string, body any, out any) error {
+	return c.doRequest(ctx, method, path, body, out, true)
+}
+
+// doNoIdempotency is for the POSTs Bridge refuses an Idempotency-Key on.
+//
+// Most of Bridge's POSTs require the header; a few reject it outright with a
+// 422 "Unexpected Idempotency Key". There is no way to tell which from the
+// method, so the ones we know are named at the call site.
+func (c *Client) doNoIdempotency(ctx context.Context, method, path string, body any, out any) error {
+	return c.doRequest(ctx, method, path, body, out, false)
+}
+
+func (c *Client) doRequest(ctx context.Context, method, path string, body any, out any, idempotencyKey bool) error {
 	if !c.Enabled() {
 		return ErrDisabled
 	}
 
-	var payload io.Reader
+	var encoded []byte
 	if body != nil {
-		encoded, err := json.Marshal(body)
+		marshalled, err := json.Marshal(body)
 		if err != nil {
 			return fmt.Errorf("bridge: encoding %s body: %w", path, err)
 		}
-		payload = bytes.NewReader(encoded)
+		encoded = marshalled
 	}
 
-	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, payload)
-	if err != nil {
-		return fmt.Errorf("bridge: building %s request: %w", path, err)
-	}
-	req.Header.Set("Api-Key", c.apiKey)
-	req.Header.Set("Accept", "application/json")
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	// Bridge requires an idempotency key on every POST and rejects one on PUT
-	// (verified against sandbox: a PUT with the header is a 422). A fresh UUID
-	// per call is the honest choice: our own idempotency is enforced by what
-	// we store (one profile per owner, one address per location), not by
-	// replaying a key, and reusing one across different bodies is rejected.
-	if method == http.MethodPost {
-		req.Header.Set("Idempotency-Key", uuid.NewString())
+	// Built per attempt: a retry needs a fresh body reader, and the whole point
+	// of the retry is to send different headers.
+	attempt := func(withKey bool) (*http.Response, error) {
+		var payload io.Reader
+		if encoded != nil {
+			payload = bytes.NewReader(encoded)
+		}
+		req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, payload)
+		if err != nil {
+			return nil, fmt.Errorf("bridge: building %s request: %w", path, err)
+		}
+		req.Header.Set("Api-Key", c.apiKey)
+		req.Header.Set("Accept", "application/json")
+		if encoded != nil {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		// Most POSTs require an idempotency key and PUTs reject one. A fresh
+		// UUID per call is the honest choice: our own idempotency is enforced
+		// by what we store (one profile per owner, one address per location),
+		// not by replaying a key, and reusing one across different bodies is
+		// rejected.
+		if withKey && method == http.MethodPost {
+			req.Header.Set("Idempotency-Key", uuid.NewString())
+		}
+		return c.http.Do(req)
 	}
 
-	resp, err := c.http.Do(req)
+	resp, err := attempt(idempotencyKey)
 	if err != nil {
 		return fmt.Errorf("bridge: %s %s: %w", method, path, err)
+	}
+
+	// Some POSTs reject the header rather than requiring it, and Bridge says so
+	// in plain terms. Sending it cost this integration a fortnight of a merchant
+	// re-running Plaid against an exchange that could never have succeeded, so
+	// the same mistake on any other endpoint now corrects itself.
+	if idempotencyKey && method == http.MethodPost && resp.StatusCode == http.StatusUnprocessableEntity {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		resp.Body.Close()
+		peek := string(raw)
+		if strings.Contains(peek, "Unexpected Idempotency Key") || strings.Contains(peek, "Idempotency-Key") {
+			resp, err = attempt(false)
+			if err != nil {
+				return fmt.Errorf("bridge: %s %s: %w", method, path, err)
+			}
+		} else {
+			return &APIError{Status: http.StatusUnprocessableEntity, Body: strings.TrimSpace(peek), Path: path}
+		}
 	}
 	defer resp.Body.Close()
 
@@ -377,7 +458,10 @@ func (c *Client) CreatePlaidLinkRequest(ctx context.Context, customerID string) 
 // is discovered.
 func (c *Client) ExchangePlaidPublicToken(ctx context.Context, linkToken, publicToken string) error {
 	path := "/v0/plaid_exchange_public_token/" + url.PathEscape(linkToken)
-	return c.do(ctx, http.MethodPost, path, map[string]any{"public_token": publicToken}, nil)
+	// No idempotency key: Bridge rejects one here with a 422 "Unexpected
+	// Idempotency Key". The link token in the path already makes the call
+	// idempotent — exchanging the same token twice is the same exchange.
+	return c.doNoIdempotency(ctx, http.MethodPost, path, map[string]any{"public_token": publicToken}, nil)
 }
 
 // ---------------------------------------------------------------------------

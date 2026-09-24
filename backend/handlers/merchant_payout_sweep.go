@@ -272,6 +272,19 @@ func (a *AppService) reconcileBridgeProfiles(ctx context.Context) {
 			continue
 		}
 		a.reconcileProfileTOS(ctx, p)
+
+		// Pull this business's bank accounts every sweep, not only while its
+		// verification is still moving.
+		//
+		// Bridge creates an external account asynchronously, so a connection
+		// that looked like it failed can land a minute later. Until now the only
+		// things that noticed were a page load and the external_account webhook;
+		// a merchant who closed the tab after an error, on a deployment without
+		// webhooks, would simply never see their bank.
+		if err := a.syncMerchantBankAccounts(ctx, p); err != nil && a.logger != nil {
+			a.logger.Logf("merchant payout sweep: bank sync failed for %s: %s", p.OwnerID, err)
+		}
+
 		a.reconcileProfileAddresses(ctx, p)
 	}
 	a.reconcileMismatchedKYCLinks(ctx)

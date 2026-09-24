@@ -1705,6 +1705,15 @@ func (s *BotDB) UpdateVolunteerEvent(ctx context.Context, eventId string, p *Cre
 			signup_url = $12,
 			location_id = $13,
 			recurrence_frequency = $14,
+			-- An event switched to recurring after it was created has no series
+			-- of its own, and the generator finds series by series_id: without
+			-- this the event shows as recurring everywhere a person looks while
+			-- being invisible to the thing that advances it, so it silently
+			-- never produces a second occurrence. Adopting its own id matches
+			-- what creation does for an event that was recurring from the start.
+			series_id = CASE
+				WHEN $14 <> 'none' AND events.series_id IS NULL THEN events.id
+				ELSE events.series_id END,
 			recurrence_monthly_mode = $15,
 			recurrence_day_of_month = $16,
 			recurrence_week_of_month = $17,
