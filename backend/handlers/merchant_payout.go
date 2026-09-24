@@ -684,7 +684,8 @@ func (a *AppService) CompleteMerchantPlaidLink(w http.ResponseWriter, r *http.Re
 		banksBefore = len(existing)
 	}
 
-	if err := client.ExchangePlaidPublicToken(ctx, strings.TrimSpace(req.LinkToken), strings.TrimSpace(req.PublicToken)); err != nil {
+	exchangeErr := client.ExchangePlaidPublicToken(ctx, strings.TrimSpace(req.LinkToken), strings.TrimSpace(req.PublicToken))
+	if err := exchangeErr; err != nil {
 		// The full Bridge status and body are in this line — the merchant-facing
 		// message stays generic, but nobody should have to guess what Bridge
 		// said.
@@ -710,6 +711,12 @@ func (a *AppService) CompleteMerchantPlaidLink(w http.ResponseWriter, r *http.Re
 			body := map[string]string{"error": message}
 			if tosURL != "" {
 				body["tos_url"] = tosURL
+			}
+			// The reason, not just the outcome. Without this the only copy of
+			// what actually went wrong is a line in a server log, which the
+			// person who hit it cannot read and cannot quote to anyone.
+			if detail := bridge.ErrorSummary(exchangeErr); detail != "" {
+				body["detail"] = detail
 			}
 			writeJSON(w, http.StatusBadGateway, body)
 			return

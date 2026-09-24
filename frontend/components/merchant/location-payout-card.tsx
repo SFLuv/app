@@ -46,6 +46,15 @@ interface LocationPayoutCardProps {
 // unwrapped in the same go as a second transaction from that wallet.
 // Thrown when the connection is waiting on the merchant to sign Bridge's terms.
 // Not a failure — like a Plaid exit, it means the flow paused on the person.
+// Thrown once the failure has already been shown to the merchant, so the catch
+// below does not report the same thing twice.
+class HandledConnectionError extends Error {
+  constructor() {
+    super("handled")
+    this.name = "HandledConnectionError"
+  }
+}
+
 class PendingTermsError extends Error {
   constructor() {
     super("Waiting on terms of service acceptance")
@@ -240,9 +249,36 @@ export function LocationPayoutCard({ location, onUnwrapped }: LocationPayoutCard
       })
       const exchangeBody = (await exchangeRes.json().catch(() => ({}))) as ProvisionResponse & {
         error?: string
+        detail?: string
+        tos_url?: string
         bank_connected?: boolean
       }
-      if (!exchangeRes.ok) throw new Error(exchangeBody.error || "The bank connection could not be completed")
+      if (!exchangeRes.ok) {
+        // Terms are answerable, so answer them rather than reporting a failure.
+        if (exchangeBody.tos_url) {
+          setTosUrl(exchangeBody.tos_url)
+          setTosOpen(true)
+          throw new PendingTermsError()
+        }
+        // Show the reason, not just the outcome. `detail` is the banking
+        // partner's own words — the thing that used to live only in a server log.
+        toast({
+          title: "Bank connection failed",
+          description: [exchangeBody.error, exchangeBody.detail].filter(Boolean).join(" "),
+          variant: "destructive",
+        })
+        // Bridge may still be creating the account: a rejected exchange is not
+        // proof that nothing happened, so keep watching before giving up.
+        const appeared = await waitForBank()
+        if (appeared) {
+          toast({
+            title: "Bank connected after all",
+            description: "Your bank came through. Finish setting up this location's payouts below.",
+          })
+          return
+        }
+        throw new HandledConnectionError()
+      }
 
       // Bridge creates the bank record asynchronously, so a 200 is not proof it
       // exists yet. Say which of the two happened instead of always claiming
@@ -267,6 +303,7 @@ export function LocationPayoutCard({ location, onUnwrapped }: LocationPayoutCard
       if (error instanceof PlaidExitError) return
       // Waiting on the terms is not a failure — the card shows the button.
       if (error instanceof PendingTermsError) return
+      if (error instanceof HandledConnectionError) return
       toast({ title: "Bank connection failed", description: error instanceof Error ? error.message : undefined, variant: "destructive" })
     } finally {
       setBusy("")

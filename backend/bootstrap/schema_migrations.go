@@ -2315,6 +2315,54 @@ var schemaMigrations = []SchemaMigration{
 			return nil
 		},
 	},
+	{
+		Version:     "1.57",
+		Description: "volunteer events: strip recurrence from events that were never in a series",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			// An event created as one-off and later edited to be recurring got
+			// its recurrence_frequency set and nothing else: series_id stayed
+			// NULL, because no UPDATE in the codebase ever assigned it. The
+			// generator finds series by series_id, so those events advertised
+			// themselves as recurring in every view a person looks at while
+			// being invisible to the thing that advances them — and silently
+			// never produced a second occurrence. One affiliate re-created
+			// their event by hand before anyone worked out why.
+			//
+			// The edit path now opens a series when recurrence is switched on.
+			// This clears the ones left behind, and it clears them rather than
+			// giving them a series: the generator advances one occurrence per
+			// run and does not skip to the present, so adopting these would
+			// backfill months of occurrences into the past at one every five
+			// minutes. Saying "not recurring", which is the truth of what these
+			// events have done since they were edited, is the honest repair.
+			//
+			// The bot database owns events. The condition is self-limiting, so
+			// re-running would match nothing.
+			tag, err := pools.Bot.Exec(ctx, `
+				UPDATE events SET
+					recurrence_frequency     = 'none',
+					recurrence_interval      = 1,
+					recurrence_monthly_mode  = '',
+					recurrence_day_of_month  = NULL,
+					recurrence_week_of_month = NULL,
+					recurrence_weekday       = NULL,
+					recurrence_until         = NULL,
+					updated_at               = EXTRACT(EPOCH FROM NOW())::BIGINT
+				WHERE recurrence_frequency <> 'none'
+				AND series_id IS NULL;
+			`)
+			if err != nil {
+				return fmt.Errorf("error clearing recurrence from series-less events: %w", err)
+			}
+			if appLogger != nil && tag.RowsAffected() > 0 {
+				appLogger.Logf(
+					"volunteer events: cleared recurrence from %d event(s) that had no series and could never have recurred",
+					tag.RowsAffected(),
+				)
+			}
+			return nil
+		},
+	},
 }
 
 // migrateW9WarningTiers replaces one hard gate with an escalating sequence.
