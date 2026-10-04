@@ -81,6 +81,7 @@ func (s *WorkflowMaintenanceScheduler) RunOnce(ctx context.Context) {
 		return
 	}
 
+	s.backfillClaimedRoleStepAssignments(ctx)
 	s.app.runWorkflowAvailabilityMaintenance("scheduled workflow maintenance")
 	s.reconcileUnsettledPayouts(ctx)
 	s.finalizeSettledWorkflows(ctx)
@@ -277,6 +278,37 @@ func (s *WorkflowMaintenanceScheduler) finalizeElapsedPartialWorkflows(parent co
 		app.logger.Logf(
 			"elapsed-workflow sweep: checked=%d finalized=%d blocked_on_payout=%d",
 			len(workflowIDs), finalized, blocked,
+		)
+	}
+}
+
+// backfillClaimedRoleStepAssignments keeps a claimed role's steps assigned to
+// whoever claimed it.
+//
+// ClaimWorkflowStep assigns every step of the role — but only those that exist
+// and are unassigned at the moment of the claim. Anything that adds a step
+// afterwards, or that generates an occurrence whose role is claimed later,
+// leaves a step unassigned with the role already taken, and nothing put it
+// right. The improver then holds the role, finishes step 1, and step 2 of the
+// same role sits unassigned and unfinishable.
+//
+// Runs before the availability pass so a step that is about to be offered is
+// offered to the person who owns it.
+func (s *WorkflowMaintenanceScheduler) backfillClaimedRoleStepAssignments(parent context.Context) {
+	app := s.app
+
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), workflowMaintenanceTimeout)
+	defer cancel()
+
+	assigned, err := app.db.BackfillClaimedRoleStepAssignments(ctx)
+	if err != nil {
+		app.logger.Logf("error backfilling claimed role step assignments: %s", err)
+		return
+	}
+	if assigned > 0 {
+		app.logger.Logf(
+			"claimed-role assignment backfill: %d step(s) assigned to the improver already holding their role",
+			assigned,
 		)
 	}
 }
