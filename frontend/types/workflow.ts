@@ -68,7 +68,11 @@ export interface WorkflowStep {
   role_id?: string | null
   assigned_improver_id?: string | null
   assigned_improver_name?: string | null
-  status: "locked" | "available" | "in_progress" | "completed" | "paid_out"
+  /**
+   * "skipped" means the workflow's window closed before anyone started this
+   * step. It is inert: not actionable, and not counted as delivered.
+   */
+  status: "locked" | "available" | "in_progress" | "completed" | "paid_out" | "skipped"
   started_at?: number | null
   completed_at?: number | null
   payout_error?: string | null
