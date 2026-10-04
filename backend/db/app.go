@@ -992,7 +992,7 @@ func (s *AppDB) CreateTables() error {
 			created_at BIGINT NOT NULL DEFAULT unix_now(),
 				updated_at BIGINT NOT NULL DEFAULT unix_now(),
 				UNIQUE (workflow_id, step_order),
-				CHECK (status IN ('locked', 'available', 'in_progress', 'completed', 'paid_out'))
+				CHECK (status IN ('locked', 'available', 'in_progress', 'completed', 'paid_out', 'skipped'))
 			);
 			CREATE INDEX IF NOT EXISTS workflow_steps_workflow_idx ON workflow_steps(workflow_id);
 			CREATE INDEX IF NOT EXISTS workflow_steps_assigned_improver_status_workflow_idx
@@ -1590,7 +1590,7 @@ func (s *AppDB) CreateTables() error {
 			created_at BIGINT NOT NULL DEFAULT unix_now(),
 			updated_at BIGINT NOT NULL DEFAULT unix_now(),
 			UNIQUE (workflow_id, step_order),
-			CHECK (status IN ('locked', 'available', 'in_progress', 'completed', 'paid_out'))
+			CHECK (status IN ('locked', 'available', 'in_progress', 'completed', 'paid_out', 'skipped'))
 			);
 
 			CREATE INDEX IF NOT EXISTS workflow_steps_workflow_idx ON workflow_steps(workflow_id);

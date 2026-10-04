@@ -4583,6 +4583,14 @@ export default function AdminPage() {
                               {formatWorkflowDisplayStatus(workflow)}
                             </Badge>
                           </div>
+                          {/* Finalized, but not by being finished. Shown next to
+                              the status because "Finalized" alone would read as
+                              the work having been delivered. */}
+                          {workflow.partially_completed && (
+                            <Badge variant="outline" className="w-fit border-amber-400/70 text-amber-700 dark:text-amber-400">
+                              Partially completed — window closed with steps undone
+                            </Badge>
+                          )}
 
                           <p className="text-sm text-muted-foreground line-clamp-2">{workflow.description || "No description provided."}</p>
                           <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">

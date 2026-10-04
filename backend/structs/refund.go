@@ -32,8 +32,8 @@ type RecordRefundRequest struct {
 }
 
 type RecordRefundResponse struct {
-	Recorded bool   `json:"recorded"`
-	RefundID int64  `json:"refund_id,omitempty"`
+	Recorded  bool   `json:"recorded"`
+	RefundID  int64  `json:"refund_id,omitempty"`
 	Refunded  string `json:"refunded_total"`
 	Remaining string `json:"remaining_refundable"`
 }

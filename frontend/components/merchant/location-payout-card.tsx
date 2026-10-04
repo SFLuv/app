@@ -17,6 +17,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { ArrowDownToLine, CheckCircle2, ExternalLink, Landmark, Loader2, RefreshCw, ShieldCheck } from "lucide-react"
 import { formatUnits, parseUnits, type Address } from "viem"
 import { useToast } from "@/hooks/use-toast"
+import { UnwrapDetailModal } from "@/components/merchant/unwrap-detail-modal"
 import { useApp } from "@/context/AppProvider"
 import { useChainConfig } from "@/context/ChainConfigProvider"
 import type { AuthedLocation } from "@/types/location"
@@ -28,6 +29,7 @@ import {
   type MerchantBankAccount,
   type MerchantPayoutStatusResponse,
   type ProvisionResponse,
+  type Unwrap,
 } from "@/types/merchant-payout"
 
 interface LocationPayoutCardProps {
@@ -74,6 +76,7 @@ export function LocationPayoutCard({ location, onUnwrapped }: LocationPayoutCard
   // even if the browser refused to open the tab for us.
   const [tosUrl, setTosUrl] = useState<string | null>(null)
   const [tosOpen, setTosOpen] = useState(false)
+  const [unwrapDetail, setUnwrapDetail] = useState<Unwrap | null>(null)
 
   const [amountInput, setAmountInput] = useState("")
   const [includeTips, setIncludeTips] = useState(false)
@@ -674,27 +677,45 @@ export function LocationPayoutCard({ location, onUnwrapped }: LocationPayoutCard
             {recentUnwraps.map((u) => {
               const s = unwrapStatusLabel(u.status)
               return (
-                <li key={u.id} className="flex items-center justify-between gap-3 px-3 py-2 text-sm">
-                  <div className="min-w-0">
-                    <p className="font-medium text-black dark:text-white">
-                      {fmt(BigInt(u.amount_wei))}
-                      {u.wallet_role === "tipping" && <span className="ml-1 text-xs text-muted-foreground">(tips)</span>}
-                    </p>
-                    <p className="text-xs text-muted-foreground">{new Date(u.created_at).toLocaleDateString()}</p>
-                  </div>
-                  <span
-                    className={`rounded-full border px-2 py-0.5 text-xs ${
-                      s.tone === "ok" ? "border-green-300 text-green-700" : s.tone === "bad" ? "border-red-300 text-red-600" : ""
-                    }`}
+                <li key={u.id}>
+                  {/* Clickable because the status pill is the beginning of the
+                      question, not the answer: a merchant chasing a payout needs
+                      which bank, which address, and a link they can open. */}
+                  <button
+                    type="button"
+                    onClick={() => setUnwrapDetail(u)}
+                    className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm transition-colors hover:bg-muted/50"
                   >
-                    {s.label}
-                  </span>
+                    <div className="min-w-0">
+                      <p className="font-medium text-black dark:text-white">
+                        {fmt(BigInt(u.amount_wei))}
+                        {u.wallet_role === "tipping" && <span className="ml-1 text-xs text-muted-foreground">(tips)</span>}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        {new Date(u.created_at).toLocaleDateString()}
+                        {u.bank_last_4 ? ` · ····${u.bank_last_4}` : ""}
+                      </p>
+                    </div>
+                    <span
+                      className={`shrink-0 rounded-full border px-2 py-0.5 text-xs ${
+                        s.tone === "ok" ? "border-green-300 text-green-700" : s.tone === "bad" ? "border-red-300 text-red-600" : ""
+                      }`}
+                    >
+                      {s.label}
+                    </span>
+                  </button>
                 </li>
               )
             })}
           </ul>
         </div>
       )}
+
+      <UnwrapDetailModal
+        open={Boolean(unwrapDetail)}
+        onOpenChange={(open) => !open && setUnwrapDetail(null)}
+        unwrap={unwrapDetail}
+      />
 
       <Dialog open={tosOpen} onOpenChange={setTosOpen}>
         <DialogContent>

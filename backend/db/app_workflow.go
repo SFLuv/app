@@ -2213,6 +2213,25 @@ func (a *AppDB) CreateWorkflow(
 		return nil, fmt.Errorf("recurrence_end_at must be on or after start_at")
 	}
 
+	// A one-time workflow may name the date its window closes. Optional, and
+	// only meaningful for one-time work: a recurring workflow's window ends when
+	// the next occurrence begins, so an end date there would be two answers to
+	// one question. Left unset the workflow stays open indefinitely and is never
+	// swept closed — which is what every workflow did before this existed, and
+	// why nothing already in the table is affected.
+	var endAtUnix *int64
+	if definition.Recurrence == "one_time" && req.EndAt != nil && strings.TrimSpace(*req.EndAt) != "" {
+		parsedEndAt, err := time.Parse(time.RFC3339, strings.TrimSpace(*req.EndAt))
+		if err != nil {
+			return nil, fmt.Errorf("end_at must be an RFC 3339 timestamp: %s", err)
+		}
+		unix := parsedEndAt.UTC().Unix()
+		if unix < startAt.UTC().Unix() {
+			return nil, fmt.Errorf("end_at must be on or after start_at")
+		}
+		endAtUnix = &unix
+	}
+
 	autoApproveWithoutVote := definition.TotalBounty == 0 && definition.SupervisorUserId != nil && *definition.SupervisorUserId == proposerId
 	seriesId := uuid.NewString()
 
@@ -2321,6 +2340,7 @@ func (a *AppDB) CreateWorkflow(
 				workflow_state_id,
 				proposer_id,
 				start_at,
+				end_at,
 				status,
 				is_start_blocked,
 				blocked_by_workflow_id,
@@ -2333,8 +2353,8 @@ func (a *AppDB) CreateWorkflow(
 					manager_bounty
 				)
 			VALUES
-				($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15);
-		`, workflowId, seriesId, stateID, proposerId, startAt.UTC().Unix(), status, isStartBlocked, blockedById, definition.TotalBounty, definition.WeeklyRequirement, 0, 0, definition.SupervisorRequired, definition.SupervisorUserId, definition.SupervisorBounty)
+				($1, $2, $3, $4, $5, $16, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15);
+		`, workflowId, seriesId, stateID, proposerId, startAt.UTC().Unix(), status, isStartBlocked, blockedById, definition.TotalBounty, definition.WeeklyRequirement, 0, 0, definition.SupervisorRequired, definition.SupervisorUserId, definition.SupervisorBounty, endAtUnix)
 	if err != nil {
 		return nil, fmt.Errorf("error inserting workflow: %s", err)
 	}
@@ -10721,6 +10741,7 @@ func (a *AppDB) GetAdminWorkflows(ctx context.Context, search string, page, coun
 					COALESCE(st.description, s.description, '') AS description,
 					COALESCE(NULLIF(TRIM(st.recurrence), ''), COALESCE(NULLIF(TRIM(s.recurrence), ''), 'one_time')) AS recurrence,
 					w.status,
+					w.partially_completed,
 					w.start_at,
 					w.created_at,
 					w.updated_at,
@@ -10828,6 +10849,7 @@ func (a *AppDB) GetAdminWorkflows(ctx context.Context, search string, page, coun
 			b.description,
 			b.recurrence,
 			b.status,
+			b.partially_completed,
 			b.start_at,
 			b.created_at,
 			b.updated_at,
@@ -10863,6 +10885,7 @@ func (a *AppDB) GetAdminWorkflows(ctx context.Context, search string, page, coun
 			&item.Description,
 			&item.Recurrence,
 			&item.Status,
+			&item.PartiallyCompleted,
 			&item.StartAt,
 			&item.CreatedAt,
 			&item.UpdatedAt,

@@ -128,12 +128,17 @@ type SupervisorUpdateRequest struct {
 }
 
 type WorkflowCreateRequest struct {
-	SeriesId             *string                        `json:"series_id,omitempty"`
-	Title                string                         `json:"title"`
-	Description          string                         `json:"description"`
-	Recurrence           string                         `json:"recurrence"`
-	RecurrenceEndAt      *string                        `json:"recurrence_end_at,omitempty"`
-	StartAt              string                         `json:"start_at"`
+	SeriesId        *string `json:"series_id,omitempty"`
+	Title           string  `json:"title"`
+	Description     string  `json:"description"`
+	Recurrence      string  `json:"recurrence"`
+	RecurrenceEndAt *string `json:"recurrence_end_at,omitempty"`
+	StartAt         string  `json:"start_at"`
+	// EndAt closes a ONE-TIME workflow's window. Optional: left unset the
+	// workflow stays open indefinitely and is never swept closed, which is the
+	// behaviour every workflow had before this existed. Recurring workflows
+	// ignore it — their window ends when the next occurrence begins.
+	EndAt                *string                        `json:"end_at,omitempty"`
 	Supervisor           *WorkflowSupervisorCreateInput `json:"supervisor,omitempty"`
 	SupervisorDataFields []WorkflowSupervisorDataField  `json:"supervisor_data_fields,omitempty"`
 	Manager              *WorkflowManagerCreateInput    `json:"manager,omitempty"`
@@ -347,6 +352,9 @@ type AdminWorkflowListItem struct {
 	CreatedAt              int64    `json:"created_at"`
 	UpdatedAt              int64    `json:"updated_at"`
 	AssignedImproverEmails []string `json:"assigned_improver_emails"`
+	// PartiallyCompleted marks a workflow finalized with steps nobody did —
+	// closed out because its window passed, not because the work was delivered.
+	PartiallyCompleted bool `json:"partially_completed"`
 }
 
 type AdminWorkflowListResponse struct {

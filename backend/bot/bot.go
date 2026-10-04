@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"math/big"
 	"os"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/SFLuv/app/backend/abi"
@@ -27,6 +29,9 @@ type IBot interface {
 	SubmitTransferBaseUnits(amount *big.Int, address string) (string, error)
 	VerifyTransfer(ctx context.Context, txHash string, address string, amount uint64) (*TransferVerificationResult, error)
 	VerifyTransferBaseUnits(ctx context.Context, txHash string, address string, amount *big.Int) (*TransferVerificationResult, error)
+	// VerifyTransferOnChain checks a payout against the chain it was recorded
+	// on, for payouts that predate a chain migration.
+	VerifyTransferOnChain(ctx context.Context, chainID int64, txHash string, address string, amount uint64) (*TransferVerificationResult, error)
 	Drain(address common.Address) error
 	Balance() (*big.Int, error)
 }
@@ -254,6 +259,20 @@ func (b *Bot) VerifyTransferBaseUnits(ctx context.Context, txHash string, addres
 }
 
 func (b *Bot) verifyTransferReceipt(ctx context.Context, txHash string, address string, tokenAmount *big.Int) (*TransferVerificationResult, error) {
+	return b.verifyTransferReceiptOn(ctx, b.client, b.tokenId, txHash, address, tokenAmount)
+}
+
+// verifyTransferReceiptOn is the receipt check bound to a specific chain's
+// client and token, so a payout recorded before a chain migration can still be
+// verified on the chain it actually happened on.
+func (b *Bot) verifyTransferReceiptOn(
+	ctx context.Context,
+	client *ethclient.Client,
+	tokenID string,
+	txHash string,
+	address string,
+	tokenAmount *big.Int,
+) (*TransferVerificationResult, error) {
 	result := &TransferVerificationResult{}
 	txHash = strings.TrimSpace(txHash)
 	if txHash == "" {
@@ -262,12 +281,15 @@ func (b *Bot) verifyTransferReceipt(ctx context.Context, txHash string, address 
 	if !common.IsHexAddress(address) {
 		return nil, fmt.Errorf("invalid recipient address: %s", address)
 	}
+	if client == nil {
+		return nil, fmt.Errorf("no client for the chain this payout was recorded on")
+	}
 
 	hash := common.HexToHash(txHash)
-	receipt, err := b.client.TransactionReceipt(ctx, hash)
+	receipt, err := client.TransactionReceipt(ctx, hash)
 	if err != nil {
 		if errors.Is(err, ethereum.NotFound) {
-			tx, isPending, txErr := b.client.TransactionByHash(ctx, hash)
+			tx, isPending, txErr := client.TransactionByHash(ctx, hash)
 			if txErr == nil && tx != nil {
 				result.Found = true
 				result.Pending = isPending
@@ -293,7 +315,7 @@ func (b *Bot) verifyTransferReceipt(ctx context.Context, txHash string, address 
 	if err != nil {
 		return nil, err
 	}
-	tokenAddress := common.HexToAddress(b.tokenId)
+	tokenAddress := common.HexToAddress(tokenID)
 	transferTopic := crypto.Keccak256Hash([]byte("Transfer(address,address,uint256)"))
 	toAddress := common.HexToAddress(address)
 
@@ -398,4 +420,83 @@ func (b *Bot) Balance() (*big.Int, error) {
 	}
 
 	return contract.BalanceOf(nil, common.HexToAddress(os.Getenv("BOT_ADDRESS")))
+}
+
+// --- verifying payouts made on a chain we have since left ---------------------
+
+// Payouts recorded before the Celo migration carry a Berachain transaction hash.
+// The reconciler used to give up on any payout whose chain differed from the
+// active one, so those steps could never settle: the money had gone out, the
+// workflow read as unpaid, and the series it belonged to stayed blocked.
+//
+// Verifying them needs the chain they happened on — its RPC and its token
+// address, which is a different contract from today's. Both are read from the
+// environment per chain id, so this stays opt-in: with nothing configured the
+// behaviour is exactly what it was, and nothing is ever marked paid on trust.
+//
+//	WORKFLOW_PAYOUT_RPC_80094=https://rpc.berachain.com
+//	WORKFLOW_PAYOUT_TOKEN_80094=0x881cad4f885c6701d8481c0ed347f6d35444ea7e
+
+var (
+	legacyChainMu      sync.Mutex
+	legacyChainClients = map[int64]*ethclient.Client{}
+)
+
+// ErrNoLegacyChainConfig means we cannot check this payout, which is different
+// from checking it and finding nothing.
+var ErrNoLegacyChainConfig = errors.New("no RPC or token configured for that chain")
+
+func legacyChainSettings(chainID int64) (rpcURL string, tokenID string, ok bool) {
+	suffix := strconv.FormatInt(chainID, 10)
+	rpcURL = strings.TrimSpace(os.Getenv("WORKFLOW_PAYOUT_RPC_" + suffix))
+	tokenID = strings.TrimSpace(os.Getenv("WORKFLOW_PAYOUT_TOKEN_" + suffix))
+	if rpcURL == "" || !common.IsHexAddress(tokenID) {
+		return "", "", false
+	}
+	return rpcURL, tokenID, true
+}
+
+// legacyChainClient dials a past chain once and keeps the connection, since the
+// reconciliation sweep walks a batch of payouts at a time.
+func legacyChainClient(rpcURL string, chainID int64) (*ethclient.Client, error) {
+	legacyChainMu.Lock()
+	defer legacyChainMu.Unlock()
+	if existing, ok := legacyChainClients[chainID]; ok && existing != nil {
+		return existing, nil
+	}
+	client, err := ethclient.Dial(rpcURL)
+	if err != nil {
+		return nil, fmt.Errorf("error connecting to chain %d: %w", chainID, err)
+	}
+	legacyChainClients[chainID] = client
+	return client, nil
+}
+
+// VerifyTransferOnChain verifies a payout against the chain it was recorded on.
+//
+// The active chain takes the ordinary path. Any other chain needs its own RPC
+// and token configured; without them this returns ErrNoLegacyChainConfig so the
+// caller can say why it could not check, rather than reporting a payout as
+// missing when it was simply unreachable.
+func (b *Bot) VerifyTransferOnChain(
+	ctx context.Context,
+	chainID int64,
+	txHash string,
+	address string,
+	amount uint64,
+) (*TransferVerificationResult, error) {
+	tokenAmount, err := b.tokenAmountFromWholeUnits(amount)
+	if err != nil {
+		return nil, err
+	}
+
+	rpcURL, tokenID, ok := legacyChainSettings(chainID)
+	if !ok {
+		return nil, ErrNoLegacyChainConfig
+	}
+	client, err := legacyChainClient(rpcURL, chainID)
+	if err != nil {
+		return nil, err
+	}
+	return b.verifyTransferReceiptOn(ctx, client, tokenID, txHash, address, tokenAmount)
 }

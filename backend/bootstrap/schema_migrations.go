@@ -2377,6 +2377,96 @@ var schemaMigrations = []SchemaMigration{
 			return nil
 		},
 	},
+	{
+		Version:     "1.59",
+		Description: "unwraps: follow Bridge's in_review drains instead of dropping them",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			// The partial index that backs the sweep's worklist listed three
+			// pending states and not 'in_review'. A drain Bridge put under review
+			// therefore fell out of the open set: nothing followed it to the
+			// bank, and the merchant's history kept showing whatever state it had
+			// before the review started.
+			//
+			// Recreated rather than added to, because a partial index's predicate
+			// cannot be altered in place.
+			if _, err := pools.App.Exec(ctx, `
+				DROP INDEX IF EXISTS unwraps_open_idx;
+				CREATE INDEX IF NOT EXISTS unwraps_open_idx ON unwraps (status)
+					WHERE status IN ('submitted','in_review','funds_received','payment_submitted');
+			`); err != nil {
+				return fmt.Errorf("error widening the open-unwrap index: %w", err)
+			}
+
+			// Rows already collapsed into funds_received by the old mapping are
+			// left alone: the sweep re-reads every open drain from Bridge and
+			// will set the right state on its next pass, and guessing here would
+			// mean inventing a review that may have since cleared.
+			return nil
+		},
+	},
+	{
+		Version:     "1.60",
+		Description: "workflows: an end date, a partial-completion mark, and a skipped step state",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			// A workflow whose window has passed with a step never started had
+			// nowhere to land: it is not complete, so it never reached
+			// 'completed', and the recurrence successor is only created at that
+			// transition — so the series stopped dead and the workflow sat in
+			// 'in_progress' forever. These three columns are what let it finish
+			// honestly: an end date to say when the window closed, a mark saying
+			// not all of it was done, and a step state for the parts nobody did.
+			//
+			// end_at is NULL for every existing workflow, which is deliberate:
+			// a one-time workflow with no end date never elapses, so nothing
+			// already in the table is swept up by this.
+			if _, err := pools.App.Exec(ctx, `
+				ALTER TABLE workflows
+					ADD COLUMN IF NOT EXISTS end_at BIGINT,
+					ADD COLUMN IF NOT EXISTS partially_completed BOOLEAN NOT NULL DEFAULT false;
+			`); err != nil {
+				return fmt.Errorf("error adding workflow end/partial columns: %w", err)
+			}
+
+			// The step status CHECK is a table-level constraint, so its name is
+			// whatever Postgres assigned. Found by its definition rather than
+			// guessed, because dropping the wrong constraint here would remove a
+			// different rule silently.
+			if _, err := pools.App.Exec(ctx, `
+				DO $$
+				DECLARE
+					constraint_name TEXT;
+				BEGIN
+					SELECT con.conname INTO constraint_name
+					FROM pg_constraint con
+					JOIN pg_class rel ON rel.oid = con.conrelid
+					WHERE rel.relname = 'workflow_steps'
+					AND con.contype = 'c'
+					AND pg_get_constraintdef(con.oid) LIKE '%paid_out%'
+					AND pg_get_constraintdef(con.oid) NOT LIKE '%skipped%'
+					LIMIT 1;
+
+					IF constraint_name IS NOT NULL THEN
+						EXECUTE format('ALTER TABLE workflow_steps DROP CONSTRAINT %I', constraint_name);
+					END IF;
+
+					IF NOT EXISTS (
+						SELECT 1 FROM pg_constraint con
+						JOIN pg_class rel ON rel.oid = con.conrelid
+						WHERE rel.relname = 'workflow_steps'
+						AND con.contype = 'c'
+						AND pg_get_constraintdef(con.oid) LIKE '%skipped%'
+					) THEN
+						ALTER TABLE workflow_steps
+							ADD CONSTRAINT workflow_steps_status_check
+							CHECK (status IN ('locked', 'available', 'in_progress', 'completed', 'paid_out', 'skipped'));
+					END IF;
+				END $$;
+			`); err != nil {
+				return fmt.Errorf("error widening the workflow step status constraint: %w", err)
+			}
+			return nil
+		},
+	},
 }
 
 // migrateW9WarningTiers replaces one hard gate with an escalating sequence.

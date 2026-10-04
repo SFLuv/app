@@ -65,6 +65,17 @@ type Unwrap struct {
 	LastSyncedAt       *time.Time `json:"last_synced_at,omitempty"`
 	CreatedAt          time.Time  `json:"created_at"`
 	UpdatedAt          time.Time  `json:"updated_at"`
+
+	// --- joined for display, not stored on the row ---------------------------
+	// Which bank this unwrap actually landed in. Resolved from the destination
+	// address the unwrap was sent to rather than the location's current one: a
+	// location re-pointed at a different bank must not rewrite where past
+	// payouts went.
+	BankName  string `json:"bank_name,omitempty"`
+	BankLast4 string `json:"bank_last_4,omitempty"`
+	// Chain names the network the destination lives on, so a link to it resolves
+	// against the right explorer.
+	Chain string `json:"chain,omitempty"`
 }
 
 // --- API shapes -------------------------------------------------------------

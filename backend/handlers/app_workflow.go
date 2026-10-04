@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/SFLuv/app/backend/bot"
 	"github.com/SFLuv/app/backend/db"
 	"github.com/SFLuv/app/backend/structs"
 	"github.com/SFLuv/app/backend/utils"
@@ -345,10 +346,6 @@ func (a *AppService) reconcileWorkflowStepPayoutByHash(ctx context.Context, work
 	if txHash == "" {
 		return false, false, nil
 	}
-	if chainID > 0 && chainID != a.activeChainID() {
-		return false, true, nil
-	}
-
 	walletAddress, err := a.db.GetPreferredWorkflowPayoutAddressForUser(ctx, improverID, false)
 	if err != nil {
 		return false, false, err
@@ -356,7 +353,27 @@ func (a *AppService) reconcileWorkflowStepPayoutByHash(ctx context.Context, work
 
 	checkCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	result, err := a.bot.bot.VerifyTransfer(checkCtx, txHash, walletAddress, bounty)
+
+	// A payout recorded on a chain we have since left is verified on that chain,
+	// not skipped. Skipping was leaving pre-migration payouts permanently
+	// unsettled: the money had gone out, the step read as unpaid, and the series
+	// it belonged to stayed blocked behind it.
+	var result *bot.TransferVerificationResult
+	if chainID > 0 && chainID != a.activeChainID() {
+		result, err = a.bot.bot.VerifyTransferOnChain(checkCtx, chainID, txHash, walletAddress, bounty)
+		if errors.Is(err, bot.ErrNoLegacyChainConfig) {
+			// Cannot check, which is not the same as checked and absent. Left
+			// pending and said out loud, because the fix is a config line.
+			a.logger.Logf(
+				"workflow payout for step %s was recorded on chain %d and cannot be verified: "+
+					"set WORKFLOW_PAYOUT_RPC_%d and WORKFLOW_PAYOUT_TOKEN_%d to settle it",
+				stepID, chainID, chainID, chainID,
+			)
+			return false, true, nil
+		}
+	} else {
+		result, err = a.bot.bot.VerifyTransfer(checkCtx, txHash, walletAddress, bounty)
+	}
 	if err != nil {
 		return false, false, err
 	}
@@ -387,10 +404,6 @@ func (a *AppService) reconcileWorkflowManagerPayoutByHash(ctx context.Context, w
 	if txHash == "" {
 		return false, false, nil
 	}
-	if chainID > 0 && chainID != a.activeChainID() {
-		return false, true, nil
-	}
-
 	walletAddress, err := a.db.GetPreferredWorkflowPayoutAddressForUser(ctx, improverID, true)
 	if err != nil {
 		return false, false, err
@@ -398,7 +411,23 @@ func (a *AppService) reconcileWorkflowManagerPayoutByHash(ctx context.Context, w
 
 	checkCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	result, err := a.bot.bot.VerifyTransfer(checkCtx, txHash, walletAddress, bounty)
+
+	// Same rule as the step path: a payout recorded on a chain we have left is
+	// verified there, not abandoned.
+	var result *bot.TransferVerificationResult
+	if chainID > 0 && chainID != a.activeChainID() {
+		result, err = a.bot.bot.VerifyTransferOnChain(checkCtx, chainID, txHash, walletAddress, bounty)
+		if errors.Is(err, bot.ErrNoLegacyChainConfig) {
+			a.logger.Logf(
+				"manager payout for workflow %s was recorded on chain %d and cannot be verified: "+
+					"set WORKFLOW_PAYOUT_RPC_%d and WORKFLOW_PAYOUT_TOKEN_%d to settle it",
+				workflowID, chainID, chainID, chainID,
+			)
+			return false, true, nil
+		}
+	} else {
+		result, err = a.bot.bot.VerifyTransfer(checkCtx, txHash, walletAddress, bounty)
+	}
 	if err != nil {
 		return false, false, err
 	}
