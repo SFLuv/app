@@ -221,6 +221,12 @@ export interface AdminWorkflowListItem {
   description: string
   recurrence: WorkflowRecurrence
   status: "approved" | "blocked" | "in_progress" | "completed" | "paid_out" | "failed" | "skipped" | "deleted"
+  /**
+   * Finalized with steps nobody did — closed out because its window passed,
+   * not because the work was delivered. Shown alongside the status so a
+   * partially completed workflow is never read as fully delivered.
+   */
+  partially_completed: boolean
   start_at: number
   created_at: number
   updated_at: number

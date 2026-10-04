@@ -55,6 +55,7 @@ export interface LocationLiquidationAddress {
 
 export type UnwrapStatus =
   | "submitted"
+  | "in_review"
   | "funds_received"
   | "payment_submitted"
   | "payment_processed"
@@ -78,6 +79,11 @@ export interface Unwrap {
   last_synced_at?: string
   created_at: string
   updated_at: string
+  /** Joined for the detail view: the bank this payout actually landed in. */
+  bank_name?: string
+  bank_last_4?: string
+  /** The network the destination address lives on. */
+  chain?: string
 }
 
 export interface MerchantPayoutStatusResponse {
@@ -101,6 +107,8 @@ export function unwrapStatusLabel(status: UnwrapStatus): { label: string; tone: 
   switch (status) {
     case "submitted":
       return { label: "Submitted", tone: "pending" }
+    case "in_review":
+      return { label: "In review", tone: "pending" }
     case "funds_received":
       return { label: "Processing", tone: "pending" }
     case "payment_submitted":

@@ -97,19 +97,34 @@ const MerchantPayoutSchemaDDL = `
 	);
 	CREATE INDEX IF NOT EXISTS unwraps_owner_created_idx ON unwraps (owner_id, created_at DESC);
 	CREATE INDEX IF NOT EXISTS unwraps_location_idx ON unwraps (location_id);
-	CREATE INDEX IF NOT EXISTS unwraps_open_idx ON unwraps (status) WHERE status IN ('submitted','funds_received','payment_submitted');
+	CREATE INDEX IF NOT EXISTS unwraps_open_idx ON unwraps (status) WHERE status IN ('submitted','in_review','funds_received','payment_submitted');
 `
 
 // Unwrap ledger statuses. The first four mirror the merchant's view of a
 // drain; anything Bridge reports that is not a success lands in "failed" with
 // the raw bridge_state kept beside it for admins.
 const (
-	UnwrapSubmitted        = "submitted"
+	UnwrapSubmitted = "submitted"
+	// UnwrapInReview is Bridge holding the drain for review. It used to collapse
+	// into funds_received, which reads as "your money arrived and is on its way"
+	// — the opposite of what a review means for when the merchant gets paid.
+	UnwrapInReview         = "in_review"
 	UnwrapFundsReceived    = "funds_received"
 	UnwrapPaymentSubmitted = "payment_submitted"
 	UnwrapPaymentProcessed = "payment_processed"
 	UnwrapFailed           = "failed"
 )
+
+// OpenUnwrapStatuses are the states still waiting on Bridge. The sweep's
+// worklist, the partial index and migration 1.59 all have to agree with this
+// list: a pending state missing from it is an unwrap that stops being followed
+// and sits on the merchant's screen forever.
+var OpenUnwrapStatuses = []string{
+	UnwrapSubmitted,
+	UnwrapInReview,
+	UnwrapFundsReceived,
+	UnwrapPaymentSubmitted,
+}
 
 // ---------------------------------------------------------------------------
 // Profiles
@@ -531,6 +546,16 @@ const unwrapColumns = `
 	id, owner_id, location_id, wallet_id, wallet_address, wallet_role, destination_address, amount_wei, tx_hash,
 	status, bridge_drain_id, bridge_state, bank_reference, last_synced_at, created_at, updated_at`
 
+// unwrapColumnsQualified is the same list bound to the unwraps alias, for the
+// reads that join. location_liquidation_addresses and merchant_bank_accounts
+// both carry owner_id and created_at, and the liquidation table carries
+// location_id and updated_at as well, so the bare list is ambiguous the moment
+// anything is joined to it — a runtime error no amount of compiling catches.
+const unwrapColumnsQualified = `
+	u.id, u.owner_id, u.location_id, u.wallet_id, u.wallet_address, u.wallet_role, u.destination_address,
+	u.amount_wei, u.tx_hash, u.status, u.bridge_drain_id, u.bridge_state, u.bank_reference,
+	u.last_synced_at, u.created_at, u.updated_at`
+
 func scanUnwrap(row pgx.Row) (*structs.Unwrap, error) {
 	var u structs.Unwrap
 	err := row.Scan(&u.ID, &u.OwnerID, &u.LocationID, &u.WalletID, &u.WalletAddress, &u.WalletRole, &u.DestinationAddress, &u.AmountWei, &u.TxHash,
@@ -560,24 +585,56 @@ func (a *AppDB) LastLocationUnwrapAt(ctx context.Context, locationID uint64) (*t
 	return at, nil
 }
 
+// ListUnwrapsByOwner is the merchant's own payout history, newest first, with
+// the bank each one landed in joined on for the detail view.
+//
+// The bank is matched through the DESTINATION ADDRESS the unwrap was sent to,
+// not through the location's current liquidation address. A location that later
+// re-points at a different bank would otherwise retitle every past payout as
+// having gone somewhere it never went.
 func (a *AppDB) ListUnwrapsByOwner(ctx context.Context, ownerID string, limit int) ([]*structs.Unwrap, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 50
 	}
-	rows, err := a.db.Query(ctx, `SELECT `+unwrapColumns+` FROM unwraps WHERE owner_id = $1 ORDER BY created_at DESC LIMIT $2;`, ownerID, limit)
+	rows, err := a.db.Query(ctx, `
+		SELECT `+unwrapColumnsQualified+`,
+			COALESCE(b.bank_name, ''),
+			COALESCE(b.last_4, ''),
+			COALESCE(la.chain, '')
+		FROM unwraps u
+		LEFT JOIN location_liquidation_addresses la
+			ON LOWER(la.address) = LOWER(u.destination_address)
+		LEFT JOIN merchant_bank_accounts b
+			ON b.bridge_external_account_id = la.bridge_external_account_id
+		WHERE u.owner_id = $1
+		ORDER BY u.created_at DESC
+		LIMIT $2;
+	`, ownerID, limit)
 	if err != nil {
 		return nil, fmt.Errorf("error listing unwraps: %w", err)
 	}
 	defer rows.Close()
 	out := []*structs.Unwrap{}
 	for rows.Next() {
-		u, err := scanUnwrap(rows)
+		u, err := scanUnwrapWithBank(rows)
 		if err != nil {
 			return nil, fmt.Errorf("error scanning unwrap: %w", err)
 		}
 		out = append(out, u)
 	}
 	return out, rows.Err()
+}
+
+func scanUnwrapWithBank(row pgx.Row) (*structs.Unwrap, error) {
+	var u structs.Unwrap
+	err := row.Scan(&u.ID, &u.OwnerID, &u.LocationID, &u.WalletID, &u.WalletAddress, &u.WalletRole,
+		&u.DestinationAddress, &u.AmountWei, &u.TxHash, &u.Status, &u.BridgeDrainID, &u.BridgeState,
+		&u.BankReference, &u.LastSyncedAt, &u.CreatedAt, &u.UpdatedAt,
+		&u.BankName, &u.BankLast4, &u.Chain)
+	if err != nil {
+		return nil, err
+	}
+	return &u, nil
 }
 
 func (a *AppDB) ListAllUnwraps(ctx context.Context, limit int) ([]*structs.Unwrap, error) {
@@ -607,7 +664,7 @@ func (a *AppDB) ListOpenUnwraps(ctx context.Context, limit int) ([]*structs.Unwr
 	}
 	rows, err := a.db.Query(ctx, `
 		SELECT `+unwrapColumns+` FROM unwraps
-		WHERE status IN ('submitted','funds_received','payment_submitted')
+		WHERE status IN ('submitted','in_review','funds_received','payment_submitted')
 		ORDER BY COALESCE(last_synced_at, created_at) ASC LIMIT $1;
 	`, limit)
 	if err != nil {
@@ -654,7 +711,9 @@ func (a *AppDB) TouchUnwrapSynced(ctx context.Context, id int64) error {
 // UnwrapStatusFromDrainState maps Bridge's drain vocabulary onto the ledger's.
 func UnwrapStatusFromDrainState(state string) string {
 	switch state {
-	case "in_review", "funds_received":
+	case "in_review":
+		return UnwrapInReview
+	case "funds_received":
 		return UnwrapFundsReceived
 	case "payment_submitted":
 		return UnwrapPaymentSubmitted

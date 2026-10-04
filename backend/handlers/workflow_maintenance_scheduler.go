@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"strings"
 	"time"
 )
 
@@ -83,6 +84,7 @@ func (s *WorkflowMaintenanceScheduler) RunOnce(ctx context.Context) {
 	s.app.runWorkflowAvailabilityMaintenance("scheduled workflow maintenance")
 	s.reconcileUnsettledPayouts(ctx)
 	s.finalizeSettledWorkflows(ctx)
+	s.finalizeElapsedPartialWorkflows(ctx)
 	s.pruneResolvedNotificationReads(ctx)
 	s.runVolunteerMaintenance(ctx)
 	s.runTaxMaintenance(ctx)
@@ -224,5 +226,57 @@ func (s *WorkflowMaintenanceScheduler) finalizeSettledWorkflows(parent context.C
 
 	if settledCount > 0 {
 		app.logger.Logf("workflow finalization sweep: finalized %d workflow(s) to paid_out", settledCount)
+	}
+}
+
+// finalizeElapsedPartialWorkflows closes out workflows whose window has passed
+// with a step nobody ever started.
+//
+// Runs on the same timer as the rest, which means it also runs shortly after
+// boot — that is the sweep that retags the ones already stranded and generates
+// the recurrence occurrences their stall swallowed. It will not touch a workflow
+// with a completed step still awaiting payout: that is money owed, and the
+// reason is logged rather than passed over silently.
+func (s *WorkflowMaintenanceScheduler) finalizeElapsedPartialWorkflows(parent context.Context) {
+	app := s.app
+
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), workflowMaintenanceTimeout)
+	defer cancel()
+
+	workflowIDs, err := app.db.GetWorkflowIDsPossiblyElapsed(ctx, workflowMaintenanceSweepLimit)
+	if err != nil {
+		app.logger.Logf("error loading workflows possibly past their window: %s", err)
+		return
+	}
+
+	finalized := 0
+	blocked := 0
+	for _, workflowID := range workflowIDs {
+		if ctx.Err() != nil {
+			return
+		}
+		done, reason, err := app.db.FinalizeWorkflowPartiallyIfElapsed(ctx, workflowID)
+		if err != nil {
+			app.logger.Logf("error finalizing elapsed workflow %s: %s", workflowID, err)
+			continue
+		}
+		if done {
+			finalized++
+			app.logger.Logf("workflow %s finalized as partially completed (%s)", workflowID, reason)
+			continue
+		}
+		// Only the money case is worth a line each; "still open" is the normal
+		// state of most candidates and would drown the log.
+		if strings.Contains(reason, "awaiting payout") {
+			blocked++
+			app.logger.Logf("workflow %s is past its window but NOT finalized: %s", workflowID, reason)
+		}
+	}
+
+	if finalized > 0 || blocked > 0 {
+		app.logger.Logf(
+			"elapsed-workflow sweep: checked=%d finalized=%d blocked_on_payout=%d",
+			len(workflowIDs), finalized, blocked,
+		)
 	}
 }
