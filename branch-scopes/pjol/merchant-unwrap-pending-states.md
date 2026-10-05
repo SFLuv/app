@@ -1,13 +1,13 @@
 # Branch scope — `pjol/merchant-unwrap-pending-states`
 
-Sep 28 – Oct 5 2026 · app + animations + mobile-app · **12.0h**
+Sep 28 – Oct 5 2026 · app + animations + mobile-app · **12.3h**
 
 Picks up where `pjol/merchant-unwrap-deployment` left off (Sep 22–28). Its last sitting ran to
 Mon 10:54; the 0.05h already counted there is not counted again here.
 
 ## How these hours were measured
 
-**7.37h measured** from session-transcript timestamps clustered into sittings on a 30-minute gap
+**7.68h measured** from session-transcript timestamps clustered into sittings on a 30-minute gap
 (`time-accounting/scripts/measure_sittings.py`). The animations work is corroborated by file mtimes
 running Oct 1 13:40 → Oct 3 22:18, inside the measured sittings. No animation work since;
 the transcript and every file mtime are unchanged from Oct 3 22:24.
@@ -34,9 +34,12 @@ those windows.
 | Check-in w/ Beth | Fri 2 Oct, 2:30–3pm | 0.5h | **0h added** |
 | Meeting (preemptive) | Mon 5 Oct, 11:15am–12:00pm | 0.75h | 0.75h |
 
-Monday's 11:15–12:00 meeting is **booked, not measured** — it had not happened when this was
-written. Today's only sitting is 10:53–10:54, which ends before it, so there is nothing to subtract;
-if the meeting runs short or long the figure should follow.
+Monday's 11:15–12:00 meeting is **stated, and corroborated rather than measured.** A transcript can
+only show the absence of session activity, never the presence of a meeting: the session ran to 11:12
+and resumed at 12:17, a 65-minute gap that contains the stated 45 minutes and bounds it — the meeting
+cannot have run longer than that gap. Neither surrounding sitting overlaps it, so nothing is
+subtracted. The 0.75h is the stated duration; only a calendar could measure the real one, and the
+Google Calendar connector is unauthorised in this session.
 
 **The Beth meeting adds nothing to the total, and that is not an oversight.** It sits at 14:30–15:00,
 inside the Friday span that is already measured. Its half hour is counted once, within that span, and
@@ -70,8 +73,9 @@ scope.
 | Fri 2 Oct | app | 15:47–15:50 | 0.04h |
 | Fri 2 Oct | app | 22:34–22:35 | 0.01h |
 | Sat 3 Oct | app + animations (one span) | 22:17–23:51 | 1.57h |
-| Mon 5 Oct | app | 10:53–10:54 | 0.01h |
-| | | **measured** | **7.37h** |
+| Mon 5 Oct | app | 10:53–11:12 | 0.31h |
+| Mon 5 Oct | app | 12:17–12:18 | 0.01h |
+| | | **measured** | **7.68h** |
 
 ---
 
@@ -255,7 +259,7 @@ runtime.
 |---|---|---|
 | Dependabot triage and the first pass of Go bumps, applied and verified building, then **reverted at request** to keep this branch to the workflow fixes before moving to `pjol/vulnerability-fixes`. go-ethereum 1.17.0 raises the `go` directive to 1.25.0, which needs the deploy image checked. | 0.38h | app |
 | Disk at 100% (638 MB free of 466 GB) blocked the Go build with `no space left on device`; reclaimed the regenerable build cache and module cache (~14 GB). One `go mod tidy` ran while full, silently rolled `go.mod` back, and was only caught by re-reading resolved versions — worth re-verifying with `go list -m` after any bump. | 0.12h | — |
-| Previous branch scope completed (tail of the sitting it was written in), plus four revisions. | 0.22h | app |
+| Previous branch scope completed (tail of the sitting it was written in), plus five revisions. | 0.53h | app |
 | Bridge unwrap configuration audited and charted — chain `celo`, currency `usdc`, rail `ach`, destination `usd`, memo `SFLUV`, no developer fee set. | 0.04h | app |
 | Investigated what Bridge actually charges. **Not answerable from our own data: we discard it.** Bridge returns `initial_amount`, `developer_fee`, `subtotal_amount`, `converted_amount`, `exchange_rate`, `gas_fee` and `outgoing_amount` on every drain; our `Drain` struct models none of them. Also established that `developer_fee` is **our** revenue line, not Bridge's charge — Bridge's take is in the spread, so no pricing page could state it per transaction. | 0.05h | app |
 
@@ -266,16 +270,16 @@ runtime.
 | Source | Hours |
 |---|---|
 | Measured — animations | 4.50h |
-| Measured — app | 2.37h |
+| Measured — app | 2.68h |
 | Measured — Beth check-in (inside the Friday span) | 0.50h |
 | Measured — webpage | 0.00h |
-| **Measured subtotal** | **7.37h** |
+| **Measured subtotal** | **7.68h** |
 
 The mobile-app edits and the disk recovery carry no separate line: both were done from inside app
-sittings, so their time is already in the 2.37h rather than alongside it. There is no mobile-app
+sittings, so their time is already in the 2.68h rather than alongside it. There is no mobile-app
 transcript of its own.
 | Meetings as stated, less 0.09h already measured inside two of the windows | 4.66h |
-| **Total** | **12.0h** |
+| **Total** | **12.3h** |
 
 # Volume
 
