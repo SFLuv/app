@@ -1,27 +1,28 @@
 # Branch scope — `pjol/merchant-unwrap-pending-states`
 
-Sep 28 – Oct 3 2026 · app + animations + mobile-app · **11.1h**
+Sep 28 – Oct 5 2026 · app + animations + mobile-app · **12.0h**
 
 Picks up where `pjol/merchant-unwrap-deployment` left off (Sep 22–28). Its last sitting ran to
 Mon 10:54; the 0.05h already counted there is not counted again here.
 
 ## How these hours were measured
 
-**7.15h measured** from session-transcript timestamps clustered into sittings on a 30-minute gap
+**7.37h measured** from session-transcript timestamps clustered into sittings on a 30-minute gap
 (`time-accounting/scripts/measure_sittings.py`). The animations work is corroborated by file mtimes
-running Oct 1 13:40 → Oct 3 22:18, inside the measured sittings.
+running Oct 1 13:40 → Oct 3 22:18, inside the measured sittings. No animation work since;
+the transcript and every file mtime are unchanged from Oct 3 22:24.
 
 **Concurrent sessions are not additive, and this happened twice.** On both Friday and Saturday an app
 session and an animations session covered the same wall-clock minutes, because the work was
 interleaved rather than sequential:
 
 - **Fri 2 Oct** — animations 13:41–15:40 (1.99h) wholly contains app 14:03–15:08 (1.07h).
-- **Sat 3 Oct** — app 22:17–23:39 (1.36h) wholly contains animations 22:17–22:24 (0.12h).
+- **Sat 3 Oct** — app 22:17–23:51 (1.57h) wholly contains animations 22:17–22:24 (0.12h).
 
-Summing each pair would claim 3.06h and 1.48h for afternoons that lasted 1.99h and 1.36h. **The union
+Summing each pair would claim 3.06h and 1.69h for afternoons that lasted 1.99h and 1.57h. **The union
 is the measurement**; the apportionment below divides each span across what shared it.
 
-**3.91h of meetings**, from 4.0h stated less 0.09h the transcripts already account for inside two of
+**4.66h of meetings**, from 4.75h stated less 0.09h the transcripts already account for inside two of
 those windows.
 
 | Meeting | Day | Stated | Counted |
@@ -31,6 +32,11 @@ those windows.
 | Boundless video check-in w/ Jacky | Wed 30 Sep, ~4pm | 0.5h | 0.5h |
 | Dev meeting | Mon 28 Sep, 2–4pm | 2.0h | 1.96h |
 | Check-in w/ Beth | Fri 2 Oct, 2:30–3pm | 0.5h | **0h added** |
+| Meeting (preemptive) | Mon 5 Oct, 11:15am–12:00pm | 0.75h | 0.75h |
+
+Monday's 11:15–12:00 meeting is **booked, not measured** — it had not happened when this was
+written. Today's only sitting is 10:53–10:54, which ends before it, so there is nothing to subtract;
+if the meeting runs short or long the figure should follow.
 
 **The Beth meeting adds nothing to the total, and that is not an oversight.** It sits at 14:30–15:00,
 inside the Friday span that is already measured. Its half hour is counted once, within that span, and
@@ -63,8 +69,9 @@ scope.
 | Fri 2 Oct | animations + app + Beth meeting (one span) | 13:41–15:40 | 1.99h |
 | Fri 2 Oct | app | 15:47–15:50 | 0.04h |
 | Fri 2 Oct | app | 22:34–22:35 | 0.01h |
-| Sat 3 Oct | app + animations (one span) | 22:17–23:39 | 1.36h |
-| | | **measured** | **7.15h** |
+| Sat 3 Oct | app + animations (one span) | 22:17–23:51 | 1.57h |
+| Mon 5 Oct | app | 10:53–10:54 | 0.01h |
+| | | **measured** | **7.37h** |
 
 ---
 
@@ -166,6 +173,48 @@ If the series state defines two separate roles both titled "Instagram Poster" �
 series was single-step until late August and step 2 arrived by a state edit — then the ids differ, the
 backfill will not match, and the state needs its roles merged instead.
 
+### Dependency vulnerabilities — 0.22h · app · `pjol/vulnerability-fixes`
+
+194 open Dependabot alerts (17 critical, 71 high, 94 medium, 12 low) reduced to **32 distinct
+packages**, of which **181 alerts are now addressed** on a separate branch (`458c3ba`, 6 files,
++784/−370). Dependabot still reports 194 because it scans the default branch; the count moves when
+this merges.
+
+| | Alerts |
+|---|---|
+| Go — 6 modules (`x/crypto`, `pgx/v5`, `go-ethereum`, `gnark-crypto`, `gorilla/websocket`, `go-chi/chi`) | 24 |
+| `next` 15.2.6 → 15.5.24 | 62 |
+| 16 transitive patch/minor pnpm overrides | 73 |
+| `jspdf` 3.0.4 → 4.2.1 | 20 |
+| `sharp` — already above the patched version | 2 |
+| **Addressed** | **181** |
+
+**`go.sum` was gitignored, and this branch would not have deployed.** `.gitignore` carried `*/go.sum`
+while `update-production-backend.sh` runs a bare `go build` — so the moment `go.mod` changed, a stale
+or absent `go.sum` fails the build outright on "missing go.sum entry". Hit locally and fixed:
+`backend/go.sum` is now tracked, `tmp/*/go.sum` stays ignored, and the deploy script runs
+`go mod download` first. Worth fixing on its own merits — `go.sum` pins dependency checksums, so
+ignoring it defeats the verification a vulnerability fix is meant to strengthen.
+
+**The first override attempt used `>=` and jumped three majors.** pnpm resolved to latest, taking
+`nanoid` 3→6, `h3` 1→2 and `preact` 10→11. Caught on verification and repinned to the exact minimum
+patched version inside each current major, then checked against the lockfile package by package.
+
+**Next 15.5.24 enforces async `params`.** 15.2.6 tolerated the synchronous shape;
+`app/photos/[photo_id]/page.tsx` now awaits it. Same value, same rendered output — the only
+interface-touching change in the set, and it changes nothing visible.
+
+Frontend typecheck came out **better** than baseline (25 errors against 39), every remaining one in
+merchant-mock files this work never touched.
+
+**13 alerts deliberately left open** — 4 high, 8 medium, 1 low; no criticals. All of them
+(`picomatch`, `ws`, `bn.js`, `stream-json`, `decode-uri-component`, `uuid`, `elliptic`) arrive through
+`@privy-io/react-auth`, which is already on the newest 2.x (2.25.0). Closing them needs either major
+overrides forced into the authentication and signing path, or a migration to Privy 3.47.0. Neither is
+a mechanical bump, both need human testing of login, wallet creation and signing, and the project has
+no automated suite to catch a regression. Stopped rather than risk silent auth breakage; `elliptic`
+has no patch at any version.
+
 ### Unwrap pending states and payout detail — 0.12h · app
 
 - `in_review` collapsed into `funds_received` in `UnwrapStatusFromDrainState`, so a merchant saw
@@ -204,9 +253,9 @@ runtime.
 
 | Item | Hours | Repo |
 |---|---|---|
-| Dependabot triage: 194 open alerts reduced to **32 distinct packages** (17 critical, 71 high, 94 medium, 12 low; 170 npm, 24 Go). Only two frontend direct deps are implicated — `next` (62 alerts) and `jspdf` (20). Six Go bumps were applied and verified building, then **reverted at request** to keep this branch to the workflow fixes; they move to `pjol/vulnerability-fixes`. Noted there: go-ethereum 1.17.0 raises the `go` directive to 1.25.0, and `go.sum` is untracked so a half-applied bump leaves no trace in the diff. | 0.40h | app |
+| Dependabot triage and the first pass of Go bumps, applied and verified building, then **reverted at request** to keep this branch to the workflow fixes before moving to `pjol/vulnerability-fixes`. go-ethereum 1.17.0 raises the `go` directive to 1.25.0, which needs the deploy image checked. | 0.38h | app |
 | Disk at 100% (638 MB free of 466 GB) blocked the Go build with `no space left on device`; reclaimed the regenerable build cache and module cache (~14 GB). One `go mod tidy` ran while full, silently rolled `go.mod` back, and was only caught by re-reading resolved versions — worth re-verifying with `go list -m` after any bump. | 0.12h | — |
-| Previous branch scope completed (tail of the sitting it was written in), plus three revisions. | 0.20h | app |
+| Previous branch scope completed (tail of the sitting it was written in), plus four revisions. | 0.22h | app |
 | Bridge unwrap configuration audited and charted — chain `celo`, currency `usdc`, rail `ach`, destination `usd`, memo `SFLUV`, no developer fee set. | 0.04h | app |
 | Investigated what Bridge actually charges. **Not answerable from our own data: we discard it.** Bridge returns `initial_amount`, `developer_fee`, `subtotal_amount`, `converted_amount`, `exchange_rate`, `gas_fee` and `outgoing_amount` on every drain; our `Drain` struct models none of them. Also established that `developer_fee` is **our** revenue line, not Bridge's charge — Bridge's take is in the spread, so no pricing page could state it per transaction. | 0.05h | app |
 
@@ -217,16 +266,16 @@ runtime.
 | Source | Hours |
 |---|---|
 | Measured — animations | 4.50h |
-| Measured — app | 2.15h |
+| Measured — app | 2.37h |
 | Measured — Beth check-in (inside the Friday span) | 0.50h |
 | Measured — webpage | 0.00h |
-| **Measured subtotal** | **7.15h** |
+| **Measured subtotal** | **7.37h** |
 
 The mobile-app edits and the disk recovery carry no separate line: both were done from inside app
-sittings, so their time is already in the 2.15h rather than alongside it. There is no mobile-app
+sittings, so their time is already in the 2.37h rather than alongside it. There is no mobile-app
 transcript of its own.
-| Meetings as stated, less 0.09h already measured inside two of the windows | 3.91h |
-| **Total** | **11.1h** |
+| Meetings as stated, less 0.09h already measured inside two of the windows | 4.66h |
+| **Total** | **12.0h** |
 
 # Volume
 
@@ -242,6 +291,14 @@ change ships on this branch.
 
 **mobile-app** — `ImproverScreen.tsx` and `types/app.ts`.
 
+**`pjol/vulnerability-fixes`** — separate branch, `458c3ba`: 6 files, +784/−370 (`.gitignore`,
+`backend/go.sum` now tracked at 272 lines, `frontend/package.json`, `frontend/pnpm-lock.yaml`,
+`app/photos/[photo_id]/page.tsx`, `update-production-backend.sh`). 26 files and +1,955/−430 against
+`main` in total, since it carries the merged workflow work too.
+
+**No animation work since Oct 3 22:24**, and no untracked work anywhere: the app tree is clean on
+`pjol/merchant-unwrap-pending-states`, and animations has zero files modified since.
+
 # Open
 
 - **Jacky's two steps: one `role_id` or two?** Decides whether the backfill fixes her case or the
@@ -250,8 +307,12 @@ change ships on this branch.
   `ensureRecurringWorkflowSeriesCatchUpTx` with a conflicting terminal state.
 - **Set `WORKFLOW_PAYOUT_RPC_80094` and `WORKFLOW_PAYOUT_TOKEN_80094`** — this is what actually clears
   the 12 stuck workflows and the payout accounting.
-- **194 Dependabot alerts**, on `pjol/vulnerability-fixes`. Go side is 6 bumps for 24 alerts; npm side
-  is 170 alerts behind `next` and `jspdf` plus 24 transitive packages.
+- **13 Dependabot alerts remain**, all behind `@privy-io/react-auth`. Decide between forcing major
+  overrides into the auth path (needs login/wallet/signing tested by hand) and migrating to Privy
+  3.47.0. `elliptic` has no patch at any version. The other 181 are addressed on
+  `pjol/vulnerability-fixes` and close when it merges.
+- **Check the deploy image is on Go 1.25** before merging that branch — go-ethereum 1.17.0 raised the
+  `go` directive from 1.24.0.
 - **Bridge fee capture** — add the seven drain fields, persist them, surface them in the detail modal.
 - **Check `default_liquidation_address_fee_percent`** in the Bridge dashboard. Nothing in this codebase
   sets it; if it is non-zero, merchants pay a fee the payout card tells them is not taken.
