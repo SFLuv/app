@@ -91,6 +91,7 @@ import { OrganizationManagement } from "@/components/admin/organization-manageme
 import { WorkflowDetailsModal } from "@/components/workflows/workflow-details-modal"
 import { AdminAnalyticsPanel } from "@/components/admin/admin-analytics-panel"
 import { PartnersPanel } from "@/components/admin/partners-panel"
+import { WebsitePanel } from "@/components/admin/website/website-panel"
 import { MerchantPayoutsPanel } from "@/components/admin/merchant-payouts-panel"
 import type { W9AdminOverview } from "@/types/w9"
 import type { ClientVersionUserCountResponse, UserResponse } from "@/types/server"
@@ -288,6 +289,7 @@ export default function AdminPage() {
       "workflows",
       "credential-types",
       "partners",
+      "website",
       "payouts",
     ].includes(value)
   }
@@ -2735,6 +2737,9 @@ export default function AdminPage() {
             <TabsTrigger value="partners" className="w-full justify-between px-3 py-2">
               <span>Partners</span>
             </TabsTrigger>
+            <TabsTrigger value="website" className="w-full justify-between px-3 py-2">
+              <span>Website</span>
+            </TabsTrigger>
             <TabsTrigger value="payouts" className="w-full justify-between px-3 py-2">
               <span>Payouts</span>
             </TabsTrigger>
@@ -2748,6 +2753,10 @@ export default function AdminPage() {
 
         <TabsContent value="partners" className="space-y-6">
           <PartnersPanel />
+        </TabsContent>
+
+        <TabsContent value="website" className="space-y-6">
+          <WebsitePanel />
         </TabsContent>
 
         <TabsContent value="payouts" className="space-y-6">
