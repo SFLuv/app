@@ -41,12 +41,17 @@ type GlobalCredentialType struct {
 	BadgeDataBase64  *string   `json:"badge_data_base64,omitempty"`
 	CreatedAt        time.Time `json:"created_at"`
 	UpdatedAt        time.Time `json:"updated_at"`
+
+	// The credential type this one is listed under when granting, if any.
+	// Grouping only: holding one does not imply holding the other.
+	ParentValue *string `json:"parent_value"`
 }
 
 type GlobalCredentialTypeRequest struct {
-	Value      string `json:"value"`
-	Label      string `json:"label"`
-	Visibility string `json:"visibility,omitempty"`
+	Value       string `json:"value"`
+	Label       string `json:"label"`
+	Visibility  string `json:"visibility,omitempty"`
+	ParentValue string `json:"parent_value,omitempty"`
 }
 
 type GlobalCredentialTypeUpdateRequest struct {
@@ -55,6 +60,8 @@ type GlobalCredentialTypeUpdateRequest struct {
 	BadgeContentType *string `json:"badge_content_type,omitempty"`
 	BadgeDataBase64  *string `json:"badge_data_base64,omitempty"`
 	ClearBadge       bool    `json:"clear_badge,omitempty"`
+	// Absent leaves it as it is; "" moves the type to the top level.
+	ParentValue *string `json:"parent_value,omitempty"`
 }
 
 type Proposer struct {

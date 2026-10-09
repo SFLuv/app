@@ -1241,7 +1241,11 @@ if [[ "$RUN_FRONTEND" -eq 1 ]]; then
     # and the thumbnail renders as a broken image with no clue why. This is the
     # escape hatch middleware.ts already provides, pointed at the local backend
     # only. Production sets nothing here and keeps the stricter policy.
-    "NEXT_PUBLIC_CSP_EXTRA_IMG_SRC=http://localhost:$BACKEND_PORT"
+    # The local marketing site is http too, and the Website tools preview its
+    # images (slides and documents that ship with the site), so allow it as well.
+    "NEXT_PUBLIC_CSP_EXTRA_IMG_SRC=http://localhost:$BACKEND_PORT${WEBPAGE_PORT:+,http://localhost:$WEBPAGE_PORT}"
+    # Links and previews in the Website tools point at the local site, not sfluv.org.
+    ${WEBPAGE_PORT:+"NEXT_PUBLIC_WEBSITE_URL=http://localhost:$WEBPAGE_PORT"}
   )
   # Collect the build started at step 0b. Usually finished by now; if not, this
   # is the only place the boot waits on it.
