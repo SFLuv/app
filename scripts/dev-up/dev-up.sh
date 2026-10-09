@@ -12,15 +12,18 @@
 #   - ponder:   indexes the local fork into the cloned ponder db
 #   - backend:  Go API on :8080 (local community config, no external sends)
 #   - frontend: Next.js on :3000
-#   - webpage:  public marketing site (pulled into ./tmp from git, or a local
-#               checkout via WEBPAGE_DIR), on the first free port from :3002 up,
+#   - webpage:  public marketing site (a sibling ../webpage checkout when you
+#               have one, else pulled into ./tmp from git), on the first free
+#               port from :3002 up,
 #               pointed at the local backend
 #   - mobile:   Expo (pulled into ./tmp, branch via MOBILE_APP_BRANCH, or a
 #               local checkout via MOBILE_APP_DIR; background — use the
 #               post-boot menu to open the iOS simulator)
 #
-# The webpage and mobile app are pulled from git by default so a fresh machine
-# needs no manual checkouts. Setting WEBPAGE_DIR / MOBILE_APP_DIR switches that
+# The webpage uses a sibling ../webpage checkout when one exists, so local edits
+# are what you see; the mobile app is pulled from git. Either falls back to git
+# so a fresh machine needs no manual checkouts. Setting WEBPAGE_DIR /
+# MOBILE_APP_DIR switches that
 # project to a local path, which wins whenever both are configured.
 #
 # After boot, an interactive menu takes the foreground: open the iOS simulator,
@@ -314,10 +317,25 @@ FRONTEND_PORT=3000
 # the frontend (:3000) and the engine (:3001).
 WEBPAGE_PORT_BASE="${WEBPAGE_PORT_BASE:-3002}"
 WEBPAGE_PORT=""
-# Pulled from git by default so a fresh machine needs no manual checkout. Set
-# WEBPAGE_DIR to develop against a local copy instead; it wins when both are set.
+# A sibling checkout wins, then WEBPAGE_DIR, then git.
+#
+# The git default exists so a fresh machine needs no manual checkout, and that
+# still holds — a machine without ../webpage clones as before. But on a machine
+# that HAS the repo checked out next door, cloning was the wrong answer: the
+# clone is reset --hard to origin, so uncommitted and unpushed webpage work was
+# silently ignored and dev-up served main while you edited something else.
+# Preferring the sibling is what "run my local changes" should mean.
+#
+# WEBPAGE_DIR still overrides, and WEBPAGE_DIR=git forces the clone when you
+# want to check the webpage as deployed rather than as edited.
 WEBPAGE_REPO="${WEBPAGE_REPO:-https://github.com/SFLuv/webpage.git}"
 WEBPAGE_BRANCH="${WEBPAGE_BRANCH:-main}"
+WEBPAGE_SIBLING="$(cd "$ROOT/.." 2>/dev/null && pwd)/webpage"
+if [[ -z "${WEBPAGE_DIR:-}" && -d "$WEBPAGE_SIBLING" ]]; then
+  WEBPAGE_DIR="$WEBPAGE_SIBLING"
+elif [[ "${WEBPAGE_DIR:-}" == "git" ]]; then
+  WEBPAGE_DIR=""
+fi
 WEBPAGE_DIR="${WEBPAGE_DIR:-}"
 WEBPAGE_CHECKOUT="$TMP_DIR/webpage"
 CELO_CHAIN_ID=42220
