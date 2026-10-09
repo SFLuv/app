@@ -188,6 +188,12 @@ const buildContentSecurityPolicy = (nonce: string, requestOrigin: string) => {
       "ws://127.0.0.1:8080",
     ])
   }
+  // The Website tools read the public site's list of pages for their link pickers.
+  try {
+    appendUnique(connectSrc, [new URL(process.env.NEXT_PUBLIC_WEBSITE_URL || "https://sfluv.org").origin])
+  } catch {
+    // A malformed setting must not take every page down; the pickers fall back to typing.
+  }
   appendUnique(connectSrc, parseEnvList(process.env.NEXT_PUBLIC_CSP_EXTRA_CONNECT_SRC))
 
   const frameSrc = [

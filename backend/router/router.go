@@ -816,13 +816,25 @@ func AddSiteRoutes(r *chi.Mux, s *handlers.AppService) {
 	r.Get("/site/forms", s.GetPublicForms)
 	r.Get("/site/forms/{slug}", s.GetPublicForm)
 	r.Post("/site/forms/{slug}/sign", s.PostSignForm)
+	r.Get("/site/past-events", s.GetPublicPastEvents)
+	r.Get("/site/past-events/{slug}", s.GetPublicPastEvent)
 
 	// Anyone signed in may ask what they can edit; the answer is just "nothing".
 	r.Get("/admin/site/me", withActiveAuth(s.GetSiteCapabilities, s))
 	r.Get("/admin/site/activity", withSiteEditor("", s.GetSiteActivity, s))
 	r.Post("/admin/site/files", withSiteEditor("", s.UploadSiteFile, s))
 
-	banner, financials, forms := structs.SiteCapabilityBanner, structs.SiteCapabilityFinancials, structs.SiteCapabilityForms
+	banner, financials, forms, pastEvents := structs.SiteCapabilityBanner, structs.SiteCapabilityFinancials, structs.SiteCapabilityForms, structs.SiteCapabilityPastEvents
+
+	r.Get("/admin/site/past-events", withSiteEditor(pastEvents, s.GetAdminPastEvents, s))
+	r.Post("/admin/site/past-events", withSiteEditor(pastEvents, s.PostAdminPastEvent, s))
+	r.Put("/admin/site/past-events/{id}", withSiteEditor(pastEvents, s.PutAdminPastEvent, s))
+	r.Delete("/admin/site/past-events/{id}", withSiteEditor(pastEvents, s.DeleteAdminPastEvent, s))
+	r.Post("/admin/site/past-events/{id}/restore", withSiteEditor(pastEvents, s.RestoreAdminPastEvent, s))
+	r.Post("/admin/site/past-events/{id}/photos", withSiteEditor(pastEvents, s.PostAdminPastEventPhotos, s))
+	r.Put("/admin/site/past-events/{id}/photos/order", withSiteEditor(pastEvents, s.PutAdminPastEventPhotoOrder, s))
+	r.Put("/admin/site/past-events/{id}/photos/{photoId}", withSiteEditor(pastEvents, s.PutAdminPastEventPhoto, s))
+	r.Delete("/admin/site/past-events/{id}/photos/{photoId}", withSiteEditor(pastEvents, s.DeleteAdminPastEventPhoto, s))
 
 	r.Get("/admin/site/spotlight", withSiteEditor(banner, s.GetAdminSpotlight, s))
 	r.Put("/admin/site/spotlight", withSiteEditor(banner, s.PutAdminSpotlight, s))

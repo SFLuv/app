@@ -1,7 +1,7 @@
 # Website editing tools + Forms and Waivers
 
-Lets non-technical staff change parts of sfluv.org from the admin panel
-(app.sfluv.org → Admin → **Website**) with no code push, and lets the public
+Lets non-technical staff change parts of sfluv.org from their own page in the
+app (app.sfluv.org → **Website** in the sidebar) with no code push, and lets the public
 sign electronic forms and waivers on the site.
 
 Status: built on branch `sanchezo/website-cms` (this repo) and
@@ -11,34 +11,43 @@ Status: built on branch `sanchezo/website-cms` (this repo) and
 
 | Question | Decision |
 |---|---|
-| Who edits | Sanchez's mom, via the admin panel. Admins can do everything. |
+| Who edits | Sanchez's mom, on the app's **Website** page (`/website`). Admins can do everything; others need a website credential. |
 | Scoping | Per capability, via the existing credential system (see Permissions). |
 | Publishing | Instant. Every edit is undoable. |
 | Forms authoring | Editor can write/paste waiver text and toggle standard fields. No drag-and-drop builder. |
 | Form lifetime | Manual open/close, plus an optional automatic close date. |
-| Withdrawal | A second form kind (`withdrawal`) in the same section. |
+| Withdrawal | A second form kind (`withdrawal`) in the same section. Each submission emails staff (`SITE_WITHDRAWAL_ALERT_EMAIL`, default admin@sfluv.org; at most 20 alerts an hour) so someone marks the original signature withdrawn. |
 
 ## Permissions
 
-Three capability flags, stored as **private credential types** (so a person
-cannot request them for themselves; they are not issued through the improver
-flow):
+Private credential types (nobody can request them for themselves), granted and
+revoked like any other credential from Admin → Improvers → Manage Improver →
+Credentials, so only improvers can hold them:
 
-| Credential type | Grants |
+| Credential | Grants |
 |---|---|
-| `website_banner` | edit the homepage highlights (the rotating Spotlight carousel) |
+| `website_editor` ("Website editor") | every tool below |
+| `website_banner` | edit the homepage banner items (the rotating Spotlight carousel) |
 | `website_financials` | upload/remove financial statements and impact reports |
 | `website_forms` | create/edit/open/close forms; read signatures |
+| `website_past_events` | past events: tiles, tile photos, galleries |
 
-A request is allowed when the caller **is an admin, or holds the active
-credential** for that capability. Admins bypass as everywhere else in the app.
-Signatures contain personal data (and minors' guardians), so the forms
-capability is deliberately separate from the other two.
+The four per-part credentials have `parent_value = 'website_editor'`, so the
+grant menu shows them in a submenu under Website editor. `parent_value`
+(migration 1.63) is a general feature of credential types, set from the
+Credential types tab ("List under"); it only groups the menu and never implies
+holding one credential because of another. The website code is what treats
+`website_editor` as covering every part.
 
-The admin UI reads `GET /admin/site/me` (the caller's capabilities) and shows
-only the tabs they may use.
+A request is allowed when the caller **is an admin, holds `website_editor`, or
+holds the credential for that part**. Signatures contain personal data (and
+minors' guardians), so forms has its own credential.
 
-## Tables (app database, migrations 1.61 and 1.62)
+The `/website` page reads `GET /admin/site/me` (the caller's capabilities) and
+shows only the tools they may use; the sidebar links to it for admins and for
+anyone with at least one.
+
+## Tables (app database, migrations 1.61 to 1.64)
 
 ### `site_files`
 Public uploads: PDFs and images used on the site. Same bytes-in-Postgres
@@ -182,6 +191,20 @@ record's detail/print view.
 Append-only audit trail shown as "Recent changes" in the admin UI:
 `(id, actor_user_id, capability, action, entity, entity_id, summary, at)`.
 
+
+### `site_past_events` + `site_past_event_photos` (migration 1.64)
+A tile in Past events on the volunteers page and its gallery. Only a tile:
+creating one makes no volunteer event, QR codes or rewards.
+
+`site_past_events`: `id, slug (fixed once created), title, event_date, description,
+cover_file_id | cover_url (+ width, height, alt), removed_at, created_by, created_at,
+updated_at`. `site_past_event_photos`: `id, event_id, file_id | url, width, height,
+alt, caption, position`. The caption is shown under the photo and doubles as its
+screen-reader text; the tile photo has no caption and is described by the title. Seeded with the 15 tiles the site used to hard-code (images stay
+where the site hosts them; the first is the tile photo). Removing an event is a
+soft delete with restore; removing a photo deletes the row, and the uploaded file
+is swept later once nothing refers to it.
+
 ## API
 
 ### Public (no auth; cached ≤ 30 s on the site)
@@ -194,8 +217,10 @@ Append-only audit trail shown as "Recent changes" in the admin UI:
 | `GET /site/forms` | open forms |
 | `GET /site/forms/{slug}` | form + current version; `{ status: "closed" }` once closed; 404 if unknown |
 | `POST /site/forms/{slug}/sign` | records a signature (rate-limited, honeypot) |
+| `GET /site/past-events` | tiles, newest first: slug, title, date, cover, photo count |
+| `GET /site/past-events/{slug}` | one gallery: + description and photos; 404 if unknown or removed |
 
-### Admin (`withAdmin` or the capability credential)
+### Admin (`withAdmin`, Website editor, or the part's credential)
 
 ```
 GET    /admin/site/me
@@ -222,6 +247,16 @@ GET    /admin/site/forms/{id}/signatures       list (no images)
 GET    /admin/site/forms/{id}/signatures.csv
 GET    /admin/site/signatures/{sid}            full record incl. images
 POST   /admin/site/signatures/{sid}/withdraw   mark withdrawn
+
+GET    /admin/site/past-events                         includes removed, with photos
+POST   /admin/site/past-events                         { title, date, description, cover_file_id?, cover_alt }
+PUT    /admin/site/past-events/{id}                    same, or cover_photo_id to use a gallery photo
+DELETE /admin/site/past-events/{id}                    soft delete
+POST   /admin/site/past-events/{id}/restore
+POST   /admin/site/past-events/{id}/photos             { file_ids } appended, ≤ 50 a call, ≤ 300 a gallery
+PUT    /admin/site/past-events/{id}/photos/order       { order: [photo ids] }
+PUT    /admin/site/past-events/{id}/photos/{photoId}   { caption }
+DELETE /admin/site/past-events/{id}/photos/{photoId}
 ```
 
 ## Website behaviour
@@ -254,7 +289,7 @@ POST   /admin/site/signatures/{sid}/withdraw   mark withdrawn
 
 ## Concurrency and storage
 
-* Saving the highlights carries the version the editor started from; if someone
+* Saving the banner items carries the version the editor started from; if someone
   else saved in between, the save is refused with a plain message instead of
   silently overwriting them. Restore is a deliberate overwrite and skips this.
 * Uploads nothing refers to (no financial document, no version of any content)

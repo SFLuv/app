@@ -70,7 +70,7 @@ func validSiteLink(value string) bool {
 	return strings.HasPrefix(lower, "https://") || strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "mailto:")
 }
 
-// ── Homepage highlights ──────────────────────────────────────────────────────
+// ── Homepage banner ──────────────────────────────────────────────────────
 
 const maxSpotlightSlides = 12
 
@@ -85,7 +85,7 @@ func sanitizeSpotlight(sp *structs.SiteSpotlight) error {
 		sp.Slides = []structs.SiteSpotlightSlide{}
 	}
 	if len(sp.Slides) > maxSpotlightSlides {
-		return fmt.Errorf("there can be at most %d highlights", maxSpotlightSlides)
+		return fmt.Errorf("there can be at most %d banner items", maxSpotlightSlides)
 	}
 
 	seen := map[string]bool{}
@@ -106,27 +106,27 @@ func sanitizeSpotlight(sp *structs.SiteSpotlight) error {
 			sl.Id = "slide-" + uuid.NewString()[:8]
 		}
 		if seen[sl.Id] {
-			return fmt.Errorf("highlight %d repeats another highlight's id", n)
+			return fmt.Errorf("banner item %d repeats another banner item's id", n)
 		}
 		seen[sl.Id] = true
 
 		if tooLong(sl.Label, 40) {
-			return fmt.Errorf("highlight %d: the small label must be 40 characters or fewer", n)
+			return fmt.Errorf("banner item %d: the small label must be 40 characters or fewer", n)
 		}
 		if tooLong(sl.Title, 150) {
-			return fmt.Errorf("highlight %d: the title must be 150 characters or fewer", n)
+			return fmt.Errorf("banner item %d: the title must be 150 characters or fewer", n)
 		}
 		if tooLong(sl.Body, 600) {
-			return fmt.Errorf("highlight %d: the text must be 600 characters or fewer", n)
+			return fmt.Errorf("banner item %d: the text must be 600 characters or fewer", n)
 		}
 		if tooLong(sl.ImageAlt, 200) {
-			return fmt.Errorf("highlight %d: the picture description must be 200 characters or fewer", n)
+			return fmt.Errorf("banner item %d: the picture description must be 200 characters or fewer", n)
 		}
 		if tooLong(sl.EventMatch, 100) {
-			return fmt.Errorf("highlight %d: the event words must be 100 characters or fewer", n)
+			return fmt.Errorf("banner item %d: the event words must be 100 characters or fewer", n)
 		}
 		if sl.ImagePosition != "" && !spotlightPositionPattern.MatchString(sl.ImagePosition) {
-			return fmt.Errorf("highlight %d: the picture position is not valid", n)
+			return fmt.Errorf("banner item %d: the picture position is not valid", n)
 		}
 
 		if sl.ImageFileId != nil && strings.TrimSpace(*sl.ImageFileId) == "" {
@@ -141,10 +141,18 @@ func sanitizeSpotlight(sp *structs.SiteSpotlight) error {
 		act.Label = strings.TrimSpace(act.Label)
 		act.Href = strings.TrimSpace(act.Href)
 		if tooLong(act.Label, 40) {
-			return fmt.Errorf("highlight %d: the button words must be 40 characters or fewer", n)
+			return fmt.Errorf("banner item %d: the button words must be 40 characters or fewer", n)
+		}
+		// A button is optional, but half of one (words with nowhere to go, or
+		// the other way round) is almost certainly a mistake.
+		if (act.Label == "") != (act.Href == "") {
+			if act.Label == "" {
+				return fmt.Errorf("banner item %d: the button needs words, or clear its link to have no button", n)
+			}
+			return fmt.Errorf("banner item %d: choose where the button goes, or clear its words to have no button", n)
 		}
 		if act.Href != "" && !validSiteLink(act.Href) {
-			return fmt.Errorf("highlight %d: the button link must start with / (a page on this site), https://, or mailto:", n)
+			return fmt.Errorf("banner item %d: the button link must start with / (a page on this site), https://, or mailto:", n)
 		}
 		if act.AlsoOpenURL != nil {
 			trimmed := strings.TrimSpace(*act.AlsoOpenURL)
@@ -152,7 +160,7 @@ func sanitizeSpotlight(sp *structs.SiteSpotlight) error {
 			case trimmed == "":
 				act.AlsoOpenURL = nil
 			case !validSiteLink(trimmed):
-				return fmt.Errorf("highlight %d: the second link must start with / , https://, or mailto:", n)
+				return fmt.Errorf("banner item %d: the second link must start with / , https://, or mailto:", n)
 			default:
 				act.AlsoOpenURL = &trimmed
 			}
@@ -171,13 +179,10 @@ func sanitizeSpotlight(sp *structs.SiteSpotlight) error {
 				label = fmt.Sprintf("#%d", n)
 			}
 			if sl.Title == "" {
-				return fmt.Errorf("highlight %d needs a title before it can be turned on", n)
+				return fmt.Errorf("banner item %d needs a title before it can be turned on", n)
 			}
 			if sl.ImageFileId == nil && (sl.ImageURL == nil || sl.ImageWidth <= 0 || sl.ImageHeight <= 0) {
 				return fmt.Errorf("“%s” needs a photo before it can be turned on", label)
-			}
-			if act.Label == "" || act.Href == "" {
-				return fmt.Errorf("“%s” needs a button (words and where it goes) before it can be turned on", label)
 			}
 		}
 		if sl.ImageAlt == "" {

@@ -8,6 +8,8 @@ export interface GlobalCredentialType {
   value: string
   label: string
   visibility?: CredentialVisibility
+  /** The credential type this one is listed under when granting (grouping only). */
+  parent_value?: string | null
   badge_content_type?: string | null
   badge_data_base64?: string | null
   created_at: string

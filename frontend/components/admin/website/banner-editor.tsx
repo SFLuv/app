@@ -12,9 +12,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { useAuthFetch } from "./use-auth-fetch"
-import { formatWhen, jsonBody, resolveSiteUrl, siteFetch, uploadSiteFile } from "@/lib/site-admin"
+import { checkSiteFile, formatWhen, jsonBody, resolveSiteUrl, siteFetch, uploadSiteFile } from "@/lib/site-admin"
 import type { SiteSpotlightAdmin, SiteSpotlightSlide } from "@/types/site"
 import { useNotice } from "./notice"
+import { findPlace, SiteLinkPicker, useSitePages, type SitePlace } from "./site-link-picker"
 
 const POSITIONS: { value: string; label: string }[] = [
   { value: "center 8%", label: "Top of the photo (keeps faces near the top)" },
@@ -47,6 +48,20 @@ function blankSlide(): SiteSpotlightSlide {
     action: { label: "", href: "", new_tab: false, also_open_file_id: null, also_open_url: null },
     event_match: "",
   }
+}
+
+/** A file uploaded through these tools is served from `/site/files/<id>/…` on the API. */
+const UPLOADED_FILE = /\/site\/files\/([0-9a-f-]{36})\//i
+
+/** How a slide refers to a document it opens: by upload id when it is one, otherwise by its path on the site. */
+function documentToOpen(url: string): Pick<SiteSpotlightSlide["action"], "also_open_file_id" | "also_open_url"> {
+  const uploaded = UPLOADED_FILE.exec(url)
+  return uploaded ? { also_open_file_id: uploaded[1], also_open_url: null } : { also_open_file_id: null, also_open_url: url }
+}
+
+function opensSameFile(action: SiteSpotlightSlide["action"], url: string): boolean {
+  const target = documentToOpen(url)
+  return target.also_open_file_id ? action.also_open_file_id === target.also_open_file_id : action.also_open_url === target.also_open_url
 }
 
 /** The part of a slide that is saved. The preview URL is for display only. */
@@ -120,11 +135,18 @@ function SlideEditor({
   const documentInput = useRef<HTMLInputElement>(null)
   const [uploading, setUploading] = useState<"image" | "document" | null>(null)
   const [documentName, setDocumentName] = useState<string | null>(null)
+  // A button is optional. It is "on" while any part of it is filled in, or once switched on.
+  const [buttonOn, setButtonOn] = useState(Boolean(slide.action.label || slide.action.href))
 
   const patch = (changes: Partial<SiteSpotlightSlide>) => onChange({ ...slide, ...changes })
   const patchAction = (changes: Partial<SiteSpotlightSlide["action"]>) => onChange({ ...slide, action: { ...slide.action, ...changes } })
 
   const uploadImage = async (file: File) => {
+    const problem = await checkSiteFile(file, "image")
+    if (problem) {
+      toast({ title: "Can’t use that file", description: problem, variant: "destructive" })
+      return
+    }
     setUploading("image")
     try {
       const uploaded = await uploadSiteFile(authFetch, file)
@@ -144,6 +166,11 @@ function SlideEditor({
   }
 
   const uploadDocument = async (file: File) => {
+    const problem = await checkSiteFile(file, "pdf")
+    if (problem) {
+      toast({ title: "Can’t use that file", description: problem, variant: "destructive" })
+      return
+    }
     setUploading("document")
     try {
       const uploaded = await uploadSiteFile(authFetch, file)
@@ -156,7 +183,31 @@ function SlideEditor({
     }
   }
 
+  // Pointing the button at one document also opens that document's PDF in a new
+  // tab, the way the impact report banner does, and pointing it elsewhere takes
+  // that PDF off again. A PDF uploaded here by hand is never replaced or removed
+  // by the link; it wins, and a note says so.
+  const { pages } = useSitePages()
+  const linkedPlace = pages ? findPlace(pages, slide.action.href) : null
+  const pickLink = (href: string, picked?: SitePlace, previous?: SitePlace) => {
+    const changes: Partial<SiteSpotlightSlide["action"]> = { href }
+    const hasDocumentNow = Boolean(slide.action.also_open_file_id || slide.action.also_open_url)
+    const attachedByLink = Boolean(previous?.opens && opensSameFile(slide.action, previous.opens))
+    if (!hasDocumentNow || attachedByLink) {
+      if (picked?.opens) {
+        Object.assign(changes, documentToOpen(picked.opens))
+        setDocumentName(picked.title)
+      } else if (attachedByLink) {
+        Object.assign(changes, { also_open_file_id: null, also_open_url: null })
+        setDocumentName(null)
+      }
+    }
+    patchAction(changes)
+  }
+
   const hasDocument = Boolean(slide.action.also_open_file_id || slide.action.also_open_url)
+  // The button points at a document but opens a different PDF (one uploaded by hand).
+  const overridesLinkedDocument = Boolean(linkedPlace?.opens && hasDocument && !opensSameFile(slide.action, linkedPlace.opens))
   // "Middle" is stored as an empty position (centred); the select cannot hold an empty value.
   const positionChoice = slide.image_position === "" ? "middle" : slide.image_position
   const knownPosition = POSITIONS.some((p) => p.value === positionChoice)
@@ -258,7 +309,25 @@ function SlideEditor({
         </div>
 
         <div className="space-y-3 rounded-lg border p-3">
-          <p className="text-sm font-medium">Button</p>
+          <div className="flex items-center justify-between gap-3">
+            <Label htmlFor={`${slide.id}-has-btn`} className="text-sm font-medium">
+              Button (optional)
+            </Label>
+            <Switch
+              id={`${slide.id}-has-btn`}
+              checked={buttonOn}
+              onCheckedChange={(on) => {
+                setButtonOn(on)
+                if (!on) {
+                  patchAction({ label: "", href: "", new_tab: false, also_open_file_id: null, also_open_url: null })
+                  setDocumentName(null)
+                }
+              }}
+            />
+          </div>
+          {!buttonOn && <p className="text-xs text-muted-foreground">No button: the card shows just its photo and words.</p>}
+          {buttonOn && (
+          <>
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="space-y-1">
               <Label htmlFor={`${slide.id}-btn`}>Button words</Label>
@@ -272,12 +341,7 @@ function SlideEditor({
             </div>
             <div className="space-y-1">
               <Label htmlFor={`${slide.id}-href`}>Where it goes</Label>
-              <Input
-                id={`${slide.id}-href`}
-                value={slide.action.href}
-                placeholder="/volunteers or https://…"
-                onChange={(e) => patchAction({ href: e.target.value })}
-              />
+              <SiteLinkPicker id={`${slide.id}-href`} value={slide.action.href} onChange={pickLink} />
             </div>
           </div>
           {offSite && (
@@ -301,8 +365,14 @@ function SlideEditor({
                     variant="ghost"
                     size="sm"
                     onClick={() => {
-                      patchAction({ also_open_file_id: null, also_open_url: null })
-                      setDocumentName(null)
+                      // Back to the PDF of the document the button points at, if it points at one.
+                      if (overridesLinkedDocument && linkedPlace?.opens) {
+                        patchAction(documentToOpen(linkedPlace.opens))
+                        setDocumentName(linkedPlace.title)
+                      } else {
+                        patchAction({ also_open_file_id: null, also_open_url: null })
+                        setDocumentName(null)
+                      }
                     }}
                   >
                     <Trash2 className="mr-2 h-4 w-4" /> Remove
@@ -322,7 +392,15 @@ function SlideEditor({
               />
             </div>
             <p className="text-xs text-muted-foreground">When someone clicks the button, the document opens in a new tab while the site goes to the place above.</p>
+            {overridesLinkedDocument && linkedPlace && (
+              <p className="text-xs text-amber-700 dark:text-amber-400">
+                The button points at “{linkedPlace.title}” but opens the PDF uploaded here instead of that document’s own. Remove this one to
+                open “{linkedPlace.title}” instead.
+              </p>
+            )}
           </div>
+          </>
+          )}
         </div>
 
         <div className="space-y-1">
@@ -335,8 +413,8 @@ function SlideEditor({
             onChange={(e) => patch({ event_match: e.target.value })}
           />
           <p className="text-xs text-muted-foreground">
-            Type a few words from the event’s title, in order. The button then goes to the next upcoming event with those words, and its date
-            and reward are shown. Leave this empty for an ordinary announcement.
+            Type a few words from the event’s title, in order. The card then shows the next upcoming event’s date and reward, and the button
+            (if there is one) goes to that event. Leave this empty for an ordinary announcement.
           </p>
         </div>
       </div>
@@ -344,13 +422,13 @@ function SlideEditor({
       <div className="space-y-2">
         <Label>Preview (approximate)</Label>
         <SlidePreview slide={slide} />
-        {!slide.enabled && <p className="max-w-sm text-xs text-muted-foreground">This highlight is switched off, so visitors will not see it.</p>}
+        {!slide.enabled && <p className="max-w-sm text-xs text-muted-foreground">This banner item is switched off, so visitors will not see it.</p>}
       </div>
     </div>
   )
 }
 
-export function HighlightsEditor() {
+export function BannerEditor() {
   const authFetch = useAuthFetch()
   const { toast } = useNotice()
 
@@ -370,7 +448,7 @@ export function HighlightsEditor() {
       apply(await siteFetch<SiteSpotlightAdmin>(authFetch, "/admin/site/spotlight"))
       setError("")
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to load the highlights.")
+      setError(err instanceof Error ? err.message : "Unable to load the banner items.")
     }
   }, [authFetch, apply])
 
@@ -397,7 +475,7 @@ export function HighlightsEditor() {
   }
 
   const remove = (slide: SiteSpotlightSlide) => {
-    if (!window.confirm(`Delete “${slide.title || "this highlight"}”? To keep it for later, switch it off instead.`)) return
+    if (!window.confirm(`Delete “${slide.title || "this banner item"}”? To keep it for later, switch it off instead.`)) return
     setSlides((list) => list.filter((s) => s.id !== slide.id))
   }
 
@@ -413,7 +491,7 @@ export function HighlightsEditor() {
       apply(next)
       const showing = next.current.slides.filter((s) => s.enabled).length
       toast({
-        title: "Highlights saved",
+        title: "Banner saved",
         description: `${showing} showing on the homepage. Changes appear on the website within about 30 seconds.`,
       })
     } catch (err) {
@@ -437,7 +515,7 @@ export function HighlightsEditor() {
   if (!loaded) {
     return (
       <div className="flex items-center gap-2 text-sm text-muted-foreground">
-        <Loader2 className="h-4 w-4 animate-spin" /> Loading the highlights…
+        <Loader2 className="h-4 w-4 animate-spin" /> Loading the banner items…
       </div>
     )
   }
@@ -449,14 +527,14 @@ export function HighlightsEditor() {
       <Card>
         <CardHeader className="flex flex-row items-start justify-between gap-4 space-y-0">
           <div className="space-y-1.5">
-            <CardTitle>Homepage highlights</CardTitle>
+            <CardTitle>Banner items</CardTitle>
             <CardDescription>
-              The rotating card beside the title on sfluv.org. Switch a highlight off when it is over — it stays here for next time. New highlights go
+              The rotating banner on sfluv.org’s front page, one card per item. Switch a banner item off when it is over — it stays here for next time. New banner items go
               first. Changes show on the website within about 30 seconds.
             </CardDescription>
           </div>
           <Button onClick={add}>
-            <Plus className="mr-2 h-4 w-4" /> New highlight
+            <Plus className="mr-2 h-4 w-4" /> New banner item
           </Button>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -464,7 +542,7 @@ export function HighlightsEditor() {
             {showing === 0 ? "Nothing is showing — the card is hidden on the homepage." : `${showing} showing on the homepage, in the order below.`}
           </p>
 
-          {slides.length === 0 && <p className="text-sm text-muted-foreground">No highlights yet. Add one to get started.</p>}
+          {slides.length === 0 && <p className="text-sm text-muted-foreground">No banner items yet. Add one to get started.</p>}
 
           <div className="space-y-3">
             {slides.map((slide, index) => {
@@ -486,9 +564,9 @@ export function HighlightsEditor() {
                       {image ? <img src={image} alt="" className="h-full w-full object-cover" style={{ objectPosition: slide.image_position || "center" }} /> : <ImageIcon className="h-4 w-4 text-muted-foreground" />}
                     </div>
                     <div className="min-w-0 flex-1">
-                      <p className="truncate font-medium">{slide.title || "Untitled highlight"}</p>
+                      <p className="truncate font-medium">{slide.title || "Untitled banner item"}</p>
                       <p className="truncate text-xs text-muted-foreground">
-                        {slide.label || "No tag"} · {slide.action.label ? `Button: ${slide.action.label}` : "No button yet"}
+                        {slide.label || "No tag"} · {slide.action.label ? `Button: ${slide.action.label}` : "No button"}
                         {slide.event_match ? " · linked to an event" : ""}
                       </p>
                     </div>
@@ -503,7 +581,7 @@ export function HighlightsEditor() {
                         {open ? <ChevronUp className="mr-1.5 h-3.5 w-3.5" /> : <ChevronDown className="mr-1.5 h-3.5 w-3.5" />}
                         {open ? "Close" : "Edit"}
                       </Button>
-                      <Button variant="ghost" size="icon" aria-label="Delete highlight" onClick={() => remove(slide)}>
+                      <Button variant="ghost" size="icon" aria-label="Delete banner item" onClick={() => remove(slide)}>
                         <Trash2 className="h-4 w-4" />
                       </Button>
                     </div>

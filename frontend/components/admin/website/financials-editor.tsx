@@ -15,6 +15,7 @@ import { useNotice } from "./notice"
 import {
   FINANCIAL_KIND_LABELS,
   PERIOD_LABELS,
+  checkSiteFile,
   formatSize,
   jsonBody,
   resolveSiteUrl,
@@ -219,6 +220,14 @@ export function FinancialsEditor() {
     void load()
   }, [load])
 
+  // A wrong or oversized file is refused when it is chosen, not at publish.
+  const pickPdf = async (chosen: File | null, keep: (file: File | null) => void) => {
+    if (!chosen) return
+    const problem = await checkSiteFile(chosen, "pdf")
+    if (problem) return toast({ title: "Can’t use that file", description: problem, variant: "destructive" })
+    keep(chosen)
+  }
+
   const fail = (title: string, err: unknown) =>
     toast({ title, description: err instanceof Error ? err.message : "", variant: "destructive" })
 
@@ -237,7 +246,7 @@ export function FinancialsEditor() {
       toast({ title: "Published", description: `“${created.label}” will appear on the website within about 30 seconds.` })
       setFile(null)
       if (fileInput.current) fileInput.current.value = ""
-      setDraft((d) => ({ ...blankDraft(), kind: d.kind, fiscal_year: d.fiscal_year, period: d.period }))
+      setDraft(blankDraft())
       await load()
     } catch (err) {
       fail("Could not publish the document", err)
@@ -375,7 +384,11 @@ export function FinancialsEditor() {
                 type="file"
                 accept="application/pdf"
                 className="hidden"
-                onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+                onChange={(e) => {
+                  const chosen = e.target.files?.[0] ?? null
+                  e.target.value = ""
+                  void pickPdf(chosen, setFile)
+                }}
               />
             </div>
           </div>
@@ -467,7 +480,11 @@ export function FinancialsEditor() {
                 type="file"
                 accept="application/pdf"
                 className="hidden"
-                onChange={(e) => setEditFile(e.target.files?.[0] ?? null)}
+                onChange={(e) => {
+                  const chosen = e.target.files?.[0] ?? null
+                  e.target.value = ""
+                  void pickPdf(chosen, setEditFile)
+                }}
               />
             </div>
           </div>

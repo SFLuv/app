@@ -9,17 +9,19 @@ import { useApp } from "@/context/AppProvider"
 import { useAuthFetch } from "./use-auth-fetch"
 import { formatWhen, siteFetch } from "@/lib/site-admin"
 import type { SiteActivity, SiteCapabilities } from "@/types/site"
-import { HighlightsEditor } from "./highlights-editor"
+import { BannerEditor } from "./banner-editor"
 import { FinancialsEditor } from "./financials-editor"
 import { FormsEditor } from "./forms-editor"
+import { PastEventsEditor } from "./past-events-editor"
 import { NoticeProvider } from "./notice"
 
-type Section = "banner" | "financials" | "forms"
+type Section = "banner" | "financials" | "forms" | "past_events"
 
 const SECTIONS: { id: Section; label: string }[] = [
-  { id: "banner", label: "Homepage highlights" },
+  { id: "banner", label: "Banner items" },
   { id: "financials", label: "Financials & reports" },
   { id: "forms", label: "Forms & waivers" },
+  { id: "past_events", label: "Past events" },
 ]
 
 /**
@@ -104,7 +106,7 @@ function WebsitePanelInner() {
 
         {caps.banner && (
           <TabsContent value="banner" className="mt-0">
-            <HighlightsEditor />
+            <BannerEditor />
           </TabsContent>
         )}
         {caps.financials && (
@@ -115,6 +117,11 @@ function WebsitePanelInner() {
         {caps.forms && (
           <TabsContent value="forms" className="mt-0">
             <FormsEditor />
+          </TabsContent>
+        )}
+        {caps.past_events && (
+          <TabsContent value="past_events" className="mt-0">
+            <PastEventsEditor />
           </TabsContent>
         )}
       </Tabs>

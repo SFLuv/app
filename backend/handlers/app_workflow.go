@@ -6025,10 +6025,10 @@ func (a *AppService) CreateAdminCredentialType(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	t, err := a.db.CreateGlobalCredentialType(r.Context(), req.Value, req.Label, req.Visibility)
+	t, err := a.db.CreateGlobalCredentialType(r.Context(), req.Value, req.Label, req.Visibility, req.ParentValue)
 	if err != nil {
 		errMsg := err.Error()
-		if strings.Contains(errMsg, "required") || strings.Contains(errMsg, "already exists") || strings.Contains(errMsg, "visibility") {
+		if strings.Contains(errMsg, "required") || strings.Contains(errMsg, "already exists") || strings.Contains(errMsg, "visibility") || strings.Contains(errMsg, "invalid parent") {
 			w.WriteHeader(http.StatusBadRequest)
 			w.Write([]byte(errMsg))
 			return
@@ -6096,6 +6096,7 @@ func (a *AppService) UpdateAdminCredentialType(w http.ResponseWriter, r *http.Re
 		req.BadgeContentType,
 		req.BadgeDataBase64,
 		req.ClearBadge,
+		req.ParentValue,
 	)
 	if err != nil {
 		errMsg := err.Error()

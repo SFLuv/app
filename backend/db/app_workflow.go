@@ -14048,6 +14048,7 @@ func (a *AppDB) GetGlobalCredentialTypes(ctx context.Context) ([]*structs.Global
 			value,
 			label,
 			visibility,
+			parent_value,
 			badge_content_type,
 			CASE
 				WHEN badge_data IS NULL THEN NULL
@@ -14070,6 +14071,7 @@ func (a *AppDB) GetGlobalCredentialTypes(ctx context.Context) ([]*structs.Global
 			&t.Value,
 			&t.Label,
 			&t.Visibility,
+			&t.ParentValue,
 			&t.BadgeContentType,
 			&t.BadgeDataBase64,
 			&t.CreatedAt,
@@ -14082,11 +14084,50 @@ func (a *AppDB) GetGlobalCredentialTypes(ctx context.Context) ([]*structs.Global
 	return results, nil
 }
 
-func (a *AppDB) CreateGlobalCredentialType(ctx context.Context, value, label, visibility string) (*structs.GlobalCredentialType, error) {
+// validCredentialParent checks that a credential type may be listed under
+// parent: the parent exists, and is neither the type itself nor one of the
+// types listed under it (which would make a loop).
+func (a *AppDB) validCredentialParent(ctx context.Context, value string, parent string) error {
+	if parent == "" {
+		return nil
+	}
+	if parent == value {
+		return fmt.Errorf("invalid parent: a credential cannot be listed under itself")
+	}
+	seen := map[string]bool{}
+	for current := parent; current != ""; {
+		if current == value {
+			return fmt.Errorf("invalid parent: that credential is already listed under this one")
+		}
+		if seen[current] {
+			break
+		}
+		seen[current] = true
+		var next *string
+		err := a.db.QueryRow(ctx, `SELECT parent_value FROM credential_type_definitions WHERE value = $1;`, current).Scan(&next)
+		if err == pgx.ErrNoRows {
+			return fmt.Errorf("invalid parent: credential type not found")
+		}
+		if err != nil {
+			return fmt.Errorf("error checking credential parent: %s", err)
+		}
+		current = ""
+		if next != nil {
+			current = *next
+		}
+	}
+	return nil
+}
+
+func (a *AppDB) CreateGlobalCredentialType(ctx context.Context, value, label, visibility, parent string) (*structs.GlobalCredentialType, error) {
 	value = strings.TrimSpace(value)
 	label = strings.TrimSpace(label)
+	parent = strings.TrimSpace(parent)
 	if value == "" || label == "" {
 		return nil, fmt.Errorf("value and label are required")
+	}
+	if err := a.validCredentialParent(ctx, value, parent); err != nil {
+		return nil, err
 	}
 
 	normalizedVisibility, err := normalizeCredentialVisibility(visibility)
@@ -14096,12 +14137,13 @@ func (a *AppDB) CreateGlobalCredentialType(ctx context.Context, value, label, vi
 
 	t := structs.GlobalCredentialType{}
 	err = a.db.QueryRow(ctx, `
-		INSERT INTO credential_type_definitions (value, label, visibility)
-		VALUES ($1, $2, $3)
+		INSERT INTO credential_type_definitions (value, label, visibility, parent_value)
+		VALUES ($1, $2, $3, NULLIF($4, ''))
 		RETURNING
 			value,
 			label,
 			visibility,
+			parent_value,
 			badge_content_type,
 			CASE
 				WHEN badge_data IS NULL THEN NULL
@@ -14109,10 +14151,11 @@ func (a *AppDB) CreateGlobalCredentialType(ctx context.Context, value, label, vi
 			END AS badge_data_base64,
 			created_at,
 			updated_at;
-	`, value, label, normalizedVisibility).Scan(
+	`, value, label, normalizedVisibility, parent).Scan(
 		&t.Value,
 		&t.Label,
 		&t.Visibility,
+		&t.ParentValue,
 		&t.BadgeContentType,
 		&t.BadgeDataBase64,
 		&t.CreatedAt,
@@ -14135,6 +14178,7 @@ func (a *AppDB) UpdateGlobalCredentialType(
 	badgeContentType *string,
 	badgeDataBase64 *string,
 	clearBadge bool,
+	parent *string,
 ) (*structs.GlobalCredentialType, error) {
 	value = strings.TrimSpace(value)
 	label = strings.TrimSpace(label)
@@ -14186,6 +14230,15 @@ func (a *AppDB) UpdateGlobalCredentialType(
 
 	contentTypeParam := parsedContentType
 
+	hasParent := parent != nil
+	parentParam := ""
+	if hasParent {
+		parentParam = strings.TrimSpace(*parent)
+		if err := a.validCredentialParent(ctx, value, parentParam); err != nil {
+			return nil, err
+		}
+	}
+
 	t := structs.GlobalCredentialType{}
 	err := a.db.QueryRow(ctx, `
 			UPDATE credential_type_definitions
@@ -14205,12 +14258,17 @@ func (a *AppDB) UpdateGlobalCredentialType(
 					WHEN $8 THEN $7
 					ELSE badge_content_type
 				END,
+				parent_value = CASE
+					WHEN $9 THEN NULLIF($10, '')
+					ELSE parent_value
+				END,
 				updated_at = NOW()
 		WHERE value = $1
 		RETURNING
 			value,
 			label,
 			visibility,
+			parent_value,
 			badge_content_type,
 			CASE
 				WHEN badge_data IS NULL THEN NULL
@@ -14218,10 +14276,11 @@ func (a *AppDB) UpdateGlobalCredentialType(
 				END AS badge_data_base64,
 				created_at,
 				updated_at;
-		`, value, label, hasVisibility, normalizedVisibility, clearBadge, badgeData, contentTypeParam, hasBadgePayload).Scan(
+		`, value, label, hasVisibility, normalizedVisibility, clearBadge, badgeData, contentTypeParam, hasBadgePayload, hasParent, parentParam).Scan(
 		&t.Value,
 		&t.Label,
 		&t.Visibility,
+		&t.ParentValue,
 		&t.BadgeContentType,
 		&t.BadgeDataBase64,
 		&t.CreatedAt,

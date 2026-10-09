@@ -65,25 +65,33 @@ func (a *AppService) siteServerError(w http.ResponseWriter, what string, err err
 
 // ── Capabilities ─────────────────────────────────────────────────────────────
 
-// SiteCapabilitiesFor is what a user may edit: everything for an admin,
-// otherwise whatever private credentials they hold.
+// SiteCapabilitiesFor is what a user may edit: everything for an admin or a
+// Website editor, otherwise whichever per-part credentials they hold.
 func (a *AppService) SiteCapabilitiesFor(ctx context.Context, userId string) structs.SiteCapabilities {
 	if a.IsAdmin(ctx, userId) {
-		return structs.SiteCapabilities{Banner: true, Financials: true, Forms: true}
+		return structs.SiteCapabilities{Banner: true, Financials: true, Forms: true, PastEvents: true}
 	}
-	has := func(credential string) bool {
-		held, err := a.db.UserHasActiveCredential(ctx, userId, credential)
-		if err != nil {
-			a.logger.Logf("error checking site capability %s for %s: %s", credential, userId, err)
-			return false
+	held, err := a.db.GetActiveCredentialTypesForUser(ctx, userId)
+	if err != nil {
+		a.logger.Logf("error reading website credentials for %s: %s", userId, err)
+		return structs.SiteCapabilities{}
+	}
+	caps := structs.SiteCapabilities{}
+	for _, credential := range held {
+		switch credential {
+		case structs.SiteEditorCredential:
+			return structs.SiteCapabilities{Banner: true, Financials: true, Forms: true, PastEvents: true}
+		case structs.SiteCapabilityBanner:
+			caps.Banner = true
+		case structs.SiteCapabilityFinancials:
+			caps.Financials = true
+		case structs.SiteCapabilityForms:
+			caps.Forms = true
+		case structs.SiteCapabilityPastEvents:
+			caps.PastEvents = true
 		}
-		return held
 	}
-	return structs.SiteCapabilities{
-		Banner:     has(structs.SiteCapabilityBanner),
-		Financials: has(structs.SiteCapabilityFinancials),
-		Forms:      has(structs.SiteCapabilityForms),
-	}
+	return caps
 }
 
 // CanEditSite reports whether a user holds a capability. An empty capability
@@ -97,8 +105,10 @@ func (a *AppService) CanEditSite(ctx context.Context, userId string, capability 
 		return caps.Financials
 	case structs.SiteCapabilityForms:
 		return caps.Forms
+	case structs.SiteCapabilityPastEvents:
+		return caps.PastEvents
 	default:
-		return caps.Banner || caps.Financials || caps.Forms
+		return caps.Banner || caps.Financials || caps.Forms || caps.PastEvents
 	}
 }
 
@@ -127,6 +137,9 @@ func (a *AppService) GetSiteActivity(w http.ResponseWriter, r *http.Request) {
 	}
 	if caps.Forms {
 		allowed = append(allowed, structs.SiteCapabilityForms)
+	}
+	if caps.PastEvents {
+		allowed = append(allowed, structs.SiteCapabilityPastEvents)
 	}
 
 	items, err := a.db.ListSiteActivity(r.Context(), allowed, 50)
@@ -201,7 +214,7 @@ func (a *AppService) UploadSiteFile(w http.ResponseWriter, r *http.Request) {
 	}()
 }
 
-// ── Homepage highlights (the Spotlight carousel) ─────────────────────────────
+// ── Homepage banner (the Spotlight carousel) ─────────────────────────────
 
 // fillSpotlightPreviews tells the admin panel where each slide's picture can be
 // shown. Output only; never stored.
@@ -229,7 +242,7 @@ func (a *AppService) GetAdminSpotlight(w http.ResponseWriter, r *http.Request) {
 
 	row, err := a.db.GetSiteContent(ctx, spotlightKey)
 	if err != nil {
-		a.siteServerError(w, "loading the highlights", err)
+		a.siteServerError(w, "loading the banner items", err)
 		return
 	}
 	if row != nil {
@@ -244,7 +257,7 @@ func (a *AppService) GetAdminSpotlight(w http.ResponseWriter, r *http.Request) {
 
 	versions, err := a.db.ListSiteContentVersions(ctx, spotlightKey, 30)
 	if err != nil {
-		a.siteServerError(w, "listing highlight versions", err)
+		a.siteServerError(w, "listing banner versions", err)
 		return
 	}
 	for _, v := range versions {
@@ -282,7 +295,7 @@ func (a *AppService) saveSpotlight(w http.ResponseWriter, r *http.Request, sp *s
 		if sl.ImageFileId != nil {
 			file, err := a.db.GetSiteFile(ctx, *sl.ImageFileId)
 			if err != nil || !strings.HasPrefix(file.ContentType, "image/") {
-				writeSiteError(w, http.StatusBadRequest, "A highlight’s photo must be an image you uploaded. Upload it again.")
+				writeSiteError(w, http.StatusBadRequest, "A banner item’s photo must be an image you uploaded. Upload it again.")
 				return
 			}
 		}
@@ -296,16 +309,16 @@ func (a *AppService) saveSpotlight(w http.ResponseWriter, r *http.Request, sp *s
 
 	value, err := json.Marshal(sp)
 	if err != nil {
-		a.siteServerError(w, "encoding the highlights", err)
+		a.siteServerError(w, "encoding the banner items", err)
 		return
 	}
 	version, err := a.db.SaveSiteContent(ctx, spotlightKey, value, utils.GetDid(r), note, expectedVersion)
 	if errors.Is(err, db.ErrSiteVersionConflict) {
-		writeSiteError(w, http.StatusConflict, "Someone else saved the highlights while you were editing. Copy anything you want to keep, then reload to see their changes.")
+		writeSiteError(w, http.StatusConflict, "Someone else saved the banner items while you were editing. Copy anything you want to keep, then reload to see their changes.")
 		return
 	}
 	if err != nil {
-		a.siteServerError(w, "saving the highlights", err)
+		a.siteServerError(w, "saving the banner items", err)
 		return
 	}
 
@@ -329,17 +342,17 @@ func (a *AppService) PutAdminSpotlight(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	note := "Edited the homepage highlights"
+	note := "Edited the homepage banner"
 	if row, _ := a.db.GetSiteContent(r.Context(), spotlightKey); row != nil {
 		var previous structs.SiteSpotlight
 		if json.Unmarshal(row.Value, &previous) == nil {
 			switch {
 			case countEnabledSlides(&sp) == 0 && countEnabledSlides(&previous) > 0:
-				note = "Turned all the highlights off"
+				note = "Turned all the banner items off"
 			case len(sp.Slides) > len(previous.Slides):
-				note = "Added a highlight"
+				note = "Added a banner item"
 			case len(sp.Slides) < len(previous.Slides):
-				note = "Removed a highlight"
+				note = "Removed a banner item"
 			}
 		}
 	}
@@ -361,12 +374,12 @@ func (a *AppService) RestoreAdminSpotlight(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if err != nil {
-		a.siteServerError(w, "loading a highlights version", err)
+		a.siteServerError(w, "loading a banner version", err)
 		return
 	}
 	var sp structs.SiteSpotlight
 	if err := json.Unmarshal(value, &sp); err != nil {
-		a.siteServerError(w, "reading a highlights version", err)
+		a.siteServerError(w, "reading a banner version", err)
 		return
 	}
 	a.saveSpotlight(w, r, &sp, fmt.Sprintf("Restored version %d", req.Version), -1)

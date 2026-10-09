@@ -95,6 +95,8 @@ func (a *AppDB) DeleteUnreferencedSiteFiles(ctx context.Context, createdBefore i
 		DELETE FROM site_files f
 		WHERE f.created_at < $1
 			AND NOT EXISTS (SELECT 1 FROM financial_documents d WHERE d.file_id = f.id)
+			AND NOT EXISTS (SELECT 1 FROM site_past_events e WHERE e.cover_file_id = f.id)
+			AND NOT EXISTS (SELECT 1 FROM site_past_event_photos p WHERE p.file_id = f.id)
 			AND NOT EXISTS (SELECT 1 FROM site_content_versions v WHERE strpos(v.value::text, f.id) > 0);
 	`, createdBefore)
 	if err != nil {
@@ -770,9 +772,14 @@ func (a *AppDB) RecordSiteActivity(ctx context.Context, actor *string, capabilit
 
 func (a *AppDB) ListSiteActivity(ctx context.Context, capabilities []string, limit int) ([]*structs.SiteActivity, error) {
 	rows, err := a.db.Query(ctx, `
-		SELECT x.id, `+displayUser+`, x.capability, x.action, x.entity, x.entity_id, x.summary, x.at
+		SELECT x.id,
+			-- Editors are improvers, whose improver record always has a name even
+			-- when their account has none.
+			COALESCE(NULLIF(`+displayUser+`, ''), NULLIF(TRIM(i.first_name || ' ' || i.last_name), ''), NULLIF(i.email, ''), ''),
+			x.capability, x.action, x.entity, x.entity_id, x.summary, x.at
 		FROM site_activity x
 		LEFT JOIN users u ON u.id = x.actor_user_id
+		LEFT JOIN improvers i ON i.user_id = x.actor_user_id
 		WHERE x.capability = ANY($1)
 		ORDER BY x.at DESC, x.id DESC
 		LIMIT $2;

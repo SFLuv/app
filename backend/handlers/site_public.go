@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/mail"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -20,7 +21,7 @@ import (
 // the same content any visitor of sfluv.org sees. See
 // docs/features/website-editing-and-forms.md.
 
-// ── Highlights ───────────────────────────────────────────────────────────────
+// ── Banner items ───────────────────────────────────────────────────────────
 
 // GetPublicSpotlight returns the slides that are switched on and complete. A
 // slide whose picture has gone missing is left out rather than shown broken.
@@ -31,7 +32,7 @@ func (a *AppService) GetPublicSpotlight(w http.ResponseWriter, r *http.Request) 
 	out := structs.SitePublicSpotlight{Slides: []structs.SitePublicSlide{}}
 	row, err := a.db.GetSiteContent(ctx, spotlightKey)
 	if err != nil {
-		a.siteServerError(w, "loading the public highlights", err)
+		a.siteServerError(w, "loading the public banner items", err)
 		return
 	}
 	var sp structs.SiteSpotlight
@@ -41,7 +42,8 @@ func (a *AppService) GetPublicSpotlight(w http.ResponseWriter, r *http.Request) 
 	}
 
 	for _, sl := range sp.Slides {
-		if !sl.Enabled || sl.Title == "" || sl.Action.Label == "" || sl.Action.Href == "" {
+		// The button is optional; the website draws one only when it has words and a link.
+		if !sl.Enabled || sl.Title == "" {
 			continue
 		}
 
@@ -103,7 +105,7 @@ func buildPublicFinancials(docs []*structs.FinancialDocument) structs.PublicFina
 	}
 
 	for _, doc := range docs {
-		item := structs.PublicFinancialDocument{Label: doc.Label, Href: doc.Href, Kind: doc.Kind}
+		item := structs.PublicFinancialDocument{Id: doc.Id, Label: doc.Label, Href: doc.Href, Kind: doc.Kind}
 		if doc.Kind == "impact_report" {
 			out.ImpactReports = append(out.ImpactReports, item)
 			continue
@@ -323,6 +325,10 @@ var (
 	// Confirmation emails per recipient. The address is typed by an anonymous
 	// visitor, so without this anyone could point SFLuv's mail at a stranger.
 	siteSignEmailLimiter = newSlidingLimiter(3, 24*time.Hour)
+	// Staff alerts for withdrawals, in total. Anyone can submit the withdrawal
+	// form, so this keeps a flood of fake ones from flooding the inbox too; the
+	// submissions themselves are all still recorded.
+	siteWithdrawalAlertLimiter = newSlidingLimiter(20, time.Hour)
 )
 
 // PostSignForm records a signature. Everything is validated against the version
@@ -489,9 +495,74 @@ func (a *AppService) PostSignForm(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Someone asking to withdraw consent needs a person to act on it, so staff
+	// are told rather than left to notice. In the background: the visitor does
+	// not wait on it, and a mail failure changes nothing for them.
+	if summary.Kind == "withdrawal" && siteWithdrawalAlertLimiter.allow("all", time.Now()) {
+		go a.sendSiteWithdrawalAlert(version.Title, insert.SignerName, contact, answers, signedAt)
+	}
+
 	writeSiteJSON(w, http.StatusCreated, structs.SiteSignResponse{
 		Id: id, SignedAt: signedAt, ConfirmationMessage: cfg.ConfirmationMessage, Emailed: emailed,
 	})
+}
+
+// siteWithdrawalAlertTo is who hears about withdrawal requests:
+// SITE_WITHDRAWAL_ALERT_EMAIL, or admin@sfluv.org when that is unset.
+func siteWithdrawalAlertTo() string {
+	if to := strings.TrimSpace(os.Getenv("SITE_WITHDRAWAL_ALERT_EMAIL")); to != "" {
+		return to
+	}
+	return "admin@sfluv.org"
+}
+
+// sendSiteWithdrawalAlert tells staff that someone submitted a withdrawal form,
+// with what they entered and where to act on it. It never includes the
+// signature image.
+func (a *AppService) sendSiteWithdrawalAlert(formTitle string, name string, contact string, answers map[string]string, signedAt int64) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			a.logger.Logf("recovered while sending a withdrawal alert: %v", rec)
+		}
+	}()
+
+	emailSender := utils.NewEmailSender()
+	if emailSender == nil {
+		a.logger.Logf("withdrawal alert not sent: email sender is not configured")
+		return
+	}
+
+	row := func(label string, value string) string {
+		if strings.TrimSpace(value) == "" {
+			value = "—"
+		}
+		return fmt.Sprintf(`<tr><td style="padding:8px 0; font-size:13px; color:#6b7280; width:150px;">%s</td><td style="padding:8px 0; font-size:13px; color:#111827;">%s</td></tr>`,
+			utils.EscapeEmailHTML(label), utils.EscapeEmailHTML(value))
+	}
+	rows := `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">`
+	rows += row("Name", name)
+	if answers["preferred_name"] != "" {
+		rows += row("Preferred name", answers["preferred_name"])
+	}
+	rows += row("Email or phone", contact)
+	if answers["event"] != "" {
+		rows += row("Event / project", answers["event"])
+	}
+	rows += row("Submitted", time.Unix(signedAt, 0).In(sfluvTimeZone).Format("January 2, 2006 at 3:04 PM MST"))
+	rows += `</table>`
+
+	next := "Find this person's original signature under Website → Forms &amp; waivers → Signatures, open it, and mark their consent as withdrawn."
+	if base := strings.TrimRight(strings.TrimSpace(os.Getenv("APP_BASE_URL")), "/"); base != "" {
+		next = fmt.Sprintf(`Find this person's original signature in the <a href="%s/website" style="color:#8f2e2e;">Website tools</a> (Forms &amp; waivers → Signatures), open it, and mark their consent as withdrawn.`,
+			utils.EscapeEmailHTML(base))
+	}
+	rows += `<p style="margin:18px 0 4px; font-size:13px; line-height:1.55; color:#111827;">` + next + `</p>`
+
+	title := "Withdrawal request: " + formTitle
+	htmlContent := utils.BuildStyledEmail(title, "Someone asked to withdraw their consent on sfluv.org.", rows)
+	if err := emailSender.SendEmail(siteWithdrawalAlertTo(), "SFLuv", title, htmlContent, utils.NotificationFromEmail(), "SFLuv website"); err != nil {
+		a.logger.Logf("error sending withdrawal alert: %s", err)
+	}
 }
 
 // decodeSiteBodyLimited reads a JSON body already wrapped in MaxBytesReader.

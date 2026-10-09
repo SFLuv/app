@@ -5,12 +5,15 @@ import "encoding/json"
 // Types for the admin-editable parts of the public site and for Forms and
 // Waivers. See docs/features/website-editing-and-forms.md.
 
-// Capabilities that can be granted to non-admins as private credentials. An
-// admin holds all of them implicitly.
+// Non-admins edit the site with private credentials: Website editor covers
+// every part, and each part also has its own credential, listed under Website
+// editor when granting. An admin holds all of them implicitly.
 const (
+	SiteEditorCredential     = "website_editor"
 	SiteCapabilityBanner     = "website_banner"
 	SiteCapabilityFinancials = "website_financials"
 	SiteCapabilityForms      = "website_forms"
+	SiteCapabilityPastEvents = "website_past_events"
 )
 
 // ── Files ────────────────────────────────────────────────────────────────────
@@ -36,7 +39,7 @@ type SiteFileData struct {
 	Data        []byte
 }
 
-// ── Homepage highlights (the Spotlight carousel) ─────────────────────────────
+// ── Homepage banner (the Spotlight carousel) ─────────────────────────────
 
 type SiteSpotlightAction struct {
 	Label string `json:"label"`
@@ -165,6 +168,8 @@ type FinancialDocumentRequest struct {
 }
 
 type PublicFinancialDocument struct {
+	// Stable, so the site can give each document a link of its own.
+	Id    string `json:"id"`
 	Label string `json:"label"`
 	Href  string `json:"href"`
 	Kind  string `json:"kind"`
@@ -333,6 +338,81 @@ type SiteCapabilities struct {
 	Banner     bool `json:"banner"`
 	Financials bool `json:"financials"`
 	Forms      bool `json:"forms"`
+	PastEvents bool `json:"past_events"`
+}
+
+// ── Past events (the photo galleries under Volunteers) ───────────────────────
+//
+// A past event is a tile in the site's Past events section and a page with a
+// photo gallery. It is only that: creating one makes no volunteer event, no
+// QR codes and no rewards.
+
+// SitePhoto is an uploaded image (FileId) or, for tiles that existed before
+// editing moved here, an image already hosted by the site (URL).
+type SitePhoto struct {
+	Id     string  `json:"id,omitempty"`
+	FileId *string `json:"file_id"`
+	URL    string  `json:"url"`
+	Width  int     `json:"width"`
+	Height int     `json:"height"`
+	Alt    string  `json:"alt"`
+	// Shown under a gallery photo. Optional.
+	Caption string `json:"caption,omitempty"`
+	// The uploaded file's name, for building its URL. Not sent.
+	Filename string `json:"-"`
+}
+
+type SitePastEvent struct {
+	Id          string      `json:"id"`
+	Slug        string      `json:"slug"`
+	Title       string      `json:"title"`
+	Date        string      `json:"date"` // YYYY-MM-DD
+	Description string      `json:"description"`
+	Cover       *SitePhoto  `json:"cover"`
+	Photos      []SitePhoto `json:"photos"`
+	RemovedAt   *int64      `json:"removed_at"`
+	CreatedAt   int64       `json:"created_at"`
+	UpdatedAt   int64       `json:"updated_at"`
+}
+
+type SitePastEventRequest struct {
+	Title       string `json:"title"`
+	Date        string `json:"date"`
+	Description string `json:"description"`
+	// An uploaded image to use as the tile's photo; "" keeps the current one.
+	CoverFileId string `json:"cover_file_id"`
+	// Or one of the event's gallery photos; "" keeps the current one.
+	CoverPhotoId string `json:"cover_photo_id"`
+	CoverAlt     string `json:"cover_alt"`
+}
+
+type SitePastEventPhotosRequest struct {
+	FileIds []string `json:"file_ids"`
+}
+
+type SitePastEventOrderRequest struct {
+	Order []string `json:"order"`
+}
+
+type SitePastEventPhotoRequest struct {
+	Caption string `json:"caption"`
+}
+
+// SitePublicPastEvent is a tile (no Photos) or a gallery page (with them).
+type SitePublicPastEvent struct {
+	Slug        string            `json:"slug"`
+	Title       string            `json:"title"`
+	Date        string            `json:"date"`
+	Description string            `json:"description,omitempty"`
+	Cover       *SitePublicImage  `json:"cover"`
+	PhotoCount  int               `json:"photo_count"`
+	Photos      []SitePublicPhoto `json:"photos,omitempty"`
+}
+
+// SitePublicPhoto is a gallery photo with its caption, if it has one.
+type SitePublicPhoto struct {
+	SitePublicImage
+	Caption string `json:"caption,omitempty"`
 }
 
 type SiteActivity struct {

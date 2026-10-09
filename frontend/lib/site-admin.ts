@@ -40,6 +40,32 @@ export function jsonBody(value: unknown): RequestInit {
 }
 
 /** Uploads a PDF or image and returns it. No Content-Type: the browser must set the multipart boundary. */
+/** Matches the backend's limit (maxSiteFileBytes). */
+export const MAX_SITE_FILE_BYTES = 25 * 1024 * 1024
+
+/**
+ * Checks a chosen file before anything is uploaded, so a wrong or oversized
+ * file is turned away the moment it is picked rather than at publish time.
+ * It reads the first bytes, as the backend does, because a file's name and the
+ * type the browser guesses from it can be anything. Returns the problem in
+ * plain words, or null. The backend checks again; this is for the person, not
+ * the lock.
+ */
+export async function checkSiteFile(file: File, want: "pdf" | "image"): Promise<string | null> {
+  if (file.size > MAX_SITE_FILE_BYTES) return "That file is too large. Files can be up to 25 MB."
+  const head = new Uint8Array(await file.slice(0, 12).arrayBuffer())
+  const text = (from: number, to: number) => String.fromCharCode(...head.slice(from, to))
+  const isPdf = text(0, 5) === "%PDF-"
+  const isImage =
+    (head[0] === 0x89 && text(1, 4) === "PNG") ||
+    (head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff) ||
+    text(0, 4) === "GIF8" ||
+    (text(0, 4) === "RIFF" && text(8, 12) === "WEBP")
+  if (want === "pdf" && !isPdf) return "That file isn’t a PDF, even if its name ends in .pdf. Choose a PDF."
+  if (want === "image" && !isImage) return "That file isn’t a photo the site can show. Choose a PNG, JPEG, WebP or GIF."
+  return null
+}
+
 export async function uploadSiteFile(authFetch: AuthFetch, file: File) {
   const form = new FormData()
   form.append("file", file)

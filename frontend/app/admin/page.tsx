@@ -19,6 +19,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import { buildCredentialBadgeDataUrl, buildCredentialLabelMap, formatCredentialLabel } from "@/lib/credential-labels"
+import { CredentialPicker, credentialDescendants } from "@/components/credentials/credential-picker"
 import { formatStatusLabel } from "@/lib/status-labels"
 import { formatWorkflowDisplayStatus } from "@/lib/workflow-status"
 import {
@@ -91,7 +92,6 @@ import { OrganizationManagement } from "@/components/admin/organization-manageme
 import { WorkflowDetailsModal } from "@/components/workflows/workflow-details-modal"
 import { AdminAnalyticsPanel } from "@/components/admin/admin-analytics-panel"
 import { PartnersPanel } from "@/components/admin/partners-panel"
-import { WebsitePanel } from "@/components/admin/website/website-panel"
 import { MerchantPayoutsPanel } from "@/components/admin/merchant-payouts-panel"
 import type { W9AdminOverview } from "@/types/w9"
 import type { ClientVersionUserCountResponse, UserResponse } from "@/types/server"
@@ -289,7 +289,6 @@ export default function AdminPage() {
       "workflows",
       "credential-types",
       "partners",
-      "website",
       "payouts",
     ].includes(value)
   }
@@ -469,6 +468,7 @@ export default function AdminPage() {
   const [newCredentialValue, setNewCredentialValue] = useState<string>("")
   const [newCredentialLabel, setNewCredentialLabel] = useState<string>("")
   const [newCredentialVisibility, setNewCredentialVisibility] = useState<CredentialVisibility>("public")
+  const [newCredentialParent, setNewCredentialParent] = useState<string>("")
   const [credentialTypeSaving, setCredentialTypeSaving] = useState<boolean>(false)
   const [credentialTypeSearch, setCredentialTypeSearch] = useState<string>("")
   const [credentialTypePage, setCredentialTypePage] = useState<number>(0)
@@ -476,6 +476,7 @@ export default function AdminPage() {
   const [selectedCredentialType, setSelectedCredentialType] = useState<GlobalCredentialType | null>(null)
   const [credentialTypeDraftLabel, setCredentialTypeDraftLabel] = useState<string>("")
   const [credentialTypeDraftVisibility, setCredentialTypeDraftVisibility] = useState<CredentialVisibility>("public")
+  const [credentialTypeDraftParent, setCredentialTypeDraftParent] = useState<string>("")
   const [credentialTypeDraftBadgeDataBase64, setCredentialTypeDraftBadgeDataBase64] = useState<string>("")
   const [credentialTypeDraftBadgeContentType, setCredentialTypeDraftBadgeContentType] = useState<string>("")
   const [credentialTypeDraftClearBadge, setCredentialTypeDraftClearBadge] = useState<boolean>(false)
@@ -1293,7 +1294,7 @@ export default function AdminPage() {
     try {
       const res = await authFetch("/admin/credential-types", {
         method: "POST",
-        body: JSON.stringify({ value, label, visibility }),
+        body: JSON.stringify({ value, label, visibility, parent_value: newCredentialParent }),
       })
       if (!res.ok) {
         const text = await res.text()
@@ -1304,6 +1305,7 @@ export default function AdminPage() {
       setNewCredentialValue("")
       setNewCredentialLabel("")
       setNewCredentialVisibility("public")
+      setNewCredentialParent("")
       setCredentialTypeSearch("")
       setCredentialTypePage(0)
     } catch (err) {
@@ -1317,6 +1319,7 @@ export default function AdminPage() {
     setSelectedCredentialType(credentialType)
     setCredentialTypeDraftLabel(credentialType.label)
     setCredentialTypeDraftVisibility(normalizeCredentialVisibility(credentialType.visibility))
+    setCredentialTypeDraftParent(credentialType.parent_value ?? "")
     setCredentialTypeDraftBadgeDataBase64("")
     setCredentialTypeDraftBadgeContentType("")
     setCredentialTypeDraftClearBadge(false)
@@ -1399,9 +1402,11 @@ export default function AdminPage() {
         badge_content_type?: string
         badge_data_base64?: string
         clear_badge?: boolean
+        parent_value: string
       } = {
         label,
         visibility: normalizeCredentialVisibility(credentialTypeDraftVisibility),
+        parent_value: credentialTypeDraftParent,
       }
 
       if (credentialTypeDraftClearBadge) payload.clear_badge = true
@@ -1426,6 +1431,7 @@ export default function AdminPage() {
       setSelectedCredentialType(updated)
       setCredentialTypeDraftLabel(updated.label)
       setCredentialTypeDraftVisibility(normalizeCredentialVisibility(updated.visibility))
+      setCredentialTypeDraftParent(updated.parent_value ?? "")
       setCredentialTypeDraftBadgeDataBase64("")
       setCredentialTypeDraftBadgeContentType("")
       setCredentialTypeDraftClearBadge(false)
@@ -1700,6 +1706,7 @@ export default function AdminPage() {
     if (
       current.label !== selectedCredentialType.label
       || current.visibility !== selectedCredentialType.visibility
+      || (current.parent_value ?? "") !== (selectedCredentialType.parent_value ?? "")
       || current.badge_content_type !== selectedCredentialType.badge_content_type
       || current.badge_data_base64 !== selectedCredentialType.badge_data_base64
     ) {
@@ -1708,6 +1715,7 @@ export default function AdminPage() {
     if (!credentialTypeModalSaving) {
       setCredentialTypeDraftLabel(current.label)
       setCredentialTypeDraftVisibility(normalizeCredentialVisibility(current.visibility))
+      setCredentialTypeDraftParent(current.parent_value ?? "")
     }
   }, [credentialTypeModalSaving, credentialTypes, selectedCredentialType])
 
@@ -2737,9 +2745,6 @@ export default function AdminPage() {
             <TabsTrigger value="partners" className="w-full justify-between px-3 py-2">
               <span>Partners</span>
             </TabsTrigger>
-            <TabsTrigger value="website" className="w-full justify-between px-3 py-2">
-              <span>Website</span>
-            </TabsTrigger>
             <TabsTrigger value="payouts" className="w-full justify-between px-3 py-2">
               <span>Payouts</span>
             </TabsTrigger>
@@ -2753,10 +2758,6 @@ export default function AdminPage() {
 
         <TabsContent value="partners" className="space-y-6">
           <PartnersPanel />
-        </TabsContent>
-
-        <TabsContent value="website" className="space-y-6">
-          <WebsitePanel />
         </TabsContent>
 
         <TabsContent value="payouts" className="space-y-6">
@@ -4168,24 +4169,16 @@ export default function AdminPage() {
                       )
                       return (
                         <div className="flex flex-col gap-2 pt-1 sm:flex-row">
-                          <Select
-                            value={improverCredentialDraft || undefined}
-                            onValueChange={setImproverCredentialDraft}
+                          <CredentialPicker
+                            className="flex-1"
+                            types={credentialTypes}
+                            value={improverCredentialDraft}
+                            onChange={setImproverCredentialDraft}
+                            isDisabled={(value) => selectedImprover.active_credentials.includes(value)}
+                            labelOf={(ct) => formatCredentialLabel(ct.value, credentialLabelMap)}
+                            placeholder={grantable.length === 0 ? "All credentials granted" : "Grant a credential…"}
                             disabled={credentialActionBusy !== null || grantable.length === 0}
-                          >
-                            <SelectTrigger className="flex-1">
-                              <SelectValue
-                                placeholder={grantable.length === 0 ? "All credentials granted" : "Grant a credential…"}
-                              />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {grantable.map((ct) => (
-                                <SelectItem key={ct.value} value={ct.value}>
-                                  {formatCredentialLabel(ct.value, credentialLabelMap)}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
+                          />
                           <Button
                             type="button"
                             variant="outline"
@@ -4930,7 +4923,7 @@ export default function AdminPage() {
             <CardContent className="space-y-6">
               <form onSubmit={createCredentialType} className="space-y-3">
                 <p className="text-sm font-medium">Add New Credential Type</p>
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
                   <div className="space-y-1">
                     <Label htmlFor="cred-value" className="text-xs">Value (slug)</Label>
                     <Input
@@ -4963,6 +4956,25 @@ export default function AdminPage() {
                         {credentialVisibilityOptions.map((option) => (
                           <SelectItem key={option.value} value={option.value}>
                             {option.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-1">
+                    <Label htmlFor="cred-parent" className="text-xs">List under (optional)</Label>
+                    <Select
+                      value={newCredentialParent || "__top"}
+                      onValueChange={(value) => setNewCredentialParent(value === "__top" ? "" : value)}
+                    >
+                      <SelectTrigger id="cred-parent">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__top">Nothing (top level)</SelectItem>
+                        {credentialTypes.map((ct) => (
+                          <SelectItem key={ct.value} value={ct.value}>
+                            {ct.label}
                           </SelectItem>
                         ))}
                       </SelectContent>
@@ -5032,6 +5044,11 @@ export default function AdminPage() {
                               <div className="min-w-0">
                                 <p className="font-medium text-sm truncate">{credentialType.label}</p>
                                 <p className="font-mono text-xs text-muted-foreground truncate">{credentialType.value}</p>
+                                {credentialType.parent_value && (
+                                  <p className="text-xs text-muted-foreground truncate">
+                                    Listed under {formatCredentialLabel(credentialType.parent_value, credentialLabelMap)}
+                                  </p>
+                                )}
                                 <Badge
                                   variant="outline"
                                   className={cn(
@@ -5157,6 +5174,36 @@ export default function AdminPage() {
                     </Select>
                     <p className="text-xs text-muted-foreground">
                       {credentialVisibilityOptions.find((option) => option.value === credentialTypeDraftVisibility)?.description}
+                    </p>
+                  </div>
+
+                  <div className="space-y-1">
+                    <Label htmlFor="credential-type-parent">List under (optional)</Label>
+                    <Select
+                      value={credentialTypeDraftParent || "__top"}
+                      onValueChange={(value) => setCredentialTypeDraftParent(value === "__top" ? "" : value)}
+                    >
+                      <SelectTrigger id="credential-type-parent">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__top">Nothing (top level)</SelectItem>
+                        {(() => {
+                          // Not itself, and not anything already listed under it (that would make a loop).
+                          const below = selectedCredentialType ? credentialDescendants(credentialTypes, selectedCredentialType.value) : new Set<string>()
+                          return credentialTypes
+                            .filter((ct) => ct.value !== selectedCredentialType?.value && !below.has(ct.value))
+                            .map((ct) => (
+                              <SelectItem key={ct.value} value={ct.value}>
+                                {ct.label}
+                              </SelectItem>
+                            ))
+                        })()}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground">
+                      When granting, this credential appears in a submenu under the one chosen here. It only groups them in the menu: holding one
+                      does not give the other.
                     </p>
                   </div>
 

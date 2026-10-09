@@ -2483,22 +2483,8 @@ var schemaMigrations = []SchemaMigration{
 	},
 	{
 		Version:     "1.62",
-		Description: "seed website editing capabilities, existing financial documents, and the media release forms",
+		Description: "seed existing financial documents and the media release forms",
 		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
-			// Capabilities are private credential types: a person cannot request
-			// them for themselves, and holding one only matters to the website
-			// editing routes. Admins need none of them.
-			if _, err := pools.App.Exec(ctx, `
-				INSERT INTO credential_type_definitions (value, label, visibility)
-				VALUES
-					('website_banner', 'Website: edit the homepage highlights', 'private'),
-					('website_financials', 'Website: manage financial documents', 'private'),
-					('website_forms', 'Website: manage forms and read signatures', 'private')
-				ON CONFLICT (value) DO NOTHING;
-			`); err != nil {
-				return fmt.Errorf("error seeding website capability credentials: %w", err)
-			}
-
 			// Every document the site's financials page lists today, so nothing
 			// is lost when the page starts reading from the database. They stay
 			// where they are (external_url is a path on the site itself) rather
@@ -2524,9 +2510,9 @@ var schemaMigrations = []SchemaMigration{
 					RETURNING key, value, version
 				)
 				INSERT INTO site_content_versions (key, version, value, note)
-				SELECT key, version, value, 'Imported from the existing homepage highlights' FROM seeded;
+				SELECT key, version, value, 'Imported from the existing homepage banner' FROM seeded;
 			`, siteSeedSpotlight); err != nil {
-				return fmt.Errorf("error seeding the homepage highlights: %w", err)
+				return fmt.Errorf("error seeding the homepage banner: %w", err)
 			}
 
 			// Both forms ship CLOSED. Nothing is public until someone opens one,
@@ -2545,6 +2531,92 @@ var schemaMigrations = []SchemaMigration{
 					ON CONFLICT (form_id, version) DO NOTHING;
 				`, form.id, form.title, form.summary, form.body, form.config); err != nil {
 					return fmt.Errorf("error seeding form version %s: %w", form.slug, err)
+				}
+			}
+			return nil
+		},
+	},
+	{
+		Version:     "1.63",
+		Description: "credential types can sit under another (parent_value); website editing credentials",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			// A credential type may be listed under another when granting, so
+			// related credentials are grouped in a submenu. It only groups them:
+			// holding the parent does not mean holding its children, or the
+			// reverse. Removing a parent leaves its children at the top level.
+			if _, err := pools.App.Exec(ctx, `
+				ALTER TABLE credential_type_definitions
+				ADD COLUMN IF NOT EXISTS parent_value TEXT
+					REFERENCES credential_type_definitions(value) ON DELETE SET NULL;
+			`); err != nil {
+				return fmt.Errorf("error adding credential parent_value: %w", err)
+			}
+
+			// Website editing: one credential for the whole site, and one per
+			// part, grouped under it. All private, so nobody can request them.
+			// Admins need none.
+			if _, err := pools.App.Exec(ctx, `
+				INSERT INTO credential_type_definitions (value, label, visibility)
+				VALUES ('website_editor', 'Website editor', 'private')
+				ON CONFLICT (value) DO NOTHING;
+
+				INSERT INTO credential_type_definitions (value, label, visibility, parent_value)
+				VALUES
+					('website_banner', 'Website editor: banner items', 'private', 'website_editor'),
+					('website_financials', 'Website editor: financials & reports', 'private', 'website_editor'),
+					('website_forms', 'Website editor: forms & waivers', 'private', 'website_editor')
+				ON CONFLICT (value) DO NOTHING;
+
+				-- Left over from an unreleased build of this feature, if present.
+				DROP TABLE IF EXISTS site_editor_permissions;
+			`); err != nil {
+				return fmt.Errorf("error seeding website editing credentials: %w", err)
+			}
+			return nil
+		},
+	},
+	{
+		Version:     "1.64",
+		Description: "past events: photo galleries for the site's Past events section, and their editing credential",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			if _, err := pools.App.Exec(ctx, db.SitePastEventsDDL); err != nil {
+				return fmt.Errorf("error creating past events tables: %w", err)
+			}
+
+			// Edits the Past events section only. Listed under Website editor,
+			// which covers it too.
+			if _, err := pools.App.Exec(ctx, `
+				INSERT INTO credential_type_definitions (value, label, visibility, parent_value)
+				VALUES ('website_past_events', 'Website editor: past events', 'private', 'website_editor')
+				ON CONFLICT (value) DO NOTHING;
+			`); err != nil {
+				return fmt.Errorf("error seeding the past events credential: %w", err)
+			}
+
+			// The tiles the site showed as a static archive, so none are lost.
+			// The first image becomes the tile's photo; every image starts the
+			// gallery. Re-running is a no-op, so staff edits are never undone.
+			for _, ev := range siteSeedPastEvents {
+				first := ev.photos[0]
+				tag, err := pools.App.Exec(ctx, `
+					INSERT INTO site_past_events (id, slug, title, event_date, cover_url, cover_width, cover_height, cover_alt)
+					VALUES ($1, $2, $3, $4::date, $5, $6, $7, $8)
+					ON CONFLICT (id) DO NOTHING;
+				`, ev.id, ev.slug, ev.title, ev.date, first.url, first.width, first.height, first.alt)
+				if err != nil {
+					return fmt.Errorf("error seeding past event %s: %w", ev.slug, err)
+				}
+				if tag.RowsAffected() == 0 {
+					continue
+				}
+				for i, photo := range ev.photos {
+					if _, err := pools.App.Exec(ctx, `
+						INSERT INTO site_past_event_photos (id, event_id, url, width, height, alt, position)
+						VALUES ($1, $2, $3, $4, $5, $6, $7)
+						ON CONFLICT (id) DO NOTHING;
+					`, fmt.Sprintf("%s-photo-%d", ev.id, i+1), ev.id, photo.url, photo.width, photo.height, photo.alt, i); err != nil {
+						return fmt.Errorf("error seeding photos for past event %s: %w", ev.slug, err)
+					}
 				}
 			}
 			return nil

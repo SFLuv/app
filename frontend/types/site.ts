@@ -4,6 +4,43 @@ export interface SiteCapabilities {
   banner: boolean
   financials: boolean
   forms: boolean
+  past_events: boolean
+}
+
+/** An uploaded image (`file_id`) or one already hosted by the site (`url` only). */
+export interface SitePhoto {
+  id?: string
+  file_id: string | null
+  url: string
+  width: number
+  height: number
+  alt: string
+  /** Shown under a gallery photo on the website. Optional. */
+  caption?: string
+}
+
+/** A tile in the site's Past events section, with its gallery. Only a tile: no event, QR codes or rewards. */
+export interface SitePastEvent {
+  id: string
+  slug: string
+  title: string
+  /** YYYY-MM-DD */
+  date: string
+  description: string
+  cover: SitePhoto | null
+  photos: SitePhoto[]
+  removed_at: number | null
+  created_at: number
+  updated_at: number
+}
+
+export interface SitePastEventRequest {
+  title: string
+  date: string
+  description: string
+  cover_file_id?: string
+  cover_photo_id?: string
+  cover_alt: string
 }
 
 export interface SiteFile {
