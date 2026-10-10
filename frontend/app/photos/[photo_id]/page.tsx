@@ -11,12 +11,16 @@ export const metadata: Metadata = {
   },
 }
 
-export default function WorkflowPhotoPage({
+// params is a Promise in Next 15. 15.2.6 still accepted the old synchronous
+// shape; 15.5.24 enforces it, so this awaits rather than reads through. Same
+// value, same rendered output — only the signature changed.
+export default async function WorkflowPhotoPage({
   params,
 }: {
-  params: { photo_id: string }
+  params: Promise<{ photo_id: string }>
 }) {
-  const photoId = decodeURIComponent(params.photo_id || "").trim()
+  const { photo_id: rawPhotoId } = await params
+  const photoId = decodeURIComponent(rawPhotoId || "").trim()
 
   if (!photoId) {
     return (

@@ -6,7 +6,14 @@
 */.env.bak
 **/*.env.bak
 **/.env.*.bak
-*/go.sum
+# go.sum is deliberately NOT ignored. It is Go's checksum file: it pins the exact
+# bytes of every dependency, which is the whole point of fixing a dependency
+# vulnerability — without it a build cannot verify it got what was intended.
+# Ignoring it also broke deploys, because update-production-backend.sh runs a
+# bare `go build`, and with a stale or absent go.sum that fails outright on
+# "missing go.sum entry" the moment go.mod changes.
+tmp/*/go.sum
+tmp/*/*/go.sum
 */package-lock.json
 **.db
 .next

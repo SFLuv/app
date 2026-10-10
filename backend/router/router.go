@@ -162,6 +162,7 @@ func New(s *handlers.BotService, a *handlers.AppService, p *handlers.PonderServi
 	AddVolunteerEventRoutes(r, s)
 	AddVolunteerListRoutes(r, a)
 	AddPartnerRoutes(r, a)
+	AddSiteRoutes(r, a)
 	AddOrganizationRoutes(r, a, s)
 	AddClientConfigRoutes(r, a)
 	AddEngineProxyRoutes(r)
@@ -802,6 +803,90 @@ func merchantOnboardingGate(check merchantOnboardingChecker) func(http.Handler) 
 
 			writeMerchantOnboardingRequired(w)
 		})
+	}
+}
+
+// AddSiteRoutes mounts the admin-editable parts of the public site and Forms
+// and Waivers. The first group is public (the same content any visitor sees);
+// the second is for editors. See docs/features/website-editing-and-forms.md.
+func AddSiteRoutes(r *chi.Mux, s *handlers.AppService) {
+	r.Get("/site/spotlight", s.GetPublicSpotlight)
+	r.Get("/site/financials", s.GetPublicFinancials)
+	r.Get("/site/files/{id}/{filename}", s.GetSiteFile)
+	r.Get("/site/forms", s.GetPublicForms)
+	r.Get("/site/forms/{slug}", s.GetPublicForm)
+	r.Post("/site/forms/{slug}/sign", s.PostSignForm)
+	r.Get("/site/past-events", s.GetPublicPastEvents)
+	r.Get("/site/past-events/{slug}", s.GetPublicPastEvent)
+
+	// Anyone signed in may ask what they can edit; the answer is just "nothing".
+	r.Get("/admin/site/me", withActiveAuth(s.GetSiteCapabilities, s))
+	r.Get("/admin/site/activity", withSiteEditor("", s.GetSiteActivity, s))
+	r.Post("/admin/site/files", withSiteEditor("", s.UploadSiteFile, s))
+
+	banner, financials, forms, pastEvents := structs.SiteCapabilityBanner, structs.SiteCapabilityFinancials, structs.SiteCapabilityForms, structs.SiteCapabilityPastEvents
+
+	r.Get("/admin/site/past-events", withSiteEditor(pastEvents, s.GetAdminPastEvents, s))
+	r.Post("/admin/site/past-events", withSiteEditor(pastEvents, s.PostAdminPastEvent, s))
+	r.Put("/admin/site/past-events/{id}", withSiteEditor(pastEvents, s.PutAdminPastEvent, s))
+	r.Delete("/admin/site/past-events/{id}", withSiteEditor(pastEvents, s.DeleteAdminPastEvent, s))
+	r.Post("/admin/site/past-events/{id}/restore", withSiteEditor(pastEvents, s.RestoreAdminPastEvent, s))
+	r.Post("/admin/site/past-events/{id}/photos", withSiteEditor(pastEvents, s.PostAdminPastEventPhotos, s))
+	r.Put("/admin/site/past-events/{id}/photos/order", withSiteEditor(pastEvents, s.PutAdminPastEventPhotoOrder, s))
+	r.Put("/admin/site/past-events/{id}/photos/{photoId}", withSiteEditor(pastEvents, s.PutAdminPastEventPhoto, s))
+	r.Delete("/admin/site/past-events/{id}/photos/{photoId}", withSiteEditor(pastEvents, s.DeleteAdminPastEventPhoto, s))
+
+	r.Get("/admin/site/spotlight", withSiteEditor(banner, s.GetAdminSpotlight, s))
+	r.Put("/admin/site/spotlight", withSiteEditor(banner, s.PutAdminSpotlight, s))
+	r.Post("/admin/site/spotlight/restore", withSiteEditor(banner, s.RestoreAdminSpotlight, s))
+
+	r.Get("/admin/site/financials", withSiteEditor(financials, s.GetAdminFinancials, s))
+	r.Post("/admin/site/financials", withSiteEditor(financials, s.PostAdminFinancial, s))
+	r.Put("/admin/site/financials/{id}", withSiteEditor(financials, s.PutAdminFinancial, s))
+	r.Delete("/admin/site/financials/{id}", withSiteEditor(financials, s.DeleteAdminFinancial, s))
+	r.Post("/admin/site/financials/{id}/restore", withSiteEditor(financials, s.RestoreAdminFinancial, s))
+
+	r.Get("/admin/site/forms", withSiteEditor(forms, s.GetAdminForms, s))
+	r.Post("/admin/site/forms", withSiteEditor(forms, s.PostAdminForm, s))
+	r.Get("/admin/site/forms/{id}", withSiteEditor(forms, s.GetAdminForm, s))
+	r.Put("/admin/site/forms/{id}", withSiteEditor(forms, s.PutAdminForm, s))
+	r.Post("/admin/site/forms/{id}/open", withSiteEditor(forms, s.PostAdminFormOpen, s))
+	r.Post("/admin/site/forms/{id}/close", withSiteEditor(forms, s.PostAdminFormClose, s))
+	r.Get("/admin/site/forms/{id}/signatures", withSiteEditor(forms, s.GetAdminFormSignatures, s))
+	r.Get("/admin/site/forms/{id}/signatures.csv", withSiteEditor(forms, s.GetAdminFormSignaturesCSV, s))
+	r.Get("/admin/site/signatures/{sid}", withSiteEditor(forms, s.GetAdminSignature, s))
+	r.Post("/admin/site/signatures/{sid}/withdraw", withSiteEditor(forms, s.PostAdminSignatureWithdraw, s))
+}
+
+// withSiteEditor admits an admin, or anyone holding the credential for the
+// named capability (empty = any of them). It mirrors withAdmin, including the
+// X-Admin-Key path for scripted calls, so the two behave alike.
+func withSiteEditor(capability string, handlerFunc http.HandlerFunc, s *handlers.AppService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		reqKey := r.Header.Get("X-Admin-Key")
+		envKey := os.Getenv("ADMIN_KEY")
+		if reqKey == envKey && envKey != "" {
+			if _, ok := r.Context().Value("userDid").(string); !ok {
+				adminId := s.GetFirstAdminId(r.Context())
+				if adminId != "" {
+					ctx := context.WithValue(r.Context(), "userDid", adminId)
+					r = r.WithContext(ctx)
+				}
+			}
+			handlerFunc(w, r)
+			return
+		}
+
+		id, ok := requireAcceptedAuthedUser(w, r, s)
+		if !ok {
+			return
+		}
+		if !s.CanEditSite(r.Context(), id, capability) {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		s.RecordAnalyticsUserActivity(r.Context(), id, r)
+		handlerFunc(w, r)
 	}
 }
 
