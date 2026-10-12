@@ -1,6 +1,33 @@
+<!-- Invoice export, formatted to branch-scopes/report_template.csv.
+     Standalone copy: branch-scopes/pjol/boundless-touchups.csv -->
+
+```csv
+CONTRACTOR NAME:,PJ O'Leary,,,,,
+SERVICE/TITLE:,Development and motion graphics - pjol/boundless-touchups,,,,,
+INVOICE DATE:,2026-10-12,,,,,
+SERVICE PERIOD: ,2026-10-05 to 2026-10-11,,,,,
+HOURLY RATE:,,,,,,
+% SFLUV,10.00%,,,,,
+,,,,,,
+DATE,,DESCRIPTION,,HOURS                ( input numbers only),,AMOUNT BILLED
+2026-10-05,,"Boundless grant video: analysis pipeline, draft 2, notes pass, draft 3, 4K asset handoff (includes the 2-3pm dev meeting and two app check-ins falling inside these spans)",,6.63,,0.00
+2026-10-08,,"Working block as stated, 12:00-15:00, less the 0.08h logged inside it",,2.92,,0.00
+2026-10-08,,"How it Works: expanding ring replaces the circular loop; 1.43x in the ring, tagline below",,0.81,,0.00
+2026-10-09,,"How it Works: legend and label placement, slower draw, first-year merchant spend from the ledger ($16,560)",,0.36,,0.00
+2026-10-09,,Past-event gallery modal with full-resolution downloads; dev-up prefers a sibling webpage checkout,,0.10,,0.00
+2026-10-09,,Merge feat/forms-and-site-editing into pjol/volunteer-gallery,,0.10,,0.00
+2026-10-10,,"Falafelland payment failure diagnosed: sponsored-transaction EOA out of gas (diagnosis only, no code)",,0.15,,0.00
+2026-10-11,,Branch scope document for the week,,0.21,,0.00
+,,,,,,0.00
+,,,,,,
+ TOTAL: ,,,,11.28,, $ -
+PAYMENT IN SFLUV,,,,,, $ -
+PAYMENT IN USD,,,,,, $ -
+```
+
 # Branch scope — `pjol/boundless-touchups`
 
-Oct 5–11 2026 · animations + webpage + app · **11.2h**
+Oct 5–11 2026 · animations + webpage + app · **11.3h**
 
 Records **my own** work this week. Branched off `sanchezo/website-cms-with-vuln-fixes`, whose two
 halves are already written up elsewhere — the website CMS and Forms and Waivers in
@@ -12,8 +39,16 @@ Saturday's payment-failure diagnosis.
 
 ## How these hours were measured
 
-**8.29h measured** from session-transcript timestamps clustered into sittings on a 30-minute gap
-(`time-accounting/scripts/measure_sittings.py`), taken at **2026-10-11 21:09 PDT**. Three projects ran
+**Correction to the figure first published here.** The first version of this document reported
+**8.29h measured / 11.2h total**, measured at Oct 11 21:09 while the sitting that wrote it was still
+open. That sitting closed at 21:13, so its line moves 0.15h → 0.21h and the measured union moves
+**8.29h → 8.36h**, total **11.2h → 11.3h** (a 1.007x change). Two feature headings also rounded
+upward past what their sittings measured — How it Works read 1.2h against a measured 1.09h, and the
+gallery 0.2h against 0.10h — so the itemisation summed 0.3h above the total it sat under. Both are
+corrected below. Nothing about the work changed; only the arithmetic describing it.
+
+**8.36h measured** from session-transcript timestamps clustered into sittings on a 30-minute gap
+(`time-accounting/scripts/measure_sittings.py`), re-taken at **2026-10-12 11:05 PDT**. Three projects ran
 this week — animations, webpage and app — and the figure is the **union** of their sittings, not the
 sum: 0.02h of overlap is merged rather than counted twice. Corroborated by file mtimes, which run
 Oct 5 12:59 → 20:09 for animations and match the commit times in both git repos.
@@ -65,11 +100,12 @@ Four weaknesses worth naming:
 | Fri 9 Oct | app | 15:08–15:13, 15:44–15:46 | 0.10h |
 | Fri 9 Oct | webpage | 18:43–18:49 | 0.10h |
 | Sat 10 Oct | app | 12:57–13:06 | 0.15h |
-| Sun 11 Oct | app | 21:00–21:09 | 0.15h |
-| | | **measured (union)** | **8.29h** |
+| Sun 11 Oct | app | 21:00–21:13 | 0.21h |
+| | | **measured (union)** | **8.36h** |
 
-The rows sum to 8.32h at the printed precision; the union is 8.29h after merging 0.02h of overlap and
-rounding. Where the two disagree the union wins.
+The rows sum to 8.38h at the printed precision; the union is 8.36h after merging 0.02h of overlap and
+rounding. Where the two disagree the union wins. The 0.02h is Monday's two app check-ins, which fall
+inside the animations spans and so are absorbed into them rather than added alongside.
 
 ---
 
@@ -110,7 +146,7 @@ at the right frame without reading the script alongside.
 
 Output: **81 video files, 3,946 MB**, three drafts and a 16-file handoff set.
 
-### How it Works reframed from circularity to amplification — 1.2h · webpage, 0.1h · app
+### How it Works reframed from circularity to amplification — 1.09h · webpage, 0.08h · app
 
 Thu 15:40–16:24, Fri 11:38–11:56 and 12:49–12:52, with the brief set in the Thu app sitting 14:05–14:10.
 
@@ -135,7 +171,7 @@ framing around it.
 Files: `src/app/(about)/how-it-works/page.tsx`, `src/content/about.ts`,
 `src/features/how-it-works/AmplificationRing.tsx`, `AmplificationLoop.tsx`, `src/styles/globals.css`.
 
-### Past-event gallery modal — 0.2h · webpage + app
+### Past-event gallery modal — 0.10h · webpage + app
 
 Fri 15:08–15:13 and 15:44–15:46; committed 15:53 in both repos.
 
@@ -151,7 +187,7 @@ Fri 15:08–15:13 and 15:44–15:46; committed 15:53 in both repos.
   `WEBPAGE_DIR=git` to force the clone back. Local website work reaches the dev stack instead of being
   masked by a fresh clone of `main`.
 
-### Falafelland payment failure diagnosed — 0.2h · app
+### Falafelland payment failure diagnosed — 0.15h · app
 
 Sat 12:57–13:06. **Investigation only; no code written.** Reported as one merchant's problem; it was not.
 
@@ -181,7 +217,7 @@ Sat 12:57–13:06. **Investigation only; no code written.** Reported as one merc
 |---|---|---|
 | Merged `feat/forms-and-site-editing` into `pjol/volunteer-gallery` so the gallery sits on top of the site-editing work rather than diverging from it (36 files, +1,872/−406 brought across). | 0.10h | webpage |
 | Previous week's branch scope closed out, the dev meeting measured from the transcript rather than assumed, and a direct question answered about whether the quiz is live on the website — checked against the deployed site, not the repo. The bulk of that sitting belongs to `pjol/merchant-unwrap-pending-states.md` and is not counted again here. | 0.02h | app |
-| This branch scope document. | 0.15h | app |
+| This branch scope document, and the invoice export at the top of this file. | 0.21h | app |
 
 ---
 
@@ -191,11 +227,11 @@ Sat 12:57–13:06. **Investigation only; no code written.** Reported as one merc
 |---|---|
 | Measured — animations | 6.63h |
 | Measured — webpage | 1.19h |
-| Measured — app | 0.49h |
-| **Measured subtotal** (union; 0.02h of overlap merged, 0.34h excluded as already recorded) | **8.29h** |
+| Measured — app | 0.56h |
+| **Measured subtotal** (union; 0.02h of overlap merged, 0.34h excluded as already recorded) | **8.36h** |
 | Dev meeting, Mon 5 Oct 2–3pm — inside the animations span, counted once there | 0h |
 | Thu 8 Oct 12:00–15:00 as stated, less the 0.08h measured inside the window | 2.92h |
-| **Total** | **11.2h** |
+| **Total** | **11.3h** |
 
 # Volume
 
