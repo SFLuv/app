@@ -15,18 +15,18 @@
 | 2026-10-05 | Boundless grant video: analysis pipeline, draft 2, notes pass, draft 3, 4K asset handoff (includes the 2-3pm dev meeting and two app check-ins falling inside these spans) | 6.63 | 0.00 |
 | 2026-10-08 | Working block as stated, 12:00-15:00, less the 0.08h logged inside it | 2.92 | 0.00 |
 | 2026-10-08 | How it Works: expanding ring replaces the circular loop; 1.43x in the ring, tagline below | 0.81 | 0.00 |
-| 2026-10-09 | How it Works: legend and label placement, slower draw, first-year merchant spend from the ledger ($16,560) | 0.36 | 0.00 |
-| 2026-10-09 | Past-event gallery modal with full-resolution downloads; dev-up prefers a sibling webpage checkout | 0.10 | 0.00 |
+| 2026-10-09 | How it Works: legend and label placement, slower draw, first-year merchant spend from the ledger ($16,560); three option write-ups | 1.23 | 0.00 |
+| 2026-10-09 | Past-event gallery modal with full-resolution downloads; dev-up prefers a sibling webpage checkout; hand-tested against the local dev stack | 0.75 | 0.00 |
 | 2026-10-09 | Merge feat/forms-and-site-editing into pjol/volunteer-gallery | 0.10 | 0.00 |
 | 2026-10-10 | Falafelland payment failure diagnosed: sponsored-transaction EOA out of gas (diagnosis only, no code) | 0.15 | 0.00 |
 | 2026-10-11 | Branch scope document for the week | 0.21 | 0.00 |
-| **TOTAL:** |  | **11.28** | **$ -** |
+| **TOTAL:** |  | **12.80** | **$ -** |
 | **PAYMENT IN SFLUV** |  |  | **$ -** |
 | **PAYMENT IN USD** |  |  | **$ -** |
 
 # Branch scope — `pjol/boundless-touchups`
 
-Oct 5–11 2026 · animations + webpage + app · **11.3h**
+Oct 5–11 2026 · animations + webpage + app · **12.8h**
 
 Records **my own** work this week. Branched off `sanchezo/website-cms-with-vuln-fixes`, whose two
 halves are already written up elsewhere — the website CMS and Forms and Waivers in
@@ -46,8 +46,16 @@ upward past what their sittings measured — How it Works read 1.2h against a me
 gallery 0.2h against 0.10h — so the itemisation summed 0.3h above the total it sat under. Both are
 corrected below. Nothing about the work changed; only the arithmetic describing it.
 
-**8.36h measured** from session-transcript timestamps clustered into sittings on a 30-minute gap
-(`time-accounting/scripts/measure_sittings.py`), re-taken at **2026-10-12 11:05 PDT**. Three projects ran
+**Second correction: the week was under-measured.** Asked whether the figure felt short, I checked the
+commits and file mtimes against the sittings instead of defending the number, and two Friday spans had
+committed output sitting in gaps the 30-minute rule had split out. Measured moves **8.36h → 9.88h** and
+the total **11.3h → 12.8h** (a 1.13x change). The cause is named in full under *Where the 30-minute rule
+undercounted*; the short version is that hand-testing a web page in a browser generates no transcript
+messages, so the webpage work was the most under-reported thing here.
+
+**9.88h measured** from session-transcript timestamps clustered into sittings on a 30-minute gap
+(`time-accounting/scripts/measure_sittings.py`), re-taken at **2026-10-12 11:12 PDT**, with two spans
+extended to the file writes and commits inside them (see *Where the 30-minute rule undercounted*). Three projects ran
 this week — animations, webpage and app — and the figure is the **union** of their sittings, not the
 sum: 0.02h of overlap is merged rather than counted twice. Corroborated by file mtimes, which run
 Oct 5 12:59 → 20:09 for animations and match the commit times in both git repos.
@@ -92,19 +100,39 @@ Four weaknesses worth naming:
 |---|---|---|---|
 | Mon 5 Oct | animations (contains the 2–3pm dev meeting) | 12:53–16:39 | 3.77h |
 | Mon 5 Oct | animations | 17:19–20:10 | 2.86h |
-| Mon 5 Oct | app | 12:56, 18:23 | 0.02h |
+| Mon 5 Oct | app | 12:56, 18:23 | *absorbed* |
 | Thu 8 Oct | app | 14:05–14:10 | 0.08h |
 | Thu 8 Oct | webpage | 15:40–16:24 | 0.73h |
-| Fri 9 Oct | webpage | 11:38–11:56, 12:49–12:52 | 0.36h |
-| Fri 9 Oct | app | 15:08–15:13, 15:44–15:46 | 0.10h |
+| Fri 9 Oct | webpage | 11:38–**12:52** *(extended)* | 1.23h |
+| Fri 9 Oct | webpage + app | 15:08–**15:53** *(extended)* | 0.75h |
 | Fri 9 Oct | webpage | 18:43–18:49 | 0.10h |
 | Sat 10 Oct | app | 12:57–13:06 | 0.15h |
 | Sun 11 Oct | app | 21:00–21:13 | 0.21h |
-| | | **measured (union)** | **8.36h** |
+| | | **measured** | **9.88h** |
 
-The rows sum to 8.38h at the printed precision; the union is 8.36h after merging 0.02h of overlap and
-rounding. Where the two disagree the union wins. The 0.02h is Monday's two app check-ins, which fall
-inside the animations spans and so are absorbed into them rather than added alongside.
+Monday's two app check-ins (12:56 and 18:23, 0.02h) fall inside the animations spans, so they are
+absorbed into them rather than added alongside.
+
+### Where the 30-minute rule undercounted
+
+The 30-minute gap is the right default — a longer silence usually means somebody left. But it measures
+*minutes containing a message*, and reviewing a rendered page in a browser produces no messages. Two
+Friday gaps were split by it that were plainly working time, and the corroboration step is what caught
+them: **the files and commits fell outside the sittings**, which the method says means the measurement
+is describing the wrong span.
+
+| Split gap | Length | What is inside it | Verdict |
+|---|---|---|---|
+| Fri 11:56 → 12:49 | 53 min | commit `a69f98f` at 12:38; the four `how-it-works-examples/` files written 12:44; 86 app files at 12:45 | **working** — span extended |
+| Fri 15:13 → 15:53 | 40 min | gallery commits in both repos at 15:53; webpage `.next/dev` rebuilding at 15:48; `tmp/webpage` dev stack at 15:27 | **working** — span extended |
+| Mon 16:39 → 17:19 | 40 min | nothing written, no commits | genuine break |
+| Thu 14:10 → 15:40 | 90 min | nothing written, no commits (and 14:10–15:00 sits inside the stated Oct 8 block) | genuine break |
+| Mon 11:12 → 12:17 | 65 min | holds the 11:15–12:00 meeting, counted in `merchant-unwrap-pending-states.md` | counted elsewhere |
+| Mon 12:19 → 12:53 | 34 min | one `.env` write at 12:40 | too thin to claim |
+
+Extending only the two corroborated spans adds **1.53h**. For scale, had the threshold itself been
+moved instead, the same week measures 9.48h at 35 minutes, 10.15h at 45 and 11.03h at 60 — which is
+why the gaps were judged individually against what landed in them rather than by turning one dial.
 
 ---
 
@@ -145,7 +173,7 @@ at the right frame without reading the script alongside.
 
 Output: **81 video files, 3,946 MB**, three drafts and a 16-file handoff set.
 
-### How it Works reframed from circularity to amplification — 1.09h · webpage, 0.08h · app
+### How it Works reframed from circularity to amplification — 1.96h · webpage, 0.08h · app
 
 Thu 15:40–16:24, Fri 11:38–11:56 and 12:49–12:52, with the brief set in the Thu app sitting 14:05–14:10.
 
@@ -170,7 +198,7 @@ framing around it.
 Files: `src/app/(about)/how-it-works/page.tsx`, `src/content/about.ts`,
 `src/features/how-it-works/AmplificationRing.tsx`, `AmplificationLoop.tsx`, `src/styles/globals.css`.
 
-### Past-event gallery modal — 0.10h · webpage + app
+### Past-event gallery modal — 0.75h · webpage + app
 
 Fri 15:08–15:13 and 15:44–15:46; committed 15:53 in both repos.
 
@@ -225,12 +253,13 @@ Sat 12:57–13:06. **Investigation only; no code written.** Reported as one merc
 | Source | Hours |
 |---|---|
 | Measured — animations | 6.63h |
-| Measured — webpage | 1.19h |
-| Measured — app | 0.56h |
-| **Measured subtotal** (union; 0.02h of overlap merged, 0.34h excluded as already recorded) | **8.36h** |
+| Measured — webpage | 2.06h |
+| Measured — app | 0.45h |
+| Measured — webpage + app, Friday's gallery span | 0.75h |
+| **Measured subtotal** (0.02h absorbed, 0.34h excluded as already recorded, two spans extended to their commits) | **9.88h** |
 | Dev meeting, Mon 5 Oct 2–3pm — inside the animations span, counted once there | 0h |
 | Thu 8 Oct 12:00–15:00 as stated, less the 0.08h measured inside the window | 2.92h |
-| **Total** | **11.3h** |
+| **Total** | **12.8h** |
 
 # Volume
 

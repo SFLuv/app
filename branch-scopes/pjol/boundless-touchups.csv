@@ -9,13 +9,13 @@ DATE,,DESCRIPTION,,HOURS                ( input numbers only),,AMOUNT BILLED
 2026-10-05,,"Boundless grant video: analysis pipeline, draft 2, notes pass, draft 3, 4K asset handoff (includes the 2-3pm dev meeting and two app check-ins falling inside these spans)",,6.63,,0.00
 2026-10-08,,"Working block as stated, 12:00-15:00, less the 0.08h logged inside it",,2.92,,0.00
 2026-10-08,,"How it Works: expanding ring replaces the circular loop; 1.43x in the ring, tagline below",,0.81,,0.00
-2026-10-09,,"How it Works: legend and label placement, slower draw, first-year merchant spend from the ledger ($16,560)",,0.36,,0.00
-2026-10-09,,Past-event gallery modal with full-resolution downloads; dev-up prefers a sibling webpage checkout,,0.10,,0.00
+2026-10-09,,"How it Works: legend and label placement, slower draw, first-year merchant spend from the ledger ($16,560); three option write-ups",,1.23,,0.00
+2026-10-09,,Past-event gallery modal with full-resolution downloads; dev-up prefers a sibling webpage checkout; hand-tested against the local dev stack,,0.75,,0.00
 2026-10-09,,Merge feat/forms-and-site-editing into pjol/volunteer-gallery,,0.10,,0.00
 2026-10-10,,"Falafelland payment failure diagnosed: sponsored-transaction EOA out of gas (diagnosis only, no code)",,0.15,,0.00
 2026-10-11,,Branch scope document for the week,,0.21,,0.00
 ,,,,,,0.00
 ,,,,,,
- TOTAL: ,,,,11.28,, $ -
+ TOTAL: ,,,,12.80,, $ -
 PAYMENT IN SFLUV,,,,,, $ -
 PAYMENT IN USD,,,,,, $ -
