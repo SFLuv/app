@@ -2854,10 +2854,45 @@ func latestDBVersion() string {
 	return schemaMigrations[len(schemaMigrations)-1].Version
 }
 
+// migrationLockKey is the Postgres advisory lock held while migrations run.
+// Any constant works as long as nothing else in the app db uses it.
+const migrationLockKey int64 = 0x5F1D_0001
+
+// RunPendingMigrations brings the app and bot databases up to the latest
+// schema version.
+//
+// It holds a session advisory lock on the app database for the whole run, so
+// two processes starting at once (a redeploy overlapping the old instance, the
+// init command run beside the server) take turns: the second waits, then reads
+// the version the first one wrote and finds nothing left to do. Without it both
+// would read the same old version and apply the same migration twice.
 func RunPendingMigrations(ctx context.Context, pools *DBPools, appLogger *logger.LogCloser) error {
 	if pools == nil || pools.App == nil || pools.Bot == nil {
 		return fmt.Errorf("app and bot db pools are required")
 	}
+
+	lockConn, err := pools.App.Acquire(ctx)
+	if err != nil {
+		return fmt.Errorf("error acquiring connection for migration lock: %w", err)
+	}
+	defer lockConn.Release()
+
+	if _, err := lockConn.Exec(ctx, "SELECT pg_advisory_lock($1)", migrationLockKey); err != nil {
+		return fmt.Errorf("error taking migration lock: %w", err)
+	}
+	defer func() {
+		// A fresh context: the lock must be released even if ctx was cancelled.
+		// If the unlock itself fails the session still ends when the connection
+		// is closed, which drops the lock with it.
+		if _, err := lockConn.Exec(context.Background(), "SELECT pg_advisory_unlock($1)", migrationLockKey); err != nil {
+			lockConn.Conn().Close(context.Background())
+		}
+	}()
+
+	return runPendingMigrationsLocked(ctx, pools, appLogger)
+}
+
+func runPendingMigrationsLocked(ctx context.Context, pools *DBPools, appLogger *logger.LogCloser) error {
 
 	if err := validateMigrationSequence(); err != nil {
 		return err
