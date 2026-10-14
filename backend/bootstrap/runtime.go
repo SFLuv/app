@@ -416,47 +416,74 @@ func NewServerHandler(ctx context.Context, pools *DBPools, appLogger *logger.Log
 	}
 	a.SetPonderDB(ponderDb)
 
-	// Compare our webhook bookkeeping against the indexer's before serving.
-	// The two drift silently and always toward the same failure — notifications
-	// stop with nothing logged — so the check runs where someone will see it.
-	// Recreating hooks reaches out to Ponder, so it is opt-in; the check itself
-	// only ever reads Ponder and writes to our own database.
-	a.LogPonderHookReconciliation(ctx, strings.TrimSpace(os.Getenv("PONDER_HOOK_AUTO_REPAIR")) == "true")
-
-	// Merchant opening hours are refreshed from Google nightly. Listings switched
-	// to manual are excluded, and a poll that returns nothing usable leaves the
-	// existing hours alone rather than clearing them.
-	handlers.NewLocationHoursScheduler(a).Start(ctx)
-
-	StartDeletedAccountPurgeLoop(ctx, a, appLogger)
-
-	// Tills are derived per location, so the account-level grant a merchant got
-	// when their first shop was approved does not reach the address their second
-	// shop is paid into. This catches every one of them up.
-	StartLocationRedeemerSync(ctx, redeemer, appLogger)
-	handlers.StartMerchantPayoutSweep(ctx, a, appLogger)
-
-	// Find or register our Bridge webhook endpoint and adopt the signing key
-	// Bridge issues for it, so BRIDGE_WEBHOOK_PUBLIC_KEY does not have to be
-	// pasted in by hand. Runs in the background: a third party must never be
-	// able to hold up the server starting.
-	handlers.StartBridgeWebhookResolution(ctx, a, appLogger)
-
-	// Workflow upkeep (recurrence catch-up, payout reconciliation, paid_out
-	// finalization) previously ran only as a side effect of user requests, so it
-	// stalled whenever nobody hit the right endpoint. Running it on a timer makes
-	// it independent of traffic.
-	handlers.NewWorkflowMaintenanceScheduler(a, workflowMaintenanceInterval()).Start(ctx)
-
 	p := handlers.NewPonderService(ponderDb, appDb, botDb, appLogger, activeChainID)
-	if err := p.SyncCurrentAnalyticsWalletRoleHistory(ctx); err != nil {
-		appLogger.Logf("error syncing analytics wallet role history during startup: %s", err)
-	}
+
+	// Everything below moves money, signs transactions or writes on a timer, so
+	// it runs only in the process holding the jobs lock. See StartJobsAsLeader.
+	jobsLeader := StartJobsAsLeader(ctx, pools.App, appLogger, func(jobsCtx context.Context) {
+		// Compare our webhook bookkeeping against the indexer's. The two drift
+		// silently and always toward the same failure — notifications stop with
+		// nothing logged — so the check runs where someone will see it.
+		// Recreating hooks reaches out to Ponder, so it is opt-in; the check
+		// itself only ever reads Ponder and writes to our own database.
+		a.LogPonderHookReconciliation(jobsCtx, strings.TrimSpace(os.Getenv("PONDER_HOOK_AUTO_REPAIR")) == "true")
+
+		if err := p.SyncCurrentAnalyticsWalletRoleHistory(jobsCtx); err != nil {
+			appLogger.Logf("error syncing analytics wallet role history during startup: %s", err)
+		}
+
+		// Backfills that read the indexer run here, not in a migration: the
+		// server comes up whether or not ponder is reachable, and a slow or dead
+		// indexer can no longer keep the backend from listening.
+		SeedPonderNotifiedTransfersOnBoot(jobsCtx, pools, appLogger)
+
+		// Merchant opening hours are refreshed from Google nightly. Listings
+		// switched to manual are excluded, and a poll that returns nothing
+		// usable leaves the existing hours alone rather than clearing them.
+		handlers.NewLocationHoursScheduler(a).Start(jobsCtx)
+
+		StartDeletedAccountPurgeLoop(jobsCtx, a, appLogger)
+
+		// Tills are derived per location, so the account-level grant a merchant
+		// got when their first shop was approved does not reach the address
+		// their second shop is paid into. This catches every one of them up.
+		StartLocationRedeemerSync(jobsCtx, redeemer, appLogger)
+		handlers.StartMerchantPayoutSweep(jobsCtx, a, appLogger)
+
+		// Find or register our Bridge webhook endpoint and adopt the signing
+		// key Bridge issues for it, so BRIDGE_WEBHOOK_PUBLIC_KEY does not have
+		// to be pasted in by hand. Runs in the background: a third party must
+		// never be able to hold up the server starting.
+		handlers.StartBridgeWebhookResolution(jobsCtx, a, appLogger)
+
+		// Workflow upkeep (recurrence catch-up, payout reconciliation, paid_out
+		// finalization) previously ran only as a side effect of user requests,
+		// so it stalled whenever nobody hit the right endpoint. Running it on a
+		// timer makes it independent of traffic.
+		handlers.NewWorkflowMaintenanceScheduler(a, workflowMaintenanceInterval()).Start(jobsCtx)
+	})
 
 	// Read-only admin MCP endpoint, gated by the existing Privy JWT + admin check.
 	// It reuses the running pools; the read-only guarantee comes from per-query
 	// read-only transactions inside the mcp package.
 	mcpService := mcp.New(pools.App, pools.Bot, pools.Ponder, a, activeChainID)
 
-	return router.New(s, a, p, mcpService.RegisterRoutes), nil
+	return withHealthz(router.New(s, a, p, mcpService.RegisterRoutes), jobsLeader), nil
+}
+
+// withHealthz answers GET /healthz ahead of the router, for a platform's
+// deploy healthcheck: no auth, no middleware, no database work, nothing
+// recorded. It reports whether this process runs the background jobs, but is
+// healthy either way: a new deployment must pass its check while the old
+// process still holds the jobs lock, or neither would ever give way.
+func withHealthz(next http.Handler, leader *JobsLeader) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/healthz" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+		fmt.Fprintf(w, `{"status":"ok","jobs_leader":%t}`, leader.Held())
+	})
 }
