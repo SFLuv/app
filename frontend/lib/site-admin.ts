@@ -30,6 +30,8 @@ export async function siteFetch<T>(authFetch: AuthFetch, path: string, init?: Re
       /* body was not JSON */
     }
     if (res.status === 403) message = message || "You don't have permission to do that."
+    // A size limit in front of the backend (nginx) answers with an HTML page, not our JSON.
+    if (res.status === 413) message = message || "That file is too large. Files can be up to 25 MB."
     throw new Error(message || `Something went wrong (${res.status}). Please try again.`)
   }
   return (await res.json()) as T
@@ -62,7 +64,11 @@ export async function checkSiteFile(file: File, want: "pdf" | "image"): Promise<
     text(0, 4) === "GIF8" ||
     (text(0, 4) === "RIFF" && text(8, 12) === "WEBP")
   if (want === "pdf" && !isPdf) return "That file isn’t a PDF, even if its name ends in .pdf. Choose a PDF."
-  if (want === "image" && !isImage) return "That file isn’t a photo the site can show. Choose a PNG, JPEG, WebP or GIF."
+  if (want === "image" && !isImage) {
+    return /\.(heic|heif)$/i.test(file.name)
+      ? "That’s an iPhone HEIC photo, which websites can’t show. Export it as JPEG, or set the iPhone to Settings → Camera → Formats → Most Compatible."
+      : "That file isn’t a photo the site can show. Choose a PNG, JPEG, WebP or GIF."
+  }
   return null
 }
 
