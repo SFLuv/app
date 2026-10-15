@@ -125,11 +125,11 @@ func (a *AppDB) GetOrganizationByUser(ctx context.Context, userId string) (*stru
 	org := &structs.Organization{}
 	var role string
 	err := a.db.QueryRow(ctx, `
-		SELECT o.id, o.name, o.logo, o.created_at, o.updated_at, om.role
+		SELECT o.id, o.name, o.logo, o.is_house, o.created_at, o.updated_at, om.role
 		FROM organization_members om
 		JOIN organizations o ON o.id = om.organization_id
 		WHERE om.user_id = $1;
-	`, userId).Scan(&org.Id, &org.Name, &org.Logo, &org.CreatedAt, &org.UpdatedAt, &role)
+	`, userId).Scan(&org.Id, &org.Name, &org.Logo, &org.IsHouse, &org.CreatedAt, &org.UpdatedAt, &role)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, "", nil
 	}
@@ -191,7 +191,7 @@ func (a *AppDB) GetOrganizationView(ctx context.Context, userId string) (*struct
 	view := &structs.OrganizationView{Organization: *org, MyRole: myRole}
 
 	rows, err := a.db.Query(ctx, `
-		SELECT om.organization_id, om.user_id, om.role,
+		SELECT om.organization_id, om.user_id, om.role, om.permissions_mode,
 			COALESCE(u.contact_email, ''), COALESCE(u.contact_name, ''), om.created_at
 		FROM organization_members om
 		LEFT JOIN users u ON u.id = om.user_id
@@ -206,7 +206,7 @@ func (a *AppDB) GetOrganizationView(ctx context.Context, userId string) (*struct
 	defer rows.Close()
 	for rows.Next() {
 		var m structs.OrganizationMember
-		if err := rows.Scan(&m.OrganizationId, &m.UserId, &m.Role, &m.ContactEmail, &m.ContactName, &m.CreatedAt); err != nil {
+		if err := rows.Scan(&m.OrganizationId, &m.UserId, &m.Role, &m.PermissionsMode, &m.ContactEmail, &m.ContactName, &m.CreatedAt); err != nil {
 			return nil, err
 		}
 		view.Members = append(view.Members, m)
@@ -841,7 +841,7 @@ func (a *AppDB) ResetOrganizationAllocations(ctx context.Context, cycle string, 
 
 func (a *AppDB) ListOrganizations(ctx context.Context) ([]*structs.OrganizationView, error) {
 	rows, err := a.db.Query(ctx, `
-		SELECT o.id, o.name, o.logo, o.created_at, o.updated_at
+		SELECT o.id, o.name, o.logo, o.is_house, o.created_at, o.updated_at
 		FROM organizations o
 		ORDER BY o.name ASC;
 	`)
@@ -852,7 +852,7 @@ func (a *AppDB) ListOrganizations(ctx context.Context) ([]*structs.OrganizationV
 	views := []*structs.OrganizationView{}
 	for rows.Next() {
 		var org structs.Organization
-		if err := rows.Scan(&org.Id, &org.Name, &org.Logo, &org.CreatedAt, &org.UpdatedAt); err != nil {
+		if err := rows.Scan(&org.Id, &org.Name, &org.Logo, &org.IsHouse, &org.CreatedAt, &org.UpdatedAt); err != nil {
 			return nil, err
 		}
 		views = append(views, &structs.OrganizationView{Organization: org})
@@ -1052,7 +1052,7 @@ func (a *AppDB) GetOrganizationsByIds(ctx context.Context, ids []int64) (map[int
 
 	for rows.Next() {
 		org := &structs.Organization{}
-		if err := rows.Scan(&org.Id, &org.Name, &org.Logo, &org.CreatedAt, &org.UpdatedAt); err != nil {
+		if err := rows.Scan(&org.Id, &org.Name, &org.Logo, &org.IsHouse, &org.CreatedAt, &org.UpdatedAt); err != nil {
 			return nil, err
 		}
 		result[org.Id] = org
