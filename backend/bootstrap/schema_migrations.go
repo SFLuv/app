@@ -2622,6 +2622,89 @@ var schemaMigrations = []SchemaMigration{
 			return nil
 		},
 	},
+	{
+		Version:     "1.65",
+		Description: "fine-grained organization member permissions, and the SFLuv administrative grant set",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			// Which organization is SFLuv's own has until now been decided by
+			// matching the normalized name (isHouseOrganization), whose own
+			// comment asks for a column the next time this table is migrated.
+			// That matters more here than it did for branding: the
+			// administrative grants below are gated on being the house
+			// organization, and a rename must not hand them to a partner or
+			// strip them from staff. Backfilled from the same name match, so
+			// the answer today is identical.
+			if _, err := pools.App.Exec(ctx, `
+				ALTER TABLE organizations
+					ADD COLUMN IF NOT EXISTS is_house BOOLEAN NOT NULL DEFAULT FALSE;
+
+				UPDATE organizations
+				SET is_house = TRUE
+				WHERE lower(btrim(name)) = 'sfluv' AND is_house = FALSE;
+			`); err != nil {
+				return fmt.Errorf("error flagging the house organization: %w", err)
+			}
+
+			// Every existing member keeps exactly what they have. "inherit" is
+			// the pre-existing behaviour - the member holds every capability of
+			// every role their organization is approved for - so this migration
+			// changes no one's access. A member only becomes restricted when an
+			// org admin switches them to "custom" in the dashboard.
+			if _, err := pools.App.Exec(ctx, `
+				ALTER TABLE organization_members
+					ADD COLUMN IF NOT EXISTS permissions_mode TEXT NOT NULL DEFAULT 'inherit';
+			`); err != nil {
+				return fmt.Errorf("error adding the organization member permissions mode: %w", err)
+			}
+
+			// Added separately so re-running over a table that already has the
+			// column does not fail on a duplicate constraint.
+			if _, err := pools.App.Exec(ctx, `
+				DO $$
+				BEGIN
+					IF NOT EXISTS (
+						SELECT 1 FROM pg_constraint
+						WHERE conname = 'organization_members_permissions_mode_check'
+					) THEN
+						ALTER TABLE organization_members
+							ADD CONSTRAINT organization_members_permissions_mode_check
+							CHECK (permissions_mode IN ('inherit', 'custom'));
+					END IF;
+				END $$;
+			`); err != nil {
+				return fmt.Errorf("error constraining the organization member permissions mode: %w", err)
+			}
+
+			// One row per granted capability. The key is text rather than an
+			// enum: the catalog lives in structs/app_organization_permissions.go
+			// because a capability is only real once a route checks it, so
+			// adding one should not need a migration.
+			//
+			// role_type is stored alongside the key, redundantly, so that
+			// revoking a whole role is one delete and so a row is readable
+			// without consulting the catalog.
+			if _, err := pools.App.Exec(ctx, `
+				CREATE TABLE IF NOT EXISTS organization_member_permissions(
+					organization_id BIGINT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+					user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+					role_type TEXT NOT NULL,
+					capability TEXT NOT NULL,
+					granted_by TEXT,
+					created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+					PRIMARY KEY (organization_id, user_id, capability)
+				);
+
+				CREATE INDEX IF NOT EXISTS organization_member_permissions_user_idx
+					ON organization_member_permissions(user_id);
+				CREATE INDEX IF NOT EXISTS organization_member_permissions_org_role_idx
+					ON organization_member_permissions(organization_id, role_type);
+			`); err != nil {
+				return fmt.Errorf("error creating the organization member permissions table: %w", err)
+			}
+
+			return nil
+		},
+	},
 }
 
 // migrateW9WarningTiers replaces one hard gate with an escalating sequence.
