@@ -78,6 +78,11 @@ interface AddVolunteerEventModalProps {
    * how a field ends up creatable but not editable.
    */
   editEvent?: EditableVolunteerEvent | null
+  /**
+   * Removes one of the edited event's current photos, right away. Without it
+   * those photos are shown but cannot be removed from this form.
+   */
+  removeExistingPhoto?: (photoId: string) => Promise<void>
 }
 
 /**
@@ -119,6 +124,8 @@ export interface EditableVolunteerEvent {
     until?: string | null
     summary?: string
   } | null
+  /** Photos the event already has, shown so the editor knows what is there. */
+  cover_photos?: { id: string; url: string; position: number }[]
 }
 
 /**
@@ -172,6 +179,7 @@ export function AddVolunteerEventModal({
   unallocatedBalance,
   submitLabel = "Create event",
   editEvent,
+  removeExistingPhoto,
 }: AddVolunteerEventModalProps) {
   const { user } = useApp()
   // Shown read-only so the organizer can see their identity is recorded
@@ -204,6 +212,8 @@ export function AddVolunteerEventModal({
    * them has a staged id to hand to it.
    */
   const [photos, setPhotos] = useState<StagedPhoto[]>([])
+  const [existingPhotos, setExistingPhotos] = useState<{ id: string; url: string }[]>([])
+  const [removingPhotoId, setRemovingPhotoId] = useState("")
   const [error, setError] = useState("")
   const [submitting, setSubmitting] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -221,6 +231,7 @@ export function AddVolunteerEventModal({
 
     const zone = editEvent.timezone || TIMEZONES[0]
     setTitle(editEvent.title)
+    setExistingPhotos([...(editEvent.cover_photos ?? [])].sort((a, b) => a.position - b.position))
     setDescription(editEvent.description ?? "")
     setTimezone(zone)
     setStartAtLocal(toLocalInputValue(editEvent.start_at, zone))
@@ -291,6 +302,7 @@ export function AddVolunteerEventModal({
       if (photo.id) void discardPhoto(photo.id).catch(() => undefined)
     }
     setPhotos([])
+    setExistingPhotos([])
     setError("")
     // eslint-disable-next-line react-hooks/exhaustive-deps -- runs on close only
   }, [open])
@@ -319,7 +331,7 @@ export function AddVolunteerEventModal({
       return
     }
 
-    const room = MAX_PHOTOS - photos.length
+    const room = MAX_PHOTOS - existingPhotos.length - photos.length
     const accepted = incoming.slice(0, Math.max(0, room))
     if (accepted.length === 0) return
 
@@ -362,6 +374,19 @@ export function AddVolunteerEventModal({
     // Best effort: an orphaned staged photo is swept server-side anyway, so a
     // failed cleanup must not block the person still filling in the form.
     if (target?.id) void discardPhoto(target.id).catch(() => undefined)
+  }
+
+  const removeCurrentPhoto = async (photoId: string) => {
+    if (!removeExistingPhoto) return
+    setRemovingPhotoId(photoId)
+    try {
+      await removeExistingPhoto(photoId)
+      setExistingPhotos((current) => current.filter((photo) => photo.id !== photoId))
+    } catch (removeError) {
+      setError(removeError instanceof Error && removeError.message ? removeError.message : "Could not remove that photo.")
+    } finally {
+      setRemovingPhotoId("")
+    }
   }
 
   /*
@@ -515,6 +540,12 @@ export function AddVolunteerEventModal({
         return
       }
 
+      // Saved, so these photos now belong to the event. Forget them before
+      // closing: closing discards whatever is still listed, which is right
+      // for a cancel but would delete photos an edit just added.
+      for (const photo of photosRef.current) URL.revokeObjectURL(photo.previewUrl)
+      photosRef.current = []
+      setPhotos([])
       onOpenChange(false)
     } finally {
       setSubmitting(false)
@@ -525,7 +556,7 @@ export function AddVolunteerEventModal({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
         <DialogHeader>
-          <DialogTitle>New Volunteer Event</DialogTitle>
+          <DialogTitle>{editEvent ? "Edit Volunteer Event" : "New Volunteer Event"}</DialogTitle>
           <DialogDescription>
             Published to the volunteers panel on the app and sfluv.org. QR codes are minted now and become
             redeemable 24 hours before the event starts.
@@ -562,6 +593,28 @@ export function AddVolunteerEventModal({
           <div className="space-y-2">
             <Label>Cover photos</Label>
             <div className="flex flex-wrap items-center gap-2">
+              {existingPhotos.map((photo) => (
+                <div key={photo.id} className="relative">
+                  {/* eslint-disable-next-line @next/next/no-img-element -- photo served by the API */}
+                  <img
+                    src={photo.url}
+                    alt="Current cover photo"
+                    className={cn("h-16 w-24 rounded border object-cover", removingPhotoId === photo.id && "opacity-60")}
+                  />
+                  {removeExistingPhoto ? (
+                    <button
+                      type="button"
+                      className="absolute -right-2 -top-2 rounded-full bg-destructive p-0.5 text-white disabled:opacity-60"
+                      onClick={() => void removeCurrentPhoto(photo.id)}
+                      disabled={removingPhotoId !== ""}
+                      aria-label="Remove this photo now"
+                      title="Removes this photo right away"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  ) : null}
+                </div>
+              ))}
               {photos.map((photo) => (
                 <div key={photo.previewUrl} className="relative">
                   {/* eslint-disable-next-line @next/next/no-img-element -- local object URL preview */}
@@ -599,7 +652,7 @@ export function AddVolunteerEventModal({
                   </button>
                 </div>
               ))}
-              {photos.length < MAX_PHOTOS && (
+              {existingPhotos.length + photos.length < MAX_PHOTOS && (
                 <Button variant="outline" size="sm" onClick={() => fileInputRef.current?.click()}>
                   <Upload className="mr-2 h-3.5 w-3.5" />
                   Add photo
@@ -617,7 +670,7 @@ export function AddVolunteerEventModal({
                 }}
               />
             </div>
-            {photos.length === 0 && (
+            {existingPhotos.length + photos.length === 0 && (
               <p className="flex items-center gap-1 text-xs text-muted-foreground">
                 <ImageIcon className="h-3 w-3" /> Events without a photo still publish, but look sparse in the list.
               </p>
