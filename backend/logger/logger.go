@@ -17,7 +17,31 @@ type LogCloser struct {
 }
 
 // New dynamically finds the root directory of your project. Pass in a relative path as though ./ is your project's root.
+//
+// The file is optional. With LOG_TO_STDOUT=true, or when the file cannot be
+// created, the logger writes to stdout alone instead of failing. The project
+// root comes from the source path baked in at compile time, which only exists
+// where the binary was built: on a host that ships just the binary (Railway's
+// Railpack image) the lookup fails, and a missing log folder must not be what
+// stops the server booting. Hosts like that read stdout anyway.
 func New(relativePath string, prefix string) (*LogCloser, error) {
+	if utils.TruthyEnv("LOG_TO_STDOUT") {
+		return stdoutLogger(prefix), nil
+	}
+
+	logCloser, err := newFileLogger(relativePath, prefix)
+	if err != nil {
+		logCloser = stdoutLogger(prefix)
+		logCloser.Logf("log file %s unavailable (%s); logging to stdout only", relativePath, err)
+	}
+	return logCloser, nil
+}
+
+func stdoutLogger(prefix string) *LogCloser {
+	return &LogCloser{logger: log.New(os.Stdout, prefix, log.Ldate|log.Ltime|log.Llongfile)}
+}
+
+func newFileLogger(relativePath string, prefix string) (*LogCloser, error) {
 	root, err := utils.GetProjectRoot()
 	if err != nil {
 		return nil, err
@@ -64,5 +88,8 @@ func (l *LogCloser) Logf(message string, a ...any) {
 }
 
 func (l *LogCloser) Close() error {
+	if l.file == nil {
+		return nil
+	}
 	return l.file.Close()
 }
