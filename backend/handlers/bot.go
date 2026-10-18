@@ -17,8 +17,10 @@ import (
 
 	"github.com/SFLuv/app/backend/bot"
 	"github.com/SFLuv/app/backend/db"
+	"github.com/SFLuv/app/backend/logger"
 	"github.com/SFLuv/app/backend/structs"
 	"github.com/SFLuv/app/backend/utils"
+	"github.com/SFLuv/app/backend/v4s"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/jackc/pgx/v5"
 )
@@ -34,6 +36,14 @@ type BotService struct {
 	// (styled email, logging). Set after construction because the two services
 	// reference each other.
 	app *AppService
+	// v4s reads live shift availability from a partner's Volunteers for
+	// Salesforce site. It fetches on demand and at most once a minute per job;
+	// a partner whose events are not on V4S costs nothing.
+	//
+	// nil when the integration is switched off, which is the default. Every
+	// call site checks for that, so "off" costs nothing and cannot fetch.
+	v4s       *v4s.Client
+	v4sConfig v4s.Config
 }
 
 // SetAppService completes the mutual wiring between the bot and app services.
@@ -46,13 +56,30 @@ func (s *BotService) SetAppService(a *AppService) {
 var redeemCodeUUIDPattern = regexp.MustCompile(`(?i)[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}`)
 
 func NewBotService(db *db.BotDB, appDb *db.AppDB, bot bot.IBot, payouts *PayoutService, activeChainID int64, readRPCURL string) *BotService {
-	return &BotService{
+	svc := &BotService{
+		v4s:           nil, // set below, only when the integration is enabled
 		db:            db,
 		appDb:         appDb,
 		bot:           bot,
 		payouts:       payouts,
 		activeChainID: activeChainID,
 		readRPCURL:    readRPCURL,
+	}
+	svc.configureV4S()
+	return svc
+}
+
+// configureV4S wires the partner-availability reader, or leaves it nil.
+//
+// Off unless the integrations file says otherwise. The file is read once at
+// boot: it names which organizations have a partner site we may read, and which
+// site that is for each. A nil client is the off state, checked at every call
+// site, so disabled means no parsing and no requests rather than work thrown
+// away.
+func (s *BotService) configureV4S() {
+	s.v4sConfig = v4s.LoadConfig("")
+	if s.v4sConfig.Active() {
+		s.v4s = v4s.NewClient()
 	}
 }
 
@@ -746,4 +773,13 @@ func (s *BotService) Drain(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusCreated)
+}
+
+// LogV4SConfig writes the partner-availability integration's state to the boot
+// log. Whether an integration that reaches out to a third party is switched on
+// should be visible without reading the environment back.
+func (s *BotService) LogV4SConfig(appLogger *logger.LogCloser) {
+	if appLogger != nil {
+		appLogger.Logf("%s", s.v4sConfig.Describe())
+	}
 }

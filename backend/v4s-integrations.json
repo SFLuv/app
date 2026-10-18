@@ -1,0 +1,31 @@
+{
+  "_comment": [
+    "Partner volunteer-availability integrations (Volunteers for Salesforce).",
+    "Each entry pairs one organization with the one site we may read for it, so a",
+    "partner's event can never cause a fetch of anyone else's host. Reads are on",
+    "demand, never on a timer, and at most one per job per ttl_seconds.",
+    "",
+    "'enabled' at the top level is the master switch; each entry has its own too,",
+    "so a single partner can be switched off without touching the rest. Absent or",
+    "false anywhere means off. Organization names are matched ignoring case and",
+    "punctuation; 'house' means the SFLuv organization itself, matched on",
+    "organizations.is_house rather than its name so a rename cannot change what",
+    "is synced."
+  ],
+  "enabled": true,
+  "integrations": [
+    {
+      "organization": "St. Anthony's",
+      "site": "https://stanthonysf.my.salesforce-sites.com/volunteer",
+      "enabled": true,
+      "ttl_seconds": 60,
+      "notes": "Jobs include Breakfast Service, Dining Room Meal Service, Dining Room Second Shift, FCP Clothing Distribution and Farmers Market. FCP Clothing Distribution runs two sittings on some days (8:30am and 1:00pm), so those occurrences need a start time close enough to tell them apart."
+    },
+    {
+      "organization": "house",
+      "site": "https://stanthonysf.my.salesforce-sites.com/volunteer",
+      "enabled": false,
+      "notes": "SFLuv's own organization. Off: SFLuv events are managed in our own portal, so there is nothing on a partner site to read. Here as the worked example for adding a partner."
+    }
+  ]
+}

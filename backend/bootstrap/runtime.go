@@ -379,6 +379,9 @@ func NewServerHandler(ctx context.Context, pools *DBPools, appLogger *logger.Log
 	minter := handlers.NewMinterService(appDb, appLogger, clientConfig)
 
 	s := handlers.NewBotService(botDb, appDb, botClient, payouts, activeChainID, clientConfig.ReadRPCURL())
+	// Report the partner-availability integration's state at boot, so whether
+	// it is on is visible in the log rather than only in the environment.
+	s.LogV4SConfig(appLogger)
 	a := handlers.NewAppService(appDb, appLogger, payouts, w9Provider, clientConfig)
 	a.SetBotService(s)
 	s.SetAppService(a)
