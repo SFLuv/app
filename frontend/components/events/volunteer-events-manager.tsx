@@ -531,9 +531,10 @@ export function VolunteerEventsManager({
       const codes = (loaded || []).map((code, index) => ({ id: code.id, number: code.number ?? index + 1 }))
       if (codes.length === 0) throw new Error("This event has no QR codes yet.")
 
-      const [{ jsPDF }, cardCanvas, { buildEventRedeemQrValue }] = await Promise.all([
+      const [{ jsPDF }, cardCanvas, cardBack, { buildEventRedeemQrValue }] = await Promise.all([
         import("jspdf"),
         import("@/lib/qr-card-canvas"),
+        import("@/lib/qr-card-back-canvas"),
         import("@/lib/redeem-link"),
       ])
 
@@ -569,33 +570,86 @@ export function VolunteerEventsManager({
         event.title.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "event"
 
       /*
-       * Page size in millimetres, derived from the card rather than fixed.
+       * US Letter, four cards to a page, fronts and backs interleaved.
        *
-       * 55mm wide is the printed card width the old export used; the height now
-       * follows the card's own 425x550 proportion so the artwork fills the page
-       * without being squashed to fit a ratio it was never drawn for.
+       * The card is 4.25 x 5.5in, which is exactly a quarter of Letter, so a 2x2
+       * grid tiles the page with no scaling and no margin. The previous export
+       * put one card on a 55mm page, which meant whoever printed it had to
+       * impose the sheet themselves and had no way to get the translated
+       * reverse onto the back at all.
+       *
+       * Page order is front, back, front, back... so "Print > Two-Sided" with
+       * the default options produces finished cards: page 1 is the first
+       * sheet's face, page 2 is that same sheet's reverse.
+       *
+       * Printers reserve an unprintable margin of roughly 4mm, which clips the
+       * outer edge of the tiling. The card art carries ~4mm of its own padding
+       * inside that edge, so what is lost is white. Do not move artwork into it.
        */
-      const pageWidthMm = 55
-      const pageHeightMm = (pageWidthMm * cardCanvas.CARD_HEIGHT) / cardCanvas.CARD_WIDTH
-      const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: [pageWidthMm, pageHeightMm] })
-      const pageWidth = doc.internal.pageSize.getWidth()
-      const pageHeight = doc.internal.pageSize.getHeight()
+      const PAGE_W = 215.9 // US Letter, mm
+      const PAGE_H = 279.4
+      const COLS = 2
+      const ROWS = 2
+      const PER_PAGE = COLS * ROWS
+      const cellW = PAGE_W / COLS
+      const cellH = PAGE_H / ROWS
 
-      for (let index = 0; index < codes.length; index += 1) {
-        if (index > 0) doc.addPage()
-        const image = cardCanvas.renderCard(template, {
-          ...shared,
-          codeValue: buildEventRedeemQrValue(codes[index].id),
-          codeNumber: codes[index].number,
-        })
-        doc.addImage(image, "JPEG", 0, 0, pageWidth, pageHeight)
+      const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: [PAGE_W, PAGE_H] })
 
-        // Yield every few cards so the progress label paints and the tab stays
-        // responsive; drawing a card is fast, but a thousand in a row is not.
-        if (index % 10 === 9) {
-          setExportProgress({ done: index + 1, total: codes.length })
-          await new Promise<void>((resolve) => setTimeout(resolve, 0))
+      // The reverse is the same for every card, so it is painted once.
+      const backImage = await cardBack.buildCardBack()
+
+      const slotXY = (slot: number) => ({
+        x: (slot % COLS) * cellW,
+        y: Math.floor(slot / COLS) * cellH,
+      })
+
+      /*
+       * Where a card's reverse goes on the back page.
+       *
+       * Duplex printing flips the sheet about its long edge, which for portrait
+       * Letter is the vertical axis: the slot that was top-left comes back up
+       * as top-right. Mirroring the columns is what keeps each reverse behind
+       * its own front. Every reverse is currently identical, so this is
+       * invisible today - it is here so that it stays correct the moment one of
+       * them carries anything card-specific, such as the code number.
+       */
+      const mirrorSlot = (slot: number) => {
+        const col = slot % COLS
+        const row = Math.floor(slot / COLS)
+        return row * COLS + (COLS - 1 - col)
+      }
+
+      let pageStarted = false
+      for (let start = 0; start < codes.length; start += PER_PAGE) {
+        const group = codes.slice(start, start + PER_PAGE)
+
+        // --- the face -------------------------------------------------------
+        if (pageStarted) doc.addPage()
+        pageStarted = true
+        for (let slot = 0; slot < group.length; slot += 1) {
+          const { x, y } = slotXY(slot)
+          const image = cardCanvas.renderCard(template, {
+            ...shared,
+            codeValue: buildEventRedeemQrValue(group[slot].id),
+            codeNumber: group[slot].number,
+          })
+          doc.addImage(image, "JPEG", x, y, cellW, cellH)
         }
+
+        // --- the reverse ----------------------------------------------------
+        // Only the slots that carry a card get one, so a part-full last sheet
+        // does not print four backs behind one front.
+        doc.addPage()
+        for (let slot = 0; slot < group.length; slot += 1) {
+          const { x, y } = slotXY(mirrorSlot(slot))
+          doc.addImage(backImage, "JPEG", x, y, cellW, cellH)
+        }
+
+        // Yield between sheets so the progress label paints and the tab stays
+        // responsive; drawing a card is fast, but a thousand in a row is not.
+        setExportProgress({ done: Math.min(start + PER_PAGE, codes.length), total: codes.length })
+        await new Promise<void>((resolve) => setTimeout(resolve, 0))
       }
 
       doc.save(`${fileBase}-qr-codes.pdf`)
@@ -952,7 +1006,7 @@ export function VolunteerEventsManager({
                       ) : (
                         <>
                           <Download className="mr-2 h-3.5 w-3.5" />
-                          QR code PDFs
+                          QR code PDF
                         </>
                       )}
                     </Button>
@@ -985,6 +1039,18 @@ export function VolunteerEventsManager({
                     >
                       Cancel event
                     </Button>
+                  )}
+                  {/*
+                    The PDF's layout is the whole point of it and is invisible
+                    until someone opens the file, so say it next to the button
+                    that makes it. Without this an affiliate re-imposes a sheet
+                    that is already imposed.
+                  */}
+                  {openEvent.qr?.codes_generated && (
+                    <p className="w-full pt-1 text-xs text-muted-foreground">
+                      Four cards to a page with the translated backs included — print double-sided
+                      on Letter at 100% scale, then cut along the middle.
+                    </p>
                   )}
                 </div>
               </div>

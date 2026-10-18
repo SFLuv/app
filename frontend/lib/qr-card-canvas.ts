@@ -30,10 +30,18 @@ export const CARD_HEIGHT = 550
 /**
  * Supersampling factor for the bitmap handed to the PDF.
  *
- * The page is ~55mm wide, so 2x lands around 390dpi — comfortably past what a
- * card printer resolves, without quadrupling the memory a batch holds.
+ * The card prints at its full 4.25in width now that the export tiles four to a
+ * Letter sheet, so 3x is what lands on the 300dpi print standard; 2x would be
+ * 200dpi. It used to be 2x because the old export put the card on a 55mm page,
+ * where that was already ~390dpi — when the printed size changed, the old
+ * factor quietly halved the resolution of every card.
+ *
+ * The cost is real: a batch holds roughly twice the JPEG bytes it did at 2x.
+ * That is the right trade for something that goes through a printer and has to
+ * carry a scannable code, but it is the number to revisit if a very large event
+ * ever runs the tab out of memory.
  */
-const SCALE = 2
+const SCALE = 3
 
 const EDGE_TOP = 18
 const EDGE_BOTTOM = 24

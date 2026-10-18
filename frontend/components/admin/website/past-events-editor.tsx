@@ -368,38 +368,61 @@ function PastEventGallery({ event, onChange }: { event: SitePastEvent; onChange:
     if (done) toast({ title: done, description: "The website updates within about 30 seconds." })
   }
 
+  // Each photo stands on its own: one that can't be used (wrong type, too large, a
+  // network hiccup) is reported by name, and every other photo is still added.
   const addPhotos = async (files: File[]) => {
+    const failed: { name: string; reason: string }[] = []
     const usable: File[] = []
-    const refused: string[] = []
     for (const file of files) {
-      if (await checkSiteFile(file, "image")) refused.push(file.name)
+      const problem = await checkSiteFile(file, "image")
+      if (problem) failed.push({ name: file.name, reason: problem })
       else usable.push(file)
     }
-    if (refused.length > 0) {
-      toast({
-        title: refused.length === 1 ? "One file isn’t a photo" : `${refused.length} files aren’t photos`,
-        description: `Skipped: ${refused.slice(0, 5).join(", ")}${refused.length > 5 ? "…" : ""}`,
-        variant: "destructive",
-      })
-    }
-    if (usable.length === 0) return
 
-    setProgress({ done: 0, total: usable.length })
     const ids: string[] = []
+    if (usable.length > 0) {
+      setProgress({ done: 0, total: usable.length })
+      for (const [index, file] of usable.entries()) {
+        try {
+          ids.push((await uploadSiteFile(authFetch, file)).id)
+        } catch (err) {
+          failed.push({ name: file.name, reason: err instanceof Error ? err.message : "The upload failed." })
+        }
+        setProgress({ done: index + 1, total: usable.length })
+      }
+    }
+
+    // Attach what uploaded, in batches of 50, the most one request may add.
+    let added = 0
     try {
-      for (const file of usable) {
-        ids.push((await uploadSiteFile(authFetch, file)).id)
-        setProgress({ done: ids.length, total: usable.length })
-      }
-      // In batches of 50, the most one request may add.
       for (let i = 0; i < ids.length; i += 50) {
-        await call("/photos", { method: "POST", ...jsonBody({ file_ids: ids.slice(i, i + 50) }) })
+        const batch = ids.slice(i, i + 50)
+        await call("/photos", { method: "POST", ...jsonBody({ file_ids: batch }) })
+        added += batch.length
       }
-      toast({ title: ids.length === 1 ? "Photo added" : `${ids.length} photos added`, description: "The website updates within about 30 seconds." })
     } catch (err) {
-      toast({ title: "Couldn’t add all the photos", description: err instanceof Error ? err.message : "", variant: "destructive" })
+      failed.push({
+        name: `${ids.length - added} uploaded ${ids.length - added === 1 ? "photo" : "photos"}`,
+        reason: err instanceof Error ? err.message : "Couldn’t add them to the gallery.",
+      })
     } finally {
       setProgress(null)
+    }
+
+    if (added > 0) {
+      toast({
+        title: added === 1 ? "Photo added" : `${added} photos added`,
+        description: "The website updates within about 30 seconds.",
+      })
+    }
+    if (failed.length > 0) {
+      const shown = failed.slice(0, 4).map((f) => `${f.name}: ${f.reason}`)
+      if (failed.length > 4) shown.push(`…and ${failed.length - 4} more.`)
+      toast({
+        title: failed.length === 1 ? "One photo couldn’t be added" : `${failed.length} photos couldn’t be added`,
+        description: shown.join("\n"),
+        variant: "destructive",
+      })
     }
   }
 

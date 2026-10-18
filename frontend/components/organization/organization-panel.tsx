@@ -16,6 +16,7 @@ import { useApp } from "@/context/AppProvider"
 import { LogoCropModal } from "./logo-crop-modal"
 import { formatCredentialLabel } from "@/lib/credential-labels"
 import type { OrganizationView, OrgRoleType } from "@/types/organization"
+import { MemberPermissions } from "@/components/organization/member-permissions"
 
 const roleLabels: Record<OrgRoleType, string> = {
   affiliate: "Affiliate",
@@ -445,6 +446,12 @@ export function OrganizationPanel() {
           )}
         </CardContent>
       </Card>
+
+      {/*
+        Permissions sit directly under Members: it is the same list of people,
+        answering the next question an admin has after "who is here".
+      */}
+      <MemberPermissions members={view.members} canManage={isAdmin} />
 
       <LogoCropModal open={cropOpen} onOpenChange={setCropOpen} src={cropSrc} onCropped={(dataUrl) => void saveLogo(dataUrl)} />
 
