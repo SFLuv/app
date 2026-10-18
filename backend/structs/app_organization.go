@@ -26,26 +26,34 @@ const (
 )
 
 type Organization struct {
-	Id        int64     `json:"id"`
-	Name      string    `json:"name"`
-	Logo      *string   `json:"logo,omitempty"`
+	Id   int64   `json:"id"`
+	Name string  `json:"name"`
+	Logo *string `json:"logo,omitempty"`
+	// IsHouse marks SFLuv's own organization rather than a partner. It gates
+	// the administrative permission section, and replaces matching on the
+	// normalized name, which would have let a rename move admin powers.
+	IsHouse   bool      `json:"is_house"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
 type OrganizationMember struct {
-	OrganizationId int64     `json:"organization_id"`
-	UserId         string    `json:"user_id"`
-	Role           string    `json:"role"` // member | admin | superadmin
-	ContactEmail   string    `json:"contact_email,omitempty"`
-	ContactName    string    `json:"contact_name,omitempty"`
-	CreatedAt      time.Time `json:"created_at"`
+	OrganizationId int64  `json:"organization_id"`
+	UserId         string `json:"user_id"`
+	Role           string `json:"role"` // member | admin | superadmin
+	// PermissionsMode is inherit | custom. "inherit" means the member holds
+	// every capability of every role the organization is approved for, which
+	// is what membership meant before fine-grained permissions existed.
+	PermissionsMode string    `json:"permissions_mode"`
+	ContactEmail    string    `json:"contact_email,omitempty"`
+	ContactName     string    `json:"contact_name,omitempty"`
+	CreatedAt       time.Time `json:"created_at"`
 }
 
 type OrganizationRole struct {
-	OrganizationId int64      `json:"organization_id"`
-	RoleType       string     `json:"role_type"` // affiliate | proposer | supervisor
-	Status         string     `json:"status"`    // pending | approved | rejected
+	OrganizationId int64  `json:"organization_id"`
+	RoleType       string `json:"role_type"` // affiliate | proposer | supervisor
+	Status         string `json:"status"`    // pending | approved | rejected
 	// Role-specific extras collected at request time.
 	Email                 string     `json:"email,omitempty"`
 	PrimaryRewardsAccount string     `json:"primary_rewards_account,omitempty"`

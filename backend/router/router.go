@@ -195,6 +195,13 @@ func AddOrganizationRoutes(r *chi.Mux, a *handlers.AppService, s *handlers.BotSe
 	r.Post("/organizations/mine/transfer-superadmin", withActiveAuth(a.TransferOrganizationSuperadmin, a))
 	r.Post("/organizations/mine/leave", withActiveAuth(a.LeaveOrganization, a))
 	r.Post("/organizations/mine/roles/request", withActiveAuth(a.RequestOrganizationRole, a))
+
+	// Fine-grained member permissions. Reading is open to any member so a
+	// member can see their own access; writing needs org admin, and the
+	// administrative section needs the house organization's superadmin.
+	r.Get("/organizations/mine/permissions", withActiveAuth(a.GetOrganizationPermissions, a))
+	r.Put("/organizations/mine/permissions", withActiveAuth(a.SetOrganizationMemberPermissions, a))
+	r.Put("/organizations/mine/permissions/administrative", withActiveAuth(a.SetOrganizationMemberAdministrative, a))
 	r.Post("/organizations/join", withActiveAuth(a.JoinOrganization, a))
 
 	// Platform-admin org controls.
@@ -380,22 +387,22 @@ func AddPartnerRoutes(r *chi.Mux, s *handlers.AppService) {
 
 func AddAffiliateRoutes(r *chi.Mux, s *handlers.BotService, a *handlers.AppService) {
 	r.Post("/affiliates/request", withActiveAuth(a.RequestAffiliateStatus, a))
-	r.Put("/affiliates/logo", withAffiliate(a.UpdateAffiliateLogo, a))
+	r.Put("/affiliates/logo", withCapability(structs.CapAffiliateProfileManage, a.UpdateAffiliateLogo, a))
 	// Volunteer events are request-only for affiliates: approval is what commits
 	// faucet funds, so an affiliate can never mint codes on their own.
-	r.Post("/affiliates/volunteer-events", withAffiliate(a.AffiliateRequestVolunteerEvent, a))
-	r.Get("/affiliates/volunteer-events", withAffiliate(a.AffiliateListVolunteerEvents, a))
+	r.Post("/affiliates/volunteer-events", withCapability(structs.CapAffiliateEventsManage, a.AffiliateRequestVolunteerEvent, a))
+	r.Get("/affiliates/volunteer-events", withCapability(structs.CapAffiliateEventsView, a.AffiliateListVolunteerEvents, a))
 	// Organizers still need their codes to print, even though they can no longer
 	// create events unilaterally. Scoped to their own organization inside the
 	// handler — these codes are bearer tokens for faucet funds.
-	r.Get("/affiliates/volunteer-events/{id}/codes.csv", withAffiliate(a.AffiliateDownloadVolunteerEventCodes, a))
-	r.Get("/affiliates/volunteer-events/{id}/codes", withAffiliate(a.AffiliateGetVolunteerEventCodes, a))
-	r.Put("/affiliates/volunteer-events/{id}", withAffiliate(a.AffiliateUpdateVolunteerEvent, a))
-	r.Post("/affiliates/volunteer-events/{id}/blast", withAffiliate(a.AffiliateSendEventBlast, a))
-	r.Post("/affiliates/volunteer-events/{id}/blast/preview", withAffiliate(a.PreviewEventBlast, a))
-	r.Post("/affiliates/volunteer-events/{id}/blast/images", withAffiliate(a.UploadEventBlastImage, a))
+	r.Get("/affiliates/volunteer-events/{id}/codes.csv", withCapability(structs.CapAffiliateCodesDownload, a.AffiliateDownloadVolunteerEventCodes, a))
+	r.Get("/affiliates/volunteer-events/{id}/codes", withCapability(structs.CapAffiliateCodesDownload, a.AffiliateGetVolunteerEventCodes, a))
+	r.Put("/affiliates/volunteer-events/{id}", withCapability(structs.CapAffiliateEventsManage, a.AffiliateUpdateVolunteerEvent, a))
+	r.Post("/affiliates/volunteer-events/{id}/blast", withCapability(structs.CapAffiliateVolunteersMsg, a.AffiliateSendEventBlast, a))
+	r.Post("/affiliates/volunteer-events/{id}/blast/preview", withCapability(structs.CapAffiliateVolunteersMsg, a.PreviewEventBlast, a))
+	r.Post("/affiliates/volunteer-events/{id}/blast/images", withCapability(structs.CapAffiliateVolunteersMsg, a.UploadEventBlastImage, a))
 
-	r.Get("/affiliates/{user_id}", withAffiliate(a.GetAffiliate, a))
+	r.Get("/affiliates/{user_id}", withCapability(structs.CapAffiliateEventsView, a.GetAffiliate, a))
 }
 
 func AddWorkflowRoutes(r *chi.Mux, s *handlers.BotService, a *handlers.AppService) {
@@ -405,18 +412,18 @@ func AddWorkflowRoutes(r *chi.Mux, s *handlers.BotService, a *handlers.AppServic
 	r.Post("/supervisors/request", withActiveAuth(a.RequestSupervisorStatus, a))
 	r.Get("/supervisors/approved", withActiveAuth(a.GetApprovedSupervisors, a))
 	r.Get("/credentials/types", withActiveAuth(a.GetCredentialTypes, a))
-	r.Get("/issuers/users/by-address/{address}", withIssuer(a.GetUserByAddress, a))
+	r.Get("/issuers/users/by-address/{address}", withCapability(structs.CapIssuerCredentialsView, a.GetUserByAddress, a))
 
-	r.Get("/proposers/workflow-templates", withProposer(a.GetProposerWorkflowTemplates, a))
-	r.Post("/proposers/workflow-templates", withProposer(a.CreateProposerWorkflowTemplate, a))
-	r.Delete("/proposers/workflow-templates/{template_id}", withProposer(a.DeleteProposerWorkflowTemplate, a))
-	r.Post("/proposers/workflows", withProposer(a.CreateWorkflow, a))
-	r.Get("/proposers/workflows", withProposer(a.GetProposerWorkflows, a))
-	r.Get("/proposers/workflow-deletion-proposals", withProposer(a.GetProposerWorkflowDeletionProposals, a))
-	r.Get("/proposers/workflows/{workflow_id}", withProposer(a.GetProposerWorkflow, a))
-	r.Post("/proposers/workflows/{workflow_id}/edit-proposals", withProposer(a.ProposeWorkflowEdit, a))
-	r.Delete("/proposers/workflows/{workflow_id}", withProposer(a.DeleteProposerWorkflow, a))
-	r.Post("/proposers/workflow-deletion-proposals", withProposer(a.ProposeWorkflowDeletion, a))
+	r.Get("/proposers/workflow-templates", withCapability(structs.CapProposerWorkflowsView, a.GetProposerWorkflowTemplates, a))
+	r.Post("/proposers/workflow-templates", withCapability(structs.CapProposerTemplatesManage, a.CreateProposerWorkflowTemplate, a))
+	r.Delete("/proposers/workflow-templates/{template_id}", withCapability(structs.CapProposerTemplatesManage, a.DeleteProposerWorkflowTemplate, a))
+	r.Post("/proposers/workflows", withCapability(structs.CapProposerWorkflowsCreate, a.CreateWorkflow, a))
+	r.Get("/proposers/workflows", withCapability(structs.CapProposerWorkflowsView, a.GetProposerWorkflows, a))
+	r.Get("/proposers/workflow-deletion-proposals", withCapability(structs.CapProposerWorkflowsView, a.GetProposerWorkflowDeletionProposals, a))
+	r.Get("/proposers/workflows/{workflow_id}", withCapability(structs.CapProposerWorkflowsView, a.GetProposerWorkflow, a))
+	r.Post("/proposers/workflows/{workflow_id}/edit-proposals", withCapability(structs.CapProposerWorkflowsPropose, a.ProposeWorkflowEdit, a))
+	r.Delete("/proposers/workflows/{workflow_id}", withCapability(structs.CapProposerWorkflowsPropose, a.DeleteProposerWorkflow, a))
+	r.Post("/proposers/workflow-deletion-proposals", withCapability(structs.CapProposerWorkflowsPropose, a.ProposeWorkflowDeletion, a))
 
 	r.Get("/improvers/workflows", withImprover(a.GetImproverWorkflows, a))
 	r.Get("/improvers/unpaid-workflows", withImprover(a.GetImproverUnpaidWorkflows, a))
@@ -444,9 +451,9 @@ func AddWorkflowRoutes(r *chi.Mux, s *handlers.BotService, a *handlers.AppServic
 	r.Post("/improvers/workflows/{workflow_id}/steps/{step_id}/complete", withImprover(a.CompleteWorkflowStep, a))
 	r.Post("/improvers/workflows/{workflow_id}/steps/{step_id}/payout-request", withImprover(a.RequestWorkflowStepPayoutRetry, a))
 
-	r.Get("/supervisors/workflows", withSupervisor(a.GetSupervisorWorkflows, a))
-	r.Post("/supervisors/workflows/export", withSupervisor(a.ExportSupervisorWorkflowData, a))
-	r.Put("/supervisors/primary-rewards-account", withSupervisor(a.UpdateSupervisorPrimaryRewardsAccount, a))
+	r.Get("/supervisors/workflows", withCapability(structs.CapSupervisorWorkflowsView, a.GetSupervisorWorkflows, a))
+	r.Post("/supervisors/workflows/export", withCapability(structs.CapSupervisorWorkflowsExport, a.ExportSupervisorWorkflowData, a))
+	r.Put("/supervisors/primary-rewards-account", withCapability(structs.CapSupervisorPayoutAccount, a.UpdateSupervisorPrimaryRewardsAccount, a))
 
 	r.Get("/admin/proposers", withAdmin(a.GetProposers, a))
 	r.Put("/admin/proposers", withAdmin(a.UpdateProposer, a))
@@ -488,12 +495,12 @@ func AddWorkflowRoutes(r *chi.Mux, s *handlers.BotService, a *handlers.AppServic
 	r.Post("/workflow-edit-proposals/{proposal_id}/votes", withVoter(a.VoteWorkflowEditProposal, a))
 	r.Post("/workflow-deletion-proposals/{proposal_id}/votes", withVoter(a.VoteWorkflowDeletionProposal, a))
 
-	r.Get("/issuers/scopes", withIssuer(a.GetMyIssuerScopes, a))
-	r.Get("/issuers/credential-requests", withIssuer(a.GetIssuerCredentialRequests, a))
-	r.Post("/issuers/credential-requests/{request_id}/decision", withIssuer(a.DecideIssuerCredentialRequest, a))
-	r.Post("/issuers/credentials", withIssuer(a.IssueCredential, a))
-	r.Delete("/issuers/credentials", withIssuer(a.RevokeCredential, a))
-	r.Get("/issuers/credentials/{user_id}", withIssuer(a.GetIssuerUserCredentials, a))
+	r.Get("/issuers/scopes", withCapability(structs.CapIssuerCredentialsView, a.GetMyIssuerScopes, a))
+	r.Get("/issuers/credential-requests", withCapability(structs.CapIssuerCredentialsView, a.GetIssuerCredentialRequests, a))
+	r.Post("/issuers/credential-requests/{request_id}/decision", withCapability(structs.CapIssuerCredentialsIssue, a.DecideIssuerCredentialRequest, a))
+	r.Post("/issuers/credentials", withCapability(structs.CapIssuerCredentialsIssue, a.IssueCredential, a))
+	r.Delete("/issuers/credentials", withCapability(structs.CapIssuerCredentialsRevoke, a.RevokeCredential, a))
+	r.Get("/issuers/credentials/{user_id}", withCapability(structs.CapIssuerCredentialsView, a.GetIssuerUserCredentials, a))
 }
 
 func AddWalletRoutes(r *chi.Mux, s *handlers.AppService) {
@@ -953,48 +960,6 @@ func withAdmin(handlerFunc http.HandlerFunc, s *handlers.AppService) http.Handle
 	}
 }
 
-func withAffiliate(handlerFunc http.HandlerFunc, s *handlers.AppService) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		id, ok := requireAcceptedAuthedUser(w, r, s)
-		if !ok {
-			return
-		}
-		if s.IsAdmin(r.Context(), id) {
-			handlerFunc(w, r)
-			return
-		}
-
-		isAffiliate := s.IsAffiliate(r.Context(), id)
-		if !isAffiliate {
-			w.WriteHeader(http.StatusForbidden)
-			return
-		}
-
-		handlerFunc(w, r)
-	}
-}
-
-func withProposer(handlerFunc http.HandlerFunc, s *handlers.AppService) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		id, ok := requireAcceptedAuthedUser(w, r, s)
-		if !ok {
-			return
-		}
-		if s.IsAdmin(r.Context(), id) {
-			handlerFunc(w, r)
-			return
-		}
-
-		isProposer := s.IsProposer(r.Context(), id)
-		if !isProposer {
-			w.WriteHeader(http.StatusForbidden)
-			return
-		}
-
-		handlerFunc(w, r)
-	}
-}
-
 func withImprover(handlerFunc http.HandlerFunc, s *handlers.AppService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id, ok := requireAcceptedAuthedUser(w, r, s)
@@ -1037,44 +1002,24 @@ func withVoter(handlerFunc http.HandlerFunc, s *handlers.AppService) http.Handle
 	}
 }
 
-func withIssuer(handlerFunc http.HandlerFunc, s *handlers.AppService) http.HandlerFunc {
+// withCapability is the fine-grained form of the role guards below: instead of
+// "is this user an affiliate", it asks "may this user do this one thing".
+//
+// It is not a new gate. A member whose permissions_mode is "inherit" — which is
+// every member until an org admin changes it — holds every capability of every
+// role their organization is approved for, so this resolves true in exactly the
+// cases the role guard it replaced resolved true. The org-level role approval
+// is still checked underneath, so a capability cannot outlive its role.
+func withCapability(capability string, handlerFunc http.HandlerFunc, s *handlers.AppService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id, ok := requireAcceptedAuthedUser(w, r, s)
 		if !ok {
 			return
 		}
-		if s.IsAdmin(r.Context(), id) {
-			handlerFunc(w, r)
-			return
-		}
-
-		isIssuer := s.IsIssuer(r.Context(), id)
-		if !isIssuer {
+		if !s.HasOrgCapability(r.Context(), id, capability) {
 			w.WriteHeader(http.StatusForbidden)
 			return
 		}
-
-		handlerFunc(w, r)
-	}
-}
-
-func withSupervisor(handlerFunc http.HandlerFunc, s *handlers.AppService) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		id, ok := requireAcceptedAuthedUser(w, r, s)
-		if !ok {
-			return
-		}
-		if s.IsAdmin(r.Context(), id) {
-			handlerFunc(w, r)
-			return
-		}
-
-		isSupervisor := s.IsSupervisor(r.Context(), id)
-		if !isSupervisor {
-			w.WriteHeader(http.StatusForbidden)
-			return
-		}
-
 		handlerFunc(w, r)
 	}
 }
