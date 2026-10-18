@@ -34,6 +34,13 @@ type IBot interface {
 	VerifyTransferOnChain(ctx context.Context, chainID int64, txHash string, address string, amount uint64) (*TransferVerificationResult, error)
 	Drain(address common.Address) error
 	Balance() (*big.Int, error)
+
+	// Funding the rest of the protocol's accounts: the faucet holds the key
+	// and the client, so the primitives live with it.
+	NativeBalance(ctx context.Context, address string) (*big.Int, error)
+	TokenBalance(ctx context.Context, address string) (*big.Int, error)
+	SendNative(ctx context.Context, to string, amount *big.Int) (string, error)
+	Address() (string, error)
 }
 
 type Bot struct {
@@ -499,4 +506,104 @@ func (b *Bot) VerifyTransferOnChain(
 		return nil, err
 	}
 	return b.verifyTransferReceiptOn(ctx, client, tokenID, txHash, address, tokenAmount)
+}
+
+// ── Native balance and transfers ─────────────────────────────────────────────
+//
+// The faucet already holds the keys and an RPC client, so funding the rest of
+// the protocol's accounts belongs here rather than in a second place that would
+// need its own copy of both.
+
+// NativeBalance reads an address's CELO balance.
+func (b *Bot) NativeBalance(ctx context.Context, address string) (*big.Int, error) {
+	if !common.IsHexAddress(address) {
+		return nil, fmt.Errorf("not an address: %q", address)
+	}
+	return b.client.BalanceAt(ctx, common.HexToAddress(address), nil)
+}
+
+// TokenBalance reads an address's SFLUV balance.
+func (b *Bot) TokenBalance(ctx context.Context, address string) (*big.Int, error) {
+	if !common.IsHexAddress(address) {
+		return nil, fmt.Errorf("not an address: %q", address)
+	}
+	contract, err := abi.NewSFLUVv2(common.HexToAddress(b.tokenId), b.client)
+	if err != nil {
+		return nil, fmt.Errorf("error creating sfluv contract instance: %s", err)
+	}
+	return contract.BalanceOf(&bind.CallOpts{Context: ctx}, common.HexToAddress(address))
+}
+
+// SendNative transfers CELO from the faucet to an address.
+//
+// This is a plain value transfer, built by hand rather than through a contract
+// binding, because the recipients are externally owned accounts that need gas
+// rather than contracts to call.
+//
+// The gas price carries no multiplier: Celo's suggested price already tracks
+// the network, and overpaying out of a faucet that funds everything else is how
+// the faucet itself runs dry.
+func (b *Bot) SendNative(ctx context.Context, to string, amount *big.Int) (string, error) {
+	if !common.IsHexAddress(to) {
+		return "", fmt.Errorf("not an address: %q", to)
+	}
+	if amount == nil || amount.Sign() <= 0 {
+		return "", fmt.Errorf("amount must be positive")
+	}
+
+	privKey, err := crypto.HexToECDSA(b.pKey)
+	if err != nil {
+		return "", fmt.Errorf("error parsing private key: %s", err)
+	}
+	pubKey, ok := privKey.Public().(*ecdsa.PublicKey)
+	if !ok {
+		return "", fmt.Errorf("error parsing public key into ecdsa type")
+	}
+	from := crypto.PubkeyToAddress(*pubKey)
+
+	chainID, err := b.client.ChainID(ctx)
+	if err != nil {
+		return "", fmt.Errorf("error getting chainId: %s", err)
+	}
+	nonce, err := b.client.PendingNonceAt(ctx, from)
+	if err != nil {
+		return "", fmt.Errorf("error getting nonce: %s", err)
+	}
+	gasPrice, err := b.client.SuggestGasPrice(ctx)
+	if err != nil {
+		return "", fmt.Errorf("error suggesting gas price: %s", err)
+	}
+
+	recipient := common.HexToAddress(to)
+	// 21000 is the fixed cost of a value transfer to an EOA. Estimating would
+	// add a round trip to learn the same number.
+	tx := types.NewTx(&types.LegacyTx{
+		Nonce:    nonce,
+		To:       &recipient,
+		Value:    amount,
+		Gas:      21000,
+		GasPrice: gasPrice,
+	})
+
+	signed, err := types.SignTx(tx, types.LatestSignerForChainID(chainID), privKey)
+	if err != nil {
+		return "", fmt.Errorf("error signing transaction: %s", err)
+	}
+	if err := b.client.SendTransaction(ctx, signed); err != nil {
+		return "", fmt.Errorf("error sending transaction: %s", err)
+	}
+	return signed.Hash().Hex(), nil
+}
+
+// Address is the faucet's own address, as derived from its key.
+func (b *Bot) Address() (string, error) {
+	privKey, err := crypto.HexToECDSA(b.pKey)
+	if err != nil {
+		return "", fmt.Errorf("error parsing private key: %s", err)
+	}
+	pubKey, ok := privKey.Public().(*ecdsa.PublicKey)
+	if !ok {
+		return "", fmt.Errorf("error parsing public key into ecdsa type")
+	}
+	return crypto.PubkeyToAddress(*pubKey).Hex(), nil
 }

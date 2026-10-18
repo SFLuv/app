@@ -44,7 +44,14 @@ type BotService struct {
 	// call site checks for that, so "off" costs nothing and cannot fetch.
 	v4s       *v4s.Client
 	v4sConfig v4s.Config
+	// funding keeps the protocol's other accounts in gas from the faucet, and
+	// emails when the faucet itself needs a person. nil when unconfigured.
+	funding *FundingService
 }
+
+// SetFundingService wires the funding sweeper. Set after construction because
+// it needs the app service for mail, which is itself wired afterwards.
+func (s *BotService) SetFundingService(f *FundingService) { s.funding = f }
 
 // SetAppService completes the mutual wiring between the bot and app services.
 func (s *BotService) SetAppService(a *AppService) {

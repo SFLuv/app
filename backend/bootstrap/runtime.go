@@ -382,6 +382,12 @@ func NewServerHandler(ctx context.Context, pools *DBPools, appLogger *logger.Log
 	// Report the partner-availability integration's state at boot, so whether
 	// it is on is visible in the log rather than only in the environment.
 	s.LogV4SConfig(appLogger)
+
+	// Keep the protocol's operational accounts in gas from the faucet, and
+	// email when the faucet itself needs a person. Reads balances and alerts
+	// even when automatic transfers are switched off.
+	fundingSvc := handlers.NewFundingService(botClient, appLogger)
+	s.SetFundingService(fundingSvc)
 	a := handlers.NewAppService(appDb, appLogger, payouts, w9Provider, clientConfig)
 	a.SetBotService(s)
 	s.SetAppService(a)
@@ -450,6 +456,10 @@ func NewServerHandler(ctx context.Context, pools *DBPools, appLogger *logger.Log
 	// stalled whenever nobody hit the right endpoint. Running it on a timer makes
 	// it independent of traffic.
 	handlers.NewWorkflowMaintenanceScheduler(a, workflowMaintenanceInterval()).Start(ctx)
+
+	// Watch the protocol's account balances, topping them up from the faucet
+	// where the config allows it and emailing when the faucet needs a person.
+	fundingSvc.Start(ctx)
 
 	p := handlers.NewPonderService(ponderDb, appDb, botDb, appLogger, activeChainID)
 	if err := p.SyncCurrentAnalyticsWalletRoleHistory(ctx); err != nil {

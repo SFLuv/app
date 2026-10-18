@@ -206,6 +206,11 @@ func AddOrganizationRoutes(r *chi.Mux, a *handlers.AppService, s *handlers.BotSe
 
 	// Platform-admin org controls.
 	r.Get("/admin/organizations", withAdmin(a.AdminListOrganizations, a))
+
+	// Protocol account balances, and a manual top-up trigger. Admin only: these
+	// expose the operational accounts and can move funds.
+	r.Get("/admin/balances", withAdmin(s.GetFundingBalances, a))
+	r.Post("/admin/balances/sweep", withAdmin(s.RunFundingSweep, a))
 	r.Put("/admin/organizations/superadmin", withAdmin(a.AdminSetOrganizationSuperadmin, a))
 	r.Put("/admin/organizations/roles", withAdmin(a.AdminSetOrganizationRoleStatus, a))
 	r.Put("/admin/organizations/issuer-scopes", withAdmin(a.AdminSetOrganizationIssuerScopes, a))

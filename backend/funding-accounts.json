@@ -1,0 +1,69 @@
+{
+  "_comment": [
+    "Operational accounts the faucet keeps in gas.",
+    "",
+    "The point of this file is that only the faucet needs a person. Every account",
+    "below has a 1 CELO floor; falling under it triggers a top-up back to",
+    "top_up_to_celo, paid out of the faucet. When the faucet itself gets low,",
+    "FUNDING_ALERT_EMAILS is emailed, because that is the one balance nothing",
+    "here can refill.",
+    "",
+    "'priority' decides who gets paid first when the faucet cannot cover",
+    "everything at once. The paymaster sponsor is 1: every sponsored user",
+    "transaction depends on it, so its exhaustion stops the whole system rather",
+    "than one feature of it.",
+    "",
+    "Top-ups are capped at one transaction per account per minute regardless of",
+    "balances, and an account topped up twice inside two minutes raises a drain",
+    "alert rather than being funded quietly.",
+    "",
+    "'enabled' is the switch for moving funds and starts off, which is the way",
+    "to watch this before trusting it with transfers. Per-account 'auto_top_up'",
+    "false does the same for one account. FUNDING_AUTO_TOPUP in the environment",
+    "overrides this field either way, so the switch can be flipped on a running",
+    "deployment without editing this file; setting it false is the kill switch.",
+    "",
+    "'alerts' is separate and defaults to ON even when it is absent: moving",
+    "money should take an opt-in, being told it is about to run out should not.",
+    "With top-ups off you still get emailed about a low faucet and about any",
+    "account below its floor that nothing is going to fix."
+  ],
+  "enabled": false,
+  "alerts": true,
+  "faucet": {
+    "name": "Bot / faucet",
+    "address_env": "BOT_ADDRESS",
+    "min_celo": 5.0,
+    "min_sfluv": 500.0,
+    "reserve_celo": 1.0
+  },
+  "accounts": [
+    {
+      "name": "Paymaster sponsor",
+      "address": "0x4e346660F66a21c34B5099Ada74cC34d91C4886e",
+      "priority": 1,
+      "min_celo": 1.0,
+      "top_up_to_celo": 6.0,
+      "auto_top_up": true,
+      "notes": "First in line, always. Pays gas for every sponsored user transaction, so customer payments to merchants all stop together when it is empty - this is the account whose exhaustion stopped payments with no warning. It is the paymaster contract's sponsor() and belongs to Citizen Wallet, not us: we cannot sign for it, but it is an EOA and anyone may fund it. At roughly 0.03 CELO a transaction, the 1 CELO floor is about thirty transactions of warning and the 6 CELO target about two hundred."
+    },
+    {
+      "name": "Redeemer admin",
+      "priority": 2,
+      "address_env": "REDEEMER_ADMIN_ADDRESS",
+      "min_celo": 1.0,
+      "top_up_to_celo": 3.0,
+      "auto_top_up": true,
+      "notes": "Grants REDEEMER_ROLE to approved merchant locations. Empty means a newly approved merchant silently cannot take payment."
+    },
+    {
+      "name": "Admin",
+      "priority": 3,
+      "address_env": "ADMIN_ADDRESS",
+      "min_celo": 1.0,
+      "top_up_to_celo": 2.0,
+      "auto_top_up": false,
+      "notes": "Watched, not funded: it signs rarely and is worth a person noticing. Set auto_top_up true once the rest has been running a while."
+    }
+  ]
+}

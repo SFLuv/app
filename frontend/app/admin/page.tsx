@@ -3,6 +3,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react"
 import { SfluvQRCode, type SfluvQRCodeHandle } from "@/components/ui/sfluv-qr-code"
 import { EditMerchantLocationModal } from "@/components/admin/edit-merchant-location-modal"
+import { BalancesPanel } from "@/components/admin/balances-panel"
 import { buildMerchantSendQrValue } from "@/lib/redeem-link"
 import { usePathname, useRouter, useSearchParams } from "next/navigation"
 import { useApp } from "@/context/AppProvider"
@@ -2700,6 +2701,10 @@ export default function AdminPage() {
               <span>Analytics</span>
               <BarChart3 className="h-4 w-4 text-muted-foreground" />
             </TabsTrigger>
+            <TabsTrigger value="balances" className="w-full justify-between px-3 py-2">
+              <span>Balances</span>
+              <Wallet className="h-4 w-4 text-muted-foreground" />
+            </TabsTrigger>
             <TabsTrigger value="w9" className="w-full justify-between px-3 py-2">
               <span>Tax & Escrow</span>
               {(w9Overview?.rows?.length ?? 0) > 0 && (
@@ -3151,6 +3156,10 @@ export default function AdminPage() {
               </CardContent>
             </Card>
           </div>
+        </TabsContent>
+
+        <TabsContent value="balances" className="space-y-6">
+          <BalancesPanel />
         </TabsContent>
 
         <TabsContent value="users" className="space-y-6">
