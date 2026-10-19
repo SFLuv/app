@@ -4,6 +4,7 @@ import { Inter } from "next/font/google"
 import { headers } from "next/headers"
 import "./globals.css"
 import { ThemeProvider } from "@/components/theme-provider"
+import { Toaster } from "@/components/ui/toaster"
 import Providers from "@/context/Providers"
 import Sidebar from "./sidebar"
 
@@ -33,6 +34,7 @@ export default async function RootLayout({
           <Providers>
             <Sidebar>{children}</Sidebar>
           </Providers>
+          <Toaster />
         </ThemeProvider>
       </body>
     </html>
