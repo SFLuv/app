@@ -66,7 +66,8 @@ func (s *BotService) chainID() int64 {
 func EnsureLogin(w http.ResponseWriter, r *http.Request) bool {
 	adminKey := os.Getenv("ADMIN_KEY")
 	header := r.Header[http.CanonicalHeaderKey("X-API-KEY")]
-	if len(header) == 0 {
+	// An unset ADMIN_KEY must refuse, not match an empty header.
+	if adminKey == "" || len(header) == 0 {
 		w.WriteHeader(http.StatusUnauthorized)
 		return false
 	}

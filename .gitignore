@@ -15,6 +15,10 @@
 tmp/*/go.sum
 tmp/*/*/go.sum
 */package-lock.json
+# Except Ponder's: the indexer must install exactly what built the live database
+# (a different Ponder build can refuse or rebuild the schema), and package.json
+# alone ("^0.15.18") lets a fresh install pull a newer release.
+!ponder/package-lock.json
 **.db
 .next
 node_modules

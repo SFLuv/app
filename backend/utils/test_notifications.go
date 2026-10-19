@@ -159,6 +159,11 @@ func sanitizeNotificationTestFilename(value string) string {
 	return filename
 }
 
+// TruthyEnv reports whether an env var is set to a yes-like value.
+func TruthyEnv(key string) bool {
+	return truthyEnv(key)
+}
+
 func truthyEnv(key string) bool {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
 	case "1", "t", "true", "y", "yes", "on":
