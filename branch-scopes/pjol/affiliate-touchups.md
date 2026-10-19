@@ -1,10 +1,17 @@
 # Branch scope — `pjol/affiliate-touchups`
 
-Oct 14–15 2026 · app + animations · **7.2h**
+Oct 14–18 2026 · app + animations + webpage · **10.7h** (round 1 **7.2h**, round 2 **2.3h**, round 3 **1.2h**)
 
 Three things that all serve affiliates: a narrated tutorial for requesting a volunteer event, a
 print-ready QR code export, and fine-grained organization permissions so an affiliate can give a
 volunteer coordinator read access without handing over the whole organization.
+
+Round 2 adds two featuresets that came out of the same week's incidents: partner volunteer
+availability, read from St. Anthony's own Salesforce site so our cards show their real numbers, and
+the faucet keeping the protocol's other accounts in gas, so the sponsored-payment outage that opened
+the week cannot happen unannounced again.
+
+# Round 1 — Oct 14–15 · 7.2h
 
 ## How these hours were measured
 
@@ -49,7 +56,7 @@ changed nothing; the stated hours above are what covers that time.
 
 ---
 
-# Large features
+## Large features
 
 ### Organization permissions — 0.50h measured, plus the stated Wednesday afternoon · app
 
@@ -147,7 +154,7 @@ there was no way to get the translated reverse onto the back at all.
 
 ---
 
-# Smaller items
+## Smaller items
 
 | Item | Hours | Repo |
 |---|---|---|
@@ -163,7 +170,7 @@ there was no way to get the translated reverse onto the back at all.
 
 ---
 
-# Totals
+## Totals
 
 | Source | Hours |
 |---|---|
@@ -175,7 +182,7 @@ there was no way to get the translated reverse onto the back at all.
 | Stated — Mon 12 Oct dev meeting, 2–3pm | 1.00h |
 | **Total** | **7.2h** |
 
-# Volume
+## Volume
 
 **app** — 14 files, +1,702/−152 in `a6396fe`. Backend 7 files (+1,025/−123), frontend 6 (+656/−29).
 1 migration (**1.65**), 3 new backend files, 2 new frontend files, 3 new routes, 30 routes re-guarded,
@@ -186,7 +193,7 @@ there was no way to get the translated reverse onto the back at all.
 `make_captions_affiliate.py`; one fix to `make.sh`. Output: a **94.3s** 1080p master at −14.0 LUFS, a
 **32-cue** SRT, and a 1280×720 thumbnail. Not under version control.
 
-# A contradiction in the app, found while fixing the video
+## A contradiction in the app, found while fixing the video
 
 The redemption window is described two different ways, and they do not agree:
 
@@ -200,6 +207,244 @@ The tooltip is the odd one out: nothing sets liveness to 24 hours before the sta
 the form and the defaults. **The tooltip should be corrected**, and it is worth checking which of the two
 an affiliate has been believing when they planned a hand-out.
 
+---
+
+# Round 2 — Oct 16–18 · 2.3h
+
+Two featuresets, neither of which touches the database: partner volunteer availability read from
+St. Anthony's own Salesforce site, and the faucet keeping the protocol's other accounts in gas.
+
+## How these hours were measured
+
+**2.3h measured** from session-transcript timestamps clustered into sittings on a 30-minute gap
+(`time-accounting/scripts/measure_sittings.py`, unioned across the SFLuv project transcripts), taken at
+**2026-10-18 13:27 PDT**. Nothing in this round is stated rather than measured.
+
+| Source | Hours | Basis |
+|---|---|---|
+| Sun 18 Oct 11:10–13:27 | 2.28h | measured — one sitting, see below |
+| Fri 16 Oct 14:35–14:43 | 0.14h | measured — already booked in round 1, not counted again |
+| | **2.28h → 2.3h** | |
+
+**Friday is not counted twice.** That 8-minute sitting is where the volunteer-card regression was found
+and fixed *and* where the St. Anthony's research was done. Round 1's smaller-items table already carried
+0.15h for it — written ahead of the measurement that would have shown 0.14h — so this round adds nothing
+for Friday, and the research described below is credited to a window already paid for.
+
+**Sunday is one sitting on evidence, not on a looser threshold.** At a 30-minute gap the transcripts
+split it in two, 11:10–12:38 and 13:16–13:27, on a 38-minute silence. Commit `effdbc6` was authored
+at **13:10**, inside that silence, which is the corroboration the method asks for: the gap is work, not
+absence. The span is therefore 11:10 → 13:27. A 45-minute threshold reaches the same span on its
+own, but the commit is why it is right rather than merely larger.
+
+**The sitting was still open at the stamp.** Writing this document is inside it, so anything after
+13:27 is uncounted — the figure is a floor, not a ceiling. The stamp is given because the previous
+branch scope was measured mid-sitting without one and had to be corrected afterwards.
+
+**0.85h of concurrent activity in another project** (`defi-bot`, 11:41–12:27 and 13:09–13:15) falls
+inside Sunday's sitting. Both were going on. The span is recorded as SFLuv time because that is what the
+sitting was for; the concurrency is named so that whoever reads this later knows what the records show.
+
+## Large features
+
+### Partner volunteer availability — 0.93h · app + webpage
+
+St. Anthony's publishes volunteer sign-ups through Volunteers for Salesforce (V4S), a Visualforce app on
+Salesforce Sites. The research first: **there is no REST API to integrate with.** The `GW_Volunteers__`
+pages are the only machine-readable surface, sign-ups land as `Status__c = 'Web Sign Up'`, and contacts
+are deduplicated on `Firstname;Lastname;Email` by default. Of the three options that leaves, the one
+chosen reads the partner's own job listing on demand, shows their real availability on our card, and
+deep-links the sign-up button to the exact shift — so the partner keeps their list and their form, and
+nothing has to be kept in step.
+
+- **Pull, not poll** (`backend/v4s/client.go`). One fetch per job per TTL (60s for St. Anthony's);
+  concurrent askers share a single fetch; a stale snapshot is served while a refresh runs behind the
+  request. A job nobody is looking at costs nothing, and a slow partner site degrades to slightly old
+  numbers rather than to a slow page. Measured against the live site: a cold fetch of the real listing
+  took **853ms** and parsed **42 shifts** out of one 59 KB request, with cached reads at 0–14µs. One
+  request may spend at most 2.5s in total on this, however many events it is rendering.
+- **The parser was wrong in a way that looked right.** The first version split the page on
+  `JobShiftDateTimeString(`, which also matches the *function definition* — so every shift's fields
+  landed one row out of step and it reported 45 shifts with every count zero. Rewritten to anchor on the
+  shift id and attribute tokens by document order, with the pattern requiring an argument that starts
+  with a capital letter, which is what skips the definition.
+- **Same-day recurring shifts, asked about before they bit.** Surveying five of St. Anthony's real jobs:
+  four carry at most one shift a day, but FCP Clothing Distribution has **58 shifts over two months with
+  22 days carrying more than one** — an 8:30am and a 1:00pm sitting. Matching on date alone would have
+  put the afternoon's numbers on the morning's card. `MatchOccurrence` matches on time of day inside a
+  2-hour window and commits only when it is **confident** (within 45 minutes) or **decisive** (twice as
+  near as the runner-up); otherwise it declines and the card falls back to what we knew. An earlier
+  version matched an 11:00am occurrence — dead between two sittings — to the 1:00pm shift on a 30-minute
+  difference. That is now refused rather than guessed.
+- **Only a configured partner can cause a fetch.** `backend/v4s-integrations.json` pairs one
+  organization with the one site readable for it, so a partner's event can never send us to another's
+  host, or to an arbitrary one if a link is mistyped or hostile. Names are matched ignoring case and
+  punctuation; SFLuv's own organization is matched on `organizations.is_house` rather than its name, so
+  a rename cannot change what is synced.
+- **Closed by default in the code, open by deliberate choice in the shipped file.** No file, an
+  unreadable file, the master switch off, or an organization with no entry all mean the same thing: the
+  link is not parsed and no request is made. The file checked in here is the opposite — `enabled: true`
+  with St. Anthony's on — because it was asked to be ready on deployment. The house entry sits beside it
+  switched off, as the worked example for adding the next partner. The boot log states which
+  integrations are live, so whether we are reaching out to a third party is visible without reading the
+  file back.
+- Config lives in JSON rather than the environment because each entry is a *pair* — organization and
+  site — which a flat variable cannot express without encoding a list in a string.
+- **One line on the website** (`src/lib/volunteer-events/format.ts`): `formatSpots` excluded external
+  sign-ups outright, on the reasoning that the partner owned the list and we could not know. For a
+  partner who publishes availability we now can, so the test is whether there is a number rather than
+  where it came from. A partner event reads "8 of 10 spots" like our own; a partner who publishes
+  nothing is unchanged.
+
+### Protocol account funding — 1.17h · app
+
+This is the feature the week's first incident asked for. The account that sponsors user transactions ran
+out of CELO, every merchant payment stopped at once, and the first anyone knew of it was a merchant
+saying payments "weren't working" — nothing watched the balance, so nothing connected the symptom to the
+cause.
+
+- **The faucet becomes the only account a person has to think about.** It tops the others up from its own
+  CELO and emails when *it* is low, because that is the one balance no automation can refill.
+- **A 1 CELO floor on every account**, as asked. At roughly 0.03 CELO a transaction that is about thirty
+  transactions of warning on the paymaster, and its 6 CELO target is about two hundred.
+- **The paymaster is first in line, always.** Verified with the faucet nearly empty: with 0.2 CELO to
+  spare it funded `Paymaster sponsor +5.8000 CELO (0.2000 → 6.0000)` and skipped the redeemer admin,
+  reporting why. An account added later without a priority sorts last, so it cannot displace it.
+- **One top-up transaction per account per minute, whatever the balances say.** Verified: `sweep 1:
+  funded=1`, then `sweep 2: funded=0 skipped=1 — Paymaster sponsor was topped up recently; waiting for
+  it to confirm`. This is the guard against a balance read that is wrong or a loop that is misbehaving:
+  the worst case is one transaction a minute rather than a drained faucet.
+- **Back-to-back top-ups raise an alert rather than being funded quietly.** An account topped up again
+  inside two minutes means it is being drained, not used. Verified: `RAPID: Paymaster sponsor was topped
+  up again` → "SFLuv account is draining faster than it is being funded". Throttled per account so a
+  draining account produces a warning rather than a mailstorm.
+- **The faucet holds 1 CELO back.** Without a reserve a faucet can spend itself down to where it cannot
+  send the transaction that would fix anything.
+- **Alerts are on by default, and stay on while top-ups are off.** `alerts` absent means enabled, which
+  is deliberately the opposite of how the top-up switch behaves: moving money should take an opt-in,
+  being told it is about to run out should not. They also fire for a *stranded* account — one below its
+  floor with nothing configured to fix it — which is the state a watch-only deployment is actually in.
+  Verified against the shipped config: `top-ups enabled=false, alerts enabled=true`, 0 funds moved,
+  1 email sent. Recipients come from `FUNDING_ALERT_EMAILS`, falling back to the site admin address so
+  an unconfigured deployment still tells somebody rather than nobody.
+- **One environment variable flips the transfers.** `FUNDING_AUTO_TOPUP` overrides the file either way,
+  so it can be switched on a running deployment without editing anything, and setting it false is the
+  kill switch. Verified across every state: unset defers to the file (off), `true`/`on`/`TRUE` move
+  funds, `false`/`0` stop them, and an unrecognised value is treated as off — a typo in a switch that
+  moves money fails closed. The boot log names which source decided it:
+  `funding: auto top-up enabled, alerts on (top-ups set by FUNDING_AUTO_TOPUP, accounts from
+  funding-accounts.json)`.
+- **An account that cannot be located is named loudly rather than dropped quietly**
+  (`funding: NOT WATCHING 2 account(s) with no resolvable address: …`), because an unwatched account
+  looks exactly like a healthy one. `REDEEMER_ADMIN_ADDRESS` and `ADMIN_ADDRESS` have to be set or those
+  two are not watched.
+- **A Balances tab in the admin panel**, ordered by urgency rather than tidiness — anything under its
+  floor is pulled to the top — with each balance shown against the floor it is judged by, because a
+  number alone does not tell you whether to act. An unreadable balance reads "Unknown", never
+  `0.0000`, which would look like an emergency.
+- Four primitives added to the bot so it can do this at all: `NativeBalance`, `TokenBalance`,
+  `SendNative` and `Address`. The sweep runs every 15 minutes in the background, after a 2-minute delay
+  at boot, and the tab's "Top up now" runs the same code path by hand.
+- The units are stated at both conversions, since this package mixes them: CELO has 18 decimals, SFLUV
+  has **6**, and neither is wei.
+
+## Smaller items
+
+| Item | Hours | Repo |
+|---|---|---|
+| **No database changes at all this round** — still 65 migrations, 1.1 → 1.65. Both featuresets are config files and code, so there is nothing to run on deploy and nothing to roll back. | — | app |
+| Route parity: **308 → 310**, exactly the two new admin balance endpoints, nothing removed. | — | app |
+| Backend builds; `go vet` clean on both new packages; `gofmt` clean. The 7 remaining vet findings are all in `handlers/app_contact.go`, untouched since Aug 2025 and untouched on this branch. | — | app |
+| Test scaffolding (`NewServiceForTest`) was added to reach the priority and rate-limit paths, then removed — this repo's testing is human-in-the-loop and production code does not carry test hooks. The verification was re-run through the real constructor with the env addresses set, which is also what caught that the first priority run had only loaded 1 of 3 accounts. | — | app |
+| This round's scope document. | 0.18h | app |
+
+## Totals
+
+| Source | Hours |
+|---|---|
+| Partner volunteer availability — app + webpage | 0.93h |
+| Protocol account funding — app | 1.17h |
+| This scope document | 0.18h |
+| **Round 2 measured** | **2.28h → 2.3h** |
+
+## Volume
+
+**app** — 22 files, **+2,618/−11** across `0a3c79a` and `effdbc6`: backend 19 files (+2,347/−11),
+frontend 2 (+269), this document (+2). **12 new files** (11 backend, 1 frontend) in 2 new packages,
+`backend/v4s` and `backend/funding`, 1,683 lines between them. 2 new JSON config files, 2 new routes,
+**0 migrations**.
+
+**webpage** — 1 file, +6/−1, uncommitted on `pjol/volunteer-gallery`.
+
+---
+
+---
+
+# Round 3 — Oct 18 evening · 1.2h
+
+The Railway migration, and bringing this branch up to the main it now has to land on.
+
+## How these hours were measured
+
+**1.1h stated** by the owner for the Railway migration, plus **0.1h measured** for the merge, taken at
+**2026-10-18 22:00 PDT**.
+
+| Source | Hours | Basis |
+|---|---|---|
+| Sun 18 Oct 20:45–21:53 — railway migration | 1.13h → 1.1h | stated |
+| Sun 18 Oct 21:54–22:00 — merging main | 0.10h | measured |
+| | **1.2h** | |
+
+**The Railway hour is stated, and the records neither support nor contradict it.** There is no session
+transcript in that window, and no file in any SFLuv repo was modified during it — which is what work on
+a deploy platform looks like, since it happens in Railway's own dashboard and not in the repository.
+Recorded as stated.
+
+## Merging main
+
+Main had moved a long way ahead of this branch: Railway preparation, background jobs behind a leader
+lock, a `/healthz` endpoint, an advisory lock around the migration runner, and volunteer event photo
+edits.
+
+- **One conflict, in `bootstrap/runtime.go`.** Main moved every background job inside
+  `StartJobsAsLeader`, so only the process holding the jobs lock runs them; this branch still had the
+  old flat list with the new funding sweep on the end of it. Took main's block whole and moved
+  `fundingSvc.Start` into the closure, on `jobsCtx`.
+- **Leader-only turns out to be required for the funding sweep rather than merely tidy.** The
+  once-a-minute top-up guard is in-process state, so two replicas each sweeping on their own timer would
+  permit two transfers a minute — exactly double the rate the guard exists to cap, and the guard was
+  asked for against a vulnerability. Running on Railway with more than one replica would have defeated
+  it quietly. The code now says so where the sweep starts.
+- `handlers/bot.go` and `frontend/app/admin/page.tsx` auto-merged.
+- **DB versioning re-checked:** still **65 migrations, 1.1 → 1.65**, strictly ascending, no duplicates.
+  Main's change to `schema_migrations.go` is not a migration but a Postgres advisory lock around the
+  runner, so two processes starting together take turns rather than both applying the same migration —
+  which is precisely the hazard a platform that overlaps deploys introduces.
+- **The merge is not verified by a build.** The machine is out of disk and the owner asked not to spend
+  the session on it. `gofmt` is clean and the resolution is a block move with one call relocated, but
+  the build is unconfirmed and is the first thing to run next.
+
+## A correction to round 1
+
+Round 1 records the `GetOrganizationsByIds` regression as found and fixed. It was — *on this branch*,
+which was never merged. Main carried the bug from **Oct 15 to Oct 18**: for three days the public
+volunteer events list served no organiser names and no logos, and it was fixed on main by someone else
+(`8c6d523`) at 21:54 tonight, minutes before this merge. Both sides had made the identical one-line
+change, so it merged without a conflict.
+
+The entry in round 1 is not wrong, but it reads as though the problem was dealt with, and in production
+it was not. A fix sitting on an unmerged branch is not a fix. Worth noting against the next regression
+this branch finds in shipped code: the fix wants to go to main on its own, not to wait for the feature
+it was found beside.
+
+## Volume
+
+**app** — merge commit `07c709b`: **12 commits, 18 files** in from main. One file resolved by hand,
+`bootstrap/runtime.go`, which now differs from main's by 16 lines — the v4s boot log line, the funding
+service's construction, and its leader-gated start. No migrations, no new routes.
+
+---
+
 # Open
 
 - **Nothing is deployed.** Migration 1.65 runs on next boot; the permissions UI and the QR export ship
@@ -211,3 +456,23 @@ an affiliate has been believing when they planned a hand-out.
   ending went in. If it needs to be shorter, the two dropdown beats are 30s of it.
 - **The affiliates page tooltip contradicts the form** on when QR codes go live. See above; the video
   now follows the form, and the tooltip is the thing to fix.
+- **Automatic top-ups arrive switched off.** `funding-accounts.json` ships `enabled: false`, which is the
+  way to watch the Balances tab for a while before trusting it with transfers. Turning them on is
+  `FUNDING_AUTO_TOPUP=true` and a restart; no file edit and no deploy.
+- **`FUNDING_ALERT_EMAILS` is unset**, so alerts currently go to the site admin address alone.
+  `REDEEMER_ADMIN_ADDRESS` and `ADMIN_ADDRESS` must be set too or those accounts are not watched at all
+  — the boot log names any it had to drop.
+- **The paymaster sponsor still needs its first funding by hand.** It is an EOA belonging to Citizen
+  Wallet, so anyone may fund it but we cannot sign for it; the floor only helps once there is something
+  above it.
+- **V4S availability ships enabled for St. Anthony's.** First deploy will start reading their listing
+  page on demand. If they would rather we did not, `enabled: false` on that entry stops it with no code
+  change, and the User-Agent identifies us so they can tell us rather than block an anonymous agent.
+- **The website change is uncommitted** on `pjol/volunteer-gallery` — one line in
+  `src/lib/volunteer-events/format.ts`. Partner spot counts will not appear until it ships, whatever the
+  backend returns.
+- **The merge with main is unbuilt.** Resolved by hand in `bootstrap/runtime.go` and `gofmt` clean, but no compile has run against it.
+- **The manual "Top up now" button is not leader-gated**, because it runs wherever the request lands. The per-minute guard is per-process, so a manual sweep on a replica that is not the jobs leader cannot see what the leader topped up. Harmless at one replica; worth closing before scaling out on Railway.
+- **Partner sign-up counts are read, not reconciled.** Someone who signs up through St. Anthony's is
+  counted on our card but is not a user of ours, so a partner event's attendance cannot be rewarded or
+  credentialed through the platform. That is the next question this opens rather than a defect.
