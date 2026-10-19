@@ -1041,7 +1041,7 @@ func (a *AppDB) GetOrganizationsByIds(ctx context.Context, ids []int64) (map[int
 	}
 
 	rows, err := a.db.Query(ctx, `
-		SELECT id, name, logo, created_at, updated_at
+		SELECT id, name, logo, is_house, created_at, updated_at
 		FROM organizations
 		WHERE id = ANY($1);
 	`, ids)
