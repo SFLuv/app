@@ -3,6 +3,7 @@ package handlers
 import (
 	"bytes"
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -720,9 +721,19 @@ func (a *AppService) GetPonderSubscriptions(w http.ResponseWriter, r *http.Reque
 	w.Write(body)
 }
 
+// ponderKeyMatches checks the shared secret on a request from the indexer. An
+// unset PONDER_KEY refuses everything: otherwise an empty header would match
+// an empty key and anyone could post fake transfers to the callback.
+func ponderKeyMatches(r *http.Request) bool {
+	key := strings.TrimSpace(os.Getenv("PONDER_KEY"))
+	if key == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(key), []byte(r.Header.Get("X-Admin-Key"))) == 1
+}
+
 func (a *AppService) PonderPingCallback(w http.ResponseWriter, r *http.Request) {
-	key := os.Getenv("PONDER_KEY")
-	if key != r.Header.Get("X-Admin-Key") {
+	if !ponderKeyMatches(r) {
 		w.WriteHeader(http.StatusUnauthorized)
 		return
 	}
@@ -731,8 +742,7 @@ func (a *AppService) PonderPingCallback(w http.ResponseWriter, r *http.Request) 
 }
 
 func (a *AppService) PonderHookHandler(w http.ResponseWriter, r *http.Request) {
-	key := os.Getenv("PONDER_KEY")
-	if key != r.Header.Get("X-Admin-Key") {
+	if !ponderKeyMatches(r) {
 		w.WriteHeader(http.StatusUnauthorized)
 		return
 	}

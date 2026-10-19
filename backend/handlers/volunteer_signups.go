@@ -70,6 +70,14 @@ func writeSignupError(w http.ResponseWriter, status int, reason string, message 
 // signup would share one bucket; but trusting the header unconditionally would
 // let anyone forge an address and evade the limit entirely. Vercel has no
 // stable egress IPs, which is why this is a secret rather than an IP allowlist.
+//
+// TRUST_PROXY=true is for when the backend itself sits behind a reverse proxy
+// (nginx on the VM, Railway's edge): every connection then arrives from the
+// proxy, so RemoteAddr is the same for everyone. The proxy appends the address
+// it actually saw to X-Forwarded-For, so the LAST entry is the one to trust.
+// Earlier entries are whatever the client sent and can be forged. Leave it off
+// when nothing sits in front of the backend, or anyone could pick their own
+// address.
 func clientIPForRateLimit(r *http.Request) string {
 	expected := strings.TrimSpace(os.Getenv("VOLUNTEER_PROXY_KEY"))
 	presented := strings.TrimSpace(r.Header.Get("X-SFLUV-Proxy-Key"))
@@ -83,11 +91,37 @@ func clientIPForRateLimit(r *http.Request) string {
 		}
 	}
 
+	if utils.TruthyEnv("TRUST_PROXY") {
+		if ip := lastForwardedFor(r); ip != "" {
+			return ip
+		}
+	}
+
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return strings.TrimSpace(r.RemoteAddr)
 	}
 	return host
+}
+
+// lastForwardedFor returns the right-most X-Forwarded-For entry across every
+// copy of the header, or "" when there is none or it is not an IP address.
+func lastForwardedFor(r *http.Request) string {
+	values := r.Header.Values("X-Forwarded-For")
+	for i := len(values) - 1; i >= 0; i-- {
+		parts := strings.Split(values[i], ",")
+		for j := len(parts) - 1; j >= 0; j-- {
+			candidate := strings.TrimSpace(parts[j])
+			if candidate == "" {
+				continue
+			}
+			if net.ParseIP(candidate) == nil {
+				return ""
+			}
+			return candidate
+		}
+	}
+	return ""
 }
 
 // SignUpForVolunteerEvent is the one signup path for both clients: auth is

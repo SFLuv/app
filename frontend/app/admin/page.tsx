@@ -614,16 +614,35 @@ export default function AdminPage() {
    * immediately — the server still enforces the faucet rule on any increase.
    */
   const saveVolunteerEventEdit = async (eventId: string, draft: VolunteerEventDraft): Promise<string | null> => {
+    const { photo_ids: heldIds = [], ...details } = draft
     const res = await authFetch(`/admin/volunteer-events/${eventId}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(draft),
+      body: JSON.stringify(details),
     })
     if (!res.ok) {
       throw new Error((await res.text()).trim() || "Unable to save the changes.")
     }
+
+    // Each held photo is forgotten once it is on the event, so pressing Save
+    // again after a failure retries only the ones that did not make it.
+    const failed: string[] = []
+    for (const placeholder of heldIds) {
+      const file = heldEditPhotos.current.get(placeholder)
+      if (!file) continue
+      try {
+        await uploadPhotoToEvent(eventId, file)
+        heldEditPhotos.current.delete(placeholder)
+      } catch (uploadError) {
+        failed.push(`${file.name} (${uploadError instanceof Error ? uploadError.message : "upload failed"})`)
+      }
+    }
+
     await getEvents()
     getUnallocatedBalance()
+    if (failed.length > 0) {
+      throw new Error(`Changes saved, but these photos could not be added: ${failed.join(", ")}. Press Save to try them again, or remove them.`)
+    }
     return eventId
   }
 
@@ -646,6 +665,42 @@ export default function AdminPage() {
    *  the server sweeps anything never attached. */
   const discardVolunteerEventPhoto = async (photoId: string): Promise<void> => {
     await authFetch(`/volunteer-events/staged-photos/${photoId}`, { method: "DELETE" }).catch(() => undefined)
+  }
+
+  /*
+   * Photos picked while editing an event that already exists are held here,
+   * in the browser, and uploaded onto the event only when Save is pressed. The
+   * edit save (PUT) itself ignores staged photo ids, which is why a photo
+   * staged while editing used to be dropped. Keyed by a local placeholder id
+   * the form treats like a staged id.
+   */
+  const heldEditPhotos = useRef<Map<string, File>>(new Map())
+
+  const holdPhotoForEdit = async (file: File): Promise<string> => {
+    const placeholder = `held-${crypto.randomUUID()}`
+    heldEditPhotos.current.set(placeholder, file)
+    return placeholder
+  }
+
+  const dropHeldPhoto = async (placeholder: string): Promise<void> => {
+    heldEditPhotos.current.delete(placeholder)
+  }
+
+  const uploadPhotoToEvent = async (eventId: string, file: File): Promise<void> => {
+    const form = new FormData()
+    form.append("photo", file)
+    const res = await authFetch(`/admin/volunteer-events/${eventId}/photos`, { method: "POST", body: form })
+    if (!res.ok) {
+      throw new Error((await res.text()).trim() || "upload failed")
+    }
+  }
+
+  const deleteEventPhoto = async (photoId: string): Promise<void> => {
+    const res = await authFetch(`/admin/volunteer-events/photos/${photoId}`, { method: "DELETE" })
+    if (!res.ok && res.status !== 404) {
+      throw new Error((await res.text()).trim() || "Could not remove that photo.")
+    }
+    getEvents()
   }
 
   const getFaucetBalance = async () => {
@@ -5318,8 +5373,9 @@ export default function AdminPage() {
             onOpenChange={(next) => !next && setEditingVolunteerEvent(null)}
             editEvent={editingVolunteerEvent}
             createEvent={(draft) => saveVolunteerEventEdit(editingVolunteerEvent?.id ?? "", draft)}
-            stagePhoto={stageVolunteerEventPhoto}
-            discardPhoto={discardVolunteerEventPhoto}
+            stagePhoto={holdPhotoForEdit}
+            discardPhoto={dropHeldPhoto}
+            removeExistingPhoto={deleteEventPhoto}
             unallocatedBalance={unallocatedBalance !== undefined ? Number(unallocatedBalance) : 0}
             submitLabel="Save changes"
           />
