@@ -4,6 +4,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react"
 import { SfluvQRCode, type SfluvQRCodeHandle } from "@/components/ui/sfluv-qr-code"
 import { EditMerchantLocationModal } from "@/components/admin/edit-merchant-location-modal"
 import { BalancesPanel } from "@/components/admin/balances-panel"
+import { SupportPanel } from "@/components/admin/support-panel"
 import { buildMerchantSendQrValue } from "@/lib/redeem-link"
 import { usePathname, useRouter, useSearchParams } from "next/navigation"
 import { useApp } from "@/context/AppProvider"
@@ -65,6 +66,7 @@ import {
   ChevronRight,
   Copy,
   BarChart3,
+  Inbox,
 } from "lucide-react"
 import { useLocation } from "@/context/LocationProvider"
 import { AuthedLocation, UpdateLocationApprovalRequest } from "@/types/location"
@@ -283,6 +285,8 @@ export default function AdminPage() {
       "events",
       "users",
       "analytics",
+      "balances",
+      "support",
       "w9",
       "merchants",
       "organizations",
@@ -298,6 +302,11 @@ export default function AdminPage() {
   const [selectedWallet, setSelectedWallet] = useState<AppWallet | null>(null)
   const [selectedWalletBYUSDBalance, setSelectedWalletBYUSDBalance] = useState<number>(0)
   const [selectedWalletSFLUVBalance, setSelectedWalletSFLUVBalance] = useState<number>(0)
+
+  // Open support requests, for the sidebar badge. The panel loads the full
+  // list itself; this is only the count, so an admin can see there is something
+  // waiting without opening the tab.
+  const [openSupportCount, setOpenSupportCount] = useState<number>(0)
 
   const [w9Overview, setW9Overview] = useState<W9AdminOverview | null>(null)
   const [w9Loading, setW9Loading] = useState<boolean>(false)
@@ -1738,6 +1747,27 @@ export default function AdminPage() {
     }
   }
 
+  // The sidebar badge. Re-read when the support tab is left, so archiving
+  // something in the panel is reflected without a page reload.
+  useEffect(() => {
+    let cancelled = false
+    const loadOpenSupportCount = async () => {
+      try {
+        const res = await authFetch("/admin/support-requests?status=new")
+        if (!res.ok) return
+        const rows = (await res.json()) as unknown[]
+        if (!cancelled) setOpenSupportCount(Array.isArray(rows) ? rows.length : 0)
+      } catch {
+        // A count that cannot be read shows as none rather than as an error:
+        // the tab still opens and the panel reports the real problem.
+      }
+    }
+    void loadOpenSupportCount()
+    return () => {
+      cancelled = true
+    }
+  }, [authFetch, activeTab])
+
   useEffect(() => {
     setCredentialTypePage((prev) => {
       const maxPage = Math.max(0, credentialTypesTotalPages - 1)
@@ -2760,6 +2790,16 @@ export default function AdminPage() {
               <span>Balances</span>
               <Wallet className="h-4 w-4 text-muted-foreground" />
             </TabsTrigger>
+            <TabsTrigger value="support" className="w-full justify-between px-3 py-2">
+              <span>Support</span>
+              {openSupportCount > 0 ? (
+                <Badge variant="destructive" className="h-5 min-w-5 rounded-full px-1.5 text-xs">
+                  {openSupportCount}
+                </Badge>
+              ) : (
+                <Inbox className="h-4 w-4 text-muted-foreground" />
+              )}
+            </TabsTrigger>
             <TabsTrigger value="w9" className="w-full justify-between px-3 py-2">
               <span>Tax & Escrow</span>
               {(w9Overview?.rows?.length ?? 0) > 0 && (
@@ -3215,6 +3255,10 @@ export default function AdminPage() {
 
         <TabsContent value="balances" className="space-y-6">
           <BalancesPanel />
+        </TabsContent>
+
+        <TabsContent value="support" className="space-y-6">
+          <SupportPanel />
         </TabsContent>
 
         <TabsContent value="users" className="space-y-6">

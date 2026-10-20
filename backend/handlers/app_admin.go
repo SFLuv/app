@@ -266,38 +266,46 @@ func (a *AppService) UpdateUserAccountType(w http.ResponseWriter, r *http.Reques
 	_ = json.NewEncoder(w).Encode(result)
 }
 
-func (a *AppService) UpdateLocationApproval(w http.ResponseWriter, r *http.Request) {
-	defer r.Body.Close()
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		a.logger.Logf("error reading update location approval body: %s", err)
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
+// locationApprovalOutcome names the ways approving a location can end, so the
+// decision can be made in one place and reported in two: an HTTP status to an
+// admin in the browser, and a sentence to one pressing a button in Telegram.
+type locationApprovalOutcome int
 
-	var u structs.UpdateLocationApprovalRequest
-	err = json.Unmarshal(body, &u)
-	if err != nil {
-		a.logger.Logf("error unmarshalling update location approval body: %s", err)
-		w.WriteHeader(http.StatusBadRequest)
-		return
-	}
+const (
+	// locationApprovalDone - the approval (or rejection) was written.
+	locationApprovalDone locationApprovalOutcome = iota
+	// locationApprovalChainUnavailable - the wallets could not be derived. A
+	// location must not be published without one, so this is a retry rather
+	// than a failure.
+	locationApprovalChainUnavailable
+	// locationApprovalWalletMoved - another of this merchant's locations took
+	// the address mid-flight. Nothing was committed; approving again derives
+	// against the new state.
+	locationApprovalWalletMoved
+	// locationApprovalFailed - anything else, already logged.
+	locationApprovalFailed
+)
 
-	ownerID, wasApproved, err := a.db.GetLocationOwnerAndApproval(r.Context(), u.Id)
+// applyLocationApproval approves or rejects a merchant location.
+//
+// This is the whole of what approving a location means — wallet derivation,
+// the redeemer grants, the approval email — and it is shared by the admin
+// endpoint and the Telegram button, because a second implementation of it
+// would be a second set of wallets to get wrong.
+func (a *AppService) applyLocationApproval(ctx context.Context, u structs.UpdateLocationApprovalRequest) locationApprovalOutcome {
+	ownerID, wasApproved, err := a.db.GetLocationOwnerAndApproval(ctx, u.Id)
 	if err != nil {
 		a.logger.Logf("error loading location %d owner/approval state: %s", u.Id, err)
-		w.WriteHeader(http.StatusInternalServerError)
-		return
+		return locationApprovalFailed
 	}
 
 	isApproving := u.Approval != nil && *u.Approval
 	hadOtherApprovedLocations := false
 	if isApproving {
-		hadOtherApprovedLocations, err = a.db.OwnerHasApprovedLocationExcluding(r.Context(), ownerID, u.Id)
+		hadOtherApprovedLocations, err = a.db.OwnerHasApprovedLocationExcluding(ctx, ownerID, u.Id)
 		if err != nil {
 			a.logger.Logf("error checking existing approved locations for owner %s: %s", ownerID, err)
-			w.WriteHeader(http.StatusInternalServerError)
-			return
+			return locationApprovalFailed
 		}
 	}
 
@@ -317,35 +325,25 @@ func (a *AppService) UpdateLocationApproval(w http.ResponseWriter, r *http.Reque
 	// be reached fails the approval and the admin retries, usually a minute
 	// later. Creation is the opposite — see provisionNewLocationWallets, which is
 	// the optional early path and treats a failed derivation as "not yet".
-	provisioning, err := a.db.GetLocationProvisioningContext(r.Context(), u.Id)
+	provisioning, err := a.db.GetLocationProvisioningContext(ctx, u.Id)
 	if err != nil {
 		a.logger.Logf("error loading provisioning context for location %d: %s", u.Id, err.Error())
-		w.WriteHeader(http.StatusInternalServerError)
-		return
+		return locationApprovalFailed
 	}
 
 	var derived *db.DerivedLocationWallets
 	if isApproving {
-		derived, err = a.deriveLocationWallets(r.Context(), provisioning)
+		derived, err = a.deriveLocationWallets(ctx, provisioning)
 		if err != nil {
 			a.logger.Logf("error deriving wallets for location %d: %s", u.Id, err.Error())
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{
-				"error": "Could not reach the chain to create this location's wallets. Try approving again in a moment.",
-			})
-			return
+			return locationApprovalChainUnavailable
 		}
 	}
 
-	err = a.db.UpdateLocationApproval(r.Context(), u.Id, u.Approval, provisioning, derived)
+	err = a.db.UpdateLocationApproval(ctx, u.Id, u.Approval, provisioning, derived)
 	if errors.Is(err, db.ErrLocationWalletIndexMoved) {
-		// Another of this merchant's locations took the address between the
-		// derivation and the write. Nothing was committed; approving again derives
-		// against the new state.
 		a.logger.Logf("wallet index moved while approving location %d; asking the admin to retry", u.Id)
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
-			"error": "Another of this merchant's locations claimed that wallet. Try approving again.",
-		})
-		return
+		return locationApprovalWalletMoved
 	}
 	if err != nil {
 		status := "pending"
@@ -357,8 +355,7 @@ func (a *AppService) UpdateLocationApproval(w http.ResponseWriter, r *http.Reque
 			}
 		}
 		a.logger.Logf("error updating location approval for location %d to %s", u.Id, status)
-		w.WriteHeader(http.StatusInternalServerError)
-		return
+		return locationApprovalFailed
 	}
 
 	if a.redeemer != nil && a.redeemer.IsEnabled() && isApproving && !wasApproved {
@@ -366,7 +363,7 @@ func (a *AppService) UpdateLocationApproval(w http.ResponseWriter, r *http.Reque
 		// approved location because it is an account-level grant and re-running
 		// it for every shop would be a chain read per approval for nothing.
 		if !hadOtherApprovedLocations {
-			if err := a.redeemer.EnsureMerchantHasRedeemerWallet(r.Context(), ownerID); err != nil {
+			if err := a.redeemer.EnsureMerchantHasRedeemerWallet(ctx, ownerID); err != nil {
 				a.logger.Logf("error auto-granting redeemer role for user %s after location %d approval: %s", ownerID, u.Id, err)
 			}
 		}
@@ -376,7 +373,7 @@ func (a *AppService) UpdateLocationApproval(w http.ResponseWriter, r *http.Reque
 		// location, so a merchant's second shop gets addresses that have never
 		// been granted anything. Skipping this is what left approved locations
 		// holding takings that withdrawTo reverted on.
-		summary, err := a.redeemer.SyncLocationWalletsForLocation(r.Context(), uint64(u.Id))
+		summary, err := a.redeemer.SyncLocationWalletsForLocation(ctx, uint64(u.Id))
 		if err != nil {
 			a.logger.Logf("error granting redeemer role to wallets for location %d: %s", u.Id, err)
 		} else if summary.Granted > 0 || summary.Failed > 0 {
@@ -393,11 +390,44 @@ func (a *AppService) UpdateLocationApproval(w http.ResponseWriter, r *http.Reque
 		// Approval is also the invitation to verify with Bridge, so bank
 		// payouts can be set up. The link rides in the approval email; a
 		// failure to get one is logged and the approval still goes out.
-		kybURL := a.startMerchantKYBForLocation(r.Context(), u.Id, ownerID)
-		a.sendLocationApprovedEmail(r.Context(), u.Id, kybURL)
+		kybURL := a.startMerchantKYBForLocation(ctx, u.Id, ownerID)
+		a.sendLocationApprovedEmail(ctx, u.Id, kybURL)
 	}
 
-	w.WriteHeader(http.StatusCreated)
+	return locationApprovalDone
+}
+
+func (a *AppService) UpdateLocationApproval(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		a.logger.Logf("error reading update location approval body: %s", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	var u structs.UpdateLocationApprovalRequest
+	err = json.Unmarshal(body, &u)
+	if err != nil {
+		a.logger.Logf("error unmarshalling update location approval body: %s", err)
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	switch a.applyLocationApproval(r.Context(), u) {
+	case locationApprovalChainUnavailable:
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+			"error": "Could not reach the chain to create this location's wallets. Try approving again in a moment.",
+		})
+	case locationApprovalWalletMoved:
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+			"error": "Another of this merchant's locations claimed that wallet. Try approving again.",
+		})
+	case locationApprovalFailed:
+		w.WriteHeader(http.StatusInternalServerError)
+	default:
+		w.WriteHeader(http.StatusCreated)
+	}
 }
 
 func (a *AppService) IsAdmin(ctx context.Context, id string) bool {

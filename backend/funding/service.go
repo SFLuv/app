@@ -19,6 +19,102 @@ type Chain interface {
 	Address() (string, error)
 }
 
+// Condition is one standing problem, named so it can be retracted later.
+//
+// The email notifier does not need this: an email is an event and stays sent.
+// A chat message is a condition — it should be on screen while the problem
+// exists and gone when it does not — which needs a stable key per problem and
+// the complete set of current problems on every sweep. That is what a sink
+// gets, so it can work out what is new and what has cleared without the
+// funding service knowing anything about how it is displayed.
+type Condition struct {
+	// Key is stable for as long as the problem is the same problem.
+	Key string
+	// Title is the one line a person reads first.
+	Title string
+	// Detail says what to do about it.
+	Detail string
+	// Fields are label/value pairs, in display order.
+	Fields [][2]string
+	// Urgent marks a condition nothing will fix on its own.
+	Urgent bool
+}
+
+// ConditionSink is an optional Notifier extension. A notifier that implements
+// it is handed the full set of active conditions after every sweep.
+type ConditionSink interface {
+	Conditions(ctx context.Context, active []Condition) error
+}
+
+// Conditions derives the standing problems from a snapshot.
+//
+// Separate keys per problem rather than one "something is low" condition, so
+// topping up CELO retracts the CELO alert while a low SFLUV balance keeps its
+// own. One message per thing that is wrong is also what makes the channel
+// readable: the alert either applies or it is gone.
+func Conditions(snap Snapshot, cfg Config) []Condition {
+	active := []Condition{}
+
+	if snap.Faucet.LowCelo {
+		active = append(active, Condition{
+			Key:    "funding:faucet:celo",
+			Title:  "Faucet is low on CELO",
+			Detail: "Nothing can refill this but a person. Sponsored transactions and top-ups both stop when it empties.",
+			Fields: [][2]string{
+				{"Balance", fmt.Sprintf("%.4f CELO", snap.Faucet.Celo)},
+				{"Floor", fmt.Sprintf("%.4f CELO", snap.Faucet.MinCelo)},
+				{"Faucet", snap.Faucet.Address},
+			},
+			Urgent: true,
+		})
+	}
+
+	if snap.Faucet.LowSfluv {
+		active = append(active, Condition{
+			Key:    "funding:faucet:sfluv",
+			Title:  "Faucet is low on SFLUV",
+			Detail: "Rewards and redemptions are paid from this balance.",
+			Fields: [][2]string{
+				{"Balance", fmt.Sprintf("%.2f SFLUV", snap.Faucet.Sfluv)},
+				{"Floor", fmt.Sprintf("%.2f SFLUV", snap.Faucet.MinSfluv)},
+				{"Faucet", snap.Faucet.Address},
+			},
+			Urgent: true,
+		})
+	}
+
+	// An account below its floor that nothing is going to fix: top-ups off, or
+	// this one marked watch-only. An account that will be topped up on the next
+	// sweep is not a condition — saying so would be an alert about something
+	// already being handled.
+	for i, entry := range snap.Accounts {
+		if !entry.Low {
+			continue
+		}
+		stranded := !cfg.Enabled || (i < len(cfg.Accounts) && !cfg.Accounts[i].AutoTopUp)
+		if !stranded {
+			continue
+		}
+		reason := "automatic top-ups are switched off"
+		if cfg.Enabled {
+			reason = "this account is watched, not funded"
+		}
+		active = append(active, Condition{
+			Key:    "funding:account:" + strings.ToLower(entry.Address),
+			Title:  entry.Name + " is below its floor",
+			Detail: "Needs funding by hand — " + reason + ".",
+			Fields: [][2]string{
+				{"Balance", fmt.Sprintf("%.4f CELO", entry.Celo)},
+				{"Floor", fmt.Sprintf("%.4f CELO", entry.MinCelo)},
+				{"Account", entry.Address},
+			},
+			Urgent: true,
+		})
+	}
+
+	return active
+}
+
 // Notifier sends an operational alert. Separated from the service so the
 // decision to alert can be tested without sending mail.
 type Notifier interface {
@@ -275,6 +371,15 @@ func (s *Service) Sweep(ctx context.Context) SweepResult {
 
 	if s.maybeAlert(snap, result) {
 		result.Alerted = true
+	}
+
+	// The full current set, every sweep. A sink that keeps standing messages
+	// needs to hear about the empty set too: that is what tells it everything
+	// has recovered and its messages should come down.
+	if sink, ok := s.notifier.(ConditionSink); ok {
+		if err := sink.Conditions(ctx, Conditions(snap, s.cfg)); err != nil {
+			s.log("funding: could not reconcile alert conditions: %s", err)
+		}
 	}
 	return result
 }
