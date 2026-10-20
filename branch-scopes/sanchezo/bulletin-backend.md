@@ -1,6 +1,6 @@
 # Branch scope — `sanchezo/bulletin-backend`
 
-Oct 19 2026 · app (backend only) · **1.5h active** (design 1.2h, build 0.3h)
+Oct 19 2026 · app (backend only) · **1.5h active** in round 1 (design 1.2h, build 0.3h); round 2 below
 
 Hours are wall-clock time from the live `UserPromptSubmit` stamps in the
 session, corroborated by file mtimes, per the `time-accounting` skill. One
@@ -74,12 +74,18 @@ Product decisions and the full spec live outside the repo, in
 ### Safety — design 0.3h, build 0.1h
 - `user_blocks`, `content_reports`, `bulletin_moderation_actions`.
 - Report a post, message, or person. Three distinct reports hide a post until
-  reviewed. Repeat reports are harmless. Admins are emailed
-  (`BULLETIN_ADMIN_EMAIL`, falling back to `AFFILIATE_ADMIN_EMAIL`).
-- Admin queue groups open reports by target with the content, the person's
-  summary, and prior actions. Actions: dismiss, remove post, remove message,
-  warn, suspend (days or indefinite), unsuspend. Suspension covers the
-  Bulletin and Messages only; the wallet keeps working.
+  reviewed. Repeat reports are harmless.
+- **No admin-panel page.** Every report is emailed to the shared alerts inbox,
+  `alerts@sfluv.org` by default (`BULLETIN_ALERT_EMAIL` overrides), the inbox
+  proposed under "Better admin alerts" in the dev requirements. A Telegram bot
+  watching that inbox is how the team will see and act on reports. The email
+  has a fixed subject (`[SFLuv alert] bulletin_report <type> <id> (<reason>)`)
+  and a `key: value` block between `---BEGIN SFLUV ALERT---` /
+  `---END SFLUV ALERT---` markers for the bot to parse.
+- Two admin routes are the bot's API: list open reports grouped by target, and
+  resolve them (dismiss, remove post, remove message, warn, suspend for days or
+  indefinitely, unsuspend). Suspension covers the Bulletin and Messages only;
+  the wallet keeps working.
 
 ### Profiles, search, trade feedback — design 0.1h, build <0.1h
 - Public name ("First L." suggested from `contact_name`), optional @handle,
@@ -117,3 +123,17 @@ rate limits, and deletion — all passing. The script lives outside the repo.
 
 Volume: 13 files (11 new), +4,311 lines (260 of them a generated table of
 neighborhood boundaries), 1 migration (1.66), 29 new routes.
+
+---
+
+# Round 2 — Oct 19 (later)
+
+- Reports go to the alerts inbox, not an admin panel (decision from Sanchez);
+  the alert email is formatted for a Telegram bot to parse.
+- Confirmed the linked-event expiry needs no change: for volunteer events
+  `events.expiration` has been the event's end since migration 1.30 (Aug 5
+  2026, `a138a64`), which moved code expiry to `qr_expires_at`. The admin and
+  affiliate event forms set it from `end_at_local`; the public API returns it
+  as `end_at`, which is what the website shows.
+
+Hours: 17:35–17:45 PDT, measured from message stamps (0.2h).

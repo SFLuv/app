@@ -93,8 +93,9 @@ func (a *AppService) ListBlockedUsers(w http.ResponseWriter, r *http.Request) {
 
 // ReportContent files a report on a post, a message, or a person. The item
 // disappears from the reporter's own feed immediately. Three distinct reports
-// on a post hide it from everyone until an admin reviews it. Admins are emailed
-// on every report; the published commitment is a review within 24 hours.
+// on a post hide it from everyone until someone reviews it. Every report is
+// emailed to the alerts inbox; the published commitment is a review within
+// 24 hours.
 func (a *AppService) ReportContent(w http.ResponseWriter, r *http.Request) {
 	userId, ok := bulletinViewer(w, r)
 	if !ok {
@@ -128,6 +129,7 @@ func (a *AppService) ReportContent(w http.ResponseWriter, r *http.Request) {
 
 	var reportedUser string
 	var postId int64
+	var excerpt string // what was reported, for the alert email
 	switch req.TargetType {
 	case "post":
 		id, err := strconv.ParseInt(req.TargetId, 10, 64)
@@ -141,6 +143,10 @@ func (a *AppService) ReportContent(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		reportedUser, postId = post.AuthorId, id
+		excerpt = post.Title
+		if post.Body != "" {
+			excerpt += "\n\n" + post.Body
+		}
 	case "message":
 		id, err := strconv.ParseInt(req.TargetId, 10, 64)
 		if err != nil {
@@ -158,6 +164,7 @@ func (a *AppService) ReportContent(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		reportedUser = msg.SenderId
+		excerpt = msg.Body
 	case "user":
 		if req.TargetId == userId {
 			notFound()
@@ -186,52 +193,135 @@ func (a *AppService) ReportContent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	autoHidden := false
 	if req.TargetType == "post" && openCount >= db.BulletinAutoHideReports {
 		if err := a.db.SetBulletinPostStatus(ctx, postId, structs.BulletinStatusActive, structs.BulletinStatusHidden); err != nil {
 			a.logger.Logf("error auto-hiding post %d: %s", postId, err)
+		} else {
+			autoHidden = true
 		}
 	}
 
-	a.emailAdminsAboutReport(req, openCount)
+	a.sendBulletinReportAlert(bulletinReportAlert{
+		Report:         req,
+		ReporterId:     userId,
+		ReportedUserId: reportedUser,
+		Excerpt:        excerpt,
+		OpenReports:    openCount,
+		AutoHidden:     autoHidden,
+		ReportedAt:     time.Now().UTC(),
+	})
 	writeJSON(w, http.StatusCreated, map[string]string{"status": "received"})
 }
 
-func (a *AppService) emailAdminsAboutReport(req structs.ContentReportRequest, openCount int) {
+// defaultBulletinAlertEmail is the shared alerts inbox (see the dev
+// requirements doc, "Better admin alerts"). Reports go there rather than to an
+// admin-panel queue; a Telegram bot watching that inbox is how the team will
+// see and act on them. BULLETIN_ALERT_EMAIL overrides it.
+const defaultBulletinAlertEmail = "alerts@sfluv.org"
+
+type bulletinReportAlert struct {
+	Report         structs.ContentReportRequest
+	ReporterId     string
+	ReportedUserId string
+	Excerpt        string
+	OpenReports    int
+	AutoHidden     bool
+	ReportedAt     time.Time
+}
+
+// sendBulletinReportAlert emails one report to the alerts inbox.
+//
+// The email is written for two readers. People get a short summary. A bot gets
+// a fixed subject ("[SFLuv alert] bulletin_report ...") and a block of
+// "key: value" lines between ---BEGIN SFLUV ALERT--- and ---END SFLUV ALERT---
+// markers, one field per line, stable names, so it can parse the report
+// without scraping prose. Acting on a report is POST
+// /admin/bulletin/reports/resolve with the target_type and target_id below.
+func (a *AppService) sendBulletinReportAlert(alert bulletinReportAlert) {
 	go func() {
-		adminEmail := strings.TrimSpace(os.Getenv("BULLETIN_ADMIN_EMAIL"))
-		if adminEmail == "" {
-			adminEmail = strings.TrimSpace(os.Getenv("AFFILIATE_ADMIN_EMAIL"))
-		}
-		if adminEmail == "" {
-			return
+		to := strings.TrimSpace(os.Getenv("BULLETIN_ALERT_EMAIL"))
+		if to == "" {
+			to = defaultBulletinAlertEmail
 		}
 		sender := utils.NewEmailSender()
 		if sender == nil {
+			a.logger.Logf("bulletin report %s %s not emailed: email sender is not configured", alert.Report.TargetType, alert.Report.TargetId)
 			return
 		}
-		what := map[string]string{"post": "a Bulletin post", "message": "a message", "user": "a person"}[req.TargetType]
-		hidden := ""
-		if req.TargetType == "post" && openCount >= db.BulletinAutoHideReports {
-			hidden = "<p style=\"font-size:13px;color:#b91c1c;\">This post now has enough reports that it has been hidden pending review.</p>"
+
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		names, _ := a.db.GetPublicUsers(ctx, []string{alert.ReporterId, alert.ReportedUserId})
+		reportedEmail := ""
+		if summary, err := a.db.GetReportedUserSummary(ctx, alert.ReportedUserId); err == nil {
+			reportedEmail = summary.ContactEmail
 		}
-		details := fmt.Sprintf(`
-<p style="font-size:14px;color:#111827;">Someone reported %s for <strong>%s</strong>. It now has %d open report(s).</p>
-<p style="font-size:13px;color:#374151;">%s</p>
-%s
-<p style="font-size:13px;color:#374151;">Review it in the admin panel under Bulletin reports. Reports should be reviewed within 24 hours.</p>`,
-			what, html.EscapeString(strings.ReplaceAll(req.Reason, "_", " ")), openCount,
-			html.EscapeString(req.Details), hidden)
-		content := utils.BuildStyledEmail("New Bulletin report", "A user reported something on the Bulletin or in Messages.", details)
-		if err := sender.SendEmail(adminEmail, "Admin", "New Bulletin report", content, utils.NotificationFromEmail(), "SFLuv Bulletin"); err != nil {
-			a.logger.Logf("error emailing admins about a report: %s", err)
+
+		// One field per line; values never contain a newline.
+		oneLine := func(s string) string { return strings.Join(strings.Fields(s), " ") }
+		fields := [][2]string{
+			{"alert_type", "bulletin_report"},
+			{"target_type", alert.Report.TargetType},
+			{"target_id", alert.Report.TargetId},
+			{"reason", alert.Report.Reason},
+			{"open_reports", strconv.Itoa(alert.OpenReports)},
+			{"auto_hidden", strconv.FormatBool(alert.AutoHidden)},
+			{"reported_user_id", alert.ReportedUserId},
+			{"reported_user_name", oneLine(names[alert.ReportedUserId].PublicName)},
+			{"reported_user_email", reportedEmail},
+			{"reporter_user_id", alert.ReporterId},
+			{"reporter_name", oneLine(names[alert.ReporterId].PublicName)},
+			{"reported_at", alert.ReportedAt.Format(time.RFC3339)},
+			{"details", oneLine(alert.Report.Details)},
+		}
+		var block strings.Builder
+		block.WriteString("---BEGIN SFLUV ALERT---\n")
+		for _, f := range fields {
+			block.WriteString(f[0] + ": " + f[1] + "\n")
+		}
+		block.WriteString("---END SFLUV ALERT---")
+
+		what := map[string]string{"post": "a Bulletin post", "message": "a message", "user": "a person"}[alert.Report.TargetType]
+		reason := strings.ReplaceAll(alert.Report.Reason, "_", " ")
+		hidden := ""
+		if alert.AutoHidden {
+			hidden = `<p style="font-size:13px;color:#b91c1c;">This post has enough reports that it is now hidden from everyone until it's reviewed.</p>`
+		}
+		excerpt := ""
+		if strings.TrimSpace(alert.Excerpt) != "" {
+			excerpt = fmt.Sprintf(`<p style="font-size:13px;color:#374151;white-space:pre-wrap;border-left:3px solid #e5e7eb;padding-left:10px;">%s</p>`,
+				html.EscapeString(truncateRunes(alert.Excerpt, 800)))
+		}
+		details := ""
+		if alert.Report.Details != "" {
+			details = fmt.Sprintf(`<p style="font-size:13px;color:#374151;">Reporter's note: %s</p>`, html.EscapeString(alert.Report.Details))
+		}
+		body := fmt.Sprintf(`
+<p style="font-size:14px;color:#111827;">%s reported %s by %s for <strong>%s</strong>. Open reports on it: %d.</p>
+%s%s%s
+<p style="font-size:13px;color:#374151;">Please review within 24 hours.</p>
+<pre style="font-size:12px;color:#374151;background:#f9fafb;padding:10px;">%s</pre>`,
+			html.EscapeString(names[alert.ReporterId].PublicName), what,
+			html.EscapeString(names[alert.ReportedUserId].PublicName), html.EscapeString(reason),
+			alert.OpenReports, hidden, excerpt, details, html.EscapeString(block.String()))
+
+		subject := fmt.Sprintf("[SFLuv alert] bulletin_report %s %s (%s)", alert.Report.TargetType, alert.Report.TargetId, alert.Report.Reason)
+		content := utils.BuildStyledEmail("Bulletin report", "Someone reported something on the Bulletin or in Messages.", body)
+		if err := sender.SendEmail(to, "SFLuv alerts", subject, content, utils.NotificationFromEmail(), "SFLuv Bulletin"); err != nil {
+			a.logger.Logf("error emailing bulletin report alert: %s", err)
 		}
 	}()
 }
 
-// --- Admin queue ----------------------------------------------------------------
+// --- Moderation API ---------------------------------------------------------------
+//
+// There is deliberately no admin-panel page for reports. They are handled from
+// the alerts inbox, through a Telegram bot that watches it. These two admin
+// endpoints are that bot's API (withAdmin accepts X-Admin-Key for scripts).
 
-// AdminListBulletinReports is the moderation queue: every target with open
-// reports, oldest first, with the reported content and the person's history.
+// AdminListBulletinReports lists every target with open reports, oldest first,
+// with the reported content and the person's history.
 func (a *AppService) AdminListBulletinReports(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	targets, err := a.db.ListOpenReportTargets(ctx)
