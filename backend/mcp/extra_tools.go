@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/SFLuv/app/backend/db"
 	"github.com/jackc/pgx/v5"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -38,6 +39,15 @@ func (a *reportCore) registerExtraTools(s *server.MCPServer) {
 		mcp.WithDescription("Explain where features and admin controls live in the SFLUV app (e.g. where merchants are approved), and which report tool exposes which data. Use this to answer navigation/where-is questions."),
 		mcp.WithReadOnlyHintAnnotation(true),
 	), a.appStructure)
+
+	a.addTool(s, mcp.NewTool("storage_report",
+		mcp.WithDescription("Size the app database and every place it stores image bytes (workflow photos, event photos, site files, logos, signatures), with rows and bytes added per month per table, plus the 15 largest tables. Use it to see how much space images take and how fast they grow."),
+		mcp.WithReadOnlyHintAnnotation(true),
+	), a.storageReport)
+}
+
+func (a *reportCore) storageReport(ctx context.Context, _ mcp.CallToolRequest) (any, error) {
+	return db.BuildStorageReport(ctx, a.appDB, a.botDB)
 }
 
 type eventRow struct {

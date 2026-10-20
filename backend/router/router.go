@@ -210,6 +210,9 @@ func AddOrganizationRoutes(r *chi.Mux, a *handlers.AppService, s *handlers.BotSe
 	r.Put("/admin/organizations/roles", withAdmin(a.AdminSetOrganizationRoleStatus, a))
 	r.Put("/admin/organizations/issuer-scopes", withAdmin(a.AdminSetOrganizationIssuerScopes, a))
 	r.Get("/admin/organizations/{id}/events", withAdmin(s.AdminGetOrganizationEvents, a))
+
+	// Database and image storage sizes, for the photos-to-bucket move.
+	r.Get("/admin/storage-report", withAdmin(a.AdminStorageReport, a))
 }
 
 func AddClientConfigRoutes(r *chi.Mux, s *handlers.AppService) {
