@@ -173,6 +173,7 @@ func New(s *handlers.BotService, a *handlers.AppService, p *handlers.PonderServi
 	AddWalletRoutes(r, a)
 	AddLocationRoutes(r, a)
 	AddContactRoutes(r, a)
+	AddBulletinRoutes(r, a)
 	AddMerchantModeRoutes(r, a)
 	AddPonderRoutes(r, a, p)
 	AddW9Routes(r, a)
@@ -1027,4 +1028,43 @@ func withCapability(capability string, handlerFunc http.HandlerFunc, s *handlers
 		}
 		handlerFunc(w, r)
 	}
+}
+
+// AddBulletinRoutes registers the neighborhood Bulletin, direct messages, and
+// their safety endpoints. Everything requires a signed-in user; the moderation
+// queue requires an admin.
+func AddBulletinRoutes(r *chi.Mux, a *handlers.AppService) {
+	r.Get("/me/profile", withActiveAuth(a.GetMyProfile, a))
+	r.Put("/me/profile", withActiveAuth(a.PutMyProfile, a))
+	r.Get("/users/search", withActiveAuth(a.SearchUsers, a))
+	r.Get("/users/{userId}/public", withActiveAuth(a.GetPublicUserProfile, a))
+
+	r.Get("/bulletin/posts", withActiveAuth(a.GetBulletinFeed, a))
+	r.Post("/bulletin/posts", withActiveAuth(a.CreateBulletinPost, a))
+	r.Get("/bulletin/posts/mine", withActiveAuth(a.GetMyBulletinPosts, a))
+	r.Get("/bulletin/posts/{id}", withActiveAuth(a.GetBulletinPost, a))
+	r.Patch("/bulletin/posts/{id}", withActiveAuth(a.UpdateBulletinPost, a))
+	r.Delete("/bulletin/posts/{id}", withActiveAuth(a.DeleteBulletinPost, a))
+	r.Post("/bulletin/posts/{id}/photos", withActiveAuth(a.UploadBulletinPhoto, a))
+	r.Delete("/bulletin/posts/{id}/photos/{photoId}", withActiveAuth(a.DeleteBulletinPhoto, a))
+	r.Post("/bulletin/posts/{id}/feedback", withActiveAuth(a.PostBulletinFeedback, a))
+	r.Get("/bulletin/photos/{photoId}", withActiveAuth(a.GetBulletinPhoto, a))
+
+	r.Get("/me/conversations", withActiveAuth(a.ListMyConversations, a))
+	r.Get("/me/messaging-summary", withActiveAuth(a.GetMessagingSummary, a))
+	r.Post("/conversations", withActiveAuth(a.StartConversation, a))
+	r.Get("/conversations/{id}", withActiveAuth(a.GetConversation, a))
+	r.Get("/conversations/{id}/messages", withActiveAuth(a.GetConversationMessages, a))
+	r.Post("/conversations/{id}/messages", withActiveAuth(a.SendConversationMessage, a))
+	r.Post("/conversations/{id}/payments", withActiveAuth(a.AttachConversationPayment, a))
+	r.Post("/conversations/{id}/read", withActiveAuth(a.MarkConversationRead, a))
+	r.Post("/conversations/{id}/archive", withActiveAuth(a.ArchiveConversation, a))
+
+	r.Get("/blocks", withActiveAuth(a.ListBlockedUsers, a))
+	r.Post("/blocks", withActiveAuth(a.BlockUser, a))
+	r.Delete("/blocks/{userId}", withActiveAuth(a.UnblockUser, a))
+	r.Post("/reports", withActiveAuth(a.ReportContent, a))
+
+	r.Get("/admin/bulletin/reports", withAdmin(a.AdminListBulletinReports, a))
+	r.Post("/admin/bulletin/reports/resolve", withAdmin(a.AdminResolveBulletinReport, a))
 }
