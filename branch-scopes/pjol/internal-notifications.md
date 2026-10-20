@@ -1,6 +1,13 @@
 # Branch scope — `pjol/internal-notifications`
 
-Oct 19–20 2026 · app + mobile-app + webpage · **2.0h** so far
+Oct 19–20 2026 · app + mobile-app + webpage · **3.2h** (2.0h stated, 1.2h measured)
+
+Internal organization notifications, delivered to the mobile app, plus the website's Get in touch
+flow and a rebuilt mobile boot sequence.
+
+# Round 1 — Oct 19–20, before any code
+
+Oct 19–20 2026 · **2.0h stated**
 
 Internal organization notifications on the mobile app, plus a round of website updates.
 
@@ -75,3 +82,173 @@ Nothing committed on this branch. `app` and `webpage` are both at their branch p
   spot-count change from the affiliate branch's round 2, still unshipped. Website edits made now would
   sit on top of it, so it wants committing or moving before this branch's work starts.
 - **Nothing is pushed.** `pjol/internal-notifications` is local only.
+
+
+---
+
+# Round 2 — Oct 20 · 1.2h measured
+
+The branch changed direction mid-sitting and most of what round 2 built was built twice.
+
+## How these hours were measured
+
+**1.2h measured** from session-transcript timestamps, clustered into sittings on a 30-minute gap,
+unioned across every project worked in — the `time-accounting` method. Corroborated by the commit
+timestamps on this branch and by file mtimes in all three repositories.
+
+| Sitting | Span | Measured | On this branch | What |
+|---|---|---|---|---|
+| A | 11:24–11:55 | 0.52h | **0.45h** | Telegram bot + website Get in touch |
+| B | 13:54–14:37 | 0.70h | **0.70h** | The pivot: merges, removal, internal notifications, mobile |
+| | | | **1.15h → 1.2h** | |
+
+**Two weaknesses, both named rather than smoothed over:**
+
+- **0.07h of sitting A was spent in `SFLUV/animations`**, not on this branch, and is deducted above.
+  It sits inside the sitting rather than beside it, so the clock cannot separate them more finely
+  than this — 0.45h is the sitting minus the other repo's own measured span.
+- **Sitting B was still open when this was written.** 14:37 is the last transcript entry, not the
+  end of the work. The figure is a floor, and whatever follows belongs in round 3.
+
+**0.04h at 10:48–10:51 is deliberately not counted.** It falls inside round 1's stated 10:00–11:00
+website-review window, which is already booked. Round 1's own weakness note stands and extends
+slightly: the non-SFLuv project overlapping that window ran 10:42–**10:53**, not 10:50.
+
+## Large features
+
+### Internal organization notifications — 0.8h · app, mobile-app
+
+Operational alerts — low protocol balances, the backend failing its health check, role requests
+waiting on a decision, website support messages — delivered to the people designated to receive
+them, with the buttons to act on them attached.
+
+Three notification sets on the house organization (Dev alerts, Admin alerts, Support requests),
+administered from the organization settings page beside the existing permissions panel. Scoped to an
+organization rather than global, so partner organizations can have their own later; only the house
+organization has any today and the handler enforces that.
+
+The design decision everything else follows from: **an alert is a condition, not an event.**
+
+- Posting is idempotent in the alert key, enforced by a partial unique index over unresolved rows.
+  The funding sweep reports the same low balance every fifteen minutes; that is one alert, pushed
+  once.
+- Resolution is global rather than per-recipient. One admin approving a merchant answers the
+  question for everybody, so it stops asking everybody.
+- Each kind declares how it ends. A low balance has **no buttons at all** — the only fix is sending
+  money, and a button that merely hid it would make an unsolved problem look handled. An outage has
+  an acknowledge that is refused while it is still down. A role request has Approve and Reject that
+  run the same code the admin panel runs.
+- Resolved alerts are kept with a sentence about how they ended, because "who approved this
+  merchant" is the question the history gets asked.
+
+**Delivery and authority are deliberately separate.** Being designated for a set decides what you
+see; whether you may act is the role that endpoint already required. A recipient of admin alerts who
+is not an administrator sees the request with no buttons on it, rather than a button that errors.
+
+Migration **1.67**: `organization_notification_subscriptions`, `internal_notifications`,
+`user_notifications`. Eight new routes (339 → 347).
+
+### Mobile notification screen — 0.25h · mobile-app
+
+A modal holding fifty pushes in AsyncStorage on one device became a screen with server-side history.
+Active notifications sit above a lazily-paged history, and the two follow different rules: an
+ordinary notification retires when it has been looked at, an internal alert when it has been dealt
+with.
+
+History is keyset-paginated on `(created_at, id)` rather than offset, because the feed is written to
+while it is being read — an offset page shows one notification twice and skips another.
+
+Removed rather than ported: the modal's deferred-navigation workaround, which stashed a tapped
+notification's intent and ran it from the modal's dismissal callback because iOS silently dropped a
+presentation made mid-dismissal.
+
+### Mobile boot sequence — 0.15h · mobile-app
+
+A cold start made two serial network calls and showed "Checking app compatibility…" until both
+landed — nothing on screen, nothing interactive. The policy and config are now cached, the app boots
+from them, and the real check runs behind it. While Privy reads the keychain, the app's own chrome
+goes up as a skeleton.
+
+**The version gate is untouched by this, by four rules:** only a non-blocking policy is ever cached;
+the cache is keyed by the binary, so a new build gets no use of the old one's verdict; it expires
+after seven days; and the real check still runs every launch and every foreground, with a blocking
+policy taking effect the moment it arrives. What is given up is the second between launch and that
+reply.
+
+### Website Get in touch — 0.45h · webpage
+
+Built in sitting A and **unaffected by the pivot**, because it only ever needed somewhere to send an
+alert. Two-step page (community chat first, form second), a whitelabel `Listbox` built from our own
+parts, a server-side proxy with a honeypot, a quotable reference (`SUP-7F3KQ2`), a confirmation
+email to the sender, and a new admin Support tab. `/contact` permanently redirects; the Get Involved
+Google Form links now point at the page with the subject preselected.
+
+## Smaller items
+
+| What | Hours | Repo |
+|---|---|---|
+| Merge `sanchezo/bulletin-backend` (4 commits, 4,545 lines) | 0.05h | app |
+| Merge `sanchezo/bulletin-mobile` (2 commits, 2,925 lines) | 0.02h | mobile-app |
+| Remove the Telegram layer, keeping the three parts that outlived it | 0.1h | app |
+| Verify 1.67 against a throwaway Postgres — 9 behaviours | 0.1h | app |
+| `?tab=balances` did not deep-link; "balances" was missing from the valid-tab list | 0.02h | app |
+
+## Totals
+
+| Source | Hours |
+|---|---|
+| Round 1 — stated (dev meeting, website review) | 2.00h |
+| Round 2 — measured | 1.15h |
+| **Total** | **3.2h** |
+
+## Volume
+
+| Repo | Files | Lines | Other |
+|---|---|---|---|
+| app | 10 modified, 12 new | +3,577 / −5 | 1 migration (67 total), 8 new routes (347 total) |
+| mobile-app | 2 modified, 4 new | +1,749 / −236 | — |
+| webpage | 7 modified, 5 new | +44 / −41 modified, 654 new | committed as `080ac8a` |
+
+Merged in from Sanchez, not counted above: 4,545 lines (app) and 2,925 lines (mobile-app).
+
+## Decisions worth finding later
+
+- **The Telegram bot was built and removed on this branch, unlanded.** Three things outlived it,
+  and they are the reason the replacement was quick: `funding.Conditions` (the sweep reports its
+  full set of active problems every run rather than an event per problem, which is what lets an
+  inbox read as current state); `applyLocationApproval`, extracted out of the HTTP handler so
+  approving a merchant derives wallets in exactly one place; and the website support flow.
+- **Removing Telegram simplified the action layer rather than complicating it.** The bot needed a
+  server-minted token per button, in its own table, because `callback_data` was capped at 64 bytes
+  and arrived from the open internet. An authenticated request from our own app needs neither, so
+  the table and the token plumbing are gone. The reply-by-email button also loses its server-side
+  302: Telegram rejects `mailto:` in buttons, a phone does not.
+- **One behaviour the Telegram version had to compromise on is now correct.** There, a role decision
+  could not both disappear and leave a record, so it collapsed to a one-line "Approved by @x" and
+  stayed on screen. Here it leaves the active list and lands in history carrying that sentence.
+- **Ack-on-view has one real cost, and it is the W-9 notice.** Per the brief, everything that is not
+  an internal alert is acked as soon as it is seen — including the derived tax and payout entries,
+  which previously stayed in the list while their condition held. A volunteer who owes a form now
+  loses the bell nag after one look. The obligation is still surfaced by the escrow card and the
+  tier modal, and the acking policy is one line per kind if this should change.
+- **The webpage still links to the community Telegram group.** That is a public group people join,
+  not the bot integration, so it was left alone — `NEXT_PUBLIC_TELEGRAM_COMMUNITY_URL` is unrelated
+  to anything removed here.
+
+## Open
+
+- **Nothing is pushed.** All three repositories are local only: `848d060` (app), `6f186bf`
+  (mobile-app), `080ac8a` (webpage).
+- **Sanchez's other two branches are not merged.** `sanchezo/photo-bucket` also claims migration
+  **1.66** and will collide with the bulletin migration on whichever lands second.
+  `sanchezo/fix-invisible-toasts` fixes `toast()` not showing messages, which the new admin panels
+  on this branch rely on — worth having, but out of the scope named for this branch.
+- **This branch still carries five unmerged commits** from `pjol/affiliate-touchups`, as round 1
+  recorded, plus Sanchez's bulletin work. A PR from here against main arrives with all of it.
+- **The uptime monitor cannot detect a dead process**, because then nothing is polling. It covers
+  unreachable deploys, an unopenable database and bad status codes. An external monitor is still
+  worth having.
+- **`user_notifications` starts empty.** Nothing can backfill it; the notifications it would be
+  backfilled from were never recorded anywhere.
+- **8 `console.error("[w9] …")` debug lines remain in `mobile/App.tsx`.** Pre-existing and left
+  alone; one went with the notification modal.
