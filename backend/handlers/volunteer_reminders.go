@@ -138,6 +138,11 @@ func (a *AppService) sendVolunteerReminderPush(ctx context.Context, userId strin
 
 	body := fmt.Sprintf("%s starts %s.", title, humanizeLeadTime(time.Until(time.Unix(startAt, 0))))
 
+	a.recordNotification(ctx, userId, "volunteer_event_reminder", "Volunteer event reminder", body, map[string]string{
+		"type":     "volunteer_event_reminder",
+		"event_id": eventId,
+	})
+
 	delivered := false
 	tokensSeen := map[string]struct{}{}
 	for _, subscription := range subscriptions {

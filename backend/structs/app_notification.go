@@ -13,6 +13,32 @@ const (
 	NotificationTypeW9EscrowHeld = "w9_escrow_held"
 )
 
+// NotificationAcksOnView reports whether opening the notification list is
+// enough to handle a notification of this type.
+//
+// True for the receipts, which is most of them: a settled payment or a payout
+// that is on its way has done its job once it has been read, and a badge that
+// will not clear for things somebody has already read teaches them to ignore
+// the badge.
+//
+// False for the two tax types, because they are not telling the person
+// something — they are asking them for a form. Those stay outstanding until the
+// W-9 is actually on file (db.W9StatusClears), at which point the condition
+// behind them is gone and they leave the feed on their own, like every other
+// derived notification. Internal alerts reach the same end through their own
+// resolution rather than through this rule.
+//
+// Takes the type rather than a notification so a seen marker can be judged by
+// its key, which is "<type>:<subject>".
+func NotificationAcksOnView(notificationType string) bool {
+	switch notificationType {
+	case NotificationTypeW9Required, NotificationTypeW9EscrowHeld:
+		return false
+	default:
+		return true
+	}
+}
+
 // Action kinds understood by current clients. A client that does not
 // recognise a kind renders the notification as plain text rather than
 // guessing at a destination.

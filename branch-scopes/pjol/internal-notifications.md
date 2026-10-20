@@ -1,6 +1,6 @@
 # Branch scope — `pjol/internal-notifications`
 
-Oct 19–20 2026 · app + mobile-app + webpage · **3.2h** (2.0h stated, 1.2h measured)
+Oct 19–20 2026 · app + mobile-app + webpage · **3.3h** (2.0h stated, 1.3h measured)
 
 Internal organization notifications, delivered to the mobile app, plus the website's Get in touch
 flow and a rebuilt mobile boot sequence.
@@ -201,6 +201,8 @@ Google Form links now point at the page with the subject preselected.
 | Round 2 — measured | 1.15h |
 | **Total** | **3.2h** |
 
+Round 3 came after this table was written; its own totals table below supersedes it.
+
 ## Volume
 
 | Repo | Files | Lines | Other |
@@ -231,6 +233,8 @@ Merged in from Sanchez, not counted above: 4,545 lines (app) and 2,925 lines (mo
   which previously stayed in the list while their condition held. A volunteer who owes a form now
   loses the bell nag after one look. The obligation is still surfaced by the escrow card and the
   tier modal, and the acking policy is one line per kind if this should change.
+  **Changed in round 3**: the owner's call was to exempt the tax notices, which now end only when
+  the W-9 is filed. The line per kind is where round 3 put the rule.
 - **The webpage still links to the community Telegram group.** That is a public group people join,
   not the bot integration, so it was left alone — `NEXT_PUBLIC_TELEGRAM_COMMUNITY_URL` is unrelated
   to anything removed here.
@@ -249,6 +253,132 @@ Merged in from Sanchez, not counted above: 4,545 lines (app) and 2,925 lines (mo
   unreachable deploys, an unopenable database and bad status codes. An external monitor is still
   worth having.
 - **`user_notifications` starts empty.** Nothing can backfill it; the notifications it would be
-  backfilled from were never recorded anywhere.
+  backfilled from were never recorded anywhere. **Round 3 found the worse half of this**: nothing
+  was writing new rows either, so see round 3 rather than this line.
 - **8 `console.error("[w9] …")` debug lines remain in `mobile/App.tsx`.** Pre-existing and left
   alone; one went with the notification modal.
+
+# Round 3 — Oct 20, the acking rule and the history that was not being written
+
+Oct 20 2026 · **0.2h measured** · app + mobile-app
+
+One instruction — "ack on view for everything except the w9 notice, that should be resolved when the
+user successfully submits their w9" — and the defect it exposed.
+
+## How these hours were measured
+
+**0.2h measured** from session-transcript timestamps on the `time-accounting` method: a 30-minute
+sitting gap, unioned across every project worked in.
+
+| Sitting | Span | Measured | On this branch |
+|---|---|---|---|
+| C | 16:18–16:28 | 0.17h | **0.17h → 0.2h** |
+
+**Two weaknesses:**
+
+- **The sitting was still open when this was written**, exactly as round 2's was. 16:28 is the last
+  transcript entry at the time of writing, not the end of the work, so the figure is a floor.
+- **A 0.00h sitting at 15:36 is not booked anywhere.** It is a single message — the hand-off that
+  closed round 2 — and 42 minutes clear of this sitting on either side, so it clusters alone and
+  rounds to nothing. Noted rather than absorbed, because round 2's figure was already published.
+
+Nothing else was worked on after 15:00 today: the two other projects with transcript activity today
+(`SFLUV/animations` 11:40–11:44, and one non-SFLuv project 10:42–10:53) both sit inside windows
+rounds 1 and 2 already accounted for. This round's clock is this work alone.
+
+## The change asked for
+
+**The tax notices no longer ack on view; they end when the W-9 is on file.** Everything else keeps
+the rule round 2 shipped.
+
+The rule is one function, `structs.NotificationAcksOnView`, and the write path is the only place it
+is consulted: `MarkImproverNotificationsSeen` splits a key into `<type>:<subject>` and drops any key
+whose type does not ack on view. A client asking for a tax notice by name cannot silence it, and
+neither can a caller written later by somebody who never read this file.
+
+The read path lost its seen state rather than ignoring it. Both tax queries dropped their
+`improver_notification_reads` join, because a column nobody is allowed to act on is worse than no
+column — the next person to touch the query would reasonably assume it meant something.
+
+**What ends one is unchanged, and was already right**: the notices are derived from live state on
+every request, so a filing reaching `completed` (which is what the vendor callback writes when the
+form is submitted) removes the row from the query's own results. The notice does not get resolved —
+it stops existing, like every other derived notification.
+
+Existing seen markers for tax notices are now dead data. The housekeeping sweep deletes them
+unconditionally instead of checking whether they are still live, which also makes it two clauses
+shorter.
+
+## The defect this exposed — ordinary notifications were not reaching the history at all
+
+Round 2 built the history table, the recorder, the pagination and the screen. **The recorder had no
+call sites.** Only internal alerts ever wrote a row, so the history on the new screen could only
+ever show alerts, and "ack on view for transactions" was a rule about rows that did not exist.
+
+The six push paths now each write their row: transaction receipts, volunteer reminders, organizer
+blasts, bulletin moderation notices, direct messages, and the W-9 messages. Written before the
+device lookup and regardless of its outcome, which is the doctrine the file already stated — a push
+that fails to send still leaves the row, because the notification is still true.
+
+Three things fell out of doing it:
+
+- **A transaction receipt had no destination.** Its payload named the transfer but carried no
+  `type`, so `targetFromData` returned "nowhere" and tapping a receipt left you on whatever screen
+  you were already on. It now carries `transaction` and lands on Activity.
+- **The badge counted some notifications twice.** It summed the server's unseen count and the
+  length of the device's own tray mirror, which was harmless while the ledger held only alerts and
+  wrong the moment both described the same arrival. The ledger is now the single source; the mirror
+  keeps the job only it can do, which is knowing what is still in the OS shade.
+- **The W-9 messages are deliberately not recorded** — and the condition for skipping them is
+  `NotificationAcksOnView` again, which is not a coincidence. A kind that does not ack on view is a
+  kind the feed already derives and keeps on screen until it is answered, so a row for it would put
+  the same thing in the list twice: once as the standing "complete your W-9" entry, once as the push
+  that said so. The release confirmation does get a row, because the condition it reports is over by
+  definition and nothing else would ever show it.
+
+## Smaller items
+
+| What | Hours | Repo |
+|---|---|---|
+| Verify the rewritten queries and the sweep against a throwaway Postgres | 0.03h | app |
+| Transaction receipts route to Activity (`type` was missing from the payload) | 0.01h | app |
+| Drop the tray mirror from the badge count | 0.01h | mobile-app |
+
+## Totals
+
+| Source | Hours |
+|---|---|
+| Round 1 — stated (dev meeting, website review) | 2.00h |
+| Round 2 — measured | 1.15h |
+| Round 3 — measured | 0.17h |
+| **Total** | **3.3h** |
+
+## Volume
+
+| Repo | Files | Lines |
+|---|---|---|
+| app | 9 modified | +145 / −86 |
+| mobile-app | 1 modified | +26 / −13 |
+
+No migration: the tax notices never had a table of their own, and the one they borrowed a seen
+marker from is unchanged.
+
+## What was verified, and what was not
+
+Against a throwaway Postgres, dropped afterwards: an escrow notice is still returned for a user who
+has an old seen marker; so is a tier notice; a `completed` filing returns the status that removes
+both; and the housekeeping sweep deleted exactly three markers — both tax markers and a settled
+payout's — while keeping the live payout's.
+
+**Not executed:** the Go key-splitting filter. The root volume has 80MB free, so nothing links on
+this machine; `go vet` type-checks every touched package and that is the whole of it. The filter is
+four lines over `strings.Cut`, but it has not been run.
+
+## Open
+
+- **Chat messages now land in notification history.** Every direct message writes a row, matching
+  what the device's tray list used to show. An active conversation will bury receipts under it.
+  Including them was the safer default — a notification somebody remembers receiving should be
+  findable — but it is one `recordNotification` call in `notifyNewMessage` if it reads wrong in use,
+  since Messages carries its own unread state anyway.
+- **History still starts empty**, and the first rows appear only as new notifications are sent.

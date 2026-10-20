@@ -15,6 +15,10 @@ import (
 // Seen notifications stay in the feed until the thing they describe is actually
 // resolved — for a pending payout, until the payout settles. Marking one seen
 // only silences the bubble; it never hides work that is still outstanding.
+//
+// The tax notices never report themselves seen, because being looked at is not
+// what answers them (structs.NotificationAcksOnView). They count against the
+// bubble until the W-9 is on file, and then they are not in the feed at all.
 func (a *AppService) GetImproverNotifications(w http.ResponseWriter, r *http.Request) {
 	userDid := utils.GetDid(r)
 	if userDid == nil {
@@ -44,6 +48,10 @@ func (a *AppService) GetImproverNotifications(w http.ResponseWriter, r *http.Req
 // MarkImproverNotificationsSeen clears the unread state for specific
 // notifications, or for the whole feed when the request asks for all of them
 // (what opening the bell does).
+//
+// "All" means all of them that ack on view. The kinds that do not are dropped
+// by the db layer rather than filtered here, so the rule holds however this is
+// called — see structs.NotificationAcksOnView.
 func (a *AppService) MarkImproverNotificationsSeen(w http.ResponseWriter, r *http.Request) {
 	userDid := utils.GetDid(r)
 	if userDid == nil {

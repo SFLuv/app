@@ -506,6 +506,9 @@ func (a *AppService) notifyModeration(userId, body string) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
+		a.recordNotification(ctx, userId, "bulletin_moderation", "SFLuv Bulletin", body, map[string]string{
+			"type": "bulletin_moderation",
+		})
 		subscriptions, err := a.db.GetMobilePushSubscriptionsByUser(ctx, userId)
 		if err != nil {
 			return

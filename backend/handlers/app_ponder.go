@@ -889,6 +889,11 @@ func (a *AppService) PonderHookHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A receipt belongs in the person's history once, however many devices it
+	// reaches, so the row is written per owner while the push is sent per
+	// token. A second wallet of theirs receiving the same transfer is a
+	// different receipt and does get its own row.
+	recorded := map[string]struct{}{}
 	for _, listener := range pushListeners {
 		wallet, walletErr := a.db.GetWalletByUserAndAddress(r.Context(), listener.Owner, listener.Address)
 		if walletErr != nil {
@@ -900,15 +905,26 @@ func (a *AppService) PonderHookHandler(w http.ResponseWriter, r *http.Request) {
 		title := fmt.Sprintf("SFLuv received to %s", accountLabel)
 		body := fmt.Sprintf("%s SFLUV", formattedAmount)
 
-		token := strings.TrimSpace(string(listener.Data))
-		ticket, pushErr := sendExpoPushNotification(r.Context(), token, title, body, map[string]string{
+		// "transaction" is what routes a tap to Activity. Without it the
+		// payload named the transfer but no destination, so tapping a receipt
+		// opened the app and left you wherever you were.
+		data := map[string]string{
+			"type":     "transaction",
 			"hash":     tx.Hash,
 			"chain_id": strconv.FormatInt(tx.ChainID, 10),
 			"to":       tx.To,
 			"from":     tx.From,
 			"amount":   formattedAmount,
 			"address":  listener.Address,
-		})
+		}
+
+		if _, already := recorded[listener.Owner+":"+listener.Address]; !already {
+			recorded[listener.Owner+":"+listener.Address] = struct{}{}
+			a.recordNotification(r.Context(), listener.Owner, "transaction", title, body, data)
+		}
+
+		token := strings.TrimSpace(string(listener.Data))
+		ticket, pushErr := sendExpoPushNotification(r.Context(), token, title, body, data)
 		a.handleExpoPushTicket(r.Context(), listener, token, ticket)
 		if pushErr != nil {
 			a.logger.Logf("error sending Expo push notification for user %s, address %s: %s", listener.Owner, listener.Address, pushErr)

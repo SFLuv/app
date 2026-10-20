@@ -595,6 +595,12 @@ func (a *AppService) notifyNewMessage(senderId, recipientId string, conversation
 		if title == "" {
 			title = "New message"
 		}
+		data := map[string]string{
+			"type":            "bulletin_message",
+			"conversation_id": strconv.FormatInt(conversationId, 10),
+		}
+		a.recordNotification(ctx, recipientId, "bulletin_message", title, preview, data)
+
 		subscriptions, err := a.db.GetMobilePushSubscriptionsByUser(ctx, recipientId)
 		if err != nil {
 			a.logger.Logf("error loading push subscriptions for %s: %s", recipientId, err)
@@ -613,10 +619,7 @@ func (a *AppService) notifyNewMessage(senderId, recipientId string, conversation
 				continue
 			}
 			seen[token] = struct{}{}
-			if _, err := sendExpoPushNotification(ctx, token, title, preview, map[string]string{
-				"type":            "bulletin_message",
-				"conversation_id": strconv.FormatInt(conversationId, 10),
-			}); err != nil {
+			if _, err := sendExpoPushNotification(ctx, token, title, preview, data); err != nil {
 				a.logger.Logf("error sending message push to %s: %s", recipientId, err)
 			}
 		}
