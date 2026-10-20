@@ -8,6 +8,7 @@ import (
 
 	"github.com/SFLuv/app/backend/funding"
 	"github.com/SFLuv/app/backend/logger"
+	"github.com/SFLuv/app/backend/structs"
 	"github.com/SFLuv/app/backend/utils"
 )
 
@@ -25,8 +26,13 @@ type FundingService struct {
 	logger *logger.LogCloser
 }
 
-// NewFundingService wires the funding module to the faucet and the mailer.
-func NewFundingService(chain funding.Chain, log *logger.LogCloser) *FundingService {
+// NewFundingService wires the funding module to the faucet, the mailer, and
+// the internal alert set.
+//
+// Both notifiers run: the email is the one that reaches somebody who is not
+// carrying the app, and the alert is the one that goes quiet on its own when
+// the balance recovers.
+func NewFundingService(chain funding.Chain, log *logger.LogCloser, alerts *NotificationService) *FundingService {
 	cfg := funding.LoadConfig("")
 	logf := func(format string, args ...any) {
 		if log != nil {
@@ -34,7 +40,7 @@ func NewFundingService(chain funding.Chain, log *logger.LogCloser) *FundingServi
 		}
 	}
 	svc := &FundingService{
-		inner:  funding.NewService(cfg, chain, &fundingNotifier{log: log}, logf),
+		inner:  funding.NewService(cfg, chain, &fundingNotifier{log: log, alerts: alerts}, logf),
 		logger: log,
 	}
 	svc.logConfig()
@@ -134,7 +140,8 @@ func (s *FundingService) RunOnce(ctx context.Context) funding.SweepResult {
 
 // fundingNotifier sends the low-faucet email.
 type fundingNotifier struct {
-	log *logger.LogCloser
+	log    *logger.LogCloser
+	alerts *NotificationService
 }
 
 // Notify emails everyone on FUNDING_ALERT_EMAILS, or the site admin when that
@@ -166,4 +173,65 @@ func (n *fundingNotifier) Notify(subject string, body string) error {
 		}
 	}
 	return firstErr
+}
+
+// Conditions reconciles the dev alert set against what is wrong right now.
+//
+// The sweep hands over its complete set of active problems every run,
+// including the empty set, which is what makes this work as a display of
+// current state rather than a log of past events. Anything live that is no
+// longer in the set has been fixed, so it is retracted; anything in the set
+// that is not live is new, so it is posted. A problem that was wrong last run
+// and is still wrong is in both and nothing happens — no second alert, no
+// second push.
+//
+// Namespaced on "funding:" so this can only ever retract its own alerts. A
+// reconcile that resolved everything not in its list would clear the uptime
+// alert every fifteen minutes.
+func (n *fundingNotifier) Conditions(ctx context.Context, active []funding.Condition) error {
+	if n.alerts == nil {
+		return nil
+	}
+
+	live, err := n.alerts.LiveKeys(ctx, "funding:")
+	if err != nil {
+		return err
+	}
+
+	wanted := map[string]funding.Condition{}
+	for _, condition := range active {
+		wanted[condition.Key] = condition
+	}
+
+	for _, key := range live {
+		if _, still := wanted[key]; still {
+			continue
+		}
+		if err := n.alerts.Resolve(ctx, key, "Back above its floor."); err != nil && n.log != nil {
+			n.log.Logf("funding: could not retract %s: %s", key, err)
+		}
+	}
+
+	for _, condition := range active {
+		fields := make([]structs.NotificationField, 0, len(condition.Fields))
+		for _, field := range condition.Fields {
+			fields = append(fields, structs.NotificationField{Label: field[0], Value: field[1]})
+		}
+		// No buttons. The only thing that fixes a low balance is sending money
+		// to the account, and a button that merely dismissed the alert would
+		// make an unsolved problem look handled.
+		if err := n.alerts.Post(ctx, Alert{
+			Set:    structs.NotificationSetDev,
+			Key:    condition.Key,
+			Kind:   structs.InternalKindFunding,
+			Title:  condition.Title,
+			Body:   condition.Detail,
+			Fields: fields,
+			Urgent: condition.Urgent,
+		}); err != nil && n.log != nil {
+			n.log.Logf("funding: could not post %s: %s", condition.Key, err)
+		}
+	}
+
+	return nil
 }

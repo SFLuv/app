@@ -710,6 +710,17 @@ func (a *AppService) RequestImproverStatus(w http.ResponseWriter, r *http.Reques
 </table>`, utils.EscapeEmailHTML(improver.UserId), utils.EscapeEmailHTML(improver.FirstName), utils.EscapeEmailHTML(improver.LastName), utils.EscapeEmailHTML(improver.Email)),
 	)
 
+	a.postRoleRequestAlert(r.Context(), roleRequestAlert{
+		Role:    "improver",
+		Subject: improver.UserId,
+		Label:   strings.TrimSpace(improver.FirstName + " " + improver.LastName),
+		Fields: []structs.NotificationField{
+			{Label: "Name", Value: strings.TrimSpace(improver.FirstName + " " + improver.LastName)},
+			{Label: "Email", Value: improver.Email},
+			{Label: "User", Value: improver.UserId},
+		},
+	})
+
 	w.WriteHeader(http.StatusCreated)
 	_ = json.NewEncoder(w).Encode(improver)
 }

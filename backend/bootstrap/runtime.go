@@ -383,10 +383,14 @@ func NewServerHandler(ctx context.Context, pools *DBPools, appLogger *logger.Log
 	// it is on is visible in the log rather than only in the environment.
 	s.LogV4SConfig(appLogger)
 
+	// Internal organization alerts. Built before the things that raise them,
+	// since they take it as a dependency.
+	notificationSvc := handlers.NewNotificationService(appDb, appLogger)
+
 	// Keep the protocol's operational accounts in gas from the faucet, and
 	// email when the faucet itself needs a person. Reads balances and alerts
 	// even when automatic transfers are switched off.
-	fundingSvc := handlers.NewFundingService(botClient, appLogger)
+	fundingSvc := handlers.NewFundingService(botClient, appLogger, notificationSvc)
 	s.SetFundingService(fundingSvc)
 	a := handlers.NewAppService(appDb, appLogger, payouts, w9Provider, clientConfig)
 	a.SetBotService(s)
@@ -394,6 +398,18 @@ func NewServerHandler(ctx context.Context, pools *DBPools, appLogger *logger.Log
 	payouts.SetAppService(a)
 	a.SetRedeemerService(redeemer)
 	a.SetMinterService(minter)
+
+	// The alert layer and the app service each hold the other: alerts are
+	// delivered through the app service's push fan-out, and the app service
+	// posts alerts. Wired here rather than in a constructor because neither
+	// can be built first.
+	a.SetNotificationService(notificationSvc)
+	notificationSvc.SetPusher(a.PushToUser)
+
+	// The health poller alerts the dev set, and its acknowledge button asks the
+	// poller whether the outage is actually over.
+	uptimeSvc := handlers.NewUptimeService(notificationSvc, appLogger)
+	a.SetUptimeService(uptimeSvc)
 
 	// Bridge is the off-ramp behind merchant bank payouts. Without a key the
 	// client is disabled and every payout route answers "not available yet";
@@ -477,6 +493,13 @@ func NewServerHandler(ctx context.Context, pools *DBPools, appLogger *logger.Log
 		// is in-process, so a second replica sweeping on its own timer would
 		// double the transfer rate the guard exists to cap.
 		fundingSvc.Start(jobsCtx)
+
+		// Internal alerts, leader-only for the same shape of reason as the
+		// sweep above: the uptime poller holds its consecutive-failure count
+		// in process, so two replicas polling would each alert for one outage.
+		notificationSvc.LogConfig(jobsCtx, appLogger)
+		notificationSvc.StartHousekeeping(jobsCtx)
+		uptimeSvc.Start(jobsCtx)
 	})
 
 	// Read-only admin MCP endpoint, gated by the existing Privy JWT + admin check.

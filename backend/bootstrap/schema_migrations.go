@@ -2712,6 +2712,13 @@ var schemaMigrations = []SchemaMigration{
 			return migrateBulletin(ctx, pools)
 		},
 	},
+	{
+		Version:     "1.67",
+		Description: "internal organization alerts, their recipients, and per-user notification history",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			return migrateInternalNotifications(ctx, pools)
+		},
+	},
 }
 
 // migrateW9WarningTiers replaces one hard gate with an escalating sequence.

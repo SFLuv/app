@@ -179,6 +179,8 @@ func New(s *handlers.BotService, a *handlers.AppService, p *handlers.PonderServi
 	AddW9Routes(r, a)
 	AddUnwrapRoutes(r, a)
 	AddMerchantPayoutRoutes(r, a)
+	AddNotificationRoutes(r, a)
+	AddSupportRoutes(r, a)
 
 	return r
 }
@@ -203,6 +205,13 @@ func AddOrganizationRoutes(r *chi.Mux, a *handlers.AppService, s *handlers.BotSe
 	r.Get("/organizations/mine/permissions", withActiveAuth(a.GetOrganizationPermissions, a))
 	r.Put("/organizations/mine/permissions", withActiveAuth(a.SetOrganizationMemberPermissions, a))
 	r.Put("/organizations/mine/permissions/administrative", withActiveAuth(a.SetOrganizationMemberAdministrative, a))
+
+	// Which members receive which sets of internal alerts. Same shape as the
+	// permissions pair above, and for the same reason: a member may read this
+	// to see what they themselves are signed up for, and only an org admin may
+	// change anyone's.
+	r.Get("/organizations/mine/notification-sets", withActiveAuth(a.GetOrganizationNotificationSettings, a))
+	r.Put("/organizations/mine/notification-sets", withActiveAuth(a.SetOrganizationNotificationSets, a))
 	r.Post("/organizations/join", withActiveAuth(a.JoinOrganization, a))
 
 	// Platform-admin org controls.
@@ -1067,4 +1076,30 @@ func AddBulletinRoutes(r *chi.Mux, a *handlers.AppService) {
 
 	r.Get("/admin/bulletin/reports", withAdmin(a.AdminListBulletinReports, a))
 	r.Post("/admin/bulletin/reports/resolve", withAdmin(a.AdminResolveBulletinReport, a))
+}
+
+// AddNotificationRoutes mounts the notification screen.
+//
+// Everything here is scoped to the caller by the handler, from their own
+// authenticated id, so there is no id in any path that a client could change to
+// read somebody else's notifications.
+func AddNotificationRoutes(r *chi.Mux, a *handlers.AppService) {
+	r.Get("/notifications", withActiveAuth(a.GetNotifications, a))
+	r.Post("/notifications/seen", withActiveAuth(a.MarkNotificationsSeen, a))
+	// Pressing an alert's button. Authorization is layered inside the handler:
+	// being designated for the alert's set is what makes it yours to see, and
+	// anything that changes platform state needs the role that endpoint
+	// already requires.
+	r.Post("/notifications/{id}/action", withActiveAuth(a.PressNotificationAction, a))
+}
+
+// AddSupportRoutes mounts the website "get in touch" form and its admin queue.
+func AddSupportRoutes(r *chi.Mux, a *handlers.AppService) {
+	// Public: the website proxies submissions server-side and presents a shared
+	// key, which is what the rate limiter buckets on. Unauthenticated by
+	// necessity — the people writing in do not have accounts.
+	r.Post("/support/requests", a.CreateSupportRequest)
+
+	r.Get("/admin/support-requests", withAdmin(a.ListSupportRequests, a))
+	r.Post("/admin/support-requests/{id}/archive", withAdmin(a.SetSupportRequestArchived, a))
 }

@@ -76,6 +76,19 @@ func (a *AppService) RequestAffiliateStatus(w http.ResponseWriter, r *http.Reque
 </table>`, utils.EscapeEmailHTML(affiliate.UserId), utils.EscapeEmailHTML(affiliate.Organization)),
 	)
 
+	// Alongside the email, not instead of it. The email is the durable record
+	// that reaches a desk; the alert is the one with the buttons on it, and the
+	// one that stops asking the moment somebody decides.
+	a.postRoleRequestAlert(r.Context(), roleRequestAlert{
+		Role:    "affiliate",
+		Subject: affiliate.UserId,
+		Label:   affiliate.Organization,
+		Fields: []structs.NotificationField{
+			{Label: "Organization", Value: affiliate.Organization},
+			{Label: "User", Value: affiliate.UserId},
+		},
+	})
+
 	w.WriteHeader(http.StatusCreated)
 	_ = json.NewEncoder(w).Encode(affiliate)
 }

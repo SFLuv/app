@@ -261,6 +261,17 @@ func (a *AppService) AddLocation(w http.ResponseWriter, r *http.Request) {
 </table>`, utils.EscapeEmailHTML(location.Name), utils.EscapeEmailHTML(location.OwnerID)),
 	)
 
+	a.postRoleRequestAlert(r.Context(), roleRequestAlert{
+		Role:    "merchant",
+		Subject: fmt.Sprintf("%d", location.ID),
+		Label:   location.Name,
+		Fields: []structs.NotificationField{
+			{Label: "Location", Value: location.Name},
+			{Label: "Address", Value: strings.TrimSpace(location.Street + ", " + location.City)},
+			{Label: "Submitted by", Value: location.OwnerID},
+		},
+	})
+
 	// The id, not the old "success" text. The stepper needs it: opening hours
 	// are optional on the form but are written through their own endpoint, which
 	// is addressed by location id, and the confirmation screen links to the
