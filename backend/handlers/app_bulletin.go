@@ -38,6 +38,10 @@ var bulletinHandlePattern = regexp.MustCompile(`^[a-z0-9_]{3,20}$`)
 
 // bulletinError writes the error shape the mobile app shows: a sentence for
 // people, and a stable code for the app to branch on when it needs to.
+//
+// Never use 401 or 403 for a business rule here (suspended, blocked, not your
+// trade): the mobile client treats any 401/403 as a dead session and asks the
+// person to sign in again. Use 409, 423, or 429 instead.
 func bulletinError(w http.ResponseWriter, status int, code, message string) {
 	writeJSON(w, status, map[string]string{"error": message, "code": code})
 }
@@ -148,7 +152,7 @@ func (a *AppService) requireBulletinParticipant(w http.ResponseWriter, r *http.R
 		return false
 	}
 	if profile.SuspendedUntil != nil && profile.SuspendedUntil.After(time.Now()) {
-		bulletinError(w, http.StatusForbidden, "suspended", "Your access to the Bulletin and Messages is paused. Contact admin@sfluv.org with questions.")
+		bulletinError(w, http.StatusLocked, "suspended", "Your access to the Bulletin and Messages is paused. Contact admin@sfluv.org with questions.")
 		return false
 	}
 	return true
@@ -895,7 +899,7 @@ func (a *AppService) PostBulletinFeedback(w http.ResponseWriter, r *http.Request
 	// Feedback is between the post's author and someone who messaged them
 	// about it; nobody else can rate either side.
 	if post.AuthorId != userId && post.AuthorId != req.ToUserId {
-		bulletinError(w, http.StatusForbidden, "not_a_trade", "You can only leave feedback on your own trades.")
+		bulletinError(w, http.StatusConflict, "not_a_trade", "You can only leave feedback on your own trades.")
 		return
 	}
 	traded, err := a.db.UsersTradedOnPost(r.Context(), postId, userId, req.ToUserId)
@@ -905,7 +909,7 @@ func (a *AppService) PostBulletinFeedback(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if !traded {
-		bulletinError(w, http.StatusForbidden, "not_a_trade", "You can only leave feedback on your own trades.")
+		bulletinError(w, http.StatusConflict, "not_a_trade", "You can only leave feedback on your own trades.")
 		return
 	}
 	if err := a.db.UpsertBulletinTradeFeedback(r.Context(), postId, userId, req.ToUserId, req.Positive); err != nil {

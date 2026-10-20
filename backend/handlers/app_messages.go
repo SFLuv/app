@@ -358,7 +358,7 @@ func (a *AppService) requireCanMessage(w http.ResponseWriter, r *http.Request, u
 		return false
 	}
 	if blocked {
-		bulletinError(w, http.StatusForbidden, "blocked", "You can't send messages in this conversation.")
+		bulletinError(w, http.StatusConflict, "blocked", "You can't send messages in this conversation.")
 		return false
 	}
 	return true
