@@ -76,7 +76,7 @@ func migrateBulletin(ctx context.Context, pools *MigrationPools) error {
 			position SMALLINT NOT NULL CHECK (position BETWEEN 0 AND 5),
 			content_type TEXT NOT NULL CHECK (content_type IN ('image/jpeg', 'image/png', 'image/webp')),
 			image_data BYTEA NOT NULL,
-			size_bytes INTEGER NOT NULL CHECK (size_bytes > 0 AND size_bytes <= 1500000),
+			size_bytes INTEGER NOT NULL CHECK (size_bytes > 0 AND size_bytes <= 4194304),
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			UNIQUE (post_id, position)
 		);

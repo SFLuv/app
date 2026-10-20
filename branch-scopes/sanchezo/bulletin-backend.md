@@ -53,7 +53,8 @@ Product decisions and the full spec live outside the repo, in
   `qr_expires_at`); an event without one runs to local midnight. Cancelled or
   finished events drop the post from the feed.
 - Optional meetup spot: an approved partner merchant.
-- Up to 6 photos per post, raster only (same sniff as location icons),
+- Up to 6 photos per post (4 MB each, the mobile workflow-photo cap), raster
+  only (same sniff as location icons),
   served only to people who can see the post.
 - Rate limit: 5 posts per user per 24h.
 

@@ -28,8 +28,9 @@ const (
 	bulletinMaxRadiusMiles     = 10.0
 	bulletinFeedPageSize       = 20
 	bulletinMaxPhotos          = 6
-	// Phones resize before upload; this is a backstop, not the target size.
-	bulletinMaxPhotoBytes = 1_500_000
+	// Matches the mobile app's workflow-photo cap: the picker compresses at
+	// quality 0.45, which keeps ordinary phone photos well under this.
+	bulletinMaxPhotoBytes = 4 << 20
 	// A ceiling on asking prices, so a typo cannot list a chair for 1,000,000.
 	bulletinMaxPriceSfluv = 10000
 )
