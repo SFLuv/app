@@ -381,15 +381,19 @@ type StoredPhoto struct {
 // photo you would have to already know the id of.
 func (s *BotDB) GetVolunteerEventPhotoData(ctx context.Context, photoId string) (*StoredPhoto, error) {
 	photo := &StoredPhoto{}
+	var objectKey *string
 	err := s.db.QueryRow(ctx, `
-		SELECT p.photo_data, p.content_type
+		SELECT p.photo_data, p.content_type, p.object_key
 		FROM event_photos p
 		JOIN events e ON e.id = p.event_id
 		WHERE p.id = $1
 			AND e.is_volunteer = TRUE
 			AND e.review_status IN ('pending', 'approved', 'cancelled');
-	`, photoId).Scan(&photo.Data, &photo.ContentType)
+	`, photoId).Scan(&photo.Data, &photo.ContentType, &objectKey)
 	if err != nil {
+		return nil, err
+	}
+	if photo.Data, err = resolveBlob(ctx, s.blobs, objectKey, photo.Data); err != nil {
 		return nil, err
 	}
 	return photo, nil
@@ -1263,8 +1267,8 @@ func (s *BotDB) CreateRecurringSuccessor(ctx context.Context, previous *Voluntee
 	// Cover photos are per-occurrence rows, so without this every generated
 	// instance after the first would publish with no images at all.
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO event_photos (id, event_id, position, file_name, content_type, photo_data, size_bytes, width, height)
-		SELECT gen_random_uuid()::text, $1, position, file_name, content_type, photo_data, size_bytes, width, height
+		INSERT INTO event_photos (id, event_id, position, file_name, content_type, photo_data, object_key, size_bytes, width, height)
+		SELECT gen_random_uuid()::text, $1, position, file_name, content_type, photo_data, object_key, size_bytes, width, height
 		FROM event_photos WHERE event_id = $2;
 	`, id, previous.Id); err != nil {
 		return "", fmt.Errorf("error cloning successor cover photos: %s", err)
@@ -1856,11 +1860,17 @@ func (s *BotDB) AddEventBlastImage(ctx context.Context, eventId string, data []b
 
 func (s *BotDB) GetEventBlastImage(ctx context.Context, imageId string) (*StoredPhoto, error) {
 	image := &StoredPhoto{}
+	var objectKey *string
 	if err := s.db.QueryRow(ctx, `
-		SELECT image_data, content_type FROM event_blast_images WHERE id = $1;
-	`, imageId).Scan(&image.Data, &image.ContentType); err != nil {
+		SELECT image_data, content_type, object_key FROM event_blast_images WHERE id = $1;
+	`, imageId).Scan(&image.Data, &image.ContentType, &objectKey); err != nil {
 		return nil, err
 	}
+	data, err := resolveBlob(ctx, s.blobs, objectKey, image.Data)
+	if err != nil {
+		return nil, err
+	}
+	image.Data = data
 	return image, nil
 }
 

@@ -53,6 +53,7 @@ func (a *AppDB) SetLocationPhoto(ctx context.Context, locationID uint, data []by
 		ON CONFLICT (location_id) DO UPDATE
 		SET content_type = EXCLUDED.content_type,
 			image_data = EXCLUDED.image_data,
+			object_key = NULL, -- the bucket copy is of the old photo
 			size_bytes = EXCLUDED.size_bytes,
 			updated_at = NOW()
 		RETURNING updated_at;
@@ -102,12 +103,16 @@ func (a *AppDB) DeleteLocationPhoto(ctx context.Context, locationID uint) error 
 // merchant has not uploaded one.
 func (a *AppDB) GetLocationPhoto(ctx context.Context, locationID uint) (*LocationPhoto, error) {
 	photo := LocationPhoto{}
+	var objectKey *string
 	err := a.db.QueryRow(ctx, `
-		SELECT image_data, content_type, updated_at
+		SELECT image_data, content_type, updated_at, object_key
 		FROM location_photos
 		WHERE location_id = $1;
-	`, locationID).Scan(&photo.Data, &photo.ContentType, &photo.UpdatedAt)
+	`, locationID).Scan(&photo.Data, &photo.ContentType, &photo.UpdatedAt, &objectKey)
 	if err != nil {
+		return nil, err
+	}
+	if photo.Data, err = resolveBlob(ctx, a.blobs, objectKey, photo.Data); err != nil {
 		return nil, err
 	}
 

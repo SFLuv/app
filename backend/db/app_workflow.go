@@ -5959,7 +5959,8 @@ func (a *AppDB) GetWorkflowSubmissionPhotoBlobByID(ctx context.Context, photoID 
 			content_type,
 			size_bytes,
 			created_at,
-			photo_data
+			photo_data,
+			object_key
 		FROM
 			workflow_submission_photos
 		WHERE
@@ -5967,6 +5968,7 @@ func (a *AppDB) GetWorkflowSubmissionPhotoBlobByID(ctx context.Context, photoID 
 	`, photoID)
 
 	photo := &structs.WorkflowSubmissionPhotoBlob{}
+	var objectKey *string
 	if err := row.Scan(
 		&photo.Id,
 		&photo.WorkflowId,
@@ -5978,9 +5980,15 @@ func (a *AppDB) GetWorkflowSubmissionPhotoBlobByID(ctx context.Context, photoID 
 		&photo.SizeBytes,
 		&photo.CreatedAt,
 		&photo.PhotoData,
+		&objectKey,
 	); err != nil {
 		return nil, err
 	}
+	data, err := resolveBlob(ctx, a.blobs, objectKey, photo.PhotoData)
+	if err != nil {
+		return nil, err
+	}
+	photo.PhotoData = data
 	return photo, nil
 }
 
@@ -5997,6 +6005,7 @@ func (a *AppDB) GetWorkflowSubmissionPhotoExports(ctx context.Context, workflowI
 			p.size_bytes,
 			p.created_at,
 				p.photo_data,
+				p.object_key,
 				COALESCE(ws.step_order, 0),
 				COALESCE(wsi.item_order, 0),
 				COALESCE(wsi.title, ''),
@@ -6035,6 +6044,7 @@ func (a *AppDB) GetWorkflowSubmissionPhotoExports(ctx context.Context, workflowI
 	results := []*structs.WorkflowSubmissionPhotoExport{}
 	for rows.Next() {
 		export := &structs.WorkflowSubmissionPhotoExport{}
+		var objectKey *string
 		if err := rows.Scan(
 			&export.Photo.Id,
 			&export.Photo.WorkflowId,
@@ -6046,6 +6056,7 @@ func (a *AppDB) GetWorkflowSubmissionPhotoExports(ctx context.Context, workflowI
 			&export.Photo.SizeBytes,
 			&export.Photo.CreatedAt,
 			&export.Photo.PhotoData,
+			&objectKey,
 			&export.StepOrder,
 			&export.ItemOrder,
 			&export.ItemTitle,
@@ -6054,6 +6065,11 @@ func (a *AppDB) GetWorkflowSubmissionPhotoExports(ctx context.Context, workflowI
 		); err != nil {
 			return nil, fmt.Errorf("error scanning workflow submission photo export row: %s", err)
 		}
+		data, err := resolveBlob(ctx, a.blobs, objectKey, export.Photo.PhotoData)
+		if err != nil {
+			return nil, err
+		}
+		export.Photo.PhotoData = data
 		results = append(results, export)
 	}
 
@@ -8412,6 +8428,7 @@ func (a *AppDB) CompleteWorkflowStep(
 						file_name,
 						content_type,
 						photo_data,
+						object_key,
 						size_bytes,
 						created_at,
 						updated_at
@@ -8425,6 +8442,7 @@ func (a *AppDB) CompleteWorkflowStep(
 					file_name,
 					content_type,
 					photo_data,
+					object_key,
 					size_bytes,
 					created_at,
 					unix_now()

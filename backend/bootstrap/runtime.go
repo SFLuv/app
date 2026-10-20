@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/SFLuv/app/backend/blobstore"
 	"github.com/SFLuv/app/backend/bot"
 	"github.com/SFLuv/app/backend/bridge"
 	"github.com/SFLuv/app/backend/clientconfig"
@@ -309,6 +310,23 @@ func NewServerHandler(ctx context.Context, pools *DBPools, appLogger *logger.Log
 
 	appDb := db.App(pools.App, appLogger)
 	botDb := db.Bot(pools.Bot)
+
+	// Image bucket. Unset (or broken) means every image keeps being served
+	// from Postgres, exactly as before; a bad bucket config must not take the
+	// API down.
+	blobs, err := blobstore.FromEnv()
+	if err != nil {
+		appLogger.Logf("image bucket disabled: %s", err)
+		blobs = nil
+	}
+	if blobs != nil {
+		appDb.SetBlobStore(blobs)
+		botDb.SetBlobStore(blobs)
+		appLogger.Logf("image bucket enabled (backfill: %t)", strings.TrimSpace(os.Getenv("BLOB_BACKFILL")) == "true")
+	} else {
+		appLogger.Logf("image bucket disabled: BLOB_BUCKET not set; images are served from Postgres")
+	}
+
 	ponderDb := db.Ponder(pools.Ponder, appLogger)
 	if err := ponderDb.Ping(); err != nil {
 		return nil, err
@@ -461,6 +479,9 @@ func NewServerHandler(ctx context.Context, pools *DBPools, appLogger *logger.Log
 		// so it stalled whenever nobody hit the right endpoint. Running it on a
 		// timer makes it independent of traffic.
 		handlers.NewWorkflowMaintenanceScheduler(a, workflowMaintenanceInterval()).Start(jobsCtx)
+
+		// Copies image bytes into the bucket; off unless BLOB_BACKFILL=true.
+		StartBlobBackfill(jobsCtx, pools, blobs, appLogger)
 	})
 
 	// Read-only admin MCP endpoint, gated by the existing Privy JWT + admin check.
