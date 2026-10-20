@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/SFLuv/app/backend/blobstore"
 	"strings"
 	"time"
 
@@ -16,10 +17,12 @@ import (
 
 type BotDB struct {
 	db *pgxpool.Pool
+	// blobs is the image bucket; nil means images are served from Postgres.
+	blobs blobstore.Store
 }
 
 func Bot(db *pgxpool.Pool) *BotDB {
-	return &BotDB{db}
+	return &BotDB{db: db}
 }
 
 func (s *BotDB) CreateTables(defaultOwner string) error {

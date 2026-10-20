@@ -48,6 +48,7 @@ func (a *AppDB) SetLocationIcon(ctx context.Context, locationID uint, data []byt
 		ON CONFLICT (location_id) DO UPDATE
 		SET content_type = EXCLUDED.content_type,
 			image_data = EXCLUDED.image_data,
+			object_key = NULL, -- the bucket copy is of the old icon
 			size_bytes = EXCLUDED.size_bytes,
 			updated_at = NOW()
 		RETURNING updated_at;
@@ -97,12 +98,16 @@ func (a *AppDB) DeleteLocationIcon(ctx context.Context, locationID uint) error {
 // merchant has not uploaded one.
 func (a *AppDB) GetLocationIcon(ctx context.Context, locationID uint) (*LocationIcon, error) {
 	icon := LocationIcon{}
+	var objectKey *string
 	err := a.db.QueryRow(ctx, `
-		SELECT image_data, content_type, updated_at
+		SELECT image_data, content_type, updated_at, object_key
 		FROM location_icons
 		WHERE location_id = $1;
-	`, locationID).Scan(&icon.Data, &icon.ContentType, &icon.UpdatedAt)
+	`, locationID).Scan(&icon.Data, &icon.ContentType, &icon.UpdatedAt, &objectKey)
 	if err != nil {
+		return nil, err
+	}
+	if icon.Data, err = resolveBlob(ctx, a.blobs, objectKey, icon.Data); err != nil {
 		return nil, err
 	}
 

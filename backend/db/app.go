@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"fmt"
+	"github.com/SFLuv/app/backend/blobstore"
 
 	"github.com/SFLuv/app/backend/logger"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -11,10 +12,12 @@ import (
 type AppDB struct {
 	db     *pgxpool.Pool
 	logger *logger.LogCloser
+	// blobs is the image bucket; nil means images are served from Postgres.
+	blobs blobstore.Store
 }
 
 func App(db *pgxpool.Pool, logger *logger.LogCloser) *AppDB {
-	return &AppDB{db, logger}
+	return &AppDB{db: db, logger: logger}
 }
 
 func (s *AppDB) CreateTables() error {

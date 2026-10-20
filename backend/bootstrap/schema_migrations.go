@@ -2705,6 +2705,30 @@ var schemaMigrations = []SchemaMigration{
 			return nil
 		},
 	},
+	{
+		Version:     "1.66",
+		Description: "object_key on image tables, for moving image bytes into a bucket",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			// Nullable and unused until a bucket is configured: a row with a
+			// key is served from the bucket, a row without one from its BYTEA
+			// column as before. The BYTEA columns are untouched here; dropping
+			// their bytes is a separate, later step. ADD COLUMN with no default
+			// is a catalog-only change, so this is instant on large tables.
+			for _, t := range db.BlobTables {
+				pool := pools.App
+				if t.Database == "bot" {
+					pool = pools.Bot
+				}
+				if _, err := pool.Exec(ctx, fmt.Sprintf(
+					`ALTER TABLE IF EXISTS %s ADD COLUMN IF NOT EXISTS object_key TEXT;`,
+					pgx.Identifier{t.Table}.Sanitize(),
+				)); err != nil {
+					return fmt.Errorf("error adding object_key to %s: %w", t.Table, err)
+				}
+			}
+			return nil
+		},
+	},
 }
 
 // migrateW9WarningTiers replaces one hard gate with an escalating sequence.

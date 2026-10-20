@@ -173,6 +173,7 @@ func (a *AppDB) SetPartnerLogo(ctx context.Context, id string, data []byte, cont
 		UPDATE partners
 		SET
 			logo_data = $2,
+			object_key = NULL, -- the bucket copy is of the old logo
 			logo_content_type = $3,
 			logo_width = $4,
 			logo_height = $5,
@@ -192,12 +193,16 @@ func (a *AppDB) SetPartnerLogo(ctx context.Context, id string, data []byte, cont
 func (a *AppDB) GetPartnerLogo(ctx context.Context, id string) (*StoredPhoto, error) {
 	logo := &StoredPhoto{}
 	var data []byte
+	var objectKey *string
 	err := a.db.QueryRow(ctx, `
-		SELECT logo_data, logo_content_type
+		SELECT logo_data, logo_content_type, object_key
 		FROM partners
 		WHERE id = $1;
-	`, id).Scan(&data, &logo.ContentType)
+	`, id).Scan(&data, &logo.ContentType, &objectKey)
 	if err != nil {
+		return nil, err
+	}
+	if data, err = resolveBlob(ctx, a.blobs, objectKey, data); err != nil {
 		return nil, err
 	}
 	if len(data) == 0 {

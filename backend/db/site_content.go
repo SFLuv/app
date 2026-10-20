@@ -74,13 +74,17 @@ func (a *AppDB) CreateSiteFile(ctx context.Context, filename string, contentType
 
 func (a *AppDB) GetSiteFileData(ctx context.Context, id string) (*structs.SiteFileData, error) {
 	file := &structs.SiteFileData{}
+	var objectKey *string
 	err := a.db.QueryRow(ctx, `
-		SELECT id, filename, content_type, width, height, data FROM site_files WHERE id = $1;
-	`, id).Scan(&file.Id, &file.Filename, &file.ContentType, &file.Width, &file.Height, &file.Data)
+		SELECT id, filename, content_type, width, height, data, object_key FROM site_files WHERE id = $1;
+	`, id).Scan(&file.Id, &file.Filename, &file.ContentType, &file.Width, &file.Height, &file.Data, &objectKey)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrSiteNotFound
 	}
 	if err != nil {
+		return nil, fmt.Errorf("error loading site file: %s", err)
+	}
+	if file.Data, err = resolveBlob(ctx, a.blobs, objectKey, file.Data); err != nil {
 		return nil, fmt.Errorf("error loading site file: %s", err)
 	}
 	return file, nil
