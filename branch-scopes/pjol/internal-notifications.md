@@ -1,6 +1,6 @@
 # Branch scope — `pjol/internal-notifications`
 
-Oct 19–20 2026 · app + mobile-app + webpage · **3.3h** (2.0h stated, 1.3h measured)
+Oct 19–21 2026 · app + mobile-app + webpage · **3.4h** (2.0h stated, 1.4h measured)
 
 Internal organization notifications, delivered to the mobile app, plus the website's Get in touch
 flow and a rebuilt mobile boot sequence.
@@ -353,6 +353,8 @@ Three things fell out of doing it:
 | Round 3 — measured | 0.17h |
 | **Total** | **3.3h** |
 
+Round 4 came after this table; its own totals table below supersedes it.
+
 ## Volume
 
 | Repo | Files | Lines |
@@ -380,5 +382,97 @@ four lines over `strings.Cut`, but it has not been run.
   what the device's tray list used to show. An active conversation will bury receipts under it.
   Including them was the safer default — a notification somebody remembers receiving should be
   findable — but it is one `recordNotification` call in `notifyNewMessage` if it reads wrong in use,
-  since Messages carries its own unread state anyway.
+  since Messages carries its own unread state anyway. **Answered in round 4**: the call is gone, the
+  push stays, and the count moved to the Messages tab.
 - **History still starts empty**, and the first rows appear only as new notifications are sent.
+
+# Round 4 — Oct 21, messages leave the history and the chat tab gets its own count
+
+Oct 21 2026 · **0.1h measured, and the figure is an upper bound** · app + mobile-app
+
+Round 3 flagged chat messages landing in notification history as a thing to decide. The decision:
+they keep the iOS push, they write no history row, and the Messages tab carries their count.
+
+## How these hours were measured
+
+**0.1h measured** from session-transcript timestamps, 30-minute sitting gap, `time-accounting`.
+
+| Sitting | Span | Measured |
+|---|---|---|
+| D | 11:55–12:02 | 0.12h → **0.1h** |
+
+**This one's weakness is the opposite of round 3's, and worth reading before quoting the number.**
+Round 3's figure was a floor because its sitting was still open. This figure is an **upper bound**:
+a second project (`ChatMTG`) was active 11:39–12:02, which covers every minute of this sitting. The
+two sessions were interleaved, so the clock cannot say how the seven minutes divided between them.
+
+Round 2's rule — deduct the other project's span from the sitting — gives 0.0h here, which is false:
+a backend change, two mobile files and a verification pass are in this round. So the span is reported
+whole, with the overlap named, rather than deducted into nothing or quietly ignored. **Somewhere
+between 0.0h and 0.1h of this is this branch**, and the honest half of that sentence is the second
+one.
+
+## The change
+
+**Messages still push; they are no longer recorded.** Round 3 wired the history recorder into six
+push paths, chat messages among them, and said in its own open items that an active conversation
+would bury receipts. It does — and the row was never needed, because a message is the one
+notification with somewhere better to be counted. The thread carries its own unread state, the inbox
+shows a dot per conversation, and now the dock shows the total.
+
+Rows written during the one day that behaviour existed are swept by the housekeeping sweep, whatever
+their age, rather than by a migration — the same treatment the dead tax markers got in round 3.
+Nothing writes one, so the sweep drains them and then does nothing forever.
+
+**The Messages tab carries the count.** `GET /me/messaging-summary` already existed, unused by the
+app: Sanchez wrote it for "the notification bell", which is exactly where messages turned out not to
+belong. Three sources keep it honest, and the cheapest does most of the work:
+
+- **The Messages screen reports its own**, counted from the inbox it already polls every fifteen
+  seconds. So the badge clears when you back out of a thread, not on the shell's next poll.
+- **An arriving push bumps it**, filtered to `bulletin_message` — the same pattern the merchant
+  till's incoming-payment confirmation uses. The server does the counting, because two messages in
+  one conversation are one unread conversation and only it knows that.
+- **A 60s poll covers the person who has push turned off**, and skips itself while the Messages
+  screen is up, since that screen is already answering the question.
+
+A failed request leaves the badge where it was. Clearing it on a dropped connection is the one wrong
+answer available.
+
+**The invariant the dock already had is intact.** The Participate tab carries no dot, with a comment
+saying why: a notification is counted in exactly one place, and a second indicator either repeats the
+bell or disagrees with it. Messages are now the kind that is *not* in the bell's ledger at all, so
+the tab is that one place for them and nothing says it twice.
+
+## Smaller items
+
+| What | Hours | Repo |
+|---|---|---|
+| Reading a thread clears its iOS shade entry, by any route in | 0.02h | mobile-app |
+
+Three code paths open a thread — a deep link, a search result, a tap in the inbox — and only the
+first cleared the notification, because only it arrived through the push handler. One effect on the
+open thread id now covers all three, so a message read from the inbox stops sitting in the shade.
+
+## Totals
+
+| Source | Hours |
+|---|---|
+| Round 1 — stated (dev meeting, website review) | 2.00h |
+| Round 2 — measured | 1.15h |
+| Round 3 — measured | 0.17h |
+| Round 4 — measured, upper bound | 0.12h |
+| **Total** | **3.4h** |
+
+## Volume
+
+| Repo | Files | Lines |
+|---|---|---|
+| app | 2 modified | +22 / −1 |
+| mobile-app | 2 modified | +174 / −4 |
+
+## Open
+
+- **The dock badge counts conversations, not messages.** Ten messages in one thread read as "1".
+  That is what the server's summary counts and what the inbox's own dots mean, so all three agree,
+  but it is a choice rather than an oversight.

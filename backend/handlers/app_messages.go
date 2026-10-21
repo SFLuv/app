@@ -595,11 +595,17 @@ func (a *AppService) notifyNewMessage(senderId, recipientId string, conversation
 		if title == "" {
 			title = "New message"
 		}
+		// The phone buzzes; nothing is written to the notification history.
+		//
+		// A message is the one push with somewhere better to be counted. The
+		// thread carries its own unread state, the inbox shows a dot per
+		// conversation and the Messages tab carries the count, so a history row
+		// would be the third place saying the same thing — and the one most
+		// likely to bury a payout receipt under an afternoon of chat.
 		data := map[string]string{
 			"type":            "bulletin_message",
 			"conversation_id": strconv.FormatInt(conversationId, 10),
 		}
-		a.recordNotification(ctx, recipientId, "bulletin_message", title, preview, data)
 
 		subscriptions, err := a.db.GetMobilePushSubscriptionsByUser(ctx, recipientId)
 		if err != nil {

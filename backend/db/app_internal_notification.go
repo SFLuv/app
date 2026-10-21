@@ -707,6 +707,21 @@ func (a *AppDB) PruneNotificationHistory(ctx context.Context) (int64, error) {
 	}
 	removed := tag.RowsAffected()
 
+	// Chat messages are no longer written here, and the rows that exist are
+	// from the short window when they were. They are swept whatever their age,
+	// because the Messages tab counts them and the thread holds them: a copy in
+	// this history is the third place saying so, which is the reason recording
+	// them stopped. Nothing writes one, so this drains and then does nothing.
+	messageTag, err := a.db.Exec(ctx, `
+		DELETE FROM user_notifications
+		WHERE internal_notification_id IS NULL
+		AND kind = 'bulletin_message';
+	`)
+	if err != nil {
+		return removed, fmt.Errorf("error pruning message notifications: %w", err)
+	}
+	removed += messageTag.RowsAffected()
+
 	alertTag, err := a.db.Exec(ctx, `
 		DELETE FROM internal_notifications
 		WHERE resolved_at IS NOT NULL
