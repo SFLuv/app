@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-// migrateInternalNotifications is the 1.67 migration body: internal
+// migrateInternalNotifications is the 1.68 migration body: internal
 // organization alerts, who receives them, and the per-user history the mobile
 // app reads.
 //

@@ -32,6 +32,23 @@ type AppService struct {
 	// uptime is the health poller, consulted by the acknowledge button so an
 	// outage cannot be acknowledged while it is still happening.
 	uptime *UptimeService
+	// protocolSvc owns the backend's own Safes and the keys that sign for them.
+	// Wired after construction because it needs the client config this service
+	// already holds.
+	protocolSvc *ProtocolService
+}
+
+// SetProtocolService wires the protocol accounts in.
+func (a *AppService) SetProtocolService(service *ProtocolService) {
+	a.protocolSvc = service
+}
+
+// Protocol exposes the service for the boot sequence and the bot wiring.
+func (a *AppService) Protocol() *ProtocolService {
+	if a == nil {
+		return nil
+	}
+	return a.protocolSvc
 }
 
 func NewAppService(db *db.AppDB, logger *logger.LogCloser, payouts *PayoutService, w9Provider w9provider.Provider, clientConfig *clientconfig.Config) *AppService {

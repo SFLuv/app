@@ -48,6 +48,78 @@ type Bot struct {
 	tokenId       string
 	tokenDecimals int
 	client        *ethclient.Client
+
+	// senders answers "which addresses were the faucet at this moment on this
+	// chain". Injected rather than queried, so this package keeps knowing
+	// nothing about the database.
+	//
+	// Nil is the pre-registry behaviour: the expected sender is derived from
+	// the key in hand, which is correct right up until the key changes.
+	senders SenderResolver
+
+	// txSenders answers the same question as senders, by transaction hash
+	// instead of by time. Consulted first.
+	txSenders TxSenderResolver
+
+	// Set once the faucet has moved to its Safe. Both nil means the EOA path.
+	spender   Spender
+	balanceOf BalanceReader
+}
+
+// SenderResolver resolves the faucet's addresses as of a moment. A set, not one
+// address, because a cutover is a boundary rather than an instant and both
+// sides of it are legitimate senders for an item that straddles it.
+type SenderResolver func(ctx context.Context, chainID int64, at time.Time) ([]common.Address, error)
+
+// SetSenderResolver installs the historical lookup. Called once at wiring time.
+func (b *Bot) SetSenderResolver(resolver SenderResolver) {
+	if b == nil {
+		return
+	}
+	b.senders = resolver
+}
+
+// TxSenderResolver answers "which of our addresses sent this transaction",
+// looked up by hash.
+//
+// Preferred over the timestamp lookup wherever it answers, because it is a
+// record of what happened rather than a deduction from when it happened. The
+// window arithmetic stays for everything sent before that record existed.
+type TxSenderResolver func(ctx context.Context, txHash string) (common.Address, bool)
+
+// SetTxSenderResolver installs the by-hash lookup.
+func (b *Bot) SetTxSenderResolver(resolver TxSenderResolver) {
+	if b == nil {
+		return
+	}
+	b.txSenders = resolver
+}
+
+// Spender sends tokens from wherever the faucet currently lives, returning the
+// hash of the transaction that carried them.
+//
+// A transaction hash, not an operation hash: everything downstream — the payout
+// ledger, the reconciler, the verifier — treats this value as something it can
+// look up as a receipt, and handing back something that is not one would break
+// all three in ways that look like missing payouts.
+type Spender func(ctx context.Context, amountBase *big.Int, to common.Address) (string, error)
+
+// BalanceReader reads the faucet's spendable balance from its current home.
+type BalanceReader func(ctx context.Context) (*big.Int, error)
+
+// SetFaucet routes sends and balance reads through the faucet Safe.
+//
+// Installed only once the Safe is deployed and funded. Until then both are nil
+// and this package does exactly what it did before: sign an ordinary transfer
+// with the key in the environment and read the balance of that key's address.
+// That fallback is what makes the cutover safe to deploy ahead of running —
+// the new code with no Safe behaves like the old code.
+func (b *Bot) SetFaucet(spender Spender, balance BalanceReader) {
+	if b == nil {
+		return
+	}
+	b.spender = spender
+	b.balanceOf = balance
 }
 
 type SendError struct {
@@ -231,16 +303,37 @@ func (b *Bot) submitTransferTxBaseUnits(tokenAmount *big.Int, address string) (*
 }
 
 func (b *Bot) SubmitTransfer(amount uint64, address string) (string, error) {
-	tx, err := b.submitTransferTx(amount, address)
+	tokenAmount, err := b.tokenAmountFromWholeUnits(amount)
 	if err != nil {
 		return "", err
 	}
-	return tx.Hash().Hex(), nil
+	return b.SubmitTransferBaseUnits(tokenAmount, address)
 }
 
 // SubmitTransferBaseUnits sends an exact base-unit amount and returns the tx
 // hash. Used by the migration recovery flow to pay precise stored balances.
 func (b *Bot) SubmitTransferBaseUnits(amount *big.Int, address string) (string, error) {
+	// The Safe path when the faucet has moved, the key path when it has not.
+	// Both answer with a transaction hash, so no caller can tell which ran.
+	if b != nil && b.spender != nil {
+		if amount == nil || amount.Sign() <= 0 {
+			return "", fmt.Errorf("transfer amount must be positive")
+		}
+		if !common.IsHexAddress(address) {
+			return "", fmt.Errorf("invalid recipient address: %s", address)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		defer cancel()
+		hash, err := b.spender(ctx, amount, common.HexToAddress(address))
+		if err != nil {
+			// Marked as not worth reverting the redemption for: the operation
+			// may yet land, and voiding the code would let the same reward be
+			// claimed twice.
+			return "", newSendError(err, false)
+		}
+		return hash, nil
+	}
+
 	tx, err := b.submitTransferTxBaseUnits(amount, address)
 	if err != nil {
 		return "", err
@@ -318,7 +411,20 @@ func (b *Bot) verifyTransferReceiptOn(
 		return result, nil
 	}
 
-	fromAddress, err := b.deriveFromAddress()
+	// Who counts as "us" is a question about when this transfer happened, not
+	// about which key is in the environment now.
+	//
+	// The faucet used to be an EOA whose address was the key's address, so the
+	// check could derive it and compare. Once the faucet became a Safe with a
+	// replaceable signer, that comparison started answering for today and
+	// failing every older payout — the money had plainly gone out, and the step
+	// read as unpaid forever because the sender no longer matched.
+	//
+	// The timestamp comes off the receipt's own block rather than from the
+	// caller. It is the authoritative moment for this transfer, it needs no
+	// threading through five call sites, and it cannot drift from the item the
+	// way a separately recorded date can.
+	acceptedSenders, err := b.sendersForReceipt(ctx, client, receipt)
 	if err != nil {
 		return nil, err
 	}
@@ -337,7 +443,7 @@ func (b *Bot) verifyTransferReceiptOn(
 		logFrom := common.BytesToAddress(lg.Topics[1].Bytes()[12:])
 		logTo := common.BytesToAddress(lg.Topics[2].Bytes()[12:])
 		logAmount := new(big.Int).SetBytes(lg.Data)
-		if logFrom == fromAddress && logTo == toAddress && logAmount.Cmp(tokenAmount) == 0 {
+		if acceptedSenders[logFrom] && logTo == toAddress && logAmount.Cmp(tokenAmount) == 0 {
 			result.Successful = true
 			return result, nil
 		}
@@ -348,6 +454,15 @@ func (b *Bot) verifyTransferReceiptOn(
 
 // send {amount} tokens to {address}
 func (b *Bot) Send(amount uint64, address string) error {
+	// On the Safe path there is nothing to wait for here: the spender does not
+	// return until it has seen the transfer land, so a submitted hash is
+	// already a mined one. Waiting again would mean waiting for a receipt we
+	// have in effect already read.
+	if b != nil && b.spender != nil {
+		_, err := b.SubmitTransfer(amount, address)
+		return err
+	}
+
 	tx, err := b.submitTransferTx(amount, address)
 	if err != nil {
 		return err
@@ -418,7 +533,19 @@ func (b *Bot) Drain(address common.Address) error {
 	return nil
 }
 
+// Balance is the faucet's spendable SFLUV.
+//
+// Read from wherever the faucet is now, which is the whole of why this is not
+// just a BalanceOf on BOT_ADDRESS any more. Once the money is in the Safe, an
+// env-address read reports zero, and a faucet that reports zero refuses every
+// payout and blocks every workflow approval for want of balance.
 func (b *Bot) Balance() (*big.Int, error) {
+	if b != nil && b.balanceOf != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		return b.balanceOf(ctx)
+	}
+
 	tokenAddress := common.HexToAddress(b.tokenId)
 
 	contract, err := abi.NewSFLUVv2(tokenAddress, b.client)
@@ -606,4 +733,79 @@ func (b *Bot) Address() (string, error) {
 		return "", fmt.Errorf("error parsing public key into ecdsa type")
 	}
 	return crypto.PubkeyToAddress(*pubKey).Hex(), nil
+}
+
+// sendersForReceipt resolves which addresses may have sent this transfer as the
+// faucet.
+//
+// Two ways of answering, in order of how much they are worth. If we recorded
+// this transaction when we submitted it, that record says exactly which account
+// sent it. Otherwise the answer is deduced from the block's timestamp and the
+// address windows, which is how anything older than the record gets answered.
+//
+// Falls back to the key's own address whenever the registry cannot answer —
+// no resolver wired, a chain it has no rows for, an unreadable block header.
+// That fallback is exactly the behaviour this check had before the registry
+// existed, so a lookup failure degrades to the old answer rather than marking a
+// real payout missing.
+func (b *Bot) sendersForReceipt(
+	ctx context.Context,
+	client *ethclient.Client,
+	receipt *types.Receipt,
+) (map[common.Address]bool, error) {
+	fallback := func() (map[common.Address]bool, error) {
+		derived, err := b.deriveFromAddress()
+		if err != nil {
+			return nil, err
+		}
+		return map[common.Address]bool{derived: true}, nil
+	}
+
+	if b == nil || receipt == nil || client == nil {
+		return fallback()
+	}
+
+	// The recorded answer first. We write down which of our accounts caused
+	// each transaction we submit, so for anything sent since that record
+	// existed this is a lookup rather than a deduction — and a lookup cannot be
+	// wrong about a transfer that straddles a cutover boundary.
+	if b.txSenders != nil {
+		if sender, ok := b.txSenders(ctx, receipt.TxHash.Hex()); ok {
+			accepted := map[common.Address]bool{sender: true}
+			if derived, err := b.deriveFromAddress(); err == nil {
+				accepted[derived] = true
+			}
+			return accepted, nil
+		}
+	}
+
+	if b.senders == nil {
+		return fallback()
+	}
+
+	chainID, err := client.ChainID(ctx)
+	if err != nil || chainID == nil {
+		return fallback()
+	}
+	header, err := client.HeaderByHash(ctx, receipt.BlockHash)
+	if err != nil || header == nil {
+		return fallback()
+	}
+
+	addresses, err := b.senders(ctx, chainID.Int64(), time.Unix(int64(header.Time), 0).UTC())
+	if err != nil || len(addresses) == 0 {
+		return fallback()
+	}
+
+	accepted := make(map[common.Address]bool, len(addresses)+1)
+	for _, address := range addresses {
+		accepted[address] = true
+	}
+	// The key in hand is always acceptable. A payout sent moments ago by a
+	// signer whose window has not been written yet is still ours, and refusing
+	// it would be the same bug in a narrower form.
+	if derived, err := b.deriveFromAddress(); err == nil {
+		accepted[derived] = true
+	}
+	return accepted, nil
 }

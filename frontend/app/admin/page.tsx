@@ -67,6 +67,7 @@ import {
   Copy,
   BarChart3,
   Inbox,
+  ShieldCheck,
 } from "lucide-react"
 import { useLocation } from "@/context/LocationProvider"
 import { AuthedLocation, UpdateLocationApprovalRequest } from "@/types/location"
@@ -96,6 +97,7 @@ import { WorkflowDetailsModal } from "@/components/workflows/workflow-details-mo
 import { AdminAnalyticsPanel } from "@/components/admin/admin-analytics-panel"
 import { PartnersPanel } from "@/components/admin/partners-panel"
 import { MerchantPayoutsPanel } from "@/components/admin/merchant-payouts-panel"
+import { ProtocolPanel } from "@/components/admin/protocol-panel"
 import type { W9AdminOverview } from "@/types/w9"
 import type { ClientVersionUserCountResponse, UserResponse } from "@/types/server"
 
@@ -295,6 +297,7 @@ export default function AdminPage() {
       "credential-types",
       "partners",
       "payouts",
+      "protocol",
     ].includes(value)
   }
 
@@ -2848,6 +2851,10 @@ export default function AdminPage() {
             <TabsTrigger value="payouts" className="w-full justify-between px-3 py-2">
               <span>Payouts</span>
             </TabsTrigger>
+            <TabsTrigger value="protocol" className="w-full justify-between px-3 py-2">
+              <span>Protocol</span>
+              <ShieldCheck className="h-4 w-4 text-muted-foreground" />
+            </TabsTrigger>
           </TabsList>
 
           <div className="min-w-0">
@@ -2862,6 +2869,10 @@ export default function AdminPage() {
 
         <TabsContent value="payouts" className="space-y-6">
           <MerchantPayoutsPanel />
+        </TabsContent>
+
+        <TabsContent value="protocol" className="space-y-6">
+          <ProtocolPanel />
         </TabsContent>
 
         <TabsContent value="tokens" className="space-y-6">

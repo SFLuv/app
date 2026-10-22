@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-// migrateBulletin is the 1.66 migration body: the neighborhood Bulletin board
+// migrateBulletin is the 1.67 migration body: the neighborhood Bulletin board
 // (posts and their photos), direct messages between users, and the safety
 // tables both need (blocks, reports, moderation actions, trade feedback).
 //

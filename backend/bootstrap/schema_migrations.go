@@ -2706,14 +2706,28 @@ var schemaMigrations = []SchemaMigration{
 		},
 	},
 	{
+		// The protocol accounts come first because their branch merges first.
+		//
+		// The order is not cosmetic: the runner applies a migration only when
+		// its version is above the one recorded in the database, so whichever
+		// branch lands first fixes the floor for everything behind it. If this
+		// one had kept a number above the protocol accounts', a database taken
+		// there by the earlier merge would never run it.
 		Version:     "1.66",
+		Description: "protocol smart accounts, their encrypted signers, and the history of which address held which protocol role",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			return migrateProtocolAccounts(ctx, pools)
+		},
+	},
+	{
+		Version:     "1.67",
 		Description: "bulletin board posts, direct messages, and their safety tables",
 		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
 			return migrateBulletin(ctx, pools)
 		},
 	},
 	{
-		Version:     "1.67",
+		Version:     "1.68",
 		Description: "internal organization alerts, their recipients, and per-user notification history",
 		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
 			return migrateInternalNotifications(ctx, pools)
