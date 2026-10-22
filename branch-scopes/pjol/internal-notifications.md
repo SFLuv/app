@@ -1,6 +1,6 @@
 # Branch scope — `pjol/internal-notifications`
 
-Oct 19–22 2026 · app + mobile-app + webpage · **7.7h** (4.3h stated, 3.4h measured)
+Oct 19–22 2026 · app + mobile-app + webpage · **8.6h** (5.2h stated, 3.4h measured)
 
 Includes the `pjol/bot-smart-wallet-hotfix` branch, which this one sits on top of and which merges
 into main first. Its hours are rolled into the totals at the foot of this document; its own file stays
@@ -660,13 +660,14 @@ quote, which is the rule this folder already follows where the two disagree.
 
 # Round 7 — Oct 22, the merge-forward, and a label the cutover will break
 
-Oct 22 2026 · **0.2h measured** · app (plus a read of `mobile-app`)
+Oct 22 2026 · **0.9h stated, 0.2h measured** · app (plus a read of `mobile-app`)
 
-Two short windows, no features. The first finished the work round 6 was written in the middle of. The
-second answered a question about the mobile app's transaction history and turned up something the
-protocol cutover breaks.
+Two short measured windows and a stated hour between them, no features. The first measured window
+finished the work round 6 was written in the middle of. The second answered a question about the mobile
+app's transaction history and turned up something the protocol cutover breaks. The hour between them
+was worked away from the keyboard, so only its owner can account for it.
 
-## How these hours were measured
+## How these hours were recorded
 
 **0.2h measured**, both windows from the session transcript, clustered on a 30-minute gap.
 
@@ -688,10 +689,14 @@ conversation ran out of room — and the next human event is at 15:49:41. The 30
 cannot tell those two apart, so left alone it banks 25 minutes of machine bookkeeping as work.
 Deducted: the sitting starts at 15:49.
 
-**The 14:28–15:24 window is not recorded here, because nothing can see it.** No transcript events in
-any project, no file modified in either repository, no commit. Fifty-six minutes the clock has no
-account of. If they were spent building and testing — which is what the plan asked for next — that is
-stated time, and it belongs in a stated row on the owner's word rather than a measured one on mine.
+**0.9h stated — Oct 22 14:28–15:24.** Stated by the owner as working time spent away from the
+keyboard. **Nothing corroborates it and nothing can**: no transcript event in any project, no file
+modified in either repository, no commit in the window. That is what the clock looks like when the work
+is not being typed, which is evidence about where the hour went rather than evidence against it.
+
+This document does not say what the hour contained, because nothing was stated about its content and
+inventing one would be the same error as inventing the figure. Recorded as stated, at the span given,
+which is what the convention asks for when the clock was not consulted.
 
 **The sitting is open as this is written**, so the 0.12h is a floor.
 
@@ -746,7 +751,6 @@ branch.
 | Item | Where |
 |---|---|
 | The mobile app's Reward label breaks at the faucet cutover — publish `faucet_addresses` as a list extra and test membership | app `backend/clientconfig/config.go`, mobile-app `mobile/src/utils/transactions.ts` |
-| The 14:28–15:24 window is unaccounted for; stated time if it was testing | this document |
 
 ## Totals across this branch
 
@@ -760,8 +764,8 @@ Supersedes round 6's table, which did not have this round in it.
 | Round 4 — messages and the chat tab | 0.12h | measured, upper bound |
 | Round 5 — ordering behind the hotfix | 0.23h | measured |
 | Round 6 — last night, and today's tail | 1.00h stated + 0.15h measured | mixed |
-| Round 7 — merge-forward, and the client-side label | 0.18h | measured |
-| **Total** | **5.0h** | 2.0h measured, 3.0h stated |
+| Round 7 — merge-forward, the afk hour, and the client-side label | 0.90h stated + 0.18h measured | mixed |
+| **Total** | **5.9h** | 2.0h measured, 3.9h stated |
 
 # Consolidated — both branches
 
@@ -795,20 +799,22 @@ added up here.
 | Oct 20 10:00–11:00 — website review | 1.00h | notifications 1 | stated |
 | Oct 21 evening | 1.00h | notifications 6 | stated, no transcript |
 | Oct 22 ~10:00–11:18 — review of the smart-wallet branch | 1.30h | hotfix 3 | stated, no transcript |
-| | **Total stated** | **4.30h** | |
+| Oct 22 14:28–15:24 — worked away from the keyboard | 0.90h | notifications 7 | stated, no transcript |
+| | **Total stated** | **5.20h** | |
 
 ## Both
 
 | | Hours |
 |---|---|
 | Measured | 3.4h |
-| Stated | 4.3h |
-| **Total** | **7.7h** |
+| Stated | 5.2h |
+| **Total** | **8.6h** |
 
-**Read the two kinds separately.** More than half of this is stated rather than measured, and two of
-the stated windows have no session behind them at all — they are the owner's account of their own
-time, recorded as such. The measured column is session-transcript spans clustered on a 30-minute gap,
-unioned across every project worked in, which is the only part of this the clock can support.
+**Read the two kinds separately.** Three fifths of this is stated rather than measured, and three of
+the stated windows have no session behind them at all — a meeting, a site review, and an hour worked
+away from the keyboard. Those are the owner's account of their own time, recorded as such. The measured
+column is session-transcript spans clustered on a 30-minute gap, unioned across every project worked
+in, which is the only part of this the clock can support.
 
 **Four measured figures carry named weaknesses**, each written up in its own round: 0.07h of one
 Oct 20 sitting went to another repository and is deducted; the Oct 21 figure is an *upper bound*
@@ -817,17 +823,14 @@ still open when its round was written is a floor; and the Oct 22 15:49 sitting h
 deducted from what the script reports, because the clustering rule counted a context-compaction
 record as the sitting's start — the only weakness here that ran toward overstating rather than under.
 
-**One window of the day is in neither column.** Oct 22 14:28–15:24, fifty-six minutes with no
-transcript event in any project, no file modified in either repository and no commit. It is left out
-rather than estimated; round 7 says so.
 
 ## What is in each branch
 
 | Branch | Measured | Stated | Total | What |
 |---|---|---|---|---|
 | `pjol/bot-smart-wallet-hotfix` | 1.36h | 1.30h | **2.7h** | Protocol Safes, rotatable signers, historical address checks, and the work to make the leaked keys deletable |
-| `pjol/internal-notifications` | 2.00h | 3.00h | **5.0h** | Internal alerts, the mobile notification screen and boot cache, the bulletin merge, the website's Get in touch, paymaster-only gas alerting, and the client-side transaction label the cutover breaks |
-| **Together** | **3.36h** | **4.30h** | **7.7h** | |
+| `pjol/internal-notifications` | 2.00h | 3.90h | **5.9h** | Internal alerts, the mobile notification screen and boot cache, the bulletin merge, the website's Get in touch, paymaster-only gas alerting, and the client-side transaction label the cutover breaks |
+| **Together** | **3.36h** | **5.20h** | **8.6h** | |
 
-The per-branch totals round independently. They happen to agree this round — 2.7h and 5.0h sum to the
-7.7h above — but where a split and a measured total disagree, the measured total is the one to quote.
+The per-branch totals round independently. They happen to agree this round — 2.7h and 5.9h sum to the
+8.6h above — but where a split and a measured total disagree, the measured total is the one to quote.
