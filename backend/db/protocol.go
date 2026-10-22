@@ -559,7 +559,11 @@ func (a *AppDB) GetSealedProtocolSigner(ctx context.Context, id int64) (*SealedP
 
 // ProtocolTransaction is one transaction we know we caused.
 type ProtocolTransaction struct {
-	TxHash        string
+	TxHash string
+	// LogIndex identifies which transfer within the transaction this is.
+	// Batched payouts share a transaction, so the hash alone does not identify
+	// one payout's money.
+	LogIndex      uint
 	ChainID       int
 	AccountKey    string
 	SenderAddress string
@@ -604,11 +608,11 @@ func (a *AppDB) ClaimProtocolTransaction(ctx context.Context, record ProtocolTra
 	var claimed bool
 	err := a.db.QueryRow(ctx, `
 		INSERT INTO protocol_transactions(
-			tx_hash, chain_id, account_key, sender_address, signer_address,
+			tx_hash, log_index, chain_id, account_key, sender_address, signer_address,
 			operation_hash, purpose, recipient, amount_base, block_number
 		)
-		VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9::numeric, $10)
-		ON CONFLICT (tx_hash) DO NOTHING
+		VALUES($1, $11, $2, $3, $4, $5, $6, $7, $8, $9::numeric, $10)
+		ON CONFLICT (tx_hash, log_index) DO NOTHING
 		RETURNING TRUE;
 	`,
 		hash, record.ChainID, record.AccountKey,
@@ -616,7 +620,7 @@ func (a *AppDB) ClaimProtocolTransaction(ctx context.Context, record ProtocolTra
 		strings.ToLower(strings.TrimSpace(record.SignerAddress)),
 		record.OperationHash, record.Purpose,
 		strings.ToLower(strings.TrimSpace(record.Recipient)),
-		amount, block,
+		amount, block, int(record.LogIndex),
 	).Scan(&claimed)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -636,10 +640,13 @@ func (a *AppDB) ClaimProtocolTransaction(ctx context.Context, record ProtocolTra
 // as a foreign transaction.
 func (a *AppDB) ProtocolTransactionSender(ctx context.Context, txHash string) (string, string, bool, error) {
 	var sender, accountKey string
+	// Any row for the hash answers it: every transfer in a batched transaction
+	// was sent by the same account, which is the only thing asked here.
 	err := a.db.QueryRow(ctx, `
 		SELECT LOWER(sender_address), account_key
 		FROM protocol_transactions
-		WHERE tx_hash = LOWER($1);
+		WHERE tx_hash = LOWER($1)
+		LIMIT 1;
 	`, strings.TrimSpace(txHash)).Scan(&sender, &accountKey)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {

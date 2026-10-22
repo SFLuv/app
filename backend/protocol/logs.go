@@ -46,10 +46,14 @@ func (c *Client) BlockNumber(ctx context.Context) (uint64, error) {
 	return client.BlockNumber(ctx)
 }
 
-// TransferClaim records a candidate transaction as belonging to this operation
-// and reports whether the claim succeeded. False means another operation
-// already owns it, and the search carries on to the next candidate.
-type TransferClaim func(txHash string, blockNumber uint64) (bool, error)
+// TransferClaim records a candidate transfer as belonging to this payout and
+// reports whether the claim succeeded. False means another payout already owns
+// it, and the search carries on to the next candidate.
+//
+// The log index is part of what is claimed, not decoration: batched payouts
+// share one transaction, so the hash alone does not identify one payout's
+// money.
+type TransferClaim func(txHash string, blockNumber uint64, logIndex uint) (bool, error)
 
 // AwaitTransfer waits for the token transfer a sponsored operation was supposed
 // to produce, and returns the hash of the transaction that carried it.
@@ -121,7 +125,7 @@ func (c *Client) AwaitTransfer(
 			if claim == nil {
 				return candidate.hash, nil
 			}
-			claimed, err := claim(candidate.hash, candidate.block)
+			claimed, err := claim(candidate.hash, candidate.block, candidate.index)
 			if err != nil {
 				return "", err
 			}

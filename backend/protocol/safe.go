@@ -230,3 +230,95 @@ func (c *Client) HasRole(ctx context.Context, token common.Address, role [32]byt
 	}
 	return new(big.Int).SetBytes(raw).Sign() != 0, nil
 }
+
+// ── Batching ─────────────────────────────────────────────────────────────────
+
+// MultiSendCallOnly is Safe's batching helper, at its canonical deployment.
+//
+// The "call only" variant deliberately. Batching requires the Safe to
+// DELEGATECALL into a helper — that is the only way one operation can make
+// several calls — and this is the variant that then performs each inner call as
+// an ordinary CALL and reverts on a delegatecall. So the Safe's storage is
+// executed against by exactly one contract whose whole job is a loop, rather
+// than by whatever the batch happens to contain.
+//
+// Verified deployed at this address on Celo (410 bytes) before relying on it.
+var MultiSendCallOnly = common.HexToAddress("0x9641d764fc13c8B624c04430C7356C1C7C8102e2")
+
+const multiSendABI = `[
+	{"type":"function","name":"multiSend","stateMutability":"payable",
+	 "inputs":[{"name":"transactions","type":"bytes"}],"outputs":[]}
+]`
+
+// BatchedCall is one call inside a batch.
+type BatchedCall struct {
+	To    common.Address
+	Value *big.Int
+	Data  []byte
+}
+
+// MultiSendCallData encodes a batch for MultiSendCallOnly.
+//
+// The inner encoding is Safe's own packing, which is not ABI encoding: each
+// call is one byte of operation, twenty of address, thirty-two of value,
+// thirty-two of data length, then the data, concatenated with no padding
+// between entries. Getting it wrong does not fail cleanly — the helper walks
+// the bytes by those offsets — so this was checked against the reference
+// encoder's output before use.
+//
+// The operation byte is zero for every call. MultiSendCallOnly would revert on
+// anything else, and this keeps that true at the point the bytes are written
+// rather than relying on the helper to catch it.
+func MultiSendCallData(calls []BatchedCall) ([]byte, error) {
+	if len(calls) == 0 {
+		return nil, fmt.Errorf("no calls to batch")
+	}
+
+	packed := []byte{}
+	for _, call := range calls {
+		value := call.Value
+		if value == nil {
+			value = big.NewInt(0)
+		}
+		packed = append(packed, 0)
+		packed = append(packed, call.To.Bytes()...)
+		packed = append(packed, common.LeftPadBytes(value.Bytes(), 32)...)
+		packed = append(packed, common.LeftPadBytes(big.NewInt(int64(len(call.Data))).Bytes(), 32)...)
+		packed = append(packed, call.Data...)
+	}
+
+	return packed2(multiSendABI, "multiSend", packed)
+}
+
+// packed2 is packed() for a single bytes argument, kept separate only because
+// the variadic form cannot take a []byte without it being read as the args
+// slice.
+func packed2(rawABI, method string, arg []byte) ([]byte, error) {
+	return packed(rawABI, method, arg)
+}
+
+// BatchCallData wraps a batch as the operation's callData.
+//
+// Operation 1 — DELEGATECALL — because that is what batching is: the Safe runs
+// MultiSendCallOnly's loop as itself, so each transfer inside comes from the
+// Safe. Single calls stay on operation 0 and never go near this.
+func BatchCallData(calls []BatchedCall) ([]byte, error) {
+	inner, err := MultiSendCallData(calls)
+	if err != nil {
+		return nil, err
+	}
+	return packed(safeABI, "execTransactionFromModule", MultiSendCallOnly, big.NewInt(0), inner, uint8(1))
+}
+
+// AddOwnerCallData adds an owner to a Safe, setting the threshold.
+//
+// Used for the offline recovery owner, with the threshold kept at 1: the point
+// is a second way in, not a second signature. Like swapOwner this is a Safe
+// self-call, so it travels as the inner call of an operation the Safe makes to
+// itself.
+func AddOwnerCallData(owner common.Address, threshold *big.Int) ([]byte, error) {
+	if threshold == nil {
+		threshold = big.NewInt(1)
+	}
+	return packed(safeABI, "addOwnerWithThreshold", owner, threshold)
+}
