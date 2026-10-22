@@ -1,6 +1,10 @@
 # Branch scope — `pjol/internal-notifications`
 
-Oct 19–22 2026 · app + mobile-app + webpage · **4.8h** (3.0h stated, 1.8h measured)
+Oct 19–22 2026 · app + mobile-app + webpage · **7.5h** (4.3h stated, 3.2h measured)
+
+Includes the `pjol/bot-smart-wallet-hotfix` branch, which this one sits on top of and which merges
+into main first. Its hours are rolled into the totals at the foot of this document; its own file stays
+as the record for its pull request.
 
 Internal organization notifications, delivered to the mobile app, plus the website's Get in touch
 flow and a rebuilt mobile boot sequence.
@@ -616,7 +620,8 @@ sitting is now accounted for end to end rather than in pieces with a gap.
 
 ## What is not in this round, and where it is instead
 
-Today's other time is logged on the branch it was spent on, so nothing here is counted twice:
+Today's other time is logged on the branch it was spent on. The consolidated table at the foot of this
+document rolls both branches together; this one says which document each window lives in:
 
 | Window | Hours | Where |
 |---|---|---|
@@ -652,3 +657,64 @@ quote, which is the rule this folder already follows where the two disagree.
 | Round 5 — ordering behind the hotfix | 0.23h | measured |
 | Round 6 — last night, and today's tail | 1.00h stated + 0.15h measured | mixed |
 | **Total** | **4.8h** | 1.8h measured, 3.0h stated |
+
+# Consolidated — both branches
+
+This branch contains `pjol/bot-smart-wallet-hotfix`, so the work in both is in anything that merges
+from here. The two documents are kept separate because the branch is what this folder records and the
+hotfix merges into main on its own first — but the hours only add up when read together, so they are
+added up here.
+
+## Measured
+
+| Day | Sitting | Measured | Round |
+|---|---|---|---|
+| Oct 20 | 11:24–11:55 (less 0.07h in another repo) | 0.45h | notifications 2 |
+| Oct 20 | 13:54–14:37 | 0.70h | notifications 2 |
+| Oct 20 | 16:18–16:28 | 0.17h | notifications 3 |
+| Oct 21 | 11:55–12:02 | 0.12h | notifications 4 *(upper bound)* |
+| Oct 22 | 11:18–11:25, 12:06–12:43 | 0.74h | hotfix 1 |
+| Oct 22 | 13:24–13:36 | 0.19h | hotfix 2 |
+| Oct 22 | 13:36–13:50 | 0.23h | notifications 5 |
+| Oct 22 | 13:50–13:58 | 0.15h | notifications 6 |
+| Oct 22 | 13:58–14:24 | 0.43h | hotfix 4 |
+| | **Total measured** | **3.18h → 3.2h** | |
+
+## Stated
+
+| Window | Stated | Round | Basis |
+|---|---|---|---|
+| Oct 19 14:00–15:00 — dev meeting | 1.00h | notifications 1 | stated |
+| Oct 20 10:00–11:00 — website review | 1.00h | notifications 1 | stated |
+| Oct 21 evening | 1.00h | notifications 6 | stated, no transcript |
+| Oct 22 ~10:00–11:18 — review of the smart-wallet branch | 1.30h | hotfix 3 | stated, no transcript |
+| | **Total stated** | **4.30h** | |
+
+## Both
+
+| | Hours |
+|---|---|
+| Measured | 3.2h |
+| Stated | 4.3h |
+| **Total** | **7.5h** |
+
+**Read the two kinds separately.** More than half of this is stated rather than measured, and two of
+the stated windows have no session behind them at all — they are the owner's account of their own
+time, recorded as such. The measured column is session-transcript spans clustered on a 30-minute gap,
+unioned across every project worked in, which is the only part of this the clock can support.
+
+**Three measured figures carry named weaknesses**, each written up in its own round: 0.07h of one
+Oct 20 sitting went to another repository and is deducted; the Oct 21 figure is an *upper bound*
+because a second project's session covered every minute of it; and every figure from a sitting that
+was still open when its round was written is a floor.
+
+## What is in each branch
+
+| Branch | Measured | Stated | Total | What |
+|---|---|---|---|---|
+| `pjol/bot-smart-wallet-hotfix` | 1.36h | 1.30h | **2.7h** | Protocol Safes, rotatable signers, historical address checks, and the work to make the leaked keys deletable |
+| `pjol/internal-notifications` | 1.82h | 3.00h | **4.8h** | Internal alerts, the mobile notification screen and boot cache, the bulletin merge, the website's Get in touch, and paymaster-only gas alerting |
+| **Together** | **3.18h** | **4.30h** | **7.5h** | |
+
+The per-branch totals round independently, which is why they read as 2.7h and 4.8h while summing to
+7.5h rather than 7.4h. The measured total is the one to quote where they disagree.
