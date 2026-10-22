@@ -345,6 +345,21 @@ func (s *BotService) NewEvent(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(id))
 }
 
+// FaucetBalance is the faucet's whole SFLUV balance in base units, read from
+// wherever the faucet currently is — its Safe after the cutover, the EOA
+// before. The admin panel used to read it from the faucet address in /config,
+// which goes stale the moment the faucet moves.
+func (s *BotService) FaucetBalance(w http.ResponseWriter, r *http.Request) {
+	balance, err := s.bot.Balance()
+	if err != nil {
+		fmt.Printf("error getting faucet balance: %s\n", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(balance.String()))
+}
+
 func (s *BotService) RemainingBalance(w http.ResponseWriter, r *http.Request) {
 	decimals, err := strconv.Atoi(os.Getenv("TOKEN_DECIMALS"))
 	if err != nil {
@@ -730,21 +745,54 @@ func (s *BotService) Redeem(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
+// Drain empties the faucet into the admin wallet.
+//
+// The destination comes from the protocol registry when there is one, and from
+// ADMIN_ADDRESS otherwise. The transfer goes through the ordinary send path
+// rather than the bot's own EOA-only drain, so it works whether the faucet is
+// still an EOA or has moved to its Safe — the old path signed with BOT_KEY and
+// read BOT_ADDRESS's balance, both of which are the wrong account once the
+// cutover has run.
 func (s *BotService) Drain(w http.ResponseWriter, r *http.Request) {
-	a := os.Getenv("ADMIN_ADDRESS")
-	if a == "" || a == "x" || a == "0x" {
+	destination, ok := s.drainDestination(r.Context())
+	if !ok {
 		fmt.Println("WARNING: be sure to specify an admin address in .env")
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 
-	adminAddress := common.HexToAddress(a)
-	err := s.bot.Drain(adminAddress)
+	balance, err := s.bot.Balance()
 	if err != nil {
+		fmt.Printf("error reading the faucet balance to drain: %s\n", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	if balance == nil || balance.Sign() == 0 {
+		// Nothing to move is not a failure, and it is the state a second drain
+		// finds itself in.
+		w.WriteHeader(http.StatusCreated)
+		return
+	}
+
+	if _, err := s.bot.SubmitTransferBaseUnits(balance, destination.Hex()); err != nil {
 		fmt.Printf("error draining faucet: %s\n", err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 
 	w.WriteHeader(http.StatusCreated)
+}
+
+// drainDestination is the current admin wallet.
+func (s *BotService) drainDestination(ctx context.Context) (common.Address, bool) {
+	if s != nil && s.app != nil && s.app.protocolSvc != nil {
+		if address, ok := s.app.protocolSvc.CurrentAddress(ctx, structs.ProtocolRoleAdmin); ok {
+			return address, true
+		}
+	}
+	configured := strings.TrimSpace(os.Getenv("ADMIN_ADDRESS"))
+	if configured == "" || configured == "x" || configured == "0x" || !common.IsHexAddress(configured) {
+		return common.Address{}, false
+	}
+	return common.HexToAddress(configured), true
 }

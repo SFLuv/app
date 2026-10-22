@@ -64,6 +64,7 @@ import {
   ChevronRight,
   Copy,
   BarChart3,
+  ShieldCheck,
 } from "lucide-react"
 import { useLocation } from "@/context/LocationProvider"
 import { AuthedLocation, UpdateLocationApprovalRequest } from "@/types/location"
@@ -93,6 +94,7 @@ import { WorkflowDetailsModal } from "@/components/workflows/workflow-details-mo
 import { AdminAnalyticsPanel } from "@/components/admin/admin-analytics-panel"
 import { PartnersPanel } from "@/components/admin/partners-panel"
 import { MerchantPayoutsPanel } from "@/components/admin/merchant-payouts-panel"
+import { ProtocolPanel } from "@/components/admin/protocol-panel"
 import type { W9AdminOverview } from "@/types/w9"
 import type { ClientVersionUserCountResponse, UserResponse } from "@/types/server"
 
@@ -290,6 +292,7 @@ export default function AdminPage() {
       "credential-types",
       "partners",
       "payouts",
+      "protocol",
     ].includes(value)
   }
 
@@ -702,16 +705,17 @@ export default function AdminPage() {
     getEvents()
   }
 
+  // Read from the backend, which follows the faucet wherever it lives (its Safe
+  // after the cutover). The faucet address in /config goes stale when it moves.
   const getFaucetBalance = async () => {
-    if (!chainConfig.faucetAddress) {
+    try {
+      const res = await authFetch("/faucet/balance")
+      if (!res.ok) throw new Error(String(res.status))
+      const bal = BigInt((await res.text()).trim())
+      setFaucetBalance(bal / BigInt(10 ** chainConfig.tokenDecimals))
+    } catch {
       setFaucetBalance("-")
-      getUnallocatedBalance()
-      return
     }
-    const decimals = 10 ** chainConfig.tokenDecimals
-    const bal = await wallets[0]?.getBalanceOf(chainConfig.tokenAddress, chainConfig.faucetAddress)
-
-    setFaucetBalance(bal ? bal / BigInt(decimals) : "-")
     getUnallocatedBalance()
   }
 
@@ -2803,6 +2807,10 @@ export default function AdminPage() {
             <TabsTrigger value="payouts" className="w-full justify-between px-3 py-2">
               <span>Payouts</span>
             </TabsTrigger>
+            <TabsTrigger value="protocol" className="w-full justify-between px-3 py-2">
+              <span>Protocol</span>
+              <ShieldCheck className="h-4 w-4 text-muted-foreground" />
+            </TabsTrigger>
           </TabsList>
 
           <div className="min-w-0">
@@ -2817,6 +2825,10 @@ export default function AdminPage() {
 
         <TabsContent value="payouts" className="space-y-6">
           <MerchantPayoutsPanel />
+        </TabsContent>
+
+        <TabsContent value="protocol" className="space-y-6">
+          <ProtocolPanel />
         </TabsContent>
 
         <TabsContent value="tokens" className="space-y-6">

@@ -386,6 +386,35 @@ func NewServerHandler(ctx context.Context, pools *DBPools, appLogger *logger.Log
 	a.SetRedeemerService(redeemer)
 	a.SetMinterService(minter)
 
+	// The backend's own Safes. Constructed even when it cannot act: the panel
+	// has to be able to say why, and LogConfig below says it at boot.
+	protocolSvc := handlers.NewProtocolService(appDb, appLogger, clientConfig)
+	a.SetProtocolService(protocolSvc)
+
+	// Who counted as the faucet when a payout happened. Installed whatever
+	// state the migration is in — with no history rows the resolver finds
+	// nothing and the verifier falls back to the key in hand, which is the
+	// behaviour it had before any of this existed.
+	botClient.SetSenderResolver(protocolSvc.FaucetSenderResolver())
+	botClient.SetTxSenderResolver(protocolSvc.TxSenderResolver())
+
+	// Whether the Safe is the faucet, decided here and not in the boot
+	// goroutine below.
+	//
+	// It is one database read, and doing it synchronously closes a window that
+	// would otherwise exist on every deploy: the goroutine that attaches the
+	// faucet takes a few seconds, and until it ran the bot would think the EOA
+	// was still in charge and sign payouts with a key whose account is empty.
+	// Knowing the cutover happened is enough to refuse those instead, which is
+	// retryable and releases the redemption code; paying from an emptied wallet
+	// is neither.
+	botClient.SetFaucetCutover(protocolSvc.CutoverComplete(ctx))
+
+	// A deploy or sweep run from the Protocol panel changes the same state the
+	// boot sequence acts on, so this process acts on it too rather than waiting
+	// for a restart.
+	WireProtocolPanel(ctx, protocolSvc, botClient, redeemer, appLogger)
+
 	// Bridge is the off-ramp behind merchant bank payouts. Without a key the
 	// client is disabled and every payout route answers "not available yet";
 	// the rest of the server is unaffected. Sandbox unless told otherwise, for
@@ -427,6 +456,12 @@ func NewServerHandler(ctx context.Context, pools *DBPools, appLogger *logger.Log
 		// Recreating hooks reaches out to Ponder, so it is opt-in; the check
 		// itself only ever reads Ponder and writes to our own database.
 		a.LogPonderHookReconciliation(jobsCtx, strings.TrimSpace(os.Getenv("PONDER_HOOK_AUTO_REPAIR")) == "true")
+
+		// The protocol accounts come before the analytics sync, because the
+		// sync reads the registry the first step seeds: run the other way
+		// round, the first boot would classify nothing as a reward and the
+		// window it opened for today's faucet would be a day late.
+		StartProtocolAccounts(jobsCtx, protocolSvc, botClient, redeemer, appLogger)
 
 		if err := p.SyncCurrentAnalyticsWalletRoleHistory(jobsCtx); err != nil {
 			appLogger.Logf("error syncing analytics wallet role history during startup: %s", err)

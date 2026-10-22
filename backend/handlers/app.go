@@ -26,6 +26,23 @@ type AppService struct {
 	// Read-only. Used to compare our webhook bookkeeping against what the
 	// indexer actually holds; the Ponder database is never written to here.
 	ponderDb *db.PonderDB
+	// protocolSvc owns the backend's own Safes and the keys that sign for them.
+	// Wired after construction because it needs the client config this service
+	// already holds.
+	protocolSvc *ProtocolService
+}
+
+// SetProtocolService wires the protocol accounts in.
+func (a *AppService) SetProtocolService(service *ProtocolService) {
+	a.protocolSvc = service
+}
+
+// Protocol exposes the service for the boot sequence and the bot wiring.
+func (a *AppService) Protocol() *ProtocolService {
+	if a == nil {
+		return nil
+	}
+	return a.protocolSvc
 }
 
 func NewAppService(db *db.AppDB, logger *logger.LogCloser, payouts *PayoutService, w9Provider w9provider.Provider, clientConfig *clientconfig.Config) *AppService {

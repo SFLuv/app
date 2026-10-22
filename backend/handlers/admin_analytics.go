@@ -230,14 +230,69 @@ func (p *PonderService) SyncAnalyticsWalletRoleHistory(ctx context.Context, chai
 	if err != nil {
 		return err
 	}
-	return p.appDB.SyncAnalyticsWalletRoleHistory(ctx, chainID, buildAnalyticsWalletRoleCandidates(chainID, walletOwners, merchantWallets))
+	return p.appDB.SyncAnalyticsWalletRoleHistory(ctx, chainID, buildAnalyticsWalletRoleCandidates(
+		chainID, walletOwners, merchantWallets, p.protocolRoleAddresses(ctx, chainID),
+	))
+}
+
+// protocolRoleAddresses is where the faucet, the admin wallets and the zapper
+// are *now*, according to the protocol registry.
+//
+// The registry rather than the environment, because the environment has one
+// answer and this question has a history. The reconciler below closes a window
+// when an address stops being current and opens one when it starts, so feeding
+// it today's addresses is what gives rolesAt() the right answer for a transfer
+// from any time — including transfers that predate a key rotation.
+//
+// Falls back to the environment when the registry has nothing, which is the
+// state before the protocol migration has run and on a deployment where it is
+// switched off. Without the fallback, analytics would stop classifying rewards
+// entirely rather than classifying them from the old source.
+func (p *PonderService) protocolRoleAddresses(ctx context.Context, chainID int64) map[string][]string {
+	roles := []string{
+		structs.ProtocolRoleFaucet,
+		structs.ProtocolRoleAdmin,
+		structs.ProtocolRoleZapper,
+	}
+	addresses := map[string][]string{}
+	if p.appDB != nil {
+		for _, role := range roles {
+			current, err := p.appDB.CurrentProtocolAddresses(ctx, role, int(chainID))
+			if err != nil {
+				continue
+			}
+			if len(current) > 0 {
+				addresses[role] = current
+			}
+		}
+	}
+	if len(addresses) > 0 {
+		return addresses
+	}
+
+	return map[string][]string{
+		structs.ProtocolRoleAdmin: utils.MergeAddressLists(
+			utils.ParseAddressList(os.Getenv("PAID_ADMIN_ADDRESSES")), os.Getenv("ADMIN_ADDRESS"),
+		),
+		structs.ProtocolRoleFaucet: utils.MergeAddressLists(
+			utils.ParseAddressList(os.Getenv("BOT_ADDRESS")), os.Getenv("FAUCET_ADDRESS"), os.Getenv("NEXT_PUBLIC_FAUCET_ADDRESS"),
+		),
+		structs.ProtocolRoleZapper: utils.MergeAddressLists(
+			utils.ParseAddressList(os.Getenv("ZAPPER_ADDRESS")), os.Getenv("NEXT_PUBLIC_ZAPPER_ADDRESS"),
+		),
+	}
 }
 
 func (p *PonderService) SyncCurrentAnalyticsWalletRoleHistory(ctx context.Context) error {
 	return p.SyncAnalyticsWalletRoleHistory(ctx, p.requestChainID(nil))
 }
 
-func buildAnalyticsWalletRoleCandidates(chainID int64, owners []*structs.AnalyticsWalletOwner, merchants []*structs.AnalyticsMerchantWallet) []appdb.AnalyticsWalletRoleCandidate {
+func buildAnalyticsWalletRoleCandidates(
+	chainID int64,
+	owners []*structs.AnalyticsWalletOwner,
+	merchants []*structs.AnalyticsMerchantWallet,
+	protocolAddresses map[string][]string,
+) []appdb.AnalyticsWalletRoleCandidate {
 	candidates := make([]appdb.AnalyticsWalletRoleCandidate, 0)
 	appendCandidate := func(address string, role string, userID string, locationID int, source string) {
 		address = normalizeAnalyticsAddress(address)
@@ -263,14 +318,15 @@ func buildAnalyticsWalletRoleCandidates(chainID int64, owners []*structs.Analyti
 		}
 		appendCandidate(merchant.Address, "merchant", merchant.OwnerID, merchant.LocationID, "merchant_location")
 	}
-	for _, address := range utils.MergeAddressLists(utils.ParseAddressList(os.Getenv("PAID_ADMIN_ADDRESSES")), os.Getenv("ADMIN_ADDRESS")) {
-		appendCandidate(address, "admin", "", 0, "env.admin")
-	}
-	for _, address := range utils.MergeAddressLists(utils.ParseAddressList(os.Getenv("BOT_ADDRESS")), os.Getenv("FAUCET_ADDRESS"), os.Getenv("NEXT_PUBLIC_FAUCET_ADDRESS")) {
-		appendCandidate(address, "faucet", "", 0, "env.faucet")
-	}
-	for _, address := range utils.MergeAddressLists(utils.ParseAddressList(os.Getenv("ZAPPER_ADDRESS")), os.Getenv("NEXT_PUBLIC_ZAPPER_ADDRESS")) {
-		appendCandidate(address, "zapper", "", 0, "env.zapper")
+	// The source string is part of the reconciler's identity for a row, so it
+	// stays "env.<role>" even now that the addresses come from the registry.
+	// Changing it would make every existing window look like a different record
+	// — closing all of them and opening replacements dated today, which would
+	// move every historical boundary to the moment of this deploy.
+	for role, addresses := range protocolAddresses {
+		for _, address := range addresses {
+			appendCandidate(address, role, "", 0, "env."+role)
+		}
 	}
 	return candidates
 }
