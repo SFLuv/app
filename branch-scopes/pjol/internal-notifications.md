@@ -1,6 +1,6 @@
 # Branch scope — `pjol/internal-notifications`
 
-Oct 19–22 2026 · app + mobile-app + webpage · **3.6h** (2.0h stated, 1.6h measured)
+Oct 19–22 2026 · app + mobile-app + webpage · **4.8h** (3.0h stated, 1.8h measured)
 
 Internal organization notifications, delivered to the mobile app, plus the website's Get in touch
 flow and a rebuilt mobile boot sequence.
@@ -579,3 +579,76 @@ Plus the merge itself, which brought in the smart-wallet branch whole.
   has actually run.
 - **An engine outage stops payouts** once the cutover is complete, with no fallback built. Carried over
   from the branch below this one, and the reason the paymaster alert is worded as strongly as it is.
+
+# Round 6 — Oct 21 evening and Oct 22, the hours the clock did not see
+
+Oct 21–22 2026 · **1.0h stated, 0.2h measured** · app
+
+Accounting rather than features. This round exists so the day adds up: one stated hour with no session
+behind it, and the tail of today's sitting that no earlier round covers.
+
+## How these hours were recorded
+
+**Two different kinds of figure, and they are kept apart on purpose.**
+
+**1.0h stated — Oct 21, evening.** Stated by the owner. **The transcript shows no SFLuv session in that
+window at all**, so there is nothing to corroborate it with and nothing for this document to say about
+what the hour contained beyond the figure itself. The clock that evening saw only other projects
+(`ChatMTG` 20:19–22:36, and a few minutes of another), which is evidence that the session transcript was
+not where this hour went, not evidence against it having happened.
+
+Recorded as stated because that is what the convention asks for when the clock was not consulted:
+report the figure, name it as stated, and do not dress it up as a measurement.
+
+**0.2h measured — Oct 22, 13:50–13:58.** The remainder of sitting C, after round 5 was written: the
+question of whether 1.65 is the last production migration, and this accounting. Both earlier rounds
+drawn from that sitting named themselves floors, and this is what they were a floor of.
+
+| Sitting | Span | Measured | Booked where |
+|---|---|---|---|
+| C | 13:24–13:36 | 0.19h | hotfix branch, round 2 |
+| C | 13:36–13:50 | 0.23h | this branch, round 5 |
+| C | 13:50–13:58 | **0.15h → 0.2h** | this round |
+| | | 0.57h | sitting C, accounted for in full |
+
+**The sitting is still open as this is written**, so even this is a floor — but a short one, and the
+sitting is now accounted for end to end rather than in pieces with a gap.
+
+## What is not in this round, and where it is instead
+
+Today's other time is logged on the branch it was spent on, so nothing here is counted twice:
+
+| Window | Hours | Where |
+|---|---|---|
+| Oct 22 ~10:00–11:18 — review of the smart-wallet branch | 1.30h stated | `bot-smart-wallet-hotfix.md`, round 3 |
+| Oct 22 11:18–11:25, 12:06–12:43 — building the review fixes | 0.74h measured | `bot-smart-wallet-hotfix.md`, round 1 |
+| Oct 22 13:24–13:36 — the fixes themselves | 0.19h measured | `bot-smart-wallet-hotfix.md`, round 2 |
+| Oct 22 13:36–13:50 — merge, renumber, paymaster alerting | 0.23h measured | this branch, round 5 |
+
+The owner's "about 10am to now" covers all of it. Split across the two documents because the branch is
+the unit this folder records, and most of today was spent on the branch that merges first.
+
+## The day, end to end
+
+| Day | Measured | Stated | Where |
+|---|---|---|---|
+| Oct 21 evening | — | 1.00h | this round |
+| Oct 22 ~10:00–11:18 | — | 1.30h | hotfix round 3 |
+| Oct 22 11:18–13:58 | 1.31h | — | hotfix rounds 1–2, this branch rounds 5–6 |
+| **Total for the two** | **1.31h** | **2.30h** | **3.6h** |
+
+The measured column is the sitting spans themselves. Adding the rounds instead gives 1.28h, three
+minutes short, because each round rounds to 0.1h independently — the measured total is the one to
+quote, which is the rule this folder already follows where the two disagree.
+
+## Totals across this branch
+
+| Round | Hours | Basis |
+|---|---|---|
+| Round 1 — before any code | 2.00h | stated |
+| Round 2 — the pivot and the build | 1.15h | measured |
+| Round 3 — acking and the unwired history | 0.17h | measured |
+| Round 4 — messages and the chat tab | 0.12h | measured, upper bound |
+| Round 5 — ordering behind the hotfix | 0.23h | measured |
+| Round 6 — last night, and today's tail | 1.00h stated + 0.15h measured | mixed |
+| **Total** | **4.8h** | 1.8h measured, 3.0h stated |
