@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/ecdsa"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math/big"
@@ -104,6 +105,25 @@ type rpcError struct {
 	Message string `json:"message"`
 }
 
+// RejectedError is the engine answering, definitively, that it did not accept a
+// request: a JSON-RPC error object, or a 4xx. Anything else that fails — a
+// dropped connection, a timeout, a 5xx, a response that would not decode — is
+// left as a plain error, because for eth_sendUserOperation those cannot tell
+// "never received" from "received and accepted, answer lost".
+type RejectedError struct {
+	Method  string
+	Code    int
+	Message string
+}
+
+func (e *RejectedError) Error() string { return e.Message }
+
+// IsRejected reports whether err is the engine definitively refusing a request.
+func IsRejected(err error) bool {
+	var rejected *RejectedError
+	return errors.As(err, &rejected)
+}
+
 type rpcResponse struct {
 	Result json.RawMessage `json:"result"`
 	Error  *rpcError       `json:"error"`
@@ -131,7 +151,13 @@ func (c *Client) rpc(ctx context.Context, url, method string, params []any, out 
 		return fmt.Errorf("error reading the %s response: %w", method, err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("%s returned %d: %s", method, resp.StatusCode, strings.TrimSpace(string(raw)))
+		message := fmt.Sprintf("%s returned %d: %s", method, resp.StatusCode, strings.TrimSpace(string(raw)))
+		// A 4xx is the engine answering that it will not take the request. A
+		// 5xx, or a 408 timeout, says nothing about whether it already did.
+		if resp.StatusCode >= 400 && resp.StatusCode < 500 && resp.StatusCode != http.StatusRequestTimeout {
+			return &RejectedError{Method: method, Code: resp.StatusCode, Message: message}
+		}
+		return fmt.Errorf("%s", message)
 	}
 
 	var parsed rpcResponse
@@ -139,7 +165,11 @@ func (c *Client) rpc(ctx context.Context, url, method string, params []any, out 
 		return fmt.Errorf("error decoding the %s response: %w", method, err)
 	}
 	if parsed.Error != nil {
-		return fmt.Errorf("%s failed: %s (code %d)", method, parsed.Error.Message, parsed.Error.Code)
+		return &RejectedError{
+			Method:  method,
+			Code:    parsed.Error.Code,
+			Message: fmt.Sprintf("%s failed: %s (code %d)", method, parsed.Error.Message, parsed.Error.Code),
+		}
 	}
 	if out == nil {
 		return nil

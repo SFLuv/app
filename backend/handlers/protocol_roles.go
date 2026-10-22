@@ -186,6 +186,66 @@ func (p *ProtocolService) RedeemerSafeHoldsAuthority(ctx context.Context, redeem
 // needs rotating.
 const EnvRecoveryOwner = "PROTOCOL_RECOVERY_OWNER"
 
+// EnsureRecoveryOwners adds the offline owner to every deployed protocol Safe
+// that lacks it. Idempotent: each Safe's owners are read first.
+//
+// Called on every boot once the cutover is complete, so an add that failed at
+// deployment is retried rather than left failed for good — boot otherwise
+// short-circuits past deployment and would never come back to it.
+func (p *ProtocolService) EnsureRecoveryOwners(ctx context.Context) error {
+	accounts, err := p.Accounts(ctx)
+	if err != nil {
+		return err
+	}
+	var firstErr error
+	for _, account := range accounts {
+		if account.DeployedAt == nil || !common.IsHexAddress(account.SafeAddress) {
+			continue
+		}
+		if err := p.EnsureRecoveryOwner(ctx, account.Key); err != nil {
+			p.logf("protocol account %s: recovery owner not added: %s", account.Key, err)
+			if firstErr == nil {
+				firstErr = err
+			}
+		}
+	}
+	return firstErr
+}
+
+// MissingRecoveryOwners lists the deployed Safes the configured recovery owner
+// is not an owner of. Read-only, for boots where on-chain writes are gated off.
+func (p *ProtocolService) MissingRecoveryOwners(ctx context.Context) ([]string, error) {
+	recovery, ok := RecoveryOwner()
+	if !ok {
+		return nil, fmt.Errorf("%s is not set", EnvRecoveryOwner)
+	}
+	accounts, err := p.Accounts(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var missing []string
+	for _, account := range accounts {
+		if account.DeployedAt == nil || !common.IsHexAddress(account.SafeAddress) {
+			continue
+		}
+		owners, err := p.client.Owners(ctx, common.HexToAddress(account.SafeAddress))
+		if err != nil {
+			return nil, err
+		}
+		present := false
+		for _, owner := range owners {
+			if owner == recovery {
+				present = true
+				break
+			}
+		}
+		if !present {
+			missing = append(missing, account.Key)
+		}
+	}
+	return missing, nil
+}
+
 // RecoveryOwner is the configured offline owner, if there is one.
 func RecoveryOwner() (common.Address, bool) {
 	raw := envValue(EnvRecoveryOwner)
@@ -210,6 +270,13 @@ func (p *ProtocolService) EnsureRecoveryOwner(ctx context.Context, accountKey st
 	if err := p.Available(); err != nil {
 		return err
 	}
+
+	// Held against payouts, rotations and sweeps. addOwner is an operation on
+	// the same Safe the faucet pays from, so it must not be sponsored alongside
+	// a payout (same nonce) or build on an owner set a swapOwner is changing.
+	// No caller holds the lock when this runs.
+	p.mu.Lock()
+	defer p.mu.Unlock()
 
 	safe, err := p.SafeFor(ctx, accountKey)
 	if err != nil {

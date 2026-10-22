@@ -372,6 +372,57 @@ func (a *AppDB) ProtocolAddressesAt(ctx context.Context, role string, chainID in
 	return addresses, rows.Err()
 }
 
+// ProtocolAddressWindow is one stretch of time an address held a role.
+type ProtocolAddressWindow struct {
+	Address string // lower-cased
+	Start   time.Time
+	End     *time.Time
+}
+
+// ProtocolAddressWindows is every window a role has had on a chain.
+type ProtocolAddressWindows []ProtocolAddressWindow
+
+// HeldAt reports whether address held the role at that moment. Same boundary
+// rule as ProtocolAddressesAt: the start is inclusive, the end exclusive.
+func (w ProtocolAddressWindows) HeldAt(address string, at time.Time) bool {
+	address = strings.ToLower(strings.TrimSpace(address))
+	for _, window := range w {
+		if window.Address != address || window.Start.After(at) {
+			continue
+		}
+		if window.End == nil || window.End.After(at) {
+			return true
+		}
+	}
+	return false
+}
+
+// ProtocolRoleWindows loads every window for a role at once, so a page of
+// transactions can be checked against it in memory rather than one query per
+// row. The table holds a handful of rows per role.
+func (a *AppDB) ProtocolRoleWindows(ctx context.Context, role string, chainID int) (ProtocolAddressWindows, error) {
+	rows, err := a.db.Query(ctx, `
+		SELECT LOWER(address), started_at, ended_at
+		FROM protocol_address_history
+		WHERE role = $1 AND chain_id = $2
+		ORDER BY started_at;
+	`, role, chainID)
+	if err != nil {
+		return nil, fmt.Errorf("error loading %s address windows: %w", role, err)
+	}
+	defer rows.Close()
+
+	windows := ProtocolAddressWindows{}
+	for rows.Next() {
+		var window ProtocolAddressWindow
+		if err := rows.Scan(&window.Address, &window.Start, &window.End); err != nil {
+			return nil, fmt.Errorf("error scanning an address window: %w", err)
+		}
+		windows = append(windows, window)
+	}
+	return windows, rows.Err()
+}
+
 // CurrentProtocolAddresses is the open windows for a role.
 func (a *AppDB) CurrentProtocolAddresses(ctx context.Context, role string, chainID int) ([]string, error) {
 	rows, err := a.db.Query(ctx, `

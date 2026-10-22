@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/SFLuv/app/backend/structs"
 	"github.com/SFLuv/app/backend/utils"
@@ -125,6 +127,7 @@ func (p *PonderService) GetTransactionHistory(w http.ResponseWriter, r *http.Req
 				tx.ChainID = chainID
 			}
 		}
+		p.labelRewards(r.Context(), chainID, txs.Transactions)
 	}
 
 	userDid := utils.GetDid(r)
@@ -296,4 +299,58 @@ func (p *PonderService) GetBalanceAtTimestamp(w http.ResponseWriter, r *http.Req
 
 	w.WriteHeader(http.StatusOK)
 	w.Write(bytes)
+}
+
+// labelRewards marks every transfer the faucet paid as a reward.
+//
+// "The faucet" is whichever address held the role at the moment of the
+// transfer, from the address history — so every past reward stays a reward when
+// the faucet moves, and nothing has to be relabelled when it does. Clients used
+// to compare the sender against the one faucet address in /config, which made
+// every earlier reward an ordinary transfer the moment that address changed.
+//
+// The history is written once the protocol service has run. Until then it is
+// empty, and FAUCET_ADDRESS stands in for all time, which is exactly what the
+// clients' own comparison did before.
+func (p *PonderService) labelRewards(ctx context.Context, chainID int64, txs []*structs.PonderTransaction) {
+	if p == nil || p.appDB == nil || len(txs) == 0 {
+		return
+	}
+	windows, err := p.appDB.ProtocolRoleWindows(ctx, structs.ProtocolRoleFaucet, int(chainID))
+	if err != nil {
+		p.logger.Logf("error loading faucet history to label rewards: %s", err)
+		windows = nil
+	}
+	fallback := strings.ToLower(strings.TrimSpace(firstNonEmptyEnv("FAUCET_ADDRESS", "NEXT_PUBLIC_FAUCET_ADDRESS")))
+
+	for _, tx := range txs {
+		if tx == nil {
+			continue
+		}
+		from := strings.ToLower(strings.TrimSpace(tx.From))
+		if from == "" {
+			tx.Type = structs.TransactionTypeTransfer
+			continue
+		}
+		reward := false
+		if len(windows) > 0 {
+			reward = windows.HeldAt(from, time.Unix(int64(tx.Timestamp), 0).UTC())
+		} else {
+			reward = fallback != "" && from == fallback
+		}
+		if reward {
+			tx.Type = structs.TransactionTypeVolunteerReward
+		} else {
+			tx.Type = structs.TransactionTypeTransfer
+		}
+	}
+}
+
+func firstNonEmptyEnv(names ...string) string {
+	for _, name := range names {
+		if value := strings.TrimSpace(os.Getenv(name)); value != "" {
+			return value
+		}
+	}
+	return ""
 }

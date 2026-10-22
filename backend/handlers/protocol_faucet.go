@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/big"
 	"sync"
@@ -49,15 +50,40 @@ const (
 	faucetQueueDepth = 256
 )
 
+// A payout's lifecycle. It leaves sendQueued exactly once, by compare-and-swap,
+// so the caller giving up and the dispatcher sending it can never both win:
+//
+//	queued -> cancelled   the caller gave up first. Never sent; its code goes back.
+//	queued -> submitted   the dispatcher took it. Its money may be on its way.
+//
+// A cancelled request is still in the channel, and the dispatcher drops it
+// when it gets there. Without that, a payout whose code had already been
+// handed back would be paid later anyway, and the volunteer could redeem the
+// same code a second time.
+const (
+	sendQueued int32 = iota
+	sendCancelled
+	sendSubmitted
+)
+
 // faucetSend is one payout waiting its turn.
 type faucetSend struct {
 	to     common.Address
 	amount *big.Int
 	result chan faucetSendResult
-	// submitted flips the moment this request is part of an operation that has
-	// gone to the engine. After that its money may be on its way, and the
-	// redemption behind it must not be released.
-	submitted atomic.Bool
+	state  atomic.Int32
+}
+
+// cancel claims the request for the caller. False means the dispatcher already
+// took it.
+func (s *faucetSend) cancel() bool {
+	return s.state.CompareAndSwap(sendQueued, sendCancelled)
+}
+
+// take claims the request for the dispatcher. False means the caller already
+// gave up on it.
+func (s *faucetSend) take() bool {
+	return s.state.CompareAndSwap(sendQueued, sendSubmitted)
 }
 
 type faucetSendResult struct {
@@ -110,13 +136,16 @@ func (p *ProtocolService) SendFromFaucet(ctx context.Context, amountBase *big.In
 	case result := <-request.result:
 		return result.txHash, result.err
 	case <-ctx.Done():
-		// Whether this is releasable depends on how far the request got, which
-		// is the whole reason the flag exists. Unsubmitted: hand the code back.
-		// Submitted: the money may be in flight and the code must stay spent.
-		if request.submitted.Load() {
-			return "", fmt.Errorf("faucet payout was submitted but not confirmed before the caller gave up: %w", ctx.Err())
+		// Whether this is releasable depends on how far the request got, and
+		// the answer has to be decided by one atomic step, not read: a check
+		// followed by a return leaves a gap in which the dispatcher can take
+		// the request and send it. Winning the cancel means it will never be
+		// sent, so the code can go back. Losing it means the dispatcher took it
+		// first, the money may be in flight, and the code must stay spent.
+		if request.cancel() {
+			return "", bot.Releasable(fmt.Errorf("faucet payout was still queued when the caller gave up: %w", ctx.Err()))
 		}
-		return "", bot.Releasable(fmt.Errorf("faucet payout was still queued when the caller gave up: %w", ctx.Err()))
+		return "", fmt.Errorf("faucet payout was submitted but not confirmed before the caller gave up: %w", ctx.Err())
 	}
 }
 
@@ -184,16 +213,20 @@ func (p *ProtocolService) dispatchFaucetBatch(batch []*faucetSend) {
 		return
 	}
 
+	// Claim each request for this operation. Any the caller has already given
+	// up on are dropped here — their codes were handed back, so sending them
+	// now would pay a reward that can be claimed again. From a successful take
+	// on, the caller can no longer cancel, so nothing taken is ever released by
+	// the caller; only a definite refusal below hands codes back.
+	batch = takeFaucetBatch(batch)
+	if len(batch) == 0 {
+		return
+	}
+
 	callData, err := p.faucetBatchCallData(batch)
 	if err != nil {
 		finish(bot.Releasable(err))
 		return
-	}
-
-	// Past this point the operation is going out, so nothing below is
-	// releasable: the money may land whatever the caller does.
-	for _, request := range batch {
-		request.submitted.Store(true)
 	}
 
 	// Sponsoring, signing and submitting are held against rotations and
@@ -212,12 +245,20 @@ func (p *ProtocolService) dispatchFaucetBatch(batch []*faucetSend) {
 	opHash, err := p.executeRaw(ctx, structs.ProtocolAccountFaucet, callData)
 	p.mu.Unlock()
 	if err != nil {
-		// The submission itself failed, so nothing was accepted and the codes
-		// can go back. This is the one post-marking case that is still safe to
-		// release, because the engine refused it outright.
-		for _, request := range batch {
-			request.submitted.Store(false)
+		var uncertain *uncertainSendError
+		if errors.As(err, &uncertain) {
+			// The operation went to the engine and the answer was lost: it may
+			// have been accepted and may still land. Releasing these codes
+			// could pay every reward in the batch twice, so they stay spent,
+			// and the operation hash is logged so an operator can trace it.
+			p.logf("protocol faucet: operation %s for %d payouts may or may not have been accepted: %s",
+				uncertain.userOpHash, len(batch), uncertain.err)
+			finish(fmt.Errorf("faucet operation %s was submitted but its acceptance is unknown: %w",
+				uncertain.userOpHash, uncertain.err))
+			return
 		}
+		// Failed before submission, or refused outright by the engine, so
+		// nothing was accepted and the codes can go back.
 		finish(bot.Releasable(fmt.Errorf("faucet operation was not accepted: %w", err)))
 		return
 	}
@@ -226,33 +267,52 @@ func (p *ProtocolService) dispatchFaucetBatch(batch []*faucetSend) {
 		p.logf("protocol faucet: operation %s carries %d payouts", opHash, len(batch))
 	}
 
-	// Each payout claims its own transfer out of the operation. A batch lands
-	// as one transaction with one Transfer log per payout, which is why the
-	// claim is keyed on the log index and not just the hash.
-	for _, request := range batch {
-		txHash, err := p.client.AwaitTransfer(ctx, p.token, safe, request.to, request.amount, fromBlock,
-			func(candidate string, block uint64, logIndex uint) (bool, error) {
-				return p.db.ClaimProtocolTransaction(ctx, db.ProtocolTransaction{
-					TxHash:        candidate,
-					LogIndex:      logIndex,
-					ChainID:       p.chainID,
-					AccountKey:    structs.ProtocolAccountFaucet,
-					SenderAddress: safe.Hex(),
-					SignerAddress: signerAddress,
-					OperationHash: opHash,
-					Purpose:       db.ProtocolTxPurposePayout,
-					Recipient:     request.to.Hex(),
-					AmountBase:    request.amount,
-					BlockNumber:   block,
-				})
+	// One search for the whole operation, under one deadline. Each payout
+	// claims its own transfer out of it — a batch lands as one transaction with
+	// one Transfer log per payout, which is why the claim is keyed on the log
+	// index and not just the hash. Searching payout by payout used to give
+	// each its own wait, so an operation that never landed held this queue for
+	// minutes.
+	expected := make([]protocol.ExpectedTransfer, len(batch))
+	for i, request := range batch {
+		expected[i] = protocol.ExpectedTransfer{To: request.to, Amount: request.amount}
+	}
+	hashes, errs := p.client.AwaitTransfers(ctx, p.token, safe, expected, fromBlock,
+		func(i int, candidate string, block uint64, logIndex uint) (bool, error) {
+			return p.db.ClaimProtocolTransaction(ctx, db.ProtocolTransaction{
+				TxHash:        candidate,
+				LogIndex:      logIndex,
+				ChainID:       p.chainID,
+				AccountKey:    structs.ProtocolAccountFaucet,
+				SenderAddress: safe.Hex(),
+				SignerAddress: signerAddress,
+				OperationHash: opHash,
+				Purpose:       db.ProtocolTxPurposePayout,
+				Recipient:     batch[i].to.Hex(),
+				AmountBase:    batch[i].amount,
+				BlockNumber:   block,
 			})
-		if err != nil {
+		})
+	for i, request := range batch {
+		if errs[i] != nil {
 			request.result <- faucetSendResult{err: fmt.Errorf(
-				"faucet operation %s was submitted but this payout's transfer was not observed: %w", opHash, err)}
+				"faucet operation %s was submitted but this payout's transfer was not observed: %w", opHash, errs[i])}
 			continue
 		}
-		request.result <- faucetSendResult{txHash: txHash}
+		request.result <- faucetSendResult{txHash: hashes[i]}
 	}
+}
+
+// takeFaucetBatch claims every request still wanted and drops the ones whose
+// callers have already given up.
+func takeFaucetBatch(batch []*faucetSend) []*faucetSend {
+	taken := make([]*faucetSend, 0, len(batch))
+	for _, request := range batch {
+		if request.take() {
+			taken = append(taken, request)
+		}
+	}
+	return taken
 }
 
 // faucetBatchCallData is one transfer on its own, or many through MultiSend.
@@ -326,5 +386,28 @@ func (p *ProtocolService) executeRaw(ctx context.Context, accountKey string, cal
 	if err := protocol.Sign(sponsored, hash, signer); err != nil {
 		return "", err
 	}
-	return p.client.Send(ctx, sponsored, nil)
+	opHash, err := p.client.Send(ctx, sponsored, nil)
+	if err != nil && !protocol.IsRejected(err) {
+		// Everything above failed before anything left this process. Send is
+		// the one step where a failure can mean "accepted, answer lost", so
+		// unless the engine said no outright, the caller must not assume the
+		// operation went nowhere.
+		return "", &uncertainSendError{userOpHash: common.Hash(hash).Hex(), err: err}
+	}
+	return opHash, err
 }
+
+// uncertainSendError is eth_sendUserOperation failing in a way that does not
+// say whether the engine accepted the operation: a dropped connection, a
+// timeout, a 5xx. The operation hash is the one we signed, so the operation can
+// still be traced on chain.
+type uncertainSendError struct {
+	userOpHash string
+	err        error
+}
+
+func (e *uncertainSendError) Error() string {
+	return fmt.Sprintf("operation %s: %s", e.userOpHash, e.err)
+}
+
+func (e *uncertainSendError) Unwrap() error { return e.err }

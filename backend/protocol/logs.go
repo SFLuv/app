@@ -46,106 +46,174 @@ func (c *Client) BlockNumber(ctx context.Context) (uint64, error) {
 	return client.BlockNumber(ctx)
 }
 
-// TransferClaim records a candidate transfer as belonging to this payout and
-// reports whether the claim succeeded. False means another payout already owns
-// it, and the search carries on to the next candidate.
-//
-// The log index is part of what is claimed, not decoration: batched payouts
-// share one transaction, so the hash alone does not identify one payout's
-// money.
-type TransferClaim func(txHash string, blockNumber uint64, logIndex uint) (bool, error)
+// ExpectedTransfer is one payout an operation was supposed to make.
+type ExpectedTransfer struct {
+	To     common.Address
+	Amount *big.Int
+}
 
-// AwaitTransfer waits for the token transfer a sponsored operation was supposed
-// to produce, and returns the hash of the transaction that carried it.
+// BatchClaim is TransferClaim for the i-th payout of a batch.
+type BatchClaim func(i int, txHash string, blockNumber uint64, logIndex uint) (bool, error)
+
+// AwaitTransfers waits for every transfer one operation was supposed to make,
+// under one shared deadline, and returns each payout's transaction hash or the
+// reason it was not found.
 //
-// Why a log search and not a receipt lookup: the engine answers with a
-// user-operation hash, and the CommunityModule that executes these operations
-// emits no event tying that hash to a transaction. The transfer itself is the
-// only on-chain trace, so it is what gets matched — on sender, recipient and
-// exact amount, in a block no earlier than the one before submission.
+// One search for the whole batch, not one per payout. Waiting payout by payout
+// gave each its own 90 seconds, so an operation that never landed held the
+// faucet queue for the batch's whole budget — minutes — while every redemption
+// behind it timed out.
 //
-// Matching on those three alone is not enough, which is the thing worth being
-// careful about here. Identical payouts are ordinary: three rewards of the same
-// size to the same wallet inside a minute is a normal evening. Without an
-// exclusive claim, two of them record the same transaction, and a payout that
-// actually failed takes credit for one that worked — underpaying somebody with
-// nothing to show that it happened.
-//
-// So every candidate is offered to claim in the order it landed, and the first
-// one that is still unowned wins. A payout with no unclaimed transfer to take
-// waits, and then reports that it could not find its own — which is the honest
-// answer and leaves the ledger retryable.
-func (c *Client) AwaitTransfer(
+// An operation is one transaction, and a batch through MultiSendCallOnly is
+// all-or-nothing: either every transfer in it happened, in that transaction, or
+// none did. So the moment any payout of the batch is found, the operation's
+// transaction is known, and a payout whose transfer is not in that transaction
+// never will be. Those fail at once rather than waiting out the deadline.
+func (c *Client) AwaitTransfers(
 	ctx context.Context,
-	token, from, to common.Address,
-	amount *big.Int,
+	token, from common.Address,
+	expected []ExpectedTransfer,
 	fromBlock uint64,
-	claim TransferClaim,
-) (string, error) {
-	if amount == nil {
-		return "", fmt.Errorf("no amount to match a transfer against")
+	claim BatchClaim,
+) ([]string, []error) {
+	hashes := make([]string, len(expected))
+	errs := make([]error, len(expected))
+	fail := func(err error) ([]string, []error) {
+		for i := range expected {
+			if hashes[i] == "" && errs[i] == nil {
+				errs[i] = err
+			}
+		}
+		return hashes, errs
 	}
 
 	dialCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	client, err := ethclient.DialContext(dialCtx, c.readRPC)
 	if err != nil {
-		return "", fmt.Errorf("error dialling the read rpc: %w", err)
+		return fail(fmt.Errorf("error dialling the read rpc: %w", err))
 	}
 	defer client.Close()
 
+	// Every transfer out of the sender, whoever it went to: one query covers
+	// the whole batch.
 	query := ethereum.FilterQuery{
 		Addresses: []common.Address{token},
 		Topics: [][]common.Hash{
 			{transferTopic},
 			{common.BytesToHash(from.Bytes())},
-			{common.BytesToHash(to.Bytes())},
 		},
 	}
 
+	opTx := ""
 	deadline := time.Now().Add(transferWaitTimeout)
 	for {
 		head, err := client.BlockNumber(ctx)
 		if err != nil {
-			return "", fmt.Errorf("error reading the head block: %w", err)
+			return fail(fmt.Errorf("error reading the head block: %w", err))
 		}
 		start := fromBlock
 		if head > uint64(maxLogRange) && start < head-uint64(maxLogRange) {
 			start = head - uint64(maxLogRange)
 		}
-
 		query.FromBlock = new(big.Int).SetUint64(start)
 		query.ToBlock = new(big.Int).SetUint64(head)
 
 		logs, err := client.FilterLogs(ctx, query)
 		if err != nil {
-			return "", fmt.Errorf("error searching for the transfer this operation should have made: %w", err)
+			return fail(fmt.Errorf("error searching for the transfers this operation should have made: %w", err))
 		}
-		for _, candidate := range matchingTransfers(logs, amount) {
-			if claim == nil {
-				return candidate.hash, nil
-			}
-			claimed, err := claim(candidate.hash, candidate.block, candidate.index)
-			if err != nil {
-				return "", err
-			}
-			if claimed {
-				return candidate.hash, nil
-			}
+
+		pending, err := claimBatch(logs, expected, hashes, errs, &opTx, claim)
+		if err != nil {
+			return fail(err)
+		}
+		if pending == 0 {
+			return hashes, errs
 		}
 
 		if !time.Now().Before(deadline) {
-			return "", fmt.Errorf(
-				"no unclaimed transfer of the expected amount from %s to %s appeared within %s",
-				from.Hex(), to.Hex(), transferWaitTimeout,
-			)
+			return fail(fmt.Errorf(
+				"no unclaimed transfer of the expected amount from %s appeared within %s",
+				from.Hex(), transferWaitTimeout,
+			))
 		}
 		select {
 		case <-ctx.Done():
-			return "", ctx.Err()
+			return fail(ctx.Err())
 		case <-time.After(transferPollInterval):
 		}
 	}
+}
+
+// claimBatch matches one poll's logs against the payouts still unresolved and
+// reports how many remain. Separate from the polling so the matching can be
+// checked without a chain.
+//
+// A payout may only take a transfer from the operation's own transaction once
+// that is known, and once it is known, a payout with nothing in it fails.
+func claimBatch(
+	logs []types.Log,
+	expected []ExpectedTransfer,
+	hashes []string,
+	errs []error,
+	opTx *string,
+	claim BatchClaim,
+) (int, error) {
+	for i, want := range expected {
+		if hashes[i] != "" || errs[i] != nil || want.Amount == nil {
+			if want.Amount == nil && errs[i] == nil {
+				errs[i] = fmt.Errorf("no amount to match a transfer against")
+			}
+			continue
+		}
+		for _, candidate := range matchingTransfersTo(logs, want.To, want.Amount) {
+			if *opTx != "" && candidate.hash != *opTx {
+				continue
+			}
+			claimed := true
+			if claim != nil {
+				var err error
+				if claimed, err = claim(i, candidate.hash, candidate.block, candidate.index); err != nil {
+					return 0, err
+				}
+			}
+			if claimed {
+				hashes[i] = candidate.hash
+				if *opTx == "" {
+					*opTx = candidate.hash
+				}
+				break
+			}
+		}
+	}
+
+	pending := 0
+	for i := range expected {
+		if hashes[i] != "" || errs[i] != nil {
+			continue
+		}
+		if *opTx != "" {
+			// The operation landed and this payout is not in it. All-or-nothing
+			// means it never will be.
+			errs[i] = fmt.Errorf("operation landed in %s but this payout's transfer is not in it", *opTx)
+			continue
+		}
+		pending++
+	}
+	return pending, nil
+}
+
+// matchingTransfersTo is matchingTransfers restricted to one recipient.
+func matchingTransfersTo(logs []types.Log, to common.Address, amount *big.Int) []transferCandidate {
+	recipient := common.BytesToHash(to.Bytes())
+	filtered := make([]types.Log, 0, len(logs))
+	for _, entry := range logs {
+		if len(entry.Topics) >= 3 && entry.Topics[2] == recipient {
+			filtered = append(filtered, entry)
+		}
+	}
+	return matchingTransfers(filtered, amount)
 }
 
 type transferCandidate struct {

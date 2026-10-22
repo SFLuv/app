@@ -13,6 +13,9 @@ export interface ServerTransaction {
   from: string;
   to: string;
   memo?: string;
+  // Set by the backend from the faucet's address history: "volunteer_reward"
+  // when the sender was the faucet at the time of the transfer.
+  type?: string;
 }
 
 export interface Transaction {

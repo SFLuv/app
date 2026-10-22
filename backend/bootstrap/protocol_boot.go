@@ -76,6 +76,7 @@ func runProtocolAccounts(
 		appLogger.Logf("protocol accounts: already migrated — nothing to deploy, sweep or hand over")
 		keepFaucetAttached(ctx, protocolSvc, botClient, appLogger)
 		attachRedeemer(ctx, protocolSvc, redeemer, appLogger, false)
+		ensureRecoveryOwners(ctx, protocolSvc, appLogger)
 		return
 	}
 
@@ -287,4 +288,57 @@ func attachRedeemer(
 			appLogger.Logf("protocol accounts: legacy redeemer authority not revoked: %s", err)
 		}
 	}
+}
+
+// ensureRecoveryOwners retries adding the offline owner on every boot after the
+// cutover. Deployment adds it, but a failure there was only logged, and once
+// the cutover is complete boot never goes back to deployment, so without this
+// a failed add would stay failed for good. Writing needs the deploy gate, like
+// every other on-chain step; with the gate shut it only reports.
+func ensureRecoveryOwners(ctx context.Context, protocolSvc *handlers.ProtocolService, appLogger *logger.LogCloser) {
+	if protocolSvc.DeployEnabled() {
+		if err := protocolSvc.EnsureRecoveryOwners(ctx); err != nil {
+			appLogger.Logf("protocol accounts: recovery owner still missing on at least one Safe: %s", err)
+		}
+		return
+	}
+	missing, err := protocolSvc.MissingRecoveryOwners(ctx)
+	if err != nil {
+		appLogger.Logf("protocol accounts: WARNING could not confirm the recovery owner: %s", err)
+		return
+	}
+	if len(missing) > 0 {
+		appLogger.Logf(
+			"protocol accounts: WARNING recovery owner is not an owner of %v — set %s=true to add it",
+			missing, handlers.EnvDeployEnabled,
+		)
+	}
+}
+
+// WireProtocolPanel makes a deploy or sweep run from the Protocol panel take
+// effect in this process straight away, the same way the boot sequence would:
+// re-read whether the cutover is complete, attach the faucet Safe once it is
+// funded, and point redeemer grants at its Safe. Without it, a panel sweep
+// moved the money and left payouts going to the emptied EOA until a restart.
+func WireProtocolPanel(
+	ctx context.Context,
+	protocolSvc *handlers.ProtocolService,
+	botClient *bot.Bot,
+	redeemer *handlers.RedeemerService,
+	appLogger *logger.LogCloser,
+) {
+	if protocolSvc == nil {
+		return
+	}
+	protocolSvc.SetAfterPanelStep(func(step string) {
+		// The process context, not the request's: the retry loop outlives the
+		// HTTP response that triggered it.
+		go func() {
+			botClient.SetFaucetCutover(protocolSvc.CutoverComplete(ctx))
+			keepFaucetAttached(ctx, protocolSvc, botClient, appLogger)
+			// A panel deploy is the operator deliberately doing the on-chain
+			// part, which is what the deploy gate stands in for at boot.
+			attachRedeemer(ctx, protocolSvc, redeemer, appLogger, step == handlers.PanelStepDeploy)
+		}()
+	})
 }

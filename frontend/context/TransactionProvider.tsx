@@ -294,7 +294,13 @@ export default function TransactionProvider({ children }: { children: ReactNode 
     if(to === "0x0000000000000000000000000000000000000000") {
       return "currency_unwrap"
     }
-    if(chainConfig.faucetAddress && from === chainConfig.faucetAddress.toLowerCase()) {
+    // The backend knows who the faucet was at the time of each transfer, so a
+    // faucet rotation never relabels past rewards. The comparison against
+    // today's faucet address is only for a backend too old to send the label.
+    if(tx?.type === "volunteer_reward") {
+      return "volunteer_reward"
+    }
+    if(tx?.type === undefined && chainConfig.faucetAddress && from === chainConfig.faucetAddress.toLowerCase()) {
       return "volunteer_reward"
     }
 

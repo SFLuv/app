@@ -442,6 +442,11 @@ func NewServerHandler(ctx context.Context, pools *DBPools, appLogger *logger.Log
 	// is neither.
 	botClient.SetFaucetCutover(protocolSvc.CutoverComplete(ctx))
 
+	// A deploy or sweep run from the Protocol panel changes the same state the
+	// boot sequence acts on, so this process acts on it too rather than waiting
+	// for a restart.
+	WireProtocolPanel(ctx, protocolSvc, botClient, redeemer, appLogger)
+
 	// Bridge is the off-ramp behind merchant bank payouts. Without a key the
 	// client is disabled and every payout route answers "not available yet";
 	// the rest of the server is unaffected. Sandbox unless told otherwise, for
