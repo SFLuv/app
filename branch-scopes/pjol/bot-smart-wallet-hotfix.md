@@ -1,6 +1,6 @@
 # Branch scope — `pjol/bot-smart-wallet-hotfix`
 
-Oct 22 2026 · app (backend + frontend) · **0.9h measured** (round 1: 0.7h, round 2: 0.2h)
+Oct 22 2026 · app (backend + frontend) · **2.2h** (0.9h measured, 1.3h stated)
 
 Railway's vulnerability means the backend's signing keys have to be rotated. This branch makes that
 possible without breaking anything: the protocol accounts become smart wallets whose addresses never
@@ -338,3 +338,50 @@ built. Named as the option rather than left as an unknown.
 - **Still nothing submitted to the engine.** Everything verified here is encoding, SQL and control
   flow; the first real test is a human one.
 - **An engine outage stops payouts** once the cutover is complete, with no fallback built.
+
+# Round 3 — Oct 22, the review that produced round 2
+
+Oct 22 2026 · **1.3h stated, not measured** · app
+
+Chronologically this comes *before* round 2: it is the review of round 1 that found the six issues
+round 2 fixed. It is logged after because round 2 was written first, and the convention appends rather
+than folds, so that an earlier figure is never silently restated.
+
+## How these hours were recorded
+
+**1.3h stated by the owner — nothing measured, and the clock cannot corroborate it.**
+
+The session transcript for this project today starts at 11:18, which is the message carrying the review
+report. The work that produced that report leaves no transcript at all: reading the branch, checking
+the migration runner's behaviour, and finding the three identical payouts on chain happened outside any
+session. The owner states the day began around 10:00, so the window is roughly 10:00–11:18.
+
+Stated rather than derived. There is no measurement here to round, and "about an hour and a quarter
+before the first message" is the owner's account of their own morning, not something the clock saw.
+
+| Source | Hours | Basis |
+|---|---|---|
+| Oct 22 ~10:00–11:18 — review of round 1 | 1.30h | stated |
+
+**Its weakness is that it is unverifiable by the method this folder uses.** It is recorded because the
+work plainly happened — the report exists, and it is specific enough that it could not have been
+written without reading the branch — not because anything measured it.
+
+## What the review produced
+
+Six findings, all of which held up. Two were wrong in round 1 in ways that would have been expensive:
+the migration number would have stranded two branches permanently, and identical payouts could record
+the same transaction. Both are fixed in round 2, along with the automatic on-chain work at boot, the
+blocking of other jobs, and the nonce question.
+
+The three identical 5-SFLUV payouts inside a minute were found on chain, which is the detail that
+turned "this could collide" into a demonstrated bug.
+
+## Totals across this branch
+
+| Round | Hours | Basis |
+|---|---|---|
+| Round 1 — building it | 0.70h | measured |
+| Round 2 — review fixes | 0.20h | measured |
+| Round 3 — the review itself | 1.30h | stated |
+| **Total** | **2.2h** | 0.9h measured, 1.3h stated |
