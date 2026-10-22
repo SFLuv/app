@@ -1,6 +1,6 @@
 # Branch scope — `pjol/internal-notifications`
 
-Oct 19–22 2026 · app + mobile-app + webpage · **8.6h** (5.2h stated, 3.4h measured)
+Oct 19–22 2026 · app + mobile-app + webpage · **10.7h** (6.6h stated, 4.2h measured)
 
 Includes the `pjol/bot-smart-wallet-hotfix` branch, which this one sits on top of and which merges
 into main first. Its hours are rolled into the totals at the foot of this document; its own file stays
@@ -767,6 +767,103 @@ Supersedes round 6's table, which did not have this round in it.
 | Round 7 — merge-forward, the afk hour, and the client-side label | 0.90h stated + 0.18h measured | mixed |
 | **Total** | **5.9h** | 2.0h measured, 3.9h stated |
 
+# Round 8 — Oct 22, the day read as one session
+
+Oct 22 2026 · **0.8h measured** · app
+
+The day was one continuous session from about 10:00 to now, which changes how two of this document's
+figures should be read. This round says how, rather than editing the rounds that wrote them.
+
+## How these hours were recorded
+
+**0.8h measured** — the remainder of the sitting round 7 was written inside.
+
+| Window | Measured | Note |
+|---|---|---|
+| Oct 22 15:24–16:19 | 0.92h | the sitting in full |
+| less round 7's share | −0.12h | 15:49–15:56, already booked |
+| | **0.80h** | this round |
+
+**Round 7's 25-minute deduction is withdrawn.** It reported this sitting as starting at 15:49 rather
+than the 15:24 the measuring script gives, on the grounds that the 15:24:45 record is a
+context-compaction summary — the machine writing its own notes — with no human event until 15:49:41.
+That reasoning was sound on the evidence then available and wrong on the facts: the owner states the
+day was continuous, so those 25 minutes were worked. The script's unmodified clustering stands, and
+the sitting counts in full.
+
+Worth keeping the distinction visible, though: **27 of this sitting's 55 minutes contain no human
+transcript event at all.** They are in the measured column because that is where the method puts
+them, but what supports them is the clustering rule plus the owner's account of the day, not a
+keystroke inside the window.
+
+## The two gaps are booked on the other branch
+
+The day's other unrecorded windows — 11:25–12:06 and 12:43–13:24, 1.4h stated — sit between measured
+sittings whose work was the hotfix branch's, so they are recorded there, in that document's round 5.
+They are in the consolidated stated table below, attributed to it.
+
+## The day, end to end
+
+Oct 22 measures **6.3h** from 10:00 to 16:19, continuous. Every minute of it is now in one column or
+the other:
+
+| Window | Hours | Basis | Booked |
+|---|---|---|---|
+| 10:00–11:18 | 1.30h | stated | hotfix 3 |
+| 11:18–11:25 | 0.12h | measured | hotfix 1 |
+| 11:25–12:06 | 0.68h | stated | hotfix 5 |
+| 12:06–12:43 | 0.62h | measured | hotfix 1 |
+| 12:43–13:24 | 0.68h | stated | hotfix 5 |
+| 13:24–14:28 | 1.06h | measured | hotfix 2 & 4, this branch 5–7 |
+| 14:28–15:24 | 0.90h | stated | this branch 7 |
+| 15:24–16:19 | 0.92h | measured | this branch 7–8 |
+| | **6.28h** | 2.72h measured, 3.56h stated | |
+
+The itemisation comes to 6.28h against 6.32h of wall clock, four minutes adrift from rounding each
+window independently. **The sitting is open as this is written**, so the last row is a floor.
+
+## What this round's measured time was spent on
+
+Answering what the mobile app does with transaction history — it labels on the client — and then the
+accounting above. The first of those turned up a defect, and the defect was fixed by somebody else
+while this was being written.
+
+## Round 7's open item is closed, by someone else
+
+Round 7 recorded that the mobile app decided "Reward" by comparing a transfer's sender against a
+single `faucet_address` from the client config, so the faucet cutover would mislabel one side of
+itself whichever address that env var held. **Sanchez fixed it on the hotfix branch between 15:11 and
+16:02**, and this round merged those seven commits forward.
+
+`f37b985` moves the decision to the backend, resolved from the protocol address history, and
+`7ba3399` adds a `type` field to the transaction so a client can tell a labelled row from a legacy
+one. An earlier attempt at it (`6488cc5`) went through a `PREVIOUS_FAUCET_ADDRESSES` env list and was
+reverted in favour of the history table, which is the better answer for the reason round 7 gave: the
+history already knows which address was the faucet when, which is exactly what the label asks.
+
+Their work is written up in `branch-scopes/sanchezo/faucet-queue-fixes.md` with its own hours. It also
+closes the `PROTOCOL_RECOVERY_OWNER` gap — deployment now refuses without one — which the hotfix
+document's round 5 covers.
+
+So the open item is struck rather than carried: **nothing is left for this branch to do about
+transaction labelling.**
+
+## Totals across this branch
+
+Supersedes round 7's table.
+
+| Round | Hours | Basis |
+|---|---|---|
+| Round 1 — before any code | 2.00h | stated |
+| Round 2 — the pivot and the build | 1.15h | measured |
+| Round 3 — acking and the unwired history | 0.17h | measured |
+| Round 4 — messages and the chat tab | 0.12h | measured, upper bound |
+| Round 5 — ordering behind the hotfix | 0.23h | measured |
+| Round 6 — last night, and today's tail | 1.00h stated + 0.15h measured | mixed |
+| Round 7 — merge-forward, the afk hour, the client-side label | 0.90h stated + 0.18h measured | mixed |
+| Round 8 — the day read as one session | 0.80h | measured |
+| **Total** | **6.7h** | 2.8h measured, 3.9h stated |
+
 # Consolidated — both branches
 
 This branch contains `pjol/bot-smart-wallet-hotfix`, so the work in both is in anything that merges
@@ -788,8 +885,8 @@ added up here.
 | Oct 22 | 13:50–13:58 | 0.15h | notifications 6 |
 | Oct 22 | 13:58–14:24 | 0.43h | hotfix 4 |
 | Oct 22 | 14:24–14:28 | 0.06h | notifications 7 |
-| Oct 22 | 15:49–15:56 | 0.12h | notifications 7 *(floor, sitting open)* |
-| | **Total measured** | **3.36h → 3.4h** | |
+| Oct 22 | 15:24–16:19 | 0.92h | notifications 7–8 *(floor, sitting open)* |
+| | **Total measured** | **4.16h → 4.2h** | |
 
 ## Stated
 
@@ -799,22 +896,26 @@ added up here.
 | Oct 20 10:00–11:00 — website review | 1.00h | notifications 1 | stated |
 | Oct 21 evening | 1.00h | notifications 6 | stated, no transcript |
 | Oct 22 ~10:00–11:18 — review of the smart-wallet branch | 1.30h | hotfix 3 | stated, no transcript |
+| Oct 22 11:25–12:06 — between the hotfix sittings | 0.68h | hotfix 5 | stated, no transcript |
+| Oct 22 12:43–13:24 — between the hotfix sittings | 0.68h | hotfix 5 | stated, no transcript |
 | Oct 22 14:28–15:24 — worked away from the keyboard | 0.90h | notifications 7 | stated, no transcript |
-| | **Total stated** | **5.20h** | |
+| | **Total stated** | **6.56h** | |
 
 ## Both
 
 | | Hours |
 |---|---|
-| Measured | 3.4h |
-| Stated | 5.2h |
-| **Total** | **8.6h** |
+| Measured | 4.2h |
+| Stated | 6.6h |
+| **Total** | **10.7h** |
 
-**Read the two kinds separately.** Three fifths of this is stated rather than measured, and three of
-the stated windows have no session behind them at all — a meeting, a site review, and an hour worked
-away from the keyboard. Those are the owner's account of their own time, recorded as such. The measured
-column is session-transcript spans clustered on a 30-minute gap, unioned across every project worked
-in, which is the only part of this the clock can support.
+**Read the two kinds separately.** Three fifths of this is stated rather than measured, and five of
+the stated windows have no session behind them at all — a meeting, a site review, an evening, an hour
+worked away from the keyboard, and two gaps inside a continuous working day. Those are the owner's
+account of their own time, recorded as such. The measured column is session-transcript spans clustered
+on a 30-minute gap, unioned across every project worked in, which is the only part of this the clock
+can support — and Oct 22 shows what that method misses on a day spent mostly not typing: it saw 2.7h
+of a 6.3h session.
 
 **Four measured figures carry named weaknesses**, each written up in its own round: 0.07h of one
 Oct 20 sitting went to another repository and is deducted; the Oct 21 figure is an *upper bound*
@@ -828,9 +929,13 @@ record as the sitting's start — the only weakness here that ran toward oversta
 
 | Branch | Measured | Stated | Total | What |
 |---|---|---|---|---|
-| `pjol/bot-smart-wallet-hotfix` | 1.36h | 1.30h | **2.7h** | Protocol Safes, rotatable signers, historical address checks, and the work to make the leaked keys deletable |
-| `pjol/internal-notifications` | 2.00h | 3.90h | **5.9h** | Internal alerts, the mobile notification screen and boot cache, the bulletin merge, the website's Get in touch, paymaster-only gas alerting, and the client-side transaction label the cutover breaks |
-| **Together** | **3.36h** | **5.20h** | **8.6h** | |
+| `pjol/bot-smart-wallet-hotfix` | 1.36h | 2.66h | **4.0h** | Protocol Safes, rotatable signers, historical address checks, and the work to make the leaked keys deletable |
+| `pjol/internal-notifications` | 2.80h | 3.90h | **6.7h** | Internal alerts, the mobile notification screen and boot cache, the bulletin merge, the website's Get in touch, paymaster-only gas alerting, and reading the transaction-label path end to end |
+| **Together** | **4.16h** | **6.56h** | **10.7h** | |
 
-The per-branch totals round independently. They happen to agree this round — 2.7h and 5.9h sum to the
-8.6h above — but where a split and a measured total disagree, the measured total is the one to quote.
+Sanchez's own rounds on the hotfix branch are not in this table. They are on the same branch and will
+arrive with the same merge, but they are someone else's hours and
+`branch-scopes/sanchezo/faucet-queue-fixes.md` is where they are recorded.
+
+The per-branch totals round independently. They agree this round — 4.0h and 6.7h sum to the 10.7h
+above — but where a split and a measured total disagree, the measured total is the one to quote.
