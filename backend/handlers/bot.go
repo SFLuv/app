@@ -345,6 +345,21 @@ func (s *BotService) NewEvent(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(id))
 }
 
+// FaucetBalance is the faucet's whole SFLUV balance in base units, read from
+// wherever the faucet currently is — its Safe after the cutover, the EOA
+// before. The admin panel used to read it from the faucet address in /config,
+// which goes stale the moment the faucet moves.
+func (s *BotService) FaucetBalance(w http.ResponseWriter, r *http.Request) {
+	balance, err := s.bot.Balance()
+	if err != nil {
+		fmt.Printf("error getting faucet balance: %s\n", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(balance.String()))
+}
+
 func (s *BotService) RemainingBalance(w http.ResponseWriter, r *http.Request) {
 	decimals, err := strconv.Atoi(os.Getenv("TOKEN_DECIMALS"))
 	if err != nil {

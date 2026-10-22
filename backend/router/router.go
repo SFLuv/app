@@ -329,6 +329,7 @@ func AddBotRoutes(r *chi.Mux, s *handlers.BotService, a *handlers.AppService) {
 	r.Post("/redeem", s.Redeem)
 	r.Post("/drain", withAdmin(s.Drain, a))
 	r.Get("/balance", withAdmin(s.RemainingBalance, a))
+	r.Get("/faucet/balance", withAdmin(s.FaucetBalance, a))
 	r.Post("/recovery/balance", s.RecoveryPreview)
 	r.Post("/recovery/claim", withAuth(s.RecoveryClaim))
 }

@@ -105,3 +105,37 @@ Volume: 6 files. 0 migrations, 0 routes, 1 new env var.
 Edge, unchanged: if an earlier operation that timed out lands inside this one's window with an identical
 payout, a payout can claim that transaction first, and the rest of the batch then fails as "not in it" (codes stay
 spent, nothing is paid twice).
+
+# Round 4 — Oct 22, rewards labelled by the backend; PREVIOUS_FAUCET_ADDRESSES removed
+
+Oct 22 2026 · app (backend + frontend) · **~0.2h active** (about 15:50 to 16:02 PDT, wall-clock from session timestamps)
+
+Supersedes round 3's labelling half. The address history in the database is the record of who the faucet was, so
+the env list was the wrong place for it. `PREVIOUS_FAUCET_ADDRESSES` and the web `faucetAddresses` list are reverted.
+The batch-stall fix from round 3 stays.
+
+- **The backend labels rewards.** `GET /transactions` sets `type: "volunteer_reward"` on a transfer whose sender held
+  the faucet role at the moment of the transfer (`AppDB.ProtocolRoleWindows`, one query per page, checked in memory
+  with `ProtocolAddressWindows.HeldAt`). Past rewards keep their label across any rotation, and an old faucet wallet
+  sending after its window has closed is not a reward. While the history is empty (before
+  `PROTOCOL_KEY_ENCRYPTION_KEY` is set and the service has seeded it), `FAUCET_ADDRESS` stands in for all time,
+  which is what the clients did before.
+- **The Berachain-era faucet was the same address.** `0x21Df0dfC…` has a nonce of 1,183 on Berachain and 1,041 on Celo,
+  the same key on both chains. `0x36BB2a38…`, the `BOT_ADDRESS` in local dev configs, has never sent a transaction on
+  either chain. `/transactions` serves the backfilled Berachain rows with the active chain id (single-chain Ponder),
+  so the epoch-to-cutover window for `0x21Df…` on 42220 covers them, and no extra history row is needed.
+- **Web:** `TransactionProvider` uses the backend's `type`. It falls back to comparing against `/config`'s
+  `faucet_address` only when the field is absent (an older backend).
+- **Admin faucet balance** comes from the new admin-only `GET /faucet/balance` (`bot.Balance()`, which follows the
+  faucet to its Safe) instead of reading `/config`'s faucet address on chain.
+- **`/config` still serves `faucet_address`** from `FAUCET_ADDRESS`, so mobile builds that label by comparison keep
+  working. It's only needed until those builds age out.
+
+| Item | Hours | Repo |
+|---|---|---|
+| The above, plus the Berachain lookup. Verified with throwaway tests, not committed: labelling against a real Postgres at 1.66, covering an empty history (env fallback), a Berachain-era reward, a pre-cutover Celo reward, a Safe reward, the old wallet after the cutover (not a reward), the Safe before the cutover (not a reward), a merchant transfer, and case-insensitivity; `tsc --noEmit` shows no errors in the changed files | 0.2 | app |
+
+Volume: 9 files. 0 migrations, 1 new route (`GET /faucet/balance`), and the `type` field on transactions.
+
+Mobile (`SFLuv/mobile-app`): `isRewardTransaction` should prefer `transaction.type` from `/transactions`. Not changed
+here; it ships with an app release.

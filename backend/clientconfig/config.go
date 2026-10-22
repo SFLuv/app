@@ -67,18 +67,13 @@ type Chain struct {
 }
 
 type Extras struct {
-	HoneyTokenAddress string `json:"honey_token_address,omitempty"`
-	HoneyDecimals     *int   `json:"honey_decimals,omitempty"`
-	ByusdTokenAddress string `json:"byusd_token_address,omitempty"`
-	ByusdDecimals     *int   `json:"byusd_decimals,omitempty"`
-	ZapperAddress     string `json:"zapper_address,omitempty"`
-	FaucetAddress     string `json:"faucet_address,omitempty"`
-	// PreviousFaucetAddresses are wallets that paid rewards before the current
-	// faucet did. Clients label a transfer as a reward when it came from the
-	// faucet *at the time*, so after a rotation the old address still has to
-	// count — otherwise every earlier reward loses its label in history.
-	PreviousFaucetAddresses []string `json:"previous_faucet_addresses,omitempty"`
-	BackingAssets           []string `json:"backing_assets,omitempty"`
+	HoneyTokenAddress string   `json:"honey_token_address,omitempty"`
+	HoneyDecimals     *int     `json:"honey_decimals,omitempty"`
+	ByusdTokenAddress string   `json:"byusd_token_address,omitempty"`
+	ByusdDecimals     *int     `json:"byusd_decimals,omitempty"`
+	ZapperAddress     string   `json:"zapper_address,omitempty"`
+	FaucetAddress     string   `json:"faucet_address,omitempty"`
+	BackingAssets     []string `json:"backing_assets,omitempty"`
 	// ReadRPCURL is a full JSON-RPC node URL for general reads (eth_getCode,
 	// eth_getBalance, eth_getStorageAt, ...). The Citizen Wallet engine at
 	// chains[].node.url is a curated RPC that 404s those methods, so clients
@@ -508,9 +503,6 @@ func loadEnvironmentExtras() (Extras, error) {
 	if extras.FaucetAddress, err = envAddress("FAUCET_ADDRESS", "NEXT_PUBLIC_FAUCET_ADDRESS"); err != nil {
 		return Extras{}, err
 	}
-	if extras.PreviousFaucetAddresses, err = envAddressList("PREVIOUS_FAUCET_ADDRESSES"); err != nil {
-		return Extras{}, err
-	}
 	if extras.BackingAssets, err = envAddressList("BACKING_ASSETS", "NEXT_PUBLIC_BACKING_ASSETS"); err != nil {
 		return Extras{}, err
 	}
@@ -539,9 +531,6 @@ func mergeExtras(base, override Extras) Extras {
 	}
 	if override.FaucetAddress != "" {
 		base.FaucetAddress = override.FaucetAddress
-	}
-	if len(override.PreviousFaucetAddresses) > 0 {
-		base.PreviousFaucetAddresses = override.PreviousFaucetAddresses
 	}
 	if len(override.BackingAssets) > 0 {
 		base.BackingAssets = override.BackingAssets
@@ -581,7 +570,6 @@ func (e Extras) isZero() bool {
 		e.ByusdDecimals == nil &&
 		e.ZapperAddress == "" &&
 		e.FaucetAddress == "" &&
-		len(e.PreviousFaucetAddresses) == 0 &&
 		len(e.BackingAssets) == 0 &&
 		e.ReadRPCURL == ""
 }
@@ -611,7 +599,6 @@ func responseJSON(body []byte, extras Extras) ([]byte, error) {
 	writeStringExtra(extrasDoc, "faucet_address", extras.FaucetAddress)
 	writeStringExtra(extrasDoc, "rpc_url", extras.ReadRPCURL)
 	writeStringSliceExtra(extrasDoc, "backing_assets", extras.BackingAssets)
-	writeStringSliceExtra(extrasDoc, "previous_faucet_addresses", extras.PreviousFaucetAddresses)
 
 	if len(extrasDoc) == 0 {
 		delete(doc, "extras")
@@ -645,8 +632,6 @@ func deleteKnownExtraFields(doc map[string]json.RawMessage) {
 		"zapperContractAddress",
 		"faucet_address",
 		"faucetAddress",
-		"previous_faucet_addresses",
-		"previousFaucetAddresses",
 		"backing_assets",
 		"backingAssets",
 		"rpc_url",

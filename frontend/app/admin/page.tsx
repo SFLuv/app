@@ -705,16 +705,17 @@ export default function AdminPage() {
     getEvents()
   }
 
+  // Read from the backend, which follows the faucet wherever it lives (its Safe
+  // after the cutover). The faucet address in /config goes stale when it moves.
   const getFaucetBalance = async () => {
-    if (!chainConfig.faucetAddress) {
+    try {
+      const res = await authFetch("/faucet/balance")
+      if (!res.ok) throw new Error(String(res.status))
+      const bal = BigInt((await res.text()).trim())
+      setFaucetBalance(bal / BigInt(10 ** chainConfig.tokenDecimals))
+    } catch {
       setFaucetBalance("-")
-      getUnallocatedBalance()
-      return
     }
-    const decimals = 10 ** chainConfig.tokenDecimals
-    const bal = await wallets[0]?.getBalanceOf(chainConfig.tokenAddress, chainConfig.faucetAddress)
-
-    setFaucetBalance(bal ? bal / BigInt(decimals) : "-")
     getUnallocatedBalance()
   }
 
