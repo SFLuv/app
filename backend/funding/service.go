@@ -19,6 +19,20 @@ type Chain interface {
 	Address() (string, error)
 }
 
+// ProtocolState is what this package needs to know about the smart-wallet
+// migration, injected rather than imported because the handlers that own that
+// migration already import this one.
+//
+// Two questions, and the second changes what is worth alerting about at all.
+type ProtocolState interface {
+	// FaucetAddress is where the faucet's money actually is. After the
+	// migration that is a smart wallet, not the address derived from the key.
+	FaucetAddress(ctx context.Context) (string, bool)
+	// Sponsored reports whether the protocol's own transactions are paid for by
+	// the paymaster rather than out of their own balance.
+	Sponsored(ctx context.Context) bool
+}
+
 // Condition is one standing problem, named so it can be retracted later.
 //
 // The email notifier does not need this: an email is an event and stays sent.
@@ -83,26 +97,40 @@ func Conditions(snap Snapshot, cfg Config) []Condition {
 		})
 	}
 
-	// An account below its floor that nothing is going to fix: top-ups off, or
-	// this one marked watch-only. An account that will be topped up on the next
-	// sweep is not a condition — saying so would be an alert about something
-	// already being handled.
+	// An account below its floor that nothing is going to fix: top-ups off,
+	// this one marked watch-only, or — after the migration — every account,
+	// because nothing can top anything up any more. An account that will be
+	// funded on the next sweep is not a condition; saying so would be an alert
+	// about something already being handled.
 	for i, entry := range snap.Accounts {
 		if !entry.Low {
 			continue
 		}
-		stranded := !cfg.Enabled || (i < len(cfg.Accounts) && !cfg.Accounts[i].AutoTopUp)
+		stranded := snap.Sponsored || !cfg.Enabled || (i < len(cfg.Accounts) && !cfg.Accounts[i].AutoTopUp)
 		if !stranded {
 			continue
 		}
-		reason := "automatic top-ups are switched off"
-		if cfg.Enabled {
-			reason = "this account is watched, not funded"
+
+		detail := "Needs funding by hand — automatic top-ups are switched off."
+		switch {
+		case snap.Sponsored:
+			// The whole of what this service is for, after the migration. Said
+			// at length because it is the one gas balance left and the person
+			// reading it needs to know both that only they can fix it and what
+			// stops when they do not.
+			detail = "This is the account that pays gas for every sponsored transaction, and it is the only CELO " +
+				"balance left that anybody has to top up. Nothing can refill it automatically: our own balances " +
+				"are in smart wallets, and moving CELO out of one is itself a sponsored transaction that this " +
+				"account would have to pay for. When it empties, every payout, every merchant payment and every " +
+				"key rotation stops at the same moment."
+		case cfg.Enabled:
+			detail = "Needs funding by hand — this account is watched, not funded."
 		}
+
 		active = append(active, Condition{
 			Key:    "funding:account:" + strings.ToLower(entry.Address),
 			Title:  entry.Name + " is below its floor",
-			Detail: "Needs funding by hand — " + reason + ".",
+			Detail: detail,
 			Fields: [][2]string{
 				{"Balance", fmt.Sprintf("%.4f CELO", entry.Celo)},
 				{"Floor", fmt.Sprintf("%.4f CELO", entry.MinCelo)},
@@ -160,8 +188,13 @@ type Snapshot struct {
 	Accounts []AccountBalance `json:"accounts"`
 	// AutoTopUpEnabled reflects the config, so the panel can say whether a low
 	// account will fix itself or needs a person.
-	AutoTopUpEnabled bool      `json:"auto_top_up_enabled"`
-	TakenAt          time.Time `json:"taken_at"`
+	AutoTopUpEnabled bool `json:"auto_top_up_enabled"`
+	// Sponsored is true once the protocol's transactions are paid for by the
+	// paymaster. It changes what a low balance means: a protocol account with
+	// no CELO is then working as intended, and the paymaster is the only gas
+	// balance anybody has to act on.
+	Sponsored bool      `json:"sponsored"`
+	TakenAt   time.Time `json:"taken_at"`
 }
 
 // Service reads balances, tops accounts up, and alerts on the faucet.
@@ -170,6 +203,10 @@ type Service struct {
 	chain    Chain
 	notifier Notifier
 	logf     Logf
+
+	// protocol answers whether the accounts below still need gas. Nil means
+	// they do, which is how this behaved before smart wallets existed.
+	protocol ProtocolState
 
 	mu sync.Mutex
 	// lastAlert throttles the low-faucet email. The condition persists until
@@ -208,6 +245,21 @@ func NewService(cfg Config, chain Chain, notifier Notifier, logf Logf) *Service 
 	}
 }
 
+// SetProtocolState tells the service about the smart-wallet migration.
+func (s *Service) SetProtocolState(state ProtocolState) {
+	if s == nil {
+		return
+	}
+	s.protocol = state
+}
+
+// sponsored reports whether protocol transactions are paid for by the
+// paymaster. False whenever it cannot be established, so an unreachable
+// registry keeps the old alerting rather than silencing it.
+func (s *Service) sponsored(ctx context.Context) bool {
+	return s != nil && s.protocol != nil && s.protocol.Sponsored(ctx)
+}
+
 // Config exposes the loaded settings.
 func (s *Service) Config() Config { return s.cfg }
 
@@ -217,9 +269,24 @@ func (s *Service) log(format string, args ...any) {
 	}
 }
 
-// faucetAddress prefers the address derived from the key, because that is the
-// account transactions will actually come from. The configured variable is a
-// fallback for display when no key is loaded.
+// faucetAddress is where the faucet's balance is.
+//
+// The registry first, because after the smart-wallet migration the money is in
+// a wallet whose address is not derivable from any key — and reading the key's
+// address then reports an empty faucet, which raises a low-balance alert about
+// an account that is empty on purpose.
+//
+// Then the address derived from the key, which is where transactions came from
+// before the migration, and finally the configured variable for display.
+func (s *Service) faucetAddressAt(ctx context.Context) string {
+	if s != nil && s.protocol != nil {
+		if address, ok := s.protocol.FaucetAddress(ctx); ok && address != "" {
+			return address
+		}
+	}
+	return s.faucetAddress()
+}
+
 func (s *Service) faucetAddress() string {
 	if s.chain != nil {
 		if address, err := s.chain.Address(); err == nil && address != "" {
@@ -236,10 +303,11 @@ func (s *Service) faucetAddress() string {
 // failing the whole snapshot, so one unreachable address does not blank the
 // admin panel.
 func (s *Service) Balances(ctx context.Context) Snapshot {
-	snap := Snapshot{TakenAt: time.Now(), AutoTopUpEnabled: s.cfg.Enabled}
+	sponsored := s.sponsored(ctx)
+	snap := Snapshot{TakenAt: time.Now(), AutoTopUpEnabled: s.cfg.Enabled, Sponsored: sponsored}
 
 	snap.Faucet.Name = orDefault(s.cfg.Faucet.Name, "Faucet")
-	snap.Faucet.Address = s.faucetAddress()
+	snap.Faucet.Address = s.faucetAddressAt(ctx)
 	snap.Faucet.MinCelo = s.cfg.Faucet.MinCelo
 	snap.Faucet.MinSfluv = s.cfg.Faucet.MinSfluv
 
@@ -250,7 +318,13 @@ func (s *Service) Balances(ctx context.Context) Snapshot {
 			snap.Faucet.Error = err.Error()
 		} else {
 			snap.Faucet.Celo = WeiToCelo(wei)
-			snap.Faucet.LowCelo = s.cfg.Faucet.MinCelo > 0 && snap.Faucet.Celo < s.cfg.Faucet.MinCelo
+			// A sponsored faucet is not meant to hold CELO: its transfers are
+			// paid for by the paymaster, and the balance that was swept into
+			// its wallet is spendable rather than spent on gas. Judging it
+			// against a gas floor would raise an urgent alert about an account
+			// that is empty exactly as designed — and would bury the one gas
+			// alert that does need a person.
+			snap.Faucet.LowCelo = !sponsored && s.cfg.Faucet.MinCelo > 0 && snap.Faucet.Celo < s.cfg.Faucet.MinCelo
 		}
 		if base, err := s.chain.TokenBalance(ctx, snap.Faucet.Address); err != nil {
 			if snap.Faucet.Error == "" {
@@ -277,6 +351,13 @@ func (s *Service) Balances(ctx context.Context) Snapshot {
 		} else {
 			entry.Celo = WeiToCelo(wei)
 			entry.Low = account.MinCelo > 0 && entry.Celo < account.MinCelo
+			// Ours need no gas once they are sponsored; the paymaster always
+			// does, because it is the account paying. NeedsGas is what tells
+			// the two apart, and it is the only reason a CELO floor still
+			// applies to anything after the migration.
+			if sponsored && !account.NeedsGas {
+				entry.Low = false
+			}
 		}
 		snap.Accounts = append(snap.Accounts, entry)
 	}
@@ -303,7 +384,16 @@ func (s *Service) Sweep(ctx context.Context) SweepResult {
 	result := SweepResult{}
 	snap := s.Balances(ctx)
 
-	if s.cfg.Enabled && s.chain != nil {
+	// Topping up is off once the protocol is sponsored, whatever the config
+	// says, and it cannot be otherwise.
+	//
+	// The money that used to do the funding is in a smart wallet now, and a
+	// smart wallet moves CELO by way of a sponsored operation — which the
+	// paymaster pays for. So the one account that still needs gas is the one
+	// account whose top-up would depend on it already having some. That circle
+	// does not close, which is why the paymaster is funded by a person and this
+	// service's job here narrows to telling them when.
+	if s.cfg.Enabled && s.chain != nil && !snap.Sponsored {
 		// What the faucet may spend, keeping its own reserve back. Without the
 		// reserve a faucet can fund others down to where it cannot afford the
 		// transaction that would fix anything.

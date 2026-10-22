@@ -1,17 +1,34 @@
 {
   "_comment": [
-    "Operational accounts the faucet keeps in gas.",
+    "Operational gas balances, and who has to do something about them.",
     "",
-    "The point of this file is that only the faucet needs a person. Every account",
-    "below has a 1 CELO floor; falling under it triggers a top-up back to",
-    "top_up_to_celo, paid out of the faucet. When the faucet itself gets low,",
-    "FUNDING_ALERT_EMAILS is emailed, because that is the one balance nothing",
-    "here can refill.",
+    "This file predates the smart-wallet migration and still describes the",
+    "world before it, which is deliberate: both worlds exist at once while the",
+    "cutover is pending, and the backend narrows this automatically rather than",
+    "needing the file edited at the moment of the switch.",
     "",
-    "'priority' decides who gets paid first when the faucet cannot cover",
-    "everything at once. The paymaster sponsor is 1: every sponsored user",
-    "transaction depends on it, so its exhaustion stops the whole system rather",
-    "than one feature of it.",
+    "BEFORE the cutover, every account below signs its own transactions and so",
+    "needs CELO. Falling under min_celo triggers a top-up back to",
+    "top_up_to_celo, paid out of the faucet, in 'priority' order when the",
+    "faucet cannot cover everything at once.",
+    "",
+    "AFTER it, our accounts are smart wallets and their transactions are paid",
+    "for by the paymaster. They need no gas at all, so their floors stop",
+    "applying — a protocol account at zero CELO is then working as designed,",
+    "and alerting on it would bury the one alert that matters. The accounts",
+    "that keep a floor are the ones marked 'needs_gas', and there is exactly",
+    "one: the paymaster, which is the account doing the sponsoring.",
+    "",
+    "Top-ups also stop entirely at that point, and cannot be otherwise. The",
+    "balance that used to fund everything is in a smart wallet, and moving CELO",
+    "out of one is itself a sponsored transaction that the paymaster pays for —",
+    "so the only account still needing gas is the one whose top-up would depend",
+    "on it already having some. That circle does not close. The paymaster is",
+    "funded by a person, and this service's job narrows to saying when.",
+    "",
+    "What still needs watching after the cutover:",
+    "  - the paymaster's CELO, which only a person can refill;",
+    "  - the faucet's SFLUV, read from the smart wallet the money moved into.",
     "",
     "Top-ups are capped at one transaction per account per minute regardless of",
     "balances, and an account topped up twice inside two minutes raises a drain",
@@ -24,9 +41,7 @@
     "deployment without editing this file; setting it false is the kill switch.",
     "",
     "'alerts' is separate and defaults to ON even when it is absent: moving",
-    "money should take an opt-in, being told it is about to run out should not.",
-    "With top-ups off you still get emailed about a low faucet and about any",
-    "account below its floor that nothing is going to fix."
+    "money should take an opt-in, being told it is about to run out should not."
   ],
   "enabled": false,
   "alerts": true,
@@ -42,10 +57,11 @@
       "name": "Paymaster sponsor",
       "address": "0x4e346660F66a21c34B5099Ada74cC34d91C4886e",
       "priority": 1,
+      "needs_gas": true,
       "min_celo": 1.0,
       "top_up_to_celo": 6.0,
       "auto_top_up": true,
-      "notes": "First in line, always. Pays gas for every sponsored user transaction, so customer payments to merchants all stop together when it is empty - this is the account whose exhaustion stopped payments with no warning. It is the paymaster contract's sponsor() and belongs to Citizen Wallet, not us: we cannot sign for it, but it is an EOA and anyone may fund it. At roughly 0.03 CELO a transaction, the 1 CELO floor is about thirty transactions of warning and the 6 CELO target about two hundred."
+      "notes": "The only account that needs CELO once our own wallets are sponsored, and the only one a person has to top up. First in line, always. Pays gas for every sponsored user transaction, so customer payments to merchants all stop together when it is empty - this is the account whose exhaustion stopped payments with no warning. It is the paymaster contract's sponsor() and belongs to Citizen Wallet, not us: we cannot sign for it, but it is an EOA and anyone may fund it. At roughly 0.03 CELO a transaction, the 1 CELO floor is about thirty transactions of warning and the 6 CELO target about two hundred."
     },
     {
       "name": "Redeemer admin",
@@ -54,7 +70,7 @@
       "min_celo": 1.0,
       "top_up_to_celo": 3.0,
       "auto_top_up": true,
-      "notes": "Grants REDEEMER_ROLE to approved merchant locations. Empty means a newly approved merchant silently cannot take payment."
+      "notes": "Grants REDEEMER_ROLE to approved merchant locations. Empty means a newly approved merchant silently cannot take payment - until the cutover, after which its grants go through its smart wallet, it needs no gas, and this floor stops applying."
     },
     {
       "name": "Admin",
@@ -63,7 +79,7 @@
       "min_celo": 1.0,
       "top_up_to_celo": 2.0,
       "auto_top_up": false,
-      "notes": "Watched, not funded: it signs rarely and is worth a person noticing. Set auto_top_up true once the rest has been running a while."
+      "notes": "Watched, not funded: it signs rarely and is worth a person noticing. Needs no gas after the cutover either, so this floor also stops applying then."
     }
   ]
 }

@@ -423,6 +423,13 @@ func NewServerHandler(ctx context.Context, pools *DBPools, appLogger *logger.Log
 	botClient.SetSenderResolver(protocolSvc.FaucetSenderResolver())
 	botClient.SetTxSenderResolver(protocolSvc.TxSenderResolver())
 
+	// Which balances are worth alerting on depends on whether the protocol's
+	// own transactions are sponsored. Once they are, the paymaster is the only
+	// CELO balance anybody has to act on, and a protocol account sitting at
+	// zero gas is working as designed rather than about to fail. Wired here
+	// because the funding service is built before this one.
+	fundingSvc.SetProtocolState(protocolSvc.FundingProtocolState())
+
 	// Bridge is the off-ramp behind merchant bank payouts. Without a key the
 	// client is disabled and every payout route answers "not available yet";
 	// the rest of the server is unaffected. Sandbox unless told otherwise, for

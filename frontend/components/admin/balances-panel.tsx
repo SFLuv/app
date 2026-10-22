@@ -47,6 +47,12 @@ type Snapshot = {
   }
   accounts: AccountBalance[]
   auto_top_up_enabled: boolean
+  /**
+   * True once the protocol's own transactions are paid for by the paymaster.
+   * It changes what the numbers mean: our wallets stop needing gas, and the
+   * paymaster becomes the only CELO balance a person has to top up.
+   */
+  sponsored: boolean
   taken_at: string
 }
 
@@ -171,12 +177,22 @@ export function BalancesPanel() {
             )}
           </CardTitle>
           <CardDescription>
-            Everything below is funded from here. This is the only balance that needs a person.
+            {snapshot.sponsored
+              ? "Rewards and redemptions are paid from this balance. Its transactions are sponsored, so it needs no gas of its own — the paymaster below is the balance that needs a person."
+              : "Everything below is funded from here. This is the only balance that needs a person."}
             <span className="ml-1 font-mono text-xs">{short(faucet.address)}</span>
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4 sm:grid-cols-2">
-          <Figure label="CELO (gas)" value={celo(faucet.celo)} floor={celo(faucet.min_celo)} low={faucet.low_celo} />
+          {/* No floor shown once sponsored: a gas floor on an account that
+              never pays gas reads as a balance sitting under its limit, which
+              is the opposite of what zero means there. */}
+          <Figure
+            label={snapshot.sponsored ? "CELO (not needed)" : "CELO (gas)"}
+            value={celo(faucet.celo)}
+            floor={snapshot.sponsored ? undefined : celo(faucet.min_celo)}
+            low={faucet.low_celo}
+          />
           <Figure label="SFLUV (rewards)" value={sfluv(faucet.sfluv)} floor={sfluv(faucet.min_sfluv)} low={faucet.low_sfluv} />
           {faucet.error ? (
             <p className="sm:col-span-2 text-sm text-destructive">Could not read: {faucet.error}</p>
@@ -188,9 +204,11 @@ export function BalancesPanel() {
         <CardHeader className="pb-2">
           <CardTitle className="text-base text-black dark:text-white">Protocol accounts</CardTitle>
           <CardDescription>
-            {snapshot.auto_top_up_enabled
-              ? "Topped up automatically from the faucet when they fall below their floor."
-              : "Automatic top-ups are off — these need funding by hand, or switch them on in funding-accounts.json."}
+            {snapshot.sponsored
+              ? "Only the paymaster still needs CELO: it pays for every sponsored transaction, and nothing can refill it automatically, because moving CELO out of a smart wallet is itself a transaction it would have to pay for."
+              : snapshot.auto_top_up_enabled
+                ? "Topped up automatically from the faucet when they fall below their floor."
+                : "Automatic top-ups are off — these need funding by hand, or switch them on in funding-accounts.json."}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
@@ -247,14 +265,31 @@ export function BalancesPanel() {
   )
 }
 
-function Figure({ label, value, floor, low }: { label: string; value: string; floor: string; low: boolean }) {
+/** A balance against the floor it is judged by, where it is judged by one. */
+function Figure({
+  label,
+  value,
+  floor,
+  low,
+}: {
+  label: string
+  value: string
+  /** Omitted for a balance nothing is judging, which is how a sponsored
+      account's gas reads: zero is correct rather than short. */
+  floor?: string
+  low: boolean
+}) {
   return (
     <div>
       <div className="text-xs uppercase tracking-wide text-muted-foreground">{label}</div>
       <div className={`text-2xl font-semibold tabular-nums ${low ? "text-destructive" : "text-black dark:text-white"}`}>
         {value}
       </div>
-      <div className="text-xs text-muted-foreground tabular-nums">floor {floor}</div>
+      {floor ? (
+        <div className="text-xs text-muted-foreground tabular-nums">floor {floor}</div>
+      ) : (
+        <div className="text-xs text-muted-foreground">not required</div>
+      )}
     </div>
   )
 }

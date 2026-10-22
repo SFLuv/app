@@ -65,6 +65,15 @@ type Account struct {
 	// for one we do not own, or one being observed before trusting automation
 	// with it.
 	AutoTopUp bool `json:"auto_top_up"`
+	// NeedsGas marks an account that must hold CELO even after the protocol's
+	// own transactions became sponsored.
+	//
+	// There is exactly one: the paymaster, which is the account doing the
+	// sponsoring. Everything else of ours sends through it and so needs no gas
+	// of its own, and a floor left on one of those would alert about an account
+	// that is empty by design. Absent means "no gas needed", which is the right
+	// default now that it is the common case.
+	NeedsGas bool `json:"needs_gas,omitempty"`
 	// Notes is for whoever reads the file next. Ignored by the code.
 	Notes string `json:"notes,omitempty"`
 

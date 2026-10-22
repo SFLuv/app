@@ -235,3 +235,12 @@ func (n *fundingNotifier) Conditions(ctx context.Context, active []funding.Condi
 
 	return nil
 }
+
+// SetProtocolState passes the smart-wallet migration's state through to the
+// funding module, which uses it to decide which balances are worth alerting on.
+func (s *FundingService) SetProtocolState(state funding.ProtocolState) {
+	if s == nil || s.inner == nil {
+		return
+	}
+	s.inner.SetProtocolState(state)
+}

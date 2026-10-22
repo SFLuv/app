@@ -1,6 +1,6 @@
 # Branch scope — `pjol/internal-notifications`
 
-Oct 19–21 2026 · app + mobile-app + webpage · **3.4h** (2.0h stated, 1.4h measured)
+Oct 19–22 2026 · app + mobile-app + webpage · **3.6h** (2.0h stated, 1.6h measured)
 
 Internal organization notifications, delivered to the mobile app, plus the website's Get in touch
 flow and a rebuilt mobile boot sequence.
@@ -476,3 +476,106 @@ open thread id now covers all three, so a message read from the inbox stops sitt
 - **The dock badge counts conversations, not messages.** Ten messages in one thread read as "1".
   That is what the server's summary counts and what the inbox's own dots mean, so all three agree,
   but it is a choice rather than an oversight.
+
+# Round 5 — Oct 22, this branch gets in line behind the protocol wallets
+
+Oct 22 2026 · **0.2h measured** · app
+
+The smart-wallet branch merges into main before this one, so this branch now sits on top of it, with
+the database versions in merge order and the gas alerting rewritten for a world where only one
+account needs gas.
+
+## How these hours were measured
+
+**0.2h measured** from session-transcript timestamps, `time-accounting` method, 30-minute sitting gap.
+
+| Sitting | Span | Measured | On this branch |
+|---|---|---|---|
+| C | 13:24–13:50 | 0.43h | **0.23h → 0.2h** |
+
+**The sitting is shared with another branch**, which is this round's weakness. The first part of it,
+13:24 to roughly 13:36, was spent fixing the smart-wallet branch and is booked there as its round 2.
+The split is attributed by when the work moved — the hotfix commit and push, at 13:36 and 13:39 —
+rather than measured separately, because the clock measures the sitting and not the branch. The
+sitting was also still open when this was written, so the figure is a floor.
+
+## Ordering, and why the rebase was abandoned
+
+The ask was a rebase onto the smart-wallet branch. **It was attempted and backed out**, and the reason
+is worth recording: with `--rebase-merges` it replays twenty-one commits including two historical
+merges — Sanchez's bulletin work, and an earlier merge of main — which means re-resolving both from
+scratch with no record of how they were settled the first time. Getting one wrong would silently drop
+somebody else's work, and nothing would show it.
+
+A single merge resolves the overlap once, in one place, and this repository merges pull requests
+rather than squashing them, so main ends up with the same commits either way. The ordering the request
+was actually about — that branch first, this one on top — is identical.
+
+Six files overlapped, and every one of them wanted both sides rather than a winner: the bot keeps its
+native-balance helpers and gains the sender resolution, `AppService` holds the notification, uptime and
+protocol services, the router registers all three groups, the admin page carries both the Support and
+Protocol tabs, and the jobs leader starts all three sets of background work.
+
+## The database versions now match the merge order
+
+This is the part that had to be right, and it was wrong in both directions before today:
+
+| Version | What | Was |
+|---|---|---|
+| 1.66 | protocol smart accounts | 1.68 on its own branch |
+| 1.67 | bulletin board | 1.66 |
+| 1.68 | internal notifications | 1.67 |
+
+The runner applies a migration only when its version is above the one recorded in the database, so
+whichever branch lands first sets the floor for everything behind it. A branch that numbered itself
+above the one merging before it would never run at all — no error, no missing-table complaint until a
+feature touched one.
+
+## Only the paymaster needs CELO now
+
+The funding module was built for a world where several accounts signed their own transactions: the
+faucet held CELO and topped up the redeemer admin, the admin wallet and the paymaster from it, and
+alerted when the faucet itself ran low.
+
+With the protocol's transactions sponsored, **our accounts need no gas at all** — a smart wallet's
+transfer is paid for by the paymaster — so the only CELO balance left that anybody has to act on is the
+paymaster's. One account is marked `needs_gas` in the config and the rest keep their floors only until
+the cutover, which is what lets both worlds be described by one file: the backend narrows it rather
+than the file being edited at the moment of the switch.
+
+**Automatic top-ups stop at that point, and cannot be otherwise.** The balance that used to do the
+funding is in a smart wallet, and moving CELO out of one is itself a sponsored transaction that the
+paymaster pays for — so the only account still needing gas is the one whose top-up would depend on it
+already having some. That circle does not close, which is why the paymaster is funded by a person and
+this service's job narrows to saying when. The alert says so at length, because it is the one gas
+alert left and whoever reads it needs to know both that only they can fix it and that every payout,
+every merchant payment and every key rotation stops together when they do not.
+
+Two smaller consequences, both the kind of thing that reads as a bug if left:
+
+- **The faucet's balance is read from the wallet the money moved into.** Reading the key's address
+  after the sweep reports an empty faucet, which would raise a low-balance alert about an account that
+  is empty on purpose.
+- **A gas floor is not shown for an account that never pays gas.** "0 CELO, floor 5" with no warning
+  looks like a panel that has lost track of itself; it now reads "not required".
+
+Verified by execution: before the cutover the faucet's CELO alert, its SFLUV alert and a stranded
+paymaster all fire; after it the CELO alert is gone, SFLUV still fires, and the paymaster is the one
+urgent gas alert — including with top-ups switched on in the config, because nothing can act on them.
+
+## Volume
+
+| Repo | Files | Lines |
+|---|---|---|
+| app (backend) | 7 modified | +214 / −34 |
+| app (frontend) | 1 modified | +42 / −7 |
+
+Plus the merge itself, which brought in the smart-wallet branch whole.
+
+## Open
+
+- **The funding config still describes the pre-cutover world**, deliberately: both worlds exist while
+  the cutover is pending, and the code narrows it automatically. It is worth a tidy once the migration
+  has actually run.
+- **An engine outage stops payouts** once the cutover is complete, with no fallback built. Carried over
+  from the branch below this one, and the reason the paymaster alert is worded as strongly as it is.
