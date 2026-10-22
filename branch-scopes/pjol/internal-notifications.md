@@ -1,6 +1,6 @@
 # Branch scope — `pjol/internal-notifications`
 
-Oct 19–22 2026 · app + mobile-app + webpage · **7.5h** (4.3h stated, 3.2h measured)
+Oct 19–22 2026 · app + mobile-app + webpage · **7.7h** (4.3h stated, 3.4h measured)
 
 Includes the `pjol/bot-smart-wallet-hotfix` branch, which this one sits on top of and which merges
 into main first. Its hours are rolled into the totals at the foot of this document; its own file stays
@@ -658,6 +658,111 @@ quote, which is the rule this folder already follows where the two disagree.
 | Round 6 — last night, and today's tail | 1.00h stated + 0.15h measured | mixed |
 | **Total** | **4.8h** | 1.8h measured, 3.0h stated |
 
+# Round 7 — Oct 22, the merge-forward, and a label the cutover will break
+
+Oct 22 2026 · **0.2h measured** · app (plus a read of `mobile-app`)
+
+Two short windows, no features. The first finished the work round 6 was written in the middle of. The
+second answered a question about the mobile app's transaction history and turned up something the
+protocol cutover breaks.
+
+## How these hours were measured
+
+**0.2h measured**, both windows from the session transcript, clustered on a 30-minute gap.
+
+| Window | Measured | What |
+|---|---|---|
+| Oct 22 14:24–14:28 | 0.06h | merge-forward, the consolidated accounting, final verification |
+| Oct 22 15:49–15:56 | 0.12h | the transaction-label trace, and this entry |
+| | **0.18h → 0.2h** | |
+
+**The first window is a correction rather than new work.** Round 6 split sitting C into sub-spans
+summing to 1.00h, while the sitting itself measured 1.06h. The missing four minutes are the merge
+commit and the accounting commit — they did not exist yet when the document that should have counted
+them was being written. Sitting C is now closed at its full 1.06h.
+
+**This round's weakness runs the opposite way to every other one in this document, which is why it is
+worth naming plainly.** The measuring script reports the current sitting as 15:24–15:52, 0.47h. It is
+not. The 15:24:45 record is a context-compaction summary — the machine writing its own notes when the
+conversation ran out of room — and the next human event is at 15:49:41. The 30-minute clustering rule
+cannot tell those two apart, so left alone it banks 25 minutes of machine bookkeeping as work.
+Deducted: the sitting starts at 15:49.
+
+**The 14:28–15:24 window is not recorded here, because nothing can see it.** No transcript events in
+any project, no file modified in either repository, no commit. Fifty-six minutes the clock has no
+account of. If they were spent building and testing — which is what the plan asked for next — that is
+stated time, and it belongs in a stated row on the owner's word rather than a measured one on mine.
+
+**The sitting is open as this is written**, so the 0.12h is a floor.
+
+## What the first window did
+
+The hotfix branch's key-removal work merged forward into this one, two conflicts resolved by keeping
+both sides: `bootstrap/runtime.go` wanted the funding module's `SetProtocolState` wiring *and* the
+synchronous cutover read, and `handlers/protocol_service.go` wanted the `FundingState` adapter *and*
+the signer verification. Then the consolidated accounting at the foot of this document, and a
+verification pass: `go vet` clean apart from the seven pre-existing `app_contact.go` findings, the
+frontend type-check at its unchanged 25-error baseline, migrations ordered 1.65 → 1.66 → 1.67 → 1.68,
+and both branches' heads matching their remotes.
+
+## The label the cutover breaks
+
+The question was whether the mobile app receives transaction history pre-labelled — faucet rewards
+tagged apart from merchant payments — or labels it on the client. **It labels on the client**, and that
+turns out to matter to the branch underneath this one.
+
+What the server sends, from `GET /transactions`, is a row of `id`, `chain_id`, `hash`, `amount`,
+`timestamp`, `from`, `to`, `memo`. There is no type, no category and no direction on it. Everything
+downstream of that is the client's own work: `direction` from comparing `from` against the active
+address, "Reward" vs "Currency Transfer" from `isRewardTransaction` comparing `from` against one
+`faucetAddress`, and counterparty names from the contact list, the merchant locations, and a lazy
+`/wallets/lookup/{address}` per address it has not seen. The memo is the only label the server attaches,
+and the user wrote it.
+
+That one `faucetAddress` is the problem. It arrives as a single `faucet_address` string in the client
+config extras, sourced from the `FAUCET_ADDRESS` / `NEXT_PUBLIC_FAUCET_ADDRESS` env pair — and the
+faucet's address changes at the cutover. One string cannot be both, so whichever it holds, the other
+side of the cutover is mislabelled: leave it on the EOA and every new reward shows as a bare hex
+address, move it to the Safe and every reward before the cutover does instead.
+
+**This is the same defect the hotfix branch was built to fix, one layer out.** The backend already
+holds the answer: `classificationAddresses()` records both faucet env addresses as faucet-role history
+rows, and the legacy entry records `BOT_ADDRESS`, each with its own validity window, precisely so a
+report over last March still classifies March's transfers. None of it reaches the client config.
+
+The cheap fix keeps the client dumb: publish the set instead of the one, as a `faucet_addresses` list
+extra, and have `isRewardTransaction` test membership. The client already parses a list extra in that
+exact shape — `backing_assets`, through `findExtraAddressList` — so it is one extras field and a
+one-line predicate, no new machinery, and it is correct for every faucet address past and future. The
+alternative, a server-resolved `category` looked up from `protocol_address_history` by the transfer's
+timestamp, is the better long-run answer and uses the window table the hotfix branch already built,
+but it changes the response shape across two repositories on separate release cadences. Not for this
+branch.
+
+**Nothing was changed.** A question answered, and a defect written down where the release will find it.
+
+## Open
+
+| Item | Where |
+|---|---|
+| The mobile app's Reward label breaks at the faucet cutover — publish `faucet_addresses` as a list extra and test membership | app `backend/clientconfig/config.go`, mobile-app `mobile/src/utils/transactions.ts` |
+| The 14:28–15:24 window is unaccounted for; stated time if it was testing | this document |
+
+## Totals across this branch
+
+Supersedes round 6's table, which did not have this round in it.
+
+| Round | Hours | Basis |
+|---|---|---|
+| Round 1 — before any code | 2.00h | stated |
+| Round 2 — the pivot and the build | 1.15h | measured |
+| Round 3 — acking and the unwired history | 0.17h | measured |
+| Round 4 — messages and the chat tab | 0.12h | measured, upper bound |
+| Round 5 — ordering behind the hotfix | 0.23h | measured |
+| Round 6 — last night, and today's tail | 1.00h stated + 0.15h measured | mixed |
+| Round 7 — merge-forward, and the client-side label | 0.18h | measured |
+| **Total** | **5.0h** | 2.0h measured, 3.0h stated |
+
 # Consolidated — both branches
 
 This branch contains `pjol/bot-smart-wallet-hotfix`, so the work in both is in anything that merges
@@ -678,7 +783,9 @@ added up here.
 | Oct 22 | 13:36–13:50 | 0.23h | notifications 5 |
 | Oct 22 | 13:50–13:58 | 0.15h | notifications 6 |
 | Oct 22 | 13:58–14:24 | 0.43h | hotfix 4 |
-| | **Total measured** | **3.18h → 3.2h** | |
+| Oct 22 | 14:24–14:28 | 0.06h | notifications 7 |
+| Oct 22 | 15:49–15:56 | 0.12h | notifications 7 *(floor, sitting open)* |
+| | **Total measured** | **3.36h → 3.4h** | |
 
 ## Stated
 
@@ -694,27 +801,33 @@ added up here.
 
 | | Hours |
 |---|---|
-| Measured | 3.2h |
+| Measured | 3.4h |
 | Stated | 4.3h |
-| **Total** | **7.5h** |
+| **Total** | **7.7h** |
 
 **Read the two kinds separately.** More than half of this is stated rather than measured, and two of
 the stated windows have no session behind them at all — they are the owner's account of their own
 time, recorded as such. The measured column is session-transcript spans clustered on a 30-minute gap,
 unioned across every project worked in, which is the only part of this the clock can support.
 
-**Three measured figures carry named weaknesses**, each written up in its own round: 0.07h of one
+**Four measured figures carry named weaknesses**, each written up in its own round: 0.07h of one
 Oct 20 sitting went to another repository and is deducted; the Oct 21 figure is an *upper bound*
-because a second project's session covered every minute of it; and every figure from a sitting that
-was still open when its round was written is a floor.
+because a second project's session covered every minute of it; every figure from a sitting that was
+still open when its round was written is a floor; and the Oct 22 15:49 sitting has 25 minutes
+deducted from what the script reports, because the clustering rule counted a context-compaction
+record as the sitting's start — the only weakness here that ran toward overstating rather than under.
+
+**One window of the day is in neither column.** Oct 22 14:28–15:24, fifty-six minutes with no
+transcript event in any project, no file modified in either repository and no commit. It is left out
+rather than estimated; round 7 says so.
 
 ## What is in each branch
 
 | Branch | Measured | Stated | Total | What |
 |---|---|---|---|---|
 | `pjol/bot-smart-wallet-hotfix` | 1.36h | 1.30h | **2.7h** | Protocol Safes, rotatable signers, historical address checks, and the work to make the leaked keys deletable |
-| `pjol/internal-notifications` | 1.82h | 3.00h | **4.8h** | Internal alerts, the mobile notification screen and boot cache, the bulletin merge, the website's Get in touch, and paymaster-only gas alerting |
-| **Together** | **3.18h** | **4.30h** | **7.5h** | |
+| `pjol/internal-notifications` | 2.00h | 3.00h | **5.0h** | Internal alerts, the mobile notification screen and boot cache, the bulletin merge, the website's Get in touch, paymaster-only gas alerting, and the client-side transaction label the cutover breaks |
+| **Together** | **3.36h** | **4.30h** | **7.7h** | |
 
-The per-branch totals round independently, which is why they read as 2.7h and 4.8h while summing to
-7.5h rather than 7.4h. The measured total is the one to quote where they disagree.
+The per-branch totals round independently. They happen to agree this round — 2.7h and 5.0h sum to the
+7.7h above — but where a split and a measured total disagree, the measured total is the one to quote.
