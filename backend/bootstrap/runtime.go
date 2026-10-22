@@ -430,6 +430,18 @@ func NewServerHandler(ctx context.Context, pools *DBPools, appLogger *logger.Log
 	// because the funding service is built before this one.
 	fundingSvc.SetProtocolState(protocolSvc.FundingProtocolState())
 
+	// Whether the Safe is the faucet, decided here and not in the boot
+	// goroutine below.
+	//
+	// It is one database read, and doing it synchronously closes a window that
+	// would otherwise exist on every deploy: the goroutine that attaches the
+	// faucet takes a few seconds, and until it ran the bot would think the EOA
+	// was still in charge and sign payouts with a key whose account is empty.
+	// Knowing the cutover happened is enough to refuse those instead, which is
+	// retryable and releases the redemption code; paying from an emptied wallet
+	// is neither.
+	botClient.SetFaucetCutover(protocolSvc.CutoverComplete(ctx))
+
 	// Bridge is the off-ramp behind merchant bank payouts. Without a key the
 	// client is disabled and every payout route answers "not available yet";
 	// the rest of the server is unaffected. Sandbox unless told otherwise, for

@@ -1,6 +1,6 @@
 # Branch scope — `pjol/bot-smart-wallet-hotfix`
 
-Oct 22 2026 · app (backend + frontend) · **2.2h** (0.9h measured, 1.3h stated)
+Oct 22 2026 · app (backend + frontend) · **2.6h** (1.3h measured, 1.3h stated)
 
 Railway's vulnerability means the backend's signing keys have to be rotated. This branch makes that
 possible without breaking anything: the protocol accounts become smart wallets whose addresses never
@@ -384,4 +384,179 @@ turned "this could collide" into a demonstrated bug.
 | Round 1 — building it | 0.70h | measured |
 | Round 2 — review fixes | 0.20h | measured |
 | Round 3 — the review itself | 1.30h | stated |
-| **Total** | **2.2h** | 0.9h measured, 1.3h stated |
+| Round 4 — so the leaked keys can be deleted | 0.43h | measured |
+| **Total** | **2.6h** | 1.3h measured, 1.3h stated |
+
+# Round 4 — Oct 22, so the leaked keys can be deleted
+
+Oct 22 2026 · **0.4h measured** · app
+
+Round 1 moved the money to Safes. It did not finish the job the leak actually
+demands, which is being able to **delete `BOT_KEY` and `REDEEMER_ADMIN_KEY` from
+Railway**. Three code paths still reached for the old key after the cutover, and
+until those were gone the keys had to stay.
+
+Plus the queueing problem the batching fix introduced, and four things found in a
+second review pass.
+
+## How these hours were measured
+
+**0.4h measured**, `time-accounting` method, 30-minute sitting gap.
+
+| Sitting | Span | Measured | Booked where |
+|---|---|---|---|
+| C | 13:24–13:36 | 0.19h | round 2 |
+| C | 13:36–13:58 | 0.38h | internal-notifications, rounds 5–6 |
+| C | 13:58–14:24 | **0.43h → 0.4h** | this round |
+| | | 1.00h | sitting C, accounted for in full |
+
+Still open as written, so a floor.
+
+## The three paths that still needed the old key
+
+**The faucet attach only tried once.** One failed balance read at boot — an RPC
+blip is enough — and the process logged "leaving the EOA in charge" and never
+tried again. Every payout for the life of that process then signed with
+`BOT_KEY` against an account the sweep had emptied: a failure for as long as
+nobody redeployed. It now retries with backoff to two minutes, logs the first
+few attempts and then every tenth, and **never falls back to the EOA once the
+cutover is complete** — it refuses instead, which is retryable, where paying
+from an emptied wallet is not.
+
+**The payout verifier derived its own address from the key.** When neither the
+transaction map nor the address windows could answer, the last resort parsed
+`BOT_KEY` to learn what "we" meant. Delete the key and every payout that really
+went out reads as unverified. Verification only ever needed *addresses*, so it
+now takes them from `BOT_ADDRESS` and the history table, uses the key's address
+only if a key happens to still be present, and never treats its absence as an
+error.
+
+**`Bot.Drain` still built a transactor from the key.** Round 1's notes said
+draining went through the registry, and `BotService.Drain` did — but the method
+underneath it survived, dead, holding the key dependency. Deleted, along with its
+interface entry. The handler's version resolves the destination from the registry
+and sends through the ordinary path, so there was nothing left for it to do.
+
+**After these, nothing signs with either key.** The only wallet-related secret
+the environment still needs is `PROTOCOL_KEY_ENCRYPTION_KEY`.
+
+## A data race, and a window on every deploy
+
+Round 2 moved the boot sequence onto a goroutine, which introduced both.
+
+`SetFaucet` wrote two function fields that every request goroutine reads — a
+plain data race, and the kind that surfaces as an impossible nil rather than
+anything legible. The faucet's routing is now one struct swapped through an
+`atomic.Pointer`.
+
+And since attaching is asynchronous, every deploy had a few seconds where the
+cutover had happened but this process did not know it yet, so payouts in that
+window were signed with the old key. **Whether the Safe is the faucet is now read
+synchronously at wiring**, one database query before the server answers anything,
+so the gap closes. The three states are explicit: before the cutover the EOA
+pays; after it with the Safe attached the Safe pays; after it without the Safe
+attached, paying is refused and the redemption code is released.
+
+## Queueing: batched rather than serialised
+
+Holding the lock through the 90-second settle meant a burst of redemptions queued
+behind it and each caller gave up after three minutes — returning a
+non-revertable error, so the QR code stayed spent and the volunteer was never
+paid. Two changes:
+
+**Payouts are batched.** Everything waiting while an operation settles goes out
+as one operation carrying many transfers, through Safe's `MultiSendCallOnly` at
+its canonical deployment (verified present on Celo before relying on it). Thirty
+redemptions become two operations instead of thirty. A single payout stays on the
+plain path, so the common case gains no delegatecall from a feature that exists
+for bursts.
+
+**The queue is a channel, and the error says whether the money went.** Waiting
+respects the caller's context. A payout abandoned before submission returns a
+*releasable* error and its code goes back; one abandoned after submission does
+not, because the money may yet land and releasing the code would let the same
+reward be claimed twice. That distinction now travels with the error instead of
+being guessed at by the bot.
+
+This also forced the claim to become per-*transfer*: a batch is one transaction
+with one Transfer log per payout, so keying the claim on the hash alone would let
+the first payout claim the transaction and starve the rest. The key is now
+`(tx_hash, log_index)`.
+
+Submission is still strictly one operation at a time, and deliberately: the
+engine assigns the nonce when it sponsors, so two operations sponsored at the
+same instant can be handed the same one. Batching is what buys the throughput
+instead. Whether they could be pipelined is a question for the dry run below.
+
+## Two risks that were not code problems until they were
+
+**CELO no longer goes into the Safes.** They never need gas, so it was dead
+weight — and stuck weight if the paymaster declines to sponsor a value transfer,
+since the direct `execTransaction` path is not built. Only SFLUV goes to the
+Safes now; leftover gas goes to `PROTOCOL_CELO_SWEEP_TO`, and the step records a
+skip when that is unset rather than guessing at a destination.
+
+**Losing the master key no longer means losing the money.** Each Safe had exactly
+one owner whose key exists only encrypted in Postgres; lose or mistype the
+encryption key, or restore the database from before the last rotation, and the
+faucet is unreachable forever. Now:
+
+- `PROTOCOL_RECOVERY_OWNER` is added as a second owner at deployment, while the
+  key the backend holds still works. Threshold stays 1, so it is a way in rather
+  than a second signature. It is also what makes the worst rotation possible: if
+  the encryption key itself leaks, the recovery owner can rotate away from the
+  compromised signer — without it, the only key that can rotate is the one that
+  needs rotating.
+- **Startup checks the signer against `getOwners()`** and refuses to attach the
+  faucet if the key it holds is not an owner. That is the restored-backup case,
+  which otherwise looks healthy in every other respect and fails at validation as
+  if the engine were broken.
+- The restore procedure is written where someone will look for it, next to the
+  key in `.env.example`.
+
+## The dry run, because nothing has touched the engine yet
+
+`go run ./cmd/protocoldryrun` asks the paymaster what it will sponsor, for an
+empty undeployed Safe belonging to a key minted for that run and never stored.
+Seven operation shapes: a deployment, an ERC-20 transfer, a two-transfer batch
+through MultiSend, `swapOwner`, `grantRole`, `revokeRole`, and a value-carrying
+call. Sponsorship is decided before execution, so the answer comes back with
+nothing signed, submitted or spent.
+
+It also sponsors twice in a row and reports both nonces, which answers whether
+operations can be pipelined or must stay serialised.
+
+The failure it is designed to distinguish: a refusal may be the paymaster's
+policy, or it may be that an empty Safe cannot pay its own sponsorship fee. Only
+the error text separates them, so the error text is printed.
+
+`.env.example` now tells you to run it before either gate goes on.
+
+## Volume
+
+| Repo | Files | Lines |
+|---|---|---|
+| app (backend) | 9 modified, 2 new | +706 / −262 modified, 575 new |
+
+## What was verified, and what was not
+
+Verified by execution: the MultiSend packing matches the reference encoder
+byte-for-byte; a batch is a delegatecall into MultiSendCallOnly while a single
+transfer stays a plain CALL and never goes near it; an empty batch is refused.
+MultiSendCallOnly is deployed on Celo at the canonical address. Full `go vet`
+clean across every package.
+
+**Not verified: the paymaster.** That is what the dry run is for, and it has not
+been run — it needs the production engine and the live config. Until it has,
+every claim here about what will be sponsored is an assumption.
+
+## Open
+
+- **Run the dry run before enabling either gate.** If it refuses any of the seven
+  shapes, the cutover plan needs revisiting rather than retrying.
+- **Pipelining is unanswered.** If the dry run shows the engine advances the
+  nonce between sponsorships, the dispatcher could submit the next batch while
+  the previous settles. It is serialised until that is known.
+- **`PROTOCOL_RECOVERY_OWNER` must be set before deploying the Safes.** It cannot
+  be added later from a key that has already been lost, which is the entire point
+  of it.

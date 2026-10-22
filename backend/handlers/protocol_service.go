@@ -44,6 +44,11 @@ type ProtocolService struct {
 	// same thing instead of each inventing its own phrasing for "not wired".
 	disabled error
 
+	// faucet is the payout queue. One goroutine drains it, batching whatever
+	// is waiting, so a burst of redemptions is a couple of operations rather
+	// than one per person.
+	faucet faucetDispatcher
+
 	mu sync.Mutex
 }
 
@@ -368,97 +373,6 @@ func (p *ProtocolService) Execute(
 // keep using the EOA path.
 var ErrFaucetNotMigrated = errors.New("faucet Safe is not deployed yet")
 
-// SendFromFaucet transfers SFLUV out of the faucet Safe and returns the hash of
-// the transaction that carried it.
-//
-// A transaction hash, not the operation hash, and that distinction is the whole
-// reason this function is longer than it looks. The payout ledger stores a hash
-// that later gets looked up as a receipt and searched for a Transfer log; the
-// engine hands back a user-operation hash, which is not a transaction and — on
-// this deployment — resolves to one through no event at all, because the
-// CommunityModule emits none. So the transfer is found the only way available:
-// by watching the token for the log this operation was supposed to produce.
-func (p *ProtocolService) SendFromFaucet(ctx context.Context, amountBase *big.Int, to common.Address) (string, error) {
-	if err := p.Available(); err != nil {
-		return "", err
-	}
-	if amountBase == nil || amountBase.Sign() <= 0 {
-		return "", fmt.Errorf("refusing to send a non-positive amount")
-	}
-
-	// One operation at a time, and the queue is the point rather than a
-	// precaution.
-	//
-	// Two things go wrong without it. The nonce comes from the engine, which
-	// fills it in when it sponsors — the Citizen Wallet client does the same
-	// and never asks the chain for one — so two operations sponsored at the
-	// same moment can be handed the same nonce, and one of them is rejected.
-	// And two payouts in flight together are two searches for a transfer,
-	// which is where identical rewards start competing for the same
-	// transaction. Serialising removes both at the source; the exclusive claim
-	// below is what covers the cases this cannot, like a retry after a
-	// timeout.
-	//
-	// It also means a rotation and a payout cannot overlap. A swapOwner landing
-	// between sponsoring and submitting would leave the operation signed by an
-	// address that is no longer an owner, and it would fail validation for a
-	// reason nothing in the error would explain.
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	safe, err := p.SafeFor(ctx, structs.ProtocolAccountFaucet)
-	if err != nil {
-		return "", ErrFaucetNotMigrated
-	}
-	signerAddress := ""
-	if signer, err := p.db.GetActiveProtocolSigner(ctx, structs.ProtocolAccountFaucet); err == nil && signer != nil {
-		signerAddress = signer.EOAAddress
-	}
-
-	// Noted before submitting. A log search that started lower could match an
-	// identical earlier payout; starting here cannot, because this operation
-	// had not been sent yet.
-	fromBlock, err := p.client.BlockNumber(ctx)
-	if err != nil {
-		return "", fmt.Errorf("error reading the head block before a faucet send: %w", err)
-	}
-
-	data, err := protocol.TransferCallData(to, amountBase)
-	if err != nil {
-		return "", err
-	}
-	opHash, err := p.Execute(ctx, structs.ProtocolAccountFaucet, p.token, big.NewInt(0), data)
-	if err != nil {
-		return "", err
-	}
-
-	// Each candidate transfer is claimed exclusively, so this payout either
-	// gets a transaction no other payout owns or gets none.
-	txHash, err := p.client.AwaitTransfer(ctx, p.token, safe, to, amountBase, fromBlock,
-		func(candidate string, block uint64) (bool, error) {
-			return p.db.ClaimProtocolTransaction(ctx, db.ProtocolTransaction{
-				TxHash:        candidate,
-				ChainID:       p.chainID,
-				AccountKey:    structs.ProtocolAccountFaucet,
-				SenderAddress: safe.Hex(),
-				SignerAddress: signerAddress,
-				OperationHash: opHash,
-				Purpose:       db.ProtocolTxPurposePayout,
-				Recipient:     to.Hex(),
-				AmountBase:    amountBase,
-				BlockNumber:   block,
-			})
-		})
-	if err != nil {
-		// The operation went out and may still land. Returning the error with
-		// the operation hash in it means the caller records a failure that an
-		// operator can still trace, rather than a success with no hash or a
-		// silent retry that pays twice.
-		return "", fmt.Errorf("faucet operation %s was submitted but its transfer was not observed: %w", opHash, err)
-	}
-	return txHash, nil
-}
-
 // FaucetBalance is the faucet's spendable SFLUV, read from wherever the faucet
 // currently is.
 func (p *ProtocolService) FaucetBalance(ctx context.Context) (*big.Int, error) {
@@ -581,4 +495,54 @@ func (f FundingState) FaucetAddress(ctx context.Context) (string, bool) {
 // paymaster rather than out of their own balances.
 func (f FundingState) Sponsored(ctx context.Context) bool {
 	return f.svc != nil && f.svc.FaucetOnSafe(ctx)
+}
+
+// VerifyFaucetSigner checks that the key we hold is actually an owner of the
+// faucet Safe, on chain.
+//
+// The guard against a restored backup. A database recovered from before the
+// last rotation holds a signer row that no longer owns anything: the Safe moved
+// on, and that key cannot sign for it. Everything else about such a row looks
+// healthy — it is active, it decrypts, it has an address — so without this the
+// faucet would attach and then fail every payout at validation, which reads as
+// the engine being broken rather than as the database being behind.
+//
+// Also the cheapest check for the other direction: a master key that was
+// changed or mistyped produces a signer that decrypts to the wrong key, and
+// this catches that too, before anything is sent.
+func (p *ProtocolService) VerifyFaucetSigner(ctx context.Context) error {
+	if err := p.Available(); err != nil {
+		return err
+	}
+	account, err := p.db.GetProtocolAccount(ctx, structs.ProtocolAccountFaucet)
+	if err != nil {
+		return err
+	}
+	if account == nil || account.Signer == nil || !common.IsHexAddress(account.SafeAddress) {
+		return fmt.Errorf("the faucet has no deployed Safe with an active signer")
+	}
+
+	owners, err := p.client.Owners(ctx, common.HexToAddress(account.SafeAddress))
+	if err != nil {
+		return err
+	}
+	held := common.HexToAddress(account.Signer.EOAAddress)
+	for _, owner := range owners {
+		if owner == held {
+			return nil
+		}
+	}
+	return fmt.Errorf(
+		"the signer we hold for the faucet (%s) is NOT an owner of Safe %s — the database may predate a rotation, "+
+			"or %s may have changed. Refusing to send with it",
+		held.Hex(), account.SafeAddress, protocol.EnvMasterKey,
+	)
+}
+
+// FaucetAccount is the faucet's registry row, with its active signer attached.
+func (p *ProtocolService) FaucetAccount(ctx context.Context) (*structs.ProtocolAccount, error) {
+	if p == nil || p.db == nil {
+		return nil, fmt.Errorf("protocol service is not configured")
+	}
+	return p.db.GetProtocolAccount(ctx, structs.ProtocolAccountFaucet)
 }

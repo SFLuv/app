@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/SFLuv/app/backend/abi"
@@ -32,7 +33,6 @@ type IBot interface {
 	// VerifyTransferOnChain checks a payout against the chain it was recorded
 	// on, for payouts that predate a chain migration.
 	VerifyTransferOnChain(ctx context.Context, chainID int64, txHash string, address string, amount uint64) (*TransferVerificationResult, error)
-	Drain(address common.Address) error
 	Balance() (*big.Int, error)
 
 	// Funding the rest of the protocol's accounts: the faucet holds the key
@@ -61,10 +61,48 @@ type Bot struct {
 	// instead of by time. Consulted first.
 	txSenders TxSenderResolver
 
-	// Set once the faucet has moved to its Safe. Both nil means the EOA path.
+	// routing is where the faucet's money is and how to spend it.
+	//
+	// Swapped atomically because it is written from the boot goroutine that
+	// brings the Safe up and read from every request goroutine that pays
+	// anybody. Two plain fields were a data race, and the kind that would show
+	// up as an impossible nil rather than as anything legible.
+	routing atomic.Pointer[faucetRouting]
+}
+
+// faucetRouting is one coherent answer to "where does the faucet pay from".
+//
+// The three states are deliberate, and the middle one is the one that matters:
+//
+//   - cutover false: the EOA pays, which is how this worked before Safes.
+//   - cutover true, spender nil: the Safe is the faucet but is not attached
+//     yet. Paying is refused rather than falling back, because the fallback
+//     would sign with a key that is presumed leaked and draw on an account
+//     that was emptied into the Safe. Refusal is retryable; a payout from an
+//     empty wallet is a failure that looks like success.
+//   - cutover true, spender set: the Safe pays.
+type faucetRouting struct {
 	spender   Spender
 	balanceOf BalanceReader
+	cutover   bool
 }
+
+func (b *Bot) faucet() faucetRouting {
+	if b == nil {
+		return faucetRouting{}
+	}
+	if current := b.routing.Load(); current != nil {
+		return *current
+	}
+	return faucetRouting{}
+}
+
+// ErrFaucetSafeNotAttached means the Safe is the faucet but is not usable yet.
+//
+// Separate from a send failure because nothing was sent: whatever asked to be
+// paid may be retried as soon as the Safe attaches, and a redemption code that
+// hit this must be released rather than consumed.
+var ErrFaucetSafeNotAttached = errors.New("faucet Safe is not attached yet")
 
 // SenderResolver resolves the faucet's addresses as of a moment. A set, not one
 // address, because a cutover is a boundary rather than an instant and both
@@ -109,17 +147,34 @@ type BalanceReader func(ctx context.Context) (*big.Int, error)
 
 // SetFaucet routes sends and balance reads through the faucet Safe.
 //
-// Installed only once the Safe is deployed and funded. Until then both are nil
-// and this package does exactly what it did before: sign an ordinary transfer
-// with the key in the environment and read the balance of that key's address.
-// That fallback is what makes the cutover safe to deploy ahead of running —
-// the new code with no Safe behaves like the old code.
+// Installed once the Safe is deployed, signed for and funded. Before the
+// cutover this is never called and the package does exactly what it did before
+// Safes existed, which is what makes this safe to deploy ahead of running.
 func (b *Bot) SetFaucet(spender Spender, balance BalanceReader) {
 	if b == nil {
 		return
 	}
-	b.spender = spender
-	b.balanceOf = balance
+	next := b.faucet()
+	next.spender = spender
+	next.balanceOf = balance
+	b.routing.Store(&next)
+}
+
+// SetFaucetCutover records that the Safe is the faucet, whether or not it is
+// attached yet.
+//
+// Set synchronously at wiring time, from the database, before the server
+// answers anything. Doing it from the boot goroutine instead would leave a few
+// seconds of every deploy in which the cutover had happened but this did not
+// know it — and payouts in that window would be signed with the old key
+// against an empty account.
+func (b *Bot) SetFaucetCutover(done bool) {
+	if b == nil {
+		return
+	}
+	next := b.faucet()
+	next.cutover = done
+	b.routing.Store(&next)
 }
 
 type SendError struct {
@@ -313,9 +368,12 @@ func (b *Bot) SubmitTransfer(amount uint64, address string) (string, error) {
 // SubmitTransferBaseUnits sends an exact base-unit amount and returns the tx
 // hash. Used by the migration recovery flow to pay precise stored balances.
 func (b *Bot) SubmitTransferBaseUnits(amount *big.Int, address string) (string, error) {
-	// The Safe path when the faucet has moved, the key path when it has not.
-	// Both answer with a transaction hash, so no caller can tell which ran.
-	if b != nil && b.spender != nil {
+	routing := b.faucet()
+
+	// The Safe path when the faucet has moved, the key path when it has not,
+	// and a refusal in between. All three answer the same way to a caller that
+	// succeeds, so nothing downstream can tell which ran.
+	if routing.spender != nil {
 		if amount == nil || amount.Sign() <= 0 {
 			return "", fmt.Errorf("transfer amount must be positive")
 		}
@@ -324,14 +382,24 @@ func (b *Bot) SubmitTransferBaseUnits(amount *big.Int, address string) (string, 
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 		defer cancel()
-		hash, err := b.spender(ctx, amount, common.HexToAddress(address))
+		hash, err := routing.spender(ctx, amount, common.HexToAddress(address))
 		if err != nil {
-			// Marked as not worth reverting the redemption for: the operation
-			// may yet land, and voiding the code would let the same reward be
-			// claimed twice.
-			return "", newSendError(err, false)
+			// Whether the redemption may be released depends on whether
+			// anything was actually submitted, which only the spender knows.
+			// A send that never went out must release the code so it can be
+			// presented again; one that may yet land must not, or the same
+			// reward is claimable twice.
+			return "", newSendError(err, ShouldReleaseOnFailure(err))
 		}
 		return hash, nil
+	}
+
+	if routing.cutover {
+		// The Safe is the faucet and is not attached yet. Signing with the old
+		// key would draw on an account with nothing in it, and that key is
+		// presumed to be in someone else's hands. Released, because nothing
+		// was sent.
+		return "", newSendError(ErrFaucetSafeNotAttached, true)
 	}
 
 	tx, err := b.submitTransferTxBaseUnits(amount, address)
@@ -458,7 +526,7 @@ func (b *Bot) Send(amount uint64, address string) error {
 	// return until it has seen the transfer land, so a submitted hash is
 	// already a mined one. Waiting again would mean waiting for a receipt we
 	// have in effect already read.
-	if b != nil && b.spender != nil {
+	if routing := b.faucet(); routing.spender != nil || routing.cutover {
 		_, err := b.SubmitTransfer(amount, address)
 		return err
 	}
@@ -485,65 +553,29 @@ func (b *Bot) Send(amount uint64, address string) error {
 	return nil
 }
 
-func (b *Bot) Drain(address common.Address) error {
-
-	tokenAddress := common.HexToAddress(b.tokenId)
-
-	contract, err := abi.NewSFLUVv2(tokenAddress, b.client)
-	if err != nil {
-		return fmt.Errorf("error creating sfluv contract instance: %s", err)
-	}
-
-	amount, err := contract.BalanceOf(nil, common.HexToAddress(os.Getenv("BOT_ADDRESS")))
-	if err != nil {
-		return fmt.Errorf("error getting bot balance: %s", err)
-	}
-
-	chid, err := b.client.ChainID(context.Background())
-	if err != nil {
-		return fmt.Errorf("error getting chainId:%s", err)
-	}
-
-	privKey, err := crypto.HexToECDSA(b.pKey)
-	if err != nil {
-		return fmt.Errorf("error parsing private key: %s", err)
-	}
-
-	pubKey, ok := privKey.Public().(*ecdsa.PublicKey)
-	if !ok {
-		return fmt.Errorf("error parsing public key into ecdsa type")
-	}
-
-	s, err := bind.NewKeyedTransactorWithChainID(privKey, chid)
-	if err != nil {
-		return fmt.Errorf("error creating transactor: %s", err)
-	}
-
-	opts := &bind.TransactOpts{
-		From:    crypto.PubkeyToAddress(*pubKey),
-		Signer:  s.Signer,
-		Context: context.Background(),
-	}
-
-	_, err = contract.Transfer(opts, address, amount)
-	if err != nil {
-		return fmt.Errorf("error draining faucet balance: %s", err)
-	}
-	// return err if err
-	return nil
-}
-
-// Balance is the faucet's spendable SFLUV.
+// Draining the faucet lives on BotService, not here.
 //
-// Read from wherever the faucet is now, which is the whole of why this is not
-// just a BalanceOf on BOT_ADDRESS any more. Once the money is in the Safe, an
-// env-address read reports zero, and a faucet that reports zero refuses every
-// payout and blocks every workflow approval for want of balance.
+// This used to be a method on the bot that built a transactor from BOT_KEY and
+// read BOT_ADDRESS's balance. Both are the wrong account after the cutover: the
+// balance is in the Safe and the key is one we intend to delete. BotService's
+// Drain resolves the destination from the registry and sends through the
+// ordinary transfer path, which routes to the Safe or the EOA depending on
+// where the faucet actually is — so there is nothing left for a key-signing
+// drain to do.
+
 func (b *Bot) Balance() (*big.Int, error) {
-	if b != nil && b.balanceOf != nil {
+	routing := b.faucet()
+	if routing.balanceOf != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
-		return b.balanceOf(ctx)
+		return routing.balanceOf(ctx)
+	}
+	if routing.cutover {
+		// Reading the old address here would report the balance of an account
+		// that was emptied into the Safe — zero — and a faucet reporting zero
+		// refuses every payout and blocks workflow approvals for want of
+		// funds. An error says "ask again", which is true.
+		return nil, ErrFaucetSafeNotAttached
 	}
 
 	tokenAddress := common.HexToAddress(b.tokenId)
@@ -738,74 +770,129 @@ func (b *Bot) Address() (string, error) {
 // sendersForReceipt resolves which addresses may have sent this transfer as the
 // faucet.
 //
-// Two ways of answering, in order of how much they are worth. If we recorded
-// this transaction when we submitted it, that record says exactly which account
-// sent it. Otherwise the answer is deduced from the block's timestamp and the
-// address windows, which is how anything older than the record gets answered.
+// Addresses only. This never needs a private key, and after the cutover it must
+// not want one: BOT_KEY is to be deleted from the environment once the money is
+// in the Safe, and a verifier that parses it to learn its own address would
+// then report every payout that really went out as unverified.
 //
-// Falls back to the key's own address whenever the registry cannot answer —
-// no resolver wired, a chain it has no rows for, an unreadable block header.
-// That fallback is exactly the behaviour this check had before the registry
-// existed, so a lookup failure degrades to the old answer rather than marking a
-// real payout missing.
+// Three sources, best first:
+//
+//  1. The transaction map. We record which of our accounts caused each
+//     transaction we submit, so for anything sent since that record existed
+//     this is a lookup rather than a deduction — and a lookup cannot be wrong
+//     about a transfer that straddles a cutover boundary.
+//  2. The address windows, keyed on the block's own timestamp. This is how
+//     everything older than the record gets answered.
+//  3. The addresses we know of without asking anything: BOT_ADDRESS, and the
+//     key's address when a key happens to still be present. Both are
+//     best-effort and neither is an error when absent.
+//
+// An empty set is returned rather than an error when nothing can answer, which
+// leaves the payout unverified — the honest outcome — instead of failing the
+// whole check.
 func (b *Bot) sendersForReceipt(
 	ctx context.Context,
 	client *ethclient.Client,
 	receipt *types.Receipt,
 ) (map[common.Address]bool, error) {
-	fallback := func() (map[common.Address]bool, error) {
-		derived, err := b.deriveFromAddress()
-		if err != nil {
-			return nil, err
+	accepted := map[common.Address]bool{}
+	add := func(addresses ...common.Address) {
+		for _, address := range addresses {
+			if address != (common.Address{}) {
+				accepted[address] = true
+			}
 		}
-		return map[common.Address]bool{derived: true}, nil
 	}
+
+	// The addresses that need nothing but the environment, added first so they
+	// are present whatever else succeeds. A payout sent moments ago by a signer
+	// whose window has not been written yet is still ours.
+	add(b.knownFaucetAddresses()...)
 
 	if b == nil || receipt == nil || client == nil {
-		return fallback()
+		return accepted, nil
 	}
 
-	// The recorded answer first. We write down which of our accounts caused
-	// each transaction we submit, so for anything sent since that record
-	// existed this is a lookup rather than a deduction — and a lookup cannot be
-	// wrong about a transfer that straddles a cutover boundary.
 	if b.txSenders != nil {
 		if sender, ok := b.txSenders(ctx, receipt.TxHash.Hex()); ok {
-			accepted := map[common.Address]bool{sender: true}
-			if derived, err := b.deriveFromAddress(); err == nil {
-				accepted[derived] = true
-			}
+			add(sender)
 			return accepted, nil
 		}
 	}
 
 	if b.senders == nil {
-		return fallback()
+		return accepted, nil
 	}
 
 	chainID, err := client.ChainID(ctx)
 	if err != nil || chainID == nil {
-		return fallback()
+		return accepted, nil
 	}
 	header, err := client.HeaderByHash(ctx, receipt.BlockHash)
 	if err != nil || header == nil {
-		return fallback()
+		return accepted, nil
 	}
 
 	addresses, err := b.senders(ctx, chainID.Int64(), time.Unix(int64(header.Time), 0).UTC())
-	if err != nil || len(addresses) == 0 {
-		return fallback()
+	if err != nil {
+		return accepted, nil
 	}
-
-	accepted := make(map[common.Address]bool, len(addresses)+1)
-	for _, address := range addresses {
-		accepted[address] = true
-	}
-	// The key in hand is always acceptable. A payout sent moments ago by a
-	// signer whose window has not been written yet is still ours, and refusing
-	// it would be the same bug in a narrower form.
-	if derived, err := b.deriveFromAddress(); err == nil {
-		accepted[derived] = true
-	}
+	add(addresses...)
 	return accepted, nil
+}
+
+// knownFaucetAddresses are the faucet addresses obtainable without a chain call
+// and without a key.
+//
+// BOT_ADDRESS is the configured one and is the reason this works after BOT_KEY
+// is deleted. The key's address is still added when a key is present, because
+// before the cutover that is the account payouts actually come from and the
+// configured variable is allowed to be absent — but it is never required, and a
+// missing or unparseable key is not an error here.
+func (b *Bot) knownFaucetAddresses() []common.Address {
+	if b == nil {
+		return nil
+	}
+	out := []common.Address{}
+	if configured := strings.TrimSpace(os.Getenv("BOT_ADDRESS")); common.IsHexAddress(configured) {
+		out = append(out, common.HexToAddress(configured))
+	}
+	if strings.TrimSpace(b.pKey) != "" {
+		if derived, err := b.deriveFromAddress(); err == nil {
+			out = append(out, derived)
+		}
+	}
+	return out
+}
+
+// ReleaseOnFailure marks an error as one whose work never left this process, so
+// a redemption code that hit it may be presented again.
+//
+// The distinction the faucet cannot make for itself: by the time an error
+// reaches the bot it is either "nothing was submitted" or "something was
+// submitted and may yet land", and only the sender knows which. Getting it the
+// wrong way round costs either a volunteer their reward or the treasury a
+// double payment, so it travels with the error rather than being guessed at.
+type ReleaseOnFailure struct{ err error }
+
+func (e *ReleaseOnFailure) Error() string { return e.err.Error() }
+func (e *ReleaseOnFailure) Unwrap() error { return e.err }
+
+// Releasable wraps an error whose operation was never submitted.
+func Releasable(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &ReleaseOnFailure{err: err}
+}
+
+// ShouldReleaseOnFailure reports whether this failure happened before anything
+// was submitted.
+//
+// Defaults to false, which is the cautious direction: an unrecognised failure
+// is treated as possibly-sent, so a code is held rather than handed back for a
+// reward that may already be on its way.
+func ShouldReleaseOnFailure(err error) bool {
+	var release *ReleaseOnFailure
+	return errors.As(err, &release)
 }

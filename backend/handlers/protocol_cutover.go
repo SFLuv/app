@@ -375,6 +375,14 @@ func (p *ProtocolService) deployAccount(ctx context.Context, account structs.Pro
 		return err
 	}
 
+	// The offline owner goes on as soon as the Safe exists, while the key we
+	// hold still works. Added after the step above is recorded, so a failure
+	// here leaves a deployed Safe rather than an un-deployed one — and it is
+	// its own step, retried on the next boot.
+	if err := p.EnsureRecoveryOwner(ctx, account.Key); err != nil {
+		p.logf("protocol account %s: recovery owner not added: %s", account.Key, err)
+	}
+
 	p.logf("protocol account %s: Safe %s is deployed and signed for", account.Key, safe.Hex())
 	return finish(structs.ProtocolStepDone, "Safe deployed and signer confirmed", opHash)
 }
@@ -607,8 +615,18 @@ func (p *ProtocolService) sweepToken(
 	return p.db.FinishProtocolStep(ctx, step, structs.ProtocolStepDone, "token balance moved", tx.Hash().Hex(), balance)
 }
 
-// sweepNative moves the gas balance, leaving behind exactly enough to pay for
-// doing so.
+// EnvCeloSweepTo is where the old accounts' leftover CELO goes.
+//
+// Not the Safes. They never need gas — every operation they make is sponsored —
+// so CELO inside one is dead weight, and worse than dead if the paymaster turns
+// out not to sponsor a value transfer: getting it back out would need the
+// direct execTransaction path, which is not built. A wallet we already control
+// is the destination, and leaving this unset skips the step rather than
+// guessing at one.
+const EnvCeloSweepTo = "PROTOCOL_CELO_SWEEP_TO"
+
+// sweepNative moves the gas balance off the old account, leaving behind exactly
+// enough to pay for doing so.
 //
 // A transfer of the whole balance cannot be signed: the transaction's own fee
 // has to come out of it. So the fee is computed, subtracted, and the remainder
@@ -621,6 +639,20 @@ func (p *ProtocolService) sweepNative(
 	oldAddress, safe common.Address,
 ) error {
 	step := legacy.accountKey + ":sweep:native"
+
+	destination := envValue(EnvCeloSweepTo)
+	if !common.IsHexAddress(destination) {
+		// Claimed first so the skip is recorded once rather than reconsidered
+		// on every boot.
+		claimed, err := p.db.ClaimProtocolStep(ctx, step)
+		if err != nil || !claimed {
+			return err
+		}
+		return p.db.FinishProtocolStep(ctx, step, structs.ProtocolStepSkipped,
+			fmt.Sprintf("no %s configured, so the gas balance was left where it is", EnvCeloSweepTo), "", nil)
+	}
+	to := common.HexToAddress(destination)
+
 	claimed, err := p.db.ClaimProtocolStep(ctx, step)
 	if err != nil || !claimed {
 		return err
@@ -688,7 +720,7 @@ func (p *ProtocolService) sweepNative(
 		GasTipCap: tipCap,
 		GasFeeCap: feeCap,
 		Gas:       transferGas,
-		To:        &safe,
+		To:        &to,
 		Value:     value,
 	})
 	signed, err := types.SignTx(tx, types.LatestSignerForChainID(chainID), oldKey)
@@ -711,7 +743,7 @@ func (p *ProtocolService) sweepNative(
 	}
 
 	p.logf("protocol sweep %s: moved %s wei of gas from %s to %s (%s)",
-		legacy.accountKey, value.String(), oldAddress.Hex(), safe.Hex(), signed.Hash().Hex())
+		legacy.accountKey, value.String(), oldAddress.Hex(), to.Hex(), signed.Hash().Hex())
 	return p.db.FinishProtocolStep(ctx, step, structs.ProtocolStepDone, "gas balance moved", signed.Hash().Hex(), value)
 }
 

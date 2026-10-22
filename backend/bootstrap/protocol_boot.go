@@ -3,11 +3,11 @@ package bootstrap
 import (
 	"context"
 	"math/big"
+	"time"
 
 	"github.com/SFLuv/app/backend/bot"
 	"github.com/SFLuv/app/backend/handlers"
 	"github.com/SFLuv/app/backend/logger"
-	"github.com/SFLuv/app/backend/structs"
 	"github.com/ethereum/go-ethereum/common"
 )
 
@@ -74,7 +74,7 @@ func runProtocolAccounts(
 	// from here — just point the faucet at what is already there.
 	if protocolSvc.CutoverComplete(ctx) {
 		appLogger.Logf("protocol accounts: already migrated — nothing to deploy, sweep or hand over")
-		attachFaucet(ctx, protocolSvc, botClient, appLogger)
+		keepFaucetAttached(ctx, protocolSvc, botClient, appLogger)
 		attachRedeemer(ctx, protocolSvc, redeemer, appLogger, false)
 		return
 	}
@@ -101,59 +101,138 @@ func runProtocolAccounts(
 	// has a signer and holds a balance. Checked here rather than assumed from
 	// the steps above, so a half-finished cutover leaves the EOA in charge
 	// instead of pointing payouts at an empty account.
-	attachFaucet(ctx, protocolSvc, botClient, appLogger)
+	keepFaucetAttached(ctx, protocolSvc, botClient, appLogger)
 	attachRedeemer(ctx, protocolSvc, redeemer, appLogger, protocolSvc.DeployEnabled())
 }
 
+// attachFaucet points payouts at the faucet Safe, retrying until it can.
+//
+// Returns whether the faucet is now attached. Two reasons it might not be, and
+// they want opposite responses:
+//
+//   - The cutover has not happened. Nothing to attach; the EOA is legitimately
+//     paying and retrying would log forever about a state that is correct.
+//   - The cutover has happened and something transient got in the way — an RPC
+//     blip reading the balance, say. Every payout until this succeeds is now a
+//     refusal, so this must keep trying rather than leaving the process in that
+//     state until somebody redeploys. That was the original bug here: one
+//     failed balance read and the faucet stayed on the EOA path for the life of
+//     the process, signing with a key whose account had been emptied.
 func attachFaucet(
 	ctx context.Context,
 	protocolSvc *handlers.ProtocolService,
 	botClient *bot.Bot,
 	appLogger *logger.LogCloser,
-) {
+	quiet bool,
+) bool {
 	if botClient == nil {
-		return
+		return false
 	}
-	accounts, err := protocolSvc.Accounts(ctx)
-	if err != nil {
-		appLogger.Logf("protocol accounts: could not be read to attach the faucet: %s", err)
-		return
+	logf := func(format string, args ...any) {
+		if !quiet {
+			appLogger.Logf(format, args...)
+		}
 	}
-	for _, account := range accounts {
-		if account.Key != structs.ProtocolAccountFaucet {
-			continue
-		}
-		if account.DeployedAt == nil || account.Signer == nil || !common.IsHexAddress(account.SafeAddress) {
-			appLogger.Logf("protocol accounts: faucet still paying from its EOA — Safe not ready")
-			return
-		}
-		balance, err := protocolSvc.FaucetBalance(ctx)
-		if err != nil {
-			appLogger.Logf("protocol accounts: faucet Safe balance unreadable, leaving the EOA in charge: %s", err)
-			return
-		}
-		if balance == nil || balance.Sign() == 0 {
-			appLogger.Logf(
-				"protocol accounts: faucet Safe %s is deployed but empty — the EOA keeps paying until it is funded",
-				account.SafeAddress,
-			)
-			return
-		}
 
-		botClient.SetFaucet(
-			func(ctx context.Context, amountBase *big.Int, to common.Address) (string, error) {
-				return protocolSvc.SendFromFaucet(ctx, amountBase, to)
-			},
-			func(ctx context.Context) (*big.Int, error) {
-				return protocolSvc.FaucetBalance(ctx)
-			},
+	account, err := protocolSvc.FaucetAccount(ctx)
+	if err != nil || account == nil {
+		logf("protocol accounts: faucet could not be read to attach: %v", err)
+		return false
+	}
+	if account.DeployedAt == nil || account.Signer == nil || !common.IsHexAddress(account.SafeAddress) {
+		logf("protocol accounts: faucet still paying from its EOA — Safe not ready")
+		return false
+	}
+
+	// Before anything is routed through it, confirm the key we hold actually
+	// owns the Safe. A database restored from before a rotation looks healthy
+	// in every other respect.
+	if err := protocolSvc.VerifyFaucetSigner(ctx); err != nil {
+		// Never quiet: this one does not fix itself, and it is the failure that
+		// would otherwise look like the engine misbehaving.
+		appLogger.Logf("protocol accounts: REFUSING to attach the faucet: %s", err)
+		return false
+	}
+
+	balance, err := protocolSvc.FaucetBalance(ctx)
+	if err != nil {
+		logf("protocol accounts: faucet Safe balance unreadable, retrying: %s", err)
+		return false
+	}
+	if balance == nil || balance.Sign() == 0 {
+		logf(
+			"protocol accounts: faucet Safe %s is deployed but empty — nothing to pay from yet",
+			account.SafeAddress,
 		)
-		appLogger.Logf(
-			"protocol accounts: faucet now pays from Safe %s (balance %s base units)",
-			account.SafeAddress, balance.String(),
-		)
+		return false
+	}
+
+	botClient.SetFaucet(
+		func(ctx context.Context, amountBase *big.Int, to common.Address) (string, error) {
+			return protocolSvc.SendFromFaucet(ctx, amountBase, to)
+		},
+		func(ctx context.Context) (*big.Int, error) {
+			return protocolSvc.FaucetBalance(ctx)
+		},
+	)
+	appLogger.Logf(
+		"protocol accounts: faucet now pays from Safe %s (balance %s base units)",
+		account.SafeAddress, balance.String(),
+	)
+	return true
+}
+
+// keepFaucetAttached retries the attach until it takes.
+//
+// Only worth doing once the cutover is complete, because only then is a
+// detached faucet an outage: every payout refuses until this succeeds, which is
+// the correct behaviour — the alternative is signing with the leaked key
+// against an emptied account — but it is not a state to leave a process in.
+//
+// Backs off to two minutes and then stays there, and logs only the first
+// failure of each attempt cycle, so an engine that is down for an hour does not
+// fill the log with the same line.
+func keepFaucetAttached(
+	ctx context.Context,
+	protocolSvc *handlers.ProtocolService,
+	botClient *bot.Bot,
+	appLogger *logger.LogCloser,
+) {
+	if attachFaucet(ctx, protocolSvc, botClient, appLogger, false) {
 		return
 	}
+	if !protocolSvc.CutoverComplete(ctx) {
+		// Pre-cutover: the EOA is paying and that is right. Nothing to retry.
+		return
+	}
+
+	appLogger.Logf("protocol accounts: faucet Safe not attached — payouts are refused until it is; retrying")
+	go func() {
+		delay := 5 * time.Second
+		const maxDelay = 2 * time.Minute
+		attempts := 0
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(delay):
+			}
+			attempts++
+			// Quiet except for the first few tries and then every tenth, so a
+			// long outage leaves a trail without burying everything else.
+			quiet := attempts > 3 && attempts%10 != 0
+			if attachFaucet(ctx, protocolSvc, botClient, appLogger, quiet) {
+				appLogger.Logf("protocol accounts: faucet attached after %d attempt(s)", attempts)
+				return
+			}
+			if delay < maxDelay {
+				delay *= 2
+				if delay > maxDelay {
+					delay = maxDelay
+				}
+			}
+		}
+	}()
 }
 
 // attachRedeemer moves the granting role onto the redeemer admin's Safe and

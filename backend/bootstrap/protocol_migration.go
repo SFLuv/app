@@ -128,17 +128,24 @@ func migrateProtocolAccounts(ctx context.Context, pools *MigrationPools) error {
 		-- transaction — or lets a payout that actually failed take credit for
 		-- one that worked, which underpays somebody and flags nothing.
 		--
-		-- tx_hash is the primary key, so claiming one is an insert that either
-		-- succeeds or tells the caller it is already spoken for. A payout keeps
-		-- looking rather than reusing a transaction another payout owns, and a
-		-- payout with no unclaimed transfer to claim reports failure, which is
+		-- The key is (tx_hash, log_index), so claiming one is an insert that
+		-- either succeeds or tells the caller it is already spoken for. A payout
+		-- keeps looking rather than reusing a transfer another payout owns, and
+		-- a payout with no unclaimed transfer to claim reports failure, which is
 		-- the truth.
+		--
+		-- The log index is in the key because payouts are batched: a burst of
+		-- redemptions is submitted as one operation carrying many transfers, so
+		-- one transaction hash legitimately belongs to a dozen payouts at once.
+		-- Keying on the hash alone would let the first of them claim the
+		-- transaction and starve the rest.
 		--
 		-- It doubles as the answer to "who sent this": a direct lookup, which
 		-- is better than inferring it from a timestamp and a window, and it is
 		-- what the payout verifier asks first.
 		CREATE TABLE IF NOT EXISTS protocol_transactions(
-			tx_hash TEXT PRIMARY KEY,
+			tx_hash TEXT NOT NULL,
+			log_index INTEGER NOT NULL DEFAULT 0,
 			chain_id INTEGER NOT NULL,
 			account_key TEXT NOT NULL,
 			sender_address TEXT NOT NULL,
@@ -148,7 +155,8 @@ func migrateProtocolAccounts(ctx context.Context, pools *MigrationPools) error {
 			recipient TEXT NOT NULL DEFAULT '',
 			amount_base NUMERIC(78,0),
 			block_number BIGINT,
-			observed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+			observed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			PRIMARY KEY (tx_hash, log_index)
 		);
 		CREATE INDEX IF NOT EXISTS protocol_transactions_account_idx
 			ON protocol_transactions(account_key, observed_at DESC);
