@@ -108,7 +108,7 @@ spent, nothing is paid twice).
 
 # Round 4 — Oct 22, rewards labelled by the backend; PREVIOUS_FAUCET_ADDRESSES removed
 
-Oct 22 2026 · app (backend + frontend) · **~0.2h active** (about 15:50 to 16:02 PDT, wall-clock from session timestamps)
+Oct 22 2026 · app (backend + frontend) · **~0.1h active** (about 15:50 to 15:55 PDT, wall-clock from session timestamps)
 
 Supersedes round 3's labelling half. The address history in the database is the record of who the faucet was, so
 the env list was the wrong place for it. `PREVIOUS_FAUCET_ADDRESSES` and the web `faucetAddresses` list are reverted.
@@ -133,7 +133,7 @@ The batch-stall fix from round 3 stays.
 
 | Item | Hours | Repo |
 |---|---|---|
-| The above, plus the Berachain lookup. Verified with throwaway tests, not committed: labelling against a real Postgres at 1.66, covering an empty history (env fallback), a Berachain-era reward, a pre-cutover Celo reward, a Safe reward, the old wallet after the cutover (not a reward), the Safe before the cutover (not a reward), a merchant transfer, and case-insensitivity; `tsc --noEmit` shows no errors in the changed files | 0.2 | app |
+| The above, plus the Berachain lookup. Verified with throwaway tests, not committed: labelling against a real Postgres at 1.66, covering an empty history (env fallback), a Berachain-era reward, a pre-cutover Celo reward, a Safe reward, the old wallet after the cutover (not a reward), the Safe before the cutover (not a reward), a merchant transfer, and case-insensitivity; `tsc --noEmit` shows no errors in the changed files | 0.1 | app |
 
 Volume: 9 files. 0 migrations, 1 new route (`GET /faucet/balance`), and the `type` field on transactions.
 
