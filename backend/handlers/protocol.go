@@ -199,6 +199,7 @@ func (a *AppService) DeployProtocolAccounts(w http.ResponseWriter, r *http.Reque
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 		return
 	}
+	a.protocolSvc.panelStepDone(PanelStepDeploy)
 
 	accounts, err := a.protocolSvc.Accounts(r.Context())
 	if err != nil {
@@ -231,6 +232,7 @@ func (a *AppService) SweepProtocolFunds(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 		return
 	}
+	a.protocolSvc.panelStepDone(PanelStepSweep)
 
 	steps, err := a.db.ListProtocolSteps(r.Context())
 	if err != nil {

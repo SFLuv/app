@@ -49,7 +49,34 @@ type ProtocolService struct {
 	// than one per person.
 	faucet faucetDispatcher
 
+	// afterPanelStep runs once a Protocol-panel deploy or sweep succeeds, so
+	// the running process re-reads the cutover state and points the faucet at
+	// its Safe. Set at wiring; nil means nothing to do.
+	afterPanelStep func(step string)
+
 	mu sync.Mutex
+}
+
+// Panel steps passed to the afterPanelStep hook.
+const (
+	PanelStepDeploy = "deploy"
+	PanelStepSweep  = "sweep"
+)
+
+// SetAfterPanelStep installs what to do after a panel deploy or sweep. The boot
+// sequence attaches the faucet; without this, a sweep run from the panel moved
+// the money and left this process paying from the emptied EOA until a restart.
+func (p *ProtocolService) SetAfterPanelStep(hook func(step string)) {
+	if p == nil {
+		return
+	}
+	p.afterPanelStep = hook
+}
+
+func (p *ProtocolService) panelStepDone(step string) {
+	if p != nil && p.afterPanelStep != nil {
+		p.afterPanelStep(step)
+	}
 }
 
 // Nothing touches the chain unless it is switched on.
@@ -185,7 +212,23 @@ func (p *ProtocolService) CutoverComplete(ctx context.Context) bool {
 			return false
 		}
 	}
-	return true
+
+	// Deployed is not migrated. Between the deploy and the sweep the faucet's
+	// money is still in the EOA, and the EOA must keep paying: treating that
+	// window as complete made every restart refuse payouts from a funded EOA,
+	// and made boot skip the very sweep that would have ended the window. The
+	// cutover is complete once the faucet's token has moved (or there was none).
+	steps, err := p.db.ListProtocolSteps(ctx)
+	if err != nil {
+		return false
+	}
+	faucetSweep := structs.ProtocolAccountFaucet + ":sweep:token"
+	for _, step := range steps {
+		if step.Step == faucetSweep {
+			return step.Status == structs.ProtocolStepDone || step.Status == structs.ProtocolStepSkipped
+		}
+	}
+	return false
 }
 
 // protocolAccountCatalog is every function the backend signs for.

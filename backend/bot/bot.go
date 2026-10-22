@@ -147,10 +147,10 @@ func (b *Bot) SetFaucet(spender Spender, balance BalanceReader) {
 	if b == nil {
 		return
 	}
-	next := b.faucet()
-	next.spender = spender
-	next.balanceOf = balance
-	b.routing.Store(&next)
+	b.updateFaucet(func(next *faucetRouting) {
+		next.spender = spender
+		next.balanceOf = balance
+	})
 }
 
 // SetFaucetCutover records that the Safe is the faucet, whether or not it is
@@ -165,9 +165,27 @@ func (b *Bot) SetFaucetCutover(done bool) {
 	if b == nil {
 		return
 	}
-	next := b.faucet()
-	next.cutover = done
-	b.routing.Store(&next)
+	b.updateFaucet(func(next *faucetRouting) {
+		next.cutover = done
+	})
+}
+
+// updateFaucet changes one part of the routing without losing a concurrent
+// change to another. The boot retry loop and a Protocol-panel step can both be
+// updating it; a plain load-modify-store would let one of them silently undo
+// the other — dropping the attached spender, say.
+func (b *Bot) updateFaucet(change func(next *faucetRouting)) {
+	for {
+		current := b.routing.Load()
+		next := faucetRouting{}
+		if current != nil {
+			next = *current
+		}
+		change(&next)
+		if b.routing.CompareAndSwap(current, &next) {
+			return
+		}
+	}
 }
 
 type SendError struct {

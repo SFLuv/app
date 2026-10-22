@@ -244,6 +244,16 @@ func (p *ProtocolService) DeployAccounts(ctx context.Context, force bool) error 
 	if !force && !p.DeployEnabled() {
 		return fmt.Errorf("deploying protocol Safes is gated off: set %s=true or deploy from the Protocol panel", EnvDeployEnabled)
 	}
+	// A Safe deployed without its offline owner has exactly one owner, whose
+	// key exists only encrypted in this database: lose the encryption key, or
+	// restore from before a rotation, and the money is unreachable for good.
+	// The recovery owner can only be added while the key we hold still works,
+	// so deployment is where it has to be required, not hoped for.
+	if recovery, ok := RecoveryOwner(); !ok {
+		return fmt.Errorf("refusing to deploy protocol Safes without a recovery owner: set %s to an offline address we control", EnvRecoveryOwner)
+	} else {
+		p.logf("protocol accounts: deploying with recovery owner %s — confirm this address is ours", recovery.Hex())
+	}
 	accounts, err := p.Accounts(ctx)
 	if err != nil {
 		return err
