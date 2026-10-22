@@ -139,3 +139,21 @@ Volume: 9 files. 0 migrations, 1 new route (`GET /faucet/balance`), and the `typ
 
 Mobile (`SFLuv/mobile-app`): `isRewardTransaction` should prefer `transaction.type` from `/transactions`. Not changed
 here; it ships with an app release.
+
+# Round 5 — Oct 22, every transaction gets a type; the mobile counterpart
+
+Oct 22 2026 · app (backend) + mobile-app · **~0.1h active** (about 15:59 to 16:06 PDT, wall-clock from session timestamps)
+
+- **`type` is now always set** on `/transactions` rows: `volunteer_reward` or `transfer`. Round 4 left it empty for
+  non-rewards (`omitempty`), so a client couldn't tell "not a reward" from "a backend too old to label". It
+  fell back to comparing against `faucet_address` in both cases, which mislabels the old wallet after a rotation. Now
+  only a missing field triggers the fallback.
+- **Mobile, `SFLuv/mobile-app` branch `sanchezo/server-reward-labels` (`ab98b16`), not merged:**
+  `isRewardTransaction` uses the backend's `type` when present (outgoing is never a reward) and compares against
+  `faucet_address` only when it's absent. `getTransactions` passes `type` through. Compatible both ways: a new build
+  with an old backend compares as before; an old build with the new backend ignores `type` and keeps using
+  `faucet_address`, which `/config` still serves.
+
+| Item | Hours | Repo |
+|---|---|---|
+| The above. Verified with throwaway tests, not committed: labelling against a real Postgres (every row typed; the old wallet after the cutover is `transfer`); mobile `tsc --noEmit` clean (0 errors) and `isRewardTransaction` correct for an old backend (from the faucet / from someone else), a new backend (Safe reward / old wallet after the swap), and outgoing | 0.1 | app, mobile-app |

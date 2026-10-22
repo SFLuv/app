@@ -329,6 +329,7 @@ func (p *PonderService) labelRewards(ctx context.Context, chainID int64, txs []*
 		}
 		from := strings.ToLower(strings.TrimSpace(tx.From))
 		if from == "" {
+			tx.Type = structs.TransactionTypeTransfer
 			continue
 		}
 		reward := false
@@ -339,6 +340,8 @@ func (p *PonderService) labelRewards(ctx context.Context, chainID int64, txs []*
 		}
 		if reward {
 			tx.Type = structs.TransactionTypeVolunteerReward
+		} else {
+			tx.Type = structs.TransactionTypeTransfer
 		}
 	}
 }
