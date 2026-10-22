@@ -142,7 +142,7 @@ here; it ships with an app release.
 
 # Round 5 — Oct 22, every transaction gets a type; the mobile counterpart
 
-Oct 22 2026 · app (backend) + mobile-app · **~0.1h active** (about 15:59 to 16:06 PDT, wall-clock from session timestamps)
+Oct 22 2026 · app (backend) + mobile-app · **~0.1h active** (about 15:59 to 16:03 PDT, wall-clock from session timestamps)
 
 - **`type` is now always set** on `/transactions` rows: `volunteer_reward` or `transfer`. Round 4 left it empty for
   non-rewards (`omitempty`), so a client couldn't tell "not a reward" from "a backend too old to label". It
