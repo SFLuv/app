@@ -1,6 +1,6 @@
 # Branch scope — `pjol/bot-smart-wallet-hotfix`
 
-Oct 22 2026 · app (backend + frontend) · **0.7h measured**
+Oct 22 2026 · app (backend + frontend) · **0.9h measured** (round 1: 0.7h, round 2: 0.2h)
 
 Railway's vulnerability means the backend's signing keys have to be rotated. This branch makes that
 possible without breaking anything: the protocol accounts become smart wallets whose addresses never
@@ -199,6 +199,9 @@ real test is a human one, and it should be done with a wallet that holds nothing
 - **Migration 1.68 skips two numbers deliberately.** On main the highest is 1.65, but 1.66 and 1.67
   are claimed by the bulletin board and internal notifications on their own branches. 1.68 is free in
   every branch in flight.
+  **Wrong, and corrected in round 2**: skipping ahead would have stranded 1.66 and 1.67 permanently,
+  because the runner only applies versions above the database's own. This migration is 1.66, and the
+  branches behind it renumber up.
 - **The analytics reconciler's `source` string stays `env.<role>`** even though the addresses now come
   from the registry. It is part of the row's identity, so changing it would close every existing
   window and reopen it dated today — moving every historical boundary to the moment of the deploy.
@@ -218,3 +221,120 @@ real test is a human one, and it should be done with a wallet that holds nothing
 - **`go test ./handlers/` still fails to build** on seven pre-existing non-constant-format-string vet
   findings in `app_contact.go`, untouched since August 2025. `go vet` on every package this branch
   touches is otherwise clean.
+
+# Round 2 — Oct 22, review fixes
+
+Oct 22 2026 · **0.2h measured** · app (backend + frontend)
+
+Six issues from review, plus two changes to how the cutover is triggered. Applied before the branch
+behind this one is rebased onto it.
+
+## How these hours were measured
+
+**0.2h measured** from session-transcript timestamps on the `time-accounting` method: a 30-minute
+sitting gap, unioned across every project worked in.
+
+| Sitting | Span | Measured |
+|---|---|---|
+| C | 13:24–13:35 | 0.19h → **0.2h** |
+
+Still open when written, so the figure is a floor. No other project had activity in the window.
+
+## The migration number was a real bug, not a collision to be dodged
+
+Round 1 took 1.68 to avoid colliding with two branches in flight. **That would have stranded them
+permanently.** The runner applies a migration only when its version is strictly greater than the one
+recorded in the database (`isVersionGreater`), so a database taken to 1.68 by this branch would never
+run 1.66 or 1.67 when those merged afterwards. Their tables would simply not exist; the version check
+would report the schema already current; nothing would say a word until a feature touched a missing
+table.
+
+Now **1.66**, the next free number after main, with the ordering written into the migration's own
+comment. The two branches behind renumber up to 1.67 and 1.68.
+
+## Identical payouts can no longer record the same transaction
+
+The sharpest of the findings, and it had a real example behind it: three 5-SFLUV rewards to one wallet
+inside a minute, on chain, yesterday. A Safe answers with an operation id rather than a transaction, so
+the transaction was being found by searching for a transfer of the right amount from the right sender to
+the right person — which, for identical payouts, is the same search three times. Two payouts could
+record one transaction, and a payout that actually failed could take credit for one that worked:
+somebody underpaid, nothing flagged.
+
+Fixed in three places at once:
+
+- **A transaction map** (`protocol_transactions`), keyed on the hash. Claiming a transaction is an
+  insert that either succeeds or reports it already spoken for, so candidates are offered in the order
+  they landed and the first unowned one wins. A payout with nothing left to claim reports failure,
+  which is the truth and leaves the ledger retryable.
+- **Sends are serialised.** One faucet operation at a time, which removes the competition at source
+  rather than only resolving it afterwards — and closes the nonce question below with it.
+- **The verifier asks the map first.** Which account sent a transaction is now a recorded fact looked
+  up by hash, rather than a deduction from the block's timestamp and a window. The windows stay for
+  everything sent before the map existed, which is everything so far.
+
+Verified against a throwaway Postgres: three identical payouts claim three distinct transactions; a
+payout offered an owned hash moves on; and a fourth payout with no unclaimed transfer gets nothing
+instead of taking another's.
+
+## The nonce question, answered
+
+Every operation is built with nonce 0 and the engine fills in the real one. **This is exactly what the
+Citizen Wallet client does** — the SDK never calls `getNonce` either, and signs whatever the sponsor
+response comes back with, which is what this code does. So the behaviour matches the client that runs
+in production today.
+
+The residual risk was two operations being sponsored at the same instant and handed the same nonce.
+Serialising the sends removes it.
+
+## Nothing on chain unless asked, and nothing in the way of other jobs
+
+Round 1 deployed Safes and granted the redeemer role automatically at boot, with only the fund sweep
+gated. **Main auto-deploys, so merging was deploying** — a pull request landing would have put
+contracts on chain and moved a token role as a side effect.
+
+Now there are two gates, both off by default: `PROTOCOL_DEPLOY_ENABLED` for putting Safes on chain and
+handing over the role, and `PROTOCOL_SWEEP_ENABLED` for moving funds and revoking. What stays automatic
+is only what writes to our own database — registering, minting a signer, deriving the addresses (a view
+call) and recording the history — because the panel cannot say anything useful until that has happened.
+Both steps are also buttons in the Protocol tab, which is where an operator does this deliberately.
+
+It also **ran inline and blocked the rest of the jobs leader**: a chain round trip and two 90-second
+waits in front of the payout sweep and workflow maintenance, on every deploy. It now returns
+immediately and works on its own goroutine.
+
+## The on-chain work is skipped once the wallets exist
+
+`CutoverComplete` — every account has a recorded, deployed Safe with a live signer — short-circuits
+deployment, the sweep and the handover entirely. Every later release, including the branches queued
+behind this one that boot this same sequence, reaches the chain not at all and only points the faucet
+at what is already there.
+
+Read from the recorded addresses rather than the schema version: the version only says the tables
+exist, while the addresses say the work is done.
+
+## The engine dependency is real and now stated
+
+Once the balances are in the Safes, every payout is a sponsored operation: the engine submits it and
+the paymaster pays. **An engine outage means no payouts, with no fallback** — the EOAs no longer hold
+anything to pay from. That is inherent to the sponsored path, not an oversight, and the Protocol panel
+now says so on the card that appears once the cutover is complete.
+
+The fallback that would exist is the direct one: `execTransaction` carrying the owner's signature,
+submitted by any EOA holding CELO. It is a different encoder from the module path used here and is not
+built. Named as the option rather than left as an unknown.
+
+## Volume
+
+| Repo | Files | Lines |
+|---|---|---|
+| app (backend) | 9 modified | +582 / −96 |
+| app (frontend) | 2 modified | +145 / −0 |
+
+## Open
+
+- **`PROTOCOL_DEPLOY_ENABLED` and `PROTOCOL_SWEEP_ENABLED` are both off**, and with no
+  `PROTOCOL_KEY_ENCRYPTION_KEY` the service disables itself and logs why. Nothing has been run.
+- **Still nothing submitted to the engine.** Everything verified here is encoding, SQL and control
+  flow; the first real test is a human one.
+- **An engine outage stops payouts** once the cutover is complete, with no fallback built.

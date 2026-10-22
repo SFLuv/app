@@ -141,3 +141,23 @@ func (p *ProtocolService) RedeemerRoleGranter() func(context.Context, [32]byte, 
 		return p.Execute(ctx, structs.ProtocolAccountRedeemerAdmin, p.token, nil, data)
 	}
 }
+
+// RedeemerSafeHoldsAuthority reports whether the redeemer admin's Safe already
+// holds the granting role, without trying to give it one.
+//
+// Asked on a boot where on-chain writes are switched off: the role may have
+// been handed over by an earlier run, and if it has, grants should go through
+// the Safe rather than the env key.
+func (p *ProtocolService) RedeemerSafeHoldsAuthority(ctx context.Context, redeemer *RedeemerService) (bool, error) {
+	if err := p.Available(); err != nil {
+		return false, err
+	}
+	if _, ok := redeemer.GrantAuthorityRole(); !ok {
+		return false, fmt.Errorf("the redeemer service is disabled")
+	}
+	safe, err := p.SafeFor(ctx, structs.ProtocolAccountRedeemerAdmin)
+	if err != nil {
+		return false, err
+	}
+	return redeemer.HoldsGrantAuthority(ctx, safe)
+}

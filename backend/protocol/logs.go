@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math/big"
+	"sort"
 	"time"
 
 	"github.com/ethereum/go-ethereum"
@@ -45,6 +46,11 @@ func (c *Client) BlockNumber(ctx context.Context) (uint64, error) {
 	return client.BlockNumber(ctx)
 }
 
+// TransferClaim records a candidate transaction as belonging to this operation
+// and reports whether the claim succeeded. False means another operation
+// already owns it, and the search carries on to the next candidate.
+type TransferClaim func(txHash string, blockNumber uint64) (bool, error)
+
 // AwaitTransfer waits for the token transfer a sponsored operation was supposed
 // to produce, and returns the hash of the transaction that carried it.
 //
@@ -54,17 +60,23 @@ func (c *Client) BlockNumber(ctx context.Context) (uint64, error) {
 // only on-chain trace, so it is what gets matched — on sender, recipient and
 // exact amount, in a block no earlier than the one before submission.
 //
-// The one case this cannot distinguish is two identical transfers — same
-// sender, same recipient, same amount — landing in the same window. The payout
-// service upstream is idempotent per payout, so a true duplicate is already
-// prevented there; if one ever happened, the hash returned would belong to the
-// other transfer of the identical pair, which carries the same money to the
-// same place.
+// Matching on those three alone is not enough, which is the thing worth being
+// careful about here. Identical payouts are ordinary: three rewards of the same
+// size to the same wallet inside a minute is a normal evening. Without an
+// exclusive claim, two of them record the same transaction, and a payout that
+// actually failed takes credit for one that worked — underpaying somebody with
+// nothing to show that it happened.
+//
+// So every candidate is offered to claim in the order it landed, and the first
+// one that is still unowned wins. A payout with no unclaimed transfer to take
+// waits, and then reports that it could not find its own — which is the honest
+// answer and leaves the ledger retryable.
 func (c *Client) AwaitTransfer(
 	ctx context.Context,
 	token, from, to common.Address,
 	amount *big.Int,
 	fromBlock uint64,
+	claim TransferClaim,
 ) (string, error) {
 	if amount == nil {
 		return "", fmt.Errorf("no amount to match a transfer against")
@@ -105,13 +117,22 @@ func (c *Client) AwaitTransfer(
 		if err != nil {
 			return "", fmt.Errorf("error searching for the transfer this operation should have made: %w", err)
 		}
-		if hash, ok := matchTransferAmount(logs, amount); ok {
-			return hash, nil
+		for _, candidate := range matchingTransfers(logs, amount) {
+			if claim == nil {
+				return candidate.hash, nil
+			}
+			claimed, err := claim(candidate.hash, candidate.block)
+			if err != nil {
+				return "", err
+			}
+			if claimed {
+				return candidate.hash, nil
+			}
 		}
 
 		if !time.Now().Before(deadline) {
 			return "", fmt.Errorf(
-				"no transfer of the expected amount from %s to %s appeared within %s",
+				"no unclaimed transfer of the expected amount from %s to %s appeared within %s",
 				from.Hex(), to.Hex(), transferWaitTimeout,
 			)
 		}
@@ -123,14 +144,20 @@ func (c *Client) AwaitTransfer(
 	}
 }
 
-// matchTransferAmount picks the newest log whose amount is exactly right.
+type transferCandidate struct {
+	hash  string
+	block uint64
+	index uint
+}
+
+// matchingTransfers is every log of exactly the right amount, oldest first.
 //
-// Newest rather than first: a retried payout that eventually produced two
-// transfers should report the one that just happened, and an older identical
-// transfer is the thing the block floor already excludes in all but the
-// pathological case.
-func matchTransferAmount(logs []types.Log, amount *big.Int) (string, bool) {
-	var best *types.Log
+// Oldest first so that when several payouts are chasing identical transfers,
+// each takes the earliest one nobody owns and they end up matched in the order
+// they were made. Taking the newest instead would have the last payout claim
+// the first transfer and leave the ordering scrambled.
+func matchingTransfers(logs []types.Log, amount *big.Int) []transferCandidate {
+	candidates := []transferCandidate{}
 	for i := range logs {
 		entry := logs[i]
 		if entry.Removed || len(entry.Topics) < 3 {
@@ -139,15 +166,19 @@ func matchTransferAmount(logs []types.Log, amount *big.Int) (string, bool) {
 		if new(big.Int).SetBytes(entry.Data).Cmp(amount) != 0 {
 			continue
 		}
-		if best == nil || entry.BlockNumber > best.BlockNumber ||
-			(entry.BlockNumber == best.BlockNumber && entry.Index > best.Index) {
-			best = &logs[i]
+		candidates = append(candidates, transferCandidate{
+			hash:  entry.TxHash.Hex(),
+			block: entry.BlockNumber,
+			index: entry.Index,
+		})
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].block != candidates[j].block {
+			return candidates[i].block < candidates[j].block
 		}
-	}
-	if best == nil {
-		return "", false
-	}
-	return best.TxHash.Hex(), true
+		return candidates[i].index < candidates[j].index
+	})
+	return candidates
 }
 
 // NativeBalance reads a CELO balance, for the cutover's sweep.

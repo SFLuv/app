@@ -50,6 +50,10 @@ type Bot struct {
 	// the key in hand, which is correct right up until the key changes.
 	senders SenderResolver
 
+	// txSenders answers the same question as senders, by transaction hash
+	// instead of by time. Consulted first.
+	txSenders TxSenderResolver
+
 	// Set once the faucet has moved to its Safe. Both nil means the EOA path.
 	spender   Spender
 	balanceOf BalanceReader
@@ -66,6 +70,22 @@ func (b *Bot) SetSenderResolver(resolver SenderResolver) {
 		return
 	}
 	b.senders = resolver
+}
+
+// TxSenderResolver answers "which of our addresses sent this transaction",
+// looked up by hash.
+//
+// Preferred over the timestamp lookup wherever it answers, because it is a
+// record of what happened rather than a deduction from when it happened. The
+// window arithmetic stays for everything sent before that record existed.
+type TxSenderResolver func(ctx context.Context, txHash string) (common.Address, bool)
+
+// SetTxSenderResolver installs the by-hash lookup.
+func (b *Bot) SetTxSenderResolver(resolver TxSenderResolver) {
+	if b == nil {
+		return
+	}
+	b.txSenders = resolver
 }
 
 // Spender sends tokens from wherever the faucet currently lives, returning the
@@ -609,7 +629,12 @@ func (b *Bot) VerifyTransferOnChain(
 }
 
 // sendersForReceipt resolves which addresses may have sent this transfer as the
-// faucet, as of the block it landed in.
+// faucet.
+//
+// Two ways of answering, in order of how much they are worth. If we recorded
+// this transaction when we submitted it, that record says exactly which account
+// sent it. Otherwise the answer is deduced from the block's timestamp and the
+// address windows, which is how anything older than the record gets answered.
 //
 // Falls back to the key's own address whenever the registry cannot answer —
 // no resolver wired, a chain it has no rows for, an unreadable block header.
@@ -629,7 +654,25 @@ func (b *Bot) sendersForReceipt(
 		return map[common.Address]bool{derived: true}, nil
 	}
 
-	if b == nil || b.senders == nil || receipt == nil || client == nil {
+	if b == nil || receipt == nil || client == nil {
+		return fallback()
+	}
+
+	// The recorded answer first. We write down which of our accounts caused
+	// each transaction we submit, so for anything sent since that record
+	// existed this is a lookup rather than a deduction — and a lookup cannot be
+	// wrong about a transfer that straddles a cutover boundary.
+	if b.txSenders != nil {
+		if sender, ok := b.txSenders(ctx, receipt.TxHash.Hex()); ok {
+			accepted := map[common.Address]bool{sender: true}
+			if derived, err := b.deriveFromAddress(); err == nil {
+				accepted[derived] = true
+			}
+			return accepted, nil
+		}
+	}
+
+	if b.senders == nil {
 		return fallback()
 	}
 

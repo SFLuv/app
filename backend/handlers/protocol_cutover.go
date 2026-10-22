@@ -233,9 +233,16 @@ func (p *ProtocolService) recordSafeAddress(ctx context.Context, accountKey stri
 // ── Deployment ───────────────────────────────────────────────────────────────
 
 // DeployAccounts deploys any registered Safe that is not on chain yet.
-func (p *ProtocolService) DeployAccounts(ctx context.Context) error {
+//
+// force is the Protocol panel asking directly. Without it this needs
+// PROTOCOL_DEPLOY_ENABLED, because a deploy of main would otherwise put
+// contracts on chain as a side effect of a merge.
+func (p *ProtocolService) DeployAccounts(ctx context.Context, force bool) error {
 	if err := p.Available(); err != nil {
 		return err
+	}
+	if !force && !p.DeployEnabled() {
+		return fmt.Errorf("deploying protocol Safes is gated off: set %s=true or deploy from the Protocol panel", EnvDeployEnabled)
 	}
 	accounts, err := p.Accounts(ctx)
 	if err != nil {
@@ -575,6 +582,24 @@ func (p *ProtocolService) sweepToken(
 		}
 		_ = p.db.FinishProtocolStep(ctx, step, structs.ProtocolStepFailed, detail, tx.Hash().Hex(), balance)
 		return fmt.Errorf("%s", detail)
+	}
+
+	// Recorded in the transaction map like any other operation of ours, so a
+	// check on this transfer later is answered by lookup rather than by
+	// deducing which address was the faucet at the time — which, for a transfer
+	// that happens exactly at the cutover boundary, is the hardest case for the
+	// window arithmetic to get right.
+	if _, err := p.db.ClaimProtocolTransaction(ctx, db.ProtocolTransaction{
+		TxHash:        tx.Hash().Hex(),
+		ChainID:       p.chainID,
+		AccountKey:    legacy.accountKey,
+		SenderAddress: oldAddress.Hex(),
+		Purpose:       db.ProtocolTxPurposeSweep,
+		Recipient:     safe.Hex(),
+		AmountBase:    balance,
+		BlockNumber:   receipt.BlockNumber.Uint64(),
+	}); err != nil {
+		p.logf("protocol sweep %s: token transfer recorded on chain but not in the transaction map: %s", legacy.accountKey, err)
 	}
 
 	p.logf("protocol sweep %s: moved %s token base units from %s to %s (%s)",

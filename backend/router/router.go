@@ -199,6 +199,7 @@ func AddProtocolRoutes(r *chi.Mux, a *handlers.AppService) {
 	r.Get("/admin/protocol", withActiveAuth(a.GetProtocolPanel, a))
 	r.Post("/admin/protocol/accounts/{key}/rotate", withActiveAuth(a.RotateProtocolAccount, a))
 	r.Post("/admin/protocol/rotate-all", withActiveAuth(a.RotateAllProtocolAccounts, a))
+	r.Post("/admin/protocol/deploy", withActiveAuth(a.DeployProtocolAccounts, a))
 	r.Post("/admin/protocol/sweep", withActiveAuth(a.SweepProtocolFunds, a))
 }
 

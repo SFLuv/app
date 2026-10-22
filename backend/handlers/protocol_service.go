@@ -47,13 +47,27 @@ type ProtocolService struct {
 	mu sync.Mutex
 }
 
-// EnvSweepEnabled gates the one irreversible part of the cutover.
+// Nothing touches the chain unless it is switched on.
 //
-// Deploying a Safe and recording an address are repeatable and harmless.
-// Moving the balance of a live faucet is neither, and it must not happen
-// because a staging image booted or because a crash loop came round again — so
-// it waits to be asked, either by this flag or by a button in the admin panel.
-const EnvSweepEnabled = "PROTOCOL_SWEEP_ENABLED"
+// Merging is deploying here: main auto-deploys, so code that acts on chain at
+// boot acts the moment a pull request lands. That is the wrong default for
+// deploying contracts, moving a live faucet's balance and handing a token role
+// around, so both of those wait to be asked — by an environment variable or by
+// a button in the Protocol panel.
+//
+// What stays automatic is everything that only writes to our own database:
+// registering the accounts, minting a signer, deriving the Safe addresses
+// (a view call) and recording which address held which role. Those are
+// idempotent, reversible and needed for the panel to be able to say anything
+// at all.
+const (
+	// EnvDeployEnabled gates putting Safes on chain and handing the redeemer
+	// role to one.
+	EnvDeployEnabled = "PROTOCOL_DEPLOY_ENABLED"
+	// EnvSweepEnabled gates moving funds and revoking the old authority — the
+	// irreversible half.
+	EnvSweepEnabled = "PROTOCOL_SWEEP_ENABLED"
+)
 
 func NewProtocolService(
 	appDb *db.AppDB,
@@ -130,8 +144,44 @@ func (p *ProtocolService) Available() error {
 
 func (p *ProtocolService) ChainID() int { return p.chainID }
 
-// SweepEnabled reflects the env gate.
+// SweepEnabled reflects the env gate on moving funds.
 func (p *ProtocolService) SweepEnabled() bool { return envBool(EnvSweepEnabled, false) }
+
+// DeployEnabled reflects the env gate on putting anything on chain.
+func (p *ProtocolService) DeployEnabled() bool { return envBool(EnvDeployEnabled, false) }
+
+// CutoverComplete reports whether every protocol account already has a
+// deployed Safe with a live signer.
+//
+// The guard on repeating the on-chain work. Each of these steps is individually
+// idempotent and each claims itself in the ledger, but this is the cheaper and
+// more obvious check: if the wallets already exist, the cutover happened on an
+// earlier deploy and there is nothing on chain left to do. Every later release
+// — including the branches queued behind this one, which will boot this same
+// sequence again — takes that path and touches nothing.
+//
+// Read from the recorded addresses rather than inferred from the schema
+// version. The version only says the tables exist; the addresses say the work
+// is done.
+func (p *ProtocolService) CutoverComplete(ctx context.Context) bool {
+	if p == nil || p.db == nil {
+		return false
+	}
+	accounts, err := p.db.ListProtocolAccounts(ctx, p.chainID)
+	if err != nil || len(accounts) == 0 {
+		return false
+	}
+	expected := len(protocolAccountCatalog(p.chainID))
+	if len(accounts) < expected {
+		return false
+	}
+	for _, account := range accounts {
+		if !common.IsHexAddress(account.SafeAddress) || account.DeployedAt == nil || account.Signer == nil {
+			return false
+		}
+	}
+	return true
+}
 
 // protocolAccountCatalog is every function the backend signs for.
 //
@@ -201,6 +251,24 @@ func (p *ProtocolService) AddressesForRoleAt(
 func (p *ProtocolService) FaucetSenderResolver() func(context.Context, int64, time.Time) ([]common.Address, error) {
 	return func(ctx context.Context, chainID int64, at time.Time) ([]common.Address, error) {
 		return p.AddressesForRoleAt(ctx, structs.ProtocolRoleFaucet, chainID, at)
+	}
+}
+
+// TxSenderResolver answers "which of our addresses sent this transaction".
+//
+// The hook the payout verifier prefers over the timestamp lookup: for anything
+// we submitted since the registry existed, this is a recorded fact rather than
+// a deduction from when the block landed.
+func (p *ProtocolService) TxSenderResolver() func(context.Context, string) (common.Address, bool) {
+	return func(ctx context.Context, txHash string) (common.Address, bool) {
+		if p == nil || p.db == nil {
+			return common.Address{}, false
+		}
+		sender, _, found, err := p.db.ProtocolTransactionSender(ctx, txHash)
+		if err != nil || !found || !common.IsHexAddress(sender) {
+			return common.Address{}, false
+		}
+		return common.HexToAddress(sender), true
 	}
 }
 
@@ -318,9 +386,33 @@ func (p *ProtocolService) SendFromFaucet(ctx context.Context, amountBase *big.In
 		return "", fmt.Errorf("refusing to send a non-positive amount")
 	}
 
+	// One operation at a time, and the queue is the point rather than a
+	// precaution.
+	//
+	// Two things go wrong without it. The nonce comes from the engine, which
+	// fills it in when it sponsors — the Citizen Wallet client does the same
+	// and never asks the chain for one — so two operations sponsored at the
+	// same moment can be handed the same nonce, and one of them is rejected.
+	// And two payouts in flight together are two searches for a transfer,
+	// which is where identical rewards start competing for the same
+	// transaction. Serialising removes both at the source; the exclusive claim
+	// below is what covers the cases this cannot, like a retry after a
+	// timeout.
+	//
+	// It also means a rotation and a payout cannot overlap. A swapOwner landing
+	// between sponsoring and submitting would leave the operation signed by an
+	// address that is no longer an owner, and it would fail validation for a
+	// reason nothing in the error would explain.
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
 	safe, err := p.SafeFor(ctx, structs.ProtocolAccountFaucet)
 	if err != nil {
 		return "", ErrFaucetNotMigrated
+	}
+	signerAddress := ""
+	if signer, err := p.db.GetActiveProtocolSigner(ctx, structs.ProtocolAccountFaucet); err == nil && signer != nil {
+		signerAddress = signer.EOAAddress
 	}
 
 	// Noted before submitting. A log search that started lower could match an
@@ -340,7 +432,23 @@ func (p *ProtocolService) SendFromFaucet(ctx context.Context, amountBase *big.In
 		return "", err
 	}
 
-	txHash, err := p.client.AwaitTransfer(ctx, p.token, safe, to, amountBase, fromBlock)
+	// Each candidate transfer is claimed exclusively, so this payout either
+	// gets a transaction no other payout owns or gets none.
+	txHash, err := p.client.AwaitTransfer(ctx, p.token, safe, to, amountBase, fromBlock,
+		func(candidate string, block uint64) (bool, error) {
+			return p.db.ClaimProtocolTransaction(ctx, db.ProtocolTransaction{
+				TxHash:        candidate,
+				ChainID:       p.chainID,
+				AccountKey:    structs.ProtocolAccountFaucet,
+				SenderAddress: safe.Hex(),
+				SignerAddress: signerAddress,
+				OperationHash: opHash,
+				Purpose:       db.ProtocolTxPurposePayout,
+				Recipient:     to.Hex(),
+				AmountBase:    amountBase,
+				BlockNumber:   block,
+			})
+		})
 	if err != nil {
 		// The operation went out and may still land. Returning the error with
 		// the operation hash in it means the caller records a failure that an

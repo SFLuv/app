@@ -61,6 +61,9 @@ export interface ProtocolPanelResponse {
   steps: ProtocolMigrationStep[]
   master_key_configured: boolean
   sweep_enabled: boolean
+  deploy_enabled: boolean
+  /** True once every account has a deployed wallet with a live signer. */
+  cutover_complete: boolean
   can_rotate: boolean
 }
 

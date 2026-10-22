@@ -554,3 +554,111 @@ func (a *AppDB) GetSealedProtocolSigner(ctx context.Context, id int64) (*SealedP
 	}
 	return signer, nil
 }
+
+// ── Which transaction was which operation ────────────────────────────────────
+
+// ProtocolTransaction is one transaction we know we caused.
+type ProtocolTransaction struct {
+	TxHash        string
+	ChainID       int
+	AccountKey    string
+	SenderAddress string
+	SignerAddress string
+	OperationHash string
+	Purpose       string
+	Recipient     string
+	AmountBase    *big.Int
+	BlockNumber   uint64
+}
+
+// Purposes, for the panel and for reading the table by hand.
+const (
+	ProtocolTxPurposePayout   = "faucet_payout"
+	ProtocolTxPurposeDeploy   = "deploy"
+	ProtocolTxPurposeRotation = "rotation"
+	ProtocolTxPurposeRole     = "role_grant"
+	ProtocolTxPurposeSweep    = "sweep"
+)
+
+// ClaimProtocolTransaction records a transaction as ours, and reports whether
+// this caller is the one that got it.
+//
+// False means some other operation already owns that hash. That is the whole
+// point: two payouts of the same amount to the same person in the same minute
+// must not both record the same transfer, and the loser keeps looking for one
+// of its own rather than taking credit for work it did not do.
+func (a *AppDB) ClaimProtocolTransaction(ctx context.Context, record ProtocolTransaction) (bool, error) {
+	hash := strings.ToLower(strings.TrimSpace(record.TxHash))
+	if hash == "" {
+		return false, fmt.Errorf("no transaction hash to claim")
+	}
+	var amount any
+	if record.AmountBase != nil {
+		amount = record.AmountBase.String()
+	}
+	var block any
+	if record.BlockNumber > 0 {
+		block = int64(record.BlockNumber)
+	}
+
+	var claimed bool
+	err := a.db.QueryRow(ctx, `
+		INSERT INTO protocol_transactions(
+			tx_hash, chain_id, account_key, sender_address, signer_address,
+			operation_hash, purpose, recipient, amount_base, block_number
+		)
+		VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9::numeric, $10)
+		ON CONFLICT (tx_hash) DO NOTHING
+		RETURNING TRUE;
+	`,
+		hash, record.ChainID, record.AccountKey,
+		strings.ToLower(strings.TrimSpace(record.SenderAddress)),
+		strings.ToLower(strings.TrimSpace(record.SignerAddress)),
+		record.OperationHash, record.Purpose,
+		strings.ToLower(strings.TrimSpace(record.Recipient)),
+		amount, block,
+	).Scan(&claimed)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, nil
+		}
+		return false, fmt.Errorf("error claiming transaction %s: %w", hash, err)
+	}
+	return claimed, nil
+}
+
+// ProtocolTransactionSender answers "which of our addresses sent this
+// transaction", by lookup rather than by inference.
+//
+// Empty means we have no record of it, which is not the same as it not being
+// ours: everything sent before this table existed is absent from it, which is
+// why the caller falls back to the address windows rather than treating a miss
+// as a foreign transaction.
+func (a *AppDB) ProtocolTransactionSender(ctx context.Context, txHash string) (string, string, bool, error) {
+	var sender, accountKey string
+	err := a.db.QueryRow(ctx, `
+		SELECT LOWER(sender_address), account_key
+		FROM protocol_transactions
+		WHERE tx_hash = LOWER($1);
+	`, strings.TrimSpace(txHash)).Scan(&sender, &accountKey)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", "", false, nil
+		}
+		return "", "", false, fmt.Errorf("error looking up transaction %s: %w", txHash, err)
+	}
+	return sender, accountKey, true, nil
+}
+
+// ProtocolTransactionClaimed reports whether a hash is already spoken for,
+// without claiming it. Used while scanning candidate transfers.
+func (a *AppDB) ProtocolTransactionClaimed(ctx context.Context, txHash string) (bool, error) {
+	var exists bool
+	if err := a.db.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM protocol_transactions WHERE tx_hash = LOWER($1));`,
+		strings.TrimSpace(txHash),
+	).Scan(&exists); err != nil {
+		return false, fmt.Errorf("error checking whether transaction %s is claimed: %w", txHash, err)
+	}
+	return exists, nil
+}

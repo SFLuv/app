@@ -396,6 +396,7 @@ func NewServerHandler(ctx context.Context, pools *DBPools, appLogger *logger.Log
 	// nothing and the verifier falls back to the key in hand, which is the
 	// behaviour it had before any of this existed.
 	botClient.SetSenderResolver(protocolSvc.FaucetSenderResolver())
+	botClient.SetTxSenderResolver(protocolSvc.TxSenderResolver())
 
 	// Bridge is the off-ramp behind merchant bank payouts. Without a key the
 	// client is disabled and every payout route answers "not available yet";

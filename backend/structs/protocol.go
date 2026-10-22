@@ -107,9 +107,15 @@ type ProtocolPanelResponse struct {
 	// keys. False means every rotation and every sponsored operation will fail,
 	// and the panel says so rather than offering buttons that cannot work.
 	MasterKeyConfigured bool `json:"master_key_configured"`
-	// SweepEnabled reflects the env gate on moving funds.
-	SweepEnabled bool `json:"sweep_enabled"`
-	CanRotate    bool `json:"can_rotate"`
+	// SweepEnabled and DeployEnabled reflect the env gates. Both default to
+	// off, so the panel is where an operator turns the cutover on rather than
+	// discovering it already happened.
+	SweepEnabled  bool `json:"sweep_enabled"`
+	DeployEnabled bool `json:"deploy_enabled"`
+	// CutoverComplete is true once every account has a deployed Safe with a
+	// live signer, which is when there is nothing on chain left to do.
+	CutoverComplete bool `json:"cutover_complete"`
+	CanRotate       bool `json:"can_rotate"`
 }
 
 // ProtocolRotateResponse is the result of one rotation.

@@ -77,6 +77,8 @@ func (a *AppService) GetProtocolPanel(w http.ResponseWriter, r *http.Request) {
 		ChainID:             a.protocolSvc.ChainID(),
 		MasterKeyConfigured: protocol.MasterKeyConfigured(),
 		SweepEnabled:        a.protocolSvc.SweepEnabled(),
+		DeployEnabled:       a.protocolSvc.DeployEnabled(),
+		CutoverComplete:     a.protocolSvc.CutoverComplete(r.Context()),
 		CanRotate:           canRotate,
 		Accounts:            []structs.ProtocolAccount{},
 		History:             []structs.ProtocolAddressWindow{},
@@ -171,6 +173,39 @@ func (a *AppService) RotateAllProtocolAccounts(w http.ResponseWriter, r *http.Re
 	// status code cannot say "two of these four keys are new", which is exactly
 	// what the operator has to know.
 	writeJSON(w, http.StatusOK, result)
+}
+
+// DeployProtocolAccounts puts the Safes on chain.
+//
+// Admin-only and never offered to a capability holder, for the same reason as
+// the sweep: it is a deliberate step in a migration, not routine operation. It
+// moves no money — the Safes are empty until the sweep — but it does spend the
+// paymaster's gas and it is what makes the rest of the cutover possible.
+func (a *AppService) DeployProtocolAccounts(w http.ResponseWriter, r *http.Request) {
+	userDid := utils.GetDid(r)
+	if userDid == nil || !a.IsAdmin(r.Context(), *userDid) {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+	if a.protocolSvc == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+			"error": "The protocol service is not configured on this deployment.",
+		})
+		return
+	}
+
+	if err := a.protocolSvc.DeployAccounts(r.Context(), true); err != nil {
+		a.logger.Logf("protocol deployment by %s failed: %s", *userDid, err)
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+
+	accounts, err := a.protocolSvc.Accounts(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]string{"status": "deployed"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": "deployed", "accounts": accounts})
 }
 
 // SweepProtocolFunds moves the legacy EOA balances onto the Safes.

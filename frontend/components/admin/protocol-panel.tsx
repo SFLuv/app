@@ -321,6 +321,52 @@ export function ProtocolPanel() {
         </CardContent>
       </Card>
 
+      {data && !data.cutover_complete && (
+        <MigrationCard
+          data={data}
+          busy={rotating}
+          onRun={async (action) => {
+            setRotating(true)
+            try {
+              const res = await authFetch(`/admin/protocol/${action}`, { method: "POST" })
+              const body = await res.json().catch(() => null)
+              if (!res.ok) {
+                throw new Error((body as { error?: string })?.error ?? `${action} failed (${res.status}).`)
+              }
+              toast({
+                title: action === "deploy" ? "Wallets deployed" : "Balances moved",
+                description:
+                  action === "deploy"
+                    ? "The wallets are on chain. Move the balances next."
+                    : "The old accounts have been emptied into the new wallets.",
+              })
+              await load()
+            } catch (err) {
+              toast({
+                title: action === "deploy" ? "Deployment failed" : "Move failed",
+                description: err instanceof Error ? err.message : "Nothing changed.",
+                variant: "destructive",
+              })
+            } finally {
+              setRotating(false)
+            }
+          }}
+        />
+      )}
+
+      {data?.cutover_complete && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Payouts go through the sponsored path</CardTitle>
+            <CardDescription>
+              Now that the balances are in these wallets, every payout is a sponsored transaction: the Citizen Wallet
+              engine submits it and the paymaster pays the gas. That means the paymaster is the one account still
+              needing CELO — and while the engine is unavailable, payouts stop rather than falling back.
+            </CardDescription>
+          </CardHeader>
+        </Card>
+      )}
+
       <AddressHistoryCard history={data?.history ?? []} />
 
       {(data?.steps?.length ?? 0) > 0 && (
@@ -396,6 +442,102 @@ export function ProtocolPanel() {
         </DialogContent>
       </Dialog>
     </div>
+  )
+}
+
+/**
+ * The two steps of the migration, offered in order.
+ *
+ * Both are off by default in the environment, because main auto-deploys and a
+ * merge must not deploy contracts or move a live balance as a side effect. This
+ * card is where someone does it deliberately, and it disappears once there is
+ * nothing left to do.
+ */
+function MigrationCard({
+  data,
+  busy,
+  onRun,
+}: {
+  data: ProtocolPanelResponse
+  busy: boolean
+  onRun: (action: "deploy" | "sweep") => Promise<void>
+}) {
+  const [confirming, setConfirming] = useState<"deploy" | "sweep" | null>(null)
+  const anyDeployed = data.accounts.some((account) => account.deployed_at !== null)
+  const allDeployed = data.accounts.length > 0 && data.accounts.every((account) => account.deployed_at !== null)
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Finish the migration</CardTitle>
+        <CardDescription>
+          Two steps, in order. Deploying puts the wallets on chain and costs only gas. Moving the balances empties the
+          old accounts into them and cannot be undone — it spends with the keys that are being replaced.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-wrap gap-2">
+        <Button variant="outline" onClick={() => setConfirming("deploy")} disabled={busy || allDeployed}>
+          {allDeployed ? "Wallets deployed" : "Deploy wallets"}
+        </Button>
+        <Button variant="destructive" onClick={() => setConfirming("sweep")} disabled={busy || !anyDeployed}>
+          Move balances across
+        </Button>
+        {!data.deploy_enabled && !allDeployed && (
+          <p className="w-full pt-1 text-xs text-muted-foreground">
+            Deploying is switched off in the environment (<code className="font-mono">PROTOCOL_DEPLOY_ENABLED</code>);
+            this button does it anyway, once, on request.
+          </p>
+        )}
+      </CardContent>
+
+      <Dialog open={confirming !== null} onOpenChange={(open) => !open && setConfirming(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              {confirming === "deploy" ? "Deploy the protocol wallets?" : "Move the balances across?"}
+            </DialogTitle>
+            <DialogDescription asChild>
+              <div className="space-y-3 text-sm">
+                {confirming === "deploy" ? (
+                  <p>
+                    Each wallet is deployed at the address already shown above — the address does not change by being
+                    deployed. No funds move. Safe to repeat: a wallet already on chain is skipped.
+                  </p>
+                ) : (
+                  <>
+                    <p>
+                      Every SFLUV and CELO balance on the old accounts is transferred to the new wallets, signed with
+                      the keys that are being replaced.
+                    </p>
+                    <p>
+                      This cannot be undone, and it is the point of no return: from here payouts come from the new
+                      wallets and go through the sponsored path.
+                    </p>
+                  </>
+                )}
+              </div>
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirming(null)} disabled={busy}>
+              Cancel
+            </Button>
+            <Button
+              variant={confirming === "deploy" ? "default" : "destructive"}
+              disabled={busy}
+              onClick={() => {
+                const action = confirming
+                setConfirming(null)
+                if (action) void onRun(action)
+              }}
+            >
+              {busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              {confirming === "deploy" ? "Deploy" : "Move balances"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </Card>
   )
 }
 

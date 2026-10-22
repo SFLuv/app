@@ -2706,7 +2706,7 @@ var schemaMigrations = []SchemaMigration{
 		},
 	},
 	{
-		Version:     "1.68",
+		Version:     "1.66",
 		Description: "protocol smart accounts, their encrypted signers, and the history of which address held which protocol role",
 		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
 			return migrateProtocolAccounts(ctx, pools)

@@ -5,15 +5,23 @@ import (
 	"fmt"
 )
 
-// migrateProtocolAccounts is the 1.68 migration body: the backend's own smart
+// migrateProtocolAccounts is the 1.66 migration body: the backend's own smart
 // accounts, the signing keys behind them, and the record of which address held
 // which protocol role when.
 //
-// The version skips ahead deliberately. On main the highest migration is 1.65,
-// but 1.66 and 1.67 are already claimed by the bulletin board and the internal
-// notifications work on their own branches, and a third claim on either number
-// would mean renumbering whichever landed last. 1.68 is free in every branch
-// in flight.
+// 1.66 is the next free number after main's 1.65, and taking it is not
+// optional. The runner applies a migration only when its version is strictly
+// greater than the one recorded in the database (isVersionGreater, in
+// schema_migrations.go), so a branch that skips ahead to 1.68 to avoid a
+// collision would leave a database at 1.68 — and 1.66 and 1.67, whenever they
+// merged afterwards, would never run. Their tables would simply not exist, the
+// version check would report the schema already current, and nothing would say
+// a word until a feature touched a missing table.
+//
+// Two other branches claim 1.66 today: the bulletin board and, above it, the
+// internal notifications work. This branch merges into main first, so they
+// renumber up to 1.67 and 1.68 behind it rather than this one jumping over
+// them.
 //
 // Everything is in the app database. Nothing here touches the ponder database,
 // which is the indexer's and is never migrated from this repository.
@@ -107,6 +115,45 @@ func migrateProtocolAccounts(ctx context.Context, pools *MigrationPools) error {
 		CREATE UNIQUE INDEX IF NOT EXISTS protocol_address_history_live_idx
 			ON protocol_address_history(role, chain_id, LOWER(address))
 			WHERE ended_at IS NULL;
+
+		-- Which transaction was which operation of ours.
+		--
+		-- The engine answers a submitted operation with an operation id, not a
+		-- transaction, and the CommunityModule emits no event tying the two
+		-- together — so the transaction has to be found by looking for the
+		-- transfer the operation was supposed to make. On its own that is not
+		-- enough: identical payouts are normal (three 5-SFLUV rewards to one
+		-- wallet inside a minute, on chain, yesterday), and matching on sender,
+		-- recipient and amount alone lets two payouts record the same
+		-- transaction — or lets a payout that actually failed take credit for
+		-- one that worked, which underpays somebody and flags nothing.
+		--
+		-- tx_hash is the primary key, so claiming one is an insert that either
+		-- succeeds or tells the caller it is already spoken for. A payout keeps
+		-- looking rather than reusing a transaction another payout owns, and a
+		-- payout with no unclaimed transfer to claim reports failure, which is
+		-- the truth.
+		--
+		-- It doubles as the answer to "who sent this": a direct lookup, which
+		-- is better than inferring it from a timestamp and a window, and it is
+		-- what the payout verifier asks first.
+		CREATE TABLE IF NOT EXISTS protocol_transactions(
+			tx_hash TEXT PRIMARY KEY,
+			chain_id INTEGER NOT NULL,
+			account_key TEXT NOT NULL,
+			sender_address TEXT NOT NULL,
+			signer_address TEXT NOT NULL DEFAULT '',
+			operation_hash TEXT NOT NULL DEFAULT '',
+			purpose TEXT NOT NULL DEFAULT '',
+			recipient TEXT NOT NULL DEFAULT '',
+			amount_base NUMERIC(78,0),
+			block_number BIGINT,
+			observed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		);
+		CREATE INDEX IF NOT EXISTS protocol_transactions_account_idx
+			ON protocol_transactions(account_key, observed_at DESC);
+		CREATE INDEX IF NOT EXISTS protocol_transactions_sender_idx
+			ON protocol_transactions(LOWER(sender_address), chain_id);
 
 		-- The cutover ledger.
 		--
