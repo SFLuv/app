@@ -178,8 +178,28 @@ func New(s *handlers.BotService, a *handlers.AppService, p *handlers.PonderServi
 	AddW9Routes(r, a)
 	AddUnwrapRoutes(r, a)
 	AddMerchantPayoutRoutes(r, a)
+	AddProtocolRoutes(r, a)
 
 	return r
+}
+
+// AddProtocolRoutes is the Protocol tab: the backend's own Safes and the keys
+// that sign for them.
+//
+// withActiveAuth rather than withAdmin, because access is not admin-only. The
+// handler resolves it: a platform admin has it outright, and anyone else needs
+// the admin.protocol.view capability, with rotation gated separately on
+// admin.protocol.rotate. Guarding the route with withAdmin would make the
+// capability unreachable.
+//
+// The sweep is the exception and checks for an admin itself: it is the
+// irreversible half of the cutover and is not something a capability grant
+// should confer.
+func AddProtocolRoutes(r *chi.Mux, a *handlers.AppService) {
+	r.Get("/admin/protocol", withActiveAuth(a.GetProtocolPanel, a))
+	r.Post("/admin/protocol/accounts/{key}/rotate", withActiveAuth(a.RotateProtocolAccount, a))
+	r.Post("/admin/protocol/rotate-all", withActiveAuth(a.RotateAllProtocolAccounts, a))
+	r.Post("/admin/protocol/sweep", withActiveAuth(a.SweepProtocolFunds, a))
 }
 
 func AddOrganizationRoutes(r *chi.Mux, a *handlers.AppService, s *handlers.BotService) {

@@ -33,6 +33,30 @@ type RedeemerService struct {
 	fromAddress  common.Address
 	chainID      *big.Int
 	redeemerRole [32]byte
+	// adminRole is the role that may grant REDEEMER_ROLE. It is what has to
+	// move to the Safe for the Safe to be the redeemer admin in any real sense.
+	adminRole [32]byte
+
+	// granter, when set, issues the role through the redeemer admin's Safe as a
+	// sponsored operation instead of signing with the env key.
+	//
+	// Installed only once the Safe actually holds the role that lets it grant.
+	// Until then the env key still holds it, and this stays nil so the old path
+	// keeps working — a half-finished cutover must not stop merchants being
+	// able to redeem.
+	granter RoleGranter
+}
+
+// RoleGranter grants an AccessControl role on the token, by whatever means the
+// caller has.
+type RoleGranter func(ctx context.Context, role [32]byte, account common.Address) (string, error)
+
+// SetRoleGranter routes grants through the protocol Safe.
+func (r *RedeemerService) SetRoleGranter(granter RoleGranter) {
+	if r == nil {
+		return
+	}
+	r.granter = granter
 }
 
 func NewRedeemerService(appDb *db.AppDB, log *logger.LogCloser, config *clientconfig.Config) *RedeemerService {
@@ -169,6 +193,7 @@ func NewRedeemerService(appDb *db.AppDB, log *logger.LogCloser, config *clientco
 	service.fromAddress = fromAddress
 	service.chainID = chainID
 	service.redeemerRole = redeemerRole
+	service.adminRole = adminRole
 	service.enabled = true
 
 	service.logf("redeemer auto-grant enabled with admin wallet %s on token %s, chain %s", service.fromAddress.Hex(), tokenID, chainID.String())
@@ -273,6 +298,16 @@ func (r *RedeemerService) EnsureMerchantHasRedeemerWallet(ctx context.Context, o
 }
 
 func (r *RedeemerService) grantRedeemerRole(ctx context.Context, walletAddress common.Address) error {
+	// The Safe path when the role has moved, the env key when it has not.
+	if r.granter != nil {
+		hash, err := r.granter(ctx, r.redeemerRole, walletAddress)
+		if err != nil {
+			return fmt.Errorf("error granting REDEEMER_ROLE to %s through the protocol Safe: %w", walletAddress.Hex(), err)
+		}
+		r.logf("granted REDEEMER_ROLE to %s through the protocol Safe in %s", walletAddress.Hex(), hash)
+		return nil
+	}
+
 	opts, err := bind.NewKeyedTransactorWithChainID(r.privateKey, r.chainID)
 	if err != nil {
 		return fmt.Errorf("error creating transactor: %w", err)
@@ -305,4 +340,94 @@ func (r *RedeemerService) logf(format string, args ...any) {
 		return
 	}
 	r.log.Logf(format, args...)
+}
+
+// GrantAuthorityRole is the role that may grant REDEEMER_ROLE, and the one the
+// cutover has to move onto the redeemer admin's Safe. Zero when the service is
+// disabled, in which case there is nothing to move.
+func (r *RedeemerService) GrantAuthorityRole() ([32]byte, bool) {
+	if r == nil || !r.enabled {
+		return [32]byte{}, false
+	}
+	return r.adminRole, true
+}
+
+// HoldsGrantAuthority reports whether an address may grant REDEEMER_ROLE.
+//
+// Read from the token rather than inferred from our own bookkeeping: the whole
+// question is whether the chain agrees, and the cost of assuming wrongly is a
+// revoked key and a Safe that cannot grant — which would stop every merchant
+// approved after it from being able to redeem.
+func (r *RedeemerService) HoldsGrantAuthority(ctx context.Context, address common.Address) (bool, error) {
+	if r == nil || !r.enabled || r.contract == nil {
+		return false, fmt.Errorf("redeemer service is not enabled")
+	}
+	return r.contract.HasRole(&bind.CallOpts{Context: ctx}, r.adminRole, address)
+}
+
+// LegacyAdminAddress is the env-key address that holds the granting role today.
+func (r *RedeemerService) LegacyAdminAddress() (common.Address, bool) {
+	if r == nil || !r.enabled {
+		return common.Address{}, false
+	}
+	return r.fromAddress, true
+}
+
+// LegacyGrantRole grants a role with the env key, which is how the granting
+// authority is handed to the Safe in the first place: the Safe cannot grant
+// itself anything.
+func (r *RedeemerService) LegacyGrantRole(ctx context.Context, role [32]byte, account common.Address) (string, error) {
+	if r == nil || !r.enabled {
+		return "", fmt.Errorf("redeemer service is not enabled")
+	}
+	opts, err := bind.NewKeyedTransactorWithChainID(r.privateKey, r.chainID)
+	if err != nil {
+		return "", fmt.Errorf("error creating transactor: %w", err)
+	}
+	opts.Context = ctx
+	opts.From = r.fromAddress
+
+	tx, err := r.contract.GrantRole(opts, role, account)
+	if err != nil {
+		return "", fmt.Errorf("error granting a role to %s: %w", account.Hex(), err)
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, 3*time.Minute)
+	defer cancel()
+	receipt, err := bind.WaitMined(waitCtx, r.client, tx)
+	if err != nil {
+		return tx.Hash().Hex(), fmt.Errorf("error waiting for the grant tx %s: %w", tx.Hash().Hex(), err)
+	}
+	if receipt == nil || receipt.Status != types.ReceiptStatusSuccessful {
+		return tx.Hash().Hex(), fmt.Errorf("the grant transaction reverted: %s", tx.Hash().Hex())
+	}
+	return tx.Hash().Hex(), nil
+}
+
+// LegacyRevokeRole takes a role away with the env key. Used once, to strip the
+// old address of the authority the Safe now holds.
+func (r *RedeemerService) LegacyRevokeRole(ctx context.Context, role [32]byte, account common.Address) (string, error) {
+	if r == nil || !r.enabled {
+		return "", fmt.Errorf("redeemer service is not enabled")
+	}
+	opts, err := bind.NewKeyedTransactorWithChainID(r.privateKey, r.chainID)
+	if err != nil {
+		return "", fmt.Errorf("error creating transactor: %w", err)
+	}
+	opts.Context = ctx
+	opts.From = r.fromAddress
+
+	tx, err := r.contract.RevokeRole(opts, role, account)
+	if err != nil {
+		return "", fmt.Errorf("error revoking a role from %s: %w", account.Hex(), err)
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, 3*time.Minute)
+	defer cancel()
+	receipt, err := bind.WaitMined(waitCtx, r.client, tx)
+	if err != nil {
+		return tx.Hash().Hex(), fmt.Errorf("error waiting for the revoke tx %s: %w", tx.Hash().Hex(), err)
+	}
+	if receipt == nil || receipt.Status != types.ReceiptStatusSuccessful {
+		return tx.Hash().Hex(), fmt.Errorf("the revoke transaction reverted: %s", tx.Hash().Hex())
+	}
+	return tx.Hash().Hex(), nil
 }
