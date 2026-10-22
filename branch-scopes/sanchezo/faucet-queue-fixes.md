@@ -67,3 +67,41 @@ Volume: 7 files. 0 migrations, 0 routes.
 
 Not changed, worth knowing: a sweep from the panel still doesn't revoke the legacy redeemer authority. That stays
 gated on `PROTOCOL_SWEEP_ENABLED` at boot, as before.
+
+# Round 3 — Oct 22, the batch stall and faucet history labels (on `pjol/bot-smart-wallet-hotfix`)
+
+Oct 22 2026 · app (backend + frontend) · **~0.1h active** (about 15:33 to 15:38 PDT, wall-clock from session timestamps)
+
+## One search per operation, not per payout
+
+`protocol.Client.AwaitTransfers` replaces the per-payout `AwaitTransfer` (removed, no other callers). It runs one
+`eth_getLogs` poll for every transfer out of the faucet Safe and claims each payout's log under one shared 90-second
+deadline. Before, each payout waited up to 90 seconds in turn, so an operation that never landed held the queue for
+the batch's whole 4-minute budget.
+
+An operation is one transaction, and a MultiSend batch is all-or-nothing. So once any payout of the batch is found,
+the operation's transaction is known: the rest may only match inside it, and a payout missing from it fails
+immediately ("operation landed in … but this payout's transfer is not in it") instead of waiting out the deadline.
+Matching is in `claimBatch`, kept separate from the polling.
+
+## Rewards from a previous faucet keep their label
+
+- **Backend:** new `PREVIOUS_FAUCET_ADDRESSES` (comma-separated, validated like `BACKING_ASSETS`), served as
+  `extras.previous_faucet_addresses` in `/config`. Documented in `.env.example`.
+- **Web:** `ResolvedCommunityConfig.faucetAddresses` holds the current faucet first, then the previous ones,
+  deduplicated. `TransactionProvider` labels a transfer `volunteer_reward` if it came from any of them, so after a
+  rotation the old wallet's rewards stay rewards in history.
+- **Mobile (`SFLuv/mobile-app`), checked, not changed:** it reads `faucet_address` from the same `/config`, so
+  changing `FAUCET_ADDRESS` reaches it. Nothing else depends on the faucet's address or type. Its reward label
+  (`mobile/src/utils/transactions.ts` `isRewardTransaction`) compares a single address, so it needs the same list
+  change, shipped in an app release.
+
+| Item | Hours | Repo |
+|---|---|---|
+| Both of the above. Verified with throwaway tests, not committed: `claimBatch` with synthetic logs (3 identical payouts claim 3 distinct logs in one tx; a payout missing from the landed tx fails at once; nothing landed stays pending; an older owned transfer is skipped; the operation's tx beats other candidates); `AwaitTransfers` against a fake JSON-RPC node finding both payouts on the second poll; `/config` serving the list, replacing a stale upstream copy, and rejecting a bad address; `tsc --noEmit` shows no errors in the changed frontend files (39 pre-existing elsewhere) | 0.1 | app |
+
+Volume: 6 files. 0 migrations, 0 routes, 1 new env var.
+
+Edge, unchanged: if an earlier operation that timed out lands inside this one's window with an identical
+payout, a payout can claim that transaction first, and the rest of the batch then fails as "not in it" (codes stay
+spent, nothing is paid twice).

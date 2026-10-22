@@ -267,32 +267,39 @@ func (p *ProtocolService) dispatchFaucetBatch(batch []*faucetSend) {
 		p.logf("protocol faucet: operation %s carries %d payouts", opHash, len(batch))
 	}
 
-	// Each payout claims its own transfer out of the operation. A batch lands
-	// as one transaction with one Transfer log per payout, which is why the
-	// claim is keyed on the log index and not just the hash.
-	for _, request := range batch {
-		txHash, err := p.client.AwaitTransfer(ctx, p.token, safe, request.to, request.amount, fromBlock,
-			func(candidate string, block uint64, logIndex uint) (bool, error) {
-				return p.db.ClaimProtocolTransaction(ctx, db.ProtocolTransaction{
-					TxHash:        candidate,
-					LogIndex:      logIndex,
-					ChainID:       p.chainID,
-					AccountKey:    structs.ProtocolAccountFaucet,
-					SenderAddress: safe.Hex(),
-					SignerAddress: signerAddress,
-					OperationHash: opHash,
-					Purpose:       db.ProtocolTxPurposePayout,
-					Recipient:     request.to.Hex(),
-					AmountBase:    request.amount,
-					BlockNumber:   block,
-				})
+	// One search for the whole operation, under one deadline. Each payout
+	// claims its own transfer out of it — a batch lands as one transaction with
+	// one Transfer log per payout, which is why the claim is keyed on the log
+	// index and not just the hash. Searching payout by payout used to give
+	// each its own wait, so an operation that never landed held this queue for
+	// minutes.
+	expected := make([]protocol.ExpectedTransfer, len(batch))
+	for i, request := range batch {
+		expected[i] = protocol.ExpectedTransfer{To: request.to, Amount: request.amount}
+	}
+	hashes, errs := p.client.AwaitTransfers(ctx, p.token, safe, expected, fromBlock,
+		func(i int, candidate string, block uint64, logIndex uint) (bool, error) {
+			return p.db.ClaimProtocolTransaction(ctx, db.ProtocolTransaction{
+				TxHash:        candidate,
+				LogIndex:      logIndex,
+				ChainID:       p.chainID,
+				AccountKey:    structs.ProtocolAccountFaucet,
+				SenderAddress: safe.Hex(),
+				SignerAddress: signerAddress,
+				OperationHash: opHash,
+				Purpose:       db.ProtocolTxPurposePayout,
+				Recipient:     batch[i].to.Hex(),
+				AmountBase:    batch[i].amount,
+				BlockNumber:   block,
 			})
-		if err != nil {
+		})
+	for i, request := range batch {
+		if errs[i] != nil {
 			request.result <- faucetSendResult{err: fmt.Errorf(
-				"faucet operation %s was submitted but this payout's transfer was not observed: %w", opHash, err)}
+				"faucet operation %s was submitted but this payout's transfer was not observed: %w", opHash, errs[i])}
 			continue
 		}
-		request.result <- faucetSendResult{txHash: txHash}
+		request.result <- faucetSendResult{txHash: hashes[i]}
 	}
 }
 

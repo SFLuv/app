@@ -72,6 +72,8 @@ export type CommunityConfigPayload = {
     zapperContractAddress?: unknown
     faucet_address?: unknown
     faucetAddress?: unknown
+    previous_faucet_addresses?: unknown
+    previousFaucetAddresses?: unknown
     backing_assets?: unknown
     backingAssets?: unknown
     [key: string]: unknown
@@ -124,6 +126,10 @@ export type ResolvedCommunityConfig = {
   byusdDecimals?: number
   zapperContractAddress?: Address
   faucetAddress?: Address
+  // Every address that has paid rewards as the faucet: the current one first,
+  // then the ones it replaced. A transfer is a reward if it came from any of
+  // them, so history keeps its labels across a faucet rotation.
+  faucetAddresses: Address[]
 }
 
 const knownChains: Record<number, Chain> = {
@@ -192,6 +198,10 @@ export function resolveCommunityConfig(payload: CommunityConfigPayload): Resolve
     findExtraAddress(extras, "zapper_address", "zapperAddress", "zapper_contract_address", "zapperContractAddress")
   const faucetAddress = findConfiguredContract(payload, "faucet") ?? findExtraAddress(extras, "faucet_address", "faucetAddress")
   const backingAssets = findExtraAddressList(extras, "backing_assets", "backingAssets")
+  const faucetAddresses = uniqueAddresses([
+    ...(faucetAddress ? [faucetAddress] : []),
+    ...findExtraAddressList(extras, "previous_faucet_addresses", "previousFaucetAddresses"),
+  ])
 
   return {
     raw: payload,
@@ -228,7 +238,18 @@ export function resolveCommunityConfig(payload: CommunityConfigPayload): Resolve
     honeyDecimals,
     zapperContractAddress: zapperAddress,
     faucetAddress,
+    faucetAddresses,
   }
+}
+
+function uniqueAddresses(addresses: Address[]): Address[] {
+  const seen = new Set<string>()
+  return addresses.filter((address) => {
+    const key = address.toLowerCase()
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
 }
 
 // The backend serves these as JSON booleans, but an older or hand-edited

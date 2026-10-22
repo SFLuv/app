@@ -294,7 +294,9 @@ export default function TransactionProvider({ children }: { children: ReactNode 
     if(to === "0x0000000000000000000000000000000000000000") {
       return "currency_unwrap"
     }
-    if(chainConfig.faucetAddress && from === chainConfig.faucetAddress.toLowerCase()) {
+    // Any address that has been the faucet, not just today's: after a faucet
+    // rotation, rewards paid by the old wallet are still rewards.
+    if(from && chainConfig.faucetAddresses?.some((address) => address.toLowerCase() === from)) {
       return "volunteer_reward"
     }
 
