@@ -150,6 +150,40 @@ export function LocationPayoutCard({ location, onUnwrapped }: LocationPayoutCard
     }
   }, [tillWallet, tipWallet, chainConfig.tokenAddress, status])
 
+  // The location's monthly allowance, read from the same eligibility check the
+  // Unwrap button uses. Probing with the smallest possible amount returns the
+  // last unwrap date and the follow-up minimum whether or not it is "allowed"
+  // (a refusal is a 403 that still carries both).
+  const [allowance, setAllowance] = useState<{ lastUnwrapAt: Date | null; minimum: bigint | null } | null>(null)
+  useEffect(() => {
+    const address = tillWallet?.address
+    if (!address) return
+    let cancelled = false
+    const read = async () => {
+      try {
+        const res = await authFetch("/unwrap/eligibility", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ wallet_address: address, amount_wei: "1", location_id: location.id }),
+        })
+        const body = (await res.json().catch(() => null)) as
+          | { last_unwrap_at?: string; minimum_followup_amount_wei?: string }
+          | null
+        if (cancelled || !body?.minimum_followup_amount_wei) return
+        setAllowance({
+          lastUnwrapAt: body.last_unwrap_at ? new Date(body.last_unwrap_at) : null,
+          minimum: BigInt(body.minimum_followup_amount_wei),
+        })
+      } catch (error) {
+        console.error("unwrap allowance", error)
+      }
+    }
+    void read()
+    return () => {
+      cancelled = true
+    }
+  }, [authFetch, tillWallet?.address, location.id, status])
+
   if (user?.isMerchant !== true) return null
 
   const profile = status?.profile ?? null
@@ -664,6 +698,49 @@ export function LocationPayoutCard({ location, onUnwrapped }: LocationPayoutCard
 
   // Step 3 — unwrap.
   const canUnwrap = Boolean(tillWallet && parsedAmount && busy === "")
+
+  // Where this location stands against its monthly allowance. Months are UTC on
+  // the server, so the reset is shown in the merchant's own time (late afternoon
+  // on the last day of the month in California).
+  const allowanceNote = (() => {
+    // SFLUV is 1:1 with USD, and merchants think about payouts in dollars.
+    const minimumLabel = allowance?.minimum
+      ? `$${Number(formatUnits(allowance.minimum, chainConfig.tokenDecimals)).toLocaleString(undefined, { maximumFractionDigits: 2 })}`
+      : "$500"
+    const tail = "Sweeping tips with the till counts as one unwrap. No fees are taken from your payout."
+    if (!allowance) {
+      return (
+        <p className="text-xs text-muted-foreground">
+          This location&apos;s first unwrap each month can be any amount; further unwraps in the same month must be at least{" "}
+          {minimumLabel}. {tail}
+        </p>
+      )
+    }
+    const now = new Date()
+    const last = allowance.lastUnwrapAt
+    const unwrappedThisMonth =
+      last !== null && last.getUTCFullYear() === now.getUTCFullYear() && last.getUTCMonth() === now.getUTCMonth()
+    const nextReset = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1))
+    const resetLabel = nextReset.toLocaleString(undefined, { month: "long", day: "numeric", hour: "numeric", minute: "2-digit" })
+    return (
+      <div className="space-y-1 rounded-lg border bg-muted/30 px-3 py-2 text-xs">
+        <p className="font-medium text-black dark:text-white">
+          {unwrappedThisMonth ? "You've already unwrapped this month" : "You haven't unwrapped yet this month"}
+        </p>
+        {unwrappedThisMonth && last ? (
+          <p className="text-muted-foreground">
+            Last unwrap: {last.toLocaleDateString(undefined, { month: "long", day: "numeric" })}. Your next unwrap of any
+            amount opens on {resetLabel}. Until then, you can still unwrap if it&apos;s {minimumLabel} or more.
+          </p>
+        ) : (
+          <p className="text-muted-foreground">
+            Your next unwrap can be any amount. After that, further unwraps this month need to be at least {minimumLabel}.
+          </p>
+        )}
+        <p className="text-muted-foreground">{tail}</p>
+      </div>
+    )
+  })()
   return (
     <div className="rounded-xl border bg-background/70 p-4">
       {header}
@@ -725,9 +802,7 @@ export function LocationPayoutCard({ location, onUnwrapped }: LocationPayoutCard
               Max
             </Button>
           </div>
-          <p className="text-xs text-muted-foreground">
-            This location's first redemption each month can be any amount; further redemptions in the same month must be at least $500. Sweeping tips with the till counts as one redemption. No fees are taken from your payout.
-          </p>
+          {allowanceNote}
         </div>
 
         {tipWallet && tipBalance !== null && tipBalance > 0n && (
