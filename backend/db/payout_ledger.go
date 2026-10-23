@@ -833,10 +833,56 @@ func (a *AppDB) MarkPayoutFailed(ctx context.Context, id int64, reason string) e
 		UPDATE payout_ledger
 		SET state = 'failed', last_error = $2, updated_at = NOW()
 		WHERE id = $1 AND state = 'pending';
-	`, id, reason); err != nil {
+	`, id, PayoutNotSentPrefix+reason); err != nil {
 		return fmt.Errorf("error marking payout %d failed: %w", id, err)
 	}
 	return nil
+}
+
+// Prefixes on last_error that say which kind of failure a row records. The
+// state column cannot say it — 'failed' is the only failure state the check
+// constraint allows — and the difference decides whether a retry may send
+// again. Written only by the payout service.
+const (
+	// PayoutNotSentPrefix: the send failed before anything left this process.
+	// The row is 'failed' and may be re-armed and sent again.
+	PayoutNotSentPrefix = "not sent: "
+	// PayoutUnconfirmedPrefix: something was submitted and its outcome is
+	// unknown. The row stays 'pending' — still counted, since the money may be
+	// out — and must not be sent again until the chain has been checked.
+	PayoutUnconfirmedPrefix = "unconfirmed: "
+)
+
+// MarkPayoutUnconfirmed records that a payout was submitted but not confirmed.
+//
+// Deliberately not 'failed'. A failed row stops counting toward the threshold
+// and invites a retry; this money may already have reached the recipient, so
+// it keeps counting and a retry is refused until someone checks the chain.
+func (a *AppDB) MarkPayoutUnconfirmed(ctx context.Context, id int64, reason string) error {
+	if _, err := a.db.Exec(ctx, `
+		UPDATE payout_ledger
+		SET last_error = $2, updated_at = NOW()
+		WHERE id = $1 AND state = 'pending';
+	`, id, PayoutUnconfirmedPrefix+reason); err != nil {
+		return fmt.Errorf("error marking payout %d unconfirmed: %w", id, err)
+	}
+	return nil
+}
+
+// RearmFailedPayout puts a payout that failed without sending anything back to
+// 'pending' so it can be attempted again. Only rows the payout service marked
+// as not sent qualify; a 'failed' row without that marker predates it and may
+// record a send whose outcome was never known, so it is left for an admin.
+func (a *AppDB) RearmFailedPayout(ctx context.Context, id int64) (bool, error) {
+	tag, err := a.db.Exec(ctx, `
+		UPDATE payout_ledger
+		SET state = 'pending', last_error = '', attempts = attempts + 1, updated_at = NOW()
+		WHERE id = $1 AND state = 'failed' AND starts_with(last_error, $2);
+	`, id, PayoutNotSentPrefix)
+	if err != nil {
+		return false, fmt.Errorf("error re-arming payout %d: %w", id, err)
+	}
+	return tag.RowsAffected() > 0, nil
 }
 
 // Exec runs a statement against the app database. Present for tests that need
