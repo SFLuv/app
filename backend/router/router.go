@@ -364,6 +364,7 @@ func AddAdminRoutes(r *chi.Mux, s *handlers.AppService) {
 	r.Get("/admin/locations", withAdmin(s.GetAuthedLocations, s))
 	r.Put("/admin/users", withActiveAuth(s.UpdateUserRole, s))
 	r.Put("/admin/users/account-type", withAdmin(s.UpdateUserAccountType, s))
+	r.Post("/admin/users/{user_id}/merchant-mode-pin", withAdmin(s.AdminResetMerchantModePIN, s))
 	r.Put("/admin/locations", withAdmin(s.UpdateLocationApproval, s))
 	r.Put("/admin/locations/{id}", withAdmin(s.AdminUpdateLocation, s))
 	r.Put("/admin/locations/{id}/google-place", withAdmin(s.AdminUpdateLocationGooglePlace, s))
