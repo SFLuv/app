@@ -1,10 +1,12 @@
 package handlers
 
 import (
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"net/http"
 	"strings"
 
@@ -98,6 +100,68 @@ func (a *AppService) SetMerchantModePIN(w http.ResponseWriter, r *http.Request) 
 	}
 	w.WriteHeader(http.StatusOK)
 	w.Write(jsonBytes)
+}
+
+// AdminResetMerchantModePIN sets a merchant's merchant-mode PIN on their behalf,
+// for when they have forgotten it. The body's pin is optional; without one a
+// random 6-digit PIN is generated. The PIN is returned once so the admin can
+// pass it on, and is never logged.
+func (a *AppService) AdminResetMerchantModePIN(w http.ResponseWriter, r *http.Request) {
+	userID := strings.TrimSpace(chiParam(r, "user_id"))
+	if userID == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	var request struct {
+		PIN string `json:"pin"`
+	}
+	defer r.Body.Close()
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	if len(strings.TrimSpace(string(body))) > 0 {
+		if err := json.Unmarshal(body, &request); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+	}
+
+	pin := strings.TrimSpace(request.PIN)
+	generated := false
+	if pin == "" {
+		pin, err = randomMerchantModePIN()
+		if err != nil {
+			a.logger.Logf("error generating merchant mode PIN for user %s: %s", userID, err.Error())
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		generated = true
+	}
+
+	if err := a.db.AdminSetMerchantModePIN(r.Context(), userID, pin); err != nil {
+		a.logger.Logf("error resetting merchant mode PIN for user %s: %s", userID, err.Error())
+		writeMerchantModeError(w, err)
+		return
+	}
+
+	adminID := "unknown admin"
+	if did := utils.GetDid(r); did != nil {
+		adminID = *did
+	}
+	a.logger.Logf("merchant mode PIN reset for user %s by %s", userID, adminID)
+
+	writeJSON(w, http.StatusOK, map[string]any{"pin": pin, "generated": generated})
+}
+
+func randomMerchantModePIN() (string, error) {
+	n, err := rand.Int(rand.Reader, big.NewInt(1_000_000))
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%06d", n.Int64()), nil
 }
 
 func (a *AppService) RequestMerchantModePINHelp(w http.ResponseWriter, r *http.Request) {

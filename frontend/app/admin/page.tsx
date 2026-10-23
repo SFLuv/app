@@ -368,6 +368,10 @@ export default function AdminPage() {
   const [adminEmailExporting, setAdminEmailExporting] = useState<boolean>(false)
   const [selectedAdminUser, setSelectedAdminUser] = useState<UserResponse | null>(null)
   const [adminUserModalOpen, setAdminUserModalOpen] = useState<boolean>(false)
+  const [merchantPinInput, setMerchantPinInput] = useState<string>("")
+  const [merchantPinBusy, setMerchantPinBusy] = useState<boolean>(false)
+  const [merchantPinError, setMerchantPinError] = useState<string>("")
+  const [merchantPinResult, setMerchantPinResult] = useState<{ pin: string; generated: boolean } | null>(null)
 
   // Events
   const [events, setEvents] = useState<Event[]>([])
@@ -2109,6 +2113,38 @@ export default function AdminPage() {
     issuerRequestPage,
   ])
 
+  // Sets a merchant's merchant-mode PIN for them; an empty box asks the server for
+  // a random one. Results show inline in the user modal.
+  const resetMerchantPin = async () => {
+    if (!selectedAdminUser) return
+    const pin = merchantPinInput.trim()
+    if (pin && !/^\d{6}$/.test(pin)) {
+      setMerchantPinError("The PIN must be exactly 6 digits.")
+      return
+    }
+    setMerchantPinBusy(true)
+    setMerchantPinError("")
+    setMerchantPinResult(null)
+    try {
+      const res = await authFetch(`/admin/users/${encodeURIComponent(selectedAdminUser.id)}/merchant-mode-pin`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(pin ? { pin } : {}),
+      })
+      if (!res.ok) {
+        const text = (await res.text().catch(() => "")).trim()
+        throw new Error(text || `Couldn't reset the PIN (error ${res.status}).`)
+      }
+      const data = (await res.json()) as { pin: string; generated: boolean }
+      setMerchantPinResult(data)
+      setMerchantPinInput("")
+    } catch (error) {
+      setMerchantPinError(error instanceof Error ? error.message : "Couldn't reset the PIN.")
+    } finally {
+      setMerchantPinBusy(false)
+    }
+  }
+
   // Tax & Escrow. No approve or reject any more: the vendor validates the form
   // and holds the tax identification number, so an admin eyeballing a wallet
   // address added delay without adding assurance.
@@ -3232,7 +3268,12 @@ export default function AdminPage() {
             open={adminUserModalOpen}
             onOpenChange={(open) => {
               setAdminUserModalOpen(open)
-              if (!open) setSelectedAdminUser(null)
+              if (!open) {
+                setSelectedAdminUser(null)
+                setMerchantPinInput("")
+                setMerchantPinError("")
+                setMerchantPinResult(null)
+              }
             }}
           >
             <DialogContent className="w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] max-h-[90vh] overflow-y-auto sm:max-w-3xl">
@@ -3328,6 +3369,42 @@ export default function AdminPage() {
                       </div>
                     )}
                   </div>
+
+                  {selectedAdminUser.is_merchant && (
+                    <div className="space-y-3 rounded-md border p-4">
+                      <h4 className="text-sm font-semibold">Merchant mode PIN</h4>
+                      <p className="text-xs text-muted-foreground">
+                        For a merchant who forgot their PIN. This sets a new PIN without the old one and clears any lockout.
+                        Leave the box empty to generate a random PIN.
+                      </p>
+                      <div className="flex flex-wrap items-end gap-2">
+                        <div className="space-y-1">
+                          <Label htmlFor="admin-merchant-pin">New PIN (optional)</Label>
+                          <Input
+                            id="admin-merchant-pin"
+                            inputMode="numeric"
+                            autoComplete="off"
+                            placeholder="6 digits"
+                            className="w-36 font-mono"
+                            value={merchantPinInput}
+                            onChange={(e) => setMerchantPinInput(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                            disabled={merchantPinBusy}
+                          />
+                        </div>
+                        <Button type="button" onClick={() => void resetMerchantPin()} disabled={merchantPinBusy}>
+                          {merchantPinBusy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                          {merchantPinInput ? "Set PIN" : "Generate new PIN"}
+                        </Button>
+                      </div>
+                      {merchantPinError && <p className="text-sm text-red-600">{merchantPinError}</p>}
+                      {merchantPinResult && (
+                        <p className="text-sm">
+                          New PIN: <span className="font-mono font-semibold">{merchantPinResult.pin}</span>. It works right away;
+                          give it to the merchant now, because it isn&apos;t shown again.
+                        </p>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
             </DialogContent>
