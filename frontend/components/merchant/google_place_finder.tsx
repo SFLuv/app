@@ -6,6 +6,7 @@ import { CheckCircle2, Loader2, Search } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { LAT_DIF, LNG_DIF, MAP_CENTER } from "@/lib/constants";
+import { ensureGooglePlacesScript } from "@/lib/google-places";
 import { GoogleSubLocation, ManualAddressDraft, PlaceSelection } from "@/types/location";
 
 interface PlaceAutocompleteProps {
@@ -222,6 +223,10 @@ export default function PlaceAutocomplete({
 
       try {
         setSearching(true);
+        // Load the Maps script here rather than relying on the host page: the
+        // admin merchant editor never loaded it, so every search there threw
+        // before reaching Google and showed "Could not reach Google".
+        await ensureGooglePlacesScript();
         const places = (await google.maps.importLibrary("places")) as any;
         const { AutocompleteSuggestion, AutocompleteSessionToken } = places;
         if (!sessionTokenRef.current) {
@@ -253,8 +258,9 @@ export default function PlaceAutocomplete({
             })),
         );
         setSearchError("");
-      } catch {
+      } catch (error) {
         if (seq !== requestSeqRef.current) return;
+        console.error("google place search", error);
         setSuggestions([]);
         setSearchError("Could not reach Google to search. Check your connection and try again.");
       } finally {
