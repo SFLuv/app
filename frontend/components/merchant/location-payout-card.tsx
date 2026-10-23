@@ -476,6 +476,61 @@ export function LocationPayoutCard({ location, onUnwrapped }: LocationPayoutCard
     </div>
   )
 
+  // The terms dialog is reachable from every step before unwrapping (the
+  // verification step's "Accept banking terms" button, and connectBank when
+  // Bridge says terms are still pending), so every step's return renders it.
+  // It used to live only in the final return, so opening it from an earlier
+  // step set tosOpen with nothing on the page to show.
+  const termsDialog = (
+    <Dialog open={tosOpen} onOpenChange={setTosOpen}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Accept the banking terms</DialogTitle>
+          <DialogDescription>
+            Payouts run through Bridge, our banking partner. Before a bank account can be linked to{" "}
+            {location.name || "this location"}, your business has to accept their terms of service. It only has to be done once.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="text-sm">
+          {tosUrl && (
+            <a
+              href={tosUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-2 underline underline-offset-4"
+            >
+              <ExternalLink className="h-4 w-4" />
+              Read and accept the terms of service
+            </a>
+          )}
+          <p className="mt-3 text-xs text-muted-foreground">
+            {kyb.done
+              ? "Opens in a new tab. Come back here once you've accepted and continue — we'll check with Bridge before sending you to your bank."
+              : "Opens in a new tab. Come back here once you've accepted — your bank can be connected once Bridge verifies your business."}
+          </p>
+        </div>
+        <DialogFooter>
+          <Button type="button" variant="outline" onClick={() => setTosOpen(false)} disabled={busy !== ""}>
+            Not now
+          </Button>
+          <Button
+            type="button"
+            onClick={() => {
+              setTosOpen(false)
+              // Before verification there is no bank step to continue to, so
+              // just re-read status to pick up the acceptance.
+              void (kyb.done ? connectBank() : loadStatus())
+            }}
+            disabled={busy !== ""}
+          >
+            {busy === "plaid" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+            {kyb.done ? "I've accepted — continue" : "I've accepted"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+
   if (loading) {
     return (
       <div className="rounded-xl border bg-background/70 p-4">
@@ -532,6 +587,7 @@ export function LocationPayoutCard({ location, onUnwrapped }: LocationPayoutCard
           </div>
           {status.production === false && <p className="text-[11px] text-muted-foreground">Sandbox mode — no real bank activity.</p>}
         </div>
+        {termsDialog}
       </div>
     )
   }
@@ -564,6 +620,7 @@ export function LocationPayoutCard({ location, onUnwrapped }: LocationPayoutCard
             </button>
           )}
         </div>
+        {termsDialog}
       </div>
     )
   }
@@ -585,6 +642,7 @@ export function LocationPayoutCard({ location, onUnwrapped }: LocationPayoutCard
             Finish payout setup
           </Button>
         </div>
+        {termsDialog}
       </div>
     )
   }
@@ -717,50 +775,7 @@ export function LocationPayoutCard({ location, onUnwrapped }: LocationPayoutCard
         unwrap={unwrapDetail}
       />
 
-      <Dialog open={tosOpen} onOpenChange={setTosOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Accept the banking terms</DialogTitle>
-            <DialogDescription>
-              Payouts run through Bridge, our banking partner. Before a bank account can be linked to{" "}
-              {location.name || "this location"}, your business has to accept their terms of service. It only has to be done once.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="text-sm">
-            {tosUrl && (
-              <a
-                href={tosUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-2 underline underline-offset-4"
-              >
-                <ExternalLink className="h-4 w-4" />
-                Read and accept the terms of service
-              </a>
-            )}
-            <p className="mt-3 text-xs text-muted-foreground">
-              Opens in a new tab. Come back here once you&apos;ve accepted and continue — we&apos;ll check with Bridge before
-              sending you to your bank.
-            </p>
-          </div>
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => setTosOpen(false)} disabled={busy !== ""}>
-              Not now
-            </Button>
-            <Button
-              type="button"
-              onClick={() => {
-                setTosOpen(false)
-                void connectBank()
-              }}
-              disabled={busy !== ""}
-            >
-              {busy === "plaid" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-              I&apos;ve accepted — continue
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {termsDialog}
 
       <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
         <DialogContent>
