@@ -137,6 +137,9 @@ export function kybStatusLabel(status: KYBStatus | undefined): { label: string; 
     case "incomplete":
       return { label: "Incomplete — finish the form", done: false, failed: false }
     case "awaiting_ubo":
+      // The business form is done; each owner listed must verify their own
+      // identity from an email Bridge sends them.
+      return { label: "Waiting on owners to verify", done: false, failed: false }
     case "awaiting_questionnaire":
       return { label: "More information needed", done: false, failed: false }
     case "under_review":
