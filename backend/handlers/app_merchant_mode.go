@@ -52,6 +52,20 @@ func (a *AppService) GetMerchantModeStatus(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	// Keep the device's recorded app version current. The app sends its version
+	// on every request; without this, a till updated while in merchant mode kept
+	// the version it was enabled on (Niebla's iPad showed 1.0.3 after updating to
+	// 2.0.1). A failure here only leaves a stale label, so it doesn't fail the poll.
+	if status.Device != nil {
+		if version := strings.TrimSpace(r.Header.Get(clientVersionHeader)); version != "" && version != status.Device.AppVersion {
+			if err := a.db.UpdateMerchantModeDeviceAppVersion(r.Context(), status.Device.ID, version); err != nil {
+				a.logger.Logf("error recording merchant mode device app version for user %s: %s", *userDid, err.Error())
+			} else {
+				status.Device.AppVersion = version
+			}
+		}
+	}
+
 	jsonBytes, err := json.Marshal(status)
 	if err != nil {
 		a.logger.Logf("error marshalling merchant mode status for user %s: %s", *userDid, err.Error())
