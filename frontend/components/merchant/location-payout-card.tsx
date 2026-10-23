@@ -555,6 +555,11 @@ export function LocationPayoutCard({ location, onUnwrapped }: LocationPayoutCard
 
   // Step 1 — verify the business.
   if (!kyb.done) {
+    // While Bridge reviews, there is nothing for the merchant to do. Bridge's
+    // hosted link for an existing customer opens what looks like a blank form, and
+    // resubmitting it can overwrite what they entered or restart the review, so
+    // the button is withheld until Bridge asks for more (incomplete, awaiting_*).
+    const underReview = profile?.kyb_status === "under_review"
     return (
       <div className="rounded-xl border bg-background/70 p-4">
         {header}
@@ -564,10 +569,18 @@ export function LocationPayoutCard({ location, onUnwrapped }: LocationPayoutCard
             <span className="text-muted-foreground">Business verification:</span>
             <span className={`rounded-full border px-2 py-0.5 text-xs ${kyb.failed ? "border-red-300 text-red-600" : ""}`}>{kyb.label}</span>
           </div>
-          <p className="text-xs text-muted-foreground">
-            A one-time verification with Bridge, our banking partner. It asks for your business details and an ID for the owner,
-            and takes a few minutes. Approval usually comes within a business day.
-          </p>
+          {underReview ? (
+            <p className="text-xs text-muted-foreground">
+              Bridge, our banking partner, is reviewing your business. There&apos;s nothing more to fill in. They&apos;ll email you if
+              they need anything else, and once you&apos;re approved (usually within a business day) this card moves on to connecting
+              your bank.
+            </p>
+          ) : (
+            <p className="text-xs text-muted-foreground">
+              A one-time verification with Bridge, our banking partner. It asks for your business details and an ID for the owner,
+              and takes a few minutes. Approval usually comes within a business day.
+            </p>
+          )}
           {termsPending && (
             <div className="flex flex-wrap items-center gap-2 text-sm">
               <span className="text-muted-foreground">Banking terms:</span>
@@ -575,10 +588,12 @@ export function LocationPayoutCard({ location, onUnwrapped }: LocationPayoutCard
             </div>
           )}
           <div className="flex flex-wrap gap-2">
-            <Button type="button" onClick={() => void startKYB()} disabled={busy !== ""}>
-              {busy === "kyb" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ExternalLink className="mr-2 h-4 w-4" />}
-              {profile?.bridge_customer_id ? "Continue verification" : "Verify your business"}
-            </Button>
+            {!underReview && (
+              <Button type="button" onClick={() => void startKYB()} disabled={busy !== ""}>
+                {busy === "kyb" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ExternalLink className="mr-2 h-4 w-4" />}
+                {profile?.bridge_customer_id ? "Continue verification" : "Verify your business"}
+              </Button>
+            )}
             {termsPending && (
               <Button type="button" variant="outline" onClick={() => void openTermsModal()} disabled={busy !== ""}>
                 Accept banking terms
