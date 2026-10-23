@@ -589,11 +589,14 @@ export function LocationPayoutCard({ location, onUnwrapped }: LocationPayoutCard
 
   // Step 1 — verify the business.
   if (!kyb.done) {
-    // While Bridge reviews, there is nothing for the merchant to do. Bridge's
-    // hosted link for an existing customer opens what looks like a blank form, and
+    // While Bridge reviews, or waits on owners to verify themselves by email,
+    // there is nothing to fill in here. Bridge's hosted link for an existing
+    // customer opens what looks like a blank copy of the whole form, and
     // resubmitting it can overwrite what they entered or restart the review, so
-    // the button is withheld until Bridge asks for more (incomplete, awaiting_*).
+    // the button is withheld unless the business form itself needs more
+    // (not_started, incomplete, awaiting_questionnaire).
     const underReview = profile?.kyb_status === "under_review"
+    const awaitingOwners = profile?.kyb_status === "awaiting_ubo"
     return (
       <div className="rounded-xl border bg-background/70 p-4">
         {header}
@@ -609,6 +612,13 @@ export function LocationPayoutCard({ location, onUnwrapped }: LocationPayoutCard
               they need anything else, and once you&apos;re approved (usually within a business day) this card moves on to connecting
               your bank.
             </p>
+          ) : awaitingOwners ? (
+            <p className="text-xs text-muted-foreground">
+              Your business details are in. Bridge, our banking partner, has emailed each owner you listed a link to verify their own
+              identity (a photo ID, sometimes a selfie). Once every owner has done that, Bridge reviews the business, usually within a
+              business day. Check each owner&apos;s inbox, including spam, for an email from Bridge. There&apos;s nothing more to fill in
+              here.
+            </p>
           ) : (
             <p className="text-xs text-muted-foreground">
               A one-time verification with Bridge, our banking partner. It asks for your business details and an ID for the owner,
@@ -622,7 +632,7 @@ export function LocationPayoutCard({ location, onUnwrapped }: LocationPayoutCard
             </div>
           )}
           <div className="flex flex-wrap gap-2">
-            {!underReview && (
+            {!underReview && !awaitingOwners && (
               <Button type="button" onClick={() => void startKYB()} disabled={busy !== ""}>
                 {busy === "kyb" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ExternalLink className="mr-2 h-4 w-4" />}
                 {profile?.bridge_customer_id ? "Continue verification" : "Verify your business"}
