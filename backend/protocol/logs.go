@@ -173,12 +173,18 @@ func (c *Client) pollTransfers(
 	if headErr != nil {
 		return 0, fmt.Errorf("error reading the head block: %w", headErr), nil
 	}
+	// The range cap leaves room for the answering node to be a few blocks
+	// ahead of the one that reported the head, since the search is open-ended.
+	window := uint64(maxLogRange - 100)
 	start := fromBlock
-	if head > uint64(maxLogRange) && start < head-uint64(maxLogRange) {
-		start = head - uint64(maxLogRange)
+	if head > window && start < head-window {
+		start = head - window
 	}
+	// Open-ended, so each node answers up to its own latest block. Bounding the
+	// search at the head another node just reported is what made a node one
+	// block behind refuse the whole query as "block is out of range".
 	query.FromBlock = new(big.Int).SetUint64(start)
-	query.ToBlock = new(big.Int).SetUint64(head)
+	query.ToBlock = nil
 
 	logs, logsErr := (*client).FilterLogs(ctx, *query)
 	if logsErr != nil {

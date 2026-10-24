@@ -83,6 +83,7 @@ func (s *WorkflowMaintenanceScheduler) RunOnce(ctx context.Context) {
 
 	s.backfillClaimedRoleStepAssignments(ctx)
 	s.app.runWorkflowAvailabilityMaintenance("scheduled workflow maintenance")
+	s.resolveUnconfirmedPayouts(ctx)
 	s.reconcileUnsettledPayouts(ctx)
 	s.finalizeSettledWorkflows(ctx)
 	s.finalizeElapsedPartialWorkflows(ctx)
@@ -136,6 +137,15 @@ func (s *WorkflowMaintenanceScheduler) pruneResolvedNotificationReads(parent con
 	if _, err := s.app.db.PruneResolvedImproverNotificationReads(ctx); err != nil {
 		s.app.logger.Logf("error pruning resolved improver notification reads: %s", err)
 	}
+}
+
+// resolveUnconfirmedPayouts settles faucet payouts whose confirmation was
+// lost, from the chain. See payout_confirmation_sweep.go.
+func (s *WorkflowMaintenanceScheduler) resolveUnconfirmedPayouts(parent context.Context) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), workflowReconcileSweepTimeout)
+	defer cancel()
+
+	s.app.ResolveUnconfirmedPayouts(ctx)
 }
 
 // reconcileUnsettledPayouts verifies on-chain the payouts that recorded a
