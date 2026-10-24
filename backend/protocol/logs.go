@@ -87,14 +87,6 @@ func (c *Client) AwaitTransfers(
 		return hashes, errs
 	}
 
-	dialCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-	client, err := ethclient.DialContext(dialCtx, c.readRPC)
-	if err != nil {
-		return fail(fmt.Errorf("error dialling the read rpc: %w", err))
-	}
-	defer client.Close()
-
 	// Every transfer out of the sender, whoever it went to: one query covers
 	// the whole batch.
 	query := ethereum.FilterQuery{
@@ -105,34 +97,42 @@ func (c *Client) AwaitTransfers(
 		},
 	}
 
+	// RPC errors are retried until the deadline, not returned. The operation
+	// has already been submitted when this runs, so giving up early does not
+	// stop the money — it only loses track of it, and the payout is recorded
+	// as a failure that a retry would pay a second time. The public Celo RPC
+	// is several nodes behind one address and a search that lands on a node a
+	// block behind the one that reported the head answers "block is out of
+	// range"; a moment later it answers normally.
+	var client *ethclient.Client
+	defer func() {
+		if client != nil {
+			client.Close()
+		}
+	}()
+
 	opTx := ""
+	var lastRPCErr error
 	deadline := time.Now().Add(transferWaitTimeout)
 	for {
-		head, err := client.BlockNumber(ctx)
-		if err != nil {
-			return fail(fmt.Errorf("error reading the head block: %w", err))
-		}
-		start := fromBlock
-		if head > uint64(maxLogRange) && start < head-uint64(maxLogRange) {
-			start = head - uint64(maxLogRange)
-		}
-		query.FromBlock = new(big.Int).SetUint64(start)
-		query.ToBlock = new(big.Int).SetUint64(head)
-
-		logs, err := client.FilterLogs(ctx, query)
-		if err != nil {
-			return fail(fmt.Errorf("error searching for the transfers this operation should have made: %w", err))
-		}
-
-		pending, err := claimBatch(logs, expected, hashes, errs, &opTx, claim)
+		pending, rpcErr, err := c.pollTransfers(ctx, &client, &query, fromBlock, expected, hashes, errs, &opTx, claim)
 		if err != nil {
 			return fail(err)
 		}
-		if pending == 0 {
+		if rpcErr == nil && pending == 0 {
 			return hashes, errs
+		}
+		if rpcErr != nil {
+			lastRPCErr = rpcErr
 		}
 
 		if !time.Now().Before(deadline) {
+			if lastRPCErr != nil {
+				return fail(fmt.Errorf(
+					"no unclaimed transfer of the expected amount from %s was seen within %s; last RPC error: %w",
+					from.Hex(), transferWaitTimeout, lastRPCErr,
+				))
+			}
 			return fail(fmt.Errorf(
 				"no unclaimed transfer of the expected amount from %s appeared within %s",
 				from.Hex(), transferWaitTimeout,
@@ -144,6 +144,49 @@ func (c *Client) AwaitTransfers(
 		case <-time.After(transferPollInterval):
 		}
 	}
+}
+
+// pollTransfers runs one search. rpcErr is a problem talking to the node, which
+// the caller retries; err is anything else, which it does not.
+func (c *Client) pollTransfers(
+	ctx context.Context,
+	client **ethclient.Client,
+	query *ethereum.FilterQuery,
+	fromBlock uint64,
+	expected []ExpectedTransfer,
+	hashes []string,
+	errs []error,
+	opTx *string,
+	claim BatchClaim,
+) (pending int, rpcErr error, err error) {
+	if *client == nil {
+		dialCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		dialed, dialErr := ethclient.DialContext(dialCtx, c.readRPC)
+		cancel()
+		if dialErr != nil {
+			return 0, fmt.Errorf("error dialling the read rpc: %w", dialErr), nil
+		}
+		*client = dialed
+	}
+
+	head, headErr := (*client).BlockNumber(ctx)
+	if headErr != nil {
+		return 0, fmt.Errorf("error reading the head block: %w", headErr), nil
+	}
+	start := fromBlock
+	if head > uint64(maxLogRange) && start < head-uint64(maxLogRange) {
+		start = head - uint64(maxLogRange)
+	}
+	query.FromBlock = new(big.Int).SetUint64(start)
+	query.ToBlock = new(big.Int).SetUint64(head)
+
+	logs, logsErr := (*client).FilterLogs(ctx, *query)
+	if logsErr != nil {
+		return 0, fmt.Errorf("error searching for the transfers this operation should have made: %w", logsErr), nil
+	}
+
+	pending, err = claimBatch(logs, expected, hashes, errs, opTx, claim)
+	return pending, nil, err
 }
 
 // claimBatch matches one poll's logs against the payouts still unresolved and
