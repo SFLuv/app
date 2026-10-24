@@ -194,6 +194,9 @@ const (
 	workflowPayoutErrorProcessingFailed   = "Workflow payout failed: processing error."
 	workflowPayoutErrorTimedOut           = "Workflow payout failed: previous payout attempt timed out. Please retry."
 	workflowPayoutErrorUnknown            = "Workflow payout failed. Please retry."
+	// Not a failure: the transfer went out and its confirmation was lost. The
+	// payout confirmation sweep settles it from the chain.
+	workflowPayoutAwaitingConfirmation = "Workflow payout sent; awaiting on-chain confirmation."
 )
 
 func normalizeWorkflowPayoutErrorForClient(raw *string) *string {
@@ -207,6 +210,9 @@ func normalizeWorkflowPayoutErrorForClient(raw *string) *string {
 
 	lower := strings.ToLower(message)
 	switch {
+	case strings.Contains(lower, "awaiting on-chain confirmation"):
+		normalized := workflowPayoutAwaitingConfirmation
+		return &normalized
 	case strings.Contains(lower, "no assigned improver"), strings.Contains(lower, "no improver is assigned"):
 		normalized := workflowPayoutErrorNoImproverAssigned
 		return &normalized
@@ -5261,6 +5267,16 @@ func (a *AppService) processWorkflowSeriesPayouts(ctx context.Context, triggerWo
 				if escrowed {
 					continue
 				}
+				if transferErr != nil && !bot.ShouldRevertRedemption(transferErr) {
+					// Sent, not confirmed. Recorded so the step reads as waiting
+					// rather than broken; no alarm, and no retry would send it.
+					if dbErr := a.db.MarkWorkflowStepPayoutFailed(ctx, target.WorkflowId, target.StepId, workflowPayoutAwaitingConfirmation); dbErr != nil {
+						a.logger.Logf("error recording unconfirmed step payout for workflow %s step %s: %s", target.WorkflowId, target.StepId, dbErr)
+						return
+					}
+					a.logger.Logf("workflow %s step %s payout awaiting confirmation: %s", target.WorkflowId, target.StepId, transferErr)
+					continue
+				}
 				if transferErr != nil {
 					errMsg := workflowPayoutErrorTransferFailed
 					if insufficient {
@@ -5374,6 +5390,20 @@ func (a *AppService) processWorkflowSeriesPayouts(ctx context.Context, triggerWo
 							return
 						}
 					}
+				}
+				if transferErr != nil && !bot.ShouldRevertRedemption(transferErr) {
+					var dbErr error
+					if target.IsManager {
+						dbErr = a.db.MarkWorkflowManagerPayoutFailed(ctx, target.WorkflowId, workflowPayoutAwaitingConfirmation)
+					} else {
+						dbErr = a.db.MarkWorkflowStepPayoutFailed(ctx, target.WorkflowId, target.StepId, workflowPayoutAwaitingConfirmation)
+					}
+					if dbErr != nil {
+						a.logger.Logf("error recording unconfirmed payout for workflow %s step %q manager %t: %s", target.WorkflowId, target.StepId, target.IsManager, dbErr)
+						return
+					}
+					a.logger.Logf("workflow %s step %q manager %t payout awaiting confirmation: %s", target.WorkflowId, target.StepId, target.IsManager, transferErr)
+					continue
 				}
 				if transferErr != nil {
 					errMsg := workflowPayoutErrorTransferFailed

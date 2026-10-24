@@ -720,3 +720,27 @@ func (a *AppDB) ProtocolTransactionClaimed(ctx context.Context, txHash string) (
 	}
 	return exists, nil
 }
+
+// ProtocolPayoutClaimOrphaned reports whether a claimed faucet transfer is
+// owed to a payout that never recorded it — the dispatcher found the transfer
+// after the caller had already given up waiting.
+//
+// Counted rather than checked for existence: one transaction can carry two
+// identical payouts to the same person, and both are claimed separately.
+func (a *AppDB) ProtocolPayoutClaimOrphaned(ctx context.Context, txHash string, recipient string, amountBase string) (bool, error) {
+	var orphaned bool
+	err := a.db.QueryRow(ctx, `
+		SELECT
+			(SELECT COUNT(*) FROM protocol_transactions
+			 WHERE tx_hash = LOWER($1) AND recipient = LOWER($2)
+			 AND amount_base = $3::numeric AND purpose = $4)
+			>
+			(SELECT COUNT(*) FROM payout_ledger
+			 WHERE LOWER(tx_hash) = LOWER($1) AND LOWER(recipient_address) = LOWER($2)
+			 AND amount_base = $3::numeric);
+	`, strings.TrimSpace(txHash), strings.TrimSpace(recipient), amountBase, ProtocolTxPurposePayout).Scan(&orphaned)
+	if err != nil {
+		return false, fmt.Errorf("error checking whether transaction %s is unrecorded: %w", txHash, err)
+	}
+	return orphaned, nil
+}
