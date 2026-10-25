@@ -992,3 +992,69 @@ func (a *AppDB) MarkPayoutCancelled(ctx context.Context, id int64, reason string
 	}
 	return nil
 }
+
+// unresolvedPayoutClause selects the rows whose outcome is not known: a send
+// marked unconfirmed, and a failure from before the not-sent marker existed,
+// which may record a send that did land.
+const unresolvedPayoutClause = `(
+	(state = 'pending' AND starts_with(last_error, '` + PayoutUnconfirmedPrefix + `'))
+	OR (state = 'failed' AND NOT starts_with(last_error, '` + PayoutNotSentPrefix + `'))
+)`
+
+// ListUnresolvedPayouts is what the confirmation sweep works through, oldest
+// first. Rows younger than settleAfter are left alone: the send that made them
+// may still be looking for its own transfer.
+func (a *AppDB) ListUnresolvedPayouts(ctx context.Context, chainID int64, settleAfter time.Duration, limit int) ([]*structs.PayoutLedgerRow, error) {
+	rows, err := a.db.Query(ctx,
+		`SELECT `+payoutLedgerColumns+`
+		 FROM payout_ledger
+		 WHERE chain_id = $1
+		 AND created_at < NOW() - make_interval(secs => $2)
+		 AND `+unresolvedPayoutClause+`
+		 ORDER BY created_at ASC
+		 LIMIT $3;`, chainID, settleAfter.Seconds(), limit)
+	if err != nil {
+		return nil, fmt.Errorf("error listing unresolved payouts: %w", err)
+	}
+	defer rows.Close()
+
+	out := []*structs.PayoutLedgerRow{}
+	for rows.Next() {
+		row, err := scanPayoutRow(rows)
+		if err != nil {
+			return nil, fmt.Errorf("error scanning payout row: %w", err)
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+// SettleUnresolvedPayout records that an unresolved payout's transfer was found
+// on chain. False means the row was resolved some other way in the meantime.
+func (a *AppDB) SettleUnresolvedPayout(ctx context.Context, id int64, txHash string, paidTaxYear int) (bool, error) {
+	tag, err := a.db.Exec(ctx, `
+		UPDATE payout_ledger
+		SET state = 'paid', paid_at = NOW(), released_at = COALESCE(released_at, NOW()),
+		    tx_hash = $2, paid_tax_year = $3, last_error = '', updated_at = NOW()
+		WHERE id = $1 AND `+unresolvedPayoutClause+`;
+	`, id, txHash, paidTaxYear)
+	if err != nil {
+		return false, fmt.Errorf("error settling payout %d: %w", id, err)
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
+// ConcludePayoutNotSent records that an unresolved payout provably never
+// reached the chain. It becomes an ordinary not-sent failure: it stops counting
+// toward the threshold and a retry may pay it.
+func (a *AppDB) ConcludePayoutNotSent(ctx context.Context, id int64, reason string) (bool, error) {
+	tag, err := a.db.Exec(ctx, `
+		UPDATE payout_ledger
+		SET state = 'failed', last_error = $2, updated_at = NOW()
+		WHERE id = $1 AND `+unresolvedPayoutClause+`;
+	`, id, PayoutNotSentPrefix+reason)
+	if err != nil {
+		return false, fmt.Errorf("error concluding payout %d not sent: %w", id, err)
+	}
+	return tag.RowsAffected() > 0, nil
+}

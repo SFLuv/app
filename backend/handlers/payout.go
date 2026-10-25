@@ -257,10 +257,12 @@ func (p *PayoutService) Pay(ctx context.Context, req PayoutRequest) (*PayoutResu
 			return nil, rearmErr
 		}
 		if !rearmed {
-			return nil, fmt.Errorf(
-				"an earlier attempt at payout %d failed and may already have reached the chain; an admin must check it before it is paid again (%s)",
+			// Unconfirmed, not a plain failure: the confirmation sweep settles
+			// it from the chain, and a redemption behind it stays spent.
+			return nil, bot.Unconfirmed(fmt.Errorf(
+				"an earlier attempt at payout %d failed and may already have reached the chain; it will not be paid again until the chain has been checked (%s)",
 				row.ID, row.LastError,
-			)
+			))
 		}
 		decision, created, err = p.recordAndDecide(ctx, row, req.AmountBase, userID, taxYear)
 		if err != nil {
