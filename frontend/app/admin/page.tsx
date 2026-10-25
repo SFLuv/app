@@ -96,6 +96,7 @@ import { PartnersPanel } from "@/components/admin/partners-panel"
 import { MerchantPayoutsPanel } from "@/components/admin/merchant-payouts-panel"
 import { ProtocolPanel } from "@/components/admin/protocol-panel"
 import type { W9AdminOverview } from "@/types/w9"
+import { W9RequestPanel } from "@/components/admin/w9-request-panel"
 import type { ClientVersionUserCountResponse, UserResponse } from "@/types/server"
 
 // Mock PayPal accounts
@@ -3803,6 +3804,7 @@ export default function AdminPage() {
         </TabsContent>
 
         <TabsContent value="w9" className="space-y-6">
+          <W9RequestPanel />
           <Card>
             <CardHeader className="pb-6">
               <CardTitle className="flex items-center gap-2 text-xl">

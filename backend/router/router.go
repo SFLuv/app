@@ -642,6 +642,8 @@ func AddW9Routes(r *chi.Mux, s *handlers.AppService) {
 	r.Get("/admin/w9/1099", withAdmin(s.Get1099Report, s))
 	r.Post("/admin/w9/{user_id}/clear", withAdmin(s.ClearW9Filing, s))
 	r.Post("/admin/w9/{user_id}/resend", withAdmin(s.ResendW9Request, s))
+	r.Get("/admin/w9/{user_id}/status", withAdmin(s.GetW9StatusForUser, s))
+	r.Post("/admin/w9/{user_id}/request", withAdmin(s.RequestW9FromUser, s))
 }
 
 func AddUnwrapRoutes(r *chi.Mux, s *handlers.AppService) {

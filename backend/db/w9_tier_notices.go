@@ -16,10 +16,14 @@ import (
 // that nobody's first notice that a tax form exists should be their reward
 // going missing. Only the last two withhold anything.
 const (
-	W9TierNotice   = "notice_400"  // a polite heads-up; still paid
-	W9TierWarning  = "warning_500" // firmer; still paid
-	W9TierEscrowed = "escrow_600"  // the crossing payment is held
-	W9TierBlocked  = "blocked"     // everything after is refused
+	W9TierNotice  = "notice_400"  // a polite heads-up; still paid
+	W9TierWarning = "warning_500" // firmer; still paid
+	// W9TierAdminRequest marks that an admin asked for the form directly. It is
+	// never a prompt of its own — installed apps do not know it, and it ranks
+	// below every real tier — but it changes what the bell entry says.
+	W9TierAdminRequest = "admin_request"
+	W9TierEscrowed     = "escrow_600" // the crossing payment is held
+	W9TierBlocked      = "blocked"    // everything after is refused
 )
 
 // W9TierSeverity orders the tiers so a later one can supersede an earlier.
@@ -187,6 +191,24 @@ func (a *AppDB) RearmW9BlockedTier(ctx context.Context, userID string, taxYear i
 	}
 	// A refusal is news every time, so the bell entry comes back with the modal
 	// rather than staying dismissed from some earlier round.
+	return a.clearW9NotificationReads(ctx, userID, taxYear)
+}
+
+// RearmW9Tier makes one tier's modal and bell entry show again.
+//
+// For an admin asking somebody for a W-9 directly. The tier is the vehicle
+// rather than the reason: installed apps can only show a W-9 prompt for one of
+// the tiers they know, so the request is delivered as the tier that fits what
+// the person has earned, re-armed even if they dismissed it before.
+func (a *AppDB) RearmW9Tier(ctx context.Context, userID string, taxYear int, tier string) error {
+	if _, err := a.db.Exec(ctx, `
+		INSERT INTO w9_tier_notices (user_id, tax_year, tier)
+		VALUES ($1, $2, $3)
+		ON CONFLICT (user_id, tax_year, tier)
+		DO UPDATE SET acknowledged_at = NULL, notified_at = NOW();
+	`, userID, taxYear, tier); err != nil {
+		return fmt.Errorf("error re-arming the %s w9 notice for %s: %w", tier, userID, err)
+	}
 	return a.clearW9NotificationReads(ctx, userID, taxYear)
 }
 
