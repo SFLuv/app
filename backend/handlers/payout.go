@@ -421,6 +421,14 @@ func (p *PayoutService) recordAndDecide(ctx context.Context, row *structs.Payout
 			p.logger.Logf("w9 %s: would %s %s for user %s (%s)", mode, decision.Action, row.AmountBase, userID, decision.Reason)
 		}
 		decision.Action = payoutActionPay
+		// The tier is what the person is shown, so it must describe what
+		// actually happened. Paid anyway means nothing was held or refused;
+		// the escrow and blocked prompts would tell them it was. Past the
+		// line while not enforcing is the warning: true, and it still asks
+		// for the form.
+		if decision.Tier == db.W9TierEscrowed || decision.Tier == db.W9TierBlocked {
+			decision.Tier = db.W9TierWarning
+		}
 	}
 
 	if decision.escrowed() {
