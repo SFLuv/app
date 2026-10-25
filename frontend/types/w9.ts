@@ -50,3 +50,24 @@ export interface W9AdminOverview {
   oldest_escrow_age_days: number
   rows: W9AdminRow[]
 }
+
+/** One person's W-9 position, as the request card shows it. */
+export interface W9UserStatus {
+  tax_year: number
+  filing_status: string
+  cleared: boolean
+  earned_sfluv: string
+  threshold_sfluv: string
+}
+
+/** What happened when an admin sent a W-9 request. */
+export interface W9RequestResult {
+  user_id: string
+  tax_year: number
+  filing_status: string
+  tier: string
+  push_delivered: boolean
+  email_sent: boolean
+  email?: string
+  email_error?: string
+}
