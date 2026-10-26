@@ -1,6 +1,6 @@
 # Branch scope — `pjol/internal-notifications`
 
-Oct 19–22 2026 · app + mobile-app + webpage · **10.7h** (6.6h stated, 4.2h measured)
+Oct 19–24 2026 · app + mobile-app + webpage · **12.7h** (8.6h stated, 4.2h measured)
 
 Includes the `pjol/bot-smart-wallet-hotfix` branch, which this one sits on top of and which merges
 into main first. Its hours are rolled into the totals at the foot of this document; its own file stays
@@ -864,6 +864,54 @@ Supersedes round 7's table.
 | Round 8 — the day read as one session | 0.80h | measured |
 | **Total** | **6.7h** | 2.8h measured, 3.9h stated |
 
+# Round 9 — Oct 24, the GCP shutdown
+
+Sat Oct 24 2026 · **2.0h stated** · infrastructure
+
+Shutting down GCP. No code on this branch, and no code in this repository.
+
+## How these hours were recorded
+
+**2.0h stated** by the owner: Saturday 24 October, 17:00–19:00, worked away from the keyboard.
+
+**Nothing corroborates it.** There is no session transcript in this project between Oct 22 and today,
+no commit in that window, and no file modified in either repository. The one thing that *can* be
+checked came out clean: the only session anywhere on Oct 24 was in another project
+(`ChatMTG`, 10:48–10:57), in the morning, so **no other project's clock overlaps the stated window** —
+which is the absence of a contradiction rather than evidence of the work, and should be read as the
+weaker of the two.
+
+Recorded as stated, at the span given, per the convention.
+
+## This is not really this branch's work
+
+Worth saying plainly, because the folder's premise is that the branch is the unit of work somebody
+asks about later: **a GCP shutdown is infrastructure, and it is not what this branch does.** Logging
+it here makes this branch look like it cost 2.0h more than it did.
+
+It belongs to the move off GCP and onto Railway, which has its own record in
+`branch-scopes/sanchezo/railway-prep.md`. It is recorded here because this is where the rest of the
+week's accounting lives and because that is where it was asked for — but if these hours are ever read
+as the cost of the notifications work, they are being read wrong. Move the row if the migration's
+file is the better home.
+
+## Totals across this branch
+
+Supersedes round 8's table.
+
+| Round | Hours | Basis |
+|---|---|---|
+| Round 1 — before any code | 2.00h | stated |
+| Round 2 — the pivot and the build | 1.15h | measured |
+| Round 3 — acking and the unwired history | 0.17h | measured |
+| Round 4 — messages and the chat tab | 0.12h | measured, upper bound |
+| Round 5 — ordering behind the hotfix | 0.23h | measured |
+| Round 6 — last night, and today's tail | 1.00h stated + 0.15h measured | mixed |
+| Round 7 — merge-forward, the afk hour, the client-side label | 0.90h stated + 0.18h measured | mixed |
+| Round 8 — the day read as one session | 0.80h | measured |
+| Round 9 — the GCP shutdown | 2.00h | stated |
+| **Total** | **8.7h** | 2.8h measured, 5.9h stated |
+
 # Consolidated — both branches
 
 This branch contains `pjol/bot-smart-wallet-hotfix`, so the work in both is in anything that merges
@@ -899,19 +947,21 @@ added up here.
 | Oct 22 11:25–12:06 — between the hotfix sittings | 0.68h | hotfix 5 | stated, no transcript |
 | Oct 22 12:43–13:24 — between the hotfix sittings | 0.68h | hotfix 5 | stated, no transcript |
 | Oct 22 14:28–15:24 — worked away from the keyboard | 0.90h | notifications 7 | stated, no transcript |
-| | **Total stated** | **6.56h** | |
+| Oct 24 17:00–19:00 — GCP shutdown | 2.00h | notifications 9 | stated, no transcript |
+| | **Total stated** | **8.56h** | |
 
 ## Both
 
 | | Hours |
 |---|---|
 | Measured | 4.2h |
-| Stated | 6.6h |
-| **Total** | **10.7h** |
+| Stated | 8.6h |
+| **Total** | **12.7h** |
 
-**Read the two kinds separately.** Three fifths of this is stated rather than measured, and five of
+**Read the two kinds separately.** Two thirds of this is stated rather than measured, and six of
 the stated windows have no session behind them at all — a meeting, a site review, an evening, an hour
-worked away from the keyboard, and two gaps inside a continuous working day. Those are the owner's
+worked away from the keyboard, two gaps inside a continuous working day, and a Saturday evening
+shutting down GCP. Those are the owner's
 account of their own time, recorded as such. The measured column is session-transcript spans clustered
 on a 30-minute gap, unioned across every project worked in, which is the only part of this the clock
 can support — and Oct 22 shows what that method misses on a day spent mostly not typing: it saw 2.7h
@@ -930,12 +980,12 @@ record as the sitting's start — the only weakness here that ran toward oversta
 | Branch | Measured | Stated | Total | What |
 |---|---|---|---|---|
 | `pjol/bot-smart-wallet-hotfix` | 1.36h | 2.66h | **4.0h** | Protocol Safes, rotatable signers, historical address checks, and the work to make the leaked keys deletable |
-| `pjol/internal-notifications` | 2.80h | 3.90h | **6.7h** | Internal alerts, the mobile notification screen and boot cache, the bulletin merge, the website's Get in touch, paymaster-only gas alerting, and reading the transaction-label path end to end |
-| **Together** | **4.16h** | **6.56h** | **10.7h** | |
+| `pjol/internal-notifications` | 2.80h | 5.90h | **8.7h** | Internal alerts, the mobile notification screen and boot cache, the bulletin merge, the website's Get in touch, paymaster-only gas alerting, reading the transaction-label path end to end — and the GCP shutdown, which is infrastructure rather than this branch's work and is flagged as such in round 9 |
+| **Together** | **4.16h** | **8.56h** | **12.7h** | |
 
 Sanchez's own rounds on the hotfix branch are not in this table. They are on the same branch and will
 arrive with the same merge, but they are someone else's hours and
 `branch-scopes/sanchezo/faucet-queue-fixes.md` is where they are recorded.
 
-The per-branch totals round independently. They agree this round — 4.0h and 6.7h sum to the 10.7h
+The per-branch totals round independently. They agree this round — 4.0h and 8.7h sum to the 12.7h
 above — but where a split and a measured total disagree, the measured total is the one to quote.
