@@ -2747,6 +2747,13 @@ var schemaMigrations = []SchemaMigration{
 			return migrateSupportCategories(ctx, pools)
 		},
 	},
+	{
+		Version:     "1.71",
+		Description: "merge the supervisor workflow view and export capabilities into one",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			return migrateSupervisorWorkflowCapability(ctx, pools)
+		},
+	},
 }
 
 // migrateW9WarningTiers replaces one hard gate with an escalating sequence.

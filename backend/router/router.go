@@ -498,7 +498,8 @@ func AddWorkflowRoutes(r *chi.Mux, s *handlers.BotService, a *handlers.AppServic
 	r.Post("/improvers/workflows/{workflow_id}/steps/{step_id}/payout-request", withImprover(a.RequestWorkflowStepPayoutRetry, a))
 
 	r.Get("/supervisors/workflows", withCapability(structs.CapSupervisorWorkflowsView, a.GetSupervisorWorkflows, a))
-	r.Post("/supervisors/workflows/export", withCapability(structs.CapSupervisorWorkflowsExport, a.ExportSupervisorWorkflowData, a))
+	// Same capability as the list above: the export is those rows in a file.
+	r.Post("/supervisors/workflows/export", withCapability(structs.CapSupervisorWorkflowsView, a.ExportSupervisorWorkflowData, a))
 	r.Put("/supervisors/primary-rewards-account", withCapability(structs.CapSupervisorPayoutAccount, a.UpdateSupervisorPrimaryRewardsAccount, a))
 
 	r.Get("/admin/proposers", withAdmin(a.GetProposers, a))
