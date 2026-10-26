@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -154,11 +155,33 @@ func (a *AppService) InviteOrganizationMember(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	token, hash := orgInviteToken()
-	if err := a.db.CreateOrganizationInvite(r.Context(), org.Id, email, hash, userDid, orgInviteTTL); err != nil {
+	created, sent, err := a.createAndSendOrgInvite(r.Context(), org, email, userDid)
+	if err != nil {
 		a.logger.Logf("error creating organization invite for org %d: %s", org.Id, err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
+	}
+	if created && !sent {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte("invite created but the email could not be sent"))
+		return
+	}
+
+	w.WriteHeader(http.StatusCreated)
+}
+
+// createAndSendOrgInvite mints an invite for an organization and emails it.
+//
+// Extracted so the house organization's cross-org tooling sends exactly the
+// same invite as an organization's own admin does, rather than a second
+// almost-identical one. created reports whether the row was written; sent
+// reports whether the email went out, kept separate because an invite that
+// exists and was not delivered is a different problem from one that was never
+// created — the first is recoverable by resending, the second is not.
+func (a *AppService) createAndSendOrgInvite(ctx context.Context, org *structs.Organization, email string, invitedBy string) (created bool, sent bool, err error) {
+	token, hash := orgInviteToken()
+	if err := a.db.CreateOrganizationInvite(ctx, org.Id, email, hash, invitedBy, orgInviteTTL); err != nil {
+		return false, false, err
 	}
 
 	appBase := strings.TrimRight(os.Getenv("APP_BASE_URL"), "/")
@@ -168,8 +191,13 @@ func (a *AppService) InviteOrganizationMember(w http.ResponseWriter, r *http.Req
 	joinLink := fmt.Sprintf("%s/organization/join?token=%s", appBase, token)
 
 	emailSender := utils.NewEmailSender()
-	if emailSender != nil {
-		details := fmt.Sprintf(`
+	if emailSender == nil {
+		// No mailer configured. The invite exists and the link is valid, so
+		// this is not a failure of the invite itself.
+		return true, true, nil
+	}
+
+	details := fmt.Sprintf(`
 <p style="font-size:14px; color:#111827;">You have been invited to join <strong>%s</strong> on SFLuv.</p>
 <p style="font-size:14px; color:#111827;">As a member you'll share the organization's roles and tools — events, workflows, and reporting — with the rest of the team.</p>
 <table role="presentation" cellpadding="0" cellspacing="0" style="margin:24px auto;">
@@ -180,22 +208,18 @@ func (a *AppService) InviteOrganizationMember(w http.ResponseWriter, r *http.Req
   </tr>
 </table>
 <p style="font-size:12px; color:#6b7280;">This invitation expires in 7 days and can only be used with the email address it was sent to. If you weren't expecting it, you can ignore this email.</p>`,
-			utils.EscapeEmailHTML(org.Name), joinLink, utils.EscapeEmailHTML(org.Name))
+		utils.EscapeEmailHTML(org.Name), joinLink, utils.EscapeEmailHTML(org.Name))
 
-		htmlContent := utils.BuildStyledEmail(
-			"You're invited to "+org.Name,
-			"Join your team on SFLuv",
-			details,
-		)
-		if err := emailSender.SendEmail(email, "", "You're invited to join "+org.Name+" on SFLuv", htmlContent, utils.NotificationFromEmail(), "SFLuv"); err != nil {
-			a.logger.Logf("error sending organization invite email to %s: %s", email, err)
-			w.WriteHeader(http.StatusInternalServerError)
-			w.Write([]byte("invite created but the email could not be sent"))
-			return
-		}
+	htmlContent := utils.BuildStyledEmail(
+		"You're invited to "+org.Name,
+		"Join your team on SFLuv",
+		details,
+	)
+	if sendErr := emailSender.SendEmail(email, "", "You're invited to join "+org.Name+" on SFLuv", htmlContent, utils.NotificationFromEmail(), "SFLuv"); sendErr != nil {
+		a.logger.Logf("error sending organization invite email to %s: %s", email, sendErr)
+		return true, false, nil
 	}
-
-	w.WriteHeader(http.StatusCreated)
+	return true, true, nil
 }
 
 // JoinOrganization accepts an invite token for the logged-in user.

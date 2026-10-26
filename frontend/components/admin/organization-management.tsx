@@ -84,6 +84,12 @@ export function OrganizationManagement() {
   const [selectedOrgId, setSelectedOrgId] = useState<number | null>(null)
   const [detailTab, setDetailTab] = useState("approvals")
   const [superadminDraft, setSuperadminDraft] = useState("")
+  // Whether this viewer may change a partner's membership: the house org's
+  // superadmin, or a house member granted "Manage other organizations'
+  // members". Asked rather than assumed, so the controls are not offered to
+  // somebody the server will refuse.
+  const [canManageMembers, setCanManageMembers] = useState(false)
+  const [inviteDraft, setInviteDraft] = useState("")
 
   const [allocDrafts, setAllocDrafts] = useState<AllocationDraftRow[]>([])
   const [allocDraftSeq, setAllocDraftSeq] = useState(0)
@@ -240,6 +246,58 @@ export function OrganizationManagement() {
           body: JSON.stringify({ organization_id: orgId, role_type: roleType, status }),
         }),
       `Role ${status}`,
+    )
+
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      try {
+        const res = await authFetch("/admin/organizations/member-access")
+        if (!res.ok) return
+        const body = (await res.json()) as { can_manage_members?: boolean }
+        if (!cancelled) setCanManageMembers(body.can_manage_members === true)
+      } catch {
+        // Left false: the controls stay hidden, which is the safe default.
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [authFetch])
+
+  const inviteMember = async (orgId: number) => {
+    const email = inviteDraft.trim()
+    if (!email) return
+    const ok = await act(
+      () =>
+        authFetch(`/admin/organizations/${orgId}/members/invites`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email }),
+        }),
+      "Invite sent",
+    )
+    if (ok) setInviteDraft("")
+  }
+
+  const removeMember = async (orgId: number, userId: string) =>
+    act(
+      () =>
+        authFetch(`/admin/organizations/${orgId}/members/${encodeURIComponent(userId)}`, {
+          method: "DELETE",
+        }),
+      "Member removed",
+    )
+
+  const setMemberRole = async (orgId: number, userId: string, role: string) =>
+    act(
+      () =>
+        authFetch(`/admin/organizations/${orgId}/members/role`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ user_id: userId, role }),
+        }),
+      "Role updated",
     )
 
   const setSuperadmin = async (orgId: number) => {
@@ -652,12 +710,68 @@ export function OrganizationManagement() {
                             )}
                           </div>
                         </div>
-                        <Badge variant="secondary" className="shrink-0 capitalize">
-                          {m.role}
-                        </Badge>
+                        {canManageMembers && m.role !== "superadmin" ? (
+                          <div className="flex shrink-0 items-center gap-2">
+                            <Select
+                              value={m.role}
+                              onValueChange={(role) => void setMemberRole(selected.organization.id, m.user_id, role)}
+                            >
+                              <SelectTrigger className="h-8 w-28 capitalize">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="member">Member</SelectItem>
+                                <SelectItem value="admin">Admin</SelectItem>
+                              </SelectContent>
+                            </Select>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-8"
+                              disabled={busy}
+                              onClick={() => void removeMember(selected.organization.id, m.user_id)}
+                            >
+                              Remove
+                            </Button>
+                          </div>
+                        ) : (
+                          // The superadmin's row stays a badge: removing or
+                          // re-roling them is refused by the server, and the
+                          // way to replace one is the transfer below.
+                          <Badge variant="secondary" className="shrink-0 capitalize">
+                            {m.role}
+                          </Badge>
+                        )}
                       </div>
                     ))}
                   </div>
+                  {canManageMembers ? (
+                    <div className="space-y-2 rounded-lg border bg-secondary/40 p-3">
+                      <Label className="text-xs">Invite a member by email</Label>
+                      <div className="flex gap-2">
+                        <Input
+                          className="h-9"
+                          type="email"
+                          placeholder="member@example.org"
+                          value={inviteDraft}
+                          onChange={(e) => setInviteDraft(e.target.value)}
+                        />
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-9 shrink-0"
+                          disabled={busy || !inviteDraft.trim()}
+                          onClick={() => void inviteMember(selected.organization.id)}
+                        >
+                          Send invite
+                        </Button>
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        The same invite this organization&apos;s own admins send. It expires in 7 days and only works
+                        for the address it was sent to.
+                      </p>
+                    </div>
+                  ) : null}
                   <div className="space-y-2 rounded-lg border bg-secondary/40 p-3">
                     <Label className="text-xs">Set superadmin by member email</Label>
                     <div className="flex gap-2">
