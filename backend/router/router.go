@@ -250,6 +250,7 @@ func AddOrganizationRoutes(r *chi.Mux, a *handlers.AppService, s *handlers.BotSe
 	// rather than by withAdmin, because the point of them is that the house
 	// organization's superadmin can delegate this to a member who is not a
 	// platform admin — see crossOrgMemberActor.
+	r.Get("/admin/organizations/member-access", withActiveAuth(a.AdminOrganizationMemberAccess, a))
 	r.Post("/admin/organizations/{id}/members/invites", withActiveAuth(a.AdminInviteOrganizationMember, a))
 	r.Delete("/admin/organizations/{id}/members/{user_id}", withActiveAuth(a.AdminRemoveOrganizationMember, a))
 	r.Put("/admin/organizations/{id}/members/role", withActiveAuth(a.AdminSetOrganizationMemberRole, a))

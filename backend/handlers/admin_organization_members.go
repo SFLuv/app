@@ -226,3 +226,37 @@ func (a *AppService) AdminSetOrganizationMemberRole(w http.ResponseWriter, r *ht
 	}
 	w.WriteHeader(http.StatusOK)
 }
+
+// AdminOrganizationMemberAccess tells the panel whether to offer the controls.
+//
+// A separate endpoint rather than a field on the organization list, because
+// that list returns a bare array and adding a wrapper to it would break every
+// existing reader for one boolean.
+func (a *AppService) AdminOrganizationMemberAccess(w http.ResponseWriter, r *http.Request) {
+	userDid := utils.GetDid(r)
+	if userDid == nil {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+	actor := *userDid
+	ctx := r.Context()
+
+	allowed := a.IsAdmin(ctx, actor)
+	if !allowed {
+		org, role, err := a.db.GetOrganizationByUser(ctx, actor)
+		if err != nil {
+			a.logger.Logf("error loading organization for %s: %s", actor, err)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		if org != nil && org.IsHouse {
+			if role == structs.OrgRoleSuperadmin {
+				allowed = true
+			} else if granted, err := a.db.HasOrgCapability(ctx, actor, structs.CapAdminOrgMembers); err == nil {
+				allowed = granted
+			}
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]bool{"can_manage_members": allowed})
+}
