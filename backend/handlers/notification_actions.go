@@ -204,6 +204,14 @@ func runRoleDecisionAction(approve bool) func(context.Context, *AppService, noti
 				return "", fmt.Errorf("updating improver %s: %w", subject, err)
 			}
 
+		case "proposer":
+			if _, err := a.db.UpdateProposer(ctx, &structs.ProposerUpdateRequest{
+				UserId: subject,
+				Status: &status,
+			}); err != nil {
+				return "", fmt.Errorf("updating proposer %s: %w", subject, err)
+			}
+
 		case "merchant":
 			id, err := strconv.ParseUint(subject, 10, 64)
 			if err != nil {

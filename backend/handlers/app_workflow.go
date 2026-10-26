@@ -602,6 +602,17 @@ func (a *AppService) RequestProposerStatus(w http.ResponseWriter, r *http.Reques
 </table>`, utils.EscapeEmailHTML(proposer.UserId), utils.EscapeEmailHTML(proposer.Organization), utils.EscapeEmailHTML(proposer.Email)),
 	)
 
+	a.postRoleRequestAlert(r.Context(), roleRequestAlert{
+		Role:    "proposer",
+		Subject: proposer.UserId,
+		Label:   strings.TrimSpace(proposer.Organization),
+		Fields: []structs.NotificationField{
+			{Label: "Organization", Value: proposer.Organization},
+			{Label: "Email", Value: proposer.Email},
+			{Label: "User", Value: proposer.UserId},
+		},
+	})
+
 	w.WriteHeader(http.StatusCreated)
 	_ = json.NewEncoder(w).Encode(proposer)
 }
@@ -642,6 +653,8 @@ func (a *AppService) UpdateProposer(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
+
+	a.resolveRoleRequestDecision(r.Context(), "proposer", req.UserId, req.Status)
 
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(proposer)
@@ -761,6 +774,11 @@ func (a *AppService) UpdateImprover(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
+
+	// The decision was made here, so the alert stops asking everyone else.
+	// Without this the panel and the phones disagree: the request is settled
+	// and the notification is still a question.
+	a.resolveRoleRequestDecision(r.Context(), "improver", req.UserId, req.Status)
 
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(improver)

@@ -426,6 +426,17 @@ func (a *AppService) UpdateLocationApproval(w http.ResponseWriter, r *http.Reque
 	case locationApprovalFailed:
 		w.WriteHeader(http.StatusInternalServerError)
 	default:
+		// Settled here, so the alert stops asking everyone else. Only on the
+		// success branch: a retryable failure leaves the request pending, and
+		// retracting the alert then would remove the one thing still asking
+		// somebody to finish the job.
+		if u.Approval != nil {
+			outcome := "Rejected in the admin panel"
+			if *u.Approval {
+				outcome = "Approved in the admin panel"
+			}
+			a.resolveRoleRequestAlert(r.Context(), "merchant", strconv.FormatUint(uint64(u.Id), 10), outcome)
+		}
 		w.WriteHeader(http.StatusCreated)
 	}
 }

@@ -246,6 +246,13 @@ func AddOrganizationRoutes(r *chi.Mux, a *handlers.AppService, s *handlers.BotSe
 	r.Put("/admin/organizations/roles", withAdmin(a.AdminSetOrganizationRoleStatus, a))
 	r.Put("/admin/organizations/issuer-scopes", withAdmin(a.AdminSetOrganizationIssuerScopes, a))
 	r.Get("/admin/organizations/{id}/events", withAdmin(s.AdminGetOrganizationEvents, a))
+	// Managing a partner organization's members. Guarded inside the handlers
+	// rather than by withAdmin, because the point of them is that the house
+	// organization's superadmin can delegate this to a member who is not a
+	// platform admin — see crossOrgMemberActor.
+	r.Post("/admin/organizations/{id}/members/invites", withActiveAuth(a.AdminInviteOrganizationMember, a))
+	r.Delete("/admin/organizations/{id}/members/{user_id}", withActiveAuth(a.AdminRemoveOrganizationMember, a))
+	r.Put("/admin/organizations/{id}/members/role", withActiveAuth(a.AdminSetOrganizationMemberRole, a))
 }
 
 func AddClientConfigRoutes(r *chi.Mux, s *handlers.AppService) {

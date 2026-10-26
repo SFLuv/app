@@ -20,11 +20,13 @@ import (
 
 // roleRequestAlert is one request waiting on a decision.
 type roleRequestAlert struct {
-	// Role is "affiliate", "improver" or "merchant", and selects which code
-	// the approve button runs.
+	// Role is "affiliate", "improver", "merchant" or "proposer", and selects
+	// which code the approve button runs. A role added here without a case in
+	// runRoleDecisionAction produces buttons that fail, so the two lists are
+	// changed together.
 	Role string
-	// Subject is the id the decision is applied to: a user id for affiliate
-	// and improver, a location id for a merchant.
+	// Subject is the id the decision is applied to: a user id for affiliate,
+	// improver and proposer, a location id for a merchant.
 	Subject string
 	// Label is who this is, in words — the name shown on the alert and in the
 	// history line after a decision.
@@ -39,6 +41,7 @@ var roleRequestTitles = map[string]string{
 	"affiliate": "Affiliate request",
 	"improver":  "Improver request",
 	"merchant":  "Merchant approval",
+	"proposer":  "Proposer request",
 }
 
 // postRoleRequestAlert puts a pending request in front of the admin set.
@@ -98,5 +101,24 @@ func (a *AppService) resolveRoleRequestAlert(ctx context.Context, role string, s
 	key := fmt.Sprintf("role:%s:%s", role, subject)
 	if err := a.notifications.Resolve(ctx, key, outcome); err != nil {
 		a.logger.Logf("error retracting the %s request alert for %s: %s", role, subject, err)
+	}
+}
+
+// resolveRoleRequestDecision retracts a pending-request alert after a decision
+// made somewhere other than the notification itself — the admin panel.
+//
+// Takes the status pointer the update requests carry, so a call that changed
+// something else about the person (a nickname, a rewards account) does not
+// retract an alert that is still waiting on a decision. Only "approved" and
+// "rejected" settle it.
+func (a *AppService) resolveRoleRequestDecision(ctx context.Context, role string, subject string, status *string) {
+	if status == nil {
+		return
+	}
+	switch strings.ToLower(strings.TrimSpace(*status)) {
+	case "approved":
+		a.resolveRoleRequestAlert(ctx, role, subject, "Approved in the admin panel")
+	case "rejected":
+		a.resolveRoleRequestAlert(ctx, role, subject, "Rejected in the admin panel")
 	}
 }

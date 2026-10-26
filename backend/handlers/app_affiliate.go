@@ -196,6 +196,8 @@ func (a *AppService) UpdateAffiliate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	a.resolveRoleRequestDecision(r.Context(), "affiliate", req.UserId, req.Status)
+
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(affiliate)
 }
