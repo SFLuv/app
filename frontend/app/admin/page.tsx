@@ -67,6 +67,7 @@ import {
   Copy,
   BarChart3,
   Inbox,
+  FlaskConical,
   ShieldCheck,
 } from "lucide-react"
 import { useLocation } from "@/context/LocationProvider"
@@ -97,6 +98,7 @@ import { WorkflowDetailsModal } from "@/components/workflows/workflow-details-mo
 import { AdminAnalyticsPanel } from "@/components/admin/admin-analytics-panel"
 import { PartnersPanel } from "@/components/admin/partners-panel"
 import { MerchantPayoutsPanel } from "@/components/admin/merchant-payouts-panel"
+import { BetaFeaturesPanel } from "@/components/admin/beta-features-panel"
 import { ProtocolPanel } from "@/components/admin/protocol-panel"
 import type { W9AdminOverview } from "@/types/w9"
 import type { ClientVersionUserCountResponse, UserResponse } from "@/types/server"
@@ -298,6 +300,7 @@ export default function AdminPage() {
       "partners",
       "payouts",
       "protocol",
+      "beta",
     ].includes(value)
   }
 
@@ -2856,6 +2859,10 @@ export default function AdminPage() {
               <span>Protocol</span>
               <ShieldCheck className="h-4 w-4 text-muted-foreground" />
             </TabsTrigger>
+            <TabsTrigger value="beta" className="w-full justify-between px-3 py-2">
+              <span>Beta features</span>
+              <FlaskConical className="h-4 w-4 text-muted-foreground" />
+            </TabsTrigger>
           </TabsList>
 
           <div className="min-w-0">
@@ -2874,6 +2881,10 @@ export default function AdminPage() {
 
         <TabsContent value="protocol" className="space-y-6">
           <ProtocolPanel />
+        </TabsContent>
+
+        <TabsContent value="beta" className="space-y-6">
+          <BetaFeaturesPanel />
         </TabsContent>
 
         <TabsContent value="tokens" className="space-y-6">
