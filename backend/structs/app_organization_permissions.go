@@ -43,7 +43,6 @@ const (
 	// that does not exist — withholding the download while allowing the page
 	// protects nothing. Merged onto this key in migration 1.71.
 	CapSupervisorWorkflowsView = "supervisor.workflows.view"
-	CapSupervisorPayoutAccount = "supervisor.payout_account.manage"
 )
 
 // Affiliate.
@@ -119,7 +118,6 @@ func OrgCapabilityCatalog() []CapabilityGroup {
 			Label:    "Supervisor",
 			Caps: []Capability{
 				{Key: CapSupervisorWorkflowsView, Label: "View and export workflow data", Hint: "See the workflows assigned to this organization, and download them.", Read: true},
-				{Key: CapSupervisorPayoutAccount, Label: "Change the rewards account", Hint: "Set where supervisor rewards are paid."},
 			},
 		},
 		{

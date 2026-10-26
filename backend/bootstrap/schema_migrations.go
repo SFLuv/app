@@ -2754,6 +2754,13 @@ var schemaMigrations = []SchemaMigration{
 			return migrateSupervisorWorkflowCapability(ctx, pools)
 		},
 	},
+	{
+		Version:     "1.72",
+		Description: "clear unpaid supervisor rewards from workflows and templates; paid ones keep their record",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			return migrateRemoveSupervisorRewards(ctx, pools)
+		},
+	},
 }
 
 // migrateW9WarningTiers replaces one hard gate with an escalating sequence.

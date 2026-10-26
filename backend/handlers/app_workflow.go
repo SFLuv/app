@@ -955,48 +955,6 @@ func (a *AppService) UpdateSupervisor(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(supervisor)
 }
 
-func (a *AppService) UpdateSupervisorPrimaryRewardsAccount(w http.ResponseWriter, r *http.Request) {
-	userDid := utils.GetDid(r)
-	if userDid == nil {
-		w.WriteHeader(http.StatusForbidden)
-		return
-	}
-
-	defer r.Body.Close()
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		a.logger.Logf("error reading supervisor primary rewards account body for user %s: %s", *userDid, err.Error())
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
-	req := structs.PrimaryRewardsAccountUpdateRequest{}
-	if err := json.Unmarshal(body, &req); err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		return
-	}
-
-	supervisor, err := a.db.UpdateSupervisorPrimaryRewardsAccount(r.Context(), *userDid, req.PrimaryRewardsAccount)
-	if err != nil {
-		errMsg := err.Error()
-		if strings.Contains(errMsg, "required") || strings.Contains(errMsg, "valid ethereum address") || strings.Contains(errMsg, "approved") {
-			w.WriteHeader(http.StatusBadRequest)
-			w.Write([]byte(errMsg))
-			return
-		}
-		if strings.Contains(errMsg, "not found") {
-			w.WriteHeader(http.StatusNotFound)
-			return
-		}
-		a.logger.Logf("error updating supervisor primary rewards account for user %s: %s", *userDid, errMsg)
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(supervisor)
-}
-
 func (a *AppService) GetApprovedSupervisors(w http.ResponseWriter, r *http.Request) {
 	supervisors, err := a.db.GetApprovedSupervisors(r.Context())
 	if err != nil {
