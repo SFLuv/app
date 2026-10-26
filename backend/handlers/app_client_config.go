@@ -74,6 +74,19 @@ func serverFeatureFlags() map[string]any {
 		// button that fails at the last step, so it stays off until the grant is
 		// confirmed on the chain the backend is pointed at.
 		"unwrap_enabled": strings.EqualFold(strings.TrimSpace(os.Getenv("UNWRAP_ENABLED")), "true"),
+		// community_features_enabled gates the Bulletin board and the Messages
+		// (chat) tabs on the mobile app, together rather than separately.
+		//
+		// Separately would be worse than it sounds. A chat can be opened from a
+		// for-sale post, so Bulletin without Messages leaves threads nobody can
+		// read; and Messages took the dock slot Contacts used to hold, so
+		// Messages without Bulletin is an inbox with the usual way of filling it
+		// missing. One switch keeps those two from disagreeing.
+		//
+		// Off is the default and is the dock the app shipped with before this
+		// work: Contacts back in its old slot, rendered on its own rather than
+		// as a segment inside Messages.
+		"community_features_enabled": strings.EqualFold(strings.TrimSpace(os.Getenv("COMMUNITY_FEATURES_ENABLED")), "true"),
 	}
 }
 
