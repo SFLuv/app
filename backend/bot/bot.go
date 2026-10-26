@@ -214,6 +214,13 @@ func (e *SendError) Unwrap() error {
 	return e.err
 }
 
+// Unconfirmed marks a send that was submitted but whose outcome is not known:
+// the money may already have landed. Callers must neither release the
+// redemption behind it nor pay it again until the chain has been checked.
+func Unconfirmed(err error) error {
+	return newSendError(err, false)
+}
+
 func newSendError(err error, revertRedemption bool) error {
 	if err == nil {
 		return nil

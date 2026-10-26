@@ -245,6 +245,42 @@ func (p *PayoutService) Pay(ctx context.Context, req PayoutRequest) (*PayoutResu
 		return nil, err
 	}
 
+	// A retry of a payout that failed. Reporting the failed row as settled —
+	// which the branch below used to do — answered success with nothing sent,
+	// and the caller marked the work paid. Instead: a failure recorded as "not
+	// sent" is re-armed and goes through the whole decision again; any other
+	// failed row predates that marker and may record a send whose outcome was
+	// never known, so it is refused until an admin has checked the chain.
+	if !created && row.State == db.PayoutStateFailed {
+		rearmed, rearmErr := p.appDb.RearmFailedPayout(ctx, row.ID)
+		if rearmErr != nil {
+			return nil, rearmErr
+		}
+		if !rearmed {
+			// Unconfirmed, not a plain failure: the confirmation sweep settles
+			// it from the chain, and a redemption behind it stays spent.
+			return nil, bot.Unconfirmed(fmt.Errorf(
+				"an earlier attempt at payout %d failed and may already have reached the chain; it will not be paid again until the chain has been checked (%s)",
+				row.ID, row.LastError,
+			))
+		}
+		decision, created, err = p.recordAndDecide(ctx, row, req.AmountBase, userID, taxYear)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// A retry of a payout that was submitted and never confirmed. It may well
+	// have landed, so sending again risks paying twice; and it must not be
+	// reported as paid either. Refused, as "may have been sent", so a
+	// redemption behind it is not released.
+	if !created && row.State == db.PayoutStatePending && strings.HasPrefix(row.LastError, db.PayoutUnconfirmedPrefix) {
+		return nil, bot.Unconfirmed(fmt.Errorf(
+			"payout %d was submitted earlier and never confirmed; it may already have been paid, so it will not be sent again until the chain has been checked",
+			row.ID,
+		))
+	}
+
 	// An existing row that already settled is the retry case: report what
 	// happened the first time rather than paying again.
 	//
@@ -295,6 +331,18 @@ func (p *PayoutService) Pay(ctx context.Context, req PayoutRequest) (*PayoutResu
 
 	txHash, err := p.transfer(ctx, row.ID, recipient, req.AmountBase)
 	if err != nil {
+		if !bot.ShouldRevertRedemption(err) {
+			// Submitted, outcome unknown: the money may be out. The row stays
+			// pending and counted, and a retry is refused rather than paying
+			// twice. Marking it failed is what used to invite exactly that.
+			if markErr := p.appDb.MarkPayoutUnconfirmed(ctx, row.ID, err.Error()); markErr != nil && p.logger != nil {
+				p.logger.Logf("w9: payout %d is unconfirmed and could not be marked so: %s", row.ID, markErr)
+			}
+			if p.logger != nil {
+				p.logger.Logf("payout %d to %s was submitted but not confirmed: %s", row.ID, recipient, err)
+			}
+			return nil, err
+		}
 		// The row counted toward the threshold from the moment it was inserted,
 		// which is what stops a concurrent payout slipping past it. A send that
 		// never happened must stop counting, or one failure would hold this
@@ -375,6 +423,14 @@ func (p *PayoutService) recordAndDecide(ctx context.Context, row *structs.Payout
 			p.logger.Logf("w9 %s: would %s %s for user %s (%s)", mode, decision.Action, row.AmountBase, userID, decision.Reason)
 		}
 		decision.Action = payoutActionPay
+		// The tier is what the person is shown, so it must describe what
+		// actually happened. Paid anyway means nothing was held or refused;
+		// the escrow and blocked prompts would tell them it was. Past the
+		// line while not enforcing is the warning: true, and it still asks
+		// for the form.
+		if decision.Tier == db.W9TierEscrowed || decision.Tier == db.W9TierBlocked {
+			decision.Tier = db.W9TierWarning
+		}
 	}
 
 	if decision.escrowed() {
@@ -450,7 +506,8 @@ func (p *PayoutService) transfer(ctx context.Context, ledgerID int64, recipient 
 		return "", fmt.Errorf("error sending payout: %w", err)
 	}
 	if err := p.appDb.RecordPayoutTxHash(ctx, ledgerID, txHash, p.chainID); err != nil {
-		return txHash, err
+		// The transfer is out; only the bookkeeping failed. Never "not sent".
+		return txHash, bot.Unconfirmed(fmt.Errorf("payout sent as %s but its hash could not be recorded: %w", txHash, err))
 	}
 
 	waitCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)

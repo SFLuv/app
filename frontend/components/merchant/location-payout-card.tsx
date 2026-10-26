@@ -150,6 +150,40 @@ export function LocationPayoutCard({ location, onUnwrapped }: LocationPayoutCard
     }
   }, [tillWallet, tipWallet, chainConfig.tokenAddress, status])
 
+  // The location's monthly allowance, read from the same eligibility check the
+  // Unwrap button uses. Probing with the smallest possible amount returns the
+  // last unwrap date and the follow-up minimum whether or not it is "allowed"
+  // (a refusal is a 403 that still carries both).
+  const [allowance, setAllowance] = useState<{ lastUnwrapAt: Date | null; minimum: bigint | null } | null>(null)
+  useEffect(() => {
+    const address = tillWallet?.address
+    if (!address) return
+    let cancelled = false
+    const read = async () => {
+      try {
+        const res = await authFetch("/unwrap/eligibility", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ wallet_address: address, amount_wei: "1", location_id: location.id }),
+        })
+        const body = (await res.json().catch(() => null)) as
+          | { last_unwrap_at?: string; minimum_followup_amount_wei?: string }
+          | null
+        if (cancelled || !body?.minimum_followup_amount_wei) return
+        setAllowance({
+          lastUnwrapAt: body.last_unwrap_at ? new Date(body.last_unwrap_at) : null,
+          minimum: BigInt(body.minimum_followup_amount_wei),
+        })
+      } catch (error) {
+        console.error("unwrap allowance", error)
+      }
+    }
+    void read()
+    return () => {
+      cancelled = true
+    }
+  }, [authFetch, tillWallet?.address, location.id, status])
+
   if (user?.isMerchant !== true) return null
 
   const profile = status?.profile ?? null
@@ -476,6 +510,61 @@ export function LocationPayoutCard({ location, onUnwrapped }: LocationPayoutCard
     </div>
   )
 
+  // The terms dialog is reachable from every step before unwrapping (the
+  // verification step's "Accept banking terms" button, and connectBank when
+  // Bridge says terms are still pending), so every step's return renders it.
+  // It used to live only in the final return, so opening it from an earlier
+  // step set tosOpen with nothing on the page to show.
+  const termsDialog = (
+    <Dialog open={tosOpen} onOpenChange={setTosOpen}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Accept the banking terms</DialogTitle>
+          <DialogDescription>
+            Payouts run through Bridge, our banking partner. Before a bank account can be linked to{" "}
+            {location.name || "this location"}, your business has to accept their terms of service. It only has to be done once.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="text-sm">
+          {tosUrl && (
+            <a
+              href={tosUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-2 underline underline-offset-4"
+            >
+              <ExternalLink className="h-4 w-4" />
+              Read and accept the terms of service
+            </a>
+          )}
+          <p className="mt-3 text-xs text-muted-foreground">
+            {kyb.done
+              ? "Opens in a new tab. Come back here once you've accepted and continue — we'll check with Bridge before sending you to your bank."
+              : "Opens in a new tab. Come back here once you've accepted — your bank can be connected once Bridge verifies your business."}
+          </p>
+        </div>
+        <DialogFooter>
+          <Button type="button" variant="outline" onClick={() => setTosOpen(false)} disabled={busy !== ""}>
+            Not now
+          </Button>
+          <Button
+            type="button"
+            onClick={() => {
+              setTosOpen(false)
+              // Before verification there is no bank step to continue to, so
+              // just re-read status to pick up the acceptance.
+              void (kyb.done ? connectBank() : loadStatus())
+            }}
+            disabled={busy !== ""}
+          >
+            {busy === "plaid" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+            {kyb.done ? "I've accepted — continue" : "I've accepted"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+
   if (loading) {
     return (
       <div className="rounded-xl border bg-background/70 p-4">
@@ -500,6 +589,14 @@ export function LocationPayoutCard({ location, onUnwrapped }: LocationPayoutCard
 
   // Step 1 — verify the business.
   if (!kyb.done) {
+    // While Bridge reviews, or waits on owners to verify themselves by email,
+    // there is nothing to fill in here. Bridge's hosted link for an existing
+    // customer opens what looks like a blank copy of the whole form, and
+    // resubmitting it can overwrite what they entered or restart the review, so
+    // the button is withheld unless the business form itself needs more
+    // (not_started, incomplete, awaiting_questionnaire).
+    const underReview = profile?.kyb_status === "under_review"
+    const awaitingOwners = profile?.kyb_status === "awaiting_ubo"
     return (
       <div className="rounded-xl border bg-background/70 p-4">
         {header}
@@ -509,10 +606,25 @@ export function LocationPayoutCard({ location, onUnwrapped }: LocationPayoutCard
             <span className="text-muted-foreground">Business verification:</span>
             <span className={`rounded-full border px-2 py-0.5 text-xs ${kyb.failed ? "border-red-300 text-red-600" : ""}`}>{kyb.label}</span>
           </div>
-          <p className="text-xs text-muted-foreground">
-            A one-time verification with Bridge, our banking partner. It asks for your business details and an ID for the owner,
-            and takes a few minutes. Approval usually comes within a business day.
-          </p>
+          {underReview ? (
+            <p className="text-xs text-muted-foreground">
+              Bridge, our banking partner, is reviewing your business. There&apos;s nothing more to fill in. They&apos;ll email you if
+              they need anything else, and once you&apos;re approved (usually within a business day) this card moves on to connecting
+              your bank.
+            </p>
+          ) : awaitingOwners ? (
+            <p className="text-xs text-muted-foreground">
+              Your business details are in. Bridge, our banking partner, has emailed each owner you listed a link to verify their own
+              identity (a photo ID, sometimes a selfie). Once every owner has done that, Bridge reviews the business, usually within a
+              business day. Check each owner&apos;s inbox, including spam, for an email from Bridge. There&apos;s nothing more to fill in
+              here.
+            </p>
+          ) : (
+            <p className="text-xs text-muted-foreground">
+              A one-time verification with Bridge, our banking partner. It asks for your business details and an ID for the owner,
+              and takes a few minutes. Approval usually comes within a business day.
+            </p>
+          )}
           {termsPending && (
             <div className="flex flex-wrap items-center gap-2 text-sm">
               <span className="text-muted-foreground">Banking terms:</span>
@@ -520,10 +632,12 @@ export function LocationPayoutCard({ location, onUnwrapped }: LocationPayoutCard
             </div>
           )}
           <div className="flex flex-wrap gap-2">
-            <Button type="button" onClick={() => void startKYB()} disabled={busy !== ""}>
-              {busy === "kyb" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ExternalLink className="mr-2 h-4 w-4" />}
-              {profile?.bridge_customer_id ? "Continue verification" : "Verify your business"}
-            </Button>
+            {!underReview && !awaitingOwners && (
+              <Button type="button" onClick={() => void startKYB()} disabled={busy !== ""}>
+                {busy === "kyb" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ExternalLink className="mr-2 h-4 w-4" />}
+                {profile?.bridge_customer_id ? "Continue verification" : "Verify your business"}
+              </Button>
+            )}
             {termsPending && (
               <Button type="button" variant="outline" onClick={() => void openTermsModal()} disabled={busy !== ""}>
                 Accept banking terms
@@ -532,6 +646,7 @@ export function LocationPayoutCard({ location, onUnwrapped }: LocationPayoutCard
           </div>
           {status.production === false && <p className="text-[11px] text-muted-foreground">Sandbox mode — no real bank activity.</p>}
         </div>
+        {termsDialog}
       </div>
     )
   }
@@ -564,6 +679,7 @@ export function LocationPayoutCard({ location, onUnwrapped }: LocationPayoutCard
             </button>
           )}
         </div>
+        {termsDialog}
       </div>
     )
   }
@@ -585,12 +701,56 @@ export function LocationPayoutCard({ location, onUnwrapped }: LocationPayoutCard
             Finish payout setup
           </Button>
         </div>
+        {termsDialog}
       </div>
     )
   }
 
   // Step 3 — unwrap.
   const canUnwrap = Boolean(tillWallet && parsedAmount && busy === "")
+
+  // Where this location stands against its monthly allowance. Months are UTC on
+  // the server, so the reset is shown in the merchant's own time (late afternoon
+  // on the last day of the month in California).
+  const allowanceNote = (() => {
+    // SFLUV is 1:1 with USD, and merchants think about payouts in dollars.
+    const minimumLabel = allowance?.minimum
+      ? `$${Number(formatUnits(allowance.minimum, chainConfig.tokenDecimals)).toLocaleString(undefined, { maximumFractionDigits: 2 })}`
+      : "$500"
+    const tail = "Sweeping tips with the till counts as one unwrap. No fees are taken from your payout."
+    if (!allowance) {
+      return (
+        <p className="text-xs text-muted-foreground">
+          This location&apos;s first unwrap each month can be any amount; further unwraps in the same month must be at least{" "}
+          {minimumLabel}. {tail}
+        </p>
+      )
+    }
+    const now = new Date()
+    const last = allowance.lastUnwrapAt
+    const unwrappedThisMonth =
+      last !== null && last.getUTCFullYear() === now.getUTCFullYear() && last.getUTCMonth() === now.getUTCMonth()
+    const nextReset = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1))
+    const resetLabel = nextReset.toLocaleString(undefined, { month: "long", day: "numeric", hour: "numeric", minute: "2-digit" })
+    return (
+      <div className="space-y-1 rounded-lg border bg-muted/30 px-3 py-2 text-xs">
+        <p className="font-medium text-black dark:text-white">
+          {unwrappedThisMonth ? "You've already unwrapped this month" : "You haven't unwrapped yet this month"}
+        </p>
+        {unwrappedThisMonth && last ? (
+          <p className="text-muted-foreground">
+            Last unwrap: {last.toLocaleDateString(undefined, { month: "long", day: "numeric" })}. Your next unwrap of any
+            amount opens on {resetLabel}. Until then, you can still unwrap if it&apos;s {minimumLabel} or more.
+          </p>
+        ) : (
+          <p className="text-muted-foreground">
+            Your next unwrap can be any amount. After that, further unwraps this month need to be at least {minimumLabel}.
+          </p>
+        )}
+        <p className="text-muted-foreground">{tail}</p>
+      </div>
+    )
+  })()
   return (
     <div className="rounded-xl border bg-background/70 p-4">
       {header}
@@ -652,9 +812,7 @@ export function LocationPayoutCard({ location, onUnwrapped }: LocationPayoutCard
               Max
             </Button>
           </div>
-          <p className="text-xs text-muted-foreground">
-            This location's first redemption each month can be any amount; further redemptions in the same month must be at least $500. Sweeping tips with the till counts as one redemption. No fees are taken from your payout.
-          </p>
+          {allowanceNote}
         </div>
 
         {tipWallet && tipBalance !== null && tipBalance > 0n && (
@@ -717,50 +875,7 @@ export function LocationPayoutCard({ location, onUnwrapped }: LocationPayoutCard
         unwrap={unwrapDetail}
       />
 
-      <Dialog open={tosOpen} onOpenChange={setTosOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Accept the banking terms</DialogTitle>
-            <DialogDescription>
-              Payouts run through Bridge, our banking partner. Before a bank account can be linked to{" "}
-              {location.name || "this location"}, your business has to accept their terms of service. It only has to be done once.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="text-sm">
-            {tosUrl && (
-              <a
-                href={tosUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-2 underline underline-offset-4"
-              >
-                <ExternalLink className="h-4 w-4" />
-                Read and accept the terms of service
-              </a>
-            )}
-            <p className="mt-3 text-xs text-muted-foreground">
-              Opens in a new tab. Come back here once you&apos;ve accepted and continue — we&apos;ll check with Bridge before
-              sending you to your bank.
-            </p>
-          </div>
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => setTosOpen(false)} disabled={busy !== ""}>
-              Not now
-            </Button>
-            <Button
-              type="button"
-              onClick={() => {
-                setTosOpen(false)
-                void connectBank()
-              }}
-              disabled={busy !== ""}
-            >
-              {busy === "plaid" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-              I&apos;ve accepted — continue
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {termsDialog}
 
       <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
         <DialogContent>

@@ -14831,3 +14831,49 @@ func improverClaimableWorkflowIDsCTE() string {
 				)` + improverClaimableStepGuards() + `
 		),`
 }
+
+// BackfillWorkflowStepPayoutTxHash records the transfer behind a step that was
+// marked paid without one — the confirmation sweep found the money afterwards.
+// It never changes a hash that is already there.
+func (a *AppDB) BackfillWorkflowStepPayoutTxHash(ctx context.Context, workflowId string, stepId string, txHash string, chainID int64) (bool, error) {
+	cmd, err := a.db.Exec(ctx, `
+		UPDATE workflow_steps
+		SET payout_tx_hash = $3, payout_chain_id = $4, updated_at = unix_now()
+		WHERE id = $1 AND workflow_id = $2 AND status = 'paid_out'
+		AND COALESCE(NULLIF(TRIM(payout_tx_hash), ''), '') = '';
+	`, stepId, workflowId, strings.TrimSpace(txHash), chainID)
+	if err != nil {
+		return false, fmt.Errorf("error backfilling workflow step payout tx hash: %s", err)
+	}
+	return cmd.RowsAffected() > 0, nil
+}
+
+// BackfillWorkflowManagerPayoutTxHash is the same for a manager bounty.
+func (a *AppDB) BackfillWorkflowManagerPayoutTxHash(ctx context.Context, workflowId string, txHash string, chainID int64) (bool, error) {
+	cmd, err := a.db.Exec(ctx, `
+		UPDATE workflows
+		SET manager_payout_tx_hash = $2, manager_payout_chain_id = $3, updated_at = unix_now()
+		WHERE id = $1 AND manager_paid_out_at IS NOT NULL
+		AND COALESCE(NULLIF(TRIM(manager_payout_tx_hash), ''), '') = '';
+	`, workflowId, strings.TrimSpace(txHash), chainID)
+	if err != nil {
+		return false, fmt.Errorf("error backfilling workflow manager payout tx hash: %s", err)
+	}
+	return cmd.RowsAffected() > 0, nil
+}
+
+// WorkflowPayoutTargetSettled reports whether a step, or a workflow's manager
+// bounty when stepId is empty, is already marked paid.
+func (a *AppDB) WorkflowPayoutTargetSettled(ctx context.Context, workflowId string, stepId string) (bool, error) {
+	var settled bool
+	var err error
+	if stepId == "" {
+		err = a.db.QueryRow(ctx, `SELECT manager_paid_out_at IS NOT NULL FROM workflows WHERE id = $1;`, workflowId).Scan(&settled)
+	} else {
+		err = a.db.QueryRow(ctx, `SELECT status = 'paid_out' FROM workflow_steps WHERE id = $1 AND workflow_id = $2;`, stepId, workflowId).Scan(&settled)
+	}
+	if err != nil {
+		return false, fmt.Errorf("error reading workflow payout state: %s", err)
+	}
+	return settled, nil
+}

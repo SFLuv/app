@@ -210,6 +210,24 @@ func (a *AppDB) ListMerchantModeDevices(ctx context.Context, userID string) (*st
 	return &structs.MerchantModeDevicesResponse{Devices: devices}, nil
 }
 
+// UpdateMerchantModeDeviceAppVersion records the app version a device reported on
+// its latest check-in. app_version is otherwise written only when merchant mode is
+// enabled, so a till updated in place kept showing the version it was set up on.
+func (a *AppDB) UpdateMerchantModeDeviceAppVersion(ctx context.Context, deviceID string, appVersion string) error {
+	appVersion = strings.TrimSpace(appVersion)
+	if appVersion == "" {
+		return nil
+	}
+	if _, err := a.db.Exec(ctx, `
+		UPDATE merchant_mode_devices
+		SET app_version = $2, updated_at = NOW()
+		WHERE id = $1 AND app_version IS DISTINCT FROM $2;
+	`, deviceID, appVersion); err != nil {
+		return fmt.Errorf("error updating merchant mode device app version: %w", err)
+	}
+	return nil
+}
+
 func (a *AppDB) GetMerchantModeStatus(ctx context.Context, userID string, installationID string) (*structs.MerchantModeStatusResponse, error) {
 	user, err := a.GetUserById(ctx, userID)
 	if err != nil {
@@ -354,6 +372,55 @@ func (a *AppDB) ListMerchantModeLocations(ctx context.Context, userID string) (*
 	}
 
 	return &structs.MerchantModeLocationsResponse{Locations: locations}, nil
+}
+
+// AdminSetMerchantModePIN replaces a merchant's PIN without the current one and
+// clears any lockout. A merchant who forgets their PIN has no way back otherwise:
+// changing it and turning merchant mode off both require it.
+func (a *AppDB) AdminSetMerchantModePIN(ctx context.Context, userID string, pin string) error {
+	if err := validateMerchantModePIN(pin); err != nil {
+		return err
+	}
+	user, err := a.GetUserById(ctx, userID)
+	if err != nil {
+		return err
+	}
+	if !user.IsMerchant {
+		return ErrMerchantModeForbidden
+	}
+
+	pinHash, err := bcrypt.GenerateFromPassword([]byte(pin), bcrypt.DefaultCost)
+	if err != nil {
+		return fmt.Errorf("error hashing merchant mode PIN: %w", err)
+	}
+
+	if _, err := a.db.Exec(ctx, `
+		INSERT INTO merchant_mode_settings (
+			owner_id,
+			pin_hash,
+			pin_hash_version,
+			failed_attempt_count,
+			locked_until,
+			updated_at
+		) VALUES (
+			$1,
+			$2,
+			'bcrypt:v1',
+			0,
+			NULL,
+			NOW()
+		)
+		ON CONFLICT (owner_id)
+		DO UPDATE SET
+			pin_hash = EXCLUDED.pin_hash,
+			pin_hash_version = EXCLUDED.pin_hash_version,
+			failed_attempt_count = 0,
+			locked_until = NULL,
+			updated_at = NOW();
+	`, userID, string(pinHash)); err != nil {
+		return fmt.Errorf("error saving merchant mode PIN: %w", err)
+	}
+	return nil
 }
 
 func (a *AppDB) SetMerchantModePIN(ctx context.Context, userID string, pin string, currentPIN string) (*structs.MerchantModeStatusResponse, error) {

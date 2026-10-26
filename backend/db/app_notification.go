@@ -280,14 +280,32 @@ func (a *AppDB) appendW9TierNotification(ctx context.Context, userID string, fee
 	}
 	defer rows.Close()
 
-	seenYears := map[int]bool{}
+	type tierRow struct {
+		taxYear    int
+		tier       string
+		notifiedAt time.Time
+		status     string
+	}
+	collected := []tierRow{}
+	adminRequested := map[int]time.Time{}
 	for rows.Next() {
-		var taxYear int
-		var tier, status string
-		var notifiedAt time.Time
-		if err := rows.Scan(&taxYear, &tier, &notifiedAt, &status); err != nil {
+		var row tierRow
+		if err := rows.Scan(&row.taxYear, &row.tier, &row.notifiedAt, &row.status); err != nil {
 			return fmt.Errorf("error scanning w9 tier notification: %w", err)
 		}
+		if row.tier == W9TierAdminRequest {
+			adminRequested[row.taxYear] = row.notifiedAt
+			continue
+		}
+		collected = append(collected, row)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	seenYears := map[int]bool{}
+	for _, row := range collected {
+		taxYear, tier, notifiedAt, status := row.taxYear, row.tier, row.notifiedAt, row.status
 		// Highest tier first, one per year — a person who has crossed 500 does
 		// not also need the 400 notice sitting under it.
 		if seenYears[taxYear] || W9StatusClears(status) {
@@ -300,11 +318,19 @@ func (a *AppDB) appendW9TierNotification(ctx context.Context, userID string, fee
 			body = "You are close to the limit that needs a W-9 on file. Complete it and your rewards keep arriving."
 		}
 
+		title := "A W-9 is coming up"
+		// Asked for directly by an admin: say so, whatever tier carried it.
+		if requestedAt, ok := adminRequested[taxYear]; ok {
+			title = "SFLuv has asked you for a W-9"
+			body = "It takes a couple of minutes. Tap to fill it in."
+			notifiedAt = requestedAt
+		}
+
 		notification := structs.ImproverNotification{
 			Key:       fmt.Sprintf("%s:%d", structs.NotificationTypeW9Required, taxYear),
 			Type:      structs.NotificationTypeW9Required,
 			Action:    &structs.NotificationAction{Kind: structs.NotificationActionTax},
-			Title:     "A W-9 is coming up",
+			Title:     title,
 			Body:      body,
 			CreatedAt: notifiedAt.Unix(),
 			TaxYear:   taxYear,
@@ -315,7 +341,7 @@ func (a *AppDB) appendW9TierNotification(ctx context.Context, userID string, fee
 		feed.UnseenCount++
 		feed.Notifications = append(feed.Notifications, notification)
 	}
-	return rows.Err()
+	return nil
 }
 
 func (a *AppDB) MarkImproverNotificationsSeen(ctx context.Context, improverId string, keys []string) (int, error) {

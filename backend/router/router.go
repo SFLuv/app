@@ -387,6 +387,7 @@ func AddAdminRoutes(r *chi.Mux, s *handlers.AppService) {
 	r.Get("/admin/locations", withAdmin(s.GetAuthedLocations, s))
 	r.Put("/admin/users", withActiveAuth(s.UpdateUserRole, s))
 	r.Put("/admin/users/account-type", withAdmin(s.UpdateUserAccountType, s))
+	r.Post("/admin/users/{user_id}/merchant-mode-pin", withAdmin(s.AdminResetMerchantModePIN, s))
 	r.Put("/admin/locations", withAdmin(s.UpdateLocationApproval, s))
 	r.Put("/admin/locations/{id}", withAdmin(s.AdminUpdateLocation, s))
 	r.Put("/admin/locations/{id}/google-place", withAdmin(s.AdminUpdateLocationGooglePlace, s))
@@ -664,6 +665,8 @@ func AddW9Routes(r *chi.Mux, s *handlers.AppService) {
 	r.Get("/admin/w9/1099", withAdmin(s.Get1099Report, s))
 	r.Post("/admin/w9/{user_id}/clear", withAdmin(s.ClearW9Filing, s))
 	r.Post("/admin/w9/{user_id}/resend", withAdmin(s.ResendW9Request, s))
+	r.Get("/admin/w9/{user_id}/status", withAdmin(s.GetW9StatusForUser, s))
+	r.Post("/admin/w9/{user_id}/request", withAdmin(s.RequestW9FromUser, s))
 }
 
 func AddUnwrapRoutes(r *chi.Mux, s *handlers.AppService) {
