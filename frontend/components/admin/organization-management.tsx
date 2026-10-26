@@ -573,11 +573,6 @@ export function OrganizationManagement() {
                           {existing.email && (
                             <p className="truncate text-xs text-muted-foreground">{existing.email}</p>
                           )}
-                          {existing.primary_rewards_account && (
-                            <p className="truncate font-mono text-xs text-muted-foreground">
-                              Rewards: {existing.primary_rewards_account}
-                            </p>
-                          )}
                           {existing.requested_by && (
                             <p className="truncate text-xs text-muted-foreground">
                               Requested by {existing.requested_by}

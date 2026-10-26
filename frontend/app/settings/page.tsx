@@ -492,13 +492,6 @@ export default function SettingsPage() {
   const [improverRewardsError, setImproverRewardsError] = useState("");
   const [improverRewardsSuccess, setImproverRewardsSuccess] = useState("");
 
-  const [supervisorRewardsSelection, setSupervisorRewardsSelection] =
-    useState("");
-  const [supervisorCustomRewardsAccount, setSupervisorCustomRewardsAccount] =
-    useState("");
-  const [supervisorRewardsSaving, setSupervisorRewardsSaving] = useState(false);
-  const [supervisorRewardsError, setSupervisorRewardsError] = useState("");
-  const [supervisorRewardsSuccess, setSupervisorRewardsSuccess] = useState("");
   const [deleteAccountDialogOpen, setDeleteAccountDialogOpen] = useState(false);
   const [deleteAccountPreview, setDeleteAccountPreview] =
     useState<AccountDeletionPreview | null>(null);
@@ -1125,22 +1118,6 @@ export default function SettingsPage() {
   }, [
     improverStatus,
     improver?.primary_rewards_account,
-    rewardsAccountOptions,
-    defaultRewardsAccount,
-  ]);
-
-  useEffect(() => {
-    if (supervisorStatus !== "approved") return;
-
-    const selectionState = getWalletSelectionState(
-      supervisor?.primary_rewards_account || "",
-      defaultRewardsAccount,
-    );
-    setSupervisorRewardsSelection(selectionState.selection);
-    setSupervisorCustomRewardsAccount(selectionState.customAddress);
-  }, [
-    supervisorStatus,
-    supervisor?.primary_rewards_account,
     rewardsAccountOptions,
     defaultRewardsAccount,
   ]);
@@ -2196,50 +2173,6 @@ export default function SettingsPage() {
       );
     } finally {
       setWalletVisibilitySavingId(null);
-    }
-  };
-
-  const handleSaveSupervisorRewardsAccount = async () => {
-    setSupervisorRewardsError("");
-    setSupervisorRewardsSuccess("");
-
-    const selectedValue =
-      supervisorRewardsSelection === CUSTOM_REWARDS_ACCOUNT_VALUE
-        ? supervisorCustomRewardsAccount.trim()
-        : supervisorRewardsSelection.trim();
-
-    if (!selectedValue) {
-      setSupervisorRewardsError("Primary rewards account is required.");
-      return;
-    }
-    if (!isAddress(selectedValue)) {
-      setSupervisorRewardsError("Enter a valid Ethereum address.");
-      return;
-    }
-
-    const normalized = getAddress(selectedValue);
-    setSupervisorRewardsSaving(true);
-    try {
-      const res = await authFetch("/supervisors/primary-rewards-account", {
-        method: "PUT",
-        body: JSON.stringify({ primary_rewards_account: normalized }),
-      });
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(text || "Unable to update supervisor rewards account.");
-      }
-
-      const data = await res.json();
-      setSupervisor(data);
-      setSupervisorRewardsSuccess("Primary rewards account updated.");
-    } catch (err) {
-      setSupervisorRewardsError(
-        err instanceof Error
-          ? err.message
-          : "Unable to update supervisor rewards account.",
-      );
-    } finally {
-      setSupervisorRewardsSaving(false);
     }
   };
 
