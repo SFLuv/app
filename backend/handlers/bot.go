@@ -698,8 +698,16 @@ func (s *BotService) Redeem(w http.ResponseWriter, r *http.Request) {
 				fmt.Printf("error undoing redemption for code %s address %s after payout failure: %s\n", request.Code, request.Address, undoErr)
 			}
 			undoCancel()
+			w.WriteHeader(http.StatusInternalServerError)
+			return
 		}
+		// Submitted, not confirmed: the money is very likely already on its
+		// way and the confirmation sweep settles it from the chain. Still an
+		// error status, so an older app shows what it always showed; a newer
+		// one reads this body and tells the volunteer it is confirming rather
+		// than failed, so they do not try a code that is already spent.
 		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte("payout pending"))
 		return
 	}
 

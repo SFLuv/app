@@ -65,7 +65,10 @@ type W9StatusResponse struct {
 	// Raw base units for the progress bar, so a client never has to parse a
 	// formatted amount back into a number to draw it.
 	ThresholdBase string `json:"threshold_base"`
-	EarnedBase    string `json:"earned_base"`
+	// AdminRequested means an admin asked for the form directly. The tier still
+	// decides whether the app prompts; this only changes what the prompt says.
+	AdminRequested bool   `json:"admin_requested"`
+	EarnedBase     string `json:"earned_base"`
 
 	// Tier is the warning the person has not yet dismissed, if any, and drives
 	// which modal shows. Blocked means a payout was actually refused.
