@@ -1,6 +1,5 @@
 export type OrgMemberRole = "member" | "admin" | "superadmin"
 export type OrgRoleType = "affiliate" | "proposer" | "supervisor" | "issuer"
-export type AllocationCycle = "daily" | "weekly" | "monthly" | "one_time"
 
 export interface Organization {
   id: number
@@ -37,15 +36,6 @@ export interface OrganizationRole {
   approved_at?: string | null
 }
 
-export interface OrganizationAllocation {
-  id: number
-  organization_id: number
-  cycle: AllocationCycle
-  allocation: number
-  balance: number
-  last_reset_at?: string | null
-}
-
 export interface OrganizationInvite {
   id: number
   organization_id: number
@@ -61,7 +51,6 @@ export interface OrganizationView {
   my_role: OrgMemberRole
   members: OrganizationMember[]
   roles: OrganizationRole[]
-  allocations: OrganizationAllocation[]
   issuer_scopes?: string[]
   invites?: OrganizationInvite[]
 }

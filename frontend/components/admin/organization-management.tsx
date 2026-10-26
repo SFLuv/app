@@ -28,29 +28,15 @@ import { formatCredentialLabel } from "@/lib/credential-labels"
 import { useToast } from "@/hooks/use-toast"
 import { useApp } from "@/context/AppProvider"
 import type { Event } from "@/types/event"
-import type { AllocationCycle, OrganizationView, OrgRoleType } from "@/types/organization"
+import type { OrganizationView, OrgRoleType } from "@/types/organization"
 import type { GlobalCredentialType } from "@/types/workflow"
 
 const roleTypes: OrgRoleType[] = ["affiliate", "proposer", "supervisor", "issuer"]
-const cycleOrder: AllocationCycle[] = ["one_time", "daily", "weekly", "monthly"]
-const cycleLabels: Record<AllocationCycle, string> = {
-  one_time: "One time",
-  daily: "Daily",
-  weekly: "Weekly",
-  monthly: "Monthly",
-}
-
 const PAGE_SIZE = 8
 const EVENTS_PAGE_SIZE = 8
 
 type SortKey = "name" | "members" | "newest"
 type FilterKey = "all" | "affiliate" | "pending"
-
-interface AllocationDraftRow {
-  key: number
-  cycle: AllocationCycle | ""
-  amount: string
-}
 
 const orgInitials = (name: string) =>
   name
@@ -66,7 +52,7 @@ const memberLabel = (m: { contact_name?: string; contact_email?: string; user_id
 
 // Platform-admin organization management: a paginated, searchable, sortable,
 // filterable org list; clicking an org opens a details modal with tabs for
-// approvals, members, and (for approved affiliates) allocations and events.
+// approvals, members, and (for approved affiliates) their events.
 export function OrganizationManagement() {
   const { authFetch } = useApp()
   const { toast } = useToast()
@@ -91,8 +77,6 @@ export function OrganizationManagement() {
   const [canManageMembers, setCanManageMembers] = useState(false)
   const [inviteDraft, setInviteDraft] = useState("")
 
-  const [allocDrafts, setAllocDrafts] = useState<AllocationDraftRow[]>([])
-  const [allocDraftSeq, setAllocDraftSeq] = useState(0)
 
   const [orgEvents, setOrgEvents] = useState<Event[]>([])
   const [orgEventsLoading, setOrgEventsLoading] = useState(false)
@@ -210,21 +194,10 @@ export function OrganizationManagement() {
     [orgs, selectedOrgId],
   )
 
-  const resetAllocDrafts = useCallback((view: OrganizationView | null) => {
-    const rows = (view?.allocations || []).map((al, i) => ({
-      key: i,
-      cycle: al.cycle,
-      amount: String(al.allocation),
-    }))
-    setAllocDrafts(rows)
-    setAllocDraftSeq(rows.length)
-  }, [])
-
   const openOrg = (view: OrganizationView) => {
     setSelectedOrgId(view.organization.id)
     setDetailTab("approvals")
     setSuperadminDraft("")
-    resetAllocDrafts(view)
     setScopeDraft([...(view.issuer_scopes || [])])
     setOrgEvents([])
     setOrgEventsLoaded(false)
@@ -313,55 +286,6 @@ export function OrganizationManagement() {
     if (ok) setSuperadminDraft("")
   }
 
-  // ── Allocations draft list (add / remove / save-replaces-all) ────────────────
-  const usedCycles = allocDrafts.map((r) => r.cycle).filter(Boolean) as AllocationCycle[]
-  const nextFreeCycle = cycleOrder.find((c) => !usedCycles.includes(c))
-
-  const addAllocRow = () => {
-    if (!nextFreeCycle) return
-    setAllocDrafts((rows) => [...rows, { key: allocDraftSeq, cycle: nextFreeCycle, amount: "" }])
-    setAllocDraftSeq((n) => n + 1)
-  }
-
-  const removeAllocRow = (key: number) => setAllocDrafts((rows) => rows.filter((r) => r.key !== key))
-
-  const updateAllocRow = (key: number, patch: Partial<AllocationDraftRow>) =>
-    setAllocDrafts((rows) => rows.map((r) => (r.key === key ? { ...r, ...patch } : r)))
-
-  // Whole non-negative integers only — parseInt would silently truncate
-  // "12.7" to 12 or "1e3" to 1, so reject anything but plain digits.
-  const isValidAmount = (value: string) => /^\d+$/.test(value.trim())
-  const allocRowsValid = allocDrafts.every((r) => r.cycle && isValidAmount(r.amount))
-
-  const allocDirty = useMemo(() => {
-    if (!selected) return false
-    const server = new Map(selected.allocations.map((al) => [al.cycle, al.allocation]))
-    if (allocDrafts.length !== server.size) return true
-    return allocDrafts.some(
-      (r) => !r.cycle || !isValidAmount(r.amount) || server.get(r.cycle) !== Number.parseInt(r.amount.trim(), 10),
-    )
-  }, [selected, allocDrafts])
-
-  const saveAllocations = async () => {
-    if (!selected || !allocRowsValid) return
-    const ok = await act(
-      () =>
-        authFetch("/admin/organizations/allocations", {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            organization_id: selected.organization.id,
-            allocations: allocDrafts.map((r) => ({
-              cycle: r.cycle,
-              allocation: Number.parseInt(r.amount.trim(), 10),
-            })),
-          }),
-        }),
-      "Allocations saved",
-    )
-    if (!ok) return
-  }
-
   const scopeDirty = useMemo(() => {
     if (!selected) return false
     const server = [...(selected.issuer_scopes || [])].sort()
@@ -399,12 +323,6 @@ export function OrganizationManagement() {
       setDeleteOrgEventError("Unable to delete this event. Please try again later.")
     }
   }
-
-  // Rebase the allocation drafts on fresh server data after a save.
-  useEffect(() => {
-    if (selected && !allocDirty) resetAllocDrafts(selected)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [orgs])
 
   // ── Org events (lazy-loaded when the Events tab is open) ─────────────────────
   useEffect(() => {
@@ -447,7 +365,7 @@ export function OrganizationManagement() {
   // now-hidden tab, snap back to Approvals instead of showing a blank body.
   useEffect(() => {
     if (!selected) return
-    if ((detailTab === "allocations" || detailTab === "events") && !isAffiliateApproved(selected)) {
+    if (detailTab === "events" && !isAffiliateApproved(selected)) {
       setDetailTab("approvals")
     }
     if (detailTab === "issuer" && !isIssuerApproved(selected)) {
@@ -639,7 +557,6 @@ export function OrganizationManagement() {
                 >
                   <TabsTrigger value="approvals">Approvals</TabsTrigger>
                   <TabsTrigger value="members">Members</TabsTrigger>
-                  {selectedAffiliateApproved && <TabsTrigger value="allocations">Allocations</TabsTrigger>}
                   {selectedAffiliateApproved && <TabsTrigger value="events">Events</TabsTrigger>}
                   {selectedIssuerApproved && <TabsTrigger value="issuer">Issuer</TabsTrigger>}
                 </TabsList>
@@ -794,134 +711,6 @@ export function OrganizationManagement() {
                     </div>
                   </div>
                 </TabsContent>
-
-                {/* Allocations (approved affiliates only) */}
-                {selectedAffiliateApproved && (
-                  <TabsContent value="allocations" className="min-h-0 flex-1 space-y-3 overflow-y-auto pt-3">
-                    <div className="flex items-center justify-between rounded-lg border bg-secondary/40 px-3 py-2 text-sm">
-                      <span className="text-muted-foreground">Total current allocation</span>
-                      <span className="font-medium">
-                        {selected.allocations.reduce((sum, al) => sum + al.allocation, 0).toLocaleString()}{" "}
-                        <span className="text-xs font-normal text-muted-foreground">
-                          ({selected.allocations.reduce((sum, al) => sum + al.balance, 0).toLocaleString()} remaining)
-                        </span>
-                      </span>
-                    </div>
-                    <div className="space-y-2">
-                      {allocDrafts.map((row) => {
-                        const server = selected.allocations.find((al) => al.cycle === row.cycle)
-                        return (
-                          <div key={row.key} className="flex items-center gap-2 rounded-lg border p-2.5">
-                            <Select
-                              value={row.cycle || undefined}
-                              onValueChange={(v) => updateAllocRow(row.key, { cycle: v as AllocationCycle })}
-                              disabled={busy}
-                            >
-                              <SelectTrigger className="h-9 w-32 shrink-0">
-                                <SelectValue placeholder="Cycle" />
-                              </SelectTrigger>
-                              <SelectContent>
-                                {cycleOrder.map((c) => (
-                                  <SelectItem
-                                    key={c}
-                                    value={c}
-                                    disabled={c !== row.cycle && usedCycles.includes(c)}
-                                  >
-                                    {cycleLabels[c]}
-                                  </SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
-                            <Input
-                              className="h-9 min-w-0 flex-1"
-                              type="number"
-                              min="0"
-                              placeholder="Amount"
-                              value={row.amount}
-                              onChange={(e) => updateAllocRow(row.key, { amount: e.target.value })}
-                              disabled={busy}
-                            />
-                            {server && (
-                              <span className="shrink-0 whitespace-nowrap text-xs text-muted-foreground">
-                                {server.balance.toLocaleString()} / {server.allocation.toLocaleString()} left
-                              </span>
-                            )}
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-9 w-9 shrink-0 text-muted-foreground hover:text-destructive"
-                              aria-label="Remove allocation"
-                              onClick={() => removeAllocRow(row.key)}
-                              disabled={busy}
-                            >
-                              <X className="h-4 w-4" />
-                            </Button>
-                          </div>
-                        )
-                      })}
-                      {allocDrafts.length === 0 && (
-                        <p className="py-4 text-center text-sm text-muted-foreground">
-                          No allocations — saving now removes all funding for this organization.
-                        </p>
-                      )}
-                    </div>
-                    <div className="flex items-center justify-between gap-2">
-                      <Button variant="outline" size="sm" onClick={addAllocRow} disabled={busy || !nextFreeCycle}>
-                        <Plus className="mr-1 h-4 w-4" /> New allocation
-                      </Button>
-                      <Button
-                        size="sm"
-                        onClick={() => void saveAllocations()}
-                        disabled={busy || !allocDirty || !allocRowsValid}
-                      >
-                        Save
-                      </Button>
-                    </div>
-                  </TabsContent>
-                )}
-
-                {/* Issuer settings (approved issuers only) */}
-                {selectedIssuerApproved && (
-                  <TabsContent value="issuer" className="min-h-0 flex-1 space-y-3 overflow-y-auto pt-3">
-                    <p className="text-sm text-muted-foreground">
-                      Credentials members of this organization can issue.
-                    </p>
-                    <div className="space-y-2">
-                      {credentialTypes.map((ct) => {
-                        const checked = scopeDraft.includes(ct.value)
-                        return (
-                          <label
-                            key={ct.value}
-                            className="flex cursor-pointer items-center gap-3 rounded-lg border p-3 transition-colors hover:bg-secondary/50"
-                          >
-                            <Checkbox
-                              checked={checked}
-                              onCheckedChange={(next) =>
-                                setScopeDraft((draft) =>
-                                  next ? [...draft, ct.value] : draft.filter((v) => v !== ct.value),
-                                )
-                              }
-                              disabled={busy}
-                            />
-                            <span className="text-sm font-medium">{formatCredentialLabel(ct.value, { [ct.value]: ct.label })}</span>
-                          </label>
-                        )
-                      })}
-                      {credentialTypes.length === 0 && (
-                        <p className="py-6 text-center text-sm text-muted-foreground">
-                          {credentialTypesError
-                            ? "Couldn't load credential types — try refreshing."
-                            : "No credential types exist yet — create them in the Credential Types tab."}
-                        </p>
-                      )}
-                    </div>
-                    <div className="flex justify-end">
-                      <Button size="sm" onClick={() => void saveIssuerScopes()} disabled={busy || !scopeDirty}>
-                        Save
-                      </Button>
-                    </div>
-                  </TabsContent>
-                )}
 
                 {/* Events (approved affiliates only) */}
                 {selectedAffiliateApproved && (

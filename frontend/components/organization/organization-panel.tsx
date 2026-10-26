@@ -26,13 +26,6 @@ const roleLabels: Record<OrgRoleType, string> = {
   issuer: "Issuer",
 }
 
-const cycleLabels: Record<string, string> = {
-  daily: "Daily",
-  weekly: "Weekly",
-  monthly: "Monthly",
-  one_time: "One-time",
-}
-
 // Roles whose "settings" are just a link to their working area.
 const roleLinks: Partial<Record<OrgRoleType, { href: string; label: string }>> = {
   affiliate: { href: "/affiliates", label: "Open affiliate dashboard" },
@@ -312,26 +305,6 @@ export function OrganizationPanel() {
                 </div>
               )
             })}
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Allocations (visible to all members) */}
-      {view.allocations.length > 0 && (
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-base text-black dark:text-white">Allocations</CardTitle>
-            <CardDescription>Shared organization spending budgets by cycle.</CardDescription>
-          </CardHeader>
-          <CardContent className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            {view.allocations.map((al) => (
-              <div key={al.id} className="rounded-lg border bg-muted/20 p-3">
-                <p className="text-xs uppercase tracking-wide text-muted-foreground">{cycleLabels[al.cycle] ?? al.cycle}</p>
-                <p className="mt-1 text-lg font-semibold">
-                  {al.balance.toLocaleString()} <span className="text-xs font-normal text-muted-foreground">/ {al.allocation.toLocaleString()}</span>
-                </p>
-              </div>
-            ))}
           </CardContent>
         </Card>
       )}
