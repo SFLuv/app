@@ -2761,6 +2761,13 @@ var schemaMigrations = []SchemaMigration{
 			return migrateRemoveSupervisorRewards(ctx, pools)
 		},
 	},
+	{
+		Version:     "1.73",
+		Description: "invites carry the role and permissions the invitee gets on accepting",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			return migrateInvitePermissions(ctx, pools)
+		},
+	},
 }
 
 // migrateW9WarningTiers replaces one hard gate with an escalating sequence.

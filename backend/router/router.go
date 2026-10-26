@@ -254,6 +254,8 @@ func AddOrganizationRoutes(r *chi.Mux, a *handlers.AppService, s *handlers.BotSe
 	r.Post("/admin/organizations/{id}/members/invites", withActiveAuth(a.AdminInviteOrganizationMember, a))
 	r.Delete("/admin/organizations/{id}/members/{user_id}", withActiveAuth(a.AdminRemoveOrganizationMember, a))
 	r.Put("/admin/organizations/{id}/members/role", withActiveAuth(a.AdminSetOrganizationMemberRole, a))
+	r.Get("/admin/organizations/{id}/permissions", withActiveAuth(a.AdminGetOrganizationPermissions, a))
+	r.Put("/admin/organizations/{id}/permissions", withActiveAuth(a.AdminSetOrganizationMemberPermissions, a))
 }
 
 func AddClientConfigRoutes(r *chi.Mux, s *handlers.AppService) {

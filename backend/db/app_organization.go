@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -263,7 +264,7 @@ func (a *AppDB) GetOrganizationView(ctx context.Context, userId string) (*struct
 
 	if myRole == structs.OrgRoleAdmin || myRole == structs.OrgRoleSuperadmin {
 		inviteRows, err := a.db.Query(ctx, `
-			SELECT id, organization_id, email, COALESCE(invited_by, ''), expires_at, accepted_at, created_at
+			SELECT id, organization_id, email, role, COALESCE(invited_by, ''), expires_at, accepted_at, created_at
 			FROM organization_invites
 			WHERE organization_id = $1 AND accepted_at IS NULL AND expires_at > NOW()
 			ORDER BY created_at DESC;
@@ -274,7 +275,7 @@ func (a *AppDB) GetOrganizationView(ctx context.Context, userId string) (*struct
 		defer inviteRows.Close()
 		for inviteRows.Next() {
 			var inv structs.OrganizationInvite
-			if err := inviteRows.Scan(&inv.Id, &inv.OrganizationId, &inv.Email, &inv.InvitedBy, &inv.ExpiresAt, &inv.AcceptedAt, &inv.CreatedAt); err != nil {
+			if err := inviteRows.Scan(&inv.Id, &inv.OrganizationId, &inv.Email, &inv.Role, &inv.InvitedBy, &inv.ExpiresAt, &inv.AcceptedAt, &inv.CreatedAt); err != nil {
 				return nil, err
 			}
 			view.Invites = append(view.Invites, inv)
@@ -507,11 +508,68 @@ func (a *AppDB) LeaveOrganization(ctx context.Context, userId string) error {
 
 // --- Invites -----------------------------------------------------------------
 
-func (a *AppDB) CreateOrganizationInvite(ctx context.Context, orgId int64, email string, tokenHash string, invitedBy string, ttl time.Duration) error {
-	_, err := a.db.Exec(ctx, `
-		INSERT INTO organization_invites(organization_id, email, token_hash, invited_by, expires_at)
-		VALUES ($1, LOWER(TRIM($2)), $3, $4, $5);
-	`, orgId, email, tokenHash, invitedBy, time.Now().UTC().Add(ttl))
+// OrganizationInviteGrant is what an invitee becomes when they accept.
+//
+// Decided when the invitation is written rather than after it is taken up,
+// because the alternative is a window in which somebody holds everything: the
+// only way to narrow a new member used to be to let them in with every
+// capability and then remove them one at a time.
+type OrganizationInviteGrant struct {
+	// Role is "member" or "admin". An admin holds every capability of every
+	// role the organization has, so Capabilities is not read for one.
+	Role string
+	// Mode is "inherit" or "custom". Inherit is the old behaviour — everything
+	// the organization holds — and custom means exactly Capabilities and
+	// nothing else, including none at all.
+	Mode string
+	// Capabilities are capability keys, read only when Mode is "custom".
+	Capabilities []string
+}
+
+func (a *AppDB) CreateOrganizationInvite(ctx context.Context, orgId int64, email string, tokenHash string, invitedBy string, ttl time.Duration, grant OrganizationInviteGrant) error {
+	role := strings.TrimSpace(grant.Role)
+	if role != structs.OrgRoleAdmin {
+		// Only member and admin are invitable: a superadmin is transferred, not
+		// invited, so anything unrecognised lands on the lesser of the two.
+		role = structs.OrgRoleMember
+	}
+	mode := structs.OrgPermissionsCustom
+	if strings.TrimSpace(grant.Mode) == structs.OrgPermissionsInherit {
+		mode = structs.OrgPermissionsInherit
+	}
+
+	// Validated now rather than at accept time: a key not in the catalog today
+	// will not be in it in seven days either, and storing one would leave a
+	// grant nobody can explain.
+	keys := make([]string, 0, len(grant.Capabilities))
+	seen := map[string]struct{}{}
+	for _, key := range grant.Capabilities {
+		key = strings.TrimSpace(key)
+		if key == "" {
+			continue
+		}
+		roleType, known := structs.CapabilityRoleType(key)
+		// Administrative capabilities are SFLuv-only and granted by the house
+		// superadmin on a live member, never carried in on an invite.
+		if !known || roleType == structs.OrgRoleTypeAdministrative {
+			continue
+		}
+		if _, dup := seen[key]; dup {
+			continue
+		}
+		seen[key] = struct{}{}
+		keys = append(keys, key)
+	}
+
+	encoded, err := json.Marshal(keys)
+	if err != nil {
+		return fmt.Errorf("error encoding invite capabilities: %w", err)
+	}
+
+	_, err = a.db.Exec(ctx, `
+		INSERT INTO organization_invites(organization_id, email, token_hash, invited_by, expires_at, role, permissions_mode, capabilities)
+		VALUES ($1, LOWER(TRIM($2)), $3, $4, $5, $6, $7, $8::jsonb);
+	`, orgId, email, tokenHash, invitedBy, time.Now().UTC().Add(ttl), role, mode, string(encoded))
 	return err
 }
 
@@ -522,12 +580,14 @@ func (a *AppDB) AcceptOrganizationInvite(ctx context.Context, tokenHash string, 
 	var orgId int64
 	err := pgx.BeginFunc(ctx, a.db, func(tx pgx.Tx) error {
 		var email string
+		var inviteRole, inviteMode string
+		var inviteCapabilities []byte
 		err := tx.QueryRow(ctx, `
 			UPDATE organization_invites
 			SET accepted_at = NOW()
 			WHERE token_hash = $1 AND accepted_at IS NULL AND expires_at > NOW()
-			RETURNING organization_id, email;
-		`, tokenHash).Scan(&orgId, &email)
+			RETURNING organization_id, email, role, permissions_mode, capabilities;
+		`, tokenHash).Scan(&orgId, &email, &inviteRole, &inviteMode, &inviteCapabilities)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrOrgInviteInvalid
 		}
@@ -560,12 +620,44 @@ func (a *AppDB) AcceptOrganizationInvite(ctx context.Context, tokenHash string, 
 			return err
 		}
 
+		// The role and permissions the invitation promised, rather than a fixed
+		// "member with everything".
+		if inviteRole != structs.OrgRoleAdmin {
+			inviteRole = structs.OrgRoleMember
+		}
+		if inviteMode != structs.OrgPermissionsInherit {
+			inviteMode = structs.OrgPermissionsCustom
+		}
 		if _, err := tx.Exec(ctx, `
-			INSERT INTO organization_members(organization_id, user_id, role)
-			VALUES ($1, $2, 'member');
-		`, orgId, userId); err != nil {
+			INSERT INTO organization_members(organization_id, user_id, role, permissions_mode)
+			VALUES ($1, $2, $3, $4);
+		`, orgId, userId, inviteRole, inviteMode); err != nil {
 			return err
 		}
+
+		// Only for a custom member. An admin is not limited by grants and an
+		// inherit member already holds everything, so writing rows for either
+		// would record a restriction that is not in force.
+		if inviteMode == structs.OrgPermissionsCustom && inviteRole == structs.OrgRoleMember && len(inviteCapabilities) > 0 {
+			keys := []string{}
+			if err := json.Unmarshal(inviteCapabilities, &keys); err != nil {
+				return fmt.Errorf("error reading invite capabilities: %w", err)
+			}
+			for _, key := range keys {
+				roleType, known := structs.CapabilityRoleType(key)
+				if !known || roleType == structs.OrgRoleTypeAdministrative {
+					continue
+				}
+				if _, err := tx.Exec(ctx, `
+					INSERT INTO organization_member_permissions(organization_id, user_id, role_type, capability, granted_by)
+					VALUES ($1, $2, $3, $4, NULL)
+					ON CONFLICT (organization_id, user_id, capability) DO NOTHING;
+				`, orgId, userId, roleType, key); err != nil {
+					return err
+				}
+			}
+		}
+
 		return syncMemberRoleFlagsTx(ctx, tx, orgId)
 	})
 	return orgId, err

@@ -66,13 +66,16 @@ type OrganizationRole struct {
 }
 
 type OrganizationInvite struct {
-	Id             int64      `json:"id"`
-	OrganizationId int64      `json:"organization_id"`
-	Email          string     `json:"email"`
-	InvitedBy      string     `json:"invited_by"`
-	ExpiresAt      time.Time  `json:"expires_at"`
-	AcceptedAt     *time.Time `json:"accepted_at,omitempty"`
-	CreatedAt      time.Time  `json:"created_at"`
+	Id             int64  `json:"id"`
+	OrganizationId int64  `json:"organization_id"`
+	Email          string `json:"email"`
+	// Role the invitee will hold on accepting, so a pending row in the member
+	// list can say what it is pending as rather than just "pending".
+	Role       string     `json:"role"`
+	InvitedBy  string     `json:"invited_by"`
+	ExpiresAt  time.Time  `json:"expires_at"`
+	AcceptedAt *time.Time `json:"accepted_at,omitempty"`
+	CreatedAt  time.Time  `json:"created_at"`
 }
 
 // OrganizationView is the full member-facing settings payload.
@@ -87,6 +90,19 @@ type OrganizationView struct {
 
 type OrganizationInviteRequest struct {
 	Email string `json:"email"`
+	// Role is "member" or "admin". Absent means member.
+	Role string `json:"role,omitempty"`
+	// PermissionsMode is "inherit" or "custom".
+	//
+	// Absent means custom, which is the opposite of what membership used to
+	// mean and is the point: a new member starts with nothing and is given what
+	// they need, rather than starting with everything the organization holds
+	// and having it taken away. A caller that wants the old behaviour has to
+	// ask for inherit by name.
+	PermissionsMode string `json:"permissions_mode,omitempty"`
+	// Capabilities are the keys to grant on acceptance, for a custom member.
+	// Ignored for an admin, who is not limited by grants.
+	Capabilities []string `json:"capabilities,omitempty"`
 }
 
 type OrganizationRoleRequest struct {
