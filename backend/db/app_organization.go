@@ -161,6 +161,24 @@ func (a *AppDB) UserOrgHasApprovedRole(ctx context.Context, userId string, roleT
 	return true, orgId, nil
 }
 
+// GetOrganizationById loads one organization, for the house-org tooling that
+// acts on an organization it does not belong to. Returns nil when there is no
+// such organization rather than an error, so a bad id reads as 404.
+func (a *AppDB) GetOrganizationById(ctx context.Context, orgId int64) (*structs.Organization, error) {
+	var org structs.Organization
+	err := a.db.QueryRow(ctx, `
+		SELECT id, name, logo, is_house, created_at, updated_at
+		FROM organizations WHERE id = $1;
+	`, orgId).Scan(&org.Id, &org.Name, &org.Logo, &org.IsHouse, &org.CreatedAt, &org.UpdatedAt)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("error loading organization %d: %w", orgId, err)
+	}
+	return &org, nil
+}
+
 func (a *AppDB) GetOrganizationMemberIDs(ctx context.Context, orgId int64) ([]string, error) {
 	rows, err := a.db.Query(ctx, `SELECT user_id FROM organization_members WHERE organization_id = $1;`, orgId)
 	if err != nil {
