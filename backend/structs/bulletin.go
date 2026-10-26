@@ -211,8 +211,15 @@ type Conversation struct {
 	// The other person's primary wallet, so "Send SFLUV" can prefill the
 	// existing send flow. Only returned on the single-conversation endpoint,
 	// and empty when the thread's post is cash-only.
-	PayAddress  string `json:"pay_address,omitempty"`
-	BlockedByMe bool   `json:"blocked_by_me"`
+	PayAddress string `json:"pay_address,omitempty"`
+	// OtherUserInactive means the other person no longer has access to
+	// messages — they were taken out of the chat beta. The conversation, its
+	// members and its history are all untouched; what changes is that the
+	// client greys them out and stops offering to send, and that they receive
+	// no pushes from it. Putting them back in the beta reverses all of that on
+	// its own, because none of it removed anything.
+	OtherUserInactive bool `json:"other_user_inactive,omitempty"`
+	BlockedByMe       bool `json:"blocked_by_me"`
 }
 
 type ConversationRow struct {

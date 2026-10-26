@@ -2733,6 +2733,13 @@ var schemaMigrations = []SchemaMigration{
 			return migrateInternalNotifications(ctx, pools)
 		},
 	},
+	{
+		Version:     "1.69",
+		Description: "per-user access to features still in beta, keeping revoked grants so re-granting restores them",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			return migrateBetaFeatures(ctx, pools)
+		},
+	},
 }
 
 // migrateW9WarningTiers replaces one hard gate with an escalating sequence.

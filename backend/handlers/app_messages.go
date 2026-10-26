@@ -112,16 +112,30 @@ func (a *AppService) ListMyConversations(w http.ResponseWriter, r *http.Request)
 		blocked[id] = true
 	}
 
+	// Which of the people on this page still have messages. Asked about the
+	// page's own ids rather than the whole beta, and asked once rather than per
+	// row. Nobody is removed from a conversation when they lose access, so this
+	// is the only thing that distinguishes them — and it is why putting them
+	// back needs no repair step.
+	chatActive, chatErr := a.db.ActiveBetaMembersAmong(ctx, structs.BetaFeatureChat, others)
+	if chatErr != nil {
+		a.logger.Logf("error narrowing chat beta members: %s", chatErr)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
 	out := make([]*structs.Conversation, 0, len(rows))
 	for _, row := range rows {
 		other := otherMember(&row.Conversation, userId)
+		_, otherStillIn := chatActive[other]
 		conv := &structs.Conversation{
-			Id:            row.Conversation.Id,
-			OtherUser:     people[other],
-			LastMessage:   row.Last,
-			UnreadCount:   row.Unread,
-			LastMessageAt: row.Conversation.LastMessageAt,
-			BlockedByMe:   blocked[other],
+			Id:                row.Conversation.Id,
+			OtherUser:         people[other],
+			LastMessage:       row.Last,
+			UnreadCount:       row.Unread,
+			LastMessageAt:     row.Conversation.LastMessageAt,
+			BlockedByMe:       blocked[other],
+			OtherUserInactive: !otherStillIn,
 		}
 		if conv.LastMessage != nil {
 			conv.LastMessage.IsMine = conv.LastMessage.SenderId == userId
@@ -186,7 +200,16 @@ func (a *AppService) StartConversation(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
-	if !active || blocked {
+	// Both people need the chat beta. The caller's own access was checked by the
+	// route guard; this is the other half, and without it somebody in the beta
+	// could pull anybody into a conversation they have no way to read.
+	//
+	// Reported as "could not be found", exactly as a blocked or deactivated
+	// person is, rather than as "they are not in the beta". The distinction is
+	// deliberate: a different answer here would let anyone enumerate the beta's
+	// membership by trying to message people.
+	inChatBeta := a.BetaFeatureAllowed(ctx, req.UserId, structs.BetaFeatureChat)
+	if !active || blocked || !inChatBeta {
 		bulletinError(w, http.StatusNotFound, "not_found", "That person could not be found.")
 		return
 	}
@@ -261,9 +284,10 @@ func (a *AppService) writeConversationDetail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	out := &structs.Conversation{
-		Id:            conv.Id,
-		OtherUser:     people[other],
-		LastMessageAt: conv.LastMessageAt,
+		Id:                conv.Id,
+		OtherUser:         people[other],
+		LastMessageAt:     conv.LastMessageAt,
+		OtherUserInactive: !a.BetaFeatureAllowed(ctx, other, structs.BetaFeatureChat),
 	}
 	canPay := true
 	if conv.PostId != nil {
@@ -586,6 +610,14 @@ func (a *AppService) notifyNewMessage(senderId, recipientId string, conversation
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
+
+		// Somebody taken out of the chat beta stops being notified. Their
+		// conversations and unread counts are all still there for when they are
+		// let back in; what stops is the phone buzzing about a thread they
+		// currently cannot open.
+		if !a.BetaFeatureAllowed(ctx, recipientId, structs.BetaFeatureChat) {
+			return
+		}
 
 		people, err := a.db.GetPublicUsers(ctx, []string{senderId})
 		if err != nil {

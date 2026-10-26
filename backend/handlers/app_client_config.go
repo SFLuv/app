@@ -74,19 +74,21 @@ func serverFeatureFlags() map[string]any {
 		// button that fails at the last step, so it stays off until the grant is
 		// confirmed on the chain the backend is pointed at.
 		"unwrap_enabled": strings.EqualFold(strings.TrimSpace(os.Getenv("UNWRAP_ENABLED")), "true"),
-		// community_features_enabled gates the Bulletin board and the Messages
-		// (chat) tabs on the mobile app, together rather than separately.
+		// bulletin_enabled and chat_enabled are the master switches for the two
+		// beta surfaces, one each: the Bulletin board and direct messages.
 		//
-		// Separately would be worse than it sounds. A chat can be opened from a
-		// for-sale post, so Bulletin without Messages leaves threads nobody can
-		// read; and Messages took the dock slot Contacts used to hold, so
-		// Messages without Bulletin is an inbox with the usual way of filling it
-		// missing. One switch keeps those two from disagreeing.
+		// These are not what a client should gate on. They say the feature
+		// exists on this backend, not that the person holding the phone may use
+		// it — that answer is per-user and comes from GET /me/beta, which folds
+		// these switches together with the person's grant so there is one
+		// answer rather than two that can disagree. They are published here for
+		// the admin panel and the website, which need to show whether a grant
+		// would do anything at all.
 		//
-		// Off is the default and is the dock the app shipped with before this
-		// work: Contacts back in its old slot, rendered on its own rather than
-		// as a segment inside Messages.
-		"community_features_enabled": strings.EqualFold(strings.TrimSpace(os.Getenv("COMMUNITY_FEATURES_ENABLED")), "true"),
+		// Off is the default for both, and off means off for everybody however
+		// many grants exist, which is what makes it a usable kill switch.
+		structs.BetaFeatureBulletin + "_enabled": betaFeatureEnvEnabled(structs.BetaFeatureBulletin),
+		structs.BetaFeatureChat + "_enabled":     betaFeatureEnvEnabled(structs.BetaFeatureChat),
 	}
 }
 

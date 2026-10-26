@@ -1064,32 +1064,52 @@ func withCapability(capability string, handlerFunc http.HandlerFunc, s *handlers
 // AddBulletinRoutes registers the neighborhood Bulletin, direct messages, and
 // their safety endpoints. Everything requires a signed-in user; the moderation
 // queue requires an admin.
+//
+// The Bulletin and the messages are each behind their own beta feature, and the
+// gate is here rather than only in the clients: a tab the app hides is still one
+// HTTP call away from being used. withBulletinBeta and withChatBeta wrap the
+// active-auth guard, so a caller must be signed in, accepted, AND hold the
+// grant — checked against the database on every request, so a revoke takes
+// effect immediately rather than at the next app launch.
+//
+// Deliberately not gated: profiles, user search, blocks and reports. Profiles
+// and search are used by surfaces outside the beta, and blocking or reporting
+// somebody must keep working for a person who has just been removed from the
+// beta — taking away the ability to report is the opposite of what a safety
+// control is for.
 func AddBulletinRoutes(r *chi.Mux, a *handlers.AppService) {
+	withBulletinBeta := func(handlerFunc http.HandlerFunc) http.HandlerFunc {
+		return withActiveAuth(a.RequireBetaFeature(structs.BetaFeatureBulletin, handlerFunc), a)
+	}
+	withChatBeta := func(handlerFunc http.HandlerFunc) http.HandlerFunc {
+		return withActiveAuth(a.RequireBetaFeature(structs.BetaFeatureChat, handlerFunc), a)
+	}
+
 	r.Get("/me/profile", withActiveAuth(a.GetMyProfile, a))
 	r.Put("/me/profile", withActiveAuth(a.PutMyProfile, a))
 	r.Get("/users/search", withActiveAuth(a.SearchUsers, a))
 	r.Get("/users/{userId}/public", withActiveAuth(a.GetPublicUserProfile, a))
 
-	r.Get("/bulletin/posts", withActiveAuth(a.GetBulletinFeed, a))
-	r.Post("/bulletin/posts", withActiveAuth(a.CreateBulletinPost, a))
-	r.Get("/bulletin/posts/mine", withActiveAuth(a.GetMyBulletinPosts, a))
-	r.Get("/bulletin/posts/{id}", withActiveAuth(a.GetBulletinPost, a))
-	r.Patch("/bulletin/posts/{id}", withActiveAuth(a.UpdateBulletinPost, a))
-	r.Delete("/bulletin/posts/{id}", withActiveAuth(a.DeleteBulletinPost, a))
-	r.Post("/bulletin/posts/{id}/photos", withActiveAuth(a.UploadBulletinPhoto, a))
-	r.Delete("/bulletin/posts/{id}/photos/{photoId}", withActiveAuth(a.DeleteBulletinPhoto, a))
-	r.Post("/bulletin/posts/{id}/feedback", withActiveAuth(a.PostBulletinFeedback, a))
-	r.Get("/bulletin/photos/{photoId}", withActiveAuth(a.GetBulletinPhoto, a))
+	r.Get("/bulletin/posts", withBulletinBeta(a.GetBulletinFeed))
+	r.Post("/bulletin/posts", withBulletinBeta(a.CreateBulletinPost))
+	r.Get("/bulletin/posts/mine", withBulletinBeta(a.GetMyBulletinPosts))
+	r.Get("/bulletin/posts/{id}", withBulletinBeta(a.GetBulletinPost))
+	r.Patch("/bulletin/posts/{id}", withBulletinBeta(a.UpdateBulletinPost))
+	r.Delete("/bulletin/posts/{id}", withBulletinBeta(a.DeleteBulletinPost))
+	r.Post("/bulletin/posts/{id}/photos", withBulletinBeta(a.UploadBulletinPhoto))
+	r.Delete("/bulletin/posts/{id}/photos/{photoId}", withBulletinBeta(a.DeleteBulletinPhoto))
+	r.Post("/bulletin/posts/{id}/feedback", withBulletinBeta(a.PostBulletinFeedback))
+	r.Get("/bulletin/photos/{photoId}", withBulletinBeta(a.GetBulletinPhoto))
 
-	r.Get("/me/conversations", withActiveAuth(a.ListMyConversations, a))
-	r.Get("/me/messaging-summary", withActiveAuth(a.GetMessagingSummary, a))
-	r.Post("/conversations", withActiveAuth(a.StartConversation, a))
-	r.Get("/conversations/{id}", withActiveAuth(a.GetConversation, a))
-	r.Get("/conversations/{id}/messages", withActiveAuth(a.GetConversationMessages, a))
-	r.Post("/conversations/{id}/messages", withActiveAuth(a.SendConversationMessage, a))
-	r.Post("/conversations/{id}/payments", withActiveAuth(a.AttachConversationPayment, a))
-	r.Post("/conversations/{id}/read", withActiveAuth(a.MarkConversationRead, a))
-	r.Post("/conversations/{id}/archive", withActiveAuth(a.ArchiveConversation, a))
+	r.Get("/me/conversations", withChatBeta(a.ListMyConversations))
+	r.Get("/me/messaging-summary", withChatBeta(a.GetMessagingSummary))
+	r.Post("/conversations", withChatBeta(a.StartConversation))
+	r.Get("/conversations/{id}", withChatBeta(a.GetConversation))
+	r.Get("/conversations/{id}/messages", withChatBeta(a.GetConversationMessages))
+	r.Post("/conversations/{id}/messages", withChatBeta(a.SendConversationMessage))
+	r.Post("/conversations/{id}/payments", withChatBeta(a.AttachConversationPayment))
+	r.Post("/conversations/{id}/read", withChatBeta(a.MarkConversationRead))
+	r.Post("/conversations/{id}/archive", withChatBeta(a.ArchiveConversation))
 
 	r.Get("/blocks", withActiveAuth(a.ListBlockedUsers, a))
 	r.Post("/blocks", withActiveAuth(a.BlockUser, a))
@@ -1098,6 +1118,15 @@ func AddBulletinRoutes(r *chi.Mux, a *handlers.AppService) {
 
 	r.Get("/admin/bulletin/reports", withAdmin(a.AdminListBulletinReports, a))
 	r.Post("/admin/bulletin/reports/resolve", withAdmin(a.AdminResolveBulletinReport, a))
+
+	// Which beta surfaces this client should show. Not itself gated — a client
+	// has to be able to ask what it is allowed before it knows what to hide.
+	r.Get("/me/beta", withActiveAuth(a.GetMyBetaFeatures, a))
+
+	r.Get("/admin/beta/features", withAdmin(a.AdminListBetaFeatures, a))
+	r.Get("/admin/beta/members", withAdmin(a.AdminListBetaFeatureMembers, a))
+	r.Post("/admin/beta/grant", withAdmin(a.AdminGrantBetaFeature, a))
+	r.Post("/admin/beta/revoke", withAdmin(a.AdminRevokeBetaFeature, a))
 }
 
 // AddNotificationRoutes mounts the notification screen.
