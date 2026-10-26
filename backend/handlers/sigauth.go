@@ -37,7 +37,8 @@ const sigAuthAccountABI = `[
 // VerifySigAuth validates a Citizen Wallet sigAuth parameter set and returns the
 // verified account address (lowercased) on success. It mirrors the CW SDK's
 // verifyConnectedHeaders + verifyAccountOwnership: it checks the expiry, rebuilds
-// the exact signed message, recovers the EIP-191 signer, and accepts the account
+// the exact signed message, recovers the EIP-191 signer of its keccak digest,
+// and accepts the account
 // if the signer IS the account (EOA) or, for a smart account, if EIP-1271
 // isValidSignature returns the magic value or the recovered signer is the
 // account's owner()/Safe isOwner (verified via the read RPC).
@@ -52,12 +53,14 @@ func VerifySigAuth(ctx context.Context, readRPCURL string, p SigAuthParams) (str
 		return "", err
 	}
 
-	message := generateConnectionMessage(account, strings.TrimSpace(p.Expiry), strings.TrimSpace(p.Redirect))
+	digest := connectionMessageDigest(account, strings.TrimSpace(p.Expiry), strings.TrimSpace(p.Redirect))
 	sig, err := decodeSignature(p.Signature)
 	if err != nil {
 		return "", err
 	}
-	textHash := accounts.TextHash([]byte(message))
+	// EIP-191 over the 32 digest bytes, not over the message text. See
+	// connectionMessageDigest for why, and what breaks if this is the text.
+	textHash := accounts.TextHash(digest)
 
 	recovered, recoveredOK := recoverSigner(textHash, sig)
 	if recoveredOK && recovered == account {
@@ -72,8 +75,27 @@ func VerifySigAuth(ctx context.Context, readRPCURL string, p SigAuthParams) (str
 	return "", fmt.Errorf("signature does not authorize account %s", account.Hex())
 }
 
-// generateConnectionMessage mirrors the CW SDK generateConnectionMessage
-// byte-for-byte so the reconstructed message hashes identically.
+// connectionMessageDigest is what the CW SDK actually signs.
+//
+// The SDK's generateConnectionMessage builds the text below and then returns
+// `id(message)` — its keccak256 — and createConnectedUrl /
+// generateConnectedHeaders sign `getBytes(message)`, the 32 raw bytes of that
+// digest. So the EIP-191 preimage is the digest, never the text.
+//
+// This was the text for a while, which meant the recovered signer was an
+// address unrelated to anybody: the EOA comparison failed, and so did all three
+// smart-account fallbacks, because EIP-1271 was asked about the wrong hash and
+// owner()/isOwner were compared against a junk address. Every sigAuth was
+// rejected and no migration recovery balance could be claimed. Verified against
+// the SDK's own test vectors, which fix both the digest and a signature's
+// expected signer.
+func connectionMessageDigest(account common.Address, expiry, redirect string) []byte {
+	return crypto.Keccak256([]byte(generateConnectionMessage(account, expiry, redirect)))
+}
+
+// generateConnectionMessage mirrors the CW SDK's message template byte-for-byte,
+// including the EIP-55 checksummed address its getAddress() produces. It is the
+// preimage of connectionMessageDigest, not the signed payload itself.
 func generateConnectionMessage(account common.Address, expiry, redirect string) string {
 	msg := fmt.Sprintf("Signature auth for %s with expiry %s", account.Hex(), expiry)
 	if redirect != "" {
