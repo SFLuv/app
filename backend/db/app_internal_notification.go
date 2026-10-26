@@ -56,6 +56,9 @@ type InternalAlert struct {
 	Fields         []structs.NotificationField
 	Payload        map[string]string
 	Urgent         bool
+	// SupportCategory is only set for support requests; empty everywhere else,
+	// where it reads as uncategorised and reaches the whole set.
+	SupportCategory string
 }
 
 // PostInternalAlert puts an alert on the board, or refreshes the one already
@@ -80,9 +83,9 @@ func (a *AppDB) PostInternalAlert(ctx context.Context, alert InternalAlert) (int
 	var created bool
 	err = a.db.QueryRow(ctx, `
 		INSERT INTO internal_notifications
-			(organization_id, notification_set, alert_key, kind, title, body, fields, payload, urgent)
+			(organization_id, notification_set, alert_key, kind, title, body, fields, payload, urgent, support_category)
 		VALUES
-			($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9)
+			($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9, NULLIF($10, ''))
 		ON CONFLICT (organization_id, alert_key) WHERE resolved_at IS NULL
 		DO UPDATE SET
 			title = EXCLUDED.title,
@@ -90,6 +93,7 @@ func (a *AppDB) PostInternalAlert(ctx context.Context, alert InternalAlert) (int
 			fields = EXCLUDED.fields,
 			payload = EXCLUDED.payload,
 			urgent = EXCLUDED.urgent,
+			support_category = EXCLUDED.support_category,
 			notification_set = EXCLUDED.notification_set,
 			kind = EXCLUDED.kind,
 			-- Only when something actually changed. A sweep that finds the same
@@ -108,6 +112,7 @@ func (a *AppDB) PostInternalAlert(ctx context.Context, alert InternalAlert) (int
 	`,
 		alert.OrganizationId, alert.Set, alert.AlertKey, alert.Kind,
 		alert.Title, alert.Body, string(fields), string(payload), alert.Urgent,
+		alert.SupportCategory,
 	).Scan(&id, &created)
 	if err != nil {
 		return 0, false, fmt.Errorf("error posting internal alert %s: %w", alert.AlertKey, err)
@@ -139,6 +144,30 @@ func (a *AppDB) DeliverInternalAlert(ctx context.Context, notificationId int64) 
 			AND s.notification_set = n.notification_set
 		WHERE n.id = $1
 		AND n.resolved_at IS NULL
+		-- Category routing, and the default is what makes this safe to deploy.
+		--
+		-- Three ways to pass: the alert has no category (every alert that is
+		-- not a support request, and any support request whose category we do
+		-- not recognise); this person has narrowed nothing, which means they
+		-- want all of them; or they have asked for this category specifically.
+		--
+		-- So nobody's delivery changes until they choose to narrow it. Reading
+		-- an empty subscription set as "none" instead would have stopped
+		-- support requests reaching every current recipient the moment this
+		-- shipped.
+		AND (
+			n.support_category IS NULL
+			OR NOT EXISTS (
+				SELECT 1 FROM support_category_subscriptions c
+				WHERE c.organization_id = n.organization_id AND c.user_id = s.user_id
+			)
+			OR EXISTS (
+				SELECT 1 FROM support_category_subscriptions c
+				WHERE c.organization_id = n.organization_id
+				AND c.user_id = s.user_id
+				AND c.category = n.support_category
+			)
+		)
 		ON CONFLICT (internal_notification_id, user_id) WHERE internal_notification_id IS NOT NULL
 		DO NOTHING
 		RETURNING user_id;
@@ -824,4 +853,73 @@ func (a *AppDB) AcknowledgeInternalAlert(
 	ctx context.Context, notificationId int64, userId string, outcome string,
 ) (bool, error) {
 	return a.ResolveInternalAlertById(ctx, notificationId, structs.ResolutionAcked, userId, outcome)
+}
+
+// GetSupportCategorySubscriptions is each member's category narrowing, for the
+// settings screen. A member absent from the map has narrowed nothing, which
+// means every category.
+func (a *AppDB) GetSupportCategorySubscriptions(ctx context.Context, orgId int64) (map[string][]string, error) {
+	rows, err := a.db.Query(ctx, `
+		SELECT user_id, category
+		FROM support_category_subscriptions
+		WHERE organization_id = $1
+		ORDER BY user_id, category;
+	`, orgId)
+	if err != nil {
+		return nil, fmt.Errorf("error loading support category subscriptions for org %d: %w", orgId, err)
+	}
+	defer rows.Close()
+
+	out := map[string][]string{}
+	for rows.Next() {
+		var userId, category string
+		if err := rows.Scan(&userId, &category); err != nil {
+			return nil, fmt.Errorf("error scanning support category subscription: %w", err)
+		}
+		out[userId] = append(out[userId], category)
+	}
+	return out, rows.Err()
+}
+
+// SetSupportCategorySubscriptions replaces one member's narrowing.
+//
+// An empty list removes every row, which restores "all categories" rather than
+// meaning "none" — the same rule the delivery query implements, and the reason
+// it is safe for somebody to clear their selection by unticking everything.
+// Unknown categories are dropped rather than refused, so a stale client cannot
+// write a routing key nothing matches.
+func (a *AppDB) SetSupportCategorySubscriptions(ctx context.Context, orgId int64, userId string, categories []string) error {
+	tx, err := a.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("error starting support category update: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM support_category_subscriptions
+		WHERE organization_id = $1 AND user_id = $2;
+	`, orgId, userId); err != nil {
+		return fmt.Errorf("error clearing support categories for %s: %w", userId, err)
+	}
+
+	seen := map[string]struct{}{}
+	for _, category := range categories {
+		category = structs.SupportCategoryOrEmpty(category)
+		if category == "" {
+			continue
+		}
+		if _, dup := seen[category]; dup {
+			continue
+		}
+		seen[category] = struct{}{}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO support_category_subscriptions(organization_id, user_id, category)
+			VALUES ($1, $2, $3)
+			ON CONFLICT DO NOTHING;
+		`, orgId, userId, category); err != nil {
+			return fmt.Errorf("error adding support category %s for %s: %w", category, userId, err)
+		}
+	}
+
+	return tx.Commit(ctx)
 }

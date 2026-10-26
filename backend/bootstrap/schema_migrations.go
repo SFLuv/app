@@ -2740,6 +2740,13 @@ var schemaMigrations = []SchemaMigration{
 			return migrateBetaFeatures(ctx, pools)
 		},
 	},
+	{
+		Version:     "1.70",
+		Description: "route support requests by category, where subscribing to none means all of them",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			return migrateSupportCategories(ctx, pools)
+		},
+	},
 }
 
 // migrateW9WarningTiers replaces one hard gate with an escalating sequence.

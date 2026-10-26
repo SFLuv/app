@@ -99,6 +99,10 @@ type Alert struct {
 	// Urgent sorts it to the top and is for things that are actively broken
 	// rather than things that need a decision.
 	Urgent bool
+	// SupportCategory narrows who receives this, and is only meaningful for
+	// support requests. Empty means uncategorised, which reaches everybody on
+	// the set — the behaviour before categories existed.
+	SupportCategory string
 }
 
 // Post puts an alert on the board and delivers it to the set's subscribers.
@@ -129,15 +133,16 @@ func (n *NotificationService) Post(ctx context.Context, alert Alert) error {
 	}
 
 	id, created, err := n.db.PostInternalAlert(ctx, db.InternalAlert{
-		OrganizationId: orgId,
-		Set:            alert.Set,
-		AlertKey:       alert.Key,
-		Kind:           alert.Kind,
-		Title:          alert.Title,
-		Body:           alert.Body,
-		Fields:         alert.Fields,
-		Payload:        alert.Payload,
-		Urgent:         alert.Urgent,
+		OrganizationId:  orgId,
+		Set:             alert.Set,
+		AlertKey:        alert.Key,
+		Kind:            alert.Kind,
+		Title:           alert.Title,
+		Body:            alert.Body,
+		Fields:          alert.Fields,
+		Payload:         alert.Payload,
+		Urgent:          alert.Urgent,
+		SupportCategory: alert.SupportCategory,
 	})
 	if err != nil {
 		return err

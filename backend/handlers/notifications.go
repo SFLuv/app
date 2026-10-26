@@ -323,9 +323,10 @@ func (a *AppService) GetOrganizationNotificationSettings(w http.ResponseWriter, 
 		// sets later, and until then the honest answer is that there are none
 		// rather than that the caller is not allowed to ask.
 		writeJSON(w, http.StatusOK, structs.OrganizationNotificationSettings{
-			Catalog:    []structs.NotificationSetDefinition{},
-			Recipients: []structs.OrganizationNotificationRecipient{},
-			LiveCounts: map[string]int{},
+			Catalog:                []structs.NotificationSetDefinition{},
+			Recipients:             []structs.OrganizationNotificationRecipient{},
+			LiveCounts:             map[string]int{},
+			SupportCategoryCatalog: []structs.SupportCategoryDefinition{},
 		})
 		return
 	}
@@ -348,23 +349,38 @@ func (a *AppService) GetOrganizationNotificationSettings(w http.ResponseWriter, 
 		counts = map[string]int{}
 	}
 
+	categories, err := a.db.GetSupportCategorySubscriptions(r.Context(), org.Id)
+	if err != nil {
+		a.logger.Logf("error loading support category subscriptions for org %d: %s", org.Id, err)
+		// Not fatal. An unreadable narrowing reads as "nobody has narrowed
+		// anything", which is the delivery default, so the screen shows the
+		// widest truthful answer rather than failing to open.
+		categories = map[string][]string{}
+	}
+
 	out := structs.OrganizationNotificationSettings{
-		Catalog:    structs.NotificationSetCatalog(),
-		Recipients: make([]structs.OrganizationNotificationRecipient, 0, len(members)),
-		CanEdit:    role == structs.OrgRoleAdmin || role == structs.OrgRoleSuperadmin,
-		LiveCounts: counts,
+		SupportCategoryCatalog: structs.SupportCategoryCatalog(),
+		Catalog:                structs.NotificationSetCatalog(),
+		Recipients:             make([]structs.OrganizationNotificationRecipient, 0, len(members)),
+		CanEdit:                role == structs.OrgRoleAdmin || role == structs.OrgRoleSuperadmin,
+		LiveCounts:             counts,
 	}
 	for _, member := range members {
 		sets := subscriptions[member.UserId]
 		if sets == nil {
 			sets = []string{}
 		}
+		memberCategories := categories[member.UserId]
+		if memberCategories == nil {
+			memberCategories = []string{}
+		}
 		out.Recipients = append(out.Recipients, structs.OrganizationNotificationRecipient{
-			UserId: member.UserId,
-			Name:   member.ContactName,
-			Email:  member.ContactEmail,
-			Role:   member.Role,
-			Sets:   sets,
+			UserId:            member.UserId,
+			Name:              member.ContactName,
+			Email:             member.ContactEmail,
+			Role:              member.Role,
+			Sets:              sets,
+			SupportCategories: memberCategories,
 		})
 	}
 
@@ -416,6 +432,23 @@ func (a *AppService) SetOrganizationNotificationSets(w http.ResponseWriter, r *h
 		a.logger.Logf("error saving notification subscriptions: %s", err)
 		http.Error(w, "could not save that", http.StatusInternalServerError)
 		return
+	}
+
+	// Nil leaves the narrowing alone, so a client that predates categories can
+	// still save sets without silently widening somebody back to everything.
+	// An empty slice clears it, which is how a person un-narrows.
+	if req.SupportCategories != nil {
+		for _, category := range req.SupportCategories {
+			if !structs.IsSupportCategory(strings.ToLower(strings.TrimSpace(category))) {
+				http.Error(w, "unknown support category: "+category, http.StatusBadRequest)
+				return
+			}
+		}
+		if err := a.db.SetSupportCategorySubscriptions(r.Context(), org.Id, req.UserId, req.SupportCategories); err != nil {
+			a.logger.Logf("error saving support categories: %s", err)
+			http.Error(w, "could not save that", http.StatusInternalServerError)
+			return
+		}
 	}
 
 	w.WriteHeader(http.StatusOK)

@@ -43,17 +43,18 @@ func (a *AppDB) CreateSupportRequest(ctx context.Context, sub structs.SupportReq
 
 		out := &structs.SupportRequest{}
 		err = a.db.QueryRow(ctx, `
-			INSERT INTO support_requests (reference, email, name, subject, message, source, status)
-			VALUES ($1, $2, $3, $4, $5, 'website', $6)
-			RETURNING id, reference, email, name, subject, message, source, status, created_at;
+			INSERT INTO support_requests (reference, email, name, subject, category, message, source, status)
+			VALUES ($1, $2, $3, $4, NULLIF($5, ''), $6, 'website', $7)
+			RETURNING id, reference, email, name, subject, COALESCE(category, ''), message, source, status, created_at;
 		`, reference,
 			strings.TrimSpace(sub.Email),
 			strings.TrimSpace(sub.Name),
 			strings.TrimSpace(sub.Subject),
+			strings.TrimSpace(sub.SubjectSlug),
 			strings.TrimSpace(sub.Message),
 			structs.SupportRequestNew,
 		).Scan(&out.Id, &out.Reference, &out.Email, &out.Name, &out.Subject,
-			&out.Message, &out.Source, &out.Status, &out.CreatedAt)
+			&out.Category, &out.Message, &out.Source, &out.Status, &out.CreatedAt)
 		if err == nil {
 			return out, nil
 		}
@@ -69,7 +70,7 @@ func (a *AppDB) CreateSupportRequest(ctx context.Context, sub structs.SupportReq
 // or only open ones.
 func (a *AppDB) ListSupportRequests(ctx context.Context, status string) ([]*structs.SupportRequest, error) {
 	query := `
-		SELECT id, reference, email, name, subject, message, source, status,
+		SELECT id, reference, email, name, subject, COALESCE(category, ''), message, source, status,
 			created_at, archived_at, COALESCE(archived_by, '')
 		FROM support_requests
 	`
@@ -90,7 +91,7 @@ func (a *AppDB) ListSupportRequests(ctx context.Context, status string) ([]*stru
 	for rows.Next() {
 		r := &structs.SupportRequest{}
 		if err := rows.Scan(&r.Id, &r.Reference, &r.Email, &r.Name, &r.Subject,
-			&r.Message, &r.Source, &r.Status, &r.CreatedAt, &r.ArchivedAt, &r.ArchivedBy); err != nil {
+			&r.Category, &r.Message, &r.Source, &r.Status, &r.CreatedAt, &r.ArchivedAt, &r.ArchivedBy); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
@@ -102,12 +103,12 @@ func (a *AppDB) ListSupportRequests(ctx context.Context, status string) ([]*stru
 func (a *AppDB) GetSupportRequest(ctx context.Context, id int64) (*structs.SupportRequest, error) {
 	r := &structs.SupportRequest{}
 	err := a.db.QueryRow(ctx, `
-		SELECT id, reference, email, name, subject, message, source, status,
+		SELECT id, reference, email, name, subject, COALESCE(category, ''), message, source, status,
 			created_at, archived_at, COALESCE(archived_by, '')
 		FROM support_requests
 		WHERE id = $1;
 	`, id).Scan(&r.Id, &r.Reference, &r.Email, &r.Name, &r.Subject,
-		&r.Message, &r.Source, &r.Status, &r.CreatedAt, &r.ArchivedAt, &r.ArchivedBy)
+		&r.Category, &r.Message, &r.Source, &r.Status, &r.CreatedAt, &r.ArchivedAt, &r.ArchivedBy)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}

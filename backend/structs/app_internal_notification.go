@@ -233,6 +233,13 @@ type OrganizationNotificationRecipient struct {
 	Email  string   `json:"email,omitempty"`
 	Role   string   `json:"role"`
 	Sets   []string `json:"sets"`
+	// SupportCategories narrows which support requests reach this person.
+	//
+	// Empty means every category, which is what somebody on the support set has
+	// always received — so a recipient who has never touched this keeps getting
+	// everything. Only meaningful alongside the support set; a person not on
+	// that set receives none of it whatever is listed here.
+	SupportCategories []string `json:"support_categories"`
 }
 
 // OrganizationNotificationSettings is the settings payload.
@@ -244,10 +251,19 @@ type OrganizationNotificationSettings struct {
 	// beside the set so somebody deciding whether to subscribe can see what
 	// they would be signing up for.
 	LiveCounts map[string]int `json:"live_counts"`
+	// SupportCategoryCatalog is the categories a support recipient can narrow
+	// to. Sent with the settings so the screen does not hard-code a list that
+	// the website and the backend both own.
+	SupportCategoryCatalog []SupportCategoryDefinition `json:"support_category_catalog"`
 }
 
 // SetOrganizationNotificationSetsRequest replaces one member's subscriptions.
 type SetOrganizationNotificationSetsRequest struct {
 	UserId string   `json:"user_id"`
 	Sets   []string `json:"sets"`
+	// SupportCategories replaces the member's category narrowing. Nil leaves it
+	// alone, so a caller that predates categories can still set sets without
+	// silently widening somebody back to everything; an empty slice clears it,
+	// which means every category.
+	SupportCategories []string `json:"support_categories"`
 }

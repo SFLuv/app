@@ -98,6 +98,9 @@ func (a *AppService) CreateSupportRequest(w http.ResponseWriter, r *http.Request
 	sub.Name = truncate(strings.TrimSpace(sub.Name), supportMaxName)
 	sub.Subject = truncate(strings.TrimSpace(sub.Subject), supportMaxSubject)
 	sub.Message = truncate(strings.TrimSpace(sub.Message), supportMaxMessage)
+	// Normalized against our own catalog, so an unrecognised slug becomes no
+	// category rather than a routing key nothing matches.
+	sub.SubjectSlug = structs.SupportCategoryOrEmpty(sub.SubjectSlug)
 
 	// net/mail, matching how the rest of the backend validates an address, so
 	// the form accepts exactly what the mailer will accept.
@@ -242,11 +245,16 @@ func (a *AppService) postSupportRequestAlert(ctx context.Context, request *struc
 			{Label: "From", Value: from},
 			{Label: "Reference", Value: request.Reference},
 		},
+		// Narrows delivery to the people who asked for this category, or
+		// everybody if nobody has narrowed anything. Empty for a request whose
+		// category we could not read, which also reaches everybody.
+		SupportCategory: request.Category,
 		Payload: map[string]string{
 			"id":        strconv.FormatInt(request.Id, 10),
 			"reference": request.Reference,
 			"email":     request.Email,
 			"subject":   subject,
+			"category":  request.Category,
 			"message":   request.Message,
 		},
 	}); err != nil {
