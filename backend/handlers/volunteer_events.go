@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"github.com/SFLuv/app/backend/db"
 	"github.com/SFLuv/app/backend/structs"
 	"github.com/SFLuv/app/backend/utils"
+	"github.com/SFLuv/app/backend/v4s"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -37,16 +39,15 @@ func publicURL(path string) string {
 // event to "SFLuv and SFLuv". The organization is real and the membership is
 // deliberate; what is wrong is treating it as a third party.
 //
-// Matched on the normalized name because there is no flag for it. That is the
-// weak part: renaming the organization would silently restore the doubled
-// branding. A boolean column on organizations would be the durable fix, and is
-// worth doing the next time that table is migrated.
+// This used to match the normalized name, with a note that a column would be
+// the durable fix. Migration 1.65 added `organizations.is_house` and backfilled
+// it from that same name match, so the answer is unchanged and a rename can no
+// longer move an event's attribution.
 func isHouseOrganization(org *structs.Organization) bool {
 	if org == nil {
 		return false
 	}
-	name := strings.ToLower(strings.TrimSpace(org.Name))
-	return name == "sfluv"
+	return org.IsHouse
 }
 
 func sfluvOrganizerLogoURL() string {
@@ -259,6 +260,13 @@ type volunteerEventContext struct {
 	signups       map[string]db.VolunteerViewerSignup
 	redeemed      map[string]bool
 	authenticated bool
+	// v4sDeadline bounds how long one request may spend waiting on partner
+	// sites in total. A cold fetch is roughly a second; a listing with several
+	// unrelated partners could otherwise stack those up one per event. Past the
+	// deadline the remaining events use whatever is cached and the refresh
+	// happens behind the response, so the page stays fast and the counts catch
+	// up on the next view.
+	v4sDeadline time.Time
 }
 
 func (s *BotService) mapVolunteerEvent(row *db.VolunteerEventRow, ctx *volunteerEventContext) *structs.VolunteerEvent {
@@ -290,8 +298,10 @@ func (s *BotService) mapVolunteerEvent(row *db.VolunteerEventRow, ctx *volunteer
 		UpdatedAt:         rfc3339(row.UpdatedAt),
 	}
 
-	// Availability is only knowable for internal signups; for external events
-	// the organizer owns the list and we must not imply a spot count.
+	// Availability is knowable for internal signups, and for external ones only
+	// where the partner publishes it — applyV4SAvailability fills those in
+	// below from a Volunteers for Salesforce listing. For every other external
+	// event the organizer owns the list and we must not imply a spot count.
 	if row.SignupMode == structs.SignupModeInternal {
 		count := row.SignupCount
 		remaining := row.MaxParticipants - count
@@ -328,6 +338,9 @@ func (s *BotService) mapVolunteerEvent(row *db.VolunteerEventRow, ctx *volunteer
 			}
 		}
 	}
+
+	// Live availability from a partner's V4S site, when their signup link is one.
+	s.applyV4SAvailability(event, row, ctx)
 
 	for _, photo := range ctx.photos[row.Id] {
 		event.CoverPhotos = append(event.CoverPhotos, structs.VolunteerEventPhoto{
@@ -372,6 +385,7 @@ func (s *BotService) buildVolunteerEventContext(r *http.Request, rows []*db.Volu
 		signups:       map[string]db.VolunteerViewerSignup{},
 		redeemed:      map[string]bool{},
 	}
+	ctx.v4sDeadline = time.Now().Add(v4sRequestBudget)
 	if len(rows) == 0 {
 		return ctx
 	}
@@ -742,4 +756,131 @@ func decodeDataURL(value string) ([]byte, string, bool) {
 	}
 
 	return data, contentType, true
+}
+
+// ── Partner availability (Volunteers for Salesforce) ─────────────────────────
+
+// v4sRequestBudget is how long one request may spend in total waiting on
+// partner sites before it stops waiting and serves what it has.
+const v4sRequestBudget = 2500 * time.Millisecond
+
+// applyV4SAvailability fills in live spot counts for an event whose external
+// signup link points at a partner's Volunteers for Salesforce job.
+//
+// Until now an external event could say nothing about availability — the
+// comment on buildSignupInfo called it unknowable, because the partner owns the
+// list. For V4S partners it is knowable: their public job listing states, per
+// shift, how many places are confirmed and how many remain. Reading it lets a
+// volunteer see "3 spots left" on sfluv.org instead of finding out only after
+// clicking through.
+//
+// The read is pull-based, not polled. Nothing fetches on a timer; a request for
+// an event triggers at most one fetch, and only when the cached snapshot has
+// aged past a minute. A stale snapshot is served while the refresh runs behind
+// the request, so a partner's slow site never slows our page.
+//
+// Anything that is not a V4S link, or any shift we cannot match to this
+// occurrence, leaves the event exactly as it was.
+func (s *BotService) applyV4SAvailability(
+	event *structs.VolunteerEvent,
+	row *db.VolunteerEventRow,
+	reqCtx *volunteerEventContext,
+) {
+	// Off unless the integrations file turned it on. A nil client is the
+	// disabled state, so nothing below runs — no parsing, no requests.
+	if s.v4s == nil || event == nil || row == nil || reqCtx == nil {
+		return
+	}
+	if row.SignupMode != structs.SignupModeExternal || row.SignupURL == "" {
+		return
+	}
+
+	// Whose event this is decides whether we may read it at all. A V4S link on
+	// an organization with no integration is left alone: being able to parse a
+	// link is not a reason to go and fetch somebody's website.
+	if row.OrganizationId == nil {
+		return
+	}
+	org := reqCtx.organizations[*row.OrganizationId]
+	if org == nil {
+		return
+	}
+	integration, ok := s.v4sConfig.For(org.Name, org.IsHouse)
+	if !ok {
+		return
+	}
+
+	source, parsed := v4s.ParseSource(row.SignupURL)
+	if !parsed {
+		return
+	}
+	// The link must point at the site this organization was configured with.
+	// Pairing the two means a mistyped or hostile link on an otherwise-allowed
+	// organization's event resolves to nothing rather than to another host.
+	if !integration.AllowsSite(source.Site) {
+		return
+	}
+
+	// Within the request's budget we may wait for a cold fetch; past it we take
+	// only what is already cached, so one slow partner cannot hold up a page.
+	var snapshot v4s.Snapshot
+	var err error
+	if reqCtx != nil && !reqCtx.v4sDeadline.IsZero() && time.Now().After(reqCtx.v4sDeadline) {
+		snapshot, _ = s.v4s.Cached(source)
+	} else {
+		fetchCtx, cancel := context.WithTimeout(context.Background(), v4sRequestBudget)
+		snapshot, err = s.v4s.GetWithTTL(fetchCtx, source, integration.TTL())
+		cancel()
+	}
+	if err != nil && len(snapshot.Shifts) == 0 {
+		// No numbers is the correct outcome here, not zero: a partner site that
+		// is down must not render as "no spots left".
+		return
+	}
+
+	// Match on the organization's local date. V4S anchors a recurring shift to
+	// local time, so the same morning shift is an hour apart in UTC either side
+	// of a daylight-saving change and a UTC-date match would miss half the year.
+	loc := time.UTC
+	if row.Timezone != "" {
+		if parsed, lerr := time.LoadLocation(row.Timezone); lerr == nil {
+			loc = parsed
+		}
+	}
+	start := time.Unix(row.StartAt, 0)
+
+	// Matches on local date, and on time of day only when the day holds more
+	// than one shift — a job with a morning and an afternoon sitting. An
+	// occurrence that cannot be told apart from its neighbour is left without
+	// availability rather than given someone else's numbers.
+	shift, found := v4s.MatchOccurrence(snapshot.Shifts, start, loc)
+	if !found {
+		return
+	}
+
+	confirmed := shift.Confirmed
+	remaining := shift.Available
+	event.SignupCount = &confirmed
+	event.SpotsRemaining = &remaining
+	// The partner's capacity, not ours. For an external event our own
+	// max_participants describes nothing — we do not hold the list — so the
+	// honest total to show beside "spots left" is the one their page states.
+	if capacity := shift.Capacity(); capacity > 0 {
+		event.MaxParticipants = capacity
+	}
+
+	// Deep link this occurrence to its own shift rather than the job, so a
+	// volunteer lands on the day they were looking at. This is also what makes
+	// a recurring event work: our series maps to their job, our occurrence to
+	// the shift on that date, with no need for the partner to expose their
+	// recurrence schedule.
+	if shift.Id != "" {
+		deep := v4s.ShiftSignupURL(source.Site, source.JobId, shift.Id)
+		event.Signup.URL = &deep
+	}
+	if shift.Full() {
+		event.Signup.Open = false
+		reason := structs.SignupClosedFull
+		event.Signup.ClosedReason = &reason
+	}
 }

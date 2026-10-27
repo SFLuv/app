@@ -608,6 +608,17 @@ func (a *AppService) RequestProposerStatus(w http.ResponseWriter, r *http.Reques
 </table>`, utils.EscapeEmailHTML(proposer.UserId), utils.EscapeEmailHTML(proposer.Organization), utils.EscapeEmailHTML(proposer.Email)),
 	)
 
+	a.postRoleRequestAlert(r.Context(), roleRequestAlert{
+		Role:    "proposer",
+		Subject: proposer.UserId,
+		Label:   strings.TrimSpace(proposer.Organization),
+		Fields: []structs.NotificationField{
+			{Label: "Organization", Value: proposer.Organization},
+			{Label: "Email", Value: proposer.Email},
+			{Label: "User", Value: proposer.UserId},
+		},
+	})
+
 	w.WriteHeader(http.StatusCreated)
 	_ = json.NewEncoder(w).Encode(proposer)
 }
@@ -648,6 +659,8 @@ func (a *AppService) UpdateProposer(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
+
+	a.resolveRoleRequestDecision(r.Context(), "proposer", req.UserId, req.Status)
 
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(proposer)
@@ -716,6 +729,17 @@ func (a *AppService) RequestImproverStatus(w http.ResponseWriter, r *http.Reques
 </table>`, utils.EscapeEmailHTML(improver.UserId), utils.EscapeEmailHTML(improver.FirstName), utils.EscapeEmailHTML(improver.LastName), utils.EscapeEmailHTML(improver.Email)),
 	)
 
+	a.postRoleRequestAlert(r.Context(), roleRequestAlert{
+		Role:    "improver",
+		Subject: improver.UserId,
+		Label:   strings.TrimSpace(improver.FirstName + " " + improver.LastName),
+		Fields: []structs.NotificationField{
+			{Label: "Name", Value: strings.TrimSpace(improver.FirstName + " " + improver.LastName)},
+			{Label: "Email", Value: improver.Email},
+			{Label: "User", Value: improver.UserId},
+		},
+	})
+
 	w.WriteHeader(http.StatusCreated)
 	_ = json.NewEncoder(w).Encode(improver)
 }
@@ -756,6 +780,11 @@ func (a *AppService) UpdateImprover(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
+
+	// The decision was made here, so the alert stops asking everyone else.
+	// Without this the panel and the phones disagree: the request is settled
+	// and the notification is still a question.
+	a.resolveRoleRequestDecision(r.Context(), "improver", req.UserId, req.Status)
 
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(improver)
@@ -918,48 +947,6 @@ func (a *AppService) UpdateSupervisor(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		a.logger.Logf("error updating supervisor %s: %s", req.UserId, err.Error())
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(supervisor)
-}
-
-func (a *AppService) UpdateSupervisorPrimaryRewardsAccount(w http.ResponseWriter, r *http.Request) {
-	userDid := utils.GetDid(r)
-	if userDid == nil {
-		w.WriteHeader(http.StatusForbidden)
-		return
-	}
-
-	defer r.Body.Close()
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		a.logger.Logf("error reading supervisor primary rewards account body for user %s: %s", *userDid, err.Error())
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
-	req := structs.PrimaryRewardsAccountUpdateRequest{}
-	if err := json.Unmarshal(body, &req); err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		return
-	}
-
-	supervisor, err := a.db.UpdateSupervisorPrimaryRewardsAccount(r.Context(), *userDid, req.PrimaryRewardsAccount)
-	if err != nil {
-		errMsg := err.Error()
-		if strings.Contains(errMsg, "required") || strings.Contains(errMsg, "valid ethereum address") || strings.Contains(errMsg, "approved") {
-			w.WriteHeader(http.StatusBadRequest)
-			w.Write([]byte(errMsg))
-			return
-		}
-		if strings.Contains(errMsg, "not found") {
-			w.WriteHeader(http.StatusNotFound)
-			return
-		}
-		a.logger.Logf("error updating supervisor primary rewards account for user %s: %s", *userDid, errMsg)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}

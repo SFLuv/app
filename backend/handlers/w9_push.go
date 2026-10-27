@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/SFLuv/app/backend/db"
+	"github.com/SFLuv/app/backend/structs"
 )
 
 // pushW9Notice sends one W9 alert to every device a person has registered.
@@ -18,6 +19,20 @@ import (
 // role, because owing a tax form is not tied to being a volunteer or an
 // improver.
 func (a *AppService) pushW9Notice(ctx context.Context, userID string, kind string, title string, body string) bool {
+	// A history row for the kinds that are messages, and none for the kinds
+	// that are conditions.
+	//
+	// The split is exactly NotificationAcksOnView, and for one reason: a kind
+	// that does not ack on view is one the feed already derives from live state
+	// and keeps on screen until it is answered. Writing a row for it too would
+	// put the same thing in the list twice — once as the standing "complete
+	// your W-9" entry and once as the push that said so. The release
+	// confirmation has no standing entry (the condition it reports is over by
+	// definition), so it would be lost entirely without this.
+	if structs.NotificationAcksOnView(kind) {
+		a.recordNotification(ctx, userID, kind, title, body, map[string]string{"type": kind})
+	}
+
 	subscriptions, err := a.db.GetMobilePushSubscriptionsByUser(ctx, userID)
 	if err != nil {
 		return false

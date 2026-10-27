@@ -155,7 +155,11 @@ func (a *AppService) InviteOrganizationMember(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	created, sent, err := a.createAndSendOrgInvite(r.Context(), org, email, userDid)
+	created, sent, err := a.createAndSendOrgInvite(r.Context(), org, email, userDid, db.OrganizationInviteGrant{
+		Role:         req.Role,
+		Mode:         req.PermissionsMode,
+		Capabilities: req.Capabilities,
+	})
 	if err != nil {
 		a.logger.Logf("error creating organization invite for org %d: %s", org.Id, err)
 		w.WriteHeader(http.StatusInternalServerError)
@@ -178,9 +182,9 @@ func (a *AppService) InviteOrganizationMember(w http.ResponseWriter, r *http.Req
 // reports whether the email went out, kept separate because an invite that
 // exists and was not delivered is a different problem from one that was never
 // created — the first is recoverable by resending, the second is not.
-func (a *AppService) createAndSendOrgInvite(ctx context.Context, org *structs.Organization, email string, invitedBy string) (created bool, sent bool, err error) {
+func (a *AppService) createAndSendOrgInvite(ctx context.Context, org *structs.Organization, email string, invitedBy string, grant db.OrganizationInviteGrant) (created bool, sent bool, err error) {
 	token, hash := orgInviteToken()
-	if err := a.db.CreateOrganizationInvite(ctx, org.Id, email, hash, invitedBy, orgInviteTTL); err != nil {
+	if err := a.db.CreateOrganizationInvite(ctx, org.Id, email, hash, invitedBy, orgInviteTTL, grant); err != nil {
 		return false, false, err
 	}
 

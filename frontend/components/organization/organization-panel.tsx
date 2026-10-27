@@ -17,19 +17,13 @@ import { LogoCropModal } from "./logo-crop-modal"
 import { formatCredentialLabel } from "@/lib/credential-labels"
 import type { OrganizationView, OrgRoleType } from "@/types/organization"
 import { MemberPermissions } from "@/components/organization/member-permissions"
+import { NotificationSets } from "@/components/organization/notification-sets"
 
 const roleLabels: Record<OrgRoleType, string> = {
   affiliate: "Affiliate",
   proposer: "Proposer",
   supervisor: "Supervisor",
   issuer: "Issuer",
-}
-
-const cycleLabels: Record<string, string> = {
-  daily: "Daily",
-  weekly: "Weekly",
-  monthly: "Monthly",
-  one_time: "One-time",
 }
 
 // Roles whose "settings" are just a link to their working area.
@@ -315,26 +309,6 @@ export function OrganizationPanel() {
         </Card>
       )}
 
-      {/* Allocations (visible to all members) */}
-      {view.allocations.length > 0 && (
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-base text-black dark:text-white">Allocations</CardTitle>
-            <CardDescription>Shared organization spending budgets by cycle.</CardDescription>
-          </CardHeader>
-          <CardContent className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            {view.allocations.map((al) => (
-              <div key={al.id} className="rounded-lg border bg-muted/20 p-3">
-                <p className="text-xs uppercase tracking-wide text-muted-foreground">{cycleLabels[al.cycle] ?? al.cycle}</p>
-                <p className="mt-1 text-lg font-semibold">
-                  {al.balance.toLocaleString()} <span className="text-xs font-normal text-muted-foreground">/ {al.allocation.toLocaleString()}</span>
-                </p>
-              </div>
-            ))}
-          </CardContent>
-        </Card>
-      )}
-
       {/* Role request */}
       {requestableRoles.length > 0 && (
         <Card>
@@ -452,6 +426,7 @@ export function OrganizationPanel() {
         answering the next question an admin has after "who is here".
       */}
       <MemberPermissions members={view.members} canManage={isAdmin} />
+      <NotificationSets members={view.members} canManage={isAdmin} />
 
       <LogoCropModal open={cropOpen} onOpenChange={setCropOpen} src={cropSrc} onCropped={(dataUrl) => void saveLogo(dataUrl)} />
 

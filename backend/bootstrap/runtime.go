@@ -379,12 +379,37 @@ func NewServerHandler(ctx context.Context, pools *DBPools, appLogger *logger.Log
 	minter := handlers.NewMinterService(appDb, appLogger, clientConfig)
 
 	s := handlers.NewBotService(botDb, appDb, botClient, payouts, activeChainID, clientConfig.ReadRPCURL())
+	// Report the partner-availability integration's state at boot, so whether
+	// it is on is visible in the log rather than only in the environment.
+	s.LogV4SConfig(appLogger)
+
+	// Internal organization alerts. Built before the things that raise them,
+	// since they take it as a dependency.
+	notificationSvc := handlers.NewNotificationService(appDb, appLogger)
+
+	// Keep the protocol's operational accounts in gas from the faucet, and
+	// email when the faucet itself needs a person. Reads balances and alerts
+	// even when automatic transfers are switched off.
+	fundingSvc := handlers.NewFundingService(botClient, appLogger, notificationSvc)
+	s.SetFundingService(fundingSvc)
 	a := handlers.NewAppService(appDb, appLogger, payouts, w9Provider, clientConfig)
 	a.SetBotService(s)
 	s.SetAppService(a)
 	payouts.SetAppService(a)
 	a.SetRedeemerService(redeemer)
 	a.SetMinterService(minter)
+
+	// The alert layer and the app service each hold the other: alerts are
+	// delivered through the app service's push fan-out, and the app service
+	// posts alerts. Wired here rather than in a constructor because neither
+	// can be built first.
+	a.SetNotificationService(notificationSvc)
+	notificationSvc.SetPusher(a.PushToUser)
+
+	// The health poller alerts the dev set, and its acknowledge button asks the
+	// poller whether the outage is actually over.
+	uptimeSvc := handlers.NewUptimeService(notificationSvc, appLogger)
+	a.SetUptimeService(uptimeSvc)
 
 	// The backend's own Safes. Constructed even when it cannot act: the panel
 	// has to be able to say why, and LogConfig below says it at boot.
@@ -397,6 +422,13 @@ func NewServerHandler(ctx context.Context, pools *DBPools, appLogger *logger.Log
 	// behaviour it had before any of this existed.
 	botClient.SetSenderResolver(protocolSvc.FaucetSenderResolver())
 	botClient.SetTxSenderResolver(protocolSvc.TxSenderResolver())
+
+	// Which balances are worth alerting on depends on whether the protocol's
+	// own transactions are sponsored. Once they are, the paymaster is the only
+	// CELO balance anybody has to act on, and a protocol account sitting at
+	// zero gas is working as designed rather than about to fail. Wired here
+	// because the funding service is built before this one.
+	fundingSvc.SetProtocolState(protocolSvc.FundingProtocolState())
 
 	// Whether the Safe is the faucet, decided here and not in the boot
 	// goroutine below.
@@ -496,6 +528,20 @@ func NewServerHandler(ctx context.Context, pools *DBPools, appLogger *logger.Log
 		// so it stalled whenever nobody hit the right endpoint. Running it on a
 		// timer makes it independent of traffic.
 		handlers.NewWorkflowMaintenanceScheduler(a, workflowMaintenanceInterval()).Start(jobsCtx)
+
+		// Watch the protocol's account balances, topping them up from the faucet
+		// where the config allows it and emailing when the faucet needs a person.
+		// Leader-only is required rather than tidy: the once-a-minute top-up guard
+		// is in-process, so a second replica sweeping on its own timer would
+		// double the transfer rate the guard exists to cap.
+		fundingSvc.Start(jobsCtx)
+
+		// Internal alerts, leader-only for the same shape of reason as the
+		// sweep above: the uptime poller holds its consecutive-failure count
+		// in process, so two replicas polling would each alert for one outage.
+		notificationSvc.LogConfig(jobsCtx, appLogger)
+		notificationSvc.StartHousekeeping(jobsCtx)
+		uptimeSvc.Start(jobsCtx)
 	})
 
 	// Read-only admin MCP endpoint, gated by the existing Privy JWT + admin check.

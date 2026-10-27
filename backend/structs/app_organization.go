@@ -19,6 +19,9 @@ const (
 
 // Allocation cycles.
 const (
+	// Allocation cycles. These no longer describe a standing organization
+	// allowance — that model is gone — and survive because event_allocations
+	// records which cycle an approved event's reward draws from.
 	AllocationCycleDaily   = "daily"
 	AllocationCycleWeekly  = "weekly"
 	AllocationCycleMonthly = "monthly"
@@ -62,38 +65,44 @@ type OrganizationRole struct {
 	ApprovedAt            *time.Time `json:"approved_at,omitempty"`
 }
 
-type OrganizationAllocation struct {
-	Id             int64      `json:"id"`
-	OrganizationId int64      `json:"organization_id"`
-	Cycle          string     `json:"cycle"` // daily | weekly | monthly | one_time
-	Allocation     uint64     `json:"allocation"`
-	Balance        uint64     `json:"balance"`
-	LastResetAt    *time.Time `json:"last_reset_at,omitempty"`
-}
-
 type OrganizationInvite struct {
-	Id             int64      `json:"id"`
-	OrganizationId int64      `json:"organization_id"`
-	Email          string     `json:"email"`
-	InvitedBy      string     `json:"invited_by"`
-	ExpiresAt      time.Time  `json:"expires_at"`
-	AcceptedAt     *time.Time `json:"accepted_at,omitempty"`
-	CreatedAt      time.Time  `json:"created_at"`
+	Id             int64  `json:"id"`
+	OrganizationId int64  `json:"organization_id"`
+	Email          string `json:"email"`
+	// Role the invitee will hold on accepting, so a pending row in the member
+	// list can say what it is pending as rather than just "pending".
+	Role       string     `json:"role"`
+	InvitedBy  string     `json:"invited_by"`
+	ExpiresAt  time.Time  `json:"expires_at"`
+	AcceptedAt *time.Time `json:"accepted_at,omitempty"`
+	CreatedAt  time.Time  `json:"created_at"`
 }
 
 // OrganizationView is the full member-facing settings payload.
 type OrganizationView struct {
-	Organization Organization             `json:"organization"`
-	MyRole       string                   `json:"my_role"`
-	Members      []OrganizationMember     `json:"members"`
-	Roles        []OrganizationRole       `json:"roles"`
-	Allocations  []OrganizationAllocation `json:"allocations"`
-	IssuerScopes []string                 `json:"issuer_scopes"`
-	Invites      []OrganizationInvite     `json:"invites,omitempty"` // admins only
+	Organization Organization         `json:"organization"`
+	MyRole       string               `json:"my_role"`
+	Members      []OrganizationMember `json:"members"`
+	Roles        []OrganizationRole   `json:"roles"`
+	IssuerScopes []string             `json:"issuer_scopes"`
+	Invites      []OrganizationInvite `json:"invites,omitempty"` // admins only
 }
 
 type OrganizationInviteRequest struct {
 	Email string `json:"email"`
+	// Role is "member" or "admin". Absent means member.
+	Role string `json:"role,omitempty"`
+	// PermissionsMode is "inherit" or "custom".
+	//
+	// Absent means custom, which is the opposite of what membership used to
+	// mean and is the point: a new member starts with nothing and is given what
+	// they need, rather than starting with everything the organization holds
+	// and having it taken away. A caller that wants the old behaviour has to
+	// ask for inherit by name.
+	PermissionsMode string `json:"permissions_mode,omitempty"`
+	// Capabilities are the keys to grant on acceptance, for a custom member.
+	// Ignored for an admin, who is not limited by grants.
+	Capabilities []string `json:"capabilities,omitempty"`
 }
 
 type OrganizationRoleRequest struct {
@@ -128,22 +137,10 @@ type AdminOrganizationSuperadminRequest struct {
 	Email          string `json:"email"`
 }
 
-type AdminOrganizationAllocationItem struct {
-	Cycle      string `json:"cycle"`
-	Allocation uint64 `json:"allocation"`
-}
-
 // AdminOrganizationIssuerScopesRequest replaces an organization's issuance
 // settings: the set of credential types its members may issue while the org's
 // issuer role is approved.
 type AdminOrganizationIssuerScopesRequest struct {
 	OrganizationId  int64    `json:"organization_id"`
 	CredentialTypes []string `json:"credential_types"`
-}
-
-// AdminOrganizationAllocationsRequest replaces an organization's full
-// allocation list: cycles present are upserted, cycles absent are removed.
-type AdminOrganizationAllocationsRequest struct {
-	OrganizationId int64                             `json:"organization_id"`
-	Allocations    []AdminOrganizationAllocationItem `json:"allocations"`
 }

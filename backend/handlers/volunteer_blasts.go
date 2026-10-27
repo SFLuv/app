@@ -205,6 +205,11 @@ func firstNameOrFallback(name string) string {
 }
 
 func (a *AppService) pushEventBlast(ctx context.Context, userId string, eventId string, subject string, message string) bool {
+	a.recordNotification(ctx, userId, "volunteer_event_blast", subject, message, map[string]string{
+		"type":     "volunteer_event_blast",
+		"event_id": eventId,
+	})
+
 	subscriptions, err := a.db.GetMobilePushSubscriptionsByUser(ctx, userId)
 	if err != nil {
 		return false

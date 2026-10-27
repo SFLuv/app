@@ -1,0 +1,24 @@
+CONTRACTOR NAME:,PJ O'Leary,,,,,
+SERVICE/TITLE:,,,,,,
+INVOICE DATE:,2026-10-26,,,,,
+SERVICE PERIOD: ,2026-10-19 to 2026-10-24,,,,,
+HOURLY RATE:,,,,,,
+% SFLUV,10.00%,,,,,
+,,,,,,
+DATE,,DESCRIPTION,,HOURS                ( input numbers only),,AMOUNT BILLED
+2026-10-19,,Dev meeting - internal notifications scope (stated),,1.00,,0.00
+2026-10-20,,"Website review; internal notifications build - dev alert set, mobile notification screen, boot cache (1.32 measured + 1.00 stated)",,2.32,,0.00
+2026-10-21,,Messages leave the notification history; chat tab unread count; evening work (0.12 measured + 1.00 stated),,1.12,,0.00
+2026-10-22,,"Smart-wallet key rotation - protocol Safes, rotatable signers, historical address checks, leaked-key removal; branch ordering; paymaster-only gas alerting (2.72 measured + 3.56 stated)",,6.28,,0.00
+2026-10-24,,"GCP shutdown - infrastructure, not notifications work (stated)",,2.00,,0.00
+,,,,,,0.00
+,,,,,,0.00
+,,,,,,0.00
+,,,,,,0.00
+,,,,,,
+ TOTAL: ,,,,12.72,, $ -
+PAYMENT IN SFLUV,,,,,, $ -
+PAYMENT IN USD,,,,,, $ -
+,,,,,,
+METHOD:,,"4.16h measured from session-transcript timestamps clustered into sittings on a 30-minute gap, unioned across projects. 8.56h stated by the contractor for work the clock did not see.",,,,
+WEAKNESSES:,,"Six stated windows have no session behind them (a meeting, a site review, an evening, an hour away from the keyboard, two gaps inside a continuous Oct 22, and the Oct 24 shutdown). Oct 21's measured figure is an upper bound - another project's session covered all of it. 0.07h of one Oct 20 sitting was deducted to another repository.",,,,

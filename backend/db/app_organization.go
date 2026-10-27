@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -255,12 +256,6 @@ func (a *AppDB) GetOrganizationView(ctx context.Context, userId string) (*struct
 		return nil, err
 	}
 
-	allocations, err := a.ListOrganizationAllocations(ctx, org.Id)
-	if err != nil {
-		return nil, err
-	}
-	view.Allocations = allocations
-
 	scopes, err := a.ListOrganizationIssuerScopes(ctx, org.Id)
 	if err != nil {
 		return nil, err
@@ -269,7 +264,7 @@ func (a *AppDB) GetOrganizationView(ctx context.Context, userId string) (*struct
 
 	if myRole == structs.OrgRoleAdmin || myRole == structs.OrgRoleSuperadmin {
 		inviteRows, err := a.db.Query(ctx, `
-			SELECT id, organization_id, email, COALESCE(invited_by, ''), expires_at, accepted_at, created_at
+			SELECT id, organization_id, email, role, COALESCE(invited_by, ''), expires_at, accepted_at, created_at
 			FROM organization_invites
 			WHERE organization_id = $1 AND accepted_at IS NULL AND expires_at > NOW()
 			ORDER BY created_at DESC;
@@ -280,7 +275,7 @@ func (a *AppDB) GetOrganizationView(ctx context.Context, userId string) (*struct
 		defer inviteRows.Close()
 		for inviteRows.Next() {
 			var inv structs.OrganizationInvite
-			if err := inviteRows.Scan(&inv.Id, &inv.OrganizationId, &inv.Email, &inv.InvitedBy, &inv.ExpiresAt, &inv.AcceptedAt, &inv.CreatedAt); err != nil {
+			if err := inviteRows.Scan(&inv.Id, &inv.OrganizationId, &inv.Email, &inv.Role, &inv.InvitedBy, &inv.ExpiresAt, &inv.AcceptedAt, &inv.CreatedAt); err != nil {
 				return nil, err
 			}
 			view.Invites = append(view.Invites, inv)
@@ -513,11 +508,68 @@ func (a *AppDB) LeaveOrganization(ctx context.Context, userId string) error {
 
 // --- Invites -----------------------------------------------------------------
 
-func (a *AppDB) CreateOrganizationInvite(ctx context.Context, orgId int64, email string, tokenHash string, invitedBy string, ttl time.Duration) error {
-	_, err := a.db.Exec(ctx, `
-		INSERT INTO organization_invites(organization_id, email, token_hash, invited_by, expires_at)
-		VALUES ($1, LOWER(TRIM($2)), $3, $4, $5);
-	`, orgId, email, tokenHash, invitedBy, time.Now().UTC().Add(ttl))
+// OrganizationInviteGrant is what an invitee becomes when they accept.
+//
+// Decided when the invitation is written rather than after it is taken up,
+// because the alternative is a window in which somebody holds everything: the
+// only way to narrow a new member used to be to let them in with every
+// capability and then remove them one at a time.
+type OrganizationInviteGrant struct {
+	// Role is "member" or "admin". An admin holds every capability of every
+	// role the organization has, so Capabilities is not read for one.
+	Role string
+	// Mode is "inherit" or "custom". Inherit is the old behaviour — everything
+	// the organization holds — and custom means exactly Capabilities and
+	// nothing else, including none at all.
+	Mode string
+	// Capabilities are capability keys, read only when Mode is "custom".
+	Capabilities []string
+}
+
+func (a *AppDB) CreateOrganizationInvite(ctx context.Context, orgId int64, email string, tokenHash string, invitedBy string, ttl time.Duration, grant OrganizationInviteGrant) error {
+	role := strings.TrimSpace(grant.Role)
+	if role != structs.OrgRoleAdmin {
+		// Only member and admin are invitable: a superadmin is transferred, not
+		// invited, so anything unrecognised lands on the lesser of the two.
+		role = structs.OrgRoleMember
+	}
+	mode := structs.OrgPermissionsCustom
+	if strings.TrimSpace(grant.Mode) == structs.OrgPermissionsInherit {
+		mode = structs.OrgPermissionsInherit
+	}
+
+	// Validated now rather than at accept time: a key not in the catalog today
+	// will not be in it in seven days either, and storing one would leave a
+	// grant nobody can explain.
+	keys := make([]string, 0, len(grant.Capabilities))
+	seen := map[string]struct{}{}
+	for _, key := range grant.Capabilities {
+		key = strings.TrimSpace(key)
+		if key == "" {
+			continue
+		}
+		roleType, known := structs.CapabilityRoleType(key)
+		// Administrative capabilities are SFLuv-only and granted by the house
+		// superadmin on a live member, never carried in on an invite.
+		if !known || roleType == structs.OrgRoleTypeAdministrative {
+			continue
+		}
+		if _, dup := seen[key]; dup {
+			continue
+		}
+		seen[key] = struct{}{}
+		keys = append(keys, key)
+	}
+
+	encoded, err := json.Marshal(keys)
+	if err != nil {
+		return fmt.Errorf("error encoding invite capabilities: %w", err)
+	}
+
+	_, err = a.db.Exec(ctx, `
+		INSERT INTO organization_invites(organization_id, email, token_hash, invited_by, expires_at, role, permissions_mode, capabilities)
+		VALUES ($1, LOWER(TRIM($2)), $3, $4, $5, $6, $7, $8::jsonb);
+	`, orgId, email, tokenHash, invitedBy, time.Now().UTC().Add(ttl), role, mode, string(encoded))
 	return err
 }
 
@@ -528,12 +580,14 @@ func (a *AppDB) AcceptOrganizationInvite(ctx context.Context, tokenHash string, 
 	var orgId int64
 	err := pgx.BeginFunc(ctx, a.db, func(tx pgx.Tx) error {
 		var email string
+		var inviteRole, inviteMode string
+		var inviteCapabilities []byte
 		err := tx.QueryRow(ctx, `
 			UPDATE organization_invites
 			SET accepted_at = NOW()
 			WHERE token_hash = $1 AND accepted_at IS NULL AND expires_at > NOW()
-			RETURNING organization_id, email;
-		`, tokenHash).Scan(&orgId, &email)
+			RETURNING organization_id, email, role, permissions_mode, capabilities;
+		`, tokenHash).Scan(&orgId, &email, &inviteRole, &inviteMode, &inviteCapabilities)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrOrgInviteInvalid
 		}
@@ -566,12 +620,44 @@ func (a *AppDB) AcceptOrganizationInvite(ctx context.Context, tokenHash string, 
 			return err
 		}
 
+		// The role and permissions the invitation promised, rather than a fixed
+		// "member with everything".
+		if inviteRole != structs.OrgRoleAdmin {
+			inviteRole = structs.OrgRoleMember
+		}
+		if inviteMode != structs.OrgPermissionsInherit {
+			inviteMode = structs.OrgPermissionsCustom
+		}
 		if _, err := tx.Exec(ctx, `
-			INSERT INTO organization_members(organization_id, user_id, role)
-			VALUES ($1, $2, 'member');
-		`, orgId, userId); err != nil {
+			INSERT INTO organization_members(organization_id, user_id, role, permissions_mode)
+			VALUES ($1, $2, $3, $4);
+		`, orgId, userId, inviteRole, inviteMode); err != nil {
 			return err
 		}
+
+		// Only for a custom member. An admin is not limited by grants and an
+		// inherit member already holds everything, so writing rows for either
+		// would record a restriction that is not in force.
+		if inviteMode == structs.OrgPermissionsCustom && inviteRole == structs.OrgRoleMember && len(inviteCapabilities) > 0 {
+			keys := []string{}
+			if err := json.Unmarshal(inviteCapabilities, &keys); err != nil {
+				return fmt.Errorf("error reading invite capabilities: %w", err)
+			}
+			for _, key := range keys {
+				roleType, known := structs.CapabilityRoleType(key)
+				if !known || roleType == structs.OrgRoleTypeAdministrative {
+					continue
+				}
+				if _, err := tx.Exec(ctx, `
+					INSERT INTO organization_member_permissions(organization_id, user_id, role_type, capability, granted_by)
+					VALUES ($1, $2, $3, $4, NULL)
+					ON CONFLICT (organization_id, user_id, capability) DO NOTHING;
+				`, orgId, userId, roleType, key); err != nil {
+					return err
+				}
+			}
+		}
+
 		return syncMemberRoleFlagsTx(ctx, tx, orgId)
 	})
 	return orgId, err
@@ -615,243 +701,6 @@ func (a *AppDB) SetOrganizationRoleStatus(ctx context.Context, orgId int64, role
 			return ErrOrgNotFound
 		}
 		return syncMemberRoleFlagsTx(ctx, tx, orgId)
-	})
-}
-
-// --- Allocations -------------------------------------------------------------
-
-func (a *AppDB) ListOrganizationAllocations(ctx context.Context, orgId int64) ([]structs.OrganizationAllocation, error) {
-	rows, err := a.db.Query(ctx, `
-		SELECT id, organization_id, cycle, allocation, balance, last_reset_at
-		FROM organization_allocations
-		WHERE organization_id = $1
-		ORDER BY CASE cycle WHEN 'daily' THEN 0 WHEN 'weekly' THEN 1 WHEN 'monthly' THEN 2 ELSE 3 END;
-	`, orgId)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	allocations := []structs.OrganizationAllocation{}
-	for rows.Next() {
-		var al structs.OrganizationAllocation
-		if err := rows.Scan(&al.Id, &al.OrganizationId, &al.Cycle, &al.Allocation, &al.Balance, &al.LastResetAt); err != nil {
-			return nil, err
-		}
-		allocations = append(allocations, al)
-	}
-	return allocations, rows.Err()
-}
-
-// ReplaceOrganizationAllocations makes the given list the organization's FULL
-// allocation set in one transaction: listed cycles are upserted, unlisted
-// cycles are deleted. For upserts, balance is clamped to the new allocation for
-// recurring cycles; one_time sets balance directly.
-func (a *AppDB) ReplaceOrganizationAllocations(ctx context.Context, orgId int64, items []structs.AdminOrganizationAllocationItem) error {
-	cycles := make([]string, 0, len(items))
-	seen := map[string]bool{}
-	for _, item := range items {
-		switch item.Cycle {
-		case structs.AllocationCycleDaily, structs.AllocationCycleWeekly, structs.AllocationCycleMonthly, structs.AllocationCycleOneTime:
-		default:
-			return fmt.Errorf("invalid allocation cycle %q", item.Cycle)
-		}
-		if seen[item.Cycle] {
-			return fmt.Errorf("duplicate allocation cycle %q", item.Cycle)
-		}
-		seen[item.Cycle] = true
-		cycles = append(cycles, item.Cycle)
-	}
-
-	return pgx.BeginFunc(ctx, a.db, func(tx pgx.Tx) error {
-		if _, err := tx.Exec(ctx, `
-			DELETE FROM organization_allocations
-			WHERE organization_id = $1 AND cycle != ALL($2::text[]);
-		`, orgId, cycles); err != nil {
-			return fmt.Errorf("error removing unlisted allocations: %w", err)
-		}
-		for _, item := range items {
-			// one_time balance only resets when its allocation actually CHANGES:
-			// replace-all saves re-submit untouched rows, and an unconditional
-			// reset would silently re-credit already-spent one_time funds every
-			// time an unrelated cycle is edited. Unchanged rows (and recurring
-			// cycles) just clamp balance to the allocation.
-			if _, err := tx.Exec(ctx, `
-				INSERT INTO organization_allocations(organization_id, cycle, allocation, balance, last_reset_at)
-				VALUES ($1, $2, $3, $3, NOW())
-				ON CONFLICT (organization_id, cycle) DO UPDATE SET
-					allocation = EXCLUDED.allocation,
-					balance = CASE
-						WHEN organization_allocations.cycle = 'one_time'
-							AND organization_allocations.allocation IS DISTINCT FROM EXCLUDED.allocation
-							THEN EXCLUDED.allocation
-						ELSE LEAST(organization_allocations.balance, EXCLUDED.allocation)
-					END;
-			`, orgId, item.Cycle, item.Allocation); err != nil {
-				return fmt.Errorf("error upserting %s allocation: %w", item.Cycle, err)
-			}
-		}
-		return nil
-	})
-}
-
-// ReserveOrganizationBalance debits `total` from the org's balances in fixed
-// deduction order: one_time -> daily -> weekly -> monthly. One-time funds are
-// consumed first (they never refresh, so they should be drawn down before any
-// recurring budget), then recurring cycles shortest-first.
-func (a *AppDB) ReserveOrganizationBalance(ctx context.Context, orgId int64, total uint64) error {
-	return pgx.BeginFunc(ctx, a.db, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `
-			SELECT id, balance FROM organization_allocations
-			WHERE organization_id = $1
-			ORDER BY CASE cycle WHEN 'one_time' THEN 0 WHEN 'daily' THEN 1 WHEN 'weekly' THEN 2 ELSE 3 END
-			FOR UPDATE;
-		`, orgId)
-		if err != nil {
-			return err
-		}
-		type row struct {
-			id      int64
-			balance uint64
-		}
-		var alloc []row
-		var available uint64
-		for rows.Next() {
-			var r row
-			if err := rows.Scan(&r.id, &r.balance); err != nil {
-				rows.Close()
-				return err
-			}
-			alloc = append(alloc, r)
-			available += r.balance
-		}
-		rows.Close()
-		if err := rows.Err(); err != nil {
-			return err
-		}
-		if available < total {
-			return ErrOrgInsufficientFunds
-		}
-		remaining := total
-		for _, r := range alloc {
-			if remaining == 0 {
-				break
-			}
-			debit := min(r.balance, remaining)
-			if debit == 0 {
-				continue
-			}
-			if _, err := tx.Exec(ctx, `
-				UPDATE organization_allocations SET balance = balance - $2 WHERE id = $1;
-			`, r.id, debit); err != nil {
-				return err
-			}
-			remaining -= debit
-		}
-		return nil
-	})
-}
-
-// RefundOrganizationBalance returns funds after a failed/deleted event, capped
-// at each cycle's allocation (recurring) and uncapped for one_time.
-func (a *AppDB) RefundOrganizationBalance(ctx context.Context, orgId int64, total uint64) error {
-	return pgx.BeginFunc(ctx, a.db, func(tx pgx.Tx) error {
-		remaining := total
-		rows, err := tx.Query(ctx, `
-			SELECT id, cycle, allocation, balance FROM organization_allocations
-			WHERE organization_id = $1
-			ORDER BY CASE cycle WHEN 'one_time' THEN 0 WHEN 'monthly' THEN 1 WHEN 'weekly' THEN 2 ELSE 3 END
-			FOR UPDATE;
-		`, orgId)
-		if err != nil {
-			return err
-		}
-		type row struct {
-			id                  int64
-			cycle               string
-			allocation, balance uint64
-		}
-		var alloc []row
-		for rows.Next() {
-			var r row
-			if err := rows.Scan(&r.id, &r.cycle, &r.allocation, &r.balance); err != nil {
-				rows.Close()
-				return err
-			}
-			alloc = append(alloc, r)
-		}
-		rows.Close()
-		if err := rows.Err(); err != nil {
-			return err
-		}
-		for i, r := range alloc {
-			if remaining == 0 {
-				break
-			}
-			var credit uint64
-			if r.cycle == structs.AllocationCycleOneTime || i == len(alloc)-1 {
-				credit = remaining
-			} else {
-				headroom := uint64(0)
-				if r.allocation > r.balance {
-					headroom = r.allocation - r.balance
-				}
-				credit = min(headroom, remaining)
-			}
-			if credit == 0 {
-				continue
-			}
-			if _, err := tx.Exec(ctx, `
-				UPDATE organization_allocations SET balance = balance + $2 WHERE id = $1;
-			`, r.id, credit); err != nil {
-				return err
-			}
-			remaining -= credit
-		}
-		return nil
-	})
-}
-
-// ResetOrganizationAllocations refills every allocation of the given cycle to
-// its full amount, less any outstanding reserved amounts the caller passes in.
-func (a *AppDB) ResetOrganizationAllocations(ctx context.Context, cycle string, reservedByOrg map[int64]uint64) error {
-	return pgx.BeginFunc(ctx, a.db, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `
-			SELECT id, organization_id, allocation FROM organization_allocations
-			WHERE cycle = $1 FOR UPDATE;
-		`, cycle)
-		if err != nil {
-			return err
-		}
-		type row struct {
-			id, orgId  int64
-			allocation uint64
-		}
-		var alloc []row
-		for rows.Next() {
-			var r row
-			if err := rows.Scan(&r.id, &r.orgId, &r.allocation); err != nil {
-				rows.Close()
-				return err
-			}
-			alloc = append(alloc, r)
-		}
-		rows.Close()
-		if err := rows.Err(); err != nil {
-			return err
-		}
-		for _, r := range alloc {
-			reserved := reservedByOrg[r.orgId]
-			next := uint64(0)
-			if r.allocation > reserved {
-				next = r.allocation - reserved
-			}
-			if _, err := tx.Exec(ctx, `
-				UPDATE organization_allocations SET balance = $2, last_reset_at = NOW() WHERE id = $1;
-			`, r.id, next); err != nil {
-				return err
-			}
-		}
-		return nil
 	})
 }
 
@@ -922,12 +771,6 @@ func (a *AppDB) ListOrganizations(ctx context.Context) ([]*structs.OrganizationV
 		if err := roleRows.Err(); err != nil {
 			return nil, err
 		}
-
-		allocations, err := a.ListOrganizationAllocations(ctx, view.Organization.Id)
-		if err != nil {
-			return nil, err
-		}
-		view.Allocations = allocations
 
 		scopes, err := a.ListOrganizationIssuerScopes(ctx, view.Organization.Id)
 		if err != nil {

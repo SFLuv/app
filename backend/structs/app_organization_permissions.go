@@ -38,9 +38,11 @@ const OrgRoleTypeAdministrative = "administrative"
 
 // Supervisor.
 const (
-	CapSupervisorWorkflowsView   = "supervisor.workflows.view"
-	CapSupervisorWorkflowsExport = "supervisor.workflows.export"
-	CapSupervisorPayoutAccount   = "supervisor.payout_account.manage"
+	// One capability over one set of rows. The export is the same workflows the
+	// view already lists, in a file, so splitting them offered a distinction
+	// that does not exist — withholding the download while allowing the page
+	// protects nothing. Merged onto this key in migration 1.71.
+	CapSupervisorWorkflowsView = "supervisor.workflows.view"
 )
 
 // Affiliate.
@@ -115,9 +117,7 @@ func OrgCapabilityCatalog() []CapabilityGroup {
 			RoleType: OrgRoleTypeSupervisor,
 			Label:    "Supervisor",
 			Caps: []Capability{
-				{Key: CapSupervisorWorkflowsView, Label: "View assigned workflows", Hint: "See the workflows assigned to this organization.", Read: true},
-				{Key: CapSupervisorWorkflowsExport, Label: "Export workflow data", Hint: "Download the workflow export.", Read: true},
-				{Key: CapSupervisorPayoutAccount, Label: "Change the rewards account", Hint: "Set where supervisor rewards are paid."},
+				{Key: CapSupervisorWorkflowsView, Label: "View and export workflow data", Hint: "See the workflows assigned to this organization, and download them.", Read: true},
 			},
 		},
 		{

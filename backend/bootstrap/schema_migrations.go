@@ -2706,10 +2706,66 @@ var schemaMigrations = []SchemaMigration{
 		},
 	},
 	{
+		// The protocol accounts come first because their branch merges first.
+		//
+		// The order is not cosmetic: the runner applies a migration only when
+		// its version is above the one recorded in the database, so whichever
+		// branch lands first fixes the floor for everything behind it. If this
+		// one had kept a number above the protocol accounts', a database taken
+		// there by the earlier merge would never run it.
 		Version:     "1.66",
 		Description: "protocol smart accounts, their encrypted signers, and the history of which address held which protocol role",
 		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
 			return migrateProtocolAccounts(ctx, pools)
+		},
+	},
+	{
+		Version:     "1.67",
+		Description: "bulletin board posts, direct messages, and their safety tables",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			return migrateBulletin(ctx, pools)
+		},
+	},
+	{
+		Version:     "1.68",
+		Description: "internal organization alerts, their recipients, and per-user notification history",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			return migrateInternalNotifications(ctx, pools)
+		},
+	},
+	{
+		Version:     "1.69",
+		Description: "per-user access to features still in beta, keeping revoked grants so re-granting restores them",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			return migrateBetaFeatures(ctx, pools)
+		},
+	},
+	{
+		Version:     "1.70",
+		Description: "route support requests by category, where subscribing to none means all of them",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			return migrateSupportCategories(ctx, pools)
+		},
+	},
+	{
+		Version:     "1.71",
+		Description: "merge the supervisor workflow view and export capabilities into one",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			return migrateSupervisorWorkflowCapability(ctx, pools)
+		},
+	},
+	{
+		Version:     "1.72",
+		Description: "clear unpaid supervisor rewards from workflows and templates; paid ones keep their record",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			return migrateRemoveSupervisorRewards(ctx, pools)
+		},
+	},
+	{
+		Version:     "1.73",
+		Description: "invites carry the role and permissions the invitee gets on accepting",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			return migrateInvitePermissions(ctx, pools)
 		},
 	},
 }

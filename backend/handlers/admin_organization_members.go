@@ -139,7 +139,11 @@ func (a *AppService) AdminInviteOrganizationMember(w http.ResponseWriter, r *htt
 		return
 	}
 
-	created, sent, err := a.createAndSendOrgInvite(r.Context(), org, email, actor)
+	created, sent, err := a.createAndSendOrgInvite(r.Context(), org, email, actor, db.OrganizationInviteGrant{
+		Role:         req.Role,
+		Mode:         req.PermissionsMode,
+		Capabilities: req.Capabilities,
+	})
 	if err != nil {
 		a.logger.Logf("error creating organization invite for org %d: %s", org.Id, err)
 		w.WriteHeader(http.StatusInternalServerError)

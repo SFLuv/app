@@ -26,6 +26,12 @@ type AppService struct {
 	// Read-only. Used to compare our webhook bookkeeping against what the
 	// indexer actually holds; the Ponder database is never written to here.
 	ponderDb *db.PonderDB
+	// notifications posts internal organization alerts. Nil-safe at every
+	// method, so call sites post without guarding it.
+	notifications *NotificationService
+	// uptime is the health poller, consulted by the acknowledge button so an
+	// outage cannot be acknowledged while it is still happening.
+	uptime *UptimeService
 	// protocolSvc owns the backend's own Safes and the keys that sign for them.
 	// Wired after construction because it needs the client config this service
 	// already holds.
@@ -63,6 +69,17 @@ func (a *AppService) activeChainID() int64 {
 	}
 	return 80094
 }
+
+// SetNotificationService wires the internal alert layer. Set after
+// construction because the service needs the database this one already holds.
+func (a *AppService) SetNotificationService(n *NotificationService) { a.notifications = n }
+
+// Notifications exposes the alert layer to the bootstrap wiring, which hands
+// it the device pusher that lives on this service.
+func (a *AppService) Notifications() *NotificationService { return a.notifications }
+
+// SetUptimeService wires the health poller.
+func (a *AppService) SetUptimeService(u *UptimeService) { a.uptime = u }
 
 func (a *AppService) SetRedeemerService(redeemer *RedeemerService) {
 	a.redeemer = redeemer

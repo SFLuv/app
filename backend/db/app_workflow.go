@@ -1189,67 +1189,6 @@ func (a *AppDB) UpdateSupervisor(ctx context.Context, req *structs.SupervisorUpd
 	return supervisor, nil
 }
 
-func (a *AppDB) UpdateSupervisorPrimaryRewardsAccount(ctx context.Context, userId string, account string) (*structs.Supervisor, error) {
-	userId = strings.TrimSpace(userId)
-	if userId == "" {
-		return nil, fmt.Errorf("user_id is required")
-	}
-
-	normalizedAccount, err := normalizeEthereumAddress(account)
-	if err != nil {
-		return nil, err
-	}
-
-	tx, err := a.db.Begin(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback(ctx)
-
-	var status string
-	err = tx.QueryRow(ctx, `
-		SELECT
-			status
-		FROM
-			supervisors
-		WHERE
-			user_id = $1
-		FOR UPDATE;
-	`, userId).Scan(&status)
-	if err == pgx.ErrNoRows {
-		return nil, fmt.Errorf("supervisor not found")
-	}
-	if err != nil {
-		return nil, fmt.Errorf("error loading supervisor: %s", err)
-	}
-	if status != "approved" {
-		return nil, fmt.Errorf("supervisor must be approved")
-	}
-
-	_, err = tx.Exec(ctx, `
-		UPDATE
-			supervisors
-		SET
-			primary_rewards_account = $2,
-			updated_at = NOW()
-		WHERE
-			user_id = $1;
-	`, userId, normalizedAccount)
-	if err != nil {
-		return nil, fmt.Errorf("error updating supervisor rewards account: %s", err)
-	}
-
-	supervisor, err := getSupervisorByUser(ctx, tx, userId)
-	if err != nil {
-		return nil, err
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return nil, err
-	}
-	return supervisor, nil
-}
-
 func getSupervisorByUser(ctx context.Context, querier interface {
 	QueryRow(context.Context, string, ...any) pgx.Row
 }, userId string) (*structs.Supervisor, error) {
@@ -1454,16 +1393,28 @@ func normalizeWorkflowTemplateData(req *structs.WorkflowTemplateCreateRequest, v
 			supervisorUserId = &normalized
 		}
 	}
-	var supervisorBounty *uint64
-	if req.SupervisorBounty != nil {
-		value := *req.SupervisorBounty
-		supervisorBounty = &value
-		totalBounty += value
-	} else if req.Manager != nil {
-		value := req.Manager.Bounty
-		supervisorBounty = &value
-		totalBounty += value
+	// Supervisor rewards are gone. A supervisor is still assigned to a workflow
+	// and still fills in its data fields; what they no longer do is get paid
+	// for it, so the only bounties a workflow carries are its steps'.
+	//
+	// A positive amount is refused rather than quietly zeroed. Both are
+	// "no reward", but zeroing lets a proposer believe they allocated something
+	// and watch it vanish, which is the worse of the two failures. Zero and
+	// absent both pass, so a client that has stopped sending the field — and an
+	// edit proposal compared against a workflow the migration has already
+	// zeroed — are unaffected.
+	//
+	// Checked here because this normalizer is the one path both workflow
+	// creation and template creation go through, including the edit-proposal
+	// comparison built on top of them.
+	if req.SupervisorBounty != nil && *req.SupervisorBounty > 0 {
+		return nil, fmt.Errorf("supervisor rewards have been removed: supervisor_bounty must be 0")
 	}
+	if req.Manager != nil && req.Manager.Bounty > 0 {
+		return nil, fmt.Errorf("supervisor rewards have been removed: manager bounty must be 0")
+	}
+	zero := uint64(0)
+	supervisorBounty := &zero
 
 	normalizedSupervisorDataFields, err := normalizeWorkflowSupervisorDataFields(req.SupervisorDataFields)
 	if err != nil {

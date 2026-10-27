@@ -1,6 +1,6 @@
 # Branch scope — `pjol/bot-smart-wallet-hotfix`
 
-Oct 22 2026 · app (backend + frontend) · **2.6h** (1.3h measured, 1.3h stated)
+Oct 22 2026 · app (backend + frontend) · **4.0h** (1.4h measured, 2.7h stated)
 
 Railway's vulnerability means the backend's signing keys have to be rotated. This branch makes that
 possible without breaking anything: the protocol accounts become smart wallets whose addresses never
@@ -560,3 +560,77 @@ every claim here about what will be sponsored is an assumption.
 - **`PROTOCOL_RECOVERY_OWNER` must be set before deploying the Safes.** It cannot
   be added later from a key that has already been lost, which is the entire point
   of it.
+
+# Round 5 — Oct 22, the morning's untyped hours
+
+Oct 22 2026 · **1.4h stated** · app
+
+No new code. This round records two windows in the middle of this branch's work that the transcript
+has nothing in, because the day they sit in was one continuous session and the clock only sees the
+parts that were typed.
+
+## How these hours were recorded
+
+**1.4h stated** by the owner, who states that Oct 22 was contiguous working time from about 10:00
+onward. These two windows fall between sittings that *are* measured, and the work on both sides of
+each is this branch's:
+
+| Window | Stated | Sits between |
+|---|---|---|
+| Oct 22 11:25–12:06 | 0.68h | round 1's first sitting and its second |
+| Oct 22 12:43–13:24 | 0.68h | round 1's second sitting and round 2's |
+| | **1.36h → 1.4h** | |
+
+**Nothing corroborates these and nothing can.** No transcript event in any project, no file modified
+in either repository, no commit. That is what the record looks like when the work is not being typed —
+reading the engine's behaviour, working out what the paymaster will accept, deciding what the
+transaction map should key on. Recorded as stated, at the spans given, which is what the convention
+asks for when the clock was not consulted.
+
+They are booked here rather than on the branch above because the measured sittings on both sides of
+both windows are this branch's: the review fixes in round 1 and the fixes themselves in round 2.
+
+## Totals across this branch
+
+Supersedes the table in round 3, which did not have this round in it. Covers only this document's
+rounds — `branch-scopes/sanchezo/faucet-queue-fixes.md` records its own work on this same branch and
+its own hours.
+
+| Round | Hours | Basis |
+|---|---|---|
+| Round 1 — building it | 0.70h | measured |
+| Round 2 — review fixes | 0.20h | measured |
+| Round 3 — the review itself | 1.30h | stated |
+| Round 4 — so the leaked keys can be deleted | 0.43h | measured |
+| Round 5 — the morning's untyped hours | 1.36h | stated |
+| **Total** | **4.0h** | 1.4h measured, 2.7h stated |
+
+**The measured column is the sitting spans, not the sum of the rounds.** Adding the rounds gives
+1.33h; the sittings themselves measure 1.36h, because rounds 1 and 2 each rounded their own figure
+down (0.74h → 0.70h, 0.19h → 0.20h). Where an itemised split and a measured total disagree the
+measured total wins, which is the rule this folder already follows, so 1.4h is the figure to quote.
+
+**Two thirds of this branch is now stated rather than measured**, across two windows with no session
+behind them — the review that produced round 2, and these two gaps. Said here because it is the part
+of the figure a reader has to weigh, and it is not visible from the total alone.
+
+## Round 4's open list has moved on
+
+Two items on it are no longer accurate, both closed by Sanchez's work on this branch between 15:11
+and 16:02 (`cdf8278`..`a3ab0a9`, written up in `branch-scopes/sanchezo/faucet-queue-fixes.md`):
+
+**`PROTOCOL_RECOVERY_OWNER` — round 4 said it "cannot be added later from a key that has already been
+lost".** Checking that today turned up something worse: as this branch stood, it could not be added
+later *at all*, because `EnsureRecoveryOwner` was reached only from `deployAccount`, which returns at
+its top once the Safe is deployed and signed for. `c4b8267` closes both halves — `DeployAccounts` now
+refuses outright without a recovery owner, and `EnsureRecoveryOwners` retries on every boot once the
+cutover is complete, so an add that failed at deployment no longer stays failed. The ordering
+constraint is now enforced by the code rather than documented in a scope file.
+
+**Reward labelling was client-side and would have broken at the cutover.** The mobile app decided
+"Reward" by comparing a transfer's sender against one `faucet_address` from the client config, so
+whichever address that env var held, the other side of the cutover would have been mislabelled —
+past rewards or future ones. `f37b985` moves the decision to the backend, resolved from the protocol
+address history, with a `type` field on the transaction so a client can tell a labelled row from a
+legacy one. That is the right place for it: the history table already knows which address was the
+faucet when, which is exactly the question the label asks.

@@ -212,6 +212,19 @@ func (a *AppDB) RearmW9Tier(ctx context.Context, userID string, taxYear int, tie
 	return a.clearW9NotificationReads(ctx, userID, taxYear)
 }
 
+// HasW9AdminRequest reports whether an admin has asked this person for the
+// year's W-9. The marker is deleted with the other notices when the filing
+// clears, so this is false once there is nothing left to ask for.
+func (a *AppDB) HasW9AdminRequest(ctx context.Context, userID string, taxYear int) (bool, error) {
+	var exists bool
+	if err := a.db.QueryRow(ctx, `
+		SELECT EXISTS (SELECT 1 FROM w9_tier_notices WHERE user_id = $1 AND tax_year = $2 AND tier = $3);
+	`, userID, taxYear, W9TierAdminRequest).Scan(&exists); err != nil {
+		return false, fmt.Errorf("error checking for an admin w9 request for %s: %w", userID, err)
+	}
+	return exists, nil
+}
+
 // ClearW9TierNotices removes every tier notice for a person and year.
 //
 // Called when a filing clears. The warnings existed to get the form filed; once

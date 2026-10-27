@@ -84,6 +84,9 @@ func (a *AppService) buildW9Status(r *http.Request, userID string) (*structs.W9S
 			response.TierAcknowledged = outstanding.AcknowledgedAt != nil
 			response.Blocked = outstanding.Tier == db.W9TierBlocked
 		}
+		if requested, err := a.db.HasW9AdminRequest(ctx, userID, taxYear); err == nil {
+			response.AdminRequested = requested
+		}
 	}
 
 	if filing != nil && !response.Cleared {

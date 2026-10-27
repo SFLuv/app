@@ -491,6 +491,55 @@ func (p *ProtocolService) LogConfig(ctx context.Context, appLogger *logger.LogCl
 // configuration are all visibly the same shape.
 func envValue(name string) string { return strings.TrimSpace(os.Getenv(name)) }
 
+// ── What the funding service needs to know ───────────────────────────────────
+
+// FaucetOnSafe reports whether the faucet is actually spending through its
+// Safe, which is the moment its transactions stop costing it gas.
+//
+// All three conditions, because any one of them missing means the EOA is still
+// paying: a Safe that is not deployed cannot be used, one with no signer cannot
+// be signed for, and one with no balance is not where the money is. It is the
+// same test attachFaucet makes before routing payouts, deliberately, so the
+// alerting and the spending cannot disagree about where the faucet is.
+func (p *ProtocolService) FaucetOnSafe(ctx context.Context) bool {
+	if p == nil || p.db == nil {
+		return false
+	}
+	account, err := p.db.GetProtocolAccount(ctx, structs.ProtocolAccountFaucet)
+	if err != nil || account == nil {
+		return false
+	}
+	if account.DeployedAt == nil || account.Signer == nil || !common.IsHexAddress(account.SafeAddress) {
+		return false
+	}
+	balance, err := p.client.TokenBalance(ctx, p.token, common.HexToAddress(account.SafeAddress))
+	return err == nil && balance != nil && balance.Sign() > 0
+}
+
+// FundingState adapts this service to what the funding module asks of it.
+type FundingState struct{ svc *ProtocolService }
+
+// FundingProtocolState is the adapter, for the funding service's constructor.
+func (p *ProtocolService) FundingProtocolState() FundingState { return FundingState{svc: p} }
+
+// FaucetAddress is where the faucet's balance is now.
+func (f FundingState) FaucetAddress(ctx context.Context) (string, bool) {
+	if f.svc == nil {
+		return "", false
+	}
+	address, ok := f.svc.CurrentAddress(ctx, structs.ProtocolRoleFaucet)
+	if !ok {
+		return "", false
+	}
+	return address.Hex(), true
+}
+
+// Sponsored reports whether the protocol's transactions are paid for by the
+// paymaster rather than out of their own balances.
+func (f FundingState) Sponsored(ctx context.Context) bool {
+	return f.svc != nil && f.svc.FaucetOnSafe(ctx)
+}
+
 // VerifyFaucetSigner checks that the key we hold is actually an owner of the
 // faucet Safe, on chain.
 //

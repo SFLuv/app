@@ -74,6 +74,21 @@ func serverFeatureFlags() map[string]any {
 		// button that fails at the last step, so it stays off until the grant is
 		// confirmed on the chain the backend is pointed at.
 		"unwrap_enabled": strings.EqualFold(strings.TrimSpace(os.Getenv("UNWRAP_ENABLED")), "true"),
+		// bulletin_enabled and chat_enabled are the master switches for the two
+		// beta surfaces, one each: the Bulletin board and direct messages.
+		//
+		// These are not what a client should gate on. They say the feature
+		// exists on this backend, not that the person holding the phone may use
+		// it — that answer is per-user and comes from GET /me/beta, which folds
+		// these switches together with the person's grant so there is one
+		// answer rather than two that can disagree. They are published here for
+		// the admin panel and the website, which need to show whether a grant
+		// would do anything at all.
+		//
+		// Off is the default for both, and off means off for everybody however
+		// many grants exist, which is what makes it a usable kill switch.
+		structs.BetaFeatureBulletin + "_enabled": betaFeatureEnvEnabled(structs.BetaFeatureBulletin),
+		structs.BetaFeatureChat + "_enabled":     betaFeatureEnvEnabled(structs.BetaFeatureChat),
 	}
 }
 

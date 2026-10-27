@@ -173,11 +173,14 @@ func New(s *handlers.BotService, a *handlers.AppService, p *handlers.PonderServi
 	AddWalletRoutes(r, a)
 	AddLocationRoutes(r, a)
 	AddContactRoutes(r, a)
+	AddBulletinRoutes(r, a)
 	AddMerchantModeRoutes(r, a)
 	AddPonderRoutes(r, a, p)
 	AddW9Routes(r, a)
 	AddUnwrapRoutes(r, a)
 	AddMerchantPayoutRoutes(r, a)
+	AddNotificationRoutes(r, a)
+	AddSupportRoutes(r, a)
 	AddProtocolRoutes(r, a)
 
 	return r
@@ -223,10 +226,22 @@ func AddOrganizationRoutes(r *chi.Mux, a *handlers.AppService, s *handlers.BotSe
 	r.Get("/organizations/mine/permissions", withActiveAuth(a.GetOrganizationPermissions, a))
 	r.Put("/organizations/mine/permissions", withActiveAuth(a.SetOrganizationMemberPermissions, a))
 	r.Put("/organizations/mine/permissions/administrative", withActiveAuth(a.SetOrganizationMemberAdministrative, a))
+
+	// Which members receive which sets of internal alerts. Same shape as the
+	// permissions pair above, and for the same reason: a member may read this
+	// to see what they themselves are signed up for, and only an org admin may
+	// change anyone's.
+	r.Get("/organizations/mine/notification-sets", withActiveAuth(a.GetOrganizationNotificationSettings, a))
+	r.Put("/organizations/mine/notification-sets", withActiveAuth(a.SetOrganizationNotificationSets, a))
 	r.Post("/organizations/join", withActiveAuth(a.JoinOrganization, a))
 
 	// Platform-admin org controls.
 	r.Get("/admin/organizations", withAdmin(a.AdminListOrganizations, a))
+
+	// Protocol account balances, and a manual top-up trigger. Admin only: these
+	// expose the operational accounts and can move funds.
+	r.Get("/admin/balances", withAdmin(s.GetFundingBalances, a))
+	r.Post("/admin/balances/sweep", withAdmin(s.RunFundingSweep, a))
 	r.Put("/admin/organizations/superadmin", withAdmin(a.AdminSetOrganizationSuperadmin, a))
 	r.Put("/admin/organizations/roles", withAdmin(a.AdminSetOrganizationRoleStatus, a))
 	r.Put("/admin/organizations/issuer-scopes", withAdmin(a.AdminSetOrganizationIssuerScopes, a))
@@ -239,6 +254,8 @@ func AddOrganizationRoutes(r *chi.Mux, a *handlers.AppService, s *handlers.BotSe
 	r.Post("/admin/organizations/{id}/members/invites", withActiveAuth(a.AdminInviteOrganizationMember, a))
 	r.Delete("/admin/organizations/{id}/members/{user_id}", withActiveAuth(a.AdminRemoveOrganizationMember, a))
 	r.Put("/admin/organizations/{id}/members/role", withActiveAuth(a.AdminSetOrganizationMemberRole, a))
+	r.Get("/admin/organizations/{id}/permissions", withActiveAuth(a.AdminGetOrganizationPermissions, a))
+	r.Put("/admin/organizations/{id}/permissions", withActiveAuth(a.AdminSetOrganizationMemberPermissions, a))
 }
 
 func AddClientConfigRoutes(r *chi.Mux, s *handlers.AppService) {
@@ -483,8 +500,8 @@ func AddWorkflowRoutes(r *chi.Mux, s *handlers.BotService, a *handlers.AppServic
 	r.Post("/improvers/workflows/{workflow_id}/steps/{step_id}/payout-request", withImprover(a.RequestWorkflowStepPayoutRetry, a))
 
 	r.Get("/supervisors/workflows", withCapability(structs.CapSupervisorWorkflowsView, a.GetSupervisorWorkflows, a))
-	r.Post("/supervisors/workflows/export", withCapability(structs.CapSupervisorWorkflowsExport, a.ExportSupervisorWorkflowData, a))
-	r.Put("/supervisors/primary-rewards-account", withCapability(structs.CapSupervisorPayoutAccount, a.UpdateSupervisorPrimaryRewardsAccount, a))
+	// Same capability as the list above: the export is those rows in a file.
+	r.Post("/supervisors/workflows/export", withCapability(structs.CapSupervisorWorkflowsView, a.ExportSupervisorWorkflowData, a))
 
 	r.Get("/admin/proposers", withAdmin(a.GetProposers, a))
 	r.Put("/admin/proposers", withAdmin(a.UpdateProposer, a))
@@ -1055,4 +1072,98 @@ func withCapability(capability string, handlerFunc http.HandlerFunc, s *handlers
 		}
 		handlerFunc(w, r)
 	}
+}
+
+// AddBulletinRoutes registers the neighborhood Bulletin, direct messages, and
+// their safety endpoints. Everything requires a signed-in user; the moderation
+// queue requires an admin.
+//
+// The Bulletin and the messages are each behind their own beta feature, and the
+// gate is here rather than only in the clients: a tab the app hides is still one
+// HTTP call away from being used. withBulletinBeta and withChatBeta wrap the
+// active-auth guard, so a caller must be signed in, accepted, AND hold the
+// grant — checked against the database on every request, so a revoke takes
+// effect immediately rather than at the next app launch.
+//
+// Deliberately not gated: profiles, user search, blocks and reports. Profiles
+// and search are used by surfaces outside the beta, and blocking or reporting
+// somebody must keep working for a person who has just been removed from the
+// beta — taking away the ability to report is the opposite of what a safety
+// control is for.
+func AddBulletinRoutes(r *chi.Mux, a *handlers.AppService) {
+	withBulletinBeta := func(handlerFunc http.HandlerFunc) http.HandlerFunc {
+		return withActiveAuth(a.RequireBetaFeature(structs.BetaFeatureBulletin, handlerFunc), a)
+	}
+	withChatBeta := func(handlerFunc http.HandlerFunc) http.HandlerFunc {
+		return withActiveAuth(a.RequireBetaFeature(structs.BetaFeatureChat, handlerFunc), a)
+	}
+
+	r.Get("/me/profile", withActiveAuth(a.GetMyProfile, a))
+	r.Put("/me/profile", withActiveAuth(a.PutMyProfile, a))
+	r.Get("/users/search", withActiveAuth(a.SearchUsers, a))
+	r.Get("/users/{userId}/public", withActiveAuth(a.GetPublicUserProfile, a))
+
+	r.Get("/bulletin/posts", withBulletinBeta(a.GetBulletinFeed))
+	r.Post("/bulletin/posts", withBulletinBeta(a.CreateBulletinPost))
+	r.Get("/bulletin/posts/mine", withBulletinBeta(a.GetMyBulletinPosts))
+	r.Get("/bulletin/posts/{id}", withBulletinBeta(a.GetBulletinPost))
+	r.Patch("/bulletin/posts/{id}", withBulletinBeta(a.UpdateBulletinPost))
+	r.Delete("/bulletin/posts/{id}", withBulletinBeta(a.DeleteBulletinPost))
+	r.Post("/bulletin/posts/{id}/photos", withBulletinBeta(a.UploadBulletinPhoto))
+	r.Delete("/bulletin/posts/{id}/photos/{photoId}", withBulletinBeta(a.DeleteBulletinPhoto))
+	r.Post("/bulletin/posts/{id}/feedback", withBulletinBeta(a.PostBulletinFeedback))
+	r.Get("/bulletin/photos/{photoId}", withBulletinBeta(a.GetBulletinPhoto))
+
+	r.Get("/me/conversations", withChatBeta(a.ListMyConversations))
+	r.Get("/me/messaging-summary", withChatBeta(a.GetMessagingSummary))
+	r.Post("/conversations", withChatBeta(a.StartConversation))
+	r.Get("/conversations/{id}", withChatBeta(a.GetConversation))
+	r.Get("/conversations/{id}/messages", withChatBeta(a.GetConversationMessages))
+	r.Post("/conversations/{id}/messages", withChatBeta(a.SendConversationMessage))
+	r.Post("/conversations/{id}/payments", withChatBeta(a.AttachConversationPayment))
+	r.Post("/conversations/{id}/read", withChatBeta(a.MarkConversationRead))
+	r.Post("/conversations/{id}/archive", withChatBeta(a.ArchiveConversation))
+
+	r.Get("/blocks", withActiveAuth(a.ListBlockedUsers, a))
+	r.Post("/blocks", withActiveAuth(a.BlockUser, a))
+	r.Delete("/blocks/{userId}", withActiveAuth(a.UnblockUser, a))
+	r.Post("/reports", withActiveAuth(a.ReportContent, a))
+
+	r.Get("/admin/bulletin/reports", withAdmin(a.AdminListBulletinReports, a))
+	r.Post("/admin/bulletin/reports/resolve", withAdmin(a.AdminResolveBulletinReport, a))
+
+	// Which beta surfaces this client should show. Not itself gated — a client
+	// has to be able to ask what it is allowed before it knows what to hide.
+	r.Get("/me/beta", withActiveAuth(a.GetMyBetaFeatures, a))
+
+	r.Get("/admin/beta/features", withAdmin(a.AdminListBetaFeatures, a))
+	r.Get("/admin/beta/members", withAdmin(a.AdminListBetaFeatureMembers, a))
+	r.Post("/admin/beta/grant", withAdmin(a.AdminGrantBetaFeature, a))
+	r.Post("/admin/beta/revoke", withAdmin(a.AdminRevokeBetaFeature, a))
+}
+
+// AddNotificationRoutes mounts the notification screen.
+//
+// Everything here is scoped to the caller by the handler, from their own
+// authenticated id, so there is no id in any path that a client could change to
+// read somebody else's notifications.
+func AddNotificationRoutes(r *chi.Mux, a *handlers.AppService) {
+	r.Get("/notifications", withActiveAuth(a.GetNotifications, a))
+	r.Post("/notifications/seen", withActiveAuth(a.MarkNotificationsSeen, a))
+	// Pressing an alert's button. Authorization is layered inside the handler:
+	// being designated for the alert's set is what makes it yours to see, and
+	// anything that changes platform state needs the role that endpoint
+	// already requires.
+	r.Post("/notifications/{id}/action", withActiveAuth(a.PressNotificationAction, a))
+}
+
+// AddSupportRoutes mounts the website "get in touch" form and its admin queue.
+func AddSupportRoutes(r *chi.Mux, a *handlers.AppService) {
+	// Public: the website proxies submissions server-side and presents a shared
+	// key, which is what the rate limiter buckets on. Unauthenticated by
+	// necessity — the people writing in do not have accounts.
+	r.Post("/support/requests", a.CreateSupportRequest)
+
+	r.Get("/admin/support-requests", withAdmin(a.ListSupportRequests, a))
+	r.Post("/admin/support-requests/{id}/archive", withAdmin(a.SetSupportRequestArchived, a))
 }

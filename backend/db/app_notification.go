@@ -175,6 +175,11 @@ func (a *AppDB) GetImproverNotifications(ctx context.Context, improverId string)
 // There is deliberately no "released" notification. It has no live condition —
 // it would be true for an instant and then false forever — so it is a push and
 // an empty escrow panel instead of a feed entry that breaks the invariant.
+//
+// Alone among the derived kinds, these do not ack on view: they are asking for
+// a form, not reporting something, so looking at the list does not answer them
+// and they carry no seen state at all. What ends one is the filing clearing,
+// which also ends the condition — see structs.NotificationAcksOnView.
 func (a *AppDB) appendW9Notifications(ctx context.Context, userID string, feed *structs.ImproverNotificationFeed) error {
 	rows, err := a.db.Query(ctx, `
 		SELECT
@@ -183,13 +188,9 @@ func (a *AppDB) appendW9Notifications(ctx context.Context, userID string, feed *
 			COUNT(*) FILTER (WHERE p.state IN ('escrowed','releasing')),
 			'0'::text,
 			MIN(p.escrowed_at),
-			COALESCE(f.status, 'not_started'),
-			MAX(r.seen_at)
+			COALESCE(f.status, 'not_started')
 		FROM payout_ledger p
 		LEFT JOIN w9_filings f ON f.user_id = p.user_id AND f.tax_year = p.tax_year
-		LEFT JOIN improver_notification_reads r
-			ON r.user_id = p.user_id
-			AND r.notification_key = 'w9_escrow_held:' || p.tax_year::text
 		WHERE p.user_id = $1
 		AND p.state IN ('escrowed','releasing')
 		GROUP BY p.tax_year, f.status;
@@ -203,12 +204,7 @@ func (a *AppDB) appendW9Notifications(ctx context.Context, userID string, feed *
 		var taxYear, escrowedCount int
 		var escrowedBase, backPayBase, status string
 		var oldest *time.Time
-		// seen_at is a bigint unix stamp (see improver_notification_reads),
-		// unlike oldest, which really is a timestamptz. Scanning it as a
-		// time.Time fails only once a row exists, so the bug hides until
-		// somebody actually opens the bell.
-		var seenAt *int64
-		if err := rows.Scan(&taxYear, &escrowedBase, &escrowedCount, &backPayBase, &oldest, &status, &seenAt); err != nil {
+		if err := rows.Scan(&taxYear, &escrowedBase, &escrowedCount, &backPayBase, &oldest, &status); err != nil {
 			return fmt.Errorf("error scanning w9 notification: %w", err)
 		}
 		if W9StatusClears(status) {
@@ -230,12 +226,11 @@ func (a *AppDB) appendW9Notifications(ctx context.Context, userID string, feed *
 			EscrowedCount:    escrowedCount,
 			BackPaySfluv:     backPayBase,
 			OldestEscrowedAt: created,
+			// Never seen, whatever anybody has looked at: money is being held
+			// and only the form releases it (structs.NotificationAcksOnView).
+			Seen: false,
 		}
-		notification.Seen = seenAt != nil
-		notification.SeenAt = seenAt
-		if seenAt == nil {
-			feed.UnseenCount++
-		}
+		feed.UnseenCount++
 		feed.Notifications = append(feed.Notifications, notification)
 	}
 	if err := rows.Err(); err != nil {
@@ -266,13 +261,9 @@ func (a *AppDB) appendW9TierNotification(ctx context.Context, userID string, fee
 			n.tax_year,
 			n.tier,
 			n.notified_at,
-			COALESCE(f.status, 'not_started'),
-			r.seen_at
+			COALESCE(f.status, 'not_started')
 		FROM w9_tier_notices n
 		LEFT JOIN w9_filings f ON f.user_id = n.user_id AND f.tax_year = n.tax_year
-		LEFT JOIN improver_notification_reads r
-			ON r.user_id = n.user_id
-			AND r.notification_key = 'w9_required:' || n.tax_year::text
 		WHERE n.user_id = $1
 		-- Only while nothing is held; the escrow notification takes over then.
 		AND NOT EXISTS (
@@ -294,13 +285,12 @@ func (a *AppDB) appendW9TierNotification(ctx context.Context, userID string, fee
 		tier       string
 		notifiedAt time.Time
 		status     string
-		seenAt     *int64
 	}
 	collected := []tierRow{}
 	adminRequested := map[int]time.Time{}
 	for rows.Next() {
 		var row tierRow
-		if err := rows.Scan(&row.taxYear, &row.tier, &row.notifiedAt, &row.status, &row.seenAt); err != nil {
+		if err := rows.Scan(&row.taxYear, &row.tier, &row.notifiedAt, &row.status); err != nil {
 			return fmt.Errorf("error scanning w9 tier notification: %w", err)
 		}
 		if row.tier == W9TierAdminRequest {
@@ -315,7 +305,7 @@ func (a *AppDB) appendW9TierNotification(ctx context.Context, userID string, fee
 
 	seenYears := map[int]bool{}
 	for _, row := range collected {
-		taxYear, tier, notifiedAt, status, seenAt := row.taxYear, row.tier, row.notifiedAt, row.status, row.seenAt
+		taxYear, tier, notifiedAt, status := row.taxYear, row.tier, row.notifiedAt, row.status
 		// Highest tier first, one per year — a person who has crossed 500 does
 		// not also need the 400 notice sitting under it.
 		if seenYears[taxYear] || W9StatusClears(status) {
@@ -344,12 +334,11 @@ func (a *AppDB) appendW9TierNotification(ctx context.Context, userID string, fee
 			Body:      body,
 			CreatedAt: notifiedAt.Unix(),
 			TaxYear:   taxYear,
+			// Same rule as the escrow notice: a form is still being asked for,
+			// so looking at the list does not answer it.
+			Seen: false,
 		}
-		notification.Seen = seenAt != nil
-		notification.SeenAt = seenAt
-		if seenAt == nil {
-			feed.UnseenCount++
-		}
+		feed.UnseenCount++
 		feed.Notifications = append(feed.Notifications, notification)
 	}
 	return nil
@@ -362,9 +351,19 @@ func (a *AppDB) MarkImproverNotificationsSeen(ctx context.Context, improverId st
 
 	cleaned := make([]string, 0, len(keys))
 	for _, key := range keys {
-		if trimmed := strings.TrimSpace(key); trimmed != "" {
-			cleaned = append(cleaned, trimmed)
+		trimmed := strings.TrimSpace(key)
+		if trimmed == "" {
+			continue
 		}
+		// Which kinds ack on view is decided here rather than by the caller,
+		// because this is the only place a marker is written: a client asking
+		// for a tax notice by name cannot silence it, and neither can a future
+		// caller that has never heard of the rule. A key is "<type>:<subject>".
+		kind, _, _ := strings.Cut(trimmed, ":")
+		if !structs.NotificationAcksOnView(kind) {
+			continue
+		}
+		cleaned = append(cleaned, trimmed)
 	}
 	if len(cleaned) == 0 {
 		return 0, nil
@@ -384,59 +383,38 @@ func (a *AppDB) MarkImproverNotificationsSeen(ctx context.Context, improverId st
 	return int(tag.RowsAffected()), nil
 }
 
-// PruneResolvedImproverNotificationReads deletes seen markers whose underlying
-// condition has cleared, so the table does not grow without bound as payouts
-// settle. Safe to run at any time: a marker for a live notification is never
-// removed.
+// PruneResolvedImproverNotificationReads deletes seen markers that no longer
+// mean anything, so the table does not grow without bound as payouts settle.
+// Safe to run at any time: a marker for a live notification is never removed.
 func (a *AppDB) PruneResolvedImproverNotificationReads(ctx context.Context) (int64, error) {
 	tag, err := a.db.Exec(ctx, `
 		DELETE FROM improver_notification_reads r
-		WHERE (r.notification_key LIKE 'workflow_payout_pending:%'
-		    OR r.notification_key LIKE 'w9_escrow_held:%'
-		    OR r.notification_key LIKE 'w9_required:%')
-		AND NOT EXISTS (
-			SELECT 1
-			FROM workflow_steps ws
-			WHERE ws.assigned_improver_id = r.user_id
-			AND ws.status = 'completed'
-			AND ws.bounty > 0
-			AND r.notification_key = 'workflow_payout_pending:' || ws.workflow_id || ':' || ws.id
-		)
-		AND NOT EXISTS (
-			SELECT 1
-			FROM workflows w
-			WHERE w.manager_improver_id = r.user_id
-			AND w.status = 'completed'
-			AND w.manager_bounty > 0
-			AND w.manager_paid_out_at IS NULL
-			AND r.notification_key = 'workflow_payout_pending:' || w.id || ':manager'
-		)
-		-- Tax markers need their own liveness check. Without it the two clauses
-		-- above are both trivially true for a w9 key — no workflow matches it —
-		-- and every prune would delete the marker for a notification that is
-		-- still on screen, making it pop back up as unread.
-		AND NOT EXISTS (
-			SELECT 1
-			FROM payout_ledger p
-			WHERE p.user_id = r.user_id
-			AND p.state IN ('escrowed','releasing')
-			AND r.notification_key = 'w9_escrow_held:' || p.tax_year::text
-		)
-		-- Same reasoning for the tier marker: it stays while an outstanding tier
-		-- is still on screen, which is while a tier notice exists, the filing has
-		-- not cleared, and nothing is escrowed yet (once it is, the escrow
-		-- notification replaces this one and this marker should go).
-		AND NOT EXISTS (
-			SELECT 1
-			FROM w9_tier_notices n
-			LEFT JOIN w9_filings f ON f.user_id = n.user_id AND f.tax_year = n.tax_year
-			WHERE n.user_id = r.user_id
-			AND r.notification_key = 'w9_required:' || n.tax_year::text
-			AND COALESCE(f.status, 'not_started') NOT IN ('completed','legacy_approved','manually_cleared')
+		-- Tax markers are swept whatever state the filing is in, because a tax
+		-- notice has no seen state any more: it is outstanding until the W-9 is
+		-- on file, at which point the notice is gone from the feed entirely.
+		-- Every row matching these two prefixes was written by the version that
+		-- did ack them on view, and nothing reads one now.
+		WHERE r.notification_key LIKE 'w9_escrow_held:%'
+		   OR r.notification_key LIKE 'w9_required:%'
+		-- Payout markers are real, and go when the payout they silenced lands.
+		   OR (
+			r.notification_key LIKE 'workflow_payout_pending:%'
 			AND NOT EXISTS (
-				SELECT 1 FROM payout_ledger p2
-				WHERE p2.user_id = n.user_id AND p2.tax_year = n.tax_year
-				AND p2.state IN ('escrowed','releasing')
+				SELECT 1
+				FROM workflow_steps ws
+				WHERE ws.assigned_improver_id = r.user_id
+				AND ws.status = 'completed'
+				AND ws.bounty > 0
+				AND r.notification_key = 'workflow_payout_pending:' || ws.workflow_id || ':' || ws.id
+			)
+			AND NOT EXISTS (
+				SELECT 1
+				FROM workflows w
+				WHERE w.manager_improver_id = r.user_id
+				AND w.status = 'completed'
+				AND w.manager_bounty > 0
+				AND w.manager_paid_out_at IS NULL
+				AND r.notification_key = 'workflow_payout_pending:' || w.id || ':manager'
 			)
 		);
 	`)

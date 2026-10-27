@@ -2259,7 +2259,11 @@ export default function ProposerPage() {
 
     if (supervisorUserId) {
       payload.supervisor_user_id = supervisorUserId
-      payload.supervisor_bounty = workflow.supervisor_bounty
+      // Always zero, never the workflow's own value. Supervisor rewards are
+      // gone and the backend refuses a positive amount, so echoing back a
+      // figure read before the migration cleared it would fail the edit
+      // outright rather than carry a reward nobody can be paid.
+      payload.supervisor_bounty = 0
     }
     if (supervisorDataFields.length > 0) {
       payload.supervisor_data_fields = supervisorDataFields
