@@ -5,20 +5,21 @@ import { useApp } from "@/context/AppProvider"
 import { cn } from "@/lib/utils"
 import { useIsMobile } from "@/hooks/use-mobile"
 import {
+  Building2,
+  ClipboardCheck,
+  ClipboardList,
+  Globe,
+  Handshake,
   LogOut,
   Map,
   Settings,
-  Wallet,
-  Handshake,
-  SquareUserIcon,
   Shield,
-  ClipboardList,
-  ClipboardCheck,
-  Vote,
   ShieldCheck,
+  SquareUserIcon,
   Store,
+  Vote,
+  Wallet,
   Wrench,
-  Globe,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import {
@@ -164,6 +165,15 @@ export function DashboardSidebar() {
         title: "Contacts",
         icon: SquareUserIcon,
         path: "/contacts"
+      },
+      // Shown to everybody signed in rather than gated on membership: the page
+      // is also where somebody with no organization creates or joins one, and
+      // the user object carries no org flag to gate on anyway. The panel has
+      // its own "No organization yet" state.
+      {
+        title: "My Organization",
+        icon: Building2,
+        path: "/organization",
       },
     ]
 

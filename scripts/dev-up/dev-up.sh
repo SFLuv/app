@@ -39,7 +39,8 @@
 #   ./scripts/dev-up/dev-up.sh --skip-db-clone       # reuse previously cloned local databases
 #   ./scripts/dev-up/dev-up.sh --mobile-branch <b>   # pull the mobile app from branch <b>
 #                                     # (overrides MOBILE_APP_BRANCH in .dev.env)
-#   ./scripts/dev-up/dev-up.sh menu                  # dev utilities (set admin, set/clear user
+#   ./scripts/dev-up/dev-up.sh menu                  # dev utilities (set admin, trigger a
+#                                                    # notification of any kind, set/clear user
 #                                     # pranks) against the local db; boots nothing
 #
 # Configuration comes from ./.dev.env (auto-created from .dev.env.example).
@@ -189,6 +190,237 @@ SQL
   done
 }
 
+# ── Notification preview ─────────────────────────────────────────────────────
+#
+# Writes a notification straight into the local app database, so every kind the
+# app can render can be looked at without waiting for the thing that normally
+# produces it. There is no backend call here: the menu already works this way,
+# and a dev-only HTTP endpoint would be a production surface to secure in
+# exchange for nothing this cannot do.
+#
+# Three mechanisms, and the menu keeps them apart because acknowledging them is
+# not the same operation:
+#
+#   ordinary   one user_notifications row. Looking at the screen is the ack,
+#              which stamps seen_at.
+#   internal   an internal_notifications row plus a delivered copy per
+#              subscriber. Looking at it does NOT ack it — the alert is a
+#              condition, and it ends by being acted on or going away. Ack here
+#              means resolved_at + resolution, which clears it for EVERY
+#              recipient at once, not just the one picked.
+#   tier       not stored as a notification. The feed derives the "a W-9 is
+#              coming up" prompt from a w9_tier_notices row, so previewing one
+#              means writing that row. Acking stamps acknowledged_at, which
+#              stops the modal and leaves the bell entry — a W-9 prompt is
+#              answered by filing, not by being looked at.
+#   escrow     also derived, but from a DIFFERENT table: "rewards are waiting"
+#              comes from payout_ledger rows in state 'escrowed', not from a
+#              tier row. Worth separating, because a tier row with an escrow
+#              tier produces the tier prompt and not this one — the feed
+#              suppresses the tier prompt entirely once anything is escrowed.
+#
+# Deliberately not offered: bulletin_message. Chat pushes are the one kind the
+# backend decides NOT to record (the thread and the Messages tab already count
+# them), so a history row for one would preview a state the app never produces.
+#
+# Not offered either: workflow_payout_pending, which is derived from a workflow
+# mid-payout. Faking that means a workflow, its steps and a payout row, which is
+# a fixture rather than a preview.
+
+NOTIF_KINDS=(
+  "transaction|ordinary|SFLuv received to Main wallet|25.00 SFLUV"
+  "bulletin_moderation|ordinary|SFLuv Bulletin|A moderator removed your post."
+  "volunteer_event_reminder|ordinary|Volunteer event reminder|Tenderloin Clean-up starts in two hours."
+  "volunteer_event_blast|ordinary|Message from the organizer|Bring gloves — we are short this week."
+  "internal_funding|internal|Faucet is low on CELO|0.4100 CELO, floor is 1.0000"
+  "internal_uptime|internal|Backend is failing its health check|No response for 4 minutes."
+  "internal_role_request|internal|Improver request|Sam Rivera is waiting on a decision."
+  "internal_support_request|internal|Support request: Technical support|My redemption code will not scan."
+  "w9_required|tier|A W-9 is coming up|notice_400"
+  "w9_escrow_held|escrow|Rewards are waiting|500000000"
+)
+
+# notif_house_org: the organization internal alerts belong to. Matched on
+# is_house for the same reason the backend does — a rename must not move them.
+notif_house_org() {
+  "${PSQL[@]}" -d "$APP_DB" -tAc "SELECT id FROM organizations WHERE is_house ORDER BY id LIMIT 1;" 2>/dev/null
+}
+
+notif_show_state() {
+  local user_id="$1"
+  echo
+  c_blue "  current notification state for ${user_id}"
+  "${PSQL[@]}" -d "$APP_DB" -v u="$user_id" <<'SQL' 2>/dev/null
+\pset border 2
+SELECT n.id,
+       n.kind,
+       left(n.title, 34) AS title,
+       CASE WHEN n.seen_at IS NULL THEN 'unseen' ELSE 'seen' END AS state,
+       COALESCE(i.resolution, '-')                               AS resolution,
+       COALESCE(left(i.outcome, 26), '-')                        AS outcome
+  FROM user_notifications n
+  LEFT JOIN internal_notifications i ON i.id = n.internal_notification_id
+ WHERE n.user_id = :'u'
+ ORDER BY n.created_at DESC, n.id DESC
+ LIMIT 12;
+SQL
+  local tiers
+  tiers="$("${PSQL[@]}" -d "$APP_DB" -tAc "SELECT count(*) FROM w9_tier_notices WHERE user_id = '$user_id' AND acknowledged_at IS NULL;" 2>/dev/null)"
+  [[ "${tiers:-0}" != "0" ]] && c_yellow "  ${tiers} outstanding W-9 tier notice(s) — these are derived, so they show in the feed with no row above"
+  return 0
+}
+
+# notif_send: writes one notification. $1 = kind, $2 = mechanism, $3 = title,
+# $4 = body/tier. Leaves NOTIF_LAST_* set for the ack step.
+NOTIF_LAST_KIND=""
+NOTIF_LAST_MECH=""
+NOTIF_LAST_ID=""
+notif_send() {
+  local kind="$1" mech="$2" title="$3" body="$4" user_id="$5"
+  NOTIF_LAST_KIND="$kind" NOTIF_LAST_MECH="$mech" NOTIF_LAST_ID=""
+
+  case "$mech" in
+    ordinary)
+      NOTIF_LAST_ID="$("${PSQL[@]}" -d "$APP_DB" -tAc \
+        "INSERT INTO user_notifications(user_id, kind, title, body, data)
+         VALUES ('$user_id', '$kind', '$title', '$body',
+                 jsonb_build_object('type', '$kind', 'preview', 'true'))
+         RETURNING id;" 2>&1)" || { c_red "  insert failed: $NOTIF_LAST_ID"; return 1; }
+      c_green "  wrote user_notifications #${NOTIF_LAST_ID} (${kind}) — unseen"
+      ;;
+    internal)
+      local org alert_set alert_kind
+      org="$(notif_house_org)"
+      [[ -z "$org" ]] && { c_red "  no house organization in this database — internal alerts have nowhere to live"; return 1; }
+      alert_kind="${kind#internal_}"
+      case "$alert_kind" in
+        funding|uptime) alert_set="dev" ;;
+        support_request) alert_set="support" ;;
+        *) alert_set="admin" ;;
+      esac
+      # A unique alert_key per preview, because the live-key index allows only
+      # one unresolved alert per condition — reusing a key would update the
+      # previous preview instead of making a new one.
+      local key="preview:${alert_kind}:$(date +%s)"
+      NOTIF_LAST_ID="$("${PSQL[@]}" -d "$APP_DB" -tAc \
+        "INSERT INTO internal_notifications(organization_id, notification_set, alert_key, kind, title, body, fields, payload, urgent)
+         VALUES ($org, '$alert_set', '$key', '$alert_kind', '$title', '$body',
+                 jsonb_build_array(jsonb_build_object('label','Source','value','dev preview')),
+                 jsonb_build_object('preview','true'), $( [[ "$alert_kind" == "uptime" ]] && echo true || echo false ))
+         RETURNING id;" 2>&1)" || { c_red "  insert failed: $NOTIF_LAST_ID"; return 1; }
+      # Delivered to the picked user whether or not they subscribe to the set,
+      # which is the point of a preview: you are looking at the rendering, not
+      # testing the subscription rules.
+      "${PSQL[@]}" -d "$APP_DB" -q -c \
+        "INSERT INTO user_notifications(user_id, kind, title, body, data, internal_notification_id)
+         VALUES ('$user_id', '$alert_kind', '$title', '$body',
+                 jsonb_build_object('type', 'internal_$alert_kind', 'notification_set', '$alert_set'), $NOTIF_LAST_ID);" >/dev/null 2>&1
+      c_green "  wrote internal_notifications #${NOTIF_LAST_ID} (${alert_kind}, set '${alert_set}') and delivered it"
+      ;;
+    tier)
+      local tier="$body" year
+      year="$(date +%Y)"
+      "${PSQL[@]}" -d "$APP_DB" -q -c \
+        "INSERT INTO w9_tier_notices(user_id, tax_year, tier)
+         VALUES ('$user_id', $year, '$tier')
+         ON CONFLICT (user_id, tax_year, tier) DO UPDATE SET notified_at = NOW(), acknowledged_at = NULL;" >/dev/null 2>&1 \
+        || { c_red "  insert failed"; return 1; }
+      NOTIF_LAST_ID="$tier"
+      c_green "  wrote w9_tier_notices (${tier}, ${year}) — the feed derives the prompt from it"
+      c_yellow "  no history row: this kind is computed from live state and stays in the feed until a W-9 clears."
+      ;;
+    escrow)
+      local amount="$body" year wallet
+      year="$(date +%Y)"
+      # The ledger is keyed on a recipient address, so the preview needs one.
+      # The user's primary wallet if they have it, a filler if not — the feed
+      # groups by user_id and tax year, so the address only has to exist.
+      wallet="$("${PSQL[@]}" -d "$APP_DB" -tAc "SELECT COALESCE(NULLIF(TRIM(primary_wallet_address), ''), '0x0000000000000000000000000000000000000001') FROM users WHERE id = '$user_id';" 2>/dev/null)"
+      NOTIF_LAST_ID="$("${PSQL[@]}" -d "$APP_DB" -tAc \
+        "INSERT INTO payout_ledger(idempotency_key, user_id, recipient_address, tax_year, source, source_ref, amount_base, state, escrowed_at)
+         VALUES ('dev-preview-' || gen_random_uuid()::text, '$user_id', '$wallet', $year, 'dev_preview', 'notification preview', $amount, 'escrowed', NOW())
+         RETURNING id;" 2>&1)" || { c_red "  insert failed: $NOTIF_LAST_ID"; return 1; }
+      c_green "  wrote payout_ledger #${NOTIF_LAST_ID} in state 'escrowed'"
+      c_yellow "  this also SUPPRESSES the tier prompt — the feed shows the stricter 'rewards waiting' entry instead of 'a W-9 is coming up', which is the rule worth seeing."
+      c_yellow "  it counts toward the faucet's allocated total while it exists. 'a' releases it."
+      ;;
+  esac
+  return 0
+}
+
+notif_ack() {
+  local user_id="$1"
+  [[ -z "$NOTIF_LAST_KIND" ]] && { c_yellow "  nothing triggered yet"; return; }
+  case "$NOTIF_LAST_MECH" in
+    ordinary)
+      "${PSQL[@]}" -d "$APP_DB" -q -c \
+        "UPDATE user_notifications SET seen_at = NOW() WHERE id = $NOTIF_LAST_ID;" >/dev/null 2>&1
+      c_green "  #${NOTIF_LAST_ID} marked seen — this is exactly what opening the screen does"
+      ;;
+    internal)
+      "${PSQL[@]}" -d "$APP_DB" -q -c \
+        "UPDATE internal_notifications
+            SET resolved_at = NOW(), resolved_by = '$user_id', resolution = 'acked',
+                outcome = 'Acknowledged from the dev menu'
+          WHERE id = $NOTIF_LAST_ID;" >/dev/null 2>&1
+      c_green "  alert #${NOTIF_LAST_ID} resolved as 'acked'"
+      c_yellow "  it has left the active list for EVERY recipient, not just this user — that is what resolving an alert means."
+      ;;
+    tier)
+      # NOTIF_LAST_ID carries the tier here — there is no row id to carry,
+      # because the notification is not a row.
+      "${PSQL[@]}" -d "$APP_DB" -q -c \
+        "UPDATE w9_tier_notices SET acknowledged_at = NOW()
+          WHERE user_id = '$user_id' AND tier = '$NOTIF_LAST_ID';" >/dev/null 2>&1
+      c_green "  tier notice '${NOTIF_LAST_ID}' acknowledged"
+      c_yellow "  the modal stops reappearing, but the bell entry does not: a W-9 prompt is answered by filing, not by being looked at."
+      ;;
+    escrow)
+      "${PSQL[@]}" -d "$APP_DB" -q -c \
+        "UPDATE payout_ledger SET state = 'released', released_at = NOW()
+          WHERE id = $NOTIF_LAST_ID;" >/dev/null 2>&1
+      c_green "  payout_ledger #${NOTIF_LAST_ID} released"
+      c_yellow "  the feed entry goes with it, and the tier prompt comes back if one is outstanding — which is the escrow rule running in reverse."
+      ;;
+  esac
+}
+
+menu_trigger_notification() {
+  pick_user "user to notify" || { c_yellow "  cancelled"; return; }
+  local user_id="$PICKED_USER_ID" user_email="$PICKED_USER_EMAIL"
+  c_blue "  notifying ${user_email} (${user_id})"
+
+  while true; do
+    echo
+    local i entry kind mech title
+    for i in "${!NOTIF_KINDS[@]}"; do
+      entry="${NOTIF_KINDS[$i]}"
+      IFS='|' read -r kind mech title _ <<< "$entry"
+      printf "    [%2d] %-26s %-9s %s\n" "$((i + 1))" "$kind" "($mech)" "$title"
+    done
+    echo "    [ a] acknowledge the last one"
+    echo "    [ s] show this user's notification state"
+    printf "  select 1-%d, a, s (blank to finish): " "${#NOTIF_KINDS[@]}"
+    local sel; read -r sel
+    case "$sel" in
+      "") return ;;
+      a|A) notif_ack "$user_id" ;;
+      s|S) notif_show_state "$user_id" ;;
+      *)
+        if [[ "$sel" =~ ^[0-9]+$ && "$sel" -ge 1 && "$sel" -le ${#NOTIF_KINDS[@]} ]]; then
+          IFS='|' read -r kind mech title body <<< "${NOTIF_KINDS[$((sel - 1))]}"
+          if notif_send "$kind" "$mech" "$title" "$body" "$user_id"; then
+            notif_show_state "$user_id"
+            c_blue "  open the app as this user to see it, then 'a' to acknowledge and 's' to compare"
+          fi
+        else
+          c_yellow "    invalid selection"
+        fi
+        ;;
+    esac
+  done
+}
+
 menu_set_admin() {
   local email
   printf "  email to grant admin: "; read -r email
@@ -293,12 +525,14 @@ run_menu() {
     if pranks_active; then
       echo "  3) Clear pranks"
     fi
+    echo "  4) Trigger a notification (preview any kind, then acknowledge it)"
     echo "  q) Quit"
     printf "select: "; local sel; read -r sel
     case "$sel" in
       1) menu_set_admin ;;
       2) menu_set_prank ;;
       3) if pranks_active; then menu_clear_pranks; else c_yellow "  no active pranks."; fi ;;
+      4) menu_trigger_notification ;;
       q|Q|"") break ;;
       *) c_yellow "  unknown selection" ;;
     esac
@@ -1542,6 +1776,7 @@ while true; do
   if pranks_active; then
     echo "  c) Clear pranks"
   fi
+  echo "  n) Trigger a notification (preview any kind, then acknowledge it)"
   echo "  l) Tail service logs (Ctrl-C returns here)"
   echo "  q) Quit (shut everything down)"
   printf "select: "
@@ -1552,6 +1787,7 @@ while true; do
     a|A) menu_set_admin ;;
     p|P) menu_set_prank ;;
     c|C) if pranks_active; then menu_clear_pranks; else c_yellow "  no active pranks."; fi ;;
+    n|N) menu_trigger_notification ;;
     l|L)
       c_yellow "  tailing ${#TAIL_LOGS[@]} logs — Ctrl-C to return to the menu"
       # A no-op INT *handler* (not '' ignore — ignores are inherited by

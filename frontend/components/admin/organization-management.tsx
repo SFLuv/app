@@ -22,13 +22,12 @@ import {
   Users,
   X,
 } from "lucide-react"
-import { Checkbox } from "@/components/ui/checkbox"
 import { EventModal } from "@/components/events/event-modal"
-import { formatCredentialLabel } from "@/lib/credential-labels"
 import { useToast } from "@/hooks/use-toast"
 import { useApp } from "@/context/AppProvider"
 import type { Event } from "@/types/event"
-import type { OrganizationView, OrgRoleType } from "@/types/organization"
+import type { OrgMemberEndpoints, OrganizationView, OrgRoleType } from "@/types/organization"
+import { MemberDirectory } from "@/components/organization/member-directory"
 import type { GlobalCredentialType } from "@/types/workflow"
 
 const roleTypes: OrgRoleType[] = ["affiliate", "proposer", "supervisor", "issuer"]
@@ -75,7 +74,6 @@ export function OrganizationManagement() {
   // members". Asked rather than assumed, so the controls are not offered to
   // somebody the server will refuse.
   const [canManageMembers, setCanManageMembers] = useState(false)
-  const [inviteDraft, setInviteDraft] = useState("")
 
 
   const [orgEvents, setOrgEvents] = useState<Event[]>([])
@@ -238,40 +236,21 @@ export function OrganizationManagement() {
     }
   }, [authFetch])
 
-  const inviteMember = async (orgId: number) => {
-    const email = inviteDraft.trim()
-    if (!email) return
-    const ok = await act(
-      () =>
-        authFetch(`/admin/organizations/${orgId}/members/invites`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email }),
-        }),
-      "Invite sent",
-    )
-    if (ok) setInviteDraft("")
-  }
-
-  const removeMember = async (orgId: number, userId: string) =>
-    act(
-      () =>
-        authFetch(`/admin/organizations/${orgId}/members/${encodeURIComponent(userId)}`, {
-          method: "DELETE",
-        }),
-      "Member removed",
-    )
-
-  const setMemberRole = async (orgId: number, userId: string, role: string) =>
-    act(
-      () =>
-        authFetch(`/admin/organizations/${orgId}/members/role`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ user_id: userId, role }),
-        }),
-      "Role updated",
-    )
+  /**
+   * The admin-panel equivalents of /organizations/mine/*, for one partner.
+   *
+   * Built per organization rather than held in state because the detail pane
+   * can switch between organizations without unmounting, and an endpoint
+   * object that lagged a render would write to the organization somebody was
+   * looking at a moment ago.
+   */
+  const endpointsFor = (orgId: number): OrgMemberEndpoints => ({
+    permissions: `/admin/organizations/${orgId}/permissions`,
+    role: `/admin/organizations/${orgId}/members/role`,
+    invites: `/admin/organizations/${orgId}/members/invites`,
+    removeMember: (userId: string) =>
+      `/admin/organizations/${orgId}/members/${encodeURIComponent(userId)}`,
+  })
 
   const setSuperadmin = async (orgId: number) => {
     const ok = await act(
@@ -603,15 +582,30 @@ export function OrganizationManagement() {
 
                 {/* Members */}
                 <TabsContent value="members" className="min-h-0 flex-1 space-y-3 overflow-y-auto pt-3">
-                  <div className="space-y-2">
-                    {selected.members.map((m) => (
-                      <div key={m.user_id} className="flex items-center justify-between gap-3 rounded-lg border p-3">
-                        <div className="flex min-w-0 items-center gap-2">
-                          <Avatar className="h-8 w-8">
-                            <AvatarFallback className="text-xs">
-                              {orgInitials(memberLabel(m)) || "?"}
-                            </AvatarFallback>
-                          </Avatar>
+                  {canManageMembers ? (
+                    /*
+                      The same directory and the same modals the organization's
+                      own settings use, pointed at this organization by id. One
+                      implementation of "configure this member" rather than two
+                      that drift — and it is why the role select and the
+                      fine-grained tree behave identically in both places.
+                    */
+                    <MemberDirectory
+                      members={selected.members}
+                      invites={[]}
+                      endpoints={endpointsFor(selected.organization.id)}
+                      canManage
+                      canEditRoles
+                      onChanged={() => void load()}
+                      title={`${selected.organization.name} members`}
+                      description="Click a person to set their role and what they can do. Changes apply to this partner organization."
+                    />
+                  ) : (
+                    <div className="space-y-2">
+                      {/* Read-only, because the viewer holds neither the house
+                          superadmin role nor the delegated capability. */}
+                      {selected.members.map((m) => (
+                        <div key={m.user_id} className="flex items-center justify-between gap-3 rounded-lg border p-3">
                           <div className="min-w-0">
                             <p className="flex items-center gap-1 truncate text-sm font-medium">
                               {m.role === "superadmin" && <Crown className="h-3.5 w-3.5 shrink-0 text-amber-500" />}
@@ -621,90 +615,13 @@ export function OrganizationManagement() {
                               <p className="truncate text-xs text-muted-foreground">{m.contact_email}</p>
                             )}
                           </div>
-                        </div>
-                        {canManageMembers && m.role !== "superadmin" ? (
-                          <div className="flex shrink-0 items-center gap-2">
-                            <Select
-                              value={m.role}
-                              onValueChange={(role) => void setMemberRole(selected.organization.id, m.user_id, role)}
-                            >
-                              <SelectTrigger className="h-8 w-28 capitalize">
-                                <SelectValue />
-                              </SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value="member">Member</SelectItem>
-                                <SelectItem value="admin">Admin</SelectItem>
-                              </SelectContent>
-                            </Select>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="h-8"
-                              disabled={busy}
-                              onClick={() => void removeMember(selected.organization.id, m.user_id)}
-                            >
-                              Remove
-                            </Button>
-                          </div>
-                        ) : (
-                          // The superadmin's row stays a badge: removing or
-                          // re-roling them is refused by the server, and the
-                          // way to replace one is the transfer below.
                           <Badge variant="secondary" className="shrink-0 capitalize">
                             {m.role}
                           </Badge>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                  {canManageMembers ? (
-                    <div className="space-y-2 rounded-lg border bg-secondary/40 p-3">
-                      <Label className="text-xs">Invite a member by email</Label>
-                      <div className="flex gap-2">
-                        <Input
-                          className="h-9"
-                          type="email"
-                          placeholder="member@example.org"
-                          value={inviteDraft}
-                          onChange={(e) => setInviteDraft(e.target.value)}
-                        />
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="h-9 shrink-0"
-                          disabled={busy || !inviteDraft.trim()}
-                          onClick={() => void inviteMember(selected.organization.id)}
-                        >
-                          Send invite
-                        </Button>
-                      </div>
-                      <p className="text-xs text-muted-foreground">
-                        The same invite this organization&apos;s own admins send. It expires in 7 days and only works
-                        for the address it was sent to.
-                      </p>
+                        </div>
+                      ))}
                     </div>
-                  ) : null}
-                  <div className="space-y-2 rounded-lg border bg-secondary/40 p-3">
-                    <Label className="text-xs">Set superadmin by member email</Label>
-                    <div className="flex gap-2">
-                      <Input
-                        className="h-9"
-                        type="email"
-                        placeholder={selectedSuperadmin?.contact_email || "member@example.org"}
-                        value={superadminDraft}
-                        onChange={(e) => setSuperadminDraft(e.target.value)}
-                      />
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="h-9 shrink-0"
-                        disabled={busy || !superadminDraft.trim()}
-                        onClick={() => void setSuperadmin(selected.organization.id)}
-                      >
-                        Set superadmin
-                      </Button>
-                    </div>
-                  </div>
+                  )}
                 </TabsContent>
 
                 {/* Events (approved affiliates only) */}

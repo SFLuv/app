@@ -40,6 +40,8 @@ export interface OrganizationInvite {
   id: number
   organization_id: number
   email: string
+  /** What the invitee becomes on accepting, so a pending row can say so. */
+  role: OrgMemberRole
   invited_by: string
   expires_at: string
   accepted_at?: string | null
@@ -88,4 +90,24 @@ export interface OrganizationPermissionsView {
   members: MemberPermissions[]
   can_edit: boolean
   can_edit_administrative: boolean
+}
+
+/**
+ * Where a member-management surface sends its writes.
+ *
+ * The same modals serve two places: an organization's own settings, which act
+ * on /organizations/mine, and the platform admin panel, which acts on a
+ * partner by id. Passing the paths in rather than branching inside the modal
+ * keeps one implementation of "configure this member" instead of two that
+ * drift.
+ */
+export interface OrgMemberEndpoints {
+  /** GET and PUT the fine-grained permissions. */
+  permissions: string
+  /** PUT a member's role. */
+  role: string
+  /** POST an invite. */
+  invites: string
+  /** DELETE a member. */
+  removeMember: (userId: string) => string
 }
