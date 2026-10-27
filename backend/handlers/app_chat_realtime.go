@@ -266,3 +266,49 @@ func (a *AppService) PublishBetaChanged(userId string, features []string) {
 		Data: map[string]any{"features": features},
 	})
 }
+
+// publishMessageUpdated tells a thread that a message changed in place — today,
+// that it was edited.
+//
+// Reuses EventMessageNew's shape but its own kind, so a client replaces the
+// message it already has rather than appending a second copy of it.
+func (a *AppService) publishMessageUpdated(ctx context.Context, conv *structs.ConversationRow, message *structs.Message, actorId string) {
+	if a.realtime == nil {
+		return
+	}
+	members, err := a.db.GetConversationMemberIds(ctx, conv.Id)
+	if err != nil {
+		return
+	}
+	for _, id := range members {
+		if id == actorId {
+			continue
+		}
+		forThem := *message
+		forThem.IsMine = false
+		a.realtime.Publish([]string{id}, realtime.Event{
+			Kind:           realtime.EventMessageUpdated,
+			ConversationId: conv.Id,
+			Data:           &forThem,
+		})
+	}
+}
+
+// publishMessageDeleted tells a thread that a message became a tombstone.
+//
+// Only the id travels. Sending the message would mean sending what it used to
+// say, which is the one thing a delete is for.
+func (a *AppService) publishMessageDeleted(ctx context.Context, conv *structs.ConversationRow, messageId int64, actorId string) {
+	if a.realtime == nil {
+		return
+	}
+	members, err := a.db.GetConversationMemberIds(ctx, conv.Id)
+	if err != nil {
+		return
+	}
+	a.realtime.PublishExcept(members, actorId, realtime.Event{
+		Kind:           realtime.EventMessageDeleted,
+		ConversationId: conv.Id,
+		Data:           map[string]any{"message_id": messageId},
+	})
+}

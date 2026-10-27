@@ -31,7 +31,13 @@ func (a *AppService) hydrateMessages(ctx context.Context, conv *structs.Conversa
 	ids := make([]int64, 0, len(msgs))
 	replyTargets := []int64{}
 	for _, m := range msgs {
-		ids = append(ids, m.Id)
+		// A deleted message has nothing to hydrate: its body is already blanked
+		// and loading its attachments or reactions would hand back content it no
+		// longer has. Its reply target is still resolved, because the tombstone
+		// keeps its place in the conversation.
+		if !m.Deleted {
+			ids = append(ids, m.Id)
+		}
 		if m.ReplyToId != nil {
 			replyTargets = append(replyTargets, *m.ReplyToId)
 		}

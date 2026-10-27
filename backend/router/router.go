@@ -1134,6 +1134,11 @@ func AddBulletinRoutes(r *chi.Mux, a *handlers.AppService) {
 
 	// Replies and reactions.
 	r.Post("/conversations/{id}/messages/{messageId}/reactions", withChatBeta(a.ToggleMessageReaction))
+	// Editing and deleting your own message. Both are sender-only; an admin
+	// removing reported content goes through the moderation path, which hides
+	// the message rather than leaving the tombstone these leave.
+	r.Patch("/conversations/{id}/messages/{messageId}", withChatBeta(a.EditConversationMessage))
+	r.Delete("/conversations/{id}/messages/{messageId}", withChatBeta(a.DeleteConversationMessage))
 
 	// Attachments. The upload is multipart; the reference route is JSON for the
 	// kinds that carry a pointer rather than bytes.
@@ -1143,6 +1148,10 @@ func AddBulletinRoutes(r *chi.Mux, a *handlers.AppService) {
 	// to that document in the same commit.
 	r.Post("/conversations/{id}/attachments", withChatBeta(a.UploadConversationAttachment))
 	r.Post("/conversations/{id}/references", withChatBeta(a.AttachConversationReference))
+	// Scrapes a URL's metadata without posting it, so the composer can show the
+	// card before the message is sent. Same fetcher and same SSRF guards as the
+	// reference route — see PreviewLink for what exposing it separately costs.
+	r.Post("/link-preview", withChatBeta(a.PreviewLink))
 	r.Get("/conversations/{id}/attachments/{attachmentId}", withChatBeta(a.GetConversationAttachment))
 	r.Get("/conversations/{id}/files", withChatBeta(a.SearchConversationFiles))
 

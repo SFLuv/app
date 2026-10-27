@@ -147,11 +147,33 @@ func (a *AppDB) CountConversationsStartedSince(ctx context.Context, userId strin
 
 const messageColumns = `
 	x.id, x.conversation_id, x.sender_id, x.kind, x.body, x.tx_hash,
-	x.amount_sfluv_base::text, x.payment_verified, x.created_at, x.reply_to_id`
+	x.amount_sfluv_base::text, x.payment_verified, x.created_at, x.reply_to_id,
+	x.edited_at, (x.deleted_at IS NOT NULL AND x.deleted_by IS NOT NULL)`
 
+// scanMessage reads a message and, if it was deleted by its sender, blanks
+// everything that was in it.
+//
+// The blanking is HERE rather than in each handler on purpose. The row keeps
+// its text so a report filed just before the delete still has something to show
+// an admin (see the 1.75 migration), which means every member-facing read is
+// one forgotten line away from serving deleted content. Doing it in the single
+// function they all go through is the only version of that which stays true as
+// handlers are added.
 func scanMessage(row pgx.Row, m *structs.Message) error {
-	return row.Scan(&m.Id, &m.ConversationId, &m.SenderId, &m.Kind, &m.Body, &m.TxHash,
-		&m.AmountSfluvBase, &m.PaymentVerified, &m.CreatedAt, &m.ReplyToId)
+	if err := row.Scan(&m.Id, &m.ConversationId, &m.SenderId, &m.Kind, &m.Body, &m.TxHash,
+		&m.AmountSfluvBase, &m.PaymentVerified, &m.CreatedAt, &m.ReplyToId,
+		&m.EditedAt, &m.Deleted); err != nil {
+		return err
+	}
+	if m.Deleted {
+		m.Body = ""
+		m.TxHash = nil
+		m.AmountSfluvBase = nil
+		m.PaymentVerified = false
+		// The attachments of a deleted message are never loaded — the hydration
+		// step skips it — so there is nothing to clear there.
+	}
+	return nil
 }
 
 type InboxRow struct {
@@ -159,6 +181,12 @@ type InboxRow struct {
 	Unread       int
 	Last         *structs.Message
 	MemberCount  int
+	// The newest reaction in the thread, whether or not it is newer than the
+	// last message. The handler decides whether it is the thing worth showing;
+	// comparing here would put a display decision in the query.
+	LatestReaction *structs.ConversationReaction
+	// Who reacted, so the handler can mark the reader's own.
+	LatestReactionUserId string
 }
 
 // ListConversations is the inbox: threads that have at least one message,
@@ -179,7 +207,8 @@ func (a *AppDB) ListConversations(ctx context.Context, userId string) ([]InboxRo
 				WHERE cm.conversation_id = c.id AND cm.left_at IS NULL
 			),
 			lm.id, lm.conversation_id, lm.sender_id, lm.kind, lm.body, lm.tx_hash,
-			lm.amount_sfluv_base::text, lm.payment_verified, lm.created_at, lm.reply_to_id
+			lm.amount_sfluv_base::text, lm.payment_verified, lm.created_at, lm.reply_to_id,
+			lr.emoji, lr.reactor_id, lr.reacted_at, lr.excerpt
 		FROM conversation_members m
 		JOIN conversations c ON c.id = m.conversation_id
 		JOIN LATERAL (
@@ -188,6 +217,22 @@ func (a *AppDB) ListConversations(ctx context.Context, userId string) ([]InboxRo
 			ORDER BY x.id DESC
 			LIMIT 1
 		) lm ON TRUE
+		-- The newest reaction in the thread, so the inbox can say "X reacted to
+		-- …" when that is genuinely the latest activity. A reaction is not a
+		-- message, so it cannot come from the lateral above.
+		--
+		-- LEFT JOIN: a thread with no reactions is the common case and must not
+		-- be dropped from the inbox. Bounded by LIMIT 1 and driven by
+		-- message_reactions_message_idx through the join on message_id.
+		LEFT JOIN LATERAL (
+			SELECT r.emoji, r.user_id AS reactor_id, r.created_at AS reacted_at,
+				LEFT(COALESCE(NULLIF(rx.body, ''), ''), 80) AS excerpt
+			FROM message_reactions r
+			JOIN messages rx ON rx.id = r.message_id
+			WHERE rx.conversation_id = c.id AND rx.deleted_at IS NULL
+			ORDER BY r.created_at DESC
+			LIMIT 1
+		) lr ON TRUE
 		WHERE m.user_id = $1 AND m.archived_at IS NULL AND m.left_at IS NULL
 		ORDER BY c.last_message_at DESC
 		LIMIT 200;
@@ -201,6 +246,9 @@ func (a *AppDB) ListConversations(ctx context.Context, userId string) ([]InboxRo
 	for rows.Next() {
 		var r InboxRow
 		var last structs.Message
+		// Nullable because the reaction lateral is a LEFT JOIN.
+		var emoji, reactorId, excerpt *string
+		var reactedAt *time.Time
 		c := &r.Conversation
 		if err := rows.Scan(
 			&c.Id, &c.Kind, &c.Title, &c.IconAttachmentId, &c.OwnerId,
@@ -208,10 +256,19 @@ func (a *AppDB) ListConversations(ctx context.Context, userId string) ([]InboxRo
 			&c.LastReadId, &c.MyRole, &r.Unread, &r.MemberCount,
 			&last.Id, &last.ConversationId, &last.SenderId, &last.Kind, &last.Body, &last.TxHash,
 			&last.AmountSfluvBase, &last.PaymentVerified, &last.CreatedAt, &last.ReplyToId,
+			&emoji, &reactorId, &reactedAt, &excerpt,
 		); err != nil {
 			return nil, err
 		}
 		r.Last = &last
+		if emoji != nil && reactedAt != nil {
+			r.LatestReactionUserId = derefString(reactorId)
+			r.LatestReaction = &structs.ConversationReaction{
+				Emoji:          *emoji,
+				MessageExcerpt: derefString(excerpt),
+				CreatedAt:      *reactedAt,
+			}
+		}
 		out = append(out, r)
 	}
 	return out, rows.Err()
@@ -238,11 +295,20 @@ func (a *AppDB) CountUnreadConversations(ctx context.Context, userId string) (in
 
 // GetMessages pages a thread backwards from beforeId (0 = newest).
 func (a *AppDB) GetMessages(ctx context.Context, conversationId int64, beforeId int64, limit int) ([]*structs.Message, bool, error) {
+	// Sender deletions come back as tombstones; admin removals do not come back
+	// at all.
+	//
+	// The distinction is the point of deleted_by. Somebody deleting their own
+	// message should leave "Message was deleted" so the thread still makes
+	// sense — especially where a reply answers it. An admin removing reported
+	// content should leave nothing, because a gap that announces itself tells
+	// everyone in the thread that something was actioned, which is the
+	// reported person's business and nobody else's.
 	rows, err := a.db.Query(ctx, `
 		SELECT `+messageColumns+`
 		FROM messages x
 		WHERE x.conversation_id = $1
-			AND x.deleted_at IS NULL
+			AND (x.deleted_at IS NULL OR x.deleted_by IS NOT NULL)
 			AND ($2 = 0 OR x.id < $2)
 		ORDER BY x.id DESC
 		LIMIT $3;
@@ -337,6 +403,90 @@ func (a *AppDB) InsertMessage(ctx context.Context, n *NewMessage) (*structs.Mess
 		return nil, err
 	}
 	return &m, nil
+}
+
+// EditWindow is how long a sender has to change what they said.
+//
+// Five minutes: long enough to fix a typo or a wrong number, short enough that
+// nobody can rewrite a conversation somebody has already acted on. An edit is
+// also marked, so the other person can see that the words changed.
+const EditWindow = 5 * time.Minute
+
+// ErrEditWindowClosed means the message is too old to edit.
+var ErrEditWindowClosed = errors.New("too late to edit that message")
+
+// ErrNotMyMessage means the caller did not send it.
+var ErrNotMyMessage = errors.New("not your message")
+
+// EditMessage changes a message's text, within the window and only for its
+// sender.
+//
+// Every condition is in the WHERE clause rather than checked first and written
+// second: the window is a deadline, and a check-then-write leaves a gap in
+// which it can pass. The distinct error cases are told apart afterwards by
+// re-reading, which only happens on the failure path.
+func (a *AppDB) EditMessage(ctx context.Context, messageId int64, userId string, body string) (*structs.Message, error) {
+	var m structs.Message
+	err := scanMessage(a.db.QueryRow(ctx, `
+		WITH x AS (
+			UPDATE messages
+			SET body = $3, edited_at = NOW()
+			WHERE id = $1
+				AND sender_id = $2
+				AND deleted_at IS NULL
+				-- Text and attachment captions only. There is nothing editable
+				-- about a payment (the amount is on a chain) or a system line
+				-- (nobody wrote it).
+				AND kind IN ('text', 'attachment')
+				AND created_at > NOW() - $4::interval
+			RETURNING *
+		)
+		SELECT `+messageColumns+` FROM x;
+	`, messageId, userId, body, EditWindow.String()), &m)
+	if errors.Is(err, pgx.ErrNoRows) {
+		// Nothing matched. Work out which rule it broke, so the person is told
+		// something they can act on.
+		var senderId string
+		var createdAt time.Time
+		var deleted bool
+		var kind string
+		if lookupErr := a.db.QueryRow(ctx, `
+			SELECT sender_id, created_at, deleted_at IS NOT NULL, kind FROM messages WHERE id = $1;
+		`, messageId).Scan(&senderId, &createdAt, &deleted, &kind); lookupErr != nil {
+			return nil, ErrConversationNotFound
+		}
+		if senderId != userId {
+			return nil, ErrNotMyMessage
+		}
+		if deleted || (kind != "text" && kind != "attachment") {
+			return nil, ErrNotMyMessage
+		}
+		return nil, ErrEditWindowClosed
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &m, nil
+}
+
+// DeleteOwnMessage removes a message for everybody, leaving a tombstone.
+//
+// deleted_by records that this was the sender's own doing, which is what makes
+// the read path return it as "Message was deleted" rather than hiding it the way
+// an admin removal is hidden.
+func (a *AppDB) DeleteOwnMessage(ctx context.Context, messageId int64, userId string) error {
+	tag, err := a.db.Exec(ctx, `
+		UPDATE messages
+		SET deleted_at = NOW(), deleted_by = $2
+		WHERE id = $1 AND sender_id = $2 AND deleted_at IS NULL;
+	`, messageId, userId)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotMyMessage
+	}
+	return nil
 }
 
 func (a *AppDB) MarkConversationRead(ctx context.Context, conversationId int64, userId string) error {

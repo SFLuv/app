@@ -163,6 +163,21 @@ func (a *AppService) ListMyConversations(w http.ResponseWriter, r *http.Request)
 			conv.OtherUserInactive = !otherStillIn
 		}
 
+		// A reaction is shown only when it is the NEWEST thing in the thread.
+		// Older than the last message it is not the latest activity, and
+		// showing it would describe the thread wrongly.
+		if row.LatestReaction != nil && row.Last != nil &&
+			row.LatestReaction.CreatedAt.After(row.Last.CreatedAt) {
+			reaction := *row.LatestReaction
+			reaction.IsMine = row.LatestReactionUserId == userId
+			if !reaction.IsMine {
+				if names, err := a.db.GetSenderNames(ctx, []string{row.LatestReactionUserId}); err == nil {
+					reaction.UserName = names[row.LatestReactionUserId]
+				}
+			}
+			conv.LatestReaction = &reaction
+		}
+
 		if conv.LastMessage != nil {
 			conv.LastMessage.IsMine = conv.LastMessage.SenderId == userId
 			// The inbox row for a group says who spoke last, so a preview is
@@ -958,4 +973,141 @@ func (a *AppService) notifyNewMessageWithTitle(senderId, recipientId string, con
 			}
 		}
 	}()
+}
+
+// EditConversationMessage changes what a message says, within the edit window.
+//
+// Sender only, and the window is enforced in the UPDATE rather than checked
+// first — see db.EditMessage for why a check-then-write leaves a gap a deadline
+// can slip through.
+func (a *AppService) EditConversationMessage(w http.ResponseWriter, r *http.Request) {
+	userId, ok := bulletinViewer(w, r)
+	if !ok {
+		return
+	}
+	conv, ok := a.loadMemberConversation(w, r, userId)
+	if !ok {
+		return
+	}
+	messageId, ok := messageIdFromPath(w, r)
+	if !ok {
+		return
+	}
+	if !a.requireMessageInConversation(w, r, messageId, conv.Id) {
+		return
+	}
+
+	var req structs.EditMessageRequest
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<15)).Decode(&req); err != nil {
+		bulletinError(w, http.StatusBadRequest, "bad_request", "Could not read that edit.")
+		return
+	}
+	body := strings.TrimSpace(req.Body)
+	if body == "" {
+		// Deliberately not treated as a delete. "Clear the text" and "remove
+		// the message" are different intentions and the second has its own
+		// button; inferring one from an empty field would delete somebody's
+		// message because they selected all and hit send.
+		bulletinError(w, http.StatusBadRequest, "empty", "A message can't be empty. Delete it instead.")
+		return
+	}
+	if utf8.RuneCountInString(body) > messageMaxRunes {
+		bulletinError(w, http.StatusBadRequest, "too_long", "Messages can be up to 2,000 characters.")
+		return
+	}
+
+	ctx := r.Context()
+	msg, err := a.db.EditMessage(ctx, messageId, userId, body)
+	switch {
+	case errors.Is(err, db.ErrEditWindowClosed):
+		bulletinError(w, http.StatusConflict, "edit_window_closed",
+			"That message is too old to edit.")
+		return
+	case errors.Is(err, db.ErrNotMyMessage):
+		bulletinError(w, http.StatusForbidden, "not_yours", "You can only edit your own messages.")
+		return
+	case errors.Is(err, db.ErrConversationNotFound):
+		bulletinError(w, http.StatusNotFound, "not_found", "That message could not be found.")
+		return
+	case err != nil:
+		a.logger.Logf("error editing message %d: %s", messageId, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	msg.IsMine = true
+	a.hydrateMessages(ctx, conv, []*structs.Message{msg}, userId)
+	// Published as a plain update rather than a new message: a client that
+	// already has this id replaces it in place, and one that does not will pick
+	// it up on its next read.
+	a.publishMessageUpdated(ctx, conv, msg, userId)
+	writeJSON(w, http.StatusOK, msg)
+}
+
+// DeleteConversationMessage removes a message for everybody, leaving a
+// tombstone.
+//
+// Sender only. An admin removing reported content goes through the moderation
+// path instead, which hides the message entirely rather than leaving a marker —
+// see GetMessages for why those two outcomes differ.
+func (a *AppService) DeleteConversationMessage(w http.ResponseWriter, r *http.Request) {
+	userId, ok := bulletinViewer(w, r)
+	if !ok {
+		return
+	}
+	conv, ok := a.loadMemberConversation(w, r, userId)
+	if !ok {
+		return
+	}
+	messageId, ok := messageIdFromPath(w, r)
+	if !ok {
+		return
+	}
+	if !a.requireMessageInConversation(w, r, messageId, conv.Id) {
+		return
+	}
+
+	ctx := r.Context()
+	if err := a.db.DeleteOwnMessage(ctx, messageId, userId); err != nil {
+		if errors.Is(err, db.ErrNotMyMessage) {
+			bulletinError(w, http.StatusForbidden, "not_yours", "You can only delete your own messages.")
+			return
+		}
+		a.logger.Logf("error deleting message %d: %s", messageId, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	a.publishMessageDeleted(ctx, conv, messageId, userId)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// messageIdFromPath reads {messageId}, writing a 404 when it is not a number.
+func messageIdFromPath(w http.ResponseWriter, r *http.Request) (int64, bool) {
+	messageId, err := strconv.ParseInt(chi.URLParam(r, "messageId"), 10, 64)
+	if err != nil || messageId <= 0 {
+		bulletinError(w, http.StatusNotFound, "not_found", "That message could not be found.")
+		return 0, false
+	}
+	return messageId, true
+}
+
+// requireMessageInConversation checks that a message id from the path belongs to
+// the conversation from the path.
+//
+// Both arrive independently, and membership of the conversation says nothing
+// about the message — see the note on the reaction endpoint, which needs the
+// same pair of checks for the same reason.
+func (a *AppService) requireMessageInConversation(w http.ResponseWriter, r *http.Request, messageId, conversationId int64) bool {
+	inThread, err := a.db.MessageIsInConversation(r.Context(), messageId, conversationId)
+	if err != nil {
+		a.logger.Logf("bulletin: unexpected error: %s", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return false
+	}
+	if !inThread {
+		bulletinError(w, http.StatusNotFound, "not_found", "That message could not be found.")
+		return false
+	}
+	return true
 }

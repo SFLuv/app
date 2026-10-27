@@ -2775,6 +2775,13 @@ var schemaMigrations = []SchemaMigration{
 			return migrateChatV2(ctx, pools)
 		},
 	},
+	{
+		Version:     "1.75",
+		Description: "editing a message shortly after sending, and deleting one for everybody",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			return migrateChatMessageManagement(ctx, pools)
+		},
+	},
 }
 
 // migrateW9WarningTiers replaces one hard gate with an escalating sequence.
