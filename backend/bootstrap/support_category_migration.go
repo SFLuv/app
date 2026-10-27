@@ -36,6 +36,33 @@ func migrateSupportCategories(ctx context.Context, pools *MigrationPools) error 
 		ALTER TABLE internal_notifications
 			ADD COLUMN IF NOT EXISTS support_category TEXT;
 
+		-- The requests themselves. Created here because the statement that
+		-- first made this table left with the Telegram bot and was never
+		-- replaced: databases that ran the bot's branch have it, production
+		-- does not, and the ALTER below failed on any database without it.
+		-- IF NOT EXISTS keeps this a no-op where it is already present.
+		--
+		-- reference is unique because CreateSupportRequest relies on the unique
+		-- violation to retry a colliding reference. A request is never deleted;
+		-- archiving is the only state change.
+		CREATE TABLE IF NOT EXISTS support_requests(
+			id BIGSERIAL PRIMARY KEY,
+			reference TEXT NOT NULL UNIQUE,
+			email TEXT NOT NULL,
+			name TEXT NOT NULL DEFAULT '',
+			subject TEXT NOT NULL DEFAULT '',
+			message TEXT NOT NULL,
+			source TEXT NOT NULL DEFAULT 'website',
+			status TEXT NOT NULL DEFAULT 'new',
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			archived_at TIMESTAMPTZ,
+			archived_by TEXT
+		);
+
+		-- The admin panel lists newest first, optionally filtered by status.
+		CREATE INDEX IF NOT EXISTS support_requests_status_created_idx
+			ON support_requests(status, created_at DESC);
+
 		-- Kept on the request as well as on the alert, so the admin panel can
 		-- show what a request was about after its alert has been resolved.
 		ALTER TABLE support_requests
