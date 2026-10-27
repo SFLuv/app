@@ -1776,6 +1776,7 @@ while true; do
   if pranks_active; then
     echo "  c) Clear pranks"
   fi
+  echo "  n) Trigger a notification (preview any kind, then acknowledge it)"
   echo "  l) Tail service logs (Ctrl-C returns here)"
   echo "  q) Quit (shut everything down)"
   printf "select: "
@@ -1786,6 +1787,7 @@ while true; do
     a|A) menu_set_admin ;;
     p|P) menu_set_prank ;;
     c|C) if pranks_active; then menu_clear_pranks; else c_yellow "  no active pranks."; fi ;;
+    n|N) menu_trigger_notification ;;
     l|L)
       c_yellow "  tailing ${#TAIL_LOGS[@]} logs — Ctrl-C to return to the menu"
       # A no-op INT *handler* (not '' ignore — ignores are inherited by
