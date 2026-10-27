@@ -139,11 +139,13 @@ func (a *AppService) ListMyConversations(w http.ResponseWriter, r *http.Request)
 	for i := range rows {
 		row := &rows[i]
 		conv := &structs.Conversation{
-			Id:            row.Conversation.Id,
-			Kind:          row.Conversation.Kind,
-			LastMessage:   row.Last,
-			UnreadCount:   row.Unread,
-			LastMessageAt: row.Conversation.LastMessageAt,
+			Id:              row.Conversation.Id,
+			Kind:            row.Conversation.Kind,
+			LastMessage:     row.Last,
+			UnreadCount:     row.Unread,
+			LastMessageAt:   row.Conversation.LastMessageAt,
+			Muted:           row.Muted,
+			OtherLastReadId: row.OtherLastReadId,
 		}
 
 		if row.Conversation.IsGroup() {
@@ -925,6 +927,14 @@ func (a *AppService) notifyNewMessageWithTitle(senderId, recipientId string, con
 		// let back in; what stops is the phone buzzing about a thread they
 		// currently cannot open.
 		if !a.BetaFeatureAllowed(ctx, recipientId, structs.BetaFeatureChat) {
+			return
+		}
+
+		// A muted thread does not buzz. Only the push is suppressed: the
+		// message still arrives, the thread still shows unread, and the badge
+		// still counts it — muting silences the phone, it does not hide the
+		// conversation.
+		if muted, err := a.db.ConversationIsMuted(ctx, conversationId, recipientId); err == nil && muted {
 			return
 		}
 
