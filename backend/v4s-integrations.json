@@ -15,11 +15,11 @@
   "enabled": true,
   "integrations": [
     {
-      "organization": "St. Anthony's",
+      "organization": "St. Anthony Foundation",
       "site": "https://stanthonysf.my.salesforce-sites.com/volunteer",
       "enabled": true,
       "ttl_seconds": 60,
-      "notes": "Jobs include Breakfast Service, Dining Room Meal Service, Dining Room Second Shift, FCP Clothing Distribution and Farmers Market. FCP Clothing Distribution runs two sittings on some days (8:30am and 1:00pm), so those occurrences need a start time close enough to tell them apart."
+      "notes": "Keyed on the organization name exactly as the organizations table spells it. It read 'St. Anthony's' here against 'St. Anthony Foundation' there, and since the match strips punctuation that compared stanthonys to stanthonyfoundation and silently matched nothing -- enabled in the boot log, never firing. Jobs include Breakfast Service, Dining Room Meal Service, Dining Room Second Shift, FCP Clothing Distribution and Farmers Market. FCP Clothing Distribution runs two sittings on some days (8:30am and 1:00pm), so those occurrences need a start time close enough to tell them apart."
     },
     {
       "organization": "house",
