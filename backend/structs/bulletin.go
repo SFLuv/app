@@ -306,8 +306,12 @@ type MessageQuote struct {
 	SenderId   string `json:"sender_id"`
 	SenderName string `json:"sender_name,omitempty"`
 	Kind       string `json:"kind"`
-	// Truncated to a line's worth.
+	// Truncated to a line's worth, and empty for a deleted message.
 	Body string `json:"body"`
+	// The quoted message was deleted. The reply keeps its quote block and says
+	// so, rather than losing it — a reply whose subject silently vanishes reads
+	// as a non-sequitur.
+	Deleted bool `json:"deleted,omitempty"`
 	// What the quoted message's first attachment was, so a reply to a photo
 	// shows "Photo" rather than an empty line.
 	AttachmentKind string `json:"attachment_kind,omitempty"`
@@ -339,6 +343,15 @@ type Message struct {
 	AmountSfluvBase *string   `json:"amount_sfluv_base,omitempty"`
 	PaymentVerified bool      `json:"payment_verified"`
 	CreatedAt       time.Time `json:"created_at"`
+
+	// EditedAt is when the sender last changed it; nil means never. The client
+	// shows "edited" from this rather than from a boolean, so the time is
+	// available if it is ever wanted.
+	EditedAt *time.Time `json:"edited_at,omitempty"`
+	// Deleted means the sender removed it for everybody. The body is blanked
+	// before this leaves the server — see the 1.75 migration on why the row
+	// keeps its text and the read path is what clears it.
+	Deleted bool `json:"deleted,omitempty"`
 
 	ReplyToId   *int64              `json:"reply_to_id,omitempty"`
 	ReplyTo     *MessageQuote       `json:"reply_to,omitempty"`
@@ -472,6 +485,11 @@ type GroupMemberRequest struct {
 	UserId string `json:"user_id"`
 	// One of the ConversationRole constants. Only meaningful on a role change.
 	Role string `json:"role"`
+}
+
+// EditMessageRequest changes a message's text.
+type EditMessageRequest struct {
+	Body string `json:"body"`
 }
 
 // ReactionRequest toggles one emoji on one message.

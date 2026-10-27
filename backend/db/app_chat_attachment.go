@@ -385,21 +385,29 @@ func (a *AppDB) GetMessageQuotes(ctx context.Context, messageIds []int64) (map[i
 		return out, nil
 	}
 
+	// A sender-deleted message still returns a quote, marked, so the reply that
+	// answers it keeps its quote block and says the subject is gone. An
+	// admin-removed one returns nothing, for the same reason it is hidden from
+	// the thread.
 	rows, err := a.db.Query(ctx, `
 		SELECT
 			x.id, x.sender_id,
 			COALESCE(NULLIF(TRIM(p.public_name), ''), ''),
 			x.kind,
-			LEFT(x.body, 160),
+			-- Blanked for a deleted message: the client shows its own wording and
+			-- must never be handed the original text to fall back on.
+			CASE WHEN x.deleted_at IS NOT NULL THEN '' ELSE LEFT(x.body, 160) END,
 			COALESCE((
 				SELECT a.kind FROM message_attachments a
 				WHERE a.message_id = x.id
 				ORDER BY a.position, a.id
 				LIMIT 1
-			), '')
+			), ''),
+			(x.deleted_at IS NOT NULL)
 		FROM messages x
 		LEFT JOIN user_profiles p ON p.user_id = x.sender_id
-		WHERE x.id = ANY($1) AND x.deleted_at IS NULL;
+		WHERE x.id = ANY($1)
+			AND (x.deleted_at IS NULL OR x.deleted_by IS NOT NULL);
 	`, messageIds)
 	if err != nil {
 		return nil, err
@@ -408,7 +416,8 @@ func (a *AppDB) GetMessageQuotes(ctx context.Context, messageIds []int64) (map[i
 
 	for rows.Next() {
 		var q structs.MessageQuote
-		if err := rows.Scan(&q.Id, &q.SenderId, &q.SenderName, &q.Kind, &q.Body, &q.AttachmentKind); err != nil {
+		if err := rows.Scan(&q.Id, &q.SenderId, &q.SenderName, &q.Kind, &q.Body,
+			&q.AttachmentKind, &q.Deleted); err != nil {
 			return nil, err
 		}
 		quote := q

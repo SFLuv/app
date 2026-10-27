@@ -49,7 +49,11 @@ const (
 	EventMessageNew = "message.new"
 	// A message's reactions changed.
 	EventMessageReaction = "message.reaction"
-	// A message was deleted.
+	// A message changed in place — edited. Carries the whole message, so a
+	// client replaces what it has rather than appending.
+	EventMessageUpdated = "message.updated"
+	// A message was deleted. Carries only the id: sending the message would
+	// mean sending what it used to say.
 	EventMessageDeleted = "message.deleted"
 	// Somebody is typing in a conversation. Not persisted anywhere.
 	EventTyping = "typing"

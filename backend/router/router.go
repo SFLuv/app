@@ -1134,6 +1134,11 @@ func AddBulletinRoutes(r *chi.Mux, a *handlers.AppService) {
 
 	// Replies and reactions.
 	r.Post("/conversations/{id}/messages/{messageId}/reactions", withChatBeta(a.ToggleMessageReaction))
+	// Editing and deleting your own message. Both are sender-only; an admin
+	// removing reported content goes through the moderation path, which hides
+	// the message rather than leaving the tombstone these leave.
+	r.Patch("/conversations/{id}/messages/{messageId}", withChatBeta(a.EditConversationMessage))
+	r.Delete("/conversations/{id}/messages/{messageId}", withChatBeta(a.DeleteConversationMessage))
 
 	// Attachments. The upload is multipart; the reference route is JSON for the
 	// kinds that carry a pointer rather than bytes.
