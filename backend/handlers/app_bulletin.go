@@ -937,23 +937,67 @@ func (a *AppService) SearchUsers(w http.ResponseWriter, r *http.Request) {
 		q = truncateRunes(q, 40)
 	}
 
-	userIds, merchants, err := a.db.SearchSFLuvUsers(r.Context(), userId, q)
+	ctx := r.Context()
+	userIds, merchants, err := a.db.SearchSFLuvUsers(ctx, userId, q)
 	if err != nil {
 		a.logger.Logf("error searching users for %s: %s", userId, err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
-	people, err := a.db.GetPublicUsers(r.Context(), userIds)
+
+	// Your own address book, searched alongside the public directory.
+	//
+	// This is what makes "I saved Maria's QR code, now I want to message her"
+	// work. The public search above only finds people who opted into being
+	// findable, which is the right rule for strangers and the wrong one for
+	// somebody whose wallet address you already have. See
+	// SearchUsersViaContacts for why that is not a privacy regression.
+	//
+	// Contact matches come FIRST: somebody typing a name they chose is looking
+	// for the person they chose it for, not for a stranger who happens to share
+	// it.
+	contactNames, err := a.db.SearchUsersViaContacts(ctx, userId, q)
+	if err != nil {
+		// Not fatal. The public results are still worth returning, and a
+		// failure here is one missing row rather than a broken search.
+		a.logger.Logf("error searching contacts for %s: %s", userId, err)
+		contactNames = map[string]string{}
+	}
+
+	ordered := make([]string, 0, len(userIds)+len(contactNames))
+	seen := map[string]struct{}{}
+	for id := range contactNames {
+		ordered = append(ordered, id)
+		seen[id] = struct{}{}
+	}
+	for _, id := range userIds {
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		ordered = append(ordered, id)
+	}
+
+	people, err := a.db.GetPublicUsers(ctx, ordered)
 	if err != nil {
 		a.logger.Logf("error resolving search results: %s", err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 	result := structs.UserSearchResult{Users: []structs.PublicUser{}, Merchants: merchants}
-	for _, id := range userIds {
-		if p, ok := people[id]; ok {
-			result.Users = append(result.Users, p)
+	for _, id := range ordered {
+		person, found := people[id]
+		if !found {
+			continue
 		}
+		// A contact match is labelled with the name the searcher saved, not the
+		// public name the account chose — which they may never have seen, and
+		// which would make the result look like somebody else.
+		if saved, isContact := contactNames[id]; isContact && strings.TrimSpace(saved) != "" {
+			person.PublicName = saved
+			person.SavedContact = true
+		}
+		result.Users = append(result.Users, person)
 	}
 	writeJSON(w, http.StatusOK, result)
 }

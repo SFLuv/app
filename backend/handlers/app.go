@@ -10,6 +10,7 @@ import (
 	"github.com/SFLuv/app/backend/clientconfig"
 	"github.com/SFLuv/app/backend/db"
 	"github.com/SFLuv/app/backend/logger"
+	"github.com/SFLuv/app/backend/realtime"
 	"github.com/SFLuv/app/backend/w9provider"
 )
 
@@ -36,6 +37,27 @@ type AppService struct {
 	// Wired after construction because it needs the client config this service
 	// already holds.
 	protocolSvc *ProtocolService
+	// realtime fans events out to foregrounded clients. Nil until wired, and
+	// every use goes through the publish helpers in app_chat_realtime.go, which
+	// no-op on nil — a server with no hub still works, it just falls back to
+	// pushes and polling for everything.
+	realtime *realtime.Hub
+	// realtimeServer is the HTTP upgrade handler for the hub above. Built once
+	// at startup by BuildRealtimeServer, which is also what sets `realtime`.
+	realtimeServer *realtime.Server
+}
+
+// SetRealtimeHub wires the websocket fan-out in.
+func (a *AppService) SetRealtimeHub(hub *realtime.Hub) {
+	a.realtime = hub
+}
+
+// RealtimeHub exposes the hub for the server's own wiring and /healthz.
+func (a *AppService) RealtimeHub() *realtime.Hub {
+	if a == nil {
+		return nil
+	}
+	return a.realtime
 }
 
 // SetProtocolService wires the protocol accounts in.

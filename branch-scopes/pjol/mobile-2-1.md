@@ -1,6 +1,18 @@
 # Branch scope — `pjol/mobile-2-1`
 
-Oct 26 2026 · app + mobile-app + webpage · **9.3h** stated (6.2h measured, as an upper bound for the earlier part)
+Oct 26–27 2026 · app + mobile-app + webpage · **11.3h** (9.3h stated for Oct 26, 2.0h measured for Oct 27)
+
+| Round | When | Hours | Basis |
+|---|---|---|---|
+| 1–3 | Oct 26 | 9.3h | stated, with 6.2h measured as an upper bound |
+| 4 | Oct 27 morning | 0.4h | **measured** |
+| 5 | Oct 27 afternoon | 1.6h | **measured** |
+| | | **11.3h** | |
+
+Rounds 4 and 5 are measured end to end, from the session transcript's message
+timestamps clustered on a 30-minute gap. Rounds 1–3 are not, and the distinction
+matters more than the total: **9.3h of this figure is what somebody said about a
+day, and 2.0h is what a clock recorded.** Do not average them.
 
 Round 1's two prospective entries are superseded by round 2 — see there. Round
 2's total is extended by round 3, which measured the evening sitting running 28
@@ -11,7 +23,7 @@ backend it needs and the organization and supervisor cleanups done alongside it.
 
 Cut from `pjol/internal-notifications`, which is itself stacked on
 `pjol/admin-org-management`. Those two carry their own scope documents; this one
-covers Oct 26 only.
+covers Oct 26 and Oct 27.
 
 ## How these hours were recorded
 
@@ -643,3 +655,287 @@ No migrations. Local database unchanged at 1.73.
   since the fetch is rebuilt from `jobId` and the display link is overwritten on
   a match — but if the config is off or the partner's site is down, the stored
   fallback sends volunteers to a date that has passed.
+
+---
+
+# Round 4 — Oct 27 morning
+
+**0.4h measured.** One sitting, 10:42–11:07, from the session transcript's
+message timestamps clustered on a 30-minute gap (`measure_sittings.py`). The
+`v2.1` force-push and the PR #209 merge are stamped 11:14, seven minutes after
+the last message in the sitting — GitHub's clock on a merge button, not working
+time, so they are not added.
+
+The release-plumbing round: get `v2.1` onto the right commit, get sanchez's
+fixes into both repos, and change the website's partners banner.
+
+## Features
+
+### The v2.1 tag was pointing at the wrong commit — 0.15h · mobile-app
+
+`v2.1` was on `7de861e`; the branch had moved four commits past it, including
+the one that set `app.config.ts` to `2.1.0`. Moved to `92599c6` with a rewritten
+annotation listing what it now includes and recording that it was moved.
+
+A forced update to a published ref, so anyone who already fetched `v2.1` has to
+re-fetch to see it move. That is the cost of the correction and it is the
+smaller one.
+
+### Sanchez's error fixes, merged into both repos — 0.15h · app + mobile-app
+
+The app repo was missing the **backend half** of fixes already shipped in mobile
+2.1 — the mobile side called endpoints the backend did not have. Merged
+`origin/main` then `origin/sanchezo/bulletin-notifications-error-fixes`.
+
+`bot.go` auto-merged and was checked by hand rather than trusted: it is the file
+V4S was wired into, and an auto-merge in this stack has produced a silently
+wrong result before. `Redeem` reverts and returns early only on a genuine send
+failure, and falls through to the `"payout pending"` body otherwise.
+
+**No migration risk**, verified rather than assumed: sanchez's branch touches
+four Go files and its own scope doc, nothing under `bootstrap/`. Migrations
+stayed at 73, strictly increasing to 1.73, no duplicates.
+
+### Partners banner — 0.1h · webpage
+
+Celo, Citizen Wallet, GLIDE, St. Anthony's, City Hope. INTN.CITY removed from
+the banner, the footer nav, the links file and the assets folder.
+
+Logos rasterised from the SVGs the organizations' own sites serve, so none were
+drawn by hand. Two stored candidates were rejected: the webpage's existing
+`st-anthonys.png` is a photo of a clothing program, not a logo, and the admin
+panel's St. Anthony's PNG is the mark with no name beside it.
+
+**The banner this changes is the fallback, not the one a deployment shows.**
+`getPartners()` prefers `GET /partners`, and the admin `partners` table holds one
+active row — Citizen Wallet — so a deployment reaching the API renders that
+alone. Edited anyway, because it is what shows when the API is unset or empty,
+but the five-partner banner needs the admin panel updated or cleared. That is
+production data and was left alone.
+
+## Totals
+
+| Item | Hours | Repo |
+|---|---|---|
+| v2.1 tag moved | 0.15 | mobile-app |
+| sanchez's fixes merged | 0.15 | app + mobile-app |
+| Partners banner | 0.10 | webpage |
+| | **0.40** | |
+
+Items are apportioned across one observed 25-minute sitting rather than clocked
+separately. The total is the measurement; the split is a reading of the order
+the work happened in.
+
+## Volume
+
+| Repo | Files | Lines |
+|---|---|---|
+| webpage (banner) | 7 | +46 / −19 |
+| app, mobile-app | merge commits only | — |
+
+No migrations. No new routes.
+
+---
+
+# Round 5 — Oct 27 afternoon
+
+**1.6h measured.** One sitting, 12:34–14:12, same method. The figure is to the
+code commits at 14:11; writing this document is after it and is not counted.
+
+The large round: Messages stops being a two-person text box.
+
+## Features
+
+### Group conversations — 0.30h · app
+
+The 1.67 schema keyed a conversation on `(user_low, user_high, post_id)` with a
+CHECK that the pair was ordered, so *a conversation* and *two people* were the
+same statement. Membership already lived in its own table, which is what made
+this a widening rather than a rewrite — the pair columns stay authoritative for
+direct threads, and the unique index enforcing one-thread-per-pair becomes
+partial so it stops applying to groups.
+
+One owner always; admins the owner appoints; `left_at` rather than a delete, so
+somebody who leaves keeps their messages in the thread and rejoining restores
+their history. An admin cannot remove another admin — otherwise two admins can
+remove each other and whoever taps first wins.
+
+Verified against the live database rather than reasoned about: two groups with
+null pairs both insert, an unordered direct pair is still refused, and a group
+carrying a pair is refused.
+
+### Attachments, references, and the link fetcher — 0.20h · app
+
+One table for seven kinds. Photos and files as bytes; links with metadata
+scraped once and then frozen, because a card that changed under a message nobody
+edited would be a way to rewrite what was said; and references to a transaction,
+a merchant, a volunteer event or a support ticket, resolved at read time against
+data that may have moved or gone.
+
+A transaction card deliberately does **not** carry the memo. A memo is what the
+sender wrote for their own records; attaching a transaction is sharing the amount
+and the parties, which are on a public chain anyway, not publishing a private
+note about it. So the resolver reads the chain index, which has no memos, rather
+than our transactions table, which does.
+
+### The realtime socket — 0.15h · app
+
+`GET /ws`, one per foregrounded client, fanned out by user id. Firebase is for
+reaching a device nobody is looking at; this is for one somebody is. The division
+is strict: while a client holds a socket the server sends it events and
+**suppresses its pushes**, so a message never arrives as a system banner over the
+chat it belongs to.
+
+Never a source of truth — every event describes something already committed and
+every screen can reach the same state with a GET, which is what lets it stay an
+in-memory hub with no broker behind it. Its one real limit is stated at the top
+of the package: the registry is in-process, so a second server replica would not
+see events published on the first.
+
+The token arrives in the socket's first frame. A header is what the rest of the
+API uses but attaches inconsistently in React Native, and its failure shape — a
+socket that connects and then silently receives nothing — is the worst one
+available; a query parameter works everywhere and puts a bearer credential in the
+one part of an HTTPS request that reliably reaches an access log.
+
+Verified live: a silent socket is closed after exactly 10s with `1008 auth
+required`, a bad token is refused immediately, and a typing frame sent before
+authenticating is refused rather than acted on.
+
+### Chat handlers, hydration and routing — 0.20h · app
+
+Twenty-one new routes. Message hydration batches four queries across a whole
+page — attachments, their references, reactions, and the quoted slice of
+anything replied to — so a fifty-message page costs four queries regardless of
+what is on it.
+
+### Mobile: the chat screen and its composer — 0.40h · mobile-app
+
+The thread was a pageSheet modal, which brought three problems that are all the
+same problem — a modal is not in the navigation stack. It could not be swiped
+back, the app's top bar stayed above it so the chat had two headers, and the
+keyboard fought it.
+
+The list is now `inverted`, which is the actual keyboard fix: index 0 is the
+newest message, so the resting position is the bottom and whatever is
+bottom-most stays pinned above the composer. The version it replaces was a
+normal list with `onContentSizeChange -> scrollToEnd`, and the keyboard changes
+the content size — so opening it fired a scroll that fought whatever the person
+was reading.
+
+The composer is one row that becomes one of three things: the text field, a grid
+of attachment options, or an amount pad. Replacing rather than expanding is why
+it works on a small phone.
+
+### Mobile: the rest of the surfaces — 0.15h · mobile-app
+
+My QR became My Profile; the profile prompt became a centred gate on first
+opening Chats; contacts became cards with a detail screen; a new-message picker
+that searches your own address book alongside the public directory; in-app
+banners; the share sheet. `useDockLift` extracts sanchez's contacts measurement,
+because the Chats tab grew a floating button of its own and two copies of
+something that fiddly is two places for it to be fixed on one screen and not the
+other.
+
+### Review, and the three bugs it found — 0.13h · app + mobile-app
+
+Worth itemising because none of them would have been found by the type checker
+or the build:
+
+1. **The unread badge would have stopped moving.** It was driven by the message
+   push, and the socket now suppresses that push for exactly the devices the
+   event reaches — so the count would have frozen for everybody with the app
+   open. The socket's handler now moves it.
+2. **Two authorization holes around leaving a group.** A membership row outlives
+   the membership, so without `left_at IS NULL` somebody removed from a group
+   kept reading its files and could still react to its messages.
+3. **The link fetcher turned a pasted `mailto:` into an authenticated request.**
+   `"mailto:a@b.com"` contains no `"://"`, so prepending `https://` produced
+   `https://mailto:a@b.com` — a valid URL whose host is `b.com` and whose
+   userinfo is `mailto:a`. On the one path in this backend that fetches a
+   user-supplied URL. It now parses before defaulting the scheme and refuses
+   userinfo outright.
+
+### The DB file-storage inventory — 0.05h · app
+
+`docs/DB_FILE_STORAGE.md`. Twelve tables hold files as bytes in Postgres and
+this is the first time the set has been written down. Asked for explicitly, and
+it is the checklist for the move to object storage — including the one entry
+that should probably never move, `site_form_signatures`, which is evidence
+rather than content.
+
+## Totals
+
+| Item | Hours | Repo |
+|---|---|---|
+| Mobile chat screen and composer | 0.40 | mobile-app |
+| Group conversations | 0.30 | app |
+| Attachments and references | 0.20 | app |
+| Chat handlers, hydration, routes | 0.20 | app |
+| The realtime socket | 0.15 | app |
+| Mobile: the rest of the surfaces | 0.15 | mobile-app |
+| Review and the three bugs it found | 0.13 | both |
+| DB file-storage inventory | 0.05 | app |
+| Survey and merges | 0.05 | both |
+| | **1.63 → 1.6** | |
+
+Items are apportioned across one observed 98-minute sitting rather than clocked
+separately: there is one commit per repo, both at the end, so there are no
+intermediate stamps to read the split off. **The total is the measurement; the
+split is a reading of the order the work happened in** and should be treated as
+the weaker number.
+
+## Volume
+
+| Repo | Files | Lines |
+|---|---|---|
+| app | 29 | +5,477 / −95 |
+| mobile-app | 30 | +8,030 / −693 |
+
+One migration (1.74), applied and verified locally. 21 new backend routes. One
+new native dependency, and a version bump to 2.2.0 that the dependency requires.
+
+**13,500 lines, and the diff is misleading in both directions here.** Most of it
+is new files rather than edited ones, which is the cheap kind of volume — but
+this folder's standing correction cuts the other way too, and 1.6h for this
+much is only possible because almost none of it was spent deciding what to
+build. The request specified the behaviour in detail; the time went on the parts
+that were not specified, which is where all three bugs above were found.
+
+## Open
+
+- **This release is a fresh binary, version 2.2.0, and the bump is required.**
+  `expo-document-picker` is a new native dependency. It was first wired up
+  behind a lazy `require` so the 2.1 build could receive the rest of this work
+  over the air; that was dropped once the decision was made to cut a new binary
+  and not OTA 2.1, and it is now a plain static import.
+
+  **What that decision exposed:** `runtimeVersion` is `policy: "appVersion"`, so
+  the `version` string IS the over-the-air compatibility boundary. Had the
+  version stayed at 2.1.0, an `eas update --channel production` would have been
+  delivered to the 2.1 build in the store — which has no document picker, and
+  `expo-document-picker` throws at import when its native side is absent, so
+  those installs would have stopped booting. The bump to 2.2.0 is what prevents
+  that, not tidiness.
+
+  The comment above `runtimeVersion` claimed the *fingerprint* policy was in use
+  and that "an update can never reach a build whose native side it does not
+  match". It was not, and it cannot. The comment is corrected and
+  `policy: "fingerprint"` is offered — it would make the guarantee structural
+  rather than a matter of remembering to bump a string — but not taken, because
+  it changes which builds a hotfix can reach and that is a release decision.
+- **Nothing is on main.** Migration 1.74 has run locally only.
+- **The chat beta gates all of it.** Nobody sees any of this until
+  `beta_feature_access` says so, and the socket is deliberately not gated —
+  it is what carries the event saying access was granted.
+- **Two profile editors now exist.** The Bulletin keeps its bottom-sheet
+  `ProfileSetupSheet` for "you need a profile to post"; chat has the centred
+  gate. Only the chat one was asked for, so the Bulletin's was left alone, but
+  they should probably converge.
+- **The realtime hub is single-process.** Stated in the package comment with the
+  way out (a `LISTEN/NOTIFY` relay or Redis feeding `Publish`). Correct today
+  because the backend runs as one process; the first thing to check when a
+  second is added.
+- **Opening a stored file in the app is not implemented.** The attachment card
+  says so rather than doing nothing. Downloading needs a file-system dependency
+  that is not in the binary either.

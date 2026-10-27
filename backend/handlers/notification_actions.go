@@ -127,11 +127,37 @@ func actionsForAlert(alert *db.InternalAlertRow, resolved bool, isAdmin bool) []
 	out := []structs.NotificationActionButton{}
 
 	if alert.Kind == structs.InternalKindSupportRequest {
+		// Chat first when it is available, because it is the faster reply and
+		// the one the sender is more likely to see: they wrote in from the app,
+		// so the app is where they are. Email stays as a second button rather
+		// than being replaced — a long answer, or one that needs an
+		// attachment, still belongs in email.
+		if chatUserId := strings.TrimSpace(alert.Payload["chat_user_id"]); chatUserId != "" {
+			out = append(out, structs.NotificationActionButton{
+				Id:    "message",
+				Label: "Message",
+				Style: structs.NotificationActionStylePrimary,
+				// A URL rather than a call back to us, like the mailto beside
+				// it, because pressing it has to END somewhere — on the chat
+				// screen, with a draft in the composer. An action that posted
+				// back could do the work but has nowhere to send the person
+				// afterwards: Run returns a sentence for the history row, not a
+				// destination. So the client resolves this link, which calls
+				// POST /admin/support-requests/{id}/conversation and navigates
+				// to what it returns.
+				URL: supportReplyChatLink(alert),
+			})
+		}
 		if email := strings.TrimSpace(alert.Payload["email"]); email != "" {
+			label := "Reply by email"
+			style := structs.NotificationActionStylePrimary
+			if strings.TrimSpace(alert.Payload["chat_user_id"]) != "" {
+				style = structs.NotificationActionStyleDefault
+			}
 			out = append(out, structs.NotificationActionButton{
 				Id:    "respond",
-				Label: "Reply by email",
-				Style: structs.NotificationActionStylePrimary,
+				Label: label,
+				Style: style,
 				URL:   supportReplyMailto(alert),
 			})
 		}
@@ -292,6 +318,21 @@ func runSupportArchiveAction(ctx context.Context, a *AppService, press notificat
 // The reference goes in the subject so a reply threads against the request it
 // answers, and the original message is quoted so whoever is replying is not
 // writing blind from a notification.
+// supportReplyChatLink is the deep link behind the Message button.
+//
+// A relative path, not an absolute URL: the client knows its own backend and
+// which app it is, and baking an origin in here would mean a notification raised
+// on staging carried a staging link into production's history. Clients treat a
+// path beginning with "sfluv:" as an instruction to themselves rather than
+// something to open in a browser.
+func supportReplyChatLink(alert *db.InternalAlertRow) string {
+	id := strings.TrimSpace(alert.Payload["id"])
+	if id == "" {
+		return ""
+	}
+	return "sfluv:support-reply/" + url.PathEscape(id)
+}
+
 func supportReplyMailto(alert *db.InternalAlertRow) string {
 	email := strings.TrimSpace(alert.Payload["email"])
 	reference := strings.TrimSpace(alert.Payload["reference"])

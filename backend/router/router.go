@@ -592,6 +592,14 @@ func AddContactRoutes(r *chi.Mux, s *handlers.AppService) {
 	r.Get("/contacts", withActiveAuth(s.GetContacts, s))
 	r.Put("/contacts", withActiveAuth(s.UpdateContact, s))
 	r.Delete("/contacts", withActiveAuth(s.DeleteContact, s))
+
+	// The contact card: one contact's details, notes and picture. Everything
+	// here is private to the contact's owner — see app_contact_detail.go.
+	r.Get("/contacts/{id}", withActiveAuth(s.GetContactDetail, s))
+	r.Patch("/contacts/{id}", withActiveAuth(s.PatchContactDetail, s))
+	r.Put("/contacts/{id}/avatar", withActiveAuth(s.PutContactAvatar, s))
+	r.Get("/contacts/{id}/avatar", withActiveAuth(s.GetContactAvatar, s))
+	r.Delete("/contacts/{id}/avatar", withActiveAuth(s.DeleteContactAvatar, s))
 }
 
 func AddMerchantModeRoutes(r *chi.Mux, s *handlers.AppService) {
@@ -1124,6 +1132,38 @@ func AddBulletinRoutes(r *chi.Mux, a *handlers.AppService) {
 	r.Post("/conversations/{id}/read", withChatBeta(a.MarkConversationRead))
 	r.Post("/conversations/{id}/archive", withChatBeta(a.ArchiveConversation))
 
+	// Replies and reactions.
+	r.Post("/conversations/{id}/messages/{messageId}/reactions", withChatBeta(a.ToggleMessageReaction))
+
+	// Attachments. The upload is multipart; the reference route is JSON for the
+	// kinds that carry a pointer rather than bytes.
+	//
+	// NOTE for the object-storage migration: the upload and fetch routes here
+	// are two of the twelve listed in docs/DB_FILE_STORAGE.md. Add any new one
+	// to that document in the same commit.
+	r.Post("/conversations/{id}/attachments", withChatBeta(a.UploadConversationAttachment))
+	r.Post("/conversations/{id}/references", withChatBeta(a.AttachConversationReference))
+	r.Get("/conversations/{id}/attachments/{attachmentId}", withChatBeta(a.GetConversationAttachment))
+	r.Get("/conversations/{id}/files", withChatBeta(a.SearchConversationFiles))
+
+	// Group chats.
+	r.Post("/conversations/groups", withChatBeta(a.CreateGroupConversation))
+	r.Patch("/conversations/{id}/group", withChatBeta(a.UpdateGroupConversation))
+	r.Post("/conversations/{id}/group/icon", withChatBeta(a.UploadGroupIcon))
+	r.Post("/conversations/{id}/group/members", withChatBeta(a.AddGroupMember))
+	r.Delete("/conversations/{id}/group/members/{userId}", withChatBeta(a.RemoveGroupMember))
+	r.Put("/conversations/{id}/group/members/{userId}/role", withChatBeta(a.SetGroupMemberRole))
+
+	// Profile pictures. The read is open to any signed-in user, matching the
+	// public name it accompanies; the writes are the owner's own.
+	r.Put("/me/profile/avatar", withActiveAuth(a.PutMyProfileAvatar, a))
+	r.Delete("/me/profile/avatar", withActiveAuth(a.DeleteMyProfileAvatar, a))
+	r.Get("/users/{userId}/avatar", withActiveAuth(a.GetUserAvatar, a))
+
+	// The realtime socket. Not behind withChatBeta — see ServeRealtime for why
+	// the event that says "you now have chat" cannot be gated on having chat.
+	r.Get("/ws", a.ServeRealtime)
+
 	r.Get("/blocks", withActiveAuth(a.ListBlockedUsers, a))
 	r.Post("/blocks", withActiveAuth(a.BlockUser, a))
 	r.Delete("/blocks/{userId}", withActiveAuth(a.UnblockUser, a))
@@ -1166,4 +1206,7 @@ func AddSupportRoutes(r *chi.Mux, a *handlers.AppService) {
 
 	r.Get("/admin/support-requests", withAdmin(a.ListSupportRequests, a))
 	r.Post("/admin/support-requests/{id}/archive", withAdmin(a.SetSupportRequestArchived, a))
+	// Opens a chat with the person who wrote in, for a request submitted from
+	// the app. Refuses one from the website, which has no account to message.
+	r.Post("/admin/support-requests/{id}/conversation", withAdmin(a.OpenSupportConversation, a))
 }
