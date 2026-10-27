@@ -1,8 +1,10 @@
 # Branch scope — `pjol/mobile-2-1`
 
-Oct 26 2026 · app + mobile-app + webpage · **8.9h** stated (5.7h measured, as an upper bound for the earlier part)
+Oct 26 2026 · app + mobile-app + webpage · **9.3h** stated (6.2h measured, as an upper bound for the earlier part)
 
-Round 1's two prospective entries are superseded by round 2 — see there.
+Round 1's two prospective entries are superseded by round 2 — see there. Round
+2's total is extended by round 3, which measured the evening sitting running 28
+minutes later than round 2 recorded it.
 
 The work behind mobile release 2.1 — tagged `v2.1` on `mobile-app` — plus the
 backend it needs and the organization and supervisor cleanups done alongside it.
@@ -444,6 +446,11 @@ allocation removal arriving back through that PR. Migrations then applied
 | Round 2 — 16:00–19:52 | 3.87h | stated (1.60h measured inside it) |
 | **Total for Oct 26** | **8.9h** | |
 
+> **Extended by round 3.** This figure stops at 19:52, where the writing
+> stopped; the sitting ran to 20:20. Round 3 measures the remaining 0.47h and
+> the day totals 9.3h. Left as written rather than edited, per this folder's
+> rule that an earlier figure is never silently restated.
+
 Round 1's 2.0h of prospective entries are **not** added to this; they are
 replaced by round 2's window, which covers the same time and more. The itemised
 features above come to 3.1h against the 3.87h stated, and are not reconciled
@@ -474,3 +481,165 @@ Local database now at 1.73. 73 migrations, strictly increasing.
   columns and is the likeliest to need a correction on first use.
 - Was 16:00–17:00 a dev meeting? The clock cannot see one. It does not change
   the total either way, but the record should say which it was.
+
+# Round 3 — Oct 26 night
+
+Oct 26 2026 · **0.5h measured** · app
+
+The St. Anthony's volunteer-availability integration, reported as not picking up
+a recurring occurrence. Two real bugs and 35 lines of change, almost all of the
+time spent finding them rather than writing them.
+
+## How these hours were recorded
+
+**0.47h → 0.5h, measured end to end**: 19:52 to 20:20, with no unobserved part.
+Nothing in this round is stated rather than measured, which makes it the
+best-supported figure in this document and the smallest.
+
+**It is the same sitting round 2 ended inside, not a new one.** Round 2 recorded
+that sitting as 18:37–19:52 because 19:52 is where it stopped writing; the
+sitting itself ran to 20:20. Re-measured the next morning it is one span of
+1.72h, of which round 2 claimed 1.25h and this round claims the remaining
+0.47h. The break between them was six minutes — well inside the 30-minute gap
+that would make it a second sitting.
+
+Three commits at 20:04, 20:08 and 20:19 sit inside the window, and the last
+message of the night is stamped 20:17, so the 20:20 boundary is the end of the
+work and not a trailing idle tool call.
+
+The Oct 27 session that wrote this section is not counted in the Oct 26 figure.
+
+## What was wrong
+
+### The integration was switched on and keyed to nobody — 0.20h · app
+
+Partner availability shipped to main in PR #206 and was configured
+`enabled: true` with St. Anthony's on, so the reasonable reading was that a
+deploy had missed a catch-up. It had not.
+
+`v4s-integrations.json` keyed the entry on `"St. Anthony's"`. The organizations
+row reads **"St. Anthony Foundation"**. Matching strips case and punctuation
+before comparing, so that put `stanthonys` against `stanthonyfoundation`,
+`Config.For` returned false, and enrichment returned before it parsed a link or
+made a single request. No availability on any of their events, ever — not just
+the recurring one.
+
+**The reason nobody caught it for a deploy and a half is worth keeping.** The
+boot log prints `v4s partner availability: enabled (...): St. Anthony's -> ...
+[on]`, because `Describe` reports what is in the file, never whether an entry
+matches a real organization. Switched on and keyed to nobody logs identically
+to working.
+
+Established by running the shipped `LoadConfig` and `For` against the real
+config file rather than by reading them, and confirmed afterwards that the
+corrected name matches along with its case and punctuation variants, and that
+no other organization's name normalizes into it — there are five.
+
+**The deploy-catch-up theory was ruled out rather than left open.** V4S is
+pull-on-demand: one fetch per job per TTL, triggered by rendering an event,
+with no timer and no backfill. There is nothing for a deploy to catch up, and
+if it had ever worked it would have worked on the first page view. The
+recurrence sweep that *does* need a catch-up is a separate mechanism, runs only
+in the process holding the jobs lock, and reports that state at `/healthz` —
+which is where to look if occurrences ever stop advancing.
+
+### The deep link pointed at a list — 0.15h · app
+
+Raised from the other side once availability started resolving: the link we
+emit opened a list of shifts rather than the one somebody had clicked.
+
+`ShiftSignupURL` built the URL from `jobId` and `volunteerShiftId` alone, which
+does not narrow the page — V4S renders the job's whole listing and leaves the
+volunteer to find their own day in it. Measured against the live listing: **31
+shifts and 117 KB**, where the narrowed page returns **the single shift and
+38 KB**.
+
+`Calendar`, `nDaysToShow` and `dtMonthFilter` are what reduce it to one day.
+The shape came from the partner's own links — an unpadded clock,
+`2026-11-02 6:30:0` — and both that escaping and `url.QueryEscape` were checked
+against the live page before picking the standard one.
+
+The filter names a **local** day, so the shift's start is converted into the
+organization's zone at the call site. A UTC instant would ask for the wrong day
+for any shift within a few hours of midnight, which is the same daylight-saving
+trap the date matching already avoids. A zero time falls back to the plain
+listing: a page showing too much beats one showing the wrong day.
+
+### The dev menu option that only existed in the other menu — 0.05h · app
+
+Last round's notification previewer went into `run_menu`, the `--menu`
+utilities mode, and nowhere else — so the menu you get after an ordinary
+`dev-up.sh` run, the one carrying the admin and prank options, did not have it.
+That is the mode where it is most useful, with the backend and the app already
+up and the notification landing on a screen you can watch.
+
+Added as `n` beside `a`/`p`/`c`. Nothing else moved: every helper it needs is
+defined at the top level rather than inside the `MENU_MODE` branch, and
+`APP_DB` is already set above that loop.
+
+## What the fix was verified against
+
+The live listing, not a fixture. Our Nov 2 occurrence resolves to shift
+`a1RRi000002saGkMAI` — 8 confirmed, 2 available of 10 — and the URL built from
+that match fetches back exactly one shift on exactly that date.
+
+Done with throwaway tests run against the shipped functions and deleted in the
+same command, which is the only way to exercise unexported matching code
+without leaving a suite behind that this repo does not want.
+
+**One finding to carry forward:** Oct 26, 27, 28 and 30 are absent from their
+listing entirely, while Oct 29 parses fine from the identical URL shape — so it
+is their data, not our parser or our window. From a public page there is no way
+to tell "fully booked" from "no shift that day", so those dates show no numbers
+rather than "full". That is the safe direction of the error, and it is the
+existing deliberate choice, but it means a fully booked day looks blank instead
+of closed.
+
+## Totals
+
+| Source | Hours | Basis |
+|---|---|---|
+| Round 1 — 11:00–16:00 | 5.00h | stated |
+| Round 2 — 16:00–19:52 | 3.87h | stated (1.60h measured inside it) |
+| Round 3 — 19:52–20:20 | 0.47h | **measured**, no unobserved part |
+| **Total for Oct 26** | **9.3h** | |
+
+The items above come to 0.40h against the 0.47h measured. The remaining 0.07h
+is the three pushes, plus committing and pushing round 2's own scope document
+at 19:54, which happened inside this window rather than before it. They are
+allowed to add up here, where round 1 and round 2 said theirs were not
+reconciled, for a reason that is not a change of policy:
+this window is 28 minutes long and fully observed, so the split is read off
+commit stamps rather than estimated across an unobserved stretch.
+
+## Volume
+
+| Repo | Files | Lines |
+|---|---|---|
+| app (round 3) | 4 | +35 / −5 |
+
+**35 lines in half an hour, and the diff is the least informative thing about
+it.** This folder's standing correction is about hours inflated from diff size;
+this round is the same error available in the other direction. Reading the
+nine-gate enrichment path, running the config matcher against production's own
+organization names, and probing a third party's live page five times is where
+the time went. A reviewer sizing this round by its diff would underreport it as
+badly as the merchant-onboarding round overreported itself.
+
+No migrations. Local database unchanged at 1.73.
+
+## Open
+
+- **None of this is on main.** Three commits sit on `pjol/mobile-2-1`; the
+  one-line config correction is the only part production needs urgently, and it
+  is a one-file cherry-pick.
+- The key fix is necessary, not sufficient, for any *other* partner: the same
+  mismatch is possible for every entry, and nothing warns about it. Cheapest
+  guard is for `configureV4S` to read the organization names at boot and warn
+  on any enabled entry matching none — it would have caught this on the first
+  deploy, and it is offered but not built.
+- A recurring successor copies `signup_url` verbatim, so the Nov 2 row still
+  carries Oct 26's shift id and date filter. Harmless while enrichment runs,
+  since the fetch is rebuilt from `jobId` and the display link is overwritten on
+  a match — but if the config is off or the partner's site is down, the stored
+  fallback sends volunteers to a date that has passed.
