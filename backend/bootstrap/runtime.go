@@ -15,6 +15,7 @@ import (
 	"github.com/SFLuv/app/backend/handlers"
 	"github.com/SFLuv/app/backend/logger"
 	"github.com/SFLuv/app/backend/mcp"
+	"github.com/SFLuv/app/backend/realtime"
 	"github.com/SFLuv/app/backend/router"
 	"github.com/SFLuv/app/backend/w9provider"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -549,7 +550,29 @@ func NewServerHandler(ctx context.Context, pools *DBPools, appLogger *logger.Log
 	// read-only transactions inside the mcp package.
 	mcpService := mcp.New(pools.App, pools.Bot, pools.Ponder, a, activeChainID)
 
-	return withHealthz(router.New(s, a, p, mcpService.RegisterRoutes), jobsLeader), nil
+	// The realtime socket.
+	//
+	// Deliberately NOT leader-gated, unlike every background job above. A job
+	// is leader-only because running it twice does the work twice; a socket is
+	// a connection to a client this process is serving, and gating it would
+	// mean a client connected to a non-leader replica got no events at all.
+	//
+	// The flip side is the hub's one real limit: its registry is in-process, so
+	// an event published on one replica does not reach a client connected to
+	// another. That is noted at the top of the realtime package along with the
+	// way out. It is correct today because the backend runs as one process, and
+	// it is the thing to check first when a second one is added.
+	realtimeHub := realtime.NewHub()
+	a.BuildRealtimeServer(realtimeHub, !isProductionEnv())
+
+	return withHealthz(router.New(s, a, p, mcpService.RegisterRoutes), jobsLeader, realtimeHub), nil
+}
+
+// isProductionEnv mirrors the router's own check, used here only to decide
+// whether the websocket accepts a browser Origin — useful for watching the
+// event stream from a local page, never wanted in production.
+func isProductionEnv() bool {
+	return strings.EqualFold(strings.TrimSpace(os.Getenv("IN_PRODUCTION")), "true")
 }
 
 // withHealthz answers GET /healthz ahead of the router, for a platform's
@@ -557,7 +580,7 @@ func NewServerHandler(ctx context.Context, pools *DBPools, appLogger *logger.Log
 // recorded. It reports whether this process runs the background jobs, but is
 // healthy either way: a new deployment must pass its check while the old
 // process still holds the jobs lock, or neither would ever give way.
-func withHealthz(next http.Handler, leader *JobsLeader) http.Handler {
+func withHealthz(next http.Handler, leader *JobsLeader, hub *realtime.Hub) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/healthz" {
 			next.ServeHTTP(w, r)
@@ -565,6 +588,12 @@ func withHealthz(next http.Handler, leader *JobsLeader) http.Handler {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Cache-Control", "no-store")
-		fmt.Fprintf(w, `{"status":"ok","jobs_leader":%t}`, leader.Held())
+		// The socket counts are here rather than on an admin endpoint because
+		// this is the one place that already answers "what is this process
+		// doing" without auth or a database round trip, and "how many clients
+		// is this replica holding" is the same kind of fact as "does it hold
+		// the jobs lock". Two integers; nothing identifying.
+		fmt.Fprintf(w, `{"status":"ok","jobs_leader":%t,"realtime_connections":%d,"realtime_users":%d}`,
+			leader.Held(), hub.Connections(), hub.Users())
 	})
 }

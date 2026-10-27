@@ -2768,6 +2768,13 @@ var schemaMigrations = []SchemaMigration{
 			return migrateInvitePermissions(ctx, pools)
 		},
 	},
+	{
+		Version:     "1.74",
+		Description: "group chats, replies, reactions, attachments, contact cards, and profile pictures",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			return migrateChatV2(ctx, pools)
+		},
+	},
 }
 
 // migrateW9WarningTiers replaces one hard gate with an escalating sequence.

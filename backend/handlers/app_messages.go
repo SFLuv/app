@@ -32,7 +32,16 @@ func conversationIdFromPath(r *http.Request) (int64, bool) {
 	return id, err == nil && id > 0
 }
 
+// otherMember is the person on the other end of a DIRECT thread.
+//
+// Empty for a group, which has no "other member" — every caller that uses the
+// result to look somebody up must check IsGroup first. Returning "" rather than
+// an arbitrary member is deliberate: a group silently resolving to whoever
+// happened to be user_low would be a wrong answer that looks like a right one.
 func otherMember(c *structs.ConversationRow, me string) string {
+	if c.IsGroup() {
+		return ""
+	}
 	if c.UserLow == me {
 		return c.UserHigh
 	}
@@ -83,10 +92,12 @@ func (a *AppService) ListMyConversations(w http.ResponseWriter, r *http.Request)
 
 	others := []string{}
 	postIds := []int64{}
-	for _, row := range rows {
-		others = append(others, otherMember(&row.Conversation, userId))
-		if row.Conversation.PostId != nil {
-			postIds = append(postIds, *row.Conversation.PostId)
+	for i := range rows {
+		if other := otherMember(&rows[i].Conversation, userId); other != "" {
+			others = append(others, other)
+		}
+		if rows[i].Conversation.PostId != nil {
+			postIds = append(postIds, *rows[i].Conversation.PostId)
 		}
 	}
 	people, err := a.db.GetPublicUsers(ctx, others)
@@ -125,20 +136,42 @@ func (a *AppService) ListMyConversations(w http.ResponseWriter, r *http.Request)
 	}
 
 	out := make([]*structs.Conversation, 0, len(rows))
-	for _, row := range rows {
-		other := otherMember(&row.Conversation, userId)
-		_, otherStillIn := chatActive[other]
+	for i := range rows {
+		row := &rows[i]
 		conv := &structs.Conversation{
-			Id:                row.Conversation.Id,
-			OtherUser:         people[other],
-			LastMessage:       row.Last,
-			UnreadCount:       row.Unread,
-			LastMessageAt:     row.Conversation.LastMessageAt,
-			BlockedByMe:       blocked[other],
-			OtherUserInactive: !otherStillIn,
+			Id:            row.Conversation.Id,
+			Kind:          row.Conversation.Kind,
+			LastMessage:   row.Last,
+			UnreadCount:   row.Unread,
+			LastMessageAt: row.Conversation.LastMessageAt,
 		}
+
+		if row.Conversation.IsGroup() {
+			conv.Title = row.Conversation.Title
+			conv.IconAttachmentId = row.Conversation.IconAttachmentId
+			conv.OwnerId = row.Conversation.OwnerId
+			conv.MyRole = row.Conversation.MyRole
+			conv.MemberCount = row.MemberCount
+			// No OtherUser, no block state, no inactive flag: all three are
+			// statements about one other person, and a group does not have one.
+			// The row shows the title and the member count instead.
+		} else {
+			other := otherMember(&row.Conversation, userId)
+			_, otherStillIn := chatActive[other]
+			conv.OtherUser = people[other]
+			conv.BlockedByMe = blocked[other]
+			conv.OtherUserInactive = !otherStillIn
+		}
+
 		if conv.LastMessage != nil {
 			conv.LastMessage.IsMine = conv.LastMessage.SenderId == userId
+			// The inbox row for a group says who spoke last, so a preview is
+			// attributable without opening the thread.
+			if row.Conversation.IsGroup() {
+				if names, err := a.db.GetSenderNames(ctx, []string{conv.LastMessage.SenderId}); err == nil {
+					conv.LastMessage.SenderName = names[conv.LastMessage.SenderId]
+				}
+			}
 		}
 		if row.Conversation.PostId != nil {
 			conv.Post = chips[*row.Conversation.PostId]
@@ -276,6 +309,12 @@ func (a *AppService) GetConversation(w http.ResponseWriter, r *http.Request) {
 // carry an SFLUV payment: a plain thread, or a post that accepts SFLUV.
 func (a *AppService) writeConversationDetail(w http.ResponseWriter, r *http.Request, userId string, conv *structs.ConversationRow, status int) {
 	ctx := r.Context()
+
+	if conv.IsGroup() {
+		a.writeGroupDetail(w, r, userId, conv, status)
+		return
+	}
+
 	other := otherMember(conv, userId)
 	people, err := a.db.GetPublicUsers(ctx, []string{other})
 	if err != nil {
@@ -285,8 +324,10 @@ func (a *AppService) writeConversationDetail(w http.ResponseWriter, r *http.Requ
 	}
 	out := &structs.Conversation{
 		Id:                conv.Id,
+		Kind:              conv.Kind,
 		OtherUser:         people[other],
 		LastMessageAt:     conv.LastMessageAt,
+		MemberCount:       2,
 		OtherUserInactive: !a.BetaFeatureAllowed(ctx, other, structs.BetaFeatureChat),
 	}
 	canPay := true
@@ -366,6 +407,7 @@ func (a *AppService) GetConversationMessages(w http.ResponseWriter, r *http.Requ
 		msgs[i], msgs[j] = msgs[j], msgs[i]
 	}
 	markMine(msgs, userId)
+	a.hydrateMessages(r.Context(), conv, msgs, userId)
 	writeJSON(w, http.StatusOK, structs.MessagesPage{Messages: msgs, HasMore: hasMore})
 }
 
@@ -375,6 +417,19 @@ func (a *AppService) requireCanMessage(w http.ResponseWriter, r *http.Request, u
 	if !a.requireBulletinParticipant(w, r, userId) {
 		return false
 	}
+
+	// A group is not gated on blocks.
+	//
+	// A block is a statement about a conversation between two people: "do not
+	// let this person reach me". In a group the message is addressed to the
+	// room, and letting one block silence somebody for everybody else would
+	// hand any member a veto over the whole thread. The client-side consequence
+	// of a block in a group is the reader's to apply — they can leave, and they
+	// can still report — not the sender's to be refused for.
+	if conv.IsGroup() {
+		return true
+	}
+
 	blocked, err := a.db.UsersAreBlocked(r.Context(), userId, otherMember(conv, userId))
 	if err != nil {
 		a.logger.Logf("bulletin: unexpected error: %s", err)
@@ -420,6 +475,7 @@ func (a *AppService) SendConversationMessage(w http.ResponseWriter, r *http.Requ
 		SenderId:       userId,
 		Kind:           structs.MessageKindText,
 		Body:           body,
+		ReplyToId:      req.ReplyToId,
 	})
 	if err != nil {
 		a.logger.Logf("error sending message in conversation %d: %s", conv.Id, err)
@@ -427,15 +483,83 @@ func (a *AppService) SendConversationMessage(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	msg.IsMine = true
-	a.notifyNewMessage(userId, otherMember(conv, userId), conv.Id, previewText(body))
+	a.hydrateMessages(r.Context(), conv, []*structs.Message{msg}, userId)
+	a.fanOutMessage(r.Context(), conv, msg, userId, previewText(body))
 	writeJSON(w, http.StatusCreated, msg)
 }
 
-// AttachConversationPayment records an SFLUV payment the sender already made
-// through the normal send flow. The transfer is checked against the indexer:
-// it must go from a wallet the sender owns to a wallet the other person owns.
-// If the indexer has not seen it yet, it is stored as pending and checked again
-// when the thread is next read.
+// fanOutMessage is the one place a new message is announced, by either route.
+//
+// The order matters: the socket first, then pushes to whoever the socket did not
+// reach. Doing it the other way round would mean a person with the app open gets
+// a system banner for the message that is already on their screen, which is the
+// single most irritating thing a chat app can do and the reason the realtime
+// layer exists at all.
+//
+// Everything after the insert is best-effort. A failure here means somebody
+// learns about the message on their next poll instead of instantly; it must
+// never fail the send, which has already committed.
+func (a *AppService) fanOutMessage(ctx context.Context, conv *structs.ConversationRow, msg *structs.Message, senderId string, preview string) {
+	reached := a.publishMessage(ctx, conv, msg, senderId)
+
+	recipients := []string{}
+	if conv.IsGroup() {
+		members, err := a.db.GetConversationMemberIds(ctx, conv.Id)
+		if err != nil {
+			a.logger.Logf("error listing members of conversation %d for push: %s", conv.Id, err)
+			return
+		}
+		recipients = members
+	} else if other := otherMember(conv, senderId); other != "" {
+		recipients = []string{other}
+	}
+
+	title := ""
+	if conv.IsGroup() {
+		// A group push needs the group's name, not the sender's: four people
+		// messaging one thread would otherwise read as four unrelated
+		// conversations in the tray.
+		title = strings.TrimSpace(conv.Title)
+		if title == "" {
+			title = "Group message"
+		}
+		if msg.SenderName != "" {
+			preview = msg.SenderName + ": " + preview
+		}
+	}
+
+	for _, id := range recipients {
+		if id == senderId {
+			continue
+		}
+		if _, alreadyTold := reached[id]; alreadyTold {
+			continue
+		}
+		a.notifyNewMessageWithTitle(senderId, id, conv.Id, title, preview)
+	}
+}
+
+// AttachConversationPayment records an SFLUV payment the sender already made.
+// The transfer is checked against the indexer: it must go from a wallet the
+// sender owns to a wallet the other person owns. If the indexer has not seen it
+// yet, it is stored as pending and checked again when the thread is next read.
+//
+// Serves both the amount typed in the chat composer and the older route through
+// the wallet's send screen. They differ only in where the number was entered —
+// the client signs and broadcasts either way, and what arrives here is the hash
+// of something that has already happened — so sharing one verification path is
+// what keeps "paid in chat" from being a weaker claim than "paid and attached".
+//
+// ── Direct threads only ─────────────────────────────────────────────────────
+//
+// "I paid you" needs a "you". A group has no single counterparty, and the
+// verification below is built on there being one: it checks the transfer went
+// from the sender to the other member. In a group there is nothing to check
+// against, so the honest options are to refuse or to invent a recipient, and
+// inventing one means money moving to somebody nobody chose.
+//
+// The client hides the control in groups. This is the server refusing it too,
+// so a crafted request cannot reach what the UI does not offer.
 func (a *AppService) AttachConversationPayment(w http.ResponseWriter, r *http.Request) {
 	userId, ok := bulletinViewer(w, r)
 	if !ok {
@@ -445,10 +569,15 @@ func (a *AppService) AttachConversationPayment(w http.ResponseWriter, r *http.Re
 	if !ok {
 		return
 	}
+	if conv.IsGroup() {
+		bulletinError(w, http.StatusBadRequest, "not_in_groups",
+			"Sending SFLUV isn't available in group chats.")
+		return
+	}
 	if !a.requireCanMessage(w, r, userId, conv) {
 		return
 	}
-	var req structs.PaymentMessageRequest
+	var req structs.InChatPaymentRequest
 	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<12)).Decode(&req); err != nil {
 		bulletinError(w, http.StatusBadRequest, "bad_request", "Could not read the payment.")
 		return
@@ -456,6 +585,11 @@ func (a *AppService) AttachConversationPayment(w http.ResponseWriter, r *http.Re
 	hash := strings.ToLower(strings.TrimSpace(req.TxHash))
 	if !txHashPattern.MatchString(hash) {
 		bulletinError(w, http.StatusBadRequest, "bad_tx", "That isn't a valid transaction.")
+		return
+	}
+	note := strings.TrimSpace(req.Note)
+	if utf8.RuneCountInString(note) > 200 {
+		bulletinError(w, http.StatusBadRequest, "too_long", "Payment notes can be up to 200 characters.")
 		return
 	}
 
@@ -474,14 +608,28 @@ func (a *AppService) AttachConversationPayment(w http.ResponseWriter, r *http.Re
 	var amountPtr *string
 	if verified {
 		amountPtr = &amount
+	} else if claimed := strings.TrimSpace(req.AmountSfluvBase); claimed != "" {
+		// What the sender says they sent, shown while the indexer catches up so
+		// the bubble reads "12 SFLUV (confirming)" rather than a blank amount.
+		//
+		// Safe to show unverified because PaymentVerified is false alongside it
+		// and the client renders that state differently. The moment the indexer
+		// answers, retryPendingPayments overwrites this with the real figure —
+		// so a sender who lies about the amount is corrected within a minute,
+		// in front of the person they lied to.
+		if amountPattern.MatchString(claimed) {
+			amountPtr = &claimed
+		}
 	}
 	msg, err := a.db.InsertMessage(r.Context(), &db.NewMessage{
 		ConversationId:  conv.Id,
 		SenderId:        userId,
 		Kind:            structs.MessageKindPayment,
+		Body:            note,
 		TxHash:          &hash,
 		AmountSfluvBase: amountPtr,
 		PaymentVerified: verified,
+		ReplyToId:       nil,
 	})
 	if errors.Is(err, db.ErrPaymentAlreadyAttached) {
 		bulletinError(w, http.StatusConflict, "already_attached", "That payment is already in a conversation.")
@@ -498,8 +646,138 @@ func (a *AppService) AttachConversationPayment(w http.ResponseWriter, r *http.Re
 	if verified {
 		preview = fmt.Sprintf("Sent you %s SFLUV", formatBaseAmount(amount))
 	}
-	a.notifyNewMessage(userId, other, conv.Id, preview)
+	if note != "" {
+		preview += " — " + previewText(note)
+	}
+	a.hydrateMessages(r.Context(), conv, []*structs.Message{msg}, userId)
+	a.fanOutMessage(r.Context(), conv, msg, userId, preview)
 	writeJSON(w, http.StatusCreated, msg)
+}
+
+// amountPattern is a whole number of base units, which is all a claimed amount
+// is ever allowed to be.
+var amountPattern = regexp.MustCompile(`^[0-9]{1,30}$`)
+
+// ToggleMessageReaction adds or removes one emoji on one message.
+//
+// Idempotent in the useful sense: tapping the same emoji twice ends with it
+// absent, and the response says which way it went so the client can settle on
+// the server's answer rather than its own optimistic guess.
+func (a *AppService) ToggleMessageReaction(w http.ResponseWriter, r *http.Request) {
+	userId, ok := bulletinViewer(w, r)
+	if !ok {
+		return
+	}
+	conv, ok := a.loadMemberConversation(w, r, userId)
+	if !ok {
+		return
+	}
+	if !a.requireCanMessage(w, r, userId, conv) {
+		return
+	}
+
+	messageId, err := strconv.ParseInt(chi.URLParam(r, "messageId"), 10, 64)
+	if err != nil || messageId <= 0 {
+		bulletinError(w, http.StatusNotFound, "not_found", "That message could not be found.")
+		return
+	}
+
+	var req structs.ReactionRequest
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<12)).Decode(&req); err != nil {
+		bulletinError(w, http.StatusBadRequest, "bad_request", "Could not read that reaction.")
+		return
+	}
+	emoji, problem := normalizeReactionEmoji(req.Emoji)
+	if problem != "" {
+		bulletinError(w, http.StatusBadRequest, "bad_emoji", problem)
+		return
+	}
+
+	ctx := r.Context()
+	// Two checks, because they answer different questions and either alone
+	// leaves a gap.
+	//
+	// The conversation in the path has already been confirmed as one the caller
+	// is in, by loadMemberConversation above. What is NOT yet established is
+	// that the message id in the path belongs to that conversation — the two
+	// arrive independently, and a caller who is in any other thread would
+	// otherwise pass a membership-only check while acting on a message from it.
+	inThread, err := a.db.MessageIsInConversation(ctx, messageId, conv.Id)
+	if err != nil {
+		a.logger.Logf("bulletin: unexpected error: %s", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	if !inThread {
+		bulletinError(w, http.StatusNotFound, "not_found", "That message could not be found.")
+		return
+	}
+	visible, err := a.db.UserCanSeeMessage(ctx, messageId, userId)
+	if err != nil {
+		a.logger.Logf("bulletin: unexpected error: %s", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	if !visible {
+		bulletinError(w, http.StatusNotFound, "not_found", "That message could not be found.")
+		return
+	}
+
+	added, err := a.db.ToggleReaction(ctx, messageId, userId, emoji)
+	if err != nil {
+		a.logger.Logf("error toggling a reaction on message %d: %s", messageId, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	reactions, err := a.db.GetMessageReactions(ctx, []int64{messageId}, userId)
+	if err != nil {
+		a.logger.Logf("error reloading reactions for message %d: %s", messageId, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	a.publishReaction(ctx, conv.Id, messageId, userId, reactions[messageId])
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"added":     added,
+		"reactions": reactions[messageId],
+	})
+}
+
+// normalizeReactionEmoji checks that what arrived is plausibly one emoji.
+//
+// Not a fixed list. The client offers six by default and a full picker behind
+// them, and a server-side allowlist would mean a release to add one. What is
+// enforced instead is shape: short, no whitespace, no control characters, and
+// nothing from the ASCII range — which is what keeps the field from becoming a
+// second message body with no length limit and no moderation.
+func normalizeReactionEmoji(raw string) (string, string) {
+	emoji := strings.TrimSpace(raw)
+	if emoji == "" {
+		return "", "Pick a reaction."
+	}
+	// Bytes, not runes, and 64 rather than 16.
+	//
+	// 16 looked generous and was not: a family emoji like 👨‍👩‍👧 is three
+	// pictographs joined by zero-width joiners, which is 18 bytes, so the cap
+	// that was meant to bound the field was silently rejecting real reactions.
+	// 64 admits the longest sequences anybody sends and still bounds it hard.
+	//
+	// The column's own CHECK is char_length BETWEEN 1 AND 16, which counts
+	// CHARACTERS — that same family emoji is five — so the two limits agree
+	// despite the different numbers.
+	if len(emoji) > 64 {
+		return "", "That isn't a reaction."
+	}
+	for _, r := range emoji {
+		if r < 0x80 || r == 0xFFFD {
+			return "", "That isn't a reaction."
+		}
+	}
+	// A grapheme cluster can legitimately be several runes — a skin tone
+	// modifier, a ZWJ sequence — so runes are deliberately not counted. The
+	// byte cap above is what bounds it.
+	return emoji, ""
 }
 
 // verifyConversationPayment checks a transfer against the indexer. verified is
@@ -564,6 +842,12 @@ func (a *AppService) MarkConversationRead(w http.ResponseWriter, r *http.Request
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
+	// Re-read rather than reusing the row loaded above: that one's
+	// last_read_message_id is from before this call, and a receipt carrying it
+	// would tell the other end the reader is one message behind where they are.
+	if updated, err := a.db.GetConversationForMember(r.Context(), conv.Id, userId); err == nil {
+		a.publishRead(r.Context(), conv.Id, userId, updated.LastReadId)
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -605,8 +889,18 @@ func formatBaseAmount(base string) string {
 }
 
 // notifyNewMessage pushes to the recipient's devices in the background, so a
-// slow push service never delays the sender.
+// slow push service never delays the sender. The title is the sender's name.
 func (a *AppService) notifyNewMessage(senderId, recipientId string, conversationId int64, preview string) {
+	a.notifyNewMessageWithTitle(senderId, recipientId, conversationId, "", preview)
+}
+
+// notifyNewMessageWithTitle is notifyNewMessage with the banner title chosen by
+// the caller, which a group needs: its pushes are titled with the group's name
+// rather than whoever happened to speak.
+//
+// An empty title falls back to the sender's public name, which is what a direct
+// thread wants.
+func (a *AppService) notifyNewMessageWithTitle(senderId, recipientId string, conversationId int64, title, preview string) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
@@ -619,11 +913,13 @@ func (a *AppService) notifyNewMessage(senderId, recipientId string, conversation
 			return
 		}
 
-		people, err := a.db.GetPublicUsers(ctx, []string{senderId})
-		if err != nil {
-			return
+		if title == "" {
+			people, err := a.db.GetPublicUsers(ctx, []string{senderId})
+			if err != nil {
+				return
+			}
+			title = people[senderId].PublicName
 		}
-		title := people[senderId].PublicName
 		if title == "" {
 			title = "New message"
 		}

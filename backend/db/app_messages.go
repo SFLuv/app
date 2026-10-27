@@ -31,10 +31,14 @@ func (a *AppDB) GetOrCreateConversation(ctx context.Context, me, other string, p
 
 	created := false
 	var id int64
+	// The unique index the conflict target names is now partial
+	// (WHERE kind = 'direct'), so the inferred target has to match it — hence
+	// the WHERE clause on the ON CONFLICT. Without it Postgres cannot infer the
+	// index and the insert fails outright rather than conflicting.
 	err = tx.QueryRow(ctx, `
-		INSERT INTO conversations(user_low, user_high, post_id, started_by)
-		VALUES ($1, $2, $3, $4)
-		ON CONFLICT (user_low, user_high, COALESCE(post_id, 0)) DO NOTHING
+		INSERT INTO conversations(kind, user_low, user_high, post_id, started_by)
+		VALUES ('direct', $1, $2, $3, $4)
+		ON CONFLICT (user_low, user_high, COALESCE(post_id, 0)) WHERE kind = 'direct' DO NOTHING
 		RETURNING id;
 	`, low, high, postId, me).Scan(&id)
 	if err == nil {
@@ -42,7 +46,8 @@ func (a *AppDB) GetOrCreateConversation(ctx context.Context, me, other string, p
 	} else if errors.Is(err, pgx.ErrNoRows) {
 		if err := tx.QueryRow(ctx, `
 			SELECT id FROM conversations
-			WHERE user_low = $1 AND user_high = $2 AND COALESCE(post_id, 0) = COALESCE($3, 0);
+			WHERE kind = 'direct' AND user_low = $1 AND user_high = $2
+				AND COALESCE(post_id, 0) = COALESCE($3, 0);
 		`, low, high, postId).Scan(&id); err != nil {
 			return nil, false, err
 		}
@@ -58,7 +63,7 @@ func (a *AppDB) GetOrCreateConversation(ctx context.Context, me, other string, p
 		return nil, false, err
 	}
 	if _, err := tx.Exec(ctx, `
-		UPDATE conversation_members SET archived_at = NULL
+		UPDATE conversation_members SET archived_at = NULL, left_at = NULL
 		WHERE conversation_id = $1 AND user_id = $2;
 	`, id, me); err != nil {
 		return nil, false, err
@@ -72,14 +77,34 @@ func (a *AppDB) GetOrCreateConversation(ctx context.Context, me, other string, p
 	return row, created, err
 }
 
+// conversationColumns is the thread's own row, in ConversationRow's field order.
+//
+// user_low and user_high are coalesced because they are nullable in a group.
+// ConversationRow keeps them as plain strings, so a group reads as "" rather
+// than forcing every caller through a nil check for a case it has already
+// excluded by testing Kind.
+const conversationColumns = `
+	c.id, c.kind, c.title, c.icon_attachment_id, COALESCE(c.owner_id, ''),
+	COALESCE(c.user_low, ''), COALESCE(c.user_high, ''), c.post_id, c.last_message_at`
+
+func scanConversation(row pgx.Row, c *structs.ConversationRow) error {
+	return row.Scan(&c.Id, &c.Kind, &c.Title, &c.IconAttachmentId, &c.OwnerId,
+		&c.UserLow, &c.UserHigh, &c.PostId, &c.LastMessageAt, &c.LastReadId, &c.MyRole)
+}
+
+// GetConversationForMember loads a thread the caller belongs to.
+//
+// left_at IS NULL is part of the membership test: somebody who left a group is
+// still a row in conversation_members — their messages have to keep a sender —
+// but they are not a member any more and must not be able to read it.
 func (a *AppDB) GetConversationForMember(ctx context.Context, conversationId int64, userId string) (*structs.ConversationRow, error) {
 	var c structs.ConversationRow
-	err := a.db.QueryRow(ctx, `
-		SELECT c.id, c.user_low, c.user_high, c.post_id, c.last_message_at, m.last_read_message_id
+	err := scanConversation(a.db.QueryRow(ctx, `
+		SELECT `+conversationColumns+`, m.last_read_message_id, m.role
 		FROM conversations c
-		JOIN conversation_members m ON m.conversation_id = c.id AND m.user_id = $2
+		JOIN conversation_members m ON m.conversation_id = c.id AND m.user_id = $2 AND m.left_at IS NULL
 		WHERE c.id = $1;
-	`, conversationId, userId).Scan(&c.Id, &c.UserLow, &c.UserHigh, &c.PostId, &c.LastMessageAt, &c.LastReadId)
+	`, conversationId, userId), &c)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrConversationNotFound
 	}
@@ -87,6 +112,28 @@ func (a *AppDB) GetConversationForMember(ctx context.Context, conversationId int
 		return nil, err
 	}
 	return &c, nil
+}
+
+// GetConversationMemberIds lists who is currently in a thread, which is the
+// fan-out set for both pushes and realtime events.
+func (a *AppDB) GetConversationMemberIds(ctx context.Context, conversationId int64) ([]string, error) {
+	rows, err := a.db.Query(ctx, `
+		SELECT user_id FROM conversation_members
+		WHERE conversation_id = $1 AND left_at IS NULL;
+	`, conversationId)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	ids := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
 }
 
 // CountConversationsStartedSince is the rate-limit input for opening new threads.
@@ -100,17 +147,18 @@ func (a *AppDB) CountConversationsStartedSince(ctx context.Context, userId strin
 
 const messageColumns = `
 	x.id, x.conversation_id, x.sender_id, x.kind, x.body, x.tx_hash,
-	x.amount_sfluv_base::text, x.payment_verified, x.created_at`
+	x.amount_sfluv_base::text, x.payment_verified, x.created_at, x.reply_to_id`
 
 func scanMessage(row pgx.Row, m *structs.Message) error {
 	return row.Scan(&m.Id, &m.ConversationId, &m.SenderId, &m.Kind, &m.Body, &m.TxHash,
-		&m.AmountSfluvBase, &m.PaymentVerified, &m.CreatedAt)
+		&m.AmountSfluvBase, &m.PaymentVerified, &m.CreatedAt, &m.ReplyToId)
 }
 
 type InboxRow struct {
 	Conversation structs.ConversationRow
 	Unread       int
 	Last         *structs.Message
+	MemberCount  int
 }
 
 // ListConversations is the inbox: threads that have at least one message,
@@ -118,7 +166,7 @@ type InboxRow struct {
 func (a *AppDB) ListConversations(ctx context.Context, userId string) ([]InboxRow, error) {
 	rows, err := a.db.Query(ctx, `
 		SELECT
-			c.id, c.user_low, c.user_high, c.post_id, c.last_message_at, m.last_read_message_id,
+			`+conversationColumns+`, m.last_read_message_id, m.role,
 			(
 				SELECT COUNT(*) FROM messages u
 				WHERE u.conversation_id = c.id
@@ -126,8 +174,12 @@ func (a *AppDB) ListConversations(ctx context.Context, userId string) ([]InboxRo
 					AND u.sender_id <> $1
 					AND u.deleted_at IS NULL
 			),
+			(
+				SELECT COUNT(*) FROM conversation_members cm
+				WHERE cm.conversation_id = c.id AND cm.left_at IS NULL
+			),
 			lm.id, lm.conversation_id, lm.sender_id, lm.kind, lm.body, lm.tx_hash,
-			lm.amount_sfluv_base::text, lm.payment_verified, lm.created_at
+			lm.amount_sfluv_base::text, lm.payment_verified, lm.created_at, lm.reply_to_id
 		FROM conversation_members m
 		JOIN conversations c ON c.id = m.conversation_id
 		JOIN LATERAL (
@@ -136,7 +188,7 @@ func (a *AppDB) ListConversations(ctx context.Context, userId string) ([]InboxRo
 			ORDER BY x.id DESC
 			LIMIT 1
 		) lm ON TRUE
-		WHERE m.user_id = $1 AND m.archived_at IS NULL
+		WHERE m.user_id = $1 AND m.archived_at IS NULL AND m.left_at IS NULL
 		ORDER BY c.last_message_at DESC
 		LIMIT 200;
 	`, userId)
@@ -149,11 +201,13 @@ func (a *AppDB) ListConversations(ctx context.Context, userId string) ([]InboxRo
 	for rows.Next() {
 		var r InboxRow
 		var last structs.Message
+		c := &r.Conversation
 		if err := rows.Scan(
-			&r.Conversation.Id, &r.Conversation.UserLow, &r.Conversation.UserHigh, &r.Conversation.PostId,
-			&r.Conversation.LastMessageAt, &r.Conversation.LastReadId, &r.Unread,
+			&c.Id, &c.Kind, &c.Title, &c.IconAttachmentId, &c.OwnerId,
+			&c.UserLow, &c.UserHigh, &c.PostId, &c.LastMessageAt,
+			&c.LastReadId, &c.MyRole, &r.Unread, &r.MemberCount,
 			&last.Id, &last.ConversationId, &last.SenderId, &last.Kind, &last.Body, &last.TxHash,
-			&last.AmountSfluvBase, &last.PaymentVerified, &last.CreatedAt,
+			&last.AmountSfluvBase, &last.PaymentVerified, &last.CreatedAt, &last.ReplyToId,
 		); err != nil {
 			return nil, err
 		}
@@ -170,6 +224,7 @@ func (a *AppDB) CountUnreadConversations(ctx context.Context, userId string) (in
 		SELECT COUNT(*) FROM conversation_members m
 		WHERE m.user_id = $1
 			AND m.archived_at IS NULL
+			AND m.left_at IS NULL
 			AND EXISTS (
 				SELECT 1 FROM messages x
 				WHERE x.conversation_id = m.conversation_id
@@ -223,6 +278,7 @@ type NewMessage struct {
 	TxHash          *string
 	AmountSfluvBase *string
 	PaymentVerified bool
+	ReplyToId       *int64
 }
 
 // InsertMessage stores a message, bumps the thread's activity time, marks it
@@ -238,12 +294,21 @@ func (a *AppDB) InsertMessage(ctx context.Context, n *NewMessage) (*structs.Mess
 	var m structs.Message
 	err = scanMessage(tx.QueryRow(ctx, `
 		WITH x AS (
-			INSERT INTO messages(conversation_id, sender_id, kind, body, tx_hash, amount_sfluv_base, payment_verified)
-			VALUES ($1, $2, $3, $4, $5, $6::numeric, $7)
+			INSERT INTO messages(conversation_id, sender_id, kind, body, tx_hash, amount_sfluv_base, payment_verified, reply_to_id)
+			VALUES ($1, $2, $3, $4, $5, $6::numeric, $7, (
+				-- A reply may only quote a message in the same thread. Resolved
+				-- here rather than validated in the handler so there is no
+				-- window between the check and the insert, and so a quote of a
+				-- message in somebody else's conversation becomes a plain
+				-- message rather than an error — the reply is still what the
+				-- person meant to send.
+				SELECT r.id FROM messages r
+				WHERE r.id = $8 AND r.conversation_id = $1 AND r.deleted_at IS NULL
+			))
 			RETURNING *
 		)
 		SELECT `+messageColumns+` FROM x;
-	`, n.ConversationId, n.SenderId, n.Kind, n.Body, n.TxHash, n.AmountSfluvBase, n.PaymentVerified), &m)
+	`, n.ConversationId, n.SenderId, n.Kind, n.Body, n.TxHash, n.AmountSfluvBase, n.PaymentVerified, n.ReplyToId), &m)
 	if err != nil {
 		if isUniqueViolation(err) {
 			return nil, ErrPaymentAlreadyAttached
@@ -256,11 +321,14 @@ func (a *AppDB) InsertMessage(ctx context.Context, n *NewMessage) (*structs.Mess
 	`, n.ConversationId, m.CreatedAt); err != nil {
 		return nil, err
 	}
+	// A new message resurfaces a thread somebody archived, but must not drag
+	// back in somebody who left a group: left_at IS NULL is what keeps "I left
+	// this group" from being undone by the next person to post in it.
 	if _, err := tx.Exec(ctx, `
 		UPDATE conversation_members
 		SET archived_at = NULL,
 			last_read_message_id = CASE WHEN user_id = $2 THEN $3 ELSE last_read_message_id END
-		WHERE conversation_id = $1;
+		WHERE conversation_id = $1 AND left_at IS NULL;
 	`, n.ConversationId, n.SenderId, m.Id); err != nil {
 		return nil, err
 	}
@@ -346,16 +414,39 @@ func (a *AppDB) GetMessageAny(ctx context.Context, messageId int64) (*structs.Me
 	return &m, nil
 }
 
-// UserCanSeeMessage reports whether a user is a member of the message's thread.
+// UserCanSeeMessage reports whether a user is currently in the message's thread.
+//
+// left_at IS NULL is load-bearing, for the reason given on the attachment read:
+// a membership row outlives the membership, so without it somebody removed from
+// a group would still pass this check for every message in it.
 func (a *AppDB) UserCanSeeMessage(ctx context.Context, messageId int64, userId string) (bool, error) {
 	var ok bool
 	err := a.db.QueryRow(ctx, `
 		SELECT EXISTS (
 			SELECT 1 FROM messages x
 			JOIN conversation_members m ON m.conversation_id = x.conversation_id
-			WHERE x.id = $1 AND m.user_id = $2
+			WHERE x.id = $1 AND m.user_id = $2 AND m.left_at IS NULL
 		);
 	`, messageId, userId).Scan(&ok)
+	return ok, err
+}
+
+// MessageIsInConversation reports whether a message belongs to a particular
+// thread.
+//
+// Needed alongside UserCanSeeMessage because the two answer different
+// questions, and only asking the first one leaves a gap: a person in
+// conversation A, acting on a message id that belongs to conversation B, passes
+// "are you in this message's thread" whenever they are also in B. The reaction
+// endpoint takes a conversation from its path and a message id from the same
+// path, and nothing otherwise forces the two to agree.
+func (a *AppDB) MessageIsInConversation(ctx context.Context, messageId int64, conversationId int64) (bool, error) {
+	var ok bool
+	err := a.db.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM messages WHERE id = $1 AND conversation_id = $2 AND deleted_at IS NULL
+		);
+	`, messageId, conversationId).Scan(&ok)
 	return ok, err
 }
 
@@ -414,7 +505,8 @@ func (a *AppDB) FindConversationId(ctx context.Context, userA, userB string, pos
 	var id int64
 	err := a.db.QueryRow(ctx, `
 		SELECT id FROM conversations
-		WHERE user_low = $1 AND user_high = $2 AND COALESCE(post_id, 0) = COALESCE($3, 0);
+		WHERE kind = 'direct' AND user_low = $1 AND user_high = $2
+			AND COALESCE(post_id, 0) = COALESCE($3, 0);
 	`, low, high, postId).Scan(&id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return 0, nil

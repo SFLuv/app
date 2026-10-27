@@ -19,8 +19,17 @@ type SupportRequest struct {
 	// sender's form did not send one, or sent one we do not recognise.
 	Category string `json:"category,omitempty"`
 	Message  string `json:"message"`
-	// Source distinguishes the website form from anything added later.
+	// Source distinguishes where the request was written.
 	Source string `json:"source"`
+	// UserId is the account that submitted it, when it came from a signed-in
+	// caller. Nil for the website form, which has no session.
+	//
+	// What it is for: an alert about a request from an account we can reach in
+	// the app can offer to open a chat with them, which is faster for both ends
+	// than an email thread. Never shown to the sender, and never used to
+	// authenticate anything — a support request's authority is the email
+	// address it has always been.
+	UserId *string `json:"user_id,omitempty"`
 	// Status is "new" or "archived". Archiving is the only state change: a
 	// request is never deleted, so an archived one can still be read.
 	Status     string     `json:"status"`
@@ -33,6 +42,12 @@ type SupportRequest struct {
 const (
 	SupportRequestNew      = "new"
 	SupportRequestArchived = "archived"
+)
+
+// Where a support request was written.
+const (
+	SupportSourceWebsite = "website"
+	SupportSourceApp     = "app"
 )
 
 // SupportRequestSubmission is the public form's body.

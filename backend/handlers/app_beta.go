@@ -210,6 +210,7 @@ func (a *AppService) AdminGrantBetaFeature(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	a.announceBetaChange(r.Context(), req.UserId)
 	writeJSON(w, http.StatusOK, map[string]any{"feature": req.Feature, "user_id": req.UserId, "active": true})
 }
 
@@ -232,5 +233,25 @@ func (a *AppService) AdminRevokeBetaFeature(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	a.announceBetaChange(r.Context(), req.UserId)
 	writeJSON(w, http.StatusOK, map[string]any{"feature": req.Feature, "user_id": req.UserId, "active": false})
+}
+
+// announceBetaChange tells a connected client its access changed, so a surface
+// appears or disappears without waiting for a relaunch.
+//
+// This is what turning somebody's messaging on actually looks like from their
+// side: the tab shows up while they are holding the phone, rather than the next
+// time they happen to cold-start the app. The same event in reverse is how a
+// revoke takes effect immediately on a device that is open.
+//
+// Best-effort and silent. Somebody who is not connected finds out at their next
+// launch, which is exactly what happened before this existed.
+func (a *AppService) announceBetaChange(ctx context.Context, userId string) {
+	features, err := a.db.BetaFeaturesForUser(ctx, userId)
+	if err != nil {
+		a.logger.Logf("error reading beta features for %s after a change: %s", userId, err)
+		return
+	}
+	a.PublishBetaChanged(userId, features)
 }

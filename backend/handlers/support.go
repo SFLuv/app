@@ -126,7 +126,21 @@ func (a *AppService) CreateSupportRequest(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	request, err := a.db.CreateSupportRequest(r.Context(), sub)
+	// Where it came from, and from whom.
+	//
+	// AuthMiddleware runs on every route and injects the caller when a valid
+	// token is present, so this endpoint stays public — the website form has no
+	// session — while a submission from the signed-in app is attributed without
+	// a second endpoint. An expired or absent token simply means "website",
+	// which is the behaviour this had before.
+	source := structs.SupportSourceWebsite
+	submitter := ""
+	if did := utils.GetDid(r); did != nil && strings.TrimSpace(*did) != "" {
+		source = structs.SupportSourceApp
+		submitter = *did
+	}
+
+	request, err := a.db.CreateSupportRequest(r.Context(), sub, source, submitter)
 	if err != nil {
 		a.logger.Logf("error storing a support request from %s: %s", sub.Email, err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{
@@ -223,6 +237,23 @@ func (a *AppService) postSupportRequestAlert(ctx context.Context, request *struc
 		return
 	}
 
+	// Whether this sender can be messaged in the app, resolved once here rather
+	// than at render time: the alert's payload is written when it is raised, and
+	// a recipient reading it an hour later should not trigger a beta lookup per
+	// view.
+	//
+	// The consequence is that the button reflects access as it was when the
+	// request arrived. Somebody who loses chat access afterwards leaves a button
+	// that opens a thread they cannot read, which the staff member finds out by
+	// the thread saying so — the same way it already says so for anybody else
+	// taken out of the beta.
+	chatUserId := ""
+	if request.UserId != nil && strings.TrimSpace(*request.UserId) != "" {
+		if a.BetaFeatureAllowed(ctx, *request.UserId, structs.BetaFeatureChat) {
+			chatUserId = strings.TrimSpace(*request.UserId)
+		}
+	}
+
 	subject := request.Subject
 	if subject == "" {
 		subject = "(no subject)"
@@ -256,6 +287,11 @@ func (a *AppService) postSupportRequestAlert(ctx context.Context, request *struc
 			"subject":   subject,
 			"category":  request.Category,
 			"message":   request.Message,
+			"source":    request.Source,
+			// Set only when the sender is an account we can open a chat with.
+			// Both halves matter: an account with no chat access would get a
+			// "Message" button that opened a thread they cannot read.
+			"chat_user_id": chatUserId,
 		},
 	}); err != nil {
 		a.logger.Logf("support request %s: could not post the alert: %s", request.Reference, err)

@@ -34,7 +34,20 @@ func NewSupportReference() (string, error) {
 // A reference collision is astronomically unlikely but not impossible, and
 // losing somebody's message to one would be indefensible, so a clash is simply
 // retried.
-func (a *AppDB) CreateSupportRequest(ctx context.Context, sub structs.SupportRequestSubmission) (*structs.SupportRequest, error) {
+// source and userId say where the request came from. userId is empty for the
+// website form, which has no signed-in caller; it is set for one submitted from
+// inside the app, and is what lets the alert offer to open a chat rather than
+// only an email.
+func (a *AppDB) CreateSupportRequest(ctx context.Context, sub structs.SupportRequestSubmission, source string, userId string) (*structs.SupportRequest, error) {
+	source = strings.TrimSpace(source)
+	if source == "" {
+		source = structs.SupportSourceWebsite
+	}
+	var owner any
+	if trimmed := strings.TrimSpace(userId); trimmed != "" {
+		owner = trimmed
+	}
+
 	for attempt := 0; attempt < 5; attempt++ {
 		reference, err := NewSupportReference()
 		if err != nil {
@@ -43,9 +56,9 @@ func (a *AppDB) CreateSupportRequest(ctx context.Context, sub structs.SupportReq
 
 		out := &structs.SupportRequest{}
 		err = a.db.QueryRow(ctx, `
-			INSERT INTO support_requests (reference, email, name, subject, category, message, source, status)
-			VALUES ($1, $2, $3, $4, NULLIF($5, ''), $6, 'website', $7)
-			RETURNING id, reference, email, name, subject, COALESCE(category, ''), message, source, status, created_at;
+			INSERT INTO support_requests (reference, email, name, subject, category, message, source, status, user_id)
+			VALUES ($1, $2, $3, $4, NULLIF($5, ''), $6, $8, $7, $9)
+			RETURNING id, reference, email, name, subject, COALESCE(category, ''), message, source, status, created_at, user_id;
 		`, reference,
 			strings.TrimSpace(sub.Email),
 			strings.TrimSpace(sub.Name),
@@ -53,8 +66,10 @@ func (a *AppDB) CreateSupportRequest(ctx context.Context, sub structs.SupportReq
 			strings.TrimSpace(sub.SubjectSlug),
 			strings.TrimSpace(sub.Message),
 			structs.SupportRequestNew,
+			source,
+			owner,
 		).Scan(&out.Id, &out.Reference, &out.Email, &out.Name, &out.Subject,
-			&out.Category, &out.Message, &out.Source, &out.Status, &out.CreatedAt)
+			&out.Category, &out.Message, &out.Source, &out.Status, &out.CreatedAt, &out.UserId)
 		if err == nil {
 			return out, nil
 		}
@@ -71,7 +86,7 @@ func (a *AppDB) CreateSupportRequest(ctx context.Context, sub structs.SupportReq
 func (a *AppDB) ListSupportRequests(ctx context.Context, status string) ([]*structs.SupportRequest, error) {
 	query := `
 		SELECT id, reference, email, name, subject, COALESCE(category, ''), message, source, status,
-			created_at, archived_at, COALESCE(archived_by, '')
+			created_at, archived_at, COALESCE(archived_by, ''), user_id
 		FROM support_requests
 	`
 	args := []any{}
@@ -91,7 +106,8 @@ func (a *AppDB) ListSupportRequests(ctx context.Context, status string) ([]*stru
 	for rows.Next() {
 		r := &structs.SupportRequest{}
 		if err := rows.Scan(&r.Id, &r.Reference, &r.Email, &r.Name, &r.Subject,
-			&r.Category, &r.Message, &r.Source, &r.Status, &r.CreatedAt, &r.ArchivedAt, &r.ArchivedBy); err != nil {
+			&r.Category, &r.Message, &r.Source, &r.Status, &r.CreatedAt, &r.ArchivedAt, &r.ArchivedBy,
+			&r.UserId); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
@@ -104,11 +120,12 @@ func (a *AppDB) GetSupportRequest(ctx context.Context, id int64) (*structs.Suppo
 	r := &structs.SupportRequest{}
 	err := a.db.QueryRow(ctx, `
 		SELECT id, reference, email, name, subject, COALESCE(category, ''), message, source, status,
-			created_at, archived_at, COALESCE(archived_by, '')
+			created_at, archived_at, COALESCE(archived_by, ''), user_id
 		FROM support_requests
 		WHERE id = $1;
 	`, id).Scan(&r.Id, &r.Reference, &r.Email, &r.Name, &r.Subject,
-		&r.Category, &r.Message, &r.Source, &r.Status, &r.CreatedAt, &r.ArchivedAt, &r.ArchivedBy)
+		&r.Category, &r.Message, &r.Source, &r.Status, &r.CreatedAt, &r.ArchivedAt, &r.ArchivedBy,
+		&r.UserId)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}

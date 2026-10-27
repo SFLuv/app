@@ -53,6 +53,11 @@ type PublicUser struct {
 	Handle     *string  `json:"handle,omitempty"`
 	Badges     []string `json:"badges"`
 	GoodTrades int      `json:"good_trades"`
+	// Set only in search results: this person is in the searcher's own
+	// contacts, and PublicName above is the name the searcher saved rather than
+	// the one the account chose. Lets the client mark the row so a saved contact
+	// is distinguishable from a stranger with a similar name.
+	SavedContact bool `json:"saved_contact,omitempty"`
 }
 
 type BulletinPhoto struct {
@@ -174,7 +179,139 @@ const (
 	MessageKindText    = "text"
 	MessageKindPayment = "payment"
 	MessageKindSystem  = "system"
+	// A message whose content is its attachments. Body may still be set — a
+	// caption — but the card is the point.
+	MessageKindAttachment = "attachment"
 )
+
+// Conversation kinds.
+const (
+	ConversationKindDirect = "direct"
+	ConversationKindGroup  = "group"
+)
+
+// Membership roles in a group. A direct thread has neither: both people are
+// plain members and there is nothing to administer.
+const (
+	ConversationRoleOwner  = "owner"
+	ConversationRoleAdmin  = "admin"
+	ConversationRoleMember = "member"
+)
+
+// Attachment kinds. The first three carry content; the rest point at something
+// that lives elsewhere and is resolved when the message is read.
+const (
+	AttachmentKindImage       = "image"
+	AttachmentKindFile        = "file"
+	AttachmentKindLink        = "link"
+	AttachmentKindTransaction = "transaction"
+	AttachmentKindMerchant    = "merchant"
+	AttachmentKindEvent       = "event"
+	AttachmentKindSupport     = "support"
+)
+
+// IsAttachmentKind reports whether a client sent a kind this build stores.
+func IsAttachmentKind(kind string) bool {
+	switch kind {
+	case AttachmentKindImage, AttachmentKindFile, AttachmentKindLink,
+		AttachmentKindTransaction, AttachmentKindMerchant, AttachmentKindEvent,
+		AttachmentKindSupport:
+		return true
+	}
+	return false
+}
+
+// MessageAttachment is one card under a message.
+//
+// Every kind shares this one shape rather than being a union, because the client
+// renders them in one list and a discriminated union in JSON costs more at the
+// call site than the empty fields do. Which fields are meaningful follows from
+// Kind, and the server never sets a field a kind does not use.
+type MessageAttachment struct {
+	Id       int64  `json:"id"`
+	Kind     string `json:"kind"`
+	Position int    `json:"position"`
+
+	// image, file.
+	ContentType string `json:"content_type,omitempty"`
+	FileName    string `json:"file_name,omitempty"`
+	SizeBytes   *int   `json:"size_bytes,omitempty"`
+	// Set for images, so the thread reserves the right space before the bytes
+	// arrive instead of reflowing under the reader.
+	ImageWidth  *int `json:"image_width,omitempty"`
+	ImageHeight *int `json:"image_height,omitempty"`
+
+	// link. Frozen at send time; see the migration's note on why.
+	LinkURL         string `json:"link_url,omitempty"`
+	LinkTitle       string `json:"link_title,omitempty"`
+	LinkDescription string `json:"link_description,omitempty"`
+	LinkImageURL    string `json:"link_image_url,omitempty"`
+	LinkSiteName    string `json:"link_site_name,omitempty"`
+
+	// transaction.
+	TxHash string `json:"tx_hash,omitempty"`
+	// Resolved from the indexer when the message is read. Nil when the transfer
+	// is not indexed yet or has gone.
+	TxAmountSfluvBase *string `json:"tx_amount_sfluv_base,omitempty"`
+	TxFrom            string  `json:"tx_from,omitempty"`
+	TxTo              string  `json:"tx_to,omitempty"`
+	TxAt              *int64  `json:"tx_at,omitempty"`
+
+	// merchant.
+	LocationId   *int     `json:"location_id,omitempty"`
+	LocationName string   `json:"location_name,omitempty"`
+	LocationAddr string   `json:"location_address,omitempty"`
+	LocationLat  *float64 `json:"location_lat,omitempty"`
+	LocationLng  *float64 `json:"location_lng,omitempty"`
+
+	// event.
+	EventId    string `json:"event_id,omitempty"`
+	EventTitle string `json:"event_title,omitempty"`
+	EventStart *int64 `json:"event_start_at,omitempty"`
+	EventEnd   *int64 `json:"event_end_at,omitempty"`
+
+	// support.
+	SupportRequestId *int64 `json:"support_request_id,omitempty"`
+	SupportReference string `json:"support_reference,omitempty"`
+	SupportSubject   string `json:"support_subject,omitempty"`
+	SupportCategory  string `json:"support_category,omitempty"`
+
+	// Set when the thing a reference points at is gone, so the client renders a
+	// dead card instead of an empty one.
+	Unavailable bool `json:"unavailable,omitempty"`
+}
+
+// MessageReaction is one emoji on one message, with who used it.
+//
+// Aggregated server-side rather than sent as rows: the client shows "😂 3" and
+// whether you are one of the three, and doing the grouping here means a message
+// with forty reactions is four lines of JSON rather than forty.
+type MessageReaction struct {
+	Emoji string `json:"emoji"`
+	Count int    `json:"count"`
+	// Whether the reader is one of them, which is what makes the chip a toggle.
+	Mine bool `json:"mine"`
+	// Public names of up to a handful of reactors, for the long-press list.
+	Names []string `json:"names,omitempty"`
+}
+
+// MessageQuote is the slice of a replied-to message shown above a reply.
+//
+// Deliberately not the whole Message: a reply only needs enough to recognise
+// what it answers, and nesting full messages makes a thread of replies grow
+// quadratically. Nil when the quoted message has since been deleted, which is
+// why the reply's own reply_to_id survives the delete.
+type MessageQuote struct {
+	Id         int64  `json:"id"`
+	SenderId   string `json:"sender_id"`
+	SenderName string `json:"sender_name,omitempty"`
+	Kind       string `json:"kind"`
+	// Truncated to a line's worth.
+	Body string `json:"body"`
+	// What the quoted message's first attachment was, so a reply to a photo
+	// shows "Photo" rather than an empty line.
+	AttachmentKind string `json:"attachment_kind,omitempty"`
+}
 
 type ConversationPostChip struct {
 	Id           int64   `json:"id"`
@@ -189,21 +326,66 @@ type ConversationPostChip struct {
 }
 
 type Message struct {
-	Id              int64     `json:"id"`
-	ConversationId  int64     `json:"conversation_id"`
-	SenderId        string    `json:"sender_id"`
-	IsMine          bool      `json:"is_mine"`
+	Id             int64  `json:"id"`
+	ConversationId int64  `json:"conversation_id"`
+	SenderId       string `json:"sender_id"`
+	IsMine         bool   `json:"is_mine"`
+	// The sender's public name. Only populated in group threads, where a bubble
+	// has to say who said it; in a direct thread the header already does.
+	SenderName      string    `json:"sender_name,omitempty"`
 	Kind            string    `json:"kind"`
 	Body            string    `json:"body"`
 	TxHash          *string   `json:"tx_hash,omitempty"`
 	AmountSfluvBase *string   `json:"amount_sfluv_base,omitempty"`
 	PaymentVerified bool      `json:"payment_verified"`
 	CreatedAt       time.Time `json:"created_at"`
+
+	ReplyToId   *int64              `json:"reply_to_id,omitempty"`
+	ReplyTo     *MessageQuote       `json:"reply_to,omitempty"`
+	Attachments []MessageAttachment `json:"attachments,omitempty"`
+	Reactions   []MessageReaction   `json:"reactions,omitempty"`
+}
+
+// ConversationMember is one person in a group, as the other members see them.
+type ConversationMember struct {
+	User PublicUser `json:"user"`
+	Role string     `json:"role"`
+	// They left of their own accord or were removed. Kept in the list only
+	// where their messages are still in the thread, so a bubble always has a
+	// name against it.
+	Left bool `json:"left,omitempty"`
+	// No longer holds the chat beta, so they cannot read this. Same meaning as
+	// OtherUserInactive on a direct thread.
+	Inactive bool `json:"inactive,omitempty"`
 }
 
 type Conversation struct {
-	Id            int64                 `json:"id"`
-	OtherUser     PublicUser            `json:"other_user"`
+	Id   int64  `json:"id"`
+	Kind string `json:"kind"`
+
+	// ── Direct threads ──────────────────────────────────────────────────────
+	//
+	// OtherUser is the zero value in a group. It is not a pointer because every
+	// client in the field reads other_user.public_name unconditionally, and a
+	// null there would crash them; a group sends an empty one and sets Title
+	// instead. The next mobile release reads Kind first, at which point this
+	// could become a pointer — it is not worth a forced update today.
+	OtherUser PublicUser `json:"other_user"`
+
+	// ── Groups ──────────────────────────────────────────────────────────────
+	Title string `json:"title,omitempty"`
+	// The group picture, as an attachment id to fetch. Nil means initials.
+	IconAttachmentId *int64 `json:"icon_attachment_id,omitempty"`
+	OwnerId          string `json:"owner_id,omitempty"`
+	// The reader's own role, so the client knows which controls to offer
+	// without working it out from OwnerId and the member list.
+	MyRole string `json:"my_role,omitempty"`
+	// Only on the single-conversation endpoint: the inbox does not need forty
+	// member records per row.
+	Members []ConversationMember `json:"members,omitempty"`
+	// Always set, including in the inbox, because the row shows "4 people".
+	MemberCount int `json:"member_count,omitempty"`
+
 	Post          *ConversationPostChip `json:"post"`
 	LastMessage   *Message              `json:"last_message"`
 	UnreadCount   int                   `json:"unread_count"`
@@ -222,13 +404,93 @@ type Conversation struct {
 	BlockedByMe       bool `json:"blocked_by_me"`
 }
 
+// ConversationRow is the stored thread, as the db layer returns it.
+//
+// UserLow and UserHigh stay plain strings and are empty in a group. The column
+// is nullable now, so the db layer coalesces — a pointer here would make
+// otherMember() and every payment path nil-check for a case they have already
+// excluded by checking Kind.
 type ConversationRow struct {
-	Id            int64
-	UserLow       string
-	UserHigh      string
-	PostId        *int64
-	LastMessageAt time.Time
-	LastReadId    int64
+	Id               int64
+	Kind             string
+	Title            string
+	IconAttachmentId *int64
+	OwnerId          string
+	UserLow          string
+	UserHigh         string
+	PostId           *int64
+	LastMessageAt    time.Time
+	LastReadId       int64
+	// The role of the member this row was loaded for.
+	MyRole string
+}
+
+// IsGroup is the one test every caller should use, rather than looking at
+// whether UserLow happens to be empty.
+func (c *ConversationRow) IsGroup() bool {
+	return c.Kind == ConversationKindGroup
+}
+
+// NewGroupRequest creates a group chat.
+type NewGroupRequest struct {
+	Title string `json:"title"`
+	// The other members. The caller is added as owner and does not need to be
+	// listed; listing them anyway is accepted and ignored.
+	UserIds []string `json:"user_ids"`
+}
+
+// GroupPatch changes a group's name or picture.
+type GroupPatch struct {
+	Title *string `json:"title"`
+	// Clears the picture. Setting one is a separate multipart upload.
+	ClearIcon bool `json:"clear_icon"`
+}
+
+// GroupMemberRequest adds, removes or re-roles one member.
+type GroupMemberRequest struct {
+	UserId string `json:"user_id"`
+	// One of the ConversationRole constants. Only meaningful on a role change.
+	Role string `json:"role"`
+}
+
+// ReactionRequest toggles one emoji on one message.
+type ReactionRequest struct {
+	Emoji string `json:"emoji"`
+}
+
+// AttachmentReferenceRequest attaches something that already exists rather than
+// uploading bytes: a transaction, a merchant, an event, a support ticket.
+//
+// Separate from the multipart upload route because it is a JSON body with no
+// file in it, and folding the two together would mean a handler that parses
+// either depending on Content-Type.
+type AttachmentReferenceRequest struct {
+	Kind string `json:"kind"`
+	// A caption, sent as the message body.
+	Body string `json:"body"`
+	// Set the one that matches Kind.
+	TxHash           string `json:"tx_hash,omitempty"`
+	LocationId       *int   `json:"location_id,omitempty"`
+	EventId          string `json:"event_id,omitempty"`
+	SupportRequestId *int64 `json:"support_request_id,omitempty"`
+	LinkURL          string `json:"link_url,omitempty"`
+	ReplyToId        *int64 `json:"reply_to_id,omitempty"`
+}
+
+// InChatPaymentRequest is the Apple-Cash-style send: an amount typed in the
+// composer rather than a trip through the wallet's send screen.
+//
+// The client still signs and broadcasts the transfer itself — this is not a
+// custodial send — so what arrives here is the hash of something that has
+// already happened, exactly as AttachConversationPayment receives it. The
+// difference is only in where the amount was typed, which is why they share the
+// same verification path.
+type InChatPaymentRequest struct {
+	TxHash string `json:"tx_hash"`
+	// What the sender meant to send, so the bubble can show an amount before
+	// the indexer confirms one. Replaced by the indexed amount once known.
+	AmountSfluvBase string `json:"amount_sfluv_base,omitempty"`
+	Note            string `json:"note,omitempty"`
 }
 
 type NewConversationRequest struct {
@@ -238,6 +500,9 @@ type NewConversationRequest struct {
 
 type NewMessageRequest struct {
 	Body string `json:"body"`
+	// The message this one answers. Ignored when it names a message in another
+	// thread or one that has been deleted — see the resolution in InsertMessage.
+	ReplyToId *int64 `json:"reply_to_id,omitempty"`
 }
 
 type PaymentMessageRequest struct {
@@ -251,6 +516,26 @@ type MessagesPage struct {
 
 type MessagingSummary struct {
 	UnreadConversations int `json:"unread_conversations"`
+}
+
+// TypingEvent is the body of a realtime typing event.
+type TypingEvent struct {
+	ConversationId int64  `json:"conversation_id"`
+	UserId         string `json:"user_id"`
+	UserName       string `json:"user_name"`
+	Typing         bool   `json:"typing"`
+}
+
+// RealtimeNotification is a notification delivered over the socket instead of
+// as a push, for a client that is already open.
+//
+// The fields mirror what a push carries — title, body, and the data bag the
+// client already routes on — so the in-app banner and the system banner are
+// built from the same thing and a tap lands in the same place.
+type RealtimeNotification struct {
+	Title string            `json:"title"`
+	Body  string            `json:"body"`
+	Data  map[string]string `json:"data,omitempty"`
 }
 
 // Search.
