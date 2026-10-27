@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useRouter } from "next/navigation"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -10,13 +10,13 @@ import { Badge } from "@/components/ui/badge"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
-import { ArrowUpRight, Award, Crown, LogOut, Mail, Pencil, Shield, Trash2, Upload, Users } from "lucide-react"
+import { ArrowUpRight, Award, Crown, LogOut, Pencil, Upload } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { useApp } from "@/context/AppProvider"
 import { LogoCropModal } from "./logo-crop-modal"
 import { formatCredentialLabel } from "@/lib/credential-labels"
-import type { OrganizationView, OrgRoleType } from "@/types/organization"
-import { MemberPermissions } from "@/components/organization/member-permissions"
+import type { OrgMemberEndpoints, OrganizationView, OrgRoleType } from "@/types/organization"
+import { MemberDirectory } from "@/components/organization/member-directory"
 import { NotificationSets } from "@/components/organization/notification-sets"
 
 const roleLabels: Record<OrgRoleType, string> = {
@@ -43,7 +43,6 @@ export function OrganizationPanel() {
 
   const [editingName, setEditingName] = useState(false)
   const [nameDraft, setNameDraft] = useState("")
-  const [inviteEmail, setInviteEmail] = useState("")
   const [requestRole, setRequestRole] = useState<OrgRoleType | "">("")
   const [requestEmail, setRequestEmail] = useState("")
   const [cropOpen, setCropOpen] = useState(false)
@@ -116,20 +115,20 @@ export function OrganizationPanel() {
       "Organization logo updated",
     )
 
-  const sendInvite = () =>
-    act(
-      () => authFetch("/organizations/mine/invites", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email: inviteEmail }) }),
-      "Invitation sent",
-    ).then((ok) => ok && setInviteEmail(""))
-
-  const removeMember = (userId: string) =>
-    act(() => authFetch(`/organizations/mine/members/${encodeURIComponent(userId)}`, { method: "DELETE" }), "Member removed")
-
-  const setMemberRole = (userId: string, role: string) =>
-    act(
-      () => authFetch("/organizations/mine/members/role", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ user_id: userId, role }) }),
-      "Member role updated",
-    )
+  /**
+   * Where the member surfaces write. Named rather than inlined because the
+   * same modals are mounted by the admin panel against a partner organization,
+   * and the only difference between the two is this object.
+   */
+  const ownOrgEndpoints: OrgMemberEndpoints = useMemo(
+    () => ({
+      permissions: "/organizations/mine/permissions",
+      role: "/organizations/mine/members/role",
+      invites: "/organizations/mine/invites",
+      removeMember: (userId: string) => `/organizations/mine/members/${encodeURIComponent(userId)}`,
+    }),
+    [],
+  )
 
   const confirmTransferSuperadmin = () => {
     const userId = transferTarget?.user_id
@@ -347,85 +346,26 @@ export function OrganizationPanel() {
         </Card>
       )}
 
-      {/* Members */}
-      <Card>
-        <CardHeader className="pb-2">
-          <CardTitle className="flex items-center gap-2 text-base text-black dark:text-white">
-            <Users className="h-4 w-4" /> Members
-          </CardTitle>
-          <CardDescription>
-            Everyone in the organization shares its roles and tools.
-            {isAdmin ? " Invite teammates by email." : ""}
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          {isAdmin && (
-            <div className="flex flex-wrap items-end gap-2">
-              <div className="flex-1 space-y-1">
-                <Label className="text-xs">Invite by email</Label>
-                <Input type="email" placeholder="teammate@example.org" value={inviteEmail} onChange={(e) => setInviteEmail(e.target.value)} />
-              </div>
-              <Button className="bg-primary hover:bg-primary/90" disabled={busy || !inviteEmail.trim()} onClick={() => void sendInvite()}>
-                <Mail className="mr-2 h-4 w-4" /> Invite
-              </Button>
-            </div>
-          )}
+      <MemberDirectory
+        members={view.members}
+        invites={view.invites ?? []}
+        endpoints={ownOrgEndpoints}
+        canManage={isAdmin}
+        // Only a superadmin changes who is an admin: an admin promoting
+        // another admin, or demoting one, is the organization's own hierarchy
+        // and not theirs to rearrange.
+        canEditRoles={isSuperadmin}
+        currentUserId={user?.id}
+        onTransferSuperadmin={(member) =>
+          setTransferTarget({
+            user_id: member.user_id,
+            name: member.contact_name || member.contact_email || member.user_id,
+          })
+        }
+        administrativeEndpoint="/organizations/mine/permissions/administrative"
+        onChanged={() => void load()}
+      />
 
-          <div className="divide-y rounded-lg border">
-            {view.members.map((m) => (
-              <div key={m.user_id} className="flex flex-wrap items-center justify-between gap-2 p-3">
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2 text-sm font-medium">
-                    {m.contact_name || m.contact_email || m.user_id.slice(0, 18) + "…"}
-                    {m.role === "superadmin" && <Crown className="h-3.5 w-3.5 text-amber-500" />}
-                    {m.role === "admin" && <Shield className="h-3.5 w-3.5 text-primary" />}
-                    {m.user_id === user?.id && <Badge variant="outline" className="text-[10px]">you</Badge>}
-                  </div>
-                  <p className="text-xs text-muted-foreground">{m.contact_email}</p>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Badge variant="outline" className="capitalize">{m.role}</Badge>
-                  {isSuperadmin && m.role !== "superadmin" && (
-                    <>
-                      <Button size="sm" variant="outline" disabled={busy} onClick={() => void setMemberRole(m.user_id, m.role === "admin" ? "member" : "admin")}>
-                        {m.role === "admin" ? "Demote" : "Make admin"}
-                      </Button>
-                      <Button size="sm" variant="outline" disabled={busy} onClick={() => setTransferTarget({ user_id: m.user_id, name: m.contact_name || m.contact_email || m.user_id })}>
-                        Make superadmin
-                      </Button>
-                    </>
-                  )}
-                  {isAdmin && m.role !== "superadmin" && m.user_id !== user?.id && (
-                    <Button size="icon" variant="ghost" className="h-8 w-8 text-red-600" disabled={busy} onClick={() => void removeMember(m.user_id)}>
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-
-          {isAdmin && (view.invites?.length ?? 0) > 0 && (
-            <div>
-              <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Pending invites</p>
-              <div className="divide-y rounded-lg border">
-                {view.invites!.map((inv) => (
-                  <div key={inv.id} className="flex items-center justify-between p-3 text-sm">
-                    <span>{inv.email}</span>
-                    <span className="text-xs text-muted-foreground">expires {new Date(inv.expires_at).toLocaleDateString()}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      {/*
-        Permissions sit directly under Members: it is the same list of people,
-        answering the next question an admin has after "who is here".
-      */}
-      <MemberPermissions members={view.members} canManage={isAdmin} />
       <NotificationSets members={view.members} canManage={isAdmin} />
 
       <LogoCropModal open={cropOpen} onOpenChange={setCropOpen} src={cropSrc} onCropped={(dataUrl) => void saveLogo(dataUrl)} />

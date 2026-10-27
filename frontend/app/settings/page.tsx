@@ -5,7 +5,6 @@ import type React from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useApp } from "@/context/AppProvider";
-import { OrganizationPanel } from "@/components/organization/organization-panel";
 import { SignetCard } from "@/components/settings/signet-card";
 import PlaceAutocomplete from "@/components/merchant/google_place_finder";
 import { LocationPayoutCard } from "@/components/merchant/location-payout-card";
@@ -526,11 +525,16 @@ export default function SettingsPage() {
   );
 
   const availableTabs = useMemo(() => {
-    // Affiliate, proposer, supervisor, and issuer are managed through the
-    // Organization tab now (role tools, rewards account, issuer scopes), so
-    // their standalone settings tabs are retired. Improver stays — it is not
-    // owned by an organization.
-    const tabs = ["account", "organization"];
+    // Affiliate, proposer, supervisor and issuer are managed from My
+    // Organization now (role tools, issuer scopes, members), which is its own
+    // page in the sidebar rather than a tab here — administering a team is not
+    // an account preference. Improver stays: it is not owned by an
+    // organization.
+    //
+    // An old ?tab=organization link is simply not in this list any more, so
+    // the effect below ignores it and the page opens on Account rather than on
+    // a tab that no longer renders.
+    const tabs = ["account"];
     if (merchantStatus !== "none") tabs.push("merchant");
     if (improverStatus === "pending" || improverStatus === "approved")
       tabs.push("improver");
@@ -2344,12 +2348,6 @@ export default function SettingsPage() {
               Merchant
             </TabsTrigger>
           )}
-          <TabsTrigger
-            value="organization"
-            className="text-black dark:text-white flex-1"
-          >
-            Organization
-          </TabsTrigger>
           {(improverStatus === "pending" || improverStatus === "approved") && (
             <TabsTrigger
               value="improver"
@@ -2359,10 +2357,6 @@ export default function SettingsPage() {
             </TabsTrigger>
           )}
         </TabsList>
-
-        <TabsContent value="organization">
-          <OrganizationPanel />
-        </TabsContent>
 
         <TabsContent value="account">
           {/* <div className="grid gap-6 md:grid-cols-2">
