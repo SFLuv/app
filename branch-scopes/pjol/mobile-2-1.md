@@ -893,7 +893,7 @@ the weaker number.
 | mobile-app | 30 | +8,030 / −693 |
 
 One migration (1.74), applied and verified locally. 21 new backend routes. One
-new native dependency.
+new native dependency, and a version bump to 2.2.0 that the dependency requires.
 
 **13,500 lines, and the diff is misleading in both directions here.** Most of it
 is new files rather than edited ones, which is the cheap kind of volume — but
@@ -904,11 +904,26 @@ that were not specified, which is where all three bugs above were found.
 
 ## Open
 
-- **`expo-document-picker` is a new native dependency, so sending FILES needs
-  the next binary.** It is required lazily inside a try, so the build in the
-  store reports "needs a newer version" rather than crashing. Photos go through
-  `expo-image-picker`, already in the binary, and work over the air. Worth
-  knowing before anyone tests the file path on the current build.
+- **This release is a fresh binary, version 2.2.0, and the bump is required.**
+  `expo-document-picker` is a new native dependency. It was first wired up
+  behind a lazy `require` so the 2.1 build could receive the rest of this work
+  over the air; that was dropped once the decision was made to cut a new binary
+  and not OTA 2.1, and it is now a plain static import.
+
+  **What that decision exposed:** `runtimeVersion` is `policy: "appVersion"`, so
+  the `version` string IS the over-the-air compatibility boundary. Had the
+  version stayed at 2.1.0, an `eas update --channel production` would have been
+  delivered to the 2.1 build in the store — which has no document picker, and
+  `expo-document-picker` throws at import when its native side is absent, so
+  those installs would have stopped booting. The bump to 2.2.0 is what prevents
+  that, not tidiness.
+
+  The comment above `runtimeVersion` claimed the *fingerprint* policy was in use
+  and that "an update can never reach a build whose native side it does not
+  match". It was not, and it cannot. The comment is corrected and
+  `policy: "fingerprint"` is offered — it would make the guarantee structural
+  rather than a matter of remembering to bump a string — but not taken, because
+  it changes which builds a hotfix can reach and that is a release decision.
 - **Nothing is on main.** Migration 1.74 has run locally only.
 - **The chat beta gates all of it.** Nobody sees any of this until
   `beta_feature_access` says so, and the socket is deliberately not gated —
