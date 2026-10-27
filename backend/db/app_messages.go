@@ -159,6 +159,12 @@ type InboxRow struct {
 	Unread       int
 	Last         *structs.Message
 	MemberCount  int
+	// The newest reaction in the thread, whether or not it is newer than the
+	// last message. The handler decides whether it is the thing worth showing;
+	// comparing here would put a display decision in the query.
+	LatestReaction *structs.ConversationReaction
+	// Who reacted, so the handler can mark the reader's own.
+	LatestReactionUserId string
 }
 
 // ListConversations is the inbox: threads that have at least one message,
@@ -179,7 +185,8 @@ func (a *AppDB) ListConversations(ctx context.Context, userId string) ([]InboxRo
 				WHERE cm.conversation_id = c.id AND cm.left_at IS NULL
 			),
 			lm.id, lm.conversation_id, lm.sender_id, lm.kind, lm.body, lm.tx_hash,
-			lm.amount_sfluv_base::text, lm.payment_verified, lm.created_at, lm.reply_to_id
+			lm.amount_sfluv_base::text, lm.payment_verified, lm.created_at, lm.reply_to_id,
+			lr.emoji, lr.reactor_id, lr.reacted_at, lr.excerpt
 		FROM conversation_members m
 		JOIN conversations c ON c.id = m.conversation_id
 		JOIN LATERAL (
@@ -188,6 +195,22 @@ func (a *AppDB) ListConversations(ctx context.Context, userId string) ([]InboxRo
 			ORDER BY x.id DESC
 			LIMIT 1
 		) lm ON TRUE
+		-- The newest reaction in the thread, so the inbox can say "X reacted to
+		-- …" when that is genuinely the latest activity. A reaction is not a
+		-- message, so it cannot come from the lateral above.
+		--
+		-- LEFT JOIN: a thread with no reactions is the common case and must not
+		-- be dropped from the inbox. Bounded by LIMIT 1 and driven by
+		-- message_reactions_message_idx through the join on message_id.
+		LEFT JOIN LATERAL (
+			SELECT r.emoji, r.user_id AS reactor_id, r.created_at AS reacted_at,
+				LEFT(COALESCE(NULLIF(rx.body, ''), ''), 80) AS excerpt
+			FROM message_reactions r
+			JOIN messages rx ON rx.id = r.message_id
+			WHERE rx.conversation_id = c.id AND rx.deleted_at IS NULL
+			ORDER BY r.created_at DESC
+			LIMIT 1
+		) lr ON TRUE
 		WHERE m.user_id = $1 AND m.archived_at IS NULL AND m.left_at IS NULL
 		ORDER BY c.last_message_at DESC
 		LIMIT 200;
@@ -201,6 +224,9 @@ func (a *AppDB) ListConversations(ctx context.Context, userId string) ([]InboxRo
 	for rows.Next() {
 		var r InboxRow
 		var last structs.Message
+		// Nullable because the reaction lateral is a LEFT JOIN.
+		var emoji, reactorId, excerpt *string
+		var reactedAt *time.Time
 		c := &r.Conversation
 		if err := rows.Scan(
 			&c.Id, &c.Kind, &c.Title, &c.IconAttachmentId, &c.OwnerId,
@@ -208,10 +234,19 @@ func (a *AppDB) ListConversations(ctx context.Context, userId string) ([]InboxRo
 			&c.LastReadId, &c.MyRole, &r.Unread, &r.MemberCount,
 			&last.Id, &last.ConversationId, &last.SenderId, &last.Kind, &last.Body, &last.TxHash,
 			&last.AmountSfluvBase, &last.PaymentVerified, &last.CreatedAt, &last.ReplyToId,
+			&emoji, &reactorId, &reactedAt, &excerpt,
 		); err != nil {
 			return nil, err
 		}
 		r.Last = &last
+		if emoji != nil && reactedAt != nil {
+			r.LatestReactionUserId = derefString(reactorId)
+			r.LatestReaction = &structs.ConversationReaction{
+				Emoji:          *emoji,
+				MessageExcerpt: derefString(excerpt),
+				CreatedAt:      *reactedAt,
+			}
+		}
 		out = append(out, r)
 	}
 	return out, rows.Err()

@@ -386,10 +386,14 @@ type Conversation struct {
 	// Always set, including in the inbox, because the row shows "4 people".
 	MemberCount int `json:"member_count,omitempty"`
 
-	Post          *ConversationPostChip `json:"post"`
-	LastMessage   *Message              `json:"last_message"`
-	UnreadCount   int                   `json:"unread_count"`
-	LastMessageAt time.Time             `json:"last_message_at"`
+	Post        *ConversationPostChip `json:"post"`
+	LastMessage *Message              `json:"last_message"`
+	// Set only when the newest thing in the thread is a reaction rather than a
+	// message, so the inbox's one preview line describes the actual latest
+	// activity. Nil otherwise.
+	LatestReaction *ConversationReaction `json:"latest_reaction,omitempty"`
+	UnreadCount    int                   `json:"unread_count"`
+	LastMessageAt  time.Time             `json:"last_message_at"`
 	// The other person's primary wallet, so "Send SFLUV" can prefill the
 	// existing send flow. Only returned on the single-conversation endpoint,
 	// and empty when the thread's post is cash-only.
@@ -410,6 +414,23 @@ type Conversation struct {
 // is nullable now, so the db layer coalesces — a pointer here would make
 // otherMember() and every payment path nil-check for a case they have already
 // excluded by checking Kind.
+// ConversationReaction is the newest reaction in a thread, when it is more
+// recent than the newest message.
+//
+// Surfaced so the inbox can say "Sanchez reacted 😂 to 'see you there'" the way
+// iMessage does. It is NOT a message and is deliberately not faked into one:
+// the thread itself renders reactions attached to their bubble, and inventing a
+// message row for one would put it in the transcript as a line somebody said.
+type ConversationReaction struct {
+	Emoji string `json:"emoji"`
+	// Who reacted. Empty for the reader's own, which the client renders as "You".
+	UserName string `json:"user_name,omitempty"`
+	IsMine   bool   `json:"is_mine"`
+	// A short slice of what was reacted to, so the row says which message.
+	MessageExcerpt string    `json:"message_excerpt,omitempty"`
+	CreatedAt      time.Time `json:"created_at"`
+}
+
 type ConversationRow struct {
 	Id               int64
 	Kind             string

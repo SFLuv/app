@@ -163,6 +163,21 @@ func (a *AppService) ListMyConversations(w http.ResponseWriter, r *http.Request)
 			conv.OtherUserInactive = !otherStillIn
 		}
 
+		// A reaction is shown only when it is the NEWEST thing in the thread.
+		// Older than the last message it is not the latest activity, and
+		// showing it would describe the thread wrongly.
+		if row.LatestReaction != nil && row.Last != nil &&
+			row.LatestReaction.CreatedAt.After(row.Last.CreatedAt) {
+			reaction := *row.LatestReaction
+			reaction.IsMine = row.LatestReactionUserId == userId
+			if !reaction.IsMine {
+				if names, err := a.db.GetSenderNames(ctx, []string{row.LatestReactionUserId}); err == nil {
+					reaction.UserName = names[row.LatestReactionUserId]
+				}
+			}
+			conv.LatestReaction = &reaction
+		}
+
 		if conv.LastMessage != nil {
 			conv.LastMessage.IsMine = conv.LastMessage.SenderId == userId
 			// The inbox row for a group says who spoke last, so a preview is

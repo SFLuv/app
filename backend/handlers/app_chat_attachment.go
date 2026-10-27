@@ -771,3 +771,54 @@ func parseLinkMetadata(body io.Reader) linkMetadata {
 func collapseWhitespace(value string) string {
 	return strings.Join(strings.Fields(value), " ")
 }
+
+// PreviewLink scrapes a URL's metadata without posting anything.
+//
+// Exists so the composer can show the card BEFORE the message is sent — the
+// attachment tray's "Link" option was removed in favour of detecting a pasted
+// URL in the text field, and a card that only appeared after sending gave
+// nobody a chance to see what they were about to share.
+//
+// ── Why this is safe to expose, and what it still costs ─────────────────────
+//
+// It is the same fetcher AttachConversationReference already uses, with the
+// same guards: http(s) only, no credentials in the URL, a resolved-IP check
+// that refuses private, loopback, link-local and carrier-grade-NAT addresses,
+// redirects re-checked per hop, a six-second timeout and a 512 KB read cap.
+//
+// What is genuinely new is that it can be called without sending a message, so
+// it is a slightly cheaper way to make us fetch a URL. Mitigated by being
+// behind auth AND the chat beta, and bounded by the same timeout — but it is
+// the reason this is a separate endpoint rather than a general-purpose one, and
+// the reason it returns metadata only and never the page.
+//
+// An unreachable or hostile URL returns empty metadata with 200, not an error:
+// the composer should fall back to sending a plain link, not block the message.
+func (a *AppService) PreviewLink(w http.ResponseWriter, r *http.Request) {
+	if _, ok := bulletinViewer(w, r); !ok {
+		return
+	}
+
+	var req struct {
+		URL string `json:"url"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<13)).Decode(&req); err != nil {
+		bulletinError(w, http.StatusBadRequest, "bad_request", "Could not read that request.")
+		return
+	}
+
+	target, problem := normalizeLinkURL(req.URL)
+	if problem != "" {
+		bulletinError(w, http.StatusBadRequest, "bad_link", problem)
+		return
+	}
+
+	meta := a.fetchLinkMetadata(r.Context(), target)
+	writeJSON(w, http.StatusOK, map[string]string{
+		"url":         target,
+		"title":       meta.Title,
+		"description": meta.Description,
+		"image_url":   meta.ImageURL,
+		"site_name":   meta.SiteName,
+	})
+}
