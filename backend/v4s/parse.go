@@ -23,6 +23,7 @@ package v4s
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"regexp"
 	"sort"
 	"strconv"
@@ -291,10 +292,36 @@ func JobListingURL(site string, jobId string, months int) string {
 }
 
 // ShiftSignupURL deep links to one shift's signup form.
-func ShiftSignupURL(site string, jobId string, shiftId string) string {
+//
+// jobId and volunteerShiftId are not enough on their own. Given only those, the
+// page renders the job's entire listing — every shift for the months it shows —
+// and a volunteer has to find their own day in it. Measured against the live
+// listing: that form returns 31 shifts and 117 KB, where the narrowed one
+// returns the single shift and 38 KB.
+//
+// Calendar, nDaysToShow and dtMonthFilter are what reduce it to the one day,
+// and they are the parameters St. Anthony's own deep links carry. localStart
+// must be the shift's start in the organization's local time, which is what
+// dtMonthFilter is matched against — passing a UTC instant would ask for the
+// wrong day for any shift in the hours either side of midnight.
+//
+// A zero localStart falls back to the job listing rather than filtering on a
+// meaningless date: a page showing too much beats one showing the wrong day.
+func ShiftSignupURL(site string, jobId string, shiftId string, localStart time.Time) string {
 	site = strings.TrimRight(strings.TrimSpace(site), "/")
-	return fmt.Sprintf(
+	listing := fmt.Sprintf(
 		"%s/GW_Volunteers__VolunteersJobListingFS?jobId=%s&volunteerShiftId=%s&ShowNumberAvailable=1",
 		site, jobId, shiftId,
 	)
+	if localStart.IsZero() {
+		return listing
+	}
+	// V4S writes this filter with an unpadded clock, e.g. "2026-11-02 6:30:0",
+	// which is the form their own links use and the one verified against the
+	// live page.
+	filter := fmt.Sprintf("%04d-%02d-%02d %d:%d:%d",
+		localStart.Year(), int(localStart.Month()), localStart.Day(),
+		localStart.Hour(), localStart.Minute(), localStart.Second(),
+	)
+	return listing + "&Calendar=1&nDaysToShow=1&dtMonthFilter=" + url.QueryEscape(filter)
 }

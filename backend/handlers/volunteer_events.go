@@ -875,7 +875,8 @@ func (s *BotService) applyV4SAvailability(
 	// the shift on that date, with no need for the partner to expose their
 	// recurrence schedule.
 	if shift.Id != "" {
-		deep := v4s.ShiftSignupURL(source.Site, source.JobId, shift.Id)
+		// In the organization's own time zone: dtMonthFilter names a local day.
+		deep := v4s.ShiftSignupURL(source.Site, source.JobId, shift.Id, shift.StartUTC.In(loc))
 		event.Signup.URL = &deep
 	}
 	if shift.Full() {
