@@ -52,6 +52,7 @@ func (s *Service) RegisterRoutes(r chi.Router) {
 	mcpServer := s.core.newServer()
 	s.core.registerExtraTools(mcpServer)
 	s.core.registerAdminDataTools(mcpServer)
+	s.core.registerSentryTools(mcpServer)
 	streamable := server.NewStreamableHTTPServer(mcpServer)
 	s.oauth.registerRoutes(r, streamable)
 }

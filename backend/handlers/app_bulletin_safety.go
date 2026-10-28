@@ -17,7 +17,6 @@ import (
 	"github.com/SFLuv/app/backend/db"
 	"github.com/SFLuv/app/backend/structs"
 	"github.com/SFLuv/app/backend/utils"
-	"github.com/go-chi/chi/v5"
 )
 
 // --- Blocks ---------------------------------------------------------------------
@@ -55,7 +54,7 @@ func (a *AppService) UnblockUser(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := a.db.UnblockUser(r.Context(), userId, chi.URLParam(r, "userId")); err != nil {
+	if err := a.db.UnblockUser(r.Context(), userId, userIdParam(r)); err != nil {
 		a.logger.Logf("bulletin: unexpected error: %s", err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
