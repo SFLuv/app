@@ -158,6 +158,9 @@ func (a *reportCore) reportCatalog(ctx context.Context, _ mcp.CallToolRequest) (
 			{"name": "credentials_report", "use": "credential type catalog, who holds credentials, issuer scopes, credential requests"},
 			{"name": "workflow_votes", "use": "per-voter approve/deny decisions + tallies + finalization for a workflow"},
 			{"name": "app_structure", "use": "where features/admin controls live and which tool exposes which data"},
+			{"name": "sentry_issues", "use": "mobile app error reports grouped into issues; filter by environment, app version, status, search"},
+			{"name": "sentry_issue", "use": "one issue's latest occurrence: stack trace, the steps and backend requests before it, tags"},
+			{"name": "sentry_events", "use": "recent occurrences of one issue: when, which user, release, request_id"},
 		},
 		"amount_units": "Amounts are $SFLUV, never wei. Fields ending in _sfluv are already whole $SFLUV (app-DB values: event amounts, workflow bounties/costs, allocations). Fields ending in _sfluv_base are on-chain base units — divide by 1,000,000 (6 decimals): transaction amounts, wallet balances, financial_summary.transfers totals.",
 	}, nil

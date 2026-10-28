@@ -1,6 +1,6 @@
 # Branch scope — `pjol/mobile-2-1`
 
-Oct 26–28 2026 · app + mobile-app + webpage · **19.5h** (9.3h stated for Oct 26, 10.2h measured for Oct 27–28)
+Oct 26–28 2026 · app + mobile-app + webpage · **19.8h** (9.3h stated for Oct 26, 10.5h measured for Oct 27–28)
 
 | Round | When | Hours | Basis |
 |---|---|---|---|
@@ -12,12 +12,13 @@ Oct 26–28 2026 · app + mobile-app + webpage · **19.5h** (9.3h stated for Oct
 | 8 | Oct 28 morning | 0.1h | **measured** |
 | 9 | Oct 28 late morning–midday | 2.0h | **measured** |
 | 10 | Oct 28 afternoon | 1.0h | **measured** |
-| | | **19.5h** | |
+| 11 | Oct 28 late afternoon | 0.3h | **measured** |
+| | | **19.8h** | |
 
-Rounds 4 through 10 are measured end to end, by clustering **session-transcript
+Rounds 4 through 11 are measured end to end, by clustering **session-transcript
 message timestamps and commit timestamps together** on a 30-minute gap. Rounds
 1–3 are not, and the distinction matters more than the total: **9.3h of this
-figure is what somebody said about a day, and 10.2h is what a clock recorded.**
+figure is what somebody said about a day, and 10.5h is what a clock recorded.**
 Do not average them.
 
 Rounds 4 to 7 originally clustered messages alone, which undercounted Oct 27 by
@@ -1818,3 +1819,127 @@ No migrations. One new route (`POST /push/signed-out`). One package
 and ⌘V with a hardware keyboard, on both platforms. Sign out by an unusual
 route — let a session lapse, or decline the terms — and check the old account's
 pushes stop. Tap a chat push from a cold start and from the background.
+
+# Round 11 — Oct 28, late afternoon
+
+**0.3h measured.** 16:09–16:27, its own sitting — 1h46m after round 10's,
+past the thirty-minute gap. Messages clustered as before, to the last evidence
+point before this section was written. Not committed in the sitting.
+
+Round 10's build in somebody's hands, and four more reports from it.
+
+## Features
+
+### Paste from the message field's own menu, for real — 0.10h · mobile-app
+
+Round 10 put `@mattermost/react-native-paste-input` under the message field
+and added the AppDelegate call its README asks for, and on iOS the long-press
+Paste still never delivered a photo. The library's `setup:` reads the root view
+factory's React host and keeps it, and with expo-updates in the app that host
+does not exist yet at the end of `didFinishLaunching`: Expo defers creating it
+until the update to run has been chosen (its own code asserts the host is nil
+there). Every later lookup of a text field therefore found nothing, the field
+was never hooked, and paste stayed text-only — silently.
+
+`patches/@mattermost+react-native-paste-input+2.0.1.patch` keeps the factory
+and reads its host when a field registers, which is long after launch; and if
+the host still cannot be reached, it finds the field from the windows by its
+React tag (Fabric sets every component view's UIView tag to it), accepting only
+a TextInput's own component view. The same patch keeps rich text pasting as
+text: text copied from Notes, Mail or a web page carries an RTF copy as raw
+bytes, which the library's file scan could detect and attach as a `.rtf`, so a
+clipboard with text and no image now always takes the ordinary paste. Both
+changes syntax-check against the iOS SDK.
+
+The Paste tile in the attachment tray is gone, and with it
+`PasteControl.tsx`. The field's own menu is the only way to paste, as in
+Telegram and Messages. A build where the native input fails to load now reports
+it to Sentry from the first composer that mounts, rather than quietly falling
+back to plain text again.
+
+### Picture pickers open at once, and show that they are working — 0.08h · mobile-app
+
+Tapping a contact's picture took a long moment to bring up the picker. All
+three picture pickers — a contact's, your own, a group's — asked
+expo-image-picker for `allowsEditing` to get a square crop, and on iOS that one
+option swaps the system photo picker for UIImagePickerController, the pre-iOS 14
+one, which loads the library before it draws. Each also asked for photo-library
+permission first, which the system picker does not need.
+
+`src/utils/avatarPicker.ts` opens the system picker with no editing and no
+permission request, then makes the crop itself — the largest centred square,
+which is what every round avatar shows anyway — scaled to 512px as a JPEG. That
+also keeps uploads under the server's 4 MB limit, which a full-size photo from
+a recent iPhone is not. The cropping is `expo-image-manipulator`, a new native
+module, loaded defensively: a binary built before it falls back to the old
+cropping picker, so an over-the-air update cannot break one.
+
+From the tap until the picture is saved or the picker is cancelled, the
+picture shows a spinner, so the beat before the picker appears reads as working,
+and the upload after choosing is visible too.
+
+### The attachment tray, opened with the keyboard up — 0.03h · mobile-app
+
+Pressing + while typing dropped the keyboard and left an empty panel where the
+tray should be. The tray fades in on the native driver, and the keyboard's
+LayoutAnimation moves the composer at the same moment; Fabric then re-applies
+the props React last rendered — opacity 0 — over the faded-in view. With the
+keyboard up the tray now mounts already shown, and the composer sliding down
+with the keyboard is the whole motion. Opening it with the keyboard down is
+unchanged.
+
+### Toasts under the screen that raised them — 0.01h · mobile-app
+
+A toast raised from a contact's page appeared only after going back to the
+list. `chromeStack` is a plain flex view, so Fabric flattens it, and the chat
+stack overlay inside it — which holds a chat, a contact, a group's details and
+the new-message screen — competes with the toast's z-index directly: 40 against
+30. Every toast from those screens was drawn under them. The toast is now 50.
+
+### Copy buttons that answer — 0.01h · mobile-app
+
+Copying a contact's address, or your own on your profile, turns the copy icon
+into a checkmark for a moment where it was pressed, and says "Address copied" to
+VoiceOver and TalkBack. `src/hooks/useCopyFeedback.ts`.
+
+### Sentry, through the admin MCP — 0.03h · app
+
+The Sentry tools (`sentry_issues`, `sentry_issue`, `sentry_events`) are on
+`main` and in production: the request-id change shipped in the same PR answers
+on api.sfluv.org. This session could not call them. The claude.ai SFLuv
+connector listed only the report tools — most likely a tool list taken before
+they deployed — and the project's own `sfluv` server needs its OAuth sign-in in
+an interactive session. Neither the MCP's tool catalog nor its "where things
+live" guide named them, so a client that reads those first never learned they
+existed. Both now list them, with a worked example of going from a user's report
+to the occurrence that hit them.
+
+## Totals
+
+| | Hours |
+|---|---|
+| Features | 0.26h |
+| Reading the code behind each report, type-checking, measurement and this write-up | 0.03h |
+| **Measured** | **0.29h**, shown as **0.3h** |
+
+## Volume
+
+| Repo | Files | Insertions | Deletions |
+|---|---|---|---|
+| app | 3 | 134 | 4 |
+| mobile-app | 12 | 387 | 284 |
+| **Total** | **15** | **521** | **288** |
+
+`package-lock.json` excluded. No migrations, no new routes. One package
+(`expo-image-manipulator@~14.0.8`) and one patch. Version stays **2.4.0**: both
+native changes are guarded or invisible to JavaScript, so this round's JS is
+safe to send over the air to a 2.4.0 binary built before it.
+
+## Needs a build
+
+A new 2.4.0 binary, for the patch and the manipulator. In a chat, on iOS:
+long-press Paste with a photo copied from Photos, a PDF copied from Files, and
+text copied from Notes (which should paste as words); then the same on
+Android. Press + with the keyboard up. Change a contact's picture, your own and
+a group's — the picker should be up at once, and a large photo should save.
+Raise a toast from a contact's page, and copy an address there.
