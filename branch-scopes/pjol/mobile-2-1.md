@@ -1,30 +1,36 @@
 # Branch scope — `pjol/mobile-2-1`
 
-Oct 26–27 2026 · app + mobile-app + webpage · **15.4h** (9.3h stated for Oct 26, 6.1h measured for Oct 27)
+Oct 26–28 2026 · app + mobile-app + webpage · **16.5h** (9.3h stated for Oct 26, 7.2h measured for Oct 27–28)
 
 | Round | When | Hours | Basis |
 |---|---|---|---|
-| 1–3 | Oct 26 | 9.3h | stated, with 6.2h measured as an upper bound |
-| 4 | Oct 27 morning | 0.4h | **measured** |
+| 1–3 | Oct 26 | 9.3h | stated, with 6.8h measured as an upper bound |
+| 4 | Oct 27 morning | ~~0.4h~~ → **1.3h** | **measured**, corrected in round 8 |
 | 5 | Oct 27 afternoon | 1.6h | **measured** |
 | 6 | Oct 27 afternoon–evening | 3.9h | **measured** |
-| 7 | Oct 27 evening | 0.1h | **measured** |
-| | | **15.4h** | |
+| 7 | Oct 27 evening | ~~0.1h~~ → **0.2h** | **measured**, corrected in round 8 |
+| 8 | Oct 28 morning | 0.1h | **measured** |
+| | | **16.5h** | |
 
-Rounds 4 through 7 are measured end to end, from the session transcript's
-message timestamps clustered on a 30-minute gap. Rounds 1–3 are not, and the
-distinction matters more than the total: **9.3h of this figure is what somebody
-said about a day, and 6.1h is what a clock recorded.** Do not average them.
+Rounds 4 through 8 are measured end to end, by clustering **session-transcript
+message timestamps and commit timestamps together** on a 30-minute gap. Rounds
+1–3 are not, and the distinction matters more than the total: **9.3h of this
+figure is what somebody said about a day, and 7.2h is what a clock recorded.**
+Do not average them.
+
+Rounds 4 to 7 originally clustered messages alone, which undercounted Oct 27 by
+0.93h — see round 8. Commits are now part of the evidence set because work done
+outside a Claude session leaves one and no messages at all.
 
 Rounds 5 and 6 are one continuous sitting (12:34–18:05, 5.53h measured) split at
 the point round 5 was written up. Round 6 is the remainder, appended rather than
 folded in, so round 5's figure is never silently restated.
 
-Oct 27's measured sittings are 0.40h, 5.53h and 0.14h, plus one at 12:03 that
-measures 0.00h — 6.07h in all, which is the 6.1h above. The rounded per-round
-rows add to 6.0h instead; where a measured total and an itemised split disagree
-the measured total wins, and here the 0.1h gap is rounding in the rows rather
-than work that went missing.
+Oct 27's measured sittings are 1.34h (10:42–12:03), 5.53h (12:34–18:05) and
+0.22h (19:02–19:15) — **7.09h**, which rounds to the 7.1h this document now
+carries for the day. The rounded per-round rows add to 7.0h; where a measured
+total and an itemised split disagree the measured total wins, and the 0.1h is
+rounding in the rows rather than work that went missing.
 
 Round 1's two prospective entries are superseded by round 2 — see there. Round
 2's total is extended by round 3, which measured the evening sitting running 28
@@ -672,11 +678,19 @@ No migrations. Local database unchanged at 1.73.
 
 # Round 4 — Oct 27 morning
 
-**0.4h measured.** One sitting, 10:42–11:07, from the session transcript's
-message timestamps clustered on a 30-minute gap (`measure_sittings.py`). The
-`v2.1` force-push and the PR #209 merge are stamped 11:14, seven minutes after
-the last message in the sitting — GitHub's clock on a merge button, not working
-time, so they are not added.
+**1.3h measured.** One sitting, 10:42–12:03, clustering message timestamps and
+commit timestamps together on a 30-minute gap.
+
+> **Corrected by round 8 from 0.4h (10:42–11:07).** As first written, this round
+> saw the 11:14 PR #209 merge, called it "GitHub's clock on a merge button, not
+> working time", and stopped there. Two mistakes in one judgement: a merge button
+> is pressed by a person, and — decisively — the reasoning was applied to the one
+> commit that had been looked at without checking whether there were others.
+> There were. **11:20** merged webpage PR #1, and **11:45** is `3505dec`, 62
+> lines of hand-written `ContactsScreen.tsx` with no session behind it at all.
+> With those in, nothing in 10:42 → 11:07 → 11:14 → 11:20 → 11:45 → 12:03
+> exceeds the 30-minute threshold, so it is one sitting of 1.34h. The threshold
+> was never relaxed; the evidence set was too narrow.
 
 The release-plumbing round: get `v2.1` onto the right commit, get sanchez's
 fixes into both repos, and change the website's partners banner.
@@ -732,20 +746,31 @@ production data and was left alone.
 | v2.1 tag moved | 0.15 | mobile-app |
 | sanchez's fixes merged | 0.15 | app + mobile-app |
 | Partners banner | 0.10 | webpage |
-| | **0.40** | |
+| Contacts: dock cleared on Home-button iPhones, add sheet lifted over the keyboard (`3505dec`, +62/−5) | 0.30 | mobile-app |
+| Unitemised remainder — three PR merges and whatever surrounded them, 11:07–12:03 | 0.64 | — |
+| | **1.34** | |
 
-Items are apportioned across one observed 25-minute sitting rather than clocked
+Items are apportioned across one observed sitting rather than clocked
 separately. The total is the measurement; the split is a reading of the order
 the work happened in.
+
+The unitemised row is the honest shape of this correction. 0.64h of the sitting
+left commits but no transcript, so *that* it was worked is evidenced and *what
+happened inside it* cannot be split further from here. Recorded as one row
+rather than spread across the named items, which would dress a gap in the
+evidence up as detail.
 
 ## Volume
 
 | Repo | Files | Lines |
 |---|---|---|
 | webpage (banner) | 7 | +46 / −19 |
-| app, mobile-app | merge commits only | — |
+| mobile-app (contacts) | 1 | +62 / −5 |
+| app | merge commits only | — |
 
-No migrations. No new routes.
+No migrations. No new routes. The contacts row was missing until round 8 — the
+same blind spot as the hours, since the commit it is in left no session behind
+it.
 
 ---
 
@@ -1284,6 +1309,11 @@ the script will show this sitting slightly longer. Left at 0.1h rather than
 chased: the correction would be bookkeeping about bookkeeping, and it is written
 down here so it is not discovered a third time as though it were news.
 
+> **It was exactly that, and round 8 recorded it: 0.22h, so 0.2h.** The sitting
+> ran to 19:15, the commit included. The prediction was right and the decision
+> not to chase it was wrong by 0.1h — cheap to have taken, since re-measuring
+> after the commit is one command.
+
 ## Verified, not assumed
 
 - `app`, `mobile-app` and `webpage`: `git status` clean, nothing unpushed, all
@@ -1298,9 +1328,126 @@ down here so it is not discovered a third time as though it were news.
 
 **Oct 26 and Oct 27 are not in an invoice yet.**
 `branch-scopes/report-2026-10-26.csv` covers the service period 2026-10-19 to
-2026-10-24 and is closed. This branch's 15.4h — 9.3h stated for Oct 26, 6.1h
-measured for Oct 27 — belongs to the next period, whose end date is the
-contractor's to set, so no CSV was written for it here. The figures are ready
+2026-10-24 and is closed. This branch's hours — **16.5h**, 9.3h stated for Oct 26
+and 7.2h measured for Oct 27–28, revised by round 8 from the 15.4h this round
+first wrote — belong to the next period, whose end date is the contractor's to
+set, so no CSV was written for it here. The figures are ready
 for one: the rounds table at the top of this document is the itemisation, and
 the stated and measured halves are already separated the way that report's
 METHOD and WEAKNESSES rows need them.
+
+---
+
+# Round 8 — Oct 28 morning
+
+**0.1h measured.** 11:15–11:23, messages and commits clustered on a 30-minute gap.
+Prompted by the contractor's read of the Oct 27 figure — "i feel like yesterday
+should be at least 7 hours total" — which was right, and for a reason no amount
+of re-reading the document would have surfaced.
+
+## The error: a narrow evidence set, not a lenient threshold
+
+The question asked was how lenient the session definition was being. It was not
+being lenient at all, and that was never the lever:
+
+| Evidence clustered (30-min gap) | Oct 27 |
+|---|---|
+| session messages only — what rounds 4–7 used | 6.15h |
+| messages **+ commits** | **7.09h** |
+| messages + commits + source-file mtimes | 7.09h |
+
+The gap threshold stayed at the skill's default 30 minutes throughout. What
+changed is *what counts as evidence that somebody was working.* A Claude session
+transcript only sees work done **through Claude**. Merging a PR in a browser and
+hand-writing a commit in an editor leave no messages, so three activity points
+in the 11:07–12:03 window were invisible: the 11:14 and 11:20 PR merges, and
+`3505dec` at 11:45 — 62 hand-written lines of `ContactsScreen.tsx`, a feature
+that was missing from this document as well as from its hours.
+
+Chain those in and the morning has no gap over 30 minutes, so it is one sitting
+of 1.34h rather than 0.40h. **+0.93h, all of it in round 4.**
+
+Source-file mtimes were added as a third tier and moved nothing — every one of
+them already falls inside a span. They stay in the method as a check that came
+back clean rather than as a contributor.
+
+## Why the threshold is not where the slack was
+
+Tested, because "be more lenient" was the obvious thing to try and it is the
+wrong answer:
+
+| Gap | Oct 27 | Verdict |
+|---|---|---|
+| 30 min | 7.09h | **kept** |
+| 45 min | 7.60h | merges a 31-minute gap at 12:03–12:34 |
+| 60 min | 8.53h | swallows two ~56-minute breaks with no activity of any kind |
+
+The 12:03–12:34 gap is **31.0 minutes** — one minute over the threshold, and
+0.52h turns on that minute. It stays split, because the rule has to be decided
+before the number is known or it is not a rule. Worth naming as the most fragile
+boundary in the branch: every other gap on Oct 27 is either under 25 minutes or
+over 55.
+
+## Oct 26 moves too, and changes nothing
+
+Same method on Oct 26: 6.17h messages-only → **6.76h** with commits. Still well
+under the 9.3h the contractor stated for that day, so the stated figure stands
+and only the upper-bound note in the header changes (6.2h → 6.8h). The gap
+between 6.8h measured and 9.3h stated is the dev meeting and the windows away
+from the keyboard that rounds 1–3 already name.
+
+## What this costs the folder
+
+**Every measured figure in `branch-scopes/` was taken from transcripts alone**,
+including the other files in this directory and the closed
+`report-2026-10-26.csv`. All of them are therefore low by whatever share of the
+work was done outside a Claude session, which for a day of merges and hand-edits
+is not negligible. This branch is now measured the wider way; the others are not
+re-measured here, and that inconsistency is named rather than left to be found.
+
+The `time-accounting` skill at <https://github.com/pjol/SKILLS> ships
+`measure_sittings.py`, which reads transcripts only. Teaching it to union commit
+timestamps from the repositories it is pointed at would fix this at the source
+for every future branch, and is the obvious next change to that repo.
+
+## Corrections made
+
+| Figure | Was | Now |
+|---|---|---|
+| Round 4 (Oct 27 morning) | 0.4h | **1.3h** |
+| Round 7 (Oct 27 evening) | 0.1h | **0.2h** |
+| Oct 27 measured | 6.1h | **7.1h** |
+| Oct 26 measured upper bound | 6.2h | **6.8h** |
+| Branch total | 15.4h | **16.5h** |
+| Round 4 volume | banner only | **+ contacts, 1 file, +62/−5** |
+
+Round 4 and round 7 keep their superseded figures with notes pointing here.
+
+## The pattern across rounds 6, 7 and 8
+
+Three rounds in a row have corrected a measurement, and the errors are not
+independent:
+
+- **Round 6** stopped the clock before its own write-up had happened.
+- **Round 7** caught that, then left its own tail uncounted on the grounds that
+  chasing it was not worth 0.1h.
+- **Round 8** found 0.93h that neither had looked for, because both were reading
+  the same single source.
+
+Every one ran **downward**. None was a judgement call that went the generous way,
+which is the useful thing to notice: this folder's standing worry is inflation
+— the 4.7x overstatement at the top of `merchant-onboarding-revamp.md` — and the
+guard against it has been working. Undercounting has no such guard, and it is
+invisible precisely because it looks rigorous. The contractor's own sense of the
+day was the only thing that caught it, and a figure that survives only because
+nobody intuited otherwise is not measured, it is unchallenged.
+
+**The fix is procedural, not arithmetic: measure after the commits land, and
+cluster commits alongside messages.** Both are one command.
+
+## Measurement note
+
+0.1h is the span to 11:23, the last evidence point before this section was
+committed. The commit itself lands a minute or two later and is not in the
+figure — bounded, named, and not chased, which is round 7's resolution applied
+on purpose rather than by oversight.
