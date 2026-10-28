@@ -1,18 +1,23 @@
 # Branch scope — `pjol/mobile-2-1`
 
-Oct 26–27 2026 · app + mobile-app + webpage · **11.3h** (9.3h stated for Oct 26, 2.0h measured for Oct 27)
+Oct 26–27 2026 · app + mobile-app + webpage · **15.1h** (9.3h stated for Oct 26, 5.8h measured for Oct 27)
 
 | Round | When | Hours | Basis |
 |---|---|---|---|
 | 1–3 | Oct 26 | 9.3h | stated, with 6.2h measured as an upper bound |
 | 4 | Oct 27 morning | 0.4h | **measured** |
 | 5 | Oct 27 afternoon | 1.6h | **measured** |
-| | | **11.3h** | |
+| 6 | Oct 27 afternoon–evening | 3.8h | **measured** |
+| | | **15.1h** | |
 
-Rounds 4 and 5 are measured end to end, from the session transcript's message
+Rounds 4, 5 and 6 are measured end to end, from the session transcript's message
 timestamps clustered on a 30-minute gap. Rounds 1–3 are not, and the distinction
 matters more than the total: **9.3h of this figure is what somebody said about a
-day, and 2.0h is what a clock recorded.** Do not average them.
+day, and 5.8h is what a clock recorded.** Do not average them.
+
+Rounds 5 and 6 are one continuous sitting (12:34–18:00, 5.45h measured) split at
+the point round 5 was written up. Round 6 is the remainder, appended rather than
+folded in, so round 5's figure is never silently restated.
 
 Round 1's two prospective entries are superseded by round 2 — see there. Round
 2's total is extended by round 3, which measured the evening sitting running 28
@@ -939,3 +944,280 @@ that were not specified, which is where all three bugs above were found.
 - **Opening a stored file in the app is not implemented.** The attachment card
   says so rather than doing nothing. Downloading needs a file-system dependency
   that is not in the binary either.
+
+# Round 6 — Oct 27 afternoon and evening
+
+**3.8h measured.** 14:12–18:00, the rest of the sitting round 5 cut at 14:12,
+from the session transcript's message timestamps clustered on a 30-minute gap
+(`measure_sittings.py`). The script now reports that sitting as a single
+5.45h span; round 5 claimed 1.6h of it, and this is the remainder.
+
+Two things in the figure are named rather than buried, because both are time
+that did not go into features:
+
+- The first ~0.2h is writing up rounds 4 and 5 and the document-picker change.
+  Round 5 explicitly excluded its own write-up from its figure, so counting it
+  here is what stops it falling out of the total altogether.
+- ~0.1h went to a full disk. The machine hit 100% on the data volume mid-round
+  and `Bash` stopped working entirely — no `git`, no `tsc`, no `go build` —
+  until legacy dev caches were cleared. Diagnosis and clearing, not product
+  work.
+
+Writing *this* section is after 18:00 and is not counted.
+
+The polish round: Messages goes from working to finished, and then the bug
+reports start coming back from the device rather than from reading the code.
+
+## Features
+
+### The chat flicker, the keyboard, the frozen share, and a real share sheet — 0.9h · mobile-app
+
+Four reports from one pass on a device, and the first is the one worth recording.
+
+The chat refreshed itself every few seconds, flickering and throwing away
+whatever the person was doing — out of the amount pad, out of a half-typed
+message. The cause was a dependency chain rather than a timer: `refresh`
+depended on the `onRead` and `onToast` callbacks, the mount effect depended on
+`refresh`, and the shell passed those callbacks as inline arrows. So every
+render of the shell — a balance poll, a socket frame, anything — gave them new
+identities, which re-ran the mount effect, which called `setMessages([])`,
+`setMode("text")` and `setDraft("")`. The screen was resetting itself several
+times a minute and the flicker was the list being emptied and refilled.
+
+Fixed by holding those callbacks in refs inside the screen, so `refresh` depends
+only on what changes *what is fetched* — the client and the thread — and the
+screen is immune to its parent re-rendering. The comment on those refs says so,
+because the obvious "tidy-up" is to list them in the dependency array again.
+
+"Send to chat" froze the whole app, every tab. A stacked `Modal` on iOS: the
+share sheet asked the shell to open a transaction sheet behind it with a double
+`requestAnimationFrame` (~32ms) while its own dismissal took 220ms, so the
+second modal was presented into a window that was still going away and the app
+kept a modal that could not be reached or dismissed. Now the open is fired where
+`setMounted(false)` happens rather than on a guessed delay.
+
+The share buttons themselves became a whitelabelled sheet — internal chats, copy
+link, and the native share sheet — rather than a "Send to chat" button at the
+bottom of each card. Copy and external share stay available without the chat
+beta, because a link to a merchant is something the website publishes to
+everybody and gating it behind messaging was wrong.
+
+### Message management, timestamps, and payment versus record — 0.5h · app + mobile-app
+
+Edit within five minutes, delete for everyone, multi-select delete, and
+"Message was deleted" tombstones — schema 1.75. The edit window is enforced in
+the `WHERE` clause rather than checked first, so a message cannot be edited by a
+request that arrives while the check is passing.
+
+`deleted_by` is what makes a tombstone and an absence different things: a
+sender's deletion shows as "Message was deleted", because a reply to it would
+otherwise be a non-sequitur and the thread would quietly look like it was always
+that way, while an **admin** removal does not appear at all — a gap that
+announces itself tells the whole thread something was actioned. Bodies are kept
+on disk and blanked in `scanMessage`, so moderation can still see what was said.
+
+iMessage's timestamps: centred separators for a real jump between sessions, and
+swipe-left-and-hold to reveal a time per message. The whole list slides as one
+so the times line up in a column.
+
+A payment made in the chat and a transaction record shared out of history looked
+nearly identical, which was the problem — "I paid you 5 SFLUV just now" and
+"look at this transfer from March" are not the same claim and a reader should not
+have to work out which one they are looking at. The record gets a receipt icon,
+a title and the amount demoted to a subtitle; the payment gets the amount and
+nothing else.
+
+### Swipe actions, muting, leaving, read receipts, and saving files — 0.6h · app + mobile-app
+
+Schema 1.76. Swipe a conversation for delete / leave / mute, with the icon
+changing to a leave glyph for a group, and the modal offering "leave" or "delete
+messages and leave" rather than the direct-thread choices.
+
+All deletions are soft. `conversations.deleted_at` hides a thread from one
+person and nothing else: the messages stay, and another message repopulates the
+history — which is what "delete for me" means to the person doing it.
+
+Muting is `muted_until`, and "forever" is a hundred years rather than a null,
+so one comparison answers the question everywhere. A muted thread still arrives,
+still shows unread and still counts toward the badge; muting silences the phone,
+it does not hide the conversation.
+
+Read state across a group is `MIN(last_read_message_id)` of the others, not
+`MAX`: "Read" has to mean everybody, or it means whoever happened to open it
+first.
+
+Files download and photos save to the camera roll, with an in-app preview and
+type-specific icons in the file search.
+
+### Attachments staged rather than sent, and emoji-only messages — 0.4h · mobile-app
+
+Picking a photo used to post it immediately, so there was no moment at which you
+could say anything about it: the picture arrived, then a second message
+explaining it. Now attachments stage in the composer with the draft split at the
+caret, so text before the attachment is its own message before it and text after
+is its own message after — iMessage's behaviour.
+
+The link attachment mode was removed entirely in favour of detecting a URL as it
+is typed or pasted. A message that is *only* a link renders as the card alone; a
+link inside a sentence keeps the sentence as a normal bubble with the card under
+it.
+
+Emoji-only messages under five graphemes render large and without a bubble,
+counted with `Intl.Segmenter` so a family emoji is one character rather than
+seven.
+
+### Attachments: the upload that failed and the thumbnails that blocked the thread — 0.5h · app + mobile-app
+
+Reported as "file attachments are not being sent correctly, and other items get
+stuck loading". Two unrelated causes, both measured rather than guessed at.
+
+The upload shared the API's 25-second timeout. The limit on an attachment is
+25 MB and up to ten at a time, which over a phone's uplink is minutes — so the
+client aborted mid-stream while the server often had the file already. The send
+reported failure, and the message turned up anyway. Multipart uploads now get
+their own 240-second ceiling.
+
+The stuck loading was the thumbnails. `getConversationAttachmentDataUri` pulls
+an image through `fetch` and base64-encodes it **on the JS thread** — for a
+multi-megabyte photo that is a third again as much string, built synchronously,
+per image. Several photos in a thread serialise behind each other and everything
+else sits on its placeholder waiting for a turn. Thumbnails and avatars now use
+`<Image source={{uri, headers}}>`, so the fetch, the decode and the caching all
+happen natively. The data-URI reader stays for the case where the *bytes* are
+what is wanted — writing a file to disk to save or share it.
+
+Files were already preview-only with a manual download, which is the behaviour
+asked for; what they lacked was a readable name. The staged chip was a 60pt
+square with the filename at 8pt on one line, which for a real document name
+rendered as an ellipsis. A file has no thumbnail, so the name *is* the preview.
+
+### The in-app previewer learns to read documents — 0.3h · mobile-app
+
+It previously said "save it to open in another app" for anything that was not a
+photo. Now PDFs render in a `WebView` over the downloaded file — WKWebView has a
+PDF renderer, so on iOS that is pages, scrolling and pinch-to-zoom — and text,
+CSV and calendar files render as text in a monospaced scroll.
+
+Android keeps the card for PDFs, deliberately: its WebView has no PDF renderer,
+and a blank page that looks broken is worse than a sentence saying where to open
+it. Word, Excel and PowerPoint keep it on both platforms, because those
+genuinely need a converter.
+
+### In-app banners: behind the pill, and firing several times for one notification — 0.3h · mobile-app
+
+The position was a React Native layout quirk worth writing down. The banner was
+an absolutely positioned child of the root `SafeAreaView` with a small top
+offset. RN runs Yoga with the legacy absolute-positioning errata, under which an
+absolute child is placed against its parent's **border** box and the parent's
+padding is ignored — and core `SafeAreaView` applies the safe-area inset *as
+padding*. So the inset did nothing for this child and `top: 6` meant six points
+from the physical top of the screen. On a notched phone the cutout is narrow and
+the card's own side margins hid it; on a Dynamic Island, which is centred and
+wide, the card landed squarely behind it. The banner is now a child of the top
+bar at `top: 0`, which is correct on every device without knowing any insets.
+
+The retriggering was three causes, none of them a duplicate notification:
+
+1. The shell passed `onDismiss` as an inline arrow, so `close` churned identity
+   every render, so the effect that has to depend on `close` re-ran on every
+   render of the whole app — replaying the entry animation and clearing the
+   4.2-second timer a few milliseconds before it fired. One banner
+   re-animating, and never leaving on its own.
+2. Notification banners were keyed `notification:${Date.now()}`, unique by
+   construction, which defeated any dedupe.
+3. `setNotificationHandler` returned `shouldShowBanner: true`, so a push
+   arriving in the foreground drew a **system** banner on top of the in-app
+   one. Push suppression is a server-side snapshot taken before the send, so a
+   device that connects in the gap gets both.
+
+The system banner is now suppressed only while the socket is live — when it is
+down the OS still draws it, so nothing is silently dropped — and `message_id`
+was added to the message push so the socket and push paths dedupe on one key.
+
+### Chats opened from a notification could load forever — 0.2h · mobile-app
+
+The reporter guessed the profile had not loaded. It was the backend client. A
+notification cold start mounts the chat before sign-in finishes, so `refresh`
+returned without fetching; the reset effect was keyed on the thread alone —
+deliberately, to stop a parent re-render wiping the composer — so nothing re-ran
+when the client arrived. The fifteen-second poll eventually rescued it, which is
+why it looked intermittent rather than broken. Fetching is now its own effect
+keyed on `refresh`, which resets nothing.
+
+### In-chat payments are previewed before they are spent — 0.2h · mobile-app
+
+The amount pad paid straight from its own button, which made a transfer the one
+thing in the composer with no review step. It now stages: the pad composes,
+a chip shows the amount with SFLuv's own mark, and the composer's send button is
+what spends. The tray refuses to open the pad while a file is staged, rather
+than allowing it and then discarding one of the two — a payment is one message
+and cannot carry a photo.
+
+The green `logo-usd` is gone with it. This is not dollars, and a dollar sign on a
+payment of a local currency names the wrong unit.
+
+### Group messages show who sent them — 0.2h · mobile-app
+
+Telegram's arrangement: a small picture beside the bubble, on the last message
+of a run from one person, bottom-aligned, with the rest of the run indented to
+match. The name still appears once at the top of the run; the picture is what
+makes a busy group scannable without reading any names.
+
+Initials are a complete fallback, and also what happens for somebody with no
+picture — the avatar route answers 404 for them, so the image errors and the
+initials take over. Asking the server first who has a picture would be a request
+per member to avoid a 404 per member.
+
+## Smaller fixes
+
+| Fix | Hours | Repo |
+|---|---|---|
+| Round 5's write-up and the document picker built into the binary at 2.2.0 | 0.2h | app + mobile-app |
+| Partner banner at half speed; Telegram step and email fallback dropped from the contact form | 0.2h | webpage |
+| Reaction previews in the inbox ("Sanchez reacted to a message") and a `/link-preview` endpoint | 0.2h | app |
+| Swipe tray showing through the row permanently, timestamp overlapping the mute button, tap-to-close that never appeared (open-ness was a ref, which does not re-render), icons invisible in dark mode (`palette.navy` inverts) | 0.2h | mobile-app |
+| Copying an internal reference now copies its universal link rather than a bare id or hash | 0.1h | mobile-app |
+| The info button dismisses the keyboard on its way out | 0.05h | mobile-app |
+| Typing indicator taken out of the inverted list, where a cell inserted at the same edge overlapped it for a frame | 0.05h | mobile-app |
+| Sending bar moved onto the header's bottom edge and given a completion run-out, so a fast send is seen to finish rather than cut off | 0.1h | mobile-app |
+| A full disk — `Bash` unusable until legacy dev caches were cleared | 0.1h | — |
+
+## Totals
+
+| | Hours |
+|---|---|
+| Features | 4.1h |
+| Smaller fixes | 1.0h |
+| **Itemised** | **5.1h** |
+| **Measured** | **3.8h** |
+
+The itemised split overshoots the measurement by 1.3h, and the measurement
+wins. Recording both rather than scaling the items down to fit: the overshoot is
+itself the finding — ten features and nine fixes in 3.8h means most of these
+items took single-digit minutes, and rounding each to a plausible-looking 0.1
+or 0.2 inflates the sum by more than a third. The same mistake as the 0.5h floor
+in round 2, at a smaller scale.
+
+## Volume
+
+| Repo | Files | Insertions | Deletions |
+|---|---|---|---|
+| app | 15 | 1,210 | 31 |
+| mobile-app | 27 | 5,099 | 700 |
+| webpage | 6 | 130 | 139 |
+| **Total** | **48** | **6,439** | **870** |
+
+2 migrations (1.75 message management, 1.76 conversation actions) · 6 new routes
+· schema at 1.76.
+
+## Known gaps
+
+- **Android cannot preview a PDF in the app.** Its WebView has no PDF renderer.
+  The card and the share sheet are the honest answer there, and the platform
+  check that chooses between them says why.
+- **A transaction shared by a third party has no addresses to label** when the
+  viewer has no history row for it and the attachment carries none. The sheet
+  says "Unknown" for that side rather than showing a blank.
+- **The in-app banner replaces rather than queues.** Five messages at once show
+  the last one; a queue would mean twenty-one seconds of banners, and the last
+  is the only one still worth reading by then.

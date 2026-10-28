@@ -552,7 +552,7 @@ func (a *AppService) fanOutMessage(ctx context.Context, conv *structs.Conversati
 		if _, alreadyTold := reached[id]; alreadyTold {
 			continue
 		}
-		a.notifyNewMessageWithTitle(senderId, id, conv.Id, title, preview)
+		a.notifyNewMessageWithTitle(senderId, id, conv.Id, msg.Id, title, preview)
 	}
 }
 
@@ -907,8 +907,8 @@ func formatBaseAmount(base string) string {
 
 // notifyNewMessage pushes to the recipient's devices in the background, so a
 // slow push service never delays the sender. The title is the sender's name.
-func (a *AppService) notifyNewMessage(senderId, recipientId string, conversationId int64, preview string) {
-	a.notifyNewMessageWithTitle(senderId, recipientId, conversationId, "", preview)
+func (a *AppService) notifyNewMessage(senderId, recipientId string, conversationId, messageId int64, preview string) {
+	a.notifyNewMessageWithTitle(senderId, recipientId, conversationId, messageId, "", preview)
 }
 
 // notifyNewMessageWithTitle is notifyNewMessage with the banner title chosen by
@@ -917,7 +917,14 @@ func (a *AppService) notifyNewMessage(senderId, recipientId string, conversation
 //
 // An empty title falls back to the sender's public name, which is what a direct
 // thread wants.
-func (a *AppService) notifyNewMessageWithTitle(senderId, recipientId string, conversationId int64, title, preview string) {
+// messageId is the row this push is about, carried so the client can tell that a
+// push and a socket frame describe the same message. The two paths are meant to
+// be mutually exclusive — the server suppresses the push for any device holding
+// a socket — but the check is a snapshot, so a device that connects in the
+// moment between it and the send receives both. Without a shared key that is
+// two in-app banners for one message. Zero for a push with no message behind it,
+// such as being added to a group, and then the field is left out.
+func (a *AppService) notifyNewMessageWithTitle(senderId, recipientId string, conversationId, messageId int64, title, preview string) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
@@ -958,6 +965,9 @@ func (a *AppService) notifyNewMessageWithTitle(senderId, recipientId string, con
 		data := map[string]string{
 			"type":            "bulletin_message",
 			"conversation_id": strconv.FormatInt(conversationId, 10),
+		}
+		if messageId != 0 {
+			data["message_id"] = strconv.FormatInt(messageId, 10)
 		}
 
 		subscriptions, err := a.db.GetMobilePushSubscriptionsByUser(ctx, recipientId)
