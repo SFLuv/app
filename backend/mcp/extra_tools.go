@@ -226,6 +226,7 @@ func (a *reportCore) appStructure(ctx context.Context, _ mcp.CallToolRequest) (a
 			{"task": "Inspect a wallet's owner, balance, and W9 status", "where": "Wallet views; use the lookup tool for reporting.", "data_tool": "lookup_wallet"},
 			{"task": "Financial totals over a date range", "where": "/admin analytics dashboard.", "data_tool": "financial_summary"},
 			{"task": "Individual on-chain transfers", "where": "Transaction history views.", "data_tool": "transactions"},
+			{"task": "Debug a mobile app error or a reported bug", "where": "Sentry (one login, ops@sfluv.org); read it here instead.", "data_tool": "sentry_issues, then sentry_issue and sentry_events"},
 		},
 		"example_questions": []map[string]string{
 			{"question": "How much did merchant \"Tilted Brim\" receive this month?", "how": "merchant_report to find the merchant's location payment wallet address(es), then transactions or financial_summary filtered to those addresses and the month's timestamp range."},
@@ -233,6 +234,7 @@ func (a *reportCore) appStructure(ctx context.Context, _ mcp.CallToolRequest) (a
 			{"question": "What events did affiliate X create?", "how": "affiliate_report to get the affiliate user_id, then events_report with that owner."},
 			{"question": "How many codes were redeemed for a given event and how much $SFLUV went out?", "how": "events_report with the event_id (or search); read redeemed_count and redeemed_amount_sfluv (whole $SFLUV)."},
 			{"question": "Find a workflow by name and see what an improver reported.", "how": "workflow_report with search=<title>, then workflow_detail with that workflow_id to read each step's submission (written/dropdown responses, step-not-possible notes, photo metadata)."},
+			{"question": "Someone says the app broke for them. What happened?", "how": "search_users for their id (a Privy DID), then sentry_issues (optionally version=, environment=preview|production); sentry_events on a likely issue shows whether it hit that DID, and sentry_issue shows the stack and the requests before it. A request_id there can be searched for in the backend's Railway logs."},
 		},
 		"amount_units_note": "Amounts are $SFLUV, never wei. Whole-$SFLUV fields end in _sfluv (event amounts, redemption totals). Base-unit fields end in _sfluv_base and use 6 decimals — divide by 1,000,000 for whole $SFLUV (transactions, financial_summary, workflow bounties, balances).",
 		"security_note":     "This MCP surface is read-only and admin-gated via Privy JWT. It never returns API keys, private keys, encrypted OAuth credentials, push tokens, W9 documents, PIN hashes, or workflow photo image bytes.",
