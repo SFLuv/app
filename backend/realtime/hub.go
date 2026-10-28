@@ -80,6 +80,32 @@ type Event struct {
 	// SentAt lets a client ignore an event older than what it already fetched,
 	// which happens on reconnect.
 	SentAt time.Time `json:"sent_at"`
+	// Notice is how the event should be announced, when it should be at all.
+	// Set on message.new: the same title and line the push carries, so a
+	// banner shown in the app and a notification shown by the phone cannot
+	// word the same message two different ways.
+	Notice *Notice `json:"notice,omitempty"`
+}
+
+// Notice is a display-ready description of a new message, Telegram's shape:
+// titled with the group, or with the person in a direct thread, and in a group
+// the line names who spoke — "Maria: 📷 Photo".
+type Notice struct {
+	Title string `json:"title"`
+	Body  string `json:"body"`
+	// Spoken is the line for a screen reader: "Maria said: hello".
+	Spoken     string `json:"spoken"`
+	SenderId   string `json:"sender_id"`
+	SenderName string `json:"sender_name"`
+	IsGroup    bool   `json:"is_group"`
+	// The group's picture, for a group's banner. Absent for a direct thread,
+	// whose banner shows the sender's own picture from SenderId.
+	IconAttachmentId *int64 `json:"icon_attachment_id,omitempty"`
+	// Silent is set for a recipient who should not be interrupted: they muted
+	// the thread, or are not in the chat beta. The message still arrives and
+	// still counts as unread — the push path skips the same people, and this
+	// tells the in-app banner to do likewise.
+	Silent bool `json:"silent,omitempty"`
 }
 
 // ClientMessage is what a client may send up. Deliberately tiny: this socket is

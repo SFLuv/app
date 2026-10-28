@@ -248,7 +248,10 @@ func (a *AppDB) ListConversations(ctx context.Context, userId string) ([]InboxRo
 			-- Deleted for everybody. A soft delete, so the rows are still here
 			-- for moderation; they are simply not anybody's conversation now.
 			AND c.deleted_at IS NULL
-		ORDER BY c.last_message_at DESC
+		-- id breaks ties, so two threads stamped in the same microsecond sort
+		-- the same way for every member and on every read, rather than in
+		-- whatever order the planner happened to produce.
+		ORDER BY c.last_message_at DESC, c.id DESC
 		LIMIT 200;
 	`, userId)
 	if err != nil {
@@ -397,8 +400,13 @@ func (a *AppDB) InsertMessage(ctx context.Context, n *NewMessage) (*structs.Mess
 		return nil, err
 	}
 
+	// GREATEST, not a plain set. created_at is the inserting transaction's
+	// start time, so two overlapping sends can commit in the opposite order to
+	// their timestamps; a plain set then lets the later commit write the OLDER
+	// time, and the thread sorts below threads it is newer than — for every
+	// member at once, until somebody sends again.
 	if _, err := tx.Exec(ctx, `
-		UPDATE conversations SET last_message_at = $2 WHERE id = $1;
+		UPDATE conversations SET last_message_at = GREATEST(last_message_at, $2) WHERE id = $1;
 	`, n.ConversationId, m.CreatedAt); err != nil {
 		return nil, err
 	}
@@ -408,7 +416,10 @@ func (a *AppDB) InsertMessage(ctx context.Context, n *NewMessage) (*structs.Mess
 	if _, err := tx.Exec(ctx, `
 		UPDATE conversation_members
 		SET archived_at = NULL,
-			last_read_message_id = CASE WHEN user_id = $2 THEN $3 ELSE last_read_message_id END
+			-- GREATEST for the reason last_message_at uses it: two overlapping
+			-- sends commit in either order, and the later commit must not move
+			-- the sender's read pointer back to the earlier message.
+			last_read_message_id = CASE WHEN user_id = $2 THEN GREATEST(last_read_message_id, $3) ELSE last_read_message_id END
 		WHERE conversation_id = $1 AND left_at IS NULL;
 	`, n.ConversationId, n.SenderId, m.Id); err != nil {
 		return nil, err

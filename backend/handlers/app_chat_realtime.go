@@ -119,7 +119,7 @@ func (a *AppService) handleTypingSignal(userId string, conversationId int64, typ
 //
 // The sender is excluded from the fan-out but included in the "already told"
 // set, since they are the one who sent it.
-func (a *AppService) publishMessage(ctx context.Context, conv *structs.ConversationRow, message *structs.Message, senderId string) map[string]struct{} {
+func (a *AppService) publishMessage(ctx context.Context, conv *structs.ConversationRow, message *structs.Message, senderId string, notice *realtime.Notice) map[string]struct{} {
 	reached := map[string]struct{}{senderId: {}}
 	if a.realtime == nil {
 		return reached
@@ -146,13 +146,33 @@ func (a *AppService) publishMessage(ctx context.Context, conv *structs.Conversat
 		}
 		forThem := *message
 		forThem.IsMine = false
+		// Per recipient, like the message: whether to announce it depends on
+		// who is reading. Muted, or out of the beta, is silent — the same people
+		// the push path declines to buzz.
+		var theirNotice *realtime.Notice
+		if notice != nil {
+			copied := *notice
+			copied.Silent = a.chatNoticeSilenced(ctx, conv.Id, id)
+			theirNotice = &copied
+		}
 		a.realtime.Publish([]string{id}, realtime.Event{
 			Kind:           realtime.EventMessageNew,
 			ConversationId: conv.Id,
 			Data:           &forThem,
+			Notice:         theirNotice,
 		})
 	}
 	return reached
+}
+
+// chatNoticeSilenced is whether a new message should arrive without a banner for
+// this recipient — the same two tests the push path applies before buzzing.
+func (a *AppService) chatNoticeSilenced(ctx context.Context, conversationId int64, recipientId string) bool {
+	if !a.BetaFeatureAllowed(ctx, recipientId, structs.BetaFeatureChat) {
+		return true
+	}
+	muted, err := a.db.ConversationIsMuted(ctx, conversationId, recipientId)
+	return err == nil && muted
 }
 
 // publishConversationUpdated tells members that a thread's membership, title or

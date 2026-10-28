@@ -1,18 +1,37 @@
 # Branch scope — `pjol/mobile-2-1`
 
-Oct 26–27 2026 · app + mobile-app + webpage · **11.3h** (9.3h stated for Oct 26, 2.0h measured for Oct 27)
+Oct 26–28 2026 · app + mobile-app + webpage · **18.5h** (9.3h stated for Oct 26, 9.2h measured for Oct 27–28)
 
 | Round | When | Hours | Basis |
 |---|---|---|---|
-| 1–3 | Oct 26 | 9.3h | stated, with 6.2h measured as an upper bound |
-| 4 | Oct 27 morning | 0.4h | **measured** |
+| 1–3 | Oct 26 | 9.3h | stated, with 6.8h measured as an upper bound |
+| 4 | Oct 27 morning | ~~0.4h~~ → **1.3h** | **measured**, corrected in round 8 |
 | 5 | Oct 27 afternoon | 1.6h | **measured** |
-| | | **11.3h** | |
+| 6 | Oct 27 afternoon–evening | 3.9h | **measured** |
+| 7 | Oct 27 evening | ~~0.1h~~ → **0.2h** | **measured**, corrected in round 8 |
+| 8 | Oct 28 morning | 0.1h | **measured** |
+| 9 | Oct 28 late morning–midday | 2.0h | **measured** |
+| | | **18.5h** | |
 
-Rounds 4 and 5 are measured end to end, from the session transcript's message
-timestamps clustered on a 30-minute gap. Rounds 1–3 are not, and the distinction
-matters more than the total: **9.3h of this figure is what somebody said about a
-day, and 2.0h is what a clock recorded.** Do not average them.
+Rounds 4 through 9 are measured end to end, by clustering **session-transcript
+message timestamps and commit timestamps together** on a 30-minute gap. Rounds
+1–3 are not, and the distinction matters more than the total: **9.3h of this
+figure is what somebody said about a day, and 9.2h is what a clock recorded.**
+Do not average them.
+
+Rounds 4 to 7 originally clustered messages alone, which undercounted Oct 27 by
+0.93h — see round 8. Commits are now part of the evidence set because work done
+outside a Claude session leaves one and no messages at all.
+
+Rounds 5 and 6 are one continuous sitting (12:34–18:05, 5.53h measured) split at
+the point round 5 was written up. Round 6 is the remainder, appended rather than
+folded in, so round 5's figure is never silently restated.
+
+Oct 27's measured sittings are 1.34h (10:42–12:03), 5.53h (12:34–18:05) and
+0.22h (19:02–19:15) — **7.09h**, which rounds to the 7.1h this document now
+carries for the day. The rounded per-round rows add to 7.0h; where a measured
+total and an itemised split disagree the measured total wins, and the 0.1h is
+rounding in the rows rather than work that went missing.
 
 Round 1's two prospective entries are superseded by round 2 — see there. Round
 2's total is extended by round 3, which measured the evening sitting running 28
@@ -660,11 +679,19 @@ No migrations. Local database unchanged at 1.73.
 
 # Round 4 — Oct 27 morning
 
-**0.4h measured.** One sitting, 10:42–11:07, from the session transcript's
-message timestamps clustered on a 30-minute gap (`measure_sittings.py`). The
-`v2.1` force-push and the PR #209 merge are stamped 11:14, seven minutes after
-the last message in the sitting — GitHub's clock on a merge button, not working
-time, so they are not added.
+**1.3h measured.** One sitting, 10:42–12:03, clustering message timestamps and
+commit timestamps together on a 30-minute gap.
+
+> **Corrected by round 8 from 0.4h (10:42–11:07).** As first written, this round
+> saw the 11:14 PR #209 merge, called it "GitHub's clock on a merge button, not
+> working time", and stopped there. Two mistakes in one judgement: a merge button
+> is pressed by a person, and — decisively — the reasoning was applied to the one
+> commit that had been looked at without checking whether there were others.
+> There were. **11:20** merged webpage PR #1, and **11:45** is `3505dec`, 62
+> lines of hand-written `ContactsScreen.tsx` with no session behind it at all.
+> With those in, nothing in 10:42 → 11:07 → 11:14 → 11:20 → 11:45 → 12:03
+> exceeds the 30-minute threshold, so it is one sitting of 1.34h. The threshold
+> was never relaxed; the evidence set was too narrow.
 
 The release-plumbing round: get `v2.1` onto the right commit, get sanchez's
 fixes into both repos, and change the website's partners banner.
@@ -720,20 +747,31 @@ production data and was left alone.
 | v2.1 tag moved | 0.15 | mobile-app |
 | sanchez's fixes merged | 0.15 | app + mobile-app |
 | Partners banner | 0.10 | webpage |
-| | **0.40** | |
+| Contacts: dock cleared on Home-button iPhones, add sheet lifted over the keyboard (`3505dec`, +62/−5) | 0.30 | mobile-app |
+| Unitemised remainder — three PR merges and whatever surrounded them, 11:07–12:03 | 0.64 | — |
+| | **1.34** | |
 
-Items are apportioned across one observed 25-minute sitting rather than clocked
+Items are apportioned across one observed sitting rather than clocked
 separately. The total is the measurement; the split is a reading of the order
 the work happened in.
+
+The unitemised row is the honest shape of this correction. 0.64h of the sitting
+left commits but no transcript, so *that* it was worked is evidenced and *what
+happened inside it* cannot be split further from here. Recorded as one row
+rather than spread across the named items, which would dress a gap in the
+evidence up as detail.
 
 ## Volume
 
 | Repo | Files | Lines |
 |---|---|---|
 | webpage (banner) | 7 | +46 / −19 |
-| app, mobile-app | merge commits only | — |
+| mobile-app (contacts) | 1 | +62 / −5 |
+| app | merge commits only | — |
 
-No migrations. No new routes.
+No migrations. No new routes. The contacts row was missing until round 8 — the
+same blind spot as the hours, since the commit it is in left no session behind
+it.
 
 ---
 
@@ -939,3 +977,724 @@ that were not specified, which is where all three bugs above were found.
 - **Opening a stored file in the app is not implemented.** The attachment card
   says so rather than doing nothing. Downloading needs a file-system dependency
   that is not in the binary either.
+
+# Round 6 — Oct 27 afternoon and evening
+
+**3.9h measured.** 14:12–18:05, the rest of the sitting round 5 cut at 14:12,
+from the session transcript's message timestamps clustered on a 30-minute gap
+(`measure_sittings.py`). The script reports that sitting as a single 5.53h span;
+round 5 claimed 1.63h of it, and this is the remainder.
+
+> **Revised by round 7 from 3.8h, and the reason is worth keeping.** This round
+> was written up while its own sitting was still open, so the last message the
+> script could see was the one before the write-up: 18:00, giving 5.45h for the
+> sitting and 3.8h for the remainder. The sitting's real last message is 18:05,
+> the commit that carried this section. The correction is to where the
+> measurement stopped, not to the work — same sitting, five more minutes of it
+> visible. **A round cannot measure its own end while it is still running**, and
+> the fix is to re-run the script after the round's commits land.
+
+Two things in the figure are named rather than buried, because both are time
+that did not go into features:
+
+- The first ~0.2h is writing up rounds 4 and 5 and the document-picker change.
+  Round 5 explicitly excluded its own write-up from its figure, so counting it
+  here is what stops it falling out of the total altogether.
+- ~0.1h went to a full disk. The machine hit 100% on the data volume mid-round
+  and `Bash` stopped working entirely — no `git`, no `tsc`, no `go build` —
+  until legacy dev caches were cleared. Diagnosis and clearing, not product
+  work.
+
+Writing *this* section and committing the round are inside the span, not after
+it: the write-up ran up to the 18:05 commits, which is where the sitting ends.
+As first written this said the time was after 18:00 and uncounted. It is
+counted, and it is most of the five minutes round 7 added.
+
+The polish round: Messages goes from working to finished, and then the bug
+reports start coming back from the device rather than from reading the code.
+
+## Features
+
+### The chat flicker, the keyboard, the frozen share, and a real share sheet — 0.9h · mobile-app
+
+Four reports from one pass on a device, and the first is the one worth recording.
+
+The chat refreshed itself every few seconds, flickering and throwing away
+whatever the person was doing — out of the amount pad, out of a half-typed
+message. The cause was a dependency chain rather than a timer: `refresh`
+depended on the `onRead` and `onToast` callbacks, the mount effect depended on
+`refresh`, and the shell passed those callbacks as inline arrows. So every
+render of the shell — a balance poll, a socket frame, anything — gave them new
+identities, which re-ran the mount effect, which called `setMessages([])`,
+`setMode("text")` and `setDraft("")`. The screen was resetting itself several
+times a minute and the flicker was the list being emptied and refilled.
+
+Fixed by holding those callbacks in refs inside the screen, so `refresh` depends
+only on what changes *what is fetched* — the client and the thread — and the
+screen is immune to its parent re-rendering. The comment on those refs says so,
+because the obvious "tidy-up" is to list them in the dependency array again.
+
+"Send to chat" froze the whole app, every tab. A stacked `Modal` on iOS: the
+share sheet asked the shell to open a transaction sheet behind it with a double
+`requestAnimationFrame` (~32ms) while its own dismissal took 220ms, so the
+second modal was presented into a window that was still going away and the app
+kept a modal that could not be reached or dismissed. Now the open is fired where
+`setMounted(false)` happens rather than on a guessed delay.
+
+The share buttons themselves became a whitelabelled sheet — internal chats, copy
+link, and the native share sheet — rather than a "Send to chat" button at the
+bottom of each card. Copy and external share stay available without the chat
+beta, because a link to a merchant is something the website publishes to
+everybody and gating it behind messaging was wrong.
+
+### Message management, timestamps, and payment versus record — 0.5h · app + mobile-app
+
+Edit within five minutes, delete for everyone, multi-select delete, and
+"Message was deleted" tombstones — schema 1.75. The edit window is enforced in
+the `WHERE` clause rather than checked first, so a message cannot be edited by a
+request that arrives while the check is passing.
+
+`deleted_by` is what makes a tombstone and an absence different things: a
+sender's deletion shows as "Message was deleted", because a reply to it would
+otherwise be a non-sequitur and the thread would quietly look like it was always
+that way, while an **admin** removal does not appear at all — a gap that
+announces itself tells the whole thread something was actioned. Bodies are kept
+on disk and blanked in `scanMessage`, so moderation can still see what was said.
+
+iMessage's timestamps: centred separators for a real jump between sessions, and
+swipe-left-and-hold to reveal a time per message. The whole list slides as one
+so the times line up in a column.
+
+A payment made in the chat and a transaction record shared out of history looked
+nearly identical, which was the problem — "I paid you 5 SFLUV just now" and
+"look at this transfer from March" are not the same claim and a reader should not
+have to work out which one they are looking at. The record gets a receipt icon,
+a title and the amount demoted to a subtitle; the payment gets the amount and
+nothing else.
+
+### Swipe actions, muting, leaving, read receipts, and saving files — 0.6h · app + mobile-app
+
+Schema 1.76. Swipe a conversation for delete / leave / mute, with the icon
+changing to a leave glyph for a group, and the modal offering "leave" or "delete
+messages and leave" rather than the direct-thread choices.
+
+All deletions are soft. `conversations.deleted_at` hides a thread from one
+person and nothing else: the messages stay, and another message repopulates the
+history — which is what "delete for me" means to the person doing it.
+
+Muting is `muted_until`, and "forever" is a hundred years rather than a null,
+so one comparison answers the question everywhere. A muted thread still arrives,
+still shows unread and still counts toward the badge; muting silences the phone,
+it does not hide the conversation.
+
+Read state across a group is `MIN(last_read_message_id)` of the others, not
+`MAX`: "Read" has to mean everybody, or it means whoever happened to open it
+first.
+
+Files download and photos save to the camera roll, with an in-app preview and
+type-specific icons in the file search.
+
+### Attachments staged rather than sent, and emoji-only messages — 0.4h · mobile-app
+
+Picking a photo used to post it immediately, so there was no moment at which you
+could say anything about it: the picture arrived, then a second message
+explaining it. Now attachments stage in the composer with the draft split at the
+caret, so text before the attachment is its own message before it and text after
+is its own message after — iMessage's behaviour.
+
+The link attachment mode was removed entirely in favour of detecting a URL as it
+is typed or pasted. A message that is *only* a link renders as the card alone; a
+link inside a sentence keeps the sentence as a normal bubble with the card under
+it.
+
+Emoji-only messages under five graphemes render large and without a bubble,
+counted with `Intl.Segmenter` so a family emoji is one character rather than
+seven.
+
+### Attachments: the upload that failed and the thumbnails that blocked the thread — 0.5h · app + mobile-app
+
+Reported as "file attachments are not being sent correctly, and other items get
+stuck loading". Two unrelated causes, both measured rather than guessed at.
+
+The upload shared the API's 25-second timeout. The limit on an attachment is
+25 MB and up to ten at a time, which over a phone's uplink is minutes — so the
+client aborted mid-stream while the server often had the file already. The send
+reported failure, and the message turned up anyway. Multipart uploads now get
+their own 240-second ceiling.
+
+The stuck loading was the thumbnails. `getConversationAttachmentDataUri` pulls
+an image through `fetch` and base64-encodes it **on the JS thread** — for a
+multi-megabyte photo that is a third again as much string, built synchronously,
+per image. Several photos in a thread serialise behind each other and everything
+else sits on its placeholder waiting for a turn. Thumbnails and avatars now use
+`<Image source={{uri, headers}}>`, so the fetch, the decode and the caching all
+happen natively. The data-URI reader stays for the case where the *bytes* are
+what is wanted — writing a file to disk to save or share it.
+
+Files were already preview-only with a manual download, which is the behaviour
+asked for; what they lacked was a readable name. The staged chip was a 60pt
+square with the filename at 8pt on one line, which for a real document name
+rendered as an ellipsis. A file has no thumbnail, so the name *is* the preview.
+
+### The in-app previewer learns to read documents — 0.3h · mobile-app
+
+It previously said "save it to open in another app" for anything that was not a
+photo. Now PDFs render in a `WebView` over the downloaded file — WKWebView has a
+PDF renderer, so on iOS that is pages, scrolling and pinch-to-zoom — and text,
+CSV and calendar files render as text in a monospaced scroll.
+
+Android keeps the card for PDFs, deliberately: its WebView has no PDF renderer,
+and a blank page that looks broken is worse than a sentence saying where to open
+it. Word, Excel and PowerPoint keep it on both platforms, because those
+genuinely need a converter.
+
+### In-app banners: behind the pill, and firing several times for one notification — 0.3h · mobile-app
+
+The position was a React Native layout quirk worth writing down. The banner was
+an absolutely positioned child of the root `SafeAreaView` with a small top
+offset. RN runs Yoga with the legacy absolute-positioning errata, under which an
+absolute child is placed against its parent's **border** box and the parent's
+padding is ignored — and core `SafeAreaView` applies the safe-area inset *as
+padding*. So the inset did nothing for this child and `top: 6` meant six points
+from the physical top of the screen. On a notched phone the cutout is narrow and
+the card's own side margins hid it; on a Dynamic Island, which is centred and
+wide, the card landed squarely behind it. The banner is now a child of the top
+bar at `top: 0`, which is correct on every device without knowing any insets.
+
+The retriggering was three causes, none of them a duplicate notification:
+
+1. The shell passed `onDismiss` as an inline arrow, so `close` churned identity
+   every render, so the effect that has to depend on `close` re-ran on every
+   render of the whole app — replaying the entry animation and clearing the
+   4.2-second timer a few milliseconds before it fired. One banner
+   re-animating, and never leaving on its own.
+2. Notification banners were keyed `notification:${Date.now()}`, unique by
+   construction, which defeated any dedupe.
+3. `setNotificationHandler` returned `shouldShowBanner: true`, so a push
+   arriving in the foreground drew a **system** banner on top of the in-app
+   one. Push suppression is a server-side snapshot taken before the send, so a
+   device that connects in the gap gets both.
+
+The system banner is now suppressed only while the socket is live — when it is
+down the OS still draws it, so nothing is silently dropped — and `message_id`
+was added to the message push so the socket and push paths dedupe on one key.
+
+### Chats opened from a notification could load forever — 0.2h · mobile-app
+
+The reporter guessed the profile had not loaded. It was the backend client. A
+notification cold start mounts the chat before sign-in finishes, so `refresh`
+returned without fetching; the reset effect was keyed on the thread alone —
+deliberately, to stop a parent re-render wiping the composer — so nothing re-ran
+when the client arrived. The fifteen-second poll eventually rescued it, which is
+why it looked intermittent rather than broken. Fetching is now its own effect
+keyed on `refresh`, which resets nothing.
+
+### In-chat payments are previewed before they are spent — 0.2h · mobile-app
+
+The amount pad paid straight from its own button, which made a transfer the one
+thing in the composer with no review step. It now stages: the pad composes,
+a chip shows the amount with SFLuv's own mark, and the composer's send button is
+what spends. The tray refuses to open the pad while a file is staged, rather
+than allowing it and then discarding one of the two — a payment is one message
+and cannot carry a photo.
+
+The green `logo-usd` is gone with it. This is not dollars, and a dollar sign on a
+payment of a local currency names the wrong unit.
+
+### Group messages show who sent them — 0.2h · mobile-app
+
+Telegram's arrangement: a small picture beside the bubble, on the last message
+of a run from one person, bottom-aligned, with the rest of the run indented to
+match. The name still appears once at the top of the run; the picture is what
+makes a busy group scannable without reading any names.
+
+Initials are a complete fallback, and also what happens for somebody with no
+picture — the avatar route answers 404 for them, so the image errors and the
+initials take over. Asking the server first who has a picture would be a request
+per member to avoid a 404 per member.
+
+## Smaller fixes
+
+| Fix | Hours | Repo |
+|---|---|---|
+| Round 5's write-up and the document picker built into the binary at 2.2.0 | 0.2h | app + mobile-app |
+| Partner banner at half speed; Telegram step and email fallback dropped from the contact form | 0.2h | webpage |
+| Reaction previews in the inbox ("Sanchez reacted to a message") and a `/link-preview` endpoint | 0.2h | app |
+| Swipe tray showing through the row permanently, timestamp overlapping the mute button, tap-to-close that never appeared (open-ness was a ref, which does not re-render), icons invisible in dark mode (`palette.navy` inverts) | 0.2h | mobile-app |
+| Copying an internal reference now copies its universal link rather than a bare id or hash | 0.1h | mobile-app |
+| The info button dismisses the keyboard on its way out | 0.05h | mobile-app |
+| Typing indicator taken out of the inverted list, where a cell inserted at the same edge overlapped it for a frame | 0.05h | mobile-app |
+| Sending bar moved onto the header's bottom edge and given a completion run-out, so a fast send is seen to finish rather than cut off | 0.1h | mobile-app |
+| A full disk — `Bash` unusable until legacy dev caches were cleared | 0.1h | — |
+
+## Totals
+
+| | Hours |
+|---|---|
+| Features | 4.1h |
+| Smaller fixes | 1.0h |
+| **Itemised** | **5.1h** |
+| **Measured** | **3.9h** |
+
+The itemised split overshoots the measurement by 1.2h, and the measurement
+wins. Recording both rather than scaling the items down to fit: the overshoot is
+itself the finding — ten features and nine fixes in 3.9h means most of these
+items took single-digit minutes, and rounding each to a plausible-looking 0.1
+or 0.2 inflates the sum by more than a third. The same mistake as the 0.5h floor
+in round 2, at a smaller scale.
+
+## Volume
+
+| Repo | Files | Insertions | Deletions |
+|---|---|---|---|
+| app | 15 | 1,492 | 31 |
+| mobile-app | 27 | 5,099 | 700 |
+| webpage | 6 | 130 | 139 |
+| **Total** | **48** | **6,721** | **870** |
+
+2 migrations (1.75 message management, 1.76 conversation actions) · 6 new routes
+· schema at 1.76.
+
+580 of app's insertions are this document. The code is 14 files, +912/−29.
+Counted as 1,210 when first written, for the same reason the hours were: the
+document was still being written when its own volume was measured. Round 7's
+additions to the document are deliberately *not* folded back in — a document
+that counts itself never converges — so **+912/−29 is the figure to quote** and
+the row above is the code plus the document as it stood at the end of round 6.
+
+## Known gaps
+
+- **Android cannot preview a PDF in the app.** Its WebView has no PDF renderer.
+  The card and the share sheet are the honest answer there, and the platform
+  check that chooses between them says why.
+- **A transaction shared by a third party has no addresses to label** when the
+  viewer has no history row for it and the attachment carries none. The sheet
+  says "Unknown" for that side rather than showing a blank.
+- **The in-app banner replaces rather than queues.** Five messages at once show
+  the last one; a queue would mean twenty-one seconds of banners, and the last
+  is the only one still worth reading by then.
+
+---
+
+# Round 7 — Oct 27 evening
+
+**0.1h measured.** 19:02–19:10, a sitting of its own — the 57-minute gap after
+round 6's 18:05 commit closes that round under the 30-minute rule. No code
+changed. This is the bookkeeping pass: re-running `measure_sittings.py` once
+round 6's commits had landed, and correcting the three things round 6 could not
+see about itself.
+
+| Fix | Hours | Repo |
+|---|---|---|
+| Re-measured round 6 after its own commits landed: 3.8h → 3.9h, sitting 5.45h → 5.53h, Oct 27 5.8h → 6.1h, branch 15.1h → 15.4h | 0.05h | app |
+| app volume corrected, 1,210 → 1,492 insertions, with the document's own 580 named separately from the 912 lines of code | 0.05h | app |
+| Round 6's "writing this section is not counted" withdrawn — it is inside the span | — | app |
+
+## What this round is for
+
+Three figures in round 6 were measured from inside the round they described, and
+all three were short by the same mechanism: **a round cannot see its own tail.**
+The hours stopped at the last message before the write-up; the volume counted the
+document while it was half written. Neither is a judgement call that went wrong,
+and nothing was inflated — both errors ran downward — which is exactly why they
+would have survived a reading. Re-running the measurement after the commit is
+what catches them, and that is the practice this round adds.
+
+Recorded as its own round rather than folded into round 6, per the convention
+that an earlier figure in this folder is never silently restated. Round 6 keeps
+the superseded figure with a note pointing here.
+
+And this round has the blind spot it is describing. 0.14h is the span up to the
+measurement; the commit carrying this section falls after it, so the next run of
+the script will show this sitting slightly longer. Left at 0.1h rather than
+chased: the correction would be bookkeeping about bookkeeping, and it is written
+down here so it is not discovered a third time as though it were news.
+
+> **It was exactly that, and round 8 recorded it: 0.22h, so 0.2h.** The sitting
+> ran to 19:15, the commit included. The prediction was right and the decision
+> not to chase it was wrong by 0.1h — cheap to have taken, since re-measuring
+> after the commit is one command.
+
+## Verified, not assumed
+
+- `app`, `mobile-app` and `webpage`: `git status` clean, nothing unpushed, all
+  three on `pjol/mobile-2-1`.
+- Volume re-derived from `git diff --shortstat` across the round's real
+  boundaries (`bb83e8b..HEAD`, `f13650f^..HEAD`, `51f4961..HEAD`) rather than
+  carried forward. `mobile-app` (27 files, +5,099/−700) and `webpage` (6 files,
+  +130/−139) came back unchanged; only `app` had moved.
+- The 48 files / +6,721 / −870 total is the sum of the three re-derived rows.
+
+## Known gap
+
+**Oct 26 and Oct 27 are not in an invoice yet.**
+`branch-scopes/report-2026-10-26.csv` covers the service period 2026-10-19 to
+2026-10-24 and is closed. This branch's hours — **16.5h**, 9.3h stated for Oct 26
+and 7.2h measured for Oct 27–28, revised by round 8 from the 15.4h this round
+first wrote — belong to the next period, whose end date is the contractor's to
+set, so no CSV was written for it here. The figures are ready
+for one: the rounds table at the top of this document is the itemisation, and
+the stated and measured halves are already separated the way that report's
+METHOD and WEAKNESSES rows need them.
+
+---
+
+# Round 8 — Oct 28 morning
+
+**0.1h measured.** 11:15–11:23, messages and commits clustered on a 30-minute gap.
+Prompted by the contractor's read of the Oct 27 figure — "i feel like yesterday
+should be at least 7 hours total" — which was right, and for a reason no amount
+of re-reading the document would have surfaced.
+
+## The error: a narrow evidence set, not a lenient threshold
+
+The question asked was how lenient the session definition was being. It was not
+being lenient at all, and that was never the lever:
+
+| Evidence clustered (30-min gap) | Oct 27 |
+|---|---|
+| session messages only — what rounds 4–7 used | 6.15h |
+| messages **+ commits** | **7.09h** |
+| messages + commits + source-file mtimes | 7.09h |
+
+The gap threshold stayed at the skill's default 30 minutes throughout. What
+changed is *what counts as evidence that somebody was working.* A Claude session
+transcript only sees work done **through Claude**. Merging a PR in a browser and
+hand-writing a commit in an editor leave no messages, so three activity points
+in the 11:07–12:03 window were invisible: the 11:14 and 11:20 PR merges, and
+`3505dec` at 11:45 — 62 hand-written lines of `ContactsScreen.tsx`, a feature
+that was missing from this document as well as from its hours.
+
+Chain those in and the morning has no gap over 30 minutes, so it is one sitting
+of 1.34h rather than 0.40h. **+0.93h, all of it in round 4.**
+
+Source-file mtimes were added as a third tier and moved nothing — every one of
+them already falls inside a span. They stay in the method as a check that came
+back clean rather than as a contributor.
+
+## Why the threshold is not where the slack was
+
+Tested, because "be more lenient" was the obvious thing to try and it is the
+wrong answer:
+
+| Gap | Oct 27 | Verdict |
+|---|---|---|
+| 30 min | 7.09h | **kept** |
+| 45 min | 7.60h | merges a 31-minute gap at 12:03–12:34 |
+| 60 min | 8.53h | swallows two ~56-minute breaks with no activity of any kind |
+
+The 12:03–12:34 gap is **31.0 minutes** — one minute over the threshold, and
+0.52h turns on that minute. It stays split, because the rule has to be decided
+before the number is known or it is not a rule. Worth naming as the most fragile
+boundary in the branch: every other gap on Oct 27 is either under 25 minutes or
+over 55.
+
+## Oct 26 moves too, and changes nothing
+
+Same method on Oct 26: 6.17h messages-only → **6.76h** with commits. Still well
+under the 9.3h the contractor stated for that day, so the stated figure stands
+and only the upper-bound note in the header changes (6.2h → 6.8h). The gap
+between 6.8h measured and 9.3h stated is the dev meeting and the windows away
+from the keyboard that rounds 1–3 already name.
+
+## What this costs the folder
+
+**Every measured figure in `branch-scopes/` was taken from transcripts alone**,
+including the other files in this directory and the closed
+`report-2026-10-26.csv`. All of them are therefore low by whatever share of the
+work was done outside a Claude session, which for a day of merges and hand-edits
+is not negligible. This branch is now measured the wider way; the others are not
+re-measured here, and that inconsistency is named rather than left to be found.
+
+The `time-accounting` skill at <https://github.com/pjol/SKILLS> ships
+`measure_sittings.py`, which reads transcripts only. Teaching it to union commit
+timestamps from the repositories it is pointed at would fix this at the source
+for every future branch, and is the obvious next change to that repo.
+
+## Corrections made
+
+| Figure | Was | Now |
+|---|---|---|
+| Round 4 (Oct 27 morning) | 0.4h | **1.3h** |
+| Round 7 (Oct 27 evening) | 0.1h | **0.2h** |
+| Oct 27 measured | 6.1h | **7.1h** |
+| Oct 26 measured upper bound | 6.2h | **6.8h** |
+| Branch total | 15.4h | **16.5h** |
+| Round 4 volume | banner only | **+ contacts, 1 file, +62/−5** |
+
+Round 4 and round 7 keep their superseded figures with notes pointing here.
+
+## The pattern across rounds 6, 7 and 8
+
+Three rounds in a row have corrected a measurement, and the errors are not
+independent:
+
+- **Round 6** stopped the clock before its own write-up had happened.
+- **Round 7** caught that, then left its own tail uncounted on the grounds that
+  chasing it was not worth 0.1h.
+- **Round 8** found 0.93h that neither had looked for, because both were reading
+  the same single source.
+
+Every one ran **downward**. None was a judgement call that went the generous way,
+which is the useful thing to notice: this folder's standing worry is inflation
+— the 4.7x overstatement at the top of `merchant-onboarding-revamp.md` — and the
+guard against it has been working. Undercounting has no such guard, and it is
+invisible precisely because it looks rigorous. The contractor's own sense of the
+day was the only thing that caught it, and a figure that survives only because
+nobody intuited otherwise is not measured, it is unchallenged.
+
+**The fix is procedural, not arithmetic: measure after the commits land, and
+cluster commits alongside messages.** Both are one command.
+
+## Measurement note
+
+0.1h is the span to 11:23, the last evidence point before this section was
+committed. The commit itself lands a minute or two later and is not in the
+figure — bounded, named, and not chased, which is round 7's resolution applied
+on purpose rather than by oversight.
+
+---
+
+# Round 9 — Oct 28, late morning to midday
+
+**2.0h measured.** 11:23–13:23, messages and commits clustered on a 30-minute
+gap. One sitting with round 8's (2.13h from 11:15), split at round 8's commit
+the way round 6 was split from round 5, so round 8's figure is not restated.
+Measured to the last evidence point before this section was committed.
+
+Four subagents ran inside this sitting — a boot audit, a structural audit,
+research on the two native features, and an independent review of the diff —
+in parallel with the main thread. They are inside the measured span, not added
+to it: the clock does not run four times because four things were reading.
+
+The second request this branch has taken from somebody using the app rather
+than reading it, and most of it is the same disease in different places: things
+that unmounted when they should have hidden, state replaced when nothing had
+changed, and screens that waited for the slowest thing in boot before drawing
+what they already knew.
+
+## Features
+
+### Structural pass, and painting on cache at boot — 0.36h · mobile-app
+
+Two read-only audits of the shell (10,344 lines, 129 `useState`, 80 `useEffect`)
+were run before anything was changed, and every claim was checked against the
+code before it was acted on. What was fixed, each verified first:
+
+- **The whole app re-rendered every two seconds** on Wallet or Activity —
+  under an open chat too. `mergeTransactions` returned a new array, with every
+  row rebuilt, on every poll whether or not anything had moved. It now returns
+  the array it was given when nothing differs, and React skips the render.
+- **The wallet bootstrap re-ran on every foreground and every send**, and at
+  least twice on every cold start. Its effect depended on the hidden-wallets
+  ARRAY, which `syncWalletPreferences` replaced with an equal copy each call —
+  and the bootstrap calls it itself. Each re-run flipped the runtime to
+  loading, fetched the profile and the Privy provider again, re-ran wallet
+  discovery and set a new runtime object that re-fired everything keyed on it.
+  Equal values now keep the same object, and the effect keys on the Privy id
+  rather than the Privy user object.
+- **The W-9 modal flapped on a network blip**: a failed status poll set the
+  status to null, which closed the modal until the next good poll. A failure now
+  keeps the last good answer, and W-9 and merchant-mode status are replaced only
+  when they change — they had been re-rendering the shell every 8 and 15 seconds.
+- **The banner replayed, and the inbox jumped.** Both had one cause: the top bar
+  unmounted while a chat was open. The in-app banner lived in it, so one showing
+  when a chat opened replayed when it closed, and one for another conversation
+  that arrived mid-chat waited until you left. And the content area grew upward
+  by the bar's height in the same commit the chat began sliding in, so the inbox
+  jumped beside it. The top bar and content now sit in one wrapper that the chat
+  overlays; the bar stays mounted, inert and hidden from VoiceOver under the
+  chat; the banner hangs from a zero-height anchor in normal flow, which keeps it
+  below the Dynamic Island without a safe-area library.
+- **The dock popped in late** after Send or a chat, and everything lifted above
+  it jumped: it unmounted, re-measured on return, and reported no top edge while
+  gone. It is hidden now, not removed.
+- **Tab changes flickered**: the slide's start values were set in an effect after
+  the new tab had painted. Now a layout effect. Activity and Notifications also
+  stop animating their own entrance on top of the tab's.
+- **Two more stacked-Modal races** of the kind that froze the app before — the
+  reaction picker opened as the action sheet closed, and the OS share sheet
+  opened one frame after ours — now wait for `onDismiss` on iOS.
+- `showToast` is stable, so effects keyed on `onToast` stop re-running with
+  every shell render; history polls pause while a chat covers the screen; and
+  the composer follows the keyboard on its own curve instead of jumping.
+
+Boot now paints the person's own app on the first frame. The tabs, the dock and
+the bell had all waited for `appUser`, which arrived only after the whole wallet
+bootstrap and a second profile fetch. A per-user profile cache seeds it, the
+wallet's first page of history and the public merchant locations are cached
+beside the balance, and the bell's existing loading spinner — never visible on a
+cold start, because it hid while routing was pending — is now what says the
+background work is still going. Every cache is keyed to who is signed in and
+cleared on sign-out.
+
+### Native: share to SFLuv, and chat pushes with the sender's face — 0.22h · app + mobile-app
+
+**Share to SFLuv.** `expo-share-intent@5.1.1`, the last release for SDK 54,
+patched in three places: a separate target name, because by default the share
+sheet label is also the Xcode target name and "SFLuv" collides with the app's
+own target and is silently skipped; and two Android bugs in that version — a
+path traversal through the shared file's display name, and a crash on a provider
+that returns no cursor. Shares open the existing share sheet, so sharing in and
+sharing out are one surface; the shared copy is deleted when the sheet closes.
+
+**Chat pushes as communication notifications.** `expo-notifications` cannot do
+these, so a Notification Service Extension in Swift
+(`targets/notification-service/`, built in by `@bacons/apple-targets@4.0.7`)
+builds an `INSendMessageIntent` with the sender's picture, or the group's, and
+initials drawn on the app's colours when there is none. The extension has no
+session, so pushes carry signed, expiring picture URLs served by a new
+unauthenticated `GET /push-image`; a group's is signed for the recipient and
+re-checked against their membership when fetched.
+
+Version 2.3.0: both add native code, and with `runtimeVersion: appVersion` an
+over-the-air update carrying the share module to a 2.2 binary would fail at
+import. Prebuild was run in a scratch copy for both platforms and generates both
+targets with the right bundle ids, entitlements and display name. **Neither has
+been compiled** — that needs an EAS build, and the first iOS build must be run
+interactively so EAS can register the two new extension identifiers.
+
+### One wording for push and banner, and pictures everywhere — 0.14h · app + mobile-app
+
+Telegram's shape: a group titled with the group and the line naming who spoke,
+"Maria: 📷 Photo"; a direct thread titled with the person. The server builds it
+once and sends it as the push and as a `notice` on the socket event, so the two
+cannot drift — they had: photo-with-caption pushed as only the caption, a file
+pushed as "Sent a file", and every in-app banner for a direct message titled
+"New message", because the sender's name was only ever filled in for groups.
+VoiceOver reads "Maria said: hello". Banners, inbox rows, the chat header and
+the member list show the person's or group's picture over their initials.
+
+### Caching: chat text on disk, attachment bytes on demand — 0.11h · mobile-app
+
+The inbox and the newest 120 messages of the 30 most recent threads are kept per
+user, and draw on the first frame — no spinner opening Messages or a thread read
+before. Attachment bytes are fetched natively into a cache when asked for, and
+shown from disk after: photos up to 8 MB fetch themselves, anything else shows a
+"not downloaded" card with its size and a tap, and a file says when it is on the
+device. Your own sent photos are put in the cache at send time.
+
+### Server-side ordering — 0.08h · app
+
+`last_message_at` could move backwards: it is the inserting transaction's start
+time, and two overlapping sends commit in either order. It is now written with
+`GREATEST`, the inbox sort gains an id tiebreak, and each recipient's pushes go
+through a FIFO instead of racing as separate goroutines. Clients insert messages
+in id order rather than appending, so every copy of a thread agrees.
+
+### Links as text, rendered by the client — 0.08h · app + mobile-app
+
+No more card above the composer asking whether to send a link. What was typed is
+what is sent; every client linkifies it and draws the card under the bubble,
+from a cached lookup — the server caches scrapes for twenty minutes so a link in
+a busy group is fetched once.
+
+## The independent review, and what it caught
+
+Five read-only reviewers ran in parallel over the uncommitted diff, one slice
+each — the shell, the chat surfaces, the cache and link modules, the native
+extension and config, the backend — given what each change was meant to do and
+none of the reasoning behind it. The native reviewer type-checked the Swift with
+`swiftc` against the iOS 18.2 SDK and dry-ran both patches; the module reviewer
+fuzzed the link parser with half a million inputs. Every finding was checked
+against the code before it was acted on. Fixed:
+
+- **A merchant till opened as the owner's personal app on every cold start.**
+  The profile cache put `appUser` on screen before the bootstrap, and nothing
+  cached whether this device is a till — so for the whole boot a locked counter
+  showed chats, contacts, history and, once the wallet was up, Send. Routing now
+  waits for an owner's merchant-mode answer, which is asked for as soon as the
+  profile appears. Sharing into SFLuv is refused on a till outright.
+- **Cached threads left permanent holes.** The first page after opening kept
+  everything older from the cache, so a thread that had moved on by more than a
+  page showed the cached tail, a gap, then the page — and paginated backwards
+  past the gap forever, saving it back to disk. The first page of a visit is now
+  authoritative; messages sent or delivered while it was in flight survive it
+  (a long-standing bug that made a just-sent message vanish until the next poll).
+- **On Android a half-finished download counted as downloaded**, forever: the
+  platform writes straight to the destination. Downloads now land in a `.part`
+  file and move into place when complete.
+- **Links went to the wrong site.** `bbc.co.uk` linked to `bbc.co`, `música.com`
+  to `sica.com`; the half of an email address before the @ became a link.
+- Smaller: link taps skipped double-tap-to-like; one avatar error hid that
+  person's picture for the session; a stale thread's 404 could close the thread
+  just opened; shared-file clean-up could, on Android 9 and below, delete the
+  person's original rather than SFLuv's copy; link previews and other users'
+  threads accumulated on disk without bound; several sign-out paths bypassed the
+  cache clears (the clears now run whenever the signed-in person changes);
+  muted threads still popped in-app banners; the server's link cache did not
+  merge simultaneous requests and cached one client's disconnect as a failure;
+  signed picture URLs were written to the access log; the read pointer had the
+  same backwards-write race as `last_message_at`; the extension decoded avatars
+  at full size against a 24 MB memory limit, and could deliver twice at the
+  deadline.
+
+## Smaller fixes
+
+| Fix | Hours | Repo |
+|---|---|---|
+| Sanchez's latest merged (the app branch already carried the Sentry PR squashed, so it was the only one taken; mobile was a fast-forward); his new packages installed | 0.17h | app + mobile-app |
+| Timestamps visible at rest on an iPhone 16 — parked against the row, not the screen, so the list padding left the leading digit showing | 0.06h | mobile-app |
+| The inbox preview one or two messages behind — out-of-order responses from overlapping reads, the later one winning; the thread had the same race and could drop messages | 0.06h | mobile-app |
+| Paste: photos, links and text, through the system's paste button where iOS has one | 0.05h | mobile-app |
+| A staged payment silently dropped when a photo was staged after it | inside the above | mobile-app |
+
+## Totals
+
+| | Hours |
+|---|---|
+| Features | 0.99h |
+| Smaller fixes | 0.34h |
+| **Itemised** | **1.33h** |
+| The independent review, its fixes, this write-up and the commit | 0.68h |
+| **Measured** | **2.0h** |
+
+Itemised from the first appearance of each piece of work in the session
+transcript — the structural pass includes writing the three audit briefs that
+started it — so the split is a reading of when things began rather than a
+stopwatch on each. The measured total is the figure.
+
+## Volume
+
+| Repo | Files | Insertions | Deletions |
+|---|---|---|---|
+| app | 15 | 748 | 78 |
+| mobile-app | 32 | 4368 | 1149 |
+| **Total** | **47** | **5116** | **1227** |
+
+No migrations. One new route (`GET /push-image`). Four packages
+(`expo-share-intent@5.1.1`, `@bacons/apple-targets@4.0.7`,
+`@expo/prebuild-config@54.0.8`, `patch-package`) and two patches.
+
+## Needs a build, then a device
+
+Everything in this round type-checks and the backend builds and vets, but the
+native half has only been prebuilt, never compiled, and none of it has run:
+
+- **Share to SFLuv** on both platforms, cold start and warm. Android cold-start
+  shares are documented not to arrive in dev-client builds — test a release build.
+- **The notification extension**: a direct message and a group, with and without
+  a picture. One open question for a device: whether iOS adds the sender's name
+  to a group's line itself, in which case "Maria: " appears twice.
+- **The shell restructure**: open and close chats from the inbox and from a
+  banner; Send; the dock; the banner over a chat header.
+- **Boot from cache** as a returning user, and as somebody new on the same phone.
+
+## Known gaps
+
+- **Left from the review, named rather than fixed:** expo-share-intent 5.1.1's
+  own Android crash paths for video metadata (upstream, unchanged here); its
+  plugin replaces rather than merges the app's app-group entitlement, harmless
+  until a second group is added; both extensions build at version 1 unless EAS
+  remote versioning writes theirs too — a warning from App Store Connect, not a
+  rejection; and pasting replaces nothing when text is selected.
+- **Android pushes keep the app icon.** The equivalent there is a
+  MessagingStyle notification built by a native FCM service; `expo-notifications`
+  has no hook for it.
+- **Files cannot be pasted**, only photos, links and text — the clipboard API
+  exposes nothing else. Sharing to SFLuv is the route for a document.
+- **Still to do from the audits:** the dock bubble animates layout on the JS
+  thread; SendScreen's keyboard offsets are wrong; screens are not memoised at
+  the shell boundary; and the shell's data still lives in one component rather
+  than in stores. Each is real, and each is a larger change than this round
+  should make blind.

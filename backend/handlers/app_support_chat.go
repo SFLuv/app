@@ -123,7 +123,10 @@ func (a *AppService) OpenSupportConversation(w http.ResponseWriter, r *http.Requ
 
 	msg.IsMine = true
 	a.hydrateMessages(ctx, conv, []*structs.Message{msg}, staffId)
-	a.fanOutMessage(ctx, conv, msg, staffId, "About your message to SFLuv")
+	a.fanOutMessage(ctx, conv, msg, staffId, announcement{
+		Line:   "About your message to SFLuv",
+		Spoken: "replied about your message to SFLuv",
+	})
 
 	writeJSON(w, http.StatusOK, OpenSupportConversationResponse{
 		ConversationId: conv.Id,

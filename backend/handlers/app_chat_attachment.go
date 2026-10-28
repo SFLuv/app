@@ -139,7 +139,7 @@ func (a *AppService) UploadConversationAttachment(w http.ResponseWriter, r *http
 
 	msg.IsMine = true
 	a.hydrateMessages(r.Context(), conv, []*structs.Message{msg}, userId)
-	a.fanOutMessage(r.Context(), conv, msg, userId, attachmentPreview(attachments, caption))
+	a.fanOutMessage(r.Context(), conv, msg, userId, attachmentsAnnouncement(attachments, caption))
 	writeJSON(w, http.StatusCreated, msg)
 }
 
@@ -221,33 +221,6 @@ func sanitizeFileName(raw string) string {
 		name = truncateRunes(name, chatFileNameMaxRunes)
 	}
 	return name
-}
-
-// attachmentPreview is the push text for a message whose content is its cards.
-func attachmentPreview(attachments []db.NewAttachment, caption string) string {
-	if caption != "" {
-		return previewText(caption)
-	}
-	images, files := 0, 0
-	for _, at := range attachments {
-		if at.Kind == structs.AttachmentKindImage {
-			images++
-		} else {
-			files++
-		}
-	}
-	switch {
-	case images > 0 && files == 0 && images == 1:
-		return "Sent a photo"
-	case images > 0 && files == 0:
-		return fmt.Sprintf("Sent %d photos", images)
-	case files == 1 && images == 0:
-		return "Sent a file"
-	case files > 0 && images == 0:
-		return fmt.Sprintf("Sent %d files", files)
-	default:
-		return "Sent an attachment"
-	}
 }
 
 // GetConversationAttachment serves an attachment's bytes to a member of the
@@ -334,7 +307,7 @@ func (a *AppService) AttachConversationReference(w http.ResponseWriter, r *http.
 
 	ctx := r.Context()
 	attachment := db.NewAttachment{Kind: req.Kind}
-	preview := ""
+	var an announcement
 
 	switch req.Kind {
 	case structs.AttachmentKindTransaction:
@@ -352,7 +325,7 @@ func (a *AppService) AttachConversationReference(w http.ResponseWriter, r *http.
 		// do is carry the memo, and resolveTransactionCard is where that is
 		// enforced.
 		attachment.TxHash = &hash
-		preview = "Shared a transaction"
+		an = announcement{Line: "🧾 Shared a transaction", Spoken: "shared a transaction"}
 
 	case structs.AttachmentKindMerchant:
 		if req.LocationId == nil || *req.LocationId <= 0 {
@@ -365,7 +338,7 @@ func (a *AppService) AttachConversationReference(w http.ResponseWriter, r *http.
 			return
 		}
 		attachment.LocationId = req.LocationId
-		preview = "Shared " + location.Name
+		an = announcement{Line: "📍 Shared " + location.Name, Spoken: "shared " + location.Name}
 
 	case structs.AttachmentKindEvent:
 		eventId := strings.TrimSpace(req.EventId)
@@ -379,7 +352,7 @@ func (a *AppService) AttachConversationReference(w http.ResponseWriter, r *http.
 			return
 		}
 		attachment.EventId = &eventId
-		preview = "Shared " + event.Title
+		an = announcement{Line: "📅 Shared " + event.Title, Spoken: "shared " + event.Title}
 
 	case structs.AttachmentKindSupport:
 		if req.SupportRequestId == nil || *req.SupportRequestId <= 0 {
@@ -400,7 +373,7 @@ func (a *AppService) AttachConversationReference(w http.ResponseWriter, r *http.
 			return
 		}
 		attachment.SupportRequestId = req.SupportRequestId
-		preview = "About your message to SFLuv"
+		an = announcement{Line: "About your message to SFLuv", Spoken: "replied about your message to SFLuv"}
 
 	case structs.AttachmentKindLink:
 		target, problem := normalizeLinkURL(req.LinkURL)
@@ -416,15 +389,13 @@ func (a *AppService) AttachConversationReference(w http.ResponseWriter, r *http.
 		attachment.LinkDescription = meta.Description
 		attachment.LinkImageURL = meta.ImageURL
 		attachment.LinkSiteName = meta.SiteName
-		preview = meta.Title
-		if preview == "" {
-			preview = target
+		label := meta.Title
+		if label == "" {
+			label = linkHost(target)
 		}
+		an = announcement{Line: "🔗 " + label, Spoken: "shared a link, " + label}
 	}
-
-	if caption != "" {
-		preview = previewText(caption)
-	}
+	an = an.withCaption(caption)
 
 	msg, err := a.db.InsertMessageWithAttachments(ctx, &db.NewMessage{
 		ConversationId: conv.Id,
@@ -441,7 +412,7 @@ func (a *AppService) AttachConversationReference(w http.ResponseWriter, r *http.
 
 	msg.IsMine = true
 	a.hydrateMessages(ctx, conv, []*structs.Message{msg}, userId)
-	a.fanOutMessage(ctx, conv, msg, userId, preview)
+	a.fanOutMessage(ctx, conv, msg, userId, an)
 	writeJSON(w, http.StatusCreated, msg)
 }
 
@@ -793,7 +764,11 @@ func collapseWhitespace(value string) string {
 // the reason it returns metadata only and never the page.
 //
 // An unreachable or hostile URL returns empty metadata with 200, not an error:
-// the composer should fall back to sending a plain link, not block the message.
+// the client's card falls back to the bare URL rather than failing to draw.
+//
+// Since links became client-rendered, every device that shows a link asks for
+// it once, so results are cached here for twenty minutes (link_preview_cache.go)
+// — a link dropped into a group is scraped once, not once per member.
 func (a *AppService) PreviewLink(w http.ResponseWriter, r *http.Request) {
 	if _, ok := bulletinViewer(w, r); !ok {
 		return
@@ -813,7 +788,13 @@ func (a *AppService) PreviewLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	meta := a.fetchLinkMetadata(r.Context(), target)
+	// Shared by everybody asking for this URL at once, so it runs detached from
+	// any one of them: one member scrolling past the link must not cancel the
+	// scrape for the rest, nor leave its empty result cached for everyone.
+	// fetchLinkMetadata applies its own timeout.
+	meta := a.linkPreviews.fetch(target, func() linkMetadata {
+		return a.fetchLinkMetadata(context.WithoutCancel(r.Context()), target)
+	})
 	writeJSON(w, http.StatusOK, map[string]string{
 		"url":         target,
 		"title":       meta.Title,

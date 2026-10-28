@@ -24,6 +24,12 @@ type AppService struct {
 	minter       *MinterService
 	logger       *logger.LogCloser
 	clientConfig *clientconfig.Config
+	// pushes keeps each recipient's chat pushes in the order they were raised.
+	// Zero value is ready; see push_queue.go.
+	pushes pushQueue
+	// linkPreviews absorbs the burst of identical scrapes a shared link causes
+	// now that every client renders its own card. Zero value is ready.
+	linkPreviews linkPreviewCache
 	// Read-only. Used to compare our webhook bookkeeping against what the
 	// indexer actually holds; the Ponder database is never written to here.
 	ponderDb *db.PonderDB

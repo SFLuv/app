@@ -287,7 +287,7 @@ func (a *AppService) AddGroupMember(w http.ResponseWriter, r *http.Request) {
 	if title == "" {
 		title = "a group"
 	}
-	a.notifyNewMessageWithTitle(userId, target, conv.Id, title, "You were added to "+title)
+	a.notifyNewMessageWithTitle(userId, target, conv.Id, 0, title, "You were added to "+title)
 
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -427,7 +427,7 @@ func (a *AppService) notifyGroupMembers(ctx context.Context, conv *structs.Conve
 		if _, told := reached[id]; told {
 			continue
 		}
-		a.notifyNewMessageWithTitle(actorId, id, conv.Id, title, body)
+		a.notifyNewMessageWithTitle(actorId, id, conv.Id, 0, title, body)
 	}
 }
 
