@@ -123,12 +123,14 @@ func allowedOrigins() []string {
 func New(s *handlers.BotService, a *handlers.AppService, p *handlers.PonderService, mcpRegister func(chi.Router)) *chi.Mux {
 	r := chi.NewRouter()
 
+	// Before the logger, so every access-log line starts with the request id.
+	r.Use(requestID)
 	r.Use(middleware.Logger)
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   allowedOrigins(),
 		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
-		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token", "Access-Token", "X-Admin-Key", "X-SFLUV-Client-Platform", "X-SFLUV-Client-Version", "X-SFLUV-Client-Build", "X-SFLUV-Client-Installation"},
-		ExposedHeaders:   []string{"Link", "X-SFLUV-Auth-Reason"},
+		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token", "Access-Token", "X-Admin-Key", "X-SFLUV-Client-Platform", "X-SFLUV-Client-Version", "X-SFLUV-Client-Build", "X-SFLUV-Client-Installation", "X-Request-Id"},
+		ExposedHeaders:   []string{"Link", "X-SFLUV-Auth-Reason", "X-Request-Id"},
 		AllowCredentials: false,
 		MaxAge:           300,
 	}))
