@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"math/big"
 	"net/http"
@@ -15,6 +14,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/SFLuv/app/backend/db"
+	"github.com/SFLuv/app/backend/realtime"
 	"github.com/SFLuv/app/backend/structs"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -512,7 +512,7 @@ func (a *AppService) SendConversationMessage(w http.ResponseWriter, r *http.Requ
 	}
 	msg.IsMine = true
 	a.hydrateMessages(r.Context(), conv, []*structs.Message{msg}, userId)
-	a.fanOutMessage(r.Context(), conv, msg, userId, previewText(body))
+	a.fanOutMessage(r.Context(), conv, msg, userId, textAnnouncement(body))
 	writeJSON(w, http.StatusCreated, msg)
 }
 
@@ -527,8 +527,9 @@ func (a *AppService) SendConversationMessage(w http.ResponseWriter, r *http.Requ
 // Everything after the insert is best-effort. A failure here means somebody
 // learns about the message on their next poll instead of instantly; it must
 // never fail the send, which has already committed.
-func (a *AppService) fanOutMessage(ctx context.Context, conv *structs.ConversationRow, msg *structs.Message, senderId string, preview string) {
-	reached := a.publishMessage(ctx, conv, msg, senderId)
+func (a *AppService) fanOutMessage(ctx context.Context, conv *structs.ConversationRow, msg *structs.Message, senderId string, an announcement) {
+	notice := a.messageNotice(ctx, conv, msg, senderId, an)
+	reached := a.publishMessage(ctx, conv, msg, senderId, notice)
 
 	recipients := []string{}
 	if conv.IsGroup() {
@@ -542,20 +543,6 @@ func (a *AppService) fanOutMessage(ctx context.Context, conv *structs.Conversati
 		recipients = []string{other}
 	}
 
-	title := ""
-	if conv.IsGroup() {
-		// A group push needs the group's name, not the sender's: four people
-		// messaging one thread would otherwise read as four unrelated
-		// conversations in the tray.
-		title = strings.TrimSpace(conv.Title)
-		if title == "" {
-			title = "Group message"
-		}
-		if msg.SenderName != "" {
-			preview = msg.SenderName + ": " + preview
-		}
-	}
-
 	for _, id := range recipients {
 		if id == senderId {
 			continue
@@ -563,8 +550,58 @@ func (a *AppService) fanOutMessage(ctx context.Context, conv *structs.Conversati
 		if _, alreadyTold := reached[id]; alreadyTold {
 			continue
 		}
-		a.notifyNewMessageWithTitle(senderId, id, conv.Id, msg.Id, title, preview)
+		a.queueMessagePush(senderId, id, conv.Id, msg.Id, notice.Title, notice.Body, notice)
 	}
+}
+
+// messageNotice is the one wording of a new message, used by the push and by
+// the in-app banner alike. Telegram's shape:
+//
+//   - a group is titled with the group, and the line says who spoke —
+//     "Garden crew" / "Maria: 📷 Photo" — because four people in one thread
+//     would otherwise read as four unrelated conversations in the tray;
+//   - a direct thread is titled with the person, and the line is just what
+//     they sent, since the title already says who.
+//
+// The spoken form is "Maria said: hello" in both, for a screen reader.
+func (a *AppService) messageNotice(ctx context.Context, conv *structs.ConversationRow, msg *structs.Message, senderId string, an announcement) *realtime.Notice {
+	// hydrateMessages names the sender only in groups, where bubbles need it.
+	// A direct thread's notice needs it too — without it every in-app banner
+	// for a direct message was titled "New message".
+	senderName := strings.TrimSpace(msg.SenderName)
+	if senderName == "" {
+		// Detached from the request: the message has committed, so the sender
+		// hanging up now must not turn every notification about it into
+		// "SFLuv neighbor". The push path this replaced did its lookup on a
+		// background context for the same reason.
+		lookupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		if people, err := a.db.GetPublicUsers(lookupCtx, []string{senderId}); err == nil {
+			senderName = strings.TrimSpace(people[senderId].PublicName)
+		}
+		cancel()
+	}
+	if senderName == "" {
+		senderName = "SFLuv neighbor"
+	}
+
+	notice := &realtime.Notice{
+		Body:       an.Line,
+		Spoken:     senderName + " " + an.Spoken,
+		SenderId:   senderId,
+		SenderName: senderName,
+		IsGroup:    conv.IsGroup(),
+	}
+	if conv.IsGroup() {
+		notice.Title = strings.TrimSpace(conv.Title)
+		if notice.Title == "" {
+			notice.Title = "Group message"
+		}
+		notice.Body = senderName + ": " + an.Line
+		notice.IconAttachmentId = conv.IconAttachmentId
+	} else {
+		notice.Title = senderName
+	}
+	return notice
 }
 
 // AttachConversationPayment records an SFLUV payment the sender already made.
@@ -670,15 +707,12 @@ func (a *AppService) AttachConversationPayment(w http.ResponseWriter, r *http.Re
 	}
 	msg.IsMine = true
 
-	preview := "Sent you SFLUV"
+	confirmed := ""
 	if verified {
-		preview = fmt.Sprintf("Sent you %s SFLUV", formatBaseAmount(amount))
-	}
-	if note != "" {
-		preview += " — " + previewText(note)
+		confirmed = formatBaseAmount(amount)
 	}
 	a.hydrateMessages(r.Context(), conv, []*structs.Message{msg}, userId)
-	a.fanOutMessage(r.Context(), conv, msg, userId, preview)
+	a.fanOutMessage(r.Context(), conv, msg, userId, paymentAnnouncement(confirmed, note))
 	writeJSON(w, http.StatusCreated, msg)
 }
 
@@ -936,7 +970,17 @@ func (a *AppService) notifyNewMessage(senderId, recipientId string, conversation
 // two in-app banners for one message. Zero for a push with no message behind it,
 // such as being added to a group, and then the field is left out.
 func (a *AppService) notifyNewMessageWithTitle(senderId, recipientId string, conversationId, messageId int64, title, preview string) {
-	go func() {
+	a.queueMessagePush(senderId, recipientId, conversationId, messageId, title, preview, nil)
+}
+
+// queueMessagePush is notifyNewMessageWithTitle carrying the message's notice,
+// whose sender and group picture ride along in the push's data so the phone
+// can put the right face on it. Nil for pushes about something other than a
+// message, such as being added to a group.
+func (a *AppService) queueMessagePush(senderId, recipientId string, conversationId, messageId int64, title, preview string, notice *realtime.Notice) {
+	// Queued per recipient rather than fired as a bare goroutine, so one
+	// person's pushes reach Expo in the order the messages were stored.
+	a.pushes.enqueue(recipientId, func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 
@@ -980,6 +1024,32 @@ func (a *AppService) notifyNewMessageWithTitle(senderId, recipientId string, con
 		if messageId != 0 {
 			data["message_id"] = strconv.FormatInt(messageId, 10)
 		}
+		if notice != nil {
+			data["sender_id"] = notice.SenderId
+			data["sender_name"] = notice.SenderName
+			data["spoken"] = notice.Spoken
+			if notice.IsGroup {
+				data["is_group"] = "1"
+			}
+			if notice.IconAttachmentId != nil {
+				data["icon_attachment_id"] = strconv.FormatInt(*notice.IconAttachmentId, 10)
+			}
+			// Signed, expiring picture URLs for the iOS extension, which has
+			// no session. The group's is signed for THIS recipient, so it is
+			// re-checked against their membership when fetched.
+			if avatar := pushAvatarURL(notice.SenderId); avatar != "" {
+				data["sender_avatar_url"] = avatar
+			}
+			if notice.IconAttachmentId != nil {
+				if icon := pushGroupIconURL(*notice.IconAttachmentId, recipientId); icon != "" {
+					data["group_avatar_url"] = icon
+				}
+			}
+		}
+		options := expoPushOptions{ThreadId: "conversation-" + strconv.FormatInt(conversationId, 10)}
+		if notice != nil {
+			options.MutableContent = true
+		}
 
 		subscriptions, err := a.db.GetMobilePushSubscriptionsByUser(ctx, recipientId)
 		if err != nil {
@@ -999,11 +1069,11 @@ func (a *AppService) notifyNewMessageWithTitle(senderId, recipientId string, con
 				continue
 			}
 			seen[token] = struct{}{}
-			if _, err := sendExpoPushNotification(ctx, token, title, preview, data); err != nil {
+			if _, err := sendExpoPushNotificationWith(ctx, token, title, preview, data, options); err != nil {
 				a.logger.Logf("error sending message push to %s: %s", recipientId, err)
 			}
 		}
-	}()
+	})
 }
 
 // EditConversationMessage changes what a message says, within the edit window.

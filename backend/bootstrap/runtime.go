@@ -141,6 +141,10 @@ func WarnOnMissingPublicConfig(appLogger *logger.LogCloser) {
 		appLogger.Logf("warning: PUBLIC_BACKEND_URL is unset; volunteer event photo and organizer logo URLs will be root-relative and will not resolve for external clients")
 	}
 
+	if strings.TrimSpace(os.Getenv("PUSH_IMAGE_SECRET")) == "" && strings.TrimSpace(os.Getenv("PONDER_KEY")) == "" {
+		appLogger.Logf("warning: neither PUSH_IMAGE_SECRET nor PONDER_KEY is set; notification picture URLs are signed with a per-process key and will stop working across restarts and between instances")
+	}
+
 	if strings.TrimSpace(os.Getenv("VOLUNTEER_PROXY_KEY")) == "" {
 		appLogger.Logf("warning: VOLUNTEER_PROXY_KEY is unset; forwarded client IPs will be ignored and proxied volunteer signups will share one rate-limit bucket")
 	}

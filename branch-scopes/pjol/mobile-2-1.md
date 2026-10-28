@@ -1,6 +1,6 @@
 # Branch scope — `pjol/mobile-2-1`
 
-Oct 26–28 2026 · app + mobile-app + webpage · **16.5h** (9.3h stated for Oct 26, 7.2h measured for Oct 27–28)
+Oct 26–28 2026 · app + mobile-app + webpage · **18.5h** (9.3h stated for Oct 26, 9.2h measured for Oct 27–28)
 
 | Round | When | Hours | Basis |
 |---|---|---|---|
@@ -10,12 +10,13 @@ Oct 26–28 2026 · app + mobile-app + webpage · **16.5h** (9.3h stated for Oct
 | 6 | Oct 27 afternoon–evening | 3.9h | **measured** |
 | 7 | Oct 27 evening | ~~0.1h~~ → **0.2h** | **measured**, corrected in round 8 |
 | 8 | Oct 28 morning | 0.1h | **measured** |
-| | | **16.5h** | |
+| 9 | Oct 28 late morning–midday | 2.0h | **measured** |
+| | | **18.5h** | |
 
-Rounds 4 through 8 are measured end to end, by clustering **session-transcript
+Rounds 4 through 9 are measured end to end, by clustering **session-transcript
 message timestamps and commit timestamps together** on a 30-minute gap. Rounds
 1–3 are not, and the distinction matters more than the total: **9.3h of this
-figure is what somebody said about a day, and 7.2h is what a clock recorded.**
+figure is what somebody said about a day, and 9.2h is what a clock recorded.**
 Do not average them.
 
 Rounds 4 to 7 originally clustered messages alone, which undercounted Oct 27 by
@@ -1451,3 +1452,249 @@ cluster commits alongside messages.** Both are one command.
 committed. The commit itself lands a minute or two later and is not in the
 figure — bounded, named, and not chased, which is round 7's resolution applied
 on purpose rather than by oversight.
+
+---
+
+# Round 9 — Oct 28, late morning to midday
+
+**2.0h measured.** 11:23–13:23, messages and commits clustered on a 30-minute
+gap. One sitting with round 8's (2.13h from 11:15), split at round 8's commit
+the way round 6 was split from round 5, so round 8's figure is not restated.
+Measured to the last evidence point before this section was committed.
+
+Four subagents ran inside this sitting — a boot audit, a structural audit,
+research on the two native features, and an independent review of the diff —
+in parallel with the main thread. They are inside the measured span, not added
+to it: the clock does not run four times because four things were reading.
+
+The second request this branch has taken from somebody using the app rather
+than reading it, and most of it is the same disease in different places: things
+that unmounted when they should have hidden, state replaced when nothing had
+changed, and screens that waited for the slowest thing in boot before drawing
+what they already knew.
+
+## Features
+
+### Structural pass, and painting on cache at boot — 0.36h · mobile-app
+
+Two read-only audits of the shell (10,344 lines, 129 `useState`, 80 `useEffect`)
+were run before anything was changed, and every claim was checked against the
+code before it was acted on. What was fixed, each verified first:
+
+- **The whole app re-rendered every two seconds** on Wallet or Activity —
+  under an open chat too. `mergeTransactions` returned a new array, with every
+  row rebuilt, on every poll whether or not anything had moved. It now returns
+  the array it was given when nothing differs, and React skips the render.
+- **The wallet bootstrap re-ran on every foreground and every send**, and at
+  least twice on every cold start. Its effect depended on the hidden-wallets
+  ARRAY, which `syncWalletPreferences` replaced with an equal copy each call —
+  and the bootstrap calls it itself. Each re-run flipped the runtime to
+  loading, fetched the profile and the Privy provider again, re-ran wallet
+  discovery and set a new runtime object that re-fired everything keyed on it.
+  Equal values now keep the same object, and the effect keys on the Privy id
+  rather than the Privy user object.
+- **The W-9 modal flapped on a network blip**: a failed status poll set the
+  status to null, which closed the modal until the next good poll. A failure now
+  keeps the last good answer, and W-9 and merchant-mode status are replaced only
+  when they change — they had been re-rendering the shell every 8 and 15 seconds.
+- **The banner replayed, and the inbox jumped.** Both had one cause: the top bar
+  unmounted while a chat was open. The in-app banner lived in it, so one showing
+  when a chat opened replayed when it closed, and one for another conversation
+  that arrived mid-chat waited until you left. And the content area grew upward
+  by the bar's height in the same commit the chat began sliding in, so the inbox
+  jumped beside it. The top bar and content now sit in one wrapper that the chat
+  overlays; the bar stays mounted, inert and hidden from VoiceOver under the
+  chat; the banner hangs from a zero-height anchor in normal flow, which keeps it
+  below the Dynamic Island without a safe-area library.
+- **The dock popped in late** after Send or a chat, and everything lifted above
+  it jumped: it unmounted, re-measured on return, and reported no top edge while
+  gone. It is hidden now, not removed.
+- **Tab changes flickered**: the slide's start values were set in an effect after
+  the new tab had painted. Now a layout effect. Activity and Notifications also
+  stop animating their own entrance on top of the tab's.
+- **Two more stacked-Modal races** of the kind that froze the app before — the
+  reaction picker opened as the action sheet closed, and the OS share sheet
+  opened one frame after ours — now wait for `onDismiss` on iOS.
+- `showToast` is stable, so effects keyed on `onToast` stop re-running with
+  every shell render; history polls pause while a chat covers the screen; and
+  the composer follows the keyboard on its own curve instead of jumping.
+
+Boot now paints the person's own app on the first frame. The tabs, the dock and
+the bell had all waited for `appUser`, which arrived only after the whole wallet
+bootstrap and a second profile fetch. A per-user profile cache seeds it, the
+wallet's first page of history and the public merchant locations are cached
+beside the balance, and the bell's existing loading spinner — never visible on a
+cold start, because it hid while routing was pending — is now what says the
+background work is still going. Every cache is keyed to who is signed in and
+cleared on sign-out.
+
+### Native: share to SFLuv, and chat pushes with the sender's face — 0.22h · app + mobile-app
+
+**Share to SFLuv.** `expo-share-intent@5.1.1`, the last release for SDK 54,
+patched in three places: a separate target name, because by default the share
+sheet label is also the Xcode target name and "SFLuv" collides with the app's
+own target and is silently skipped; and two Android bugs in that version — a
+path traversal through the shared file's display name, and a crash on a provider
+that returns no cursor. Shares open the existing share sheet, so sharing in and
+sharing out are one surface; the shared copy is deleted when the sheet closes.
+
+**Chat pushes as communication notifications.** `expo-notifications` cannot do
+these, so a Notification Service Extension in Swift
+(`targets/notification-service/`, built in by `@bacons/apple-targets@4.0.7`)
+builds an `INSendMessageIntent` with the sender's picture, or the group's, and
+initials drawn on the app's colours when there is none. The extension has no
+session, so pushes carry signed, expiring picture URLs served by a new
+unauthenticated `GET /push-image`; a group's is signed for the recipient and
+re-checked against their membership when fetched.
+
+Version 2.3.0: both add native code, and with `runtimeVersion: appVersion` an
+over-the-air update carrying the share module to a 2.2 binary would fail at
+import. Prebuild was run in a scratch copy for both platforms and generates both
+targets with the right bundle ids, entitlements and display name. **Neither has
+been compiled** — that needs an EAS build, and the first iOS build must be run
+interactively so EAS can register the two new extension identifiers.
+
+### One wording for push and banner, and pictures everywhere — 0.14h · app + mobile-app
+
+Telegram's shape: a group titled with the group and the line naming who spoke,
+"Maria: 📷 Photo"; a direct thread titled with the person. The server builds it
+once and sends it as the push and as a `notice` on the socket event, so the two
+cannot drift — they had: photo-with-caption pushed as only the caption, a file
+pushed as "Sent a file", and every in-app banner for a direct message titled
+"New message", because the sender's name was only ever filled in for groups.
+VoiceOver reads "Maria said: hello". Banners, inbox rows, the chat header and
+the member list show the person's or group's picture over their initials.
+
+### Caching: chat text on disk, attachment bytes on demand — 0.11h · mobile-app
+
+The inbox and the newest 120 messages of the 30 most recent threads are kept per
+user, and draw on the first frame — no spinner opening Messages or a thread read
+before. Attachment bytes are fetched natively into a cache when asked for, and
+shown from disk after: photos up to 8 MB fetch themselves, anything else shows a
+"not downloaded" card with its size and a tap, and a file says when it is on the
+device. Your own sent photos are put in the cache at send time.
+
+### Server-side ordering — 0.08h · app
+
+`last_message_at` could move backwards: it is the inserting transaction's start
+time, and two overlapping sends commit in either order. It is now written with
+`GREATEST`, the inbox sort gains an id tiebreak, and each recipient's pushes go
+through a FIFO instead of racing as separate goroutines. Clients insert messages
+in id order rather than appending, so every copy of a thread agrees.
+
+### Links as text, rendered by the client — 0.08h · app + mobile-app
+
+No more card above the composer asking whether to send a link. What was typed is
+what is sent; every client linkifies it and draws the card under the bubble,
+from a cached lookup — the server caches scrapes for twenty minutes so a link in
+a busy group is fetched once.
+
+## The independent review, and what it caught
+
+Five read-only reviewers ran in parallel over the uncommitted diff, one slice
+each — the shell, the chat surfaces, the cache and link modules, the native
+extension and config, the backend — given what each change was meant to do and
+none of the reasoning behind it. The native reviewer type-checked the Swift with
+`swiftc` against the iOS 18.2 SDK and dry-ran both patches; the module reviewer
+fuzzed the link parser with half a million inputs. Every finding was checked
+against the code before it was acted on. Fixed:
+
+- **A merchant till opened as the owner's personal app on every cold start.**
+  The profile cache put `appUser` on screen before the bootstrap, and nothing
+  cached whether this device is a till — so for the whole boot a locked counter
+  showed chats, contacts, history and, once the wallet was up, Send. Routing now
+  waits for an owner's merchant-mode answer, which is asked for as soon as the
+  profile appears. Sharing into SFLuv is refused on a till outright.
+- **Cached threads left permanent holes.** The first page after opening kept
+  everything older from the cache, so a thread that had moved on by more than a
+  page showed the cached tail, a gap, then the page — and paginated backwards
+  past the gap forever, saving it back to disk. The first page of a visit is now
+  authoritative; messages sent or delivered while it was in flight survive it
+  (a long-standing bug that made a just-sent message vanish until the next poll).
+- **On Android a half-finished download counted as downloaded**, forever: the
+  platform writes straight to the destination. Downloads now land in a `.part`
+  file and move into place when complete.
+- **Links went to the wrong site.** `bbc.co.uk` linked to `bbc.co`, `música.com`
+  to `sica.com`; the half of an email address before the @ became a link.
+- Smaller: link taps skipped double-tap-to-like; one avatar error hid that
+  person's picture for the session; a stale thread's 404 could close the thread
+  just opened; shared-file clean-up could, on Android 9 and below, delete the
+  person's original rather than SFLuv's copy; link previews and other users'
+  threads accumulated on disk without bound; several sign-out paths bypassed the
+  cache clears (the clears now run whenever the signed-in person changes);
+  muted threads still popped in-app banners; the server's link cache did not
+  merge simultaneous requests and cached one client's disconnect as a failure;
+  signed picture URLs were written to the access log; the read pointer had the
+  same backwards-write race as `last_message_at`; the extension decoded avatars
+  at full size against a 24 MB memory limit, and could deliver twice at the
+  deadline.
+
+## Smaller fixes
+
+| Fix | Hours | Repo |
+|---|---|---|
+| Sanchez's latest merged (the app branch already carried the Sentry PR squashed, so it was the only one taken; mobile was a fast-forward); his new packages installed | 0.17h | app + mobile-app |
+| Timestamps visible at rest on an iPhone 16 — parked against the row, not the screen, so the list padding left the leading digit showing | 0.06h | mobile-app |
+| The inbox preview one or two messages behind — out-of-order responses from overlapping reads, the later one winning; the thread had the same race and could drop messages | 0.06h | mobile-app |
+| Paste: photos, links and text, through the system's paste button where iOS has one | 0.05h | mobile-app |
+| A staged payment silently dropped when a photo was staged after it | inside the above | mobile-app |
+
+## Totals
+
+| | Hours |
+|---|---|
+| Features | 0.99h |
+| Smaller fixes | 0.34h |
+| **Itemised** | **1.33h** |
+| The independent review, its fixes, this write-up and the commit | 0.68h |
+| **Measured** | **2.0h** |
+
+Itemised from the first appearance of each piece of work in the session
+transcript — the structural pass includes writing the three audit briefs that
+started it — so the split is a reading of when things began rather than a
+stopwatch on each. The measured total is the figure.
+
+## Volume
+
+| Repo | Files | Insertions | Deletions |
+|---|---|---|---|
+| app | 15 | 748 | 78 |
+| mobile-app | 32 | 4368 | 1149 |
+| **Total** | **47** | **5116** | **1227** |
+
+No migrations. One new route (`GET /push-image`). Four packages
+(`expo-share-intent@5.1.1`, `@bacons/apple-targets@4.0.7`,
+`@expo/prebuild-config@54.0.8`, `patch-package`) and two patches.
+
+## Needs a build, then a device
+
+Everything in this round type-checks and the backend builds and vets, but the
+native half has only been prebuilt, never compiled, and none of it has run:
+
+- **Share to SFLuv** on both platforms, cold start and warm. Android cold-start
+  shares are documented not to arrive in dev-client builds — test a release build.
+- **The notification extension**: a direct message and a group, with and without
+  a picture. One open question for a device: whether iOS adds the sender's name
+  to a group's line itself, in which case "Maria: " appears twice.
+- **The shell restructure**: open and close chats from the inbox and from a
+  banner; Send; the dock; the banner over a chat header.
+- **Boot from cache** as a returning user, and as somebody new on the same phone.
+
+## Known gaps
+
+- **Left from the review, named rather than fixed:** expo-share-intent 5.1.1's
+  own Android crash paths for video metadata (upstream, unchanged here); its
+  plugin replaces rather than merges the app's app-group entitlement, harmless
+  until a second group is added; both extensions build at version 1 unless EAS
+  remote versioning writes theirs too — a warning from App Store Connect, not a
+  rejection; and pasting replaces nothing when text is selected.
+- **Android pushes keep the app icon.** The equivalent there is a
+  MessagingStyle notification built by a native FCM service; `expo-notifications`
+  has no hook for it.
+- **Files cannot be pasted**, only photos, links and text — the clipboard API
+  exposes nothing else. Sharing to SFLuv is the route for a document.
+- **Still to do from the audits:** the dock bubble animates layout on the JS
+  thread; SendScreen's keyboard offsets are wrong; screens are not memoised at
+  the shell boundary; and the shell's data still lives in one component rather
+  than in stores. Each is real, and each is a larger change than this round
+  should make blind.

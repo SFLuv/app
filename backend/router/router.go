@@ -120,11 +120,30 @@ func allowedOrigins() []string {
 	return origins
 }
 
+// redactSignedURLs keeps signed picture URLs out of the access log.
+//
+// A /push-image URL is a bearer link: its query is the signature, and anybody
+// holding it can fetch that picture until it expires. The access logger prints
+// the full RequestURI, so every notification picture fetched would otherwise
+// leave a working link in the logs and wherever they are forwarded. The
+// handler reads r.URL, not RequestURI, so blanking the latter for the logger
+// changes nothing it sees.
+func redactSignedURLs(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/push-image" && r.URL.RawQuery != "" {
+			r = r.WithContext(r.Context())
+			r.RequestURI = "/push-image?(signed)"
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 func New(s *handlers.BotService, a *handlers.AppService, p *handlers.PonderService, mcpRegister func(chi.Router)) *chi.Mux {
 	r := chi.NewRouter()
 
 	// Before the logger, so every access-log line starts with the request id.
 	r.Use(requestID)
+	r.Use(redactSignedURLs)
 	r.Use(middleware.Logger)
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   allowedOrigins(),
@@ -1176,6 +1195,10 @@ func AddBulletinRoutes(r *chi.Mux, a *handlers.AppService) {
 	r.Put("/me/profile/avatar", withActiveAuth(a.PutMyProfileAvatar, a))
 	r.Delete("/me/profile/avatar", withActiveAuth(a.DeleteMyProfileAvatar, a))
 	r.Get("/users/{userId}/avatar", withActiveAuth(a.GetUserAvatar, a))
+	// The same pictures for a notification, fetched by the iOS extension that
+	// has no session. Unauthenticated by design; every URL is signed, expires,
+	// and names one picture — see push_images.go.
+	r.Get("/push-image", a.GetPushImage)
 
 	// The realtime socket. Not behind withChatBeta — see ServeRealtime for why
 	// the event that says "you now have chat" cannot be gated on having chat.

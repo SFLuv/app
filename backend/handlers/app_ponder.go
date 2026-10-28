@@ -934,7 +934,22 @@ func (a *AppService) PonderHookHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
+// expoPushOptions are the Expo push fields only some pushes need.
+type expoPushOptions struct {
+	// MutableContent lets the iOS Notification Service Extension rewrite the
+	// push before it is shown — which is how a chat push gets the sender's
+	// picture instead of the app icon.
+	MutableContent bool
+	// ThreadId groups pushes in the iOS tray: one stack per conversation
+	// rather than every message as its own row.
+	ThreadId string
+}
+
 func sendExpoPushNotification(ctx context.Context, token string, title string, body string, data map[string]string) (*expoPushTicket, error) {
+	return sendExpoPushNotificationWith(ctx, token, title, body, data, expoPushOptions{})
+}
+
+func sendExpoPushNotificationWith(ctx context.Context, token string, title string, body string, data map[string]string, options expoPushOptions) (*expoPushTicket, error) {
 	if strings.TrimSpace(token) == "" {
 		return nil, fmt.Errorf("empty Expo push token")
 	}
@@ -956,6 +971,12 @@ func sendExpoPushNotification(ctx context.Context, token string, title string, b
 		"body":  body,
 		"sound": "default",
 		"data":  data,
+	}
+	if options.MutableContent {
+		payload["mutableContent"] = true
+	}
+	if options.ThreadId != "" {
+		payload["threadId"] = options.ThreadId
 	}
 
 	reqBody, err := json.Marshal(payload)

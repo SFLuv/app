@@ -79,15 +79,20 @@ func (a *AppDB) InsertMessageWithAttachments(ctx context.Context, n *NewMessage,
 		}
 	}
 
+	// GREATEST for the reason given in InsertMessage: overlapping sends commit
+	// out of timestamp order, and a plain set can move the thread backwards.
 	if _, err := tx.Exec(ctx, `
-		UPDATE conversations SET last_message_at = $2 WHERE id = $1;
+		UPDATE conversations SET last_message_at = GREATEST(last_message_at, $2) WHERE id = $1;
 	`, n.ConversationId, m.CreatedAt); err != nil {
 		return nil, err
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE conversation_members
 		SET archived_at = NULL,
-			last_read_message_id = CASE WHEN user_id = $2 THEN $3 ELSE last_read_message_id END
+			-- GREATEST for the reason last_message_at uses it: two overlapping
+			-- sends commit in either order, and the later commit must not move
+			-- the sender's read pointer back to the earlier message.
+			last_read_message_id = CASE WHEN user_id = $2 THEN GREATEST(last_read_message_id, $3) ELSE last_read_message_id END
 		WHERE conversation_id = $1 AND left_at IS NULL;
 	`, n.ConversationId, n.SenderId, m.Id); err != nil {
 		return nil, err
