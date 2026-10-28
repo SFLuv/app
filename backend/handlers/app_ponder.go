@@ -587,6 +587,30 @@ func (a *AppService) SyncPonderPushSubscriptions(w http.ResponseWriter, r *http.
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// ReportPushDeviceSignedOut is a signed-out app telling us so — see
+// db.DeactivateSignedOutDevice. Unauthenticated by necessity, and answered
+// 204 whatever happened, so it says nothing about which tokens exist.
+func (a *AppService) ReportPushDeviceSignedOut(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Token          string `json:"token"`
+		InstallationID string `json:"installation_id"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<12)).Decode(&req); err != nil {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	disabled, err := a.db.DeactivateSignedOutDevice(r.Context(), req.Token, req.InstallationID)
+	if err != nil {
+		a.logger.Logf("error deactivating a signed-out device's pushes: %s", err)
+	}
+	for _, address := range disabled {
+		if err := a.deletePonderHooksForAddressIfUnused(r.Context(), address); err != nil {
+			a.logger.Logf("error cleaning up ponder hooks for signed-out address %s: %s", address, err)
+		}
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (a *AppService) GetPonderPushSubscriptions(w http.ResponseWriter, r *http.Request) {
 	userDid := utils.GetDid(r)
 	if userDid == nil {

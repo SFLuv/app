@@ -208,6 +208,36 @@ func (a *AppDB) SyncMobilePushSubscriptions(
 		if err := collectPushAddresses(rows, disabledAddresses); err != nil {
 			return nil, fmt.Errorf("error reading stale push tokens for installation: %w", err)
 		}
+
+		// Other accounts on this same installation, under any token. The
+		// token match above misses an account whose row predates a token
+		// change on this device, and that account went on receiving pushes on
+		// a phone it had been signed out of. One app install is one person
+		// signed in at a time, so whoever is syncing now is the only owner
+		// this installation should be notifying.
+		rows, err = tx.Query(ctx, `
+			UPDATE mobile_push_subscriptions
+			SET
+				active = FALSE,
+				device_registered = FALSE,
+				delete_date = $3::TIMESTAMPTZ,
+				delete_reason = $4::TEXT,
+				updated_at = NOW()
+			WHERE
+				owner <> $1
+			AND
+				installation_id_hash = $2
+			AND
+				active = TRUE
+			RETURNING
+				address;
+		`, owner, installationIDHash, time.Now().UTC().Add(accountDeletionGracePeriod), deleteReasonPushDeviceUnregistered)
+		if err != nil {
+			return nil, fmt.Errorf("error clearing other owners on installation: %w", err)
+		}
+		if err := collectPushAddresses(rows, disabledAddresses); err != nil {
+			return nil, fmt.Errorf("error reading other owners on installation: %w", err)
+		}
 	}
 
 	if len(normalizedAddresses) == 0 && (preferenceEnabled != nil || deviceRegistered != nil) {
@@ -809,4 +839,60 @@ func (a *AppDB) MarkMobilePushNotificationTicketReceipt(
 	}
 
 	return nil
+}
+
+// DeactivateSignedOutDevice stops every account's pushes to a device that says
+// nobody is signed in on it.
+//
+// Sign-out normally unregisters the device itself, but only through the
+// ordinary authenticated sync, so every sign-out that skips it — a session
+// that simply ended, the terms or deleted-account screens returning to login,
+// an unregister request lost to a bad connection — left that account's pushes
+// arriving on a phone nobody was signed in to. A signed-out app cannot
+// authenticate, so it reports itself here instead.
+//
+// Both the token and the installation id must match. Each is a secret only the
+// device and this server hold, and requiring both means a token alone cannot
+// silence somebody's notifications. Rows written before installation ids were
+// recorded have an empty hash and match on the token alone.
+//
+// Returns the addresses whose subscriptions were deactivated, for hook clean-up.
+func (a *AppDB) DeactivateSignedOutDevice(ctx context.Context, token string, installationID string) ([]string, error) {
+	normalizedToken := normalizePushToken(token)
+	installationIDHash, err := hashMobilePushInstallationID(installationID)
+	if err != nil {
+		return nil, err
+	}
+	if normalizedToken == "" || installationIDHash == "" {
+		return nil, nil
+	}
+	rows, err := a.db.Query(ctx, `
+		UPDATE mobile_push_subscriptions
+		SET
+			active = FALSE,
+			device_registered = FALSE,
+			delete_date = $3::TIMESTAMPTZ,
+			delete_reason = $4::TEXT,
+			updated_at = NOW()
+		WHERE
+			token = $1
+		AND
+			(installation_id_hash = $2 OR installation_id_hash = '')
+		AND
+			active = TRUE
+		RETURNING
+			address;
+	`, normalizedToken, installationIDHash, time.Now().UTC().Add(accountDeletionGracePeriod), deleteReasonPushDeviceUnregistered)
+	if err != nil {
+		return nil, fmt.Errorf("error deactivating a signed-out device: %w", err)
+	}
+	disabled := make(map[string]struct{})
+	if err := collectPushAddresses(rows, disabled); err != nil {
+		return nil, fmt.Errorf("error reading a signed-out device's subscriptions: %w", err)
+	}
+	addresses := make([]string, 0, len(disabled))
+	for address := range disabled {
+		addresses = append(addresses, address)
+	}
+	return addresses, nil
 }

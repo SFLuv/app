@@ -1,6 +1,6 @@
 # Branch scope — `pjol/mobile-2-1`
 
-Oct 26–28 2026 · app + mobile-app + webpage · **18.5h** (9.3h stated for Oct 26, 9.2h measured for Oct 27–28)
+Oct 26–28 2026 · app + mobile-app + webpage · **19.5h** (9.3h stated for Oct 26, 10.2h measured for Oct 27–28)
 
 | Round | When | Hours | Basis |
 |---|---|---|---|
@@ -11,12 +11,13 @@ Oct 26–28 2026 · app + mobile-app + webpage · **18.5h** (9.3h stated for Oct
 | 7 | Oct 27 evening | ~~0.1h~~ → **0.2h** | **measured**, corrected in round 8 |
 | 8 | Oct 28 morning | 0.1h | **measured** |
 | 9 | Oct 28 late morning–midday | 2.0h | **measured** |
-| | | **18.5h** | |
+| 10 | Oct 28 afternoon | 1.0h | **measured** |
+| | | **19.5h** | |
 
-Rounds 4 through 9 are measured end to end, by clustering **session-transcript
+Rounds 4 through 10 are measured end to end, by clustering **session-transcript
 message timestamps and commit timestamps together** on a 30-minute gap. Rounds
 1–3 are not, and the distinction matters more than the total: **9.3h of this
-figure is what somebody said about a day, and 9.2h is what a clock recorded.**
+figure is what somebody said about a day, and 10.2h is what a clock recorded.**
 Do not average them.
 
 Rounds 4 to 7 originally clustered messages alone, which undercounted Oct 27 by
@@ -1698,3 +1699,122 @@ native half has only been prebuilt, never compiled, and none of it has run:
   the shell boundary; and the shell's data still lives in one component rather
   than in stores. Each is real, and each is a larger change than this round
   should make blind.
+
+---
+
+# Round 10 — Oct 28, afternoon
+
+**1.0h measured.** 13:23–14:23, the same sitting as rounds 8 and 9 — no gap
+in it reaches thirty minutes — split at round 9's commit. Messages and commits
+clustered as before; measured to the last evidence point before this section
+was committed.
+
+The first build of round 9 in somebody's hands, and what they found.
+
+## Features
+
+### Pushes for accounts no longer signed in — 0.08h · app + mobile-app
+
+Some people kept getting notifications for an account they had signed out of.
+A new sign-in on the same phone already deactivated the previous account's
+subscriptions for that push token; what nothing covered was a phone left
+signed out. Sign-out unregisters through the ordinary authenticated sync, and
+several ways out skip it — a session that ends by itself, the terms and
+deleted-account screens returning to login, an unregister lost to a bad
+connection — while a signed-out app cannot authenticate to say so.
+
+So a signed-out app now reports itself to a new unauthenticated
+`POST /push/signed-out` once per signed-out spell, with its push token and its
+installation id, and every subscription matching both is deactivated. Both are
+secrets only the phone and the server hold, so a token alone cannot silence
+anybody, and the route can only turn notifications off. The sign-in sync also
+clears other accounts on the same installation whatever their token. Nobody is
+signed out by any of this; stale rows clear themselves the next time the
+current user's app syncs.
+
+### The message field's own Paste takes photos and files — 0.12h · mobile-app
+
+The "photo on your clipboard" chip is gone — it guessed at the clipboard,
+appeared for things that were not photos, and sat in the way. The composer's
+text field is now `@mattermost/react-native-paste-input`, a drop-in TextInput
+whose native Paste (long-press, or ⌘V) delivers images and files as well as
+text; they are staged like anything picked from the library.
+
+On iOS the library needs a call in the AppDelegate, which Expo generates, so a
+local config plugin (`plugins/withPasteInput.js`) adds it — by looking the class
+up at runtime rather than importing the pod, since a Swift `import` of an
+Objective-C pod needs a module map nothing here guarantees, and a missing one
+fails the whole build. The plugin also sets `RCT_NEW_ARCH_ENABLED` before
+autolinking: the library's podspec refuses to install without it, and Expo's
+Podfile loads every podspec before React Native sets it. Both prebuilt in a
+scratch copy; the inserted Swift type-checks against the iOS 18.2 SDK. The
+component is loaded defensively, so a binary without it keeps a plain text
+field instead of crashing.
+
+Version **2.4.0**: a new native module again — but no extension or entitlement,
+so none of the Apple-portal work 2.3.0 needed.
+
+### Opening a chat from a notification — 0.05h · mobile-app
+
+Two causes. On a cold start, a tapped conversation push was dropped outright
+whenever beta access had not loaded yet — "not known" was treated as "off", and
+the tap was marked handled either way. It is now held and opened once access is
+known. And on an ordinary tap the chat opened on its cached copy, which lacked
+the new message, while the first fetch — the one most likely to fail just after
+waking, with a token to refresh — was silent and not retried until the
+fifteen-second poll.
+
+The push's message id now travels with the tap. If the cached thread does not
+have that message, the chat paints its name and picture — from the cache, or
+the push's own title — over a spinner instead of stale messages, and a failed
+first fetch retries at 1.5, 3 and 6 seconds. An in-app banner's message is also
+merged into that thread's cached copy as it arrives, so tapping the banner opens
+on it. A thread no longer writes its pre-network state back to disk, and "Say
+hello." waits until the server has said the thread is empty.
+
+### Shared items: the sheet's bottom, and the photo at once — 0.03h · mobile-app
+
+The share sheet had no bottom padding, so its last row — the send row, for
+anything shared in from another app — sat under the home indicator. It now
+clears it on every phone. And a photo shared in appears in the chat the moment
+it opens: the sheet seeds the attachment cache with the local file and the
+message into the thread, instead of the chat fetching it and then downloading
+your own photo back.
+
+## Smaller fixes
+
+| Fix | Hours | Repo |
+|---|---|---|
+| Contacts' add button sat high — a hard-coded 108pt from before the dock lift was measured, with the lift then added on top; now the Messages button's positioning | 0.03h | mobile-app |
+| Answering two questions: whether the current build fixes the top bar vanishing before a chat slides in (it should — the bar is no longer unmounted — with the dock, the orbs and Android's bottom padding still showing the same family of artifact), and what Apple-portal work the two new extensions created | 0.57h | — |
+| Round 9's push and summary, after its measured end | 0.10h | app + mobile-app |
+
+The second row is mostly the time between messages, which the sitting counts.
+
+## Totals
+
+| | Hours |
+|---|---|
+| Features | 0.28h |
+| Smaller fixes | 0.70h |
+| **Itemised** | **0.98h** |
+| Reading the code behind each report, verification, this write-up and the commit | 0.01h |
+| **Measured** | **1.0h** |
+
+## Volume
+
+| Repo | Files | Insertions | Deletions |
+|---|---|---|---|
+| app | 3 | 114 | 0 |
+| mobile-app | 13 | 506 | 139 |
+| **Total** | **16** | **620** | **139** |
+
+No migrations. One new route (`POST /push/signed-out`). One package
+(`@mattermost/react-native-paste-input@2.0.1`) and one local config plugin.
+
+## Needs a build
+
+2.4.0, for the paste input: long-press Paste of a photo and of a PDF in a chat,
+and ⌘V with a hardware keyboard, on both platforms. Sign out by an unusual
+route — let a session lapse, or decline the terms — and check the old account's
+pushes stop. Tap a chat push from a cold start and from the background.
