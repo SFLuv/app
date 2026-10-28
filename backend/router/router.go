@@ -1130,7 +1130,13 @@ func AddBulletinRoutes(r *chi.Mux, a *handlers.AppService) {
 	r.Post("/conversations/{id}/messages", withChatBeta(a.SendConversationMessage))
 	r.Post("/conversations/{id}/payments", withChatBeta(a.AttachConversationPayment))
 	r.Post("/conversations/{id}/read", withChatBeta(a.MarkConversationRead))
+	// "Delete for me" is archiving, which already restores the thread intact
+	// when a new message arrives — see the 1.76 migration.
 	r.Post("/conversations/{id}/archive", withChatBeta(a.ArchiveConversation))
+	r.Post("/conversations/{id}/mute", withChatBeta(a.MuteConversation))
+	// A soft delete that hides the thread from everybody. Any member may do it.
+	r.Delete("/conversations/{id}", withChatBeta(a.DeleteConversationForEveryone))
+	r.Post("/conversations/{id}/group/leave", withChatBeta(a.LeaveGroup))
 
 	// Replies and reactions.
 	r.Post("/conversations/{id}/messages/{messageId}/reactions", withChatBeta(a.ToggleMessageReaction))

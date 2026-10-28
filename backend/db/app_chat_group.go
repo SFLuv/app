@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/SFLuv/app/backend/structs"
 	"github.com/jackc/pgx/v5"
@@ -399,4 +400,104 @@ func (a *AppDB) InsertSystemMessage(ctx context.Context, conversationId int64, a
 		Kind:           structs.MessageKindSystem,
 		Body:           body,
 	})
+}
+
+// ── Conversation-level actions ───────────────────────────────────────────────
+
+// MuteConversation silences a thread's pushes until a time, or clears the mute
+// when until is nil.
+//
+// A timestamp rather than a mode: "an hour", "a day" and "forever" are all
+// deadlines, and forever is simply a long one. One nullable column answers
+// "should this buzz" with a single comparison, where a mode column beside a
+// deadline would have two states that can disagree.
+func (a *AppDB) MuteConversation(ctx context.Context, conversationId int64, userId string, until *time.Time) error {
+	tag, err := a.db.Exec(ctx, `
+		UPDATE conversation_members SET muted_until = $3
+		WHERE conversation_id = $1 AND user_id = $2 AND left_at IS NULL;
+	`, conversationId, userId, until)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrConversationNotFound
+	}
+	return nil
+}
+
+// ConversationIsMuted reports whether a member currently has it silenced.
+func (a *AppDB) ConversationIsMuted(ctx context.Context, conversationId int64, userId string) (bool, error) {
+	var muted bool
+	err := a.db.QueryRow(ctx, `
+		SELECT COALESCE(muted_until > NOW(), FALSE)
+		FROM conversation_members
+		WHERE conversation_id = $1 AND user_id = $2;
+	`, conversationId, userId).Scan(&muted)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	return muted, err
+}
+
+// DeleteConversationForEveryone hides a thread from every member.
+//
+// A soft delete: the rows stay so a report filed against a message in it can
+// still be answered. See the 1.76 migration for why that trade is made in this
+// direction.
+//
+// Any member may do it, which is the capability the product asked for. It is
+// recorded in deleted_by, so who did it is answerable afterwards rather than
+// anonymous.
+func (a *AppDB) DeleteConversationForEveryone(ctx context.Context, conversationId int64, userId string) error {
+	tag, err := a.db.Exec(ctx, `
+		UPDATE conversations c
+		SET deleted_at = NOW(), deleted_by = $2
+		WHERE c.id = $1
+			AND c.deleted_at IS NULL
+			AND EXISTS (
+				SELECT 1 FROM conversation_members m
+				WHERE m.conversation_id = c.id AND m.user_id = $2 AND m.left_at IS NULL
+			);
+	`, conversationId, userId)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrConversationNotFound
+	}
+	return nil
+}
+
+// DeleteOwnMessagesIn soft-deletes everything one person said in a thread, for
+// "delete my messages and leave".
+//
+// deleted_by is set, so each one renders as the sender's own tombstone rather
+// than vanishing — the thread keeps its shape for the people still in it, and a
+// reply to something this person said does not become a non-sequitur.
+func (a *AppDB) DeleteOwnMessagesIn(ctx context.Context, conversationId int64, userId string) error {
+	_, err := a.db.Exec(ctx, `
+		UPDATE messages
+		SET deleted_at = NOW(), deleted_by = $2
+		WHERE conversation_id = $1 AND sender_id = $2 AND deleted_at IS NULL;
+	`, conversationId, userId)
+	return err
+}
+
+// OtherMemberReadState is how far the other people in a thread have read, which
+// is what "Delivered" and "Read" are derived from.
+//
+// The MINIMUM across the other members, not the maximum: in a group, "read"
+// should mean everybody has seen it, and taking the furthest-along member would
+// mark a message read because one person of five opened the thread.
+func (a *AppDB) OtherMemberReadState(ctx context.Context, conversationId int64, userId string) (int64, error) {
+	var lastRead *int64
+	err := a.db.QueryRow(ctx, `
+		SELECT MIN(last_read_message_id)
+		FROM conversation_members
+		WHERE conversation_id = $1 AND user_id <> $2 AND left_at IS NULL;
+	`, conversationId, userId).Scan(&lastRead)
+	if err != nil || lastRead == nil {
+		return 0, err
+	}
+	return *lastRead, nil
 }

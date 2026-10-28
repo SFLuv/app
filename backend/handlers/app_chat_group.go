@@ -8,9 +8,11 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/SFLuv/app/backend/db"
+	"github.com/SFLuv/app/backend/realtime"
 	"github.com/SFLuv/app/backend/structs"
 	"github.com/go-chi/chi/v5"
 )
@@ -480,4 +482,130 @@ func (a *AppService) UploadGroupIcon(w http.ResponseWriter, r *http.Request) {
 
 	a.publishConversationUpdated(ctx, conv.Id, userId)
 	writeJSON(w, http.StatusOK, map[string]int64{"icon_attachment_id": attachmentId})
+}
+
+// ── Conversation actions ─────────────────────────────────────────────────────
+
+// MuteForever is what the client sends for "mute until I unmute".
+//
+// A hundred years rather than NULL-means-forever, because NULL already means
+// "not muted" and one column cannot carry both. Long enough that the
+// distinction never matters, finite so the comparison stays a comparison.
+const MuteForever = 100 * 365 * 24 * time.Hour
+
+// MuteConversation silences a thread's pushes, or clears the mute.
+func (a *AppService) MuteConversation(w http.ResponseWriter, r *http.Request) {
+	userId, ok := bulletinViewer(w, r)
+	if !ok {
+		return
+	}
+	conv, ok := a.loadMemberConversation(w, r, userId)
+	if !ok {
+		return
+	}
+
+	var req structs.MuteConversationRequest
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<12)).Decode(&req); err != nil {
+		bulletinError(w, http.StatusBadRequest, "bad_request", "Could not read that request.")
+		return
+	}
+
+	var until *time.Time
+	if req.Minutes > 0 {
+		capped := time.Duration(req.Minutes) * time.Minute
+		if capped > MuteForever {
+			capped = MuteForever
+		}
+		when := time.Now().Add(capped)
+		until = &when
+	}
+
+	if err := a.db.MuteConversation(r.Context(), conv.Id, userId, until); err != nil {
+		if errors.Is(err, db.ErrConversationNotFound) {
+			bulletinError(w, http.StatusNotFound, "not_found", "That conversation could not be found.")
+			return
+		}
+		a.logger.Logf("error muting conversation %d: %s", conv.Id, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"muted": until != nil})
+}
+
+// DeleteConversationForEveryone hides a thread from every member.
+//
+// A soft delete — the rows stay for moderation. See the 1.76 migration for why
+// that direction was chosen, and note that this is a capability any member has
+// over everybody else's copy, which is why who used it is recorded.
+func (a *AppService) DeleteConversationForEveryone(w http.ResponseWriter, r *http.Request) {
+	userId, ok := bulletinViewer(w, r)
+	if !ok {
+		return
+	}
+	conv, ok := a.loadMemberConversation(w, r, userId)
+	if !ok {
+		return
+	}
+
+	ctx := r.Context()
+	// Captured before the delete: afterwards the membership read this needs is
+	// still there, but the conversation is not loadable, and an event nobody
+	// receives is worse than one sent a moment early.
+	members, _ := a.db.GetConversationMemberIds(ctx, conv.Id)
+
+	if err := a.db.DeleteConversationForEveryone(ctx, conv.Id, userId); err != nil {
+		if errors.Is(err, db.ErrConversationNotFound) {
+			bulletinError(w, http.StatusNotFound, "not_found", "That conversation could not be found.")
+			return
+		}
+		a.logger.Logf("error deleting conversation %d: %s", conv.Id, err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	if a.realtime != nil && len(members) > 0 {
+		a.realtime.Publish(members, realtime.Event{
+			Kind:           realtime.EventConversationUpdated,
+			ConversationId: conv.Id,
+			Data:           map[string]any{"deleted": true, "actor_id": userId},
+		})
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// LeaveGroup leaves a group, optionally tombstoning everything the caller said
+// in it first.
+//
+// "Delete my messages and leave" tombstones rather than erases, so the thread
+// keeps its shape for the people still in it and a reply to something this
+// person said does not become a non-sequitur.
+func (a *AppService) LeaveGroup(w http.ResponseWriter, r *http.Request) {
+	userId, conv, ok := a.loadGroupForMember(w, r)
+	if !ok {
+		return
+	}
+
+	var req structs.LeaveGroupRequest
+	// An empty body is a plain leave; only the flag needs reading.
+	_ = json.NewDecoder(io.LimitReader(r.Body, 1<<12)).Decode(&req)
+
+	ctx := r.Context()
+	if req.DeleteMyMessages {
+		if err := a.db.DeleteOwnMessagesIn(ctx, conv.Id, userId); err != nil {
+			a.logger.Logf("error clearing own messages in group %d: %s", conv.Id, err)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+	}
+
+	if err := a.db.RemoveGroupMember(ctx, conv.Id, userId, userId); err != nil {
+		a.writeGroupError(w, err, conv.Id)
+		return
+	}
+
+	if _, err := a.db.InsertSystemMessage(ctx, conv.Id, userId, a.publicName(ctx, userId)+" left"); err != nil {
+		a.logger.Logf("error recording a departure from group %d: %s", conv.Id, err)
+	}
+	a.publishConversationUpdated(ctx, conv.Id, userId)
+	w.WriteHeader(http.StatusNoContent)
 }

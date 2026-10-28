@@ -103,7 +103,7 @@ func (a *AppDB) GetConversationForMember(ctx context.Context, conversationId int
 		SELECT `+conversationColumns+`, m.last_read_message_id, m.role
 		FROM conversations c
 		JOIN conversation_members m ON m.conversation_id = c.id AND m.user_id = $2 AND m.left_at IS NULL
-		WHERE c.id = $1;
+		WHERE c.id = $1 AND c.deleted_at IS NULL;
 	`, conversationId, userId), &c)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrConversationNotFound
@@ -187,6 +187,10 @@ type InboxRow struct {
 	LatestReaction *structs.ConversationReaction
 	// Who reacted, so the handler can mark the reader's own.
 	LatestReactionUserId string
+	// Whether this member has the thread muted right now.
+	Muted bool
+	// How far the OTHER members have read, for the sender's "Read" state.
+	OtherLastReadId int64
 }
 
 // ListConversations is the inbox: threads that have at least one message,
@@ -208,7 +212,12 @@ func (a *AppDB) ListConversations(ctx context.Context, userId string) ([]InboxRo
 			),
 			lm.id, lm.conversation_id, lm.sender_id, lm.kind, lm.body, lm.tx_hash,
 			lm.amount_sfluv_base::text, lm.payment_verified, lm.created_at, lm.reply_to_id,
-			lr.emoji, lr.reactor_id, lr.reacted_at, lr.excerpt
+			lr.emoji, lr.reactor_id, lr.reacted_at, lr.excerpt,
+			COALESCE(m.muted_until > NOW(), FALSE),
+			COALESCE((
+				SELECT MIN(o.last_read_message_id) FROM conversation_members o
+				WHERE o.conversation_id = c.id AND o.user_id <> $1 AND o.left_at IS NULL
+			), 0)
 		FROM conversation_members m
 		JOIN conversations c ON c.id = m.conversation_id
 		JOIN LATERAL (
@@ -233,7 +242,12 @@ func (a *AppDB) ListConversations(ctx context.Context, userId string) ([]InboxRo
 			ORDER BY r.created_at DESC
 			LIMIT 1
 		) lr ON TRUE
-		WHERE m.user_id = $1 AND m.archived_at IS NULL AND m.left_at IS NULL
+		WHERE m.user_id = $1
+			AND m.archived_at IS NULL
+			AND m.left_at IS NULL
+			-- Deleted for everybody. A soft delete, so the rows are still here
+			-- for moderation; they are simply not anybody's conversation now.
+			AND c.deleted_at IS NULL
 		ORDER BY c.last_message_at DESC
 		LIMIT 200;
 	`, userId)
@@ -256,7 +270,7 @@ func (a *AppDB) ListConversations(ctx context.Context, userId string) ([]InboxRo
 			&c.LastReadId, &c.MyRole, &r.Unread, &r.MemberCount,
 			&last.Id, &last.ConversationId, &last.SenderId, &last.Kind, &last.Body, &last.TxHash,
 			&last.AmountSfluvBase, &last.PaymentVerified, &last.CreatedAt, &last.ReplyToId,
-			&emoji, &reactorId, &reactedAt, &excerpt,
+			&emoji, &reactorId, &reactedAt, &excerpt, &r.Muted, &r.OtherLastReadId,
 		); err != nil {
 			return nil, err
 		}
@@ -279,6 +293,7 @@ func (a *AppDB) CountUnreadConversations(ctx context.Context, userId string) (in
 	var n int
 	err := a.db.QueryRow(ctx, `
 		SELECT COUNT(*) FROM conversation_members m
+		JOIN conversations c ON c.id = m.conversation_id AND c.deleted_at IS NULL
 		WHERE m.user_id = $1
 			AND m.archived_at IS NULL
 			AND m.left_at IS NULL

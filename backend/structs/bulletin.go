@@ -399,6 +399,15 @@ type Conversation struct {
 	// Always set, including in the inbox, because the row shows "4 people".
 	MemberCount int `json:"member_count,omitempty"`
 
+	// Muted means this member has silenced its pushes. The thread still
+	// appears and still counts as unread — muting is about the phone buzzing,
+	// not about hiding the conversation.
+	Muted bool `json:"muted,omitempty"`
+	// How far the other members have read, so the sender's own messages can
+	// show Delivered or Read. The MINIMUM across them in a group — see
+	// OtherMemberReadState for why.
+	OtherLastReadId int64 `json:"other_last_read_message_id,omitempty"`
+
 	Post        *ConversationPostChip `json:"post"`
 	LastMessage *Message              `json:"last_message"`
 	// Set only when the newest thing in the thread is a reaction rather than a
@@ -485,6 +494,21 @@ type GroupMemberRequest struct {
 	UserId string `json:"user_id"`
 	// One of the ConversationRole constants. Only meaningful on a role change.
 	Role string `json:"role"`
+}
+
+// MuteConversationRequest silences a thread for a while.
+//
+// Minutes rather than a timestamp, so the client does not have to agree with
+// the server about the current time. Zero or absent clears the mute; a very
+// large value is "forever", which the client sends rather than the server
+// inventing a sentinel.
+type MuteConversationRequest struct {
+	Minutes int `json:"minutes"`
+}
+
+// LeaveGroupRequest leaves a group, optionally tombstoning what you said in it.
+type LeaveGroupRequest struct {
+	DeleteMyMessages bool `json:"delete_my_messages"`
 }
 
 // EditMessageRequest changes a message's text.
