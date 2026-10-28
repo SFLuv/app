@@ -1,23 +1,30 @@
 # Branch scope — `pjol/mobile-2-1`
 
-Oct 26–27 2026 · app + mobile-app + webpage · **15.1h** (9.3h stated for Oct 26, 5.8h measured for Oct 27)
+Oct 26–27 2026 · app + mobile-app + webpage · **15.4h** (9.3h stated for Oct 26, 6.1h measured for Oct 27)
 
 | Round | When | Hours | Basis |
 |---|---|---|---|
 | 1–3 | Oct 26 | 9.3h | stated, with 6.2h measured as an upper bound |
 | 4 | Oct 27 morning | 0.4h | **measured** |
 | 5 | Oct 27 afternoon | 1.6h | **measured** |
-| 6 | Oct 27 afternoon–evening | 3.8h | **measured** |
-| | | **15.1h** | |
+| 6 | Oct 27 afternoon–evening | 3.9h | **measured** |
+| 7 | Oct 27 evening | 0.1h | **measured** |
+| | | **15.4h** | |
 
-Rounds 4, 5 and 6 are measured end to end, from the session transcript's message
-timestamps clustered on a 30-minute gap. Rounds 1–3 are not, and the distinction
-matters more than the total: **9.3h of this figure is what somebody said about a
-day, and 5.8h is what a clock recorded.** Do not average them.
+Rounds 4 through 7 are measured end to end, from the session transcript's
+message timestamps clustered on a 30-minute gap. Rounds 1–3 are not, and the
+distinction matters more than the total: **9.3h of this figure is what somebody
+said about a day, and 6.1h is what a clock recorded.** Do not average them.
 
-Rounds 5 and 6 are one continuous sitting (12:34–18:00, 5.45h measured) split at
+Rounds 5 and 6 are one continuous sitting (12:34–18:05, 5.53h measured) split at
 the point round 5 was written up. Round 6 is the remainder, appended rather than
 folded in, so round 5's figure is never silently restated.
+
+Oct 27's measured sittings are 0.40h, 5.53h and 0.14h, plus one at 12:03 that
+measures 0.00h — 6.07h in all, which is the 6.1h above. The rounded per-round
+rows add to 6.0h instead; where a measured total and an itemised split disagree
+the measured total wins, and here the 0.1h gap is rounding in the rows rather
+than work that went missing.
 
 Round 1's two prospective entries are superseded by round 2 — see there. Round
 2's total is extended by round 3, which measured the evening sitting running 28
@@ -947,10 +954,19 @@ that were not specified, which is where all three bugs above were found.
 
 # Round 6 — Oct 27 afternoon and evening
 
-**3.8h measured.** 14:12–18:00, the rest of the sitting round 5 cut at 14:12,
+**3.9h measured.** 14:12–18:05, the rest of the sitting round 5 cut at 14:12,
 from the session transcript's message timestamps clustered on a 30-minute gap
-(`measure_sittings.py`). The script now reports that sitting as a single
-5.45h span; round 5 claimed 1.6h of it, and this is the remainder.
+(`measure_sittings.py`). The script reports that sitting as a single 5.53h span;
+round 5 claimed 1.63h of it, and this is the remainder.
+
+> **Revised by round 7 from 3.8h, and the reason is worth keeping.** This round
+> was written up while its own sitting was still open, so the last message the
+> script could see was the one before the write-up: 18:00, giving 5.45h for the
+> sitting and 3.8h for the remainder. The sitting's real last message is 18:05,
+> the commit that carried this section. The correction is to where the
+> measurement stopped, not to the work — same sitting, five more minutes of it
+> visible. **A round cannot measure its own end while it is still running**, and
+> the fix is to re-run the script after the round's commits land.
 
 Two things in the figure are named rather than buried, because both are time
 that did not go into features:
@@ -963,7 +979,10 @@ that did not go into features:
   until legacy dev caches were cleared. Diagnosis and clearing, not product
   work.
 
-Writing *this* section is after 18:00 and is not counted.
+Writing *this* section and committing the round are inside the span, not after
+it: the write-up ran up to the 18:05 commits, which is where the sitting ends.
+As first written this said the time was after 18:00 and uncounted. It is
+counted, and it is most of the five minutes round 7 added.
 
 The polish round: Messages goes from working to finished, and then the bug
 reports start coming back from the device rather than from reading the code.
@@ -1189,11 +1208,11 @@ per member to avoid a 404 per member.
 | Features | 4.1h |
 | Smaller fixes | 1.0h |
 | **Itemised** | **5.1h** |
-| **Measured** | **3.8h** |
+| **Measured** | **3.9h** |
 
-The itemised split overshoots the measurement by 1.3h, and the measurement
+The itemised split overshoots the measurement by 1.2h, and the measurement
 wins. Recording both rather than scaling the items down to fit: the overshoot is
-itself the finding — ten features and nine fixes in 3.8h means most of these
+itself the finding — ten features and nine fixes in 3.9h means most of these
 items took single-digit minutes, and rounding each to a plausible-looking 0.1
 or 0.2 inflates the sum by more than a third. The same mistake as the 0.5h floor
 in round 2, at a smaller scale.
@@ -1202,13 +1221,20 @@ in round 2, at a smaller scale.
 
 | Repo | Files | Insertions | Deletions |
 |---|---|---|---|
-| app | 15 | 1,210 | 31 |
+| app | 15 | 1,492 | 31 |
 | mobile-app | 27 | 5,099 | 700 |
 | webpage | 6 | 130 | 139 |
-| **Total** | **48** | **6,439** | **870** |
+| **Total** | **48** | **6,721** | **870** |
 
 2 migrations (1.75 message management, 1.76 conversation actions) · 6 new routes
 · schema at 1.76.
+
+580 of app's insertions are this document. The code is 14 files, +912/−29.
+Counted as 1,210 when first written, for the same reason the hours were: the
+document was still being written when its own volume was measured. Round 7's
+additions to the document are deliberately *not* folded back in — a document
+that counts itself never converges — so **+912/−29 is the figure to quote** and
+the row above is the code plus the document as it stood at the end of round 6.
 
 ## Known gaps
 
@@ -1221,3 +1247,60 @@ in round 2, at a smaller scale.
 - **The in-app banner replaces rather than queues.** Five messages at once show
   the last one; a queue would mean twenty-one seconds of banners, and the last
   is the only one still worth reading by then.
+
+---
+
+# Round 7 — Oct 27 evening
+
+**0.1h measured.** 19:02–19:10, a sitting of its own — the 57-minute gap after
+round 6's 18:05 commit closes that round under the 30-minute rule. No code
+changed. This is the bookkeeping pass: re-running `measure_sittings.py` once
+round 6's commits had landed, and correcting the three things round 6 could not
+see about itself.
+
+| Fix | Hours | Repo |
+|---|---|---|
+| Re-measured round 6 after its own commits landed: 3.8h → 3.9h, sitting 5.45h → 5.53h, Oct 27 5.8h → 6.1h, branch 15.1h → 15.4h | 0.05h | app |
+| app volume corrected, 1,210 → 1,492 insertions, with the document's own 580 named separately from the 912 lines of code | 0.05h | app |
+| Round 6's "writing this section is not counted" withdrawn — it is inside the span | — | app |
+
+## What this round is for
+
+Three figures in round 6 were measured from inside the round they described, and
+all three were short by the same mechanism: **a round cannot see its own tail.**
+The hours stopped at the last message before the write-up; the volume counted the
+document while it was half written. Neither is a judgement call that went wrong,
+and nothing was inflated — both errors ran downward — which is exactly why they
+would have survived a reading. Re-running the measurement after the commit is
+what catches them, and that is the practice this round adds.
+
+Recorded as its own round rather than folded into round 6, per the convention
+that an earlier figure in this folder is never silently restated. Round 6 keeps
+the superseded figure with a note pointing here.
+
+And this round has the blind spot it is describing. 0.14h is the span up to the
+measurement; the commit carrying this section falls after it, so the next run of
+the script will show this sitting slightly longer. Left at 0.1h rather than
+chased: the correction would be bookkeeping about bookkeeping, and it is written
+down here so it is not discovered a third time as though it were news.
+
+## Verified, not assumed
+
+- `app`, `mobile-app` and `webpage`: `git status` clean, nothing unpushed, all
+  three on `pjol/mobile-2-1`.
+- Volume re-derived from `git diff --shortstat` across the round's real
+  boundaries (`bb83e8b..HEAD`, `f13650f^..HEAD`, `51f4961..HEAD`) rather than
+  carried forward. `mobile-app` (27 files, +5,099/−700) and `webpage` (6 files,
+  +130/−139) came back unchanged; only `app` had moved.
+- The 48 files / +6,721 / −870 total is the sum of the three re-derived rows.
+
+## Known gap
+
+**Oct 26 and Oct 27 are not in an invoice yet.**
+`branch-scopes/report-2026-10-26.csv` covers the service period 2026-10-19 to
+2026-10-24 and is closed. This branch's 15.4h — 9.3h stated for Oct 26, 6.1h
+measured for Oct 27 — belongs to the next period, whose end date is the
+contractor's to set, so no CSV was written for it here. The figures are ready
+for one: the rounds table at the top of this document is the itemisation, and
+the stated and measured halves are already separated the way that report's
+METHOD and WEAKNESSES rows need them.
