@@ -16,11 +16,14 @@ New `userIdParam(r)` (`handlers/path_params.go`) decodes the parameter. Used by 
 five `{userId}` routes: public profile, avatar, unblock, remove group member, set
 group member role.
 
-## Why "could not be found" (backend)
+## Messaging someone without chat (backend)
 
-`POST /conversations` deliberately gives one answer for a deactivated person, a block
-and someone outside the chat beta. It now logs which one, with the request id, so a
-report from Sentry can be explained from the Railway logs.
+`POST /conversations` gave the same "could not be found" for a deactivated person, a
+block and someone outside the chat beta, so testers took the beta gate for a broken
+feature. Someone without chat now gets 422 `chat_not_enabled`: "You can't message this
+person: they don't have chat enabled yet. An SFLuv admin can turn it on for them in the
+admin panel." (Not 403: the app reads any 403 as an auth failure.) Deactivated and
+blocked still read "could not be found". Every refusal is logged with the request id.
 
 ## Volume
 

@@ -254,18 +254,24 @@ func (a *AppService) StartConversation(w http.ResponseWriter, r *http.Request) {
 	// Both people need the chat beta. The caller's own access was checked by the
 	// route guard; this is the other half, and without it somebody in the beta
 	// could pull anybody into a conversation they have no way to read.
-	//
-	// Reported as "could not be found", exactly as a blocked or deactivated
-	// person is, rather than as "they are not in the beta". The distinction is
-	// deliberate: a different answer here would let anyone enumerate the beta's
-	// membership by trying to message people.
 	inChatBeta := a.BetaFeatureAllowed(ctx, req.UserId, structs.BetaFeatureChat)
 	if !active || blocked || !inChatBeta {
-		// The caller sees one answer for all three; the log says which, so a
-		// "could not be found" report can be explained from its request id.
+		// Logged with the request id, so a refusal reported from the app can be
+		// explained from the Railway logs.
 		a.logger.Logf("[%s] start conversation refused: active=%t blocked=%t in_chat_beta=%t",
 			middleware.GetReqID(ctx), active, blocked, inChatBeta)
+	}
+	if !active || blocked {
 		bulletinError(w, http.StatusNotFound, "not_found", "That person could not be found.")
+		return
+	}
+	// Said plainly while chat is a beta. This used to read "could not be found"
+	// too, so nobody could work out who is in the beta by trying to message
+	// people; testers took it for a broken feature instead, and knowing who
+	// has chat is worth less than knowing why a message will not start.
+	if !inChatBeta {
+		bulletinError(w, http.StatusUnprocessableEntity, "chat_not_enabled",
+			"You can't message this person: they don't have chat enabled yet. An SFLuv admin can turn it on for them in the admin panel.")
 		return
 	}
 
