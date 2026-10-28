@@ -242,7 +242,7 @@ func (a *AppService) GetUserAvatar(w http.ResponseWriter, r *http.Request) {
 	if _, ok := bulletinViewer(w, r); !ok {
 		return
 	}
-	targetId := strings.TrimSpace(chi.URLParam(r, "userId"))
+	targetId := userIdParam(r)
 	if targetId == "" {
 		w.WriteHeader(http.StatusNotFound)
 		return

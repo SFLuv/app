@@ -14,7 +14,6 @@ import (
 	"github.com/SFLuv/app/backend/db"
 	"github.com/SFLuv/app/backend/realtime"
 	"github.com/SFLuv/app/backend/structs"
-	"github.com/go-chi/chi/v5"
 )
 
 const groupTitleMaxRunes = 60
@@ -299,7 +298,7 @@ func (a *AppService) RemoveGroupMember(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	target := strings.TrimSpace(chi.URLParam(r, "userId"))
+	target := userIdParam(r)
 	if target == "" {
 		bulletinError(w, http.StatusBadRequest, "bad_request", "Choose somebody to remove.")
 		return
@@ -329,7 +328,7 @@ func (a *AppService) SetGroupMemberRole(w http.ResponseWriter, r *http.Request) 
 	if !ok {
 		return
 	}
-	target := strings.TrimSpace(chi.URLParam(r, "userId"))
+	target := userIdParam(r)
 	if target == "" {
 		bulletinError(w, http.StatusBadRequest, "bad_request", "Choose somebody.")
 		return

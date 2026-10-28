@@ -17,6 +17,7 @@ import (
 	"github.com/SFLuv/app/backend/db"
 	"github.com/SFLuv/app/backend/structs"
 	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
 )
 
 const (
@@ -260,6 +261,10 @@ func (a *AppService) StartConversation(w http.ResponseWriter, r *http.Request) {
 	// membership by trying to message people.
 	inChatBeta := a.BetaFeatureAllowed(ctx, req.UserId, structs.BetaFeatureChat)
 	if !active || blocked || !inChatBeta {
+		// The caller sees one answer for all three; the log says which, so a
+		// "could not be found" report can be explained from its request id.
+		a.logger.Logf("[%s] start conversation refused: active=%t blocked=%t in_chat_beta=%t",
+			middleware.GetReqID(ctx), active, blocked, inChatBeta)
 		bulletinError(w, http.StatusNotFound, "not_found", "That person could not be found.")
 		return
 	}

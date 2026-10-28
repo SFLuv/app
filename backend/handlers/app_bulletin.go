@@ -1009,7 +1009,7 @@ func (a *AppService) GetPublicUserProfile(w http.ResponseWriter, r *http.Request
 	if !ok {
 		return
 	}
-	targetId := chi.URLParam(r, "userId")
+	targetId := userIdParam(r)
 	blocked, err := a.db.UsersAreBlocked(r.Context(), viewer, targetId)
 	if err != nil {
 		a.logger.Logf("bulletin: unexpected error: %s", err)
