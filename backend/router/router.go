@@ -1199,6 +1199,10 @@ func AddBulletinRoutes(r *chi.Mux, a *handlers.AppService) {
 	// has no session. Unauthenticated by design; every URL is signed, expires,
 	// and names one picture — see push_images.go.
 	r.Get("/push-image", a.GetPushImage)
+	// A signed-out app reporting itself, so accounts no longer signed in on a
+	// device stop notifying it. Unauthenticated by design; it needs both of the
+	// device's own identifiers and can only switch notifications OFF.
+	r.Post("/push/signed-out", a.ReportPushDeviceSignedOut)
 
 	// The realtime socket. Not behind withChatBeta — see ServeRealtime for why
 	// the event that says "you now have chat" cannot be gated on having chat.
