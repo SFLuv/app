@@ -136,6 +136,24 @@ func (a *AppService) ListMyConversations(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// The last message's attachments, which are what its preview line names —
+	// "📷 Photo", "📎 menu.pdf", "📍 Shared Café Réveille". The inbox never
+	// loaded them, so a photo or a file sent with no caption previewed as an
+	// empty line: the client's wording for every kind was there, with nothing
+	// to word. Metadata only, one query for the page; without it the inbox
+	// still loads, with the old blank previews.
+	lastIds := make([]int64, 0, len(rows))
+	for i := range rows {
+		if last := rows[i].Last; last != nil && !last.Deleted {
+			lastIds = append(lastIds, last.Id)
+		}
+	}
+	lastAttachments, err := a.db.GetMessageAttachments(ctx, lastIds)
+	if err != nil {
+		a.logger.Logf("error loading inbox attachments for %s: %s", userId, err)
+		lastAttachments = nil
+	}
+
 	out := make([]*structs.Conversation, 0, len(rows))
 	for i := range rows {
 		row := &rows[i]
@@ -182,6 +200,20 @@ func (a *AppService) ListMyConversations(w http.ResponseWriter, r *http.Request)
 		}
 
 		if conv.LastMessage != nil {
+			if cards, found := lastAttachments[conv.LastMessage.Id]; found {
+				// Only the names a preview prints. The thread resolves the rest
+				// — a transaction's amount, a support request's status — when it
+				// is opened.
+				for j := range cards {
+					switch cards[j].Kind {
+					case structs.AttachmentKindMerchant:
+						a.resolveMerchantCard(ctx, &cards[j])
+					case structs.AttachmentKindEvent:
+						a.resolveEventCard(ctx, &cards[j])
+					}
+				}
+				conv.LastMessage.Attachments = cards
+			}
 			conv.LastMessage.IsMine = conv.LastMessage.SenderId == userId
 			// The inbox row for a group says who spoke last, so a preview is
 			// attributable without opening the thread.
@@ -207,13 +239,13 @@ func (a *AppService) GetMessagingSummary(w http.ResponseWriter, r *http.Request)
 	if !ok {
 		return
 	}
-	n, err := a.db.CountUnreadConversations(r.Context(), userId)
+	unread, err := a.db.ListUnreadConversations(r.Context(), userId)
 	if err != nil {
 		a.logger.Logf("error counting unread conversations for %s: %s", userId, err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, http.StatusOK, structs.MessagingSummary{UnreadConversations: n})
+	writeJSON(w, http.StatusOK, structs.MessagingSummary{UnreadConversations: len(unread), Unread: unread})
 }
 
 // --- Opening a thread ---------------------------------------------------------------
@@ -604,6 +636,26 @@ func (a *AppService) messageNotice(ctx context.Context, conv *structs.Conversati
 	return notice
 }
 
+// noticeAsCalled is a notice's wording with the sender called `name` — what
+// one recipient saved them as. The rest of the line is the server's one
+// wording, so only the name is swapped, and only where messageNotice put it:
+// a direct thread's title, the start of a group's line, the start of the
+// spoken form.
+func noticeAsCalled(notice *realtime.Notice, title, preview, name string) (string, string, string) {
+	spoken := notice.Spoken
+	if rest, ok := strings.CutPrefix(spoken, notice.SenderName+" "); ok {
+		spoken = name + " " + rest
+	}
+	if notice.IsGroup {
+		if rest, ok := strings.CutPrefix(preview, notice.SenderName+": "); ok {
+			preview = name + ": " + rest
+		}
+	} else if title == notice.SenderName {
+		title = name
+	}
+	return title, preview, spoken
+}
+
 // AttachConversationPayment records an SFLUV payment the sender already made.
 // The transfer is checked against the indexer: it must go from a wallet the
 // sender owns to a wallet the other person owns. If the indexer has not seen it
@@ -899,7 +951,16 @@ func (a *AppService) MarkConversationRead(w http.ResponseWriter, r *http.Request
 	if !ok {
 		return
 	}
-	if err := a.db.MarkConversationRead(r.Context(), conv.Id, userId); err != nil {
+	// Optional: the newest message the client had on screen. No body is a
+	// client from before it, and reads to the thread's newest as it always did.
+	var body struct {
+		UpTo int64 `json:"up_to"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<10)).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	if err := a.db.MarkConversationRead(r.Context(), conv.Id, userId, body.UpTo); err != nil {
 		a.logger.Logf("bulletin: unexpected error: %s", err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
@@ -1025,9 +1086,24 @@ func (a *AppService) queueMessagePush(senderId, recipientId string, conversation
 			data["message_id"] = strconv.FormatInt(messageId, 10)
 		}
 		if notice != nil {
+			senderName, spoken := notice.SenderName, notice.Spoken
+			// What the recipient saved the sender as, if they did, wins — name
+			// and picture — as it does everywhere the app draws a person
+			// (contactOverrides.ts). A push titled with somebody's profile name
+			// when you call them "Mom" is the phone disagreeing with itself.
+			contact, err := a.db.ContactForAccount(ctx, recipientId, notice.SenderId)
+			if err != nil {
+				a.logger.Logf("error loading %s's contact for %s: %s", recipientId, notice.SenderId, err)
+			}
+			if contact != nil {
+				if name := strings.TrimSpace(contact.Name); name != "" && name != senderName {
+					title, preview, spoken = noticeAsCalled(notice, title, preview, name)
+					senderName = name
+				}
+			}
 			data["sender_id"] = notice.SenderId
-			data["sender_name"] = notice.SenderName
-			data["spoken"] = notice.Spoken
+			data["sender_name"] = senderName
+			data["spoken"] = spoken
 			if notice.IsGroup {
 				data["is_group"] = "1"
 			}
@@ -1035,9 +1111,14 @@ func (a *AppService) queueMessagePush(senderId, recipientId string, conversation
 				data["icon_attachment_id"] = strconv.FormatInt(*notice.IconAttachmentId, 10)
 			}
 			// Signed, expiring picture URLs for the iOS extension, which has
-			// no session. The group's is signed for THIS recipient, so it is
-			// re-checked against their membership when fetched.
-			if avatar := pushAvatarURL(notice.SenderId); avatar != "" {
+			// no session. The group's, and a contact's picture, are signed for
+			// THIS recipient: a group's is re-checked against their membership
+			// when fetched, and a contact's against their owning it.
+			if contact != nil && contact.HasAvatar {
+				if avatar := pushContactAvatarURL(contact.Id, recipientId); avatar != "" {
+					data["sender_avatar_url"] = avatar
+				}
+			} else if avatar := pushAvatarURL(notice.SenderId); avatar != "" {
 				data["sender_avatar_url"] = avatar
 			}
 			if notice.IconAttachmentId != nil {

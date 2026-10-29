@@ -1,6 +1,6 @@
 # Branch scope — `pjol/mobile-2-1`
 
-Oct 26–28 2026 · app + mobile-app + webpage · **19.8h** (9.3h stated for Oct 26, 10.5h measured for Oct 27–28)
+Oct 26–29 2026 · app + mobile-app + webpage, and the board deck in animations · **22.7h** (11.7h stated: 9.3h for Oct 26 and 2.4h for Oct 28's presentation practice and board presentation; 11.0h measured for Oct 27–29)
 
 | Round | When | Hours | Basis |
 |---|---|---|---|
@@ -13,13 +13,16 @@ Oct 26–28 2026 · app + mobile-app + webpage · **19.8h** (9.3h stated for Oct
 | 9 | Oct 28 late morning–midday | 2.0h | **measured** |
 | 10 | Oct 28 afternoon | 1.0h | **measured** |
 | 11 | Oct 28 late afternoon | 0.3h | **measured** |
-| | | **19.8h** | |
+| 12 | Oct 28 late afternoon–evening | 2.4h | **stated** — presentation practice and board presentation — with 0.07h measured |
+| 13 | Oct 29 midday, with Oct 28's last six minutes | 0.5h | **measured** |
+| | | **22.7h** | |
 
-Rounds 4 through 11 are measured end to end, by clustering **session-transcript
-message timestamps and commit timestamps together** on a 30-minute gap. Rounds
-1–3 are not, and the distinction matters more than the total: **9.3h of this
-figure is what somebody said about a day, and 10.5h is what a clock recorded.**
-Do not average them.
+Rounds 4 through 11, and 13, are measured end to end, by clustering
+**session-transcript message timestamps and commit timestamps together** on a
+30-minute gap. Rounds 1–3 are not, and nor is most of round 12, which is a
+presentation practice and a board presentation that no transcript can see. The
+distinction matters more than the total: **11.7h of this figure is what
+somebody said, and 11.0h is what a clock recorded.** Do not average them.
 
 Rounds 4 to 7 originally clustered messages alone, which undercounted Oct 27 by
 0.93h — see round 8. Commits are now part of the evidence set because work done
@@ -34,6 +37,10 @@ Oct 27's measured sittings are 1.34h (10:42–12:03), 5.53h (12:34–18:05) and
 carries for the day. The rounded per-round rows add to 7.0h; where a measured
 total and an itemised split disagree the measured total wins, and the 0.1h is
 rounding in the rows rather than work that went missing.
+
+With round 13 the rounded rows add to 22.6h against the 22.7h above. The
+difference is the same kind of rounding in the rows — 0.09h on Oct 27 and 0.07h
+on Oct 28, less the 0.03h that round 13 rounds up — not work that went missing.
 
 Round 1's two prospective entries are superseded by round 2 — see there. Round
 2's total is extended by round 3, which measured the evening sitting running 28
@@ -1943,3 +1950,325 @@ text copied from Notes (which should paste as words); then the same on
 Android. Press + with the keyboard up. Change a contact's picture, your own and
 a group's — the picker should be up at once, and a large photo should save.
 Raise a toast from a contact's page, and copy an address there.
+
+# Round 12 — Oct 28, late afternoon and evening
+
+**2.4h, nearly all of it stated.** 15:56–18:40 is one continuous stretch: a
+board-deck sitting from 15:56, presentation practice from 16:00 to 18:00, and
+the board presentation from 18:00 to 18:40. The owner gave the times for the
+practice and the presentation, and no transcript can see either one. Round 11's
+16:09–16:27 sits inside the practice window and is counted once, in round 11.
+
+## How these hours were recorded
+
+| Window | Hours | Basis |
+|---|---|---|
+| 15:56–16:00 | 0.07h | measured — the board-deck session's transcript |
+| 16:00–18:00 — presentation practice | 2.00h | **stated** |
+| 18:00–18:40 — board presentation | 0.67h | **stated** |
+| less 16:09–16:27, round 11 | −0.29h | measured, and counted there |
+| | **2.44h → 2.4h** | |
+
+Three pieces of work left evidence inside the practice window:
+
+- Round 11's app work, 16:09–16:28. This includes the commit and push at 16:28,
+  which round 11 left uncounted.
+- A board-deck sitting, 16:00–16:03.
+- A second board-deck sitting, 17:29–17:45.
+
+The deck changes were asked for between run-throughs. All three pieces are part
+of the two stated hours, not added to them: the window is wall-clock time, and
+anything done inside it is counted once.
+
+Sanchez's deck commit at 17:14 is not evidence of this time. It is their work,
+and as in rounds 8–11, nobody else's commit counts toward these hours.
+
+Measured to the end of the board presentation, at 18:40. This write-up began at
+18:40 and is not included.
+
+## Features
+
+### Presentation practice — 1.40h · stated
+
+16:00–18:00, minus round 11 and the two deck sittings inside it. The deck
+changes were asked for between run-throughs, so the line between practice and
+deck work is approximate. The total is not.
+
+### The board presentation — 0.67h · stated
+
+18:00–18:40.
+
+### The board deck: months on every slide, and jumping to a slide from the presenter window — 0.26h · animations
+
+17:29–17:45. The deck is not on this branch: it is in `SFLUV/animations`, under
+`board/deck/`.
+
+- Sanchez's preview of the current slide in the presenter window was pulled in.
+- Every slide now shows the months it covers, on a Jun–Oct strip. A slide can
+  cover one month or a range. A range for work still in development runs open
+  and dashed, like the map's planned lines. The you-are-here strip moved left to
+  make room.
+- The presenter window now uses the deck's navigation keys, through one shared
+  `navKey`. Before, it took only the arrows and clicker keys. Now it also takes
+  a slide number then Enter, and Home and End. Its counter reads "Go to 9 ↵"
+  while a number is being typed.
+
+Not yet committed in `animations` at the time of writing.
+
+### The deck goes into git, without secrets or footage — 0.12h · animations
+
+15:56–16:03. A `.gitignore` of 78 lines keeps these out of the repository:
+
+- `.env` files and key files;
+- data exported from the SFLuv MCP that contains wallet addresses;
+- final renders, which are shared elsewhere or rendered again from source;
+- outside footage, and anything cut from it.
+
+What is kept in git: the components, the timelines, and the brand assets they
+use. Committed as `016c767`, the repository's initial commit, at 16:03.
+
+## The deck's earlier sittings add no hours
+
+The deck was built in one Claude session that ran across all three days. Its
+Oct 26 and Oct 27 sittings fall inside windows this document already counts:
+
+| Deck sitting | Span | Already inside |
+|---|---|---|
+| Oct 26, 13:26–15:05 and 15:46–15:58 | 1.85h | round 1's stated 11:00–16:00 |
+| Oct 26, 16:41–16:44 | 0.05h | round 2's 16:08–17:37, which notes it as "a 3-minute blip in another project" |
+| Oct 27, 13:15–14:05 | 0.83h | round 5's measured 12:34–18:05 |
+
+The owner was running the deck session and the app sessions at the same time.
+Adding the deck's spans would count the same clock twice, so they add **0.0h**.
+They are listed here so the work is on record:
+
+- **Oct 26:** the brief. A 15–20 minute timeline of the platform's milestones
+  since July, cut down to the big ones and placed in the larger story.
+- **Oct 27:** the deck, built in the chosen style:
+  - two sections renamed, to "creating merchant self-redeeming tools" and
+    "architecture upgrades";
+  - the SFLUV logo on the Bera → Celo migration slide;
+  - the partners slide corrected.
+
+## Totals
+
+| | Hours |
+|---|---|
+| Presentation practice | 1.40h |
+| Board presentation | 0.67h |
+| Board deck, Oct 28 | 0.38h |
+| Board deck, Oct 26–27 | 0.00h — counted in rounds 1, 2 and 5 |
+| **Round 12** | **2.44h**, shown as **2.4h**: 2.38h stated, 0.07h measured |
+
+Each item is rounded on its own. Rounded, they add to 2.45h; the total of 2.44h
+is unrounded.
+
+## Volume
+
+| Repo | Files | Insertions | Deletions |
+|---|---|---|---|
+| app | 1 | 143 | 5 |
+| animations | 8 | 161 | 34 |
+| **Total** | **9** | **304** | **39** |
+
+In `app`, only this document changed. In `animations`:
+
+- the `.gitignore`, committed;
+- seven deck files, +83/−34, not yet committed.
+
+The initial commit holds 490 files and +244,486 lines. Nearly all of that is
+the rest of `animations`, which this branch does not cover. `board/deck/` is 19
+of those files, +2,892 lines: the deck as built on Oct 26 and 27, whose time is
+covered above.
+
+No migrations, no new routes, nothing needing a build.
+
+# Round 13 — Oct 29, midday
+
+**0.5h measured** (0.47h): two stretches.
+
+| Window | Hours | Basis |
+|---|---|---|
+| Oct 28, 18:40–18:46 | 0.10h | measured: round 12's write-up, which round 12 left out |
+| Oct 29, 11:43–12:05 | 0.37h | measured: this round's work, up to the last evidence point before this section |
+| | **0.47h → 0.5h** | |
+
+Messages and PJ's commits are clustered as before. Within the Oct 29 sitting,
+each feature is timed by when its tool calls and file writes happened. That
+split is approximate below 0.05h.
+
+This round starts by pulling Sanchez's newest work. The app repo has nothing
+new: `origin/main` matches this branch exactly. Mobile-app fast-forwards three
+commits on `sanchezo/sentry-mobile`:
+
+- a dead-tap report fix;
+- the picture you gave a contact, everywhere that person appears;
+- the name you gave a contact, in every chat surface, including an open chat.
+
+They are his work and are not counted here. Then come four reports.
+
+## Features
+
+### A chat counts as read the moment it opens — 0.13h · app + mobile-app
+
+Opening a chat could take up to fifteen seconds to clear its unread state. The
+read was sent only after the thread's own two fetches returned. Then the shell
+re-counted the Messages badge at the same moment the read was sent, so the
+count usually came back before the read had landed. The badge kept the old
+number until the next poll.
+
+`src/services/pendingReads.ts` now holds reads until the server confirms them.
+
+- **When a read is recorded.** As soon as a thread is on screen, including from
+  the cache before any network. It records the newest message showing, and
+  records again when a newer message arrives.
+- **What uses it.** The inbox rows and the Messages badge both apply it, so both
+  clear immediately.
+- **Why a watermark.** A conversation counts as read while its newest message is
+  no newer than the recorded one. A message that arrives after the read shows
+  as unread again on its own. A server reply from before the read cannot bring
+  the dot back.
+- **Until the server confirms.** The read is sent, then retried with backoff and
+  again each time the app returns to the foreground. An unconfirmed read is kept
+  on disk, so one made just before closing the app still shows and still sends
+  on the next launch. A confirmed read is dropped once a server reply agrees
+  with it.
+- **Scope.** Reads belong to the signed-in person and are cleared on sign-out,
+  like the chat cache.
+
+The backend changes are backwards compatible:
+
+- `POST /conversations/{id}/read` takes an optional `up_to`, the newest message
+  the client showed. The server never marks read past it, so a read sent from a
+  cached view does not cover a message that reached the server but not the
+  phone. A request with no body marks read to the newest message, as before.
+- `GET /me/messaging-summary` also lists each unread conversation with its
+  newest unread message. The client can then remove its own unconfirmed reads
+  from the count exactly. The count is unchanged, and older clients read only
+  the count.
+
+Against an older server the badge shows the plain count, as it did before.
+
+### Pushes show the picture and name you gave someone — 0.12h · app + mobile-app
+
+The report was that chat pushes don't show the person's or the chat's picture.
+Since Sanchez's change, the app draws the picture you gave a contact wherever
+that person appears. The push still fetched only the sender's own profile
+picture. A contact you had given a photo, who had none of their own, appeared
+in the app with your photo and in the push as initials.
+
+The push now does what the app does, for each recipient:
+
+- The recipient's contact for the sender is looked up, the same one the app
+  uses (favourites first, then the oldest).
+- If you gave them a picture, the push carries a signed URL for it. This is a
+  new `push-image` kind, `c`, checked against the recipient still owning that
+  contact.
+- If you gave them a name, the push uses it: a direct thread's title, the
+  "Maria: " at the start of a group's line, and the spoken form.
+
+In-app banners make the same swap on the device, because the socket's notice is
+one wording shared by every member.
+
+`publicBackendBase` read only two of the three settings that every other public
+URL here uses. A deployment that set its public address only as
+`MCP_PUBLIC_BASE_URL` sent no picture URLs at all. It now uses
+`utils.PublicBackendBase`.
+
+`/push-image` is live in production. It returns its own empty-body 404, not the
+router's "404 page not found", so the route itself was not the cause. This round
+could not see whether production sets a public URL.
+
+The extension now logs each fallback to the unified log, for Console.app under
+the subsystem `SFLuv.NotificationService`:
+
+- the push carried no picture URL;
+- a picture download failed, with its status;
+- a picture did not decode;
+- iOS refused the communication-notification style.
+
+The fallbacks tell the two failures apart:
+
+- **Initials where a picture should be** means the server half failed.
+- **The SFLuv logo** means iOS refused the communication-notification style.
+
+The extension's setup matches Apple's guide: the entitlement and
+`NSUserActivityTypes` on the app, the interaction donated before the content is
+updated, the direction set to incoming, and the content handler called once.
+
+### Names in an open chat — 0.05h · mobile-app
+
+Sanchez's change covers this report: renaming a contact re-renders an open
+chat's header, its bubbles, reply quotes, chat info and the inbox. Two gaps
+remained.
+
+- **Edits could be lost.** The contact card saved its fields only when they lost
+  focus. A back tap or swipe while still typing unmounted the screen first, so
+  the rename could be lost without anyone noticing. Leaving the card now saves
+  any edit still in a field. The shell also stopped re-opening the card when
+  that late save came back.
+- **Banners.** In-app banners now use the contact name too.
+
+Not covered: when the other person changes their *own* profile name, an open
+chat picks it up on its next refresh, up to fifteen seconds later.
+
+### "📷 Photo" in the inbox, as in the push — 0.04h · app + mobile-app
+
+Pushes already described attachments: "📷 Photo", "📎 menu.pdf",
+"📍 Shared Café Réveille". The inbox did not, because its query never loaded the
+last message's attachments. A photo or file sent without a caption previewed as
+an empty line, or just "You: ". The client already had labels for every kind,
+with nothing to label.
+
+The inbox now loads attachment metadata for every last message in one query,
+and fills in the merchant and event names the preview prints. A video is named
+for what it is ("🎥 Video") in both places, not by its file name. The inbox
+label now counts photos, videos and files together the way the push does: two
+photos and a PDF are "3 attachments", not "3 photos".
+
+## Smaller items
+
+| Item | Hours | Repo |
+|---|---|---|
+| Pulled Sanchez's newest on both repos; app had nothing new | 0.01 | both |
+| Review of the diff. It caught the inbox's unread callback, which had become an inline arrow; `loadInbox` depends on it, so the inbox would have refetched on every shell render. Now a stable callback | 0.02 | mobile-app |
+
+## Totals
+
+| | Hours |
+|---|---|
+| Features | 0.34h |
+| Smaller items | 0.03h |
+| Round 12's write-up, Oct 28 | 0.10h |
+| **Measured** | **0.47h**, shown as **0.5h** |
+
+## Volume
+
+| Repo | Files | Insertions | Deletions |
+|---|---|---|---|
+| app (code) | 6 | 236 | 42 |
+| mobile-app | 9 | 620 | 43 |
+| **Total** | **15** | **856** | **85** |
+
+This document is not counted, and neither are Sanchez's three merged commits.
+No migrations and no new routes; one new kind on an existing route
+(`push-image?k=c`). Nothing is committed yet.
+
+## Needs a deploy and a build
+
+- **Backend deploy:** pushes with your contact's picture and name, the fallback
+  public URL, attachment previews in the inbox, video wording, `up_to` on reads,
+  and the per-conversation unread list. The preview fix reaches installed 2.4.0
+  phones as soon as it deploys.
+- **A rebuilt binary:** for everything in mobile-app. There is no production
+  build yet, so nothing is sent over the air; each change ships in the next
+  binary.
+
+To test:
+
+- Open an unread chat. The badge and the inbox row should clear at once, and
+  stay clear in airplane mode, until the read is sent.
+- Give a contact a photo and a name. Have them message you with the app
+  closed, then check the push.
+- Rename a contact and tap Back while still typing.
+- Send a photo with no caption. The inbox should say "📷 Photo".

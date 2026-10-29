@@ -579,6 +579,15 @@ type MessagesPage struct {
 
 type MessagingSummary struct {
 	UnreadConversations int `json:"unread_conversations"`
+	// The same conversations, each with its newest unread message from
+	// somebody else. Added after the count; clients from before it read only
+	// the count.
+	Unread []UnreadConversation `json:"unread"`
+}
+
+type UnreadConversation struct {
+	ConversationId int64 `json:"conversation_id"`
+	LastMessageId  int64 `json:"last_message_id"`
 }
 
 // TypingEvent is the body of a realtime typing event.

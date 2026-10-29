@@ -76,31 +76,46 @@ func textAnnouncement(body string) announcement {
 }
 
 // attachmentsAnnouncement describes photos and files, named where one is.
+// A video is a file to the server, but nobody calls IMG_0042.MOV by its name,
+// so it is named for what it is. src/screens/MessagesScreen.tsx words the
+// inbox's preview the same way.
 func attachmentsAnnouncement(attachments []db.NewAttachment, caption string) announcement {
-	images, files := 0, 0
+	images, videos, files := 0, 0, 0
 	fileName := ""
 	for _, at := range attachments {
-		if at.Kind == structs.AttachmentKindImage {
+		switch {
+		case at.Kind == structs.AttachmentKindImage:
 			images++
-		} else {
+		case strings.HasPrefix(strings.ToLower(at.ContentType), "video/"):
+			videos++
+		default:
 			files++
 			fileName = strings.TrimSpace(at.FileName)
 		}
 	}
 	var an announcement
 	switch {
-	case images == 1 && files == 0:
+	case images == 1 && videos == 0 && files == 0:
 		an = announcement{Line: "📷 Photo", Spoken: "sent a photo"}
-	case images > 1 && files == 0:
+	case images > 1 && videos == 0 && files == 0:
 		an = announcement{Line: fmt.Sprintf("📷 %d photos", images), Spoken: fmt.Sprintf("sent %d photos", images)}
-	case files == 1 && images == 0 && fileName != "":
+	case videos == 1 && images == 0 && files == 0:
+		an = announcement{Line: "🎥 Video", Spoken: "sent a video"}
+	case videos > 1 && images == 0 && files == 0:
+		an = announcement{Line: fmt.Sprintf("🎥 %d videos", videos), Spoken: fmt.Sprintf("sent %d videos", videos)}
+	case images+videos > 0 && files == 0:
+		an = announcement{
+			Line:   fmt.Sprintf("📷 %d photos and videos", images+videos),
+			Spoken: fmt.Sprintf("sent %d photos and videos", images+videos),
+		}
+	case files == 1 && images+videos == 0 && fileName != "":
 		an = announcement{Line: "📎 " + fileName, Spoken: "sent a file, " + fileName}
-	case files == 1 && images == 0:
+	case files == 1 && images+videos == 0:
 		an = announcement{Line: "📎 File", Spoken: "sent a file"}
-	case files > 1 && images == 0:
+	case files > 1 && images+videos == 0:
 		an = announcement{Line: fmt.Sprintf("📎 %d files", files), Spoken: fmt.Sprintf("sent %d files", files)}
 	default:
-		total := images + files
+		total := images + videos + files
 		an = announcement{Line: fmt.Sprintf("📎 %d attachments", total), Spoken: fmt.Sprintf("sent %d attachments", total)}
 	}
 	return an.withCaption(caption)
