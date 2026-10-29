@@ -291,24 +291,39 @@ func (a *AppDB) ListConversations(ctx context.Context, userId string) ([]InboxRo
 	return out, rows.Err()
 }
 
-// CountUnreadConversations feeds the notification bell.
-func (a *AppDB) CountUnreadConversations(ctx context.Context, userId string) (int, error) {
-	var n int
-	err := a.db.QueryRow(ctx, `
-		SELECT COUNT(*) FROM conversation_members m
+// ListUnreadConversations feeds the Messages badge: each conversation with
+// something unread in it, and the newest unread message from somebody else.
+//
+// The list rather than just its length, so a client can take off a read it
+// has made and the server has not confirmed yet — knowing which conversations
+// were counted, and whether the read covers what made each one unread.
+func (a *AppDB) ListUnreadConversations(ctx context.Context, userId string) ([]structs.UnreadConversation, error) {
+	rows, err := a.db.Query(ctx, `
+		SELECT m.conversation_id, MAX(x.id)
+		FROM conversation_members m
 		JOIN conversations c ON c.id = m.conversation_id AND c.deleted_at IS NULL
+		JOIN messages x ON x.conversation_id = m.conversation_id
+			AND x.id > m.last_read_message_id
+			AND x.sender_id <> $1
+			AND x.deleted_at IS NULL
 		WHERE m.user_id = $1
 			AND m.archived_at IS NULL
 			AND m.left_at IS NULL
-			AND EXISTS (
-				SELECT 1 FROM messages x
-				WHERE x.conversation_id = m.conversation_id
-					AND x.id > m.last_read_message_id
-					AND x.sender_id <> $1
-					AND x.deleted_at IS NULL
-			);
-	`, userId).Scan(&n)
-	return n, err
+		GROUP BY m.conversation_id;
+	`, userId)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []structs.UnreadConversation{}
+	for rows.Next() {
+		var u structs.UnreadConversation
+		if err := rows.Scan(&u.ConversationId, &u.LastMessageId); err != nil {
+			return nil, err
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
 }
 
 // GetMessages pages a thread backwards from beforeId (0 = newest).
@@ -515,15 +530,26 @@ func (a *AppDB) DeleteOwnMessage(ctx context.Context, messageId int64, userId st
 	return nil
 }
 
-func (a *AppDB) MarkConversationRead(ctx context.Context, conversationId int64, userId string) error {
+// MarkConversationRead moves the reader's pointer up to upTo, the newest
+// message the client had on screen — never past the thread's newest, and never
+// backwards. upTo of zero means the thread's newest, which is what a client
+// that does not say what it showed has always had.
+//
+// The ceiling is what stops a client marking read a message it never saw: a
+// read sent from a cached thread, a moment before the thread's own fetch, would
+// otherwise also cover whatever had reached the server and not the phone.
+func (a *AppDB) MarkConversationRead(ctx context.Context, conversationId int64, userId string, upTo int64) error {
 	_, err := a.db.Exec(ctx, `
 		UPDATE conversation_members m
 		SET last_read_message_id = GREATEST(
 			m.last_read_message_id,
-			COALESCE((SELECT MAX(id) FROM messages WHERE conversation_id = $1), 0)
+			LEAST(
+				COALESCE((SELECT MAX(id) FROM messages WHERE conversation_id = $1), 0),
+				CASE WHEN $3::bigint > 0 THEN $3::bigint ELSE 9223372036854775807 END
+			)
 		)
 		WHERE m.conversation_id = $1 AND m.user_id = $2;
-	`, conversationId, userId)
+	`, conversationId, userId, upTo)
 	return err
 }
 

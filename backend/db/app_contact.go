@@ -115,6 +115,29 @@ func (a *AppDB) PatchContact(ctx context.Context, contactId int, userId string, 
 	return nil
 }
 
+// ContactForAccount is the owner's own card for an account — the name and
+// picture they gave that person — matched by the account behind the contact's
+// address. Of several, the one the app draws them with: GetContacts' order,
+// favourites first and then the oldest. Nil when they have none.
+func (a *AppDB) ContactForAccount(ctx context.Context, ownerId, accountId string) (*structs.Contact, error) {
+	var c structs.Contact
+	err := a.db.QueryRow(ctx, `
+		SELECT c.id, c.name, EXISTS (SELECT 1 FROM contact_avatars av WHERE av.contact_id = c.id)
+		FROM contacts c
+		WHERE c.owner = $1 AND c.user_id = $2 AND c.active = TRUE
+		ORDER BY c.is_favorite DESC, c.id ASC
+		LIMIT 1;
+	`, ownerId, accountId).Scan(&c.Id, &c.Name, &c.HasAvatar)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	c.Owner = ownerId
+	return &c, nil
+}
+
 // SetContactAvatar stores or replaces a contact's picture.
 func (a *AppDB) SetContactAvatar(ctx context.Context, contactId int, userId string, contentType string, data []byte) error {
 	// The ownership test is a subquery rather than a prior read, so a contact id

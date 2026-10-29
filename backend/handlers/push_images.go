@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/SFLuv/app/backend/db"
+	"github.com/SFLuv/app/backend/utils"
 )
 
 // ── Pictures for a notification ─────────────────────────────────────────────
@@ -32,7 +33,9 @@ import (
 //   - a person's profile picture, which any signed-in member can already see;
 //   - a group's picture, re-checked against the RECIPIENT's membership when it
 //     is fetched — the signature names who the push was for, so somebody who
-//     left the group between the push and opening it gets nothing.
+//     left the group between the push and opening it gets nothing;
+//   - the picture the recipient gave the sender as a contact, which only its
+//     owner can see, re-checked against the recipient owning it.
 //
 // Nothing else is reachable through it, and a forged or expired URL is a 404.
 
@@ -76,14 +79,13 @@ func signPushImage(parts ...string) string {
 }
 
 // publicBackendBase is where this server is reachable from a phone, resolved
-// the same way as the W-9 return URL. Empty when unconfigured, and then no
-// picture URLs are sent at all: a relative URL is useless to the extension.
+// as every other public URL this server builds is (utils.PublicBackendBase).
+// It read only two of that function's three settings, so a deployment that
+// set its origin as MCP_PUBLIC_BASE_URL alone sent no pictures at all. Empty
+// when unconfigured, and then no picture URLs are sent: a relative URL is
+// useless to the extension.
 func publicBackendBase() string {
-	base := strings.TrimSpace(envString("PUBLIC_BACKEND_URL", ""))
-	if base == "" {
-		base = strings.TrimSpace(envString("NEXT_PUBLIC_BACKEND_URL", ""))
-	}
-	return strings.TrimSuffix(base, "/")
+	return utils.PublicBackendBase()
 }
 
 // pushAvatarURL is a signed URL for a person's profile picture, or "".
@@ -119,6 +121,24 @@ func pushGroupIconURL(attachmentId int64, recipientId string) string {
 	return base + "/push-image?" + q.Encode()
 }
 
+// pushContactAvatarURL is a signed URL for the picture ownerId gave one of
+// their contacts, valid only while the contact is still theirs, or "".
+func pushContactAvatarURL(contactId int, ownerId string) string {
+	base := publicBackendBase()
+	if base == "" || contactId <= 0 || ownerId == "" {
+		return ""
+	}
+	id := strconv.Itoa(contactId)
+	exp := strconv.FormatInt(time.Now().Add(pushImageTTL).Unix(), 10)
+	q := url.Values{}
+	q.Set("k", "c")
+	q.Set("id", id)
+	q.Set("r", ownerId)
+	q.Set("exp", exp)
+	q.Set("sig", signPushImage("c", id, ownerId, exp))
+	return base + "/push-image?" + q.Encode()
+}
+
 // GetPushImage serves a signed notification picture. Unauthenticated by
 // design — see the note at the top of this file — so every refusal is the
 // same bare 404, and nothing distinguishes "bad signature" from "no picture".
@@ -137,6 +157,8 @@ func (a *AppService) GetPushImage(w http.ResponseWriter, r *http.Request) {
 		want = signPushImage("u", id, exp)
 	case "g":
 		want = signPushImage("g", id, recipient, exp)
+	case "c":
+		want = signPushImage("c", id, recipient, exp)
 	default:
 		w.WriteHeader(http.StatusNotFound)
 		return
@@ -151,6 +173,24 @@ func (a *AppService) GetPushImage(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			if !errors.Is(err, db.ErrAvatarNotFound) {
 				a.logger.Logf("error loading a push avatar for %s: %s", id, err)
+			}
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		writePushImage(w, contentType, data)
+		return
+	}
+
+	if kind == "c" {
+		contactId, err := strconv.Atoi(id)
+		if err != nil || contactId <= 0 {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		contentType, data, err := a.db.GetContactAvatar(r.Context(), contactId, recipient)
+		if err != nil {
+			if !errors.Is(err, db.ErrContactNotFound) {
+				a.logger.Logf("error loading a push contact picture %d: %s", contactId, err)
 			}
 			w.WriteHeader(http.StatusNotFound)
 			return
