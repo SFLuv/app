@@ -58,6 +58,12 @@ export interface W9UserStatus {
   cleared: boolean
   earned_sfluv: string
   threshold_sfluv: string
+  /** How many of this year's forms failed the IRS TIN match. */
+  tin_mismatch_count?: number
+  /** Rejected once: they can send a corrected form from the app. */
+  correction_needed?: boolean
+  /** Rejected again: the app now sends them to support, so an admin has to act. */
+  support_needed?: boolean
 }
 
 /** What happened when an admin sent a W-9 request. */

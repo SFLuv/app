@@ -2789,6 +2789,36 @@ var schemaMigrations = []SchemaMigration{
 			return migrateChatConversationActions(ctx, pools)
 		},
 	},
+	{
+		Version:     "1.77",
+		Description: "count failed W-9 TIN matches, so a first failure gets a fresh form and a repeat gets a person",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			return migrateW9TINMismatchCount(ctx, pools)
+		},
+	},
+}
+
+// migrateW9TINMismatchCount adds the count of failed TIN matches per filing.
+//
+// A W-9 that fails the IRS TIN match is usually a typo or a name that differs
+// from the Social Security card, and the person can fix it by filing again. A
+// second failure is unlikely to be fixed the same way, and TaxBandits limits
+// how many matches it will run per person, so that case goes to a human. The
+// count is what tells the two apart.
+//
+// Filings already rejected are counted as one failure, which is what they are.
+func migrateW9TINMismatchCount(ctx context.Context, pools *MigrationPools) error {
+	if _, err := pools.App.Exec(ctx, `
+		ALTER TABLE w9_filings
+			ADD COLUMN IF NOT EXISTS tin_mismatch_count INTEGER NOT NULL DEFAULT 0;
+
+		UPDATE w9_filings
+		SET tin_mismatch_count = 1
+		WHERE tin_match = 'rejected' AND tin_mismatch_count = 0;
+	`); err != nil {
+		return fmt.Errorf("error adding the w9 tin mismatch count: %w", err)
+	}
+	return nil
 }
 
 // migrateW9WarningTiers replaces one hard gate with an escalating sequence.

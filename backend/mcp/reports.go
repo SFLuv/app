@@ -384,6 +384,7 @@ type w9Status struct {
 	PendingApproval *bool  `json:"pending_approval,omitempty"`
 	ApprovedAt      string `json:"approved_at,omitempty"`
 	RejectedAt      string `json:"rejected_at,omitempty"`
+	TINMismatches   int    `json:"tin_mismatches,omitempty"`
 	LastTxHash      string `json:"last_tx_hash,omitempty"`
 	LastTxTimestamp int64  `json:"last_tx_timestamp,omitempty"`
 }
@@ -973,8 +974,11 @@ func (a *reportCore) loadW9(ctx context.Context, wallet string, userID string, y
 				-- completed_at, and used to be reported as approved.
 				CASE WHEN f.status IN ('completed','legacy_approved','manually_cleared')
 					THEN COALESCE(f.completed_at, f.updated_at) END AS approved_at,
+				-- tin_match_at is when the IRS check failed; the provider
+				-- event and updated_at are fallbacks for rows from before it.
 				CASE WHEN f.status = 'invalid'
-					THEN COALESCE(f.last_provider_event_at, f.updated_at) END AS rejected_at
+					THEN COALESCE(f.tin_match_at, f.last_provider_event_at, f.updated_at) END AS rejected_at,
+				COALESCE(f.tin_mismatch_count, 0) AS tin_mismatches
 			FROM per_wallet w
 			LEFT JOIN per_person pp ON pp.user_id = w.user_id AND pp.year = w.year
 			LEFT JOIN crossed c ON c.user_id = w.user_id AND c.year = w.year
@@ -1012,6 +1016,7 @@ func (a *reportCore) loadW9(ctx context.Context, wallet string, userID string, y
 				&pending,
 				&approvedAt,
 				&rejectedAt,
+				&row.TINMismatches,
 			); err != nil {
 				return fmt.Errorf("scan w9 report: %w", err)
 			}

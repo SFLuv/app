@@ -90,7 +90,14 @@ func (a *AppService) buildW9Status(r *http.Request, userID string) (*structs.W9S
 		}
 	}
 
-	if filing != nil && !response.Cleared {
+	// A rejected filing's link is the form that failed, so it is never handed
+	// out. The person gets a fresh one from StartW9 (first failure) or a person
+	// at support (after that).
+	if filing != nil && filing.Status == db.W9StatusInvalid {
+		response.TINMismatchCount = filing.TINMismatchCount
+		response.SupportNeeded = filing.TINMismatchCount >= w9SelfServeMismatchLimit
+		response.CorrectionNeeded = !response.SupportNeeded
+	} else if filing != nil && !response.Cleared {
 		response.FormURL = filing.FormURL
 		response.FormURLExpiresAt = filing.FormURLExpiresAt
 	}
@@ -142,6 +149,11 @@ func payoutSourceLabel(source string) string {
 
 // StartW9 hands back a link to the form, creating the vendor request if this is
 // the first time. Called when someone taps "complete your tax form".
+//
+// After a failed TIN match this is where the fresh form is made: the rejected
+// one is never reopened, and a new one costs a TaxBandits credit, so it waits
+// for the person to ask. Past w9SelfServeMismatchLimit failures it refuses and
+// points them at support instead.
 func (a *AppService) StartW9(w http.ResponseWriter, r *http.Request) {
 	userDid := utils.GetDid(r)
 	if userDid == nil {
@@ -154,7 +166,17 @@ func (a *AppService) StartW9(w http.ResponseWriter, r *http.Request) {
 	}
 
 	taxYear := time.Now().UTC().Year()
-	filing, err := a.payouts.EnsureW9Request(r.Context(), *userDid, taxYear)
+	current, err := a.db.GetW9Filing(r.Context(), *userDid, taxYear)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	if current != nil && current.Status == db.W9StatusInvalid && current.TINMismatchCount >= w9SelfServeMismatchLimit {
+		w.WriteHeader(http.StatusConflict)
+		w.Write([]byte("We couldn't verify your W-9 with the IRS. Please email " + w9SupportEmail + " and we'll help sort it out."))
+		return
+	}
+	filing, err := a.payouts.ReissueInvalidW9Request(r.Context(), *userDid, taxYear)
 	if err != nil {
 		a.logger.Logf("error starting a w9 for %s: %s", *userDid, err)
 		w.WriteHeader(http.StatusServiceUnavailable)

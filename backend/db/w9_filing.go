@@ -15,7 +15,7 @@ const w9FilingColumns = `
 	id, user_id, tax_year, status, provider, provider_request_id, form_url,
 	form_url_expires_at, threshold_crossed_at, requested_at, completed_at,
 	tin_type, cleared_by_user_id, clear_reason, last_provider_status,
-	last_provider_event_at, COALESCE(tin_match, '')
+	last_provider_event_at, COALESCE(tin_match, ''), tin_mismatch_count
 `
 
 func scanW9Filing(row interface{ Scan(...any) error }) (*structs.W9Filing, error) {
@@ -25,7 +25,7 @@ func scanW9Filing(row interface{ Scan(...any) error }) (*structs.W9Filing, error
 		&out.ID, &out.UserID, &out.TaxYear, &out.Status, &out.Provider,
 		&out.ProviderRequestID, &out.FormURL, &formExpires, &crossed, &requested,
 		&completed, &out.TINType, &out.ClearedByUserID, &out.ClearReason,
-		&out.LastProviderStatus, &lastEvent, &out.TINMatch,
+		&out.LastProviderStatus, &lastEvent, &out.TINMatch, &out.TINMismatchCount,
 	); err != nil {
 		return nil, err
 	}
@@ -334,12 +334,52 @@ func (a *AppDB) RecordTINMatch(ctx context.Context, userID string, taxYear int, 
 			-- Only a rejection changes the filing's standing, and only forward:
 			-- it stops clearing future payouts. Nothing already paid is touched.
 			status = CASE WHEN $3 = 'rejected' THEN 'invalid' ELSE status END,
+			-- Counted, because the second failure is handled differently from
+			-- the first: the first gets a fresh form, the second gets a person.
+			tin_mismatch_count = tin_mismatch_count + CASE WHEN $3 = 'rejected' THEN 1 ELSE 0 END,
 			updated_at = NOW()
 		WHERE user_id = $1 AND tax_year = $2
 		AND COALESCE(tin_match, '') IS DISTINCT FROM $3;
 	`, userID, taxYear, match)
 	if err != nil {
 		return false, fmt.Errorf("error recording the tin match for %s: %w", userID, err)
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
+// ReissueW9ProviderRequest points a rejected filing at a brand-new form.
+//
+// A filing that failed its TIN match keeps the link to the form the person
+// already submitted, and that form cannot be submitted again. This swaps in a
+// new request and resets everything the old one decided: back to 'requested',
+// no completion time, no TIN result. Clearing tin_match matters beyond tidiness
+// — RecordTINMatch only writes when the value changes, so a second rejection
+// would otherwise be skipped as "still rejected" and the filing would stay
+// cleared. The mismatch count is kept: it is what tells the second failure from
+// the first.
+//
+// Only touches an 'invalid' filing, so a request that raced a completion cannot
+// undo it. Reports whether it changed anything.
+func (a *AppDB) ReissueW9ProviderRequest(ctx context.Context, userID string, taxYear int, provider string, requestID string, formURL string, expires *time.Time) (bool, error) {
+	tag, err := a.db.Exec(ctx, `
+		UPDATE w9_filings
+		SET provider = $3,
+			provider_request_id = $4,
+			form_url = $5,
+			form_url_expires_at = $6,
+			status = 'requested',
+			requested_at = NOW(),
+			completed_at = NULL,
+			tin_type = '',
+			tin_match = '',
+			tin_match_at = NULL,
+			last_provider_status = '',
+			last_provider_event_at = NULL,
+			updated_at = NOW()
+		WHERE user_id = $1 AND tax_year = $2 AND status = 'invalid';
+	`, userID, taxYear, provider, requestID, formURL, expires)
+	if err != nil {
+		return false, fmt.Errorf("error reissuing the w9 request for %s: %w", userID, err)
 	}
 	return tag.RowsAffected() > 0, nil
 }
