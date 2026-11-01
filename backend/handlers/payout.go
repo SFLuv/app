@@ -532,6 +532,13 @@ func (p *PayoutService) transfer(ctx context.Context, ledgerID int64, recipient 
 // Replaces the old W9_LIMIT_WEI / W9_LIMIT_SFLUV pair, whose names were both
 // misleading — SFLUV has six decimals, not eighteen, and TOKEN_DECIMALS in this
 // codebase is a multiplier rather than an exponent.
+// W9ThresholdBase is the annual W-9 line in token base units, the same value the
+// payout gate measures against, for reports outside this package that must not
+// drift from it.
+func W9ThresholdBase() *big.Int {
+	return w9ThresholdBase()
+}
+
 func w9ThresholdBase() *big.Int {
 	sfluv := int64(600)
 	if raw := strings.TrimSpace(os.Getenv("W9_THRESHOLD_SFLUV")); raw != "" {

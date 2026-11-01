@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"math/big"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -227,8 +228,21 @@ func w9AdminTaxYear(r *http.Request) int {
 	return time.Now().UTC().Year()
 }
 
+// chiParam reads a path parameter, decoded.
+//
+// chi matches routes against the raw, still-encoded path whenever a request has
+// one, so chi.URLParam hands back `did%3Aprivy%3A…` for a Privy DID that a
+// client encoded into the path. The admin panel's W-9 card does exactly that,
+// so every lookup missed: the card read "Not started" and "Earned 0" for
+// everyone, and its send button answered 404 because no user has that id.
+// userIdParam (path_params.go) fixed the same thing for the chat routes; this
+// fixes it for every handler that reads its parameters through here.
 func chiParam(r *http.Request, name string) string {
-	return strings.TrimSpace(chi.URLParam(r, name))
+	raw := chi.URLParam(r, name)
+	if decoded, err := url.PathUnescape(raw); err == nil {
+		raw = decoded
+	}
+	return strings.TrimSpace(raw)
 }
 
 // AcknowledgeW9Tier records that someone dismissed a tier's modal.

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"github.com/SFLuv/app/backend/handlers"
 	"math/big"
 	"strings"
 	"time"
@@ -869,44 +870,122 @@ func (a *reportCore) loadW9(ctx context.Context, wallet string, userID string, y
 	out := []w9Status{}
 	err := withReadOnlyTx(ctx, a.appDB, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `
-			SELECT
-				LOWER(e.wallet_address),
-				COALESCE(e.chain_id, $6)::bigint,
-				e.year,
-				e.amount_received::text,
-				COALESCE(e.user_id, ''),
-				e.w9_required,
-				e.w9_required_at,
-				COALESCE(e.last_tx_hash, ''),
-				COALESCE(e.last_tx_timestamp, 0)::bigint,
-				COALESCE(s.email, ''),
-				s.submitted_at,
-				s.pending_approval,
-				s.approved_at,
-				s.rejected_at
-			FROM w9_wallet_earnings e
-			-- Filings are per person per year now, not per wallet: one W-9
-			-- covers every address someone holds. The old per-wallet
-			-- submissions table is retained only for retention and is not
-			-- read here, because it would report a stale answer.
-			LEFT JOIN LATERAL (
+			-- Earnings come from the payout ledger, the table the payout gate
+			-- itself counts: every platform payout keyed to the person, plus
+			-- the 2026 history import (source 'historical_ponder'). This used to
+			-- read w9_wallet_earnings, which stopped updating when the ledger
+			-- took over in September 2026, so every total after that was low.
+			WITH counted AS (
 				SELECT
-					'' AS email,
-					f.requested_at AS submitted_at,
-					(f.status IN ('requested','in_progress')) AS pending_approval,
-					f.completed_at AS approved_at,
-					NULL::timestamptz AS rejected_at
-				FROM w9_filings f
-				WHERE f.user_id = e.user_id AND f.tax_year = e.year
-				LIMIT 1
-			) s ON TRUE
-			WHERE ($1 = '' OR LOWER(e.wallet_address) = $1)
-			AND ($2 = '' OR e.user_id = $2)
-			AND ($3 = 0 OR e.year = $3)
-			ORDER BY e.year DESC, e.amount_received DESC, e.wallet_address ASC
+					LOWER(p.recipient_address) AS wallet_address,
+					p.chain_id,
+					p.tax_year AS year,
+					NULLIF(p.user_id, '') AS user_id,
+					p.amount_base,
+					p.tx_hash,
+					COALESCE(p.paid_at, p.created_at) AS at,
+					p.id
+				FROM payout_ledger p
+				WHERE p.counts_toward_threshold
+				AND p.state IN ('pending','escrowed','releasing','paid')
+			), legacy AS (
+				-- The old per-wallet table still holds what the import did not
+				-- carry across: earlier years, and 2026 wallets with no account.
+				-- Rows the import did carry are recognised by its idempotency
+				-- key and skipped, so nothing is counted twice. SFLuv's own
+				-- addresses are left out, as the import and the gate leave them.
+				SELECT
+					LOWER(e.wallet_address),
+					COALESCE(e.chain_id, $6)::bigint,
+					e.year,
+					NULLIF(e.user_id, ''),
+					e.amount_received,
+					COALESCE(e.last_tx_hash, ''),
+					COALESCE(to_timestamp(NULLIF(e.last_tx_timestamp, 0)), e.updated_at::timestamptz),
+					0::bigint
+				FROM w9_wallet_earnings e
+				WHERE e.amount_received > 0
+				AND NOT EXISTS (
+					SELECT 1 FROM payout_ledger p
+					WHERE p.idempotency_key = 'historical:' || e.year || ':' || COALESCE(e.chain_id, 0) || ':' || LOWER(e.wallet_address)
+				)
+				AND NOT EXISTS (
+					SELECT 1 FROM protocol_address_history h
+					WHERE LOWER(h.address) = LOWER(e.wallet_address)
+				)
+			), earnings AS (
+				SELECT * FROM counted
+				UNION ALL
+				SELECT * FROM legacy
+			), per_wallet AS (
+				SELECT
+					wallet_address,
+					chain_id,
+					year,
+					MAX(user_id) AS user_id,
+					SUM(amount_base) AS amount_received,
+					(ARRAY_AGG(tx_hash ORDER BY at DESC, id DESC))[1] AS last_tx_hash,
+					MAX(at) AS last_at
+				FROM earnings
+				GROUP BY wallet_address, chain_id, year
+			), per_person AS (
+				-- The W-9 line is per person per year, across every wallet and
+				-- chain, so "required" is judged on this total, as the gate does.
+				SELECT user_id, year, SUM(amount_base) AS total
+				FROM earnings
+				WHERE user_id IS NOT NULL
+				GROUP BY user_id, year
+			), crossed AS (
+				SELECT user_id, year, MIN(at) AS crossed_at
+				FROM (
+					SELECT
+						user_id,
+						year,
+						at,
+						SUM(amount_base) OVER (
+							PARTITION BY user_id, year ORDER BY at, id
+							ROWS UNBOUNDED PRECEDING
+						) AS running
+					FROM earnings
+					WHERE user_id IS NOT NULL
+				) r
+				WHERE running >= $7::numeric
+				GROUP BY user_id, year
+			)
+			SELECT
+				w.wallet_address,
+				w.chain_id,
+				w.year,
+				w.amount_received::text AS amount_received,
+				COALESCE(w.user_id, '') AS user_id,
+				COALESCE(pp.total, w.amount_received) >= $7::numeric AS w9_required,
+				CASE
+					WHEN w.user_id IS NOT NULL THEN COALESCE(f.threshold_crossed_at, c.crossed_at)
+					WHEN w.amount_received >= $7::numeric THEN w.last_at
+				END AS w9_required_at,
+				COALESCE(w.last_tx_hash, '') AS last_tx_hash,
+				COALESCE(EXTRACT(EPOCH FROM w.last_at), 0)::bigint AS last_tx_timestamp,
+				'' AS submission_email,
+				f.requested_at AS submitted_at,
+				CASE WHEN f.id IS NULL THEN NULL ELSE f.status IN ('requested','in_progress') END AS pending_approval,
+				-- Only a filing that clears is "approved". A form that was
+				-- completed and then failed its TIN match keeps its
+				-- completed_at, and used to be reported as approved.
+				CASE WHEN f.status IN ('completed','legacy_approved','manually_cleared')
+					THEN COALESCE(f.completed_at, f.updated_at) END AS approved_at,
+				CASE WHEN f.status = 'invalid'
+					THEN COALESCE(f.last_provider_event_at, f.updated_at) END AS rejected_at
+			FROM per_wallet w
+			LEFT JOIN per_person pp ON pp.user_id = w.user_id AND pp.year = w.year
+			LEFT JOIN crossed c ON c.user_id = w.user_id AND c.year = w.year
+			LEFT JOIN w9_filings f ON f.user_id = w.user_id AND f.tax_year = w.year
+			WHERE ($1 = '' OR w.wallet_address = $1)
+			AND ($2 = '' OR w.user_id = $2)
+			AND ($3 = 0 OR w.year = $3)
+			ORDER BY w.year DESC, w.amount_received DESC, w.wallet_address ASC
 			LIMIT $4
 			OFFSET $5;
-		`, wallet, userID, year, limit, offset, a.chainID)
+		`, wallet, userID, year, limit, offset, a.chainID, handlers.W9ThresholdBase().String())
 		if err != nil {
 			return fmt.Errorf("query w9 report: %w", err)
 		}
