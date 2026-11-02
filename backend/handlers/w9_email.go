@@ -146,8 +146,8 @@ func (a *AppService) emailW9Tier(ctx context.Context, userID string, taxYear int
 // the prompt makes it (see StartW9).
 //
 // After w9SelfServeMismatchLimit failures they are asked to contact support
-// instead, no form is made, the prompt is left alone, and filing again from the
-// app is refused.
+// instead: no form is made, the prompt says to email support, and filing again
+// from the app is refused.
 //
 // Called from the webhook and the sweeper with their context. The form and the
 // email go to a goroutine, so a slow vendor or mail call never holds up the
@@ -160,10 +160,12 @@ func (a *AppService) onW9TINMismatch(ctx context.Context, userID string, taxYear
 	count := filing.TINMismatchCount
 	selfServe := count < w9SelfServeMismatchLimit
 
-	if selfServe {
-		if _, err := a.armW9Prompt(ctx, userID, taxYear); err != nil {
-			a.logger.Logf("w9: could not re-arm the prompt for %s after a failed TIN match: %s", userID, err)
-		}
+	// The prompt comes back either way. Signing the form cleared every tier
+	// notice, so without this a failure leaves nothing in the app at all; with
+	// it, the app shows the correction or, past the limit, the support message
+	// (correction_needed / support_needed on the status decide which).
+	if _, err := a.armW9Prompt(ctx, userID, taxYear); err != nil {
+		a.logger.Logf("w9: could not re-arm the prompt for %s after a failed TIN match: %s", userID, err)
 	}
 
 	go func() {
