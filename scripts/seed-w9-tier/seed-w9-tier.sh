@@ -131,6 +131,10 @@ fi
 [[ -n "$ADDR" ]] || { echo "account has no primary wallet address; --fast is the only option" >&2; exit 1; }
 clear_seeded
 
+# The event has to start in the future (the API refuses a past start), but a
+# code is only redeemable once the event's QR window opens, which by default is
+# midnight on the event's own day. Opening the window 48 hours before the start
+# puts "now" inside it, so the code can be redeemed straight away.
 TZ_NAME="America/Los_Angeles"
 s_at="$(TZ=$TZ_NAME date -v+1d '+%Y-%m-%dT%H:%M:%S' 2>/dev/null || TZ=$TZ_NAME date -d '+1 day' '+%Y-%m-%dT%H:%M:%S')"
 e_at="$(TZ=$TZ_NAME date -v+1d -v+3H '+%Y-%m-%dT%H:%M:%S' 2>/dev/null || TZ=$TZ_NAME date -d '+1 day +3 hours' '+%Y-%m-%dT%H:%M:%S')"
@@ -142,7 +146,8 @@ mk_event(){
   admin_api POST /admin/volunteer-events "$(jq -nc \
     --arg t "$1" --arg s "$s_at" --arg e "$e_at" --arg tz "$TZ_NAME" --argjson r "$2" \
     '{title:$t, description:"W-9 tier fixture", start_at_local:$s, end_at_local:$e,
-      timezone:$tz, max_participants:1, reward_amount_sfluv:$r, signup_mode:"internal"}')"
+      timezone:$tz, max_participants:1, reward_amount_sfluv:$r, signup_mode:"internal",
+      qr_live_offset_hours:48}')"
 }
 code_for(){ admin_api GET "/admin/volunteer-events/$1/codes" | jq -r '[.. | objects | select(has("number")) | .id] | first // empty'; }
 redeem(){ curl -s -X POST "$API/redeem" -H 'Content-Type: application/json' \
