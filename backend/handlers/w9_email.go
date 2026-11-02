@@ -277,7 +277,7 @@ func (a *AppService) emailW9Correction(ctx context.Context, userID string, taxYe
 			how = "To send a corrected one, open the SFLuv app and tap the W-9 prompt. You'll get a fresh, blank form. Before you submit it, please check:"
 		}
 		details = w9EmailParagraphs(greeting,
-			fmt.Sprintf("The name and taxpayer number on the W-9 you sent us for %d didn't match the IRS's records. That's usually a small mistake, and it's quick to fix.", taxYear),
+			fmt.Sprintf("The name and taxpayer number on the W-9 you sent us for %d didn't match the IRS's records.", taxYear),
 			how,
 		) + w9EmailList(
 			"Your Social Security number or EIN, digit by digit.",

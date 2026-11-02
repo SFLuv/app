@@ -196,7 +196,9 @@ export function W9RequestPanel() {
               <p className="text-sm text-muted-foreground">
                 {status.filing_status === "invalid"
                   ? "They don't have a fresh form yet. They get one by tapping the W-9 prompt in the app, or you can send it from here."
-                  : "They have a fresh form and were told what to check. Sending from here re-sends that same form."}
+                  : (status.tin_mismatch_count ?? 0) >= 2
+                    ? "They have a fresh form from an admin. Sending from here re-sends that same form."
+                    : "They have a fresh form and were told what to check. Sending from here re-sends that same form."}
               </p>
             ) : null}
 
