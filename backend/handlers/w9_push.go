@@ -88,10 +88,19 @@ func (a *AppService) pushW9Tier(ctx context.Context, userID string, taxYear int,
 			fmt.Sprintf("Once you reach %s we'll need a W-9 on file before sending more. It takes a couple of minutes — worth doing before it holds anything up.", limit),
 		)
 	case db.W9TierWarning:
-		a.pushW9Notice(ctx, userID, "w9_required",
-			fmt.Sprintf("%s SFLUV — you're close to the %s limit", amount, limit),
-			"Complete your W-9 now and your rewards will keep arriving without interruption.",
-		)
+		// While enforcement is off, the warning is also what somebody already
+		// past the line is shown, and "close to the limit" would be wrong.
+		if earned.Cmp(w9ThresholdBase()) >= 0 {
+			a.pushW9Notice(ctx, userID, "w9_required",
+				fmt.Sprintf("You've earned %s SFLUV — we need a W-9 from you", amount),
+				fmt.Sprintf("You're past %s SFLUV for the year, so we need a W-9 on file. It takes a couple of minutes.", limit),
+			)
+		} else {
+			a.pushW9Notice(ctx, userID, "w9_required",
+				fmt.Sprintf("%s SFLUV — you're close to the %s limit", amount, limit),
+				"Complete your W-9 now and your rewards will keep arriving without interruption.",
+			)
+		}
 	case db.W9TierEscrowed:
 		a.pushW9Notice(ctx, userID, "w9_escrow_held",
 			"Your reward is waiting on a W-9",

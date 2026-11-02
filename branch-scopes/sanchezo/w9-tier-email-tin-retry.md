@@ -98,3 +98,11 @@ follow-up question about another volunteer's check).
 | An admin "Send" for someone with one failed match sends the correction push and email (what to check, fresh form link) instead of the plain request | 0.05 | app |
 
 **Volume:** 4 files, +81/−7.
+
+# Round 5 — 2026-11-02
+
+**0.05h, measured** (09:33–09:36 MST, prompt time to commit by the shell clock).
+
+| Change | Hours | Repo |
+|---|---|---|
+| Warning push for somebody already past the limit (what they get while enforcement is off) reads "You've earned N SFLUV — we need a W-9 from you" instead of "close to the limit". A volunteer got the wrong one on 2026-11-01. Mobile pop-up fixed the same way on `sanchezo/w9-tin-correction` | 0.05 | app + mobile |
