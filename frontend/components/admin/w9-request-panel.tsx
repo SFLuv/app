@@ -194,8 +194,9 @@ export function W9RequestPanel() {
               </p>
             ) : status?.correction_needed ? (
               <p className="text-sm text-muted-foreground">
-                They've been emailed about the mismatch and can send a corrected form from the app. Sending from here
-                creates the new form now.
+                {status.filing_status === "invalid"
+                  ? "They don't have a fresh form yet. They get one by tapping the W-9 prompt in the app, or you can send it from here."
+                  : "They have a fresh form and were told what to check. Sending from here re-sends that same form."}
               </p>
             ) : null}
 

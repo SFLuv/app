@@ -137,14 +137,20 @@ func (a *AppService) emailW9Tier(ctx context.Context, userID string, taxYear int
 // onW9TINMismatch tells somebody their W-9 failed the IRS TIN match.
 //
 // The first failure is nearly always a typo or a name that differs from the
-// Social Security card, so the person is told what to check and can file a
-// corrected form themselves: the in-app prompt comes back, and tapping it gets
-// a fresh form (see StartW9). After w9SelfServeMismatchLimit failures they are
-// asked to contact support instead, the prompt is left alone, and filing again
-// from the app is refused.
+// Social Security card, so it is answered with a fresh, blank form straight
+// away: the email carries its link, the push and the in-app prompt open it,
+// and nobody has to ask. It costs one TaxBandits credit, and the count below
+// bounds it to one per person per year. If the form cannot be made right now
+// (the vendor is down), the email says to use the app instead, where tapping
+// the prompt makes it (see StartW9).
 //
-// No form is created here. A new form is a new TaxBandits credit, so it is made
-// only when the person or an admin actually acts on this.
+// After w9SelfServeMismatchLimit failures they are asked to contact support
+// instead, no form is made, the prompt is left alone, and filing again from the
+// app is refused.
+//
+// Called from the webhook and the sweeper with their context. The form and the
+// email go to a goroutine, so a slow vendor or mail call never holds up the
+// webhook's reply.
 func (a *AppService) onW9TINMismatch(ctx context.Context, userID string, taxYear int) {
 	filing, err := a.db.GetW9Filing(ctx, userID, taxYear)
 	if err != nil || filing == nil {
@@ -154,30 +160,48 @@ func (a *AppService) onW9TINMismatch(ctx context.Context, userID string, taxYear
 	selfServe := count < w9SelfServeMismatchLimit
 
 	if selfServe {
-		a.pushW9Notice(ctx, userID, "w9_required",
-			"We need a corrected W-9",
-			"The name or taxpayer number on your W-9 didn't match IRS records. It's usually a typo. Tap to send a corrected one.",
-		)
 		if _, err := a.armW9Prompt(ctx, userID, taxYear); err != nil {
 			a.logger.Logf("w9: could not re-arm the prompt for %s after a failed TIN match: %s", userID, err)
 		}
-	} else {
-		a.pushW9Notice(ctx, userID, "w9_required",
-			"We still couldn't verify your W-9",
-			fmt.Sprintf("Your corrected W-9 didn't match IRS records either. Please email %s and we'll help sort it out.", w9SupportEmail),
-		)
 	}
 
-	to, sent, why := a.emailW9Correction(ctx, userID, taxYear, selfServe)
-	a.logger.Logf("w9: TIN match failed for %s (failure %d, self-serve %t); email to %q sent %t %s",
-		userID, count, selfServe, to, sent, why)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+
+		formURL := ""
+		if selfServe && a.payouts != nil {
+			reissued, err := a.payouts.ReissueInvalidW9Request(ctx, userID, taxYear)
+			if err != nil {
+				a.logger.Logf("w9: could not issue a fresh form to %s after a failed TIN match: %s", userID, err)
+			} else if reissued != nil && reissued.Status != db.W9StatusInvalid {
+				formURL = strings.TrimSpace(reissued.FormURL)
+			}
+		}
+
+		if selfServe {
+			a.pushW9Notice(ctx, userID, "w9_required",
+				"We need a corrected W-9",
+				"The name or taxpayer number on your W-9 didn't match IRS records. It's usually a typo. Tap to send a corrected one.",
+			)
+		} else {
+			a.pushW9Notice(ctx, userID, "w9_required",
+				"We still couldn't verify your W-9",
+				fmt.Sprintf("Your corrected W-9 didn't match IRS records either. Please email %s and we'll help sort it out.", w9SupportEmail),
+			)
+		}
+
+		to, sent, why := a.emailW9Correction(ctx, userID, taxYear, selfServe, formURL)
+		a.logger.Logf("w9: TIN match failed for %s (failure %d, self-serve %t, fresh form %t); email to %q sent %t %s",
+			userID, count, selfServe, formURL != "", to, sent, why)
+	}()
 }
 
 // emailW9Correction explains a failed TIN match and what to do next.
 //
-// It carries no form link on purpose: the old link is the rejected form, and a
-// new one is only made when the person opens the app and asks for it.
-func (a *AppService) emailW9Correction(ctx context.Context, userID string, taxYear int, selfServe bool) (string, bool, string) {
+// formURL is the fresh form, when one could be made. The rejected form's link
+// is never sent: that form cannot be submitted again.
+func (a *AppService) emailW9Correction(ctx context.Context, userID string, taxYear int, selfServe bool, formURL string) (string, bool, string) {
 	greeting := a.w9EmailGreeting(ctx, userID)
 	var subject, subtitle, details string
 	if selfServe {
@@ -187,15 +211,23 @@ func (a *AppService) emailW9Correction(ctx context.Context, userID string, taxYe
 		if payoutEnforcementMode() == enforcementEnforce {
 			held = " Until a corrected W-9 is on file, new rewards may be held."
 		}
+		how := "We've made you a fresh, blank form. Before you fill it in, please check:"
+		if formURL == "" {
+			how = "To send a corrected one, open the SFLuv app and tap the W-9 prompt. You'll get a fresh, blank form. Before you submit it, please check:"
+		}
 		details = w9EmailParagraphs(greeting,
 			fmt.Sprintf("The name and taxpayer number on the W-9 you sent us for %d didn't match the IRS's records. That's usually a small mistake, and it's quick to fix.", taxYear),
-			"To send a corrected one, open the SFLuv app and tap the W-9 prompt. You'll get a fresh, blank form.",
-			"Before you submit it, please check:",
+			how,
 		) + w9EmailList(
 			"Your Social Security number or EIN, digit by digit.",
 			"Your name exactly as it appears on your Social Security card, including your legal last name.",
 			"If you're filing for a business, its name together with the business's EIN, not your personal Social Security number.",
-		) + w9EmailParagraphs("Rewards you've already received aren't affected."+held) + w9EmailSupportLine()
+		)
+		if formURL != "" {
+			details += w9EmailButton(formURL, "Fill out a corrected W-9") +
+				w9EmailNote("This link doesn't expire. You can also fill it in from the SFLuv app.")
+		}
+		details += w9EmailParagraphs("Rewards you've already received aren't affected."+held) + w9EmailSupportLine()
 	} else {
 		subject = "We still couldn't verify your W-9"
 		subtitle = "We'd like to help sort it out."

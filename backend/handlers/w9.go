@@ -91,15 +91,19 @@ func (a *AppService) buildW9Status(r *http.Request, userID string) (*structs.W9S
 	}
 
 	// A rejected filing's link is the form that failed, so it is never handed
-	// out. The person gets a fresh one from StartW9 (first failure) or a person
-	// at support (after that).
-	if filing != nil && filing.Status == db.W9StatusInvalid {
+	// out. After a first failure the fresh form is normally already there (see
+	// onW9TINMismatch), and if not StartW9 makes it; after that it is support.
+	// Correction stays flagged on the fresh form until it clears, so the app
+	// keeps saying "corrected" rather than reverting to the plain prompt.
+	if filing != nil && !response.Cleared {
 		response.TINMismatchCount = filing.TINMismatchCount
-		response.SupportNeeded = filing.TINMismatchCount >= w9SelfServeMismatchLimit
-		response.CorrectionNeeded = !response.SupportNeeded
-	} else if filing != nil && !response.Cleared {
-		response.FormURL = filing.FormURL
-		response.FormURLExpiresAt = filing.FormURLExpiresAt
+		invalid := filing.Status == db.W9StatusInvalid
+		response.SupportNeeded = invalid && filing.TINMismatchCount >= w9SelfServeMismatchLimit
+		response.CorrectionNeeded = !response.SupportNeeded && filing.TINMismatchCount > 0
+		if !invalid {
+			response.FormURL = filing.FormURL
+			response.FormURLExpiresAt = filing.FormURLExpiresAt
+		}
 	}
 
 	rows, err := a.db.ListPayoutsForUserYear(ctx, userID, taxYear,
@@ -150,10 +154,10 @@ func payoutSourceLabel(source string) string {
 // StartW9 hands back a link to the form, creating the vendor request if this is
 // the first time. Called when someone taps "complete your tax form".
 //
-// After a failed TIN match this is where the fresh form is made: the rejected
-// one is never reopened, and a new one costs a TaxBandits credit, so it waits
-// for the person to ask. Past w9SelfServeMismatchLimit failures it refuses and
-// points them at support instead.
+// After a failed TIN match the fresh form is normally made at once (see
+// onW9TINMismatch); if that failed, this makes it. The rejected form is never
+// reopened. Past w9SelfServeMismatchLimit failures it refuses and points them
+// at support instead.
 func (a *AppService) StartW9(w http.ResponseWriter, r *http.Request) {
 	userDid := utils.GetDid(r)
 	if userDid == nil {

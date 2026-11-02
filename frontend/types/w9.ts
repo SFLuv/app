@@ -60,7 +60,7 @@ export interface W9UserStatus {
   threshold_sfluv: string
   /** How many of this year's forms failed the IRS TIN match. */
   tin_mismatch_count?: number
-  /** Rejected once: they can send a corrected form from the app. */
+  /** Rejected once and not yet cleared: they have been given (or can get) a fresh form. */
   correction_needed?: boolean
   /** Rejected again: the app now sends them to support, so an admin has to act. */
   support_needed?: boolean

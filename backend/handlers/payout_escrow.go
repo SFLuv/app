@@ -147,12 +147,12 @@ func (p *PayoutService) ensureTaxPayee(ctx context.Context, userID string) (stri
 // send the person back to the form they already submitted, which cannot be
 // submitted again. This makes a new request instead.
 //
-// A new request is a new TaxBandits credit, so it is only ever made on a
-// person's explicit action: the person tapping to fill in their W-9
-// (StartW9), or an admin sending or re-sending the request. The payout path
-// and the admin send pre-check keep calling EnsureW9Request, so a rejected
-// filing never mints a form on its own. For any filing that is not invalid
-// this is exactly EnsureW9Request.
+// A new request is a new TaxBandits credit, so it is made in three places
+// only: once automatically on a first failed TIN match (onW9TINMismatch), when
+// the person taps to fill in their W-9 (StartW9), and when an admin sends or
+// re-sends the request. The payout path and the admin send pre-check keep
+// calling EnsureW9Request, so a payout never mints a form. For any filing that
+// is not invalid this is exactly EnsureW9Request.
 func (p *PayoutService) ReissueInvalidW9Request(ctx context.Context, userID string, taxYear int) (*structs.W9Filing, error) {
 	if p.provider == nil {
 		return nil, w9provider.ErrProviderDisabled

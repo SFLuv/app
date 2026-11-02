@@ -75,3 +75,15 @@ entries were not yet written when it was measured).
 | A payout or a link refresh put a rejected filing back to `requested` while it still pointed at the rejected form (`EnsureW9FilingRequestedTx`, `SaveW9ProviderRequest` treated `invalid` like any open filing). Seen in production: a volunteer's filing went from invalid to pending when he earned 25 SFLUV on Nov 1, which hid the rejection from the report and the admin card and would have let the app re-open the rejected form instead of issuing a fresh one. Both upserts now keep `invalid`; migration 1.77 also puts any open filing with a rejected TIN match back to `invalid`. SQL dry-run against a local database | 0.1 | app |
 
 **Volume:** 2 files, +17/−4.
+
+# Round 3 — 2026-11-02
+
+**0.1h, measured** (08:17–08:29 MST, prompt time to commit by the shell clock; includes the round-2
+follow-up question about another volunteer's check).
+
+| Change | Hours | Repo |
+|---|---|---|
+| A first failed TIN match now issues the fresh form automatically, instead of waiting for a tap or an admin. The email carries its link ("Fill out a corrected W-9"); if the vendor call fails, the email falls back to "open the app", where tapping still makes it. One credit per person per year at most, bounded by the failure count. Form and email run in a goroutine so the webhook reply isn't held up. `correction_needed` stays set on the fresh form until it clears, so the app keeps the "corrected" wording; the admin card says whether they have the fresh form yet. Supersedes round 1's "no form is made at rejection time" | 0.1 | app |
+| Admin MCP `w9_report`: `tin_match` (matched / pending / rejected) and `tin_match_at`, so the IRS result can be checked without the database or the TaxBandits console | 0.0 | app |
+
+**Volume:** 6 files, +95/−48.
