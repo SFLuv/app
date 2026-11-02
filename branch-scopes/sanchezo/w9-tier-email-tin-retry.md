@@ -106,3 +106,22 @@ follow-up question about another volunteer's check).
 | Change | Hours | Repo |
 |---|---|---|
 | Warning push for somebody already past the limit (what they get while enforcement is off) reads "You've earned N SFLUV — we need a W-9 from you" instead of "close to the limit". A volunteer got the wrong one on 2026-11-01. Mobile pop-up fixed the same way on `sanchezo/w9-tin-correction` | 0.05 | app + mobile |
+
+# Round 6 — 2026-11-02: hand-tested on the dev stack
+
+**1.5h, measured** (09:36–11:02 MST, one sitting, `measure_sittings.py` method on the session transcript).
+Most of it is stack setup and the walkthrough itself; the code changes are small.
+
+| Work | Hours | Repo |
+|---|---|---|
+| Stack setup: dev-up with the fake provider and the mobile branch, a simulator dev build (`expo run:ios`, dev bundle id), stale LAN IP and a frozen simulator worked around, frontend TLS certificate reused instead of a keychain prompt, faucet minted, 30s sweep | 0.6 | — |
+| Stub form: a second button that fails the IRS check, and the stand-in mints a new submission after a rejection like the vendor does | 0.1 | app |
+| Walkthrough with Sanchez on the simulator: 400/500/600 prompts and emails, release on signature, first failure → automatic fresh form + correction email, corrected form clears, second failure → support message + admin alert, admin card "Send a new W-9 form" | 0.4 | app + mobile |
+| Fixes found by it: release/after-signing wording says "received", not "on file" (Sanchez chose to keep paying on signature); bell entry says "corrected" / "couldn't verify"; the prompt is re-armed after a second failure (nothing showed in the app); two copy fixes | 0.3 | app + mobile |
+
+**Volume since round 5:** app 6 files, +64/−23 (plus the stub-form commit); mobile 1 file.
+
+Local test notes: the dev-stack sweep skips a filing for an hour after it is polled when the provider
+accepts webhooks and none is configured locally, so the walkthrough cleared `last_polled_at` on the test
+filing; and `scripts/w9-earn` creates its event a day ahead, which redemption now refuses ("code not
+started"), so the QR window was opened by hand. Neither is fixed here.
