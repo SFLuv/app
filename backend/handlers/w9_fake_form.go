@@ -145,7 +145,13 @@ func (a *AppService) ServeFakeW9Form(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		if err := fake.Sign(requestID, "ssn"); err != nil {
+		// The second button on the form fails the IRS check, so the failed
+		// TIN match flow can be walked through by hand.
+		tinMatch := ""
+		if r.FormValue("tin_match") == w9provider.TINMatchRejected {
+			tinMatch = w9provider.TINMatchRejected
+		}
+		if err := fake.Sign(requestID, "ssn", tinMatch); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
 			w.Write([]byte(err.Error()))
 			return
@@ -195,7 +201,8 @@ func (a *AppService) ServeFakeW9Form(w http.ResponseWriter, r *http.Request) {
 		This stub collects nothing — an SSN must never reach our systems, not even in testing.</p>
 		<form method="POST">
 			<button type="submit" style="padding:.75rem 1.25rem;font-size:1rem">Submit W-9</button>
+			<button type="submit" name="tin_match" value="%s" style="padding:.75rem 1.25rem;font-size:1rem;margin-top:.75rem">Submit W-9 that fails the IRS check</button>
 		</form>
 		<p style="color:#666;font-size:.85rem">Request %s</p>
-		</body></html>`, requestID)
+		</body></html>`, w9provider.TINMatchRejected, requestID)
 }

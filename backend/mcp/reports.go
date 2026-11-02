@@ -89,7 +89,7 @@ These base-unit values are $SFLUV base units, NOT wei — wei implies 18 decimal
 	), a.transactions)
 
 	a.addTool(s, mcp.NewTool("w9_report",
-		mcp.WithDescription("Report W9 wallet earnings and submission status without exposing stored W9 document URLs."),
+		mcp.WithDescription("Report W9 wallet earnings and submission status, including the IRS TIN match result (tin_match: matched, pending, rejected) and failure count, without exposing stored W9 document URLs or taxpayer numbers."),
 		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithNumber("year", mcp.Description("Optional tax year.")),
 		mcp.WithString("wallet_address", mcp.Description("Optional wallet address.")),
@@ -384,6 +384,9 @@ type w9Status struct {
 	PendingApproval *bool  `json:"pending_approval,omitempty"`
 	ApprovedAt      string `json:"approved_at,omitempty"`
 	RejectedAt      string `json:"rejected_at,omitempty"`
+	TINMismatches   int    `json:"tin_mismatches,omitempty"`
+	TINMatch        string `json:"tin_match,omitempty"`
+	TINMatchAt      string `json:"tin_match_at,omitempty"`
 	LastTxHash      string `json:"last_tx_hash,omitempty"`
 	LastTxTimestamp int64  `json:"last_tx_timestamp,omitempty"`
 }
@@ -973,8 +976,15 @@ func (a *reportCore) loadW9(ctx context.Context, wallet string, userID string, y
 				-- completed_at, and used to be reported as approved.
 				CASE WHEN f.status IN ('completed','legacy_approved','manually_cleared')
 					THEN COALESCE(f.completed_at, f.updated_at) END AS approved_at,
+				-- tin_match_at is when the IRS check failed; the provider
+				-- event and updated_at are fallbacks for rows from before it.
 				CASE WHEN f.status = 'invalid'
-					THEN COALESCE(f.last_provider_event_at, f.updated_at) END AS rejected_at
+					THEN COALESCE(f.tin_match_at, f.last_provider_event_at, f.updated_at) END AS rejected_at,
+				COALESCE(f.tin_mismatch_count, 0) AS tin_mismatches,
+				-- The IRS check on the current form: matched, pending, rejected,
+				-- or empty before it has been asked.
+				COALESCE(f.tin_match, '') AS tin_match,
+				f.tin_match_at
 			FROM per_wallet w
 			LEFT JOIN per_person pp ON pp.user_id = w.user_id AND pp.year = w.year
 			LEFT JOIN crossed c ON c.user_id = w.user_id AND c.year = w.year
@@ -997,6 +1007,7 @@ func (a *reportCore) loadW9(ctx context.Context, wallet string, userID string, y
 			var pending sql.NullBool
 			var approvedAt sql.NullTime
 			var rejectedAt sql.NullTime
+			var tinMatchAt sql.NullTime
 			if err := rows.Scan(
 				&row.WalletAddress,
 				&row.ChainID,
@@ -1012,6 +1023,9 @@ func (a *reportCore) loadW9(ctx context.Context, wallet string, userID string, y
 				&pending,
 				&approvedAt,
 				&rejectedAt,
+				&row.TINMismatches,
+				&row.TINMatch,
+				&tinMatchAt,
 			); err != nil {
 				return fmt.Errorf("scan w9 report: %w", err)
 			}
@@ -1023,6 +1037,7 @@ func (a *reportCore) loadW9(ctx context.Context, wallet string, userID string, y
 			}
 			row.ApprovedAt = formatNullTime(approvedAt)
 			row.RejectedAt = formatNullTime(rejectedAt)
+			row.TINMatchAt = formatNullTime(tinMatchAt)
 			out = append(out, row)
 		}
 		return rows.Err()

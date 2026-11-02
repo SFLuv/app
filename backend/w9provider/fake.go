@@ -75,6 +75,9 @@ type fakeRequest struct {
 	completedAt *time.Time
 	tinType     string
 	statusReads int
+	// tinMatchResult, when set, overrides the stand-in's default for this one
+	// submission, so the stub form can choose to fail the IRS check.
+	tinMatchResult string
 }
 
 func NewFake(cfg Config) *Fake {
@@ -179,7 +182,10 @@ func (f *Fake) upsert(in W9RequestInput) *fakeRequest {
 		ref = fmt.Sprintf("sfluv:anon:%s:%d", f.runID, f.seq)
 	}
 
-	if existing, ok := f.byPayeeRef[ref]; ok && f.idempotentOnPayeeRef {
+	// A rejected submission is never handed back: asking again after a failed
+	// match is how a fresh form is made, and the vendor mints a new submission
+	// for it rather than reopening the one that failed.
+	if existing, ok := f.byPayeeRef[ref]; ok && f.idempotentOnPayeeRef && existing.w9Status != "INVALID" {
 		return existing
 	}
 
@@ -244,13 +250,14 @@ func (f *Fake) requestFor(r *fakeRequest) W9Request {
 	}
 }
 
-// Sign is what the stub form's submit button calls.
+// Sign is what the stub form's submit buttons call.
 //
 // It moves the request into the signed-but-unmatched state the vendor models
 // explicitly, which is the state we release money on. Nothing is pushed
 // anywhere — the backend finds out by polling, exactly as it will in
-// production.
-func (f *Fake) Sign(providerRequestID string, tinType string) error {
+// production. tinMatch, when not empty, is how this submission's IRS check
+// will come out (TINMatchRejected to test a failed match).
+func (f *Fake) Sign(providerRequestID string, tinType string, tinMatch string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -265,6 +272,7 @@ func (f *Fake) Sign(providerRequestID string, tinType string) error {
 		tinType = "ssn"
 	}
 	req.tinType = tinType
+	req.tinMatchResult = tinMatch
 	return nil
 }
 
@@ -298,7 +306,11 @@ func (f *Fake) GetW9Status(_ context.Context, providerRequestID string) (W9Statu
 	// Modelling the erasure matters — an earlier fake reported a tidy
 	// "rejected" verdict that the real vendor never sends, and the caller's
 	// rejection handling was dead code as a result.
-	switch f.tinMatchResult {
+	result := f.tinMatchResult
+	if req.tinMatchResult != "" {
+		result = req.tinMatchResult
+	}
+	switch result {
 	case TINMatchMatched:
 		req.w9Status = "COMPLETED"
 	case TINMatchRejected:
@@ -307,7 +319,7 @@ func (f *Fake) GetW9Status(_ context.Context, providerRequestID string) (W9Statu
 
 	// Re-derived from the new status, exactly as the real adapter does.
 	status.Status = tbNormaliseStatus(req.w9Status)
-	status.TINMatch = f.tinMatchResult
+	status.TINMatch = result
 	if status.Status == StatusInvalid {
 		status.CompletedAt = nil
 	}

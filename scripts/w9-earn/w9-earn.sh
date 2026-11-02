@@ -65,6 +65,10 @@ ADDR="$(psql_app "SELECT COALESCE(primary_wallet_address,'') FROM users WHERE id
 
 before="$(psql_app "SELECT ROUND(COALESCE(SUM(amount_base),0)/1000000.0, 2) FROM payout_ledger WHERE user_id='$UID_' AND tax_year=$YEAR AND counts_toward_threshold AND state IN ('escrowed','releasing','paid');")"
 
+# The event has to start in the future (the API refuses a past start), but a
+# code is only redeemable once the event's QR window opens, which by default is
+# midnight on the event's own day. Opening the window 48 hours before the start
+# puts "now" inside it, so the code can be redeemed straight away.
 TZ_NAME="America/Los_Angeles"
 s_at="$(TZ=$TZ_NAME date -v+1d '+%Y-%m-%dT%H:%M:%S' 2>/dev/null || TZ=$TZ_NAME date -d '+1 day' '+%Y-%m-%dT%H:%M:%S')"
 e_at="$(TZ=$TZ_NAME date -v+1d -v+3H '+%Y-%m-%dT%H:%M:%S' 2>/dev/null || TZ=$TZ_NAME date -d '+1 day +3 hours' '+%Y-%m-%dT%H:%M:%S')"
@@ -72,7 +76,8 @@ e_at="$(TZ=$TZ_NAME date -v+1d -v+3H '+%Y-%m-%dT%H:%M:%S' 2>/dev/null || TZ=$TZ_
 ev="$(admin_api POST /admin/volunteer-events "$(jq -nc \
   --arg t "w9-earn $AMOUNT" --arg s "$s_at" --arg e "$e_at" --arg tz "$TZ_NAME" --argjson r "$AMOUNT" \
   '{title:$t, description:"W-9 ladder step", start_at_local:$s, end_at_local:$e,
-    timezone:$tz, max_participants:1, reward_amount_sfluv:$r, signup_mode:"internal"}')" \
+    timezone:$tz, max_participants:1, reward_amount_sfluv:$r, signup_mode:"internal",
+    qr_live_offset_hours:48}')" \
   | jq -r '.id // empty')"
 [[ -n "$ev" ]] || { echo "could not create the event — is the faucet funded? (./scripts/fund-faucet/fund-faucet.sh)" >&2; exit 1; }
 
