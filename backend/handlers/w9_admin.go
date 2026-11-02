@@ -133,7 +133,8 @@ func (a *AppService) ClearW9Filing(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]any{"released": released, "back_pay_queued": backPay})
 }
 
-// ResendW9Request issues a fresh form link for someone who lost theirs.
+// ResendW9Request issues a fresh form link for someone who lost theirs, or a
+// new form for someone whose last one failed its TIN match.
 func (a *AppService) ResendW9Request(w http.ResponseWriter, r *http.Request) {
 	if a.payouts == nil {
 		w.WriteHeader(http.StatusServiceUnavailable)
@@ -145,7 +146,7 @@ func (a *AppService) ResendW9Request(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	filing, err := a.payouts.EnsureW9Request(r.Context(), userID, w9AdminTaxYear(r))
+	filing, err := a.payouts.ReissueInvalidW9Request(r.Context(), userID, w9AdminTaxYear(r))
 	if err != nil {
 		a.logger.Logf("error resending a w9 request for %s: %s", userID, err)
 		w.WriteHeader(http.StatusServiceUnavailable)

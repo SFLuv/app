@@ -42,6 +42,7 @@ func (p *PayoutService) onTierReached(ctx context.Context, userID string, taxYea
 		p.logger.Logf("w9: could not prepare a form for %s at tier %s: %s", userID, tier, err)
 	}
 	p.notify.pushW9Tier(ctx, userID, taxYear, tier)
+	p.notify.emailW9TierAsync(userID, taxYear, tier)
 }
 
 // onBlocked runs after a payout was refused.
@@ -55,6 +56,14 @@ func (p *PayoutService) onBlocked(ctx context.Context, userID string, taxYear in
 		return
 	}
 
+	// Recorded before the re-arm only to learn whether this is the first
+	// refusal of the year. The modal and push come back on every refusal; the
+	// email goes once, because an inbox is not a place for a message per QR
+	// scan.
+	firstRefusal, err := p.appDb.RecordW9TierReached(ctx, userID, taxYear, db.W9TierBlocked)
+	if err != nil && p.logger != nil {
+		p.logger.Logf("w9: could not record the blocked tier for %s: %s", userID, err)
+	}
 	if err := p.appDb.RearmW9BlockedTier(ctx, userID, taxYear); err != nil && p.logger != nil {
 		p.logger.Logf("w9: could not re-arm the blocked notice for %s: %s", userID, err)
 	}
@@ -63,6 +72,9 @@ func (p *PayoutService) onBlocked(ctx context.Context, userID string, taxYear in
 	}
 	if p.notify != nil {
 		p.notify.pushW9Tier(ctx, userID, taxYear, db.W9TierBlocked)
+		if firstRefusal {
+			p.notify.emailW9TierAsync(userID, taxYear, db.W9TierBlocked)
+		}
 	}
 }
 
@@ -82,7 +94,8 @@ func (p *PayoutService) onEscrowed(ctx context.Context, userID string, taxYear i
 	// keeps answering with the warning tier, so somebody whose money is
 	// actually being held is shown "you are approaching the limit" — the one
 	// tier whose whole point is that the money has already stopped.
-	if _, err := p.appDb.RecordW9TierReached(ctx, userID, taxYear, db.W9TierEscrowed); err != nil && p.logger != nil {
+	firstHold, err := p.appDb.RecordW9TierReached(ctx, userID, taxYear, db.W9TierEscrowed)
+	if err != nil && p.logger != nil {
 		p.logger.Logf("w9: could not record the escrow tier for %s: %s", userID, err)
 	}
 
@@ -94,7 +107,93 @@ func (p *PayoutService) onEscrowed(ctx context.Context, userID string, taxYear i
 
 	if p.notify != nil {
 		p.notify.pushW9EscrowHeld(ctx, userID, taxYear)
+		if firstHold {
+			p.notify.emailW9TierAsync(userID, taxYear, db.W9TierEscrowed)
+		}
 	}
+}
+
+// ensureTaxPayee returns the person's vendor payee id, creating it the first
+// time, along with the contact email the form request carries.
+func (p *PayoutService) ensureTaxPayee(ctx context.Context, userID string) (string, string, error) {
+	email, _ := p.appDb.GetUserContactEmail(ctx, userID)
+	contactEmail := ""
+	if email != nil {
+		contactEmail = *email
+	}
+
+	payeeID, err := p.appDb.GetTaxPayeeID(ctx, userID)
+	if err != nil {
+		return "", "", err
+	}
+	if payeeID == "" {
+		payee, err := p.provider.EnsurePayee(ctx, w9provider.PayeeInput{UserID: userID, Email: contactEmail})
+		if err != nil {
+			return "", "", err
+		}
+		payeeID = payee.ProviderPayeeID
+		if err := p.appDb.UpsertTaxPayee(ctx, userID, p.provider.Name(), payeeID); err != nil {
+			return "", "", err
+		}
+	}
+	return payeeID, contactEmail, nil
+}
+
+// ReissueInvalidW9Request gives somebody whose W-9 failed the TIN match a new,
+// blank form to file a corrected one.
+//
+// EnsureW9Request deliberately reuses a filing's existing link, which is right
+// for a form still in progress and wrong for one that was rejected: it would
+// send the person back to the form they already submitted, which cannot be
+// submitted again. This makes a new request instead.
+//
+// A new request is a new TaxBandits credit, so it is made in three places
+// only: once automatically on a first failed TIN match (onW9TINMismatch), when
+// the person taps to fill in their W-9 (StartW9), and when an admin sends or
+// re-sends the request. The payout path and the admin send pre-check keep
+// calling EnsureW9Request, so a payout never mints a form. For any filing that
+// is not invalid this is exactly EnsureW9Request.
+func (p *PayoutService) ReissueInvalidW9Request(ctx context.Context, userID string, taxYear int) (*structs.W9Filing, error) {
+	if p.provider == nil {
+		return nil, w9provider.ErrProviderDisabled
+	}
+	filing, err := p.appDb.GetW9Filing(ctx, userID, taxYear)
+	if err != nil {
+		return nil, err
+	}
+	if filing == nil || filing.Status != db.W9StatusInvalid {
+		return p.EnsureW9Request(ctx, userID, taxYear)
+	}
+
+	payeeID, contactEmail, err := p.ensureTaxPayee(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	created, err := p.provider.CreateW9Request(ctx, w9provider.W9RequestInput{
+		UserID:          userID,
+		ProviderPayeeID: payeeID,
+		TaxYear:         taxYear,
+		Email:           contactEmail,
+		ReturnURL:       w9ReturnURL(),
+	})
+	if err != nil {
+		return nil, err
+	}
+	changed, err := p.appDb.ReissueW9ProviderRequest(ctx, userID, taxYear, p.provider.Name(),
+		created.ProviderRequestID, created.FormURL, timePtr(created.FormURLExpiresAt))
+	if err != nil {
+		return nil, err
+	}
+	if !changed && p.logger != nil {
+		// The filing stopped being invalid between the read and the write:
+		// another tap or an admin got there first. The form just made is
+		// orphaned, which costs one credit; the filing keeps the other one.
+		p.logger.Logf("w9: reissued form %s for %s was not needed; the filing had already moved on", created.ProviderRequestID, userID)
+	}
+	if p.logger != nil && changed {
+		p.logger.Logf("w9: issued a fresh form to %s after a failed TIN match", userID)
+	}
+	return p.appDb.GetW9Filing(ctx, userID, taxYear)
 }
 
 // EnsureW9Request makes sure this person has somewhere to go and fill the form
@@ -112,25 +211,9 @@ func (p *PayoutService) EnsureW9Request(ctx context.Context, userID string, taxY
 		return filing, nil
 	}
 
-	email, _ := p.appDb.GetUserContactEmail(ctx, userID)
-	contactEmail := ""
-	if email != nil {
-		contactEmail = *email
-	}
-
-	payeeID, err := p.appDb.GetTaxPayeeID(ctx, userID)
+	payeeID, contactEmail, err := p.ensureTaxPayee(ctx, userID)
 	if err != nil {
 		return nil, err
-	}
-	if payeeID == "" {
-		payee, err := p.provider.EnsurePayee(ctx, w9provider.PayeeInput{UserID: userID, Email: contactEmail})
-		if err != nil {
-			return nil, err
-		}
-		payeeID = payee.ProviderPayeeID
-		if err := p.appDb.UpsertTaxPayee(ctx, userID, p.provider.Name(), payeeID); err != nil {
-			return nil, err
-		}
 	}
 
 	// A stored link may have expired, so an existing request is re-linked rather
@@ -387,11 +470,9 @@ func (p *PayoutService) SyncFilingFromProvider(ctx context.Context, filing *stru
 			}
 			if recorded && status.TINMatch == w9provider.TINMatchRejected && p.notify != nil {
 				// They need to file again, and they need to know before the next
-				// reward is held rather than after.
-				p.notify.pushW9Notice(ctx, filing.UserID, "w9_required",
-					"We need a corrected W-9",
-					"The tax details on your W-9 could not be verified. Please complete a new one so your next rewards aren't held.",
-				)
+				// reward is held rather than after. What they are told depends on
+				// whether this is the first failure; see onW9TINMismatch.
+				p.notify.onW9TINMismatch(ctx, filing.UserID, filing.TaxYear)
 			}
 		}
 	}

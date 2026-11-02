@@ -179,7 +179,27 @@ export function W9RequestPanel() {
                 <Badge variant="outline">
                   Earned {status.earned_sfluv} of {status.threshold_sfluv} SFLUV this year
                 </Badge>
+                {!!status.tin_mismatch_count && (
+                  <Badge variant={status.support_needed ? "destructive" : "outline"}>
+                    Failed the IRS TIN match {status.tin_mismatch_count === 1 ? "once" : `${status.tin_mismatch_count} times`}
+                  </Badge>
+                )}
               </div>
+            ) : null}
+
+            {status?.support_needed ? (
+              <p className="text-sm text-muted-foreground">
+                The app has stopped letting them retry on their own and asked them to email support. Talk to them
+                first, then send a new form from here once you know what went wrong.
+              </p>
+            ) : status?.correction_needed ? (
+              <p className="text-sm text-muted-foreground">
+                {status.filing_status === "invalid"
+                  ? "They don't have a fresh form yet. They get one by tapping the W-9 prompt in the app, or you can send it from here."
+                  : (status.tin_mismatch_count ?? 0) >= 2
+                    ? "They have a fresh form from an admin. Sending from here re-sends that same form."
+                    : "They have a fresh form and were told what to check. Sending from here re-sends that same form."}
+              </p>
             ) : null}
 
             {status?.cleared ? (
@@ -197,7 +217,11 @@ export function W9RequestPanel() {
             ) : (
               <Button size="sm" onClick={() => setConfirming(true)} disabled={statusLoading || !status}>
                 <Send className="h-4 w-4 mr-2" />
-                {status && status.filing_status !== "not_started" ? "Send the W-9 request again" : "Send W-9 request"}
+                {status?.filing_status === "invalid"
+                  ? "Send a new W-9 form"
+                  : status && status.filing_status !== "not_started"
+                    ? "Send the W-9 request again"
+                    : "Send W-9 request"}
               </Button>
             )}
 

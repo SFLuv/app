@@ -51,6 +51,10 @@ type W9Filing struct {
 	ClearReason         string     `json:"clear_reason,omitempty"`
 	LastProviderStatus  string     `json:"last_provider_status,omitempty"`
 	LastProviderEventAt *time.Time `json:"last_provider_event_at,omitempty"`
+	// TINMismatchCount is how many times this year's W-9 failed the IRS TIN
+	// match. It decides whether the person may simply file again (the first
+	// time) or needs a person to help (after that).
+	TINMismatchCount int `json:"tin_mismatch_count"`
 }
 
 // W9StatusResponse is what a person sees: whether they owe a form, how much is
@@ -67,8 +71,16 @@ type W9StatusResponse struct {
 	ThresholdBase string `json:"threshold_base"`
 	// AdminRequested means an admin asked for the form directly. The tier still
 	// decides whether the app prompts; this only changes what the prompt says.
-	AdminRequested bool   `json:"admin_requested"`
-	EarnedBase     string `json:"earned_base"`
+	AdminRequested bool `json:"admin_requested"`
+	// CorrectionNeeded means the W-9 on file failed the IRS TIN match and the
+	// person can file a corrected one themselves. Like AdminRequested, the tier
+	// still decides whether the app prompts; this changes what it says.
+	CorrectionNeeded bool `json:"correction_needed"`
+	// SupportNeeded means it has failed more than once: filing again on their
+	// own is refused, and they are asked to contact support instead.
+	SupportNeeded    bool   `json:"support_needed"`
+	TINMismatchCount int    `json:"tin_mismatch_count"`
+	EarnedBase       string `json:"earned_base"`
 
 	// Tier is the warning the person has not yet dismissed, if any, and drives
 	// which modal shows. Blocked means a payout was actually refused.

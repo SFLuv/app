@@ -58,7 +58,9 @@ func (a *AppService) GetW9StatusForUser(w http.ResponseWriter, r *http.Request) 
 //
 // Refused once a W-9 is on file — there is nothing left to ask for. Otherwise
 // safe to press again: the form link is reused, not re-created, and the prompt
-// and bell entry come back even if they were dismissed.
+// and bell entry come back even if they were dismissed. The one exception is a
+// filing that failed its TIN match, which gets a fresh form; that is also how
+// support unsticks somebody the app has stopped letting retry on their own.
 func (a *AppService) RequestW9FromUser(w http.ResponseWriter, r *http.Request) {
 	if a.payouts == nil {
 		w.WriteHeader(http.StatusServiceUnavailable)
@@ -88,7 +90,7 @@ func (a *AppService) RequestW9FromUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	filing, err := a.payouts.EnsureW9Request(ctx, userID, taxYear)
+	filing, err := a.payouts.ReissueInvalidW9Request(ctx, userID, taxYear)
 	if err != nil {
 		a.logger.Logf("w9 admin request: could not prepare a form for %s: %s", userID, err)
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "The tax form could not be prepared: " + err.Error()})
@@ -104,17 +106,29 @@ func (a *AppService) RequestW9FromUser(w http.ResponseWriter, r *http.Request) {
 	if filing != nil {
 		result.FilingStatus = filing.Status
 	}
-	result.PushDelivered = a.pushW9Notice(ctx, userID, "w9_requested", w9RequestPushTitle, w9RequestPushBody)
-
-	name := ""
-	if user.Name != nil {
-		name = strings.TrimSpace(*user.Name)
-	}
 	formURL := ""
 	if filing != nil {
 		formURL = filing.FormURL
 	}
-	result.Email, result.EmailSent, result.EmailError = a.sendW9RequestEmail(ctx, userID, name, formURL, taxYear)
+
+	// Somebody whose last form failed the IRS check once is told what to check,
+	// the same as the automatic correction. Past that, an admin has talked to
+	// them, so the plain request is what fits.
+	correcting := filing != nil && filing.TINMismatchCount > 0 && filing.TINMismatchCount < w9SelfServeMismatchLimit
+	if correcting {
+		result.PushDelivered = a.pushW9Notice(ctx, userID, "w9_requested",
+			"We need a corrected W-9",
+			"Your last W-9 didn't match IRS records. Tap to fill out a fresh one.",
+		)
+		result.Email, result.EmailSent, result.EmailError = a.emailW9Correction(ctx, userID, taxYear, true, formURL)
+	} else {
+		result.PushDelivered = a.pushW9Notice(ctx, userID, "w9_requested", w9RequestPushTitle, w9RequestPushBody)
+		name := ""
+		if user.Name != nil {
+			name = strings.TrimSpace(*user.Name)
+		}
+		result.Email, result.EmailSent, result.EmailError = a.sendW9RequestEmail(ctx, userID, name, formURL, taxYear)
+	}
 
 	requestedBy := "admin key"
 	if did := utils.GetDid(r); did != nil {
@@ -127,24 +141,11 @@ func (a *AppService) RequestW9FromUser(w http.ResponseWriter, r *http.Request) {
 }
 
 // armAdminW9Request re-arms the in-app prompt that best fits what the person
-// has earned.
-//
-// Installed apps can only draw the four threshold prompts, so a direct request
-// borrows one. Only the first two are ever borrowed: the escrow and blocked
-// prompts tell somebody their money is being held or refused, and a request is
-// not that. Below the warning line it is the notice; at or past it, the warning
-// — "close to the limit" reads a little short for someone already over it, but
-// what it asks for is true, which the other two would not be.
+// has earned (see armW9Prompt) and marks it as an admin request, so newer app
+// builds can say so.
 func (a *AppService) armAdminW9Request(ctx context.Context, userID string, taxYear int) (string, error) {
-	tier := db.W9TierNotice
-	earned, err := a.db.SumUserEarnedForYear(ctx, userID, taxYear)
+	tier, err := a.armW9Prompt(ctx, userID, taxYear)
 	if err != nil {
-		return "", err
-	}
-	if warning := w9Thresholds().Warning; warning != nil && earned.Cmp(warning) >= 0 {
-		tier = db.W9TierWarning
-	}
-	if err := a.db.RearmW9Tier(ctx, userID, taxYear, tier); err != nil {
 		return "", err
 	}
 	return tier, a.db.RearmW9Tier(ctx, userID, taxYear, db.W9TierAdminRequest)
