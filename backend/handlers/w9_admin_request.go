@@ -106,17 +106,29 @@ func (a *AppService) RequestW9FromUser(w http.ResponseWriter, r *http.Request) {
 	if filing != nil {
 		result.FilingStatus = filing.Status
 	}
-	result.PushDelivered = a.pushW9Notice(ctx, userID, "w9_requested", w9RequestPushTitle, w9RequestPushBody)
-
-	name := ""
-	if user.Name != nil {
-		name = strings.TrimSpace(*user.Name)
-	}
 	formURL := ""
 	if filing != nil {
 		formURL = filing.FormURL
 	}
-	result.Email, result.EmailSent, result.EmailError = a.sendW9RequestEmail(ctx, userID, name, formURL, taxYear)
+
+	// Somebody whose last form failed the IRS check once is told what to check,
+	// the same as the automatic correction. Past that, an admin has talked to
+	// them, so the plain request is what fits.
+	correcting := filing != nil && filing.TINMismatchCount > 0 && filing.TINMismatchCount < w9SelfServeMismatchLimit
+	if correcting {
+		result.PushDelivered = a.pushW9Notice(ctx, userID, "w9_requested",
+			"We need a corrected W-9",
+			"Your last W-9 didn't match IRS records. Tap to fill out a fresh one.",
+		)
+		result.Email, result.EmailSent, result.EmailError = a.emailW9Correction(ctx, userID, taxYear, true, formURL)
+	} else {
+		result.PushDelivered = a.pushW9Notice(ctx, userID, "w9_requested", w9RequestPushTitle, w9RequestPushBody)
+		name := ""
+		if user.Name != nil {
+			name = strings.TrimSpace(*user.Name)
+		}
+		result.Email, result.EmailSent, result.EmailError = a.sendW9RequestEmail(ctx, userID, name, formURL, taxYear)
+	}
 
 	requestedBy := "admin key"
 	if did := utils.GetDid(r); did != nil {

@@ -87,3 +87,14 @@ follow-up question about another volunteer's check).
 | Admin MCP `w9_report`: `tin_match` (matched / pending / rejected) and `tin_match_at`, so the IRS result can be checked without the database or the TaxBandits console | 0.0 | app |
 
 **Volume:** 6 files, +95/−48.
+
+# Round 4 — 2026-11-02
+
+**0.1h, measured** (08:47–08:49 MST, prompt time to commit by the shell clock).
+
+| Change | Hours | Repo |
+|---|---|---|
+| Admin alert: a second failed TIN match emails `W9_ALERT_EMAIL` (default admin@sfluv.org) with the person's name, email, year's earnings and user id, and what to do. No taxpayer number; the backend has none | 0.05 | app |
+| An admin "Send" for someone with one failed match sends the correction push and email (what to check, fresh form link) instead of the plain request | 0.05 | app |
+
+**Volume:** 4 files, +81/−7.

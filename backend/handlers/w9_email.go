@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -194,7 +195,65 @@ func (a *AppService) onW9TINMismatch(ctx context.Context, userID string, taxYear
 		to, sent, why := a.emailW9Correction(ctx, userID, taxYear, selfServe, formURL)
 		a.logger.Logf("w9: TIN match failed for %s (failure %d, self-serve %t, fresh form %t); email to %q sent %t %s",
 			userID, count, selfServe, formURL != "", to, sent, why)
+
+		if !selfServe {
+			a.alertW9SupportNeeded(ctx, userID, taxYear, count)
+		}
 	}()
+}
+
+// w9AlertTo is who hears that somebody needs a person to sort out their W-9:
+// W9_ALERT_EMAIL, or admin@sfluv.org when that is unset.
+func w9AlertTo() string {
+	if to := strings.TrimSpace(os.Getenv("W9_ALERT_EMAIL")); to != "" {
+		return to
+	}
+	return "admin@sfluv.org"
+}
+
+// alertW9SupportNeeded tells staff that somebody's W-9 has failed the IRS check
+// too many times to retry on their own, so a person has to step in.
+//
+// It names the person and how to reach them, and never carries a taxpayer
+// number: the backend does not have one. The form as submitted is in the
+// TaxBandits console.
+func (a *AppService) alertW9SupportNeeded(ctx context.Context, userID string, taxYear int, failures int) {
+	sender := utils.NewEmailSender()
+	if sender == nil {
+		a.logger.Logf("w9 alert: email is not configured; %s needs support after %d failed TIN matches", userID, failures)
+		return
+	}
+	name := a.w9EmailName(ctx, userID)
+	if name == "" {
+		name = "(no name on file)"
+	}
+	contact := "(no email on file)"
+	if email, err := a.db.GetUserContactEmail(ctx, userID); err == nil && email != nil && strings.TrimSpace(*email) != "" {
+		contact = strings.TrimSpace(*email)
+	}
+	earned := "unknown"
+	if amount, err := a.db.SumUserEarnedForYear(ctx, userID, taxYear); err == nil {
+		earned = formatSfluvBase(amount)
+	}
+
+	subject := fmt.Sprintf("W-9 needs help: %s failed the IRS check %d times", name, failures)
+	details := w9EmailParagraphs(
+		fmt.Sprintf("%s's W-9 for %d has failed the IRS TIN match %d times, so the app has stopped letting them retry on their own and asked them to email %s.", name, taxYear, failures, w9SupportEmail),
+		"Please reach out, find out what's different between what they're entering and their Social Security card (or the business's EIN letter), then send them a new form from the admin panel's Request a W-9 card.",
+	) + w9EmailList(
+		"Name: "+name,
+		"Email: "+contact,
+		fmt.Sprintf("Earned in %d: %s SFLUV", taxYear, earned),
+		"User id: "+userID,
+	) + w9EmailNote("The form they submitted is in the TaxBandits console. This email deliberately carries no taxpayer number.")
+
+	html := utils.BuildStyledEmail("A W-9 needs a person", subject, details)
+	to := w9AlertTo()
+	if err := sender.SendEmail(to, "SFLuv admin", subject, html, utils.NotificationFromEmail(), "SFLuv"); err != nil {
+		a.logger.Logf("w9 alert to %s about %s failed: %s", to, userID, err)
+		return
+	}
+	a.logger.Logf("w9 alert: told %s that %s needs support after %d failed TIN matches", to, userID, failures)
 }
 
 // emailW9Correction explains a failed TIN match and what to do next.
