@@ -2815,6 +2815,15 @@ func migrateW9TINMismatchCount(ctx context.Context, pools *MigrationPools) error
 		UPDATE w9_filings
 		SET tin_mismatch_count = 1
 		WHERE tin_match = 'rejected' AND tin_mismatch_count = 0;
+
+		-- A payout or a link refresh used to put a rejected filing back to
+		-- 'requested' while it still pointed at the rejected form, which hid
+		-- the rejection (seen in production, 2026-11-01). A rejected match that is still
+		-- open is invalid. A reissued form clears tin_match, so this never
+		-- touches one.
+		UPDATE w9_filings
+		SET status = 'invalid', updated_at = NOW()
+		WHERE tin_match = 'rejected' AND status IN ('requested','in_progress');
 	`); err != nil {
 		return fmt.Errorf("error adding the w9 tin mismatch count: %w", err)
 	}

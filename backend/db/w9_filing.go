@@ -108,8 +108,9 @@ func (a *AppDB) GetW9FilingStatusTx(ctx context.Context, tx pgx.Tx, userID strin
 
 // EnsureW9FilingRequestedTx records that this person now owes a form.
 //
-// It never downgrades a filing: someone already cleared stays cleared, and
-// threshold_crossed_at keeps its first value so the record shows when the
+// It never downgrades a filing: someone already cleared stays cleared, a
+// filing that failed its TIN match stays invalid (only ReissueW9ProviderRequest
+// moves it on, with a new form), and threshold_crossed_at keeps its first value so the record shows when the
 // obligation actually began rather than when it was last touched.
 func (a *AppDB) EnsureW9FilingRequestedTx(ctx context.Context, tx pgx.Tx, userID string, taxYear int) error {
 	if strings.TrimSpace(userID) == "" {
@@ -120,7 +121,7 @@ func (a *AppDB) EnsureW9FilingRequestedTx(ctx context.Context, tx pgx.Tx, userID
 		VALUES ($1, $2, 'requested', NOW(), NOW())
 		ON CONFLICT (user_id, tax_year) DO UPDATE
 		SET status = CASE
-				WHEN w9_filings.status IN ('completed','legacy_approved','manually_cleared')
+				WHEN w9_filings.status IN ('completed','legacy_approved','manually_cleared','invalid')
 					THEN w9_filings.status
 				ELSE 'requested'
 			END,
@@ -134,6 +135,9 @@ func (a *AppDB) EnsureW9FilingRequestedTx(ctx context.Context, tx pgx.Tx, userID
 }
 
 // SaveW9ProviderRequest stores the vendor handles for a filing.
+//
+// An invalid filing keeps its status. This is called when an existing link is
+// refreshed, and a refreshed link to a rejected form is still a rejected form.
 func (a *AppDB) SaveW9ProviderRequest(ctx context.Context, userID string, taxYear int, provider string, requestID string, formURL string, expires *time.Time) error {
 	if _, err := a.db.Exec(ctx, `
 		INSERT INTO w9_filings (user_id, tax_year, status, provider, provider_request_id, form_url, form_url_expires_at, requested_at)
@@ -144,7 +148,7 @@ func (a *AppDB) SaveW9ProviderRequest(ctx context.Context, userID string, taxYea
 			form_url = EXCLUDED.form_url,
 			form_url_expires_at = EXCLUDED.form_url_expires_at,
 			status = CASE
-				WHEN w9_filings.status IN ('completed','legacy_approved','manually_cleared')
+				WHEN w9_filings.status IN ('completed','legacy_approved','manually_cleared','invalid')
 					THEN w9_filings.status
 				ELSE 'requested'
 			END,

@@ -64,3 +64,14 @@ measured. Work was done with Claude Code.
 - Not hand-tested on the dev stack. Worth running: a sandbox filing with a deliberately wrong TIN,
   then the fresh form, then a second wrong TIN.
 - No mobile build (builds only when asked).
+
+# Round 2 — 2026-11-02
+
+**0.1h, measured** (08:12–08:15 MST, from the prompt time and the shell clock; this turn's transcript
+entries were not yet written when it was measured).
+
+| Fix | Hours | Repo |
+|---|---|---|
+| A payout or a link refresh put a rejected filing back to `requested` while it still pointed at the rejected form (`EnsureW9FilingRequestedTx`, `SaveW9ProviderRequest` treated `invalid` like any open filing). Seen in production: a volunteer's filing went from invalid to pending when he earned 25 SFLUV on Nov 1, which hid the rejection from the report and the admin card and would have let the app re-open the rejected form instead of issuing a fresh one. Both upserts now keep `invalid`; migration 1.77 also puts any open filing with a rejected TIN match back to `invalid`. SQL dry-run against a local database | 0.1 | app |
+
+**Volume:** 2 files, +17/−4.
