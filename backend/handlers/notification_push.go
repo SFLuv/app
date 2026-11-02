@@ -55,6 +55,7 @@ func (a *AppService) PushToUser(
 		return
 	}
 
+	badge := a.pushBadge(ctx, userId)
 	seen := map[string]struct{}{}
 	for _, subscription := range subscriptions {
 		if subscription == nil || !subscription.Active || !subscription.DeviceRegistered {
@@ -69,7 +70,7 @@ func (a *AppService) PushToUser(
 		}
 		seen[token] = struct{}{}
 
-		if _, err := sendExpoPushNotification(ctx, token, title, body, data); err != nil {
+		if _, err := sendExpoPushNotificationWith(ctx, token, title, body, data, expoPushOptions{Badge: badge}); err != nil {
 			a.logger.Logf("error pushing to %s: %s", userId, err)
 		}
 	}

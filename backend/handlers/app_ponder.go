@@ -918,6 +918,8 @@ func (a *AppService) PonderHookHandler(w http.ResponseWriter, r *http.Request) {
 	// token. A second wallet of theirs receiving the same transfer is a
 	// different receipt and does get its own row.
 	recorded := map[string]struct{}{}
+	// Per owner, counted once their receipt row exists, so the number includes it.
+	badges := map[string]*int{}
 	for _, listener := range pushListeners {
 		wallet, walletErr := a.db.GetWalletByUserAndAddress(r.Context(), listener.Owner, listener.Address)
 		if walletErr != nil {
@@ -947,8 +949,13 @@ func (a *AppService) PonderHookHandler(w http.ResponseWriter, r *http.Request) {
 			a.recordNotification(r.Context(), listener.Owner, "transaction", title, body, data)
 		}
 
+		badge, counted := badges[listener.Owner]
+		if !counted {
+			badge = a.pushBadge(r.Context(), listener.Owner)
+			badges[listener.Owner] = badge
+		}
 		token := strings.TrimSpace(string(listener.Data))
-		ticket, pushErr := sendExpoPushNotification(r.Context(), token, title, body, data)
+		ticket, pushErr := sendExpoPushNotificationWith(r.Context(), token, title, body, data, expoPushOptions{Badge: badge})
 		a.handleExpoPushTicket(r.Context(), listener, token, ticket)
 		if pushErr != nil {
 			a.logger.Logf("error sending Expo push notification for user %s, address %s: %s", listener.Owner, listener.Address, pushErr)
@@ -967,6 +974,12 @@ type expoPushOptions struct {
 	// ThreadId groups pushes in the iOS tray: one stack per conversation
 	// rather than every message as its own row.
 	ThreadId string
+	// Badge is the number for the app's icon, or nil to leave it alone. iOS
+	// shows no count at all unless a push sets one; see pushBadge.
+	Badge *int
+	// CategoryId names the actions iOS offers on the push. "chat_message" is
+	// the one with Reply, registered by the app at launch.
+	CategoryId string
 }
 
 func sendExpoPushNotification(ctx context.Context, token string, title string, body string, data map[string]string) (*expoPushTicket, error) {
@@ -990,11 +1003,21 @@ func sendExpoPushNotificationWith(ctx context.Context, token string, title strin
 	}
 
 	payload := map[string]any{
-		"to":    token,
-		"title": title,
-		"body":  body,
-		"sound": "default",
-		"data":  data,
+		"to":   token,
+		"data": data,
+	}
+	// Nothing to show is a badge update and nothing else: no title, no body
+	// and, above all, no sound — a phone that chimes for nothing visible.
+	if title != "" || body != "" {
+		payload["title"] = title
+		payload["body"] = body
+		payload["sound"] = "default"
+	}
+	if options.Badge != nil {
+		payload["badge"] = *options.Badge
+	}
+	if options.CategoryId != "" {
+		payload["categoryId"] = options.CategoryId
 	}
 	if options.MutableContent {
 		payload["mutableContent"] = true
