@@ -15,7 +15,8 @@ import (
 // So the icon stayed bare however much was waiting.
 //
 // The number is what is waiting: every unread message, plus everything the
-// bell counts. Each push carries it as it stands once that push's own message
+// bell counts — the notification ledger and the improver feed together, as
+// the app's bell adds them. Each push carries it as it stands once that push's own message
 // or notification has been stored, so the icon is right the moment the push
 // lands. The app sets it again whenever it is open and the counts move.
 
@@ -38,7 +39,16 @@ func (a *AppService) pushBadge(ctx context.Context, userId string) *int {
 		a.logger.Logf("error counting notifications for %s's badge: %s", userId, err)
 		return nil
 	}
-	total := messages + notifications
+	// The bell adds the improver feed's unseen entries to the ledger's — a
+	// workflow payout waiting, and the W-9 items, which every account can have
+	// — so the icon does too. Without them a push showed one fewer than the
+	// bell whenever a W-9 was outstanding.
+	improver, err := a.db.GetImproverNotifications(ctx, userId)
+	if err != nil {
+		a.logger.Logf("error counting improver notifications for %s's badge: %s", userId, err)
+		return nil
+	}
+	total := messages + notifications + improver.UnseenCount
 	return &total
 }
 
