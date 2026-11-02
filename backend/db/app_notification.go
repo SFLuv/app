@@ -261,7 +261,8 @@ func (a *AppDB) appendW9TierNotification(ctx context.Context, userID string, fee
 			n.tax_year,
 			n.tier,
 			n.notified_at,
-			COALESCE(f.status, 'not_started')
+			COALESCE(f.status, 'not_started'),
+			COALESCE(f.tin_mismatch_count, 0)
 		FROM w9_tier_notices n
 		LEFT JOIN w9_filings f ON f.user_id = n.user_id AND f.tax_year = n.tax_year
 		WHERE n.user_id = $1
@@ -285,12 +286,13 @@ func (a *AppDB) appendW9TierNotification(ctx context.Context, userID string, fee
 		tier       string
 		notifiedAt time.Time
 		status     string
+		mismatches int
 	}
 	collected := []tierRow{}
 	adminRequested := map[int]time.Time{}
 	for rows.Next() {
 		var row tierRow
-		if err := rows.Scan(&row.taxYear, &row.tier, &row.notifiedAt, &row.status); err != nil {
+		if err := rows.Scan(&row.taxYear, &row.tier, &row.notifiedAt, &row.status, &row.mismatches); err != nil {
 			return fmt.Errorf("error scanning w9 tier notification: %w", err)
 		}
 		if row.tier == W9TierAdminRequest {
@@ -315,12 +317,24 @@ func (a *AppDB) appendW9TierNotification(ctx context.Context, userID string, fee
 
 		body := "You are approaching the amount that needs a W-9 on file. It takes a couple of minutes."
 		if tier == W9TierWarning {
-			body = "You are close to the limit that needs a W-9 on file. Complete it and your rewards keep arriving."
+			// Also what somebody already past the limit has while enforcement
+			// is off, so it must not say "close to".
+			body = "You've reached the point where we need a W-9 on file. Complete it and your rewards keep arriving."
 		}
 
 		title := "A W-9 is coming up"
+		switch {
+		// A form failed the IRS TIN match. That is the news, whatever tier is
+		// carrying the entry; see onW9TINMismatch for the limit of two.
+		case row.mismatches >= 2 && status == W9StatusInvalid:
+			title = "We couldn't verify your W-9"
+			body = "Your W-9 still didn't match IRS records. Please email techsupport@sfluv.org and we'll help sort it out."
+		case row.mismatches > 0:
+			title = "We need a corrected W-9"
+			body = "The name or taxpayer number on your W-9 didn't match IRS records. Tap to send a corrected one."
+		}
 		// Asked for directly by an admin: say so, whatever tier carried it.
-		if requestedAt, ok := adminRequested[taxYear]; ok {
+		if requestedAt, ok := adminRequested[taxYear]; ok && row.mismatches == 0 {
 			title = "SFLuv has asked you for a W-9"
 			body = "It takes a couple of minutes. Tap to fill it in."
 			notifiedAt = requestedAt

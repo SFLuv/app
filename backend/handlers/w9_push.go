@@ -169,11 +169,15 @@ func (a *AppService) pushW9Reminder(ctx context.Context, userID string, taxYear 
 
 // pushW9EscrowReleased confirms money is on its way, and is honest about the
 // part that is not.
+//
+// Release happens on the signature, hours before the IRS TIN match answers, so
+// this says the form was received rather than that it is on file. A form that
+// later fails the match would otherwise have been called done.
 func (a *AppService) pushW9EscrowReleased(ctx context.Context, userID string, taxYear int, released *big.Int, backPayRequested int64) {
 	if released != nil && released.Sign() > 0 {
-		body := "Thanks — your W-9 is on file and your held rewards are on the way."
+		body := "Thanks — we've received your W-9, and your held rewards are on the way. We'll let you know if the IRS check finds anything to fix."
 		if backPayRequested > 0 {
-			body = "Thanks — your W-9 is on file. Your held rewards are on the way, and the rest is queued for us to send shortly."
+			body = "Thanks — we've received your W-9. Your held rewards are on the way, and the rest is queued for us to send shortly."
 		}
 		a.pushW9Notice(ctx, userID, "w9_escrow_released",
 			fmt.Sprintf("%s SFLUV is on the way", formatSfluvBase(released)), body)
@@ -182,7 +186,7 @@ func (a *AppService) pushW9EscrowReleased(ctx context.Context, userID string, ta
 
 	if backPayRequested > 0 {
 		a.pushW9Notice(ctx, userID, "w9_escrow_released",
-			"Your W-9 is on file",
+			"We've received your W-9",
 			"Thanks. Your outstanding rewards are queued for us to send shortly.",
 		)
 	}
