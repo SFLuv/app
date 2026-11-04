@@ -50,10 +50,11 @@ func (a *reportCore) registerExtraTools(s *server.MCPServer) {
 	), a.clientVersionsReport)
 
 	a.addTool(s, mcp.NewTool("w9_person_detail",
-		mcp.WithDescription("One person's W-9 state for a tax year, for answering \"what have they been told and what happened\": the filing (status, IRS TIN match result and failure count, provider status, timings), each tier prompt with when it was armed and dismissed, their payouts with state and any error, how many devices can get a push, and the app versions they last used. Never returns taxpayer numbers, form links, or provider request ids. Find the user id with search_users or w9_report."),
+		mcp.WithDescription("One person's W-9 state for a tax year, for answering \"what have they been told and what happened\": the filing (status, IRS TIN match result and failure count, provider status, timings), each tier prompt with when it was armed and dismissed, a payout summary with the newest payouts and any not yet paid, how many devices can get a push, and the app versions they last used. Never returns taxpayer numbers, form links, or provider request ids. Find the user id with search_users or w9_report."),
 		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithString("user_id", mcp.Required(), mcp.Description("The person's user id.")),
 		mcp.WithNumber("year", mcp.Description("Tax year. Defaults to the current year.")),
+		mcp.WithBoolean("all_payouts", mcp.Description("List up to the newest 100 payouts instead of the newest 5 plus any not yet paid. Defaults to false.")),
 	), a.w9PersonDetail)
 }
 
@@ -86,7 +87,7 @@ type w9PersonPayout struct {
 	Source                string  `json:"source"`
 	RecipientAddress      string  `json:"recipient_address"`
 	ChainID               int64   `json:"chain_id"`
-	AmountBase            string  `json:"amount_base"`
+	AmountSfluvBase       string  `json:"amount_sfluv_base"`
 	State                 string  `json:"state"`
 	CountsTowardThreshold bool    `json:"counts_toward_threshold"`
 	ShadowDecision        string  `json:"shadow_decision,omitempty"`
@@ -105,9 +106,26 @@ type w9PersonClient struct {
 	LastSeenAt *string `json:"last_seen_at,omitempty"`
 }
 
-// w9PersonPayoutLimit bounds the payout list; nobody near a W-9 line has more
-// than a handful, and the newest are the ones being asked about.
-const w9PersonPayoutLimit = 100
+type w9PersonPayoutState struct {
+	State           string `json:"state"`
+	Count           int    `json:"count"`
+	AmountSfluvBase string `json:"amount_sfluv_base"`
+}
+
+type w9PersonPayoutSummary struct {
+	Count            int                   `json:"count"`
+	CountedSfluvBase string                `json:"counted_sfluv_base"`
+	LastPayoutAt     *string               `json:"last_payout_at,omitempty"`
+	ByState          []w9PersonPayoutState `json:"by_state"`
+}
+
+// A busy volunteer has dozens of payouts, nearly all small and paid, and the
+// list is what makes this tool's answer long. By default it holds the newest
+// few and whatever has not been paid, the rows a question is usually about.
+const (
+	w9PersonRecentPayouts = 5
+	w9PersonPayoutLimit   = 100
+)
 
 // A failed send's error can quote the RPC endpoint, and that URL can carry a
 // provider key, so URLs are taken out of last_error before it leaves here.
@@ -127,8 +145,10 @@ func (a *reportCore) w9PersonDetail(ctx context.Context, request mcp.CallToolReq
 		return nil, errors.New("user_id is required")
 	}
 	year := request.GetInt("year", time.Now().UTC().Year())
+	allPayouts := request.GetBool("all_payouts", false)
 
 	var filing *w9PersonFiling
+	summary := w9PersonPayoutSummary{CountedSfluvBase: "0", ByState: []w9PersonPayoutState{}}
 	notices := []w9PersonNotice{}
 	payouts := []w9PersonPayout{}
 	clients := []w9PersonClient{}
@@ -188,6 +208,46 @@ func (a *reportCore) w9PersonDetail(ctx context.Context, request mcp.CallToolReq
 			return err
 		}
 
+		// Counted the way the payout gate counts, so failed and cancelled rows
+		// stay out of the total.
+		var lastPayoutAt *time.Time
+		if err := tx.QueryRow(ctx, `
+			SELECT
+				COUNT(*)::int,
+				COALESCE(SUM(amount_base) FILTER (
+					WHERE counts_toward_threshold
+					AND state IN ('pending','escrowed','releasing','paid')
+				), 0)::text,
+				MAX(created_at)
+			FROM payout_ledger
+			WHERE user_id = $1 AND tax_year = $2;
+		`, userID, year).Scan(&summary.Count, &summary.CountedSfluvBase, &lastPayoutAt); err != nil {
+			return err
+		}
+		summary.LastPayoutAt = optionalTime(lastPayoutAt)
+
+		stateRows, err := tx.Query(ctx, `
+			SELECT state, COUNT(*)::int, SUM(amount_base)::text
+			FROM payout_ledger
+			WHERE user_id = $1 AND tax_year = $2
+			GROUP BY state
+			ORDER BY state ASC;
+		`, userID, year)
+		if err != nil {
+			return err
+		}
+		defer stateRows.Close()
+		for stateRows.Next() {
+			var s w9PersonPayoutState
+			if err := stateRows.Scan(&s.State, &s.Count, &s.AmountSfluvBase); err != nil {
+				return err
+			}
+			summary.ByState = append(summary.ByState, s)
+		}
+		if err := stateRows.Err(); err != nil {
+			return err
+		}
+
 		payoutRows, err := tx.Query(ctx, `
 			SELECT
 				source, recipient_address, chain_id, amount_base::text, state,
@@ -195,9 +255,16 @@ func (a *reportCore) w9PersonDetail(ctx context.Context, request mcp.CallToolReq
 				created_at, escrowed_at, released_at, paid_at
 			FROM payout_ledger
 			WHERE user_id = $1 AND tax_year = $2
+			AND ($3 OR state <> 'paid' OR id IN (
+				SELECT recent.id
+				FROM payout_ledger recent
+				WHERE recent.user_id = $1 AND recent.tax_year = $2
+				ORDER BY recent.created_at DESC, recent.id DESC
+				LIMIT $4
+			))
 			ORDER BY created_at DESC, id DESC
-			LIMIT $3;
-		`, userID, year, w9PersonPayoutLimit)
+			LIMIT $5;
+		`, userID, year, allPayouts, w9PersonRecentPayouts, w9PersonPayoutLimit)
 		if err != nil {
 			return err
 		}
@@ -206,7 +273,7 @@ func (a *reportCore) w9PersonDetail(ctx context.Context, request mcp.CallToolReq
 			var p w9PersonPayout
 			var createdAt, escrowedAt, releasedAt, paidAt *time.Time
 			if err := payoutRows.Scan(
-				&p.Source, &p.RecipientAddress, &p.ChainID, &p.AmountBase, &p.State,
+				&p.Source, &p.RecipientAddress, &p.ChainID, &p.AmountSfluvBase, &p.State,
 				&p.CountsTowardThreshold, &p.ShadowDecision, &p.TxHash, &p.LastError,
 				&createdAt, &escrowedAt, &releasedAt, &paidAt,
 			); err != nil {
@@ -257,15 +324,16 @@ func (a *reportCore) w9PersonDetail(ctx context.Context, request mcp.CallToolReq
 	}
 
 	return map[string]any{
-		"generated_at": time.Now().UTC().Format(time.RFC3339),
-		"user_id":      userID,
-		"year":         year,
-		"note":         "filing is null when no filing exists for the year. acknowledged_at on a tier prompt means it was dismissed, not that a W-9 was filed. amount_base is in the same units as w9_report's amount_received, and its decimals depend on chain_id. Payouts list the newest 100.",
-		"filing":       filing,
-		"tier_notices": notices,
-		"payouts":      payouts,
-		"push_devices": pushDevices,
-		"app_versions": clients,
+		"generated_at":   time.Now().UTC().Format(time.RFC3339),
+		"user_id":        userID,
+		"year":           year,
+		"note":           "filing is null when no filing exists for the year. acknowledged_at on a tier prompt means it was dismissed, not that a W-9 was filed. _sfluv_base amounts are 6-decimal base units on every chain: divide by 1,000,000. counted_sfluv_base is the payout ledger only; w9_report's total can be higher where an older wallet total was never imported. payouts holds the newest 5 plus any not yet paid, unless all_payouts is set, which lists up to the newest 100.",
+		"filing":         filing,
+		"tier_notices":   notices,
+		"payout_summary": summary,
+		"payouts":        payouts,
+		"push_devices":   pushDevices,
+		"app_versions":   clients,
 	}, nil
 }
 
