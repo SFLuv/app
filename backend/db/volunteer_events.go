@@ -879,6 +879,32 @@ func (s *BotDB) ExpireStagedVolunteerEventPhotos(ctx context.Context, olderThanU
 	return tag.RowsAffected(), nil
 }
 
+// RemoveEventCoverPhoto deletes a photo from the event it belongs to, answering
+// pgx.ErrNoRows when that event has no such photo.
+func (s *BotDB) RemoveEventCoverPhoto(ctx context.Context, eventId string, photoId string) error {
+	tag, err := s.db.Exec(ctx, `DELETE FROM event_photos WHERE event_id = $1 AND id = $2;`, eventId, photoId)
+	if err != nil {
+		return fmt.Errorf("error removing event photo: %s", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return pgx.ErrNoRows
+	}
+	return nil
+}
+
+// ReorderEventCoverPhotos puts an event's photos in the given order; the first
+// is the one its tile shows. Photos missing from the list follow the listed ones.
+func (s *BotDB) ReorderEventCoverPhotos(ctx context.Context, eventId string, order []string) error {
+	if _, err := s.db.Exec(ctx, `
+		UPDATE event_photos p
+		SET position = COALESCE(array_position($2::text[], p.id), 100000 + p.position)
+		WHERE p.event_id = $1;
+	`, eventId, order); err != nil {
+		return fmt.Errorf("error reordering event photos: %s", err)
+	}
+	return nil
+}
+
 func (s *BotDB) DeleteVolunteerEventPhoto(ctx context.Context, photoId string) error {
 	if _, err := s.db.Exec(ctx, `DELETE FROM event_photos WHERE id = $1;`, photoId); err != nil {
 		return fmt.Errorf("error deleting event photo: %s", err)

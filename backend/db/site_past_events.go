@@ -54,10 +54,21 @@ const SitePastEventsDDL = `
 	CREATE INDEX IF NOT EXISTS site_past_event_photos_event_idx ON site_past_event_photos(event_id, position);
 `
 
+// SiteEventGalleriesDDL lets a gallery belong to a live volunteer event rather
+// than be a tile in Past events. The key is the event's series id (its own id
+// for a one-off), so a recurring event keeps one gallery from week to week. A
+// plain column and no foreign key: events live in the bot database. Applied by
+// migration 1.78.
+const SiteEventGalleriesDDL = `
+	ALTER TABLE site_past_events ADD COLUMN IF NOT EXISTS series_key TEXT;
+	CREATE UNIQUE INDEX IF NOT EXISTS site_past_events_series_key_idx
+		ON site_past_events(series_key) WHERE series_key IS NOT NULL;
+`
+
 const pastEventColumns = `
 	e.id, e.slug, e.title, to_char(e.event_date, 'YYYY-MM-DD'), e.description,
 	e.cover_file_id, e.cover_url, e.cover_width, e.cover_height, e.cover_alt, COALESCE(cf.filename, ''),
-	e.removed_at, e.created_at, e.updated_at`
+	e.series_key, e.removed_at, e.created_at, e.updated_at`
 
 const pastEventFrom = `site_past_events e LEFT JOIN site_files cf ON cf.id = e.cover_file_id`
 
@@ -68,7 +79,7 @@ func scanPastEvent(row pgx.Row) (*structs.SitePastEvent, error) {
 	if err := row.Scan(
 		&ev.Id, &ev.Slug, &ev.Title, &ev.Date, &ev.Description,
 		&coverFileId, &coverURL, &cover.Width, &cover.Height, &cover.Alt, &cover.Filename,
-		&ev.RemovedAt, &ev.CreatedAt, &ev.UpdatedAt,
+		&ev.SeriesKey, &ev.RemovedAt, &ev.CreatedAt, &ev.UpdatedAt,
 	); err != nil {
 		return nil, err
 	}
@@ -123,7 +134,7 @@ func (a *AppDB) ListPastEvents(ctx context.Context, includeRemoved bool) ([]*str
 	rows, err := a.db.Query(ctx, `
 		SELECT `+pastEventColumns+`
 		FROM `+pastEventFrom+`
-		WHERE $1 OR e.removed_at IS NULL
+		WHERE e.series_key IS NULL AND ($1 OR e.removed_at IS NULL)
 		ORDER BY e.event_date DESC, e.created_at DESC, e.id;
 	`, includeRemoved)
 	if err != nil {
@@ -170,7 +181,34 @@ func (a *AppDB) GetPastEvent(ctx context.Context, id string) (*structs.SitePastE
 
 // GetPastEventBySlug returns a shown (not removed) event by its address.
 func (a *AppDB) GetPastEventBySlug(ctx context.Context, slug string) (*structs.SitePastEvent, error) {
-	return a.getPastEvent(ctx, "e.slug = $1 AND e.removed_at IS NULL", slug)
+	return a.getPastEvent(ctx, "e.slug = $1 AND e.removed_at IS NULL AND e.series_key IS NULL", slug)
+}
+
+// GetEventGallery returns the gallery belonging to a live event's series.
+func (a *AppDB) GetEventGallery(ctx context.Context, seriesKey string) (*structs.SitePastEvent, error) {
+	return a.getPastEvent(ctx, "e.series_key = $1", seriesKey)
+}
+
+// EnsureEventGallery returns a series' gallery, starting one if it has none.
+func (a *AppDB) EnsureEventGallery(ctx context.Context, seriesKey string, slug string, title string, date string, userId *string) (*structs.SitePastEvent, error) {
+	for attempt := 0; attempt < 5; attempt++ {
+		candidate := slug
+		if attempt > 0 {
+			candidate = fmt.Sprintf("%s-%s", slug, uuid.NewString()[:4])
+		}
+		_, err := a.db.Exec(ctx, `
+			INSERT INTO site_past_events (id, slug, title, event_date, series_key, created_by)
+			VALUES ($1, $2, $3, $4::date, $5, $6)
+			ON CONFLICT (series_key) WHERE series_key IS NOT NULL DO NOTHING;
+		`, uuid.NewString(), candidate, title, date, seriesKey, userId)
+		if err == nil {
+			return a.GetEventGallery(ctx, seriesKey)
+		}
+		if !isUniqueViolation(err) {
+			return nil, fmt.Errorf("error starting event gallery: %s", err)
+		}
+	}
+	return nil, fmt.Errorf("error starting event gallery: could not find a free address")
 }
 
 // CreatePastEvent adds a tile. The slug must already be unique-ish; on a clash

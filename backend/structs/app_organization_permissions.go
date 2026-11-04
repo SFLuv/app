@@ -78,6 +78,7 @@ const (
 	CapAdminSiteFinancials   = "admin.site.financials"
 	CapAdminSiteForms        = "admin.site.forms"
 	CapAdminSitePastEvents   = "admin.site.past_events"
+	CapAdminSiteLiveEvents   = "admin.site.live_events"
 	// Protocol signing keys. Split in two deliberately: seeing which Safe pays
 	// for what is useful to anyone operating the platform, while minting a key
 	// and handing a Safe over to it is the most consequential button in the
@@ -168,6 +169,7 @@ func AdministrativeCapabilityGroup() CapabilityGroup {
 			{Key: CapAdminSiteFinancials, Label: "Edit financial documents", Hint: "Statements and impact reports on sfluv.org."},
 			{Key: CapAdminSiteForms, Label: "Edit forms and waivers", Hint: "Authoring, opening and closing public forms."},
 			{Key: CapAdminSitePastEvents, Label: "Edit past events", Hint: "The volunteer archive and its photo galleries."},
+			{Key: CapAdminSiteLiveEvents, Label: "Edit live event photos", Hint: "Cover photos and galleries on upcoming volunteer events."},
 			{Key: CapAdminOrgMembers, Label: "Manage other organizations' members", Hint: "Invite, remove and re-role members of any partner organization, which that organization's own admins would otherwise be the only ones able to do."},
 			{Key: CapAdminProtocolView, Label: "View protocol wallets", Hint: "The Safes that pay rewards and grant redeemer access, and the signing key behind each.", Read: true},
 			{Key: CapAdminProtocolRotate, Label: "Rotate protocol signing keys", Hint: "Mint a new key for a protocol Safe and remove the old one. The Safe's address never changes."},
@@ -189,6 +191,7 @@ func AdminSiteCapabilityCredentials() map[string]string {
 		CapAdminSiteFinancials: SiteCapabilityFinancials,
 		CapAdminSiteForms:      SiteCapabilityForms,
 		CapAdminSitePastEvents: SiteCapabilityPastEvents,
+		CapAdminSiteLiveEvents: SiteCapabilityLiveEvents,
 	}
 }
 

@@ -14,6 +14,7 @@ const (
 	SiteCapabilityFinancials = "website_financials"
 	SiteCapabilityForms      = "website_forms"
 	SiteCapabilityPastEvents = "website_past_events"
+	SiteCapabilityLiveEvents = "website_live_events"
 )
 
 // ── Files ────────────────────────────────────────────────────────────────────
@@ -339,6 +340,7 @@ type SiteCapabilities struct {
 	Financials bool `json:"financials"`
 	Forms      bool `json:"forms"`
 	PastEvents bool `json:"past_events"`
+	LiveEvents bool `json:"live_events"`
 }
 
 // ── Past events (the photo galleries under Volunteers) ───────────────────────
@@ -370,7 +372,10 @@ type SitePastEvent struct {
 	Description string      `json:"description"`
 	Cover       *SitePhoto  `json:"cover"`
 	Photos      []SitePhoto `json:"photos"`
-	RemovedAt   *int64      `json:"removed_at"`
+	// Set when this gallery belongs to a live event's series rather than being
+	// a Past events tile. Decides which permission may edit it.
+	SeriesKey *string `json:"-"`
+	RemovedAt *int64  `json:"removed_at"`
 	CreatedAt   int64       `json:"created_at"`
 	UpdatedAt   int64       `json:"updated_at"`
 }
@@ -413,6 +418,24 @@ type SitePublicPastEvent struct {
 type SitePublicPhoto struct {
 	SitePublicImage
 	Caption string `json:"caption,omitempty"`
+}
+
+// SiteLiveEvent is a volunteer event as the Website tools edit it: its cover
+// photos, and the gallery shared by its series (nil until one is started).
+type SiteLiveEvent struct {
+	Id                string                `json:"id"`
+	Title             string                `json:"title"`
+	Slug              string                `json:"slug"`
+	StartAt           string                `json:"start_at"`
+	Timezone          string                `json:"timezone"`
+	RecurrenceSummary string                `json:"recurrence_summary"`
+	OrganizerName     string                `json:"organizer_name"`
+	CoverPhotos       []VolunteerEventPhoto `json:"cover_photos"`
+	Gallery           *SitePastEvent        `json:"gallery"`
+}
+
+type SiteEventPhotoOrderRequest struct {
+	Order []string `json:"order"`
 }
 
 type SiteActivity struct {
