@@ -299,6 +299,9 @@ func (a *AppDB) appendW9TierNotification(ctx context.Context, userID string, fee
 			adminRequested[row.taxYear] = row.notifiedAt
 			continue
 		}
+		if row.tier == W9TierCorrectionPrompt {
+			continue
+		}
 		collected = append(collected, row)
 	}
 	if err := rows.Err(); err != nil {

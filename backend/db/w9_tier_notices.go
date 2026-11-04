@@ -22,8 +22,12 @@ const (
 	// never a prompt of its own — installed apps do not know it, and it ranks
 	// below every real tier — but it changes what the bell entry says.
 	W9TierAdminRequest = "admin_request"
-	W9TierEscrowed     = "escrow_600" // the crossing payment is held
-	W9TierBlocked      = "blocked"    // everything after is refused
+	// W9TierCorrectionPrompt marks that a payout has already brought the
+	// corrected-W-9 prompt back once. A marker like admin_request, never a prompt
+	// of its own; see onPayoutAfterTINMismatch.
+	W9TierCorrectionPrompt = "correction_prompt"
+	W9TierEscrowed         = "escrow_600" // the crossing payment is held
+	W9TierBlocked          = "blocked"    // everything after is refused
 )
 
 // W9TierSeverity orders the tiers so a later one can supersede an earlier.
@@ -221,6 +225,19 @@ func (a *AppDB) HasW9AdminRequest(ctx context.Context, userID string, taxYear in
 		SELECT EXISTS (SELECT 1 FROM w9_tier_notices WHERE user_id = $1 AND tax_year = $2 AND tier = $3);
 	`, userID, taxYear, W9TierAdminRequest).Scan(&exists); err != nil {
 		return false, fmt.Errorf("error checking for an admin w9 request for %s: %w", userID, err)
+	}
+	return exists, nil
+}
+
+// HasW9CorrectionPrompt reports whether a payout has already brought the
+// corrected-W-9 prompt back this year. Deleted with the other notices when the
+// filing clears.
+func (a *AppDB) HasW9CorrectionPrompt(ctx context.Context, userID string, taxYear int) (bool, error) {
+	var exists bool
+	if err := a.db.QueryRow(ctx, `
+		SELECT EXISTS (SELECT 1 FROM w9_tier_notices WHERE user_id = $1 AND tax_year = $2 AND tier = $3);
+	`, userID, taxYear, W9TierCorrectionPrompt).Scan(&exists); err != nil {
+		return false, fmt.Errorf("error checking the w9 correction prompt for %s: %w", userID, err)
 	}
 	return exists, nil
 }
