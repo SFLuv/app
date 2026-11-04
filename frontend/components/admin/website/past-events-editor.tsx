@@ -29,7 +29,7 @@ function formatDate(date: string): string {
   )
 }
 
-function Thumb({ photo, className }: { photo: SitePhoto | null; className?: string }) {
+export function Thumb({ photo, className }: { photo: SitePhoto | null; className?: string }) {
   const src = resolveSiteUrl(photo?.url)
   return (
     <div className={`overflow-hidden rounded-md border bg-muted ${className ?? ""}`}>
@@ -354,8 +354,22 @@ function PastEventDetails({
   )
 }
 
-/** The event's photos: add many at once, put them in order, caption them, pick the tile photo. */
-function PastEventGallery({ event, onChange }: { event: SitePastEvent; onChange: (event: SitePastEvent) => void }) {
+/**
+ * The event's photos: add many at once, put them in order, caption them, pick
+ * the tile photo. A live event's gallery has no tile, so no tile photo, and is
+ * edited through that event's routes (`liveEventId`).
+ */
+export function PastEventGallery({
+  event,
+  onChange,
+  liveEventId,
+}: {
+  event: SitePastEvent
+  onChange: (event: SitePastEvent) => void
+  liveEventId?: string
+}) {
+  const liveEvent = Boolean(liveEventId)
+  const base = liveEventId ? `/admin/site/live-events/${liveEventId}/gallery` : `/admin/site/past-events/${event.id}`
   const authFetch = useAuthFetch()
   const { toast } = useNotice()
   const input = useRef<HTMLInputElement>(null)
@@ -363,7 +377,7 @@ function PastEventGallery({ event, onChange }: { event: SitePastEvent; onChange:
   const [busyId, setBusyId] = useState<string | null>(null)
 
   const call = async (path: string, init: RequestInit, done?: string) => {
-    const updated = await siteFetch<SitePastEvent>(authFetch, `/admin/site/past-events/${event.id}${path}`, init)
+    const updated = await siteFetch<SitePastEvent>(authFetch, `${base}${path}`, init)
     onChange(updated)
     if (done) toast({ title: done, description: "The website updates within about 30 seconds." })
   }
@@ -497,7 +511,7 @@ function PastEventGallery({ event, onChange }: { event: SitePastEvent; onChange:
           <CardDescription>
             {event.photos.length === 0
               ? "No photos yet. Add as many as you like; you can choose several at once."
-              : `${event.photos.length} ${event.photos.length === 1 ? "photo" : "photos"}, shown on the gallery page in this order.`}
+              : `${event.photos.length} ${event.photos.length === 1 ? "photo" : "photos"}, shown ${liveEvent ? "under the event" : "on the gallery page"} in this order.`}
           </CardDescription>
         </div>
         <Button disabled={progress !== null} onClick={() => input.current?.click()}>
@@ -524,7 +538,7 @@ function PastEventGallery({ event, onChange }: { event: SitePastEvent; onChange:
               <li key={photo.id} className="space-y-2 rounded-lg border p-2">
                 <div className="relative">
                   <Thumb photo={photo} className="aspect-[4/3] w-full" />
-                  {isCover(photo) && (
+                  {!liveEvent && isCover(photo) && (
                     <Badge className="absolute left-2 top-2" variant="secondary">
                       <Star className="mr-1 h-3 w-3" /> Tile photo
                     </Badge>
@@ -560,7 +574,7 @@ function PastEventGallery({ event, onChange }: { event: SitePastEvent; onChange:
                     </Button>
                   </div>
                   <div className="flex gap-1">
-                    {!isCover(photo) && (
+                    {!liveEvent && !isCover(photo) && (
                       <Button variant="ghost" size="sm" disabled={busyId !== null} onClick={() => void useAsCover(photo)}>
                         <Star className="mr-1.5 h-3.5 w-3.5" /> Use as tile photo
                       </Button>

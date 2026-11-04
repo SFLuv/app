@@ -59,8 +59,8 @@ export function DashboardSidebar() {
     let cancelled = false
     siteFetch("/admin/site/me")
       .then((res) => (res.ok ? res.json() : null))
-      .then((caps: { banner?: boolean; financials?: boolean; forms?: boolean; past_events?: boolean } | null) => {
-        if (!cancelled) setCanEditWebsite(Boolean(caps && (caps.banner || caps.financials || caps.forms || caps.past_events)))
+      .then((caps: { banner?: boolean; financials?: boolean; forms?: boolean; past_events?: boolean; live_events?: boolean } | null) => {
+        if (!cancelled) setCanEditWebsite(Boolean(caps && (caps.banner || caps.financials || caps.forms || caps.past_events || caps.live_events)))
       })
       .catch(() => {
         if (!cancelled) setCanEditWebsite(false)

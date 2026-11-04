@@ -904,6 +904,7 @@ func AddSiteRoutes(r *chi.Mux, s *handlers.AppService) {
 	r.Post("/site/forms/{slug}/sign", s.PostSignForm)
 	r.Get("/site/past-events", s.GetPublicPastEvents)
 	r.Get("/site/past-events/{slug}", s.GetPublicPastEvent)
+	r.Get("/site/event-galleries/{event_id}", s.GetPublicEventGallery)
 
 	// Anyone signed in may ask what they can edit; the answer is just "nothing".
 	r.Get("/admin/site/me", withActiveAuth(s.GetSiteCapabilities, s))
@@ -911,6 +912,17 @@ func AddSiteRoutes(r *chi.Mux, s *handlers.AppService) {
 	r.Post("/admin/site/files", withSiteEditor("", s.UploadSiteFile, s))
 
 	banner, financials, forms, pastEvents := structs.SiteCapabilityBanner, structs.SiteCapabilityFinancials, structs.SiteCapabilityForms, structs.SiteCapabilityPastEvents
+
+	liveEvents := structs.SiteCapabilityLiveEvents
+	r.Get("/admin/site/live-events", withSiteEditor(liveEvents, s.GetAdminLiveEvents, s))
+	r.Post("/admin/site/live-events/{id}/photos", withSiteEditor(liveEvents, s.PostAdminLiveEventPhoto, s))
+	r.Put("/admin/site/live-events/{id}/photos/order", withSiteEditor(liveEvents, s.PutAdminLiveEventPhotoOrder, s))
+	r.Delete("/admin/site/live-events/{id}/photos/{photoId}", withSiteEditor(liveEvents, s.DeleteAdminLiveEventPhoto, s))
+	r.Post("/admin/site/live-events/{id}/gallery", withSiteEditor(liveEvents, s.PostAdminLiveEventGallery, s))
+	r.Post("/admin/site/live-events/{id}/gallery/photos", withSiteEditor(liveEvents, s.PostAdminLiveEventGalleryPhotos, s))
+	r.Put("/admin/site/live-events/{id}/gallery/photos/order", withSiteEditor(liveEvents, s.PutAdminLiveEventGalleryPhotoOrder, s))
+	r.Put("/admin/site/live-events/{id}/gallery/photos/{photoId}", withSiteEditor(liveEvents, s.PutAdminLiveEventGalleryPhoto, s))
+	r.Delete("/admin/site/live-events/{id}/gallery/photos/{photoId}", withSiteEditor(liveEvents, s.DeleteAdminLiveEventGalleryPhoto, s))
 
 	r.Get("/admin/site/past-events", withSiteEditor(pastEvents, s.GetAdminPastEvents, s))
 	r.Post("/admin/site/past-events", withSiteEditor(pastEvents, s.PostAdminPastEvent, s))
