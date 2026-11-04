@@ -88,7 +88,10 @@ Run `backend/cmd/init` (or start the server) so migration `1.21` creates the
 `admin_report_catalog`, `search_users`, `lookup_wallet`, `financial_summary`,
 `transactions`, `w9_report` (never the stored W9 URL), `merchant_report`,
 `workflow_report`, `events_report` (admin- and affiliate-created),
-`affiliate_report`, and `app_structure` (answers "where is the control for X?").
+`affiliate_report`, `client_versions_report` (counts by app version and build, no
+user details), `w9_person_detail` (one person's W-9 trail, never taxpayer numbers
+or form links), `sentry_release_health` (users, sessions and crashes per release),
+and `app_structure` (answers "where is the control for X?").
 
 To answer "how much did *Tilted Brim* receive this month": call `merchant_report`
 for that merchant's location payment wallet address(es), then `transactions` or

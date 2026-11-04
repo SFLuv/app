@@ -2,6 +2,8 @@ package mcp
 
 import (
 	"context"
+	"errors"
+	"regexp"
 	"strings"
 	"time"
 
@@ -38,6 +40,299 @@ func (a *reportCore) registerExtraTools(s *server.MCPServer) {
 		mcp.WithDescription("Explain where features and admin controls live in the SFLUV app (e.g. where merchants are approved), and which report tool exposes which data. Use this to answer navigation/where-is questions."),
 		mcp.WithReadOnlyHintAnnotation(true),
 	), a.appStructure)
+
+	a.addTool(s, mcp.NewTool("client_versions_report",
+		mcp.WithDescription("Count signed-in people by the app version and build they last used, per platform, seen in the last 7 days, the last 30 days, and ever. Use it to see how far a store release has spread, or who an over-the-air update can reach. Counts only: no user ids, contact details, or device details."),
+		mcp.WithReadOnlyHintAnnotation(true),
+		mcp.WithString("platform", mcp.Description("Optional platform filter (e.g. ios, android).")),
+		mcp.WithNumber("page", mcp.Description("Zero-based page number.")),
+		mcp.WithNumber("count", mcp.Description("Rows per page, capped at 500.")),
+	), a.clientVersionsReport)
+
+	a.addTool(s, mcp.NewTool("w9_person_detail",
+		mcp.WithDescription("One person's W-9 state for a tax year, for answering \"what have they been told and what happened\": the filing (status, IRS TIN match result and failure count, provider status, timings), each tier prompt with when it was armed and dismissed, their payouts with state and any error, how many devices can get a push, and the app versions they last used. Never returns taxpayer numbers, form links, or provider request ids. Find the user id with search_users or w9_report."),
+		mcp.WithReadOnlyHintAnnotation(true),
+		mcp.WithString("user_id", mcp.Required(), mcp.Description("The person's user id.")),
+		mcp.WithNumber("year", mcp.Description("Tax year. Defaults to the current year.")),
+	), a.w9PersonDetail)
+}
+
+type w9PersonFiling struct {
+	Status              string  `json:"status"`
+	Provider            string  `json:"provider,omitempty"`
+	HasFormLink         bool    `json:"has_form_link"`
+	TINType             string  `json:"tin_type,omitempty"`
+	TINMatch            string  `json:"tin_match,omitempty"`
+	TINMatchAt          *string `json:"tin_match_at,omitempty"`
+	TINMismatches       int     `json:"tin_mismatches"`
+	ThresholdCrossedAt  *string `json:"threshold_crossed_at,omitempty"`
+	RequestedAt         *string `json:"requested_at,omitempty"`
+	CompletedAt         *string `json:"completed_at,omitempty"`
+	ClearedByUserID     string  `json:"cleared_by_user_id,omitempty"`
+	ClearReason         string  `json:"clear_reason,omitempty"`
+	LastProviderStatus  string  `json:"last_provider_status,omitempty"`
+	LastProviderEventAt *string `json:"last_provider_event_at,omitempty"`
+	LastPolledAt        *string `json:"last_polled_at,omitempty"`
+	UpdatedAt           *string `json:"updated_at,omitempty"`
+}
+
+type w9PersonNotice struct {
+	Tier           string  `json:"tier"`
+	NotifiedAt     *string `json:"notified_at,omitempty"`
+	AcknowledgedAt *string `json:"acknowledged_at,omitempty"`
+}
+
+type w9PersonPayout struct {
+	Source                string  `json:"source"`
+	RecipientAddress      string  `json:"recipient_address"`
+	ChainID               int64   `json:"chain_id"`
+	AmountBase            string  `json:"amount_base"`
+	State                 string  `json:"state"`
+	CountsTowardThreshold bool    `json:"counts_toward_threshold"`
+	ShadowDecision        string  `json:"shadow_decision,omitempty"`
+	TxHash                string  `json:"tx_hash,omitempty"`
+	LastError             string  `json:"last_error,omitempty"`
+	CreatedAt             *string `json:"created_at,omitempty"`
+	EscrowedAt            *string `json:"escrowed_at,omitempty"`
+	ReleasedAt            *string `json:"released_at,omitempty"`
+	PaidAt                *string `json:"paid_at,omitempty"`
+}
+
+type w9PersonClient struct {
+	Platform   string  `json:"platform"`
+	Version    string  `json:"version"`
+	Build      string  `json:"build"`
+	LastSeenAt *string `json:"last_seen_at,omitempty"`
+}
+
+// w9PersonPayoutLimit bounds the payout list; nobody near a W-9 line has more
+// than a handful, and the newest are the ones being asked about.
+const w9PersonPayoutLimit = 100
+
+// A failed send's error can quote the RPC endpoint, and that URL can carry a
+// provider key, so URLs are taken out of last_error before it leaves here.
+var errorURL = regexp.MustCompile(`[a-zA-Z][a-zA-Z0-9+.-]*://[^\s"']+`)
+
+func optionalTime(t *time.Time) *string {
+	if t == nil {
+		return nil
+	}
+	formatted := t.UTC().Format(time.RFC3339)
+	return &formatted
+}
+
+func (a *reportCore) w9PersonDetail(ctx context.Context, request mcp.CallToolRequest) (any, error) {
+	userID := strings.TrimSpace(request.GetString("user_id", ""))
+	if userID == "" {
+		return nil, errors.New("user_id is required")
+	}
+	year := request.GetInt("year", time.Now().UTC().Year())
+
+	var filing *w9PersonFiling
+	notices := []w9PersonNotice{}
+	payouts := []w9PersonPayout{}
+	clients := []w9PersonClient{}
+	pushDevices := 0
+	err := withReadOnlyTx(ctx, a.appDB, func(tx pgx.Tx) error {
+		var f w9PersonFiling
+		var tinMatchAt, crossedAt, requestedAt, completedAt, providerEventAt, polledAt, updatedAt *time.Time
+		err := tx.QueryRow(ctx, `
+			SELECT
+				status, provider, form_url <> '', tin_type, tin_match, tin_match_at,
+				tin_mismatch_count, threshold_crossed_at, requested_at, completed_at,
+				cleared_by_user_id, clear_reason, last_provider_status,
+				last_provider_event_at, last_polled_at, updated_at
+			FROM w9_filings
+			WHERE user_id = $1 AND tax_year = $2;
+		`, userID, year).Scan(
+			&f.Status, &f.Provider, &f.HasFormLink, &f.TINType, &f.TINMatch, &tinMatchAt,
+			&f.TINMismatches, &crossedAt, &requestedAt, &completedAt,
+			&f.ClearedByUserID, &f.ClearReason, &f.LastProviderStatus,
+			&providerEventAt, &polledAt, &updatedAt,
+		)
+		switch {
+		case err == nil:
+			f.TINMatchAt = optionalTime(tinMatchAt)
+			f.ThresholdCrossedAt = optionalTime(crossedAt)
+			f.RequestedAt = optionalTime(requestedAt)
+			f.CompletedAt = optionalTime(completedAt)
+			f.LastProviderEventAt = optionalTime(providerEventAt)
+			f.LastPolledAt = optionalTime(polledAt)
+			f.UpdatedAt = optionalTime(updatedAt)
+			filing = &f
+		case !errors.Is(err, pgx.ErrNoRows):
+			return err
+		}
+
+		noticeRows, err := tx.Query(ctx, `
+			SELECT tier, notified_at, acknowledged_at
+			FROM w9_tier_notices
+			WHERE user_id = $1 AND tax_year = $2
+			ORDER BY notified_at ASC, tier ASC;
+		`, userID, year)
+		if err != nil {
+			return err
+		}
+		defer noticeRows.Close()
+		for noticeRows.Next() {
+			var n w9PersonNotice
+			var notifiedAt, acknowledgedAt *time.Time
+			if err := noticeRows.Scan(&n.Tier, &notifiedAt, &acknowledgedAt); err != nil {
+				return err
+			}
+			n.NotifiedAt = optionalTime(notifiedAt)
+			n.AcknowledgedAt = optionalTime(acknowledgedAt)
+			notices = append(notices, n)
+		}
+		if err := noticeRows.Err(); err != nil {
+			return err
+		}
+
+		payoutRows, err := tx.Query(ctx, `
+			SELECT
+				source, recipient_address, chain_id, amount_base::text, state,
+				counts_toward_threshold, shadow_decision, tx_hash, last_error,
+				created_at, escrowed_at, released_at, paid_at
+			FROM payout_ledger
+			WHERE user_id = $1 AND tax_year = $2
+			ORDER BY created_at DESC, id DESC
+			LIMIT $3;
+		`, userID, year, w9PersonPayoutLimit)
+		if err != nil {
+			return err
+		}
+		defer payoutRows.Close()
+		for payoutRows.Next() {
+			var p w9PersonPayout
+			var createdAt, escrowedAt, releasedAt, paidAt *time.Time
+			if err := payoutRows.Scan(
+				&p.Source, &p.RecipientAddress, &p.ChainID, &p.AmountBase, &p.State,
+				&p.CountsTowardThreshold, &p.ShadowDecision, &p.TxHash, &p.LastError,
+				&createdAt, &escrowedAt, &releasedAt, &paidAt,
+			); err != nil {
+				return err
+			}
+			p.LastError = errorURL.ReplaceAllString(p.LastError, "[url]")
+			p.CreatedAt = optionalTime(createdAt)
+			p.EscrowedAt = optionalTime(escrowedAt)
+			p.ReleasedAt = optionalTime(releasedAt)
+			p.PaidAt = optionalTime(paidAt)
+			payouts = append(payouts, p)
+		}
+		if err := payoutRows.Err(); err != nil {
+			return err
+		}
+
+		if err := tx.QueryRow(ctx, `
+			SELECT COUNT(DISTINCT token)::int
+			FROM mobile_push_subscriptions
+			WHERE owner = $1 AND active AND device_registered;
+		`, userID).Scan(&pushDevices); err != nil {
+			return err
+		}
+
+		clientRows, err := tx.Query(ctx, `
+			SELECT platform, version, build, last_seen_at
+			FROM user_client_versions
+			WHERE user_id = $1
+			ORDER BY last_seen_at DESC;
+		`, userID)
+		if err != nil {
+			return err
+		}
+		defer clientRows.Close()
+		for clientRows.Next() {
+			var c w9PersonClient
+			var lastSeen *time.Time
+			if err := clientRows.Scan(&c.Platform, &c.Version, &c.Build, &lastSeen); err != nil {
+				return err
+			}
+			c.LastSeenAt = optionalTime(lastSeen)
+			clients = append(clients, c)
+		}
+		return clientRows.Err()
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return map[string]any{
+		"generated_at": time.Now().UTC().Format(time.RFC3339),
+		"user_id":      userID,
+		"year":         year,
+		"note":         "filing is null when no filing exists for the year. acknowledged_at on a tier prompt means it was dismissed, not that a W-9 was filed. amount_base is in the same units as w9_report's amount_received, and its decimals depend on chain_id. Payouts list the newest 100.",
+		"filing":       filing,
+		"tier_notices": notices,
+		"payouts":      payouts,
+		"push_devices": pushDevices,
+		"app_versions": clients,
+	}, nil
+}
+
+type clientVersionRow struct {
+	Platform       string `json:"platform"`
+	Version        string `json:"version"`
+	Build          string `json:"build"`
+	LegacyInferred bool   `json:"legacy_inferred"`
+	Seen7d         int    `json:"seen_7d"`
+	Seen30d        int    `json:"seen_30d"`
+	Ever           int    `json:"ever"`
+	LastSeenAt     string `json:"last_seen_at"`
+}
+
+func (a *reportCore) clientVersionsReport(ctx context.Context, request mcp.CallToolRequest) (any, error) {
+	platform := strings.ToLower(strings.TrimSpace(request.GetString("platform", "")))
+	page := max(0, request.GetInt("page", 0))
+	limit := safeLimit(request.GetInt("count", defaultLimit))
+	offset := page * limit
+
+	versions := []clientVersionRow{}
+	err := withReadOnlyTx(ctx, a.appDB, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `
+			SELECT
+				platform,
+				version,
+				build,
+				legacy_inferred,
+				COUNT(*) FILTER (WHERE last_seen_at > NOW() - INTERVAL '7 days')::int AS seen_7d,
+				COUNT(*) FILTER (WHERE last_seen_at > NOW() - INTERVAL '30 days')::int AS seen_30d,
+				COUNT(*)::int AS ever,
+				MAX(last_seen_at)
+			FROM user_client_versions
+			WHERE ($1 = '' OR platform = $1)
+			GROUP BY platform, version, build, legacy_inferred
+			ORDER BY seen_30d DESC, ever DESC, platform ASC, version ASC, build ASC
+			LIMIT $2 OFFSET $3;
+		`, platform, limit, offset)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var row clientVersionRow
+			var lastSeen time.Time
+			if err := rows.Scan(
+				&row.Platform, &row.Version, &row.Build, &row.LegacyInferred,
+				&row.Seen7d, &row.Seen30d, &row.Ever, &lastSeen,
+			); err != nil {
+				return err
+			}
+			row.LastSeenAt = lastSeen.UTC().Format(time.RFC3339)
+			versions = append(versions, row)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return map[string]any{
+		"generated_at": time.Now().UTC().Format(time.RFC3339),
+		"page":         page,
+		"count":        limit,
+		"note":         "One count per person per platform, at the version they used most recently, so seen_* are people, not installs or downloads. Signed-in requests only: someone who never signed in is not counted. Version is the installed store build; over-the-air updates do not change it. legacy_inferred rows are old apps that send no version, recorded as 1.0.0 from their user agent.",
+		"versions":     versions,
+	}, nil
 }
 
 type eventRow struct {
@@ -227,6 +522,9 @@ func (a *reportCore) appStructure(ctx context.Context, _ mcp.CallToolRequest) (a
 			{"task": "Financial totals over a date range", "where": "/admin analytics dashboard.", "data_tool": "financial_summary"},
 			{"task": "Individual on-chain transfers", "where": "Transaction history views.", "data_tool": "transactions"},
 			{"task": "Debug a mobile app error or a reported bug", "where": "Sentry (one login, ops@sfluv.org); read it here instead.", "data_tool": "sentry_issues, then sentry_issue and sentry_events"},
+			{"task": "See which app versions people are running", "where": "Not shown in one place in the app; read it here.", "data_tool": "client_versions_report"},
+			{"task": "See how a new release is spreading and whether it crashes", "where": "Sentry; read it here instead.", "data_tool": "sentry_release_health"},
+			{"task": "Work out what one person was told about their W-9", "where": "/admin Tax & Escrow shows part of it; the full trail is here.", "data_tool": "w9_person_detail"},
 		},
 		"example_questions": []map[string]string{
 			{"question": "How much did merchant \"Tilted Brim\" receive this month?", "how": "merchant_report to find the merchant's location payment wallet address(es), then transactions or financial_summary filtered to those addresses and the month's timestamp range."},

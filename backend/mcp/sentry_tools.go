@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -132,6 +133,129 @@ func (a *reportCore) registerSentryTools(s *server.MCPServer) {
 	), func(ctx context.Context, request mcp.CallToolRequest) (any, error) {
 		return a.sentryEvents(ctx, sentry, request)
 	})
+
+	a.addTool(s, mcp.NewTool("sentry_release_health",
+		mcp.WithDescription("Per mobile app release: distinct users, sessions, how many sessions crashed or hit an error, and users per day. Use it to see how a store release is spreading and whether it is healthy. Only releases that report to Sentry appear, which means 2.2 and later; client_versions_report also covers older versions."),
+		mcp.WithReadOnlyHintAnnotation(true),
+		mcp.WithString("environment", mcp.Description("preview (test builds), production (store builds) or development. Omit for all.")),
+		mcp.WithString("period", mcp.Description("How far back: 24h, 7d, 14d (default) or 30d.")),
+	), func(ctx context.Context, request mcp.CallToolRequest) (any, error) {
+		return a.sentryReleaseHealth(ctx, sentry, request)
+	})
+}
+
+type sentrySessionGroups struct {
+	Intervals []string `json:"intervals"`
+	Groups    []struct {
+		By     map[string]string    `json:"by"`
+		Totals map[string]float64   `json:"totals"`
+		Series map[string][]float64 `json:"series"`
+	} `json:"groups"`
+}
+
+type sentryReleaseHealthRow struct {
+	Release    string         `json:"release"`
+	Users      int            `json:"users"`
+	Sessions   int            `json:"sessions"`
+	Crashed    int            `json:"crashed"`
+	Errored    int            `json:"errored"`
+	Abnormal   int            `json:"abnormal"`
+	Healthy    int            `json:"healthy"`
+	DailyUsers map[string]int `json:"daily_users"`
+}
+
+func (a *reportCore) sentryReleaseHealth(ctx context.Context, c *sentryClient, request mcp.CallToolRequest) (any, error) {
+	base := url.Values{}
+	base.Set("interval", "1d")
+	base.Add("groupBy", "release")
+	switch period := strings.TrimSpace(request.GetString("period", "14d")); period {
+	case "24h", "7d", "14d", "30d":
+		base.Set("statsPeriod", period)
+	default:
+		return nil, errors.New("period must be 24h, 7d, 14d or 30d")
+	}
+	if environment := strings.TrimSpace(request.GetString("environment", "")); environment != "" {
+		if !sentrySlug.MatchString(environment) {
+			return nil, errors.New("environment must be preview, production or development")
+		}
+		base.Set("environment", environment)
+	}
+	path := fmt.Sprintf("/organizations/%s/sessions/", c.org)
+
+	// Users cannot be split by session status, so this takes two questions.
+	byRelease := url.Values{}
+	for key, values := range base {
+		byRelease[key] = values
+	}
+	byRelease.Add("field", "count_unique(user)")
+	byRelease.Add("field", "sum(session)")
+	var users sentrySessionGroups
+	if err := c.get(ctx, path, byRelease, &users); err != nil {
+		return nil, err
+	}
+
+	byStatus := url.Values{}
+	for key, values := range base {
+		byStatus[key] = values
+	}
+	byStatus.Add("groupBy", "session.status")
+	byStatus.Add("field", "sum(session)")
+	var statuses sentrySessionGroups
+	if err := c.get(ctx, path, byStatus, &statuses); err != nil {
+		return nil, err
+	}
+
+	rows := map[string]*sentryReleaseHealthRow{}
+	for _, group := range users.Groups {
+		release := group.By["release"]
+		row := &sentryReleaseHealthRow{
+			Release:    release,
+			Users:      int(group.Totals["count_unique(user)"]),
+			Sessions:   int(group.Totals["sum(session)"]),
+			DailyUsers: map[string]int{},
+		}
+		for i, value := range group.Series["count_unique(user)"] {
+			// Days with nobody are left out; a release's series is mostly them.
+			if i < len(users.Intervals) && value > 0 && len(users.Intervals[i]) >= 10 {
+				row.DailyUsers[users.Intervals[i][:10]] = int(value)
+			}
+		}
+		rows[release] = row
+	}
+	for _, group := range statuses.Groups {
+		row, ok := rows[group.By["release"]]
+		if !ok {
+			continue
+		}
+		count := int(group.Totals["sum(session)"])
+		switch group.By["session.status"] {
+		case "crashed":
+			row.Crashed = count
+		case "errored":
+			row.Errored = count
+		case "abnormal":
+			row.Abnormal = count
+		case "healthy":
+			row.Healthy = count
+		}
+	}
+
+	releases := make([]*sentryReleaseHealthRow, 0, len(rows))
+	for _, row := range rows {
+		releases = append(releases, row)
+	}
+	sort.Slice(releases, func(i, j int) bool {
+		if releases[i].Users != releases[j].Users {
+			return releases[i].Users > releases[j].Users
+		}
+		return releases[i].Release < releases[j].Release
+	})
+
+	return map[string]any{
+		"generated_at": time.Now().UTC().Format(time.RFC3339),
+		"note":         "Releases read org.sfluv.wallet@<version>+<build>; the OS is not in the name, and iOS and Android builds number separately. Users include anyone on the team running the build. daily_users days are UTC.",
+		"releases":     releases,
+	}, nil
 }
 
 type sentryIssueRow struct {
