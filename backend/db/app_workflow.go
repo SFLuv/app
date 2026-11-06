@@ -5488,18 +5488,21 @@ func (a *AppDB) GetSupervisorWorkflows(
 		count = 200
 	}
 
+	// "paid_out_partial" is a filter, not a workflow status: every finalized
+	// workflow, plus any other that already has at least one step paid out.
 	allowedStatus := map[string]struct{}{
-		"pending":     {},
-		"approved":    {},
-		"rejected":    {},
-		"in_progress": {},
-		"completed":   {},
-		"paid_out":    {},
-		"blocked":     {},
-		"expired":     {},
-		"failed":      {},
-		"skipped":     {},
-		"deleted":     {},
+		"pending":          {},
+		"approved":         {},
+		"rejected":         {},
+		"in_progress":      {},
+		"completed":        {},
+		"paid_out":         {},
+		"paid_out_partial": {},
+		"blocked":          {},
+		"expired":          {},
+		"failed":           {},
+		"skipped":          {},
+		"deleted":          {},
 	}
 	normalizedStatus := strings.ToLower(strings.TrimSpace(statusFilter))
 	if normalizedStatus != "" && normalizedStatus != "all" {
@@ -5552,7 +5555,14 @@ func (a *AppDB) GetSupervisorWorkflows(
 			argIndex++
 		}
 	}
-	if normalizedStatus != "" && normalizedStatus != "all" {
+	if normalizedStatus == "paid_out_partial" {
+		baseConditions = append(baseConditions, `(
+			w.status = 'paid_out'
+			OR EXISTS (
+				SELECT 1 FROM workflow_steps ws WHERE ws.workflow_id = w.id AND ws.status = 'paid_out'
+			)
+		)`)
+	} else if normalizedStatus != "" && normalizedStatus != "all" {
 		baseConditions = append(baseConditions, fmt.Sprintf("w.status = $%d", argIndex))
 		args = append(args, normalizedStatus)
 		argIndex++

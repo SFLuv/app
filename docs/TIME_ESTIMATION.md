@@ -7,8 +7,8 @@
 > `scripts/measure_sittings.py`. Prefer the skill; keep this file pointing at it
 > rather than letting the two drift.
 >
-> Measured figures are recorded in `branch-scopes/<branch-name>.md` and nowhere
-> else — the skill supplies the number, that folder is the record.
+> Measured figures are recorded in `branch-scopes/<handle>/week-<YYYY-MM-DD>.md`,
+> one file per person per week, and nowhere else — the skill supplies the number, that folder is the record.
 
 Branch scopes carry hours. Those hours have been wrong — inflated roughly
 **4.7x** across `pjol/merchant-onboarding-revamp` before this document existed —
