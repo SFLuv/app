@@ -250,7 +250,22 @@ func (a *AppService) loadAdminPastEvent(w http.ResponseWriter, r *http.Request) 
 		a.siteServerError(w, "loading a past event", err)
 		return nil, false
 	}
+	// A live event's gallery is reached through the live event's own routes,
+	// under its own permission. To the Past events routes it doesn't exist.
+	if ev.SeriesKey != nil && !isLiveGalleryRequest(r) {
+		writeSiteError(w, http.StatusNotFound, "That event no longer exists.")
+		return nil, false
+	}
 	return ev, true
+}
+
+// galleryCapability is the permission a gallery's edits are logged under, so
+// the Recent changes list shows them to the right people.
+func galleryCapability(ev *structs.SitePastEvent) string {
+	if ev.SeriesKey != nil {
+		return structs.SiteCapabilityLiveEvents
+	}
+	return structs.SiteCapabilityPastEvents
 }
 
 func (a *AppService) PutAdminPastEvent(w http.ResponseWriter, r *http.Request) {
@@ -341,7 +356,7 @@ func (a *AppService) PostAdminPastEventPhotos(w http.ResponseWriter, r *http.Req
 	if len(files) == 1 {
 		noun = "photo"
 	}
-	a.siteActivity(r, structs.SiteCapabilityPastEvents, "add", "past_event", ev.Id,
+	a.siteActivity(r, galleryCapability(ev), "add", "past_event", ev.Id,
 		"Added "+strconv.Itoa(len(files))+" "+noun+" to “"+ev.Title+"”")
 	a.respondPastEvent(w, r, ev.Id, http.StatusOK)
 }
@@ -359,7 +374,7 @@ func (a *AppService) PutAdminPastEventPhotoOrder(w http.ResponseWriter, r *http.
 		a.siteServerError(w, "reordering past event photos", err)
 		return
 	}
-	a.siteActivity(r, structs.SiteCapabilityPastEvents, "edit", "past_event", ev.Id, "Reordered the photos of “"+ev.Title+"”")
+	a.siteActivity(r, galleryCapability(ev), "edit", "past_event", ev.Id, "Reordered the photos of “"+ev.Title+"”")
 	a.respondPastEvent(w, r, ev.Id, http.StatusOK)
 }
 
@@ -389,7 +404,7 @@ func (a *AppService) PutAdminPastEventPhoto(w http.ResponseWriter, r *http.Reque
 	if req.Caption == "" {
 		verb = "Removed a caption from"
 	}
-	a.siteActivity(r, structs.SiteCapabilityPastEvents, "edit", "past_event", ev.Id, verb+" “"+ev.Title+"”")
+	a.siteActivity(r, galleryCapability(ev), "edit", "past_event", ev.Id, verb+" “"+ev.Title+"”")
 	a.respondPastEvent(w, r, ev.Id, http.StatusOK)
 }
 
@@ -406,6 +421,6 @@ func (a *AppService) DeleteAdminPastEventPhoto(w http.ResponseWriter, r *http.Re
 		a.siteServerError(w, "removing a past event photo", err)
 		return
 	}
-	a.siteActivity(r, structs.SiteCapabilityPastEvents, "remove", "past_event", ev.Id, "Removed a photo from “"+ev.Title+"”")
+	a.siteActivity(r, galleryCapability(ev), "remove", "past_event", ev.Id, "Removed a photo from “"+ev.Title+"”")
 	a.respondPastEvent(w, r, ev.Id, http.StatusOK)
 }

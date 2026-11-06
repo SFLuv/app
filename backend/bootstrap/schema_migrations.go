@@ -2796,6 +2796,27 @@ var schemaMigrations = []SchemaMigration{
 			return migrateW9TINMismatchCount(ctx, pools)
 		},
 	},
+	{
+		Version:     "1.78",
+		Description: "live events: a gallery can belong to a volunteer event's series, and their editing credential",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			if _, err := pools.App.Exec(ctx, db.SiteEventGalleriesDDL); err != nil {
+				return fmt.Errorf("error adding event galleries: %w", err)
+			}
+
+			// Edits live events' photos only. Listed under Website editor,
+			// which covers it too.
+			if _, err := pools.App.Exec(ctx, `
+				INSERT INTO credential_type_definitions (value, label, visibility, parent_value)
+				VALUES ('website_live_events', 'Website editor: live events', 'private', 'website_editor')
+				ON CONFLICT (value) DO NOTHING;
+			`); err != nil {
+				return fmt.Errorf("error seeding the live events credential: %w", err)
+			}
+
+			return nil
+		},
+	},
 }
 
 // migrateW9TINMismatchCount adds the count of failed TIN matches per filing.

@@ -69,7 +69,7 @@ func (a *AppService) siteServerError(w http.ResponseWriter, what string, err err
 // Website editor, otherwise whichever per-part credentials they hold.
 func (a *AppService) SiteCapabilitiesFor(ctx context.Context, userId string) structs.SiteCapabilities {
 	if a.IsAdmin(ctx, userId) {
-		return structs.SiteCapabilities{Banner: true, Financials: true, Forms: true, PastEvents: true}
+		return structs.SiteCapabilities{Banner: true, Financials: true, Forms: true, PastEvents: true, LiveEvents: true}
 	}
 	held, err := a.db.GetActiveCredentialTypesForUser(ctx, userId)
 	if err != nil {
@@ -80,7 +80,7 @@ func (a *AppService) SiteCapabilitiesFor(ctx context.Context, userId string) str
 	for _, credential := range held {
 		switch credential {
 		case structs.SiteEditorCredential:
-			return structs.SiteCapabilities{Banner: true, Financials: true, Forms: true, PastEvents: true}
+			return structs.SiteCapabilities{Banner: true, Financials: true, Forms: true, PastEvents: true, LiveEvents: true}
 		case structs.SiteCapabilityBanner:
 			caps.Banner = true
 		case structs.SiteCapabilityFinancials:
@@ -89,6 +89,8 @@ func (a *AppService) SiteCapabilitiesFor(ctx context.Context, userId string) str
 			caps.Forms = true
 		case structs.SiteCapabilityPastEvents:
 			caps.PastEvents = true
+		case structs.SiteCapabilityLiveEvents:
+			caps.LiveEvents = true
 		}
 	}
 	return caps
@@ -107,8 +109,10 @@ func (a *AppService) CanEditSite(ctx context.Context, userId string, capability 
 		return caps.Forms
 	case structs.SiteCapabilityPastEvents:
 		return caps.PastEvents
+	case structs.SiteCapabilityLiveEvents:
+		return caps.LiveEvents
 	default:
-		return caps.Banner || caps.Financials || caps.Forms || caps.PastEvents
+		return caps.Banner || caps.Financials || caps.Forms || caps.PastEvents || caps.LiveEvents
 	}
 }
 
@@ -140,6 +144,9 @@ func (a *AppService) GetSiteActivity(w http.ResponseWriter, r *http.Request) {
 	}
 	if caps.PastEvents {
 		allowed = append(allowed, structs.SiteCapabilityPastEvents)
+	}
+	if caps.LiveEvents {
+		allowed = append(allowed, structs.SiteCapabilityLiveEvents)
 	}
 
 	items, err := a.db.ListSiteActivity(r.Context(), allowed, 50)

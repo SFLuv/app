@@ -31,8 +31,9 @@ Credentials, so only improvers can hold them:
 | `website_financials` | upload/remove financial statements and impact reports |
 | `website_forms` | create/edit/open/close forms; read signatures |
 | `website_past_events` | past events: tiles, tile photos, galleries |
+| `website_live_events` | live events: cover photos and galleries on upcoming volunteer events |
 
-The four per-part credentials have `parent_value = 'website_editor'`, so the
+The five per-part credentials have `parent_value = 'website_editor'`, so the
 grant menu shows them in a submenu under Website editor. `parent_value`
 (migration 1.63) is a general feature of credential types, set from the
 Credential types tab ("List under"); it only groups the menu and never implies
@@ -312,3 +313,16 @@ DELETE /admin/site/past-events/{id}/photos/{photoId}
   (browser "Save as PDF") instead.
 * Lawyer review of the seeded media-release wording. It ships as a **draft**,
   closed, until someone opens it.
+
+## Live events
+
+Website → Live events keeps the photos on upcoming volunteer events current, under
+`website_live_events`. Nothing else about the event can be changed from here.
+
+- **Cover photos** belong to one occurrence. A recurring event has one upcoming occurrence at a
+  time and the next copies its photos when generated, so a change carries forward.
+- **A gallery** is a `site_past_events` row with `series_key` set: the event's series id, or its own
+  id for a one-off. It uses the same photo handling as Past events, reached through
+  `/admin/site/live-events/{id}/gallery/photos`.
+- **The two permissions stay separate.** A row with a `series_key` is invisible to the Past events
+  routes, tiles and sitemap. The website reads it from `GET /site/event-galleries/{event_id}`.

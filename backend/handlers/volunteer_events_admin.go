@@ -451,6 +451,42 @@ func (a *AppService) AdminListVolunteerEvents(w http.ResponseWriter, r *http.Req
 // AdminUploadVolunteerEventPhoto attaches a cover photo. Bytes are sniffed
 // rather than trusted, since these are served to every visitor of the public
 // portal.
+type eventCoverUpload struct {
+	data        []byte
+	contentType string
+	fileName    string
+}
+
+// readEventCoverUpload reads and checks the photo in a cover upload. On failure
+// it returns the status to answer with and a message for the person uploading.
+func readEventCoverUpload(r *http.Request) (*eventCoverUpload, int, string) {
+	if err := r.ParseMultipartForm(maxEventPhotoBytes); err != nil {
+		return nil, http.StatusBadRequest, "could not read upload"
+	}
+	defer r.MultipartForm.RemoveAll()
+
+	file, header, err := r.FormFile("photo")
+	if err != nil {
+		return nil, http.StatusBadRequest, "photo file is required"
+	}
+	defer file.Close()
+
+	data, err := io.ReadAll(io.LimitReader(file, maxEventPhotoBytes+1))
+	if err != nil || len(data) == 0 {
+		return nil, http.StatusBadRequest, "photo file is empty"
+	}
+	if len(data) > maxEventPhotoBytes {
+		return nil, http.StatusRequestEntityTooLarge, fmt.Sprintf("photo must be %d MB or smaller", maxEventPhotoBytes>>20)
+	}
+
+	contentType := resolvePartnerLogoContentType(data, header.Filename)
+	if contentType == "" {
+		return nil, http.StatusBadRequest, "cover photo must be a PNG, JPEG, GIF, WebP, or SVG image"
+	}
+
+	return &eventCoverUpload{data: data, contentType: contentType, fileName: header.Filename}, 0, ""
+}
+
 func (a *AppService) AdminUploadVolunteerEventPhoto(w http.ResponseWriter, r *http.Request) {
 	if a.bot == nil || a.bot.db == nil {
 		w.WriteHeader(http.StatusServiceUnavailable)
@@ -463,37 +499,10 @@ func (a *AppService) AdminUploadVolunteerEventPhoto(w http.ResponseWriter, r *ht
 		return
 	}
 
-	if err := r.ParseMultipartForm(maxEventPhotoBytes); err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte("could not read upload"))
-		return
-	}
-	defer r.MultipartForm.RemoveAll()
-
-	file, header, err := r.FormFile("photo")
-	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte("photo file is required"))
-		return
-	}
-	defer file.Close()
-
-	data, err := io.ReadAll(io.LimitReader(file, maxEventPhotoBytes+1))
-	if err != nil || len(data) == 0 {
-		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte("photo file is empty"))
-		return
-	}
-	if len(data) > maxEventPhotoBytes {
-		w.WriteHeader(http.StatusRequestEntityTooLarge)
-		w.Write([]byte(fmt.Sprintf("photo must be %d MB or smaller", maxEventPhotoBytes>>20)))
-		return
-	}
-
-	contentType := resolvePartnerLogoContentType(data, header.Filename)
-	if contentType == "" {
-		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte("cover photo must be a PNG, JPEG, GIF, WebP, or SVG image"))
+	photo, status, problem := readEventCoverUpload(r)
+	if problem != "" {
+		w.WriteHeader(status)
+		w.Write([]byte(problem))
 		return
 	}
 
@@ -504,9 +513,9 @@ func (a *AppService) AdminUploadVolunteerEventPhoto(w http.ResponseWriter, r *ht
 		return
 	}
 
-	width, height := partnerLogoDimensions(data, contentType)
+	width, height := partnerLogoDimensions(photo.data, photo.contentType)
 
-	photoId, err := a.bot.db.AddVolunteerEventPhoto(r.Context(), eventId, data, contentType, header.Filename, width, height)
+	photoId, err := a.bot.db.AddVolunteerEventPhoto(r.Context(), eventId, photo.data, photo.contentType, photo.fileName, width, height)
 	if err != nil {
 		a.logger.Logf("error storing cover photo for event %s: %s", eventId, err)
 		w.WriteHeader(http.StatusInternalServerError)

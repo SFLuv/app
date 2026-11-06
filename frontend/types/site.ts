@@ -5,6 +5,7 @@ export interface SiteCapabilities {
   financials: boolean
   forms: boolean
   past_events: boolean
+  live_events: boolean
 }
 
 /** An uploaded image (`file_id`) or one already hosted by the site (`url` only). */
@@ -32,6 +33,19 @@ export interface SitePastEvent {
   removed_at: number | null
   created_at: number
   updated_at: number
+}
+
+/** A volunteer event as the Website tools edit it. `gallery` is null until one is started. */
+export interface SiteLiveEvent {
+  id: string
+  title: string
+  slug: string
+  start_at: string
+  timezone: string
+  recurrence_summary: string
+  organizer_name: string
+  cover_photos: { id: string; url: string; width: number; height: number; position: number }[]
+  gallery: SitePastEvent | null
 }
 
 export interface SitePastEventRequest {
