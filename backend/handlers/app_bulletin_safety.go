@@ -213,11 +213,8 @@ func (a *AppService) ReportContent(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]string{"status": "received"})
 }
 
-// defaultBulletinAlertEmail is the shared alerts inbox (see the dev
-// requirements doc, "Better admin alerts"). Reports go there rather than to an
-// admin-panel queue; a Telegram bot watching that inbox is how the team will
-// see and act on them. BULLETIN_ALERT_EMAIL overrides it.
-const defaultBulletinAlertEmail = "alerts@sfluv.org"
+// Reports go to the support inbox rather than to an admin-panel queue, with
+// everything else people send us. BULLETIN_ALERT_EMAIL overrides it.
 
 type bulletinReportAlert struct {
 	Report         structs.ContentReportRequest
@@ -241,7 +238,7 @@ func (a *AppService) sendBulletinReportAlert(alert bulletinReportAlert) {
 	go func() {
 		to := strings.TrimSpace(os.Getenv("BULLETIN_ALERT_EMAIL"))
 		if to == "" {
-			to = defaultBulletinAlertEmail
+			to = utils.SupportInboxEmail()
 		}
 		sender := utils.NewEmailSender()
 		if sender == nil {
@@ -307,7 +304,7 @@ func (a *AppService) sendBulletinReportAlert(alert bulletinReportAlert) {
 
 		subject := fmt.Sprintf("[SFLuv alert] bulletin_report %s %s (%s)", alert.Report.TargetType, alert.Report.TargetId, alert.Report.Reason)
 		content := utils.BuildStyledEmail("Bulletin report", "Someone reported something on the Bulletin or in Messages.", body)
-		if err := sender.SendEmail(to, "SFLuv alerts", subject, content, utils.NotificationFromEmail(), "SFLuv Bulletin"); err != nil {
+		if err := sender.SendEmail(to, "SFLuv Support", subject, content, utils.NotificationFromEmail(), "SFLuv Bulletin"); err != nil {
 			a.logger.Logf("error emailing bulletin report alert: %s", err)
 		}
 	}()
@@ -316,8 +313,8 @@ func (a *AppService) sendBulletinReportAlert(alert bulletinReportAlert) {
 // --- Moderation API ---------------------------------------------------------------
 //
 // There is deliberately no admin-panel page for reports. They are handled from
-// the alerts inbox, through a Telegram bot that watches it. These two admin
-// endpoints are that bot's API (withAdmin accepts X-Admin-Key for scripts).
+// the support inbox. These two admin endpoints are for tooling (withAdmin
+// accepts X-Admin-Key for scripts).
 
 // AdminListBulletinReports lists every target with open reports, oldest first,
 // with the reported content and the person's history.
@@ -464,7 +461,7 @@ func (a *AppService) AdminResolveBulletinReport(w http.ResponseWriter, r *http.R
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
-		a.notifyModeration(targetUser, "Your access to the Bulletin and Messages has been paused. Your wallet still works. Contact admin@sfluv.org with questions.")
+		a.notifyModeration(targetUser, "Your access to the Bulletin and Messages has been paused. Your wallet still works. Contact support@sfluv.org with questions.")
 	case "unsuspend":
 		if targetUser == "" {
 			bulletinError(w, http.StatusBadRequest, "bad_action", "There is no one to restore.")

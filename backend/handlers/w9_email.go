@@ -33,7 +33,13 @@ import (
 // self-service retries would burn credits and attempts without fixing anything.
 const w9SelfServeMismatchLimit = 2
 
-const w9SupportEmail = "techsupport@sfluv.org"
+// w9SupportPage is where a W-9 question goes. A form rather than an address,
+// because a form is what can tell the right people it arrived: mail typed to an
+// address reaches the inbox with nothing to say what it is about.
+const (
+	w9SupportPage    = "sfluv.org/get-in-touch"
+	w9SupportPageURL = "https://sfluv.org/get-in-touch?subject=w9"
+)
 
 // w9TierEmailsEnabled is the off switch for automatic W-9 email.
 //
@@ -190,7 +196,7 @@ func (a *AppService) onW9TINMismatch(ctx context.Context, userID string, taxYear
 		} else {
 			a.pushW9Notice(ctx, userID, "w9_required",
 				"We still couldn't verify your W-9",
-				fmt.Sprintf("Your corrected W-9 didn't match IRS records either. Please email %s and we'll help sort it out.", w9SupportEmail),
+				fmt.Sprintf("Your corrected W-9 didn't match IRS records either. Please contact us at %s and we'll help sort it out.", w9SupportPage),
 			)
 		}
 
@@ -240,7 +246,7 @@ func (a *AppService) alertW9SupportNeeded(ctx context.Context, userID string, ta
 
 	subject := fmt.Sprintf("W-9 needs help: %s failed the IRS check %d times", name, failures)
 	details := w9EmailParagraphs(
-		fmt.Sprintf("%s's W-9 for %d has failed the IRS TIN match %d times, so the app has stopped letting them retry on their own and asked them to email %s.", name, taxYear, failures, w9SupportEmail),
+		fmt.Sprintf("%s's W-9 for %d has failed the IRS TIN match %d times, so the app has stopped letting them retry on their own and asked them to contact us through %s.", name, taxYear, failures, w9SupportPage),
 		"Please reach out, find out what's different between what they're entering and their Social Security card (or the business's EIN letter), then send them a new form from the admin panel's Request a W-9 card.",
 	) + w9EmailList(
 		"Name: "+name,
@@ -294,7 +300,7 @@ func (a *AppService) emailW9Correction(ctx context.Context, userID string, taxYe
 		subtitle = "We'd like to help sort it out."
 		details = w9EmailParagraphs(greeting,
 			fmt.Sprintf("The name and taxpayer number on your corrected W-9 for %d didn't match the IRS's records either.", taxYear),
-			fmt.Sprintf("Rather than have you try again on your own, we'd like to sort it out with you. Please email %s and we'll help.", w9SupportEmail),
+			fmt.Sprintf("Rather than have you try again on your own, we'd like to sort it out with you. Please contact us at %s and we'll help.", w9SupportPageURL),
 			"Rewards you've already received aren't affected.",
 		)
 	}
@@ -393,5 +399,5 @@ func w9EmailNote(text string) string {
 }
 
 func w9EmailSupportLine() string {
-	return fmt.Sprintf(`<p style="margin:0; font-size:12px; color:#6b7280;">Questions? Email %s.</p>`+"\n", w9SupportEmail)
+	return fmt.Sprintf(`<p style="margin:0; font-size:12px; color:#6b7280;">Questions? <a href="%s">Contact us here</a>.</p>`+"\n", utils.EscapeEmailHTML(w9SupportPageURL))
 }

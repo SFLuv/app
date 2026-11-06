@@ -149,11 +149,15 @@ func (a *AppService) CreateSupportRequest(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// The reference goes out before anything else can fail: the person has
-	// written to us and is owed an acknowledgement regardless of whether the
-	// alert lands.
+	// The inbox is where the message gets answered, so it goes first. The person
+	// is owed an acknowledgement whatever happens to that, and the chats are told
+	// last so they can say if the inbox never got it.
+	inboxErr := a.sendSupportInboxEmail(request)
+	if inboxErr != nil {
+		a.logger.Logf("support request %s: could not email the support inbox: %s", request.Reference, inboxErr)
+	}
 	a.sendSupportReceivedEmail(request)
-	a.postSupportRequestAlert(r.Context(), request)
+	a.notifySupportRequest(r.Context(), request, inboxErr != nil)
 
 	a.logger.Logf("support request %s from %s", request.Reference, request.Email)
 	writeJSON(w, http.StatusCreated, map[string]string{"reference": request.Reference})
@@ -214,14 +218,18 @@ func (a *AppService) sendSupportReceivedEmail(request *structs.SupportRequest) {
 	if toName == "" {
 		toName = "there"
 	}
-	if err := sender.SendEmail(request.Email, toName,
+	// Sent from our Mailgun domain, because sfluv.org has no SPF or DMARC for
+	// Mailgun to send as. Reply-To is what makes answering it reach a person.
+	if err := sender.SendEmailWithReplyTo(request.Email, toName,
 		"We have your message ("+request.Reference+")",
-		html, utils.NotificationFromEmail(), "SFLuv"); err != nil {
+		html, utils.NotificationFromEmail(), "SFLuv", utils.SupportInboxEmail()); err != nil {
 		a.logger.Logf("support request %s: could not confirm receipt to %s: %s", request.Reference, request.Email, err)
 	}
 }
 
 // postSupportRequestAlert puts the request in front of the support set.
+//
+// Only used now when no support chat was told: see notifySupportRequest.
 //
 // The message itself goes in the alert's body rather than only in a link,
 // because a support request is usually answerable from reading it, and making

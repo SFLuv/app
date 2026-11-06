@@ -177,7 +177,7 @@ func (a *AppService) StartW9(w http.ResponseWriter, r *http.Request) {
 	}
 	if current != nil && current.Status == db.W9StatusInvalid && current.TINMismatchCount >= w9SelfServeMismatchLimit {
 		w.WriteHeader(http.StatusConflict)
-		w.Write([]byte("We couldn't verify your W-9 with the IRS. Please email " + w9SupportEmail + " and we'll help sort it out."))
+		w.Write([]byte("We couldn't verify your W-9 with the IRS. Please contact us at " + w9SupportPage + " and we'll help sort it out."))
 		return
 	}
 	filing, err := a.payouts.ReissueInvalidW9Request(r.Context(), *userDid, taxYear)
