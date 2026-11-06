@@ -510,13 +510,15 @@ export function PastEventGallery({
           <CardTitle>Gallery</CardTitle>
           <CardDescription>
             {event.photos.length === 0
-              ? "No photos yet. Add as many as you like; you can choose several at once."
+              ? liveEvent
+                ? "No photos yet. Lots of photos, up to 300, shown under the event. You can choose up to 50 at once."
+                : "No photos yet. Add as many as you like; you can choose several at once."
               : `${event.photos.length} ${event.photos.length === 1 ? "photo" : "photos"}, shown ${liveEvent ? "under the event" : "on the gallery page"} in this order.`}
           </CardDescription>
         </div>
         <Button disabled={progress !== null} onClick={() => input.current?.click()}>
           {progress ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Upload className="mr-2 h-4 w-4" />}
-          {progress ? `Uploading ${progress.done} of ${progress.total}…` : "Add photos"}
+          {progress ? `Uploading ${progress.done} of ${progress.total}…` : liveEvent ? "Add gallery photos" : "Add photos"}
         </Button>
         <input
           ref={input}
