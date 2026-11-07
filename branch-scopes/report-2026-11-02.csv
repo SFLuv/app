@@ -1,0 +1,24 @@
+CONTRACTOR NAME:,PJ O'Leary,,,,,
+SERVICE/TITLE:,,,,,,
+INVOICE DATE:,2026-11-02,,,,,
+SERVICE PERIOD: ,2026-10-26 to 2026-10-29,,,,,
+HOURLY RATE:,,,,,,
+% SFLUV,10.00%,,,,,
+,,,,,,
+DATE,,DESCRIPTION,,HOURS                ( input numbers only),,AMOUNT BILLED
+2026-10-26,,"Mobile 2.1 backend - beta access for bulletin and chat enforced server-side, migration recovery signature fix, supervisor rewards removed, cross-org member tooling, support routing by category, pre-permissioned invites, standing allocations removed; organization screen rework; mobile UX for 2.1; dev-menu notification previewer; St. Anthony's availability integration fix (0.47 measured + 8.87 stated)",,9.34,,0.00
+2026-10-27,,"v2.1 tag corrected; Sanchez's error fixes merged; partners banner; group chats, attachments, realtime socket and the mobile chat screen; chat polish - share sheet, message management, swipe actions, read receipts, attachment upload and thumbnail fixes, in-app banners, payment previews (6.37 measured)",,6.37,,0.00
+2026-10-28,,Boot cache and structural pass; share to SFLuv and chat pushes with the sender's photo; server-side ordering; pushes stopped for signed-out devices; paste photos and files into chat; picture pickers; Sentry tools in the admin MCP; board deck edits (3.59 measured),,3.59,,0.00
+2026-10-28,,"Presentation practice and board presentation, with board deck changes between run-throughs (stated 16:00-18:40, less the 0.29h of app work inside it on the row above)",,2.38,,0.00
+2026-10-29,,Chats marked read on open; pushes and chats show the name and photo given to a contact; photo label in the inbox; two reports and a contacts restructure investigated (0.76 measured),,0.76,,0.00
+2026-10-29,,Vipul Presentation (stated),,1.00,,0.00
+,,,,,,0.00
+,,,,,,0.00
+,,,,,,0.00
+,,,,,,
+ TOTAL: ,,,,23.44,, $ -
+PAYMENT IN SFLUV,,,,,, $ -
+PAYMENT IN USD,,,,,, $ -
+,,,,,,
+METHOD:,,"11.19h measured from PJ's session-transcript and commit timestamps (GitHub merges included) clustered into sittings on a 30-minute gap, unioned across app, mobile-app, webpage and animations. 12.25h stated by the contractor for work the clock did not see. Itemised in branch-scopes/pjol/mobile-2-1.md, rounds 1-14.",,,,
+WEAKNESSES:,,"Oct 26 is the contractor's stated 11:00-19:52 plus a measured 19:52-20:20; PJ's evidence covers 6.28h of the day and overlapped three other projects, so it is an upper bound on the app work, not a measurement of it. Three stated windows have no session behind them: Oct 28's presentation practice and board presentation, and Oct 29's Vipul Presentation. Oct 27 is 6.37h, not the branch scope's 7.09h: the scope joined 11:20-12:34 into one sitting on commit 3505dec at 11:45, which is Sanchez's, and its own rule counts only PJ's commits.",,,,

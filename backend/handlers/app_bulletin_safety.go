@@ -509,6 +509,7 @@ func (a *AppService) notifyModeration(userId, body string) {
 		if err != nil {
 			return
 		}
+		badge := a.pushBadge(ctx, userId)
 		seen := map[string]struct{}{}
 		for _, s := range subscriptions {
 			if s == nil || !s.Active || !s.DeviceRegistered {
@@ -519,7 +520,7 @@ func (a *AppService) notifyModeration(userId, body string) {
 				continue
 			}
 			seen[token] = struct{}{}
-			_, _ = sendExpoPushNotification(ctx, token, "SFLuv Bulletin", body, map[string]string{"type": "bulletin_moderation"})
+			_, _ = sendExpoPushNotificationWith(ctx, token, "SFLuv Bulletin", body, map[string]string{"type": "bulletin_moderation"}, expoPushOptions{Badge: badge})
 		}
 	}()
 }

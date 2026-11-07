@@ -120,7 +120,8 @@ func allowedOrigins() []string {
 	return origins
 }
 
-// redactSignedURLs keeps signed picture URLs out of the access log.
+// redactSignedURLs keeps signed notification URLs, pictures and threads, out of
+// the access log.
 //
 // A /push-image URL is a bearer link: its query is the signature, and anybody
 // holding it can fetch that picture until it expires. The access logger prints
@@ -133,6 +134,12 @@ func redactSignedURLs(next http.Handler) http.Handler {
 		if r.URL.Path == "/push-image" && r.URL.RawQuery != "" {
 			r = r.WithContext(r.Context())
 			r.RequestURI = "/push-image?(signed)"
+		}
+		// The same for a notification's thread URL, which can post as the
+		// person it was signed for.
+		if strings.HasPrefix(r.URL.Path, "/push-thread/") && r.URL.RawQuery != "" {
+			r = r.WithContext(r.Context())
+			r.RequestURI = r.URL.Path + "?(signed)"
 		}
 		next.ServeHTTP(w, r)
 	})
@@ -1211,6 +1218,10 @@ func AddBulletinRoutes(r *chi.Mux, a *handlers.AppService) {
 	// has no session. Unauthenticated by design; every URL is signed, expires,
 	// and names one picture — see push_images.go.
 	r.Get("/push-image", a.GetPushImage)
+	// A notification's thread: its history for the expanded banner, and a reply
+	// typed into it. Unauthenticated the same way — see push_thread.go.
+	r.Get("/push-thread/{id}", a.GetPushThread)
+	r.Post("/push-thread/{id}", a.PostPushThreadReply)
 	// A signed-out app reporting itself, so accounts no longer signed in on a
 	// device stop notifying it. Unauthenticated by design; it needs both of the
 	// device's own identifiers and can only switch notifications OFF.

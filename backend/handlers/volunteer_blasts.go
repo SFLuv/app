@@ -216,6 +216,7 @@ func (a *AppService) pushEventBlast(ctx context.Context, userId string, eventId 
 	}
 
 	delivered := false
+	badge := a.pushBadge(ctx, userId)
 	tokensSeen := map[string]struct{}{}
 	for _, subscription := range subscriptions {
 		if subscription == nil || !subscription.Active || !subscription.DeviceRegistered {
@@ -232,10 +233,10 @@ func (a *AppService) pushEventBlast(ctx context.Context, userId string, eventId 
 
 		// event_id so the app can deep-link to the event, reusing the plumbing
 		// already built for reminders.
-		if _, err := sendExpoPushNotification(ctx, token, subject, message, map[string]string{
+		if _, err := sendExpoPushNotificationWith(ctx, token, subject, message, map[string]string{
 			"type":     "volunteer_event_blast",
 			"event_id": eventId,
-		}); err != nil {
+		}, expoPushOptions{Badge: badge}); err != nil {
 			a.logger.Logf("error pushing event blast to %s: %s", userId, err)
 			continue
 		}

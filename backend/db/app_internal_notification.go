@@ -497,6 +497,27 @@ const notificationPageSize = 30
 // maxNotificationPageSize is the ceiling on a client-requested page.
 const maxNotificationPageSize = 100
 
+// CountOutstandingNotifications is the number on the bell: ordinary
+// notifications not yet seen, and internal alerts not yet resolved. The app's
+// icon badge counts the same things, plus unread messages, so a push can carry
+// the number the bell will show when the app opens.
+func (a *AppDB) CountOutstandingNotifications(ctx context.Context, userId string) (int, error) {
+	var n int
+	if err := a.db.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM user_notifications un
+		LEFT JOIN internal_notifications n ON n.id = un.internal_notification_id
+		WHERE un.user_id = $1
+		AND (
+			(un.internal_notification_id IS NULL AND un.seen_at IS NULL)
+			OR (un.internal_notification_id IS NOT NULL AND n.resolved_at IS NULL)
+		);
+	`, userId).Scan(&n); err != nil {
+		return 0, fmt.Errorf("error counting outstanding notifications: %w", err)
+	}
+	return n, nil
+}
+
 // GetNotificationFeed builds the notification screen for one user.
 //
 // Two queries rather than one, matching the two halves of the screen. Active is
@@ -566,18 +587,11 @@ func (a *AppDB) GetNotificationFeed(
 	// above is capped. A badge reading 100 while 140 things are outstanding is
 	// wrong in the direction that matters, and the cap exists to bound the
 	// payload rather than to bound the truth.
-	if err := a.db.QueryRow(ctx, `
-		SELECT COUNT(*)
-		FROM user_notifications un
-		LEFT JOIN internal_notifications n ON n.id = un.internal_notification_id
-		WHERE un.user_id = $1
-		AND (
-			(un.internal_notification_id IS NULL AND un.seen_at IS NULL)
-			OR (un.internal_notification_id IS NOT NULL AND n.resolved_at IS NULL)
-		);
-	`, userId).Scan(&feed.UnseenCount); err != nil {
-		return nil, fmt.Errorf("error counting outstanding notifications: %w", err)
+	unseen, err := a.CountOutstandingNotifications(ctx, userId)
+	if err != nil {
+		return nil, err
 	}
+	feed.UnseenCount = unseen
 
 	// History: everything no longer asking for anything.
 	where := `

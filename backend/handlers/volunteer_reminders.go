@@ -144,6 +144,7 @@ func (a *AppService) sendVolunteerReminderPush(ctx context.Context, userId strin
 	})
 
 	delivered := false
+	badge := a.pushBadge(ctx, userId)
 	tokensSeen := map[string]struct{}{}
 	for _, subscription := range subscriptions {
 		if subscription == nil || !subscription.Active || !subscription.DeviceRegistered {
@@ -160,10 +161,10 @@ func (a *AppService) sendVolunteerReminderPush(ctx context.Context, userId strin
 		tokensSeen[token] = struct{}{}
 
 		// event_id lets the app deep-link straight to the event detail screen.
-		if _, err := sendExpoPushNotification(ctx, token, "Volunteer event reminder", body, map[string]string{
+		if _, err := sendExpoPushNotificationWith(ctx, token, "Volunteer event reminder", body, map[string]string{
 			"type":     "volunteer_event_reminder",
 			"event_id": eventId,
-		}); err != nil {
+		}, expoPushOptions{Badge: badge}); err != nil {
 			a.logger.Logf("error sending volunteer reminder push to %s: %s", userId, err)
 			continue
 		}

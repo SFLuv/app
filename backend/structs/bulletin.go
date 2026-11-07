@@ -588,6 +588,9 @@ type MessagingSummary struct {
 type UnreadConversation struct {
 	ConversationId int64 `json:"conversation_id"`
 	LastMessageId  int64 `json:"last_message_id"`
+	// How many messages are unread in it, so the Messages badge can count
+	// messages rather than conversations. Added after the other two.
+	UnreadCount int `json:"unread_count"`
 }
 
 // TypingEvent is the body of a realtime typing event.
