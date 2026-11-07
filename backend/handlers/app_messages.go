@@ -622,7 +622,7 @@ func (a *AppService) messageNotice(ctx context.Context, conv *structs.Conversati
 		SenderId:   senderId,
 		SenderName: senderName,
 		IsGroup:    conv.IsGroup(),
-		NoReply:    msg.Kind == structs.MessageKindSystem,
+		NoReply:    senderId == structs.SupportBotUserId,
 	}
 	if conv.IsGroup() {
 		notice.Title = strings.TrimSpace(conv.Title)
@@ -1143,7 +1143,7 @@ func (a *AppService) queueMessagePush(senderId, recipientId string, conversation
 		if notice != nil {
 			options.MutableContent = true
 			// Reply from the banner. Only a message gets it: "you were added to
-			// a group" has nothing to answer, and neither does an automated line.
+			// a group" has nothing to answer, and neither does an automated message.
 			if !notice.NoReply {
 				options.CategoryId = "chat_message"
 			}

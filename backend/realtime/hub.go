@@ -97,9 +97,9 @@ type Notice struct {
 	Spoken     string `json:"spoken"`
 	SenderId   string `json:"sender_id"`
 	SenderName string `json:"sender_name"`
-	// NoReply marks an automated line, such as a support alert in a group chat.
+	// NoReply marks an automated message, such as a support alert in a group chat.
 	// Its push gets no Reply button: an answer would go to the group, not to
-	// whoever the line is about. Server-side only.
+	// whoever the message is about. Server-side only.
 	NoReply bool `json:"-"`
 	IsGroup bool `json:"is_group"`
 	// The group's picture, for a group's banner. Absent for a direct thread,

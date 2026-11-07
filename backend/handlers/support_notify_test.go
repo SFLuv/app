@@ -68,14 +68,14 @@ func TestSupportChatLinePreview(t *testing.T) {
 func TestMessageNoticeNoReply(t *testing.T) {
 	a := &AppService{}
 	conv := &structs.ConversationRow{}
-	for kind, want := range map[string]bool{
-		structs.MessageKindSystem: true,
-		structs.MessageKindText:   false,
+	for sender, want := range map[string]bool{
+		structs.SupportBotUserId: true,
+		"someone":                false,
 	} {
-		msg := &structs.Message{Kind: kind, SenderName: "SFLuv"}
-		notice := a.messageNotice(context.Background(), conv, msg, "sender", announcement{Line: "hi", Spoken: "said: hi"})
+		msg := &structs.Message{Kind: structs.MessageKindText, SenderName: "Name"}
+		notice := a.messageNotice(context.Background(), conv, msg, sender, announcement{Line: "hi", Spoken: "said: hi"})
 		if notice.NoReply != want {
-			t.Errorf("kind %q: NoReply = %v, want %v", kind, notice.NoReply, want)
+			t.Errorf("sender %q: NoReply = %v, want %v", sender, notice.NoReply, want)
 		}
 	}
 }

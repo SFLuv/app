@@ -2824,6 +2824,13 @@ var schemaMigrations = []SchemaMigration{
 			return migrateSupportBotUser(ctx, pools)
 		},
 	},
+	{
+		Version:     "1.80",
+		Description: "support: a public name for the account that posts support notifications",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			return migrateSupportBotProfile(ctx, pools)
+		},
+	},
 }
 
 // migrateW9TINMismatchCount adds the count of failed TIN matches per filing.
