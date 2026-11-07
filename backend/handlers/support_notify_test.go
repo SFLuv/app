@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"reflect"
 	"strings"
 	"testing"
@@ -61,5 +62,20 @@ func TestSupportChatLinePreview(t *testing.T) {
 
 	if line := supportChatLine(request, true); !strings.Contains(line, "did not reach support@") {
 		t.Errorf("line %q does not report the failed inbox email", line)
+	}
+}
+
+func TestMessageNoticeNoReply(t *testing.T) {
+	a := &AppService{}
+	conv := &structs.ConversationRow{}
+	for kind, want := range map[string]bool{
+		structs.MessageKindSystem: true,
+		structs.MessageKindText:   false,
+	} {
+		msg := &structs.Message{Kind: kind, SenderName: "SFLuv"}
+		notice := a.messageNotice(context.Background(), conv, msg, "sender", announcement{Line: "hi", Spoken: "said: hi"})
+		if notice.NoReply != want {
+			t.Errorf("kind %q: NoReply = %v, want %v", kind, notice.NoReply, want)
+		}
 	}
 }
