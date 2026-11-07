@@ -47,6 +47,9 @@ const (
 // SupportBotUserId is the account that posts support notifications into chats.
 const SupportBotUserId = "sfluv:support-bot"
 
+// SupportBotName is what that account is called in chats and on pushes.
+const SupportBotName = "SFLuv Support"
+
 // Where a support request was written.
 const (
 	SupportSourceWebsite = "website"

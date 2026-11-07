@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/SFLuv/app/backend/db"
 	"github.com/SFLuv/app/backend/structs"
 	"github.com/SFLuv/app/backend/utils"
 )
@@ -108,12 +109,16 @@ func (a *AppService) postSupportChatLine(ctx context.Context, conversationId int
 	if err != nil {
 		return err
 	}
-	msg, err := a.db.InsertSystemMessage(ctx, conv.Id, structs.SupportBotUserId, line)
+	msg, err := a.db.InsertMessage(ctx, &db.NewMessage{
+		ConversationId: conv.Id,
+		SenderId:       structs.SupportBotUserId,
+		Kind:           structs.MessageKindText,
+		Body:           line,
+	})
 	if err != nil {
 		return err
 	}
-	// Named here because the bot has no public profile to look a name up from.
-	msg.SenderName = "SFLuv"
+	msg.SenderName = structs.SupportBotName
 	a.fanOutMessage(ctx, conv, msg, structs.SupportBotUserId, announcement{
 		Line:   oneLineText(line),
 		Spoken: "said: " + oneLineText(line),
