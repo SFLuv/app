@@ -183,8 +183,8 @@ func (a *AppService) sendW9RequestEmail(ctx context.Context, userID string, name
   You can also fill it in from the SFLuv app. This link doesn't expire.
 </p>
 <p style="margin:0; font-size:12px; color:#6b7280;">
-  Questions? Email techsupport@sfluv.org.
-</p>`, greeting, taxYear, utils.EscapeEmailHTML(formURL))
+  Questions? <a href="%s">Contact us here</a>.
+</p>`, greeting, taxYear, utils.EscapeEmailHTML(formURL), utils.EscapeEmailHTML(w9SupportPageURL))
 
 	html := utils.BuildStyledEmail(w9RequestPushTitle, "Your tax form is ready to fill in.", details)
 	if err := sender.SendEmail(to, name, w9RequestPushTitle, html, utils.NotificationFromEmail(), "SFLuv"); err != nil {

@@ -1,5 +1,6 @@
 "use client";
 
+import { TECHNICAL_SUPPORT_URL } from "@/lib/support-contact";
 import Link from "next/link";
 import {
   ConnectedWallet,
@@ -254,7 +255,6 @@ const defaultTxState: TxState = {
 };
 const REACTIVATED_ACCOUNT_RECOVERY_NOTICE_STORAGE_KEY =
   "sfluv_reactivated_account_recovery_notice";
-const ACCOUNT_RECOVERY_SUPPORT_EMAIL = "techsupport@sfluv.org";
 const POLICY_REQUIRED_HEADER = "X-SFLUV-Auth-Reason";
 const POLICY_REQUIRED_REASON = "privacy-policy-required";
 const MERCHANT_ONBOARDING_REQUIRED_REASON = "merchant-onboarding-required";
@@ -2528,9 +2528,9 @@ function RecoveryFundsNoticeDialog({
             Contact{" "}
             <a
               className="font-semibold text-foreground underline underline-offset-4"
-              href={`mailto:${ACCOUNT_RECOVERY_SUPPORT_EMAIL}`}
+              href={TECHNICAL_SUPPORT_URL}
             >
-              {ACCOUNT_RECOVERY_SUPPORT_EMAIL}
+              support
             </a>{" "}
             to recover your funds.
           </p>

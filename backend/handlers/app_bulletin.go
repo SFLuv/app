@@ -153,7 +153,7 @@ func (a *AppService) requireBulletinParticipant(w http.ResponseWriter, r *http.R
 		return false
 	}
 	if profile.SuspendedUntil != nil && profile.SuspendedUntil.After(time.Now()) {
-		bulletinError(w, http.StatusLocked, "suspended", "Your access to the Bulletin and Messages is paused. Contact admin@sfluv.org with questions.")
+		bulletinError(w, http.StatusLocked, "suspended", "Your access to the Bulletin and Messages is paused. Contact support@sfluv.org with questions.")
 		return false
 	}
 	return true

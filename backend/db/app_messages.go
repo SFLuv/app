@@ -114,6 +114,24 @@ func (a *AppDB) GetConversationForMember(ctx context.Context, conversationId int
 	return &c, nil
 }
 
+// GetGroupConversation loads a group by id, for posting to it from outside the
+// conversation. Not a membership check: nothing a client sends can reach this.
+func (a *AppDB) GetGroupConversation(ctx context.Context, conversationId int64) (*structs.ConversationRow, error) {
+	var c structs.ConversationRow
+	err := scanConversation(a.db.QueryRow(ctx, `
+		SELECT `+conversationColumns+`, 0::bigint, ''::text
+		FROM conversations c
+		WHERE c.id = $1 AND c.kind = 'group' AND c.deleted_at IS NULL;
+	`, conversationId), &c)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrConversationNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &c, nil
+}
+
 // GetConversationMemberIds lists who is currently in a thread, which is the
 // fan-out set for both pushes and realtime events.
 func (a *AppDB) GetConversationMemberIds(ctx context.Context, conversationId int64) ([]string, error) {
@@ -299,7 +317,7 @@ func (a *AppDB) ListConversations(ctx context.Context, userId string) ([]InboxRo
 // were counted, and whether the read covers what made each one unread.
 func (a *AppDB) ListUnreadConversations(ctx context.Context, userId string) ([]structs.UnreadConversation, error) {
 	rows, err := a.db.Query(ctx, `
-		SELECT m.conversation_id, MAX(x.id)
+		SELECT m.conversation_id, MAX(x.id), COUNT(x.id)
 		FROM conversation_members m
 		JOIN conversations c ON c.id = m.conversation_id AND c.deleted_at IS NULL
 		JOIN messages x ON x.conversation_id = m.conversation_id
@@ -318,12 +336,33 @@ func (a *AppDB) ListUnreadConversations(ctx context.Context, userId string) ([]s
 	out := []structs.UnreadConversation{}
 	for rows.Next() {
 		var u structs.UnreadConversation
-		if err := rows.Scan(&u.ConversationId, &u.LastMessageId); err != nil {
+		if err := rows.Scan(&u.ConversationId, &u.LastMessageId, &u.UnreadCount); err != nil {
 			return nil, err
 		}
 		out = append(out, u)
 	}
 	return out, rows.Err()
+}
+
+// CountUnreadMessages is every message waiting for userId across their
+// conversations, counted the way each inbox row counts its own: newer than
+// where they have read to, from somebody else, not deleted. It is the message
+// half of the app icon's badge.
+func (a *AppDB) CountUnreadMessages(ctx context.Context, userId string) (int, error) {
+	var n int
+	err := a.db.QueryRow(ctx, `
+		SELECT COUNT(x.id)
+		FROM conversation_members m
+		JOIN conversations c ON c.id = m.conversation_id AND c.deleted_at IS NULL
+		JOIN messages x ON x.conversation_id = m.conversation_id
+			AND x.id > m.last_read_message_id
+			AND x.sender_id <> $1
+			AND x.deleted_at IS NULL
+		WHERE m.user_id = $1
+			AND m.archived_at IS NULL
+			AND m.left_at IS NULL;
+	`, userId).Scan(&n)
+	return n, err
 }
 
 // GetMessages pages a thread backwards from beforeId (0 = newest).

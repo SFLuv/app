@@ -622,6 +622,7 @@ func (a *AppService) messageNotice(ctx context.Context, conv *structs.Conversati
 		SenderId:   senderId,
 		SenderName: senderName,
 		IsGroup:    conv.IsGroup(),
+		NoReply:    msg.Kind == structs.MessageKindSystem,
 	}
 	if conv.IsGroup() {
 		notice.Title = strings.TrimSpace(conv.Title)
@@ -1126,10 +1127,26 @@ func (a *AppService) queueMessagePush(senderId, recipientId string, conversation
 					data["group_avatar_url"] = icon
 				}
 			}
+			// What a reply from the notification is sent through, and what the
+			// expanded notification reads its history from — see push_thread.go.
+			if !notice.NoReply {
+				if thread := pushThreadURL(conversationId, recipientId); thread != "" {
+					data["thread_url"] = thread
+				}
+			}
 		}
-		options := expoPushOptions{ThreadId: "conversation-" + strconv.FormatInt(conversationId, 10)}
+		options := expoPushOptions{
+			ThreadId: "conversation-" + strconv.FormatInt(conversationId, 10),
+			// Counted here, after the message was stored, so it includes this one.
+			Badge: a.pushBadge(ctx, recipientId),
+		}
 		if notice != nil {
 			options.MutableContent = true
+			// Reply from the banner. Only a message gets it: "you were added to
+			// a group" has nothing to answer, and neither does an automated line.
+			if !notice.NoReply {
+				options.CategoryId = "chat_message"
+			}
 		}
 
 		subscriptions, err := a.db.GetMobilePushSubscriptionsByUser(ctx, recipientId)

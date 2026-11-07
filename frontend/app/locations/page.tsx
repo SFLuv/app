@@ -22,8 +22,8 @@ import { ensureGooglePlacesScript, hasGoogleMapsPlaces } from "@/lib/google-plac
 import {
   getLocationApplicationStatus,
   MERCHANT_ONBOARDING_PATH,
-  MERCHANT_SUPPORT_EMAIL,
 } from "@/lib/merchant-onboarding"
+import { MERCHANT_SUPPORT_URL, TECHNICAL_SUPPORT_URL } from "@/lib/support-contact"
 
 /**
  * Where a merchant manages the till a shop is paid into — the slot Connected
@@ -426,15 +426,15 @@ export default function LocationsPage() {
                   >
                     merchant setup page
                   </button>
-                  , then email{" "}
+                  , then contact{" "}
                 </>
               )}
-              {user?.accountType !== "merchant" && "Email "}
+              {user?.accountType !== "merchant" && "Contact "}
               <a
                 className="font-semibold text-foreground underline underline-offset-4"
-                href={`mailto:${MERCHANT_SUPPORT_EMAIL}`}
+                href={MERCHANT_SUPPORT_URL}
               >
-                {MERCHANT_SUPPORT_EMAIL}
+                us
               </a>{" "}
               to ask for another review.
             </p>
@@ -450,8 +450,14 @@ export default function LocationsPage() {
         <CardContent className="space-y-4">
           {paymentAddress === "" ? (
             <div className="rounded-lg border bg-muted/25 px-4 py-5 text-sm text-muted-foreground">
-              No wallet yet. Wallets are created at approval. Email {MERCHANT_SUPPORT_EMAIL} if
-              this stays.
+              No wallet yet. Wallets are created at approval.{" "}
+              <a
+                className="font-semibold text-foreground underline underline-offset-4"
+                href={TECHNICAL_SUPPORT_URL}
+              >
+                Contact us
+              </a>{" "}
+              if this stays.
             </div>
           ) : (
             <div className="flex flex-wrap items-center gap-2">
@@ -473,7 +479,13 @@ export default function LocationsPage() {
           {paymentAddress !== "" && !locationWallet && (
             <div className="rounded-lg border bg-muted/25 px-4 py-5 text-sm text-muted-foreground">
               This wallet could not be opened, so sending is unavailable. Your balance is
-              untouched. Reload the page, or email {MERCHANT_SUPPORT_EMAIL}.
+              untouched. Reload the page, or{" "}
+              <a
+                className="font-semibold text-foreground underline underline-offset-4"
+                href={TECHNICAL_SUPPORT_URL}
+              >
+                contact us
+              </a>.
             </div>
           )}
 

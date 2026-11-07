@@ -1,6 +1,6 @@
 # Branch scope — `pjol/mobile-2-1`
 
-Oct 26–29 2026 · app + mobile-app + webpage, and the board deck in animations · **22.7h** (11.7h stated: 9.3h for Oct 26 and 2.4h for Oct 28's presentation practice and board presentation; 11.0h measured for Oct 27–29)
+Oct 26–29 2026 · app + mobile-app + webpage, and the board deck in animations · **24.1h** (12.7h stated: 9.3h for Oct 26, 2.4h for Oct 28's presentation practice and board presentation, and 1.0h for Oct 29's Vipul Presentation; 11.4h measured for Oct 27–29)
 
 | Round | When | Hours | Basis |
 |---|---|---|---|
@@ -15,14 +15,16 @@ Oct 26–29 2026 · app + mobile-app + webpage, and the board deck in animations
 | 11 | Oct 28 late afternoon | 0.3h | **measured** |
 | 12 | Oct 28 late afternoon–evening | 2.4h | **stated** — presentation practice and board presentation — with 0.07h measured |
 | 13 | Oct 29 midday, with Oct 28's last six minutes | 0.5h | **measured** |
-| | | **22.7h** | |
+| 14 | Oct 29, the rest of midday and the afternoon | 1.4h | **stated** — the Vipul Presentation — with 0.39h measured |
+| | | **24.1h** | |
 
 Rounds 4 through 11, and 13, are measured end to end, by clustering
 **session-transcript message timestamps and commit timestamps together** on a
-30-minute gap. Rounds 1–3 are not, and nor is most of round 12, which is a
-presentation practice and a board presentation that no transcript can see. The
-distinction matters more than the total: **11.7h of this figure is what
-somebody said, and 11.0h is what a clock recorded.** Do not average them.
+30-minute gap. Rounds 1–3 are not, and nor is most of round 12 or round 14: a
+presentation practice, a board presentation and the Vipul Presentation, which
+no transcript can see. The distinction matters more than the total: **12.7h of
+this figure is what somebody said, and 11.4h is what a clock recorded.** Do not
+average them.
 
 Rounds 4 to 7 originally clustered messages alone, which undercounted Oct 27 by
 0.93h — see round 8. Commits are now part of the evidence set because work done
@@ -38,9 +40,10 @@ carries for the day. The rounded per-round rows add to 7.0h; where a measured
 total and an itemised split disagree the measured total wins, and the 0.1h is
 rounding in the rows rather than work that went missing.
 
-With round 13 the rounded rows add to 22.6h against the 22.7h above. The
+With round 14 the rounded rows add to 24.0h against the 24.1h above. The
 difference is the same kind of rounding in the rows — 0.09h on Oct 27 and 0.07h
-on Oct 28, less the 0.03h that round 13 rounds up — not work that went missing.
+on Oct 28, less the 0.03h that round 13 rounds up and the 0.01h that round 14
+does — not work that went missing.
 
 Round 1's two prospective entries are superseded by round 2 — see there. Round
 2's total is extended by round 3, which measured the evening sitting running 28
@@ -2272,3 +2275,135 @@ To test:
   closed, then check the push.
 - Rename a contact and tap Back while still typing.
 - Send a photo with no caption. The inbox should say "📷 Photo".
+
+# Round 14 — Oct 29, the rest of midday and the afternoon
+
+**1.4h** (1.39h): 1.00h stated for the Vipul Presentation, and 0.39h measured
+in two stretches.
+
+## How these hours were recorded
+
+| Window | Hours | Basis |
+|---|---|---|
+| 12:05–12:22 | 0.28h | measured: the rest of the midday sitting, after round 13's last evidence point |
+| 16:20–16:26 | 0.10h | measured: a short session, ending with the merge of PR #218 at 16:26 |
+| 16:30–17:30 — Vipul Presentation | 1.00h | **stated** |
+| | **1.39h → 1.4h** | |
+
+Messages and PJ's commits are clustered as before, on a 30-minute gap. The
+midday sitting measures 0.65h in all, 11:43–12:22. Round 13 counted 0.37h of it,
+up to 12:05, and this round counts the remaining 0.28h. That remainder includes
+a 15-minute pause, 12:07–12:21, between round 13's report and the next message.
+It is under the 30-minute gap, so it counts, as every such pause in this
+document does.
+
+The afternoon stretch is this session's transcript from 16:20 to 16:24, then
+the merge of PR #218 on GitHub at 16:26. The merge is PJ's, so it counts as
+evidence.
+
+The owner gave the meeting's times on Oct 30, as part of the day before, so it
+is recorded on Oct 29. No transcript or commit sees it.
+
+Not counted: 16:26–16:30, the three and a half minutes between the merge and
+the meeting, which no evidence covers.
+
+No other session shows work on Oct 29:
+
+- The board-deck session's last record is Oct 28 at 17:45.
+- The deck's uncommitted files have not changed since round 12 counted them.
+  Their mtimes are Oct 28, 17:33–17:43.
+- PJ made no commits in `animations` or `webpage` that day.
+
+Rows rounded on their own add to 1.38h; the 1.39h total is unrounded.
+
+Measured to the merge at 16:26 on Oct 29. This write-up began at 11:37 on Oct 30
+and is not included.
+
+## Features
+
+### Vipul Presentation — 1.00h · stated
+
+16:30–17:30. A meeting; the time is the owner's.
+
+### Round 13's write-up, and the pause after it — 0.27h · app
+
+12:05–12:21. Round 13 was appended to this document at 12:06 and reported at
+12:07. The rest is the pause before the next message.
+
+### Nothing ships over the air — 0.01h · app
+
+12:21–12:22. There is no production build yet; mobile changes ship by
+rebuilding the binary. Round 13 had listed an over-the-air update as one way to
+ship them. Its ship section now says a rebuilt binary carries everything in
+mobile-app. A note was saved so later sessions do not plan for over-the-air
+updates.
+
+### Committed and pushed — 0.01h · app + mobile-app
+
+12:22. mobile-app `e6daed5` and app `6c3e761`, both on `pjol/mobile-2-1`. These
+are round 13's changes. Its volume section's "Nothing is committed yet" was true
+when it was written.
+
+### Two reports and a contacts restructure, investigated — 0.10h · app + mobile-app
+
+16:20–16:26. Two reports:
+
+- Pushes still showed the sender's public profile name and picture, not the
+  ones the recipient gave them as a contact.
+- Photos still had no preview in the chat screen, though the push's preview
+  worked.
+
+The request that came with them:
+
+- Where a contact is linked to a public profile, the contact's name and picture
+  win.
+- There is one contact per profile.
+- Contacts that turned out to be the same account become "alternate wallets"
+  under that person, labelled with their old contact names.
+- Alternate wallets stay in payment search as before. Messaging goes to the
+  account behind them, and never lists the wallets themselves.
+
+The push code already used the contact (round 13), and the inbox already loaded
+attachments. Both depend on round 13's backend. On Oct 30 the owner confirmed
+the backend had been off, which accounts for both reports. No code was changed.
+
+What the restructure starts from:
+
+- **Saved by address.** A contact is saved by address, and its account
+  (`contacts.user_id`) is resolved from `wallets` when it is saved. Two saved
+  wallets of one account are therefore two contacts. Their names always differ,
+  because names are unique per owner.
+- **Payment search.** It lists merchants and contacts, matched by name or
+  address.
+- **Messaging search.** The new-message search matches any of a person's
+  contacts by name, so an alternate wallet's name finds the person today.
+- **Which contact draws a person.** The app and the push both use the
+  favourite contact, or else the oldest.
+
+The session ended before two questions were answered: which of several
+contacts becomes the person's contact, and what happens when somebody saves a
+new wallet for a person they already have. The restructure was not started.
+
+PR #218 merged this branch into `main` at 16:26, with rounds 1–13 in this
+document. This round was written after the merge, so it reaches `main` only
+with a follow-up commit.
+
+## Totals
+
+| | Hours |
+|---|---|
+| Vipul Presentation | 1.00h — stated |
+| Round 13's write-up, and the pause after it | 0.27h |
+| Nothing ships over the air | 0.01h |
+| Committed and pushed | 0.01h |
+| Two reports and a contacts restructure, investigated | 0.10h |
+| **Round 14** | **1.39h**, shown as **1.4h**: 1.00h stated, 0.39h measured |
+
+## Volume
+
+No code changed. In `app`, only this document. The two commits in this round
+carry round 13's changes and are counted in round 13's volume.
+
+No migrations, no new routes, and nothing new to deploy or build. Round 13's
+list still stands. Its pushes and inbox previews need to be tested again with
+the backend running.

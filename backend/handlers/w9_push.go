@@ -39,6 +39,7 @@ func (a *AppService) pushW9Notice(ctx context.Context, userID string, kind strin
 	}
 
 	delivered := false
+	badge := a.pushBadge(ctx, userID)
 	tokensSeen := map[string]struct{}{}
 	for _, subscription := range subscriptions {
 		if subscription == nil || !subscription.Active || !subscription.DeviceRegistered {
@@ -53,9 +54,9 @@ func (a *AppService) pushW9Notice(ctx context.Context, userID string, kind strin
 		}
 		tokensSeen[token] = struct{}{}
 
-		if _, err := sendExpoPushNotification(ctx, token, title, body, map[string]string{
+		if _, err := sendExpoPushNotificationWith(ctx, token, title, body, map[string]string{
 			"type": kind,
-		}); err != nil {
+		}, expoPushOptions{Badge: badge}); err != nil {
 			a.logger.Logf("error pushing a w9 notice to %s: %s", userID, err)
 			continue
 		}

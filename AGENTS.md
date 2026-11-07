@@ -161,16 +161,21 @@ Important behavior:
 ### Email Notifications
 Mailgun is used for all transactional email. Styled HTML templates are constructed in Go handlers. Follow existing patterns in `backend/handlers/app.go` and `backend/handlers/app_workflow.go` for email template style.
 
-### Branch Scope Documents
-Every branch records its own work in `branch-scopes/<branch-name>.md`, and that file must be up to date
-**before the branch is merged**. `branch-scopes/pjol/volunteer-panel.md` is the worked example.
+### Scope Documents
+Work is recorded **by week, not by branch**: one file per person per week, at
+`branch-scopes/<handle>/week-<YYYY-MM-DD>.md`, named for the week's Monday and covering Monday to Sunday,
+Pacific time, across every repo and branch worked that week. Keep it current as the week goes; it must be
+complete before that week's report (`branch-scopes/report-<date>.csv`) is drawn from it.
+`branch-scopes/pjol/week-2026-11-02.md` is the first. Files named for a branch, such as
+`branch-scopes/pjol/volunteer-panel.md`, are the earlier convention and stay as they are.
 
-What it is for: the branch is the unit of work people ask about later — what shipped in it, why a decision
-was made, and how long it took. Commit messages scatter that across dozens of entries and a PR description
-disappears once it is merged, so it lives in the repo alongside the code it describes.
+What it is for: what shipped, why a decision was made, and how long it took. A week lines up with the
+reports drawn from these files; a branch can run for several weeks, and one week can touch several
+branches. Commit messages scatter that across dozens of entries and a PR description disappears once it is
+merged, so it lives in the repo alongside the code it describes.
 
 Each file carries:
-- A header with the date range, the repos touched, and total active hours
+- A header with the date range, the repos and branches touched, and total active hours
 - How those hours were measured, stated plainly, and any weakness in the measurement named
 - Features grouped large-to-small, each with its own hours (**to the nearest 0.1h**) and repo
 - A table of smaller fixes, same rule
@@ -200,7 +205,7 @@ Commit clustering is **not** the method — it measures when work landed, not wh
 branch committed days after it was written clusters into the length of the commit session. If the clock
 was not consulted at all, report the volume and say the time was not measured rather than reporting hours.
 
-The measured figures live here, in `branch-scopes/<branch-name>.md`, in the shape described above — the
+The measured figures live here, in `branch-scopes/<handle>/week-<YYYY-MM-DD>.md`, in the shape described above — the
 skill supplies the number, this folder is where it is recorded. Nothing about time reporting is stored
 outside this folder.
 
@@ -208,8 +213,8 @@ Itemised hours should add up to the measured figure. Rounding every item up to a
 total — the first draft of round 2 in the example file floored at 0.5h and came out 35% over what the
 commit history showed.
 
-Work spanning more than one sitting is appended as a new `# Round N` section rather than folded into the
-existing numbers, so an earlier estimate is never silently restated.
+Each later sitting in the week is appended as a new `# Round N` section rather than folded into the
+existing numbers, so an earlier figure is never silently restated.
 
 ## Testing
 

@@ -3,17 +3,14 @@
 import Link from "next/link"
 import { useMemo, useState } from "react"
 import { useApp } from "@/context/AppProvider"
+import { TECHNICAL_SUPPORT_URL } from "@/lib/support-contact"
 import type { AccountDeletionStatusResponse } from "@/types/server"
 
-const SUPPORT_EMAIL = "techsupport@sfluv.org"
-const WORDPRESS_HELP_URL = "https://sfluv.org/delete-account#sfluv-delete-help"
+const DELETE_HELP_URL = "https://sfluv.org/delete-account#sfluv-delete-help"
 const POLICY_REQUIRED_HEADER = "X-SFLUV-Auth-Reason"
 const POLICY_REQUIRED_REASON = "privacy-policy-required"
 
 type SubmitPhase = "idle" | "submitting" | "success"
-
-const supportMailto =
-  `mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent("SFLuv account deletion request")}`
 
 const formatDeleteDate = (value?: string | null) => {
   if (!value) return ""
@@ -180,14 +177,14 @@ export default function DeleteAccountPage() {
             <div>
               <p className="font-bold text-slate-950">Can’t sign in?</p>
               <p className="mt-1">
-                Use the support form on SFLuv.org or email us directly.
+                Use the support form on SFLuv.org or contact us.
               </p>
               <div className="mt-3 flex flex-wrap gap-2">
-                <Link className="font-bold text-[#b64b46] underline" href={WORDPRESS_HELP_URL}>
+                <Link className="font-bold text-[#b64b46] underline" href={DELETE_HELP_URL}>
                   Open support form
                 </Link>
-                <a className="font-bold text-[#b64b46] underline" href={supportMailto}>
-                  Email support
+                <a className="font-bold text-[#b64b46] underline" href={TECHNICAL_SUPPORT_URL}>
+                  Contact support
                 </a>
               </div>
             </div>
@@ -336,7 +333,7 @@ function SuccessState({ deleteDateLabel }: { deleteDateLabel: string }) {
       ) : null}
       <div className="mt-6">
         <a
-          href={supportMailto}
+          href={TECHNICAL_SUPPORT_URL}
           className="inline-flex w-full items-center justify-center rounded-full bg-emerald-700 px-5 py-3 text-base font-black text-white transition hover:bg-emerald-800 sm:w-auto"
         >
           Contact support
