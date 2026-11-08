@@ -78,6 +78,68 @@ func (p *PayoutService) onBlocked(ctx context.Context, userID string, taxYear in
 	}
 }
 
+// onPayoutAfterTINMismatch brings the corrected-W-9 prompt back, once, for
+// somebody being paid after a failed TIN match who has put the prompt away.
+//
+// A tier prompt is news once, so earning more never brought it back, and a
+// rejection from before onW9TINMismatch existed never armed it at all. Being
+// paid is when they are looking at the app. Once, because a volunteer can be
+// paid many times a week and the bell entry stays either way.
+//
+// No form and no email: StartW9 makes the fresh form if they tap through. Past
+// the self-serve limit the answer is support, which has its own message. Nothing
+// here may affect the payout, so failures are only logged.
+func (p *PayoutService) onPayoutAfterTINMismatch(ctx context.Context, userID string, taxYear int) {
+	if strings.TrimSpace(userID) == "" || p.notify == nil {
+		return
+	}
+	logErr := func(err error) {
+		if p.logger != nil {
+			p.logger.Logf("w9: correction prompt for %s: %s", userID, err)
+		}
+	}
+
+	filing, err := p.appDb.GetW9Filing(ctx, userID, taxYear)
+	if err != nil {
+		logErr(err)
+		return
+	}
+	if filing == nil || db.W9StatusClears(filing.Status) ||
+		filing.TINMismatchCount < 1 || filing.TINMismatchCount >= w9SelfServeMismatchLimit {
+		return
+	}
+
+	// Still waiting to be seen, so there is nothing to bring back, and the one
+	// showing is not spent.
+	outstanding, err := p.appDb.GetOutstandingW9Tier(ctx, userID, taxYear)
+	if err != nil {
+		logErr(err)
+		return
+	}
+	if outstanding != nil && outstanding.AcknowledgedAt == nil {
+		return
+	}
+
+	shown, err := p.appDb.HasW9CorrectionPrompt(ctx, userID, taxYear)
+	if err != nil {
+		logErr(err)
+		return
+	}
+	if shown {
+		return
+	}
+
+	// Armed before it is marked: failing between the two shows it again on the
+	// next payout, where the other order would never show it at all.
+	if _, err := p.notify.armW9Prompt(ctx, userID, taxYear); err != nil {
+		logErr(err)
+		return
+	}
+	if _, err := p.appDb.RecordW9TierReached(ctx, userID, taxYear, db.W9TierCorrectionPrompt); err != nil {
+		logErr(err)
+	}
+}
+
 // onEscrowed runs after money has been held.
 //
 // Deliberately outside the payout transaction: asking a vendor for a form and
