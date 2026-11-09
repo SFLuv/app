@@ -1,6 +1,6 @@
 /**
  * The printed card's reverse: the same redemption steps as the front, in
- * Spanish, Traditional Chinese and Arabic.
+ * Spanish, Traditional Chinese, Arabic and Vietnamese.
  *
  * Drawn here rather than shipped as artwork for the same reasons the front is
  * (see qr-card-canvas): text measured before it is drawn, so nothing is laid
@@ -12,9 +12,10 @@
  * "SFLuv Gratitude Perks-back side 05-16-26 (4.25 x 5.5).pdf". Only the layout
  * changed: the three blocks now sit on a shared grid with consistent spacing
  * and a rule between them, and the Arabic is live text rather than the
- * low-resolution bitmap the reference embedded it as. Do not reword any of it
- * without a new translation — these are the only instructions a volunteer who
- * does not read English gets.
+ * low-resolution bitmap the reference embedded it as. The Vietnamese is not in
+ * that reference; it was supplied on its own on 2026-11-08 and is transcribed
+ * verbatim from that. Do not reword any of it without a new translation —
+ * these are the only instructions a volunteer who does not read English gets.
  */
 import { LOGO_SRC } from "@/lib/qr-geometry"
 import { CARD_HEIGHT, CARD_WIDTH } from "@/lib/qr-card-canvas"
@@ -32,7 +33,12 @@ const EDGE_TOP = 20
 const EDGE_BOTTOM = 22
 const SIDE = 20
 
-const LOGO_WIDTH = 92
+/**
+ * 92 when the back carried three languages. A fourth needs the height: at 92
+ * the four blocks would have to shrink to about 84% of their size to fit, and
+ * at 64 they keep about 91% (steps print at 7.5pt, headings at 9.8pt).
+ */
+const LOGO_WIDTH = 64
 
 export type BackDirection = "ltr" | "rtl"
 
@@ -50,7 +56,7 @@ export interface BackBlock {
 }
 
 /**
- * The three translations, verbatim from the printed reference.
+ * The translations, verbatim from their sources (see the top of the file).
  *
  * The Chinese is written with the standard ideographs (支, 二, 用). The
  * reference PDF's font encoded three of them as Kangxi radicals (⽀, ⼆, ⽤),
@@ -96,14 +102,29 @@ export const BACK_BLOCKS: BackBlock[] = [
     direction: "rtl",
     scale: 1.04,
   },
+  {
+    heading: "Lời cảm ơn từ SFLuv!",
+    lead: "Để đổi token của quý vị:",
+    steps: [
+      "1. Quét mã QR",
+      "2. Tải xuống ứng dụng SFLuv",
+      "3. Quét mã lần nữa",
+      "4. Nhận SFLuv của quý vị!",
+    ],
+    font: FONT_LATIN,
+    direction: "ltr",
+  },
 ]
 
 const HEADING_SIZE = 15
 const LEAD_SIZE = 12.5
 const STEP_SIZE = 11.5
-const STEP_LINE = 1.42
-const HEADING_GAP = 7
-const LEAD_GAP = 6
+/** 1.42 with three blocks; tightened so four keep more of their type size. */
+const STEP_LINE = 1.3
+const HEADING_GAP = 5
+const LEAD_GAP = 4
+/** The least room left above, between and below the blocks; the rules sit in it. */
+const MIN_GAP = 12
 
 function loadImage(src: string): Promise<HTMLImageElement | null> {
   return new Promise((resolve) => {
@@ -115,15 +136,16 @@ function loadImage(src: string): Promise<HTMLImageElement | null> {
   })
 }
 
-/** One block's height, so the three can be spaced against the real remaining room. */
-function blockHeight(block: BackBlock): number {
+/**
+ * The part of one block's height that grows and shrinks with its type, at full
+ * size. The two fixed gaps inside a block are BLOCK_FIXED, and do not scale.
+ */
+function blockTextHeight(block: BackBlock): number {
   const s = block.scale ?? 1
-  return (
-    HEADING_SIZE * s * 1.3 + HEADING_GAP +
-    LEAD_SIZE * s * 1.3 + LEAD_GAP +
-    block.steps.length * STEP_SIZE * s * STEP_LINE
-  )
+  return (HEADING_SIZE * 1.3 + LEAD_SIZE * 1.3 + block.steps.length * STEP_SIZE * STEP_LINE) * s
 }
+
+const BLOCK_FIXED = HEADING_GAP + LEAD_GAP
 
 /**
  * Paint the reverse once, at the same pixel size and supersampling as the front
@@ -150,14 +172,22 @@ export async function buildCardBack(scale = 3): Promise<string> {
     y += height
   }
 
-  // Share whatever room is left between the three blocks and the two rules, so
-  // the card fills its height evenly instead of bunching at the top.
+  // One gap above each block and one below the last.
   const bottom = CARD_HEIGHT - EDGE_BOTTOM
-  const blocks = BACK_BLOCKS.map(blockHeight)
-  const totalBlocks = blocks.reduce((sum, h) => sum + h, 0)
-  const gaps = BACK_BLOCKS.length // one above each block, plus one before the first rule's partner
-  const slack = Math.max(0, bottom - y - totalBlocks)
-  const gap = slack / (gaps + 1)
+  const room = bottom - y
+  const gaps = BACK_BLOCKS.length + 1
+  const text = BACK_BLOCKS.reduce((sum, block) => sum + blockTextHeight(block), 0)
+  const fixed = BACK_BLOCKS.length * BLOCK_FIXED
+
+  // Shrink the type, all blocks alike, only as far as it takes for every gap
+  // to keep MIN_GAP. Never enlarge it: with room to spare, the spare goes into
+  // the gaps instead.
+  const fit = Math.min(1, (room - gaps * MIN_GAP - fixed) / text)
+
+  // Share whatever room is left between the blocks and the rules, so the card
+  // fills its height evenly instead of bunching at the top.
+  const slack = Math.max(0, room - fixed - text * fit)
+  const gap = slack / gaps
 
   ctx.textBaseline = "middle"
   BACK_BLOCKS.forEach((block, index) => {
@@ -172,7 +202,7 @@ export async function buildCardBack(scale = 3): Promise<string> {
       ctx.stroke()
     }
 
-    const s = block.scale ?? 1
+    const s = (block.scale ?? 1) * fit
     ctx.textAlign = "center"
     ctx.direction = block.direction
     ctx.fillStyle = INK

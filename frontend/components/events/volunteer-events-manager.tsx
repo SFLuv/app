@@ -352,6 +352,8 @@ export function VolunteerEventsManager({
   const [search, setSearch] = useState("")
   const [busyId, setBusyId] = useState("")
   const [exportProgress, setExportProgress] = useState<{ done: number; total: number } | null>(null)
+  // Which of the two QR exports is running, so only its button shows progress.
+  const [exportSides, setExportSides] = useState<"two-sided" | "one-sided" | null>(null)
   const [openEvent, setOpenEvent] = useState<ManagedVolunteerEvent | null>(null)
   const [blastEvent, setBlastEvent] = useState<ManagedVolunteerEvent | null>(null)
   const [error, setError] = useState("")
@@ -520,9 +522,15 @@ export function VolunteerEventsManager({
    * title, the third line of the heading and the last instruction. Neither can
    * happen here: the static half of the card is painted once per event, and
    * every string is measured before it is drawn.
+   *
+   * One-sided splits the same pages into two files, the faces and the
+   * translated reverses, each printed single-sided: for a printer without
+   * duplex, print the faces, put the sheets back in the tray, then print the
+   * reverses.
    */
-  const downloadCodes = async (event: ManagedVolunteerEvent) => {
+  const downloadCodes = async (event: ManagedVolunteerEvent, oneSided = false) => {
     setBusyId(event.id)
+    setExportSides(oneSided ? "one-sided" : "two-sided")
     try {
       const res = await authFetch(`${basePath}/${event.id}/codes`)
       if (!res.ok) throw new Error((await res.text()).trim() || "Unable to load QR codes.")
@@ -580,7 +588,9 @@ export function VolunteerEventsManager({
        *
        * Page order is front, back, front, back... so "Print > Two-Sided" with
        * the default options produces finished cards: page 1 is the first
-       * sheet's face, page 2 is that same sheet's reverse.
+       * sheet's face, page 2 is that same sheet's reverse. One-sided writes the
+       * faces to one file and the reverses to another, page for page, so page
+       * N of the second belongs behind page N of the first.
        *
        * Printers reserve an unprintable margin of roughly 4mm, which clips the
        * outer edge of the tiling. The card art carries ~4mm of its own padding
@@ -594,7 +604,9 @@ export function VolunteerEventsManager({
       const cellW = PAGE_W / COLS
       const cellH = PAGE_H / ROWS
 
-      const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: [PAGE_W, PAGE_H] })
+      const newDoc = () => new jsPDF({ orientation: "portrait", unit: "mm", format: [PAGE_W, PAGE_H] })
+      const doc = newDoc()
+      const backDoc = oneSided ? newDoc() : doc
 
       // The reverse is the same for every card, so it is painted once.
       const backImage = await cardBack.buildCardBack()
@@ -612,7 +624,9 @@ export function VolunteerEventsManager({
        * as top-right. Mirroring the columns is what keeps each reverse behind
        * its own front. Every reverse is currently identical, so this is
        * invisible today - it is here so that it stays correct the moment one of
-       * them carries anything card-specific, such as the code number.
+       * them carries anything card-specific, such as the code number. The
+       * one-sided reverses are placed the same way, which holds when the
+       * printed faces are fed back in flipped about their long edge.
        */
       const mirrorSlot = (slot: number) => {
         const col = slot % COLS
@@ -639,11 +653,13 @@ export function VolunteerEventsManager({
 
         // --- the reverse ----------------------------------------------------
         // Only the slots that carry a card get one, so a part-full last sheet
-        // does not print four backs behind one front.
-        doc.addPage()
+        // does not print four backs behind one front. Interleaved, the reverse
+        // always takes a new page after its face; in its own file, the first
+        // reverse goes on the page the file starts with.
+        if (!oneSided || start > 0) backDoc.addPage()
         for (let slot = 0; slot < group.length; slot += 1) {
           const { x, y } = slotXY(mirrorSlot(slot))
-          doc.addImage(backImage, "JPEG", x, y, cellW, cellH)
+          backDoc.addImage(backImage, "JPEG", x, y, cellW, cellH)
         }
 
         // Yield between sheets so the progress label paints and the tab stays
@@ -652,7 +668,12 @@ export function VolunteerEventsManager({
         await new Promise<void>((resolve) => setTimeout(resolve, 0))
       }
 
-      doc.save(`${fileBase}-qr-codes.pdf`)
+      if (oneSided) {
+        doc.save(`${fileBase}-qr-codes-fronts.pdf`)
+        backDoc.save(`${fileBase}-qr-codes-backs.pdf`)
+      } else {
+        doc.save(`${fileBase}-qr-codes.pdf`)
+      }
     } catch (err) {
       toast({
         title: "Could not download QR codes",
@@ -661,6 +682,7 @@ export function VolunteerEventsManager({
       })
     } finally {
       setExportProgress(null)
+      setExportSides(null)
       setBusyId("")
     }
   }
@@ -992,25 +1014,36 @@ export function VolunteerEventsManager({
                       Edit
                     </Button>
                   )}
-                  {openEvent.qr?.codes_generated && (
-                    <Button variant="outline" size="sm" disabled={busyId === openEvent.id} onClick={() => downloadCodes(openEvent)}>
-                      {busyId === openEvent.id ? (
-                        <>
-                          <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
-                          {/* A big event takes a while and saves one file per
-                              batch; without the count it reads as a hang. */}
-                          {exportProgress
-                            ? `Drawing ${exportProgress.done} of ${exportProgress.total}`
-                            : "Preparing PDF"}
-                        </>
-                      ) : (
-                        <>
-                          <Download className="mr-2 h-3.5 w-3.5" />
-                          QR code PDF
-                        </>
-                      )}
-                    </Button>
-                  )}
+                  {openEvent.qr?.codes_generated &&
+                    ([
+                      { sides: "two-sided", label: "QR code PDF", hint: "Cards with the translated instructions on the back" },
+                      { sides: "one-sided", label: "QR code PDFs (one-sided)", hint: "Two files, card fronts and translated backs, each to print single-sided" },
+                    ] as const).map(({ sides, label, hint }) => (
+                      <Button
+                        key={sides}
+                        variant="outline"
+                        size="sm"
+                        title={hint}
+                        disabled={busyId === openEvent.id}
+                        onClick={() => downloadCodes(openEvent, sides === "one-sided")}
+                      >
+                        {busyId === openEvent.id && exportSides === sides ? (
+                          <>
+                            <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+                            {/* A big event takes a while and saves one file per
+                                batch; without the count it reads as a hang. */}
+                            {exportProgress
+                              ? `Drawing ${exportProgress.done} of ${exportProgress.total}`
+                              : "Preparing PDF"}
+                          </>
+                        ) : (
+                          <>
+                            <Download className="mr-2 h-3.5 w-3.5" />
+                            {label}
+                          </>
+                        )}
+                      </Button>
+                    ))}
                   {openEvent.review_status === "approved" && (openEvent.signup_count ?? 0) > 0 && (
                     <Button variant="outline" size="sm" disabled={busyId === openEvent.id} onClick={() => setBlastEvent(openEvent)}>
                       <Megaphone className="mr-2 h-3.5 w-3.5" />
