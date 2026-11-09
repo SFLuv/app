@@ -36,14 +36,27 @@ import (
 // reward be claimed twice.
 
 const (
-	// How many transfers go in one operation.
+	// How many transfers go in one operation. One: batching is off.
 	//
-	// Bounded by gas rather than by taste: the paymaster sponsors a limited
-	// amount per operation, and a batch that exceeds it fails as a whole,
-	// taking everybody in it down together. Twenty-five ERC-20 transfers is
-	// comfortably inside what the engine will sponsor and turns any plausible
-	// event burst into one or two operations.
-	maxFaucetBatch = 25
+	// A batch goes out as a DELEGATECALL into MultiSendCallOnly, and our
+	// paymaster (0x825b77eE…5a55) only sponsors operations whose target is on
+	// its whitelist. MultiSendCallOnly has never been on it, so every batch of
+	// two or more reverts on chain with "AA38 contract not whitelisted". On
+	// 2026-11-08 four perk-card payouts that arrived within 23 seconds were
+	// grouped into two batches, both reverted, and their codes stayed spent, so
+	// every rescan said "already redeemed".
+	//
+	// At one, the dispatcher still queues and sends in order, and every payout
+	// takes the single-transfer path, which calls the token directly and which
+	// the whitelist allows. The cost is burst speed: about five seconds a
+	// payout, one after another.
+	//
+	// Raising this again needs MultiSendCallOnly added to the paymaster's
+	// whitelist first. updateWhitelist replaces the whole list rather than
+	// adding to it, so the call must carry every address already allowed, and
+	// a delegatecall through the CommunityModule has never run on chain, so a
+	// two-payout batch should be tested before relying on it.
+	maxFaucetBatch = 1
 	// How long a request may sit unqueued before the caller is told the system
 	// is saturated. Generous, because the alternative for a redemption is a
 	// failure the volunteer sees.
