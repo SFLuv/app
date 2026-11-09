@@ -8,7 +8,7 @@ import "time"
 type SupportRequest struct {
 	Id int64 `json:"id"`
 	// Reference is what the sender is given to quote back, and what appears in
-	// the Telegram alert. Short and unambiguous on purpose: someone reads it
+	// the chat notification. Short and unambiguous on purpose: someone reads it
 	// off a phone screen and types it into a reply.
 	Reference string `json:"reference"`
 	Email     string `json:"email"`
@@ -44,6 +44,12 @@ const (
 	SupportRequestArchived = "archived"
 )
 
+// SupportBotUserId is the account that posts support notifications into chats.
+const SupportBotUserId = "sfluv:support-bot"
+
+// SupportBotName is what that account is called in chats and on pushes.
+const SupportBotName = "SFLuv Support"
+
 // Where a support request was written.
 const (
 	SupportSourceWebsite = "website"
@@ -69,6 +75,8 @@ const (
 	SupportCategoryPress            = "press"
 	SupportCategoryTechnical        = "technical-support"
 	SupportCategoryOther            = "other"
+	SupportCategoryW9               = "w9"
+	SupportCategoryAccountDeletion  = "account-deletion"
 )
 
 // SupportCategoryDefinition describes one category for the settings screen.
@@ -88,6 +96,8 @@ func SupportCategoryCatalog() []SupportCategoryDefinition {
 		{Id: SupportCategoryPress, Label: "Press or media"},
 		{Id: SupportCategoryTechnical, Label: "Technical support"},
 		{Id: SupportCategoryOther, Label: "Something else"},
+		{Id: SupportCategoryW9, Label: "W-9 and tax questions"},
+		{Id: SupportCategoryAccountDeletion, Label: "Account deletion"},
 	}
 }
 

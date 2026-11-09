@@ -168,7 +168,7 @@ function LiveEventDetails({
             <div className="max-w-2xl space-y-1.5">
               <CardTitle>Gallery</CardTitle>
               <CardDescription>
-                Photos shown under the event, so people can see what it’s like.
+                Lots of photos, up to 300, shown under the event so people can see what it’s like.
                 {event.recurrence_summary && " A repeating event keeps the same gallery every time it comes around."}
               </CardDescription>
             </div>
@@ -214,7 +214,7 @@ function CoverPhotos({ event, onChange }: { event: SiteLiveEvent; onChange: (eve
       }
     }
     setBusy(null)
-    if (files.length > room) failed.push(`Only ${MAX_COVER_PHOTOS} cover photos fit, so ${files.length - room} weren’t added.`)
+    if (files.length > room) failed.push(`Only ${MAX_COVER_PHOTOS} cover photos fit, so ${files.length - room} weren’t added. The gallery below can hold many more.`)
     if (added > 0) toast({ title: added === 1 ? "Cover photo added" : `${added} cover photos added`, description: "The website updates within a few minutes." })
     if (failed.length > 0) toast({ title: "Some photos couldn’t be added", description: failed.join("\n"), variant: "destructive" })
   }
@@ -249,15 +249,21 @@ function CoverPhotos({ event, onChange }: { event: SiteLiveEvent; onChange: (eve
     <Card>
       <CardHeader className="flex flex-row flex-wrap items-start justify-between gap-4 space-y-0">
         <div className="max-w-2xl space-y-1.5">
-          <CardTitle>Cover photos</CardTitle>
+          <div className="flex flex-wrap items-center gap-2">
+            <CardTitle>Cover photos</CardTitle>
+            <Badge variant={room <= 0 ? "secondary" : "outline"}>
+              {photos.length} of {MAX_COVER_PHOTOS}
+            </Badge>
+          </div>
           <CardDescription>
-            Shown at the top of the event’s page. The main cover is also the photo on its tile.
+            The few photos at the very top of the event’s page. The main cover is also the photo on its tile. For lots of photos, use the
+            gallery below.
             {event.recurrence_summary && " Changes here carry forward to the next dates of this event."}
           </CardDescription>
         </div>
         <Button disabled={busy !== null || room <= 0} onClick={() => input.current?.click()}>
           {busy === "add" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Upload className="mr-2 h-4 w-4" />}
-          Add photos
+          Add cover photos
         </Button>
         <input
           ref={input}
@@ -272,7 +278,13 @@ function CoverPhotos({ event, onChange }: { event: SiteLiveEvent; onChange: (eve
           }}
         />
       </CardHeader>
-      <CardContent>
+      <CardContent className="space-y-4">
+        {room <= 0 && (
+          <p className="rounded-md border bg-muted/50 p-3 text-sm">
+            This event has all {MAX_COVER_PHOTOS} cover photos. To add a different one, remove one first. To add more photos to the event, use
+            the gallery below.
+          </p>
+        )}
         {photos.length === 0 ? (
           <p className="text-sm text-muted-foreground">No cover photos. The event shows a placeholder until one is added.</p>
         ) : (

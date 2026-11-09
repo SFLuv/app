@@ -28,6 +28,14 @@ func NotificationFromEmail() string {
 	return "no_reply@mail.sfluv.org"
 }
 
+// SupportInboxEmail is the shared inbox every way of contacting us ends up in.
+func SupportInboxEmail() string {
+	if to := strings.TrimSpace(os.Getenv("SUPPORT_INBOX_EMAIL")); to != "" {
+		return to
+	}
+	return "support@sfluv.org"
+}
+
 func NewEmailSender() *EmailSender {
 	if NotificationTestModeEnabled() {
 		return &EmailSender{}
@@ -44,6 +52,12 @@ func NewEmailSender() *EmailSender {
 }
 
 func (es *EmailSender) SendEmail(toEmail, toName, subject, htmlContent string, fromEmail, fromName string) error {
+	return es.SendEmailWithReplyTo(toEmail, toName, subject, htmlContent, fromEmail, fromName, "")
+}
+
+// SendEmailWithReplyTo is SendEmail with somewhere for a reply to go other than
+// the From address. An empty replyTo leaves the header off.
+func (es *EmailSender) SendEmailWithReplyTo(toEmail, toName, subject, htmlContent string, fromEmail, fromName, replyTo string) error {
 	if NotificationTestModeEnabled() {
 		_, err := WriteTestEmailNotification(toEmail, toName, subject, htmlContent, fromEmail, fromName, nil)
 		return err
@@ -59,6 +73,9 @@ func (es *EmailSender) SendEmail(toEmail, toName, subject, htmlContent string, f
 		toEmail,
 	)
 	m.SetHTML(htmlContent)
+	if replyTo = strings.TrimSpace(replyTo); replyTo != "" {
+		m.SetReplyTo(replyTo)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
 	defer cancel()

@@ -1,5 +1,6 @@
 "use client";
 
+import { TECHNICAL_SUPPORT_URL } from "@/lib/support-contact";
 import type React from "react";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -205,7 +206,6 @@ const getDeletionFallbackDate = () =>
   formatDeletionDate(
     new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
   ) || "30 days from now";
-const ACCOUNT_RECOVERY_SUPPORT_EMAIL = "techsupport@sfluv.org";
 
 const formatMerchantModeDate = (value?: string | null) => {
   if (!value) return "Never";
@@ -4807,9 +4807,9 @@ export default function SettingsPage() {
               If you later reactivate during the grace period, contact{" "}
               <a
                 className="font-semibold text-foreground underline underline-offset-4"
-                href={`mailto:${ACCOUNT_RECOVERY_SUPPORT_EMAIL}`}
+                href={TECHNICAL_SUPPORT_URL}
               >
-                {ACCOUNT_RECOVERY_SUPPORT_EMAIL}
+                support
               </a>{" "}
               to recover your funds.
             </p>

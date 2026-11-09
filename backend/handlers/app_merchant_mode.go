@@ -8,6 +8,7 @@ import (
 	"io"
 	"math/big"
 	"net/http"
+	"net/mail"
 	"strings"
 
 	"github.com/SFLuv/app/backend/db"
@@ -225,11 +226,18 @@ func (a *AppService) RequestMerchantModePINHelp(w http.ResponseWriter, r *http.R
 		details,
 	)
 
-	if err := emailSender.SendEmail("techsupport@sfluv.org", "Tech Support", "Merchant Mode PIN help requested", htmlContent, utils.NotificationFromEmail(), "SFLuv Support"); err != nil {
+	// Reply-To only when it is a real address: Mailgun refuses the whole message
+	// over a bad header, and this email is the only record of the request.
+	replyTo := ""
+	if parsed, err := mail.ParseAddress(contactEmail); err == nil {
+		replyTo = parsed.Address
+	}
+	if err := emailSender.SendEmailWithReplyTo(utils.SupportInboxEmail(), "SFLuv Support", "Merchant Mode PIN help requested", htmlContent, utils.NotificationFromEmail(), "SFLuv Support", replyTo); err != nil {
 		a.logger.Logf("error sending merchant mode PIN help email for user %s: %s", *userDid, err.Error())
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
+	a.notifySupportChats(r.Context(), []supportChat{supportChatTechnical}, "Merchant Mode PIN help requested. Details are in support@.")
 
 	w.WriteHeader(http.StatusNoContent)
 }

@@ -114,6 +114,24 @@ func (a *AppDB) GetConversationForMember(ctx context.Context, conversationId int
 	return &c, nil
 }
 
+// GetGroupConversation loads a group by id, for posting to it from outside the
+// conversation. Not a membership check: nothing a client sends can reach this.
+func (a *AppDB) GetGroupConversation(ctx context.Context, conversationId int64) (*structs.ConversationRow, error) {
+	var c structs.ConversationRow
+	err := scanConversation(a.db.QueryRow(ctx, `
+		SELECT `+conversationColumns+`, 0::bigint, ''::text
+		FROM conversations c
+		WHERE c.id = $1 AND c.kind = 'group' AND c.deleted_at IS NULL;
+	`, conversationId), &c)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrConversationNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &c, nil
+}
+
 // GetConversationMemberIds lists who is currently in a thread, which is the
 // fan-out set for both pushes and realtime events.
 func (a *AppDB) GetConversationMemberIds(ctx context.Context, conversationId int64) ([]string, error) {

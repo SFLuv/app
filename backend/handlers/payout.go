@@ -328,6 +328,7 @@ func (p *PayoutService) Pay(ctx context.Context, req PayoutRequest) (*PayoutResu
 	if decision.Tier != "" {
 		p.onTierReached(ctx, userID, taxYear, decision.Tier)
 	}
+	p.onPayoutAfterTINMismatch(ctx, userID, taxYear)
 
 	txHash, err := p.transfer(ctx, row.ID, recipient, req.AmountBase)
 	if err != nil {

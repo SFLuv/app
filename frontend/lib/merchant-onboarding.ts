@@ -8,9 +8,6 @@ import { AuthedLocation } from "@/types/location"
  */
 export const MERCHANT_ONBOARDING_PATH = "/merchant-onboarding"
 
-/** Who to ask when a listing needs a second look. */
-export const MERCHANT_SUPPORT_EMAIL = "techsupport@sfluv.org"
-
 export type LocationApplicationStatus = "approved" | "pending" | "rejected"
 
 /**

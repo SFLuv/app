@@ -4,7 +4,6 @@ import React, { useEffect, useMemo, useRef, useState } from "react"
 import { SfluvQRCode, type SfluvQRCodeHandle } from "@/components/ui/sfluv-qr-code"
 import { EditMerchantLocationModal } from "@/components/admin/edit-merchant-location-modal"
 import { BalancesPanel } from "@/components/admin/balances-panel"
-import { SupportPanel } from "@/components/admin/support-panel"
 import { buildMerchantSendQrValue } from "@/lib/redeem-link"
 import { usePathname, useRouter, useSearchParams } from "next/navigation"
 import { useApp } from "@/context/AppProvider"
@@ -66,7 +65,6 @@ import {
   ChevronRight,
   Copy,
   BarChart3,
-  Inbox,
   FlaskConical,
   ShieldCheck,
 } from "lucide-react"
@@ -102,6 +100,7 @@ import { BetaFeaturesPanel } from "@/components/admin/beta-features-panel"
 import { ProtocolPanel } from "@/components/admin/protocol-panel"
 import type { W9AdminOverview } from "@/types/w9"
 import { W9RequestPanel } from "@/components/admin/w9-request-panel"
+import { MerchantPinReset } from "@/components/admin/merchant-pin-reset"
 import type { ClientVersionUserCountResponse, UserResponse } from "@/types/server"
 
 // Mock PayPal accounts
@@ -291,7 +290,6 @@ export default function AdminPage() {
       "users",
       "analytics",
       "balances",
-      "support",
       "w9",
       "merchants",
       "organizations",
@@ -310,10 +308,6 @@ export default function AdminPage() {
   const [selectedWalletBYUSDBalance, setSelectedWalletBYUSDBalance] = useState<number>(0)
   const [selectedWalletSFLUVBalance, setSelectedWalletSFLUVBalance] = useState<number>(0)
 
-  // Open support requests, for the sidebar badge. The panel loads the full
-  // list itself; this is only the count, so an admin can see there is something
-  // waiting without opening the tab.
-  const [openSupportCount, setOpenSupportCount] = useState<number>(0)
 
   const [w9Overview, setW9Overview] = useState<W9AdminOverview | null>(null)
   const [w9Loading, setW9Loading] = useState<boolean>(false)
@@ -382,10 +376,6 @@ export default function AdminPage() {
   const [adminEmailExporting, setAdminEmailExporting] = useState<boolean>(false)
   const [selectedAdminUser, setSelectedAdminUser] = useState<UserResponse | null>(null)
   const [adminUserModalOpen, setAdminUserModalOpen] = useState<boolean>(false)
-  const [merchantPinInput, setMerchantPinInput] = useState<string>("")
-  const [merchantPinBusy, setMerchantPinBusy] = useState<boolean>(false)
-  const [merchantPinError, setMerchantPinError] = useState<string>("")
-  const [merchantPinResult, setMerchantPinResult] = useState<{ pin: string; generated: boolean } | null>(null)
 
   // Events
   const [events, setEvents] = useState<Event[]>([])
@@ -1759,27 +1749,6 @@ export default function AdminPage() {
     }
   }
 
-  // The sidebar badge. Re-read when the support tab is left, so archiving
-  // something in the panel is reflected without a page reload.
-  useEffect(() => {
-    let cancelled = false
-    const loadOpenSupportCount = async () => {
-      try {
-        const res = await authFetch("/admin/support-requests?status=new")
-        if (!res.ok) return
-        const rows = (await res.json()) as unknown[]
-        if (!cancelled) setOpenSupportCount(Array.isArray(rows) ? rows.length : 0)
-      } catch {
-        // A count that cannot be read shows as none rather than as an error:
-        // the tab still opens and the panel reports the real problem.
-      }
-    }
-    void loadOpenSupportCount()
-    return () => {
-      cancelled = true
-    }
-  }, [authFetch, activeTab])
-
   useEffect(() => {
     setCredentialTypePage((prev) => {
       const maxPage = Math.max(0, credentialTypesTotalPages - 1)
@@ -2147,38 +2116,6 @@ export default function AdminPage() {
     issuerRequestSearch,
     issuerRequestPage,
   ])
-
-  // Sets a merchant's merchant-mode PIN for them; an empty box asks the server for
-  // a random one. Results show inline in the user modal.
-  const resetMerchantPin = async () => {
-    if (!selectedAdminUser) return
-    const pin = merchantPinInput.trim()
-    if (pin && !/^\d{6}$/.test(pin)) {
-      setMerchantPinError("The PIN must be exactly 6 digits.")
-      return
-    }
-    setMerchantPinBusy(true)
-    setMerchantPinError("")
-    setMerchantPinResult(null)
-    try {
-      const res = await authFetch(`/admin/users/${encodeURIComponent(selectedAdminUser.id)}/merchant-mode-pin`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(pin ? { pin } : {}),
-      })
-      if (!res.ok) {
-        const text = (await res.text().catch(() => "")).trim()
-        throw new Error(text || `Couldn't reset the PIN (error ${res.status}).`)
-      }
-      const data = (await res.json()) as { pin: string; generated: boolean }
-      setMerchantPinResult(data)
-      setMerchantPinInput("")
-    } catch (error) {
-      setMerchantPinError(error instanceof Error ? error.message : "Couldn't reset the PIN.")
-    } finally {
-      setMerchantPinBusy(false)
-    }
-  }
 
   // Tax & Escrow. No approve or reject any more: the vendor validates the form
   // and holds the tax identification number, so an admin eyeballing a wallet
@@ -2834,16 +2771,6 @@ export default function AdminPage() {
               <span>Balances</span>
               <Wallet className="h-4 w-4 text-muted-foreground" />
             </TabsTrigger>
-            <TabsTrigger value="support" className="w-full justify-between px-3 py-2">
-              <span>Support</span>
-              {openSupportCount > 0 ? (
-                <Badge variant="destructive" className="h-5 min-w-5 rounded-full px-1.5 text-xs">
-                  {openSupportCount}
-                </Badge>
-              ) : (
-                <Inbox className="h-4 w-4 text-muted-foreground" />
-              )}
-            </TabsTrigger>
             <TabsTrigger value="w9" className="w-full justify-between px-3 py-2">
               <span>Tax & Escrow</span>
               {(w9Overview?.rows?.length ?? 0) > 0 && (
@@ -3317,10 +3244,6 @@ export default function AdminPage() {
           <BalancesPanel />
         </TabsContent>
 
-        <TabsContent value="support" className="space-y-6">
-          <SupportPanel />
-        </TabsContent>
-
         <TabsContent value="users" className="space-y-6">
           {adminUsersError && (
             <div className="flex items-center gap-2 text-red-600 text-sm p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
@@ -3335,9 +3258,6 @@ export default function AdminPage() {
               setAdminUserModalOpen(open)
               if (!open) {
                 setSelectedAdminUser(null)
-                setMerchantPinInput("")
-                setMerchantPinError("")
-                setMerchantPinResult(null)
               }
             }}
           >
@@ -3436,39 +3356,9 @@ export default function AdminPage() {
                   </div>
 
                   {selectedAdminUser.is_merchant && (
-                    <div className="space-y-3 rounded-md border p-4">
-                      <h4 className="text-sm font-semibold">Merchant mode PIN</h4>
-                      <p className="text-xs text-muted-foreground">
-                        For a merchant who forgot their PIN. This sets a new PIN without the old one and clears any lockout.
-                        Leave the box empty to generate a random PIN.
-                      </p>
-                      <div className="flex flex-wrap items-end gap-2">
-                        <div className="space-y-1">
-                          <Label htmlFor="admin-merchant-pin">New PIN (optional)</Label>
-                          <Input
-                            id="admin-merchant-pin"
-                            inputMode="numeric"
-                            autoComplete="off"
-                            placeholder="6 digits"
-                            className="w-36 font-mono"
-                            value={merchantPinInput}
-                            onChange={(e) => setMerchantPinInput(e.target.value.replace(/\D/g, "").slice(0, 6))}
-                            disabled={merchantPinBusy}
-                          />
-                        </div>
-                        <Button type="button" onClick={() => void resetMerchantPin()} disabled={merchantPinBusy}>
-                          {merchantPinBusy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                          {merchantPinInput ? "Set PIN" : "Generate new PIN"}
-                        </Button>
-                      </div>
-                      {merchantPinError && <p className="text-sm text-red-600">{merchantPinError}</p>}
-                      {merchantPinResult && (
-                        <p className="text-sm">
-                          New PIN: <span className="font-mono font-semibold">{merchantPinResult.pin}</span>. It works right away;
-                          give it to the merchant now, because it isn&apos;t shown again.
-                        </p>
-                      )}
-                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      To reset this merchant&apos;s merchant mode PIN, open their location in the Merchants tab.
+                    </p>
                   )}
                 </div>
               )}
@@ -5806,6 +5696,10 @@ export default function AdminPage() {
                   Edit details
                 </Button>
               </div>
+
+              {selectedLocationForReview.owner_id && selectedLocationForReview.approval === true && (
+                <MerchantPinReset userId={selectedLocationForReview.owner_id} />
+              )}
 
               <div className="space-y-2">
                 <Label>Change Approval Status</Label>

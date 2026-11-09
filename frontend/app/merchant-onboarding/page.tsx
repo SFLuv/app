@@ -13,8 +13,8 @@ import { Card, CardContent } from "@/components/ui/card"
 import { ensureGooglePlacesScript, hasGoogleMapsPlaces } from "@/lib/google-places"
 import {
   getLocationApplicationStatus,
-  MERCHANT_SUPPORT_EMAIL,
 } from "@/lib/merchant-onboarding"
+import { MERCHANT_SUPPORT_URL } from "@/lib/support-contact"
 import { AuthedLocation } from "@/types/location"
 
 /**
@@ -192,12 +192,12 @@ export default function MerchantOnboardingPage() {
                         a merchant who never hovers would sit waiting on a review
                         nobody has been asked for. */}
                     <p className="text-sm text-gray-600 dark:text-gray-400">
-                      Saving does not re-queue this listing. Email{" "}
+                      Saving does not re-queue this listing. Contact{" "}
                       <a
                         className="font-semibold text-foreground underline underline-offset-4"
-                        href={`mailto:${MERCHANT_SUPPORT_EMAIL}`}
+                        href={MERCHANT_SUPPORT_URL}
                       >
-                        {MERCHANT_SUPPORT_EMAIL}
+                        us
                       </a>{" "}
                       to ask for another review.
                     </p>

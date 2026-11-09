@@ -299,6 +299,9 @@ func (a *AppDB) appendW9TierNotification(ctx context.Context, userID string, fee
 			adminRequested[row.taxYear] = row.notifiedAt
 			continue
 		}
+		if row.tier == W9TierCorrectionPrompt {
+			continue
+		}
 		collected = append(collected, row)
 	}
 	if err := rows.Err(); err != nil {
@@ -328,7 +331,7 @@ func (a *AppDB) appendW9TierNotification(ctx context.Context, userID string, fee
 		// carrying the entry; see onW9TINMismatch for the limit of two.
 		case row.mismatches >= 2 && status == W9StatusInvalid:
 			title = "We couldn't verify your W-9"
-			body = "Your W-9 still didn't match IRS records. Please email techsupport@sfluv.org and we'll help sort it out."
+			body = "Your W-9 still didn't match IRS records. Please contact us at sfluv.org/get-in-touch and we'll help sort it out."
 		case row.mismatches > 0:
 			title = "We need a corrected W-9"
 			body = "The name or taxpayer number on your W-9 didn't match IRS records. Tap to send a corrected one."
