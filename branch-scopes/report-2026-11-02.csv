@@ -1,7 +1,7 @@
 CONTRACTOR NAME:,PJ O'Leary,,,,,
 SERVICE/TITLE:,,,,,,
 INVOICE DATE:,2026-11-02,,,,,
-SERVICE PERIOD: ,2026-10-26 to 2026-10-29,,,,,
+SERVICE PERIOD: ,2026-10-26 to 2026-11-05,,,,,
 HOURLY RATE:,,,,,,
 % SFLUV,10.00%,,,,,
 ,,,,,,
@@ -12,13 +12,13 @@ DATE,,DESCRIPTION,,HOURS                ( input numbers only),,AMOUNT BILLED
 2026-10-28,,"Presentation practice and board presentation, with board deck changes between run-throughs (stated 16:00-18:40, less the 0.29h of app work inside it on the row above)",,2.38,,0.00
 2026-10-29,,Chats marked read on open; pushes and chats show the name and photo given to a contact; photo label in the inbox; two reports and a contacts restructure investigated (0.76 measured),,0.76,,0.00
 2026-10-29,,Vipul Presentation (stated),,1.00,,0.00
-,,,,,,0.00
-,,,,,,0.00
-,,,,,,0.00
+2026-11-03,,IIW Conference (stated),,6.00,,0.00
+2026-11-04,,IIW Conference (stated),,6.00,,0.00
+2026-11-05,,IIW Conference (stated),,6.00,,0.00
 ,,,,,,
- TOTAL: ,,,,23.44,, $ -
+ TOTAL: ,,,,41.44,, $ -
 PAYMENT IN SFLUV,,,,,, $ -
 PAYMENT IN USD,,,,,, $ -
 ,,,,,,
-METHOD:,,"11.19h measured from PJ's session-transcript and commit timestamps (GitHub merges included) clustered into sittings on a 30-minute gap, unioned across app, mobile-app, webpage and animations. 12.25h stated by the contractor for work the clock did not see. Itemised in branch-scopes/pjol/mobile-2-1.md, rounds 1-14.",,,,
-WEAKNESSES:,,"Oct 26 is the contractor's stated 11:00-19:52 plus a measured 19:52-20:20; PJ's evidence covers 6.28h of the day and overlapped three other projects, so it is an upper bound on the app work, not a measurement of it. Three stated windows have no session behind them: Oct 28's presentation practice and board presentation, and Oct 29's Vipul Presentation. Oct 27 is 6.37h, not the branch scope's 7.09h: the scope joined 11:20-12:34 into one sitting on commit 3505dec at 11:45, which is Sanchez's, and its own rule counts only PJ's commits.",,,,
+METHOD:,,"11.19h measured from PJ's session-transcript and commit timestamps (GitHub merges included) clustered into sittings on a 30-minute gap, unioned across app, mobile-app, webpage and animations. 30.25h stated by the contractor for work the clock did not see. Oct 26-29 is itemised in branch-scopes/pjol/mobile-2-1.md, rounds 1-14; the IIW Conference days are the contractor's figure.",,,,
+WEAKNESSES:,,"Oct 26 is the contractor's stated 11:00-19:52 plus a measured 19:52-20:20; PJ's evidence covers 6.28h of the day and overlapped three other projects, so it is an upper bound on the app work, not a measurement of it. Six stated windows have no session behind them: Oct 28's presentation practice and board presentation, Oct 29's Vipul Presentation, and the three IIW Conference days, given as 6h a day without times. Nov 4's 0.17h session at 12:03, recorded in branch-scopes/pjol/week-2026-11-02.md, may fall inside that day's conference hours. Oct 27 is 6.37h, not the branch scope's 7.09h: the scope joined 11:20-12:34 into one sitting on commit 3505dec at 11:45, which is Sanchez's, and its own rule counts only PJ's commits.",,,,
