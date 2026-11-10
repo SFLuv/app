@@ -30,12 +30,15 @@ const SUPERVISOR_STATUS_FILTERS = new Set([
   "in_progress",
   "completed",
   "paid_out",
-  "paid_out_partial",
   "expired",
   "failed",
   "skipped",
   "deleted",
 ])
+
+// Finalized (Partial) is part of Finalized now. Links saved with its old value
+// open on Finalized rather than on All.
+const readStatusParam = (value: string | null): string => (value === "paid_out_partial" ? "paid_out" : value || "all")
 
 const toLocalDateBoundaryISO = (value: string, boundary: "start" | "end"): string => {
   const trimmed = value.trim()
@@ -81,7 +84,7 @@ export default function SupervisorPage() {
   const pageFromQuery = Number(searchParams.get("page") || "0")
   const countFromQuery = Number(searchParams.get("count") || "20")
   const searchFromQuery = searchParams.get("search") || ""
-  const statusFromQuery = searchParams.get("status") || "all"
+  const statusFromQuery = readStatusParam(searchParams.get("status"))
   const supervisorFromQuery = searchParams.get("supervisor_id") || SUPERVISOR_FILTER_ALL
   const sortByFromQuery = searchParams.get("sort_by")
   const sortDirectionFromQuery = searchParams.get("sort_direction")
@@ -215,7 +218,7 @@ export default function SupervisorPage() {
     const nextPage = Number(searchParams.get("page") || "0")
     const nextCount = Number(searchParams.get("count") || "20")
     const nextSearch = searchParams.get("search") || ""
-    const nextStatus = searchParams.get("status") || "all"
+    const nextStatus = readStatusParam(searchParams.get("status"))
     const nextSupervisor = searchParams.get("supervisor_id") || SUPERVISOR_FILTER_ALL
     const nextSortBy = searchParams.get("sort_by")
     const nextSortDirection = searchParams.get("sort_direction")
@@ -435,7 +438,6 @@ export default function SupervisorPage() {
                   <SelectItem value="in_progress">In Progress</SelectItem>
                   <SelectItem value="completed">Completed</SelectItem>
                   <SelectItem value="paid_out">Finalized</SelectItem>
-                  <SelectItem value="paid_out_partial">Finalized (Partial)</SelectItem>
                   <SelectItem value="expired">Expired</SelectItem>
                   <SelectItem value="failed">Failed</SelectItem>
                   <SelectItem value="skipped">Skipped</SelectItem>

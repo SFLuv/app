@@ -2831,6 +2831,13 @@ var schemaMigrations = []SchemaMigration{
 			return migrateSupportBotProfile(ctx, pools)
 		},
 	},
+	{
+		Version:     "1.81",
+		Description: "workflows: finalize partially the recurring occurrences skipped after a step was paid",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			return migrateStrandedSkippedWorkflows(ctx, pools)
+		},
+	},
 }
 
 // migrateW9TINMismatchCount adds the count of failed TIN matches per filing.
