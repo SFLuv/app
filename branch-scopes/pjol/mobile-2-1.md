@@ -1340,7 +1340,7 @@ down here so it is not discovered a third time as though it were news.
 ## Known gap
 
 **Oct 26 and Oct 27 are not in an invoice yet.**
-`branch-scopes/report-2026-10-26.csv` covers the service period 2026-10-19 to
+`branch-scopes/pjol/report-2026-10-26.csv` covers the service period 2026-10-19 to
 2026-10-24 and is closed. This branch's hours — **16.5h**, 9.3h stated for Oct 26
 and 7.2h measured for Oct 27–28, revised by round 8 from the 15.4h this round
 first wrote — belong to the next period, whose end date is the contractor's to

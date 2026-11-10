@@ -1,0 +1,24 @@
+CONTRACTOR NAME:,PJ O'Leary,,,,,
+SERVICE/TITLE:,,,,,,
+INVOICE DATE:,2026-11-09,,,,,
+SERVICE PERIOD: ,2026-11-02 to 2026-11-09,,,,,
+HOURLY RATE:,,,,,,
+% SFLUV,10.00%,,,,,
+,,,,,,
+DATE,,DESCRIPTION,,HOURS                ( input numbers only),,AMOUNT BILLED
+2026-11-02,,"Composer follows the keyboard (2.4.0 over the air, 2.5.0 native); Sanchez's W-9 work folded in; reply from a chat push; chat list, reads and per-chat counts; home-screen icon badge; over-the-air and native split; the conversation in an expanded push; last week's records; dev meeting (0.88 measured + 1.00 stated)",,1.88,,0.00
+2026-11-03,,IIW Conference (stated),,6.00,,0.00
+2026-11-04,,IIW Conference (stated),,6.00,,0.00
+2026-11-04,,"Weekly scope started, and the scope convention moved from branches to weeks (0.17 measured)",,0.17,,0.00
+2026-11-05,,IIW Conference (stated),,6.00,,0.00
+2026-11-06,,Dev review; Finalized (Partial) filter in the supervisor panel; merge checked against main and the production apps; offline payments researched (0.65 measured + 1.00 stated),,1.65,,0.00
+2026-11-08,,Vietnamese on the back of the perk cards; one-sided QR export; the week re-measured (0.15 measured),,0.15,,0.00
+2026-11-09,,One-sided QR export as separate fronts and backs PDFs; main merged in and migrations checked; the week closed (0.14 measured),,0.14,,0.00
+,,,,,,0.00
+,,,,,,
+ TOTAL: ,,,,21.99,, $ -
+PAYMENT IN SFLUV,,,,,, $ -
+PAYMENT IN USD,,,,,, $ -
+,,,,,,
+METHOD:,,"1.99h measured from PJ's session-transcript and commit timestamps (GitHub merges included) clustered into sittings on a 30-minute gap, across every SFLUV project's transcripts and PJ's commits in app, mobile-app, webpage and animations. 20.00h stated by the contractor for work the clock did not see. Itemised in branch-scopes/pjol/week-2026-11-02.md, rounds 1-7.",,,,
+WEAKNESSES:,,"Five stated windows have no session behind them: Monday's dev meeting, Friday's dev review, and the three IIW Conference days, given as 6h a day without times. Nov 4's 0.17h session at 12:03 may fall inside that day's conference hours. Monday's first two sittings were 32 minutes apart, just over the gap, so the 0.54h between them is not counted. Nov 9's 0.14h falls in the next week by date and is here by the contractor's call, because it finishes Sunday's work.",,,,

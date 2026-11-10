@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // Finalizing a workflow nobody finished.
@@ -131,6 +133,30 @@ func (a *AppDB) FinalizeWorkflowPartiallyIfElapsed(ctx context.Context, workflow
 		return false, "still open", tx.Commit(ctx)
 	}
 
+	finalized, reason, err := finalizeWorkflowPartiallyTx(ctx, tx, workflowID)
+	if err != nil {
+		return false, "", err
+	}
+	if !finalized {
+		return false, reason, tx.Commit(ctx)
+	}
+
+	// And generate the occurrence the stall swallowed.
+	if _, err := ensureRecurringWorkflowSuccessorTx(ctx, tx, workflowID); err != nil {
+		return false, "", err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return false, "", err
+	}
+	return true, reason, nil
+}
+
+// finalizeWorkflowPartiallyTx is the close-out itself, for a workflow whose
+// window is already known to have passed. It does not create the recurrence
+// successor: the sweep above does that itself, and the recurrence catch-up,
+// which also closes occurrences through here, creates its own.
+func finalizeWorkflowPartiallyTx(ctx context.Context, tx pgx.Tx, workflowID string) (bool, string, error) {
 	// Zero-bounty completed steps owe nothing, so they settle themselves —
 	// the same rule the ordinary finalization uses.
 	if _, err := tx.Exec(ctx, `
@@ -150,7 +176,7 @@ func (a *AppDB) FinalizeWorkflowPartiallyIfElapsed(ctx context.Context, workflow
 		return false, "", fmt.Errorf("error counting steps still owed: %s", err)
 	}
 	if owed > 0 {
-		return false, fmt.Sprintf("%d completed step(s) still awaiting payout", owed), tx.Commit(ctx)
+		return false, fmt.Sprintf("%d completed step(s) still awaiting payout", owed), nil
 	}
 
 	// Everything nobody started is abandoned, not failed: 'skipped' says the
@@ -172,7 +198,7 @@ func (a *AppDB) FinalizeWorkflowPartiallyIfElapsed(ctx context.Context, workflow
 	}
 	skipped := skipTag.RowsAffected()
 	if skipped == 0 {
-		return false, "nothing left unstarted", tx.Commit(ctx)
+		return false, "nothing left unstarted", nil
 	}
 
 	if _, err := tx.Exec(ctx, `
@@ -202,13 +228,5 @@ func (a *AppDB) FinalizeWorkflowPartiallyIfElapsed(ctx context.Context, workflow
 		return false, "", fmt.Errorf("error releasing blocked workflows: %s", err)
 	}
 
-	// And generate the occurrence the stall swallowed.
-	if _, err := ensureRecurringWorkflowSuccessorTx(ctx, tx, workflowID); err != nil {
-		return false, "", err
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return false, "", err
-	}
 	return true, fmt.Sprintf("%d step(s) skipped", skipped), nil
 }

@@ -4364,6 +4364,56 @@ func skipUnclaimedPastRecurringWorkflowsTx(ctx context.Context, tx pgx.Tx, serie
 	return nil
 }
 
+// closeElapsedRecurringWorkflowTx ends an occurrence that the next one has
+// superseded.
+//
+// An occurrence nobody finished a step in is skipped, as it always was. One
+// with a step already done is finalized partially instead: the finished steps
+// keep their status and their payout, and only the steps nobody did are
+// skipped. Skipping it outright filed paid work under 'skipped', where the
+// supervisor export reported every step as never done. It also meant partial
+// finalization never saw a recurring workflow at all, because this runs first
+// and partial finalization only looks at unfinished ones.
+//
+// A completed step still awaiting payout blocks the close-out, as it does in
+// the sweep, and the occurrence is left open. The series then waits for that
+// payout: the successor is only generated from a closed occurrence, and the
+// sweep generates it once the payout lands and the occurrence can close.
+func closeElapsedRecurringWorkflowTx(ctx context.Context, tx pgx.Tx, workflowId string) error {
+	var hasFinishedStep bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM workflow_steps
+			WHERE workflow_id = $1 AND status IN ('completed', 'paid_out')
+		);
+	`, workflowId).Scan(&hasFinishedStep); err != nil {
+		return fmt.Errorf("error checking elapsed recurring workflow for finished steps: %s", err)
+	}
+	if hasFinishedStep {
+		if _, _, err := finalizeWorkflowPartiallyTx(ctx, tx, workflowId); err != nil {
+			return err
+		}
+		return nil
+	}
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE
+			workflows
+		SET
+			status = 'skipped',
+			is_start_blocked = false,
+			blocked_by_workflow_id = NULL,
+			updated_at = unix_now()
+		WHERE
+			id = $1
+		AND
+			status IN ('approved', 'in_progress', 'blocked');
+	`, workflowId); err != nil {
+		return fmt.Errorf("error skipping elapsed recurring workflow: %s", err)
+	}
+	return nil
+}
+
 func ensureRecurringWorkflowSeriesCatchUpTx(ctx context.Context, tx pgx.Tx, seriesId string, nowUnix int64) error {
 	if strings.TrimSpace(seriesId) == "" {
 		return nil
@@ -4461,20 +4511,8 @@ func ensureRecurringWorkflowSeriesCatchUpTx(ctx context.Context, tx pgx.Tx, seri
 		}
 
 		if status == "approved" || status == "in_progress" || status == "blocked" {
-			if _, err := tx.Exec(ctx, `
-				UPDATE
-					workflows
-				SET
-					status = 'skipped',
-					is_start_blocked = false,
-					blocked_by_workflow_id = NULL,
-					updated_at = unix_now()
-				WHERE
-					id = $1
-				AND
-					status IN ('approved', 'in_progress', 'blocked');
-			`, workflowId); err != nil {
-				return fmt.Errorf("error skipping elapsed recurring workflow: %s", err)
+			if err := closeElapsedRecurringWorkflowTx(ctx, tx, workflowId); err != nil {
+				return err
 			}
 		}
 
@@ -5488,8 +5526,11 @@ func (a *AppDB) GetSupervisorWorkflows(
 		count = 200
 	}
 
-	// "paid_out_partial" is a filter, not a workflow status: every finalized
-	// workflow, plus any other that already has at least one step paid out.
+	// "paid_out" is Finalized: every finalized workflow, plus any other that
+	// already has a step paid out, since a workflow can be finalized in part.
+	// The export takes only the paid steps from those. "paid_out_partial" was
+	// the partial half under its own name, and is still accepted as Finalized so
+	// links saved with it keep working.
 	allowedStatus := map[string]struct{}{
 		"pending":          {},
 		"approved":         {},
@@ -5509,6 +5550,9 @@ func (a *AppDB) GetSupervisorWorkflows(
 		if _, ok := allowedStatus[normalizedStatus]; !ok {
 			return nil, fmt.Errorf("invalid status filter")
 		}
+	}
+	if normalizedStatus == "paid_out_partial" {
+		normalizedStatus = "paid_out"
 	}
 
 	orderBy := normalizeSupervisorSort(sortBy)
@@ -5555,7 +5599,7 @@ func (a *AppDB) GetSupervisorWorkflows(
 			argIndex++
 		}
 	}
-	if normalizedStatus == "paid_out_partial" {
+	if normalizedStatus == "paid_out" {
 		baseConditions = append(baseConditions, `(
 			w.status = 'paid_out'
 			OR EXISTS (
@@ -6831,14 +6875,23 @@ func (a *AppDB) ClaimWorkflowStep(
 	if stepStatus != "locked" && stepStatus != "available" {
 		return nil, nil, fmt.Errorf("workflow step is not claimable")
 	}
+	// A locked step can be claimed once its workflow has started, ahead of the
+	// step before it. It stays locked and opens for whoever holds it when that
+	// step is done.
+	//
+	// This used to wait for the step before it. In a weekly series whose first
+	// step is finished on the day, that left a later role claimable for only the
+	// hours between that step finishing and the next occurrence starting, and
+	// the claim never reached the series, so nobody held the role from week to
+	// week.
 	canUnlockOnClaim := stepStatus == "available"
 	if stepStatus == "locked" {
+		if workflowStartAt > time.Now().UTC().Unix() {
+			return nil, nil, fmt.Errorf("workflow step is not available yet")
+		}
 		canUnlockOnClaim, err = canStepTransitionToAvailableTx(ctx, tx, workflowId, stepOrder, workflowStartAt)
 		if err != nil {
 			return nil, nil, err
-		}
-		if !canUnlockOnClaim {
-			return nil, nil, fmt.Errorf("workflow step is not available yet")
 		}
 	}
 	if workflowRecurrence != "one_time" {
@@ -14668,39 +14721,21 @@ func improverClaimableStepGuards() string {
 						ctd.value IS NULL
 				)
 			AND
-				-- A locked step is only claimable once it could actually
-				-- unlock. Mirrors canStepTransitionToAvailableTx: step one
-				-- waits for the start time, later steps wait for the one
-				-- before them.
+				-- A locked step is claimable once its workflow has started,
+				-- ahead of the step before it. Mirrors ClaimWorkflowStep: the
+				-- claim leaves it locked, and it opens for its holder when
+				-- the step before it is done.
 				(
 					ws.status <> 'locked'
-					OR (
-						ws.step_order <= 1
-						AND EXISTS (
-							SELECT
-								1
-							FROM
-								workflows sw
-							WHERE
-								sw.id = ws.workflow_id
-							AND
-								sw.start_at <= EXTRACT(EPOCH FROM NOW())
-						)
-					)
-					OR (
-						ws.step_order > 1
-						AND EXISTS (
-							SELECT
-								1
-							FROM
-								workflow_steps prev
-							WHERE
-								prev.workflow_id = ws.workflow_id
-							AND
-								prev.step_order = ws.step_order - 1
-							AND
-								prev.status IN ('completed', 'paid_out')
-						)
+					OR EXISTS (
+						SELECT
+							1
+						FROM
+							workflows sw
+						WHERE
+							sw.id = ws.workflow_id
+						AND
+							sw.start_at <= EXTRACT(EPOCH FROM NOW())
 					)
 				)`
 }

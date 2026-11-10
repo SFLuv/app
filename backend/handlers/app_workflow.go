@@ -2049,11 +2049,11 @@ type supervisorExportColumn struct {
 	Header string
 }
 
+// deriveSupervisorCSVStepStatus reads the step first and the workflow second.
+// A skipped workflow can hold a step that was done and paid, and the step's own
+// record of that has to win: reading the workflow first reported every such
+// step as "skipped".
 func deriveSupervisorCSVStepStatus(step structs.WorkflowStep, workflowStatus string) string {
-	if strings.EqualFold(strings.TrimSpace(workflowStatus), "skipped") {
-		return "skipped"
-	}
-
 	if step.Submission != nil {
 		if step.Submission.StepNotPossible {
 			return "failed"
@@ -2062,14 +2062,48 @@ func deriveSupervisorCSVStepStatus(step structs.WorkflowStep, workflowStatus str
 	}
 
 	switch strings.ToLower(strings.TrimSpace(step.Status)) {
-	case "in_progress":
-		return "active"
 	case "completed", "paid_out":
 		return "complete"
+	case "skipped":
+		return "skipped"
+	}
+
+	// Unfinished steps of a skipped workflow were never done.
+	if strings.EqualFold(strings.TrimSpace(workflowStatus), "skipped") {
+		return "skipped"
+	}
+
+	switch strings.ToLower(strings.TrimSpace(step.Status)) {
+	case "in_progress":
+		return "active"
 	default:
 		// locked + available (and any unknown status) are treated as not yet submitted.
 		return "pending"
 	}
+}
+
+// isSupervisorFinalizedFilter reports whether an export is for Finalized work,
+// which takes only the steps that were paid out. "paid_out_partial" is the old
+// name of the partial half, which Finalized now includes.
+func isSupervisorFinalizedFilter(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "paid_out", "paid_out_partial":
+		return true
+	}
+	return false
+}
+
+// finalizedWorkflowSteps keeps the steps that were paid out. A workflow
+// finalized in part, or still running with a step already paid, is listed under
+// Finalized for the steps that were finalized, not for the ones that were not.
+func finalizedWorkflowSteps(steps []structs.WorkflowStep) []structs.WorkflowStep {
+	finalized := make([]structs.WorkflowStep, 0, len(steps))
+	for _, step := range steps {
+		if strings.EqualFold(strings.TrimSpace(step.Status), "paid_out") {
+			finalized = append(finalized, step)
+		}
+	}
+	return finalized
 }
 
 func buildSupervisorWorkflowCSV(
@@ -2353,6 +2387,7 @@ func (a *AppService) ExportSupervisorWorkflowData(w http.ResponseWriter, r *http
 	}
 
 	exportLocation, exportTimezone := resolveSupervisorExportTimezone(req.Timezone)
+	finalizedOnly := isSupervisorFinalizedFilter(req.Status)
 
 	workflows := make([]*structs.Workflow, 0, len(workflowIDs))
 	improverIDs := map[string]struct{}{}
@@ -2369,6 +2404,12 @@ func (a *AppService) ExportSupervisorWorkflowData(w http.ResponseWriter, r *http
 		if !isAdmin && (workflow.SupervisorUserId == nil || strings.TrimSpace(*workflow.SupervisorUserId) != *userDid) {
 			w.WriteHeader(http.StatusForbidden)
 			return
+		}
+		if finalizedOnly {
+			workflow.Steps = finalizedWorkflowSteps(workflow.Steps)
+			if len(workflow.Steps) == 0 {
+				continue
+			}
 		}
 		workflows = append(workflows, workflow)
 		for _, step := range workflow.Steps {
@@ -2410,7 +2451,16 @@ func (a *AppService) ExportSupervisorWorkflowData(w http.ResponseWriter, r *http
 			a.logger.Logf("error loading supervisor photo exports for workflow %s user %s: %s", workflow.Id, *userDid, err)
 			continue
 		}
+		// Photos follow the steps that were kept, so a Finalized export carries
+		// none from a step that was not finalized.
+		exportedStepOrders := map[int]struct{}{}
+		for _, step := range workflow.Steps {
+			exportedStepOrders[step.StepOrder] = struct{}{}
+		}
 		for _, photoExport := range photos {
+			if _, kept := exportedStepOrders[photoExport.StepOrder]; finalizedOnly && !kept {
+				continue
+			}
 			archiveName := buildSupervisorWorkflowPhotoArchiveName(photoExport, workflow.StartAt, exportLocation, exportTimezone, fileNameCounts)
 			photoBytes := photoExport.Photo.PhotoData
 			if !supervisorWorkflowPhotoShouldUseOriginalBytes(photoExport.Photo.ContentType, photoExport.Photo.FileName) {
