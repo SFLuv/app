@@ -121,16 +121,18 @@ const mockPaypalAccounts = [
   },
 ]
 
-type ApprovalStatus = "pending" | "approved" | "rejected"
+// Setup is approval with the listing held back: everything an approved
+// merchant has, but off the map and public lists until they are ready.
+type ApprovalStatus = "pending" | "setup" | "approved" | "rejected"
 
-const approvalToStatus = (approval?: boolean | null): ApprovalStatus => {
-  if (approval === true) return "approved"
-  if (approval === false) return "rejected"
+const approvalToStatus = (location: Pick<AuthedLocation, "approval" | "in_setup">): ApprovalStatus => {
+  if (location.approval === true) return location.in_setup ? "setup" : "approved"
+  if (location.approval === false) return "rejected"
   return "pending"
 }
 
 const statusToApproval = (status: ApprovalStatus): boolean | null => {
-  if (status === "approved") return true
+  if (status === "approved" || status === "setup") return true
   if (status === "rejected") return false
   return null
 }
@@ -796,7 +798,7 @@ export default function AdminPage() {
     const s = merchantSearch.trim().toLowerCase()
     return authedMapLocations
       .filter((location) => {
-        const matchesStatus = merchantStatusFilter === "all" || approvalToStatus(location.approval) === merchantStatusFilter
+        const matchesStatus = merchantStatusFilter === "all" || approvalToStatus(location) === merchantStatusFilter
         const matchesSearch = !s || location.name.toLowerCase().includes(s) || (location.city || "").toLowerCase().includes(s)
         return matchesStatus && matchesSearch
       })
@@ -806,8 +808,8 @@ export default function AdminPage() {
       // out of sight. Approved and rejected keep their existing order relative
       // to each other; the sort is stable, so nothing else moves.
       .sort((a, b) => {
-        const aPending = approvalToStatus(a.approval) === "pending" ? 0 : 1
-        const bPending = approvalToStatus(b.approval) === "pending" ? 0 : 1
+        const aPending = approvalToStatus(a) === "pending" ? 0 : 1
+        const bPending = approvalToStatus(b) === "pending" ? 0 : 1
         return aPending - bPending
       })
   }, [authedMapLocations, merchantStatusFilter, merchantSearch])
@@ -2454,7 +2456,7 @@ export default function AdminPage() {
 
   const openMerchantModal = (location: AuthedLocation) => {
     setselectedLocationForReview(location)
-    setMerchantStatusDraft(approvalToStatus(location.approval))
+    setMerchantStatusDraft(approvalToStatus(location))
     setMerchantModalError("")
     setOpenMerchantQrCardIds(new Set())
     merchantQrRefs.current = new Map()
@@ -2489,6 +2491,7 @@ export default function AdminPage() {
     const update: UpdateLocationApprovalRequest = {
       id: selectedLocationForReview.id,
       approval: statusToApproval(merchantStatusDraft),
+      setup: merchantStatusDraft === "setup",
     }
 
     try {
@@ -3667,6 +3670,7 @@ export default function AdminPage() {
                       <SelectContent>
                         <SelectItem value="all">All</SelectItem>
                         <SelectItem value="approved">Approved</SelectItem>
+                        <SelectItem value="setup">Setup</SelectItem>
                         <SelectItem value="pending">Pending</SelectItem>
                         <SelectItem value="rejected">Rejected</SelectItem>
                       </SelectContent>
@@ -3738,14 +3742,16 @@ export default function AdminPage() {
                           </div>
                           <Badge
                             variant={
-                              approvalToStatus(location.approval) === "approved"
+                              approvalToStatus(location) === "approved"
                                 ? "default"
-                                : approvalToStatus(location.approval) === "rejected"
-                                  ? "destructive"
-                                  : "outline"
+                                : approvalToStatus(location) === "setup"
+                                  ? "secondary"
+                                  : approvalToStatus(location) === "rejected"
+                                    ? "destructive"
+                                    : "outline"
                             }
                           >
-                            {formatStatusLabel(approvalToStatus(location.approval))}
+                            {formatStatusLabel(approvalToStatus(location))}
                           </Badge>
                         </div>
                       </CardContent>
@@ -5712,10 +5718,17 @@ export default function AdminPage() {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="pending">Pending</SelectItem>
+                    <SelectItem value="setup">Setup</SelectItem>
                     <SelectItem value="approved">Approved</SelectItem>
                     <SelectItem value="rejected">Rejected</SelectItem>
                   </SelectContent>
                 </Select>
+                {merchantStatusDraft === "setup" && (
+                  <p className="text-xs text-muted-foreground">
+                    Approved, with wallets and merchant tools, but kept off the map and public lists. In the app&apos;s
+                    payment screen it is offered only to someone for whom it is the nearest merchant.
+                  </p>
+                )}
               </div>
 
               {merchantModalError && (

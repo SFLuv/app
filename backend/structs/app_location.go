@@ -191,6 +191,10 @@ type Location struct {
 	Hours []LocationDayHours `json:"hours"`
 	// When true the nightly Google sync leaves this listing's hours alone.
 	HoursManual bool `json:"hours_manual"`
+	// InSetup marks an approved location that is not listed yet: off the map
+	// and every public list, and offered in the mobile payment screen only as
+	// the nearest merchant. Only ever true when Approval is.
+	InSetup bool `json:"in_setup"`
 }
 
 type LocationPaymentWallet struct {
@@ -241,6 +245,9 @@ type PublicLocation struct {
 	GoogleID string `json:"google_id"`
 	Name     string `json:"name"`
 	Approval bool   `json:"approval"`
+	// InSetup: see Location.InSetup. The public list carries these only when
+	// asked with include_setup.
+	InSetup bool `json:"in_setup"`
 	// The public face of locations.payment_wallet_address, and the address the
 	// map's Pay button sends to; see Location.PayToAddress.
 	PayToAddress string             `json:"pay_to_address"`
@@ -268,6 +275,10 @@ type PublicLocation struct {
 type LocationsPageRequest struct {
 	Page  uint
 	Count uint
+	// IncludeSetup adds the locations in setup, flagged, to the public list.
+	// Only the mobile payment screen asks for them, to offer one when it is
+	// the nearest; everything else gets the listed merchants alone.
+	IncludeSetup bool
 }
 
 type AuthedLocationResponse struct {

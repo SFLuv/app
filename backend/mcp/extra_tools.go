@@ -575,7 +575,7 @@ func (a *reportCore) appStructure(ctx context.Context, _ mcp.CallToolRequest) (a
 		"generated_at": time.Now().UTC().Format(time.RFC3339),
 		"overview":     "SFLUV is a local-currency platform (wrapped HONEY on the active chain) for merchants, improvers, proposers, voters, issuers, and affiliates. Admins manage everything from the /admin panel; role requests happen in /settings.",
 		"admin_controls": []map[string]string{
-			{"task": "Approve or reject a merchant", "where": "/settings merchant approval flow (admin view) and /admin Users/Merchants management; merchant locations are approved there.", "data_tool": "merchant_report"},
+			{"task": "Approve, set up or reject a merchant", "where": "/settings merchant approval flow (admin view) and /admin Users/Merchants management; merchant locations are approved there. Setup approves a location but keeps it off the map and public lists.", "data_tool": "merchant_report"},
 			{"task": "View / search users and roles", "where": "/admin Users tab.", "data_tool": "search_users"},
 			{"task": "Manage organizations (members, role approvals, allocations, issuer scopes)", "where": "/admin Organizations tab. Orgs own affiliate/proposer/supervisor/issuer roles.", "data_tool": "organizations_report"},
 			{"task": "Grant or revoke credentials; configure who can issue what", "where": "/issuer panel; org issuer scopes in /admin Organizations. Credential type catalog in /admin Credential Types.", "data_tool": "credentials_report"},

@@ -2838,6 +2838,25 @@ var schemaMigrations = []SchemaMigration{
 			return migrateStrandedSkippedWorkflows(ctx, pools)
 		},
 	},
+	{
+		Version:     "1.82",
+		Description: "locations: a setup state, approved but kept off the map",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			// Setup is approval with the listing held back: a merchant who is
+			// onboarded but not yet ready to take SFLuv over the counter from
+			// anyone. It is a flag beside approval rather than a fourth value
+			// of it, because everything that reads approval = TRUE (the
+			// merchant role, wallets, merchant mode, payouts) must keep
+			// treating the merchant as approved. Only the public listings
+			// read it. It is only ever true alongside approval = TRUE.
+			if _, err := pools.App.Exec(ctx, `
+				ALTER TABLE locations ADD COLUMN IF NOT EXISTS in_setup BOOLEAN NOT NULL DEFAULT FALSE;
+			`); err != nil {
+				return fmt.Errorf("error adding locations.in_setup: %w", err)
+			}
+			return nil
+		},
+	},
 }
 
 // migrateW9TINMismatchCount adds the count of failed TIN matches per filing.

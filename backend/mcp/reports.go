@@ -99,7 +99,7 @@ These base-unit values are $SFLUV base units, NOT wei — wei implies 18 decimal
 	), a.w9Report)
 
 	a.addTool(s, mcp.NewTool("merchant_report",
-		mcp.WithDescription("List merchant locations, owner contact details, approval state, and configured payment wallets."),
+		mcp.WithDescription("List merchant locations, owner contact details, approval state (in_setup marks an approved location kept off the map and public lists), and configured payment wallets."),
 		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithBoolean("approved_only", mcp.Description("Only include approved locations. Defaults to false.")),
 		mcp.WithNumber("page", mcp.Description("Zero-based page number.")),
@@ -1055,6 +1055,7 @@ type merchantRow struct {
 	OwnerName            string   `json:"owner_name,omitempty"`
 	Name                 string   `json:"name"`
 	Approval             bool     `json:"approval"`
+	InSetup              bool     `json:"in_setup"`
 	ApprovedAt           string   `json:"approved_at,omitempty"`
 	Street               string   `json:"street,omitempty"`
 	City                 string   `json:"city,omitempty"`
@@ -1082,6 +1083,7 @@ func (a *reportCore) merchantReport(ctx context.Context, request mcp.CallToolReq
 				COALESCE(u.contact_name, ''),
 				COALESCE(l.name, ''),
 				COALESCE(l.approval, FALSE),
+				l.in_setup,
 				l.approved_at,
 				COALESCE(l.street, ''),
 				COALESCE(l.city, ''),
@@ -1122,6 +1124,7 @@ func (a *reportCore) merchantReport(ctx context.Context, request mcp.CallToolReq
 				&row.OwnerName,
 				&row.Name,
 				&row.Approval,
+				&row.InSetup,
 				&approvedAt,
 				&row.Street,
 				&row.City,
