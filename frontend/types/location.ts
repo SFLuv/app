@@ -68,6 +68,11 @@ export interface AuthedLocation {
   description: string;
   type: string;
   approval?: boolean | null;
+  /**
+   * Approved but not listed: kept off the map and public lists while the
+   * merchant gets set up. Only ever true when `approval` is.
+   */
+  in_setup?: boolean;
   street: string;
   city: string;
   state: string;
@@ -179,4 +184,6 @@ export type PlaceSelection =
 export interface UpdateLocationApprovalRequest {
   id: number;
   approval: boolean | null;
+  /** With `approval: true`, approves the location but keeps it unlisted. */
+  setup?: boolean;
 }

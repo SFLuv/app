@@ -96,6 +96,7 @@ func (a *AppDB) GetLocation(ctx context.Context, id uint64) (*structs.PublicLoca
 			COALESCE(l.google_id, ''),
 			l.name,
 			l.approval,
+			l.in_setup,
 			`+locationPayToAddressExpr+` AS pay_to_address,
 			COALESCE(
 				NULLIF(TRIM(l.tipping_wallet_address), ''),
@@ -136,6 +137,7 @@ func (a *AppDB) GetLocation(ctx context.Context, id uint64) (*structs.PublicLoca
 		&location.GoogleID,
 		&location.Name,
 		&location.Approval,
+		&location.InSetup,
 		&payToAddress,
 		&tipToAddress,
 		&location.Description,
@@ -209,6 +211,7 @@ func (s *AppDB) GetLocations(ctx context.Context, r *structs.LocationsPageReques
 			l.id,
 			COALESCE(l.google_id, ''),
 			l.name,
+			l.in_setup,
 			`+locationPayToAddressExpr+` AS pay_to_address,
 			COALESCE(
 				NULLIF(TRIM(l.tipping_wallet_address), ''),
@@ -235,12 +238,13 @@ func (s *AppDB) GetLocations(ctx context.Context, r *structs.LocationsPageReques
 			ON u.id = l.owner_id
 			AND u.active = TRUE
 		WHERE l.approval = TRUE
+		AND ($3 OR l.in_setup = FALSE)
 		AND l.active = TRUE
 		AND l.location_kind = 'merchant'
 		ORDER BY l.id
 		LIMIT $1
 		OFFSET $2;
-	`, count, offset)
+	`, count, offset, r != nil && r.IncludeSetup)
 	if err != nil {
 		return nil, fmt.Errorf("error querying for locations: %w", err)
 	}
@@ -260,6 +264,7 @@ func (s *AppDB) GetLocations(ctx context.Context, r *structs.LocationsPageReques
 			&location.ID,
 			&location.GoogleID,
 			&location.Name,
+			&location.InSetup,
 			&payToAddress,
 			&tipToAddress,
 			&location.Description,
@@ -326,6 +331,7 @@ func (s *AppDB) GetAuthedLocations(ctx context.Context, r *structs.LocationsPage
 			l.description,
 			l.type,
 			l.approval,
+			l.in_setup,
 			l.street,
 			l.city,
 			l.state,
@@ -398,6 +404,7 @@ func (s *AppDB) GetAuthedLocations(ctx context.Context, r *structs.LocationsPage
 			&location.Description,
 			&location.Type,
 			&location.Approval,
+			&location.InSetup,
 			&location.Street,
 			&location.City,
 			&location.State,
@@ -948,6 +955,7 @@ func (a *AppDB) GetLocationsByUser(ctx context.Context, userId string) ([]*struc
 		l.description,
 		l.type,
 		l.approval,
+		l.in_setup,
 		l.street,
 		l.city,
 		l.state,
@@ -1020,6 +1028,7 @@ func (a *AppDB) GetLocationsByUser(ctx context.Context, userId string) ([]*struc
 			&location.Description,
 			&location.Type,
 			&location.Approval,
+			&location.InSetup,
 			&location.Street,
 			&location.City,
 			&location.State,

@@ -340,21 +340,13 @@ func (a *AppService) applyLocationApproval(ctx context.Context, u structs.Update
 		}
 	}
 
-	err = a.db.UpdateLocationApproval(ctx, u.Id, u.Approval, provisioning, derived)
+	err = a.db.UpdateLocationApproval(ctx, u.Id, u.Approval, u.Setup, provisioning, derived)
 	if errors.Is(err, db.ErrLocationWalletIndexMoved) {
 		a.logger.Logf("wallet index moved while approving location %d; asking the admin to retry", u.Id)
 		return locationApprovalWalletMoved
 	}
 	if err != nil {
-		status := "pending"
-		if u.Approval != nil {
-			if *u.Approval {
-				status = "approved"
-			} else {
-				status = "rejected"
-			}
-		}
-		a.logger.Logf("error updating location approval for location %d to %s", u.Id, status)
+		a.logger.Logf("error updating location approval for location %d to %s", u.Id, locationApprovalStatusLabel(u))
 		return locationApprovalFailed
 	}
 
@@ -432,12 +424,29 @@ func (a *AppService) UpdateLocationApproval(w http.ResponseWriter, r *http.Reque
 		// somebody to finish the job.
 		if u.Approval != nil {
 			outcome := "Rejected in the admin panel"
-			if *u.Approval {
+			if *u.Approval && u.Setup {
+				outcome = "Approved for setup in the admin panel"
+			} else if *u.Approval {
 				outcome = "Approved in the admin panel"
 			}
 			a.resolveRoleRequestAlert(r.Context(), "merchant", strconv.FormatUint(uint64(u.Id), 10), outcome)
 		}
 		w.WriteHeader(http.StatusCreated)
+	}
+}
+
+// locationApprovalStatusLabel names the state an approval request asks for.
+// Setup counts only alongside approval, as UpdateLocationApproval stores it.
+func locationApprovalStatusLabel(u structs.UpdateLocationApprovalRequest) string {
+	switch {
+	case u.Approval == nil:
+		return "pending"
+	case !*u.Approval:
+		return "rejected"
+	case u.Setup:
+		return "setup"
+	default:
+		return "approved"
 	}
 }
 

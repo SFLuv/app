@@ -50,6 +50,9 @@ func (a *AppService) GetLocations(w http.ResponseWriter, r *http.Request) {
 	request := structs.LocationsPageRequest{
 		Page:  uint(page),
 		Count: uint(count),
+		// Opt-in, so the map, the website and every app build that predates
+		// setup keep getting listed merchants alone.
+		IncludeSetup: r.URL.Query().Get("include_setup") == "true",
 	}
 
 	locations, err := a.db.GetLocations(r.Context(), &request)

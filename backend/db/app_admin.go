@@ -66,12 +66,16 @@ func (a *AppDB) GetAdminUserIDs(ctx context.Context) ([]string, error) {
 // provisioning is applied in the same transaction: a location must never become
 // payable without a payment wallet that is its own.
 //
+// setup approves without listing; it is dropped unless approval is true, so a
+// pending or rejected location is never left marked as in setup.
+//
 // provisioning and derived are resolved by the caller before the transaction is
 // opened, so no write locks are held while waiting on the chain RPC.
 func (a *AppDB) UpdateLocationApproval(
 	ctx context.Context,
 	id uint,
 	approval *bool,
+	setup bool,
 	provisioning *LocationProvisioningContext,
 	derived *DerivedLocationWallets,
 ) error {
@@ -112,10 +116,11 @@ func (a *AppDB) UpdateLocationApproval(
 				approved_at = CASE
 					WHEN $1 IS TRUE THEN COALESCE(approved_at, NOW())
 					ELSE NULL
-				END
+				END,
+				in_setup = ($1 IS TRUE AND $3)
 			WHERE
 				id = $2;
-		`, approval, id)
+		`, approval, id, setup)
 	if err != nil {
 		return fmt.Errorf("error updating approval for location %d: %s", id, err)
 	}

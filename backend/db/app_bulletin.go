@@ -511,14 +511,15 @@ func (a *AppDB) GetBulletinPhotoData(ctx context.Context, photoId int64) (int64,
 // --- Meetup locations ---------------------------------------------------------
 
 // GetApprovedLocationNames resolves meetup spots. Only approved merchant
-// locations can be a meetup spot.
+// locations can be a meetup spot, and not one still in setup, which is kept
+// out of every public list.
 func (a *AppDB) GetApprovedLocationNames(ctx context.Context, ids []int) (map[int]string, error) {
 	out := map[int]string{}
 	if len(ids) == 0 {
 		return out, nil
 	}
 	rows, err := a.db.Query(ctx, `
-		SELECT id, name FROM locations WHERE id = ANY($1) AND approval = TRUE;
+		SELECT id, name FROM locations WHERE id = ANY($1) AND approval = TRUE AND in_setup = FALSE;
 	`, ids)
 	if err != nil {
 		return nil, err
@@ -566,9 +567,10 @@ func (a *AppDB) UpsertBulletinTradeFeedback(ctx context.Context, postId int64, f
 // --- Search -------------------------------------------------------------------
 
 // SearchSFLuvUsers finds people who chose to be findable (by public name prefix
-// or exact handle) and approved merchant locations (by name). An exact handle
-// match finds anyone who set that handle, discoverable or not: knowing the
-// handle is the permission. Blocked users never appear. No location is returned.
+// or exact handle) and listed merchant locations (by name: approved, and not in
+// setup). An exact handle match finds anyone who set that handle, discoverable
+// or not: knowing the handle is the permission. Blocked users never appear. No
+// location is returned.
 func (a *AppDB) SearchSFLuvUsers(ctx context.Context, viewerId string, query string) ([]string, []structs.UserSearchMerchant, error) {
 	q := strings.ToLower(strings.TrimSpace(query))
 	handle := strings.TrimPrefix(q, "@")
@@ -613,6 +615,7 @@ func (a *AppDB) SearchSFLuvUsers(ctx context.Context, viewerId string, query str
 		FROM locations l
 		JOIN users u ON u.id = l.owner_id AND u.active = TRUE
 		WHERE l.approval = TRUE
+			AND l.in_setup = FALSE
 			AND l.owner_id IS NOT NULL
 			AND l.owner_id <> $1
 			AND LOWER(l.name) LIKE '%' || $2 ESCAPE '\'
