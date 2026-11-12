@@ -92,7 +92,7 @@ frontend/
 ### Workflow Lifecycle
 `pending` → (voting) → `approved` → (start_at elapsed) → `in_progress` → (all steps done) → `completed` → `paid_out`
 
-Special statuses: `rejected`, `expired` (pending > 14 days), `deleted`, `blocked` (series awaiting prior workflow payout).
+Special statuses: `rejected`, `expired` (pending > 14 days, or an approved one-time workflow with no end date that nobody claimed within 30 days of its start), `deleted`, `blocked` (series awaiting prior workflow payout).
 
 ### Workflow Steps
 Sequential steps, each assigned to one improver role. Status: `locked` → `available` → `in_progress` → `completed` → `paid_out`. Steps unlock sequentially — completing step N makes step N+1 available.
