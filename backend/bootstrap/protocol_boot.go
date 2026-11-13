@@ -77,6 +77,7 @@ func runProtocolAccounts(
 		keepFaucetAttached(ctx, protocolSvc, botClient, appLogger)
 		attachRedeemer(ctx, protocolSvc, redeemer, appLogger, false)
 		ensureRecoveryOwners(ctx, protocolSvc, appLogger)
+		ensureFaucetBatcher(ctx, protocolSvc, appLogger)
 		return
 	}
 
@@ -104,6 +105,25 @@ func runProtocolAccounts(
 	// instead of pointing payouts at an empty account.
 	keepFaucetAttached(ctx, protocolSvc, botClient, appLogger)
 	attachRedeemer(ctx, protocolSvc, redeemer, appLogger, protocolSvc.DeployEnabled())
+	ensureFaucetBatcher(ctx, protocolSvc, appLogger)
+}
+
+// ensureFaucetBatcher gives a configured batcher its one-time approval from the
+// faucet Safe, then says whether batching is on. It is on only while the
+// batcher is the audited contract, the approval has landed and the paymaster
+// sponsors calls to it; until then every payout goes out on its own.
+func ensureFaucetBatcher(ctx context.Context, protocolSvc *handlers.ProtocolService, appLogger *logger.LogCloser) {
+	if !protocolSvc.FaucetBatcherConfigured() {
+		return
+	}
+	if err := protocolSvc.EnsureFaucetBatcherAllowance(ctx); err != nil {
+		appLogger.Logf("protocol faucet: batcher approval: %s", err)
+	}
+	if err := protocolSvc.FaucetBatchingReady(ctx); err != nil {
+		appLogger.Logf("protocol faucet: batching is off: %s", err)
+		return
+	}
+	appLogger.Logf("protocol faucet: batching is on, up to %d payouts an operation", handlers.MaxFaucetBatch)
 }
 
 // attachFaucet points payouts at the faucet Safe, retrying until it can.

@@ -29,6 +29,7 @@ type Client struct {
 	engineRPC  string
 	readRPC    string
 	entryPoint common.Address
+	paymaster  common.Address
 	factory    common.Address
 	accountKey string
 
@@ -82,6 +83,7 @@ func NewClient(cfg Config) (*Client, error) {
 		engineRPC:  fmt.Sprintf("%s/v1/rpc/%s", engine, common.HexToAddress(cfg.Paymaster).Hex()),
 		readRPC:    read,
 		entryPoint: common.HexToAddress(cfg.EntryPoint),
+		paymaster:  common.HexToAddress(cfg.Paymaster),
 		factory:    common.HexToAddress(cfg.Factory),
 		accountKey: fmt.Sprintf("%s/v1/accounts", engine),
 		http:       &http.Client{Timeout: 30 * time.Second},

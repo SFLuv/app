@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -36,32 +38,183 @@ import (
 // reward be claimed twice.
 
 const (
-	// How many transfers go in one operation. One: batching is off.
+	// How many transfers go in one operation when batching is on.
 	//
-	// A batch goes out as a DELEGATECALL into MultiSendCallOnly, and our
-	// paymaster (0x825b77eE…5a55) only sponsors operations whose target is on
-	// its whitelist. MultiSendCallOnly has never been on it, so every batch of
-	// two or more reverts on chain with "AA38 contract not whitelisted". On
-	// 2026-11-08 four perk-card payouts that arrived within 23 seconds were
-	// grouped into two batches, both reverted, and their codes stayed spent, so
-	// every rescan said "already redeemed".
+	// Batches go through SFLuvBatcher (protocol/batcher.go), and only while
+	// faucetBatcherReady says so, checked again before every batch: the
+	// batcher is configured and is exactly the audited contract, the
+	// paymaster would sponsor a call to it, and the Safe's allowance covers
+	// the batch. Otherwise each payout goes out on its own, as it has since
+	// 2026-11-08.
 	//
-	// At one, the dispatcher still queues and sends in order, and every payout
-	// takes the single-transfer path, which calls the token directly and which
-	// the whitelist allows. The cost is burst speed: about five seconds a
-	// payout, one after another.
+	// That date is why the checks are not optional. Batching went in through
+	// Safe's MultiSendCallOnly, which the paymaster had never whitelisted, and
+	// four perk-card payouts batched together reverted on chain with "AA38
+	// contract not whitelisted" and left their codes spent. It could not have
+	// worked even whitelisted: the CommunityModule executes every call as a
+	// CALL, so MultiSend's loop would have run as itself, holding nothing.
 	//
-	// Raising this again needs MultiSendCallOnly added to the paymaster's
-	// whitelist first. updateWhitelist replaces the whole list rather than
-	// adding to it, so the call must carry every address already allowed, and
-	// a delegatecall through the CommunityModule has never run on chain, so a
-	// two-payout batch should be tested before relying on it.
-	maxFaucetBatch = 1
+	// Twenty-five keeps one operation's gas well inside what a sponsored
+	// operation carries (a 100-recipient batch is about 3M).
+	maxFaucetBatch = 25
 	// How long a request may sit unqueued before the caller is told the system
 	// is saturated. Generous, because the alternative for a redemption is a
 	// failure the volunteer sees.
 	faucetQueueDepth = 256
 )
+
+// faucetBatcherAddress is the SFLuvBatcher deployment named by
+// FAUCET_BATCHER_ADDRESS, or the zero address, which keeps batching off.
+func faucetBatcherAddress() common.Address {
+	raw := strings.TrimSpace(os.Getenv("FAUCET_BATCHER_ADDRESS"))
+	if !common.IsHexAddress(raw) {
+		return common.Address{}
+	}
+	return common.HexToAddress(raw)
+}
+
+// MaxFaucetBatch is maxFaucetBatch, for the boot log.
+const MaxFaucetBatch = maxFaucetBatch
+
+// FaucetBatcherConfigured reports whether FAUCET_BATCHER_ADDRESS names one.
+func (p *ProtocolService) FaucetBatcherConfigured() bool {
+	return faucetBatcherAddress() != (common.Address{})
+}
+
+// FaucetBatchingReady is faucetBatcherReady for the smallest batch: nil when a
+// batch would go through the batcher now.
+func (p *ProtocolService) FaucetBatchingReady(ctx context.Context) error {
+	if err := p.Available(); err != nil {
+		return err
+	}
+	safe, err := p.SafeFor(ctx, structs.ProtocolAccountFaucet)
+	if err != nil {
+		return err
+	}
+	return p.faucetBatcherReady(ctx, safe, big.NewInt(1))
+}
+
+// faucetBatchLimit is how many payouts the dispatcher gathers into one
+// operation: one without a batcher, so a quiet deployment behaves exactly as
+// before.
+func faucetBatchLimit() int {
+	if faucetBatcherAddress() == (common.Address{}) {
+		return 1
+	}
+	return maxFaucetBatch
+}
+
+// checkFaucetBatcher confirms the configured batcher is SFLuvBatcher, built for
+// this token, by its runtime code hash and its token(). It is what the faucet
+// Safe approves without a limit, so an address that is anything else — a typo,
+// or a contract planted to drain the faucet — is never approved or used.
+func (p *ProtocolService) checkFaucetBatcher(ctx context.Context) (common.Address, error) {
+	batcher := faucetBatcherAddress()
+	if batcher == (common.Address{}) {
+		return batcher, fmt.Errorf("FAUCET_BATCHER_ADDRESS is not set")
+	}
+	codeHash, err := p.client.BatcherCodeHashAt(ctx, batcher)
+	if err != nil {
+		return batcher, err
+	}
+	if codeHash != protocol.BatcherCodeHash {
+		return batcher, fmt.Errorf("the code at %s (hash %s) is not SFLuvBatcher (hash %s)",
+			batcher.Hex(), codeHash.Hex(), protocol.BatcherCodeHash.Hex())
+	}
+	token, err := p.client.BatcherToken(ctx, batcher)
+	if err != nil {
+		return batcher, err
+	}
+	if token != p.token {
+		return batcher, fmt.Errorf("the batcher at %s moves %s, not %s", batcher.Hex(), token.Hex(), p.token.Hex())
+	}
+	return batcher, nil
+}
+
+// faucetBatcherReady reports why a batch of total cannot go through the
+// batcher right now, or nil when it can.
+func (p *ProtocolService) faucetBatcherReady(ctx context.Context, safe common.Address, total *big.Int) error {
+	batcher, err := p.checkFaucetBatcher(ctx)
+	if err != nil {
+		return err
+	}
+	sponsored, err := p.client.PaymasterSponsors(ctx, safe, batcher)
+	if err != nil {
+		return err
+	}
+	if !sponsored {
+		return fmt.Errorf("the paymaster does not sponsor calls to the batcher %s; it is not on the whitelist", batcher.Hex())
+	}
+	allowance, err := p.client.Allowance(ctx, p.token, safe, batcher)
+	if err != nil {
+		return err
+	}
+	if allowance.Cmp(total) < 0 {
+		return fmt.Errorf("the faucet's allowance to the batcher is %s, under the batch's %s", allowance, total)
+	}
+	return nil
+}
+
+// EnsureFaucetBatcherAllowance approves the batcher from the faucet Safe,
+// once, so batches can be paid. A no-op without a batcher, when the allowance
+// is already in place, or when the batcher is not the audited contract.
+//
+// The approval has no limit, which is safe for this contract alone: it pulls
+// only from whoever calls it, so the allowance can be spent by nobody but the
+// faucet Safe, calling it itself.
+func (p *ProtocolService) EnsureFaucetBatcherAllowance(ctx context.Context) error {
+	if faucetBatcherAddress() == (common.Address{}) {
+		return nil
+	}
+	if err := p.Available(); err != nil {
+		return err
+	}
+	batcher, err := p.checkFaucetBatcher(ctx)
+	if err != nil {
+		return err
+	}
+	safe, err := p.SafeFor(ctx, structs.ProtocolAccountFaucet)
+	if err != nil {
+		return err
+	}
+	half := new(big.Int).Rsh(protocol.MaxAllowance, 1)
+	allowance, err := p.client.Allowance(ctx, p.token, safe, batcher)
+	if err != nil {
+		return err
+	}
+	if allowance.Cmp(half) >= 0 {
+		return nil
+	}
+
+	approve, err := protocol.ApproveCallData(batcher, protocol.MaxAllowance)
+	if err != nil {
+		return err
+	}
+	callData, err := protocol.SafeModuleCallData(p.token, big.NewInt(0), approve)
+	if err != nil {
+		return err
+	}
+	p.mu.Lock()
+	opHash, err := p.executeRaw(ctx, structs.ProtocolAccountFaucet, callData, nil)
+	p.mu.Unlock()
+	if err != nil {
+		return fmt.Errorf("could not send the batcher approval: %w", err)
+	}
+	p.logf("protocol faucet: approving batcher %s from the faucet Safe in operation %s", batcher.Hex(), opHash)
+
+	for deadline := time.Now().Add(3 * time.Minute); time.Now().Before(deadline); {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(5 * time.Second):
+		}
+		if allowance, err := p.client.Allowance(ctx, p.token, safe, batcher); err == nil && allowance.Cmp(half) >= 0 {
+			p.logf("protocol faucet: batcher %s approved; batches go through it once the paymaster sponsors it", batcher.Hex())
+			return nil
+		}
+	}
+	return fmt.Errorf("the batcher approval in operation %s has not landed yet", opHash)
+}
 
 // A payout's lifecycle. It leaves sendQueued exactly once, by compare-and-swap,
 // so the caller giving up and the dispatcher sending it can never both win:
@@ -189,7 +342,8 @@ func (p *ProtocolService) runFaucetDispatcher() {
 		// Everything already waiting joins this operation. Non-blocking, so a
 		// quiet faucet sends one transfer immediately rather than waiting to
 		// see whether company arrives.
-		for len(batch) < maxFaucetBatch {
+		limit := faucetBatchLimit()
+		for len(batch) < limit {
 			select {
 			case next := <-p.faucet.queue:
 				batch = append(batch, next)
@@ -204,9 +358,7 @@ func (p *ProtocolService) runFaucetDispatcher() {
 }
 
 func (p *ProtocolService) dispatchFaucetBatch(batch []*faucetSend) {
-	// Its own budget, independent of any caller's. A caller that has given up
-	// must not abandon an operation mid-flight for everybody else in the batch.
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 
 	finish := func(err error) {
@@ -225,14 +377,6 @@ func (p *ProtocolService) dispatchFaucetBatch(batch []*faucetSend) {
 		signerAddress = signer.EOAAddress
 	}
 
-	// Noted before submitting. A log search that started lower could match an
-	// identical earlier payout; starting here cannot.
-	fromBlock, err := p.client.BlockNumber(ctx)
-	if err != nil {
-		finish(bot.Releasable(fmt.Errorf("could not read the head block before a faucet send: %w", err)))
-		return
-	}
-
 	// Claim each request for this operation. Any the caller has already given
 	// up on are dropped here — their codes were handed back, so sending them
 	// now would pay a reward that can be claimed again. From a successful take
@@ -240,6 +384,47 @@ func (p *ProtocolService) dispatchFaucetBatch(batch []*faucetSend) {
 	// the caller; only a definite refusal below hands codes back.
 	batch = takeFaucetBatch(batch)
 	if len(batch) == 0 {
+		return
+	}
+
+	// A batch goes through the batcher only if it can take it now — checked
+	// here, before every batch, not trusted from some earlier moment. Anything
+	// short of that and each payout goes out on its own.
+	if len(batch) > 1 {
+		total := new(big.Int)
+		for _, request := range batch {
+			total.Add(total, request.amount)
+		}
+		if err := p.faucetBatcherReady(ctx, safe, total); err != nil {
+			p.logf("protocol faucet: sending %d payouts one at a time: %s", len(batch), err)
+			for _, request := range batch {
+				p.sendFaucetOperation(safe, signerAddress, []*faucetSend{request})
+			}
+			return
+		}
+	}
+	p.sendFaucetOperation(safe, signerAddress, batch)
+}
+
+// sendFaucetOperation sends one operation carrying every payout in batch, all
+// already taken, and answers each one.
+func (p *ProtocolService) sendFaucetOperation(safe common.Address, signerAddress string, batch []*faucetSend) {
+	// Its own budget, independent of any caller's. A caller that has given up
+	// must not abandon an operation mid-flight for everybody else in the batch.
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+
+	finish := func(err error) {
+		for _, request := range batch {
+			request.result <- faucetSendResult{err: err}
+		}
+	}
+
+	// Noted before submitting. A log search that started lower could match an
+	// identical earlier payout; starting here cannot.
+	fromBlock, err := p.client.BlockNumber(ctx)
+	if err != nil {
+		finish(bot.Releasable(fmt.Errorf("could not read the head block before a faucet send: %w", err)))
 		return
 	}
 
@@ -384,11 +569,11 @@ func takeFaucetBatch(batch []*faucetSend) []*faucetSend {
 	return taken
 }
 
-// faucetBatchCallData is one transfer on its own, or many through MultiSend.
+// faucetBatchCallData is one transfer on its own, or many through the batcher.
 //
 // A single payout stays on the plain path — an ordinary CALL from the Safe to
-// the token — so the common case gains no delegatecall and no helper contract
-// from a feature that exists for bursts.
+// the token — so the common case gains no helper contract from a feature that
+// exists for bursts. A batch reaches here only after faucetBatcherReady.
 func (p *ProtocolService) faucetBatchCallData(batch []*faucetSend) ([]byte, error) {
 	if len(batch) == 1 {
 		transfer, err := protocol.TransferCallData(batch[0].to, batch[0].amount)
@@ -398,15 +583,13 @@ func (p *ProtocolService) faucetBatchCallData(batch []*faucetSend) ([]byte, erro
 		return protocol.SafeModuleCallData(p.token, big.NewInt(0), transfer)
 	}
 
-	calls := make([]protocol.BatchedCall, 0, len(batch))
-	for _, request := range batch {
-		transfer, err := protocol.TransferCallData(request.to, request.amount)
-		if err != nil {
-			return nil, err
-		}
-		calls = append(calls, protocol.BatchedCall{To: p.token, Value: big.NewInt(0), Data: transfer})
+	recipients := make([]common.Address, len(batch))
+	amounts := make([]*big.Int, len(batch))
+	for i, request := range batch {
+		recipients[i] = request.to
+		amounts[i] = request.amount
 	}
-	return protocol.BatchCallData(calls)
+	return protocol.BatchTransferCallData(faucetBatcherAddress(), recipients, amounts)
 }
 
 // executeRaw submits a prepared callData as the account, sponsored.

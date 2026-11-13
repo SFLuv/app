@@ -64,7 +64,7 @@ type BatchClaim func(i int, txHash string, blockNumber uint64, logIndex uint) (b
 // faucet queue for the batch's whole budget — minutes — while every redemption
 // behind it timed out.
 //
-// An operation is one transaction, and a batch through MultiSendCallOnly is
+// An operation is one transaction, and a batch through SFLuvBatcher is
 // all-or-nothing: either every transfer in it happened, in that transaction, or
 // none did. So the moment any payout of the batch is found, the operation's
 // transaction is known, and a payout whose transfer is not in that transaction
