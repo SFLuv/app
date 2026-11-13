@@ -55,7 +55,7 @@ Hook Body:
 ```
 ### GET /hooks
 
-Lists every stored hook as `{ id, address, url, allowed }`. `allowed` is false for a url outside `HOOK_ALLOWED_ORIGINS`: such a hook is sent the admin key on every matching transfer, and should be deleted.
+Lists every stored hook as `{ id, address, url, allowed }`. `allowed` is false for a url outside `HOOK_ALLOWED_ORIGINS`: such a hook is sent the admin key on every matching transfer. The backend's boot reconcile deletes any hook it did not create that points at an origin other than its `PONDER_CALLBACK_URL`.
 
 ### DELETE /hooks?id={HOOK_ID}
 

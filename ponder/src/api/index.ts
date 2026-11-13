@@ -67,8 +67,9 @@ const describeHook = (hook: PonderHook) => {
 }
 
 // At boot, name any stored hook that points outside the allowed origins. They
-// are reported, not deleted: a wrong HOOK_ALLOWED_ORIGINS must not wipe the
-// backend's own hooks. DELETE /hooks?id= removes one.
+// are reported, not deleted here: a wrong HOOK_ALLOWED_ORIGINS must not wipe the
+// backend's own hooks. The backend's boot reconcile deletes hooks it never made
+// that point at another origin, which knows which hooks are its own.
 void (async () => {
   if (allowedOrigins.length === 0) {
     console.warn("ponder api: HOOK_ALLOWED_ORIGINS is not set; hooks may point at any origin")
@@ -78,7 +79,7 @@ void (async () => {
     const foreign = (await listHooks()).map(describeHook).filter((hook) => !hook.allowed)
     if (foreign.length > 0) {
       console.warn(
-        `ponder api: ${foreign.length} stored hook(s) point outside HOOK_ALLOWED_ORIGINS and are sent the admin key on every matching transfer; delete them:`,
+        `ponder api: ${foreign.length} stored hook(s) point outside HOOK_ALLOWED_ORIGINS and are sent the admin key on every matching transfer; the backend's boot reconcile drops those it did not make, and DELETE /hooks?id= removes any other:`,
         foreign.map(({ id, address, url }) => ({ id, address, url })),
       )
     }

@@ -490,8 +490,10 @@ func NewServerHandler(ctx context.Context, pools *DBPools, appLogger *logger.Log
 		// Compare our webhook bookkeeping against the indexer's. The two drift
 		// silently and always toward the same failure — notifications stop with
 		// nothing logged — so the check runs where someone will see it.
-		// Recreating hooks reaches out to Ponder, so it is opt-in; the check
-		// itself only ever reads Ponder and writes to our own database.
+		// Recreating hooks reaches out to Ponder, so it is opt-in. Hooks we never
+		// made that point elsewhere are deleted through Ponder's API on every
+		// boot: they are sent the admin key (PONDER_HOOK_DROP_FOREIGN=false to
+		// stop). Otherwise the check only reads Ponder.
 		a.LogPonderHookReconciliation(jobsCtx, strings.TrimSpace(os.Getenv("PONDER_HOOK_AUTO_REPAIR")) == "true")
 
 		// The protocol accounts come before the analytics sync, because the
