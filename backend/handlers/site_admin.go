@@ -22,7 +22,10 @@ import (
 // Admin routes for the editable site and Forms and Waivers. See
 // docs/features/website-editing-and-forms.md.
 
-const spotlightKey = "spotlight"
+const (
+	spotlightKey = "spotlight"
+	resourcesKey = "resources"
+)
 
 func writeSiteJSON(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json")
@@ -69,7 +72,7 @@ func (a *AppService) siteServerError(w http.ResponseWriter, what string, err err
 // Website editor, otherwise whichever per-part credentials they hold.
 func (a *AppService) SiteCapabilitiesFor(ctx context.Context, userId string) structs.SiteCapabilities {
 	if a.IsAdmin(ctx, userId) {
-		return structs.SiteCapabilities{Banner: true, Financials: true, Forms: true, PastEvents: true, LiveEvents: true}
+		return structs.SiteCapabilities{Banner: true, Financials: true, Forms: true, PastEvents: true, LiveEvents: true, Resources: true}
 	}
 	held, err := a.db.GetActiveCredentialTypesForUser(ctx, userId)
 	if err != nil {
@@ -80,7 +83,7 @@ func (a *AppService) SiteCapabilitiesFor(ctx context.Context, userId string) str
 	for _, credential := range held {
 		switch credential {
 		case structs.SiteEditorCredential:
-			return structs.SiteCapabilities{Banner: true, Financials: true, Forms: true, PastEvents: true, LiveEvents: true}
+			return structs.SiteCapabilities{Banner: true, Financials: true, Forms: true, PastEvents: true, LiveEvents: true, Resources: true}
 		case structs.SiteCapabilityBanner:
 			caps.Banner = true
 		case structs.SiteCapabilityFinancials:
@@ -91,6 +94,8 @@ func (a *AppService) SiteCapabilitiesFor(ctx context.Context, userId string) str
 			caps.PastEvents = true
 		case structs.SiteCapabilityLiveEvents:
 			caps.LiveEvents = true
+		case structs.SiteCapabilityResources:
+			caps.Resources = true
 		}
 	}
 	return caps
@@ -111,8 +116,10 @@ func (a *AppService) CanEditSite(ctx context.Context, userId string, capability 
 		return caps.PastEvents
 	case structs.SiteCapabilityLiveEvents:
 		return caps.LiveEvents
+	case structs.SiteCapabilityResources:
+		return caps.Resources
 	default:
-		return caps.Banner || caps.Financials || caps.Forms || caps.PastEvents || caps.LiveEvents
+		return caps.Banner || caps.Financials || caps.Forms || caps.PastEvents || caps.LiveEvents || caps.Resources
 	}
 }
 
@@ -147,6 +154,9 @@ func (a *AppService) GetSiteActivity(w http.ResponseWriter, r *http.Request) {
 	}
 	if caps.LiveEvents {
 		allowed = append(allowed, structs.SiteCapabilityLiveEvents)
+	}
+	if caps.Resources {
+		allowed = append(allowed, structs.SiteCapabilityResources)
 	}
 
 	items, err := a.db.ListSiteActivity(r.Context(), allowed, 50)
@@ -390,6 +400,168 @@ func (a *AppService) RestoreAdminSpotlight(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	a.saveSpotlight(w, r, &sp, fmt.Sprintf("Restored version %d", req.Version), -1)
+}
+
+// ── Resources page ───────────────────────────────────────────────────────────
+
+func emptySiteResources() structs.SiteResources {
+	return structs.SiteResources{
+		HowTo: []structs.SiteHowToVideo{}, Books: []structs.SiteResourceBook{},
+		Podcasts: []structs.SiteResourcePodcast{}, TechnicalLinks: []structs.SiteResourceLink{},
+	}
+}
+
+func decodeSiteResources(raw []byte) structs.SiteResources {
+	out := emptySiteResources()
+	_ = json.Unmarshal(raw, &out)
+	if out.HowTo == nil {
+		out.HowTo = []structs.SiteHowToVideo{}
+	}
+	if out.Books == nil {
+		out.Books = []structs.SiteResourceBook{}
+	}
+	if out.Podcasts == nil {
+		out.Podcasts = []structs.SiteResourcePodcast{}
+	}
+	if out.TechnicalLinks == nil {
+		out.TechnicalLinks = []structs.SiteResourceLink{}
+	}
+	return out
+}
+
+func (a *AppService) fillResourcePreviews(ctx context.Context, res *structs.SiteResources) {
+	for i := range res.Books {
+		b := &res.Books[i]
+		b.CoverPreviewURL = nil
+		if b.CoverFileId != nil {
+			if file, err := a.db.GetSiteFile(ctx, *b.CoverFileId); err == nil {
+				u := siteFileURL(file.Id, file.Filename)
+				b.CoverPreviewURL = &u
+			}
+		} else if b.CoverURL != nil {
+			b.CoverPreviewURL = b.CoverURL
+		}
+	}
+}
+
+func (a *AppService) GetAdminResources(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	out := &structs.SiteResourcesAdmin{Current: emptySiteResources(), Versions: []*structs.SiteResourcesVersion{}}
+
+	row, err := a.db.GetSiteContent(ctx, resourcesKey)
+	if err != nil {
+		a.siteServerError(w, "loading the resources page", err)
+		return
+	}
+	if row != nil {
+		out.Current = decodeSiteResources(row.Value)
+		out.Version = row.Version
+		out.UpdatedAt = row.UpdatedAt
+	}
+	a.fillResourcePreviews(ctx, &out.Current)
+
+	versions, err := a.db.ListSiteContentVersions(ctx, resourcesKey, 30)
+	if err != nil {
+		a.siteServerError(w, "listing resources page versions", err)
+		return
+	}
+	for _, v := range versions {
+		item := &structs.SiteResourcesVersion{
+			Version: v.Version, SavedAt: v.SavedAt, SavedBy: v.SavedBy, Note: v.Note,
+			IsCurrent: row != nil && v.Version == row.Version,
+			Value:     decodeSiteResources(v.Value),
+		}
+		a.fillResourcePreviews(ctx, &item.Value)
+		out.Versions = append(out.Versions, item)
+	}
+	writeSiteJSON(w, http.StatusOK, out)
+}
+
+func (a *AppService) saveResources(w http.ResponseWriter, r *http.Request, res *structs.SiteResources, note string, expectedVersion int) {
+	ctx := r.Context()
+	for _, b := range res.Books {
+		if b.CoverFileId == nil {
+			continue
+		}
+		file, err := a.db.GetSiteFile(ctx, *b.CoverFileId)
+		if err != nil || !strings.HasPrefix(file.ContentType, "image/") {
+			writeSiteError(w, http.StatusBadRequest, "A book cover must be an image you uploaded. Upload it again.")
+			return
+		}
+	}
+
+	value, err := json.Marshal(res)
+	if err != nil {
+		a.siteServerError(w, "encoding the resources page", err)
+		return
+	}
+	version, err := a.db.SaveSiteContent(ctx, resourcesKey, value, utils.GetDid(r), note, expectedVersion)
+	if errors.Is(err, db.ErrSiteVersionConflict) {
+		writeSiteError(w, http.StatusConflict, "Someone else saved the resources page while you were editing. Copy anything you want to keep, then reload to see their changes.")
+		return
+	}
+	if err != nil {
+		a.siteServerError(w, "saving the resources page", err)
+		return
+	}
+
+	a.siteActivity(r, structs.SiteCapabilityResources, "save", "resources", fmt.Sprint(version), note)
+	a.GetAdminResources(w, r)
+}
+
+func (a *AppService) PutAdminResources(w http.ResponseWriter, r *http.Request) {
+	var req structs.SiteResourcesSaveRequest
+	if !decodeSiteBody(w, r, &req) {
+		return
+	}
+	res := req.SiteResources
+	expected := -1
+	if req.BaseVersion != nil {
+		expected = *req.BaseVersion
+	}
+	if err := sanitizeResources(&res); err != nil {
+		writeSiteError(w, http.StatusBadRequest, capitalizeFirst(err.Error())+".")
+		return
+	}
+
+	note := "Edited the resources page"
+	if row, _ := a.db.GetSiteContent(r.Context(), resourcesKey); row != nil {
+		previous := decodeSiteResources(row.Value)
+		switch {
+		case len(res.HowTo) > len(previous.HowTo):
+			note = "Added a how-to video"
+		case len(res.HowTo) < len(previous.HowTo):
+			note = "Removed a how-to video"
+		}
+	}
+	a.saveResources(w, r, &res, note, expected)
+}
+
+// RestoreAdminResources copies an old version forward as a new one, as the
+// banner's restore does.
+func (a *AppService) RestoreAdminResources(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Version int `json:"version"`
+	}
+	if !decodeSiteBody(w, r, &req) {
+		return
+	}
+	value, err := a.db.GetSiteContentVersion(r.Context(), resourcesKey, req.Version)
+	if errors.Is(err, db.ErrSiteNotFound) {
+		writeSiteError(w, http.StatusNotFound, "That version no longer exists.")
+		return
+	}
+	if err != nil {
+		a.siteServerError(w, "loading a resources page version", err)
+		return
+	}
+	res := decodeSiteResources(value)
+	// Checked again: what was valid when it was saved must still be valid now.
+	if err := sanitizeResources(&res); err != nil {
+		writeSiteError(w, http.StatusBadRequest, capitalizeFirst(err.Error())+".")
+		return
+	}
+	a.saveResources(w, r, &res, fmt.Sprintf("Restored version %d", req.Version), -1)
 }
 
 // ── Financial documents ──────────────────────────────────────────────────────

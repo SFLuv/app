@@ -82,6 +82,77 @@ func (a *AppService) GetPublicSpotlight(w http.ResponseWriter, r *http.Request) 
 	writeSiteJSON(w, http.StatusOK, out)
 }
 
+// ── Resources page ───────────────────────────────────────────────────────────
+
+// GetPublicResources returns the Resources page's switched-on items. The
+// embeds are built here from the video id, never from anything typed, and a
+// book whose cover has gone missing is left out rather than shown broken.
+func (a *AppService) GetPublicResources(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	w.Header().Set("Cache-Control", "public, max-age=15, stale-while-revalidate=60")
+
+	out := structs.SitePublicResources{
+		HowTo: []structs.SitePublicVideo{}, Books: []structs.SitePublicBook{},
+		Podcasts: []structs.SitePublicPodcast{}, TechnicalLinks: []structs.SitePublicLink{},
+	}
+	row, err := a.db.GetSiteContent(ctx, resourcesKey)
+	if err != nil {
+		a.siteServerError(w, "loading the public resources page", err)
+		return
+	}
+	if row == nil {
+		writeSiteJSON(w, http.StatusOK, out)
+		return
+	}
+	res := decodeSiteResources(row.Value)
+
+	for _, v := range res.HowTo {
+		if !v.Enabled || v.Title == "" || !youTubeIDPattern.MatchString(v.VideoId) {
+			continue
+		}
+		out.HowTo = append(out.HowTo, structs.SitePublicVideo{
+			Id: v.Id, Title: v.Title, Description: v.Description, VideoId: v.VideoId,
+			EmbedURL: youTubeEmbedURL(v.VideoId), WatchURL: youTubeWatchURL(v.VideoId),
+		})
+	}
+	for _, b := range res.Books {
+		if !b.Enabled || b.Title == "" || b.Href == "" {
+			continue
+		}
+		var cover structs.SitePublicImage
+		switch {
+		case b.CoverFileId != nil:
+			file, err := a.db.GetSiteFile(ctx, *b.CoverFileId)
+			if err != nil {
+				continue
+			}
+			cover = structs.SitePublicImage{URL: siteFileURL(file.Id, file.Filename), Width: file.Width, Height: file.Height}
+		case b.CoverURL != nil && b.CoverWidth > 0 && b.CoverHeight > 0:
+			cover = structs.SitePublicImage{URL: *b.CoverURL, Width: b.CoverWidth, Height: b.CoverHeight}
+		default:
+			continue
+		}
+		cover.Alt = b.CoverAlt
+		if cover.Alt == "" {
+			cover.Alt = b.Title + " book cover"
+		}
+		out.Books = append(out.Books, structs.SitePublicBook{Id: b.Id, Title: b.Title, Author: b.Author, Href: b.Href, Cover: cover})
+	}
+	for _, p := range res.Podcasts {
+		if !p.Enabled || p.Name == "" || p.Href == "" || !youTubeIDPattern.MatchString(p.VideoId) {
+			continue
+		}
+		out.Podcasts = append(out.Podcasts, structs.SitePublicPodcast{Id: p.Id, Name: p.Name, Href: p.Href, EmbedURL: youTubeEmbedURL(p.VideoId)})
+	}
+	for _, l := range res.TechnicalLinks {
+		if !l.Enabled || l.Label == "" || l.Href == "" {
+			continue
+		}
+		out.TechnicalLinks = append(out.TechnicalLinks, structs.SitePublicLink{Id: l.Id, Label: l.Label, Href: l.Href})
+	}
+	writeSiteJSON(w, http.StatusOK, out)
+}
+
 // ── Financials ───────────────────────────────────────────────────────────────
 
 func financialPeriodLabel(period string) string {

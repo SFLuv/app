@@ -14,9 +14,10 @@ import { FinancialsEditor } from "./financials-editor"
 import { FormsEditor } from "./forms-editor"
 import { PastEventsEditor } from "./past-events-editor"
 import { LiveEventsEditor } from "./live-events-editor"
+import { ResourcesEditor } from "./resources-editor"
 import { NoticeProvider } from "./notice"
 
-type Section = "banner" | "financials" | "forms" | "live_events" | "past_events"
+type Section = "banner" | "financials" | "forms" | "live_events" | "past_events" | "resources"
 
 const SECTIONS: { id: Section; label: string }[] = [
   { id: "banner", label: "Banner items" },
@@ -24,6 +25,7 @@ const SECTIONS: { id: Section; label: string }[] = [
   { id: "forms", label: "Forms & waivers" },
   { id: "live_events", label: "Live events" },
   { id: "past_events", label: "Past events" },
+  { id: "resources", label: "Resources & how-to" },
 ]
 
 /**
@@ -129,6 +131,11 @@ function WebsitePanelInner() {
         {caps.past_events && (
           <TabsContent value="past_events" className="mt-0">
             <PastEventsEditor />
+          </TabsContent>
+        )}
+        {caps.resources && (
+          <TabsContent value="resources" className="mt-0">
+            <ResourcesEditor />
           </TabsContent>
         )}
       </Tabs>

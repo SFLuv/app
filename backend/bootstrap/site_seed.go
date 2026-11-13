@@ -160,3 +160,36 @@ I understand that withdrawing does not require SFLuv to remove materials that we
 		}`,
 	},
 }
+
+// siteSeedResources is the Resources page as the site showed it, so moving it
+// onto the database changes nothing a visitor sees — except "Get Technical",
+// whose Polygon link is replaced by Celo, the network SFLuv now runs on. Book
+// covers stay where they are (paths on the site itself). The How to section
+// starts empty: its videos are added in the Website tools.
+const siteSeedResources = `{
+	"how_to": [],
+	"books": [
+		{"id": "book-read-write-own", "enabled": true, "title": "Read Write Own", "author": "Chris Dixon",
+		 "href": "https://readwriteown.com/",
+		 "cover_file_id": null, "cover_url": "/assets/external/m.media-amazon.com/71tgNZQXn-L._AC_UF1000-1000_QL80_-bc19111b1df6.jpg",
+		 "cover_width": 667, "cover_height": 1000, "cover_alt": "Read Write Own book cover"},
+		{"id": "book-how-to-dao", "enabled": true, "title": "How to DAO: Mastering the Future of Internet Coordination", "author": "Owocki and Puncar",
+		 "href": "https://www.amazon.com/How-DAO-Mastering-Internet-Coordination/dp/059371377X",
+		 "cover_file_id": null, "cover_url": "/assets/wp-content/uploads/2025/06/HowToDao.jpg",
+		 "cover_width": 996, "cover_height": 1500, "cover_alt": "How to DAO book cover"},
+		{"id": "book-code-of-capital", "enabled": true, "title": "The Code of Capital", "author": "Katharina Pistor",
+		 "href": "https://press.princeton.edu/books/hardcover/9780691178974/the-code-of-capital",
+		 "cover_file_id": null, "cover_url": "/assets/external/pup-assets.imgix.net/9780691178974-a9264b85d7b8.jpg",
+		 "cover_width": 1500, "cover_height": 2280, "cover_alt": "The Code of Capital book cover"}
+	],
+	"podcasts": [
+		{"id": "podcast-bankless", "enabled": true, "name": "Bankless", "href": "https://www.bankless.com/podcast",
+		 "video_url": "https://www.youtube.com/watch?v=Xb4g8LzcFSI", "video_id": "Xb4g8LzcFSI"},
+		{"id": "podcast-a16z", "enabled": true, "name": "The a16z Podcast", "href": "https://a16z.com/podcasts/a16z-podcast",
+		 "video_url": "https://www.youtube.com/watch?v=S4vaqf55NpQ", "video_id": "S4vaqf55NpQ"}
+	],
+	"technical_links": [
+		{"id": "link-ethereum", "enabled": true, "label": "ethereum.org — What is Ethereum?", "href": "https://ethereum.org/en/what-is-ethereum/"},
+		{"id": "link-celo", "enabled": true, "label": "docs.celo.org — Discover Celo", "href": "https://docs.celo.org/learn"}
+	]
+}`

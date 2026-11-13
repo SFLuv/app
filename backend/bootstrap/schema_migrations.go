@@ -2890,6 +2890,38 @@ var schemaMigrations = []SchemaMigration{
 			return nil
 		},
 	},
+	{
+		Version:     "1.84",
+		Description: "website: the Resources page, and its How to videos, edited from the Website tools",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			// Edits the Resources page only. Listed under Website editor,
+			// which covers it too.
+			if _, err := pools.App.Exec(ctx, `
+				INSERT INTO credential_type_definitions (value, label, visibility, parent_value)
+				VALUES ('website_resources', 'Website editor: resources page', 'private', 'website_editor')
+				ON CONFLICT (value) DO NOTHING;
+			`); err != nil {
+				return fmt.Errorf("error seeding the resources credential: %w", err)
+			}
+
+			// The page as the site showed it, Polygon swapped for Celo, so the
+			// move changes nothing else a visitor sees. Re-running leaves any
+			// edit alone.
+			if _, err := pools.App.Exec(ctx, `
+				WITH seeded AS (
+					INSERT INTO site_content (key, value, version)
+					VALUES ('resources', $1::jsonb, 1)
+					ON CONFLICT (key) DO NOTHING
+					RETURNING key, value, version
+				)
+				INSERT INTO site_content_versions (key, version, value, note)
+				SELECT key, version, value, 'Imported from the existing resources page, with Celo in place of Polygon' FROM seeded;
+			`, siteSeedResources); err != nil {
+				return fmt.Errorf("error seeding the resources page: %w", err)
+			}
+			return nil
+		},
+	},
 }
 
 // migrateW9TINMismatchCount adds the count of failed TIN matches per filing.
