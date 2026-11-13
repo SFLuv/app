@@ -149,7 +149,13 @@ const maxWorkflowPhotoUploadLabel = "4MB"
 const workflowStepPhotoChunkUploadBytes = 256 * 1024
 const workflowStepPhotoChunkThresholdBytes = 512 * 1024
 const minWorkflowPhotoResizeDimension = 640
-const maxWorkflowPhotoInitialDimension = 4096
+// Re-encoding starts no larger than this. 4096 put a 16-megapixel canvas, at
+// the edge of iOS Safari's limit, behind every resize; 2560 is still a sharp
+// evidence photo and a fraction of the memory.
+const maxWorkflowPhotoInitialDimension = 2560
+// Where the quality search starts. 0.99 almost never fits and cost an extra
+// full-size encode on every photo.
+const workflowPhotoStartQuality = 0.92
 const workflowPhotoCaptureIdealWidth = 4032
 const workflowPhotoCaptureIdealHeight = 3024
 const workflowPhotoCaptureFallbackMaxDimensions = [3072, 2560, 2048, 1600, 1280]
@@ -363,13 +369,35 @@ const buildWorkflowPhotoCaptureSizeCandidates = (width: number, height: number) 
   return candidates
 }
 
-const loadImageFromFile = (file: File) =>
-  new Promise<HTMLImageElement>((resolve, reject) => {
+// Browsers report an empty type for some image files — HEIC on Chrome and on
+// desktop, and photos from some Android galleries — so a file is judged an
+// image by its extension too. Refusing those outright as "not an image" was
+// one way a web upload failed where the app, which never asks, did not.
+const workflowImageExtensions = /\.(jpe?g|png|webp|gif|heic|heif|avif|bmp)$/i
+const isWorkflowImageFile = (file: File) =>
+  file.type.startsWith("image/") || (!file.type && workflowImageExtensions.test(file.name))
+const isHeicFile = (file: File) =>
+  /^image\/hei[cf]/i.test(file.type) || /\.hei[cf]$/i.test(file.name)
+
+type DecodedWorkflowImage = {
+  source: CanvasImageSource
+  width: number
+  height: number
+  release: () => void
+}
+
+const decodeWithImageElement = (file: File) =>
+  new Promise<DecodedWorkflowImage>((resolve, reject) => {
     const objectURL = URL.createObjectURL(file)
     const image = new Image()
     image.onload = () => {
       URL.revokeObjectURL(objectURL)
-      resolve(image)
+      resolve({
+        source: image,
+        width: image.naturalWidth || image.width,
+        height: image.naturalHeight || image.height,
+        release: () => {},
+      })
     }
     image.onerror = () => {
       URL.revokeObjectURL(objectURL)
@@ -378,15 +406,53 @@ const loadImageFromFile = (file: File) =>
     image.src = objectURL
   })
 
+// createImageBitmap first: it decodes off the main thread and its memory can
+// be handed back at once, which an <img> cannot. Older browsers, and ones that
+// reject the orientation option, fall back to an <img>.
+const loadImageFromFile = async (file: File): Promise<DecodedWorkflowImage> => {
+  if (typeof createImageBitmap === "function") {
+    try {
+      const bitmap = await createImageBitmap(file, { imageOrientation: "from-image" })
+      return { source: bitmap, width: bitmap.width, height: bitmap.height, release: () => bitmap.close() }
+    } catch {
+      // Fall through to an <img>.
+    }
+  }
+  try {
+    return await decodeWithImageElement(file)
+  } catch (err) {
+    if (isHeicFile(file)) {
+      throw new Error(
+        `This browser can't open HEIC photos (${file.name}). Upload it from Safari, which converts it, or from the SFLuv app.`,
+      )
+    }
+    throw err
+  }
+}
+
+// One canvas per photo, reused for every encode and emptied afterwards. A new
+// full-size canvas for each attempt, never released, could run iOS Safari out
+// of canvas memory partway through a photo, after which every encode failed.
+const createWorkflowPhotoCanvas = () => {
+  const canvas = document.createElement("canvas")
+  return {
+    canvas,
+    release: () => {
+      canvas.width = 0
+      canvas.height = 0
+    },
+  }
+}
+
 const renderJpegBlob = (
-  image: HTMLImageElement,
+  canvas: HTMLCanvasElement,
+  image: CanvasImageSource,
   width: number,
   height: number,
   quality: number,
   sourceCrop?: { x: number; y: number; width: number; height: number },
 ) =>
   new Promise<Blob | null>((resolve) => {
-    const canvas = document.createElement("canvas")
     canvas.width = width
     canvas.height = height
     const ctx = canvas.getContext("2d")
@@ -1476,89 +1542,98 @@ export default function ImproverPage() {
     aspectRatio?: WorkflowPhotoAspectRatio | null,
     maxBytes: number = maxWorkflowPhotoUploadBytes,
   ) => {
-    if (!file.type.startsWith("image/")) {
+    if (!isWorkflowImageFile(file)) {
       throw new Error(`Only image uploads are allowed: ${file.name}`)
     }
     const effectiveMaxBytes = Math.max(64 * 1024, Math.min(maxBytes, maxWorkflowPhotoUploadBytes))
 
     const image = await loadImageFromFile(file)
-    const imageWidth = image.naturalWidth || image.width
-    const imageHeight = image.naturalHeight || image.height
-    if (!imageWidth || !imageHeight) {
-      throw new Error(`Unable to process image dimensions for ${file.name}`)
-    }
-
-    const normalizedAspect = aspectRatio ? normalizeWorkflowPhotoAspectRatio(aspectRatio) : null
-    const crop = normalizedAspect
-      ? computeCropForAspectRatio(imageWidth, imageHeight, workflowPhotoAspectRatios[normalizedAspect])
-      : { x: 0, y: 0, width: imageWidth, height: imageHeight }
-
-    if (
-      file.size <= effectiveMaxBytes &&
-      cropMatchesFullImage(crop, imageWidth, imageHeight) &&
-      isPreservableWorkflowUploadType(file.type)
-    ) {
-      return file
-    }
-
-    let targetWidth = crop.width
-    let targetHeight = crop.height
-    const largestDimension = Math.max(targetWidth, targetHeight)
-    if (largestDimension > maxWorkflowPhotoInitialDimension) {
-      const initialScale = maxWorkflowPhotoInitialDimension / largestDimension
-      targetWidth = Math.max(minWorkflowPhotoResizeDimension, Math.round(targetWidth * initialScale))
-      targetHeight = Math.max(minWorkflowPhotoResizeDimension, Math.round(targetHeight * initialScale))
-    }
-
-    const encodeBestJpegBlobForCurrentSize = async () => {
-      const highestQualityBlob = await renderJpegBlob(image, targetWidth, targetHeight, 0.99, crop)
-      if (highestQualityBlob && highestQualityBlob.size <= effectiveMaxBytes) {
-        return highestQualityBlob
+    const { canvas, release: releaseCanvas } = createWorkflowPhotoCanvas()
+    try {
+      const imageWidth = image.width
+      const imageHeight = image.height
+      if (!imageWidth || !imageHeight) {
+        throw new Error(`Unable to process image dimensions for ${file.name}`)
       }
 
-      const lowestQualityBlob = await renderJpegBlob(image, targetWidth, targetHeight, 0.5, crop)
-      if (!lowestQualityBlob || lowestQualityBlob.size > effectiveMaxBytes) {
-        return null
+      const normalizedAspect = aspectRatio ? normalizeWorkflowPhotoAspectRatio(aspectRatio) : null
+      const crop = normalizedAspect
+        ? computeCropForAspectRatio(imageWidth, imageHeight, workflowPhotoAspectRatios[normalizedAspect])
+        : { x: 0, y: 0, width: imageWidth, height: imageHeight }
+
+      if (
+        file.size <= effectiveMaxBytes &&
+        cropMatchesFullImage(crop, imageWidth, imageHeight) &&
+        isPreservableWorkflowUploadType(file.type)
+      ) {
+        return file
       }
 
-      let bestBlob = lowestQualityBlob
-      let lowQuality = 0.5
-      let highQuality = 0.99
-      for (let attempt = 0; attempt < 7; attempt += 1) {
-        const midQuality = (lowQuality + highQuality) / 2
-        const blob = await renderJpegBlob(image, targetWidth, targetHeight, midQuality, crop)
-        if (!blob) {
-          highQuality = midQuality
-          continue
+      let targetWidth = crop.width
+      let targetHeight = crop.height
+      const largestDimension = Math.max(targetWidth, targetHeight)
+      if (largestDimension > maxWorkflowPhotoInitialDimension) {
+        const initialScale = maxWorkflowPhotoInitialDimension / largestDimension
+        targetWidth = Math.max(minWorkflowPhotoResizeDimension, Math.round(targetWidth * initialScale))
+        targetHeight = Math.max(minWorkflowPhotoResizeDimension, Math.round(targetHeight * initialScale))
+      }
+
+      const render = (quality: number) =>
+        renderJpegBlob(canvas, image.source, targetWidth, targetHeight, quality, crop)
+
+      const encodeBestJpegBlobForCurrentSize = async () => {
+        const highestQualityBlob = await render(workflowPhotoStartQuality)
+        if (highestQualityBlob && highestQualityBlob.size <= effectiveMaxBytes) {
+          return highestQualityBlob
         }
-        if (blob.size <= effectiveMaxBytes) {
-          bestBlob = blob
-          lowQuality = midQuality
-        } else {
-          highQuality = midQuality
+
+        const lowestQualityBlob = await render(0.5)
+        if (!lowestQualityBlob || lowestQualityBlob.size > effectiveMaxBytes) {
+          return null
         }
+
+        let bestBlob = lowestQualityBlob
+        let lowQuality = 0.5
+        let highQuality = workflowPhotoStartQuality
+        for (let attempt = 0; attempt < 5; attempt += 1) {
+          const midQuality = (lowQuality + highQuality) / 2
+          const blob = await render(midQuality)
+          if (!blob) {
+            highQuality = midQuality
+            continue
+          }
+          if (blob.size <= effectiveMaxBytes) {
+            bestBlob = blob
+            lowQuality = midQuality
+          } else {
+            highQuality = midQuality
+          }
+        }
+
+        return bestBlob
       }
 
-      return bestBlob
+      for (let scaleAttempt = 0; scaleAttempt < 7; scaleAttempt += 1) {
+        const blob = await encodeBestJpegBlobForCurrentSize()
+        if (blob) {
+          return new File([blob], toJpegFileName(file.name), {
+            type: "image/jpeg",
+            lastModified: Date.now(),
+          })
+        }
+
+        if (targetWidth <= minWorkflowPhotoResizeDimension && targetHeight <= minWorkflowPhotoResizeDimension) {
+          break
+        }
+        targetWidth = Math.max(minWorkflowPhotoResizeDimension, Math.round(targetWidth * 0.8))
+        targetHeight = Math.max(minWorkflowPhotoResizeDimension, Math.round(targetHeight * 0.8))
+      }
+
+      throw new Error(`Unable to downsize ${file.name} below ${formatWorkflowByteLimitLabel(effectiveMaxBytes)}.`)
+    } finally {
+      releaseCanvas()
+      image.release()
     }
-
-    for (let scaleAttempt = 0; scaleAttempt < 7; scaleAttempt += 1) {
-      const blob = await encodeBestJpegBlobForCurrentSize()
-      if (blob) {
-        return new File([blob], toJpegFileName(file.name), {
-          type: "image/jpeg",
-          lastModified: Date.now(),
-        })
-      }
-
-      if (targetWidth <= minWorkflowPhotoResizeDimension && targetHeight <= minWorkflowPhotoResizeDimension) {
-        break
-      }
-      targetWidth = Math.max(minWorkflowPhotoResizeDimension, Math.round(targetWidth * 0.9))
-      targetHeight = Math.max(minWorkflowPhotoResizeDimension, Math.round(targetHeight * 0.9))
-    }
-
-    throw new Error(`Unable to downsize ${file.name} below ${formatWorkflowByteLimitLabel(effectiveMaxBytes)}.`)
   }, [])
 
   const prepareSelectedPhotos = useCallback(
@@ -1884,6 +1959,10 @@ export default function ImproverPage() {
           const blob = await new Promise<Blob | null>((resolve) => {
             canvas.toBlob((value) => resolve(value), "image/jpeg", 0.98)
           })
+          // Handed back at once: iOS Safari counts every canvas still alive
+          // against one budget, and the resize below needs its own.
+          canvas.width = 0
+          canvas.height = 0
           if (!blob) {
             lastProcessingError = "Unable to capture photo from the camera stream."
             continue
@@ -1969,10 +2048,30 @@ export default function ImproverPage() {
         formData.set("content_type", upload.file.type || "image/jpeg")
         formData.set("chunk", chunkBlob, upload.file.name || `chunk-${chunkIndex}.part`)
 
-        const res = await authFetch(`/improvers/workflows/${workflowId}/steps/${stepId}/photos`, {
-          method: "POST",
-          body: formData,
-        })
+        // A chunk is written with an upsert on (upload, index), so sending one
+        // again is harmless. A dropped connection or a 5xx on one chunk of a
+        // dozen used to fail the whole photo; it is retried twice first.
+        let res: Response | null = null
+        let lastError: unknown = null
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          if (attempt > 0) {
+            await new Promise((resolve) => setTimeout(resolve, attempt * 1000))
+          }
+          try {
+            res = await authFetch(`/improvers/workflows/${workflowId}/steps/${stepId}/photos`, {
+              method: "POST",
+              body: formData,
+            })
+          } catch (err) {
+            res = null
+            lastError = err
+            continue
+          }
+          if (res.status < 500) break
+        }
+        if (!res) {
+          throw lastError instanceof Error ? lastError : new Error("Unable to upload photo for this step.")
+        }
         if (!res.ok) {
           const text = await res.text()
           throw new Error(text || "Unable to upload photo for this step.")
@@ -3095,14 +3194,19 @@ export default function ImproverPage() {
                             type="file"
                             accept="image/*"
                             multiple={item.requires_photo ? effectivePhotoAllowAnyCount || effectivePhotoRequiredCount > 1 : false}
-                            onChange={(e) =>
+                            onChange={(e) => {
                               void replaceItemPhotosFromSelection(
                                 step.id,
                                 item.id,
                                 effectivePhotoAspectRatio,
                                 e.target.files,
                               )
-                            }
+                              // Cleared so that choosing the same photo again,
+                              // after an error, fires a change at all. It did
+                              // not, and a retry looked like nothing happening.
+                              // The files are copied before this runs.
+                              e.currentTarget.value = ""
+                            }}
                             disabled={stepNotPossibleSelected || Boolean(submitting)}
                           />
                           {form.photos.length > 0 ? (
