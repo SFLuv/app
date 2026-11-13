@@ -317,7 +317,9 @@ const payoutLedgerColumns = `
 	id, idempotency_key, COALESCE(user_id, ''), recipient_address, chain_id,
 	tax_year, COALESCE(paid_tax_year, 0), source, source_ref, amount_base::text,
 	state, escrowed_at, expired_at, released_at, paid_at, tx_hash,
-	attempts, last_error, counts_toward_threshold, created_at
+	attempts, last_error, counts_toward_threshold, created_at,
+	attempt_started_at, operation_hash, operation_sender, COALESCE(operation_nonce::text, ''),
+	operation_valid_until, updated_at
 `
 
 func scanPayoutRow(row interface{ Scan(...any) error }) (*structs.PayoutLedgerRow, error) {
@@ -328,6 +330,8 @@ func scanPayoutRow(row interface{ Scan(...any) error }) (*structs.PayoutLedgerRo
 		&out.TaxYear, &out.PaidTaxYear, &out.Source, &out.SourceRef, &out.AmountBase,
 		&out.State, &escrowedAt, &expiredAt, &releasedAt, &paidAt, &out.TxHash,
 		&out.Attempts, &out.LastError, &out.CountsTowardThreshold, &out.CreatedAt,
+		&out.AttemptStartedAt, &out.OperationHash, &out.OperationSender, &out.OperationNonce,
+		&out.OperationValidUntil, &out.UpdatedAt,
 	); err != nil {
 		return nil, err
 	}
@@ -874,15 +878,101 @@ func (a *AppDB) MarkPayoutUnconfirmed(ctx context.Context, id int64, reason stri
 // as not sent qualify; a 'failed' row without that marker predates it and may
 // record a send whose outcome was never known, so it is left for an admin.
 func (a *AppDB) RearmFailedPayout(ctx context.Context, id int64) (bool, error) {
+	// The last attempt's operation goes with it: only a row whose operation
+	// provably never sent anything is re-armed, and the next attempt writes
+	// down its own.
 	tag, err := a.db.Exec(ctx, `
 		UPDATE payout_ledger
-		SET state = 'pending', last_error = '', attempts = attempts + 1, updated_at = NOW()
+		SET state = 'pending', last_error = '', attempts = attempts + 1, updated_at = NOW(),
+		    attempt_started_at = NULL, operation_hash = '', operation_sender = '', operation_nonce = NULL,
+		    operation_valid_until = NULL
 		WHERE id = $1 AND state = 'failed' AND starts_with(last_error, $2);
 	`, id, PayoutNotSentPrefix)
 	if err != nil {
 		return false, fmt.Errorf("error re-arming payout %d: %w", id, err)
 	}
 	return tag.RowsAffected() > 0, nil
+}
+
+// MarkPayoutAttemptStarted stamps the moment a payout is handed to the faucet.
+// A pending row whose attempt is long past every in-process deadline was
+// abandoned — the process sending it stopped — and the sweep takes it up.
+func (a *AppDB) MarkPayoutAttemptStarted(ctx context.Context, id int64) error {
+	if _, err := a.db.Exec(ctx, `
+		UPDATE payout_ledger
+		SET attempt_started_at = NOW(), updated_at = NOW()
+		WHERE id = $1;
+	`, id); err != nil {
+		return fmt.Errorf("error stamping payout %d's attempt: %w", id, err)
+	}
+	return nil
+}
+
+// RecordPayoutOperation writes down the operation a payout is about to go out
+// as. It runs before the operation is sent, and the send does not happen if it
+// fails: an operation nobody recorded is one nobody can look up afterwards,
+// which is how a code ended up spent for good. The old key's sends record only
+// their sender, having no operation.
+func (a *AppDB) RecordPayoutOperation(ctx context.Context, id int64, hash string, sender string, nonce string, validUntil *time.Time) error {
+	tag, err := a.db.Exec(ctx, `
+		UPDATE payout_ledger
+		SET operation_hash = $2, operation_sender = $3, operation_nonce = NULLIF($4, '')::numeric,
+		    operation_valid_until = $5, updated_at = NOW()
+		WHERE id = $1 AND state IN ('pending', 'releasing');
+	`, id, strings.ToLower(hash), strings.ToLower(sender), nonce, validUntil)
+	if err != nil {
+		return fmt.Errorf("error recording payout %d's operation: %w", id, err)
+	}
+	if tag.RowsAffected() != 1 {
+		return fmt.Errorf("payout %d is no longer waiting to be sent", id)
+	}
+	return nil
+}
+
+// ListRedemptionCodePayouts is every payout made for one redemption code,
+// newest first. A code that was handed back and redeemed again has several.
+func (a *AppDB) ListRedemptionCodePayouts(ctx context.Context, code string) ([]*structs.PayoutLedgerRow, error) {
+	rows, err := a.db.Query(ctx,
+		`SELECT `+payoutLedgerColumns+`
+		 FROM payout_ledger
+		 WHERE source = $1 AND source_ref = $2
+		 ORDER BY id DESC;`, PayoutSourceRedemptionCode, code)
+	if err != nil {
+		return nil, fmt.Errorf("error listing payouts for code %s: %w", code, err)
+	}
+	defer rows.Close()
+
+	out := []*structs.PayoutLedgerRow{}
+	for rows.Next() {
+		row, err := scanPayoutRow(rows)
+		if err != nil {
+			return nil, fmt.Errorf("error scanning payout row: %w", err)
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+// RedemptionCodeHasStandingPayout reports whether any payout for the code may
+// have sent money or still might: paid, held, being released, in flight, or a
+// failure from before the not-sent marker, whose outcome was never known. A
+// code with one of these is never handed back.
+func (a *AppDB) RedemptionCodeHasStandingPayout(ctx context.Context, code string) (bool, error) {
+	var standing bool
+	err := a.db.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM payout_ledger
+			WHERE source = $1 AND source_ref = $2
+			AND (
+				state NOT IN ('failed', 'cancelled')
+				OR (state = 'failed' AND NOT starts_with(last_error, $3))
+			)
+		);
+	`, PayoutSourceRedemptionCode, code, PayoutNotSentPrefix).Scan(&standing)
+	if err != nil {
+		return true, fmt.Errorf("error checking payouts for code %s: %w", code, err)
+	}
+	return standing, nil
 }
 
 // Exec runs a statement against the app database. Present for tests that need
@@ -994,11 +1084,19 @@ func (a *AppDB) MarkPayoutCancelled(ctx context.Context, id int64, reason string
 }
 
 // unresolvedPayoutClause selects the rows whose outcome is not known: a send
-// marked unconfirmed, and a failure from before the not-sent marker existed,
-// which may record a send that did land.
+// marked unconfirmed, a failure from before the not-sent marker existed, which
+// may record a send that did land, and a pending row abandoned mid-send.
+//
+// Abandoned means the process sending it stopped — a deploy, a crash — before
+// it could record any outcome at all. Fifteen minutes is well past every
+// in-process deadline on the way to the chain (three minutes waiting for the
+// faucet queue, four for the operation, two verifying), so a row still pending
+// and unmarked after that has nobody left to finish it. Before this, such a row
+// stayed pending forever and its redemption code stayed spent with it.
 const unresolvedPayoutClause = `(
 	(state = 'pending' AND starts_with(last_error, '` + PayoutUnconfirmedPrefix + `'))
 	OR (state = 'failed' AND NOT starts_with(last_error, '` + PayoutNotSentPrefix + `'))
+	OR (state = 'pending' AND last_error = '' AND COALESCE(attempt_started_at, created_at) < NOW() - INTERVAL '15 minutes')
 )`
 
 // ListUnresolvedPayouts is what the confirmation sweep works through, oldest

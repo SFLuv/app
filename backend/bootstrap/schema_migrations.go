@@ -2857,6 +2857,39 @@ var schemaMigrations = []SchemaMigration{
 			return nil
 		},
 	},
+	{
+		Version:     "1.83",
+		Description: "payouts: write down each operation before it is sent; redemptions: when",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			// The operation a payout went out as, recorded before it is sent.
+			// Until now a payout whose confirmation was lost left nothing to
+			// look up but a recipient and an amount, so whether it could still
+			// land was guessed from timing, and a redemption code behind one
+			// could stay spent for good. With the operation's nonce the chain
+			// answers directly whether it ran and what it sent; with the end of
+			// the paymaster's window, when it can no longer run at all.
+			if _, err := pools.App.Exec(ctx, `
+				ALTER TABLE payout_ledger ADD COLUMN IF NOT EXISTS operation_hash TEXT NOT NULL DEFAULT '';
+				ALTER TABLE payout_ledger ADD COLUMN IF NOT EXISTS operation_sender TEXT NOT NULL DEFAULT '';
+				ALTER TABLE payout_ledger ADD COLUMN IF NOT EXISTS operation_nonce NUMERIC(78,0);
+				ALTER TABLE payout_ledger ADD COLUMN IF NOT EXISTS operation_valid_until TIMESTAMPTZ;
+				CREATE INDEX IF NOT EXISTS payout_ledger_source_ref_all_idx
+					ON payout_ledger (source, source_ref);
+			`); err != nil {
+				return fmt.Errorf("error adding payout_ledger operation columns: %w", err)
+			}
+			// When a code was redeemed. Added without a default and given one
+			// after, so existing rows stay NULL: a redemption from before this
+			// cannot be dated, and an undated one is never handed back.
+			if _, err := pools.Bot.Exec(ctx, `
+				ALTER TABLE redemptions ADD COLUMN IF NOT EXISTS redeemed_at TIMESTAMPTZ;
+				ALTER TABLE redemptions ALTER COLUMN redeemed_at SET DEFAULT NOW();
+			`); err != nil {
+				return fmt.Errorf("error adding redemptions.redeemed_at: %w", err)
+			}
+			return nil
+		},
+	},
 }
 
 // migrateW9TINMismatchCount adds the count of failed TIN matches per filing.

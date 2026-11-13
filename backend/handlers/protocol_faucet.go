@@ -83,8 +83,10 @@ const (
 type faucetSend struct {
 	to     common.Address
 	amount *big.Int
-	result chan faucetSendResult
-	state  atomic.Int32
+	// journal is handed the operation before it is sent. May be nil.
+	journal bot.OperationJournal
+	result  chan faucetSendResult
+	state   atomic.Int32
 }
 
 // cancel claims the request for the caller. False means the dispatcher already
@@ -120,7 +122,11 @@ type faucetDispatcher struct {
 // CommunityModule emits none. So the transfer is found the only way available,
 // by watching the token for the log this operation was supposed to produce, and
 // claimed exclusively so that two identical payouts cannot report the same one.
-func (p *ProtocolService) SendFromFaucet(ctx context.Context, amountBase *big.Int, to common.Address) (string, error) {
+//
+// journal, when not nil, is handed the operation after it is signed and before
+// it is sent, so the payout behind it can be checked against the chain however
+// this call ends — even if the process ends with it.
+func (p *ProtocolService) SendFromFaucet(ctx context.Context, amountBase *big.Int, to common.Address, journal bot.OperationJournal) (string, error) {
 	if err := p.Available(); err != nil {
 		// Nothing was sent, so the code behind this may be presented again.
 		return "", bot.Releasable(err)
@@ -130,9 +136,10 @@ func (p *ProtocolService) SendFromFaucet(ctx context.Context, amountBase *big.In
 	}
 
 	request := &faucetSend{
-		to:     to,
-		amount: new(big.Int).Set(amountBase),
-		result: make(chan faucetSendResult, 1),
+		to:      to,
+		amount:  new(big.Int).Set(amountBase),
+		journal: journal,
+		result:  make(chan faucetSendResult, 1),
 	}
 
 	p.startFaucetDispatcher()
@@ -242,6 +249,31 @@ func (p *ProtocolService) dispatchFaucetBatch(batch []*faucetSend) {
 		return
 	}
 
+	// Every payout in the operation writes it down before it goes. If any of
+	// them cannot, nothing is sent: the operation would be one that payout could
+	// never be checked against.
+	var signed bot.SubmittedOperation
+	submittedAt := time.Now()
+	journal := func(op *protocol.UserOperation, hash [32]byte) error {
+		signed = bot.SubmittedOperation{
+			Hash:   common.Hash(hash).Hex(),
+			Sender: op.Sender.Hex(),
+			Nonce:  new(big.Int).Set(op.Nonce),
+		}
+		if validUntil, ok := protocol.ValidUntil(op.PaymasterAndData); ok {
+			signed.ValidUntil = &validUntil
+		}
+		for _, request := range batch {
+			if request.journal == nil {
+				continue
+			}
+			if err := request.journal(signed); err != nil {
+				return fmt.Errorf("could not record operation %s before sending it: %w", signed.Hash, err)
+			}
+		}
+		return nil
+	}
+
 	// Sponsoring, signing and submitting are held against rotations and
 	// sweeps, which take the same lock.
 	//
@@ -255,7 +287,7 @@ func (p *ProtocolService) dispatchFaucetBatch(batch []*faucetSend) {
 	// behind a rotation must sign with the key that rotation installed, not the
 	// one that was current when it was queued.
 	p.mu.Lock()
-	opHash, err := p.executeRaw(ctx, structs.ProtocolAccountFaucet, callData)
+	opHash, err := p.executeRaw(ctx, structs.ProtocolAccountFaucet, callData, journal)
 	p.mu.Unlock()
 	if err != nil {
 		var uncertain *uncertainSendError
@@ -306,13 +338,37 @@ func (p *ProtocolService) dispatchFaucetBatch(batch []*faucetSend) {
 				BlockNumber:   block,
 			})
 		})
+	// A transfer not seen in time is not yet a failure. Before handing back
+	// "may have been sent", ask the chain once whether the operation ran: one
+	// that ran without this payout's transfer sent nothing, and saying so now
+	// releases the code at once instead of leaving it spent until the sweep
+	// gets there; one that ran with it is paid. One that has not run yet stays
+	// unconfirmed — it may still land, and the sweep follows it.
+	journaled := JournaledOperation{
+		Hash: signed.Hash, Sender: signed.Sender, Nonce: signed.Nonce,
+		ValidUntil: signed.ValidUntil, Since: submittedAt,
+	}
 	for i, request := range batch {
-		if errs[i] != nil {
-			request.result <- faucetSendResult{err: fmt.Errorf(
-				"faucet operation %s was submitted but this payout's transfer was not observed: %w", opHash, errs[i])}
+		if errs[i] == nil {
+			request.result <- faucetSendResult{txHash: hashes[i]}
 			continue
 		}
-		request.result <- faucetSendResult{txHash: hashes[i]}
+		if signed.Hash != "" {
+			search, err := p.FindFaucetOperation(ctx, journaled, request.to, request.amount)
+			switch {
+			case err != nil:
+				p.logf("protocol faucet: could not check operation %s after its transfer went unseen: %s", signed.Hash, err)
+			case search.Sent:
+				request.result <- faucetSendResult{txHash: search.TxHash}
+				continue
+			case search.NeverSent():
+				request.result <- faucetSendResult{err: bot.Releasable(fmt.Errorf(
+					"faucet payout was not sent: %s", search.Describe(signed.Hash)))}
+				continue
+			}
+		}
+		request.result <- faucetSendResult{err: fmt.Errorf(
+			"faucet operation %s was submitted but this payout's transfer was not observed: %w", opHash, errs[i])}
 	}
 }
 
@@ -358,7 +414,11 @@ func (p *ProtocolService) faucetBatchCallData(batch []*faucetSend) ([]byte, erro
 // Separate from Execute because a batch's callData is built by the caller: it
 // is a delegatecall into MultiSend rather than a single call, and Execute's job
 // of wrapping one inner call does not apply.
-func (p *ProtocolService) executeRaw(ctx context.Context, accountKey string, callData []byte) (string, error) {
+//
+// beforeSend, when not nil, sees the signed operation and its hash before the
+// engine does. An error from it stops the send, and is returned as a plain
+// error — nothing has left this process.
+func (p *ProtocolService) executeRaw(ctx context.Context, accountKey string, callData []byte, beforeSend func(*protocol.UserOperation, [32]byte) error) (string, error) {
 	account, err := p.db.GetProtocolAccount(ctx, accountKey)
 	if err != nil {
 		return "", err
@@ -398,6 +458,11 @@ func (p *ProtocolService) executeRaw(ctx context.Context, accountKey string, cal
 	}
 	if err := protocol.Sign(sponsored, hash, signer); err != nil {
 		return "", err
+	}
+	if beforeSend != nil {
+		if err := beforeSend(sponsored, hash); err != nil {
+			return "", err
+		}
 	}
 	opHash, err := p.client.Send(ctx, sponsored, nil)
 	if err != nil && !protocol.IsRejected(err) {

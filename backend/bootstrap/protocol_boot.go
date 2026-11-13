@@ -169,8 +169,8 @@ func attachFaucet(
 	}
 
 	botClient.SetFaucet(
-		func(ctx context.Context, amountBase *big.Int, to common.Address) (string, error) {
-			return protocolSvc.SendFromFaucet(ctx, amountBase, to)
+		func(ctx context.Context, amountBase *big.Int, to common.Address, journal bot.OperationJournal) (string, error) {
+			return protocolSvc.SendFromFaucet(ctx, amountBase, to, journal)
 		},
 		func(ctx context.Context) (*big.Int, error) {
 			return protocolSvc.FaucetBalance(ctx)

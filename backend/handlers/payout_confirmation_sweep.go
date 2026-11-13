@@ -22,18 +22,34 @@ import (
 // sweep it stayed that way until somebody checked by hand, and the workflow
 // series behind it stayed blocked.
 //
-// So every few minutes each unresolved row is looked up on the chain. A
+// So every few minutes each unresolved row is looked up on the chain.
+//
+// A row whose operation was written down before it was sent is settled from
+// what the chain says became of that operation, as soon as there is an answer:
+// run with its transfer, it is paid; run without it, or past the paymaster's
+// window without running at all, it never sent anything. A row abandoned
+// before anything was written down never reached a send, and is not sent.
+//
+// Older rows, and the old key's sends, have only a recipient and an amount. A
 // transfer found is claimed and the row settles as paid, along with whatever it
-// was paying for. A transfer still absent once the row is an hour old, with a
-// later faucet operation already mined, never will land — operations take
-// their nonces in order — so the row becomes an ordinary not-sent failure and
-// is paid again through the normal path.
+// was paying for. A transfer still absent once the paymaster's seven-day window
+// has closed on any operation the row could have gone out as never will land,
+// so the row becomes an ordinary not-sent failure and is paid again through
+// the normal path.
+//
+// That used to be an hour, once a later faucet operation had landed, on the
+// reasoning that operations take their nonces in order. On this deployment
+// they do not: the engine gives each operation a random nonce key of its own,
+// so an earlier operation still queued in the engine could land after a later
+// one, after its payout had been concluded lost and paid again.
 const (
 	// Leaves the send that made a row time to find its own transfer.
 	payoutConfirmationSettleAfter = 5 * time.Minute
-	// How long a row must go unfound before it is concluded not sent.
-	payoutConfirmationConcludeAfter = time.Hour
-	payoutConfirmationSweepLimit    = 25
+	payoutConfirmationSweepLimit  = 25
+	// A pending row with no outcome recorded this long after its attempt began
+	// was abandoned mid-send. Must match unresolvedPayoutClause in the db
+	// package.
+	payoutAbandonedAfter = 15 * time.Minute
 )
 
 // ResolveUnconfirmedPayouts runs one pass of the sweep.
@@ -76,6 +92,18 @@ func (a *AppService) resolveUnconfirmedPayout(ctx context.Context, row *structs.
 		return fmt.Errorf("amount %q is not a positive integer", row.AmountBase)
 	}
 
+	if row.OperationHash != "" {
+		return a.resolveJournaledPayout(ctx, row, amount)
+	}
+	// Abandoned before any send: its attempt began, but neither path wrote
+	// anything down, and both write before they send. The queue it waited in
+	// died with the process, so it cannot go out now.
+	if row.State == db.PayoutStatePending && row.LastError == "" && row.AttemptStartedAt != nil && row.OperationSender == "" {
+		return a.concludePayoutNotSent(ctx, row, fmt.Sprintf(
+			"abandoned before it was sent: its attempt began at %s and nothing was recorded as sent",
+			row.AttemptStartedAt.UTC().Format(time.RFC3339)))
+	}
+
 	search, err := a.protocolSvc.FindFaucetPayout(ctx, common.HexToAddress(row.RecipientAddress), amount, row.CreatedAt)
 	if err != nil {
 		return err
@@ -84,9 +112,57 @@ func (a *AppService) resolveUnconfirmedPayout(ctx context.Context, row *structs.
 	if search.TxHash != "" {
 		return a.settleConfirmedPayout(ctx, row, search.TxHash)
 	}
-	if time.Since(row.CreatedAt) >= payoutConfirmationConcludeAfter && search.LaterOperationLanded {
+	// No operation was written down for this row, so nothing can be asked
+	// about it directly. It is concluded lost only once the paymaster's window
+	// has closed for any operation its last attempt could have made: until
+	// then one may still be waiting in the engine's queue and land.
+	if time.Since(lastPayoutAttempt(row)) >= faucetSponsorshipWindow+faucetSponsorshipMargin {
 		return a.concludePayoutNotSent(ctx, row, search.describeSearch(row.CreatedAt))
 	}
+	return nil
+}
+
+// lastPayoutAttempt is the latest a row's last attempt can have been sponsored:
+// every write to the row comes at or after the attempt that made it.
+func lastPayoutAttempt(row *structs.PayoutLedgerRow) time.Time {
+	latest := row.CreatedAt
+	if row.UpdatedAt.After(latest) {
+		latest = row.UpdatedAt
+	}
+	if row.AttemptStartedAt != nil && row.AttemptStartedAt.After(latest) {
+		latest = *row.AttemptStartedAt
+	}
+	return latest
+}
+
+// resolveJournaledPayout settles a payout from what the chain says became of
+// the operation it was written down as. There is no waiting period: every
+// conclusion here rests on the chain's own record, not on how long it has been.
+func (a *AppService) resolveJournaledPayout(ctx context.Context, row *structs.PayoutLedgerRow, amount *big.Int) error {
+	nonce, ok := new(big.Int).SetString(row.OperationNonce, 10)
+	if !ok {
+		return fmt.Errorf("operation nonce %q is not a number", row.OperationNonce)
+	}
+	since := row.CreatedAt
+	if row.AttemptStartedAt != nil {
+		since = *row.AttemptStartedAt
+	}
+
+	search, err := a.protocolSvc.FindFaucetOperation(ctx, JournaledOperation{
+		Hash: row.OperationHash, Sender: row.OperationSender, Nonce: nonce,
+		ValidUntil: row.OperationValidUntil, Since: since,
+	}, common.HexToAddress(row.RecipientAddress), amount)
+	if err != nil {
+		return err
+	}
+	switch {
+	case search.Sent:
+		return a.settleConfirmedPayout(ctx, row, search.TxHash)
+	case search.NeverSent():
+		return a.concludePayoutNotSent(ctx, row, search.Describe(row.OperationHash))
+	}
+	// Not run yet and still inside its window: it may land. Asked again on
+	// the next pass.
 	return nil
 }
 
@@ -152,7 +228,7 @@ func (a *AppService) concludePayoutNotSent(ctx context.Context, row *structs.Pay
 		// Hand the code back so the volunteer can scan it again; the retry
 		// re-arms this row and pays it.
 		if a.bot != nil && a.bot.db != nil {
-			if err := a.bot.db.UndoRedeem(ctx, row.SourceRef, row.RecipientAddress, a.activeChainID()); err != nil {
+			if _, err := a.bot.releaseRedemption(ctx, row.SourceRef, row.RecipientAddress); err != nil {
 				return fmt.Errorf("could not hand code %s back: %w", row.SourceRef, err)
 			}
 		}

@@ -1,12 +1,16 @@
 package protocol
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"math/big"
+	"strings"
 	"time"
 
 	"github.com/ethereum/go-ethereum"
+	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethclient"
@@ -172,6 +176,264 @@ func MatchingTransfers(logs []types.Log, to common.Address, amount *big.Int) []T
 		out[i] = TransferCandidate{TxHash: candidate.hash, Block: candidate.block, Index: candidate.index}
 	}
 	return out
+}
+
+// Finding one operation after the fact.
+//
+// This deployment's EntryPoint emits no UserOperationEvent, and the engine
+// gives every operation a nonce key of its own, chosen at random, at sequence
+// zero. So the events a standard EntryPoint would be asked do not exist, and a
+// later operation landing says nothing about an earlier one. What does exist is
+// the nonce: getNonce(sender, key) moves past the operation's sequence in the
+// block that included it, and because the key belongs to that one operation,
+// it answers whether that operation ran, whatever it did when it did.
+
+const entryPointLookupABI = `[{
+	"inputs": [
+		{"name": "sender", "type": "address"},
+		{"name": "key", "type": "uint192"}
+	],
+	"name": "getNonce",
+	"outputs": [{"name": "nonce", "type": "uint256"}],
+	"stateMutability": "view",
+	"type": "function"
+}, {
+	"inputs": [{
+		"components": [
+			{"name": "sender", "type": "address"},
+			{"name": "nonce", "type": "uint256"},
+			{"name": "initCode", "type": "bytes"},
+			{"name": "callData", "type": "bytes"},
+			{"name": "callGasLimit", "type": "uint256"},
+			{"name": "verificationGasLimit", "type": "uint256"},
+			{"name": "preVerificationGas", "type": "uint256"},
+			{"name": "maxFeePerGas", "type": "uint256"},
+			{"name": "maxPriorityFeePerGas", "type": "uint256"},
+			{"name": "paymasterAndData", "type": "bytes"},
+			{"name": "signature", "type": "bytes"}
+		],
+		"name": "ops",
+		"type": "tuple[]"
+	}, {"name": "beneficiary", "type": "address"}],
+	"name": "handleOps",
+	"outputs": [],
+	"stateMutability": "nonpayable",
+	"type": "function"
+}]`
+
+var nonceSequenceMask = new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 64), big.NewInt(1))
+
+// NonceKey and NonceSequence split a 4337 nonce into its 192-bit key and its
+// 64-bit sequence.
+func NonceKey(nonce *big.Int) *big.Int { return new(big.Int).Rsh(nonce, 64) }
+func NonceSequence(nonce *big.Int) *big.Int {
+	return new(big.Int).And(nonce, nonceSequenceMask)
+}
+
+// HeadAt is one block's number and timestamp.
+func (c *Client) HeadAt(ctx context.Context, block uint64) (Head, error) {
+	client, err := c.dialRead(ctx)
+	if err != nil {
+		return Head{}, err
+	}
+	defer client.Close()
+	header, err := retryRPC(ctx, func() (*types.Header, error) {
+		return client.HeaderByNumber(ctx, new(big.Int).SetUint64(block))
+	})
+	if err != nil {
+		return Head{}, fmt.Errorf("error reading block %d: %w", block, err)
+	}
+	return Head{Number: header.Number.Uint64(), Time: time.Unix(int64(header.Time), 0)}, nil
+}
+
+// OperationIncludedAt reports whether the operation with this nonce had been
+// included as of block: whether the EntryPoint's sequence for its key had
+// moved past it.
+func (c *Client) OperationIncludedAt(ctx context.Context, sender common.Address, nonce *big.Int, block uint64) (bool, error) {
+	client, err := c.dialRead(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer client.Close()
+	return c.operationIncludedAt(ctx, client, sender, nonce, block)
+}
+
+func (c *Client) operationIncludedAt(ctx context.Context, client *ethclient.Client, sender common.Address, nonce *big.Int, block uint64) (bool, error) {
+	parsed, err := abi.JSON(strings.NewReader(entryPointLookupABI))
+	if err != nil {
+		return false, fmt.Errorf("error parsing the entry point lookup abi: %w", err)
+	}
+	payload, err := parsed.Pack("getNonce", sender, NonceKey(nonce))
+	if err != nil {
+		return false, fmt.Errorf("error encoding getNonce: %w", err)
+	}
+	raw, err := retryRPC(ctx, func() ([]byte, error) {
+		return client.CallContract(ctx, ethereum.CallMsg{To: &c.entryPoint, Data: payload}, new(big.Int).SetUint64(block))
+	})
+	if err != nil {
+		return false, fmt.Errorf("error reading the entry point nonce at block %d: %w", block, err)
+	}
+	if len(raw) != 32 {
+		return false, fmt.Errorf("getNonce returned %d bytes, want 32", len(raw))
+	}
+	current := new(big.Int).SetBytes(raw)
+	if NonceKey(current).Cmp(NonceKey(nonce)) != 0 {
+		return false, fmt.Errorf("getNonce answered for key %s, asked for %s", NonceKey(current), NonceKey(nonce))
+	}
+	return NonceSequence(current).Cmp(NonceSequence(nonce)) > 0, nil
+}
+
+// OperationInclusionBlock is the block that included the operation, found by
+// binary search on its nonce between from, where it had not been included, and
+// to, where it had.
+func (c *Client) OperationInclusionBlock(ctx context.Context, sender common.Address, nonce *big.Int, from, to uint64) (uint64, error) {
+	client, err := c.dialRead(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer client.Close()
+
+	if from >= to {
+		return 0, fmt.Errorf("empty search range %d-%d", from, to)
+	}
+	included, err := c.operationIncludedAt(ctx, client, sender, nonce, from)
+	if err != nil {
+		return 0, err
+	}
+	if included {
+		return 0, fmt.Errorf("operation was already included at block %d, before it was sent", from)
+	}
+	lo, hi := from, to
+	for hi-lo > 1 {
+		mid := lo + (hi-lo)/2
+		included, err := c.operationIncludedAt(ctx, client, sender, nonce, mid)
+		if err != nil {
+			return 0, err
+		}
+		if included {
+			hi = mid
+		} else {
+			lo = mid
+		}
+	}
+	return hi, nil
+}
+
+// OperationTxIn is the transaction in block that carried sender's operation
+// with this nonce: a handleOps call to the EntryPoint that lists it.
+//
+// The block is read as raw JSON. go-ethereum refuses to decode a block holding
+// a transaction type it does not know, and Celo blocks carry its fee-currency
+// type.
+func (c *Client) OperationTxIn(ctx context.Context, block uint64, sender common.Address, nonce *big.Int) (string, bool, error) {
+	client, err := c.dialRead(ctx)
+	if err != nil {
+		return "", false, err
+	}
+	defer client.Close()
+
+	type rawTx struct {
+		Hash  string  `json:"hash"`
+		To    *string `json:"to"`
+		Input string  `json:"input"`
+	}
+	type rawBlock struct {
+		Transactions []rawTx `json:"transactions"`
+	}
+	var got *rawBlock
+	if _, err := retryRPC(ctx, func() (bool, error) {
+		return true, client.Client().CallContext(ctx, &got, "eth_getBlockByNumber", fmt.Sprintf("0x%x", block), true)
+	}); err != nil {
+		return "", false, fmt.Errorf("error reading block %d: %w", block, err)
+	}
+	if got == nil {
+		return "", false, fmt.Errorf("block %d is not available yet", block)
+	}
+
+	parsed, err := abi.JSON(strings.NewReader(entryPointLookupABI))
+	if err != nil {
+		return "", false, fmt.Errorf("error parsing the entry point lookup abi: %w", err)
+	}
+	handleOps := parsed.Methods["handleOps"]
+	for _, tx := range got.Transactions {
+		if tx.To == nil || !strings.EqualFold(*tx.To, c.entryPoint.Hex()) {
+			continue
+		}
+		input := common.FromHex(tx.Input)
+		if len(input) < 4 || !bytes.Equal(input[:4], handleOps.ID) {
+			continue
+		}
+		values, err := handleOps.Inputs.Unpack(input[4:])
+		if err != nil || len(values) == 0 {
+			continue
+		}
+		ops, ok := abi.ConvertType(values[0], new([]userOpTuple)).(*[]userOpTuple)
+		if !ok {
+			continue
+		}
+		for _, op := range *ops {
+			if op.Sender == sender && op.Nonce != nil && op.Nonce.Cmp(nonce) == 0 {
+				return strings.ToLower(tx.Hash), true, nil
+			}
+		}
+	}
+	return "", false, nil
+}
+
+// ValidUntil is the end of the window the paymaster signed an operation for,
+// read from its paymasterAndData: the paymaster's address, then validUntil and
+// validAfter as ABI words, then the signature — the layout this paymaster
+// produces. An operation not included by then never can be.
+func ValidUntil(paymasterAndData []byte) (time.Time, bool) {
+	if len(paymasterAndData) < 20+64 {
+		return time.Time{}, false
+	}
+	word := new(big.Int).SetBytes(paymasterAndData[20:52])
+	if !word.IsUint64() || word.Uint64() == 0 || word.Uint64() > 1<<40 {
+		return time.Time{}, false
+	}
+	return time.Unix(int64(word.Uint64()), 0), true
+}
+
+// TransfersInReceipt is every token transfer out of sender in one transaction,
+// read from its receipt. Found is false when the node has no receipt for it.
+//
+// A receipt, not a log search, because a receipt is all of a transaction's
+// logs or nothing: a node that answers with one cannot have left a transfer
+// out, which is what lets an empty answer be read as "nothing was sent".
+func (c *Client) TransfersInReceipt(ctx context.Context, txHash string, token, sender common.Address) (logs []types.Log, found bool, err error) {
+	client, err := c.dialRead(ctx)
+	if err != nil {
+		return nil, false, err
+	}
+	defer client.Close()
+
+	receipt, err := retryRPC(ctx, func() (*types.Receipt, error) {
+		receipt, err := client.TransactionReceipt(ctx, common.HexToHash(txHash))
+		if errors.Is(err, ethereum.NotFound) {
+			return nil, nil
+		}
+		return receipt, err
+	})
+	if err != nil {
+		return nil, false, fmt.Errorf("error reading the receipt of %s: %w", txHash, err)
+	}
+	if receipt == nil {
+		return nil, false, nil
+	}
+
+	from := common.BytesToHash(sender.Bytes())
+	out := []types.Log{}
+	for _, entry := range receipt.Logs {
+		if entry == nil || entry.Address != token || len(entry.Topics) < 3 {
+			continue
+		}
+		if entry.Topics[0] != transferTopic || entry.Topics[1] != from {
+			continue
+		}
+		out = append(out, *entry)
+	}
+	return out, true, nil
 }
 
 func (c *Client) dialRead(ctx context.Context) (*ethclient.Client, error) {

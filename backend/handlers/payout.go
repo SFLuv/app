@@ -502,7 +502,27 @@ func (p *PayoutService) transfer(ctx context.Context, ledgerID int64, recipient 
 		return "", fmt.Errorf("no faucet is configured")
 	}
 
-	txHash, err := p.bot.SubmitTransferBaseUnits(amount, recipient)
+	// Stamped before anything is handed over, so a row the process abandons
+	// mid-send can be told from one still being sent. Nothing has gone out if
+	// it fails.
+	if err := p.appDb.MarkPayoutAttemptStarted(ctx, ledgerID); err != nil {
+		return "", err
+	}
+	// The operation is written onto the row before it is sent, which is what
+	// lets the confirmation sweep, and a rescan of the code behind it, ask the
+	// chain what became of it rather than guess. Its own deadline: the caller's
+	// may be nearly spent by the time the faucet queue reaches this payout.
+	journal := func(op bot.SubmittedOperation) error {
+		journalCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		nonce := ""
+		if op.Nonce != nil {
+			nonce = op.Nonce.String()
+		}
+		return p.appDb.RecordPayoutOperation(journalCtx, ledgerID, op.Hash, op.Sender, nonce, op.ValidUntil)
+	}
+
+	txHash, err := p.bot.SubmitTransferBaseUnitsJournaled(amount, recipient, journal)
 	if err != nil {
 		return "", fmt.Errorf("error sending payout: %w", err)
 	}

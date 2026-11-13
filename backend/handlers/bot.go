@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/SFLuv/app/backend/bot"
@@ -47,6 +48,9 @@ type BotService struct {
 	// funding keeps the protocol's other accounts in gas from the faucet, and
 	// emails when the faucet itself needs a person. nil when unconfigured.
 	funding *FundingService
+	// payoutRechecks is when a rescan last asked the chain about each payout,
+	// by ledger id; see recheckRedeemedCode.
+	payoutRechecks sync.Map
 }
 
 // SetFundingService wires the funding sweeper. Set after construction because
@@ -682,6 +686,29 @@ func (s *BotService) Redeem(w http.ResponseWriter, r *http.Request) {
 	defer redeemCancel()
 
 	amount, err := s.db.Redeem(redeemCtx, request.Code, request.Address, s.chainID())
+	if err != nil && err.Error() == "code redeemed" {
+		// Checked, not taken at its word: a code whose payout sent nothing is
+		// handed back and redeemed for this scan. See redeem_settlement.go.
+		recheckCtx, recheckCancel := context.WithTimeout(context.Background(), 45*time.Second)
+		state, holder := s.recheckRedeemedCode(recheckCtx, request.Code)
+		recheckCancel()
+		switch state {
+		case redeemedCodeReopened:
+			amount, err = s.db.Redeem(redeemCtx, request.Code, request.Address, s.chainID())
+		case redeemedCodePending:
+			// The person whose payout it is hears what they always have, that
+			// it is still confirming. Anyone else hears that the code is
+			// taken for now; an older app shows its generic error for it.
+			if holder != "" && strings.EqualFold(holder, request.Address) {
+				w.WriteHeader(http.StatusInternalServerError)
+				w.Write([]byte("payout pending"))
+				return
+			}
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte("code pending"))
+			return
+		}
+	}
 	if err != nil {
 		switch err.Error() {
 		case "code not started":
@@ -706,6 +733,9 @@ func (s *BotService) Redeem(w http.ResponseWriter, r *http.Request) {
 	multiplier, multiplierErr := getTokenMultiplier()
 	if multiplierErr != nil {
 		fmt.Printf("error reading token decimals for code %s: %s\n", request.Code, multiplierErr)
+		// Nothing was recorded or sent, so the code goes back. This path used
+		// to leave it spent with no payout behind it at all.
+		s.releaseAfterFailedPayout(request.Code, request.Address)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
@@ -727,11 +757,7 @@ func (s *BotService) Redeem(w http.ResponseWriter, r *http.Request) {
 		// undoing the redemption there would let the same reward be claimed
 		// twice, once now and once after the W-9 lands.
 		if bot.ShouldRevertRedemption(payoutErr) {
-			undoCtx, undoCancel := context.WithTimeout(context.Background(), 10*time.Second)
-			if undoErr := s.db.UndoRedeem(undoCtx, request.Code, request.Address, s.chainID()); undoErr != nil {
-				fmt.Printf("error undoing redemption for code %s address %s after payout failure: %s\n", request.Code, request.Address, undoErr)
-			}
-			undoCancel()
+			s.releaseAfterFailedPayout(request.Code, request.Address)
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
@@ -750,11 +776,7 @@ func (s *BotService) Redeem(w http.ResponseWriter, r *http.Request) {
 	// only thing they need to claim it. Reuses the same undo the send-failure
 	// path uses rather than inventing a second refund route.
 	if result != nil && result.Blocked {
-		undoCtx, undoCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		if undoErr := s.db.UndoRedeem(undoCtx, request.Code, request.Address, s.chainID()); undoErr != nil {
-			fmt.Printf("error releasing code %s after a blocked payout: %s\n", request.Code, undoErr)
-		}
-		undoCancel()
+		s.releaseAfterFailedPayout(request.Code, request.Address)
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusConflict)
