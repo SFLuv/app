@@ -36,6 +36,9 @@ const (
 type FaucetPayoutSearch struct {
 	// TxHash is the transfer that carried it, empty if none was found.
 	TxHash string
+	// Matching counts every transfer of this amount to this recipient in the
+	// range, claimed or not.
+	Matching int
 	// SearchedUntil is the timestamp of the newest block searched.
 	SearchedUntil time.Time
 }
@@ -99,7 +102,9 @@ func (p *ProtocolService) FindFaucetPayout(ctx context.Context, recipient common
 		signerAddress = signer.EOAAddress
 	}
 
-	for _, candidate := range protocol.MatchingTransfers(logs, recipient, amount) {
+	candidates := protocol.MatchingTransfers(logs, recipient, amount)
+	result.Matching = len(candidates)
+	for _, candidate := range candidates {
 		claimed, err := p.db.ClaimProtocolTransaction(ctx, db.ProtocolTransaction{
 			TxHash:        candidate.TxHash,
 			LogIndex:      candidate.Index,

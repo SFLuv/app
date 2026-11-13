@@ -1145,12 +1145,20 @@ func (a *AppDB) SettleUnresolvedPayout(ctx context.Context, id int64, txHash str
 // ConcludePayoutNotSent records that an unresolved payout provably never
 // reached the chain. It becomes an ordinary not-sent failure: it stops counting
 // toward the threshold and a retry may pay it.
-func (a *AppDB) ConcludePayoutNotSent(ctx context.Context, id int64, reason string) (bool, error) {
+//
+// The conclusion is pinned to the journal it was decided on: the operation
+// hash and sender the row carried when the chain was asked. A send records its
+// operation on the row, in one update, before it goes, and only while the row
+// is pending; this update runs only while the row still carries what was
+// checked. The two cannot both succeed, so nothing can be sent behind a
+// conclusion that it was not.
+func (a *AppDB) ConcludePayoutNotSent(ctx context.Context, id int64, operationHash string, operationSender string, reason string) (bool, error) {
 	tag, err := a.db.Exec(ctx, `
 		UPDATE payout_ledger
 		SET state = 'failed', last_error = $2, updated_at = NOW()
-		WHERE id = $1 AND `+unresolvedPayoutClause+`;
-	`, id, PayoutNotSentPrefix+reason)
+		WHERE id = $1 AND `+unresolvedPayoutClause+`
+		AND operation_hash = $3 AND operation_sender = $4;
+	`, id, PayoutNotSentPrefix+reason, strings.ToLower(operationHash), strings.ToLower(operationSender))
 	if err != nil {
 		return false, fmt.Errorf("error concluding payout %d not sent: %w", id, err)
 	}

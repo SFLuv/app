@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/big"
 	"os"
@@ -201,6 +202,10 @@ func decidePayout(priorTotal *big.Int, amount *big.Int, thresholds payoutThresho
 	return payoutDecision{Action: payoutActionPay, Reason: "below the reporting threshold"}
 }
 
+// ErrPayoutInFlight is Pay refusing to send a payout that another attempt is
+// sending or abandoned mid-send. It is never a failure of the payout itself.
+var ErrPayoutInFlight = errors.New("an attempt at this payout is already under way or was abandoned mid-send; it will not be sent again until the chain has been checked")
+
 // Pay sends money, or holds it and says why.
 //
 // The sequence matters. The ledger row is written first so nothing can be paid
@@ -240,10 +245,11 @@ func (p *PayoutService) Pay(ctx context.Context, req PayoutRequest) (*PayoutResu
 		CountsTowardThreshold: true,
 	}
 
-	decision, created, err := p.recordAndDecide(ctx, row, req.AmountBase, userID, taxYear)
+	decision, created, err := p.recordAndDecide(ctx, row, req.AmountBase, userID, taxYear, false)
 	if err != nil {
 		return nil, err
 	}
+	rearmed := false
 
 	// A retry of a payout that failed. Reporting the failed row as settled —
 	// which the branch below used to do — answered success with nothing sent,
@@ -252,11 +258,11 @@ func (p *PayoutService) Pay(ctx context.Context, req PayoutRequest) (*PayoutResu
 	// failed row predates that marker and may record a send whose outcome was
 	// never known, so it is refused until an admin has checked the chain.
 	if !created && row.State == db.PayoutStateFailed {
-		rearmed, rearmErr := p.appDb.RearmFailedPayout(ctx, row.ID)
+		ok, rearmErr := p.appDb.RearmFailedPayout(ctx, row.ID)
 		if rearmErr != nil {
 			return nil, rearmErr
 		}
-		if !rearmed {
+		if !ok {
 			// Unconfirmed, not a plain failure: the confirmation sweep settles
 			// it from the chain, and a redemption behind it stays spent.
 			return nil, bot.Unconfirmed(fmt.Errorf(
@@ -264,7 +270,8 @@ func (p *PayoutService) Pay(ctx context.Context, req PayoutRequest) (*PayoutResu
 				row.ID, row.LastError,
 			))
 		}
-		decision, created, err = p.recordAndDecide(ctx, row, req.AmountBase, userID, taxYear)
+		rearmed = true
+		decision, created, err = p.recordAndDecide(ctx, row, req.AmountBase, userID, taxYear, true)
 		if err != nil {
 			return nil, err
 		}
@@ -279,6 +286,16 @@ func (p *PayoutService) Pay(ctx context.Context, req PayoutRequest) (*PayoutResu
 			"payout %d was submitted earlier and never confirmed; it may already have been paid, so it will not be sent again until the chain has been checked",
 			row.ID,
 		))
+	}
+
+	// A payout another attempt is still sending, or abandoned mid-send. Sending
+	// it again from here is how one payout went out twice: the first attempt's
+	// operation may land as well. Whichever attempt is sending records the
+	// outcome, and one that was abandoned is settled from the chain by the
+	// sweep. Only a row this call has just re-armed — one whose last attempt
+	// provably sent nothing — goes on to be sent.
+	if !created && !rearmed && row.State == db.PayoutStatePending {
+		return nil, bot.Unconfirmed(fmt.Errorf("payout %d: %w", row.ID, ErrPayoutInFlight))
 	}
 
 	// An existing row that already settled is the retry case: report what
@@ -365,7 +382,12 @@ func (p *PayoutService) Pay(ctx context.Context, req PayoutRequest) (*PayoutResu
 
 // recordAndDecide writes the ledger row and settles the escrow question inside
 // one transaction, holding the per-person lock while it does.
-func (p *PayoutService) recordAndDecide(ctx context.Context, row *structs.PayoutLedgerRow, amount *big.Int, userID string, taxYear int) (payoutDecision, bool, error) {
+//
+// An existing row is decided again only when reuse is true, which Pay passes
+// for a row it has just re-armed. Any other existing pending row belongs to an
+// attempt already under way, and deciding it again could hold money that
+// attempt is sending.
+func (p *PayoutService) recordAndDecide(ctx context.Context, row *structs.PayoutLedgerRow, amount *big.Int, userID string, taxYear int, reuse bool) (payoutDecision, bool, error) {
 	tx, err := p.appDb.BeginTx(ctx)
 	if err != nil {
 		return payoutDecision{}, false, fmt.Errorf("error starting payout transaction: %w", err)
@@ -376,7 +398,7 @@ func (p *PayoutService) recordAndDecide(ctx context.Context, row *structs.Payout
 	if err != nil {
 		return payoutDecision{}, false, err
 	}
-	if !created && row.State != db.PayoutStatePending {
+	if !created && (row.State != db.PayoutStatePending || !reuse) {
 		return payoutDecision{}, false, tx.Commit(ctx)
 	}
 

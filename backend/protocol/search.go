@@ -384,16 +384,29 @@ func (c *Client) OperationTxIn(ctx context.Context, block uint64, sender common.
 // read from its paymasterAndData: the paymaster's address, then validUntil and
 // validAfter as ABI words, then the signature — the layout this paymaster
 // produces. An operation not included by then never can be.
+//
+// Read wrongly, this would declare an operation dead while it can still land,
+// so it is only trusted when the pair reads as a window: validAfter before
+// validUntil, by no more than validWindowCeiling. Zero, which means no expiry,
+// is never trusted.
 func ValidUntil(paymasterAndData []byte) (time.Time, bool) {
 	if len(paymasterAndData) < 20+64 {
 		return time.Time{}, false
 	}
-	word := new(big.Int).SetBytes(paymasterAndData[20:52])
-	if !word.IsUint64() || word.Uint64() == 0 || word.Uint64() > 1<<40 {
+	until := new(big.Int).SetBytes(paymasterAndData[20:52])
+	after := new(big.Int).SetBytes(paymasterAndData[52:84])
+	if !until.IsUint64() || !after.IsUint64() || until.Uint64() == 0 || until.Uint64() > 1<<48 {
 		return time.Time{}, false
 	}
-	return time.Unix(int64(word.Uint64()), 0), true
+	if after.Uint64() >= until.Uint64() || until.Uint64()-after.Uint64() > uint64(validWindowCeiling/time.Second) {
+		return time.Time{}, false
+	}
+	return time.Unix(int64(until.Uint64()), 0), true
 }
+
+// validWindowCeiling is the longest paymaster window ValidUntil believes. The
+// paymaster signs seven days; anything far longer is a misread.
+const validWindowCeiling = 30 * 24 * time.Hour
 
 // TransfersInReceipt is every token transfer out of sender in one transaction,
 // read from its receipt. Found is false when the node has no receipt for it.

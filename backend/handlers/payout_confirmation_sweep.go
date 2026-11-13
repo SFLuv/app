@@ -113,9 +113,21 @@ func (a *AppService) resolveUnconfirmedPayout(ctx context.Context, row *structs.
 		return a.settleConfirmedPayout(ctx, row, search.TxHash)
 	}
 	// No operation was written down for this row, so nothing can be asked
-	// about it directly. It is concluded lost only once the paymaster's window
-	// has closed for any operation its last attempt could have made: until
-	// then one may still be waiting in the engine's queue and land.
+	// about it directly. It is concluded lost only when all of these hold:
+	//   - the paymaster's window has closed for any operation its last attempt
+	//     could have made, so none can still be waiting in the engine's queue;
+	//   - no transfer of this amount to this recipient exists anywhere in the
+	//     range, claimed by anyone. One that another payout holds could be
+	//     this payout's, credited to the wrong row; that is left to a person;
+	//   - it was not the old key's send, which carries no expiry at all.
+	if row.OperationSender != "" {
+		return nil
+	}
+	if search.Matching > 0 {
+		a.logger.Logf("payout confirmation sweep: payout %d (%s %s) has %d matching transfer(s) held by other payouts; left for an admin",
+			row.ID, row.Source, row.SourceRef, search.Matching)
+		return nil
+	}
 	if time.Since(lastPayoutAttempt(row)) >= faucetSponsorshipWindow+faucetSponsorshipMargin {
 		return a.concludePayoutNotSent(ctx, row, search.describeSearch(row.CreatedAt))
 	}
@@ -217,7 +229,7 @@ func (a *AppService) settleConfirmedPayout(ctx context.Context, row *structs.Pay
 // concludePayoutNotSent turns a row that provably never landed into an ordinary
 // not-sent failure and puts what it paid for back in line to be paid.
 func (a *AppService) concludePayoutNotSent(ctx context.Context, row *structs.PayoutLedgerRow, reason string) error {
-	concluded, err := a.db.ConcludePayoutNotSent(ctx, row.ID, reason)
+	concluded, err := a.db.ConcludePayoutNotSent(ctx, row.ID, row.OperationHash, row.OperationSender, reason)
 	if err != nil || !concluded {
 		return err
 	}
