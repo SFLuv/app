@@ -475,6 +475,17 @@ type WorkflowProposalExpiryNotice struct {
 	ProposerEmail  string `json:"proposer_email"`
 }
 
+// WorkflowUnclaimedExpiryNotice describes an approved one-time workflow that
+// expired because nobody claimed any of its steps in time.
+type WorkflowUnclaimedExpiryNotice struct {
+	WorkflowId     string `json:"workflow_id"`
+	WorkflowTitle  string `json:"workflow_title"`
+	ProposerUserId string `json:"proposer_user_id"`
+	ProposerEmail  string `json:"proposer_email"`
+	StartAt        int64  `json:"start_at"`
+	ReleasedBounty uint64 `json:"released_bounty"`
+}
+
 type WorkflowProposalOutcomeNotification struct {
 	WorkflowId     string `json:"workflow_id"`
 	WorkflowTitle  string `json:"workflow_title"`

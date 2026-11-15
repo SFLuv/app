@@ -87,6 +87,7 @@ func (s *WorkflowMaintenanceScheduler) RunOnce(ctx context.Context) {
 	s.reconcileUnsettledPayouts(ctx)
 	s.finalizeSettledWorkflows(ctx)
 	s.finalizeElapsedPartialWorkflows(ctx)
+	s.expireUnclaimedWorkflows(ctx)
 	s.pruneResolvedNotificationReads(ctx)
 	s.runVolunteerMaintenance(ctx)
 	s.runTaxMaintenance(ctx)
