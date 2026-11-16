@@ -31,9 +31,11 @@ import (
 
 // BatcherCodeHash is the runtime code hash of SFLuvBatcher built for the Celo
 // SFLUV token with the contracts repo's batcher profile (solc 0.8.28, EVM
-// cancun, optimizer off). Nothing else is approved or batched through: an
-// unlimited allowance to the wrong contract would let it drain the faucet.
-var BatcherCodeHash = common.HexToHash("0x744ebebb726abddb041df9e34f329a33d174d5d257b1a12ad0250b7518b855e0")
+// cancun, optimizer off, remappings from remappings.txt only), from a clean
+// build. Checked against a fresh clone of the contracts repo. Nothing else is
+// approved or batched through: an unlimited allowance to the wrong contract
+// would let it drain the faucet.
+var BatcherCodeHash = common.HexToHash("0x6bb04297721b59d7a65386999718f39edb4df5408d7b11a6bb0067d21c28fd51")
 
 const batcherABI = `[
 	{"type":"function","name":"batchTransfer","stateMutability":"nonpayable",
