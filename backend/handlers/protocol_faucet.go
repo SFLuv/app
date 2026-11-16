@@ -25,11 +25,12 @@ import (
 // several seconds to settle. Done one at a time that is minutes of queue, and
 // the callers at the back time out.
 //
-// Two things fix it together. Queued payouts are batched — everything waiting
-// while an operation settles goes out as a single operation carrying many
-// transfers, so thirty redemptions are two operations rather than thirty. And
-// waiting is on a channel rather than a mutex, so a caller that gives up gets
-// an answer that says whether its money was ever sent.
+// Two things fix it together. Payouts go to the engine in waves, up to ten at
+// once, each its own operation, which the engine carries together in one
+// transaction; the next wave goes as soon as the engine has taken this one, so
+// thirty redemptions are three quick waves rather than thirty sends one after
+// another. And waiting is on a channel rather than a mutex, so a caller that
+// gives up gets an answer that says whether its money was ever sent.
 //
 // That last distinction is the one with a cost attached. A payout abandoned
 // before submission must release its redemption code, or the volunteer is never
@@ -44,8 +45,7 @@ const (
 	// faucetBatcherReady says so, checked again before every batch: the
 	// batcher is configured and is exactly the audited contract, the
 	// paymaster would sponsor a call to it, and the Safe's allowance covers
-	// the batch. Otherwise each payout goes out on its own, as it has since
-	// 2026-11-08.
+	// the batch. Otherwise each payout goes out as its own operation.
 	//
 	// That date is why the checks are not optional. Batching went in through
 	// Safe's MultiSendCallOnly, which the paymaster had never whitelisted, and
@@ -57,6 +57,19 @@ const (
 	// Twenty-five keeps one operation's gas well inside what a sponsored
 	// operation carries (a 100-recipient batch is about 3M).
 	maxFaucetBatch = 25
+	// How many payouts go to the engine at once. Its single queue worker
+	// carries up to ten operations in a pass (citizenwallet/engine,
+	// internal/queue/queue.go batchSize), so a wave of ten is one handleOps
+	// transaction when nothing else is queued, and never more than one pass of
+	// ours waiting. The engine has no rate limiter; what it does have is a
+	// twelve-second limit on how long it holds a send open, and an operation
+	// still queued when that runs out is sent anyway. Keeping ours to a pass at
+	// a time keeps every send well inside it.
+	faucetWaveSize = 10
+	// How many payouts may be waiting for their transfers at once, across
+	// waves. Each wave polls the read RPC every three seconds while it waits,
+	// so this bounds that load: six waves of ten.
+	maxFaucetInFlight = 60
 	// How long a request may sit unqueued before the caller is told the system
 	// is saturated. Generous, because the alternative for a redemption is a
 	// failure the volunteer sees.
@@ -94,12 +107,11 @@ func (p *ProtocolService) FaucetBatchingReady(ctx context.Context) error {
 	return p.faucetBatcherReady(ctx, safe, big.NewInt(1))
 }
 
-// faucetBatchLimit is how many payouts the dispatcher gathers into one
-// operation: one without a batcher, so a quiet deployment behaves exactly as
-// before.
-func faucetBatchLimit() int {
+// faucetWaveLimit is how many payouts go out together: as many as one engine
+// pass carries, or a full batch when a batcher is configured.
+func faucetWaveLimit() int {
 	if faucetBatcherAddress() == (common.Address{}) {
-		return 1
+		return faucetWaveSize
 	}
 	return maxFaucetBatch
 }
@@ -222,8 +234,8 @@ func (p *ProtocolService) EnsureFaucetBatcherAllowance(ctx context.Context) erro
 //	queued -> cancelled   the caller gave up first. Never sent; its code goes back.
 //	queued -> submitted   the dispatcher took it. Its money may be on its way.
 //
-// A cancelled request is still in the channel, and the dispatcher drops it
-// when it gets there. Without that, a payout whose code had already been
+// A cancelled request is still queued, and the dispatcher drops it when it
+// gets there. Without that, a payout whose code had already been
 // handed back would be paid later anyway, and the volunteer could redeem the
 // same code a second time.
 const (
@@ -259,10 +271,13 @@ type faucetSendResult struct {
 	err    error
 }
 
-// faucetDispatcher owns the queue and the single goroutine that drains it.
+// faucetDispatcher owns the queue and the goroutine that turns it into waves.
 type faucetDispatcher struct {
 	queue chan *faucetSend
-	once  sync.Once
+	// settled hands each wave back to the dispatcher once every payout in it
+	// has been answered, freeing its recipients and its room.
+	settled chan []*faucetSend
+	once    sync.Once
 }
 
 // SendFromFaucet transfers SFLUV out of the faucet Safe and returns the hash of
@@ -325,46 +340,133 @@ func (p *ProtocolService) SendFromFaucet(ctx context.Context, amountBase *big.In
 func (p *ProtocolService) startFaucetDispatcher() {
 	p.faucet.once.Do(func() {
 		p.faucet.queue = make(chan *faucetSend, faucetQueueDepth)
+		// One report per wave, and there are never more waves in flight than
+		// payouts, so this never fills.
+		p.faucet.settled = make(chan []*faucetSend, maxFaucetInFlight)
 		go p.runFaucetDispatcher()
 	})
 }
 
-// runFaucetDispatcher drains the queue, batching whatever is waiting.
+// runFaucetDispatcher turns the queue into waves.
 //
-// One goroutine, so operations are submitted strictly one at a time. That is
-// not a performance compromise but a requirement: the engine assigns the
-// operation's nonce when it sponsors it, so two operations sponsored at the
-// same moment can be handed the same nonce and one of them is rejected. The
-// batching is what buys the throughput instead.
+// A wave is up to faucetWaveLimit payouts, all to different people, submitted
+// at the same moment as separate operations. The engine's one queue worker
+// gathers whatever arrives within a quarter of a second and carries it in one
+// handleOps transaction, ten at a time, so a wave of ten is one of its passes.
+// The next wave goes as soon as the engine has answered every send in this one
+// — when the transactions are broadcast, not when they land — so at most one
+// pass's worth of ours is ever waiting in its queue. Waiting for the transfers
+// to land happens in the background, for up to maxFaucetInFlight payouts.
+//
+// Nobody has two payouts in flight at once. A payout is matched to the Transfer
+// it made by recipient and amount, so two identical payouts in flight together
+// could each claim the other's; a payout to someone already being paid waits
+// until theirs has settled.
+//
+// This used to send one operation at a time, on the belief that two operations
+// sponsored together could be handed the same nonce. They are not:
+// pm_ooSponsorUserOperation gives every operation a nonce key of its own at
+// sequence zero (pkg/common/nonce.go) — 24 random bytes cut to 100 bits, with
+// the second's timestamp ORed into the low ones, which leaves 76 bits that
+// differ between two operations sponsored in the same second. The faucet's
+// operations on chain each carry a different one. The nonce is set at
+// sponsorship and is covered by both the paymaster's signature and the
+// owner's, so nothing after that can change it.
 func (p *ProtocolService) runFaucetDispatcher() {
-	for first := range p.faucet.queue {
-		batch := []*faucetSend{first}
-		// Everything already waiting joins this operation. Non-blocking, so a
-		// quiet faucet sends one transfer immediately rather than waiting to
-		// see whether company arrives.
-		limit := faucetBatchLimit()
-		for len(batch) < limit {
+	var held []*faucetSend              // received, not yet in a wave
+	paying := map[common.Address]bool{} // recipients with a payout in flight
+	inFlight := 0
+
+	receive := func(request *faucetSend) { held = append(held, request) }
+	release := func(settled []*faucetSend) {
+		inFlight -= len(settled)
+		for _, request := range settled {
+			delete(paying, request.to)
+		}
+	}
+
+	for {
+		// Wait for anything that could let a payout go: a new one, or a wave
+		// settling, which frees its recipients and its room.
+		select {
+		case request := <-p.faucet.queue:
+			receive(request)
+		case settled := <-p.faucet.settled:
+			release(settled)
+		}
+	drain:
+		for {
 			select {
-			case next := <-p.faucet.queue:
-				batch = append(batch, next)
+			case request := <-p.faucet.queue:
+				receive(request)
+			case settled := <-p.faucet.settled:
+				release(settled)
 			default:
-			}
-			if len(p.faucet.queue) == 0 {
-				break
+				break drain
 			}
 		}
-		p.dispatchFaucetBatch(batch)
+
+		for inFlight < maxFaucetInFlight {
+			limit := min(faucetWaveLimit(), maxFaucetInFlight-inFlight)
+			wave := make([]*faucetSend, 0, limit)
+			var rest []*faucetSend
+			inWave := map[common.Address]bool{}
+			for _, request := range held {
+				if len(wave) < limit && !paying[request.to] && !inWave[request.to] {
+					wave = append(wave, request)
+					inWave[request.to] = true
+					continue
+				}
+				rest = append(rest, request)
+			}
+			held = rest
+			if len(wave) == 0 {
+				break
+			}
+
+			// Claim each request for this wave. Any the caller has already
+			// given up on are dropped here — their codes were handed back, so
+			// sending them now would pay a reward that can be claimed again.
+			// From a successful take on, the caller can no longer cancel, so
+			// nothing taken is ever released by the caller; only a definite
+			// refusal hands codes back.
+			wave = takeFaucetBatch(wave)
+			if len(wave) == 0 {
+				continue
+			}
+			for _, request := range wave {
+				paying[request.to] = true
+			}
+			inFlight += len(wave)
+			p.dispatchFaucetWave(wave)
+		}
 	}
 }
 
-func (p *ProtocolService) dispatchFaucetBatch(batch []*faucetSend) {
+// faucetSubmission is one operation the engine accepted, and the payouts it
+// carries.
+type faucetSubmission struct {
+	requests    []*faucetSend
+	opHash      string
+	signed      bot.SubmittedOperation
+	submittedAt time.Time
+}
+
+// dispatchFaucetWave submits a wave, every payout in it already taken, and
+// returns once the engine has answered each send. Waiting for the transfers
+// carries on in the background and hands the wave back on p.faucet.settled
+// when it is done; so does every early exit here.
+func (p *ProtocolService) dispatchFaucetWave(wave []*faucetSend) {
+	// Its own budget, independent of any caller's. A caller that has given up
+	// must not abandon a send mid-flight for everybody else in the wave.
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 
 	finish := func(err error) {
-		for _, request := range batch {
+		for _, request := range wave {
 			request.result <- faucetSendResult{err: err}
 		}
+		p.faucet.settled <- wave
 	}
 
 	safe, err := p.SafeFor(ctx, structs.ProtocolAccountFaucet)
@@ -377,49 +479,6 @@ func (p *ProtocolService) dispatchFaucetBatch(batch []*faucetSend) {
 		signerAddress = signer.EOAAddress
 	}
 
-	// Claim each request for this operation. Any the caller has already given
-	// up on are dropped here — their codes were handed back, so sending them
-	// now would pay a reward that can be claimed again. From a successful take
-	// on, the caller can no longer cancel, so nothing taken is ever released by
-	// the caller; only a definite refusal below hands codes back.
-	batch = takeFaucetBatch(batch)
-	if len(batch) == 0 {
-		return
-	}
-
-	// A batch goes through the batcher only if it can take it now — checked
-	// here, before every batch, not trusted from some earlier moment. Anything
-	// short of that and each payout goes out on its own.
-	if len(batch) > 1 {
-		total := new(big.Int)
-		for _, request := range batch {
-			total.Add(total, request.amount)
-		}
-		if err := p.faucetBatcherReady(ctx, safe, total); err != nil {
-			p.logf("protocol faucet: sending %d payouts one at a time: %s", len(batch), err)
-			for _, request := range batch {
-				p.sendFaucetOperation(safe, signerAddress, []*faucetSend{request})
-			}
-			return
-		}
-	}
-	p.sendFaucetOperation(safe, signerAddress, batch)
-}
-
-// sendFaucetOperation sends one operation carrying every payout in batch, all
-// already taken, and answers each one.
-func (p *ProtocolService) sendFaucetOperation(safe common.Address, signerAddress string, batch []*faucetSend) {
-	// Its own budget, independent of any caller's. A caller that has given up
-	// must not abandon an operation mid-flight for everybody else in the batch.
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
-	defer cancel()
-
-	finish := func(err error) {
-		for _, request := range batch {
-			request.result <- faucetSendResult{err: err}
-		}
-	}
-
 	// Noted before submitting. A log search that started lower could match an
 	// identical earlier payout; starting here cannot.
 	fromBlock, err := p.client.BlockNumber(ctx)
@@ -428,85 +487,153 @@ func (p *ProtocolService) sendFaucetOperation(safe common.Address, signerAddress
 		return
 	}
 
-	callData, err := p.faucetBatchCallData(batch)
+	// The operations the wave goes out as: one through the batcher if it can
+	// take the whole wave now — checked here, before every wave, not trusted
+	// from some earlier moment — and otherwise one per payout.
+	var operations [][]*faucetSend
+	if len(wave) > 1 && faucetBatcherAddress() != (common.Address{}) {
+		total := new(big.Int)
+		for _, request := range wave {
+			total.Add(total, request.amount)
+		}
+		if err := p.faucetBatcherReady(ctx, safe, total); err != nil {
+			p.logf("protocol faucet: sending %d payouts as separate operations: %s", len(wave), err)
+		} else {
+			operations = [][]*faucetSend{wave}
+		}
+	}
+	if operations == nil {
+		operations = make([][]*faucetSend, len(wave))
+		for i, request := range wave {
+			operations[i] = []*faucetSend{request}
+		}
+	}
+
+	// All at once, so they reach the engine inside one of its quarter-second
+	// gathers. Sponsoring, signing and submitting are held against rotations
+	// and sweeps, which take the write lock: a swapOwner landing between a
+	// sponsor and its send would leave the operation signed by an address that
+	// is no longer an owner, and it would fail validation for a reason nothing
+	// in the error explains. Only the submitting is held — waiting for the
+	// transfers to land, the slow part, blocks nothing. The signer is read
+	// inside executeRaw, so a wave that queued behind a rotation signs with the
+	// key that rotation installed.
+	submitted := make([]*faucetSubmission, len(operations))
+	var wg sync.WaitGroup
+	p.mu.RLock()
+	for i, requests := range operations {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			submitted[i] = p.submitFaucetOperation(ctx, requests)
+		}()
+	}
+	wg.Wait()
+	p.mu.RUnlock()
+
+	go p.settleFaucetWave(safe, signerAddress, fromBlock, wave, submitted)
+}
+
+// submitFaucetOperation sends one operation carrying every payout in requests.
+// When it is not accepted it answers them itself and returns nil. Called with
+// the read lock held.
+func (p *ProtocolService) submitFaucetOperation(ctx context.Context, requests []*faucetSend) *faucetSubmission {
+	finish := func(err error) *faucetSubmission {
+		for _, request := range requests {
+			request.result <- faucetSendResult{err: err}
+		}
+		return nil
+	}
+
+	callData, err := p.faucetBatchCallData(requests)
 	if err != nil {
-		finish(bot.Releasable(err))
-		return
+		return finish(bot.Releasable(err))
 	}
 
 	// Every payout in the operation writes it down before it goes. If any of
 	// them cannot, nothing is sent: the operation would be one that payout could
 	// never be checked against.
-	var signed bot.SubmittedOperation
-	submittedAt := time.Now()
+	submission := &faucetSubmission{requests: requests, submittedAt: time.Now()}
 	journal := func(op *protocol.UserOperation, hash [32]byte) error {
-		signed = bot.SubmittedOperation{
+		submission.signed = bot.SubmittedOperation{
 			Hash:   common.Hash(hash).Hex(),
 			Sender: op.Sender.Hex(),
 			Nonce:  new(big.Int).Set(op.Nonce),
 		}
 		if validUntil, ok := protocol.ValidUntil(op.PaymasterAndData); ok {
-			signed.ValidUntil = &validUntil
+			submission.signed.ValidUntil = &validUntil
 		}
-		for _, request := range batch {
+		for _, request := range requests {
 			if request.journal == nil {
 				continue
 			}
-			if err := request.journal(signed); err != nil {
-				return fmt.Errorf("could not record operation %s before sending it: %w", signed.Hash, err)
+			if err := request.journal(submission.signed); err != nil {
+				return fmt.Errorf("could not record operation %s before sending it: %w", submission.signed.Hash, err)
 			}
 		}
 		return nil
 	}
 
-	// Sponsoring, signing and submitting are held against rotations and
-	// sweeps, which take the same lock.
-	//
-	// A swapOwner landing between the sponsor and the send would leave this
-	// operation signed by an address that is no longer an owner, and it would
-	// fail validation for a reason nothing in the error explains. The lock is
-	// taken inside the dispatcher rather than around the whole batch so that
-	// waiting for the transfers to land — the slow part — blocks nothing.
-	//
-	// It is also why the signer is read inside executeRaw: a batch that queued
-	// behind a rotation must sign with the key that rotation installed, not the
-	// one that was current when it was queued.
-	p.mu.Lock()
 	opHash, err := p.executeRaw(ctx, structs.ProtocolAccountFaucet, callData, journal)
-	p.mu.Unlock()
 	if err != nil {
 		var uncertain *uncertainSendError
 		if errors.As(err, &uncertain) {
-			// The operation went to the engine and the answer was lost: it may
-			// have been accepted and may still land. Releasing these codes
-			// could pay every reward in the batch twice, so they stay spent,
-			// and the operation hash is logged so an operator can trace it.
+			// The operation went to the engine and the answer was lost, or the
+			// engine answered after queueing it: it may have been accepted and
+			// may still land. Releasing these codes could pay every reward in
+			// it twice, so they stay spent, and the operation hash is logged so
+			// an operator can trace it.
 			p.logf("protocol faucet: operation %s for %d payouts may or may not have been accepted: %s",
-				uncertain.userOpHash, len(batch), uncertain.err)
-			finish(fmt.Errorf("faucet operation %s was submitted but its acceptance is unknown: %w",
+				uncertain.userOpHash, len(requests), uncertain.err)
+			return finish(fmt.Errorf("faucet operation %s was submitted but its acceptance is unknown: %w",
 				uncertain.userOpHash, uncertain.err))
-			return
 		}
 		// Failed before submission, or refused outright by the engine, so
 		// nothing was accepted and the codes can go back.
-		finish(bot.Releasable(fmt.Errorf("faucet operation was not accepted: %w", err)))
+		return finish(bot.Releasable(fmt.Errorf("faucet operation was not accepted: %w", err)))
+	}
+	if len(requests) > 1 {
+		p.logf("protocol faucet: operation %s carries %d payouts", opHash, len(requests))
+	}
+	submission.opHash = opHash
+	return submission
+}
+
+// settleFaucetWave waits for the transfers of every operation in a wave the
+// engine accepted, answers each payout, and then hands the wave back so its
+// recipients can be paid again.
+//
+// One search for the whole wave, under one deadline. Each payout claims its own
+// transfer out of it — keyed on the log index, since a batch is one transaction
+// with a Transfer log per payout — and each operation's transaction is pinned
+// on its own, since the engine may carry the wave in one transaction or split
+// it across passes. Searching payout by payout used to give each its own wait,
+// so an operation that never landed held the queue for minutes.
+func (p *ProtocolService) settleFaucetWave(safe common.Address, signerAddress string, fromBlock uint64, wave []*faucetSend, submitted []*faucetSubmission) {
+	defer func() { p.faucet.settled <- wave }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+
+	type payout struct {
+		request    *faucetSend
+		submission *faucetSubmission
+	}
+	var payouts []payout
+	var expected []protocol.ExpectedTransfer
+	for i, submission := range submitted {
+		if submission == nil {
+			continue // refused, and answered when it was
+		}
+		for _, request := range submission.requests {
+			payouts = append(payouts, payout{request: request, submission: submission})
+			expected = append(expected, protocol.ExpectedTransfer{To: request.to, Amount: request.amount, Operation: i})
+		}
+	}
+	if len(payouts) == 0 {
 		return
 	}
 
-	if len(batch) > 1 {
-		p.logf("protocol faucet: operation %s carries %d payouts", opHash, len(batch))
-	}
-
-	// One search for the whole operation, under one deadline. Each payout
-	// claims its own transfer out of it — a batch lands as one transaction with
-	// one Transfer log per payout, which is why the claim is keyed on the log
-	// index and not just the hash. Searching payout by payout used to give
-	// each its own wait, so an operation that never landed held this queue for
-	// minutes.
-	expected := make([]protocol.ExpectedTransfer, len(batch))
-	for i, request := range batch {
-		expected[i] = protocol.ExpectedTransfer{To: request.to, Amount: request.amount}
-	}
 	hashes, errs := p.client.AwaitTransfers(ctx, p.token, safe, expected, fromBlock,
 		func(i int, candidate string, block uint64, logIndex uint) (bool, error) {
 			return p.db.ClaimProtocolTransaction(ctx, db.ProtocolTransaction{
@@ -516,10 +643,10 @@ func (p *ProtocolService) sendFaucetOperation(safe common.Address, signerAddress
 				AccountKey:    structs.ProtocolAccountFaucet,
 				SenderAddress: safe.Hex(),
 				SignerAddress: signerAddress,
-				OperationHash: opHash,
+				OperationHash: payouts[i].submission.opHash,
 				Purpose:       db.ProtocolTxPurposePayout,
-				Recipient:     batch[i].to.Hex(),
-				AmountBase:    batch[i].amount,
+				Recipient:     payouts[i].request.to.Hex(),
+				AmountBase:    payouts[i].request.amount,
 				BlockNumber:   block,
 			})
 		})
@@ -529,16 +656,17 @@ func (p *ProtocolService) sendFaucetOperation(safe common.Address, signerAddress
 	// releases the code at once instead of leaving it spent until the sweep
 	// gets there; one that ran with it is paid. One that has not run yet stays
 	// unconfirmed — it may still land, and the sweep follows it.
-	journaled := JournaledOperation{
-		Hash: signed.Hash, Sender: signed.Sender, Nonce: signed.Nonce,
-		ValidUntil: signed.ValidUntil, Since: submittedAt,
-	}
-	for i, request := range batch {
+	for i, payout := range payouts {
+		request, submission := payout.request, payout.submission
 		if errs[i] == nil {
 			request.result <- faucetSendResult{txHash: hashes[i]}
 			continue
 		}
-		if signed.Hash != "" {
+		if signed := submission.signed; signed.Hash != "" {
+			journaled := JournaledOperation{
+				Hash: signed.Hash, Sender: signed.Sender, Nonce: signed.Nonce,
+				ValidUntil: signed.ValidUntil, Since: submission.submittedAt,
+			}
 			search, err := p.FindFaucetOperation(ctx, journaled, request.to, request.amount)
 			switch {
 			case err != nil:
@@ -553,7 +681,7 @@ func (p *ProtocolService) sendFaucetOperation(safe common.Address, signerAddress
 			}
 		}
 		request.result <- faucetSendResult{err: fmt.Errorf(
-			"faucet operation %s was submitted but this payout's transfer was not observed: %w", opHash, errs[i])}
+			"faucet operation %s was submitted but this payout's transfer was not observed: %w", submission.opHash, errs[i])}
 	}
 }
 

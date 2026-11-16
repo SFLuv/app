@@ -50,14 +50,18 @@ func (c *Client) BlockNumber(ctx context.Context) (uint64, error) {
 type ExpectedTransfer struct {
 	To     common.Address
 	Amount *big.Int
+	// Operation says which operation made it, when one search covers several.
+	// Transfers with the same value came from one operation and land in one
+	// transaction together; the zero value puts them all in one.
+	Operation int
 }
 
 // BatchClaim is TransferClaim for the i-th payout of a batch.
 type BatchClaim func(i int, txHash string, blockNumber uint64, logIndex uint) (bool, error)
 
-// AwaitTransfers waits for every transfer one operation was supposed to make,
-// under one shared deadline, and returns each payout's transaction hash or the
-// reason it was not found.
+// AwaitTransfers waits for every transfer one or more operations were supposed
+// to make, under one shared deadline, and returns each payout's transaction
+// hash or the reason it was not found.
 //
 // One search for the whole batch, not one per payout. Waiting payout by payout
 // gave each its own 90 seconds, so an operation that never landed held the
@@ -66,9 +70,12 @@ type BatchClaim func(i int, txHash string, blockNumber uint64, logIndex uint) (b
 //
 // An operation is one transaction, and a batch through SFLuvBatcher is
 // all-or-nothing: either every transfer in it happened, in that transaction, or
-// none did. So the moment any payout of the batch is found, the operation's
-// transaction is known, and a payout whose transfer is not in that transaction
-// never will be. Those fail at once rather than waiting out the deadline.
+// none did. So the moment any payout of an operation is found, that
+// operation's transaction is known, and a payout of it whose transfer is not
+// in that transaction never will be. Those fail at once rather than waiting out
+// the deadline. Separate operations searched together (ExpectedTransfer's
+// Operation) are pinned separately: the engine may carry them in one
+// transaction or in several.
 func (c *Client) AwaitTransfers(
 	ctx context.Context,
 	token, from common.Address,
@@ -111,11 +118,11 @@ func (c *Client) AwaitTransfers(
 		}
 	}()
 
-	opTx := ""
+	opTx := map[int]string{}
 	var lastRPCErr error
 	deadline := time.Now().Add(transferWaitTimeout)
 	for {
-		pending, rpcErr, err := c.pollTransfers(ctx, &client, &query, fromBlock, expected, hashes, errs, &opTx, claim)
+		pending, rpcErr, err := c.pollTransfers(ctx, &client, &query, fromBlock, expected, hashes, errs, opTx, claim)
 		if err != nil {
 			return fail(err)
 		}
@@ -156,7 +163,7 @@ func (c *Client) pollTransfers(
 	expected []ExpectedTransfer,
 	hashes []string,
 	errs []error,
-	opTx *string,
+	opTx map[int]string,
 	claim BatchClaim,
 ) (pending int, rpcErr error, err error) {
 	if *client == nil {
@@ -199,14 +206,15 @@ func (c *Client) pollTransfers(
 // reports how many remain. Separate from the polling so the matching can be
 // checked without a chain.
 //
-// A payout may only take a transfer from the operation's own transaction once
+// A payout may only take a transfer from its operation's own transaction once
 // that is known, and once it is known, a payout with nothing in it fails.
+// opTx holds each operation's transaction as it is found.
 func claimBatch(
 	logs []types.Log,
 	expected []ExpectedTransfer,
 	hashes []string,
 	errs []error,
-	opTx *string,
+	opTx map[int]string,
 	claim BatchClaim,
 ) (int, error) {
 	for i, want := range expected {
@@ -217,7 +225,7 @@ func claimBatch(
 			continue
 		}
 		for _, candidate := range matchingTransfersTo(logs, want.To, want.Amount) {
-			if *opTx != "" && candidate.hash != *opTx {
+			if known := opTx[want.Operation]; known != "" && candidate.hash != known {
 				continue
 			}
 			claimed := true
@@ -229,8 +237,8 @@ func claimBatch(
 			}
 			if claimed {
 				hashes[i] = candidate.hash
-				if *opTx == "" {
-					*opTx = candidate.hash
+				if opTx[want.Operation] == "" {
+					opTx[want.Operation] = candidate.hash
 				}
 				break
 			}
@@ -242,10 +250,10 @@ func claimBatch(
 		if hashes[i] != "" || errs[i] != nil {
 			continue
 		}
-		if *opTx != "" {
+		if known := opTx[expected[i].Operation]; known != "" {
 			// The operation landed and this payout is not in it. All-or-nothing
 			// means it never will be.
-			errs[i] = fmt.Errorf("operation landed in %s but this payout's transfer is not in it", *opTx)
+			errs[i] = fmt.Errorf("operation landed in %s but this payout's transfer is not in it", known)
 			continue
 		}
 		pending++

@@ -116,6 +116,9 @@ type RejectedError struct {
 	Method  string
 	Code    int
 	Message string
+	// Reason is the engine's own error text for a JSON-RPC error object, and
+	// empty for an HTTP status.
+	Reason string
 }
 
 func (e *RejectedError) Error() string { return e.Message }
@@ -171,6 +174,7 @@ func (c *Client) rpc(ctx context.Context, url, method string, params []any, out 
 			Method:  method,
 			Code:    parsed.Error.Code,
 			Message: fmt.Sprintf("%s failed: %s (code %d)", method, parsed.Error.Message, parsed.Error.Code),
+			Reason:  parsed.Error.Message,
 		}
 	}
 	if out == nil {
@@ -261,9 +265,52 @@ func (c *Client) Send(ctx context.Context, op *UserOperation, extra map[string]a
 	}
 	var hash string
 	if err := c.rpc(ctx, c.engineRPC, "eth_sendUserOperation", params, &hash); err != nil {
+		var rejected *RejectedError
+		if errors.As(err, &rejected) && rejected.Reason != "" && !engineRefusedBeforeQueueing(rejected.Reason) {
+			// Not a refusal: the engine had already queued the operation when
+			// it answered with this, and it may still land. Returned as a plain
+			// error so no caller takes it for "nothing was sent".
+			return "", fmt.Errorf("the engine answered %q after queueing the operation, so it may still land: %s",
+				rejected.Reason, rejected.Message)
+		}
 		return "", err
 	}
 	return hash, nil
+}
+
+// What the engine says when it turns an operation away before queueing it.
+//
+// eth_sendUserOperation (citizenwallet/engine, internal/userop/handlers.go)
+// checks the operation, stores it, queues it, and then holds the request open
+// until its single queue worker has sent the transaction, for at most twelve
+// seconds. An error raised before the operation is queued means nothing was
+// sent. An error after it does not: "request timeout" is the twelve seconds
+// running out while the operation is still in the queue, and the worker sends
+// it anyway. So only the errors below are refusals, matched exactly, and
+// anything else the engine says to a send — including text this list has never
+// seen — is treated as "may have been accepted". Getting that wrong one way
+// leaves a payout unconfirmed until the sweep resolves it; the other way hands
+// a redemption code back while its money is still on the way.
+var engineQueueRefusals = map[string]bool{
+	"paymaster contract not deployed":      true,
+	"invalid user operation":               true,
+	"error marshalling user operation":     true,
+	"error unmarshalling user operation":   true,
+	"invalid entry point address":          true,
+	"error missing entry point address":    true,
+	"error unmarshalling validity":         true,
+	"paymaster signature has expired":      true,
+	"paymaster signature is not valid yet": true,
+	"error recovering public key":          true,
+	"error getting sponsor key":            true,
+	"error converting private key":         true,
+	"paymaster signature does not match":   true,
+}
+
+func engineRefusedBeforeQueueing(reason string) bool {
+	reason = strings.TrimSpace(reason)
+	// The store failing means the operation was never queued.
+	return engineQueueRefusals[reason] || strings.HasPrefix(reason, "error persisting user operation")
 }
 
 // Execute is the whole flow for one call made by one Safe: build, sponsor,
