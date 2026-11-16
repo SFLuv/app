@@ -54,7 +54,13 @@ type ProtocolService struct {
 	// its Safe. Set at wiring; nil means nothing to do.
 	afterPanelStep func(step string)
 
-	mu sync.Mutex
+	// mu keeps payouts apart from anything that changes the Safes they are
+	// signed against: key rotations, the legacy sweep, the recovery owner, the
+	// batcher approval. Those take the write lock. Payouts take the read lock,
+	// so a wave of them can be sponsored and submitted at the same time — the
+	// engine gives every operation a random nonce key of its own, so they
+	// cannot collide with each other.
+	mu sync.RWMutex
 }
 
 // Panel steps passed to the afterPanelStep hook.

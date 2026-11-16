@@ -11,6 +11,7 @@ import (
 	"image/png"
 	"net/http"
 	"net/mail"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -530,4 +531,203 @@ func cleanSiteFilename(name string) string {
 		name = string(runes[len(runes)-120:])
 	}
 	return name
+}
+
+// ── Resources page ───────────────────────────────────────────────────────────
+
+const (
+	maxResourceHowTo    = 30
+	maxResourceBooks    = 30
+	maxResourcePodcasts = 20
+	maxResourceLinks    = 40
+)
+
+var youTubeIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{11}$`)
+
+// youTubeVideoID reads the video id out of a YouTube link in the forms people
+// paste — watch?v=, youtu.be/, /embed/, /shorts/, /live/ — or a bare id. Only
+// YouTube's own hosts: the site builds the embed from the id, so nothing an
+// editor types ends up as a frame's address.
+func youTubeVideoID(raw string) (string, bool) {
+	raw = strings.TrimSpace(raw)
+	if youTubeIDPattern.MatchString(raw) {
+		return raw, true
+	}
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") {
+		return "", false
+	}
+	host := strings.ToLower(u.Hostname())
+	host = strings.TrimPrefix(host, "www.")
+	host = strings.TrimPrefix(host, "m.")
+	segments := strings.Split(strings.Trim(u.Path, "/"), "/")
+	id := ""
+	switch host {
+	case "youtu.be":
+		id = segments[0]
+	case "youtube.com", "youtube-nocookie.com", "music.youtube.com":
+		switch {
+		case u.Path == "/watch":
+			id = u.Query().Get("v")
+		case len(segments) == 2 && (segments[0] == "embed" || segments[0] == "shorts" || segments[0] == "live" || segments[0] == "v"):
+			id = segments[1]
+		}
+	}
+	if !youTubeIDPattern.MatchString(id) {
+		return "", false
+	}
+	return id, true
+}
+
+func youTubeEmbedURL(id string) string { return "https://www.youtube.com/embed/" + id }
+func youTubeWatchURL(id string) string { return "https://www.youtube.com/watch?v=" + id }
+
+// resourceItemID keeps an editor's id when it is sound and unused, and makes
+// one otherwise.
+func resourceItemID(id string, prefix string, seen map[string]bool) string {
+	id = strings.TrimSpace(id)
+	if id == "" || tooLong(id, 64) || seen[id] {
+		id = prefix + "-" + uuid.NewString()[:8]
+	}
+	seen[id] = true
+	return id
+}
+
+// sanitizeResources normalises and validates the Resources page. An item that
+// is switched off may be unfinished; one that is switched on must be
+// complete, because it is what the public sees.
+func sanitizeResources(res *structs.SiteResources) error {
+	if res.HowTo == nil {
+		res.HowTo = []structs.SiteHowToVideo{}
+	}
+	if res.Books == nil {
+		res.Books = []structs.SiteResourceBook{}
+	}
+	if res.Podcasts == nil {
+		res.Podcasts = []structs.SiteResourcePodcast{}
+	}
+	if res.TechnicalLinks == nil {
+		res.TechnicalLinks = []structs.SiteResourceLink{}
+	}
+	switch {
+	case len(res.HowTo) > maxResourceHowTo:
+		return fmt.Errorf("there can be at most %d how-to videos", maxResourceHowTo)
+	case len(res.Books) > maxResourceBooks:
+		return fmt.Errorf("there can be at most %d books", maxResourceBooks)
+	case len(res.Podcasts) > maxResourcePodcasts:
+		return fmt.Errorf("there can be at most %d podcasts", maxResourcePodcasts)
+	case len(res.TechnicalLinks) > maxResourceLinks:
+		return fmt.Errorf("there can be at most %d technical links", maxResourceLinks)
+	}
+	seen := map[string]bool{}
+
+	for i := range res.HowTo {
+		v := &res.HowTo[i]
+		n := i + 1
+		v.Id = resourceItemID(v.Id, "howto", seen)
+		v.Title = strings.TrimSpace(v.Title)
+		v.Description = strings.TrimSpace(v.Description)
+		v.VideoURL = strings.TrimSpace(v.VideoURL)
+		v.VideoId = ""
+		if tooLong(v.Title, 150) {
+			return fmt.Errorf("how-to video %d: the title must be 150 characters or fewer", n)
+		}
+		if tooLong(v.Description, 1000) {
+			return fmt.Errorf("how-to video %d: the description must be 1000 characters or fewer", n)
+		}
+		if tooLong(v.VideoURL, 500) {
+			return fmt.Errorf("how-to video %d: the YouTube link is too long", n)
+		}
+		if v.VideoURL != "" {
+			id, ok := youTubeVideoID(v.VideoURL)
+			if !ok {
+				return fmt.Errorf("how-to video %d: that is not a YouTube video link; paste the link from the video's Share button", n)
+			}
+			v.VideoId = id
+		}
+		if v.Enabled && (v.Title == "" || v.VideoId == "") {
+			return fmt.Errorf("how-to video %d needs a title and a YouTube link before it can be shown; switch it off to keep it as a draft", n)
+		}
+	}
+
+	for i := range res.Books {
+		b := &res.Books[i]
+		n := i + 1
+		b.Id = resourceItemID(b.Id, "book", seen)
+		b.Title = strings.TrimSpace(b.Title)
+		b.Author = strings.TrimSpace(b.Author)
+		b.Href = strings.TrimSpace(b.Href)
+		b.CoverAlt = strings.TrimSpace(b.CoverAlt)
+		b.CoverPreviewURL = nil
+		if tooLong(b.Title, 200) || tooLong(b.Author, 150) || tooLong(b.CoverAlt, 200) {
+			return fmt.Errorf("book %d: the title, author or cover description is too long", n)
+		}
+		if b.Href != "" && !validSiteLink(b.Href) {
+			return fmt.Errorf("book %d: the link must start with https:// or / (a page on this site)", n)
+		}
+		if b.CoverFileId != nil && strings.TrimSpace(*b.CoverFileId) == "" {
+			b.CoverFileId = nil
+		}
+		if b.CoverFileId != nil {
+			// An uploaded cover replaces one already on the site.
+			b.CoverURL, b.CoverWidth, b.CoverHeight = nil, 0, 0
+		} else if b.CoverURL != nil {
+			trimmed := strings.TrimSpace(*b.CoverURL)
+			if trimmed == "" {
+				b.CoverURL = nil
+			} else if !validSiteLink(trimmed) || strings.HasPrefix(strings.ToLower(trimmed), "mailto:") {
+				return fmt.Errorf("book %d: the cover must be an uploaded picture", n)
+			} else {
+				b.CoverURL = &trimmed
+			}
+		}
+		hasCover := b.CoverFileId != nil || (b.CoverURL != nil && b.CoverWidth > 0 && b.CoverHeight > 0)
+		if b.Enabled && (b.Title == "" || b.Href == "" || !hasCover) {
+			return fmt.Errorf("book %d needs a title, a link and a cover before it can be shown; switch it off to keep it as a draft", n)
+		}
+	}
+
+	for i := range res.Podcasts {
+		p := &res.Podcasts[i]
+		n := i + 1
+		p.Id = resourceItemID(p.Id, "podcast", seen)
+		p.Name = strings.TrimSpace(p.Name)
+		p.Href = strings.TrimSpace(p.Href)
+		p.VideoURL = strings.TrimSpace(p.VideoURL)
+		p.VideoId = ""
+		if tooLong(p.Name, 150) || tooLong(p.VideoURL, 500) {
+			return fmt.Errorf("podcast %d: the name or YouTube link is too long", n)
+		}
+		if p.Href != "" && !validSiteLink(p.Href) {
+			return fmt.Errorf("podcast %d: the link must start with https:// or / (a page on this site)", n)
+		}
+		if p.VideoURL != "" {
+			id, ok := youTubeVideoID(p.VideoURL)
+			if !ok {
+				return fmt.Errorf("podcast %d: that is not a YouTube video link; paste the link from the video's Share button", n)
+			}
+			p.VideoId = id
+		}
+		if p.Enabled && (p.Name == "" || p.Href == "" || p.VideoId == "") {
+			return fmt.Errorf("podcast %d needs a name, a link and a featured YouTube episode before it can be shown; switch it off to keep it as a draft", n)
+		}
+	}
+
+	for i := range res.TechnicalLinks {
+		l := &res.TechnicalLinks[i]
+		n := i + 1
+		l.Id = resourceItemID(l.Id, "link", seen)
+		l.Label = strings.TrimSpace(l.Label)
+		l.Href = strings.TrimSpace(l.Href)
+		if tooLong(l.Label, 150) {
+			return fmt.Errorf("technical link %d: the words must be 150 characters or fewer", n)
+		}
+		if l.Href != "" && !validSiteLink(l.Href) {
+			return fmt.Errorf("technical link %d: the link must start with https:// or / (a page on this site)", n)
+		}
+		if l.Enabled && (l.Label == "" || l.Href == "") {
+			return fmt.Errorf("technical link %d needs words and a link before it can be shown; switch it off to keep it as a draft", n)
+		}
+	}
+	return nil
 }

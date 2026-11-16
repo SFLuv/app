@@ -32,8 +32,9 @@ Credentials, so only improvers can hold them:
 | `website_forms` | create/edit/open/close forms; read signatures |
 | `website_past_events` | past events: tiles, tile photos, galleries |
 | `website_live_events` | live events: cover photos and galleries on upcoming volunteer events |
+| `website_resources` | the Resources page: How to videos, books, podcasts, technical links |
 
-The five per-part credentials have `parent_value = 'website_editor'`, so the
+The six per-part credentials have `parent_value = 'website_editor'`, so the
 grant menu shows them in a submenu under Website editor. `parent_value`
 (migration 1.63) is a general feature of credential types, set from the
 Credential types tab ("List under"); it only groups the menu and never implies
@@ -67,7 +68,8 @@ pattern as partner logos. **Never** holds signatures.
 Allowed types: PDF, PNG, JPEG, WebP, GIF. Max 25 MB.
 
 ### `site_content` + `site_content_versions`
-Small singleton documents edited as a whole. Today: key `spotlight`, the list of slides in the homepage carousel.
+Small singleton documents edited as a whole. Today: key `spotlight`, the list of slides in the homepage carousel,
+and key `resources`, the Resources page (below).
 
 `site_content(key PK, value jsonb, version int, updated_by, updated_at)`
 `site_content_versions(id, key, version, value jsonb, saved_by, saved_at, note)` — append only.
@@ -95,6 +97,28 @@ version's value into a *new* version, so history is never rewritten.
 
 A slide that is switched **on** must be complete (title, photo, button); one that is
 switched off may be a draft. Migration 1.62 seeds the two slides the site shows today.
+
+`resources` value (migration 1.84; each list is in the order visitors see):
+
+```json
+{
+  "how_to":   [ { "id": "…", "enabled": true, "title": "…", "description": "plain text, optional",
+                  "video_url": "the YouTube link as pasted", "video_id": "read from it by the server" } ],
+  "books":    [ { "id": "…", "enabled": true, "title": "…", "author": "…", "href": "https://…",
+                  "cover_file_id": "uuid | null", "cover_url": "/assets/… | null",
+                  "cover_width": 667, "cover_height": 1000, "cover_alt": "…" } ],
+  "podcasts": [ { "id": "…", "enabled": true, "name": "…", "href": "https://…",
+                  "video_url": "…", "video_id": "…" } ],
+  "technical_links": [ { "id": "…", "enabled": true, "label": "…", "href": "https://…" } ]
+}
+```
+
+A YouTube link is accepted in any of the forms people paste (watch?v=, youtu.be/, /embed/,
+/shorts/, /live/, or a bare id), from YouTube's own hosts only. The server stores the id it reads
+and the public route builds `https://www.youtube.com/embed/<id>` itself, so nothing an editor types
+becomes a frame's address. As with slides, an item switched on must be complete. Migration 1.84
+seeds the page the site showed, with Celo in Get Technical in place of Polygon, and adds the
+`website_resources` credential.
 
 ### `financial_documents`
 
@@ -220,6 +244,7 @@ is swept later once nothing refers to it.
 | `POST /site/forms/{slug}/sign` | records a signature (rate-limited, honeypot) |
 | `GET /site/past-events` | tiles, newest first: slug, title, date, cover, photo count |
 | `GET /site/past-events/{slug}` | one gallery: + description and photos; 404 if unknown or removed |
+| `GET /site/resources` | the Resources page's enabled, complete items; embeds and cover URLs resolved |
 
 ### Admin (`withAdmin`, Website editor, or the part's credential)
 
@@ -231,6 +256,10 @@ POST   /admin/site/files                       multipart "file"
 GET    /admin/site/spotlight                  current + versions
 PUT    /admin/site/spotlight                  replaces the whole list
 POST   /admin/site/spotlight/restore          { version }
+
+GET    /admin/site/resources                  current + versions
+PUT    /admin/site/resources                  replaces the whole page, { …, base_version }
+POST   /admin/site/resources/restore          { version }
 
 GET    /admin/site/financials                  includes removed
 POST   /admin/site/financials
@@ -265,7 +294,7 @@ DELETE /admin/site/past-events/{id}/photos/{photoId}
 * The homepage carousel, the financials page and the forms pages fetch from the API with a
   30-second revalidate, so an edit appears within about half a minute.
 * If the API is unreachable, the site falls back: financials to the copy in
-  `src/content/financials.ts`; the carousel to the slides in `src/content/spotlight.ts` if
+  `src/content/financials.ts`; the Resources page to `src/content/resources.ts` (no How to videos); the carousel to the slides in `src/content/spotlight.ts` if
   the backend predates the feature, and to nothing on any other failure; forms to a
   "temporarily unavailable" notice. It never blanks the page.
 * `POST /api/forms/[slug]/sign` on the website proxies to the backend and

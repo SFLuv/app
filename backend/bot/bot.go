@@ -28,6 +28,7 @@ type IBot interface {
 	Send(amount uint64, address string) error
 	SubmitTransfer(amount uint64, address string) (string, error)
 	SubmitTransferBaseUnits(amount *big.Int, address string) (string, error)
+	SubmitTransferBaseUnitsJournaled(amount *big.Int, address string, journal OperationJournal) (string, error)
 	VerifyTransfer(ctx context.Context, txHash string, address string, amount uint64) (*TransferVerificationResult, error)
 	VerifyTransferBaseUnits(ctx context.Context, txHash string, address string, amount *big.Int) (*TransferVerificationResult, error)
 	// VerifyTransferOnChain checks a payout against the chain it was recorded
@@ -140,7 +141,23 @@ func (b *Bot) SetTxSenderResolver(resolver TxSenderResolver) {
 // ledger, the reconciler, the verifier — treats this value as something it can
 // look up as a receipt, and handing back something that is not one would break
 // all three in ways that look like missing payouts.
-type Spender func(ctx context.Context, amountBase *big.Int, to common.Address) (string, error)
+//
+// journal, when not nil, is handed the operation before it is sent.
+type Spender func(ctx context.Context, amountBase *big.Int, to common.Address, journal OperationJournal) (string, error)
+
+// SubmittedOperation is a sponsored operation as it is about to be sent: enough
+// to find it on chain later, whatever happens to the process sending it.
+type SubmittedOperation struct {
+	Hash   string
+	Sender string
+	Nonce  *big.Int
+	// ValidUntil is when the paymaster's signature runs out; nil if unknown.
+	ValidUntil *time.Time
+}
+
+// OperationJournal records an operation before it is sent. An error stops the
+// send — nothing has gone out, so the caller may treat it as not sent.
+type OperationJournal func(SubmittedOperation) error
 
 // BalanceReader reads the faucet's spendable balance from its current home.
 type BalanceReader func(ctx context.Context) (*big.Int, error)
@@ -393,6 +410,13 @@ func (b *Bot) SubmitTransfer(amount uint64, address string) (string, error) {
 // SubmitTransferBaseUnits sends an exact base-unit amount and returns the tx
 // hash. Used by the migration recovery flow to pay precise stored balances.
 func (b *Bot) SubmitTransferBaseUnits(amount *big.Int, address string) (string, error) {
+	return b.SubmitTransferBaseUnitsJournaled(amount, address, nil)
+}
+
+// SubmitTransferBaseUnitsJournaled is SubmitTransferBaseUnits with the operation
+// handed to journal before it is sent. Only the Safe path has an operation to
+// journal; the old key's path signs a plain transaction and never calls it.
+func (b *Bot) SubmitTransferBaseUnitsJournaled(amount *big.Int, address string, journal OperationJournal) (string, error) {
 	routing := b.faucet()
 
 	// The Safe path when the faucet has moved, the key path when it has not,
@@ -407,7 +431,7 @@ func (b *Bot) SubmitTransferBaseUnits(amount *big.Int, address string) (string, 
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 		defer cancel()
-		hash, err := routing.spender(ctx, amount, common.HexToAddress(address))
+		hash, err := routing.spender(ctx, amount, common.HexToAddress(address), journal)
 		if err != nil {
 			// Whether the redemption may be released depends on whether
 			// anything was actually submitted, which only the spender knows.
@@ -425,6 +449,20 @@ func (b *Bot) SubmitTransferBaseUnits(amount *big.Int, address string) (string, 
 		// presumed to be in someone else's hands. Released, because nothing
 		// was sent.
 		return "", newSendError(ErrFaucetSafeNotAttached, true)
+	}
+
+	// The old key signs a plain transaction, which has no operation to write
+	// down. Its sender is recorded all the same, before anything is sent, so a
+	// payout abandoned with nothing journaled at all is known never to have
+	// reached either path's send.
+	if journal != nil {
+		from, err := b.deriveFromAddress()
+		if err != nil {
+			return "", newSendError(err, true)
+		}
+		if err := journal(SubmittedOperation{Sender: from.Hex()}); err != nil {
+			return "", newSendError(err, true)
+		}
 	}
 
 	tx, err := b.submitTransferTxBaseUnits(amount, address)

@@ -5304,6 +5304,13 @@ func (a *AppService) processWorkflowSeriesPayouts(ctx context.Context, triggerWo
 				if escrowed {
 					continue
 				}
+				if errors.Is(transferErr, ErrPayoutInFlight) {
+					// Another attempt is sending this payout, or was abandoned
+					// mid-send. Left alone: that attempt records its outcome, or
+					// the sweep settles it from the chain.
+					a.logger.Logf("workflow %s step %s payout already under way: %s", target.WorkflowId, target.StepId, transferErr)
+					continue
+				}
 				if transferErr != nil && !bot.ShouldRevertRedemption(transferErr) {
 					// Sent, not confirmed. Recorded so the step reads as waiting
 					// rather than broken; no alarm, and no retry would send it.
@@ -5427,6 +5434,11 @@ func (a *AppService) processWorkflowSeriesPayouts(ctx context.Context, triggerWo
 							return
 						}
 					}
+				}
+				if errors.Is(transferErr, ErrPayoutInFlight) {
+					// Already under way, as in the step loop above.
+					a.logger.Logf("workflow %s step %q manager %t payout already under way: %s", target.WorkflowId, target.StepId, target.IsManager, transferErr)
+					continue
 				}
 				if transferErr != nil && !bot.ShouldRevertRedemption(transferErr) {
 					var dbErr error

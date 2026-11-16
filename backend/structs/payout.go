@@ -28,6 +28,16 @@ type PayoutLedgerRow struct {
 	LastError             string     `json:"last_error,omitempty"`
 	CountsTowardThreshold bool       `json:"counts_toward_threshold"`
 	CreatedAt             time.Time  `json:"created_at"`
+	// AttemptStartedAt is when the current attempt to send began.
+	AttemptStartedAt *time.Time `json:"attempt_started_at,omitempty"`
+	// The operation this attempt went out as, written down before it was
+	// sent. Empty for the old key's sends and for rows from before the journal.
+	OperationHash   string `json:"operation_hash,omitempty"`
+	OperationSender string `json:"operation_sender,omitempty"`
+	OperationNonce  string `json:"operation_nonce,omitempty"`
+	// OperationValidUntil is when the paymaster's signature on it runs out.
+	OperationValidUntil *time.Time `json:"operation_valid_until,omitempty"`
+	UpdatedAt           time.Time  `json:"updated_at"`
 }
 
 // W9Filing is one person's tax form state for one year.

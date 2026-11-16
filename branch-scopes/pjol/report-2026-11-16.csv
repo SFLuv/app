@@ -1,0 +1,21 @@
+CONTRACTOR NAME:,PJ O'Leary,,,,,
+SERVICE/TITLE:,,,,,,
+INVOICE DATE:,2026-11-16,,,,,
+SERVICE PERIOD: ,2026-11-09 to 2026-11-16,,,,,
+HOURLY RATE:,,,,,,
+% SFLUV,10.00%,,,,,
+,,,,,,
+DATE,,DESCRIPTION,,HOURS                ( input numbers only),,AMOUNT BILLED
+2026-11-09,,Last week's file closed and #230 merged; the IIW Conference recorded in the right week and last week's report drawn; dev meeting (0.26 measured + 1.00 stated),,1.26,,0.00
+2026-11-10,,"A paid workflow step that read as skipped; step 2 of the Perk Card Coordination claimable again; finished occurrences finalized, not skipped; the Finalized filter includes partial finalizations; 24 stranded workflows repaired; reports moved into pjol/; #232 merged (0.62 measured)",,0.62,,0.00
+2026-11-11,,"Merchant Setup state - stored beside approval, admin controls, and offered on the payment screen only as the nearest merchant; #233 merged; dev instances checked (0.24 measured)",,0.24,,0.00
+2026-11-13,,"QR redemptions settle instead of leaving codes spent when nothing was paid; no payout can be sent twice; the apps wait long enough for a redemption to settle; Ponder's hook route no longer hands out its admin key, and foreign hooks are dropped at every deploy; web workflow photo uploads; our own SFLuvBatcher contract in place of Safe's MultiSend; the Resources page and How to videos edited from the Website tools, with Polygon replaced by Celo (2.20 measured + 0.82 stated)",,3.02,,0.00
+2026-11-16,,"Ponder key rotation and batcher approval questions answered; stray submodules cleared from the contracts repo and the batcher build made reproducible; last week's missing time and dev meeting recorded; weeks set to end at Monday noon Pacific; whether the batcher is needed, re-examined; this report (0.71 measured + 1.05 stated)",,1.76,,0.00
+,,,,,,0.00
+,,,,,,
+ TOTAL: ,,,,6.90,, $ -
+PAYMENT IN SFLUV,,,,,, $ -
+PAYMENT IN USD,,,,,, $ -
+,,,,,,
+METHOD:,,"4.03h measured from PJ's session-transcript and commit timestamps (GitHub merges included) clustered into sittings on a 30-minute gap, across every SFLUV project's transcripts and PJ's commits in app, mobile-app, webpage, contracts and animations. 2.87h stated by the contractor for work the clock did not see. Itemised in branch-scopes/pjol/week-2026-11-09.md, rounds 1-17.",,,,
+WEAKNESSES:,,"Three stated windows have no session behind them: Nov 9's dev meeting, 15:00-16:00; Nov 13's 09:00-09:49, before the first message; and Nov 16's 09:30-10:33, before the first message. On Nov 10 the gap rule counts the 11.7 minutes from 15:01 to PJ merging #232 at 15:12, and nothing records what filled them. The week's first write-ups left out 0.81h that fell between rounds; it was recovered from the same timestamps, not estimated, and is itemised in round 14. Weeks now end at Monday 12:00 noon Pacific; this report is measured to 11:15:55 on Nov 16, when it was drawn.",,,,

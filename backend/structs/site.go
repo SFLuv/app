@@ -15,6 +15,7 @@ const (
 	SiteCapabilityForms      = "website_forms"
 	SiteCapabilityPastEvents = "website_past_events"
 	SiteCapabilityLiveEvents = "website_live_events"
+	SiteCapabilityResources  = "website_resources"
 )
 
 // ── Files ────────────────────────────────────────────────────────────────────
@@ -137,6 +138,127 @@ type SiteSpotlightAdmin struct {
 	Version   int                   `json:"version"`
 	UpdatedAt int64                 `json:"updated_at"`
 	Versions  []*SiteContentVersion `json:"versions"`
+}
+
+// ── Resources page ───────────────────────────────────────────────────────────
+//
+// The whole Resources page as one document, edited and versioned as a whole
+// like the banner: its How to videos, reading list, podcasts and technical
+// links. Each item can be switched off without being deleted.
+
+// SiteResources is the Resources page as stored.
+type SiteResources struct {
+	HowTo          []SiteHowToVideo      `json:"how_to"`
+	Books          []SiteResourceBook    `json:"books"`
+	Podcasts       []SiteResourcePodcast `json:"podcasts"`
+	TechnicalLinks []SiteResourceLink    `json:"technical_links"`
+}
+
+// SiteHowToVideo is one video in the How to section.
+type SiteHowToVideo struct {
+	Id          string `json:"id"`
+	Enabled     bool   `json:"enabled"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	// VideoURL is the YouTube link as the editor pasted it. VideoId is read out
+	// of it on every save, so it is never taken from the client.
+	VideoURL string `json:"video_url"`
+	VideoId  string `json:"video_id"`
+}
+
+// SiteResourceBook is one book in the reading list. Its cover is an uploaded
+// image (CoverFileId) or one already on the site (CoverURL, with its size).
+type SiteResourceBook struct {
+	Id          string  `json:"id"`
+	Enabled     bool    `json:"enabled"`
+	Title       string  `json:"title"`
+	Author      string  `json:"author"`
+	Href        string  `json:"href"`
+	CoverFileId *string `json:"cover_file_id"`
+	CoverURL    *string `json:"cover_url"`
+	CoverWidth  int     `json:"cover_width"`
+	CoverHeight int     `json:"cover_height"`
+	CoverAlt    string  `json:"cover_alt"`
+	// For the editor only: never stored.
+	CoverPreviewURL *string `json:"cover_preview_url"`
+}
+
+// SiteResourcePodcast is one podcast, with a featured episode on YouTube.
+type SiteResourcePodcast struct {
+	Id       string `json:"id"`
+	Enabled  bool   `json:"enabled"`
+	Name     string `json:"name"`
+	Href     string `json:"href"`
+	VideoURL string `json:"video_url"`
+	VideoId  string `json:"video_id"`
+}
+
+// SiteResourceLink is one entry in Get Technical.
+type SiteResourceLink struct {
+	Id      string `json:"id"`
+	Enabled bool   `json:"enabled"`
+	Label   string `json:"label"`
+	Href    string `json:"href"`
+}
+
+type SiteResourcesSaveRequest struct {
+	SiteResources
+	BaseVersion *int `json:"base_version"`
+}
+
+type SiteResourcesVersion struct {
+	Version   int           `json:"version"`
+	SavedAt   int64         `json:"saved_at"`
+	SavedBy   string        `json:"saved_by"`
+	Note      string        `json:"note"`
+	Value     SiteResources `json:"value"`
+	IsCurrent bool          `json:"is_current"`
+}
+
+type SiteResourcesAdmin struct {
+	Current   SiteResources           `json:"current"`
+	Version   int                     `json:"version"`
+	UpdatedAt int64                   `json:"updated_at"`
+	Versions  []*SiteResourcesVersion `json:"versions"`
+}
+
+// The Resources page as the website gets it: switched-on, complete items only.
+
+type SitePublicVideo struct {
+	Id          string `json:"id"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	VideoId     string `json:"video_id"`
+	EmbedURL    string `json:"embed_url"`
+	WatchURL    string `json:"watch_url"`
+}
+
+type SitePublicBook struct {
+	Id     string          `json:"id"`
+	Title  string          `json:"title"`
+	Author string          `json:"author"`
+	Href   string          `json:"href"`
+	Cover  SitePublicImage `json:"cover"`
+}
+
+type SitePublicPodcast struct {
+	Id       string `json:"id"`
+	Name     string `json:"name"`
+	Href     string `json:"href"`
+	EmbedURL string `json:"embed_url"`
+}
+
+type SitePublicLink struct {
+	Id    string `json:"id"`
+	Label string `json:"label"`
+	Href  string `json:"href"`
+}
+
+type SitePublicResources struct {
+	HowTo          []SitePublicVideo   `json:"how_to"`
+	Books          []SitePublicBook    `json:"books"`
+	Podcasts       []SitePublicPodcast `json:"podcasts"`
+	TechnicalLinks []SitePublicLink    `json:"technical_links"`
 }
 
 // ── Financial documents ──────────────────────────────────────────────────────
@@ -341,6 +463,7 @@ type SiteCapabilities struct {
 	Forms      bool `json:"forms"`
 	PastEvents bool `json:"past_events"`
 	LiveEvents bool `json:"live_events"`
+	Resources  bool `json:"resources"`
 }
 
 // ── Past events (the photo galleries under Volunteers) ───────────────────────

@@ -136,9 +136,11 @@ Mailgun is used for all transactional email. Styled HTML templates are construct
 
 ### Scope Documents
 Work is recorded **by week, not by branch**: one file per person per week, at
-`branch-scopes/<handle>/week-<YYYY-MM-DD>.md`, named for the week's Monday and covering Monday to Sunday,
-Pacific time, across every repo and branch worked that week. Keep it current as the week goes; it must be
-complete before that week's report (`branch-scopes/<handle>/report-<date>.csv`) is drawn from it.
+`branch-scopes/<handle>/week-<YYYY-MM-DD>.md`, named for the Monday it starts on and covering **Monday 12:00
+noon to the next Monday 12:00 noon, Pacific time**, across every repo and branch worked in it. Monday morning
+belongs to the week before, and a sitting across noon on Monday is split at noon. (Weeks ran Monday to Sunday
+until Nov 16, 2026; `week-2026-11-09` is the first to end at noon.) Keep it current as the week goes; it must
+be complete before that week's report (`branch-scopes/<handle>/report-<date>.csv`) is drawn from it.
 `branch-scopes/pjol/week-2026-11-02.md` is the first. Files named for a branch, such as
 `branch-scopes/pjol/volunteer-panel.md`, are the earlier convention and stay as they are.
 

@@ -23,6 +23,24 @@ const isHexAddress = (value: string) => /^0x[a-fA-F0-9]{40}$/.test(value)
 const loginRedirectPendingKey = "faucet_redeem_login_redirect_pending"
 const loginRedirectPendingTimeoutMs = 15000
 
+// How long a redemption is waited for. The backend answers only once the payout
+// has gone out or been given up on, and payouts wait their turn in the faucet's
+// queue: about three minutes at worst. The old 20 seconds gave up long before
+// that and called a perk failed while its code was already spent.
+const redeemRequestTimeoutMs = 5 * 60_000
+
+// Outcomes that are not settled yet. They stay on screen rather than
+// redirecting away, because what they say is what to do next.
+const stillConfirmingState = "Still Confirming"
+const codeBeingRedeemedState = "Code Being Redeemed"
+
+// What the redeeming screen says as the wait goes on.
+const redeemWaitingText = (elapsedSeconds: number): string => {
+  if (elapsedSeconds < 20) return "Requesting your reward from the event faucet."
+  if (elapsedSeconds < 90) return "The faucet is busy, and your reward is in line to be sent. Keep this page open."
+  return "Still sending. This can take a few minutes when the network is busy. Keep this page open, or check your wallet later."
+}
+
 const Page = () => {
   const missingPrimarySmartWalletMessage = "Your default wallet is still initializing. Please wait a few seconds and try again."
   const searchParams = useSearchParams();
@@ -42,6 +60,8 @@ const Page = () => {
   })
   const [webWalletError, setWebWalletError] = useState<string | null>(null)
   const [successRedirectTo, setSuccessRedirectTo] = useState<string | null>(null)
+  const [redeemStartedAt, setRedeemStartedAt] = useState<number | null>(null)
+  const [redeemClock, setRedeemClock] = useState<number>(() => Date.now())
   const directRedeemAttemptedRef = useRef<boolean>(false)
   const webWalletRedeemAttemptedRef = useRef<boolean>(false)
   const webWalletRedeemInFlightRef = useRef<boolean>(false)
@@ -64,7 +84,9 @@ const Page = () => {
     error &&
     error !== "Reward Held" &&
     error !== "Reward Not Sent" &&
-    error !== "Merchant Account"
+    error !== "Merchant Account" &&
+    error !== stillConfirmingState &&
+    error !== codeBeingRedeemedState
   )
   const shouldAutoRedirect = success || isFinalErrorState
   const markLoginRedirectPending = useCallback(() => {
@@ -92,8 +114,9 @@ const Page = () => {
     try {
       setSuccessRedirectTo(overrideReturnTo || null)
       setRedeemAccount(address)
+      setRedeemStartedAt(Date.now())
       const controller = new AbortController()
-      const timeoutId = setTimeout(() => controller.abort(), 20000)
+      const timeoutId = setTimeout(() => controller.abort(), redeemRequestTimeoutMs)
       let res: Response
       try {
         res = await fetch(BACKEND + "/redeem", {
@@ -150,6 +173,14 @@ const Page = () => {
         case "user redeemed":
           setError("User already redeemed for this event.")
           break;
+        // Sent, and still confirming when the backend stopped waiting.
+        case "payout pending":
+          setError(stillConfirmingState)
+          break;
+        // Somebody's payout for this code is still settling.
+        case "code pending":
+          setError(codeBeingRedeemedState)
+          break;
         default:
           setError("Error redeeming code.")
         }
@@ -157,12 +188,10 @@ const Page = () => {
       }
 
       setSuccess(true)
-    } catch (err) {
-      if (err instanceof Error && err.name === "AbortError") {
-        setError("Redeem request timed out. Please try again.")
-        return
-      }
-      setError("Internal server error.")
+    } catch {
+      // Timed out or lost the connection. The request may have reached the
+      // backend and spent the code, so this is not a failure to retry blindly.
+      setError(stillConfirmingState)
       return
     }
 
@@ -400,6 +429,14 @@ const Page = () => {
     void redeemWithWebWallet()
   }, [continueWithWebWalletRequested, isWebWalletSessionReady, redeemWithWebWallet])
 
+  const redeemInFlight = Boolean(redeemStartedAt) && !error && !success
+  useEffect(() => {
+    if (!redeemInFlight) return
+    setRedeemClock(Date.now())
+    const intervalId = setInterval(() => setRedeemClock(Date.now()), 1000)
+    return () => clearInterval(intervalId)
+  }, [redeemInFlight])
+
   useEffect(() => {
     if (!loginRedirectPending) return
     const timeoutId = setTimeout(() => {
@@ -528,9 +565,14 @@ const Page = () => {
           </div>
         </div>
         : !error ?
-        <div className="text-center space-y-6 justify-center items-center">
+        <div className="mx-auto max-w-md px-4 text-center space-y-6 justify-center items-center">
           <h2 className="text-3xl font-bold text-black dark:text-white">Redeeming...</h2>
           <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-[#eb6c6c] m-auto"></div>
+          {redeemStartedAt && (
+            <p className="text-sm text-muted-foreground">
+              {redeemWaitingText(Math.max(0, (redeemClock - redeemStartedAt) / 1000))}
+            </p>
+          )}
         </div>
         : error ?
         <div className="mx-auto w-full max-w-lg px-4 text-center">
@@ -557,6 +599,28 @@ const Page = () => {
               <p>
                 <span className="font-semibold">This QR code has not been used up.</span> Sign in with a
                 personal account and scan it again.
+              </p>
+            </div>
+          )}
+          {error === stillConfirmingState && (
+            <div className="mt-4 space-y-3 text-sm text-muted-foreground">
+              <p>
+                Your reward may still be on its way. Check your wallet in a few minutes.
+              </p>
+              <p>
+                If it hasn&apos;t arrived, scan this code again.{" "}
+                <span className="font-semibold">A code is never paid twice</span>, and one whose reward never went
+                out opens back up.
+              </p>
+            </div>
+          )}
+          {error === codeBeingRedeemedState && (
+            <div className="mt-4 space-y-3 text-sm text-muted-foreground">
+              <p>
+                This code was just redeemed, and its reward is still confirming.
+              </p>
+              <p>
+                If that reward doesn&apos;t go through, the code opens back up. Try again in a few minutes.
               </p>
             </div>
           )}

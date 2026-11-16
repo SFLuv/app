@@ -2857,6 +2857,71 @@ var schemaMigrations = []SchemaMigration{
 			return nil
 		},
 	},
+	{
+		Version:     "1.83",
+		Description: "payouts: write down each operation before it is sent; redemptions: when",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			// The operation a payout went out as, recorded before it is sent.
+			// Until now a payout whose confirmation was lost left nothing to
+			// look up but a recipient and an amount, so whether it could still
+			// land was guessed from timing, and a redemption code behind one
+			// could stay spent for good. With the operation's nonce the chain
+			// answers directly whether it ran and what it sent; with the end of
+			// the paymaster's window, when it can no longer run at all.
+			if _, err := pools.App.Exec(ctx, `
+				ALTER TABLE payout_ledger ADD COLUMN IF NOT EXISTS operation_hash TEXT NOT NULL DEFAULT '';
+				ALTER TABLE payout_ledger ADD COLUMN IF NOT EXISTS operation_sender TEXT NOT NULL DEFAULT '';
+				ALTER TABLE payout_ledger ADD COLUMN IF NOT EXISTS operation_nonce NUMERIC(78,0);
+				ALTER TABLE payout_ledger ADD COLUMN IF NOT EXISTS operation_valid_until TIMESTAMPTZ;
+				CREATE INDEX IF NOT EXISTS payout_ledger_source_ref_all_idx
+					ON payout_ledger (source, source_ref);
+			`); err != nil {
+				return fmt.Errorf("error adding payout_ledger operation columns: %w", err)
+			}
+			// When a code was redeemed. Added without a default and given one
+			// after, so existing rows stay NULL: a redemption from before this
+			// cannot be dated, and an undated one is never handed back.
+			if _, err := pools.Bot.Exec(ctx, `
+				ALTER TABLE redemptions ADD COLUMN IF NOT EXISTS redeemed_at TIMESTAMPTZ;
+				ALTER TABLE redemptions ALTER COLUMN redeemed_at SET DEFAULT NOW();
+			`); err != nil {
+				return fmt.Errorf("error adding redemptions.redeemed_at: %w", err)
+			}
+			return nil
+		},
+	},
+	{
+		Version:     "1.84",
+		Description: "website: the Resources page, and its How to videos, edited from the Website tools",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			// Edits the Resources page only. Listed under Website editor,
+			// which covers it too.
+			if _, err := pools.App.Exec(ctx, `
+				INSERT INTO credential_type_definitions (value, label, visibility, parent_value)
+				VALUES ('website_resources', 'Website editor: resources page', 'private', 'website_editor')
+				ON CONFLICT (value) DO NOTHING;
+			`); err != nil {
+				return fmt.Errorf("error seeding the resources credential: %w", err)
+			}
+
+			// The page as the site showed it, Polygon swapped for Celo, so the
+			// move changes nothing else a visitor sees. Re-running leaves any
+			// edit alone.
+			if _, err := pools.App.Exec(ctx, `
+				WITH seeded AS (
+					INSERT INTO site_content (key, value, version)
+					VALUES ('resources', $1::jsonb, 1)
+					ON CONFLICT (key) DO NOTHING
+					RETURNING key, value, version
+				)
+				INSERT INTO site_content_versions (key, version, value, note)
+				SELECT key, version, value, 'Imported from the existing resources page, with Celo in place of Polygon' FROM seeded;
+			`, siteSeedResources); err != nil {
+				return fmt.Errorf("error seeding the resources page: %w", err)
+			}
+			return nil
+		},
+	},
 }
 
 // migrateW9TINMismatchCount adds the count of failed TIN matches per filing.

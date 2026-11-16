@@ -6,6 +6,72 @@ export interface SiteCapabilities {
   forms: boolean
   past_events: boolean
   live_events: boolean
+  resources: boolean
+}
+
+/** One video in the Resources page's How to section. `video_id` is read from `video_url` by the server. */
+export interface SiteHowToVideo {
+  id: string
+  enabled: boolean
+  title: string
+  description: string
+  video_url: string
+  video_id: string
+}
+
+/** A book in the reading list. Its cover is an upload (`cover_file_id`) or an image already on the site (`cover_url`). */
+export interface SiteResourceBook {
+  id: string
+  enabled: boolean
+  title: string
+  author: string
+  href: string
+  cover_file_id: string | null
+  cover_url: string | null
+  cover_width: number
+  cover_height: number
+  cover_alt: string
+  /** For display only; never saved. */
+  cover_preview_url: string | null
+}
+
+export interface SiteResourcePodcast {
+  id: string
+  enabled: boolean
+  name: string
+  href: string
+  video_url: string
+  video_id: string
+}
+
+export interface SiteResourceLink {
+  id: string
+  enabled: boolean
+  label: string
+  href: string
+}
+
+export interface SiteResources {
+  how_to: SiteHowToVideo[]
+  books: SiteResourceBook[]
+  podcasts: SiteResourcePodcast[]
+  technical_links: SiteResourceLink[]
+}
+
+export interface SiteResourcesVersion {
+  version: number
+  saved_at: number
+  saved_by: string
+  note: string
+  value: SiteResources
+  is_current: boolean
+}
+
+export interface SiteResourcesAdmin {
+  current: SiteResources
+  version: number
+  updated_at: number
+  versions: SiteResourcesVersion[]
 }
 
 /** An uploaded image (`file_id`) or one already hosted by the site (`url` only). */

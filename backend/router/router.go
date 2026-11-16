@@ -904,6 +904,7 @@ func merchantOnboardingGate(check merchantOnboardingChecker) func(http.Handler) 
 // the second is for editors. See docs/features/website-editing-and-forms.md.
 func AddSiteRoutes(r *chi.Mux, s *handlers.AppService) {
 	r.Get("/site/spotlight", s.GetPublicSpotlight)
+	r.Get("/site/resources", s.GetPublicResources)
 	r.Get("/site/financials", s.GetPublicFinancials)
 	r.Get("/site/files/{id}/{filename}", s.GetSiteFile)
 	r.Get("/site/forms", s.GetPublicForms)
@@ -944,6 +945,11 @@ func AddSiteRoutes(r *chi.Mux, s *handlers.AppService) {
 	r.Get("/admin/site/spotlight", withSiteEditor(banner, s.GetAdminSpotlight, s))
 	r.Put("/admin/site/spotlight", withSiteEditor(banner, s.PutAdminSpotlight, s))
 	r.Post("/admin/site/spotlight/restore", withSiteEditor(banner, s.RestoreAdminSpotlight, s))
+
+	resources := structs.SiteCapabilityResources
+	r.Get("/admin/site/resources", withSiteEditor(resources, s.GetAdminResources, s))
+	r.Put("/admin/site/resources", withSiteEditor(resources, s.PutAdminResources, s))
+	r.Post("/admin/site/resources/restore", withSiteEditor(resources, s.RestoreAdminResources, s))
 
 	r.Get("/admin/site/financials", withSiteEditor(financials, s.GetAdminFinancials, s))
 	r.Post("/admin/site/financials", withSiteEditor(financials, s.PostAdminFinancial, s))

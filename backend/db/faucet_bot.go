@@ -886,9 +886,22 @@ func (s *BotDB) GetCodeAmount(ctx context.Context, id string) (uint64, error) {
 }
 
 func (s *BotDB) UndoRedeem(ctx context.Context, id string, account string, chainID int64) error {
+	_, err := s.UndoRedeemIf(ctx, id, account, chainID, nil)
+	return err
+}
+
+// UndoRedeemIf hands a code back only if mayRelease agrees, asked while the
+// code's row is locked.
+//
+// The lock is what makes the answer hold. Redeem takes the same row lock before
+// it can spend the code again, so nothing can redeem it — and start a payout
+// that mayRelease would have had to see — between the question and the
+// release. A nil mayRelease releases unconditionally, as UndoRedeem always has.
+// Released is false when there was nothing to undo or mayRelease said no.
+func (s *BotDB) UndoRedeemIf(ctx context.Context, id string, account string, chainID int64, mayRelease func(context.Context) (bool, error)) (released bool, err error) {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
-		return fmt.Errorf("error creating db tx for redeem undo: %w", err)
+		return false, fmt.Errorf("error creating db tx for redeem undo: %w", err)
 	}
 	defer tx.Rollback(context.Background())
 
@@ -905,12 +918,21 @@ func (s *BotDB) UndoRedeem(ctx context.Context, id string, account string, chain
 	var redeemed bool
 	if err := row.Scan(&redeemed); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return nil
+			return false, nil
 		}
-		return fmt.Errorf("error locking code for redeem undo: %w", err)
+		return false, fmt.Errorf("error locking code for redeem undo: %w", err)
 	}
 	if !redeemed {
-		return nil
+		return false, nil
+	}
+	if mayRelease != nil {
+		ok, err := mayRelease(ctx)
+		if err != nil {
+			return false, err
+		}
+		if !ok {
+			return false, nil
+		}
 	}
 
 	tag, err := tx.Exec(ctx, `
@@ -924,10 +946,10 @@ func (s *BotDB) UndoRedeem(ctx context.Context, id string, account string, chain
 				(chain_id = $3 OR chain_id IS NULL);
 		`, id, account, chainID)
 	if err != nil {
-		return fmt.Errorf("error deleting redemption during undo: %w", err)
+		return false, fmt.Errorf("error deleting redemption during undo: %w", err)
 	}
 	if tag.RowsAffected() != 1 {
-		return fmt.Errorf("no matching redemption found to undo for code %s", id)
+		return false, fmt.Errorf("no matching redemption found to undo for code %s", id)
 	}
 
 	_, err = tx.Exec(ctx, `
@@ -948,14 +970,40 @@ func (s *BotDB) UndoRedeem(ctx context.Context, id string, account string, chain
 			);
 	`, id)
 	if err != nil {
-		return fmt.Errorf("error updating code status during redeem undo: %w", err)
+		return false, fmt.Errorf("error updating code status during redeem undo: %w", err)
 	}
 
 	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("error committing redeem undo: %w", err)
+		return false, fmt.Errorf("error committing redeem undo: %w", err)
 	}
 
-	return nil
+	return true, nil
+}
+
+// CodeRedemption is who holds a spent code and since when. RedeemedAt is nil
+// for a redemption made before it was recorded.
+type CodeRedemption struct {
+	Address    string
+	RedeemedAt *time.Time
+}
+
+// GetCodeRedemption returns the redemption holding a code, or nil if none does.
+func (s *BotDB) GetCodeRedemption(ctx context.Context, code string) (*CodeRedemption, error) {
+	var out CodeRedemption
+	err := s.db.QueryRow(ctx, `
+		SELECT COALESCE(address, ''), redeemed_at
+		FROM redemptions
+		WHERE code = $1
+		ORDER BY id DESC
+		LIMIT 1;
+	`, code).Scan(&out.Address, &out.RedeemedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("error loading the redemption of code %s: %w", code, err)
+	}
+	return &out, nil
 }
 
 func (s *BotDB) AllocatedBalance(ctx context.Context) (uint64, error) {

@@ -140,28 +140,29 @@ func main() {
 	nativeCall, err := protocol.SafeModuleCallData(owner, big.NewInt(1), nil)
 	orDie(err)
 
-	// Two transfers in one operation, through MultiSend. This is the batching
-	// the faucet relies on under load, and it is a delegatecall — the one
-	// operation shape a paymaster is most likely to treat differently.
-	batchFirst, err := protocol.TransferCallData(owner, big.NewInt(1))
-	orDie(err)
-	batchCall, err := protocol.BatchCallData([]protocol.BatchedCall{
-		{To: tokenAddress, Value: big.NewInt(0), Data: batchFirst},
-		{To: tokenAddress, Value: big.NewInt(0), Data: batchFirst},
-	})
-	orDie(err)
-
 	cases := []struct {
 		name     string
 		callData []byte
 	}{
 		{"deploy (inert self-call + initCode)", mustInert(safe)},
 		{"transfer (ERC-20)", transferCall},
-		{"batch of 2 transfers (MultiSend, delegatecall)", batchCall},
 		{"swap-owner (key rotation)", swapCall},
 		{"grant-role (redeemer handover)", grantCall},
 		{"revoke-role", revokeCall},
 		{"native value transfer", nativeCall},
+	}
+
+	// Two transfers in one operation, through SFLuvBatcher: the batching the
+	// faucet relies on under load, and a call to a contract the paymaster must
+	// whitelist. Only when one is configured.
+	if raw := strings.TrimSpace(os.Getenv("FAUCET_BATCHER_ADDRESS")); common.IsHexAddress(raw) {
+		batchCall, err := protocol.BatchTransferCallData(common.HexToAddress(raw),
+			[]common.Address{owner, owner}, []*big.Int{big.NewInt(1), big.NewInt(1)})
+		orDie(err)
+		cases = append(cases, struct {
+			name     string
+			callData []byte
+		}{"batch of 2 transfers (SFLuvBatcher)", batchCall})
 	}
 
 	failures := 0
