@@ -149,15 +149,12 @@ func (a *AppService) CreateSupportRequest(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// The inbox is where the message gets answered, so it goes first. The person
-	// is owed an acknowledgement whatever happens to that, and the chats are told
-	// last so they can say if the inbox never got it.
-	inboxErr := a.sendSupportInboxEmail(request)
-	if inboxErr != nil {
-		a.logger.Logf("support request %s: could not email the support inbox: %s", request.Reference, inboxErr)
-	}
+	// The person is owed an acknowledgement, and the hub decides who on the
+	// team hears about it: the category is the topic.
 	a.sendSupportReceivedEmail(request)
-	a.notifySupportRequest(r.Context(), request, inboxErr != nil)
+	a.postSupportRequestAlert(r.Context(), request, supportRequestAlert{
+		Topic: structs.NotificationTopicForSupportCategory(request.Category),
+	})
 
 	a.logger.Logf("support request %s from %s", request.Reference, request.Email)
 	writeJSON(w, http.StatusCreated, map[string]string{"reference": request.Reference})
@@ -227,9 +224,20 @@ func (a *AppService) sendSupportReceivedEmail(request *structs.SupportRequest) {
 	}
 }
 
-// postSupportRequestAlert puts the request in front of the support set.
-//
-// Only used now when no support chat was told: see notifySupportRequest.
+// supportRequestAlert is what differs between the ways a support request
+// arrives: the topic it is routed by, and anything the alert should add.
+type supportRequestAlert struct {
+	Topic string
+	// Title replaces "Support request: <subject>".
+	Title string
+	// Fields are added after From and Reference.
+	Fields []structs.NotificationField
+	// Informational files it straight to history, for mail that was filtered.
+	Informational bool
+}
+
+// postSupportRequestAlert puts the request in the hub, under the topic its
+// category (or, for mail, its mailbox) is routed by.
 //
 // The message itself goes in the alert's body rather than only in a link,
 // because a support request is usually answerable from reading it, and making
@@ -240,10 +248,7 @@ func (a *AppService) sendSupportReceivedEmail(request *structs.SupportRequest) {
 // version of this needed a server-side redirect and a minted token for the same
 // button, because a chat client will not accept a mailto in a button at all —
 // an endpoint, a token table row and a 302 to do what a URL now does.
-func (a *AppService) postSupportRequestAlert(ctx context.Context, request *structs.SupportRequest) {
-	if a.notifications == nil {
-		return
-	}
+func (a *AppService) postSupportRequestAlert(ctx context.Context, request *structs.SupportRequest, opts supportRequestAlert) {
 
 	// Whether this sender can be messaged in the app, resolved once here rather
 	// than at render time: the alert's payload is written when it is raised, and
@@ -274,20 +279,26 @@ func (a *AppService) postSupportRequestAlert(ctx context.Context, request *struc
 		from = from + " <" + request.Email + ">"
 	}
 
-	if err := a.notifications.Post(ctx, Alert{
-		Set:   structs.NotificationSetSupport,
-		Key:   "support:" + request.Reference,
-		Kind:  structs.InternalKindSupportRequest,
-		Title: "Support request: " + subject,
-		Body:  request.Message,
-		Fields: []structs.NotificationField{
-			{Label: "From", Value: from},
-			{Label: "Reference", Value: request.Reference},
-		},
-		// Narrows delivery to the people who asked for this category, or
-		// everybody if nobody has narrowed anything. Empty for a request whose
-		// category we could not read, which also reaches everybody.
-		SupportCategory: request.Category,
+	title := opts.Title
+	if title == "" {
+		title = "Support request: " + subject
+	}
+	fields := append([]structs.NotificationField{
+		{Label: "From", Value: from},
+		{Label: "Reference", Value: request.Reference},
+	}, opts.Fields...)
+
+	a.notify(ctx, Alert{
+		Topic:  opts.Topic,
+		Key:    "support:" + request.Reference,
+		Kind:   structs.InternalKindSupportRequest,
+		Title:  title,
+		Body:   request.Message,
+		Fields: fields,
+		// A team that takes these by email answers the person by replying.
+		ReplyTo:       request.Email,
+		ChatLine:      supportChatLine(request),
+		Informational: opts.Informational,
 		Payload: map[string]string{
 			"id":        strconv.FormatInt(request.Id, 10),
 			"reference": request.Reference,
@@ -301,9 +312,7 @@ func (a *AppService) postSupportRequestAlert(ctx context.Context, request *struc
 			// "Message" button that opened a thread they cannot read.
 			"chat_user_id": chatUserId,
 		},
-	}); err != nil {
-		a.logger.Logf("support request %s: could not post the alert: %s", request.Reference, err)
-	}
+	})
 }
 
 // ── Admin ────────────────────────────────────────────────────────────────────

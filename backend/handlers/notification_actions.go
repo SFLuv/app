@@ -109,6 +109,17 @@ var notificationActions = map[string][]notificationActionSpec{
 			Run:   runSupportArchiveAction,
 		},
 	},
+	// A notice is something a person has to look at and nothing the platform
+	// can do for them, so its one button records that somebody did. Not
+	// admin-gated: being on the team it was routed to is the job.
+	structs.InternalKindNotice: {
+		{
+			Id:    "handled",
+			Label: "Mark handled",
+			Style: structs.NotificationActionStyleDefault,
+			Run:   runNoticeHandledAction,
+		},
+	},
 }
 
 // actionsForAlert is the button list a particular person should see on a
@@ -125,6 +136,29 @@ func actionsForAlert(alert *db.InternalAlertRow, resolved bool, isAdmin bool) []
 	}
 
 	out := []structs.NotificationActionButton{}
+
+	// Somewhere to go: the page in the admin panel or the app where this is
+	// dealt with.
+	if link := strings.TrimSpace(alert.Payload["url"]); link != "" {
+		out = append(out, structs.NotificationActionButton{
+			Id:    "open",
+			Label: "Open",
+			Style: structs.NotificationActionStylePrimary,
+			URL:   link,
+		})
+	}
+
+	// Somebody to answer: a notice about a person who left an address.
+	if alert.Kind == structs.InternalKindNotice {
+		if email := strings.TrimSpace(alert.Payload["email"]); email != "" {
+			out = append(out, structs.NotificationActionButton{
+				Id:    "respond",
+				Label: "Reply by email",
+				Style: structs.NotificationActionStyleDefault,
+				URL:   supportReplyMailto(alert),
+			})
+		}
+	}
 
 	if alert.Kind == structs.InternalKindSupportRequest {
 		// Chat first when it is available, because it is the faster reply and
@@ -238,6 +272,22 @@ func runRoleDecisionAction(approve bool) func(context.Context, *AppService, noti
 				return "", fmt.Errorf("updating proposer %s: %w", subject, err)
 			}
 
+		case "supervisor":
+			if _, err := a.db.UpdateSupervisor(ctx, &structs.SupervisorUpdateRequest{
+				UserId: subject,
+				Status: &status,
+			}); err != nil {
+				return "", fmt.Errorf("updating supervisor %s: %w", subject, err)
+			}
+
+		case "issuer":
+			if _, err := a.db.UpdateIssuerRequest(ctx, &structs.IssuerUpdateRequest{
+				UserId: subject,
+				Status: &status,
+			}); err != nil {
+				return "", fmt.Errorf("updating issuer %s: %w", subject, err)
+			}
+
 		case "merchant":
 			id, err := strconv.ParseUint(subject, 10, 64)
 			if err != nil {
@@ -286,6 +336,13 @@ func runUptimeAckAction(ctx context.Context, a *AppService, press notificationPr
 		return "", errRetryable("Still down — " + state.Detail + ". The alert stays until it recovers.")
 	}
 	return fmt.Sprintf("Down for %s. Acknowledged by %s.", state.LastOutageFor(), press.Actor), nil
+}
+
+// ── Notices ──────────────────────────────────────────────────────────────────
+
+// runNoticeHandledAction records that somebody dealt with a notice.
+func runNoticeHandledAction(ctx context.Context, a *AppService, press notificationPress) (string, error) {
+	return fmt.Sprintf("Handled by %s", press.Actor), nil
 }
 
 // ── Support requests ─────────────────────────────────────────────────────────

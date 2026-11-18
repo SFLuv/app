@@ -16,7 +16,7 @@ Status: built on branch `sanchezo/website-cms` (this repo) and
 | Publishing | Instant. Every edit is undoable. |
 | Forms authoring | Editor can write/paste waiver text and toggle standard fields. No drag-and-drop builder. |
 | Form lifetime | Manual open/close, plus an optional automatic close date. |
-| Withdrawal | A second form kind (`withdrawal`) in the same section. Each submission emails staff (`SITE_WITHDRAWAL_ALERT_EMAIL`, default admin@sfluv.org; at most 20 alerts an hour) so someone marks the original signature withdrawn. |
+| Withdrawal | A second form kind (`withdrawal`) in the same section. Each submission posts a notification to the hub under "Consent withdrawals" (the first 20 an hour one by one, the rest counted on one standing alert) so someone marks the original signature withdrawn. |
 
 ## Permissions
 

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/SFLuv/app/backend/db"
+	"github.com/SFLuv/app/backend/structs"
 	"github.com/SFLuv/app/backend/utils"
 )
 
@@ -210,15 +211,6 @@ func (a *AppService) onW9TINMismatch(ctx context.Context, userID string, taxYear
 	}()
 }
 
-// w9AlertTo is who hears that somebody needs a person to sort out their W-9:
-// W9_ALERT_EMAIL, or admin@sfluv.org when that is unset.
-func w9AlertTo() string {
-	if to := strings.TrimSpace(os.Getenv("W9_ALERT_EMAIL")); to != "" {
-		return to
-	}
-	return "admin@sfluv.org"
-}
-
 // alertW9SupportNeeded tells staff that somebody's W-9 has failed the IRS check
 // too many times to retry on their own, so a person has to step in.
 //
@@ -226,17 +218,12 @@ func w9AlertTo() string {
 // number: the backend does not have one. The form as submitted is in the
 // TaxBandits console.
 func (a *AppService) alertW9SupportNeeded(ctx context.Context, userID string, taxYear int, failures int) {
-	sender := utils.NewEmailSender()
-	if sender == nil {
-		a.logger.Logf("w9 alert: email is not configured; %s needs support after %d failed TIN matches", userID, failures)
-		return
-	}
 	name := a.w9EmailName(ctx, userID)
 	if name == "" {
 		name = "(no name on file)"
 	}
-	contact := "(no email on file)"
-	if email, err := a.db.GetUserContactEmail(ctx, userID); err == nil && email != nil && strings.TrimSpace(*email) != "" {
+	contact := ""
+	if email, err := a.db.GetUserContactEmail(ctx, userID); err == nil && email != nil {
 		contact = strings.TrimSpace(*email)
 	}
 	earned := "unknown"
@@ -244,24 +231,34 @@ func (a *AppService) alertW9SupportNeeded(ctx context.Context, userID string, ta
 		earned = formatSfluvBase(amount)
 	}
 
-	subject := fmt.Sprintf("W-9 needs help: %s failed the IRS check %d times", name, failures)
-	details := w9EmailParagraphs(
-		fmt.Sprintf("%s's W-9 for %d has failed the IRS TIN match %d times, so the app has stopped letting them retry on their own and asked them to contact us through %s.", name, taxYear, failures, w9SupportPage),
-		"Please reach out, find out what's different between what they're entering and their Social Security card (or the business's EIN letter), then send them a new form from the admin panel's Request a W-9 card.",
-	) + w9EmailList(
-		"Name: "+name,
-		"Email: "+contact,
-		fmt.Sprintf("Earned in %d: %s SFLUV", taxYear, earned),
-		"User id: "+userID,
-	) + w9EmailNote("The form they submitted is in the TaxBandits console. This email deliberately carries no taxpayer number.")
-
-	html := utils.BuildStyledEmail("A W-9 needs a person", subject, details)
-	to := w9AlertTo()
-	if err := sender.SendEmail(to, "SFLuv admin", subject, html, utils.NotificationFromEmail(), "SFLuv"); err != nil {
-		a.logger.Logf("w9 alert to %s about %s failed: %s", to, userID, err)
-		return
+	payload := map[string]string{"user_id": userID}
+	if contact != "" {
+		payload["email"] = contact
+		payload["subject"] = "your W-9"
 	}
-	a.logger.Logf("w9 alert: told %s that %s needs support after %d failed TIN matches", to, userID, failures)
+	if base := strings.TrimRight(strings.TrimSpace(os.Getenv("APP_BASE_URL")), "/"); base != "" {
+		payload["url"] = base + "/admin"
+	}
+	// One live alert per person and year: a third failure refreshes the count
+	// rather than asking again.
+	a.notify(ctx, Alert{
+		Topic: structs.NotificationTopicW9,
+		Key:   fmt.Sprintf("w9_support:%s:%d", userID, taxYear),
+		Kind:  structs.InternalKindNotice,
+		Title: fmt.Sprintf("W-9 needs help: %s failed the IRS check %d times", name, failures),
+		Body: fmt.Sprintf("%s's W-9 for %d has failed the IRS TIN match %d times, so the app has stopped letting them retry on their own and asked them to contact us through %s. Find out what differs from their Social Security card (or the business's EIN letter), then send a new form from the admin panel's Request a W-9 card. The form they submitted is in the TaxBandits console; this carries no taxpayer number.",
+			name, taxYear, failures, w9SupportPage),
+		Fields: []structs.NotificationField{
+			{Label: "Name", Value: name},
+			{Label: "Email", Value: contact},
+			{Label: fmt.Sprintf("Earned in %d", taxYear), Value: earned + " SFLUV"},
+			{Label: "User", Value: userID},
+		},
+		Payload: payload,
+		// The body names a person and their tax trouble, so a team chat gets
+		// only that somebody needs W-9 help.
+		ChatLine: fmt.Sprintf("W-9 needs help: %s, %d failed IRS checks for %d", name, failures, taxYear),
+	})
 }
 
 // emailW9Correction explains a failed TIN match and what to do next.

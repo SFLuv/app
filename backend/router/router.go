@@ -259,8 +259,14 @@ func AddOrganizationRoutes(r *chi.Mux, a *handlers.AppService, s *handlers.BotSe
 	// permissions pair above, and for the same reason: a member may read this
 	// to see what they themselves are signed up for, and only an org admin may
 	// change anyone's.
-	r.Get("/organizations/mine/notification-sets", withActiveAuth(a.GetOrganizationNotificationSettings, a))
-	r.Put("/organizations/mine/notification-sets", withActiveAuth(a.SetOrganizationNotificationSets, a))
+	// The notification hub: teams of house-organization members and the topics
+	// routed to them. Members read; organization admins write.
+	r.Get("/organizations/mine/notification-hub", withActiveAuth(a.GetNotificationHub, a))
+	r.Post("/organizations/mine/notification-teams", withActiveAuth(a.CreateNotificationTeam, a))
+	r.Put("/organizations/mine/notification-teams/{id}", withActiveAuth(a.UpdateNotificationTeam, a))
+	r.Delete("/organizations/mine/notification-teams/{id}", withActiveAuth(a.DeleteNotificationTeam, a))
+	r.Put("/organizations/mine/notification-teams/{id}/members", withActiveAuth(a.SetNotificationTeamMembers, a))
+	r.Put("/organizations/mine/notification-routes", withActiveAuth(a.SetNotificationRoute, a))
 	r.Post("/organizations/join", withActiveAuth(a.JoinOrganization, a))
 
 	// Platform-admin org controls.
@@ -1264,7 +1270,7 @@ func AddNotificationRoutes(r *chi.Mux, a *handlers.AppService) {
 	r.Get("/notifications", withActiveAuth(a.GetNotifications, a))
 	r.Post("/notifications/seen", withActiveAuth(a.MarkNotificationsSeen, a))
 	// Pressing an alert's button. Authorization is layered inside the handler:
-	// being designated for the alert's set is what makes it yours to see, and
+	// having been delivered it through one of your teams makes it yours, and
 	// anything that changes platform state needs the role that endpoint
 	// already requires.
 	r.Post("/notifications/{id}/action", withActiveAuth(a.PressNotificationAction, a))
@@ -1276,6 +1282,9 @@ func AddSupportRoutes(r *chi.Mux, a *handlers.AppService) {
 	// key, which is what the rate limiter buckets on. Unauthenticated by
 	// necessity — the people writing in do not have accounts.
 	r.Post("/support/requests", a.CreateSupportRequest)
+	// Mail to our receiving domain, forwarded by a Mailgun route. Public, and
+	// verified by Mailgun's webhook signature instead.
+	r.Post("/mailgun/inbound", a.ReceiveInboundEmail)
 
 	r.Get("/admin/support-requests", withAdmin(a.ListSupportRequests, a))
 	r.Post("/admin/support-requests/{id}/archive", withAdmin(a.SetSupportRequestArchived, a))

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
@@ -132,10 +133,10 @@ func (a *AppService) AffiliateRequestVolunteerEvent(w http.ResponseWriter, r *ht
 		return
 	}
 
-	// Deliberately after the response is decided: the request has succeeded
-	// whether or not the notification email does, and a failed email must not
-	// turn a saved request into an error.
-	go a.sendVolunteerEventRequestEmail(org.Name, req.Title, int64(req.RewardAmountSfluv)*int64(req.MaxParticipants))
+	// Deliberately after the request is saved: it has succeeded whether or not
+	// the notification does, and a failed notification must not turn a saved
+	// request into an error.
+	a.notifyVolunteerEventRequest(r.Context(), id, org.Name, req.Title, int64(req.RewardAmountSfluv)*int64(req.MaxParticipants), false)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
@@ -252,6 +253,7 @@ func (a *AppService) AdminApproveVolunteerEvent(w http.ResponseWriter, r *http.R
 	}
 
 	go a.sendVolunteerEventDecisionEmail(row.Owner, row.Title, true, "")
+	a.resolveVolunteerEventAlert(r.Context(), "event_request:"+eventId, "Approved in the admin panel")
 
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -298,6 +300,7 @@ func (a *AppService) AdminRejectVolunteerEvent(w http.ResponseWriter, r *http.Re
 	if row != nil {
 		go a.sendVolunteerEventDecisionEmail(row.Owner, row.Title, false, req.Reason)
 	}
+	a.resolveVolunteerEventAlert(r.Context(), "event_request:"+eventId, "Rejected in the admin panel")
 
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -469,24 +472,46 @@ func (a *AppService) writeVolunteerEventCodesCSV(w http.ResponseWriter, r *http.
 	}
 }
 
-func (a *AppService) sendVolunteerEventRequestEmail(orgName string, title string, required int64) {
-	adminEmail := strings.TrimSpace(os.Getenv("AFFILIATE_ADMIN_EMAIL"))
-	sender := utils.NewEmailSender()
-	if adminEmail == "" || sender == nil {
+// notifyVolunteerEventRequest puts an affiliate's event request, or a change
+// to one, in the hub. Keyed by the event, so a second edit while the first is
+// waiting refreshes it rather than asking twice; deciding it in the admin panel
+// retires it.
+func (a *AppService) notifyVolunteerEventRequest(ctx context.Context, eventId string, orgName string, title string, required int64, isEdit bool) {
+	key := "event_request:" + eventId
+	heading := "Volunteer event request: " + title
+	body := fmt.Sprintf("%s has requested a volunteer event. Approving it reserves %d SFLUV from the faucet and generates its QR codes.", orgName, required)
+	if isEdit {
+		key = "event_edit:" + eventId
+		heading = "Volunteer event change: " + title
+		body = fmt.Sprintf("%s has asked to change a volunteer event. It needs %d SFLUV from the faucet as changed.", orgName, required)
+	}
+	payload := map[string]string{"event_id": eventId}
+	if base := strings.TrimRight(strings.TrimSpace(os.Getenv("APP_BASE_URL")), "/"); base != "" {
+		payload["url"] = base + "/admin"
+	}
+	a.notify(ctx, Alert{
+		Topic: structs.NotificationTopicEventRequest,
+		Key:   key,
+		Kind:  structs.InternalKindNotice,
+		Title: heading,
+		Body:  body,
+		Fields: []structs.NotificationField{
+			{Label: "Organization", Value: orgName},
+			{Label: "Event", Value: title},
+			{Label: "Reserves", Value: fmt.Sprintf("%d SFLUV", required)},
+		},
+		Payload: payload,
+	})
+}
+
+// resolveVolunteerEventAlert retires an event request's alert once an admin has
+// decided it.
+func (a *AppService) resolveVolunteerEventAlert(ctx context.Context, key string, outcome string) {
+	if a.notifications == nil {
 		return
 	}
-
-	details := fmt.Sprintf(`
-<p style="font-size:14px; color:#111827;">
-  <strong>%s</strong> has requested a volunteer event: <strong>%s</strong>.
-</p>
-<p style="font-size:14px; color:#111827;">
-  Approving it will reserve <strong>%d SFLUV</strong> from the faucet and generate its QR codes.
-</p>`, utils.EscapeEmailHTML(orgName), utils.EscapeEmailHTML(title), required)
-
-	html := utils.BuildStyledEmail("New volunteer event request", "An affiliate has requested a volunteer event.", details)
-	if err := sender.SendEmail(adminEmail, "Admin", "New volunteer event request", html, utils.NotificationFromEmail(), "SFLuv Volunteering"); err != nil {
-		a.logger.Logf("error sending volunteer event request email: %s", err)
+	if err := a.notifications.Resolve(ctx, key, outcome); err != nil {
+		a.logger.Logf("notifications: could not retire %s: %s", key, err)
 	}
 }
 
@@ -619,7 +644,7 @@ func (a *AppService) AffiliateUpdateVolunteerEvent(w http.ResponseWriter, r *htt
 		return
 	}
 
-	go a.sendVolunteerEventRequestEmail(org.Name, "Edit to "+row.Title, int64(req.RewardAmountSfluv)*int64(req.MaxParticipants))
+	a.notifyVolunteerEventRequest(r.Context(), eventId, org.Name, row.Title, int64(req.RewardAmountSfluv)*int64(req.MaxParticipants), true)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)

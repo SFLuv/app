@@ -11,6 +11,7 @@ import (
 	"github.com/SFLuv/app/backend/db"
 	"github.com/SFLuv/app/backend/logger"
 	"github.com/SFLuv/app/backend/structs"
+	"github.com/SFLuv/app/backend/utils"
 )
 
 // NotificationService posts internal organization alerts and delivers them.
@@ -32,6 +33,11 @@ type NotificationService struct {
 	// can watch what would have been sent.
 	push func(ctx context.Context, userId string, title string, body string, data map[string]string)
 
+	// chat posts one line into a group chat as the support bot, for teams that
+	// asked for their notifications in a chat. Injected for the same reason as
+	// push: the chat plumbing lives on AppService.
+	chat func(ctx context.Context, conversationId int64, line string) error
+
 	// houseMu guards the cached house organization id. The lookup is a query
 	// per alert otherwise, and alerts are posted from a once-a-minute sweep.
 	houseMu sync.Mutex
@@ -52,6 +58,14 @@ func (n *NotificationService) SetPusher(
 		return
 	}
 	n.push = push
+}
+
+// SetChatPoster wires group-chat delivery.
+func (n *NotificationService) SetChatPoster(chat func(ctx context.Context, conversationId int64, line string) error) {
+	if n == nil {
+		return
+	}
+	n.chat = chat
 }
 
 func (n *NotificationService) logf(format string, args ...any) {
@@ -81,12 +95,13 @@ func (n *NotificationService) houseOrganization(ctx context.Context) (int64, err
 	return id, nil
 }
 
-// Alert is one condition to put on the board.
+// Alert is one notification for the hub.
 type Alert struct {
-	// Set is which group of people this is for.
-	Set string
-	// Key is stable for the condition. Two posts with the same key are the
-	// same alert, however far apart.
+	// Topic is what it is about, and decides which teams hear about it. One
+	// of the topics in structs.NotificationTopicCatalog.
+	Topic string
+	// Key is stable for the condition. Two posts with the same key while the
+	// first is live are the same alert, however far apart.
 	Key string
 	// Kind selects the action buttons.
 	Kind  string
@@ -99,23 +114,33 @@ type Alert struct {
 	// Urgent sorts it to the top and is for things that are actively broken
 	// rather than things that need a decision.
 	Urgent bool
-	// SupportCategory narrows who receives this, and is only meaningful for
-	// support requests. Empty means uncategorised, which reaches everybody on
-	// the set — the behaviour before categories existed.
-	SupportCategory string
+	// Informational is for a notification that asks for nothing: a signup, a
+	// signature. It is delivered like any other and goes straight to history,
+	// so it never sits in anybody's active list.
+	Informational bool
+	// ReplyTo is where a reply to the team's email should go: the person who
+	// wrote in, so answering from an inbox reaches them.
+	ReplyTo string
+	// ChatLine replaces the line a team chat is sent, for a caller that knows
+	// better than the generic one what is safe to show to everybody in a chat.
+	ChatLine string
 }
 
-// Post puts an alert on the board and delivers it to the set's subscribers.
+// Post puts a notification in the hub and delivers it to the teams its topic
+// is routed to.
 //
-// Safe to call on a timer with the same alert forever. The first call creates
-// and pushes; later calls refresh the text in place and push nothing, so a
-// condition that has held for a day has buzzed one phone once.
+// Safe to call on a timer with the same alert forever. The first call creates,
+// delivers and pushes; later calls refresh the text in place and only deliver
+// to people who did not have it yet (somebody added to a team since), so a
+// condition that has held for a day has buzzed each phone once. Email and chat
+// go out on the first call only.
 func (n *NotificationService) Post(ctx context.Context, alert Alert) error {
 	if n == nil {
 		return nil
 	}
-	if !structs.IsNotificationSet(alert.Set) {
-		return fmt.Errorf("unknown notification set %q", alert.Set)
+	topic, known := structs.NotificationTopic(alert.Topic)
+	if !known {
+		return fmt.Errorf("unknown notification topic %q", alert.Topic)
 	}
 	if strings.TrimSpace(alert.Key) == "" {
 		return fmt.Errorf("an alert key is required")
@@ -133,51 +158,202 @@ func (n *NotificationService) Post(ctx context.Context, alert Alert) error {
 	}
 
 	id, created, err := n.db.PostInternalAlert(ctx, db.InternalAlert{
-		OrganizationId:  orgId,
-		Set:             alert.Set,
-		AlertKey:        alert.Key,
-		Kind:            alert.Kind,
-		Title:           alert.Title,
-		Body:            alert.Body,
-		Fields:          alert.Fields,
-		Payload:         alert.Payload,
-		Urgent:          alert.Urgent,
-		SupportCategory: alert.SupportCategory,
+		OrganizationId: orgId,
+		Set:            topic.Set,
+		Topic:          topic.Id,
+		AlertKey:       alert.Key,
+		Kind:           alert.Kind,
+		Title:          alert.Title,
+		Body:           alert.Body,
+		Fields:         alert.Fields,
+		Payload:        alert.Payload,
+		Urgent:         alert.Urgent,
 	})
 	if err != nil {
 		return err
 	}
 
-	recipients, err := n.db.DeliverInternalAlert(ctx, id)
+	plan, err := n.db.NotificationDeliveryPlan(ctx, orgId, topic.Id)
+	if err != nil {
+		// Stored, so it is in the hub and in the admin panel's list; nobody
+		// was told. Recorded as such so the list says so.
+		if created {
+			_ = n.db.SetInternalAlertDelivery(ctx, id, structs.NotificationDelivery{
+				ReachedNobody: true, Failures: []string{"routing: " + err.Error()},
+			})
+		}
+		return err
+	}
+
+	recipients, err := n.db.DeliverInternalAlertTo(ctx, id, plan.Members)
 	if err != nil {
 		return err
 	}
-	if len(recipients) == 0 {
-		if created {
-			// Worth a line: an alert with no recipients is indistinguishable
-			// from a working system from the outside, and this is the only
-			// place that difference is visible.
-			n.logf("notifications: %s posted with no recipients — nobody receives the %q set", alert.Key, alert.Set)
-		}
-		return nil
-	}
 
-	// Only a new alert buzzes. A refreshed one has already been delivered to
-	// everybody who was subscribed when it was raised, and DeliverInternalAlert
-	// returns only people who had not received it, so a member added to a set
-	// mid-condition still gets their one push.
-	if n.push != nil {
+	pushed := 0
+	if n.push != nil && len(recipients) > 0 {
 		data := map[string]string{
 			"type":             "internal_" + alert.Kind,
-			"notification_set": alert.Set,
+			"notification_set": topic.Set,
+			"topic":            topic.Id,
 			"alert_key":        alert.Key,
 		}
 		for _, userId := range recipients {
+			if !plan.Push[userId] {
+				continue
+			}
 			n.push(ctx, userId, alert.Title, alert.Body, data)
+			pushed++
+		}
+	}
+
+	if !created {
+		return nil
+	}
+
+	delivery := structs.NotificationDelivery{
+		Teams:      plan.Teams,
+		CatchAll:   plan.CatchAll,
+		Recipients: len(recipients),
+		Pushed:     pushed,
+	}
+	if delivery.Teams == nil {
+		delivery.Teams = []structs.NotificationDeliveryTeam{}
+	}
+	if plan.Empty() {
+		// The failure this whole hub exists to prevent, so it is loud: kept,
+		// listed in the admin panel as reaching nobody, and logged.
+		delivery.ReachedNobody = true
+		n.logf("notifications: %s (%s) reached NOBODY — no team takes %q and there is no catch-all", alert.Key, topic.Label, topic.Id)
+	}
+
+	if len(plan.Emails) > 0 || len(plan.Chats) > 0 {
+		// Email and chat leave the request's path: the person who wrote in is
+		// not kept waiting on Mailgun, and the record is written once they are
+		// done.
+		go n.deliverOutside(context.WithoutCancel(ctx), id, topic, alert, plan, delivery)
+	} else if err := n.db.SetInternalAlertDelivery(ctx, id, delivery); err != nil {
+		n.logf("notifications: %s", err)
+	}
+
+	if alert.Informational {
+		if err := n.db.ResolveInternalAlertInformational(ctx, id); err != nil {
+			n.logf("notifications: could not file %s to history: %s", alert.Key, err)
 		}
 	}
 
 	return nil
+}
+
+// deliverOutside sends a new notification to its teams' addresses and chats,
+// then records where it went.
+func (n *NotificationService) deliverOutside(
+	ctx context.Context, id int64, topic structs.NotificationTopicDefinition, alert Alert,
+	plan *db.NotificationDeliveryPlan, delivery structs.NotificationDelivery,
+) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			n.logf("notifications: recovered while delivering %s: %v", alert.Key, rec)
+		}
+	}()
+
+	if len(plan.Emails) > 0 {
+		sender := utils.NewEmailSender()
+		if sender == nil {
+			delivery.Failures = append(delivery.Failures, "email: no mailer is configured")
+		} else {
+			html := hubEmailHTML(topic, alert, plan.Teams)
+			for _, address := range plan.Emails {
+				if err := sender.SendEmailWithReplyTo(address, "", alert.Title, html,
+					utils.NotificationFromEmail(), "SFLuv notifications", alert.ReplyTo); err != nil {
+					delivery.Failures = append(delivery.Failures, "email to "+address+": "+err.Error())
+					continue
+				}
+				delivery.Emailed = append(delivery.Emailed, address)
+			}
+		}
+	}
+
+	if len(plan.Chats) > 0 {
+		line := alert.ChatLine
+		if strings.TrimSpace(line) == "" {
+			line = hubChatLine(alert)
+		}
+		for _, chat := range plan.Chats {
+			if n.chat == nil {
+				delivery.Failures = append(delivery.Failures, "chat: chat delivery is not wired")
+				break
+			}
+			if err := n.chat(ctx, chat, line); err != nil {
+				delivery.Failures = append(delivery.Failures, fmt.Sprintf("chat %d: %s", chat, err))
+				continue
+			}
+			delivery.Chats = append(delivery.Chats, chat)
+		}
+	}
+
+	if delivery.Recipients == 0 && len(delivery.Emailed) == 0 && len(delivery.Chats) == 0 {
+		delivery.ReachedNobody = true
+		n.logf("notifications: %s (%s) reached NOBODY — every address and chat failed: %s",
+			alert.Key, topic.Label, strings.Join(delivery.Failures, "; "))
+	} else if len(delivery.Failures) > 0 {
+		n.logf("notifications: %s partly delivered: %s", alert.Key, strings.Join(delivery.Failures, "; "))
+	}
+	if err := n.db.SetInternalAlertDelivery(ctx, id, delivery); err != nil {
+		n.logf("notifications: %s", err)
+	}
+}
+
+// hubEmailHTML is the email a team address or member receives.
+func hubEmailHTML(topic structs.NotificationTopicDefinition, alert Alert, teams []structs.NotificationDeliveryTeam) string {
+	var content strings.Builder
+	if body := strings.TrimSpace(alert.Body); body != "" {
+		content.WriteString(`<p style="margin:0 0 18px; font-size:14px; line-height:1.55; color:#111827; white-space:pre-wrap;">`)
+		content.WriteString(utils.EscapeEmailHTML(body))
+		content.WriteString(`</p>`)
+	}
+	if len(alert.Fields) > 0 {
+		content.WriteString(`<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">`)
+		for _, field := range alert.Fields {
+			if strings.TrimSpace(field.Value) == "" {
+				continue
+			}
+			content.WriteString(fmt.Sprintf(`<tr>
+    <td style="padding:10px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#6b7280; width:150px; vertical-align:top;">%s</td>
+    <td style="padding:10px 0; border-bottom:1px solid #e5e7eb; font-size:13px; color:#111827; white-space:pre-wrap; word-break:break-word;">%s</td>
+  </tr>`, utils.EscapeEmailHTML(field.Label), utils.EscapeEmailHTML(field.Value)))
+		}
+		content.WriteString(`</table>`)
+	}
+	if alert.ReplyTo != "" {
+		content.WriteString(`<p style="margin:18px 0 0; font-size:13px; color:#374151;">Reply to this email to answer them.</p>`)
+	}
+
+	names := make([]string, 0, len(teams))
+	for _, team := range teams {
+		names = append(names, team.Name)
+	}
+	footer := "SFLuv notification hub"
+	if len(names) > 0 {
+		footer = "Sent to " + strings.Join(names, ", ") + " · change who gets this on the Organization page"
+	}
+	return utils.BuildStyledEmailWithFooter(alert.Title, topic.Label, content.String(), footer)
+}
+
+// hubChatLine is the generic line a team chat gets: the title, the details on
+// one line, and the start of the body.
+func hubChatLine(alert Alert) string {
+	parts := []string{strings.TrimSpace(alert.Title)}
+	for _, field := range alert.Fields {
+		if value := oneLineText(field.Value); value != "" {
+			parts = append(parts, field.Label+": "+value)
+		}
+	}
+	line := strings.Join(parts, " · ")
+	if body := oneLineText(alert.Body); body != "" {
+		line += "\n" + truncateRunes(body, supportChatPreviewRunes)
+	}
+	return line
 }
 
 // Resolve retracts an alert by key, for a condition that cleared on its own.
@@ -258,12 +434,12 @@ func (n *NotificationService) StartHousekeeping(ctx context.Context) {
 	}()
 }
 
-// LogConfig says who receives what at boot.
+// LogConfig says, at boot, which topics reach nobody.
 //
-// The failure this is here to catch is a silent one: alerts being posted
-// correctly and reaching nobody, which looks exactly like a system with
-// nothing wrong with it. Naming the empty sets at startup is the only place
-// that is visible without going looking.
+// The failure this is here to catch is a silent one: notifications being
+// posted correctly and reaching nobody, which looks exactly like a system with
+// nothing wrong with it. Each one is also marked in the admin panel as it
+// happens; this is the place it is visible without going looking.
 func (n *NotificationService) LogConfig(ctx context.Context, log *logger.LogCloser) {
 	if n == nil || log == nil {
 		return
@@ -271,30 +447,32 @@ func (n *NotificationService) LogConfig(ctx context.Context, log *logger.LogClos
 	orgId, err := n.houseOrganization(ctx)
 	if err != nil {
 		if errors.Is(err, db.ErrNoHouseOrganization) {
-			log.Logf("notifications: no house organization yet — internal alerts will be dropped until one exists")
+			log.Logf("notifications: no house organization yet — notifications will be dropped until one exists")
 			return
 		}
 		log.Logf("notifications: could not resolve the house organization: %s", err)
 		return
 	}
 
-	subscriptions, err := n.db.GetOrganizationNotificationSubscriptions(ctx, orgId)
+	routes, err := n.db.GetNotificationRoutes(ctx, orgId)
 	if err != nil {
-		log.Logf("notifications: could not read subscriptions: %s", err)
+		log.Logf("notifications: could not read routes: %s", err)
 		return
 	}
-
-	counts := map[string]int{}
-	for _, sets := range subscriptions {
-		for _, set := range sets {
-			counts[set]++
+	if len(routes[structs.NotificationTopicUnrouted]) > 0 {
+		log.Logf("notifications: a catch-all team receives every topic without a team of its own")
+		return
+	}
+	unrouted := []string{}
+	for _, topic := range structs.NotificationTopicCatalog() {
+		if len(routes[topic.Id]) == 0 {
+			unrouted = append(unrouted, topic.Id)
 		}
 	}
-	for _, set := range structs.NotificationSetCatalog() {
-		if counts[set.Id] == 0 {
-			log.Logf("notifications: NOBODY receives %q (%s) — these alerts will be posted and seen by no one", set.Id, set.Label)
-			continue
-		}
-		log.Logf("notifications: %q goes to %d member(s)", set.Id, counts[set.Id])
+	if len(unrouted) == 0 {
+		log.Logf("notifications: every topic has a team")
+		return
 	}
+	log.Logf("notifications: NOBODY receives %d topic(s), and there is no catch-all — they will be kept in the hub and seen by no one: %s",
+		len(unrouted), strings.Join(unrouted, ", "))
 }

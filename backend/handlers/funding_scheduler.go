@@ -9,7 +9,6 @@ import (
 	"github.com/SFLuv/app/backend/funding"
 	"github.com/SFLuv/app/backend/logger"
 	"github.com/SFLuv/app/backend/structs"
-	"github.com/SFLuv/app/backend/utils"
 )
 
 // fundingSweepInterval is how often the protocol's accounts are checked.
@@ -138,41 +137,32 @@ func (s *FundingService) RunOnce(ctx context.Context) funding.SweepResult {
 
 // ── Alerting ─────────────────────────────────────────────────────────────────
 
-// fundingNotifier sends the low-faucet email.
+// fundingNotifier tells the hub when the faucet needs a person.
 type fundingNotifier struct {
 	log    *logger.LogCloser
 	alerts *NotificationService
 }
 
-// Notify emails everyone on FUNDING_ALERT_EMAILS, or the site admin when that
-// is unset, so an unconfigured deployment still tells somebody.
+// Notify posts the funding module's low-faucet and draining alerts to the hub,
+// under the same topic as the per-account conditions below. These used to be
+// emailed to FUNDING_ALERT_EMAILS; a team that wants them by email says so in
+// its settings. One live notice per subject: while one is unhandled a repeat
+// updates it rather than buzzing again, and the per-account conditions below
+// keep saying what is low right now.
 func (n *fundingNotifier) Notify(subject string, body string) error {
-	recipients := funding.AlertEmails(siteWithdrawalAlertTo())
-	if len(recipients) == 0 {
-		return fmt.Errorf("no recipients: set %s", funding.EnvAlertEmails)
+	if n.alerts == nil {
+		return fmt.Errorf("the notification hub is not running")
 	}
-
-	sender := utils.NewEmailSender()
-
-	// The body is already plain text with its own alignment; a <pre> keeps the
-	// columns lined up rather than collapsing them into a paragraph.
-	content := `<pre style="font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;` +
-		`white-space:pre-wrap;margin:0;color:#111827;">` +
-		utils.EscapeEmailHTML(body) + `</pre>`
-	html := utils.BuildStyledEmail(subject, "A protocol account needs funding.", content)
-
-	var firstErr error
-	for _, to := range recipients {
-		if err := sender.SendEmail(to, "", subject, html, utils.NotificationFromEmail(), "SFLuv"); err != nil {
-			if firstErr == nil {
-				firstErr = err
-			}
-			if n.log != nil {
-				n.log.Logf("funding: could not email %s: %s", to, err)
-			}
-		}
-	}
-	return firstErr
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return n.alerts.Post(ctx, Alert{
+		Topic:  structs.NotificationTopicFunding,
+		Key:    "funding_notice:" + subject,
+		Kind:   structs.InternalKindNotice,
+		Title:  subject,
+		Body:   body,
+		Urgent: true,
+	})
 }
 
 // Conditions reconciles the dev alert set against what is wrong right now.
@@ -221,7 +211,7 @@ func (n *fundingNotifier) Conditions(ctx context.Context, active []funding.Condi
 		// to the account, and a button that merely dismissed the alert would
 		// make an unsolved problem look handled.
 		if err := n.alerts.Post(ctx, Alert{
-			Set:    structs.NotificationSetDev,
+			Topic:  structs.NotificationTopicFunding,
 			Key:    condition.Key,
 			Kind:   structs.InternalKindFunding,
 			Title:  condition.Title,

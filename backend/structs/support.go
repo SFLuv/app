@@ -54,6 +54,9 @@ const SupportBotName = "SFLuv Support"
 const (
 	SupportSourceWebsite = "website"
 	SupportSourceApp     = "app"
+	// SupportSourceEmail is mail that reached one of our addresses, received
+	// through the Mailgun route.
+	SupportSourceEmail = "email"
 )
 
 // SupportRequestSubmission is the public form's body.

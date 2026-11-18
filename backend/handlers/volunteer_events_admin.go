@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
@@ -755,7 +754,7 @@ func (a *AppService) GenerateRecurringVolunteerEvents(ctx context.Context) {
 			// The occurrence still exists so it stays on the public calendar and
 			// the admin can see what needs funding; only the codes are withheld.
 			a.logger.Logf("recurring volunteer event %s created awaiting funding (needs %d SFLUV)", successorId, required)
-			a.sendVolunteerFundingShortfallEmail(row.Title, required)
+			a.notifyVolunteerFundingShortfall(ctx, successorId, row.Title, required)
 		}
 	}
 
@@ -787,6 +786,7 @@ func (a *AppService) retryUnfundedVolunteerEvents(ctx context.Context) {
 			continue
 		}
 		a.logger.Logf("minted codes for volunteer event %s after faucet top-up", row.Id)
+		a.resolveVolunteerEventAlert(ctx, "event_funding:"+row.Id, "Funded: codes generated after the faucet was topped up")
 	}
 }
 
@@ -806,26 +806,23 @@ func (a *AppService) volunteerFaucetCanCover(ctx context.Context, required int64
 	return unallocated.Int64() >= required
 }
 
-func (a *AppService) sendVolunteerFundingShortfallEmail(title string, required int64) {
-	adminEmail := strings.TrimSpace(os.Getenv("AFFILIATE_ADMIN_EMAIL"))
-	sender := utils.NewEmailSender()
-	if adminEmail == "" || sender == nil {
-		return
-	}
-
-	details := fmt.Sprintf(`
-<p style="font-size:14px; color:#111827;">
-  The next occurrence of <strong>%s</strong> was created, but its QR codes could not be generated:
-  it needs <strong>%d SFLUV</strong> and the faucet does not have that much unallocated.
-</p>
-<p style="font-size:14px; color:#111827;">
-  Top up the faucet and the codes will be generated automatically — no further action needed.
-</p>`, utils.EscapeEmailHTML(title), required)
-
-	html := utils.BuildStyledEmail("Volunteer event needs funding", "A recurring volunteer event could not mint its QR codes.", details)
-	if err := sender.SendEmail(adminEmail, "Admin", "Volunteer event needs funding", html, utils.NotificationFromEmail(), "SFLuv Volunteering"); err != nil {
-		a.logger.Logf("error sending volunteer funding shortfall email: %s", err)
-	}
+// notifyVolunteerFundingShortfall tells the hub that a recurring event's next
+// occurrence could not mint its codes. Retired by the sweep that mints them
+// once the faucet is topped up.
+func (a *AppService) notifyVolunteerFundingShortfall(ctx context.Context, eventId string, title string, required int64) {
+	a.notify(ctx, Alert{
+		Topic: structs.NotificationTopicEventFunding,
+		Key:   "event_funding:" + eventId,
+		Kind:  structs.InternalKindNotice,
+		Title: "Volunteer event needs funding: " + title,
+		Body: fmt.Sprintf("The next occurrence of %s was created, but its QR codes could not be generated: it needs %d SFLUV and the faucet does not have that much unallocated. Top up the faucet and the codes are generated automatically.",
+			title, required),
+		Fields: []structs.NotificationField{
+			{Label: "Event", Value: title},
+			{Label: "Needs", Value: fmt.Sprintf("%d SFLUV", required)},
+		},
+		Urgent: true,
+	})
 }
 
 // applyVolunteerEventEdit validates a proposed edit and applies it.
@@ -974,6 +971,7 @@ func (a *AppService) AdminApproveVolunteerEventEdit(w http.ResponseWriter, r *ht
 		a.logger.Logf("error marking edit request approved for %s: %s", eventId, err)
 	}
 
+	a.resolveVolunteerEventAlert(r.Context(), "event_edit:"+eventId, "Change approved in the admin panel")
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -999,6 +997,7 @@ func (a *AppService) AdminRejectVolunteerEventEdit(w http.ResponseWriter, r *htt
 		return
 	}
 
+	a.resolveVolunteerEventAlert(r.Context(), "event_edit:"+eventId, "Change rejected in the admin panel")
 	w.WriteHeader(http.StatusNoContent)
 }
 
