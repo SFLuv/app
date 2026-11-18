@@ -343,7 +343,10 @@ func (a *AppService) sendW9Email(ctx context.Context, userID string, subject str
 		return to, false, "email is not configured"
 	}
 	html := utils.BuildStyledEmail(subject, subtitle, detailsHTML)
-	if err := sender.SendEmail(to, a.w9EmailName(ctx, userID), subject, html, utils.NotificationFromEmail(), "SFLuv"); err != nil {
+	// Replies go to the support inbox, as the support emails' do: a
+	// reply to a tax-form email is a question about it, and no_reply@
+	// would lose it.
+	if err := sender.SendEmailWithReplyTo(to, a.w9EmailName(ctx, userID), subject, html, utils.NotificationFromEmail(), "SFLuv", utils.SupportInboxEmail()); err != nil {
 		a.logger.Logf("w9 email to %s failed: %s", userID, err)
 		return to, false, "the email could not be sent"
 	}

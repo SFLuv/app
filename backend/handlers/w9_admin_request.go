@@ -187,7 +187,9 @@ func (a *AppService) sendW9RequestEmail(ctx context.Context, userID string, name
 </p>`, greeting, taxYear, utils.EscapeEmailHTML(formURL), utils.EscapeEmailHTML(w9SupportPageURL))
 
 	html := utils.BuildStyledEmail(w9RequestPushTitle, "Your tax form is ready to fill in.", details)
-	if err := sender.SendEmail(to, name, w9RequestPushTitle, html, utils.NotificationFromEmail(), "SFLuv"); err != nil {
+	// Replies go to the support inbox: someone answering a tax-form
+	// email has a question about it, and no_reply@ would lose it.
+	if err := sender.SendEmailWithReplyTo(to, name, w9RequestPushTitle, html, utils.NotificationFromEmail(), "SFLuv", utils.SupportInboxEmail()); err != nil {
 		a.logger.Logf("w9 admin request: email to %s failed: %s", userID, err)
 		return to, false, "the email could not be sent"
 	}
