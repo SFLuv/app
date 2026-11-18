@@ -821,6 +821,30 @@ func (s *BotService) applyV4SAvailability(
 		return
 	}
 
+	// Match on the organization's local date. V4S anchors a recurring shift to
+	// local time, so the same morning shift is an hour apart in UTC either side
+	// of a daylight-saving change and a UTC-date match would miss half the year.
+	loc := time.UTC
+	if row.Timezone != "" {
+		if parsed, lerr := time.LoadLocation(row.Timezone); lerr == nil {
+			loc = parsed
+		}
+	}
+	start := time.Unix(row.StartAt, 0)
+
+	// unmatched handles every way of ending up without this occurrence's shift:
+	// the partner's site is down, the day is not posted yet, or a day with two
+	// sittings cannot be told apart. The saved link stays only when it is
+	// filtered to this very day, as a one-off event's link is. A recurring
+	// event's saved link names the day it was copied from, so following it
+	// lands a volunteer on some other day; they get the job's full listing
+	// instead, to pick their own.
+	unmatched := func() {
+		if listing, replace := v4s.UnmatchedSignupURL(source, start.In(loc)); replace {
+			event.Signup.URL = &listing
+		}
+	}
+
 	// Within the request's budget we may wait for a cold fetch; past it we take
 	// only what is already cached, so one slow partner cannot hold up a page.
 	var snapshot v4s.Snapshot
@@ -835,19 +859,9 @@ func (s *BotService) applyV4SAvailability(
 	if err != nil && len(snapshot.Shifts) == 0 {
 		// No numbers is the correct outcome here, not zero: a partner site that
 		// is down must not render as "no spots left".
+		unmatched()
 		return
 	}
-
-	// Match on the organization's local date. V4S anchors a recurring shift to
-	// local time, so the same morning shift is an hour apart in UTC either side
-	// of a daylight-saving change and a UTC-date match would miss half the year.
-	loc := time.UTC
-	if row.Timezone != "" {
-		if parsed, lerr := time.LoadLocation(row.Timezone); lerr == nil {
-			loc = parsed
-		}
-	}
-	start := time.Unix(row.StartAt, 0)
 
 	// Matches on local date, and on time of day only when the day holds more
 	// than one shift — a job with a morning and an afternoon sitting. An
@@ -855,30 +869,33 @@ func (s *BotService) applyV4SAvailability(
 	// availability rather than given someone else's numbers.
 	shift, found := v4s.MatchOccurrence(snapshot.Shifts, start, loc)
 	if !found {
+		unmatched()
 		return
 	}
 
-	confirmed := shift.Confirmed
-	remaining := shift.Available
-	event.SignupCount = &confirmed
-	event.SpotsRemaining = &remaining
-	// The partner's capacity, not ours. For an external event our own
-	// max_participants describes nothing — we do not hold the list — so the
-	// honest total to show beside "spots left" is the one their page states.
-	if capacity := shift.Capacity(); capacity > 0 {
-		event.MaxParticipants = capacity
+	if shift.Counted() {
+		confirmed := shift.Confirmed
+		remaining := shift.Available
+		event.SignupCount = &confirmed
+		event.SpotsRemaining = &remaining
+		// The partner's capacity, not ours. For an external event our own
+		// max_participants describes nothing — we do not hold the list — so the
+		// honest total to show beside "spots left" is the one their page states.
+		if capacity := shift.Capacity(); capacity > 0 {
+			event.MaxParticipants = capacity
+		}
 	}
 
-	// Deep link this occurrence to its own shift rather than the job, so a
+	// Deep link this occurrence to its own day rather than the job, so a
 	// volunteer lands on the day they were looking at. This is also what makes
 	// a recurring event work: our series maps to their job, our occurrence to
 	// the shift on that date, with no need for the partner to expose their
-	// recurrence schedule.
-	if shift.Id != "" {
-		// In the organization's own time zone: dtMonthFilter names a local day.
-		deep := v4s.ShiftSignupURL(source.Site, source.JobId, shift.Id, shift.StartUTC.In(loc))
-		event.Signup.URL = &deep
-	}
+	// recurrence schedule. A full shift has no id (V4S drops the sign-up link
+	// that carries it), so its link is the day's listing, marked "Not
+	// available" there, rather than the shift itself.
+	// In the organization's own time zone: dtMonthFilter names a local day.
+	deep := v4s.ShiftSignupURL(source.Site, source.JobId, shift.Id, shift.StartUTC.In(loc))
+	event.Signup.URL = &deep
 	if shift.Full() {
 		event.Signup.Open = false
 		reason := structs.SignupClosedFull

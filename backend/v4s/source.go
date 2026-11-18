@@ -3,6 +3,7 @@ package v4s
 import (
 	"net/url"
 	"strings"
+	"time"
 )
 
 // Source is a V4S job identified from an event's external signup link.
@@ -22,6 +23,12 @@ type Source struct {
 	// used for matching — a recurring event's link would pin every occurrence
 	// to one date — but it is kept so a one-off event can be linked exactly.
 	ShiftId string
+	// LocalDate is the day the link is filtered to, as YYYY-MM-DD in the
+	// organization's local time, taken from its dtMonthFilter. Empty when the
+	// link names no day. A link pasted from one occurrence carries that
+	// occurrence's day, which is right for a one-off event and wrong for every
+	// later occurrence of a recurring one.
+	LocalDate string
 }
 
 // Key identifies the job for caching and rate limiting.
@@ -71,8 +78,23 @@ func ParseSource(raw string) (Source, bool) {
 
 	site := u.Scheme + "://" + u.Host + u.Path[:idx]
 	return Source{
-		Site:    site,
-		JobId:   jobId,
-		ShiftId: strings.TrimSpace(q.Get("volunteerShiftId")),
+		Site:      site,
+		JobId:     jobId,
+		ShiftId:   strings.TrimSpace(q.Get("volunteerShiftId")),
+		LocalDate: filterDate(q.Get("dtMonthFilter")),
 	}, true
+}
+
+// filterDate reads the day out of a dtMonthFilter value such as
+// "2026-10-26 6:30:0". Anything that does not start with a date gives "".
+func filterDate(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if len(raw) < len("2006-01-02") {
+		return ""
+	}
+	day := raw[:len("2006-01-02")]
+	if _, err := time.Parse("2006-01-02", day); err != nil {
+		return ""
+	}
+	return day
 }
