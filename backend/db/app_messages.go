@@ -166,7 +166,8 @@ func (a *AppDB) CountConversationsStartedSince(ctx context.Context, userId strin
 const messageColumns = `
 	x.id, x.conversation_id, x.sender_id, x.kind, x.body, x.tx_hash,
 	x.amount_sfluv_base::text, x.payment_verified, x.created_at, x.reply_to_id,
-	x.edited_at, (x.deleted_at IS NOT NULL AND x.deleted_by IS NOT NULL)`
+	x.edited_at, (x.deleted_at IS NOT NULL AND x.deleted_by IS NOT NULL),
+	x.mentions::text`
 
 // scanMessage reads a message and, if it was deleted by its sender, blanks
 // everything that was in it.
@@ -178,16 +179,22 @@ const messageColumns = `
 // function they all go through is the only version of that which stays true as
 // handlers are added.
 func scanMessage(row pgx.Row, m *structs.Message) error {
+	var mentions *string
 	if err := row.Scan(&m.Id, &m.ConversationId, &m.SenderId, &m.Kind, &m.Body, &m.TxHash,
 		&m.AmountSfluvBase, &m.PaymentVerified, &m.CreatedAt, &m.ReplyToId,
-		&m.EditedAt, &m.Deleted); err != nil {
+		&m.EditedAt, &m.Deleted, &mentions); err != nil {
 		return err
 	}
+	m.Mentions = decodeMentions(mentions)
 	if m.Deleted {
 		m.Body = ""
 		m.TxHash = nil
 		m.AmountSfluvBase = nil
 		m.PaymentVerified = false
+		// A tombstone tags nobody. The entities point into a body that has
+		// just been blanked, and leaving them would tell every reader who the
+		// deleted message was about.
+		m.Mentions = nil
 		// The attachments of a deleted message are never loaded — the hydration
 		// step skips it — so there is nothing to clear there.
 	}
@@ -417,6 +424,9 @@ type NewMessage struct {
 	AmountSfluvBase *string
 	PaymentVerified bool
 	ReplyToId       *int64
+	// Already validated against the body and the member list — the handler's
+	// job, since only it knows who is in the thread. Nil stores NULL.
+	Mentions []structs.MessageMention
 }
 
 // InsertMessage stores a message, bumps the thread's activity time, marks it
@@ -432,7 +442,7 @@ func (a *AppDB) InsertMessage(ctx context.Context, n *NewMessage) (*structs.Mess
 	var m structs.Message
 	err = scanMessage(tx.QueryRow(ctx, `
 		WITH x AS (
-			INSERT INTO messages(conversation_id, sender_id, kind, body, tx_hash, amount_sfluv_base, payment_verified, reply_to_id)
+			INSERT INTO messages(conversation_id, sender_id, kind, body, tx_hash, amount_sfluv_base, payment_verified, reply_to_id, mentions)
 			VALUES ($1, $2, $3, $4, $5, $6::numeric, $7, (
 				-- A reply may only quote a message in the same thread. Resolved
 				-- here rather than validated in the handler so there is no
@@ -442,11 +452,12 @@ func (a *AppDB) InsertMessage(ctx context.Context, n *NewMessage) (*structs.Mess
 				-- person meant to send.
 				SELECT r.id FROM messages r
 				WHERE r.id = $8 AND r.conversation_id = $1 AND r.deleted_at IS NULL
-			))
+			), $9::jsonb)
 			RETURNING *
 		)
 		SELECT `+messageColumns+` FROM x;
-	`, n.ConversationId, n.SenderId, n.Kind, n.Body, n.TxHash, n.AmountSfluvBase, n.PaymentVerified, n.ReplyToId), &m)
+	`, n.ConversationId, n.SenderId, n.Kind, n.Body, n.TxHash, n.AmountSfluvBase, n.PaymentVerified, n.ReplyToId,
+		encodeMentions(n.Mentions)), &m)
 	if err != nil {
 		if isUniqueViolation(err) {
 			return nil, ErrPaymentAlreadyAttached
@@ -505,12 +516,16 @@ var ErrNotMyMessage = errors.New("not your message")
 // second: the window is a deadline, and a check-then-write leaves a gap in
 // which it can pass. The distinct error cases are told apart afterwards by
 // re-reading, which only happens on the failure path.
-func (a *AppDB) EditMessage(ctx context.Context, messageId int64, userId string, body string) (*structs.Message, error) {
+//
+// mentions replaces whatever the message tagged before, nil included: the
+// offsets were computed against the old text, so carrying them over to the new
+// one would highlight whichever words now happen to sit there.
+func (a *AppDB) EditMessage(ctx context.Context, messageId int64, userId string, body string, mentions []structs.MessageMention) (*structs.Message, error) {
 	var m structs.Message
 	err := scanMessage(a.db.QueryRow(ctx, `
 		WITH x AS (
 			UPDATE messages
-			SET body = $3, edited_at = NOW()
+			SET body = $3, edited_at = NOW(), mentions = $5::jsonb
 			WHERE id = $1
 				AND sender_id = $2
 				AND deleted_at IS NULL
@@ -522,7 +537,7 @@ func (a *AppDB) EditMessage(ctx context.Context, messageId int64, userId string,
 			RETURNING *
 		)
 		SELECT `+messageColumns+` FROM x;
-	`, messageId, userId, body, EditWindow.String()), &m)
+	`, messageId, userId, body, EditWindow.String(), encodeMentions(mentions)), &m)
 	if errors.Is(err, pgx.ErrNoRows) {
 		// Nothing matched. Work out which rule it broke, so the person is told
 		// something they can act on.

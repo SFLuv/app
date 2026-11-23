@@ -55,16 +55,16 @@ func (a *AppDB) InsertMessageWithAttachments(ctx context.Context, n *NewMessage,
 	var m structs.Message
 	err = scanMessage(tx.QueryRow(ctx, `
 		WITH x AS (
-			INSERT INTO messages(conversation_id, sender_id, kind, body, tx_hash, amount_sfluv_base, payment_verified, reply_to_id)
+			INSERT INTO messages(conversation_id, sender_id, kind, body, tx_hash, amount_sfluv_base, payment_verified, reply_to_id, mentions)
 			VALUES ($1, $2, $3, $4, $5, $6::numeric, $7, (
 				SELECT r.id FROM messages r
 				WHERE r.id = $8 AND r.conversation_id = $1 AND r.deleted_at IS NULL
-			))
+			), $9::jsonb)
 			RETURNING *
 		)
 		SELECT `+messageColumns+` FROM x;
 	`, n.ConversationId, n.SenderId, n.Kind, n.Body, n.TxHash, n.AmountSfluvBase,
-		n.PaymentVerified, n.ReplyToId), &m)
+		n.PaymentVerified, n.ReplyToId, encodeMentions(n.Mentions)), &m)
 	if err != nil {
 		if isUniqueViolation(err) {
 			return nil, ErrPaymentAlreadyAttached

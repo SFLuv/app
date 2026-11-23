@@ -2922,6 +2922,16 @@ var schemaMigrations = []SchemaMigration{
 			return nil
 		},
 	},
+	{
+		// 1.86, not 1.85: pjol/notification-alignment claims 1.85 for the
+		// notification hub. Whichever of the two reaches main second must keep
+		// the higher number, or a database already past it skips it for good.
+		Version:     "1.86",
+		Description: "chat: who a message tags, stored beside its text",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			return migrateChatMentions(ctx, pools)
+		},
+	},
 }
 
 // migrateW9TINMismatchCount adds the count of failed TIN matches per filing.
