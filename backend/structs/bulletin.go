@@ -357,6 +357,27 @@ type Message struct {
 	ReplyTo     *MessageQuote       `json:"reply_to,omitempty"`
 	Attachments []MessageAttachment `json:"attachments,omitempty"`
 	Reactions   []MessageReaction   `json:"reactions,omitempty"`
+
+	// Mentions are the people tagged in Body, Telegram style. Body keeps the
+	// readable "@Maria" so every reader that predates this field — older app
+	// builds, the web, a push preview — still shows something sensible; the
+	// entities are what let each reader's app draw the tagged person under the
+	// name THAT reader saved them as, and what lets the server reach a muted
+	// member who was tagged. Absent when nobody was, and always absent on a
+	// deleted message.
+	Mentions []MessageMention `json:"mentions,omitempty"`
+}
+
+// MessageMention is one tagged person and the run of Body that tags them.
+//
+// Offset and Length count UTF-16 code units, not bytes or runes, because that
+// is how a JavaScript string indexes and the app is what reads them. Counting
+// anything else would put the highlight in the wrong place after the first
+// emoji, which is the bug every chat app with entities has shipped once.
+type MessageMention struct {
+	UserId string `json:"user_id"`
+	Offset int    `json:"offset"`
+	Length int    `json:"length"`
 }
 
 // ConversationMember is one person in a group, as the other members see them.
@@ -514,6 +535,10 @@ type LeaveGroupRequest struct {
 // EditMessageRequest changes a message's text.
 type EditMessageRequest struct {
 	Body string `json:"body"`
+	// Replaces the message's mentions outright. Absent clears them: the body
+	// changed, so offsets computed against the old text no longer point at
+	// anything, and keeping them would highlight the wrong words.
+	Mentions []MessageMention `json:"mentions,omitempty"`
 }
 
 // ReactionRequest toggles one emoji on one message.
@@ -566,6 +591,10 @@ type NewMessageRequest struct {
 	// The message this one answers. Ignored when it names a message in another
 	// thread or one that has been deleted — see the resolution in InsertMessage.
 	ReplyToId *int64 `json:"reply_to_id,omitempty"`
+	// Who the body tags. Entries that do not hold up — not a member, out of
+	// range, overlapping — are dropped rather than failing the send; see
+	// normalizeMentions.
+	Mentions []MessageMention `json:"mentions,omitempty"`
 }
 
 type PaymentMessageRequest struct {

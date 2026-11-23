@@ -536,6 +536,7 @@ func (a *AppService) SendConversationMessage(w http.ResponseWriter, r *http.Requ
 		Kind:           structs.MessageKindText,
 		Body:           body,
 		ReplyToId:      req.ReplyToId,
+		Mentions:       a.conversationMentions(r.Context(), conv, req.Mentions, req.Body),
 	})
 	if err != nil {
 		a.logger.Logf("error sending message in conversation %d: %s", conv.Id, err)
@@ -575,6 +576,7 @@ func (a *AppService) fanOutMessage(ctx context.Context, conv *structs.Conversati
 		recipients = []string{other}
 	}
 
+	mentioned := mentionedUserIds(msg)
 	for _, id := range recipients {
 		if id == senderId {
 			continue
@@ -582,7 +584,8 @@ func (a *AppService) fanOutMessage(ctx context.Context, conv *structs.Conversati
 		if _, alreadyTold := reached[id]; alreadyTold {
 			continue
 		}
-		a.queueMessagePush(senderId, id, conv.Id, msg.Id, notice.Title, notice.Body, notice)
+		_, wasMentioned := mentioned[id]
+		a.queueMessagePush(senderId, id, conv.Id, msg.Id, notice.Title, notice.Body, notice, wasMentioned)
 	}
 }
 
@@ -1032,14 +1035,17 @@ func (a *AppService) notifyNewMessage(senderId, recipientId string, conversation
 // two in-app banners for one message. Zero for a push with no message behind it,
 // such as being added to a group, and then the field is left out.
 func (a *AppService) notifyNewMessageWithTitle(senderId, recipientId string, conversationId, messageId int64, title, preview string) {
-	a.queueMessagePush(senderId, recipientId, conversationId, messageId, title, preview, nil)
+	a.queueMessagePush(senderId, recipientId, conversationId, messageId, title, preview, nil, false)
 }
 
 // queueMessagePush is notifyNewMessageWithTitle carrying the message's notice,
 // whose sender and group picture ride along in the push's data so the phone
 // can put the right face on it. Nil for pushes about something other than a
 // message, such as being added to a group.
-func (a *AppService) queueMessagePush(senderId, recipientId string, conversationId, messageId int64, title, preview string, notice *realtime.Notice) {
+//
+// mentioned means the message tags this recipient, which overrides their mute
+// for this one push — see the mute check below.
+func (a *AppService) queueMessagePush(senderId, recipientId string, conversationId, messageId int64, title, preview string, notice *realtime.Notice, mentioned bool) {
 	// Queued per recipient rather than fired as a bare goroutine, so one
 	// person's pushes reach Expo in the order the messages were stored.
 	a.pushes.enqueue(recipientId, func() {
@@ -1058,8 +1064,16 @@ func (a *AppService) queueMessagePush(senderId, recipientId string, conversation
 		// message still arrives, the thread still shows unread, and the badge
 		// still counts it — muting silences the phone, it does not hide the
 		// conversation.
-		if muted, err := a.db.ConversationIsMuted(ctx, conversationId, recipientId); err == nil && muted {
-			return
+		//
+		// Except for somebody the message tags by name. Telegram's rule, and
+		// the reason to tag anyone: muting a busy group is how people cope
+		// with it, and "@Maria are you coming?" is the one message in it Maria
+		// needs to see. Only the mute is bypassed — the beta check above and
+		// the socket suppression in fanOutMessage still apply.
+		if !mentioned {
+			if muted, err := a.db.ConversationIsMuted(ctx, conversationId, recipientId); err == nil && muted {
+				return
+			}
 		}
 
 		if title == "" {
@@ -1216,7 +1230,8 @@ func (a *AppService) EditConversationMessage(w http.ResponseWriter, r *http.Requ
 	}
 
 	ctx := r.Context()
-	msg, err := a.db.EditMessage(ctx, messageId, userId, body)
+	msg, err := a.db.EditMessage(ctx, messageId, userId, body,
+		a.conversationMentions(ctx, conv, req.Mentions, req.Body))
 	switch {
 	case errors.Is(err, db.ErrEditWindowClosed):
 		bulletinError(w, http.StatusConflict, "edit_window_closed",

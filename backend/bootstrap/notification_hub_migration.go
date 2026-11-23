@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-// migrateNotificationHub is the 1.85 migration body: notification teams, the
+// migrateNotificationHub is the 1.87 migration body: notification teams, the
 // routes from topics to teams, and a record on each notification of where it
 // went.
 //
