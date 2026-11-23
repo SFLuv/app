@@ -1174,6 +1174,9 @@ func AddBulletinRoutes(r *chi.Mux, a *handlers.AppService) {
 	r.Get("/conversations/{id}", withChatBeta(a.GetConversation))
 	r.Get("/conversations/{id}/messages", withChatBeta(a.GetConversationMessages))
 	r.Post("/conversations/{id}/messages", withChatBeta(a.SendConversationMessage))
+	// Search within one thread: newest match first, paged with before like the
+	// thread itself. Same membership check as the thread read.
+	r.Get("/conversations/{id}/messages/search", withChatBeta(a.SearchConversationMessages))
 	r.Post("/conversations/{id}/payments", withChatBeta(a.AttachConversationPayment))
 	r.Post("/conversations/{id}/read", withChatBeta(a.MarkConversationRead))
 	// "Delete for me" is archiving, which already restores the thread intact

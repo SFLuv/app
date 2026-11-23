@@ -134,6 +134,7 @@ func (a *AppService) publishMessage(ctx context.Context, conv *structs.Conversat
 	for id := range online {
 		reached[id] = struct{}{}
 	}
+	mentioned := mentionedUserIds(message)
 
 	// A copy per recipient, because IsMine is relative to who is reading it and
 	// the stored message does not know. Cheap: this is one small struct.
@@ -152,7 +153,8 @@ func (a *AppService) publishMessage(ctx context.Context, conv *structs.Conversat
 		var theirNotice *realtime.Notice
 		if notice != nil {
 			copied := *notice
-			copied.Silent = a.chatNoticeSilenced(ctx, conv.Id, id)
+			_, wasMentioned := mentioned[id]
+			copied.Silent = a.chatNoticeSilenced(ctx, conv.Id, id, wasMentioned)
 			theirNotice = &copied
 		}
 		a.realtime.Publish([]string{id}, realtime.Event{
@@ -166,10 +168,15 @@ func (a *AppService) publishMessage(ctx context.Context, conv *structs.Conversat
 }
 
 // chatNoticeSilenced is whether a new message should arrive without a banner for
-// this recipient — the same two tests the push path applies before buzzing.
-func (a *AppService) chatNoticeSilenced(ctx context.Context, conversationId int64, recipientId string) bool {
+// this recipient — the same two tests the push path applies before buzzing,
+// including the push path's exception: a member the message tags gets the
+// banner even with the thread muted.
+func (a *AppService) chatNoticeSilenced(ctx context.Context, conversationId int64, recipientId string, mentioned bool) bool {
 	if !a.BetaFeatureAllowed(ctx, recipientId, structs.BetaFeatureChat) {
 		return true
+	}
+	if mentioned {
+		return false
 	}
 	muted, err := a.db.ConversationIsMuted(ctx, conversationId, recipientId)
 	return err == nil && muted
