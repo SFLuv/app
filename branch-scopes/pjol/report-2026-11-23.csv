@@ -1,0 +1,22 @@
+CONTRACTOR NAME:,PJ O'Leary,,,,,
+SERVICE/TITLE:,,,,,,
+INVOICE DATE:,2026-11-23,,,,,
+SERVICE PERIOD: ,2026-11-16 to 2026-11-23,,,,,
+HOURLY RATE:,,,,,,
+% SFLUV,10.00%,,,,,
+,,,,,,
+DATE,,DESCRIPTION,,HOURS                ( input numbers only),,AMOUNT BILLED
+2026-11-16,,"Touchpoint map of every way people reach us; the engine's limits found and the faucet dispatcher made concurrent, with a double-pay hole on engine timeouts closed; nonces checked; merges and environment for the deploy; the over-the-air and 2.5.0 mobile branches; call with Sanchez, 12:00-16:00 (0.62 measured + 4.00 stated)",,4.62,,0.00
+2026-11-16,,"Two meetings, 16:00-17:00 and 17:00-18:00 (stated)",,2.00,,0.00
+2026-11-18,,"Monday afternoon recorded; the notification hub - every touchpoint posts to the backend, which routes each topic to teams of house-organization members by app, push, email and group chat, with a catch-all and a record of where each notification went; inbound email through Mailgun; the website's dead merchant link and W-9 form fixed; mobile till contact, forgotten PIN and W-9 topic; the touchpoint catalog and a live Visualizer tab; the visualizer traced back to touchpoints; Sanchez's translation groundwork folded in; committed and pushed (2.04 measured)",,2.04,,0.00
+2026-11-20,,"CRM discussion, 14:00-15:20 (0.01 measured + 1.33 stated)",,1.34,,0.00
+2026-11-21,,"CA Digital Business License discussion, 15:00-16:00 (stated)",,1.00,,0.00
+2026-11-23,,"The week re-measured, brought up to date and closed (0.04 measured)",,0.04,,0.00
+,,,,,,0.00
+,,,,,,
+ TOTAL: ,,,,11.04,, $ -
+PAYMENT IN SFLUV,,,,,, $ -
+PAYMENT IN USD,,,,,, $ -
+,,,,,,
+METHOD:,,"2.71h measured from PJ's session-transcript and commit timestamps (GitHub merges included) clustered into sittings on a 30-minute gap, across every SFLUV project's transcripts and PJ's commits in app, mobile-app, webpage, contracts and animations. 8.33h stated by the contractor for work the clock did not see. Itemised in branch-scopes/pjol/week-2026-11-16.md, rounds 1-12.",,,,
+WEAKNESSES:,,"Five stated windows have no session behind them: Nov 16's call with Sanchez, 12:00-16:00, and its two meetings, 16:00-18:00; Nov 20's CRM discussion, 14:00-15:20; and Nov 21's CA Digital Business License discussion, 15:00-16:00. During the Nov 16 call the keyboard record is on other projects, so those four hours are call time on the contractor's word. Nov 16's 0.62h measured falls before noon and is carried in from the week of Nov 9, whose report was drawn at 11:15:55. Session time inside the Nov 20 and Nov 21 stated windows is not counted twice. The week is measured to noon on Nov 23; this report was drawn after noon, and that time is in week-2026-11-23.",,,,
