@@ -579,10 +579,7 @@ func (a *AppService) fanOutMessage(ctx context.Context, conv *structs.Conversati
 		if id == senderId {
 			continue
 		}
-		if _, alreadyTold := reached[id]; alreadyTold {
-			continue
-		}
-		a.queueMessagePush(senderId, id, conv.Id, msg.Id, notice.Title, notice.Body, notice)
+		a.queueMessagePush(senderId, id, conv.Id, msg.Id, notice.Title, notice.Body, notice, reached[id])
 	}
 }
 
@@ -1032,14 +1029,29 @@ func (a *AppService) notifyNewMessage(senderId, recipientId string, conversation
 // two in-app banners for one message. Zero for a push with no message behind it,
 // such as being added to a group, and then the field is left out.
 func (a *AppService) notifyNewMessageWithTitle(senderId, recipientId string, conversationId, messageId int64, title, preview string) {
-	a.queueMessagePush(senderId, recipientId, conversationId, messageId, title, preview, nil)
+	a.queueMessagePush(senderId, recipientId, conversationId, messageId, title, preview, nil, realtime.Presence{})
 }
 
 // queueMessagePush is notifyNewMessageWithTitle carrying the message's notice,
 // whose sender and group picture ride along in the push's data so the phone
 // can put the right face on it. Nil for pushes about something other than a
 // message, such as being added to a group.
-func (a *AppService) queueMessagePush(senderId, recipientId string, conversationId, messageId int64, title, preview string, notice *realtime.Notice) {
+//
+// open is the recipient's devices that already got it over a socket: those are
+// skipped, every other device of theirs is pushed. A socket from an app too old
+// to say which device it is (before 2.5.0) skips the push altogether, as every
+// push did before devices could be told apart.
+func (a *AppService) queueMessagePush(senderId, recipientId string, conversationId, messageId int64, title, preview string, notice *realtime.Notice, open realtime.Presence) {
+	if open.Unidentified {
+		return
+	}
+	openDevices := map[string]struct{}{}
+	for installation := range open.Installations {
+		if hashed := db.HashMobilePushInstallationID(installation); hashed != "" {
+			openDevices[hashed] = struct{}{}
+		}
+	}
+
 	// Queued per recipient rather than fired as a bare goroutine, so one
 	// person's pushes reach Expo in the order the messages were stored.
 	a.pushes.enqueue(recipientId, func() {
@@ -1167,6 +1179,10 @@ func (a *AppService) queueMessagePush(senderId, recipientId string, conversation
 				continue
 			}
 			seen[token] = struct{}{}
+			// This device has the app open and was told over its socket.
+			if _, isOpen := openDevices[s.InstallationIDHash]; isOpen && s.InstallationIDHash != "" {
+				continue
+			}
 			if _, err := sendExpoPushNotificationWith(ctx, token, title, preview, data, options); err != nil {
 				a.logger.Logf("error sending message push to %s: %s", recipientId, err)
 			}

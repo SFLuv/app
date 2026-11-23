@@ -110,17 +110,17 @@ func (a *AppService) handleTypingSignal(userId string, conversationId int64, typ
 // ── Publishers ───────────────────────────────────────────────────────────────
 
 // publishMessage tells a conversation's members about a new message, and reports
-// which of them were reached.
+// which of their devices were reached.
 //
-// The returned set is what suppresses pushes: a member who received this over a
-// socket has already been told, and sending them a system banner for the same
-// message — over the chat they are looking at — is the thing this whole
-// mechanism exists to stop.
+// The returned presence is what the push skips: a device that received this
+// over a socket already shows it, and a system banner for the same message —
+// over the chat they are looking at — is the thing this mechanism exists to
+// stop. Only those devices: the same person's other phone still gets the push.
 //
-// The sender is excluded from the fan-out but included in the "already told"
-// set, since they are the one who sent it.
-func (a *AppService) publishMessage(ctx context.Context, conv *structs.ConversationRow, message *structs.Message, senderId string, notice *realtime.Notice) map[string]struct{} {
-	reached := map[string]struct{}{senderId: {}}
+// The sender is excluded from the fan-out and marked as wholly reached, since
+// they are the one who sent it.
+func (a *AppService) publishMessage(ctx context.Context, conv *structs.ConversationRow, message *structs.Message, senderId string, notice *realtime.Notice) map[string]realtime.Presence {
+	reached := map[string]realtime.Presence{senderId: {Unidentified: true}}
 	if a.realtime == nil {
 		return reached
 	}
@@ -130,9 +130,11 @@ func (a *AppService) publishMessage(ctx context.Context, conv *structs.Conversat
 		return reached
 	}
 
-	online := a.realtime.OnlineAmong(members)
-	for id := range online {
-		reached[id] = struct{}{}
+	online := a.realtime.PresenceAmong(members)
+	for id, presence := range online {
+		if id != senderId {
+			reached[id] = presence
+		}
 	}
 
 	// A copy per recipient, because IsMine is relative to who is reading it and
@@ -245,25 +247,24 @@ func (a *AppService) publishRead(ctx context.Context, conversationId int64, user
 }
 
 // PublishNotification delivers a notification over the socket to whoever is
-// connected, and reports who was reached so the push can skip them.
+// connected, and reports which of their devices were reached so the push can
+// skip those (and only those).
 //
 // This is the general case of publishMessage: the same suppression rule applied
 // to every other kind of notification the server sends. The data bag is the same
 // one a push carries, so the client's existing routing — targetFromData — works
 // unchanged on both.
-func (a *AppService) PublishNotification(userIds []string, title, body string, data map[string]string) map[string]struct{} {
-	reached := map[string]struct{}{}
+func (a *AppService) PublishNotification(userIds []string, title, body string, data map[string]string) map[string]realtime.Presence {
 	if a.realtime == nil || len(userIds) == 0 {
+		return map[string]realtime.Presence{}
+	}
+	reached := a.realtime.PresenceAmong(userIds)
+	if len(reached) == 0 {
 		return reached
 	}
-	online := a.realtime.OnlineAmong(userIds)
-	if len(online) == 0 {
-		return reached
-	}
-	targets := make([]string, 0, len(online))
-	for id := range online {
+	targets := make([]string, 0, len(reached))
+	for id := range reached {
 		targets = append(targets, id)
-		reached[id] = struct{}{}
 	}
 	a.realtime.Publish(targets, realtime.Event{
 		Kind: realtime.EventNotification,

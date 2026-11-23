@@ -104,6 +104,16 @@ func pushInactiveReason(preferenceEnabled *bool, deviceRegistered *bool, fallbac
 	return deleteReasonPonderDelete
 }
 
+// HashMobilePushInstallationID is the form an installation id is stored in on
+// a push subscription, for matching one the app announced on its socket.
+func HashMobilePushInstallationID(rawInstallationID string) string {
+	hashed, err := hashMobilePushInstallationID(rawInstallationID)
+	if err != nil {
+		return ""
+	}
+	return hashed
+}
+
 func hashMobilePushInstallationID(rawInstallationID string) (string, error) {
 	if strings.TrimSpace(rawInstallationID) == "" {
 		return "", nil

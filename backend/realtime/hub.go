@@ -38,6 +38,7 @@ package realtime
 
 import (
 	"encoding/json"
+	"strings"
 	"sync"
 	"time"
 )
@@ -121,6 +122,11 @@ type ClientMessage struct {
 	Kind string `json:"kind"`
 	// Auth, sent once as the first frame. See the comment on Serve.
 	Token string `json:"token,omitempty"`
+	// Which install of the app this socket is, sent with the auth frame: the
+	// same id the app registers its push subscription under. Lets a push skip
+	// only the device that has the app open, not the person's other devices.
+	// Empty from apps older than 2.5.0, which never sent it.
+	InstallationId string `json:"installation_id,omitempty"`
 	// Typing.
 	ConversationId int64 `json:"conversation_id,omitempty"`
 	Typing         bool  `json:"typing,omitempty"`
@@ -144,21 +150,22 @@ type sink interface {
 type Hub struct {
 	mu sync.RWMutex
 	// One user may have several: a phone and a tablet, or the same phone
-	// mid-reconnect with the old socket not yet reaped.
-	byUser map[string]map[sink]struct{}
+	// mid-reconnect with the old socket not yet reaped. Each is kept with the
+	// installation id it announced ("" when it announced none).
+	byUser map[string]map[sink]string
 }
 
 func NewHub() *Hub {
-	return &Hub{byUser: map[string]map[sink]struct{}{}}
+	return &Hub{byUser: map[string]map[sink]string{}}
 }
 
-func (h *Hub) add(userId string, s sink) {
+func (h *Hub) add(userId, installationId string, s sink) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.byUser[userId] == nil {
-		h.byUser[userId] = map[sink]struct{}{}
+		h.byUser[userId] = map[sink]string{}
 	}
-	h.byUser[userId][s] = struct{}{}
+	h.byUser[userId][s] = strings.TrimSpace(installationId)
 }
 
 func (h *Hub) remove(userId string, s sink) {
@@ -174,10 +181,56 @@ func (h *Hub) remove(userId string, s sink) {
 	}
 }
 
+// Presence is which of one person's devices have the app open right now.
+//
+// The app holds its socket only while it is in the foreground (it drops it on
+// the way to the background), so a device here is one somebody is looking at.
+type Presence struct {
+	// Installation ids of the open devices that said which they are.
+	Installations map[string]struct{}
+	// A socket that did not say which device it is: an app older than 2.5.0.
+	// Nothing can be told apart for that person, so they are treated as the
+	// whole account being open, which is how every push was decided before.
+	Unidentified bool
+}
+
+// Open reports whether any device is open at all.
+func (p Presence) Open() bool {
+	return p.Unidentified || len(p.Installations) > 0
+}
+
+// PresenceAmong is, for each of the named users with a live socket, which of
+// their devices those sockets are. A user with none is left out.
+//
+// This is what decides pushes. A push skips the devices listed here, which
+// already show the event in the app, and still reaches the person's other
+// devices: one phone open on a desk must not silence the one in their pocket.
+func (h *Hub) PresenceAmong(userIds []string) map[string]Presence {
+	presence := map[string]Presence{}
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	for _, id := range userIds {
+		conns := h.byUser[id]
+		if len(conns) == 0 {
+			continue
+		}
+		p := Presence{Installations: map[string]struct{}{}}
+		for _, installation := range conns {
+			if installation == "" {
+				p.Unidentified = true
+			} else {
+				p.Installations[installation] = struct{}{}
+			}
+		}
+		presence[id] = p
+	}
+	return presence
+}
+
 // IsOnline reports whether a user has at least one live socket.
 //
-// This is what suppresses a push: the message notifier asks before sending, and
-// skips the device that is already looking at the app. It is advisory — a socket
+// Pushes are decided per device now (PresenceAmong); this answers only whether
+// the person can be reached over a socket at all. It is advisory — a socket
 // can die between this answer and the publish, in which case the person misses
 // the banner and sees the message the next time the screen refreshes. Getting it
 // wrong in the other direction, by pushing to somebody who is holding the app

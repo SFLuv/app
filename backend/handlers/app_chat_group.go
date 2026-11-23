@@ -424,10 +424,7 @@ func (a *AppService) notifyGroupMembers(ctx context.Context, conv *structs.Conve
 		if id == actorId {
 			continue
 		}
-		if _, told := reached[id]; told {
-			continue
-		}
-		a.notifyNewMessageWithTitle(actorId, id, conv.Id, 0, title, body)
+		a.queueMessagePush(actorId, id, conv.Id, 0, title, body, nil, reached[id])
 	}
 }
 

@@ -3,6 +3,7 @@ package realtime
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -159,7 +160,7 @@ func (s *Server) Serve(w http.ResponseWriter, r *http.Request) {
 		_ = ws.Close()
 		return
 	}
-	userId, ok := s.readAuth(ws)
+	userId, installationId, ok := s.readAuth(ws)
 	if !ok {
 		s.writeClose(ws, websocket.ClosePolicyViolation, "auth required")
 		_ = ws.Close()
@@ -176,7 +177,7 @@ func (s *Server) Serve(w http.ResponseWriter, r *http.Request) {
 		return ws.SetReadDeadline(time.Now().Add(pongWait))
 	})
 
-	s.hub.add(userId, c)
+	s.hub.add(userId, installationId, c)
 	defer func() {
 		s.hub.remove(userId, c)
 		c.close()
@@ -192,24 +193,30 @@ func (s *Server) Serve(w http.ResponseWriter, r *http.Request) {
 	s.readLoop(c, userId)
 }
 
-// readAuth waits for the first frame and validates it.
-func (s *Server) readAuth(ws *websocket.Conn) (string, bool) {
+// readAuth waits for the first frame and validates it, returning who it is and
+// which installation of the app (empty from apps that do not say).
+func (s *Server) readAuth(ws *websocket.Conn) (string, string, bool) {
 	_, raw, err := ws.ReadMessage()
 	if err != nil {
-		return "", false
+		return "", "", false
 	}
 	var msg ClientMessage
 	if err := json.Unmarshal(raw, &msg); err != nil {
-		return "", false
+		return "", "", false
 	}
 	if msg.Kind != ClientMessageAuth || msg.Token == "" {
-		return "", false
+		return "", "", false
 	}
 	userId, err := s.validate(msg.Token)
 	if err != nil || userId == "" {
-		return "", false
+		return "", "", false
 	}
-	return userId, true
+	// Bounded: it is matched against stored ids, never stored itself.
+	installationId := strings.TrimSpace(msg.InstallationId)
+	if len(installationId) > 128 {
+		installationId = ""
+	}
+	return userId, installationId, true
 }
 
 func (s *Server) writeLoop(c *conn) {
