@@ -24,32 +24,90 @@ export type NotificationTopicDefinition = {
   description: string
 }
 
-/** A group of house-organization members, and how they want to be told. */
+/** How a person is told, on top of the app. */
+export type NotificationMemberChannels = {
+  push: boolean
+  email: boolean
+}
+
+/** One person a topic goes to inside a team. */
+export type NotificationMemberDestination = NotificationMemberChannels & {
+  user_id: string
+}
+
+/** Where one topic goes inside a team. Everyone named gets it in the app. */
+export type NotificationTeamDestinations = {
+  /** Every member of the team, now and later. Null when only `members` get it. */
+  everyone: NotificationMemberChannels | null
+  members: NotificationMemberDestination[]
+  /** The team's shared address. */
+  email_address: boolean
+  /** Ids of the team's own group chats. */
+  chats: number[]
+}
+
+/** A group chat a team posts in. */
+export type NotificationTeamChat = {
+  id: number
+  title: string
+}
+
+/** Keys a team's rule for every topic without one of its own. */
+export const TEAM_RULE_DEFAULT = "*"
+
+/** What a team does before anybody sets it up: everyone, in the app and on their phone. */
+export const DEFAULT_TEAM_DESTINATIONS: NotificationTeamDestinations = {
+  everyone: { push: true, email: false },
+  members: [],
+  email_address: false,
+  chats: [],
+}
+
+/** A group of house-organization members. */
 export type NotificationTeam = {
   id: number
   name: string
   description: string
-  /** Members always see the team's notifications in the app; these are extras. */
-  push_members: boolean
-  email_members: boolean
+  /** The lead: who the organization admins named, or the first person added. "" with nobody on the team. */
+  lead_user_id: string
+  /** Members the lead made team admins. */
+  admin_ids: string[]
+  /** The team's shared address, if it has one. Its rules decide whether it is used. */
   email_address: string
-  chat_conversation_id?: number | null
-  /** The group chat's title, filled in by the backend for display. */
-  chat_name?: string
+  chats: NotificationTeamChat[]
+  /**
+   * Where each topic goes inside the team: by topic id, "unrouted" for what comes
+   * through the catch-all, and TEAM_RULE_DEFAULT for anything else.
+   */
+  rules: Record<string, NotificationTeamDestinations>
   member_ids: string[]
   /** Topic ids routed to this team, including "unrouted" for the catch-all. */
   topics: string[]
   created_at: string
 }
 
-/** The body of a team create or update. Every field is replaced. */
+/** The body of a team create or rename. */
 export type NotificationTeamInput = {
   name: string
   description: string
-  push_members: boolean
-  email_members: boolean
-  email_address: string
-  chat_conversation_id: number | null
+}
+
+/** A group chat the chat search offers. */
+export type NotificationChatOption = {
+  id: number
+  title: string
+  members: number
+}
+
+/** What a test send reports: where it went. */
+export type NotificationTestResult = {
+  topic: string
+  teams: NotificationDeliveryTeam[]
+  catch_all: boolean
+  people: number
+  emails: number
+  chats: number
+  reached_nobody: boolean
 }
 
 /** A house-organization member, as the team editor lists them. */
@@ -113,7 +171,11 @@ export type NotificationHubView = {
   recent: NotificationHubEntry[]
   /** Notifications in the last 30 days that reached no person, address or chat. */
   reached_nobody: number
+  /** An admin of the house organization: every team and every route. */
   can_edit: boolean
+  /** Team id → "lead" or "admin", for the teams the viewer manages. */
+  managed_teams?: Record<string, "lead" | "admin">
+  my_user_id?: string
   /** False while the backend cannot receive email, so email topics never fire. */
   inbound_email: boolean
   /** Every way in and the topics each posts under, for the visualizer. */

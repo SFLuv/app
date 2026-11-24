@@ -265,6 +265,7 @@ func (s *BotService) SignUpForVolunteerEvent(w http.ResponseWriter, r *http.Requ
 			Key:           fmt.Sprintf("event_signup:%v", result.SignupId),
 			Kind:          structs.InternalKindNotice,
 			Title:         "Signed up: " + eventTitle,
+			Subtitle:      volunteer + " · " + eventTitle,
 			Body:          volunteer + " signed up for " + eventTitle + ".",
 			Informational: true,
 			Fields: []structs.NotificationField{

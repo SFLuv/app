@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"strconv"
 	"strings"
 )
 
@@ -31,9 +32,20 @@ func (a *AppService) recordNotification(
 	if strings.TrimSpace(userId) == "" {
 		return
 	}
-	if _, err := a.db.RecordUserNotification(ctx, userId, kind, title, body, data); err != nil {
+	id, err := a.db.RecordUserNotification(ctx, userId, kind, title, body, data)
+	if err != nil {
 		a.logger.Logf("error recording a %s notification for %s: %s", kind, userId, err)
+		return
 	}
+	// An app that is open shows it now, as an in-app banner, and refreshes its
+	// list. Every notification that is recorded is pushed by its caller next,
+	// so this is the one place all of them pass through.
+	announced := make(map[string]string, len(data)+1)
+	for key, value := range data {
+		announced[key] = value
+	}
+	announced["notification_id"] = strconv.FormatInt(id, 10)
+	a.AnnounceNotification([]string{userId}, title, body, announced)
 }
 
 // PushToUser sends to every registered device a user has, and is the fan-out

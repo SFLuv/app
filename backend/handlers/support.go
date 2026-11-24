@@ -289,12 +289,14 @@ func (a *AppService) postSupportRequestAlert(ctx context.Context, request *struc
 	}, opts.Fields...)
 
 	a.notify(ctx, Alert{
-		Topic:  opts.Topic,
-		Key:    "support:" + request.Reference,
-		Kind:   structs.InternalKindSupportRequest,
-		Title:  title,
-		Body:   request.Message,
-		Fields: fields,
+		Topic: opts.Topic,
+		Key:   "support:" + request.Reference,
+		Kind:  structs.InternalKindSupportRequest,
+		Title: title,
+		// Who wrote in: the line under the topic in the app's list.
+		Subtitle: request.Email,
+		Body:     request.Message,
+		Fields:   fields,
 		// A team that takes these by email answers the person by replying.
 		ReplyTo:       request.Email,
 		ChatLine:      supportChatLine(request),

@@ -262,11 +262,18 @@ func AddOrganizationRoutes(r *chi.Mux, a *handlers.AppService, s *handlers.BotSe
 	// The notification hub: teams of house-organization members and the topics
 	// routed to them. Members read; organization admins write.
 	r.Get("/organizations/mine/notification-hub", withActiveAuth(a.GetNotificationHub, a))
+	r.Get("/organizations/mine/notification-hub/access", withActiveAuth(a.GetNotificationHubAccess, a))
 	r.Post("/organizations/mine/notification-teams", withActiveAuth(a.CreateNotificationTeam, a))
 	r.Put("/organizations/mine/notification-teams/{id}", withActiveAuth(a.UpdateNotificationTeam, a))
 	r.Delete("/organizations/mine/notification-teams/{id}", withActiveAuth(a.DeleteNotificationTeam, a))
 	r.Put("/organizations/mine/notification-teams/{id}/members", withActiveAuth(a.SetNotificationTeamMembers, a))
 	r.Put("/organizations/mine/notification-routes", withActiveAuth(a.SetNotificationRoute, a))
+	r.Put("/organizations/mine/notification-teams/{id}/lead", withActiveAuth(a.SetNotificationTeamLead, a))
+	r.Put("/organizations/mine/notification-teams/{id}/admins", withActiveAuth(a.SetNotificationTeamAdmins, a))
+	r.Put("/organizations/mine/notification-teams/{id}/resources", withActiveAuth(a.SetNotificationTeamResources, a))
+	r.Put("/organizations/mine/notification-teams/{id}/rules", withActiveAuth(a.SetNotificationTeamRule, a))
+	r.Post("/organizations/mine/notification-hub/test", withActiveAuth(a.SendTestNotification, a))
+	r.Get("/organizations/mine/notification-hub/chats", withActiveAuth(a.SearchNotificationChats, a))
 	r.Post("/organizations/join", withActiveAuth(a.JoinOrganization, a))
 
 	// Platform-admin org controls.

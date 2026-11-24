@@ -2940,6 +2940,13 @@ var schemaMigrations = []SchemaMigration{
 			return migrateNotificationHub(ctx, pools)
 		},
 	},
+	{
+		Version:     "1.88",
+		Description: "notification teams: a lead and admins, several group chats, and routing inside the team; a subtitle on each notification",
+		Apply: func(ctx context.Context, pools *MigrationPools, appLogger *logger.LogCloser) error {
+			return migrateNotificationTeamRouting(ctx, pools)
+		},
+	},
 }
 
 // migrateW9TINMismatchCount adds the count of failed TIN matches per filing.

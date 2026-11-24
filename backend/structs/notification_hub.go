@@ -395,30 +395,102 @@ type NotificationTeam struct {
 	Id          int64  `json:"id"`
 	Name        string `json:"name"`
 	Description string `json:"description"`
-	// Members get every notification routed to the team in the app's
-	// notification screen. That part is not optional: it is what the hub is.
-	// The rest are extra ways to be told.
-	PushMembers  bool   `json:"push_members"`
-	EmailMembers bool   `json:"email_members"`
-	EmailAddress string `json:"email_address"`
-	// ChatConversationId is a group chat the team's notifications are posted
-	// into by the support bot. Nil for none.
-	ChatConversationId *int64 `json:"chat_conversation_id,omitempty"`
-	// ChatName is the chat's title, filled in for the settings screen.
-	ChatName  string    `json:"chat_name,omitempty"`
-	MemberIds []string  `json:"member_ids"`
-	Topics    []string  `json:"topics"`
-	CreatedAt time.Time `json:"created_at"`
+	// LeadUserId is the team's lead: whoever the house organization's admins
+	// named, or else the first person added. Empty when the team has nobody.
+	LeadUserId string `json:"lead_user_id"`
+	// AdminIds are the members the lead made team admins. They do what the
+	// lead does, except choose admins.
+	AdminIds []string `json:"admin_ids"`
+	// EmailAddress and Chats are the places, besides its members, the team can
+	// send a notification to. Whether it does is up to its rules.
+	EmailAddress string                 `json:"email_address"`
+	Chats        []NotificationTeamChat `json:"chats"`
+	// Rules are where each topic goes inside the team, keyed by topic id,
+	// NotificationTopicUnrouted for whatever arrives through the catch-all,
+	// and NotificationTeamRuleDefault for anything without a rule of its own.
+	// With no rule at all, everyone on the team gets it in the app and on
+	// their phone.
+	Rules     map[string]NotificationTeamDestinations `json:"rules"`
+	MemberIds []string                                `json:"member_ids"`
+	Topics    []string                                `json:"topics"`
+	CreatedAt time.Time                               `json:"created_at"`
 }
 
-// NotificationTeamInput creates or changes a team's details.
+// NotificationTeamRuleDefault keys a team's rule for every topic that has none
+// of its own.
+const NotificationTeamRuleDefault = "*"
+
+// NotificationTeamChat is a group chat a team can post into.
+type NotificationTeamChat struct {
+	Id    int64  `json:"id"`
+	Title string `json:"title"`
+}
+
+// NotificationTeamDestinations is where one topic goes inside a team. Everyone
+// named gets it in the app; Push and Email are on top of that.
+type NotificationTeamDestinations struct {
+	// Everyone is every member of the team, now and later. Nil when only the
+	// people in Members get it.
+	Everyone *NotificationMemberChannels `json:"everyone"`
+	// Members are particular people on the team.
+	Members []NotificationMemberDestination `json:"members"`
+	// EmailAddress sends it to the team's shared address.
+	EmailAddress bool `json:"email_address"`
+	// Chats are the team's group chats it is posted in.
+	Chats []int64 `json:"chats"`
+}
+
+// NotificationMemberChannels is how a person is told, on top of the app.
+type NotificationMemberChannels struct {
+	Push  bool `json:"push"`
+	Email bool `json:"email"`
+}
+
+// NotificationMemberDestination is one person a topic goes to.
+type NotificationMemberDestination struct {
+	UserId string `json:"user_id"`
+	Push   bool   `json:"push"`
+	Email  bool   `json:"email"`
+}
+
+// DefaultNotificationTeamDestinations is what a team does before anybody has
+// set it up: everyone on it, in the app and on their phone.
+func DefaultNotificationTeamDestinations() NotificationTeamDestinations {
+	return NotificationTeamDestinations{
+		Everyone: &NotificationMemberChannels{Push: true},
+		Members:  []NotificationMemberDestination{},
+		Chats:    []int64{},
+	}
+}
+
+// NotificationTeamInput creates or renames a team. Who is on it is set
+// separately; where things go inside it is the team's own business.
 type NotificationTeamInput struct {
-	Name               string `json:"name"`
-	Description        string `json:"description"`
-	PushMembers        bool   `json:"push_members"`
-	EmailMembers       bool   `json:"email_members"`
-	EmailAddress       string `json:"email_address"`
-	ChatConversationId *int64 `json:"chat_conversation_id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+// NotificationTeamLeadRequest names a team's lead.
+type NotificationTeamLeadRequest struct {
+	UserId string `json:"user_id"`
+}
+
+// NotificationTeamAdminsRequest replaces a team's admins.
+type NotificationTeamAdminsRequest struct {
+	UserIds []string `json:"user_ids"`
+}
+
+// NotificationTeamResourcesRequest replaces a team's shared address and chats.
+type NotificationTeamResourcesRequest struct {
+	EmailAddress string  `json:"email_address"`
+	ChatIds      []int64 `json:"chat_ids"`
+}
+
+// NotificationTeamRuleRequest sets where one topic goes inside a team. Nil
+// destinations removes the rule, so the team default applies again.
+type NotificationTeamRuleRequest struct {
+	Topic        string                        `json:"topic"`
+	Destinations *NotificationTeamDestinations `json:"destinations"`
 }
 
 // NotificationTeamMembersRequest replaces a team's members.
@@ -495,8 +567,14 @@ type NotificationHubView struct {
 	Recent     []NotificationHubEntry `json:"recent"`
 	// ReachedNobody counts the last 30 days' notifications that reached no
 	// person, address or chat.
-	ReachedNobody int  `json:"reached_nobody"`
-	CanEdit       bool `json:"can_edit"`
+	ReachedNobody int `json:"reached_nobody"`
+	// CanEdit is an admin of the house organization: every team, every route.
+	CanEdit bool `json:"can_edit"`
+	// ManagedTeams is the teams the viewer leads ("lead") or is an admin of
+	// ("admin"). A viewer who is neither an organization admin nor in here
+	// cannot open the hub; one who is only in here sees just these teams.
+	ManagedTeams map[int64]string `json:"managed_teams"`
+	MyUserId     string           `json:"my_user_id"`
 	// InboundEmail says whether the backend can receive mail at all, so the
 	// screen can say the email topics are dead until it is set up.
 	InboundEmail bool `json:"inbound_email"`
@@ -509,4 +587,12 @@ type NotificationHubView struct {
 	// GeneratedAt is when this view was read, so a live screen can say how
 	// fresh it is.
 	GeneratedAt time.Time `json:"generated_at"`
+}
+
+// NotificationChatOption is a group chat a team could post into, as the team
+// editor's chat search lists it.
+type NotificationChatOption struct {
+	Id      int64  `json:"id"`
+	Title   string `json:"title"`
+	Members int    `json:"members"`
 }

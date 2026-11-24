@@ -623,13 +623,14 @@ func (a *AppService) notifySiteWithdrawal(ctx context.Context, signatureId any, 
 	})
 
 	a.notify(ctx, Alert{
-		Topic:   structs.NotificationTopicFormWithdrawal,
-		Key:     fmt.Sprintf("site_withdrawal:%v", signatureId),
-		Kind:    structs.InternalKindNotice,
-		Title:   "Withdrawal request: " + formTitle,
-		Body:    "Someone asked to withdraw their consent on sfluv.org. Find their original signature in the Website tools (Forms & waivers → Signatures), open it, and mark their consent as withdrawn.",
-		Fields:  fields,
-		Payload: payload,
+		Topic:    structs.NotificationTopicFormWithdrawal,
+		Key:      fmt.Sprintf("site_withdrawal:%v", signatureId),
+		Kind:     structs.InternalKindNotice,
+		Title:    "Withdrawal request: " + formTitle,
+		Subtitle: name + " · " + formTitle,
+		Body:     "Someone asked to withdraw their consent on sfluv.org. Find their original signature in the Website tools (Forms & waivers → Signatures), open it, and mark their consent as withdrawn.",
+		Fields:   fields,
+		Payload:  payload,
 	})
 }
 
@@ -648,6 +649,7 @@ func (a *AppService) notifySiteSignature(ctx context.Context, signatureId any, f
 		Key:           fmt.Sprintf("site_signature:%v", signatureId),
 		Kind:          structs.InternalKindNotice,
 		Title:         "Signed: " + formTitle,
+		Subtitle:      name + " · " + formTitle,
 		Body:          name + " signed " + formTitle + " on sfluv.org.",
 		Fields:        fields,
 		Informational: true,

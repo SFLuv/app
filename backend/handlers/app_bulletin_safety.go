@@ -263,11 +263,12 @@ func (a *AppService) sendBulletinReportAlert(alert bulletinReportAlert) {
 		payload["url"] = base + "/admin"
 	}
 	a.notify(ctx, Alert{
-		Topic: structs.NotificationTopicContentReport,
-		Key:   "report:" + alert.Report.TargetType + ":" + alert.Report.TargetId,
-		Kind:  structs.InternalKindNotice,
-		Title: "Content report: " + strings.ToLower(what[:1]) + what[1:] + " for " + reason,
-		Body:  body,
+		Topic:    structs.NotificationTopicContentReport,
+		Key:      "report:" + alert.Report.TargetType + ":" + alert.Report.TargetId,
+		Kind:     structs.InternalKindNotice,
+		Title:    "Content report: " + strings.ToLower(what[:1]) + what[1:] + " for " + reason,
+		Subtitle: reported + " · " + reason,
+		Body:     body,
 		Fields: []structs.NotificationField{
 			{Label: "Reported", Value: reported},
 			{Label: "Their email", Value: reportedEmail},
@@ -282,7 +283,7 @@ func (a *AppService) sendBulletinReportAlert(alert bulletinReportAlert) {
 		Payload: payload,
 		// Safety reports can carry what somebody said in a private message, so
 		// a team chat gets the summary line and not the excerpt.
-		ChatLine: fmt.Sprintf("Content report: %s by %s for %s (%d open)", strings.ToLower(what), reported, reason, alert.OpenReports),
+		ChatLine: fmt.Sprintf("%s by %s\nReason: %s\nOpen reports: %d", what, reported, reason, alert.OpenReports),
 	})
 }
 

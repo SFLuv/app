@@ -19,7 +19,7 @@ import (
 // and the copy every request used to send to support@, which is now a team's
 // email address if anybody wants it.
 
-const supportChatPreviewRunes = 140
+const supportChatPreviewRunes = 500
 
 // supportChatLine is what the chat shows and what the phone says.
 //
@@ -35,9 +35,9 @@ func supportChatLine(request *structs.SupportRequest) string {
 		from = request.Email
 	}
 
-	line := fmt.Sprintf("New support message: %s · %s · %s", topic, from, request.Reference)
+	line := fmt.Sprintf("%s\nFrom: %s\nReference: %s", topic, from, request.Reference)
 	if request.Category != structs.SupportCategoryW9 && request.Category != structs.SupportCategoryAccountDeletion {
-		line += "\n" + truncateRunes(oneLineText(request.Message), supportChatPreviewRunes)
+		line += "\n\n" + truncateRunes(strings.TrimSpace(request.Message), supportChatPreviewRunes)
 	}
 	return line
 }

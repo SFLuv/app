@@ -980,6 +980,10 @@ type expoPushOptions struct {
 	// CategoryId names the actions iOS offers on the push. "chat_message" is
 	// the one with Reply, registered by the app at launch.
 	CategoryId string
+	// ContentAvailable wakes the app in the background to handle the push's
+	// data, for a push that changes what the phone already shows (clearing a
+	// handled notification) rather than showing anything new.
+	ContentAvailable bool
 }
 
 func sendExpoPushNotification(ctx context.Context, token string, title string, body string, data map[string]string) (*expoPushTicket, error) {
@@ -1024,6 +1028,10 @@ func sendExpoPushNotificationWith(ctx context.Context, token string, title strin
 	}
 	if options.ThreadId != "" {
 		payload["threadId"] = options.ThreadId
+	}
+	if options.ContentAvailable {
+		payload["_contentAvailable"] = true
+		payload["priority"] = "high"
 	}
 
 	reqBody, err := json.Marshal(payload)

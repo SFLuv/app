@@ -264,6 +264,9 @@ func (a *AppService) PressNotificationAction(w http.ResponseWriter, r *http.Requ
 	if err := a.db.SetInternalAlertOutcome(r.Context(), alert.Id, outcome); err != nil {
 		a.logger.Logf("error recording the outcome of alert %d: %s", alert.Id, err)
 	}
+	// Gone for everybody else it went to, at once: their lists, banners and
+	// notification centres.
+	a.announceResolvedById(context.WithoutCancel(r.Context()), alert.Id, alert.AlertKey)
 
 	a.respondNotificationAction(w, r, userId, structs.NotificationActionResponse{
 		Ok:      true,

@@ -100,3 +100,23 @@ func (a *AppService) syncBadge(userId string) {
 		}
 	})
 }
+
+// syncBadgeDismissing is syncBadge carrying something for the app to clear: a
+// silent push that wakes the app in the background, sets the icon's count, and
+// tells it which notifications in the phone's notification centre are done.
+func (a *AppService) syncBadgeDismissing(userId string, dismiss map[string]string) {
+	a.pushes.enqueue(userId, func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		data := map[string]string{"type": "badge"}
+		for key, value := range dismiss {
+			data[key] = value
+		}
+		badge := a.pushBadge(ctx, userId)
+		for _, token := range a.pushTokensFor(ctx, userId) {
+			if _, err := sendExpoPushNotificationWith(ctx, token, "", "", data, expoPushOptions{Badge: badge, ContentAvailable: true}); err != nil {
+				a.logger.Logf("error clearing a handled notification from %s's phone: %s", userId, err)
+			}
+		}
+	})
+}
